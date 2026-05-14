@@ -19,7 +19,7 @@ func (t Tool) Spec() llm.ToolSpec {
 		profiles = t.Manager.ProfilesJSON()
 	}
 	return registry.FunctionSpec(
-		"delegate.run",
+		"delegate-run",
 		"Run a focused delegate agent for bounded analysis. Profiles: "+profiles+". Use when a subproblem can be analyzed independently from a compact context.",
 		registry.ObjectSchema([]string{"profile", "task", "context"}, map[string]any{
 			"profile": map[string]any{"type": "string", "description": "Delegate profile name, e.g. code or incident."},

@@ -13,10 +13,8 @@ func NewAccessPolicy(allowedUsers, allowedChannels []string) AccessPolicy {
 }
 
 func (p AccessPolicy) IsAllowed(userID, channelID string) bool {
-	if len(p.users) > 0 {
-		if _, ok := p.users[userID]; !ok {
-			return false
-		}
+	if !p.AllowsUser(userID) {
+		return false
 	}
 	if len(p.channels) > 0 {
 		if _, ok := p.channels[channelID]; !ok {
@@ -24,6 +22,14 @@ func (p AccessPolicy) IsAllowed(userID, channelID string) bool {
 		}
 	}
 	return true
+}
+
+func (p AccessPolicy) AllowsUser(userID string) bool {
+	if len(p.users) == 0 {
+		return true
+	}
+	_, ok := p.users[userID]
+	return ok
 }
 
 func set(values []string) map[string]struct{} {
