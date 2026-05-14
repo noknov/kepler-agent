@@ -37,7 +37,7 @@ type SearchTool struct{ Client Client }
 
 func (t SearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
-		"notion.search",
+		"notion-search",
 		"Search Notion pages/databases. Use for incident notes, runbooks, and knowledge base lookup.",
 		registry.ObjectSchema([]string{"query"}, map[string]any{
 			"query": map[string]any{"type": "string", "description": "Search query."},
@@ -78,7 +78,7 @@ type CreatePageTool struct{ Client Client }
 
 func (t CreatePageTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
-		"notion.create_page",
+		"notion-create_page",
 		"Create a Notion page in the configured incident/runbook database. Use only when the user asks to write a report or preserve an incident summary.",
 		registry.ObjectSchema([]string{"title", "body"}, map[string]any{
 			"title": map[string]any{"type": "string", "description": "Page title."},

@@ -16,6 +16,7 @@ import (
 type Client struct {
 	token      string
 	botUserID  string
+	teamID     string
 	httpClient *http.Client
 }
 
@@ -40,12 +41,16 @@ func (c *Client) AuthTest(ctx context.Context) (string, error) {
 		OK     bool   `json:"ok"`
 		Error  string `json:"error,omitempty"`
 		UserID string `json:"user_id,omitempty"`
+		TeamID string `json:"team_id,omitempty"`
 	}
 	if err := c.postJSON(ctx, "auth.test", map[string]any{}, &out); err != nil {
 		return "", err
 	}
 	if !out.OK {
 		return "", fmt.Errorf("slack auth.test failed: %s", out.Error)
+	}
+	if out.TeamID != "" {
+		c.teamID = out.TeamID
 	}
 	return out.UserID, nil
 }
@@ -71,6 +76,83 @@ func (c *Client) PostMessage(ctx context.Context, channel, threadTS, text string
 		return "", fmt.Errorf("slack chat.postMessage failed: %s", out.Error)
 	}
 	return out.TS, nil
+}
+
+func (c *Client) PublishHome(ctx context.Context, userID string, view map[string]any) error {
+	payload := map[string]any{
+		"user_id": userID,
+		"view":    view,
+	}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+	}
+	if err := c.postJSON(ctx, "views.publish", payload, &out); err != nil {
+		return err
+	}
+	if !out.OK {
+		return fmt.Errorf("slack views.publish failed: %s", out.Error)
+	}
+	return nil
+}
+
+func (c *Client) StartStream(ctx context.Context, channel, threadTS, recipientUserID string) (string, error) {
+	payload := map[string]any{
+		"channel":   channel,
+		"thread_ts": threadTS,
+	}
+	if recipientUserID != "" {
+		payload["recipient_user_id"] = recipientUserID
+	}
+	if c.teamID != "" {
+		payload["recipient_team_id"] = c.teamID
+	}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+		TS    string `json:"ts,omitempty"`
+	}
+	if err := c.postJSON(ctx, "chat.startStream", payload, &out); err != nil {
+		return "", err
+	}
+	if !out.OK {
+		return "", fmt.Errorf("slack chat.startStream failed: %s", out.Error)
+	}
+	return out.TS, nil
+}
+
+func (c *Client) AppendStream(ctx context.Context, channel, ts string, chunks []map[string]any) error {
+	payload := map[string]any{
+		"channel": channel,
+		"ts":      ts,
+		"chunks":  chunks,
+	}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+	}
+	if err := c.postJSON(ctx, "chat.appendStream", payload, &out); err != nil {
+		return err
+	}
+	if !out.OK {
+		return fmt.Errorf("slack chat.appendStream failed: %s", out.Error)
+	}
+	return nil
+}
+
+func (c *Client) StopStream(ctx context.Context, channel, ts string) error {
+	payload := map[string]any{"channel": channel, "ts": ts}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+	}
+	if err := c.postJSON(ctx, "chat.stopStream", payload, &out); err != nil {
+		return err
+	}
+	if !out.OK {
+		return fmt.Errorf("slack chat.stopStream failed: %s", out.Error)
+	}
+	return nil
 }
 
 func (c *Client) DeleteMessage(ctx context.Context, channel, ts string) error {
