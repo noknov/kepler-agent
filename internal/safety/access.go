@@ -32,6 +32,14 @@ func (p AccessPolicy) AllowsUser(userID string) bool {
 	return ok
 }
 
+func (p AccessPolicy) AllowsChannel(channelID string) bool {
+	if len(p.channels) == 0 {
+		return true
+	}
+	_, ok := p.channels[channelID]
+	return ok
+}
+
 func set(values []string) map[string]struct{} {
 	if len(values) == 0 {
 		return nil

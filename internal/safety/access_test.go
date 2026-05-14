@@ -19,4 +19,10 @@ func TestAccessPolicy(t *testing.T) {
 	if p.AllowsUser("U2") {
 		t.Fatal("expected denied user from allowlist")
 	}
+	if !p.AllowsChannel("C1") {
+		t.Fatal("expected allowlisted channel")
+	}
+	if p.AllowsChannel("C2") {
+		t.Fatal("expected denied channel from allowlist")
+	}
 }
