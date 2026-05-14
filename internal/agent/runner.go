@@ -17,6 +17,8 @@ type Observer interface {
 	Latency(d time.Duration)
 }
 
+type StatusUpdater func(status string)
+
 type ObservationFormatter interface {
 	ToolObservation(toolName string, output string) string
 }
@@ -26,16 +28,17 @@ type Sanitizer interface {
 }
 
 type Runner struct {
-	LLM       llm.Client
-	Model     string
-	Thinking  string
-	MaxTokens int
-	Temp      float64
-	Tools     *registry.Registry
-	Format    ObservationFormatter
-	Sanitize  Sanitizer
-	Observer  Observer
-	MaxSteps  int
+	LLM          llm.Client
+	Model        string
+	Thinking     string
+	MaxTokens    int
+	Temp         float64
+	Tools        *registry.Registry
+	Format       ObservationFormatter
+	Sanitize     Sanitizer
+	Observer     Observer
+	MaxSteps     int
+	StatusUpdate StatusUpdater
 }
 
 type Request struct {
@@ -62,6 +65,13 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		if r.Observer != nil {
 			r.Observer.LLMCall()
 		}
+		if r.StatusUpdate != nil {
+			if step == 0 {
+				r.StatusUpdate("Analyzing...")
+			} else {
+				r.StatusUpdate(fmt.Sprintf("Processing... (step %d)", step+1))
+			}
+		}
 		resp, err := r.LLM.Chat(ctx, llm.Request{
 			Model:       r.Model,
 			Messages:    messages,
@@ -79,15 +89,21 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		generated = append(generated, assistantMsg)
 
 		if len(assistantMsg.ToolCalls) == 0 {
+			if r.StatusUpdate != nil {
+				r.StatusUpdate("Generating response...")
+			}
 			final := strings.TrimSpace(r.sanitize(assistantMsg.Content))
 			if final == "" {
-				final = "我没有拿到有效回复，请再试一次或补充更多上下文。"
+				final = "I didn't get a valid response. Please try again or provide more context."
 			}
 			return Result{Generated: generated, Final: final}, nil
 		}
 
 		for _, call := range assistantMsg.ToolCalls {
 			name := call.Function.Name
+			if r.StatusUpdate != nil {
+				r.StatusUpdate(toolStatusHint(name))
+			}
 			args := json.RawMessage(call.Function.Arguments)
 			start := time.Now()
 			result, err := r.Tools.Execute(ctx, name, args, req.Runtime)
@@ -134,4 +150,26 @@ func (r Runner) sanitize(text string) string {
 		return text
 	}
 	return r.Sanitize.Sanitize(text)
+}
+
+var toolHints = map[string]string{
+	"code-read_file":     "Reading code...",
+	"code-search":        "Searching code...",
+	"git-status":         "Checking repo status...",
+	"git-log":            "Reading commit history...",
+	"git-show":           "Inspecting commit...",
+	"gcp-logs":           "Querying logs...",
+	"notion-search":      "Searching docs...",
+	"notion-create_page": "Creating page...",
+	"youtrack-get_issue": "Fetching issue...",
+	"youtrack-search":    "Searching issues...",
+	"slack-ask_user":     "Asking for more info...",
+	"delegate-run":       "Deep analysis...",
+}
+
+func toolStatusHint(name string) string {
+	if hint, ok := toolHints[name]; ok {
+		return hint
+	}
+	return "Processing..."
 }

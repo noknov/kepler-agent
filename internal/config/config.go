@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -74,7 +75,16 @@ type ObservingConfig struct {
 }
 
 func Load() (Config, error) {
-	_ = loadDotEnv(".env")
+	dotenvValues, err := readDotEnv(".env")
+	if err != nil {
+		return Config{}, err
+	}
+	allowEnvMixing := envBoolValue(firstNonEmpty(os.Getenv("ALLOW_ENV_MIXING"), dotenvValues["ALLOW_ENV_MIXING"]))
+	conflicts := providerEnvConflicts(dotenvValues)
+	if len(conflicts) > 0 && !allowEnvMixing {
+		return Config{}, fmt.Errorf(".env conflicts with existing shell environment for %s; clear the shell variables or set ALLOW_ENV_MIXING=true", strings.Join(conflicts, ", "))
+	}
+	applyDotEnv(dotenvValues)
 	wd, _ := os.Getwd()
 	llmBaseURL := firstEnv("KIMI_BASE_URL", "MOONSHOT_BASE_URL", "OPENAI_BASE_URL")
 	if llmBaseURL == "" {
@@ -147,6 +157,9 @@ func Load() (Config, error) {
 	}
 	if cfg.Slack.BotToken == "" {
 		return cfg, fmt.Errorf("SLACK_BOT_TOKEN is required")
+	}
+	if strings.Contains(cfg.LLM.BaseURL, "api.kimi.com/coding") && !envBool("ALLOW_EXPERIMENTAL_CODING_ENDPOINT", false) {
+		return cfg, fmt.Errorf("the coding endpoint %q is disabled for oncall-agent by default; switch to an OpenAI-compatible provider or set ALLOW_EXPERIMENTAL_CODING_ENDPOINT=true to continue deliberately", cfg.LLM.BaseURL)
 	}
 	if cfg.LLM.APIKey == "" {
 		return cfg, fmt.Errorf("MOONSHOT_API_KEY, KIMI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, or ANTHROPIC_AUTH_TOKEN is required")
@@ -266,6 +279,23 @@ func envDurationAliases(fallback time.Duration, keys ...string) time.Duration {
 	return fallback
 }
 
+func envBool(key string, fallback bool) bool {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	return envBoolValue(raw)
+}
+
+func envBoolValue(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
 func normalizeRoots(roots []string) []string {
 	out := make([]string, 0, len(roots))
 	for _, r := range roots {
@@ -296,16 +326,17 @@ func normalizeClaudeCodeBaseURL(raw string) string {
 	return raw
 }
 
-func loadDotEnv(path string) error {
+func readDotEnv(path string) (map[string]string, error) {
 	file, err := os.Open(path)
 	if os.IsNotExist(err) {
-		return nil
+		return nil, nil
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer file.Close()
 
+	values := map[string]string{}
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -318,12 +349,94 @@ func loadDotEnv(path string) error {
 			continue
 		}
 		key = strings.TrimSpace(key)
-		if key == "" || os.Getenv(key) != "" {
+		if key == "" {
 			continue
 		}
 		value = strings.TrimSpace(value)
 		value = strings.Trim(value, `"'`)
+		values[key] = value
+	}
+	return values, scanner.Err()
+}
+
+func applyDotEnv(values map[string]string) {
+	for key, value := range values {
+		if os.Getenv(key) != "" {
+			continue
+		}
 		_ = os.Setenv(key, value)
 	}
-	return scanner.Err()
+}
+
+func providerEnvConflicts(dotenvValues map[string]string) []string {
+	shell := providerSnapshot(func(key string) string { return os.Getenv(key) })
+	dotenv := providerSnapshot(func(key string) string { return dotenvValues[key] })
+	if !shell.configured() || !dotenv.configured() {
+		return nil
+	}
+
+	conflicts := make([]string, 0, 4)
+	if shell.Protocol != dotenv.Protocol {
+		conflicts = append(conflicts, "LLM_PROTOCOL")
+	}
+	if shell.BaseURL != dotenv.BaseURL {
+		conflicts = append(conflicts, "LLM_BASE_URL")
+	}
+	if shell.Model != dotenv.Model {
+		conflicts = append(conflicts, "LLM_MODEL")
+	}
+	if shell.APIKey != dotenv.APIKey {
+		conflicts = append(conflicts, "LLM_API_KEY")
+	}
+	sort.Strings(conflicts)
+	return conflicts
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+type llmEnvSnapshot struct {
+	Protocol string
+	BaseURL  string
+	Model    string
+	APIKey   string
+}
+
+func (s llmEnvSnapshot) configured() bool {
+	return s.Protocol != "" || s.BaseURL != "" || s.Model != "" || s.APIKey != ""
+}
+
+func providerSnapshot(get func(string) string) llmEnvSnapshot {
+	snapshot := llmEnvSnapshot{
+		Protocol: strings.ToLower(strings.TrimSpace(get("LLM_PROTOCOL"))),
+		BaseURL: trimRightSlash(firstNonEmpty(
+			get("KIMI_BASE_URL"),
+			get("MOONSHOT_BASE_URL"),
+			get("OPENAI_BASE_URL"),
+			normalizeClaudeCodeBaseURL(get("ANTHROPIC_BASE_URL")),
+		)),
+		Model: firstNonEmpty(
+			get("KIMI_MODEL"),
+			get("MOONSHOT_MODEL"),
+			get("OPENAI_MODEL"),
+			get("ANTHROPIC_MODEL"),
+		),
+		APIKey: firstNonEmpty(
+			get("MOONSHOT_API_KEY"),
+			get("KIMI_API_KEY"),
+			get("OPENAI_API_KEY"),
+			get("ANTHROPIC_API_KEY"),
+			get("ANTHROPIC_AUTH_TOKEN"),
+		),
+	}
+	if snapshot.BaseURL != "" && snapshot.Protocol == "" && strings.Contains(snapshot.BaseURL, "api.kimi.com/coding") {
+		snapshot.Protocol = "openai"
+	}
+	return snapshot
 }

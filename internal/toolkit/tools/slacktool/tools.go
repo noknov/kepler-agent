@@ -19,7 +19,7 @@ type AskUserTool struct {
 
 func (t AskUserTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
-		"slack.ask_user",
+		"slack-ask_user",
 		"Ask the Slack user for missing information, then pause. Use only when you cannot safely proceed without clarification.",
 		registry.ObjectSchema([]string{"question"}, map[string]any{
 			"question": map[string]any{"type": "string", "description": "Specific question to ask in the current thread."},

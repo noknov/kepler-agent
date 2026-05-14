@@ -1,11 +1,11 @@
 # oncall-agent
 
-Go-based Slack on-call debugging agent powered directly by Kimi/Moonshot Chat Completions, without Cursor CLI.
+Go-based Slack on-call debugging agent powered by configurable OpenAI-compatible LLM APIs, without Cursor CLI.
 
 ## Why this design
 
 - Slack receives `app_mention`, verifies Slack signatures, checks allowlists, then starts an agent run in the thread.
-- Kimi is called through the OpenAI-compatible HTTP API with native `tool_calls`, so tool execution is structured instead of parsed from free-form JSON text.
+- The model is called through an OpenAI-compatible HTTP API with native `tool_calls`, so tool execution is structured instead of parsed from free-form JSON text.
 - Runtime safety is code-enforced: Slack user/channel authorization, prompt guardrails, post-response redaction, path allowlists, command deny rules, and read-only tool boundaries.
 - Context is managed explicitly. Slack thread context, session messages, and tool observations are truncated before they reach the model.
 - Sessions are persisted by Slack `channel:thread_ts`, so follow-up mentions and pending clarification replies reuse context.
@@ -37,21 +37,15 @@ cp .env.example .env
 go run ./cmd/oncall-agent
 ```
 
-`oncall-agent` loads local `.env` automatically. Kimi can be configured either with Moonshot/OpenAI-compatible variables:
+`oncall-agent` loads local `.env` automatically. The simplest setup uses DeepSeek-compatible variables:
 
-- `MOONSHOT_API_KEY` or `KIMI_API_KEY`
-- `KIMI_BASE_URL` or `MOONSHOT_BASE_URL`
-- `KIMI_MODEL`
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL=https://api.deepseek.com`
+- `OPENAI_MODEL=deepseek-chat`
 
-or with Claude Code-style variables:
+You can still point the service at other OpenAI-compatible providers with `KIMI_*`, `MOONSHOT_*`, or `ANTHROPIC_*` compatibility variables, but startup now fails if your shell and `.env` disagree on provider settings unless you explicitly set `ALLOW_ENV_MIXING=true`.
 
-- `ANTHROPIC_BASE_URL`
-- `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`
-- `ANTHROPIC_MODEL`
-- `CLAUDE_CODE_MAX_OUTPUT_TOKENS`
-- `API_TIMEOUT_MS`
-
-When `ANTHROPIC_BASE_URL=https://api.kimi.com/coding/`, the agent normalizes it to the OpenAI-compatible `https://api.kimi.com/coding/v1` endpoint and defaults the model to `kimi-for-coding`.
+If you point the bot at `https://api.kimi.com/coding/`, startup now fails by default. That endpoint must be explicitly opted into with `ALLOW_EXPERIMENTAL_CODING_ENDPOINT=true`.
 
 Expose `POST /slack/events` to Slack. The app also exposes:
 
@@ -82,11 +76,11 @@ Use Slack Events API with:
 - `channels:history`, `groups:history`, `im:history` as needed for thread context
 - `chat:write`
 - `chat:delete` if you want the temporary thinking message removed
-- Event subscriptions: `app_mention`, `message.channels`, `message.groups`, `reaction_added`
+- Event subscriptions: `app_mention`, `message.channels`, `message.groups`, `app_home_opened`, `reaction_added`
 
 Only users in `ALLOWED_SLACK_USERS` are sent to the LLM.
 
-The old App Home / modal flow for per-user agent tokens is not needed. If you reuse an existing Slack app, remove or disable App Home and Interactivity callbacks that only served token registration. This service does not read per-user LLM tokens; it uses the service-level Kimi credentials and `ALLOWED_SLACK_USERS` for access control.
+The old App Home / modal flow for per-user agent tokens is not needed. If you reuse an existing Slack app, remove or disable App Home and Interactivity callbacks that only served token registration. The App Home page now shows the actual provider, base URL host, and model the service is configured to use.
 
 ## Tools
 
@@ -106,4 +100,4 @@ GCP values in `.env` are defaults and hints, not fixed environments. `gcp.logs` 
 
 ## Notes
 
-Kimi currently documents an OpenAI-compatible base URL at `https://api.moonshot.ai/v1`, native `tool_calls`, and `kimi-k2.6` as the latest recommended agent/code model. The implementation keeps these values configurable through env vars.
+The implementation keeps provider choice configurable through env vars. `OPENAI_*` reflects the original DeepSeek setup, while `KIMI_*`, `MOONSHOT_*`, and `ANTHROPIC_*` remain available for other OpenAI-compatible backends.
