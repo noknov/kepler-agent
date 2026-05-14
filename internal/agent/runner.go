@@ -62,6 +62,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	var generated []llm.Message
 
 	for step := 0; step < maxSteps; step++ {
+		lastStep := step == maxSteps-1
 		if r.Observer != nil {
 			r.Observer.LLMCall()
 		}
@@ -72,10 +73,18 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 				r.StatusUpdate(fmt.Sprintf("Processing... (step %d)", step+1))
 			}
 		}
+
+		// On the last step, omit tools so the model is forced to produce a
+		// final text response using whatever it has gathered so far.
+		var toolSpecs []llm.ToolSpec
+		if !lastStep {
+			toolSpecs = r.Tools.Specs()
+		}
+
 		resp, err := r.LLM.Chat(ctx, llm.Request{
 			Model:       r.Model,
 			Messages:    messages,
-			Tools:       r.Tools.Specs(),
+			Tools:       toolSpecs,
 			MaxTokens:   r.MaxTokens,
 			Temperature: r.Temp,
 			Thinking:    r.Thinking,

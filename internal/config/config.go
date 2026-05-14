@@ -32,13 +32,15 @@ type SlackConfig struct {
 }
 
 type LLMConfig struct {
-	BaseURL     string
-	APIKey      string
-	Model       string
-	Thinking    string
-	MaxTokens   int
-	Temperature float64
-	Timeout     time.Duration
+	BaseURL         string
+	APIKey          string
+	Model           string
+	Protocol        string
+	AnthropicFlavor string
+	Thinking        string
+	MaxTokens       int
+	Temperature     float64
+	Timeout         time.Duration
 }
 
 type SecurityConfig struct {
@@ -80,23 +82,33 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	allowEnvMixing := envBoolValue(firstNonEmpty(os.Getenv("ALLOW_ENV_MIXING"), dotenvValues["ALLOW_ENV_MIXING"]))
+	preferDotEnv := envBoolValue(firstNonEmpty(os.Getenv("PREFER_DOTENV"), dotenvValues["PREFER_DOTENV"]))
 	conflicts := providerEnvConflicts(dotenvValues)
-	if len(conflicts) > 0 && !allowEnvMixing {
-		return Config{}, fmt.Errorf(".env conflicts with existing shell environment for %s; clear the shell variables or set ALLOW_ENV_MIXING=true", strings.Join(conflicts, ", "))
+	if len(conflicts) > 0 && !allowEnvMixing && !preferDotEnv {
+		return Config{}, fmt.Errorf(".env conflicts with existing shell environment for %s; clear the shell variables, set PREFER_DOTENV=true to use .env, or set ALLOW_ENV_MIXING=true", strings.Join(conflicts, ", "))
 	}
-	applyDotEnv(dotenvValues)
+	applyDotEnv(dotenvValues, preferDotEnv)
 	wd, _ := os.Getwd()
-	llmBaseURL := firstEnv("KIMI_BASE_URL", "MOONSHOT_BASE_URL", "OPENAI_BASE_URL")
+	llmProtocol := normalizeLLMProtocol(firstEnv("LLM_PROTOCOL", "KIMI_PROTOCOL", "ANTHROPIC_PROTOCOL"))
+	llmBaseURL := providerBaseURL(llmProtocol)
 	if llmBaseURL == "" {
-		llmBaseURL = normalizeClaudeCodeBaseURL(os.Getenv("ANTHROPIC_BASE_URL"))
+		llmBaseURL = os.Getenv("ANTHROPIC_BASE_URL")
+		if llmBaseURL != "" && llmProtocol == "" {
+			llmProtocol = "anthropic"
+		}
 	}
 	if llmBaseURL == "" {
 		llmBaseURL = "https://api.moonshot.ai/v1"
 	}
-	llmModel := firstEnv("KIMI_MODEL", "MOONSHOT_MODEL", "OPENAI_MODEL")
-	if llmModel == "" {
-		llmModel = os.Getenv("ANTHROPIC_MODEL")
+	llmBaseURL = normalizeLLMBaseURL(llmBaseURL, llmProtocol)
+	if llmProtocol == "" {
+		llmProtocol = inferLLMProtocol(llmBaseURL)
 	}
+	anthropicFlavor := normalizeAnthropicFlavor(firstEnv("LLM_ANTHROPIC_FLAVOR", "ANTHROPIC_FLAVOR"))
+	if anthropicFlavor == "" && llmProtocol == "anthropic" {
+		anthropicFlavor = inferAnthropicFlavor(llmBaseURL)
+	}
+	llmModel := providerModel(llmProtocol)
 	if llmModel == "" && strings.Contains(llmBaseURL, "api.kimi.com/coding") {
 		llmModel = "kimi-for-coding"
 	}
@@ -113,13 +125,15 @@ func Load() (Config, error) {
 			BotUserID:     os.Getenv("SLACK_BOT_USER_ID"),
 		},
 		LLM: LLMConfig{
-			BaseURL:     trimRightSlash(llmBaseURL),
-			APIKey:      firstEnv("MOONSHOT_API_KEY", "KIMI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
-			Model:       llmModel,
-			Thinking:    env("KIMI_THINKING", "enabled"),
-			MaxTokens:   envIntAliases(8192, "KIMI_MAX_TOKENS", "CLAUDE_CODE_MAX_OUTPUT_TOKENS"),
-			Temperature: envFloat("KIMI_TEMPERATURE", 0.2),
-			Timeout:     envDurationAliases(120*time.Second, "KIMI_TIMEOUT", "API_TIMEOUT_MS"),
+			BaseURL:         trimRightSlash(llmBaseURL),
+			APIKey:          providerAPIKey(llmProtocol),
+			Model:           llmModel,
+			Protocol:        llmProtocol,
+			AnthropicFlavor: anthropicFlavor,
+			Thinking:        env("KIMI_THINKING", "enabled"),
+			MaxTokens:       envIntAliases(8192, "KIMI_MAX_TOKENS", "CLAUDE_CODE_MAX_OUTPUT_TOKENS"),
+			Temperature:     envFloat("KIMI_TEMPERATURE", 0.2),
+			Timeout:         envDurationAliases(120*time.Second, "KIMI_TIMEOUT", "API_TIMEOUT_MS"),
 		},
 		Security: SecurityConfig{
 			AllowedUsers:    envCSV("ALLOWED_SLACK_USERS"),
@@ -158,11 +172,17 @@ func Load() (Config, error) {
 	if cfg.Slack.BotToken == "" {
 		return cfg, fmt.Errorf("SLACK_BOT_TOKEN is required")
 	}
-	if strings.Contains(cfg.LLM.BaseURL, "api.kimi.com/coding") && !envBool("ALLOW_EXPERIMENTAL_CODING_ENDPOINT", false) {
+	if strings.Contains(cfg.LLM.BaseURL, "api.kimi.com/coding") && cfg.LLM.Protocol != "anthropic" && !envBool("ALLOW_EXPERIMENTAL_CODING_ENDPOINT", false) {
 		return cfg, fmt.Errorf("the coding endpoint %q is disabled for oncall-agent by default; switch to an OpenAI-compatible provider or set ALLOW_EXPERIMENTAL_CODING_ENDPOINT=true to continue deliberately", cfg.LLM.BaseURL)
 	}
 	if cfg.LLM.APIKey == "" {
 		return cfg, fmt.Errorf("MOONSHOT_API_KEY, KIMI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, or ANTHROPIC_AUTH_TOKEN is required")
+	}
+	if cfg.LLM.Protocol != "openai" && cfg.LLM.Protocol != "anthropic" {
+		return cfg, fmt.Errorf("LLM_PROTOCOL must be openai or anthropic")
+	}
+	if cfg.LLM.AnthropicFlavor != "" && cfg.LLM.AnthropicFlavor != "official" && cfg.LLM.AnthropicFlavor != "claude-code" {
+		return cfg, fmt.Errorf("LLM_ANTHROPIC_FLAVOR must be official or claude-code")
 	}
 	if len(cfg.Security.AllowedUsers) == 0 {
 		return cfg, fmt.Errorf("ALLOWED_SLACK_USERS is required")
@@ -184,6 +204,27 @@ func firstEnv(keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func providerBaseURL(protocol string) string {
+	if protocol == "anthropic" {
+		return firstEnv("ANTHROPIC_BASE_URL", "KIMI_BASE_URL", "MOONSHOT_BASE_URL", "OPENAI_BASE_URL")
+	}
+	return firstEnv("KIMI_BASE_URL", "MOONSHOT_BASE_URL", "OPENAI_BASE_URL")
+}
+
+func providerModel(protocol string) string {
+	if protocol == "anthropic" {
+		return firstEnv("ANTHROPIC_MODEL", "KIMI_MODEL", "MOONSHOT_MODEL", "OPENAI_MODEL")
+	}
+	return firstEnv("KIMI_MODEL", "MOONSHOT_MODEL", "OPENAI_MODEL", "ANTHROPIC_MODEL")
+}
+
+func providerAPIKey(protocol string) string {
+	if protocol == "anthropic" {
+		return firstEnv("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "MOONSHOT_API_KEY", "KIMI_API_KEY", "OPENAI_API_KEY")
+	}
+	return firstEnv("MOONSHOT_API_KEY", "KIMI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 }
 
 func envCSV(key string) []string {
@@ -315,15 +356,44 @@ func trimRightSlash(s string) string {
 	return strings.TrimRight(strings.TrimSpace(s), "/")
 }
 
-func normalizeClaudeCodeBaseURL(raw string) string {
+func normalizeLLMProtocol(raw string) string {
+	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+func normalizeLLMBaseURL(raw, protocol string) string {
 	raw = trimRightSlash(raw)
 	if raw == "" {
 		return ""
 	}
-	if strings.Contains(raw, "api.kimi.com/coding") && !strings.HasSuffix(raw, "/v1") {
+	if protocol != "anthropic" && strings.Contains(raw, "api.kimi.com/coding") && !strings.HasSuffix(raw, "/v1") {
 		return raw + "/v1"
 	}
 	return raw
+}
+
+func inferLLMProtocol(raw string) string {
+	raw = trimRightSlash(raw)
+	if strings.Contains(raw, "api.kimi.com/coding") && !strings.HasSuffix(raw, "/v1") {
+		return "anthropic"
+	}
+	return "openai"
+}
+
+func normalizeAnthropicFlavor(raw string) string {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	switch raw {
+	case "claudecode", "claude_code", "claude-code":
+		return "claude-code"
+	default:
+		return raw
+	}
+}
+
+func inferAnthropicFlavor(raw string) string {
+	if strings.Contains(trimRightSlash(raw), "api.kimi.com/coding") {
+		return "claude-code"
+	}
+	return "official"
 }
 
 func readDotEnv(path string) (map[string]string, error) {
@@ -359,9 +429,9 @@ func readDotEnv(path string) (map[string]string, error) {
 	return values, scanner.Err()
 }
 
-func applyDotEnv(values map[string]string) {
+func applyDotEnv(values map[string]string, overwrite bool) {
 	for key, value := range values {
-		if os.Getenv(key) != "" {
+		if os.Getenv(key) != "" && !overwrite {
 			continue
 		}
 		_ = os.Setenv(key, value)
@@ -378,6 +448,9 @@ func providerEnvConflicts(dotenvValues map[string]string) []string {
 	conflicts := make([]string, 0, 4)
 	if shell.Protocol != dotenv.Protocol {
 		conflicts = append(conflicts, "LLM_PROTOCOL")
+	}
+	if shell.AnthropicFlavor != dotenv.AnthropicFlavor {
+		conflicts = append(conflicts, "LLM_ANTHROPIC_FLAVOR")
 	}
 	if shell.BaseURL != dotenv.BaseURL {
 		conflicts = append(conflicts, "LLM_BASE_URL")
@@ -402,25 +475,50 @@ func firstNonEmpty(values ...string) string {
 }
 
 type llmEnvSnapshot struct {
-	Protocol string
-	BaseURL  string
-	Model    string
-	APIKey   string
+	Protocol        string
+	AnthropicFlavor string
+	BaseURL         string
+	Model           string
+	APIKey          string
 }
 
 func (s llmEnvSnapshot) configured() bool {
-	return s.Protocol != "" || s.BaseURL != "" || s.Model != "" || s.APIKey != ""
+	return s.Protocol != "" || s.AnthropicFlavor != "" || s.BaseURL != "" || s.Model != "" || s.APIKey != ""
 }
 
 func providerSnapshot(get func(string) string) llmEnvSnapshot {
+	protocol := normalizeLLMProtocol(firstNonEmpty(
+		get("LLM_PROTOCOL"),
+		get("KIMI_PROTOCOL"),
+		get("ANTHROPIC_PROTOCOL"),
+	))
+	anthropicFlavor := normalizeAnthropicFlavor(firstNonEmpty(
+		get("LLM_ANTHROPIC_FLAVOR"),
+		get("ANTHROPIC_FLAVOR"),
+	))
+	baseURL := firstNonEmpty(
+		get("KIMI_BASE_URL"),
+		get("MOONSHOT_BASE_URL"),
+		get("OPENAI_BASE_URL"),
+		get("ANTHROPIC_BASE_URL"),
+	)
+	if baseURL != "" && protocol == "" && strings.TrimSpace(get("ANTHROPIC_BASE_URL")) != "" &&
+		strings.TrimSpace(get("KIMI_BASE_URL")) == "" &&
+		strings.TrimSpace(get("MOONSHOT_BASE_URL")) == "" &&
+		strings.TrimSpace(get("OPENAI_BASE_URL")) == "" {
+		protocol = "anthropic"
+	}
+	baseURL = normalizeLLMBaseURL(baseURL, protocol)
+	if protocol == "" && baseURL != "" {
+		protocol = inferLLMProtocol(baseURL)
+	}
+	if anthropicFlavor == "" && protocol == "anthropic" {
+		anthropicFlavor = inferAnthropicFlavor(baseURL)
+	}
 	snapshot := llmEnvSnapshot{
-		Protocol: strings.ToLower(strings.TrimSpace(get("LLM_PROTOCOL"))),
-		BaseURL: trimRightSlash(firstNonEmpty(
-			get("KIMI_BASE_URL"),
-			get("MOONSHOT_BASE_URL"),
-			get("OPENAI_BASE_URL"),
-			normalizeClaudeCodeBaseURL(get("ANTHROPIC_BASE_URL")),
-		)),
+		Protocol:        protocol,
+		AnthropicFlavor: anthropicFlavor,
+		BaseURL:         trimRightSlash(baseURL),
 		Model: firstNonEmpty(
 			get("KIMI_MODEL"),
 			get("MOONSHOT_MODEL"),
@@ -434,9 +532,6 @@ func providerSnapshot(get func(string) string) llmEnvSnapshot {
 			get("ANTHROPIC_API_KEY"),
 			get("ANTHROPIC_AUTH_TOKEN"),
 		),
-	}
-	if snapshot.BaseURL != "" && snapshot.Protocol == "" && strings.Contains(snapshot.BaseURL, "api.kimi.com/coding") {
-		snapshot.Protocol = "openai"
 	}
 	return snapshot
 }
