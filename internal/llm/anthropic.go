@@ -1,0 +1,274 @@
+package llm
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+)
+
+type AnthropicClient struct {
+	baseURL    string
+	apiKey     string
+	flavor     string
+	httpClient *http.Client
+}
+
+func NewAnthropicClient(baseURL, apiKey string, timeout time.Duration, flavor string) *AnthropicClient {
+	flavor = strings.ToLower(strings.TrimSpace(flavor))
+	if flavor == "" {
+		flavor = "official"
+	}
+	return &AnthropicClient{
+		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"),
+		apiKey:  apiKey,
+		flavor:  flavor,
+		httpClient: &http.Client{
+			Timeout: timeout,
+		},
+	}
+}
+
+func (c *AnthropicClient) Chat(ctx Context, req Request) (Response, error) {
+	body := anthropicRequest{
+		Model:       req.Model,
+		System:      anthropicSystem(req.Messages),
+		Messages:    anthropicMessages(req.Messages),
+		Tools:       anthropicTools(req.Tools),
+		MaxTokens:   req.MaxTokens,
+		Temperature: req.Temperature,
+	}
+	if len(body.Tools) == 0 {
+		body.Tools = nil
+	}
+
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return Response{}, err
+	}
+
+	stdCtx, ok := ctx.(context.Context)
+	if !ok {
+		stdCtx = context.Background()
+	}
+	httpReq, err := http.NewRequestWithContext(stdCtx, http.MethodPost, anthropicMessagesURL(c.baseURL), bytes.NewReader(payload))
+	if err != nil {
+		return Response{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	setAnthropicAuthHeaders(httpReq.Header, c.apiKey, c.flavor)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return Response{}, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return Response{}, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return Response{}, fmt.Errorf("anthropic messages failed: status=%d body=%s", resp.StatusCode, string(data))
+	}
+
+	var parsed anthropicResponse
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return Response{}, err
+	}
+	message := Message{Role: "assistant", Content: strings.TrimSpace(parsed.text())}
+	for _, block := range parsed.Content {
+		if block.Type != "tool_use" {
+			continue
+		}
+		args := "{}"
+		if len(block.Input) > 0 {
+			args = string(block.Input)
+		}
+		message.ToolCalls = append(message.ToolCalls, ToolCall{
+			ID:   block.ID,
+			Type: "function",
+			Function: ToolFunction{
+				Name:      block.Name,
+				Arguments: args,
+			},
+		})
+	}
+	if message.Content == "" && len(message.ToolCalls) == 0 {
+		return Response{}, fmt.Errorf("anthropic messages returned no text or tool calls")
+	}
+
+	return Response{
+		Message:      message,
+		FinishReason: parsed.StopReason,
+		Usage: Usage{
+			PromptTokens:     parsed.Usage.InputTokens,
+			CompletionTokens: parsed.Usage.OutputTokens,
+			TotalTokens:      parsed.Usage.InputTokens + parsed.Usage.OutputTokens,
+		},
+		Raw: data,
+	}, nil
+}
+
+type anthropicRequest struct {
+	Model       string             `json:"model"`
+	System      string             `json:"system,omitempty"`
+	Messages    []anthropicMessage `json:"messages"`
+	Tools       []anthropicTool    `json:"tools,omitempty"`
+	MaxTokens   int                `json:"max_tokens"`
+	Temperature float64            `json:"temperature,omitempty"`
+}
+
+type anthropicMessage struct {
+	Role    string           `json:"role"`
+	Content []anthropicBlock `json:"content"`
+}
+
+type anthropicBlock struct {
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   string          `json:"content,omitempty"`
+}
+
+type anthropicTool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	InputSchema map[string]any `json:"input_schema"`
+}
+
+type anthropicResponse struct {
+	Content []anthropicBlock `json:"content"`
+	Usage   struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
+	StopReason string `json:"stop_reason"`
+}
+
+func (r anthropicResponse) text() string {
+	parts := make([]string, 0)
+	for _, block := range r.Content {
+		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+			parts = append(parts, block.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func anthropicSystem(messages []Message) string {
+	parts := make([]string, 0)
+	for _, msg := range messages {
+		if msg.Role == "system" && strings.TrimSpace(msg.Content) != "" {
+			parts = append(parts, msg.Content)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func anthropicMessages(messages []Message) []anthropicMessage {
+	out := make([]anthropicMessage, 0, len(messages))
+	for _, msg := range messages {
+		switch msg.Role {
+		case "system":
+			continue
+		case "assistant":
+			blocks := make([]anthropicBlock, 0, 1+len(msg.ToolCalls))
+			if strings.TrimSpace(msg.Content) != "" {
+				blocks = append(blocks, anthropicBlock{Type: "text", Text: msg.Content})
+			}
+			for _, call := range msg.ToolCalls {
+				input := json.RawMessage(call.Function.Arguments)
+				if !json.Valid(input) {
+					input, _ = json.Marshal(map[string]string{"arguments": call.Function.Arguments})
+				}
+				blocks = append(blocks, anthropicBlock{
+					Type:  "tool_use",
+					ID:    call.ID,
+					Name:  call.Function.Name,
+					Input: input,
+				})
+			}
+			if len(blocks) > 0 {
+				out = append(out, anthropicMessage{Role: "assistant", Content: blocks})
+			}
+		case "tool":
+			block := anthropicBlock{
+				Type:      "tool_result",
+				ToolUseID: msg.ToolCallID,
+				Content:   msg.Content,
+			}
+			last := len(out) - 1
+			if last >= 0 && out[last].Role == "user" && onlyToolResults(out[last].Content) {
+				out[last].Content = append(out[last].Content, block)
+			} else {
+				out = append(out, anthropicMessage{Role: "user", Content: []anthropicBlock{block}})
+			}
+		default:
+			if strings.TrimSpace(msg.Content) != "" {
+				out = append(out, anthropicMessage{
+					Role:    "user",
+					Content: []anthropicBlock{{Type: "text", Text: msg.Content}},
+				})
+			}
+		}
+	}
+	return out
+}
+
+func onlyToolResults(blocks []anthropicBlock) bool {
+	if len(blocks) == 0 {
+		return false
+	}
+	for _, block := range blocks {
+		if block.Type != "tool_result" {
+			return false
+		}
+	}
+	return true
+}
+
+func anthropicTools(tools []ToolSpec) []anthropicTool {
+	out := make([]anthropicTool, 0, len(tools))
+	for _, tool := range tools {
+		out = append(out, anthropicTool{
+			Name:        tool.Function.Name,
+			Description: tool.Function.Description,
+			InputSchema: tool.Function.Parameters,
+		})
+	}
+	return out
+}
+
+func anthropicMessagesURL(baseURL string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if strings.HasSuffix(baseURL, "/v1") {
+		return baseURL + "/messages"
+	}
+	return baseURL + "/v1/messages"
+}
+
+func setAnthropicAuthHeaders(header http.Header, token, flavor string) {
+	flavor = strings.ToLower(strings.TrimSpace(flavor))
+	if hasBearerPrefix(token) {
+		header.Set("Authorization", token)
+		if flavor != "claude-code" {
+			header.Set("x-api-key", strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(token, "Bearer "), "bearer ")))
+		}
+		return
+	}
+	header.Set("x-api-key", token)
+	if flavor == "claude-code" {
+		header.Set("Authorization", "Bearer "+token)
+		header.Set("x-app", "cli")
+		header.Set("User-Agent", "claude-cli/1.0 oncall-agent")
+	}
+}

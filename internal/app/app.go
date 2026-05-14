@@ -59,7 +59,12 @@ func NewServer(cfg config.Config) (*Server, error) {
 		return nil, err
 	}
 
-	kimi := llm.NewKimiClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout)
+	var llmClient llm.Client
+	if cfg.LLM.Protocol == "anthropic" {
+		llmClient = llm.NewAnthropicClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout, cfg.LLM.AnthropicFlavor)
+	} else {
+		llmClient = llm.NewKimiClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout)
+	}
 	slackClient := slack.NewClient(cfg.Slack.BotToken, cfg.Slack.BotUserID)
 	if cfg.Slack.BotUserID == "" {
 		if botUserID, err := slackClient.AuthTest(context.Background()); err == nil {
@@ -77,13 +82,16 @@ func NewServer(cfg config.Config) (*Server, error) {
 	redactor := safety.Redactor{WorkspaceRoots: cfg.Security.WorkspaceRoots}
 	promptPolicy := safety.PromptPolicy{WorkspaceRoots: cfg.Security.WorkspaceRoots}
 
-	delegates := delegation.NewManager(kimi, cfg.LLM.Model, cfg.LLM.Thinking)
+	delegates := delegation.NewManager(llmClient, cfg.LLM.Model, cfg.LLM.Thinking)
 	_ = delegates.LoadMarkdown(filepath.Join("config", "rules"), filepath.Join("config", "skills"))
 
 	tools := registry.New()
 	tools.Register(codeTools.SearchTool{Paths: workspacePolicy})
 	tools.Register(codeTools.ReadFileTool{Paths: workspacePolicy})
 	gitBase := gitTools.Base{Paths: workspacePolicy, Guard: commandPolicy, Timeout: cfg.Tools.CommandTimeout}
+	tools.Register(gitTools.FetchRefTool{Base: gitBase})
+	tools.Register(gitTools.SearchRefTool{Base: gitBase})
+	tools.Register(gitTools.ReadFileRefTool{Base: gitBase})
 	tools.Register(gitTools.StatusTool{Base: gitBase})
 	tools.Register(gitTools.LogTool{Base: gitBase})
 	tools.Register(gitTools.ShowTool{Base: gitBase})
@@ -117,7 +125,7 @@ func NewServer(cfg config.Config) (*Server, error) {
 		MaxSummaryChars: cfg.Sessions.MaxSummaryChars,
 	}
 	runner := agent.Runner{
-		LLM:       kimi,
+		LLM:       llmClient,
 		Model:     cfg.LLM.Model,
 		Thinking:  cfg.LLM.Thinking,
 		MaxTokens: cfg.LLM.MaxTokens,
@@ -222,7 +230,7 @@ func (s *Server) handleEvent(ctx context.Context, eventID string, ev slack.Event
 	case "app_mention":
 		s.handleMention(ctx, eventID, ev)
 	case "message":
-		s.handlePendingReply(ctx, eventID, ev)
+		s.handleMessage(ctx, eventID, ev)
 	case "reaction_added":
 		if ev.Item.Type == "message" {
 			s.metrics.Reaction(ev.Reaction)
@@ -235,9 +243,9 @@ func (s *Server) handleMention(ctx context.Context, eventID string, ev slack.Eve
 		return
 	}
 	threadTS := ev.ConversationThreadTS()
-	if !s.access.IsAllowed(ev.User, ev.Channel) {
+	if !s.access.AllowsChannel(ev.Channel) {
 		s.metrics.Denied()
-		_, _ = s.slack.PostMessage(ctx, ev.Channel, threadTS, "<@"+ev.User+"> Sorry, you don't have permission to use this bot.")
+		_, _ = s.slack.PostMessage(ctx, ev.Channel, threadTS, "<@"+ev.User+"> Sorry, this channel is not allowed to use this bot.")
 		return
 	}
 	text := s.prompt.CleanUserText(s.cfg.Slack.BotUserID, ev.Text)
@@ -253,11 +261,41 @@ func (s *Server) handleMention(ctx context.Context, eventID string, ev slack.Eve
 	})
 }
 
+func (s *Server) handleMessage(ctx context.Context, eventID string, ev slack.Event) {
+	if isAppDM(ev) {
+		s.handleDirectMessage(ctx, eventID, ev)
+		return
+	}
+	s.handlePendingReply(ctx, eventID, ev)
+}
+
+func (s *Server) handleDirectMessage(ctx context.Context, eventID string, ev slack.Event) {
+	if ev.Subtype != "" || ev.BotID != "" || ev.User == "" || ev.User == s.cfg.Slack.BotUserID {
+		return
+	}
+	if !s.access.AllowsUser(ev.User) {
+		s.metrics.Denied()
+		_, _ = s.slack.PostMessage(ctx, ev.Channel, ev.ConversationThreadTS(), "<@"+ev.User+"> Sorry, you don't have permission to use this bot.")
+		return
+	}
+	text := strings.TrimSpace(ev.Text)
+	if text == "" {
+		text = "(The user sent an empty app DM. Greet them briefly and ask what they need help with. Reply in the same language the user used, or English by default.)"
+	}
+	s.conv.HandleMention(ctx, conversation.Request{
+		EventID:  eventID,
+		UserID:   ev.User,
+		Channel:  ev.Channel,
+		ThreadTS: ev.ConversationThreadTS(),
+		Text:     text,
+	})
+}
+
 func (s *Server) handlePendingReply(ctx context.Context, eventID string, ev slack.Event) {
 	if ev.Subtype != "" || ev.BotID != "" || ev.User == "" || ev.ThreadTS == "" {
 		return
 	}
-	if !s.access.IsAllowed(ev.User, ev.Channel) {
+	if !s.access.AllowsChannel(ev.Channel) {
 		s.metrics.Denied()
 		return
 	}
@@ -268,4 +306,8 @@ func (s *Server) handlePendingReply(ctx context.Context, eventID string, ev slac
 		ThreadTS: ev.ThreadTS,
 		Text:     strings.TrimSpace(ev.Text),
 	})
+}
+
+func isAppDM(ev slack.Event) bool {
+	return ev.ChannelType == "im" || strings.HasPrefix(ev.Channel, "D")
 }

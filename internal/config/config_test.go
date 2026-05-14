@@ -34,13 +34,77 @@ func TestLoadRejectsCrossProviderEnvMixing(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsCodingEndpointWithoutExplicitOptIn(t *testing.T) {
+func TestLoadPrefersDotEnvWhenConfigured(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"PREFER_DOTENV":        "true",
+		"SLACK_BOT_TOKEN":      "xoxb-test",
+		"SLACK_SIGNING_SECRET": "secret",
+		"ALLOWED_SLACK_USERS":  "U123",
+		"LLM_PROTOCOL":         "anthropic",
+		"ANTHROPIC_BASE_URL":   "https://api.kimi.com/coding/",
+		"ANTHROPIC_AUTH_TOKEN": "dotenv-token",
+		"ANTHROPIC_MODEL":      "kimi-for-coding",
+	})
+	t.Setenv("OPENAI_BASE_URL", "https://api.deepseek.com")
+	t.Setenv("OPENAI_API_KEY", "shell-key")
+	t.Setenv("OPENAI_MODEL", "deepseek-chat")
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.LLM.Protocol != "anthropic" {
+		t.Fatalf("LLM.Protocol = %q, want anthropic", cfg.LLM.Protocol)
+	}
+	if cfg.LLM.Model != "kimi-for-coding" {
+		t.Fatalf("LLM.Model = %q, want kimi-for-coding", cfg.LLM.Model)
+	}
+}
+
+func TestLoadAllowsAnthropicCodingEndpointWithoutExperimentalOptIn(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
 	writeEnvFile(t, dir, map[string]string{
 		"SLACK_BOT_TOKEN":      "xoxb-test",
 		"SLACK_SIGNING_SECRET": "secret",
 		"ALLOWED_SLACK_USERS":  "U123",
+		"LLM_PROTOCOL":         "anthropic",
+		"ANTHROPIC_BASE_URL":   "https://api.kimi.com/coding/",
+		"ANTHROPIC_AUTH_TOKEN": "token",
+		"ANTHROPIC_MODEL":      "kimi-for-coding",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.LLM.Protocol != "anthropic" {
+		t.Fatalf("LLM.Protocol = %q, want anthropic", cfg.LLM.Protocol)
+	}
+}
+
+func TestLoadRejectsOpenAICodingEndpointWithoutExplicitOptIn(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":      "xoxb-test",
+		"SLACK_SIGNING_SECRET": "secret",
+		"ALLOWED_SLACK_USERS":  "U123",
+		"LLM_PROTOCOL":         "openai",
 		"ANTHROPIC_BASE_URL":   "https://api.kimi.com/coding/",
 		"ANTHROPIC_AUTH_TOKEN": "token",
 		"ANTHROPIC_MODEL":      "kimi-for-coding",
@@ -78,6 +142,11 @@ func resetConfigEnv(t *testing.T) {
 		"SLACK_BOT_USER_ID",
 		"ALLOWED_SLACK_USERS",
 		"ALLOWED_SLACK_CHANNELS",
+		"LLM_PROTOCOL",
+		"LLM_ANTHROPIC_FLAVOR",
+		"KIMI_PROTOCOL",
+		"ANTHROPIC_PROTOCOL",
+		"ANTHROPIC_FLAVOR",
 		"OPENAI_API_KEY",
 		"OPENAI_BASE_URL",
 		"OPENAI_MODEL",
@@ -92,6 +161,7 @@ func resetConfigEnv(t *testing.T) {
 		"ANTHROPIC_AUTH_TOKEN",
 		"ANTHROPIC_MODEL",
 		"ALLOW_ENV_MIXING",
+		"PREFER_DOTENV",
 		"ALLOW_EXPERIMENTAL_CODING_ENDPOINT",
 	}
 	for _, key := range keys {

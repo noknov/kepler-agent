@@ -14,17 +14,18 @@ type Authorization struct {
 }
 
 type Event struct {
-	Type     string `json:"type"`
-	Subtype  string `json:"subtype,omitempty"`
-	User     string `json:"user,omitempty"`
-	Text     string `json:"text,omitempty"`
-	Channel  string `json:"channel,omitempty"`
-	TS       string `json:"ts,omitempty"`
-	ThreadTS string `json:"thread_ts,omitempty"`
-	BotID    string `json:"bot_id,omitempty"`
-	Reaction string `json:"reaction,omitempty"`
-	Tab      string `json:"tab,omitempty"`
-	Item     Item   `json:"item,omitempty"`
+	Type        string `json:"type"`
+	Subtype     string `json:"subtype,omitempty"`
+	User        string `json:"user,omitempty"`
+	Text        string `json:"text,omitempty"`
+	Channel     string `json:"channel,omitempty"`
+	ChannelType string `json:"channel_type,omitempty"`
+	TS          string `json:"ts,omitempty"`
+	ThreadTS    string `json:"thread_ts,omitempty"`
+	BotID       string `json:"bot_id,omitempty"`
+	Reaction    string `json:"reaction,omitempty"`
+	Tab         string `json:"tab,omitempty"`
+	Item        Item   `json:"item,omitempty"`
 }
 
 type Item struct {
