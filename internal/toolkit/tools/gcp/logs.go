@@ -31,7 +31,7 @@ func (t LogsTool) Spec() llm.ToolSpec {
 		description += " Current defaults/hints: " + hint + "."
 	}
 	return registry.FunctionSpec(
-		"gcp.logs",
+		"gcp-logs",
 		description,
 		registry.ObjectSchema(nil, map[string]any{
 			"filter":    map[string]any{"type": "string", "description": "Cloud Logging filter expression. Example: severity>=ERROR AND resource.labels.namespace_name=\"mt-dev\""},

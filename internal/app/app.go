@@ -39,6 +39,7 @@ func Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	go pullWorkspaceRepos(ctx, cfg.Security.WorkspaceRoots, 10*time.Minute)
 	return server.ListenAndServe(ctx)
 }
 
@@ -73,8 +74,8 @@ func NewServer(cfg config.Config) (*Server, error) {
 	recorder := observability.NewRecorder()
 	workspacePolicy := safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}
 	commandPolicy := safety.NewCommandPolicy()
-	redactor := safety.Redactor{}
-	promptPolicy := safety.PromptPolicy{}
+	redactor := safety.Redactor{WorkspaceRoots: cfg.Security.WorkspaceRoots}
+	promptPolicy := safety.PromptPolicy{WorkspaceRoots: cfg.Security.WorkspaceRoots}
 
 	delegates := delegation.NewManager(kimi, cfg.LLM.Model, cfg.LLM.Thinking)
 	_ = delegates.LoadMarkdown(filepath.Join("config", "rules"), filepath.Join("config", "skills"))
@@ -125,9 +126,10 @@ func NewServer(cfg config.Config) (*Server, error) {
 		Format:    mem,
 		Sanitize:  redactor,
 		Observer:  recorder,
-		MaxSteps:  12,
+		MaxSteps:  16,
 	}
 	conv := conversation.NewService(store, slackClient, runner, mem, promptPolicy, redactor, recorder)
+	conv.Format = slack.MarkdownToMrkdwn
 
 	s := &Server{
 		cfg:     cfg,
@@ -180,6 +182,18 @@ func (s *Server) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+
+	var envelope slack.EventEnvelope
+	if err := json.Unmarshal(bodyBytes, &envelope); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if envelope.Type == "url_verification" {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"challenge": envelope.Challenge})
+		return
+	}
+
 	body := string(bodyBytes)
 	if err := slack.VerifySignature(
 		s.cfg.Slack.SigningSecret,
@@ -189,16 +203,6 @@ func (s *Server) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 		time.Now(),
 	); err != nil {
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
-		return
-	}
-
-	var envelope slack.EventEnvelope
-	if err := json.Unmarshal(bodyBytes, &envelope); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
-		return
-	}
-	if envelope.Type == "url_verification" {
-		_ = json.NewEncoder(w).Encode(map[string]string{"challenge": envelope.Challenge})
 		return
 	}
 
@@ -213,6 +217,8 @@ func (s *Server) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleEvent(ctx context.Context, eventID string, ev slack.Event) {
 	switch ev.Type {
+	case "app_home_opened":
+		s.handleAppHome(ctx, ev)
 	case "app_mention":
 		s.handleMention(ctx, eventID, ev)
 	case "message":
@@ -231,13 +237,12 @@ func (s *Server) handleMention(ctx context.Context, eventID string, ev slack.Eve
 	threadTS := ev.ConversationThreadTS()
 	if !s.access.IsAllowed(ev.User, ev.Channel) {
 		s.metrics.Denied()
-		_, _ = s.slack.PostMessage(ctx, ev.Channel, threadTS, "<@"+ev.User+"> 你暂时没有权限使用这个 bot。")
+		_, _ = s.slack.PostMessage(ctx, ev.Channel, threadTS, "<@"+ev.User+"> Sorry, you don't have permission to use this bot.")
 		return
 	}
 	text := s.prompt.CleanUserText(s.cfg.Slack.BotUserID, ev.Text)
 	if text == "" {
-		_, _ = s.slack.PostMessage(ctx, ev.Channel, threadTS, "<@"+ev.User+"> 我在，直接把要排查的问题发我就行。")
-		return
+		text = "(The user mentioned me but didn't say anything specific. Greet them briefly and ask what they need help with. Reply in the same language the user used, or English by default.)"
 	}
 	s.conv.HandleMention(ctx, conversation.Request{
 		EventID:  eventID,
