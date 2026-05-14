@@ -23,6 +23,7 @@ type Event struct {
 	ThreadTS string `json:"thread_ts,omitempty"`
 	BotID    string `json:"bot_id,omitempty"`
 	Reaction string `json:"reaction,omitempty"`
+	Tab      string `json:"tab,omitempty"`
 	Item     Item   `json:"item,omitempty"`
 }
 

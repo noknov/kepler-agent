@@ -22,7 +22,7 @@ type ReadFileTool struct {
 
 func (t ReadFileTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
-		"code.read_file",
+		"code-read_file",
 		"Read a text file from an allowed workspace root. Use start_line and max_lines to avoid dumping huge files.",
 		registry.ObjectSchema([]string{"path"}, map[string]any{
 			"path":       map[string]any{"type": "string", "description": "File path under one of WORKSPACE_ROOTS."},
@@ -98,7 +98,7 @@ type SearchTool struct {
 
 func (t SearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
-		"code.search",
+		"code-search",
 		"Search code with ripgrep under an allowed workspace root. Prefer this before reading files when locating symbols, errors, routes, or config keys.",
 		registry.ObjectSchema([]string{"query"}, map[string]any{
 			"query": map[string]any{"type": "string", "description": "Literal or regex query for rg."},
@@ -154,7 +154,12 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, _ registry
 		return registry.Result{}, fmt.Errorf("rg failed: %s", strings.TrimSpace(stderr.String()))
 	}
 
-	lines := strings.Split(strings.TrimRight(stdout.String(), "\n"), "\n")
+	output := stdout.String()
+	// Strip workspace root prefix from rg output so the model never sees absolute paths
+	for _, r := range t.Paths.Roots {
+		output = strings.ReplaceAll(output, r+"/", "")
+	}
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
 	if len(lines) > args.Limit {
 		lines = append(lines[:args.Limit], "...[truncated after "+strconv.Itoa(args.Limit)+" matches]")
 	}

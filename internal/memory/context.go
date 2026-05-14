@@ -50,10 +50,7 @@ func (b Builder) Build(systemPrompt, threadContext, userText, summary string, tu
 		})
 	}
 
-	history := turns
-	if b.MaxMessages > 0 && len(history) > b.MaxMessages {
-		history = history[len(history)-b.MaxMessages:]
-	}
+	history := trimHistory(turns, b.MaxMessages)
 	messages = append(messages, ToLLM(history)...)
 	messages = append(messages, llm.Message{Role: "user", Content: userText})
 	return messages
@@ -119,6 +116,23 @@ func ToLLM(turns []Turn) []llm.Message {
 		messages = append(messages, msg)
 	}
 	return messages
+}
+
+// trimHistory keeps the last ~max turns but never splits a tool_calls/tool
+// group, which would cause "tool must follow tool_calls" API errors.
+func trimHistory(turns []Turn, max int) []Turn {
+	if max <= 0 || len(turns) <= max {
+		return turns
+	}
+	start := len(turns) - max
+	// Advance past any orphaned tool responses at the cut point.
+	for start < len(turns) && turns[start].Role == RoleTool {
+		start++
+	}
+	if start >= len(turns) {
+		return nil
+	}
+	return turns[start:]
 }
 
 func truncate(s string, max int) string {

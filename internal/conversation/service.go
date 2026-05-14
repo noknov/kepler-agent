@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
 
@@ -15,9 +16,14 @@ import (
 
 type Messenger interface {
 	PostMessage(ctx context.Context, channel, threadTS, text string) (string, error)
+	StartStream(ctx context.Context, channel, threadTS, recipientUserID string) (string, error)
+	AppendStream(ctx context.Context, channel, ts string, chunks []map[string]any) error
+	StopStream(ctx context.Context, channel, ts string) error
 	DeleteMessage(ctx context.Context, channel, ts string) error
 	ThreadContext(ctx context.Context, channel, threadTS string, limit int) string
 }
+
+type TextFormatter func(string) string
 
 type Service struct {
 	Store     session.Store
@@ -27,6 +33,7 @@ type Service struct {
 	Prompt    safety.PromptPolicy
 	Redactor  safety.Redactor
 	Metrics   *observability.Recorder
+	Format    TextFormatter
 
 	mu       sync.Mutex
 	locks    map[string]*sync.Mutex
@@ -85,7 +92,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 
 	sess, ok, err := s.Store.Get(ctx, sessionID)
 	if err != nil {
-		s.reportError(ctx, req, "读取会话失败："+s.Redactor.Sanitize(err.Error()))
+		s.reportError(ctx, req, "Failed to load session: "+s.Redactor.Sanitize(err.Error()))
 		return
 	}
 	if requirePending {
@@ -98,15 +105,38 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}
 
 	start := time.Now()
-	thinkingTS, _ := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, "<@"+req.UserID+"> :thinking_face: thinking...")
+
+	streamTS, streamErr := s.Messenger.StartStream(ctx, req.Channel, req.ThreadTS, req.UserID)
+	useStream := streamErr == nil && streamTS != ""
+	if streamErr != nil {
+		log.Printf("stream fallback: %v", streamErr)
+	}
+
+	var thinkingTS string
+	if !useStream {
+		thinkingTS, _ = s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, ":thinking_face: ...")
+	}
 	defer func() {
 		if s.Metrics != nil {
 			s.Metrics.Latency(time.Since(start))
 		}
-		if thinkingTS != "" {
+		if useStream {
+			_ = s.Messenger.StopStream(context.Background(), req.Channel, streamTS)
+		} else if thinkingTS != "" {
 			_ = s.Messenger.DeleteMessage(context.Background(), req.Channel, thinkingTS)
 		}
 	}()
+
+	const taskID = "thinking"
+	runner := s.Runner
+	runner.StatusUpdate = func(status string) {
+		if !useStream {
+			return
+		}
+		_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
+			{"type": "task_update", "id": taskID, "title": status, "status": "in_progress"},
+		})
+	}
 
 	threadContext := s.Messenger.ThreadContext(ctx, req.Channel, req.ThreadTS, 30)
 	messages := s.Memory.Build(
@@ -116,7 +146,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		sess.Summary,
 		sess.Turns,
 	)
-	result, err := s.Runner.Run(ctx, agent.Request{
+	result, err := runner.Run(ctx, agent.Request{
 		Messages: messages,
 		Runtime: registry.Runtime{
 			UserID:   req.UserID,
@@ -138,7 +168,15 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}
 		sess.Turns = trimTurns(sess.Turns, s.maxTurns)
 		_ = s.Store.Save(ctx, sess)
-		s.reportError(ctx, req, "<@"+req.UserID+"> 处理失败："+s.Redactor.Sanitize(err.Error()))
+		errMsg := "Error: " + s.Redactor.Sanitize(err.Error())
+		if useStream {
+			_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
+				{"type": "task_update", "id": taskID, "status": "error"},
+				{"type": "markdown_text", "text": errMsg},
+			})
+		} else {
+			s.reportError(ctx, req, errMsg)
+		}
 		return
 	}
 
@@ -152,7 +190,19 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		s.Metrics.Error(err)
 	}
 	if !result.Pending && result.Final != "" {
-		_, _ = s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, result.Final)
+		finalText := s.Redactor.Sanitize(result.Final)
+		if useStream {
+			_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
+				{"type": "task_update", "id": taskID, "status": "complete"},
+				{"type": "markdown_text", "text": finalText},
+			})
+		} else {
+			text := finalText
+			if s.Format != nil {
+				text = s.Format(text)
+			}
+			_, _ = s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, text)
+		}
 	}
 }
 
@@ -194,5 +244,12 @@ func trimTurns(turns []memory.Turn, max int) []memory.Turn {
 	if max <= 0 || len(turns) <= max {
 		return turns
 	}
-	return append([]memory.Turn(nil), turns[len(turns)-max:]...)
+	start := len(turns) - max
+	for start < len(turns) && turns[start].Role == memory.RoleTool {
+		start++
+	}
+	if start >= len(turns) {
+		return nil
+	}
+	return append([]memory.Turn(nil), turns[start:]...)
 }

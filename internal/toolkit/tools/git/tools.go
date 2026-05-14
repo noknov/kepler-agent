@@ -25,7 +25,7 @@ type StatusTool struct{ Base }
 
 func (t StatusTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
-		"git.status",
+		"git-status",
 		"Read git branch and working tree status. This is read-only.",
 		registry.ObjectSchema(nil, map[string]any{
 			"repo": map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
@@ -50,7 +50,7 @@ type LogTool struct{ Base }
 
 func (t LogTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
-		"git.log",
+		"git-log",
 		"Read recent commits from git log. This is read-only.",
 		registry.ObjectSchema(nil, map[string]any{
 			"repo":  map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
@@ -83,7 +83,7 @@ type ShowTool struct{ Base }
 
 func (t ShowTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
-		"git.show",
+		"git-show",
 		"Read a commit diff or file at revision. This is read-only and output is capped.",
 		registry.ObjectSchema([]string{"rev"}, map[string]any{
 			"repo":      map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
