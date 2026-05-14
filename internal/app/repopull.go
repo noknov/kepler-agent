@@ -28,19 +28,12 @@ func pullWorkspaceRepos(ctx context.Context, roots []string, interval time.Durat
 				if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
 					continue
 				}
-				var out []byte
-				var pullErr error
-				for _, branch := range []string{"mt-main", "main", "master"} {
-					cmd := exec.CommandContext(ctx, "git", "-C", dir, "pull", "--ff-only", "origin", branch)
-					out, pullErr = cmd.CombinedOutput()
-					if pullErr == nil {
-						break
-					}
-				}
+				cmd := exec.CommandContext(ctx, "git", "-C", dir, "fetch", "--prune", "origin")
+				out, pullErr := cmd.CombinedOutput()
 				if pullErr != nil {
 					log.Printf("workspace pull %s: %s", e.Name(), strings.TrimSpace(string(out)))
 				} else {
-					log.Printf("workspace pull %s: ok", e.Name())
+					log.Printf("workspace fetch %s: ok", e.Name())
 				}
 			}
 		}

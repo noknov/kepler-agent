@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/url"
 	"strings"
 
 	"github.com/wati/oncall-agent/internal/slack"
@@ -31,10 +30,6 @@ func (s *Server) homeView(userID string) map[string]any {
 		statusText = "Not allowlisted"
 	}
 
-	channelMode := "Any channel mention"
-	if len(s.cfg.Security.AllowedChannels) > 0 {
-		channelMode = "Allowlisted channels only"
-	}
 	mentionText := "mention the bot"
 	if s.cfg.Slack.BotUserID != "" {
 		mentionText = fmt.Sprintf("mention `<@%s>`", s.cfg.Slack.BotUserID)
@@ -42,12 +37,8 @@ func (s *Server) homeView(userID string) map[string]any {
 
 	blocks := []map[string]any{
 		headerBlock("Oncall Agent"),
-		sectionBlock("*Shared oncall assistant*\nNo personal Cursor API key is needed. This app uses the service-level API credentials plus Slack-side access control."),
 		fieldsBlock(
 			field("*Access*\n"+statusEmoji+" "+statusText),
-			field("*Channel mode*\n"+channelMode),
-			field("*Provider*\n"+displayProviderName(s.cfg.LLM.BaseURL)),
-			field("*Base URL*\n"+displayProviderHost(s.cfg.LLM.BaseURL)),
 			field("*Model*\n`"+s.cfg.LLM.Model+"`"),
 		),
 		dividerBlock(),
@@ -101,30 +92,4 @@ func field(text string) map[string]any {
 
 func dividerBlock() map[string]any {
 	return map[string]any{"type": "divider"}
-}
-
-func displayProviderHost(rawURL string) string {
-	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.Host == "" {
-		if rawURL == "" {
-			return "Unknown"
-		}
-		return "`" + rawURL + "`"
-	}
-	return "`" + parsed.Host + "`"
-}
-
-func displayProviderName(rawURL string) string {
-	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.Host == "" {
-		return "Unknown"
-	}
-	switch parsed.Host {
-	case "api.deepseek.com":
-		return "DeepSeek"
-	case "api.moonshot.ai", "api.kimi.com":
-		return "Kimi"
-	default:
-		return "`" + parsed.Host + "`"
-	}
 }
