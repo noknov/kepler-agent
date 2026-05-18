@@ -55,26 +55,9 @@ func (c *AnthropicClient) Chat(ctx Context, req Request) (Response, error) {
 	if !ok {
 		stdCtx = context.Background()
 	}
-	httpReq, err := http.NewRequestWithContext(stdCtx, http.MethodPost, anthropicMessagesURL(c.baseURL), bytes.NewReader(payload))
+	data, err := c.doWithRetry(stdCtx, payload)
 	if err != nil {
 		return Response{}, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("anthropic-version", "2023-06-01")
-	setAnthropicAuthHeaders(httpReq.Header, c.apiKey, c.flavor)
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return Response{}, err
-	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return Response{}, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Response{}, fmt.Errorf("anthropic messages failed: status=%d body=%s", resp.StatusCode, string(data))
 	}
 
 	var parsed anthropicResponse
@@ -113,6 +96,49 @@ func (c *AnthropicClient) Chat(ctx Context, req Request) (Response, error) {
 		},
 		Raw: data,
 	}, nil
+}
+
+func (c *AnthropicClient) doWithRetry(ctx context.Context, payload []byte) ([]byte, error) {
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
+		data, err := c.doOnce(ctx, payload)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
+		if !IsTemporaryOverload(err) || attempt == 3 {
+			return nil, err
+		}
+		if err := sleepBeforeRetry(ctx, attempt); err != nil {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+func (c *AnthropicClient) doOnce(ctx context.Context, payload []byte) ([]byte, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicMessagesURL(c.baseURL), bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	setAnthropicAuthHeaders(httpReq.Header, c.apiKey, c.flavor)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, ProviderError{Provider: "anthropic messages", StatusCode: resp.StatusCode, Body: compactBody(data)}
+	}
+	return data, nil
 }
 
 type anthropicRequest struct {
