@@ -50,28 +50,9 @@ func (c *KimiClient) Chat(ctx Context, req Request) (Response, error) {
 	if !ok {
 		stdCtx = context.Background()
 	}
-	httpReq, err := http.NewRequestWithContext(stdCtx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(payload))
+	data, err := c.doWithRetry(stdCtx, payload)
 	if err != nil {
 		return Response{}, err
-	}
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	if hasBearerPrefix(c.apiKey) {
-		httpReq.Header.Set("Authorization", c.apiKey)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return Response{}, err
-	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return Response{}, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Response{}, fmt.Errorf("kimi chat completion failed: status=%d body=%s", resp.StatusCode, string(data))
 	}
 
 	var parsed struct {
@@ -93,6 +74,51 @@ func (c *KimiClient) Chat(ctx Context, req Request) (Response, error) {
 		Usage:        parsed.Usage,
 		Raw:          data,
 	}, nil
+}
+
+func (c *KimiClient) doWithRetry(ctx context.Context, payload []byte) ([]byte, error) {
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
+		data, err := c.doOnce(ctx, payload)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
+		if !IsTemporaryOverload(err) || attempt == 3 {
+			return nil, err
+		}
+		if err := sleepBeforeRetry(ctx, attempt); err != nil {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+func (c *KimiClient) doOnce(ctx context.Context, payload []byte) ([]byte, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if hasBearerPrefix(c.apiKey) {
+		httpReq.Header.Set("Authorization", c.apiKey)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, ProviderError{Provider: "kimi chat completion", StatusCode: resp.StatusCode, Body: compactBody(data)}
+	}
+	return data, nil
 }
 
 func hasBearerPrefix(token string) bool {

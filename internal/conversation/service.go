@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/wati/oncall-agent/internal/agent"
+	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/memory"
 	"github.com/wati/oncall-agent/internal/observability"
 	"github.com/wati/oncall-agent/internal/safety"
@@ -168,7 +169,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}
 		sess.Turns = trimTurns(sess.Turns, s.maxTurns)
 		_ = s.Store.Save(ctx, sess)
-		errMsg := "Error: " + s.Redactor.Sanitize(err.Error())
+		errMsg := s.Redactor.Sanitize(llm.UserFacingError(err))
 		if useStream {
 			_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
 				{"type": "task_update", "id": taskID, "status": "error"},
