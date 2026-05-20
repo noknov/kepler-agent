@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -231,6 +232,8 @@ func (s *Server) handleEvent(ctx context.Context, eventID string, ev slack.Event
 		s.handleMention(ctx, eventID, ev)
 	case "message":
 		s.handleMessage(ctx, eventID, ev)
+	case "file_shared":
+		s.handleFileShared(ctx, eventID, ev)
 	case "reaction_added":
 		if ev.Item.Type == "message" {
 			s.metrics.Reaction(ev.Reaction)
@@ -250,15 +253,17 @@ func (s *Server) handleMention(ctx context.Context, eventID string, ev slack.Eve
 	}
 	text := s.prompt.CleanUserText(s.cfg.Slack.BotUserID, ev.Text)
 	text = appendSlackFiles(text, ev.Files)
+	parts := s.slackImageParts(ctx, ev.Files)
 	if text == "" {
 		text = "(The user mentioned me but didn't say anything specific. Greet them briefly and ask what they need help with. Reply in the same language the user used, or English by default.)"
 	}
 	s.conv.HandleMention(ctx, conversation.Request{
-		EventID:  eventID,
-		UserID:   ev.User,
-		Channel:  ev.Channel,
-		ThreadTS: threadTS,
-		Text:     text,
+		EventID:      eventID,
+		UserID:       ev.User,
+		Channel:      ev.Channel,
+		ThreadTS:     threadTS,
+		Text:         text,
+		ContentParts: parts,
 	})
 }
 
@@ -281,15 +286,64 @@ func (s *Server) handleDirectMessage(ctx context.Context, eventID string, ev sla
 	}
 	text := strings.TrimSpace(ev.Text)
 	text = appendSlackFiles(text, ev.Files)
+	parts := s.slackImageParts(ctx, ev.Files)
 	if text == "" {
 		text = "(The user sent an empty app DM. Greet them briefly and ask what they need help with. Reply in the same language the user used, or English by default.)"
 	}
 	s.conv.HandleMention(ctx, conversation.Request{
-		EventID:  eventID,
-		UserID:   ev.User,
-		Channel:  ev.Channel,
-		ThreadTS: ev.ConversationThreadTS(),
-		Text:     text,
+		EventID:      eventID,
+		UserID:       ev.User,
+		Channel:      ev.Channel,
+		ThreadTS:     ev.ConversationThreadTS(),
+		Text:         text,
+		ContentParts: parts,
+	})
+}
+
+func (s *Server) handleFileShared(ctx context.Context, eventID string, ev slack.Event) {
+	userID := firstNonEmpty(ev.User, ev.UserID)
+	channelID := firstNonEmpty(ev.Channel, ev.ChannelID)
+	if userID == "" || userID == s.cfg.Slack.BotUserID || channelID == "" {
+		return
+	}
+	file := ev.File
+	if file.ID == "" {
+		file.ID = ev.FileID
+	}
+	if file.ID == "" {
+		return
+	}
+	if isDMChannel(channelID) {
+		if !s.access.AllowsUser(userID) {
+			s.metrics.Denied()
+			_, _ = s.slack.PostMessage(ctx, channelID, ev.ConversationThreadTS(), "<@"+userID+"> Sorry, you don't have permission to use this bot.")
+			return
+		}
+		text := appendSlackFiles("", []slack.File{file})
+		s.conv.HandleMention(ctx, conversation.Request{
+			EventID:      eventID,
+			UserID:       userID,
+			Channel:      channelID,
+			ThreadTS:     ev.ConversationThreadTS(),
+			Text:         text,
+			ContentParts: s.slackImageParts(ctx, []slack.File{file}),
+		})
+		return
+	}
+	if !s.access.AllowsChannel(channelID) {
+		s.metrics.Denied()
+		return
+	}
+	if ev.ThreadTS == "" {
+		return
+	}
+	s.conv.HandleReply(ctx, conversation.Request{
+		EventID:      eventID,
+		UserID:       userID,
+		Channel:      channelID,
+		ThreadTS:     ev.ThreadTS,
+		Text:         appendSlackFiles("", []slack.File{file}),
+		ContentParts: s.slackImageParts(ctx, []slack.File{file}),
 	})
 }
 
@@ -302,16 +356,21 @@ func (s *Server) handlePendingReply(ctx context.Context, eventID string, ev slac
 		return
 	}
 	s.conv.HandleReply(ctx, conversation.Request{
-		EventID:  eventID,
-		UserID:   ev.User,
-		Channel:  ev.Channel,
-		ThreadTS: ev.ThreadTS,
-		Text:     appendSlackFiles(strings.TrimSpace(ev.Text), ev.Files),
+		EventID:      eventID,
+		UserID:       ev.User,
+		Channel:      ev.Channel,
+		ThreadTS:     ev.ThreadTS,
+		Text:         appendSlackFiles(strings.TrimSpace(ev.Text), ev.Files),
+		ContentParts: s.slackImageParts(ctx, ev.Files),
 	})
 }
 
 func isAppDM(ev slack.Event) bool {
-	return ev.ChannelType == "im" || strings.HasPrefix(ev.Channel, "D")
+	return ev.ChannelType == "im" || isDMChannel(ev.Channel)
+}
+
+func isDMChannel(channel string) bool {
+	return strings.HasPrefix(channel, "D")
 }
 
 func isUserMessageSubtype(subtype string) bool {
@@ -328,4 +387,92 @@ func appendSlackFiles(text string, files []slack.File) string {
 		return filesText
 	}
 	return text + "\n\n" + filesText
+}
+
+func (s *Server) slackImageParts(ctx context.Context, files []slack.File) []llm.ContentPart {
+	parts := make([]llm.ContentPart, 0, len(files))
+	for _, file := range files {
+		mime := normalizedImageMIME(file)
+		if mime == "" {
+			continue
+		}
+		if file.Size > maxSlackImageBytes {
+			log.Printf("skip slack image %s: size %d exceeds limit %d", file.ID, file.Size, maxSlackImageBytes)
+			continue
+		}
+		data, err := s.slack.DownloadFile(ctx, file, maxSlackImageBytes)
+		if err != nil {
+			log.Printf("skip slack image %s: %v", file.ID, err)
+			continue
+		}
+		actualMIME := sniffImageMIME(data)
+		if actualMIME == "" {
+			log.Printf("skip slack image %s: downloaded content is not a supported image", file.ID)
+			continue
+		}
+		if actualMIME != mime {
+			log.Printf("slack image %s declared %s but detected %s", file.ID, mime, actualMIME)
+		}
+		dataURL := "data:" + actualMIME + ";base64," + base64.StdEncoding.EncodeToString(data)
+		parts = append(parts, llm.ImageURLPart(dataURL))
+	}
+	return parts
+}
+
+const maxSlackImageBytes = 8 << 20
+
+func normalizedImageMIME(file slack.File) string {
+	mime := strings.ToLower(strings.TrimSpace(file.Mimetype))
+	switch mime {
+	case "image/png", "image/jpeg", "image/webp", "image/gif":
+		return mime
+	}
+	switch strings.ToLower(strings.TrimSpace(file.Filetype)) {
+	case "png":
+		return "image/png"
+	case "jpg", "jpeg":
+		return "image/jpeg"
+	case "webp":
+		return "image/webp"
+	case "gif":
+		return "image/gif"
+	default:
+		return ""
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func sniffImageMIME(data []byte) string {
+	if len(data) >= 8 &&
+		data[0] == 0x89 &&
+		data[1] == 'P' &&
+		data[2] == 'N' &&
+		data[3] == 'G' &&
+		data[4] == '\r' &&
+		data[5] == '\n' &&
+		data[6] == 0x1a &&
+		data[7] == '\n' {
+		return "image/png"
+	}
+	if len(data) >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff {
+		return "image/jpeg"
+	}
+	if len(data) >= 12 &&
+		string(data[0:4]) == "RIFF" &&
+		string(data[8:12]) == "WEBP" {
+		return "image/webp"
+	}
+	if len(data) >= 6 && (string(data[0:6]) == "GIF87a" || string(data[0:6]) == "GIF89a") {
+		return "image/gif"
+	}
+	return ""
 }

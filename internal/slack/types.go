@@ -17,6 +17,7 @@ type Event struct {
 	Type        string `json:"type"`
 	Subtype     string `json:"subtype,omitempty"`
 	User        string `json:"user,omitempty"`
+	UserID      string `json:"user_id,omitempty"`
 	Text        string `json:"text,omitempty"`
 	Channel     string `json:"channel,omitempty"`
 	ChannelType string `json:"channel_type,omitempty"`
@@ -27,6 +28,9 @@ type Event struct {
 	Tab         string `json:"tab,omitempty"`
 	Item        Item   `json:"item,omitempty"`
 	Files       []File `json:"files,omitempty"`
+	File        File   `json:"file,omitempty"`
+	FileID      string `json:"file_id,omitempty"`
+	ChannelID   string `json:"channel_id,omitempty"`
 }
 
 type Item struct {
@@ -45,16 +49,17 @@ type Message struct {
 }
 
 type File struct {
-	ID         string `json:"id,omitempty"`
-	Name       string `json:"name,omitempty"`
-	Title      string `json:"title,omitempty"`
-	Mimetype   string `json:"mimetype,omitempty"`
-	Filetype   string `json:"filetype,omitempty"`
-	PrettyType string `json:"pretty_type,omitempty"`
-	Mode       string `json:"mode,omitempty"`
-	Size       int64  `json:"size,omitempty"`
-	URLPrivate string `json:"url_private,omitempty"`
-	Permalink  string `json:"permalink,omitempty"`
+	ID                 string `json:"id,omitempty"`
+	Name               string `json:"name,omitempty"`
+	Title              string `json:"title,omitempty"`
+	Mimetype           string `json:"mimetype,omitempty"`
+	Filetype           string `json:"filetype,omitempty"`
+	PrettyType         string `json:"pretty_type,omitempty"`
+	Mode               string `json:"mode,omitempty"`
+	Size               int64  `json:"size,omitempty"`
+	URLPrivate         string `json:"url_private,omitempty"`
+	URLPrivateDownload string `json:"url_private_download,omitempty"`
+	Permalink          string `json:"permalink,omitempty"`
 }
 
 func (e Event) ConversationThreadTS() string {

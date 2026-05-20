@@ -45,11 +45,12 @@ type Service struct {
 }
 
 type Request struct {
-	EventID  string
-	UserID   string
-	Channel  string
-	ThreadTS string
-	Text     string
+	EventID      string
+	UserID       string
+	Channel      string
+	ThreadTS     string
+	Text         string
+	ContentParts []llm.ContentPart
 }
 
 func NewService(store session.Store, messenger Messenger, runner agent.Runner, memoryBuilder memory.Builder, prompt safety.PromptPolicy, redactor safety.Redactor, metrics *observability.Recorder) *Service {
@@ -141,10 +142,11 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}
 
 	threadContext := s.Messenger.ThreadContext(ctx, req.Channel, req.ThreadTS, 30)
-	messages := s.Memory.Build(
+	messages := s.Memory.BuildWithParts(
 		s.Prompt.SystemPrompt(),
 		threadContext,
 		req.Text,
+		req.ContentParts,
 		sess.Summary,
 		sess.Turns,
 	)
