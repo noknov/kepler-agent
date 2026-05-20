@@ -249,6 +249,7 @@ func (s *Server) handleMention(ctx context.Context, eventID string, ev slack.Eve
 		return
 	}
 	text := s.prompt.CleanUserText(s.cfg.Slack.BotUserID, ev.Text)
+	text = appendSlackFiles(text, ev.Files)
 	if text == "" {
 		text = "(The user mentioned me but didn't say anything specific. Greet them briefly and ask what they need help with. Reply in the same language the user used, or English by default.)"
 	}
@@ -270,7 +271,7 @@ func (s *Server) handleMessage(ctx context.Context, eventID string, ev slack.Eve
 }
 
 func (s *Server) handleDirectMessage(ctx context.Context, eventID string, ev slack.Event) {
-	if ev.Subtype != "" || ev.BotID != "" || ev.User == "" || ev.User == s.cfg.Slack.BotUserID {
+	if !isUserMessageSubtype(ev.Subtype) || ev.BotID != "" || ev.User == "" || ev.User == s.cfg.Slack.BotUserID {
 		return
 	}
 	if !s.access.AllowsUser(ev.User) {
@@ -279,6 +280,7 @@ func (s *Server) handleDirectMessage(ctx context.Context, eventID string, ev sla
 		return
 	}
 	text := strings.TrimSpace(ev.Text)
+	text = appendSlackFiles(text, ev.Files)
 	if text == "" {
 		text = "(The user sent an empty app DM. Greet them briefly and ask what they need help with. Reply in the same language the user used, or English by default.)"
 	}
@@ -292,7 +294,7 @@ func (s *Server) handleDirectMessage(ctx context.Context, eventID string, ev sla
 }
 
 func (s *Server) handlePendingReply(ctx context.Context, eventID string, ev slack.Event) {
-	if ev.Subtype != "" || ev.BotID != "" || ev.User == "" || ev.ThreadTS == "" {
+	if !isUserMessageSubtype(ev.Subtype) || ev.BotID != "" || ev.User == "" || ev.ThreadTS == "" {
 		return
 	}
 	if !s.access.AllowsChannel(ev.Channel) {
@@ -304,10 +306,26 @@ func (s *Server) handlePendingReply(ctx context.Context, eventID string, ev slac
 		UserID:   ev.User,
 		Channel:  ev.Channel,
 		ThreadTS: ev.ThreadTS,
-		Text:     strings.TrimSpace(ev.Text),
+		Text:     appendSlackFiles(strings.TrimSpace(ev.Text), ev.Files),
 	})
 }
 
 func isAppDM(ev slack.Event) bool {
 	return ev.ChannelType == "im" || strings.HasPrefix(ev.Channel, "D")
+}
+
+func isUserMessageSubtype(subtype string) bool {
+	return subtype == "" || subtype == "file_share"
+}
+
+func appendSlackFiles(text string, files []slack.File) string {
+	filesText := slack.FormatFiles(files)
+	if filesText == "" {
+		return strings.TrimSpace(text)
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return filesText
+	}
+	return text + "\n\n" + filesText
 }
