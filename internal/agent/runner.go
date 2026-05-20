@@ -3,12 +3,19 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+)
+
+var (
+	ErrRepetitiveOutput = errors.New("model output repeated itself")
+	ErrRepeatedToolCall = errors.New("model repeated the same tool call")
 )
 
 type Observer interface {
@@ -60,6 +67,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	}
 	messages := append([]llm.Message(nil), req.Messages...)
 	var generated []llm.Message
+	seenToolCalls := map[string]int{}
 
 	for step := 0; step < maxSteps; step++ {
 		lastStep := step == maxSteps-1
@@ -94,9 +102,6 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		}
 
 		assistantMsg := resp.Message
-		messages = append(messages, assistantMsg)
-		generated = append(generated, assistantMsg)
-
 		if len(assistantMsg.ToolCalls) == 0 {
 			if r.StatusUpdate != nil {
 				r.StatusUpdate("Generating response...")
@@ -105,11 +110,29 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			if final == "" {
 				final = "I didn't get a valid response. Please try again or provide more context."
 			}
+			if looksRepetitive(final) {
+				return Result{Generated: generated}, ErrRepetitiveOutput
+			}
+			assistantMsg.Content = final
+			messages = append(messages, assistantMsg)
+			generated = append(generated, assistantMsg)
 			return Result{Generated: generated, Final: final}, nil
 		}
 
+		// Text before a tool call is only a transient narration. Persisting it
+		// pollutes future turns and can amplify model loops, so keep only the
+		// structured tool calls in the conversation state.
+		assistantMsg.Content = ""
+		messages = append(messages, assistantMsg)
+		generated = append(generated, assistantMsg)
+
 		for _, call := range assistantMsg.ToolCalls {
 			name := call.Function.Name
+			signature := toolCallSignature(call)
+			seenToolCalls[signature]++
+			if seenToolCalls[signature] > 2 {
+				return Result{Generated: generated}, fmt.Errorf("%w: %s", ErrRepeatedToolCall, name)
+			}
 			if r.StatusUpdate != nil {
 				r.StatusUpdate(toolStatusHint(name))
 			}
@@ -145,6 +168,57 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		}
 	}
 	return Result{Generated: generated}, fmt.Errorf("agent exceeded max tool steps")
+}
+
+func toolCallSignature(call llm.ToolCall) string {
+	args := strings.Join(strings.Fields(call.Function.Arguments), " ")
+	return call.Function.Name + "\x00" + args
+}
+
+func looksRepetitive(text string) bool {
+	normalized := strings.TrimSpace(text)
+	if len([]rune(normalized)) < 160 {
+		return false
+	}
+	units := repeatedUnits(normalized)
+	if len(units) < 8 {
+		return false
+	}
+	counts := map[string]int{}
+	total := 0
+	for _, unit := range units {
+		runeLen := len([]rune(unit))
+		if runeLen < 8 {
+			continue
+		}
+		counts[unit]++
+		total++
+		if counts[unit] >= 6 && counts[unit]*runeLen >= len([]rune(normalized))/3 {
+			return true
+		}
+	}
+	if total == 0 {
+		return false
+	}
+	for _, count := range counts {
+		if count >= 8 && count*2 >= total {
+			return true
+		}
+	}
+	return false
+}
+
+func repeatedUnits(text string) []string {
+	splitter := regexp.MustCompile(`[。！？!?;\n]+`)
+	raw := splitter.Split(text, -1)
+	units := make([]string, 0, len(raw))
+	for _, unit := range raw {
+		unit = strings.Join(strings.Fields(strings.TrimSpace(unit)), " ")
+		if unit != "" {
+			units = append(units, unit)
+		}
+	}
+	return units
 }
 
 func (r Runner) format(toolName, output string) string {
