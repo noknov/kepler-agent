@@ -200,15 +200,57 @@ func (c *Client) ThreadContext(ctx context.Context, channel, threadTS string, li
 	lines := make([]string, 0, len(replies))
 	for _, msg := range replies {
 		text := strings.TrimSpace(msg.Text)
-		if text == "" {
+		filesText := FormatFiles(msg.Files)
+		if text == "" && filesText == "" {
 			continue
 		}
 		role := msg.User
 		if msg.User == c.botUserID || msg.BotID != "" {
 			role = "bot"
 		}
-		lines = append(lines, role+": "+NormalizeMentions(text, c.botUserID))
+		content := NormalizeMentions(text, c.botUserID)
+		if filesText != "" {
+			if content != "" {
+				content += "\n"
+			}
+			content += filesText
+		}
+		lines = append(lines, role+": "+content)
 	}
+	return strings.Join(lines, "\n")
+}
+
+func FormatFiles(files []File) string {
+	if len(files) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(files)+1)
+	lines = append(lines, "Uploaded Slack files:")
+	for _, file := range files {
+		name := strings.TrimSpace(file.Title)
+		if name == "" {
+			name = strings.TrimSpace(file.Name)
+		}
+		if name == "" {
+			name = strings.TrimSpace(file.ID)
+		}
+		kind := strings.TrimSpace(file.Mimetype)
+		if kind == "" {
+			kind = strings.TrimSpace(file.PrettyType)
+		}
+		if kind == "" {
+			kind = strings.TrimSpace(file.Filetype)
+		}
+		if kind == "" {
+			kind = "unknown type"
+		}
+		line := "- " + name + " (" + kind + ")"
+		if file.Permalink != "" {
+			line += " " + file.Permalink
+		}
+		lines = append(lines, line)
+	}
+	lines = append(lines, "Note: this bot currently receives file metadata only, not image pixels. Ask the user for the visible details if the task requires reading the image.")
 	return strings.Join(lines, "\n")
 }
 

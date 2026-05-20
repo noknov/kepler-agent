@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync"
 	"time"
@@ -169,7 +170,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}
 		sess.Turns = trimTurns(sess.Turns, s.maxTurns)
 		_ = s.Store.Save(ctx, sess)
-		errMsg := s.Redactor.Sanitize(llm.UserFacingError(err))
+		errMsg := s.Redactor.Sanitize(userFacingError(err))
 		if useStream {
 			_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
 				{"type": "task_update", "id": taskID, "status": "error"},
@@ -253,4 +254,15 @@ func trimTurns(turns []memory.Turn, max int) []memory.Turn {
 		return nil
 	}
 	return append([]memory.Turn(nil), turns[start:]...)
+}
+
+func userFacingError(err error) string {
+	switch {
+	case errors.Is(err, agent.ErrRepetitiveOutput):
+		return "模型输出出现了重复循环，我已经中断这次回复，避免把无效内容继续发到 Slack。请换一种更具体的问法再试一次。"
+	case errors.Is(err, agent.ErrRepeatedToolCall):
+		return "模型重复调用了同一个工具，我已经中断这次分析，避免继续消耗 token。请稍微缩小问题范围后再试一次。"
+	default:
+		return llm.UserFacingError(err)
+	}
 }
