@@ -170,6 +170,106 @@ func (c *Client) DeleteMessage(ctx context.Context, channel, ts string) error {
 	return nil
 }
 
+func (c *Client) FileInfo(ctx context.Context, fileID string) (File, error) {
+	fileID = strings.TrimSpace(fileID)
+	if fileID == "" {
+		return File{}, fmt.Errorf("slack file id is required")
+	}
+	values := url.Values{}
+	values.Set("file", fileID)
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+		File  File   `json:"file,omitempty"`
+	}
+	if err := c.get(ctx, "files.info", values, &out); err != nil {
+		return File{}, err
+	}
+	if !out.OK {
+		return File{}, fmt.Errorf("slack files.info failed: %s", out.Error)
+	}
+	return out.File, nil
+}
+
+func (c *Client) DownloadFile(ctx context.Context, file File, maxBytes int64) ([]byte, error) {
+	if strings.TrimSpace(file.URLPrivateDownload) == "" && strings.TrimSpace(file.URLPrivate) == "" && strings.TrimSpace(file.ID) != "" {
+		info, err := c.FileInfo(ctx, file.ID)
+		if err != nil {
+			return nil, err
+		}
+		file = mergeFile(file, info)
+	}
+	fileURL := strings.TrimSpace(file.URLPrivateDownload)
+	if fileURL == "" {
+		fileURL = strings.TrimSpace(file.URLPrivate)
+	}
+	if fileURL == "" {
+		return nil, fmt.Errorf("slack file %s has no private download URL", file.ID)
+	}
+	if maxBytes <= 0 {
+		maxBytes = 8 << 20
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("slack file download failed: status=%d body=%s", resp.StatusCode, string(data))
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("slack file %s exceeds %d bytes", file.ID, maxBytes)
+	}
+	return data, nil
+}
+
+func mergeFile(primary, fallback File) File {
+	if primary.ID == "" {
+		primary.ID = fallback.ID
+	}
+	if primary.Name == "" {
+		primary.Name = fallback.Name
+	}
+	if primary.Title == "" {
+		primary.Title = fallback.Title
+	}
+	if primary.Mimetype == "" {
+		primary.Mimetype = fallback.Mimetype
+	}
+	if primary.Filetype == "" {
+		primary.Filetype = fallback.Filetype
+	}
+	if primary.PrettyType == "" {
+		primary.PrettyType = fallback.PrettyType
+	}
+	if primary.Mode == "" {
+		primary.Mode = fallback.Mode
+	}
+	if primary.Size == 0 {
+		primary.Size = fallback.Size
+	}
+	if primary.URLPrivate == "" {
+		primary.URLPrivate = fallback.URLPrivate
+	}
+	if primary.URLPrivateDownload == "" {
+		primary.URLPrivateDownload = fallback.URLPrivateDownload
+	}
+	if primary.Permalink == "" {
+		primary.Permalink = fallback.Permalink
+	}
+	return primary
+}
+
 func (c *Client) Replies(ctx context.Context, channel, threadTS string, limit int) ([]Message, error) {
 	if limit <= 0 {
 		limit = 20
@@ -250,7 +350,7 @@ func FormatFiles(files []File) string {
 		}
 		lines = append(lines, line)
 	}
-	lines = append(lines, "Note: this bot currently receives file metadata only, not image pixels. Ask the user for the visible details if the task requires reading the image.")
+	lines = append(lines, "Note: supported image files may be sent to the model on the current turn; thread history contains file metadata only.")
 	return strings.Join(lines, "\n")
 }
 
