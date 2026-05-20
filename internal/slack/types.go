@@ -26,6 +26,7 @@ type Event struct {
 	Reaction    string `json:"reaction,omitempty"`
 	Tab         string `json:"tab,omitempty"`
 	Item        Item   `json:"item,omitempty"`
+	Files       []File `json:"files,omitempty"`
 }
 
 type Item struct {
@@ -40,6 +41,20 @@ type Message struct {
 	Text     string `json:"text,omitempty"`
 	TS       string `json:"ts,omitempty"`
 	ThreadTS string `json:"thread_ts,omitempty"`
+	Files    []File `json:"files,omitempty"`
+}
+
+type File struct {
+	ID         string `json:"id,omitempty"`
+	Name       string `json:"name,omitempty"`
+	Title      string `json:"title,omitempty"`
+	Mimetype   string `json:"mimetype,omitempty"`
+	Filetype   string `json:"filetype,omitempty"`
+	PrettyType string `json:"pretty_type,omitempty"`
+	Mode       string `json:"mode,omitempty"`
+	Size       int64  `json:"size,omitempty"`
+	URLPrivate string `json:"url_private,omitempty"`
+	Permalink  string `json:"permalink,omitempty"`
 }
 
 func (e Event) ConversationThreadTS() string {
