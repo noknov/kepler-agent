@@ -52,6 +52,34 @@ func TestAnthropicMessagesConvertToolCallsAndResults(t *testing.T) {
 	}
 }
 
+func TestAnthropicMessagesConvertImageParts(t *testing.T) {
+	messages := anthropicMessages([]Message{{
+		Role: "user",
+		ContentParts: []ContentPart{
+			TextPart("describe this"),
+			ImageURLPart("data:image/png;base64,aGVsbG8="),
+		},
+	}})
+
+	if len(messages) != 1 {
+		t.Fatalf("len(messages) = %d, want 1", len(messages))
+	}
+	blocks := messages[0].Content
+	if len(blocks) != 2 {
+		t.Fatalf("len(blocks) = %d, want 2", len(blocks))
+	}
+	if blocks[0].Type != "text" || blocks[0].Text != "describe this" {
+		t.Fatalf("text block mismatch: %#v", blocks[0])
+	}
+	source, ok := blocks[1].Source.(map[string]string)
+	if blocks[1].Type != "image" || !ok {
+		t.Fatalf("image block mismatch: %#v", blocks[1])
+	}
+	if source["type"] != "base64" || source["media_type"] != "image/png" || source["data"] != "aGVsbG8=" {
+		t.Fatalf("image source mismatch: %#v", source)
+	}
+}
+
 func TestAnthropicTools(t *testing.T) {
 	tools := anthropicTools([]ToolSpec{{
 		Type: "function",

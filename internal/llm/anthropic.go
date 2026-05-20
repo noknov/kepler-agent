@@ -158,6 +158,7 @@ type anthropicMessage struct {
 type anthropicBlock struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
+	Source    any             `json:"source,omitempty"`
 	ID        string          `json:"id,omitempty"`
 	Name      string          `json:"name,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
@@ -208,9 +209,7 @@ func anthropicMessages(messages []Message) []anthropicMessage {
 			continue
 		case "assistant":
 			blocks := make([]anthropicBlock, 0, 1+len(msg.ToolCalls))
-			if strings.TrimSpace(msg.Content) != "" {
-				blocks = append(blocks, anthropicBlock{Type: "text", Text: msg.Content})
-			}
+			blocks = append(blocks, anthropicContentBlocks(msg)...)
 			for _, call := range msg.ToolCalls {
 				input := json.RawMessage(call.Function.Arguments)
 				if !json.Valid(input) {
@@ -239,15 +238,65 @@ func anthropicMessages(messages []Message) []anthropicMessage {
 				out = append(out, anthropicMessage{Role: "user", Content: []anthropicBlock{block}})
 			}
 		default:
-			if strings.TrimSpace(msg.Content) != "" {
+			blocks := anthropicContentBlocks(msg)
+			if len(blocks) > 0 {
 				out = append(out, anthropicMessage{
 					Role:    "user",
-					Content: []anthropicBlock{{Type: "text", Text: msg.Content}},
+					Content: blocks,
 				})
 			}
 		}
 	}
 	return out
+}
+
+func anthropicContentBlocks(msg Message) []anthropicBlock {
+	if len(msg.ContentParts) == 0 {
+		if strings.TrimSpace(msg.Content) == "" {
+			return nil
+		}
+		return []anthropicBlock{{Type: "text", Text: msg.Content}}
+	}
+	blocks := make([]anthropicBlock, 0, len(msg.ContentParts))
+	for _, part := range msg.ContentParts {
+		switch part.Type {
+		case "text":
+			if strings.TrimSpace(part.Text) != "" {
+				blocks = append(blocks, anthropicBlock{Type: "text", Text: part.Text})
+			}
+		case "image_url":
+			if part.ImageURL == nil || strings.TrimSpace(part.ImageURL.URL) == "" {
+				continue
+			}
+			source, ok := anthropicImageSource(part.ImageURL.URL)
+			if !ok {
+				continue
+			}
+			blocks = append(blocks, anthropicBlock{Type: "image", Source: source})
+		}
+	}
+	return blocks
+}
+
+func anthropicImageSource(dataURL string) (map[string]string, bool) {
+	const marker = ";base64,"
+	if !strings.HasPrefix(dataURL, "data:image/") {
+		return nil, false
+	}
+	idx := strings.Index(dataURL, marker)
+	if idx < 0 {
+		return nil, false
+	}
+	mediaType := strings.TrimPrefix(dataURL[:idx], "data:")
+	data := dataURL[idx+len(marker):]
+	if mediaType == "" || data == "" {
+		return nil, false
+	}
+	return map[string]string{
+		"type":       "base64",
+		"media_type": mediaType,
+		"data":       data,
+	}, true
 }
 
 func onlyToolResults(blocks []anthropicBlock) bool {
