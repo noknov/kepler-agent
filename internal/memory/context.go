@@ -36,6 +36,10 @@ type Builder struct {
 }
 
 func (b Builder) Build(systemPrompt, threadContext, userText, summary string, turns []Turn) []llm.Message {
+	return b.BuildWithParts(systemPrompt, threadContext, userText, nil, summary, turns)
+}
+
+func (b Builder) BuildWithParts(systemPrompt, threadContext, userText string, userParts []llm.ContentPart, summary string, turns []Turn) []llm.Message {
 	messages := []llm.Message{{Role: "system", Content: systemPrompt}}
 	if summary != "" {
 		messages = append(messages, llm.Message{
@@ -52,7 +56,16 @@ func (b Builder) Build(systemPrompt, threadContext, userText, summary string, tu
 
 	history := trimHistory(turns, b.MaxMessages)
 	messages = append(messages, ToLLM(history)...)
-	messages = append(messages, llm.Message{Role: "user", Content: userText})
+	userMessage := llm.Message{Role: "user", Content: userText}
+	if len(userParts) > 0 {
+		parts := make([]llm.ContentPart, 0, len(userParts)+1)
+		if strings.TrimSpace(userText) != "" {
+			parts = append(parts, llm.TextPart(userText))
+		}
+		parts = append(parts, userParts...)
+		userMessage.ContentParts = parts
+	}
+	messages = append(messages, userMessage)
 	return messages
 }
 
