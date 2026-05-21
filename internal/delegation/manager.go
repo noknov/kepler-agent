@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/wati/oncall-agent/internal/prompts"
 )
 
 type Profile struct {
@@ -33,11 +34,11 @@ func NewManager(client llm.Client, model, thinking string) *Manager {
 		profiles: map[string]Profile{
 			"code": {
 				Name:         "code",
-				SystemPrompt: "You are a focused code-reading delegate. Inspect only the supplied context and return concise findings with evidence.",
+				SystemPrompt: prompts.Delegate("code", "You are a focused code-reading delegate. Inspect only the supplied context and return concise findings with evidence."),
 			},
 			"incident": {
 				Name:         "incident",
-				SystemPrompt: "You are an incident triage delegate. Build a hypothesis list, evidence, impact, and next checks.",
+				SystemPrompt: prompts.Delegate("incident", "You are an incident triage delegate. Build a hypothesis list, evidence, impact, and next checks."),
 			},
 		},
 	}

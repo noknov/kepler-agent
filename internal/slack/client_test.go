@@ -49,3 +49,21 @@ func TestMergeFile(t *testing.T) {
 		t.Fatalf("mergeFile did not fill fallback fields: %#v", got)
 	}
 }
+
+func TestFormatThreadContextSkipsBotReplies(t *testing.T) {
+	got := formatThreadContext([]Message{
+		{User: "U123", Text: "first question"},
+		{User: "B999", Text: "old bot answer"},
+		{BotID: "B01", Text: "app reply"},
+		{User: "U123", Text: "follow-up"},
+	}, "B999")
+
+	if strings.Contains(got, "old bot answer") || strings.Contains(got, "app reply") {
+		t.Fatalf("formatThreadContext() leaked bot replies: %q", got)
+	}
+	for _, want := range []string{"U123: first question", "U123: follow-up"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatThreadContext() = %q, want %q", got, want)
+		}
+	}
+}
