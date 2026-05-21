@@ -106,6 +106,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	if !ok {
 		sess = session.Session{ID: sessionID, Channel: req.Channel, ThreadTS: req.ThreadTS, UserID: req.UserID}
 	}
+	sess.Turns = memory.FilterPersistentTurns(sess.Turns)
 
 	start := time.Now()
 
@@ -164,7 +165,6 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	sess.PendingUserID = ""
 	sess.PendingQuestion = ""
 	sess.Turns = append(sess.Turns, memory.UserTurn(req.Text))
-	sess.Turns = append(sess.Turns, memory.FromLLM(result.Generated)...)
 
 	if err != nil {
 		if s.Metrics != nil {
@@ -183,6 +183,8 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}
 		return
 	}
+
+	sess.Turns = append(sess.Turns, memory.FilterPersistentTurns(memory.FromLLM(result.Generated))...)
 
 	if result.Pending {
 		sess.PendingUserInput = true

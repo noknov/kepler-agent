@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/wati/oncall-agent/internal/prompts"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
@@ -60,6 +61,8 @@ type Result struct {
 	PendingQuestion string
 }
 
+const repetitiveRetryPrompt = "Your previous answer became repetitive. Give one concise final answer only. Do not repeat sentences. Do not narrate further investigation. If evidence is insufficient, say the next check in one short paragraph."
+
 func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	maxSteps := r.MaxSteps
 	if maxSteps <= 0 {
@@ -68,9 +71,10 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	messages := append([]llm.Message(nil), req.Messages...)
 	var generated []llm.Message
 	seenToolCalls := map[string]int{}
+	retriedRepetitiveFinal := false
 
 	for step := 0; step < maxSteps; step++ {
-		lastStep := step == maxSteps-1
+		lastStep := step == maxSteps-1 || retriedRepetitiveFinal
 		if r.Observer != nil {
 			r.Observer.LLMCall()
 		}
@@ -111,6 +115,14 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 				final = "I didn't get a valid response. Please try again or provide more context."
 			}
 			if looksRepetitive(final) {
+				if !retriedRepetitiveFinal {
+					retriedRepetitiveFinal = true
+					messages = append(messages, llm.Message{Role: "system", Content: repetitiveRetryPrompt})
+					if r.StatusUpdate != nil {
+						r.StatusUpdate("Retrying final response...")
+					}
+					continue
+				}
 				return Result{Generated: generated}, ErrRepetitiveOutput
 			}
 			assistantMsg.Content = final
@@ -236,23 +248,25 @@ func (r Runner) sanitize(text string) string {
 }
 
 var toolHints = map[string]string{
-	"code-read_file":     "Reading code...",
-	"code-search":        "Searching code...",
-	"git-status":         "Checking repo status...",
-	"git-log":            "Reading commit history...",
-	"git-show":           "Inspecting commit...",
-	"gcp-logs":           "Querying logs...",
-	"notion-search":      "Searching docs...",
-	"notion-create_page": "Creating page...",
-	"youtrack-get_issue": "Fetching issue...",
-	"youtrack-search":    "Searching issues...",
-	"slack-ask_user":     "Asking for more info...",
-	"delegate-run":       "Deep analysis...",
+	"code-read_file":           "Reading code...",
+	"code-search":              "Searching code...",
+	"git-status":               "Checking repo status...",
+	"git-log":                  "Reading commit history...",
+	"git-show":                 "Inspecting commit...",
+	"gcp-logs":                 "Querying logs...",
+	"notion-search":            "Searching docs...",
+	"notion-create_page":       "Creating page...",
+	"youtrack-get_issue":       "Fetching issue...",
+	"youtrack-search":          "Searching issues...",
+	"github-dispatch_workflow": "Triggering GitHub workflow...",
+	"github-workflow_runs":     "Checking GitHub workflow runs...",
+	"slack-ask_user":           "Asking for more info...",
+	"delegate-run":             "Deep analysis...",
 }
 
 func toolStatusHint(name string) string {
 	if hint, ok := toolHints[name]; ok {
-		return hint
+		return prompts.ToolStatus(name, hint)
 	}
-	return "Processing..."
+	return prompts.ToolStatus("default", "Processing...")
 }
