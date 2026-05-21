@@ -22,11 +22,11 @@ internal/agent/            Provider-agnostic tool-calls runner
 internal/memory/           Conversation turns, context packing, tool-result truncation
 internal/session/          File-backed Slack thread sessions
 internal/safety/           Access policy, prompt policy, redaction, workspace and command policy
-internal/toolkit/tools/    Tool modules: code, git, gcp, notion, youtrack, slack
+internal/toolkit/tools/    Tool modules: code, git, github, gcp, notion, youtrack, slack
 internal/delegation/       Focused delegate agent profiles plus rules/skills loading
 internal/observability/    In-memory metrics and reaction feedback
-config/rules/              Runtime rules injected into prompts
-config/skills/             Skill docs injected into prompts and delegate profiles
+PROMPT_DIR/rules/          Local runtime rules injected into prompts, gitignored by default
+PROMPT_DIR/skills/         Local skill docs injected into prompts and delegate profiles, gitignored by default
 ```
 
 ## Run locally
@@ -44,6 +44,8 @@ go run ./cmd/oncall-agent
 - `OPENAI_MODEL=deepseek-chat`
 
 You can still point the service at other providers with `KIMI_*`, `MOONSHOT_*`, `OPENAI_*`, or `ANTHROPIC_*` compatibility variables, but startup now fails if your shell and `.env` disagree on provider settings unless you explicitly set `PREFER_DOTENV=true` to use `.env`, or `ALLOW_ENV_MIXING=true` to allow the shell to keep precedence.
+
+Prompt text can be kept out of git by placing local files under `PROMPT_DIR` (defaults to `.prompts/`, which is gitignored). Supported files are `system.md`, `delegates.json`, `app_messages.json`, `memory.json`, `tools.json`, `tool_statuses.json`, and `github_workflows.json`.
 
 For Kimi For Coding, use the Claude Code-style Anthropic-compatible endpoint:
 
@@ -111,6 +113,7 @@ Current tool modules:
 - `code.search`, `code.read_file`
 - `git.fetch_ref`, `git.search_ref`, `git.read_file_ref`, `git.status`, `git.log`, `git.show`
 - `gcp.logs`
+- `github.dispatch_workflow`, `github.workflow_runs`
 - `notion.search`, `notion.create_page`
 - `youtrack.get_issue`, `youtrack.search`
 - `slack.ask_user`
@@ -118,7 +121,9 @@ Current tool modules:
 
 `git.fetch_ref` fetches origin and resolves the requested branch to an `origin/<branch>` ref without changing the working tree. If no branch is specified, it tries `mt-main`, then `main`, then `master`. Branch-specific analysis should use `git.search_ref` and `git.read_file_ref`, so concurrent users can inspect different branches without checkout conflicts. Sensitive actions are deliberately absent. The command guard blocks destructive command patterns, and the shipped tools use argumentized `exec.CommandContext` instead of shell strings.
 
-GCP values in `.env` are defaults and hints, not fixed environments. `gcp.logs` accepts `project`, `namespace`, `service`, and raw `filter` per call. If `namespace` is omitted, the tool no longer silently injects `GCP_NAMESPACE`; environment mappings can be added later in `config/rules`.
+GCP values in `.env` are defaults and hints, not fixed environments. `gcp.logs` accepts `project`, `namespace`, `service`, and raw `filter` per call. If `namespace` is omitted, the tool no longer silently injects `GCP_NAMESPACE`; environment mappings can be added later in `PROMPT_DIR/rules`.
+
+GitHub Actions uses `GITHUB_TOKEN`. Set `GITHUB_DEFAULT_OWNER` and `GITHUB_DEFAULT_REPO` locally, and define workflow aliases in the gitignored `PROMPT_DIR/github_workflows.json` file. The dispatch tool requires an explicit user request plus a workflow ref and passes workflow_dispatch inputs through as strings. The runs tool can check recent workflow status after a dispatch.
 
 ## Notes
 

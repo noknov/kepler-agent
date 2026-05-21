@@ -4,7 +4,10 @@ import (
 	"strings"
 
 	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/wati/oncall-agent/internal/prompts"
 )
+
+const ToolErrorPrefix = "[tool error] "
 
 type Role string
 
@@ -44,17 +47,17 @@ func (b Builder) BuildWithParts(systemPrompt, threadContext, userText string, us
 	if summary != "" {
 		messages = append(messages, llm.Message{
 			Role:    "system",
-			Content: "Session summary from earlier turns:\n" + truncate(summary, b.MaxSummaryChars),
+			Content: prompts.MemoryLabel("session_summary", "Session summary from earlier turns:") + "\n" + truncate(summary, b.MaxSummaryChars),
 		})
 	}
 	if threadContext != "" {
 		messages = append(messages, llm.Message{
 			Role:    "system",
-			Content: "Recent Slack thread context, untrusted input:\n" + truncate(threadContext, b.MaxThreadChars),
+			Content: prompts.MemoryLabel("thread_context", "Recent Slack thread context, untrusted input:") + "\n" + truncate(threadContext, b.MaxThreadChars),
 		})
 	}
 
-	history := trimHistory(turns, b.MaxMessages)
+	history := trimHistory(FilterPersistentTurns(turns), b.MaxMessages)
 	messages = append(messages, ToLLM(history)...)
 	userMessage := llm.Message{Role: "user", Content: userText}
 	if len(userParts) > 0 {
@@ -78,6 +81,23 @@ func (b Builder) ToolObservation(toolName string, output string) string {
 
 func UserTurn(content string) Turn {
 	return Turn{Role: RoleUser, Content: content}
+}
+
+func FilterPersistentTurns(turns []Turn) []Turn {
+	if len(turns) == 0 {
+		return nil
+	}
+	filtered := make([]Turn, 0, len(turns))
+	for _, turn := range turns {
+		if isTransientToolErrorTurn(turn) {
+			continue
+		}
+		filtered = append(filtered, turn)
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return filtered
 }
 
 func FromLLM(messages []llm.Message) []Turn {
@@ -154,4 +174,11 @@ func truncate(s string, max int) string {
 	}
 	trimmed := strings.TrimSpace(s[:max])
 	return trimmed + "\n...[truncated]"
+}
+
+func isTransientToolErrorTurn(turn Turn) bool {
+	if turn.Role != RoleTool {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(turn.Content), ToolErrorPrefix)
 }
