@@ -58,9 +58,10 @@ func TestRunnerRejectsRepetitiveFinal(t *testing.T) {
 	}
 	client := &fakeClient{responses: []llm.Response{
 		{Message: llm.Message{Role: "assistant", Content: repeated}},
+		{Message: llm.Message{Role: "assistant", Content: repeated}},
 	}}
 
-	result, err := Runner{LLM: client, Tools: registry.New(), MaxSteps: 1}.Run(context.Background(), Request{})
+	result, err := Runner{LLM: client, Tools: registry.New(), MaxSteps: 2}.Run(context.Background(), Request{})
 	if !errors.Is(err, ErrRepetitiveOutput) {
 		t.Fatalf("Run() error = %v, want ErrRepetitiveOutput", err)
 	}
@@ -69,11 +70,46 @@ func TestRunnerRejectsRepetitiveFinal(t *testing.T) {
 	}
 }
 
-type fakeClient struct {
-	responses []llm.Response
+func TestRunnerRetriesRepetitiveFinal(t *testing.T) {
+	repeated := ""
+	for i := 0; i < 20; i++ {
+		repeated += "让我查看一下后端中这三个功能的具体实现和保存逻辑。"
+	}
+	client := &fakeClient{responses: []llm.Response{
+		{Message: llm.Message{Role: "assistant", Content: repeated}},
+		{Message: llm.Message{Role: "assistant", Content: "这是修正后的最终回答。"}},
+	}}
+
+	result, err := Runner{LLM: client, Tools: registry.New(), MaxSteps: 3}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "这是修正后的最终回答。" {
+		t.Fatalf("Final = %q", result.Final)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("expected 2 LLM calls, got %d", len(client.requests))
+	}
+	lastRequest := client.requests[len(client.requests)-1]
+	foundRetryPrompt := false
+	for _, msg := range lastRequest.Messages {
+		if msg.Role == "system" && msg.Content == repetitiveRetryPrompt {
+			foundRetryPrompt = true
+			break
+		}
+	}
+	if !foundRetryPrompt {
+		t.Fatal("retry prompt was not added to the second request")
+	}
 }
 
-func (f *fakeClient) Chat(_ llm.Context, _ llm.Request) (llm.Response, error) {
+type fakeClient struct {
+	responses []llm.Response
+	requests  []llm.Request
+}
+
+func (f *fakeClient) Chat(_ llm.Context, req llm.Request) (llm.Response, error) {
+	f.requests = append(f.requests, req)
 	if len(f.responses) == 0 {
 		return llm.Response{}, errors.New("unexpected chat call")
 	}

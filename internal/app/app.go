@@ -19,12 +19,14 @@ import (
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/memory"
 	"github.com/wati/oncall-agent/internal/observability"
+	"github.com/wati/oncall-agent/internal/prompts"
 	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/session"
 	"github.com/wati/oncall-agent/internal/slack"
 	codeTools "github.com/wati/oncall-agent/internal/toolkit/tools/code"
 	gcpTools "github.com/wati/oncall-agent/internal/toolkit/tools/gcp"
 	gitTools "github.com/wati/oncall-agent/internal/toolkit/tools/git"
+	githubTools "github.com/wati/oncall-agent/internal/toolkit/tools/github"
 	notionTools "github.com/wati/oncall-agent/internal/toolkit/tools/notion"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/slacktool"
@@ -55,6 +57,7 @@ type Server struct {
 }
 
 func NewServer(cfg config.Config) (*Server, error) {
+	prompts.LoadFromEnv()
 	store, err := session.NewFileStore(cfg.Sessions.DataDir)
 	if err != nil {
 		return nil, err
@@ -84,7 +87,7 @@ func NewServer(cfg config.Config) (*Server, error) {
 	promptPolicy := safety.PromptPolicy{WorkspaceRoots: cfg.Security.WorkspaceRoots}
 
 	delegates := delegation.NewManager(llmClient, cfg.LLM.Model, cfg.LLM.Thinking)
-	_ = delegates.LoadMarkdown(filepath.Join("config", "rules"), filepath.Join("config", "skills"))
+	_ = delegates.LoadMarkdown(filepath.Join(prompts.Dir(), "rules"), filepath.Join(prompts.Dir(), "skills"))
 
 	tools := registry.New()
 	tools.Register(codeTools.SearchTool{Paths: workspacePolicy})
@@ -116,6 +119,14 @@ func NewServer(cfg config.Config) (*Server, error) {
 	youtrackClient := youtrackTools.Client{BaseURL: cfg.Tools.YouTrackURL, Token: cfg.Tools.YouTrackToken}
 	tools.Register(youtrackTools.GetIssueTool{Client: youtrackClient})
 	tools.Register(youtrackTools.SearchTool{Client: youtrackClient})
+	githubClient := githubTools.Client{
+		Token:      cfg.Tools.GitHubToken,
+		APIBaseURL: cfg.Tools.GitHubAPIBaseURL,
+		Owner:      cfg.Tools.GitHubDefaultOwner,
+		Repo:       cfg.Tools.GitHubDefaultRepo,
+	}
+	tools.Register(githubTools.DispatchWorkflowTool{Client: githubClient})
+	tools.Register(githubTools.WorkflowRunsTool{Client: githubClient})
 	tools.Register(slacktool.AskUserTool{Slack: slackClient})
 	tools.Register(delegation.Tool{Manager: delegates})
 
@@ -255,7 +266,7 @@ func (s *Server) handleMention(ctx context.Context, eventID string, ev slack.Eve
 	text = appendSlackFiles(text, ev.Files)
 	parts := s.slackImageParts(ctx, ev.Files)
 	if text == "" {
-		text = "(The user mentioned me but didn't say anything specific. Greet them briefly and ask what they need help with. Reply in the same language the user used, or English by default.)"
+		text = prompts.AppMessage("empty_mention", "(The user mentioned me but didn't say anything specific. Greet them briefly and ask what they need help with. Reply in the same language the user used, or English by default.)")
 	}
 	s.conv.HandleMention(ctx, conversation.Request{
 		EventID:      eventID,
@@ -288,7 +299,7 @@ func (s *Server) handleDirectMessage(ctx context.Context, eventID string, ev sla
 	text = appendSlackFiles(text, ev.Files)
 	parts := s.slackImageParts(ctx, ev.Files)
 	if text == "" {
-		text = "(The user sent an empty app DM. Greet them briefly and ask what they need help with. Reply in the same language the user used, or English by default.)"
+		text = prompts.AppMessage("empty_dm", "(The user sent an empty app DM. Greet them briefly and ask what they need help with. Reply in the same language the user used, or English by default.)")
 	}
 	s.conv.HandleMention(ctx, conversation.Request{
 		EventID:      eventID,

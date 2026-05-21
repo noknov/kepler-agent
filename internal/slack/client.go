@@ -297,18 +297,22 @@ func (c *Client) ThreadContext(ctx context.Context, channel, threadTS string, li
 	if err != nil || len(replies) == 0 {
 		return ""
 	}
+	return formatThreadContext(replies, c.botUserID)
+}
+
+func formatThreadContext(replies []Message, botUserID string) string {
 	lines := make([]string, 0, len(replies))
 	for _, msg := range replies {
+		if msg.User == botUserID || msg.BotID != "" {
+			continue
+		}
 		text := strings.TrimSpace(msg.Text)
 		filesText := FormatFiles(msg.Files)
 		if text == "" && filesText == "" {
 			continue
 		}
 		role := msg.User
-		if msg.User == c.botUserID || msg.BotID != "" {
-			role = "bot"
-		}
-		content := NormalizeMentions(text, c.botUserID)
+		content := NormalizeMentions(text, botUserID)
 		if filesText != "" {
 			if content != "" {
 				content += "\n"

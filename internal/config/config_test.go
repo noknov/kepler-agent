@@ -97,6 +97,37 @@ func TestLoadAllowsAnthropicCodingEndpointWithoutExperimentalOptIn(t *testing.T)
 	}
 }
 
+func TestLoadGitHubConfig(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":      "xoxb-test",
+		"SLACK_SIGNING_SECRET": "secret",
+		"ALLOWED_SLACK_USERS":  "U123",
+		"OPENAI_API_KEY":       "openai-token",
+		"GITHUB_TOKEN":         "github-token",
+		"GITHUB_DEFAULT_OWNER": "owner",
+		"GITHUB_DEFAULT_REPO":  "repo",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.Tools.GitHubToken != "github-token" {
+		t.Fatalf("GitHubToken = %q, want github-token", cfg.Tools.GitHubToken)
+	}
+	if cfg.Tools.GitHubDefaultOwner != "owner" || cfg.Tools.GitHubDefaultRepo != "repo" {
+		t.Fatalf("GitHub defaults = %s/%s", cfg.Tools.GitHubDefaultOwner, cfg.Tools.GitHubDefaultRepo)
+	}
+}
+
 func TestLoadRejectsOpenAICodingEndpointWithoutExplicitOptIn(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
@@ -163,6 +194,10 @@ func resetConfigEnv(t *testing.T) {
 		"ALLOW_ENV_MIXING",
 		"PREFER_DOTENV",
 		"ALLOW_EXPERIMENTAL_CODING_ENDPOINT",
+		"GITHUB_TOKEN",
+		"GITHUB_API_BASE_URL",
+		"GITHUB_DEFAULT_OWNER",
+		"GITHUB_DEFAULT_REPO",
 	}
 	for _, key := range keys {
 		t.Setenv(key, "")
