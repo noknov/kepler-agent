@@ -70,6 +70,10 @@ type ToolConfig struct {
 	NotionVersion       string
 	YouTrackURL         string
 	YouTrackToken       string
+	GitHubToken         string
+	GitHubAPIBaseURL    string
+	GitHubDefaultOwner  string
+	GitHubDefaultRepo   string
 }
 
 type ObservingConfig struct {
@@ -160,6 +164,10 @@ func Load() (Config, error) {
 			NotionVersion:       env("NOTION_VERSION", "2022-06-28"),
 			YouTrackURL:         trimRightSlash(os.Getenv("YOUTRACK_URL")),
 			YouTrackToken:       os.Getenv("YOUTRACK_TOKEN"),
+			GitHubToken:         os.Getenv("GITHUB_TOKEN"),
+			GitHubAPIBaseURL:    trimRightSlash(env("GITHUB_API_BASE_URL", "https://api.github.com")),
+			GitHubDefaultOwner:  os.Getenv("GITHUB_DEFAULT_OWNER"),
+			GitHubDefaultRepo:   os.Getenv("GITHUB_DEFAULT_REPO"),
 		},
 		Observing: ObservingConfig{
 			LogLevel: env("LOG_LEVEL", "info"),

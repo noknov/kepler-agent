@@ -4,3 +4,4 @@
 .cache/
 bin/
 dist/
+.prompts/

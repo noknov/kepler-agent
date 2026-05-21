@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/wati/oncall-agent/internal/prompts"
 )
 
 type Runtime struct {
@@ -64,6 +65,8 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 }
 
 func FunctionSpec(name, description string, parameters map[string]any) llm.ToolSpec {
+	description = prompts.ToolDescription(name, description)
+	applyParameterPrompts(name, parameters)
 	return llm.ToolSpec{
 		Type: "function",
 		Function: llm.ToolSpecFunction{
@@ -71,6 +74,23 @@ func FunctionSpec(name, description string, parameters map[string]any) llm.ToolS
 			Description: description,
 			Parameters:  parameters,
 		},
+	}
+}
+
+func applyParameterPrompts(toolName string, parameters map[string]any) {
+	properties, ok := parameters["properties"].(map[string]any)
+	if !ok {
+		return
+	}
+	for param, raw := range properties {
+		property, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		current, _ := property["description"].(string)
+		if next := prompts.ParamDescription(toolName, param, current); next != "" {
+			property["description"] = next
+		}
 	}
 }
 
