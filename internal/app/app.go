@@ -42,7 +42,7 @@ func Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	go pullWorkspaceRepos(ctx, cfg.Security.WorkspaceRoots, cfg.Tools.GitHubToken, 10*time.Minute)
+	go pullWorkspaceRepos(ctx, cfg.Security.WorkspaceRoots, 10*time.Minute)
 	return server.ListenAndServe(ctx)
 }
 
