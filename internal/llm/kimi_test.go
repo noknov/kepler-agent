@@ -34,3 +34,12 @@ func TestBearerTokenValue(t *testing.T) {
 		t.Fatalf("bearerTokenValue() = %q, want sk-test", got)
 	}
 }
+
+func TestProviderName(t *testing.T) {
+	if got := NewKimiClient("https://api.xiaomimimo.com/v1", "token", 0).providerName(); got != "mimo" {
+		t.Fatalf("providerName() = %q, want mimo", got)
+	}
+	if got := NewKimiClient("https://api.moonshot.ai/v1", "token", 0).providerName(); got != "kimi" {
+		t.Fatalf("providerName() = %q, want kimi", got)
+	}
+}
