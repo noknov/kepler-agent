@@ -73,3 +73,37 @@ func TestIsDMChannel(t *testing.T) {
 		t.Fatal("C channel should not be treated as DM")
 	}
 }
+
+func TestIsChannelMention(t *testing.T) {
+	tests := []struct {
+		name string
+		ev   slack.Event
+		want bool
+	}{
+		{
+			name: "thread app mention",
+			ev:   slack.Event{Type: "app_mention", Channel: "C123", TS: "1717000000.000200", ThreadTS: "1717000000.000100"},
+			want: true,
+		},
+		{
+			name: "top level app mention",
+			ev:   slack.Event{Type: "app_mention", Channel: "C123", TS: "1717000000.000100"},
+			want: true,
+		},
+		{
+			name: "plain thread message",
+			ev:   slack.Event{Type: "message", Channel: "C123", TS: "1717000000.000200", ThreadTS: "1717000000.000100"},
+		},
+		{
+			name: "dm app mention",
+			ev:   slack.Event{Type: "app_mention", Channel: "D123", ChannelType: "im", TS: "1717000000.000200", ThreadTS: "1717000000.000100"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isChannelMention(tt.ev); got != tt.want {
+				t.Fatalf("isChannelMention() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

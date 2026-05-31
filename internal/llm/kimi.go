@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -27,21 +28,7 @@ func NewKimiClient(baseURL, apiKey string, timeout time.Duration) *KimiClient {
 }
 
 func (c *KimiClient) Chat(ctx Context, req Request) (Response, error) {
-	body := map[string]any{
-		"model":       req.Model,
-		"messages":    req.Messages,
-		"tools":       req.Tools,
-		"max_tokens":  req.MaxTokens,
-		"temperature": req.Temperature,
-	}
-	if req.Thinking == "enabled" || req.Thinking == "disabled" {
-		body["thinking"] = map[string]string{"type": req.Thinking}
-	}
-	if len(req.Tools) == 0 {
-		delete(body, "tools")
-	}
-
-	payload, err := json.Marshal(body)
+	payload, err := json.Marshal(c.chatBody(req))
 	if err != nil {
 		return Response{}, err
 	}
@@ -76,6 +63,31 @@ func (c *KimiClient) Chat(ctx Context, req Request) (Response, error) {
 	}, nil
 }
 
+func (c *KimiClient) chatBody(req Request) map[string]any {
+	body := map[string]any{
+		"model":       req.Model,
+		"messages":    req.Messages,
+		"tools":       req.Tools,
+		"max_tokens":  req.MaxTokens,
+		"temperature": req.Temperature,
+	}
+	if len(req.Tools) == 0 {
+		delete(body, "tools")
+	}
+	if isMiMoEndpoint(c.baseURL, req.Model) {
+		delete(body, "max_tokens")
+		body["max_completion_tokens"] = req.MaxTokens
+		if req.Thinking == "enabled" || req.Thinking == "disabled" {
+			body["thinking"] = map[string]string{"type": req.Thinking}
+		}
+		return body
+	}
+	if req.Thinking == "enabled" || req.Thinking == "disabled" {
+		body["thinking"] = map[string]string{"type": req.Thinking}
+	}
+	return body
+}
+
 func (c *KimiClient) doWithRetry(ctx context.Context, payload []byte) ([]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt < 4; attempt++ {
@@ -103,6 +115,10 @@ func (c *KimiClient) doOnce(ctx context.Context, payload []byte) ([]byte, error)
 	if hasBearerPrefix(c.apiKey) {
 		httpReq.Header.Set("Authorization", c.apiKey)
 	}
+	if isMiMoEndpoint(c.baseURL, "") {
+		httpReq.Header.Del("Authorization")
+		httpReq.Header.Set("api-key", bearerTokenValue(c.apiKey))
+	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(httpReq)
@@ -123,4 +139,18 @@ func (c *KimiClient) doOnce(ctx context.Context, payload []byte) ([]byte, error)
 
 func hasBearerPrefix(token string) bool {
 	return len(token) >= 7 && (token[:7] == "Bearer " || token[:7] == "bearer ")
+}
+
+func bearerTokenValue(token string) string {
+	token = strings.TrimSpace(token)
+	if hasBearerPrefix(token) {
+		return strings.TrimSpace(token[7:])
+	}
+	return token
+}
+
+func isMiMoEndpoint(baseURL, model string) bool {
+	baseURL = strings.ToLower(strings.TrimSpace(baseURL))
+	model = strings.ToLower(strings.TrimSpace(model))
+	return strings.Contains(baseURL, "xiaomimimo.com") || strings.HasPrefix(model, "mimo-")
 }
