@@ -37,13 +37,17 @@ cp .env.example .env
 go run ./cmd/oncall-agent
 ```
 
-`oncall-agent` loads local `.env` automatically. The simplest setup uses DeepSeek-compatible variables:
+`oncall-agent` loads local `.env` automatically. The default setup uses Xiaomi MiMo's OpenAI-compatible API:
 
-- `OPENAI_API_KEY`
-- `OPENAI_BASE_URL=https://api.deepseek.com`
-- `OPENAI_MODEL=deepseek-chat`
+- `LLM_PROTOCOL=openai`
+- `MIMO_API_KEY`
+- `MIMO_BASE_URL=https://api.xiaomimimo.com/v1`
+- `MIMO_MODEL=mimo-v2.5`
+- `MIMO_THINKING=disabled`
 
-You can still point the service at other providers with `KIMI_*`, `MOONSHOT_*`, `OPENAI_*`, or `ANTHROPIC_*` compatibility variables, but startup now fails if your shell and `.env` disagree on provider settings unless you explicitly set `PREFER_DOTENV=true` to use `.env`, or `ALLOW_ENV_MIXING=true` to allow the shell to keep precedence.
+`mimo-v2.5` is selected so Slack image uploads can be passed as multimodal `image_url` parts. MiMo thinking is disabled by default because multi-turn tool calls must preserve provider-specific reasoning fields across turns; enabling it should be done deliberately after that history path is validated.
+
+You can still point the service at other providers with `MIMO_*`, `KIMI_*`, `MOONSHOT_*`, `OPENAI_*`, or `ANTHROPIC_*` compatibility variables, but startup now fails if your shell and `.env` disagree on provider settings unless you explicitly set `PREFER_DOTENV=true` to use `.env`, or `ALLOW_ENV_MIXING=true` to allow the shell to keep precedence.
 
 Prompt text can be kept out of git by placing local files under `PROMPT_DIR` (defaults to `.prompts/`, which is gitignored). Supported files are `system.md`, `delegates.json`, `app_messages.json`, `memory.json`, `tools.json`, `tool_statuses.json`, and `github_workflows.json`.
 
@@ -127,4 +131,4 @@ GitHub Actions uses `GITHUB_TOKEN`. Set `GITHUB_DEFAULT_OWNER` and `GITHUB_DEFAU
 
 ## Notes
 
-The implementation keeps provider choice configurable through env vars. `OPENAI_*` reflects the original DeepSeek setup, `KIMI_*` and `MOONSHOT_*` cover OpenAI-compatible backends, and `ANTHROPIC_*` can use Anthropic-compatible Messages endpoints such as Kimi For Coding's Claude Code-style API.
+The implementation keeps provider choice configurable through env vars. `MIMO_*` is the default OpenAI-compatible backend, `OPENAI_*`, `KIMI_*`, and `MOONSHOT_*` cover alternate OpenAI-compatible backends, and `ANTHROPIC_*` can use Anthropic-compatible Messages endpoints such as Kimi For Coding's Claude Code-style API.
