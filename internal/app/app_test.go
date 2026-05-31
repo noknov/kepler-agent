@@ -108,19 +108,10 @@ func TestIsChannelMention(t *testing.T) {
 	}
 }
 
-func TestGitFetchEnvUsesTokenWithoutGlobalConfig(t *testing.T) {
-	env := gitFetchEnv("/tmp/askpass", "token")
+func TestGitFetchEnvDisablesTerminalPrompt(t *testing.T) {
+	env := gitFetchEnv()
 	if !containsEnv(env, "GIT_TERMINAL_PROMPT=0") {
 		t.Fatal("git fetch env should disable terminal prompts")
-	}
-	if !containsEnv(env, "GIT_CONFIG_GLOBAL=/dev/null") {
-		t.Fatal("git fetch env should ignore global git config when token is provided")
-	}
-	if !containsEnv(env, "GIT_ASKPASS=/tmp/askpass") {
-		t.Fatal("git fetch env should configure askpass")
-	}
-	if !containsEnv(env, "ONCALL_AGENT_GITHUB_TOKEN=token") {
-		t.Fatal("git fetch env should pass the token through environment")
 	}
 }
 
