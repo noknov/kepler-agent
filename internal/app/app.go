@@ -253,6 +253,9 @@ func (s *Server) handleEvent(ctx context.Context, eventID string, ev slack.Event
 }
 
 func (s *Server) handleMention(ctx context.Context, eventID string, ev slack.Event) {
+	if !isChannelMention(ev) {
+		return
+	}
 	if ev.User == "" || ev.User == s.cfg.Slack.BotUserID || ev.BotID != "" {
 		return
 	}
@@ -279,11 +282,48 @@ func (s *Server) handleMention(ctx context.Context, eventID string, ev slack.Eve
 }
 
 func (s *Server) handleMessage(ctx context.Context, eventID string, ev slack.Event) {
-	if isAppDM(ev) {
-		s.handleDirectMessage(ctx, eventID, ev)
+	if !isAppDM(ev) {
 		return
 	}
-	s.handlePendingReply(ctx, eventID, ev)
+	s.handleDirectMessage(ctx, eventID, ev)
+}
+
+func (s *Server) handleFileShared(ctx context.Context, eventID string, ev slack.Event) {
+	userID := firstNonEmpty(ev.User, ev.UserID)
+	channelID := firstNonEmpty(ev.Channel, ev.ChannelID)
+	if userID == "" || userID == s.cfg.Slack.BotUserID || channelID == "" {
+		return
+	}
+	// Channel file uploads are only handled when Slack also emits an app_mention
+	// event for the uploaded message. Standalone file_shared events have no
+	// mention text, so responding there would violate the no-mention contract.
+	if !isDMChannel(channelID) {
+		return
+	}
+	file := ev.File
+	if file.ID == "" {
+		file.ID = ev.FileID
+	}
+	if file.ID == "" {
+		return
+	}
+	if !s.access.AllowsUser(userID) {
+		s.metrics.Denied()
+		_, _ = s.slack.PostMessage(ctx, channelID, ev.ConversationThreadTS(), "<@"+userID+"> Sorry, you don't have permission to use this bot.")
+		return
+	}
+	text := appendSlackFiles("", []slack.File{file})
+	if text == "" {
+		text = prompts.AppMessage("empty_dm", "(The user sent an app DM with a file but no text. Briefly describe what you can do with the file and ask for any missing context.)")
+	}
+	s.conv.HandleMention(ctx, conversation.Request{
+		EventID:      eventID,
+		UserID:       userID,
+		Channel:      channelID,
+		ThreadTS:     ev.ConversationThreadTS(),
+		Text:         text,
+		ContentParts: s.slackImageParts(ctx, []slack.File{file}),
+	})
 }
 
 func (s *Server) handleDirectMessage(ctx context.Context, eventID string, ev slack.Event) {
@@ -311,73 +351,12 @@ func (s *Server) handleDirectMessage(ctx context.Context, eventID string, ev sla
 	})
 }
 
-func (s *Server) handleFileShared(ctx context.Context, eventID string, ev slack.Event) {
-	userID := firstNonEmpty(ev.User, ev.UserID)
-	channelID := firstNonEmpty(ev.Channel, ev.ChannelID)
-	if userID == "" || userID == s.cfg.Slack.BotUserID || channelID == "" {
-		return
-	}
-	file := ev.File
-	if file.ID == "" {
-		file.ID = ev.FileID
-	}
-	if file.ID == "" {
-		return
-	}
-	if isDMChannel(channelID) {
-		if !s.access.AllowsUser(userID) {
-			s.metrics.Denied()
-			_, _ = s.slack.PostMessage(ctx, channelID, ev.ConversationThreadTS(), "<@"+userID+"> Sorry, you don't have permission to use this bot.")
-			return
-		}
-		text := appendSlackFiles("", []slack.File{file})
-		s.conv.HandleMention(ctx, conversation.Request{
-			EventID:      eventID,
-			UserID:       userID,
-			Channel:      channelID,
-			ThreadTS:     ev.ConversationThreadTS(),
-			Text:         text,
-			ContentParts: s.slackImageParts(ctx, []slack.File{file}),
-		})
-		return
-	}
-	if !s.access.AllowsChannel(channelID) {
-		s.metrics.Denied()
-		return
-	}
-	if ev.ThreadTS == "" {
-		return
-	}
-	s.conv.HandleReply(ctx, conversation.Request{
-		EventID:      eventID,
-		UserID:       userID,
-		Channel:      channelID,
-		ThreadTS:     ev.ThreadTS,
-		Text:         appendSlackFiles("", []slack.File{file}),
-		ContentParts: s.slackImageParts(ctx, []slack.File{file}),
-	})
-}
-
-func (s *Server) handlePendingReply(ctx context.Context, eventID string, ev slack.Event) {
-	if !isUserMessageSubtype(ev.Subtype) || ev.BotID != "" || ev.User == "" || ev.ThreadTS == "" {
-		return
-	}
-	if !s.access.AllowsChannel(ev.Channel) {
-		s.metrics.Denied()
-		return
-	}
-	s.conv.HandleReply(ctx, conversation.Request{
-		EventID:      eventID,
-		UserID:       ev.User,
-		Channel:      ev.Channel,
-		ThreadTS:     ev.ThreadTS,
-		Text:         appendSlackFiles(strings.TrimSpace(ev.Text), ev.Files),
-		ContentParts: s.slackImageParts(ctx, ev.Files),
-	})
-}
-
 func isAppDM(ev slack.Event) bool {
 	return ev.ChannelType == "im" || isDMChannel(ev.Channel)
+}
+
+func isChannelMention(ev slack.Event) bool {
+	return ev.Type == "app_mention" && !isAppDM(ev)
 }
 
 func isDMChannel(channel string) bool {
