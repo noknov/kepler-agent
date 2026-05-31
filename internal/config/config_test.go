@@ -148,10 +148,13 @@ func TestLoadDefaultsToMiMo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v, want nil", err)
 	}
-	if cfg.LLM.Protocol != "openai" {
-		t.Fatalf("LLM.Protocol = %q, want openai", cfg.LLM.Protocol)
+	if cfg.LLM.Provider != "mimo" {
+		t.Fatalf("LLM.Provider = %q, want mimo", cfg.LLM.Provider)
 	}
-	if cfg.LLM.BaseURL != "https://api.xiaomimimo.com/v1" {
+	if cfg.LLM.Protocol != "anthropic" {
+		t.Fatalf("LLM.Protocol = %q, want anthropic", cfg.LLM.Protocol)
+	}
+	if cfg.LLM.BaseURL != "https://token-plan-cn.xiaomimimo.com/anthropic" {
 		t.Fatalf("LLM.BaseURL = %q, want MiMo base URL", cfg.LLM.BaseURL)
 	}
 	if cfg.LLM.Model != "mimo-v2.5" {
@@ -162,6 +165,38 @@ func TestLoadDefaultsToMiMo(t *testing.T) {
 	}
 	if cfg.LLM.Thinking != "disabled" {
 		t.Fatalf("LLM.Thinking = %q, want disabled for MiMo default", cfg.LLM.Thinking)
+	}
+}
+
+func TestLoadMiMoTokenPlanKeepsProviderSpecificKey(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":      "xoxb-test",
+		"SLACK_SIGNING_SECRET": "secret",
+		"ALLOWED_SLACK_USERS":  "U123",
+		"LLM_PROVIDER":         "mimo",
+		"MIMO_PROTOCOL":        "anthropic",
+		"MIMO_BASE_URL":        "https://token-plan-cn.xiaomimimo.com/anthropic",
+		"MIMO_API_KEY":         "tp-token",
+		"MIMO_MODEL":           "mimo-v2.5",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.LLM.Provider != "mimo" || cfg.LLM.Protocol != "anthropic" {
+		t.Fatalf("LLM provider/protocol = %s/%s, want mimo/anthropic", cfg.LLM.Provider, cfg.LLM.Protocol)
+	}
+	if cfg.LLM.APIKey != "tp-token" {
+		t.Fatalf("LLM.APIKey = %q, want MiMo token", cfg.LLM.APIKey)
 	}
 }
 
@@ -211,6 +246,8 @@ func resetConfigEnv(t *testing.T) {
 		"ALLOWED_SLACK_USERS",
 		"ALLOWED_SLACK_CHANNELS",
 		"LLM_PROTOCOL",
+		"LLM_PROVIDER",
+		"LLM_VENDOR",
 		"LLM_ANTHROPIC_FLAVOR",
 		"MIMO_PROTOCOL",
 		"MIMO_API_KEY",
