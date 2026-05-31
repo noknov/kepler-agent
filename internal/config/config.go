@@ -93,7 +93,7 @@ func Load() (Config, error) {
 	}
 	applyDotEnv(dotenvValues, preferDotEnv)
 	wd, _ := os.Getwd()
-	llmProtocol := normalizeLLMProtocol(firstEnv("LLM_PROTOCOL", "KIMI_PROTOCOL", "ANTHROPIC_PROTOCOL"))
+	llmProtocol := normalizeLLMProtocol(firstEnv("LLM_PROTOCOL", "MIMO_PROTOCOL", "KIMI_PROTOCOL", "ANTHROPIC_PROTOCOL"))
 	llmBaseURL := providerBaseURL(llmProtocol)
 	if llmBaseURL == "" {
 		llmBaseURL = os.Getenv("ANTHROPIC_BASE_URL")
@@ -102,7 +102,7 @@ func Load() (Config, error) {
 		}
 	}
 	if llmBaseURL == "" {
-		llmBaseURL = "https://api.moonshot.ai/v1"
+		llmBaseURL = "https://api.xiaomimimo.com/v1"
 	}
 	llmBaseURL = normalizeLLMBaseURL(llmBaseURL, llmProtocol)
 	if llmProtocol == "" {
@@ -117,7 +117,14 @@ func Load() (Config, error) {
 		llmModel = "kimi-for-coding"
 	}
 	if llmModel == "" {
-		llmModel = "kimi-k2.6"
+		llmModel = "mimo-v2.5"
+	}
+	llmThinking := firstEnv("MIMO_THINKING", "KIMI_THINKING")
+	if llmThinking == "" {
+		llmThinking = "enabled"
+	}
+	if isMiMoConfig(llmBaseURL, llmModel) && firstEnv("MIMO_THINKING", "KIMI_THINKING") == "" {
+		llmThinking = "disabled"
 	}
 	cfg := Config{
 		HTTP: HTTPConfig{
@@ -130,14 +137,14 @@ func Load() (Config, error) {
 		},
 		LLM: LLMConfig{
 			BaseURL:         trimRightSlash(llmBaseURL),
-			APIKey:          providerAPIKey(llmProtocol),
+			APIKey:          providerAPIKey(llmProtocol, llmBaseURL, llmModel),
 			Model:           llmModel,
 			Protocol:        llmProtocol,
 			AnthropicFlavor: anthropicFlavor,
-			Thinking:        env("KIMI_THINKING", "enabled"),
-			MaxTokens:       envIntAliases(8192, "KIMI_MAX_TOKENS", "CLAUDE_CODE_MAX_OUTPUT_TOKENS"),
-			Temperature:     envFloat("KIMI_TEMPERATURE", 0.2),
-			Timeout:         envDurationAliases(120*time.Second, "KIMI_TIMEOUT", "API_TIMEOUT_MS"),
+			Thinking:        llmThinking,
+			MaxTokens:       envIntAliases(8192, "MIMO_MAX_TOKENS", "KIMI_MAX_TOKENS", "CLAUDE_CODE_MAX_OUTPUT_TOKENS"),
+			Temperature:     envFloatAliases(0.2, "MIMO_TEMPERATURE", "KIMI_TEMPERATURE"),
+			Timeout:         envDurationAliases(120*time.Second, "MIMO_TIMEOUT", "KIMI_TIMEOUT", "API_TIMEOUT_MS"),
 		},
 		Security: SecurityConfig{
 			AllowedUsers:    envCSV("ALLOWED_SLACK_USERS"),
@@ -184,7 +191,7 @@ func Load() (Config, error) {
 		return cfg, fmt.Errorf("the coding endpoint %q is disabled for oncall-agent by default; switch to an OpenAI-compatible provider or set ALLOW_EXPERIMENTAL_CODING_ENDPOINT=true to continue deliberately", cfg.LLM.BaseURL)
 	}
 	if cfg.LLM.APIKey == "" {
-		return cfg, fmt.Errorf("MOONSHOT_API_KEY, KIMI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, or ANTHROPIC_AUTH_TOKEN is required")
+		return cfg, fmt.Errorf("MIMO_API_KEY, MOONSHOT_API_KEY, KIMI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, or ANTHROPIC_AUTH_TOKEN is required")
 	}
 	if cfg.LLM.Protocol != "openai" && cfg.LLM.Protocol != "anthropic" {
 		return cfg, fmt.Errorf("LLM_PROTOCOL must be openai or anthropic")
@@ -216,23 +223,26 @@ func firstEnv(keys ...string) string {
 
 func providerBaseURL(protocol string) string {
 	if protocol == "anthropic" {
-		return firstEnv("ANTHROPIC_BASE_URL", "KIMI_BASE_URL", "MOONSHOT_BASE_URL", "OPENAI_BASE_URL")
+		return firstEnv("ANTHROPIC_BASE_URL", "MIMO_BASE_URL", "KIMI_BASE_URL", "MOONSHOT_BASE_URL", "OPENAI_BASE_URL")
 	}
-	return firstEnv("KIMI_BASE_URL", "MOONSHOT_BASE_URL", "OPENAI_BASE_URL")
+	return firstEnv("MIMO_BASE_URL", "KIMI_BASE_URL", "MOONSHOT_BASE_URL", "OPENAI_BASE_URL")
 }
 
 func providerModel(protocol string) string {
 	if protocol == "anthropic" {
-		return firstEnv("ANTHROPIC_MODEL", "KIMI_MODEL", "MOONSHOT_MODEL", "OPENAI_MODEL")
+		return firstEnv("ANTHROPIC_MODEL", "MIMO_MODEL", "KIMI_MODEL", "MOONSHOT_MODEL", "OPENAI_MODEL")
 	}
-	return firstEnv("KIMI_MODEL", "MOONSHOT_MODEL", "OPENAI_MODEL", "ANTHROPIC_MODEL")
+	return firstEnv("MIMO_MODEL", "KIMI_MODEL", "MOONSHOT_MODEL", "OPENAI_MODEL", "ANTHROPIC_MODEL")
 }
 
-func providerAPIKey(protocol string) string {
-	if protocol == "anthropic" {
-		return firstEnv("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "MOONSHOT_API_KEY", "KIMI_API_KEY", "OPENAI_API_KEY")
+func providerAPIKey(protocol, baseURL, model string) string {
+	if isMiMoConfig(baseURL, model) {
+		return firstEnv("MIMO_API_KEY")
 	}
-	return firstEnv("MOONSHOT_API_KEY", "KIMI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+	if protocol == "anthropic" {
+		return firstEnv("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "MIMO_API_KEY", "MOONSHOT_API_KEY", "KIMI_API_KEY", "OPENAI_API_KEY")
+	}
+	return firstEnv("MIMO_API_KEY", "MOONSHOT_API_KEY", "KIMI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 }
 
 func envCSV(key string) []string {
@@ -291,6 +301,20 @@ func envFloat(key string, fallback float64) float64 {
 		return fallback
 	}
 	return v
+}
+
+func envFloatAliases(fallback float64, keys ...string) float64 {
+	for _, key := range keys {
+		raw := strings.TrimSpace(os.Getenv(key))
+		if raw == "" {
+			continue
+		}
+		v, err := strconv.ParseFloat(raw, 64)
+		if err == nil {
+			return v
+		}
+	}
+	return fallback
 }
 
 func envDuration(key string, fallback time.Duration) time.Duration {
@@ -404,6 +428,12 @@ func inferAnthropicFlavor(raw string) string {
 	return "official"
 }
 
+func isMiMoConfig(baseURL, model string) bool {
+	baseURL = strings.ToLower(trimRightSlash(baseURL))
+	model = strings.ToLower(strings.TrimSpace(model))
+	return strings.Contains(baseURL, "xiaomimimo.com") || strings.HasPrefix(model, "mimo-")
+}
+
 func readDotEnv(path string) (map[string]string, error) {
 	file, err := os.Open(path)
 	if os.IsNotExist(err) {
@@ -497,6 +527,7 @@ func (s llmEnvSnapshot) configured() bool {
 func providerSnapshot(get func(string) string) llmEnvSnapshot {
 	protocol := normalizeLLMProtocol(firstNonEmpty(
 		get("LLM_PROTOCOL"),
+		get("MIMO_PROTOCOL"),
 		get("KIMI_PROTOCOL"),
 		get("ANTHROPIC_PROTOCOL"),
 	))
@@ -505,12 +536,14 @@ func providerSnapshot(get func(string) string) llmEnvSnapshot {
 		get("ANTHROPIC_FLAVOR"),
 	))
 	baseURL := firstNonEmpty(
+		get("MIMO_BASE_URL"),
 		get("KIMI_BASE_URL"),
 		get("MOONSHOT_BASE_URL"),
 		get("OPENAI_BASE_URL"),
 		get("ANTHROPIC_BASE_URL"),
 	)
 	if baseURL != "" && protocol == "" && strings.TrimSpace(get("ANTHROPIC_BASE_URL")) != "" &&
+		strings.TrimSpace(get("MIMO_BASE_URL")) == "" &&
 		strings.TrimSpace(get("KIMI_BASE_URL")) == "" &&
 		strings.TrimSpace(get("MOONSHOT_BASE_URL")) == "" &&
 		strings.TrimSpace(get("OPENAI_BASE_URL")) == "" {
@@ -528,12 +561,14 @@ func providerSnapshot(get func(string) string) llmEnvSnapshot {
 		AnthropicFlavor: anthropicFlavor,
 		BaseURL:         trimRightSlash(baseURL),
 		Model: firstNonEmpty(
+			get("MIMO_MODEL"),
 			get("KIMI_MODEL"),
 			get("MOONSHOT_MODEL"),
 			get("OPENAI_MODEL"),
 			get("ANTHROPIC_MODEL"),
 		),
 		APIKey: firstNonEmpty(
+			get("MIMO_API_KEY"),
 			get("MOONSHOT_API_KEY"),
 			get("KIMI_API_KEY"),
 			get("OPENAI_API_KEY"),

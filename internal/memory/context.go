@@ -87,10 +87,29 @@ func FilterPersistentTurns(turns []Turn) []Turn {
 	if len(turns) == 0 {
 		return nil
 	}
+	persistedToolCallIDs := map[string]struct{}{}
+	for _, turn := range turns {
+		if turn.Role != RoleTool || isTransientToolErrorTurn(turn) || strings.TrimSpace(turn.ToolCallID) == "" {
+			continue
+		}
+		persistedToolCallIDs[strings.TrimSpace(turn.ToolCallID)] = struct{}{}
+	}
 	filtered := make([]Turn, 0, len(turns))
 	for _, turn := range turns {
 		if isTransientToolErrorTurn(turn) {
 			continue
+		}
+		if turn.Role == RoleAssistant && len(turn.ToolCalls) > 0 {
+			keptCalls := make([]ToolCall, 0, len(turn.ToolCalls))
+			for _, call := range turn.ToolCalls {
+				if _, ok := persistedToolCallIDs[strings.TrimSpace(call.ID)]; ok {
+					keptCalls = append(keptCalls, call)
+				}
+			}
+			turn.ToolCalls = keptCalls
+			if len(turn.ToolCalls) == 0 && strings.TrimSpace(turn.Content) == "" {
+				continue
+			}
 		}
 		filtered = append(filtered, turn)
 	}
