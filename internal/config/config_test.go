@@ -104,7 +104,7 @@ func TestLoadGitHubConfig(t *testing.T) {
 		"SLACK_BOT_TOKEN":      "xoxb-test",
 		"SLACK_SIGNING_SECRET": "secret",
 		"ALLOWED_SLACK_USERS":  "U123",
-		"OPENAI_API_KEY":       "openai-token",
+		"MIMO_API_KEY":         "mimo-token",
 		"GITHUB_TOKEN":         "github-token",
 		"GITHUB_DEFAULT_OWNER": "owner",
 		"GITHUB_DEFAULT_REPO":  "repo",
@@ -125,6 +125,43 @@ func TestLoadGitHubConfig(t *testing.T) {
 	}
 	if cfg.Tools.GitHubDefaultOwner != "owner" || cfg.Tools.GitHubDefaultRepo != "repo" {
 		t.Fatalf("GitHub defaults = %s/%s", cfg.Tools.GitHubDefaultOwner, cfg.Tools.GitHubDefaultRepo)
+	}
+}
+
+func TestLoadDefaultsToMiMo(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":      "xoxb-test",
+		"SLACK_SIGNING_SECRET": "secret",
+		"ALLOWED_SLACK_USERS":  "U123",
+		"MIMO_API_KEY":         "mimo-token",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.LLM.Protocol != "openai" {
+		t.Fatalf("LLM.Protocol = %q, want openai", cfg.LLM.Protocol)
+	}
+	if cfg.LLM.BaseURL != "https://api.xiaomimimo.com/v1" {
+		t.Fatalf("LLM.BaseURL = %q, want MiMo base URL", cfg.LLM.BaseURL)
+	}
+	if cfg.LLM.Model != "mimo-v2.5" {
+		t.Fatalf("LLM.Model = %q, want mimo-v2.5", cfg.LLM.Model)
+	}
+	if cfg.LLM.APIKey != "mimo-token" {
+		t.Fatalf("LLM.APIKey = %q, want mimo-token", cfg.LLM.APIKey)
+	}
+	if cfg.LLM.Thinking != "disabled" {
+		t.Fatalf("LLM.Thinking = %q, want disabled for MiMo default", cfg.LLM.Thinking)
 	}
 }
 
@@ -175,6 +212,14 @@ func resetConfigEnv(t *testing.T) {
 		"ALLOWED_SLACK_CHANNELS",
 		"LLM_PROTOCOL",
 		"LLM_ANTHROPIC_FLAVOR",
+		"MIMO_PROTOCOL",
+		"MIMO_API_KEY",
+		"MIMO_BASE_URL",
+		"MIMO_MODEL",
+		"MIMO_THINKING",
+		"MIMO_MAX_TOKENS",
+		"MIMO_TEMPERATURE",
+		"MIMO_TIMEOUT",
 		"KIMI_PROTOCOL",
 		"ANTHROPIC_PROTOCOL",
 		"ANTHROPIC_FLAVOR",
