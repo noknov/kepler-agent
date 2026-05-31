@@ -266,6 +266,8 @@ func userFacingError(err error) string {
 		return "模型输出出现了重复循环，我已经中断这次回复，避免把无效内容继续发到 Slack。请换一种更具体的问法再试一次。"
 	case errors.Is(err, agent.ErrRepeatedToolCall):
 		return "模型重复调用了同一个工具，我已经中断这次分析，避免继续消耗 token。请稍微缩小问题范围后再试一次。"
+	case errors.Is(err, agent.ErrTextualToolCall):
+		return "模型返回了文本形式的工具调用而不是结构化工具接口，无法安全执行。请换一种更具体的问法，或稍后再试。"
 	default:
 		return llm.UserFacingError(err)
 	}

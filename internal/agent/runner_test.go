@@ -70,6 +70,42 @@ func TestRunnerRejectsRepetitiveFinal(t *testing.T) {
 	}
 }
 
+func TestRunnerRejectsTextualToolCallFinal(t *testing.T) {
+	textual := "<tool_call>\n<function=code-search>\n<parameter=query>test</parameter>\n</function>\n</tool_call>"
+	client := &fakeClient{responses: []llm.Response{
+		{Message: llm.Message{Role: "assistant", Content: textual}},
+		{Message: llm.Message{Role: "assistant", Content: textual}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	_, err := Runner{LLM: client, Tools: tools, MaxSteps: 4}.Run(context.Background(), Request{})
+	if !errors.Is(err, ErrTextualToolCall) {
+		t.Fatalf("Run() error = %v, want ErrTextualToolCall", err)
+	}
+}
+
+func TestRunnerRetriesTextualToolCallThenSucceeds(t *testing.T) {
+	textual := "<tool_call><function=code-search></function></tool_call>"
+	client := &fakeClient{responses: []llm.Response{
+		{Message: llm.Message{Role: "assistant", Content: textual}},
+		{Message: llm.Message{Role: "assistant", Content: "这是基于已有证据的总结。"}},
+	}}
+
+	tools := registry.New()
+	tools.Register(fakeTool{})
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 4}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "这是基于已有证据的总结。" {
+		t.Fatalf("Final = %q", result.Final)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("expected 2 LLM calls, got %d", len(client.requests))
+	}
+}
+
 func TestRunnerRetriesRepetitiveFinal(t *testing.T) {
 	repeated := ""
 	for i := 0; i < 20; i++ {
