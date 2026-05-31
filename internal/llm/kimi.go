@@ -132,9 +132,16 @@ func (c *KimiClient) doOnce(ctx context.Context, payload []byte) ([]byte, error)
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, ProviderError{Provider: "kimi chat completion", StatusCode: resp.StatusCode, Body: compactBody(data)}
+		return nil, ProviderError{Provider: c.providerName() + " chat completion", StatusCode: resp.StatusCode, Body: compactBody(data)}
 	}
 	return data, nil
+}
+
+func (c *KimiClient) providerName() string {
+	if isMiMoEndpoint(c.baseURL, "") {
+		return "mimo"
+	}
+	return "kimi"
 }
 
 func hasBearerPrefix(token string) bool {
