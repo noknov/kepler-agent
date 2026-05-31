@@ -69,6 +69,7 @@ func NewServer(cfg config.Config) (*Server, error) {
 	} else {
 		llmClient = llm.NewKimiClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout)
 	}
+	llmClient = llm.WrapClient(llmClient, llm.CapabilitiesFor(cfg.LLM.Provider, cfg.LLM.Protocol))
 	slackClient := slack.NewClient(cfg.Slack.BotToken, cfg.Slack.BotUserID)
 	if cfg.Slack.BotUserID == "" {
 		if botUserID, err := slackClient.AuthTest(context.Background()); err == nil {
