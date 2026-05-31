@@ -17,6 +17,7 @@ import (
 var (
 	ErrRepetitiveOutput = errors.New("model output repeated itself")
 	ErrRepeatedToolCall = errors.New("model repeated the same tool call")
+	ErrTextualToolCall  = errors.New("model returned textual tool invocation instead of structured tool calls")
 )
 
 type Observer interface {
@@ -63,6 +64,8 @@ type Result struct {
 
 const repetitiveRetryPrompt = "Your previous answer became repetitive. Give one concise final answer only. Do not repeat sentences. Do not narrate further investigation. If evidence is insufficient, say the next check in one short paragraph."
 
+const textualToolCallRetryPrompt = "Your previous reply included textual tool-call markup (for example <tool_call> or <function=...>) instead of using the API's structured tool calling. Do not output tool XML or pseudo tool syntax. Either call tools through the provided tool interface, or give a concise final answer in plain language using evidence already gathered."
+
 func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	maxSteps := r.MaxSteps
 	if maxSteps <= 0 {
@@ -72,9 +75,10 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	var generated []llm.Message
 	seenToolCalls := map[string]int{}
 	retriedRepetitiveFinal := false
+	retriedTextualToolCall := false
 
 	for step := 0; step < maxSteps; step++ {
-		lastStep := step == maxSteps-1 || retriedRepetitiveFinal
+		lastStep := step == maxSteps-1 || retriedRepetitiveFinal || retriedTextualToolCall
 		if r.Observer != nil {
 			r.Observer.LLMCall()
 		}
@@ -113,6 +117,17 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			final := strings.TrimSpace(r.sanitize(assistantMsg.Content))
 			if final == "" {
 				final = "I didn't get a valid response. Please try again or provide more context."
+			}
+			if llm.LooksLikeTextualToolCall(final) {
+				if !retriedTextualToolCall {
+					retriedTextualToolCall = true
+					messages = append(messages, llm.Message{Role: "system", Content: textualToolCallRetryPrompt})
+					if r.StatusUpdate != nil {
+						r.StatusUpdate("Retrying after invalid tool format...")
+					}
+					continue
+				}
+				return Result{Generated: generated}, ErrTextualToolCall
 			}
 			if looksRepetitive(final) {
 				if !retriedRepetitiveFinal {

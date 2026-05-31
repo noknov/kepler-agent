@@ -9,6 +9,8 @@ import (
 
 const ToolErrorPrefix = "[tool error] "
 
+const delegateRunProvenancePrefix = "[delegate inference — unverified; corroborate with code/git/gcp tools before treating as fact]\n"
+
 type Role string
 
 const (
@@ -75,6 +77,9 @@ func (b Builder) BuildWithParts(systemPrompt, threadContext, userText string, us
 func (b Builder) ToolObservation(toolName string, output string) string {
 	if output == "" {
 		return "tool " + toolName + " returned empty output"
+	}
+	if toolName == "delegate-run" {
+		output = delegateRunProvenancePrefix + output
 	}
 	return truncate(output, b.MaxToolChars)
 }

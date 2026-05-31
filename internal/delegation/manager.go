@@ -33,12 +33,12 @@ func NewManager(client llm.Client, model, thinking string) *Manager {
 		thinking: thinking,
 		profiles: map[string]Profile{
 			"code": {
-				Name:         "code",
-				SystemPrompt: prompts.Delegate("code", "You are a focused code-reading delegate. Inspect only the supplied context and return concise findings with evidence."),
+				Name: "code",
+				SystemPrompt: prompts.Delegate("code", "You are a focused analysis delegate. You cannot run tools or read the repository. Use only the supplied Context. Quote evidence verbatim from Context when citing code or paths. If Context is insufficient, list unknowns and recommend which real tools the main agent should run (for example code-search, code-read_file, git-log). Never invent file contents, APIs, or command output."),
 			},
 			"incident": {
-				Name:         "incident",
-				SystemPrompt: prompts.Delegate("incident", "You are an incident triage delegate. Build a hypothesis list, evidence, impact, and next checks."),
+				Name: "incident",
+				SystemPrompt: prompts.Delegate("incident", "You are an incident triage delegate. You cannot run tools. Use only the supplied Context. Build hypotheses, evidence quoted from Context, impact, and next checks. Never invent logs, metrics, or deployments. Recommend concrete follow-up tools for the main agent when verification is needed."),
 			},
 		},
 	}
