@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -267,8 +268,7 @@ func (s *Server) handleMention(ctx context.Context, eventID string, ev slack.Eve
 		return
 	}
 	text := s.prompt.CleanUserText(s.cfg.Slack.BotUserID, ev.Text)
-	text = appendSlackFiles(text, ev.Files)
-	parts := s.slackImageParts(ctx, ev.Files)
+	text, parts := s.attachSlackFiles(ctx, text, ev.Files)
 	if text == "" {
 		text = prompts.AppMessage("empty_mention", "(The user mentioned me but didn't say anything specific. Greet them briefly and ask what they need help with. Reply in the same language the user used, or English by default.)")
 	}
@@ -313,7 +313,7 @@ func (s *Server) handleFileShared(ctx context.Context, eventID string, ev slack.
 		_, _ = s.slack.PostMessage(ctx, channelID, ev.ConversationThreadTS(), "<@"+userID+"> Sorry, you don't have permission to use this bot.")
 		return
 	}
-	text := appendSlackFiles("", []slack.File{file})
+	text, parts := s.attachSlackFiles(ctx, "", []slack.File{file})
 	if text == "" {
 		text = prompts.AppMessage("empty_dm", "(The user sent an app DM with a file but no text. Briefly describe what you can do with the file and ask for any missing context.)")
 	}
@@ -323,7 +323,7 @@ func (s *Server) handleFileShared(ctx context.Context, eventID string, ev slack.
 		Channel:      channelID,
 		ThreadTS:     ev.ConversationThreadTS(),
 		Text:         text,
-		ContentParts: s.slackImageParts(ctx, []slack.File{file}),
+		ContentParts: parts,
 	})
 }
 
@@ -337,8 +337,7 @@ func (s *Server) handleDirectMessage(ctx context.Context, eventID string, ev sla
 		return
 	}
 	text := strings.TrimSpace(ev.Text)
-	text = appendSlackFiles(text, ev.Files)
-	parts := s.slackImageParts(ctx, ev.Files)
+	text, parts := s.attachSlackFiles(ctx, text, ev.Files)
 	if text == "" {
 		text = prompts.AppMessage("empty_dm", "(The user sent an empty app DM. Greet them briefly and ask what they need help with. Reply in the same language the user used, or English by default.)")
 	}
@@ -380,6 +379,65 @@ func appendSlackFiles(text string, files []slack.File) string {
 	return text + "\n\n" + filesText
 }
 
+func (s *Server) attachSlackFiles(ctx context.Context, text string, files []slack.File) (string, []llm.ContentPart) {
+	text = appendSlackFiles(text, files)
+	if excerpt := s.slackPDFExcerpts(ctx, files); excerpt != "" {
+		text = strings.TrimSpace(text)
+		if text == "" {
+			text = excerpt
+		} else {
+			text += "\n\n" + excerpt
+		}
+	}
+	return text, s.slackImageParts(ctx, files)
+}
+
+func (s *Server) slackPDFExcerpts(ctx context.Context, files []slack.File) string {
+	blocks := make([]string, 0, len(files))
+	for _, file := range files {
+		if !slack.IsPDFFile(file) {
+			continue
+		}
+		if file.Size > maxSlackPDFBytes {
+			log.Printf("skip slack pdf %s: size %d exceeds limit %d", file.ID, file.Size, maxSlackPDFBytes)
+			blocks = append(blocks, slack.FormatPDFExcerpt(slack.FileDisplayName(file), "[PDF too large to extract; max "+formatBytes(maxSlackPDFBytes)+"]"))
+			continue
+		}
+		data, err := s.slack.DownloadFile(ctx, file, maxSlackPDFBytes)
+		if err != nil {
+			log.Printf("skip slack pdf %s: download failed: %v", file.ID, err)
+			blocks = append(blocks, slack.FormatPDFExcerpt(slack.FileDisplayName(file), "[Could not download PDF from Slack: "+err.Error()+"]"))
+			continue
+		}
+		if !slack.IsPDFData(data) {
+			log.Printf("skip slack pdf %s: downloaded content is not a PDF", file.ID)
+			blocks = append(blocks, slack.FormatPDFExcerpt(slack.FileDisplayName(file), "[Downloaded file is not a valid PDF]"))
+			continue
+		}
+		text, err := slack.ExtractPDFText(data, maxSlackPDFTextChars)
+		if err != nil {
+			log.Printf("skip slack pdf %s: extract failed: %v", file.ID, err)
+			blocks = append(blocks, slack.FormatPDFExcerpt(slack.FileDisplayName(file), "[Could not extract text from PDF; it may be scanned/image-only. Ask the user to paste key details or send a screenshot.]"))
+			continue
+		}
+		blocks = append(blocks, slack.FormatPDFExcerpt(slack.FileDisplayName(file), text))
+	}
+	return strings.Join(blocks, "\n\n")
+}
+
+func formatBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for v := n / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.0f %cB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
 func (s *Server) slackImageParts(ctx context.Context, files []slack.File) []llm.ContentPart {
 	parts := make([]llm.ContentPart, 0, len(files))
 	for _, file := range files {
@@ -410,7 +468,11 @@ func (s *Server) slackImageParts(ctx context.Context, files []slack.File) []llm.
 	return parts
 }
 
-const maxSlackImageBytes = 8 << 20
+const (
+	maxSlackImageBytes    = 8 << 20
+	maxSlackPDFBytes      = 16 << 20
+	maxSlackPDFTextChars  = slack.DefaultMaxPDFExtractChars
+)
 
 func normalizedImageMIME(file slack.File) string {
 	mime := strings.ToLower(strings.TrimSpace(file.Mimetype))
