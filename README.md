@@ -46,7 +46,7 @@ go run ./cmd/oncall-agent
 - `MIMO_MODEL=mimo-v2.5`
 - `MIMO_THINKING=disabled`
 
-`mimo-v2.5` is selected so Slack image uploads can be passed as multimodal `image_url` parts. MiMo thinking is disabled by default because multi-turn tool calls must preserve provider-specific reasoning fields across turns; enabling it should be done deliberately after that history path is validated.
+`mimo-v2.5` is selected so Slack image uploads can be passed as multimodal `image_url` parts. PDF uploads in Slack DMs or mentions are downloaded and converted to plain text for the model (up to 16 MB per file, 16k characters of extracted text). MiMo thinking is disabled by default because multi-turn tool calls must preserve provider-specific reasoning fields across turns; enabling it should be done deliberately after that history path is validated.
 
 `LLM_PROVIDER` selects the provider-specific environment namespace. `MIMO_*`, `KIMI_*`, `MOONSHOT_*`, `OPENAI_*`, and `ANTHROPIC_*` are intentionally separate; the app does not borrow MiMo tokens from Anthropic config or vice versa. `MIMO_PROTOCOL=anthropic` only means the MiMo provider uses an Anthropic-compatible transport.
 
