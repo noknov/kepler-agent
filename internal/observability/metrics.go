@@ -6,6 +6,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/wati/oncall-agent/internal/llm"
 )
 
 type Snapshot struct {
@@ -13,10 +15,14 @@ type Snapshot struct {
 	Requests         int64            `json:"requests"`
 	DeniedRequests   int64            `json:"denied_requests"`
 	LLMCalls         int64            `json:"llm_calls"`
+	LLMErrors        int64            `json:"llm_errors"`
+	LLMUsage         TokenUsage       `json:"llm_usage"`
 	ToolCalls        map[string]int64 `json:"tool_calls"`
 	ToolErrors       map[string]int64 `json:"tool_errors"`
 	ReactionFeedback map[string]int64 `json:"reaction_feedback"`
 	LatencyMS        LatencySummary   `json:"latency_ms"`
+	LLMLatencyMS     LatencySummary   `json:"llm_latency_ms"`
+	ToolLatencyMS    LatencySummary   `json:"tool_latency_ms"`
 	LastErrors       []string         `json:"last_errors,omitempty"`
 }
 
@@ -26,11 +32,19 @@ type LatencySummary struct {
 	Max   int64 `json:"max"`
 }
 
+type TokenUsage struct {
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	TotalTokens      int64 `json:"total_tokens"`
+}
+
 type Recorder struct {
-	mu        sync.Mutex
-	startedAt time.Time
-	snap      Snapshot
-	latSum    int64
+	mu         sync.Mutex
+	startedAt  time.Time
+	snap       Snapshot
+	latSum     int64
+	llmLatSum  int64
+	toolLatSum int64
 }
 
 func NewRecorder() *Recorder {
@@ -58,16 +72,25 @@ func (r *Recorder) Denied() {
 	r.snap.DeniedRequests++
 }
 
-func (r *Recorder) LLMCall() {
+func (r *Recorder) LLMCall(usage llm.Usage, d time.Duration, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.snap.LLMCalls++
+	r.snap.LLMUsage.PromptTokens += int64(usage.PromptTokens)
+	r.snap.LLMUsage.CompletionTokens += int64(usage.CompletionTokens)
+	r.snap.LLMUsage.TotalTokens += int64(usage.TotalTokens)
+	r.addLatencyLocked(&r.snap.LLMLatencyMS, &r.llmLatSum, d)
+	if err != nil {
+		r.snap.LLMErrors++
+		r.addErrorLocked("llm: " + err.Error())
+	}
 }
 
-func (r *Recorder) ToolCall(name string, err error) {
+func (r *Recorder) ToolCall(name string, d time.Duration, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.snap.ToolCalls[name]++
+	r.addLatencyLocked(&r.snap.ToolLatencyMS, &r.toolLatSum, d)
 	if err != nil {
 		r.snap.ToolErrors[name]++
 		r.addErrorLocked(name + ": " + err.Error())
@@ -83,12 +106,16 @@ func (r *Recorder) Reaction(name string) {
 func (r *Recorder) Latency(d time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.addLatencyLocked(&r.snap.LatencyMS, &r.latSum, d)
+}
+
+func (r *Recorder) addLatencyLocked(summary *LatencySummary, sum *int64, d time.Duration) {
 	ms := d.Milliseconds()
-	r.snap.LatencyMS.Count++
-	r.latSum += ms
-	r.snap.LatencyMS.Avg = r.latSum / r.snap.LatencyMS.Count
-	if ms > r.snap.LatencyMS.Max {
-		r.snap.LatencyMS.Max = ms
+	summary.Count++
+	*sum += ms
+	summary.Avg = *sum / summary.Count
+	if ms > summary.Max {
+		summary.Max = ms
 	}
 }
 
