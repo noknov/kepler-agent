@@ -283,10 +283,11 @@ func (s *Server) handleMention(ctx context.Context, eventID string, ev slack.Eve
 }
 
 func (s *Server) handleMessage(ctx context.Context, eventID string, ev slack.Event) {
-	if !isAppDM(ev) {
+	if isAppDM(ev) {
+		s.handleDirectMessage(ctx, eventID, ev)
 		return
 	}
-	s.handleDirectMessage(ctx, eventID, ev)
+	s.handleChannelReply(ctx, eventID, ev)
 }
 
 func (s *Server) handleFileShared(ctx context.Context, eventID string, ev slack.Event) {
@@ -336,6 +337,19 @@ func (s *Server) handleDirectMessage(ctx context.Context, eventID string, ev sla
 		_, _ = s.slack.PostMessage(ctx, ev.Channel, ev.ConversationThreadTS(), "<@"+ev.User+"> Sorry, you don't have permission to use this bot.")
 		return
 	}
+	if isThreadReply(ev) {
+		text, parts := s.attachSlackFiles(ctx, strings.TrimSpace(ev.Text), ev.Files)
+		if text != "" && s.conv.HandleReply(ctx, conversation.Request{
+			EventID:      eventID,
+			UserID:       ev.User,
+			Channel:      ev.Channel,
+			ThreadTS:     ev.ThreadTS,
+			Text:         text,
+			ContentParts: parts,
+		}) {
+			return
+		}
+	}
 	text := strings.TrimSpace(ev.Text)
 	text, parts := s.attachSlackFiles(ctx, text, ev.Files)
 	if text == "" {
@@ -346,6 +360,28 @@ func (s *Server) handleDirectMessage(ctx context.Context, eventID string, ev sla
 		UserID:       ev.User,
 		Channel:      ev.Channel,
 		ThreadTS:     ev.ConversationThreadTS(),
+		Text:         text,
+		ContentParts: parts,
+	})
+}
+
+func (s *Server) handleChannelReply(ctx context.Context, eventID string, ev slack.Event) {
+	if !isThreadReply(ev) || !isUserMessageSubtype(ev.Subtype) || ev.BotID != "" || ev.User == "" || ev.User == s.cfg.Slack.BotUserID {
+		return
+	}
+	if !s.access.AllowsChannel(ev.Channel) {
+		s.metrics.Denied()
+		return
+	}
+	text, parts := s.attachSlackFiles(ctx, strings.TrimSpace(ev.Text), ev.Files)
+	if text == "" {
+		return
+	}
+	_ = s.conv.HandleReply(ctx, conversation.Request{
+		EventID:      eventID,
+		UserID:       ev.User,
+		Channel:      ev.Channel,
+		ThreadTS:     ev.ThreadTS,
 		Text:         text,
 		ContentParts: parts,
 	})
@@ -365,6 +401,10 @@ func isDMChannel(channel string) bool {
 
 func isUserMessageSubtype(subtype string) bool {
 	return subtype == "" || subtype == "file_share"
+}
+
+func isThreadReply(ev slack.Event) bool {
+	return ev.ThreadTS != "" && ev.ThreadTS != ev.TS
 }
 
 func appendSlackFiles(text string, files []slack.File) string {
