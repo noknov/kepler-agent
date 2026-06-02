@@ -21,9 +21,8 @@ var (
 )
 
 type Observer interface {
-	LLMCall()
-	ToolCall(name string, err error)
-	Latency(d time.Duration)
+	LLMCall(usage llm.Usage, d time.Duration, err error)
+	ToolCall(name string, d time.Duration, err error)
 }
 
 type StatusUpdater func(status string)
@@ -79,9 +78,6 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 
 	for step := 0; step < maxSteps; step++ {
 		lastStep := step == maxSteps-1 || retriedRepetitiveFinal || retriedTextualToolCall
-		if r.Observer != nil {
-			r.Observer.LLMCall()
-		}
 		if r.StatusUpdate != nil {
 			if step == 0 {
 				r.StatusUpdate("Analyzing...")
@@ -97,6 +93,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			toolSpecs = r.Tools.Specs()
 		}
 
+		llmStart := time.Now()
 		resp, err := r.LLM.Chat(ctx, llm.Request{
 			Model:       r.Model,
 			Messages:    messages,
@@ -105,6 +102,9 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			Temperature: r.Temp,
 			Thinking:    r.Thinking,
 		})
+		if r.Observer != nil {
+			r.Observer.LLMCall(resp.Usage, time.Since(llmStart), err)
+		}
 		if err != nil {
 			return Result{Generated: generated}, err
 		}
@@ -167,8 +167,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			start := time.Now()
 			result, err := r.Tools.Execute(ctx, name, args, req.Runtime)
 			if r.Observer != nil {
-				r.Observer.ToolCall(name, err)
-				r.Observer.Latency(time.Since(start))
+				r.Observer.ToolCall(name, time.Since(start), err)
 			}
 			content := ""
 			if err != nil {

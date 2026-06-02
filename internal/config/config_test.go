@@ -200,6 +200,32 @@ func TestLoadMiMoTokenPlanKeepsProviderSpecificKey(t *testing.T) {
 	}
 }
 
+func TestLoadOpenAIDoesNotEnableThinkingByDefault(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":      "xoxb-test",
+		"SLACK_SIGNING_SECRET": "secret",
+		"ALLOWED_SLACK_USERS":  "U123",
+		"LLM_PROVIDER":         "openai",
+		"OPENAI_API_KEY":       "openai-token",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.LLM.Thinking != "" {
+		t.Fatalf("LLM.Thinking = %q, want empty for OpenAI default", cfg.LLM.Thinking)
+	}
+}
+
 func TestLoadRejectsOpenAICodingEndpointWithoutExplicitOptIn(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()

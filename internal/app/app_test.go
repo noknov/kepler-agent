@@ -108,6 +108,18 @@ func TestIsChannelMention(t *testing.T) {
 	}
 }
 
+func TestIsThreadReply(t *testing.T) {
+	if !isThreadReply(slack.Event{TS: "1717000000.000200", ThreadTS: "1717000000.000100"}) {
+		t.Fatal("message with a different thread_ts should be treated as a thread reply")
+	}
+	if isThreadReply(slack.Event{TS: "1717000000.000100"}) {
+		t.Fatal("top-level message should not be treated as a thread reply")
+	}
+	if isThreadReply(slack.Event{TS: "1717000000.000100", ThreadTS: "1717000000.000100"}) {
+		t.Fatal("root message with matching thread_ts should not be treated as a thread reply")
+	}
+}
+
 func TestGitFetchEnvDisablesTerminalPrompt(t *testing.T) {
 	env := gitFetchEnv()
 	if !containsEnv(env, "GIT_TERMINAL_PROMPT=0") {

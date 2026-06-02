@@ -107,9 +107,6 @@ func Load() (Config, error) {
 	}
 	llmModel := providerModel(llmProvider)
 	llmThinking := providerThinking(llmProvider)
-	if llmThinking == "" {
-		llmThinking = "enabled"
-	}
 	if llmProvider == "mimo" && providerThinking(llmProvider) == "" {
 		llmThinking = "disabled"
 	}
