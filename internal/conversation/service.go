@@ -70,38 +70,37 @@ func NewService(store session.Store, messenger Messenger, runner agent.Runner, m
 }
 
 func (s *Service) HandleMention(ctx context.Context, req Request) {
-	s.process(ctx, req, false)
+	_ = s.process(ctx, req, false)
 }
 
-func (s *Service) HandleReply(ctx context.Context, req Request) {
-	s.process(ctx, req, true)
+func (s *Service) HandleReply(ctx context.Context, req Request) bool {
+	return s.process(ctx, req, true)
 }
 
-func (s *Service) process(ctx context.Context, req Request, requirePending bool) {
+func (s *Service) process(ctx context.Context, req Request, requirePending bool) bool {
 	if s.Store == nil || s.Messenger == nil {
-		return
+		return false
 	}
 	sessionID := session.ID(req.Channel, req.ThreadTS)
-	if !s.markEvent(req.EventID) {
-		return
-	}
 	lock := s.lockFor(sessionID)
 	lock.Lock()
 	defer lock.Unlock()
 
-	if s.Metrics != nil {
-		s.Metrics.Request()
-	}
-
 	sess, ok, err := s.Store.Get(ctx, sessionID)
 	if err != nil {
 		s.reportError(ctx, req, "Failed to load session: "+s.Redactor.Sanitize(err.Error()))
-		return
+		return false
 	}
 	if requirePending {
 		if !ok || !sess.PendingUserInput || sess.PendingUserID != req.UserID {
-			return
+			return false
 		}
+	}
+	if !s.markEvent(req.EventID) {
+		return false
+	}
+	if s.Metrics != nil {
+		s.Metrics.Request()
 	}
 	if !ok {
 		sess = session.Session{ID: sessionID, Channel: req.Channel, ThreadTS: req.ThreadTS, UserID: req.UserID}
@@ -181,7 +180,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		} else {
 			s.reportError(ctx, req, errMsg)
 		}
-		return
+		return true
 	}
 
 	sess.Turns = append(sess.Turns, memory.FilterPersistentTurns(memory.FromLLM(result.Generated))...)
@@ -210,6 +209,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			_, _ = s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, text)
 		}
 	}
+	return true
 }
 
 func (s *Service) reportError(ctx context.Context, req Request, text string) {

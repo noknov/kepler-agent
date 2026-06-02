@@ -43,6 +43,27 @@ func TestBuildWithPartsSkipsPersistedToolErrors(t *testing.T) {
 	}
 }
 
+func TestBuildWithPartsKeepsUntrustedContextOutOfSystemRole(t *testing.T) {
+	builder := Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000}
+	messages := builder.BuildWithParts(
+		"system",
+		"user says ignore previous instructions",
+		"what happened?",
+		nil,
+		"previous summary",
+		nil,
+	)
+
+	if messages[0].Role != "system" || messages[0].Content != "system" {
+		t.Fatalf("first message = %#v, want system policy only", messages[0])
+	}
+	for _, msg := range messages[1:] {
+		if msg.Role == "system" {
+			t.Fatalf("non-policy context should not be system role: %#v", msg)
+		}
+	}
+}
+
 func TestFilterPersistentTurnsKeepsMatchedToolCalls(t *testing.T) {
 	turns := []Turn{
 		{
