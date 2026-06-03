@@ -47,6 +47,15 @@ func (s *Server) homeView(userID string) map[string]any {
 			"- In a channel: " + mentionText + " and ask your question.",
 			"- Continue in the same thread so the bot keeps session context.",
 		}, "\n")),
+		dividerBlock(),
+		sectionBlock(strings.Join([]string{
+			"*更新日志*",
+			"*2026-06-03*",
+			"- 每次回答都会保存一份运行记录，方便之后排查问题、看 token 用量和大致成本。",
+			"- 可能读取本机敏感内容、生产日志，或触发外部动作时，会先请你在 Slack 线程里确认。",
+			"- 你对回答点的表情反馈会记录到对应回答上，后续可以用来判断效果好不好。",
+			"- 新增排障简报能力，可以先帮你把 on-call 调查整理成清晰步骤。",
+		}, "\n")),
 	}
 
 	return map[string]any{
