@@ -354,7 +354,7 @@ func FormatFiles(files []File) string {
 		}
 		lines = append(lines, line)
 	}
-	lines = append(lines, "Note: on the current turn, supported image files are sent to the model as images and PDF files as extracted text; thread history contains file metadata only.")
+	lines = append(lines, "Note: on the current turn, supported image files are sent to the model as images, and PDF, Markdown, and plain-text files as extracted text; thread history contains file metadata only.")
 	return strings.Join(lines, "\n")
 }
 
