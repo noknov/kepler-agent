@@ -59,6 +59,26 @@ func TestSniffImageMIME(t *testing.T) {
 	}
 }
 
+func TestShouldAttemptSlackTextExcerpt(t *testing.T) {
+	tests := []struct {
+		name string
+		file slack.File
+		want bool
+	}{
+		{name: "unknown extension can still be text", file: slack.File{Name: "incident.payload"}, want: true},
+		{name: "markdown", file: slack.File{Name: "runbook.md", Mimetype: "text/markdown"}, want: true},
+		{name: "pdf uses pdf extractor", file: slack.File{Name: "invoice.pdf", Mimetype: "application/pdf", Filetype: "pdf"}},
+		{name: "image uses image part", file: slack.File{Name: "screenshot.png", Mimetype: "image/png"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldAttemptSlackTextExcerpt(tt.file); got != tt.want {
+				t.Fatalf("shouldAttemptSlackTextExcerpt(%#v) = %v, want %v", tt.file, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFirstNonEmpty(t *testing.T) {
 	if got := firstNonEmpty("", "  ", "U123"); got != "U123" {
 		t.Fatalf("firstNonEmpty() = %q, want U123", got)
