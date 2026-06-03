@@ -174,6 +174,8 @@ func NewServer(cfg config.Config) (*Server, error) {
 	conv.RunProvider = cfg.LLM.Provider
 	conv.RunModel = cfg.LLM.Model
 	conv.CostRates = costRates
+	conv.ConfirmTools = setBool(cfg.Tools.ConfirmTools)
+	conv.SensitivePatterns = cfg.Tools.SensitivePatterns
 
 	s := &Server{
 		cfg:     cfg,
@@ -227,17 +229,6 @@ func (s *Server) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var envelope slack.EventEnvelope
-	if err := json.Unmarshal(bodyBytes, &envelope); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
-		return
-	}
-	if envelope.Type == "url_verification" {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"challenge": envelope.Challenge})
-		return
-	}
-
 	body := string(bodyBytes)
 	if err := slack.VerifySignature(
 		s.cfg.Slack.SigningSecret,
@@ -247,6 +238,17 @@ func (s *Server) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 		time.Now(),
 	); err != nil {
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return
+	}
+
+	var envelope slack.EventEnvelope
+	if err := json.Unmarshal(bodyBytes, &envelope); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if envelope.Type == "url_verification" {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"challenge": envelope.Challenge})
 		return
 	}
 
@@ -284,7 +286,7 @@ func (s *Server) handleMention(ctx context.Context, eventID string, ev slack.Eve
 		return
 	}
 	threadTS := ev.ConversationThreadTS()
-	if !s.access.AllowsChannel(ev.Channel) {
+	if !s.access.IsAllowed(ev.User, ev.Channel) {
 		s.metrics.Denied()
 		_, _ = s.slack.PostMessage(ctx, ev.Channel, threadTS, "<@"+ev.User+"> Sorry, this channel is not allowed to use this bot.")
 		return
@@ -329,6 +331,10 @@ func (s *Server) handleFileShared(ctx context.Context, eventID string, ev slack.
 		file.ID = ev.FileID
 	}
 	if file.ID == "" {
+		return
+	}
+	if ev.ConversationThreadTS() == "" {
+		log.Printf("skip slack file_shared %s: no message timestamp; waiting for message.file_share event", file.ID)
 		return
 	}
 	if !s.access.AllowsUser(userID) {
@@ -613,6 +619,20 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func setBool(values []string) map[string]bool {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out[value] = true
+		}
+	}
+	return out
 }
 
 func sniffImageMIME(data []byte) string {
