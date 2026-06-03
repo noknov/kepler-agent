@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,18 +31,20 @@ type Messenger interface {
 type TextFormatter func(string) string
 
 type Service struct {
-	Store       session.Store
-	Messenger   Messenger
-	Runner      agent.Runner
-	Memory      memory.Builder
-	Prompt      safety.PromptPolicy
-	Redactor    safety.Redactor
-	Metrics     *observability.Recorder
-	Format      TextFormatter
-	RunStore    runs.Store
-	RunProvider string
-	RunModel    string
-	CostRates   observability.CostRates
+	Store             session.Store
+	Messenger         Messenger
+	Runner            agent.Runner
+	Memory            memory.Builder
+	Prompt            safety.PromptPolicy
+	Redactor          safety.Redactor
+	Metrics           *observability.Recorder
+	Format            TextFormatter
+	RunStore          runs.Store
+	RunProvider       string
+	RunModel          string
+	CostRates         observability.CostRates
+	ConfirmTools      map[string]bool
+	SensitivePatterns []string
 
 	mu       sync.Mutex
 	locks    map[string]*sync.Mutex
@@ -111,6 +114,10 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	if !ok {
 		sess = session.Session{ID: sessionID, Channel: req.Channel, ThreadTS: req.ThreadTS, UserID: req.UserID}
 	}
+	confirmedActions := map[string]bool{}
+	if sess.PendingActionKey != "" && sess.PendingUserID == req.UserID && looksLikeConfirmation(req.Text) {
+		confirmedActions[sess.PendingActionKey] = true
+	}
 	sess.Turns = memory.FilterPersistentTurns(sess.Turns)
 
 	start := time.Now()
@@ -163,9 +170,12 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	result, err := runner.Run(ctx, agent.Request{
 		Messages: messages,
 		Runtime: registry.Runtime{
-			UserID:   req.UserID,
-			Channel:  req.Channel,
-			ThreadTS: req.ThreadTS,
+			UserID:            req.UserID,
+			Channel:           req.Channel,
+			ThreadTS:          req.ThreadTS,
+			ConfirmedActions:  confirmedActions,
+			ConfirmTools:      s.ConfirmTools,
+			SensitivePatterns: s.SensitivePatterns,
 		},
 	})
 
@@ -173,6 +183,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	sess.PendingUserInput = false
 	sess.PendingUserID = ""
 	sess.PendingQuestion = ""
+	sess.PendingActionKey = ""
 	sess.Turns = append(sess.Turns, memory.UserTurn(req.Text))
 
 	if err != nil {
@@ -204,10 +215,25 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		sess.PendingUserInput = true
 		sess.PendingUserID = req.UserID
 		sess.PendingQuestion = result.PendingQuestion
+		sess.PendingActionKey = result.PendingActionKey
 	}
 	sess.Turns = trimTurns(sess.Turns, s.maxTurns)
 	if err := s.Store.Save(ctx, sess); err != nil && s.Metrics != nil {
 		s.Metrics.Error(err)
+	}
+	if result.Pending && result.PendingQuestion != "" {
+		pendingText := s.Redactor.Sanitize(result.PendingQuestion)
+		if s.Format != nil {
+			pendingText = s.Format(pendingText)
+		}
+		if useStream {
+			_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
+				{"type": "task_update", "id": taskID, "status": "complete"},
+				{"type": "markdown_text", "text": "<@" + req.UserID + "> " + pendingText},
+			})
+		} else {
+			_, _ = s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, "<@"+req.UserID+"> "+pendingText)
+		}
 	}
 	if !result.Pending && result.Final != "" {
 		finalText := s.Redactor.Sanitize(result.Final)
@@ -313,6 +339,16 @@ func trimTurns(turns []memory.Turn, max int) []memory.Turn {
 		return nil
 	}
 	return append([]memory.Turn(nil), turns[start:]...)
+}
+
+func looksLikeConfirmation(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	switch text {
+	case "confirm", "confirmed", "yes", "y", "ok", "okay", "go", "go ahead", "proceed", "approve", "approved", "同意", "确认", "可以", "执行", "继续":
+		return true
+	default:
+		return strings.Contains(text, "确认执行") || strings.Contains(text, "可以执行") || strings.Contains(text, "go ahead")
+	}
 }
 
 func userFacingError(errorID string) string {
