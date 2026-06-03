@@ -31,20 +31,18 @@ type Messenger interface {
 type TextFormatter func(string) string
 
 type Service struct {
-	Store             session.Store
-	Messenger         Messenger
-	Runner            agent.Runner
-	Memory            memory.Builder
-	Prompt            safety.PromptPolicy
-	Redactor          safety.Redactor
-	Metrics           *observability.Recorder
-	Format            TextFormatter
-	RunStore          runs.Store
-	RunProvider       string
-	RunModel          string
-	CostRates         observability.CostRates
-	ConfirmTools      map[string]bool
-	SensitivePatterns []string
+	Store       session.Store
+	Messenger   Messenger
+	Runner      agent.Runner
+	Memory      memory.Builder
+	Prompt      safety.PromptPolicy
+	Redactor    safety.Redactor
+	Metrics     *observability.Recorder
+	Format      TextFormatter
+	RunStore    runs.Store
+	RunProvider string
+	RunModel    string
+	CostRates   observability.CostRates
 
 	mu       sync.Mutex
 	locks    map[string]*sync.Mutex
@@ -114,10 +112,6 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	if !ok {
 		sess = session.Session{ID: sessionID, Channel: req.Channel, ThreadTS: req.ThreadTS, UserID: req.UserID}
 	}
-	confirmedActions := map[string]bool{}
-	if sess.PendingActionKey != "" && sess.PendingUserID == req.UserID && looksLikeConfirmation(req.Text) {
-		confirmedActions[sess.PendingActionKey] = true
-	}
 	sess.Turns = memory.FilterPersistentTurns(sess.Turns)
 
 	start := time.Now()
@@ -167,23 +161,21 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		sess.Summary,
 		sess.Turns,
 	)
+	locale := agent.DetectLocale(req.Text)
 	result, err := runner.Run(ctx, agent.Request{
 		Messages: messages,
 		Runtime: registry.Runtime{
-			UserID:            req.UserID,
-			Channel:           req.Channel,
-			ThreadTS:          req.ThreadTS,
-			ConfirmedActions:  confirmedActions,
-			ConfirmTools:      s.ConfirmTools,
-			SensitivePatterns: s.SensitivePatterns,
+			UserID:   req.UserID,
+			Channel:  req.Channel,
+			ThreadTS: req.ThreadTS,
 		},
+		Locale: locale,
 	})
 
 	sess.UserID = req.UserID
 	sess.PendingUserInput = false
 	sess.PendingUserID = ""
 	sess.PendingQuestion = ""
-	sess.PendingActionKey = ""
 	sess.Turns = append(sess.Turns, memory.UserTurn(req.Text))
 
 	if err != nil {
@@ -200,7 +192,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		errMsg := s.Redactor.Sanitize(userFacingError(errorID))
 		if useStream {
 			_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
-				{"type": "task_update", "id": taskID, "status": "error"},
+				{"type": "task_update", "id": taskID, "title": agent.FailedTitle(locale), "status": "error"},
 				{"type": "markdown_text", "text": errMsg},
 			})
 		} else {
@@ -215,7 +207,6 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		sess.PendingUserInput = true
 		sess.PendingUserID = req.UserID
 		sess.PendingQuestion = result.PendingQuestion
-		sess.PendingActionKey = result.PendingActionKey
 	}
 	sess.Turns, sess.Summary = s.trimAndSummarize(sess.Turns, sess.Summary)
 	if err := s.Store.Save(ctx, sess); err != nil && s.Metrics != nil {
@@ -228,17 +219,12 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}
 		if useStream {
 			_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
-				{"type": "task_update", "id": taskID, "status": "complete"},
+				{"type": "task_update", "id": taskID, "title": agent.WaitingTitle(locale), "status": "complete"},
 			})
-			ts, _ := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, "<@"+req.UserID+"> "+pendingText)
-			if runObserver != nil {
-				runObserver.LinkSlackMessage(req.Channel, ts)
-			}
-		} else {
-			ts, _ := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, "<@"+req.UserID+"> "+pendingText)
-			if runObserver != nil {
-				runObserver.LinkSlackMessage(req.Channel, ts)
-			}
+		}
+		ts, _ := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, "<@"+req.UserID+"> "+pendingText)
+		if runObserver != nil {
+			runObserver.LinkSlackMessage(req.Channel, ts)
 		}
 	}
 	if !result.Pending && result.Final != "" {
@@ -251,17 +237,12 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}
 		if useStream {
 			_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
-				{"type": "task_update", "id": taskID, "status": "complete"},
+				{"type": "task_update", "id": taskID, "title": agent.CompleteTitle(locale), "status": "complete"},
 			})
-			ts, _ := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
-			if runObserver != nil {
-				runObserver.LinkSlackMessage(req.Channel, ts)
-			}
-		} else {
-			ts, _ := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
-			if runObserver != nil {
-				runObserver.LinkSlackMessage(req.Channel, ts)
-			}
+		}
+		ts, _ := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
+		if runObserver != nil {
+			runObserver.LinkSlackMessage(req.Channel, ts)
 		}
 	} else if result.Pending && runObserver != nil {
 		runObserver.Finish("pending_user", "", nil, result.PendingQuestion)
@@ -404,16 +385,6 @@ func trimSummary(summary string, max int) string {
 		return summary
 	}
 	return strings.TrimSpace(summary[len(summary)-max:])
-}
-
-func looksLikeConfirmation(text string) bool {
-	text = strings.ToLower(strings.TrimSpace(text))
-	switch text {
-	case "confirm", "confirmed", "yes", "y", "ok", "okay", "go", "go ahead", "proceed", "approve", "approved", "同意", "确认", "可以", "执行", "继续":
-		return true
-	default:
-		return strings.Contains(text, "确认执行") || strings.Contains(text, "可以执行") || strings.Contains(text, "go ahead")
-	}
 }
 
 func userFacingError(errorID string) string {
