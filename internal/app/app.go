@@ -21,6 +21,7 @@ import (
 	"github.com/wati/oncall-agent/internal/memory"
 	"github.com/wati/oncall-agent/internal/observability"
 	"github.com/wati/oncall-agent/internal/prompts"
+	"github.com/wati/oncall-agent/internal/runs"
 	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/session"
 	"github.com/wati/oncall-agent/internal/slack"
@@ -63,6 +64,10 @@ func NewServer(cfg config.Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	runStore, err := runs.NewFileStore(cfg.Observing.RunsDir)
+	if err != nil {
+		return nil, err
+	}
 
 	var llmClient llm.Client
 	if cfg.LLM.Protocol == "anthropic" {
@@ -83,6 +88,19 @@ func NewServer(cfg config.Config) (*Server, error) {
 	}
 
 	recorder := observability.NewRecorder()
+	costRates := observability.DefaultCostRates(cfg.LLM.Provider, cfg.LLM.Model)
+	if cfg.Observing.InputCostPerMTok >= 0 {
+		costRates.InputPerMTok = cfg.Observing.InputCostPerMTok
+	}
+	if cfg.Observing.OutputCostPerMTok >= 0 {
+		costRates.OutputPerMTok = cfg.Observing.OutputCostPerMTok
+	}
+	if cfg.Observing.CacheReadCostPerMTok >= 0 {
+		costRates.CacheReadPerMTok = cfg.Observing.CacheReadCostPerMTok
+	}
+	if cfg.Observing.CacheCreationCostPerMTok >= 0 {
+		costRates.CacheCreationPerMTok = cfg.Observing.CacheCreationCostPerMTok
+	}
 	workspacePolicy := safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}
 	commandPolicy := safety.NewCommandPolicy()
 	redactor := safety.Redactor{WorkspaceRoots: cfg.Security.WorkspaceRoots}
@@ -152,6 +170,10 @@ func NewServer(cfg config.Config) (*Server, error) {
 	}
 	conv := conversation.NewService(store, slackClient, runner, mem, promptPolicy, redactor, recorder)
 	conv.Format = slack.MarkdownToMrkdwn
+	conv.RunStore = runStore
+	conv.RunProvider = cfg.LLM.Provider
+	conv.RunModel = cfg.LLM.Model
+	conv.CostRates = costRates
 
 	s := &Server{
 		cfg:     cfg,
