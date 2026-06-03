@@ -129,7 +129,7 @@ func TestNewErrorID(t *testing.T) {
 	}
 }
 
-func TestStreamOutputUsesFormatter(t *testing.T) {
+func TestStreamModePostsFinalAnswerForNotification(t *testing.T) {
 	ctx := context.Background()
 	store, err := session.NewFileStore(t.TempDir())
 	if err != nil {
@@ -155,15 +155,21 @@ func TestStreamOutputUsesFormatter(t *testing.T) {
 		Text:     "who is the author?",
 	})
 
-	found := false
+	if len(messenger.posts) == 0 {
+		t.Fatalf("stream mode should post final answer as a normal Slack message")
+	}
+	if got := messenger.posts[len(messenger.posts)-1]; got != "Author: <@U085SRJFCLX>" {
+		t.Fatalf("final post = %q, want formatted mention", got)
+	}
+	foundComplete := false
 	for _, chunk := range messenger.chunks {
-		if chunk["type"] == "markdown_text" && chunk["text"] == "Author: <@U085SRJFCLX>" {
-			found = true
+		if chunk["type"] == "task_update" && chunk["status"] == "complete" {
+			foundComplete = true
 			break
 		}
 	}
-	if !found {
-		t.Fatalf("stream chunks did not include formatted mention: %#v", messenger.chunks)
+	if !foundComplete {
+		t.Fatalf("stream chunks did not mark task complete: %#v", messenger.chunks)
 	}
 }
 
