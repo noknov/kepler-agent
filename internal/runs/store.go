@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,8 @@ type Run struct {
 	UserID           string        `json:"user_id,omitempty"`
 	Channel          string        `json:"channel,omitempty"`
 	ThreadTS         string        `json:"thread_ts,omitempty"`
+	SlackMessageTS   string        `json:"slack_message_ts,omitempty"`
+	SlackChannel     string        `json:"slack_channel,omitempty"`
 	Provider         string        `json:"provider,omitempty"`
 	Model            string        `json:"model,omitempty"`
 	Status           string        `json:"status"`
@@ -152,6 +155,81 @@ func (s *FileStore) AddFeedback(ctx context.Context, runID string, feedback Feed
 	return s.saveLocked(run)
 }
 
+func (s *FileStore) AddFeedbackForMessage(ctx context.Context, channel, messageTS string, feedback Feedback) (string, bool, error) {
+	select {
+	case <-ctx.Done():
+		return "", false, ctx.Err()
+	default:
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return "", false, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(s.dir, entry.Name()))
+		if err != nil {
+			return "", false, err
+		}
+		var run Run
+		if err := json.Unmarshal(data, &run); err != nil {
+			continue
+		}
+		if run.SlackChannel == channel && run.SlackMessageTS == messageTS {
+			run.Feedback = append(run.Feedback, feedback)
+			run.Quality = scoreRun(run)
+			if err := s.saveLocked(run); err != nil {
+				return "", false, err
+			}
+			return run.ID, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func (s *FileStore) List(ctx context.Context, limit int) ([]Run, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if limit <= 0 {
+		limit = 20
+	}
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Run, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(s.dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var run Run
+		if err := json.Unmarshal(data, &run); err != nil {
+			continue
+		}
+		out = append(out, run)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].StartedAt.After(out[j].StartedAt)
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 func (s *FileStore) saveLocked(run Run) error {
 	data, err := json.MarshalIndent(run, "", "  ")
 	if err != nil {
@@ -198,6 +276,30 @@ func scoreFeedback(feedback []Feedback) *QualityScore {
 		Notes:     notes,
 		UpdatedAt: time.Now().UTC(),
 	}
+}
+
+func scoreRun(run Run) *QualityScore {
+	score := 1.0
+	notes := []string{}
+	if run.Status == "error" {
+		score -= 0.5
+		notes = append(notes, "run_error")
+	}
+	for _, step := range run.Steps {
+		if step.Error != "" {
+			score -= 0.1
+			notes = append(notes, "step_error:"+step.Name)
+		}
+	}
+	if score < 0 {
+		score = 0
+	}
+	quality := &QualityScore{Automatic: score, Notes: notes, UpdatedAt: time.Now().UTC()}
+	if manual := scoreFeedback(run.Feedback); manual != nil {
+		quality.Manual = manual.Manual
+		quality.Notes = append(quality.Notes, manual.Notes...)
+	}
+	return quality
 }
 
 func reactionScore(value string) (float64, bool) {

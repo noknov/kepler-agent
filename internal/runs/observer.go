@@ -74,6 +74,16 @@ func (o *Observer) Finish(status, errorID string, err error, final string) {
 	}
 	o.Run.EndedAt = time.Now().UTC()
 	o.Run.DurationMS = o.Run.EndedAt.Sub(o.Run.StartedAt).Milliseconds()
+	o.Run.Quality = scoreRun(*o.Run)
+	o.save(context.Background())
+}
+
+func (o *Observer) LinkSlackMessage(channel, messageTS string) {
+	if o == nil || o.Run == nil || messageTS == "" {
+		return
+	}
+	o.Run.SlackChannel = channel
+	o.Run.SlackMessageTS = messageTS
 	o.save(context.Background())
 }
 
