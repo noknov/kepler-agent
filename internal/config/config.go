@@ -78,7 +78,12 @@ type ToolConfig struct {
 }
 
 type ObservingConfig struct {
-	LogLevel string
+	LogLevel                 string
+	RunsDir                  string
+	InputCostPerMTok         float64
+	OutputCostPerMTok        float64
+	CacheReadCostPerMTok     float64
+	CacheCreationCostPerMTok float64
 }
 
 func Load() (Config, error) {
@@ -162,7 +167,12 @@ func Load() (Config, error) {
 			GitHubDefaultRepo:   os.Getenv("GITHUB_DEFAULT_REPO"),
 		},
 		Observing: ObservingConfig{
-			LogLevel: env("LOG_LEVEL", "info"),
+			LogLevel:                 env("LOG_LEVEL", "info"),
+			RunsDir:                  env("RUN_DATA_DIR", filepath.Join(wd, ".data", "runs")),
+			InputCostPerMTok:         envFloat("LLM_INPUT_COST_PER_MTOK", -1),
+			OutputCostPerMTok:        envFloat("LLM_OUTPUT_COST_PER_MTOK", -1),
+			CacheReadCostPerMTok:     envFloat("LLM_CACHE_READ_COST_PER_MTOK", -1),
+			CacheCreationCostPerMTok: envFloat("LLM_CACHE_CREATION_COST_PER_MTOK", -1),
 		},
 	}
 
