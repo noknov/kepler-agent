@@ -110,6 +110,98 @@ func (c *KimiClient) chatBody(req Request) map[string]any {
 	return body
 }
 
+func (c *KimiClient) ChatStream(ctx Context, req Request, cb StreamCallback) (Response, error) {
+	body := c.chatBody(req)
+	body["stream"] = true
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return Response{}, err
+	}
+
+	stdCtx, ok := ctx.(context.Context)
+	if !ok {
+		stdCtx = context.Background()
+	}
+	httpReq, err := http.NewRequestWithContext(stdCtx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(payload))
+	if err != nil {
+		return Response{}, err
+	}
+	c.setHeaders(httpReq)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return Response{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		return Response{}, ProviderError{Provider: c.providerName() + " stream", StatusCode: resp.StatusCode, Body: compactBody(data)}
+	}
+
+	var msg Message
+	msg.Role = "assistant"
+	var finishReason string
+	var usage openAIUsage
+
+	err = readSSE(resp.Body, func(ev sseEvent) bool {
+		if ev.Data == "[DONE]" {
+			return false
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content          string `json:"content"`
+					ReasoningContent string `json:"reasoning_content"`
+				} `json:"delta"`
+				FinishReason *string `json:"finish_reason"`
+			} `json:"choices"`
+			Usage openAIUsage `json:"usage"`
+		}
+		if json.Unmarshal([]byte(ev.Data), &chunk) != nil {
+			return true
+		}
+		if chunk.Usage.TotalTokens > 0 {
+			usage = chunk.Usage
+		}
+		if len(chunk.Choices) == 0 {
+			return true
+		}
+		delta := chunk.Choices[0].Delta
+		if delta.Content != "" {
+			msg.Content += delta.Content
+			cb(delta.Content)
+		}
+		if delta.ReasoningContent != "" {
+			msg.ReasoningContent += delta.ReasoningContent
+		}
+		if chunk.Choices[0].FinishReason != nil {
+			finishReason = *chunk.Choices[0].FinishReason
+		}
+		return true
+	})
+	if err != nil {
+		return Response{}, err
+	}
+	return Response{
+		Message:      msg,
+		FinishReason: finishReason,
+		Usage:        usage.toUsage(),
+	}, nil
+}
+
+func (c *KimiClient) setHeaders(httpReq *http.Request) {
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if hasBearerPrefix(c.apiKey) {
+		httpReq.Header.Set("Authorization", c.apiKey)
+	}
+	if isMiMoEndpoint(c.baseURL, "") {
+		httpReq.Header.Del("Authorization")
+		httpReq.Header.Set("api-key", bearerTokenValue(c.apiKey))
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+}
+
 func (c *KimiClient) doWithRetry(ctx context.Context, payload []byte) ([]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt < 4; attempt++ {
@@ -133,15 +225,7 @@ func (c *KimiClient) doOnce(ctx context.Context, payload []byte) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	if hasBearerPrefix(c.apiKey) {
-		httpReq.Header.Set("Authorization", c.apiKey)
-	}
-	if isMiMoEndpoint(c.baseURL, "") {
-		httpReq.Header.Del("Authorization")
-		httpReq.Header.Set("api-key", bearerTokenValue(c.apiKey))
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
+	c.setHeaders(httpReq)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {

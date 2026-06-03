@@ -15,6 +15,23 @@ func (c *NormalizingClient) Chat(ctx Context, req Request) (Response, error) {
 	return resp, nil
 }
 
+func (c *NormalizingClient) ChatStream(ctx Context, req Request, cb StreamCallback) (Response, error) {
+	sc, ok := c.Inner.(StreamClient)
+	if !ok {
+		resp, err := c.Chat(ctx, req)
+		if err == nil && cb != nil {
+			cb(resp.Message.Content)
+		}
+		return resp, err
+	}
+	resp, err := sc.ChatStream(ctx, req, cb)
+	if err != nil {
+		return resp, err
+	}
+	resp.Message = NormalizeAssistantMessage(c.Caps, resp.Message, req.Tools)
+	return resp, nil
+}
+
 // WrapClient returns a client that applies provider-aware message normalization.
 func WrapClient(inner Client, caps Capabilities) Client {
 	if inner == nil {

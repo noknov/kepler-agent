@@ -100,6 +100,136 @@ func (c *AnthropicClient) Chat(ctx Context, req Request) (Response, error) {
 	}, nil
 }
 
+func (c *AnthropicClient) ChatStream(ctx Context, req Request, cb StreamCallback) (Response, error) {
+	body := anthropicRequest{
+		Model:       req.Model,
+		System:      anthropicSystem(req.Messages),
+		Messages:    anthropicMessages(req.Messages),
+		Tools:       anthropicTools(req.Tools),
+		MaxTokens:   req.MaxTokens,
+		Temperature: req.Temperature,
+		Stream:      true,
+	}
+	if len(body.Tools) == 0 {
+		body.Tools = nil
+	}
+
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return Response{}, err
+	}
+
+	stdCtx, ok := ctx.(context.Context)
+	if !ok {
+		stdCtx = context.Background()
+	}
+	httpReq, err := http.NewRequestWithContext(stdCtx, http.MethodPost, anthropicMessagesURL(c.baseURL), bytes.NewReader(payload))
+	if err != nil {
+		return Response{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	setAnthropicAuthHeaders(httpReq.Header, c.apiKey, c.flavor)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return Response{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		return Response{}, ProviderError{Provider: "anthropic stream", StatusCode: resp.StatusCode, Body: compactBody(data)}
+	}
+
+	var msg Message
+	msg.Role = "assistant"
+	var stopReason string
+	var usage struct {
+		InputTokens              int
+		OutputTokens             int
+		CacheReadInputTokens     int
+		CacheCreationInputTokens int
+	}
+	inTextBlock := false
+
+	err = readSSE(resp.Body, func(ev sseEvent) bool {
+		switch ev.Event {
+		case "content_block_start":
+			var block struct {
+				ContentBlock struct {
+					Type string `json:"type"`
+				} `json:"content_block"`
+			}
+			_ = json.Unmarshal([]byte(ev.Data), &block)
+			inTextBlock = block.ContentBlock.Type == "text"
+		case "content_block_delta":
+			if !inTextBlock {
+				return true
+			}
+			var delta struct {
+				Delta struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"delta"`
+			}
+			if json.Unmarshal([]byte(ev.Data), &delta) == nil && delta.Delta.Type == "text_delta" && delta.Delta.Text != "" {
+				msg.Content += delta.Delta.Text
+				cb(delta.Delta.Text)
+			}
+		case "content_block_stop":
+			inTextBlock = false
+		case "message_delta":
+			var md struct {
+				Delta struct {
+					StopReason string `json:"stop_reason"`
+				} `json:"delta"`
+				Usage struct {
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage"`
+			}
+			if json.Unmarshal([]byte(ev.Data), &md) == nil {
+				stopReason = md.Delta.StopReason
+				if md.Usage.OutputTokens > 0 {
+					usage.OutputTokens = md.Usage.OutputTokens
+				}
+			}
+		case "message_start":
+			var ms struct {
+				Message struct {
+					Usage struct {
+						InputTokens              int `json:"input_tokens"`
+						CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+						CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+					} `json:"usage"`
+				} `json:"message"`
+			}
+			if json.Unmarshal([]byte(ev.Data), &ms) == nil {
+				usage.InputTokens = ms.Message.Usage.InputTokens
+				usage.CacheReadInputTokens = ms.Message.Usage.CacheReadInputTokens
+				usage.CacheCreationInputTokens = ms.Message.Usage.CacheCreationInputTokens
+			}
+		case "message_stop":
+			return false
+		}
+		return true
+	})
+	if err != nil {
+		return Response{}, err
+	}
+	return Response{
+		Message:      msg,
+		FinishReason: stopReason,
+		Usage: Usage{
+			PromptTokens:             usage.InputTokens,
+			CompletionTokens:         usage.OutputTokens,
+			TotalTokens:              usage.InputTokens + usage.OutputTokens,
+			CacheReadInputTokens:     usage.CacheReadInputTokens,
+			CacheCreationInputTokens: usage.CacheCreationInputTokens,
+		},
+	}, nil
+}
+
 func (c *AnthropicClient) doWithRetry(ctx context.Context, payload []byte) ([]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt < 4; attempt++ {
@@ -150,6 +280,7 @@ type anthropicRequest struct {
 	Tools       []anthropicTool    `json:"tools,omitempty"`
 	MaxTokens   int                `json:"max_tokens"`
 	Temperature float64            `json:"temperature,omitempty"`
+	Stream      bool               `json:"stream,omitempty"`
 }
 
 type anthropicMessage struct {

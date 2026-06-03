@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/wati/oncall-agent/internal/llm"
@@ -139,6 +141,37 @@ func TestRunnerRetriesRepetitiveFinal(t *testing.T) {
 	}
 }
 
+func TestRunnerInjectsBudgetWarningNearMaxSteps(t *testing.T) {
+	const maxSteps = 14
+	responses := make([]llm.Response, maxSteps)
+	for i := range responses {
+		responses[i] = llm.Response{Message: toolCallMessage("tool_"+string(rune('a'+i)), fmt.Sprintf(`{"text":"%d"}`, i))}
+	}
+	client := &fakeClient{responses: responses}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	_, err := Runner{LLM: client, Tools: tools, MaxSteps: maxSteps}.Run(context.Background(), Request{})
+	if !errors.Is(err, ErrMaxToolSteps) {
+		t.Fatalf("Run() error = %v, want ErrMaxToolSteps", err)
+	}
+	// Warning should be injected at step maxSteps-10 = step 4
+	warningStep := maxSteps - 10
+	want := budgetWarningPrompt(9)
+	found := false
+	for i := warningStep; i < len(client.requests); i++ {
+		for _, msg := range client.requests[i].Messages {
+			if msg.Role == "system" && msg.Content == want {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("budget warning not found from step %d onward", warningStep)
+	}
+}
+
 func TestRunnerReturnsMaxToolStepsError(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{
 		{Message: toolCallMessage("tool_1", `{"text":"1"}`)},
@@ -164,6 +197,46 @@ func toolCallMessage(id, args string) llm.Message {
 				Arguments: args,
 			},
 		}},
+	}
+}
+
+func TestCompressContextClearsOldToolResults(t *testing.T) {
+	r := Runner{MaxContextChars: 500}
+	messages := []llm.Message{
+		{Role: "system", Content: "system prompt"},
+		{Role: "user", Content: "question"},
+		{Role: "assistant"},
+		{Role: "tool", ToolCallID: "1", Content: strings.Repeat("x", 200)},
+		{Role: "assistant"},
+		{Role: "tool", ToolCallID: "2", Content: strings.Repeat("y", 200)},
+		// recent messages (within last 8)
+		{Role: "assistant"},
+		{Role: "tool", ToolCallID: "3", Content: strings.Repeat("z", 200)},
+		{Role: "assistant"},
+		{Role: "tool", ToolCallID: "4", Content: "recent"},
+		{Role: "assistant", Content: "thinking..."},
+		{Role: "tool", ToolCallID: "5", Content: "latest"},
+	}
+	result := r.compressContext(messages)
+	// Old tool results (before boundary) should be cleared
+	if result[3].Content != toolResultCleared {
+		t.Fatalf("expected old tool result [1] to be cleared, got len=%d", len(result[3].Content))
+	}
+	// Recent results (within last 8) should be preserved
+	if result[11].Content != "latest" {
+		t.Fatalf("expected recent tool result to be preserved, got: %s", result[11].Content)
+	}
+}
+
+func TestCompressContextNoOpUnderLimit(t *testing.T) {
+	r := Runner{MaxContextChars: 10000}
+	messages := []llm.Message{
+		{Role: "system", Content: "prompt"},
+		{Role: "tool", ToolCallID: "1", Content: "short"},
+	}
+	result := r.compressContext(messages)
+	if result[1].Content != "short" {
+		t.Fatal("should not compress when under limit")
 	}
 }
 

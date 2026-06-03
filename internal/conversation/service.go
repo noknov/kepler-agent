@@ -139,6 +139,8 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}()
 
 	const taskID = "thinking"
+	locale := agent.DetectLocale(req.Text)
+
 	runner := s.Runner
 	if runObserver != nil {
 		runner.Observer = multiObserver{s.Metrics, runObserver}
@@ -152,6 +154,16 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		})
 	}
 
+	var flusher *streamFlusher
+	if useStream {
+		flusher = &streamFlusher{
+			ctx: ctx, messenger: s.Messenger,
+			channel: req.Channel, streamTS: streamTS,
+			taskID: taskID, locale: locale,
+		}
+		runner.OnToken = flusher.Write
+	}
+
 	threadContext := s.Messenger.ThreadContext(ctx, req.Channel, req.ThreadTS, 30)
 	messages := s.Memory.BuildWithParts(
 		s.Prompt.SystemPrompt(),
@@ -161,7 +173,6 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		sess.Summary,
 		sess.Turns,
 	)
-	locale := agent.DetectLocale(req.Text)
 	result, err := runner.Run(ctx, agent.Request{
 		Messages: messages,
 		Runtime: registry.Runtime{
@@ -171,6 +182,9 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		},
 		Locale: locale,
 	})
+	if flusher != nil {
+		flusher.Flush()
+	}
 
 	sess.UserID = req.UserID
 	sess.PendingUserInput = false
@@ -232,17 +246,27 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if runObserver != nil {
 			runObserver.Finish("completed", "", nil, finalText)
 		}
-		if s.Format != nil {
-			finalText = s.Format(finalText)
-		}
 		if useStream {
-			_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
-				{"type": "task_update", "id": taskID, "title": agent.CompleteTitle(locale), "status": "complete"},
-			})
-		}
-		ts, _ := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
-		if runObserver != nil {
-			runObserver.LinkSlackMessage(req.Channel, ts)
+			if !result.Streamed {
+				if s.Format != nil {
+					finalText = s.Format(finalText)
+				}
+				_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
+					{"type": "task_update", "id": taskID, "title": agent.CompleteTitle(locale), "status": "complete"},
+					{"type": "markdown_text", "text": finalText},
+				})
+			}
+			if runObserver != nil {
+				runObserver.LinkSlackMessage(req.Channel, streamTS)
+			}
+		} else {
+			if s.Format != nil {
+				finalText = s.Format(finalText)
+			}
+			ts, _ := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
+			if runObserver != nil {
+				runObserver.LinkSlackMessage(req.Channel, ts)
+			}
 		}
 	} else if result.Pending && runObserver != nil {
 		runObserver.Finish("pending_user", "", nil, result.PendingQuestion)
@@ -414,4 +438,41 @@ func (e *errorWithID) Error() string {
 
 func (e *errorWithID) Unwrap() error {
 	return e.err
+}
+
+type streamFlusher struct {
+	ctx       context.Context
+	messenger Messenger
+	channel   string
+	streamTS  string
+	taskID    string
+	locale    string
+	buf       strings.Builder
+	lastFlush time.Time
+	started   bool
+}
+
+func (f *streamFlusher) Write(delta string) {
+	if !f.started {
+		f.started = true
+		_ = f.messenger.AppendStream(f.ctx, f.channel, f.streamTS, []map[string]any{
+			{"type": "task_update", "id": f.taskID, "title": agent.CompleteTitle(f.locale), "status": "complete"},
+		})
+	}
+	f.buf.WriteString(delta)
+	if time.Since(f.lastFlush) > 80*time.Millisecond || f.buf.Len() > 80 {
+		f.Flush()
+	}
+}
+
+func (f *streamFlusher) Flush() {
+	if f.buf.Len() == 0 {
+		return
+	}
+	text := f.buf.String()
+	f.buf.Reset()
+	f.lastFlush = time.Now()
+	_ = f.messenger.AppendStream(f.ctx, f.channel, f.streamTS, []map[string]any{
+		{"type": "markdown_text", "text": text},
+	})
 }
