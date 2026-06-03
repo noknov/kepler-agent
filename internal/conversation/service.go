@@ -12,6 +12,7 @@ import (
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/memory"
 	"github.com/wati/oncall-agent/internal/observability"
+	"github.com/wati/oncall-agent/internal/runs"
 	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/session"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
@@ -29,14 +30,18 @@ type Messenger interface {
 type TextFormatter func(string) string
 
 type Service struct {
-	Store     session.Store
-	Messenger Messenger
-	Runner    agent.Runner
-	Memory    memory.Builder
-	Prompt    safety.PromptPolicy
-	Redactor  safety.Redactor
-	Metrics   *observability.Recorder
-	Format    TextFormatter
+	Store       session.Store
+	Messenger   Messenger
+	Runner      agent.Runner
+	Memory      memory.Builder
+	Prompt      safety.PromptPolicy
+	Redactor    safety.Redactor
+	Metrics     *observability.Recorder
+	Format      TextFormatter
+	RunStore    runs.Store
+	RunProvider string
+	RunModel    string
+	CostRates   observability.CostRates
 
 	mu       sync.Mutex
 	locks    map[string]*sync.Mutex
@@ -109,6 +114,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	sess.Turns = memory.FilterPersistentTurns(sess.Turns)
 
 	start := time.Now()
+	runObserver := s.newRunObserver(sessionID, req, start)
 
 	streamTS, streamErr := s.Messenger.StartStream(ctx, req.Channel, req.ThreadTS, req.UserID)
 	useStream := streamErr == nil && streamTS != ""
@@ -133,6 +139,9 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 
 	const taskID = "thinking"
 	runner := s.Runner
+	if runObserver != nil {
+		runner.Observer = multiObserver{s.Metrics, runObserver}
+	}
 	runner.StatusUpdate = func(status string) {
 		if !useStream {
 			return
@@ -169,6 +178,9 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	if err != nil {
 		errorID := newErrorID()
 		log.Printf("conversation error id=%s session=%s event=%s user=%s channel=%s thread=%s err=%v", errorID, sessionID, req.EventID, req.UserID, req.Channel, req.ThreadTS, err)
+		if runObserver != nil {
+			runObserver.Finish("error", errorID, err, "")
+		}
 		if s.Metrics != nil {
 			s.Metrics.Error(wrapErrorID(errorID, err))
 		}
@@ -199,6 +211,9 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}
 	if !result.Pending && result.Final != "" {
 		finalText := s.Redactor.Sanitize(result.Final)
+		if runObserver != nil {
+			runObserver.Finish("completed", "", nil, finalText)
+		}
 		if s.Format != nil {
 			finalText = s.Format(finalText)
 		}
@@ -210,8 +225,46 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		} else {
 			_, _ = s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
 		}
+	} else if result.Pending && runObserver != nil {
+		runObserver.Finish("pending_user", "", nil, result.PendingQuestion)
 	}
 	return true
+}
+
+func (s *Service) newRunObserver(sessionID string, req Request, startedAt time.Time) *runs.Observer {
+	if s.RunStore == nil {
+		return nil
+	}
+	return runs.NewObserver(s.RunStore, runs.Run{
+		ID:        runs.NewID(),
+		SessionID: sessionID,
+		EventID:   req.EventID,
+		UserID:    req.UserID,
+		Channel:   req.Channel,
+		ThreadTS:  req.ThreadTS,
+		Provider:  s.RunProvider,
+		Model:     s.RunModel,
+		Status:    "running",
+		StartedAt: startedAt.UTC(),
+	}, s.CostRates)
+}
+
+type multiObserver []agent.Observer
+
+func (m multiObserver) LLMCall(usage llm.Usage, d time.Duration, err error) {
+	for _, observer := range m {
+		if observer != nil {
+			observer.LLMCall(usage, d, err)
+		}
+	}
+}
+
+func (m multiObserver) ToolCall(name string, d time.Duration, err error) {
+	for _, observer := range m {
+		if observer != nil {
+			observer.ToolCall(name, d, err)
+		}
+	}
 }
 
 func (s *Service) reportError(ctx context.Context, req Request, text string) {
