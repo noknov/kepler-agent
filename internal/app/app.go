@@ -429,6 +429,14 @@ func (s *Server) attachSlackFiles(ctx context.Context, text string, files []slac
 			text += "\n\n" + excerpt
 		}
 	}
+	if excerpt := s.slackTextExcerpts(ctx, files); excerpt != "" {
+		text = strings.TrimSpace(text)
+		if text == "" {
+			text = excerpt
+		} else {
+			text += "\n\n" + excerpt
+		}
+	}
 	return text, s.slackImageParts(ctx, files)
 }
 
@@ -463,6 +471,45 @@ func (s *Server) slackPDFExcerpts(ctx context.Context, files []slack.File) strin
 		blocks = append(blocks, slack.FormatPDFExcerpt(slack.FileDisplayName(file), text))
 	}
 	return strings.Join(blocks, "\n\n")
+}
+
+func (s *Server) slackTextExcerpts(ctx context.Context, files []slack.File) string {
+	blocks := make([]string, 0, len(files))
+	for _, file := range files {
+		if !shouldAttemptSlackTextExcerpt(file) {
+			continue
+		}
+		declaredText := slack.IsTextFile(file)
+		if file.Size > maxSlackTextBytes {
+			log.Printf("skip slack text %s: size %d exceeds limit %d", file.ID, file.Size, maxSlackTextBytes)
+			if declaredText {
+				blocks = append(blocks, slack.FormatTextExcerpt(slack.FileDisplayName(file), "[Text file too large to read; max "+formatBytes(maxSlackTextBytes)+"]"))
+			}
+			continue
+		}
+		data, err := s.slack.DownloadFile(ctx, file, maxSlackTextBytes)
+		if err != nil {
+			log.Printf("skip slack text %s: download failed: %v", file.ID, err)
+			if declaredText {
+				blocks = append(blocks, slack.FormatTextExcerpt(slack.FileDisplayName(file), "[Could not download text file from Slack: "+err.Error()+"]"))
+			}
+			continue
+		}
+		text, err := slack.ExtractTextFile(data, maxSlackTextChars)
+		if err != nil {
+			log.Printf("skip slack text %s: extract failed: %v", file.ID, err)
+			if declaredText {
+				blocks = append(blocks, slack.FormatTextExcerpt(slack.FileDisplayName(file), "[Could not read text file: "+err.Error()+"]"))
+			}
+			continue
+		}
+		blocks = append(blocks, slack.FormatTextExcerpt(slack.FileDisplayName(file), text))
+	}
+	return strings.Join(blocks, "\n\n")
+}
+
+func shouldAttemptSlackTextExcerpt(file slack.File) bool {
+	return !slack.IsPDFFile(file) && normalizedImageMIME(file) == ""
 }
 
 func formatBytes(n int64) string {
@@ -509,9 +556,11 @@ func (s *Server) slackImageParts(ctx context.Context, files []slack.File) []llm.
 }
 
 const (
-	maxSlackImageBytes    = 8 << 20
-	maxSlackPDFBytes      = 16 << 20
-	maxSlackPDFTextChars  = slack.DefaultMaxPDFExtractChars
+	maxSlackImageBytes   = 8 << 20
+	maxSlackPDFBytes     = 16 << 20
+	maxSlackPDFTextChars = slack.DefaultMaxPDFExtractChars
+	maxSlackTextBytes    = 1 << 20
+	maxSlackTextChars    = slack.DefaultMaxTextExtractChars
 )
 
 func normalizedImageMIME(file slack.File) string {
