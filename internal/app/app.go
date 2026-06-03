@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/wati/oncall-agent/internal/session"
 	"github.com/wati/oncall-agent/internal/slack"
 	codeTools "github.com/wati/oncall-agent/internal/toolkit/tools/code"
+	diagnosticsTools "github.com/wati/oncall-agent/internal/toolkit/tools/diagnostics"
 	gcpTools "github.com/wati/oncall-agent/internal/toolkit/tools/gcp"
 	gitTools "github.com/wati/oncall-agent/internal/toolkit/tools/git"
 	githubTools "github.com/wati/oncall-agent/internal/toolkit/tools/github"
@@ -49,13 +51,14 @@ func Run(ctx context.Context) error {
 }
 
 type Server struct {
-	cfg     config.Config
-	slack   *slack.Client
-	access  safety.AccessPolicy
-	conv    *conversation.Service
-	prompt  safety.PromptPolicy
-	metrics *observability.Recorder
-	mux     *http.ServeMux
+	cfg      config.Config
+	slack    *slack.Client
+	access   safety.AccessPolicy
+	conv     *conversation.Service
+	prompt   safety.PromptPolicy
+	metrics  *observability.Recorder
+	runStore *runs.FileStore
+	mux      *http.ServeMux
 }
 
 func NewServer(cfg config.Config) (*Server, error) {
@@ -110,6 +113,7 @@ func NewServer(cfg config.Config) (*Server, error) {
 	_ = delegates.LoadMarkdown(filepath.Join(prompts.Dir(), "rules"), filepath.Join(prompts.Dir(), "skills"))
 
 	tools := registry.New()
+	tools.Register(diagnosticsTools.IncidentBriefTool{})
 	tools.Register(codeTools.SearchTool{Paths: workspacePolicy})
 	tools.Register(codeTools.ReadFileTool{Paths: workspacePolicy})
 	gitBase := gitTools.Base{Paths: workspacePolicy, Guard: commandPolicy, Timeout: cfg.Tools.CommandTimeout}
@@ -178,13 +182,14 @@ func NewServer(cfg config.Config) (*Server, error) {
 	conv.SensitivePatterns = cfg.Tools.SensitivePatterns
 
 	s := &Server{
-		cfg:     cfg,
-		slack:   slackClient,
-		access:  safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
-		conv:    conv,
-		prompt:  promptPolicy,
-		metrics: recorder,
-		mux:     http.NewServeMux(),
+		cfg:      cfg,
+		slack:    slackClient,
+		access:   safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
+		conv:     conv,
+		prompt:   promptPolicy,
+		metrics:  recorder,
+		runStore: runStore,
+		mux:      http.NewServeMux(),
 	}
 	s.routes(tools)
 	return s, nil
@@ -192,6 +197,8 @@ func NewServer(cfg config.Config) (*Server, error) {
 
 func (s *Server) routes(tools *registry.Registry) {
 	s.mux.Handle("/metrics", s.metrics)
+	s.mux.HandleFunc("/runs", s.handleRuns)
+	s.mux.HandleFunc("/runs/", s.handleRun)
 	s.mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -274,8 +281,69 @@ func (s *Server) handleEvent(ctx context.Context, eventID string, ev slack.Event
 	case "reaction_added":
 		if ev.Item.Type == "message" {
 			s.metrics.Reaction(ev.Reaction)
+			s.recordReactionFeedback(ctx, ev)
 		}
 	}
+}
+
+func (s *Server) recordReactionFeedback(ctx context.Context, ev slack.Event) {
+	if s.runStore == nil || ev.Item.Channel == "" || ev.Item.TS == "" || ev.Reaction == "" {
+		return
+	}
+	_, ok, err := s.runStore.AddFeedbackForMessage(ctx, ev.Item.Channel, ev.Item.TS, runs.Feedback{
+		Source:    "slack_reaction",
+		Value:     ev.Reaction,
+		UserID:    ev.User,
+		Channel:   ev.Item.Channel,
+		MessageTS: ev.Item.TS,
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		log.Printf("record reaction feedback failed channel=%s ts=%s reaction=%s err=%v", ev.Item.Channel, ev.Item.TS, ev.Reaction, err)
+		return
+	}
+	if !ok {
+		log.Printf("reaction feedback had no matching run channel=%s ts=%s reaction=%s", ev.Item.Channel, ev.Item.TS, ev.Reaction)
+	}
+}
+
+func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	runsList, err := s.runStore.List(r.Context(), limit)
+	if err != nil {
+		http.Error(w, "failed to list runs", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(runsList)
+}
+
+func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/runs/")
+	run, ok, err := s.runStore.Get(r.Context(), id)
+	if err != nil {
+		http.Error(w, "failed to read run", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(run)
 }
 
 func (s *Server) handleMention(ctx context.Context, eventID string, ev slack.Event) {
