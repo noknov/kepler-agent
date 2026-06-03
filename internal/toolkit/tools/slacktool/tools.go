@@ -37,11 +37,7 @@ func (t AskUserTool) Execute(ctx context.Context, raw json.RawMessage, rt regist
 	if args.Question == "" {
 		return registry.Result{}, fmt.Errorf("question is required")
 	}
-	if t.Slack != nil {
-		_, err := t.Slack.PostMessage(ctx, rt.Channel, rt.ThreadTS, "<@"+rt.UserID+"> "+args.Question)
-		if err != nil {
-			return registry.Result{}, err
-		}
-	}
-	return registry.Result{Content: "asked user: " + args.Question, WaitForUser: true}, nil
+	_ = ctx
+	_ = rt
+	return registry.Result{Content: args.Question, WaitForUser: true}, nil
 }

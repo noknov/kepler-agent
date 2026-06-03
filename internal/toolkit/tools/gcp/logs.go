@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -46,7 +47,7 @@ func (t LogsTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t LogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t LogsTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
 	var args struct {
 		Filter    string `json:"filter"`
 		Severity  string `json:"severity"`
@@ -59,6 +60,21 @@ func (t LogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.R
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
+	}
+	checkProject := args.Project
+	if checkProject == "" {
+		checkProject = t.DefaultProject
+	}
+	if registry.ToolNeedsConfirmation(rt, "gcp-logs") || registry.LooksProductionScoped(checkProject, args.Namespace, args.Service, args.Filter) {
+		payload := map[string]any{"filter": args.Filter, "severity": args.Severity, "namespace": args.Namespace, "service": args.Service, "freshness": args.Freshness, "limit": args.Limit, "project": args.Project, "format": args.Format}
+		key, confirmed := registry.ConfirmationState(rt, "gcp-logs", payload)
+		if !confirmed {
+			return registry.Result{
+				Content:          "This may read production or sensitive log data from your local GCP credentials. Reply `confirm` in this thread to allow this exact log query.",
+				WaitForUser:      true,
+				PendingActionKey: key,
+			}, nil
+		}
 	}
 	project := args.Project
 	if project == "" {
@@ -75,6 +91,9 @@ func (t LogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.R
 	}
 	if args.Limit > 200 {
 		args.Limit = 200
+	}
+	if args.Severity != "" && !validSeverity(args.Severity) {
+		return registry.Result{}, fmt.Errorf("invalid severity %q", args.Severity)
 	}
 	filter := buildFilter(args.Filter, args.Severity, args.Namespace, args.Service)
 	format := args.Format
@@ -126,9 +145,10 @@ func buildFilter(raw, severity, namespace, service string) string {
 		parts = append(parts, "severity>="+severity)
 	}
 	if namespace != "" {
-		parts = append(parts, `resource.labels.namespace_name="`+namespace+`"`)
+		parts = append(parts, `resource.labels.namespace_name="`+filterString(namespace)+`"`)
 	}
 	if service != "" {
+		service = filterString(service)
 		parts = append(parts, `(
 resource.labels.container_name="`+service+`" OR
 resource.labels.pod_name:"`+service+`" OR
@@ -137,6 +157,21 @@ labels."k8s-pod/app_kubernetes_io/name"="`+service+`"
 )`)
 	}
 	return strings.Join(parts, " AND ")
+}
+
+var severityRe = regexp.MustCompile(`^[A-Za-z]+$`)
+
+func validSeverity(severity string) bool {
+	return severityRe.MatchString(strings.TrimSpace(severity))
+}
+
+func filterString(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `"`, `\"`)
+	value = strings.ReplaceAll(value, "\n", " ")
+	value = strings.ReplaceAll(value, "\r", " ")
+	return value
 }
 
 func (t LogsTool) defaultHint() string {
