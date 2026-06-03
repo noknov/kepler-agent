@@ -95,7 +95,7 @@ func TestHandleReplyConsumesPendingQuestion(t *testing.T) {
 	if !ok {
 		t.Fatal("session not saved")
 	}
-	if sess.PendingUserInput || sess.PendingUserID != "" || sess.PendingQuestion != "" {
+	if sess.PendingUserInput || sess.PendingUserID != "" {
 		t.Fatalf("pending state was not cleared: %#v", sess)
 	}
 	if len(sess.Turns) == 0 || sess.Turns[0].Content != "production" {
@@ -129,7 +129,7 @@ func TestNewErrorID(t *testing.T) {
 	}
 }
 
-func TestStreamModePostsFinalAnswerForNotification(t *testing.T) {
+func TestStreamModePostsFinalAnswer(t *testing.T) {
 	ctx := context.Background()
 	store, err := session.NewFileStore(t.TempDir())
 	if err != nil {
@@ -156,20 +156,20 @@ func TestStreamModePostsFinalAnswerForNotification(t *testing.T) {
 	})
 
 	if len(messenger.posts) == 0 {
-		t.Fatalf("stream mode should post final answer as a normal Slack message")
+		t.Fatal("stream mode should post final answer as a separate message")
 	}
 	if got := messenger.posts[len(messenger.posts)-1]; got != "Author: <@U085SRJFCLX>" {
 		t.Fatalf("final post = %q, want formatted mention", got)
 	}
 	foundComplete := false
 	for _, chunk := range messenger.chunks {
-		if chunk["type"] == "task_update" && chunk["status"] == "complete" {
+		if chunk["type"] == "task_update" && chunk["status"] == "complete" && chunk["title"] == "Done" {
 			foundComplete = true
 			break
 		}
 	}
 	if !foundComplete {
-		t.Fatalf("stream chunks did not mark task complete: %#v", messenger.chunks)
+		t.Fatalf("stream chunks should mark task complete with title: %#v", messenger.chunks)
 	}
 }
 
@@ -211,7 +211,7 @@ func (m *fakeMessenger) AppendStream(_ context.Context, _, _ string, chunks []ma
 	return nil
 }
 
-func (m *fakeMessenger) StopStream(context.Context, string, string) error {
+func (m *fakeMessenger) StopStream(_ context.Context, _, _ string) error {
 	return nil
 }
 

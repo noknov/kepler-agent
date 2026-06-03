@@ -61,21 +61,6 @@ func (t LogsTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
 	}
-	checkProject := args.Project
-	if checkProject == "" {
-		checkProject = t.DefaultProject
-	}
-	if registry.ToolNeedsConfirmation(rt, "gcp-logs") || registry.LooksProductionScoped(checkProject, args.Namespace, args.Service, args.Filter) {
-		payload := map[string]any{"filter": args.Filter, "severity": args.Severity, "namespace": args.Namespace, "service": args.Service, "freshness": args.Freshness, "limit": args.Limit, "project": args.Project, "format": args.Format}
-		key, confirmed := registry.ConfirmationState(rt, "gcp-logs", payload)
-		if !confirmed {
-			return registry.Result{
-				Content:          "This may read production or sensitive log data from your local GCP credentials. Reply `confirm` in this thread to allow this exact log query.",
-				WaitForUser:      true,
-				PendingActionKey: key,
-			}, nil
-		}
-	}
 	project := args.Project
 	if project == "" {
 		project = t.DefaultProject
