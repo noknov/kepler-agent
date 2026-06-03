@@ -195,7 +195,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if s.Metrics != nil {
 			s.Metrics.Error(wrapErrorID(errorID, err))
 		}
-		sess.Turns = trimTurns(sess.Turns, s.maxTurns)
+		sess.Turns, sess.Summary = s.trimAndSummarize(sess.Turns, sess.Summary)
 		_ = s.Store.Save(ctx, sess)
 		errMsg := s.Redactor.Sanitize(userFacingError(errorID))
 		if useStream {
@@ -217,7 +217,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		sess.PendingQuestion = result.PendingQuestion
 		sess.PendingActionKey = result.PendingActionKey
 	}
-	sess.Turns = trimTurns(sess.Turns, s.maxTurns)
+	sess.Turns, sess.Summary = s.trimAndSummarize(sess.Turns, sess.Summary)
 	if err := s.Store.Save(ctx, sess); err != nil && s.Metrics != nil {
 		s.Metrics.Error(err)
 	}
@@ -231,8 +231,14 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 				{"type": "task_update", "id": taskID, "status": "complete"},
 				{"type": "markdown_text", "text": "<@" + req.UserID + "> " + pendingText},
 			})
+			if runObserver != nil {
+				runObserver.LinkSlackMessage(req.Channel, streamTS)
+			}
 		} else {
-			_, _ = s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, "<@"+req.UserID+"> "+pendingText)
+			ts, _ := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, "<@"+req.UserID+"> "+pendingText)
+			if runObserver != nil {
+				runObserver.LinkSlackMessage(req.Channel, ts)
+			}
 		}
 	}
 	if !result.Pending && result.Final != "" {
@@ -248,8 +254,14 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 				{"type": "task_update", "id": taskID, "status": "complete"},
 				{"type": "markdown_text", "text": finalText},
 			})
+			if runObserver != nil {
+				runObserver.LinkSlackMessage(req.Channel, streamTS)
+			}
 		} else {
-			_, _ = s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
+			ts, _ := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
+			if runObserver != nil {
+				runObserver.LinkSlackMessage(req.Channel, ts)
+			}
 		}
 	} else if result.Pending && runObserver != nil {
 		runObserver.Finish("pending_user", "", nil, result.PendingQuestion)
@@ -339,6 +351,59 @@ func trimTurns(turns []memory.Turn, max int) []memory.Turn {
 		return nil
 	}
 	return append([]memory.Turn(nil), turns[start:]...)
+}
+
+func (s *Service) trimAndSummarize(turns []memory.Turn, existing string) ([]memory.Turn, string) {
+	trimmed := trimTurns(turns, s.maxTurns)
+	removed := len(turns) - len(trimmed)
+	if removed <= 0 {
+		return trimmed, existing
+	}
+	addition := summarizeTurns(turns[:removed])
+	if addition == "" {
+		return trimmed, existing
+	}
+	summary := strings.TrimSpace(existing)
+	if summary != "" {
+		summary += "\n"
+	}
+	summary += addition
+	return trimmed, trimSummary(summary, s.Memory.MaxSummaryChars)
+}
+
+func summarizeTurns(turns []memory.Turn) string {
+	lines := make([]string, 0, len(turns)+1)
+	lines = append(lines, "Trimmed conversation summary:")
+	for _, turn := range turns {
+		label := string(turn.Role)
+		content := strings.TrimSpace(turn.Content)
+		if turn.Role == memory.RoleAssistant && len(turn.ToolCalls) > 0 {
+			names := make([]string, 0, len(turn.ToolCalls))
+			for _, call := range turn.ToolCalls {
+				names = append(names, call.Name)
+			}
+			content = "called tools: " + strings.Join(names, ", ")
+		}
+		if turn.Role == memory.RoleTool {
+			label = "tool:" + turn.Name
+		}
+		content = strings.Join(strings.Fields(content), " ")
+		if len(content) > 240 {
+			content = content[:240] + "..."
+		}
+		if content != "" {
+			lines = append(lines, "- "+label+": "+content)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func trimSummary(summary string, max int) string {
+	summary = strings.TrimSpace(summary)
+	if max <= 0 || len(summary) <= max {
+		return summary
+	}
+	return strings.TrimSpace(summary[len(summary)-max:])
 }
 
 func looksLikeConfirmation(text string) bool {
