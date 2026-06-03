@@ -3,6 +3,7 @@ package conversation
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/wati/oncall-agent/internal/agent"
@@ -101,6 +102,29 @@ func TestHandleReplyConsumesPendingQuestion(t *testing.T) {
 	}
 	if got := metrics.Snapshot().Requests; got != 1 {
 		t.Fatalf("Requests = %d, want 1", got)
+	}
+}
+
+func TestUserFacingErrorForMaxToolSteps(t *testing.T) {
+	got := userFacingError("err-test123")
+	if strings.Contains(got, "agent exceeded max tool steps") {
+		t.Fatalf("userFacingError() leaked internal error: %q", got)
+	}
+	if strings.Contains(got, "连续使用工具超过上限") {
+		t.Fatalf("userFacingError() leaked implementation detail: %q", got)
+	}
+	if strings.Contains(got, "找我") || strings.Contains(strings.ToLower(got), "contact me") {
+		t.Fatalf("userFacingError() should not ask users to contact a person: %q", got)
+	}
+	if !strings.Contains(got, "Something went wrong") || !strings.Contains(got, "Please try again later") || !strings.Contains(got, "Error ID: err-test123") {
+		t.Fatalf("userFacingError() = %q, want generic error with id", got)
+	}
+}
+
+func TestNewErrorID(t *testing.T) {
+	got := newErrorID()
+	if !strings.HasPrefix(got, "err-") || len(got) < 8 {
+		t.Fatalf("newErrorID() = %q, want err-*", got)
 	}
 }
 

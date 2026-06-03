@@ -1,6 +1,22 @@
 package safety
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestSystemPromptIsGeneralPurposeAssistant(t *testing.T) {
+	prompt := (PromptPolicy{}).SystemPrompt()
+	if !strings.Contains(prompt, "general-purpose assistant") {
+		t.Fatalf("SystemPrompt() should describe a general-purpose assistant: %q", prompt)
+	}
+	if !strings.Contains(prompt, "food or drink ordering") {
+		t.Fatalf("SystemPrompt() should cover future local-life tools: %q", prompt)
+	}
+	if !strings.Contains(prompt, "requires explicit user confirmation") {
+		t.Fatalf("SystemPrompt() should require confirmation before risky actions: %q", prompt)
+	}
+}
 
 func TestRedactorRedactsSecrets(t *testing.T) {
 	got := (Redactor{}).Sanitize("Authorization: Bearer sk-abc and SLACK_TOKEN=xoxb-secret")

@@ -2,7 +2,8 @@ package conversation
 
 import (
 	"context"
-	"errors"
+	"crypto/rand"
+	"encoding/hex"
 	"log"
 	"sync"
 	"time"
@@ -166,12 +167,14 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	sess.Turns = append(sess.Turns, memory.UserTurn(req.Text))
 
 	if err != nil {
+		errorID := newErrorID()
+		log.Printf("conversation error id=%s session=%s event=%s user=%s channel=%s thread=%s err=%v", errorID, sessionID, req.EventID, req.UserID, req.Channel, req.ThreadTS, err)
 		if s.Metrics != nil {
-			s.Metrics.Error(err)
+			s.Metrics.Error(wrapErrorID(errorID, err))
 		}
 		sess.Turns = trimTurns(sess.Turns, s.maxTurns)
 		_ = s.Store.Save(ctx, sess)
-		errMsg := s.Redactor.Sanitize(userFacingError(err))
+		errMsg := s.Redactor.Sanitize(userFacingError(errorID))
 		if useStream {
 			_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
 				{"type": "task_update", "id": taskID, "status": "error"},
@@ -260,15 +263,31 @@ func trimTurns(turns []memory.Turn, max int) []memory.Turn {
 	return append([]memory.Turn(nil), turns[start:]...)
 }
 
-func userFacingError(err error) string {
-	switch {
-	case errors.Is(err, agent.ErrRepetitiveOutput):
-		return "模型输出出现了重复循环，我已经中断这次回复，避免把无效内容继续发到 Slack。请换一种更具体的问法再试一次。"
-	case errors.Is(err, agent.ErrRepeatedToolCall):
-		return "模型重复调用了同一个工具，我已经中断这次分析，避免继续消耗 token。请稍微缩小问题范围后再试一次。"
-	case errors.Is(err, agent.ErrTextualToolCall):
-		return "模型返回了文本形式的工具调用而不是结构化工具接口，无法安全执行。请换一种更具体的问法，或稍后再试。"
-	default:
-		return llm.UserFacingError(err)
+func userFacingError(errorID string) string {
+	return "Something went wrong. Please try again later. Error ID: " + errorID
+}
+
+func newErrorID() string {
+	var b [6]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "err-" + time.Now().UTC().Format("20060102150405")
 	}
+	return "err-" + hex.EncodeToString(b[:])
+}
+
+func wrapErrorID(errorID string, err error) error {
+	return &errorWithID{id: errorID, err: err}
+}
+
+type errorWithID struct {
+	id  string
+	err error
+}
+
+func (e *errorWithID) Error() string {
+	return "error_id=" + e.id + " " + e.err.Error()
+}
+
+func (e *errorWithID) Unwrap() error {
+	return e.err
 }
