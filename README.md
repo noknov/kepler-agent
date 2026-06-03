@@ -145,7 +145,7 @@ LLM_CACHE_READ_COST_PER_MTOK=0
 LLM_CACHE_CREATION_COST_PER_MTOK=0
 ```
 
-`git.fetch_ref` fetches origin and resolves the requested branch to an `origin/<branch>` ref without changing the working tree. If no branch is specified, it tries `main`, then `master`. Branch-specific analysis should use `git.search_ref` and `git.read_file_ref`, so concurrent users can inspect different branches without checkout conflicts. Sensitive actions are deliberately absent. The command guard blocks destructive command patterns, and the shipped tools use argumentized `exec.CommandContext` instead of shell strings.
+`git.fetch_ref` fetches origin and resolves the requested branch to an `origin/<branch>` ref without changing the working tree. If no branch is specified, it tries `main`, then `master`. Branch-specific analysis should use `git.search_ref` and `git.read_file_ref`, so concurrent users can inspect different branches without checkout conflicts. Risky local reads and externally visible actions are gated by confirmation policy. The command guard blocks destructive command patterns, and the shipped tools use argumentized `exec.CommandContext` instead of shell strings.
 
 GCP values in `.env` are defaults and hints, not fixed environments. `gcp.logs` accepts `project`, `namespace`, `service`, and raw `filter` per call. If `namespace` is omitted, the tool no longer silently injects `GCP_NAMESPACE`; environment mappings can be added later in `PROMPT_DIR/rules`.
 
