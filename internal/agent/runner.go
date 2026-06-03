@@ -18,6 +18,7 @@ var (
 	ErrRepetitiveOutput = errors.New("model output repeated itself")
 	ErrRepeatedToolCall = errors.New("model repeated the same tool call")
 	ErrTextualToolCall  = errors.New("model returned textual tool invocation instead of structured tool calls")
+	ErrMaxToolSteps     = errors.New("agent exceeded max tool steps")
 )
 
 type Observer interface {
@@ -193,7 +194,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			}
 		}
 	}
-	return Result{Generated: generated}, fmt.Errorf("agent exceeded max tool steps")
+	return Result{Generated: generated}, ErrMaxToolSteps
 }
 
 func toolCallSignature(call llm.ToolCall) string {

@@ -139,6 +139,34 @@ func TestRunnerRetriesRepetitiveFinal(t *testing.T) {
 	}
 }
 
+func TestRunnerReturnsMaxToolStepsError(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{Message: toolCallMessage("tool_1", `{"text":"1"}`)},
+		{Message: toolCallMessage("tool_2", `{"text":"2"}`)},
+	}}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	_, err := Runner{LLM: client, Tools: tools, MaxSteps: 2}.Run(context.Background(), Request{})
+	if !errors.Is(err, ErrMaxToolSteps) {
+		t.Fatalf("Run() error = %v, want ErrMaxToolSteps", err)
+	}
+}
+
+func toolCallMessage(id, args string) llm.Message {
+	return llm.Message{
+		Role: "assistant",
+		ToolCalls: []llm.ToolCall{{
+			ID:   id,
+			Type: "function",
+			Function: llm.ToolFunction{
+				Name:      "echo",
+				Arguments: args,
+			},
+		}},
+	}
+}
+
 type fakeClient struct {
 	responses []llm.Response
 	requests  []llm.Request

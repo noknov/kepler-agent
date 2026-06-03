@@ -148,7 +148,7 @@ func NewServer(cfg config.Config) (*Server, error) {
 		Format:    mem,
 		Sanitize:  redactor,
 		Observer:  recorder,
-		MaxSteps:  16,
+		MaxSteps:  32,
 	}
 	conv := conversation.NewService(store, slackClient, runner, mem, promptPolicy, redactor, recorder)
 	conv.Format = slack.MarkdownToMrkdwn
