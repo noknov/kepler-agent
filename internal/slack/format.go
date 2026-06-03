@@ -14,6 +14,7 @@ var (
 	reHeading    = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
 	reHR         = regexp.MustCompile(`(?m)^[-*]{3,}$`)
 	reTable      = regexp.MustCompile(`(?m)^(\|.+\|)\n(\|[-| :]+\|)\n((?:\|.+\|\n?)+)`)
+	reBareUserID = regexp.MustCompile(`(^|[^<A-Za-z0-9_])@([UW][A-Z0-9]{8,})\b`)
 	reBlankLines = regexp.MustCompile(`\n{3,}`)
 )
 
@@ -30,6 +31,7 @@ func MarkdownToMrkdwn(md string) string {
 	s = reStrike.ReplaceAllString(s, "~$1~")
 	s = reHeading.ReplaceAllString(s, "*$1*")
 	s = reHR.ReplaceAllString(s, "───")
+	s = reBareUserID.ReplaceAllString(s, "$1<@$2>")
 
 	s = reBlankLines.ReplaceAllString(s, "\n\n")
 	return strings.TrimSpace(s)
