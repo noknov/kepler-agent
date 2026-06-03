@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,10 +22,12 @@ import (
 	"github.com/wati/oncall-agent/internal/memory"
 	"github.com/wati/oncall-agent/internal/observability"
 	"github.com/wati/oncall-agent/internal/prompts"
+	"github.com/wati/oncall-agent/internal/runs"
 	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/session"
 	"github.com/wati/oncall-agent/internal/slack"
 	codeTools "github.com/wati/oncall-agent/internal/toolkit/tools/code"
+	diagnosticsTools "github.com/wati/oncall-agent/internal/toolkit/tools/diagnostics"
 	gcpTools "github.com/wati/oncall-agent/internal/toolkit/tools/gcp"
 	gitTools "github.com/wati/oncall-agent/internal/toolkit/tools/git"
 	githubTools "github.com/wati/oncall-agent/internal/toolkit/tools/github"
@@ -48,18 +51,23 @@ func Run(ctx context.Context) error {
 }
 
 type Server struct {
-	cfg     config.Config
-	slack   *slack.Client
-	access  safety.AccessPolicy
-	conv    *conversation.Service
-	prompt  safety.PromptPolicy
-	metrics *observability.Recorder
-	mux     *http.ServeMux
+	cfg      config.Config
+	slack    *slack.Client
+	access   safety.AccessPolicy
+	conv     *conversation.Service
+	prompt   safety.PromptPolicy
+	metrics  *observability.Recorder
+	runStore *runs.FileStore
+	mux      *http.ServeMux
 }
 
 func NewServer(cfg config.Config) (*Server, error) {
 	prompts.LoadFromEnv()
 	store, err := session.NewFileStore(cfg.Sessions.DataDir)
+	if err != nil {
+		return nil, err
+	}
+	runStore, err := runs.NewFileStore(cfg.Observing.RunsDir)
 	if err != nil {
 		return nil, err
 	}
@@ -83,6 +91,19 @@ func NewServer(cfg config.Config) (*Server, error) {
 	}
 
 	recorder := observability.NewRecorder()
+	costRates := observability.DefaultCostRates(cfg.LLM.Provider, cfg.LLM.Model)
+	if cfg.Observing.InputCostPerMTok >= 0 {
+		costRates.InputPerMTok = cfg.Observing.InputCostPerMTok
+	}
+	if cfg.Observing.OutputCostPerMTok >= 0 {
+		costRates.OutputPerMTok = cfg.Observing.OutputCostPerMTok
+	}
+	if cfg.Observing.CacheReadCostPerMTok >= 0 {
+		costRates.CacheReadPerMTok = cfg.Observing.CacheReadCostPerMTok
+	}
+	if cfg.Observing.CacheCreationCostPerMTok >= 0 {
+		costRates.CacheCreationPerMTok = cfg.Observing.CacheCreationCostPerMTok
+	}
 	workspacePolicy := safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}
 	commandPolicy := safety.NewCommandPolicy()
 	redactor := safety.Redactor{WorkspaceRoots: cfg.Security.WorkspaceRoots}
@@ -92,6 +113,7 @@ func NewServer(cfg config.Config) (*Server, error) {
 	_ = delegates.LoadMarkdown(filepath.Join(prompts.Dir(), "rules"), filepath.Join(prompts.Dir(), "skills"))
 
 	tools := registry.New()
+	tools.Register(diagnosticsTools.IncidentBriefTool{})
 	tools.Register(codeTools.SearchTool{Paths: workspacePolicy})
 	tools.Register(codeTools.ReadFileTool{Paths: workspacePolicy})
 	gitBase := gitTools.Base{Paths: workspacePolicy, Guard: commandPolicy, Timeout: cfg.Tools.CommandTimeout}
@@ -152,15 +174,22 @@ func NewServer(cfg config.Config) (*Server, error) {
 	}
 	conv := conversation.NewService(store, slackClient, runner, mem, promptPolicy, redactor, recorder)
 	conv.Format = slack.MarkdownToMrkdwn
+	conv.RunStore = runStore
+	conv.RunProvider = cfg.LLM.Provider
+	conv.RunModel = cfg.LLM.Model
+	conv.CostRates = costRates
+	conv.ConfirmTools = setBool(cfg.Tools.ConfirmTools)
+	conv.SensitivePatterns = cfg.Tools.SensitivePatterns
 
 	s := &Server{
-		cfg:     cfg,
-		slack:   slackClient,
-		access:  safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
-		conv:    conv,
-		prompt:  promptPolicy,
-		metrics: recorder,
-		mux:     http.NewServeMux(),
+		cfg:      cfg,
+		slack:    slackClient,
+		access:   safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
+		conv:     conv,
+		prompt:   promptPolicy,
+		metrics:  recorder,
+		runStore: runStore,
+		mux:      http.NewServeMux(),
 	}
 	s.routes(tools)
 	return s, nil
@@ -168,6 +197,8 @@ func NewServer(cfg config.Config) (*Server, error) {
 
 func (s *Server) routes(tools *registry.Registry) {
 	s.mux.Handle("/metrics", s.metrics)
+	s.mux.HandleFunc("/runs", s.handleRuns)
+	s.mux.HandleFunc("/runs/", s.handleRun)
 	s.mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -205,17 +236,6 @@ func (s *Server) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var envelope slack.EventEnvelope
-	if err := json.Unmarshal(bodyBytes, &envelope); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
-		return
-	}
-	if envelope.Type == "url_verification" {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"challenge": envelope.Challenge})
-		return
-	}
-
 	body := string(bodyBytes)
 	if err := slack.VerifySignature(
 		s.cfg.Slack.SigningSecret,
@@ -225,6 +245,17 @@ func (s *Server) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 		time.Now(),
 	); err != nil {
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return
+	}
+
+	var envelope slack.EventEnvelope
+	if err := json.Unmarshal(bodyBytes, &envelope); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if envelope.Type == "url_verification" {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"challenge": envelope.Challenge})
 		return
 	}
 
@@ -250,8 +281,69 @@ func (s *Server) handleEvent(ctx context.Context, eventID string, ev slack.Event
 	case "reaction_added":
 		if ev.Item.Type == "message" {
 			s.metrics.Reaction(ev.Reaction)
+			s.recordReactionFeedback(ctx, ev)
 		}
 	}
+}
+
+func (s *Server) recordReactionFeedback(ctx context.Context, ev slack.Event) {
+	if s.runStore == nil || ev.Item.Channel == "" || ev.Item.TS == "" || ev.Reaction == "" {
+		return
+	}
+	_, ok, err := s.runStore.AddFeedbackForMessage(ctx, ev.Item.Channel, ev.Item.TS, runs.Feedback{
+		Source:    "slack_reaction",
+		Value:     ev.Reaction,
+		UserID:    ev.User,
+		Channel:   ev.Item.Channel,
+		MessageTS: ev.Item.TS,
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		log.Printf("record reaction feedback failed channel=%s ts=%s reaction=%s err=%v", ev.Item.Channel, ev.Item.TS, ev.Reaction, err)
+		return
+	}
+	if !ok {
+		log.Printf("reaction feedback had no matching run channel=%s ts=%s reaction=%s", ev.Item.Channel, ev.Item.TS, ev.Reaction)
+	}
+}
+
+func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	runsList, err := s.runStore.List(r.Context(), limit)
+	if err != nil {
+		http.Error(w, "failed to list runs", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(runsList)
+}
+
+func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/runs/")
+	run, ok, err := s.runStore.Get(r.Context(), id)
+	if err != nil {
+		http.Error(w, "failed to read run", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(run)
 }
 
 func (s *Server) handleMention(ctx context.Context, eventID string, ev slack.Event) {
@@ -262,7 +354,7 @@ func (s *Server) handleMention(ctx context.Context, eventID string, ev slack.Eve
 		return
 	}
 	threadTS := ev.ConversationThreadTS()
-	if !s.access.AllowsChannel(ev.Channel) {
+	if !s.access.IsAllowed(ev.User, ev.Channel) {
 		s.metrics.Denied()
 		_, _ = s.slack.PostMessage(ctx, ev.Channel, threadTS, "<@"+ev.User+"> Sorry, this channel is not allowed to use this bot.")
 		return
@@ -307,6 +399,10 @@ func (s *Server) handleFileShared(ctx context.Context, eventID string, ev slack.
 		file.ID = ev.FileID
 	}
 	if file.ID == "" {
+		return
+	}
+	if ev.ConversationThreadTS() == "" {
+		log.Printf("skip slack file_shared %s: no message timestamp; waiting for message.file_share event", file.ID)
 		return
 	}
 	if !s.access.AllowsUser(userID) {
@@ -591,6 +687,20 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func setBool(values []string) map[string]bool {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out[value] = true
+		}
+	}
+	return out
 }
 
 func sniffImageMIME(data []byte) string {

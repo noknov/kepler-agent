@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/memory"
 	"github.com/wati/oncall-agent/internal/observability"
+	"github.com/wati/oncall-agent/internal/runs"
 	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/session"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
@@ -29,14 +31,20 @@ type Messenger interface {
 type TextFormatter func(string) string
 
 type Service struct {
-	Store     session.Store
-	Messenger Messenger
-	Runner    agent.Runner
-	Memory    memory.Builder
-	Prompt    safety.PromptPolicy
-	Redactor  safety.Redactor
-	Metrics   *observability.Recorder
-	Format    TextFormatter
+	Store             session.Store
+	Messenger         Messenger
+	Runner            agent.Runner
+	Memory            memory.Builder
+	Prompt            safety.PromptPolicy
+	Redactor          safety.Redactor
+	Metrics           *observability.Recorder
+	Format            TextFormatter
+	RunStore          runs.Store
+	RunProvider       string
+	RunModel          string
+	CostRates         observability.CostRates
+	ConfirmTools      map[string]bool
+	SensitivePatterns []string
 
 	mu       sync.Mutex
 	locks    map[string]*sync.Mutex
@@ -106,9 +114,14 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	if !ok {
 		sess = session.Session{ID: sessionID, Channel: req.Channel, ThreadTS: req.ThreadTS, UserID: req.UserID}
 	}
+	confirmedActions := map[string]bool{}
+	if sess.PendingActionKey != "" && sess.PendingUserID == req.UserID && looksLikeConfirmation(req.Text) {
+		confirmedActions[sess.PendingActionKey] = true
+	}
 	sess.Turns = memory.FilterPersistentTurns(sess.Turns)
 
 	start := time.Now()
+	runObserver := s.newRunObserver(sessionID, req, start)
 
 	streamTS, streamErr := s.Messenger.StartStream(ctx, req.Channel, req.ThreadTS, req.UserID)
 	useStream := streamErr == nil && streamTS != ""
@@ -133,6 +146,9 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 
 	const taskID = "thinking"
 	runner := s.Runner
+	if runObserver != nil {
+		runner.Observer = multiObserver{s.Metrics, runObserver}
+	}
 	runner.StatusUpdate = func(status string) {
 		if !useStream {
 			return
@@ -154,9 +170,12 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	result, err := runner.Run(ctx, agent.Request{
 		Messages: messages,
 		Runtime: registry.Runtime{
-			UserID:   req.UserID,
-			Channel:  req.Channel,
-			ThreadTS: req.ThreadTS,
+			UserID:            req.UserID,
+			Channel:           req.Channel,
+			ThreadTS:          req.ThreadTS,
+			ConfirmedActions:  confirmedActions,
+			ConfirmTools:      s.ConfirmTools,
+			SensitivePatterns: s.SensitivePatterns,
 		},
 	})
 
@@ -164,15 +183,19 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	sess.PendingUserInput = false
 	sess.PendingUserID = ""
 	sess.PendingQuestion = ""
+	sess.PendingActionKey = ""
 	sess.Turns = append(sess.Turns, memory.UserTurn(req.Text))
 
 	if err != nil {
 		errorID := newErrorID()
 		log.Printf("conversation error id=%s session=%s event=%s user=%s channel=%s thread=%s err=%v", errorID, sessionID, req.EventID, req.UserID, req.Channel, req.ThreadTS, err)
+		if runObserver != nil {
+			runObserver.Finish("error", errorID, err, "")
+		}
 		if s.Metrics != nil {
 			s.Metrics.Error(wrapErrorID(errorID, err))
 		}
-		sess.Turns = trimTurns(sess.Turns, s.maxTurns)
+		sess.Turns, sess.Summary = s.trimAndSummarize(sess.Turns, sess.Summary)
 		_ = s.Store.Save(ctx, sess)
 		errMsg := s.Redactor.Sanitize(userFacingError(errorID))
 		if useStream {
@@ -192,13 +215,37 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		sess.PendingUserInput = true
 		sess.PendingUserID = req.UserID
 		sess.PendingQuestion = result.PendingQuestion
+		sess.PendingActionKey = result.PendingActionKey
 	}
-	sess.Turns = trimTurns(sess.Turns, s.maxTurns)
+	sess.Turns, sess.Summary = s.trimAndSummarize(sess.Turns, sess.Summary)
 	if err := s.Store.Save(ctx, sess); err != nil && s.Metrics != nil {
 		s.Metrics.Error(err)
 	}
+	if result.Pending && result.PendingQuestion != "" {
+		pendingText := s.Redactor.Sanitize(result.PendingQuestion)
+		if s.Format != nil {
+			pendingText = s.Format(pendingText)
+		}
+		if useStream {
+			_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
+				{"type": "task_update", "id": taskID, "status": "complete"},
+				{"type": "markdown_text", "text": "<@" + req.UserID + "> " + pendingText},
+			})
+			if runObserver != nil {
+				runObserver.LinkSlackMessage(req.Channel, streamTS)
+			}
+		} else {
+			ts, _ := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, "<@"+req.UserID+"> "+pendingText)
+			if runObserver != nil {
+				runObserver.LinkSlackMessage(req.Channel, ts)
+			}
+		}
+	}
 	if !result.Pending && result.Final != "" {
 		finalText := s.Redactor.Sanitize(result.Final)
+		if runObserver != nil {
+			runObserver.Finish("completed", "", nil, finalText)
+		}
 		if s.Format != nil {
 			finalText = s.Format(finalText)
 		}
@@ -207,11 +254,55 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 				{"type": "task_update", "id": taskID, "status": "complete"},
 				{"type": "markdown_text", "text": finalText},
 			})
+			if runObserver != nil {
+				runObserver.LinkSlackMessage(req.Channel, streamTS)
+			}
 		} else {
-			_, _ = s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
+			ts, _ := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
+			if runObserver != nil {
+				runObserver.LinkSlackMessage(req.Channel, ts)
+			}
 		}
+	} else if result.Pending && runObserver != nil {
+		runObserver.Finish("pending_user", "", nil, result.PendingQuestion)
 	}
 	return true
+}
+
+func (s *Service) newRunObserver(sessionID string, req Request, startedAt time.Time) *runs.Observer {
+	if s.RunStore == nil {
+		return nil
+	}
+	return runs.NewObserver(s.RunStore, runs.Run{
+		ID:        runs.NewID(),
+		SessionID: sessionID,
+		EventID:   req.EventID,
+		UserID:    req.UserID,
+		Channel:   req.Channel,
+		ThreadTS:  req.ThreadTS,
+		Provider:  s.RunProvider,
+		Model:     s.RunModel,
+		Status:    "running",
+		StartedAt: startedAt.UTC(),
+	}, s.CostRates)
+}
+
+type multiObserver []agent.Observer
+
+func (m multiObserver) LLMCall(usage llm.Usage, d time.Duration, err error) {
+	for _, observer := range m {
+		if observer != nil {
+			observer.LLMCall(usage, d, err)
+		}
+	}
+}
+
+func (m multiObserver) ToolCall(name string, d time.Duration, err error) {
+	for _, observer := range m {
+		if observer != nil {
+			observer.ToolCall(name, d, err)
+		}
+	}
 }
 
 func (s *Service) reportError(ctx context.Context, req Request, text string) {
@@ -260,6 +351,69 @@ func trimTurns(turns []memory.Turn, max int) []memory.Turn {
 		return nil
 	}
 	return append([]memory.Turn(nil), turns[start:]...)
+}
+
+func (s *Service) trimAndSummarize(turns []memory.Turn, existing string) ([]memory.Turn, string) {
+	trimmed := trimTurns(turns, s.maxTurns)
+	removed := len(turns) - len(trimmed)
+	if removed <= 0 {
+		return trimmed, existing
+	}
+	addition := summarizeTurns(turns[:removed])
+	if addition == "" {
+		return trimmed, existing
+	}
+	summary := strings.TrimSpace(existing)
+	if summary != "" {
+		summary += "\n"
+	}
+	summary += addition
+	return trimmed, trimSummary(summary, s.Memory.MaxSummaryChars)
+}
+
+func summarizeTurns(turns []memory.Turn) string {
+	lines := make([]string, 0, len(turns)+1)
+	lines = append(lines, "Trimmed conversation summary:")
+	for _, turn := range turns {
+		label := string(turn.Role)
+		content := strings.TrimSpace(turn.Content)
+		if turn.Role == memory.RoleAssistant && len(turn.ToolCalls) > 0 {
+			names := make([]string, 0, len(turn.ToolCalls))
+			for _, call := range turn.ToolCalls {
+				names = append(names, call.Name)
+			}
+			content = "called tools: " + strings.Join(names, ", ")
+		}
+		if turn.Role == memory.RoleTool {
+			label = "tool:" + turn.Name
+		}
+		content = strings.Join(strings.Fields(content), " ")
+		if len(content) > 240 {
+			content = content[:240] + "..."
+		}
+		if content != "" {
+			lines = append(lines, "- "+label+": "+content)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func trimSummary(summary string, max int) string {
+	summary = strings.TrimSpace(summary)
+	if max <= 0 || len(summary) <= max {
+		return summary
+	}
+	return strings.TrimSpace(summary[len(summary)-max:])
+}
+
+func looksLikeConfirmation(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	switch text {
+	case "confirm", "confirmed", "yes", "y", "ok", "okay", "go", "go ahead", "proceed", "approve", "approved", "同意", "确认", "可以", "执行", "继续":
+		return true
+	default:
+		return strings.Contains(text, "确认执行") || strings.Contains(text, "可以执行") || strings.Contains(text, "go ahead")
+	}
 }
 
 func userFacingError(errorID string) string {

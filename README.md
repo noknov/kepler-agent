@@ -82,6 +82,8 @@ Expose `POST /slack/events` to Slack. The app also exposes:
 
 - `GET /healthz`
 - `GET /metrics`
+- `GET /runs?limit=20`
+- `GET /runs/<run_id>`
 
 ## ngrok
 
@@ -117,6 +119,7 @@ The old App Home / modal flow for per-user agent tokens is not needed. If you re
 
 Current tool modules:
 
+- `diagnostics.incident_brief`
 - `code.search`, `code.read_file`
 - `git.fetch_ref`, `git.search_ref`, `git.read_file_ref`, `git.status`, `git.log`, `git.show`
 - `gcp.logs`
@@ -126,7 +129,23 @@ Current tool modules:
 - `slack.ask_user`
 - `delegate.run`
 
-`git.fetch_ref` fetches origin and resolves the requested branch to an `origin/<branch>` ref without changing the working tree. If no branch is specified, it tries `main`, then `master`. Branch-specific analysis should use `git.search_ref` and `git.read_file_ref`, so concurrent users can inspect different branches without checkout conflicts. Sensitive actions are deliberately absent. The command guard blocks destructive command patterns, and the shipped tools use argumentized `exec.CommandContext` instead of shell strings.
+Risky tools require a real user confirmation before execution. By default this includes external write/dispatch tools (`github.dispatch_workflow`, `notion.create_page`), sensitive local path/query reads such as `.env`, credentials, private keys, kubeconfig, and production-looking GCP log scopes. Extend or tighten this locally with:
+
+```bash
+CONFIRMATION_REQUIRED_TOOLS=github-dispatch_workflow,notion-create_page,gcp-logs,code-read_file
+SENSITIVE_PATH_PATTERNS=.env,secret,token,credential,id_rsa,.pem,.kube,service-account
+```
+
+Each Slack request is recorded as a run under `RUN_DATA_DIR` (default `.data/runs`). Run records include LLM/tool steps, token usage, estimated cost when rates are known, errors, Slack message linkage, and quality feedback from reactions. Override cost rates when your provider pricing differs:
+
+```bash
+LLM_INPUT_COST_PER_MTOK=0
+LLM_OUTPUT_COST_PER_MTOK=0
+LLM_CACHE_READ_COST_PER_MTOK=0
+LLM_CACHE_CREATION_COST_PER_MTOK=0
+```
+
+`git.fetch_ref` fetches origin and resolves the requested branch to an `origin/<branch>` ref without changing the working tree. If no branch is specified, it tries `main`, then `master`. Branch-specific analysis should use `git.search_ref` and `git.read_file_ref`, so concurrent users can inspect different branches without checkout conflicts. Risky local reads and externally visible actions are gated by confirmation policy. The command guard blocks destructive command patterns, and the shipped tools use argumentized `exec.CommandContext` instead of shell strings.
 
 GCP values in `.env` are defaults and hints, not fixed environments. `gcp.logs` accepts `project`, `namespace`, `service`, and raw `filter` per call. If `namespace` is omitted, the tool no longer silently injects `GCP_NAMESPACE`; environment mappings can be added later in `PROMPT_DIR/rules`.
 

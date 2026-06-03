@@ -47,6 +47,8 @@ func (s *Server) homeView(userID string) map[string]any {
 			"- In a channel: " + mentionText + " and ask your question.",
 			"- Continue in the same thread so the bot keeps session context.",
 		}, "\n")),
+		dividerBlock(),
+		sectionBlock(strings.TrimSpace(appHomeChangelog)),
 	}
 
 	return map[string]any{
