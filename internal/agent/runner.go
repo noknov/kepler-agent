@@ -56,10 +56,11 @@ type Request struct {
 }
 
 type Result struct {
-	Generated       []llm.Message
-	Final           string
-	Pending         bool
-	PendingQuestion string
+	Generated        []llm.Message
+	Final            string
+	Pending          bool
+	PendingQuestion  string
+	PendingActionKey string
 }
 
 const repetitiveRetryPrompt = "Your previous answer became repetitive. Give one concise final answer only. Do not repeat sentences. Do not narrate further investigation. If evidence is insufficient, say the next check in one short paragraph."
@@ -187,9 +188,10 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 
 			if err == nil && result.WaitForUser {
 				return Result{
-					Generated:       generated,
-					Pending:         true,
-					PendingQuestion: content,
+					Generated:        generated,
+					Pending:          true,
+					PendingQuestion:  content,
+					PendingActionKey: result.PendingActionKey,
 				}, nil
 			}
 		}
