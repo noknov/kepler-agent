@@ -124,17 +124,6 @@ func (t SearchRefTool) Execute(ctx context.Context, raw json.RawMessage, rt regi
 	if strings.TrimSpace(args.Query) == "" {
 		return registry.Result{}, fmt.Errorf("query is required")
 	}
-	if registry.IsSensitiveText(args.Query+" "+args.Path, rt.SensitivePatterns) || registry.ToolNeedsConfirmation(rt, "git-search_ref") {
-		payload := map[string]any{"repo": args.Repo, "ref": args.Ref, "query": args.Query, "path": args.Path, "limit": args.Limit}
-		key, confirmed := registry.ConfirmationState(rt, "git-search_ref", payload)
-		if !confirmed {
-			return registry.Result{
-				Content:          "This searches potentially sensitive repository content. Reply `confirm` in this thread to allow this exact search.",
-				WaitForUser:      true,
-				PendingActionKey: key,
-			}, nil
-		}
-	}
 	if args.Limit <= 0 {
 		args.Limit = 50
 	}
@@ -197,17 +186,6 @@ func (t ReadFileRefTool) Execute(ctx context.Context, raw json.RawMessage, rt re
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
-	}
-	if registry.IsSensitiveText(args.Path, rt.SensitivePatterns) || registry.ToolNeedsConfirmation(rt, "git-read_file_ref") {
-		payload := map[string]any{"repo": args.Repo, "ref": args.Ref, "path": args.Path, "start_line": args.StartLine, "max_lines": args.MaxLines}
-		key, confirmed := registry.ConfirmationState(rt, "git-read_file_ref", payload)
-		if !confirmed {
-			return registry.Result{
-				Content:          "This reads a potentially sensitive file from repository history. Reply `confirm` in this thread to allow this exact read.",
-				WaitForUser:      true,
-				PendingActionKey: key,
-			}, nil
-		}
 	}
 	repo, err := t.repo(args.Repo)
 	if err != nil {
@@ -315,17 +293,6 @@ func (t ShowTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
-	}
-	if registry.IsSensitiveText(args.Path+" "+args.Rev, rt.SensitivePatterns) || registry.ToolNeedsConfirmation(rt, "git-show") {
-		payload := map[string]any{"repo": args.Repo, "rev": args.Rev, "path": args.Path, "max_chars": args.MaxChars}
-		key, confirmed := registry.ConfirmationState(rt, "git-show", payload)
-		if !confirmed {
-			return registry.Result{
-				Content:          "This may expose sensitive repository content or history. Reply `confirm` in this thread to allow this exact git show.",
-				WaitForUser:      true,
-				PendingActionKey: key,
-			}, nil
-		}
 	}
 	if args.MaxChars <= 0 {
 		args.MaxChars = 12000

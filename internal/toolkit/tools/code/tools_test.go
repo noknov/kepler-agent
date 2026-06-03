@@ -11,7 +11,7 @@ import (
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
-func TestReadFileRequiresConfirmationForSensitiveLocalPath(t *testing.T) {
+func TestReadFileReturnsContentDirectly(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("TOKEN=secret\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -23,24 +23,14 @@ func TestReadFileRequiresConfirmationForSensitiveLocalPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !result.WaitForUser || result.PendingActionKey == "" {
-		t.Fatalf("expected pending confirmation, got %#v", result)
-	}
-
-	result, err = tool.Execute(context.Background(), raw, registry.Runtime{
-		ConfirmedActions: map[string]bool{result.PendingActionKey: true},
-	})
-	if err != nil {
-		t.Fatalf("confirmed Execute() error = %v", err)
-	}
 	if result.WaitForUser || result.Content == "" {
-		t.Fatalf("expected file content after confirmation, got %#v", result)
+		t.Fatalf("expected file content, got %#v", result)
 	}
 }
 
-func TestSearchRequiresConfirmationForSensitiveQuery(t *testing.T) {
+func TestSearchReturnsResultsDirectly(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "app.go"), []byte("package app\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "app.go"), []byte("package app\nvar token = \"x\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
@@ -48,7 +38,7 @@ func TestSearchRequiresConfirmationForSensitiveQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !result.WaitForUser || result.PendingActionKey == "" {
-		t.Fatalf("expected pending confirmation, got %#v", result)
+	if result.WaitForUser || result.Content == "" || result.Content == "no matches" {
+		t.Fatalf("expected search results, got %#v", result)
 	}
 }

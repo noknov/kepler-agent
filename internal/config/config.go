@@ -75,8 +75,6 @@ type ToolConfig struct {
 	GitHubAPIBaseURL    string
 	GitHubDefaultOwner  string
 	GitHubDefaultRepo   string
-	ConfirmTools        []string
-	SensitivePatterns   []string
 }
 
 type ObservingConfig struct {
@@ -167,8 +165,6 @@ func Load() (Config, error) {
 			GitHubAPIBaseURL:    trimRightSlash(env("GITHUB_API_BASE_URL", "https://api.github.com")),
 			GitHubDefaultOwner:  os.Getenv("GITHUB_DEFAULT_OWNER"),
 			GitHubDefaultRepo:   os.Getenv("GITHUB_DEFAULT_REPO"),
-			ConfirmTools:        envCSVDefault("CONFIRMATION_REQUIRED_TOOLS", []string{"github-dispatch_workflow", "notion-create_page"}),
-			SensitivePatterns:   envCSVDefault("SENSITIVE_PATH_PATTERNS", nil),
 		},
 		Observing: ObservingConfig{
 			LogLevel:                 env("LOG_LEVEL", "info"),

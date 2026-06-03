@@ -2,30 +2,23 @@ package registry
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/prompts"
 )
 
 type Runtime struct {
-	UserID            string
-	Channel           string
-	ThreadTS          string
-	ConfirmedActions  map[string]bool
-	ConfirmTools      map[string]bool
-	SensitivePatterns []string
+	UserID   string
+	Channel  string
+	ThreadTS string
 }
 
 type Result struct {
-	Content          string
-	WaitForUser      bool
-	PendingActionKey string
+	Content     string
+	WaitForUser bool
 }
 
 type Tool interface {
@@ -110,61 +103,4 @@ func ObjectSchema(required []string, properties map[string]any) map[string]any {
 		schema["required"] = required
 	}
 	return schema
-}
-
-func ActionKey(name string, payload any) string {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		data = []byte(fmt.Sprintf("%v", payload))
-	}
-	sum := sha256.Sum256(append([]byte(name+"\x00"), data...))
-	return "action:" + hex.EncodeToString(sum[:12])
-}
-
-func ConfirmationState(rt Runtime, name string, payload any) (string, bool) {
-	key := ActionKey(name, payload)
-	return key, rt.ConfirmedActions != nil && rt.ConfirmedActions[key]
-}
-
-func ToolNeedsConfirmation(rt Runtime, name string) bool {
-	if rt.ConfirmTools == nil {
-		return false
-	}
-	return rt.ConfirmTools[name]
-}
-
-func IsSensitiveText(text string, patterns []string) bool {
-	text = strings.ToLower(strings.TrimSpace(text))
-	if text == "" {
-		return false
-	}
-	if len(patterns) == 0 {
-		patterns = DefaultSensitivePatterns()
-	}
-	for _, pattern := range patterns {
-		pattern = strings.ToLower(strings.TrimSpace(pattern))
-		if pattern != "" && strings.Contains(text, pattern) {
-			return true
-		}
-	}
-	return false
-}
-
-func LooksProductionScoped(values ...string) bool {
-	for _, value := range values {
-		value = strings.ToLower(strings.TrimSpace(value))
-		if value == "" {
-			continue
-		}
-		for _, marker := range []string{"prod", "production", "live"} {
-			if strings.Contains(value, marker) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func DefaultSensitivePatterns() []string {
-	return []string{".env", "secret", "token", "credential", "credentials", "private_key", "id_rsa", ".pem", ".key", ".kube", "kubeconfig", "service-account"}
 }

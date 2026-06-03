@@ -103,17 +103,6 @@ func (t DispatchWorkflowTool) Execute(ctx context.Context, raw json.RawMessage, 
 		return registry.Result{}, fmt.Errorf("ref is required")
 	}
 	inputs := normalizeInputs(args.Inputs)
-	payload := map[string]any{"repository": repository, "workflow": workflow, "ref": ref, "inputs": inputs}
-	if registry.ToolNeedsConfirmation(rt, "github-dispatch_workflow") {
-		key, confirmed := registry.ConfirmationState(rt, "github-dispatch_workflow", payload)
-		if !confirmed {
-			return registry.Result{
-				Content:          fmt.Sprintf("This will trigger GitHub Actions for `%s` workflow `%s` on ref `%s` with inputs `%s`. Reply `confirm` in this thread to run this exact workflow.", repository, workflow, ref, formatInputs(inputs)),
-				WaitForUser:      true,
-				PendingActionKey: key,
-			}, nil
-		}
-	}
 	if err := t.Client.dispatch(ctx, repository, workflow, ref, inputs); err != nil {
 		return registry.Result{}, err
 	}

@@ -178,8 +178,6 @@ func NewServer(cfg config.Config) (*Server, error) {
 	conv.RunProvider = cfg.LLM.Provider
 	conv.RunModel = cfg.LLM.Model
 	conv.CostRates = costRates
-	conv.ConfirmTools = setBool(cfg.Tools.ConfirmTools)
-	conv.SensitivePatterns = cfg.Tools.SensitivePatterns
 
 	s := &Server{
 		cfg:      cfg,
@@ -687,20 +685,6 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func setBool(values []string) map[string]bool {
-	if len(values) == 0 {
-		return nil
-	}
-	out := make(map[string]bool, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			out[value] = true
-		}
-	}
-	return out
 }
 
 func sniffImageMIME(data []byte) string {

@@ -41,17 +41,6 @@ func (t ReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
 	}
-	if registry.IsSensitiveText(args.Path, rt.SensitivePatterns) || registry.ToolNeedsConfirmation(rt, "code-read_file") {
-		payload := map[string]any{"path": args.Path, "start_line": args.StartLine, "max_lines": args.MaxLines}
-		key, confirmed := registry.ConfirmationState(rt, "code-read_file", payload)
-		if !confirmed {
-			return registry.Result{
-				Content:          "This reads a potentially sensitive local file from your machine. Reply `confirm` in this thread to allow this exact read.",
-				WaitForUser:      true,
-				PendingActionKey: key,
-			}, nil
-		}
-	}
 	path, err := t.Paths.Resolve(args.Path)
 	if err != nil {
 		return registry.Result{}, err
@@ -132,17 +121,6 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	}
 	if strings.TrimSpace(args.Query) == "" {
 		return registry.Result{}, fmt.Errorf("query is required")
-	}
-	if registry.IsSensitiveText(args.Query+" "+args.Path+" "+args.Glob, rt.SensitivePatterns) || registry.ToolNeedsConfirmation(rt, "code-search") {
-		payload := map[string]any{"query": args.Query, "path": args.Path, "glob": args.Glob, "limit": args.Limit}
-		key, confirmed := registry.ConfirmationState(rt, "code-search", payload)
-		if !confirmed {
-			return registry.Result{
-				Content:          "This searches potentially sensitive local content on your machine. Reply `confirm` in this thread to allow this exact search.",
-				WaitForUser:      true,
-				PendingActionKey: key,
-			}, nil
-		}
 	}
 	if args.Limit <= 0 {
 		args.Limit = 50

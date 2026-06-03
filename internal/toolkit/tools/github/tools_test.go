@@ -54,7 +54,7 @@ func TestDispatchWorkflowTool(t *testing.T) {
 	}
 }
 
-func TestDispatchWorkflowRequiresConfirmationWhenConfigured(t *testing.T) {
+func TestDispatchWorkflowExecutesDirectly(t *testing.T) {
 	called := false
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		called = true
@@ -68,26 +68,13 @@ func TestDispatchWorkflowRequiresConfirmationWhenConfigured(t *testing.T) {
 		HTTP:       &http.Client{Transport: transport},
 	}}
 	raw := json.RawMessage(`{"workflow":"deploy.yml","ref":"main"}`)
-	rt := registry.Runtime{ConfirmTools: map[string]bool{"github-dispatch_workflow": true}}
 
-	result, err := tool.Execute(context.Background(), raw, rt)
+	result, err := tool.Execute(context.Background(), raw, registry.Runtime{})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if called {
-		t.Fatal("dispatch should not execute before confirmation")
-	}
-	if !result.WaitForUser || result.PendingActionKey == "" {
-		t.Fatalf("expected pending confirmation, got %#v", result)
-	}
-
-	rt.ConfirmedActions = map[string]bool{result.PendingActionKey: true}
-	result, err = tool.Execute(context.Background(), raw, rt)
-	if err != nil {
-		t.Fatalf("confirmed Execute() error = %v", err)
-	}
 	if !called || !strings.Contains(result.Content, "deploy.yml") {
-		t.Fatalf("expected confirmed dispatch, called=%v result=%#v", called, result)
+		t.Fatalf("expected dispatch to execute directly, called=%v result=%#v", called, result)
 	}
 }
 

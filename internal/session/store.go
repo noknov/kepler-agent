@@ -24,7 +24,6 @@ type Session struct {
 	PendingUserInput bool          `json:"pending_user_input,omitempty"`
 	PendingUserID    string        `json:"pending_user_id,omitempty"`
 	PendingQuestion  string        `json:"pending_question,omitempty"`
-	PendingActionKey string        `json:"pending_action_key,omitempty"`
 	CreatedAt        time.Time     `json:"created_at"`
 	UpdatedAt        time.Time     `json:"updated_at"`
 }
