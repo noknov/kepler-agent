@@ -229,10 +229,10 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if useStream {
 			_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
 				{"type": "task_update", "id": taskID, "status": "complete"},
-				{"type": "markdown_text", "text": "<@" + req.UserID + "> " + pendingText},
 			})
+			ts, _ := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, "<@"+req.UserID+"> "+pendingText)
 			if runObserver != nil {
-				runObserver.LinkSlackMessage(req.Channel, streamTS)
+				runObserver.LinkSlackMessage(req.Channel, ts)
 			}
 		} else {
 			ts, _ := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, "<@"+req.UserID+"> "+pendingText)
@@ -252,10 +252,10 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if useStream {
 			_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
 				{"type": "task_update", "id": taskID, "status": "complete"},
-				{"type": "markdown_text", "text": finalText},
 			})
+			ts, _ := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
 			if runObserver != nil {
-				runObserver.LinkSlackMessage(req.Channel, streamTS)
+				runObserver.LinkSlackMessage(req.Channel, ts)
 			}
 		} else {
 			ts, _ := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)

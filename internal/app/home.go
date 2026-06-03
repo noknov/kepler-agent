@@ -36,7 +36,7 @@ func (s *Server) homeView(userID string) map[string]any {
 	}
 
 	blocks := []map[string]any{
-		headerBlock("Oncall Agent"),
+		headerBlock("Channel-X Copilot Agent"),
 		fieldsBlock(
 			field("*Access*\n"+statusEmoji+" "+statusText),
 			field("*Model*\n`"+s.cfg.LLM.Model+"`"),
