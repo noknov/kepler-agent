@@ -199,17 +199,16 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}
 	if !result.Pending && result.Final != "" {
 		finalText := s.Redactor.Sanitize(result.Final)
+		if s.Format != nil {
+			finalText = s.Format(finalText)
+		}
 		if useStream {
 			_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
 				{"type": "task_update", "id": taskID, "status": "complete"},
 				{"type": "markdown_text", "text": finalText},
 			})
 		} else {
-			text := finalText
-			if s.Format != nil {
-				text = s.Format(text)
-			}
-			_, _ = s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, text)
+			_, _ = s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
 		}
 	}
 	return true
