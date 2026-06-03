@@ -5,19 +5,16 @@ import (
 	"testing"
 )
 
-func TestSystemPromptIsGeneralPurposeAssistant(t *testing.T) {
+func TestSystemPromptFallbackStaysMinimal(t *testing.T) {
 	prompt := (PromptPolicy{}).SystemPrompt()
-	if !strings.Contains(prompt, "general-purpose assistant") {
-		t.Fatalf("SystemPrompt() should describe a general-purpose assistant: %q", prompt)
+	if !strings.Contains(prompt, "Slack assistant") {
+		t.Fatalf("SystemPrompt() should keep a minimal fallback assistant role: %q", prompt)
 	}
-	if !strings.Contains(prompt, "Channel-X Copilot Agent") || !strings.Contains(prompt, "<@U085SRJFCLX>") {
-		t.Fatalf("SystemPrompt() should include agent identity and author: %q", prompt)
+	if strings.Contains(prompt, "Channel-X Copilot Agent") || strings.Contains(prompt, "U085SRJFCLX") {
+		t.Fatalf("SystemPrompt() should not contain deployment-specific identity prompt: %q", prompt)
 	}
-	if !strings.Contains(prompt, "food or drink ordering") {
-		t.Fatalf("SystemPrompt() should cover future local-life tools: %q", prompt)
-	}
-	if !strings.Contains(prompt, "requires explicit user confirmation") {
-		t.Fatalf("SystemPrompt() should require confirmation before risky actions: %q", prompt)
+	if strings.Contains(prompt, "food or drink ordering") || strings.Contains(prompt, "author") {
+		t.Fatalf("SystemPrompt() should not contain detailed product prompt text: %q", prompt)
 	}
 }
 
