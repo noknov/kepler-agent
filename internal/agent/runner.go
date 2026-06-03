@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/wati/oncall-agent/internal/llm"
-	"github.com/wati/oncall-agent/internal/prompts"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
@@ -53,14 +52,14 @@ type Runner struct {
 type Request struct {
 	Messages []llm.Message
 	Runtime  registry.Runtime
+	Locale   string
 }
 
 type Result struct {
-	Generated        []llm.Message
-	Final            string
-	Pending          bool
-	PendingQuestion  string
-	PendingActionKey string
+	Generated       []llm.Message
+	Final           string
+	Pending         bool
+	PendingQuestion string
 }
 
 const repetitiveRetryPrompt = "Your previous answer became repetitive. Give one concise final answer only. Do not repeat sentences. Do not narrate further investigation. If evidence is insufficient, say the next check in one short paragraph."
@@ -81,11 +80,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	for step := 0; step < maxSteps; step++ {
 		lastStep := step == maxSteps-1 || retriedRepetitiveFinal || retriedTextualToolCall
 		if r.StatusUpdate != nil {
-			if step == 0 {
-				r.StatusUpdate("Analyzing...")
-			} else {
-				r.StatusUpdate(fmt.Sprintf("Processing... (step %d)", step+1))
-			}
+			r.StatusUpdate(StepStatus(req.Locale, step))
 		}
 
 		// On the last step, omit tools so the model is forced to produce a
@@ -114,7 +109,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		assistantMsg := resp.Message
 		if len(assistantMsg.ToolCalls) == 0 {
 			if r.StatusUpdate != nil {
-				r.StatusUpdate("Generating response...")
+				r.StatusUpdate(GeneratingStatus(req.Locale))
 			}
 			final := strings.TrimSpace(r.sanitize(assistantMsg.Content))
 			if final == "" {
@@ -125,7 +120,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 					retriedTextualToolCall = true
 					messages = append(messages, llm.Message{Role: "system", Content: textualToolCallRetryPrompt})
 					if r.StatusUpdate != nil {
-						r.StatusUpdate("Retrying after invalid tool format...")
+						r.StatusUpdate(RetryStatus(req.Locale))
 					}
 					continue
 				}
@@ -136,7 +131,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 					retriedRepetitiveFinal = true
 					messages = append(messages, llm.Message{Role: "system", Content: repetitiveRetryPrompt})
 					if r.StatusUpdate != nil {
-						r.StatusUpdate("Retrying final response...")
+						r.StatusUpdate(RetryStatus(req.Locale))
 					}
 					continue
 				}
@@ -163,7 +158,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 				return Result{Generated: generated}, fmt.Errorf("%w: %s", ErrRepeatedToolCall, name)
 			}
 			if r.StatusUpdate != nil {
-				r.StatusUpdate(toolStatusHint(name))
+				r.StatusUpdate(ToolHint(name, req.Locale))
 			}
 			args := json.RawMessage(call.Function.Arguments)
 			start := time.Now()
@@ -188,10 +183,9 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 
 			if err == nil && result.WaitForUser {
 				return Result{
-					Generated:        generated,
-					Pending:          true,
-					PendingQuestion:  content,
-					PendingActionKey: result.PendingActionKey,
+					Generated:       generated,
+					Pending:         true,
+					PendingQuestion: content,
 				}, nil
 			}
 		}
@@ -262,28 +256,4 @@ func (r Runner) sanitize(text string) string {
 		return text
 	}
 	return r.Sanitize.Sanitize(text)
-}
-
-var toolHints = map[string]string{
-	"code-read_file":           "Reading code...",
-	"code-search":              "Searching code...",
-	"git-status":               "Checking repo status...",
-	"git-log":                  "Reading commit history...",
-	"git-show":                 "Inspecting commit...",
-	"gcp-logs":                 "Querying logs...",
-	"notion-search":            "Searching docs...",
-	"notion-create_page":       "Creating page...",
-	"youtrack-get_issue":       "Fetching issue...",
-	"youtrack-search":          "Searching issues...",
-	"github-dispatch_workflow": "Triggering GitHub workflow...",
-	"github-workflow_runs":     "Checking GitHub workflow runs...",
-	"slack-ask_user":           "Asking for more info...",
-	"delegate-run":             "Deep analysis...",
-}
-
-func toolStatusHint(name string) string {
-	if hint, ok := toolHints[name]; ok {
-		return prompts.ToolStatus(name, hint)
-	}
-	return prompts.ToolStatus("default", "Processing...")
 }

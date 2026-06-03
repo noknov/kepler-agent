@@ -98,17 +98,6 @@ func (t CreatePageTool) Execute(ctx context.Context, raw json.RawMessage, rt reg
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
 	}
-	payload := map[string]any{"title": args.Title, "body_hash": registry.ActionKey("notion-body", args.Body)}
-	if registry.ToolNeedsConfirmation(rt, "notion-create_page") {
-		key, confirmed := registry.ConfirmationState(rt, "notion-create_page", payload)
-		if !confirmed {
-			return registry.Result{
-				Content:          fmt.Sprintf("This will create a Notion page titled `%s` from this conversation. Reply `confirm` in this thread to create this exact page.", args.Title),
-				WaitForUser:      true,
-				PendingActionKey: key,
-			}, nil
-		}
-	}
 	body := map[string]any{
 		"parent": map[string]any{"database_id": t.Client.DatabaseID},
 		"properties": map[string]any{
