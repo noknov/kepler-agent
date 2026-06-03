@@ -47,7 +47,7 @@ func (c *KimiClient) Chat(ctx Context, req Request) (Response, error) {
 			Message      Message `json:"message"`
 			FinishReason string  `json:"finish_reason"`
 		} `json:"choices"`
-		Usage Usage `json:"usage"`
+		Usage openAIUsage `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return Response{}, err
@@ -58,9 +58,31 @@ func (c *KimiClient) Chat(ctx Context, req Request) (Response, error) {
 	return Response{
 		Message:      parsed.Choices[0].Message,
 		FinishReason: parsed.Choices[0].FinishReason,
-		Usage:        parsed.Usage,
+		Usage:        parsed.Usage.toUsage(),
 		Raw:          data,
 	}, nil
+}
+
+type openAIUsage struct {
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	TotalTokens         int `json:"total_tokens"`
+	PromptTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+	CompletionTokensDetails struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details"`
+}
+
+func (u openAIUsage) toUsage() Usage {
+	return Usage{
+		PromptTokens:         u.PromptTokens,
+		CompletionTokens:     u.CompletionTokens,
+		TotalTokens:          u.TotalTokens,
+		CacheReadInputTokens: u.PromptTokensDetails.CachedTokens,
+		ReasoningTokens:      u.CompletionTokensDetails.ReasoningTokens,
+	}
 }
 
 func (c *KimiClient) chatBody(req Request) map[string]any {
