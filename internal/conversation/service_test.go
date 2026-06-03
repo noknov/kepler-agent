@@ -12,6 +12,7 @@ import (
 	"github.com/wati/oncall-agent/internal/observability"
 	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/session"
+	"github.com/wati/oncall-agent/internal/slack"
 )
 
 func TestHandleReplyIgnoresThreadWithoutPendingQuestion(t *testing.T) {
@@ -128,17 +129,63 @@ func TestNewErrorID(t *testing.T) {
 	}
 }
 
-type replyLLM struct{}
+func TestStreamOutputUsesFormatter(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	messenger := &fakeMessenger{streamTS: "200.000"}
+	svc := NewService(
+		store,
+		messenger,
+		agent.Runner{LLM: &replyLLM{content: "Author: @U085SRJFCLX"}, MaxSteps: 1},
+		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+	svc.Format = slack.MarkdownToMrkdwn
 
-func (replyLLM) Chat(_ llm.Context, _ llm.Request) (llm.Response, error) {
+	svc.HandleMention(ctx, Request{
+		EventID:  "E3",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "who is the author?",
+	})
+
+	found := false
+	for _, chunk := range messenger.chunks {
+		if chunk["type"] == "markdown_text" && chunk["text"] == "Author: <@U085SRJFCLX>" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("stream chunks did not include formatted mention: %#v", messenger.chunks)
+	}
+}
+
+func (l *replyLLM) Chat(_ llm.Context, _ llm.Request) (llm.Response, error) {
+	content := l.content
+	if content == "" {
+		content = "ack"
+	}
 	return llm.Response{
-		Message: llm.Message{Role: "assistant", Content: "ack"},
+		Message: llm.Message{Role: "assistant", Content: content},
 		Usage:   llm.Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12},
 	}, nil
 }
 
+type replyLLM struct {
+	content string
+}
+
 type fakeMessenger struct {
-	posts []string
+	posts    []string
+	streamTS string
+	chunks   []map[string]any
 }
 
 func (m *fakeMessenger) PostMessage(_ context.Context, _, _, text string) (string, error) {
@@ -147,10 +194,14 @@ func (m *fakeMessenger) PostMessage(_ context.Context, _, _, text string) (strin
 }
 
 func (m *fakeMessenger) StartStream(context.Context, string, string, string) (string, error) {
+	if m.streamTS != "" {
+		return m.streamTS, nil
+	}
 	return "", errors.New("stream unavailable")
 }
 
-func (m *fakeMessenger) AppendStream(context.Context, string, string, []map[string]any) error {
+func (m *fakeMessenger) AppendStream(_ context.Context, _, _ string, chunks []map[string]any) error {
+	m.chunks = append(m.chunks, chunks...)
 	return nil
 }
 
