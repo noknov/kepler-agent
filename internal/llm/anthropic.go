@@ -90,9 +90,11 @@ func (c *AnthropicClient) Chat(ctx Context, req Request) (Response, error) {
 		Message:      message,
 		FinishReason: parsed.StopReason,
 		Usage: Usage{
-			PromptTokens:     parsed.Usage.InputTokens,
-			CompletionTokens: parsed.Usage.OutputTokens,
-			TotalTokens:      parsed.Usage.InputTokens + parsed.Usage.OutputTokens,
+			PromptTokens:             parsed.Usage.InputTokens,
+			CompletionTokens:         parsed.Usage.OutputTokens,
+			TotalTokens:              parsed.Usage.InputTokens + parsed.Usage.OutputTokens,
+			CacheReadInputTokens:     parsed.Usage.CacheReadInputTokens,
+			CacheCreationInputTokens: parsed.Usage.CacheCreationInputTokens,
 		},
 		Raw: data,
 	}, nil
@@ -175,8 +177,10 @@ type anthropicTool struct {
 type anthropicResponse struct {
 	Content []anthropicBlock `json:"content"`
 	Usage   struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+		InputTokens              int `json:"input_tokens"`
+		OutputTokens             int `json:"output_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 	} `json:"usage"`
 	StopReason string `json:"stop_reason"`
 }
