@@ -1,7 +1,9 @@
 .env
 .DS_Store
+.idea/
 .data/
 .cache/
 bin/
 dist/
 .prompts/
+copilot-agent-avatar-*.png
