@@ -129,7 +129,7 @@ func TestNewErrorID(t *testing.T) {
 	}
 }
 
-func TestStreamModePostsFinalAnswer(t *testing.T) {
+func TestStreamModeAnswerInStream(t *testing.T) {
 	ctx := context.Background()
 	store, err := session.NewFileStore(t.TempDir())
 	if err != nil {
@@ -155,21 +155,106 @@ func TestStreamModePostsFinalAnswer(t *testing.T) {
 		Text:     "who is the author?",
 	})
 
-	if len(messenger.posts) == 0 {
-		t.Fatal("stream mode should post final answer as a separate message")
+	// Final answer should be in the stream, not a separate PostMessage
+	for _, p := range messenger.posts {
+		if p == "Author: <@U085SRJFCLX>" {
+			t.Fatal("stream mode should NOT post final answer as separate message")
+		}
 	}
-	if got := messenger.posts[len(messenger.posts)-1]; got != "Author: <@U085SRJFCLX>" {
-		t.Fatalf("final post = %q, want formatted mention", got)
-	}
+	foundText := false
 	foundComplete := false
 	for _, chunk := range messenger.chunks {
+		if chunk["type"] == "markdown_text" && chunk["text"] == "Author: <@U085SRJFCLX>" {
+			foundText = true
+		}
 		if chunk["type"] == "task_update" && chunk["status"] == "complete" && chunk["title"] == "Done" {
+			foundComplete = true
+		}
+	}
+	if !foundText {
+		t.Fatalf("stream should contain final answer as markdown_text: %#v", messenger.chunks)
+	}
+	if !foundComplete {
+		t.Fatalf("stream should mark task complete: %#v", messenger.chunks)
+	}
+}
+
+type streamLLM struct {
+	content string
+}
+
+func (l *streamLLM) Chat(_ llm.Context, _ llm.Request) (llm.Response, error) {
+	return llm.Response{
+		Message: llm.Message{Role: "assistant", Content: l.content},
+		Usage:   llm.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+	}, nil
+}
+
+func (l *streamLLM) ChatStream(_ llm.Context, _ llm.Request, cb llm.StreamCallback) (llm.Response, error) {
+	words := strings.Fields(l.content)
+	for i, w := range words {
+		if i > 0 {
+			cb(" ")
+		}
+		cb(w)
+	}
+	return llm.Response{
+		Message: llm.Message{Role: "assistant", Content: l.content},
+		Usage:   llm.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+	}, nil
+}
+
+func TestStreamModeStreamsTokens(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	messenger := &fakeMessenger{streamTS: "200.000"}
+	svc := NewService(
+		store,
+		messenger,
+		agent.Runner{LLM: &streamLLM{content: "hello world"}, MaxSteps: 1},
+		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+
+	svc.HandleMention(ctx, Request{
+		EventID:  "E4",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "hi",
+	})
+
+	// Streaming mode should NOT post a separate message
+	for _, p := range messenger.posts {
+		if p == "hello world" {
+			t.Fatal("streamed answer should not be sent via PostMessage")
+		}
+	}
+	// Should have markdown_text chunks
+	var text strings.Builder
+	for _, chunk := range messenger.chunks {
+		if chunk["type"] == "markdown_text" {
+			text.WriteString(chunk["text"].(string))
+		}
+	}
+	if got := text.String(); got != "hello world" {
+		t.Fatalf("streamed text = %q, want %q", got, "hello world")
+	}
+	// Should have task_update complete
+	foundComplete := false
+	for _, chunk := range messenger.chunks {
+		if chunk["type"] == "task_update" && chunk["status"] == "complete" {
 			foundComplete = true
 			break
 		}
 	}
 	if !foundComplete {
-		t.Fatalf("stream chunks should mark task complete with title: %#v", messenger.chunks)
+		t.Fatal("stream should mark task complete")
 	}
 }
 

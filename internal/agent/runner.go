@@ -36,17 +36,19 @@ type Sanitizer interface {
 }
 
 type Runner struct {
-	LLM          llm.Client
-	Model        string
-	Thinking     string
-	MaxTokens    int
-	Temp         float64
-	Tools        *registry.Registry
-	Format       ObservationFormatter
-	Sanitize     Sanitizer
-	Observer     Observer
-	MaxSteps     int
-	StatusUpdate StatusUpdater
+	LLM             llm.Client
+	Model           string
+	Thinking        string
+	MaxTokens       int
+	Temp            float64
+	Tools           *registry.Registry
+	Format          ObservationFormatter
+	Sanitize        Sanitizer
+	Observer        Observer
+	MaxSteps        int
+	MaxContextChars int
+	StatusUpdate    StatusUpdater
+	OnToken         llm.StreamCallback
 }
 
 type Request struct {
@@ -60,11 +62,19 @@ type Result struct {
 	Final           string
 	Pending         bool
 	PendingQuestion string
+	Streamed        bool
 }
 
 const repetitiveRetryPrompt = "Your previous answer became repetitive. Give one concise final answer only. Do not repeat sentences. Do not narrate further investigation. If evidence is insufficient, say the next check in one short paragraph."
 
 const textualToolCallRetryPrompt = "Your previous reply included textual tool-call markup (for example <tool_call> or <function=...>) instead of using the API's structured tool calling. Do not output tool XML or pseudo tool syntax. Either call tools through the provided tool interface, or give a concise final answer in plain language using evidence already gathered."
+
+func budgetWarningPrompt(remainingToolSteps int) string {
+	return fmt.Sprintf(
+		"You have %d tool-using turn(s) remaining before you must give your final answer. Stop exploring. Synthesize your findings now using evidence already gathered. Do not start new searches or delegate-run calls unless absolutely critical.",
+		remainingToolSteps,
+	)
+}
 
 func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	maxSteps := r.MaxSteps
@@ -76,12 +86,24 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	seenToolCalls := map[string]int{}
 	retriedRepetitiveFinal := false
 	retriedTextualToolCall := false
+	budgetWarned := false
 
 	for step := 0; step < maxSteps; step++ {
 		lastStep := step == maxSteps-1 || retriedRepetitiveFinal || retriedTextualToolCall
 		if r.StatusUpdate != nil {
 			r.StatusUpdate(StepStatus(req.Locale, step))
 		}
+
+		if !budgetWarned && step == maxSteps-10 && !lastStep {
+			remaining := (maxSteps - 1) - step
+			messages = append(messages, llm.Message{
+				Role:    "system",
+				Content: budgetWarningPrompt(remaining),
+			})
+			budgetWarned = true
+		}
+
+		messages = r.compressContext(messages)
 
 		// On the last step, omit tools so the model is forced to produce a
 		// final text response using whatever it has gathered so far.
@@ -90,15 +112,29 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			toolSpecs = r.Tools.Specs()
 		}
 
-		llmStart := time.Now()
-		resp, err := r.LLM.Chat(ctx, llm.Request{
+		llmReq := llm.Request{
 			Model:       r.Model,
 			Messages:    messages,
 			Tools:       toolSpecs,
 			MaxTokens:   r.MaxTokens,
 			Temperature: r.Temp,
 			Thinking:    r.Thinking,
-		})
+		}
+
+		useStream := lastStep && r.OnToken != nil
+		llmStart := time.Now()
+		var resp llm.Response
+		var err error
+		if useStream {
+			if sc, ok := r.LLM.(llm.StreamClient); ok {
+				resp, err = sc.ChatStream(ctx, llmReq, r.OnToken)
+			} else {
+				resp, err = r.LLM.Chat(ctx, llmReq)
+				useStream = false
+			}
+		} else {
+			resp, err = r.LLM.Chat(ctx, llmReq)
+		}
 		if r.Observer != nil {
 			r.Observer.LLMCall(resp.Usage, time.Since(llmStart), err)
 		}
@@ -108,14 +144,14 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 
 		assistantMsg := resp.Message
 		if len(assistantMsg.ToolCalls) == 0 {
-			if r.StatusUpdate != nil {
+			if !useStream && r.StatusUpdate != nil {
 				r.StatusUpdate(GeneratingStatus(req.Locale))
 			}
 			final := strings.TrimSpace(r.sanitize(assistantMsg.Content))
 			if final == "" {
 				final = "I didn't get a valid response. Please try again or provide more context."
 			}
-			if llm.LooksLikeTextualToolCall(final) {
+			if !useStream && llm.LooksLikeTextualToolCall(final) {
 				if !retriedTextualToolCall {
 					retriedTextualToolCall = true
 					messages = append(messages, llm.Message{Role: "system", Content: textualToolCallRetryPrompt})
@@ -126,7 +162,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 				}
 				return Result{Generated: generated}, ErrTextualToolCall
 			}
-			if looksRepetitive(final) {
+			if !useStream && looksRepetitive(final) {
 				if !retriedRepetitiveFinal {
 					retriedRepetitiveFinal = true
 					messages = append(messages, llm.Message{Role: "system", Content: repetitiveRetryPrompt})
@@ -140,7 +176,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			assistantMsg.Content = final
 			messages = append(messages, assistantMsg)
 			generated = append(generated, assistantMsg)
-			return Result{Generated: generated, Final: final}, nil
+			return Result{Generated: generated, Final: final, Streamed: useStream}, nil
 		}
 
 		// Text before a tool call is only a transient narration. Persisting it
@@ -242,6 +278,45 @@ func repeatedUnits(text string) []string {
 		}
 	}
 	return units
+}
+
+const defaultMaxContextChars = 120_000
+const toolResultCleared = "[previous result cleared to save context — key findings should already be incorporated in later messages]"
+
+// compressContext replaces old tool result bodies with a short stub when total
+// message size exceeds the budget. It preserves the most recent tool results
+// (last 8 messages) and all non-tool messages intact.
+func (r Runner) compressContext(messages []llm.Message) []llm.Message {
+	limit := r.MaxContextChars
+	if limit <= 0 {
+		limit = defaultMaxContextChars
+	}
+	total := 0
+	for i := range messages {
+		total += len(messages[i].Content)
+	}
+	if total <= limit {
+		return messages
+	}
+
+	// Find the boundary: preserve the last 8 messages unconditionally.
+	preserve := 8
+	if preserve > len(messages) {
+		preserve = len(messages)
+	}
+	boundary := len(messages) - preserve
+
+	for i := range messages[:boundary] {
+		if messages[i].Role == "tool" && len(messages[i].Content) > len(toolResultCleared) {
+			total -= len(messages[i].Content)
+			messages[i].Content = toolResultCleared
+			total += len(toolResultCleared)
+			if total <= limit {
+				break
+			}
+		}
+	}
+	return messages
 }
 
 func (r Runner) format(toolName, output string) string {
