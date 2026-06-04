@@ -7,7 +7,7 @@ Go-based Slack on-call debugging agent powered by configurable OpenAI-compatible
 - Slack receives `app_mention`, verifies Slack signatures, checks allowlists, then starts an agent run in the thread.
 - The model is called through an OpenAI-compatible Chat Completions API or Anthropic-compatible Messages API with native tool calls, so tool execution is structured instead of parsed from free-form JSON text.
 - Runtime safety is code-enforced: Slack user/channel authorization, prompt guardrails, post-response redaction, path allowlists, command deny rules, and read-only tool boundaries.
-- Context is managed explicitly. Slack thread context, session messages, and tool observations are truncated before they reach the model.
+- Context is managed explicitly. Slack thread context, session messages, and tool observations are bounded before they reach the model, with large Slack files kept searchable by file ID.
 - Sessions are persisted by Slack `channel:thread_ts`, so follow-up mentions and pending clarification replies reuse context.
 - Delegation, rules, and skills are modeled as focused agent profiles, not as one-off prompt folders. RAG and caching should be added under `internal/memory` or infrastructure once there is a concrete retrieval source.
 
@@ -46,7 +46,7 @@ go run ./cmd/oncall-agent
 - `MIMO_MODEL=mimo-v2.5`
 - `MIMO_THINKING=disabled`
 
-`mimo-v2.5` is selected so Slack image uploads can be passed as multimodal `image_url` parts. PDF and text uploads in Slack DMs or mentions are downloaded and converted to plain text excerpts for the model (up to 16 MB per file, 16k characters injected initially). For larger files or truncated excerpts, the model can use `slack.file_search` with the Slack file ID to retrieve relevant sections on demand. MiMo thinking is disabled by default because multi-turn tool calls must preserve provider-specific reasoning fields across turns; enabling it should be done deliberately after that history path is validated.
+`mimo-v2.5` is selected so Slack image uploads can be passed as multimodal `image_url` parts. PDF and text uploads in Slack DMs or mentions are downloaded and converted to plain text for the model (up to 16 MB per file, up to 100k characters injected initially). For larger files or rare truncated excerpts, the model can use `slack.file_search` with the Slack file ID to retrieve relevant sections on demand. MiMo thinking is disabled by default because multi-turn tool calls must preserve provider-specific reasoning fields across turns; enabling it should be done deliberately after that history path is validated.
 
 `LLM_PROVIDER` selects the provider-specific environment namespace. `MIMO_*`, `KIMI_*`, `MOONSHOT_*`, `OPENAI_*`, and `ANTHROPIC_*` are intentionally separate; the app does not borrow MiMo tokens from Anthropic config or vice versa. `MIMO_PROTOCOL=anthropic` only means the MiMo provider uses an Anthropic-compatible transport.
 
