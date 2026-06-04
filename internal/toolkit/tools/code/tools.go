@@ -41,7 +41,7 @@ func (t ReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
 	}
-	path, err := t.Paths.Resolve(args.Path)
+	path, err := t.Paths.ResolveReadableFile(args.Path)
 	if err != nil {
 		return registry.Result{}, err
 	}

@@ -46,7 +46,9 @@ func Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	go pullWorkspaceRepos(ctx, cfg.Security.WorkspaceRoots, 10*time.Minute)
+	if cfg.Security.WorkspaceAutoFetch {
+		go pullWorkspaceRepos(ctx, cfg.Security.WorkspaceRoots, 10*time.Minute)
+	}
 	return server.ListenAndServe(ctx)
 }
 
