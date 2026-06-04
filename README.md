@@ -131,6 +131,7 @@ Current tool modules:
 - `youtrack.get_issue`, `youtrack.search`
 - `slack.ask_user`
 - `slack.file_search`
+- `slack.json_analyze`
 - `knowledge.runbook_search`
 - `delegate.run`
 

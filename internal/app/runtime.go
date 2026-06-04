@@ -142,6 +142,7 @@ func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm
 	tools.Register(knowledgeTools.RunbookSearchTool{})
 	tools.Register(slacktool.AskUserTool{Slack: slackClient})
 	tools.Register(slacktool.FileSearchTool{Slack: slackClient})
+	tools.Register(slacktool.JSONAnalyzeTool{Slack: slackClient})
 	tools.Register(delegation.Tool{Manager: delegates})
 	return tools
 }
