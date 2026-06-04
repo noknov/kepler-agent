@@ -25,6 +25,10 @@ type Observer interface {
 	ToolCall(name string, d time.Duration, err error)
 }
 
+type MetadataObserver interface {
+	ToolCallWithMetadata(name string, args json.RawMessage, d time.Duration, err error)
+}
+
 type StatusUpdater func(status string)
 
 type ObservationFormatter interface {
@@ -200,7 +204,12 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			start := time.Now()
 			result, err := r.Tools.Execute(ctx, name, args, req.Runtime)
 			if r.Observer != nil {
-				r.Observer.ToolCall(name, time.Since(start), err)
+				duration := time.Since(start)
+				if observer, ok := r.Observer.(MetadataObserver); ok {
+					observer.ToolCallWithMetadata(name, args, duration, err)
+				} else {
+					r.Observer.ToolCall(name, duration, err)
+				}
 			}
 			content := ""
 			if err != nil {
