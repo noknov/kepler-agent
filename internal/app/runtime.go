@@ -112,6 +112,8 @@ func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm
 	tools.Register(codeTools.SearchTool{Paths: workspacePolicy})
 	tools.Register(codeTools.ReadFileTool{Paths: workspacePolicy})
 	gitBase := gitTools.Base{Paths: workspacePolicy, Guard: commandPolicy, Timeout: cfg.Tools.CommandTimeout}
+	tools.Register(gitTools.RepoSearchTool{Base: gitBase})
+	tools.Register(gitTools.RepoReadFileTool{Base: gitBase})
 	tools.Register(gitTools.FetchRefTool{Base: gitBase})
 	tools.Register(gitTools.SearchRefTool{Base: gitBase})
 	tools.Register(gitTools.ReadFileRefTool{Base: gitBase})

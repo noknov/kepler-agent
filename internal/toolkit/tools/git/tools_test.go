@@ -16,18 +16,7 @@ import (
 )
 
 func TestFetchRefReturnsImmutableCommitRef(t *testing.T) {
-	root := t.TempDir()
-	origin := filepath.Join(root, "origin.git")
-	work := filepath.Join(root, "work")
-	runGit(t, root, "init", "--bare", origin)
-	runGit(t, root, "init", "-b", "main", work)
-	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("hello\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, work, "add", "README.md")
-	runGit(t, work, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "init")
-	runGit(t, work, "remote", "add", "origin", origin)
-	runGit(t, work, "push", "origin", "main")
+	root, work := testRepo(t)
 
 	tool := FetchRefTool{Base: Base{
 		Paths:   safety.WorkspacePolicy{Roots: []string{root}},
@@ -51,6 +40,59 @@ func TestFetchRefReturnsImmutableCommitRef(t *testing.T) {
 			t.Fatalf("content = %q, ref should not be a moving branch ref", content)
 		}
 	}
+}
+
+func TestRepoToolsReadFetchedSnapshotNotWorkingTree(t *testing.T) {
+	root, work := testRepo(t)
+	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("local only\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := Base{
+		Paths:   safety.WorkspacePolicy{Roots: []string{root}},
+		Guard:   safety.NewCommandPolicy(),
+		Timeout: 10 * time.Second,
+	}
+	searchTool := RepoSearchTool{Base: base}
+	searchResult, err := searchTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","query":"hello"}`), registry.Runtime{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(searchResult.Content, "README.md:1:hello") {
+		t.Fatalf("search content = %q, want remote snapshot match", searchResult.Content)
+	}
+	noMatch, err := searchTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","query":"local only"}`), registry.Runtime{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(noMatch.Content, "no matches") {
+		t.Fatalf("search content = %q, want no local working tree match", noMatch.Content)
+	}
+
+	readTool := RepoReadFileTool{Base: base}
+	readResult, err := readTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","path":"README.md"}`), registry.Runtime{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(readResult.Content, "hello") || strings.Contains(readResult.Content, "local only") {
+		t.Fatalf("read content = %q, want remote snapshot only", readResult.Content)
+	}
+}
+
+func testRepo(t *testing.T) (string, string) {
+	t.Helper()
+	root := t.TempDir()
+	origin := filepath.Join(root, "origin.git")
+	work := filepath.Join(root, "work")
+	runGit(t, root, "init", "--bare", origin)
+	runGit(t, root, "init", "-b", "main", work)
+	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, work, "add", "README.md")
+	runGit(t, work, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "init")
+	runGit(t, work, "remote", "add", "origin", origin)
+	runGit(t, work, "push", "origin", "main")
+	return root, work
 }
 
 func runGit(t *testing.T, dir string, args ...string) {
