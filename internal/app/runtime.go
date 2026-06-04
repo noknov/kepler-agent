@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 
 	"github.com/wati/oncall-agent/internal/agent"
+	"github.com/wati/oncall-agent/internal/codeintel"
 	"github.com/wati/oncall-agent/internal/config"
 	"github.com/wati/oncall-agent/internal/delegation"
 	"github.com/wati/oncall-agent/internal/llm"
@@ -13,6 +14,7 @@ import (
 	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/slack"
 	codeTools "github.com/wati/oncall-agent/internal/toolkit/tools/code"
+	codeIntelTools "github.com/wati/oncall-agent/internal/toolkit/tools/codeintel"
 	diagnosticsTools "github.com/wati/oncall-agent/internal/toolkit/tools/diagnostics"
 	gcpTools "github.com/wati/oncall-agent/internal/toolkit/tools/gcp"
 	gitTools "github.com/wati/oncall-agent/internal/toolkit/tools/git"
@@ -102,6 +104,11 @@ func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm
 	tools.Register(diagnosticsTools.IncidentBriefTool{})
 	tools.Register(diagnosticsTools.TimelineTool{})
 	tools.Register(diagnosticsTools.EvidenceBoardTool{})
+	intel := codeintel.Manager{Paths: workspacePolicy, Timeout: cfg.Tools.CommandTimeout}
+	tools.Register(codeIntelTools.SymbolsTool{Manager: intel})
+	tools.Register(codeIntelTools.DefinitionTool{Manager: intel})
+	tools.Register(codeIntelTools.ReferencesTool{Manager: intel})
+	tools.Register(codeIntelTools.DiagnosticsTool{Manager: intel})
 	tools.Register(codeTools.SearchTool{Paths: workspacePolicy})
 	tools.Register(codeTools.ReadFileTool{Paths: workspacePolicy})
 	gitBase := gitTools.Base{Paths: workspacePolicy, Guard: commandPolicy, Timeout: cfg.Tools.CommandTimeout}
