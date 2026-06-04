@@ -6,3 +6,5 @@
 - More reliable investigations: on-call questions are now organized around symptoms, evidence, likely causes, and next checks.
 - Better follow-up behavior: longer Slack threads keep a compact memory of earlier context, so the conversation stays easier to continue.
 - Clearer incident summaries: the agent can turn messy debugging context into a brief with status, evidence, hypotheses, and next actions.
+- Runbook-aware investigations: add Markdown runbooks under `PROMPT_DIR/runbooks/` and the agent can search them from Slack.
+- Evidence-first answers: tool observations are passed as evidence blocks so final incident answers can cite their sources.

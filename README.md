@@ -53,6 +53,7 @@ go run ./cmd/oncall-agent
 You can still point the service at other providers by changing `LLM_PROVIDER`, but startup now fails if your shell and `.env` disagree on provider settings unless you explicitly set `PREFER_DOTENV=true` to use `.env`, or `ALLOW_ENV_MIXING=true` to allow the shell to keep precedence.
 
 Prompt text can be kept out of git by placing local files under `PROMPT_DIR` (defaults to `.prompts/`, which is gitignored). Supported files are `system.md`, `delegates.json`, `app_messages.json`, `memory.json`, `tools.json`, `tool_statuses.json`, and `github_workflows.json`.
+Service runbooks can be added as Markdown files under `PROMPT_DIR/runbooks/`; the `knowledge.runbook_search` tool searches them during Slack investigations.
 
 For Kimi For Coding, use the Claude Code-style Anthropic-compatible endpoint:
 
@@ -120,6 +121,8 @@ The old App Home / modal flow for per-user agent tokens is not needed. If you re
 Current tool modules:
 
 - `diagnostics.incident_brief`
+- `diagnostics.timeline`
+- `diagnostics.evidence_board`
 - `code.search`, `code.read_file`
 - `git.fetch_ref`, `git.search_ref`, `git.read_file_ref`, `git.status`, `git.log`, `git.show`
 - `gcp.logs`
@@ -127,6 +130,7 @@ Current tool modules:
 - `notion.search`, `notion.create_page`
 - `youtrack.get_issue`, `youtrack.search`
 - `slack.ask_user`
+- `knowledge.runbook_search`
 - `delegate.run`
 
 Each Slack request is recorded as a run under `RUN_DATA_DIR` (default `.data/runs`). Run records include LLM/tool steps, token usage, estimated cost when rates are known, errors, Slack message linkage, and quality feedback from reactions. Override cost rates when your provider pricing differs:

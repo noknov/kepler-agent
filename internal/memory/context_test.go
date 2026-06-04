@@ -92,19 +92,34 @@ func TestFilterPersistentTurnsKeepsMatchedToolCalls(t *testing.T) {
 func TestToolObservationDelegateProvenance(t *testing.T) {
 	b := Builder{MaxToolChars: 10000}
 	out := b.ToolObservation("delegate-run", "some analysis")
-	if !stringsHasPrefix(out, delegateRunProvenancePrefix) {
+	if !stringsContains(out, delegateRunProvenancePrefix) {
 		t.Fatalf("missing provenance prefix: %q", out)
+	}
+	if !stringsHasPrefix(out, "<evidence source=\"delegate-run\">") {
+		t.Fatalf("missing evidence wrapper: %q", out)
 	}
 }
 
-func TestToolObservationOtherToolsUnchanged(t *testing.T) {
+func TestToolObservationOtherToolsUseEvidenceWrapper(t *testing.T) {
 	b := Builder{MaxToolChars: 10000}
 	out := b.ToolObservation("code-search", "matches")
 	if stringsHasPrefix(out, delegateRunProvenancePrefix) {
 		t.Fatalf("unexpected provenance on code-search: %q", out)
 	}
+	if !stringsHasPrefix(out, "<evidence source=\"code-search\">") {
+		t.Fatalf("missing evidence wrapper: %q", out)
+	}
 }
 
 func stringsHasPrefix(s, prefix string) bool {
 	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
+}
+
+func stringsContains(s, needle string) bool {
+	for i := 0; i+len(needle) <= len(s); i++ {
+		if s[i:i+len(needle)] == needle {
+			return true
+		}
+	}
+	return needle == ""
 }
