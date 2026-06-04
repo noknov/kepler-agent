@@ -128,6 +128,57 @@ func TestLoadGitHubConfig(t *testing.T) {
 	}
 }
 
+func TestLoadEnablesWorkspaceAutoFetchByDefault(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":      "xoxb-test",
+		"SLACK_SIGNING_SECRET": "secret",
+		"ALLOWED_SLACK_USERS":  "U123",
+		"MIMO_API_KEY":         "mimo-token",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if !cfg.Security.WorkspaceAutoFetch {
+		t.Fatal("WorkspaceAutoFetch = false, want true by default")
+	}
+}
+
+func TestLoadCanDisableWorkspaceAutoFetch(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":      "xoxb-test",
+		"SLACK_SIGNING_SECRET": "secret",
+		"ALLOWED_SLACK_USERS":  "U123",
+		"MIMO_API_KEY":         "mimo-token",
+		"WORKSPACE_AUTO_FETCH": "false",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.Security.WorkspaceAutoFetch {
+		t.Fatal("WorkspaceAutoFetch = true, want false when explicitly disabled")
+	}
+}
+
 func TestLoadDefaultsToMiMo(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
@@ -302,6 +353,7 @@ func resetConfigEnv(t *testing.T) {
 		"ALLOW_ENV_MIXING",
 		"PREFER_DOTENV",
 		"ALLOW_EXPERIMENTAL_CODING_ENDPOINT",
+		"WORKSPACE_AUTO_FETCH",
 		"GITHUB_TOKEN",
 		"GITHUB_API_BASE_URL",
 		"GITHUB_DEFAULT_OWNER",
