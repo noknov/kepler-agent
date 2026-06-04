@@ -74,7 +74,7 @@ func (m Manager) Symbols(ctx context.Context, repoPath, query string, limit int)
 	if server.Language == "go" {
 		return m.goSymbols(ctx, repo, query, limit, server)
 	}
-	client, err := startClient(ctx, server, repo, m.timeout())
+	client, err := startClient(ctx, server, serverRoot(repo, server), m.timeout())
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +126,7 @@ func (m Manager) Diagnostics(ctx context.Context, repoPath, path string) ([]Diag
 	if server.Language == "go" {
 		return m.goDiagnostics(ctx, repo, file, server)
 	}
-	client, err := startClient(ctx, server, repo, m.timeout())
+	client, err := startClient(ctx, server, serverRoot(repo, server), m.timeout())
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +176,7 @@ func (m Manager) locationRequest(ctx context.Context, pos Position, method strin
 		}
 		return m.goLocations(ctx, repo, file, pos, server, "references")
 	}
-	client, err := startClient(ctx, server, repo, m.timeout())
+	client, err := startClient(ctx, server, serverRoot(repo, server), m.timeout())
 	if err != nil {
 		return nil, err
 	}
@@ -253,6 +253,7 @@ type serverSpec struct {
 	Language string
 	Name     string
 	Args     []string
+	Root     string
 }
 
 func detectServer(repo string) (serverSpec, error) {
@@ -262,13 +263,20 @@ func detectServer(repo string) (serverSpec, error) {
 		}
 		return serverSpec{}, fmt.Errorf("Go repository detected but gopls is not installed")
 	}
-	if hasGlob(repo, "*.sln") || hasGlob(repo, "*.csproj") || hasGlob(filepath.Join(repo, "*"), "*.csproj") {
+	if root, ok := findCSharpRoot(repo); ok {
 		if path, err := exec.LookPath("csharp-ls"); err == nil {
-			return serverSpec{Language: "csharp", Name: path}, nil
+			return serverSpec{Language: "csharp", Name: path, Root: root}, nil
 		}
-		return serverSpec{}, fmt.Errorf("C# repository detected but csharp-ls is not installed")
+		return serverSpec{}, fmt.Errorf("C# repository detected under %s but csharp-ls is not installed", relPath(repo, root))
 	}
 	return serverSpec{}, fmt.Errorf("unsupported repository for code intelligence; install gopls for Go or csharp-ls for C#")
+}
+
+func serverRoot(repo string, server serverSpec) string {
+	if server.Root != "" {
+		return server.Root
+	}
+	return repo
 }
 
 func hasFile(dir, name string) bool {
@@ -279,6 +287,55 @@ func hasFile(dir, name string) bool {
 func hasGlob(dir, pattern string) bool {
 	matches, _ := filepath.Glob(filepath.Join(dir, pattern))
 	return len(matches) > 0
+}
+
+func findCSharpRoot(repo string) (string, bool) {
+	if hasGlob(repo, "*.sln") || hasGlob(repo, "*.csproj") || hasGlob(filepath.Join(repo, "*"), "*.csproj") {
+		return repo, true
+	}
+	var firstProject string
+	var firstSolution string
+	_ = filepath.WalkDir(repo, func(path string, d os.DirEntry, err error) error {
+		if err != nil || path == repo {
+			return nil
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if name == ".git" || name == "node_modules" || name == "bin" || name == "obj" || name == ".vs" {
+				return filepath.SkipDir
+			}
+			if depth(repo, path) > 3 {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		switch ext {
+		case ".sln":
+			firstSolution = filepath.Dir(path)
+			return filepath.SkipAll
+		case ".csproj":
+			if firstProject == "" {
+				firstProject = filepath.Dir(path)
+			}
+		}
+		return nil
+	})
+	if firstSolution != "" {
+		return firstSolution, true
+	}
+	if firstProject != "" {
+		return firstProject, true
+	}
+	return "", false
+}
+
+func depth(root, path string) int {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." {
+		return 0
+	}
+	return len(strings.Split(filepath.ToSlash(rel), "/"))
 }
 
 type lspClient struct {

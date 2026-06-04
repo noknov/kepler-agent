@@ -37,7 +37,13 @@ func TestGoSymbolsWithGopls(t *testing.T) {
 
 func TestCSharpMissingServerMessage(t *testing.T) {
 	root := t.TempDir()
-	if err := writeTestFile(filepath.Join(root, "app.csproj"), "<Project />"); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "src", "App"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestFile(filepath.Join(root, "src", "App", "App.csproj"), "<Project />"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestFile(filepath.Join(root, "src", "App.sln"), ""); err != nil {
 		t.Fatal(err)
 	}
 	manager := Manager{Paths: safety.WorkspacePolicy{Roots: []string{root}}, Timeout: time.Second}
@@ -47,6 +53,9 @@ func TestCSharpMissingServerMessage(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "csharp-ls") {
 		t.Fatalf("error = %v, want csharp-ls hint", err)
+	}
+	if !strings.Contains(err.Error(), "src") {
+		t.Fatalf("error = %v, want nested project path", err)
 	}
 }
 

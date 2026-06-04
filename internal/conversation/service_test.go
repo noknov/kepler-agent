@@ -258,6 +258,43 @@ func TestStreamModeStreamsTokens(t *testing.T) {
 	}
 }
 
+func TestStreamModeFallsBackWhenAppendFails(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	messenger := &fakeMessenger{streamTS: "200.000", appendErr: errors.New("append failed")}
+	svc := NewService(
+		store,
+		messenger,
+		agent.Runner{LLM: &streamLLM{content: "fallback answer"}, MaxSteps: 1},
+		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+
+	svc.HandleMention(ctx, Request{
+		EventID:  "E5",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "hi",
+	})
+
+	if len(messenger.posts) == 0 {
+		t.Fatal("expected fallback PostMessage when stream append fails")
+	}
+	got := messenger.posts[len(messenger.posts)-1]
+	if !strings.Contains(got, "fallback answer") {
+		t.Fatalf("fallback post = %q, want final answer", got)
+	}
+	if !strings.Contains(got, "streaming delivery failed") {
+		t.Fatalf("fallback post = %q, want delivery note", got)
+	}
+}
+
 func (l *replyLLM) Chat(_ llm.Context, _ llm.Request) (llm.Response, error) {
 	content := l.content
 	if content == "" {
@@ -274,9 +311,10 @@ type replyLLM struct {
 }
 
 type fakeMessenger struct {
-	posts    []string
-	streamTS string
-	chunks   []map[string]any
+	posts     []string
+	streamTS  string
+	appendErr error
+	chunks    []map[string]any
 }
 
 func (m *fakeMessenger) PostMessage(_ context.Context, _, _, text string) (string, error) {
@@ -293,7 +331,7 @@ func (m *fakeMessenger) StartStream(context.Context, string, string, string) (st
 
 func (m *fakeMessenger) AppendStream(_ context.Context, _, _ string, chunks []map[string]any) error {
 	m.chunks = append(m.chunks, chunks...)
-	return nil
+	return m.appendErr
 }
 
 func (m *fakeMessenger) StopStream(_ context.Context, _, _ string) error {
