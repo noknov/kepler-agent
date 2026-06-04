@@ -51,7 +51,7 @@ type FetchRefTool struct{ Base }
 func (t FetchRefTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-fetch_ref",
-		"Fetch origin and resolve the branch ref to analyze without changing the working tree. Use when the user names a branch, and use with no branch to select the default branch main, then master.",
+		"Fetch origin and resolve a branch to an immutable commit ref without changing the working tree. Use when the user names a branch, and use with no branch to select the default branch main, then master.",
 		registry.ObjectSchema(nil, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
 			"branch": map[string]any{"type": "string", "description": "Branch to analyze. If omitted, tries main, then master."},
@@ -69,7 +69,7 @@ func (t FetchRefTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 	if err != nil {
 		return registry.Result{}, err
 	}
-	if _, err := t.run(ctx, repo, "fetch", "--prune", "origin"); err != nil {
+	if _, err := t.run(ctx, repo, "fetch", "--prune", "--no-write-fetch-head", "origin"); err != nil {
 		return registry.Result{}, err
 	}
 
@@ -87,11 +87,15 @@ func (t FetchRefTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 	if !t.refExists(ctx, repo, ref) {
 		return registry.Result{}, fmt.Errorf("branch %q does not exist on origin", branch)
 	}
-	commit, err := t.run(ctx, repo, "rev-parse", "--short", ref)
+	commit, err := t.run(ctx, repo, "rev-parse", ref)
 	if err != nil {
 		return registry.Result{}, err
 	}
-	return registry.Result{Content: fmt.Sprintf("branch=%s\nref=%s\ncommit=%s\nworking_tree_changed=false", branch, ref, strings.TrimSpace(commit))}, nil
+	short, err := t.run(ctx, repo, "rev-parse", "--short", ref)
+	if err != nil {
+		return registry.Result{}, err
+	}
+	return registry.Result{Content: fmt.Sprintf("branch=%s\nbranch_ref=%s\nref=%s\ncommit=%s\nworking_tree_changed=false", branch, ref, strings.TrimSpace(commit), strings.TrimSpace(short))}, nil
 }
 
 type SearchRefTool struct{ Base }
@@ -102,7 +106,7 @@ func (t SearchRefTool) Spec() llm.ToolSpec {
 		"Search code at a git ref without changing the working tree. Use this instead of code-search when analyzing a specified branch.",
 		registry.ObjectSchema([]string{"query", "ref"}, map[string]any{
 			"repo":  map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
-			"ref":   map[string]any{"type": "string", "description": "Ref returned by git-fetch_ref, e.g. origin/feature-branch."},
+			"ref":   map[string]any{"type": "string", "description": "Immutable ref returned by git-fetch_ref, usually a commit SHA."},
 			"query": map[string]any{"type": "string", "description": "Regex query for git grep."},
 			"path":  map[string]any{"type": "string", "description": "Optional pathspec inside repo."},
 			"limit": map[string]any{"type": "integer", "description": "Maximum matching lines. Defaults to 50, max 200."},
@@ -168,7 +172,7 @@ func (t ReadFileRefTool) Spec() llm.ToolSpec {
 		"Read a file at a git ref without changing the working tree. Use this instead of code-read_file when analyzing a specified branch.",
 		registry.ObjectSchema([]string{"ref", "path"}, map[string]any{
 			"repo":       map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
-			"ref":        map[string]any{"type": "string", "description": "Ref returned by git-fetch_ref, e.g. origin/feature-branch."},
+			"ref":        map[string]any{"type": "string", "description": "Immutable ref returned by git-fetch_ref, usually a commit SHA."},
 			"path":       map[string]any{"type": "string", "description": "File path inside repo."},
 			"start_line": map[string]any{"type": "integer", "description": "1-based start line. Defaults to 1."},
 			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines to return. Defaults to 240, max 1000."},
