@@ -8,7 +8,7 @@ import (
 )
 
 // DefaultMaxTextExtractChars limits how much text-file content is injected into the model prompt.
-const DefaultMaxTextExtractChars = 16000
+const DefaultMaxTextExtractChars = 100000
 
 // IsTextFile reports whether Slack metadata describes a plain text or Markdown upload.
 func IsTextFile(file File) bool {
