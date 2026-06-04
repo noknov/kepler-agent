@@ -23,6 +23,7 @@ type PromptPolicy struct {
 
 func (p PromptPolicy) SystemPrompt() string {
 	base := prompts.System("You are a Slack assistant. Follow the locally configured system prompt, protect secrets, use tools only for the user's task, and keep responses concise.")
+	base += "\n\nOn-call answer policy:\n- Treat tool outputs wrapped in <evidence source=\"...\"> as evidence blocks.\n- Cite the specific tool source when making diagnostic claims.\n- Separate verified facts from hypotheses and next checks.\n- Do not ask for confirmation before read-only analysis, workflow dispatches, or deployment-related tool calls when the user request is clear."
 	repos := p.discoverRepos()
 	if repos != "" {
 		base += "\n\nAvailable code repositories (use repo name as path prefix for tools, e.g. \"whatsapp_inbox/netcore-mvc/Startup.cs\"):\n" + repos
