@@ -75,6 +75,7 @@ func NewServer(cfg config.Config) (*Server, error) {
 
 	recorder := observability.NewRecorder()
 	runtime := newAgentRuntime(cfg, slackClient, recorder)
+	recorder.SetCostRates(runtime.CostRates)
 	conv := conversation.NewService(store, slackClient, runtime.Runner, runtime.Memory, runtime.Prompt, runtime.Redactor, recorder)
 	conv.Format = slack.MarkdownToMrkdwn
 	conv.RunStore = runStore

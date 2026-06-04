@@ -19,6 +19,7 @@ import (
 
 type Run struct {
 	ID               string        `json:"id"`
+	TraceID          string        `json:"trace_id,omitempty"`
 	SessionID        string        `json:"session_id"`
 	EventID          string        `json:"event_id,omitempty"`
 	UserID           string        `json:"user_id,omitempty"`
@@ -36,6 +37,7 @@ type Run struct {
 	EstimatedCostUSD float64       `json:"estimated_cost_usd,omitempty"`
 	ErrorID          string        `json:"error_id,omitempty"`
 	Error            string        `json:"error,omitempty"`
+	ErrorStack       string        `json:"error_stack,omitempty"`
 	FinalHash        string        `json:"final_hash,omitempty"`
 	Steps            []Step        `json:"steps,omitempty"`
 	Feedback         []Feedback    `json:"feedback,omitempty"`
@@ -44,6 +46,8 @@ type Run struct {
 
 type Step struct {
 	ID               string         `json:"id"`
+	SpanID           string         `json:"span_id,omitempty"`
+	ParentSpanID     string         `json:"parent_span_id,omitempty"`
 	Type             string         `json:"type"`
 	Name             string         `json:"name,omitempty"`
 	StartedAt        time.Time      `json:"started_at"`
@@ -94,6 +98,22 @@ func NewID() string {
 		return "run-" + time.Now().UTC().Format("20060102150405")
 	}
 	return "run-" + hex.EncodeToString(b[:])
+}
+
+func NewTraceID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "trace-" + time.Now().UTC().Format("20060102150405")
+	}
+	return "trace-" + hex.EncodeToString(b[:])
+}
+
+func NewSpanID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "span-" + time.Now().UTC().Format("150405")
+	}
+	return "span-" + hex.EncodeToString(b[:])
 }
 
 func HashText(text string) string {
@@ -279,20 +299,41 @@ func scoreFeedback(feedback []Feedback) *QualityScore {
 }
 
 func scoreRun(run Run) *QualityScore {
-	score := 1.0
+	score := 0.75
 	notes := []string{}
-	if run.Status == "error" {
-		score -= 0.5
+	switch run.Status {
+	case "completed":
+		score += 0.15
+	case "pending_user":
+		score += 0.05
+		notes = append(notes, "pending_user")
+	case "error":
+		score -= 0.45
 		notes = append(notes, "run_error")
 	}
+	toolSteps := 0
 	for _, step := range run.Steps {
 		if step.Error != "" {
 			score -= 0.1
 			notes = append(notes, "step_error:"+step.Name)
 		}
+		if step.Type == "tool" {
+			toolSteps++
+		}
+	}
+	if toolSteps > 0 {
+		score += 0.1
+		notes = append(notes, "tool_evidence")
+	}
+	if run.FinalHash == "" && run.Status == "completed" {
+		score -= 0.15
+		notes = append(notes, "missing_final")
 	}
 	if score < 0 {
 		score = 0
+	}
+	if score > 1 {
+		score = 1
 	}
 	quality := &QualityScore{Automatic: score, Notes: notes, UpdatedAt: time.Now().UTC()}
 	if manual := scoreFeedback(run.Feedback); manual != nil {

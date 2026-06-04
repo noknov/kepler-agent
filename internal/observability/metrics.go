@@ -17,6 +17,7 @@ type Snapshot struct {
 	LLMCalls         int64            `json:"llm_calls"`
 	LLMErrors        int64            `json:"llm_errors"`
 	LLMUsage         TokenUsage       `json:"llm_usage"`
+	EstimatedCostUSD float64          `json:"estimated_cost_usd,omitempty"`
 	ToolCalls        map[string]int64 `json:"tool_calls"`
 	ToolErrors       map[string]int64 `json:"tool_errors"`
 	ReactionFeedback map[string]int64 `json:"reaction_feedback"`
@@ -33,9 +34,12 @@ type LatencySummary struct {
 }
 
 type TokenUsage struct {
-	PromptTokens     int64 `json:"prompt_tokens"`
-	CompletionTokens int64 `json:"completion_tokens"`
-	TotalTokens      int64 `json:"total_tokens"`
+	PromptTokens             int64 `json:"prompt_tokens"`
+	CompletionTokens         int64 `json:"completion_tokens"`
+	TotalTokens              int64 `json:"total_tokens"`
+	CacheReadInputTokens     int64 `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens,omitempty"`
+	ReasoningTokens          int64 `json:"reasoning_tokens,omitempty"`
 }
 
 type Recorder struct {
@@ -45,6 +49,7 @@ type Recorder struct {
 	latSum     int64
 	llmLatSum  int64
 	toolLatSum int64
+	rates      CostRates
 }
 
 func NewRecorder() *Recorder {
@@ -58,6 +63,12 @@ func NewRecorder() *Recorder {
 			ReactionFeedback: map[string]int64{},
 		},
 	}
+}
+
+func (r *Recorder) SetCostRates(rates CostRates) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rates = rates
 }
 
 func (r *Recorder) Request() {
@@ -79,6 +90,10 @@ func (r *Recorder) LLMCall(usage llm.Usage, d time.Duration, err error) {
 	r.snap.LLMUsage.PromptTokens += int64(usage.PromptTokens)
 	r.snap.LLMUsage.CompletionTokens += int64(usage.CompletionTokens)
 	r.snap.LLMUsage.TotalTokens += int64(usage.TotalTokens)
+	r.snap.LLMUsage.CacheReadInputTokens += int64(usage.CacheReadInputTokens)
+	r.snap.LLMUsage.CacheCreationInputTokens += int64(usage.CacheCreationInputTokens)
+	r.snap.LLMUsage.ReasoningTokens += int64(usage.ReasoningTokens)
+	r.snap.EstimatedCostUSD += r.rates.EstimateUSD(usage)
 	r.addLatencyLocked(&r.snap.LLMLatencyMS, &r.llmLatSum, d)
 	if err != nil {
 		r.snap.LLMErrors++
