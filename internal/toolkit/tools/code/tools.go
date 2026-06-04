@@ -23,11 +23,11 @@ type ReadFileTool struct {
 func (t ReadFileTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"code-read_file",
-		"Read a text file from an allowed workspace root. Use start_line and max_lines to avoid dumping huge files.",
+		"Read a text file from an allowed workspace root. Use start_line and max_lines for very large files.",
 		registry.ObjectSchema([]string{"path"}, map[string]any{
 			"path":       map[string]any{"type": "string", "description": "File path under one of WORKSPACE_ROOTS."},
 			"start_line": map[string]any{"type": "integer", "description": "1-based start line. Defaults to 1."},
-			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines to return. Defaults to 120, max 300."},
+			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines to return. Defaults to 240, max 1000."},
 		}),
 	)
 }
@@ -49,10 +49,10 @@ func (t ReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 		args.StartLine = 1
 	}
 	if args.MaxLines <= 0 {
-		args.MaxLines = 120
+		args.MaxLines = 240
 	}
-	if args.MaxLines > 300 {
-		args.MaxLines = 300
+	if args.MaxLines > 1000 {
+		args.MaxLines = 1000
 	}
 
 	file, err := os.Open(path)
@@ -81,7 +81,7 @@ func (t ReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 		}
 		b.WriteString(fmt.Sprintf("%6d  %s\n", lineNo, scanner.Text()))
 		emitted++
-		if b.Len() > 60_000 {
+		if b.Len() > 200_000 {
 			b.WriteString("...[truncated]\n")
 			break
 		}

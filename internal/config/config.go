@@ -146,7 +146,7 @@ func Load() (Config, error) {
 		Sessions: SessionConfig{
 			DataDir:         env("SESSION_DATA_DIR", filepath.Join(wd, ".data", "sessions")),
 			MaxMessages:     envInt("SESSION_MAX_MESSAGES", 24),
-			MaxToolChars:    envInt("SESSION_MAX_TOOL_CHARS", 3500),
+			MaxToolChars:    envInt("SESSION_MAX_TOOL_CHARS", 20000),
 			MaxThreadChars:  envInt("SESSION_MAX_THREAD_CHARS", 6000),
 			MaxSummaryChars: envInt("SESSION_MAX_SUMMARY_CHARS", 2500),
 		},

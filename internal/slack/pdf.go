@@ -10,7 +10,7 @@ import (
 )
 
 // DefaultMaxPDFExtractChars limits how much PDF text is injected into the model prompt.
-const DefaultMaxPDFExtractChars = 16000
+const DefaultMaxPDFExtractChars = 100000
 
 // IsPDFFile reports whether Slack metadata describes a PDF upload.
 func IsPDFFile(file File) bool {
