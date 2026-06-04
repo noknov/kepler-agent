@@ -128,32 +128,7 @@ func TestLoadGitHubConfig(t *testing.T) {
 	}
 }
 
-func TestLoadEnablesWorkspaceAutoFetchByDefault(t *testing.T) {
-	resetConfigEnv(t)
-	dir := t.TempDir()
-	writeEnvFile(t, dir, map[string]string{
-		"SLACK_BOT_TOKEN":      "xoxb-test",
-		"SLACK_SIGNING_SECRET": "secret",
-		"ALLOWED_SLACK_USERS":  "U123",
-		"MIMO_API_KEY":         "mimo-token",
-	})
-
-	wd, _ := os.Getwd()
-	defer func() { _ = os.Chdir(wd) }()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v, want nil", err)
-	}
-	if !cfg.Security.WorkspaceAutoFetch {
-		t.Fatal("WorkspaceAutoFetch = false, want true by default")
-	}
-}
-
-func TestLoadCanDisableWorkspaceAutoFetch(t *testing.T) {
+func TestLoadKeepsWorkspaceAutoFetchOptIn(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
 	writeEnvFile(t, dir, map[string]string{
@@ -175,7 +150,7 @@ func TestLoadCanDisableWorkspaceAutoFetch(t *testing.T) {
 		t.Fatalf("Load() error = %v, want nil", err)
 	}
 	if cfg.Security.WorkspaceAutoFetch {
-		t.Fatal("WorkspaceAutoFetch = true, want false when explicitly disabled")
+		t.Fatal("WorkspaceAutoFetch = true, want false by default")
 	}
 }
 
