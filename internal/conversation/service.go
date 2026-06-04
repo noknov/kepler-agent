@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"runtime/debug"
 	"strings"
@@ -147,15 +148,6 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	if runObserver != nil {
 		runner.Observer = multiObserver{s.Metrics, runObserver}
 	}
-	runner.StatusUpdate = func(status string) {
-		if !useStream {
-			return
-		}
-		_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
-			{"type": "task_update", "id": taskID, "title": status, "status": "in_progress"},
-		})
-	}
-
 	var flusher *streamFlusher
 	if useStream {
 		flusher = &streamFlusher{
@@ -164,6 +156,19 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			taskID: taskID, locale: locale,
 		}
 		runner.OnToken = flusher.Write
+	}
+	runner.StatusUpdate = func(status string) {
+		if !useStream {
+			return
+		}
+		err := s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
+			{"type": "task_update", "id": taskID, "title": status, "status": "in_progress"},
+		})
+		if flusher != nil {
+			flusher.RecordError(err)
+		} else if err != nil {
+			s.recordDeliveryError(req, streamTS, err)
+		}
 	}
 
 	threadContext := s.Messenger.ThreadContext(ctx, req.Channel, req.ThreadTS, 30)
@@ -208,10 +213,17 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		_ = s.Store.Save(ctx, sess)
 		errMsg := s.Redactor.Sanitize(userFacingError(errorID))
 		if useStream {
-			_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
+			appendErr := s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
 				{"type": "task_update", "id": taskID, "title": agent.FailedTitle(locale), "status": "error"},
 				{"type": "markdown_text", "text": errMsg},
 			})
+			if flusher != nil {
+				flusher.RecordError(appendErr)
+			}
+			if appendErr != nil {
+				s.recordDeliveryError(req, streamTS, appendErr)
+				s.postFallback(ctx, req, errMsg, false)
+			}
 		} else {
 			s.reportError(ctx, req, errMsg)
 		}
@@ -235,11 +247,17 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			pendingText = s.Format(pendingText)
 		}
 		if useStream {
-			_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
+			appendErr := s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
 				{"type": "task_update", "id": taskID, "title": agent.WaitingTitle(locale), "status": "complete"},
 			})
+			if flusher != nil {
+				flusher.RecordError(appendErr)
+			}
 		}
-		ts, _ := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, "<@"+req.UserID+"> "+pendingText)
+		ts, postErr := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, "<@"+req.UserID+"> "+pendingText)
+		if postErr != nil {
+			s.recordDeliveryError(req, "", postErr)
+		}
 		if runObserver != nil {
 			runObserver.LinkSlackMessage(req.Channel, ts)
 		}
@@ -254,19 +272,32 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 				if s.Format != nil {
 					finalText = s.Format(finalText)
 				}
-				_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
+				appendErr := s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
 					{"type": "task_update", "id": taskID, "title": agent.CompleteTitle(locale), "status": "complete"},
 					{"type": "markdown_text", "text": finalText},
 				})
+				if flusher != nil {
+					flusher.RecordError(appendErr)
+				}
+			} else if s.Format != nil {
+				finalText = s.Format(finalText)
 			}
-			if runObserver != nil {
+			if flusher != nil && flusher.Err() != nil {
+				s.recordDeliveryError(req, streamTS, flusher.Err())
+				if ts, ok := s.postFallback(ctx, req, finalText, true); ok && runObserver != nil {
+					runObserver.LinkSlackMessage(req.Channel, ts)
+				}
+			} else if runObserver != nil {
 				runObserver.LinkSlackMessage(req.Channel, streamTS)
 			}
 		} else {
 			if s.Format != nil {
 				finalText = s.Format(finalText)
 			}
-			ts, _ := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
+			ts, postErr := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
+			if postErr != nil {
+				s.recordDeliveryError(req, "", postErr)
+			}
 			if runObserver != nil {
 				runObserver.LinkSlackMessage(req.Channel, ts)
 			}
@@ -327,7 +358,36 @@ func (m multiObserver) ToolCallWithMetadata(name string, args json.RawMessage, d
 }
 
 func (s *Service) reportError(ctx context.Context, req Request, text string) {
-	_, _ = s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, text)
+	if _, err := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, text); err != nil {
+		s.recordDeliveryError(req, "", err)
+	}
+}
+
+func (s *Service) postFallback(ctx context.Context, req Request, text string, note bool) (string, bool) {
+	fallback := text
+	if note {
+		fallback = strings.TrimSpace(fallback) + "\n\n_Note: streaming delivery failed, so I reposted the complete answer here._"
+	}
+	ts, err := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, fallback)
+	if err != nil {
+		s.recordDeliveryError(req, "", err)
+		return "", false
+	}
+	return ts, true
+}
+
+func (s *Service) recordDeliveryError(req Request, streamTS string, err error) {
+	if err == nil {
+		return
+	}
+	target := req.ThreadTS
+	if streamTS != "" {
+		target = streamTS
+	}
+	log.Printf("slack delivery error channel=%s thread=%s target=%s event=%s user=%s err=%v", req.Channel, req.ThreadTS, target, req.EventID, req.UserID, err)
+	if s.Metrics != nil {
+		s.Metrics.Error(fmt.Errorf("slack delivery failed: %w", err))
+	}
 }
 
 func (s *Service) lockFor(sessionID string) *sync.Mutex {
@@ -466,14 +526,16 @@ type streamFlusher struct {
 	buf       strings.Builder
 	lastFlush time.Time
 	started   bool
+	err       error
 }
 
 func (f *streamFlusher) Write(delta string) {
 	if !f.started {
 		f.started = true
-		_ = f.messenger.AppendStream(f.ctx, f.channel, f.streamTS, []map[string]any{
+		err := f.messenger.AppendStream(f.ctx, f.channel, f.streamTS, []map[string]any{
 			{"type": "task_update", "id": f.taskID, "title": agent.CompleteTitle(f.locale), "status": "complete"},
 		})
+		f.RecordError(err)
 	}
 	f.buf.WriteString(delta)
 	if time.Since(f.lastFlush) > 80*time.Millisecond || f.buf.Len() > 80 {
@@ -488,7 +550,21 @@ func (f *streamFlusher) Flush() {
 	text := f.buf.String()
 	f.buf.Reset()
 	f.lastFlush = time.Now()
-	_ = f.messenger.AppendStream(f.ctx, f.channel, f.streamTS, []map[string]any{
+	err := f.messenger.AppendStream(f.ctx, f.channel, f.streamTS, []map[string]any{
 		{"type": "markdown_text", "text": text},
 	})
+	f.RecordError(err)
+}
+
+func (f *streamFlusher) RecordError(err error) {
+	if err != nil && f.err == nil {
+		f.err = err
+	}
+}
+
+func (f *streamFlusher) Err() error {
+	if f == nil {
+		return nil
+	}
+	return f.err
 }
