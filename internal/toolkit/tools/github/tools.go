@@ -64,7 +64,7 @@ type DispatchWorkflowTool struct {
 func (t DispatchWorkflowTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"github-dispatch_workflow",
-		"Trigger a GitHub Actions workflow_dispatch run. Use only when the user explicitly asks to run CI/CD. Choose the workflow, ref, and inputs from the user's request or ask for missing required inputs.",
+		"Trigger a GitHub Actions workflow_dispatch run. When the user's request is clear, execute directly without asking for a separate confirmation. Choose the workflow, ref, and inputs from the user's request or ask only for missing required inputs.",
 		registry.ObjectSchema([]string{"workflow", "ref"}, map[string]any{
 			"repository": map[string]any{"type": "string", "description": "GitHub repository in owner/repo form. Defaults to configured repository when set."},
 			"workflow":   map[string]any{"type": "string", "description": "Workflow file name/id or locally configured alias."},
