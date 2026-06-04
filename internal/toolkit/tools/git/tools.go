@@ -69,33 +69,18 @@ func (t FetchRefTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 	if err != nil {
 		return registry.Result{}, err
 	}
-	if _, err := t.run(ctx, repo, "fetch", "--prune", "--no-write-fetch-head", "origin"); err != nil {
+	snap, err := t.fetchSnapshot(ctx, repo, args.Branch)
+	if err != nil {
 		return registry.Result{}, err
 	}
+	return registry.Result{Content: snap.header()}, nil
+}
 
-	branch := strings.TrimSpace(args.Branch)
-	if branch == "" {
-		branch, err = t.defaultBranch(ctx, repo)
-		if err != nil {
-			return registry.Result{}, err
-		}
-	}
-	if err := validateRefPart(branch); err != nil {
-		return registry.Result{}, err
-	}
-	ref := "origin/" + branch
-	if !t.refExists(ctx, repo, ref) {
-		return registry.Result{}, fmt.Errorf("branch %q does not exist on origin", branch)
-	}
-	commit, err := t.run(ctx, repo, "rev-parse", ref)
-	if err != nil {
-		return registry.Result{}, err
-	}
-	short, err := t.run(ctx, repo, "rev-parse", "--short", ref)
-	if err != nil {
-		return registry.Result{}, err
-	}
-	return registry.Result{Content: fmt.Sprintf("branch=%s\nbranch_ref=%s\nref=%s\ncommit=%s\nworking_tree_changed=false", branch, ref, strings.TrimSpace(commit), strings.TrimSpace(short))}, nil
+type snapshot struct {
+	Branch    string
+	BranchRef string
+	Ref       string
+	Commit    string
 }
 
 type SearchRefTool struct{ Base }
@@ -162,6 +147,75 @@ func (t SearchRefTool) Execute(ctx context.Context, raw json.RawMessage, rt regi
 		lines = append(lines[:args.Limit], "...[truncated after "+strconv.Itoa(args.Limit)+" matches]")
 	}
 	return registry.Result{Content: strings.Join(lines, "\n")}, nil
+}
+
+type RepoSearchTool struct{ Base }
+
+func (t RepoSearchTool) Spec() llm.ToolSpec {
+	return registry.FunctionSpec(
+		"repo-search",
+		"Fetch one repository lazily, pin the requested branch to a commit snapshot, then search code at that snapshot. Prefer this for normal repository code searches.",
+		registry.ObjectSchema([]string{"query"}, map[string]any{
+			"repo":   map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
+			"branch": map[string]any{"type": "string", "description": "Branch to analyze. If omitted, tries main, then master."},
+			"query":  map[string]any{"type": "string", "description": "Regex query for git grep."},
+			"path":   map[string]any{"type": "string", "description": "Optional pathspec inside repo."},
+			"limit":  map[string]any{"type": "integer", "description": "Maximum matching lines. Defaults to 50, max 200."},
+		}),
+	)
+}
+
+func (t RepoSearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+	var args struct {
+		Repo   string `json:"repo"`
+		Branch string `json:"branch"`
+		Query  string `json:"query"`
+		Path   string `json:"path"`
+		Limit  int    `json:"limit"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return registry.Result{}, err
+	}
+	if strings.TrimSpace(args.Query) == "" {
+		return registry.Result{}, fmt.Errorf("query is required")
+	}
+	if args.Limit <= 0 {
+		args.Limit = 50
+	}
+	if args.Limit > 200 {
+		args.Limit = 200
+	}
+	repo, err := t.repo(args.Repo)
+	if err != nil {
+		return registry.Result{}, err
+	}
+	snap, err := t.fetchSnapshot(ctx, repo, args.Branch)
+	if err != nil {
+		return registry.Result{}, err
+	}
+	path, err := cleanGitPath(args.Path)
+	if err != nil {
+		return registry.Result{}, err
+	}
+	cmdArgs := []string{"grep", "-n", "--no-color", "-I", "-e", args.Query, snap.Ref, "--"}
+	if path != "" {
+		cmdArgs = append(cmdArgs, path)
+	}
+	out, err := t.run(ctx, repo, cmdArgs...)
+	if err != nil {
+		if strings.TrimSpace(out) == "" {
+			return registry.Result{Content: snap.header() + "\n\nno matches"}, nil
+		}
+		return registry.Result{}, err
+	}
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimPrefix(line, snap.Ref+":")
+	}
+	if len(lines) > args.Limit {
+		lines = append(lines[:args.Limit], "...[truncated after "+strconv.Itoa(args.Limit)+" matches]")
+	}
+	return registry.Result{Content: snap.header() + "\n\n" + strings.Join(lines, "\n")}, nil
 }
 
 type ReadFileRefTool struct{ Base }
@@ -238,6 +292,48 @@ func (t ReadFileRefTool) Execute(ctx context.Context, raw json.RawMessage, rt re
 		}
 	}
 	return registry.Result{Content: b.String()}, nil
+}
+
+type RepoReadFileTool struct{ Base }
+
+func (t RepoReadFileTool) Spec() llm.ToolSpec {
+	return registry.FunctionSpec(
+		"repo-read_file",
+		"Fetch one repository lazily, pin the requested branch to a commit snapshot, then read a file at that snapshot. Prefer this for normal repository file reads.",
+		registry.ObjectSchema([]string{"path"}, map[string]any{
+			"repo":       map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
+			"branch":     map[string]any{"type": "string", "description": "Branch to analyze. If omitted, tries main, then master."},
+			"path":       map[string]any{"type": "string", "description": "File path inside repo."},
+			"start_line": map[string]any{"type": "integer", "description": "1-based start line. Defaults to 1."},
+			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines to return. Defaults to 240, max 1000."},
+		}),
+	)
+}
+
+func (t RepoReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+	var args struct {
+		Repo      string `json:"repo"`
+		Branch    string `json:"branch"`
+		Path      string `json:"path"`
+		StartLine int    `json:"start_line"`
+		MaxLines  int    `json:"max_lines"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return registry.Result{}, err
+	}
+	repo, err := t.repo(args.Repo)
+	if err != nil {
+		return registry.Result{}, err
+	}
+	snap, err := t.fetchSnapshot(ctx, repo, args.Branch)
+	if err != nil {
+		return registry.Result{}, err
+	}
+	out, err := t.readAtRef(ctx, repo, snap.Ref, args.Path, args.StartLine, args.MaxLines)
+	if err != nil {
+		return registry.Result{}, err
+	}
+	return registry.Result{Content: snap.header() + "\n\n" + out}, nil
 }
 
 type LogTool struct{ Base }
@@ -334,6 +430,45 @@ func (b Base) repo(path string) (string, error) {
 	return b.Paths.Resolve(path)
 }
 
+func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string) (snapshot, error) {
+	if _, err := b.run(ctx, repo, "fetch", "--prune", "--no-write-fetch-head", "origin"); err != nil {
+		return snapshot{}, err
+	}
+	branch := strings.TrimSpace(rawBranch)
+	if branch == "" {
+		var err error
+		branch, err = b.defaultBranch(ctx, repo)
+		if err != nil {
+			return snapshot{}, err
+		}
+	}
+	if err := validateRefPart(branch); err != nil {
+		return snapshot{}, err
+	}
+	ref := "origin/" + branch
+	if !b.refExists(ctx, repo, ref) {
+		return snapshot{}, fmt.Errorf("branch %q does not exist on origin", branch)
+	}
+	commit, err := b.run(ctx, repo, "rev-parse", ref)
+	if err != nil {
+		return snapshot{}, err
+	}
+	short, err := b.run(ctx, repo, "rev-parse", "--short", ref)
+	if err != nil {
+		return snapshot{}, err
+	}
+	return snapshot{
+		Branch:    branch,
+		BranchRef: ref,
+		Ref:       strings.TrimSpace(commit),
+		Commit:    strings.TrimSpace(short),
+	}, nil
+}
+
+func (s snapshot) header() string {
+	return fmt.Sprintf("branch=%s\nbranch_ref=%s\nref=%s\ncommit=%s\nworking_tree_changed=false", s.Branch, s.BranchRef, s.Ref, s.Commit)
+}
+
 func (b Base) defaultBranch(ctx context.Context, repo string) (string, error) {
 	for _, branch := range []string{"main", "master"} {
 		if b.refExists(ctx, repo, "origin/"+branch) || b.refExists(ctx, repo, branch) {
@@ -359,6 +494,48 @@ func (b Base) resolveRef(ctx context.Context, repo, raw string) (string, error) 
 		return "", fmt.Errorf("ref %q does not exist", ref)
 	}
 	return ref, nil
+}
+
+func (b Base) readAtRef(ctx context.Context, repo, ref, rawPath string, startLine, maxLines int) (string, error) {
+	path, err := cleanGitPath(rawPath)
+	if err != nil {
+		return "", err
+	}
+	if path == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	if startLine <= 0 {
+		startLine = 1
+	}
+	if maxLines <= 0 {
+		maxLines = 240
+	}
+	if maxLines > 1000 {
+		maxLines = 1000
+	}
+	out, err := b.run(ctx, repo, "show", ref+":"+path)
+	if err != nil {
+		return "", err
+	}
+	lines := strings.Split(out, "\n")
+	var buf strings.Builder
+	emitted := 0
+	for idx, line := range lines {
+		lineNo := idx + 1
+		if lineNo < startLine {
+			continue
+		}
+		if emitted >= maxLines {
+			break
+		}
+		buf.WriteString(fmt.Sprintf("%6d  %s\n", lineNo, line))
+		emitted++
+		if buf.Len() > 200_000 {
+			buf.WriteString("...[truncated]\n")
+			break
+		}
+	}
+	return buf.String(), nil
 }
 
 func (b Base) refExists(ctx context.Context, repo, ref string) bool {
