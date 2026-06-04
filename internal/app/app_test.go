@@ -1,6 +1,8 @@
 package app
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -144,6 +146,31 @@ func TestGitFetchEnvDisablesTerminalPrompt(t *testing.T) {
 	env := gitFetchEnv()
 	if !containsEnv(env, "GIT_TERMINAL_PROMPT=0") {
 		t.Fatal("git fetch env should disable terminal prompts")
+	}
+}
+
+func TestDiscoverWorkspaceReposIncludesRootAndChildren(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, root, ".git")
+	mkdir(t, root, "child", ".git")
+	mkdir(t, root, "not-repo")
+
+	repos := discoverWorkspaceRepos([]string{root, root})
+	if len(repos) != 2 {
+		t.Fatalf("repos = %#v, want root and child only", repos)
+	}
+	if repos[0] != root {
+		t.Fatalf("first repo = %q, want root %q", repos[0], root)
+	}
+	if repos[1] != root+"/child" {
+		t.Fatalf("second repo = %q, want child", repos[1])
+	}
+}
+
+func mkdir(t *testing.T, parts ...string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(parts...), 0o700); err != nil {
+		t.Fatal(err)
 	}
 }
 
