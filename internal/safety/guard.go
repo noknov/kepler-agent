@@ -146,6 +146,58 @@ func (g WorkspacePolicy) Resolve(path string) (string, error) {
 	return "", fmt.Errorf("file not found in any workspace root: %s", clean)
 }
 
+func (g WorkspacePolicy) ResolveReadableFile(path string) (string, error) {
+	resolved, err := g.Resolve(path)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("path is a directory")
+	}
+	if IsSensitivePath(resolved) {
+		return "", fmt.Errorf("refusing to read sensitive file %q", filepath.Base(resolved))
+	}
+	realPath, err := filepath.EvalSymlinks(resolved)
+	if err != nil {
+		return "", err
+	}
+	for _, root := range g.Roots {
+		realRoot, err := filepath.EvalSymlinks(filepath.Clean(root))
+		if err != nil {
+			realRoot = filepath.Clean(root)
+		}
+		if isWithin(realPath, realRoot) {
+			return realPath, nil
+		}
+	}
+	return "", fmt.Errorf("path resolves outside allowed workspace roots")
+}
+
+func IsSensitivePath(path string) bool {
+	base := strings.ToLower(filepath.Base(path))
+	if base == ".env" || strings.HasPrefix(base, ".env.") || base == "id_rsa" || base == "id_ed25519" || base == "credentials" || base == "config.json" {
+		return true
+	}
+	sensitiveSuffixes := []string{".pem", ".key", ".p12", ".pfx", ".kubeconfig"}
+	for _, suffix := range sensitiveSuffixes {
+		if strings.HasSuffix(base, suffix) {
+			return true
+		}
+	}
+	sensitiveParts := []string{"/.aws/", "/.gcloud/", "/.kube/", "/secrets/", "/credentials/"}
+	normalized := "/" + strings.ToLower(filepath.ToSlash(path))
+	for _, part := range sensitiveParts {
+		if strings.Contains(normalized, part) {
+			return true
+		}
+	}
+	return false
+}
+
 func isWithin(path, root string) bool {
 	if path == root {
 		return true

@@ -13,11 +13,11 @@ import (
 
 func TestReadFileReturnsContentDirectly(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("TOKEN=secret\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "app.go"), []byte("package app\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	tool := ReadFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	raw := json.RawMessage(`{"path":".env"}`)
+	raw := json.RawMessage(`{"path":"app.go"}`)
 
 	result, err := tool.Execute(context.Background(), raw, registry.Runtime{})
 	if err != nil {
@@ -25,6 +25,18 @@ func TestReadFileReturnsContentDirectly(t *testing.T) {
 	}
 	if result.WaitForUser || result.Content == "" {
 		t.Fatalf("expected file content, got %#v", result)
+	}
+}
+
+func TestReadFileRejectsSensitiveFilesWithoutPrompting(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("TOKEN=secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := ReadFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"path":".env"}`), registry.Runtime{})
+	if err == nil {
+		t.Fatal("expected sensitive file read to be rejected")
 	}
 }
 
