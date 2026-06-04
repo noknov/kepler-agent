@@ -141,7 +141,7 @@ func Load() (Config, error) {
 			AllowedUsers:       envCSV("ALLOWED_SLACK_USERS"),
 			AllowedChannels:    envCSV("ALLOWED_SLACK_CHANNELS"),
 			WorkspaceRoots:     normalizeRoots(envCSVDefault("WORKSPACE_ROOTS", []string{wd})),
-			WorkspaceAutoFetch: envBool("WORKSPACE_AUTO_FETCH", false),
+			WorkspaceAutoFetch: envBool("WORKSPACE_AUTO_FETCH", true),
 		},
 		Sessions: SessionConfig{
 			DataDir:         env("SESSION_DATA_DIR", filepath.Join(wd, ".data", "sessions")),

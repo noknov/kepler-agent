@@ -14,28 +14,14 @@ import (
 // workspace roots so the agent always reads up-to-date code.
 func pullWorkspaceRepos(ctx context.Context, roots []string, interval time.Duration) {
 	pullAll := func() {
-		for _, root := range roots {
-			entries, err := os.ReadDir(root)
-			if err != nil {
-				log.Printf("workspace pull: cannot read %s: %v", root, err)
-				continue
-			}
-			for _, e := range entries {
-				if !e.IsDir() {
-					continue
-				}
-				dir := filepath.Join(root, e.Name())
-				if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
-					continue
-				}
-				cmd := exec.CommandContext(ctx, "git", "-C", dir, "fetch", "--prune", "origin")
-				cmd.Env = gitFetchEnv()
-				out, pullErr := cmd.CombinedOutput()
-				if pullErr != nil {
-					log.Printf("workspace pull %s: %s", e.Name(), strings.TrimSpace(string(out)))
-				} else {
-					log.Printf("workspace fetch %s: ok", e.Name())
-				}
+		for _, dir := range discoverWorkspaceRepos(roots) {
+			cmd := exec.CommandContext(ctx, "git", "-C", dir, "fetch", "--prune", "origin")
+			cmd.Env = gitFetchEnv()
+			out, pullErr := cmd.CombinedOutput()
+			if pullErr != nil {
+				log.Printf("workspace fetch %s: %s", filepath.Base(dir), strings.TrimSpace(string(out)))
+			} else {
+				log.Printf("workspace fetch %s: ok", filepath.Base(dir))
 			}
 		}
 	}
@@ -51,6 +37,35 @@ func pullWorkspaceRepos(ctx context.Context, roots []string, interval time.Durat
 			pullAll()
 		}
 	}
+}
+
+func discoverWorkspaceRepos(roots []string) []string {
+	seen := map[string]bool{}
+	var repos []string
+	add := func(dir string) {
+		clean := filepath.Clean(dir)
+		if seen[clean] {
+			return
+		}
+		if _, err := os.Stat(filepath.Join(clean, ".git")); err == nil {
+			seen[clean] = true
+			repos = append(repos, clean)
+		}
+	}
+	for _, root := range roots {
+		add(root)
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			log.Printf("workspace fetch: cannot read %s: %v", root, err)
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				add(filepath.Join(root, e.Name()))
+			}
+		}
+	}
+	return repos
 }
 
 func gitFetchEnv() []string {
