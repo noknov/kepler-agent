@@ -1,7 +1,12 @@
 package runs
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"sort"
 	"time"
 
 	"github.com/wati/oncall-agent/internal/llm"
@@ -21,6 +26,9 @@ func NewObserver(store Store, run Run, rates observability.CostRates) *Observer 
 	now := time.Now().UTC()
 	if run.ID == "" {
 		run.ID = NewID()
+	}
+	if run.TraceID == "" {
+		run.TraceID = NewTraceID()
 	}
 	if run.StartedAt.IsZero() {
 		run.StartedAt = now
@@ -53,12 +61,25 @@ func (o *Observer) LLMCall(usage llm.Usage, d time.Duration, err error) {
 }
 
 func (o *Observer) ToolCall(name string, d time.Duration, err error) {
+	o.ToolCallWithMetadata(name, nil, d, err)
+}
+
+func (o *Observer) ToolCallWithMetadata(name string, args json.RawMessage, d time.Duration, err error) {
 	o.appendStep(Step{
 		Type:       "tool",
 		Name:       name,
 		DurationMS: d.Milliseconds(),
 		Error:      errorString(err),
+		Metadata:   toolMetadata(args),
 	})
+}
+
+func (o *Observer) RecordErrorStack(stack string) {
+	if o == nil || o.Run == nil || stack == "" {
+		return
+	}
+	o.Run.ErrorStack = stack
+	o.save(context.Background())
 }
 
 func (o *Observer) Finish(status, errorID string, err error, final string) {
@@ -90,6 +111,8 @@ func (o *Observer) LinkSlackMessage(channel, messageTS string) {
 func (o *Observer) appendStep(step Step) {
 	o.stepSeq++
 	step.ID = o.Run.ID + "-step-" + time.Now().UTC().Format("150405.000000000")
+	step.SpanID = NewSpanID()
+	step.ParentSpanID = o.Run.TraceID
 	step.StartedAt = time.Now().UTC().Add(-time.Duration(step.DurationMS) * time.Millisecond)
 	o.Run.Steps = append(o.Run.Steps, step)
 	o.save(context.Background())
@@ -107,4 +130,32 @@ func errorString(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+func toolMetadata(args json.RawMessage) map[string]any {
+	if len(args) == 0 {
+		return nil
+	}
+	compact := make([]byte, 0, len(args))
+	var buf bytes.Buffer
+	if json.Compact(&buf, args) == nil {
+		compact = buf.Bytes()
+	} else {
+		compact = []byte(args)
+	}
+	sum := sha256.Sum256(compact)
+	meta := map[string]any{
+		"args_hash":  "sha256:" + hex.EncodeToString(sum[:8]),
+		"args_bytes": len(compact),
+	}
+	var object map[string]any
+	if json.Unmarshal(compact, &object) == nil {
+		keys := make([]string, 0, len(object))
+		for key := range object {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		meta["args_keys"] = keys
+	}
+	return meta
 }

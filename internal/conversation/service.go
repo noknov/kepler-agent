@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"log"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -196,6 +198,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		errorID := newErrorID()
 		log.Printf("conversation error id=%s session=%s event=%s user=%s channel=%s thread=%s err=%v", errorID, sessionID, req.EventID, req.UserID, req.Channel, req.ThreadTS, err)
 		if runObserver != nil {
+			runObserver.RecordErrorStack(string(debug.Stack()))
 			runObserver.Finish("error", errorID, err, "")
 		}
 		if s.Metrics != nil {
@@ -305,6 +308,19 @@ func (m multiObserver) LLMCall(usage llm.Usage, d time.Duration, err error) {
 func (m multiObserver) ToolCall(name string, d time.Duration, err error) {
 	for _, observer := range m {
 		if observer != nil {
+			observer.ToolCall(name, d, err)
+		}
+	}
+}
+
+func (m multiObserver) ToolCallWithMetadata(name string, args json.RawMessage, d time.Duration, err error) {
+	for _, observer := range m {
+		if observer == nil {
+			continue
+		}
+		if metadataObserver, ok := observer.(agent.MetadataObserver); ok {
+			metadataObserver.ToolCallWithMetadata(name, args, d, err)
+		} else {
 			observer.ToolCall(name, d, err)
 		}
 	}
