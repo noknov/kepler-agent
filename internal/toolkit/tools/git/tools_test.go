@@ -28,6 +28,9 @@ func TestFetchRefReturnsImmutableCommitRef(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := result.Content
+	if !strings.Contains(content, "repo=work") {
+		t.Fatalf("content = %q, want repo label", content)
+	}
 	if !strings.Contains(content, "branch_ref=origin/main") {
 		t.Fatalf("content = %q, want branch_ref", content)
 	}
@@ -39,6 +42,29 @@ func TestFetchRefReturnsImmutableCommitRef(t *testing.T) {
 		if line == "ref=origin/main" {
 			t.Fatalf("content = %q, ref should not be a moving branch ref", content)
 		}
+	}
+}
+
+func TestRefToolsRequireExplicitRepo(t *testing.T) {
+	root, work := testRepo(t)
+	base := Base{
+		Paths:   safety.WorkspacePolicy{Roots: []string{root}},
+		Guard:   safety.NewCommandPolicy(),
+		Timeout: 10 * time.Second,
+	}
+	fetchResult, err := (FetchRefTool{Base: base}).Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main"}`), registry.Runtime{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := regexp.MustCompile(`(?m)^ref=([0-9a-f]{40})$`).FindStringSubmatch(fetchResult.Content)[1]
+
+	_, err = (ReadFileRefTool{Base: base}).Execute(context.Background(), json.RawMessage(`{"ref":"`+ref+`","path":"README.md"}`), registry.Runtime{})
+	if err == nil || !strings.Contains(err.Error(), "repo is required") {
+		t.Fatalf("ReadFileRefTool error = %v, want repo required", err)
+	}
+	_, err = (SearchRefTool{Base: base}).Execute(context.Background(), json.RawMessage(`{"ref":"`+ref+`","query":"hello"}`), registry.Runtime{})
+	if err == nil || !strings.Contains(err.Error(), "repo is required") {
+		t.Fatalf("SearchRefTool error = %v, want repo required", err)
 	}
 }
 
