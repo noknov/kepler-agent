@@ -171,7 +171,7 @@ func (t ReadFileRefTool) Spec() llm.ToolSpec {
 			"ref":        map[string]any{"type": "string", "description": "Ref returned by git-fetch_ref, e.g. origin/feature-branch."},
 			"path":       map[string]any{"type": "string", "description": "File path inside repo."},
 			"start_line": map[string]any{"type": "integer", "description": "1-based start line. Defaults to 1."},
-			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines to return. Defaults to 120, max 300."},
+			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines to return. Defaults to 240, max 1000."},
 		}),
 	)
 }
@@ -206,10 +206,10 @@ func (t ReadFileRefTool) Execute(ctx context.Context, raw json.RawMessage, rt re
 		args.StartLine = 1
 	}
 	if args.MaxLines <= 0 {
-		args.MaxLines = 120
+		args.MaxLines = 240
 	}
-	if args.MaxLines > 300 {
-		args.MaxLines = 300
+	if args.MaxLines > 1000 {
+		args.MaxLines = 1000
 	}
 	out, err := t.run(ctx, repo, "show", ref+":"+path)
 	if err != nil {
@@ -228,7 +228,7 @@ func (t ReadFileRefTool) Execute(ctx context.Context, raw json.RawMessage, rt re
 		}
 		b.WriteString(fmt.Sprintf("%6d  %s\n", lineNo, line))
 		emitted++
-		if b.Len() > 60_000 {
+		if b.Len() > 200_000 {
 			b.WriteString("...[truncated]\n")
 			break
 		}

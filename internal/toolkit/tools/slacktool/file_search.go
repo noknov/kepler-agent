@@ -14,7 +14,7 @@ import (
 
 const (
 	maxSearchFileBytes = 16 << 20
-	maxSearchTextChars = 500_000
+	maxSearchTextChars = 2_000_000
 )
 
 type FileSearcher interface {
