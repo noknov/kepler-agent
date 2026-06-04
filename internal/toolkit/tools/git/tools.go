@@ -304,9 +304,17 @@ func (t ShowTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.
 	if err != nil {
 		return registry.Result{}, err
 	}
-	cmdArgs := []string{"show", "--stat", "--patch", args.Rev}
-	if args.Path != "" {
-		cmdArgs = append(cmdArgs, "--", args.Path)
+	rev := strings.TrimSpace(args.Rev)
+	if err := validateRefPart(rev); err != nil {
+		return registry.Result{}, err
+	}
+	path, err := cleanGitPath(args.Path)
+	if err != nil {
+		return registry.Result{}, err
+	}
+	cmdArgs := []string{"show", "--stat", "--patch", rev}
+	if path != "" {
+		cmdArgs = append(cmdArgs, "--", path)
 	}
 	out, err := t.run(ctx, repo, cmdArgs...)
 	if len(out) > args.MaxChars {

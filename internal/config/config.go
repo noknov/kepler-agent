@@ -45,9 +45,10 @@ type LLMConfig struct {
 }
 
 type SecurityConfig struct {
-	AllowedUsers    []string
-	AllowedChannels []string
-	WorkspaceRoots  []string
+	AllowedUsers       []string
+	AllowedChannels    []string
+	WorkspaceRoots     []string
+	WorkspaceAutoFetch bool
 }
 
 type SessionConfig struct {
@@ -137,9 +138,10 @@ func Load() (Config, error) {
 			Timeout:         providerTimeout(llmProvider),
 		},
 		Security: SecurityConfig{
-			AllowedUsers:    envCSV("ALLOWED_SLACK_USERS"),
-			AllowedChannels: envCSV("ALLOWED_SLACK_CHANNELS"),
-			WorkspaceRoots:  normalizeRoots(envCSVDefault("WORKSPACE_ROOTS", []string{wd})),
+			AllowedUsers:       envCSV("ALLOWED_SLACK_USERS"),
+			AllowedChannels:    envCSV("ALLOWED_SLACK_CHANNELS"),
+			WorkspaceRoots:     normalizeRoots(envCSVDefault("WORKSPACE_ROOTS", []string{wd})),
+			WorkspaceAutoFetch: envBool("WORKSPACE_AUTO_FETCH", false),
 		},
 		Sessions: SessionConfig{
 			DataDir:         env("SESSION_DATA_DIR", filepath.Join(wd, ".data", "sessions")),
