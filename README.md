@@ -146,7 +146,7 @@ LLM_CACHE_CREATION_COST_PER_MTOK=0
 
 GCP values in `.env` are defaults and hints, not fixed environments. `gcp.logs` accepts `project`, `namespace`, `service`, and raw `filter` per call. If `namespace` is omitted, the tool no longer silently injects `GCP_NAMESPACE`; environment mappings can be added later in `PROMPT_DIR/rules`.
 
-GitHub Actions uses `GITHUB_TOKEN`. Set `GITHUB_DEFAULT_OWNER` and `GITHUB_DEFAULT_REPO` locally, and define workflow aliases in the gitignored `PROMPT_DIR/github_workflows.json` file. The dispatch tool requires an explicit user request plus a workflow ref and passes workflow_dispatch inputs through as strings. The runs tool can check recent workflow status after a dispatch.
+GitHub Actions uses `GITHUB_TOKEN`. Set `GITHUB_DEFAULT_OWNER` and `GITHUB_DEFAULT_REPO` locally, and define workflow aliases in the gitignored `PROMPT_DIR/github_workflows.json` file. The dispatch tool executes directly when the Slack request is clear, asks only for missing required inputs, and passes workflow_dispatch inputs through as strings. The runs tool can check recent workflow status after a dispatch.
 
 ## Notes
 
