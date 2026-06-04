@@ -1,11 +1,7 @@
 *What's new*
 *2026-06-04*
-- Evidence-first answers: tool observations are passed as evidence blocks so final incident answers can cite their sources.
 - Code intelligence: the agent can look up Go/C# symbols, definitions, references, and diagnostics when the language server is available.
-- More reliable Slack delivery: if streaming fails, the agent reposts the complete answer as a normal reply instead of failing silently.
-- Better C# project detection: mixed repositories with nested solutions, such as backend code under a subdirectory, are recognized by code intelligence tools.
-- Fresher branch analysis: the agent now fetches workspace repositories by default and uses remote refs for latest or branch-specific code questions.
-- Stable branch snapshots: branch-specific analysis now reads a fixed commit snapshot, so concurrent requests do not drift if a branch moves mid-answer.
+- Stability improvements: branch-specific code analysis and Slack replies are more reliable.
 
 *2026-06-03*
 - Streaming responses: the final answer now appears progressively in real-time instead of all at once.
