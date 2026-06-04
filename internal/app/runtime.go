@@ -17,6 +17,7 @@ import (
 	gcpTools "github.com/wati/oncall-agent/internal/toolkit/tools/gcp"
 	gitTools "github.com/wati/oncall-agent/internal/toolkit/tools/git"
 	githubTools "github.com/wati/oncall-agent/internal/toolkit/tools/github"
+	knowledgeTools "github.com/wati/oncall-agent/internal/toolkit/tools/knowledge"
 	notionTools "github.com/wati/oncall-agent/internal/toolkit/tools/notion"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/slacktool"
@@ -99,6 +100,8 @@ func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm
 
 	tools := registry.New()
 	tools.Register(diagnosticsTools.IncidentBriefTool{})
+	tools.Register(diagnosticsTools.TimelineTool{})
+	tools.Register(diagnosticsTools.EvidenceBoardTool{})
 	tools.Register(codeTools.SearchTool{Paths: workspacePolicy})
 	tools.Register(codeTools.ReadFileTool{Paths: workspacePolicy})
 	gitBase := gitTools.Base{Paths: workspacePolicy, Guard: commandPolicy, Timeout: cfg.Tools.CommandTimeout}
@@ -136,6 +139,7 @@ func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm
 	}
 	tools.Register(githubTools.DispatchWorkflowTool{Client: githubClient})
 	tools.Register(githubTools.WorkflowRunsTool{Client: githubClient})
+	tools.Register(knowledgeTools.RunbookSearchTool{})
 	tools.Register(slacktool.AskUserTool{Slack: slackClient})
 	tools.Register(delegation.Tool{Manager: delegates})
 	return tools

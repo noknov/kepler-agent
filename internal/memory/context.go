@@ -81,7 +81,7 @@ func (b Builder) ToolObservation(toolName string, output string) string {
 	if toolName == "delegate-run" {
 		output = delegateRunProvenancePrefix + output
 	}
-	return truncate(output, b.MaxToolChars)
+	return "<evidence source=\"" + toolName + "\">\n" + truncate(output, b.MaxToolChars) + "\n</evidence>"
 }
 
 func UserTurn(content string) Turn {

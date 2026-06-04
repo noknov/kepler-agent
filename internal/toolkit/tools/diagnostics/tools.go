@@ -26,6 +26,140 @@ func (IncidentBriefTool) Spec() llm.ToolSpec {
 	)
 }
 
+type TimelineTool struct{}
+
+func (TimelineTool) Spec() llm.ToolSpec {
+	return registry.FunctionSpec(
+		"diagnostics-timeline",
+		"Build an incident timeline from observed events. Use after collecting Slack context, logs, deploys, workflow runs, or issue updates.",
+		registry.ObjectSchema([]string{"events"}, map[string]any{
+			"title": map[string]any{"type": "string", "description": "Short incident or investigation title."},
+			"events": map[string]any{
+				"type":        "array",
+				"description": "Timeline entries. Each item can include time, source, event, impact, and evidence.",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"time":     map[string]any{"type": "string"},
+						"source":   map[string]any{"type": "string"},
+						"event":    map[string]any{"type": "string"},
+						"impact":   map[string]any{"type": "string"},
+						"evidence": map[string]any{"type": "string"},
+					},
+				},
+			},
+		}),
+	)
+}
+
+func (TimelineTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	select {
+	case <-ctx.Done():
+		return registry.Result{}, ctx.Err()
+	default:
+	}
+	var args struct {
+		Title  string `json:"title"`
+		Events []struct {
+			Time     string `json:"time"`
+			Source   string `json:"source"`
+			Event    string `json:"event"`
+			Impact   string `json:"impact"`
+			Evidence string `json:"evidence"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return registry.Result{}, err
+	}
+	if len(args.Events) == 0 {
+		return registry.Result{}, fmt.Errorf("events are required")
+	}
+	title := strings.TrimSpace(args.Title)
+	if title == "" {
+		title = "Incident timeline"
+	}
+	var b strings.Builder
+	b.WriteString(title + "\n")
+	for i, event := range args.Events {
+		when := strings.TrimSpace(event.Time)
+		if when == "" {
+			when = "unknown time"
+		}
+		source := strings.TrimSpace(event.Source)
+		if source == "" {
+			source = "unknown source"
+		}
+		b.WriteString(fmt.Sprintf("%d. %s — %s\n", i+1, when, strings.TrimSpace(event.Event)))
+		b.WriteString("   source: " + source + "\n")
+		if strings.TrimSpace(event.Impact) != "" {
+			b.WriteString("   impact: " + strings.TrimSpace(event.Impact) + "\n")
+		}
+		if strings.TrimSpace(event.Evidence) != "" {
+			b.WriteString("   evidence: " + strings.TrimSpace(event.Evidence) + "\n")
+		}
+	}
+	return registry.Result{Content: b.String()}, nil
+}
+
+type EvidenceBoardTool struct{}
+
+func (EvidenceBoardTool) Spec() llm.ToolSpec {
+	return registry.FunctionSpec(
+		"diagnostics-evidence_board",
+		"Create an evidence board that separates facts, hypotheses, risks, and next checks. Use before giving a final incident answer.",
+		registry.ObjectSchema(nil, map[string]any{
+			"facts":       arrayOfStrings("Verified facts with source/tool references."),
+			"hypotheses":  arrayOfStrings("Hypotheses with confidence or disconfirming evidence."),
+			"risks":       arrayOfStrings("User or operational risks."),
+			"next_checks": arrayOfStrings("Concrete next checks or actions."),
+		}),
+	)
+}
+
+func (EvidenceBoardTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	select {
+	case <-ctx.Done():
+		return registry.Result{}, ctx.Err()
+	default:
+	}
+	var args struct {
+		Facts      []string `json:"facts"`
+		Hypotheses []string `json:"hypotheses"`
+		Risks      []string `json:"risks"`
+		NextChecks []string `json:"next_checks"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return registry.Result{}, err
+	}
+	var b strings.Builder
+	writeList := func(title string, items []string) {
+		b.WriteString(title + "\n")
+		if len(items) == 0 {
+			b.WriteString("- none captured\n")
+			return
+		}
+		for _, item := range items {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				b.WriteString("- " + item + "\n")
+			}
+		}
+	}
+	writeList("Verified facts", args.Facts)
+	writeList("Hypotheses", args.Hypotheses)
+	writeList("Risks", args.Risks)
+	writeList("Next checks", args.NextChecks)
+	return registry.Result{Content: b.String()}, nil
+}
+
+func arrayOfStrings(description string) map[string]any {
+	return map[string]any{
+		"type":        "array",
+		"description": description,
+		"items":       map[string]any{"type": "string"},
+	}
+}
+
 func (IncidentBriefTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
 	select {
 	case <-ctx.Done():
@@ -70,7 +204,7 @@ func (IncidentBriefTool) Execute(ctx context.Context, raw json.RawMessage, _ reg
 	b.WriteString("Suggested tool sequence:\n")
 	b.WriteString("- diagnostics-incident_brief: keep this brief as the investigation spine.\n")
 	b.WriteString("- github-workflow_runs: check recent deploy/CI for the repository when relevant.\n")
-	b.WriteString("- gcp-logs: query namespace/service logs for the stated window; production scopes require confirmation.\n")
+	b.WriteString("- gcp-logs: query namespace/service logs for the stated window.\n")
 	b.WriteString("- code-search/code-read_file or git-search_ref/git-read_file_ref: verify code only after narrowing the component.\n")
 	b.WriteString("- notion-search/youtrack-search: look for existing runbooks, incidents, or tickets.\n\n")
 	b.WriteString("Answer format:\n")
