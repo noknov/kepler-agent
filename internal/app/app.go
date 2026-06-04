@@ -557,7 +557,7 @@ const (
 	maxSlackImageBytes   = 8 << 20
 	maxSlackPDFBytes     = 16 << 20
 	maxSlackPDFTextChars = slack.DefaultMaxPDFExtractChars
-	maxSlackTextBytes    = 1 << 20
+	maxSlackTextBytes    = 16 << 20
 	maxSlackTextChars    = slack.DefaultMaxTextExtractChars
 )
 
