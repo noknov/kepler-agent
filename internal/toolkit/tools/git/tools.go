@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -77,6 +78,7 @@ func (t FetchRefTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 }
 
 type snapshot struct {
+	Repo      string
 	Branch    string
 	BranchRef string
 	Ref       string
@@ -89,8 +91,8 @@ func (t SearchRefTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-search_ref",
 		"Search code at a git ref without changing the working tree. Use this instead of code-search when analyzing a specified branch.",
-		registry.ObjectSchema([]string{"query", "ref"}, map[string]any{
-			"repo":  map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
+		registry.ObjectSchema([]string{"repo", "query", "ref"}, map[string]any{
+			"repo":  map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Required so the ref is resolved in the correct repository."},
 			"ref":   map[string]any{"type": "string", "description": "Immutable ref returned by git-fetch_ref, usually a commit SHA."},
 			"query": map[string]any{"type": "string", "description": "Regex query for git grep."},
 			"path":  map[string]any{"type": "string", "description": "Optional pathspec inside repo."},
@@ -119,7 +121,7 @@ func (t SearchRefTool) Execute(ctx context.Context, raw json.RawMessage, rt regi
 	if args.Limit > 200 {
 		args.Limit = 200
 	}
-	repo, err := t.repo(args.Repo)
+	repo, err := t.explicitRepo(args.Repo)
 	if err != nil {
 		return registry.Result{}, err
 	}
@@ -224,8 +226,8 @@ func (t ReadFileRefTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-read_file_ref",
 		"Read a file at a git ref without changing the working tree. Use this instead of code-read_file when analyzing a specified branch.",
-		registry.ObjectSchema([]string{"ref", "path"}, map[string]any{
-			"repo":       map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
+		registry.ObjectSchema([]string{"repo", "ref", "path"}, map[string]any{
+			"repo":       map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Required so the ref is resolved in the correct repository."},
 			"ref":        map[string]any{"type": "string", "description": "Immutable ref returned by git-fetch_ref, usually a commit SHA."},
 			"path":       map[string]any{"type": "string", "description": "File path inside repo."},
 			"start_line": map[string]any{"type": "integer", "description": "1-based start line. Defaults to 1."},
@@ -245,7 +247,7 @@ func (t ReadFileRefTool) Execute(ctx context.Context, raw json.RawMessage, rt re
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
 	}
-	repo, err := t.repo(args.Repo)
+	repo, err := t.explicitRepo(args.Repo)
 	if err != nil {
 		return registry.Result{}, err
 	}
@@ -430,6 +432,13 @@ func (b Base) repo(path string) (string, error) {
 	return b.Paths.Resolve(path)
 }
 
+func (b Base) explicitRepo(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("repo is required for ref-based git tools; use the same repo returned by git-fetch_ref")
+	}
+	return b.Paths.Resolve(path)
+}
+
 func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string) (snapshot, error) {
 	if _, err := b.run(ctx, repo, "fetch", "--prune", "--no-write-fetch-head", "origin"); err != nil {
 		return snapshot{}, err
@@ -458,6 +467,7 @@ func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string) (snapsh
 		return snapshot{}, err
 	}
 	return snapshot{
+		Repo:      repoLabel(repo),
 		Branch:    branch,
 		BranchRef: ref,
 		Ref:       strings.TrimSpace(commit),
@@ -466,7 +476,7 @@ func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string) (snapsh
 }
 
 func (s snapshot) header() string {
-	return fmt.Sprintf("branch=%s\nbranch_ref=%s\nref=%s\ncommit=%s\nworking_tree_changed=false", s.Branch, s.BranchRef, s.Ref, s.Commit)
+	return fmt.Sprintf("repo=%s\nbranch=%s\nbranch_ref=%s\nref=%s\ncommit=%s\nworking_tree_changed=false", s.Repo, s.Branch, s.BranchRef, s.Ref, s.Commit)
 }
 
 func (b Base) defaultBranch(ctx context.Context, repo string) (string, error) {
@@ -562,6 +572,10 @@ func cleanGitPath(path string) (string, error) {
 		return "", fmt.Errorf("invalid path %q", path)
 	}
 	return path, nil
+}
+
+func repoLabel(repo string) string {
+	return filepath.ToSlash(filepath.Base(repo))
 }
 
 func (b Base) run(ctx context.Context, repo string, args ...string) (string, error) {

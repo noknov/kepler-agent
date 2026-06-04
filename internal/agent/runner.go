@@ -195,7 +195,19 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			signature := toolCallSignature(call)
 			seenToolCalls[signature]++
 			if seenToolCalls[signature] > 2 {
-				return Result{Generated: generated}, fmt.Errorf("%w: %s", ErrRepeatedToolCall, name)
+				content := fmt.Sprintf("[tool error] duplicate %s call skipped. Use the existing tool result already in the conversation, call a different tool with different arguments, or give the final answer now.", name)
+				toolMessage := llm.Message{
+					Role:       "tool",
+					ToolCallID: call.ID,
+					Name:       name,
+					Content:    content,
+				}
+				messages = append(messages, toolMessage)
+				generated = append(generated, toolMessage)
+				if r.Observer != nil {
+					r.Observer.ToolCall(name, 0, fmt.Errorf("%w: %s", ErrRepeatedToolCall, name))
+				}
+				continue
 			}
 			if r.StatusUpdate != nil {
 				r.StatusUpdate(ToolHint(name, req.Locale))

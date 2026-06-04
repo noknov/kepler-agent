@@ -186,6 +186,35 @@ func TestRunnerReturnsMaxToolStepsError(t *testing.T) {
 	}
 }
 
+func TestRunnerSkipsDuplicateToolCallInsteadOfFailing(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{Message: toolCallMessage("tool_1", `{"text":"same"}`)},
+		{Message: toolCallMessage("tool_2", `{"text":"same"}`)},
+		{Message: toolCallMessage("tool_3", `{"text":"same"}`)},
+		{Message: llm.Message{Role: "assistant", Content: "final"}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 5}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "final" {
+		t.Fatalf("Final = %q, want final", result.Final)
+	}
+	foundDuplicate := false
+	for _, msg := range result.Generated {
+		if msg.Role == "tool" && strings.Contains(msg.Content, "duplicate echo call skipped") {
+			foundDuplicate = true
+			break
+		}
+	}
+	if !foundDuplicate {
+		t.Fatalf("duplicate tool result not found: %#v", result.Generated)
+	}
+}
+
 func toolCallMessage(id, args string) llm.Message {
 	return llm.Message{
 		Role: "assistant",
