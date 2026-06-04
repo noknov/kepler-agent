@@ -1,6 +1,8 @@
 package safety
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -32,5 +34,31 @@ func TestCommandPolicyBlocksDangerousCommands(t *testing.T) {
 	}
 	if err := guard.Check("kubectl delete pod api-1"); err == nil {
 		t.Fatal("expected kubectl delete blocked")
+	}
+}
+
+func TestWorkspacePolicyRejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(root, "link.txt")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	_, err := (WorkspacePolicy{Roots: []string{root}}).ResolveReadableFile("link.txt")
+	if err == nil {
+		t.Fatal("expected symlink escape to be rejected")
+	}
+}
+
+func TestWorkspacePolicyRejectsSensitivePath(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "private.pem"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := (WorkspacePolicy{Roots: []string{root}}).ResolveReadableFile("private.pem")
+	if err == nil {
+		t.Fatal("expected sensitive path to be rejected")
 	}
 }
