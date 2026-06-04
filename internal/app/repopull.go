@@ -15,7 +15,7 @@ import (
 func pullWorkspaceRepos(ctx context.Context, roots []string, interval time.Duration) {
 	pullAll := func() {
 		for _, dir := range discoverWorkspaceRepos(roots) {
-			cmd := exec.CommandContext(ctx, "git", "-C", dir, "fetch", "--prune", "origin")
+			cmd := exec.CommandContext(ctx, "git", "-C", dir, "fetch", "--prune", "--no-write-fetch-head", "origin")
 			cmd.Env = gitFetchEnv()
 			out, pullErr := cmd.CombinedOutput()
 			if pullErr != nil {
