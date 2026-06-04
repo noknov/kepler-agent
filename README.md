@@ -148,7 +148,7 @@ LLM_CACHE_READ_COST_PER_MTOK=0
 LLM_CACHE_CREATION_COST_PER_MTOK=0
 ```
 
-`git.fetch_ref` fetches origin and resolves the requested branch to an `origin/<branch>` ref without changing the working tree. If no branch is specified, it tries `mt-main`, then `main`, then `master`. Branch-specific analysis should use `git.search_ref` and `git.read_file_ref`, so concurrent users can inspect different branches without checkout conflicts. The command guard blocks destructive command patterns, and the shipped tools use argumentized `exec.CommandContext` instead of shell strings.
+`git.fetch_ref` fetches origin and resolves the requested branch to an immutable commit ref without changing the working tree. If no branch is specified, it tries `mt-main`, then `main`, then `master`. Branch-specific analysis should use `git.search_ref` and `git.read_file_ref` with the returned commit ref, so concurrent users can inspect different branches without checkout conflicts or mid-run branch movement. The command guard blocks destructive command patterns, and the shipped tools use argumentized `exec.CommandContext` instead of shell strings.
 
 Code intelligence tools are read-only and currently target the current working tree. Go uses `gopls`; C# uses `csharp-ls` when installed. If a language server is unavailable, the agent falls back to text search and reports the missing dependency.
 
