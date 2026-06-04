@@ -357,7 +357,7 @@ func FormatFiles(files []File) string {
 		}
 		lines = append(lines, line)
 	}
-	lines = append(lines, "Note: on the current turn, supported image files are sent to the model as images, and PDF, Markdown, and plain-text files as extracted text excerpts. For large text/PDF files, use slack-file_search with the file id to retrieve relevant sections instead of relying on the initial excerpt.")
+	lines = append(lines, "Note: on the current turn, supported image files are sent to the model as images, and PDF, Markdown, JSON, and plain-text files as extracted text. For JSON statistics use slack-json_analyze with the file id; for large text/PDF files use slack-file_search with the file id to retrieve relevant sections.")
 	return strings.Join(lines, "\n")
 }
 
