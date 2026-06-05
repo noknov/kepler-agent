@@ -104,6 +104,37 @@ func TestRepoToolsReadFetchedSnapshotNotWorkingTree(t *testing.T) {
 	}
 }
 
+func TestRepoToolsReuseSnapshotWithinRuntime(t *testing.T) {
+	root, work := testRepo(t)
+	base := Base{
+		Paths:   safety.WorkspacePolicy{Roots: []string{root}},
+		Guard:   safety.NewCommandPolicy(),
+		Timeout: 10 * time.Second,
+	}
+	rt := registry.Runtime{Cache: registry.NewRuntimeCache()}
+	searchTool := RepoSearchTool{Base: base}
+	if _, err := searchTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","query":"hello"}`), rt); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(root, "origin.git"), filepath.Join(root, "origin.git.offline")); err != nil {
+		t.Fatal(err)
+	}
+
+	readTool := RepoReadFileTool{Base: base}
+	result, err := readTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","path":"README.md"}`), rt)
+	if err != nil {
+		t.Fatalf("cached read failed after origin became unavailable: %v", err)
+	}
+	if !strings.Contains(result.Content, "hello") {
+		t.Fatalf("read content = %q, want cached snapshot content", result.Content)
+	}
+
+	_, err = readTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","path":"README.md"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	if err == nil {
+		t.Fatal("read with a fresh runtime should fetch again and fail while origin is unavailable")
+	}
+}
+
 func testRepo(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()

@@ -26,6 +26,8 @@ type FileSearchTool struct {
 	Slack FileSearcher
 }
 
+func (FileSearchTool) Parallel() bool { return true }
+
 func (t FileSearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"slack-file_search",

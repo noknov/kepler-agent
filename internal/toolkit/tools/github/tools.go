@@ -113,6 +113,8 @@ type WorkflowRunsTool struct {
 	Client Client
 }
 
+func (WorkflowRunsTool) Parallel() bool { return true }
+
 func (t WorkflowRunsTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"github-workflow_runs",

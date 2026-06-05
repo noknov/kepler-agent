@@ -24,6 +24,8 @@ type Base struct {
 
 type StatusTool struct{ Base }
 
+func (StatusTool) Parallel() bool { return true }
+
 func (t StatusTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-status",
@@ -49,6 +51,8 @@ func (t StatusTool) Execute(ctx context.Context, raw json.RawMessage, _ registry
 
 type FetchRefTool struct{ Base }
 
+func (FetchRefTool) Repeatable() bool { return true }
+
 func (t FetchRefTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-fetch_ref",
@@ -60,7 +64,7 @@ func (t FetchRefTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t FetchRefTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t FetchRefTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
 	var args struct {
 		Repo   string `json:"repo"`
 		Branch string `json:"branch"`
@@ -70,7 +74,7 @@ func (t FetchRefTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 	if err != nil {
 		return registry.Result{}, err
 	}
-	snap, err := t.fetchSnapshot(ctx, repo, args.Branch)
+	snap, err := t.fetchSnapshot(ctx, repo, args.Branch, rt)
 	if err != nil {
 		return registry.Result{}, err
 	}
@@ -86,6 +90,8 @@ type snapshot struct {
 }
 
 type SearchRefTool struct{ Base }
+
+func (SearchRefTool) Parallel() bool { return true }
 
 func (t SearchRefTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
@@ -191,7 +197,7 @@ func (t RepoSearchTool) Execute(ctx context.Context, raw json.RawMessage, rt reg
 	if err != nil {
 		return registry.Result{}, err
 	}
-	snap, err := t.fetchSnapshot(ctx, repo, args.Branch)
+	snap, err := t.fetchSnapshot(ctx, repo, args.Branch, rt)
 	if err != nil {
 		return registry.Result{}, err
 	}
@@ -221,6 +227,8 @@ func (t RepoSearchTool) Execute(ctx context.Context, raw json.RawMessage, rt reg
 }
 
 type ReadFileRefTool struct{ Base }
+
+func (ReadFileRefTool) Parallel() bool { return true }
 
 func (t ReadFileRefTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
@@ -327,7 +335,7 @@ func (t RepoReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt r
 	if err != nil {
 		return registry.Result{}, err
 	}
-	snap, err := t.fetchSnapshot(ctx, repo, args.Branch)
+	snap, err := t.fetchSnapshot(ctx, repo, args.Branch, rt)
 	if err != nil {
 		return registry.Result{}, err
 	}
@@ -339,6 +347,8 @@ func (t RepoReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt r
 }
 
 type LogTool struct{ Base }
+
+func (LogTool) Parallel() bool { return true }
 
 func (t LogTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
@@ -372,6 +382,8 @@ func (t LogTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Ru
 }
 
 type ShowTool struct{ Base }
+
+func (ShowTool) Parallel() bool { return true }
 
 func (t ShowTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
@@ -439,16 +451,28 @@ func (b Base) explicitRepo(path string) (string, error) {
 	return b.Paths.Resolve(path)
 }
 
-func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string) (snapshot, error) {
+func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string, rt registry.Runtime) (snapshot, error) {
+	branch := strings.TrimSpace(rawBranch)
+	cacheKey := "git-snapshot\x00" + repo + "\x00" + branch
+	if cached, ok := rt.Cache.Get(cacheKey); ok {
+		if snap, ok := cached.(snapshot); ok {
+			return snap, nil
+		}
+	}
 	if _, err := b.run(ctx, repo, "fetch", "--prune", "--no-write-fetch-head", "origin"); err != nil {
 		return snapshot{}, err
 	}
-	branch := strings.TrimSpace(rawBranch)
 	if branch == "" {
 		var err error
 		branch, err = b.defaultBranch(ctx, repo)
 		if err != nil {
 			return snapshot{}, err
+		}
+		cacheKey = "git-snapshot\x00" + repo + "\x00" + branch
+		if cached, ok := rt.Cache.Get(cacheKey); ok {
+			if snap, ok := cached.(snapshot); ok {
+				return snap, nil
+			}
 		}
 	}
 	if err := validateRefPart(branch); err != nil {
@@ -466,13 +490,18 @@ func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string) (snapsh
 	if err != nil {
 		return snapshot{}, err
 	}
-	return snapshot{
+	snap := snapshot{
 		Repo:      repoLabel(repo),
 		Branch:    branch,
 		BranchRef: ref,
 		Ref:       strings.TrimSpace(commit),
 		Commit:    strings.TrimSpace(short),
-	}, nil
+	}
+	rt.Cache.Set(cacheKey, snap)
+	if rawBranch == "" {
+		rt.Cache.Set("git-snapshot\x00"+repo+"\x00", snap)
+	}
+	return snap, nil
 }
 
 func (s snapshot) header() string {
