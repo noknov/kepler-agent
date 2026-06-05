@@ -29,7 +29,7 @@ func IsTemporaryOverload(err error) bool {
 
 func UserFacingError(err error) string {
 	if IsTemporaryOverload(err) {
-		return "模型服务现在比较繁忙，刚刚已经重试过但仍然没有成功。请稍后再试一次。"
+		return "The service is temporarily overloaded. I've already retried but it didn't go through — please try again in a moment."
 	}
 	return "Error: " + err.Error()
 }
