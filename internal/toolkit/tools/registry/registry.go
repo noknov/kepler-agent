@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/prompts"
@@ -14,6 +15,38 @@ type Runtime struct {
 	UserID   string
 	Channel  string
 	ThreadTS string
+	Cache    *RuntimeCache
+}
+
+type RuntimeCache struct {
+	mu     sync.Mutex
+	values map[string]any
+}
+
+func NewRuntimeCache() *RuntimeCache {
+	return &RuntimeCache{values: map[string]any{}}
+}
+
+func (c *RuntimeCache) Get(key string) (any, bool) {
+	if c == nil {
+		return nil, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	value, ok := c.values[key]
+	return value, ok
+}
+
+func (c *RuntimeCache) Set(key string, value any) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.values == nil {
+		c.values = map[string]any{}
+	}
+	c.values[key] = value
 }
 
 type Result struct {
@@ -24,6 +57,31 @@ type Result struct {
 type Tool interface {
 	Spec() llm.ToolSpec
 	Execute(ctx context.Context, args json.RawMessage, rt Runtime) (Result, error)
+}
+
+// RepeatableTool marks a side-effect-free tool whose results may change across
+// identical calls (e.g. git fetch, log queries, LLM delegates). The runner
+// skips duplicate-call detection for these tools.
+type RepeatableTool interface {
+	Repeatable() bool
+}
+
+type ParallelTool interface {
+	Parallel() bool
+}
+
+func IsRepeatable(tool Tool) bool {
+	if rt, ok := tool.(RepeatableTool); ok {
+		return rt.Repeatable()
+	}
+	return false
+}
+
+func CanRunInParallel(tool Tool) bool {
+	if pt, ok := tool.(ParallelTool); ok {
+		return pt.Parallel()
+	}
+	return false
 }
 
 type Registry struct {
@@ -62,6 +120,22 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 		return Result{}, fmt.Errorf("unknown tool %q", name)
 	}
 	return tool.Execute(ctx, args, rt)
+}
+
+func (r *Registry) IsRepeatable(name string) bool {
+	tool, ok := r.tools[name]
+	if !ok {
+		return false
+	}
+	return IsRepeatable(tool)
+}
+
+func (r *Registry) CanRunInParallel(name string) bool {
+	tool, ok := r.tools[name]
+	if !ok {
+		return false
+	}
+	return CanRunInParallel(tool)
 }
 
 func FunctionSpec(name, description string, parameters map[string]any) llm.ToolSpec {

@@ -20,6 +20,8 @@ type ReadFileTool struct {
 	Paths safety.WorkspacePolicy
 }
 
+func (ReadFileTool) Parallel() bool { return true }
+
 func (t ReadFileTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"code-read_file",
@@ -95,6 +97,8 @@ func (t ReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 type SearchTool struct {
 	Paths safety.WorkspacePolicy
 }
+
+func (SearchTool) Parallel() bool { return true }
 
 func (t SearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
