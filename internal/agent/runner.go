@@ -54,6 +54,7 @@ type Runner struct {
 	MaxContextChars int
 	StatusUpdate    StatusUpdater
 	OnToken         llm.StreamCallback
+	OnNarration     llm.StreamCallback
 }
 
 type Request struct {
@@ -137,6 +138,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			if sc, ok := r.LLM.(llm.StreamClient); ok {
 				guard := &streamGuard{downstream: r.OnToken}
 				resp, err = sc.ChatStream(ctx, llmReq, guard.Write)
+				guard.Flush()
 				if guard.suppressed {
 					useStream = false
 				}
@@ -191,9 +193,14 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			return Result{Generated: generated, Final: final, Streamed: useStream}, nil
 		}
 
-		// Text before a tool call is only a transient narration. Persisting it
-		// pollutes future turns and can amplify model loops, so keep only the
-		// structured tool calls in the conversation state.
+		// Stream any progress text the model emitted before tool calls to the
+		// user, then strip it from the conversation history to avoid polluting
+		// future turns or amplifying model loops.
+		if narration := strings.TrimSpace(assistantMsg.Content); narration != "" && r.OnNarration != nil {
+			if !llm.LooksLikeTextualToolCall(narration) {
+				r.OnNarration(narration + "\n\n")
+			}
+		}
 		assistantMsg.Content = ""
 		messages = append(messages, assistantMsg)
 		generated = append(generated, assistantMsg)
@@ -459,6 +466,23 @@ func (g *streamGuard) Write(delta string) {
 	}
 	g.buf.WriteString(delta)
 	if g.buf.Len() >= streamGuardThreshold {
+		if llm.LooksLikeTextualToolCall(g.buf.String()) {
+			g.suppressed = true
+			return
+		}
+		g.flushed = true
+		g.downstream(g.buf.String())
+		g.buf.Reset()
+	}
+}
+
+// Flush delivers any buffered content that hasn't been flushed yet.
+// Must be called after the stream ends to handle short responses.
+func (g *streamGuard) Flush() {
+	if g.suppressed || g.flushed {
+		return
+	}
+	if g.buf.Len() > 0 {
 		if llm.LooksLikeTextualToolCall(g.buf.String()) {
 			g.suppressed = true
 			return
