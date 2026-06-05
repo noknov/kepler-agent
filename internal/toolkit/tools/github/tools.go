@@ -349,3 +349,115 @@ func summarizeRuns(runs []workflowRun) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// PRDiffTool fetches a pull request's metadata and diff from GitHub API.
+type PRDiffTool struct {
+	Client Client
+}
+
+func (PRDiffTool) Parallel() bool { return true }
+
+func (t PRDiffTool) Spec() llm.ToolSpec {
+	return registry.FunctionSpec(
+		"github-pr_diff",
+		"Fetch a GitHub pull request's description, changed files, and unified diff. Use for code review when you have a PR URL or number. This works even if the source branch has been deleted.",
+		registry.ObjectSchema([]string{"pr"}, map[string]any{
+			"repository": map[string]any{"type": "string", "description": "GitHub repository in owner/repo form (e.g. ClareAI/whatsapp_inbox). Required."},
+			"pr":         map[string]any{"type": "integer", "description": "Pull request number."},
+		}),
+	)
+}
+
+func (t PRDiffTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	if !t.Client.enabled() {
+		return registry.Result{}, fmt.Errorf("GitHub is not configured: GITHUB_TOKEN is required")
+	}
+	var args struct {
+		Repository string `json:"repository"`
+		PR         int    `json:"pr"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return registry.Result{}, err
+	}
+	repository := strings.TrimSpace(args.Repository)
+	if repository == "" {
+		repository = t.Client.defaultRepository()
+	}
+	if repository == "" {
+		return registry.Result{}, fmt.Errorf("repository is required")
+	}
+	if args.PR <= 0 {
+		return registry.Result{}, fmt.Errorf("pr number is required")
+	}
+
+	owner, repo, err := splitRepository(repository)
+	if err != nil {
+		return registry.Result{}, err
+	}
+
+	// Fetch PR metadata
+	metaURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", t.Client.baseURL(), owner, repo, args.PR)
+	metaData, err := t.Client.do(ctx, http.MethodGet, metaURL, nil)
+	if err != nil {
+		return registry.Result{}, fmt.Errorf("fetch PR metadata: %w", err)
+	}
+	var prMeta struct {
+		Title   string `json:"title"`
+		Body    string `json:"body"`
+		State   string `json:"state"`
+		Merged  bool   `json:"merged"`
+		Commits int    `json:"commits"`
+		Head    struct {
+			Ref string `json:"ref"`
+			SHA string `json:"sha"`
+		} `json:"head"`
+		Base struct {
+			Ref string `json:"ref"`
+		} `json:"base"`
+	}
+	if err := json.Unmarshal(metaData, &prMeta); err != nil {
+		return registry.Result{}, fmt.Errorf("parse PR metadata: %w", err)
+	}
+
+	// Fetch diff
+	diffURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", t.Client.baseURL(), owner, repo, args.PR)
+	diffReq, err := http.NewRequestWithContext(ctx, http.MethodGet, diffURL, nil)
+	if err != nil {
+		return registry.Result{}, err
+	}
+	diffReq.Header.Set("Authorization", "Bearer "+t.Client.Token)
+	diffReq.Header.Set("Accept", "application/vnd.github.diff")
+	diffReq.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	diffResp, err := t.Client.httpClient().Do(diffReq)
+	if err != nil {
+		return registry.Result{}, fmt.Errorf("fetch PR diff: %w", err)
+	}
+	defer diffResp.Body.Close()
+	diffBody, err := io.ReadAll(io.LimitReader(diffResp.Body, 512<<10)) // 512KB max
+	if err != nil {
+		return registry.Result{}, fmt.Errorf("read PR diff: %w", err)
+	}
+	if diffResp.StatusCode >= 300 {
+		return registry.Result{}, fmt.Errorf("github diff status %d: %s", diffResp.StatusCode, string(diffBody))
+	}
+
+	diff := string(diffBody)
+	if len(diff) > 100000 {
+		diff = diff[:100000] + "\n\n... [diff truncated, showing first 100KB] ..."
+	}
+
+	// Build output
+	var out strings.Builder
+	fmt.Fprintf(&out, "PR #%d: %s\n", args.PR, prMeta.Title)
+	fmt.Fprintf(&out, "State: %s | Merged: %t | Commits: %d\n", prMeta.State, prMeta.Merged, prMeta.Commits)
+	fmt.Fprintf(&out, "Base: %s ← Head: %s (%s)\n", prMeta.Base.Ref, prMeta.Head.Ref, prMeta.Head.SHA[:min(7, len(prMeta.Head.SHA))])
+	if body := strings.TrimSpace(prMeta.Body); body != "" {
+		if len(body) > 2000 {
+			body = body[:2000] + "..."
+		}
+		fmt.Fprintf(&out, "\nDescription:\n%s\n", body)
+	}
+	fmt.Fprintf(&out, "\nDiff:\n%s", diff)
+
+	return registry.Result{Content: out.String()}, nil
+}
