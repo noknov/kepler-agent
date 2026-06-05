@@ -12,6 +12,8 @@ func TestLooksLikeTextualToolCall(t *testing.T) {
 		{"<tool_call>\n<function=code-search>\n</function>\n</tool_call>", true},
 		{"I'll call <function=git-log> next.", true},
 		{"normal markdown with `code` only", false},
+		{`<tool_invocation name="repo-search" arguments={"query": "foo", "repo": "bar"} />`, true},
+		{`<tool_invocation name="x" arguments={} /><tool_invocation name="y" arguments={} />`, true},
 	}
 	for _, tc := range cases {
 		if got := LooksLikeTextualToolCall(tc.content); got != tc.want {
