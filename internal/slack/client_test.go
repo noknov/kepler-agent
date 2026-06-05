@@ -1,6 +1,9 @@
 package slack
 
 import (
+	"context"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -66,4 +69,48 @@ func TestFormatThreadContextSkipsBotReplies(t *testing.T) {
 			t.Fatalf("formatThreadContext() = %q, want %q", got, want)
 		}
 	}
+}
+
+func TestDoRetriesRetryableHTTPStatus(t *testing.T) {
+	attempts := 0
+	client := &Client{httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return &http.Response{
+				StatusCode: http.StatusBadGateway,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("temporary")),
+				Request:    r,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+			Request:    r,
+		}, nil
+	})}}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://slack.test/api", strings.NewReader(`{"x":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		OK bool `json:"ok"`
+	}
+	if err := client.do(req, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !out.OK {
+		t.Fatal("response was not decoded")
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }

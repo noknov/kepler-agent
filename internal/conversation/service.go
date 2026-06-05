@@ -164,14 +164,12 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		err := s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
 			{"type": "task_update", "id": taskID, "title": status, "status": "in_progress"},
 		})
-		if flusher != nil {
-			flusher.RecordError(err)
-		} else if err != nil {
+		if err != nil {
 			s.recordDeliveryError(req, streamTS, err)
 		}
 	}
 
-	threadContext := s.Messenger.ThreadContext(ctx, req.Channel, req.ThreadTS, 30)
+	threadContext := s.Messenger.ThreadContext(ctx, req.Channel, req.ThreadTS, threadContextLimit(s.Memory.MaxMessages))
 	messages := s.Memory.BuildWithParts(
 		s.Prompt.SystemPrompt(),
 		threadContext,
@@ -218,7 +216,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 				{"type": "markdown_text", "text": errMsg},
 			})
 			if flusher != nil {
-				flusher.RecordError(appendErr)
+				flusher.RecordContentError(appendErr)
 			}
 			if appendErr != nil {
 				s.recordDeliveryError(req, streamTS, appendErr)
@@ -250,8 +248,8 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			appendErr := s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
 				{"type": "task_update", "id": taskID, "title": agent.WaitingTitle(locale), "status": "complete"},
 			})
-			if flusher != nil {
-				flusher.RecordError(appendErr)
+			if appendErr != nil {
+				s.recordDeliveryError(req, streamTS, appendErr)
 			}
 		}
 		ts, postErr := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, "<@"+req.UserID+"> "+pendingText)
@@ -277,7 +275,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 					{"type": "markdown_text", "text": finalText},
 				})
 				if flusher != nil {
-					flusher.RecordError(appendErr)
+					flusher.RecordContentError(appendErr)
 				}
 			} else if s.Format != nil {
 				finalText = s.Format(finalText)
@@ -434,6 +432,19 @@ func trimTurns(turns []memory.Turn, max int) []memory.Turn {
 	return append([]memory.Turn(nil), turns[start:]...)
 }
 
+func threadContextLimit(maxMessages int) int {
+	if maxMessages <= 0 {
+		return 12
+	}
+	if maxMessages < 4 {
+		return 4
+	}
+	if maxMessages > 16 {
+		return 16
+	}
+	return maxMessages
+}
+
 func (s *Service) trimAndSummarize(turns []memory.Turn, existing string) ([]memory.Turn, string) {
 	trimmed := trimTurns(turns, s.maxTurns)
 	removed := len(turns) - len(trimmed)
@@ -517,16 +528,16 @@ func (e *errorWithID) Unwrap() error {
 }
 
 type streamFlusher struct {
-	ctx       context.Context
-	messenger Messenger
-	channel   string
-	streamTS  string
-	taskID    string
-	locale    string
-	buf       strings.Builder
-	lastFlush time.Time
-	started   bool
-	err       error
+	ctx        context.Context
+	messenger  Messenger
+	channel    string
+	streamTS   string
+	taskID     string
+	locale     string
+	buf        strings.Builder
+	lastFlush  time.Time
+	started    bool
+	contentErr error
 }
 
 func (f *streamFlusher) Write(delta string) {
@@ -535,7 +546,9 @@ func (f *streamFlusher) Write(delta string) {
 		err := f.messenger.AppendStream(f.ctx, f.channel, f.streamTS, []map[string]any{
 			{"type": "task_update", "id": f.taskID, "title": agent.CompleteTitle(f.locale), "status": "complete"},
 		})
-		f.RecordError(err)
+		if err != nil {
+			log.Printf("stream status update failed channel=%s target=%s err=%v", f.channel, f.streamTS, err)
+		}
 	}
 	f.buf.WriteString(delta)
 	if time.Since(f.lastFlush) > 80*time.Millisecond || f.buf.Len() > 80 {
@@ -553,12 +566,12 @@ func (f *streamFlusher) Flush() {
 	err := f.messenger.AppendStream(f.ctx, f.channel, f.streamTS, []map[string]any{
 		{"type": "markdown_text", "text": text},
 	})
-	f.RecordError(err)
+	f.RecordContentError(err)
 }
 
-func (f *streamFlusher) RecordError(err error) {
-	if err != nil && f.err == nil {
-		f.err = err
+func (f *streamFlusher) RecordContentError(err error) {
+	if err != nil && f.contentErr == nil {
+		f.contentErr = err
 	}
 }
 
@@ -566,5 +579,5 @@ func (f *streamFlusher) Err() error {
 	if f == nil {
 		return nil
 	}
-	return f.err
+	return f.contentErr
 }
