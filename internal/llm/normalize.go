@@ -27,6 +27,9 @@ func LooksLikeTextualToolCall(content string) bool {
 	if strings.Contains(s, "<tool_name>") || strings.Contains(s, "<parameters>") {
 		return true
 	}
+	if strings.Contains(s, "<tool_invocation") || strings.Contains(s, "</tool_invocation>") {
+		return true
+	}
 	if strings.Contains(s, "```") && strings.Contains(s, "tool_call") {
 		return true
 	}
