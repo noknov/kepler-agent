@@ -17,6 +17,8 @@ type JSONAnalyzeTool struct {
 	Slack FileSearcher
 }
 
+func (JSONAnalyzeTool) Parallel() bool { return true }
+
 func (t JSONAnalyzeTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"slack-json_analyze",

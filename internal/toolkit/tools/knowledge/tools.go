@@ -18,6 +18,8 @@ type RunbookSearchTool struct {
 	Dir string
 }
 
+func (RunbookSearchTool) Parallel() bool { return true }
+
 func (t RunbookSearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"knowledge-runbook_search",

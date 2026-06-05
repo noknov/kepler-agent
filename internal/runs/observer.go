@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/wati/oncall-agent/internal/llm"
@@ -17,6 +18,7 @@ type Observer struct {
 	Store    Store
 	Run      *Run
 	Rates    observability.CostRates
+	mu       sync.Mutex
 	stepSeq  int
 	started  time.Time
 	finished bool
@@ -42,6 +44,8 @@ func NewObserver(store Store, run Run, rates observability.CostRates) *Observer 
 }
 
 func (o *Observer) LLMCall(usage llm.Usage, d time.Duration, err error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	cost := o.Rates.EstimateUSD(usage)
 	o.Run.Usage.PromptTokens += usage.PromptTokens
 	o.Run.Usage.CompletionTokens += usage.CompletionTokens
@@ -50,7 +54,7 @@ func (o *Observer) LLMCall(usage llm.Usage, d time.Duration, err error) {
 	o.Run.Usage.CacheCreationInputTokens += usage.CacheCreationInputTokens
 	o.Run.Usage.ReasoningTokens += usage.ReasoningTokens
 	o.Run.EstimatedCostUSD += cost
-	o.appendStep(Step{
+	o.appendStepLocked(Step{
 		Type:             "llm",
 		Name:             o.Run.Model,
 		DurationMS:       d.Milliseconds(),
@@ -65,7 +69,9 @@ func (o *Observer) ToolCall(name string, d time.Duration, err error) {
 }
 
 func (o *Observer) ToolCallWithMetadata(name string, args json.RawMessage, d time.Duration, err error) {
-	o.appendStep(Step{
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.appendStepLocked(Step{
 		Type:       "tool",
 		Name:       name,
 		DurationMS: d.Milliseconds(),
@@ -78,11 +84,15 @@ func (o *Observer) RecordErrorStack(stack string) {
 	if o == nil || o.Run == nil || stack == "" {
 		return
 	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	o.Run.ErrorStack = stack
-	o.save(context.Background())
+	o.saveLocked(context.Background())
 }
 
 func (o *Observer) Finish(status, errorID string, err error, final string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	if o.finished {
 		return
 	}
@@ -96,29 +106,37 @@ func (o *Observer) Finish(status, errorID string, err error, final string) {
 	o.Run.EndedAt = time.Now().UTC()
 	o.Run.DurationMS = o.Run.EndedAt.Sub(o.Run.StartedAt).Milliseconds()
 	o.Run.Quality = scoreRun(*o.Run)
-	o.save(context.Background())
+	o.saveLocked(context.Background())
 }
 
 func (o *Observer) LinkSlackMessage(channel, messageTS string) {
 	if o == nil || o.Run == nil || messageTS == "" {
 		return
 	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	o.Run.SlackChannel = channel
 	o.Run.SlackMessageTS = messageTS
-	o.save(context.Background())
+	o.saveLocked(context.Background())
 }
 
-func (o *Observer) appendStep(step Step) {
+func (o *Observer) appendStepLocked(step Step) {
 	o.stepSeq++
 	step.ID = o.Run.ID + "-step-" + time.Now().UTC().Format("150405.000000000")
 	step.SpanID = NewSpanID()
 	step.ParentSpanID = o.Run.TraceID
 	step.StartedAt = time.Now().UTC().Add(-time.Duration(step.DurationMS) * time.Millisecond)
 	o.Run.Steps = append(o.Run.Steps, step)
-	o.save(context.Background())
+	o.saveLocked(context.Background())
 }
 
 func (o *Observer) save(ctx context.Context) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.saveLocked(ctx)
+}
+
+func (o *Observer) saveLocked(ctx context.Context) {
 	if o.Store == nil || o.Run == nil {
 		return
 	}

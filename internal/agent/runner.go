@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wati/oncall-agent/internal/llm"
@@ -84,6 +85,9 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	maxSteps := r.MaxSteps
 	if maxSteps <= 0 {
 		maxSteps = 12
+	}
+	if req.Runtime.Cache == nil {
+		req.Runtime.Cache = registry.NewRuntimeCache()
 	}
 	messages := append([]llm.Message(nil), req.Messages...)
 	var generated []llm.Message
@@ -190,64 +194,140 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		messages = append(messages, assistantMsg)
 		generated = append(generated, assistantMsg)
 
-		for _, call := range assistantMsg.ToolCalls {
-			name := call.Function.Name
-			signature := toolCallSignature(call)
-			seenToolCalls[signature]++
-			if seenToolCalls[signature] > 2 {
-				content := fmt.Sprintf("[tool error] duplicate %s call skipped. Use the existing tool result already in the conversation, call a different tool with different arguments, or give the final answer now.", name)
-				toolMessage := llm.Message{
-					Role:       "tool",
-					ToolCallID: call.ID,
-					Name:       name,
-					Content:    content,
-				}
-				messages = append(messages, toolMessage)
-				generated = append(generated, toolMessage)
-				if r.Observer != nil {
-					r.Observer.ToolCall(name, 0, fmt.Errorf("%w: %s", ErrRepeatedToolCall, name))
-				}
-				continue
-			}
-			if r.StatusUpdate != nil {
-				r.StatusUpdate(ToolHint(name, req.Locale))
-			}
-			args := json.RawMessage(call.Function.Arguments)
-			start := time.Now()
-			result, err := r.Tools.Execute(ctx, name, args, req.Runtime)
-			if r.Observer != nil {
-				duration := time.Since(start)
-				if observer, ok := r.Observer.(MetadataObserver); ok {
-					observer.ToolCallWithMetadata(name, args, duration, err)
-				} else {
-					r.Observer.ToolCall(name, duration, err)
-				}
-			}
-			content := ""
-			if err != nil {
-				content = "[tool error] " + err.Error()
-			} else {
-				content = r.format(name, r.sanitize(result.Content))
-			}
-			toolMessage := llm.Message{
-				Role:       "tool",
-				ToolCallID: call.ID,
-				Name:       name,
-				Content:    content,
-			}
-			messages = append(messages, toolMessage)
-			generated = append(generated, toolMessage)
-
-			if err == nil && result.WaitForUser {
+		toolResults := r.executeToolCalls(ctx, assistantMsg.ToolCalls, seenToolCalls, req)
+		for _, tr := range toolResults {
+			messages = append(messages, tr.message)
+			generated = append(generated, tr.message)
+			if tr.waitForUser {
 				return Result{
 					Generated:       generated,
 					Pending:         true,
-					PendingQuestion: content,
+					PendingQuestion: tr.message.Content,
 				}, nil
 			}
 		}
 	}
 	return Result{Generated: generated}, ErrMaxToolSteps
+}
+
+type toolResult struct {
+	message     llm.Message
+	waitForUser bool
+	name        string
+	args        json.RawMessage
+	duration    time.Duration
+	err         error
+}
+
+func (r Runner) executeToolCalls(ctx context.Context, calls []llm.ToolCall, seenToolCalls map[string]int, req Request) []toolResult {
+	type indexedCall struct {
+		index int
+		call  llm.ToolCall
+	}
+
+	results := make([]toolResult, len(calls))
+	var toRun []indexedCall
+
+	for i, call := range calls {
+		name := call.Function.Name
+		signature := toolCallSignature(call)
+		seenToolCalls[signature]++
+		if seenToolCalls[signature] > 2 && !r.Tools.IsRepeatable(name) {
+			err := fmt.Errorf("%w: %s", ErrRepeatedToolCall, name)
+			content := fmt.Sprintf("[tool error] duplicate %s call skipped. Use the existing tool result already in the conversation, call a different tool with different arguments, or give the final answer now.", name)
+			results[i] = toolResult{
+				message: llm.Message{Role: "tool", ToolCallID: call.ID, Name: name, Content: content},
+				name:    name,
+				err:     err,
+			}
+			continue
+		}
+		toRun = append(toRun, indexedCall{index: i, call: call})
+	}
+
+	if len(toRun) > 1 {
+		for _, ic := range toRun {
+			if !r.Tools.CanRunInParallel(ic.call.Function.Name) {
+				for _, ic := range toRun {
+					results[ic.index] = r.executeSingleTool(ctx, ic.call, req, true)
+				}
+				r.observeToolResults(results)
+				return results
+			}
+		}
+	}
+
+	if len(toRun) == 1 {
+		ic := toRun[0]
+		results[ic.index] = r.executeSingleTool(ctx, ic.call, req, true)
+		r.observeToolResults(results)
+		return results
+	}
+	if len(toRun) == 0 {
+		r.observeToolResults(results)
+		return results
+	}
+
+	if r.StatusUpdate != nil {
+		names := make([]string, 0, len(toRun))
+		for _, ic := range toRun {
+			names = append(names, ic.call.Function.Name)
+		}
+		r.StatusUpdate(ToolHint(strings.Join(names, ", "), req.Locale))
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(len(toRun))
+	for _, ic := range toRun {
+		go func(ic indexedCall) {
+			defer wg.Done()
+			results[ic.index] = r.executeSingleTool(ctx, ic.call, req, false)
+		}(ic)
+	}
+	wg.Wait()
+	r.observeToolResults(results)
+	return results
+}
+
+func (r Runner) executeSingleTool(ctx context.Context, call llm.ToolCall, req Request, emitStatus bool) toolResult {
+	name := call.Function.Name
+	if emitStatus && r.StatusUpdate != nil {
+		r.StatusUpdate(ToolHint(name, req.Locale))
+	}
+	args := json.RawMessage(call.Function.Arguments)
+	start := time.Now()
+	result, err := r.Tools.Execute(ctx, name, args, req.Runtime)
+	duration := time.Since(start)
+	content := ""
+	if err != nil {
+		content = "[tool error] " + err.Error()
+	} else {
+		content = r.format(name, r.sanitize(result.Content))
+	}
+	return toolResult{
+		message:     llm.Message{Role: "tool", ToolCallID: call.ID, Name: name, Content: content},
+		waitForUser: err == nil && result.WaitForUser,
+		name:        name,
+		args:        args,
+		duration:    duration,
+		err:         err,
+	}
+}
+
+func (r Runner) observeToolResults(results []toolResult) {
+	if r.Observer == nil {
+		return
+	}
+	for _, result := range results {
+		if result.name == "" {
+			continue
+		}
+		if observer, ok := r.Observer.(MetadataObserver); ok {
+			observer.ToolCallWithMetadata(result.name, result.args, result.duration, result.err)
+		} else {
+			r.Observer.ToolCall(result.name, result.duration, result.err)
+		}
+	}
 }
 
 func toolCallSignature(call llm.ToolCall) string {
@@ -301,7 +381,7 @@ func repeatedUnits(text string) []string {
 	return units
 }
 
-const defaultMaxContextChars = 120_000
+const defaultMaxContextChars = 80_000
 const toolResultCleared = "[previous result cleared to save context — key findings should already be incorporated in later messages]"
 
 // compressContext replaces old tool result bodies with a short stub when total

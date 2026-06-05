@@ -59,7 +59,7 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *obs
 			Format:    mem,
 			Sanitize:  redactor,
 			Observer:  recorder,
-			MaxSteps:  128,
+			MaxSteps:  cfg.Tools.AgentMaxSteps,
 		},
 		Memory:    mem,
 		Prompt:    promptPolicy,

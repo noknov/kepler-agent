@@ -26,6 +26,10 @@ type LogsTool struct {
 	Timeout          time.Duration
 }
 
+func (LogsTool) Repeatable() bool { return true }
+
+func (LogsTool) Parallel() bool { return true }
+
 func (t LogsTool) Spec() llm.ToolSpec {
 	description := "Query GCP Cloud Logging with gcloud logging read. Read-only. Project, namespace, service, and filter are per-call inputs; configured GCP values are only defaults/hints, not fixed environments."
 	if hint := t.defaultHint(); hint != "" {
