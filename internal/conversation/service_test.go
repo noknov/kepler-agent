@@ -295,6 +295,45 @@ func TestStreamModeFallsBackWhenAppendFails(t *testing.T) {
 	}
 }
 
+func TestStreamStatusFailureDoesNotFallbackWhenFinalAnswerIsDelivered(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	messenger := &fakeMessenger{streamTS: "200.000", statusErr: errors.New("status failed")}
+	svc := NewService(
+		store,
+		messenger,
+		agent.Runner{LLM: &replyLLM{content: "final answer"}, MaxSteps: 1},
+		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+
+	svc.HandleMention(ctx, Request{
+		EventID:  "E6",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "hi",
+	})
+
+	if len(messenger.posts) != 0 {
+		t.Fatalf("status-only stream failure should not create fallback posts: %#v", messenger.posts)
+	}
+	foundFinal := false
+	for _, chunk := range messenger.chunks {
+		if chunk["type"] == "markdown_text" && chunk["text"] == "final answer" {
+			foundFinal = true
+		}
+	}
+	if !foundFinal {
+		t.Fatalf("final answer was not delivered in stream: %#v", messenger.chunks)
+	}
+}
+
 func (l *replyLLM) Chat(_ llm.Context, _ llm.Request) (llm.Response, error) {
 	content := l.content
 	if content == "" {
@@ -314,6 +353,7 @@ type fakeMessenger struct {
 	posts     []string
 	streamTS  string
 	appendErr error
+	statusErr error
 	chunks    []map[string]any
 }
 
@@ -331,7 +371,17 @@ func (m *fakeMessenger) StartStream(context.Context, string, string, string) (st
 
 func (m *fakeMessenger) AppendStream(_ context.Context, _, _ string, chunks []map[string]any) error {
 	m.chunks = append(m.chunks, chunks...)
+	if m.statusErr != nil && isOnlyTaskUpdate(chunks) {
+		return m.statusErr
+	}
 	return m.appendErr
+}
+
+func isOnlyTaskUpdate(chunks []map[string]any) bool {
+	if len(chunks) != 1 {
+		return false
+	}
+	return chunks[0]["type"] == "task_update"
 }
 
 func (m *fakeMessenger) StopStream(_ context.Context, _, _ string) error {

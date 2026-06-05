@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -396,17 +397,105 @@ func (c *Client) get(ctx context.Context, method string, values url.Values, out 
 }
 
 func (c *Client) do(req *http.Request, out any) error {
-	resp, err := c.httpClient.Do(req)
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		attemptReq, err := cloneRequestForAttempt(req)
+		if err != nil {
+			return err
+		}
+		resp, err := c.httpClient.Do(attemptReq)
+		if err != nil {
+			lastErr = err
+			if !shouldRetrySlack(req.Context(), attempt, 0, err) {
+				return err
+			}
+			if err := sleepSlackRetry(req.Context(), attempt, 0); err != nil {
+				return err
+			}
+			continue
+		}
+		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return readErr
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			lastErr = slackHTTPError{StatusCode: resp.StatusCode, Body: string(data)}
+			if !shouldRetrySlack(req.Context(), attempt, resp.StatusCode, nil) {
+				return lastErr
+			}
+			if err := sleepSlackRetry(req.Context(), attempt, retryAfter(resp)); err != nil {
+				return err
+			}
+			continue
+		}
+		return json.NewDecoder(bytes.NewReader(data)).Decode(out)
+	}
+	return lastErr
+}
+
+type slackHTTPError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e slackHTTPError) Error() string {
+	return fmt.Sprintf("slack http status %d: %s", e.StatusCode, e.Body)
+}
+
+func cloneRequestForAttempt(req *http.Request) (*http.Request, error) {
+	clone := req.Clone(req.Context())
+	if req.Body == nil || req.GetBody == nil {
+		return clone, nil
+	}
+	body, err := req.GetBody()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	clone.Body = body
+	return clone, nil
+}
+
+func shouldRetrySlack(ctx context.Context, attempt, status int, err error) bool {
+	if attempt >= 2 || ctx.Err() != nil {
+		return false
+	}
 	if err != nil {
-		return err
+		return true
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("slack http status %d: %s", resp.StatusCode, string(data))
+	switch status {
+	case 429, 500, 502, 503, 504:
+		return true
+	default:
+		return false
 	}
-	return json.NewDecoder(bytes.NewReader(data)).Decode(out)
+}
+
+func sleepSlackRetry(ctx context.Context, attempt int, retryAfter time.Duration) error {
+	delay := retryAfter
+	if delay <= 0 {
+		delay = time.Duration(attempt+1) * 250 * time.Millisecond
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func retryAfter(resp *http.Response) time.Duration {
+	raw := strings.TrimSpace(resp.Header.Get("Retry-After"))
+	if raw == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(raw); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if when, err := http.ParseTime(raw); err == nil {
+		return time.Until(when)
+	}
+	return 0
 }
