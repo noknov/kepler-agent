@@ -143,39 +143,50 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 
 	const taskID = "thinking"
 	locale := agent.DetectLocale(req.Text)
-	isDM := strings.HasPrefix(req.Channel, "D")
+	_ = strings.HasPrefix(req.Channel, "D") // isDM — reserved for future per-channel behavior
 
 	runner := s.Runner
 	if runObserver != nil {
 		runner.Observer = multiObserver{s.Metrics, runObserver}
 	}
-	var flusher *streamFlusher
-	if useStream {
-		flusher = &streamFlusher{
-			ctx: ctx, messenger: s.Messenger,
-			channel: req.Channel, streamTS: streamTS,
-			taskID: taskID, locale: locale,
-		}
-		if isDM {
-			runner.OnNarration = func(delta string) {
-				_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
-					{"type": "markdown_text", "text": delta},
-				})
-			}
-		} else {
-			runner.OnToken = flusher.Write
-		}
-	}
-	runner.StatusUpdate = func(status string) {
+	var answerStream *dmStreamWriter
+	appendProgress := func(chunks []map[string]any) {
 		if !useStream {
 			return
 		}
-		err := s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
+		err := s.Messenger.AppendStream(ctx, req.Channel, streamTS, chunks)
+		if err == nil {
+			return
+		}
+		if !strings.Contains(err.Error(), "not_in_streaming_state") {
+			s.recordDeliveryError(req, streamTS, err)
+			return
+		}
+		newTS, startErr := s.Messenger.StartStream(ctx, req.Channel, req.ThreadTS, req.UserID)
+		if startErr != nil {
+			s.recordDeliveryError(req, streamTS, startErr)
+			return
+		}
+		streamTS = newTS
+		_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, chunks)
+	}
+	if useStream {
+		runner.OnNarration = func(delta string) {
+			appendProgress([]map[string]any{
+				{"type": "markdown_text", "text": delta},
+			})
+		}
+		answerStream = &dmStreamWriter{
+			ctx: ctx, messenger: s.Messenger,
+			channel: req.Channel, threadTS: req.ThreadTS,
+			userID: req.UserID,
+		}
+		runner.OnToken = answerStream.Write
+	}
+	runner.StatusUpdate = func(status string) {
+		appendProgress([]map[string]any{
 			{"type": "task_update", "id": taskID, "title": status, "status": "in_progress"},
 		})
-		if err != nil {
-			s.recordDeliveryError(req, streamTS, err)
-		}
 	}
 
 	threadContext := s.Messenger.ThreadContext(ctx, req.Channel, req.ThreadTS, 0)
@@ -196,8 +207,8 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		},
 		Locale: locale,
 	})
-	if flusher != nil {
-		flusher.Flush()
+	if answerStream != nil {
+		answerStream.Flush()
 	}
 
 	sess.UserID = req.UserID
@@ -224,9 +235,6 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 				{"type": "task_update", "id": taskID, "title": agent.FailedTitle(locale), "status": "error"},
 				{"type": "markdown_text", "text": errMsg},
 			})
-			if flusher != nil {
-				flusher.RecordContentError(appendErr)
-			}
 			if appendErr != nil {
 				s.recordDeliveryError(req, streamTS, appendErr)
 				s.postFallback(ctx, req, errMsg, false)
@@ -274,49 +282,22 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if runObserver != nil {
 			runObserver.Finish("completed", "", nil, finalText)
 		}
-		if useStream && isDM {
-			// DM mode: mark the progress stream as complete, then post
-			// the final answer as a separate new message.
-			_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
-				{"type": "task_update", "id": taskID, "title": agent.CompleteTitle(locale), "status": "complete"},
-			})
-			if s.Format != nil {
-				finalText = s.Format(finalText)
-			}
-			ts, postErr := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
-			if postErr != nil {
-				s.recordDeliveryError(req, "", postErr)
-			}
+		// Mark the progress stream as complete.
+		appendProgress([]map[string]any{
+			{"type": "task_update", "id": taskID, "title": agent.CompleteTitle(locale), "status": "complete"},
+		})
+		if useStream && answerStream != nil && answerStream.streamTS != "" && !answerStream.Failed() {
+			answerStream.Flush()
+			_ = s.Messenger.StopStream(ctx, req.Channel, answerStream.streamTS)
 			if runObserver != nil {
-				runObserver.LinkSlackMessage(req.Channel, ts)
-			}
-		} else if useStream {
-			// Channel mode: deliver everything in the same stream message.
-			if !result.Streamed {
-				if s.Format != nil {
-					finalText = s.Format(finalText)
-				}
-				appendErr := s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
-					{"type": "task_update", "id": taskID, "title": agent.CompleteTitle(locale), "status": "complete"},
-					{"type": "markdown_text", "text": finalText},
-				})
-				if flusher != nil {
-					flusher.RecordContentError(appendErr)
-				}
-			} else if s.Format != nil {
-				finalText = s.Format(finalText)
-			}
-			if flusher != nil && flusher.Err() != nil {
-				s.recordDeliveryError(req, streamTS, flusher.Err())
-				if ts, ok := s.postFallback(ctx, req, finalText, true); ok && runObserver != nil {
-					runObserver.LinkSlackMessage(req.Channel, ts)
-				}
-			} else if runObserver != nil {
-				runObserver.LinkSlackMessage(req.Channel, streamTS)
+				runObserver.LinkSlackMessage(req.Channel, answerStream.streamTS)
 			}
 		} else {
 			if s.Format != nil {
 				finalText = s.Format(finalText)
+			}
+			if answerStream.Failed() {
+				finalText = "_streaming delivery failed, here is the answer:_\n\n" + finalText
 			}
 			ts, postErr := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
 			if postErr != nil {
@@ -593,4 +574,55 @@ func (f *streamFlusher) Err() error {
 		return nil
 	}
 	return f.contentErr
+}
+
+// dmStreamWriter lazily opens a new stream message for the final answer.
+type dmStreamWriter struct {
+	ctx       context.Context
+	messenger Messenger
+	channel   string
+	threadTS  string
+	userID    string
+	streamTS  string
+	buf       strings.Builder
+	lastFlush time.Time
+	err       error
+}
+
+func (w *dmStreamWriter) Write(delta string) {
+	if w.err != nil {
+		return
+	}
+	if w.streamTS == "" {
+		ts, err := w.messenger.StartStream(w.ctx, w.channel, w.threadTS, w.userID)
+		if err != nil {
+			log.Printf("answer stream start failed: %v", err)
+			w.err = err
+			return
+		}
+		w.streamTS = ts
+	}
+	w.buf.WriteString(delta)
+	if time.Since(w.lastFlush) > 80*time.Millisecond || w.buf.Len() > 80 {
+		w.Flush()
+	}
+}
+
+func (w *dmStreamWriter) Flush() {
+	if w.buf.Len() == 0 || w.streamTS == "" {
+		return
+	}
+	text := w.buf.String()
+	w.buf.Reset()
+	w.lastFlush = time.Now()
+	err := w.messenger.AppendStream(w.ctx, w.channel, w.streamTS, []map[string]any{
+		{"type": "markdown_text", "text": text},
+	})
+	if err != nil && w.err == nil {
+		w.err = err
+	}
+}
+
+func (w *dmStreamWriter) Failed() bool {
+	return w != nil && w.err != nil
 }
