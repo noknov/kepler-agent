@@ -284,7 +284,92 @@ func (f *fakeClient) Chat(_ llm.Context, req llm.Request) (llm.Response, error) 
 	return resp, nil
 }
 
+func TestRepeatableToolAllowsDuplicateCalls(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{Message: repeatableToolCallMessage("tool_1", `{"x":"1"}`)},
+		{Message: repeatableToolCallMessage("tool_2", `{"x":"1"}`)},
+		{Message: repeatableToolCallMessage("tool_3", `{"x":"1"}`)},
+		{Message: llm.Message{Role: "assistant", Content: "final"}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeRepeatableTool{})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 5}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "final" {
+		t.Fatalf("Final = %q, want final", result.Final)
+	}
+	for _, msg := range result.Generated {
+		if msg.Role == "tool" && strings.Contains(msg.Content, "duplicate") {
+			t.Fatal("repeatable tool should never be skipped as duplicate")
+		}
+	}
+}
+
+func repeatableToolCallMessage(id, args string) llm.Message {
+	return llm.Message{
+		Role: "assistant",
+		ToolCalls: []llm.ToolCall{{
+			ID:   id,
+			Type: "function",
+			Function: llm.ToolFunction{
+				Name:      "fetch",
+				Arguments: args,
+			},
+		}},
+	}
+}
+
+func TestParallelToolExecution(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{Message: llm.Message{
+			Role: "assistant",
+			ToolCalls: []llm.ToolCall{
+				{ID: "t1", Type: "function", Function: llm.ToolFunction{Name: "echo", Arguments: `{"text":"a"}`}},
+				{ID: "t2", Type: "function", Function: llm.ToolFunction{Name: "echo", Arguments: `{"text":"b"}`}},
+				{ID: "t3", Type: "function", Function: llm.ToolFunction{Name: "echo", Arguments: `{"text":"c"}`}},
+			},
+		}},
+		{Message: llm.Message{Role: "assistant", Content: "done"}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 4}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "done" {
+		t.Fatalf("Final = %q, want done", result.Final)
+	}
+	toolResults := 0
+	for _, msg := range result.Generated {
+		if msg.Role == "tool" {
+			toolResults++
+		}
+	}
+	if toolResults != 3 {
+		t.Fatalf("expected 3 tool results, got %d", toolResults)
+	}
+	// Verify order is preserved
+	idx := 0
+	for _, msg := range result.Generated {
+		if msg.Role != "tool" {
+			continue
+		}
+		wantIDs := []string{"t1", "t2", "t3"}
+		if msg.ToolCallID != wantIDs[idx] {
+			t.Fatalf("tool result %d: ToolCallID = %q, want %q", idx, msg.ToolCallID, wantIDs[idx])
+		}
+		idx++
+	}
+}
+
 type fakeTool struct{}
+
+func (fakeTool) Parallel() bool { return true }
 
 func (fakeTool) Spec() llm.ToolSpec {
 	return llm.ToolSpec{
@@ -298,5 +383,24 @@ func (fakeTool) Spec() llm.ToolSpec {
 }
 
 func (fakeTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	return registry.Result{Content: string(args)}, nil
+}
+
+type fakeRepeatableTool struct{}
+
+func (fakeRepeatableTool) Repeatable() bool { return true }
+
+func (fakeRepeatableTool) Spec() llm.ToolSpec {
+	return llm.ToolSpec{
+		Type: "function",
+		Function: llm.ToolSpecFunction{
+			Name:        "fetch",
+			Description: "fetch data",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}
+}
+
+func (fakeRepeatableTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
 	return registry.Result{Content: string(args)}, nil
 }

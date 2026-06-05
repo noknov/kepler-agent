@@ -13,6 +13,8 @@ import (
 
 type IncidentBriefTool struct{}
 
+func (IncidentBriefTool) Parallel() bool { return true }
+
 func (IncidentBriefTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"diagnostics-incident_brief",
@@ -27,6 +29,8 @@ func (IncidentBriefTool) Spec() llm.ToolSpec {
 }
 
 type TimelineTool struct{}
+
+func (TimelineTool) Parallel() bool { return true }
 
 func (TimelineTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
@@ -102,6 +106,8 @@ func (TimelineTool) Execute(ctx context.Context, raw json.RawMessage, _ registry
 }
 
 type EvidenceBoardTool struct{}
+
+func (EvidenceBoardTool) Parallel() bool { return true }
 
 func (EvidenceBoardTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(

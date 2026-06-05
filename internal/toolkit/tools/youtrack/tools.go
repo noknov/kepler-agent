@@ -33,6 +33,8 @@ func (c Client) httpClient() *http.Client {
 
 type GetIssueTool struct{ Client Client }
 
+func (GetIssueTool) Parallel() bool { return true }
+
 func (t GetIssueTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"youtrack-get_issue",
@@ -63,6 +65,8 @@ func (t GetIssueTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 }
 
 type SearchTool struct{ Client Client }
+
+func (SearchTool) Parallel() bool { return true }
 
 func (t SearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(

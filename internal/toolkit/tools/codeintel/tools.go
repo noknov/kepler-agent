@@ -15,6 +15,8 @@ type SymbolsTool struct {
 	Manager engine.Manager
 }
 
+func (SymbolsTool) Parallel() bool { return true }
+
 func (t SymbolsTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"code-symbols",
@@ -59,6 +61,8 @@ type DefinitionTool struct {
 	Manager engine.Manager
 }
 
+func (DefinitionTool) Parallel() bool { return true }
+
 func (t DefinitionTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"code-definition",
@@ -83,6 +87,8 @@ type ReferencesTool struct {
 	Manager engine.Manager
 }
 
+func (ReferencesTool) Parallel() bool { return true }
+
 func (t ReferencesTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"code-references",
@@ -106,6 +112,8 @@ func (t ReferencesTool) Execute(ctx context.Context, raw json.RawMessage, _ regi
 type DiagnosticsTool struct {
 	Manager engine.Manager
 }
+
+func (DiagnosticsTool) Parallel() bool { return true }
 
 func (t DiagnosticsTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
