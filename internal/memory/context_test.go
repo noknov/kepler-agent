@@ -1,6 +1,9 @@
 package memory
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestFilterPersistentTurnsRemovesToolErrors(t *testing.T) {
 	turns := []Turn{
@@ -61,6 +64,20 @@ func TestBuildWithPartsKeepsUntrustedContextOutOfSystemRole(t *testing.T) {
 		if msg.Role == "system" {
 			t.Fatalf("non-policy context should not be system role: %#v", msg)
 		}
+	}
+}
+
+func TestTruncatePreservesHeadAndTail(t *testing.T) {
+	text := strings.Repeat("A", 600) + " important middle " + strings.Repeat("Z", 600)
+	got := truncate(text, 400)
+	if !strings.Contains(got, strings.Repeat("A", 100)) {
+		t.Fatalf("truncate should preserve head, got %q", got)
+	}
+	if !strings.Contains(got, strings.Repeat("Z", 100)) {
+		t.Fatalf("truncate should preserve tail, got %q", got)
+	}
+	if !strings.Contains(got, "middle truncated") {
+		t.Fatalf("truncate should mark omitted middle, got %q", got)
 	}
 }
 
