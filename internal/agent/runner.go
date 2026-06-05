@@ -135,7 +135,11 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		var err error
 		if useStream {
 			if sc, ok := r.LLM.(llm.StreamClient); ok {
-				resp, err = sc.ChatStream(ctx, llmReq, r.OnToken)
+				guard := &streamGuard{downstream: r.OnToken}
+				resp, err = sc.ChatStream(ctx, llmReq, guard.Write)
+				if guard.suppressed {
+					useStream = false
+				}
 			} else {
 				resp, err = r.LLM.Chat(ctx, llmReq)
 				useStream = false
@@ -432,4 +436,35 @@ func (r Runner) sanitize(text string) string {
 		return text
 	}
 	return r.Sanitize.Sanitize(text)
+}
+
+// streamGuard buffers initial tokens and suppresses downstream delivery if
+// the content looks like a textual tool call (e.g. <tool_invocation ...>).
+type streamGuard struct {
+	downstream llm.StreamCallback
+	buf        strings.Builder
+	flushed    bool
+	suppressed bool
+}
+
+const streamGuardThreshold = 120
+
+func (g *streamGuard) Write(delta string) {
+	if g.suppressed {
+		return
+	}
+	if g.flushed {
+		g.downstream(delta)
+		return
+	}
+	g.buf.WriteString(delta)
+	if g.buf.Len() >= streamGuardThreshold {
+		if llm.LooksLikeTextualToolCall(g.buf.String()) {
+			g.suppressed = true
+			return
+		}
+		g.flushed = true
+		g.downstream(g.buf.String())
+		g.buf.Reset()
+	}
 }
