@@ -146,14 +146,14 @@ func Load() (Config, error) {
 		},
 		Sessions: SessionConfig{
 			DataDir:         env("SESSION_DATA_DIR", filepath.Join(wd, ".data", "sessions")),
-			MaxMessages:     envInt("SESSION_MAX_MESSAGES", 16),
-			MaxToolChars:    envInt("SESSION_MAX_TOOL_CHARS", 12000),
-			MaxThreadChars:  envInt("SESSION_MAX_THREAD_CHARS", 4000),
+			MaxMessages:     envInt("SESSION_MAX_MESSAGES", 24),
+			MaxToolChars:    envInt("SESSION_MAX_TOOL_CHARS", 20000),
+			MaxThreadChars:  envInt("SESSION_MAX_THREAD_CHARS", 6000),
 			MaxSummaryChars: envInt("SESSION_MAX_SUMMARY_CHARS", 2500),
 		},
 		Tools: ToolConfig{
 			CommandTimeout:      envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
-			AgentMaxSteps:       envInt("AGENT_MAX_STEPS", 64),
+			AgentMaxSteps:       envInt("AGENT_MAX_STEPS", 128),
 			GCloudPath:          env("GCLOUD_PATH", "gcloud"),
 			GCPDefaultProject:   os.Getenv("GCP_PROJECT"),
 			GCPDefaultNamespace: env("GCP_NAMESPACE", ""),
