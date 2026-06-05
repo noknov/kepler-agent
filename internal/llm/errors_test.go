@@ -21,8 +21,8 @@ func TestTemporaryOverloadErrors(t *testing.T) {
 
 func TestUserFacingTemporaryOverloadError(t *testing.T) {
 	msg := UserFacingError(ProviderError{Provider: "anthropic messages", StatusCode: 503, Body: "busy"})
-	if !strings.Contains(msg, "模型服务") {
-		t.Fatalf("UserFacingError() = %q, want friendly Chinese overload message", msg)
+	if !strings.Contains(msg, "temporarily overloaded") {
+		t.Fatalf("UserFacingError() = %q, want friendly overload message", msg)
 	}
 	if strings.Contains(msg, "status=503") {
 		t.Fatalf("UserFacingError() leaked provider status: %q", msg)

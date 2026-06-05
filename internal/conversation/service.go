@@ -143,6 +143,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 
 	const taskID = "thinking"
 	locale := agent.DetectLocale(req.Text)
+	isDM := strings.HasPrefix(req.Channel, "D")
 
 	runner := s.Runner
 	if runObserver != nil {
@@ -155,7 +156,15 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			channel: req.Channel, streamTS: streamTS,
 			taskID: taskID, locale: locale,
 		}
-		runner.OnToken = flusher.Write
+		if isDM {
+			runner.OnNarration = func(delta string) {
+				_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
+					{"type": "markdown_text", "text": delta},
+				})
+			}
+		} else {
+			runner.OnToken = flusher.Write
+		}
 	}
 	runner.StatusUpdate = func(status string) {
 		if !useStream {
@@ -265,7 +274,24 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if runObserver != nil {
 			runObserver.Finish("completed", "", nil, finalText)
 		}
-		if useStream {
+		if useStream && isDM {
+			// DM mode: mark the progress stream as complete, then post
+			// the final answer as a separate new message.
+			_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, []map[string]any{
+				{"type": "task_update", "id": taskID, "title": agent.CompleteTitle(locale), "status": "complete"},
+			})
+			if s.Format != nil {
+				finalText = s.Format(finalText)
+			}
+			ts, postErr := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
+			if postErr != nil {
+				s.recordDeliveryError(req, "", postErr)
+			}
+			if runObserver != nil {
+				runObserver.LinkSlackMessage(req.Channel, ts)
+			}
+		} else if useStream {
+			// Channel mode: deliver everything in the same stream message.
 			if !result.Streamed {
 				if s.Format != nil {
 					finalText = s.Format(finalText)
