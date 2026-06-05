@@ -129,7 +129,7 @@ func TestNewErrorID(t *testing.T) {
 	}
 }
 
-func TestStreamModeAnswerInStream(t *testing.T) {
+func TestStreamModeAnswerAsNewMessage(t *testing.T) {
 	ctx := context.Background()
 	store, err := session.NewFileStore(t.TempDir())
 	if err != nil {
@@ -155,27 +155,25 @@ func TestStreamModeAnswerInStream(t *testing.T) {
 		Text:     "who is the author?",
 	})
 
-	// Final answer should be in the stream, not a separate PostMessage
+	// Final answer should be posted as a separate message (fallback when LLM doesn't stream)
+	found := false
 	for _, p := range messenger.posts {
 		if p == "Author: <@U085SRJFCLX>" {
-			t.Fatal("stream mode should NOT post final answer as separate message")
+			found = true
 		}
 	}
-	foundText := false
+	if !found {
+		t.Fatalf("final answer should be posted as separate message, posts=%v", messenger.posts)
+	}
+	// Progress stream should be marked complete
 	foundComplete := false
 	for _, chunk := range messenger.chunks {
-		if chunk["type"] == "markdown_text" && chunk["text"] == "Author: <@U085SRJFCLX>" {
-			foundText = true
-		}
-		if chunk["type"] == "task_update" && chunk["status"] == "complete" && chunk["title"] == "Done" {
+		if chunk["type"] == "task_update" && chunk["status"] == "complete" {
 			foundComplete = true
 		}
 	}
-	if !foundText {
-		t.Fatalf("stream should contain final answer as markdown_text: %#v", messenger.chunks)
-	}
 	if !foundComplete {
-		t.Fatalf("stream should mark task complete: %#v", messenger.chunks)
+		t.Fatalf("progress stream should be marked complete: %#v", messenger.chunks)
 	}
 }
 
@@ -295,7 +293,7 @@ func TestStreamModeFallsBackWhenAppendFails(t *testing.T) {
 	}
 }
 
-func TestStreamStatusFailureDoesNotFallbackWhenFinalAnswerIsDelivered(t *testing.T) {
+func TestStreamStatusFailureDoesNotAffectFinalAnswer(t *testing.T) {
 	ctx := context.Background()
 	store, err := session.NewFileStore(t.TempDir())
 	if err != nil {
@@ -320,17 +318,21 @@ func TestStreamStatusFailureDoesNotFallbackWhenFinalAnswerIsDelivered(t *testing
 		Text:     "hi",
 	})
 
-	if len(messenger.posts) != 0 {
-		t.Fatalf("status-only stream failure should not create fallback posts: %#v", messenger.posts)
-	}
-	foundFinal := false
-	for _, chunk := range messenger.chunks {
-		if chunk["type"] == "markdown_text" && chunk["text"] == "final answer" {
-			foundFinal = true
+	// Non-streaming LLM posts final answer as separate message regardless of status errors
+	found := false
+	for _, p := range messenger.posts {
+		if p == "final answer" {
+			found = true
 		}
 	}
-	if !foundFinal {
-		t.Fatalf("final answer was not delivered in stream: %#v", messenger.chunks)
+	if !found {
+		t.Fatalf("final answer should be posted, posts=%v", messenger.posts)
+	}
+	// Should NOT have the streaming-failed prefix
+	for _, p := range messenger.posts {
+		if strings.Contains(p, "streaming delivery failed") {
+			t.Fatal("status-only failure should not trigger delivery-failed prefix")
+		}
 	}
 }
 
