@@ -169,7 +169,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}
 	}
 
-	threadContext := s.Messenger.ThreadContext(ctx, req.Channel, req.ThreadTS, 30)
+	threadContext := s.Messenger.ThreadContext(ctx, req.Channel, req.ThreadTS, 0)
 	messages := s.Memory.BuildWithParts(
 		s.Prompt.SystemPrompt(),
 		threadContext,
