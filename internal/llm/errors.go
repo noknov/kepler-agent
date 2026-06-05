@@ -24,7 +24,21 @@ func (e ProviderError) Retryable() bool {
 
 func IsTemporaryOverload(err error) bool {
 	var providerErr ProviderError
-	return errors.As(err, &providerErr) && providerErr.Retryable()
+	if errors.As(err, &providerErr) && providerErr.Retryable() {
+		return true
+	}
+	return isNetworkTimeout(err)
+}
+
+func isNetworkTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr interface{ Timeout() bool }
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func UserFacingError(err error) string {
