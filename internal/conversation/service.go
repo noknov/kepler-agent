@@ -169,7 +169,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}
 	}
 
-	threadContext := s.Messenger.ThreadContext(ctx, req.Channel, req.ThreadTS, threadContextLimit(s.Memory.MaxMessages))
+	threadContext := s.Messenger.ThreadContext(ctx, req.Channel, req.ThreadTS, 30)
 	messages := s.Memory.BuildWithParts(
 		s.Prompt.SystemPrompt(),
 		threadContext,
@@ -430,19 +430,6 @@ func trimTurns(turns []memory.Turn, max int) []memory.Turn {
 		return nil
 	}
 	return append([]memory.Turn(nil), turns[start:]...)
-}
-
-func threadContextLimit(maxMessages int) int {
-	if maxMessages <= 0 {
-		return 12
-	}
-	if maxMessages < 4 {
-		return 4
-	}
-	if maxMessages > 16 {
-		return 16
-	}
-	return maxMessages
 }
 
 func (s *Service) trimAndSummarize(turns []memory.Turn, existing string) ([]memory.Turn, string) {

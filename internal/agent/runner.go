@@ -381,7 +381,7 @@ func repeatedUnits(text string) []string {
 	return units
 }
 
-const defaultMaxContextChars = 80_000
+const defaultMaxContextChars = 120_000
 const toolResultCleared = "[previous result cleared to save context — key findings should already be incorporated in later messages]"
 
 // compressContext replaces old tool result bodies with a short stub when total
