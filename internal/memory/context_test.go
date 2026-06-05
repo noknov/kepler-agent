@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -78,6 +79,55 @@ func TestTruncatePreservesHeadAndTail(t *testing.T) {
 	}
 	if !strings.Contains(got, "middle truncated") {
 		t.Fatalf("truncate should mark omitted middle, got %q", got)
+	}
+}
+
+func TestCompressThreadContextPreservesEdgesAndRelevantMiddle(t *testing.T) {
+	lines := []string{
+		"U1: original question about checkout failures",
+		"U2: initial hypothesis",
+		"U3: deployment branch mt-main",
+	}
+	for i := 0; i < 30; i++ {
+		lines = append(lines, "U4: routine update number "+strconv.Itoa(i)+" with low signal")
+	}
+	lines = append(lines,
+		"U5: critical error status=500 api/v2/messenger failed with stack trace abc123",
+		"U6: another routine comment",
+		"U7: final decision should move business plan check later",
+		"U8: latest clarification from user",
+	)
+
+	got := CompressThreadContext(strings.Join(lines, "\n"), 1200)
+	for _, want := range []string{
+		"original question",
+		"critical error status=500",
+		"final decision",
+		"latest clarification",
+		"Full Slack thread was read",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("compressed thread missing %q:\n%s", want, got)
+		}
+	}
+	if len(got) > 1200 {
+		t.Fatalf("compressed length = %d, want <= 1200\n%s", len(got), got)
+	}
+}
+
+func TestBuildWithPartsUsesThreadCompression(t *testing.T) {
+	builder := Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 900, MaxSummaryChars: 1000}
+	thread := "U1: first report\n" + strings.Repeat("U2: filler update with repeated low signal details and timestamps\n", 40) + "U3: latest user clarification"
+	messages := builder.BuildWithParts("system", thread, "what happened?", nil, "", nil)
+	if len(messages) < 2 {
+		t.Fatalf("messages = %#v", messages)
+	}
+	threadMessage := messages[1].Content
+	if !strings.Contains(threadMessage, "Thread context compressed") {
+		t.Fatalf("thread context was not compressed: %q", threadMessage)
+	}
+	if !strings.Contains(threadMessage, "first report") || !strings.Contains(threadMessage, "latest user clarification") {
+		t.Fatalf("compressed thread lost edge context: %q", threadMessage)
 	}
 }
 
