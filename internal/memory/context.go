@@ -196,8 +196,14 @@ func truncate(s string, max int) string {
 	if max <= 0 || len(s) <= max {
 		return s
 	}
-	trimmed := strings.TrimSpace(s[:max])
-	return trimmed + "\n...[truncated]"
+	marker := "\n...[middle truncated to fit context budget]...\n"
+	if max <= len(marker)+200 {
+		return strings.TrimSpace(s[:max]) + "\n...[truncated]"
+	}
+	keep := max - len(marker)
+	head := keep / 2
+	tail := keep - head
+	return strings.TrimSpace(s[:head]) + marker + strings.TrimSpace(s[len(s)-tail:])
 }
 
 func isTransientToolErrorTurn(turn Turn) bool {

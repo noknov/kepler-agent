@@ -272,25 +272,44 @@ func mergeFile(primary, fallback File) File {
 }
 
 func (c *Client) Replies(ctx context.Context, channel, threadTS string, limit int) ([]Message, error) {
-	if limit <= 0 {
-		limit = 20
-	}
+	all := limit <= 0
 	values := url.Values{}
 	values.Set("channel", channel)
 	values.Set("ts", threadTS)
-	values.Set("limit", fmt.Sprintf("%d", limit))
-	var out struct {
-		OK       bool      `json:"ok"`
-		Error    string    `json:"error,omitempty"`
-		Messages []Message `json:"messages,omitempty"`
+	pageLimit := limit
+	if all || pageLimit > 200 {
+		pageLimit = 200
 	}
-	if err := c.get(ctx, "conversations.replies", values, &out); err != nil {
-		return nil, err
+	if pageLimit <= 0 {
+		pageLimit = 200
 	}
-	if !out.OK {
-		return nil, fmt.Errorf("slack conversations.replies failed: %s", out.Error)
+	values.Set("limit", fmt.Sprintf("%d", pageLimit))
+	var replies []Message
+	for {
+		var out struct {
+			OK               bool      `json:"ok"`
+			Error            string    `json:"error,omitempty"`
+			Messages         []Message `json:"messages,omitempty"`
+			ResponseMetadata struct {
+				NextCursor string `json:"next_cursor,omitempty"`
+			} `json:"response_metadata,omitempty"`
+		}
+		if err := c.get(ctx, "conversations.replies", values, &out); err != nil {
+			return nil, err
+		}
+		if !out.OK {
+			return nil, fmt.Errorf("slack conversations.replies failed: %s", out.Error)
+		}
+		replies = append(replies, out.Messages...)
+		if !all && len(replies) >= limit {
+			return replies[:limit], nil
+		}
+		cursor := strings.TrimSpace(out.ResponseMetadata.NextCursor)
+		if cursor == "" {
+			return replies, nil
+		}
+		values.Set("cursor", cursor)
 	}
-	return out.Messages, nil
 }
 
 func (c *Client) ThreadContext(ctx context.Context, channel, threadTS string, limit int) string {

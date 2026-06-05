@@ -109,6 +109,41 @@ func TestDoRetriesRetryableHTTPStatus(t *testing.T) {
 	}
 }
 
+func TestRepliesLimitZeroReadsAllPages(t *testing.T) {
+	attempts := 0
+	client := &Client{httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		if got := r.URL.Query().Get("limit"); got != "200" {
+			t.Fatalf("limit = %q, want 200", got)
+		}
+		if attempts == 1 {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"ok":true,"messages":[{"user":"U1","text":"one"}],"response_metadata":{"next_cursor":"next"}}`)),
+				Request:    r,
+			}, nil
+		}
+		if got := r.URL.Query().Get("cursor"); got != "next" {
+			t.Fatalf("cursor = %q, want next", got)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"ok":true,"messages":[{"user":"U2","text":"two"}]}`)),
+			Request:    r,
+		}, nil
+	})}}
+
+	replies, err := client.Replies(context.Background(), "C1", "100.000", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replies) != 2 || replies[0].Text != "one" || replies[1].Text != "two" {
+		t.Fatalf("Replies() = %#v, want both pages", replies)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {

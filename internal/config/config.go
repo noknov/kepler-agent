@@ -153,7 +153,7 @@ func Load() (Config, error) {
 		},
 		Tools: ToolConfig{
 			CommandTimeout:      envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
-			AgentMaxSteps:       envInt("AGENT_MAX_STEPS", 128),
+			AgentMaxSteps:       envInt("AGENT_MAX_STEPS", 64),
 			GCloudPath:          env("GCLOUD_PATH", "gcloud"),
 			GCPDefaultProject:   os.Getenv("GCP_PROJECT"),
 			GCPDefaultNamespace: env("GCP_NAMESPACE", ""),
