@@ -148,6 +148,7 @@ func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm
 	}
 	tools.Register(githubTools.DispatchWorkflowTool{Client: githubClient})
 	tools.Register(githubTools.WorkflowRunsTool{Client: githubClient})
+	tools.Register(githubTools.PRDiffTool{Client: githubClient})
 	tools.Register(knowledgeTools.RunbookSearchTool{})
 	tools.Register(slacktool.AskUserTool{Slack: slackClient})
 	tools.Register(slacktool.FileSearchTool{Slack: slackClient})
