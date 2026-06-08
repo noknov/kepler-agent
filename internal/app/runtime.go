@@ -23,6 +23,7 @@ import (
 	notionTools "github.com/wati/oncall-agent/internal/toolkit/tools/notion"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/slacktool"
+	webSearchTools "github.com/wati/oncall-agent/internal/toolkit/tools/websearch"
 	youtrackTools "github.com/wati/oncall-agent/internal/toolkit/tools/youtrack"
 )
 
@@ -149,6 +150,7 @@ func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm
 	tools.Register(githubTools.DispatchWorkflowTool{Client: githubClient})
 	tools.Register(githubTools.WorkflowRunsTool{Client: githubClient})
 	tools.Register(githubTools.PRDiffTool{Client: githubClient})
+	tools.Register(webSearchTools.ReadPageTool{Client: webSearchTools.Client{}})
 	tools.Register(knowledgeTools.RunbookSearchTool{})
 	tools.Register(slacktool.AskUserTool{Slack: slackClient})
 	tools.Register(slacktool.FileSearchTool{Slack: slackClient})

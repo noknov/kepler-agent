@@ -277,6 +277,38 @@ func TestLoadRejectsOpenAICodingEndpointWithoutExplicitOptIn(t *testing.T) {
 	}
 }
 
+func TestLoadWebSearchConfig(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":             "xoxb-test",
+		"SLACK_SIGNING_SECRET":        "secret",
+		"ALLOWED_SLACK_USERS":         "U123",
+		"LLM_PROVIDER":                "openai",
+		"OPENAI_API_KEY":              "openai-token",
+		"WEB_SEARCH_PROVIDER":         "serpapi",
+		"WEB_SEARCH_SERPAPI_KEY":      "serp-key",
+		"WEB_SEARCH_SERPAPI_BASE_URL": "https://serpapi.example/search.json",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Tools.WebSearchProvider != "serpapi" || cfg.Tools.WebSearchSerpAPIKey != "serp-key" {
+		t.Fatalf("web search config = %#v", cfg.Tools)
+	}
+	if cfg.Tools.WebSearchSerpAPIURL != "https://serpapi.example/search.json" {
+		t.Fatalf("WebSearchSerpAPIURL = %q", cfg.Tools.WebSearchSerpAPIURL)
+	}
+}
+
 func writeEnvFile(t *testing.T, dir string, values map[string]string) {
 	t.Helper()
 	lines := make([]string, 0, len(values))
@@ -333,6 +365,11 @@ func resetConfigEnv(t *testing.T) {
 		"GITHUB_API_BASE_URL",
 		"GITHUB_DEFAULT_OWNER",
 		"GITHUB_DEFAULT_REPO",
+		"WEB_SEARCH_PROVIDER",
+		"WEB_SEARCH_GOOGLE_API_KEY",
+		"WEB_SEARCH_GOOGLE_CX",
+		"WEB_SEARCH_SERPAPI_KEY",
+		"WEB_SEARCH_SERPAPI_BASE_URL",
 	}
 	for _, key := range keys {
 		t.Setenv(key, "")
