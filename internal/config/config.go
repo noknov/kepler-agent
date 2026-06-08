@@ -77,6 +77,11 @@ type ToolConfig struct {
 	GitHubAPIBaseURL    string
 	GitHubDefaultOwner  string
 	GitHubDefaultRepo   string
+	WebSearchProvider   string
+	WebSearchGoogleKey  string
+	WebSearchGoogleCX   string
+	WebSearchSerpAPIKey string
+	WebSearchSerpAPIURL string
 }
 
 type ObservingConfig struct {
@@ -169,6 +174,11 @@ func Load() (Config, error) {
 			GitHubAPIBaseURL:    trimRightSlash(env("GITHUB_API_BASE_URL", "https://api.github.com")),
 			GitHubDefaultOwner:  os.Getenv("GITHUB_DEFAULT_OWNER"),
 			GitHubDefaultRepo:   os.Getenv("GITHUB_DEFAULT_REPO"),
+			WebSearchProvider:   env("WEB_SEARCH_PROVIDER", "google_cse"),
+			WebSearchGoogleKey:  os.Getenv("WEB_SEARCH_GOOGLE_API_KEY"),
+			WebSearchGoogleCX:   os.Getenv("WEB_SEARCH_GOOGLE_CX"),
+			WebSearchSerpAPIKey: os.Getenv("WEB_SEARCH_SERPAPI_KEY"),
+			WebSearchSerpAPIURL: trimRightSlash(env("WEB_SEARCH_SERPAPI_BASE_URL", "https://serpapi.com/search.json")),
 		},
 		Observing: ObservingConfig{
 			LogLevel:                 env("LOG_LEVEL", "info"),
