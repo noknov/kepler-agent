@@ -40,15 +40,18 @@ func (s *Server) homeView(userID string) map[string]any {
 		currentModel = v.(string)
 	}
 
+	models := s.cfg.LLM.AvailableModels
+	infoBlock := fieldsBlock(
+		field("*Access*\n"+statusEmoji+" "+statusText),
+		field("*Model*\n`"+currentModel+"`"),
+	)
+	if len(models) > 1 {
+		infoBlock["accessory"] = modelSelectMenu(models, currentModel)
+	}
+
 	blocks := []map[string]any{
 		headerBlock("Channel-X Copilot Agent"),
-		fieldsBlock(
-			field("*Access*\n"+statusEmoji+" "+statusText),
-			field("*Model*\n`"+currentModel+"`"),
-		),
-	}
-	if models := s.cfg.LLM.AvailableModels; len(models) > 1 {
-		blocks = append(blocks, actionsBlock(modelSelectMenu(models, currentModel)))
+		infoBlock,
 	}
 	blocks = append(blocks,
 		dividerBlock(),
@@ -98,13 +101,6 @@ func field(text string) map[string]any {
 	return map[string]any{
 		"type": "mrkdwn",
 		"text": text,
-	}
-}
-
-func actionsBlock(elements ...map[string]any) map[string]any {
-	return map[string]any{
-		"type":     "actions",
-		"elements": elements,
 	}
 }
 
