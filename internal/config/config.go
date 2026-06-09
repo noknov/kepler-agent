@@ -36,6 +36,7 @@ type LLMConfig struct {
 	BaseURL         string
 	APIKey          string
 	Model           string
+	AvailableModels []string
 	Protocol        string
 	AnthropicFlavor string
 	Thinking        string
@@ -120,6 +121,7 @@ func Load() (Config, error) {
 		anthropicFlavor = inferAnthropicFlavor(llmBaseURL)
 	}
 	llmModel := providerModel(llmProvider)
+	llmAvailableModels := availableModels(llmModel)
 	llmThinking := providerThinking(llmProvider)
 	if llmProvider == "mimo" && providerThinking(llmProvider) == "" {
 		llmThinking = "disabled"
@@ -138,6 +140,7 @@ func Load() (Config, error) {
 			BaseURL:         trimRightSlash(llmBaseURL),
 			APIKey:          providerAPIKey(llmProvider),
 			Model:           llmModel,
+			AvailableModels: llmAvailableModels,
 			Protocol:        llmProtocol,
 			AnthropicFlavor: anthropicFlavor,
 			Thinking:        llmThinking,
@@ -310,6 +313,29 @@ func providerModel(provider string) string {
 	default:
 		return env("OPENAI_MODEL", "gpt-4o-mini")
 	}
+}
+
+func availableModels(defaultModel string) []string {
+	raw := strings.TrimSpace(os.Getenv("AVAILABLE_MODELS"))
+	if raw == "" {
+		return []string{defaultModel}
+	}
+	seen := map[string]bool{}
+	var models []string
+	for _, m := range strings.Split(raw, ",") {
+		m = strings.TrimSpace(m)
+		if m != "" && !seen[m] {
+			seen[m] = true
+			models = append(models, m)
+		}
+	}
+	if len(models) == 0 {
+		return []string{defaultModel}
+	}
+	if !seen[defaultModel] {
+		models = append([]string{defaultModel}, models...)
+	}
+	return models
 }
 
 func providerAPIKey(provider string) string {

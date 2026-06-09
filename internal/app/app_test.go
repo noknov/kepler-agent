@@ -219,20 +219,53 @@ func TestAuthorizeObservabilityRejectsForwardedUnauthenticated(t *testing.T) {
 	}
 }
 
-func TestHomeViewIncludesProviderDetails(t *testing.T) {
+func TestHomeViewIncludesModelAndAccess(t *testing.T) {
 	server := &Server{cfg: config.Config{LLM: config.LLMConfig{
-		Provider:        "mimo",
-		BaseURL:         "https://token-plan-cn.xiaomimimo.com/anthropic",
 		Model:           "mimo-v2.5",
-		Protocol:        "anthropic",
-		AnthropicFlavor: "claude-code",
+		AvailableModels: []string{"mimo-v2.5"},
 	}}}
 	view := server.homeView("U1")
 	text := flattenBlockText(view)
-	for _, want := range []string{"*Provider*", "mimo", "*Base URL*", "token-plan-cn.xiaomimimo.com", "*Protocol*", "anthropic", "*Anthropic flavor*", "claude-code"} {
+	for _, want := range []string{"*Access*", "*Model*", "mimo-v2.5"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("home view missing %q in %q", want, text)
 		}
+	}
+}
+
+func TestHomeViewShowsModelDropdownWhenMultipleModels(t *testing.T) {
+	server := &Server{cfg: config.Config{LLM: config.LLMConfig{
+		Model:           "mimo-v2.5",
+		AvailableModels: []string{"mimo-v2.5", "mimo-v2.5-pro"},
+	}}}
+	view := server.homeView("U1")
+	blocks, _ := view["blocks"].([]map[string]any)
+	found := false
+	for _, block := range blocks {
+		if block["type"] == "actions" {
+			elements, _ := block["elements"].([]map[string]any)
+			for _, el := range elements {
+				if el["action_id"] == "select_model" {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected model select dropdown when multiple models available")
+	}
+}
+
+func TestHomeViewReflectsUserModelPreference(t *testing.T) {
+	server := &Server{cfg: config.Config{LLM: config.LLMConfig{
+		Model:           "mimo-v2.5",
+		AvailableModels: []string{"mimo-v2.5", "mimo-v2.5-pro"},
+	}}}
+	server.modelPrefs.Store("U1", "mimo-v2.5-pro")
+	view := server.homeView("U1")
+	text := flattenBlockText(view)
+	if !strings.Contains(text, "mimo-v2.5-pro") {
+		t.Fatalf("home view should show user's preferred model, got %q", text)
 	}
 }
 

@@ -44,9 +44,10 @@ type Service struct {
 	Metrics     *observability.Recorder
 	Format      TextFormatter
 	RunStore    runs.Store
-	RunProvider string
-	RunModel    string
-	CostRates   observability.CostRates
+	RunProvider   string
+	RunModel      string
+	ModelOverride func(userID string) string
+	CostRates     observability.CostRates
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
@@ -174,6 +175,11 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}()
 
 	runner := s.Runner
+	if s.ModelOverride != nil {
+		if m := s.ModelOverride(req.UserID); m != "" {
+			runner.Model = m
+		}
+	}
 	if runObserver != nil {
 		runner.Observer = multiObserver{s.Metrics, runObserver}
 	}
@@ -369,6 +375,12 @@ func (s *Service) newRunObserver(sessionID string, req Request, startedAt time.T
 	if s.RunStore == nil {
 		return nil
 	}
+	model := s.RunModel
+	if s.ModelOverride != nil {
+		if m := s.ModelOverride(req.UserID); m != "" {
+			model = m
+		}
+	}
 	return runs.NewObserver(s.RunStore, runs.Run{
 		ID:        runs.NewID(),
 		SessionID: sessionID,
@@ -377,7 +389,7 @@ func (s *Service) newRunObserver(sessionID string, req Request, startedAt time.T
 		Channel:   req.Channel,
 		ThreadTS:  req.ThreadTS,
 		Provider:  s.RunProvider,
-		Model:     s.RunModel,
+		Model:     model,
 		Status:    "running",
 		StartedAt: startedAt.UTC(),
 	}, s.CostRates)

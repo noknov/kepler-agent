@@ -11,8 +11,10 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wati/oncall-agent/internal/config"
@@ -43,14 +45,15 @@ func Run(ctx context.Context) error {
 }
 
 type Server struct {
-	cfg      config.Config
-	slack    *slack.Client
-	access   safety.AccessPolicy
-	conv     *conversation.Service
-	prompt   safety.PromptPolicy
-	metrics  *observability.Recorder
-	runStore *runs.FileStore
-	mux      *http.ServeMux
+	cfg        config.Config
+	slack      *slack.Client
+	access     safety.AccessPolicy
+	conv       *conversation.Service
+	prompt     safety.PromptPolicy
+	metrics    *observability.Recorder
+	runStore   *runs.FileStore
+	mux        *http.ServeMux
+	modelPrefs sync.Map
 }
 
 func NewServer(cfg config.Config) (*Server, error) {
@@ -95,6 +98,12 @@ func NewServer(cfg config.Config) (*Server, error) {
 		runStore: runStore,
 		mux:      http.NewServeMux(),
 	}
+	conv.ModelOverride = func(userID string) string {
+		if v, ok := s.modelPrefs.Load(userID); ok {
+			return v.(string)
+		}
+		return ""
+	}
 	s.routes(runtime.Tools)
 	return s, nil
 }
@@ -108,6 +117,7 @@ func (s *Server) routes(tools *registry.Registry) {
 		_, _ = w.Write([]byte("ok"))
 	})
 	s.mux.HandleFunc("/slack/events", s.handleSlackEvents)
+	s.mux.HandleFunc("/slack/interactions", s.handleSlackInteractions)
 	log.Printf("oncall-agent configured, tools=%s", strings.Join(tools.Names(), ", "))
 }
 
@@ -170,6 +180,84 @@ func (s *Server) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	go s.handleEvent(context.Background(), envelope.EventID, envelope.Event)
+}
+
+func (s *Server) handleSlackInteractions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
+	if err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	rawBody := string(bodyBytes)
+	if err := slack.VerifySignature(
+		s.cfg.Slack.SigningSecret,
+		r.Header.Get("X-Slack-Request-Timestamp"),
+		rawBody,
+		r.Header.Get("X-Slack-Signature"),
+		time.Now(),
+	); err != nil {
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return
+	}
+	body := extractFormPayload(rawBody)
+	if body == "" {
+		http.Error(w, "missing payload", http.StatusBadRequest)
+		return
+	}
+
+	var payload struct {
+		Type string `json:"type"`
+		User struct {
+			ID string `json:"id"`
+		} `json:"user"`
+		Actions []struct {
+			ActionID       string `json:"action_id"`
+			SelectedOption struct {
+				Value string `json:"value"`
+			} `json:"selected_option"`
+		} `json:"actions"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+
+	if payload.Type == "block_actions" {
+		for _, action := range payload.Actions {
+			if action.ActionID == "select_model" && action.SelectedOption.Value != "" {
+				s.handleModelSelect(payload.User.ID, action.SelectedOption.Value)
+			}
+		}
+	}
+}
+
+func (s *Server) handleModelSelect(userID, model string) {
+	allowed := false
+	for _, m := range s.cfg.LLM.AvailableModels {
+		if m == model {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return
+	}
+	if model == s.cfg.LLM.Model {
+		s.modelPrefs.Delete(userID)
+	} else {
+		s.modelPrefs.Store(userID, model)
+	}
+	go func() {
+		if err := s.slack.PublishHome(context.Background(), userID, s.homeView(userID)); err != nil {
+			log.Printf("publish home after model select failed: %v", err)
+		}
+	}()
 }
 
 func (s *Server) handleEvent(ctx context.Context, eventID string, ev slack.Event) {
@@ -629,6 +717,14 @@ func normalizedImageMIME(file slack.File) string {
 	default:
 		return ""
 	}
+}
+
+func extractFormPayload(body string) string {
+	values, err := url.ParseQuery(body)
+	if err != nil {
+		return ""
+	}
+	return values.Get("payload")
 }
 
 func firstNonEmpty(values ...string) string {
