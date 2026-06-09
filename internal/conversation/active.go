@@ -190,7 +190,7 @@ func interruptedMessage(locale string) string {
 
 func steeringAppliedMessage(locale string) string {
 	if locale == agent.LocaleZH {
-		return "对话引导中...\n\n"
+		return "_对话引导中..._\n\n"
 	}
-	return "Steering conversation...\n\n"
+	return "_Steering conversation..._\n\n"
 }
