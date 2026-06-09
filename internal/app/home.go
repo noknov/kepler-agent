@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"strings"
 
 	"github.com/wati/oncall-agent/internal/slack"
@@ -39,7 +40,11 @@ func (s *Server) homeView(userID string) map[string]any {
 		headerBlock("Channel-X Copilot Agent"),
 		fieldsBlock(
 			field("*Access*\n"+statusEmoji+" "+statusText),
+			field("*Provider*\n`"+emptyDash(s.cfg.LLM.Provider)+"`"),
 			field("*Model*\n`"+s.cfg.LLM.Model+"`"),
+			field("*Protocol*\n`"+emptyDash(s.cfg.LLM.Protocol)+"`"),
+			field("*Base URL*\n`"+baseURLHost(s.cfg.LLM.BaseURL)+"`"),
+			field("*Anthropic flavor*\n`"+emptyDash(s.cfg.LLM.AnthropicFlavor)+"`"),
 		),
 		dividerBlock(),
 		sectionBlock(strings.Join([]string{
@@ -53,6 +58,22 @@ func (s *Server) homeView(userID string) map[string]any {
 		"type":   "home",
 		"blocks": blocks,
 	}
+}
+
+func baseURLHost(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" {
+		return emptyDash(raw)
+	}
+	return parsed.Host
+}
+
+func emptyDash(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "-"
+	}
+	return value
 }
 
 func headerBlock(text string) map[string]any {

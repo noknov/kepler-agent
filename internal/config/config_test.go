@@ -309,6 +309,36 @@ func TestLoadWebSearchConfig(t *testing.T) {
 	}
 }
 
+func TestLoadObservabilityAuthConfig(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":                     "xoxb-test",
+		"SLACK_SIGNING_SECRET":                "secret",
+		"ALLOWED_SLACK_USERS":                 "U123",
+		"MIMO_API_KEY":                        "mimo-token",
+		"OBSERVABILITY_TOKEN":                 "admin-token",
+		"OBSERVABILITY_ALLOW_UNAUTHENTICATED": "true",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Observing.AdminToken != "admin-token" {
+		t.Fatalf("AdminToken = %q, want admin-token", cfg.Observing.AdminToken)
+	}
+	if !cfg.Observing.AllowUnauthenticated {
+		t.Fatal("AllowUnauthenticated = false, want true")
+	}
+}
+
 func writeEnvFile(t *testing.T, dir string, values map[string]string) {
 	t.Helper()
 	lines := make([]string, 0, len(values))
@@ -370,6 +400,8 @@ func resetConfigEnv(t *testing.T) {
 		"WEB_SEARCH_GOOGLE_CX",
 		"WEB_SEARCH_SERPAPI_KEY",
 		"WEB_SEARCH_SERPAPI_BASE_URL",
+		"OBSERVABILITY_TOKEN",
+		"OBSERVABILITY_ALLOW_UNAUTHENTICATED",
 	}
 	for _, key := range keys {
 		t.Setenv(key, "")
