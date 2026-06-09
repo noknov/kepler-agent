@@ -68,7 +68,6 @@ func (s *Server) homeView(userID string) map[string]any {
 	}
 }
 
-
 func headerBlock(text string) map[string]any {
 	return map[string]any{
 		"type": "header",

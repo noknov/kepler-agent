@@ -32,17 +32,18 @@ type SlackConfig struct {
 }
 
 type LLMConfig struct {
-	Provider        string
-	BaseURL         string
-	APIKey          string
-	Model           string
-	AvailableModels []string
-	Protocol        string
-	AnthropicFlavor string
-	Thinking        string
-	MaxTokens       int
-	Temperature     float64
-	Timeout         time.Duration
+	Provider         string
+	BaseURL          string
+	APIKey           string
+	Model            string
+	AvailableModels  []string
+	MultimodalModels []string
+	Protocol         string
+	AnthropicFlavor  string
+	Thinking         string
+	MaxTokens        int
+	Temperature      float64
+	Timeout          time.Duration
 }
 
 type SecurityConfig struct {
@@ -122,6 +123,7 @@ func Load() (Config, error) {
 	}
 	llmModel := providerModel(llmProvider)
 	llmAvailableModels := availableModels(llmModel)
+	llmMultimodalModels := envCSV("MULTIMODAL_MODELS")
 	llmThinking := providerThinking(llmProvider)
 	if llmProvider == "mimo" && providerThinking(llmProvider) == "" {
 		llmThinking = "disabled"
@@ -136,17 +138,18 @@ func Load() (Config, error) {
 			BotUserID:     os.Getenv("SLACK_BOT_USER_ID"),
 		},
 		LLM: LLMConfig{
-			Provider:        llmProvider,
-			BaseURL:         trimRightSlash(llmBaseURL),
-			APIKey:          providerAPIKey(llmProvider),
-			Model:           llmModel,
-			AvailableModels: llmAvailableModels,
-			Protocol:        llmProtocol,
-			AnthropicFlavor: anthropicFlavor,
-			Thinking:        llmThinking,
-			MaxTokens:       providerMaxTokens(llmProvider),
-			Temperature:     providerTemperature(llmProvider),
-			Timeout:         providerTimeout(llmProvider),
+			Provider:         llmProvider,
+			BaseURL:          trimRightSlash(llmBaseURL),
+			APIKey:           providerAPIKey(llmProvider),
+			Model:            llmModel,
+			AvailableModels:  llmAvailableModels,
+			MultimodalModels: llmMultimodalModels,
+			Protocol:         llmProtocol,
+			AnthropicFlavor:  anthropicFlavor,
+			Thinking:         llmThinking,
+			MaxTokens:        providerMaxTokens(llmProvider),
+			Temperature:      providerTemperature(llmProvider),
+			Timeout:          providerTimeout(llmProvider),
 		},
 		Security: SecurityConfig{
 			AllowedUsers:       envCSV("ALLOWED_SLACK_USERS"),
