@@ -409,7 +409,7 @@ func TestActiveReplyIsInjectedIntoNextStep(t *testing.T) {
 		if chunk["type"] == "task_update" && chunk["title"] == "Steering conversation..." {
 			foundStatus = true
 		}
-		if chunk["type"] == "markdown_text" && chunk["text"] == "Steering conversation...\n\n" {
+		if chunk["type"] == "markdown_text" && chunk["text"] == "_Steering conversation..._\n\n" {
 			foundText = true
 		}
 	}

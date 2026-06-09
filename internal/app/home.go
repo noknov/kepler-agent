@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/url"
 	"strings"
 
 	"github.com/wati/oncall-agent/internal/slack"
@@ -36,23 +35,29 @@ func (s *Server) homeView(userID string) map[string]any {
 		mentionText = fmt.Sprintf("mention `<@%s>`", s.cfg.Slack.BotUserID)
 	}
 
+	currentModel := s.cfg.LLM.Model
+	if v, ok := s.modelPrefs.Load(userID); ok {
+		currentModel = v.(string)
+	}
+
 	blocks := []map[string]any{
 		headerBlock("Channel-X Copilot Agent"),
 		fieldsBlock(
 			field("*Access*\n"+statusEmoji+" "+statusText),
-			field("*Provider*\n`"+emptyDash(s.cfg.LLM.Provider)+"`"),
-			field("*Model*\n`"+s.cfg.LLM.Model+"`"),
-			field("*Protocol*\n`"+emptyDash(s.cfg.LLM.Protocol)+"`"),
-			field("*Base URL*\n`"+baseURLHost(s.cfg.LLM.BaseURL)+"`"),
-			field("*Anthropic flavor*\n`"+emptyDash(s.cfg.LLM.AnthropicFlavor)+"`"),
+			field("*Model*\n`"+currentModel+"`"),
 		),
+	}
+	if models := s.cfg.LLM.AvailableModels; len(models) > 1 {
+		blocks = append(blocks, actionsBlock(modelSelectMenu(models, currentModel)))
+	}
+	blocks = append(blocks,
 		dividerBlock(),
 		sectionBlock(strings.Join([]string{
 			"*How to use*",
 			"- In a channel: " + mentionText + " and ask your question.",
 			"- Continue in the same thread so the bot keeps session context.",
 		}, "\n")),
-	}
+	)
 
 	return map[string]any{
 		"type":   "home",
@@ -60,21 +65,6 @@ func (s *Server) homeView(userID string) map[string]any {
 	}
 }
 
-func baseURLHost(raw string) string {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Host == "" {
-		return emptyDash(raw)
-	}
-	return parsed.Host
-}
-
-func emptyDash(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "-"
-	}
-	return value
-}
 
 func headerBlock(text string) map[string]any {
 	return map[string]any{
@@ -109,6 +99,37 @@ func field(text string) map[string]any {
 		"type": "mrkdwn",
 		"text": text,
 	}
+}
+
+func actionsBlock(elements ...map[string]any) map[string]any {
+	return map[string]any{
+		"type":     "actions",
+		"elements": elements,
+	}
+}
+
+func modelSelectMenu(models []string, current string) map[string]any {
+	options := make([]map[string]any, len(models))
+	var initial map[string]any
+	for i, m := range models {
+		opt := map[string]any{
+			"text":  map[string]any{"type": "plain_text", "text": m},
+			"value": m,
+		}
+		options[i] = opt
+		if m == current {
+			initial = opt
+		}
+	}
+	menu := map[string]any{
+		"type":      "static_select",
+		"action_id": "select_model",
+		"options":   options,
+	}
+	if initial != nil {
+		menu["initial_option"] = initial
+	}
+	return menu
 }
 
 func dividerBlock() map[string]any {
