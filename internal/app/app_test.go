@@ -1,11 +1,14 @@
 package app
 
 import (
+	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/wati/oncall-agent/internal/config"
 	"github.com/wati/oncall-agent/internal/slack"
 )
 
@@ -167,6 +170,72 @@ func TestDiscoverWorkspaceReposIncludesRootAndChildren(t *testing.T) {
 	}
 }
 
+func TestAuthorizeObservabilityRequiresTokenByDefault(t *testing.T) {
+	server := &Server{}
+	req, err := http.NewRequest(http.MethodGet, "/runs", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.RemoteAddr = "127.0.0.1:1234"
+	if server.authorizeObservability(req) {
+		t.Fatal("observability endpoint should require a token by default")
+	}
+}
+
+func TestAuthorizeObservabilityAcceptsBearerToken(t *testing.T) {
+	server := &Server{cfg: config.Config{Observing: config.ObservingConfig{AdminToken: "secret-token"}}}
+	req, err := http.NewRequest(http.MethodGet, "/runs", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer secret-token")
+	if !server.authorizeObservability(req) {
+		t.Fatal("valid bearer token should authorize observability endpoint")
+	}
+}
+
+func TestAuthorizeObservabilityAllowsExplicitLocalUnauthenticated(t *testing.T) {
+	server := &Server{cfg: config.Config{Observing: config.ObservingConfig{AllowUnauthenticated: true}}}
+	req, err := http.NewRequest(http.MethodGet, "/runs", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.RemoteAddr = "[::1]:1234"
+	if !server.authorizeObservability(req) {
+		t.Fatal("explicit local unauthenticated observability should be allowed")
+	}
+}
+
+func TestAuthorizeObservabilityRejectsForwardedUnauthenticated(t *testing.T) {
+	server := &Server{cfg: config.Config{Observing: config.ObservingConfig{AllowUnauthenticated: true}}}
+	req, err := http.NewRequest(http.MethodGet, "/runs", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-Forwarded-For", "203.0.113.10")
+	if server.authorizeObservability(req) {
+		t.Fatal("forwarded request should not be treated as local unauthenticated access")
+	}
+}
+
+func TestHomeViewIncludesProviderDetails(t *testing.T) {
+	server := &Server{cfg: config.Config{LLM: config.LLMConfig{
+		Provider:        "mimo",
+		BaseURL:         "https://token-plan-cn.xiaomimimo.com/anthropic",
+		Model:           "mimo-v2.5",
+		Protocol:        "anthropic",
+		AnthropicFlavor: "claude-code",
+	}}}
+	view := server.homeView("U1")
+	text := flattenBlockText(view)
+	for _, want := range []string{"*Provider*", "mimo", "*Base URL*", "token-plan-cn.xiaomimimo.com", "*Protocol*", "anthropic", "*Anthropic flavor*", "claude-code"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("home view missing %q in %q", want, text)
+		}
+	}
+}
+
 func mkdir(t *testing.T, parts ...string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(parts...), 0o700); err != nil {
@@ -181,4 +250,21 @@ func containsEnv(env []string, value string) bool {
 		}
 	}
 	return false
+}
+
+func flattenBlockText(view map[string]any) string {
+	var out strings.Builder
+	blocks, _ := view["blocks"].([]map[string]any)
+	for _, block := range blocks {
+		if text, ok := block["text"].(map[string]any); ok {
+			out.WriteString(firstNonEmpty(fmt.Sprint(text["text"]), ""))
+			out.WriteString("\n")
+		}
+		fields, _ := block["fields"].([]map[string]any)
+		for _, field := range fields {
+			out.WriteString(firstNonEmpty(fmt.Sprint(field["text"]), ""))
+			out.WriteString("\n")
+		}
+	}
+	return out.String()
 }

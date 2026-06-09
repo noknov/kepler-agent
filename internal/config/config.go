@@ -87,6 +87,8 @@ type ToolConfig struct {
 type ObservingConfig struct {
 	LogLevel                 string
 	RunsDir                  string
+	AdminToken               string
+	AllowUnauthenticated     bool
 	InputCostPerMTok         float64
 	OutputCostPerMTok        float64
 	CacheReadCostPerMTok     float64
@@ -183,6 +185,8 @@ func Load() (Config, error) {
 		Observing: ObservingConfig{
 			LogLevel:                 env("LOG_LEVEL", "info"),
 			RunsDir:                  env("RUN_DATA_DIR", filepath.Join(wd, ".data", "runs")),
+			AdminToken:               os.Getenv("OBSERVABILITY_TOKEN"),
+			AllowUnauthenticated:     envBool("OBSERVABILITY_ALLOW_UNAUTHENTICATED", false),
 			InputCostPerMTok:         envFloat("LLM_INPUT_COST_PER_MTOK", -1),
 			OutputCostPerMTok:        envFloat("LLM_OUTPUT_COST_PER_MTOK", -1),
 			CacheReadCostPerMTok:     envFloat("LLM_CACHE_READ_COST_PER_MTOK", -1),

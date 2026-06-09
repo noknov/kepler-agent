@@ -59,6 +59,28 @@ func TestCSharpMissingServerMessage(t *testing.T) {
 	}
 }
 
+func TestIsolatedGoEnvUsesWritableCaches(t *testing.T) {
+	root := t.TempDir()
+	env, err := isolatedGoEnv(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"HOME=", "GOCACHE=", "GOMODCACHE=", "GIT_TERMINAL_PROMPT=0"} {
+		if !hasEnvPrefix(env, key) {
+			t.Fatalf("isolatedGoEnv missing %s in %#v", key, env)
+		}
+	}
+}
+
 func writeTestFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
+}
+
+func hasEnvPrefix(env []string, prefix string) bool {
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			return true
+		}
+	}
+	return false
 }
