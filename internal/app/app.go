@@ -104,6 +104,15 @@ func NewServer(cfg config.Config) (*Server, error) {
 		}
 		return ""
 	}
+	if mm := cfg.LLM.MultimodalModels; len(mm) > 0 {
+		mmSet := make(map[string]bool, len(mm))
+		for _, m := range mm {
+			mmSet[m] = true
+		}
+		conv.Multimodal = func(model string) bool {
+			return mmSet[model]
+		}
+	}
 	s.routes(runtime.Tools)
 	return s, nil
 }

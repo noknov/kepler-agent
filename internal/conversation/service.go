@@ -35,18 +35,19 @@ type Messenger interface {
 type TextFormatter func(string) string
 
 type Service struct {
-	Store       session.Store
-	Messenger   Messenger
-	Runner      agent.Runner
-	Memory      memory.Builder
-	Prompt      safety.PromptPolicy
-	Redactor    safety.Redactor
-	Metrics     *observability.Recorder
-	Format      TextFormatter
-	RunStore    runs.Store
+	Store         session.Store
+	Messenger     Messenger
+	Runner        agent.Runner
+	Memory        memory.Builder
+	Prompt        safety.PromptPolicy
+	Redactor      safety.Redactor
+	Metrics       *observability.Recorder
+	Format        TextFormatter
+	RunStore      runs.Store
 	RunProvider   string
 	RunModel      string
 	ModelOverride func(userID string) string
+	Multimodal    func(model string) bool
 	CostRates     observability.CostRates
 
 	mu    sync.Mutex
@@ -224,12 +225,18 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		})
 	}
 
+	contentParts := req.ContentParts
+	userText := req.Text
+	if len(contentParts) > 0 && s.Multimodal != nil && !s.Multimodal(runner.Model) {
+		contentParts, userText = stripImageParts(contentParts, userText, locale)
+	}
+
 	threadContext := s.Messenger.ThreadContext(ctx, req.Channel, req.ThreadTS, 0)
 	messages := s.Memory.BuildWithParts(
 		s.Prompt.SystemPrompt(),
 		threadContext,
-		req.Text,
-		req.ContentParts,
+		userText,
+		contentParts,
 		sess.Summary,
 		sess.Turns,
 	)
@@ -731,4 +738,24 @@ func (w *dmStreamWriter) Flush() {
 
 func (w *dmStreamWriter) Failed() bool {
 	return w != nil && w.err != nil
+}
+
+func stripImageParts(parts []llm.ContentPart, text, locale string) ([]llm.ContentPart, string) {
+	imageCount := 0
+	filtered := make([]llm.ContentPart, 0, len(parts))
+	for _, p := range parts {
+		if p.Type == "image_url" {
+			imageCount++
+			continue
+		}
+		filtered = append(filtered, p)
+	}
+	if imageCount == 0 {
+		return parts, text
+	}
+	note := fmt.Sprintf("\n\n[%d image(s) attached but the current model does not support image input; ask the user to describe the image or paste the text content]", imageCount)
+	if locale == agent.LocaleZH {
+		note = fmt.Sprintf("\n\n[用户附带了 %d 张图片，但当前模型不支持图片输入；请引导用户描述图片内容或粘贴文字]", imageCount)
+	}
+	return filtered, text + note
 }
