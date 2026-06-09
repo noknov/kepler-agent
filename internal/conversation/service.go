@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"runtime/debug"
@@ -47,9 +48,12 @@ type Service struct {
 	RunModel    string
 	CostRates   observability.CostRates
 
-	mu       sync.Mutex
-	locks    map[string]*sync.Mutex
-	seen     map[string]time.Time
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
+	seen  map[string]time.Time
+	// active is intentionally separate from per-session locks: in-flight
+	// replies must be queued/cancelled without blocking on the running turn.
+	active   map[string]*activeRun
 	seenTTL  time.Duration
 	maxTurns int
 }
@@ -74,16 +78,23 @@ func NewService(store session.Store, messenger Messenger, runner agent.Runner, m
 		Metrics:   metrics,
 		locks:     map[string]*sync.Mutex{},
 		seen:      map[string]time.Time{},
+		active:    map[string]*activeRun{},
 		seenTTL:   10 * time.Minute,
 		maxTurns:  memoryBuilder.MaxMessages * 2,
 	}
 }
 
 func (s *Service) HandleMention(ctx context.Context, req Request) {
+	if s.controlActive(req) {
+		return
+	}
 	_ = s.process(ctx, req, false)
 }
 
 func (s *Service) HandleReply(ctx context.Context, req Request) bool {
+	if s.controlActive(req) {
+		return true
+	}
 	return s.process(ctx, req, true)
 }
 
@@ -94,8 +105,17 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	sessionID := session.ID(req.Channel, req.ThreadTS)
 	lock := s.lockFor(sessionID)
 	lock.Lock()
-	defer lock.Unlock()
+	var followUps []Request
+	defer func() {
+		lock.Unlock()
+		if followUp, ok := combineQueuedFollowUps(followUps); ok {
+			go s.process(context.Background(), followUp, false)
+		}
+	}()
 
+	// The session lock still covers all session load/save and one full agent
+	// turn. Active replies are only queued into activeRun and are persisted by
+	// this goroutine when drained.
 	sess, ok, err := s.Store.Get(ctx, sessionID)
 	if err != nil {
 		s.reportError(ctx, req, "Failed to load session: "+s.Redactor.Sanitize(err.Error()))
@@ -144,6 +164,14 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	const taskID = "thinking"
 	locale := agent.DetectLocale(req.Text)
 	_ = strings.HasPrefix(req.Channel, "D") // isDM — reserved for future per-channel behavior
+	runCtx, cancelRun := context.WithCancel(ctx)
+	active := newActiveRun(sessionID, req.UserID, cancelRun)
+	s.registerActive(sessionID, active)
+	defer func() {
+		s.unregisterActive(sessionID, active)
+		followUps = append(followUps, active.remainingQueued()...)
+		cancelRun()
+	}()
 
 	runner := s.Runner
 	if runObserver != nil {
@@ -170,6 +198,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		streamTS = newTS
 		_ = s.Messenger.AppendStream(ctx, req.Channel, streamTS, chunks)
 	}
+	active.setProgress(locale, appendProgress)
 	if useStream {
 		runner.OnNarration = func(delta string) {
 			appendProgress([]map[string]any{
@@ -198,14 +227,15 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		sess.Summary,
 		sess.Turns,
 	)
-	result, err := runner.Run(ctx, agent.Request{
+	result, err := runner.Run(runCtx, agent.Request{
 		Messages: messages,
 		Runtime: registry.Runtime{
 			UserID:   req.UserID,
 			Channel:  req.Channel,
 			ThreadTS: req.ThreadTS,
 		},
-		Locale: locale,
+		Locale:   locale,
+		Steering: active.drainMessages,
 	})
 	if answerStream != nil {
 		answerStream.Flush()
@@ -216,8 +246,30 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	sess.PendingUserID = ""
 	sess.PendingQuestion = ""
 	sess.Turns = append(sess.Turns, memory.UserTurn(req.Text))
+	for _, queued := range active.consumedRequests() {
+		if strings.TrimSpace(queued.Text) != "" {
+			sess.Turns = append(sess.Turns, memory.UserTurn(queued.Text))
+		}
+	}
 
 	if err != nil {
+		if active.wasCanceled() || errors.Is(err, context.Canceled) {
+			if runObserver != nil {
+				runObserver.Finish("interrupted", "", nil, "")
+			}
+			sess.Turns, sess.Summary = s.trimAndSummarize(sess.Turns, sess.Summary)
+			_ = s.Store.Save(ctx, sess)
+			message := interruptedMessage(locale)
+			if useStream {
+				appendProgress([]map[string]any{
+					{"type": "task_update", "id": taskID, "title": agent.CancelledTitle(locale), "status": "complete"},
+					{"type": "markdown_text", "text": message},
+				})
+			} else {
+				s.reportError(ctx, req, message)
+			}
+			return true
+		}
 		errorID := newErrorID()
 		log.Printf("conversation error id=%s session=%s event=%s user=%s channel=%s thread=%s err=%v", errorID, sessionID, req.EventID, req.UserID, req.Channel, req.ThreadTS, err)
 		if runObserver != nil {
@@ -422,6 +474,48 @@ func (s *Service) markEvent(eventID string) bool {
 		return false
 	}
 	s.seen[eventID] = now
+	return true
+}
+
+func (s *Service) registerActive(sessionID string, run *activeRun) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active == nil {
+		s.active = map[string]*activeRun{}
+	}
+	s.active[sessionID] = run
+}
+
+func (s *Service) unregisterActive(sessionID string, run *activeRun) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active[sessionID] == run {
+		delete(s.active, sessionID)
+	}
+}
+
+func (s *Service) activeFor(sessionID string) *activeRun {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.active[sessionID]
+}
+
+func (s *Service) controlActive(req Request) bool {
+	if strings.TrimSpace(req.ThreadTS) == "" {
+		return false
+	}
+	active := s.activeFor(session.ID(req.Channel, req.ThreadTS))
+	if active == nil || active.userID != req.UserID {
+		return false
+	}
+	if !s.markEvent(req.EventID) {
+		return true
+	}
+	if isCancelRequest(req.Text) {
+		active.interrupt()
+		return true
+	}
+	active.enqueue(req)
 	return true
 }
 
