@@ -29,6 +29,9 @@ type statusSet struct {
 	complete   string
 	waiting    string
 	failed     string
+	canceling  string
+	cancelled  string
+	steering   string
 }
 
 var statusZH = statusSet{
@@ -54,9 +57,12 @@ var statusZH = statusSet{
 		"路径重构中...",
 		"切换频道...",
 	},
-	complete: "传输完毕",
-	waiting:  "等待信号",
-	failed:   "链路中断",
+	complete:  "传输完毕",
+	waiting:   "等待信号",
+	failed:    "链路中断",
+	canceling: "中止中...",
+	cancelled: "已中止",
+	steering:  "对话引导中...",
 }
 
 var statusEN = statusSet{
@@ -74,77 +80,80 @@ var statusEN = statusSet{
 	retrying: []string{
 		"Rethinking...",
 	},
-	complete: "Done",
-	waiting:  "Waiting for your reply",
-	failed:   "Analysis failed",
+	complete:  "Done",
+	waiting:   "Waiting for your reply",
+	failed:    "Analysis failed",
+	canceling: "Cancelling...",
+	cancelled: "Cancelled",
+	steering:  "Steering conversation...",
 }
 
 var toolHintsZH = map[string][]string{
-	"code-read_file":                {"扫描源码中..."},
-	"code-search":                   {"全文检索中..."},
-	"code-symbols":                  {"解析符号表..."},
-	"code-definition":               {"追踪定义源..."},
-	"code-references":               {"扫描引用链..."},
-	"code-diagnostics":              {"诊断代码中..."},
-	"repo-search":                   {"仓库全文检索中..."},
-	"repo-read_file":                {"读取文件快照..."},
-	"git-status":                    {"读取仓库状态..."},
-	"git-fetch_ref":                 {"拉取远程分支..."},
-	"git-search_ref":                {"分支内检索中..."},
-	"git-read_file_ref":             {"读取分支文件..."},
-	"git-log":                       {"回溯时间线..."},
-	"git-show":                      {"定位变更帧..."},
-	"gcp-logs":                      {"日志流抓取中..."},
-	"gcp-query_logs":                {"日志流抓取中..."},
-	"notion-search":                 {"知识库索引中..."},
-	"notion-create_page":            {"写入文档..."},
-	"youtrack-get_issue":            {"加载工单..."},
-	"youtrack-search":               {"检索工单库..."},
-	"github-dispatch_workflow":      {"触发工作流..."},
-	"github-workflow_runs":          {"读取流水线状态..."},
-	"github-pr_diff":                {"拉取 PR 变更..."},
-	"slack-ask_user":                {"等待外部输入..."},
-	"slack-json_analyze":            {"解析数据文件..."},
-	"slack-file_search":             {"检索附件中..."},
-	"knowledge-runbook_search":      {"查阅运维手册..."},
-	"diagnostics-incident_brief":    {"梳理事件摘要..."},
-	"diagnostics-timeline":          {"重建时间线..."},
-	"diagnostics-evidence_board":    {"整理证据链..."},
-	"delegate-run":                  {"子进程展开中..."},
+	"code-read_file":             {"扫描源码中..."},
+	"code-search":                {"全文检索中..."},
+	"code-symbols":               {"解析符号表..."},
+	"code-definition":            {"追踪定义源..."},
+	"code-references":            {"扫描引用链..."},
+	"code-diagnostics":           {"诊断代码中..."},
+	"repo-search":                {"仓库全文检索中..."},
+	"repo-read_file":             {"读取文件快照..."},
+	"git-status":                 {"读取仓库状态..."},
+	"git-fetch_ref":              {"拉取远程分支..."},
+	"git-search_ref":             {"分支内检索中..."},
+	"git-read_file_ref":          {"读取分支文件..."},
+	"git-log":                    {"回溯时间线..."},
+	"git-show":                   {"定位变更帧..."},
+	"gcp-logs":                   {"日志流抓取中..."},
+	"gcp-query_logs":             {"日志流抓取中..."},
+	"notion-search":              {"知识库索引中..."},
+	"notion-create_page":         {"写入文档..."},
+	"youtrack-get_issue":         {"加载工单..."},
+	"youtrack-search":            {"检索工单库..."},
+	"github-dispatch_workflow":   {"触发工作流..."},
+	"github-workflow_runs":       {"读取流水线状态..."},
+	"github-pr_diff":             {"拉取 PR 变更..."},
+	"slack-ask_user":             {"等待外部输入..."},
+	"slack-json_analyze":         {"解析数据文件..."},
+	"slack-file_search":          {"检索附件中..."},
+	"knowledge-runbook_search":   {"查阅运维手册..."},
+	"diagnostics-incident_brief": {"梳理事件摘要..."},
+	"diagnostics-timeline":       {"重建时间线..."},
+	"diagnostics-evidence_board": {"整理证据链..."},
+	"delegate-run":               {"子进程展开中..."},
 }
 
 var toolHintsEN = map[string]string{
-	"code-read_file":                "Reading source...",
-	"code-search":                   "Searching codebase...",
-	"code-symbols":                  "Resolving symbols...",
-	"code-definition":               "Looking up definition...",
-	"code-references":               "Finding references...",
-	"code-diagnostics":              "Running diagnostics...",
-	"repo-search":                   "Searching repo...",
-	"repo-read_file":                "Reading file...",
-	"git-status":                    "Checking repo state...",
-	"git-fetch_ref":                 "Fetching remote ref...",
-	"git-search_ref":                "Searching branch...",
-	"git-read_file_ref":             "Reading file at ref...",
-	"git-log":                       "Tracing commit history...",
-	"git-show":                      "Inspecting changeset...",
-	"gcp-logs":                      "Fetching log stream...",
-	"gcp-query_logs":                "Fetching log stream...",
-	"notion-search":                 "Searching knowledge base...",
-	"notion-create_page":            "Writing document...",
-	"youtrack-get_issue":            "Loading issue...",
-	"youtrack-search":               "Searching issues...",
-	"github-dispatch_workflow":      "Dispatching workflow...",
-	"github-workflow_runs":          "Checking pipeline status...",
-	"github-pr_diff":                "Fetching PR diff...",
-	"slack-ask_user":                "Awaiting input...",
-	"slack-json_analyze":            "Analyzing data file...",
-	"slack-file_search":             "Searching attachments...",
-	"knowledge-runbook_search":      "Searching runbooks...",
-	"diagnostics-incident_brief":    "Summarizing incident...",
-	"diagnostics-timeline":          "Building timeline...",
-	"diagnostics-evidence_board":    "Gathering evidence...",
-	"delegate-run":                  "Spawning sub-analysis...",
+	"code-read_file":             "Reading source...",
+	"code-search":                "Searching codebase...",
+	"code-symbols":               "Resolving symbols...",
+	"code-definition":            "Looking up definition...",
+	"code-references":            "Finding references...",
+	"code-diagnostics":           "Running diagnostics...",
+	"repo-search":                "Searching repo...",
+	"repo-read_file":             "Reading file...",
+	"git-status":                 "Checking repo state...",
+	"git-fetch_ref":              "Fetching remote ref...",
+	"git-search_ref":             "Searching branch...",
+	"git-read_file_ref":          "Reading file at ref...",
+	"git-log":                    "Tracing commit history...",
+	"git-show":                   "Inspecting changeset...",
+	"gcp-logs":                   "Fetching log stream...",
+	"gcp-query_logs":             "Fetching log stream...",
+	"notion-search":              "Searching knowledge base...",
+	"notion-create_page":         "Writing document...",
+	"youtrack-get_issue":         "Loading issue...",
+	"youtrack-search":            "Searching issues...",
+	"github-dispatch_workflow":   "Dispatching workflow...",
+	"github-workflow_runs":       "Checking pipeline status...",
+	"github-pr_diff":             "Fetching PR diff...",
+	"slack-ask_user":             "Awaiting input...",
+	"slack-json_analyze":         "Analyzing data file...",
+	"slack-file_search":          "Searching attachments...",
+	"knowledge-runbook_search":   "Searching runbooks...",
+	"diagnostics-incident_brief": "Summarizing incident...",
+	"diagnostics-timeline":       "Building timeline...",
+	"diagnostics-evidence_board": "Gathering evidence...",
+	"delegate-run":               "Spawning sub-analysis...",
 }
 
 func pick(choices []string) string {
@@ -184,6 +193,18 @@ func WaitingTitle(locale string) string {
 
 func FailedTitle(locale string) string {
 	return localeSet(locale).failed
+}
+
+func CancelingTitle(locale string) string {
+	return localeSet(locale).canceling
+}
+
+func CancelledTitle(locale string) string {
+	return localeSet(locale).cancelled
+}
+
+func SteeringQueuedTitle(locale string) string {
+	return localeSet(locale).steering
 }
 
 func ToolHint(name, locale string) string {

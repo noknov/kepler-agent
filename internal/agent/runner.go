@@ -40,6 +40,8 @@ type Sanitizer interface {
 	Sanitize(text string) string
 }
 
+type SteeringProvider func() []llm.Message
+
 type Runner struct {
 	LLM             llm.Client
 	Model           string
@@ -61,6 +63,7 @@ type Request struct {
 	Messages []llm.Message
 	Runtime  registry.Runtime
 	Locale   string
+	Steering SteeringProvider
 }
 
 type Result struct {
@@ -101,6 +104,11 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		lastStep := step == maxSteps-1 || retriedRepetitiveFinal || retriedTextualToolCall
 		if r.StatusUpdate != nil {
 			r.StatusUpdate(StepStatus(req.Locale, step))
+		}
+		if req.Steering != nil {
+			if steering := req.Steering(); len(steering) > 0 {
+				messages = append(messages, steering...)
+			}
 		}
 
 		if !budgetWarned && step == maxSteps-10 && !lastStep {

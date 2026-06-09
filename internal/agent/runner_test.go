@@ -215,6 +215,45 @@ func TestRunnerSkipsDuplicateToolCallInsteadOfFailing(t *testing.T) {
 	}
 }
 
+func TestRunnerInjectsSteeringBeforeNextStep(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{Message: toolCallMessage("tool_1", `{"text":"initial"}`)},
+		{Message: llm.Message{Role: "assistant", Content: "final"}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+	steeringCalls := 0
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 4}.Run(context.Background(), Request{
+		Steering: func() []llm.Message {
+			steeringCalls++
+			if steeringCalls != 2 {
+				return nil
+			}
+			return []llm.Message{{Role: "user", Content: "switch to staging"}}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "final" {
+		t.Fatalf("Final = %q, want final", result.Final)
+	}
+	if len(client.requests) < 2 {
+		t.Fatalf("expected at least 2 LLM requests, got %d", len(client.requests))
+	}
+	found := false
+	for _, msg := range client.requests[1].Messages {
+		if msg.Role == "user" && strings.Contains(msg.Content, "switch to staging") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("steering message not found in second request: %#v", client.requests[1].Messages)
+	}
+}
+
 func toolCallMessage(id, args string) llm.Message {
 	return llm.Message{
 		Role: "assistant",

@@ -2,8 +2,10 @@ package conversation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/wati/oncall-agent/internal/agent"
@@ -13,6 +15,7 @@ import (
 	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/session"
 	"github.com/wati/oncall-agent/internal/slack"
+	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
 func TestHandleReplyIgnoresThreadWithoutPendingQuestion(t *testing.T) {
@@ -240,8 +243,12 @@ func TestStreamModeStreamsTokens(t *testing.T) {
 			text.WriteString(chunk["text"].(string))
 		}
 	}
-	if got := text.String(); got != "hello world" {
-		t.Fatalf("streamed text = %q, want %q", got, "hello world")
+	gotText := text.String()
+	if !strings.Contains(gotText, "hello world") {
+		t.Fatalf("streamed text = %q, want final answer", gotText)
+	}
+	if strings.Contains(gotText, "cancel") {
+		t.Fatalf("streamed text = %q, should not include active control hint", gotText)
 	}
 	// Should have task_update complete
 	foundComplete := false
@@ -336,6 +343,147 @@ func TestStreamStatusFailureDoesNotAffectFinalAnswer(t *testing.T) {
 	}
 }
 
+func TestActiveReplyIsInjectedIntoNextStep(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := &blockingTool{started: make(chan struct{}), release: make(chan struct{})}
+	tools := registry.New()
+	tools.Register(tool)
+	llmClient := &toolThenFinalLLM{}
+	svc := NewService(
+		store,
+		&fakeMessenger{streamTS: "200.000"},
+		agent.Runner{LLM: llmClient, Tools: tools, MaxSteps: 3},
+		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		svc.HandleMention(ctx, Request{
+			EventID:  "E7",
+			UserID:   "U1",
+			Channel:  "C1",
+			ThreadTS: "100.000",
+			Text:     "check prod logs",
+		})
+	}()
+
+	<-tool.started
+	handled := svc.HandleReply(ctx, Request{
+		EventID:  "E8",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "actually use staging",
+	})
+	if !handled {
+		t.Fatal("active reply was not handled")
+	}
+	close(tool.release)
+	<-done
+
+	requests := llmClient.Requests()
+	if len(requests) < 2 {
+		t.Fatalf("LLM requests = %d, want at least 2", len(requests))
+	}
+	found := false
+	for _, msg := range requests[1].Messages {
+		if msg.Role == "user" && strings.Contains(msg.Content, "actually use staging") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("queued guidance not injected into next step: %#v", requests[1].Messages)
+	}
+	foundStatus := false
+	foundText := false
+	for _, chunk := range svc.Messenger.(*fakeMessenger).chunks {
+		if chunk["type"] == "task_update" && chunk["title"] == "Steering conversation..." {
+			foundStatus = true
+		}
+		if chunk["type"] == "markdown_text" && chunk["text"] == "Steering conversation...\n\n" {
+			foundText = true
+		}
+	}
+	if !foundStatus {
+		t.Fatalf("steering status not found: %#v", svc.Messenger.(*fakeMessenger).chunks)
+	}
+	if !foundText {
+		t.Fatalf("steering stream text not found: %#v", svc.Messenger.(*fakeMessenger).chunks)
+	}
+}
+
+func TestActiveReplyCanCancelRun(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	llmClient := &cancelAwareLLM{started: make(chan struct{})}
+	messenger := &fakeMessenger{streamTS: "200.000"}
+	svc := NewService(
+		store,
+		messenger,
+		agent.Runner{LLM: llmClient, Tools: registry.New(), MaxSteps: 1},
+		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		svc.HandleMention(ctx, Request{
+			EventID:  "E9",
+			UserID:   "U1",
+			Channel:  "C1",
+			ThreadTS: "100.000",
+			Text:     "keep working",
+		})
+	}()
+
+	<-llmClient.started
+	handled := svc.HandleReply(ctx, Request{
+		EventID:  "E10",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "cancel",
+	})
+	if !handled {
+		t.Fatal("cancel reply was not handled")
+	}
+	<-done
+
+	var text strings.Builder
+	for _, chunk := range messenger.chunks {
+		if chunk["type"] == "task_update" {
+			text.WriteString(chunk["title"].(string))
+			text.WriteString("\n")
+		}
+		if chunk["type"] == "markdown_text" {
+			text.WriteString(chunk["text"].(string))
+			text.WriteString("\n")
+		}
+	}
+	got := text.String()
+	if !strings.Contains(got, "Cancelled") {
+		t.Fatalf("cancel status not found in stream chunks: %q", got)
+	}
+	if strings.Contains(got, "Something went wrong") {
+		t.Fatalf("cancel should not emit generic error: %q", got)
+	}
+}
+
 func (l *replyLLM) Chat(_ llm.Context, _ llm.Request) (llm.Response, error) {
 	content := l.content
 	if content == "" {
@@ -349,6 +497,77 @@ func (l *replyLLM) Chat(_ llm.Context, _ llm.Request) (llm.Response, error) {
 
 type replyLLM struct {
 	content string
+}
+
+type cancelAwareLLM struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (l *cancelAwareLLM) Chat(ctx llm.Context, _ llm.Request) (llm.Response, error) {
+	l.once.Do(func() { close(l.started) })
+	<-ctx.Done()
+	return llm.Response{}, ctx.Err()
+}
+
+type toolThenFinalLLM struct {
+	mu       sync.Mutex
+	requests []llm.Request
+	calls    int
+}
+
+func (l *toolThenFinalLLM) Chat(_ llm.Context, req llm.Request) (llm.Response, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.requests = append(l.requests, req)
+	l.calls++
+	if l.calls == 1 {
+		return llm.Response{Message: llm.Message{
+			Role: "assistant",
+			ToolCalls: []llm.ToolCall{{
+				ID:   "tool_1",
+				Type: "function",
+				Function: llm.ToolFunction{
+					Name:      "block",
+					Arguments: `{}`,
+				},
+			}},
+		}}, nil
+	}
+	return llm.Response{Message: llm.Message{Role: "assistant", Content: "done"}}, nil
+}
+
+func (l *toolThenFinalLLM) Requests() []llm.Request {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]llm.Request(nil), l.requests...)
+}
+
+type blockingTool struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (t *blockingTool) Spec() llm.ToolSpec {
+	return llm.ToolSpec{
+		Type: "function",
+		Function: llm.ToolSpecFunction{
+			Name:        "block",
+			Description: "block until released",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}
+}
+
+func (t *blockingTool) Execute(ctx context.Context, _ json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	t.once.Do(func() { close(t.started) })
+	select {
+	case <-t.release:
+		return registry.Result{Content: "released"}, nil
+	case <-ctx.Done():
+		return registry.Result{}, ctx.Err()
+	}
 }
 
 type fakeMessenger struct {
