@@ -6,7 +6,7 @@ Go-based Slack on-call debugging agent powered by configurable OpenAI-compatible
 
 - Slack receives `app_mention`, verifies Slack signatures, checks allowlists, then starts an agent run in the thread.
 - The model is called through an OpenAI-compatible Chat Completions API or Anthropic-compatible Messages API with native tool calls, so tool execution is structured instead of parsed from free-form JSON text.
-- Runtime safety is code-enforced: Slack user/channel authorization, prompt guardrails, post-response redaction, path allowlists, command deny rules, and read-only tool boundaries.
+- Runtime safety is code-enforced: Slack user/channel authorization, prompt guardrails, post-response redaction, path allowlists, command deny rules, and tool-specific boundaries for read-only and action tools.
 - Context is managed explicitly. Slack thread context, session messages, and tool observations are bounded before they reach the model, with large Slack files kept searchable by file ID.
 - Sessions are persisted by Slack `channel:thread_ts`, so follow-up mentions and pending clarification replies reuse context.
 - Delegation, rules, and skills are modeled as focused agent profiles, not as one-off prompt folders. RAG and caching should be added under `internal/memory` or infrastructure once there is a concrete retrieval source.
@@ -85,6 +85,8 @@ Expose `POST /slack/events` to Slack. The app also exposes:
 - `GET /metrics`
 - `GET /runs?limit=20`
 - `GET /runs/<run_id>`
+
+`/metrics` and `/runs` are protected by `OBSERVABILITY_TOKEN`. Send it as `Authorization: Bearer <token>` or `X-Oncall-Agent-Admin-Token: <token>`. If you intentionally want unauthenticated direct-loopback access while developing, set `OBSERVABILITY_ALLOW_UNAUTHENTICATED=true`; requests with forwarded headers are still rejected.
 
 ## ngrok
 

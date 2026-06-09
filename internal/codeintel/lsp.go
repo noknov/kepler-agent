@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -661,7 +663,7 @@ func symbolKind(kind int) string {
 }
 
 func (m Manager) goSymbols(ctx context.Context, repo, query string, limit int, server serverSpec) ([]Symbol, error) {
-	out, err := runCommand(ctx, repo, server.Name, "workspace_symbol", query)
+	out, err := runCommand(ctx, repo, server.Name, m.timeout(), "workspace_symbol", query)
 	if err != nil {
 		return nil, err
 	}
@@ -682,7 +684,7 @@ func (m Manager) goSymbols(ctx context.Context, repo, query string, limit int, s
 
 func (m Manager) goLocations(ctx context.Context, repo, file string, pos Position, server serverSpec, command string) ([]Location, error) {
 	rel := relPath(repo, file)
-	out, err := runCommand(ctx, repo, server.Name, command, fmt.Sprintf("%s:%d:%d", rel, pos.Line, pos.Character))
+	out, err := runCommand(ctx, repo, server.Name, m.timeout(), command, fmt.Sprintf("%s:%d:%d", rel, pos.Line, pos.Character))
 	if err != nil {
 		return nil, err
 	}
@@ -699,7 +701,7 @@ func (m Manager) goLocations(ctx context.Context, repo, file string, pos Positio
 
 func (m Manager) goDiagnostics(ctx context.Context, repo, file string, server serverSpec) ([]Diagnostic, error) {
 	rel := relPath(repo, file)
-	out, err := runCommand(ctx, repo, server.Name, "check", rel)
+	out, err := runCommand(ctx, repo, server.Name, m.timeout(), "check", rel)
 	if err != nil {
 		return nil, err
 	}
@@ -716,9 +718,21 @@ func (m Manager) goDiagnostics(ctx context.Context, repo, file string, server se
 	return diagnostics, nil
 }
 
-func runCommand(ctx context.Context, dir, name string, args ...string) (string, error) {
+func runCommand(ctx context.Context, dir, name string, timeout time.Duration, args ...string) (string, error) {
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+	if filepath.Base(name) == "gopls" {
+		env, err := isolatedGoEnv(dir)
+		if err != nil {
+			return "", err
+		}
+		cmd.Env = env
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -730,6 +744,28 @@ func runCommand(ctx context.Context, dir, name string, args ...string) (string, 
 		return "", fmt.Errorf("%s failed: %s", filepath.Base(name), msg)
 	}
 	return stdout.String(), nil
+}
+
+func isolatedGoEnv(repo string) ([]string, error) {
+	sum := sha256.Sum256([]byte(filepath.Clean(repo)))
+	key := hex.EncodeToString(sum[:8])
+	base := filepath.Join(os.TempDir(), "oncall-agent-codeintel", key)
+	dirs := []string{
+		filepath.Join(base, "home"),
+		filepath.Join(base, "go-build"),
+		filepath.Join(base, "gomodcache"),
+	}
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("prepare gopls cache: %w", err)
+		}
+	}
+	return append(os.Environ(),
+		"HOME="+filepath.Join(base, "home"),
+		"GOCACHE="+filepath.Join(base, "go-build"),
+		"GOMODCACHE="+filepath.Join(base, "gomodcache"),
+		"GIT_TERMINAL_PROMPT=0",
+	), nil
 }
 
 var (

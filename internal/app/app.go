@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -98,7 +100,7 @@ func NewServer(cfg config.Config) (*Server, error) {
 }
 
 func (s *Server) routes(tools *registry.Registry) {
-	s.mux.Handle("/metrics", s.metrics)
+	s.mux.Handle("/metrics", s.observabilityHandler(s.metrics))
 	s.mux.HandleFunc("/runs", s.handleRuns)
 	s.mux.HandleFunc("/runs/", s.handleRun)
 	s.mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -214,6 +216,10 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.authorizeObservability(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	limit := 20
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
@@ -234,6 +240,10 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.authorizeObservability(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	id := strings.TrimPrefix(r.URL.Path, "/runs/")
 	run, ok, err := s.runStore.Get(r.Context(), id)
 	if err != nil {
@@ -246,6 +256,46 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(run)
+}
+
+func (s *Server) observabilityHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.authorizeObservability(r) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) authorizeObservability(r *http.Request) bool {
+	token := strings.TrimSpace(s.cfg.Observing.AdminToken)
+	if token == "" {
+		return s.cfg.Observing.AllowUnauthenticated && isLocalRequest(r)
+	}
+	got := strings.TrimSpace(r.Header.Get("X-Oncall-Agent-Admin-Token"))
+	if got == "" {
+		auth := strings.TrimSpace(r.Header.Get("Authorization"))
+		if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+			got = strings.TrimSpace(auth[len("Bearer "):])
+		}
+	}
+	if got == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1
+}
+
+func isLocalRequest(r *http.Request) bool {
+	if r.Header.Get("Forwarded") != "" || r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("X-Real-IP") != "" {
+		return false
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err != nil {
+		host = strings.TrimSpace(r.RemoteAddr)
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (s *Server) handleMention(ctx context.Context, eventID string, ev slack.Event) {
