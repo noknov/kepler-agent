@@ -242,17 +242,13 @@ func TestHomeViewShowsModelDropdownWhenMultipleModels(t *testing.T) {
 	blocks, _ := view["blocks"].([]map[string]any)
 	found := false
 	for _, block := range blocks {
-		if block["type"] == "actions" {
-			elements, _ := block["elements"].([]map[string]any)
-			for _, el := range elements {
-				if el["action_id"] == "select_model" {
-					found = true
-				}
-			}
+		acc, _ := block["accessory"].(map[string]any)
+		if acc != nil && acc["action_id"] == "select_model" {
+			found = true
 		}
 	}
 	if !found {
-		t.Fatal("expected model select dropdown when multiple models available")
+		t.Fatal("expected model select dropdown as section accessory when multiple models available")
 	}
 }
 
@@ -263,9 +259,20 @@ func TestHomeViewReflectsUserModelPreference(t *testing.T) {
 	}}}
 	server.modelPrefs.Store("U1", "mimo-v2.5-pro")
 	view := server.homeView("U1")
-	text := flattenBlockText(view)
-	if !strings.Contains(text, "mimo-v2.5-pro") {
-		t.Fatalf("home view should show user's preferred model, got %q", text)
+	blocks, _ := view["blocks"].([]map[string]any)
+	found := false
+	for _, block := range blocks {
+		acc, _ := block["accessory"].(map[string]any)
+		if acc == nil || acc["action_id"] != "select_model" {
+			continue
+		}
+		initial, _ := acc["initial_option"].(map[string]any)
+		if initial != nil && initial["value"] == "mimo-v2.5-pro" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected dropdown initial_option to reflect user's preferred model mimo-v2.5-pro")
 	}
 }
 

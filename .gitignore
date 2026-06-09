@@ -7,3 +7,5 @@ bin/
 dist/
 .prompts/
 copilot-agent-avatar-*.png
+cmd/slack-broadcast/
+slack-broadcast
