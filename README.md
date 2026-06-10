@@ -135,6 +135,7 @@ Current tool modules:
 - `github.dispatch_workflow`, `github.workflow_runs`
 - `notion.search`, `notion.create_page`
 - `youtrack.get_issue`, `youtrack.search`
+- `luckin.query_shop_list`, `luckin.search_product`, `luckin.switch_product`, `luckin.query_product_detail`, `luckin.preview_order`, `luckin.query_coupons`, `luckin.create_order`, `luckin.query_order_detail`, `luckin.cancel_order`
 - `slack.ask_user`
 - `slack.file_search`
 - `slack.json_analyze`
@@ -157,6 +158,8 @@ Code intelligence tools are read-only and currently target the current working t
 GCP values in `.env` are defaults and hints, not fixed environments. `gcp.logs` accepts `project`, `namespace`, `service`, and raw `filter` per call. If `namespace` is omitted, the tool no longer silently injects `GCP_NAMESPACE`; environment mappings can be added later in `PROMPT_DIR/rules`.
 
 GitHub Actions uses `GITHUB_TOKEN`. Set `GITHUB_DEFAULT_OWNER` and `GITHUB_DEFAULT_REPO` locally, and define workflow aliases in the gitignored `PROMPT_DIR/github_workflows.json` file. The dispatch tool executes directly when the Slack request is clear, asks only for missing required inputs, and passes workflow_dispatch inputs through as strings. The runs tool can check recent workflow status after a dispatch.
+
+Luckin Coffee MCP uses the official Streamable HTTP endpoint from <https://open.lkcoffee.com/mcp>. Copy a personal login token from that page into `LUCKIN_MCP_TOKEN`. The default `LUCKIN_MCP_URL` is `https://gwmcp.lkcoffee.com/order/user/mcp`; override it only for Luckin-provided test or pre-release gateways. Order creation and cancellation require an explicit user confirmation flag before the local wrapper forwards the remote MCP call.
 
 ## Notes
 
