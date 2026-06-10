@@ -309,6 +309,36 @@ func TestLoadWebSearchConfig(t *testing.T) {
 	}
 }
 
+func TestLoadLuckinMCPConfig(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":      "xoxb-test",
+		"SLACK_SIGNING_SECRET": "secret",
+		"ALLOWED_SLACK_USERS":  "U123",
+		"MIMO_API_KEY":         "mimo-token",
+		"LUCKIN_MCP_URL":       "https://example.test/mcp/",
+		"LUCKIN_MCP_TOKEN":     "luckin-token",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Tools.LuckinMCPURL != "https://example.test/mcp" {
+		t.Fatalf("LuckinMCPURL = %q", cfg.Tools.LuckinMCPURL)
+	}
+	if cfg.Tools.LuckinMCPToken != "luckin-token" {
+		t.Fatalf("LuckinMCPToken = %q", cfg.Tools.LuckinMCPToken)
+	}
+}
+
 func TestLoadObservabilityAuthConfig(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
@@ -395,6 +425,8 @@ func resetConfigEnv(t *testing.T) {
 		"GITHUB_API_BASE_URL",
 		"GITHUB_DEFAULT_OWNER",
 		"GITHUB_DEFAULT_REPO",
+		"LUCKIN_MCP_URL",
+		"LUCKIN_MCP_TOKEN",
 		"WEB_SEARCH_PROVIDER",
 		"WEB_SEARCH_GOOGLE_API_KEY",
 		"WEB_SEARCH_GOOGLE_CX",
