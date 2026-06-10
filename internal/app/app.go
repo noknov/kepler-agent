@@ -41,6 +41,9 @@ func Run(ctx context.Context) error {
 	if cfg.Security.WorkspaceAutoFetch {
 		go pullWorkspaceRepos(ctx, cfg.Security.WorkspaceRoots, 10*time.Minute)
 	}
+	if server.ragManager != nil {
+		go server.ragManager.StartIndexLoop(ctx)
+	}
 	return server.ListenAndServe(ctx)
 }
 
@@ -52,8 +55,14 @@ type Server struct {
 	prompt     safety.PromptPolicy
 	metrics    *observability.Recorder
 	runStore   runs.Store
+	ragManager ragManagerCloser
 	mux        *http.ServeMux
 	modelPrefs sync.Map
+}
+
+type ragManagerCloser interface {
+	StartIndexLoop(ctx context.Context)
+	Close()
 }
 
 func NewServer(cfg config.Config) (*Server, error) {
@@ -89,14 +98,15 @@ func NewServer(cfg config.Config) (*Server, error) {
 	conv.CostRates = runtime.CostRates
 
 	s := &Server{
-		cfg:      cfg,
-		slack:    slackClient,
-		access:   safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
-		conv:     conv,
-		prompt:   runtime.Prompt,
-		metrics:  recorder,
-		runStore: runStore,
-		mux:      http.NewServeMux(),
+		cfg:        cfg,
+		slack:      slackClient,
+		access:     safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
+		conv:       conv,
+		prompt:     runtime.Prompt,
+		metrics:    recorder,
+		runStore:   runStore,
+		ragManager: runtime.RAGManager,
+		mux:        http.NewServeMux(),
 	}
 	conv.ModelOverride = func(userID string) string {
 		if v, ok := s.modelPrefs.Load(userID); ok {

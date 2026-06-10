@@ -1,0 +1,152 @@
+package rag
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"strings"
+
+	"github.com/wati/oncall-agent/internal/llm"
+	internrag "github.com/wati/oncall-agent/internal/rag"
+	"github.com/wati/oncall-agent/internal/safety"
+	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+)
+
+type SearchTool struct {
+	Manager *internrag.Manager
+	Paths   safety.WorkspacePolicy
+}
+
+func (SearchTool) Parallel() bool { return true }
+
+func (t SearchTool) Spec() llm.ToolSpec {
+	return registry.FunctionSpec(
+		"rag-search",
+		"Semantic code search using RAG. Use for questions like 'how does authentication work', "+
+			"'where is error retry logic', or 'what handles webhook events'. "+
+			"For exact symbol/string matching, prefer code-search or repo-search instead.",
+		registry.ObjectSchema([]string{"query"}, map[string]any{
+			"query":  map[string]any{"type": "string", "description": "Natural language or code-related query."},
+			"repo":   map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
+			"branch": map[string]any{"type": "string", "description": "Branch to search. Defaults to the repo's default branch."},
+			"limit":  map[string]any{"type": "integer", "description": "Maximum results. Defaults to 10, max 20."},
+		}),
+	)
+}
+
+func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+	var args struct {
+		Query  string `json:"query"`
+		Repo   string `json:"repo"`
+		Branch string `json:"branch"`
+		Limit  int    `json:"limit"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return registry.Result{}, err
+	}
+	if strings.TrimSpace(args.Query) == "" {
+		return registry.Result{}, fmt.Errorf("query is required")
+	}
+	if args.Limit <= 0 {
+		args.Limit = 10
+	}
+	if args.Limit > 20 {
+		args.Limit = 20
+	}
+
+	repo := args.Repo
+	if repo == "" && len(t.Paths.Roots) > 0 {
+		repo = t.Paths.Roots[0]
+	}
+	repoPath, err := t.Paths.Resolve(repo)
+	if err != nil {
+		return registry.Result{}, err
+	}
+	repoPath, _ = filepath.Abs(repoPath)
+
+	branch := args.Branch
+	if branch == "" {
+		branch = "main"
+	}
+
+	results, err := t.Manager.Search(ctx, args.Query, repoPath, branch, args.Limit)
+	if err != nil {
+		return registry.Result{}, fmt.Errorf("rag search: %w", err)
+	}
+
+	if len(results) == 0 {
+		return registry.Result{Content: "no matching code found"}, nil
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Found %d results for: %s\n\n", len(results), args.Query))
+	for i, r := range results {
+		b.WriteString(fmt.Sprintf("--- Result %d [score=%.3f source=%s] ---\n", i+1, r.Score, r.Source))
+		if r.SymbolName != "" {
+			b.WriteString(fmt.Sprintf("symbol: %s\n", r.SymbolName))
+		}
+		b.WriteString(fmt.Sprintf("file: %s", r.FilePath))
+		if r.StartLine > 0 {
+			b.WriteString(fmt.Sprintf(":%d-%d", r.StartLine, r.EndLine))
+		}
+		b.WriteString(fmt.Sprintf(" [%s]\n", r.Language))
+		content := r.Content
+		if len(content) > 2000 {
+			content = content[:2000] + "\n...[truncated]"
+		}
+		b.WriteString(content)
+		b.WriteString("\n\n")
+	}
+	return registry.Result{Content: strings.TrimSpace(b.String())}, nil
+}
+
+type IndexTool struct {
+	Manager *internrag.Manager
+	Paths   safety.WorkspacePolicy
+}
+
+func (t IndexTool) Spec() llm.ToolSpec {
+	return registry.FunctionSpec(
+		"rag-index",
+		"Trigger incremental RAG index update for a repository. "+
+			"Use when you know the repo has recent changes that haven't been indexed yet.",
+		registry.ObjectSchema(nil, map[string]any{
+			"repo":   map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
+			"branch": map[string]any{"type": "string", "description": "Branch to index. Defaults to main."},
+		}),
+	)
+}
+
+func (t IndexTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+	var args struct {
+		Repo   string `json:"repo"`
+		Branch string `json:"branch"`
+	}
+	_ = json.Unmarshal(raw, &args)
+
+	repo := args.Repo
+	if repo == "" && len(t.Paths.Roots) > 0 {
+		repo = t.Paths.Roots[0]
+	}
+	repoPath, err := t.Paths.Resolve(repo)
+	if err != nil {
+		return registry.Result{}, err
+	}
+	repoPath, _ = filepath.Abs(repoPath)
+
+	branch := args.Branch
+	if branch == "" {
+		branch = "main"
+	}
+
+	result, err := t.Manager.IndexRepo(ctx, repoPath, branch)
+	if err != nil {
+		return registry.Result{}, fmt.Errorf("rag index: %w", err)
+	}
+
+	return registry.Result{
+		Content: fmt.Sprintf("Indexed %s@%s: %d files changed, %d chunks, took %s",
+			result.Repo, result.Branch, result.FilesChanged, result.ChunksAdded, result.Duration),
+	}, nil
+}
