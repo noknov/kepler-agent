@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
 )
 
@@ -144,17 +145,12 @@ type Usage struct {
 }
 
 type Client interface {
-	Chat(ctx Context, req Request) (Response, error)
+	Chat(ctx context.Context, req Request) (Response, error)
 }
 
 type StreamCallback func(delta string)
 
 type StreamClient interface {
 	Client
-	ChatStream(ctx Context, req Request, cb StreamCallback) (Response, error)
-}
-
-type Context interface {
-	Done() <-chan struct{}
-	Err() error
+	ChatStream(ctx context.Context, req Request, cb StreamCallback) (Response, error)
 }

@@ -9,7 +9,7 @@ type stubClient struct {
 	resp Response
 }
 
-func (s *stubClient) Chat(_ Context, _ Request) (Response, error) {
+func (s *stubClient) Chat(_ context.Context, _ Request) (Response, error) {
 	return s.resp, nil
 }
 

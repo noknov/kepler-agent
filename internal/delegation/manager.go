@@ -43,12 +43,16 @@ func NewManager(client llm.Client, model, thinking string) *Manager {
 	}
 }
 
-func (m *Manager) LoadMarkdown(rulesDir, _ string) error {
+func (m *Manager) LoadMarkdown(rulesDir, skillsDir string) error {
 	rules, err := loadDir(rulesDir)
 	if err != nil {
 		return err
 	}
-	m.rules = rules
+	skills, err := loadDir(skillsDir)
+	if err != nil {
+		return err
+	}
+	m.rules = append(rules, skills...)
 	return nil
 }
 
