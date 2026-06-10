@@ -26,7 +26,7 @@ internal/toolkit/tools/    Tool modules: code, git, github, gcp, notion, youtrac
 internal/delegation/       Focused delegate agent profiles plus rules/skills loading
 internal/observability/    In-memory metrics and reaction feedback
 PROMPT_DIR/rules/          Local runtime rules injected into prompts, gitignored by default
-PROMPT_DIR/skills/         Local skill docs injected into prompts and delegate profiles, gitignored by default
+PROMPT_DIR/skills/         Standard SKILL.md folders advertised by metadata and loaded on demand, gitignored by default
 ```
 
 ## Run locally
@@ -53,6 +53,7 @@ go run ./cmd/oncall-agent
 You can still point the service at other providers by changing `LLM_PROVIDER`, but startup now fails if your shell and `.env` disagree on provider settings unless you explicitly set `PREFER_DOTENV=true` to use `.env`, or `ALLOW_ENV_MIXING=true` to allow the shell to keep precedence.
 
 Prompt text can be kept out of git by placing local files under `PROMPT_DIR` (defaults to `.prompts/`, which is gitignored). Supported files are `system.md`, `delegates.json`, `app_messages.json`, `memory.json`, `tools.json`, `tool_statuses.json`, and `github_workflows.json`.
+Runtime rules can be added under `PROMPT_DIR/rules/`; these Markdown instructions are injected into the main on-call agent and delegate agents. Skills use the standard directory layout `PROMPT_DIR/skills/<skill-name>/SKILL.md` with `name` and `description` frontmatter. Only skill metadata is included in the base prompt; the agent loads full skill instructions on demand with `skills-load` when the user explicitly names a skill or the task matches a skill description.
 Service runbooks can be added as Markdown files under `PROMPT_DIR/runbooks/`; the `knowledge.runbook_search` tool searches them during Slack investigations.
 
 For Kimi For Coding, use the Claude Code-style Anthropic-compatible endpoint:
@@ -139,6 +140,7 @@ Current tool modules:
 - `slack.ask_user`
 - `slack.file_search`
 - `slack.json_analyze`
+- `skills.load`
 - `knowledge.runbook_search`
 - `delegate.run`
 
