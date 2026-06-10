@@ -23,7 +23,6 @@ type Manager struct {
 	thinking string
 	profiles map[string]Profile
 	rules    []string
-	skills   []string
 }
 
 func NewManager(client llm.Client, model, thinking string) *Manager {
@@ -33,28 +32,23 @@ func NewManager(client llm.Client, model, thinking string) *Manager {
 		thinking: thinking,
 		profiles: map[string]Profile{
 			"code": {
-				Name: "code",
+				Name:         "code",
 				SystemPrompt: prompts.Delegate("code", "You are a focused analysis delegate. You cannot run tools or read the repository. Use only the supplied Context. Quote evidence verbatim from Context when citing code or paths. If Context is insufficient, list unknowns and recommend which real tools the main agent should run (for example code-search, code-read_file, git-log). Never invent file contents, APIs, or command output."),
 			},
 			"incident": {
-				Name: "incident",
+				Name:         "incident",
 				SystemPrompt: prompts.Delegate("incident", "You are an incident triage delegate. You cannot run tools. Use only the supplied Context. Build hypotheses, evidence quoted from Context, impact, and next checks. Never invent logs, metrics, or deployments. Recommend concrete follow-up tools for the main agent when verification is needed."),
 			},
 		},
 	}
 }
 
-func (m *Manager) LoadMarkdown(rulesDir, skillsDir string) error {
+func (m *Manager) LoadMarkdown(rulesDir, _ string) error {
 	rules, err := loadDir(rulesDir)
 	if err != nil {
 		return err
 	}
-	skills, err := loadDir(skillsDir)
-	if err != nil {
-		return err
-	}
 	m.rules = rules
-	m.skills = skills
 	return nil
 }
 
@@ -63,10 +57,6 @@ func (m *Manager) RulesAndSkillsPrompt() string {
 	if len(m.rules) > 0 {
 		b.WriteString("\n\nAdditional rules:\n")
 		b.WriteString(strings.Join(m.rules, "\n\n---\n\n"))
-	}
-	if len(m.skills) > 0 {
-		b.WriteString("\n\nAvailable skills:\n")
-		b.WriteString(strings.Join(m.skills, "\n\n---\n\n"))
 	}
 	return b.String()
 }
