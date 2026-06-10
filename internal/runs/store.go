@@ -77,7 +77,9 @@ type QualityScore struct {
 type Store interface {
 	Save(ctx context.Context, run Run) error
 	Get(ctx context.Context, id string) (Run, bool, error)
+	List(ctx context.Context, limit int) ([]Run, error)
 	AddFeedback(ctx context.Context, runID string, feedback Feedback) error
+	AddFeedbackForMessage(ctx context.Context, channel, messageTS string, feedback Feedback) (string, bool, error)
 }
 
 type FileStore struct {

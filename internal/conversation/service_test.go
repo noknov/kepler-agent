@@ -184,14 +184,14 @@ type streamLLM struct {
 	content string
 }
 
-func (l *streamLLM) Chat(_ llm.Context, _ llm.Request) (llm.Response, error) {
+func (l *streamLLM) Chat(_ context.Context, _ llm.Request) (llm.Response, error) {
 	return llm.Response{
 		Message: llm.Message{Role: "assistant", Content: l.content},
 		Usage:   llm.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
 	}, nil
 }
 
-func (l *streamLLM) ChatStream(_ llm.Context, _ llm.Request, cb llm.StreamCallback) (llm.Response, error) {
+func (l *streamLLM) ChatStream(_ context.Context, _ llm.Request, cb llm.StreamCallback) (llm.Response, error) {
 	words := strings.Fields(l.content)
 	for i, w := range words {
 		if i > 0 {
@@ -484,7 +484,7 @@ func TestActiveReplyCanCancelRun(t *testing.T) {
 	}
 }
 
-func (l *replyLLM) Chat(_ llm.Context, _ llm.Request) (llm.Response, error) {
+func (l *replyLLM) Chat(_ context.Context, _ llm.Request) (llm.Response, error) {
 	content := l.content
 	if content == "" {
 		content = "ack"
@@ -504,7 +504,7 @@ type cancelAwareLLM struct {
 	once    sync.Once
 }
 
-func (l *cancelAwareLLM) Chat(ctx llm.Context, _ llm.Request) (llm.Response, error) {
+func (l *cancelAwareLLM) Chat(ctx context.Context, _ llm.Request) (llm.Response, error) {
 	l.once.Do(func() { close(l.started) })
 	<-ctx.Done()
 	return llm.Response{}, ctx.Err()
@@ -516,7 +516,7 @@ type toolThenFinalLLM struct {
 	calls    int
 }
 
-func (l *toolThenFinalLLM) Chat(_ llm.Context, req llm.Request) (llm.Response, error) {
+func (l *toolThenFinalLLM) Chat(_ context.Context, req llm.Request) (llm.Response, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.requests = append(l.requests, req)

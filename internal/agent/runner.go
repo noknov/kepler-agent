@@ -264,25 +264,25 @@ func (r Runner) executeToolCalls(ctx context.Context, calls []llm.ToolCall, seen
 		toRun = append(toRun, indexedCall{index: i, call: call})
 	}
 
-	if len(toRun) > 1 {
+	if len(toRun) == 0 {
+		r.observeToolResults(results)
+		return results
+	}
+
+	allParallel := len(toRun) > 1
+	if allParallel {
 		for _, ic := range toRun {
 			if !r.Tools.CanRunInParallel(ic.call.Function.Name) {
-				for _, ic := range toRun {
-					results[ic.index] = r.executeSingleTool(ctx, ic.call, req, true)
-				}
-				r.observeToolResults(results)
-				return results
+				allParallel = false
+				break
 			}
 		}
 	}
 
-	if len(toRun) == 1 {
-		ic := toRun[0]
-		results[ic.index] = r.executeSingleTool(ctx, ic.call, req, true)
-		r.observeToolResults(results)
-		return results
-	}
-	if len(toRun) == 0 {
+	if !allParallel {
+		for _, ic := range toRun {
+			results[ic.index] = r.executeSingleTool(ctx, ic.call, req, true)
+		}
 		r.observeToolResults(results)
 		return results
 	}
@@ -405,7 +405,8 @@ const toolResultCleared = "[previous result cleared to save context — key find
 
 // compressContext replaces old tool result bodies with a short stub when total
 // message size exceeds the budget. It preserves the most recent tool results
-// (last 8 messages) and all non-tool messages intact.
+// (last 8 messages) and all non-tool messages intact. Returns a new slice;
+// the original messages are never mutated.
 func (r Runner) compressContext(messages []llm.Message) []llm.Message {
 	limit := r.MaxContextChars
 	if limit <= 0 {
@@ -419,24 +420,26 @@ func (r Runner) compressContext(messages []llm.Message) []llm.Message {
 		return messages
 	}
 
-	// Find the boundary: preserve the last 8 messages unconditionally.
-	preserve := 8
-	if preserve > len(messages) {
-		preserve = len(messages)
-	}
-	boundary := len(messages) - preserve
+	out := make([]llm.Message, len(messages))
+	copy(out, messages)
 
-	for i := range messages[:boundary] {
-		if messages[i].Role == "tool" && len(messages[i].Content) > len(toolResultCleared) {
-			total -= len(messages[i].Content)
-			messages[i].Content = toolResultCleared
+	preserve := 8
+	if preserve > len(out) {
+		preserve = len(out)
+	}
+	boundary := len(out) - preserve
+
+	for i := range out[:boundary] {
+		if out[i].Role == "tool" && len(out[i].Content) > len(toolResultCleared) {
+			total -= len(out[i].Content)
+			out[i].Content = toolResultCleared
 			total += len(toolResultCleared)
 			if total <= limit {
 				break
 			}
 		}
 	}
-	return messages
+	return out
 }
 
 func (r Runner) format(toolName, output string) string {

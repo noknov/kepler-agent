@@ -313,7 +313,7 @@ type fakeClient struct {
 	requests  []llm.Request
 }
 
-func (f *fakeClient) Chat(_ llm.Context, req llm.Request) (llm.Response, error) {
+func (f *fakeClient) Chat(_ context.Context, req llm.Request) (llm.Response, error) {
 	f.requests = append(f.requests, req)
 	if len(f.responses) == 0 {
 		return llm.Response{}, errors.New("unexpected chat call")
