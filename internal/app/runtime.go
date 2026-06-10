@@ -20,6 +20,7 @@ import (
 	gitTools "github.com/wati/oncall-agent/internal/toolkit/tools/git"
 	githubTools "github.com/wati/oncall-agent/internal/toolkit/tools/github"
 	knowledgeTools "github.com/wati/oncall-agent/internal/toolkit/tools/knowledge"
+	luckinTools "github.com/wati/oncall-agent/internal/toolkit/tools/luckin"
 	notionTools "github.com/wati/oncall-agent/internal/toolkit/tools/notion"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/slacktool"
@@ -150,6 +151,10 @@ func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm
 	tools.Register(githubTools.DispatchWorkflowTool{Client: githubClient})
 	tools.Register(githubTools.WorkflowRunsTool{Client: githubClient})
 	tools.Register(githubTools.PRDiffTool{Client: githubClient})
+	luckinTools.RegisterAll(tools, &luckinTools.Client{
+		URL:   cfg.Tools.LuckinMCPURL,
+		Token: cfg.Tools.LuckinMCPToken,
+	})
 	tools.Register(webSearchTools.ReadPageTool{Client: webSearchTools.Client{}})
 	tools.Register(knowledgeTools.RunbookSearchTool{})
 	tools.Register(slacktool.AskUserTool{Slack: slackClient})
