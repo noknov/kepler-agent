@@ -326,25 +326,28 @@ func betterThreadExcerpt(a, b threadExcerpt) bool {
 }
 
 func truncate(s string, max int) string {
-	if max <= 0 || len(s) <= max {
+	runes := []rune(s)
+	if max <= 0 || len(runes) <= max {
 		return s
 	}
 	marker := "\n...[middle truncated to fit context budget]...\n"
-	if max <= len(marker)+200 {
-		return strings.TrimSpace(s[:max]) + "\n...[truncated]"
+	markerRunes := len([]rune(marker))
+	if max <= markerRunes+200 {
+		return strings.TrimSpace(string(runes[:max])) + "\n...[truncated]"
 	}
-	keep := max - len(marker)
+	keep := max - markerRunes
 	head := keep / 2
 	tail := keep - head
-	return strings.TrimSpace(s[:head]) + marker + strings.TrimSpace(s[len(s)-tail:])
+	return strings.TrimSpace(string(runes[:head])) + marker + strings.TrimSpace(string(runes[len(runes)-tail:]))
 }
 
 func truncateInline(s string, max int) string {
 	s = strings.TrimSpace(s)
-	if max <= 0 || len(s) <= max {
+	runes := []rune(s)
+	if max <= 0 || len(runes) <= max {
 		return s
 	}
-	return strings.TrimSpace(s[:max]) + "...[truncated]"
+	return strings.TrimSpace(string(runes[:max])) + "...[truncated]"
 }
 
 func isTransientToolErrorTurn(turn Turn) bool {

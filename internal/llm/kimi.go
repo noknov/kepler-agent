@@ -27,17 +27,13 @@ func NewKimiClient(baseURL, apiKey string, timeout time.Duration) *KimiClient {
 	}
 }
 
-func (c *KimiClient) Chat(ctx Context, req Request) (Response, error) {
+func (c *KimiClient) Chat(ctx context.Context, req Request) (Response, error) {
 	payload, err := json.Marshal(c.chatBody(req))
 	if err != nil {
 		return Response{}, err
 	}
 
-	stdCtx, ok := ctx.(context.Context)
-	if !ok {
-		stdCtx = context.Background()
-	}
-	data, err := c.doWithRetry(stdCtx, payload)
+	data, err := c.doWithRetry(ctx, payload)
 	if err != nil {
 		return Response{}, err
 	}
@@ -110,7 +106,7 @@ func (c *KimiClient) chatBody(req Request) map[string]any {
 	return body
 }
 
-func (c *KimiClient) ChatStream(ctx Context, req Request, cb StreamCallback) (Response, error) {
+func (c *KimiClient) ChatStream(ctx context.Context, req Request, cb StreamCallback) (Response, error) {
 	body := c.chatBody(req)
 	body["stream"] = true
 	payload, err := json.Marshal(body)
@@ -118,11 +114,7 @@ func (c *KimiClient) ChatStream(ctx Context, req Request, cb StreamCallback) (Re
 		return Response{}, err
 	}
 
-	stdCtx, ok := ctx.(context.Context)
-	if !ok {
-		stdCtx = context.Background()
-	}
-	httpReq, err := http.NewRequestWithContext(stdCtx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(payload))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(payload))
 	if err != nil {
 		return Response{}, err
 	}
