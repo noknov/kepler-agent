@@ -19,6 +19,17 @@ type Config struct {
 	Sessions  SessionConfig
 	Tools     ToolConfig
 	Observing ObservingConfig
+	RAG       RAGConfig
+}
+
+type RAGConfig struct {
+	Enabled          bool
+	PostgresDSN      string
+	EmbeddingBaseURL string
+	EmbeddingAPIKey  string
+	EmbeddingModel   string
+	EmbeddingDims    int
+	IndexInterval    time.Duration
 }
 
 type HTTPConfig struct {
@@ -201,6 +212,15 @@ func Load() (Config, error) {
 			OutputCostPerMTok:        envFloat("LLM_OUTPUT_COST_PER_MTOK", -1),
 			CacheReadCostPerMTok:     envFloat("LLM_CACHE_READ_COST_PER_MTOK", -1),
 			CacheCreationCostPerMTok: envFloat("LLM_CACHE_CREATION_COST_PER_MTOK", -1),
+		},
+		RAG: RAGConfig{
+			Enabled:          envBool("RAG_ENABLED", false),
+			PostgresDSN:      os.Getenv("RAG_POSTGRES_DSN"),
+			EmbeddingBaseURL: trimRightSlash(env("RAG_EMBEDDING_BASE_URL", "https://api.openai.com/v1")),
+			EmbeddingAPIKey:  os.Getenv("RAG_EMBEDDING_API_KEY"),
+			EmbeddingModel:   env("RAG_EMBEDDING_MODEL", "text-embedding-3-small"),
+			EmbeddingDims:    envInt("RAG_EMBEDDING_DIMS", 1536),
+			IndexInterval:    envDuration("RAG_INDEX_INTERVAL", 5*time.Minute),
 		},
 	}
 
