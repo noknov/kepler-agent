@@ -1,12 +1,14 @@
 package llm
 
+import "context"
+
 // NormalizingClient wraps an LLM client and normalizes assistant messages after each Chat.
 type NormalizingClient struct {
 	Inner Client
 	Caps  Capabilities
 }
 
-func (c *NormalizingClient) Chat(ctx Context, req Request) (Response, error) {
+func (c *NormalizingClient) Chat(ctx context.Context, req Request) (Response, error) {
 	resp, err := c.Inner.Chat(ctx, req)
 	if err != nil {
 		return resp, err
@@ -15,7 +17,7 @@ func (c *NormalizingClient) Chat(ctx Context, req Request) (Response, error) {
 	return resp, nil
 }
 
-func (c *NormalizingClient) ChatStream(ctx Context, req Request, cb StreamCallback) (Response, error) {
+func (c *NormalizingClient) ChatStream(ctx context.Context, req Request, cb StreamCallback) (Response, error) {
 	sc, ok := c.Inner.(StreamClient)
 	if !ok {
 		resp, err := c.Chat(ctx, req)

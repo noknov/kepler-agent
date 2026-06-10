@@ -33,7 +33,7 @@ func NewAnthropicClient(baseURL, apiKey string, timeout time.Duration, flavor st
 	}
 }
 
-func (c *AnthropicClient) Chat(ctx Context, req Request) (Response, error) {
+func (c *AnthropicClient) Chat(ctx context.Context, req Request) (Response, error) {
 	body := anthropicRequest{
 		Model:       req.Model,
 		System:      anthropicSystem(req.Messages),
@@ -51,11 +51,7 @@ func (c *AnthropicClient) Chat(ctx Context, req Request) (Response, error) {
 		return Response{}, err
 	}
 
-	stdCtx, ok := ctx.(context.Context)
-	if !ok {
-		stdCtx = context.Background()
-	}
-	data, err := c.doWithRetry(stdCtx, payload)
+	data, err := c.doWithRetry(ctx, payload)
 	if err != nil {
 		return Response{}, err
 	}
@@ -100,7 +96,7 @@ func (c *AnthropicClient) Chat(ctx Context, req Request) (Response, error) {
 	}, nil
 }
 
-func (c *AnthropicClient) ChatStream(ctx Context, req Request, cb StreamCallback) (Response, error) {
+func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, cb StreamCallback) (Response, error) {
 	body := anthropicRequest{
 		Model:       req.Model,
 		System:      anthropicSystem(req.Messages),
@@ -119,11 +115,7 @@ func (c *AnthropicClient) ChatStream(ctx Context, req Request, cb StreamCallback
 		return Response{}, err
 	}
 
-	stdCtx, ok := ctx.(context.Context)
-	if !ok {
-		stdCtx = context.Background()
-	}
-	httpReq, err := http.NewRequestWithContext(stdCtx, http.MethodPost, anthropicMessagesURL(c.baseURL), bytes.NewReader(payload))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicMessagesURL(c.baseURL), bytes.NewReader(payload))
 	if err != nil {
 		return Response{}, err
 	}

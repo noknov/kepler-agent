@@ -146,22 +146,23 @@ func combineQueuedFollowUps(requests []Request) (Request, bool) {
 	first := requests[0]
 	var b strings.Builder
 	b.WriteString("Queued follow-up from messages sent while the previous run was finishing:\n")
+	var combinedParts []llm.ContentPart
 	for _, req := range requests {
 		text := strings.TrimSpace(req.Text)
-		if text == "" {
-			continue
+		if text != "" {
+			b.WriteString("- <@")
+			b.WriteString(req.UserID)
+			b.WriteString(">: ")
+			b.WriteString(text)
+			b.WriteString("\n")
 		}
-		b.WriteString("- <@")
-		b.WriteString(req.UserID)
-		b.WriteString(">: ")
-		b.WriteString(text)
-		b.WriteString("\n")
+		combinedParts = append(combinedParts, req.ContentParts...)
 	}
 	followUp := first
 	followUp.EventID = first.EventID + ":queued:" + time.Now().UTC().Format("150405.000000000")
 	followUp.Text = strings.TrimSpace(b.String())
-	followUp.ContentParts = nil
-	if followUp.Text == "" {
+	followUp.ContentParts = combinedParts
+	if followUp.Text == "" && len(combinedParts) == 0 {
 		return Request{}, false
 	}
 	return followUp, true

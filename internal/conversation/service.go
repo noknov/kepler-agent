@@ -489,6 +489,16 @@ func (s *Service) markEvent(eventID string) bool {
 			delete(s.seen, id)
 		}
 	}
+	// Prune session locks that are no longer held and have no active run.
+	for id, lock := range s.locks {
+		if s.active[id] != nil {
+			continue
+		}
+		if lock.TryLock() {
+			lock.Unlock()
+			delete(s.locks, id)
+		}
+	}
 	if _, ok := s.seen[eventID]; ok {
 		return false
 	}
@@ -599,10 +609,11 @@ func summarizeTurns(turns []memory.Turn) string {
 
 func trimSummary(summary string, max int) string {
 	summary = strings.TrimSpace(summary)
-	if max <= 0 || len(summary) <= max {
+	runes := []rune(summary)
+	if max <= 0 || len(runes) <= max {
 		return summary
 	}
-	return strings.TrimSpace(summary[len(summary)-max:])
+	return strings.TrimSpace(string(runes[len(runes)-max:]))
 }
 
 func userFacingError(errorID string) string {

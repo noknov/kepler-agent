@@ -51,7 +51,7 @@ type Server struct {
 	conv       *conversation.Service
 	prompt     safety.PromptPolicy
 	metrics    *observability.Recorder
-	runStore   *runs.FileStore
+	runStore   runs.Store
 	mux        *http.ServeMux
 	modelPrefs sync.Map
 }
