@@ -79,6 +79,8 @@ type ToolConfig struct {
 	GitHubAPIBaseURL    string
 	GitHubDefaultOwner  string
 	GitHubDefaultRepo   string
+	LuckinMCPURL        string
+	LuckinMCPToken      string
 	WebSearchProvider   string
 	WebSearchGoogleKey  string
 	WebSearchGoogleCX   string
@@ -182,6 +184,8 @@ func Load() (Config, error) {
 			GitHubAPIBaseURL:    trimRightSlash(env("GITHUB_API_BASE_URL", "https://api.github.com")),
 			GitHubDefaultOwner:  os.Getenv("GITHUB_DEFAULT_OWNER"),
 			GitHubDefaultRepo:   os.Getenv("GITHUB_DEFAULT_REPO"),
+			LuckinMCPURL:        trimRightSlash(env("LUCKIN_MCP_URL", "https://gwmcp.lkcoffee.com/order/user/mcp")),
+			LuckinMCPToken:      os.Getenv("LUCKIN_MCP_TOKEN"),
 			WebSearchProvider:   env("WEB_SEARCH_PROVIDER", "google_cse"),
 			WebSearchGoogleKey:  os.Getenv("WEB_SEARCH_GOOGLE_API_KEY"),
 			WebSearchGoogleCX:   os.Getenv("WEB_SEARCH_GOOGLE_CX"),
