@@ -18,11 +18,20 @@ type Catalog struct {
 	MemoryLabels    map[string]string     `json:"memory_labels,omitempty"`
 	ToolStatuses    map[string]string     `json:"tool_statuses,omitempty"`
 	GitHubWorkflows map[string]string     `json:"github_workflows,omitempty"`
+	Rules           []string              `json:"-"`
+	Skills          []Skill               `json:"-"`
 }
 
 type ToolPrompt struct {
 	Description string            `json:"description,omitempty"`
 	Parameters  map[string]string `json:"parameters,omitempty"`
+}
+
+type Skill struct {
+	Name        string
+	Description string
+	Content     string
+	Source      string
 }
 
 var current = struct {
@@ -63,6 +72,8 @@ func LoadDir(dir string) error {
 	readJSON(filepath.Join(dir, "memory.json"), &catalog.MemoryLabels)
 	readJSON(filepath.Join(dir, "tool_statuses.json"), &catalog.ToolStatuses)
 	readJSON(filepath.Join(dir, "github_workflows.json"), &catalog.GitHubWorkflows)
+	catalog.Rules = readMarkdownDir(filepath.Join(dir, "rules"))
+	catalog.Skills = readSkillsDir(filepath.Join(dir, "skills"))
 
 	current.Lock()
 	current.dir = dir
@@ -119,6 +130,63 @@ func GitHubWorkflow(name, fallback string) string {
 	return choose(current.catalog.GitHubWorkflows[name], fallback)
 }
 
+func RulesPrompt() string {
+	current.RLock()
+	defer current.RUnlock()
+	var b strings.Builder
+	if len(current.catalog.Rules) > 0 {
+		b.WriteString("\n\nAdditional rules:\n")
+		b.WriteString(strings.Join(current.catalog.Rules, "\n\n---\n\n"))
+	}
+	return b.String()
+}
+
+func SkillsPrompt() string {
+	current.RLock()
+	defer current.RUnlock()
+	if len(current.catalog.Skills) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\nAvailable skills:\n")
+	b.WriteString("Skills are loaded on demand. If the user explicitly names a skill, or the task clearly matches a skill description, call skills-load with that skill name before following its workflow. Do not assume the full skill instructions until skills-load returns them.\n")
+	for _, skill := range current.catalog.Skills {
+		b.WriteString("\n- ")
+		b.WriteString(skill.Name)
+		if skill.Description != "" {
+			b.WriteString(": ")
+			b.WriteString(skill.Description)
+		}
+	}
+	return b.String()
+}
+
+func RulesAndSkillsPrompt() string {
+	return RulesPrompt() + SkillsPrompt()
+}
+
+func LoadSkill(name string) (Skill, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return Skill{}, false
+	}
+	current.RLock()
+	defer current.RUnlock()
+	if len(current.catalog.Skills) > 0 {
+		for _, skill := range current.catalog.Skills {
+			if strings.EqualFold(skill.Name, name) {
+				return skill, true
+			}
+		}
+		for _, skill := range current.catalog.Skills {
+			if strings.EqualFold(skill.Source, name) {
+				return skill, true
+			}
+		}
+	}
+	return Skill{}, false
+}
+
 func choose(value, fallback string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallback
@@ -130,6 +198,87 @@ func readText(path string, out *string) {
 	data, err := os.ReadFile(path)
 	if err == nil {
 		*out = strings.TrimSpace(string(data))
+	}
+}
+
+func readMarkdownDir(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, entry := range entries {
+		switch {
+		case entry.IsDir():
+			path := filepath.Join(dir, entry.Name(), "SKILL.md")
+			if data, err := os.ReadFile(path); err == nil {
+				out = append(out, "# "+entry.Name()+"/SKILL.md\n"+strings.TrimSpace(string(data)))
+			}
+		case filepath.Ext(entry.Name()) == ".md":
+			path := filepath.Join(dir, entry.Name())
+			if data, err := os.ReadFile(path); err == nil {
+				out = append(out, "# "+entry.Name()+"\n"+strings.TrimSpace(string(data)))
+			}
+		}
+	}
+	return out
+}
+
+func readSkillsDir(dir string) []Skill {
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return nil
+	}
+	var out []Skill
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name(), "SKILL.md")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		skill := parseSkill(entry.Name(), strings.TrimSpace(string(data)))
+		skill.Source = entry.Name() + "/SKILL.md"
+		out = append(out, skill)
+	}
+	return out
+}
+
+func parseSkill(fallbackName, content string) Skill {
+	name := fallbackName
+	description := ""
+	if strings.HasPrefix(content, "---\n") {
+		if end := strings.Index(content[len("---\n"):], "\n---"); end >= 0 {
+			frontmatter := content[len("---\n") : len("---\n")+end]
+			for _, line := range strings.Split(frontmatter, "\n") {
+				key, value, ok := strings.Cut(line, ":")
+				if !ok {
+					continue
+				}
+				value = strings.Trim(strings.TrimSpace(value), `"'`)
+				switch strings.TrimSpace(key) {
+				case "name":
+					if value != "" {
+						name = value
+					}
+				case "description":
+					description = value
+				}
+			}
+		}
+	}
+	return Skill{
+		Name:        name,
+		Description: description,
+		Content:     content,
 	}
 }
 

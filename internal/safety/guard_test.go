@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/wati/oncall-agent/internal/prompts"
 )
 
 func TestSystemPromptFallbackStaysMinimal(t *testing.T) {
@@ -17,6 +19,37 @@ func TestSystemPromptFallbackStaysMinimal(t *testing.T) {
 	}
 	if strings.Contains(prompt, "food or drink ordering") || strings.Contains(prompt, "author") {
 		t.Fatalf("SystemPrompt() should not contain detailed product prompt text: %q", prompt)
+	}
+}
+
+func TestSystemPromptIncludesConfiguredSkills(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "skills", "triage"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skill := `---
+name: triage
+description: Use this for alert triage.
+---
+
+# Triage
+
+Full triage workflow body.
+`
+	if err := os.WriteFile(filepath.Join(dir, "skills", "triage", "SKILL.md"), []byte(skill), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := prompts.LoadDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = prompts.LoadDir(t.TempDir()) })
+
+	prompt := (PromptPolicy{}).SystemPrompt()
+	if !strings.Contains(prompt, "Available skills:") || !strings.Contains(prompt, "Use this for alert triage.") {
+		t.Fatalf("SystemPrompt() did not include configured skill:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "Full triage workflow body.") {
+		t.Fatalf("SystemPrompt() should not include full skill body:\n%s", prompt)
 	}
 }
 
