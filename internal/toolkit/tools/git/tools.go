@@ -159,6 +159,9 @@ func (t SearchRefTool) Execute(ctx context.Context, raw json.RawMessage, rt regi
 
 type RepoSearchTool struct{ Base }
 
+func (RepoSearchTool) Repeatable() bool { return true }
+func (RepoSearchTool) Parallel() bool   { return true }
+
 func (t RepoSearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"repo-search",
@@ -305,6 +308,9 @@ func (t ReadFileRefTool) Execute(ctx context.Context, raw json.RawMessage, rt re
 }
 
 type RepoReadFileTool struct{ Base }
+
+func (RepoReadFileTool) Repeatable() bool { return true }
+func (RepoReadFileTool) Parallel() bool   { return true }
 
 func (t RepoReadFileTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
