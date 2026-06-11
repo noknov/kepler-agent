@@ -3,7 +3,7 @@ services:
     image: pgvector/pgvector:pg17
     container_name: oncall-rag-pgvector
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_USER: oncall
       POSTGRES_PASSWORD: oncall
@@ -12,5 +12,25 @@ services:
       - rag_pgdata:/var/lib/postgresql/data
     restart: unless-stopped
 
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: oncall-rag-pgadmin
+    ports:
+      - "127.0.0.1:5480:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@local.dev
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+      PGADMIN_SERVER_JSON_FILE: /pgadmin4/servers.json
+    volumes:
+      - rag_pgadmin:/var/lib/pgadmin
+      - ./.docker/pgadmin/servers.json:/pgadmin4/servers.json:ro
+      - ./.docker/pgadmin/pgpassfile:/tmp/pgpassfile:ro
+    depends_on:
+      - pgvector
+    restart: unless-stopped
+
 volumes:
   rag_pgdata:
+  rag_pgadmin:

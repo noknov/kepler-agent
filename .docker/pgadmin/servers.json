@@ -1,0 +1,15 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "oncall-rag",
+      "Group": "Servers",
+      "Host": "pgvector",
+      "Port": 5432,
+      "MaintenanceDB": "oncall_rag",
+      "Username": "oncall",
+      "Password": "oncall",
+      "SSLMode": "prefer",
+      "PassFile": "/tmp/pgpassfile"
+    }
+  }
+}
