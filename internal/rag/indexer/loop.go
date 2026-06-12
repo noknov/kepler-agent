@@ -13,6 +13,12 @@ type Loop struct {
 	Indexer  *Indexer
 	Roots    []string
 	Interval time.Duration
+	Observer Observer
+}
+
+type Observer interface {
+	RAGIndexSuccess(repo, branch, commit string, filesChanged, chunksAdded, chunksReused int, d time.Duration)
+	RAGIndexError(repo, branch string, d time.Duration, err error)
 }
 
 func (l *Loop) Run(ctx context.Context) {
@@ -49,14 +55,21 @@ func (l *Loop) indexAll(ctx context.Context) {
 
 			fetchOrigin(ctx, repo)
 
+			start := time.Now()
 			result, err := l.Indexer.IndexRepo(ctx, repo, branch)
 			if err != nil {
+				if l.Observer != nil {
+					l.Observer.RAGIndexError(repo, branch, time.Since(start), err)
+				}
 				log.Printf("rag/indexer: failed to index %s@%s: %v", repo, branch, err)
 				continue
 			}
+			if l.Observer != nil {
+				l.Observer.RAGIndexSuccess(repo, branch, result.CommitSHA, result.FilesChanged, result.ChunksAdded, result.ChunksReused, result.Duration)
+			}
 			if result.FilesChanged > 0 {
-				log.Printf("rag/indexer: indexed %s@%s: %d files, %d chunks in %s",
-					repo, branch, result.FilesChanged, result.ChunksAdded, result.Duration)
+				log.Printf("rag/indexer: indexed %s@%s: %d files, %d chunks, %d reused in %s",
+					repo, branch, result.FilesChanged, result.ChunksAdded, result.ChunksReused, result.Duration)
 			}
 		}
 	}

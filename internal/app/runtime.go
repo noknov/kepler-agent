@@ -67,12 +67,12 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *obs
 			EmbeddingDims:    cfg.RAG.EmbeddingDims,
 			IndexInterval:    cfg.RAG.IndexInterval,
 			WorkspaceRoots:   cfg.Security.WorkspaceRoots,
+			Observer:         recorder,
 		})
 		if err != nil {
 			log.Printf("rag: failed to initialize, continuing without RAG: %v", err)
 		} else {
-			tools.Register(ragTools.SearchTool{Manager: ragMgr, Paths: workspacePolicy})
-			tools.Register(ragTools.IndexTool{Manager: ragMgr, Paths: workspacePolicy})
+			tools.Register(ragTools.SearchTool{Manager: ragMgr, Paths: workspacePolicy, Observer: recorder})
 		}
 	}
 
