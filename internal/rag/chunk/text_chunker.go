@@ -32,8 +32,9 @@ func (t TextChunker) Chunk(path, content string) ([]Chunk, error) {
 			ChunkType: TypeBlock,
 			Content:   content,
 		}
-		fillChunkFields([]Chunk{c}, "", path, lang)
-		return []Chunk{c}, nil
+		chunks := []Chunk{c}
+		fillChunkFields(chunks, "", path, lang)
+		return chunks, nil
 	}
 
 	var chunks []Chunk
