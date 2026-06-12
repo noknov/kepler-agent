@@ -68,7 +68,7 @@ func (idx *Indexer) IndexRepo(ctx context.Context, repoPath, branch string) (*In
 		}, nil
 	}
 
-	var changedFiles []string
+	var changedFiles []changedFile
 	if found && state.LastCommit != "" {
 		changedFiles, err = gitDiffFiles(ctx, repoPath, state.LastCommit, currentCommit)
 		if err != nil {
@@ -79,9 +79,13 @@ func (idx *Indexer) IndexRepo(ctx context.Context, repoPath, branch string) (*In
 	}
 
 	if !found || changedFiles == nil {
-		changedFiles, err = gitListFiles(ctx, repoPath, currentCommit)
+		files, err := gitListFiles(ctx, repoPath, currentCommit)
 		if err != nil {
 			return nil, fmt.Errorf("list files: %w", err)
+		}
+		changedFiles = make([]changedFile, 0, len(files))
+		for _, file := range files {
+			changedFiles = append(changedFiles, changedFile{Path: file})
 		}
 	}
 
@@ -95,24 +99,33 @@ func (idx *Indexer) IndexRepo(ctx context.Context, repoPath, branch string) (*In
 	var allChunks []store.ChunkRecord
 	var needEmbed []int
 
-	for _, filePath := range indexable {
+	for _, file := range indexable {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
 		}
 
-		content, err := gitShowFile(ctx, repoPath, currentCommit, filePath)
-		if err != nil {
-			if err := idx.Store.DeleteChunksForFile(ctx, repoPath, branch, filePath); err != nil {
-				log.Printf("rag/indexer: delete chunks for removed file %s: %v", filePath, err)
+		if file.Deleted {
+			if err := idx.Store.DeleteChunksForFile(ctx, repoPath, branch, file.Path); err != nil {
+				log.Printf("rag/indexer: delete chunks for removed file %s: %v", file.Path, err)
 			}
 			continue
 		}
 
-		chunks, err := idx.Chunker.Chunk(filePath, content)
+		if err := idx.Store.DeleteChunksForFile(ctx, repoPath, branch, file.Path); err != nil {
+			return nil, fmt.Errorf("delete old chunks for %s: %w", file.Path, err)
+		}
+
+		content, err := gitShowFile(ctx, repoPath, currentCommit, file.Path)
 		if err != nil {
-			log.Printf("rag/indexer: chunk %s: %v", filePath, err)
+			log.Printf("rag/indexer: read %s at %s: %v", file.Path, currentCommit, err)
+			continue
+		}
+
+		chunks, err := idx.Chunker.Chunk(file.Path, content)
+		if err != nil {
+			log.Printf("rag/indexer: chunk %s: %v", file.Path, err)
 			continue
 		}
 
@@ -187,10 +200,15 @@ func buildEmbeddingText(c *store.ChunkRecord) string {
 	return b.String()
 }
 
-func filterIndexable(files []string) []string {
-	out := make([]string, 0, len(files))
+type changedFile struct {
+	Path    string
+	Deleted bool
+}
+
+func filterIndexable(files []changedFile) []changedFile {
+	out := make([]changedFile, 0, len(files))
 	for _, f := range files {
-		if chunk.ShouldIndex(f) {
+		if chunk.ShouldIndex(f.Path) {
 			out = append(out, f)
 		}
 	}
@@ -205,12 +223,32 @@ func gitRevParse(ctx context.Context, repo, ref string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-func gitDiffFiles(ctx context.Context, repo, fromCommit, toCommit string) ([]string, error) {
-	out, err := gitRun(ctx, repo, "diff", "--name-only", "--diff-filter=ACMR", fromCommit+".."+toCommit)
+func gitDiffFiles(ctx context.Context, repo, fromCommit, toCommit string) ([]changedFile, error) {
+	out, err := gitRun(ctx, repo, "diff", "--name-status", "--diff-filter=ACDMR", fromCommit+".."+toCommit)
 	if err != nil {
 		return nil, err
 	}
-	return splitNonEmpty(out), nil
+	return parseNameStatus(out), nil
+}
+
+func parseNameStatus(out string) []changedFile {
+	lines := splitNonEmpty(out)
+	files := make([]changedFile, 0, len(lines))
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		status := fields[0]
+		path := fields[1]
+		deleted := strings.HasPrefix(status, "D")
+		if strings.HasPrefix(status, "R") && len(fields) >= 3 {
+			files = append(files, changedFile{Path: fields[1], Deleted: true})
+			path = fields[2]
+		}
+		files = append(files, changedFile{Path: path, Deleted: deleted})
+	}
+	return files
 }
 
 func gitListFiles(ctx context.Context, repo, commit string) ([]string, error) {
