@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -19,6 +20,10 @@ type Client struct {
 }
 
 func NewClient(baseURL, apiKey, model string, dims int) *Client {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		baseURL = "https://api.openai.com/v1"
+	}
 	if model == "" {
 		model = "text-embedding-3-small"
 	}

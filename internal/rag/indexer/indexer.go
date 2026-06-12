@@ -50,9 +50,14 @@ func (idx *Indexer) IndexRepo(ctx context.Context, repoPath, branch string) (*In
 		return nil, fmt.Errorf("abs path: %w", err)
 	}
 
-	currentCommit, err := gitRevParse(ctx, repoPath, "origin/"+branch)
+	ref, err := resolveBranchRef(ctx, repoPath, branch)
 	if err != nil {
-		return nil, fmt.Errorf("rev-parse origin/%s: %w", branch, err)
+		return nil, err
+	}
+
+	currentCommit, err := gitRevParse(ctx, repoPath, ref)
+	if err != nil {
+		return nil, fmt.Errorf("rev-parse %s: %w", ref, err)
 	}
 
 	state, found, err := idx.Store.GetIndexState(ctx, repoPath, branch)
@@ -221,6 +226,15 @@ func gitRevParse(ctx context.Context, repo, ref string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
+}
+
+func resolveBranchRef(ctx context.Context, repo, branch string) (string, error) {
+	for _, ref := range []string{"origin/" + branch, branch} {
+		if _, err := gitRevParse(ctx, repo, ref); err == nil {
+			return ref, nil
+		}
+	}
+	return "", fmt.Errorf("branch %q does not exist as origin/%s or local %s", branch, branch, branch)
 }
 
 func gitDiffFiles(ctx context.Context, repo, fromCommit, toCommit string) ([]changedFile, error) {

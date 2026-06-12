@@ -11,7 +11,7 @@ import (
 // Loop periodically indexes all repos under the given workspace roots.
 type Loop struct {
 	Indexer  *Indexer
-	Roots   []string
+	Roots    []string
 	Interval time.Duration
 }
 
@@ -83,8 +83,7 @@ func discoverRepos(root string) []string {
 
 func detectDefaultBranch(ctx context.Context, repo string) string {
 	for _, branch := range []string{"mt-main", "main", "master"} {
-		out, err := gitRun(ctx, repo, "rev-parse", "--verify", "--quiet", "origin/"+branch)
-		if err == nil && strings.TrimSpace(out) != "" {
+		if _, err := resolveBranchRef(ctx, repo, branch); err == nil {
 			return branch
 		}
 	}

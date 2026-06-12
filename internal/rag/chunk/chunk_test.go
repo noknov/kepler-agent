@@ -56,6 +56,29 @@ func TestShouldIndex(t *testing.T) {
 	}
 }
 
+func TestComputeIDIncludesBranch(t *testing.T) {
+	base := Chunk{
+		RepoPath: "/repo",
+		FilePath: "service.go",
+		Content:  "func Run() {}\n",
+	}
+
+	mainChunk := base
+	mainChunk.Branch = "main"
+	mainChunk.ComputeID()
+
+	featureChunk := base
+	featureChunk.Branch = "feature"
+	featureChunk.ComputeID()
+
+	if mainChunk.ID == "" || featureChunk.ID == "" {
+		t.Fatal("chunk IDs should be populated")
+	}
+	if mainChunk.ID == featureChunk.ID {
+		t.Fatalf("chunk IDs should differ across branches, got %q", mainChunk.ID)
+	}
+}
+
 func TestGoChunker(t *testing.T) {
 	src := `package example
 
