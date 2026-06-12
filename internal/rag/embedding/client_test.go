@@ -21,7 +21,10 @@ func TestTruncateBody(t *testing.T) {
 }
 
 func TestNewClient_Defaults(t *testing.T) {
-	c := NewClient("https://api.openai.com/v1", "sk-test", "", 0)
+	c := NewClient("", "sk-test", "", 0)
+	if c.BaseURL != "https://api.openai.com/v1" {
+		t.Errorf("default base URL = %q, want https://api.openai.com/v1", c.BaseURL)
+	}
 	if c.Model != "text-embedding-3-small" {
 		t.Errorf("default model = %q, want text-embedding-3-small", c.Model)
 	}
@@ -30,5 +33,12 @@ func TestNewClient_Defaults(t *testing.T) {
 	}
 	if c.HTTPClient == nil {
 		t.Error("HTTP client should not be nil")
+	}
+}
+
+func TestNewClient_TrimsTrailingSlash(t *testing.T) {
+	c := NewClient("https://example.com/v1///", "", "model", 128)
+	if c.BaseURL != "https://example.com/v1" {
+		t.Errorf("base URL = %q, want https://example.com/v1", c.BaseURL)
 	}
 }
