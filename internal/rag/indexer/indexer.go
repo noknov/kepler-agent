@@ -17,9 +17,13 @@ import (
 
 type Indexer struct {
 	Store     store.Store
-	Embedder  *embedding.Client
+	Embedder  Embedder
 	Chunker   *chunk.Dispatcher
 	BatchSize int
+}
+
+type Embedder interface {
+	EmbedBatched(ctx context.Context, texts []string, batchSize int) ([][]float32, error)
 }
 
 func New(s store.Store, emb *embedding.Client) *Indexer {
@@ -32,12 +36,15 @@ func New(s store.Store, emb *embedding.Client) *Indexer {
 }
 
 type IndexResult struct {
-	Repo         string
-	Branch       string
-	FilesChanged int
-	ChunksAdded  int
-	ChunksKept   int
-	Duration     time.Duration
+	Repo           string
+	Branch         string
+	CommitSHA      string
+	FilesChanged   int
+	ChunksAdded    int
+	ChunksKept     int
+	ChunksReused   int
+	ChunksEmbedded int
+	Duration       time.Duration
 }
 
 // IndexRepo performs an incremental index of a single repo+branch.
@@ -67,9 +74,10 @@ func (idx *Indexer) IndexRepo(ctx context.Context, repoPath, branch string) (*In
 
 	if found && state.LastCommit == currentCommit {
 		return &IndexResult{
-			Repo:     repoPath,
-			Branch:   branch,
-			Duration: time.Since(start),
+			Repo:      repoPath,
+			Branch:    branch,
+			CommitSHA: currentCommit,
+			Duration:  time.Since(start),
 		}, nil
 	}
 
@@ -98,6 +106,7 @@ func (idx *Indexer) IndexRepo(ctx context.Context, repoPath, branch string) (*In
 	result := &IndexResult{
 		Repo:         repoPath,
 		Branch:       branch,
+		CommitSHA:    currentCommit,
 		FilesChanged: len(indexable),
 	}
 
@@ -118,9 +127,11 @@ func (idx *Indexer) IndexRepo(ctx context.Context, repoPath, branch string) (*In
 			continue
 		}
 
-		if err := idx.Store.DeleteChunksForFile(ctx, repoPath, branch, file.Path); err != nil {
-			return nil, fmt.Errorf("delete old chunks for %s: %w", file.Path, err)
+		existing, err := idx.Store.GetChunksForFile(ctx, repoPath, branch, file.Path)
+		if err != nil {
+			return nil, fmt.Errorf("get old chunks for %s: %w", file.Path, err)
 		}
+		existingByID := chunksByID(existing)
 
 		content, err := gitShowFile(ctx, repoPath, currentCommit, file.Path)
 		if err != nil {
@@ -144,13 +155,24 @@ func (idx *Indexer) IndexRepo(ctx context.Context, repoPath, branch string) (*In
 
 		for _, c := range chunks {
 			rec := store.ChunkRecord{Chunk: c}
+			if old, ok := existingByID[c.ID]; ok && old.ContentHash == c.ContentHash && len(old.Embedding) > 0 {
+				rec.Embedding = old.Embedding
+				result.ChunksReused++
+			}
 			idx := len(allChunks)
 			allChunks = append(allChunks, rec)
-			needEmbed = append(needEmbed, idx)
+			if len(rec.Embedding) == 0 {
+				needEmbed = append(needEmbed, idx)
+			}
+		}
+
+		if err := idx.Store.DeleteChunksForFile(ctx, repoPath, branch, file.Path); err != nil {
+			return nil, fmt.Errorf("delete old chunks for %s: %w", file.Path, err)
 		}
 	}
 
 	if len(needEmbed) > 0 {
+		result.ChunksEmbedded = len(needEmbed)
 		texts := make([]string, len(needEmbed))
 		for i, ci := range needEmbed {
 			c := &allChunks[ci]
@@ -185,6 +207,14 @@ func (idx *Indexer) IndexRepo(ctx context.Context, repoPath, branch string) (*In
 
 	result.Duration = time.Since(start)
 	return result, nil
+}
+
+func chunksByID(records []store.ChunkRecord) map[string]store.ChunkRecord {
+	out := make(map[string]store.ChunkRecord, len(records))
+	for _, r := range records {
+		out[r.ID] = r
+	}
+	return out
 }
 
 func buildEmbeddingText(c *store.ChunkRecord) string {

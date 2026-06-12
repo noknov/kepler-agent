@@ -78,6 +78,8 @@ const repetitiveRetryPrompt = "Your previous answer became repetitive. Give one 
 
 const textualToolCallRetryPrompt = "Your previous reply included textual tool-call markup (for example <tool_call> or <function=...>) instead of using the API's structured tool calling. Do not output tool XML or pseudo tool syntax. Either call tools through the provided tool interface, or give a concise final answer in plain language using evidence already gathered."
 
+const emptyResponseRetryPrompt = "Your previous response contained no user-visible text and no structured tool calls. Continue from the current conversation and either call an available tool through the structured tool interface or give a concise final answer in plain text."
+
 func budgetWarningPrompt(remainingToolSteps int) string {
 	return fmt.Sprintf(
 		"You have %d tool-using turn(s) remaining before you must give your final answer. Stop exploring. Synthesize your findings now using evidence already gathered. Do not start new searches or delegate-run calls unless absolutely critical.",
@@ -98,6 +100,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	seenToolCalls := map[string]int{}
 	retriedRepetitiveFinal := false
 	retriedTextualToolCall := false
+	retriedEmptyResponse := false
 	budgetWarned := false
 
 	for step := 0; step < maxSteps; step++ {
@@ -161,6 +164,14 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			r.Observer.LLMCall(resp.Usage, time.Since(llmStart), err)
 		}
 		if err != nil {
+			if llm.IsEmptyResponse(err) && !retriedEmptyResponse {
+				retriedEmptyResponse = true
+				messages = append(messages, llm.Message{Role: "system", Content: emptyResponseRetryPrompt})
+				if r.StatusUpdate != nil {
+					r.StatusUpdate(RetryStatus(req.Locale))
+				}
+				continue
+			}
 			return Result{Generated: generated}, err
 		}
 
@@ -320,6 +331,8 @@ func (r Runner) executeSingleTool(ctx context.Context, call llm.ToolCall, req Re
 	content := ""
 	if err != nil {
 		content = "[tool error] " + err.Error()
+	} else if result.WaitForUser {
+		content = r.sanitize(result.Content)
 	} else {
 		content = r.format(name, r.sanitize(result.Content))
 	}

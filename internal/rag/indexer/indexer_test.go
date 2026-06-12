@@ -5,7 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
+
+	"github.com/wati/oncall-agent/internal/rag/chunk"
+	"github.com/wati/oncall-agent/internal/rag/store"
 )
 
 func TestParseNameStatus(t *testing.T) {
@@ -63,6 +67,97 @@ func TestResolveBranchRefFallsBackToLocalBranch(t *testing.T) {
 	}
 }
 
+func TestIndexRepoReusesExistingChunkEmbeddings(t *testing.T) {
+	ctx := context.Background()
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	writeFile(t, repo, "main.go", `package main
+
+func Stable() string {
+	return "stable"
+}
+
+func Changed() string {
+	return "old"
+}
+`)
+	runGit(t, repo, "add", "main.go")
+	runGit(t, repo, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "initial")
+	initialCommit, err := gitRevParse(ctx, repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	absRepo, err := filepath.Abs(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialContent, err := gitShowFile(ctx, repo, initialCommit, "main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := chunk.NewDispatcher()
+	initialChunks, err := dispatcher.Chunk("main.go", initialContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing := make([]store.ChunkRecord, 0, len(initialChunks))
+	for i := range initialChunks {
+		initialChunks[i].RepoPath = absRepo
+		initialChunks[i].Branch = "main"
+		initialChunks[i].CommitSHA = initialCommit
+		initialChunks[i].ComputeContentHash()
+		initialChunks[i].ComputeID()
+		existing = append(existing, store.ChunkRecord{
+			Chunk:     initialChunks[i],
+			Embedding: []float32{1, 2, 3},
+		})
+	}
+
+	writeFile(t, repo, "main.go", `package main
+
+func Stable() string {
+	return "stable"
+}
+
+func Changed() string {
+	return "new"
+}
+`)
+	runGit(t, repo, "add", "main.go")
+	runGit(t, repo, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "update changed")
+
+	st := &memoryStore{
+		state: store.IndexState{RepoPath: absRepo, Branch: "main", LastCommit: initialCommit},
+		files: map[string][]store.ChunkRecord{
+			"main.go": existing,
+		},
+	}
+	emb := &recordingEmbedder{}
+	idx := &Indexer{
+		Store:     st,
+		Embedder:  emb,
+		Chunker:   chunk.NewDispatcher(),
+		BatchSize: 64,
+	}
+	result, err := idx.IndexRepo(ctx, repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FilesChanged != 1 {
+		t.Fatalf("FilesChanged = %d, want 1", result.FilesChanged)
+	}
+	if emb.calls != 1 {
+		t.Fatalf("embedding calls = %d, want 1", emb.calls)
+	}
+	if emb.inputs != 1 {
+		t.Fatalf("embedding inputs = %d, want only the changed chunk", emb.inputs)
+	}
+	if len(st.upserts) == 0 {
+		t.Fatal("expected upserted chunks")
+	}
+}
+
 func runGit(t *testing.T, repo string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
@@ -70,4 +165,89 @@ func runGit(t *testing.T, repo string, args ...string) {
 	if err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, out)
 	}
+}
+
+func writeFile(t *testing.T, repo, path, content string) {
+	t.Helper()
+	fullPath := filepath.Join(repo, path)
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type memoryStore struct {
+	mu      sync.Mutex
+	state   store.IndexState
+	files   map[string][]store.ChunkRecord
+	upserts []store.ChunkRecord
+}
+
+func (s *memoryStore) Migrate(context.Context) error { return nil }
+
+func (s *memoryStore) UpsertChunks(_ context.Context, records []store.ChunkRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.upserts = append(s.upserts, records...)
+	return nil
+}
+
+func (s *memoryStore) GetChunksForFile(_ context.Context, _, _, filePath string) ([]store.ChunkRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	records := s.files[filePath]
+	out := make([]store.ChunkRecord, len(records))
+	copy(out, records)
+	return out, nil
+}
+
+func (s *memoryStore) DeleteChunksForFile(_ context.Context, _, _, filePath string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.files, filePath)
+	return nil
+}
+
+func (s *memoryStore) DeleteStaleChunks(context.Context, string, string, []string) error {
+	return nil
+}
+
+func (s *memoryStore) GetIndexState(context.Context, string, string) (store.IndexState, bool, error) {
+	return s.state, true, nil
+}
+
+func (s *memoryStore) SetIndexState(_ context.Context, state store.IndexState) error {
+	s.state = state
+	return nil
+}
+
+func (s *memoryStore) SearchSemantic(context.Context, []float32, string, string, int) ([]store.SearchResult, error) {
+	return nil, nil
+}
+
+func (s *memoryStore) SearchFullText(context.Context, string, string, string, int) ([]store.SearchResult, error) {
+	return nil, nil
+}
+
+func (s *memoryStore) SearchHybrid(context.Context, []float32, string, string, string, int) ([]store.SearchResult, error) {
+	return nil, nil
+}
+
+func (s *memoryStore) Close() error { return nil }
+
+type recordingEmbedder struct {
+	calls  int
+	inputs int
+}
+
+func (e *recordingEmbedder) EmbedBatched(_ context.Context, texts []string, _ int) ([][]float32, error) {
+	e.calls++
+	e.inputs += len(texts)
+	out := make([][]float32, len(texts))
+	for i := range out {
+		out[i] = []float32{9, 9, 9}
+	}
+	return out, nil
 }
