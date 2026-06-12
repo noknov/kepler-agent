@@ -22,7 +22,9 @@ func (g GoChunker) Chunk(path, content string) ([]Chunk, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, content, parser.ParseComments)
 	if err != nil {
-		return fallbackChunks(path, content), nil
+		chunks := fallbackChunks(path, content)
+		fillChunkFields(chunks, "", path, "go")
+		return chunks, nil
 	}
 
 	lines := strings.Split(content, "\n")

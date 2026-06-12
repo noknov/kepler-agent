@@ -1,9 +1,11 @@
 package rag
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -67,7 +69,7 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 
 	branch := args.Branch
 	if branch == "" {
-		branch = "main"
+		branch = defaultBranch(ctx, repoPath)
 	}
 
 	results, err := t.Manager.Search(ctx, args.Query, repoPath, branch, args.Limit)
@@ -137,7 +139,7 @@ func (t IndexTool) Execute(ctx context.Context, raw json.RawMessage, rt registry
 
 	branch := args.Branch
 	if branch == "" {
-		branch = "main"
+		branch = defaultBranch(ctx, repoPath)
 	}
 
 	result, err := t.Manager.IndexRepo(ctx, repoPath, branch)
@@ -149,4 +151,23 @@ func (t IndexTool) Execute(ctx context.Context, raw json.RawMessage, rt registry
 		Content: fmt.Sprintf("Indexed %s@%s: %d files changed, %d chunks, took %s",
 			result.Repo, result.Branch, result.FilesChanged, result.ChunksAdded, result.Duration),
 	}, nil
+}
+
+func defaultBranch(ctx context.Context, repoPath string) string {
+	for _, branch := range []string{"main", "master"} {
+		if refExists(ctx, repoPath, "origin/"+branch) || refExists(ctx, repoPath, branch) {
+			return branch
+		}
+	}
+	return "main"
+}
+
+func refExists(ctx context.Context, repoPath, ref string) bool {
+	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "--no-optional-locks", "rev-parse", "--verify", "--quiet", ref)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return false
+	}
+	return strings.TrimSpace(stdout.String()) != ""
 }

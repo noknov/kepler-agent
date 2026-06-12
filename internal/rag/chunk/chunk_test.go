@@ -283,6 +283,54 @@ Content for section two.
 	}
 }
 
+func TestTextChunker_SmallFileFillsFields(t *testing.T) {
+	chunker := TextChunker{}
+	chunks, err := chunker.Chunk("config.yaml", "enabled: true\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("expected 1 chunk, got %d", len(chunks))
+	}
+	c := chunks[0]
+	if c.FilePath != "config.yaml" {
+		t.Errorf("FilePath = %q, want config.yaml", c.FilePath)
+	}
+	if c.Language != "yaml" {
+		t.Errorf("Language = %q, want yaml", c.Language)
+	}
+	if c.ID == "" {
+		t.Error("ID should be populated")
+	}
+	if c.ContentHash == "" {
+		t.Error("ContentHash should be populated")
+	}
+}
+
+func TestGoChunker_FallbackFillsFields(t *testing.T) {
+	chunker := GoChunker{}
+	chunks, err := chunker.Chunk("broken.go", "package main\nfunc broken(\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("expected 1 fallback chunk, got %d", len(chunks))
+	}
+	c := chunks[0]
+	if c.FilePath != "broken.go" {
+		t.Errorf("FilePath = %q, want broken.go", c.FilePath)
+	}
+	if c.Language != "go" {
+		t.Errorf("Language = %q, want go", c.Language)
+	}
+	if c.ID == "" {
+		t.Error("ID should be populated")
+	}
+	if c.ContentHash == "" {
+		t.Error("ContentHash should be populated")
+	}
+}
+
 func TestDispatcher(t *testing.T) {
 	d := NewDispatcher()
 
