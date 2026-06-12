@@ -2,6 +2,7 @@ package llm
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
@@ -46,5 +47,33 @@ func TestAnthropicChatParsesToolUseBlocks(t *testing.T) {
 	}
 	if message.Content != "checking" {
 		t.Fatalf("content = %q", message.Content)
+	}
+}
+
+func TestAnthropicEmptyResponseErrorMetadata(t *testing.T) {
+	raw := anthropicResponse{
+		Content: []anthropicBlock{
+			{Type: "thinking", Text: "hidden reasoning"},
+		},
+		StopReason: "end_turn",
+	}
+	err := EmptyResponseError{
+		Provider:     "anthropic messages",
+		StopReason:   raw.StopReason,
+		ContentTypes: raw.contentTypes(),
+	}
+
+	if !IsEmptyResponse(err) {
+		t.Fatal("expected EmptyResponseError to be recognized")
+	}
+	var emptyErr EmptyResponseError
+	if !errors.As(err, &emptyErr) {
+		t.Fatal("expected errors.As to find EmptyResponseError")
+	}
+	if got := emptyErr.ContentTypes; len(got) != 1 || got[0] != "thinking" {
+		t.Fatalf("ContentTypes = %#v, want [thinking]", got)
+	}
+	if emptyErr.Error() != "anthropic messages returned no text or tool calls (stop_reason=end_turn)" {
+		t.Fatalf("Error() = %q", emptyErr.Error())
 	}
 }

@@ -20,6 +20,7 @@ type Config struct {
 	EmbeddingDims    int
 	IndexInterval    time.Duration
 	WorkspaceRoots   []string
+	Observer         indexer.Observer
 }
 
 type Manager struct {
@@ -90,12 +91,17 @@ func (m *Manager) IndexRepo(ctx context.Context, repoPath, branch string) (*inde
 	return m.indexer.IndexRepo(ctx, repoPath, branch)
 }
 
+func (m *Manager) GetIndexState(ctx context.Context, repoPath, branch string) (store.IndexState, bool, error) {
+	return m.store.GetIndexState(ctx, repoPath, branch)
+}
+
 // StartIndexLoop runs the background indexing loop. Blocks until ctx is cancelled.
 func (m *Manager) StartIndexLoop(ctx context.Context) {
 	loop := &indexer.Loop{
 		Indexer:  m.indexer,
 		Roots:    m.config.WorkspaceRoots,
 		Interval: m.config.IndexInterval,
+		Observer: m.config.Observer,
 	}
 	loop.Run(ctx)
 }

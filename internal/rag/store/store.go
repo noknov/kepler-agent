@@ -28,6 +28,7 @@ type Store interface {
 	Migrate(ctx context.Context) error
 
 	UpsertChunks(ctx context.Context, records []ChunkRecord) error
+	GetChunksForFile(ctx context.Context, repoPath, branch, filePath string) ([]ChunkRecord, error)
 	DeleteChunksForFile(ctx context.Context, repoPath, branch, filePath string) error
 	DeleteStaleChunks(ctx context.Context, repoPath, branch string, keepIDs []string) error
 
