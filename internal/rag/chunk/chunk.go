@@ -38,7 +38,7 @@ type Chunk struct {
 }
 
 func (c *Chunk) ComputeID() {
-	h := sha256.Sum256([]byte(c.RepoPath + "\x00" + c.FilePath + "\x00" + c.Content))
+	h := sha256.Sum256([]byte(c.RepoPath + "\x00" + c.Branch + "\x00" + c.FilePath + "\x00" + c.Content))
 	c.ID = fmt.Sprintf("%x", h[:12])
 }
 
