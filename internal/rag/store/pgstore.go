@@ -171,8 +171,8 @@ func (s *PGStore) SearchSemantic(ctx context.Context, embedding []float32, repoP
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, repo_path, file_path, branch, commit_sha,
 			start_line, end_line, chunk_type, language,
-			symbol_name, parent_symbol, package,
-			content, context_prefix, content_hash,
+			COALESCE(symbol_name, ''), COALESCE(parent_symbol, ''), COALESCE(package, ''),
+			content, COALESCE(context_prefix, ''), content_hash,
 			1 - (embedding <=> $1::vector) AS score
 		FROM rag_chunks
 		WHERE repo_path = $2 AND branch = $3 AND embedding IS NOT NULL
@@ -192,12 +192,15 @@ func (s *PGStore) SearchFullText(ctx context.Context, query, repoPath, branch st
 		limit = 10
 	}
 	tsQuery := toTSQuery(query)
+	if tsQuery == "" {
+		return nil, nil
+	}
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, repo_path, file_path, branch, commit_sha,
 			start_line, end_line, chunk_type, language,
-			symbol_name, parent_symbol, package,
-			content, context_prefix, content_hash,
+			COALESCE(symbol_name, ''), COALESCE(parent_symbol, ''), COALESCE(package, ''),
+			content, COALESCE(context_prefix, ''), content_hash,
 			ts_rank(tsv, to_tsquery('english', $1)) AS score
 		FROM rag_chunks
 		WHERE repo_path = $2 AND branch = $3 AND tsv @@ to_tsquery('english', $1)
@@ -218,6 +221,9 @@ func (s *PGStore) SearchHybrid(ctx context.Context, embedding []float32, query, 
 	}
 	vec := pgvector.NewVector(embedding)
 	tsQuery := toTSQuery(query)
+	if tsQuery == "" {
+		return s.SearchSemantic(ctx, embedding, repoPath, branch, limit)
+	}
 
 	rows, err := s.pool.Query(ctx, `
 		WITH semantic AS (
@@ -245,8 +251,8 @@ func (s *PGStore) SearchHybrid(ctx context.Context, embedding []float32, query, 
 		)
 		SELECT c.id, c.repo_path, c.file_path, c.branch, c.commit_sha,
 			c.start_line, c.end_line, c.chunk_type, c.language,
-			c.symbol_name, c.parent_symbol, c.package,
-			c.content, c.context_prefix, c.content_hash,
+			COALESCE(c.symbol_name, ''), COALESCE(c.parent_symbol, ''), COALESCE(c.package, ''),
+			c.content, COALESCE(c.context_prefix, ''), c.content_hash,
 			cb.score
 		FROM combined cb
 		JOIN rag_chunks c ON c.id = cb.id

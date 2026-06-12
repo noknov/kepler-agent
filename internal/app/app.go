@@ -42,6 +42,7 @@ func Run(ctx context.Context) error {
 		go pullWorkspaceRepos(ctx, cfg.Security.WorkspaceRoots, 10*time.Minute)
 	}
 	if server.ragManager != nil {
+		defer server.ragManager.Close()
 		go server.ragManager.StartIndexLoop(ctx)
 	}
 	return server.ListenAndServe(ctx)
