@@ -310,17 +310,58 @@ func TestCompressContextNoOpUnderLimit(t *testing.T) {
 
 type fakeClient struct {
 	responses []llm.Response
+	errors    []error
 	requests  []llm.Request
 }
 
 func (f *fakeClient) Chat(_ context.Context, req llm.Request) (llm.Response, error) {
 	f.requests = append(f.requests, req)
+	if len(f.errors) > 0 {
+		err := f.errors[0]
+		f.errors = f.errors[1:]
+		if err != nil {
+			return llm.Response{}, err
+		}
+	}
 	if len(f.responses) == 0 {
 		return llm.Response{}, errors.New("unexpected chat call")
 	}
 	resp := f.responses[0]
 	f.responses = f.responses[1:]
 	return resp, nil
+}
+
+func TestRunnerRetriesEmptyResponseThenSucceeds(t *testing.T) {
+	client := &fakeClient{
+		errors: []error{
+			llm.EmptyResponseError{Provider: "anthropic messages", StopReason: "end_turn"},
+			nil,
+		},
+		responses: []llm.Response{
+			{Message: llm.Message{Role: "assistant", Content: "这是重试后的回答。"}},
+		},
+	}
+
+	result, err := Runner{LLM: client, Tools: registry.New(), MaxSteps: 3}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "这是重试后的回答。" {
+		t.Fatalf("Final = %q", result.Final)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("expected 2 LLM calls, got %d", len(client.requests))
+	}
+	foundRetryPrompt := false
+	for _, msg := range client.requests[1].Messages {
+		if msg.Role == "system" && msg.Content == emptyResponseRetryPrompt {
+			foundRetryPrompt = true
+			break
+		}
+	}
+	if !foundRetryPrompt {
+		t.Fatal("empty-response retry prompt was not added to the second request")
+	}
 }
 
 func TestRepeatableToolAllowsDuplicateCalls(t *testing.T) {
@@ -406,6 +447,44 @@ func TestParallelToolExecution(t *testing.T) {
 	}
 }
 
+func TestWaitForUserToolResultIsNotEvidenceWrapped(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{Message: llm.Message{
+			Role: "assistant",
+			ToolCalls: []llm.ToolCall{{
+				ID:   "ask_1",
+				Type: "function",
+				Function: llm.ToolFunction{
+					Name:      "ask",
+					Arguments: `{"question":"which repo?"}`,
+				},
+			}},
+		}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeWaitTool{})
+
+	result, err := Runner{
+		LLM:    client,
+		Tools:  tools,
+		Format: fakeObservationFormatter{},
+	}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !result.Pending {
+		t.Fatal("expected pending result")
+	}
+	if result.PendingQuestion != "which repo?" {
+		t.Fatalf("PendingQuestion = %q, want raw question", result.PendingQuestion)
+	}
+	for _, msg := range result.Generated {
+		if msg.Role == "tool" && strings.Contains(msg.Content, "<evidence") {
+			t.Fatalf("wait-for-user tool result should not be evidence wrapped: %q", msg.Content)
+		}
+	}
+}
+
 type fakeTool struct{}
 
 func (fakeTool) Parallel() bool { return true }
@@ -442,4 +521,33 @@ func (fakeRepeatableTool) Spec() llm.ToolSpec {
 
 func (fakeRepeatableTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
 	return registry.Result{Content: string(args)}, nil
+}
+
+type fakeWaitTool struct{}
+
+func (fakeWaitTool) Spec() llm.ToolSpec {
+	return llm.ToolSpec{
+		Type: "function",
+		Function: llm.ToolSpecFunction{
+			Name:        "ask",
+			Description: "ask user",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}
+}
+
+func (fakeWaitTool) Execute(_ context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	var args struct {
+		Question string `json:"question"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return registry.Result{}, err
+	}
+	return registry.Result{Content: args.Question, WaitForUser: true}, nil
+}
+
+type fakeObservationFormatter struct{}
+
+func (fakeObservationFormatter) ToolObservation(toolName string, output string) string {
+	return "<evidence source=\"" + toolName + "\">\n" + output + "\n</evidence>"
 }

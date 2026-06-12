@@ -70,6 +70,52 @@ func (s *PGStore) UpsertChunks(ctx context.Context, records []ChunkRecord) error
 	return nil
 }
 
+func (s *PGStore) GetChunksForFile(ctx context.Context, repoPath, branch, filePath string) ([]ChunkRecord, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, repo_path, file_path, branch, commit_sha,
+			start_line, end_line, chunk_type, language,
+			COALESCE(symbol_name, ''), COALESCE(parent_symbol, ''), COALESCE(package, ''),
+			content, COALESCE(context_prefix, ''), content_hash,
+			embedding::text
+		FROM rag_chunks
+		WHERE repo_path=$1 AND branch=$2 AND file_path=$3
+	`, repoPath, branch, filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []ChunkRecord
+	for rows.Next() {
+		var r ChunkRecord
+		var chunkType, symbolName, parentSymbol, pkg, contextPrefix string
+		var embText *string
+		if err := rows.Scan(
+			&r.ID, &r.RepoPath, &r.FilePath, &r.Branch, &r.CommitSHA,
+			&r.StartLine, &r.EndLine, &chunkType, &r.Language,
+			&symbolName, &parentSymbol, &pkg,
+			&r.Content, &contextPrefix, &r.ContentHash,
+			&embText,
+		); err != nil {
+			return nil, err
+		}
+		r.ChunkType = chunk.Type(chunkType)
+		r.SymbolName = symbolName
+		r.ParentSymbol = parentSymbol
+		r.Package = pkg
+		r.ContextPrefix = contextPrefix
+		if embText != nil {
+			var v pgvector.Vector
+			if err := v.Parse(*embText); err != nil {
+				return nil, fmt.Errorf("parse embedding for chunk %s: %w", r.ID, err)
+			}
+			r.Embedding = v.Slice()
+		}
+		records = append(records, r)
+	}
+	return records, rows.Err()
+}
+
 func (s *PGStore) upsertBatch(ctx context.Context, records []ChunkRecord) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

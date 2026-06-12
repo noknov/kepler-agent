@@ -26,6 +26,7 @@ type Result struct {
 	SymbolName string
 	Language   string
 	Content    string
+	CommitSHA  string
 	Score      float64
 	Source     string
 }
@@ -146,10 +147,11 @@ func (e *Engine) grepSearch(ctx context.Context, q Query) []Result {
 		}
 		seen[file] = true
 		results = append(results, Result{
-			FilePath: file,
-			Content:  strings.TrimSpace(parts[1]),
-			Score:    0.1,
-			Source:   "grep",
+			FilePath:  file,
+			Content:   strings.TrimSpace(parts[1]),
+			Score:     0.1,
+			Source:    "grep",
+			CommitSHA: resolveCommit(ctx, q.RepoPath, ref),
 		})
 	}
 	return results
@@ -201,6 +203,7 @@ func storeToResult(r store.SearchResult) Result {
 		SymbolName: r.SymbolName,
 		Language:   r.Language,
 		Content:    r.Content,
+		CommitSHA:  r.CommitSHA,
 		Score:      r.Score,
 		Source:     r.Source,
 	}
@@ -224,4 +227,17 @@ func resolveBranchRef(ctx context.Context, repoPath, branch string) string {
 		}
 	}
 	return ""
+}
+
+func resolveCommit(ctx context.Context, repoPath, ref string) string {
+	if ref == "" {
+		return ""
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "--no-optional-locks", "rev-parse", ref)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(stdout.String())
 }
