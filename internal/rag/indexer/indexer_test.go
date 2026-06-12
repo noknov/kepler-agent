@@ -1,6 +1,12 @@
 package indexer
 
-import "testing"
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+)
 
 func TestParseNameStatus(t *testing.T) {
 	files := parseNameStatus("M\tcmd/main.go\nD\told.go\nR100\tbefore.go\tafter.go\n")
@@ -36,5 +42,32 @@ func TestFilterIndexableKeepsDeletedSourceFiles(t *testing.T) {
 	}
 	if files[1].Path != "README.md" || files[1].Deleted {
 		t.Fatalf("second file = %#v, want live README.md", files[1])
+	}
+}
+
+func TestResolveBranchRefFallsBackToLocalBranch(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "init")
+
+	ref, err := resolveBranchRef(context.Background(), repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref != "main" {
+		t.Fatalf("ref = %q, want main", ref)
+	}
+}
+
+func runGit(t *testing.T, repo string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
 	}
 }

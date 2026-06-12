@@ -111,7 +111,10 @@ func (e *Engine) grepSearch(ctx context.Context, q Query) []Result {
 		return nil
 	}
 
-	ref := "origin/" + q.Branch
+	ref := resolveBranchRef(ctx, q.RepoPath, q.Branch)
+	if ref == "" {
+		return nil
+	}
 	cmdArgs := []string{"-C", q.RepoPath, "--no-optional-locks",
 		"grep", "-n", "--no-color", "-I", "-i",
 		"-e", grepTerm, ref, "--"}
@@ -211,4 +214,14 @@ func longestWord(words []string) string {
 		}
 	}
 	return best
+}
+
+func resolveBranchRef(ctx context.Context, repoPath, branch string) string {
+	for _, ref := range []string{"origin/" + branch, branch} {
+		cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "--no-optional-locks", "rev-parse", "--verify", "--quiet", ref)
+		if err := cmd.Run(); err == nil {
+			return ref
+		}
+	}
+	return ""
 }
