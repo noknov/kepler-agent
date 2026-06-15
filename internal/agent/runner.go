@@ -109,7 +109,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	budgetWarned := false
 
 	for step := 0; step < maxSteps; step++ {
-		lastStep := step == maxSteps-1 || retriedRepetitiveFinal || retriedTextualToolCall
+		lastStep := step == maxSteps-1 || retriedRepetitiveFinal
 		if r.StatusUpdate != nil {
 			r.StatusUpdate(StepStatus(req.Locale, step))
 		}
@@ -198,7 +198,10 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 					}
 					continue
 				}
-				return Result{Generated: generated}, ErrTextualToolCall
+				final = llm.StripTextualToolCallMarkup(final)
+				if final == "" {
+					return Result{Generated: generated}, ErrTextualToolCall
+				}
 			}
 			if !useStream && looksRepetitive(final) {
 			if !retriedRepetitiveFinal {
