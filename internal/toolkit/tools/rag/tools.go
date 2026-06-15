@@ -31,14 +31,12 @@ func (SearchTool) Parallel() bool { return true }
 func (t SearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"rag-search",
-		"Semantic code search using RAG. Use for questions like 'how does authentication work', "+
-			"'where is error retry logic', or 'what handles webhook events'. "+
-			"For exact symbol/string matching, prefer code-search or repo-search instead.",
+		"",
 		registry.ObjectSchema([]string{"query"}, map[string]any{
-			"query":  map[string]any{"type": "string", "description": "Natural language or code-related query."},
-			"repo":   map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
-			"branch": map[string]any{"type": "string", "description": "Branch to search. Defaults to the repo's default branch."},
-			"limit":  map[string]any{"type": "integer", "description": "Maximum results. Defaults to 10, max 20."},
+			"query":  map[string]any{"type": "string", "description": ""},
+			"repo":   map[string]any{"type": "string", "description": ""},
+			"branch": map[string]any{"type": "string", "description": ""},
+			"limit":  map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }

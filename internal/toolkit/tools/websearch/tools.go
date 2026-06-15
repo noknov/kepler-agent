@@ -46,13 +46,13 @@ func (SearchTool) Parallel() bool { return true }
 func (t SearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"web-search",
-		"Search the public web and return concise source results with titles, URLs, and snippets. Use for current external information that is not in Slack, code, or runbooks.",
+		"",
 		registry.ObjectSchema([]string{"query"}, map[string]any{
-			"query":    map[string]any{"type": "string", "description": "Search query."},
-			"provider": map[string]any{"type": "string", "description": "Optional provider override: google_cse or serpapi. Defaults to WEB_SEARCH_PROVIDER."},
-			"engine":   map[string]any{"type": "string", "description": "Optional SerpAPI engine, e.g. google or baidu. Ignored by google_cse."},
-			"site":     map[string]any{"type": "string", "description": "Optional domain restriction, e.g. docs.github.com."},
-			"limit":    map[string]any{"type": "integer", "description": "Maximum results. Defaults to 5, max 10."},
+			"query":    map[string]any{"type": "string", "description": ""},
+			"provider": map[string]any{"type": "string", "description": ""},
+			"engine":   map[string]any{"type": "string", "description": ""},
+			"site":     map[string]any{"type": "string", "description": ""},
+			"limit":    map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }
@@ -66,10 +66,10 @@ func (ReadPageTool) Parallel() bool { return true }
 func (t ReadPageTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"web-read_page",
-		"Read a specific public http/https web page and return extracted title, URL, and readable text. Use when the user provides a URL or after web-search returns a promising result.",
+		"",
 		registry.ObjectSchema([]string{"url"}, map[string]any{
-			"url":       map[string]any{"type": "string", "description": "Absolute http or https URL to read."},
-			"max_chars": map[string]any{"type": "integer", "description": "Maximum extracted text characters. Defaults to 12000, max 50000."},
+			"url":       map[string]any{"type": "string", "description": ""},
+			"max_chars": map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }
