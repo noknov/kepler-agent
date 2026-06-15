@@ -49,6 +49,7 @@ type Service struct {
 	ModelOverride func(userID string) string
 	Multimodal    func(model string) bool
 	CostRates     observability.CostRates
+	HealthSummary func() string
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
@@ -248,7 +249,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			ThreadTS: req.ThreadTS,
 		},
 		Locale:   locale,
-		Steering: active.drainMessages,
+		Steering: s.steering(active),
 	})
 	if answerStream != nil {
 		answerStream.Flush()
@@ -400,6 +401,23 @@ func (s *Service) newRunObserver(sessionID string, req Request, startedAt time.T
 		Status:    "running",
 		StartedAt: startedAt.UTC(),
 	}, s.CostRates)
+}
+
+func (s *Service) steering(active *activeRun) agent.SteeringProvider {
+	healthInjected := false
+	return func() []llm.Message {
+		var messages []llm.Message
+		if !healthInjected && s.HealthSummary != nil {
+			healthInjected = true
+			if summary := strings.TrimSpace(s.HealthSummary()); summary != "" {
+				messages = append(messages, llm.Message{Role: "system", Content: summary})
+			}
+		}
+		if active != nil {
+			messages = append(messages, active.drainMessages()...)
+		}
+		return messages
+	}
 }
 
 type multiObserver []agent.Observer

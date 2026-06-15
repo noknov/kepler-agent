@@ -36,16 +36,20 @@ func New(s store.Store, emb *embedding.Client) *Indexer {
 }
 
 type IndexResult struct {
-	Repo           string
-	Branch         string
-	CommitSHA      string
-	FilesChanged   int
-	ChunksAdded    int
-	ChunksKept     int
-	ChunksReused   int
-	ChunksEmbedded int
-	Duration       time.Duration
+	Repo               string
+	Branch             string
+	CommitSHA          string
+	FilesChanged       int
+	ChunksAdded        int
+	ChunksKept         int
+	ChunksReused       int
+	ChunksEmbedded     int
+	ChunksSplitLarge   int
+	ChunksSkippedLarge int
+	Duration           time.Duration
 }
+
+const maxChunkContentBytes = 128 * 1024
 
 // IndexRepo performs an incremental index of a single repo+branch.
 // It detects changed files via git diff, re-chunks only those files,
@@ -145,6 +149,7 @@ func (idx *Indexer) IndexRepo(ctx context.Context, repoPath, branch string) (*In
 			continue
 		}
 
+		chunks = splitOversizedChunks(chunks, maxChunkContentBytes)
 		for i := range chunks {
 			chunks[i].RepoPath = repoPath
 			chunks[i].Branch = branch
@@ -152,8 +157,17 @@ func (idx *Indexer) IndexRepo(ctx context.Context, repoPath, branch string) (*In
 			chunks[i].ComputeContentHash()
 			chunks[i].ComputeID()
 		}
+		disambiguateDuplicateIDs(chunks)
 
 		for _, c := range chunks {
+			if len(c.Content) > maxChunkContentBytes {
+				result.ChunksSkippedLarge++
+				log.Printf("rag/indexer: skip oversized chunk %s:%d-%d (%d bytes)", c.FilePath, c.StartLine, c.EndLine, len(c.Content))
+				continue
+			}
+			if isSplitOversizedChunk(c) {
+				result.ChunksSplitLarge++
+			}
 			rec := store.ChunkRecord{Chunk: c}
 			if old, ok := existingByID[c.ID]; ok && old.ContentHash == c.ContentHash && len(old.Embedding) > 0 {
 				rec.Embedding = old.Embedding
@@ -207,6 +221,121 @@ func (idx *Indexer) IndexRepo(ctx context.Context, repoPath, branch string) (*In
 
 	result.Duration = time.Since(start)
 	return result, nil
+}
+
+const oversizedChunkContext = "oversized chunk split"
+
+func splitOversizedChunks(chunks []chunk.Chunk, maxBytes int) []chunk.Chunk {
+	if maxBytes <= 0 {
+		return chunks
+	}
+	out := make([]chunk.Chunk, 0, len(chunks))
+	for _, c := range chunks {
+		if len(c.Content) <= maxBytes {
+			out = append(out, c)
+			continue
+		}
+		parts := splitChunkContent(c, maxBytes)
+		out = append(out, parts...)
+	}
+	return out
+}
+
+func splitChunkContent(c chunk.Chunk, maxBytes int) []chunk.Chunk {
+	lines := strings.Split(c.Content, "\n")
+	var parts []chunk.Chunk
+	startLine := c.StartLine
+	var current []string
+	currentBytes := 0
+
+	flush := func(endLine int) {
+		if len(current) == 0 {
+			return
+		}
+		part := c
+		part.StartLine = startLine
+		part.EndLine = endLine
+		part.Content = strings.Join(current, "\n")
+		part.ContextPrefix = splitContextPrefix(c.ContextPrefix)
+		parts = append(parts, part)
+		current = nil
+		currentBytes = 0
+		startLine = endLine + 1
+	}
+
+	for i, line := range lines {
+		lineNo := c.StartLine + i
+		if len(line) > maxBytes {
+			flush(lineNo - 1)
+			parts = append(parts, splitLongLineChunk(c, line, lineNo, maxBytes)...)
+			startLine = lineNo + 1
+			continue
+		}
+		addBytes := len(line)
+		if len(current) > 0 {
+			addBytes++
+		}
+		if len(current) > 0 && currentBytes+addBytes > maxBytes {
+			flush(lineNo - 1)
+		}
+		current = append(current, line)
+		currentBytes += addBytes
+	}
+	flush(c.EndLine)
+	return parts
+}
+
+func splitLongLineChunk(c chunk.Chunk, line string, lineNo, maxBytes int) []chunk.Chunk {
+	var parts []chunk.Chunk
+	var b strings.Builder
+	for _, r := range line {
+		rs := string(r)
+		if b.Len() > 0 && b.Len()+len(rs) > maxBytes {
+			part := c
+			part.StartLine = lineNo
+			part.EndLine = lineNo
+			part.Content = b.String()
+			part.ContextPrefix = splitContextPrefix(c.ContextPrefix)
+			parts = append(parts, part)
+			b.Reset()
+		}
+		b.WriteString(rs)
+	}
+	if b.Len() > 0 {
+		part := c
+		part.StartLine = lineNo
+		part.EndLine = lineNo
+		part.Content = b.String()
+		part.ContextPrefix = splitContextPrefix(c.ContextPrefix)
+		parts = append(parts, part)
+	}
+	return parts
+}
+
+func splitContextPrefix(existing string) string {
+	existing = strings.TrimSpace(existing)
+	if existing == "" {
+		return oversizedChunkContext
+	}
+	if strings.Contains(existing, oversizedChunkContext) {
+		return existing
+	}
+	return existing + "\n" + oversizedChunkContext
+}
+
+func isSplitOversizedChunk(c chunk.Chunk) bool {
+	return strings.Contains(c.ContextPrefix, oversizedChunkContext)
+}
+
+func disambiguateDuplicateIDs(chunks []chunk.Chunk) {
+	seen := map[string]int{}
+	for i := range chunks {
+		id := chunks[i].ID
+		seen[id]++
+		if seen[id] > 1 {
+			chunks[i].ID = fmt.Sprintf("%s-%d", id, seen[id])
+		}
+	}
 }
 
 func chunksByID(records []store.ChunkRecord) map[string]store.ChunkRecord {

@@ -2,6 +2,8 @@ package store
 
 import "fmt"
 
+const tsvContentLimit = 200000
+
 func migrationSQL(dims int) string {
 	return fmt.Sprintf(`
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -22,11 +24,11 @@ CREATE TABLE IF NOT EXISTS rag_chunks (
 	content        TEXT NOT NULL,
 	context_prefix TEXT,
 	content_hash   TEXT NOT NULL,
-	embedding      vector(%d),
+	embedding      vector(%[1]d),
 	tsv            tsvector GENERATED ALWAYS AS (
 		setweight(to_tsvector('english', coalesce(symbol_name, '')), 'A') ||
 		setweight(to_tsvector('english', coalesce(package, '')), 'B') ||
-		setweight(to_tsvector('english', content), 'C')
+		setweight(to_tsvector('english', left(content, %[2]d)), 'C')
 	) STORED,
 	created_at     TIMESTAMPTZ DEFAULT NOW(),
 	updated_at     TIMESTAMPTZ DEFAULT NOW()
@@ -64,5 +66,5 @@ CREATE TABLE IF NOT EXISTS rag_index_state (
 	indexed_at  TIMESTAMPTZ DEFAULT NOW(),
 	PRIMARY KEY (repo_path, branch)
 );
-`, dims)
+`, dims, tsvContentLimit)
 }
