@@ -9,10 +9,15 @@ import (
 	"github.com/wati/oncall-agent/internal/prompts"
 )
 
-func TestSystemPromptFallbackStaysMinimal(t *testing.T) {
+func TestSystemPromptDefaultStaysGeneric(t *testing.T) {
+	if err := prompts.LoadDirs(prompts.PublicDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = prompts.LoadDirs(prompts.PublicDir) })
+
 	prompt := (PromptPolicy{}).SystemPrompt()
-	if !strings.Contains(prompt, "斗包") || !strings.Contains(prompt, "general-purpose assistant") {
-		t.Fatalf("SystemPrompt() should keep the default 斗包 assistant role: %q", prompt)
+	if !strings.Contains(prompt, "capable engineering assistant") {
+		t.Fatalf("SystemPrompt() should keep the public default assistant role: %q", prompt)
 	}
 	if strings.Contains(prompt, "channelx-copilot-agent") || strings.Contains(prompt, "Channel-X Copilot Agent") || strings.Contains(prompt, "U085SRJFCLX") {
 		t.Fatalf("SystemPrompt() should not contain deployment-specific identity prompt: %q", prompt)
@@ -39,10 +44,10 @@ Full triage workflow body.
 	if err := os.WriteFile(filepath.Join(dir, "skills", "triage", "SKILL.md"), []byte(skill), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := prompts.LoadDir(dir); err != nil {
+	if err := prompts.LoadDirs(prompts.PublicDir, dir); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = prompts.LoadDir(t.TempDir()) })
+	t.Cleanup(func() { _ = prompts.LoadDirs(prompts.PublicDir) })
 
 	prompt := (PromptPolicy{}).SystemPrompt()
 	if !strings.Contains(prompt, "Available skills:") || !strings.Contains(prompt, "Use this for alert triage.") {

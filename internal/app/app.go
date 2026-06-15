@@ -28,6 +28,7 @@ import (
 	"github.com/wati/oncall-agent/internal/session"
 	"github.com/wati/oncall-agent/internal/slack"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	"github.com/wati/oncall-agent/internal/web"
 )
 
 func Run(ctx context.Context) error {
@@ -141,11 +142,11 @@ func NewServer(cfg config.Config) (*Server, error) {
 			return mmSet[model]
 		}
 	}
-	s.routes(runtime.Tools)
+	s.routes(cfg, store, runtime, runStore, recorder, healthService, runtime.Tools)
 	return s, nil
 }
 
-func (s *Server) routes(tools *registry.Registry) {
+func (s *Server) routes(cfg config.Config, store session.Store, runtime agentRuntime, runStore runs.Store, recorder *observability.Recorder, healthService *health.Service, tools *registry.Registry) {
 	s.mux.Handle("/metrics", s.observabilityHandler(s.metrics))
 	s.mux.HandleFunc("/health/dashboard", s.handleHealthDashboard)
 	s.mux.HandleFunc("/health/tools", s.handleToolHealth)
@@ -158,6 +159,23 @@ func (s *Server) routes(tools *registry.Registry) {
 	})
 	s.mux.HandleFunc("/slack/events", s.handleSlackEvents)
 	s.mux.HandleFunc("/slack/interactions", s.handleSlackInteractions)
+
+	webHub := web.NewHub()
+	webMessenger := web.NewHubMessenger(webHub)
+	webPrompt := safety.PromptPolicy{
+		WorkspaceRoots: cfg.Security.WorkspaceRoots,
+	}
+	webConv := conversation.NewService(store, webMessenger, runtime.Runner, runtime.Memory, webPrompt, runtime.Redactor, recorder)
+	webConv.RunStore = runStore
+	webConv.RunProvider = cfg.LLM.Provider
+	webConv.RunModel = cfg.LLM.Model
+	webConv.CostRates = runtime.CostRates
+	webConv.HealthSummary = healthService.SummaryPrompt
+	if cfg.Web.Model != "" {
+		webConv.ModelOverride = func(string) string { return cfg.Web.Model }
+	}
+	web.New(s.slack, webConv, webHub, cfg.Security.AllowedUsers).RegisterRoutes(s.mux)
+
 	log.Printf("oncall-agent configured, tools=%s", strings.Join(tools.Names(), ", "))
 }
 
@@ -483,7 +501,7 @@ func (s *Server) handleMention(ctx context.Context, eventID string, ev slack.Eve
 	text := s.prompt.CleanUserText(s.cfg.Slack.BotUserID, ev.Text)
 	text, parts := s.attachSlackFiles(ctx, text, ev.Files)
 	if text == "" {
-		text = prompts.AppMessage("empty_mention", "(The user mentioned me but didn't say anything specific. Greet them briefly and ask what they need help with. Reply in the same language the user used, or English by default.)")
+		text = prompts.AppMessage("empty_mention", "")
 	}
 	s.conv.HandleMention(ctx, conversation.Request{
 		EventID:      eventID,
@@ -533,7 +551,7 @@ func (s *Server) handleFileShared(ctx context.Context, eventID string, ev slack.
 	}
 	text, parts := s.attachSlackFiles(ctx, "", []slack.File{file})
 	if text == "" {
-		text = prompts.AppMessage("empty_dm_with_file", "(The user sent an app DM with a file but no text. Briefly describe what you can do with the file and ask for any missing context.)")
+		text = prompts.AppMessage("empty_dm_with_file", "")
 	}
 	s.conv.HandleMention(ctx, conversation.Request{
 		EventID:      eventID,
@@ -570,7 +588,7 @@ func (s *Server) handleDirectMessage(ctx context.Context, eventID string, ev sla
 	text := strings.TrimSpace(ev.Text)
 	text, parts := s.attachSlackFiles(ctx, text, ev.Files)
 	if text == "" {
-		text = prompts.AppMessage("empty_dm", "(The user sent an empty app DM. Greet them briefly and ask what they need help with. Reply in the same language the user used, or English by default.)")
+		text = prompts.AppMessage("empty_dm", "")
 	}
 	s.conv.HandleMention(ctx, conversation.Request{
 		EventID:      eventID,

@@ -29,9 +29,9 @@ func (StatusTool) Parallel() bool { return true }
 func (t StatusTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-status",
-		"Read git branch and working tree status. This is read-only.",
+		"",
 		registry.ObjectSchema(nil, map[string]any{
-			"repo": map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
+			"repo": map[string]any{"type": "string", "description": ""},
 		}),
 	)
 }
@@ -56,10 +56,10 @@ func (FetchRefTool) Repeatable() bool { return true }
 func (t FetchRefTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-fetch_ref",
-		"Fetch origin and resolve a branch to an immutable commit ref without changing the working tree. Use when the user names a branch, and use with no branch to select the default branch main, then master.",
+		"",
 		registry.ObjectSchema(nil, map[string]any{
-			"repo":   map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
-			"branch": map[string]any{"type": "string", "description": "Branch to analyze. If omitted, tries main, then master."},
+			"repo":   map[string]any{"type": "string", "description": ""},
+			"branch": map[string]any{"type": "string", "description": ""},
 		}),
 	)
 }
@@ -96,13 +96,13 @@ func (SearchRefTool) Parallel() bool { return true }
 func (t SearchRefTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-search_ref",
-		"Search code at a git ref without changing the working tree. Use this instead of code-search when analyzing a specified branch.",
+		"",
 		registry.ObjectSchema([]string{"repo", "query", "ref"}, map[string]any{
-			"repo":  map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Required so the ref is resolved in the correct repository."},
-			"ref":   map[string]any{"type": "string", "description": "Immutable ref returned by git-fetch_ref, usually a commit SHA."},
-			"query": map[string]any{"type": "string", "description": "Regex query for git grep."},
-			"path":  map[string]any{"type": "string", "description": "Optional pathspec inside repo."},
-			"limit": map[string]any{"type": "integer", "description": "Maximum matching lines. Defaults to 50, max 200."},
+			"repo":  map[string]any{"type": "string", "description": ""},
+			"ref":   map[string]any{"type": "string", "description": ""},
+			"query": map[string]any{"type": "string", "description": ""},
+			"path":  map[string]any{"type": "string", "description": ""},
+			"limit": map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }
@@ -165,13 +165,13 @@ func (RepoSearchTool) Parallel() bool   { return true }
 func (t RepoSearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"repo-search",
-		"Fetch one repository lazily, pin the requested branch to a commit snapshot, then search code at that snapshot. Prefer this for normal repository code searches.",
+		"",
 		registry.ObjectSchema([]string{"query"}, map[string]any{
-			"repo":   map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
-			"branch": map[string]any{"type": "string", "description": "Branch to analyze. If omitted, tries main, then master."},
-			"query":  map[string]any{"type": "string", "description": "Regex query for git grep."},
-			"path":   map[string]any{"type": "string", "description": "Optional pathspec inside repo."},
-			"limit":  map[string]any{"type": "integer", "description": "Maximum matching lines. Defaults to 50, max 200."},
+			"repo":   map[string]any{"type": "string", "description": ""},
+			"branch": map[string]any{"type": "string", "description": ""},
+			"query":  map[string]any{"type": "string", "description": ""},
+			"path":   map[string]any{"type": "string", "description": ""},
+			"limit":  map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }
@@ -236,13 +236,13 @@ func (ReadFileRefTool) Parallel() bool { return true }
 func (t ReadFileRefTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-read_file_ref",
-		"Read a file at a git ref without changing the working tree. Use this instead of code-read_file when analyzing a specified branch.",
+		"",
 		registry.ObjectSchema([]string{"repo", "ref", "path"}, map[string]any{
-			"repo":       map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Required so the ref is resolved in the correct repository."},
-			"ref":        map[string]any{"type": "string", "description": "Immutable ref returned by git-fetch_ref, usually a commit SHA."},
-			"path":       map[string]any{"type": "string", "description": "File path inside repo."},
-			"start_line": map[string]any{"type": "integer", "description": "1-based start line. Defaults to 1."},
-			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines to return. Defaults to 240, max 1000."},
+			"repo":       map[string]any{"type": "string", "description": ""},
+			"ref":        map[string]any{"type": "string", "description": ""},
+			"path":       map[string]any{"type": "string", "description": ""},
+			"start_line": map[string]any{"type": "integer", "description": ""},
+			"max_lines":  map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }
@@ -315,13 +315,13 @@ func (RepoReadFileTool) Parallel() bool   { return true }
 func (t RepoReadFileTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"repo-read_file",
-		"Fetch one repository lazily, pin the requested branch to a commit snapshot, then read a file at that snapshot. Prefer this for normal repository file reads.",
+		"",
 		registry.ObjectSchema([]string{"path"}, map[string]any{
-			"repo":       map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
-			"branch":     map[string]any{"type": "string", "description": "Branch to analyze. If omitted, tries main, then master."},
-			"path":       map[string]any{"type": "string", "description": "File path inside repo."},
-			"start_line": map[string]any{"type": "integer", "description": "1-based start line. Defaults to 1."},
-			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines to return. Defaults to 240, max 1000."},
+			"repo":       map[string]any{"type": "string", "description": ""},
+			"branch":     map[string]any{"type": "string", "description": ""},
+			"path":       map[string]any{"type": "string", "description": ""},
+			"start_line": map[string]any{"type": "integer", "description": ""},
+			"max_lines":  map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }
@@ -359,10 +359,10 @@ func (LogTool) Parallel() bool { return true }
 func (t LogTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-log",
-		"Read recent commits from git log. This is read-only.",
+		"",
 		registry.ObjectSchema(nil, map[string]any{
-			"repo":  map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
-			"limit": map[string]any{"type": "integer", "description": "Number of commits. Defaults to 10, max 50."},
+			"repo":  map[string]any{"type": "string", "description": ""},
+			"limit": map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }
@@ -394,12 +394,12 @@ func (ShowTool) Parallel() bool { return true }
 func (t ShowTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-show",
-		"Read a commit diff or file at revision. This is read-only and output is capped.",
+		"",
 		registry.ObjectSchema([]string{"rev"}, map[string]any{
-			"repo":      map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
-			"rev":       map[string]any{"type": "string", "description": "Commit SHA, branch, tag, or ref."},
-			"path":      map[string]any{"type": "string", "description": "Optional file path inside repo."},
-			"max_chars": map[string]any{"type": "integer", "description": "Maximum characters. Defaults to 12000, max 50000."},
+			"repo":      map[string]any{"type": "string", "description": ""},
+			"rev":       map[string]any{"type": "string", "description": ""},
+			"path":      map[string]any{"type": "string", "description": ""},
+			"max_chars": map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }

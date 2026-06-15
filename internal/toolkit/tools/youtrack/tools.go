@@ -38,9 +38,9 @@ func (GetIssueTool) Parallel() bool { return true }
 func (t GetIssueTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"youtrack-get_issue",
-		"Fetch a YouTrack issue by ID, including summary, description, state, assignee and recent comments when available.",
+		"",
 		registry.ObjectSchema([]string{"issue_id"}, map[string]any{
-			"issue_id": map[string]any{"type": "string", "description": "Issue ID, e.g. WATI-123."},
+			"issue_id": map[string]any{"type": "string", "description": ""},
 		}),
 	)
 }
@@ -71,10 +71,10 @@ func (SearchTool) Parallel() bool { return true }
 func (t SearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"youtrack-search",
-		"Search YouTrack issues using YouTrack query syntax.",
+		"",
 		registry.ObjectSchema([]string{"query"}, map[string]any{
-			"query": map[string]any{"type": "string", "description": "YouTrack query, e.g. 'State: Open text: payment'."},
-			"limit": map[string]any{"type": "integer", "description": "Maximum results. Defaults to 10, max 50."},
+			"query": map[string]any{"type": "string", "description": ""},
+			"limit": map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }
