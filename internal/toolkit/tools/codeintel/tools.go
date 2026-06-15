@@ -20,11 +20,11 @@ func (SymbolsTool) Parallel() bool { return true }
 func (t SymbolsTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"code-symbols",
-		"Search Go or C# symbols using language-server code intelligence. This is read-only and more precise than text search for functions, methods, classes, and interfaces.",
+		"",
 		registry.ObjectSchema([]string{"query"}, map[string]any{
-			"repo":  map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
-			"query": map[string]any{"type": "string", "description": "Symbol name or fuzzy query, e.g. CreateOrder."},
-			"limit": map[string]any{"type": "integer", "description": "Maximum symbols. Defaults to 20, max 100."},
+			"repo":  map[string]any{"type": "string", "description": ""},
+			"query": map[string]any{"type": "string", "description": ""},
+			"limit": map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }
@@ -66,7 +66,7 @@ func (DefinitionTool) Parallel() bool { return true }
 func (t DefinitionTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"code-definition",
-		"Find the definition for the symbol at a Go or C# source position using language-server code intelligence. This is read-only.",
+		"",
 		positionSchema(),
 	)
 }
@@ -92,7 +92,7 @@ func (ReferencesTool) Parallel() bool { return true }
 func (t ReferencesTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"code-references",
-		"Find references for the symbol at a Go or C# source position using language-server code intelligence. This is read-only.",
+		"",
 		positionSchema(),
 	)
 }
@@ -118,10 +118,10 @@ func (DiagnosticsTool) Parallel() bool { return true }
 func (t DiagnosticsTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"code-diagnostics",
-		"Read language-server diagnostics for a Go or C# source file. This is read-only and based on the current working tree.",
+		"",
 		registry.ObjectSchema([]string{"path"}, map[string]any{
-			"repo": map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
-			"path": map[string]any{"type": "string", "description": "Source file path inside the repo."},
+			"repo": map[string]any{"type": "string", "description": ""},
+			"path": map[string]any{"type": "string", "description": ""},
 		}),
 	)
 }
@@ -155,10 +155,10 @@ func (t DiagnosticsTool) Execute(ctx context.Context, raw json.RawMessage, _ reg
 
 func positionSchema() map[string]any {
 	return registry.ObjectSchema([]string{"path", "line", "character"}, map[string]any{
-		"repo":      map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS. Defaults to first root."},
-		"path":      map[string]any{"type": "string", "description": "Source file path inside the repo."},
-		"line":      map[string]any{"type": "integer", "description": "1-based source line."},
-		"character": map[string]any{"type": "integer", "description": "1-based UTF-16/LSP character column; approximate byte column usually works for ASCII code."},
+		"repo":      map[string]any{"type": "string", "description": ""},
+		"path":      map[string]any{"type": "string", "description": ""},
+		"line":      map[string]any{"type": "integer", "description": ""},
+		"character": map[string]any{"type": "integer", "description": ""},
 	})
 }
 

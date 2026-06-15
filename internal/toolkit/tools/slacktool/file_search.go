@@ -31,11 +31,11 @@ func (FileSearchTool) Parallel() bool { return true }
 func (t FileSearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"slack-file_search",
-		"Search an uploaded Slack text/PDF file by file id and return relevant excerpts. Use this when the initial Slack file excerpt is truncated or the file is too large.",
+		"",
 		registry.ObjectSchema([]string{"file_id"}, map[string]any{
-			"file_id": map[string]any{"type": "string", "description": "Slack file id from the uploaded file metadata, e.g. F012ABCDEF."},
-			"query":   map[string]any{"type": "string", "description": "Keyword or phrase to search. If omitted, returns the beginning excerpt."},
-			"limit":   map[string]any{"type": "integer", "description": "Maximum matching excerpts. Defaults to 5, max 20."},
+			"file_id": map[string]any{"type": "string", "description": ""},
+			"query":   map[string]any{"type": "string", "description": ""},
+			"limit":   map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }

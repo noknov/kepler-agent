@@ -32,7 +32,7 @@ Follow these detailed steps.
 	if err := prompts.LoadDir(dir); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = prompts.LoadDir(t.TempDir()) })
+	t.Cleanup(func() { _ = prompts.LoadDirs(prompts.PublicDir) })
 
 	result, err := LoadTool{}.Execute(context.Background(), json.RawMessage(`{"name":"demo"}`), registry.Runtime{})
 	if err != nil {

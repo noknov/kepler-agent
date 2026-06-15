@@ -22,21 +22,21 @@ func (JSONAnalyzeTool) Parallel() bool { return true }
 func (t JSONAnalyzeTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"slack-json_analyze",
-		"Analyze an uploaded Slack JSON file structurally without putting the full file into model context. Use this for JSON statistics, field distributions, numeric summaries, top values, and group-by analysis.",
+		"",
 		registry.ObjectSchema([]string{"file_id"}, map[string]any{
-			"file_id":  map[string]any{"type": "string", "description": "Slack file id from uploaded file metadata, e.g. F012ABCDEF."},
-			"group_by": map[string]any{"type": "string", "description": "Optional top-level or dotted field path to group records by."},
+			"file_id":  map[string]any{"type": "string", "description": ""},
+			"group_by": map[string]any{"type": "string", "description": ""},
 			"metrics": map[string]any{
 				"type":        "array",
-				"description": "Optional numeric field paths to summarize. When omitted, numeric fields are detected automatically.",
+				"description": "",
 				"items":       map[string]any{"type": "string"},
 			},
 			"top_fields": map[string]any{
 				"type":        "array",
-				"description": "Optional categorical field paths for top value counts. When omitted, low-cardinality string/bool fields are detected automatically.",
+				"description": "",
 				"items":       map[string]any{"type": "string"},
 			},
-			"limit": map[string]any{"type": "integer", "description": "Maximum top values or groups to return. Defaults to 10, max 50."},
+			"limit": map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }
