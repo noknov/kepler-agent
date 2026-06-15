@@ -8,7 +8,7 @@ import (
 
 func TestRecorderTracksRAGIndexAndSearchHealth(t *testing.T) {
 	rec := NewRecorder()
-	rec.RAGIndexSuccess("/repo", "main", "abcdef1234567890", 2, 10, 8, 25*time.Millisecond)
+	rec.RAGIndexSuccess("/repo", "main", "abcdef1234567890", 2, 10, 8, 2, 1, 25*time.Millisecond)
 	rec.RAGSearch(3, true, nil)
 	rec.RAGIndexError("/repo", "main", 10*time.Millisecond, errors.New("boom"))
 	rec.RAGSearch(0, false, errors.New("query failed"))
@@ -29,6 +29,12 @@ func TestRecorderTracksRAGIndexAndSearchHealth(t *testing.T) {
 	}
 	if state.LastChunksReused != 8 {
 		t.Fatalf("LastChunksReused = %d, want 8", state.LastChunksReused)
+	}
+	if state.LastChunksSplitLarge != 2 {
+		t.Fatalf("LastChunksSplitLarge = %d, want 2", state.LastChunksSplitLarge)
+	}
+	if state.LastChunksSkippedLarge != 1 {
+		t.Fatalf("LastChunksSkippedLarge = %d, want 1", state.LastChunksSkippedLarge)
 	}
 	if state.LastError != "boom" {
 		t.Fatalf("LastError = %q, want boom", state.LastError)

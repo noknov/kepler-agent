@@ -19,6 +19,7 @@ import (
 
 	"github.com/wati/oncall-agent/internal/config"
 	"github.com/wati/oncall-agent/internal/conversation"
+	"github.com/wati/oncall-agent/internal/health"
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/observability"
 	"github.com/wati/oncall-agent/internal/prompts"
@@ -41,9 +42,16 @@ func Run(ctx context.Context) error {
 	if cfg.Security.WorkspaceAutoFetch {
 		go pullWorkspaceRepos(ctx, cfg.Security.WorkspaceRoots, 10*time.Minute)
 	}
-	if server.ragManager != nil {
+	if server.ragManager != nil && cfg.RAG.BackgroundIndex {
 		defer server.ragManager.Close()
+		log.Printf("rag/indexer: starting async background prewarm loop")
 		go server.ragManager.StartIndexLoop(ctx)
+	} else if server.ragManager != nil {
+		defer server.ragManager.Close()
+		log.Printf("rag/indexer: background prewarm disabled; on-demand indexing will be used")
+	}
+	if server.health != nil {
+		go server.health.Start(ctx)
 	}
 	return server.ListenAndServe(ctx)
 }
@@ -57,6 +65,7 @@ type Server struct {
 	metrics    *observability.Recorder
 	runStore   runs.Store
 	ragManager ragManagerCloser
+	health     *health.Service
 	mux        *http.ServeMux
 	modelPrefs sync.Map
 }
@@ -90,6 +99,7 @@ func NewServer(cfg config.Config) (*Server, error) {
 
 	recorder := observability.NewRecorder()
 	runtime := newAgentRuntime(cfg, slackClient, recorder)
+	healthService := health.NewService(runtime.Tools, cfg.Security.WorkspaceRoots, recorder, runtime.RAGManager != nil)
 	recorder.SetCostRates(runtime.CostRates)
 	conv := conversation.NewService(store, slackClient, runtime.Runner, runtime.Memory, runtime.Prompt, runtime.Redactor, recorder)
 	conv.Format = slack.MarkdownToMrkdwn
@@ -97,6 +107,12 @@ func NewServer(cfg config.Config) (*Server, error) {
 	conv.RunProvider = cfg.LLM.Provider
 	conv.RunModel = cfg.LLM.Model
 	conv.CostRates = runtime.CostRates
+	conv.HealthSummary = healthService.SummaryPrompt
+
+	var ragManager ragManagerCloser
+	if runtime.RAGManager != nil {
+		ragManager = runtime.RAGManager
+	}
 
 	s := &Server{
 		cfg:        cfg,
@@ -106,7 +122,8 @@ func NewServer(cfg config.Config) (*Server, error) {
 		prompt:     runtime.Prompt,
 		metrics:    recorder,
 		runStore:   runStore,
-		ragManager: runtime.RAGManager,
+		ragManager: ragManager,
+		health:     healthService,
 		mux:        http.NewServeMux(),
 	}
 	conv.ModelOverride = func(userID string) string {
@@ -130,6 +147,8 @@ func NewServer(cfg config.Config) (*Server, error) {
 
 func (s *Server) routes(tools *registry.Registry) {
 	s.mux.Handle("/metrics", s.observabilityHandler(s.metrics))
+	s.mux.HandleFunc("/health/tools", s.handleToolHealth)
+	s.mux.HandleFunc("/health/tools/rag", s.handleRAGHealth)
 	s.mux.HandleFunc("/runs", s.handleRuns)
 	s.mux.HandleFunc("/runs/", s.handleRun)
 	s.mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -364,6 +383,47 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(run)
+}
+
+func (s *Server) handleToolHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authorizeObservability(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if s.health == nil {
+		http.Error(w, "tool health monitor unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	snapshot := s.health.Snapshot()
+	if strings.EqualFold(r.URL.Query().Get("refresh"), "true") {
+		snapshot = s.health.Probe(r.Context())
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(snapshot)
+}
+
+func (s *Server) handleRAGHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authorizeObservability(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if s.health == nil {
+		http.Error(w, "tool health monitor unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if strings.EqualFold(r.URL.Query().Get("refresh"), "true") {
+		_ = s.health.Probe(r.Context())
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s.health.RAGSnapshot())
 }
 
 func (s *Server) observabilityHandler(next http.Handler) http.Handler {
