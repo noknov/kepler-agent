@@ -18,12 +18,12 @@ func (IncidentBriefTool) Parallel() bool { return true }
 func (IncidentBriefTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"diagnostics-incident_brief",
-		"Create a structured incident diagnostic brief from service, environment, symptom, and time window. Use this to plan on-call investigations before reading logs or code.",
+		"",
 		registry.ObjectSchema([]string{"service", "symptom"}, map[string]any{
-			"service":     map[string]any{"type": "string", "description": "Service, deployment, job, or repository name."},
-			"environment": map[string]any{"type": "string", "description": "Environment or namespace, e.g. dev, staging, prod."},
-			"symptom":     map[string]any{"type": "string", "description": "Observed user-visible problem, alert, error, or regression."},
-			"window":      map[string]any{"type": "string", "description": "Approximate time window, e.g. 30m, since deploy, today."},
+			"service":     map[string]any{"type": "string", "description": ""},
+			"environment": map[string]any{"type": "string", "description": ""},
+			"symptom":     map[string]any{"type": "string", "description": ""},
+			"window":      map[string]any{"type": "string", "description": ""},
 		}),
 	)
 }
@@ -35,12 +35,12 @@ func (TimelineTool) Parallel() bool { return true }
 func (TimelineTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"diagnostics-timeline",
-		"Build an incident timeline from observed events. Use after collecting Slack context, logs, deploys, workflow runs, or issue updates.",
+		"",
 		registry.ObjectSchema([]string{"events"}, map[string]any{
-			"title": map[string]any{"type": "string", "description": "Short incident or investigation title."},
+			"title": map[string]any{"type": "string", "description": ""},
 			"events": map[string]any{
 				"type":        "array",
-				"description": "Timeline entries. Each item can include time, source, event, impact, and evidence.",
+				"description": "",
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -112,12 +112,12 @@ func (EvidenceBoardTool) Parallel() bool { return true }
 func (EvidenceBoardTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"diagnostics-evidence_board",
-		"Create an evidence board that separates facts, hypotheses, risks, and next checks. Use before giving a final incident answer.",
+		"",
 		registry.ObjectSchema(nil, map[string]any{
-			"facts":       arrayOfStrings("Verified facts with source/tool references."),
-			"hypotheses":  arrayOfStrings("Hypotheses with confidence or disconfirming evidence."),
-			"risks":       arrayOfStrings("User or operational risks."),
-			"next_checks": arrayOfStrings("Concrete next checks or actions."),
+			"facts":       arrayOfStrings(),
+			"hypotheses":  arrayOfStrings(),
+			"risks":       arrayOfStrings(),
+			"next_checks": arrayOfStrings(),
 		}),
 	)
 }
@@ -158,10 +158,10 @@ func (EvidenceBoardTool) Execute(ctx context.Context, raw json.RawMessage, _ reg
 	return registry.Result{Content: b.String()}, nil
 }
 
-func arrayOfStrings(description string) map[string]any {
+func arrayOfStrings() map[string]any {
 	return map[string]any{
 		"type":        "array",
-		"description": description,
+		"description": "",
 		"items":       map[string]any{"type": "string"},
 	}
 }

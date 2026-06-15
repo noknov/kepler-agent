@@ -144,7 +144,8 @@ func (r *Registry) CanRunInParallel(name string) bool {
 }
 
 func FunctionSpec(name, description string, parameters map[string]any) llm.ToolSpec {
-	description = prompts.ToolDescription(name, description)
+	staticDescription := prompts.ToolDescription(name, "")
+	description = mergeDescription(staticDescription, description)
 	applyParameterPrompts(name, parameters)
 	return llm.ToolSpec{
 		Type: "function",
@@ -156,19 +157,51 @@ func FunctionSpec(name, description string, parameters map[string]any) llm.ToolS
 	}
 }
 
+func mergeDescription(staticDescription, dynamicSuffix string) string {
+	if staticDescription == "" {
+		return dynamicSuffix
+	}
+	if dynamicSuffix == "" {
+		return staticDescription
+	}
+	return staticDescription + " " + dynamicSuffix
+}
+
 func applyParameterPrompts(toolName string, parameters map[string]any) {
 	properties, ok := parameters["properties"].(map[string]any)
 	if !ok {
 		return
 	}
 	for param, raw := range properties {
-		property, ok := raw.(map[string]any)
-		if !ok {
-			continue
+		applyPropertyPrompt(toolName, param, raw)
+	}
+}
+
+func applyPropertyPrompt(toolName, path string, raw any) {
+	property, ok := raw.(map[string]any)
+	if !ok {
+		return
+	}
+	current, _ := property["description"].(string)
+	if next := prompts.ParamDescription(toolName, path, current); next != "" {
+		property["description"] = next
+	}
+	if nested, ok := property["properties"].(map[string]any); ok {
+		for name, child := range nested {
+			applyPropertyPrompt(toolName, path+"."+name, child)
 		}
-		current, _ := property["description"].(string)
-		if next := prompts.ParamDescription(toolName, param, current); next != "" {
-			property["description"] = next
+	}
+	items, ok := property["items"].(map[string]any)
+	if !ok {
+		return
+	}
+	current, _ = items["description"].(string)
+	if next := prompts.ParamDescription(toolName, path+".items", current); next != "" {
+		items["description"] = next
+	}
+	if nested, ok := items["properties"].(map[string]any); ok {
+		for name, child := range nested {
+			applyPropertyPrompt(toolName, path+".items."+name, child)
 		}
 	}
 }

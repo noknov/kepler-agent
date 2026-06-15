@@ -22,11 +22,11 @@ type PromptPolicy struct {
 }
 
 func (p PromptPolicy) SystemPrompt() string {
-	base := prompts.System("You are 斗包, a capable general-purpose assistant. Follow the locally configured system prompt, protect secrets, use tools only for the user's task, verify code claims with tool evidence, and keep responses concise.")
+	base := prompts.System("")
 	base += prompts.RulesAndSkillsPrompt()
 	repos := p.discoverRepos()
 	if repos != "" {
-		base += "\n\nAvailable code repositories (use repo name as path prefix for tools, e.g. \"whatsapp_inbox/netcore-mvc/Startup.cs\"):\n" + repos
+		base += prompts.PromptText("repository_inventory_header", "") + repos
 	}
 	return base
 }

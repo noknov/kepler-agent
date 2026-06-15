@@ -24,10 +24,10 @@ func TestLoadDirOverridesPrompts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := LoadDir(dir); err != nil {
+	if err := LoadDirs(PublicDir, dir); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = LoadDir(t.TempDir()) })
+	t.Cleanup(func() { _ = LoadDirs(PublicDir) })
 
 	if got := System("fallback"); got != "system override" {
 		t.Fatalf("System() = %q", got)
@@ -67,10 +67,10 @@ Full workflow body.
 		t.Fatal(err)
 	}
 
-	if err := LoadDir(dir); err != nil {
+	if err := LoadDirs(PublicDir, dir); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = LoadDir(t.TempDir()) })
+	t.Cleanup(func() { _ = LoadDirs(PublicDir) })
 
 	got := RulesAndSkillsPrompt()
 	for _, want := range []string{

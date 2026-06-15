@@ -8,7 +8,7 @@ A Slack-native intelligent assistant built in Go, powered by configurable LLM ba
 - 🔧 **Structured tool calls, not prompt parsing.** The model communicates with tools through the provider's native function-calling API (OpenAI-compatible or Anthropic-compatible), so arguments are typed and validated rather than parsed from free-form text.
 - 🔒 **Layered runtime safety.** Slack user/channel authorization, system prompt guardrails, post-response secret redaction, workspace path allowlists, command deny rules, and per-tool read-only vs. action boundaries are all code-enforced.
 - 📦 **Explicit context budgets.** Thread context, session history, and tool observations are bounded and compressed before reaching the model. Large Slack files stay searchable by file ID without flooding the context window.
-- 🗂️ **Prompt configuration outside of git.** Identity, policies, rules, and skills live in a local `PROMPT_DIR` directory (gitignored by default). No prompt text needs to be committed to the repository.
+- 🗂️ **Layered prompt configuration.** Generic prompts live in the committed `prompts/` directory. Sensitive identity, company policy, workflow aliases, internal rules, private skills, and runbooks live in a local `PROMPT_DIR` overlay (defaults to `.prompts/`, gitignored). A non-hidden `prompts.private.example/` directory documents the private overlay shape with placeholders.
 
 ## 📁 Project layout
 
@@ -22,16 +22,15 @@ internal/memory/           Conversation turns, context packing, tool-result form
 internal/session/          File-backed Slack thread sessions
 internal/safety/           Access policy, prompt policy, secret redaction, workspace and command policy
 internal/health/           Tool and RAG health probing, health dashboard
-internal/prompts/          Prompt catalog: loads system.md, delegates, tools, rules, skills from PROMPT_DIR
+internal/prompts/          Prompt catalog: loads public defaults, then private PROMPT_DIR overrides
 internal/delegation/       Focused delegate agent profiles for bounded sub-tasks
 internal/observability/    In-memory metrics, cost tracking, reaction-based quality feedback
 internal/llm/              Anthropic and OpenAI-compatible LLM clients with streaming
 internal/rag/              Semantic code search: chunking, embedding, pgvector store, hybrid search
 internal/toolkit/tools/    All tool modules: code, git, github, gcp, notion, youtrack, slack, rag, web
-PROMPT_DIR/system.md       Main system prompt (gitignored)
-PROMPT_DIR/rules/          Runtime Markdown rules injected into all agent prompts
-PROMPT_DIR/skills/         SKILL.md folders advertised by metadata, loaded on demand
-PROMPT_DIR/runbooks/       Service runbooks searched by knowledge.runbook_search
+prompts/                   Committed generic prompt defaults and placeholders
+prompts.private.example/   Non-hidden private prompt overlay examples with placeholders
+PROMPT_DIR/                Private prompt overlay, defaults to .prompts/ and stays gitignored
 ```
 
 ## 🚀 Running locally
@@ -96,11 +95,19 @@ OPENAI_MODEL=gpt-4o
 
 ## 📝 Prompt configuration
 
-All prompt text lives outside git under `PROMPT_DIR` (defaults to `.prompts/`, which is gitignored). The following files are loaded at startup:
+Prompt text is loaded in layers:
+
+1. `prompts/` contains committed, generic defaults that are safe to maintain in git.
+2. `PROMPT_DIR` (defaults to `.prompts/`, gitignored) overrides those defaults for sensitive or deployment-specific content.
+3. `prompts.private.example/` is not loaded; it provides non-hidden placeholder examples for private files so new keys and structures are easy to copy without exposing real internal details.
+
+Put generic assistant behavior, retry prompts, memory labels, public tool descriptions, and reusable coding rules in `prompts/`. Put company identity, internal process, service runbooks, workflow aliases, repository-specific assumptions, and private skills in `PROMPT_DIR`.
+
+The following files are loaded from `prompts/` and then overlaid by matching files in `PROMPT_DIR`:
 
 | File | Purpose |
 |---|---|
-| `system.md` | Main system prompt; overrides the built-in fallback |
+| `system.md` | Main system prompt |
 | `delegates.json` | System prompts for delegate sub-agents |
 | `app_messages.json` | Responses to empty mentions, empty DMs, file-only DMs |
 | `tools.json` | Tool description and parameter overrides |
@@ -109,6 +116,7 @@ All prompt text lives outside git under `PROMPT_DIR` (defaults to `.prompts/`, w
 | `health.json` | Health summary header and rules text |
 | `tool_statuses.json` | Slack status messages shown while tools run |
 | `github_workflows.json` | Workflow filename aliases for `github.dispatch_workflow` |
+| `texts.json` | Shared prompt snippets such as section headers and context wrappers |
 | `rules/*.md` | Markdown rules injected into the main agent and delegates |
 | `skills/<name>/SKILL.md` | Skill definitions with `name` and `description` frontmatter |
 | `runbooks/*.md` | Service runbooks searched by `knowledge.runbook_search` |

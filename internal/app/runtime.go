@@ -127,7 +127,9 @@ func costRates(cfg config.Config) observability.CostRates {
 
 func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm.Client, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) *registry.Registry {
 	delegates := delegation.NewManager(llmClient, cfg.LLM.Model, cfg.LLM.Thinking)
-	_ = delegates.LoadMarkdown(filepath.Join(prompts.Dir(), "rules"), filepath.Join(prompts.Dir(), "skills"))
+	for _, dir := range prompts.Dirs() {
+		_ = delegates.LoadMarkdown(filepath.Join(dir, "rules"), filepath.Join(dir, "skills"))
+	}
 
 	tools := registry.New()
 	tools.Register(diagnosticsTools.IncidentBriefTool{})
