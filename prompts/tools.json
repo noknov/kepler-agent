@@ -1,0 +1,366 @@
+{
+  "code-search": {
+    "description": "Search code with ripgrep under an allowed workspace root. Prefer this before reading files when locating symbols, errors, routes, or config keys.",
+    "parameters": {
+      "query": "Literal or regex query for rg.",
+      "path": "Directory or file under WORKSPACE_ROOTS. Defaults to first root.",
+      "glob": "Optional rg glob, for example '*.go' or '!node_modules'.",
+      "limit": "Maximum matching lines. Defaults to 50, max 200."
+    }
+  },
+  "code-read_file": {
+    "description": "Read a text file from an allowed workspace root. Use start_line and max_lines for very large files.",
+    "parameters": {
+      "path": "File path under one of WORKSPACE_ROOTS.",
+      "start_line": "1-based start line. Defaults to 1.",
+      "max_lines": "Maximum lines to return. Defaults to 240, max 1000."
+    }
+  },
+  "git-status": {
+    "description": "Read git branch and working tree status. This is read-only.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root."
+    }
+  },
+  "git-fetch_ref": {
+    "description": "Fetch origin and resolve a branch to an immutable commit ref without changing the working tree.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "branch": "Branch to analyze. If omitted, tries the configured default branch, main, then master."
+    }
+  },
+  "git-search_ref": {
+    "description": "Search code at a git ref without changing the working tree. Use this instead of code-search when analyzing a specified branch.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS.",
+      "ref": "Immutable ref returned by git-fetch_ref, usually a commit SHA.",
+      "query": "Regex query for git grep.",
+      "path": "Optional pathspec inside repo.",
+      "limit": "Maximum matching lines. Defaults to 50, max 200."
+    }
+  },
+  "git-read_file_ref": {
+    "description": "Read a file at a git ref without changing the working tree.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS.",
+      "ref": "Immutable ref returned by git-fetch_ref, usually a commit SHA.",
+      "path": "File path inside the repo.",
+      "start_line": "1-based start line. Defaults to 1.",
+      "max_lines": "Maximum lines to return. Defaults to 240, max 1000."
+    }
+  },
+  "git-log": {
+    "description": "Read recent commit history. This is read-only.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "ref": "Optional branch, tag, or commit ref.",
+      "limit": "Maximum commits. Defaults to 20, max 100."
+    }
+  },
+  "git-show": {
+    "description": "Show a commit, diff, or file content at a git revision. This is read-only.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "rev": "Commit SHA, branch, tag, or ref.",
+      "path": "Optional file path inside repo.",
+      "max_chars": "Maximum characters. Defaults to 12000, max 50000."
+    }
+  },
+  "github-dispatch_workflow": {
+    "description": "Trigger a GitHub Actions workflow_dispatch run. When the user's request is clear, execute directly without asking for a separate confirmation. Ask only for missing required inputs.",
+    "parameters": {
+      "repository": "GitHub repository in owner/repo form. Defaults to configured repository when set.",
+      "workflow": "Workflow file name/id or configured alias.",
+      "ref": "Git ref in the workflow repository, usually main.",
+      "inputs": "workflow_dispatch inputs. Pass service, environment, branch, image tag, or other workflow-specific inputs exactly as requested by the user."
+    }
+  },
+  "github-workflow_runs": {
+    "description": "List recent GitHub Actions workflow runs. Use after triggering CI/CD or when the user asks about CI/CD status.",
+    "parameters": {
+      "repository": "GitHub repository in owner/repo form. Defaults to configured repository when set.",
+      "workflow": "Workflow file name/id or configured alias.",
+      "branch": "Optional branch filter.",
+      "limit": "Maximum runs to return. Defaults to 5, max 20."
+    }
+  },
+  "github-pr_diff": {
+    "description": "Fetch GitHub pull request metadata and unified diff for review or investigation.",
+    "parameters": {
+      "repository": "GitHub repository in owner/repo form. Defaults to configured repository when set.",
+      "pr": "Pull request number."
+    }
+  },
+  "skills-load": {
+    "description": "Load the full instructions for an available skill by name before following that skill workflow.",
+    "parameters": {
+      "name": "Skill name from the Available skills list."
+    }
+  },
+  "delegate-run": {
+    "description": "Run a focused delegate for bounded analysis using only supplied context.",
+    "parameters": {
+      "profile": "Delegate profile name.",
+      "task": "Specific question or analysis task for the delegate.",
+      "context": "Evidence and context the delegate may use."
+    }
+  },
+  "knowledge-runbook_search": {
+    "description": "Search local runbooks under PROMPT_DIR/runbooks. Use this for ownership, known alerts, dashboards, playbooks, and recurring operational procedures.",
+    "parameters": {
+      "query": "Service, alert, symptom, dashboard, or runbook keyword.",
+      "limit": "Maximum runbook matches. Defaults to 5, max 20."
+    }
+  },
+  "code-symbols": {
+    "description": "Search Go or C# symbols using language-server code intelligence. This is read-only and more precise than text search for functions, methods, classes, and interfaces.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "query": "Symbol name or fuzzy query, for example CreateOrder.",
+      "limit": "Maximum symbols. Defaults to 20, max 100."
+    }
+  },
+  "code-definition": {
+    "description": "Find the definition for the symbol at a Go or C# source position using language-server code intelligence. This is read-only.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "path": "Source file path inside the repo.",
+      "line": "1-based source line.",
+      "character": "1-based UTF-16/LSP character column; approximate byte column usually works for ASCII code."
+    }
+  },
+  "code-references": {
+    "description": "Find references for the symbol at a Go or C# source position using language-server code intelligence. This is read-only.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "path": "Source file path inside the repo.",
+      "line": "1-based source line.",
+      "character": "1-based UTF-16/LSP character column; approximate byte column usually works for ASCII code."
+    }
+  },
+  "code-diagnostics": {
+    "description": "Read language-server diagnostics for a Go or C# source file. This is read-only and based on the current working tree.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "path": "Source file path inside the repo."
+    }
+  },
+  "repo-search": {
+    "description": "Fetch one repository lazily, pin the requested branch to a commit snapshot, then search code at that snapshot. Prefer this for normal repository code searches.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "branch": "Branch to analyze. If omitted, tries the configured default branch, main, then master.",
+      "query": "Regex query for git grep.",
+      "path": "Optional pathspec inside repo.",
+      "limit": "Maximum matching lines. Defaults to 50, max 200."
+    }
+  },
+  "repo-read_file": {
+    "description": "Fetch one repository lazily, pin the requested branch to a commit snapshot, then read a file at that snapshot. Prefer this for normal repository file reads.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "branch": "Branch to analyze. If omitted, tries the configured default branch, main, then master.",
+      "path": "File path inside repo.",
+      "start_line": "1-based start line. Defaults to 1.",
+      "max_lines": "Maximum lines to return. Defaults to 240, max 1000."
+    }
+  },
+  "gcp-logs": {
+    "description": "Query GCP Cloud Logging with gcloud logging read. Read-only. Project, namespace, service, and filter are per-call inputs; configured GCP values are only defaults or hints, not fixed environments.",
+    "parameters": {
+      "filter": "Cloud Logging filter expression.",
+      "severity": "Minimum severity, for example ERROR, WARNING, or INFO. Used when filter is not fully specified.",
+      "namespace": "GKE namespace for this query. Optional; when omitted, no namespace filter is added unless filter already contains one.",
+      "service": "Service, deployment, or container name hint. Matched against common GKE labels.",
+      "freshness": "Freshness window, for example 30m or 2h. Defaults to 30m.",
+      "limit": "Maximum log entries. Defaults to 30, max 200.",
+      "project": "GCP project for this query. Defaults to configured GCP_PROJECT only when omitted.",
+      "format": "gcloud format, json or value. Defaults to json."
+    }
+  },
+  "diagnostics-incident_brief": {
+    "description": "Create a structured incident diagnostic brief from service, environment, symptom, and time window. Use this to plan on-call investigations before reading logs or code.",
+    "parameters": {
+      "service": "Service, deployment, job, or repository name.",
+      "environment": "Environment or namespace, for example dev, staging, or prod.",
+      "symptom": "Observed user-visible problem, alert, error, or regression.",
+      "window": "Approximate time window, for example 30m, since deploy, or today."
+    }
+  },
+  "diagnostics-timeline": {
+    "description": "Build an incident timeline from observed events. Use after collecting Slack context, logs, deploys, workflow runs, or issue updates.",
+    "parameters": {
+      "title": "Short incident or investigation title.",
+      "events": "Timeline entries. Each item can include time, source, event, impact, and evidence."
+    }
+  },
+  "diagnostics-evidence_board": {
+    "description": "Create an evidence board that separates facts, hypotheses, risks, and next checks. Use before giving a final incident answer.",
+    "parameters": {
+      "facts": "Verified facts with source or tool references.",
+      "hypotheses": "Hypotheses with confidence or disconfirming evidence.",
+      "risks": "User or operational risks.",
+      "next_checks": "Concrete next checks or actions."
+    }
+  },
+  "notion-search": {
+    "description": "Search Notion pages or databases. Use for incident notes, runbooks, and knowledge base lookup.",
+    "parameters": {
+      "query": "Search query.",
+      "limit": "Maximum results. Defaults to 10, max 50."
+    }
+  },
+  "notion-create_page": {
+    "description": "Create a Notion page in the configured incident or runbook database. Use only when the user asks to write a report or preserve an incident summary.",
+    "parameters": {
+      "title": "Page title.",
+      "body": "Markdown-ish plain text body. It will be stored as one paragraph block."
+    }
+  },
+  "youtrack-get_issue": {
+    "description": "Fetch a YouTrack issue by ID, including summary, description, state, assignee, and recent comments when available.",
+    "parameters": {
+      "issue_id": "Issue ID."
+    }
+  },
+  "youtrack-search": {
+    "description": "Search YouTrack issues using YouTrack query syntax.",
+    "parameters": {
+      "query": "YouTrack query.",
+      "limit": "Maximum results. Defaults to 10, max 50."
+    }
+  },
+  "rag-search": {
+    "description": "Semantic code search using RAG. Use for architectural or behavioral questions. For exact symbol or string matching, prefer code-search or repo-search instead.",
+    "parameters": {
+      "query": "Natural language or code-related query.",
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "branch": "Branch to search. Defaults to the repo's default branch.",
+      "limit": "Maximum results. Defaults to 10, max 20."
+    }
+  },
+  "slack-ask_user": {
+    "description": "Ask the Slack user for missing information, then pause. Use only when you cannot safely proceed without clarification.",
+    "parameters": {
+      "question": "Specific question to ask in the current thread."
+    }
+  },
+  "slack-file_search": {
+    "description": "Search an uploaded Slack text or PDF file by file id and return relevant excerpts. Use this when the initial Slack file excerpt is truncated or the file is too large.",
+    "parameters": {
+      "file_id": "Slack file id from the uploaded file metadata.",
+      "query": "Keyword or phrase to search. If omitted, returns the beginning excerpt.",
+      "limit": "Maximum matching excerpts. Defaults to 5, max 20."
+    }
+  },
+  "slack-json_analyze": {
+    "description": "Analyze an uploaded Slack JSON file structurally without putting the full file into model context. Use this for JSON statistics, field distributions, numeric summaries, top values, and group-by analysis.",
+    "parameters": {
+      "file_id": "Slack file id from uploaded file metadata.",
+      "group_by": "Optional top-level or dotted field path to group records by.",
+      "metrics": "Optional numeric field paths to summarize. When omitted, numeric fields are detected automatically.",
+      "top_fields": "Optional categorical field paths for top value counts. When omitted, low-cardinality string or bool fields are detected automatically.",
+      "limit": "Maximum top values or groups to return. Defaults to 10, max 50."
+    }
+  },
+  "web-search": {
+    "description": "Search the public web and return concise source results with titles, URLs, and snippets. Use for current external information that is not in Slack, code, or runbooks.",
+    "parameters": {
+      "query": "Search query.",
+      "provider": "Optional provider override: google_cse or serpapi. Defaults to WEB_SEARCH_PROVIDER.",
+      "engine": "Optional SerpAPI engine, for example google or baidu. Ignored by google_cse.",
+      "site": "Optional domain restriction, for example docs.github.com.",
+      "limit": "Maximum results. Defaults to 5, max 10."
+    }
+  },
+  "web-read_page": {
+    "description": "Read a specific public http or https web page and return extracted title, URL, and readable text. Use when the user provides a URL or after web-search returns a promising result.",
+    "parameters": {
+      "url": "Absolute http or https URL to read.",
+      "max_chars": "Maximum extracted text characters. Defaults to 12000, max 50000."
+    }
+  },
+  "luckin-query_shop_list": {
+    "description": "Query nearby Luckin Coffee stores. Use this before product search or ordering. Requires the user's approximate longitude and latitude; ask for location when missing.",
+    "parameters": {
+      "deptName": "Optional store name filter.",
+      "longitude": "Longitude.",
+      "latitude": "Latitude."
+    }
+  },
+  "luckin-search_product": {
+    "description": "Search Luckin products in a store from the user's natural-language query. Use after choosing a store.",
+    "parameters": {
+      "deptId": "Luckin store ID.",
+      "query": "Original user product request."
+    }
+  },
+  "luckin-switch_product": {
+    "description": "Switch a Luckin product option such as temperature, cup size, sugar, or ice. Use product attribute IDs returned by product search/detail.",
+    "parameters": {
+      "deptId": "Luckin store ID.",
+      "productId": "Product ID.",
+      "skuCode": "Current product SKU code.",
+      "amount": "Quantity.",
+      "attrOperationParam": "Attribute switch operation.",
+      "attrOperationParam.attributeId": "Attribute group ID.",
+      "attrOperationParam.subAttr": "Target attribute value.",
+      "attrOperationParam.subAttr.attributeId": "Attribute value ID.",
+      "attrOperationParam.subAttr.operation": "Operation type. Use 3 to select."
+    }
+  },
+  "luckin-query_product_detail": {
+    "description": "Query Luckin product details and selectable attributes for a store product.",
+    "parameters": {
+      "deptId": "Luckin store ID.",
+      "productId": "Product ID."
+    }
+  },
+  "luckin-preview_order": {
+    "description": "Preview a Luckin pickup order, including estimated price, applicable coupon codes, store info, and items. Use this before creating an order.",
+    "parameters": {
+      "deptId": "Luckin store ID.",
+      "productList": "Order item list.",
+      "productList.items.amount": "Quantity.",
+      "productList.items.productId": "Product ID.",
+      "productList.items.skuCode": "Product SKU code."
+    }
+  },
+  "luckin-query_coupons": {
+    "description": "Query applicable Luckin coupons and discounts for the selected store and products. This calls Luckin previewOrder; coupon codes are returned in couponCodeList and can be passed to luckin-create_order.",
+    "parameters": {
+      "deptId": "Luckin store ID.",
+      "productList": "Order item list.",
+      "productList.items.amount": "Quantity.",
+      "productList.items.productId": "Product ID.",
+      "productList.items.skuCode": "Product SKU code."
+    }
+  },
+  "luckin-create_order": {
+    "description": "Create a Luckin order and return payment information. Only call after previewing the order and after the user explicitly confirms they want to place it. If a payOrderQrCodeUrl is returned, show it as the primary payment option because Slack or desktop clients may not complete WeChat Pay deep links directly.",
+    "parameters": {
+      "deptId": "Luckin store ID.",
+      "productList": "Order item list.",
+      "productList.items.amount": "Quantity.",
+      "productList.items.productId": "Product ID.",
+      "productList.items.skuCode": "Product SKU code.",
+      "longitude": "Longitude.",
+      "latitude": "Latitude.",
+      "couponCodeList": "Optional coupon code list from previewOrder.",
+      "confirmed": "Must be true only after the user explicitly confirms order creation."
+    }
+  },
+  "luckin-query_order_detail": {
+    "description": "Query Luckin order status and pickup details.",
+    "parameters": {
+      "orderId": "Luckin order ID."
+    }
+  },
+  "luckin-cancel_order": {
+    "description": "Cancel a Luckin order. Only call when the user explicitly asks to cancel that order.",
+    "parameters": {
+      "orderId": "Luckin order ID.",
+      "confirmed": "Must be true only after the user explicitly asked to cancel this order."
+    }
+  }
+}

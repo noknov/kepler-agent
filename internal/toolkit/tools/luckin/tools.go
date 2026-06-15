@@ -93,46 +93,46 @@ func tools(client *Client) []MCPTool {
 			Client:      client,
 			LocalName:   "luckin-query_shop_list",
 			RemoteName:  "queryShopList",
-			Description: "Query nearby Luckin Coffee stores. Use this before product search or ordering. Requires the user's approximate longitude and latitude; ask for location when missing.",
+			Description: "",
 			Parameters: registry.ObjectSchema([]string{"longitude", "latitude"}, map[string]any{
-				"deptName":  map[string]any{"type": "string", "description": "Optional store name filter."},
-				"longitude": map[string]any{"type": "number", "description": "Longitude."},
-				"latitude":  map[string]any{"type": "number", "description": "Latitude."},
+				"deptName":  map[string]any{"type": "string", "description": ""},
+				"longitude": map[string]any{"type": "number", "description": ""},
+				"latitude":  map[string]any{"type": "number", "description": ""},
 			}),
 		},
 		{
 			Client:      client,
 			LocalName:   "luckin-search_product",
 			RemoteName:  "searchProductForMcp",
-			Description: "Search Luckin products in a store from the user's natural-language query. Use after choosing a store.",
+			Description: "",
 			Parameters: registry.ObjectSchema([]string{"deptId", "query"}, map[string]any{
-				"deptId": map[string]any{"type": "integer", "description": "Luckin store ID."},
-				"query":  map[string]any{"type": "string", "description": "Original user product request, e.g. 冰美式 or 生椰拿铁少糖."},
+				"deptId": map[string]any{"type": "integer", "description": ""},
+				"query":  map[string]any{"type": "string", "description": ""},
 			}),
 		},
 		{
 			Client:      client,
 			LocalName:   "luckin-switch_product",
 			RemoteName:  "switchProduct",
-			Description: "Switch a Luckin product option such as temperature, cup size, sugar, or ice. Use product attribute IDs returned by product search/detail.",
+			Description: "",
 			Parameters: registry.ObjectSchema([]string{"deptId", "productId", "skuCode", "attrOperationParam", "amount"}, map[string]any{
-				"deptId":    map[string]any{"type": "integer", "description": "Luckin store ID."},
-				"productId": map[string]any{"type": "integer", "description": "Product ID."},
-				"skuCode":   map[string]any{"type": "string", "description": "Current product SKU code."},
-				"amount":    map[string]any{"type": "integer", "description": "Quantity."},
+				"deptId":    map[string]any{"type": "integer", "description": ""},
+				"productId": map[string]any{"type": "integer", "description": ""},
+				"skuCode":   map[string]any{"type": "string", "description": ""},
+				"amount":    map[string]any{"type": "integer", "description": ""},
 				"attrOperationParam": map[string]any{
 					"type":        "object",
-					"description": "Attribute switch operation.",
+					"description": "",
 					"required":    []string{"attributeId", "subAttr"},
 					"properties": map[string]any{
-						"attributeId": map[string]any{"type": "integer", "description": "Attribute group ID."},
+						"attributeId": map[string]any{"type": "integer", "description": ""},
 						"subAttr": map[string]any{
 							"type":        "object",
-							"description": "Target attribute value. operation must be 3 to select it.",
+							"description": "",
 							"required":    []string{"attributeId", "operation"},
 							"properties": map[string]any{
-								"attributeId": map[string]any{"type": "integer", "description": "Attribute value ID."},
-								"operation":   map[string]any{"type": "integer", "description": "Operation type. Use 3 to select."},
+								"attributeId": map[string]any{"type": "integer", "description": ""},
+								"operation":   map[string]any{"type": "integer", "description": ""},
 							},
 						},
 					},
@@ -143,31 +143,31 @@ func tools(client *Client) []MCPTool {
 			Client:      client,
 			LocalName:   "luckin-query_product_detail",
 			RemoteName:  "queryProductDetailInfo",
-			Description: "Query Luckin product details and selectable attributes for a store product.",
+			Description: "",
 			Parameters: registry.ObjectSchema([]string{"deptId", "productId"}, map[string]any{
-				"deptId":    map[string]any{"type": "integer", "description": "Luckin store ID."},
-				"productId": map[string]any{"type": "integer", "description": "Product ID."},
+				"deptId":    map[string]any{"type": "integer", "description": ""},
+				"productId": map[string]any{"type": "integer", "description": ""},
 			}),
 		},
 		{
 			Client:      client,
 			LocalName:   "luckin-preview_order",
 			RemoteName:  "previewOrder",
-			Description: "Preview a Luckin pickup order, including estimated price, applicable coupon codes, store info, and items. Use this before creating an order.",
+			Description: "",
 			Parameters:  registry.ObjectSchema([]string{"deptId", "productList"}, orderProperties(false)),
 		},
 		{
 			Client:      client,
 			LocalName:   "luckin-query_coupons",
 			RemoteName:  "previewOrder",
-			Description: "Query applicable Luckin coupons and discounts for the selected store and products. This calls Luckin previewOrder; coupon codes are returned in couponCodeList and can be passed to luckin-create_order.",
+			Description: "",
 			Parameters:  registry.ObjectSchema([]string{"deptId", "productList"}, orderProperties(false)),
 		},
 		{
 			Client:      client,
 			LocalName:   "luckin-create_order",
 			RemoteName:  "createOrder",
-			Description: "Create a Luckin order and return payment information. Only call after previewing the order and after the user explicitly confirms they want to place it. If a payOrderQrCodeUrl is returned, show it as the primary payment option because Slack or desktop clients may not complete WeChat Pay deep links directly.",
+			Description: "",
 			Parameters:  registry.ObjectSchema([]string{"deptId", "productList", "longitude", "latitude", "confirmed"}, orderProperties(true)),
 			SideEffect:  true,
 		},
@@ -175,19 +175,19 @@ func tools(client *Client) []MCPTool {
 			Client:      client,
 			LocalName:   "luckin-query_order_detail",
 			RemoteName:  "queryOrderDetailInfo",
-			Description: "Query Luckin order status and pickup details.",
+			Description: "",
 			Parameters: registry.ObjectSchema([]string{"orderId"}, map[string]any{
-				"orderId": map[string]any{"type": "string", "description": "Luckin order ID."},
+				"orderId": map[string]any{"type": "string", "description": ""},
 			}),
 		},
 		{
 			Client:      client,
 			LocalName:   "luckin-cancel_order",
 			RemoteName:  "cancelOrder",
-			Description: "Cancel a Luckin order. Only call when the user explicitly asks to cancel that order.",
+			Description: "",
 			Parameters: registry.ObjectSchema([]string{"orderId", "confirmed"}, map[string]any{
-				"orderId":   map[string]any{"type": "string", "description": "Luckin order ID."},
-				"confirmed": map[string]any{"type": "boolean", "description": "Must be true only after the user explicitly asked to cancel this order."},
+				"orderId":   map[string]any{"type": "string", "description": ""},
+				"confirmed": map[string]any{"type": "boolean", "description": ""},
 			}),
 			SideEffect: true,
 		},
@@ -196,30 +196,30 @@ func tools(client *Client) []MCPTool {
 
 func orderProperties(includeLocation bool) map[string]any {
 	props := map[string]any{
-		"deptId": map[string]any{"type": "integer", "description": "Luckin store ID."},
+		"deptId": map[string]any{"type": "integer", "description": ""},
 		"productList": map[string]any{
 			"type":        "array",
-			"description": "Order item list.",
+			"description": "",
 			"items": map[string]any{
 				"type":     "object",
 				"required": []string{"amount", "productId", "skuCode"},
 				"properties": map[string]any{
-					"amount":    map[string]any{"type": "integer", "description": "Quantity."},
-					"productId": map[string]any{"type": "integer", "description": "Product ID."},
-					"skuCode":   map[string]any{"type": "string", "description": "Product SKU code."},
+					"amount":    map[string]any{"type": "integer", "description": ""},
+					"productId": map[string]any{"type": "integer", "description": ""},
+					"skuCode":   map[string]any{"type": "string", "description": ""},
 				},
 			},
 		},
 	}
 	if includeLocation {
-		props["longitude"] = map[string]any{"type": "number", "description": "Longitude."}
-		props["latitude"] = map[string]any{"type": "number", "description": "Latitude."}
+		props["longitude"] = map[string]any{"type": "number", "description": ""}
+		props["latitude"] = map[string]any{"type": "number", "description": ""}
 		props["couponCodeList"] = map[string]any{
 			"type":        "array",
-			"description": "Optional coupon code list from previewOrder.",
+			"description": "",
 			"items":       map[string]any{"type": "string"},
 		}
-		props["confirmed"] = map[string]any{"type": "boolean", "description": "Must be true only after the user explicitly confirms order creation."}
+		props["confirmed"] = map[string]any{"type": "boolean", "description": ""}
 	}
 	return props
 }
