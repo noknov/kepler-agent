@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/wati/oncall-agent/internal/observability"
+	"github.com/wati/oncall-agent/internal/prompts"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
@@ -137,7 +138,7 @@ func (s *Service) SummaryPrompt() string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("Tool health summary:\n")
+	b.WriteString(prompts.HealthPrompt("summary_header", "Tool health summary:\n"))
 	for _, tool := range snap.Tools {
 		if tool.Status == StatusHealthy {
 			continue
@@ -155,7 +156,7 @@ func (s *Service) SummaryPrompt() string {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("Rules: do not make high-confidence code claims when critical code tools are unhealthy. Treat stale RAG results as hints only, and verify with repo/code read tools before final claims.")
+	b.WriteString(prompts.HealthPrompt("summary_rules", "Rules: do not make high-confidence code claims when critical code tools are unhealthy. Treat stale RAG results as hints only, and verify with repo/code read tools before final claims."))
 	return strings.TrimSpace(b.String())
 }
 

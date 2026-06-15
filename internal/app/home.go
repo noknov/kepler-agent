@@ -50,7 +50,7 @@ func (s *Server) homeView(userID string) map[string]any {
 	}
 
 	blocks := []map[string]any{
-		headerBlock("Channel-X Copilot Agent"),
+		headerBlock("斗包"),
 		infoBlock,
 	}
 	blocks = append(blocks,

@@ -131,7 +131,7 @@ func TestRunnerRetriesRepetitiveFinal(t *testing.T) {
 	lastRequest := client.requests[len(client.requests)-1]
 	foundRetryPrompt := false
 	for _, msg := range lastRequest.Messages {
-		if msg.Role == "system" && msg.Content == repetitiveRetryPrompt {
+		if msg.Role == "system" && msg.Content == repetitiveRetryPrompt() {
 			foundRetryPrompt = true
 			break
 		}
@@ -354,7 +354,7 @@ func TestRunnerRetriesEmptyResponseThenSucceeds(t *testing.T) {
 	}
 	foundRetryPrompt := false
 	for _, msg := range client.requests[1].Messages {
-		if msg.Role == "system" && msg.Content == emptyResponseRetryPrompt {
+		if msg.Role == "system" && msg.Content == emptyResponseRetryPrompt() {
 			foundRetryPrompt = true
 			break
 		}

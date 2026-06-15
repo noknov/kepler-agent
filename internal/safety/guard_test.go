@@ -11,10 +11,10 @@ import (
 
 func TestSystemPromptFallbackStaysMinimal(t *testing.T) {
 	prompt := (PromptPolicy{}).SystemPrompt()
-	if !strings.Contains(prompt, "Slack assistant") {
-		t.Fatalf("SystemPrompt() should keep a minimal fallback assistant role: %q", prompt)
+	if !strings.Contains(prompt, "斗包") || !strings.Contains(prompt, "general-purpose assistant") {
+		t.Fatalf("SystemPrompt() should keep the default 斗包 assistant role: %q", prompt)
 	}
-	if strings.Contains(prompt, "Channel-X Copilot Agent") || strings.Contains(prompt, "U085SRJFCLX") {
+	if strings.Contains(prompt, "channelx-copilot-agent") || strings.Contains(prompt, "Channel-X Copilot Agent") || strings.Contains(prompt, "U085SRJFCLX") {
 		t.Fatalf("SystemPrompt() should not contain deployment-specific identity prompt: %q", prompt)
 	}
 	if strings.Contains(prompt, "food or drink ordering") || strings.Contains(prompt, "author") {
