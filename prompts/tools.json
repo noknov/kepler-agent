@@ -30,7 +30,7 @@
     }
   },
   "git-search_ref": {
-    "description": "Search code at a git ref without changing the working tree. Use this instead of code-search when analyzing a specified branch.",
+    "description": "Search code at a git ref without changing the working tree. Use this instead of code-search when analyzing a specified branch. Required before claiming a specific guard, conditional, or log string exists (for example shopifyOrder.test, Skipping test order).",
     "parameters": {
       "repo": "Repository path under WORKSPACE_ROOTS.",
       "ref": "Immutable ref returned by git-fetch_ref, usually a commit SHA.",
@@ -40,7 +40,7 @@
     }
   },
   "git-read_file_ref": {
-    "description": "Read a file at a git ref without changing the working tree.",
+    "description": "Read a file at a git ref without changing the working tree. Use before quoting code blocks or line numbers in the final answer.",
     "parameters": {
       "repo": "Repository path under WORKSPACE_ROOTS.",
       "ref": "Immutable ref returned by git-fetch_ref, usually a commit SHA.",

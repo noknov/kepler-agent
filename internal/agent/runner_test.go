@@ -530,6 +530,154 @@ func TestWaitForUserToolResultIsNotEvidenceWrapped(t *testing.T) {
 	}
 }
 
+func TestHasFencedCodeBlock(t *testing.T) {
+	cases := []struct {
+		text string
+		want bool
+	}{
+		{"no code here", false},
+		{"use `inline` code", false},
+		{"```\nsome code\n```", true},
+		{"```go\nfunc f() {}\n```", true},
+		{"text before\n```csharp\nif (x) {}\n```\ntext after", true},
+		{"   ```\nindented fence\n```", true},
+	}
+	for _, c := range cases {
+		if got := hasFencedCodeBlock(c.text); got != c.want {
+			t.Errorf("hasFencedCodeBlock(%q) = %v, want %v", c.text, got, c.want)
+		}
+	}
+}
+
+func TestRunnerRetriesOnCodeClaimWithoutCodeTool(t *testing.T) {
+	codeAnswer := "Here is the code:\n```csharp\nif (x.test) { return; }\n```"
+	client := &fakeClient{responses: []llm.Response{
+		{Message: llm.Message{Role: "assistant", Content: codeAnswer}},
+		{Message: llm.Message{Role: "assistant", Content: "I cannot verify this without reading the file."}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 5}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "I cannot verify this without reading the file." {
+		t.Fatalf("Final = %q", result.Final)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("expected 2 LLM calls, got %d", len(client.requests))
+	}
+	retryPrompt := codeClaimRetryPrompt()
+	found := false
+	for _, msg := range client.requests[1].Messages {
+		if msg.Role == "system" && msg.Content == retryPrompt {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("code_claim_retry prompt was not injected")
+	}
+}
+
+func TestRunnerNoCodeClaimRetryWhenCodeToolCalled(t *testing.T) {
+	codeAnswer := "Here is the code:\n```csharp\nif (x.test) { return; }\n```"
+	client := &fakeClient{responses: []llm.Response{
+		{Message: codeToolCallMessage("read_1", `{"path":"ShopifyService.cs"}`)},
+		{Message: llm.Message{Role: "assistant", Content: codeAnswer}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeCodeTool{})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 5}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != codeAnswer {
+		t.Fatalf("Final = %q", result.Final)
+	}
+	// Only 2 LLM calls: tool step + final answer; no retry injected.
+	if len(client.requests) != 2 {
+		t.Fatalf("expected 2 LLM calls (no retry), got %d", len(client.requests))
+	}
+}
+
+func TestRunnerNoCodeClaimRetryWhenNoCodeBlock(t *testing.T) {
+	answer := "The field `test` is just a boolean on the model."
+	client := &fakeClient{responses: []llm.Response{
+		{Message: llm.Message{Role: "assistant", Content: answer}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 3}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != answer {
+		t.Fatalf("Final = %q", result.Final)
+	}
+	if len(client.requests) != 1 {
+		t.Fatalf("expected 1 LLM call, got %d", len(client.requests))
+	}
+}
+
+func TestRunnerCodeClaimRetryOnlyOnce(t *testing.T) {
+	codeAnswer := "```csharp\nif (x.test) { return; }\n```"
+	client := &fakeClient{responses: []llm.Response{
+		{Message: llm.Message{Role: "assistant", Content: codeAnswer}},
+		{Message: llm.Message{Role: "assistant", Content: codeAnswer}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 5}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	// Second response still has code block but retry already used; accepted as-is.
+	if result.Final != codeAnswer {
+		t.Fatalf("Final = %q", result.Final)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("expected exactly 2 LLM calls (one retry), got %d", len(client.requests))
+	}
+}
+
+func codeToolCallMessage(id, args string) llm.Message {
+	return llm.Message{
+		Role: "assistant",
+		ToolCalls: []llm.ToolCall{{
+			ID:   id,
+			Type: "function",
+			Function: llm.ToolFunction{
+				Name:      "git-read_file_ref",
+				Arguments: args,
+			},
+		}},
+	}
+}
+
+// fakeCodeTool simulates a code-reading tool (git-read_file_ref) to verify
+// that the code claim retry is suppressed when evidence was gathered.
+type fakeCodeTool struct{}
+
+func (fakeCodeTool) Spec() llm.ToolSpec {
+	return llm.ToolSpec{
+		Type: "function",
+		Function: llm.ToolSpecFunction{
+			Name:        "git-read_file_ref",
+			Description: "read file at git ref",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}
+}
+
+func (fakeCodeTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	return registry.Result{Content: string(args)}, nil
+}
+
 type fakeTool struct{}
 
 func (fakeTool) Parallel() bool { return true }
