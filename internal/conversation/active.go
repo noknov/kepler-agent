@@ -8,6 +8,7 @@ import (
 
 	"github.com/wati/oncall-agent/internal/agent"
 	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/wati/oncall-agent/internal/prompts"
 )
 
 type progressAppender func([]map[string]any)
@@ -122,7 +123,7 @@ func (a *activeRun) remainingQueued() []Request {
 
 func formatSteeringMessages(requests []Request) string {
 	var b strings.Builder
-	b.WriteString("Additional user guidance received while you were already working. Treat this as the user's latest instruction for the current run; it supersedes conflicting earlier assumptions.\n")
+	b.WriteString(prompts.PromptText("steering_header", ""))
 	b.WriteString("<active_turn_guidance>\n")
 	for _, req := range requests {
 		text := strings.TrimSpace(req.Text)

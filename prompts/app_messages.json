@@ -1,0 +1,6 @@
+{
+  "empty_mention": "(The user mentioned the app but did not include a specific request. Greet them briefly and ask what they need help with. Reply in the same language the user used, or English by default.)",
+  "empty_dm": "(The user sent an empty app DM. Greet them briefly and ask what they need help with. Reply in the same language the user used, or English by default.)",
+  "empty_dm_with_file": "(The user sent an app DM with a file but no text. Briefly describe what you can do with the file and ask for any missing context.)"
+}
+

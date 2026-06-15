@@ -15,9 +15,9 @@ type LoadTool struct{}
 func (LoadTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"skills-load",
-		"Load the full instructions for an available skill by name. Use this before following a skill workflow when the user's request explicitly names a skill or clearly matches a skill description.",
+		"",
 		registry.ObjectSchema([]string{"name"}, map[string]any{
-			"name": map[string]any{"type": "string", "description": "Skill name from the Available skills list."},
+			"name": map[string]any{"type": "string", "description": ""},
 		}),
 	)
 }

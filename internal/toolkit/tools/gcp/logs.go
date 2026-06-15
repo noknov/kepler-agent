@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/wati/oncall-agent/internal/prompts"
 	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
@@ -31,22 +32,22 @@ func (LogsTool) Repeatable() bool { return true }
 func (LogsTool) Parallel() bool { return true }
 
 func (t LogsTool) Spec() llm.ToolSpec {
-	description := "Query GCP Cloud Logging with gcloud logging read. Read-only. Project, namespace, service, and filter are per-call inputs; configured GCP values are only defaults/hints, not fixed environments."
+	dynamicHint := ""
 	if hint := t.defaultHint(); hint != "" {
-		description += " Current defaults/hints: " + hint + "."
+		dynamicHint = prompts.PromptText("gcp_defaults_hint_prefix", "") + hint + "."
 	}
 	return registry.FunctionSpec(
 		"gcp-logs",
-		description,
+		dynamicHint,
 		registry.ObjectSchema(nil, map[string]any{
-			"filter":    map[string]any{"type": "string", "description": "Cloud Logging filter expression. Example: severity>=ERROR AND resource.labels.namespace_name=\"mt-dev\""},
-			"severity":  map[string]any{"type": "string", "description": "Minimum severity, e.g. ERROR, WARNING, INFO. Used when filter is not fully specified."},
-			"namespace": map[string]any{"type": "string", "description": "GKE namespace for this query. Optional; when omitted, no namespace filter is added unless filter already contains one."},
-			"service":   map[string]any{"type": "string", "description": "Service/deployment/container name hint. Matched against common GKE labels."},
-			"freshness": map[string]any{"type": "string", "description": "Freshness window, e.g. 30m, 2h. Defaults to 30m."},
-			"limit":     map[string]any{"type": "integer", "description": "Maximum log entries. Defaults to 30, max 200."},
-			"project":   map[string]any{"type": "string", "description": "GCP project for this query. Defaults to configured GCP_PROJECT only when omitted."},
-			"format":    map[string]any{"type": "string", "description": "gcloud format, json or value. Defaults to json."},
+			"filter":    map[string]any{"type": "string", "description": ""},
+			"severity":  map[string]any{"type": "string", "description": ""},
+			"namespace": map[string]any{"type": "string", "description": ""},
+			"service":   map[string]any{"type": "string", "description": ""},
+			"freshness": map[string]any{"type": "string", "description": ""},
+			"limit":     map[string]any{"type": "integer", "description": ""},
+			"project":   map[string]any{"type": "string", "description": ""},
+			"format":    map[string]any{"type": "string", "description": ""},
 		}),
 	)
 }

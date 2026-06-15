@@ -9,6 +9,7 @@ import (
 )
 
 const DefaultDir = ".prompts"
+const PublicDir = "prompts"
 
 type Catalog struct {
 	System          string                `json:"system,omitempty"`
@@ -20,6 +21,7 @@ type Catalog struct {
 	GitHubWorkflows map[string]string     `json:"github_workflows,omitempty"`
 	Runner          map[string]string     `json:"runner,omitempty"`
 	Health          map[string]string     `json:"health,omitempty"`
+	Texts           map[string]string     `json:"texts,omitempty"`
 	Rules           []string              `json:"-"`
 	Skills          []Skill               `json:"-"`
 }
@@ -39,9 +41,14 @@ type Skill struct {
 var current = struct {
 	sync.RWMutex
 	dir     string
+	dirs    []string
 	catalog Catalog
 }{
 	dir: DefaultDir,
+}
+
+func init() {
+	_ = LoadDirs(PublicDir)
 }
 
 func LoadFromEnv() {
@@ -49,7 +56,7 @@ func LoadFromEnv() {
 	if dir == "" {
 		dir = DefaultDir
 	}
-	_ = LoadDir(dir)
+	_ = LoadDirs(PublicDir, dir)
 }
 
 func Dir() string {
@@ -58,8 +65,96 @@ func Dir() string {
 	return current.dir
 }
 
+func Dirs() []string {
+	current.RLock()
+	defer current.RUnlock()
+	return append([]string(nil), current.dirs...)
+}
+
 func LoadDir(dir string) error {
-	catalog := Catalog{
+	return LoadDirs(dir)
+}
+
+func LoadDirs(dirs ...string) error {
+	catalog := newCatalog()
+	loaded := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			continue
+		}
+		resolved := resolveDir(dir)
+		next := newCatalog()
+		loadCatalogDir(resolved, &next)
+		mergeCatalog(&catalog, next)
+		loaded = append(loaded, resolved)
+	}
+	activeDir := DefaultDir
+	if len(loaded) > 0 {
+		activeDir = loaded[len(loaded)-1]
+	}
+
+	current.Lock()
+	current.dir = activeDir
+	current.dirs = loaded
+	current.catalog = catalog
+	current.Unlock()
+	return nil
+}
+
+func resolveDir(dir string) string {
+	if filepath.IsAbs(dir) {
+		return dir
+	}
+	if looksLikeCatalogDir(dir) {
+		return dir
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return dir
+	}
+	for {
+		candidate := filepath.Join(wd, dir)
+		if looksLikeCatalogDir(candidate) {
+			return candidate
+		}
+		parent := filepath.Dir(wd)
+		if parent == wd {
+			break
+		}
+		wd = parent
+	}
+	return dir
+}
+
+func looksLikeCatalogDir(dir string) bool {
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	markers := []string{
+		"system.md",
+		"delegates.json",
+		"app_messages.json",
+		"tools.json",
+		"memory.json",
+		"runner.json",
+		"health.json",
+		"texts.json",
+		"rules",
+		"skills",
+		"runbooks",
+	}
+	for _, marker := range markers {
+		if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func newCatalog() Catalog {
+	return Catalog{
 		Delegates:       map[string]string{},
 		AppMessages:     map[string]string{},
 		Tools:           map[string]ToolPrompt{},
@@ -68,7 +163,11 @@ func LoadDir(dir string) error {
 		GitHubWorkflows: map[string]string{},
 		Runner:          map[string]string{},
 		Health:          map[string]string{},
+		Texts:           map[string]string{},
 	}
+}
+
+func loadCatalogDir(dir string, catalog *Catalog) {
 	readText(filepath.Join(dir, "system.md"), &catalog.System)
 	readJSON(filepath.Join(dir, "delegates.json"), &catalog.Delegates)
 	readJSON(filepath.Join(dir, "app_messages.json"), &catalog.AppMessages)
@@ -78,14 +177,64 @@ func LoadDir(dir string) error {
 	readJSON(filepath.Join(dir, "github_workflows.json"), &catalog.GitHubWorkflows)
 	readJSON(filepath.Join(dir, "runner.json"), &catalog.Runner)
 	readJSON(filepath.Join(dir, "health.json"), &catalog.Health)
+	readJSON(filepath.Join(dir, "texts.json"), &catalog.Texts)
 	catalog.Rules = readMarkdownDir(filepath.Join(dir, "rules"))
 	catalog.Skills = readSkillsDir(filepath.Join(dir, "skills"))
+}
 
-	current.Lock()
-	current.dir = dir
-	current.catalog = catalog
-	current.Unlock()
-	return nil
+func mergeCatalog(dst *Catalog, src Catalog) {
+	dst.System = choose(src.System, dst.System)
+	mergeStringMap(dst.Delegates, src.Delegates)
+	mergeStringMap(dst.AppMessages, src.AppMessages)
+	mergeToolMap(dst.Tools, src.Tools)
+	mergeStringMap(dst.MemoryLabels, src.MemoryLabels)
+	mergeStringMap(dst.ToolStatuses, src.ToolStatuses)
+	mergeStringMap(dst.GitHubWorkflows, src.GitHubWorkflows)
+	mergeStringMap(dst.Runner, src.Runner)
+	mergeStringMap(dst.Health, src.Health)
+	mergeStringMap(dst.Texts, src.Texts)
+	dst.Rules = append(dst.Rules, src.Rules...)
+	dst.Skills = mergeSkills(dst.Skills, src.Skills)
+}
+
+func mergeStringMap(dst, src map[string]string) {
+	for key, value := range src {
+		if strings.TrimSpace(value) != "" {
+			dst[key] = value
+		}
+	}
+}
+
+func mergeToolMap(dst, src map[string]ToolPrompt) {
+	for name, incoming := range src {
+		current := dst[name]
+		current.Description = choose(incoming.Description, current.Description)
+		if current.Parameters == nil {
+			current.Parameters = map[string]string{}
+		}
+		mergeStringMap(current.Parameters, incoming.Parameters)
+		dst[name] = current
+	}
+}
+
+func mergeSkills(dst, src []Skill) []Skill {
+	if len(src) == 0 {
+		return dst
+	}
+	byName := map[string]int{}
+	for i, skill := range dst {
+		byName[strings.ToLower(skill.Name)] = i
+	}
+	for _, skill := range src {
+		key := strings.ToLower(skill.Name)
+		if i, ok := byName[key]; ok {
+			dst[i] = skill
+			continue
+		}
+		byName[key] = len(dst)
+		dst = append(dst, skill)
+	}
+	return dst
 }
 
 func System(fallback string) string {
@@ -148,12 +297,18 @@ func HealthPrompt(name, fallback string) string {
 	return choose(current.catalog.Health[name], fallback)
 }
 
+func PromptText(name, fallback string) string {
+	current.RLock()
+	defer current.RUnlock()
+	return choose(current.catalog.Texts[name], fallback)
+}
+
 func RulesPrompt() string {
 	current.RLock()
 	defer current.RUnlock()
 	var b strings.Builder
 	if len(current.catalog.Rules) > 0 {
-		b.WriteString("\n\nAdditional rules:\n")
+		b.WriteString(choose(current.catalog.Texts["rules_header"], ""))
 		b.WriteString(strings.Join(current.catalog.Rules, "\n\n---\n\n"))
 	}
 	return b.String()
@@ -166,8 +321,8 @@ func SkillsPrompt() string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("\n\nAvailable skills:\n")
-	b.WriteString("Skills are loaded on demand. If the user explicitly names a skill, or the task clearly matches a skill description, call skills-load with that skill name before following its workflow. Do not assume the full skill instructions until skills-load returns them.\n")
+	b.WriteString(choose(current.catalog.Texts["skills_header"], ""))
+	b.WriteString(choose(current.catalog.Texts["skills_loading_policy"], ""))
 	for _, skill := range current.catalog.Skills {
 		b.WriteString("\n- ")
 		b.WriteString(skill.Name)

@@ -25,11 +25,11 @@ func (ReadFileTool) Parallel() bool { return true }
 func (t ReadFileTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"code-read_file",
-		"Read a text file from an allowed workspace root. Use start_line and max_lines for very large files.",
+		"",
 		registry.ObjectSchema([]string{"path"}, map[string]any{
-			"path":       map[string]any{"type": "string", "description": "File path under one of WORKSPACE_ROOTS."},
-			"start_line": map[string]any{"type": "integer", "description": "1-based start line. Defaults to 1."},
-			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines to return. Defaults to 240, max 1000."},
+			"path":       map[string]any{"type": "string", "description": ""},
+			"start_line": map[string]any{"type": "integer", "description": ""},
+			"max_lines":  map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }
@@ -103,12 +103,12 @@ func (SearchTool) Parallel() bool { return true }
 func (t SearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"code-search",
-		"Search code with ripgrep under an allowed workspace root. Prefer this before reading files when locating symbols, errors, routes, or config keys.",
+		"",
 		registry.ObjectSchema([]string{"query"}, map[string]any{
-			"query": map[string]any{"type": "string", "description": "Literal or regex query for rg."},
-			"path":  map[string]any{"type": "string", "description": "Directory or file under WORKSPACE_ROOTS. Defaults to first root."},
-			"glob":  map[string]any{"type": "string", "description": "Optional rg glob, e.g. '*.go' or '!node_modules'."},
-			"limit": map[string]any{"type": "integer", "description": "Maximum matching lines. Defaults to 50, max 200."},
+			"query": map[string]any{"type": "string", "description": ""},
+			"path":  map[string]any{"type": "string", "description": ""},
+			"glob":  map[string]any{"type": "string", "description": ""},
+			"limit": map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }

@@ -14,6 +14,7 @@ import (
 type Config struct {
 	HTTP      HTTPConfig
 	Slack     SlackConfig
+	Web       WebConfig
 	LLM       LLMConfig
 	Security  SecurityConfig
 	Sessions  SessionConfig
@@ -35,6 +36,13 @@ type RAGConfig struct {
 
 type HTTPConfig struct {
 	Addr string
+}
+
+// WebConfig holds settings for the built-in web chat UI.
+type WebConfig struct {
+	// Model overrides the LLM model used for web sessions.
+	// Empty means use the same default as Slack.
+	Model string
 }
 
 type SlackConfig struct {
@@ -150,6 +158,9 @@ func Load() (Config, error) {
 			BotToken:      os.Getenv("SLACK_BOT_TOKEN"),
 			SigningSecret: os.Getenv("SLACK_SIGNING_SECRET"),
 			BotUserID:     os.Getenv("SLACK_BOT_USER_ID"),
+		},
+		Web: WebConfig{
+			Model: os.Getenv("WEB_MODEL"),
 		},
 		LLM: LLMConfig{
 			Provider:         llmProvider,

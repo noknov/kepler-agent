@@ -1,0 +1,14 @@
+{
+  "rules_header": "\n\nAdditional rules:\n",
+  "skills_header": "\n\nAvailable skills:\n",
+  "skills_loading_policy": "Skills are loaded on demand. If the user explicitly names a skill, or the task clearly matches a skill description, call skills-load with that skill name before following its workflow. Do not assume the full skill instructions until skills-load returns them.\n",
+  "repository_inventory_header": "\n\nAvailable code repositories. Use repo name as the path prefix for repository tools:\n",
+  "thread_compressed_header": "Thread context compressed to preserve accuracy under budget.",
+  "thread_compressed_note": "Full Slack thread was read; middle messages are summarized or excerpted below.",
+  "thread_earliest_messages": "Earliest messages:",
+  "thread_middle_summary": "Middle summary:",
+  "thread_recent_messages": "Most recent messages:",
+  "steering_header": "Additional user guidance received while you were already working. Treat this as the user's latest instruction for the current run; it supersedes conflicting earlier assumptions.\n",
+  "gcp_defaults_hint_prefix": "Current defaults/hints: ",
+  "delegate_profiles_prefix": " Available profiles: "
+}
