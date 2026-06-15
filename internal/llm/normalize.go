@@ -6,8 +6,13 @@ import (
 )
 
 var (
-	reToolCallBlock = regexp.MustCompile(`(?is)<tool_call>.*?</tool_call>`)
-	reFunctionTag   = regexp.MustCompile(`(?is)<function=[^>]+>.*?</function>`)
+	reToolCallBlock      = regexp.MustCompile(`(?is)<tool_call>.*?</tool_call>`)
+	reFunctionTag        = regexp.MustCompile(`(?is)<function=[^>]+>.*?</function>`)
+	reToolInvocation     = regexp.MustCompile(`(?is)<tool_invocation[^>]*>.*?</tool_invocation>`)
+	reToolInvocationSelf = regexp.MustCompile(`(?i)<tool_invocation[^>]*/\s*>`)
+	reToolNameBlock      = regexp.MustCompile(`(?is)<tool_name>.*?</tool_name>`)
+	reParametersBlock    = regexp.MustCompile(`(?is)<parameters>.*?</parameters>`)
+	reToolCallCodeBlock  = regexp.MustCompile("(?s)```[\\w]*\\s*tool_call.*?```")
 )
 
 // LooksLikeTextualToolCall reports whether content appears to describe tool invocations
@@ -41,17 +46,24 @@ func LooksLikeTextualToolCall(content string) bool {
 func NormalizeAssistantMessage(caps Capabilities, msg Message, _ []ToolSpec) Message {
 	msg.Content = strings.TrimSpace(msg.Content)
 	if len(msg.ToolCalls) > 0 {
-		msg.Content = stripTextualToolCallMarkup(msg.Content)
+		msg.Content = StripTextualToolCallMarkup(msg.Content)
 	}
 	_ = caps
 	return msg
 }
 
-func stripTextualToolCallMarkup(content string) string {
+// StripTextualToolCallMarkup removes all textual tool-call markup patterns
+// from content, returning whatever plain text remains.
+func StripTextualToolCallMarkup(content string) string {
 	if content == "" {
 		return ""
 	}
 	content = reToolCallBlock.ReplaceAllString(content, "")
 	content = reFunctionTag.ReplaceAllString(content, "")
+	content = reToolInvocation.ReplaceAllString(content, "")
+	content = reToolInvocationSelf.ReplaceAllString(content, "")
+	content = reToolNameBlock.ReplaceAllString(content, "")
+	content = reParametersBlock.ReplaceAllString(content, "")
+	content = reToolCallCodeBlock.ReplaceAllString(content, "")
 	return strings.TrimSpace(content)
 }

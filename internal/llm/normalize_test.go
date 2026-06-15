@@ -22,6 +22,31 @@ func TestLooksLikeTextualToolCall(t *testing.T) {
 	}
 }
 
+func TestStripTextualToolCallMarkup(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"", ""},
+		{"plain text", "plain text"},
+		{"<tool_call><function=search></function></tool_call>", ""},
+		{"answer\n<tool_call><function=x></function></tool_call>", "answer"},
+		{`<tool_invocation name="search" arguments={"q":"x"} />`, ""},
+		{`answer <tool_invocation name="x" arguments={} />`, "answer"},
+		{`<tool_invocation name="x" arguments={}>body</tool_invocation>`, ""},
+		{"<tool_name>search</tool_name><parameters>{}</parameters>", ""},
+		{"answer\n<tool_name>x</tool_name>", "answer"},
+		{"```json\ntool_call\n```", ""},
+		{"answer\n```\ntool_call\n```", "answer"},
+	}
+	for _, tc := range cases {
+		got := StripTextualToolCallMarkup(tc.input)
+		if got != tc.want {
+			t.Errorf("StripTextualToolCallMarkup(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestNormalizeAssistantMessageStripsMarkupWhenStructuredCallsPresent(t *testing.T) {
 	msg := Message{
 		Role: "assistant",
