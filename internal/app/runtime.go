@@ -1,6 +1,7 @@
 package app
 
 import (
+	"log"
 	"path/filepath"
 
 	"github.com/wati/oncall-agent/internal/agent"
@@ -11,6 +12,7 @@ import (
 	"github.com/wati/oncall-agent/internal/memory"
 	"github.com/wati/oncall-agent/internal/observability"
 	"github.com/wati/oncall-agent/internal/prompts"
+	"github.com/wati/oncall-agent/internal/rag"
 	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/slack"
 	codeTools "github.com/wati/oncall-agent/internal/toolkit/tools/code"
@@ -22,6 +24,7 @@ import (
 	knowledgeTools "github.com/wati/oncall-agent/internal/toolkit/tools/knowledge"
 	luckinTools "github.com/wati/oncall-agent/internal/toolkit/tools/luckin"
 	notionTools "github.com/wati/oncall-agent/internal/toolkit/tools/notion"
+	ragTools "github.com/wati/oncall-agent/internal/toolkit/tools/rag"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 	skillTools "github.com/wati/oncall-agent/internal/toolkit/tools/skills"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/slacktool"
@@ -30,12 +33,13 @@ import (
 )
 
 type agentRuntime struct {
-	Runner    agent.Runner
-	Memory    memory.Builder
-	Prompt    safety.PromptPolicy
-	Redactor  safety.Redactor
-	Tools     *registry.Registry
-	CostRates observability.CostRates
+	Runner     agent.Runner
+	Memory     memory.Builder
+	Prompt     safety.PromptPolicy
+	Redactor   safety.Redactor
+	Tools      *registry.Registry
+	CostRates  observability.CostRates
+	RAGManager *rag.Manager
 }
 
 func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *observability.Recorder) agentRuntime {
@@ -51,6 +55,27 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *obs
 		MaxSummaryChars: cfg.Sessions.MaxSummaryChars,
 	}
 	tools := newToolRegistry(cfg, slackClient, llmClient, workspacePolicy, commandPolicy)
+
+	var ragMgr *rag.Manager
+	if cfg.RAG.Enabled {
+		var err error
+		ragMgr, err = rag.NewManager(rag.Config{
+			PostgresDSN:      cfg.RAG.PostgresDSN,
+			EmbeddingBaseURL: cfg.RAG.EmbeddingBaseURL,
+			EmbeddingAPIKey:  cfg.RAG.EmbeddingAPIKey,
+			EmbeddingModel:   cfg.RAG.EmbeddingModel,
+			EmbeddingDims:    cfg.RAG.EmbeddingDims,
+			IndexInterval:    cfg.RAG.IndexInterval,
+			WorkspaceRoots:   cfg.Security.WorkspaceRoots,
+			Observer:         recorder,
+		})
+		if err != nil {
+			log.Printf("rag: failed to initialize, continuing without RAG: %v", err)
+		} else {
+			tools.Register(ragTools.SearchTool{Manager: ragMgr, Paths: workspacePolicy, Observer: recorder})
+		}
+	}
+
 	return agentRuntime{
 		Runner: agent.Runner{
 			LLM:       llmClient,
@@ -64,11 +89,12 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *obs
 			Observer:  recorder,
 			MaxSteps:  cfg.Tools.AgentMaxSteps,
 		},
-		Memory:    mem,
-		Prompt:    promptPolicy,
-		Redactor:  redactor,
-		Tools:     tools,
-		CostRates: costRates(cfg),
+		Memory:     mem,
+		Prompt:     promptPolicy,
+		Redactor:   redactor,
+		Tools:      tools,
+		CostRates:  costRates(cfg),
+		RAGManager: ragMgr,
 	}
 }
 

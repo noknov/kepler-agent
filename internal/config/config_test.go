@@ -128,6 +128,58 @@ func TestLoadGitHubConfig(t *testing.T) {
 	}
 }
 
+func TestLoadRAGBackgroundIndexDefaultsOn(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":      "xoxb-test",
+		"SLACK_SIGNING_SECRET": "secret",
+		"ALLOWED_SLACK_USERS":  "U123",
+		"MIMO_API_KEY":         "mimo-token",
+		"RAG_ENABLED":          "true",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if !cfg.RAG.BackgroundIndex {
+		t.Fatal("RAG.BackgroundIndex = false, want true by default")
+	}
+}
+
+func TestLoadRAGBackgroundIndexCanBeDisabled(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":      "xoxb-test",
+		"SLACK_SIGNING_SECRET": "secret",
+		"ALLOWED_SLACK_USERS":  "U123",
+		"MIMO_API_KEY":         "mimo-token",
+		"RAG_BACKGROUND_INDEX": "false",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.RAG.BackgroundIndex {
+		t.Fatal("RAG.BackgroundIndex = true, want false")
+	}
+}
+
 func TestLoadKeepsWorkspaceAutoFetchOptIn(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
