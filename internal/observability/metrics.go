@@ -39,17 +39,19 @@ type RAGSnapshot struct {
 }
 
 type RAGIndexState struct {
-	Repo             string    `json:"repo"`
-	Branch           string    `json:"branch"`
-	LastCommit       string    `json:"last_commit,omitempty"`
-	LastIndexedAt    time.Time `json:"last_indexed_at,omitempty"`
-	LastDurationMS   int64     `json:"last_duration_ms,omitempty"`
-	LastFilesChanged int       `json:"last_files_changed,omitempty"`
-	LastChunksAdded  int       `json:"last_chunks_added,omitempty"`
-	LastChunksReused int       `json:"last_chunks_reused,omitempty"`
-	LastError        string    `json:"last_error,omitempty"`
-	Runs             int64     `json:"runs,omitempty"`
-	Failures         int64     `json:"failures,omitempty"`
+	Repo                   string    `json:"repo"`
+	Branch                 string    `json:"branch"`
+	LastCommit             string    `json:"last_commit,omitempty"`
+	LastIndexedAt          time.Time `json:"last_indexed_at,omitempty"`
+	LastDurationMS         int64     `json:"last_duration_ms,omitempty"`
+	LastFilesChanged       int       `json:"last_files_changed,omitempty"`
+	LastChunksAdded        int       `json:"last_chunks_added,omitempty"`
+	LastChunksReused       int       `json:"last_chunks_reused,omitempty"`
+	LastChunksSplitLarge   int       `json:"last_chunks_split_large,omitempty"`
+	LastChunksSkippedLarge int       `json:"last_chunks_skipped_large,omitempty"`
+	LastError              string    `json:"last_error,omitempty"`
+	Runs                   int64     `json:"runs,omitempty"`
+	Failures               int64     `json:"failures,omitempty"`
 }
 
 type LatencySummary struct {
@@ -140,7 +142,7 @@ func (r *Recorder) ToolCall(name string, d time.Duration, err error) {
 	}
 }
 
-func (r *Recorder) RAGIndexSuccess(repo, branch, commit string, filesChanged, chunksAdded, chunksReused int, d time.Duration) {
+func (r *Recorder) RAGIndexSuccess(repo, branch, commit string, filesChanged, chunksAdded, chunksReused, chunksSplitLarge, chunksSkippedLarge int, d time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ensureRAGLocked()
@@ -155,6 +157,8 @@ func (r *Recorder) RAGIndexSuccess(repo, branch, commit string, filesChanged, ch
 	state.LastFilesChanged = filesChanged
 	state.LastChunksAdded = chunksAdded
 	state.LastChunksReused = chunksReused
+	state.LastChunksSplitLarge = chunksSplitLarge
+	state.LastChunksSkippedLarge = chunksSkippedLarge
 	state.LastError = ""
 	state.Runs++
 	r.snap.RAG.Indexes[key] = state

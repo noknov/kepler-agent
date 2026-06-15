@@ -22,6 +22,12 @@ func TestMigrationSQL(t *testing.T) {
 	if !strings.Contains(sql, "gin(tsv)") {
 		t.Error("migration SQL should create GIN index for tsvector")
 	}
+	if !strings.Contains(sql, "left(content, 200000)") {
+		t.Error("migration SQL should cap content used for tsvector")
+	}
+	if strings.Contains(sql, "ALTER TABLE rag_chunks DROP COLUMN tsv") {
+		t.Error("startup migration should not rewrite existing rag_chunks tsv column")
+	}
 }
 
 func TestToTSQuery(t *testing.T) {
