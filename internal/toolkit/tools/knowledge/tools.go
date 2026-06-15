@@ -23,10 +23,10 @@ func (RunbookSearchTool) Parallel() bool { return true }
 func (t RunbookSearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"knowledge-runbook_search",
-		"Search local service runbooks under PROMPT_DIR/runbooks. Use this for service ownership, known alerts, dashboards, playbooks, and recurring incident procedures.",
+		"",
 		registry.ObjectSchema([]string{"query"}, map[string]any{
-			"query": map[string]any{"type": "string", "description": "Service, alert, symptom, dashboard, or runbook keyword."},
-			"limit": map[string]any{"type": "integer", "description": "Maximum runbook matches. Defaults to 5, max 20."},
+			"query": map[string]any{"type": "string", "description": ""},
+			"limit": map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/wati/oncall-agent/internal/prompts"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
@@ -24,11 +25,11 @@ func (t Tool) Spec() llm.ToolSpec {
 	}
 	return registry.FunctionSpec(
 		"delegate-run",
-		"Run a focused delegate for bounded analysis without tools. Output is unverified inference from the context you pass; corroborate with code-search, code-read_file, git-log, or gcp-logs before stating facts. Profiles: "+profiles+".",
+		prompts.PromptText("delegate_profiles_prefix", "")+profiles+".",
 		registry.ObjectSchema([]string{"profile", "task", "context"}, map[string]any{
-			"profile": map[string]any{"type": "string", "description": "Delegate profile name, e.g. code or incident."},
-			"task":    map[string]any{"type": "string", "description": "Specific bounded task."},
-			"context": map[string]any{"type": "string", "description": "Compact context for the delegate. Do not paste huge raw logs."},
+			"profile": map[string]any{"type": "string", "description": ""},
+			"task":    map[string]any{"type": "string", "description": ""},
+			"context": map[string]any{"type": "string", "description": ""},
 		}),
 	)
 }

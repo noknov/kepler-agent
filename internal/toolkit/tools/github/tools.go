@@ -64,12 +64,12 @@ type DispatchWorkflowTool struct {
 func (t DispatchWorkflowTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"github-dispatch_workflow",
-		"Trigger a GitHub Actions workflow_dispatch run. When the user's request is clear, execute directly without asking for a separate confirmation. Choose the workflow, ref, and inputs from the user's request or ask only for missing required inputs.",
+		"",
 		registry.ObjectSchema([]string{"workflow", "ref"}, map[string]any{
-			"repository": map[string]any{"type": "string", "description": "GitHub repository in owner/repo form. Defaults to configured repository when set."},
-			"workflow":   map[string]any{"type": "string", "description": "Workflow file name/id or locally configured alias."},
-			"ref":        map[string]any{"type": "string", "description": "Git ref in the workflow repository, usually main."},
-			"inputs":     map[string]any{"type": "object", "description": "workflow_dispatch inputs. Pass service, environment, branch, image tag, or other workflow-specific inputs exactly as requested by the user."},
+			"repository": map[string]any{"type": "string", "description": ""},
+			"workflow":   map[string]any{"type": "string", "description": ""},
+			"ref":        map[string]any{"type": "string", "description": ""},
+			"inputs":     map[string]any{"type": "object", "description": ""},
 		}),
 	)
 }
@@ -118,12 +118,12 @@ func (WorkflowRunsTool) Parallel() bool { return true }
 func (t WorkflowRunsTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"github-workflow_runs",
-		"List recent GitHub Actions workflow runs. Use after triggering CI/CD or when the user asks about CI/CD status.",
+		"",
 		registry.ObjectSchema([]string{"workflow"}, map[string]any{
-			"repository": map[string]any{"type": "string", "description": "GitHub repository in owner/repo form. Defaults to configured repository when set."},
-			"workflow":   map[string]any{"type": "string", "description": "Workflow file name/id or locally configured alias."},
-			"branch":     map[string]any{"type": "string", "description": "Optional branch filter."},
-			"limit":      map[string]any{"type": "integer", "description": "Maximum runs to return. Defaults to 5, max 20."},
+			"repository": map[string]any{"type": "string", "description": ""},
+			"workflow":   map[string]any{"type": "string", "description": ""},
+			"branch":     map[string]any{"type": "string", "description": ""},
+			"limit":      map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }
@@ -360,10 +360,10 @@ func (PRDiffTool) Parallel() bool { return true }
 func (t PRDiffTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"github-pr_diff",
-		"Fetch a GitHub pull request's description, changed files, and unified diff. Use for code review when you have a PR URL or number. This works even if the source branch has been deleted.",
+		"",
 		registry.ObjectSchema([]string{"pr"}, map[string]any{
-			"repository": map[string]any{"type": "string", "description": "GitHub repository in owner/repo form (e.g. ClareAI/whatsapp_inbox). Required."},
-			"pr":         map[string]any{"type": "integer", "description": "Pull request number."},
+			"repository": map[string]any{"type": "string", "description": ""},
+			"pr":         map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }

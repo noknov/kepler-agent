@@ -1,0 +1,6 @@
+{
+  "deploy-service": "<service-deploy-workflow>.yml",
+  "rollback-service": "<service-rollback-workflow>.yml",
+  "all-services": "<all-services-workflow>.yml"
+}
+
