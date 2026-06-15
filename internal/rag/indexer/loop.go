@@ -17,7 +17,7 @@ type Loop struct {
 }
 
 type Observer interface {
-	RAGIndexSuccess(repo, branch, commit string, filesChanged, chunksAdded, chunksReused int, d time.Duration)
+	RAGIndexSuccess(repo, branch, commit string, filesChanged, chunksAdded, chunksReused, chunksSplitLarge, chunksSkippedLarge int, d time.Duration)
 	RAGIndexError(repo, branch string, d time.Duration, err error)
 }
 
@@ -65,11 +65,11 @@ func (l *Loop) indexAll(ctx context.Context) {
 				continue
 			}
 			if l.Observer != nil {
-				l.Observer.RAGIndexSuccess(repo, branch, result.CommitSHA, result.FilesChanged, result.ChunksAdded, result.ChunksReused, result.Duration)
+				l.Observer.RAGIndexSuccess(repo, branch, result.CommitSHA, result.FilesChanged, result.ChunksAdded, result.ChunksReused, result.ChunksSplitLarge, result.ChunksSkippedLarge, result.Duration)
 			}
 			if result.FilesChanged > 0 {
-				log.Printf("rag/indexer: indexed %s@%s: %d files, %d chunks, %d reused in %s",
-					repo, branch, result.FilesChanged, result.ChunksAdded, result.ChunksReused, result.Duration)
+				log.Printf("rag/indexer: indexed %s@%s: %d files, %d chunks, %d reused, %d split_large, %d skipped_large in %s",
+					repo, branch, result.FilesChanged, result.ChunksAdded, result.ChunksReused, result.ChunksSplitLarge, result.ChunksSkippedLarge, result.Duration)
 			}
 		}
 	}

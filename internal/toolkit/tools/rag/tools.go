@@ -80,7 +80,14 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 
 	state, indexed, stateErr := t.Manager.GetIndexState(ctx, repoPath, branch)
 	currentCommit := currentCommit(ctx, repoPath, branch)
+	missing := !indexed || state.LastCommit == ""
 	stale := indexed && currentCommit != "" && state.LastCommit != "" && state.LastCommit != currentCommit
+	queued := false
+	inFlight := t.Manager.IndexInFlight(repoPath, branch)
+	if stateErr == nil && (missing || stale) && !inFlight {
+		queued = t.Manager.QueueIndex(repoPath, branch)
+		inFlight = queued
+	}
 
 	results, err := t.Manager.Search(ctx, args.Query, repoPath, branch, args.Limit)
 	if t.Observer != nil {
@@ -93,15 +100,18 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	if len(results) == 0 {
 		var b strings.Builder
 		b.WriteString("no matching code found")
-		writeIndexSummary(&b, repoPath, branch, state, indexed, stateErr, currentCommit)
+		writeIndexSummary(&b, repoPath, branch, state, indexed, stateErr, currentCommit, queued, inFlight)
+		if missing || stale {
+			b.WriteString("RAG index is not fresh; on-demand indexing has been queued or is already running. Use repo-search/code-search for this turn.\n")
+		}
 		return registry.Result{Content: b.String()}, nil
 	}
 
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Found %d results for: %s\n\n", len(results), args.Query))
-	writeIndexSummary(&b, repoPath, branch, state, indexed, stateErr, currentCommit)
-	if stale {
-		b.WriteString("warning: RAG index is stale for this branch; prefer exact repo/code search before making a final claim.\n\n")
+	writeIndexSummary(&b, repoPath, branch, state, indexed, stateErr, currentCommit, queued, inFlight)
+	if missing || stale {
+		b.WriteString("warning: RAG index is not fresh for this branch; on-demand indexing has been queued or is already running. Treat these results as hints and verify with repo-search/code-search before making a final claim.\n\n")
 	}
 	for i, r := range results {
 		b.WriteString(fmt.Sprintf("--- Result %d [score=%.3f source=%s] ---\n", i+1, r.Score, r.Source))
@@ -126,7 +136,7 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	return registry.Result{Content: strings.TrimSpace(b.String())}, nil
 }
 
-func writeIndexSummary(b *strings.Builder, repoPath, branch string, state store.IndexState, indexed bool, stateErr error, currentCommit string) {
+func writeIndexSummary(b *strings.Builder, repoPath, branch string, state store.IndexState, indexed bool, stateErr error, currentCommit string, queued, inFlight bool) {
 	b.WriteString(fmt.Sprintf("index: repo=%s branch=%s", repoPath, branch))
 	if currentCommit != "" {
 		b.WriteString(" current_commit=" + shortSHA(currentCommit))
@@ -137,6 +147,11 @@ func writeIndexSummary(b *strings.Builder, repoPath, branch string, state store.
 		b.WriteString(" indexed_commit=" + shortSHA(state.LastCommit))
 	} else {
 		b.WriteString(" indexed_commit=missing")
+	}
+	if queued {
+		b.WriteString(" on_demand_index=queued")
+	} else if inFlight {
+		b.WriteString(" on_demand_index=running")
 	}
 	b.WriteString("\n\n")
 }

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -155,6 +156,53 @@ func Changed() string {
 	}
 	if len(st.upserts) == 0 {
 		t.Fatal("expected upserted chunks")
+	}
+}
+
+func TestIndexRepoSplitsOversizedChunks(t *testing.T) {
+	ctx := context.Background()
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	writeFile(t, repo, "big.go", "package main\nfunc broken(\n"+strings.Repeat("x", maxChunkContentBytes+1))
+	runGit(t, repo, "add", "big.go")
+	runGit(t, repo, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "big")
+
+	absRepo, err := filepath.Abs(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &memoryStore{
+		state: store.IndexState{RepoPath: absRepo, Branch: "main", LastCommit: "old"},
+		files: map[string][]store.ChunkRecord{},
+	}
+	emb := &recordingEmbedder{}
+	idx := &Indexer{
+		Store:     st,
+		Embedder:  emb,
+		Chunker:   chunk.NewDispatcher(),
+		BatchSize: 64,
+	}
+
+	result, err := idx.IndexRepo(ctx, repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ChunksSplitLarge == 0 {
+		t.Fatal("expected oversized chunk to be split")
+	}
+	if result.ChunksSkippedLarge != 0 {
+		t.Fatalf("ChunksSkippedLarge = %d, want 0", result.ChunksSkippedLarge)
+	}
+	if emb.calls == 0 || emb.inputs == 0 {
+		t.Fatalf("split chunks should be embedded, calls=%d inputs=%d", emb.calls, emb.inputs)
+	}
+	if len(st.upserts) == 0 {
+		t.Fatal("expected split chunks to be upserted")
+	}
+	for _, rec := range st.upserts {
+		if len(rec.Content) > maxChunkContentBytes {
+			t.Fatalf("upserted oversized chunk with %d bytes", len(rec.Content))
+		}
 	}
 }
 

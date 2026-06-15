@@ -24,6 +24,7 @@ type Config struct {
 
 type RAGConfig struct {
 	Enabled          bool
+	BackgroundIndex  bool
 	PostgresDSN      string
 	EmbeddingBaseURL string
 	EmbeddingAPIKey  string
@@ -215,6 +216,7 @@ func Load() (Config, error) {
 		},
 		RAG: RAGConfig{
 			Enabled:          envBool("RAG_ENABLED", false),
+			BackgroundIndex:  envBool("RAG_BACKGROUND_INDEX", true),
 			PostgresDSN:      os.Getenv("RAG_POSTGRES_DSN"),
 			EmbeddingBaseURL: trimRightSlash(env("RAG_EMBEDDING_BASE_URL", "https://api.openai.com/v1")),
 			EmbeddingAPIKey:  os.Getenv("RAG_EMBEDDING_API_KEY"),
