@@ -477,7 +477,7 @@ func (s *Server) handleMention(ctx context.Context, eventID string, ev slack.Eve
 	threadTS := ev.ConversationThreadTS()
 	if !s.access.IsAllowed(ev.User, ev.Channel) {
 		s.metrics.Denied()
-		_, _ = s.slack.PostMessage(ctx, ev.Channel, threadTS, "<@"+ev.User+"> Sorry, this channel is not allowed to use this bot.")
+		_, _ = s.slack.PostMessage(ctx, ev.Channel, threadTS, "<@"+ev.User+"> Sorry, you don't have permission to use this bot here.")
 		return
 	}
 	text := s.prompt.CleanUserText(s.cfg.Slack.BotUserID, ev.Text)
