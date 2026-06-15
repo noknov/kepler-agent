@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/wati/oncall-agent/internal/prompts"
 )
 
 func TestFilterPersistentTurnsRemovesToolErrors(t *testing.T) {
@@ -159,7 +161,8 @@ func TestFilterPersistentTurnsKeepsMatchedToolCalls(t *testing.T) {
 func TestToolObservationDelegateProvenance(t *testing.T) {
 	b := Builder{MaxToolChars: 10000}
 	out := b.ToolObservation("delegate-run", "some analysis")
-	if !stringsContains(out, delegateRunProvenancePrefix) {
+	delegateProvenance := prompts.MemoryLabel("delegate_provenance", "[delegate inference — unverified; corroborate with code/git/gcp tools before treating as fact]\n")
+	if !stringsContains(out, delegateProvenance) {
 		t.Fatalf("missing provenance prefix: %q", out)
 	}
 	if !stringsHasPrefix(out, "<evidence source=\"delegate-run\">") {
@@ -170,7 +173,8 @@ func TestToolObservationDelegateProvenance(t *testing.T) {
 func TestToolObservationOtherToolsUseEvidenceWrapper(t *testing.T) {
 	b := Builder{MaxToolChars: 10000}
 	out := b.ToolObservation("code-search", "matches")
-	if stringsHasPrefix(out, delegateRunProvenancePrefix) {
+	delegateProvenance := prompts.MemoryLabel("delegate_provenance", "[delegate inference — unverified; corroborate with code/git/gcp tools before treating as fact]\n")
+	if stringsHasPrefix(out, delegateProvenance) {
 		t.Fatalf("unexpected provenance on code-search: %q", out)
 	}
 	if !stringsHasPrefix(out, "<evidence source=\"code-search\">") {

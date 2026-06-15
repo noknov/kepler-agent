@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/wati/oncall-agent/internal/prompts"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
@@ -74,17 +75,21 @@ type Result struct {
 	Streamed        bool
 }
 
-const repetitiveRetryPrompt = "Your previous answer became repetitive. Give one concise final answer only. Do not repeat sentences. Do not narrate further investigation. If evidence is insufficient, say the next check in one short paragraph."
+func repetitiveRetryPrompt() string {
+	return prompts.RunnerPrompt("repetitive_retry", "Your previous answer became repetitive. Give one concise final answer only. Do not repeat sentences. Do not narrate further investigation. If evidence is insufficient, say the next check in one short paragraph.")
+}
 
-const textualToolCallRetryPrompt = "Your previous reply included textual tool-call markup (for example <tool_call> or <function=...>) instead of using the API's structured tool calling. Do not output tool XML or pseudo tool syntax. Either call tools through the provided tool interface, or give a concise final answer in plain language using evidence already gathered."
+func textualToolCallRetryPrompt() string {
+	return prompts.RunnerPrompt("textual_tool_call_retry", "Your previous reply included textual tool-call markup (for example <tool_call> or <function=...>) instead of using the API's structured tool calling. Do not output tool XML or pseudo tool syntax. Either call tools through the provided tool interface, or give a concise final answer in plain language using evidence already gathered.")
+}
 
-const emptyResponseRetryPrompt = "Your previous response contained no user-visible text and no structured tool calls. Continue from the current conversation and either call an available tool through the structured tool interface or give a concise final answer in plain text."
+func emptyResponseRetryPrompt() string {
+	return prompts.RunnerPrompt("empty_response_retry", "Your previous response contained no user-visible text and no structured tool calls. Continue from the current conversation and either call an available tool through the structured tool interface or give a concise final answer in plain text.")
+}
 
 func budgetWarningPrompt(remainingToolSteps int) string {
-	return fmt.Sprintf(
-		"You have %d tool-using turn(s) remaining before you must give your final answer. Stop exploring. Synthesize your findings now using evidence already gathered. Do not start new searches or delegate-run calls unless absolutely critical.",
-		remainingToolSteps,
-	)
+	tmpl := prompts.RunnerPrompt("budget_warning", "You have %d tool-using turn(s) remaining before you must give your final answer. Stop exploring. Synthesize your findings now using evidence already gathered. Do not start new searches or delegate-run calls unless absolutely critical.")
+	return fmt.Sprintf(tmpl, remainingToolSteps)
 }
 
 func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
@@ -166,7 +171,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		if err != nil {
 			if llm.IsEmptyResponse(err) && !retriedEmptyResponse {
 				retriedEmptyResponse = true
-				messages = append(messages, llm.Message{Role: "system", Content: emptyResponseRetryPrompt})
+				messages = append(messages, llm.Message{Role: "system", Content: emptyResponseRetryPrompt()})
 				if r.StatusUpdate != nil {
 					r.StatusUpdate(RetryStatus(req.Locale))
 				}
@@ -185,9 +190,9 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 				final = "I didn't get a valid response. Please try again or provide more context."
 			}
 			if !useStream && llm.LooksLikeTextualToolCall(final) {
-				if !retriedTextualToolCall {
-					retriedTextualToolCall = true
-					messages = append(messages, llm.Message{Role: "system", Content: textualToolCallRetryPrompt})
+			if !retriedTextualToolCall {
+				retriedTextualToolCall = true
+				messages = append(messages, llm.Message{Role: "system", Content: textualToolCallRetryPrompt()})
 					if r.StatusUpdate != nil {
 						r.StatusUpdate(RetryStatus(req.Locale))
 					}
@@ -196,9 +201,9 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 				return Result{Generated: generated}, ErrTextualToolCall
 			}
 			if !useStream && looksRepetitive(final) {
-				if !retriedRepetitiveFinal {
-					retriedRepetitiveFinal = true
-					messages = append(messages, llm.Message{Role: "system", Content: repetitiveRetryPrompt})
+			if !retriedRepetitiveFinal {
+				retriedRepetitiveFinal = true
+				messages = append(messages, llm.Message{Role: "system", Content: repetitiveRetryPrompt()})
 					if r.StatusUpdate != nil {
 						r.StatusUpdate(RetryStatus(req.Locale))
 					}

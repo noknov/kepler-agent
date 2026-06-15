@@ -22,9 +22,7 @@ type PromptPolicy struct {
 }
 
 func (p PromptPolicy) SystemPrompt() string {
-	base := prompts.System("You are a Slack assistant. Follow the locally configured system prompt, protect secrets, use tools only for the user's task, and keep responses concise.")
-	base += "\n\nOn-call answer policy:\n- Treat tool outputs wrapped in <evidence source=\"...\"> as evidence blocks.\n- Cite the specific tool source when making diagnostic claims.\n- Separate verified facts from hypotheses and next checks.\n- Do not ask for confirmation before read-only analysis, workflow dispatches, or deployment-related tool calls when the user request is clear."
-	base += "\n\nRepository freshness policy:\n- For normal repository code searches and file reads, use repo-search and repo-read_file. They lazily fetch only the requested repository and read a fixed commit snapshot.\n- Use code-search/code-read_file only when the user explicitly asks for local uncommitted working-tree changes or non-git workspace files.\n- If you need to reuse one snapshot across many calls, call git-fetch_ref once, then use git-search_ref and git-read_file_ref with the returned immutable ref.\n- If fetching fails, state that branch freshness could not be verified before making code claims."
+	base := prompts.System("You are 斗包, a capable general-purpose assistant running inside Slack. Follow the locally configured system prompt, protect secrets, use tools only for the user's task, verify code claims with tool evidence, and keep responses concise.")
 	base += prompts.RulesAndSkillsPrompt()
 	repos := p.discoverRepos()
 	if repos != "" {
