@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -219,6 +220,28 @@ func TestAuthorizeObservabilityRejectsForwardedUnauthenticated(t *testing.T) {
 	}
 }
 
+func TestHealthDashboardRequiresObservabilityAccess(t *testing.T) {
+	server := &Server{cfg: config.Config{Observing: config.ObservingConfig{AdminToken: "secret-token"}}}
+	req := httptest.NewRequest(http.MethodGet, "/health/dashboard", nil)
+	rec := httptest.NewRecorder()
+	server.handleHealthDashboard(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("dashboard without token status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/health/dashboard", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	rec = httptest.NewRecorder()
+	server.handleHealthDashboard(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dashboard with token status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "斗包 Tool Health") || !strings.Contains(body, "/health/tools?refresh=true") {
+		t.Fatalf("dashboard body missing expected content:\n%s", body)
+	}
+}
+
 func TestHomeViewIncludesModelAndAccess(t *testing.T) {
 	server := &Server{cfg: config.Config{LLM: config.LLMConfig{
 		Model:           "mimo-v2.5",
@@ -226,10 +249,13 @@ func TestHomeViewIncludesModelAndAccess(t *testing.T) {
 	}}}
 	view := server.homeView("U1")
 	text := flattenBlockText(view)
-	for _, want := range []string{"*Access*", "*Model*", "mimo-v2.5"} {
+	for _, want := range []string{"斗包", "*Access*", "*Model*", "mimo-v2.5"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("home view missing %q in %q", want, text)
 		}
+	}
+	if strings.Contains(text, "Channel-X Copilot Agent") {
+		t.Fatalf("home view should not use old product name: %q", text)
 	}
 }
 
