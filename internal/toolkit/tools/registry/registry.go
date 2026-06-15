@@ -114,6 +114,11 @@ func (r *Registry) Names() []string {
 	return names
 }
 
+func (r *Registry) Has(name string) bool {
+	_, ok := r.tools[name]
+	return ok
+}
+
 func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessage, rt Runtime) (Result, error) {
 	tool, ok := r.tools[name]
 	if !ok {

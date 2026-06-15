@@ -24,7 +24,34 @@ type Snapshot struct {
 	LatencyMS        LatencySummary   `json:"latency_ms"`
 	LLMLatencyMS     LatencySummary   `json:"llm_latency_ms"`
 	ToolLatencyMS    LatencySummary   `json:"tool_latency_ms"`
+	RAG              RAGSnapshot      `json:"rag,omitempty"`
 	LastErrors       []string         `json:"last_errors,omitempty"`
+}
+
+type RAGSnapshot struct {
+	IndexRuns       int64                    `json:"index_runs,omitempty"`
+	IndexErrors     int64                    `json:"index_errors,omitempty"`
+	Searches        int64                    `json:"searches,omitempty"`
+	SearchErrors    int64                    `json:"search_errors,omitempty"`
+	SearchResults   int64                    `json:"search_results,omitempty"`
+	SearchStaleHits int64                    `json:"search_stale_hits,omitempty"`
+	Indexes         map[string]RAGIndexState `json:"indexes,omitempty"`
+}
+
+type RAGIndexState struct {
+	Repo                   string    `json:"repo"`
+	Branch                 string    `json:"branch"`
+	LastCommit             string    `json:"last_commit,omitempty"`
+	LastIndexedAt          time.Time `json:"last_indexed_at,omitempty"`
+	LastDurationMS         int64     `json:"last_duration_ms,omitempty"`
+	LastFilesChanged       int       `json:"last_files_changed,omitempty"`
+	LastChunksAdded        int       `json:"last_chunks_added,omitempty"`
+	LastChunksReused       int       `json:"last_chunks_reused,omitempty"`
+	LastChunksSplitLarge   int       `json:"last_chunks_split_large,omitempty"`
+	LastChunksSkippedLarge int       `json:"last_chunks_skipped_large,omitempty"`
+	LastError              string    `json:"last_error,omitempty"`
+	Runs                   int64     `json:"runs,omitempty"`
+	Failures               int64     `json:"failures,omitempty"`
 }
 
 type LatencySummary struct {
@@ -61,6 +88,9 @@ func NewRecorder() *Recorder {
 			ToolCalls:        map[string]int64{},
 			ToolErrors:       map[string]int64{},
 			ReactionFeedback: map[string]int64{},
+			RAG: RAGSnapshot{
+				Indexes: map[string]RAGIndexState{},
+			},
 		},
 	}
 }
@@ -112,6 +142,66 @@ func (r *Recorder) ToolCall(name string, d time.Duration, err error) {
 	}
 }
 
+func (r *Recorder) RAGIndexSuccess(repo, branch, commit string, filesChanged, chunksAdded, chunksReused, chunksSplitLarge, chunksSkippedLarge int, d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ensureRAGLocked()
+	r.snap.RAG.IndexRuns++
+	key := ragIndexKey(repo, branch)
+	state := r.snap.RAG.Indexes[key]
+	state.Repo = repo
+	state.Branch = branch
+	state.LastCommit = commit
+	state.LastIndexedAt = time.Now().UTC()
+	state.LastDurationMS = d.Milliseconds()
+	state.LastFilesChanged = filesChanged
+	state.LastChunksAdded = chunksAdded
+	state.LastChunksReused = chunksReused
+	state.LastChunksSplitLarge = chunksSplitLarge
+	state.LastChunksSkippedLarge = chunksSkippedLarge
+	state.LastError = ""
+	state.Runs++
+	r.snap.RAG.Indexes[key] = state
+}
+
+func (r *Recorder) RAGIndexError(repo, branch string, d time.Duration, err error) {
+	if err == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ensureRAGLocked()
+	r.snap.RAG.IndexRuns++
+	r.snap.RAG.IndexErrors++
+	key := ragIndexKey(repo, branch)
+	state := r.snap.RAG.Indexes[key]
+	state.Repo = repo
+	state.Branch = branch
+	state.LastIndexedAt = time.Now().UTC()
+	state.LastDurationMS = d.Milliseconds()
+	state.LastError = err.Error()
+	state.Runs++
+	state.Failures++
+	r.snap.RAG.Indexes[key] = state
+	r.addErrorLocked("rag/index " + key + ": " + err.Error())
+}
+
+func (r *Recorder) RAGSearch(results int, stale bool, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ensureRAGLocked()
+	r.snap.RAG.Searches++
+	if err != nil {
+		r.snap.RAG.SearchErrors++
+		r.addErrorLocked("rag/search: " + err.Error())
+		return
+	}
+	r.snap.RAG.SearchResults += int64(results)
+	if stale {
+		r.snap.RAG.SearchStaleHits++
+	}
+}
+
 func (r *Recorder) Reaction(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -150,6 +240,7 @@ func (r *Recorder) Snapshot() Snapshot {
 	cp.ToolCalls = copyMap(r.snap.ToolCalls)
 	cp.ToolErrors = copyMap(r.snap.ToolErrors)
 	cp.ReactionFeedback = copyMap(r.snap.ReactionFeedback)
+	cp.RAG.Indexes = copyRAGIndexes(r.snap.RAG.Indexes)
 	cp.LastErrors = append([]string(nil), r.snap.LastErrors...)
 	sort.Strings(cp.LastErrors)
 	return cp
@@ -167,10 +258,28 @@ func (r *Recorder) addErrorLocked(msg string) {
 	}
 }
 
+func (r *Recorder) ensureRAGLocked() {
+	if r.snap.RAG.Indexes == nil {
+		r.snap.RAG.Indexes = map[string]RAGIndexState{}
+	}
+}
+
 func copyMap(in map[string]int64) map[string]int64 {
 	out := make(map[string]int64, len(in))
 	for k, v := range in {
 		out[k] = v
 	}
 	return out
+}
+
+func copyRAGIndexes(in map[string]RAGIndexState) map[string]RAGIndexState {
+	out := make(map[string]RAGIndexState, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func ragIndexKey(repo, branch string) string {
+	return repo + "@" + branch
 }

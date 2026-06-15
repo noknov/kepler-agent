@@ -11,8 +11,6 @@ import (
 
 const ToolErrorPrefix = "[tool error] "
 
-const delegateRunProvenancePrefix = "[delegate inference — unverified; corroborate with code/git/gcp tools before treating as fact]\n"
-
 type Role string
 
 const (
@@ -88,7 +86,7 @@ func (b Builder) ToolObservation(toolName string, output string) string {
 		return "tool " + toolName + " returned empty output"
 	}
 	if toolName == "delegate-run" {
-		output = delegateRunProvenancePrefix + output
+		output = prompts.MemoryLabel("delegate_provenance", "[delegate inference — unverified; corroborate with code/git/gcp tools before treating as fact]\n") + output
 	}
 	return "<evidence source=\"" + toolName + "\">\n" + truncate(output, b.MaxToolChars) + "\n</evidence>"
 }

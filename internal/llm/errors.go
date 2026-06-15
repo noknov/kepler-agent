@@ -14,6 +14,22 @@ type ProviderError struct {
 	Body       string
 }
 
+type EmptyResponseError struct {
+	Provider     string
+	StopReason   string
+	ContentTypes []string
+	PromptTokens int
+	OutputTokens int
+}
+
+func (e EmptyResponseError) Error() string {
+	detail := e.Provider + " returned no text or tool calls"
+	if e.StopReason != "" {
+		detail += " (stop_reason=" + e.StopReason + ")"
+	}
+	return detail
+}
+
 func (e ProviderError) Error() string {
 	return fmt.Sprintf("%s failed: status=%d body=%s", e.Provider, e.StatusCode, e.Body)
 }
@@ -28,6 +44,11 @@ func IsTemporaryOverload(err error) bool {
 		return true
 	}
 	return isNetworkTimeout(err)
+}
+
+func IsEmptyResponse(err error) bool {
+	var emptyErr EmptyResponseError
+	return errors.As(err, &emptyErr)
 }
 
 func isNetworkTimeout(err error) bool {

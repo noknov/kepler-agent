@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -79,20 +78,23 @@ func (c *AnthropicClient) Chat(ctx context.Context, req Request) (Response, erro
 		})
 	}
 	if message.Content == "" && len(message.ToolCalls) == 0 {
-		return Response{}, fmt.Errorf("anthropic messages returned no text or tool calls")
+		return Response{
+				Usage: anthropicUsage(parsed),
+				Raw:   data,
+			}, EmptyResponseError{
+				Provider:     "anthropic messages",
+				StopReason:   parsed.StopReason,
+				ContentTypes: parsed.contentTypes(),
+				PromptTokens: parsed.Usage.InputTokens,
+				OutputTokens: parsed.Usage.OutputTokens,
+			}
 	}
 
 	return Response{
 		Message:      message,
 		FinishReason: parsed.StopReason,
-		Usage: Usage{
-			PromptTokens:             parsed.Usage.InputTokens,
-			CompletionTokens:         parsed.Usage.OutputTokens,
-			TotalTokens:              parsed.Usage.InputTokens + parsed.Usage.OutputTokens,
-			CacheReadInputTokens:     parsed.Usage.CacheReadInputTokens,
-			CacheCreationInputTokens: parsed.Usage.CacheCreationInputTokens,
-		},
-		Raw: data,
+		Usage:        anthropicUsage(parsed),
+		Raw:          data,
 	}, nil
 }
 
@@ -316,6 +318,26 @@ func (r anthropicResponse) text() string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+func (r anthropicResponse) contentTypes() []string {
+	types := make([]string, 0, len(r.Content))
+	for _, block := range r.Content {
+		if block.Type != "" {
+			types = append(types, block.Type)
+		}
+	}
+	return types
+}
+
+func anthropicUsage(r anthropicResponse) Usage {
+	return Usage{
+		PromptTokens:             r.Usage.InputTokens,
+		CompletionTokens:         r.Usage.OutputTokens,
+		TotalTokens:              r.Usage.InputTokens + r.Usage.OutputTokens,
+		CacheReadInputTokens:     r.Usage.CacheReadInputTokens,
+		CacheCreationInputTokens: r.Usage.CacheCreationInputTokens,
+	}
 }
 
 func anthropicSystem(messages []Message) string {

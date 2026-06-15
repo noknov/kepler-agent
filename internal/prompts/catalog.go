@@ -18,6 +18,8 @@ type Catalog struct {
 	MemoryLabels    map[string]string     `json:"memory_labels,omitempty"`
 	ToolStatuses    map[string]string     `json:"tool_statuses,omitempty"`
 	GitHubWorkflows map[string]string     `json:"github_workflows,omitempty"`
+	Runner          map[string]string     `json:"runner,omitempty"`
+	Health          map[string]string     `json:"health,omitempty"`
 	Rules           []string              `json:"-"`
 	Skills          []Skill               `json:"-"`
 }
@@ -64,6 +66,8 @@ func LoadDir(dir string) error {
 		MemoryLabels:    map[string]string{},
 		ToolStatuses:    map[string]string{},
 		GitHubWorkflows: map[string]string{},
+		Runner:          map[string]string{},
+		Health:          map[string]string{},
 	}
 	readText(filepath.Join(dir, "system.md"), &catalog.System)
 	readJSON(filepath.Join(dir, "delegates.json"), &catalog.Delegates)
@@ -72,6 +76,8 @@ func LoadDir(dir string) error {
 	readJSON(filepath.Join(dir, "memory.json"), &catalog.MemoryLabels)
 	readJSON(filepath.Join(dir, "tool_statuses.json"), &catalog.ToolStatuses)
 	readJSON(filepath.Join(dir, "github_workflows.json"), &catalog.GitHubWorkflows)
+	readJSON(filepath.Join(dir, "runner.json"), &catalog.Runner)
+	readJSON(filepath.Join(dir, "health.json"), &catalog.Health)
 	catalog.Rules = readMarkdownDir(filepath.Join(dir, "rules"))
 	catalog.Skills = readSkillsDir(filepath.Join(dir, "skills"))
 
@@ -128,6 +134,18 @@ func GitHubWorkflow(name, fallback string) string {
 	current.RLock()
 	defer current.RUnlock()
 	return choose(current.catalog.GitHubWorkflows[name], fallback)
+}
+
+func RunnerPrompt(name, fallback string) string {
+	current.RLock()
+	defer current.RUnlock()
+	return choose(current.catalog.Runner[name], fallback)
+}
+
+func HealthPrompt(name, fallback string) string {
+	current.RLock()
+	defer current.RUnlock()
+	return choose(current.catalog.Health[name], fallback)
 }
 
 func RulesPrompt() string {

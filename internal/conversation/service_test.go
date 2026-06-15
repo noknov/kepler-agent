@@ -109,6 +109,47 @@ func TestHandleReplyConsumesPendingQuestion(t *testing.T) {
 	}
 }
 
+func TestProcessInjectsToolHealthSummary(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	llmClient := &captureLLM{}
+	svc := NewService(
+		store,
+		&fakeMessenger{},
+		agent.Runner{LLM: llmClient, Tools: registry.New(), MaxSteps: 1},
+		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+	svc.HealthSummary = func() string {
+		return "Tool health summary:\n- rag-search: degraded"
+	}
+
+	svc.HandleMention(ctx, Request{
+		EventID:  "E-health",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "check code",
+	})
+
+	req := llmClient.LastRequest()
+	found := false
+	for _, msg := range req.Messages {
+		if msg.Role == "system" && strings.Contains(msg.Content, "rag-search: degraded") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("health summary not injected into LLM request: %#v", req.Messages)
+	}
+}
+
 func TestUserFacingErrorForMaxToolSteps(t *testing.T) {
 	got := userFacingError("err-test123")
 	if strings.Contains(got, "agent exceeded max tool steps") {
@@ -497,6 +538,27 @@ func (l *replyLLM) Chat(_ context.Context, _ llm.Request) (llm.Response, error) 
 
 type replyLLM struct {
 	content string
+}
+
+type captureLLM struct {
+	mu      sync.Mutex
+	request llm.Request
+}
+
+func (l *captureLLM) Chat(_ context.Context, req llm.Request) (llm.Response, error) {
+	l.mu.Lock()
+	l.request = req
+	l.mu.Unlock()
+	return llm.Response{
+		Message: llm.Message{Role: "assistant", Content: "ack"},
+		Usage:   llm.Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12},
+	}, nil
+}
+
+func (l *captureLLM) LastRequest() llm.Request {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.request
 }
 
 type cancelAwareLLM struct {
