@@ -1,62 +1,67 @@
 # oncall-agent
 
-Go-based Slack on-call debugging agent powered by configurable OpenAI-compatible or Anthropic-compatible LLM APIs, without Cursor CLI.
+A Slack-native intelligent assistant built in Go, powered by configurable LLM backends. It handles engineering investigations, code analysis, CI/CD operations, and general-purpose tasks — all within a Slack thread, with full tool-call support and structured context management.
 
-## Why this design
+## ✨ Design principles
 
-- Slack receives `app_mention`, verifies Slack signatures, checks allowlists, then starts an agent run in the thread.
-- The model is called through an OpenAI-compatible Chat Completions API or Anthropic-compatible Messages API with native tool calls, so tool execution is structured instead of parsed from free-form JSON text.
-- Runtime safety is code-enforced: Slack user/channel authorization, prompt guardrails, post-response redaction, path allowlists, command deny rules, and tool-specific boundaries for read-only and action tools.
-- Context is managed explicitly. Slack thread context, session messages, and tool observations are bounded before they reach the model, with large Slack files kept searchable by file ID.
-- Sessions are persisted by Slack `channel:thread_ts`, so follow-up mentions and pending clarification replies reuse context.
-- Delegation, rules, and skills are modeled as focused agent profiles, not as one-off prompt folders. RAG and caching should be added under `internal/memory` or infrastructure once there is a concrete retrieval source.
+- 💬 **Slack-native conversation model.** Events arrive via the Slack Events API (`app_mention`, `message`, `file_shared`, `app_home_opened`). Each thread has its own session; follow-up mentions and pending clarification replies reuse existing context without re-reading thread history.
+- 🔧 **Structured tool calls, not prompt parsing.** The model communicates with tools through the provider's native function-calling API (OpenAI-compatible or Anthropic-compatible), so arguments are typed and validated rather than parsed from free-form text.
+- 🔒 **Layered runtime safety.** Slack user/channel authorization, system prompt guardrails, post-response secret redaction, workspace path allowlists, command deny rules, and per-tool read-only vs. action boundaries are all code-enforced.
+- 📦 **Explicit context budgets.** Thread context, session history, and tool observations are bounded and compressed before reaching the model. Large Slack files stay searchable by file ID without flooding the context window.
+- 🗂️ **Prompt configuration outside of git.** Identity, policies, rules, and skills live in a local `PROMPT_DIR` directory (gitignored by default). No prompt text needs to be committed to the repository.
 
-## Project layout
+## 📁 Project layout
 
 ```text
-cmd/oncall-agent/          Minimal process entrypoint
-internal/app/              Dependency wiring and HTTP server
-internal/slack/            Slack signature verification, Events API types, Web API client
-internal/conversation/     Slack thread lifecycle, per-session locks, idempotency, pending replies
-internal/agent/            Provider-agnostic tool-calls runner
-internal/memory/           Conversation turns, context packing, tool-result truncation
+cmd/oncall-agent/          Process entrypoint
+internal/app/              HTTP server, Slack event routing, dependency wiring
+internal/slack/            Signature verification, Events API types, Web API client
+internal/conversation/     Thread lifecycle, per-session locks, idempotency, pending replies
+internal/agent/            Provider-agnostic tool-call runner with step budget and context compression
+internal/memory/           Conversation turns, context packing, tool-result formatting
 internal/session/          File-backed Slack thread sessions
-internal/safety/           Access policy, prompt policy, redaction, workspace and command policy
-internal/toolkit/tools/    Tool modules: code, git, github, gcp, notion, youtrack, slack
-internal/delegation/       Focused delegate agent profiles plus rules/skills loading
-internal/observability/    In-memory metrics and reaction feedback
-PROMPT_DIR/rules/          Local runtime rules injected into prompts, gitignored by default
-PROMPT_DIR/skills/         Standard SKILL.md folders advertised by metadata and loaded on demand, gitignored by default
+internal/safety/           Access policy, prompt policy, secret redaction, workspace and command policy
+internal/health/           Tool and RAG health probing, health dashboard
+internal/prompts/          Prompt catalog: loads system.md, delegates, tools, rules, skills from PROMPT_DIR
+internal/delegation/       Focused delegate agent profiles for bounded sub-tasks
+internal/observability/    In-memory metrics, cost tracking, reaction-based quality feedback
+internal/llm/              Anthropic and OpenAI-compatible LLM clients with streaming
+internal/rag/              Semantic code search: chunking, embedding, pgvector store, hybrid search
+internal/toolkit/tools/    All tool modules: code, git, github, gcp, notion, youtrack, slack, rag, web
+PROMPT_DIR/system.md       Main system prompt (gitignored)
+PROMPT_DIR/rules/          Runtime Markdown rules injected into all agent prompts
+PROMPT_DIR/skills/         SKILL.md folders advertised by metadata, loaded on demand
+PROMPT_DIR/runbooks/       Service runbooks searched by knowledge.runbook_search
 ```
 
-## Run locally
+## 🚀 Running locally
 
 ```bash
-cd /Users/shelton/Documents/wati/oncall-agent
 cp .env.example .env
+# fill in required values, then:
 go run ./cmd/oncall-agent
 ```
 
-`oncall-agent` loads local `.env` automatically. The default setup uses Xiaomi MiMo Token Plan with the Anthropic-compatible API:
+The server loads `.env` automatically on startup. Expose `POST /slack/events` through a public HTTPS URL (see [ngrok](#-ngrok) below).
 
-- `LLM_PROVIDER=mimo`
-- `MIMO_PROTOCOL=anthropic`
-- `MIMO_API_KEY`
-- `MIMO_BASE_URL=https://token-plan-cn.xiaomimimo.com/anthropic`
-- `MIMO_MODEL=mimo-v2.5`
-- `MIMO_THINKING=disabled`
+## 🤖 LLM configuration
 
-`mimo-v2.5` is selected so Slack image uploads can be passed as multimodal `image_url` parts. PDF and text uploads in Slack DMs or mentions are downloaded and converted to plain text for the model (up to 16 MB per file, up to 100k characters injected initially). For larger files or rare truncated excerpts, the model can use `slack.file_search` with the Slack file ID to retrieve relevant sections on demand. MiMo thinking is disabled by default because multi-turn tool calls must preserve provider-specific reasoning fields across turns; enabling it should be done deliberately after that history path is validated.
+`LLM_PROVIDER` selects the active provider. Each provider has its own env namespace so credentials are never shared between providers unintentionally.
 
-`LLM_PROVIDER` selects the provider-specific environment namespace. `MIMO_*`, `KIMI_*`, `MOONSHOT_*`, `OPENAI_*`, and `ANTHROPIC_*` are intentionally separate; the app does not borrow MiMo tokens from Anthropic config or vice versa. `MIMO_PROTOCOL=anthropic` only means the MiMo provider uses an Anthropic-compatible transport.
+**MiMo (default)**
 
-You can still point the service at other providers by changing `LLM_PROVIDER`, but startup now fails if your shell and `.env` disagree on provider settings unless you explicitly set `PREFER_DOTENV=true` to use `.env`, or `ALLOW_ENV_MIXING=true` to allow the shell to keep precedence.
+```bash
+LLM_PROVIDER=mimo
+MIMO_PROTOCOL=anthropic
+MIMO_API_KEY=...
+MIMO_BASE_URL=https://token-plan-cn.xiaomimimo.com/anthropic
+MIMO_MODEL=mimo-v2.5
+MIMO_THINKING=disabled
+```
 
-Prompt text can be kept out of git by placing local files under `PROMPT_DIR` (defaults to `.prompts/`, which is gitignored). Supported files are `system.md`, `delegates.json`, `app_messages.json`, `memory.json`, `tools.json`, `tool_statuses.json`, and `github_workflows.json`.
-Runtime rules can be added under `PROMPT_DIR/rules/`; these Markdown instructions are injected into the main on-call agent and delegate agents. Skills use the standard directory layout `PROMPT_DIR/skills/<skill-name>/SKILL.md` with `name` and `description` frontmatter. Only skill metadata is included in the base prompt; the agent loads full skill instructions on demand with `skills-load` when the user explicitly names a skill or the task matches a skill description.
-Service runbooks can be added as Markdown files under `PROMPT_DIR/runbooks/`; the `knowledge.runbook_search` tool searches them during Slack investigations.
+MiMo thinking is disabled by default because multi-turn tool calls must preserve provider-specific reasoning fields across turns. Enable it only after validating that path.
 
-For Kimi For Coding, use the Claude Code-style Anthropic-compatible endpoint:
+**Kimi For Coding**
 
 ```bash
 LLM_PROTOCOL=anthropic
@@ -66,9 +71,7 @@ ANTHROPIC_AUTH_TOKEN=sk-...
 ANTHROPIC_MODEL=kimi-for-coding
 ```
 
-`ANTHROPIC_BASE_URL` automatically selects the Anthropic-compatible client when no `KIMI_BASE_URL`, `MOONSHOT_BASE_URL`, or `OPENAI_BASE_URL` is set. The Anthropic flavor defaults to `claude-code` for `api.kimi.com/coding` and `official` otherwise. If you want to keep a `KIMI_BASE_URL` value for this endpoint, set `LLM_PROTOCOL=anthropic` explicitly and use `https://api.kimi.com/coding/` rather than the OpenAI-compatible `/coding/v1` URL.
-
-For the real Anthropic API, use:
+**Anthropic**
 
 ```bash
 LLM_PROTOCOL=anthropic
@@ -78,20 +81,41 @@ ANTHROPIC_API_KEY=sk-ant-...
 ANTHROPIC_MODEL=claude-sonnet-4-5-20250929
 ```
 
-If you point the bot at `https://api.kimi.com/coding/` with the OpenAI-compatible protocol, startup still fails by default. That path must be explicitly opted into with `ALLOW_EXPERIMENTAL_CODING_ENDPOINT=true`.
+**OpenAI-compatible**
 
-Expose `POST /slack/events` to Slack. The app also exposes:
+```bash
+LLM_PROVIDER=openai
+OPENAI_API_KEY=...
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4o
+```
 
-- `GET /healthz`
-- `GET /metrics`
-- `GET /runs?limit=20`
-- `GET /runs/<run_id>`
+### 🖼️ Multimodal and model switching
 
-`/metrics` and `/runs` are protected by `OBSERVABILITY_TOKEN`. Send it as `Authorization: Bearer <token>` or `X-Oncall-Agent-Admin-Token: <token>`. If you intentionally want unauthenticated direct-loopback access while developing, set `OBSERVABILITY_ALLOW_UNAUTHENTICATED=true`; requests with forwarded headers are still rejected.
+`AVAILABLE_MODELS` enables a model selector in the Slack App Home tab. `MULTIMODAL_MODELS` controls which models receive image parts; images sent to non-listed models are stripped and replaced with a text description prompt.
 
-## ngrok
+## 📝 Prompt configuration
 
-For local development:
+All prompt text lives outside git under `PROMPT_DIR` (defaults to `.prompts/`, which is gitignored). The following files are loaded at startup:
+
+| File | Purpose |
+|---|---|
+| `system.md` | Main system prompt; overrides the built-in fallback |
+| `delegates.json` | System prompts for delegate sub-agents |
+| `app_messages.json` | Responses to empty mentions, empty DMs, file-only DMs |
+| `tools.json` | Tool description and parameter overrides |
+| `memory.json` | Labels for session summary and thread context blocks |
+| `runner.json` | Retry and budget-warning prompt templates |
+| `health.json` | Health summary header and rules text |
+| `tool_statuses.json` | Slack status messages shown while tools run |
+| `github_workflows.json` | Workflow filename aliases for `github.dispatch_workflow` |
+| `rules/*.md` | Markdown rules injected into the main agent and delegates |
+| `skills/<name>/SKILL.md` | Skill definitions with `name` and `description` frontmatter |
+| `runbooks/*.md` | Service runbooks searched by `knowledge.runbook_search` |
+
+Only skill metadata appears in the base prompt; full skill instructions are loaded on demand when the agent calls `skills-load`.
+
+## 🌐 ngrok
 
 ```bash
 ngrok http 8080
@@ -99,52 +123,152 @@ ngrok http 8080
 
 Use the HTTPS forwarding URL as the Slack Request URL:
 
-```text
+```
 https://<your-ngrok-domain>/slack/events
 ```
 
-Set `HTTP_ADDR=:8080`, fill `SLACK_SIGNING_SECRET` from Slack App > Basic Information, and keep Socket Mode disabled. If you use a free ngrok URL, update Slack's Request URL whenever ngrok gives you a new domain. A reserved ngrok domain avoids that churn.
+Set `HTTP_ADDR=:8080`, fill `SLACK_SIGNING_SECRET` from **Slack App → Basic Information**, and keep Socket Mode disabled. A reserved ngrok domain avoids regenerating the URL on each restart.
 
-## Slack app setup
+## ⚙️ Slack app setup
 
-Use Slack Events API with:
+Required OAuth scopes:
 
 - `app_mentions:read`
-- `channels:history`, `groups:history`, `im:history` as needed for thread context
+- `channels:history`, `groups:history`, `im:history` (for thread context)
 - `chat:write`
-- `chat:delete` if you want the temporary thinking message removed
-- Event subscriptions: `app_mention`, `message.channels`, `message.groups`, `app_home_opened`, `reaction_added`
+- `files:read` (for file downloads)
+- `chat:delete` (optional, to remove the temporary thinking indicator)
 
-Channel mentions are allowed by `ALLOWED_SLACK_CHANNELS`. `ALLOWED_SLACK_USERS` is used for app DMs.
+Event subscriptions: `app_mention`, `message.channels`, `message.groups`, `message.im`, `app_home_opened`, `file_shared`, `reaction_added`.
 
-The old App Home / modal flow for per-user agent tokens is not needed. If you reuse an existing Slack app, remove or disable App Home and Interactivity callbacks that only served token registration. The App Home page now shows the actual provider, base URL host, protocol, Anthropic flavor, and model the service is configured to use.
+- `ALLOWED_SLACK_CHANNELS` controls which channels the bot responds to in channel threads.
+- `ALLOWED_SLACK_USERS` controls who can use the bot in app DMs.
 
-## Tools
+The App Home tab shows the configured provider, model, base URL, and protocol. It also includes a model selector when `AVAILABLE_MODELS` is set.
 
-Current tool modules:
+## 🛠️ Tools
 
-- `diagnostics.incident_brief`
-- `diagnostics.timeline`
-- `diagnostics.evidence_board`
-- `code.symbols`
-- `code.definition`
-- `code.references`
-- `code.diagnostics`
-- `code.search`, `code.read_file`
-- `git.fetch_ref`, `git.search_ref`, `git.read_file_ref`, `git.status`, `git.log`, `git.show`
-- `gcp.logs`
-- `github.dispatch_workflow`, `github.workflow_runs`
-- `notion.search`, `notion.create_page`
-- `youtrack.get_issue`, `youtrack.search`
-- `luckin.query_shop_list`, `luckin.search_product`, `luckin.switch_product`, `luckin.query_product_detail`, `luckin.preview_order`, `luckin.query_coupons`, `luckin.create_order`, `luckin.query_order_detail`, `luckin.cancel_order`
-- `slack.ask_user`
-- `slack.file_search`
-- `slack.json_analyze`
-- `skills.load`
-- `knowledge.runbook_search`
-- `delegate.run`
+### 🔍 Code and repository
 
-Each Slack request is recorded as a run under `RUN_DATA_DIR` (default `.data/runs`). Run records include LLM/tool steps, token usage, estimated cost when rates are known, errors, Slack message linkage, and quality feedback from reactions. Override cost rates when your provider pricing differs:
+| Tool | Description |
+|---|---|
+| `code.search` | ripgrep search across the local working tree |
+| `code.read_file` | Read a file from the local working tree |
+| `repo-search` | Lazily fetch a remote repo, pin a commit snapshot, search it |
+| `repo-read_file` | Read a file from a pinned remote repo snapshot |
+| `git.fetch_ref` | Fetch a branch and return an immutable ref for subsequent calls |
+| `git.search_ref` | Search code at a specific git ref |
+| `git.read_file_ref` | Read a file at a specific git ref |
+| `git.status` | Working tree and branch status |
+| `git.log` | Recent commit history |
+| `git.show` | Commit diff or file at a revision |
+| `code.symbols` | Find Go/C# symbols via language server (gopls / csharp-ls) |
+| `code.definition` | Go to symbol definition |
+| `code.references` | Find symbol references |
+| `code.diagnostics` | LSP diagnostics for a file |
+| `rag-search` | Hybrid semantic + full-text code search across indexed repositories |
+
+`repo-search` and `repo-read_file` fetch only the requested repository on demand and resolve the branch to an immutable snapshot, so concurrent users can inspect different branches without checkout conflicts.
+
+### 🐙 GitHub
+
+| Tool | Description |
+|---|---|
+| `github.dispatch_workflow` | Trigger a `workflow_dispatch` GitHub Actions run |
+| `github.workflow_runs` | List recent workflow run status |
+| `github.pr_diff` | Fetch a PR's metadata and unified diff |
+
+Workflow aliases are defined in `PROMPT_DIR/github_workflows.json`. `GITHUB_DEFAULT_OWNER` and `GITHUB_DEFAULT_REPO` set the default repository.
+
+### ☁️ Observability
+
+| Tool | Description |
+|---|---|
+| `gcp.logs` | Query GCP Cloud Logging (project, namespace, service, or raw filter) |
+| `diagnostics.incident_brief` | Structured incident diagnostic summary |
+| `diagnostics.timeline` | Incident event timeline |
+| `diagnostics.evidence_board` | Structured evidence board |
+
+### 🔎 Knowledge and search
+
+| Tool | Description |
+|---|---|
+| `web-search` | Public web search (Google Custom Search or SerpAPI) |
+| `web-read_page` | Fetch and read a public web page |
+| `notion.search` | Search Notion pages |
+| `notion.create_page` | Create a Notion page |
+| `youtrack.get_issue` | Fetch a YouTrack issue |
+| `youtrack.search` | Search YouTrack issues |
+| `knowledge.runbook_search` | Search local runbooks under `PROMPT_DIR/runbooks/` |
+
+### 💬 Slack
+
+| Tool | Description |
+|---|---|
+| `slack.ask_user` | Ask the user for missing information and pause the run |
+| `slack.file_search` | Search a large uploaded Slack file by query |
+| `slack.json_analyze` | Structurally analyze an uploaded JSON file |
+
+### 🤝 Agent control
+
+| Tool | Description |
+|---|---|
+| `skills-load` | Load full SKILL.md instructions for a named skill |
+| `delegate.run` | Run a focused sub-agent for bounded analysis without tools |
+
+### ☕ Luckin Coffee
+
+Order management via the official Luckin MCP endpoint. Requires `LUCKIN_MCP_TOKEN` from <https://open.lkcoffee.com/mcp>. Order creation and cancellation require an explicit confirmation step.
+
+## 📊 Observability endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET /healthz` | Liveness check |
+| `GET /health/dashboard` | Interactive health dashboard (browser) |
+| `GET /health/tools` | Tool health status (JSON) |
+| `GET /metrics` | Run and cost metrics |
+| `GET /runs?limit=20` | Recent run list |
+| `GET /runs/<run_id>` | Run detail with LLM/tool steps, token usage, and cost |
+
+`/metrics` and `/runs` require `Authorization: Bearer <token>` or `X-Admin-Token: <token>` matching `OBSERVABILITY_TOKEN`. Set `OBSERVABILITY_ALLOW_UNAUTHENTICATED=true` only for direct loopback development access.
+
+## 🧠 RAG semantic code search
+
+RAG indexes repositories into PostgreSQL with pgvector and provides hybrid search combining vector similarity (70%), full-text (30%), and grep.
+
+**Start the local database:**
+
+```bash
+docker compose -f docker-compose.rag.yml up -d
+```
+
+**Configuration:**
+
+```bash
+RAG_ENABLED=true
+RAG_POSTGRES_DSN=postgres://oncall:oncall@localhost:5432/oncall_rag?sslmode=disable
+
+# Embedding provider — any OpenAI-compatible /v1/embeddings endpoint works:
+# 🖥️  Local Ollama:    http://localhost:11434/v1       model: nomic-embed-text  dims: 768
+# ⚡  SiliconFlow:     https://api.siliconflow.cn/v1   model: BAAI/bge-m3       dims: 1024
+# 🌐  OpenAI:          https://api.openai.com/v1        model: text-embedding-3-small  dims: 1536
+RAG_EMBEDDING_BASE_URL=http://localhost:11434/v1
+RAG_EMBEDDING_API_KEY=ollama
+RAG_EMBEDDING_MODEL=nomic-embed-text
+RAG_EMBEDDING_DIMS=768
+
+RAG_BACKGROUND_INDEX=true   # optional workspace prewarming on startup
+RAG_INDEX_INTERVAL=5m
+```
+
+Indexing is incremental: only changed files are re-chunked, and only chunks whose content changed are re-embedded. The agent also queues per-repo indexing on demand when `rag-search` is called for an un-indexed repository.
+
+## 💰 Cost tracking
+
+Each Slack request is recorded as a run under `RUN_DATA_DIR` (default `.data/runs`). Runs include LLM and tool steps, token usage, estimated cost, errors, Slack message linkage, and quality feedback from emoji reactions.
+
+Override cost rates to match your provider:
 
 ```bash
 LLM_INPUT_COST_PER_MTOK=0
@@ -152,17 +276,3 @@ LLM_OUTPUT_COST_PER_MTOK=0
 LLM_CACHE_READ_COST_PER_MTOK=0
 LLM_CACHE_CREATION_COST_PER_MTOK=0
 ```
-
-`repo-search` and `repo-read_file` lazily fetch only the requested repository, resolve the requested branch to an immutable commit ref, and inspect that snapshot without changing the working tree. If no branch is specified, they try `main`, then `master`. Lower-level `git-fetch_ref`, `git-search_ref`, and `git-read_file_ref` remain available when the agent needs to reuse one snapshot across several calls. This lets concurrent users inspect different branches without checkout conflicts or mid-run branch movement. The command guard blocks destructive command patterns, and the shipped tools use argumentized `exec.CommandContext` instead of shell strings.
-
-Code intelligence tools are read-only and currently target the current working tree. Go uses `gopls`; C# uses `csharp-ls` when installed. If a language server is unavailable, the agent falls back to text search and reports the missing dependency.
-
-GCP values in `.env` are defaults and hints, not fixed environments. `gcp.logs` accepts `project`, `namespace`, `service`, and raw `filter` per call. If `namespace` is omitted, the tool no longer silently injects `GCP_NAMESPACE`; environment mappings can be added later in `PROMPT_DIR/rules`.
-
-GitHub Actions uses `GITHUB_TOKEN`. Set `GITHUB_DEFAULT_OWNER` and `GITHUB_DEFAULT_REPO` locally, and define workflow aliases in the gitignored `PROMPT_DIR/github_workflows.json` file. The dispatch tool executes directly when the Slack request is clear, asks only for missing required inputs, and passes workflow_dispatch inputs through as strings. The runs tool can check recent workflow status after a dispatch.
-
-Luckin Coffee MCP uses the official Streamable HTTP endpoint from <https://open.lkcoffee.com/mcp>. Copy a personal login token from that page into `LUCKIN_MCP_TOKEN`. The default `LUCKIN_MCP_URL` is `https://gwmcp.lkcoffee.com/order/user/mcp`; override it only for Luckin-provided test or pre-release gateways. Order creation and cancellation require an explicit user confirmation flag before the local wrapper forwards the remote MCP call.
-
-## Notes
-
-The implementation keeps provider choice configurable through env vars. `MIMO_*` is the default MiMo Token Plan backend, `OPENAI_*`, `KIMI_*`, and `MOONSHOT_*` cover alternate OpenAI-compatible backends, and `ANTHROPIC_*` is reserved for Anthropic-compatible providers such as the real Anthropic API or Kimi For Coding.
