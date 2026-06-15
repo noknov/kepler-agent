@@ -28,6 +28,7 @@ import (
 	"github.com/wati/oncall-agent/internal/session"
 	"github.com/wati/oncall-agent/internal/slack"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	"github.com/wati/oncall-agent/internal/web"
 )
 
 func Run(ctx context.Context) error {
@@ -141,11 +142,11 @@ func NewServer(cfg config.Config) (*Server, error) {
 			return mmSet[model]
 		}
 	}
-	s.routes(runtime.Tools)
+	s.routes(cfg, store, runtime, runStore, recorder, healthService, runtime.Tools)
 	return s, nil
 }
 
-func (s *Server) routes(tools *registry.Registry) {
+func (s *Server) routes(cfg config.Config, store session.Store, runtime agentRuntime, runStore runs.Store, recorder *observability.Recorder, healthService *health.Service, tools *registry.Registry) {
 	s.mux.Handle("/metrics", s.observabilityHandler(s.metrics))
 	s.mux.HandleFunc("/health/dashboard", s.handleHealthDashboard)
 	s.mux.HandleFunc("/health/tools", s.handleToolHealth)
@@ -158,6 +159,23 @@ func (s *Server) routes(tools *registry.Registry) {
 	})
 	s.mux.HandleFunc("/slack/events", s.handleSlackEvents)
 	s.mux.HandleFunc("/slack/interactions", s.handleSlackInteractions)
+
+	webHub := web.NewHub()
+	webMessenger := web.NewHubMessenger(webHub)
+	webPrompt := safety.PromptPolicy{
+		WorkspaceRoots: cfg.Security.WorkspaceRoots,
+	}
+	webConv := conversation.NewService(store, webMessenger, runtime.Runner, runtime.Memory, webPrompt, runtime.Redactor, recorder)
+	webConv.RunStore = runStore
+	webConv.RunProvider = cfg.LLM.Provider
+	webConv.RunModel = cfg.LLM.Model
+	webConv.CostRates = runtime.CostRates
+	webConv.HealthSummary = healthService.SummaryPrompt
+	if cfg.Web.Model != "" {
+		webConv.ModelOverride = func(string) string { return cfg.Web.Model }
+	}
+	web.New(s.slack, webConv, webHub, cfg.Security.AllowedUsers).RegisterRoutes(s.mux)
+
 	log.Printf("oncall-agent configured, tools=%s", strings.Join(tools.Names(), ", "))
 }
 
