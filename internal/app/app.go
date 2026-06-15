@@ -147,6 +147,7 @@ func NewServer(cfg config.Config) (*Server, error) {
 
 func (s *Server) routes(tools *registry.Registry) {
 	s.mux.Handle("/metrics", s.observabilityHandler(s.metrics))
+	s.mux.HandleFunc("/health/dashboard", s.handleHealthDashboard)
 	s.mux.HandleFunc("/health/tools", s.handleToolHealth)
 	s.mux.HandleFunc("/health/tools/rag", s.handleRAGHealth)
 	s.mux.HandleFunc("/runs", s.handleRuns)
@@ -532,7 +533,7 @@ func (s *Server) handleFileShared(ctx context.Context, eventID string, ev slack.
 	}
 	text, parts := s.attachSlackFiles(ctx, "", []slack.File{file})
 	if text == "" {
-		text = prompts.AppMessage("empty_dm", "(The user sent an app DM with a file but no text. Briefly describe what you can do with the file and ask for any missing context.)")
+		text = prompts.AppMessage("empty_dm_with_file", "(The user sent an app DM with a file but no text. Briefly describe what you can do with the file and ask for any missing context.)")
 	}
 	s.conv.HandleMention(ctx, conversation.Request{
 		EventID:      eventID,
