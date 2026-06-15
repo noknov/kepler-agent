@@ -92,6 +92,44 @@ func budgetWarningPrompt(remainingToolSteps int) string {
 	return fmt.Sprintf(tmpl, remainingToolSteps)
 }
 
+func codeClaimRetryPrompt() string {
+	return prompts.RunnerPrompt("code_claim_retry", "")
+}
+
+// codeReadingTools is the set of tool names that constitute evidence for code
+// claims. A final response containing a fenced code block should be preceded
+// by at least one call to one of these tools in the same run.
+var codeReadingTools = map[string]bool{
+	"git-search_ref":    true,
+	"git-read_file_ref": true,
+	"repo-search":       true,
+	"repo-read_file":    true,
+	"code-search":       true,
+	"code-read_file":    true,
+	"code-symbols":      true,
+	"code-definition":   true,
+	"code-references":   true,
+}
+
+// hasFencedCodeBlock reports whether text contains a fenced code block
+// (a line beginning with three or more backticks, optionally indented).
+func hasFencedCodeBlock(text string) bool {
+	for len(text) > 0 {
+		end := strings.IndexByte(text, '\n')
+		line := text
+		if end >= 0 {
+			line = text[:end]
+			text = text[end+1:]
+		} else {
+			text = ""
+		}
+		if strings.HasPrefix(strings.TrimLeft(line, " \t"), "```") {
+			return true
+		}
+	}
+	return false
+}
+
 func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	maxSteps := r.MaxSteps
 	if maxSteps <= 0 {
@@ -106,6 +144,8 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	retriedRepetitiveFinal := false
 	retriedTextualToolCall := false
 	retriedEmptyResponse := false
+	retriedCodeClaim := false
+	codeToolCalledThisRun := false
 	budgetWarned := false
 
 	for step := 0; step < maxSteps; step++ {
@@ -214,6 +254,14 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 				}
 				return Result{Generated: generated}, ErrRepetitiveOutput
 			}
+			if !useStream && !retriedCodeClaim && !codeToolCalledThisRun && hasFencedCodeBlock(final) {
+				retriedCodeClaim = true
+				messages = append(messages, llm.Message{Role: "system", Content: codeClaimRetryPrompt()})
+				if r.StatusUpdate != nil {
+					r.StatusUpdate(RetryStatus(req.Locale))
+				}
+				continue
+			}
 			assistantMsg.Content = final
 			messages = append(messages, assistantMsg)
 			generated = append(generated, assistantMsg)
@@ -236,6 +284,9 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		for _, tr := range toolResults {
 			messages = append(messages, tr.message)
 			generated = append(generated, tr.message)
+			if codeReadingTools[tr.name] {
+				codeToolCalledThisRun = true
+			}
 			if tr.waitForUser {
 				return Result{
 					Generated:       generated,
