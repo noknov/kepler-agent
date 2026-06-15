@@ -22,7 +22,7 @@ type PromptPolicy struct {
 }
 
 func (p PromptPolicy) SystemPrompt() string {
-	base := prompts.System("You are 斗包, a capable general-purpose assistant running inside Slack. Follow the locally configured system prompt, protect secrets, use tools only for the user's task, verify code claims with tool evidence, and keep responses concise.")
+	base := prompts.System("You are 斗包, a capable general-purpose assistant. Follow the locally configured system prompt, protect secrets, use tools only for the user's task, verify code claims with tool evidence, and keep responses concise.")
 	base += prompts.RulesAndSkillsPrompt()
 	repos := p.discoverRepos()
 	if repos != "" {
