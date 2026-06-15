@@ -87,6 +87,24 @@ func TestRunnerRejectsTextualToolCallFinal(t *testing.T) {
 	}
 }
 
+func TestRunnerStripsTextualToolCallMarkupOnRetry(t *testing.T) {
+	textual := "Here is the answer.\n<tool_call>\n<function=code-search>\n<parameter=query>test</parameter>\n</function>\n</tool_call>"
+	client := &fakeClient{responses: []llm.Response{
+		{Message: llm.Message{Role: "assistant", Content: textual}},
+		{Message: llm.Message{Role: "assistant", Content: textual}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 4}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "Here is the answer." {
+		t.Fatalf("Final = %q, want stripped text", result.Final)
+	}
+}
+
 func TestRunnerRetriesTextualToolCallThenSucceeds(t *testing.T) {
 	textual := "<tool_call><function=code-search></function></tool_call>"
 	client := &fakeClient{responses: []llm.Response{
@@ -105,6 +123,33 @@ func TestRunnerRetriesTextualToolCallThenSucceeds(t *testing.T) {
 	}
 	if len(client.requests) != 2 {
 		t.Fatalf("expected 2 LLM calls, got %d", len(client.requests))
+	}
+	// Retry should still include tools so the model can make structured calls.
+	retryReq := client.requests[1]
+	if len(retryReq.Tools) == 0 {
+		t.Fatal("retry request should still include tools")
+	}
+}
+
+func TestRunnerRetriesTextualToolCallThenUsesStructuredCalls(t *testing.T) {
+	textual := "<tool_call><function=echo><parameter=text>hello</parameter></function></tool_call>"
+	client := &fakeClient{responses: []llm.Response{
+		{Message: llm.Message{Role: "assistant", Content: textual}},
+		{Message: toolCallMessage("tool_retry", `{"text":"structured"}`)},
+		{Message: llm.Message{Role: "assistant", Content: "最终结果。"}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 5}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "最终结果。" {
+		t.Fatalf("Final = %q, want 最终结果。", result.Final)
+	}
+	if len(client.requests) != 3 {
+		t.Fatalf("expected 3 LLM calls, got %d", len(client.requests))
 	}
 }
 
