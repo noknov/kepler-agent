@@ -173,7 +173,7 @@ func TestNewErrorID(t *testing.T) {
 	}
 }
 
-func TestStreamModeAnswerAsNewMessage(t *testing.T) {
+func TestStreamModeReplaysNonStreamingFinalAnswer(t *testing.T) {
 	ctx := context.Background()
 	store, err := session.NewFileStore(t.TempDir())
 	if err != nil {
@@ -199,15 +199,19 @@ func TestStreamModeAnswerAsNewMessage(t *testing.T) {
 		Text:     "who is the author?",
 	})
 
-	// Final answer should be posted as a separate message (fallback when LLM doesn't stream)
-	found := false
-	for _, p := range messenger.posts {
-		if p == "Author: <@U085SRJFCLX>" {
-			found = true
+	var text strings.Builder
+	for _, chunk := range messenger.chunks {
+		if chunk["type"] == "markdown_text" {
+			text.WriteString(chunk["text"].(string))
 		}
 	}
-	if !found {
-		t.Fatalf("final answer should be posted as separate message, posts=%v", messenger.posts)
+	if got := text.String(); got != "Author: @U085SRJFCLX" {
+		t.Fatalf("streamed final answer = %q, want final answer", got)
+	}
+	for _, p := range messenger.posts {
+		if strings.Contains(p, "Author:") {
+			t.Fatalf("final answer should be streamed, posts=%v", messenger.posts)
+		}
 	}
 	// Progress stream should be marked complete
 	foundComplete := false
@@ -221,11 +225,60 @@ func TestStreamModeAnswerAsNewMessage(t *testing.T) {
 	}
 }
 
+func TestStreamModeReplaysLongNonStreamingFinalAnswerInChunks(t *testing.T) {
+	oldInterval := answerReplayInterval
+	answerReplayInterval = 0
+	t.Cleanup(func() { answerReplayInterval = oldInterval })
+
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := strings.Repeat("流式传输", 40)
+	messenger := &fakeMessenger{streamTS: "200.000"}
+	svc := NewService(
+		store,
+		messenger,
+		agent.Runner{LLM: &replyLLM{content: final}, MaxSteps: 1},
+		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+
+	svc.HandleMention(ctx, Request{
+		EventID:  "E3-long",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "stream it",
+	})
+
+	var text strings.Builder
+	markdownChunks := 0
+	for _, chunk := range messenger.chunks {
+		if chunk["type"] == "markdown_text" {
+			markdownChunks++
+			text.WriteString(chunk["text"].(string))
+		}
+	}
+	if markdownChunks < 2 {
+		t.Fatalf("markdown chunks = %d, want multiple chunks", markdownChunks)
+	}
+	if got := text.String(); got != final {
+		t.Fatalf("streamed final answer length = %d, want %d", len([]rune(got)), len([]rune(final)))
+	}
+}
+
 type streamLLM struct {
-	content string
+	content     string
+	chatCalls   int
+	streamCalls int
 }
 
 func (l *streamLLM) Chat(_ context.Context, _ llm.Request) (llm.Response, error) {
+	l.chatCalls++
 	return llm.Response{
 		Message: llm.Message{Role: "assistant", Content: l.content},
 		Usage:   llm.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
@@ -233,6 +286,7 @@ func (l *streamLLM) Chat(_ context.Context, _ llm.Request) (llm.Response, error)
 }
 
 func (l *streamLLM) ChatStream(_ context.Context, _ llm.Request, cb llm.StreamCallback) (llm.Response, error) {
+	l.streamCalls++
 	words := strings.Fields(l.content)
 	for i, w := range words {
 		if i > 0 {
@@ -244,6 +298,40 @@ func (l *streamLLM) ChatStream(_ context.Context, _ llm.Request, cb llm.StreamCa
 		Message: llm.Message{Role: "assistant", Content: l.content},
 		Usage:   llm.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
 	}, nil
+}
+
+func TestStreamModeUsesNativeStreamWhenToolsAreOmitted(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	llmClient := &streamLLM{content: "hello world"}
+	messenger := &fakeMessenger{streamTS: "200.000"}
+	svc := NewService(
+		store,
+		messenger,
+		agent.Runner{LLM: llmClient, Tools: registry.New(), MaxSteps: 3},
+		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+
+	svc.HandleMention(ctx, Request{
+		EventID:  "E4-native",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "hi",
+	})
+
+	if llmClient.streamCalls != 1 {
+		t.Fatalf("ChatStream calls = %d, want 1", llmClient.streamCalls)
+	}
+	if llmClient.chatCalls != 0 {
+		t.Fatalf("Chat calls = %d, want 0", llmClient.chatCalls)
+	}
 }
 
 func TestStreamModeStreamsTokens(t *testing.T) {
@@ -366,17 +454,20 @@ func TestStreamStatusFailureDoesNotAffectFinalAnswer(t *testing.T) {
 		Text:     "hi",
 	})
 
-	// Non-streaming LLM posts final answer as separate message regardless of status errors
-	found := false
-	for _, p := range messenger.posts {
-		if p == "final answer" {
-			found = true
+	var text strings.Builder
+	for _, chunk := range messenger.chunks {
+		if chunk["type"] == "markdown_text" {
+			text.WriteString(chunk["text"].(string))
 		}
 	}
-	if !found {
-		t.Fatalf("final answer should be posted, posts=%v", messenger.posts)
+	if got := text.String(); got != "final answer" {
+		t.Fatalf("streamed final answer = %q, want final answer", got)
 	}
-	// Should NOT have the streaming-failed prefix
+	for _, p := range messenger.posts {
+		if p == "final answer" {
+			t.Fatalf("final answer should be streamed, posts=%v", messenger.posts)
+		}
+	}
 	for _, p := range messenger.posts {
 		if strings.Contains(p, "streaming delivery failed") {
 			t.Fatal("status-only failure should not trigger delivery-failed prefix")
