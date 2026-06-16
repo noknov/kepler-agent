@@ -259,6 +259,19 @@ func TestIsTransientGitFetchError(t *testing.T) {
 	}
 }
 
+func TestOriginBranchRefspecFetchesOnlyRequestedBranch(t *testing.T) {
+	refspec, err := originBranchRefspec("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refspec != "+refs/heads/main:refs/remotes/origin/main" {
+		t.Fatalf("refspec = %q, want main-only refspec", refspec)
+	}
+	if _, err := originBranchRefspec("main:refs/heads/other"); err == nil {
+		t.Fatal("branch refspec injection should be rejected")
+	}
+}
+
 func runGit(t *testing.T, repo string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
