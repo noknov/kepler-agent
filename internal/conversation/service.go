@@ -254,7 +254,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		Steering: s.steering(active),
 	})
 	if answerStream != nil {
-		answerStream.Flush()
+		answerStream.Close()
 	}
 
 	sess.UserID = req.UserID
@@ -355,19 +355,20 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			{"type": "task_update", "id": taskID, "title": agent.CompleteTitle(locale), "status": "complete"},
 		})
 		if useStream && answerStream != nil && result.Streamed && !answerStream.Failed() {
-			answerStream.Flush()
-			if answerStream.streamTS != "" && !answerStream.Failed() {
-				_ = s.Messenger.StopStream(ctx, req.Channel, answerStream.streamTS)
+			answerStream.Close()
+			answerStreamTS := answerStream.TS()
+			if answerStreamTS != "" && !answerStream.Failed() {
+				_ = s.Messenger.StopStream(ctx, req.Channel, answerStreamTS)
 			}
-			if runObserver != nil && answerStream.streamTS != "" && !answerStream.Failed() {
-				runObserver.LinkSlackMessage(req.Channel, answerStream.streamTS)
+			if runObserver != nil && answerStreamTS != "" && !answerStream.Failed() {
+				runObserver.LinkSlackMessage(req.Channel, answerStreamTS)
 			}
 		}
 		if !useStream || answerStream == nil || !result.Streamed || answerStream.Failed() {
 			if s.Format != nil {
 				finalText = s.Format(finalText)
 			}
-			if answerStream.Failed() {
+			if answerStream != nil && answerStream.Failed() {
 				finalText = "_streaming delivery failed, here is the answer:_\n\n" + finalText
 			}
 			ts, postErr := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
@@ -731,9 +732,15 @@ type dmStreamWriter struct {
 	threadTS  string
 	userID    string
 	streamTS  string
+	mu        sync.Mutex
+	flushMu   sync.Mutex
 	buf       strings.Builder
 	lastFlush time.Time
 	err       error
+	started   bool
+	wake      chan struct{}
+	done      chan struct{}
+	closed    bool
 }
 
 var (
@@ -746,41 +753,127 @@ var (
 )
 
 func (w *dmStreamWriter) Write(delta string) {
-	if w.err != nil {
+	if delta == "" {
 		return
 	}
-	if w.streamTS == "" {
+	w.mu.Lock()
+	if w.err != nil || w.closed {
+		w.mu.Unlock()
+		return
+	}
+	if !w.started {
 		ts, err := w.messenger.StartStream(w.ctx, w.channel, w.threadTS, w.userID)
 		if err != nil {
 			log.Printf("answer stream start failed: %v", err)
 			w.err = err
+			w.mu.Unlock()
 			return
 		}
 		w.streamTS = ts
+		w.wake = make(chan struct{}, 1)
+		w.done = make(chan struct{})
+		w.started = true
+		go w.run()
 	}
 	w.buf.WriteString(delta)
 	if shouldFlushStream(w.channel, w.lastFlush, w.buf.Len()) {
-		w.Flush()
+		w.signal()
 	}
+	w.mu.Unlock()
 }
 
 func (w *dmStreamWriter) Flush() {
+	w.mu.Lock()
+	if !w.started {
+		w.mu.Unlock()
+		return
+	}
+	w.mu.Unlock()
+	w.flushBuffered()
+}
+
+func (w *dmStreamWriter) Close() {
+	w.mu.Lock()
+	if !w.started || w.closed {
+		w.mu.Unlock()
+		return
+	}
+	w.closed = true
+	close(w.wake)
+	done := w.done
+	w.mu.Unlock()
+	<-done
+}
+
+func (w *dmStreamWriter) Failed() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.err != nil
+}
+
+func (w *dmStreamWriter) TS() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.streamTS
+}
+
+func (w *dmStreamWriter) run() {
+	interval, _ := streamFlushConfig(w.channel)
+	if interval <= 0 {
+		interval = 10 * time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	defer close(w.done)
+	for {
+		select {
+		case <-w.ctx.Done():
+			w.flushBuffered()
+			return
+		case _, ok := <-w.wake:
+			w.flushBuffered()
+			if !ok {
+				return
+			}
+		case <-ticker.C:
+			w.flushBuffered()
+		}
+	}
+}
+
+func (w *dmStreamWriter) signal() {
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (w *dmStreamWriter) flushBuffered() {
+	w.flushMu.Lock()
+	defer w.flushMu.Unlock()
+
+	w.mu.Lock()
 	if w.buf.Len() == 0 || w.streamTS == "" {
+		w.mu.Unlock()
 		return
 	}
 	text := w.buf.String()
 	w.buf.Reset()
 	w.lastFlush = time.Now()
-	err := w.messenger.AppendStream(w.ctx, w.channel, w.streamTS, []map[string]any{
+	streamTS := w.streamTS
+	w.mu.Unlock()
+
+	err := w.messenger.AppendStream(w.ctx, w.channel, streamTS, []map[string]any{
 		{"type": "markdown_text", "text": text},
 	})
-	if err != nil && w.err == nil {
+	if err == nil {
+		return
+	}
+	w.mu.Lock()
+	if w.err == nil {
 		w.err = err
 	}
-}
-
-func (w *dmStreamWriter) Failed() bool {
-	return w != nil && w.err != nil
+	w.mu.Unlock()
 }
 
 func shouldFlushStream(channel string, lastFlush time.Time, bufLen int) bool {
