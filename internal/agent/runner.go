@@ -50,6 +50,7 @@ type Runner struct {
 	MaxTokens       int
 	Temp            float64
 	Tools           *registry.Registry
+	Capabilities    llm.Capabilities
 	Format          ObservationFormatter
 	Sanitize        Sanitizer
 	Observer        Observer
@@ -192,11 +193,18 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		var err error
 		if useStream {
 			if sc, ok := r.LLM.(llm.StreamClient); ok {
-				guard := &streamGuard{downstream: r.OnToken}
-				resp, err = sc.ChatStream(ctx, llmReq, guard.Write)
-				guard.Flush()
-				if guard.suppressed || !resp.Streamed {
-					useStream = false
+				if r.useStreamGuard() {
+					guard := &streamGuard{downstream: r.OnToken}
+					resp, err = sc.ChatStream(ctx, llmReq, guard.Write)
+					guard.Flush()
+					if guard.suppressed || !resp.Streamed {
+						useStream = false
+					}
+				} else {
+					resp, err = sc.ChatStream(ctx, llmReq, r.OnToken)
+					if !resp.Streamed {
+						useStream = false
+					}
 				}
 			} else {
 				resp, err = r.LLM.Chat(ctx, llmReq)
@@ -526,6 +534,16 @@ func (r Runner) sanitize(text string) string {
 		return text
 	}
 	return r.Sanitize.Sanitize(text)
+}
+
+func (r Runner) useStreamGuard() bool {
+	if r.Capabilities.NativeToolCalls {
+		return false
+	}
+	if r.Capabilities.RepairTextualToolCalls {
+		return true
+	}
+	return r.Capabilities.Provider == "" && r.Capabilities.Protocol == ""
 }
 
 // streamGuard buffers initial tokens and suppresses downstream delivery if
