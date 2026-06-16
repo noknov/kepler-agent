@@ -354,10 +354,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		appendProgress([]map[string]any{
 			{"type": "task_update", "id": taskID, "title": agent.CompleteTitle(locale), "status": "complete"},
 		})
-		if useStream && answerStream != nil && !answerStream.Failed() {
-			if answerStream.streamTS == "" {
-				answerStream.Replay(finalText)
-			}
+		if useStream && answerStream != nil && result.Streamed && !answerStream.Failed() {
 			answerStream.Flush()
 			if answerStream.streamTS != "" && !answerStream.Failed() {
 				_ = s.Messenger.StopStream(ctx, req.Channel, answerStream.streamTS)
@@ -366,7 +363,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 				runObserver.LinkSlackMessage(req.Channel, answerStream.streamTS)
 			}
 		}
-		if !useStream || answerStream == nil || answerStream.Failed() {
+		if !useStream || answerStream == nil || !result.Streamed || answerStream.Failed() {
 			if s.Format != nil {
 				finalText = s.Format(finalText)
 			}
@@ -740,10 +737,8 @@ type dmStreamWriter struct {
 }
 
 var (
-	streamFlushInterval    = envDuration("STREAM_FLUSH_INTERVAL", 35*time.Millisecond)
-	streamFlushChars       = envInt("STREAM_FLUSH_CHARS", 32)
-	answerReplayChunkChars = envInt("ANSWER_REPLAY_CHUNK_CHARS", 64)
-	answerReplayInterval   = envDuration("ANSWER_REPLAY_INTERVAL", 75*time.Millisecond)
+	streamFlushInterval = envDuration("STREAM_FLUSH_INTERVAL", 35*time.Millisecond)
+	streamFlushChars    = envInt("STREAM_FLUSH_CHARS", 32)
 )
 
 func (w *dmStreamWriter) Write(delta string) {
@@ -765,23 +760,6 @@ func (w *dmStreamWriter) Write(delta string) {
 	}
 }
 
-func (w *dmStreamWriter) Replay(text string) {
-	for _, chunk := range splitRunes(text, answerReplayChunkChars) {
-		if w.err != nil {
-			return
-		}
-		w.Write(chunk)
-		w.Flush()
-		if w.err != nil {
-			return
-		}
-		if err := sleepStreamReplay(w.ctx); err != nil {
-			w.err = err
-			return
-		}
-	}
-}
-
 func (w *dmStreamWriter) Flush() {
 	if w.buf.Len() == 0 || w.streamTS == "" {
 		return
@@ -799,40 +777,6 @@ func (w *dmStreamWriter) Flush() {
 
 func (w *dmStreamWriter) Failed() bool {
 	return w != nil && w.err != nil
-}
-
-func splitRunes(text string, size int) []string {
-	if text == "" {
-		return nil
-	}
-	if size <= 0 {
-		return []string{text}
-	}
-	runes := []rune(text)
-	out := make([]string, 0, (len(runes)+size-1)/size)
-	for len(runes) > 0 {
-		n := size
-		if len(runes) < n {
-			n = len(runes)
-		}
-		out = append(out, string(runes[:n]))
-		runes = runes[n:]
-	}
-	return out
-}
-
-func sleepStreamReplay(ctx context.Context) error {
-	if answerReplayInterval <= 0 {
-		return nil
-	}
-	timer := time.NewTimer(answerReplayInterval)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }
 
 func shouldFlushStream(lastFlush time.Time, bufLen int) bool {

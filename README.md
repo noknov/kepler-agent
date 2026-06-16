@@ -97,8 +97,6 @@ Final answer streaming is flushed in small batches to keep the UI responsive wit
 |---|---:|---|
 | `STREAM_FLUSH_INTERVAL` | `35ms` | Maximum time to buffer generated text before appending a stream chunk. |
 | `STREAM_FLUSH_CHARS` | `32` | Maximum buffered characters before appending a stream chunk. |
-| `ANSWER_REPLAY_CHUNK_CHARS` | `64` | Chunk size used when replaying a completed non-streaming answer into the stream UI. |
-| `ANSWER_REPLAY_INTERVAL` | `75ms` | Delay between replay chunks. |
 
 ### 🖼️ Multimodal and model switching
 

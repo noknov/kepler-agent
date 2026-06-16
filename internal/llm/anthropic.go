@@ -146,33 +146,72 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, cb Stream
 		CacheCreationInputTokens int
 	}
 	inTextBlock := false
+	toolBlocks := map[int]*ToolCall{}
+	currentBlockIndex := -1
 
 	err = readSSE(resp.Body, func(ev sseEvent) bool {
 		switch ev.Event {
 		case "content_block_start":
 			var block struct {
+				Index        int `json:"index"`
 				ContentBlock struct {
-					Type string `json:"type"`
+					Type  string          `json:"type"`
+					ID    string          `json:"id"`
+					Name  string          `json:"name"`
+					Input json.RawMessage `json:"input"`
 				} `json:"content_block"`
 			}
 			_ = json.Unmarshal([]byte(ev.Data), &block)
+			currentBlockIndex = block.Index
 			inTextBlock = block.ContentBlock.Type == "text"
-		case "content_block_delta":
-			if !inTextBlock {
-				return true
+			if block.ContentBlock.Type == "tool_use" {
+				args := ""
+				if input := strings.TrimSpace(string(block.ContentBlock.Input)); input != "" && input != "{}" {
+					args = string(block.ContentBlock.Input)
+				}
+				toolBlocks[block.Index] = &ToolCall{
+					ID:   block.ContentBlock.ID,
+					Type: "function",
+					Function: ToolFunction{
+						Name:      block.ContentBlock.Name,
+						Arguments: args,
+					},
+				}
 			}
+		case "content_block_delta":
 			var delta struct {
+				Index int `json:"index"`
 				Delta struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
+					Type        string `json:"type"`
+					Text        string `json:"text"`
+					PartialJSON string `json:"partial_json"`
 				} `json:"delta"`
 			}
-			if json.Unmarshal([]byte(ev.Data), &delta) == nil && delta.Delta.Type == "text_delta" && delta.Delta.Text != "" {
+			if json.Unmarshal([]byte(ev.Data), &delta) != nil {
+				return true
+			}
+			switch {
+			case inTextBlock && delta.Delta.Type == "text_delta" && delta.Delta.Text != "":
 				msg.Content += delta.Delta.Text
 				cb(delta.Delta.Text)
+			case delta.Delta.Type == "input_json_delta" && delta.Delta.PartialJSON != "":
+				call := toolBlocks[delta.Index]
+				if call == nil && currentBlockIndex >= 0 {
+					call = toolBlocks[currentBlockIndex]
+				}
+				if call != nil {
+					call.Function.Arguments += delta.Delta.PartialJSON
+				}
 			}
 		case "content_block_stop":
+			if call := toolBlocks[currentBlockIndex]; call != nil {
+				if call.Function.Arguments == "" {
+					call.Function.Arguments = "{}"
+				}
+				msg.ToolCalls = append(msg.ToolCalls, *call)
+			}
 			inTextBlock = false
+			currentBlockIndex = -1
 		case "message_delta":
 			var md struct {
 				Delta struct {
@@ -221,6 +260,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, cb Stream
 			CacheReadInputTokens:     usage.CacheReadInputTokens,
 			CacheCreationInputTokens: usage.CacheCreationInputTokens,
 		},
+		Streamed: true,
 	}, nil
 }
 

@@ -31,3 +31,23 @@ func TestNormalizingClientStripsMarkupWhenToolCallsPresent(t *testing.T) {
 		t.Fatalf("content = %q", resp.Message.Content)
 	}
 }
+
+func TestNormalizingClientDoesNotFakeStreamWhenInnerCannotStream(t *testing.T) {
+	inner := &stubClient{resp: Response{Message: Message{Role: "assistant", Content: "complete"}}}
+	client := WrapClient(inner, CapabilitiesFor("openai", "openai")).(StreamClient)
+
+	called := false
+	resp, err := client.ChatStream(context.Background(), Request{}, func(string) { called = true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("callback should not be called for non-streaming inner client")
+	}
+	if resp.Streamed {
+		t.Fatal("response should not be marked streamed")
+	}
+	if resp.Message.Content != "complete" {
+		t.Fatalf("content = %q, want complete", resp.Message.Content)
+	}
+}
