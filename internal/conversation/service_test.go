@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/wati/oncall-agent/internal/agent"
 	"github.com/wati/oncall-agent/internal/llm"
@@ -291,6 +292,33 @@ func (l *streamLLM) ChatStream(_ context.Context, _ llm.Request, cb llm.StreamCa
 	}, nil
 }
 
+type sequenceStreamLLM struct {
+	responses   []llm.Response
+	streamCalls int
+}
+
+func (l *sequenceStreamLLM) Chat(_ context.Context, _ llm.Request) (llm.Response, error) {
+	if len(l.responses) == 0 {
+		return llm.Response{}, errors.New("unexpected chat call")
+	}
+	resp := l.responses[0]
+	l.responses = l.responses[1:]
+	return resp, nil
+}
+
+func (l *sequenceStreamLLM) ChatStream(_ context.Context, _ llm.Request, cb llm.StreamCallback) (llm.Response, error) {
+	l.streamCalls++
+	if len(l.responses) == 0 {
+		return llm.Response{}, errors.New("unexpected stream call")
+	}
+	resp := l.responses[0]
+	l.responses = l.responses[1:]
+	if resp.Streamed && len(resp.Message.ToolCalls) == 0 && resp.Message.Content != "" {
+		cb(resp.Message.Content)
+	}
+	return resp, nil
+}
+
 func TestStreamModeUsesNativeStreamWhenToolsAreOmitted(t *testing.T) {
 	ctx := context.Background()
 	store, err := session.NewFileStore(t.TempDir())
@@ -380,6 +408,77 @@ func TestStreamModeStreamsTokens(t *testing.T) {
 	}
 	if !foundComplete {
 		t.Fatal("stream should mark task complete")
+	}
+}
+
+func TestToolNarrationAndFinalAnswerUseSeparateStreams(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	llmClient := &sequenceStreamLLM{responses: []llm.Response{
+		{
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "让我看看 wati-voice-service 的结构...",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "tool_1",
+					Type: "function",
+					Function: llm.ToolFunction{
+						Name:      "echo",
+						Arguments: `{"text":"ok"}`,
+					},
+				}},
+			},
+			Streamed: true,
+		},
+		{
+			Message:  llm.Message{Role: "assistant", Content: "## :telephone_receiver: wati-voice-service"},
+			Streamed: true,
+		},
+	}}
+	tools := registry.New()
+	tools.Register(echoTool{})
+	messenger := &fakeMessenger{streamSeq: []string{"progress.000", "answer.000"}}
+	svc := NewService(
+		store,
+		messenger,
+		agent.Runner{LLM: llmClient, Tools: tools, MaxSteps: 3, Capabilities: llm.Capabilities{NativeToolCalls: true}},
+		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+
+	svc.HandleMention(ctx, Request{
+		EventID:  "E4-separate-streams",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "看一下 voice service",
+	})
+
+	var narrationTS, answerTS string
+	for _, append := range messenger.appends {
+		for _, chunk := range append.chunks {
+			if chunk["type"] != "markdown_text" {
+				continue
+			}
+			text := chunk["text"].(string)
+			if strings.Contains(text, "让我看看") {
+				narrationTS = append.ts
+			}
+			if strings.Contains(text, "wati-voice-service") && strings.Contains(text, "##") {
+				answerTS = append.ts
+			}
+		}
+	}
+	if narrationTS != "progress.000" {
+		t.Fatalf("narration ts = %q, want progress stream", narrationTS)
+	}
+	if answerTS != "answer.000" {
+		t.Fatalf("answer ts = %q, want answer stream", answerTS)
 	}
 }
 
@@ -708,12 +807,39 @@ func (t *blockingTool) Execute(ctx context.Context, _ json.RawMessage, _ registr
 	}
 }
 
+type echoTool struct{}
+
+func (echoTool) Parallel() bool { return true }
+
+func (echoTool) Spec() llm.ToolSpec {
+	return llm.ToolSpec{
+		Type: "function",
+		Function: llm.ToolSpecFunction{
+			Name:        "echo",
+			Description: "echo input",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}
+}
+
+func (echoTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	return registry.Result{Content: string(args)}, nil
+}
+
 type fakeMessenger struct {
-	posts     []string
-	streamTS  string
-	appendErr error
-	statusErr error
-	chunks    []map[string]any
+	posts      []string
+	streamTS   string
+	streamSeq  []string
+	startDelay time.Duration
+	appendErr  error
+	statusErr  error
+	chunks     []map[string]any
+	appends    []streamAppend
+}
+
+type streamAppend struct {
+	ts     string
+	chunks []map[string]any
 }
 
 func (m *fakeMessenger) PostMessage(_ context.Context, _, _, text string) (string, error) {
@@ -722,13 +848,22 @@ func (m *fakeMessenger) PostMessage(_ context.Context, _, _, text string) (strin
 }
 
 func (m *fakeMessenger) StartStream(context.Context, string, string, string) (string, error) {
+	if m.startDelay > 0 {
+		time.Sleep(m.startDelay)
+	}
+	if len(m.streamSeq) > 0 {
+		ts := m.streamSeq[0]
+		m.streamSeq = m.streamSeq[1:]
+		return ts, nil
+	}
 	if m.streamTS != "" {
 		return m.streamTS, nil
 	}
 	return "", errors.New("stream unavailable")
 }
 
-func (m *fakeMessenger) AppendStream(_ context.Context, _, _ string, chunks []map[string]any) error {
+func (m *fakeMessenger) AppendStream(_ context.Context, _, ts string, chunks []map[string]any) error {
+	m.appends = append(m.appends, streamAppend{ts: ts, chunks: chunks})
 	m.chunks = append(m.chunks, chunks...)
 	if m.statusErr != nil && isOnlyTaskUpdate(chunks) {
 		return m.statusErr
