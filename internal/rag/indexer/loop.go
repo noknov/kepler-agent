@@ -55,7 +55,7 @@ func (l *Loop) indexAll(ctx context.Context) {
 			}
 
 			start := time.Now()
-			if err := fetchOrigin(ctx, repo); err != nil {
+			if err := fetchOriginBranch(ctx, repo, branch); err != nil {
 				if l.Observer != nil {
 					l.Observer.RAGIndexError(repo, branch, time.Since(start), err)
 				}
@@ -110,7 +110,22 @@ func detectDefaultBranch(ctx context.Context, repo string) string {
 	return ""
 }
 
-func fetchOrigin(ctx context.Context, repo string) error {
+func fetchOriginBranch(ctx context.Context, repo, branch string) error {
+	refspec, err := originBranchRefspec(branch)
+	if err != nil {
+		return err
+	}
+	err = retryTransientGitFetch(ctx, func(ctx context.Context) error {
+		_, err := gitRun(ctx, repo, "fetch", "--prune", "--no-write-fetch-head", "origin", refspec)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("fetch origin/%s: %w", branch, err)
+	}
+	return nil
+}
+
+func retryTransientGitFetch(ctx context.Context, run func(context.Context) error) error {
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
@@ -122,7 +137,7 @@ func fetchOrigin(ctx context.Context, repo string) error {
 		}
 
 		attemptCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-		_, err := gitRun(attemptCtx, repo, "fetch", "--prune", "--no-write-fetch-head", "origin")
+		err := run(attemptCtx)
 		cancel()
 		if err == nil {
 			return nil
@@ -132,7 +147,14 @@ func fetchOrigin(ctx context.Context, repo string) error {
 			break
 		}
 	}
-	return fmt.Errorf("fetch origin: %w", lastErr)
+	return lastErr
+}
+
+func originBranchRefspec(branch string) (string, error) {
+	if strings.TrimSpace(branch) == "" || strings.ContainsAny(branch, " \t\r\n:") {
+		return "", fmt.Errorf("invalid branch %q", branch)
+	}
+	return "+refs/heads/" + branch + ":refs/remotes/origin/" + branch, nil
 }
 
 func isTransientGitFetchError(err error) bool {
