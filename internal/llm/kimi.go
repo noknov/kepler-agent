@@ -145,6 +145,15 @@ func (c *KimiClient) ChatStream(ctx context.Context, req Request, cb StreamCallb
 				Delta struct {
 					Content          string `json:"content"`
 					ReasoningContent string `json:"reasoning_content"`
+					ToolCalls        []struct {
+						Index    int    `json:"index"`
+						ID       string `json:"id"`
+						Type     string `json:"type"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
 				} `json:"delta"`
 				FinishReason *string `json:"finish_reason"`
 			} `json:"choices"`
@@ -167,6 +176,27 @@ func (c *KimiClient) ChatStream(ctx context.Context, req Request, cb StreamCallb
 		if delta.ReasoningContent != "" {
 			msg.ReasoningContent += delta.ReasoningContent
 		}
+		for _, tc := range delta.ToolCalls {
+			for len(msg.ToolCalls) <= tc.Index {
+				msg.ToolCalls = append(msg.ToolCalls, ToolCall{Type: "function"})
+			}
+			call := &msg.ToolCalls[tc.Index]
+			if tc.ID != "" {
+				call.ID = tc.ID
+			}
+			if tc.Type != "" {
+				call.Type = tc.Type
+			}
+			if call.Type == "" {
+				call.Type = "function"
+			}
+			if tc.Function.Name != "" {
+				call.Function.Name += tc.Function.Name
+			}
+			if tc.Function.Arguments != "" {
+				call.Function.Arguments += tc.Function.Arguments
+			}
+		}
 		if chunk.Choices[0].FinishReason != nil {
 			finishReason = *chunk.Choices[0].FinishReason
 		}
@@ -179,6 +209,7 @@ func (c *KimiClient) ChatStream(ctx context.Context, req Request, cb StreamCallb
 		Message:      msg,
 		FinishReason: finishReason,
 		Usage:        usage.toUsage(),
+		Streamed:     true,
 	}, nil
 }
 
