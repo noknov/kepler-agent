@@ -186,7 +186,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			Thinking:    r.Thinking,
 		}
 
-		useStream := lastStep && r.OnToken != nil
+		useStream := len(toolSpecs) == 0 && r.OnToken != nil
 		llmStart := time.Now()
 		var resp llm.Response
 		var err error

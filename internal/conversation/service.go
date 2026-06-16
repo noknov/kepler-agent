@@ -352,13 +352,19 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		appendProgress([]map[string]any{
 			{"type": "task_update", "id": taskID, "title": agent.CompleteTitle(locale), "status": "complete"},
 		})
-		if useStream && answerStream != nil && answerStream.streamTS != "" && !answerStream.Failed() {
+		if useStream && answerStream != nil && !answerStream.Failed() {
+			if answerStream.streamTS == "" {
+				answerStream.Replay(finalText)
+			}
 			answerStream.Flush()
-			_ = s.Messenger.StopStream(ctx, req.Channel, answerStream.streamTS)
-			if runObserver != nil {
+			if answerStream.streamTS != "" && !answerStream.Failed() {
+				_ = s.Messenger.StopStream(ctx, req.Channel, answerStream.streamTS)
+			}
+			if runObserver != nil && answerStream.streamTS != "" && !answerStream.Failed() {
 				runObserver.LinkSlackMessage(req.Channel, answerStream.streamTS)
 			}
-		} else {
+		}
+		if !useStream || answerStream == nil || answerStream.Failed() {
 			if s.Format != nil {
 				finalText = s.Format(finalText)
 			}
@@ -731,6 +737,11 @@ type dmStreamWriter struct {
 	err       error
 }
 
+var (
+	answerReplayChunkChars = 120
+	answerReplayInterval   = 180 * time.Millisecond
+)
+
 func (w *dmStreamWriter) Write(delta string) {
 	if w.err != nil {
 		return
@@ -747,6 +758,23 @@ func (w *dmStreamWriter) Write(delta string) {
 	w.buf.WriteString(delta)
 	if time.Since(w.lastFlush) > 80*time.Millisecond || w.buf.Len() > 80 {
 		w.Flush()
+	}
+}
+
+func (w *dmStreamWriter) Replay(text string) {
+	for _, chunk := range splitRunes(text, answerReplayChunkChars) {
+		if w.err != nil {
+			return
+		}
+		w.Write(chunk)
+		w.Flush()
+		if w.err != nil {
+			return
+		}
+		if err := sleepStreamReplay(w.ctx); err != nil {
+			w.err = err
+			return
+		}
 	}
 }
 
@@ -767,6 +795,40 @@ func (w *dmStreamWriter) Flush() {
 
 func (w *dmStreamWriter) Failed() bool {
 	return w != nil && w.err != nil
+}
+
+func splitRunes(text string, size int) []string {
+	if text == "" {
+		return nil
+	}
+	if size <= 0 {
+		return []string{text}
+	}
+	runes := []rune(text)
+	out := make([]string, 0, (len(runes)+size-1)/size)
+	for len(runes) > 0 {
+		n := size
+		if len(runes) < n {
+			n = len(runes)
+		}
+		out = append(out, string(runes[:n]))
+		runes = runes[n:]
+	}
+	return out
+}
+
+func sleepStreamReplay(ctx context.Context) error {
+	if answerReplayInterval <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(answerReplayInterval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func stripImageParts(parts []llm.ContentPart, text, locale string) ([]llm.ContentPart, string) {
