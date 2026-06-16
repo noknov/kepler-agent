@@ -186,7 +186,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			Thinking:    r.Thinking,
 		}
 
-		useStream := len(toolSpecs) == 0 && r.OnToken != nil
+		useStream := r.OnToken != nil
 		llmStart := time.Now()
 		var resp llm.Response
 		var err error
@@ -195,7 +195,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 				guard := &streamGuard{downstream: r.OnToken}
 				resp, err = sc.ChatStream(ctx, llmReq, guard.Write)
 				guard.Flush()
-				if guard.suppressed {
+				if guard.suppressed || !resp.Streamed {
 					useStream = false
 				}
 			} else {
@@ -271,7 +271,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		// Stream any progress text the model emitted before tool calls to the
 		// user, then strip it from the conversation history to avoid polluting
 		// future turns or amplifying model loops.
-		if narration := strings.TrimSpace(assistantMsg.Content); narration != "" && r.OnNarration != nil {
+		if narration := strings.TrimSpace(assistantMsg.Content); !useStream && narration != "" && r.OnNarration != nil {
 			if !llm.LooksLikeTextualToolCall(narration) {
 				r.OnNarration(narration + "\n\n")
 			}

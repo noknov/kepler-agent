@@ -376,6 +376,96 @@ func (f *fakeClient) Chat(_ context.Context, req llm.Request) (llm.Response, err
 	return resp, nil
 }
 
+type fakeStreamClient struct {
+	fakeClient
+	streamCalls int
+}
+
+func (f *fakeStreamClient) ChatStream(ctx context.Context, req llm.Request, cb llm.StreamCallback) (llm.Response, error) {
+	f.streamCalls++
+	resp, err := f.Chat(ctx, req)
+	if err != nil {
+		return resp, err
+	}
+	if cb != nil && resp.Message.Content != "" {
+		cb(resp.Message.Content)
+	}
+	resp.Streamed = true
+	return resp, nil
+}
+
+func TestRunnerStreamsFinalAnswerWithToolsAvailable(t *testing.T) {
+	client := &fakeStreamClient{fakeClient: fakeClient{responses: []llm.Response{
+		{Message: llm.Message{Role: "assistant", Content: "streamed final"}},
+	}}}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	var streamed strings.Builder
+	result, err := Runner{
+		LLM:      client,
+		Tools:    tools,
+		MaxSteps: 3,
+		OnToken:  func(delta string) { streamed.WriteString(delta) },
+	}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if client.streamCalls != 1 {
+		t.Fatalf("ChatStream calls = %d, want 1", client.streamCalls)
+	}
+	if len(client.requests) != 1 || len(client.requests[0].Tools) == 0 {
+		t.Fatalf("stream request should include tools: %#v", client.requests)
+	}
+	if result.Final != "streamed final" {
+		t.Fatalf("Final = %q, want streamed final", result.Final)
+	}
+	if result.Streamed != true {
+		t.Fatal("result should be marked streamed")
+	}
+	if got := streamed.String(); got != "streamed final" {
+		t.Fatalf("streamed text = %q, want streamed final", got)
+	}
+}
+
+func TestRunnerExecutesToolCallsFromStreamResponse(t *testing.T) {
+	client := &fakeStreamClient{fakeClient: fakeClient{responses: []llm.Response{
+		{Message: toolCallMessage("tool_1", `{"text":"ok"}`)},
+		{Message: llm.Message{Role: "assistant", Content: "done"}},
+	}}}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	var streamed strings.Builder
+	result, err := Runner{
+		LLM:      client,
+		Tools:    tools,
+		MaxSteps: 4,
+		OnToken:  func(delta string) { streamed.WriteString(delta) },
+	}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if client.streamCalls != 2 {
+		t.Fatalf("ChatStream calls = %d, want 2", client.streamCalls)
+	}
+	if result.Final != "done" {
+		t.Fatalf("Final = %q, want done", result.Final)
+	}
+	toolResults := 0
+	for _, msg := range result.Generated {
+		if msg.Role == "tool" && msg.ToolCallID == "tool_1" {
+			toolResults++
+		}
+	}
+	if toolResults != 1 {
+		t.Fatalf("tool results = %d, want 1", toolResults)
+	}
+	if got := streamed.String(); got != "done" {
+		t.Fatalf("streamed text = %q, want done", got)
+	}
+}
+
 func TestRunnerRetriesEmptyResponseThenSucceeds(t *testing.T) {
 	client := &fakeClient{
 		errors: []error{

@@ -133,6 +133,7 @@ type Response struct {
 	FinishReason string
 	Usage        Usage
 	Raw          json.RawMessage
+	Streamed     bool
 }
 
 type Usage struct {

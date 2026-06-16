@@ -173,7 +173,7 @@ func TestNewErrorID(t *testing.T) {
 	}
 }
 
-func TestStreamModeReplaysNonStreamingFinalAnswer(t *testing.T) {
+func TestStreamModePostsNonStreamingFormattedFinalAnswer(t *testing.T) {
 	ctx := context.Background()
 	store, err := session.NewFileStore(t.TempDir())
 	if err != nil {
@@ -199,19 +199,16 @@ func TestStreamModeReplaysNonStreamingFinalAnswer(t *testing.T) {
 		Text:     "who is the author?",
 	})
 
-	var text strings.Builder
 	for _, chunk := range messenger.chunks {
 		if chunk["type"] == "markdown_text" {
-			text.WriteString(chunk["text"].(string))
+			t.Fatalf("non-streaming final answer should not be replayed as markdown chunks: %#v", messenger.chunks)
 		}
 	}
-	if got := text.String(); got != "Author: @U085SRJFCLX" {
-		t.Fatalf("streamed final answer = %q, want final answer", got)
+	if len(messenger.posts) != 1 {
+		t.Fatalf("posts = %#v, want one final post", messenger.posts)
 	}
-	for _, p := range messenger.posts {
-		if strings.Contains(p, "Author:") {
-			t.Fatalf("final answer should be streamed, posts=%v", messenger.posts)
-		}
+	if got := messenger.posts[0]; got != "Author: <@U085SRJFCLX>" {
+		t.Fatalf("posted final answer = %q, want formatted final answer", got)
 	}
 	// Progress stream should be marked complete
 	foundComplete := false
@@ -225,11 +222,7 @@ func TestStreamModeReplaysNonStreamingFinalAnswer(t *testing.T) {
 	}
 }
 
-func TestStreamModeReplaysLongNonStreamingFinalAnswerInChunks(t *testing.T) {
-	oldInterval := answerReplayInterval
-	answerReplayInterval = 0
-	t.Cleanup(func() { answerReplayInterval = oldInterval })
-
+func TestStreamModePostsNonStreamingFinalAnswer(t *testing.T) {
 	ctx := context.Background()
 	store, err := session.NewFileStore(t.TempDir())
 	if err != nil {
@@ -255,19 +248,16 @@ func TestStreamModeReplaysLongNonStreamingFinalAnswerInChunks(t *testing.T) {
 		Text:     "stream it",
 	})
 
-	var text strings.Builder
-	markdownChunks := 0
 	for _, chunk := range messenger.chunks {
 		if chunk["type"] == "markdown_text" {
-			markdownChunks++
-			text.WriteString(chunk["text"].(string))
+			t.Fatalf("non-streaming final answer should not be replayed as markdown chunks: %#v", messenger.chunks)
 		}
 	}
-	if markdownChunks < 2 {
-		t.Fatalf("markdown chunks = %d, want multiple chunks", markdownChunks)
+	if len(messenger.posts) != 1 {
+		t.Fatalf("posts = %#v, want one final post", messenger.posts)
 	}
-	if got := text.String(); got != final {
-		t.Fatalf("streamed final answer length = %d, want %d", len([]rune(got)), len([]rune(final)))
+	if got := messenger.posts[0]; got != final {
+		t.Fatalf("posted final answer length = %d, want %d", len([]rune(got)), len([]rune(final)))
 	}
 }
 
@@ -295,8 +285,9 @@ func (l *streamLLM) ChatStream(_ context.Context, _ llm.Request, cb llm.StreamCa
 		cb(w)
 	}
 	return llm.Response{
-		Message: llm.Message{Role: "assistant", Content: l.content},
-		Usage:   llm.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+		Message:  llm.Message{Role: "assistant", Content: l.content},
+		Usage:    llm.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+		Streamed: true,
 	}, nil
 }
 
@@ -454,19 +445,13 @@ func TestStreamStatusFailureDoesNotAffectFinalAnswer(t *testing.T) {
 		Text:     "hi",
 	})
 
-	var text strings.Builder
 	for _, chunk := range messenger.chunks {
 		if chunk["type"] == "markdown_text" {
-			text.WriteString(chunk["text"].(string))
+			t.Fatalf("non-streaming final answer should not be replayed as markdown chunks: %#v", messenger.chunks)
 		}
 	}
-	if got := text.String(); got != "final answer" {
-		t.Fatalf("streamed final answer = %q, want final answer", got)
-	}
-	for _, p := range messenger.posts {
-		if p == "final answer" {
-			t.Fatalf("final answer should be streamed, posts=%v", messenger.posts)
-		}
+	if len(messenger.posts) != 1 || messenger.posts[0] != "final answer" {
+		t.Fatalf("posts = %#v, want final answer post", messenger.posts)
 	}
 	for _, p := range messenger.posts {
 		if strings.Contains(p, "streaming delivery failed") {
