@@ -319,6 +319,31 @@ func (l *sequenceStreamLLM) ChatStream(_ context.Context, _ llm.Request, cb llm.
 	return resp, nil
 }
 
+type streamingToolLLM struct {
+	responses []llm.Response
+}
+
+func (l *streamingToolLLM) Chat(_ context.Context, _ llm.Request) (llm.Response, error) {
+	if len(l.responses) == 0 {
+		return llm.Response{}, errors.New("unexpected chat call")
+	}
+	resp := l.responses[0]
+	l.responses = l.responses[1:]
+	return resp, nil
+}
+
+func (l *streamingToolLLM) ChatStream(_ context.Context, _ llm.Request, cb llm.StreamCallback) (llm.Response, error) {
+	if len(l.responses) == 0 {
+		return llm.Response{}, errors.New("unexpected stream call")
+	}
+	resp := l.responses[0]
+	l.responses = l.responses[1:]
+	if strings.TrimSpace(resp.Message.Content) != "" {
+		cb(resp.Message.Content)
+	}
+	return resp, nil
+}
+
 func TestStreamModeUsesNativeStreamWhenToolsAreOmitted(t *testing.T) {
 	ctx := context.Background()
 	store, err := session.NewFileStore(t.TempDir())
@@ -444,7 +469,7 @@ func TestToolNarrationAndFinalAnswerUseSeparateStreams(t *testing.T) {
 	svc := NewService(
 		store,
 		messenger,
-		agent.Runner{LLM: llmClient, Tools: tools, MaxSteps: 3, Capabilities: llm.Capabilities{NativeToolCalls: true}},
+		agent.Runner{LLM: llmClient, Tools: tools, MaxSteps: 2, Capabilities: llm.Capabilities{NativeToolCalls: true}},
 		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
 		safety.PromptPolicy{},
 		safety.Redactor{},
@@ -453,6 +478,77 @@ func TestToolNarrationAndFinalAnswerUseSeparateStreams(t *testing.T) {
 
 	svc.HandleMention(ctx, Request{
 		EventID:  "E4-separate-streams",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "看一下 voice service",
+	})
+
+	var narrationTS, answerTS string
+	for _, append := range messenger.appends {
+		for _, chunk := range append.chunks {
+			if chunk["type"] != "markdown_text" {
+				continue
+			}
+			text := chunk["text"].(string)
+			if strings.Contains(text, "让我看看") {
+				narrationTS = append.ts
+			}
+			if strings.Contains(text, "wati-voice-service") && strings.Contains(text, "##") {
+				answerTS = append.ts
+			}
+		}
+	}
+	if narrationTS != "progress.000" {
+		t.Fatalf("narration ts = %q, want progress stream", narrationTS)
+	}
+	if answerTS != "answer.000" {
+		t.Fatalf("answer ts = %q, want answer stream", answerTS)
+	}
+}
+
+func TestStreamedToolNarrationAndFinalAnswerUseSeparateStreams(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	llmClient := &streamingToolLLM{responses: []llm.Response{
+		{
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "让我看看 wati-voice-service 的结构...",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "tool_1",
+					Type: "function",
+					Function: llm.ToolFunction{
+						Name:      "echo",
+						Arguments: `{"text":"ok"}`,
+					},
+				}},
+			},
+			Streamed: true,
+		},
+		{
+			Message:  llm.Message{Role: "assistant", Content: "## :telephone_receiver: wati-voice-service"},
+			Streamed: true,
+		},
+	}}
+	tools := registry.New()
+	tools.Register(echoTool{})
+	messenger := &fakeMessenger{streamSeq: []string{"progress.000", "answer.000"}}
+	svc := NewService(
+		store,
+		messenger,
+		agent.Runner{LLM: llmClient, Tools: tools, MaxSteps: 2, Capabilities: llm.Capabilities{NativeToolCalls: true}},
+		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+
+	svc.HandleMention(ctx, Request{
+		EventID:  "E4-streamed-separate",
 		UserID:   "U1",
 		Channel:  "C1",
 		ThreadTS: "100.000",
