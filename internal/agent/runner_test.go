@@ -393,6 +393,7 @@ func (f *fakeStreamClient) ChatStream(ctx context.Context, req llm.Request, cb l
 		for _, delta := range f.deltas {
 			cb(delta)
 		}
+		f.deltas = nil
 	} else if cb != nil && resp.Message.Content != "" && !f.suppressContentDeltas {
 		cb(resp.Message.Content)
 	}
@@ -413,6 +414,7 @@ func TestRunnerStreamsFinalAnswerWithToolsAvailable(t *testing.T) {
 		Tools:    tools,
 		MaxSteps: 3,
 		OnToken:  func(delta string) { streamed.WriteString(delta) },
+		OnNarration: func(delta string) { streamed.WriteString(delta) },
 	}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -446,8 +448,9 @@ func TestRunnerExecutesToolCallsFromStreamResponse(t *testing.T) {
 	result, err := Runner{
 		LLM:      client,
 		Tools:    tools,
-		MaxSteps: 4,
+		MaxSteps: 2,
 		OnToken:  func(delta string) { streamed.WriteString(delta) },
+		OnNarration: func(delta string) { streamed.WriteString(delta) },
 	}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -517,6 +520,43 @@ func TestRunnerUsesStreamGuardForUnknownCapabilities(t *testing.T) {
 	}
 	if result.Streamed {
 		t.Fatal("result should not be marked streamed when guard suppresses output")
+	}
+}
+
+func TestRunnerNarratesStreamedToolPreamble(t *testing.T) {
+	client := &fakeStreamClient{
+		fakeClient: fakeClient{responses: []llm.Response{
+			{Message: toolCallMessage("tool_1", `{"text":"ok"}`)},
+			{Message: llm.Message{Role: "assistant", Content: "done"}},
+		}},
+		deltas: []string{"让我看看相关代码。"},
+	}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	var narrated, answered strings.Builder
+	result, err := Runner{
+		LLM:          client,
+		Tools:        tools,
+		Capabilities: llm.Capabilities{NativeToolCalls: true},
+		MaxSteps:     2,
+		OnNarration:  func(delta string) { narrated.WriteString(delta) },
+		OnToken:      func(delta string) { answered.WriteString(delta) },
+	}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := narrated.String(); got != "让我看看相关代码。" {
+		t.Fatalf("narration = %q, want streamed preamble", got)
+	}
+	if got := answered.String(); got != "done" {
+		t.Fatalf("answer stream = %q, want done", got)
+	}
+	if result.Final != "done" {
+		t.Fatalf("Final = %q, want done", result.Final)
+	}
+	if !result.Streamed {
+		t.Fatal("result should be marked streamed")
 	}
 }
 
