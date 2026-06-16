@@ -89,6 +89,17 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-4o
 ```
 
+### 💬 Streaming responsiveness
+
+Final answer streaming is flushed in small batches to keep the UI responsive without sending one request per token. These settings can be tuned from the environment; duration values accept either milliseconds as a number or Go duration strings such as `35ms`.
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `STREAM_FLUSH_INTERVAL` | `35ms` | Maximum time to buffer generated text before appending a stream chunk. |
+| `STREAM_FLUSH_CHARS` | `32` | Maximum buffered characters before appending a stream chunk. |
+| `ANSWER_REPLAY_CHUNK_CHARS` | `64` | Chunk size used when replaying a completed non-streaming answer into the stream UI. |
+| `ANSWER_REPLAY_INTERVAL` | `75ms` | Delay between replay chunks. |
+
 ### 🖼️ Multimodal and model switching
 
 `AVAILABLE_MODELS` enables a model selector in the Slack App Home tab. `MULTIMODAL_MODELS` controls which models receive image parts; images sent to non-listed models are stripped and replaced with a text description prompt.
