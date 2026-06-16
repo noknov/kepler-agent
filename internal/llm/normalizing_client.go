@@ -20,11 +20,7 @@ func (c *NormalizingClient) Chat(ctx context.Context, req Request) (Response, er
 func (c *NormalizingClient) ChatStream(ctx context.Context, req Request, cb StreamCallback) (Response, error) {
 	sc, ok := c.Inner.(StreamClient)
 	if !ok {
-		resp, err := c.Chat(ctx, req)
-		if err == nil && cb != nil {
-			cb(resp.Message.Content)
-		}
-		return resp, err
+		return c.Chat(ctx, req)
 	}
 	resp, err := sc.ChatStream(ctx, req, cb)
 	if err != nil {
