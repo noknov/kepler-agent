@@ -67,8 +67,8 @@ func NewHubMessenger(hub *WebHub) *HubMessenger {
 	return &HubMessenger{hub: hub}
 }
 
-// StartStream returns threadTS as streamTS so all downstream AppendStream/StopStream
-// calls route to the same hub channel regardless of which internal stream they belong to.
+// StartStream returns threadTS as streamTS so all downstream AppendStream calls
+// route to the same hub channel regardless of which internal stream they belong to.
 func (m *HubMessenger) StartStream(_ context.Context, _, threadTS, _ string) (string, error) {
 	return threadTS, nil
 }
@@ -79,7 +79,6 @@ func (m *HubMessenger) AppendStream(_ context.Context, _, ts string, chunks []ma
 }
 
 func (m *HubMessenger) StopStream(_ context.Context, _, ts string) error {
-	m.hub.send(ts, hubEvent{Kind: kindDone})
 	return nil
 }
 
