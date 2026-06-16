@@ -219,6 +219,9 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			ctx: ctx, messenger: s.Messenger,
 			channel: req.Channel, threadTS: req.ThreadTS,
 			userID: req.UserID,
+			beforeStart: func() {
+				_ = s.Messenger.StopStream(context.Background(), req.Channel, streamTS)
+			},
 		}
 		runner.OnToken = answerStream.Write
 	}
@@ -726,21 +729,22 @@ func (f *streamFlusher) Err() error {
 
 // dmStreamWriter lazily opens a new stream message for the final answer.
 type dmStreamWriter struct {
-	ctx       context.Context
-	messenger Messenger
-	channel   string
-	threadTS  string
-	userID    string
-	streamTS  string
-	mu        sync.Mutex
-	flushMu   sync.Mutex
-	buf       strings.Builder
-	lastFlush time.Time
-	err       error
-	started   bool
-	wake      chan struct{}
-	done      chan struct{}
-	closed    bool
+	ctx         context.Context
+	messenger   Messenger
+	channel     string
+	threadTS    string
+	userID      string
+	beforeStart func()
+	streamTS    string
+	mu          sync.Mutex
+	flushMu     sync.Mutex
+	buf         strings.Builder
+	lastFlush   time.Time
+	err         error
+	started     bool
+	wake        chan struct{}
+	done        chan struct{}
+	closed      bool
 }
 
 var (
@@ -762,14 +766,6 @@ func (w *dmStreamWriter) Write(delta string) {
 		return
 	}
 	if !w.started {
-		ts, err := w.messenger.StartStream(w.ctx, w.channel, w.threadTS, w.userID)
-		if err != nil {
-			log.Printf("answer stream start failed: %v", err)
-			w.err = err
-			w.mu.Unlock()
-			return
-		}
-		w.streamTS = ts
 		w.wake = make(chan struct{}, 1)
 		w.done = make(chan struct{})
 		w.started = true
@@ -818,6 +814,25 @@ func (w *dmStreamWriter) TS() string {
 }
 
 func (w *dmStreamWriter) run() {
+	if w.beforeStart != nil {
+		w.beforeStart()
+	}
+	ts, err := w.messenger.StartStream(w.ctx, w.channel, w.threadTS, w.userID)
+	if err != nil {
+		log.Printf("answer stream start failed: %v", err)
+		w.mu.Lock()
+		if w.err == nil {
+			w.err = err
+		}
+		w.mu.Unlock()
+		close(w.done)
+		return
+	}
+	w.mu.Lock()
+	w.streamTS = ts
+	w.mu.Unlock()
+	w.flushBuffered()
+
 	interval, _ := streamFlushConfig(w.channel)
 	if interval <= 0 {
 		interval = 10 * time.Millisecond
