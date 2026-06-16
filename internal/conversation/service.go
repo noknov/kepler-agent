@@ -354,10 +354,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		appendProgress([]map[string]any{
 			{"type": "task_update", "id": taskID, "title": agent.CompleteTitle(locale), "status": "complete"},
 		})
-		if useStream && answerStream != nil && !answerStream.Failed() {
-			if answerStream.streamTS == "" {
-				answerStream.Replay(finalText)
-			}
+		if useStream && answerStream != nil && result.Streamed && !answerStream.Failed() {
 			answerStream.Flush()
 			if answerStream.streamTS != "" && !answerStream.Failed() {
 				_ = s.Messenger.StopStream(ctx, req.Channel, answerStream.streamTS)
@@ -366,7 +363,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 				runObserver.LinkSlackMessage(req.Channel, answerStream.streamTS)
 			}
 		}
-		if !useStream || answerStream == nil || answerStream.Failed() {
+		if !useStream || answerStream == nil || !result.Streamed || answerStream.Failed() {
 			if s.Format != nil {
 				finalText = s.Format(finalText)
 			}
@@ -695,7 +692,7 @@ func (f *streamFlusher) Write(delta string) {
 		}
 	}
 	f.buf.WriteString(delta)
-	if shouldFlushStream(f.lastFlush, f.buf.Len()) {
+	if shouldFlushStream(f.channel, f.lastFlush, f.buf.Len()) {
 		f.Flush()
 	}
 }
@@ -740,10 +737,12 @@ type dmStreamWriter struct {
 }
 
 var (
-	streamFlushInterval    = envDuration("STREAM_FLUSH_INTERVAL", 35*time.Millisecond)
-	streamFlushChars       = envInt("STREAM_FLUSH_CHARS", 32)
-	answerReplayChunkChars = envInt("ANSWER_REPLAY_CHUNK_CHARS", 64)
-	answerReplayInterval   = envDuration("ANSWER_REPLAY_INTERVAL", 75*time.Millisecond)
+	streamFlushInterval      = envDuration("STREAM_FLUSH_INTERVAL", 35*time.Millisecond)
+	streamFlushChars         = envInt("STREAM_FLUSH_CHARS", 32)
+	webStreamFlushInterval   = envDuration("WEB_STREAM_FLUSH_INTERVAL", 8*time.Millisecond)
+	webStreamFlushChars      = envInt("WEB_STREAM_FLUSH_CHARS", 8)
+	slackStreamFlushInterval = envDuration("SLACK_STREAM_FLUSH_INTERVAL", streamFlushInterval)
+	slackStreamFlushChars    = envInt("SLACK_STREAM_FLUSH_CHARS", streamFlushChars)
 )
 
 func (w *dmStreamWriter) Write(delta string) {
@@ -760,25 +759,8 @@ func (w *dmStreamWriter) Write(delta string) {
 		w.streamTS = ts
 	}
 	w.buf.WriteString(delta)
-	if shouldFlushStream(w.lastFlush, w.buf.Len()) {
+	if shouldFlushStream(w.channel, w.lastFlush, w.buf.Len()) {
 		w.Flush()
-	}
-}
-
-func (w *dmStreamWriter) Replay(text string) {
-	for _, chunk := range splitRunes(text, answerReplayChunkChars) {
-		if w.err != nil {
-			return
-		}
-		w.Write(chunk)
-		w.Flush()
-		if w.err != nil {
-			return
-		}
-		if err := sleepStreamReplay(w.ctx); err != nil {
-			w.err = err
-			return
-		}
 	}
 }
 
@@ -801,42 +783,16 @@ func (w *dmStreamWriter) Failed() bool {
 	return w != nil && w.err != nil
 }
 
-func splitRunes(text string, size int) []string {
-	if text == "" {
-		return nil
-	}
-	if size <= 0 {
-		return []string{text}
-	}
-	runes := []rune(text)
-	out := make([]string, 0, (len(runes)+size-1)/size)
-	for len(runes) > 0 {
-		n := size
-		if len(runes) < n {
-			n = len(runes)
-		}
-		out = append(out, string(runes[:n]))
-		runes = runes[n:]
-	}
-	return out
+func shouldFlushStream(channel string, lastFlush time.Time, bufLen int) bool {
+	interval, chars := streamFlushConfig(channel)
+	return interval <= 0 || chars <= 0 || time.Since(lastFlush) > interval || bufLen >= chars
 }
 
-func sleepStreamReplay(ctx context.Context) error {
-	if answerReplayInterval <= 0 {
-		return nil
+func streamFlushConfig(channel string) (time.Duration, int) {
+	if strings.HasPrefix(channel, "web:") {
+		return webStreamFlushInterval, webStreamFlushChars
 	}
-	timer := time.NewTimer(answerReplayInterval)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
-
-func shouldFlushStream(lastFlush time.Time, bufLen int) bool {
-	return streamFlushInterval <= 0 || streamFlushChars <= 0 || time.Since(lastFlush) > streamFlushInterval || bufLen >= streamFlushChars
+	return slackStreamFlushInterval, slackStreamFlushChars
 }
 
 func envInt(key string, fallback int) int {

@@ -44,6 +44,7 @@ type agentRuntime struct {
 
 func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *observability.Recorder) agentRuntime {
 	llmClient := newLLMClient(cfg)
+	llmCapabilities := llm.CapabilitiesFor(cfg.LLM.Provider, cfg.LLM.Protocol)
 	workspacePolicy := safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}
 	commandPolicy := safety.NewCommandPolicy()
 	redactor := safety.Redactor{WorkspaceRoots: cfg.Security.WorkspaceRoots}
@@ -78,16 +79,17 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *obs
 
 	return agentRuntime{
 		Runner: agent.Runner{
-			LLM:       llmClient,
-			Model:     cfg.LLM.Model,
-			Thinking:  cfg.LLM.Thinking,
-			MaxTokens: cfg.LLM.MaxTokens,
-			Temp:      cfg.LLM.Temperature,
-			Tools:     tools,
-			Format:    mem,
-			Sanitize:  redactor,
-			Observer:  recorder,
-			MaxSteps:  cfg.Tools.AgentMaxSteps,
+			LLM:          llmClient,
+			Model:        cfg.LLM.Model,
+			Thinking:     cfg.LLM.Thinking,
+			MaxTokens:    cfg.LLM.MaxTokens,
+			Temp:         cfg.LLM.Temperature,
+			Tools:        tools,
+			Capabilities: llmCapabilities,
+			Format:       mem,
+			Sanitize:     redactor,
+			Observer:     recorder,
+			MaxSteps:     cfg.Tools.AgentMaxSteps,
 		},
 		Memory:     mem,
 		Prompt:     promptPolicy,
