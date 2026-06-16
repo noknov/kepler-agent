@@ -59,6 +59,7 @@ type Runner struct {
 	StatusUpdate    StatusUpdater
 	OnToken         llm.StreamCallback
 	OnNarration     llm.StreamCallback
+	OnToolRound     func()
 }
 
 type Request struct {
@@ -187,28 +188,29 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			Thinking:    r.Thinking,
 		}
 
-		useStream := r.OnToken != nil
+		streamOut := r.streamCallback(toolSpecs)
+		useStream := streamOut != nil
 		llmStart := time.Now()
 		var resp llm.Response
 		var err error
 		streamedText := false
 		if useStream {
 			if sc, ok := r.LLM.(llm.StreamClient); ok {
-				onToken := func(delta string) {
+				onDelta := func(delta string) {
 					if delta != "" {
 						streamedText = true
 					}
-					r.OnToken(delta)
+					streamOut(delta)
 				}
 				if r.useStreamGuard() {
-					guard := &streamGuard{downstream: onToken}
+					guard := &streamGuard{downstream: onDelta}
 					resp, err = sc.ChatStream(ctx, llmReq, guard.Write)
 					guard.Flush()
 					if guard.suppressed || !resp.Streamed {
 						useStream = false
 					}
 				} else {
-					resp, err = sc.ChatStream(ctx, llmReq, onToken)
+					resp, err = sc.ChatStream(ctx, llmReq, onDelta)
 					if !resp.Streamed {
 						useStream = false
 					}
@@ -289,7 +291,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		// Stream any progress text the model emitted before tool calls to the
 		// user, then strip it from the conversation history to avoid polluting
 		// future turns or amplifying model loops.
-		if narration := strings.TrimSpace(assistantMsg.Content); !useStream && narration != "" && r.OnNarration != nil {
+		if narration := strings.TrimSpace(assistantMsg.Content); narration != "" && r.OnNarration != nil && !streamedText {
 			if !llm.LooksLikeTextualToolCall(narration) {
 				r.OnNarration(narration + "\n\n")
 			}
@@ -299,6 +301,9 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		generated = append(generated, assistantMsg)
 
 		toolResults := r.executeToolCalls(ctx, assistantMsg.ToolCalls, seenToolCalls, req)
+		if r.OnToolRound != nil && len(toolResults) > 0 {
+			r.OnToolRound()
+		}
 		for _, tr := range toolResults {
 			messages = append(messages, tr.message)
 			generated = append(generated, tr.message)
@@ -544,6 +549,13 @@ func (r Runner) sanitize(text string) string {
 		return text
 	}
 	return r.Sanitize.Sanitize(text)
+}
+
+func (r Runner) streamCallback(toolSpecs []llm.ToolSpec) llm.StreamCallback {
+	if len(toolSpecs) > 0 {
+		return r.OnNarration
+	}
+	return r.OnToken
 }
 
 func (r Runner) useStreamGuard() bool {
