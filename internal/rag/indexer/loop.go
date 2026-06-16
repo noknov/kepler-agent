@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os/exec"
 	"strings"
@@ -53,9 +54,15 @@ func (l *Loop) indexAll(ctx context.Context) {
 				continue
 			}
 
-			fetchOrigin(ctx, repo)
-
 			start := time.Now()
+			if err := fetchOrigin(ctx, repo); err != nil {
+				if l.Observer != nil {
+					l.Observer.RAGIndexError(repo, branch, time.Since(start), err)
+				}
+				log.Printf("rag/indexer: fetch %s: %v", repo, err)
+				continue
+			}
+
 			result, err := l.Indexer.IndexRepo(ctx, repo, branch)
 			if err != nil {
 				if l.Observer != nil {
@@ -103,10 +110,51 @@ func detectDefaultBranch(ctx context.Context, repo string) string {
 	return ""
 }
 
-func fetchOrigin(ctx context.Context, repo string) {
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	if _, err := gitRun(ctx, repo, "fetch", "--prune", "--no-write-fetch-head", "origin"); err != nil {
-		log.Printf("rag/indexer: fetch %s: %v", repo, err)
+func fetchOrigin(ctx context.Context, repo string) error {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(attempt) * time.Second):
+			}
+		}
+
+		attemptCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		_, err := gitRun(attemptCtx, repo, "fetch", "--prune", "--no-write-fetch-head", "origin")
+		cancel()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !isTransientGitFetchError(err) {
+			break
+		}
 	}
+	return fmt.Errorf("fetch origin: %w", lastErr)
+}
+
+func isTransientGitFetchError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"early eof",
+		"connection reset",
+		"connection timed out",
+		"timeout",
+		"tls handshake timeout",
+		"unexpected disconnect",
+		"the remote end hung up unexpectedly",
+		"could not read from remote repository",
+		"ssh_exchange_identification",
+		"connection refused",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }

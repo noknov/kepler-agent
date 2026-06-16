@@ -2,12 +2,14 @@ package indexer
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/wati/oncall-agent/internal/rag/chunk"
 	"github.com/wati/oncall-agent/internal/rag/store"
@@ -206,6 +208,57 @@ func TestIndexRepoSplitsOversizedChunks(t *testing.T) {
 	}
 }
 
+func TestLoopSkipsIndexWhenFetchFails(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "init", "-b", "main")
+	writeFile(t, repo, "README.md", "# test\n")
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "init")
+	runGit(t, repo, "remote", "add", "origin", filepath.Join(root, "missing-remote.git"))
+
+	st := &memoryStore{files: map[string][]store.ChunkRecord{}}
+	obs := &recordingObserver{}
+	loop := &Loop{
+		Indexer: &Indexer{
+			Store:     st,
+			Embedder:  &recordingEmbedder{},
+			Chunker:   chunk.NewDispatcher(),
+			BatchSize: 64,
+		},
+		Roots:    []string{root},
+		Observer: obs,
+	}
+
+	loop.indexAll(ctx)
+
+	if obs.successes != 0 {
+		t.Fatalf("successes = %d, want 0", obs.successes)
+	}
+	if obs.errors != 1 {
+		t.Fatalf("errors = %d, want 1", obs.errors)
+	}
+	if st.state.LastCommit != "" {
+		t.Fatalf("LastCommit = %q, want empty because indexing should be skipped", st.state.LastCommit)
+	}
+}
+
+func TestIsTransientGitFetchError(t *testing.T) {
+	if !isTransientGitFetchError(errors.New("git fetch --prune --no-write-fetch-head origin: fatal: early EOF")) {
+		t.Fatal("early EOF should be treated as transient")
+	}
+	if !isTransientGitFetchError(errors.New("fatal: the remote end hung up unexpectedly")) {
+		t.Fatal("remote disconnect should be treated as transient")
+	}
+	if isTransientGitFetchError(errors.New("fatal: Authentication failed for origin")) {
+		t.Fatal("authentication failures should not be treated as transient")
+	}
+}
+
 func runGit(t *testing.T, repo string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
@@ -298,4 +351,17 @@ func (e *recordingEmbedder) EmbedBatched(_ context.Context, texts []string, _ in
 		out[i] = []float32{9, 9, 9}
 	}
 	return out, nil
+}
+
+type recordingObserver struct {
+	successes int
+	errors    int
+}
+
+func (o *recordingObserver) RAGIndexSuccess(string, string, string, int, int, int, int, int, time.Duration) {
+	o.successes++
+}
+
+func (o *recordingObserver) RAGIndexError(string, string, time.Duration, error) {
+	o.errors++
 }
