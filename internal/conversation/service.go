@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -693,7 +695,7 @@ func (f *streamFlusher) Write(delta string) {
 		}
 	}
 	f.buf.WriteString(delta)
-	if time.Since(f.lastFlush) > 80*time.Millisecond || f.buf.Len() > 80 {
+	if shouldFlushStream(f.lastFlush, f.buf.Len()) {
 		f.Flush()
 	}
 }
@@ -738,8 +740,10 @@ type dmStreamWriter struct {
 }
 
 var (
-	answerReplayChunkChars = 120
-	answerReplayInterval   = 180 * time.Millisecond
+	streamFlushInterval    = envDuration("STREAM_FLUSH_INTERVAL", 35*time.Millisecond)
+	streamFlushChars       = envInt("STREAM_FLUSH_CHARS", 32)
+	answerReplayChunkChars = envInt("ANSWER_REPLAY_CHUNK_CHARS", 64)
+	answerReplayInterval   = envDuration("ANSWER_REPLAY_INTERVAL", 75*time.Millisecond)
 )
 
 func (w *dmStreamWriter) Write(delta string) {
@@ -756,7 +760,7 @@ func (w *dmStreamWriter) Write(delta string) {
 		w.streamTS = ts
 	}
 	w.buf.WriteString(delta)
-	if time.Since(w.lastFlush) > 80*time.Millisecond || w.buf.Len() > 80 {
+	if shouldFlushStream(w.lastFlush, w.buf.Len()) {
 		w.Flush()
 	}
 }
@@ -829,6 +833,37 @@ func sleepStreamReplay(ctx context.Context) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+func shouldFlushStream(lastFlush time.Time, bufLen int) bool {
+	return streamFlushInterval <= 0 || streamFlushChars <= 0 || time.Since(lastFlush) > streamFlushInterval || bufLen >= streamFlushChars
+}
+
+func envInt(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return v
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	if ms, err := strconv.Atoi(raw); err == nil {
+		return time.Duration(ms) * time.Millisecond
+	}
+	v, err := time.ParseDuration(raw)
+	if err != nil {
+		return fallback
+	}
+	return v
 }
 
 func stripImageParts(parts []llm.ContentPart, text, locale string) ([]llm.ContentPart, string) {
