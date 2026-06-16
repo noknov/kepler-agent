@@ -378,8 +378,9 @@ func (f *fakeClient) Chat(_ context.Context, req llm.Request) (llm.Response, err
 
 type fakeStreamClient struct {
 	fakeClient
-	streamCalls int
-	deltas      []string
+	streamCalls           int
+	deltas                []string
+	suppressContentDeltas bool
 }
 
 func (f *fakeStreamClient) ChatStream(ctx context.Context, req llm.Request, cb llm.StreamCallback) (llm.Response, error) {
@@ -392,7 +393,7 @@ func (f *fakeStreamClient) ChatStream(ctx context.Context, req llm.Request, cb l
 		for _, delta := range f.deltas {
 			cb(delta)
 		}
-	} else if cb != nil && resp.Message.Content != "" {
+	} else if cb != nil && resp.Message.Content != "" && !f.suppressContentDeltas {
 		cb(resp.Message.Content)
 	}
 	resp.Streamed = true
@@ -516,6 +517,48 @@ func TestRunnerUsesStreamGuardForUnknownCapabilities(t *testing.T) {
 	}
 	if result.Streamed {
 		t.Fatal("result should not be marked streamed when guard suppresses output")
+	}
+}
+
+func TestRunnerNarratesToolPreambleWhenStreamDoesNotEmitContent(t *testing.T) {
+	client := &fakeStreamClient{
+		fakeClient: fakeClient{responses: []llm.Response{
+			{Message: llm.Message{
+				Role:    "assistant",
+				Content: "让我看看相关代码。",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "tool_1",
+					Type: "function",
+					Function: llm.ToolFunction{
+						Name:      "echo",
+						Arguments: `{"text":"ok"}`,
+					},
+				}},
+			}},
+			{Message: llm.Message{Role: "assistant", Content: "done"}},
+		}},
+		suppressContentDeltas: true,
+	}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	var narrated strings.Builder
+	result, err := Runner{
+		LLM:          client,
+		Tools:        tools,
+		Capabilities: llm.Capabilities{NativeToolCalls: true},
+		MaxSteps:     3,
+		OnToken:      func(string) {},
+		OnNarration:  func(delta string) { narrated.WriteString(delta) },
+	}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "done" {
+		t.Fatalf("Final = %q, want done", result.Final)
+	}
+	if got := narrated.String(); got != "让我看看相关代码。\n\n" {
+		t.Fatalf("narration = %q, want preamble", got)
 	}
 }
 

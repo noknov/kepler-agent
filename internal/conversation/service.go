@@ -739,10 +739,10 @@ type dmStreamWriter struct {
 var (
 	streamFlushInterval      = envDuration("STREAM_FLUSH_INTERVAL", 35*time.Millisecond)
 	streamFlushChars         = envInt("STREAM_FLUSH_CHARS", 32)
-	webStreamFlushInterval   = envDuration("WEB_STREAM_FLUSH_INTERVAL", 8*time.Millisecond)
-	webStreamFlushChars      = envInt("WEB_STREAM_FLUSH_CHARS", 8)
-	slackStreamFlushInterval = envDuration("SLACK_STREAM_FLUSH_INTERVAL", streamFlushInterval)
-	slackStreamFlushChars    = envInt("SLACK_STREAM_FLUSH_CHARS", streamFlushChars)
+	webStreamFlushInterval   = envDuration("WEB_STREAM_FLUSH_INTERVAL", 16*time.Millisecond)
+	webStreamFlushChars      = envInt("WEB_STREAM_FLUSH_CHARS", 16)
+	slackStreamFlushInterval = envDuration("SLACK_STREAM_FLUSH_INTERVAL", 100*time.Millisecond)
+	slackStreamFlushChars    = envInt("SLACK_STREAM_FLUSH_CHARS", 96)
 )
 
 func (w *dmStreamWriter) Write(delta string) {
