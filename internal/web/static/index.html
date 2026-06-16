@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>斗包 · Oncall Agent</title>
+<title>斗包</title>
 <script src="https://cdn.jsdelivr.net/npm/marked@13/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/core.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/languages/go.min.js"></script>
@@ -283,7 +283,12 @@ header {
 /* Message rows */
 .msg-row { display: flex; padding: 4px 0; }
 .msg-row.user { justify-content: flex-end; }
-.msg-row.assistant { justify-content: flex-start; }
+.msg-row.assistant {
+  justify-content: flex-start;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
 
 .msg-bubble {
   max-width: 82%;
@@ -569,7 +574,7 @@ marked.setOptions({
 });
 
 let convId = null, streaming = false;
-let currentAssistantEl = null, currentStatusEl = null, accumulatedText = '';
+let currentAssistantRow = null, currentAssistantEl = null, currentStatusEl = null, accumulatedText = '';
 
 // ── Boot ──────────────────────────────────────────
 async function boot() {
@@ -654,7 +659,7 @@ document.getElementById('back-btn').addEventListener('click', () => {
 // ── New chat ──────────────────────────────────────
 document.getElementById('new-chat-btn').addEventListener('click', () => {
   if (streaming) return;
-  convId = null; accumulatedText = ''; currentAssistantEl = null; currentStatusEl = null;
+  convId = null; accumulatedText = ''; currentAssistantRow = null; currentAssistantEl = null; currentStatusEl = null;
   const inner = document.getElementById('messages-inner');
   inner.innerHTML = '';
   inner.appendChild(buildEmptyState());
@@ -693,23 +698,34 @@ function appendUserMessage(text) {
   row.appendChild(bubble); inner.appendChild(row); scrollToBottom();
 }
 
-function createAssistantRow() {
+function ensureAssistantRow() {
   removeEmptyState();
+  if (currentAssistantRow) return currentAssistantRow;
   const inner = document.getElementById('messages-inner');
   const row = document.createElement('div'); row.className = 'msg-row assistant';
+  inner.appendChild(row);
+  currentAssistantRow = row;
+  return row;
+}
+
+function createAssistantRow() {
+  const row = ensureAssistantRow();
+  if (currentAssistantEl) return currentAssistantEl;
   const bubble = document.createElement('div'); bubble.className = 'msg-bubble cursor';
-  row.appendChild(bubble); inner.appendChild(row);
+  row.appendChild(bubble);
   currentAssistantEl = bubble; accumulatedText = '';
   scrollToBottom(); return bubble;
 }
 
 function setStatus(title, inProgress) {
+  const row = ensureAssistantRow();
   if (!currentStatusEl) {
-    const inner = document.getElementById('messages-inner');
-    const row = document.createElement('div'); row.className = 'msg-row assistant';
     const pill = document.createElement('div'); pill.className = 'status-pill';
-    row.appendChild(pill); inner.appendChild(row); currentStatusEl = pill;
+    row.insertBefore(pill, currentAssistantEl || null);
+    currentStatusEl = pill;
   }
+  currentStatusEl.style.display = '';
+  currentStatusEl.style.opacity = '1';
   if (inProgress) {
     currentStatusEl.innerHTML = `<span class="spinner"></span><span>${escapeHtml(title)}</span>`;
   } else {
@@ -733,7 +749,7 @@ function finalizeAssistant() {
     currentAssistantEl.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
     currentAssistantEl = null;
   }
-  currentStatusEl = null; accumulatedText = '';
+  currentAssistantRow = null; currentStatusEl = null; accumulatedText = '';
 }
 
 function appendPlainMessage(text) {
@@ -799,7 +815,6 @@ function handleChunk(chunk) {
   if (chunk.type === 'task_update') {
     setStatus(chunk.title || '', chunk.status === 'in_progress');
   } else if (chunk.type === 'markdown_text') {
-    if (currentStatusEl && !currentAssistantEl) { currentStatusEl.style.display = 'none'; currentStatusEl = null; }
     if (chunk.text) appendToken(chunk.text);
   }
 }

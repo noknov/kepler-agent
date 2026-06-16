@@ -76,13 +76,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	agentCtx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
 
-	go s.conv.HandleMention(agentCtx, conversation.Request{
-		EventID:  newID(),
-		UserID:   user.ID,
-		Channel:  "web:" + user.ID,
-		ThreadTS: convID,
-		Text:     body.Text,
-	})
+	go func() {
+		s.conv.HandleMention(agentCtx, conversation.Request{
+			EventID:  newID(),
+			UserID:   user.ID,
+			Channel:  "web:" + user.ID,
+			ThreadTS: convID,
+			Text:     body.Text,
+		})
+		s.hub.send(convID, hubEvent{Kind: kindDone})
+	}()
 
 	for {
 		select {

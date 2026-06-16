@@ -537,7 +537,7 @@ type streamGuard struct {
 	suppressed bool
 }
 
-const streamGuardThreshold = 120
+const streamGuardThreshold = 24
 
 func (g *streamGuard) Write(delta string) {
 	if g.suppressed {
