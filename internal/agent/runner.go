@@ -191,17 +191,24 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		llmStart := time.Now()
 		var resp llm.Response
 		var err error
+		streamedText := false
 		if useStream {
 			if sc, ok := r.LLM.(llm.StreamClient); ok {
+				onToken := func(delta string) {
+					if delta != "" {
+						streamedText = true
+					}
+					r.OnToken(delta)
+				}
 				if r.useStreamGuard() {
-					guard := &streamGuard{downstream: r.OnToken}
+					guard := &streamGuard{downstream: onToken}
 					resp, err = sc.ChatStream(ctx, llmReq, guard.Write)
 					guard.Flush()
 					if guard.suppressed || !resp.Streamed {
 						useStream = false
 					}
 				} else {
-					resp, err = sc.ChatStream(ctx, llmReq, r.OnToken)
+					resp, err = sc.ChatStream(ctx, llmReq, onToken)
 					if !resp.Streamed {
 						useStream = false
 					}
@@ -229,6 +236,9 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		}
 
 		assistantMsg := resp.Message
+		if useStream && !streamedText && strings.TrimSpace(assistantMsg.Content) != "" {
+			useStream = false
+		}
 		if len(assistantMsg.ToolCalls) == 0 {
 			if !useStream && r.StatusUpdate != nil {
 				r.StatusUpdate(GeneratingStatus(req.Locale))
