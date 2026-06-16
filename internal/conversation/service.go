@@ -692,7 +692,7 @@ func (f *streamFlusher) Write(delta string) {
 		}
 	}
 	f.buf.WriteString(delta)
-	if shouldFlushStream(f.lastFlush, f.buf.Len()) {
+	if shouldFlushStream(f.channel, f.lastFlush, f.buf.Len()) {
 		f.Flush()
 	}
 }
@@ -737,8 +737,12 @@ type dmStreamWriter struct {
 }
 
 var (
-	streamFlushInterval = envDuration("STREAM_FLUSH_INTERVAL", 35*time.Millisecond)
-	streamFlushChars    = envInt("STREAM_FLUSH_CHARS", 32)
+	streamFlushInterval      = envDuration("STREAM_FLUSH_INTERVAL", 35*time.Millisecond)
+	streamFlushChars         = envInt("STREAM_FLUSH_CHARS", 32)
+	webStreamFlushInterval   = envDuration("WEB_STREAM_FLUSH_INTERVAL", 8*time.Millisecond)
+	webStreamFlushChars      = envInt("WEB_STREAM_FLUSH_CHARS", 8)
+	slackStreamFlushInterval = envDuration("SLACK_STREAM_FLUSH_INTERVAL", streamFlushInterval)
+	slackStreamFlushChars    = envInt("SLACK_STREAM_FLUSH_CHARS", streamFlushChars)
 )
 
 func (w *dmStreamWriter) Write(delta string) {
@@ -755,7 +759,7 @@ func (w *dmStreamWriter) Write(delta string) {
 		w.streamTS = ts
 	}
 	w.buf.WriteString(delta)
-	if shouldFlushStream(w.lastFlush, w.buf.Len()) {
+	if shouldFlushStream(w.channel, w.lastFlush, w.buf.Len()) {
 		w.Flush()
 	}
 }
@@ -779,8 +783,16 @@ func (w *dmStreamWriter) Failed() bool {
 	return w != nil && w.err != nil
 }
 
-func shouldFlushStream(lastFlush time.Time, bufLen int) bool {
-	return streamFlushInterval <= 0 || streamFlushChars <= 0 || time.Since(lastFlush) > streamFlushInterval || bufLen >= streamFlushChars
+func shouldFlushStream(channel string, lastFlush time.Time, bufLen int) bool {
+	interval, chars := streamFlushConfig(channel)
+	return interval <= 0 || chars <= 0 || time.Since(lastFlush) > interval || bufLen >= chars
+}
+
+func streamFlushConfig(channel string) (time.Duration, int) {
+	if strings.HasPrefix(channel, "web:") {
+		return webStreamFlushInterval, webStreamFlushChars
+	}
+	return slackStreamFlushInterval, slackStreamFlushChars
 }
 
 func envInt(key string, fallback int) int {

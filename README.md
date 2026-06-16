@@ -95,8 +95,12 @@ Final answer streaming is flushed in small batches to keep the UI responsive wit
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `STREAM_FLUSH_INTERVAL` | `35ms` | Maximum time to buffer generated text before appending a stream chunk. |
-| `STREAM_FLUSH_CHARS` | `32` | Maximum buffered characters before appending a stream chunk. |
+| `WEB_STREAM_FLUSH_INTERVAL` | `8ms` | Maximum time to buffer generated text before appending a web SSE stream chunk. |
+| `WEB_STREAM_FLUSH_CHARS` | `8` | Maximum buffered characters before appending a web SSE stream chunk. |
+| `SLACK_STREAM_FLUSH_INTERVAL` | `35ms` | Maximum time to buffer generated text before calling Slack `chat.appendStream`. |
+| `SLACK_STREAM_FLUSH_CHARS` | `32` | Maximum buffered characters before calling Slack `chat.appendStream`. |
+| `STREAM_FLUSH_INTERVAL` | `35ms` | Shared fallback used when the Slack-specific interval is not set. |
+| `STREAM_FLUSH_CHARS` | `32` | Shared fallback used when the Slack-specific character threshold is not set. |
 
 ### 🖼️ Multimodal and model switching
 
