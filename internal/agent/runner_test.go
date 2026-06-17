@@ -383,19 +383,27 @@ type fakeStreamClient struct {
 	suppressContentDeltas bool
 }
 
-func (f *fakeStreamClient) ChatStream(ctx context.Context, req llm.Request, cb llm.StreamCallback) (llm.Response, error) {
+func (f *fakeStreamClient) ChatStream(ctx context.Context, req llm.Request, h llm.StreamHandler) (llm.Response, error) {
 	f.streamCalls++
 	resp, err := f.Chat(ctx, req)
 	if err != nil {
 		return resp, err
 	}
-	if cb != nil && len(f.deltas) > 0 {
+	emitText := func(delta string) {
+		if h.OnText != nil {
+			h.OnText(delta)
+		}
+	}
+	if len(f.deltas) > 0 {
 		for _, delta := range f.deltas {
-			cb(delta)
+			emitText(delta)
 		}
 		f.deltas = nil
-	} else if cb != nil && resp.Message.Content != "" && !f.suppressContentDeltas {
-		cb(resp.Message.Content)
+	} else if resp.Message.Content != "" && !f.suppressContentDeltas {
+		emitText(resp.Message.Content)
+	}
+	if len(resp.Message.ToolCalls) > 0 && h.OnToolCallsStarted != nil {
+		h.OnToolCallsStarted()
 	}
 	resp.Streamed = true
 	return resp, nil
@@ -520,6 +528,86 @@ func TestRunnerUsesStreamGuardForUnknownCapabilities(t *testing.T) {
 	}
 	if result.Streamed {
 		t.Fatal("result should not be marked streamed when guard suppresses output")
+	}
+}
+
+func TestRunnerRoutesPostToolToolRoundToOnNarration(t *testing.T) {
+	client := &fakeStreamClient{
+		fakeClient: fakeClient{responses: []llm.Response{
+			{Message: toolCallMessage("tool_1", `{"text":"ok"}`)},
+			{Message: llm.Message{
+				Role:    "assistant",
+				Content: "让我看看仓库里现有的写法...",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "tool_2",
+					Type: "function",
+					Function: llm.ToolFunction{
+						Name:      "echo",
+						Arguments: `{"text":"ok2"}`,
+					},
+				}},
+			}},
+			{Message: llm.Message{Role: "assistant", Content: "done"}},
+		}},
+		deltas: []string{"让我先看看这个 PR 的内容..."},
+	}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	var narrated, answered strings.Builder
+	_, err := Runner{
+		LLM:          client,
+		Tools:        tools,
+		Capabilities: llm.Capabilities{NativeToolCalls: true},
+		MaxSteps:     12,
+		OnNarration:  func(delta string) { narrated.WriteString(delta) },
+		OnToken:      func(delta string) { answered.WriteString(delta) },
+	}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !strings.Contains(narrated.String(), "让我先看看这个 PR") {
+		t.Fatalf("narration = %q, want first round preamble", narrated.String())
+	}
+	if !strings.Contains(narrated.String(), "让我看看仓库里") {
+		t.Fatalf("narration = %q, want second round preamble", narrated.String())
+	}
+	if !strings.Contains(narrated.String(), "让我先看看这个 PR 的内容...\n\n让我看看仓库里") {
+		t.Fatalf("narration = %q, want paragraph break between tool rounds", narrated.String())
+	}
+	if got := answered.String(); got != "done" {
+		t.Fatalf("answer = %q, want final only on answer stream", got)
+	}
+}
+
+func TestRunnerRoutesPostToolFinalAnswerToOnTokenWithDefaultMaxSteps(t *testing.T) {
+	client := &fakeStreamClient{
+		fakeClient: fakeClient{responses: []llm.Response{
+			{Message: toolCallMessage("tool_1", `{"text":"ok"}`)},
+			{Message: llm.Message{Role: "assistant", Content: "final answer"}},
+		}},
+		deltas: []string{"preamble"},
+	}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	var narrated, answered strings.Builder
+	_, err := Runner{
+		LLM:          client,
+		Tools:        tools,
+		Capabilities: llm.Capabilities{NativeToolCalls: true},
+		MaxSteps:     12,
+		OnNarration:  func(delta string) { narrated.WriteString(delta) },
+		OnToken:      func(delta string) { answered.WriteString(delta) },
+	}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := narrated.String(); got != "preamble" {
+		t.Fatalf("narration = %q, want preamble", got)
+	}
+	if got := answered.String(); got != "final answer" {
+		t.Fatalf("answer = %q, want final answer", got)
 	}
 }
 
