@@ -191,7 +191,6 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}
 	var answerStream *dmStreamWriter
 	var progressMarkdown *streamMarkdownBuffer
-	var hadNarration bool
 	var progressAppendFailed bool
 	appendProgress := func(chunks []map[string]any) {
 		if !useStream || progressStopped {
@@ -230,21 +229,26 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if err == nil {
 			return nil
 		}
-		progressAppendFailed = true
 		if !strings.Contains(err.Error(), "not_in_streaming_state") {
+			progressAppendFailed = true
 			s.recordDeliveryError(req, progressTS, err)
 			return err
 		}
 		newTS, startErr := s.Messenger.StartStream(ctx, req.Channel, req.ThreadTS, req.UserID)
 		if startErr != nil {
+			progressAppendFailed = true
 			s.recordDeliveryError(req, progressTS, startErr)
 			return startErr
 		}
 		progressTS = newTS
 		streamTS = newTS
-		return s.Messenger.AppendStream(ctx, req.Channel, progressTS, []map[string]any{
+		if err := s.Messenger.AppendStream(ctx, req.Channel, progressTS, []map[string]any{
 			{"type": "markdown_text", "text": text},
-		})
+		}); err != nil {
+			progressAppendFailed = true
+			return err
+		}
+		return nil
 	}
 	if useStream {
 		progressMarkdown = &streamMarkdownBuffer{
@@ -288,16 +292,13 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}
 	active.setProgress(locale, appendProgress)
 	if useStream {
-		runner.OnNarration = func(delta string) {
-			hadNarration = true
-			progressMarkdown.Write(delta)
-		}
-		runner.OnToken = func(delta string) {
-			if hadNarration {
-				startAnswerStream().Write(delta)
-				return
+		runner.OnStream = func(ev agent.StreamEvent) {
+			switch ev.Kind {
+			case agent.StreamNarration:
+				progressMarkdown.Write(ev.Delta)
+			case agent.StreamAnswer:
+				startAnswerStream().Write(ev.Delta)
 			}
-			progressMarkdown.Write(delta)
 		}
 	}
 	runner.StatusUpdate = func(status string) {
@@ -431,16 +432,13 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 				{"type": "task_update", "id": taskID, "title": agent.CompleteTitle(locale), "status": "complete"},
 			})
 		}
-		if result.Streamed && answerStream != nil && !answerStream.Failed() {
-			answerStreamTS := answerStream.TS()
-			if answerStreamTS != "" {
-				_ = s.Messenger.StopStream(ctx, req.Channel, answerStreamTS)
+		answerStreamOK := result.Streamed && answerStream != nil && !answerStream.Failed() && answerStream.TS() != ""
+		if answerStreamOK {
+			_ = s.Messenger.StopStream(ctx, req.Channel, answerStream.TS())
+			if runObserver != nil {
+				runObserver.LinkSlackMessage(req.Channel, answerStream.TS())
 			}
-			if runObserver != nil && answerStreamTS != "" {
-				runObserver.LinkSlackMessage(req.Channel, answerStreamTS)
-			}
-		}
-		if !result.Streamed || progressAppendFailed || (answerStream != nil && answerStream.Failed()) {
+		} else {
 			if s.Format != nil {
 				finalText = s.Format(finalText)
 			}

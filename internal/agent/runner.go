@@ -57,8 +57,7 @@ type Runner struct {
 	MaxSteps        int
 	MaxContextChars int
 	StatusUpdate StatusUpdater
-	OnToken      llm.StreamCallback
-	OnNarration  llm.StreamCallback
+	OnStream     func(StreamEvent)
 }
 
 type Request struct {
@@ -188,26 +187,23 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			Thinking:    r.Thinking,
 		}
 
-		useStream := r.OnToken != nil || r.OnNarration != nil
+		useStream := r.OnStream != nil
 		llmStart := time.Now()
 		var resp llm.Response
 		var err error
 		streamedText := false
 		var router *streamRouter
-		if useStream && len(toolSpecs) > 0 && afterTools {
-			router = &streamRouter{narration: r.OnNarration, answer: r.OnToken, afterTools: true}
+		if useStream && len(toolSpecs) > 0 {
+			router = &streamRouter{emit: r.OnStream, afterTools: afterTools}
 		}
 		streamText := func(delta string) {
 			if delta != "" {
 				streamedText = true
 			}
-			switch {
-			case router != nil:
+			if router != nil {
 				router.text(delta)
-			case len(toolSpecs) > 0 && r.OnNarration != nil:
-				r.OnNarration(delta)
-			case r.OnToken != nil:
-				r.OnToken(delta)
+			} else {
+				r.OnStream(StreamEvent{Kind: StreamAnswer, Delta: delta})
 			}
 		}
 		streamHandler := llm.StreamHandler{
@@ -259,7 +255,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		}
 
 		assistantMsg := resp.Message
-		if router != nil && streamedText {
+		if router != nil {
 			router.finish(len(assistantMsg.ToolCalls) > 0)
 		}
 		if useStream && !streamedText && strings.TrimSpace(assistantMsg.Content) != "" {
@@ -312,15 +308,13 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			return Result{Generated: generated, Final: final, Streamed: useStream}, nil
 		}
 
-		// Stream any progress text the model emitted before tool calls to the
-		// user, then strip it from the conversation history to avoid polluting
-		// future turns or amplifying model loops.
-		if narration := strings.TrimSpace(assistantMsg.Content); narration != "" && r.OnNarration != nil && !streamedText {
+		// Emit non-streamed narration as a batch event so the UI still shows it.
+		if narration := strings.TrimSpace(assistantMsg.Content); narration != "" && r.OnStream != nil && !streamedText {
 			if !llm.LooksLikeTextualToolCall(narration) {
 				if afterTools {
 					narration = "\n\n" + narration
 				}
-				r.OnNarration(narration)
+				r.OnStream(StreamEvent{Kind: StreamNarration, Delta: narration})
 			}
 		}
 		assistantMsg.Content = ""
@@ -579,10 +573,11 @@ func (r Runner) sanitize(text string) string {
 }
 
 // streamRouter buffers ambiguous post-tool text until tool calls start or the
-// turn ends, then routes live narration or final answer tokens.
+// turn ends, then emits typed StreamEvents. Only used when afterTools is true
+// (i.e. the second+ LLM round with tools available) where we cannot know
+// upfront whether text is narration or a final answer.
 type streamRouter struct {
-	narration  llm.StreamCallback
-	answer     llm.StreamCallback
+	emit       func(StreamEvent)
 	afterTools bool
 	buf        strings.Builder
 	toolTurn   bool
@@ -593,9 +588,7 @@ func (sr *streamRouter) text(delta string) {
 		return
 	}
 	if sr.toolTurn {
-		if sr.narration != nil {
-			sr.narration(delta)
-		}
+		sr.emit(StreamEvent{Kind: StreamNarration, Delta: delta})
 		return
 	}
 	sr.buf.WriteString(delta)
@@ -606,26 +599,25 @@ func (sr *streamRouter) toolCallsStarted() {
 		return
 	}
 	sr.toolTurn = true
-	sr.flushNarration()
+	sr.flushAs(StreamNarration)
 }
 
 func (sr *streamRouter) finish(hasToolCalls bool) {
 	if sr.toolTurn || hasToolCalls {
 		if !sr.toolTurn {
-			sr.flushNarration()
+			sr.flushAs(StreamNarration)
 		}
 		return
 	}
-	if sr.buf.Len() == 0 || sr.answer == nil {
+	if sr.buf.Len() == 0 {
 		return
 	}
-	sr.answer(sr.buf.String())
+	sr.emit(StreamEvent{Kind: StreamAnswer, Delta: sr.buf.String()})
 	sr.buf.Reset()
 }
 
-func (sr *streamRouter) flushNarration() {
-	if sr.buf.Len() == 0 || sr.narration == nil {
-		sr.buf.Reset()
+func (sr *streamRouter) flushAs(kind StreamKind) {
+	if sr.buf.Len() == 0 {
 		return
 	}
 	text := strings.TrimSpace(sr.buf.String())
@@ -636,7 +628,7 @@ func (sr *streamRouter) flushNarration() {
 	if sr.afterTools {
 		text = "\n\n" + text
 	}
-	sr.narration(text)
+	sr.emit(StreamEvent{Kind: kind, Delta: text})
 }
 
 func (r Runner) useStreamGuard() bool {
