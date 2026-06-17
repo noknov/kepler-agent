@@ -1,8 +1,7 @@
 {
-  "repetitive_retry": "Your previous answer became repetitive. Give one concise final answer only. Do not repeat sentences. Do not narrate further investigation. If evidence is insufficient, say the next check in one short paragraph.",
+  "repetitive_retry": "Your previous answer became repetitive. Give one concise final answer only. Do not repeat sentences or narrate further investigation. If evidence is insufficient, state the next check in one short paragraph.",
   "textual_tool_call_retry": "Your previous reply included textual tool-call markup instead of using the API's structured tool calling. Do not output tool XML or pseudo tool syntax. Either call tools through the provided tool interface, or give a concise final answer in plain language using evidence already gathered.",
   "empty_response_retry": "Your previous response contained no user-visible text and no structured tool calls. Continue from the current conversation and either call an available tool through the structured tool interface or give a concise final answer in plain text.",
   "budget_warning": "You have %d tool-using turn(s) remaining before you must give your final answer. Stop exploring. Synthesize your findings now using evidence already gathered. Do not start new searches or delegate-run calls unless absolutely critical.",
-  "code_claim_retry": "Your previous answer quoted or described code that is not present in tool evidence from this run. Revise: remove unverified code blocks, or call git-search_ref / git-read_file_ref (or code-search / code-read_file) first, then answer using only verified evidence. If unverified, say inference explicitly."
+  "code_claim_retry": "Your previous answer quoted or described code that is not present in tool evidence from this run. Revise: remove unverified code blocks, or search and read the code first, then answer using only verified evidence. If unverified, say so explicitly."
 }
-

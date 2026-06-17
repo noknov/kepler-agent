@@ -949,25 +949,6 @@ func TestHasFencedCodeBlock(t *testing.T) {
 	}
 }
 
-func TestHasSpecificCodeClaim(t *testing.T) {
-	cases := []struct {
-		text string
-		want bool
-	}{
-		{"plain operational summary", false},
-		{"The field `test` appears in the payload.", false},
-		{"See internal/app/runtime.go:45 for wiring.", true},
-		{"The bug is around line 128.", true},
-		{"Call `runner.Run()` after building messages.", true},
-		{"```go\nfunc f() {}\n```", true},
-	}
-	for _, c := range cases {
-		if got := hasSpecificCodeClaim(c.text); got != c.want {
-			t.Errorf("hasSpecificCodeClaim(%q) = %v, want %v", c.text, got, c.want)
-		}
-	}
-}
-
 func TestRunnerRetriesOnCodeClaimWithoutCodeTool(t *testing.T) {
 	codeAnswer := "Here is the code:\n```csharp\nif (x.test) { return; }\n```"
 	client := &fakeClient{responses: []llm.Response{

@@ -8,7 +8,7 @@ A Slack-native intelligent assistant built in Go, powered by configurable LLM ba
 - 🔧 **Structured tool calls, not prompt parsing.** The model communicates with tools through the provider's native function-calling API (OpenAI-compatible or Anthropic-compatible), so arguments are typed and validated rather than parsed from free-form text.
 - 🔒 **Layered runtime safety.** Slack user/channel authorization, system prompt guardrails, post-response secret redaction, workspace path allowlists, command deny rules, and per-tool read-only vs. action boundaries are all code-enforced.
 - 📦 **Explicit context budgets.** Thread context, session history, and tool observations are bounded and compressed before reaching the model. Large Slack files stay searchable by file ID without flooding the context window.
-- 🗂️ **Layered prompt configuration.** Generic prompts live in the committed `prompts/` directory. Sensitive identity, company policy, workflow aliases, internal rules, private skills, and runbooks live in a local `PROMPT_DIR` overlay (defaults to `.prompts/`, gitignored). A non-hidden `prompts.private.example/` directory documents the private overlay shape with placeholders.
+- 🗂️ **Layered prompt configuration.** Generic prompts live in the committed `prompts/` directory. Only small sensitive deployment addenda, such as company-specific repository names, workflow aliases, and internal runbook references, belong in a local `PROMPT_DIR` overlay (defaults to `.prompts/`, gitignored).
 
 ## 📁 Project layout
 
@@ -28,9 +28,8 @@ internal/observability/    In-memory metrics, cost tracking, reaction-based qual
 internal/llm/              Anthropic and OpenAI-compatible LLM clients with streaming
 internal/rag/              Semantic code search: chunking, embedding, pgvector store, hybrid search
 internal/toolkit/tools/    All tool modules: code, git, github, gcp, notion, youtrack, slack, rag, web
-prompts/                   Committed generic prompt defaults and placeholders
-prompts.private.example/   Non-hidden private prompt overlay examples with placeholders
-PROMPT_DIR/                Private prompt overlay, defaults to .prompts/ and stays gitignored
+prompts/                   Committed generic prompt defaults
+PROMPT_DIR/                Optional private prompt addendum, defaults to .prompts/ and stays gitignored
 ```
 
 ## 🚀 Running locally
@@ -111,25 +110,23 @@ Final answer streaming is flushed in small batches to keep the UI responsive wit
 Prompt text is loaded in two layers:
 
 1. `prompts/` contains committed, generic defaults that are safe to maintain in git.
-2. `PROMPT_DIR` (defaults to `.prompts/`, gitignored) overrides those defaults for sensitive or deployment-specific content.
-3. `prompts.private.example/` is not loaded; it provides non-hidden placeholder examples for private files so new keys and structures are easy to copy without exposing real internal details.
+2. `PROMPT_DIR` (defaults to `.prompts/`, gitignored) adds only sensitive deployment-specific supplements.
 
-Put generic assistant behavior, retry prompts, memory labels, public tool descriptions, and reusable coding rules in `prompts/`. Put company identity, internal process, service runbooks, workflow aliases, repository-specific assumptions, and private skills in `PROMPT_DIR`.
+Put generic assistant behavior, retry prompts, memory labels, public tool descriptions, and reusable coding rules in `prompts/`. Put only narrow sensitive details in `PROMPT_DIR`, such as company-specific repository names, workflow aliases, private runbook references, or a short local identity addendum.
 
 Keep the main assistant behavior in git so remote branches and local deployments stay aligned. The private `PROMPT_DIR/agent.md` is appended as a small local addendum for sensitive deployment details; it should not carry a full fork of the main prompt.
 
-The preferred shape is intentionally small:
+The private overlay should stay intentionally small:
 
 | File | Purpose |
 |---|---|
-| `agent.md` | Main system prompt in `prompts/`; small local addendum in `PROMPT_DIR`. Within the same directory, this supersedes legacy `system.md`. |
-| `tools.json` | Tool description and parameter overrides. |
-| `runtime.json` | App messages, status text, memory labels, retry prompts, health text, shared snippets, and GitHub workflow aliases. |
-| `rules/*.md` | Optional extra rules. Same-name private rules replace public rules; new private rules append. |
-| `skills/<name>/SKILL.md` | Skill definitions with `name` and `description` frontmatter. Same-name private skills replace public skills. |
-| `runbooks/*.md` | Service runbooks searched by `knowledge.runbook_search`; keep real operational runbooks private. |
+| `agent.md` | Short local addendum appended after the git-tracked main prompt. Do not fork the whole main prompt here. |
+| `runtime.json` | Optional private runtime mappings, mainly workflow aliases. |
+| `tools.json` | Optional private tool-description addenda for internal repositories or workflows. |
+| `runbooks/*.md` | Optional private operational runbooks searched by `knowledge.runbook_search`. |
+| `skills/<name>/SKILL.md` | Optional private skills for genuinely internal workflows. |
 
-The older split files remain supported for compatibility and are overlaid by matching files in `PROMPT_DIR`:
+The committed `prompts/` directory contains only runtime prompt files. Do not add README-style placeholder files under loaded directories such as `runbooks/`; if a file can be read by a tool or prompt loader, its content should be useful at runtime.
 
 | File | Purpose |
 |---|---|
@@ -141,7 +138,6 @@ The older split files remain supported for compatibility and are overlaid by mat
 | `runner.json` | Retry and budget-warning prompt templates |
 | `health.json` | Health summary header and rules text |
 | `tool_statuses.json` | Slack status messages shown while tools run |
-| `github_workflows.json` | Workflow filename aliases for `github.dispatch_workflow` |
 | `texts.json` | Shared prompt snippets such as section headers and context wrappers |
 | `rules/*.md` | Markdown rules injected into the main agent and delegates |
 | `skills/<name>/SKILL.md` | Skill definitions with `name` and `description` frontmatter |
@@ -150,6 +146,58 @@ The older split files remain supported for compatibility and are overlaid by mat
 Only skill metadata appears in the base prompt; full skill instructions are loaded on demand when the agent calls `skills-load`.
 
 Repository inventory is not injected into the system prompt by default, because repository names can be sensitive. Set `PROMPT_INCLUDE_REPO_INVENTORY=true` only for deployments where sending local repository names to the model provider is acceptable.
+
+### Private overlay example
+
+A minimal `.prompts/` (or `PROMPT_DIR`) setup:
+
+```text
+.prompts/
+  agent.md            # Short identity addendum appended after system.md
+  tools.json          # Override tool descriptions for internal repos/workflows
+  runtime.json        # Workflow aliases, status text, and other runtime mappings
+  rules/              # Internal policy rules (matched by filename with public rules)
+  runbooks/           # Operational runbooks searched by knowledge-runbook_search
+  skills/             # Internal skills (matched by name with public skills)
+```
+
+**`agent.md`** — keep it short; the main behavior lives in the committed `system.md`:
+
+```markdown
+Identity:
+- Your name is <ASSISTANT_NAME>.
+- You serve the <COMPANY_NAME> engineering team.
+
+Deployment-specific CI/CD:
+- The default GitHub workflow repository is `<ORG>/<REPO>`.
+- For service deployments, use the `deploy` workflow alias.
+```
+
+**`runtime.json`** — compact overlay for workflow aliases and other runtime mappings:
+
+```json
+{
+  "github_workflows": {
+    "deploy": "cicd-deploy.yml",
+    "rollback": "cicd-rollback.yml"
+  }
+}
+```
+
+**`tools.json`** — override specific tool descriptions for internal context:
+
+```json
+{
+  "github-dispatch_workflow": {
+    "description": "Trigger a workflow in <ORG>/<REPO>.",
+    "parameters": {
+      "repository": "Defaults to <ORG>/<REPO>."
+    }
+  }
+}
+```
+
+Private files are merged on top of public defaults at startup. See `internal/prompts/catalog.go` for the full merge semantics.
 
 ## 🌐 ngrok
 
@@ -214,7 +262,7 @@ The App Home tab shows the configured provider, model, base URL, and protocol. I
 | `github.workflow_runs` | List recent workflow run status |
 | `github.pr_diff` | Fetch a PR's metadata and unified diff |
 
-Workflow aliases are defined in `PROMPT_DIR/github_workflows.json`. `GITHUB_DEFAULT_OWNER` and `GITHUB_DEFAULT_REPO` set the default repository.
+Workflow aliases can be defined in `PROMPT_DIR/runtime.json` under `github_workflows` or in the legacy `PROMPT_DIR/github_workflows.json`. `GITHUB_DEFAULT_OWNER` and `GITHUB_DEFAULT_REPO` set the default repository.
 
 ### ☁️ Observability
 

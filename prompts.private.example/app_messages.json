@@ -1,6 +1,0 @@
-{
-  "empty_mention": "(The user mentioned the internal assistant without a request. Greet them using the internal assistant name and ask what operational or engineering help they need.)",
-  "empty_dm": "(The user sent an empty DM to the internal assistant. Greet them and ask what internal task they need help with.)",
-  "empty_dm_with_file": "(The user sent a private file without text. Acknowledge the file and ask what internal analysis they want performed.)"
-}
-
