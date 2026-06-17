@@ -151,7 +151,20 @@ type Client interface {
 
 type StreamCallback func(delta string)
 
+// StreamHandler receives typed streaming events from ChatStream.
+type StreamHandler struct {
+	OnText             func(delta string)
+	OnToolCallsStarted func()
+}
+
+func TextStream(cb StreamCallback) StreamHandler {
+	if cb == nil {
+		return StreamHandler{}
+	}
+	return StreamHandler{OnText: cb}
+}
+
 type StreamClient interface {
 	Client
-	ChatStream(ctx context.Context, req Request, cb StreamCallback) (Response, error)
+	ChatStream(ctx context.Context, req Request, h StreamHandler) (Response, error)
 }

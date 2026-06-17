@@ -101,18 +101,25 @@ func TestAnthropicChatStreamParsesToolUseBlocks(t *testing.T) {
 	client.httpClient = server.Client()
 
 	var streamed string
+	var toolStarted bool
 	resp, err := client.ChatStream(context.Background(), Request{
 		Model: "claude-test",
 		Tools: []ToolSpec{{Type: "function", Function: ToolSpecFunction{
 			Name:       "code-search",
 			Parameters: map[string]any{"type": "object"},
 		}}},
-	}, func(delta string) { streamed += delta })
+	}, StreamHandler{
+		OnText:             func(delta string) { streamed += delta },
+		OnToolCallsStarted: func() { toolStarted = true },
+	})
 	if err != nil {
 		t.Fatalf("ChatStream() error = %v", err)
 	}
 	if streamed != "" {
 		t.Fatalf("streamed text = %q, want empty for tool-only response", streamed)
+	}
+	if !toolStarted {
+		t.Fatal("OnToolCallsStarted was not called")
 	}
 	if resp.FinishReason != "tool_use" {
 		t.Fatalf("FinishReason = %q, want tool_use", resp.FinishReason)

@@ -65,18 +65,25 @@ func TestKimiChatStreamParsesToolCallDeltas(t *testing.T) {
 	client.httpClient = server.Client()
 
 	var streamed string
+	var toolStarted bool
 	resp, err := client.ChatStream(context.Background(), Request{
 		Model: "test",
 		Tools: []ToolSpec{{Type: "function", Function: ToolSpecFunction{
 			Name:       "echo",
 			Parameters: map[string]any{"type": "object"},
 		}}},
-	}, func(delta string) { streamed += delta })
+	}, StreamHandler{
+		OnText:             func(delta string) { streamed += delta },
+		OnToolCallsStarted: func() { toolStarted = true },
+	})
 	if err != nil {
 		t.Fatalf("ChatStream() error = %v", err)
 	}
 	if streamed != "" {
 		t.Fatalf("streamed text = %q, want empty for tool-only response", streamed)
+	}
+	if !toolStarted {
+		t.Fatal("OnToolCallsStarted was not called")
 	}
 	if resp.FinishReason != "tool_calls" {
 		t.Fatalf("FinishReason = %q, want tool_calls", resp.FinishReason)
