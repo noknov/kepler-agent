@@ -67,10 +67,11 @@ type LLMConfig struct {
 }
 
 type SecurityConfig struct {
-	AllowedUsers       []string
-	AllowedChannels    []string
-	WorkspaceRoots     []string
-	WorkspaceAutoFetch bool
+	AllowedUsers               []string
+	AllowedChannels            []string
+	WorkspaceRoots             []string
+	WorkspaceAutoFetch         bool
+	PromptIncludeRepoInventory bool
 }
 
 type SessionConfig struct {
@@ -177,10 +178,11 @@ func Load() (Config, error) {
 			Timeout:          providerTimeout(llmProvider),
 		},
 		Security: SecurityConfig{
-			AllowedUsers:       envCSV("ALLOWED_SLACK_USERS"),
-			AllowedChannels:    envCSV("ALLOWED_SLACK_CHANNELS"),
-			WorkspaceRoots:     normalizeRoots(envCSVDefault("WORKSPACE_ROOTS", []string{wd})),
-			WorkspaceAutoFetch: envBool("WORKSPACE_AUTO_FETCH", false),
+			AllowedUsers:               envCSV("ALLOWED_SLACK_USERS"),
+			AllowedChannels:            envCSV("ALLOWED_SLACK_CHANNELS"),
+			WorkspaceRoots:             normalizeRoots(envCSVDefault("WORKSPACE_ROOTS", []string{wd})),
+			WorkspaceAutoFetch:         envBool("WORKSPACE_AUTO_FETCH", false),
+			PromptIncludeRepoInventory: envBool("PROMPT_INCLUDE_REPO_INVENTORY", false),
 		},
 		Sessions: SessionConfig{
 			DataDir:         env("SESSION_DATA_DIR", filepath.Join(wd, ".data", "sessions")),
@@ -420,11 +422,11 @@ func providerMaxTokens(provider string) int {
 func providerTemperature(provider string) float64 {
 	switch provider {
 	case "mimo":
-		return envFloatAliases(0.2, "MIMO_TEMPERATURE")
+		return envFloatAliases(0, "MIMO_TEMPERATURE")
 	case "kimi", "moonshot":
-		return envFloatAliases(0.2, "KIMI_TEMPERATURE")
+		return envFloatAliases(0, "KIMI_TEMPERATURE")
 	default:
-		return envFloatAliases(0.2, "OPENAI_TEMPERATURE", "ANTHROPIC_TEMPERATURE")
+		return envFloatAliases(0, "OPENAI_TEMPERATURE", "ANTHROPIC_TEMPERATURE")
 	}
 }
 

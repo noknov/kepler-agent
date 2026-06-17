@@ -18,15 +18,18 @@ var secretPatterns = []*regexp.Regexp{
 }
 
 type PromptPolicy struct {
-	WorkspaceRoots []string
+	WorkspaceRoots             []string
+	IncludeRepositoryInventory bool
 }
 
 func (p PromptPolicy) SystemPrompt() string {
 	base := prompts.System("")
 	base += prompts.RulesAndSkillsPrompt()
-	repos := p.discoverRepos()
-	if repos != "" {
-		base += prompts.PromptText("repository_inventory_header", "") + repos
+	if p.IncludeRepositoryInventory {
+		repos := p.discoverRepos()
+		if repos != "" {
+			base += prompts.PromptText("repository_inventory_header", "") + repos
+		}
 	}
 	return base
 }

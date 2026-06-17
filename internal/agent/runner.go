@@ -56,8 +56,8 @@ type Runner struct {
 	Observer        Observer
 	MaxSteps        int
 	MaxContextChars int
-	StatusUpdate StatusUpdater
-	OnStream     func(StreamEvent)
+	StatusUpdate    StatusUpdater
+	OnStream        func(StreamEvent)
 }
 
 type Request struct {
@@ -109,6 +109,7 @@ var codeReadingTools = map[string]bool{
 	"code-symbols":      true,
 	"code-definition":   true,
 	"code-references":   true,
+	"git-show":          true,
 }
 
 // hasFencedCodeBlock reports whether text contains a fenced code block
@@ -128,6 +129,19 @@ func hasFencedCodeBlock(text string) bool {
 		}
 	}
 	return false
+}
+
+var (
+	fileLineClaimRe = regexp.MustCompile(`\b[\w./-]+\.(go|ts|tsx|js|jsx|py|java|cs|json|ya?ml|md):\d+\b`)
+	lineClaimRe     = regexp.MustCompile(`(?i)\b(lines?)\s*\d{1,6}\b|第\s*\d{1,6}\s*行`)
+	codeSymbolRe    = regexp.MustCompile("`[^`]*[A-Za-z_][A-Za-z0-9_]*(\\([^`]*\\)|\\.[A-Za-z_][A-Za-z0-9_]*)[^`]*`")
+)
+
+func hasSpecificCodeClaim(text string) bool {
+	return hasFencedCodeBlock(text) ||
+		fileLineClaimRe.MatchString(text) ||
+		lineClaimRe.MatchString(text) ||
+		codeSymbolRe.MatchString(text)
 }
 
 func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
@@ -294,7 +308,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 				}
 				return Result{Generated: generated}, ErrRepetitiveOutput
 			}
-			if !useStream && !retriedCodeClaim && !codeToolCalledThisRun && hasFencedCodeBlock(final) {
+			if !useStream && !retriedCodeClaim && !codeToolCalledThisRun && hasSpecificCodeClaim(final) {
 				retriedCodeClaim = true
 				messages = append(messages, llm.Message{Role: "system", Content: codeClaimRetryPrompt()})
 				if r.StatusUpdate != nil {

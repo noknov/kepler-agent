@@ -4,9 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/prompts"
@@ -18,11 +15,11 @@ type Profile struct {
 }
 
 type Manager struct {
-	client   llm.Client
-	model    string
-	thinking string
-	profiles map[string]Profile
-	rules    []string
+	client       llm.Client
+	model        string
+	thinking     string
+	profiles     map[string]Profile
+	policyPrompt string
 }
 
 func NewManager(client llm.Client, model, thinking string) *Manager {
@@ -43,26 +40,12 @@ func NewManager(client llm.Client, model, thinking string) *Manager {
 	}
 }
 
-func (m *Manager) LoadMarkdown(rulesDir, skillsDir string) error {
-	rules, err := loadDir(rulesDir)
-	if err != nil {
-		return err
-	}
-	skills, err := loadDir(skillsDir)
-	if err != nil {
-		return err
-	}
-	m.rules = append(rules, skills...)
-	return nil
+func (m *Manager) SetPolicyPrompt(prompt string) {
+	m.policyPrompt = prompt
 }
 
 func (m *Manager) RulesAndSkillsPrompt() string {
-	var b strings.Builder
-	if len(m.rules) > 0 {
-		b.WriteString(prompts.PromptText("rules_header", ""))
-		b.WriteString(strings.Join(m.rules, "\n\n---\n\n"))
-	}
-	return b.String()
+	return m.policyPrompt
 }
 
 func (m *Manager) Run(ctx context.Context, profileName, task, contextText string) (string, error) {
@@ -93,29 +76,4 @@ func (m *Manager) ProfilesJSON() string {
 	}
 	data, _ := json.Marshal(names)
 	return string(data)
-}
-
-func loadDir(dir string) ([]string, error) {
-	if dir == "" {
-		return nil, nil
-	}
-	entries, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var out []string
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, "# "+e.Name()+"\n"+strings.TrimSpace(string(data)))
-	}
-	return out, nil
 }

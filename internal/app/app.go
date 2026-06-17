@@ -163,7 +163,8 @@ func (s *Server) routes(cfg config.Config, store session.Store, runtime agentRun
 	webHub := web.NewHub()
 	webMessenger := web.NewHubMessenger(webHub)
 	webPrompt := safety.PromptPolicy{
-		WorkspaceRoots: cfg.Security.WorkspaceRoots,
+		WorkspaceRoots:             cfg.Security.WorkspaceRoots,
+		IncludeRepositoryInventory: cfg.Security.PromptIncludeRepoInventory,
 	}
 	webConv := conversation.NewService(store, webMessenger, runtime.Runner, runtime.Memory, webPrompt, runtime.Redactor, recorder)
 	webConv.RunStore = runStore

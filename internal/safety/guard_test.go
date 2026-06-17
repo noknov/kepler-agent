@@ -58,6 +58,38 @@ Full triage workflow body.
 	}
 }
 
+func TestSystemPromptOmitsRepositoryInventoryByDefault(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "private-service")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module private-service\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prompt := (PromptPolicy{WorkspaceRoots: []string{root}}).SystemPrompt()
+	if strings.Contains(prompt, "private-service") {
+		t.Fatalf("SystemPrompt() leaked repo inventory by default:\n%s", prompt)
+	}
+}
+
+func TestSystemPromptIncludesRepositoryInventoryWhenEnabled(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "private-service")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module private-service\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prompt := (PromptPolicy{WorkspaceRoots: []string{root}, IncludeRepositoryInventory: true}).SystemPrompt()
+	if !strings.Contains(prompt, "private-service/ (Go)") {
+		t.Fatalf("SystemPrompt() did not include enabled repo inventory:\n%s", prompt)
+	}
+}
+
 func TestRedactorRedactsSecrets(t *testing.T) {
 	got := (Redactor{}).Sanitize("Authorization: Bearer sk-abc and SLACK_TOKEN=xoxb-secret")
 	if got == "Authorization: Bearer sk-abc and SLACK_TOKEN=xoxb-secret" {

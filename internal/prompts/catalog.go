@@ -23,6 +23,7 @@ type Catalog struct {
 	Health          map[string]string     `json:"health,omitempty"`
 	Texts           map[string]string     `json:"texts,omitempty"`
 	Rules           []string              `json:"-"`
+	RuleKeys        []string              `json:"-"`
 	Skills          []Skill               `json:"-"`
 }
 
@@ -169,6 +170,7 @@ func newCatalog() Catalog {
 
 func loadCatalogDir(dir string, catalog *Catalog) {
 	readText(filepath.Join(dir, "system.md"), &catalog.System)
+	readText(filepath.Join(dir, "agent.md"), &catalog.System)
 	readJSON(filepath.Join(dir, "delegates.json"), &catalog.Delegates)
 	readJSON(filepath.Join(dir, "app_messages.json"), &catalog.AppMessages)
 	readJSON(filepath.Join(dir, "tools.json"), &catalog.Tools)
@@ -178,12 +180,13 @@ func loadCatalogDir(dir string, catalog *Catalog) {
 	readJSON(filepath.Join(dir, "runner.json"), &catalog.Runner)
 	readJSON(filepath.Join(dir, "health.json"), &catalog.Health)
 	readJSON(filepath.Join(dir, "texts.json"), &catalog.Texts)
-	catalog.Rules = readMarkdownDir(filepath.Join(dir, "rules"))
+	readRuntimeJSON(filepath.Join(dir, "runtime.json"), catalog)
+	catalog.RuleKeys, catalog.Rules = readMarkdownDir(filepath.Join(dir, "rules"))
 	catalog.Skills = readSkillsDir(filepath.Join(dir, "skills"))
 }
 
 func mergeCatalog(dst *Catalog, src Catalog) {
-	dst.System = choose(src.System, dst.System)
+	dst.System = appendPrompt(dst.System, src.System)
 	mergeStringMap(dst.Delegates, src.Delegates)
 	mergeStringMap(dst.AppMessages, src.AppMessages)
 	mergeToolMap(dst.Tools, src.Tools)
@@ -193,8 +196,41 @@ func mergeCatalog(dst *Catalog, src Catalog) {
 	mergeStringMap(dst.Runner, src.Runner)
 	mergeStringMap(dst.Health, src.Health)
 	mergeStringMap(dst.Texts, src.Texts)
-	dst.Rules = append(dst.Rules, src.Rules...)
+	dst.RuleKeys, dst.Rules = mergeRules(dst.RuleKeys, dst.Rules, src.RuleKeys, src.Rules)
 	dst.Skills = mergeSkills(dst.Skills, src.Skills)
+}
+
+func appendPrompt(base, addendum string) string {
+	base = strings.TrimSpace(base)
+	addendum = strings.TrimSpace(addendum)
+	switch {
+	case base == "":
+		return addendum
+	case addendum == "":
+		return base
+	default:
+		return base + "\n\n" + addendum
+	}
+}
+
+func readRuntimeJSON(path string, catalog *Catalog) {
+	var runtime struct {
+		AppMessages     map[string]string `json:"app_messages,omitempty"`
+		MemoryLabels    map[string]string `json:"memory_labels,omitempty"`
+		ToolStatuses    map[string]string `json:"tool_statuses,omitempty"`
+		GitHubWorkflows map[string]string `json:"github_workflows,omitempty"`
+		Runner          map[string]string `json:"runner,omitempty"`
+		Health          map[string]string `json:"health,omitempty"`
+		Texts           map[string]string `json:"texts,omitempty"`
+	}
+	readJSON(path, &runtime)
+	mergeStringMap(catalog.AppMessages, runtime.AppMessages)
+	mergeStringMap(catalog.MemoryLabels, runtime.MemoryLabels)
+	mergeStringMap(catalog.ToolStatuses, runtime.ToolStatuses)
+	mergeStringMap(catalog.GitHubWorkflows, runtime.GitHubWorkflows)
+	mergeStringMap(catalog.Runner, runtime.Runner)
+	mergeStringMap(catalog.Health, runtime.Health)
+	mergeStringMap(catalog.Texts, runtime.Texts)
 }
 
 func mergeStringMap(dst, src map[string]string) {
@@ -215,6 +251,27 @@ func mergeToolMap(dst, src map[string]ToolPrompt) {
 		mergeStringMap(current.Parameters, incoming.Parameters)
 		dst[name] = current
 	}
+}
+
+func mergeRules(dstKeys, dstRules, srcKeys, srcRules []string) ([]string, []string) {
+	if len(srcRules) == 0 {
+		return dstKeys, dstRules
+	}
+	index := map[string]int{}
+	for i, key := range dstKeys {
+		index[key] = i
+	}
+	for i, rule := range srcRules {
+		key := srcKeys[i]
+		if existing, ok := index[key]; ok {
+			dstRules[existing] = rule
+			continue
+		}
+		index[key] = len(dstKeys)
+		dstKeys = append(dstKeys, key)
+		dstRules = append(dstRules, rule)
+	}
+	return dstKeys, dstRules
 }
 
 func mergeSkills(dst, src []Skill) []Skill {
@@ -374,30 +431,33 @@ func readText(path string, out *string) {
 	}
 }
 
-func readMarkdownDir(dir string) []string {
+func readMarkdownDir(dir string) ([]string, []string) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
-		return nil
+		return nil, nil
 	}
 	if err != nil {
-		return nil
+		return nil, nil
 	}
+	var keys []string
 	var out []string
 	for _, entry := range entries {
 		switch {
 		case entry.IsDir():
 			path := filepath.Join(dir, entry.Name(), "SKILL.md")
 			if data, err := os.ReadFile(path); err == nil {
+				keys = append(keys, entry.Name()+"/SKILL.md")
 				out = append(out, "# "+entry.Name()+"/SKILL.md\n"+strings.TrimSpace(string(data)))
 			}
 		case filepath.Ext(entry.Name()) == ".md":
 			path := filepath.Join(dir, entry.Name())
 			if data, err := os.ReadFile(path); err == nil {
+				keys = append(keys, entry.Name())
 				out = append(out, "# "+entry.Name()+"\n"+strings.TrimSpace(string(data)))
 			}
 		}
 	}
-	return out
+	return keys, out
 }
 
 func readSkillsDir(dir string) []Skill {

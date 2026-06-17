@@ -949,6 +949,25 @@ func TestHasFencedCodeBlock(t *testing.T) {
 	}
 }
 
+func TestHasSpecificCodeClaim(t *testing.T) {
+	cases := []struct {
+		text string
+		want bool
+	}{
+		{"plain operational summary", false},
+		{"The field `test` appears in the payload.", false},
+		{"See internal/app/runtime.go:45 for wiring.", true},
+		{"The bug is around line 128.", true},
+		{"Call `runner.Run()` after building messages.", true},
+		{"```go\nfunc f() {}\n```", true},
+	}
+	for _, c := range cases {
+		if got := hasSpecificCodeClaim(c.text); got != c.want {
+			t.Errorf("hasSpecificCodeClaim(%q) = %v, want %v", c.text, got, c.want)
+		}
+	}
+}
+
 func TestRunnerRetriesOnCodeClaimWithoutCodeTool(t *testing.T) {
 	codeAnswer := "Here is the code:\n```csharp\nif (x.test) { return; }\n```"
 	client := &fakeClient{responses: []llm.Response{
@@ -978,6 +997,27 @@ func TestRunnerRetriesOnCodeClaimWithoutCodeTool(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("code_claim_retry prompt was not injected")
+	}
+}
+
+func TestRunnerRetriesOnFileLineClaimWithoutCodeTool(t *testing.T) {
+	answer := "The issue is in internal/app/runtime.go:45 where the runner is wired."
+	client := &fakeClient{responses: []llm.Response{
+		{Message: llm.Message{Role: "assistant", Content: answer}},
+		{Message: llm.Message{Role: "assistant", Content: "I need to read the file before making that claim."}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 5}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "I need to read the file before making that claim." {
+		t.Fatalf("Final = %q", result.Final)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("expected 2 LLM calls, got %d", len(client.requests))
 	}
 }
 
