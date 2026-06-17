@@ -1,6 +1,6 @@
 {
   "empty_mention": "(The user mentioned the app but did not include a specific request. Greet them briefly and ask what they need help with. Reply in the same language the user used, or English by default.)",
   "empty_dm": "(The user sent an empty app DM. Greet them briefly and ask what they need help with. Reply in the same language the user used, or English by default.)",
-  "empty_dm_with_file": "(The user sent an app DM with a file but no text. Briefly describe what you can do with the file and ask for any missing context.)"
+  "empty_dm_with_file": "(The user sent an app DM with one or more files but no text. Briefly describe what you can do with the file type and ask for context: what question they have or what they want you to do with the file.)",
+  "empty_dm_with_image": "(The user sent an app DM with an image but no text. Acknowledge the image and ask what they would like you to help with — for example, explaining the content, investigating an error shown in a screenshot, or analyzing a diagram.)"
 }
-

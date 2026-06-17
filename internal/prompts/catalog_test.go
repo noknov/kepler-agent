@@ -1,6 +1,8 @@
 package prompts
 
 import (
+	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,6 +65,67 @@ func TestAgentPromptSupersedesSystemPromptWithinSameDir(t *testing.T) {
 
 	if got := System("fallback"); got != "agent system" {
 		t.Fatalf("System() = %q", got)
+	}
+}
+
+func TestPublicPromptFilesAreRuntimeContent(t *testing.T) {
+	publicDir := resolveDir(PublicDir)
+	var readmes []string
+	err := filepath.WalkDir(publicDir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if strings.HasPrefix(strings.ToLower(filepath.Base(path)), "readme") {
+			readmes = append(readmes, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(readmes) > 0 {
+		t.Fatalf("document prompt conventions in the root README, not under %s: %v", publicDir, readmes)
+	}
+
+	jsonFiles, err := filepath.Glob(filepath.Join(publicDir, "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range jsonFiles {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var obj map[string]any
+		if err := json.Unmarshal(data, &obj); err != nil {
+			t.Fatalf("%s is not valid JSON: %v", path, err)
+		}
+		if len(obj) == 0 {
+			t.Fatalf("%s is an empty placeholder; remove it or add runtime content", path)
+		}
+	}
+
+	runbookDocs, err := filepath.Glob(filepath.Join(publicDir, "runbooks", "*.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range runbookDocs {
+		if strings.EqualFold(filepath.Base(path), "README.md") {
+			t.Fatalf("%s can be returned by runbook search; document runbook conventions in README instead", path)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lower := strings.ToLower(string(data))
+		for _, marker := range []string{"placeholder", "todo", "replace this", "write xxx", "请写"} {
+			if strings.Contains(lower, marker) {
+				t.Fatalf("%s contains placeholder marker %q", path, marker)
+			}
+		}
 	}
 }
 

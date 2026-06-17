@@ -492,6 +492,11 @@ func parseSkill(fallbackName, content string) Skill {
 		if end := strings.Index(content[len("---\n"):], "\n---"); end >= 0 {
 			frontmatter := content[len("---\n") : len("---\n")+end]
 			for _, line := range strings.Split(frontmatter, "\n") {
+				// Skip indented lines (YAML arrays, nested maps) and
+				// bare list items that belong to a preceding key.
+				if len(line) > 0 && (line[0] == ' ' || line[0] == '\t' || line[0] == '-') {
+					continue
+				}
 				key, value, ok := strings.Cut(line, ":")
 				if !ok {
 					continue
