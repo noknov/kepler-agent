@@ -12,43 +12,6 @@ import (
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
-func streamAll(buf *strings.Builder) func(StreamEvent) {
-	return func(ev StreamEvent) {
-		buf.WriteString(ev.Delta)
-	}
-}
-
-func streamByKind(narration, answer *strings.Builder) func(StreamEvent) {
-	return func(ev StreamEvent) {
-		switch ev.Kind {
-		case StreamNarration:
-			if narration != nil {
-				narration.WriteString(ev.Delta)
-			}
-		case StreamAnswer:
-			if answer != nil {
-				answer.WriteString(ev.Delta)
-			}
-		}
-	}
-}
-
-func streamAnswerOnly(buf *strings.Builder) func(StreamEvent) {
-	return func(ev StreamEvent) {
-		if ev.Kind == StreamAnswer {
-			buf.WriteString(ev.Delta)
-		}
-	}
-}
-
-func streamNarrationOnly(buf *strings.Builder) func(StreamEvent) {
-	return func(ev StreamEvent) {
-		if ev.Kind == StreamNarration {
-			buf.WriteString(ev.Delta)
-		}
-	}
-}
-
 func TestLooksRepetitive(t *testing.T) {
 	repeated := ""
 	for i := 0; i < 20; i++ {
@@ -458,7 +421,8 @@ func TestRunnerStreamsFinalAnswerWithToolsAvailable(t *testing.T) {
 		LLM:      client,
 		Tools:    tools,
 		MaxSteps: 3,
-		OnStream: streamAll(&streamed),
+		OnToken:  func(delta string) { streamed.WriteString(delta) },
+		OnNarration: func(delta string) { streamed.WriteString(delta) },
 	}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -493,7 +457,8 @@ func TestRunnerExecutesToolCallsFromStreamResponse(t *testing.T) {
 		LLM:      client,
 		Tools:    tools,
 		MaxSteps: 2,
-		OnStream: streamAll(&streamed),
+		OnToken:  func(delta string) { streamed.WriteString(delta) },
+		OnNarration: func(delta string) { streamed.WriteString(delta) },
 	}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -531,7 +496,7 @@ func TestRunnerBypassesStreamGuardForNativeToolCalls(t *testing.T) {
 		LLM:          client,
 		Capabilities: llm.Capabilities{NativeToolCalls: true},
 		MaxSteps:     1,
-		OnStream:     streamAnswerOnly(&streamed),
+		OnToken:      func(delta string) { streamed.WriteString(delta) },
 	}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -553,7 +518,7 @@ func TestRunnerUsesStreamGuardForUnknownCapabilities(t *testing.T) {
 	result, err := Runner{
 		LLM:      client,
 		MaxSteps: 1,
-		OnStream: streamAnswerOnly(&streamed),
+		OnToken:  func(delta string) { streamed.WriteString(delta) },
 	}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -595,7 +560,8 @@ func TestRunnerRoutesPostToolToolRoundToOnNarration(t *testing.T) {
 		Tools:        tools,
 		Capabilities: llm.Capabilities{NativeToolCalls: true},
 		MaxSteps:     12,
-		OnStream:     streamByKind(&narrated, &answered),
+		OnNarration:  func(delta string) { narrated.WriteString(delta) },
+		OnToken:      func(delta string) { answered.WriteString(delta) },
 	}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -631,7 +597,8 @@ func TestRunnerRoutesPostToolFinalAnswerToOnTokenWithDefaultMaxSteps(t *testing.
 		Tools:        tools,
 		Capabilities: llm.Capabilities{NativeToolCalls: true},
 		MaxSteps:     12,
-		OnStream:     streamByKind(&narrated, &answered),
+		OnNarration:  func(delta string) { narrated.WriteString(delta) },
+		OnToken:      func(delta string) { answered.WriteString(delta) },
 	}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -661,7 +628,8 @@ func TestRunnerNarratesStreamedToolPreamble(t *testing.T) {
 		Tools:        tools,
 		Capabilities: llm.Capabilities{NativeToolCalls: true},
 		MaxSteps:     2,
-		OnStream:     streamByKind(&narrated, &answered),
+		OnNarration:  func(delta string) { narrated.WriteString(delta) },
+		OnToken:      func(delta string) { answered.WriteString(delta) },
 	}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -708,7 +676,8 @@ func TestRunnerNarratesToolPreambleWhenStreamDoesNotEmitContent(t *testing.T) {
 		Tools:        tools,
 		Capabilities: llm.Capabilities{NativeToolCalls: true},
 		MaxSteps:     3,
-		OnStream:     streamNarrationOnly(&narrated),
+		OnToken:      func(string) {},
+		OnNarration:  func(delta string) { narrated.WriteString(delta) },
 	}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -754,7 +723,7 @@ func TestRunnerSeparatesThreeToolRoundsWithoutExtraNewlines(t *testing.T) {
 		Tools:        tools,
 		Capabilities: llm.Capabilities{NativeToolCalls: true},
 		MaxSteps:     12,
-		OnStream:     streamNarrationOnly(&narrated),
+		OnNarration:  func(delta string) { narrated.WriteString(delta) },
 	}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
