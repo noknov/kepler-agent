@@ -276,14 +276,16 @@ func (l *streamLLM) Chat(_ context.Context, _ llm.Request) (llm.Response, error)
 	}, nil
 }
 
-func (l *streamLLM) ChatStream(_ context.Context, _ llm.Request, cb llm.StreamCallback) (llm.Response, error) {
+func (l *streamLLM) ChatStream(_ context.Context, _ llm.Request, h llm.StreamHandler) (llm.Response, error) {
 	l.streamCalls++
 	words := strings.Fields(l.content)
 	for i, w := range words {
-		if i > 0 {
-			cb(" ")
+		if i > 0 && h.OnText != nil {
+			h.OnText(" ")
 		}
-		cb(w)
+		if h.OnText != nil {
+			h.OnText(w)
+		}
 	}
 	return llm.Response{
 		Message:  llm.Message{Role: "assistant", Content: l.content},
@@ -306,15 +308,20 @@ func (l *sequenceStreamLLM) Chat(_ context.Context, _ llm.Request) (llm.Response
 	return resp, nil
 }
 
-func (l *sequenceStreamLLM) ChatStream(_ context.Context, _ llm.Request, cb llm.StreamCallback) (llm.Response, error) {
+func (l *sequenceStreamLLM) ChatStream(_ context.Context, _ llm.Request, h llm.StreamHandler) (llm.Response, error) {
 	l.streamCalls++
 	if len(l.responses) == 0 {
 		return llm.Response{}, errors.New("unexpected stream call")
 	}
 	resp := l.responses[0]
 	l.responses = l.responses[1:]
-	if resp.Streamed && len(resp.Message.ToolCalls) == 0 && resp.Message.Content != "" {
-		cb(resp.Message.Content)
+	if resp.Streamed && resp.Message.Content != "" {
+		if h.OnText != nil {
+			h.OnText(resp.Message.Content)
+		}
+	}
+	if len(resp.Message.ToolCalls) > 0 && h.OnToolCallsStarted != nil {
+		h.OnToolCallsStarted()
 	}
 	return resp, nil
 }
@@ -332,14 +339,17 @@ func (l *streamingToolLLM) Chat(_ context.Context, _ llm.Request) (llm.Response,
 	return resp, nil
 }
 
-func (l *streamingToolLLM) ChatStream(_ context.Context, _ llm.Request, cb llm.StreamCallback) (llm.Response, error) {
+func (l *streamingToolLLM) ChatStream(_ context.Context, _ llm.Request, h llm.StreamHandler) (llm.Response, error) {
 	if len(l.responses) == 0 {
 		return llm.Response{}, errors.New("unexpected stream call")
 	}
 	resp := l.responses[0]
 	l.responses = l.responses[1:]
-	if strings.TrimSpace(resp.Message.Content) != "" {
-		cb(resp.Message.Content)
+	if strings.TrimSpace(resp.Message.Content) != "" && h.OnText != nil {
+		h.OnText(resp.Message.Content)
+	}
+	if len(resp.Message.ToolCalls) > 0 && h.OnToolCallsStarted != nil {
+		h.OnToolCallsStarted()
 	}
 	return resp, nil
 }
@@ -504,6 +514,141 @@ func TestToolNarrationAndFinalAnswerUseSeparateStreams(t *testing.T) {
 	}
 	if answerTS != "answer.000" {
 		t.Fatalf("answer ts = %q, want answer stream", answerTS)
+	}
+}
+
+func TestToolNarrationAndFinalAnswerSeparateWithDefaultMaxSteps(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	llmClient := &sequenceStreamLLM{responses: []llm.Response{
+		{
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "让我看看 wati-voice-service 的结构...",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "tool_1",
+					Type: "function",
+					Function: llm.ToolFunction{
+						Name:      "echo",
+						Arguments: `{"text":"ok"}`,
+					},
+				}},
+			},
+			Streamed: true,
+		},
+		{
+			Message:  llm.Message{Role: "assistant", Content: "## :telephone_receiver: wati-voice-service"},
+			Streamed: true,
+		},
+	}}
+	tools := registry.New()
+	tools.Register(echoTool{})
+	messenger := &fakeMessenger{streamSeq: []string{"progress.000", "answer.000"}}
+	svc := NewService(
+		store,
+		messenger,
+		agent.Runner{LLM: llmClient, Tools: tools, MaxSteps: 12, Capabilities: llm.Capabilities{NativeToolCalls: true}},
+		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+
+	svc.HandleMention(ctx, Request{
+		EventID:  "E4-default-max-steps",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "看一下 voice service",
+	})
+
+	var narrationTS, answerTS string
+	for _, append := range messenger.appends {
+		for _, chunk := range append.chunks {
+			if chunk["type"] != "markdown_text" {
+				continue
+			}
+			text := chunk["text"].(string)
+			if strings.Contains(text, "让我看看") {
+				narrationTS = append.ts
+			}
+			if strings.Contains(text, "wati-voice-service") && strings.Contains(text, "##") {
+				answerTS = append.ts
+			}
+		}
+	}
+	if narrationTS != "progress.000" {
+		t.Fatalf("narration ts = %q, want progress stream", narrationTS)
+	}
+	if answerTS != "answer.000" {
+		t.Fatalf("answer ts = %q, want answer stream", answerTS)
+	}
+}
+
+func TestMultiRoundToolNarrationStaysOnProgressStream(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	llmClient := &streamingToolLLM{responses: []llm.Response{
+		{
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "让我先看看这个 PR 的内容...",
+				ToolCalls: []llm.ToolCall{{
+					ID: "tool_1", Type: "function",
+					Function: llm.ToolFunction{Name: "echo", Arguments: `{"text":"ok"}`},
+				}},
+			},
+		},
+		{
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "让我看看仓库里现有的 Internal Controller...",
+				ToolCalls: []llm.ToolCall{{
+					ID: "tool_2", Type: "function",
+					Function: llm.ToolFunction{Name: "echo", Arguments: `{"text":"ok2"}`},
+				}},
+			},
+		},
+	}}
+	tools := registry.New()
+	tools.Register(echoTool{})
+	messenger := &fakeMessenger{streamSeq: []string{"progress.000", "answer.000", "extra.000"}}
+	svc := NewService(
+		store,
+		messenger,
+		agent.Runner{LLM: llmClient, Tools: tools, MaxSteps: 12, Capabilities: llm.Capabilities{NativeToolCalls: true}},
+		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+
+	svc.HandleMention(ctx, Request{
+		EventID:  "E4-multi-tool",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "review this PR",
+	})
+
+	var answerMarkdown bool
+	for _, append := range messenger.appends {
+		if append.ts != "progress.000" {
+			for _, chunk := range append.chunks {
+				if chunk["type"] == "markdown_text" {
+					answerMarkdown = true
+				}
+			}
+		}
+	}
+	if answerMarkdown {
+		t.Fatal("second tool round should not open the answer stream")
 	}
 }
 

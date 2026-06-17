@@ -106,7 +106,7 @@ func (c *KimiClient) chatBody(req Request) map[string]any {
 	return body
 }
 
-func (c *KimiClient) ChatStream(ctx context.Context, req Request, cb StreamCallback) (Response, error) {
+func (c *KimiClient) ChatStream(ctx context.Context, req Request, h StreamHandler) (Response, error) {
 	body := c.chatBody(req)
 	body["stream"] = true
 	payload, err := json.Marshal(body)
@@ -135,6 +135,7 @@ func (c *KimiClient) ChatStream(ctx context.Context, req Request, cb StreamCallb
 	msg.Role = "assistant"
 	var finishReason string
 	var usage openAIUsage
+	toolCallsStarted := false
 
 	err = readSSE(resp.Body, func(ev sseEvent) bool {
 		if ev.Data == "[DONE]" {
@@ -171,12 +172,20 @@ func (c *KimiClient) ChatStream(ctx context.Context, req Request, cb StreamCallb
 		delta := chunk.Choices[0].Delta
 		if delta.Content != "" {
 			msg.Content += delta.Content
-			cb(delta.Content)
+			if h.OnText != nil {
+				h.OnText(delta.Content)
+			}
 		}
 		if delta.ReasoningContent != "" {
 			msg.ReasoningContent += delta.ReasoningContent
 		}
 		for _, tc := range delta.ToolCalls {
+			if !toolCallsStarted && (tc.ID != "" || tc.Function.Name != "" || tc.Function.Arguments != "") {
+				toolCallsStarted = true
+				if h.OnToolCallsStarted != nil {
+					h.OnToolCallsStarted()
+				}
+			}
 			for len(msg.ToolCalls) <= tc.Index {
 				msg.ToolCalls = append(msg.ToolCalls, ToolCall{Type: "function"})
 			}
