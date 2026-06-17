@@ -190,8 +190,8 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		runner.Observer = multiObserver{s.Metrics, runObserver}
 	}
 	var answerStream *dmStreamWriter
+	var progressMarkdown *streamMarkdownBuffer
 	var hadNarration bool
-	var hadToolActivity bool
 	var progressAppendFailed bool
 	appendProgress := func(chunks []map[string]any) {
 		if !useStream || progressStopped {
@@ -220,6 +220,47 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		streamTS = newTS
 		_ = s.Messenger.AppendStream(ctx, req.Channel, progressTS, chunks)
 	}
+	appendProgressMarkdown := func(text string) error {
+		if !useStream || progressStopped || text == "" {
+			return nil
+		}
+		err := s.Messenger.AppendStream(ctx, req.Channel, progressTS, []map[string]any{
+			{"type": "markdown_text", "text": text},
+		})
+		if err == nil {
+			return nil
+		}
+		progressAppendFailed = true
+		if !strings.Contains(err.Error(), "not_in_streaming_state") {
+			s.recordDeliveryError(req, progressTS, err)
+			return err
+		}
+		newTS, startErr := s.Messenger.StartStream(ctx, req.Channel, req.ThreadTS, req.UserID)
+		if startErr != nil {
+			s.recordDeliveryError(req, progressTS, startErr)
+			return startErr
+		}
+		progressTS = newTS
+		streamTS = newTS
+		return s.Messenger.AppendStream(ctx, req.Channel, progressTS, []map[string]any{
+			{"type": "markdown_text", "text": text},
+		})
+	}
+	if useStream {
+		progressMarkdown = &streamMarkdownBuffer{
+			ctx:     ctx,
+			channel: req.Channel,
+			append:  appendProgressMarkdown,
+			canFlush: func() bool {
+				return !progressStopped && progressTS != ""
+			},
+		}
+		defer func() {
+			if progressMarkdown != nil {
+				progressMarkdown.Close()
+			}
+		}()
+	}
 	stopProgress := func() {
 		if progressStopped || progressTS == "" {
 			return
@@ -230,6 +271,9 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	startAnswerStream := func() *dmStreamWriter {
 		if answerStream != nil {
 			return answerStream
+		}
+		if progressMarkdown != nil {
+			progressMarkdown.Close()
 		}
 		appendProgress([]map[string]any{
 			{"type": "task_update", "id": taskID, "title": agent.CompleteTitle(locale), "status": "complete"},
@@ -243,22 +287,17 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		return answerStream
 	}
 	active.setProgress(locale, appendProgress)
-	runner.OnToolRound = func() { hadToolActivity = true }
 	if useStream {
 		runner.OnNarration = func(delta string) {
 			hadNarration = true
-			appendProgress([]map[string]any{
-				{"type": "markdown_text", "text": delta},
-			})
+			progressMarkdown.Write(delta)
 		}
 		runner.OnToken = func(delta string) {
-			if hadNarration || hadToolActivity {
+			if hadNarration {
 				startAnswerStream().Write(delta)
 				return
 			}
-			appendProgress([]map[string]any{
-				{"type": "markdown_text", "text": delta},
-			})
+			progressMarkdown.Write(delta)
 		}
 	}
 	runner.StatusUpdate = func(status string) {
@@ -708,59 +747,117 @@ func (e *errorWithID) Unwrap() error {
 	return e.err
 }
 
-type streamFlusher struct {
-	ctx        context.Context
-	messenger  Messenger
-	channel    string
-	streamTS   string
-	taskID     string
-	locale     string
-	buf        strings.Builder
-	lastFlush  time.Time
-	started    bool
-	contentErr error
+type streamMarkdownBuffer struct {
+	ctx      context.Context
+	channel  string
+	append   func(text string) error
+	canFlush func() bool
+
+	mu          sync.Mutex
+	flushMu     sync.Mutex
+	buf         strings.Builder
+	lastFlush   time.Time
+	err         error
+	loopStarted bool
+	wake        chan struct{}
+	done        chan struct{}
+	closed      bool
 }
 
-func (f *streamFlusher) Write(delta string) {
-	if !f.started {
-		f.started = true
-		err := f.messenger.AppendStream(f.ctx, f.channel, f.streamTS, []map[string]any{
-			{"type": "task_update", "id": f.taskID, "title": agent.CompleteTitle(f.locale), "status": "complete"},
-		})
-		if err != nil {
-			log.Printf("stream status update failed channel=%s target=%s err=%v", f.channel, f.streamTS, err)
-		}
-	}
-	f.buf.WriteString(delta)
-	if shouldFlushStream(f.channel, f.lastFlush, f.buf.Len()) {
-		f.Flush()
-	}
-}
-
-func (f *streamFlusher) Flush() {
-	if f.buf.Len() == 0 {
+func (b *streamMarkdownBuffer) Write(delta string) {
+	if delta == "" {
 		return
 	}
-	text := f.buf.String()
-	f.buf.Reset()
-	f.lastFlush = time.Now()
-	err := f.messenger.AppendStream(f.ctx, f.channel, f.streamTS, []map[string]any{
-		{"type": "markdown_text", "text": text},
-	})
-	f.RecordContentError(err)
+	b.mu.Lock()
+	if b.err != nil || b.closed {
+		b.mu.Unlock()
+		return
+	}
+	if !b.loopStarted {
+		b.wake = make(chan struct{}, 1)
+		b.done = make(chan struct{})
+		b.loopStarted = true
+		go b.loop()
+	}
+	b.buf.WriteString(delta)
+	if shouldFlushStream(b.channel, b.lastFlush, b.buf.Len()) {
+		select {
+		case b.wake <- struct{}{}:
+		default:
+		}
+	}
+	b.mu.Unlock()
 }
 
-func (f *streamFlusher) RecordContentError(err error) {
-	if err != nil && f.contentErr == nil {
-		f.contentErr = err
+func (b *streamMarkdownBuffer) Close() {
+	b.mu.Lock()
+	if !b.loopStarted || b.closed {
+		b.mu.Unlock()
+		return
+	}
+	b.closed = true
+	close(b.wake)
+	done := b.done
+	b.mu.Unlock()
+	<-done
+}
+
+func (b *streamMarkdownBuffer) Failed() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.err != nil
+}
+
+func (b *streamMarkdownBuffer) loop() {
+	b.flush()
+	interval, _ := streamFlushConfig(b.channel)
+	if interval <= 0 {
+		interval = 10 * time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	defer close(b.done)
+	for {
+		select {
+		case <-b.ctx.Done():
+			b.flush()
+			return
+		case _, ok := <-b.wake:
+			b.flush()
+			if !ok {
+				return
+			}
+		case <-ticker.C:
+			b.flush()
+		}
 	}
 }
 
-func (f *streamFlusher) Err() error {
-	if f == nil {
-		return nil
+func (b *streamMarkdownBuffer) flush() {
+	b.flushMu.Lock()
+	defer b.flushMu.Unlock()
+
+	b.mu.Lock()
+	if b.buf.Len() == 0 || (b.canFlush != nil && !b.canFlush()) {
+		b.mu.Unlock()
+		return
 	}
-	return f.contentErr
+	text := b.buf.String()
+	b.buf.Reset()
+	b.lastFlush = time.Now()
+	appendFn := b.append
+	b.mu.Unlock()
+
+	if appendFn == nil {
+		return
+	}
+	if err := appendFn(text); err != nil {
+		b.mu.Lock()
+		if b.err == nil {
+			b.err = err
+		}
+		b.mu.Unlock()
+	}
 }
 
 // dmStreamWriter lazily opens a new stream message for the final answer.
@@ -787,8 +884,8 @@ var (
 	streamFlushChars         = envInt("STREAM_FLUSH_CHARS", 32)
 	webStreamFlushInterval   = envDuration("WEB_STREAM_FLUSH_INTERVAL", 16*time.Millisecond)
 	webStreamFlushChars      = envInt("WEB_STREAM_FLUSH_CHARS", 16)
-	slackStreamFlushInterval = envDuration("SLACK_STREAM_FLUSH_INTERVAL", 100*time.Millisecond)
-	slackStreamFlushChars    = envInt("SLACK_STREAM_FLUSH_CHARS", 96)
+	slackStreamFlushInterval = envDuration("SLACK_STREAM_FLUSH_INTERVAL", 50*time.Millisecond)
+	slackStreamFlushChars    = envInt("SLACK_STREAM_FLUSH_CHARS", 48)
 )
 
 func (w *dmStreamWriter) Write(delta string) {

@@ -98,7 +98,7 @@ func (c *AnthropicClient) Chat(ctx context.Context, req Request) (Response, erro
 	}, nil
 }
 
-func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, cb StreamCallback) (Response, error) {
+func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamHandler) (Response, error) {
 	body := anthropicRequest{
 		Model:       req.Model,
 		System:      anthropicSystem(req.Messages),
@@ -165,6 +165,9 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, cb Stream
 			currentBlockIndex = block.Index
 			inTextBlock = block.ContentBlock.Type == "text"
 			if block.ContentBlock.Type == "tool_use" {
+				if h.OnToolCallsStarted != nil {
+					h.OnToolCallsStarted()
+				}
 				args := ""
 				if input := strings.TrimSpace(string(block.ContentBlock.Input)); input != "" && input != "{}" {
 					args = string(block.ContentBlock.Input)
@@ -193,7 +196,9 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, cb Stream
 			switch {
 			case inTextBlock && delta.Delta.Type == "text_delta" && delta.Delta.Text != "":
 				msg.Content += delta.Delta.Text
-				cb(delta.Delta.Text)
+				if h.OnText != nil {
+					h.OnText(delta.Delta.Text)
+				}
 			case delta.Delta.Type == "input_json_delta" && delta.Delta.PartialJSON != "":
 				call := toolBlocks[delta.Index]
 				if call == nil && currentBlockIndex >= 0 {

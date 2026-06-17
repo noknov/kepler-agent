@@ -37,7 +37,7 @@ func TestNormalizingClientDoesNotFakeStreamWhenInnerCannotStream(t *testing.T) {
 	client := WrapClient(inner, CapabilitiesFor("openai", "openai")).(StreamClient)
 
 	called := false
-	resp, err := client.ChatStream(context.Background(), Request{}, func(string) { called = true })
+	resp, err := client.ChatStream(context.Background(), Request{}, TextStream(func(string) { called = true }))
 	if err != nil {
 		t.Fatal(err)
 	}
