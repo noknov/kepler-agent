@@ -12,6 +12,43 @@ import (
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
+func streamAll(buf *strings.Builder) func(StreamEvent) {
+	return func(ev StreamEvent) {
+		buf.WriteString(ev.Delta)
+	}
+}
+
+func streamByKind(narration, answer *strings.Builder) func(StreamEvent) {
+	return func(ev StreamEvent) {
+		switch ev.Kind {
+		case StreamNarration:
+			if narration != nil {
+				narration.WriteString(ev.Delta)
+			}
+		case StreamAnswer:
+			if answer != nil {
+				answer.WriteString(ev.Delta)
+			}
+		}
+	}
+}
+
+func streamAnswerOnly(buf *strings.Builder) func(StreamEvent) {
+	return func(ev StreamEvent) {
+		if ev.Kind == StreamAnswer {
+			buf.WriteString(ev.Delta)
+		}
+	}
+}
+
+func streamNarrationOnly(buf *strings.Builder) func(StreamEvent) {
+	return func(ev StreamEvent) {
+		if ev.Kind == StreamNarration {
+			buf.WriteString(ev.Delta)
+		}
+	}
+}
+
 func TestLooksRepetitive(t *testing.T) {
 	repeated := ""
 	for i := 0; i < 20; i++ {
@@ -421,8 +458,7 @@ func TestRunnerStreamsFinalAnswerWithToolsAvailable(t *testing.T) {
 		LLM:      client,
 		Tools:    tools,
 		MaxSteps: 3,
-		OnToken:  func(delta string) { streamed.WriteString(delta) },
-		OnNarration: func(delta string) { streamed.WriteString(delta) },
+		OnStream: streamAll(&streamed),
 	}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -457,8 +493,7 @@ func TestRunnerExecutesToolCallsFromStreamResponse(t *testing.T) {
 		LLM:      client,
 		Tools:    tools,
 		MaxSteps: 2,
-		OnToken:  func(delta string) { streamed.WriteString(delta) },
-		OnNarration: func(delta string) { streamed.WriteString(delta) },
+		OnStream: streamAll(&streamed),
 	}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -496,7 +531,7 @@ func TestRunnerBypassesStreamGuardForNativeToolCalls(t *testing.T) {
 		LLM:          client,
 		Capabilities: llm.Capabilities{NativeToolCalls: true},
 		MaxSteps:     1,
-		OnToken:      func(delta string) { streamed.WriteString(delta) },
+		OnStream:     streamAnswerOnly(&streamed),
 	}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -518,7 +553,7 @@ func TestRunnerUsesStreamGuardForUnknownCapabilities(t *testing.T) {
 	result, err := Runner{
 		LLM:      client,
 		MaxSteps: 1,
-		OnToken:  func(delta string) { streamed.WriteString(delta) },
+		OnStream: streamAnswerOnly(&streamed),
 	}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -560,8 +595,7 @@ func TestRunnerRoutesPostToolToolRoundToOnNarration(t *testing.T) {
 		Tools:        tools,
 		Capabilities: llm.Capabilities{NativeToolCalls: true},
 		MaxSteps:     12,
-		OnNarration:  func(delta string) { narrated.WriteString(delta) },
-		OnToken:      func(delta string) { answered.WriteString(delta) },
+		OnStream:     streamByKind(&narrated, &answered),
 	}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -597,8 +631,7 @@ func TestRunnerRoutesPostToolFinalAnswerToOnTokenWithDefaultMaxSteps(t *testing.
 		Tools:        tools,
 		Capabilities: llm.Capabilities{NativeToolCalls: true},
 		MaxSteps:     12,
-		OnNarration:  func(delta string) { narrated.WriteString(delta) },
-		OnToken:      func(delta string) { answered.WriteString(delta) },
+		OnStream:     streamByKind(&narrated, &answered),
 	}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -628,8 +661,7 @@ func TestRunnerNarratesStreamedToolPreamble(t *testing.T) {
 		Tools:        tools,
 		Capabilities: llm.Capabilities{NativeToolCalls: true},
 		MaxSteps:     2,
-		OnNarration:  func(delta string) { narrated.WriteString(delta) },
-		OnToken:      func(delta string) { answered.WriteString(delta) },
+		OnStream:     streamByKind(&narrated, &answered),
 	}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -676,8 +708,7 @@ func TestRunnerNarratesToolPreambleWhenStreamDoesNotEmitContent(t *testing.T) {
 		Tools:        tools,
 		Capabilities: llm.Capabilities{NativeToolCalls: true},
 		MaxSteps:     3,
-		OnToken:      func(string) {},
-		OnNarration:  func(delta string) { narrated.WriteString(delta) },
+		OnStream:     streamNarrationOnly(&narrated),
 	}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -685,8 +716,56 @@ func TestRunnerNarratesToolPreambleWhenStreamDoesNotEmitContent(t *testing.T) {
 	if result.Final != "done" {
 		t.Fatalf("Final = %q, want done", result.Final)
 	}
-	if got := narrated.String(); got != "让我看看相关代码。\n\n" {
+	if got := narrated.String(); got != "让我看看相关代码。" {
 		t.Fatalf("narration = %q, want preamble", got)
+	}
+}
+
+func TestRunnerSeparatesThreeToolRoundsWithoutExtraNewlines(t *testing.T) {
+	client := &fakeStreamClient{
+		fakeClient: fakeClient{responses: []llm.Response{
+			{Message: toolCallMessage("tool_1", `{"text":"ok"}`)},
+			{Message: llm.Message{
+				Role:    "assistant",
+				Content: "round two",
+				ToolCalls: []llm.ToolCall{{
+					ID: "tool_2", Type: "function",
+					Function: llm.ToolFunction{Name: "echo", Arguments: `{"text":"ok2"}`},
+				}},
+			}},
+			{Message: llm.Message{
+				Role:    "assistant",
+				Content: "round three",
+				ToolCalls: []llm.ToolCall{{
+					ID: "tool_3", Type: "function",
+					Function: llm.ToolFunction{Name: "echo", Arguments: `{"text":"ok3"}`},
+				}},
+			}},
+			{Message: llm.Message{Role: "assistant", Content: "done"}},
+		}},
+		deltas: []string{"round one"},
+	}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	var narrated strings.Builder
+	_, err := Runner{
+		LLM:          client,
+		Tools:        tools,
+		Capabilities: llm.Capabilities{NativeToolCalls: true},
+		MaxSteps:     12,
+		OnStream:     streamNarrationOnly(&narrated),
+	}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	got := narrated.String()
+	if strings.Contains(got, "\n\n\n\n") {
+		t.Fatalf("narration = %q, want single paragraph breaks only", got)
+	}
+	want := "round one\n\nround two\n\nround three"
+	if got != want {
+		t.Fatalf("narration = %q, want %q", got, want)
 	}
 }
 

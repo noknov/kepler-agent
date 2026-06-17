@@ -191,7 +191,6 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}
 	var answerStream *dmStreamWriter
 	var progressMarkdown *streamMarkdownBuffer
-	var hadNarration bool
 	var progressAppendFailed bool
 	appendProgress := func(chunks []map[string]any) {
 		if !useStream || progressStopped {
@@ -288,16 +287,13 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}
 	active.setProgress(locale, appendProgress)
 	if useStream {
-		runner.OnNarration = func(delta string) {
-			hadNarration = true
-			progressMarkdown.Write(delta)
-		}
-		runner.OnToken = func(delta string) {
-			if hadNarration {
-				startAnswerStream().Write(delta)
-				return
+		runner.OnStream = func(ev agent.StreamEvent) {
+			switch ev.Kind {
+			case agent.StreamNarration:
+				progressMarkdown.Write(ev.Delta)
+			case agent.StreamAnswer:
+				startAnswerStream().Write(ev.Delta)
 			}
-			progressMarkdown.Write(delta)
 		}
 	}
 	runner.StatusUpdate = func(status string) {
@@ -868,15 +864,15 @@ type dmStreamWriter struct {
 	threadTS  string
 	userID    string
 	streamTS  string
-	mu          sync.Mutex
-	flushMu     sync.Mutex
-	buf         strings.Builder
-	lastFlush   time.Time
-	err         error
-	started     bool
-	wake        chan struct{}
-	done        chan struct{}
-	closed      bool
+	mu        sync.Mutex
+	flushMu   sync.Mutex
+	buf       strings.Builder
+	lastFlush time.Time
+	err       error
+	started   bool
+	wake      chan struct{}
+	done      chan struct{}
+	closed    bool
 }
 
 var (
