@@ -108,7 +108,7 @@ Final answer streaming is flushed in small batches to keep the UI responsive wit
 
 ## 📝 Prompt configuration
 
-Prompt text is loaded in layers:
+Prompt text is loaded in two layers:
 
 1. `prompts/` contains committed, generic defaults that are safe to maintain in git.
 2. `PROMPT_DIR` (defaults to `.prompts/`, gitignored) overrides those defaults for sensitive or deployment-specific content.
@@ -116,7 +116,20 @@ Prompt text is loaded in layers:
 
 Put generic assistant behavior, retry prompts, memory labels, public tool descriptions, and reusable coding rules in `prompts/`. Put company identity, internal process, service runbooks, workflow aliases, repository-specific assumptions, and private skills in `PROMPT_DIR`.
 
-The following files are loaded from `prompts/` and then overlaid by matching files in `PROMPT_DIR`:
+Keep the main assistant behavior in git so remote branches and local deployments stay aligned. The private `PROMPT_DIR/agent.md` is appended as a small local addendum for sensitive deployment details; it should not carry a full fork of the main prompt.
+
+The preferred shape is intentionally small:
+
+| File | Purpose |
+|---|---|
+| `agent.md` | Main system prompt in `prompts/`; small local addendum in `PROMPT_DIR`. Within the same directory, this supersedes legacy `system.md`. |
+| `tools.json` | Tool description and parameter overrides. |
+| `runtime.json` | App messages, status text, memory labels, retry prompts, health text, shared snippets, and GitHub workflow aliases. |
+| `rules/*.md` | Optional extra rules. Same-name private rules replace public rules; new private rules append. |
+| `skills/<name>/SKILL.md` | Skill definitions with `name` and `description` frontmatter. Same-name private skills replace public skills. |
+| `runbooks/*.md` | Service runbooks searched by `knowledge.runbook_search`; keep real operational runbooks private. |
+
+The older split files remain supported for compatibility and are overlaid by matching files in `PROMPT_DIR`:
 
 | File | Purpose |
 |---|---|
@@ -135,6 +148,8 @@ The following files are loaded from `prompts/` and then overlaid by matching fil
 | `runbooks/*.md` | Service runbooks searched by `knowledge.runbook_search` |
 
 Only skill metadata appears in the base prompt; full skill instructions are loaded on demand when the agent calls `skills-load`.
+
+Repository inventory is not injected into the system prompt by default, because repository names can be sensitive. Set `PROMPT_INCLUDE_REPO_INVENTORY=true` only for deployments where sending local repository names to the model provider is acceptable.
 
 ## 🌐 ngrok
 

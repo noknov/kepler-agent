@@ -7,9 +7,13 @@ import (
 	"testing"
 )
 
-func TestLoadDirOverridesPrompts(t *testing.T) {
+func TestLoadDirAppendsSystemPromptAndOverridesStructuredPrompts(t *testing.T) {
+	public := t.TempDir()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "system.md"), []byte("system override\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(public, "agent.md"), []byte("public system\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "agent.md"), []byte("private addendum\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "tools.json"), []byte(`{
@@ -24,12 +28,12 @@ func TestLoadDirOverridesPrompts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := LoadDirs(PublicDir, dir); err != nil {
+	if err := LoadDirs(public, dir); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = LoadDirs(PublicDir) })
 
-	if got := System("fallback"); got != "system override" {
+	if got := System("fallback"); got != "public system\n\nprivate addendum" {
 		t.Fatalf("System() = %q", got)
 	}
 	if got := ToolDescription("demo-tool", "fallback"); got != "tool override" {
@@ -40,6 +44,86 @@ func TestLoadDirOverridesPrompts(t *testing.T) {
 	}
 	if got := Delegate("code", "fallback"); got != "delegate override" {
 		t.Fatalf("Delegate() = %q", got)
+	}
+}
+
+func TestAgentPromptSupersedesSystemPromptWithinSameDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "system.md"), []byte("legacy system\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "agent.md"), []byte("agent system\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := LoadDirs(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = LoadDirs(PublicDir) })
+
+	if got := System("fallback"); got != "agent system" {
+		t.Fatalf("System() = %q", got)
+	}
+}
+
+func TestRuntimeJSONOverridesPromptSections(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "runtime.json"), []byte(`{
+		"runner": {"empty_response_retry": "retry from runtime"},
+		"texts": {"rules_header": "Rules from runtime:\n"},
+		"app_messages": {"empty_mention": "hello"}
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := LoadDirs(PublicDir, dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = LoadDirs(PublicDir) })
+
+	if got := RunnerPrompt("empty_response_retry", "fallback"); got != "retry from runtime" {
+		t.Fatalf("RunnerPrompt() = %q", got)
+	}
+	if got := PromptText("rules_header", "fallback"); got != "Rules from runtime:\n" {
+		t.Fatalf("PromptText() = %q", got)
+	}
+	if got := AppMessage("empty_mention", "fallback"); got != "hello" {
+		t.Fatalf("AppMessage() = %q", got)
+	}
+}
+
+func TestPrivateRulesOverrideByFilename(t *testing.T) {
+	public := t.TempDir()
+	private := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(public, "rules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(private, "rules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(public, "rules", "general.md"), []byte("public rule\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(private, "rules", "general.md"), []byte("private rule\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(private, "rules", "local.md"), []byte("local rule\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := LoadDirs(public, private); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = LoadDirs(PublicDir) })
+
+	got := RulesPrompt()
+	if strings.Contains(got, "public rule") {
+		t.Fatalf("RulesPrompt() should replace same-name public rule:\n%s", got)
+	}
+	for _, want := range []string{"private rule", "local rule"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("RulesPrompt() missing %q:\n%s", want, got)
+		}
 	}
 }
 
