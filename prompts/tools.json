@@ -428,5 +428,15 @@
     "parameters": {
       "expression": "JavaScript expression to evaluate, e.g. \"document.title\" or \"localStorage.getItem('token')\" or \"document.querySelectorAll('a').length\"."
     }
+  },
+  "pw-get_all_pages": {
+    "description": "List all open browser tabs/pages. Returns tab index, title, and URL for each open tab. Use this when pw-navigate lands on about:blank (OIDC popup), when you need to know which tabs are open, or before calling pw-switch_page.",
+    "parameters": {}
+  },
+  "pw-switch_page": {
+    "description": "Switch focus to a different browser tab by its index. Use after pw-get_all_pages to switch from an about:blank popup back to the main page, or to navigate between multiple open tabs.",
+    "parameters": {
+      "index": "Tab index to switch to (integer from pw-get_all_pages output, e.g. 0 for the first tab)."
+    }
   }
 }

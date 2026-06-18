@@ -280,6 +280,253 @@ func TestExtractDataURI(t *testing.T) {
 	}
 }
 
+// toolCallTransport returns a transport that dispatches tools/call requests by tool name.
+func toolCallTransport(t *testing.T, sessionID string, handlers map[string]string) http.RoundTripper {
+	t.Helper()
+	return roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var payload struct {
+			Method string `json:"method"`
+			Params struct {
+				Name string `json:"name"`
+			} `json:"params"`
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &payload)
+		switch payload.Method {
+		case "initialize":
+			return httpResp(http.StatusOK,
+				map[string]string{"Content-Type": "application/json", "Mcp-Session-Id": sessionID},
+				`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`), nil
+		case "notifications/initialized":
+			return httpResp(http.StatusAccepted, nil, ""), nil
+		case "tools/call":
+			text := handlers[payload.Params.Name]
+			if text == "" {
+				text = "ok"
+			}
+			body := `{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"` + text + `"}]}}`
+			return httpResp(http.StatusOK,
+				map[string]string{"Content-Type": "application/json"}, body), nil
+		default:
+			t.Fatalf("unexpected method %q", payload.Method)
+			return nil, nil
+		}
+	})
+}
+
+func TestMergeDefaultArgs(t *testing.T) {
+	cases := []struct {
+		defaults string
+		user     string
+		wantKeys map[string]string
+	}{
+		// Default wins over user for same key
+		{`{"action":"list"}`, `{"action":"select","index":1}`, map[string]string{"action": `"list"`, "index": "1"}},
+		// Empty defaults → user args unchanged
+		{``, `{"foo":"bar"}`, map[string]string{"foo": `"bar"`}},
+		// Empty user args
+		{`{"action":"list"}`, `{}`, map[string]string{"action": `"list"`}},
+	}
+	for _, tc := range cases {
+		got := mergeDefaultArgs(json.RawMessage(tc.defaults), json.RawMessage(tc.user))
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(got, &m); err != nil {
+			t.Fatalf("mergeDefaultArgs produced invalid JSON: %v (input defaults=%q user=%q)", err, tc.defaults, tc.user)
+		}
+		for k, wantVal := range tc.wantKeys {
+			if v, ok := m[k]; !ok {
+				t.Errorf("key %q missing from merged result", k)
+			} else if string(v) != wantVal {
+				t.Errorf("key %q = %s, want %s", k, v, wantVal)
+			}
+		}
+	}
+}
+
+func TestFindMainTabIndex(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    string
+		wantIdx  int
+	}{
+		{
+			name:    "single non-blank tab",
+			input:   "### Result\n- 0: (current) [My App](https://example.com/)",
+			wantIdx: 0,
+		},
+		{
+			name:    "blank tab first, main tab second",
+			input:   "### Result\n- 0: (current) [about:blank](about:blank)\n- 1: [App](https://example.com/)",
+			wantIdx: 1,
+		},
+		{
+			name:    "all blank tabs",
+			input:   "### Result\n- 0: (current) [about:blank](about:blank)\n- 1: [about:blank](about:blank)",
+			wantIdx: -1,
+		},
+		{
+			name:    "empty string",
+			input:   "",
+			wantIdx: -1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := findMainTabIndex(tc.input); got != tc.wantIdx {
+				t.Errorf("findMainTabIndex() = %d, want %d", got, tc.wantIdx)
+			}
+		})
+	}
+}
+
+func TestNavigateTool_Normal(t *testing.T) {
+	handlers := map[string]string{
+		"browser_navigate": `navigated to https://example.com`,
+		"browser_evaluate": `https://example.com`, // not about:blank
+	}
+	client := &Client{MCP: &mcp.Client{
+		ServiceName: "playwright",
+		URL:         "http://playwright.test/mcp",
+		HTTP:        &http.Client{Transport: toolCallTransport(t, "s1", handlers)},
+	}}
+	tool := NavigateTool{Client: client}
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://example.com"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(result.Content, "[Auto-recovery]") {
+		t.Fatalf("expected normal navigation, got auto-recovery: %q", result.Content)
+	}
+}
+
+func TestNavigateTool_AboutBlankRecovery(t *testing.T) {
+	selectCalled := false
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var payload struct {
+			Method string `json:"method"`
+			Params struct {
+				Name      string          `json:"name"`
+				Arguments json.RawMessage `json:"arguments"`
+			} `json:"params"`
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &payload)
+		switch payload.Method {
+		case "initialize":
+			return httpResp(http.StatusOK,
+				map[string]string{"Content-Type": "application/json", "Mcp-Session-Id": "s1"},
+				`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`), nil
+		case "notifications/initialized":
+			return httpResp(http.StatusAccepted, nil, ""), nil
+		case "tools/call":
+			var text string
+			switch payload.Params.Name {
+			case "browser_navigate":
+				text = "navigated"
+			case "browser_evaluate":
+				text = "about:blank"
+			case "browser_tabs":
+				var args struct {
+					Action string `json:"action"`
+				}
+				_ = json.Unmarshal(payload.Params.Arguments, &args)
+				if args.Action == "list" {
+					text = `### Result\n- 0: (current) [about:blank](about:blank)\n- 1: [App](https://app.example.com/)`
+				} else if args.Action == "select" {
+					selectCalled = true
+					text = "switched"
+				}
+			}
+			body := `{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"` + text + `"}]}}`
+			return httpResp(http.StatusOK, map[string]string{"Content-Type": "application/json"}, body), nil
+		default:
+			return httpResp(http.StatusOK, nil, ""), nil
+		}
+	})
+
+	client := &Client{MCP: &mcp.Client{
+		ServiceName: "playwright",
+		URL:         "http://playwright.test/mcp",
+		HTTP:        &http.Client{Transport: transport},
+	}}
+	tool := NavigateTool{Client: client}
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://app.example.com"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, "[Auto-recovery]") {
+		t.Fatalf("expected auto-recovery notice in result, got: %q", result.Content)
+	}
+	if !selectCalled {
+		t.Fatal("expected browser_tabs select to be called for recovery")
+	}
+}
+
+func TestMCPTool_DefaultArgsInjected(t *testing.T) {
+	var capturedArgs json.RawMessage
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var payload struct {
+			Method string `json:"method"`
+			Params struct {
+				Arguments json.RawMessage `json:"arguments"`
+			} `json:"params"`
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &payload)
+		switch payload.Method {
+		case "initialize":
+			return httpResp(http.StatusOK,
+				map[string]string{"Content-Type": "application/json", "Mcp-Session-Id": "s1"},
+				`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`), nil
+		case "notifications/initialized":
+			return httpResp(http.StatusAccepted, nil, ""), nil
+		case "tools/call":
+			capturedArgs = payload.Params.Arguments
+			return httpResp(http.StatusOK,
+				map[string]string{"Content-Type": "application/json"},
+				`{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"ok"}]}}`), nil
+		default:
+			return httpResp(http.StatusOK, nil, ""), nil
+		}
+	})
+
+	client := &Client{MCP: &mcp.Client{
+		ServiceName: "playwright",
+		URL:         "http://playwright.test/mcp",
+		HTTP:        &http.Client{Transport: transport},
+	}}
+	// pw-get_all_pages always sends action:list, ignoring user args
+	tool := MCPTool{
+		Client:      client,
+		LocalName:   "pw-get_all_pages",
+		RemoteName:  "browser_tabs",
+		DefaultArgs: json.RawMessage(`{"action":"list"}`),
+		Parameters:  registry.ObjectSchema(nil, map[string]any{}),
+	}
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var args map[string]json.RawMessage
+	if err := json.Unmarshal(capturedArgs, &args); err != nil {
+		t.Fatalf("capturedArgs not JSON: %v", err)
+	}
+	if string(args["action"]) != `"list"` {
+		t.Fatalf("expected action=list in forwarded args, got %s", capturedArgs)
+	}
+}
+
+func TestRegisterAll_IncludesNewTools(t *testing.T) {
+	reg := registry.New()
+	RegisterAll(reg, &Client{MCP: &mcp.Client{URL: "http://localhost:8931/mcp"}})
+	names := strings.Join(reg.Names(), "\n")
+	for _, want := range []string{"pw-navigate", "pw-get_all_pages", "pw-switch_page"} {
+		if !strings.Contains(names, want) {
+			t.Errorf("expected tool %q to be registered, got:\n%s", want, names)
+		}
+	}
+}
+
 func TestScreenshotSchemaTypeNotRequired(t *testing.T) {
 	client := &Client{MCP: &mcp.Client{URL: "http://localhost:8931/mcp"}}
 	for _, tool := range tools(client) {
