@@ -263,6 +263,13 @@
       "limit": "Maximum top values or groups to return. Defaults to 10, max 50."
     }
   },
+  "slack-send_screenshot": {
+    "description": "Upload the latest browser screenshot to the current Slack thread. Always call this immediately after pw-screenshot — the image was stored internally by pw-screenshot and will be retrieved automatically. Do not pass data_uri unless you have a specific image string to share.",
+    "parameters": {
+      "data_uri": "Leave empty to use the screenshot from the last pw-screenshot call (recommended). Only set if you have a specific data URI to upload.",
+      "filename": "Optional filename for the uploaded file (e.g. login-page.png). Defaults to screenshot.png."
+    }
+  },
   "web-search": {
     "description": "Search the public web and return results with titles, URLs, and snippets. Use for current external information not available in Slack, code, or runbooks.",
     "parameters": {
@@ -389,16 +396,17 @@
     }
   },
   "pw-fill_form": {
-    "description": "Fill multiple form fields at once. Use for login forms or complex forms with multiple inputs. Each field needs a target ref from pw-snapshot.",
+    "description": "Fill multiple form fields at once. Use for login forms or complex forms with multiple inputs. Each field needs a ref from pw-snapshot.",
     "parameters": {
-      "fields": "Array of field objects, each with: target (ref from snapshot), element (description), name (field name), type (textbox/checkbox/radio/combobox/slider), value (value to set)."
+      "fields": "Array of field objects, each with: ref (element ref from snapshot), element (human-readable description), name (field label), type (textbox/checkbox/radio/combobox/slider), value (value to set)."
     }
   },
   "pw-screenshot": {
-    "description": "Capture a screenshot of the current browser page as a PNG or JPEG image. Use to visually verify what the page looks like or to include evidence in incident reports.",
+    "description": "Capture a screenshot of the current browser page. The image is stored internally — you will NOT receive the image data directly. Always call slack-send_screenshot immediately after to share it in the Slack thread. Do not skip the slack-send_screenshot step.",
     "parameters": {
-      "type": "Image format: png or jpeg. Defaults to png.",
-      "filename": "Optional filename for the screenshot."
+      "type": "Image format: png or jpeg. Optional, defaults to png.",
+      "fullPage": "Set to true to capture the full scrollable page instead of just the viewport.",
+      "filename": "Optional filename hint for the screenshot."
     }
   },
   "pw-press_key": {
@@ -416,11 +424,9 @@
     }
   },
   "pw-evaluate": {
-    "description": "Run JavaScript in the browser. Use for tasks that can't be done with click/type — reading computed styles, checking localStorage, calling app APIs from the browser context. The function receives page object as argument.",
+    "description": "Evaluate a JavaScript expression in the browser context. Use for tasks that can't be done with click/type — reading computed styles, checking localStorage, inspecting DOM state. Runs in the browser (not Node.js), so use standard browser globals like document, window, localStorage.",
     "parameters": {
-      "function": "JavaScript function to evaluate, e.g. async (page) => { return await page.title(); }",
-      "element": "Optional human-readable element description.",
-      "target": "Optional element reference from snapshot."
+      "expression": "JavaScript expression to evaluate, e.g. \"document.title\" or \"localStorage.getItem('token')\" or \"document.querySelectorAll('a').length\"."
     }
   }
 }

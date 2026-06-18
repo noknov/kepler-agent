@@ -214,7 +214,7 @@ func Load() (Config, error) {
 			GitHubDefaultRepo:   os.Getenv("GITHUB_DEFAULT_REPO"),
 			LuckinMCPURL:        trimRightSlash(env("LUCKIN_MCP_URL", "https://gwmcp.lkcoffee.com/order/user/mcp")),
 			LuckinMCPToken:      os.Getenv("LUCKIN_MCP_TOKEN"),
-			PlaywrightMCPURL:    env("PLAYWRIGHT_MCP_URL", "http://localhost:8931/mcp"),
+			PlaywrightMCPURL:    trimRightSlash(os.Getenv("PLAYWRIGHT_MCP_URL")),
 			PlaywrightMCPToken:  os.Getenv("PLAYWRIGHT_MCP_TOKEN"),
 			WebSearchProvider:   env("WEB_SEARCH_PROVIDER", "google_cse"),
 			WebSearchGoogleKey:  os.Getenv("WEB_SEARCH_GOOGLE_API_KEY"),

@@ -304,6 +304,36 @@ Workflow aliases can be defined in `PROMPT_DIR/runtime.json` under `github_workf
 
 Order management via the official Luckin MCP endpoint. Requires `LUCKIN_MCP_TOKEN` from <https://open.lkcoffee.com/mcp>. Order creation and cancellation require an explicit confirmation step.
 
+### 🌐 Browser automation (Playwright)
+
+Headless browser control via a local Playwright MCP server. Set `PLAYWRIGHT_MCP_URL` to enable; leave it unset to disable all `pw-*` tools entirely.
+
+Start the MCP server with Docker:
+
+```bash
+docker run -d \
+  --name playwright-mcp \
+  --restart unless-stopped \
+  -p 8931:8931 \
+  mcr.microsoft.com/playwright/mcp:latest \
+  --port 8931 --host 0.0.0.0 --headless \
+  --no-sandbox \
+  --browser chromium \
+  --viewport-size 1920x1080 \
+  --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36" \
+  --ignore-https-errors
+```
+
+Then set in your env:
+
+```
+PLAYWRIGHT_MCP_URL=http://localhost:8931/mcp
+```
+
+> **Note:** Use `--browser chromium`, not `--browser chrome`. The official `mcr.microsoft.com/playwright/mcp` image ships Chromium only; passing `--browser chrome` causes the server to start but fail silently on every navigation (all pages land on `about:blank`).
+
+Available tools: `pw-navigate`, `pw-snapshot`, `pw-click`, `pw-type`, `pw-fill_form`, `pw-screenshot`, `pw-press_key`, `pw-wait`, `pw-evaluate`. Screenshots are returned as data URIs and can be embedded directly in responses. Browser state is scoped to a single agent turn — each new Slack message starts a fresh session.
+
 ## 📊 Observability endpoints
 
 | Endpoint | Description |
