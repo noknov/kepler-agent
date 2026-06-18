@@ -52,6 +52,7 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *obs
 			EmbeddingAPIKey:  cfg.RAG.EmbeddingAPIKey,
 			EmbeddingModel:   cfg.RAG.EmbeddingModel,
 			EmbeddingDims:    cfg.RAG.EmbeddingDims,
+			BatchDelay:       cfg.RAG.BatchDelay,
 			IndexInterval:    cfg.RAG.IndexInterval,
 			WorkspaceRoots:   cfg.Security.WorkspaceRoots,
 			Observer:         recorder,

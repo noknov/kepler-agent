@@ -128,7 +128,7 @@ func TestLoadGitHubConfig(t *testing.T) {
 	}
 }
 
-func TestLoadRAGBackgroundIndexDefaultsOn(t *testing.T) {
+func TestLoadRAGBackgroundIndexDefaultsOff(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
 	writeEnvFile(t, dir, map[string]string{
@@ -149,12 +149,12 @@ func TestLoadRAGBackgroundIndexDefaultsOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v, want nil", err)
 	}
-	if !cfg.RAG.BackgroundIndex {
-		t.Fatal("RAG.BackgroundIndex = false, want true by default")
+	if cfg.RAG.BackgroundIndex {
+		t.Fatal("RAG.BackgroundIndex = true, want false by default")
 	}
 }
 
-func TestLoadRAGBackgroundIndexCanBeDisabled(t *testing.T) {
+func TestLoadRAGBackgroundIndexCanBeEnabled(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
 	writeEnvFile(t, dir, map[string]string{
@@ -162,7 +162,7 @@ func TestLoadRAGBackgroundIndexCanBeDisabled(t *testing.T) {
 		"SLACK_SIGNING_SECRET": "secret",
 		"ALLOWED_SLACK_USERS":  "U123",
 		"MIMO_API_KEY":         "mimo-token",
-		"RAG_BACKGROUND_INDEX": "false",
+		"RAG_BACKGROUND_INDEX": "true",
 	})
 
 	wd, _ := os.Getwd()
@@ -175,8 +175,8 @@ func TestLoadRAGBackgroundIndexCanBeDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v, want nil", err)
 	}
-	if cfg.RAG.BackgroundIndex {
-		t.Fatal("RAG.BackgroundIndex = true, want false")
+	if !cfg.RAG.BackgroundIndex {
+		t.Fatal("RAG.BackgroundIndex = false, want true")
 	}
 }
 

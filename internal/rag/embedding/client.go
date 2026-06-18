@@ -16,6 +16,7 @@ type Client struct {
 	APIKey     string
 	Model      string
 	Dims       int
+	BatchDelay time.Duration
 	HTTPClient *http.Client
 }
 
@@ -131,6 +132,13 @@ func (c *Client) EmbedBatched(ctx context.Context, texts []string, batchSize int
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
+		}
+		if i > 0 && c.BatchDelay > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(c.BatchDelay):
+			}
 		}
 		batch, err := c.Embed(ctx, texts[i:end])
 		if err != nil {

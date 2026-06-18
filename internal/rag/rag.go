@@ -19,6 +19,7 @@ type Config struct {
 	EmbeddingAPIKey  string
 	EmbeddingModel   string
 	EmbeddingDims    int
+	BatchDelay       time.Duration
 	IndexInterval    time.Duration
 	WorkspaceRoots   []string
 	Observer         indexer.Observer
@@ -56,6 +57,7 @@ func NewManager(cfg Config) (*Manager, error) {
 	}
 
 	emb := embedding.NewClient(cfg.EmbeddingBaseURL, cfg.EmbeddingAPIKey, cfg.EmbeddingModel, cfg.EmbeddingDims)
+	emb.BatchDelay = cfg.BatchDelay
 	idx := indexer.New(pgStore, emb)
 	eng := &search.Engine{
 		Store:    pgStore,

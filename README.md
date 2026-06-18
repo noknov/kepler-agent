@@ -342,7 +342,7 @@ RAG_EMBEDDING_API_KEY=ollama
 RAG_EMBEDDING_MODEL=nomic-embed-text
 RAG_EMBEDDING_DIMS=768
 
-RAG_BACKGROUND_INDEX=true   # optional workspace prewarming on startup
+RAG_BACKGROUND_INDEX=false  # set true for periodic workspace prewarming
 RAG_INDEX_INTERVAL=5m
 ```
 
