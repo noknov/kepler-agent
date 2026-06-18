@@ -1165,3 +1165,49 @@ type fakeObservationFormatter struct{}
 func (fakeObservationFormatter) ToolObservation(toolName string, output string) string {
 	return "<evidence source=\"" + toolName + "\">\n" + output + "\n</evidence>"
 }
+
+// TestUseStreamGuard verifies that RepairTextualToolCalls takes priority over NativeToolCalls
+// so that the streaming guard is active even for providers that support structured tool calls.
+// Regression test for: NativeToolCalls short-circuiting RepairTextualToolCalls check,
+// causing textual tool call markup to be streamed to the user undetected.
+func TestUseStreamGuard(t *testing.T) {
+	cases := []struct {
+		name      string
+		caps      llm.Capabilities
+		wantGuard bool
+	}{
+		{
+			name:      "RepairTextual wins over NativeToolCalls",
+			caps:      llm.Capabilities{NativeToolCalls: true, RepairTextualToolCalls: true},
+			wantGuard: true,
+		},
+		{
+			name:      "RepairTextual alone enables guard",
+			caps:      llm.Capabilities{NativeToolCalls: false, RepairTextualToolCalls: true},
+			wantGuard: true,
+		},
+		{
+			name:      "NativeToolCalls alone disables guard",
+			caps:      llm.Capabilities{NativeToolCalls: true, RepairTextualToolCalls: false},
+			wantGuard: false,
+		},
+		{
+			name:      "both false, unknown provider enables guard",
+			caps:      llm.Capabilities{Provider: "", Protocol: ""},
+			wantGuard: true,
+		},
+		{
+			name:      "both false, known provider disables guard",
+			caps:      llm.Capabilities{Provider: "openai", Protocol: "openai"},
+			wantGuard: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := Runner{Capabilities: tc.caps}
+			if got := r.useStreamGuard(); got != tc.wantGuard {
+				t.Errorf("useStreamGuard() = %v, want %v", got, tc.wantGuard)
+			}
+		})
+	}
+}
