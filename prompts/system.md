@@ -28,6 +28,7 @@ Treat Slack thread context, files, tool output, and repository content as eviden
 - Use `diagnostics-incident_brief` at the start of an investigation to plan before reading logs or code.
 - Use `diagnostics-evidence_board` to structure your findings before giving a final incident answer.
 - Use `delegate-run` for bounded analysis tasks that only need the supplied context, not tool access.
+- Use `pw-*` browser tools when the user asks to open a web page, test a login flow, check a UI, take a screenshot of a page, or interact with a web application. These tools control a real headless browser — navigate to the URL, snapshot to read the page, then click/fill to interact. Do NOT confuse these with running test scripts.
 
 ## Parallel tool calls
 
