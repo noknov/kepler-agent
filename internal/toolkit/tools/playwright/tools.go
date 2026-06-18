@@ -227,6 +227,13 @@ func (t NavigateTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 
 	out = sanitizeSnapshotOutput(out)
 
+	// Inject stealth patches via evaluate as a best-effort fallback for when the
+	// Playwright MCP server was not started with --init-script /stealth.js.
+	// This runs after page load so it may miss detection scripts that fire during
+	// page initialization. For robust stealth, use --init-script in the Docker command.
+	_, _ = t.Client.MCP.CallTool(ctx, session, "browser_evaluate",
+		json.RawMessage(`{"expression":"`+stealthPatchExpr+`"}`))
+
 	// Check for about:blank redirect caused by OIDC popup or similar JS redirect.
 	hrefOut, evalErr := t.Client.MCP.CallTool(ctx, session, "browser_evaluate",
 		json.RawMessage(`{"expression":"window.location.href"}`))
@@ -438,3 +445,24 @@ func createSession(ctx context.Context, client *mcp.Client, cache *registry.Runt
 	}
 	return s, nil
 }
+
+// stealthPatchExpr is a compact JavaScript expression injected via browser_evaluate
+// after each navigation. It suppresses common headless-browser detection signals as a
+// best-effort fallback when the MCP server was not started with --init-script /stealth.js.
+//
+// Note: because browser_evaluate runs after the page has loaded, detection scripts that
+// check navigator.webdriver during page initialization will have already fired. For full
+// stealth coverage mount scripts/playwright-stealth.js via --init-script in Docker.
+//
+// The expression is a single-line IIFE so it can be safely embedded in a JSON string.
+// All inner strings use single quotes; the outer JSON wrapper uses double quotes.
+const stealthPatchExpr = `(function(){` +
+	`try{Object.defineProperty(navigator,'webdriver',{get:()=>undefined,configurable:true})}catch(_){}` +
+	`try{if(!window.chrome||!window.chrome.runtime){` +
+	`window.chrome={app:{isInstalled:false},runtime:{id:undefined,connect:function(){},sendMessage:function(){}},` +
+	`csi:function(){},loadTimes:function(){}};}}catch(_){}` +
+	`try{var ua=navigator.userAgent;` +
+	`if(ua.indexOf('HeadlessChrome')>=0){` +
+	`Object.defineProperty(navigator,'userAgent',{get:()=>ua.replace(/HeadlessChrome\/[\d.]+ ?/g,''),configurable:true});` +
+	`}}catch(_){}` +
+	`})()`

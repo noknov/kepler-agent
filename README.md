@@ -315,13 +315,15 @@ docker run -d \
   --name playwright-mcp \
   --restart unless-stopped \
   -p 8931:8931 \
+  -v "$(pwd)/scripts/playwright-stealth.js:/stealth.js:ro" \
   mcr.microsoft.com/playwright/mcp:latest \
   --port 8931 --host 0.0.0.0 --headless \
   --no-sandbox \
   --browser chromium \
   --viewport-size 1920x1080 \
   --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36" \
-  --ignore-https-errors
+  --ignore-https-errors \
+  --init-script /stealth.js
 ```
 
 Then set in your env:
@@ -331,6 +333,8 @@ PLAYWRIGHT_MCP_URL=http://localhost:8931/mcp
 ```
 
 > **Note:** Use `--browser chromium`, not `--browser chrome`. The official `mcr.microsoft.com/playwright/mcp` image ships Chromium only; passing `--browser chrome` causes the server to start but fail silently on every navigation (all pages land on `about:blank`).
+
+> **Stealth mode:** The `-v` mount and `--init-script /stealth.js` flags load `scripts/playwright-stealth.js` into every page context before the page's own JavaScript runs. This suppresses the primary headless-browser detection signals (`navigator.webdriver`, missing `window.chrome`, empty `navigator.plugins`). If you omit the `--init-script`, the agent still injects a lightweight patch via `browser_evaluate` after each navigation, but that runs after page init so it may miss early detection scripts. For best results use `--init-script`.
 
 Available tools: `pw-navigate`, `pw-snapshot`, `pw-click`, `pw-type`, `pw-fill_form`, `pw-screenshot`, `pw-press_key`, `pw-wait`, `pw-evaluate`. Screenshots are returned as data URIs and can be embedded directly in responses. Browser state is scoped to a single agent turn — each new Slack message starts a fresh session.
 
