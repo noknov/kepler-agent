@@ -936,6 +936,9 @@ func TestActiveReplyCanCancelRun(t *testing.T) {
 	if !strings.Contains(got, "Cancelled") {
 		t.Fatalf("cancel status not found in stream chunks: %q", got)
 	}
+	if strings.Contains(got, "Cancelled this request") {
+		t.Fatalf("cancel should not emit redundant body text: %q", got)
+	}
 	if strings.Contains(got, "Something went wrong") {
 		t.Fatalf("cancel should not emit generic error: %q", got)
 	}

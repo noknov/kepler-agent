@@ -813,12 +813,14 @@ function processSSEMessage(raw) {
 
 function handleChunk(chunk) {
   if (chunk.type === 'task_update') {
-    if (chunk.status === 'complete' && currentAssistantEl && accumulatedText.trim()) {
+    if (chunk.status === 'complete' && currentAssistantEl) {
       currentAssistantEl.classList.remove('cursor');
-      currentAssistantEl.innerHTML = marked.parse(accumulatedText);
-      currentAssistantEl.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
-      currentAssistantEl = null;
-      accumulatedText = '';
+      if (accumulatedText.trim()) {
+        currentAssistantEl.innerHTML = marked.parse(accumulatedText);
+        currentAssistantEl.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+        currentAssistantEl = null;
+        accumulatedText = '';
+      }
     }
     setStatus(chunk.title || '', chunk.status === 'in_progress');
   } else if (chunk.type === 'markdown_text') {
