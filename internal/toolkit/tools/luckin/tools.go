@@ -1,48 +1,23 @@
 package luckin
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
-	"sync/atomic"
-	"time"
 
 	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/wati/oncall-agent/internal/mcp"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
-const defaultMCPURL = "https://gwmcp.lkcoffee.com/order/user/mcp"
-
+// Client wraps a shared MCP client with Luckin-specific behavior.
 type Client struct {
-	URL   string
-	Token string
-	HTTP  *http.Client
-
-	nextID atomic.Int64
+	MCP *mcp.Client
 }
 
 func (c *Client) enabled() bool {
-	return strings.TrimSpace(c.Token) != ""
-}
-
-func (c *Client) endpoint() string {
-	endpoint := strings.TrimSpace(c.URL)
-	if endpoint == "" {
-		return defaultMCPURL
-	}
-	return endpoint
-}
-
-func (c *Client) httpClient() *http.Client {
-	if c.HTTP != nil {
-		return c.HTTP
-	}
-	return &http.Client{Timeout: 30 * time.Second}
+	return c.MCP != nil && strings.TrimSpace(c.MCP.Token) != ""
 }
 
 type MCPTool struct {
@@ -70,13 +45,16 @@ func (t MCPTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.R
 		}
 		args = cleaned
 	}
-	session, err := t.Client.session(ctx, rt.Cache)
+	session, err := getOrCreateSession(ctx, t.Client.MCP, rt.Cache)
 	if err != nil {
 		return registry.Result{}, err
 	}
-	out, err := t.Client.callTool(ctx, session, t.RemoteName, args)
+	out, err := t.Client.MCP.CallTool(ctx, session, t.RemoteName, args)
 	if err != nil {
 		return registry.Result{}, err
+	}
+	if t.RemoteName == "createOrder" {
+		out = annotateCreateOrderPayment(out)
 	}
 	return registry.Result{Content: out}, nil
 }
@@ -90,10 +68,9 @@ func RegisterAll(reg *registry.Registry, client *Client) {
 func tools(client *Client) []MCPTool {
 	return []MCPTool{
 		{
-			Client:      client,
-			LocalName:   "luckin-query_shop_list",
-			RemoteName:  "queryShopList",
-			Description: "",
+			Client:     client,
+			LocalName:  "luckin-query_shop_list",
+			RemoteName: "queryShopList",
 			Parameters: registry.ObjectSchema([]string{"longitude", "latitude"}, map[string]any{
 				"deptName":  map[string]any{"type": "string", "description": ""},
 				"longitude": map[string]any{"type": "number", "description": ""},
@@ -101,20 +78,18 @@ func tools(client *Client) []MCPTool {
 			}),
 		},
 		{
-			Client:      client,
-			LocalName:   "luckin-search_product",
-			RemoteName:  "searchProductForMcp",
-			Description: "",
+			Client:     client,
+			LocalName:  "luckin-search_product",
+			RemoteName: "searchProductForMcp",
 			Parameters: registry.ObjectSchema([]string{"deptId", "query"}, map[string]any{
 				"deptId": map[string]any{"type": "integer", "description": ""},
 				"query":  map[string]any{"type": "string", "description": ""},
 			}),
 		},
 		{
-			Client:      client,
-			LocalName:   "luckin-switch_product",
-			RemoteName:  "switchProduct",
-			Description: "",
+			Client:     client,
+			LocalName:  "luckin-switch_product",
+			RemoteName: "switchProduct",
 			Parameters: registry.ObjectSchema([]string{"deptId", "productId", "skuCode", "attrOperationParam", "amount"}, map[string]any{
 				"deptId":    map[string]any{"type": "integer", "description": ""},
 				"productId": map[string]any{"type": "integer", "description": ""},
@@ -140,51 +115,45 @@ func tools(client *Client) []MCPTool {
 			}),
 		},
 		{
-			Client:      client,
-			LocalName:   "luckin-query_product_detail",
-			RemoteName:  "queryProductDetailInfo",
-			Description: "",
+			Client:     client,
+			LocalName:  "luckin-query_product_detail",
+			RemoteName: "queryProductDetailInfo",
 			Parameters: registry.ObjectSchema([]string{"deptId", "productId"}, map[string]any{
 				"deptId":    map[string]any{"type": "integer", "description": ""},
 				"productId": map[string]any{"type": "integer", "description": ""},
 			}),
 		},
 		{
-			Client:      client,
-			LocalName:   "luckin-preview_order",
-			RemoteName:  "previewOrder",
-			Description: "",
-			Parameters:  registry.ObjectSchema([]string{"deptId", "productList"}, orderProperties(false)),
+			Client:     client,
+			LocalName:  "luckin-preview_order",
+			RemoteName: "previewOrder",
+			Parameters: registry.ObjectSchema([]string{"deptId", "productList"}, orderProperties(false)),
 		},
 		{
-			Client:      client,
-			LocalName:   "luckin-query_coupons",
-			RemoteName:  "previewOrder",
-			Description: "",
-			Parameters:  registry.ObjectSchema([]string{"deptId", "productList"}, orderProperties(false)),
+			Client:     client,
+			LocalName:  "luckin-query_coupons",
+			RemoteName: "previewOrder",
+			Parameters: registry.ObjectSchema([]string{"deptId", "productList"}, orderProperties(false)),
 		},
 		{
-			Client:      client,
-			LocalName:   "luckin-create_order",
-			RemoteName:  "createOrder",
-			Description: "",
-			Parameters:  registry.ObjectSchema([]string{"deptId", "productList", "longitude", "latitude", "confirmed"}, orderProperties(true)),
-			SideEffect:  true,
+			Client:     client,
+			LocalName:  "luckin-create_order",
+			RemoteName: "createOrder",
+			Parameters: registry.ObjectSchema([]string{"deptId", "productList", "longitude", "latitude", "confirmed"}, orderProperties(true)),
+			SideEffect: true,
 		},
 		{
-			Client:      client,
-			LocalName:   "luckin-query_order_detail",
-			RemoteName:  "queryOrderDetailInfo",
-			Description: "",
+			Client:     client,
+			LocalName:  "luckin-query_order_detail",
+			RemoteName: "queryOrderDetailInfo",
 			Parameters: registry.ObjectSchema([]string{"orderId"}, map[string]any{
 				"orderId": map[string]any{"type": "string", "description": ""},
 			}),
 		},
 		{
-			Client:      client,
-			LocalName:   "luckin-cancel_order",
-			RemoteName:  "cancelOrder",
-			Description: "",
+			Client:     client,
+			LocalName:  "luckin-cancel_order",
+			RemoteName: "cancelOrder",
 			Parameters: registry.ObjectSchema([]string{"orderId", "confirmed"}, map[string]any{
 				"orderId":   map[string]any{"type": "string", "description": ""},
 				"confirmed": map[string]any{"type": "boolean", "description": ""},
@@ -244,225 +213,23 @@ func requireConfirmation(raw json.RawMessage) (json.RawMessage, error) {
 	return cleaned, nil
 }
 
-type session struct {
-	ID          string
-	Initialized bool
-}
-
-const sessionCacheKey = "luckin-mcp-session"
-
-func (c *Client) session(ctx context.Context, cache *registry.RuntimeCache) (session, error) {
+func getOrCreateSession(ctx context.Context, client *mcp.Client, cache *registry.RuntimeCache) (mcp.Session, error) {
+	key := client.SessionKey()
 	if cache != nil {
-		if cached, ok := cache.Get(sessionCacheKey); ok {
-			if s, ok := cached.(session); ok && s.Initialized {
+		if cached, ok := cache.Get(key); ok {
+			if s, ok := cached.(mcp.Session); ok && s.Initialized {
 				return s, nil
 			}
 		}
 	}
-	s, err := c.initialize(ctx)
+	s, err := client.Initialize(ctx)
 	if err != nil {
-		return session{}, err
+		return mcp.Session{}, err
 	}
 	if cache != nil {
-		cache.Set(sessionCacheKey, s)
+		cache.Set(key, s)
 	}
 	return s, nil
-}
-
-func (c *Client) initialize(ctx context.Context) (session, error) {
-	result, headers, err := c.rpc(ctx, "", "initialize", map[string]any{
-		"protocolVersion": "2025-03-26",
-		"capabilities":    map[string]any{},
-		"clientInfo": map[string]string{
-			"name":    "wati-oncall-agent",
-			"version": "0.1.0",
-		},
-	})
-	if err != nil {
-		return session{}, err
-	}
-	if len(result) == 0 {
-		return session{}, fmt.Errorf("Luckin MCP initialize returned empty result")
-	}
-	s := session{ID: firstHeader(headers, "Mcp-Session-Id"), Initialized: true}
-	_ = c.notifyInitialized(ctx, s.ID)
-	return s, nil
-}
-
-func (c *Client) notifyInitialized(ctx context.Context, sessionID string) error {
-	_, _, err := c.rpcWithID(ctx, sessionID, nil, "notifications/initialized", nil)
-	return err
-}
-
-func (c *Client) callTool(ctx context.Context, s session, name string, args json.RawMessage) (string, error) {
-	var arguments map[string]any
-	if len(args) > 0 {
-		if err := json.Unmarshal(args, &arguments); err != nil {
-			return "", err
-		}
-	}
-	result, _, err := c.rpc(ctx, s.ID, "tools/call", map[string]any{
-		"name":      name,
-		"arguments": arguments,
-	})
-	if err != nil {
-		return "", err
-	}
-	return formatToolResult(name, result), nil
-}
-
-func (c *Client) rpc(ctx context.Context, sessionID string, method string, params any) (json.RawMessage, http.Header, error) {
-	id := c.nextID.Add(1)
-	return c.rpcWithID(ctx, sessionID, id, method, params)
-}
-
-func (c *Client) rpcWithID(ctx context.Context, sessionID string, id any, method string, params any) (json.RawMessage, http.Header, error) {
-	payload := map[string]any{
-		"jsonrpc": "2.0",
-		"method":  method,
-	}
-	if id != nil {
-		payload["id"] = id
-	}
-	if params != nil {
-		payload["params"] = params
-	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return nil, nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint(), bytes.NewReader(data))
-	if err != nil {
-		return nil, nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(c.Token))
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("Content-Type", "application/json")
-	if sessionID != "" {
-		req.Header.Set("Mcp-Session-Id", sessionID)
-	}
-	resp, err := c.httpClient().Do(req)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return nil, resp.Header, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, resp.Header, fmt.Errorf("luckin mcp status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	if id == nil {
-		return nil, resp.Header, nil
-	}
-	result, err := parseRPCResponse(body, resp.Header.Get("Content-Type"))
-	if err != nil {
-		return nil, resp.Header, err
-	}
-	return result, resp.Header, nil
-}
-
-type rpcResponse struct {
-	Result *json.RawMessage `json:"result"`
-	Error  *struct {
-		Code    int             `json:"code"`
-		Message string          `json:"message"`
-		Data    json.RawMessage `json:"data,omitempty"`
-	} `json:"error,omitempty"`
-}
-
-func parseRPCResponse(body []byte, contentType string) (json.RawMessage, error) {
-	if strings.Contains(strings.ToLower(contentType), "text/event-stream") {
-		return parseSSERPCResponse(body)
-	}
-	return parseJSONRPCResponse(bytes.TrimSpace(body))
-}
-
-func parseSSERPCResponse(body []byte) (json.RawMessage, error) {
-	scanner := bufio.NewScanner(bytes.NewReader(body))
-	scanner.Buffer(make([]byte, 0, 64*1024), 8<<20)
-	var dataLines []string
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			if len(dataLines) > 0 {
-				if result, err := parseJSONRPCResponse([]byte(strings.Join(dataLines, "\n"))); err == nil {
-					return result, nil
-				}
-				dataLines = nil
-			}
-			continue
-		}
-		if strings.HasPrefix(line, "data:") {
-			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	if len(dataLines) > 0 {
-		return parseJSONRPCResponse([]byte(strings.Join(dataLines, "\n")))
-	}
-	return nil, fmt.Errorf("luckin mcp returned no JSON-RPC data")
-}
-
-func parseJSONRPCResponse(body []byte) (json.RawMessage, error) {
-	if len(body) == 0 {
-		return nil, fmt.Errorf("luckin mcp returned empty response")
-	}
-	var resp rpcResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, err
-	}
-	if resp.Error != nil {
-		if len(resp.Error.Data) > 0 {
-			return nil, fmt.Errorf("luckin mcp error %d: %s: %s", resp.Error.Code, resp.Error.Message, string(resp.Error.Data))
-		}
-		return nil, fmt.Errorf("luckin mcp error %d: %s", resp.Error.Code, resp.Error.Message)
-	}
-	if resp.Result == nil {
-		return nil, fmt.Errorf("luckin mcp JSON-RPC message had no result")
-	}
-	return *resp.Result, nil
-}
-
-func formatToolResult(remoteName string, raw json.RawMessage) string {
-	var parsed struct {
-		Content []struct {
-			Type string          `json:"type"`
-			Text string          `json:"text,omitempty"`
-			Data json.RawMessage `json:"data,omitempty"`
-		} `json:"content"`
-		StructuredContent json.RawMessage `json:"structuredContent,omitempty"`
-		IsError           bool            `json:"isError,omitempty"`
-	}
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return string(raw)
-	}
-	var parts []string
-	if len(parsed.StructuredContent) > 0 {
-		parts = append(parts, string(parsed.StructuredContent))
-	}
-	for _, item := range parsed.Content {
-		switch {
-		case item.Text != "":
-			parts = append(parts, item.Text)
-		case len(item.Data) > 0:
-			parts = append(parts, string(item.Data))
-		}
-	}
-	if len(parts) == 0 {
-		parts = append(parts, string(raw))
-	}
-	out := strings.Join(parts, "\n")
-	if remoteName == "createOrder" {
-		out = annotateCreateOrderPayment(out)
-	}
-	if parsed.IsError {
-		return "[tool error] " + out
-	}
-	return out
 }
 
 func annotateCreateOrderPayment(out string) string {
@@ -528,13 +295,4 @@ func stringifyJSONValue(value any) string {
 		}
 		return string(data)
 	}
-}
-
-func firstHeader(headers http.Header, key string) string {
-	for _, candidate := range []string{key, strings.ToLower(key), strings.ToUpper(key)} {
-		if value := strings.TrimSpace(headers.Get(candidate)); value != "" {
-			return value
-		}
-	}
-	return ""
 }

@@ -103,6 +103,8 @@ type ToolConfig struct {
 	GitHubDefaultRepo   string
 	LuckinMCPURL        string
 	LuckinMCPToken      string
+	PlaywrightMCPURL    string
+	PlaywrightMCPToken  string
 	WebSearchProvider   string
 	WebSearchGoogleKey  string
 	WebSearchGoogleCX   string
@@ -212,6 +214,8 @@ func Load() (Config, error) {
 			GitHubDefaultRepo:   os.Getenv("GITHUB_DEFAULT_REPO"),
 			LuckinMCPURL:        trimRightSlash(env("LUCKIN_MCP_URL", "https://gwmcp.lkcoffee.com/order/user/mcp")),
 			LuckinMCPToken:      os.Getenv("LUCKIN_MCP_TOKEN"),
+			PlaywrightMCPURL:    env("PLAYWRIGHT_MCP_URL", "http://localhost:8931/mcp"),
+			PlaywrightMCPToken:  os.Getenv("PLAYWRIGHT_MCP_TOKEN"),
 			WebSearchProvider:   env("WEB_SEARCH_PROVIDER", "google_cse"),
 			WebSearchGoogleKey:  os.Getenv("WEB_SEARCH_GOOGLE_API_KEY"),
 			WebSearchGoogleCX:   os.Getenv("WEB_SEARCH_GOOGLE_CX"),
