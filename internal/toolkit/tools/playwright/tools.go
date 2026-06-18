@@ -43,6 +43,13 @@ func (t MCPTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.R
 		return registry.Result{}, err
 	}
 	out, err := t.Client.MCP.CallTool(ctx, session, t.RemoteName, raw)
+	if err != nil && strings.Contains(err.Error(), "Session not found") {
+		session, err = createSession(ctx, t.Client.MCP, rt.Cache)
+		if err != nil {
+			return registry.Result{}, err
+		}
+		out, err = t.Client.MCP.CallTool(ctx, session, t.RemoteName, raw)
+	}
 	if err != nil {
 		return registry.Result{}, err
 	}
@@ -152,12 +159,16 @@ func getOrCreateSession(ctx context.Context, client *mcp.Client, cache *registry
 			}
 		}
 	}
+	return createSession(ctx, client, cache)
+}
+
+func createSession(ctx context.Context, client *mcp.Client, cache *registry.RuntimeCache) (mcp.Session, error) {
 	s, err := client.Initialize(ctx)
 	if err != nil {
 		return mcp.Session{}, err
 	}
 	if cache != nil {
-		cache.Set(key, s)
+		cache.Set(client.SessionKey(), s)
 	}
 	return s, nil
 }
