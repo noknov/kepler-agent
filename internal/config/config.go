@@ -32,6 +32,7 @@ type RAGConfig struct {
 	EmbeddingModel   string
 	EmbeddingDims    int
 	IndexInterval    time.Duration
+	BatchDelay       time.Duration
 }
 
 type HTTPConfig struct {
@@ -229,13 +230,14 @@ func Load() (Config, error) {
 		},
 		RAG: RAGConfig{
 			Enabled:          envBool("RAG_ENABLED", false),
-			BackgroundIndex:  envBool("RAG_BACKGROUND_INDEX", true),
+			BackgroundIndex:  envBool("RAG_BACKGROUND_INDEX", false),
 			PostgresDSN:      os.Getenv("RAG_POSTGRES_DSN"),
 			EmbeddingBaseURL: trimRightSlash(env("RAG_EMBEDDING_BASE_URL", "https://api.openai.com/v1")),
 			EmbeddingAPIKey:  os.Getenv("RAG_EMBEDDING_API_KEY"),
 			EmbeddingModel:   env("RAG_EMBEDDING_MODEL", "text-embedding-3-small"),
 			EmbeddingDims:    envInt("RAG_EMBEDDING_DIMS", 1536),
 			IndexInterval:    envDuration("RAG_INDEX_INTERVAL", 5*time.Minute),
+			BatchDelay:       envDuration("RAG_BATCH_DELAY", 200*time.Millisecond),
 		},
 	}
 
