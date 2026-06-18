@@ -5,6 +5,7 @@ import (
 	"github.com/wati/oncall-agent/internal/config"
 	"github.com/wati/oncall-agent/internal/delegation"
 	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/wati/oncall-agent/internal/mcp"
 	"github.com/wati/oncall-agent/internal/prompts"
 	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/slack"
@@ -17,6 +18,7 @@ import (
 	knowledgeTools "github.com/wati/oncall-agent/internal/toolkit/tools/knowledge"
 	luckinTools "github.com/wati/oncall-agent/internal/toolkit/tools/luckin"
 	notionTools "github.com/wati/oncall-agent/internal/toolkit/tools/notion"
+	playwrightTools "github.com/wati/oncall-agent/internal/toolkit/tools/playwright"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 	skillTools "github.com/wati/oncall-agent/internal/toolkit/tools/skills"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/slacktool"
@@ -96,8 +98,19 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 	tools.Register(githubTools.PRDiffTool{Client: githubClient})
 
 	luckinTools.RegisterAll(tools, &luckinTools.Client{
-		URL:   cfg.Tools.LuckinMCPURL,
-		Token: cfg.Tools.LuckinMCPToken,
+		MCP: &mcp.Client{
+			ServiceName: "luckin",
+			URL:         cfg.Tools.LuckinMCPURL,
+			Token:       cfg.Tools.LuckinMCPToken,
+		},
+	})
+
+	playwrightTools.RegisterAll(tools, &playwrightTools.Client{
+		MCP: &mcp.Client{
+			ServiceName: "playwright",
+			URL:         cfg.Tools.PlaywrightMCPURL,
+			Token:       cfg.Tools.PlaywrightMCPToken,
+		},
 	})
 }
 
@@ -110,6 +123,7 @@ func registerSlackTools(tools *registry.Registry, slackClient *slack.Client) {
 	tools.Register(slacktool.AskUserTool{Slack: slackClient})
 	tools.Register(slacktool.FileSearchTool{Slack: slackClient})
 	tools.Register(slacktool.JSONAnalyzeTool{Slack: slackClient})
+	tools.Register(slacktool.SendScreenshotTool{Slack: slackClient})
 }
 
 func registerAgentControlTools(tools *registry.Registry, cfg config.Config, llmClient llm.Client) {

@@ -263,6 +263,13 @@
       "limit": "Maximum top values or groups to return. Defaults to 10, max 50."
     }
   },
+  "slack-send_screenshot": {
+    "description": "Upload the latest browser screenshot to the current Slack thread. Always call this immediately after pw-screenshot — the image was stored internally by pw-screenshot and will be retrieved automatically. Do not pass data_uri unless you have a specific image string to share.",
+    "parameters": {
+      "data_uri": "Leave empty to use the screenshot from the last pw-screenshot call (recommended). Only set if you have a specific data URI to upload.",
+      "filename": "Optional filename for the uploaded file (e.g. login-page.png). Defaults to screenshot.png."
+    }
+  },
   "web-search": {
     "description": "Search the public web and return results with titles, URLs, and snippets. Use for current external information not available in Slack, code, or runbooks.",
     "parameters": {
@@ -361,6 +368,75 @@
     "parameters": {
       "orderId": "Order ID.",
       "confirmed": "Must be true only after the user explicitly asked to cancel this order."
+    }
+  },
+  "pw-navigate": {
+    "description": "Open a web page in the headless browser. Use this to access a live web application — login pages, dashboards, staging environments, etc. This is NOT for running test scripts; it controls a real browser to interact with live web pages. Typical flow: pw-navigate → pw-snapshot → pw-click/pw-type → pw-screenshot.",
+    "parameters": {
+      "url": "Absolute URL to navigate to."
+    }
+  },
+  "pw-snapshot": {
+    "description": "Read the current page structure as an accessibility tree. Returns structured text listing all interactive elements (buttons, inputs, links) with refs like [ref=s1e4]. Always call this after pw-navigate to understand what's on the page, and use the refs for pw-click/pw-type. Do NOT try to read .playwright-mcp/* file paths from the output — they live inside the browser container and are not accessible from the workspace.",
+    "parameters": {}
+  },
+  "pw-click": {
+    "description": "Click an element on the page. Get the target ref from a pw-snapshot result (e.g. [ref=s1e4]). Use for buttons, links, checkboxes, etc.",
+    "parameters": {
+      "target": "Element reference from the accessibility snapshot (e.g. s1e4).",
+      "element": "Human-readable element description for logging."
+    }
+  },
+  "pw-type": {
+    "description": "Type text into an element. Use for input fields, search boxes, login forms, etc. Get the target ref from pw-snapshot.",
+    "parameters": {
+      "target": "Element reference from snapshot (e.g. s1e4).",
+      "element": "Human-readable element description.",
+      "text": "Text to type into the element."
+    }
+  },
+  "pw-fill_form": {
+    "description": "Fill multiple form fields at once. Use for login forms or complex forms with multiple inputs. Each field needs a ref from pw-snapshot.",
+    "parameters": {
+      "fields": "Array of field objects, each with: ref (element ref from snapshot), element (human-readable description), name (field label), type (textbox/checkbox/radio/combobox/slider), value (value to set)."
+    }
+  },
+  "pw-screenshot": {
+    "description": "Capture a screenshot of the current browser page. The image is stored internally — you will NOT receive the image data directly. Always call slack-send_screenshot immediately after to share it in the Slack thread. Do not skip the slack-send_screenshot step.",
+    "parameters": {
+      "type": "Image format: png or jpeg. Optional, defaults to png.",
+      "fullPage": "Set to true to capture the full scrollable page instead of just the viewport.",
+      "filename": "Optional filename hint for the screenshot."
+    }
+  },
+  "pw-press_key": {
+    "description": "Press a keyboard key. Use after pw-type to submit forms (Enter), switch focus (Tab), or dismiss dialogs (Escape).",
+    "parameters": {
+      "key": "Key name (e.g. Enter, Tab, Escape, ArrowDown)."
+    }
+  },
+  "pw-wait": {
+    "description": "Wait for something to happen on the page — either for specific text to appear/disappear or for a time delay. Use after navigation or clicks that trigger loading.",
+    "parameters": {
+      "text": "Text to wait for on the page.",
+      "textGone": "Text to wait for to disappear.",
+      "time": "Time to wait in seconds."
+    }
+  },
+  "pw-evaluate": {
+    "description": "Evaluate a JavaScript expression in the browser context. Use for tasks that can't be done with click/type — reading computed styles, checking localStorage, inspecting DOM state. Runs in the browser (not Node.js), so use standard browser globals like document, window, localStorage.",
+    "parameters": {
+      "expression": "JavaScript expression to evaluate, e.g. \"document.title\" or \"localStorage.getItem('token')\" or \"document.querySelectorAll('a').length\"."
+    }
+  },
+  "pw-get_all_pages": {
+    "description": "List all open browser tabs/pages. Returns tab index, title, and URL for each open tab. Use this when pw-navigate lands on about:blank (OIDC popup), when you need to know which tabs are open, or before calling pw-switch_page.",
+    "parameters": {}
+  },
+  "pw-switch_page": {
+    "description": "Switch focus to a different browser tab by its index. Use after pw-get_all_pages to switch from an about:blank popup back to the main page, or to navigate between multiple open tabs.",
+    "parameters": {
+      "index": "Tab index to switch to (integer from pw-get_all_pages output, e.g. 0 for the first tab)."
     }
   }
 }
