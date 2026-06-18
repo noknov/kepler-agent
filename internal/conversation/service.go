@@ -290,6 +290,24 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}
 		return answerStream
 	}
+	appendStreamStatus := func(chunks []map[string]any) {
+		if !useStream {
+			return
+		}
+		ts := progressTS
+		if progressStopped && answerStream != nil {
+			if answerTS := answerStream.TS(); answerTS != "" {
+				ts = answerTS
+			}
+		}
+		if ts == "" {
+			ts = streamTS
+		}
+		if ts == "" {
+			return
+		}
+		_ = s.Messenger.AppendStream(ctx, req.Channel, ts, chunks)
+	}
 	active.setProgress(locale, appendProgress)
 	if useStream {
 		runner.OnStream = func(ev agent.StreamEvent) {
@@ -354,14 +372,15 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			}
 			sess.Turns, sess.Summary = s.trimAndSummarize(sess.Turns, sess.Summary)
 			_ = s.Store.Save(ctx, sess)
-			message := interruptedMessage(locale)
 			if useStream {
-				appendProgress([]map[string]any{
+				if progressMarkdown != nil {
+					progressMarkdown.Close()
+				}
+				appendStreamStatus([]map[string]any{
 					{"type": "task_update", "id": taskID, "title": agent.CancelledTitle(locale), "status": "complete"},
-					{"type": "markdown_text", "text": message},
 				})
 			} else {
-				s.reportError(ctx, req, message)
+				s.reportError(ctx, req, interruptedMessage(locale))
 			}
 			return true
 		}
@@ -866,15 +885,15 @@ type dmStreamWriter struct {
 	threadTS  string
 	userID    string
 	streamTS  string
-	mu          sync.Mutex
-	flushMu     sync.Mutex
-	buf         strings.Builder
-	lastFlush   time.Time
-	err         error
-	started     bool
-	wake        chan struct{}
-	done        chan struct{}
-	closed      bool
+	mu        sync.Mutex
+	flushMu   sync.Mutex
+	buf       strings.Builder
+	lastFlush time.Time
+	err       error
+	started   bool
+	wake      chan struct{}
+	done      chan struct{}
+	closed    bool
 }
 
 var (
