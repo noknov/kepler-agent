@@ -377,7 +377,7 @@
     }
   },
   "pw-snapshot": {
-    "description": "Read the current page structure as an accessibility tree. Returns structured text listing all interactive elements (buttons, inputs, links) with refs like [ref=s1e4]. Always call this after pw-navigate to understand what's on the page, and use the refs for pw-click/pw-type.",
+    "description": "Read the current page structure as an accessibility tree. Returns structured text listing all interactive elements (buttons, inputs, links) with refs like [ref=s1e4]. Always call this after pw-navigate to understand what's on the page, and use the refs for pw-click/pw-type. Do NOT try to read .playwright-mcp/* file paths from the output — they live inside the browser container and are not accessible from the workspace.",
     "parameters": {}
   },
   "pw-click": {

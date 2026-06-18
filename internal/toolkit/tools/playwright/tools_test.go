@@ -52,9 +52,12 @@ func mcpTransport(t *testing.T, sessionID string, toolHandler func(name string) 
 			var params struct{ Name string }
 			_ = json.Unmarshal(payload.Params, &params)
 			result := toolHandler(params.Name)
+			body, _ := json.Marshal(map[string]any{
+				"jsonrpc": "2.0", "id": 2,
+				"result": map[string]any{"content": []map[string]any{{"type": "text", "text": result}}},
+			})
 			return httpResp(http.StatusOK,
-				map[string]string{"Content-Type": "application/json"},
-				`{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"`+result+`"}]}}`), nil
+				map[string]string{"Content-Type": "application/json"}, string(body)), nil
 		default:
 			t.Fatalf("unexpected method %q", payload.Method)
 			return nil, nil
@@ -304,9 +307,12 @@ func toolCallTransport(t *testing.T, sessionID string, handlers map[string]strin
 			if text == "" {
 				text = "ok"
 			}
-			body := `{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"` + text + `"}]}}`
+			body, _ := json.Marshal(map[string]any{
+				"jsonrpc": "2.0", "id": 2,
+				"result": map[string]any{"content": []map[string]any{{"type": "text", "text": text}}},
+			})
 			return httpResp(http.StatusOK,
-				map[string]string{"Content-Type": "application/json"}, body), nil
+				map[string]string{"Content-Type": "application/json"}, string(body)), nil
 		default:
 			t.Fatalf("unexpected method %q", payload.Method)
 			return nil, nil
@@ -524,6 +530,75 @@ func TestRegisterAll_IncludesNewTools(t *testing.T) {
 		if !strings.Contains(names, want) {
 			t.Errorf("expected tool %q to be registered, got:\n%s", want, names)
 		}
+	}
+}
+
+// TestNavigate_StripsMCPPaths verifies that .playwright-mcp/ file paths are stripped
+// from pw-navigate output so the LLM cannot attempt to read container-internal files.
+func TestNavigate_StripsMCPPaths(t *testing.T) {
+	internalYML := "page-2026-06-18T10-24-18-415Z.yml"
+	internalLog := "console-2026-06-18T10-24-05-717Z.log"
+	navigateResponse := "### Ran Playwright code\n" +
+		"```js\nawait page.goto('https://example.com');\n```\n" +
+		"### Page\n- Page URL: https://example.com/\n- Page Title: Example\n" +
+		"### Snapshot\n- [Snapshot](.playwright-mcp/" + internalYML + ")\n" +
+		"### Events\n- New console entries: .playwright-mcp/" + internalLog + "#L1-L6"
+
+	handlers := map[string]string{
+		"browser_navigate": navigateResponse,
+		"browser_evaluate": "https://example.com", // not about:blank
+	}
+	client := &Client{MCP: &mcp.Client{
+		ServiceName: "playwright",
+		URL:         "http://playwright.test/mcp",
+		HTTP:        &http.Client{Transport: toolCallTransport(t, "s1", handlers)},
+	}}
+	tool := NavigateTool{Client: client}
+	result, err := tool.Execute(context.Background(),
+		json.RawMessage(`{"url":"https://example.com"}`),
+		registry.Runtime{Cache: registry.NewRuntimeCache()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The specific internal file names must be gone.
+	for _, internal := range []string{internalYML, internalLog} {
+		if strings.Contains(result.Content, internal) {
+			t.Fatalf("output still contains internal path %q after sanitization:\n%s", internal, result.Content)
+		}
+	}
+	// Page URL and title should still be present.
+	if !strings.Contains(result.Content, "https://example.com/") {
+		t.Fatalf("page URL missing from sanitized output:\n%s", result.Content)
+	}
+}
+
+// TestMCPTool_StripsMCPPaths verifies that pw-snapshot and other tools also strip internal paths.
+func TestMCPTool_StripsMCPPaths(t *testing.T) {
+	internalYML := "page-123.yml"
+	snapshotResponse := "- Page URL: https://example.com/\n" +
+		"- Page Title: Example\n" +
+		"- [Snapshot](.playwright-mcp/" + internalYML + ")\n" +
+		`- button "Submit" [ref=s1e1]`
+
+	client := &Client{MCP: &mcp.Client{
+		ServiceName: "playwright",
+		URL:         "http://playwright.test/mcp",
+		HTTP: &http.Client{Transport: mcpTransport(t, "s1", func(_ string) string {
+			return snapshotResponse
+		})},
+	}}
+	tool := MCPTool{Client: client, LocalName: "pw-snapshot", RemoteName: "browser_snapshot",
+		Parameters: registry.ObjectSchema(nil, map[string]any{})}
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{}`),
+		registry.Runtime{Cache: registry.NewRuntimeCache()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(result.Content, internalYML) {
+		t.Fatalf("output still contains internal path %q:\n%s", internalYML, result.Content)
+	}
+	if !strings.Contains(result.Content, `ref=s1e1`) {
+		t.Fatalf("element ref missing from sanitized output:\n%s", result.Content)
 	}
 }
 

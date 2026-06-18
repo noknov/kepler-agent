@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -75,7 +76,63 @@ func (t MCPTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.R
 		summary += fmt.Sprintf("Screenshot captured (~%dKB). Call slack-send_screenshot to share it in the Slack thread.", sizeKB)
 		return registry.Result{Content: summary}, nil
 	}
-	return registry.Result{Content: out}, nil
+	// Strip internal .playwright-mcp/ file paths from all tool output — not just snapshots.
+	// pw-navigate results also contain lines like "[Snapshot](.playwright-mcp/page-xxx.yml)"
+	// which cause the LLM to call code-read_file on container-internal paths.
+	return registry.Result{Content: sanitizeSnapshotOutput(out)}, nil
+}
+
+const snapshotPathNotice = "Note: .playwright-mcp/* paths are internal to the browser container and cannot be read with code-read_file or other workspace file tools. Use element refs from this output (e.g. ref=s1e4) directly with pw-click, pw-type, or pw-fill_form."
+
+var (
+	rePlaywrightMDLink = regexp.MustCompile(`(?m)\[([^\]]*)\]\(\.playwright-mcp/[^)]+\)`)
+	rePlaywrightPath   = regexp.MustCompile(`\.playwright-mcp/[a-zA-Z0-9._-]+`)
+)
+
+// sanitizeSnapshotOutput removes internal Playwright MCP file-path references from
+// snapshot results so the model does not try to read them via code-read_file.
+func sanitizeSnapshotOutput(s string) string {
+	if !strings.Contains(s, ".playwright-mcp/") {
+		return s
+	}
+	stripped := false
+	out := rePlaywrightMDLink.ReplaceAllStringFunc(s, func(match string) string {
+		stripped = true
+		sub := rePlaywrightMDLink.FindStringSubmatch(match)
+		if len(sub) >= 2 {
+			if text := strings.TrimSpace(sub[1]); text != "" {
+				return text
+			}
+		}
+		return ""
+	})
+	out = rePlaywrightPath.ReplaceAllString(out, "")
+	out = collapseBlankLines(strings.TrimSpace(out))
+	if !stripped {
+		return out
+	}
+	if out != "" {
+		return out + "\n\n" + snapshotPathNotice
+	}
+	return snapshotPathNotice
+}
+
+func collapseBlankLines(s string) string {
+	if s == "" {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	out := make([]string, 0, len(lines))
+	prevBlank := false
+	for _, line := range lines {
+		blank := strings.TrimSpace(line) == ""
+		if blank && prevBlank {
+			continue
+		}
+		out = append(out, line)
+		prevBlank = blank
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
 }
 
 // extractDataURI splits s into the first data:image/... URI found and the remaining text.
@@ -167,6 +224,8 @@ func (t NavigateTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 	if err != nil {
 		return registry.Result{}, err
 	}
+
+	out = sanitizeSnapshotOutput(out)
 
 	// Check for about:blank redirect caused by OIDC popup or similar JS redirect.
 	hrefOut, evalErr := t.Client.MCP.CallTool(ctx, session, "browser_evaluate",
