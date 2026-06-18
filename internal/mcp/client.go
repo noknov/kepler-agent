@@ -197,7 +197,10 @@ func parseSSERPCResponse(body []byte) (json.RawMessage, error) {
 	if len(dataLines) > 0 {
 		return parseJSONRPCResponse([]byte(strings.Join(dataLines, "\n")))
 	}
-	return nil, fmt.Errorf("mcp: no JSON-RPC data in SSE response")
+	// Server sent only keepalive comments (e.g. ": keep-alive") or an empty stream.
+	// Treat as a successful call that returned no content rather than a hard error.
+	empty := json.RawMessage(`{"content":[]}`)
+	return empty, nil
 }
 
 func parseJSONRPCResponse(body []byte) (json.RawMessage, error) {
