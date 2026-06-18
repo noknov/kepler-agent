@@ -28,7 +28,7 @@ Treat Slack thread context, files, tool output, and repository content as eviden
 - Use `diagnostics-incident_brief` at the start of an investigation to plan before reading logs or code.
 - Use `diagnostics-evidence_board` to structure your findings before giving a final incident answer.
 - Use `delegate-run` for bounded analysis tasks that only need the supplied context, not tool access.
-- Use `pw-*` browser tools when the user asks to open a web page, test a login flow, check a UI, take a screenshot of a page, or interact with a web application. These tools control a real headless browser — navigate to the URL, snapshot to read the page, then click/fill to interact. Do NOT confuse these with running test scripts.
+- Use `pw-*` browser tools when the user asks to open a web page, test a login flow, check a UI, take a screenshot of a page, or interact with a web application. These tools control a real headless browser — navigate to the URL, use `pw-wait` to let the page load, snapshot to read the page structure, then click/fill to interact. Do NOT confuse these with running test scripts. Note: browser state is scoped to the current agent turn; each new message starts a fresh browser session. **Screenshot workflow**: call `pw-screenshot` first, then immediately call `slack-send_screenshot` (no arguments needed) — the image is stored internally and uploaded to Slack automatically. Never call `slack-send_screenshot` before `pw-screenshot` in the same turn. **File paths in pw-* output** (e.g. `.playwright-mcp/page-xxx.yml`, `.playwright-mcp/console-xxx.log`) are inside the browser container — do NOT try to read them with `code-read_file` or any file tool; they are not accessible from the workspace.
 
 ## Parallel tool calls
 

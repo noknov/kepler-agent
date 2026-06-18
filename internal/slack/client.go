@@ -171,6 +171,70 @@ func (c *Client) DeleteMessage(ctx context.Context, channel, ts string) error {
 	return nil
 }
 
+// UploadFile uploads data to Slack using the v2 upload API and shares it into
+// a channel thread. filename should include an extension (e.g. "screenshot.png").
+// Returns the file permalink on success.
+func (c *Client) UploadFile(ctx context.Context, channel, threadTS, filename string, data []byte) (string, error) {
+	// Step 1: obtain a pre-signed upload URL.
+	values := url.Values{}
+	values.Set("filename", filename)
+	values.Set("length", fmt.Sprintf("%d", len(data)))
+	var urlOut struct {
+		OK        bool   `json:"ok"`
+		Error     string `json:"error,omitempty"`
+		UploadURL string `json:"upload_url,omitempty"`
+		FileID    string `json:"file_id,omitempty"`
+	}
+	if err := c.get(ctx, "files.getUploadURLExternal", values, &urlOut); err != nil {
+		return "", fmt.Errorf("slack files.getUploadURLExternal: %w", err)
+	}
+	if !urlOut.OK {
+		return "", fmt.Errorf("slack files.getUploadURLExternal failed: %s", urlOut.Error)
+	}
+
+	// Step 2: POST the file content to the pre-signed upload URL.
+	uploadReq, err := http.NewRequestWithContext(ctx, http.MethodPost, urlOut.UploadURL, bytes.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+	uploadReq.Header.Set("Content-Type", "application/octet-stream")
+	uploadResp, err := c.httpClient.Do(uploadReq)
+	if err != nil {
+		return "", fmt.Errorf("slack file upload: %w", err)
+	}
+	uploadBody, _ := io.ReadAll(io.LimitReader(uploadResp.Body, 1<<10))
+	uploadResp.Body.Close()
+	if uploadResp.StatusCode < 200 || uploadResp.StatusCode >= 300 {
+		return "", fmt.Errorf("slack file upload: status %d: %s", uploadResp.StatusCode, strings.TrimSpace(string(uploadBody)))
+	}
+
+	// Step 3: complete the upload and share into the channel thread.
+	completePayload := map[string]any{
+		"files":   []map[string]string{{"id": urlOut.FileID, "title": filename}},
+		"channel": channel,
+	}
+	if threadTS != "" {
+		completePayload["thread_ts"] = threadTS
+	}
+	var completeOut struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+		Files []struct {
+			Permalink string `json:"permalink,omitempty"`
+		} `json:"files,omitempty"`
+	}
+	if err := c.postJSON(ctx, "files.completeUploadExternal", completePayload, &completeOut); err != nil {
+		return "", fmt.Errorf("slack files.completeUploadExternal: %w", err)
+	}
+	if !completeOut.OK {
+		return "", fmt.Errorf("slack files.completeUploadExternal failed: %s", completeOut.Error)
+	}
+	if len(completeOut.Files) > 0 {
+		return completeOut.Files[0].Permalink, nil
+	}
+	return "", nil
+}
+
 func (c *Client) FileInfo(ctx context.Context, fileID string) (File, error) {
 	fileID = strings.TrimSpace(fileID)
 	if fileID == "" {

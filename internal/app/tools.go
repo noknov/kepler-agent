@@ -123,6 +123,7 @@ func registerSlackTools(tools *registry.Registry, slackClient *slack.Client) {
 	tools.Register(slacktool.AskUserTool{Slack: slackClient})
 	tools.Register(slacktool.FileSearchTool{Slack: slackClient})
 	tools.Register(slacktool.JSONAnalyzeTool{Slack: slackClient})
+	tools.Register(slacktool.SendScreenshotTool{Slack: slackClient})
 }
 
 func registerAgentControlTools(tools *registry.Registry, cfg config.Config, llmClient llm.Client) {

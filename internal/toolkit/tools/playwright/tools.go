@@ -43,7 +43,7 @@ func (t MCPTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.R
 		return registry.Result{}, err
 	}
 	out, err := t.Client.MCP.CallTool(ctx, session, t.RemoteName, raw)
-	if err != nil && strings.Contains(err.Error(), "Session not found") {
+	if err != nil && isSessionExpired(err) {
 		session, err = createSession(ctx, t.Client.MCP, rt.Cache)
 		if err != nil {
 			return registry.Result{}, err
@@ -53,11 +53,62 @@ func (t MCPTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.R
 	if err != nil {
 		return registry.Result{}, err
 	}
+	// Image data URIs must not pass through LLM context (multi-MB base64 strings cause
+	// context overflows and LLM timeouts). The Playwright MCP result is typically a
+	// concatenation of a text summary followed by a "data:image/..." URI on its own line.
+	// We extract the URI (wherever it appears), cache it, and return only the text part.
+	if dataURI, textPart := extractDataURI(out); dataURI != "" {
+		if rt.Cache != nil {
+			rt.Cache.Set(screenshotCacheKey, dataURI)
+		}
+		sizeKB := len(dataURI) * 3 / 4 / 1024 // approximate decoded size
+		summary := strings.TrimSpace(textPart)
+		if summary != "" {
+			summary += "\n"
+		}
+		summary += fmt.Sprintf("Screenshot captured (~%dKB). Call slack-send_screenshot to share it in the Slack thread.", sizeKB)
+		return registry.Result{Content: summary}, nil
+	}
 	return registry.Result{Content: out}, nil
 }
 
+// extractDataURI splits s into the first data:image/... URI found and the remaining text.
+// Returns ("", s) if no data URI is present.
+func extractDataURI(s string) (dataURI, rest string) {
+	idx := strings.Index(s, "data:image/")
+	if idx < 0 {
+		return "", s
+	}
+	// The data URI runs to end of the line (or end of string).
+	end := strings.IndexByte(s[idx:], '\n')
+	if end < 0 {
+		return s[idx:], strings.TrimSpace(s[:idx])
+	}
+	return s[idx : idx+end], strings.TrimSpace(s[:idx])
+}
+
+// ScreenshotCacheKey is the RuntimeCache key used to pass the latest screenshot
+// from pw-screenshot to slack-send_screenshot without putting base64 in LLM context.
+const ScreenshotCacheKey = "pw-screenshot-latest"
+
+const screenshotCacheKey = ScreenshotCacheKey
+
+// isSessionExpired reports whether err indicates the MCP session has expired or is unknown.
+// Playwright MCP returns HTTP 404 for unknown sessions; some implementations use JSON-RPC -32001.
+func isSessionExpired(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "status 404") ||
+		strings.Contains(msg, "-32001") ||
+		strings.Contains(msg, "Session not found") ||
+		strings.Contains(msg, "session not found")
+}
+
 // RegisterAll registers all Playwright browser tools into the registry.
+// It is a no-op when the client is not configured (PLAYWRIGHT_MCP_URL unset).
 func RegisterAll(reg *registry.Registry, client *Client) {
+	if client == nil || !client.enabled() {
+		return
+	}
 	for _, tool := range tools(client) {
 		reg.Register(tool)
 	}
@@ -70,7 +121,7 @@ func tools(client *Client) []MCPTool {
 			LocalName:  "pw-navigate",
 			RemoteName: "browser_navigate",
 			Parameters: registry.ObjectSchema([]string{"url"}, map[string]any{
-				"url": map[string]any{"type": "string", "description": ""},
+				"url": map[string]any{"type": "string", "description": "Absolute URL to navigate to."},
 			}),
 		},
 		{
@@ -84,8 +135,8 @@ func tools(client *Client) []MCPTool {
 			LocalName:  "pw-click",
 			RemoteName: "browser_click",
 			Parameters: registry.ObjectSchema([]string{"target"}, map[string]any{
-				"target":  map[string]any{"type": "string", "description": ""},
-				"element": map[string]any{"type": "string", "description": ""},
+				"target":  map[string]any{"type": "string", "description": "Element ref from pw-snapshot (e.g. s1e4)."},
+				"element": map[string]any{"type": "string", "description": "Human-readable description of the element, for logging."},
 			}),
 		},
 		{
@@ -93,9 +144,9 @@ func tools(client *Client) []MCPTool {
 			LocalName:  "pw-type",
 			RemoteName: "browser_type",
 			Parameters: registry.ObjectSchema([]string{"target", "text"}, map[string]any{
-				"target":  map[string]any{"type": "string", "description": ""},
-				"element": map[string]any{"type": "string", "description": ""},
-				"text":    map[string]any{"type": "string", "description": ""},
+				"target":  map[string]any{"type": "string", "description": "Element ref from pw-snapshot (e.g. s1e4)."},
+				"element": map[string]any{"type": "string", "description": "Human-readable description of the element, for logging."},
+				"text":    map[string]any{"type": "string", "description": "Text to type into the element."},
 			}),
 		},
 		{
@@ -108,13 +159,14 @@ func tools(client *Client) []MCPTool {
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
-							"target":  map[string]any{"type": "string"},
-							"element": map[string]any{"type": "string"},
-							"name":    map[string]any{"type": "string"},
+							// "ref" is the field name used by Playwright MCP for per-field element refs.
+							"ref":     map[string]any{"type": "string", "description": "Element ref from pw-snapshot."},
+							"element": map[string]any{"type": "string", "description": "Human-readable element description."},
+							"name":    map[string]any{"type": "string", "description": "Field label or name."},
 							"type":    map[string]any{"type": "string", "enum": []string{"textbox", "checkbox", "radio", "combobox", "slider"}},
-							"value":   map[string]any{"type": "string"},
+							"value":   map[string]any{"type": "string", "description": "Value to set."},
 						},
-						"required": []string{"target", "name", "type", "value"},
+						"required": []string{"ref", "name", "type", "value"},
 					},
 				},
 			}),
@@ -123,9 +175,11 @@ func tools(client *Client) []MCPTool {
 			Client:     client,
 			LocalName:  "pw-screenshot",
 			RemoteName: "browser_take_screenshot",
-			Parameters: registry.ObjectSchema([]string{"type"}, map[string]any{
-				"type":     map[string]any{"type": "string", "enum": []string{"png", "jpeg"}},
-				"filename": map[string]any{"type": "string"},
+			// "type" is optional; omitting it defaults to PNG on the server side.
+			Parameters: registry.ObjectSchema(nil, map[string]any{
+				"type":     map[string]any{"type": "string", "enum": []string{"png", "jpeg"}, "description": "Image format. Defaults to png."},
+				"fullPage": map[string]any{"type": "boolean", "description": "Capture the full scrollable page instead of just the viewport."},
+				"filename": map[string]any{"type": "string", "description": "Optional filename hint for the screenshot."},
 			}),
 		},
 		{
@@ -133,7 +187,7 @@ func tools(client *Client) []MCPTool {
 			LocalName:  "pw-press_key",
 			RemoteName: "browser_press_key",
 			Parameters: registry.ObjectSchema([]string{"key"}, map[string]any{
-				"key": map[string]any{"type": "string", "description": ""},
+				"key": map[string]any{"type": "string", "description": "Key name (e.g. Enter, Tab, Escape, ArrowDown)."},
 			}),
 		},
 		{
@@ -141,19 +195,19 @@ func tools(client *Client) []MCPTool {
 			LocalName:  "pw-wait",
 			RemoteName: "browser_wait_for",
 			Parameters: registry.ObjectSchema(nil, map[string]any{
-				"text":     map[string]any{"type": "string"},
-				"textGone": map[string]any{"type": "string"},
-				"time":     map[string]any{"type": "number"},
+				"text":     map[string]any{"type": "string", "description": "Wait until this text appears on the page."},
+				"textGone": map[string]any{"type": "string", "description": "Wait until this text disappears from the page."},
+				"time":     map[string]any{"type": "number", "description": "Time to wait in seconds."},
 			}),
 		},
 		{
 			Client:     client,
 			LocalName:  "pw-evaluate",
 			RemoteName: "browser_evaluate",
-			Parameters: registry.ObjectSchema([]string{"function"}, map[string]any{
-				"function": map[string]any{"type": "string"},
-				"element":  map[string]any{"type": "string"},
-				"target":   map[string]any{"type": "string"},
+			Parameters: registry.ObjectSchema([]string{"expression"}, map[string]any{
+				// Playwright MCP evaluates a JavaScript expression string in the browser context.
+				// Use standard browser globals (document, window, localStorage) — not Playwright's page object.
+				"expression": map[string]any{"type": "string", "description": "JavaScript expression to evaluate in the browser context, e.g. \"document.title\" or \"localStorage.getItem('token')\"."},
 			}),
 		},
 	}

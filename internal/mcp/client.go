@@ -6,11 +6,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -21,8 +23,12 @@ type Client struct {
 	ServiceName string // e.g. "luckin", "playwright" — used in session cache key
 	URL         string // remote MCP endpoint
 	Token       string // Bearer token; empty means no Authorization header
+	// HTTP overrides the shared HTTP client. Set in tests to inject a mock transport.
+	// Leave nil to use the lazily-initialized shared client (keep-alives enabled, 60s timeout).
 	HTTP        *http.Client
 	nextID      atomic.Int64
+	sharedOnce  sync.Once
+	sharedHTTP  *http.Client
 }
 
 // Session holds the MCP session state after initialization.
@@ -41,12 +47,13 @@ func (c *Client) httpClient() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
-	return &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			DisableKeepAlives: true,
-		},
-	}
+	c.sharedOnce.Do(func() {
+		c.sharedHTTP = &http.Client{
+			// 60s covers slow browser operations (navigation, screenshots, waits).
+			Timeout: 60 * time.Second,
+		}
+	})
+	return c.sharedHTTP
 }
 
 // Initialize performs the MCP initialize handshake and returns a session.
@@ -66,7 +73,9 @@ func (c *Client) Initialize(ctx context.Context) (Session, error) {
 		return Session{}, fmt.Errorf("mcp %s: initialize returned empty result", c.ServiceName)
 	}
 	s := Session{ID: firstHeader(headers, "Mcp-Session-Id"), Initialized: true}
-	_ = c.NotifyInitialized(ctx, s.ID)
+	if err := c.NotifyInitialized(ctx, s.ID); err != nil {
+		return Session{}, fmt.Errorf("mcp %s: notifications/initialized: %w", c.ServiceName, err)
+	}
 	return s, nil
 }
 
@@ -211,13 +220,15 @@ func parseJSONRPCResponse(body []byte) (json.RawMessage, error) {
 	return *resp.Result, nil
 }
 
-// FormatToolResult parses an MCP tools/call result and returns the concatenated text content.
+// FormatToolResult parses an MCP tools/call result and returns the concatenated content.
+// Image items (type "image") are returned as data URIs so multimodal models can consume them.
 func FormatToolResult(raw json.RawMessage) string {
 	var parsed struct {
 		Content []struct {
-			Type string          `json:"type"`
-			Text string          `json:"text,omitempty"`
-			Data json.RawMessage `json:"data,omitempty"`
+			Type     string `json:"type"`
+			Text     string `json:"text,omitempty"`
+			Data     string `json:"data,omitempty"` // base64-encoded; present on image items
+			MimeType string `json:"mimeType,omitempty"`
 		} `json:"content"`
 		StructuredContent json.RawMessage `json:"structuredContent,omitempty"`
 		IsError           bool            `json:"isError,omitempty"`
@@ -230,11 +241,29 @@ func FormatToolResult(raw json.RawMessage) string {
 		parts = append(parts, string(parsed.StructuredContent))
 	}
 	for _, item := range parsed.Content {
-		switch {
-		case item.Text != "":
-			parts = append(parts, item.Text)
-		case len(item.Data) > 0:
-			parts = append(parts, string(item.Data))
+		switch item.Type {
+		case "text":
+			if item.Text != "" {
+				parts = append(parts, item.Text)
+			}
+		case "image":
+			if item.Data != "" {
+				mimeType := item.MimeType
+				if mimeType == "" {
+					mimeType = "image/png"
+				}
+				// Validate the base64 payload before constructing the data URI.
+				if _, err := base64.StdEncoding.DecodeString(item.Data); err == nil {
+					parts = append(parts, "data:"+mimeType+";base64,"+item.Data)
+				} else {
+					parts = append(parts, "[image: invalid base64]")
+				}
+			}
+		default:
+			// Unknown content types: include raw text if present, otherwise skip.
+			if item.Text != "" {
+				parts = append(parts, item.Text)
+			}
 		}
 	}
 	if len(parts) == 0 {
