@@ -9,13 +9,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wati/oncall-agent/internal/mcp"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
 func TestMCPToolCallsStreamableHTTP(t *testing.T) {
 	var sessionID string
 	var callCount int
-	client := &Client{URL: "https://luckin.test/mcp", Token: "token", HTTP: &http.Client{
+	client := &Client{MCP: &mcp.Client{URL: "https://luckin.test/mcp", Token: "token", HTTP: &http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if got := r.Header.Get("Authorization"); got != "Bearer token" {
 				t.Fatalf("Authorization = %q", got)
@@ -64,7 +65,7 @@ func TestMCPToolCallsStreamableHTTP(t *testing.T) {
 			}
 			return nil, nil
 		}),
-	}}
+	}}}
 	tool := MCPTool{
 		Client:     client,
 		LocalName:  "luckin-query_shop_list",
@@ -120,7 +121,7 @@ func TestSideEffectRequiresConfirmationAndStripsFlag(t *testing.T) {
 
 func TestRegisterAllIncludesCouponAlias(t *testing.T) {
 	reg := registry.New()
-	RegisterAll(reg, &Client{})
+	RegisterAll(reg, &Client{MCP: &mcp.Client{Token: "x"}})
 	names := strings.Join(reg.Names(), "\n")
 	if !strings.Contains(names, "luckin-query_coupons") {
 		t.Fatalf("registered names missing coupon alias:\n%s", names)
@@ -128,13 +129,13 @@ func TestRegisterAllIncludesCouponAlias(t *testing.T) {
 }
 
 func TestCreateOrderResultAnnotatesPaymentURLs(t *testing.T) {
-	raw := json.RawMessage(`{
+	out := mcp.FormatToolResult(json.RawMessage(`{
 		"content": [{
 			"type": "text",
 			"text": "{\"code\":0,\"data\":{\"orderIdStr\":\"7620\",\"discountPrice\":9.9,\"needPay\":true,\"payOrderUrl\":\"weixin://pay\",\"payOrderQrCodeUrl\":\"https://example.test/qr.png\"}}"
 		}]
-	}`)
-	got := formatToolResult("createOrder", raw)
+	}`))
+	got := annotateCreateOrderPayment(out)
 	for _, want := range []string{
 		"payQrCodeUrl=https://example.test/qr.png",
 		"wechatPayUrl=weixin://pay",

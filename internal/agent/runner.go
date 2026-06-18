@@ -641,11 +641,14 @@ func (sr *streamRouter) flushAs(kind StreamKind) {
 }
 
 func (r Runner) useStreamGuard() bool {
-	if r.Capabilities.NativeToolCalls {
-		return false
-	}
+	// RepairTextualToolCalls takes priority: even models that support native
+	// tool calls can occasionally fall back to textual markup, so the guard
+	// must be active to suppress that output before it reaches the user.
 	if r.Capabilities.RepairTextualToolCalls {
 		return true
+	}
+	if r.Capabilities.NativeToolCalls {
+		return false
 	}
 	return r.Capabilities.Provider == "" && r.Capabilities.Protocol == ""
 }
