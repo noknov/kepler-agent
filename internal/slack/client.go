@@ -209,9 +209,10 @@ func (c *Client) UploadFile(ctx context.Context, channel, threadTS, filename str
 	}
 
 	// Step 3: complete the upload and share into the channel thread.
+	// The files.completeUploadExternal endpoint requires "channel_id" (not "channel").
 	completePayload := map[string]any{
-		"files":   []map[string]string{{"id": urlOut.FileID, "title": filename}},
-		"channel": channel,
+		"files":      []map[string]string{{"id": urlOut.FileID, "title": filename}},
+		"channel_id": channel,
 	}
 	if threadTS != "" {
 		completePayload["thread_ts"] = threadTS
