@@ -83,37 +83,49 @@ func tools(client *Client) []MCPTool {
 			Client:     client,
 			LocalName:  "pw-click",
 			RemoteName: "browser_click",
-			Parameters: registry.ObjectSchema([]string{"element", "ref"}, map[string]any{
+			Parameters: registry.ObjectSchema([]string{"target"}, map[string]any{
+				"target":  map[string]any{"type": "string", "description": ""},
 				"element": map[string]any{"type": "string", "description": ""},
-				"ref":     map[string]any{"type": "string", "description": ""},
 			}),
 		},
 		{
 			Client:     client,
 			LocalName:  "pw-type",
 			RemoteName: "browser_type",
-			Parameters: registry.ObjectSchema([]string{"element", "ref", "text"}, map[string]any{
+			Parameters: registry.ObjectSchema([]string{"target", "text"}, map[string]any{
+				"target":  map[string]any{"type": "string", "description": ""},
 				"element": map[string]any{"type": "string", "description": ""},
-				"ref":     map[string]any{"type": "string", "description": ""},
 				"text":    map[string]any{"type": "string", "description": ""},
 			}),
 		},
 		{
 			Client:     client,
-			LocalName:  "pw-fill",
-			RemoteName: "browser_fill",
-			Parameters: registry.ObjectSchema([]string{"element", "ref", "value"}, map[string]any{
-				"element": map[string]any{"type": "string", "description": ""},
-				"ref":     map[string]any{"type": "string", "description": ""},
-				"value":   map[string]any{"type": "string", "description": ""},
+			LocalName:  "pw-fill_form",
+			RemoteName: "browser_fill_form",
+			Parameters: registry.ObjectSchema([]string{"fields"}, map[string]any{
+				"fields": map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"target":  map[string]any{"type": "string"},
+							"element": map[string]any{"type": "string"},
+							"name":    map[string]any{"type": "string"},
+							"type":    map[string]any{"type": "string", "enum": []string{"textbox", "checkbox", "radio", "combobox", "slider"}},
+							"value":   map[string]any{"type": "string"},
+						},
+						"required": []string{"target", "name", "type", "value"},
+					},
+				},
 			}),
 		},
 		{
 			Client:     client,
 			LocalName:  "pw-screenshot",
 			RemoteName: "browser_take_screenshot",
-			Parameters: registry.ObjectSchema([]string{"name"}, map[string]any{
-				"name": map[string]any{"type": "string", "description": ""},
+			Parameters: registry.ObjectSchema([]string{"type"}, map[string]any{
+				"type":     map[string]any{"type": "string", "enum": []string{"png", "jpeg"}},
+				"filename": map[string]any{"type": "string"},
 			}),
 		},
 		{
@@ -129,23 +141,20 @@ func tools(client *Client) []MCPTool {
 			LocalName:  "pw-wait",
 			RemoteName: "browser_wait_for",
 			Parameters: registry.ObjectSchema(nil, map[string]any{
-				"text": map[string]any{"type": "string", "description": ""},
-				"time": map[string]any{"type": "number", "description": ""},
+				"text":     map[string]any{"type": "string"},
+				"textGone": map[string]any{"type": "string"},
+				"time":     map[string]any{"type": "number"},
 			}),
 		},
 		{
 			Client:     client,
 			LocalName:  "pw-evaluate",
 			RemoteName: "browser_evaluate",
-			Parameters: registry.ObjectSchema([]string{"expression"}, map[string]any{
-				"expression": map[string]any{"type": "string", "description": ""},
+			Parameters: registry.ObjectSchema([]string{"function"}, map[string]any{
+				"function": map[string]any{"type": "string"},
+				"element":  map[string]any{"type": "string"},
+				"target":   map[string]any{"type": "string"},
 			}),
-		},
-		{
-			Client:     client,
-			LocalName:  "pw-get_url",
-			RemoteName: "browser_get_url",
-			Parameters: registry.ObjectSchema(nil, map[string]any{}),
 		},
 	}
 }

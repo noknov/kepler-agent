@@ -364,65 +364,63 @@
     }
   },
   "pw-navigate": {
-    "description": "Open a web page in the headless browser. Use this to access a live web application — login pages, dashboards, staging environments, etc. This is NOT for running test scripts; it controls a real browser to interact with live web pages. Typical flow: pw-navigate → pw-snapshot → pw-click/pw-fill → pw-screenshot.",
+    "description": "Open a web page in the headless browser. Use this to access a live web application — login pages, dashboards, staging environments, etc. This is NOT for running test scripts; it controls a real browser to interact with live web pages. Typical flow: pw-navigate → pw-snapshot → pw-click/pw-type → pw-screenshot.",
     "parameters": {
       "url": "Absolute URL to navigate to."
     }
   },
   "pw-snapshot": {
-    "description": "Read the current page structure as an accessibility tree. Returns structured text listing all interactive elements (buttons, inputs, links) with refs like [ref=s1e4]. Always call this after pw-navigate to understand what's on the page, and use the refs for pw-click/pw-fill.",
+    "description": "Read the current page structure as an accessibility tree. Returns structured text listing all interactive elements (buttons, inputs, links) with refs like [ref=s1e4]. Always call this after pw-navigate to understand what's on the page, and use the refs for pw-click/pw-type.",
     "parameters": {}
   },
   "pw-click": {
-    "description": "Click an element on the page. Get the ref from a pw-snapshot result (e.g. [ref=s1e4]). Use for buttons, links, checkboxes, etc.",
+    "description": "Click an element on the page. Get the target ref from a pw-snapshot result (e.g. [ref=s1e4]). Use for buttons, links, checkboxes, etc.",
     "parameters": {
-      "element": "Human-readable element description for logging.",
-      "ref": "Element reference from the accessibility snapshot (e.g. s1e4)."
+      "target": "Element reference from the accessibility snapshot (e.g. s1e4).",
+      "element": "Human-readable element description for logging."
     }
   },
   "pw-type": {
-    "description": "Type text character by character into an element. Use for input fields that need keystroke-by-keystroke input. For simple form filling, prefer pw-fill.",
+    "description": "Type text into an element. Use for input fields, search boxes, login forms, etc. Get the target ref from pw-snapshot.",
     "parameters": {
+      "target": "Element reference from snapshot (e.g. s1e4).",
       "element": "Human-readable element description.",
-      "ref": "Element reference from snapshot.",
-      "text": "Text to type."
+      "text": "Text to type into the element."
     }
   },
-  "pw-fill": {
-    "description": "Set the value of a form input field directly. Preferred over pw-type for filling text inputs, search boxes, login forms, etc.",
+  "pw-fill_form": {
+    "description": "Fill multiple form fields at once. Use for login forms or complex forms with multiple inputs. Each field needs a target ref from pw-snapshot.",
     "parameters": {
-      "element": "Human-readable element description.",
-      "ref": "Element reference from snapshot.",
-      "value": "Value to fill into the field."
+      "fields": "Array of field objects, each with: target (ref from snapshot), element (description), name (field name), type (textbox/checkbox/radio/combobox/slider), value (value to set)."
     }
   },
   "pw-screenshot": {
-    "description": "Capture a screenshot of the current browser page as a PNG image. Use to visually verify what the page looks like or to include evidence in incident reports.",
+    "description": "Capture a screenshot of the current browser page as a PNG or JPEG image. Use to visually verify what the page looks like or to include evidence in incident reports.",
     "parameters": {
-      "name": "Descriptive name for the screenshot (used as filename)."
+      "type": "Image format: png or jpeg. Defaults to png.",
+      "filename": "Optional filename for the screenshot."
     }
   },
   "pw-press_key": {
-    "description": "Press a keyboard key. Use after pw-fill/pw-type to submit forms (Enter), switch focus (Tab), or dismiss dialogs (Escape).",
+    "description": "Press a keyboard key. Use after pw-type to submit forms (Enter), switch focus (Tab), or dismiss dialogs (Escape).",
     "parameters": {
       "key": "Key name (e.g. Enter, Tab, Escape, ArrowDown)."
     }
   },
   "pw-wait": {
-    "description": "Wait for something to happen on the page — either for specific text to appear or for a time delay. Use after navigation or clicks that trigger loading.",
+    "description": "Wait for something to happen on the page — either for specific text to appear/disappear or for a time delay. Use after navigation or clicks that trigger loading.",
     "parameters": {
       "text": "Text to wait for on the page.",
-      "time": "Time to wait in seconds (alternative to text)."
+      "textGone": "Text to wait for to disappear.",
+      "time": "Time to wait in seconds."
     }
   },
   "pw-evaluate": {
-    "description": "Run JavaScript in the browser. Use for tasks that can't be done with click/type/fill — reading computed styles, checking localStorage, calling app APIs from the browser context.",
+    "description": "Run JavaScript in the browser. Use for tasks that can't be done with click/type — reading computed styles, checking localStorage, calling app APIs from the browser context. The function receives page object as argument.",
     "parameters": {
-      "expression": "JavaScript expression or code to evaluate."
+      "function": "JavaScript function to evaluate, e.g. async (page) => { return await page.title(); }",
+      "element": "Optional human-readable element description.",
+      "target": "Optional element reference from snapshot."
     }
-  },
-  "pw-get_url": {
-    "description": "Get the current browser URL. Use to confirm navigation succeeded or to check if a redirect happened.",
-    "parameters": {}
   }
 }
