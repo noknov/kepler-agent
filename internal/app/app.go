@@ -128,10 +128,7 @@ func NewServer(cfg config.Config) (*Server, error) {
 		mux:        http.NewServeMux(),
 	}
 	conv.ModelOverride = func(userID string) string {
-		if v, ok := s.modelPrefs.Load(userID); ok {
-			return v.(string)
-		}
-		return ""
+		return s.modelPreference(userID)
 	}
 	if mm := cfg.LLM.MultimodalModels; len(mm) > 0 {
 		mmSet := make(map[string]bool, len(mm))
@@ -172,10 +169,15 @@ func (s *Server) routes(cfg config.Config, store session.Store, runtime agentRun
 	webConv.RunModel = cfg.LLM.Model
 	webConv.CostRates = runtime.CostRates
 	webConv.HealthSummary = healthService.SummaryPrompt
-	if cfg.Web.Model != "" {
-		webConv.ModelOverride = func(string) string { return cfg.Web.Model }
+	webConv.ModelOverride = func(userID string) string {
+		return s.modelPreference(userID)
 	}
-	web.New(s.slack, webConv, webHub, cfg.Security.AllowedUsers).RegisterRoutes(s.mux)
+	web.New(s.slack, webConv, webHub, cfg.Security.AllowedUsers, web.ModelSettings{
+		DefaultModel: cfg.LLM.Model,
+		Models:       cfg.LLM.AvailableModels,
+		Get:          s.modelPreference,
+		Set:          s.setModelPreference,
+	}).RegisterRoutes(s.mux)
 
 	log.Printf("oncall-agent configured, tools=%s", strings.Join(tools.Names(), ", "))
 }
@@ -297,6 +299,24 @@ func (s *Server) handleSlackInteractions(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleModelSelect(userID, model string) {
+	if !s.setModelPreference(userID, model) {
+		return
+	}
+	go func() {
+		if err := s.slack.PublishHome(context.Background(), userID, s.homeView(userID)); err != nil {
+			log.Printf("publish home after model select failed: %v", err)
+		}
+	}()
+}
+
+func (s *Server) modelPreference(userID string) string {
+	if v, ok := s.modelPrefs.Load(userID); ok {
+		return v.(string)
+	}
+	return ""
+}
+
+func (s *Server) setModelPreference(userID, model string) bool {
 	allowed := false
 	for _, m := range s.cfg.LLM.AvailableModels {
 		if m == model {
@@ -305,18 +325,14 @@ func (s *Server) handleModelSelect(userID, model string) {
 		}
 	}
 	if !allowed {
-		return
+		return false
 	}
 	if model == s.cfg.LLM.Model {
 		s.modelPrefs.Delete(userID)
 	} else {
 		s.modelPrefs.Store(userID, model)
 	}
-	go func() {
-		if err := s.slack.PublishHome(context.Background(), userID, s.homeView(userID)); err != nil {
-			log.Printf("publish home after model select failed: %v", err)
-		}
-	}()
+	return true
 }
 
 func (s *Server) handleEvent(ctx context.Context, eventID string, ev slack.Event) {

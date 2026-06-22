@@ -304,6 +304,80 @@ func TestLoadOpenAIDoesNotEnableThinkingByDefault(t *testing.T) {
 	}
 }
 
+func TestLoadOpenCodeGoDefaults(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":      "xoxb-test",
+		"SLACK_SIGNING_SECRET": "secret",
+		"ALLOWED_SLACK_USERS":  "U123",
+		"OPENCODE_GO_API_KEY":  "oc-go-token",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.LLM.Provider != "opencode-go" {
+		t.Fatalf("LLM.Provider = %q, want opencode-go", cfg.LLM.Provider)
+	}
+	if cfg.LLM.Protocol != "openai" {
+		t.Fatalf("LLM.Protocol = %q, want openai", cfg.LLM.Protocol)
+	}
+	if cfg.LLM.BaseURL != "https://opencode.ai/zen/go/v1" {
+		t.Fatalf("LLM.BaseURL = %q, want OpenCode Go base URL", cfg.LLM.BaseURL)
+	}
+	if cfg.LLM.Model != "glm-5.2" {
+		t.Fatalf("LLM.Model = %q, want glm-5.2", cfg.LLM.Model)
+	}
+	if cfg.LLM.APIKey != "oc-go-token" {
+		t.Fatalf("LLM.APIKey = %q, want oc-go-token", cfg.LLM.APIKey)
+	}
+	for _, want := range []string{"glm-5.2", "kimi-k2.7-code", "minimax-m3", "qwen3.7-max", "deepseek-v4-flash"} {
+		if !containsString(cfg.LLM.AvailableModels, want) {
+			t.Fatalf("AvailableModels = %#v, want %q", cfg.LLM.AvailableModels, want)
+		}
+	}
+}
+
+func TestLoadOpenCodeGoAnthropicEndpoint(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":      "xoxb-test",
+		"SLACK_SIGNING_SECRET": "secret",
+		"ALLOWED_SLACK_USERS":  "U123",
+		"LLM_PROVIDER":         "opencode-go",
+		"OPENCODE_GO_PROTOCOL": "anthropic",
+		"OPENCODE_GO_API_KEY":  "oc-go-token",
+		"OPENCODE_GO_MODEL":    "minimax-m3",
+		"OPENCODE_GO_BASE_URL": "https://opencode.ai/zen/go/v1",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.LLM.Provider != "opencode-go" || cfg.LLM.Protocol != "anthropic" {
+		t.Fatalf("LLM provider/protocol = %s/%s, want opencode-go/anthropic", cfg.LLM.Provider, cfg.LLM.Protocol)
+	}
+	if cfg.LLM.Model != "minimax-m3" {
+		t.Fatalf("LLM.Model = %q, want minimax-m3", cfg.LLM.Model)
+	}
+}
+
 func TestLoadRejectsOpenAICodingEndpointWithoutExplicitOptIn(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
@@ -462,6 +536,13 @@ func resetConfigEnv(t *testing.T) {
 		"KIMI_API_KEY",
 		"KIMI_BASE_URL",
 		"KIMI_MODEL",
+		"OPENCODE_GO_PROTOCOL",
+		"OPENCODE_GO_API_KEY",
+		"OPENCODE_GO_BASE_URL",
+		"OPENCODE_GO_MODEL",
+		"OPENCODE_GO_MAX_TOKENS",
+		"OPENCODE_GO_TEMPERATURE",
+		"OPENCODE_GO_TIMEOUT",
 		"MOONSHOT_API_KEY",
 		"MOONSHOT_BASE_URL",
 		"MOONSHOT_MODEL",
@@ -491,4 +572,13 @@ func resetConfigEnv(t *testing.T) {
 	for _, key := range keys {
 		t.Setenv(key, "")
 	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

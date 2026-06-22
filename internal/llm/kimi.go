@@ -276,6 +276,9 @@ func (c *KimiClient) doOnce(ctx context.Context, payload []byte) ([]byte, error)
 }
 
 func (c *KimiClient) providerName() string {
+	if isOpenCodeGoEndpoint(c.baseURL) {
+		return "opencode-go"
+	}
 	if isMiMoEndpoint(c.baseURL, "") {
 		return "mimo"
 	}
@@ -298,4 +301,9 @@ func isMiMoEndpoint(baseURL, model string) bool {
 	baseURL = strings.ToLower(strings.TrimSpace(baseURL))
 	model = strings.ToLower(strings.TrimSpace(model))
 	return strings.Contains(baseURL, "xiaomimimo.com") || strings.HasPrefix(model, "mimo-")
+}
+
+func isOpenCodeGoEndpoint(baseURL string) bool {
+	baseURL = strings.ToLower(strings.TrimSpace(baseURL))
+	return strings.Contains(baseURL, "opencode.ai/zen/go")
 }

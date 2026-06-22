@@ -89,7 +89,9 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *obs
 
 func newLLMClient(cfg config.Config) llm.Client {
 	var client llm.Client
-	if cfg.LLM.Protocol == "anthropic" {
+	if cfg.LLM.Provider == "opencode-go" {
+		client = llm.NewOpenCodeGoClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout)
+	} else if cfg.LLM.Protocol == "anthropic" {
 		client = llm.NewAnthropicClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout, cfg.LLM.AnthropicFlavor)
 	} else {
 		client = llm.NewKimiClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout)

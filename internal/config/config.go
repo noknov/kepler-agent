@@ -14,7 +14,6 @@ import (
 type Config struct {
 	HTTP      HTTPConfig
 	Slack     SlackConfig
-	Web       WebConfig
 	LLM       LLMConfig
 	Security  SecurityConfig
 	Sessions  SessionConfig
@@ -37,13 +36,6 @@ type RAGConfig struct {
 
 type HTTPConfig struct {
 	Addr string
-}
-
-// WebConfig holds settings for the built-in web chat UI.
-type WebConfig struct {
-	// Model overrides the LLM model used for web sessions.
-	// Empty means use the same default as Slack.
-	Model string
 }
 
 type SlackConfig struct {
@@ -148,7 +140,7 @@ func Load() (Config, error) {
 		anthropicFlavor = inferAnthropicFlavor(llmBaseURL)
 	}
 	llmModel := providerModel(llmProvider)
-	llmAvailableModels := availableModels(llmModel)
+	llmAvailableModels := availableModels(llmProvider, llmModel)
 	llmMultimodalModels := envCSV("MULTIMODAL_MODELS")
 	llmThinking := providerThinking(llmProvider)
 	if llmProvider == "mimo" && providerThinking(llmProvider) == "" {
@@ -162,9 +154,6 @@ func Load() (Config, error) {
 			BotToken:      os.Getenv("SLACK_BOT_TOKEN"),
 			SigningSecret: os.Getenv("SLACK_SIGNING_SECRET"),
 			BotUserID:     os.Getenv("SLACK_BOT_USER_ID"),
-		},
-		Web: WebConfig{
-			Model: os.Getenv("WEB_MODEL"),
 		},
 		LLM: LLMConfig{
 			Provider:         llmProvider,
@@ -307,6 +296,8 @@ func inferLLMProviderFrom(get func(string) string) string {
 		return "kimi"
 	case firstNonEmpty(get("MOONSHOT_API_KEY"), get("MOONSHOT_BASE_URL"), get("MOONSHOT_MODEL")) != "":
 		return "moonshot"
+	case firstNonEmpty(get("OPENCODE_GO_API_KEY"), get("OPENCODE_GO_BASE_URL"), get("OPENCODE_GO_MODEL"), get("OPENCODE_GO_PROTOCOL")) != "":
+		return "opencode-go"
 	case firstNonEmpty(get("OPENAI_API_KEY"), get("OPENAI_BASE_URL"), get("OPENAI_MODEL")) != "":
 		return "openai"
 	}
@@ -325,6 +316,12 @@ func providerProtocol(provider string) string {
 		return normalizeLLMProtocol(firstEnv("ANTHROPIC_PROTOCOL", "LLM_PROTOCOL"))
 	case "kimi":
 		return normalizeLLMProtocol(firstEnv("KIMI_PROTOCOL", "LLM_PROTOCOL"))
+	case "opencode-go":
+		protocol := normalizeLLMProtocol(firstEnv("OPENCODE_GO_PROTOCOL", "LLM_PROTOCOL"))
+		if protocol == "" {
+			return "openai"
+		}
+		return protocol
 	default:
 		return normalizeLLMProtocol(firstEnv("LLM_PROTOCOL"))
 	}
@@ -340,6 +337,8 @@ func providerBaseURL(provider string) string {
 		return env("KIMI_BASE_URL", "https://api.moonshot.ai/v1")
 	case "moonshot":
 		return env("MOONSHOT_BASE_URL", "https://api.moonshot.ai/v1")
+	case "opencode-go":
+		return env("OPENCODE_GO_BASE_URL", "https://opencode.ai/zen/go/v1")
 	default:
 		return env("OPENAI_BASE_URL", "https://api.openai.com/v1")
 	}
@@ -358,14 +357,19 @@ func providerModel(provider string) string {
 		return env("KIMI_MODEL", "kimi-k2.6")
 	case "moonshot":
 		return env("MOONSHOT_MODEL", "kimi-k2.6")
+	case "opencode-go":
+		return env("OPENCODE_GO_MODEL", "glm-5.2")
 	default:
 		return env("OPENAI_MODEL", "gpt-4o-mini")
 	}
 }
 
-func availableModels(defaultModel string) []string {
+func availableModels(provider, defaultModel string) []string {
 	raw := strings.TrimSpace(os.Getenv("AVAILABLE_MODELS"))
 	if raw == "" {
+		if provider == "opencode-go" {
+			return ensureDefaultModel(defaultModel, opencodeGoModels())
+		}
 		return []string{defaultModel}
 	}
 	seen := map[string]bool{}
@@ -380,10 +384,42 @@ func availableModels(defaultModel string) []string {
 	if len(models) == 0 {
 		return []string{defaultModel}
 	}
-	if !seen[defaultModel] {
-		models = append([]string{defaultModel}, models...)
+	return ensureDefaultModel(defaultModel, models)
+}
+
+func ensureDefaultModel(defaultModel string, models []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(models)+1)
+	for _, model := range models {
+		if model == "" || seen[model] {
+			continue
+		}
+		seen[model] = true
+		out = append(out, model)
 	}
-	return models
+	if defaultModel != "" && !seen[defaultModel] {
+		out = append([]string{defaultModel}, out...)
+	}
+	return out
+}
+
+func opencodeGoModels() []string {
+	return []string{
+		"glm-5.2",
+		"glm-5.1",
+		"kimi-k2.7-code",
+		"kimi-k2.6",
+		"mimo-v2.5",
+		"mimo-v2.5-pro",
+		"minimax-m3",
+		"minimax-m2.7",
+		"minimax-m2.5",
+		"qwen3.7-max",
+		"qwen3.7-plus",
+		"qwen3.6-plus",
+		"deepseek-v4-pro",
+		"deepseek-v4-flash",
+	}
 }
 
 func providerAPIKey(provider string) string {
@@ -396,6 +432,8 @@ func providerAPIKey(provider string) string {
 		return firstEnv("KIMI_API_KEY")
 	case "moonshot":
 		return firstEnv("MOONSHOT_API_KEY")
+	case "opencode-go":
+		return firstEnv("OPENCODE_GO_API_KEY")
 	default:
 		return firstEnv("OPENAI_API_KEY")
 	}
@@ -420,6 +458,8 @@ func providerMaxTokens(provider string) int {
 		return envIntAliases(8192, "ANTHROPIC_MAX_TOKENS", "CLAUDE_CODE_MAX_OUTPUT_TOKENS")
 	case "kimi", "moonshot":
 		return envIntAliases(8192, "KIMI_MAX_TOKENS")
+	case "opencode-go":
+		return envIntAliases(8192, "OPENCODE_GO_MAX_TOKENS")
 	default:
 		return envIntAliases(8192, "OPENAI_MAX_TOKENS")
 	}
@@ -431,6 +471,8 @@ func providerTemperature(provider string) float64 {
 		return envFloatAliases(0, "MIMO_TEMPERATURE")
 	case "kimi", "moonshot":
 		return envFloatAliases(0, "KIMI_TEMPERATURE")
+	case "opencode-go":
+		return envFloatAliases(0, "OPENCODE_GO_TEMPERATURE")
 	default:
 		return envFloatAliases(0, "OPENAI_TEMPERATURE", "ANTHROPIC_TEMPERATURE")
 	}
@@ -444,6 +486,8 @@ func providerTimeout(provider string) time.Duration {
 		return envDurationAliases(120*time.Second, "ANTHROPIC_TIMEOUT", "API_TIMEOUT_MS")
 	case "kimi", "moonshot":
 		return envDurationAliases(120*time.Second, "KIMI_TIMEOUT", "API_TIMEOUT_MS")
+	case "opencode-go":
+		return envDurationAliases(120*time.Second, "OPENCODE_GO_TIMEOUT", "API_TIMEOUT_MS")
 	default:
 		return envDurationAliases(120*time.Second, "OPENAI_TIMEOUT", "API_TIMEOUT_MS")
 	}
@@ -635,6 +679,15 @@ func inferAnthropicFlavor(raw string) string {
 	return "official"
 }
 
+func providerEnvPrefix(provider string) string {
+	switch provider {
+	case "opencode-go":
+		return "OPENCODE_GO"
+	default:
+		return strings.ToUpper(provider)
+	}
+}
+
 func isMiMoConfig(baseURL, model string) bool {
 	baseURL = strings.ToLower(trimRightSlash(baseURL))
 	model = strings.ToLower(strings.TrimSpace(model))
@@ -740,15 +793,19 @@ func providerSnapshot(get func(string) string) llmEnvSnapshot {
 	if provider == "" {
 		return llmEnvSnapshot{}
 	}
-	protocol := normalizeLLMProtocol(firstNonEmpty(get(strings.ToUpper(provider)+"_PROTOCOL"), get("LLM_PROTOCOL")))
+	prefix := providerEnvPrefix(provider)
+	protocol := normalizeLLMProtocol(firstNonEmpty(get(prefix+"_PROTOCOL"), get("LLM_PROTOCOL")))
 	if protocol == "" && provider == "mimo" {
 		protocol = "anthropic"
+	}
+	if protocol == "" && provider == "opencode-go" {
+		protocol = "openai"
 	}
 	anthropicFlavor := normalizeAnthropicFlavor(firstNonEmpty(
 		get("LLM_ANTHROPIC_FLAVOR"),
 		get("ANTHROPIC_FLAVOR"),
 	))
-	baseURL := firstNonEmpty(get(strings.ToUpper(provider) + "_BASE_URL"))
+	baseURL := firstNonEmpty(get(prefix + "_BASE_URL"))
 	baseURL = normalizeLLMBaseURL(baseURL, protocol)
 	if protocol == "" && baseURL != "" {
 		protocol = inferLLMProtocol(baseURL)
@@ -761,7 +818,7 @@ func providerSnapshot(get func(string) string) llmEnvSnapshot {
 		Protocol:        protocol,
 		AnthropicFlavor: anthropicFlavor,
 		BaseURL:         trimRightSlash(baseURL),
-		Model:           firstNonEmpty(get(strings.ToUpper(provider) + "_MODEL")),
+		Model:           firstNonEmpty(get(prefix + "_MODEL")),
 		APIKey:          providerSnapshotAPIKey(provider, get),
 	}
 	return snapshot
@@ -772,6 +829,6 @@ func providerSnapshotAPIKey(provider string, get func(string) string) string {
 	case "anthropic":
 		return firstNonEmpty(get("ANTHROPIC_API_KEY"), get("ANTHROPIC_AUTH_TOKEN"))
 	default:
-		return firstNonEmpty(get(strings.ToUpper(provider) + "_API_KEY"))
+		return firstNonEmpty(get(providerEnvPrefix(provider) + "_API_KEY"))
 	}
 }

@@ -88,6 +88,32 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-4o
 ```
 
+**OpenCode Go**
+
+OpenCode Go exposes selected subscription models through OpenAI-compatible
+`/chat/completions` and Anthropic-compatible `/messages` endpoints. The default
+here uses the OpenAI-compatible endpoint and `glm-5.2`. When `AVAILABLE_MODELS`
+is omitted, the app exposes the full OpenCode Go model list in both Slack and
+the Web UI model selectors. The runtime routes each selected Go model to the
+documented OpenAI-compatible or Anthropic-compatible endpoint automatically.
+
+```bash
+LLM_PROVIDER=opencode-go
+OPENCODE_GO_API_KEY=...
+OPENCODE_GO_BASE_URL=https://opencode.ai/zen/go/v1
+OPENCODE_GO_MODEL=glm-5.2
+OPENCODE_GO_PROTOCOL=openai
+```
+
+`OPENCODE_GO_PROTOCOL` describes the default protocol shown in configuration.
+You do not need to restart or change this value when a user picks a `/messages`
+model such as `minimax-m3` or `qwen3.7-max`; the OpenCode Go client handles
+that per request.
+
+```bash
+AVAILABLE_MODELS=glm-5.2,kimi-k2.7-code,minimax-m3,qwen3.7-max,deepseek-v4-flash
+```
+
 ### 💬 Streaming responsiveness
 
 Final answer streaming is flushed in small batches to keep the UI responsive without sending one request per token. These settings can be tuned from the environment; duration values accept either milliseconds as a number or Go duration strings such as `35ms`.
