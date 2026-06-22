@@ -13,6 +13,7 @@ type Message struct {
 	Name             string     `json:"name,omitempty"`
 	ToolCallID       string     `json:"tool_call_id,omitempty"`
 	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	Usage            *Usage     `json:"-"` // API-reported token usage; set on assistant messages after each LLM call
 }
 
 type ContentPart struct {

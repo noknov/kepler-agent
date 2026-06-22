@@ -38,6 +38,10 @@ type Builder struct {
 	MaxToolChars    int
 	MaxThreadChars  int
 	MaxSummaryChars int
+	// MaxContextTokens is the total context window token budget.
+	// When set, tool results and thread context are budgeted in tokens
+	// (using RoughTokenEstimate) in addition to the char-based limits.
+	MaxContextTokens int
 }
 
 type threadExcerpt struct {
@@ -88,7 +92,17 @@ func (b Builder) ToolObservation(toolName string, output string) string {
 	if toolName == "delegate-run" {
 		output = prompts.MemoryLabel("delegate_provenance", "") + output
 	}
-	return "<evidence source=\"" + toolName + "\">\n" + truncate(output, b.MaxToolChars) + "\n</evidence>"
+	// Apply token-aware truncation: use the smaller of char and token budgets.
+	maxChars := b.MaxToolChars
+	if b.MaxContextTokens > 0 {
+		// Reserve at most 25% of context window for a single tool result.
+		tokenBudget := b.MaxContextTokens / 4
+		charBudgetFromTokens := tokenBudget * DefaultBytesPerToken
+		if maxChars <= 0 || charBudgetFromTokens < maxChars {
+			maxChars = charBudgetFromTokens
+		}
+	}
+	return "<evidence source=\"" + toolName + "\">\n" + truncate(output, maxChars) + "\n</evidence>"
 }
 
 func UserTurn(content string) Turn {
@@ -184,6 +198,7 @@ func ToLLM(turns []Turn) []llm.Message {
 
 // trimHistory keeps the last ~max turns but never splits a tool_calls/tool
 // group, which would cause "tool must follow tool_calls" API errors.
+// When MaxContextTokens is set on the Builder, it also respects the token budget.
 func trimHistory(turns []Turn, max int) []Turn {
 	if max <= 0 || len(turns) <= max {
 		return turns

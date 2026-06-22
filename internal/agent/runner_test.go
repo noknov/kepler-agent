@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/wati/oncall-agent/internal/memory"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
@@ -313,43 +314,51 @@ func toolCallMessage(id, args string) llm.Message {
 	}
 }
 
-func TestCompressContextClearsOldToolResults(t *testing.T) {
-	r := Runner{MaxContextChars: 500}
+func TestMicroCompactClearsOldToolResults(t *testing.T) {
+	c := &memory.Compactor{
+		KeepRecentTools: 4,
+		ClearableTools:  map[string]bool{"bash": true, "read": true},
+	}
+	r := Runner{Compactor: c}
 	messages := []llm.Message{
 		{Role: "system", Content: "system prompt"},
 		{Role: "user", Content: "question"},
 		{Role: "assistant"},
-		{Role: "tool", ToolCallID: "1", Content: strings.Repeat("x", 200)},
+		{Role: "tool", Name: "bash", ToolCallID: "1", Content: strings.Repeat("x", 200)},
 		{Role: "assistant"},
-		{Role: "tool", ToolCallID: "2", Content: strings.Repeat("y", 200)},
-		// recent messages (within last 8)
+		{Role: "tool", Name: "read", ToolCallID: "2", Content: strings.Repeat("y", 200)},
+		// recent messages (within last 4 tool results)
 		{Role: "assistant"},
-		{Role: "tool", ToolCallID: "3", Content: strings.Repeat("z", 200)},
+		{Role: "tool", Name: "bash", ToolCallID: "3", Content: strings.Repeat("z", 200)},
 		{Role: "assistant"},
-		{Role: "tool", ToolCallID: "4", Content: "recent"},
+		{Role: "tool", Name: "read", ToolCallID: "4", Content: "recent"},
 		{Role: "assistant", Content: "thinking..."},
-		{Role: "tool", ToolCallID: "5", Content: "latest"},
+		{Role: "tool", Name: "bash", ToolCallID: "5", Content: "latest"},
 	}
-	result := r.compressContext(messages)
+	result := r.Compactor.ApplyMicroCompact(messages)
 	// Old tool results (before boundary) should be cleared
-	if result[3].Content != toolResultCleared {
-		t.Fatalf("expected old tool result [1] to be cleared, got len=%d", len(result[3].Content))
+	if result[3].Content != memory.ToolResultClearedMsg {
+		t.Fatalf("expected old tool result [1] to be cleared, got: %s", result[3].Content)
 	}
-	// Recent results (within last 8) should be preserved
+	// Recent results (within last 4) should be preserved
 	if result[11].Content != "latest" {
 		t.Fatalf("expected recent tool result to be preserved, got: %s", result[11].Content)
 	}
 }
 
-func TestCompressContextNoOpUnderLimit(t *testing.T) {
-	r := Runner{MaxContextChars: 10000}
+func TestMicroCompactNoOpUnderLimit(t *testing.T) {
+	c := &memory.Compactor{
+		KeepRecentTools: 8,
+		ClearableTools:  map[string]bool{"bash": true},
+	}
+	r := Runner{Compactor: c}
 	messages := []llm.Message{
 		{Role: "system", Content: "prompt"},
-		{Role: "tool", ToolCallID: "1", Content: "short"},
+		{Role: "tool", Name: "bash", ToolCallID: "1", Content: "short"},
 	}
-	result := r.compressContext(messages)
+	result := r.Compactor.ApplyMicroCompact(messages)
 	if result[1].Content != "short" {
-		t.Fatal("should not compress when under limit")
+		t.Fatal("should not compress when under tool count limit")
 	}
 }
 
