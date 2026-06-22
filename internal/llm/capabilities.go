@@ -16,17 +16,17 @@ func CapabilitiesFor(provider, protocol string) Capabilities {
 	provider = normalizeProviderName(provider)
 	protocol = normalizeProtocolName(protocol)
 	caps := Capabilities{
-		Provider:                provider,
-		Protocol:                protocol,
-		NativeToolCalls:         true,
-		RepairTextualToolCalls:  true,
+		Provider:               provider,
+		Protocol:               protocol,
+		NativeToolCalls:        true,
+		RepairTextualToolCalls: true,
 	}
 	return caps
 }
 
 func normalizeProviderName(provider string) string {
 	switch provider {
-	case "mimo", "anthropic", "kimi", "moonshot", "openai":
+	case "mimo", "anthropic", "kimi", "moonshot", "opencode-go", "openai":
 		return provider
 	default:
 		if provider == "" {

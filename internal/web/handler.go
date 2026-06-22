@@ -25,6 +25,45 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.auth.currentUser(r)
+	if !ok {
+		http.Error(w, `{"error":"unauthenticated"}`, http.StatusUnauthorized)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		current := s.models.DefaultModel
+		if s.models.Get != nil {
+			if pref := s.models.Get(user.ID); pref != "" {
+				current = pref
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"default_model": s.models.DefaultModel,
+			"current_model": current,
+			"models":        s.models.Models,
+		})
+	case http.MethodPost:
+		var body struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Model == "" {
+			http.Error(w, `{"error":"missing model"}`, http.StatusBadRequest)
+			return
+		}
+		if s.models.Set == nil || !s.models.Set(user.ID, body.Model) {
+			http.Error(w, `{"error":"unknown model"}`, http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // handleChat accepts POST {"text":"...","conv_id":"..."} and returns an SSE stream.
 //
 // Each chunk event carries a single item from the agent's AppendStream calls.

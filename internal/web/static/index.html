@@ -224,6 +224,22 @@ header {
 .header-title { font-size: 15px; font-weight: 700; color: var(--text); letter-spacing: -0.01em; }
 .header-right { display: flex; align-items: center; gap: 8px; }
 .user-name { font-size: 12px; color: var(--text-muted); }
+.model-select {
+  max-width: 170px;
+  height: 30px;
+  border: 1px solid rgba(160,120,220,.26);
+  border-radius: 10px;
+  background: rgba(255,255,255,.48);
+  color: var(--text);
+  font: 500 12px var(--font);
+  padding: 0 28px 0 10px;
+  outline: none;
+}
+.model-select:focus {
+  border-color: rgba(120,70,210,.45);
+  box-shadow: 0 0 0 3px rgba(120,70,210,.1);
+}
+.model-select:disabled { display: none; }
 
 .btn {
   display: inline-flex;
@@ -525,6 +541,7 @@ header {
       <span class="header-title">斗包</span>
     </div>
     <div class="header-right">
+      <select id="model-select" class="model-select" title="Model" disabled></select>
       <span class="user-name" id="user-name"></span>
       <button class="btn" id="new-chat-btn">+ New Chat</button>
       <a href="/auth/signout" class="btn">Sign out</a>
@@ -584,6 +601,7 @@ async function boot() {
     const user = await r.json();
     document.getElementById('user-name').textContent = user.user_id;
     showChat();
+    loadModels();
   } catch { showLogin(); }
 }
 function showLogin() { document.getElementById('login-screen').classList.add('visible'); }
@@ -645,6 +663,7 @@ document.getElementById('verify-code-btn').addEventListener('click', async () =>
     document.getElementById('login-screen').classList.remove('visible');
     document.getElementById('user-name').textContent = pendingUserID;
     showChat();
+    loadModels();
   } catch { errEl.textContent = 'Network error. Please try again.'; btn.disabled = false; btn.textContent = 'Verify'; }
 });
 
@@ -654,6 +673,36 @@ document.getElementById('back-btn').addEventListener('click', () => {
   document.getElementById('otp-input').value = '';
   document.getElementById('step-otp').style.display = 'none';
   document.getElementById('step-userid').style.display = '';
+});
+
+// ── Model selection ───────────────────────────────
+async function loadModels() {
+  const select = document.getElementById('model-select');
+  try {
+    const r = await fetch('/api/models');
+    if (!r.ok) return;
+    const data = await r.json();
+    const models = Array.isArray(data.models) ? data.models : [];
+    select.innerHTML = '';
+    for (const model of models) {
+      const opt = document.createElement('option');
+      opt.value = model; opt.textContent = model;
+      select.appendChild(opt);
+    }
+    select.value = data.current_model || data.default_model || models[0] || '';
+    select.disabled = models.length < 2;
+  } catch {}
+}
+
+document.getElementById('model-select').addEventListener('change', async e => {
+  const model = e.target.value;
+  try {
+    await fetch('/api/models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    });
+  } catch {}
 });
 
 // ── New chat ──────────────────────────────────────
