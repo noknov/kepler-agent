@@ -476,7 +476,10 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if compressed {
 			appendStreamNotice(contextCompressedMessage(locale))
 		}
-		appendStreamNotice(contextUsage)
+		completeTitle := completeTitleWithContext(locale, contextUsage)
+		appendStreamStatus([]map[string]any{
+			{"type": "task_update", "id": taskID, "title": completeTitle, "status": "complete"},
+		})
 		answerStreamOK := result.Streamed && answerStream != nil && !answerStream.Failed() && answerStream.TS() != ""
 		if answerStreamOK {
 			_ = s.Messenger.StopStream(ctx, req.Channel, answerStream.TS())
@@ -592,6 +595,15 @@ func contextCompressedMessage(locale string) string {
 		return "上下文已压缩"
 	}
 	return "Context compressed"
+}
+
+func completeTitleWithContext(locale, contextUsage string) string {
+	title := agent.CompleteTitle(locale)
+	contextUsage = strings.TrimSpace(contextUsage)
+	if contextUsage == "" {
+		return title
+	}
+	return title + "    " + contextUsage
 }
 
 func formatTokenCount(n int) string {

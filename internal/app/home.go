@@ -159,7 +159,7 @@ const openCodeUsageBarWidth = 5
 func formatOpenCodeUsageLine(label string, window *openCodeUsageWindow) string {
 	used := int(math.Round(window.UsagePercent))
 	bar := formatOpenCodeUsageBar(used)
-	return fmt.Sprintf("%s %d%%/%s · resets in %s", bar, used, label, formatOpenCodeResetIn(window.ResetInSec))
+	return fmt.Sprintf("`%s` %d%%/%s · resets in %s", bar, used, label, formatOpenCodeResetIn(window.ResetInSec))
 }
 
 func formatOpenCodeUsageBar(percentUsed int) string {

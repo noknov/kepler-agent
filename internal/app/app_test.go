@@ -346,9 +346,9 @@ func TestHomeViewShowsOpenCodeGoUsageFromClient(t *testing.T) {
 	text := flattenBlockText(view)
 	for _, want := range []string{
 		"*Usage*",
-		"▰▰▱▱▱ 33%/5h · resets in 3h 25m",
-		"▰▰▰▱▱ 50%/Week · resets in 3d",
-		"▱▱▱▱▱ 5%/Month · resets in 26d 3h",
+		"`▰▰▱▱▱` 33%/5h · resets in 3h 25m",
+		"`▰▰▰▱▱` 50%/Week · resets in 3d",
+		"`▱▱▱▱▱` 5%/Month · resets in 26d 3h",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("home view missing %q in %q", want, text)
@@ -363,9 +363,9 @@ func TestFormatOpenCodeUsageText(t *testing.T) {
 		Monthly: &openCodeUsageWindow{UsagePercent: 0, ResetInSec: 2_587_800},
 	})
 	want := strings.Join([]string{
-		"▱▱▱▱▱ 0%/5h · resets in 4h 34m",
-		"▱▱▱▱▱ 0%/Week · resets in 6d 20h",
-		"▱▱▱▱▱ 0%/Month · resets in 29d 22h",
+		"`▱▱▱▱▱` 0%/5h · resets in 4h 34m",
+		"`▱▱▱▱▱` 0%/Week · resets in 6d 20h",
+		"`▱▱▱▱▱` 0%/Month · resets in 29d 22h",
 	}, "\n")
 	if got != want {
 		t.Fatalf("formatOpenCodeUsageText() = %q, want %q", got, want)
