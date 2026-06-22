@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -287,94 +288,51 @@ func (c *Compactor) compressToolResults(messages []llm.Message) []llm.Message {
 
 // --- Layer 3: History folding ---
 
-// foldHistory trims older messages to fit within the token budget while
-// preserving important ones (errors, decisions, user messages). Returns
-// the trimmed messages and a brief summary of what was folded.
+// foldHistory trims older messages at stable conversation boundaries so the
+// remaining history stays coherent and tool_use/tool_result pairs are not split.
 func (c *Compactor) foldHistory(messages []llm.Message) ([]llm.Message, string) {
 	threshold := c.Threshold()
 
-	// Find the system prompt (always keep it).
-	systemIdx := -1
-	for i, msg := range messages {
-		if msg.Role == "system" {
-			systemIdx = i
-			break
-		}
-	}
-
-	// Score each non-system message by importance.
-	type scored struct {
-		index int
-		score int
-	}
-	scoredMessages := make([]scored, 0, len(messages))
-	for i, msg := range messages {
-		if i == systemIdx {
+	var system []llm.Message
+	var conversation []llm.Message
+	for _, msg := range messages {
+		if msg.Role == "system" && len(system) == 0 {
+			system = append(system, msg)
 			continue
 		}
-		scoredMessages = append(scoredMessages, scored{
-			index: i,
-			score: messageImportanceScore(&msg),
-		})
+		conversation = append(conversation, msg)
 	}
 
-	// Always keep the most recent messages (last 25% of the list).
-	keepRecentFrom := len(messages) - len(messages)/4
-	if keepRecentFrom < 2 {
-		keepRecentFrom = 2
+	groups := groupMessagesByStableBoundary(conversation)
+	if len(groups) == 0 {
+		return messages, ""
 	}
 
-	// Build the kept set: system + recent + high-importance older messages.
-	keepSet := make(map[int]bool)
-	if systemIdx >= 0 {
-		keepSet[systemIdx] = true
-	}
-	for i := keepRecentFrom; i < len(messages); i++ {
-		keepSet[i] = true
-	}
-
-	// Fill remaining budget with highest-scored older messages.
-	currentTokens := 0
-	for i := range messages {
-		if keepSet[i] {
-			currentTokens += estimateMessageTokens(&messages[i])
-		}
-	}
-
-	// Sort older messages by score (descending), then add until budget is full.
-	var older []scoredIndex
-	for _, s := range scoredMessages {
-		if s.index < keepRecentFrom {
-			older = append(older, scoredIndex{s.index, s.score})
-		}
-	}
-	// Sort by score descending, then by index descending (prefer later).
-	sortByScoreDesc(older)
-
-	for _, om := range older {
-		msgTokens := estimateMessageTokens(&messages[om.index])
-		if currentTokens+msgTokens > threshold {
+	currentTokens := EstimateTokens(system)
+	keepFrom := len(groups) - 1
+	for i := len(groups) - 1; i >= 0; i-- {
+		groupTokens := EstimateTokens(groups[i].messages)
+		shouldKeep := i == len(groups)-1 || currentTokens+groupTokens <= threshold
+		if shouldKeep {
+			currentTokens += groupTokens
+			keepFrom = i
 			continue
 		}
-		keepSet[om.index] = true
-		currentTokens += msgTokens
+		break
 	}
 
-	// Build folded messages and summary of removed ones.
-	var folded []llm.Message
 	var summaryParts []string
-	for i := range messages {
-		if keepSet[i] {
-			folded = append(folded, messages[i])
-		} else {
-			desc := describeFoldedMessage(&messages[i])
-			if desc != "" {
-				summaryParts = append(summaryParts, desc)
-			}
+	for _, group := range groups[:keepFrom] {
+		if desc := describeFoldedGroup(group); desc != "" {
+			summaryParts = append(summaryParts, desc)
 		}
 	}
 
-	// Ensure tool_use/tool_result pairing is not broken.
+	folded := make([]llm.Message, 0, len(messages))
+	folded = append(folded, system...)
+	for _, group := range groups[keepFrom:] {
+		folded = append(folded, group.messages...)
+	}
 	folded = repairToolPairing(folded)
 
 	summary := ""
@@ -426,88 +384,83 @@ func (c *Compactor) applyCompactBoundary(messages []llm.Message, summary string)
 	})
 	result = append(result, recent...)
 
-	return result
+	return repairToolPairing(result)
 }
 
 // --- helpers ---
 
-type scoredIndex struct {
-	index int
-	score int
+type messageGroup struct {
+	messages []llm.Message
 }
 
-// messageImportanceScore rates how important a message is for context retention.
-// Higher scores = more important = less likely to be folded away.
-func messageImportanceScore(msg *llm.Message) int {
-	score := 0
-	content := strings.ToLower(msg.Content)
-
-	// User messages are always high priority.
-	if msg.Role == "user" {
-		score += 10
-	}
-
-	// Error/failure signals
-	for _, keyword := range []string{
-		"error", "exception", "failed", "failure", "timeout", "panic",
-	} {
-		if strings.Contains(content, keyword) {
-			score += 5
+func groupMessagesByStableBoundary(messages []llm.Message) []messageGroup {
+	groups := make([]messageGroup, 0)
+	current := messageGroup{}
+	for _, msg := range messages {
+		if (msg.Role == "user" || msg.Role == "assistant") && len(current.messages) > 0 {
+			groups = append(groups, current)
+			current = messageGroup{}
 		}
+		current.messages = append(current.messages, msg)
 	}
-
-	// Decision signals
-	for _, keyword := range []string{
-		"decision", "decided", "should", "must", "important",
-	} {
-		if strings.Contains(content, keyword) {
-			score += 3
-		}
+	if len(current.messages) > 0 {
+		groups = append(groups, current)
 	}
-
-	// Tool results that contain findings
-	if msg.Role == "tool" {
-		if len(msg.Content) > 100 {
-			score += 2 // non-trivial tool result
-		}
-	}
-
-	// Assistant messages with tool calls (preserve structure)
-	if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
-		score += 3
-	}
-
-	// Recency bonus: handled by the caller via keepRecentFrom
-	return score
+	return groups
 }
 
-// describeFoldedMessage generates a one-line description of a folded message.
-func describeFoldedMessage(msg *llm.Message) string {
-	switch msg.Role {
-	case "user":
-		content := strings.Join(strings.Fields(msg.Content), " ")
-		if len(content) > 200 {
-			content = content[:200] + "..."
-		}
-		return "- user: " + content
-	case "assistant":
-		if len(msg.ToolCalls) > 0 {
-			names := make([]string, 0, len(msg.ToolCalls))
-			for _, tc := range msg.ToolCalls {
-				names = append(names, tc.Function.Name)
-			}
-			return "- assistant: called tools: " + strings.Join(names, ", ")
-		}
-		content := strings.Join(strings.Fields(msg.Content), " ")
-		if len(content) > 200 {
-			content = content[:200] + "..."
-		}
-		return "- assistant: " + content
-	case "tool":
-		return "- tool:" + msg.Name + " (result cleared)"
-	default:
+func describeFoldedGroup(group messageGroup) string {
+	if len(group.messages) == 0 {
 		return ""
 	}
+	counts := map[string]int{}
+	tools := make([]string, 0)
+	for _, msg := range group.messages {
+		counts[msg.Role]++
+		if msg.Role == "assistant" {
+			for _, tc := range msg.ToolCalls {
+				tools = append(tools, tc.Function.Name)
+			}
+			continue
+		}
+		if msg.Role == "tool" && msg.Name != "" {
+			tools = append(tools, msg.Name)
+		}
+	}
+	parts := []string{
+		"- conversation segment",
+		"messages=" + strconv.Itoa(len(group.messages)),
+	}
+	if counts["user"] > 0 {
+		parts = append(parts, "user="+strconv.Itoa(counts["user"]))
+	}
+	if counts["assistant"] > 0 {
+		parts = append(parts, "assistant="+strconv.Itoa(counts["assistant"]))
+	}
+	if counts["tool"] > 0 {
+		parts = append(parts, "tool="+strconv.Itoa(counts["tool"]))
+	}
+	if len(tools) > 0 {
+		parts = append(parts, "tools="+strings.Join(uniqueStrings(tools), ","))
+	}
+	return strings.Join(parts, " ")
+}
+
+func uniqueStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
 }
 
 // repairToolPairing ensures no orphaned tool results exist (a tool_result
@@ -517,34 +470,31 @@ func repairToolPairing(messages []llm.Message) []llm.Message {
 		return messages
 	}
 
-	// Collect all tool_use IDs from assistant messages.
-	pendingIDs := map[string]bool{}
+	toolCallIDs := map[string]bool{}
+	toolResultIDs := map[string]bool{}
 	for _, msg := range messages {
 		if msg.Role == "assistant" {
 			for _, tc := range msg.ToolCalls {
-				pendingIDs[tc.ID] = true
+				toolCallIDs[tc.ID] = true
 			}
+			continue
+		}
+		if msg.Role == "tool" {
+			toolResultIDs[msg.ToolCallID] = true
 		}
 	}
 
 	// Remove orphaned tool results.
 	result := make([]llm.Message, 0, len(messages))
 	for _, msg := range messages {
-		if msg.Role == "tool" && !pendingIDs[msg.ToolCallID] {
+		if msg.Role == "tool" && !toolCallIDs[msg.ToolCallID] {
 			continue // orphaned tool result
 		}
 		// Remove tool_use IDs that have no matching tool_result.
 		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
-			// Check if all tool calls have results ahead.
-			resultIDs := map[string]bool{}
-			for j := range messages {
-				if messages[j].Role == "tool" {
-					resultIDs[messages[j].ToolCallID] = true
-				}
-			}
 			kept := make([]llm.ToolCall, 0, len(msg.ToolCalls))
 			for _, tc := range msg.ToolCalls {
-				if resultIDs[tc.ID] {
+				if toolResultIDs[tc.ID] {
 					kept = append(kept, tc)
 				}
 			}
@@ -577,19 +527,4 @@ func truncateHeadTail(s string, maxRunes int) string {
 	return strings.TrimSpace(string(runes[:head])) +
 		marker +
 		strings.TrimSpace(string(runes[len(runes)-tail:]))
-}
-
-// sortByScoreDesc sorts messages by score descending, breaking ties
-// by index descending (prefer later/more recent messages).
-func sortByScoreDesc(msgs []scoredIndex) {
-	for i := 1; i < len(msgs); i++ {
-		for j := i; j > 0; j-- {
-			if msgs[j].score > msgs[j-1].score ||
-				(msgs[j].score == msgs[j-1].score && msgs[j].index > msgs[j-1].index) {
-				msgs[j], msgs[j-1] = msgs[j-1], msgs[j]
-			} else {
-				break
-			}
-		}
-	}
 }

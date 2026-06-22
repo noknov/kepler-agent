@@ -529,7 +529,6 @@ func repeatedUnits(text string) []string {
 	return units
 }
 
-
 func (r Runner) format(toolName, output string) string {
 	if r.Format == nil {
 		return output
