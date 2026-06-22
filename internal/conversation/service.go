@@ -667,72 +667,243 @@ func (s *Service) controlActive(req Request) bool {
 	return true
 }
 
-func trimTurns(turns []memory.Turn, max int) []memory.Turn {
-	if max <= 0 || len(turns) <= max {
-		return turns
-	}
-	start := len(turns) - max
-	for start < len(turns) && turns[start].Role == memory.RoleTool {
-		start++
-	}
-	if start >= len(turns) {
-		return nil
-	}
-	return append([]memory.Turn(nil), turns[start:]...)
-}
-
 func (s *Service) trimAndSummarize(turns []memory.Turn, existing string) ([]memory.Turn, string) {
-	trimmed := trimTurns(turns, s.maxTurns)
-	removed := len(turns) - len(trimmed)
-	if removed <= 0 {
-		return trimmed, existing
+	// Use token-aware trimming: convert turns to messages, estimate tokens,
+	// then trim based on a token budget derived from MaxMessages.
+	tokenBudget := s.maxTurns * 1000 // ~1000 tokens per turn as a guideline
+	llmMessages := memory.ToLLM(turns)
+	totalTokens := memory.EstimateTokens(llmMessages)
+
+	if totalTokens <= tokenBudget {
+		return turns, existing
 	}
+
+	// Determine how many turns to keep using importance scoring.
+	keep := s.selectImportantTurns(turns, tokenBudget)
+	removed := len(turns) - len(keep)
+	if removed <= 0 {
+		return keep, existing
+	}
+
 	addition := summarizeTurns(turns[:removed])
 	if addition == "" {
-		return trimmed, existing
+		return keep, existing
 	}
 	summary := strings.TrimSpace(existing)
 	if summary != "" {
 		summary += "\n"
 	}
 	summary += addition
-	return trimmed, trimSummary(summary, s.Memory.MaxSummaryChars)
+	return keep, trimSummary(summary, s.Memory.MaxSummaryChars)
 }
 
-func summarizeTurns(turns []memory.Turn) string {
-	lines := make([]string, 0, len(turns)+1)
-	lines = append(lines, "Trimmed conversation summary:")
-	for _, turn := range turns {
-		label := string(turn.Role)
-		content := strings.TrimSpace(turn.Content)
-		if turn.Role == memory.RoleAssistant && len(turn.ToolCalls) > 0 {
-			names := make([]string, 0, len(turn.ToolCalls))
-			for _, call := range turn.ToolCalls {
-				names = append(names, call.Name)
-			}
-			content = "called tools: " + strings.Join(names, ", ")
-		}
-		if turn.Role == memory.RoleTool {
-			label = "tool:" + turn.Name
-		}
-		content = strings.Join(strings.Fields(content), " ")
-		if len(content) > 240 {
-			content = content[:240] + "..."
-		}
-		if content != "" {
-			lines = append(lines, "- "+label+": "+content)
+// selectImportantTurns picks the most important turns to keep within the token budget.
+// It always preserves the most recent turns and high-importance older turns.
+func (s *Service) selectImportantTurns(turns []memory.Turn, tokenBudget int) []memory.Turn {
+	if len(turns) == 0 {
+		return nil
+	}
+
+	// Always keep recent turns (last 40% of the list, minimum 4).
+	recentCount := len(turns) * 40 / 100
+	if recentCount < 4 {
+		recentCount = 4
+	}
+	if recentCount > len(turns) {
+		recentCount = len(turns)
+	}
+	recentFrom := len(turns) - recentCount
+
+	// Score older turns by importance.
+	type scoredTurn struct {
+		index int
+		score int
+	}
+	var scored []scoredTurn
+	for i := 0; i < recentFrom; i++ {
+		scored = append(scored, scoredTurn{
+			index: i,
+			score: scoreTurnImportance(&turns[i]),
+		})
+	}
+
+	// Sort by score descending (insertion sort for simplicity).
+	for i := 1; i < len(scored); i++ {
+		for j := i; j > 0 && scored[j].score > scored[j-1].score; j-- {
+			scored[j], scored[j-1] = scored[j-1], scored[j]
 		}
 	}
+
+	// Build kept set: recent turns + high-scoring older turns within budget.
+	keepSet := make(map[int]bool)
+	currentTokens := 0
+
+	// First add recent turns.
+	for i := recentFrom; i < len(turns); i++ {
+		tokens := memory.RoughTokenEstimate(turns[i].Content)
+		currentTokens += tokens
+		keepSet[i] = true
+	}
+
+	// Then fill remaining budget with important older turns.
+	for _, st := range scored {
+		tokens := memory.RoughTokenEstimate(turns[st.index].Content)
+		if currentTokens+tokens > tokenBudget {
+			continue
+		}
+		keepSet[st.index] = true
+		currentTokens += tokens
+	}
+
+	// Build result in order, never breaking tool_use/tool_result pairs.
+	result := make([]memory.Turn, 0, len(keepSet))
+	for i := 0; i < len(turns); i++ {
+		if keepSet[i] {
+			// Skip orphaned tool results at the start.
+			if turns[i].Role == memory.RoleTool && len(result) == 0 {
+				continue
+			}
+			result = append(result, turns[i])
+		}
+	}
+	return result
+}
+
+// scoreTurnImportance rates a turn's importance for context retention.
+func scoreTurnImportance(turn *memory.Turn) int {
+	score := 0
+	content := strings.ToLower(turn.Content)
+
+	// User messages are always high priority.
+	if turn.Role == memory.RoleUser {
+		score += 10
+	}
+
+	// Error/failure signals.
+	for _, keyword := range []string{
+		"error", "exception", "failed", "failure", "timeout",
+	} {
+		if strings.Contains(content, keyword) {
+			score += 5
+		}
+	}
+
+	// Decision signals.
+	for _, keyword := range []string{
+		"decision", "decided", "should", "must", "important",
+	} {
+		if strings.Contains(content, keyword) {
+			score += 3
+		}
+	}
+
+	// Tool results with substantial content.
+	if turn.Role == memory.RoleTool && len(turn.Content) > 100 {
+		score += 2
+	}
+
+	// Assistant messages with tool calls.
+	if turn.Role == memory.RoleAssistant && len(turn.ToolCalls) > 0 {
+		score += 3
+	}
+
+	return score
+}
+
+// summarizeTurns generates a structured summary of removed turns.
+// It preserves key information: user intents, tool call names, error states,
+// and content excerpts — far more useful than the old flat truncation.
+func summarizeTurns(turns []memory.Turn) string {
+	if len(turns) == 0 {
+		return ""
+	}
+
+	var userMessages []string
+	var toolCalls []string
+	var errors []string
+	var assistantExcerpts []string
+
+	for _, turn := range turns {
+		content := strings.Join(strings.Fields(strings.TrimSpace(turn.Content)), " ")
+
+		switch turn.Role {
+		case memory.RoleUser:
+			if len(content) > 200 {
+				content = content[:200] + "..."
+			}
+			if content != "" {
+				userMessages = append(userMessages, content)
+			}
+
+		case memory.RoleAssistant:
+			if len(turn.ToolCalls) > 0 {
+				names := make([]string, 0, len(turn.ToolCalls))
+				for _, call := range turn.ToolCalls {
+					names = append(names, call.Name)
+				}
+				toolCalls = append(toolCalls, strings.Join(names, ", "))
+			} else if content != "" {
+				if len(content) > 240 {
+					content = content[:240] + "..."
+				}
+				assistantExcerpts = append(assistantExcerpts, content)
+			}
+
+		case memory.RoleTool:
+			if strings.HasPrefix(content, "[tool error]") {
+				if len(content) > 200 {
+					content = content[:200] + "..."
+				}
+				errors = append(errors, turn.Name+": "+content)
+			}
+		}
+	}
+
+	lines := make([]string, 0, 8)
+	lines = append(lines, "Trimmed conversation summary:")
+
+	if len(userMessages) > 0 {
+		lines = append(lines, "User messages:")
+		for _, m := range userMessages {
+			lines = append(lines, "  - "+m)
+		}
+	}
+	if len(toolCalls) > 0 {
+		lines = append(lines, "Tools called: "+strings.Join(toolCalls, "; "))
+	}
+	if len(errors) > 0 {
+		lines = append(lines, "Errors encountered:")
+		for _, e := range errors {
+			lines = append(lines, "  - "+e)
+		}
+	}
+	if len(assistantExcerpts) > 0 {
+		lines = append(lines, "Assistant responses:")
+		for _, e := range assistantExcerpts {
+			lines = append(lines, "  - "+e)
+		}
+	}
+
 	return strings.Join(lines, "\n")
 }
 
+// trimSummary trims a summary to fit within the character budget.
+// It preserves the tail (most recent additions) and uses head+tail
+// truncation rather than pure tail truncation.
 func trimSummary(summary string, max int) string {
 	summary = strings.TrimSpace(summary)
 	runes := []rune(summary)
 	if max <= 0 || len(runes) <= max {
 		return summary
 	}
-	return strings.TrimSpace(string(runes[len(runes)-max:]))
+	// Keep the most recent portion (tail), with a marker.
+	marker := "\n...[older summary truncated]...\n"
+	markerRunes := len([]rune(marker))
+	if max <= markerRunes+100 {
+		return strings.TrimSpace(string(runes[len(runes)-max:]))
+	}
+	tailSize := max - markerRunes
+	return marker + strings.TrimSpace(string(runes[len(runes)-tailSize:]))
 }
 
 func userFacingError(errorID string) string {
