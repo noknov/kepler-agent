@@ -237,6 +237,39 @@ func TestFormatCompactUserMessage(t *testing.T) {
 	}
 }
 
+func TestApplyCompactBoundaryRepairsToolPairing(t *testing.T) {
+	c := &Compactor{
+		MaxContextTokens:    120,
+		AutocompactBuffer:   10,
+		OutputReserve:       10,
+		MaxToolResultTokens: 100,
+	}
+	messages := []llm.Message{
+		{Role: "system", Content: "system"},
+		{Role: "user", Content: strings.Repeat("old ", 200)},
+		{Role: "assistant", Content: strings.Repeat("large assistant context ", 200), ToolCalls: []llm.ToolCall{{
+			ID:   "call-1",
+			Type: "function",
+			Function: llm.ToolFunction{
+				Name:      "code-search",
+				Arguments: `{"query":"x"}`,
+			},
+		}}},
+		{Role: "tool", Name: "code-search", ToolCallID: "call-1", Content: "result"},
+	}
+
+	result := c.applyCompactBoundary(messages, "summary")
+
+	for _, msg := range result {
+		if msg.Role == "tool" && msg.ToolCallID == "call-1" {
+			t.Fatalf("orphaned tool result should be removed after compact boundary: %#v", result)
+		}
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			t.Fatalf("assistant tool calls without matching result should be removed: %#v", result)
+		}
+	}
+}
+
 func TestCircuitBreaker(t *testing.T) {
 	c := &Compactor{}
 
@@ -269,41 +302,51 @@ func TestCircuitBreaker(t *testing.T) {
 	}
 }
 
-func TestMessageImportanceScore(t *testing.T) {
-	tests := []struct {
-		name    string
-		msg     llm.Message
-		minScore int
-	}{
-		{
-			"user message",
-			llm.Message{Role: "user", Content: "fix the bug"},
-			10, // user messages get base 10
-		},
-		{
-			"error in tool result",
-			llm.Message{Role: "tool", Content: "error: connection timeout"},
-			5, // error keyword
-		},
-		{
-			"assistant with tool calls",
-			llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "1", Function: llm.ToolFunction{Name: "code-search"}}}},
-			3, // tool calls get 3
-		},
-		{
-			"plain assistant",
-			llm.Message{Role: "assistant", Content: "I'll help you with that"},
-			0,
-		},
+func TestFoldHistoryKeepsRecentSegmentsIntact(t *testing.T) {
+	c := &Compactor{
+		MaxContextTokens:  140,
+		AutocompactBuffer: 20,
+		OutputReserve:     20,
+	}
+	messages := []llm.Message{
+		{Role: "system", Content: "system"},
+		{Role: "user", Content: strings.Repeat("old request ", 60)},
+		{Role: "assistant", Content: strings.Repeat("old answer ", 60)},
+		{Role: "user", Content: "recent request"},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{
+			ID:   "recent-call",
+			Type: "function",
+			Function: llm.ToolFunction{
+				Name:      "code-search",
+				Arguments: `{"query":"recent"}`,
+			},
+		}}},
+		{Role: "tool", Name: "code-search", ToolCallID: "recent-call", Content: "recent result"},
+		{Role: "assistant", Content: "recent answer"},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			score := messageImportanceScore(&tt.msg)
-			if score < tt.minScore {
-				t.Errorf("messageImportanceScore() = %d, want >= %d", score, tt.minScore)
-			}
-		})
+	folded, summary := c.foldHistory(messages)
+
+	if summary == "" || !strings.Contains(summary, "conversation segment") {
+		t.Fatalf("fold summary should describe folded conversation segments, got %q", summary)
+	}
+	for _, msg := range folded {
+		if strings.Contains(msg.Content, "old request") || strings.Contains(msg.Content, "old answer") {
+			t.Fatalf("old conversation segments should be folded out: %#v", folded)
+		}
+	}
+	foundToolCall := false
+	foundToolResult := false
+	for _, msg := range folded {
+		if msg.Role == "assistant" && len(msg.ToolCalls) == 1 && msg.ToolCalls[0].ID == "recent-call" {
+			foundToolCall = true
+		}
+		if msg.Role == "tool" && msg.ToolCallID == "recent-call" {
+			foundToolResult = true
+		}
+	}
+	if !foundToolCall || !foundToolResult {
+		t.Fatalf("recent tool call/result pair not preserved together: %#v", folded)
 	}
 }
 

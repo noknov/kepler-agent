@@ -167,6 +167,45 @@ func TestUserFacingErrorForMaxToolSteps(t *testing.T) {
 	}
 }
 
+func TestStreamNoticeHasBlockBoundaries(t *testing.T) {
+	got := streamNotice("上下文已压缩")
+	if got != "\n\n_上下文已压缩_\n\n" {
+		t.Fatalf("streamNotice() = %q", got)
+	}
+}
+
+func TestTrimAndSummarizeReportsCompression(t *testing.T) {
+	svc := NewService(
+		nil,
+		nil,
+		agent.Runner{},
+		memory.Builder{MaxMessages: 1, MaxSummaryChars: 10000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		nil,
+	)
+	turns := []memory.Turn{
+		memory.UserTurn(strings.Repeat("old user context ", 400)),
+		{Role: memory.RoleAssistant, Content: strings.Repeat("old assistant context ", 400)},
+		memory.UserTurn("recent 1"),
+		{Role: memory.RoleAssistant, Content: "recent 2"},
+		memory.UserTurn("recent 3"),
+		{Role: memory.RoleAssistant, Content: "recent 4"},
+	}
+
+	kept, summary, compressed := svc.trimAndSummarize(turns, "")
+
+	if !compressed {
+		t.Fatal("trimAndSummarize() compressed = false, want true")
+	}
+	if len(kept) >= len(turns) {
+		t.Fatalf("trimAndSummarize() kept %d turns, want fewer than %d", len(kept), len(turns))
+	}
+	if !strings.Contains(summary, "Trimmed conversation summary") {
+		t.Fatalf("summary does not describe trimmed context: %q", summary)
+	}
+}
+
 func TestNewErrorID(t *testing.T) {
 	got := newErrorID()
 	if !strings.HasPrefix(got, "err-") || len(got) < 8 {
@@ -201,9 +240,12 @@ func TestStreamModePostsNonStreamingFormattedFinalAnswer(t *testing.T) {
 	})
 
 	for _, chunk := range messenger.chunks {
-		if chunk["type"] == "markdown_text" {
+		if chunk["type"] == "markdown_text" && strings.Contains(chunk["text"].(string), "Author:") {
 			t.Fatalf("non-streaming final answer should not be replayed as markdown chunks: %#v", messenger.chunks)
 		}
+	}
+	if !chunksContainText(messenger.chunks, "Context:") {
+		t.Fatalf("context usage not found in stream chunks: %#v", messenger.chunks)
 	}
 	if len(messenger.posts) != 1 {
 		t.Fatalf("posts = %#v, want one final post", messenger.posts)
@@ -250,9 +292,12 @@ func TestStreamModePostsNonStreamingFinalAnswer(t *testing.T) {
 	})
 
 	for _, chunk := range messenger.chunks {
-		if chunk["type"] == "markdown_text" {
+		if chunk["type"] == "markdown_text" && strings.Contains(chunk["text"].(string), final) {
 			t.Fatalf("non-streaming final answer should not be replayed as markdown chunks: %#v", messenger.chunks)
 		}
+	}
+	if !chunksContainText(messenger.chunks, "Context:") {
+		t.Fatalf("context usage not found in stream chunks: %#v", messenger.chunks)
 	}
 	if len(messenger.posts) != 1 {
 		t.Fatalf("posts = %#v, want one final post", messenger.posts)
@@ -786,9 +831,12 @@ func TestStreamStatusFailureDoesNotAffectFinalAnswer(t *testing.T) {
 	})
 
 	for _, chunk := range messenger.chunks {
-		if chunk["type"] == "markdown_text" {
+		if chunk["type"] == "markdown_text" && strings.Contains(chunk["text"].(string), "final answer") {
 			t.Fatalf("non-streaming final answer should not be replayed as markdown chunks: %#v", messenger.chunks)
 		}
+	}
+	if !chunksContainText(messenger.chunks, "Context:") {
+		t.Fatalf("context usage not found in stream chunks: %#v", messenger.chunks)
 	}
 	if len(messenger.posts) != 1 || messenger.posts[0] != "final answer" {
 		t.Fatalf("posts = %#v, want final answer post", messenger.posts)
@@ -863,10 +911,10 @@ func TestActiveReplyIsInjectedIntoNextStep(t *testing.T) {
 	foundStatus := false
 	foundText := false
 	for _, chunk := range svc.Messenger.(*fakeMessenger).chunks {
-		if chunk["type"] == "task_update" && chunk["title"] == "Steering conversation..." {
+		if chunk["type"] == "task_update" && chunk["title"] == "Conversation guided" {
 			foundStatus = true
 		}
-		if chunk["type"] == "markdown_text" && chunk["text"] == "_Steering conversation..._\n\n" {
+		if chunk["type"] == "markdown_text" && chunk["text"] == "\n\n_Conversation guided_\n\n" {
 			foundText = true
 		}
 	}
@@ -1084,6 +1132,19 @@ type fakeMessenger struct {
 type streamAppend struct {
 	ts     string
 	chunks []map[string]any
+}
+
+func chunksContainText(chunks []map[string]any, want string) bool {
+	for _, chunk := range chunks {
+		if chunk["type"] != "markdown_text" {
+			continue
+		}
+		text, _ := chunk["text"].(string)
+		if strings.Contains(text, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *fakeMessenger) PostMessage(_ context.Context, _, _, text string) (string, error) {

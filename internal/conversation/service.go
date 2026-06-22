@@ -353,6 +353,15 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	if answerStream != nil {
 		answerStream.Close()
 	}
+	contextUsage := contextUsageMarkdown(s.Memory.MaxContextTokens, messages, result.Generated)
+	appendStreamNotice := func(text string) {
+		if !useStream || text == "" {
+			return
+		}
+		appendStreamStatus([]map[string]any{
+			{"type": "markdown_text", "text": streamNotice(text)},
+		})
+	}
 
 	sess.UserID = req.UserID
 	sess.PendingUserInput = false
@@ -370,7 +379,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			if runObserver != nil {
 				runObserver.Finish("interrupted", "", nil, "")
 			}
-			sess.Turns, sess.Summary = s.trimAndSummarize(sess.Turns, sess.Summary)
+			sess.Turns, sess.Summary, _ = s.trimAndSummarize(sess.Turns, sess.Summary)
 			_ = s.Store.Save(ctx, sess)
 			if useStream {
 				if progressMarkdown != nil {
@@ -393,7 +402,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if s.Metrics != nil {
 			s.Metrics.Error(wrapErrorID(errorID, err))
 		}
-		sess.Turns, sess.Summary = s.trimAndSummarize(sess.Turns, sess.Summary)
+		sess.Turns, sess.Summary, _ = s.trimAndSummarize(sess.Turns, sess.Summary)
 		_ = s.Store.Save(ctx, sess)
 		errMsg := s.Redactor.Sanitize(userFacingError(errorID))
 		if useStream {
@@ -418,7 +427,8 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		sess.PendingUserID = req.UserID
 		sess.PendingQuestion = result.PendingQuestion
 	}
-	sess.Turns, sess.Summary = s.trimAndSummarize(sess.Turns, sess.Summary)
+	var compressed bool
+	sess.Turns, sess.Summary, compressed = s.trimAndSummarize(sess.Turns, sess.Summary)
 	if err := s.Store.Save(ctx, sess); err != nil && s.Metrics != nil {
 		s.Metrics.Error(err)
 	}
@@ -427,10 +437,22 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if s.Format != nil {
 			pendingText = s.Format(pendingText)
 		}
+		if compressed {
+			appendStreamNotice(contextCompressedMessage(locale))
+		}
+		appendStreamNotice(contextUsage)
 		if useStream {
 			appendProgress([]map[string]any{
 				{"type": "task_update", "id": taskID, "title": agent.WaitingTitle(locale), "status": "complete"},
 			})
+		}
+		if !useStream && (contextUsage != "" || compressed) {
+			var notices []string
+			if compressed {
+				notices = append(notices, contextCompressedMessage(locale))
+			}
+			notices = append(notices, contextUsage)
+			pendingText = appendContextNoticeText(pendingText, notices...)
 		}
 		ts, postErr := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, "<@"+req.UserID+"> "+pendingText)
 		if postErr != nil {
@@ -451,6 +473,10 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 				{"type": "task_update", "id": taskID, "title": agent.CompleteTitle(locale), "status": "complete"},
 			})
 		}
+		if compressed {
+			appendStreamNotice(contextCompressedMessage(locale))
+		}
+		appendStreamNotice(contextUsage)
 		answerStreamOK := result.Streamed && answerStream != nil && !answerStream.Failed() && answerStream.TS() != ""
 		if answerStreamOK {
 			_ = s.Messenger.StopStream(ctx, req.Channel, answerStream.TS())
@@ -465,6 +491,14 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 				finalText = "_streaming delivery failed, here is the answer:_\n\n" + finalText
 			} else if progressAppendFailed {
 				finalText = "_streaming delivery failed, here is the answer:_\n\n" + finalText
+			}
+			if !useStream && (contextUsage != "" || compressed) {
+				var notices []string
+				if compressed {
+					notices = append(notices, contextCompressedMessage(locale))
+				}
+				notices = append(notices, contextUsage)
+				finalText = appendContextNoticeText(finalText, notices...)
 			}
 			ts, postErr := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
 			if postErr != nil {
@@ -502,6 +536,76 @@ func (s *Service) newRunObserver(sessionID string, req Request, startedAt time.T
 		Status:    "running",
 		StartedAt: startedAt.UTC(),
 	}, s.CostRates)
+}
+
+func contextUsageMarkdown(maxContextTokens int, base, generated []llm.Message) string {
+	if len(base) == 0 && len(generated) == 0 {
+		return ""
+	}
+	messages := make([]llm.Message, 0, len(base)+len(generated))
+	messages = append(messages, base...)
+	messages = append(messages, generated...)
+	used := memory.CountTokensWithCalibration(messages)
+	if used <= 0 {
+		return ""
+	}
+	limit := maxContextTokens
+	if limit <= 0 {
+		limit = memory.DefaultMaxContextTokens
+	}
+	percent := used * 100 / limit
+	if percent == 0 {
+		percent = 1
+	}
+	return "Context: " + formatTokenCount(used) + " / " + formatTokenCount(limit) + " tokens (" + strconv.Itoa(percent) + "%)."
+}
+
+func appendContextNoticeText(text string, notices ...string) string {
+	text = strings.TrimSpace(text)
+	var clean []string
+	for _, notice := range notices {
+		notice = strings.TrimSpace(notice)
+		if notice != "" {
+			clean = append(clean, "_"+notice+"_")
+		}
+	}
+	if len(clean) == 0 {
+		return text
+	}
+	noticeText := strings.Join(clean, "\n\n")
+	if text == "" {
+		return noticeText
+	}
+	return text + "\n\n" + noticeText
+}
+
+func streamNotice(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	return "\n\n_" + text + "_\n\n"
+}
+
+func contextCompressedMessage(locale string) string {
+	if locale == agent.LocaleZH {
+		return "上下文已压缩"
+	}
+	return "Context compressed"
+}
+
+func formatTokenCount(n int) string {
+	if n < 1000 {
+		return strconv.Itoa(n)
+	}
+	s := strconv.Itoa(n)
+	var parts []string
+	for len(s) > 3 {
+		parts = append([]string{s[len(s)-3:]}, parts...)
+		s = s[:len(s)-3]
+	}
+	parts = append([]string{s}, parts...)
+	return strings.Join(parts, ",")
 }
 
 func (s *Service) steering(active *activeRun) agent.SteeringProvider {
@@ -667,7 +771,7 @@ func (s *Service) controlActive(req Request) bool {
 	return true
 }
 
-func (s *Service) trimAndSummarize(turns []memory.Turn, existing string) ([]memory.Turn, string) {
+func (s *Service) trimAndSummarize(turns []memory.Turn, existing string) ([]memory.Turn, string, bool) {
 	// Use token-aware trimming: convert turns to messages, estimate tokens,
 	// then trim based on a token budget derived from MaxMessages.
 	tokenBudget := s.maxTurns * 1000 // ~1000 tokens per turn as a guideline
@@ -675,26 +779,26 @@ func (s *Service) trimAndSummarize(turns []memory.Turn, existing string) ([]memo
 	totalTokens := memory.EstimateTokens(llmMessages)
 
 	if totalTokens <= tokenBudget {
-		return turns, existing
+		return turns, existing, false
 	}
 
 	// Determine how many turns to keep using importance scoring.
 	keep := s.selectImportantTurns(turns, tokenBudget)
 	removed := len(turns) - len(keep)
 	if removed <= 0 {
-		return keep, existing
+		return keep, existing, false
 	}
 
 	addition := summarizeTurns(turns[:removed])
 	if addition == "" {
-		return keep, existing
+		return keep, existing, true
 	}
 	summary := strings.TrimSpace(existing)
 	if summary != "" {
 		summary += "\n"
 	}
 	summary += addition
-	return keep, trimSummary(summary, s.Memory.MaxSummaryChars)
+	return keep, trimSummary(summary, s.Memory.MaxSummaryChars), true
 }
 
 // selectImportantTurns picks the most important turns to keep within the token budget.
