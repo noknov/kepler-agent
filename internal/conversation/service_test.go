@@ -174,6 +174,14 @@ func TestStreamNoticeHasBlockBoundaries(t *testing.T) {
 	}
 }
 
+func TestCompleteTitleWithContext(t *testing.T) {
+	got := completeTitleWithContext(agent.LocaleZH, "Context: 23,769 / 200,000 tokens (11%).")
+	want := "传输完毕    Context: 23,769 / 200,000 tokens (11%)."
+	if got != want {
+		t.Fatalf("completeTitleWithContext() = %q, want %q", got, want)
+	}
+}
+
 func TestTrimAndSummarizeReportsCompression(t *testing.T) {
 	svc := NewService(
 		nil,
@@ -1136,12 +1144,17 @@ type streamAppend struct {
 
 func chunksContainText(chunks []map[string]any, want string) bool {
 	for _, chunk := range chunks {
-		if chunk["type"] != "markdown_text" {
-			continue
+		var values []string
+		if text, ok := chunk["text"].(string); ok {
+			values = append(values, text)
 		}
-		text, _ := chunk["text"].(string)
-		if strings.Contains(text, want) {
-			return true
+		if title, ok := chunk["title"].(string); ok {
+			values = append(values, title)
+		}
+		for _, value := range values {
+			if strings.Contains(value, want) {
+				return true
+			}
 		}
 	}
 	return false

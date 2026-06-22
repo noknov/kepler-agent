@@ -62,7 +62,7 @@ var statusZH = statusSet{
 	failed:    "链路中断",
 	canceling: "中止中...",
 	cancelled: "已中止",
-	steering:  "已引导对话",
+	steering:  "对话引导中...",
 }
 
 var statusEN = statusSet{
