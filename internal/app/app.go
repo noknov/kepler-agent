@@ -58,17 +58,18 @@ func Run(ctx context.Context) error {
 }
 
 type Server struct {
-	cfg        config.Config
-	slack      *slack.Client
-	access     safety.AccessPolicy
-	conv       *conversation.Service
-	prompt     safety.PromptPolicy
-	metrics    *observability.Recorder
-	runStore   runs.Store
-	ragManager ragManagerCloser
-	health     *health.Service
-	mux        *http.ServeMux
-	modelPrefs sync.Map
+	cfg           config.Config
+	slack         *slack.Client
+	access        safety.AccessPolicy
+	conv          *conversation.Service
+	prompt        safety.PromptPolicy
+	metrics       *observability.Recorder
+	runStore      runs.Store
+	ragManager    ragManagerCloser
+	health        *health.Service
+	mux           *http.ServeMux
+	modelPrefs    sync.Map
+	openCodeUsage *openCodeUsageClient
 }
 
 type ragManagerCloser interface {
@@ -116,16 +117,17 @@ func NewServer(cfg config.Config) (*Server, error) {
 	}
 
 	s := &Server{
-		cfg:        cfg,
-		slack:      slackClient,
-		access:     safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
-		conv:       conv,
-		prompt:     runtime.Prompt,
-		metrics:    recorder,
-		runStore:   runStore,
-		ragManager: ragManager,
-		health:     healthService,
-		mux:        http.NewServeMux(),
+		cfg:           cfg,
+		slack:         slackClient,
+		access:        safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
+		conv:          conv,
+		prompt:        runtime.Prompt,
+		metrics:       recorder,
+		runStore:      runStore,
+		ragManager:    ragManager,
+		health:        healthService,
+		mux:           http.NewServeMux(),
+		openCodeUsage: newOpenCodeUsageClient(cfg.LLM.OpenCodeUsage),
 	}
 	conv.ModelOverride = func(userID string) string {
 		return s.modelPreference(userID)

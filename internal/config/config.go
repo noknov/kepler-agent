@@ -51,12 +51,18 @@ type LLMConfig struct {
 	Model            string
 	AvailableModels  []string
 	MultimodalModels []string
+	OpenCodeUsage    OpenCodeUsageConfig
 	Protocol         string
 	AnthropicFlavor  string
 	Thinking         string
 	MaxTokens        int
 	Temperature      float64
 	Timeout          time.Duration
+}
+
+type OpenCodeUsageConfig struct {
+	WorkspaceID string
+	AuthCookie  string
 }
 
 type SecurityConfig struct {
@@ -162,12 +168,16 @@ func Load() (Config, error) {
 			Model:            llmModel,
 			AvailableModels:  llmAvailableModels,
 			MultimodalModels: llmMultimodalModels,
-			Protocol:         llmProtocol,
-			AnthropicFlavor:  anthropicFlavor,
-			Thinking:         llmThinking,
-			MaxTokens:        providerMaxTokens(llmProvider),
-			Temperature:      providerTemperature(llmProvider),
-			Timeout:          providerTimeout(llmProvider),
+			OpenCodeUsage: OpenCodeUsageConfig{
+				WorkspaceID: os.Getenv("OPENCODE_WORKSPACE_ID"),
+				AuthCookie:  os.Getenv("OPENCODE_AUTH_COOKIE"),
+			},
+			Protocol:        llmProtocol,
+			AnthropicFlavor: anthropicFlavor,
+			Thinking:        llmThinking,
+			MaxTokens:       providerMaxTokens(llmProvider),
+			Temperature:     providerTemperature(llmProvider),
+			Timeout:         providerTimeout(llmProvider),
 		},
 		Security: SecurityConfig{
 			AllowedUsers:               envCSV("ALLOWED_SLACK_USERS"),
