@@ -62,7 +62,7 @@ var statusZH = statusSet{
 	failed:    "链路中断",
 	canceling: "中止中...",
 	cancelled: "已中止",
-	steering:  "对话引导中...",
+	steering:  "已引导对话",
 }
 
 var statusEN = statusSet{
@@ -85,7 +85,7 @@ var statusEN = statusSet{
 	failed:    "Analysis failed",
 	canceling: "Cancelling...",
 	cancelled: "Cancelled",
-	steering:  "Steering conversation...",
+	steering:  "Conversation guided",
 }
 
 var toolHintsZH = map[string][]string{

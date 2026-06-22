@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/wati/oncall-agent/internal/memory"
 	"github.com/wati/oncall-agent/internal/prompts"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
@@ -44,18 +45,18 @@ type Sanitizer interface {
 type SteeringProvider func() []llm.Message
 
 type Runner struct {
-	LLM             llm.Client
-	Model           string
-	Thinking        string
-	MaxTokens       int
-	Temp            float64
-	Tools           *registry.Registry
-	Capabilities    llm.Capabilities
-	Format          ObservationFormatter
-	Sanitize        Sanitizer
-	Observer        Observer
-	MaxSteps        int
-	MaxContextChars int
+	LLM          llm.Client
+	Model        string
+	Thinking     string
+	MaxTokens    int
+	Temp         float64
+	Tools        *registry.Registry
+	Capabilities llm.Capabilities
+	Format       ObservationFormatter
+	Sanitize     Sanitizer
+	Observer     Observer
+	MaxSteps     int
+	Compactor    *memory.Compactor
 	StatusUpdate StatusUpdater
 	OnStream     func(StreamEvent)
 }
@@ -178,7 +179,9 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			budgetWarned = true
 		}
 
-		messages = r.compressContext(messages)
+		if r.Compactor != nil {
+			messages = r.Compactor.ApplyMicroCompact(messages)
+		}
 
 		// On the last step, omit tools so the model is forced to produce a
 		// final text response using whatever it has gathered so far.
@@ -264,6 +267,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		}
 
 		assistantMsg := resp.Message
+		assistantMsg.Usage = &resp.Usage // attach API-reported token usage for calibration
 		if router != nil {
 			router.finish(len(assistantMsg.ToolCalls) > 0)
 		}
@@ -523,48 +527,6 @@ func repeatedUnits(text string) []string {
 		}
 	}
 	return units
-}
-
-const defaultMaxContextChars = 120_000
-const toolResultCleared = "[previous result cleared to save context — key findings should already be incorporated in later messages]"
-
-// compressContext replaces old tool result bodies with a short stub when total
-// message size exceeds the budget. It preserves the most recent tool results
-// (last 8 messages) and all non-tool messages intact. Returns a new slice;
-// the original messages are never mutated.
-func (r Runner) compressContext(messages []llm.Message) []llm.Message {
-	limit := r.MaxContextChars
-	if limit <= 0 {
-		limit = defaultMaxContextChars
-	}
-	total := 0
-	for i := range messages {
-		total += len(messages[i].Content)
-	}
-	if total <= limit {
-		return messages
-	}
-
-	out := make([]llm.Message, len(messages))
-	copy(out, messages)
-
-	preserve := 8
-	if preserve > len(out) {
-		preserve = len(out)
-	}
-	boundary := len(out) - preserve
-
-	for i := range out[:boundary] {
-		if out[i].Role == "tool" && len(out[i].Content) > len(toolResultCleared) {
-			total -= len(out[i].Content)
-			out[i].Content = toolResultCleared
-			total += len(toolResultCleared)
-			if total <= limit {
-				break
-			}
-		}
-	}
-	return out
 }
 
 func (r Runner) format(toolName, output string) string {

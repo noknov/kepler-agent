@@ -36,12 +36,29 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *obs
 		IncludeRepositoryInventory: cfg.Security.PromptIncludeRepoInventory,
 	}
 	mem := memory.Builder{
-		MaxMessages:     cfg.Sessions.MaxMessages,
-		MaxToolChars:    cfg.Sessions.MaxToolChars,
-		MaxThreadChars:  cfg.Sessions.MaxThreadChars,
-		MaxSummaryChars: cfg.Sessions.MaxSummaryChars,
+		MaxMessages:      cfg.Sessions.MaxMessages,
+		MaxToolChars:     cfg.Sessions.MaxToolChars,
+		MaxThreadChars:   cfg.Sessions.MaxThreadChars,
+		MaxSummaryChars:  cfg.Sessions.MaxSummaryChars,
+		MaxContextTokens: cfg.Sessions.MaxContextTokens,
 	}
 	tools := newToolRegistry(cfg, slackClient, llmClient, workspacePolicy, commandPolicy)
+
+	// Build the 4-layer context compactor.
+	compactModel := cfg.Sessions.CompactModel
+	if compactModel == "" {
+		compactModel = cfg.LLM.Model
+	}
+	compactor := &memory.Compactor{
+		MaxContextTokens:    cfg.Sessions.MaxContextTokens,
+		AutocompactBuffer:   cfg.Sessions.AutocompactBuffer,
+		OutputReserve:       memory.DefaultOutputReserve,
+		KeepRecentTools:     memory.DefaultKeepRecentTools,
+		MaxToolResultTokens: cfg.Sessions.MaxToolResultTokens,
+		ClearableTools:      defaultClearableTools(),
+		LLMClient:           llmClient,
+		CompactModel:        compactModel,
+	}
 
 	var ragMgr *rag.Manager
 	if cfg.RAG.Enabled {
@@ -77,6 +94,7 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *obs
 			Sanitize:     redactor,
 			Observer:     recorder,
 			MaxSteps:     cfg.Tools.AgentMaxSteps,
+			Compactor:    compactor,
 		},
 		Memory:     mem,
 		Prompt:     promptPolicy,
@@ -114,4 +132,38 @@ func costRates(cfg config.Config) observability.CostRates {
 		rates.CacheCreationPerMTok = cfg.Observing.CacheCreationCostPerMTok
 	}
 	return rates
+}
+
+// defaultClearableTools returns the set of tool names whose results can be
+// cleared by the Layer 1 micro-compact. These are read/search/browse tools
+// that produce large outputs the model has already incorporated.
+func defaultClearableTools() map[string]bool {
+	tools := []string{
+		// Code search and reading
+		"code-read_file", "code-search", "code-symbols",
+		"code-definition", "code-references", "code-diagnostics",
+		// Git reading
+		"git-search_ref", "git-read_file_ref", "git-log", "git-show",
+		"repo-search", "repo-read_file",
+		// Web and knowledge
+		"web-read_page", "knowledge-runbook_search", "rag-search",
+		// Diagnostics
+		"diagnostics-timeline", "diagnostics-incident_brief", "diagnostics-evidence_board",
+		// GCP logs
+		"gcp-logs",
+		// Slack file search
+		"slack-file_search", "slack-json_analyze",
+		// GitHub
+		"github-pr_diff", "github-workflow_runs",
+		// Notion
+		"notion-search",
+		// Playwright / browser
+		"pw-screenshot", "pw-snapshot",
+		"browser_snapshot", "browser_take_screenshot",
+	}
+	m := make(map[string]bool, len(tools))
+	for _, t := range tools {
+		m[t] = true
+	}
+	return m
 }

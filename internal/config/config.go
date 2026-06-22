@@ -74,11 +74,15 @@ type SecurityConfig struct {
 }
 
 type SessionConfig struct {
-	DataDir         string
-	MaxMessages     int
-	MaxToolChars    int
-	MaxThreadChars  int
-	MaxSummaryChars int
+	DataDir             string
+	MaxMessages         int
+	MaxToolChars        int
+	MaxThreadChars      int
+	MaxSummaryChars     int
+	MaxContextTokens    int    // context window token limit (default 200000)
+	AutocompactBuffer   int    // reserved token headroom before auto-compact (default 13000)
+	CompactModel        string // model used for compact summaries (empty = main model)
+	MaxToolResultTokens int    // per-tool-result token cap (default 5000)
 }
 
 type ToolConfig struct {
@@ -187,11 +191,15 @@ func Load() (Config, error) {
 			PromptIncludeRepoInventory: envBool("PROMPT_INCLUDE_REPO_INVENTORY", false),
 		},
 		Sessions: SessionConfig{
-			DataDir:         env("SESSION_DATA_DIR", filepath.Join(wd, ".data", "sessions")),
-			MaxMessages:     envInt("SESSION_MAX_MESSAGES", 24),
-			MaxToolChars:    envInt("SESSION_MAX_TOOL_CHARS", 20000),
-			MaxThreadChars:  envInt("SESSION_MAX_THREAD_CHARS", 6000),
-			MaxSummaryChars: envInt("SESSION_MAX_SUMMARY_CHARS", 2500),
+			DataDir:             env("SESSION_DATA_DIR", filepath.Join(wd, ".data", "sessions")),
+			MaxMessages:         envInt("SESSION_MAX_MESSAGES", 24),
+			MaxToolChars:        envInt("SESSION_MAX_TOOL_CHARS", 20000),
+			MaxThreadChars:      envInt("SESSION_MAX_THREAD_CHARS", 6000),
+			MaxSummaryChars:     envInt("SESSION_MAX_SUMMARY_CHARS", 2500),
+			MaxContextTokens:    envInt("SESSION_MAX_CONTEXT_TOKENS", 200000),
+			AutocompactBuffer:   envInt("SESSION_AUTOCOMPACT_BUFFER", 13000),
+			CompactModel:        env("SESSION_COMPACT_MODEL", ""),
+			MaxToolResultTokens: envInt("SESSION_MAX_TOOL_RESULT_TOKENS", 5000),
 		},
 		Tools: ToolConfig{
 			CommandTimeout:      envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
