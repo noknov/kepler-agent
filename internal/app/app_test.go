@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wati/oncall-agent/internal/config"
 	"github.com/wati/oncall-agent/internal/slack"
@@ -268,13 +270,18 @@ func TestHomeViewShowsModelDropdownWhenMultipleModels(t *testing.T) {
 	blocks, _ := view["blocks"].([]map[string]any)
 	found := false
 	for _, block := range blocks {
-		acc, _ := block["accessory"].(map[string]any)
-		if acc != nil && acc["action_id"] == "select_model" {
-			found = true
+		if block["type"] != "actions" {
+			continue
+		}
+		elements, _ := block["elements"].([]map[string]any)
+		for _, element := range elements {
+			if element["action_id"] == "select_model" {
+				found = true
+			}
 		}
 	}
 	if !found {
-		t.Fatal("expected model select dropdown as section accessory when multiple models available")
+		t.Fatal("expected model select dropdown in actions block when multiple models available")
 	}
 }
 
@@ -288,17 +295,116 @@ func TestHomeViewReflectsUserModelPreference(t *testing.T) {
 	blocks, _ := view["blocks"].([]map[string]any)
 	found := false
 	for _, block := range blocks {
-		acc, _ := block["accessory"].(map[string]any)
-		if acc == nil || acc["action_id"] != "select_model" {
+		if block["type"] != "actions" {
 			continue
 		}
-		initial, _ := acc["initial_option"].(map[string]any)
-		if initial != nil && initial["value"] == "mimo-v2.5-pro" {
-			found = true
+		elements, _ := block["elements"].([]map[string]any)
+		for _, element := range elements {
+			if element["action_id"] != "select_model" {
+				continue
+			}
+			initial, _ := element["initial_option"].(map[string]any)
+			if initial != nil && initial["value"] == "mimo-v2.5-pro" {
+				found = true
+			}
 		}
 	}
 	if !found {
 		t.Fatal("expected dropdown initial_option to reflect user's preferred model mimo-v2.5-pro")
+	}
+}
+
+func TestHomeViewHidesOpenCodeGoUsageWithoutClient(t *testing.T) {
+	server := &Server{cfg: config.Config{LLM: config.LLMConfig{
+		Provider:        "opencode-go",
+		Model:           "glm-5.2",
+		AvailableModels: []string{"glm-5.2", "deepseek-v4-flash"},
+	}}}
+	view := server.homeView("U1")
+	text := flattenBlockText(view)
+	if strings.Contains(text, "*Usage*") || strings.Contains(text, "/5h") {
+		t.Fatalf("home view should not show usage without a real usage client: %q", text)
+	}
+}
+
+func TestHomeViewShowsOpenCodeGoUsageFromClient(t *testing.T) {
+	server := &Server{cfg: config.Config{LLM: config.LLMConfig{
+		Provider:        "opencode-go",
+		Model:           "glm-5.2",
+		AvailableModels: []string{"glm-5.2", "deepseek-v4-flash"},
+	}}}
+	server.openCodeUsage = &openCodeUsageClient{
+		cached: openCodeUsageSummary{
+			Rolling: &openCodeUsageWindow{UsagePercent: 33, PercentRemaining: 67, ResetInSec: 12_300},
+			Weekly:  &openCodeUsageWindow{UsagePercent: 50, PercentRemaining: 50, ResetInSec: 259_200},
+			Monthly: &openCodeUsageWindow{UsagePercent: 5, PercentRemaining: 95, ResetInSec: 2_260_000},
+		},
+		cachedAt: time.Now(),
+		cacheTTL: time.Hour,
+	}
+	view := server.homeView("U1")
+	text := flattenBlockText(view)
+	for _, want := range []string{
+		"*Usage*",
+		"▰▰▱▱▱ 33%/5h · resets in 3h 25m",
+		"▰▰▰▱▱ 50%/Week · resets in 3d",
+		"▱▱▱▱▱ 5%/Month · resets in 26d 3h",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("home view missing %q in %q", want, text)
+		}
+	}
+}
+
+func TestFormatOpenCodeUsageText(t *testing.T) {
+	got := formatOpenCodeUsageText(openCodeUsageSummary{
+		Rolling: &openCodeUsageWindow{UsagePercent: 0, ResetInSec: 16_440},
+		Weekly:  &openCodeUsageWindow{UsagePercent: 0, ResetInSec: 590_400},
+		Monthly: &openCodeUsageWindow{UsagePercent: 0, ResetInSec: 2_587_800},
+	})
+	want := strings.Join([]string{
+		"▱▱▱▱▱ 0%/5h · resets in 4h 34m",
+		"▱▱▱▱▱ 0%/Week · resets in 6d 20h",
+		"▱▱▱▱▱ 0%/Month · resets in 29d 22h",
+	}, "\n")
+	if got != want {
+		t.Fatalf("formatOpenCodeUsageText() = %q, want %q", got, want)
+	}
+}
+
+func TestParseOpenCodeGoUsageHTML(t *testing.T) {
+	html := `rollingUsage:$R[1]={usagePercent:33,resetInSec:12300}
+weeklyUsage:$R[2]={resetInSec:259200,usagePercent:50}
+monthlyUsage:$R[3]={usagePercent:5,resetInSec:2260000}`
+	usage, err := parseOpenCodeGoUsageHTML(html)
+	if err != nil {
+		t.Fatalf("parseOpenCodeGoUsageHTML() error = %v", err)
+	}
+	if usage.Rolling == nil || usage.Rolling.PercentRemaining != 67 || usage.Rolling.ResetInSec != 12300 {
+		t.Fatalf("rolling = %#v, want 67%% left and 12300 reset sec", usage.Rolling)
+	}
+	if usage.Weekly == nil || usage.Weekly.PercentRemaining != 50 {
+		t.Fatalf("weekly = %#v, want 50%% left", usage.Weekly)
+	}
+	if usage.Monthly == nil || usage.Monthly.PercentRemaining != 95 {
+		t.Fatalf("monthly = %#v, want 95%% left", usage.Monthly)
+	}
+}
+
+func TestOpenCodeUsageSummaryDoesNotReturnStaleCacheOnFetchError(t *testing.T) {
+	client := &openCodeUsageClient{
+		workspaceID: "wrk_test",
+		authCookie:  "auth=test",
+		httpClient:  &http.Client{Timeout: time.Second},
+		cached: openCodeUsageSummary{
+			Rolling: &openCodeUsageWindow{PercentRemaining: 99},
+		},
+		cachedAt: time.Now().Add(-time.Hour),
+		cacheTTL: time.Minute,
+	}
+	_, err := client.Summary(context.Background(), time.Now())
+	if err == nil {
+		t.Fatal("expected fetch error when cache is stale")
 	}
 }
 
