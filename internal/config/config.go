@@ -320,7 +320,7 @@ func inferLLMProviderFrom(get func(string) string) string {
 		return "kimi"
 	case firstNonEmpty(get("MOONSHOT_API_KEY"), get("MOONSHOT_BASE_URL"), get("MOONSHOT_MODEL")) != "":
 		return "moonshot"
-	case firstNonEmpty(get("OPENCODE_GO_API_KEY"), get("OPENCODE_GO_BASE_URL"), get("OPENCODE_GO_MODEL"), get("OPENCODE_GO_PROTOCOL")) != "":
+	case firstNonEmpty(get("OPENCODE_API_KEY"), get("OPENCODE_BASE_URL"), get("OPENCODE_MODEL"), get("OPENCODE_PROTOCOL")) != "":
 		return "opencode-go"
 	case firstNonEmpty(get("OPENAI_API_KEY"), get("OPENAI_BASE_URL"), get("OPENAI_MODEL")) != "":
 		return "openai"
@@ -341,7 +341,7 @@ func providerProtocol(provider string) string {
 	case "kimi":
 		return normalizeLLMProtocol(firstEnv("KIMI_PROTOCOL", "LLM_PROTOCOL"))
 	case "opencode-go":
-		protocol := normalizeLLMProtocol(firstEnv("OPENCODE_GO_PROTOCOL", "LLM_PROTOCOL"))
+		protocol := normalizeLLMProtocol(firstEnv("OPENCODE_PROTOCOL", "LLM_PROTOCOL"))
 		if protocol == "" {
 			return "openai"
 		}
@@ -362,7 +362,7 @@ func providerBaseURL(provider string) string {
 	case "moonshot":
 		return env("MOONSHOT_BASE_URL", "https://api.moonshot.ai/v1")
 	case "opencode-go":
-		return env("OPENCODE_GO_BASE_URL", "https://opencode.ai/zen/go/v1")
+		return env("OPENCODE_BASE_URL", "https://opencode.ai/zen/go/v1")
 	default:
 		return env("OPENAI_BASE_URL", "https://api.openai.com/v1")
 	}
@@ -382,14 +382,14 @@ func providerModel(provider string) string {
 	case "moonshot":
 		return env("MOONSHOT_MODEL", "kimi-k2.6")
 	case "opencode-go":
-		return env("OPENCODE_GO_MODEL", "glm-5.2")
+		return env("OPENCODE_MODEL", "glm-5.2")
 	default:
 		return env("OPENAI_MODEL", "gpt-4o-mini")
 	}
 }
 
 func availableModels(provider, defaultModel string) []string {
-	raw := strings.TrimSpace(os.Getenv("AVAILABLE_MODELS"))
+	raw := strings.TrimSpace(os.Getenv(providerEnvPrefix(provider) + "_AVAILABLE_MODELS"))
 	if raw == "" {
 		if provider == "opencode-go" {
 			return ensureDefaultModel(defaultModel, opencodeGoModels())
@@ -457,7 +457,7 @@ func providerAPIKey(provider string) string {
 	case "moonshot":
 		return firstEnv("MOONSHOT_API_KEY")
 	case "opencode-go":
-		return firstEnv("OPENCODE_GO_API_KEY")
+		return firstEnv("OPENCODE_API_KEY")
 	default:
 		return firstEnv("OPENAI_API_KEY")
 	}
@@ -496,7 +496,7 @@ func providerTemperature(provider string) float64 {
 	case "kimi", "moonshot":
 		return envFloatAliases(0, "KIMI_TEMPERATURE")
 	case "opencode-go":
-		return envFloatAliases(0, "OPENCODE_GO_TEMPERATURE")
+		return envFloatAliases(0, "OPENCODE_TEMPERATURE")
 	default:
 		return envFloatAliases(0, "OPENAI_TEMPERATURE", "ANTHROPIC_TEMPERATURE")
 	}
@@ -511,7 +511,7 @@ func providerTimeout(provider string) time.Duration {
 	case "kimi", "moonshot":
 		return envDurationAliases(120*time.Second, "KIMI_TIMEOUT", "API_TIMEOUT_MS")
 	case "opencode-go":
-		return envDurationAliases(120*time.Second, "OPENCODE_GO_TIMEOUT", "API_TIMEOUT_MS")
+		return envDurationAliases(120*time.Second, "OPENCODE_TIMEOUT", "API_TIMEOUT_MS")
 	default:
 		return envDurationAliases(120*time.Second, "OPENAI_TIMEOUT", "API_TIMEOUT_MS")
 	}
@@ -706,7 +706,7 @@ func inferAnthropicFlavor(raw string) string {
 func providerEnvPrefix(provider string) string {
 	switch provider {
 	case "opencode-go":
-		return "OPENCODE_GO"
+		return "OPENCODE"
 	default:
 		return strings.ToUpper(provider)
 	}
