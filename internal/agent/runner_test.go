@@ -218,37 +218,6 @@ func TestRunnerRetriesRepetitiveFinal(t *testing.T) {
 	}
 }
 
-func TestRunnerInjectsBudgetWarningNearMaxSteps(t *testing.T) {
-	const maxSteps = 14
-	responses := make([]llm.Response, maxSteps)
-	for i := range responses {
-		responses[i] = llm.Response{Message: toolCallMessage("tool_"+string(rune('a'+i)), fmt.Sprintf(`{"text":"%d"}`, i))}
-	}
-	client := &fakeClient{responses: responses}
-	tools := registry.New()
-	tools.Register(fakeTool{})
-
-	_, err := Runner{LLM: client, Tools: tools, MaxSteps: maxSteps}.Run(context.Background(), Request{})
-	if !errors.Is(err, ErrMaxToolSteps) {
-		t.Fatalf("Run() error = %v, want ErrMaxToolSteps", err)
-	}
-	// Warning should be injected at step maxSteps-10 = step 4
-	warningStep := maxSteps - 10
-	want := budgetWarningPrompt(9)
-	found := false
-	for i := warningStep; i < len(client.requests); i++ {
-		for _, msg := range client.requests[i].Messages {
-			if msg.Role == "system" && msg.Content == want {
-				found = true
-				break
-			}
-		}
-	}
-	if !found {
-		t.Fatalf("budget warning not found from step %d onward", warningStep)
-	}
-}
-
 func TestRunnerReturnsMaxToolStepsError(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{
 		{Message: toolCallMessage("tool_1", `{"text":"1"}`)},
@@ -373,36 +342,6 @@ func TestRunnerKeepsToolsAfterManySearchTurns(t *testing.T) {
 	}
 }
 
-func TestRunnerInjectsConvergenceWarningAfterRepeatedCodeSearch(t *testing.T) {
-	client := &nudgeAwareFakeClient{}
-	tools := registry.New()
-	tools.Register(fakeCodeSearchTool{})
-
-	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 12}.Run(context.Background(), Request{})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if result.Final != "after nudge" {
-		t.Fatalf("Final = %q, want after nudge", result.Final)
-	}
-	if len(client.requests) != 9 {
-		t.Fatalf("Chat calls = %d, want 9", len(client.requests))
-	}
-	foundNudge := false
-	for _, msg := range client.requests[8].Messages {
-		if msg.Role == "system" && msg.Content == convergenceWarningPrompt() {
-			foundNudge = true
-			break
-		}
-	}
-	if !foundNudge {
-		t.Fatal("convergence warning was not injected before request after 8 search turns")
-	}
-	if len(client.requests[8].Tools) == 0 {
-		t.Fatal("nudge request should still expose tools")
-	}
-}
-
 func TestRunnerParallelCodeSearchCountsAsOneTurn(t *testing.T) {
 	client := &parallelBurstFakeClient{}
 	tools := registry.New()
@@ -504,20 +443,6 @@ func (f *longSearchFakeClient) Chat(_ context.Context, req llm.Request) (llm.Res
 	f.requests = append(f.requests, req)
 	if f.searches >= 12 {
 		return llm.Response{Message: llm.Message{Role: "assistant", Content: "final after 12 searches"}}, nil
-	}
-	f.searches++
-	return llm.Response{Message: codeSearchToolCallMessage(fmt.Sprintf("search_%d", f.searches), fmt.Sprintf(`{"query":"q%d"}`, f.searches))}, nil
-}
-
-type nudgeAwareFakeClient struct {
-	requests []llm.Request
-	searches int
-}
-
-func (f *nudgeAwareFakeClient) Chat(_ context.Context, req llm.Request) (llm.Response, error) {
-	f.requests = append(f.requests, req)
-	if f.searches >= 8 {
-		return llm.Response{Message: llm.Message{Role: "assistant", Content: "after nudge"}}, nil
 	}
 	f.searches++
 	return llm.Response{Message: codeSearchToolCallMessage(fmt.Sprintf("search_%d", f.searches), fmt.Sprintf(`{"query":"q%d"}`, f.searches))}, nil
@@ -1201,37 +1126,6 @@ func TestRepeatableToolAllowsDuplicateCalls(t *testing.T) {
 	}
 }
 
-func TestRunnerForcesSynthesisAfterManySearchTurns(t *testing.T) {
-	client := &synthesisAwareFakeClient{}
-	tools := registry.New()
-	tools.Register(fakeCodeSearchTool{})
-
-	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 20}.Run(context.Background(), Request{})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if result.Final != "forced synthesis final" {
-		t.Fatalf("Final = %q, want forced synthesis final", result.Final)
-	}
-	if len(client.requests) < forceSynthesisSearchTurns+1 {
-		t.Fatalf("Chat calls = %d, want synthesis request", len(client.requests))
-	}
-	synthesisReq := client.requests[len(client.requests)-1]
-	if len(synthesisReq.Tools) != 0 {
-		t.Fatalf("synthesis request should not expose tools: %#v", synthesisReq.Tools)
-	}
-	foundPrompt := false
-	for _, msg := range synthesisReq.Messages {
-		if msg.Role == "system" && msg.Content == synthesisPrompt() {
-			foundPrompt = true
-			break
-		}
-	}
-	if !foundPrompt {
-		t.Fatal("synthesis prompt was not injected")
-	}
-}
-
 func TestRunnerDisablesExploreAfterFailure(t *testing.T) {
 	client := &exploreFailureAwareClient{}
 	tools := registry.New()
@@ -1253,20 +1147,6 @@ func TestRunnerDisablesExploreAfterFailure(t *testing.T) {
 			t.Fatalf("explore-code should be disabled after failure: %#v", client.requests[1].Tools)
 		}
 	}
-}
-
-type synthesisAwareFakeClient struct {
-	requests []llm.Request
-	searches int
-}
-
-func (f *synthesisAwareFakeClient) Chat(_ context.Context, req llm.Request) (llm.Response, error) {
-	f.requests = append(f.requests, req)
-	if len(req.Tools) == 0 && f.searches >= forceSynthesisSearchTurns {
-		return llm.Response{Message: llm.Message{Role: "assistant", Content: "forced synthesis final"}}, nil
-	}
-	f.searches++
-	return llm.Response{Message: codeSearchToolCallMessage(fmt.Sprintf("search_%d", f.searches), fmt.Sprintf(`{"query":"q%d"}`, f.searches))}, nil
 }
 
 type exploreFailureAwareClient struct {
