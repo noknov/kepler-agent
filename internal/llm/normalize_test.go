@@ -14,6 +14,7 @@ func TestLooksLikeTextualToolCall(t *testing.T) {
 		{"normal markdown with `code` only", false},
 		{`<tool_invocation name="repo-search" arguments={"query": "foo", "repo": "bar"} />`, true},
 		{`<tool_invocation name="x" arguments={} /><tool_invocation name="y" arguments={} />`, true},
+		{`<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="code-search"></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>`, true},
 	}
 	for _, tc := range cases {
 		if got := LooksLikeTextualToolCall(tc.content); got != tc.want {
@@ -38,6 +39,12 @@ func TestStripTextualToolCallMarkup(t *testing.T) {
 		{"answer\n<tool_name>x</tool_name>", "answer"},
 		{"```json\ntool_call\n```", ""},
 		{"answer\n```\ntool_call\n```", "answer"},
+		{`answer
+<｜｜DSML｜｜tool_calls>
+<｜｜DSML｜｜invoke name="code-search">
+<｜｜DSML｜｜parameter name="query" string="true">CatalogInfo</｜｜DSML｜｜parameter>
+</｜｜DSML｜｜invoke>
+</｜｜DSML｜｜tool_calls>`, "answer"},
 	}
 	for _, tc := range cases {
 		got := StripTextualToolCallMarkup(tc.input)

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/prompts"
 )
 
@@ -67,6 +68,22 @@ func TestBuildWithPartsKeepsUntrustedContextOutOfSystemRole(t *testing.T) {
 		if msg.Role == "system" {
 			t.Fatalf("non-policy context should not be system role: %#v", msg)
 		}
+	}
+}
+
+func TestFromLLMToLLMPreservesUsage(t *testing.T) {
+	usage := &llm.Usage{PromptTokens: 1234, CompletionTokens: 56, TotalTokens: 1290}
+	turns := FromLLM([]llm.Message{{
+		Role:    "assistant",
+		Content: "done",
+		Usage:   usage,
+	}})
+	if len(turns) != 1 || turns[0].Usage == nil {
+		t.Fatalf("FromLLM() did not preserve usage: %#v", turns)
+	}
+	messages := ToLLM(turns)
+	if len(messages) != 1 || messages[0].Usage == nil || messages[0].Usage.PromptTokens != 1234 {
+		t.Fatalf("ToLLM() did not restore usage: %#v", messages)
 	}
 }
 

@@ -230,6 +230,15 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 				stopReason = md.Delta.StopReason
 				if md.Usage.OutputTokens > 0 {
 					usage.OutputTokens = md.Usage.OutputTokens
+					if h.OnUsage != nil {
+						h.OnUsage(Usage{
+							PromptTokens:             usage.InputTokens,
+							CompletionTokens:         usage.OutputTokens,
+							TotalTokens:              usage.InputTokens + usage.OutputTokens,
+							CacheReadInputTokens:     usage.CacheReadInputTokens,
+							CacheCreationInputTokens: usage.CacheCreationInputTokens,
+						})
+					}
 				}
 			}
 		case "message_start":
@@ -246,6 +255,15 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 				usage.InputTokens = ms.Message.Usage.InputTokens
 				usage.CacheReadInputTokens = ms.Message.Usage.CacheReadInputTokens
 				usage.CacheCreationInputTokens = ms.Message.Usage.CacheCreationInputTokens
+				if h.OnUsage != nil {
+					h.OnUsage(Usage{
+						PromptTokens:             usage.InputTokens,
+						CompletionTokens:         usage.OutputTokens,
+						TotalTokens:              usage.InputTokens + usage.OutputTokens,
+						CacheReadInputTokens:     usage.CacheReadInputTokens,
+						CacheCreationInputTokens: usage.CacheCreationInputTokens,
+					})
+				}
 			}
 		case "message_stop":
 			return false

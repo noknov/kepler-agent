@@ -102,6 +102,7 @@ func TestAnthropicChatStreamParsesToolUseBlocks(t *testing.T) {
 
 	var streamed string
 	var toolStarted bool
+	var usageEvents []Usage
 	resp, err := client.ChatStream(context.Background(), Request{
 		Model: "claude-test",
 		Tools: []ToolSpec{{Type: "function", Function: ToolSpecFunction{
@@ -111,6 +112,7 @@ func TestAnthropicChatStreamParsesToolUseBlocks(t *testing.T) {
 	}, StreamHandler{
 		OnText:             func(delta string) { streamed += delta },
 		OnToolCallsStarted: func() { toolStarted = true },
+		OnUsage:            func(usage Usage) { usageEvents = append(usageEvents, usage) },
 	})
 	if err != nil {
 		t.Fatalf("ChatStream() error = %v", err)
@@ -133,5 +135,14 @@ func TestAnthropicChatStreamParsesToolUseBlocks(t *testing.T) {
 	}
 	if resp.Usage.TotalTokens != 12 {
 		t.Fatalf("usage total = %d, want 12", resp.Usage.TotalTokens)
+	}
+	if len(usageEvents) != 2 {
+		t.Fatalf("usage events = %#v, want message_start and message_delta", usageEvents)
+	}
+	if usageEvents[0].PromptTokens != 5 || usageEvents[0].CompletionTokens != 0 {
+		t.Fatalf("first usage event = %#v, want input-only", usageEvents[0])
+	}
+	if usageEvents[1].PromptTokens != 5 || usageEvents[1].CompletionTokens != 7 || usageEvents[1].TotalTokens != 12 {
+		t.Fatalf("second usage event = %#v, want cumulative usage", usageEvents[1])
 	}
 }

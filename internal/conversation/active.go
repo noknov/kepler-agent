@@ -176,7 +176,7 @@ func isCancelRequest(text string) bool {
 		return false
 	}
 	switch text {
-	case "cancel", "stop", "abort", "interrupt", "nevermind", "never mind", "中止", "停止", "取消", "停一下", "别查了", "不用了":
+	case "cancel", "stop", "abort", "interrupt", "中止", "停止", "取消":
 		return true
 	default:
 		return false
@@ -192,7 +192,7 @@ func interruptedMessage(locale string) string {
 
 func steeringAppliedMessage(locale string) string {
 	if locale == agent.LocaleZH {
-		return streamNotice("已引导对话")
+		return "\n\n_已引导对话_\n"
 	}
-	return streamNotice("Conversation guided")
+	return "\n\n_Conversation guided_\n"
 }

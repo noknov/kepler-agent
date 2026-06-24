@@ -31,6 +31,7 @@ type Turn struct {
 	Name       string     `json:"name,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	Usage      *llm.Usage `json:"usage,omitempty"`
 }
 
 type Builder struct {
@@ -153,6 +154,7 @@ func FromLLM(messages []llm.Message) []Turn {
 			Content:    msg.Content,
 			Name:       msg.Name,
 			ToolCallID: msg.ToolCallID,
+			Usage:      msg.Usage,
 		}
 		if len(msg.ToolCalls) > 0 {
 			turn.ToolCalls = make([]ToolCall, 0, len(msg.ToolCalls))
@@ -177,6 +179,7 @@ func ToLLM(turns []Turn) []llm.Message {
 			Content:    turn.Content,
 			Name:       turn.Name,
 			ToolCallID: turn.ToolCallID,
+			Usage:      turn.Usage,
 		}
 		if len(turn.ToolCalls) > 0 {
 			msg.ToolCalls = make([]llm.ToolCall, 0, len(turn.ToolCalls))

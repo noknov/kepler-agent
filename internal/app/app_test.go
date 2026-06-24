@@ -314,7 +314,7 @@ func TestHomeViewReflectsUserModelPreference(t *testing.T) {
 	}
 }
 
-func TestHomeViewHidesOpenCodeGoUsageWithoutClient(t *testing.T) {
+func TestHomeViewHidesTokenUsageWithoutClient(t *testing.T) {
 	server := &Server{cfg: config.Config{LLM: config.LLMConfig{
 		Provider:        "opencode-go",
 		Model:           "glm-5.2",
@@ -327,17 +327,17 @@ func TestHomeViewHidesOpenCodeGoUsageWithoutClient(t *testing.T) {
 	}
 }
 
-func TestHomeViewShowsOpenCodeGoUsageFromClient(t *testing.T) {
+func TestHomeViewShowsTokenUsageFromClient(t *testing.T) {
 	server := &Server{cfg: config.Config{LLM: config.LLMConfig{
 		Provider:        "opencode-go",
 		Model:           "glm-5.2",
 		AvailableModels: []string{"glm-5.2", "deepseek-v4-flash"},
 	}}}
-	server.openCodeUsage = &openCodeUsageClient{
-		cached: openCodeUsageSummary{
-			Rolling: &openCodeUsageWindow{UsagePercent: 33, PercentRemaining: 67, ResetInSec: 12_300},
-			Weekly:  &openCodeUsageWindow{UsagePercent: 50, PercentRemaining: 50, ResetInSec: 259_200},
-			Monthly: &openCodeUsageWindow{UsagePercent: 5, PercentRemaining: 95, ResetInSec: 2_260_000},
+	server.tokenUsage = &opencodeTokenUsageClient{
+		cached: tokenUsageSummary{
+			Rolling: &tokenUsageWindow{UsagePercent: 33, PercentRemaining: 67, ResetInSec: 12_300},
+			Weekly:  &tokenUsageWindow{UsagePercent: 50, PercentRemaining: 50, ResetInSec: 259_200},
+			Monthly: &tokenUsageWindow{UsagePercent: 5, PercentRemaining: 95, ResetInSec: 2_260_000},
 		},
 		cachedAt: time.Now(),
 		cacheTTL: time.Hour,
@@ -346,9 +346,9 @@ func TestHomeViewShowsOpenCodeGoUsageFromClient(t *testing.T) {
 	text := flattenBlockText(view)
 	for _, want := range []string{
 		"*Usage*",
-		"`▰▰▱▱▱` 33%/5h · resets in 3h 25m",
-		"`▰▰▰▱▱` 50%/Week · resets in 3d",
-		"`▱▱▱▱▱` 5%/Month · resets in 26d 3h",
+		"█▋░░░ 33%/5h · resets in 3h 25m",
+		"██▌░░ 50%/Week · resets in 3d",
+		"▎░░░░ 5%/Month · resets in 26d 3h",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("home view missing %q in %q", want, text)
@@ -356,19 +356,19 @@ func TestHomeViewShowsOpenCodeGoUsageFromClient(t *testing.T) {
 	}
 }
 
-func TestFormatOpenCodeUsageText(t *testing.T) {
-	got := formatOpenCodeUsageText(openCodeUsageSummary{
-		Rolling: &openCodeUsageWindow{UsagePercent: 0, ResetInSec: 16_440},
-		Weekly:  &openCodeUsageWindow{UsagePercent: 0, ResetInSec: 590_400},
-		Monthly: &openCodeUsageWindow{UsagePercent: 0, ResetInSec: 2_587_800},
+func TestFormatTokenUsageText(t *testing.T) {
+	got := formatTokenUsageText(tokenUsageSummary{
+		Rolling: &tokenUsageWindow{UsagePercent: 0, ResetInSec: 16_440},
+		Weekly:  &tokenUsageWindow{UsagePercent: 0, ResetInSec: 590_400},
+		Monthly: &tokenUsageWindow{UsagePercent: 0, ResetInSec: 2_587_800},
 	})
 	want := strings.Join([]string{
-		"`▱▱▱▱▱` 0%/5h · resets in 4h 34m",
-		"`▱▱▱▱▱` 0%/Week · resets in 6d 20h",
-		"`▱▱▱▱▱` 0%/Month · resets in 29d 22h",
+		"░░░░░ 0%/5h · resets in 4h 34m",
+		"░░░░░ 0%/Week · resets in 6d 20h",
+		"░░░░░ 0%/Month · resets in 29d 22h",
 	}, "\n")
 	if got != want {
-		t.Fatalf("formatOpenCodeUsageText() = %q, want %q", got, want)
+		t.Fatalf("formatTokenUsageText() = %q, want %q", got, want)
 	}
 }
 
@@ -391,13 +391,13 @@ monthlyUsage:$R[3]={usagePercent:5,resetInSec:2260000}`
 	}
 }
 
-func TestOpenCodeUsageSummaryDoesNotReturnStaleCacheOnFetchError(t *testing.T) {
-	client := &openCodeUsageClient{
+func TestTokenUsageSummaryDoesNotReturnStaleCacheOnFetchError(t *testing.T) {
+	client := &opencodeTokenUsageClient{
 		workspaceID: "wrk_test",
 		authCookie:  "auth=test",
 		httpClient:  &http.Client{Timeout: time.Second},
-		cached: openCodeUsageSummary{
-			Rolling: &openCodeUsageWindow{PercentRemaining: 99},
+		cached: tokenUsageSummary{
+			Rolling: &tokenUsageWindow{PercentRemaining: 99},
 		},
 		cachedAt: time.Now().Add(-time.Hour),
 		cacheTTL: time.Minute,

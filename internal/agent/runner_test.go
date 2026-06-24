@@ -88,6 +88,37 @@ func TestRunnerRejectsTextualToolCallFinal(t *testing.T) {
 	}
 }
 
+func TestRunnerRetriesTemporaryProviderError(t *testing.T) {
+	client := &fakeClient{
+		errors: []error{
+			llm.ProviderError{Provider: "opencode-go stream", StatusCode: 522, Body: "error code: 522"},
+		},
+		responses: []llm.Response{
+			{Message: llm.Message{Role: "assistant", Content: "done after retry"}},
+		},
+	}
+
+	var statuses []string
+	result, err := Runner{
+		LLM:          client,
+		Tools:        registry.New(),
+		MaxSteps:     4,
+		StatusUpdate: func(status string) { statuses = append(statuses, status) },
+	}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "done after retry" {
+		t.Fatalf("Final = %q, want retry response", result.Final)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("Chat calls = %d, want 2", len(client.requests))
+	}
+	if len(statuses) < 2 {
+		t.Fatalf("statuses = %#v, want retry status", statuses)
+	}
+}
+
 func TestRunnerStripsTextualToolCallMarkupOnRetry(t *testing.T) {
 	textual := "Here is the answer.\n<tool_call>\n<function=code-search>\n<parameter=query>test</parameter>\n</function>\n</tool_call>"
 	client := &fakeClient{responses: []llm.Response{
@@ -261,6 +292,94 @@ func TestRunnerSkipsDuplicateToolCallInsteadOfFailing(t *testing.T) {
 	}
 }
 
+func TestRunnerAsksForClarificationAfterRepeatedMissingWorkspacePath(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{Message: repoMissToolCallMessage("tool_1", `{"path":"frontend"}`)},
+		{Message: repoMissToolCallMessage("tool_2", `{"path":"wati-frontend"}`)},
+		{Message: llm.Message{Role: "assistant", Content: "should not reach this"}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeMissingWorkspaceTool{})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 6}.Run(context.Background(), Request{
+		Locale: "zh",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !result.Pending {
+		t.Fatal("expected pending clarification")
+	}
+	if !strings.Contains(result.PendingQuestion, "frontend") ||
+		!strings.Contains(result.PendingQuestion, "wati-frontend") ||
+		!strings.Contains(result.PendingQuestion, "请选一个方向") {
+		t.Fatalf("PendingQuestion = %q, want repo/path clarification", result.PendingQuestion)
+	}
+	if strings.Contains(result.PendingQuestion, "path=") || strings.Contains(result.PendingQuestion, "目标") {
+		t.Fatalf("PendingQuestion leaked internal wording: %q", result.PendingQuestion)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("Chat calls = %d, want stop after second missing path", len(client.requests))
+	}
+}
+
+func TestRunnerDoesNotAskForClarificationWhenCodeSearchMakesProgress(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{Message: repoMissToolCallMessage("tool_1", `{"path":"wati-frontend-app/domains/connectors/src/Integration/_constants/IntegrationCards.tsx"}`)},
+		{Message: codeSearchToolCallMessage("tool_2", `{"query":"IntegrationCards","path":"domains/connectors"}`)},
+		{Message: repoMissToolCallMessage("tool_3", `{"path":"wati-frontend-app/domains/connectors/src/Integration/Shopify/Catalog/index.tsx"}`)},
+		{Message: llm.Message{Role: "assistant", Content: "done"}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeMissingWorkspaceTool{})
+	tools.Register(fakeCodeSearchTool{})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 8}.Run(context.Background(), Request{
+		Locale: "zh",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Pending {
+		t.Fatalf("did not expect pending clarification after successful search, got %q", result.PendingQuestion)
+	}
+	if result.Final != "done" {
+		t.Fatalf("Final = %q, want done", result.Final)
+	}
+	if len(client.requests) != 4 {
+		t.Fatalf("Chat calls = %d, want continue through final", len(client.requests))
+	}
+}
+
+func TestRunnerAsksForClarificationAfterRepeatedAccessFailures(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{Message: restrictedToolCallMessage("tool_1", `{"target":"prod logs"}`)},
+		{Message: restrictedToolCallMessage("tool_2", `{"target":"prod metrics"}`)},
+		{Message: llm.Message{Role: "assistant", Content: "should not reach this"}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeRestrictedTool{})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 6}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !result.Pending {
+		t.Fatal("expected pending clarification")
+	}
+	if !strings.Contains(result.PendingQuestion, "prod logs") ||
+		!strings.Contains(result.PendingQuestion, "prod metrics") ||
+		!strings.Contains(result.PendingQuestion, "choose one direction") {
+		t.Fatalf("PendingQuestion = %q, want access clarification options", result.PendingQuestion)
+	}
+	if strings.Contains(result.PendingQuestion, "target=") || strings.Contains(result.PendingQuestion, "target I can access") {
+		t.Fatalf("PendingQuestion leaked internal wording: %q", result.PendingQuestion)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("Chat calls = %d, want stop after second access failure", len(client.requests))
+	}
+}
+
 func TestRunnerInjectsSteeringBeforeNextStep(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{
 		{Message: toolCallMessage("tool_1", `{"text":"initial"}`)},
@@ -312,6 +431,24 @@ func toolCallMessage(id, args string) llm.Message {
 			},
 		}},
 	}
+}
+
+func repoMissToolCallMessage(id, args string) llm.Message {
+	msg := toolCallMessage(id, args)
+	msg.ToolCalls[0].Function.Name = "repo-search"
+	return msg
+}
+
+func restrictedToolCallMessage(id, args string) llm.Message {
+	msg := toolCallMessage(id, args)
+	msg.ToolCalls[0].Function.Name = "restricted"
+	return msg
+}
+
+func codeSearchToolCallMessage(id, args string) llm.Message {
+	msg := toolCallMessage(id, args)
+	msg.ToolCalls[0].Function.Name = "code-search"
+	return msg
 }
 
 func TestMicroCompactClearsOldToolResults(t *testing.T) {
@@ -1143,6 +1280,64 @@ func (fakeRepeatableTool) Spec() llm.ToolSpec {
 }
 
 func (fakeRepeatableTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	return registry.Result{Content: string(args)}, nil
+}
+
+type fakeMissingWorkspaceTool struct{}
+
+func (fakeMissingWorkspaceTool) Spec() llm.ToolSpec {
+	return llm.ToolSpec{
+		Type: "function",
+		Function: llm.ToolSpecFunction{
+			Name:        "repo-search",
+			Description: "search repository",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}
+}
+
+func (fakeMissingWorkspaceTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	var payload struct {
+		Path string `json:"path"`
+	}
+	_ = json.Unmarshal(args, &payload)
+	if payload.Path == "" {
+		payload.Path = "repo"
+	}
+	return registry.Result{}, fmt.Errorf("file not found in any workspace root: %s", payload.Path)
+}
+
+type fakeRestrictedTool struct{}
+
+func (fakeRestrictedTool) Spec() llm.ToolSpec {
+	return llm.ToolSpec{
+		Type: "function",
+		Function: llm.ToolSpecFunction{
+			Name:        "restricted",
+			Description: "restricted data source",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}
+}
+
+func (fakeRestrictedTool) Execute(_ context.Context, _ json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	return registry.Result{}, errors.New("permission denied: missing credentials")
+}
+
+type fakeCodeSearchTool struct{}
+
+func (fakeCodeSearchTool) Spec() llm.ToolSpec {
+	return llm.ToolSpec{
+		Type: "function",
+		Function: llm.ToolSpecFunction{
+			Name:        "code-search",
+			Description: "search code",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}
+}
+
+func (fakeCodeSearchTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
 	return registry.Result{Content: string(args)}, nil
 }
 

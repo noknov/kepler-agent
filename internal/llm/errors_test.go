@@ -14,6 +14,9 @@ func TestTemporaryOverloadErrors(t *testing.T) {
 	if !IsTemporaryOverload(fmt.Errorf("wrapped: %w", err)) {
 		t.Fatal("expected wrapped 429 provider error to be temporary overload")
 	}
+	if !IsTemporaryOverload(ProviderError{Provider: "opencode-go stream", StatusCode: 522, Body: "error code: 522"}) {
+		t.Fatal("expected 522 provider error to be temporary overload")
+	}
 	if IsTemporaryOverload(ProviderError{Provider: "anthropic messages", StatusCode: 400, Body: "bad request"}) {
 		t.Fatal("did not expect 400 provider error to be temporary overload")
 	}

@@ -10,6 +10,8 @@ var (
 	reFunctionTag        = regexp.MustCompile(`(?is)<function=[^>]+>.*?</function>`)
 	reToolInvocation     = regexp.MustCompile(`(?is)<tool_invocation[^>]*>.*?</tool_invocation>`)
 	reToolInvocationSelf = regexp.MustCompile(`(?i)<tool_invocation[^>]*/\s*>`)
+	reDSMLToolCalls      = regexp.MustCompile(`(?is)<\s*｜｜DSML｜｜tool_calls\s*>.*?<\s*/\s*｜｜DSML｜｜tool_calls\s*>`)
+	reDSMLInvoke         = regexp.MustCompile(`(?is)<\s*｜｜DSML｜｜invoke\b.*?<\s*/\s*｜｜DSML｜｜invoke\s*>`)
 	reToolNameBlock      = regexp.MustCompile(`(?is)<tool_name>.*?</tool_name>`)
 	reParametersBlock    = regexp.MustCompile(`(?is)<parameters>.*?</parameters>`)
 	reToolCallCodeBlock  = regexp.MustCompile("(?s)```[\\w]*\\s*tool_call.*?```")
@@ -33,6 +35,9 @@ func LooksLikeTextualToolCall(content string) bool {
 		return true
 	}
 	if strings.Contains(s, "<tool_invocation") || strings.Contains(s, "</tool_invocation>") {
+		return true
+	}
+	if strings.Contains(s, "dsml") && (strings.Contains(s, "tool_calls") || strings.Contains(s, "invoke")) {
 		return true
 	}
 	if strings.Contains(s, "```") && strings.Contains(s, "tool_call") {
@@ -62,6 +67,8 @@ func StripTextualToolCallMarkup(content string) string {
 	content = reFunctionTag.ReplaceAllString(content, "")
 	content = reToolInvocation.ReplaceAllString(content, "")
 	content = reToolInvocationSelf.ReplaceAllString(content, "")
+	content = reDSMLToolCalls.ReplaceAllString(content, "")
+	content = reDSMLInvoke.ReplaceAllString(content, "")
 	content = reToolNameBlock.ReplaceAllString(content, "")
 	content = reParametersBlock.ReplaceAllString(content, "")
 	content = reToolCallCodeBlock.ReplaceAllString(content, "")

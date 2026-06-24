@@ -52,7 +52,7 @@ func (s *Server) homeView(userID string) map[string]any {
 	if len(models) > 1 {
 		blocks = append(blocks, actionsBlock(modelSelectMenu(models, currentModel)))
 	}
-	if usageText, ok := s.openCodeGoUsageText(); ok {
+	if usageText, ok := s.tokenUsageText(); ok {
 		blocks = append(blocks, sectionBlock("*Usage*\n"+usageText))
 	}
 	blocks = append(blocks,
@@ -126,54 +126,69 @@ func dividerBlock() map[string]any {
 	return map[string]any{"type": "divider"}
 }
 
-func (s *Server) openCodeGoUsageText() (string, bool) {
-	if s.cfg.LLM.Provider != "opencode-go" {
-		return "", false
-	}
-	if s.openCodeUsage != nil {
+func (s *Server) tokenUsageText() (string, bool) {
+	if s.tokenUsage != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 		defer cancel()
-		if usage, err := s.openCodeUsage.Summary(ctx, time.Now()); err == nil {
-			return formatOpenCodeUsageText(usage), true
+		if usage, err := s.tokenUsage.Summary(ctx, time.Now()); err == nil {
+			return formatTokenUsageText(usage), true
 		}
 	}
 	return "", false
 }
 
-func formatOpenCodeUsageText(usage openCodeUsageSummary) string {
+func formatTokenUsageText(usage tokenUsageSummary) string {
 	lines := make([]string, 0, 3)
 	if usage.Rolling != nil {
-		lines = append(lines, formatOpenCodeUsageLine("5h", usage.Rolling))
+		lines = append(lines, formatTokenUsageLine("5h", usage.Rolling))
 	}
 	if usage.Weekly != nil {
-		lines = append(lines, formatOpenCodeUsageLine("Week", usage.Weekly))
+		lines = append(lines, formatTokenUsageLine("Week", usage.Weekly))
 	}
 	if usage.Monthly != nil {
-		lines = append(lines, formatOpenCodeUsageLine("Month", usage.Monthly))
+		lines = append(lines, formatTokenUsageLine("Month", usage.Monthly))
 	}
 	return strings.Join(lines, "\n")
 }
 
-const openCodeUsageBarWidth = 5
+const tokenUsageBarWidth = 5
 
-func formatOpenCodeUsageLine(label string, window *openCodeUsageWindow) string {
+func formatTokenUsageLine(label string, window *tokenUsageWindow) string {
 	used := int(math.Round(window.UsagePercent))
-	bar := formatOpenCodeUsageBar(used)
-	return fmt.Sprintf("`%s` %d%%/%s · resets in %s", bar, used, label, formatOpenCodeResetIn(window.ResetInSec))
+	bar := formatTokenUsageBar(used)
+	return fmt.Sprintf("%s %d%%/%s · resets in %s", bar, used, label, formatTokenUsageResetIn(window.ResetInSec))
 }
 
-func formatOpenCodeUsageBar(percentUsed int) string {
-	filled := int(math.Round(float64(percentUsed) / 100 * openCodeUsageBarWidth))
-	if filled > openCodeUsageBarWidth {
-		filled = openCodeUsageBarWidth
+func formatTokenUsageBar(percentUsed int) string {
+	const subLevels = 8
+	total := int(math.Round(float64(percentUsed) / 100 * float64(tokenUsageBarWidth*subLevels)))
+	if total > tokenUsageBarWidth*subLevels {
+		total = tokenUsageBarWidth * subLevels
 	}
-	if filled < 0 {
-		filled = 0
+	if total < 0 {
+		total = 0
 	}
-	return strings.Repeat("▰", filled) + strings.Repeat("▱", openCodeUsageBarWidth-filled)
+
+	fullCells := total / subLevels
+	partialLevel := total % subLevels
+	emptyCells := tokenUsageBarWidth - fullCells
+	if partialLevel > 0 {
+		emptyCells--
+	}
+
+	// Vertical block elements from thinnest (1/8) to full (8/8).
+	partialChars := []rune{'▏', '▎', '▍', '▌', '▋', '▊', '▉'}
+
+	var b strings.Builder
+	b.WriteString(strings.Repeat("█", fullCells))
+	if partialLevel > 0 {
+		b.WriteRune(partialChars[partialLevel-1])
+	}
+	b.WriteString(strings.Repeat("░", emptyCells))
+	return b.String()
 }
 
-func formatOpenCodeResetIn(seconds int64) string {
+func formatTokenUsageResetIn(seconds int64) string {
 	if seconds <= 0 {
 		return "now"
 	}

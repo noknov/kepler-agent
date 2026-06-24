@@ -44,6 +44,20 @@ func NewObserver(store Store, run Run, rates observability.CostRates) *Observer 
 }
 
 func (o *Observer) LLMCall(usage llm.Usage, d time.Duration, err error) {
+	o.recordLLMStep(usage, d, err, Step{})
+}
+
+func (o *Observer) LLMResponse(resp llm.Response, d time.Duration, err error) {
+	step := Step{
+		FinishReason:     resp.FinishReason,
+		Content:          resp.Message.Content,
+		ReasoningContent: resp.Message.ReasoningContent,
+		ToolCallNames:    toolCallNames(resp.Message.ToolCalls),
+	}
+	o.recordLLMStep(resp.Usage, d, err, step)
+}
+
+func (o *Observer) recordLLMStep(usage llm.Usage, d time.Duration, err error, step Step) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	cost := o.Rates.EstimateUSD(usage)
@@ -54,14 +68,13 @@ func (o *Observer) LLMCall(usage llm.Usage, d time.Duration, err error) {
 	o.Run.Usage.CacheCreationInputTokens += usage.CacheCreationInputTokens
 	o.Run.Usage.ReasoningTokens += usage.ReasoningTokens
 	o.Run.EstimatedCostUSD += cost
-	o.appendStepLocked(Step{
-		Type:             "llm",
-		Name:             o.Run.Model,
-		DurationMS:       d.Milliseconds(),
-		Usage:            usage,
-		EstimatedCostUSD: cost,
-		Error:            errorString(err),
-	})
+	step.Type = "llm"
+	step.Name = o.Run.Model
+	step.DurationMS = d.Milliseconds()
+	step.Usage = usage
+	step.EstimatedCostUSD = cost
+	step.Error = errorString(err)
+	o.appendStepLocked(step)
 }
 
 func (o *Observer) ToolCall(name string, d time.Duration, err error) {
@@ -128,6 +141,22 @@ func (o *Observer) appendStepLocked(step Step) {
 	step.StartedAt = time.Now().UTC().Add(-time.Duration(step.DurationMS) * time.Millisecond)
 	o.Run.Steps = append(o.Run.Steps, step)
 	o.saveLocked(context.Background())
+}
+
+func toolCallNames(calls []llm.ToolCall) []string {
+	if len(calls) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(calls))
+	for _, call := range calls {
+		if call.Function.Name != "" {
+			names = append(names, call.Function.Name)
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return names
 }
 
 func (o *Observer) save(ctx context.Context) {

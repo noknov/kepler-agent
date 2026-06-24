@@ -1,6 +1,6 @@
 {
   "code-search": {
-    "description": "Search code with ripgrep under an allowed workspace root. Prefer this for locating symbols, error messages, routes, config keys, or string patterns in the local working tree.",
+    "description": "Search code with ripgrep under an allowed workspace root. Prefer this for symbols, error messages, routes, config keys, or string patterns in the local working tree. For broad investigations, narrow by repo/path/glob before expanding.",
     "parameters": {
       "query": "Literal string or regex pattern for ripgrep.",
       "path": "Directory or file under WORKSPACE_ROOTS. Defaults to first root.",
@@ -9,7 +9,7 @@
     }
   },
   "code-read_file": {
-    "description": "Read a text file from an allowed workspace root. Use start_line and max_lines for large files. Read the file before making claims about its contents.",
+    "description": "Read a text file from an allowed workspace root. Use start_line and max_lines for large files. Read targeted ranges before making claims about file contents.",
     "parameters": {
       "path": "File path under one of WORKSPACE_ROOTS.",
       "start_line": "1-based start line. Defaults to 1.",
@@ -98,7 +98,7 @@
     }
   },
   "delegate-run": {
-    "description": "Run a focused delegate for bounded analysis using only the supplied context. Delegates cannot call tools or read files directly; they analyze only what you provide.",
+    "description": "Run a focused delegate for bounded analysis using only supplied context. Delegates cannot call tools or read files directly; they analyze only what you provide.",
     "parameters": {
       "profile": "Delegate profile name.",
       "task": "Specific question or analysis task for the delegate.",
@@ -146,7 +146,7 @@
     }
   },
   "repo-search": {
-    "description": "Fetch a repository on demand, pin the requested branch to a commit snapshot, then search code at that snapshot. Prefer this for normal repository code searches when you need a specific branch.",
+    "description": "Fetch a repository on demand, pin the requested branch to a commit snapshot, then search code at that snapshot. Prefer this for repository investigations involving a named branch/ref.",
     "parameters": {
       "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
       "branch": "Branch to analyze. If omitted, tries the configured default branch, main, then master.",
@@ -156,7 +156,7 @@
     }
   },
   "repo-read_file": {
-    "description": "Fetch a repository on demand, pin the requested branch to a commit snapshot, then read a file at that snapshot. Prefer this for normal repository file reads when you need a specific branch.",
+    "description": "Fetch a repository on demand, pin the requested branch to a commit snapshot, then read a file at that snapshot. Prefer this for repository file reads involving a named branch/ref.",
     "parameters": {
       "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
       "branch": "Branch to analyze. If omitted, tries the configured default branch, main, then master.",
@@ -231,7 +231,7 @@
     }
   },
   "rag-search": {
-    "description": "Semantic code search using RAG. Use for architectural or behavioral questions where keyword search is insufficient. For exact symbol or string matching, prefer code-search or repo-search instead. Results are hints; confirm with code read tools before quoting.",
+    "description": "Semantic code search using RAG. Use for architectural or behavioral questions where keyword search is insufficient. For exact symbol or string matching, prefer code-search or repo-search instead. Results are hints only; confirm important claims with code/repo read tools before quoting or explaining code.",
     "parameters": {
       "query": "Natural language or code-related query.",
       "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
@@ -240,7 +240,7 @@
     }
   },
   "slack-ask_user": {
-    "description": "Ask the Slack user for missing information, then pause the current run. Use only when you cannot safely proceed without clarification and have exhausted available tools.",
+    "description": "Ask the Slack user for missing information, then pause the current run. Use only when one concrete missing constraint blocks the next deterministic step. Name the missing repo, path, branch, environment, account, catalog, parameter, config, permission, channel, or data source.",
     "parameters": {
       "question": "Specific question to ask in the current thread."
     }

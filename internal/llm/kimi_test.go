@@ -31,6 +31,21 @@ func TestMiMoChatBodyUsesOfficialOpenAIFields(t *testing.T) {
 	}
 }
 
+func TestChatBodyOmitsMaxTokensWhenUnset(t *testing.T) {
+	client := NewKimiClient("https://opencode.ai/zen/go/v1", "token", 0)
+	body := client.chatBody(Request{
+		Model:    "glm-5.2",
+		Messages: []Message{{Role: "user", Content: "hello"}},
+	})
+
+	if _, ok := body["max_tokens"]; ok {
+		t.Fatalf("chatBody should omit max_tokens when MaxTokens is unset: %#v", body)
+	}
+	if _, ok := body["max_completion_tokens"]; ok {
+		t.Fatalf("chatBody should omit max_completion_tokens when MaxTokens is unset: %#v", body)
+	}
+}
+
 func TestBearerTokenValue(t *testing.T) {
 	if got := bearerTokenValue("Bearer sk-test"); got != "sk-test" {
 		t.Fatalf("bearerTokenValue() = %q, want sk-test", got)

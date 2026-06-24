@@ -15,43 +15,56 @@ import (
 	"github.com/wati/oncall-agent/internal/config"
 )
 
-type openCodeUsageClient struct {
+type tokenUsageProvider interface {
+	Summary(ctx context.Context, now time.Time) (tokenUsageSummary, error)
+}
+
+type opencodeTokenUsageClient struct {
 	workspaceID string
 	authCookie  string
 	httpClient  *http.Client
 
 	mu        sync.Mutex
-	cached    openCodeUsageSummary
+	cached    tokenUsageSummary
 	cachedAt  time.Time
 	cacheTTL  time.Duration
 	lastError string
 }
 
-type openCodeUsageWindow struct {
+type tokenUsageWindow struct {
 	UsagePercent     float64
 	PercentRemaining float64
 	ResetInSec       int64
 }
 
-type openCodeUsageSummary struct {
-	Rolling *openCodeUsageWindow
-	Weekly  *openCodeUsageWindow
-	Monthly *openCodeUsageWindow
+type tokenUsageSummary struct {
+	Rolling *tokenUsageWindow
+	Weekly  *tokenUsageWindow
+	Monthly *tokenUsageWindow
 }
 
-func newOpenCodeUsageClient(cfg config.OpenCodeUsageConfig) *openCodeUsageClient {
+func newTokenUsageProvider(provider string, cfg config.TokenUsageConfig) tokenUsageProvider {
+	switch provider {
+	case "opencode-go":
+		return newOpenCodeGoTokenUsageClient(cfg.OpenCodeGo)
+	default:
+		return nil
+	}
+}
+
+func newOpenCodeGoTokenUsageClient(cfg config.OpenCodeGoTokenUsageConfig) *opencodeTokenUsageClient {
 	if strings.TrimSpace(cfg.WorkspaceID) == "" || strings.TrimSpace(cfg.AuthCookie) == "" {
 		return nil
 	}
-	return &openCodeUsageClient{
+	return &opencodeTokenUsageClient{
 		workspaceID: strings.TrimSpace(cfg.WorkspaceID),
-		authCookie:  normalizeOpenCodeAuthCookie(cfg.AuthCookie),
+		authCookie:  normalizeTokenUsageAuthCookie(cfg.AuthCookie),
 		httpClient:  &http.Client{Timeout: 5 * time.Second},
 		cacheTTL:    time.Minute,
 	}
 }
 
-func normalizeOpenCodeAuthCookie(raw string) string {
+func normalizeTokenUsageAuthCookie(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if strings.HasPrefix(raw, "auth=") {
 		return raw
@@ -59,7 +72,7 @@ func normalizeOpenCodeAuthCookie(raw string) string {
 	return "auth=" + raw
 }
 
-func (c *openCodeUsageClient) Summary(ctx context.Context, now time.Time) (openCodeUsageSummary, error) {
+func (c *opencodeTokenUsageClient) Summary(ctx context.Context, now time.Time) (tokenUsageSummary, error) {
 	c.mu.Lock()
 	if !c.cachedAt.IsZero() && time.Since(c.cachedAt) < c.cacheTTL {
 		summary := c.cached
@@ -74,7 +87,7 @@ func (c *openCodeUsageClient) Summary(ctx context.Context, now time.Time) (openC
 	defer c.mu.Unlock()
 	if err != nil {
 		c.lastError = err.Error()
-		return openCodeUsageSummary{}, err
+		return tokenUsageSummary{}, err
 	}
 	c.cached = summary
 	c.cachedAt = time.Now()
@@ -82,11 +95,11 @@ func (c *openCodeUsageClient) Summary(ctx context.Context, now time.Time) (openC
 	return summary, nil
 }
 
-func (c *openCodeUsageClient) fetch(ctx context.Context, _ time.Time) (openCodeUsageSummary, error) {
+func (c *opencodeTokenUsageClient) fetch(ctx context.Context, _ time.Time) (tokenUsageSummary, error) {
 	url := "https://opencode.ai/workspace/" + c.workspaceID + "/go"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return openCodeUsageSummary{}, err
+		return tokenUsageSummary{}, err
 	}
 	req.Header.Set("Accept", "text/html")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; oncall-agent/1.0)")
@@ -94,15 +107,15 @@ func (c *openCodeUsageClient) fetch(ctx context.Context, _ time.Time) (openCodeU
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return openCodeUsageSummary{}, err
+		return tokenUsageSummary{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return openCodeUsageSummary{}, fmt.Errorf("opencode go page returned HTTP %d", resp.StatusCode)
+		return tokenUsageSummary{}, fmt.Errorf("opencode go page returned HTTP %d", resp.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return openCodeUsageSummary{}, err
+		return tokenUsageSummary{}, err
 	}
 	return parseOpenCodeGoUsageHTML(string(data))
 }
@@ -118,39 +131,39 @@ var (
 	reMonthlyResetFirst = regexp.MustCompile(`monthlyUsage:\$R\[\d+\]=\{[^}]*resetInSec:` + scrapedNumberPattern + `[^}]*usagePercent:` + scrapedNumberPattern + `[^}]*\}`)
 )
 
-func parseOpenCodeGoUsageHTML(html string) (openCodeUsageSummary, error) {
-	rolling := parseOpenCodeUsageWindow(html, reRollingPctFirst, reRollingResetFirst)
-	weekly := parseOpenCodeUsageWindow(html, reWeeklyPctFirst, reWeeklyResetFirst)
-	monthly := parseOpenCodeUsageWindow(html, reMonthlyPctFirst, reMonthlyResetFirst)
+func parseOpenCodeGoUsageHTML(html string) (tokenUsageSummary, error) {
+	rolling := parseTokenUsageWindow(html, reRollingPctFirst, reRollingResetFirst)
+	weekly := parseTokenUsageWindow(html, reWeeklyPctFirst, reWeeklyResetFirst)
+	monthly := parseTokenUsageWindow(html, reMonthlyPctFirst, reMonthlyResetFirst)
 
 	if rolling == nil && weekly == nil && monthly == nil {
-		dataSlot := parseOpenCodeUsageDataSlots(html)
+		dataSlot := parseTokenUsageDataSlots(html)
 		rolling = dataSlot["rolling"]
 		weekly = dataSlot["weekly"]
 		monthly = dataSlot["monthly"]
 	}
 	if rolling == nil && weekly == nil && monthly == nil {
-		return openCodeUsageSummary{}, fmt.Errorf("no opencode usage percentages found")
+		return tokenUsageSummary{}, fmt.Errorf("no opencode usage percentages found")
 	}
 
-	return openCodeUsageSummary{
+	return tokenUsageSummary{
 		Rolling: rolling,
 		Weekly:  weekly,
 		Monthly: monthly,
 	}, nil
 }
 
-func parseOpenCodeUsageWindow(html string, pctFirst, resetFirst *regexp.Regexp) *openCodeUsageWindow {
+func parseTokenUsageWindow(html string, pctFirst, resetFirst *regexp.Regexp) *tokenUsageWindow {
 	if match := pctFirst.FindStringSubmatch(html); len(match) == 3 {
-		return normalizeOpenCodeUsageWindow(match[1], match[2])
+		return normalizeTokenUsageWindow(match[1], match[2])
 	}
 	if match := resetFirst.FindStringSubmatch(html); len(match) == 3 {
-		return normalizeOpenCodeUsageWindow(match[2], match[1])
+		return normalizeTokenUsageWindow(match[2], match[1])
 	}
 	return nil
 }
 
-func normalizeOpenCodeUsageWindow(usagePercentRaw, resetInSecRaw string) *openCodeUsageWindow {
+func normalizeTokenUsageWindow(usagePercentRaw, resetInSecRaw string) *tokenUsageWindow {
 	usagePercent, err := strconv.ParseFloat(usagePercentRaw, 64)
 	if err != nil || !isFiniteFloat(usagePercent) {
 		return nil
@@ -161,15 +174,15 @@ func normalizeOpenCodeUsageWindow(usagePercentRaw, resetInSecRaw string) *openCo
 	}
 	usagePercent = math.Max(0, usagePercent)
 	percentRemaining := math.Max(0, 100-usagePercent)
-	return &openCodeUsageWindow{
+	return &tokenUsageWindow{
 		UsagePercent:     usagePercent,
 		PercentRemaining: percentRemaining,
 		ResetInSec:       int64(math.Round(resetInSec)),
 	}
 }
 
-func parseOpenCodeUsageDataSlots(html string) map[string]*openCodeUsageWindow {
-	result := map[string]*openCodeUsageWindow{}
+func parseTokenUsageDataSlots(html string) map[string]*tokenUsageWindow {
+	result := map[string]*tokenUsageWindow{}
 	parts := strings.Split(html, `data-slot="usage-item"`)
 	for i := 1; i < len(parts); i++ {
 		content := parts[i]
@@ -201,7 +214,7 @@ func parseOpenCodeUsageDataSlots(html string) map[string]*openCodeUsageWindow {
 			resetInSec = parsed
 		}
 
-		window := normalizeOpenCodeUsageWindow(usageMatch[1], strconv.FormatInt(resetInSec, 10))
+		window := normalizeTokenUsageWindow(usageMatch[1], strconv.FormatInt(resetInSec, 10))
 		if window == nil {
 			continue
 		}

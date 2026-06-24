@@ -156,6 +156,7 @@ type StreamCallback func(delta string)
 type StreamHandler struct {
 	OnText             func(delta string)
 	OnToolCallsStarted func()
+	OnUsage            func(usage Usage)
 }
 
 func TextStream(cb StreamCallback) StreamHandler {
