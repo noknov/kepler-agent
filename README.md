@@ -179,7 +179,7 @@ The committed `prompts/` directory contains only runtime prompt files. Do not ad
 | `app_messages.json` | Responses to empty mentions, empty DMs, file-only DMs |
 | `tools.json` | Tool description and parameter overrides |
 | `memory.json` | Labels for session summary and thread context blocks |
-| `runner.json` | Retry and budget-warning prompt templates |
+| `runner.json` | Retry prompt templates for final-answer validation |
 | `health.json` | Health summary header and rules text |
 | `tool_statuses.json` | Slack status messages shown while tools run |
 | `texts.json` | Shared prompt snippets such as section headers and context wrappers |

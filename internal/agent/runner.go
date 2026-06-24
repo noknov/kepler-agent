@@ -26,13 +26,6 @@ var (
 
 const (
 	clarificationErrorThreshold = 2
-	convergenceNudgeCodeTurns   = 12
-	convergenceNudgeSearchTurns = 8
-	convergenceNudgeRAGTurns    = 5
-	forceSynthesisCodeTurns     = 18
-	forceSynthesisSearchTurns   = 12
-	noProgressForceTurns        = 4
-	maxSynthesisRetries         = 2
 	exploreFailureLimit         = 1
 )
 
@@ -106,25 +99,8 @@ func emptyResponseRetryPrompt() string {
 	return prompts.RunnerPrompt("empty_response_retry", "")
 }
 
-func budgetWarningPrompt(remainingToolSteps int) string {
-	tmpl := prompts.RunnerPrompt("budget_warning", "")
-	return fmt.Sprintf(tmpl, remainingToolSteps)
-}
-
 func codeClaimRetryPrompt() string {
 	return prompts.RunnerPrompt("code_claim_retry", "")
-}
-
-func convergenceWarningPrompt() string {
-	return prompts.RunnerPrompt("convergence_warning", "")
-}
-
-func synthesisPrompt() string {
-	return prompts.RunnerPrompt("synthesis_now", "")
-}
-
-func synthesisRetryPrompt() string {
-	return prompts.RunnerPrompt("synthesis_retry", "")
 }
 
 func rawEvidenceRetryPrompt() string {
@@ -194,16 +170,11 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	retriedCodeClaim := false
 	retriedRawEvidence := false
 	codeToolCalledThisRun := false
-	budgetWarned := false
-	convergenceWarned := false
-	synthesisRetries := 0
 	afterTools := false
 	clarificationErrors := newClarificationErrorTracker()
-	progress := convergenceProgress{searchTurns: map[string]int{}}
 	control := newRunnerControl()
 
 	for step := 0; step < maxSteps; step++ {
-		lastStep := step == maxSteps-1
 		if r.StatusUpdate != nil {
 			r.StatusUpdate(StepStatus(req.Locale, step))
 		}
@@ -213,35 +184,12 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			}
 		}
 
-		if !budgetWarned && step == maxSteps-10 && !lastStep {
-			remaining := (maxSteps - 1) - step
-			messages = append(messages, llm.Message{
-				Role:    "system",
-				Content: budgetWarningPrompt(remaining),
-			})
-			budgetWarned = true
-		}
-
-		forceSynthesis := !lastStep && control.shouldForceSynthesis(progress)
-		if forceSynthesis {
-			messages = append(messages, llm.Message{
-				Role:    "system",
-				Content: synthesisPrompt(),
-			})
-		} else if !convergenceWarned && progress.shouldNudge() && !lastStep {
-			messages = append(messages, llm.Message{
-				Role:    "system",
-				Content: convergenceWarningPrompt(),
-			})
-			convergenceWarned = true
-		}
-
 		if r.Compactor != nil {
 			messages = r.compactMessages(ctx, messages)
 		}
 
 		var toolSpecs []llm.ToolSpec
-		if !lastStep && !forceSynthesis {
+		if r.Tools != nil {
 			toolSpecs = control.filterToolSpecs(r.Tools.Specs())
 		}
 
@@ -416,18 +364,6 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			return Result{Generated: generated, Final: final, Streamed: useStream}, nil
 		}
 
-		if len(toolSpecs) == 0 {
-			synthesisRetries++
-			if synthesisRetries <= maxSynthesisRetries {
-				messages = append(messages, llm.Message{Role: "system", Content: synthesisRetryPrompt()})
-				if r.StatusUpdate != nil {
-					r.StatusUpdate(RetryStatus(req.Locale))
-				}
-				continue
-			}
-			return Result{Generated: generated}, ErrMaxToolSteps
-		}
-
 		// Emit non-streamed narration as a batch event so the UI still shows it.
 		if narration := strings.TrimSpace(assistantMsg.Content); narration != "" && r.OnStream != nil && !streamedText {
 			if !llm.LooksLikeTextualToolCall(narration) {
@@ -459,7 +395,6 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 				}, nil
 			}
 		}
-		progress.finishTurn(toolResults)
 		control.finishTurn(toolResults)
 		locale := requestLocale(req.Locale, messages)
 		if question := clarificationErrors.Question(toolResults, locale); question != "" {
@@ -520,15 +455,12 @@ func (r Runner) compactMessages(ctx context.Context, messages []llm.Message) []l
 }
 
 type runnerControl struct {
-	seenEvidence    map[string]bool
-	noProgressTurns int
-	toolFailures    map[string]int
-	disabledTools   map[string]bool
+	toolFailures  map[string]int
+	disabledTools map[string]bool
 }
 
 func newRunnerControl() *runnerControl {
 	return &runnerControl{
-		seenEvidence:  map[string]bool{},
 		toolFailures:  map[string]int{},
 		disabledTools: map[string]bool{},
 	}
@@ -552,7 +484,6 @@ func (c *runnerControl) finishTurn(results []toolResult) {
 	if c == nil || len(results) == 0 {
 		return
 	}
-	newEvidence := false
 	for _, result := range results {
 		if result.err != nil {
 			c.toolFailures[result.name]++
@@ -564,96 +495,7 @@ func (c *runnerControl) finishTurn(results []toolResult) {
 		if result.name != "" {
 			c.toolFailures[result.name] = 0
 		}
-		if !codeReadingTools[result.name] {
-			continue
-		}
-		fp := evidenceFingerprint(result)
-		if fp == "" || c.seenEvidence[fp] {
-			continue
-		}
-		c.seenEvidence[fp] = true
-		newEvidence = true
 	}
-	if newEvidence {
-		c.noProgressTurns = 0
-		return
-	}
-	c.noProgressTurns++
-}
-
-func (c *runnerControl) shouldForceSynthesis(progress convergenceProgress) bool {
-	if c == nil {
-		return false
-	}
-	if c.noProgressTurns >= noProgressForceTurns {
-		return true
-	}
-	if progress.codeEvidenceTurns >= forceSynthesisCodeTurns {
-		return true
-	}
-	return progress.searchTurns["code-search"] >= forceSynthesisSearchTurns ||
-		progress.searchTurns["repo-search"] >= forceSynthesisSearchTurns ||
-		progress.searchTurns["rag-search"] >= convergenceNudgeRAGTurns+2
-}
-
-func evidenceFingerprint(result toolResult) string {
-	if result.name == "" {
-		return ""
-	}
-	content := strings.Join(strings.Fields(result.message.Content), " ")
-	if content == "" {
-		content = strings.Join(strings.Fields(string(result.args)), " ")
-	}
-	if content == "" {
-		return ""
-	}
-	if len(content) > 512 {
-		content = content[:512]
-	}
-	return result.name + "\x00" + content
-}
-
-type convergenceProgress struct {
-	codeEvidenceTurns int
-	searchTurns       map[string]int
-}
-
-func (p *convergenceProgress) finishTurn(results []toolResult) {
-	if p == nil || len(results) == 0 {
-		return
-	}
-	if p.searchTurns == nil {
-		p.searchTurns = map[string]int{}
-	}
-	hadCodeEvidence := false
-	searchTypes := map[string]bool{}
-	for _, result := range results {
-		if result.err != nil {
-			continue
-		}
-		if codeReadingTools[result.name] {
-			hadCodeEvidence = true
-		}
-		switch result.name {
-		case "code-search", "repo-search", "rag-search":
-			searchTypes[result.name] = true
-		}
-	}
-	if hadCodeEvidence {
-		p.codeEvidenceTurns++
-	}
-	for name := range searchTypes {
-		p.searchTurns[name]++
-	}
-}
-
-func (p convergenceProgress) shouldNudge() bool {
-	if p.codeEvidenceTurns >= convergenceNudgeCodeTurns {
-		return true
-	}
-	return p.searchTurns["code-search"] >= convergenceNudgeSearchTurns ||
-		p.searchTurns["repo-search"] >= convergenceNudgeSearchTurns ||
-		p.searchTurns["rag-search"] >= convergenceNudgeRAGTurns
 }
 
 func requestLocale(locale string, messages []llm.Message) string {
