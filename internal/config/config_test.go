@@ -311,7 +311,7 @@ func TestLoadOpenCodeGoDefaults(t *testing.T) {
 		"SLACK_BOT_TOKEN":      "xoxb-test",
 		"SLACK_SIGNING_SECRET": "secret",
 		"ALLOWED_SLACK_USERS":  "U123",
-		"OPENCODE_API_KEY":     "oc-go-token",
+		"OPENCODE_GO_API_KEY":  "oc-go-token",
 	})
 
 	wd, _ := os.Getwd()
@@ -349,18 +349,63 @@ func TestLoadOpenCodeGoDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadOpenCodeZenDefaults(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":      "xoxb-test",
+		"SLACK_SIGNING_SECRET": "secret",
+		"ALLOWED_SLACK_USERS":  "U123",
+		"OPENCODE_ZEN_API_KEY": "oc-zen-token",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.LLM.Provider != "opencode-zen" {
+		t.Fatalf("LLM.Provider = %q, want opencode-zen", cfg.LLM.Provider)
+	}
+	if cfg.LLM.Protocol != "openai" {
+		t.Fatalf("LLM.Protocol = %q, want openai", cfg.LLM.Protocol)
+	}
+	if cfg.LLM.BaseURL != "https://opencode.ai/zen/v1" {
+		t.Fatalf("LLM.BaseURL = %q, want OpenCode Zen base URL", cfg.LLM.BaseURL)
+	}
+	if cfg.LLM.Model != "mimo-v2.5-free" {
+		t.Fatalf("LLM.Model = %q, want mimo-v2.5-free", cfg.LLM.Model)
+	}
+	if cfg.LLM.APIKey != "oc-zen-token" {
+		t.Fatalf("LLM.APIKey = %q, want oc-zen-token", cfg.LLM.APIKey)
+	}
+	if cfg.LLM.MaxTokens != 0 {
+		t.Fatalf("LLM.MaxTokens = %d, want 0 for opencode-zen", cfg.LLM.MaxTokens)
+	}
+	for _, want := range []string{"mimo-v2.5-free", "minimax-m3-free", "nemotron-3-ultra-free", "north-mini-code-free"} {
+		if !containsString(cfg.LLM.AvailableModels, want) {
+			t.Fatalf("AvailableModels = %#v, want %q", cfg.LLM.AvailableModels, want)
+		}
+	}
+}
+
 func TestLoadOpenCodeUsesProviderSpecificAvailableModels(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
 	writeEnvFile(t, dir, map[string]string{
-		"SLACK_BOT_TOKEN":           "xoxb-test",
-		"SLACK_SIGNING_SECRET":      "secret",
-		"ALLOWED_SLACK_USERS":       "U123",
-		"LLM_PROVIDER":              "opencode-go",
-		"OPENCODE_API_KEY":          "oc-token",
-		"OPENCODE_MODEL":            "glm-5.2",
-		"OPENCODE_AVAILABLE_MODELS": "glm-5.2,kimi-k2.7-code,mimo-v2.5",
-		"MIMO_AVAILABLE_MODELS":     "mimo-v2.5-pro",
+		"SLACK_BOT_TOKEN":              "xoxb-test",
+		"SLACK_SIGNING_SECRET":         "secret",
+		"ALLOWED_SLACK_USERS":          "U123",
+		"LLM_PROVIDER":                 "opencode-go",
+		"OPENCODE_GO_API_KEY":          "oc-token",
+		"OPENCODE_GO_MODEL":            "glm-5.2",
+		"OPENCODE_GO_AVAILABLE_MODELS": "glm-5.2,kimi-k2.7-code,mimo-v2.5",
+		"MIMO_AVAILABLE_MODELS":        "mimo-v2.5-pro",
 	})
 
 	wd, _ := os.Getwd()
@@ -379,18 +424,48 @@ func TestLoadOpenCodeUsesProviderSpecificAvailableModels(t *testing.T) {
 	}
 }
 
+func TestLoadOpenCodeZenUsesProviderSpecificAvailableModels(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":               "xoxb-test",
+		"SLACK_SIGNING_SECRET":          "secret",
+		"ALLOWED_SLACK_USERS":           "U123",
+		"LLM_PROVIDER":                  "opencode-zen",
+		"OPENCODE_ZEN_API_KEY":          "oc-zen-token",
+		"OPENCODE_ZEN_MODEL":            "mimo-v2.5-free",
+		"OPENCODE_ZEN_AVAILABLE_MODELS": "mimo-v2.5-free,minimax-m3-free",
+		"OPENCODE_GO_AVAILABLE_MODELS":  "glm-5.2,kimi-k2.7-code",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	want := []string{"mimo-v2.5-free", "minimax-m3-free"}
+	if !equalStrings(cfg.LLM.AvailableModels, want) {
+		t.Fatalf("AvailableModels = %#v, want %#v", cfg.LLM.AvailableModels, want)
+	}
+}
+
 func TestLoadMiMoUsesProviderSpecificAvailableModels(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
 	writeEnvFile(t, dir, map[string]string{
-		"SLACK_BOT_TOKEN":           "xoxb-test",
-		"SLACK_SIGNING_SECRET":      "secret",
-		"ALLOWED_SLACK_USERS":       "U123",
-		"LLM_PROVIDER":              "mimo",
-		"MIMO_API_KEY":              "mimo-token",
-		"MIMO_MODEL":                "mimo-v2.5",
-		"MIMO_AVAILABLE_MODELS":     "mimo-v2.5,mimo-v2.5-pro",
-		"OPENCODE_AVAILABLE_MODELS": "glm-5.2,kimi-k2.7-code",
+		"SLACK_BOT_TOKEN":              "xoxb-test",
+		"SLACK_SIGNING_SECRET":         "secret",
+		"ALLOWED_SLACK_USERS":          "U123",
+		"LLM_PROVIDER":                 "mimo",
+		"MIMO_API_KEY":                 "mimo-token",
+		"MIMO_MODEL":                   "mimo-v2.5",
+		"MIMO_AVAILABLE_MODELS":        "mimo-v2.5,mimo-v2.5-pro",
+		"OPENCODE_GO_AVAILABLE_MODELS": "glm-5.2,kimi-k2.7-code",
 	})
 
 	wd, _ := os.Getwd()
@@ -413,13 +488,13 @@ func TestLoadTokenUsageConfigUsesOpenCodeGoEnv(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
 	writeEnvFile(t, dir, map[string]string{
-		"SLACK_BOT_TOKEN":       "xoxb-test",
-		"SLACK_SIGNING_SECRET":  "secret",
-		"ALLOWED_SLACK_USERS":   "U123",
-		"LLM_PROVIDER":          "opencode-go",
-		"OPENCODE_API_KEY":      "oc-go-token",
-		"OPENCODE_WORKSPACE_ID": "wrk_opencode",
-		"OPENCODE_AUTH_COOKIE":  "auth=opencode",
+		"SLACK_BOT_TOKEN":          "xoxb-test",
+		"SLACK_SIGNING_SECRET":     "secret",
+		"ALLOWED_SLACK_USERS":      "U123",
+		"LLM_PROVIDER":             "opencode-go",
+		"OPENCODE_GO_API_KEY":      "oc-go-token",
+		"OPENCODE_GO_WORKSPACE_ID": "wrk_opencode",
+		"OPENCODE_GO_AUTH_COOKIE":  "auth=opencode",
 	})
 
 	wd, _ := os.Getwd()
@@ -448,10 +523,10 @@ func TestLoadOpenCodeGoAnthropicEndpoint(t *testing.T) {
 		"SLACK_SIGNING_SECRET": "secret",
 		"ALLOWED_SLACK_USERS":  "U123",
 		"LLM_PROVIDER":         "opencode-go",
-		"OPENCODE_PROTOCOL":    "anthropic",
-		"OPENCODE_API_KEY":     "oc-go-token",
-		"OPENCODE_MODEL":       "minimax-m3",
-		"OPENCODE_BASE_URL":    "https://opencode.ai/zen/go/v1",
+		"OPENCODE_GO_PROTOCOL": "anthropic",
+		"OPENCODE_GO_API_KEY":  "oc-go-token",
+		"OPENCODE_GO_MODEL":    "minimax-m3",
+		"OPENCODE_GO_BASE_URL": "https://opencode.ai/zen/go/v1",
 	})
 
 	wd, _ := os.Getwd()
@@ -632,15 +707,22 @@ func resetConfigEnv(t *testing.T) {
 		"KIMI_BASE_URL",
 		"KIMI_MODEL",
 		"KIMI_AVAILABLE_MODELS",
-		"OPENCODE_PROTOCOL",
-		"OPENCODE_API_KEY",
-		"OPENCODE_BASE_URL",
-		"OPENCODE_MODEL",
-		"OPENCODE_AVAILABLE_MODELS",
-		"OPENCODE_TEMPERATURE",
-		"OPENCODE_TIMEOUT",
-		"OPENCODE_WORKSPACE_ID",
-		"OPENCODE_AUTH_COOKIE",
+		"OPENCODE_GO_PROTOCOL",
+		"OPENCODE_GO_API_KEY",
+		"OPENCODE_GO_BASE_URL",
+		"OPENCODE_GO_MODEL",
+		"OPENCODE_GO_AVAILABLE_MODELS",
+		"OPENCODE_GO_TEMPERATURE",
+		"OPENCODE_GO_TIMEOUT",
+		"OPENCODE_GO_WORKSPACE_ID",
+		"OPENCODE_GO_AUTH_COOKIE",
+		"OPENCODE_ZEN_PROTOCOL",
+		"OPENCODE_ZEN_API_KEY",
+		"OPENCODE_ZEN_BASE_URL",
+		"OPENCODE_ZEN_MODEL",
+		"OPENCODE_ZEN_AVAILABLE_MODELS",
+		"OPENCODE_ZEN_TEMPERATURE",
+		"OPENCODE_ZEN_TIMEOUT",
 		"MOONSHOT_API_KEY",
 		"MOONSHOT_BASE_URL",
 		"MOONSHOT_MODEL",

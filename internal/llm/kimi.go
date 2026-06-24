@@ -286,6 +286,9 @@ func (c *KimiClient) providerName() string {
 	if isOpenCodeGoEndpoint(c.baseURL) {
 		return "opencode-go"
 	}
+	if isOpenCodeZenEndpoint(c.baseURL) {
+		return "opencode-zen"
+	}
 	if isMiMoEndpoint(c.baseURL, "") {
 		return "mimo"
 	}
@@ -313,4 +316,9 @@ func isMiMoEndpoint(baseURL, model string) bool {
 func isOpenCodeGoEndpoint(baseURL string) bool {
 	baseURL = strings.ToLower(strings.TrimSpace(baseURL))
 	return strings.Contains(baseURL, "opencode.ai/zen/go")
+}
+
+func isOpenCodeZenEndpoint(baseURL string) bool {
+	baseURL = strings.ToLower(strings.TrimSpace(baseURL))
+	return strings.Contains(baseURL, "opencode.ai/zen") && !strings.Contains(baseURL, "opencode.ai/zen/go")
 }

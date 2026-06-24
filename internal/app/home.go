@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math"
 	"strings"
-	"time"
 
 	"github.com/wati/oncall-agent/internal/slack"
 )
@@ -51,9 +49,6 @@ func (s *Server) homeView(userID string) map[string]any {
 	}
 	if len(models) > 1 {
 		blocks = append(blocks, actionsBlock(modelSelectMenu(models, currentModel)))
-	}
-	if block, ok := s.tokenUsageSectionBlock(); ok {
-		blocks = append(blocks, block)
 	}
 	blocks = append(blocks,
 		dividerBlock(),
@@ -132,90 +127,4 @@ func sectionBlock(text string) map[string]any {
 
 func dividerBlock() map[string]any {
 	return map[string]any{"type": "divider"}
-}
-
-func (s *Server) tokenUsageSectionBlock() (map[string]any, bool) {
-	if s.tokenUsage == nil {
-		return nil, false
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
-	defer cancel()
-	usage, err := s.tokenUsage.Summary(ctx, time.Now())
-	if err != nil {
-		return nil, false
-	}
-	text, ok := formatTokenUsageText(usage)
-	if !ok {
-		return nil, false
-	}
-	return sectionBlock(text), true
-}
-
-type tokenUsageRow struct {
-	label  string
-	window *tokenUsageWindow
-}
-
-func formatTokenUsageText(usage tokenUsageSummary) (string, bool) {
-	rows := make([]tokenUsageRow, 0, 3)
-	if usage.Rolling != nil {
-		rows = append(rows, tokenUsageRow{"5h", usage.Rolling})
-	}
-	if usage.Weekly != nil {
-		rows = append(rows, tokenUsageRow{"Week", usage.Weekly})
-	}
-	if usage.Monthly != nil {
-		rows = append(rows, tokenUsageRow{"Month", usage.Monthly})
-	}
-	if len(rows) == 0 {
-		return "", false
-	}
-
-	lines := make([]string, 0, len(rows)+1)
-	lines = append(lines, "*Usage*")
-	for _, row := range rows {
-		used := int(math.Round(row.window.UsagePercent))
-		lines = append(lines, fmt.Sprintf("%s *%s* · %d%% · _resets in %s_",
-			tokenUsageStatusEmoji(used),
-			row.label,
-			used,
-			formatTokenUsageResetIn(row.window.ResetInSec),
-		))
-	}
-	return strings.Join(lines, "\n"), true
-}
-
-func tokenUsageStatusEmoji(percent int) string {
-	switch {
-	case percent >= 80:
-		return ":red_circle:"
-	case percent >= 50:
-		return ":large_yellow_circle:"
-	default:
-		return ":large_green_circle:"
-	}
-}
-
-func formatTokenUsageResetIn(seconds int64) string {
-	if seconds <= 0 {
-		return "now"
-	}
-	days := seconds / 86400
-	seconds %= 86400
-	hours := seconds / 3600
-	seconds %= 3600
-	minutes := seconds / 60
-
-	switch {
-	case days > 0 && hours > 0:
-		return fmt.Sprintf("%dd %dh", days, hours)
-	case days > 0:
-		return fmt.Sprintf("%dd", days)
-	case hours > 0 && minutes > 0:
-		return fmt.Sprintf("%dh %dm", hours, minutes)
-	case hours > 0:
-		return fmt.Sprintf("%dh", hours)
-	default:
-		return fmt.Sprintf("%dm", minutes)
-	}
 }

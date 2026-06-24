@@ -88,30 +88,48 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-4o
 ```
 
-**OpenCode**
+**OpenCode Zen**
+
+Use this for the free OpenCode Zen models. It is intentionally separate
+from OpenCode Go so the free key and model list do not collide with the
+Go subscription provider.
+
+```bash
+LLM_PROVIDER=opencode-zen
+OPENCODE_ZEN_API_KEY=...
+OPENCODE_ZEN_BASE_URL=https://opencode.ai/zen/v1
+OPENCODE_ZEN_MODEL=mimo-v2.5-free
+OPENCODE_ZEN_PROTOCOL=openai
+```
+
+```bash
+OPENCODE_ZEN_AVAILABLE_MODELS=mimo-v2.5-free,minimax-m3-free,nemotron-3-ultra-free,north-mini-code-free
+```
+
+**OpenCode Go**
 
 OpenCode exposes selected subscription models through OpenAI-compatible
 `/chat/completions` and Anthropic-compatible `/messages` endpoints. The default
-here uses the OpenAI-compatible endpoint and `glm-5.2`. When `OPENCODE_AVAILABLE_MODELS`
+here uses the OpenAI-compatible endpoint and `glm-5.2`. When `OPENCODE_GO_AVAILABLE_MODELS`
 is omitted, the app exposes the full OpenCode model list in both Slack and
 the Web UI model selectors. The runtime routes each selected model to the
 documented OpenAI-compatible or Anthropic-compatible endpoint automatically.
 
 ```bash
 LLM_PROVIDER=opencode-go
-OPENCODE_API_KEY=...
-OPENCODE_BASE_URL=https://opencode.ai/zen/go/v1
-OPENCODE_MODEL=glm-5.2
-OPENCODE_PROTOCOL=openai
+OPENCODE_GO_API_KEY=...
+OPENCODE_GO_BASE_URL=https://opencode.ai/zen/go/v1
+OPENCODE_GO_MODEL=glm-5.2
+OPENCODE_GO_PROTOCOL=openai
 ```
 
-`OPENCODE_PROTOCOL` describes the default protocol shown in configuration.
+`OPENCODE_GO_PROTOCOL` describes the default protocol shown in configuration.
 You do not need to restart or change this value when a user picks a `/messages`
 model such as `minimax-m3` or `qwen3.7-max`; the OpenCode client handles
 that per request.
 
 ```bash
-OPENCODE_AVAILABLE_MODELS=glm-5.2,kimi-k2.7-code,mimo-v2.5
+OPENCODE_GO_AVAILABLE_MODELS=glm-5.2,kimi-k2.7-code,mimo-v2.5
 ```
 
 ### 💬 Streaming responsiveness
@@ -129,7 +147,7 @@ Final answer streaming is flushed in small batches to keep the UI responsive wit
 
 ### 🖼️ Multimodal and model switching
 
-`<PROVIDER>_AVAILABLE_MODELS` enables a model selector in the Slack App Home tab for the active provider, such as `MIMO_AVAILABLE_MODELS` or `OPENCODE_AVAILABLE_MODELS`. `MULTIMODAL_MODELS` controls which models receive image parts; images sent to non-listed models are stripped and replaced with a text description prompt.
+`<PROVIDER>_AVAILABLE_MODELS` enables a model selector in the Slack App Home tab for the active provider, such as `MIMO_AVAILABLE_MODELS`, `OPENCODE_ZEN_AVAILABLE_MODELS`, or `OPENCODE_GO_AVAILABLE_MODELS`. `MULTIMODAL_MODELS` controls which models receive image parts; images sent to non-listed models are stripped and replaced with a text description prompt.
 
 ## 📝 Prompt configuration
 
