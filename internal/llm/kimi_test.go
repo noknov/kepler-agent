@@ -65,6 +65,9 @@ func TestProviderName(t *testing.T) {
 	if got := NewKimiClient("https://opencode.ai/zen/go/v1", "token", 0).providerName(); got != "opencode-go" {
 		t.Fatalf("providerName() = %q, want opencode-go", got)
 	}
+	if got := NewKimiClient("https://opencode.ai/zen/v1", "token", 0).providerName(); got != "opencode-zen" {
+		t.Fatalf("providerName() = %q, want opencode-zen", got)
+	}
 }
 
 func TestKimiChatStreamParsesToolCallDeltas(t *testing.T) {

@@ -314,20 +314,7 @@ func TestHomeViewReflectsUserModelPreference(t *testing.T) {
 	}
 }
 
-func TestHomeViewHidesTokenUsageWithoutClient(t *testing.T) {
-	server := &Server{cfg: config.Config{LLM: config.LLMConfig{
-		Provider:        "opencode-go",
-		Model:           "glm-5.2",
-		AvailableModels: []string{"glm-5.2", "deepseek-v4-flash"},
-	}}}
-	view := server.homeView("U1")
-	text := flattenBlockText(view)
-	if strings.Contains(text, "*Usage*") || strings.Contains(text, "/5h") {
-		t.Fatalf("home view should not show usage without a real usage client: %q", text)
-	}
-}
-
-func TestHomeViewShowsTokenUsageFromClient(t *testing.T) {
+func TestHomeViewDoesNotShowTokenUsage(t *testing.T) {
 	server := &Server{cfg: config.Config{LLM: config.LLMConfig{
 		Provider:        "opencode-go",
 		Model:           "glm-5.2",
@@ -336,43 +323,14 @@ func TestHomeViewShowsTokenUsageFromClient(t *testing.T) {
 	server.tokenUsage = &opencodeTokenUsageClient{
 		cached: tokenUsageSummary{
 			Rolling: &tokenUsageWindow{UsagePercent: 33, PercentRemaining: 67, ResetInSec: 12_300},
-			Weekly:  &tokenUsageWindow{UsagePercent: 50, PercentRemaining: 50, ResetInSec: 259_200},
-			Monthly: &tokenUsageWindow{UsagePercent: 5, PercentRemaining: 95, ResetInSec: 2_260_000},
 		},
 		cachedAt: time.Now(),
 		cacheTTL: time.Hour,
 	}
 	view := server.homeView("U1")
 	text := flattenBlockText(view)
-	for _, want := range []string{
-		"*Usage*",
-		":large_green_circle: *5h* · 33% · _resets in 3h 25m_",
-		":large_yellow_circle: *Week* · 50% · _resets in 3d_",
-		":large_green_circle: *Month* · 5% · _resets in 26d 3h_",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("home view missing %q in %q", want, text)
-		}
-	}
-}
-
-func TestFormatTokenUsageText(t *testing.T) {
-	got, ok := formatTokenUsageText(tokenUsageSummary{
-		Rolling: &tokenUsageWindow{UsagePercent: 0, ResetInSec: 16_440},
-		Weekly:  &tokenUsageWindow{UsagePercent: 0, ResetInSec: 590_400},
-		Monthly: &tokenUsageWindow{UsagePercent: 0, ResetInSec: 2_587_800},
-	})
-	if !ok {
-		t.Fatal("formatTokenUsageText() = false, want true")
-	}
-	want := strings.Join([]string{
-		"*Usage*",
-		":large_green_circle: *5h* · 0% · _resets in 4h 34m_",
-		":large_green_circle: *Week* · 0% · _resets in 6d 20h_",
-		":large_green_circle: *Month* · 0% · _resets in 29d 22h_",
-	}, "\n")
-	if got != want {
-		t.Fatalf("formatTokenUsageText() = %q, want %q", got, want)
+	if strings.Contains(text, "*Usage*") || strings.Contains(text, "/5h") {
+		t.Fatalf("home view should not show usage: %q", text)
 	}
 }
 
