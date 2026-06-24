@@ -51,7 +51,7 @@ type LLMConfig struct {
 	Model            string
 	AvailableModels  []string
 	MultimodalModels []string
-	OpenCodeUsage    OpenCodeUsageConfig
+	TokenUsage       TokenUsageConfig
 	Protocol         string
 	AnthropicFlavor  string
 	Thinking         string
@@ -60,7 +60,11 @@ type LLMConfig struct {
 	Timeout          time.Duration
 }
 
-type OpenCodeUsageConfig struct {
+type TokenUsageConfig struct {
+	OpenCodeGo OpenCodeGoTokenUsageConfig
+}
+
+type OpenCodeGoTokenUsageConfig struct {
 	WorkspaceID string
 	AuthCookie  string
 }
@@ -172,9 +176,11 @@ func Load() (Config, error) {
 			Model:            llmModel,
 			AvailableModels:  llmAvailableModels,
 			MultimodalModels: llmMultimodalModels,
-			OpenCodeUsage: OpenCodeUsageConfig{
-				WorkspaceID: os.Getenv("OPENCODE_WORKSPACE_ID"),
-				AuthCookie:  os.Getenv("OPENCODE_AUTH_COOKIE"),
+			TokenUsage: TokenUsageConfig{
+				OpenCodeGo: OpenCodeGoTokenUsageConfig{
+					WorkspaceID: os.Getenv("OPENCODE_WORKSPACE_ID"),
+					AuthCookie:  os.Getenv("OPENCODE_AUTH_COOKIE"),
+				},
 			},
 			Protocol:        llmProtocol,
 			AnthropicFlavor: anthropicFlavor,
@@ -477,7 +483,7 @@ func providerMaxTokens(provider string) int {
 	case "kimi", "moonshot":
 		return envIntAliases(8192, "KIMI_MAX_TOKENS")
 	case "opencode-go":
-		return envIntAliases(8192, "OPENCODE_GO_MAX_TOKENS")
+		return 0
 	default:
 		return envIntAliases(8192, "OPENAI_MAX_TOKENS")
 	}

@@ -45,6 +45,60 @@ func TestFetchRefReturnsImmutableCommitRef(t *testing.T) {
 	}
 }
 
+func TestFetchRefUsesOriginHEADDefaultBranch(t *testing.T) {
+	root, work := testRepo(t)
+	runGit(t, work, "branch", "-m", "main", "mt-main")
+	runGit(t, work, "push", "origin", ":main", "mt-main")
+	runGit(t, work, "fetch", "origin")
+	runGit(t, work, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/mt-main")
+
+	tool := FetchRefTool{Base: Base{
+		Paths:   safety.WorkspacePolicy{Roots: []string{root}},
+		Guard:   safety.NewCommandPolicy(),
+		Timeout: 10 * time.Second,
+	}}
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`"}`), registry.Runtime{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, "branch=mt-main") || !strings.Contains(result.Content, "branch_ref=origin/mt-main") {
+		t.Fatalf("content = %q, want origin/HEAD default branch mt-main", result.Content)
+	}
+}
+
+func TestFetchRefRefreshesAdvancedBranchWithinRuntime(t *testing.T) {
+	root, work := testRepo(t)
+	base := Base{
+		Paths:   safety.WorkspacePolicy{Roots: []string{root}},
+		Guard:   safety.NewCommandPolicy(),
+		Timeout: 10 * time.Second,
+	}
+	rt := registry.Runtime{Cache: registry.NewRuntimeCache()}
+	tool := FetchRefTool{Base: base}
+
+	first, err := tool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main"}`), rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRef := regexp.MustCompile(`(?m)^ref=([0-9a-f]{40})$`).FindStringSubmatch(first.Content)[1]
+
+	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("new remote content\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, work, "add", "README.md")
+	runGit(t, work, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "advance")
+	runGit(t, work, "push", "origin", "main")
+
+	second, err := tool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main"}`), rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRef := regexp.MustCompile(`(?m)^ref=([0-9a-f]{40})$`).FindStringSubmatch(second.Content)[1]
+	if secondRef == firstRef {
+		t.Fatalf("ref did not refresh after branch advanced: %s", second.Content)
+	}
+}
+
 func TestRefToolsRequireExplicitRepo(t *testing.T) {
 	root, work := testRepo(t)
 	base := Base{
@@ -104,7 +158,7 @@ func TestRepoToolsReadFetchedSnapshotNotWorkingTree(t *testing.T) {
 	}
 }
 
-func TestRepoToolsReuseSnapshotWithinRuntime(t *testing.T) {
+func TestRepoToolsFetchOnEachRequest(t *testing.T) {
 	root, work := testRepo(t)
 	base := Base{
 		Paths:   safety.WorkspacePolicy{Roots: []string{root}},
@@ -121,15 +175,11 @@ func TestRepoToolsReuseSnapshotWithinRuntime(t *testing.T) {
 	}
 
 	readTool := RepoReadFileTool{Base: base}
-	result, err := readTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","path":"README.md"}`), rt)
-	if err != nil {
-		t.Fatalf("cached read failed after origin became unavailable: %v", err)
-	}
-	if !strings.Contains(result.Content, "hello") {
-		t.Fatalf("read content = %q, want cached snapshot content", result.Content)
+	if _, err := readTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","path":"README.md"}`), rt); err == nil {
+		t.Fatal("read should fetch again and fail after origin becomes unavailable")
 	}
 
-	_, err = readTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","path":"README.md"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	_, err := readTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","path":"README.md"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
 	if err == nil {
 		t.Fatal("read with a fresh runtime should fetch again and fail while origin is unavailable")
 	}

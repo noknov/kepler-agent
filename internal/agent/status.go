@@ -36,6 +36,7 @@ type statusSet struct {
 
 var statusZH = statusSet{
 	analyzing: []string{
+		"思考中...",
 		"少女祈祷中...",
 		"量子纠缠中...",
 		"神经元同步中...",
@@ -212,7 +213,7 @@ func ToolHint(name, locale string) string {
 		if hints, ok := toolHintsZH[name]; ok {
 			return prompts.ToolStatus(name, pick(hints))
 		}
-		return prompts.ToolStatus("default", pick(statusZH.step))
+		return pick(statusZH.step)
 	}
 	if hint, ok := toolHintsEN[name]; ok {
 		return prompts.ToolStatus(name, hint)

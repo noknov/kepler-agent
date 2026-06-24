@@ -192,9 +192,21 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	var answerStream *dmStreamWriter
 	var progressMarkdown *streamMarkdownBuffer
 	var progressAppendFailed bool
+	currentStatus := agent.StepStatus(locale, 0)
+	var currentUsage string
 	appendProgress := func(chunks []map[string]any) {
 		if !useStream || progressStopped {
 			return
+		}
+		for _, chunk := range chunks {
+			if chunk["type"] != "task_update" || currentUsage == "" {
+				continue
+			}
+			title, _ := chunk["title"].(string)
+			if title == "" {
+				title = currentStatus
+			}
+			chunk["title"] = titleWithContext(title, currentUsage)
 		}
 		err := s.Messenger.AppendStream(ctx, req.Channel, progressTS, chunks)
 		if err == nil {
@@ -250,6 +262,50 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}
 		return nil
 	}
+	appendTaskUpdate := func(title, status string) {
+		if title != "" {
+			currentStatus = title
+		}
+		appendProgress([]map[string]any{
+			{"type": "task_update", "id": taskID, "title": currentStatus, "status": status},
+		})
+	}
+	baseContextTokens := 0
+	liveStreamTokens := 0
+	displayedUsageTokens := 0
+	lastUsageUpdate := time.Time{}
+	setCurrentUsage := func(used int) bool {
+		if used <= 0 {
+			return false
+		}
+		if displayedUsageTokens > 0 && used < displayedUsageTokens {
+			return false
+		}
+		displayedUsageTokens = used
+		currentUsage = contextUsageText(s.Memory.MaxContextTokens, used)
+		return true
+	}
+	updateLiveUsage := func(delta string) {
+		if !useStream || delta == "" {
+			return
+		}
+		liveStreamTokens += memory.RoughTokenEstimate(delta)
+		if baseContextTokens <= 0 || liveStreamTokens <= 0 {
+			return
+		}
+		if time.Since(lastUsageUpdate) < 750*time.Millisecond && liveStreamTokens%250 != 0 {
+			return
+		}
+		lastUsageUpdate = time.Now()
+		if setCurrentUsage(baseContextTokens + liveStreamTokens) {
+			appendTaskUpdate(currentStatus, "in_progress")
+		}
+	}
+	updateAPIUsage := func(usage llm.Usage) {
+		if setCurrentUsage(contextTokensFromStreamUsage(usage, baseContextTokens)) {
+			appendTaskUpdate(currentStatus, "in_progress")
+		}
+	}
 	if useStream {
 		progressMarkdown = &streamMarkdownBuffer{
 			ctx:     ctx,
@@ -279,10 +335,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if progressMarkdown != nil {
 			progressMarkdown.Close()
 		}
-		appendProgress([]map[string]any{
-			{"type": "task_update", "id": taskID, "title": agent.CompleteTitle(locale), "status": "complete"},
-		})
-		stopProgress()
+		appendTaskUpdate(agent.GeneratingStatus(locale), "in_progress")
 		answerStream = &dmStreamWriter{
 			ctx: ctx, messenger: s.Messenger,
 			channel: req.Channel, threadTS: req.ThreadTS,
@@ -290,40 +343,23 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}
 		return answerStream
 	}
-	appendStreamStatus := func(chunks []map[string]any) {
-		if !useStream {
-			return
-		}
-		ts := progressTS
-		if progressStopped && answerStream != nil {
-			if answerTS := answerStream.TS(); answerTS != "" {
-				ts = answerTS
-			}
-		}
-		if ts == "" {
-			ts = streamTS
-		}
-		if ts == "" {
-			return
-		}
-		_ = s.Messenger.AppendStream(ctx, req.Channel, ts, chunks)
-	}
 	active.setProgress(locale, appendProgress)
 	if useStream {
 		runner.OnStream = func(ev agent.StreamEvent) {
 			switch ev.Kind {
 			case agent.StreamNarration:
+				updateLiveUsage(ev.Delta)
 				progressMarkdown.Write(ev.Delta)
 			case agent.StreamAnswer:
+				updateLiveUsage(ev.Delta)
 				startAnswerStream().Write(ev.Delta)
 			}
 		}
 	}
 	runner.StatusUpdate = func(status string) {
-		appendProgress([]map[string]any{
-			{"type": "task_update", "id": taskID, "title": status, "status": "in_progress"},
-		})
+		appendTaskUpdate(status, "in_progress")
 	}
+	runner.OnUsage = updateAPIUsage
 
 	contentParts := req.ContentParts
 	userText := req.Text
@@ -340,6 +376,10 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		sess.Summary,
 		sess.Turns,
 	)
+	baseContextTokens = memory.CountTokensWithCalibration(messages)
+	if memory.LastUsage(messages) != nil && baseContextTokens > 0 {
+		setCurrentUsage(baseContextTokens)
+	}
 	result, err := runner.Run(runCtx, agent.Request{
 		Messages: messages,
 		Runtime: registry.Runtime{
@@ -353,15 +393,9 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	if answerStream != nil {
 		answerStream.Close()
 	}
-	contextUsage := contextUsageMarkdown(s.Memory.MaxContextTokens, messages, result.Generated)
-	appendStreamNotice := func(text string) {
-		if !useStream || text == "" {
-			return
-		}
-		appendStreamStatus([]map[string]any{
-			{"type": "markdown_text", "text": streamNotice(text)},
-		})
-	}
+	contextUsageTokens := contextUsageTokenCount(messages, result.Generated)
+	contextUsage := contextUsageText(s.Memory.MaxContextTokens, contextUsageTokens)
+	setCurrentUsage(contextUsageTokens)
 
 	sess.UserID = req.UserID
 	sess.PendingUserInput = false
@@ -385,7 +419,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 				if progressMarkdown != nil {
 					progressMarkdown.Close()
 				}
-				appendStreamStatus([]map[string]any{
+				appendProgress([]map[string]any{
 					{"type": "task_update", "id": taskID, "title": agent.CancelledTitle(locale), "status": "complete"},
 				})
 			} else {
@@ -410,7 +444,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 				s.postFallback(ctx, req, errMsg, false)
 			} else {
 				appendProgress([]map[string]any{
-					{"type": "task_update", "id": taskID, "title": agent.FailedTitle(locale), "status": "error"},
+					{"type": "task_update", "id": taskID, "title": failedTitleWithErrorID(locale, errorID), "status": "error"},
 					{"type": "markdown_text", "text": errMsg},
 				})
 			}
@@ -432,25 +466,20 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	if err := s.Store.Save(ctx, sess); err != nil && s.Metrics != nil {
 		s.Metrics.Error(err)
 	}
+	if useStream && compressed && !progressStopped {
+		appendTaskUpdate(contextCompressingTitle(locale), "in_progress")
+	}
 	if result.Pending && result.PendingQuestion != "" {
 		pendingText := s.Redactor.Sanitize(result.PendingQuestion)
 		if s.Format != nil {
 			pendingText = s.Format(pendingText)
 		}
-		if compressed {
-			appendStreamNotice(contextCompressedMessage(locale))
-		}
-		appendStreamNotice(contextUsage)
 		if useStream {
-			appendProgress([]map[string]any{
-				{"type": "task_update", "id": taskID, "title": agent.WaitingTitle(locale), "status": "complete"},
-			})
+			appendTaskUpdate(agent.WaitingTitle(locale), "complete")
+			stopProgress()
 		}
 		if !useStream && (contextUsage != "" || compressed) {
 			var notices []string
-			if compressed {
-				notices = append(notices, contextCompressedMessage(locale))
-			}
 			notices = append(notices, contextUsage)
 			pendingText = appendContextNoticeText(pendingText, notices...)
 		}
@@ -469,17 +498,9 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}
 		// Mark the progress stream as complete when the answer stayed on it.
 		if !progressStopped {
-			appendProgress([]map[string]any{
-				{"type": "task_update", "id": taskID, "title": agent.CompleteTitle(locale), "status": "complete"},
-			})
+			appendTaskUpdate(agent.CompleteTitle(locale), "complete")
+			stopProgress()
 		}
-		if compressed {
-			appendStreamNotice(contextCompressedMessage(locale))
-		}
-		completeTitle := completeTitleWithContext(locale, contextUsage)
-		appendStreamStatus([]map[string]any{
-			{"type": "task_update", "id": taskID, "title": completeTitle, "status": "complete"},
-		})
 		answerStreamOK := result.Streamed && answerStream != nil && !answerStream.Failed() && answerStream.TS() != ""
 		if answerStreamOK {
 			_ = s.Messenger.StopStream(ctx, req.Channel, answerStream.TS())
@@ -497,9 +518,6 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			}
 			if !useStream && (contextUsage != "" || compressed) {
 				var notices []string
-				if compressed {
-					notices = append(notices, contextCompressedMessage(locale))
-				}
 				notices = append(notices, contextUsage)
 				finalText = appendContextNoticeText(finalText, notices...)
 			}
@@ -542,13 +560,34 @@ func (s *Service) newRunObserver(sessionID string, req Request, startedAt time.T
 }
 
 func contextUsageMarkdown(maxContextTokens int, base, generated []llm.Message) string {
+	return contextUsageText(maxContextTokens, contextUsageTokenCount(base, generated))
+}
+
+func contextUsageTokenCount(base, generated []llm.Message) int {
 	if len(base) == 0 && len(generated) == 0 {
-		return ""
+		return 0
 	}
 	messages := make([]llm.Message, 0, len(base)+len(generated))
 	messages = append(messages, base...)
 	messages = append(messages, generated...)
-	used := memory.CountTokensWithCalibration(messages)
+	return memory.CountTokensWithCalibration(messages)
+}
+
+func contextTokensFromStreamUsage(usage llm.Usage, baseContextTokens int) int {
+	inputTokens := usage.PromptTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
+	if inputTokens > 0 {
+		return inputTokens + usage.CompletionTokens
+	}
+	if baseContextTokens > 0 {
+		return baseContextTokens + usage.CompletionTokens
+	}
+	if usage.TotalTokens > 0 {
+		return usage.TotalTokens
+	}
+	return usage.CompletionTokens
+}
+
+func contextUsageText(maxContextTokens, used int) string {
 	if used <= 0 {
 		return ""
 	}
@@ -560,7 +599,27 @@ func contextUsageMarkdown(maxContextTokens int, base, generated []llm.Message) s
 	if percent == 0 {
 		percent = 1
 	}
-	return "Context: " + formatTokenCount(used) + " / " + formatTokenCount(limit) + " tokens (" + strconv.Itoa(percent) + "%)."
+	return formatTokenCount(used) + " tokens (" + strconv.Itoa(percent) + "%)"
+}
+
+func titleWithContext(title, contextUsage string) string {
+	contextUsage = strings.TrimSpace(contextUsage)
+	if contextUsage == "" {
+		return title
+	}
+	return title + "    ·    " + contextUsage
+}
+
+func completeTitleWithContext(locale, contextUsage string) string {
+	return titleWithContext(agent.CompleteTitle(locale), contextUsage)
+}
+
+func failedTitleWithErrorID(locale, errorID string) string {
+	errorID = strings.TrimSpace(errorID)
+	if errorID == "" {
+		return agent.FailedTitle(locale)
+	}
+	return agent.FailedTitle(locale) + " · " + errorID
 }
 
 func appendContextNoticeText(text string, notices ...string) string {
@@ -590,20 +649,11 @@ func streamNotice(text string) string {
 	return "\n\n_" + text + "_\n\n"
 }
 
-func contextCompressedMessage(locale string) string {
+func contextCompressingTitle(locale string) string {
 	if locale == agent.LocaleZH {
-		return "上下文已压缩"
+		return "上下文压缩中..."
 	}
-	return "Context compressed"
-}
-
-func completeTitleWithContext(locale, contextUsage string) string {
-	title := agent.CompleteTitle(locale)
-	contextUsage = strings.TrimSpace(contextUsage)
-	if contextUsage == "" {
-		return title
-	}
-	return title + "    " + contextUsage
+	return "Compressing context..."
 }
 
 func formatTokenCount(n int) string {
@@ -643,6 +693,19 @@ func (m multiObserver) LLMCall(usage llm.Usage, d time.Duration, err error) {
 	for _, observer := range m {
 		if observer != nil {
 			observer.LLMCall(usage, d, err)
+		}
+	}
+}
+
+func (m multiObserver) LLMResponse(resp llm.Response, d time.Duration, err error) {
+	for _, observer := range m {
+		if observer == nil {
+			continue
+		}
+		if responseObserver, ok := observer.(agent.LLMResponseObserver); ok {
+			responseObserver.LLMResponse(resp, d, err)
+		} else {
+			observer.LLMCall(resp.Usage, d, err)
 		}
 	}
 }
@@ -1023,7 +1086,7 @@ func trimSummary(summary string, max int) string {
 }
 
 func userFacingError(errorID string) string {
-	return "Something went wrong. Please try again later. Error ID: " + errorID
+	return "Something went wrong. Please try again later."
 }
 
 func newErrorID() string {

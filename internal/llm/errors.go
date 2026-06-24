@@ -71,7 +71,7 @@ func UserFacingError(err error) string {
 
 func isRetryableStatus(status int) bool {
 	switch status {
-	case 429, 500, 502, 503, 504:
+	case 429, 500, 502, 503, 504, 522:
 		return true
 	default:
 		return false

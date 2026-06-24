@@ -210,16 +210,43 @@ func (s *Service) probeGitRepo(ctx context.Context, now time.Time) ToolState {
 		state.Message = "no git repos discovered under workspace roots"
 		return state
 	}
-	repo := repos[0]
-	cmd := exec.CommandContext(ctx, "git", "-C", repo, "--no-optional-locks", "rev-parse", "--is-inside-work-tree")
-	if out, err := cmd.CombinedOutput(); err != nil || strings.TrimSpace(string(out)) != "true" {
+	var checked []map[string]string
+	var failures []string
+	for _, repo := range repos {
+		item := map[string]string{"repo": repo}
+		cmd := exec.CommandContext(ctx, "git", "-C", repo, "--no-optional-locks", "rev-parse", "--is-inside-work-tree")
+		if out, err := cmd.CombinedOutput(); err != nil || strings.TrimSpace(string(out)) != "true" {
+			failures = append(failures, filepath.Base(repo)+": git rev-parse failed")
+			item["status"] = "rev-parse failed"
+			checked = append(checked, item)
+			continue
+		}
+		if origin := gitCommandOutput(ctx, repo, "remote", "get-url", "origin"); origin == "" {
+			failures = append(failures, filepath.Base(repo)+": origin remote missing")
+			item["status"] = "origin missing"
+			checked = append(checked, item)
+			continue
+		}
+		branch := localDefaultBranch(ctx, repo)
+		if branch == "" {
+			failures = append(failures, filepath.Base(repo)+": default branch ref not resolvable")
+			item["status"] = "default branch unresolved"
+			checked = append(checked, item)
+			continue
+		}
+		item["status"] = "ok"
+		item["default_branch"] = branch
+		checked = append(checked, item)
+	}
+	if len(failures) > 0 {
 		state.Status = StatusUnhealthy
-		state.Message = "git rev-parse failed for " + repo
+		state.Message = strings.Join(failures, "; ")
+		state.Details = map[string]any{"repo_count": len(repos), "repos": checked}
 		return state
 	}
 	state.Status = StatusHealthy
-	state.Message = "git repos accessible"
-	state.Details = map[string]any{"repo_count": len(repos), "sample_repo": repo}
+	state.Message = "git repos accessible and default refs resolvable; fetch freshness is checked by git tools on request"
+	state.Details = map[string]any{"repo_count": len(repos), "repos": checked}
 	return state
 }
 
@@ -366,6 +393,28 @@ func resolveCommit(ctx context.Context, repo, branch string) string {
 		}
 	}
 	return ""
+}
+
+func localDefaultBranch(ctx context.Context, repo string) string {
+	if out := gitCommandOutput(ctx, repo, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); out != "" {
+		return strings.TrimPrefix(out, "origin/")
+	}
+	for _, branch := range []string{"main", "master"} {
+		if resolveCommit(ctx, repo, branch) != "" {
+			return branch
+		}
+	}
+	return ""
+}
+
+func gitCommandOutput(ctx context.Context, repo string, args ...string) string {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repo, "--no-optional-locks"}, args...)...)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(stdout.String())
 }
 
 func shortSHA(sha string) string {

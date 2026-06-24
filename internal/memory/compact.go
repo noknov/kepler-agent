@@ -82,7 +82,7 @@ func GenerateCompactSummary(ctx context.Context, client llm.Client, model string
 		return "", err
 	}
 
-	summary := extractSummary(resp.Message.Content)
+	summary := llm.StripTextualToolCallMarkup(extractSummary(resp.Message.Content))
 	return summary, nil
 }
 

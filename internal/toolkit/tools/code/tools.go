@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -43,7 +44,7 @@ func (t ReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
 	}
-	path, err := t.Paths.ResolveReadableFile(args.Path)
+	path, err := resolveReadableFile(t.Paths, args.Path)
 	if err != nil {
 		return registry.Result{}, err
 	}
@@ -136,7 +137,7 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	if root == "" && len(t.Paths.Roots) > 0 {
 		root = t.Paths.Roots[0]
 	}
-	path, err := t.Paths.Resolve(root)
+	path, err := resolveWorkspacePath(t.Paths, root)
 	if err != nil {
 		return registry.Result{}, err
 	}
@@ -168,4 +169,48 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 		lines = append(lines[:args.Limit], "...[truncated after "+strconv.Itoa(args.Limit)+" matches]")
 	}
 	return registry.Result{Content: strings.Join(lines, "\n")}, nil
+}
+
+func resolveReadableFile(paths safety.WorkspacePolicy, path string) (string, error) {
+	resolved, err := paths.ResolveReadableFile(path)
+	if err == nil {
+		return resolved, nil
+	}
+	if stripped, ok := stripWorkspaceRootBase(paths, path); ok {
+		if resolved, retryErr := paths.ResolveReadableFile(stripped); retryErr == nil {
+			return resolved, nil
+		}
+	}
+	return "", err
+}
+
+func resolveWorkspacePath(paths safety.WorkspacePolicy, path string) (string, error) {
+	resolved, err := paths.Resolve(path)
+	if err == nil {
+		return resolved, nil
+	}
+	if stripped, ok := stripWorkspaceRootBase(paths, path); ok {
+		if resolved, retryErr := paths.Resolve(stripped); retryErr == nil {
+			return resolved, nil
+		}
+	}
+	return "", err
+}
+
+func stripWorkspaceRootBase(paths safety.WorkspacePolicy, path string) (string, bool) {
+	clean := filepath.Clean(strings.TrimSpace(path))
+	if clean == "." || filepath.IsAbs(clean) {
+		return "", false
+	}
+	parts := strings.Split(filepath.ToSlash(clean), "/")
+	if len(parts) < 2 {
+		return "", false
+	}
+	first := parts[0]
+	for _, root := range paths.Roots {
+		if filepath.Base(filepath.Clean(root)) == first {
+			return filepath.FromSlash(strings.Join(parts[1:], "/")), true
+		}
+	}
+	return "", false
 }

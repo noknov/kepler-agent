@@ -162,8 +162,11 @@ func TestUserFacingErrorForMaxToolSteps(t *testing.T) {
 	if strings.Contains(got, "找我") || strings.Contains(strings.ToLower(got), "contact me") {
 		t.Fatalf("userFacingError() should not ask users to contact a person: %q", got)
 	}
-	if !strings.Contains(got, "Something went wrong") || !strings.Contains(got, "Please try again later") || !strings.Contains(got, "Error ID: err-test123") {
-		t.Fatalf("userFacingError() = %q, want generic error with id", got)
+	if !strings.Contains(got, "Something went wrong") || !strings.Contains(got, "Please try again later") {
+		t.Fatalf("userFacingError() = %q, want generic error", got)
+	}
+	if strings.Contains(got, "err-test123") || strings.Contains(got, "Error ID") {
+		t.Fatalf("userFacingError() should leave error id to the card title: %q", got)
 	}
 }
 
@@ -175,10 +178,52 @@ func TestStreamNoticeHasBlockBoundaries(t *testing.T) {
 }
 
 func TestCompleteTitleWithContext(t *testing.T) {
-	got := completeTitleWithContext(agent.LocaleZH, "Context: 23,769 / 200,000 tokens (11%).")
-	want := "传输完毕    Context: 23,769 / 200,000 tokens (11%)."
+	got := completeTitleWithContext(agent.LocaleZH, "23,769 tokens (11%)")
+	want := "传输完毕    ·    23,769 tokens (11%)"
 	if got != want {
 		t.Fatalf("completeTitleWithContext() = %q, want %q", got, want)
+	}
+}
+
+func TestContextUsageTextHidesContextLimit(t *testing.T) {
+	got := contextUsageText(200_000, 23_769)
+	want := "23,769 tokens (11%)"
+	if got != want {
+		t.Fatalf("contextUsageText() = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "/ 200,000") {
+		t.Fatalf("contextUsageText() exposed context limit: %q", got)
+	}
+}
+
+func TestFailedTitleIncludesErrorID(t *testing.T) {
+	got := failedTitleWithErrorID(agent.LocaleZH, "err-test123")
+	want := "链路中断 · err-test123"
+	if got != want {
+		t.Fatalf("failedTitleWithErrorID() = %q, want %q", got, want)
+	}
+	if fallback := failedTitleWithErrorID(agent.LocaleZH, ""); fallback != agent.FailedTitle(agent.LocaleZH) {
+		t.Fatalf("failedTitleWithErrorID(empty) = %q, want failed title", fallback)
+	}
+}
+
+func TestContextTokensFromStreamUsageUsesBaseWhenInputMissing(t *testing.T) {
+	got := contextTokensFromStreamUsage(llm.Usage{CompletionTokens: 1200, TotalTokens: 1200}, 20_000)
+	if got != 21_200 {
+		t.Fatalf("contextTokensFromStreamUsage() = %d, want base plus completion", got)
+	}
+}
+
+func TestContextTokensFromStreamUsageUsesInputWhenPresent(t *testing.T) {
+	got := contextTokensFromStreamUsage(llm.Usage{
+		PromptTokens:             18_000,
+		CacheCreationInputTokens: 500,
+		CacheReadInputTokens:     1_000,
+		CompletionTokens:         200,
+		TotalTokens:              19_700,
+	}, 20_000)
+	if got != 19_700 {
+		t.Fatalf("contextTokensFromStreamUsage() = %d, want API input/cache/output sum", got)
 	}
 }
 
@@ -252,7 +297,7 @@ func TestStreamModePostsNonStreamingFormattedFinalAnswer(t *testing.T) {
 			t.Fatalf("non-streaming final answer should not be replayed as markdown chunks: %#v", messenger.chunks)
 		}
 	}
-	if !chunksContainText(messenger.chunks, "Context:") {
+	if !chunksContainText(messenger.chunks, "tokens (") {
 		t.Fatalf("context usage not found in stream chunks: %#v", messenger.chunks)
 	}
 	if len(messenger.posts) != 1 {
@@ -304,7 +349,7 @@ func TestStreamModePostsNonStreamingFinalAnswer(t *testing.T) {
 			t.Fatalf("non-streaming final answer should not be replayed as markdown chunks: %#v", messenger.chunks)
 		}
 	}
-	if !chunksContainText(messenger.chunks, "Context:") {
+	if !chunksContainText(messenger.chunks, "tokens (") {
 		t.Fatalf("context usage not found in stream chunks: %#v", messenger.chunks)
 	}
 	if len(messenger.posts) != 1 {
@@ -312,6 +357,216 @@ func TestStreamModePostsNonStreamingFinalAnswer(t *testing.T) {
 	}
 	if got := messenger.posts[0]; got != final {
 		t.Fatalf("posted final answer length = %d, want %d", len([]rune(got)), len([]rune(final)))
+	}
+}
+
+func TestCompressedContextNoticeOnlyAppearsInStream(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(ctx, session.Session{
+		ID:       session.ID("C1", "100.000"),
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		UserID:   "U1",
+		Turns: []memory.Turn{
+			memory.UserTurn(strings.Repeat("旧上下文 ", 1200)),
+			{Role: memory.RoleAssistant, Content: strings.Repeat("旧回答 ", 1200)},
+			memory.UserTurn(strings.Repeat("更早上下文 ", 1200)),
+			{Role: memory.RoleAssistant, Content: strings.Repeat("更早回答 ", 1200)},
+			memory.UserTurn(strings.Repeat("最早上下文 ", 1200)),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	messenger := &fakeMessenger{streamTS: "200.000"}
+	svc := NewService(
+		store,
+		messenger,
+		agent.Runner{LLM: &replyLLM{content: "最终回答"}, MaxSteps: 1},
+		memory.Builder{MaxMessages: 1, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+
+	svc.HandleMention(ctx, Request{
+		EventID:  "E3-compressed",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "请回答",
+	})
+
+	if !chunksContainText(messenger.chunks, contextCompressingTitle(agent.LocaleZH)) {
+		t.Fatalf("compressing context title not found in stream chunks: %#v", messenger.chunks)
+	}
+	if len(messenger.posts) != 1 {
+		t.Fatalf("posts = %#v, want one final post", messenger.posts)
+	}
+	if strings.Contains(messenger.posts[0], contextCompressingTitle(agent.LocaleZH)) {
+		t.Fatalf("posted final answer should not contain compressing context title: %q", messenger.posts[0])
+	}
+	if !taskUpdateOnStream(messenger.appends, messenger.streamTS, contextCompressingTitle(agent.LocaleZH)) {
+		t.Fatalf("compressing context should appear as task_update on progress stream: %#v", messenger.chunks)
+	}
+	if taskUpdateCompleteOnStream(messenger.appends, messenger.streamTS, contextCompressingTitle(agent.LocaleZH)) {
+		t.Fatalf("compressing context title should not be marked complete: %#v", messenger.chunks)
+	}
+	if !taskUpdateCompleteOnStream(messenger.appends, messenger.streamTS, agent.CompleteTitle(agent.LocaleZH)) {
+		t.Fatalf("final complete title not found after compression: %#v", messenger.chunks)
+	}
+}
+
+func TestCompressedContextNoticeStaysOffAnswerStream(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(ctx, session.Session{
+		ID:       session.ID("C1", "100.000"),
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		UserID:   "U1",
+		Turns: []memory.Turn{
+			memory.UserTurn(strings.Repeat("旧上下文 ", 1200)),
+			{Role: memory.RoleAssistant, Content: strings.Repeat("旧回答 ", 1200)},
+			memory.UserTurn(strings.Repeat("更早上下文 ", 1200)),
+			{Role: memory.RoleAssistant, Content: strings.Repeat("更早回答 ", 1200)},
+			memory.UserTurn(strings.Repeat("最早上下文 ", 1200)),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	llmClient := &sequenceStreamLLM{responses: []llm.Response{
+		{
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "正在检索相关信息...",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "tool_1",
+					Type: "function",
+					Function: llm.ToolFunction{
+						Name:      "echo",
+						Arguments: `{"text":"ok"}`,
+					},
+				}},
+			},
+			Streamed: true,
+		},
+		{
+			Message:  llm.Message{Role: "assistant", Content: "最终回答内容"},
+			Streamed: true,
+		},
+	}}
+	tools := registry.New()
+	tools.Register(echoTool{})
+	messenger := &fakeMessenger{streamSeq: []string{"progress.000", "answer.000"}}
+	svc := NewService(
+		store,
+		messenger,
+		agent.Runner{LLM: llmClient, Tools: tools, MaxSteps: 2, Capabilities: llm.Capabilities{NativeToolCalls: true}},
+		memory.Builder{MaxMessages: 1, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+
+	svc.HandleMention(ctx, Request{
+		EventID:  "E3-compressed-separate-streams",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "请回答",
+	})
+
+	compressTitle := contextCompressingTitle(agent.LocaleZH)
+	progressChunks := chunksOnStream(messenger.appends, "progress.000")
+	answerChunks := chunksOnStream(messenger.appends, "answer.000")
+
+	if !taskUpdateOnStream(messenger.appends, "progress.000", compressTitle) {
+		t.Fatalf("compressing title should be task_update on progress stream: %#v", progressChunks)
+	}
+	if chunksContainText(answerChunks, compressTitle) {
+		t.Fatalf("compressing title should not appear on answer stream: %#v", answerChunks)
+	}
+	for _, chunk := range answerChunks {
+		if chunk["type"] == "markdown_text" && strings.Contains(chunk["text"].(string), compressTitle) {
+			t.Fatalf("answer stream markdown should not contain compressing title: %#v", chunk)
+		}
+	}
+}
+
+func TestActiveReplySteeringShowsSeparatedStatusInChinese(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := &blockingTool{started: make(chan struct{}), release: make(chan struct{})}
+	tools := registry.New()
+	tools.Register(tool)
+	llmClient := &toolThenFinalLLM{}
+	messenger := &fakeMessenger{streamTS: "200.000"}
+	svc := NewService(
+		store,
+		messenger,
+		agent.Runner{LLM: llmClient, Tools: tools, MaxSteps: 3},
+		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		svc.HandleMention(ctx, Request{
+			EventID:  "E7-zh-steer",
+			UserID:   "U1",
+			Channel:  "C1",
+			ThreadTS: "100.000",
+			Text:     "查一下生产日志",
+		})
+	}()
+
+	<-tool.started
+	handled := svc.HandleReply(ctx, Request{
+		EventID:  "E8-zh-steer",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "改成查 staging",
+	})
+	if !handled {
+		t.Fatal("active reply was not handled")
+	}
+	close(tool.release)
+	<-done
+
+	cardTitle := agent.SteeringQueuedTitle(agent.LocaleZH)
+	bodyText := steeringAppliedMessage(agent.LocaleZH)
+	foundCard := false
+	foundBody := false
+	for _, chunk := range messenger.chunks {
+		if chunk["type"] == "task_update" && strings.HasPrefix(chunk["title"].(string), cardTitle) {
+			foundCard = true
+		}
+		if chunk["type"] == "markdown_text" && chunk["text"] == bodyText {
+			foundBody = true
+		}
+		if chunk["type"] == "markdown_text" && strings.HasSuffix(chunk["text"].(string), "\n\n") {
+			t.Fatalf("steering markdown should not end with blank line: %q", chunk["text"])
+		}
+	}
+	if !foundCard {
+		t.Fatalf("steering card title %q not found: %#v", cardTitle, messenger.chunks)
+	}
+	if !foundBody {
+		t.Fatalf("steering body text %q not found: %#v", bodyText, messenger.chunks)
 	}
 }
 
@@ -843,7 +1098,7 @@ func TestStreamStatusFailureDoesNotAffectFinalAnswer(t *testing.T) {
 			t.Fatalf("non-streaming final answer should not be replayed as markdown chunks: %#v", messenger.chunks)
 		}
 	}
-	if !chunksContainText(messenger.chunks, "Context:") {
+	if !chunksContainText(messenger.chunks, "tokens (") {
 		t.Fatalf("context usage not found in stream chunks: %#v", messenger.chunks)
 	}
 	if len(messenger.posts) != 1 || messenger.posts[0] != "final answer" {
@@ -919,10 +1174,10 @@ func TestActiveReplyIsInjectedIntoNextStep(t *testing.T) {
 	foundStatus := false
 	foundText := false
 	for _, chunk := range svc.Messenger.(*fakeMessenger).chunks {
-		if chunk["type"] == "task_update" && chunk["title"] == "Conversation guided" {
+		if chunk["type"] == "task_update" && strings.HasPrefix(chunk["title"].(string), "Conversation guided") {
 			foundStatus = true
 		}
-		if chunk["type"] == "markdown_text" && chunk["text"] == "\n\n_Conversation guided_\n\n" {
+		if chunk["type"] == "markdown_text" && chunk["text"] == "\n\n_Conversation guided_\n" {
 			foundText = true
 		}
 	}
@@ -1153,6 +1408,52 @@ func chunksContainText(chunks []map[string]any, want string) bool {
 		}
 		for _, value := range values {
 			if strings.Contains(value, want) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func chunksOnStream(appends []streamAppend, ts string) []map[string]any {
+	var out []map[string]any
+	for _, item := range appends {
+		if item.ts == ts {
+			out = append(out, item.chunks...)
+		}
+	}
+	return out
+}
+
+func taskUpdateOnStream(appends []streamAppend, ts, titleWant string) bool {
+	for _, item := range appends {
+		if item.ts != ts {
+			continue
+		}
+		for _, chunk := range item.chunks {
+			if chunk["type"] != "task_update" {
+				continue
+			}
+			title, _ := chunk["title"].(string)
+			if strings.Contains(title, titleWant) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func taskUpdateCompleteOnStream(appends []streamAppend, ts, titleWant string) bool {
+	for _, item := range appends {
+		if item.ts != ts {
+			continue
+		}
+		for _, chunk := range item.chunks {
+			if chunk["type"] != "task_update" || chunk["status"] != "complete" {
+				continue
+			}
+			title, _ := chunk["title"].(string)
+			if strings.Contains(title, titleWant) {
 				return true
 			}
 		}

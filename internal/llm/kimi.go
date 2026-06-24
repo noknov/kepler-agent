@@ -86,15 +86,19 @@ func (c *KimiClient) chatBody(req Request) map[string]any {
 		"model":       req.Model,
 		"messages":    req.Messages,
 		"tools":       req.Tools,
-		"max_tokens":  req.MaxTokens,
 		"temperature": req.Temperature,
+	}
+	if req.MaxTokens > 0 {
+		body["max_tokens"] = req.MaxTokens
 	}
 	if len(req.Tools) == 0 {
 		delete(body, "tools")
 	}
 	if isMiMoEndpoint(c.baseURL, req.Model) {
 		delete(body, "max_tokens")
-		body["max_completion_tokens"] = req.MaxTokens
+		if req.MaxTokens > 0 {
+			body["max_completion_tokens"] = req.MaxTokens
+		}
 		if req.Thinking == "enabled" || req.Thinking == "disabled" {
 			body["thinking"] = map[string]string{"type": req.Thinking}
 		}
@@ -165,6 +169,9 @@ func (c *KimiClient) ChatStream(ctx context.Context, req Request, h StreamHandle
 		}
 		if chunk.Usage.TotalTokens > 0 {
 			usage = chunk.Usage
+			if h.OnUsage != nil {
+				h.OnUsage(usage.toUsage())
+			}
 		}
 		if len(chunk.Choices) == 0 {
 			return true

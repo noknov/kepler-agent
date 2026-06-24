@@ -55,6 +55,10 @@ type Step struct {
 	Usage            llm.Usage      `json:"usage,omitempty"`
 	EstimatedCostUSD float64        `json:"estimated_cost_usd,omitempty"`
 	Error            string         `json:"error,omitempty"`
+	FinishReason     string         `json:"finish_reason,omitempty"`
+	Content          string         `json:"content,omitempty"`
+	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	ToolCallNames    []string       `json:"tool_call_names,omitempty"`
 	Metadata         map[string]any `json:"metadata,omitempty"`
 }
 

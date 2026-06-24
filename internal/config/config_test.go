@@ -339,10 +339,44 @@ func TestLoadOpenCodeGoDefaults(t *testing.T) {
 	if cfg.LLM.APIKey != "oc-go-token" {
 		t.Fatalf("LLM.APIKey = %q, want oc-go-token", cfg.LLM.APIKey)
 	}
+	if cfg.LLM.MaxTokens != 0 {
+		t.Fatalf("LLM.MaxTokens = %d, want 0 for opencode-go", cfg.LLM.MaxTokens)
+	}
 	for _, want := range []string{"glm-5.2", "kimi-k2.7-code", "minimax-m3", "qwen3.7-max", "deepseek-v4-flash"} {
 		if !containsString(cfg.LLM.AvailableModels, want) {
 			t.Fatalf("AvailableModels = %#v, want %q", cfg.LLM.AvailableModels, want)
 		}
+	}
+}
+
+func TestLoadTokenUsageConfigUsesOpenCodeGoEnv(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":       "xoxb-test",
+		"SLACK_SIGNING_SECRET":  "secret",
+		"ALLOWED_SLACK_USERS":   "U123",
+		"LLM_PROVIDER":          "opencode-go",
+		"OPENCODE_GO_API_KEY":   "oc-go-token",
+		"OPENCODE_WORKSPACE_ID": "wrk_opencode",
+		"OPENCODE_AUTH_COOKIE":  "auth=opencode",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.LLM.TokenUsage.OpenCodeGo.WorkspaceID != "wrk_opencode" {
+		t.Fatalf("TokenUsage.OpenCodeGo.WorkspaceID = %q, want OpenCode Go env value", cfg.LLM.TokenUsage.OpenCodeGo.WorkspaceID)
+	}
+	if cfg.LLM.TokenUsage.OpenCodeGo.AuthCookie != "auth=opencode" {
+		t.Fatalf("TokenUsage.OpenCodeGo.AuthCookie = %q, want OpenCode Go env value", cfg.LLM.TokenUsage.OpenCodeGo.AuthCookie)
 	}
 }
 
@@ -543,6 +577,8 @@ func resetConfigEnv(t *testing.T) {
 		"OPENCODE_GO_MAX_TOKENS",
 		"OPENCODE_GO_TEMPERATURE",
 		"OPENCODE_GO_TIMEOUT",
+		"OPENCODE_WORKSPACE_ID",
+		"OPENCODE_AUTH_COOKIE",
 		"MOONSHOT_API_KEY",
 		"MOONSHOT_BASE_URL",
 		"MOONSHOT_MODEL",

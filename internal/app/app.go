@@ -58,18 +58,18 @@ func Run(ctx context.Context) error {
 }
 
 type Server struct {
-	cfg           config.Config
-	slack         *slack.Client
-	access        safety.AccessPolicy
-	conv          *conversation.Service
-	prompt        safety.PromptPolicy
-	metrics       *observability.Recorder
-	runStore      runs.Store
-	ragManager    ragManagerCloser
-	health        *health.Service
-	mux           *http.ServeMux
-	modelPrefs    sync.Map
-	openCodeUsage *openCodeUsageClient
+	cfg        config.Config
+	slack      *slack.Client
+	access     safety.AccessPolicy
+	conv       *conversation.Service
+	prompt     safety.PromptPolicy
+	metrics    *observability.Recorder
+	runStore   runs.Store
+	ragManager ragManagerCloser
+	health     *health.Service
+	mux        *http.ServeMux
+	modelPrefs sync.Map
+	tokenUsage tokenUsageProvider
 }
 
 type ragManagerCloser interface {
@@ -117,17 +117,17 @@ func NewServer(cfg config.Config) (*Server, error) {
 	}
 
 	s := &Server{
-		cfg:           cfg,
-		slack:         slackClient,
-		access:        safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
-		conv:          conv,
-		prompt:        runtime.Prompt,
-		metrics:       recorder,
-		runStore:      runStore,
-		ragManager:    ragManager,
-		health:        healthService,
-		mux:           http.NewServeMux(),
-		openCodeUsage: newOpenCodeUsageClient(cfg.LLM.OpenCodeUsage),
+		cfg:        cfg,
+		slack:      slackClient,
+		access:     safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
+		conv:       conv,
+		prompt:     runtime.Prompt,
+		metrics:    recorder,
+		runStore:   runStore,
+		ragManager: ragManager,
+		health:     healthService,
+		mux:        http.NewServeMux(),
+		tokenUsage: newTokenUsageProvider(cfg.LLM.Provider, cfg.LLM.TokenUsage),
 	}
 	conv.ModelOverride = func(userID string) string {
 		return s.modelPreference(userID)

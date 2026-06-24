@@ -459,12 +459,6 @@ func (b Base) explicitRepo(path string) (string, error) {
 
 func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string, rt registry.Runtime) (snapshot, error) {
 	branch := strings.TrimSpace(rawBranch)
-	cacheKey := "git-snapshot\x00" + repo + "\x00" + branch
-	if cached, ok := rt.Cache.Get(cacheKey); ok {
-		if snap, ok := cached.(snapshot); ok {
-			return snap, nil
-		}
-	}
 	if _, err := b.run(ctx, repo, "fetch", "--prune", "--no-write-fetch-head", "origin"); err != nil {
 		return snapshot{}, err
 	}
@@ -473,12 +467,6 @@ func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string, rt regi
 		branch, err = b.defaultBranch(ctx, repo)
 		if err != nil {
 			return snapshot{}, err
-		}
-		cacheKey = "git-snapshot\x00" + repo + "\x00" + branch
-		if cached, ok := rt.Cache.Get(cacheKey); ok {
-			if snap, ok := cached.(snapshot); ok {
-				return snap, nil
-			}
 		}
 	}
 	if err := validateRefPart(branch); err != nil {
@@ -503,6 +491,7 @@ func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string, rt regi
 		Ref:       strings.TrimSpace(commit),
 		Commit:    strings.TrimSpace(short),
 	}
+	cacheKey := "git-snapshot\x00" + repo + "\x00" + branch
 	rt.Cache.Set(cacheKey, snap)
 	if rawBranch == "" {
 		rt.Cache.Set("git-snapshot\x00"+repo+"\x00", snap)
@@ -515,12 +504,17 @@ func (s snapshot) header() string {
 }
 
 func (b Base) defaultBranch(ctx context.Context, repo string) (string, error) {
+	if out, err := b.run(ctx, repo, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); err == nil {
+		if branch := strings.TrimPrefix(strings.TrimSpace(out), "origin/"); branch != "" {
+			return branch, nil
+		}
+	}
 	for _, branch := range []string{"main", "master"} {
 		if b.refExists(ctx, repo, "origin/"+branch) || b.refExists(ctx, repo, branch) {
 			return branch, nil
 		}
 	}
-	return "", fmt.Errorf("could not find default branch main or master")
+	return "", fmt.Errorf("could not find default branch from origin/HEAD, main, or master")
 }
 
 func (b Base) resolveRef(ctx context.Context, repo, raw string) (string, error) {
