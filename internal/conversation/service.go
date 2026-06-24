@@ -438,18 +438,10 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}
 		sess.Turns, sess.Summary, _ = s.trimAndSummarize(sess.Turns, sess.Summary)
 		_ = s.Store.Save(ctx, sess)
-		errMsg := s.Redactor.Sanitize(userFacingError(errorID))
-		if useStream {
-			if progressStopped {
-				s.postFallback(ctx, req, errMsg, false)
-			} else {
-				appendProgress([]map[string]any{
-					{"type": "task_update", "id": taskID, "title": failedTitleWithErrorID(locale, errorID), "status": "error"},
-					{"type": "markdown_text", "text": errMsg},
-				})
-			}
-		} else {
-			s.reportError(ctx, req, errMsg)
+		if useStream && !progressStopped {
+			appendProgress([]map[string]any{
+				{"type": "task_update", "id": taskID, "title": failedTitleWithErrorID(locale, errorID), "status": "error"},
+			})
 		}
 		return true
 	}
@@ -1083,10 +1075,6 @@ func trimSummary(summary string, max int) string {
 	}
 	tailSize := max - markerRunes
 	return marker + strings.TrimSpace(string(runes[len(runes)-tailSize:]))
-}
-
-func userFacingError(errorID string) string {
-	return "Something went wrong. Please try again later."
 }
 
 func newErrorID() string {

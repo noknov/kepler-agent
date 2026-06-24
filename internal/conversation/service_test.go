@@ -151,25 +151,6 @@ func TestProcessInjectsToolHealthSummary(t *testing.T) {
 	}
 }
 
-func TestUserFacingErrorForMaxToolSteps(t *testing.T) {
-	got := userFacingError("err-test123")
-	if strings.Contains(got, "agent exceeded max tool steps") {
-		t.Fatalf("userFacingError() leaked internal error: %q", got)
-	}
-	if strings.Contains(got, "连续使用工具超过上限") {
-		t.Fatalf("userFacingError() leaked implementation detail: %q", got)
-	}
-	if strings.Contains(got, "找我") || strings.Contains(strings.ToLower(got), "contact me") {
-		t.Fatalf("userFacingError() should not ask users to contact a person: %q", got)
-	}
-	if !strings.Contains(got, "Something went wrong") || !strings.Contains(got, "Please try again later") {
-		t.Fatalf("userFacingError() = %q, want generic error", got)
-	}
-	if strings.Contains(got, "err-test123") || strings.Contains(got, "Error ID") {
-		t.Fatalf("userFacingError() should leave error id to the card title: %q", got)
-	}
-}
-
 func TestStreamNoticeHasBlockBoundaries(t *testing.T) {
 	got := streamNotice("上下文已压缩")
 	if got != "\n\n_上下文已压缩_\n\n" {
