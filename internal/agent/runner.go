@@ -25,6 +25,9 @@ var (
 
 const (
 	clarificationErrorThreshold = 2
+	convergenceNudgeCodeTools   = 10
+	forceSynthesisCodeTools     = 18
+	maxSynthesisRetries         = 3
 )
 
 type Observer interface {
@@ -106,6 +109,14 @@ func codeClaimRetryPrompt() string {
 	return prompts.RunnerPrompt("code_claim_retry", "")
 }
 
+func convergenceWarningPrompt() string {
+	return prompts.RunnerPrompt("convergence_warning", "")
+}
+
+func synthesisRetryPrompt() string {
+	return prompts.RunnerPrompt("synthesis_retry", "")
+}
+
 // codeReadingTools is the set of tool names that constitute evidence for code
 // claims. A final response containing a fenced code block should be preceded
 // by at least one call to one of these tools in the same run.
@@ -119,6 +130,8 @@ var codeReadingTools = map[string]bool{
 	"code-symbols":      true,
 	"code-definition":   true,
 	"code-references":   true,
+	"explore-code":      true,
+	"rag-search":        true,
 }
 
 // hasFencedCodeBlock reports whether text contains a fenced code block
@@ -167,8 +180,11 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	retriedCodeClaim := false
 	codeToolCalledThisRun := false
 	budgetWarned := false
+	convergenceWarned := false
+	synthesisRetries := 0
 	afterTools := false
 	clarificationErrors := newClarificationErrorTracker()
+	progress := convergenceProgress{toolCounts: map[string]int{}}
 
 	for step := 0; step < maxSteps; step++ {
 		lastStep := step == maxSteps-1 || retriedRepetitiveFinal
@@ -190,14 +206,23 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			budgetWarned = true
 		}
 
+		forceSynthesis := progress.shouldForceSynthesis()
+		if !convergenceWarned && progress.shouldNudge() && !lastStep {
+			messages = append(messages, llm.Message{
+				Role:    "system",
+				Content: convergenceWarningPrompt(),
+			})
+			convergenceWarned = true
+		}
+
 		if r.Compactor != nil {
-			messages = r.Compactor.ApplyMicroCompact(messages)
+			messages = r.compactMessages(ctx, messages)
 		}
 
 		// On convergence steps, omit tools so the model is forced to produce a
 		// final text response using whatever it has gathered so far.
 		var toolSpecs []llm.ToolSpec
-		if !lastStep {
+		if !lastStep && !forceSynthesis {
 			toolSpecs = r.Tools.Specs()
 		}
 
@@ -300,6 +325,21 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		if router != nil {
 			router.finish(len(assistantMsg.ToolCalls) > 0)
 		}
+		if forceSynthesis && len(assistantMsg.ToolCalls) > 0 {
+			synthesisRetries++
+			if synthesisRetries > maxSynthesisRetries {
+				final := forcedSynthesisFallback(req.Locale)
+				assistantMsg = llm.Message{Role: "assistant", Content: final}
+				messages = append(messages, assistantMsg)
+				generated = append(generated, assistantMsg)
+				return Result{Generated: generated, Final: final, Streamed: false}, nil
+			}
+			messages = append(messages, llm.Message{Role: "system", Content: synthesisRetryPrompt()})
+			if r.StatusUpdate != nil {
+				r.StatusUpdate(RetryStatus(req.Locale))
+			}
+			continue
+		}
 		if useStream && !streamedText && strings.TrimSpace(assistantMsg.Content) != "" {
 			useStream = false
 		}
@@ -368,6 +408,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			afterTools = true
 		}
 		for _, tr := range toolResults {
+			progress.record(tr)
 			messages = append(messages, tr.message)
 			generated = append(generated, tr.message)
 			if codeReadingTools[tr.name] {
@@ -395,6 +436,56 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		}
 	}
 	return Result{Generated: generated}, ErrMaxToolSteps
+}
+
+func forcedSynthesisFallback(locale string) string {
+	if locale == "zh" {
+		return "我已经停止继续调用工具，因为当前调查没有收敛。基于已收集证据还无法给出更可靠的结论；请查看上方证据，下一步应换一个调查维度或补充一个更具体的约束。"
+	}
+	return "I stopped requesting tools because the investigation is not converging. The evidence gathered so far is not enough for a more reliable conclusion; the next step is to switch investigation dimensions or add one concrete constraint."
+}
+
+func (r Runner) compactMessages(ctx context.Context, messages []llm.Message) []llm.Message {
+	if r.Compactor == nil {
+		return messages
+	}
+	compacted, _, err := r.Compactor.CompactIfNeeded(ctx, messages)
+	if err != nil {
+		return r.Compactor.ApplyMicroCompact(messages)
+	}
+	return compacted
+}
+
+type convergenceProgress struct {
+	codeEvidenceTools int
+	toolCounts        map[string]int
+}
+
+func (p *convergenceProgress) record(result toolResult) {
+	if p == nil || result.err != nil {
+		return
+	}
+	if p.toolCounts == nil {
+		p.toolCounts = map[string]int{}
+	}
+	p.toolCounts[result.name]++
+	if codeReadingTools[result.name] {
+		p.codeEvidenceTools++
+	}
+}
+
+func (p convergenceProgress) shouldNudge() bool {
+	if p.codeEvidenceTools >= convergenceNudgeCodeTools {
+		return true
+	}
+	return p.toolCounts["code-search"] >= 6 || p.toolCounts["repo-search"] >= 6 || p.toolCounts["rag-search"] >= 4
+}
+
+func (p convergenceProgress) shouldForceSynthesis() bool {
+	if p.codeEvidenceTools >= forceSynthesisCodeTools {
+		return true
+	}
+	return p.toolCounts["code-search"] >= 10 || p.toolCounts["repo-search"] >= 10
 }
 
 func requestLocale(locale string, messages []llm.Message) string {

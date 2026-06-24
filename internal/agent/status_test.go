@@ -22,6 +22,15 @@ func TestToolHintDefaultUsesThinkingForENLocale(t *testing.T) {
 	}
 }
 
+func TestToolHintExploreCode(t *testing.T) {
+	if got := ToolHint("explore-code", LocaleEN); got != "Exploring codebase..." {
+		t.Fatalf("ToolHint(explore-code, en) = %q", got)
+	}
+	if got := ToolHint("explore-code", LocaleZH); got != "代码探索中..." {
+		t.Fatalf("ToolHint(explore-code, zh) = %q", got)
+	}
+}
+
 func TestStepStatusZHIncludesThinking(t *testing.T) {
 	choices := map[string]struct{}{}
 	for range 50 {

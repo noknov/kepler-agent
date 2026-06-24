@@ -129,6 +129,8 @@ func registerSlackTools(tools *registry.Registry, slackClient *slack.Client) {
 func registerAgentControlTools(tools *registry.Registry, cfg config.Config, llmClient llm.Client) {
 	delegates := delegation.NewManager(llmClient, cfg.LLM.Model, cfg.LLM.Thinking)
 	delegates.SetPolicyPrompt(prompts.RulesAndSkillsPrompt())
+	delegates.SetTools(tools)
 	tools.Register(skillTools.LoadTool{})
 	tools.Register(delegation.Tool{Manager: delegates})
+	tools.Register(delegation.ExploreTool{Manager: delegates})
 }
