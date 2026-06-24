@@ -311,7 +311,7 @@ func TestLoadOpenCodeGoDefaults(t *testing.T) {
 		"SLACK_BOT_TOKEN":      "xoxb-test",
 		"SLACK_SIGNING_SECRET": "secret",
 		"ALLOWED_SLACK_USERS":  "U123",
-		"OPENCODE_GO_API_KEY":  "oc-go-token",
+		"OPENCODE_API_KEY":     "oc-go-token",
 	})
 
 	wd, _ := os.Getwd()
@@ -349,6 +349,66 @@ func TestLoadOpenCodeGoDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadOpenCodeUsesProviderSpecificAvailableModels(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":           "xoxb-test",
+		"SLACK_SIGNING_SECRET":      "secret",
+		"ALLOWED_SLACK_USERS":       "U123",
+		"LLM_PROVIDER":              "opencode-go",
+		"OPENCODE_API_KEY":          "oc-token",
+		"OPENCODE_MODEL":            "glm-5.2",
+		"OPENCODE_AVAILABLE_MODELS": "glm-5.2,kimi-k2.7-code,mimo-v2.5",
+		"MIMO_AVAILABLE_MODELS":     "mimo-v2.5-pro",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	want := []string{"glm-5.2", "kimi-k2.7-code", "mimo-v2.5"}
+	if !equalStrings(cfg.LLM.AvailableModels, want) {
+		t.Fatalf("AvailableModels = %#v, want %#v", cfg.LLM.AvailableModels, want)
+	}
+}
+
+func TestLoadMiMoUsesProviderSpecificAvailableModels(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":           "xoxb-test",
+		"SLACK_SIGNING_SECRET":      "secret",
+		"ALLOWED_SLACK_USERS":       "U123",
+		"LLM_PROVIDER":              "mimo",
+		"MIMO_API_KEY":              "mimo-token",
+		"MIMO_MODEL":                "mimo-v2.5",
+		"MIMO_AVAILABLE_MODELS":     "mimo-v2.5,mimo-v2.5-pro",
+		"OPENCODE_AVAILABLE_MODELS": "glm-5.2,kimi-k2.7-code",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	want := []string{"mimo-v2.5", "mimo-v2.5-pro"}
+	if !equalStrings(cfg.LLM.AvailableModels, want) {
+		t.Fatalf("AvailableModels = %#v, want %#v", cfg.LLM.AvailableModels, want)
+	}
+}
+
 func TestLoadTokenUsageConfigUsesOpenCodeGoEnv(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
@@ -357,7 +417,7 @@ func TestLoadTokenUsageConfigUsesOpenCodeGoEnv(t *testing.T) {
 		"SLACK_SIGNING_SECRET":  "secret",
 		"ALLOWED_SLACK_USERS":   "U123",
 		"LLM_PROVIDER":          "opencode-go",
-		"OPENCODE_GO_API_KEY":   "oc-go-token",
+		"OPENCODE_API_KEY":      "oc-go-token",
 		"OPENCODE_WORKSPACE_ID": "wrk_opencode",
 		"OPENCODE_AUTH_COOKIE":  "auth=opencode",
 	})
@@ -388,10 +448,10 @@ func TestLoadOpenCodeGoAnthropicEndpoint(t *testing.T) {
 		"SLACK_SIGNING_SECRET": "secret",
 		"ALLOWED_SLACK_USERS":  "U123",
 		"LLM_PROVIDER":         "opencode-go",
-		"OPENCODE_GO_PROTOCOL": "anthropic",
-		"OPENCODE_GO_API_KEY":  "oc-go-token",
-		"OPENCODE_GO_MODEL":    "minimax-m3",
-		"OPENCODE_GO_BASE_URL": "https://opencode.ai/zen/go/v1",
+		"OPENCODE_PROTOCOL":    "anthropic",
+		"OPENCODE_API_KEY":     "oc-go-token",
+		"OPENCODE_MODEL":       "minimax-m3",
+		"OPENCODE_BASE_URL":    "https://opencode.ai/zen/go/v1",
 	})
 
 	wd, _ := os.Getwd()
@@ -557,6 +617,7 @@ func resetConfigEnv(t *testing.T) {
 		"MIMO_API_KEY",
 		"MIMO_BASE_URL",
 		"MIMO_MODEL",
+		"MIMO_AVAILABLE_MODELS",
 		"MIMO_THINKING",
 		"MIMO_MAX_TOKENS",
 		"MIMO_TEMPERATURE",
@@ -570,22 +631,26 @@ func resetConfigEnv(t *testing.T) {
 		"KIMI_API_KEY",
 		"KIMI_BASE_URL",
 		"KIMI_MODEL",
-		"OPENCODE_GO_PROTOCOL",
-		"OPENCODE_GO_API_KEY",
-		"OPENCODE_GO_BASE_URL",
-		"OPENCODE_GO_MODEL",
-		"OPENCODE_GO_MAX_TOKENS",
-		"OPENCODE_GO_TEMPERATURE",
-		"OPENCODE_GO_TIMEOUT",
+		"KIMI_AVAILABLE_MODELS",
+		"OPENCODE_PROTOCOL",
+		"OPENCODE_API_KEY",
+		"OPENCODE_BASE_URL",
+		"OPENCODE_MODEL",
+		"OPENCODE_AVAILABLE_MODELS",
+		"OPENCODE_TEMPERATURE",
+		"OPENCODE_TIMEOUT",
 		"OPENCODE_WORKSPACE_ID",
 		"OPENCODE_AUTH_COOKIE",
 		"MOONSHOT_API_KEY",
 		"MOONSHOT_BASE_URL",
 		"MOONSHOT_MODEL",
+		"MOONSHOT_AVAILABLE_MODELS",
 		"ANTHROPIC_BASE_URL",
 		"ANTHROPIC_API_KEY",
 		"ANTHROPIC_AUTH_TOKEN",
 		"ANTHROPIC_MODEL",
+		"ANTHROPIC_AVAILABLE_MODELS",
+		"OPENAI_AVAILABLE_MODELS",
 		"ALLOW_ENV_MIXING",
 		"PREFER_DOTENV",
 		"ALLOW_EXPERIMENTAL_CODING_ENDPOINT",
@@ -617,4 +682,16 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
