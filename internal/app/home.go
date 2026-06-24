@@ -52,8 +52,8 @@ func (s *Server) homeView(userID string) map[string]any {
 	if len(models) > 1 {
 		blocks = append(blocks, actionsBlock(modelSelectMenu(models, currentModel)))
 	}
-	if usageText, ok := s.tokenUsageText(); ok {
-		blocks = append(blocks, sectionBlock("*Usage*\n"+usageText))
+	if block, ok := s.tokenUsageSectionBlock(); ok {
+		blocks = append(blocks, block)
 	}
 	blocks = append(blocks,
 		dividerBlock(),
@@ -81,14 +81,18 @@ func headerBlock(text string) map[string]any {
 	}
 }
 
-func sectionBlock(text string) map[string]any {
-	return map[string]any{
-		"type": "section",
-		"text": map[string]any{
+func sectionBlockWithFields(text string, fields ...map[string]any) map[string]any {
+	block := map[string]any{"type": "section"}
+	if len(fields) > 0 {
+		block["fields"] = fields
+	}
+	if text != "" {
+		block["text"] = map[string]any{
 			"type": "mrkdwn",
 			"text": text,
-		},
+		}
 	}
+	return block
 }
 
 func actionsBlock(elements ...map[string]any) map[string]any {
@@ -122,70 +126,74 @@ func modelSelectMenu(models []string, current string) map[string]any {
 	return menu
 }
 
+func sectionBlock(text string) map[string]any {
+	return sectionBlockWithFields(text)
+}
+
 func dividerBlock() map[string]any {
 	return map[string]any{"type": "divider"}
 }
 
-func (s *Server) tokenUsageText() (string, bool) {
-	if s.tokenUsage != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
-		defer cancel()
-		if usage, err := s.tokenUsage.Summary(ctx, time.Now()); err == nil {
-			return formatTokenUsageText(usage), true
-		}
+func (s *Server) tokenUsageSectionBlock() (map[string]any, bool) {
+	if s.tokenUsage == nil {
+		return nil, false
 	}
-	return "", false
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	usage, err := s.tokenUsage.Summary(ctx, time.Now())
+	if err != nil {
+		return nil, false
+	}
+	text, ok := formatTokenUsageText(usage)
+	if !ok {
+		return nil, false
+	}
+	return sectionBlock(text), true
 }
 
-func formatTokenUsageText(usage tokenUsageSummary) string {
-	lines := make([]string, 0, 3)
+type tokenUsageRow struct {
+	label  string
+	window *tokenUsageWindow
+}
+
+func formatTokenUsageText(usage tokenUsageSummary) (string, bool) {
+	rows := make([]tokenUsageRow, 0, 3)
 	if usage.Rolling != nil {
-		lines = append(lines, formatTokenUsageLine("5h", usage.Rolling))
+		rows = append(rows, tokenUsageRow{"5h", usage.Rolling})
 	}
 	if usage.Weekly != nil {
-		lines = append(lines, formatTokenUsageLine("Week", usage.Weekly))
+		rows = append(rows, tokenUsageRow{"Week", usage.Weekly})
 	}
 	if usage.Monthly != nil {
-		lines = append(lines, formatTokenUsageLine("Month", usage.Monthly))
+		rows = append(rows, tokenUsageRow{"Month", usage.Monthly})
 	}
-	return strings.Join(lines, "\n")
+	if len(rows) == 0 {
+		return "", false
+	}
+
+	lines := make([]string, 0, len(rows)+1)
+	lines = append(lines, "*Usage*")
+	for _, row := range rows {
+		used := int(math.Round(row.window.UsagePercent))
+		lines = append(lines, fmt.Sprintf("%s *%s* · %d%% · _resets in %s_",
+			tokenUsageStatusEmoji(used),
+			row.label,
+			used,
+			formatTokenUsageResetIn(row.window.ResetInSec),
+		))
+	}
+	return strings.Join(lines, "\n"), true
 }
 
-const tokenUsageBarWidth = 5
-
-func formatTokenUsageLine(label string, window *tokenUsageWindow) string {
-	used := int(math.Round(window.UsagePercent))
-	bar := formatTokenUsageBar(used)
-	return fmt.Sprintf("%s %d%%/%s · resets in %s", bar, used, label, formatTokenUsageResetIn(window.ResetInSec))
-}
-
-func formatTokenUsageBar(percentUsed int) string {
-	const subLevels = 8
-	total := int(math.Round(float64(percentUsed) / 100 * float64(tokenUsageBarWidth*subLevels)))
-	if total > tokenUsageBarWidth*subLevels {
-		total = tokenUsageBarWidth * subLevels
+func tokenUsageStatusEmoji(percent int) string {
+	switch {
+	case percent >= 80:
+		return ":red_circle:"
+	case percent >= 50:
+		return ":large_yellow_circle:"
+	default:
+		return ":large_green_circle:"
 	}
-	if total < 0 {
-		total = 0
-	}
-
-	fullCells := total / subLevels
-	partialLevel := total % subLevels
-	emptyCells := tokenUsageBarWidth - fullCells
-	if partialLevel > 0 {
-		emptyCells--
-	}
-
-	// Vertical block elements from thinnest (1/8) to full (8/8).
-	partialChars := []rune{'▏', '▎', '▍', '▌', '▋', '▊', '▉'}
-
-	var b strings.Builder
-	b.WriteString(strings.Repeat("█", fullCells))
-	if partialLevel > 0 {
-		b.WriteRune(partialChars[partialLevel-1])
-	}
-	b.WriteString(strings.Repeat("░", emptyCells))
-	return b.String()
 }
 
 func formatTokenUsageResetIn(seconds int64) string {

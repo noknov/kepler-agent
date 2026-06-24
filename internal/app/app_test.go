@@ -346,9 +346,9 @@ func TestHomeViewShowsTokenUsageFromClient(t *testing.T) {
 	text := flattenBlockText(view)
 	for _, want := range []string{
 		"*Usage*",
-		"█▋░░░ 33%/5h · resets in 3h 25m",
-		"██▌░░ 50%/Week · resets in 3d",
-		"▎░░░░ 5%/Month · resets in 26d 3h",
+		":large_green_circle: *5h* · 33% · _resets in 3h 25m_",
+		":large_yellow_circle: *Week* · 50% · _resets in 3d_",
+		":large_green_circle: *Month* · 5% · _resets in 26d 3h_",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("home view missing %q in %q", want, text)
@@ -357,15 +357,19 @@ func TestHomeViewShowsTokenUsageFromClient(t *testing.T) {
 }
 
 func TestFormatTokenUsageText(t *testing.T) {
-	got := formatTokenUsageText(tokenUsageSummary{
+	got, ok := formatTokenUsageText(tokenUsageSummary{
 		Rolling: &tokenUsageWindow{UsagePercent: 0, ResetInSec: 16_440},
 		Weekly:  &tokenUsageWindow{UsagePercent: 0, ResetInSec: 590_400},
 		Monthly: &tokenUsageWindow{UsagePercent: 0, ResetInSec: 2_587_800},
 	})
+	if !ok {
+		t.Fatal("formatTokenUsageText() = false, want true")
+	}
 	want := strings.Join([]string{
-		"░░░░░ 0%/5h · resets in 4h 34m",
-		"░░░░░ 0%/Week · resets in 6d 20h",
-		"░░░░░ 0%/Month · resets in 29d 22h",
+		"*Usage*",
+		":large_green_circle: *5h* · 0% · _resets in 4h 34m_",
+		":large_green_circle: *Week* · 0% · _resets in 6d 20h_",
+		":large_green_circle: *Month* · 0% · _resets in 29d 22h_",
 	}, "\n")
 	if got != want {
 		t.Fatalf("formatTokenUsageText() = %q, want %q", got, want)
