@@ -128,13 +128,54 @@ func TestExploreRetriesTextReportWhenFinalStepRequestsTools(t *testing.T) {
 	}
 	foundRetry := false
 	for _, msg := range client.requests[exploreMaxSteps].Messages {
-		if msg.Role == "system" && strings.Contains(msg.Content, "Tool calls are unavailable") {
+		if msg.Role == "system" && strings.Contains(msg.Content, "Tool calls are no longer available") {
 			foundRetry = true
 			break
 		}
 	}
 	if !foundRetry {
 		t.Fatal("synthesis retry prompt was not injected into explore retry")
+	}
+}
+
+func TestExploreReturnsPartialReportWhenSynthesisRetryStillRequestsTools(t *testing.T) {
+	responses := make([]llm.Response, 0, exploreMaxSteps+1)
+	for i := 0; i < exploreMaxSteps-1; i++ {
+		responses = append(responses, llm.Response{Message: llm.Message{
+			Role: "assistant",
+			ToolCalls: []llm.ToolCall{
+				{ID: "search_" + string(rune('a'+i)), Type: "function", Function: llm.ToolFunction{Name: "code-search", Arguments: `{"query":"Catalog"}`}},
+			},
+		}})
+	}
+	responses = append(responses,
+		llm.Response{Message: llm.Message{
+			Role: "assistant",
+			ToolCalls: []llm.ToolCall{
+				{ID: "late_tool", Type: "function", Function: llm.ToolFunction{Name: "code-search", Arguments: `{"query":"too-late"}`}},
+			},
+		}},
+		llm.Response{Message: llm.Message{
+			Role: "assistant",
+			ToolCalls: []llm.ToolCall{
+				{ID: "still_late", Type: "function", Function: llm.ToolFunction{Name: "code-search", Arguments: `{"query":"still-too-late"}`}},
+			},
+		}},
+	)
+	client := &exploreFakeClient{responses: responses}
+	tools := &exploreFakeTools{}
+	manager := NewManager(client, "test-model", "")
+	manager.SetTools(tools)
+
+	out, err := manager.Explore(context.Background(), "broad search", "", registry.Runtime{})
+	if err != nil {
+		t.Fatalf("Explore() error = %v", err)
+	}
+	if !strings.Contains(out, "partial evidence") || !strings.Contains(out, "code-search") {
+		t.Fatalf("Explore() output = %q, want partial evidence report", out)
+	}
+	if tools.calls != exploreMaxSteps-1 {
+		t.Fatalf("tool calls = %d, want no execution for synthesis retry tool calls", tools.calls)
 	}
 }
 
