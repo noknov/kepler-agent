@@ -141,7 +141,7 @@ func defaultClearableTools() map[string]bool {
 	tools := []string{
 		// Code search and reading
 		"code-read_file", "code-search", "code-symbols",
-		"code-definition", "code-references", "code-diagnostics",
+		"code-definition", "code-references", "code-diagnostics", "explore-code",
 		// Git reading
 		"git-search_ref", "git-read_file_ref", "git-log", "git-show",
 		"repo-search", "repo-read_file",

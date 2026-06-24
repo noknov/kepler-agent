@@ -187,6 +187,18 @@ func TestToolObservationDelegateProvenance(t *testing.T) {
 	}
 }
 
+func TestToolObservationExploreProvenance(t *testing.T) {
+	b := Builder{MaxToolChars: 10000}
+	out := b.ToolObservation("explore-code", "Finding: compare entry points")
+	exploreProvenance := prompts.MemoryLabel("explore_provenance", "")
+	if !stringsContains(out, exploreProvenance) {
+		t.Fatalf("missing explore provenance prefix: %q", out)
+	}
+	if !stringsHasPrefix(out, "<evidence source=\"explore-code\">") {
+		t.Fatalf("missing evidence wrapper: %q", out)
+	}
+}
+
 func TestToolObservationOtherToolsUseEvidenceWrapper(t *testing.T) {
 	b := Builder{MaxToolChars: 10000}
 	out := b.ToolObservation("code-search", "matches")

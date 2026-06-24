@@ -7,6 +7,7 @@ import (
 
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/prompts"
+	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
 type Profile struct {
@@ -18,8 +19,15 @@ type Manager struct {
 	client       llm.Client
 	model        string
 	thinking     string
+	tools        ToolExecutor
 	profiles     map[string]Profile
 	policyPrompt string
+}
+
+type ToolExecutor interface {
+	Specs() []llm.ToolSpec
+	Execute(ctx context.Context, name string, args json.RawMessage, rt registry.Runtime) (registry.Result, error)
+	CanRunInParallel(name string) bool
 }
 
 func NewManager(client llm.Client, model, thinking string) *Manager {
@@ -38,6 +46,10 @@ func NewManager(client llm.Client, model, thinking string) *Manager {
 			},
 		},
 	}
+}
+
+func (m *Manager) SetTools(tools ToolExecutor) {
+	m.tools = tools
 }
 
 func (m *Manager) SetPolicyPrompt(prompt string) {

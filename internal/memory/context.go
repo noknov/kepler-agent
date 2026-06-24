@@ -93,6 +93,9 @@ func (b Builder) ToolObservation(toolName string, output string) string {
 	if toolName == "delegate-run" {
 		output = prompts.MemoryLabel("delegate_provenance", "") + output
 	}
+	if toolName == "explore-code" {
+		output = prompts.MemoryLabel("explore_provenance", "") + output
+	}
 	// Apply token-aware truncation: use the smaller of char and token budgets.
 	maxChars := b.MaxToolChars
 	if b.MaxContextTokens > 0 {
