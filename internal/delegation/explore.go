@@ -108,9 +108,9 @@ func (m *Manager) Explore(ctx context.Context, task, boundaries string, rt regis
 		}
 		if len(specs) == 0 {
 			if retriedSynthesis {
-				return "", fmt.Errorf("explore did not produce a text report after synthesis retry")
+				return partialExploreReport(messages), nil
 			}
-			messages = append(messages, llm.Message{Role: "system", Content: prompts.RunnerPrompt("synthesis_retry", "")})
+			messages = append(messages, llm.Message{Role: "system", Content: exploreFinalReportPrompt()})
 			retriedSynthesis = true
 			step--
 			continue
@@ -120,6 +120,34 @@ func (m *Manager) Explore(ctx context.Context, task, boundaries string, rt regis
 		messages = append(messages, m.executeExploreToolCalls(ctx, msg.ToolCalls, rt)...)
 	}
 	return "", fmt.Errorf("explore did not converge within %d steps", exploreMaxSteps)
+}
+
+func partialExploreReport(messages []llm.Message) string {
+	var evidence []string
+	for _, msg := range messages {
+		if msg.Role != "tool" {
+			continue
+		}
+		text := strings.TrimSpace(msg.Content)
+		if text == "" {
+			continue
+		}
+		text = strings.Join(strings.Fields(text), " ")
+		if len([]rune(text)) > 240 {
+			runes := []rune(text)
+			text = string(runes[:240]) + "..."
+		}
+		evidence = append(evidence, "- "+msg.Name+": "+text)
+		if len(evidence) >= 6 {
+			break
+		}
+	}
+	if len(evidence) == 0 {
+		return "Finding: exploration could not produce a final report.\nEvidence:\n- No tool evidence was gathered before synthesis failed.\nExcluded: none.\nNext decisive checks: run a narrower direct search/read in the main agent."
+	}
+	return "Finding: exploration stopped before producing a polished report; use this as partial evidence only.\nEvidence:\n" +
+		strings.Join(evidence, "\n") +
+		"\nExcluded: not fully determined.\nNext decisive checks: synthesize from these excerpts or run one narrower direct search/read."
 }
 
 func (m *Manager) exploreToolSpecs() []llm.ToolSpec {
@@ -151,6 +179,16 @@ Output format:
 - Evidence: bullet list with file paths, line numbers, and exact facts from tool evidence.
 - Excluded: what you checked and ruled out.
 - Next decisive checks: at most 3 targeted reads/searches if uncertainty remains.`)
+}
+
+func exploreFinalReportPrompt() string {
+	return `Tool calls are no longer available in this exploration sub-agent. Return a concise text report now using only evidence already gathered.
+
+Output format:
+- Finding: one concise answer or orientation.
+- Evidence: bullet list with file paths, line numbers, and exact facts from tool evidence.
+- Excluded: what you checked and ruled out.
+- Next decisive checks: at most 3 targeted reads/searches if uncertainty remains.`
 }
 
 func (m *Manager) executeExploreToolCalls(ctx context.Context, calls []llm.ToolCall, rt registry.Runtime) []llm.Message {

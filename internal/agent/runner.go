@@ -21,13 +21,19 @@ var (
 	ErrRepeatedToolCall = errors.New("model repeated the same tool call")
 	ErrTextualToolCall  = errors.New("model returned textual tool invocation instead of structured tool calls")
 	ErrMaxToolSteps     = errors.New("agent exceeded max tool steps")
+	ErrEmptyFinal       = errors.New("model returned empty final response")
 )
 
 const (
 	clarificationErrorThreshold = 2
-	convergenceNudgeCodeTools   = 10
-	forceSynthesisCodeTools     = 18
-	maxSynthesisRetries         = 3
+	convergenceNudgeCodeTurns   = 12
+	convergenceNudgeSearchTurns = 8
+	convergenceNudgeRAGTurns    = 5
+	forceSynthesisCodeTurns     = 18
+	forceSynthesisSearchTurns   = 12
+	noProgressForceTurns        = 4
+	maxSynthesisRetries         = 2
+	exploreFailureLimit         = 1
 )
 
 type Observer interface {
@@ -113,8 +119,16 @@ func convergenceWarningPrompt() string {
 	return prompts.RunnerPrompt("convergence_warning", "")
 }
 
+func synthesisPrompt() string {
+	return prompts.RunnerPrompt("synthesis_now", "")
+}
+
 func synthesisRetryPrompt() string {
 	return prompts.RunnerPrompt("synthesis_retry", "")
+}
+
+func rawEvidenceRetryPrompt() string {
+	return prompts.RunnerPrompt("raw_evidence_retry", "")
 }
 
 // codeReadingTools is the set of tool names that constitute evidence for code
@@ -178,16 +192,18 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	retriedEmptyResponse := false
 	retriedTemporaryOverload := false
 	retriedCodeClaim := false
+	retriedRawEvidence := false
 	codeToolCalledThisRun := false
 	budgetWarned := false
 	convergenceWarned := false
 	synthesisRetries := 0
 	afterTools := false
 	clarificationErrors := newClarificationErrorTracker()
-	progress := convergenceProgress{toolCounts: map[string]int{}}
+	progress := convergenceProgress{searchTurns: map[string]int{}}
+	control := newRunnerControl()
 
 	for step := 0; step < maxSteps; step++ {
-		lastStep := step == maxSteps-1 || retriedRepetitiveFinal
+		lastStep := step == maxSteps-1
 		if r.StatusUpdate != nil {
 			r.StatusUpdate(StepStatus(req.Locale, step))
 		}
@@ -206,8 +222,13 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			budgetWarned = true
 		}
 
-		forceSynthesis := progress.shouldForceSynthesis()
-		if !convergenceWarned && progress.shouldNudge() && !lastStep {
+		forceSynthesis := !lastStep && control.shouldForceSynthesis(progress)
+		if forceSynthesis {
+			messages = append(messages, llm.Message{
+				Role:    "system",
+				Content: synthesisPrompt(),
+			})
+		} else if !convergenceWarned && progress.shouldNudge() && !lastStep {
 			messages = append(messages, llm.Message{
 				Role:    "system",
 				Content: convergenceWarningPrompt(),
@@ -219,11 +240,9 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			messages = r.compactMessages(ctx, messages)
 		}
 
-		// On convergence steps, omit tools so the model is forced to produce a
-		// final text response using whatever it has gathered so far.
 		var toolSpecs []llm.ToolSpec
 		if !lastStep && !forceSynthesis {
-			toolSpecs = r.Tools.Specs()
+			toolSpecs = control.filterToolSpecs(r.Tools.Specs())
 		}
 
 		llmReq := llm.Request{
@@ -325,21 +344,6 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		if router != nil {
 			router.finish(len(assistantMsg.ToolCalls) > 0)
 		}
-		if forceSynthesis && len(assistantMsg.ToolCalls) > 0 {
-			synthesisRetries++
-			if synthesisRetries > maxSynthesisRetries {
-				final := forcedSynthesisFallback(req.Locale)
-				assistantMsg = llm.Message{Role: "assistant", Content: final}
-				messages = append(messages, assistantMsg)
-				generated = append(generated, assistantMsg)
-				return Result{Generated: generated, Final: final, Streamed: false}, nil
-			}
-			messages = append(messages, llm.Message{Role: "system", Content: synthesisRetryPrompt()})
-			if r.StatusUpdate != nil {
-				r.StatusUpdate(RetryStatus(req.Locale))
-			}
-			continue
-		}
 		if useStream && !streamedText && strings.TrimSpace(assistantMsg.Content) != "" {
 			useStream = false
 		}
@@ -349,7 +353,15 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			}
 			final := strings.TrimSpace(r.sanitize(assistantMsg.Content))
 			if final == "" {
-				final = "I didn't get a valid response. Please try again or provide more context."
+				if !retriedEmptyResponse {
+					retriedEmptyResponse = true
+					messages = append(messages, llm.Message{Role: "system", Content: emptyResponseRetryPrompt()})
+					if r.StatusUpdate != nil {
+						r.StatusUpdate(RetryStatus(req.Locale))
+					}
+					continue
+				}
+				return Result{Generated: generated}, ErrEmptyFinal
 			}
 			if !useStream && llm.LooksLikeTextualToolCall(final) {
 				if !retriedTextualToolCall {
@@ -361,6 +373,20 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 					continue
 				}
 				final = llm.StripTextualToolCallMarkup(final)
+				if final == "" {
+					return Result{Generated: generated}, ErrTextualToolCall
+				}
+			}
+			if !useStream && hasRawEvidenceDump(final) {
+				if !retriedRawEvidence {
+					retriedRawEvidence = true
+					messages = append(messages, llm.Message{Role: "system", Content: rawEvidenceRetryPrompt()})
+					if r.StatusUpdate != nil {
+						r.StatusUpdate(RetryStatus(req.Locale))
+					}
+					continue
+				}
+				final = stripRawEvidenceDump(final)
 				if final == "" {
 					return Result{Generated: generated}, ErrTextualToolCall
 				}
@@ -390,6 +416,18 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			return Result{Generated: generated, Final: final, Streamed: useStream}, nil
 		}
 
+		if len(toolSpecs) == 0 {
+			synthesisRetries++
+			if synthesisRetries <= maxSynthesisRetries {
+				messages = append(messages, llm.Message{Role: "system", Content: synthesisRetryPrompt()})
+				if r.StatusUpdate != nil {
+					r.StatusUpdate(RetryStatus(req.Locale))
+				}
+				continue
+			}
+			return Result{Generated: generated}, ErrMaxToolSteps
+		}
+
 		// Emit non-streamed narration as a batch event so the UI still shows it.
 		if narration := strings.TrimSpace(assistantMsg.Content); narration != "" && r.OnStream != nil && !streamedText {
 			if !llm.LooksLikeTextualToolCall(narration) {
@@ -408,7 +446,6 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			afterTools = true
 		}
 		for _, tr := range toolResults {
-			progress.record(tr)
 			messages = append(messages, tr.message)
 			generated = append(generated, tr.message)
 			if codeReadingTools[tr.name] {
@@ -422,6 +459,8 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 				}, nil
 			}
 		}
+		progress.finishTurn(toolResults)
+		control.finishTurn(toolResults)
 		locale := requestLocale(req.Locale, messages)
 		if question := clarificationErrors.Question(toolResults, locale); question != "" {
 			generated = append(generated, llm.Message{
@@ -438,11 +477,35 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	return Result{Generated: generated}, ErrMaxToolSteps
 }
 
-func forcedSynthesisFallback(locale string) string {
-	if locale == "zh" {
-		return "我已经停止继续调用工具，因为当前调查没有收敛。基于已收集证据还无法给出更可靠的结论；请查看上方证据，下一步应换一个调查维度或补充一个更具体的约束。"
+func hasRawEvidenceDump(text string) bool {
+	return strings.Contains(text, "<evidence source=") ||
+		strings.Contains(text, "</evidence>") ||
+		strings.Contains(text, "<tool_call>") ||
+		strings.Contains(text, "</tool_call>")
+}
+
+func stripRawEvidenceDump(text string) string {
+	lines := strings.Split(text, "\n")
+	cleaned := make([]string, 0, len(lines))
+	skippingBlock := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.Contains(trimmed, "<evidence source="), strings.Contains(trimmed, "<tool_call>"):
+			skippingBlock = true
+			continue
+		case strings.Contains(trimmed, "</evidence>"), strings.Contains(trimmed, "</tool_call>"):
+			skippingBlock = false
+			continue
+		case skippingBlock:
+			continue
+		case strings.HasPrefix(trimmed, "- [code-"), strings.HasPrefix(trimmed, "[code-"):
+			continue
+		default:
+			cleaned = append(cleaned, line)
+		}
 	}
-	return "I stopped requesting tools because the investigation is not converging. The evidence gathered so far is not enough for a more reliable conclusion; the next step is to switch investigation dimensions or add one concrete constraint."
+	return strings.TrimSpace(strings.Join(cleaned, "\n"))
 }
 
 func (r Runner) compactMessages(ctx context.Context, messages []llm.Message) []llm.Message {
@@ -456,36 +519,141 @@ func (r Runner) compactMessages(ctx context.Context, messages []llm.Message) []l
 	return compacted
 }
 
-type convergenceProgress struct {
-	codeEvidenceTools int
-	toolCounts        map[string]int
+type runnerControl struct {
+	seenEvidence    map[string]bool
+	noProgressTurns int
+	toolFailures    map[string]int
+	disabledTools   map[string]bool
 }
 
-func (p *convergenceProgress) record(result toolResult) {
-	if p == nil || result.err != nil {
+func newRunnerControl() *runnerControl {
+	return &runnerControl{
+		seenEvidence:  map[string]bool{},
+		toolFailures:  map[string]int{},
+		disabledTools: map[string]bool{},
+	}
+}
+
+func (c *runnerControl) filterToolSpecs(specs []llm.ToolSpec) []llm.ToolSpec {
+	if c == nil || len(c.disabledTools) == 0 {
+		return specs
+	}
+	out := make([]llm.ToolSpec, 0, len(specs))
+	for _, spec := range specs {
+		if c.disabledTools[spec.Function.Name] {
+			continue
+		}
+		out = append(out, spec)
+	}
+	return out
+}
+
+func (c *runnerControl) finishTurn(results []toolResult) {
+	if c == nil || len(results) == 0 {
 		return
 	}
-	if p.toolCounts == nil {
-		p.toolCounts = map[string]int{}
+	newEvidence := false
+	for _, result := range results {
+		if result.err != nil {
+			c.toolFailures[result.name]++
+			if result.name == "explore-code" && c.toolFailures[result.name] >= exploreFailureLimit {
+				c.disabledTools[result.name] = true
+			}
+			continue
+		}
+		if result.name != "" {
+			c.toolFailures[result.name] = 0
+		}
+		if !codeReadingTools[result.name] {
+			continue
+		}
+		fp := evidenceFingerprint(result)
+		if fp == "" || c.seenEvidence[fp] {
+			continue
+		}
+		c.seenEvidence[fp] = true
+		newEvidence = true
 	}
-	p.toolCounts[result.name]++
-	if codeReadingTools[result.name] {
-		p.codeEvidenceTools++
+	if newEvidence {
+		c.noProgressTurns = 0
+		return
+	}
+	c.noProgressTurns++
+}
+
+func (c *runnerControl) shouldForceSynthesis(progress convergenceProgress) bool {
+	if c == nil {
+		return false
+	}
+	if c.noProgressTurns >= noProgressForceTurns {
+		return true
+	}
+	if progress.codeEvidenceTurns >= forceSynthesisCodeTurns {
+		return true
+	}
+	return progress.searchTurns["code-search"] >= forceSynthesisSearchTurns ||
+		progress.searchTurns["repo-search"] >= forceSynthesisSearchTurns ||
+		progress.searchTurns["rag-search"] >= convergenceNudgeRAGTurns+2
+}
+
+func evidenceFingerprint(result toolResult) string {
+	if result.name == "" {
+		return ""
+	}
+	content := strings.Join(strings.Fields(result.message.Content), " ")
+	if content == "" {
+		content = strings.Join(strings.Fields(string(result.args)), " ")
+	}
+	if content == "" {
+		return ""
+	}
+	if len(content) > 512 {
+		content = content[:512]
+	}
+	return result.name + "\x00" + content
+}
+
+type convergenceProgress struct {
+	codeEvidenceTurns int
+	searchTurns       map[string]int
+}
+
+func (p *convergenceProgress) finishTurn(results []toolResult) {
+	if p == nil || len(results) == 0 {
+		return
+	}
+	if p.searchTurns == nil {
+		p.searchTurns = map[string]int{}
+	}
+	hadCodeEvidence := false
+	searchTypes := map[string]bool{}
+	for _, result := range results {
+		if result.err != nil {
+			continue
+		}
+		if codeReadingTools[result.name] {
+			hadCodeEvidence = true
+		}
+		switch result.name {
+		case "code-search", "repo-search", "rag-search":
+			searchTypes[result.name] = true
+		}
+	}
+	if hadCodeEvidence {
+		p.codeEvidenceTurns++
+	}
+	for name := range searchTypes {
+		p.searchTurns[name]++
 	}
 }
 
 func (p convergenceProgress) shouldNudge() bool {
-	if p.codeEvidenceTools >= convergenceNudgeCodeTools {
+	if p.codeEvidenceTurns >= convergenceNudgeCodeTurns {
 		return true
 	}
-	return p.toolCounts["code-search"] >= 6 || p.toolCounts["repo-search"] >= 6 || p.toolCounts["rag-search"] >= 4
-}
-
-func (p convergenceProgress) shouldForceSynthesis() bool {
-	if p.codeEvidenceTools >= forceSynthesisCodeTools {
-		return true
-	}
-	return p.toolCounts["code-search"] >= 10 || p.toolCounts["repo-search"] >= 10
+	return p.searchTurns["code-search"] >= convergenceNudgeSearchTurns ||
+		p.searchTurns["repo-search"] >= convergenceNudgeSearchTurns ||
+		p.searchTurns["rag-search"] >= convergenceNudgeRAGTurns
 }
 
 func requestLocale(locale string, messages []llm.Message) string {
