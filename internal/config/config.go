@@ -194,22 +194,22 @@ func Load() (Config, error) {
 			AllowedChannels:            envCSV("ALLOWED_SLACK_CHANNELS"),
 			WorkspaceRoots:             normalizeRoots(envCSVDefault("WORKSPACE_ROOTS", []string{wd})),
 			WorkspaceAutoFetch:         envBool("WORKSPACE_AUTO_FETCH", false),
-			PromptIncludeRepoInventory: envBool("PROMPT_INCLUDE_REPO_INVENTORY", false),
+			PromptIncludeRepoInventory: envBool("PROMPT_INCLUDE_REPO_INVENTORY", true),
 		},
 		Sessions: SessionConfig{
 			DataDir:             env("SESSION_DATA_DIR", filepath.Join(wd, ".data", "sessions")),
 			MaxMessages:         envInt("SESSION_MAX_MESSAGES", 24),
-			MaxToolChars:        envInt("SESSION_MAX_TOOL_CHARS", 20000),
+			MaxToolChars:        envInt("SESSION_MAX_TOOL_CHARS", 40000),
 			MaxThreadChars:      envInt("SESSION_MAX_THREAD_CHARS", 6000),
 			MaxSummaryChars:     envInt("SESSION_MAX_SUMMARY_CHARS", 2500),
 			MaxContextTokens:    envInt("SESSION_MAX_CONTEXT_TOKENS", 200000),
 			AutocompactBuffer:   envInt("SESSION_AUTOCOMPACT_BUFFER", 13000),
 			CompactModel:        env("SESSION_COMPACT_MODEL", ""),
-			MaxToolResultTokens: envInt("SESSION_MAX_TOOL_RESULT_TOKENS", 5000),
+			MaxToolResultTokens: envInt("SESSION_MAX_TOOL_RESULT_TOKENS", 8000),
 		},
 		Tools: ToolConfig{
 			CommandTimeout:      envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
-			AgentMaxSteps:       envInt("AGENT_MAX_STEPS", 128),
+			AgentMaxSteps:       envInt("AGENT_MAX_STEPS", 0),
 			GCloudPath:          env("GCLOUD_PATH", "gcloud"),
 			GCPDefaultProject:   os.Getenv("GCP_PROJECT"),
 			GCPDefaultNamespace: env("GCP_NAMESPACE", ""),
@@ -520,7 +520,11 @@ func providerThinking(provider string) string {
 	case "kimi", "moonshot":
 		return firstEnv("KIMI_THINKING")
 	case "deepseek":
-		return firstEnv("DEEPSEEK_THINKING")
+		v := firstEnv("DEEPSEEK_THINKING")
+		if v == "" {
+			return "enabled"
+		}
+		return v
 	default:
 		return ""
 	}

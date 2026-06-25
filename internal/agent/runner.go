@@ -29,7 +29,7 @@ const (
 	// ample opportunity to self-correct first. Most tool errors (wrong path,
 	// wrong branch, wrong repo) are technical mistakes the model can fix itself.
 	clarificationErrorThreshold = 4
-	exploreFailureLimit         = 1
+	exploreFailureLimit         = 3
 )
 
 type Observer interface {
@@ -158,7 +158,7 @@ func hasUnverifiedCodeClaim(text string) bool {
 func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	maxSteps := r.MaxSteps
 	if maxSteps <= 0 {
-		maxSteps = 12
+		maxSteps = 200 // effectively unlimited; context window is the real constraint
 	}
 	if req.Runtime.Cache == nil {
 		req.Runtime.Cache = registry.NewRuntimeCache()
@@ -367,7 +367,11 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 				}
 				return Result{Generated: generated}, ErrRepetitiveOutput
 			}
-			if !useStream && !retriedCodeClaim && !codeToolCalledThisRun && hasUnverifiedCodeClaim(final) {
+			// Unverified code claim check: applies in both streaming and
+			// non-streaming modes. If the model references specific code
+			// (functions, guards, conditionals) without having called any
+			// code tool, force it to verify with actual tool calls first.
+			if !retriedCodeClaim && !codeToolCalledThisRun && hasUnverifiedCodeClaim(final) {
 				retriedCodeClaim = true
 				messages = append(messages, llm.Message{Role: "system", Content: codeClaimRetryPrompt()})
 				if r.StatusUpdate != nil {
@@ -430,6 +434,30 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 				PendingQuestion: question,
 			}, nil
 		}
+	}
+	// Max steps reached: attempt one final LLM call without tools to force a
+	// summary answer rather than returning a hard error to the user.
+	if r.StatusUpdate != nil {
+		r.StatusUpdate(GeneratingStatus(req.Locale))
+	}
+	if r.Compactor != nil {
+		messages = r.compactMessages(ctx, messages)
+	}
+	messages = append(messages, llm.Message{Role: "system", Content: "You have reached the investigation step limit. Summarize your findings now based on evidence gathered so far. If you are uncertain, state what is known and what remains unverified."})
+	resp, err := r.LLM.Chat(ctx, llm.Request{
+		Model:       r.Model,
+		Messages:    messages,
+		Tools:       nil, // no tools — force text answer
+		MaxTokens:   r.MaxTokens,
+		Temperature: r.Temp,
+		Thinking:    r.Thinking,
+	})
+	if err == nil && strings.TrimSpace(resp.Message.Content) != "" {
+		final := strings.TrimSpace(r.sanitize(resp.Message.Content))
+		msg := resp.Message
+		msg.Content = final
+		generated = append(generated, msg)
+		return Result{Generated: generated, Final: final}, nil
 	}
 	return Result{Generated: generated}, ErrMaxToolSteps
 }

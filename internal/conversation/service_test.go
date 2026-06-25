@@ -196,15 +196,32 @@ func TestContextTokensFromStreamUsageUsesBaseWhenInputMissing(t *testing.T) {
 }
 
 func TestContextTokensFromStreamUsageUsesInputWhenPresent(t *testing.T) {
+	// Anthropic-style: cache tokens are independent of PromptTokens.
 	got := contextTokensFromStreamUsage(llm.Usage{
 		PromptTokens:             18_000,
 		CacheCreationInputTokens: 500,
 		CacheReadInputTokens:     1_000,
 		CompletionTokens:         200,
 		TotalTokens:              19_700,
+		CacheIncludedInPrompt:    false,
 	}, 20_000)
 	if got != 19_700 {
-		t.Fatalf("contextTokensFromStreamUsage() = %d, want API input/cache/output sum", got)
+		t.Fatalf("contextTokensFromStreamUsage() anthropic = %d, want 19700 (18000+500+1000+200)", got)
+	}
+}
+
+func TestContextTokensFromStreamUsageOpenAIStyle(t *testing.T) {
+	// OpenAI-style: CacheReadInputTokens is a subset of PromptTokens.
+	// Adding it again would over-count by 5000.
+	got := contextTokensFromStreamUsage(llm.Usage{
+		PromptTokens:          20_000,
+		CacheReadInputTokens:  5_000, // already inside PromptTokens
+		CompletionTokens:      500,
+		TotalTokens:           20_500,
+		CacheIncludedInPrompt: true,
+	}, 20_000)
+	if got != 20_500 {
+		t.Fatalf("contextTokensFromStreamUsage() openai = %d, want 20500 (20000+500, no double-count)", got)
 	}
 }
 

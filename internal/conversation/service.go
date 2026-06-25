@@ -572,7 +572,15 @@ func contextUsageTokenCount(base, generated []llm.Message) int {
 }
 
 func contextTokensFromStreamUsage(usage llm.Usage, baseContextTokens int) int {
-	inputTokens := usage.PromptTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
+	// For OpenAI-compatible APIs, CacheReadInputTokens is already included in
+	// PromptTokens, so we must not add it again. For Anthropic, cache tokens
+	// are independent fields that must be summed in.
+	var inputTokens int
+	if usage.CacheIncludedInPrompt {
+		inputTokens = usage.PromptTokens
+	} else {
+		inputTokens = usage.PromptTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
+	}
 	if inputTokens > 0 {
 		return inputTokens + usage.CompletionTokens
 	}

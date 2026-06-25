@@ -1123,19 +1123,18 @@ func TestRunnerDisablesExploreAfterFailure(t *testing.T) {
 	tools.Register(fakeExploreErrorTool{})
 	tools.Register(fakeCodeSearchTool{})
 
-	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 5}.Run(context.Background(), Request{})
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 8}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if result.Final != "continued without explore" {
 		t.Fatalf("Final = %q, want continued without explore", result.Final)
 	}
-	if len(client.requests) < 2 {
-		t.Fatalf("Chat calls = %d, want retry after explore failure", len(client.requests))
-	}
-	for _, spec := range client.requests[1].Tools {
+	// After exploreFailureLimit (3) failures, explore-code should be removed.
+	lastReq := client.requests[len(client.requests)-1]
+	for _, spec := range lastReq.Tools {
 		if spec.Function.Name == "explore-code" {
-			t.Fatalf("explore-code should be disabled after failure: %#v", client.requests[1].Tools)
+			t.Fatalf("explore-code should be disabled after %d failures", exploreFailureLimit)
 		}
 	}
 }
@@ -1148,16 +1147,12 @@ type exploreFailureAwareClient struct {
 func (f *exploreFailureAwareClient) Chat(_ context.Context, req llm.Request) (llm.Response, error) {
 	f.requests = append(f.requests, req)
 	f.calls++
-	if f.calls == 1 {
+	// Keep calling explore-code until exploreFailureLimit (3) failures accumulate.
+	if f.calls <= exploreFailureLimit {
 		return llm.Response{Message: llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{{
-			ID: "explore_1", Type: "function",
+			ID: "explore_" + fmt.Sprint(f.calls), Type: "function",
 			Function: llm.ToolFunction{Name: "explore-code", Arguments: `{"task":"broad investigation"}`},
 		}}}}, nil
-	}
-	for _, spec := range req.Tools {
-		if spec.Function.Name == "explore-code" {
-			return llm.Response{}, errors.New("explore-code still exposed after failure")
-		}
 	}
 	return llm.Response{Message: llm.Message{Role: "assistant", Content: "continued without explore"}}, nil
 }

@@ -106,7 +106,7 @@
     }
   },
   "explore-code": {
-    "description": "Launch a read-only code exploration sub-agent with its own isolated context. Use this for open-ended investigations, broad searches, entry-point comparisons, or when more than a few directed searches would otherwise clutter the main thread. It can run only read/search/code-intelligence tools and returns a concise evidence report.",
+    "description": "Launch a read-only code exploration sub-agent for genuinely broad investigations spanning multiple services or unclear ownership. Do NOT use for simple lookups (feature flags, config checks, single-function reads, API routes) — use code-search/code-read_file directly instead. The sub-agent runs in isolation and returns a summarized report which may lose nuance; always verify critical details from its report with targeted reads before citing them.",
     "parameters": {
       "task": "Specific investigation question for the read-only explorer.",
       "boundaries": "Known repo/root, branch/ref, service, feature surface, candidate files, or constraints. Include what has already been ruled out when useful."

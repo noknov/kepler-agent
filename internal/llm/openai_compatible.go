@@ -74,12 +74,17 @@ type openAIUsage struct {
 }
 
 func (u openAIUsage) toUsage() Usage {
+	// For OpenAI-compatible APIs, prompt_tokens_details.cached_tokens is a
+	// *subset* of prompt_tokens (not an independent field like Anthropic's
+	// cache_read_input_tokens). We set CacheIncludedInPrompt=true so that
+	// token counters know not to add CacheReadInputTokens a second time.
 	return Usage{
-		PromptTokens:         u.PromptTokens,
-		CompletionTokens:     u.CompletionTokens,
-		TotalTokens:          u.TotalTokens,
-		CacheReadInputTokens: u.PromptTokensDetails.CachedTokens,
-		ReasoningTokens:      u.CompletionTokensDetails.ReasoningTokens,
+		PromptTokens:          u.PromptTokens,
+		CompletionTokens:      u.CompletionTokens,
+		TotalTokens:           u.TotalTokens,
+		CacheReadInputTokens:  u.PromptTokensDetails.CachedTokens,
+		ReasoningTokens:       u.CompletionTokensDetails.ReasoningTokens,
+		CacheIncludedInPrompt: true,
 	}
 }
 

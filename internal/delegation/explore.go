@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	exploreMaxSteps  = 6
-	exploreMaxTokens = 4096
+	exploreMaxSteps  = 4
+	exploreMaxTokens = 2048
 )
 
 var exploreAllowedTools = map[string]bool{
@@ -93,7 +93,7 @@ func (m *Manager) Explore(ctx context.Context, task, boundaries string, rt regis
 		}
 		resp, err := m.client.Chat(ctx, llm.Request{
 			Model:       m.model,
-			Thinking:    m.thinking,
+			Thinking:    "", // disable thinking in explore for speed
 			Messages:    messages,
 			Tools:       specs,
 			MaxTokens:   exploreMaxTokens,
