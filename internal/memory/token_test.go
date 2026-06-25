@@ -54,16 +54,49 @@ func TestRoughTokenEstimateForToolResult(t *testing.T) {
 }
 
 func TestTokenCountFromUsage(t *testing.T) {
-	usage := llm.Usage{
-		PromptTokens:             1000,
-		CompletionTokens:         500,
-		CacheReadInputTokens:     200,
-		CacheCreationInputTokens: 100,
+	tests := []struct {
+		name  string
+		usage llm.Usage
+		want  int
+	}{
+		{
+			name: "anthropic style - cache tokens are independent",
+			usage: llm.Usage{
+				PromptTokens:             1000,
+				CompletionTokens:         500,
+				CacheReadInputTokens:     200,
+				CacheCreationInputTokens: 100,
+				CacheIncludedInPrompt:    false,
+			},
+			want: 1800, // 1000 + 500 + 200 + 100
+		},
+		{
+			name: "openai style - cache tokens already in prompt_tokens",
+			usage: llm.Usage{
+				PromptTokens:          18000,
+				CompletionTokens:      500,
+				CacheReadInputTokens:  5000, // subset of PromptTokens, must NOT be added again
+				CacheIncludedInPrompt: true,
+			},
+			want: 18500, // 18000 + 500 (no double-count of 5000)
+		},
+		{
+			name: "openai style - no cache hit",
+			usage: llm.Usage{
+				PromptTokens:          10000,
+				CompletionTokens:      300,
+				CacheIncludedInPrompt: true,
+			},
+			want: 10300,
+		},
 	}
-	got := TokenCountFromUsage(usage)
-	want := 1800 // 1000 + 500 + 200 + 100
-	if got != want {
-		t.Errorf("TokenCountFromUsage() = %d, want %d", got, want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := TokenCountFromUsage(tt.usage)
+			if got != tt.want {
+				t.Errorf("TokenCountFromUsage() = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }
 

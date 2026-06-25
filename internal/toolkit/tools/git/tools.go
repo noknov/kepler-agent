@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -447,7 +448,45 @@ func (b Base) repo(path string) (string, error) {
 	if path == "" && len(b.Paths.Roots) > 0 {
 		path = b.Paths.Roots[0]
 	}
-	return b.Paths.Resolve(path)
+	resolved, err := b.Paths.Resolve(path)
+	if err != nil {
+		return "", err
+	}
+	if isGitDir(resolved) {
+		return resolved, nil
+	}
+	// The resolved path is not a git repo — scan immediate subdirectories
+	// for a single repo (common multi-repo workspace layout).
+	entries, dirErr := os.ReadDir(resolved)
+	if dirErr != nil {
+		return resolved, nil
+	}
+	var repos []string
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		sub := filepath.Join(resolved, e.Name())
+		if isGitDir(sub) {
+			repos = append(repos, sub)
+		}
+	}
+	if len(repos) == 1 {
+		return repos[0], nil
+	}
+	if len(repos) > 1 {
+		names := make([]string, len(repos))
+		for i, r := range repos {
+			names[i] = filepath.Base(r)
+		}
+		return "", fmt.Errorf("workspace contains multiple repos — pass repo=%s", strings.Join(names, " | "))
+	}
+	return resolved, nil
+}
+
+func isGitDir(dir string) bool {
+	info, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil && info.IsDir()
 }
 
 func (b Base) explicitRepo(path string) (string, error) {
@@ -459,9 +498,9 @@ func (b Base) explicitRepo(path string) (string, error) {
 
 func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string, rt registry.Runtime) (snapshot, error) {
 	branch := strings.TrimSpace(rawBranch)
-	if _, err := b.run(ctx, repo, "fetch", "--prune", "--no-write-fetch-head", "origin"); err != nil {
-		return snapshot{}, err
-	}
+	// Use --force to handle force-pushed branches without ref lock errors.
+	// Fetch may still fail (network, concurrent access) — non-fatal, use local cache.
+	_, _ = b.run(ctx, repo, "fetch", "--prune", "--force", "--no-write-fetch-head", "origin")
 	if branch == "" {
 		var err error
 		branch, err = b.defaultBranch(ctx, repo)

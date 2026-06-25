@@ -144,6 +144,12 @@ type Usage struct {
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 	ReasoningTokens          int `json:"reasoning_tokens,omitempty"`
+	// CacheIncludedInPrompt is true for OpenAI-compatible APIs where
+	// CacheReadInputTokens is a subset of PromptTokens (not an independent
+	// field). When true, token counters must NOT add CacheReadInputTokens
+	// again to avoid double-counting. Anthropic sets this to false because
+	// its input_tokens field excludes cache tokens entirely.
+	CacheIncludedInPrompt bool `json:"-"`
 }
 
 type Client interface {

@@ -34,10 +34,21 @@ func RoughTokenEstimateForToolResult(content string) int {
 }
 
 // TokenCountFromUsage returns the total context window token count from an
-// API response's usage data. This mirrors claude-code's getTokenCountFromUsage:
+// API response's usage data.
+//
+// For Anthropic-style APIs, cache tokens are independent of PromptTokens:
 //
 //	input_tokens + cache_creation_input_tokens + cache_read_input_tokens + output_tokens
+//
+// For OpenAI-compatible APIs (Usage.CacheIncludedInPrompt == true),
+// CacheReadInputTokens is already a subset of PromptTokens, so adding it
+// again would double-count. In that case we only sum the top-level fields:
+//
+//	prompt_tokens + completion_tokens
 func TokenCountFromUsage(usage llm.Usage) int {
+	if usage.CacheIncludedInPrompt {
+		return usage.PromptTokens + usage.CompletionTokens
+	}
 	return usage.PromptTokens +
 		usage.CacheCreationInputTokens +
 		usage.CacheReadInputTokens +

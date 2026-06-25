@@ -67,7 +67,7 @@ func (m *Manager) Run(ctx context.Context, profileName, task, contextText string
 	}
 	resp, err := m.client.Chat(ctx, llm.Request{
 		Model:    m.model,
-		Thinking: m.thinking,
+		Thinking: "", // disable thinking in sub-agents for speed
 		Messages: []llm.Message{
 			{Role: "system", Content: profile.SystemPrompt + m.RulesAndSkillsPrompt()},
 			{Role: "user", Content: "Task:\n" + task + "\n\nContext:\n" + contextText},

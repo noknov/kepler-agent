@@ -3,6 +3,7 @@
 .idea/
 .data/
 .cache/
+.tmp-gocache/
 bin/
 dist/
 .prompts/
