@@ -261,11 +261,13 @@ func TestRunnerSkipsDuplicateToolCallInsteadOfFailing(t *testing.T) {
 	}
 }
 
-func TestRunnerAsksForClarificationAfterRepeatedMissingWorkspacePath(t *testing.T) {
+func TestRunnerDoesNotInterruptOnMissingWorkspacePath(t *testing.T) {
+	// Missing file/path errors should NOT trigger clarification — the model
+	// should self-correct by trying different paths or repos.
 	client := &fakeClient{responses: []llm.Response{
 		{Message: repoMissToolCallMessage("tool_1", `{"path":"frontend"}`)},
 		{Message: repoMissToolCallMessage("tool_2", `{"path":"wati-frontend"}`)},
-		{Message: llm.Message{Role: "assistant", Content: "should not reach this"}},
+		{Message: llm.Message{Role: "assistant", Content: "found it another way"}},
 	}}
 	tools := registry.New()
 	tools.Register(fakeMissingWorkspaceTool{})
@@ -276,19 +278,11 @@ func TestRunnerAsksForClarificationAfterRepeatedMissingWorkspacePath(t *testing.
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if !result.Pending {
-		t.Fatal("expected pending clarification")
+	if result.Pending {
+		t.Fatalf("should not interrupt for missing paths; got PendingQuestion = %q", result.PendingQuestion)
 	}
-	if !strings.Contains(result.PendingQuestion, "frontend") ||
-		!strings.Contains(result.PendingQuestion, "wati-frontend") ||
-		!strings.Contains(result.PendingQuestion, "请选一个方向") {
-		t.Fatalf("PendingQuestion = %q, want repo/path clarification", result.PendingQuestion)
-	}
-	if strings.Contains(result.PendingQuestion, "path=") || strings.Contains(result.PendingQuestion, "目标") {
-		t.Fatalf("PendingQuestion leaked internal wording: %q", result.PendingQuestion)
-	}
-	if len(client.requests) != 2 {
-		t.Fatalf("Chat calls = %d, want stop after second missing path", len(client.requests))
+	if len(client.requests) != 3 {
+		t.Fatalf("Chat calls = %d, want model to continue all 3 turns", len(client.requests))
 	}
 }
 
@@ -466,28 +460,25 @@ func TestRunnerAsksForClarificationAfterRepeatedAccessFailures(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{
 		{Message: restrictedToolCallMessage("tool_1", `{"target":"prod logs"}`)},
 		{Message: restrictedToolCallMessage("tool_2", `{"target":"prod metrics"}`)},
+		{Message: restrictedToolCallMessage("tool_3", `{"target":"prod dashboard"}`)},
+		{Message: restrictedToolCallMessage("tool_4", `{"target":"prod config"}`)},
 		{Message: llm.Message{Role: "assistant", Content: "should not reach this"}},
 	}}
 	tools := registry.New()
 	tools.Register(fakeRestrictedTool{})
 
-	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 6}.Run(context.Background(), Request{})
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 8}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if !result.Pending {
 		t.Fatal("expected pending clarification")
 	}
-	if !strings.Contains(result.PendingQuestion, "prod logs") ||
-		!strings.Contains(result.PendingQuestion, "prod metrics") ||
-		!strings.Contains(result.PendingQuestion, "choose one direction") {
-		t.Fatalf("PendingQuestion = %q, want access clarification options", result.PendingQuestion)
+	if !strings.Contains(result.PendingQuestion, "permission") {
+		t.Fatalf("PendingQuestion = %q, want access clarification", result.PendingQuestion)
 	}
-	if strings.Contains(result.PendingQuestion, "target=") || strings.Contains(result.PendingQuestion, "target I can access") {
-		t.Fatalf("PendingQuestion leaked internal wording: %q", result.PendingQuestion)
-	}
-	if len(client.requests) != 2 {
-		t.Fatalf("Chat calls = %d, want stop after second access failure", len(client.requests))
+	if len(client.requests) != 4 {
+		t.Fatalf("Chat calls = %d, want stop after fourth access failure", len(client.requests))
 	}
 }
 

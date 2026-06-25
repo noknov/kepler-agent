@@ -25,7 +25,10 @@ var (
 )
 
 const (
-	clarificationErrorThreshold = 2
+	// Only trigger clarification after many repeated failures — give the model
+	// ample opportunity to self-correct first. Most tool errors (wrong path,
+	// wrong branch, wrong repo) are technical mistakes the model can fix itself.
+	clarificationErrorThreshold = 4
 	exploreFailureLimit         = 1
 )
 
@@ -687,22 +690,14 @@ func (t *clarificationErrorTracker) Question(results []toolResult, locale string
 }
 
 func (t *clarificationErrorTracker) resetWithSuccessfulEvidence(results []toolResult) {
-	codeEvidence := false
-	anySuccess := false
 	for _, result := range results {
-		if result.err != nil {
-			continue
+		if result.err == nil {
+			// Any successful tool call resets all counters — the model is
+			// making progress and earlier failures were likely self-corrected.
+			t.counts = map[string]int{}
+			t.failures = map[string][]clarificationFailure{}
+			return
 		}
-		anySuccess = true
-		if codeReadingTools[result.name] {
-			codeEvidence = true
-		}
-	}
-	if codeEvidence {
-		t.resetKeys("target_lookup", "branch", "git_repository")
-	}
-	if anySuccess {
-		t.resetKeys("invalid_input", "external_unavailable")
 	}
 }
 
@@ -716,37 +711,18 @@ func (t *clarificationErrorTracker) resetKeys(keys ...string) {
 func clarificationErrorKey(result toolResult) string {
 	errText := strings.ToLower(result.err.Error())
 	switch {
-	case strings.Contains(errText, "file not found in any workspace root") ||
-		strings.Contains(errText, "no such file or directory") ||
-		strings.Contains(errText, "path ") && strings.Contains(errText, " not in "):
-		return "target_lookup"
-	case strings.Contains(errText, "branch ") && strings.Contains(errText, "does not exist"):
-		return "branch"
-	case strings.Contains(errText, "不是 git 仓库") || strings.Contains(errText, "not a git repository"):
-		return "git_repository"
+	// These are errors the model CANNOT self-correct — they require user input
+	// or external action. Everything else (wrong path, wrong branch, wrong repo,
+	// invalid params, timeouts) the model should retry with different parameters.
 	case strings.Contains(errText, "unauthorized") ||
 		strings.Contains(errText, "forbidden") ||
 		strings.Contains(errText, "permission denied") ||
 		strings.Contains(errText, "access denied") ||
-		strings.Contains(errText, "authentication required") ||
-		strings.Contains(errText, "credentials") ||
-		strings.Contains(errText, "token"):
+		strings.Contains(errText, "authentication required"):
 		return "auth_access"
 	case strings.Contains(errText, "missing config") ||
-		strings.Contains(errText, "not configured") ||
-		strings.Contains(errText, "api key") ||
-		strings.Contains(errText, "environment variable"):
+		strings.Contains(errText, "not configured"):
 		return "missing_config"
-	case strings.Contains(errText, "invalid ") ||
-		strings.Contains(errText, " is required") ||
-		strings.Contains(errText, "must be "):
-		return "invalid_input"
-	case strings.Contains(errText, "timeout") ||
-		strings.Contains(errText, "deadline exceeded") ||
-		strings.Contains(errText, "connection refused") ||
-		strings.Contains(errText, "no such host") ||
-		strings.Contains(errText, "temporary failure"):
-		return "external_unavailable"
 	default:
 		return ""
 	}
@@ -778,90 +754,28 @@ func conciseError(text string) string {
 
 func clarificationQuestion(locale, key string, failures []clarificationFailure) string {
 	zh := strings.HasPrefix(strings.ToLower(locale), "zh")
-	detail := clarificationDetail(zh, key, failures)
+	// Only two categories reach here — both are genuinely blocked and need user input.
 	switch key {
-	case "target_lookup":
-		if zh {
-			return detail + "请选一个方向：\n1. 告诉我正确的仓库名、目录名或分支名；\n2. 让我先列出当前可用的仓库和目录再继续；\n3. 先基于已找到的证据给出有限结论。"
-		}
-		return detail + "Please choose one direction:\n1. Send the correct repository, directory, or branch name;\n2. Have me list the available repositories and directories first;\n3. Have me give a limited conclusion from the evidence already found."
-	case "branch":
-		if zh {
-			return detail + "请选一个方向：\n1. 确认正确分支名；\n2. 让我列出可用远端分支；\n3. 改用默认分支继续。"
-		}
-		return detail + "Please choose one direction:\n1. Confirm the branch name;\n2. Have me list available remote branches;\n3. Continue with the default branch."
-	case "git_repository":
-		if zh {
-			return detail + "请选一个方向：\n1. 告诉我要分析的仓库位置；\n2. 让我列出当前可用 workspace；\n3. 暂停 git 相关检查，只分析已有上下文。"
-		}
-		return detail + "Please choose one direction:\n1. Send the repository location;\n2. Have me list the available workspace roots;\n3. Pause git checks and analyze only the existing context."
 	case "auth_access":
 		if zh {
-			return detail + "请选一个方向：\n1. 修复权限后让我重试；\n2. 换一个我有权限访问的地方；\n3. 先基于当前证据给出有限结论。"
+			return "我没有权限访问这个资源，需要额外授权才能继续。"
 		}
-		return detail + "Please choose one direction:\n1. Fix access and have me retry;\n2. Switch to a place I can access;\n3. Have me give a limited conclusion from current evidence."
+		return "I don't have permission to access this resource. It needs additional authorization to proceed."
 	case "missing_config":
 		if zh {
-			return detail + "请选一个方向：\n1. 补充缺失配置后让我重试；\n2. 换一个不依赖该配置的检查方式；\n3. 先停止并说明缺了什么。"
+			return "缺少必要的配置，暂时无法执行这个操作。"
 		}
-		return detail + "Please choose one direction:\n1. Add the missing config and have me retry;\n2. Switch to a check that does not need it;\n3. Stop and summarize what is missing."
-	case "invalid_input":
-		if zh {
-			return detail + "请选一个方向：\n1. 给我准确参数；\n2. 让我先查询可用参数/目标；\n3. 基于当前信息给出有限结论。"
-		}
-		return detail + "Please choose one direction:\n1. Send the exact input;\n2. Have me discover valid inputs/targets first;\n3. Have me give a limited conclusion from current information."
-	case "external_unavailable":
-		if zh {
-			return detail + "请选一个方向：\n1. 稍后重试；\n2. 换一个数据源/环境；\n3. 先基于已有证据给出有限结论。"
-		}
-		return detail + "Please choose one direction:\n1. Retry later;\n2. Use a different data source/environment;\n3. Have me give a limited conclusion from the evidence already gathered."
+		return "A required configuration is missing — I can't perform this operation right now."
 	default:
 		if zh {
-			return detail + "请选一个方向：\n1. 补充准确名称或条件；\n2. 让我列出可用选项；\n3. 先基于已有证据给出有限结论。"
+			return "遇到了无法自动解决的问题，需要你的帮助。"
 		}
-		return detail + "Please choose one direction:\n1. Provide the exact name or condition;\n2. Have me list available options;\n3. Have me give a limited conclusion from the evidence already gathered."
+		return "I've hit an issue I can't resolve automatically and need your help."
 	}
 }
 
 func clarificationDetail(zh bool, key string, failures []clarificationFailure) string {
-	names := failureNames(failures)
-	if len(names) > 0 {
-		joinedZH := strings.Join(names, "、")
-		joinedEN := strings.Join(names, ", ")
-		switch key {
-		case "target_lookup":
-			if zh {
-				return "我刚才尝试打开或定位 " + joinedZH + "，但这些具体文件/位置没有成功解析。\n"
-			}
-			return "I tried to open or locate " + joinedEN + ", but those specific files or locations did not resolve.\n"
-		case "branch":
-			if zh {
-				return "我刚才尝试查找 " + joinedZH + " 这些分支，但没有找到匹配。\n"
-			}
-			return "I tried to find these branches but found no match: " + joinedEN + ".\n"
-		case "auth_access":
-			if zh {
-				return "我刚才尝试访问 " + joinedZH + "，但都遇到权限或认证问题。\n"
-			}
-			return "I tried to access " + joinedEN + ", but authorization or authentication failed.\n"
-		case "invalid_input":
-			if zh {
-				return "我刚才尝试使用 " + joinedZH + "，但工具连续拒绝这些输入。\n"
-			}
-			return "I tried " + joinedEN + ", but the tool kept rejecting those inputs.\n"
-		}
-	}
-	if len(failures) == 0 {
-		if zh {
-			return "我缺少一个具体信息才能继续。\n"
-		}
-		return "I need one specific detail before continuing.\n"
-	}
-	last := failures[len(failures)-1]
-	if zh {
-		return fmt.Sprintf("我连续在 %s 上遇到问题：%s。\n", last.Tool, last.Error)
-	}
-	return fmt.Sprintf("I keep hitting this problem in %s: %s.\n", last.Tool, last.Error)
+	return ""
 }
 
 func failureNames(failures []clarificationFailure) []string {
