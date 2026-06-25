@@ -28,19 +28,20 @@ import (
 
 func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm.Client, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) *registry.Registry {
 	tools := registry.NewReadOnly()
-	registerDiagnosticsTools(tools)
+	registerDeferredDiagnosticsTools(tools)
 	registerCodeTools(tools, cfg, workspacePolicy, commandPolicy)
 	registerIntegrationTools(tools, cfg, commandPolicy)
 	registerKnowledgeTools(tools, cfg)
 	registerSlackTools(tools, slackClient)
 	registerAgentControlTools(tools, cfg, llmClient)
+	tools.Register(registry.ToolSearchTool{Registry: tools})
 	return tools
 }
 
-func registerDiagnosticsTools(tools *registry.Registry) {
-	tools.Register(diagnosticsTools.IncidentBriefTool{})
-	tools.Register(diagnosticsTools.TimelineTool{})
-	tools.Register(diagnosticsTools.EvidenceBoardTool{})
+func registerDeferredDiagnosticsTools(tools *registry.Registry) {
+	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryDiagnostics, diagnosticsTools.IncidentBriefTool{}))
+	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryDiagnostics, diagnosticsTools.TimelineTool{}))
+	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryDiagnostics, diagnosticsTools.EvidenceBoardTool{}))
 }
 
 func registerCodeTools(tools *registry.Registry, cfg config.Config, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) {
@@ -80,12 +81,12 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 		TitleProperty: cfg.Tools.NotionTitleProperty,
 		Version:       cfg.Tools.NotionVersion,
 	}
-	tools.Register(notionTools.SearchTool{Client: notionClient})
-	tools.Register(notionTools.CreatePageTool{Client: notionClient})
+	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, notionTools.SearchTool{Client: notionClient}))
+	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, notionTools.CreatePageTool{Client: notionClient}))
 
 	youtrackClient := youtrackTools.Client{BaseURL: cfg.Tools.YouTrackURL, Token: cfg.Tools.YouTrackToken}
-	tools.Register(youtrackTools.GetIssueTool{Client: youtrackClient})
-	tools.Register(youtrackTools.SearchTool{Client: youtrackClient})
+	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, youtrackTools.GetIssueTool{Client: youtrackClient}))
+	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, youtrackTools.SearchTool{Client: youtrackClient}))
 
 	githubClient := githubTools.Client{
 		Token:      cfg.Tools.GitHubToken,
@@ -97,21 +98,21 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 	tools.Register(githubTools.WorkflowRunsTool{Client: githubClient})
 	tools.Register(githubTools.PRDiffTool{Client: githubClient})
 
-	luckinTools.RegisterAll(tools, &luckinTools.Client{
+	luckinTools.RegisterDeferredAll(tools, &luckinTools.Client{
 		MCP: &mcp.Client{
 			ServiceName: "luckin",
 			URL:         cfg.Tools.LuckinMCPURL,
 			Token:       cfg.Tools.LuckinMCPToken,
 		},
-	})
+	}, registry.CategoryIntegration)
 
-	playwrightTools.RegisterAll(tools, &playwrightTools.Client{
+	playwrightTools.RegisterDeferredAll(tools, &playwrightTools.Client{
 		MCP: &mcp.Client{
 			ServiceName: "playwright",
 			URL:         cfg.Tools.PlaywrightMCPURL,
 			Token:       cfg.Tools.PlaywrightMCPToken,
 		},
-	})
+	}, registry.CategoryBrowser)
 }
 
 func registerKnowledgeTools(tools *registry.Registry, cfg config.Config) {

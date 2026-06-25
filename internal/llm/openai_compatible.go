@@ -142,7 +142,7 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		return Response{}, ProviderError{Provider: c.providerName() + " stream", StatusCode: resp.StatusCode, Body: compactBody(data)}
+		return Response{}, NewProviderError(c.providerName()+" stream", resp.StatusCode, compactBody(data), resp.Header.Get("Retry-After"))
 	}
 
 	var msg Message
@@ -253,16 +253,16 @@ func (c *OpenAICompatibleClient) setHeaders(httpReq *http.Request) {
 
 func (c *OpenAICompatibleClient) doWithRetry(ctx context.Context, payload []byte) ([]byte, error) {
 	var lastErr error
-	for attempt := 0; attempt < 4; attempt++ {
+	for attempt := 0; attempt < MaxRetries; attempt++ {
 		data, err := c.doOnce(ctx, payload)
 		if err == nil {
 			return data, nil
 		}
 		lastErr = err
-		if !IsTemporaryOverload(err) || attempt == 3 {
+		if !IsTemporaryOverload(err) || attempt == MaxRetries-1 {
 			return nil, err
 		}
-		if err := sleepBeforeRetry(ctx, attempt); err != nil {
+		if err := sleepBeforeRetry(ctx, attempt, lastErr); err != nil {
 			return nil, err
 		}
 	}
@@ -287,7 +287,7 @@ func (c *OpenAICompatibleClient) doOnce(ctx context.Context, payload []byte) ([]
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, ProviderError{Provider: c.providerName() + " chat completion", StatusCode: resp.StatusCode, Body: compactBody(data)}
+		return nil, NewProviderError(c.providerName()+" chat completion", resp.StatusCode, compactBody(data), resp.Header.Get("Retry-After"))
 	}
 	return data, nil
 }

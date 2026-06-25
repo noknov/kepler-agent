@@ -23,13 +23,9 @@ type PromptPolicy struct {
 }
 
 func (p PromptPolicy) SystemPrompt() string {
-	base := prompts.System("")
-	base += prompts.RulesAndSkillsPrompt()
+	base := prompts.StaticSystemPrompt()
 	if p.IncludeRepositoryInventory {
-		repos := p.discoverRepos()
-		if repos != "" {
-			base += prompts.PromptText("repository_inventory_header", "") + repos
-		}
+		base += prompts.DynamicSystemPrompt(p.discoverRepos())
 	}
 	return base
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
@@ -87,8 +88,8 @@ func TestExploreRejectsUnavailableTools(t *testing.T) {
 }
 
 func TestExploreRetriesTextReportWhenFinalStepRequestsTools(t *testing.T) {
-	responses := make([]llm.Response, 0, exploreMaxSteps+1)
-	for i := 0; i < exploreMaxSteps-1; i++ {
+	responses := make([]llm.Response, 0, exploreMaxSteps)
+	for i := 0; i < exploreMaxSteps-2; i++ {
 		responses = append(responses, llm.Response{Message: llm.Message{
 			Role: "assistant",
 			ToolCalls: []llm.ToolCall{
@@ -117,30 +118,30 @@ func TestExploreRetriesTextReportWhenFinalStepRequestsTools(t *testing.T) {
 	if out != "Finding: final text report." {
 		t.Fatalf("Explore() output = %q", out)
 	}
-	if len(client.requests) != exploreMaxSteps+1 {
-		t.Fatalf("Chat calls = %d, want final retry", len(client.requests))
+	if len(client.requests) != exploreMaxSteps {
+		t.Fatalf("Chat calls = %d, want %d synthesis attempts after tool rounds", len(client.requests), exploreMaxSteps)
 	}
-	if len(client.requests[exploreMaxSteps-1].Tools) != 0 || len(client.requests[exploreMaxSteps].Tools) != 0 {
-		t.Fatal("final synthesis and retry requests should not expose tools")
+	if len(client.requests[exploreMaxSteps-2].Tools) != 0 || len(client.requests[exploreMaxSteps-1].Tools) != 0 {
+		t.Fatal("final synthesis requests should not expose tools")
 	}
-	if tools.calls != exploreMaxSteps-1 {
-		t.Fatalf("tool calls = %d, want no execution for final-step tool request", tools.calls)
+	if tools.calls != exploreMaxSteps-2 {
+		t.Fatalf("tool calls = %d, want no execution for synthesis-step tool requests", tools.calls)
 	}
 	foundRetry := false
-	for _, msg := range client.requests[exploreMaxSteps].Messages {
+	for _, msg := range client.requests[exploreMaxSteps-1].Messages {
 		if msg.Role == "system" && strings.Contains(msg.Content, "Tool calls are no longer available") {
 			foundRetry = true
 			break
 		}
 	}
 	if !foundRetry {
-		t.Fatal("synthesis retry prompt was not injected into explore retry")
+		t.Fatal("synthesis retry prompt was not injected before final text report")
 	}
 }
 
 func TestExploreReturnsPartialReportWhenSynthesisRetryStillRequestsTools(t *testing.T) {
-	responses := make([]llm.Response, 0, exploreMaxSteps+1)
-	for i := 0; i < exploreMaxSteps-1; i++ {
+	responses := make([]llm.Response, 0, exploreMaxSteps)
+	for i := 0; i < exploreMaxSteps-2; i++ {
 		responses = append(responses, llm.Response{Message: llm.Message{
 			Role: "assistant",
 			ToolCalls: []llm.ToolCall{
@@ -174,8 +175,102 @@ func TestExploreReturnsPartialReportWhenSynthesisRetryStillRequestsTools(t *test
 	if !strings.Contains(out, "partial evidence") || !strings.Contains(out, "code-search") {
 		t.Fatalf("Explore() output = %q, want partial evidence report", out)
 	}
-	if tools.calls != exploreMaxSteps-1 {
-		t.Fatalf("tool calls = %d, want no execution for synthesis retry tool calls", tools.calls)
+	if tools.calls != exploreMaxSteps-2 {
+		t.Fatalf("tool calls = %d, want no execution for synthesis-step tool calls", tools.calls)
+	}
+}
+
+func TestExploreUsesChatStreamWhenAvailable(t *testing.T) {
+	client := &exploreStreamFakeClient{responses: []llm.Response{
+		{Message: llm.Message{Role: "assistant", Content: "Finding: streamed report."}},
+	}}
+	manager := NewManager(client, "test-model", "")
+	manager.SetTools(&exploreFakeTools{})
+
+	out, err := manager.Explore(context.Background(), "quick lookup", "", registry.Runtime{})
+	if err != nil {
+		t.Fatalf("Explore() error = %v", err)
+	}
+	if out != "Finding: streamed report." {
+		t.Fatalf("Explore() output = %q", out)
+	}
+	if client.streamCalls != 1 {
+		t.Fatalf("ChatStream calls = %d, want 1", client.streamCalls)
+	}
+	if client.chatCalls != 0 {
+		t.Fatalf("Chat calls = %d, want 0", client.chatCalls)
+	}
+}
+
+func TestExploreMicroCompactClearsOldToolResults(t *testing.T) {
+	messages := []llm.Message{
+		{Role: "user", Content: "task"},
+	}
+	for i := 0; i < 8; i++ {
+		messages = append(messages,
+			llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "c" + string(rune('a'+i)), Function: llm.ToolFunction{Name: "code-search"}}}},
+			llm.Message{Role: "tool", ToolCallID: "c" + string(rune('a'+i)), Name: "code-search", Content: "result-" + string(rune('a'+i))},
+		)
+	}
+	result := applyExploreMicroCompact(messages)
+	cleared := 0
+	preserved := 0
+	for _, msg := range result {
+		if msg.Role != "tool" {
+			continue
+		}
+		if msg.Content == exploreToolResultClearedMsg {
+			cleared++
+		} else {
+			preserved++
+		}
+	}
+	if cleared != 4 {
+		t.Fatalf("cleared = %d, want 4 older tool results removed", cleared)
+	}
+	if preserved != 4 {
+		t.Fatalf("preserved = %d, want 4 recent tool results kept", preserved)
+	}
+}
+
+func TestExploreMicroCompactNoOpWhenFewTools(t *testing.T) {
+	messages := []llm.Message{
+		{Role: "tool", Name: "code-search", Content: "keep me"},
+	}
+	result := applyExploreMicroCompact(messages)
+	if result[0].Content != "keep me" {
+		t.Fatalf("content = %q, want unchanged", result[0].Content)
+	}
+}
+
+func TestExploreExecutesParallelToolCalls(t *testing.T) {
+	client := &exploreFakeClient{responses: []llm.Response{
+		{Message: llm.Message{
+			Role: "assistant",
+			ToolCalls: []llm.ToolCall{
+				{ID: "search_1", Type: "function", Function: llm.ToolFunction{Name: "code-search", Arguments: `{"query":"A"}`}},
+				{ID: "read_1", Type: "function", Function: llm.ToolFunction{Name: "code-read_file", Arguments: `{"path":"a.go"}`}},
+			},
+		}},
+		{Message: llm.Message{Role: "assistant", Content: "Finding: parallel reads done."}},
+	}}
+	tools := &exploreParallelFakeTools{delay: 50 * time.Millisecond}
+	manager := NewManager(client, "test-model", "")
+	manager.SetTools(tools)
+
+	start := time.Now()
+	out, err := manager.Explore(context.Background(), "parallel reads", "", registry.Runtime{})
+	if err != nil {
+		t.Fatalf("Explore() error = %v", err)
+	}
+	if !strings.HasPrefix(out, "Finding:") {
+		t.Fatalf("Explore() output = %q", out)
+	}
+	if elapsed := time.Since(start); elapsed > 120*time.Millisecond {
+		t.Fatalf("parallel tool calls took %v, expected under 120ms", elapsed)
+	}
+	if tools.maxConcurrent < 2 {
+		t.Fatalf("maxConcurrent = %d, want at least 2", tools.maxConcurrent)
 	}
 }
 
@@ -193,6 +288,57 @@ func (f *exploreFakeClient) Chat(_ context.Context, req llm.Request) (llm.Respon
 	f.responses = f.responses[1:]
 	return resp, nil
 }
+
+type exploreStreamFakeClient struct {
+	responses    []llm.Response
+	streamCalls  int
+	chatCalls    int
+}
+
+func (f *exploreStreamFakeClient) Chat(_ context.Context, _ llm.Request) (llm.Response, error) {
+	f.chatCalls++
+	return llm.Response{}, errors.New("unexpected chat call")
+}
+
+func (f *exploreStreamFakeClient) ChatStream(_ context.Context, _ llm.Request, _ llm.StreamHandler) (llm.Response, error) {
+	f.streamCalls++
+	if len(f.responses) == 0 {
+		return llm.Response{}, errors.New("unexpected stream call")
+	}
+	resp := f.responses[0]
+	f.responses = f.responses[1:]
+	return resp, nil
+}
+
+type exploreParallelFakeTools struct {
+	mu            sync.Mutex
+	active        int
+	maxConcurrent int
+	delay         time.Duration
+}
+
+func (f *exploreParallelFakeTools) Specs() []llm.ToolSpec {
+	return []llm.ToolSpec{
+		{Type: "function", Function: llm.ToolSpecFunction{Name: "code-search", Parameters: map[string]any{"type": "object"}}},
+		{Type: "function", Function: llm.ToolSpecFunction{Name: "code-read_file", Parameters: map[string]any{"type": "object"}}},
+	}
+}
+
+func (f *exploreParallelFakeTools) Execute(_ context.Context, name string, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	f.mu.Lock()
+	f.active++
+	if f.active > f.maxConcurrent {
+		f.maxConcurrent = f.active
+	}
+	f.mu.Unlock()
+	time.Sleep(f.delay)
+	f.mu.Lock()
+	f.active--
+	f.mu.Unlock()
+	return registry.Result{Content: name + ":" + string(args)}, nil
+}
+
+func (f *exploreParallelFakeTools) CanRunInParallel(_ string) bool { return false }
 
 type exploreFakeTools struct {
 	mu    sync.Mutex

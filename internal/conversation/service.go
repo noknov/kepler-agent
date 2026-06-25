@@ -40,6 +40,7 @@ type Service struct {
 	Store         session.Store
 	Messenger     Messenger
 	Runner        agent.Runner
+	Compactor     *memory.Compactor
 	Memory        memory.Builder
 	Prompt        safety.PromptPolicy
 	Redactor      safety.Redactor
@@ -77,6 +78,7 @@ func NewService(store session.Store, messenger Messenger, runner agent.Runner, m
 		Store:     store,
 		Messenger: messenger,
 		Runner:    runner,
+		Compactor: runner.Compactor,
 		Memory:    memoryBuilder,
 		Prompt:    prompt,
 		Redactor:  redactor,
@@ -144,6 +146,10 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 
 	start := time.Now()
 	runObserver := s.newRunObserver(sessionID, req, start)
+	runID := ""
+	if runObserver != nil && runObserver.Run != nil {
+		runID = runObserver.Run.ID
+	}
 
 	streamTS, streamErr := s.Messenger.StartStream(ctx, req.Channel, req.ThreadTS, req.UserID)
 	useStream := streamErr == nil && streamTS != ""
@@ -419,6 +425,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			ThreadTS: req.ThreadTS,
 		},
 		Locale:   locale,
+		RunID:    runID,
 		Steering: s.steering(active),
 	})
 	if answerStream != nil {
@@ -444,7 +451,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			if runObserver != nil {
 				runObserver.Finish("interrupted", "", nil, "")
 			}
-			sess.Turns, sess.Summary, _ = s.trimAndSummarize(sess.Turns, sess.Summary)
+			sess.Turns, sess.Summary, _ = s.trimAndSummarize(ctx, sess.Turns, sess.Summary)
 			_ = s.Store.Save(ctx, sess)
 			if useStream {
 				if progressMarkdown != nil {
@@ -467,7 +474,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if s.Metrics != nil {
 			s.Metrics.Error(wrapErrorID(errorID, err))
 		}
-		sess.Turns, sess.Summary, _ = s.trimAndSummarize(sess.Turns, sess.Summary)
+		sess.Turns, sess.Summary, _ = s.trimAndSummarize(ctx, sess.Turns, sess.Summary)
 		_ = s.Store.Save(ctx, sess)
 		if useStream && !progressStopped {
 			appendProgress([]map[string]any{
@@ -485,7 +492,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		sess.PendingQuestion = result.PendingQuestion
 	}
 	var compressed bool
-	sess.Turns, sess.Summary, compressed = s.trimAndSummarize(sess.Turns, sess.Summary)
+	sess.Turns, sess.Summary, compressed = s.trimAndSummarize(ctx, sess.Turns, sess.Summary)
 	if err := s.Store.Save(ctx, sess); err != nil && s.Metrics != nil {
 		s.Metrics.Error(err)
 	}
@@ -956,34 +963,50 @@ func (s *Service) controlActive(req Request) bool {
 	return true
 }
 
-func (s *Service) trimAndSummarize(turns []memory.Turn, existing string) ([]memory.Turn, string, bool) {
-	// Use token-aware trimming: convert turns to messages, estimate tokens,
-	// then trim based on a token budget derived from MaxMessages.
-	tokenBudget := s.maxTurns * 1000 // ~1000 tokens per turn as a guideline
+func (s *Service) trimAndSummarize(ctx context.Context, turns []memory.Turn, existing string) ([]memory.Turn, string, bool) {
+	summary := existing
+	compressed := false
+
+	if s.Compactor != nil && len(turns) > 0 {
+		llmMessages := memory.ToLLM(turns)
+		compacted, result, err := s.Compactor.CompactIfNeeded(ctx, llmMessages)
+		if err != nil {
+			log.Printf("conversation compact error: %v", err)
+		} else if result != nil && result.Layer != "" {
+			turns = memory.FilterPersistentTurns(memory.FromLLM(compacted))
+			if result.PostTokens < result.PreTokens || result.Summary != "" {
+				compressed = true
+			}
+			if result.Layer == "llm_compact" && strings.TrimSpace(result.Summary) != "" {
+				summary = trimSummary(result.Summary, s.Memory.MaxSummaryChars)
+			}
+		}
+	}
+
+	tokenBudget := s.maxTurns * 1000
 	llmMessages := memory.ToLLM(turns)
 	totalTokens := memory.EstimateTokens(llmMessages)
 
 	if totalTokens <= tokenBudget {
-		return turns, existing, false
+		return turns, summary, compressed
 	}
 
-	// Determine how many turns to keep using importance scoring.
 	keep := s.selectImportantTurns(turns, tokenBudget)
 	removed := len(turns) - len(keep)
 	if removed <= 0 {
-		return keep, existing, false
+		return keep, summary, compressed
 	}
 
 	addition := summarizeTurns(turns[:removed])
 	if addition == "" {
-		return keep, existing, true
+		return keep, summary, true
 	}
-	summary := strings.TrimSpace(existing)
-	if summary != "" {
-		summary += "\n"
+	trimmedSummary := strings.TrimSpace(summary)
+	if trimmedSummary != "" {
+		trimmedSummary += "\n"
 	}
-	summary += addition
-	return keep, trimSummary(summary, s.Memory.MaxSummaryChars), true
+	trimmedSummary += addition
+	return keep, trimSummary(trimmedSummary, s.Memory.MaxSummaryChars), true
 }
 
 // selectImportantTurns picks the most important turns to keep within the token budget.

@@ -88,6 +88,9 @@ func TestSystemPromptIncludesRepositoryInventoryWhenEnabled(t *testing.T) {
 	if !strings.Contains(prompt, "private-service/ (Go)") {
 		t.Fatalf("SystemPrompt() did not include enabled repo inventory:\n%s", prompt)
 	}
+	if !strings.Contains(prompt, prompts.DynamicBoundaryMarker) {
+		t.Fatalf("SystemPrompt() should include dynamic boundary marker:\n%s", prompt)
+	}
 }
 
 func TestRedactorRedactsSecrets(t *testing.T) {
