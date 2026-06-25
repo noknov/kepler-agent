@@ -8,7 +8,7 @@ import (
 )
 
 func TestMiMoChatBodyUsesOfficialOpenAIFields(t *testing.T) {
-	client := NewKimiClient("https://api.xiaomimimo.com/v1", "token", 0)
+	client := NewOpenAICompatibleClient("mimo", "https://api.xiaomimimo.com/v1", "token", 0)
 	body := client.chatBody(Request{
 		Model:     "mimo-v2.5",
 		Messages:  []Message{{Role: "user", Content: "hello"}},
@@ -32,7 +32,7 @@ func TestMiMoChatBodyUsesOfficialOpenAIFields(t *testing.T) {
 }
 
 func TestChatBodyOmitsMaxTokensWhenUnset(t *testing.T) {
-	client := NewKimiClient("https://opencode.ai/zen/go/v1", "token", 0)
+	client := NewOpenAICompatibleClient("opencode-go", "https://opencode.ai/zen/go/v1", "token", 0)
 	body := client.chatBody(Request{
 		Model:    "glm-5.2",
 		Messages: []Message{{Role: "user", Content: "hello"}},
@@ -46,6 +46,38 @@ func TestChatBodyOmitsMaxTokensWhenUnset(t *testing.T) {
 	}
 }
 
+func TestDeepSeekChatBodyUsesOpenAICompatibleToolCalls(t *testing.T) {
+	client := NewOpenAICompatibleClient("deepseek", "https://api.deepseek.com", "token", 0)
+	body := client.chatBody(Request{
+		Model:    "deepseek-v4-flash",
+		Messages: []Message{{Role: "user", Content: "hello"}},
+		Tools: []ToolSpec{{Type: "function", Function: ToolSpecFunction{
+			Name:        "echo",
+			Description: "Echo text",
+			Parameters:  map[string]any{"type": "object"},
+		}}},
+		MaxTokens:   1234,
+		Temperature: 0,
+	})
+
+	if got := body["model"]; got != "deepseek-v4-flash" {
+		t.Fatalf("model = %#v, want deepseek-v4-flash", got)
+	}
+	if got := body["max_tokens"]; got != 1234 {
+		t.Fatalf("max_tokens = %#v, want 1234", got)
+	}
+	tools, ok := body["tools"].([]ToolSpec)
+	if !ok {
+		t.Fatalf("tools = %#v, want []ToolSpec", body["tools"])
+	}
+	if len(tools) != 1 || tools[0].Type != "function" || tools[0].Function.Name != "echo" {
+		t.Fatalf("tools = %#v, want OpenAI-compatible function tool", tools)
+	}
+	if _, ok := body["strict"]; ok {
+		t.Fatalf("chatBody should not set DeepSeek beta strict mode fields: %#v", body)
+	}
+}
+
 func TestBearerTokenValue(t *testing.T) {
 	if got := bearerTokenValue("Bearer sk-test"); got != "sk-test" {
 		t.Fatalf("bearerTokenValue() = %q, want sk-test", got)
@@ -56,21 +88,27 @@ func TestBearerTokenValue(t *testing.T) {
 }
 
 func TestProviderName(t *testing.T) {
-	if got := NewKimiClient("https://api.xiaomimimo.com/v1", "token", 0).providerName(); got != "mimo" {
+	if got := NewOpenAICompatibleClient("mimo", "https://api.xiaomimimo.com/v1", "token", 0).providerName(); got != "mimo" {
 		t.Fatalf("providerName() = %q, want mimo", got)
 	}
-	if got := NewKimiClient("https://api.moonshot.ai/v1", "token", 0).providerName(); got != "kimi" {
+	if got := NewOpenAICompatibleClient("kimi", "https://api.moonshot.ai/v1", "token", 0).providerName(); got != "kimi" {
 		t.Fatalf("providerName() = %q, want kimi", got)
 	}
-	if got := NewKimiClient("https://opencode.ai/zen/go/v1", "token", 0).providerName(); got != "opencode-go" {
+	if got := NewOpenAICompatibleClient("opencode-go", "https://opencode.ai/zen/go/v1", "token", 0).providerName(); got != "opencode-go" {
 		t.Fatalf("providerName() = %q, want opencode-go", got)
 	}
-	if got := NewKimiClient("https://opencode.ai/zen/v1", "token", 0).providerName(); got != "opencode-zen" {
+	if got := NewOpenAICompatibleClient("opencode-zen", "https://opencode.ai/zen/v1", "token", 0).providerName(); got != "opencode-zen" {
 		t.Fatalf("providerName() = %q, want opencode-zen", got)
+	}
+	if got := NewOpenAICompatibleClient("deepseek", "https://api.deepseek.com", "token", 0).providerName(); got != "deepseek" {
+		t.Fatalf("providerName() = %q, want deepseek", got)
+	}
+	if got := NewOpenAICompatibleClient("", "https://example.test/v1", "token", 0).providerName(); got != "openai-compatible" {
+		t.Fatalf("providerName() = %q, want openai-compatible", got)
 	}
 }
 
-func TestKimiChatStreamParsesToolCallDeltas(t *testing.T) {
+func TestOpenAICompatibleChatStreamParsesToolCallDeltas(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/chat/completions" {
 			t.Fatalf("path = %q, want /chat/completions", r.URL.Path)
@@ -82,7 +120,7 @@ func TestKimiChatStreamParsesToolCallDeltas(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewKimiClient(server.URL, "token", 0)
+	client := NewOpenAICompatibleClient("test", server.URL, "token", 0)
 	client.httpClient = server.Client()
 
 	var streamed string
