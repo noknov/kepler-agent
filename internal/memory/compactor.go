@@ -111,10 +111,28 @@ func (c *Compactor) CompactIfNeeded(ctx context.Context, messages []llm.Message)
 	}
 
 	result := &CompactResult{}
-	result.PreTokens = CountTokensWithCalibration(messages)
 
-	// Check if we're under threshold — no compression needed.
-	if result.PreTokens <= c.Threshold() {
+	// Fast path: use API-reported token usage if available (avoids expensive
+	// full-message estimation). This mirrors Claude Code's optimization where
+	// real usage data from the last API call is trusted over heuristics.
+	threshold := c.Threshold()
+	if usage := LastUsage(messages); usage != nil {
+		apiTokens := TokenCountFromUsage(*usage)
+		if apiTokens > 0 && apiTokens <= threshold {
+			result.PreTokens = apiTokens
+			result.PostTokens = apiTokens
+			return messages, result, nil
+		}
+		if apiTokens > 0 {
+			result.PreTokens = apiTokens
+		}
+	}
+
+	if result.PreTokens == 0 {
+		result.PreTokens = CountTokensWithCalibration(messages)
+	}
+
+	if result.PreTokens <= threshold {
 		result.PostTokens = result.PreTokens
 		return messages, result, nil
 	}

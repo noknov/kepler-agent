@@ -27,11 +27,11 @@ import (
 )
 
 func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm.Client, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) *registry.Registry {
-	tools := registry.New()
+	tools := registry.NewReadOnly()
 	registerDiagnosticsTools(tools)
 	registerCodeTools(tools, cfg, workspacePolicy, commandPolicy)
 	registerIntegrationTools(tools, cfg, commandPolicy)
-	registerKnowledgeTools(tools)
+	registerKnowledgeTools(tools, cfg)
 	registerSlackTools(tools, slackClient)
 	registerAgentControlTools(tools, cfg, llmClient)
 	return tools
@@ -114,8 +114,18 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 	})
 }
 
-func registerKnowledgeTools(tools *registry.Registry) {
-	tools.Register(webSearchTools.ReadPageTool{Client: webSearchTools.Client{}})
+func registerKnowledgeTools(tools *registry.Registry, cfg config.Config) {
+	webClient := webSearchTools.Client{
+		Provider:       cfg.Tools.WebSearchProvider,
+		GoogleAPIKey:   cfg.Tools.WebSearchGoogleKey,
+		GoogleCX:       cfg.Tools.WebSearchGoogleCX,
+		SerpAPIKey:     cfg.Tools.WebSearchSerpAPIKey,
+		SerpAPIBaseURL: cfg.Tools.WebSearchSerpAPIURL,
+	}
+	tools.Register(webSearchTools.ReadPageTool{Client: webClient})
+	if webClient.GoogleAPIKey != "" || webClient.SerpAPIKey != "" {
+		tools.Register(webSearchTools.SearchTool{Client: webClient})
+	}
 	tools.Register(knowledgeTools.RunbookSearchTool{})
 }
 

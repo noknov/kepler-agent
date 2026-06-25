@@ -61,6 +61,8 @@ type DispatchWorkflowTool struct {
 	Client Client
 }
 
+func (DispatchWorkflowTool) IsWrite() bool { return true }
+
 func (t DispatchWorkflowTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"github-dispatch_workflow",

@@ -207,11 +207,14 @@ func (m *Manager) executeExploreToolCalls(ctx context.Context, calls []llm.ToolC
 		}
 		return out
 	}
+	sem := make(chan struct{}, 10)
 	var wg sync.WaitGroup
 	wg.Add(len(calls))
 	for i, call := range calls {
 		go func(i int, call llm.ToolCall) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			out[i] = m.executeExploreToolCall(ctx, call, rt)
 		}(i, call)
 	}

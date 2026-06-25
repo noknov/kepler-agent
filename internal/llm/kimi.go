@@ -124,7 +124,10 @@ func (c *KimiClient) ChatStream(ctx context.Context, req Request, h StreamHandle
 	}
 	c.setHeaders(httpReq)
 
-	resp, err := c.httpClient.Do(httpReq)
+	// Use a timeout-free client for streaming — the global client timeout
+	// would kill long generations mid-stream. Context cancellation still works.
+	streamClient := &http.Client{}
+	resp, err := streamClient.Do(httpReq)
 	if err != nil {
 		return Response{}, err
 	}

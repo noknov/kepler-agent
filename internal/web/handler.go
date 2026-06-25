@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -84,7 +85,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		Text   string `json:"text"`
 		ConvID string `json:"conv_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Text == "" {
+	// 20MB: leaves headroom for future base64-encoded image attachments
+	if err := json.NewDecoder(io.LimitReader(r.Body, 20<<20)).Decode(&body); err != nil || body.Text == "" {
 		http.Error(w, "missing text", http.StatusBadRequest)
 		return
 	}

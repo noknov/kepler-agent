@@ -221,11 +221,24 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 				r.OnStream(StreamEvent{Kind: StreamAnswer, Delta: delta})
 			}
 		}
+
+		// Streaming tool executor: start executing tools as they complete
+		// during streaming, rather than waiting for the full response.
+		var streamExec *streamingToolExecutor
+		if useStream && r.Tools != nil && len(toolSpecs) > 0 {
+			streamExec = newStreamingToolExecutor(ctx, r, req, seenToolCalls)
+		}
+
 		streamHandler := llm.StreamHandler{
 			OnText: streamText,
 			OnToolCallsStarted: func() {
 				if router != nil {
 					router.toolCallsStarted()
+				}
+			},
+			OnToolCallComplete: func(call llm.ToolCall) {
+				if streamExec != nil {
+					streamExec.Submit(call)
 				}
 			},
 			OnUsage: func(usage llm.Usage) {
@@ -241,6 +254,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 					resp, err = sc.ChatStream(ctx, llmReq, llm.StreamHandler{
 						OnText:             guard.Write,
 						OnToolCallsStarted: streamHandler.OnToolCallsStarted,
+						OnToolCallComplete: streamHandler.OnToolCallComplete,
 						OnUsage:            streamHandler.OnUsage,
 					})
 					guard.Flush()
@@ -377,7 +391,12 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		messages = append(messages, assistantMsg)
 		generated = append(generated, assistantMsg)
 
-		toolResults := r.executeToolCalls(ctx, assistantMsg.ToolCalls, seenToolCalls, req)
+		var toolResults []toolResult
+		if streamExec != nil && streamExec.HasResults() {
+			toolResults = streamExec.Drain(assistantMsg.ToolCalls)
+		} else {
+			toolResults = r.executeToolCalls(ctx, assistantMsg.ToolCalls, seenToolCalls, req)
+		}
 		if len(toolResults) > 0 {
 			afterTools = true
 		}
@@ -447,9 +466,12 @@ func (r Runner) compactMessages(ctx context.Context, messages []llm.Message) []l
 	if r.Compactor == nil {
 		return messages
 	}
+	// Always apply micro-compact first (zero cost, clears old tool results).
+	messages = r.Compactor.ApplyMicroCompact(messages)
+	// Only run expensive compaction when near the threshold.
 	compacted, _, err := r.Compactor.CompactIfNeeded(ctx, messages)
 	if err != nil {
-		return r.Compactor.ApplyMicroCompact(messages)
+		return messages
 	}
 	return compacted
 }
@@ -535,7 +557,8 @@ func (r Runner) executeToolCalls(ctx context.Context, calls []llm.ToolCall, seen
 	}
 
 	results := make([]toolResult, len(calls))
-	var toRun []indexedCall
+	var parallel []indexedCall
+	var serial []indexedCall
 
 	for i, call := range calls {
 		name := call.Function.Name
@@ -551,49 +574,43 @@ func (r Runner) executeToolCalls(ctx context.Context, calls []llm.ToolCall, seen
 			}
 			continue
 		}
-		toRun = append(toRun, indexedCall{index: i, call: call})
+		ic := indexedCall{index: i, call: call}
+		if r.Tools.CanRunInParallel(name) {
+			parallel = append(parallel, ic)
+		} else {
+			serial = append(serial, ic)
+		}
 	}
 
-	if len(toRun) == 0 {
-		r.observeToolResults(results)
-		return results
-	}
-
-	allParallel := len(toRun) > 1
-	if allParallel {
-		for _, ic := range toRun {
-			if !r.Tools.CanRunInParallel(ic.call.Function.Name) {
-				allParallel = false
-				break
+	// Run concurrency-safe tools in parallel (up to maxStreamingConcurrency).
+	if len(parallel) > 0 {
+		if r.StatusUpdate != nil {
+			names := make([]string, 0, len(parallel))
+			for _, ic := range parallel {
+				names = append(names, ic.call.Function.Name)
 			}
+			r.StatusUpdate(ToolHint(strings.Join(names, ", "), req.Locale))
 		}
+
+		sem := make(chan struct{}, maxStreamingConcurrency)
+		var wg sync.WaitGroup
+		wg.Add(len(parallel))
+		for _, ic := range parallel {
+			go func(ic indexedCall) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				results[ic.index] = r.executeSingleTool(ctx, ic.call, req, false)
+			}(ic)
+		}
+		wg.Wait()
 	}
 
-	if !allParallel {
-		for _, ic := range toRun {
-			results[ic.index] = r.executeSingleTool(ctx, ic.call, req, true)
-		}
-		r.observeToolResults(results)
-		return results
+	// Run non-parallel tools sequentially.
+	for _, ic := range serial {
+		results[ic.index] = r.executeSingleTool(ctx, ic.call, req, true)
 	}
 
-	if r.StatusUpdate != nil {
-		names := make([]string, 0, len(toRun))
-		for _, ic := range toRun {
-			names = append(names, ic.call.Function.Name)
-		}
-		r.StatusUpdate(ToolHint(strings.Join(names, ", "), req.Locale))
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(len(toRun))
-	for _, ic := range toRun {
-		go func(ic indexedCall) {
-			defer wg.Done()
-			results[ic.index] = r.executeSingleTool(ctx, ic.call, req, false)
-		}(ic)
-	}
-	wg.Wait()
 	r.observeToolResults(results)
 	return results
 }

@@ -70,6 +70,13 @@ type ParallelTool interface {
 	Parallel() bool
 }
 
+// WriteTool marks a tool that performs write/mutate operations (create, update,
+// delete, dispatch). When the registry is in read-only mode, these tools are
+// registered (so the model sees them in tool specs) but execution is refused.
+type WriteTool interface {
+	IsWrite() bool
+}
+
 func IsRepeatable(tool Tool) bool {
 	if rt, ok := tool.(RepeatableTool); ok {
 		return rt.Repeatable()
@@ -84,12 +91,27 @@ func CanRunInParallel(tool Tool) bool {
 	return false
 }
 
+func IsWriteOp(tool Tool) bool {
+	if wt, ok := tool.(WriteTool); ok {
+		return wt.IsWrite()
+	}
+	return false
+}
+
 type Registry struct {
-	tools map[string]Tool
+	tools    map[string]Tool
+	readOnly bool
 }
 
 func New() *Registry {
 	return &Registry{tools: map[string]Tool{}}
+}
+
+// NewReadOnly creates a registry that refuses to execute write tools.
+// Write tools are still registered (visible to the model) but will return
+// a descriptive error when called.
+func NewReadOnly() *Registry {
+	return &Registry{tools: map[string]Tool{}, readOnly: true}
 }
 
 func (r *Registry) Register(tool Tool) {
@@ -123,6 +145,9 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 	tool, ok := r.tools[name]
 	if !ok {
 		return Result{}, fmt.Errorf("unknown tool %q", name)
+	}
+	if r.readOnly && IsWriteOp(tool) {
+		return Result{}, fmt.Errorf("tool %q is a write operation and is disabled in read-only mode; use read/query tools instead", name)
 	}
 	return tool.Execute(ctx, args, rt)
 }
