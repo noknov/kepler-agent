@@ -199,20 +199,27 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	var progressMarkdown *streamMarkdownBuffer
 	var progressAppendFailed bool
 	currentStatus := agent.StepStatus(locale, 0)
-	var currentUsage string
+	// displayedUsageTokens and cumulativeTokens are declared before appendProgress
+	// so the closure can capture them by reference.
+	displayedUsageTokens := 0
+	priorConversationTokens := s.priorConversationBilledTokens(ctx, sessionID, runObserver)
+	cumulativeTokens := 0 // total billed tokens across all LLM calls (provider dashboard number)
 	appendProgress := func(chunks []map[string]any) {
 		if !useStream || progressStopped {
 			return
 		}
 		for _, chunk := range chunks {
-			if chunk["type"] != "task_update" || currentUsage == "" {
+			if chunk["type"] != "task_update" {
+				continue
+			}
+			if cumulativeTokens <= 0 && displayedUsageTokens <= 0 {
 				continue
 			}
 			title, _ := chunk["title"].(string)
 			if title == "" {
 				title = currentStatus
 			}
-			chunk["title"] = titleWithContext(title, currentUsage)
+			chunk["title"] = streamingTaskTitle(title, cumulativeTokens, displayedUsageTokens, s.Memory.MaxContextTokens)
 		}
 		err := s.Messenger.AppendStream(ctx, req.Channel, progressTS, chunks)
 		if err == nil {
@@ -278,7 +285,6 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}
 	baseContextTokens := 0
 	liveStreamTokens := 0
-	displayedUsageTokens := 0
 	lastUsageUpdate := time.Time{}
 	setCurrentUsage := func(used int) bool {
 		if used <= 0 {
@@ -288,7 +294,6 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			return false
 		}
 		displayedUsageTokens = used
-		currentUsage = contextUsageText(s.Memory.MaxContextTokens, used)
 		return true
 	}
 	updateLiveUsage := func(delta string) {
@@ -307,7 +312,19 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			appendTaskUpdate(currentStatus, "in_progress")
 		}
 	}
+	syncCumulativeTokens := func() {
+		if runObserver == nil {
+			return
+		}
+		// Authoritative billing total from completed LLM responses only.
+		// Always replace (not max) so any stream-time over-estimate is corrected.
+		cumulativeTokens = priorConversationTokens + runObserver.BilledTokens()
+	}
 	updateAPIUsage := func(usage llm.Usage) {
+		// Stream usage events can report inflated or cumulative numbers that do
+		// not match the final billed usage recorded by the observer.  Only use
+		// stream usage for context-window % display; cumulative billing is
+		// synced from the observer after each LLM step completes.
 		if setCurrentUsage(contextTokensFromStreamUsage(usage, baseContextTokens)) {
 			appendTaskUpdate(currentStatus, "in_progress")
 		}
@@ -366,6 +383,13 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		appendTaskUpdate(status, "in_progress")
 	}
 	runner.OnUsage = updateAPIUsage
+	runner.OnLLMStepComplete = func() {
+		prev := cumulativeTokens
+		syncCumulativeTokens()
+		if cumulativeTokens != prev {
+			appendTaskUpdate(currentStatus, "in_progress")
+		}
+	}
 
 	contentParts := req.ContentParts
 	userText := req.Text
@@ -387,7 +411,8 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		setCurrentUsage(baseContextTokens)
 	}
 	result, err := runner.Run(runCtx, agent.Request{
-		Messages: messages,
+		Messages:     messages,
+		UserQuestion: userText,
 		Runtime: registry.Runtime{
 			UserID:   req.UserID,
 			Channel:  req.Channel,
@@ -476,9 +501,21 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			appendTaskUpdate(agent.WaitingTitle(locale), "complete")
 			stopProgress()
 		}
-		if !useStream && (contextUsage != "" || compressed) {
+		if !useStream && (contextUsage != "" || compressed || runObserver != nil) {
 			var notices []string
-			notices = append(notices, contextUsage)
+			if runObserver != nil {
+				billed := runObserver.BilledTokens()
+				billed += priorConversationTokens
+				run := runObserver.Run
+				noticeParts := []string{formatTokenCount(billed) + " tokens consumed"}
+				if run != nil && run.EstimatedCostUSD > 0 {
+					noticeParts = append(noticeParts, fmt.Sprintf("~$%.4f", run.EstimatedCostUSD))
+				}
+				notices = append(notices, strings.Join(noticeParts, " · "))
+			}
+			if contextUsage != "" {
+				notices = append(notices, contextUsage+" context")
+			}
 			pendingText = appendContextNoticeText(pendingText, notices...)
 		}
 		ts, postErr := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, "<@"+req.UserID+"> "+pendingText)
@@ -496,6 +533,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}
 		// Mark the progress stream as complete when the answer stayed on it.
 		if !progressStopped {
+			syncCumulativeTokens()
 			appendTaskUpdate(agent.CompleteTitle(locale), "complete")
 			stopProgress()
 		}
@@ -514,9 +552,23 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			} else if progressAppendFailed {
 				finalText = "_streaming delivery failed, here is the answer:_\n\n" + finalText
 			}
-			if !useStream && (contextUsage != "" || compressed) {
+			if !useStream && (contextUsage != "" || compressed || runObserver != nil) {
 				var notices []string
-				notices = append(notices, contextUsage)
+				// Show cumulative billed tokens and cost (what the provider charges).
+				if runObserver != nil {
+					billed := runObserver.BilledTokens()
+					billed += priorConversationTokens
+					run := runObserver.Run
+					noticeParts := []string{formatTokenCount(billed) + " tokens consumed"}
+					if run != nil && run.EstimatedCostUSD > 0 {
+						noticeParts = append(noticeParts, fmt.Sprintf("~$%.4f", run.EstimatedCostUSD))
+					}
+					notices = append(notices, strings.Join(noticeParts, " · "))
+				}
+				// Also show context-window occupancy for compaction awareness.
+				if contextUsage != "" {
+					notices = append(notices, contextUsage+" context")
+				}
 				finalText = appendContextNoticeText(finalText, notices...)
 			}
 			ts, postErr := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
@@ -555,6 +607,29 @@ func (s *Service) newRunObserver(sessionID string, req Request, startedAt time.T
 		Status:    "running",
 		StartedAt: startedAt.UTC(),
 	}, s.CostRates)
+}
+
+func (s *Service) priorConversationBilledTokens(ctx context.Context, sessionID string, current *runs.Observer) int {
+	if s.RunStore == nil || sessionID == "" {
+		return 0
+	}
+	runsList, err := s.RunStore.List(ctx, 10_000)
+	if err != nil {
+		log.Printf("failed to list prior runs for session=%s: %v", sessionID, err)
+		return 0
+	}
+	currentID := ""
+	if current != nil && current.Run != nil {
+		currentID = current.Run.ID
+	}
+	total := 0
+	for _, run := range runsList {
+		if run.SessionID != sessionID || run.ID == currentID {
+			continue
+		}
+		total += runs.BilledTokens(run.Usage)
+	}
+	return total
 }
 
 func contextUsageMarkdown(maxContextTokens int, base, generated []llm.Message) string {
@@ -614,6 +689,35 @@ func titleWithContext(title, contextUsage string) string {
 		return title
 	}
 	return title + "    ·    " + contextUsage
+}
+
+// streamingTaskTitle builds the task-update title in the format:
+//
+//	"xx,xxx tokens · xx% · {status}"
+//
+// where "xx,xxx tokens" is the cumulative billed count across all LLM calls
+// and "xx%" is the current context-window occupancy.  Either or both metric
+// parts are omitted when the data is not yet available.
+func streamingTaskTitle(status string, cumulTokens, ctxTokens, maxCtxTokens int) string {
+	var parts []string
+	if cumulTokens > 0 {
+		parts = append(parts, formatTokenCount(cumulTokens)+" tokens")
+	}
+	if ctxTokens > 0 {
+		limit := maxCtxTokens
+		if limit <= 0 {
+			limit = memory.DefaultMaxContextTokens
+		}
+		pct := ctxTokens * 100 / limit
+		if pct == 0 {
+			pct = 1
+		}
+		parts = append(parts, strconv.Itoa(pct)+"%")
+	}
+	if status != "" {
+		parts = append(parts, status)
+	}
+	return strings.Join(parts, " · ")
 }
 
 func completeTitleWithContext(locale, contextUsage string) string {

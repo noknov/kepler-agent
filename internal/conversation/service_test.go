@@ -13,6 +13,7 @@ import (
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/memory"
 	"github.com/wati/oncall-agent/internal/observability"
+	"github.com/wati/oncall-agent/internal/runs"
 	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/session"
 	"github.com/wati/oncall-agent/internal/slack"
@@ -225,6 +226,104 @@ func TestContextTokensFromStreamUsageOpenAIStyle(t *testing.T) {
 	}
 }
 
+func TestStreamingTaskTitle(t *testing.T) {
+	tests := []struct {
+		name         string
+		status       string
+		cumulTokens  int
+		ctxTokens    int
+		maxCtxTokens int
+		want         string
+	}{
+		{
+			name:         "all present",
+			status:       "思考中...",
+			cumulTokens:  45678,
+			ctxTokens:    20000,
+			maxCtxTokens: 200000,
+			want:         "45,678 tokens · 10% · 思考中...",
+		},
+		{
+			name:         "no cumulative yet",
+			status:       "搜索中...",
+			cumulTokens:  0,
+			ctxTokens:    15000,
+			maxCtxTokens: 200000,
+			want:         "7% · 搜索中...",
+		},
+		{
+			name:         "no context yet",
+			status:       "启动中...",
+			cumulTokens:  5000,
+			ctxTokens:    0,
+			maxCtxTokens: 200000,
+			want:         "5,000 tokens · 启动中...",
+		},
+		{
+			name:         "complete with both",
+			status:       "完成",
+			cumulTokens:  120000,
+			ctxTokens:    25000,
+			maxCtxTokens: 200000,
+			want:         "120,000 tokens · 12% · 完成",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := streamingTaskTitle(tt.status, tt.cumulTokens, tt.ctxTokens, tt.maxCtxTokens)
+			if got != tt.want {
+				t.Errorf("streamingTaskTitle() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPriorConversationBilledTokens(t *testing.T) {
+	ctx := context.Background()
+	store, err := runs.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := runs.NewObserver(store, runs.Run{
+		ID:        "run-current",
+		SessionID: "C1:100.000",
+		Usage:     llm.Usage{PromptTokens: 100, CompletionTokens: 10},
+	}, observability.CostRates{})
+	for _, run := range []runs.Run{
+		{
+			ID:        "run-prior-1",
+			SessionID: "C1:100.000",
+			Usage:     llm.Usage{PromptTokens: 1000, CompletionTokens: 100},
+		},
+		{
+			ID:        "run-prior-2",
+			SessionID: "C1:100.000",
+			Usage: llm.Usage{
+				PromptTokens:             2000,
+				CacheReadInputTokens:     300,
+				CacheCreationInputTokens: 400,
+				CompletionTokens:         200,
+			},
+		},
+		{
+			ID:        "run-other-session",
+			SessionID: "C2:100.000",
+			Usage:     llm.Usage{PromptTokens: 9000, CompletionTokens: 900},
+		},
+	} {
+		if err := store.Save(ctx, run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := &Service{RunStore: store}
+
+	got := svc.priorConversationBilledTokens(ctx, "C1:100.000", current)
+	want := 4000
+	if got != want {
+		t.Fatalf("priorConversationBilledTokens() = %d, want %d", got, want)
+	}
+}
+
 func TestTrimAndSummarizeReportsCompression(t *testing.T) {
 	svc := NewService(
 		nil,
@@ -295,8 +394,8 @@ func TestStreamModePostsNonStreamingFormattedFinalAnswer(t *testing.T) {
 			t.Fatalf("non-streaming final answer should not be replayed as markdown chunks: %#v", messenger.chunks)
 		}
 	}
-	if !chunksContainText(messenger.chunks, "tokens (") {
-		t.Fatalf("context usage not found in stream chunks: %#v", messenger.chunks)
+	if !chunksContainText(messenger.chunks, "%") {
+		t.Fatalf("context window percentage not found in stream chunks: %#v", messenger.chunks)
 	}
 	if len(messenger.posts) != 1 {
 		t.Fatalf("posts = %#v, want one final post", messenger.posts)
@@ -347,8 +446,8 @@ func TestStreamModePostsNonStreamingFinalAnswer(t *testing.T) {
 			t.Fatalf("non-streaming final answer should not be replayed as markdown chunks: %#v", messenger.chunks)
 		}
 	}
-	if !chunksContainText(messenger.chunks, "tokens (") {
-		t.Fatalf("context usage not found in stream chunks: %#v", messenger.chunks)
+	if !chunksContainText(messenger.chunks, "%") {
+		t.Fatalf("context window percentage not found in stream chunks: %#v", messenger.chunks)
 	}
 	if len(messenger.posts) != 1 {
 		t.Fatalf("posts = %#v, want one final post", messenger.posts)
@@ -1096,8 +1195,8 @@ func TestStreamStatusFailureDoesNotAffectFinalAnswer(t *testing.T) {
 			t.Fatalf("non-streaming final answer should not be replayed as markdown chunks: %#v", messenger.chunks)
 		}
 	}
-	if !chunksContainText(messenger.chunks, "tokens (") {
-		t.Fatalf("context usage not found in stream chunks: %#v", messenger.chunks)
+	if !chunksContainText(messenger.chunks, "%") {
+		t.Fatalf("context window percentage not found in stream chunks: %#v", messenger.chunks)
 	}
 	if len(messenger.posts) != 1 || messenger.posts[0] != "final answer" {
 		t.Fatalf("posts = %#v, want final answer post", messenger.posts)
