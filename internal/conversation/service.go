@@ -169,7 +169,13 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}()
 
 	const taskID = "thinking"
-	locale := agent.DetectLocale(req.Text)
+	// Use session-stored locale for consistency across the thread.
+	// Only detect from text on the first message.
+	locale := sess.Locale
+	if locale == "" {
+		locale = agent.DetectLocale(req.Text)
+		sess.Locale = locale
+	}
 	_ = strings.HasPrefix(req.Channel, "D") // isDM — reserved for future per-channel behavior
 	runCtx, cancelRun := context.WithCancel(ctx)
 	active := newActiveRun(sessionID, req.UserID, cancelRun)
