@@ -33,21 +33,56 @@ type Store interface {
 	Save(ctx context.Context, s Session) error
 }
 
+// FileStore persists sessions as JSON files with per-session locking.
+// Unlike a global mutex, concurrent sessions on different threads never
+// contend with each other — matching Claude Code's session isolation.
 type FileStore struct {
 	dir string
-	mu  sync.Mutex
+
+	mu    sync.Mutex
+	locks map[string]*sessionLock
 }
+
+type sessionLock struct {
+	sync.Mutex
+	lastUsed time.Time
+}
+
+const lockEvictAge = 30 * time.Minute
 
 func NewFileStore(dir string) (*FileStore, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	return &FileStore{dir: dir}, nil
+	return &FileStore{dir: dir, locks: make(map[string]*sessionLock)}, nil
 }
 
 func ID(channel, threadTS string) string {
 	raw := channel + ":" + threadTS
 	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+func (s *FileStore) lockFor(id string) *sessionLock {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Evict stale locks periodically (amortized O(1) — only when map is large)
+	if len(s.locks) > 100 {
+		now := time.Now()
+		for k, v := range s.locks {
+			if now.Sub(v.lastUsed) > lockEvictAge {
+				delete(s.locks, k)
+			}
+		}
+	}
+
+	lock, ok := s.locks[id]
+	if !ok {
+		lock = &sessionLock{}
+		s.locks[id] = lock
+	}
+	lock.lastUsed = time.Now()
+	return lock
 }
 
 func (s *FileStore) Get(ctx context.Context, id string) (Session, bool, error) {
@@ -56,8 +91,9 @@ func (s *FileStore) Get(ctx context.Context, id string) (Session, bool, error) {
 		return Session{}, false, ctx.Err()
 	default:
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	lock := s.lockFor(id)
+	lock.Lock()
+	defer lock.Unlock()
 
 	data, err := os.ReadFile(s.path(id))
 	if errors.Is(err, os.ErrNotExist) {
@@ -79,8 +115,9 @@ func (s *FileStore) Save(ctx context.Context, sess Session) error {
 		return ctx.Err()
 	default:
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	lock := s.lockFor(sess.ID)
+	lock.Lock()
+	defer lock.Unlock()
 
 	now := time.Now().UTC()
 	if sess.CreatedAt.IsZero() {
@@ -88,7 +125,7 @@ func (s *FileStore) Save(ctx context.Context, sess Session) error {
 	}
 	sess.UpdatedAt = now
 
-	data, err := json.MarshalIndent(sess, "", "  ")
+	data, err := json.Marshal(sess)
 	if err != nil {
 		return err
 	}

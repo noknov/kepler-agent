@@ -181,9 +181,15 @@ func (g WorkspacePolicy) ResolveReadableFile(path string) (string, error) {
 	return "", fmt.Errorf("path resolves outside allowed workspace roots")
 }
 
+// IsSensitivePath prevents the agent from reading files that contain secrets.
+// The agent runs on a shared server — any content it reads could be surfaced
+// to users via Slack. Credentials, keys, and env files must stay protected.
 func IsSensitivePath(path string) bool {
 	base := strings.ToLower(filepath.Base(path))
-	if base == ".env" || strings.HasPrefix(base, ".env.") || base == "id_rsa" || base == "id_ed25519" || base == "credentials" || base == "config.json" {
+	if base == ".env" || strings.HasPrefix(base, ".env.") {
+		return true
+	}
+	if base == "id_rsa" || base == "id_ed25519" || base == "credentials" || base == "credentials.json" {
 		return true
 	}
 	sensitiveSuffixes := []string{".pem", ".key", ".p12", ".pfx", ".kubeconfig"}

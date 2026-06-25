@@ -76,6 +76,8 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, _ registry
 
 type CreatePageTool struct{ Client Client }
 
+func (CreatePageTool) IsWrite() bool { return true }
+
 func (t CreatePageTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"notion-create_page",

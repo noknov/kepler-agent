@@ -154,9 +154,10 @@ type StreamCallback func(delta string)
 
 // StreamHandler receives typed streaming events from ChatStream.
 type StreamHandler struct {
-	OnText             func(delta string)
-	OnToolCallsStarted func()
-	OnUsage            func(usage Usage)
+	OnText              func(delta string)
+	OnToolCallsStarted  func()
+	OnToolCallComplete  func(call ToolCall)
+	OnUsage             func(usage Usage)
 }
 
 func TextStream(cb StreamCallback) StreamHandler {

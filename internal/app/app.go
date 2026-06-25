@@ -186,8 +186,11 @@ func (s *Server) routes(cfg config.Config, store session.Store, runtime agentRun
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	httpServer := &http.Server{
-		Addr:    s.cfg.HTTP.Addr,
-		Handler: s.mux,
+		Addr:              s.cfg.HTTP.Addr,
+		Handler:           s.mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 	go func() {
 		<-ctx.Done()

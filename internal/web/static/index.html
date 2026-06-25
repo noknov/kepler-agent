@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>斗包</title>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked@13/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/core.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/languages/go.min.js"></script>
@@ -784,17 +785,19 @@ function setStatus(title, inProgress) {
   scrollToBottom();
 }
 
+function renderMarkdown(text) { return DOMPurify.sanitize(marked.parse(text)); }
+
 function appendToken(text) {
   if (!currentAssistantEl) createAssistantRow();
   accumulatedText += text;
-  currentAssistantEl.innerHTML = marked.parse(accumulatedText);
+  currentAssistantEl.innerHTML = renderMarkdown(accumulatedText);
   scrollToBottom();
 }
 
 function finalizeAssistant() {
   if (currentAssistantEl) {
     currentAssistantEl.classList.remove('cursor');
-    currentAssistantEl.innerHTML = marked.parse(accumulatedText);
+    currentAssistantEl.innerHTML = renderMarkdown(accumulatedText);
     currentAssistantEl.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
     currentAssistantEl = null;
   }
@@ -804,7 +807,7 @@ function finalizeAssistant() {
 function appendPlainMessage(text) {
   if (!currentAssistantEl) createAssistantRow();
   accumulatedText += text;
-  currentAssistantEl.innerHTML = marked.parse(accumulatedText);
+  currentAssistantEl.innerHTML = renderMarkdown(accumulatedText);
   scrollToBottom();
 }
 
@@ -865,7 +868,7 @@ function handleChunk(chunk) {
     if (chunk.status === 'complete' && currentAssistantEl) {
       currentAssistantEl.classList.remove('cursor');
       if (accumulatedText.trim()) {
-        currentAssistantEl.innerHTML = marked.parse(accumulatedText);
+        currentAssistantEl.innerHTML = renderMarkdown(accumulatedText);
         currentAssistantEl.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
         currentAssistantEl = null;
         accumulatedText = '';
