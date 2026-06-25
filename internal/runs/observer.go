@@ -67,6 +67,12 @@ func (o *Observer) recordLLMStep(usage llm.Usage, d time.Duration, err error, st
 	o.Run.Usage.CacheReadInputTokens += usage.CacheReadInputTokens
 	o.Run.Usage.CacheCreationInputTokens += usage.CacheCreationInputTokens
 	o.Run.Usage.ReasoningTokens += usage.ReasoningTokens
+	// Propagate the provider-style flag: if any call uses OpenAI-style semantics
+	// (cache already included in PromptTokens), mark the accumulated usage accordingly
+	// so consumers can compute total billed tokens correctly.
+	if usage.CacheIncludedInPrompt {
+		o.Run.Usage.CacheIncludedInPrompt = true
+	}
 	o.Run.EstimatedCostUSD += cost
 	step.Type = "llm"
 	step.Name = o.Run.Model
@@ -120,6 +126,29 @@ func (o *Observer) Finish(status, errorID string, err error, final string) {
 	o.Run.DurationMS = o.Run.EndedAt.Sub(o.Run.StartedAt).Milliseconds()
 	o.Run.Quality = scoreRun(*o.Run)
 	o.saveLocked(context.Background())
+}
+
+// BilledTokens returns the total number of tokens billed across all completed
+// LLM calls in this run.  It is safe to call concurrently with ongoing calls.
+// The semantics are provider-aware: for OpenAI-compatible APIs, cache tokens
+// are already included in PromptTokens; for Anthropic they are independent.
+func (o *Observer) BilledTokens() int {
+	if o == nil || o.Run == nil {
+		return 0
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return BilledTokens(o.Run.Usage)
+}
+
+// BilledTokens returns the provider-aware billed token count for accumulated
+// usage. OpenAI-compatible cache tokens are included in PromptTokens; Anthropic
+// cache tokens are independent.
+func BilledTokens(usage llm.Usage) int {
+	if usage.CacheIncludedInPrompt {
+		return usage.PromptTokens + usage.CompletionTokens
+	}
+	return usage.PromptTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens + usage.CompletionTokens
 }
 
 func (o *Observer) LinkSlackMessage(channel, messageTS string) {
