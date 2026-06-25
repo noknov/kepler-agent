@@ -26,7 +26,7 @@ func CapabilitiesFor(provider, protocol string) Capabilities {
 
 func normalizeProviderName(provider string) string {
 	switch provider {
-	case "mimo", "anthropic", "kimi", "moonshot", "opencode-go", "opencode-zen", "openai":
+	case "mimo", "anthropic", "kimi", "moonshot", "opencode-go", "opencode-zen", "deepseek", "openai":
 		return provider
 	default:
 		if provider == "" {

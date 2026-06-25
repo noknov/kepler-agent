@@ -112,7 +112,7 @@ func newLLMClient(cfg config.Config) llm.Client {
 	} else if cfg.LLM.Protocol == "anthropic" {
 		client = llm.NewAnthropicClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout, cfg.LLM.AnthropicFlavor)
 	} else {
-		client = llm.NewKimiClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout)
+		client = llm.NewOpenAICompatibleClient(cfg.LLM.Provider, cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout)
 	}
 	return llm.WrapClient(client, llm.CapabilitiesFor(cfg.LLM.Provider, cfg.LLM.Protocol))
 }

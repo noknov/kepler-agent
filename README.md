@@ -46,7 +46,22 @@ The server loads `.env` automatically on startup. Expose `POST /slack/events` th
 
 `LLM_PROVIDER` selects the active provider. Each provider has its own env namespace so credentials are never shared between providers unintentionally.
 
-**MiMo (default)**
+**DeepSeek (default)**
+
+DeepSeek uses the OpenAI-compatible `/chat/completions` protocol, including
+structured function/tool calls. The default model is the official flash model;
+`DEEPSEEK_AVAILABLE_MODELS` exposes both official V4 models in Slack and the Web UI.
+
+```bash
+LLM_PROVIDER=deepseek
+DEEPSEEK_PROTOCOL=openai
+DEEPSEEK_API_KEY=sk-...
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_AVAILABLE_MODELS=deepseek-v4-flash,deepseek-v4-pro
+```
+
+**MiMo**
 
 ```bash
 LLM_PROVIDER=mimo

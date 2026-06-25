@@ -11,23 +11,25 @@ import (
 	"time"
 )
 
-type KimiClient struct {
+type OpenAICompatibleClient struct {
+	provider   string
 	baseURL    string
 	apiKey     string
 	httpClient *http.Client
 }
 
-func NewKimiClient(baseURL, apiKey string, timeout time.Duration) *KimiClient {
-	return &KimiClient{
-		baseURL: baseURL,
-		apiKey:  apiKey,
+func NewOpenAICompatibleClient(provider, baseURL, apiKey string, timeout time.Duration) *OpenAICompatibleClient {
+	return &OpenAICompatibleClient{
+		provider: strings.TrimSpace(provider),
+		baseURL:  baseURL,
+		apiKey:   apiKey,
 		httpClient: &http.Client{
 			Timeout: timeout,
 		},
 	}
 }
 
-func (c *KimiClient) Chat(ctx context.Context, req Request) (Response, error) {
+func (c *OpenAICompatibleClient) Chat(ctx context.Context, req Request) (Response, error) {
 	payload, err := json.Marshal(c.chatBody(req))
 	if err != nil {
 		return Response{}, err
@@ -49,7 +51,7 @@ func (c *KimiClient) Chat(ctx context.Context, req Request) (Response, error) {
 		return Response{}, err
 	}
 	if len(parsed.Choices) == 0 {
-		return Response{}, fmt.Errorf("kimi returned no choices")
+		return Response{}, fmt.Errorf("%s returned no choices", c.providerName())
 	}
 	return Response{
 		Message:      parsed.Choices[0].Message,
@@ -81,7 +83,7 @@ func (u openAIUsage) toUsage() Usage {
 	}
 }
 
-func (c *KimiClient) chatBody(req Request) map[string]any {
+func (c *OpenAICompatibleClient) chatBody(req Request) map[string]any {
 	body := map[string]any{
 		"model":       req.Model,
 		"messages":    req.Messages,
@@ -110,7 +112,7 @@ func (c *KimiClient) chatBody(req Request) map[string]any {
 	return body
 }
 
-func (c *KimiClient) ChatStream(ctx context.Context, req Request, h StreamHandler) (Response, error) {
+func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h StreamHandler) (Response, error) {
 	body := c.chatBody(req)
 	body["stream"] = true
 	payload, err := json.Marshal(body)
@@ -232,7 +234,7 @@ func (c *KimiClient) ChatStream(ctx context.Context, req Request, h StreamHandle
 	}, nil
 }
 
-func (c *KimiClient) setHeaders(httpReq *http.Request) {
+func (c *OpenAICompatibleClient) setHeaders(httpReq *http.Request) {
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	if hasBearerPrefix(c.apiKey) {
 		httpReq.Header.Set("Authorization", c.apiKey)
@@ -244,7 +246,7 @@ func (c *KimiClient) setHeaders(httpReq *http.Request) {
 	httpReq.Header.Set("Content-Type", "application/json")
 }
 
-func (c *KimiClient) doWithRetry(ctx context.Context, payload []byte) ([]byte, error) {
+func (c *OpenAICompatibleClient) doWithRetry(ctx context.Context, payload []byte) ([]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt < 4; attempt++ {
 		data, err := c.doOnce(ctx, payload)
@@ -262,7 +264,7 @@ func (c *KimiClient) doWithRetry(ctx context.Context, payload []byte) ([]byte, e
 	return nil, lastErr
 }
 
-func (c *KimiClient) doOnce(ctx context.Context, payload []byte) ([]byte, error) {
+func (c *OpenAICompatibleClient) doOnce(ctx context.Context, payload []byte) ([]byte, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
@@ -285,17 +287,11 @@ func (c *KimiClient) doOnce(ctx context.Context, payload []byte) ([]byte, error)
 	return data, nil
 }
 
-func (c *KimiClient) providerName() string {
-	if isOpenCodeGoEndpoint(c.baseURL) {
-		return "opencode-go"
+func (c *OpenAICompatibleClient) providerName() string {
+	if c.provider != "" {
+		return c.provider
 	}
-	if isOpenCodeZenEndpoint(c.baseURL) {
-		return "opencode-zen"
-	}
-	if isMiMoEndpoint(c.baseURL, "") {
-		return "mimo"
-	}
-	return "kimi"
+	return "openai-compatible"
 }
 
 func hasBearerPrefix(token string) bool {
@@ -314,14 +310,4 @@ func isMiMoEndpoint(baseURL, model string) bool {
 	baseURL = strings.ToLower(strings.TrimSpace(baseURL))
 	model = strings.ToLower(strings.TrimSpace(model))
 	return strings.Contains(baseURL, "xiaomimimo.com") || strings.HasPrefix(model, "mimo-")
-}
-
-func isOpenCodeGoEndpoint(baseURL string) bool {
-	baseURL = strings.ToLower(strings.TrimSpace(baseURL))
-	return strings.Contains(baseURL, "opencode.ai/zen/go")
-}
-
-func isOpenCodeZenEndpoint(baseURL string) bool {
-	baseURL = strings.ToLower(strings.TrimSpace(baseURL))
-	return strings.Contains(baseURL, "opencode.ai/zen") && !strings.Contains(baseURL, "opencode.ai/zen/go")
 }

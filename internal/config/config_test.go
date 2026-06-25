@@ -304,6 +304,51 @@ func TestLoadOpenAIDoesNotEnableThinkingByDefault(t *testing.T) {
 	}
 }
 
+func TestLoadDeepSeekDefaults(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":      "xoxb-test",
+		"SLACK_SIGNING_SECRET": "secret",
+		"ALLOWED_SLACK_USERS":  "U123",
+		"DEEPSEEK_API_KEY":     "ds-token",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.LLM.Provider != "deepseek" {
+		t.Fatalf("LLM.Provider = %q, want deepseek", cfg.LLM.Provider)
+	}
+	if cfg.LLM.Protocol != "openai" {
+		t.Fatalf("LLM.Protocol = %q, want openai", cfg.LLM.Protocol)
+	}
+	if cfg.LLM.BaseURL != "https://api.deepseek.com" {
+		t.Fatalf("LLM.BaseURL = %q, want DeepSeek base URL", cfg.LLM.BaseURL)
+	}
+	if cfg.LLM.Model != "deepseek-v4-flash" {
+		t.Fatalf("LLM.Model = %q, want deepseek-v4-flash", cfg.LLM.Model)
+	}
+	if cfg.LLM.APIKey != "ds-token" {
+		t.Fatalf("LLM.APIKey = %q, want ds-token", cfg.LLM.APIKey)
+	}
+	if cfg.LLM.Thinking != "" {
+		t.Fatalf("LLM.Thinking = %q, want empty DeepSeek default", cfg.LLM.Thinking)
+	}
+	for _, want := range []string{"deepseek-v4-flash", "deepseek-v4-pro"} {
+		if !containsString(cfg.LLM.AvailableModels, want) {
+			t.Fatalf("AvailableModels = %#v, want %q", cfg.LLM.AvailableModels, want)
+		}
+	}
+}
+
 func TestLoadOpenCodeGoDefaults(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
@@ -703,6 +748,15 @@ func resetConfigEnv(t *testing.T) {
 		"OPENAI_API_KEY",
 		"OPENAI_BASE_URL",
 		"OPENAI_MODEL",
+		"DEEPSEEK_PROTOCOL",
+		"DEEPSEEK_API_KEY",
+		"DEEPSEEK_BASE_URL",
+		"DEEPSEEK_MODEL",
+		"DEEPSEEK_AVAILABLE_MODELS",
+		"DEEPSEEK_THINKING",
+		"DEEPSEEK_MAX_TOKENS",
+		"DEEPSEEK_TEMPERATURE",
+		"DEEPSEEK_TIMEOUT",
 		"KIMI_API_KEY",
 		"KIMI_BASE_URL",
 		"KIMI_MODEL",

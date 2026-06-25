@@ -324,6 +324,8 @@ func inferLLMProviderFrom(get func(string) string) string {
 		return "opencode-zen"
 	case firstNonEmpty(get("OPENCODE_GO_API_KEY"), get("OPENCODE_GO_BASE_URL"), get("OPENCODE_GO_MODEL"), get("OPENCODE_GO_PROTOCOL")) != "":
 		return "opencode-go"
+	case firstNonEmpty(get("DEEPSEEK_API_KEY"), get("DEEPSEEK_BASE_URL"), get("DEEPSEEK_MODEL"), get("DEEPSEEK_PROTOCOL")) != "":
+		return "deepseek"
 	case firstNonEmpty(get("OPENAI_API_KEY"), get("OPENAI_BASE_URL"), get("OPENAI_MODEL")) != "":
 		return "openai"
 	}
@@ -354,6 +356,12 @@ func providerProtocol(provider string) string {
 			return "openai"
 		}
 		return protocol
+	case "deepseek":
+		protocol := normalizeLLMProtocol(firstEnv("DEEPSEEK_PROTOCOL", "LLM_PROTOCOL"))
+		if protocol == "" {
+			return "openai"
+		}
+		return protocol
 	default:
 		return normalizeLLMProtocol(firstEnv("LLM_PROTOCOL"))
 	}
@@ -373,6 +381,8 @@ func providerBaseURL(provider string) string {
 		return env("OPENCODE_GO_BASE_URL", "https://opencode.ai/zen/go/v1")
 	case "opencode-zen":
 		return env("OPENCODE_ZEN_BASE_URL", "https://opencode.ai/zen/v1")
+	case "deepseek":
+		return env("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 	default:
 		return env("OPENAI_BASE_URL", "https://api.openai.com/v1")
 	}
@@ -395,6 +405,8 @@ func providerModel(provider string) string {
 		return env("OPENCODE_GO_MODEL", "glm-5.2")
 	case "opencode-zen":
 		return env("OPENCODE_ZEN_MODEL", "mimo-v2.5-free")
+	case "deepseek":
+		return env("DEEPSEEK_MODEL", "deepseek-v4-flash")
 	default:
 		return env("OPENAI_MODEL", "gpt-4o-mini")
 	}
@@ -408,6 +420,9 @@ func availableModels(provider, defaultModel string) []string {
 		}
 		if provider == "opencode-zen" {
 			return ensureDefaultModel(defaultModel, opencodeZenModels())
+		}
+		if provider == "deepseek" {
+			return ensureDefaultModel(defaultModel, deepSeekModels())
 		}
 		return []string{defaultModel}
 	}
@@ -470,6 +485,13 @@ func opencodeZenModels() []string {
 	}
 }
 
+func deepSeekModels() []string {
+	return []string{
+		"deepseek-v4-flash",
+		"deepseek-v4-pro",
+	}
+}
+
 func providerAPIKey(provider string) string {
 	switch provider {
 	case "mimo":
@@ -484,6 +506,8 @@ func providerAPIKey(provider string) string {
 		return firstEnv("OPENCODE_GO_API_KEY")
 	case "opencode-zen":
 		return firstEnv("OPENCODE_ZEN_API_KEY")
+	case "deepseek":
+		return firstEnv("DEEPSEEK_API_KEY")
 	default:
 		return firstEnv("OPENAI_API_KEY")
 	}
@@ -495,6 +519,8 @@ func providerThinking(provider string) string {
 		return firstEnv("MIMO_THINKING")
 	case "kimi", "moonshot":
 		return firstEnv("KIMI_THINKING")
+	case "deepseek":
+		return firstEnv("DEEPSEEK_THINKING")
 	default:
 		return ""
 	}
@@ -512,6 +538,8 @@ func providerMaxTokens(provider string) int {
 		return 0
 	case "opencode-zen":
 		return 0
+	case "deepseek":
+		return envIntAliases(8192, "DEEPSEEK_MAX_TOKENS")
 	default:
 		return envIntAliases(8192, "OPENAI_MAX_TOKENS")
 	}
@@ -527,6 +555,8 @@ func providerTemperature(provider string) float64 {
 		return envFloatAliases(0, "OPENCODE_GO_TEMPERATURE")
 	case "opencode-zen":
 		return envFloatAliases(0, "OPENCODE_ZEN_TEMPERATURE")
+	case "deepseek":
+		return envFloatAliases(0, "DEEPSEEK_TEMPERATURE")
 	default:
 		return envFloatAliases(0, "OPENAI_TEMPERATURE", "ANTHROPIC_TEMPERATURE")
 	}
@@ -544,6 +574,8 @@ func providerTimeout(provider string) time.Duration {
 		return envDurationAliases(120*time.Second, "OPENCODE_GO_TIMEOUT", "API_TIMEOUT_MS")
 	case "opencode-zen":
 		return envDurationAliases(120*time.Second, "OPENCODE_ZEN_TIMEOUT", "API_TIMEOUT_MS")
+	case "deepseek":
+		return envDurationAliases(120*time.Second, "DEEPSEEK_TIMEOUT", "API_TIMEOUT_MS")
 	default:
 		return envDurationAliases(120*time.Second, "OPENAI_TIMEOUT", "API_TIMEOUT_MS")
 	}
@@ -856,7 +888,7 @@ func providerSnapshot(get func(string) string) llmEnvSnapshot {
 	if protocol == "" && provider == "mimo" {
 		protocol = "anthropic"
 	}
-	if protocol == "" && (provider == "opencode-go" || provider == "opencode-zen") {
+	if protocol == "" && (provider == "opencode-go" || provider == "opencode-zen" || provider == "deepseek") {
 		protocol = "openai"
 	}
 	anthropicFlavor := normalizeAnthropicFlavor(firstNonEmpty(
