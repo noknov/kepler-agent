@@ -65,6 +65,12 @@ func RegisterAll(reg *registry.Registry, client *Client) {
 	}
 }
 
+func RegisterDeferredAll(reg *registry.Registry, client *Client, category string) {
+	for _, tool := range tools(client) {
+		reg.RegisterDeferred(registry.AsDeferred(category, tool))
+	}
+}
+
 func tools(client *Client) []MCPTool {
 	return []MCPTool{
 		{

@@ -11,6 +11,16 @@ import (
 const DefaultDir = ".prompts"
 const PublicDir = "prompts"
 
+// DynamicBoundaryMarker separates cacheable static prompt content from runtime
+// context so LLM providers can set prompt-cache breakpoints after the static portion.
+const DynamicBoundaryMarker = "\n\n---DYNAMIC_CONTEXT_BELOW---\n\n"
+
+var staticPromptCache struct {
+	mu     sync.Mutex
+	once   sync.Once
+	prompt string
+}
+
 type Catalog struct {
 	System          string                `json:"system,omitempty"`
 	Delegates       map[string]string     `json:"delegates,omitempty"`
@@ -100,6 +110,7 @@ func LoadDirs(dirs ...string) error {
 	current.dirs = loaded
 	current.catalog = catalog
 	current.Unlock()
+	resetStaticPromptCache()
 	return nil
 }
 
@@ -393,6 +404,34 @@ func SkillsPrompt() string {
 
 func RulesAndSkillsPrompt() string {
 	return RulesPrompt() + SkillsPrompt()
+}
+
+func resetStaticPromptCache() {
+	staticPromptCache.mu.Lock()
+	staticPromptCache.once = sync.Once{}
+	staticPromptCache.prompt = ""
+	staticPromptCache.mu.Unlock()
+}
+
+// StaticSystemPrompt returns the memoized static system prompt (system.md, agent.md,
+// rules, and skill metadata). It is computed once per catalog load.
+func StaticSystemPrompt() string {
+	staticPromptCache.once.Do(func() {
+		staticPromptCache.prompt = System("") + RulesAndSkillsPrompt()
+	})
+	staticPromptCache.mu.Lock()
+	defer staticPromptCache.mu.Unlock()
+	return staticPromptCache.prompt
+}
+
+// DynamicSystemPrompt returns the runtime-varying portion of the system prompt.
+// When repoInventory is non-empty it is prefixed with DynamicBoundaryMarker.
+func DynamicSystemPrompt(repoInventory string) string {
+	repoInventory = strings.TrimSpace(repoInventory)
+	if repoInventory == "" {
+		return ""
+	}
+	return DynamicBoundaryMarker + PromptText("repository_inventory_header", "") + repoInventory
 }
 
 func LoadSkill(name string) (Skill, bool) {

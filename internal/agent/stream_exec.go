@@ -14,10 +14,11 @@ const maxStreamingConcurrency = 10
 // Claude Code's StreamingToolExecutor pattern and dramatically reduces
 // perceived latency for multi-tool responses.
 type streamingToolExecutor struct {
-	ctx           context.Context
-	runner        Runner
-	req           Request
-	seenToolCalls map[string]int
+	ctx             context.Context
+	runner          Runner
+	req             Request
+	seenToolCalls   map[string]int
+	seenSearchTerms map[string]int
 
 	mu      sync.Mutex
 	results map[string]toolResult
@@ -25,14 +26,15 @@ type streamingToolExecutor struct {
 	sem     chan struct{}
 }
 
-func newStreamingToolExecutor(ctx context.Context, r Runner, req Request, seenToolCalls map[string]int) *streamingToolExecutor {
+func newStreamingToolExecutor(ctx context.Context, r Runner, req Request, seenToolCalls, seenSearchTerms map[string]int) *streamingToolExecutor {
 	return &streamingToolExecutor{
-		ctx:           ctx,
-		runner:        r,
-		req:           req,
-		seenToolCalls: seenToolCalls,
-		results:       make(map[string]toolResult),
-		sem:           make(chan struct{}, maxStreamingConcurrency),
+		ctx:             ctx,
+		runner:          r,
+		req:             req,
+		seenToolCalls:   seenToolCalls,
+		seenSearchTerms: seenSearchTerms,
+		results:         make(map[string]toolResult),
+		sem:             make(chan struct{}, maxStreamingConcurrency),
 	}
 }
 
@@ -48,14 +50,12 @@ func (e *streamingToolExecutor) Submit(call llm.ToolCall) {
 		return
 	}
 
-	signature := toolCallSignature(call)
 	e.mu.Lock()
-	e.seenToolCalls[signature]++
-	if e.seenToolCalls[signature] > 2 && !e.runner.Tools.IsRepeatable(name) {
+	if dup, content := e.runner.duplicateToolCall(call, e.seenToolCalls, e.seenSearchTerms); dup {
 		e.results[call.ID] = toolResult{
 			message: llm.Message{
 				Role: "tool", ToolCallID: call.ID, Name: name,
-				Content: "[tool error] duplicate " + name + " call skipped.",
+				Content: content,
 			},
 			name: name,
 			err:  ErrRepeatedToolCall,
@@ -112,13 +112,11 @@ func (e *streamingToolExecutor) Drain(calls []llm.ToolCall) []toolResult {
 	// Execute tools that weren't pre-executed (non-parallel or submitted late)
 	for _, i := range remaining {
 		call := calls[i]
-		signature := toolCallSignature(call)
-		e.seenToolCalls[signature]++
-		if e.seenToolCalls[signature] > 2 && !e.runner.Tools.IsRepeatable(call.Function.Name) {
+		if dup, content := e.runner.duplicateToolCall(call, e.seenToolCalls, e.seenSearchTerms); dup {
 			results[i] = toolResult{
 				message: llm.Message{
 					Role: "tool", ToolCallID: call.ID, Name: call.Function.Name,
-					Content: "[tool error] duplicate " + call.Function.Name + " call skipped.",
+					Content: content,
 				},
 				name: call.Function.Name,
 				err:  ErrRepeatedToolCall,

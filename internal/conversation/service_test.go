@@ -343,7 +343,7 @@ func TestTrimAndSummarizeReportsCompression(t *testing.T) {
 		{Role: memory.RoleAssistant, Content: "recent 4"},
 	}
 
-	kept, summary, compressed := svc.trimAndSummarize(turns, "")
+	kept, summary, compressed := svc.trimAndSummarize(context.Background(), turns, "")
 
 	if !compressed {
 		t.Fatal("trimAndSummarize() compressed = false, want true")

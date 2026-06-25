@@ -77,6 +77,19 @@ type WriteTool interface {
 	IsWrite() bool
 }
 
+// DeferredTool is registered but excluded from default Specs() until its category
+// is activated via ActivateCategory or the tool_search tool.
+type DeferredTool interface {
+	Tool
+	Category() string
+}
+
+const (
+	CategoryDiagnostics = "diagnostics"
+	CategoryBrowser       = "browser"
+	CategoryIntegration   = "integration"
+)
+
 func IsRepeatable(tool Tool) bool {
 	if rt, ok := tool.(RepeatableTool); ok {
 		return rt.Repeatable()
@@ -99,23 +112,104 @@ func IsWriteOp(tool Tool) bool {
 }
 
 type Registry struct {
-	tools    map[string]Tool
-	readOnly bool
+	tools      map[string]Tool
+	deferred   map[string]Tool
+	categories map[string][]string
+	readOnly   bool
 }
 
 func New() *Registry {
-	return &Registry{tools: map[string]Tool{}}
+	return &Registry{
+		tools:      map[string]Tool{},
+		deferred:   map[string]Tool{},
+		categories: map[string][]string{},
+	}
 }
 
 // NewReadOnly creates a registry that refuses to execute write tools.
 // Write tools are still registered (visible to the model) but will return
 // a descriptive error when called.
 func NewReadOnly() *Registry {
-	return &Registry{tools: map[string]Tool{}, readOnly: true}
+	return &Registry{
+		tools:      map[string]Tool{},
+		deferred:   map[string]Tool{},
+		categories: map[string][]string{},
+		readOnly:   true,
+	}
 }
 
 func (r *Registry) Register(tool Tool) {
 	r.tools[tool.Spec().Function.Name] = tool
+}
+
+type categorizedTool struct {
+	Tool
+	category string
+}
+
+func (t categorizedTool) Category() string {
+	return t.category
+}
+
+// AsDeferred wraps a tool with a deferred-tool category label.
+func AsDeferred(category string, tool Tool) DeferredTool {
+	return categorizedTool{Tool: tool, category: category}
+}
+
+func (r *Registry) RegisterDeferred(tool DeferredTool) {
+	name := tool.Spec().Function.Name
+	r.deferred[name] = tool
+	category := tool.Category()
+	r.categories[category] = append(r.categories[category], name)
+}
+
+// ActivateCategory moves deferred tools in category into the active tool set.
+// Returns the names of tools that were activated. Already-active tools are skipped.
+func (r *Registry) ActivateCategory(category string) []string {
+	names := append([]string(nil), r.categories[category]...)
+	activated := make([]string, 0, len(names))
+	for _, name := range names {
+		tool, ok := r.deferred[name]
+		if !ok {
+			continue
+		}
+		r.tools[name] = tool
+		delete(r.deferred, name)
+		activated = append(activated, name)
+	}
+	return activated
+}
+
+func (r *Registry) DeferredCategories() []string {
+	categories := make([]string, 0, len(r.categories))
+	for category, names := range r.categories {
+		if len(names) == 0 {
+			continue
+		}
+		pending := 0
+		for _, name := range names {
+			if _, ok := r.deferred[name]; ok {
+				pending++
+			}
+		}
+		if pending > 0 {
+			categories = append(categories, category)
+		}
+	}
+	sort.Strings(categories)
+	return categories
+}
+
+func (r *Registry) DeferredToolNames(category string) []string {
+	names := append([]string(nil), r.categories[category]...)
+	pending := make([]string, 0, len(names))
+	for _, name := range names {
+		if _, ok := r.deferred[name]; ok {
+			pending = append(pending, name)
+		}
+	}
+	sort.Strings(pending)
+	return pending
 }
 
 func (r *Registry) Specs() []llm.ToolSpec {

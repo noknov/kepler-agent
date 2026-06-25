@@ -17,6 +17,7 @@ type Profile struct {
 
 type Manager struct {
 	client       llm.Client
+	streamClient llm.StreamClient
 	model        string
 	thinking     string
 	tools        ToolExecutor
@@ -31,7 +32,7 @@ type ToolExecutor interface {
 }
 
 func NewManager(client llm.Client, model, thinking string) *Manager {
-	return &Manager{
+	m := &Manager{
 		client:   client,
 		model:    model,
 		thinking: thinking,
@@ -46,6 +47,14 @@ func NewManager(client llm.Client, model, thinking string) *Manager {
 			},
 		},
 	}
+	if sc, ok := client.(llm.StreamClient); ok {
+		m.streamClient = sc
+	}
+	return m
+}
+
+func (m *Manager) SetStreamClient(client llm.StreamClient) {
+	m.streamClient = client
 }
 
 func (m *Manager) SetTools(tools ToolExecutor) {

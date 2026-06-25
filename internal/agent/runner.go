@@ -13,6 +13,7 @@ import (
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/memory"
 	"github.com/wati/oncall-agent/internal/prompts"
+	"github.com/wati/oncall-agent/internal/runs"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
@@ -30,6 +31,7 @@ const (
 	// wrong branch, wrong repo) are technical mistakes the model can fix itself.
 	clarificationErrorThreshold = 4
 	exploreFailureLimit         = 3
+	pivotAfterSteps             = 8
 )
 
 type Observer interface {
@@ -79,6 +81,7 @@ type Request struct {
 	Messages []llm.Message
 	Runtime  registry.Runtime
 	Locale   string
+	RunID    string
 	Steering SteeringProvider
 }
 
@@ -163,23 +166,35 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	if req.Runtime.Cache == nil {
 		req.Runtime.Cache = registry.NewRuntimeCache()
 	}
+	if strings.TrimSpace(req.RunID) == "" {
+		req.RunID = runs.NewID()
+	}
 	messages := append([]llm.Message(nil), req.Messages...)
 	var generated []llm.Message
 	seenToolCalls := map[string]int{}
+	seenSearchTerms := map[string]int{}
 	retriedRepetitiveFinal := false
 	retriedTextualToolCall := false
 	retriedEmptyResponse := false
-	retriedTemporaryOverload := false
+	overloadRetries := 0
+	const maxOverloadRetries = 3
+	retriedPromptTooLong := false
 	retriedCodeClaim := false
 	retriedRawEvidence := false
 	codeToolCalledThisRun := false
 	afterTools := false
+	pivotInjected := false
+	toolsWithoutProgress := 0
 	clarificationErrors := newClarificationErrorTracker()
 	control := newRunnerControl()
 
 	for step := 0; step < maxSteps; step++ {
 		if r.StatusUpdate != nil {
 			r.StatusUpdate(StepStatus(req.Locale, step))
+		}
+		if step >= pivotAfterSteps && afterTools && !pivotInjected {
+			messages = append(messages, llm.Message{Role: "system", Content: stepBudgetPivotMessage()})
+			pivotInjected = true
 		}
 		if req.Steering != nil {
 			if steering := req.Steering(); len(steering) > 0 {
@@ -229,7 +244,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		// during streaming, rather than waiting for the full response.
 		var streamExec *streamingToolExecutor
 		if useStream && r.Tools != nil && len(toolSpecs) > 0 {
-			streamExec = newStreamingToolExecutor(ctx, r, req, seenToolCalls)
+			streamExec = newStreamingToolExecutor(ctx, r, req, seenToolCalls, seenSearchTerms)
 		}
 
 		streamHandler := llm.StreamHandler{
@@ -294,8 +309,28 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 				}
 				continue
 			}
-			if llm.IsTemporaryOverload(err) && !retriedTemporaryOverload && !streamedText {
-				retriedTemporaryOverload = true
+			if llm.IsTemporaryOverload(err) && overloadRetries < maxOverloadRetries && !streamedText {
+				overloadRetries++
+				if llm.IsRateLimited(err) {
+					var pe llm.ProviderError
+					if errors.As(err, &pe) && pe.RetryAfter > 0 {
+						if sleepErr := sleepCtx(ctx, pe.RetryAfter); sleepErr != nil {
+							return Result{Generated: generated}, sleepErr
+						}
+					} else if sleepErr := sleepCtx(ctx, llm.RetryDelay(overloadRetries)); sleepErr != nil {
+						return Result{Generated: generated}, sleepErr
+					}
+				} else if sleepErr := sleepCtx(ctx, llm.RetryDelay(overloadRetries)); sleepErr != nil {
+					return Result{Generated: generated}, sleepErr
+				}
+				if r.StatusUpdate != nil {
+					r.StatusUpdate(RetryStatus(req.Locale))
+				}
+				continue
+			}
+			if llm.IsPromptTooLong(err) && r.Compactor != nil && !retriedPromptTooLong {
+				retriedPromptTooLong = true
+				messages = r.compactMessagesAggressive(ctx, messages)
 				if r.StatusUpdate != nil {
 					r.StatusUpdate(RetryStatus(req.Locale))
 				}
@@ -402,10 +437,19 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		if streamExec != nil && streamExec.HasResults() {
 			toolResults = streamExec.Drain(assistantMsg.ToolCalls)
 		} else {
-			toolResults = r.executeToolCalls(ctx, assistantMsg.ToolCalls, seenToolCalls, req)
+			toolResults = r.executeToolCalls(ctx, assistantMsg.ToolCalls, seenToolCalls, seenSearchTerms, req)
 		}
 		if len(toolResults) > 0 {
 			afterTools = true
+		}
+		if toolResultsLackProgress(toolResults) {
+			toolsWithoutProgress++
+			if toolsWithoutProgress >= 3 && !pivotInjected {
+				messages = append(messages, llm.Message{Role: "system", Content: stepBudgetPivotMessage()})
+				pivotInjected = true
+			}
+		} else if len(toolResults) > 0 {
+			toolsWithoutProgress = 0
 		}
 		for _, tr := range toolResults {
 			messages = append(messages, tr.message)
@@ -422,7 +466,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			}
 		}
 		control.finishTurn(toolResults)
-		locale := requestLocale(req.Locale, messages)
+		locale := requestLocale(req.Locale)
 		if question := clarificationErrors.Question(toolResults, locale); question != "" {
 			generated = append(generated, llm.Message{
 				Role:    "assistant",
@@ -507,6 +551,31 @@ func (r Runner) compactMessages(ctx context.Context, messages []llm.Message) []l
 	return compacted
 }
 
+func (r Runner) compactMessagesAggressive(ctx context.Context, messages []llm.Message) []llm.Message {
+	if r.Compactor == nil {
+		return messages
+	}
+	compacted, err := r.Compactor.CompactForce(ctx, messages)
+	if err != nil {
+		return messages
+	}
+	return compacted
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 type runnerControl struct {
 	toolFailures  map[string]int
 	disabledTools map[string]bool
@@ -551,25 +620,8 @@ func (c *runnerControl) finishTurn(results []toolResult) {
 	}
 }
 
-func requestLocale(locale string, messages []llm.Message) string {
-	if strings.TrimSpace(locale) != "" {
-		return locale
-	}
-	for _, msg := range messages {
-		if msg.Role == "user" && containsCJK(msg.Content) {
-			return "zh"
-		}
-	}
-	return locale
-}
-
-func containsCJK(text string) bool {
-	for _, r := range text {
-		if (r >= '\u4e00' && r <= '\u9fff') || (r >= '\u3400' && r <= '\u4dbf') {
-			return true
-		}
-	}
-	return false
+func requestLocale(locale string) string {
+	return strings.TrimSpace(locale)
 }
 
 type toolResult struct {
@@ -581,7 +633,7 @@ type toolResult struct {
 	err         error
 }
 
-func (r Runner) executeToolCalls(ctx context.Context, calls []llm.ToolCall, seenToolCalls map[string]int, req Request) []toolResult {
+func (r Runner) executeToolCalls(ctx context.Context, calls []llm.ToolCall, seenToolCalls, seenSearchTerms map[string]int, req Request) []toolResult {
 	type indexedCall struct {
 		index int
 		call  llm.ToolCall
@@ -593,11 +645,8 @@ func (r Runner) executeToolCalls(ctx context.Context, calls []llm.ToolCall, seen
 
 	for i, call := range calls {
 		name := call.Function.Name
-		signature := toolCallSignature(call)
-		seenToolCalls[signature]++
-		if seenToolCalls[signature] > 2 && !r.Tools.IsRepeatable(name) {
+		if dup, content := r.duplicateToolCall(call, seenToolCalls, seenSearchTerms); dup {
 			err := fmt.Errorf("%w: %s", ErrRepeatedToolCall, name)
-			content := fmt.Sprintf("[tool error] duplicate %s call skipped. Use the existing tool result already in the conversation, call a different tool with different arguments, or give the final answer now.", name)
 			results[i] = toolResult{
 				message: llm.Message{Role: "tool", ToolCallID: call.ID, Name: name, Content: content},
 				name:    name,
@@ -663,6 +712,7 @@ func (r Runner) executeSingleTool(ctx context.Context, call llm.ToolCall, req Re
 	} else {
 		content = r.format(name, r.sanitize(result.Content))
 	}
+	content = maybeSpillResult(spillRunID(req.RunID), name, call.ID, content)
 	return toolResult{
 		message:     llm.Message{Role: "tool", ToolCallID: call.ID, Name: name, Content: content},
 		waitForUser: err == nil && result.WaitForUser,
@@ -858,6 +908,87 @@ func (r Runner) observeToolResults(results []toolResult) {
 func toolCallSignature(call llm.ToolCall) string {
 	args := strings.Join(strings.Fields(call.Function.Arguments), " ")
 	return call.Function.Name + "\x00" + args
+}
+
+var searchDedupTools = map[string]bool{
+	"code-search":              true,
+	"repo-search":              true,
+	"git-search_ref":           true,
+	"rag-search":               true,
+	"knowledge-runbook_search": true,
+	"notion-search":            true,
+	"web-search":               true,
+	"slack-file_search":        true,
+}
+
+func normalizeSearchTerm(s string) string {
+	s = strings.ToLower(s)
+	s = strings.ReplaceAll(s, "_", "")
+	s = strings.ReplaceAll(s, "-", "")
+	s = strings.ReplaceAll(s, " ", "")
+	return s
+}
+
+func searchTermSignature(toolName string, args json.RawMessage) string {
+	if !searchDedupTools[toolName] {
+		return ""
+	}
+	var payload struct {
+		Query string `json:"query"`
+	}
+	if err := json.Unmarshal(args, &payload); err != nil || strings.TrimSpace(payload.Query) == "" {
+		return ""
+	}
+	return toolName + "\x00" + normalizeSearchTerm(payload.Query)
+}
+
+func (r Runner) duplicateToolCall(call llm.ToolCall, seenToolCalls, seenSearchTerms map[string]int) (bool, string) {
+	name := call.Function.Name
+	repeatable := r.Tools != nil && r.Tools.IsRepeatable(name)
+	signature := toolCallSignature(call)
+	seenToolCalls[signature]++
+	if seenToolCalls[signature] > 2 && !repeatable {
+		return true, fmt.Sprintf("[tool error] duplicate %s call skipped. Use the existing tool result already in the conversation, call a different tool with different arguments, or give the final answer now.", name)
+	}
+	if searchSig := searchTermSignature(name, json.RawMessage(call.Function.Arguments)); searchSig != "" {
+		seenSearchTerms[searchSig]++
+		if seenSearchTerms[searchSig] > 2 && !repeatable {
+			return true, fmt.Sprintf("[tool error] duplicate %s call skipped. Use the existing tool result already in the conversation, call a different tool with different arguments, or give the final answer now.", name)
+		}
+	}
+	return false, ""
+}
+
+func stepBudgetPivotMessage() string {
+	return "You have used several investigation steps. If you have enough evidence for a useful partial answer, stop searching and summarize your findings now. State what is known, what remains uncertain, and suggest the next concrete check the user could try."
+}
+
+func toolResultsLackProgress(results []toolResult) bool {
+	if len(results) == 0 {
+		return false
+	}
+	bad := 0
+	for _, result := range results {
+		if result.err != nil || emptyToolResult(result.message.Content) {
+			bad++
+		}
+	}
+	return bad*2 >= len(results)
+}
+
+func emptyToolResult(content string) bool {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return true
+	}
+	if strings.HasPrefix(content, "[tool error]") {
+		return true
+	}
+	switch content {
+	case "no matches", "no web results":
+		return true
+	}
+	return strings.HasPrefix(content, "no matching code found")
 }
 
 func looksRepetitive(text string) bool {

@@ -13,8 +13,12 @@ import (
 )
 
 const (
-	exploreMaxSteps  = 4
-	exploreMaxTokens = 2048
+	exploreMaxSteps  = 12
+	exploreMaxTokens = 8192
+
+	exploreMicroCompactThreshold = 6
+	exploreKeepRecentToolResults = 4
+	exploreToolResultClearedMsg    = "[Previous tool result cleared for context management]"
 )
 
 var exploreAllowedTools = map[string]bool{
@@ -88,10 +92,10 @@ func (m *Manager) Explore(ctx context.Context, task, boundaries string, rt regis
 	retriedSynthesis := false
 	for step := 0; step < exploreMaxSteps; step++ {
 		specs := toolSpecs
-		if step == exploreMaxSteps-1 {
+		if step >= exploreMaxSteps-2 {
 			specs = nil
 		}
-		resp, err := m.client.Chat(ctx, llm.Request{
+		resp, err := m.exploreChat(ctx, llm.Request{
 			Model:       m.model,
 			Thinking:    "", // disable thinking in explore for speed
 			Messages:    messages,
@@ -112,14 +116,74 @@ func (m *Manager) Explore(ctx context.Context, task, boundaries string, rt regis
 			}
 			messages = append(messages, llm.Message{Role: "system", Content: exploreFinalReportPrompt()})
 			retriedSynthesis = true
-			step--
 			continue
 		}
 		msg.Content = ""
 		messages = append(messages, msg)
 		messages = append(messages, m.executeExploreToolCalls(ctx, msg.ToolCalls, rt)...)
+		messages = applyExploreMicroCompact(messages)
 	}
 	return "", fmt.Errorf("explore did not converge within %d steps", exploreMaxSteps)
+}
+
+func (m *Manager) exploreChat(ctx context.Context, req llm.Request) (llm.Response, error) {
+	sc := m.streamClient
+	if sc == nil {
+		if c, ok := m.client.(llm.StreamClient); ok {
+			sc = c
+		}
+	}
+	if sc != nil {
+		return sc.ChatStream(ctx, req, llm.StreamHandler{})
+	}
+	return m.client.Chat(ctx, req)
+}
+
+func applyExploreMicroCompact(messages []llm.Message) []llm.Message {
+	toolCount := 0
+	for _, msg := range messages {
+		if msg.Role == "tool" {
+			toolCount++
+		}
+	}
+	if toolCount <= exploreMicroCompactThreshold {
+		return messages
+	}
+
+	keep := exploreKeepRecentToolResults
+	seen := 0
+	boundary := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != "tool" {
+			continue
+		}
+		seen++
+		if seen >= keep {
+			boundary = i
+			break
+		}
+	}
+	if boundary < 0 {
+		return messages
+	}
+
+	out := make([]llm.Message, len(messages))
+	copy(out, messages)
+	cleared := false
+	for i := 0; i < boundary; i++ {
+		if out[i].Role != "tool" {
+			continue
+		}
+		if out[i].Content == exploreToolResultClearedMsg {
+			continue
+		}
+		out[i].Content = exploreToolResultClearedMsg
+		cleared = true
+	}
+	if !cleared {
+		return messages
+	}
+	return out
 }
 
 func partialExploreReport(messages []llm.Message) string {
@@ -129,7 +193,7 @@ func partialExploreReport(messages []llm.Message) string {
 			continue
 		}
 		text := strings.TrimSpace(msg.Content)
-		if text == "" {
+		if text == "" || text == exploreToolResultClearedMsg {
 			continue
 		}
 		text = strings.Join(strings.Fields(text), " ")
@@ -193,18 +257,8 @@ Output format:
 
 func (m *Manager) executeExploreToolCalls(ctx context.Context, calls []llm.ToolCall, rt registry.Runtime) []llm.Message {
 	out := make([]llm.Message, len(calls))
-	allParallel := len(calls) > 1
-	for _, call := range calls {
-		name := call.Function.Name
-		if !exploreAllowedTools[name] || !m.tools.CanRunInParallel(name) {
-			allParallel = false
-			break
-		}
-	}
-	if !allParallel {
-		for i, call := range calls {
-			out[i] = m.executeExploreToolCall(ctx, call, rt)
-		}
+	if len(calls) == 1 {
+		out[0] = m.executeExploreToolCall(ctx, calls[0], rt)
 		return out
 	}
 	sem := make(chan struct{}, 10)

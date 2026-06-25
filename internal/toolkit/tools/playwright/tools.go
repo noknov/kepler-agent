@@ -315,6 +315,18 @@ func RegisterAll(reg *registry.Registry, client *Client) {
 	}
 }
 
+// RegisterDeferredAll registers Playwright tools as deferred until the browser
+// category is activated. It is a no-op when the client is not configured.
+func RegisterDeferredAll(reg *registry.Registry, client *Client, category string) {
+	if client == nil || !client.enabled() {
+		return
+	}
+	reg.RegisterDeferred(registry.AsDeferred(category, NavigateTool{Client: client}))
+	for _, tool := range tools(client) {
+		reg.RegisterDeferred(registry.AsDeferred(category, tool))
+	}
+}
+
 func tools(client *Client) []MCPTool {
 	return []MCPTool{
 		{

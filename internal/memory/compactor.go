@@ -205,6 +205,34 @@ func (c *Compactor) CompactIfNeeded(ctx context.Context, messages []llm.Message)
 	return compacted, result, nil
 }
 
+// CompactForce runs all compression layers regardless of token threshold.
+// Used reactively when the provider rejects a request for exceeding context limits.
+func (c *Compactor) CompactForce(ctx context.Context, messages []llm.Message) ([]llm.Message, error) {
+	if len(messages) == 0 {
+		return messages, nil
+	}
+
+	msgs := c.microCompact(messages)
+	msgs = c.compressToolResults(msgs)
+	msgs, _ = c.foldHistory(msgs)
+
+	if c.LLMClient == nil {
+		return msgs, nil
+	}
+
+	model := c.CompactModel
+	summary, err := GenerateCompactSummary(ctx, c.LLMClient, model, msgs, "")
+	if err != nil {
+		return msgs, err
+	}
+
+	c.mu.Lock()
+	c.consecutiveFailures = 0
+	c.mu.Unlock()
+
+	return c.applyCompactBoundary(msgs, summary), nil
+}
+
 // RecordCompactSuccess resets the circuit breaker.
 func (c *Compactor) RecordCompactSuccess() {
 	c.mu.Lock()
