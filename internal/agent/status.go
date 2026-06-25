@@ -12,11 +12,23 @@ const (
 	LocaleEN = "en"
 )
 
+// DetectLocale checks whether the text contains any CJK characters.
+// Used to determine the language for status hints. Defaults to Chinese
+// since this is the primary language for our user base.
 func DetectLocale(text string) string {
+	hasCJK := false
+	hasLatin := false
 	for _, r := range text {
-		if unicode.Is(unicode.Han, r) {
-			return LocaleZH
+		if unicode.Is(unicode.Han, r) || unicode.Is(unicode.Katakana, r) || unicode.Is(unicode.Hangul, r) {
+			hasCJK = true
+			break
 		}
+		if r >= 'A' && r <= 'z' {
+			hasLatin = true
+		}
+	}
+	if hasCJK || !hasLatin {
+		return LocaleZH
 	}
 	return LocaleEN
 }

@@ -19,6 +19,7 @@ type Session struct {
 	Channel          string        `json:"channel"`
 	ThreadTS         string        `json:"thread_ts"`
 	UserID           string        `json:"user_id"`
+	Locale           string        `json:"locale,omitempty"`
 	Summary          string        `json:"summary,omitempty"`
 	Turns            []memory.Turn `json:"turns,omitempty"`
 	PendingUserInput bool          `json:"pending_user_input,omitempty"`
