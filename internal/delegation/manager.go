@@ -34,6 +34,10 @@ type Manager struct {
 	profiles     map[string]Profile
 	explore      ExploreProfile
 	policyPrompt string
+
+	exploreClient       llm.Client
+	exploreStreamClient llm.StreamClient
+	exploreModel        string
 }
 
 type ToolExecutor interface {
@@ -114,6 +118,14 @@ func (m *Manager) SetExploreProfile(profile ExploreProfile) {
 	m.explore = profile
 }
 
+func (m *Manager) SetExploreClient(client llm.Client, model string) {
+	m.exploreClient = client
+	m.exploreModel = model
+	if sc, ok := client.(llm.StreamClient); ok {
+		m.exploreStreamClient = sc
+	}
+}
+
 func (m *Manager) SetStreamClient(client llm.StreamClient) {
 	m.streamClient = client
 }
@@ -128,6 +140,13 @@ func (m *Manager) SetPolicyPrompt(prompt string) {
 
 func (m *Manager) RulesAndSkillsPrompt() string {
 	return m.policyPrompt
+}
+
+func (m *Manager) resolveExploreModel() string {
+	if m.exploreModel != "" {
+		return m.exploreModel
+	}
+	return m.model
 }
 
 func (m *Manager) Run(ctx context.Context, profileName, task, contextText string) (string, error) {

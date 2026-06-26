@@ -1,6 +1,8 @@
 package llm
 
 import (
+	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -15,6 +17,11 @@ var (
 	reToolNameBlock      = regexp.MustCompile(`(?is)<tool_name>.*?</tool_name>`)
 	reParametersBlock    = regexp.MustCompile(`(?is)<parameters>.*?</parameters>`)
 	reToolCallCodeBlock  = regexp.MustCompile("(?s)```[\\w]*\\s*tool_call.*?```")
+
+	// Parsing patterns for extracting structured tool calls from textual markup.
+	reParseToolInvocation = regexp.MustCompile(`(?is)<tool_invocation\s+name="([^"]+)"\s+arguments=([\s\S]*?)(?:/>|</tool_invocation>)`)
+	reParseFunctionTag    = regexp.MustCompile(`(?is)<function=([^>]+)>([\s\S]*?)</function>`)
+	reParseDSMLInvoke     = regexp.MustCompile(`(?is)<\s*｜｜DSML｜｜invoke\s+name="([^"]+)"[^>]*>([\s\S]*?)<\s*/\s*｜｜DSML｜｜invoke\s*>`)
 )
 
 // LooksLikeTextualToolCall reports whether content appears to describe tool invocations
@@ -46,15 +53,94 @@ func LooksLikeTextualToolCall(content string) bool {
 	return false
 }
 
-// NormalizeAssistantMessage trims assistant output and removes textual tool-call
-// markup from Content when structured ToolCalls are already present.
+// NormalizeAssistantMessage trims assistant output and handles textual tool-call
+// markup. When structured ToolCalls are present, strips textual markup from Content.
+// When no structured ToolCalls exist but textual markup is detected, attempts to
+// parse the markup into structured ToolCalls so the runner can execute them.
 func NormalizeAssistantMessage(caps Capabilities, msg Message, _ []ToolSpec) Message {
 	msg.Content = strings.TrimSpace(msg.Content)
 	if len(msg.ToolCalls) > 0 {
 		msg.Content = StripTextualToolCallMarkup(msg.Content)
+	} else if caps.RepairTextualToolCalls && LooksLikeTextualToolCall(msg.Content) {
+		if parsed := ParseTextualToolCalls(msg.Content); len(parsed) > 0 {
+			msg.ToolCalls = parsed
+			msg.Content = StripTextualToolCallMarkup(msg.Content)
+		}
 	}
-	_ = caps
 	return msg
+}
+
+// ParseTextualToolCalls attempts to extract structured ToolCall objects from
+// textual tool-call markup in content. Returns nil if no parseable calls found.
+func ParseTextualToolCalls(content string) []ToolCall {
+	var calls []ToolCall
+
+	// Pattern 1: <tool_invocation name="NAME" arguments=ARGS />
+	for _, match := range reParseToolInvocation.FindAllStringSubmatch(content, -1) {
+		if call, ok := buildToolCall(match[1], match[2]); ok {
+			calls = append(calls, call)
+		}
+	}
+	if len(calls) > 0 {
+		return calls
+	}
+
+	// Pattern 2: <function=NAME>ARGS</function>
+	for _, match := range reParseFunctionTag.FindAllStringSubmatch(content, -1) {
+		if call, ok := buildToolCall(match[1], match[2]); ok {
+			calls = append(calls, call)
+		}
+	}
+	if len(calls) > 0 {
+		return calls
+	}
+
+	// Pattern 3: DSML (DeepSeek) format
+	for _, match := range reParseDSMLInvoke.FindAllStringSubmatch(content, -1) {
+		if call, ok := buildToolCall(match[1], match[2]); ok {
+			calls = append(calls, call)
+		}
+	}
+	return calls
+}
+
+var textualCallCounter int64
+
+func buildToolCall(name, rawArgs string) (ToolCall, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ToolCall{}, false
+	}
+	args := normalizeToolArgs(rawArgs)
+	textualCallCounter++
+	return ToolCall{
+		ID:   fmt.Sprintf("textual_%d", textualCallCounter),
+		Type: "function",
+		Function: ToolFunction{
+			Name:      name,
+			Arguments: args,
+		},
+	}, true
+}
+
+func normalizeToolArgs(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "{}"
+	}
+	if json.Valid([]byte(raw)) {
+		return raw
+	}
+	// Some models wrap JSON in extra whitespace or add trailing content.
+	start := strings.IndexByte(raw, '{')
+	end := strings.LastIndexByte(raw, '}')
+	if start >= 0 && end > start {
+		candidate := raw[start : end+1]
+		if json.Valid([]byte(candidate)) {
+			return candidate
+		}
+	}
+	return "{}"
 }
 
 // StripTextualToolCallMarkup removes all textual tool-call markup patterns

@@ -58,6 +58,15 @@ type LLMConfig struct {
 	MaxTokens        int
 	Temperature      float64
 	Timeout          time.Duration
+
+	// Explore sub-agent can use a different provider/model for speed/cost.
+	// Credentials (base URL, API key, protocol) are resolved from the
+	// provider's existing env block — only provider and model need to be set.
+	ExploreProvider string
+	ExploreBaseURL  string
+	ExploreAPIKey   string
+	ExploreModel    string
+	ExploreProtocol string
 }
 
 type TokenUsageConfig struct {
@@ -160,6 +169,19 @@ func Load() (Config, error) {
 	if llmProvider == "mimo" && providerThinking(llmProvider) == "" {
 		llmThinking = "disabled"
 	}
+
+	exploreProvider := strings.TrimSpace(os.Getenv("EXPLORE_PROVIDER"))
+	var exploreBaseURL, exploreAPIKey, exploreModel, exploreProtocol string
+	if exploreProvider != "" {
+		exploreBaseURL = providerBaseURL(exploreProvider)
+		exploreAPIKey = providerAPIKey(exploreProvider)
+		exploreProtocol = providerProtocol(exploreProvider)
+		exploreModel = strings.TrimSpace(os.Getenv("EXPLORE_MODEL"))
+		if exploreModel == "" {
+			exploreModel = providerModel(exploreProvider)
+		}
+	}
+
 	cfg := Config{
 		HTTP: HTTPConfig{
 			Addr: env("HTTP_ADDR", ":8080"),
@@ -188,6 +210,12 @@ func Load() (Config, error) {
 			MaxTokens:       providerMaxTokens(llmProvider),
 			Temperature:     providerTemperature(llmProvider),
 			Timeout:         providerTimeout(llmProvider),
+
+			ExploreProvider: exploreProvider,
+			ExploreBaseURL:  trimRightSlash(exploreBaseURL),
+			ExploreAPIKey:   exploreAPIKey,
+			ExploreModel:    exploreModel,
+			ExploreProtocol: exploreProtocol,
 		},
 		Security: SecurityConfig{
 			AllowedUsers:               envCSV("ALLOWED_SLACK_USERS"),
