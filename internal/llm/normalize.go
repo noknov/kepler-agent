@@ -19,9 +19,11 @@ var (
 	reToolCallCodeBlock  = regexp.MustCompile("(?s)```[\\w]*\\s*tool_call.*?```")
 
 	// Parsing patterns for extracting structured tool calls from textual markup.
-	reParseToolInvocation = regexp.MustCompile(`(?is)<tool_invocation\s+name="([^"]+)"\s+arguments=([\s\S]*?)(?:/>|</tool_invocation>)`)
-	reParseFunctionTag    = regexp.MustCompile(`(?is)<function=([^>]+)>([\s\S]*?)</function>`)
-	reParseDSMLInvoke     = regexp.MustCompile(`(?is)<\s*｜｜DSML｜｜invoke\s+name="([^"]+)"[^>]*>([\s\S]*?)<\s*/\s*｜｜DSML｜｜invoke\s*>`)
+	reParseToolInvocation       = regexp.MustCompile(`(?is)<tool_invocation\s+name="([^"]+)"\s+arguments=([\s\S]*?)(?:/>|</tool_invocation>)`)
+	reParseToolInvocationQuoted = regexp.MustCompile(`(?is)<tool_invocation\s+name=["']([^"']+)["']\s+arguments=["']([\s\S]*?)["']\s*(?:/>|>[\s\S]*?</tool_invocation>)`)
+	reParseFunctionTag          = regexp.MustCompile(`(?is)<function=([^>]+)>([\s\S]*?)</function>`)
+	reParseDSMLInvoke           = regexp.MustCompile(`(?is)<\s*｜｜DSML｜｜invoke\s+name="([^"]+)"[^>]*>([\s\S]*?)<\s*/\s*｜｜DSML｜｜invoke\s*>`)
+	reParseToolNameParams       = regexp.MustCompile(`(?is)<tool_name>\s*([^<]+?)\s*</tool_name>\s*<parameters>\s*([\s\S]*?)\s*</parameters>`)
 )
 
 // LooksLikeTextualToolCall reports whether content appears to describe tool invocations
@@ -53,6 +55,26 @@ func LooksLikeTextualToolCall(content string) bool {
 	return false
 }
 
+// MayBecomeTextualToolCall reports whether a stream prefix ends inside a
+// possible textual tool-call marker. It is deliberately conservative and is
+// used only to delay streaming by a tiny tail buffer.
+func MayBecomeTextualToolCall(content string) bool {
+	s := strings.ToLower(content)
+	tails := []string{
+		"<", "<t", "<to", "<too", "<tool", "<tool_", "<tool_c", "<tool_ca", "<tool_cal",
+		"<f", "<fu", "<fun", "<func", "<funct", "<functi", "<functio", "<function",
+		"<p", "<pa", "<par", "<para", "<param", "<parame", "<paramet", "<paramete", "<parameter",
+		"<｜", "<｜｜", "<｜｜d", "<｜｜ds", "<｜｜dsm", "<｜｜dsml",
+		"```", "``", "`",
+	}
+	for _, tail := range tails {
+		if strings.HasSuffix(s, tail) {
+			return true
+		}
+	}
+	return false
+}
+
 // NormalizeAssistantMessage trims assistant output and handles textual tool-call
 // markup. When structured ToolCalls are present, strips textual markup from Content.
 // When no structured ToolCalls exist but textual markup is detected, attempts to
@@ -76,6 +98,14 @@ func ParseTextualToolCalls(content string) []ToolCall {
 	var calls []ToolCall
 
 	// Pattern 1: <tool_invocation name="NAME" arguments=ARGS />
+	for _, match := range reParseToolInvocationQuoted.FindAllStringSubmatch(content, -1) {
+		if call, ok := buildToolCall(match[1], match[2]); ok {
+			calls = append(calls, call)
+		}
+	}
+	if len(calls) > 0 {
+		return calls
+	}
 	for _, match := range reParseToolInvocation.FindAllStringSubmatch(content, -1) {
 		if call, ok := buildToolCall(match[1], match[2]); ok {
 			calls = append(calls, call)
@@ -97,6 +127,16 @@ func ParseTextualToolCalls(content string) []ToolCall {
 
 	// Pattern 3: DSML (DeepSeek) format
 	for _, match := range reParseDSMLInvoke.FindAllStringSubmatch(content, -1) {
+		if call, ok := buildToolCall(match[1], match[2]); ok {
+			calls = append(calls, call)
+		}
+	}
+	if len(calls) > 0 {
+		return calls
+	}
+
+	// Pattern 4: <tool_name>NAME</tool_name><parameters>ARGS</parameters>
+	for _, match := range reParseToolNameParams.FindAllStringSubmatch(content, -1) {
 		if call, ok := buildToolCall(match[1], match[2]); ok {
 			calls = append(calls, call)
 		}
