@@ -119,6 +119,10 @@
       "limit": "Maximum runbook matches. Defaults to 5, max 20."
     }
   },
+  "system-current_time": {
+    "description": "Read the current date and time from the server system clock. Use when the user asks about today, now, current date/time, relative dates, deadlines, or when an investigation needs an absolute date anchor.",
+    "parameters": {}
+  },
   "code-symbols": {
     "description": "Search symbols using language-server code intelligence. More precise than text search for finding functions, methods, classes, and interfaces. This is read-only.",
     "parameters": {

@@ -499,8 +499,10 @@ func (b Base) explicitRepo(path string) (string, error) {
 func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string, rt registry.Runtime) (snapshot, error) {
 	branch := strings.TrimSpace(rawBranch)
 	// Use --force to handle force-pushed branches without ref lock errors.
-	// Fetch may still fail (network, concurrent access) — non-fatal, use local cache.
-	_, _ = b.run(ctx, repo, "fetch", "--prune", "--force", "--no-write-fetch-head", "origin")
+	// Snapshot tools must not silently answer from stale origin refs.
+	if _, err := b.run(ctx, repo, "fetch", "--prune", "--force", "--no-write-fetch-head", "origin"); err != nil {
+		return snapshot{}, err
+	}
 	if branch == "" {
 		var err error
 		branch, err = b.defaultBranch(ctx, repo)

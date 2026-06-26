@@ -1,6 +1,8 @@
 package memory
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -302,6 +304,36 @@ func TestCircuitBreaker(t *testing.T) {
 	}
 }
 
+func TestCompactForceFallsBackWhenLLMSummaryFails(t *testing.T) {
+	c := &Compactor{
+		LLMClient:           failingCompactClient{},
+		MaxToolResultTokens: 10,
+	}
+	messages := []llm.Message{
+		{Role: "system", Content: "system"},
+		{Role: "user", Content: strings.Repeat("old context ", 200)},
+		{Role: "assistant"},
+		{Role: "tool", Name: "code-read_file", ToolCallID: "1", Content: strings.Repeat("large result ", 500)},
+	}
+
+	compacted, result, err := c.CompactForce(context.Background(), messages)
+	if err != nil {
+		t.Fatalf("CompactForce() error = %v", err)
+	}
+	if result == nil || result.Layer != "force_llm_compact_failed" {
+		t.Fatalf("result = %#v, want force_llm_compact_failed", result)
+	}
+	if len(compacted) == 0 {
+		t.Fatal("expected fallback messages")
+	}
+	c.mu.Lock()
+	failures := c.consecutiveFailures
+	c.mu.Unlock()
+	if failures != 1 {
+		t.Fatalf("consecutiveFailures = %d, want 1", failures)
+	}
+}
+
 func TestFoldHistoryKeepsRecentSegmentsIntact(t *testing.T) {
 	c := &Compactor{
 		MaxContextTokens:  140,
@@ -390,6 +422,12 @@ func TestRepairToolPairing(t *testing.T) {
 }
 
 // --- helpers ---
+
+type failingCompactClient struct{}
+
+func (failingCompactClient) Chat(context.Context, llm.Request) (llm.Response, error) {
+	return llm.Response{}, errors.New("compact model unavailable")
+}
 
 func truncateForTest(s string, max int) string {
 	runes := []rune(s)

@@ -47,6 +47,10 @@ type LLMResponseObserver interface {
 	LLMResponse(resp llm.Response, d time.Duration, err error)
 }
 
+type EventObserver interface {
+	Event(name string, metadata map[string]any)
+}
+
 type StatusUpdater func(status string)
 
 type ObservationFormatter interface {
@@ -60,29 +64,31 @@ type Sanitizer interface {
 type SteeringProvider func() []llm.Message
 
 type Runner struct {
-	LLM          llm.Client
-	Model        string
-	Thinking     string
-	MaxTokens    int
-	Temp         float64
-	Tools        *registry.Registry
-	Capabilities llm.Capabilities
-	Format       ObservationFormatter
-	Sanitize     Sanitizer
-	Observer     Observer
-	MaxSteps     int
-	Compactor    *memory.Compactor
-	StatusUpdate StatusUpdater
-	OnStream     func(StreamEvent)
-	OnUsage      func(llm.Usage)
+	LLM               llm.Client
+	Model             string
+	Thinking          string
+	MaxTokens         int
+	Temp              float64
+	Tools             *registry.Registry
+	Capabilities      llm.Capabilities
+	Format            ObservationFormatter
+	Sanitize          Sanitizer
+	Observer          Observer
+	MaxSteps          int
+	Compactor         *memory.Compactor
+	StatusUpdate      StatusUpdater
+	OnStream          func(StreamEvent)
+	OnUsage           func(llm.Usage)
+	OnLLMStepComplete func()
 }
 
 type Request struct {
-	Messages []llm.Message
-	Runtime  registry.Runtime
-	Locale   string
-	RunID    string
-	Steering SteeringProvider
+	Messages     []llm.Message
+	UserQuestion string
+	Runtime      registry.Runtime
+	Locale       string
+	RunID        string
+	Steering     SteeringProvider
 }
 
 type Result struct {
@@ -127,7 +133,6 @@ var codeReadingTools = map[string]bool{
 	"code-definition":   true,
 	"code-references":   true,
 	"explore-code":      true,
-	"rag-search":        true,
 }
 
 // hasFencedCodeBlock reports whether text contains a fenced code block
@@ -184,6 +189,8 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	codeToolCalledThisRun := false
 	afterTools := false
 	pivotInjected := false
+	searchMissPivotInjected := false
+	consecutiveNoMatchSearchRounds := 0
 	toolsWithoutProgress := 0
 	clarificationErrors := newClarificationErrorTracker()
 	control := newRunnerControl()
@@ -195,6 +202,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		if step >= pivotAfterSteps && afterTools && !pivotInjected {
 			messages = append(messages, llm.Message{Role: "system", Content: stepBudgetPivotMessage()})
 			pivotInjected = true
+			r.observeEvent("step_budget_pivot", map[string]any{"step": step})
 		}
 		if req.Steering != nil {
 			if steering := req.Steering(); len(steering) > 0 {
@@ -205,6 +213,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		if r.Compactor != nil {
 			messages = r.compactMessages(ctx, messages)
 		}
+		messages = memory.PrepareForLLM(messages)
 
 		var toolSpecs []llm.ToolSpec
 		if r.Tools != nil {
@@ -300,6 +309,9 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 				r.Observer.LLMCall(resp.Usage, llmDuration, err)
 			}
 		}
+		if r.OnLLMStepComplete != nil {
+			r.OnLLMStepComplete()
+		}
 		if err != nil {
 			if llm.IsEmptyResponse(err) && !retriedEmptyResponse {
 				retriedEmptyResponse = true
@@ -341,6 +353,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 
 		assistantMsg := resp.Message
 		assistantMsg.Usage = &resp.Usage // attach API-reported token usage for calibration
+		assistantMsg.ToolCalls = memory.NormalizeToolCalls(assistantMsg.ToolCalls)
 		if router != nil {
 			router.finish(len(assistantMsg.ToolCalls) > 0)
 		}
@@ -430,11 +443,12 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			}
 		}
 		assistantMsg.Content = ""
+		assistantMsg.ReasoningContent = ""
 		messages = append(messages, assistantMsg)
 		generated = append(generated, assistantMsg)
 
 		var toolResults []toolResult
-		if streamExec != nil && streamExec.HasResults() {
+		if streamExec != nil && streamExec.HasSubmitted() {
 			toolResults = streamExec.Drain(assistantMsg.ToolCalls)
 		} else {
 			toolResults = r.executeToolCalls(ctx, assistantMsg.ToolCalls, seenToolCalls, seenSearchTerms, req)
@@ -442,11 +456,14 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		if len(toolResults) > 0 {
 			afterTools = true
 		}
+		allSearchesMissed := searchRoundAllNoMatch(toolResults)
+		searchesHadHits := searchRoundHasHits(toolResults)
 		if toolResultsLackProgress(toolResults) {
 			toolsWithoutProgress++
 			if toolsWithoutProgress >= 3 && !pivotInjected {
 				messages = append(messages, llm.Message{Role: "system", Content: stepBudgetPivotMessage()})
 				pivotInjected = true
+				r.observeEvent("tool_progress_pivot", map[string]any{"rounds_without_progress": toolsWithoutProgress})
 			}
 		} else if len(toolResults) > 0 {
 			toolsWithoutProgress = 0
@@ -464,6 +481,16 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 					PendingQuestion: tr.message.Content,
 				}, nil
 			}
+		}
+		if allSearchesMissed {
+			consecutiveNoMatchSearchRounds++
+			if consecutiveNoMatchSearchRounds >= 2 && !searchMissPivotInjected {
+				messages = append(messages, llm.Message{Role: "system", Content: searchMissPivotMessage()})
+				searchMissPivotInjected = true
+				r.observeEvent("search_miss_pivot", map[string]any{"consecutive_no_match_rounds": consecutiveNoMatchSearchRounds})
+			}
+		} else if searchesHadHits {
+			consecutiveNoMatchSearchRounds = 0
 		}
 		control.finishTurn(toolResults)
 		locale := requestLocale(req.Locale)
@@ -487,6 +514,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	if r.Compactor != nil {
 		messages = r.compactMessages(ctx, messages)
 	}
+	messages = memory.PrepareForLLM(messages)
 	messages = append(messages, llm.Message{Role: "system", Content: "You have reached the investigation step limit. Summarize your findings now based on evidence gathered so far. If you are uncertain, state what is known and what remains unverified."})
 	resp, err := r.LLM.Chat(ctx, llm.Request{
 		Model:       r.Model,
@@ -544,10 +572,12 @@ func (r Runner) compactMessages(ctx context.Context, messages []llm.Message) []l
 	// Always apply micro-compact first (zero cost, clears old tool results).
 	messages = r.Compactor.ApplyMicroCompact(messages)
 	// Only run expensive compaction when near the threshold.
-	compacted, _, err := r.Compactor.CompactIfNeeded(ctx, messages)
+	compacted, result, err := r.Compactor.CompactIfNeeded(ctx, messages)
 	if err != nil {
+		r.observeEvent("compact_error", map[string]any{"error": err.Error(), "mode": "auto"})
 		return messages
 	}
+	r.observeCompactResult(result)
 	return compacted
 }
 
@@ -555,11 +585,37 @@ func (r Runner) compactMessagesAggressive(ctx context.Context, messages []llm.Me
 	if r.Compactor == nil {
 		return messages
 	}
-	compacted, err := r.Compactor.CompactForce(ctx, messages)
+	compacted, result, err := r.Compactor.CompactForce(ctx, messages)
 	if err != nil {
+		r.observeEvent("compact_error", map[string]any{"error": err.Error(), "mode": "force"})
 		return messages
 	}
+	r.observeCompactResult(result)
 	return compacted
+}
+
+func (r Runner) observeCompactResult(result *memory.CompactResult) {
+	if result == nil || result.Layer == "" {
+		return
+	}
+	meta := map[string]any{
+		"layer":       result.Layer,
+		"pre_tokens":  result.PreTokens,
+		"post_tokens": result.PostTokens,
+	}
+	if result.CircuitBreakerHit {
+		meta["circuit_breaker_hit"] = true
+	}
+	r.observeEvent("context_compact", meta)
+}
+
+func (r Runner) observeEvent(name string, metadata map[string]any) {
+	if r.Observer == nil || name == "" {
+		return
+	}
+	if observer, ok := r.Observer.(EventObserver); ok {
+		observer.Event(name, metadata)
+	}
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {
@@ -705,9 +761,10 @@ func (r Runner) executeSingleTool(ctx context.Context, call llm.ToolCall, req Re
 	result, err := r.Tools.Execute(ctx, name, args, req.Runtime)
 	duration := time.Since(start)
 	content := ""
+	needsUserInput := result.NeedsUserInput || result.WaitForUser
 	if err != nil {
 		content = "[tool error] " + err.Error()
-	} else if result.WaitForUser {
+	} else if needsUserInput {
 		content = r.sanitize(result.Content)
 	} else {
 		content = r.format(name, r.sanitize(result.Content))
@@ -715,7 +772,7 @@ func (r Runner) executeSingleTool(ctx context.Context, call llm.ToolCall, req Re
 	content = maybeSpillResult(spillRunID(req.RunID), name, call.ID, content)
 	return toolResult{
 		message:     llm.Message{Role: "tool", ToolCallID: call.ID, Name: name, Content: content},
-		waitForUser: err == nil && result.WaitForUser,
+		waitForUser: err == nil && needsUserInput,
 		name:        name,
 		args:        args,
 		duration:    duration,
@@ -963,6 +1020,10 @@ func stepBudgetPivotMessage() string {
 	return "You have used several investigation steps. If you have enough evidence for a useful partial answer, stop searching and summarize your findings now. State what is known, what remains uncertain, and suggest the next concrete check the user could try."
 }
 
+func searchMissPivotMessage() string {
+	return prompts.RunnerPrompt("search_miss_pivot", "Recent searches returned no matches. Before repeating similar search terms, diagnose the failed assumption: wrong repository/root, wrong branch/ref, wrong path, wrong product wording, generated code, missing external tool, or unavailable data source. Try a different evidence source or a meaningfully different naming pattern. If that still misses, answer with what is known and what remains unverified instead of continuing to guess.")
+}
+
 func toolResultsLackProgress(results []toolResult) bool {
 	if len(results) == 0 {
 		return false
@@ -989,6 +1050,57 @@ func emptyToolResult(content string) bool {
 		return true
 	}
 	return strings.HasPrefix(content, "no matching code found")
+}
+
+func unwrapEvidenceContent(content string) string {
+	content = strings.TrimSpace(content)
+	if !strings.Contains(content, "<evidence") {
+		return content
+	}
+	start := strings.Index(content, ">")
+	end := strings.LastIndex(content, "</evidence>")
+	if start < 0 || end <= start {
+		return content
+	}
+	return strings.TrimSpace(content[start+1 : end])
+}
+
+func isNoMatchResult(content string) bool {
+	inner := unwrapEvidenceContent(content)
+	switch inner {
+	case "", "no matches", "no web results":
+		return true
+	}
+	return strings.HasPrefix(inner, "no matching code found")
+}
+
+func searchRoundAllNoMatch(results []toolResult) bool {
+	if len(results) == 0 {
+		return false
+	}
+	searches := 0
+	for _, result := range results {
+		if !searchDedupTools[result.name] {
+			continue
+		}
+		searches++
+		if !isNoMatchResult(result.message.Content) {
+			return false
+		}
+	}
+	return searches > 0
+}
+
+func searchRoundHasHits(results []toolResult) bool {
+	for _, result := range results {
+		if !searchDedupTools[result.name] {
+			continue
+		}
+		if !isNoMatchResult(result.message.Content) {
+			return true
+		}
+	}
+	return false
 }
 
 func looksRepetitive(text string) bool {

@@ -40,3 +40,27 @@ func TestRecorderTracksRAGIndexAndSearchHealth(t *testing.T) {
 		t.Fatalf("LastError = %q, want boom", state.LastError)
 	}
 }
+
+func TestRecorderTracksAgentEvents(t *testing.T) {
+	rec := NewRecorder()
+	rec.Event("search_miss_pivot", map[string]any{"consecutive_no_match_rounds": 2})
+	rec.Event("compact_error", map[string]any{"error": "summary failed"})
+
+	snap := rec.Snapshot()
+	if snap.AgentEvents["search_miss_pivot"] != 1 {
+		t.Fatalf("search_miss_pivot count = %d, want 1", snap.AgentEvents["search_miss_pivot"])
+	}
+	if snap.AgentEvents["compact_error"] != 1 {
+		t.Fatalf("compact_error count = %d, want 1", snap.AgentEvents["compact_error"])
+	}
+	found := false
+	for _, err := range snap.LastErrors {
+		if err == "compact_error: summary failed" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("LastErrors = %#v, want compact error", snap.LastErrors)
+	}
+}

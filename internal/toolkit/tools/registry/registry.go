@@ -50,7 +50,15 @@ func (c *RuntimeCache) Set(key string, value any) {
 }
 
 type Result struct {
-	Content     string
+	Content string
+
+	// NeedsUserInput means the tool is intentionally pausing the run because
+	// the model lacks a preference, direction, or missing detail from the user.
+	// This is not a permission approval mechanism.
+	NeedsUserInput bool
+
+	// WaitForUser is kept for compatibility with older tools/tests. New tools
+	// should set NeedsUserInput instead.
 	WaitForUser bool
 }
 
@@ -71,8 +79,7 @@ type ParallelTool interface {
 }
 
 // WriteTool marks a tool that performs write/mutate operations (create, update,
-// delete, dispatch). When the registry is in read-only mode, these tools are
-// registered (so the model sees them in tool specs) but execution is refused.
+// delete, dispatch). Capability policy decides whether these tools are exposed.
 type WriteTool interface {
 	IsWrite() bool
 }
@@ -84,10 +91,14 @@ type DeferredTool interface {
 	Category() string
 }
 
+type CapabilityPolicy struct {
+	AllowWrites bool
+}
+
 const (
 	CategoryDiagnostics = "diagnostics"
-	CategoryBrowser       = "browser"
-	CategoryIntegration   = "integration"
+	CategoryBrowser     = "browser"
+	CategoryIntegration = "integration"
 )
 
 func IsRepeatable(tool Tool) bool {
@@ -115,27 +126,26 @@ type Registry struct {
 	tools      map[string]Tool
 	deferred   map[string]Tool
 	categories map[string][]string
-	readOnly   bool
+	policy     CapabilityPolicy
 }
 
 func New() *Registry {
+	return NewWithPolicy(CapabilityPolicy{AllowWrites: true})
+}
+
+func NewWithPolicy(policy CapabilityPolicy) *Registry {
 	return &Registry{
 		tools:      map[string]Tool{},
 		deferred:   map[string]Tool{},
 		categories: map[string][]string{},
+		policy:     policy,
 	}
 }
 
-// NewReadOnly creates a registry that refuses to execute write tools.
-// Write tools are still registered (visible to the model) but will return
-// a descriptive error when called.
+// NewReadOnly creates a registry whose exposed tool surface excludes write tools.
+// Execute still refuses write tools as a defense-in-depth fallback for stale contexts.
 func NewReadOnly() *Registry {
-	return &Registry{
-		tools:      map[string]Tool{},
-		deferred:   map[string]Tool{},
-		categories: map[string][]string{},
-		readOnly:   true,
-	}
+	return NewWithPolicy(CapabilityPolicy{AllowWrites: false})
 }
 
 func (r *Registry) Register(tool Tool) {
@@ -149,6 +159,18 @@ type categorizedTool struct {
 
 func (t categorizedTool) Category() string {
 	return t.category
+}
+
+func (t categorizedTool) Repeatable() bool {
+	return IsRepeatable(t.Tool)
+}
+
+func (t categorizedTool) Parallel() bool {
+	return CanRunInParallel(t.Tool)
+}
+
+func (t categorizedTool) IsWrite() bool {
+	return IsWriteOp(t.Tool)
 }
 
 // AsDeferred wraps a tool with a deferred-tool category label.
@@ -169,15 +191,25 @@ func (r *Registry) ActivateCategory(category string) []string {
 	names := append([]string(nil), r.categories[category]...)
 	activated := make([]string, 0, len(names))
 	for _, name := range names {
-		tool, ok := r.deferred[name]
-		if !ok {
-			continue
+		if r.ActivateTool(name) {
+			activated = append(activated, name)
 		}
-		r.tools[name] = tool
-		delete(r.deferred, name)
-		activated = append(activated, name)
 	}
 	return activated
+}
+
+// ActivateTool moves one deferred tool into the active tool set.
+func (r *Registry) ActivateTool(name string) bool {
+	tool, ok := r.deferred[name]
+	if !ok {
+		return false
+	}
+	if !r.canExpose(tool) {
+		return false
+	}
+	r.tools[name] = tool
+	delete(r.deferred, name)
+	return true
 }
 
 func (r *Registry) DeferredCategories() []string {
@@ -188,7 +220,7 @@ func (r *Registry) DeferredCategories() []string {
 		}
 		pending := 0
 		for _, name := range names {
-			if _, ok := r.deferred[name]; ok {
+			if tool, ok := r.deferred[name]; ok && r.canExpose(tool) {
 				pending++
 			}
 		}
@@ -204,7 +236,7 @@ func (r *Registry) DeferredToolNames(category string) []string {
 	names := append([]string(nil), r.categories[category]...)
 	pending := make([]string, 0, len(names))
 	for _, name := range names {
-		if _, ok := r.deferred[name]; ok {
+		if tool, ok := r.deferred[name]; ok && r.canExpose(tool) {
 			pending = append(pending, name)
 		}
 	}
@@ -223,7 +255,10 @@ func (r *Registry) Specs() []llm.ToolSpec {
 
 func (r *Registry) Names() []string {
 	names := make([]string, 0, len(r.tools))
-	for name := range r.tools {
+	for name, tool := range r.tools {
+		if !r.canExpose(tool) {
+			continue
+		}
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -240,10 +275,14 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 	if !ok {
 		return Result{}, fmt.Errorf("unknown tool %q", name)
 	}
-	if r.readOnly && IsWriteOp(tool) {
-		return Result{}, fmt.Errorf("tool %q is a write operation and is disabled in read-only mode; use read/query tools instead", name)
+	if !r.policy.AllowWrites && IsWriteOp(tool) {
+		return Result{}, fmt.Errorf("tool %q is a write operation and is disabled by server capability policy", name)
 	}
 	return tool.Execute(ctx, args, rt)
+}
+
+func (r *Registry) canExpose(tool Tool) bool {
+	return r.policy.AllowWrites || !IsWriteOp(tool)
 }
 
 func (r *Registry) IsRepeatable(name string) bool {

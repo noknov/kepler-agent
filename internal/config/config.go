@@ -520,11 +520,7 @@ func providerThinking(provider string) string {
 	case "kimi", "moonshot":
 		return firstEnv("KIMI_THINKING")
 	case "deepseek":
-		v := firstEnv("DEEPSEEK_THINKING")
-		if v == "" {
-			return "enabled"
-		}
-		return v
+		return firstEnv("DEEPSEEK_THINKING")
 	default:
 		return ""
 	}
