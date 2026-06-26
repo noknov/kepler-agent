@@ -15,6 +15,7 @@ import (
 
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/safety"
+	"github.com/wati/oncall-agent/internal/toolkit/gitcache"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
@@ -59,10 +60,10 @@ func (t ReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 		args.MaxLines = 1000
 	}
 
-	// If the file is inside a tracked git repo, lazy-fetch once per run and
+	// If the file is inside a tracked git repo, lazy-fetch on a process TTL and
 	// read from the upstream tracking ref via "git show".  This guarantees the
-	// agent always sees the latest committed code without modifying the working
-	// tree — safe for concurrent multi-user access.
+	// agent usually sees recent committed code without paying a remote fetch on
+	// every Slack request and without modifying the working tree.
 	if repoDir := findRepoRoot(t.Paths.Roots, filepath.Dir(path)); repoDir != "" {
 		upstreamRef := lazyFetchRepo(ctx, repoDir, rt)
 		if relPath, relErr := filepath.Rel(repoDir, path); relErr == nil && !strings.HasPrefix(relPath, "..") {
@@ -229,19 +230,16 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	return registry.Result{Content: strings.Join(resultLines, "\n")}, nil
 }
 
-// lazyFetchRepo does one "git fetch origin" per repo per agent run, deduplicating
-// via rt.Cache. Returns the upstream tracking ref for HEAD (e.g. "origin/main").
-// This is the lazy-load contract: the first code-search or code-read_file call for
-// a repo in a given run triggers a fetch; subsequent calls skip the network hop.
+// lazyFetchRepo refreshes origin refs on a process-wide TTL. Returns the
+// upstream tracking ref for HEAD (e.g. "origin/main"). Runtime cache still
+// deduplicates repeated calls inside the same run, while gitcache prevents
+// separate user requests from all fetching the same repo.
 func lazyFetchRepo(ctx context.Context, repoDir string, rt registry.Runtime) string {
 	cacheKey := "code-git-fetch\x00" + filepath.Clean(repoDir)
 	if _, ok := rt.Cache.Get(cacheKey); !ok {
 		fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(fetchCtx, "git", "-C", repoDir,
-			"fetch", "--prune", "--force", "--no-write-fetch-head", "origin")
-		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-		_, _ = cmd.CombinedOutput() // non-fatal; stale is always better than broken
+		_ = gitcache.FetchOrigin(fetchCtx, repoDir, gitcache.DefaultFetchTTL) // non-fatal; stale is better than broken
 		rt.Cache.Set(cacheKey, true)
 	}
 	// Resolve the upstream tracking ref (fast, no network).

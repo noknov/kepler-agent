@@ -18,6 +18,7 @@ import (
 	knowledgeTools "github.com/wati/oncall-agent/internal/toolkit/tools/knowledge"
 	luckinTools "github.com/wati/oncall-agent/internal/toolkit/tools/luckin"
 	notionTools "github.com/wati/oncall-agent/internal/toolkit/tools/notion"
+	plannerTools "github.com/wati/oncall-agent/internal/toolkit/tools/planner"
 	playwrightTools "github.com/wati/oncall-agent/internal/toolkit/tools/playwright"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 	skillTools "github.com/wati/oncall-agent/internal/toolkit/tools/skills"
@@ -150,6 +151,7 @@ func registerAgentControlTools(tools *registry.Registry, cfg config.Config, llmC
 	}
 	delegates.SetPolicyPrompt(prompts.RulesAndSkillsPrompt())
 	delegates.SetTools(tools)
+	tools.Register(plannerTools.PlanTool{})
 	tools.Register(skillTools.LoadTool{})
 	tools.Register(delegation.Tool{Manager: delegates})
 	tools.Register(delegation.ExploreTool{Manager: delegates})

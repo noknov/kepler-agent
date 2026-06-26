@@ -4,10 +4,10 @@ import (
 	"context"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
+
+	"github.com/wati/oncall-agent/internal/toolkit/gitcache"
 )
 
 // pullWorkspaceRepos periodically runs "git fetch origin" for each sub-repo
@@ -22,11 +22,8 @@ func pullWorkspaceRepos(ctx context.Context, roots []string, interval time.Durat
 	pullAll := func() {
 		for _, dir := range discoverWorkspaceRepos(roots) {
 			name := filepath.Base(dir)
-			cmd := exec.CommandContext(ctx, "git", "-C", dir, "fetch", "--prune", "--force", "--no-write-fetch-head", "origin")
-			cmd.Env = gitFetchEnv()
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				log.Printf("workspace fetch %s: %s", name, strings.TrimSpace(string(out)))
+			if err := gitcache.FetchOrigin(ctx, dir, interval); err != nil {
+				log.Printf("workspace fetch %s: %v", name, err)
 			} else {
 				log.Printf("workspace fetch %s: ok", name)
 			}
@@ -73,8 +70,4 @@ func discoverWorkspaceRepos(roots []string) []string {
 		}
 	}
 	return repos
-}
-
-func gitFetchEnv() []string {
-	return append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 }

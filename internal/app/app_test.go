@@ -148,13 +148,6 @@ func TestIsThreadReply(t *testing.T) {
 	}
 }
 
-func TestGitFetchEnvDisablesTerminalPrompt(t *testing.T) {
-	env := gitFetchEnv()
-	if !containsEnv(env, "GIT_TERMINAL_PROMPT=0") {
-		t.Fatal("git fetch env should disable terminal prompts")
-	}
-}
-
 func TestDiscoverWorkspaceReposIncludesRootAndChildren(t *testing.T) {
 	root := t.TempDir()
 	mkdir(t, root, ".git")
@@ -378,15 +371,6 @@ func mkdir(t *testing.T, parts ...string) {
 	if err := os.MkdirAll(filepath.Join(parts...), 0o700); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func containsEnv(env []string, value string) bool {
-	for _, item := range env {
-		if item == value {
-			return true
-		}
-	}
-	return false
 }
 
 func flattenBlockText(view map[string]any) string {
