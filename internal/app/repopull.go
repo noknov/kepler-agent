@@ -10,18 +10,31 @@ import (
 	"time"
 )
 
-// pullWorkspaceRepos periodically git-fetches each sub-repo under the given
-// workspace roots so the agent always reads up-to-date code.
+// pullWorkspaceRepos periodically git-fetches and fast-forwards each sub-repo
+// under the given workspace roots so the agent always reads up-to-date code.
 func pullWorkspaceRepos(ctx context.Context, roots []string, interval time.Duration) {
 	pullAll := func() {
 		for _, dir := range discoverWorkspaceRepos(roots) {
-			cmd := exec.CommandContext(ctx, "git", "-C", dir, "fetch", "--prune", "--no-write-fetch-head", "origin")
-			cmd.Env = gitFetchEnv()
-			out, pullErr := cmd.CombinedOutput()
-			if pullErr != nil {
-				log.Printf("workspace fetch %s: %s", filepath.Base(dir), strings.TrimSpace(string(out)))
+			name := filepath.Base(dir)
+			fetchCmd := exec.CommandContext(ctx, "git", "-C", dir, "fetch", "--prune", "--no-write-fetch-head", "origin")
+			fetchCmd.Env = gitFetchEnv()
+			if out, err := fetchCmd.CombinedOutput(); err != nil {
+				log.Printf("workspace fetch %s: %s", name, strings.TrimSpace(string(out)))
+				continue
+			}
+			// Fast-forward the local branch to match its upstream tracking branch.
+			// This keeps the working tree current so code-search/code-read_file
+			// return up-to-date results without the agent needing to use ref tools.
+			mergeCmd := exec.CommandContext(ctx, "git", "-C", dir, "merge", "--ff-only", "@{u}")
+			mergeCmd.Env = gitFetchEnv()
+			out, mergeErr := mergeCmd.CombinedOutput()
+			msg := strings.TrimSpace(string(out))
+			if mergeErr != nil {
+				log.Printf("workspace fetch %s: fetched ok, ff-merge failed: %s", name, msg)
+			} else if msg == "Already up to date." || msg == "Already up-to-date." {
+				log.Printf("workspace fetch %s: ok (up to date)", name)
 			} else {
-				log.Printf("workspace fetch %s: ok", filepath.Base(dir))
+				log.Printf("workspace fetch %s: ok, fast-forwarded (%s)", name, firstLine(msg))
 			}
 		}
 	}
@@ -70,4 +83,11 @@ func discoverWorkspaceRepos(roots []string) []string {
 
 func gitFetchEnv() []string {
 	return append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+}
+
+func firstLine(s string) string {
+	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+		return s[:idx]
+	}
+	return s
 }
