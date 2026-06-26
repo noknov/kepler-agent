@@ -59,14 +59,13 @@ type LLMConfig struct {
 	Temperature      float64
 	Timeout          time.Duration
 
-	// Explore sub-agent can use a different provider/model for speed/cost.
-	// Credentials (base URL, API key, protocol) are resolved from the
-	// provider's existing env block — only provider and model need to be set.
-	ExploreProvider string
-	ExploreBaseURL  string
-	ExploreAPIKey   string
-	ExploreModel    string
-	ExploreProtocol string
+	// Secondary model is used for cheaper/faster background work such as
+	// read-only code exploration and compact summaries.
+	SecondaryProvider string
+	SecondaryBaseURL  string
+	SecondaryAPIKey   string
+	SecondaryModel    string
+	SecondaryProtocol string
 }
 
 type TokenUsageConfig struct {
@@ -94,7 +93,7 @@ type SessionConfig struct {
 	MaxSummaryChars     int
 	MaxContextTokens    int    // context window token limit (default 200000)
 	AutocompactBuffer   int    // reserved token headroom before auto-compact (default 13000)
-	CompactModel        string // model used for compact summaries (empty = main model)
+	CompactModel        string // model used for compact summaries (empty = secondary model, then main model)
 	MaxToolResultTokens int    // per-tool-result token cap (default 5000)
 }
 
@@ -170,15 +169,15 @@ func Load() (Config, error) {
 		llmThinking = "disabled"
 	}
 
-	exploreProvider := strings.TrimSpace(os.Getenv("EXPLORE_PROVIDER"))
-	var exploreBaseURL, exploreAPIKey, exploreModel, exploreProtocol string
-	if exploreProvider != "" {
-		exploreBaseURL = providerBaseURL(exploreProvider)
-		exploreAPIKey = providerAPIKey(exploreProvider)
-		exploreProtocol = providerProtocol(exploreProvider)
-		exploreModel = strings.TrimSpace(os.Getenv("EXPLORE_MODEL"))
-		if exploreModel == "" {
-			exploreModel = providerModel(exploreProvider)
+	secondaryProvider := strings.TrimSpace(os.Getenv("SECONDARY_PROVIDER"))
+	var secondaryBaseURL, secondaryAPIKey, secondaryModel, secondaryProtocol string
+	if secondaryProvider != "" {
+		secondaryBaseURL = providerBaseURL(secondaryProvider)
+		secondaryAPIKey = providerAPIKey(secondaryProvider)
+		secondaryProtocol = providerProtocol(secondaryProvider)
+		secondaryModel = strings.TrimSpace(os.Getenv("SECONDARY_MODEL"))
+		if secondaryModel == "" {
+			secondaryModel = providerModel(secondaryProvider)
 		}
 	}
 
@@ -211,11 +210,11 @@ func Load() (Config, error) {
 			Temperature:     providerTemperature(llmProvider),
 			Timeout:         providerTimeout(llmProvider),
 
-			ExploreProvider: exploreProvider,
-			ExploreBaseURL:  trimRightSlash(exploreBaseURL),
-			ExploreAPIKey:   exploreAPIKey,
-			ExploreModel:    exploreModel,
-			ExploreProtocol: exploreProtocol,
+			SecondaryProvider: secondaryProvider,
+			SecondaryBaseURL:  trimRightSlash(secondaryBaseURL),
+			SecondaryAPIKey:   secondaryAPIKey,
+			SecondaryModel:    secondaryModel,
+			SecondaryProtocol: secondaryProtocol,
 		},
 		Security: SecurityConfig{
 			AllowedUsers:               envCSV("ALLOWED_SLACK_USERS"),
