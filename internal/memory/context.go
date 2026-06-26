@@ -64,7 +64,6 @@ func (b Builder) BuildWithParts(systemPrompt, threadContext, userText string, us
 		})
 	}
 	if threadContext != "" {
-		threadContext = CompressThreadContext(threadContext, b.MaxThreadChars)
 		messages = append(messages, llm.Message{
 			Role:    "user",
 			Content: prompts.MemoryLabel("thread_context", "") + "\n<slack_thread_context>\n" + threadContext + "\n</slack_thread_context>",
@@ -233,15 +232,17 @@ func CompressThreadContext(context string, budget int) string {
 		prompts.PromptText("thread_compressed_header", ""),
 		prompts.PromptText("thread_compressed_note", ""),
 	}
+
 	headCount, tailCount := 3, 8
 	headEnd := min(headCount, len(lines))
 	tailStart := max(headEnd, len(lines)-tailCount)
+
 	sections = append(sections, prompts.PromptText("thread_earliest_messages", ""))
-	sections = append(sections, numberedLines(lines[:headEnd], 1, 700)...)
+	sections = append(sections, numberedLines(lines[:headEnd], 1, 500)...)
 	if tailStart > headEnd {
 		middle := lines[headEnd:tailStart]
 		sections = append(sections, prompts.PromptText("thread_middle_summary", ""))
-		sections = append(sections, summarizeMiddleThread(middle, headEnd+1, budget/3)...)
+		sections = append(sections, summarizeMiddleThread(middle, headEnd+1, budget/4)...)
 	}
 	if tailStart < len(lines) {
 		sections = append(sections, prompts.PromptText("thread_recent_messages", ""))

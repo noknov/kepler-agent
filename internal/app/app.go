@@ -27,6 +27,7 @@ import (
 	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/session"
 	"github.com/wati/oncall-agent/internal/slack"
+	"github.com/wati/oncall-agent/internal/toolkit/gitcache"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 	"github.com/wati/oncall-agent/internal/web"
 )
@@ -41,7 +42,7 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	if cfg.Security.WorkspaceAutoFetch {
-		go pullWorkspaceRepos(ctx, cfg.Security.WorkspaceRoots, 10*time.Minute)
+		go pullWorkspaceRepos(ctx, cfg.Security.WorkspaceRoots, gitcache.DefaultFetchTTL)
 	}
 	if server.ragManager != nil && cfg.RAG.BackgroundIndex {
 		defer server.ragManager.Close()

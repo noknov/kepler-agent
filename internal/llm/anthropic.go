@@ -367,8 +367,8 @@ type cacheControl struct {
 }
 
 type anthropicTool struct {
-	Name         string        `json:"name"`
-	Description  string        `json:"description,omitempty"`
+	Name         string         `json:"name"`
+	Description  string         `json:"description,omitempty"`
 	InputSchema  map[string]any `json:"input_schema"`
 	CacheControl *cacheControl  `json:"cache_control,omitempty"`
 }
@@ -419,22 +419,67 @@ func anthropicUsage(r anthropicResponse) Usage {
 // caching — subsequent requests with the same system prefix hit the cache
 // and skip re-encoding, reducing TTFT by ~80%.
 func anthropicSystemBlocks(messages []Message) any {
-	parts := make([]string, 0)
+	blocks := make([]map[string]any, 0)
 	for _, msg := range messages {
-		if msg.Role == "system" && strings.TrimSpace(msg.Content) != "" {
-			parts = append(parts, msg.Content)
+		if msg.Role != "system" || strings.TrimSpace(msg.Content) == "" {
+			continue
+		}
+		for _, part := range splitSystemPromptForCache(msg.Content) {
+			if strings.TrimSpace(part.text) == "" {
+				continue
+			}
+			block := map[string]any{
+				"type": "text",
+				"text": part.text,
+			}
+			if part.cacheable {
+				block["cache_control"] = map[string]string{"type": "ephemeral"}
+			}
+			blocks = append(blocks, block)
 		}
 	}
-	if len(parts) == 0 {
+	if len(blocks) == 0 {
 		return nil
 	}
-	text := strings.Join(parts, "\n\n")
-	return []map[string]any{
-		{
-			"type":          "text",
-			"text":          text,
-			"cache_control": map[string]string{"type": "ephemeral"},
-		},
+	markLastCacheableBlock(blocks)
+	return blocks
+}
+
+type systemPromptPart struct {
+	text      string
+	cacheable bool
+}
+
+func splitSystemPromptForCache(text string) []systemPromptPart {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	const marker = "---DYNAMIC_CONTEXT_BELOW---"
+	idx := strings.Index(text, marker)
+	if idx < 0 {
+		return []systemPromptPart{{text: text, cacheable: true}}
+	}
+	staticPart := strings.TrimSpace(text[:idx])
+	dynamicPart := strings.TrimSpace(text[idx:])
+	parts := make([]systemPromptPart, 0, 2)
+	if staticPart != "" {
+		parts = append(parts, systemPromptPart{text: staticPart, cacheable: true})
+	}
+	if dynamicPart != "" {
+		parts = append(parts, systemPromptPart{text: dynamicPart})
+	}
+	return parts
+}
+
+func markLastCacheableBlock(blocks []map[string]any) {
+	for i := len(blocks) - 1; i >= 0; i-- {
+		if _, ok := blocks[i]["cache_control"]; ok {
+			return
+		}
+	}
+	if len(blocks) > 0 {
+		blocks[len(blocks)-1]["cache_control"] = map[string]string{"type": "ephemeral"}
 	}
 }
 

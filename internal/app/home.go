@@ -23,45 +23,42 @@ func (s *Server) handleAppHome(ctx context.Context, ev slack.Event) {
 
 func (s *Server) homeView(userID string) map[string]any {
 	allowed := s.access.AllowsUser(userID)
-	statusEmoji := ":white_check_mark:"
-	statusText := "Allowed"
+	accessHeader := "Access  :heavy_check_mark:"
 	if !allowed {
-		statusEmoji = ":no_entry:"
-		statusText = "Not allowlisted"
+		accessHeader = "Access  :no_entry:  Not allowlisted"
 	}
 
-	mentionText := "mention the bot"
+	botMention := "the bot"
 	if s.cfg.Slack.BotUserID != "" {
-		mentionText = fmt.Sprintf("mention `<@%s>`", s.cfg.Slack.BotUserID)
+		botMention = fmt.Sprintf("<@%s>", s.cfg.Slack.BotUserID)
 	}
 
-	currentModel := s.cfg.LLM.Model
-	if v, ok := s.modelPrefs.Load(userID); ok {
-		currentModel = v.(string)
+	secondary := strings.TrimSpace(s.cfg.LLM.SecondaryModel)
+	if secondary == "" {
+		secondary = s.cfg.LLM.Model
 	}
-
-	models := s.cfg.LLM.AvailableModels
-
-	blocks := []map[string]any{
-		headerBlock("斗包"),
-		sectionBlock(fmt.Sprintf("*Access* %s\n%s", statusText, statusEmoji)),
-		sectionBlock("*Model* `" + currentModel + "`"),
+	modelFields := []map[string]any{
+		mrkdwnField("*Primary*\n`" + s.cfg.LLM.Model + "`"),
+		mrkdwnField("*Explorer / Summary*\n`" + secondary + "`"),
 	}
-	if len(models) > 1 {
-		blocks = append(blocks, actionsBlock(modelSelectMenu(models, currentModel)))
-	}
-	blocks = append(blocks,
-		dividerBlock(),
-		sectionBlock(strings.Join([]string{
-			"*How to use*",
-			"- In a channel: " + mentionText + " and ask your question.",
-			"- Continue in the same thread so the bot keeps session context.",
-		}, "\n")),
-	)
 
 	return map[string]any{
-		"type":   "home",
-		"blocks": blocks,
+		"type": "home",
+		"blocks": []map[string]any{
+			sectionBlock(botMention + " — chat in any channel or DM"),
+			headerBlock(accessHeader),
+			dividerBlock(),
+			headerBlock("Model"),
+			sectionBlockWithFields("", modelFields...),
+			dividerBlock(),
+		},
+	}
+}
+
+func mrkdwnField(text string) map[string]any {
+	return map[string]any{
+		"type": "mrkdwn",
+		"text": text,
 	}
 }
 

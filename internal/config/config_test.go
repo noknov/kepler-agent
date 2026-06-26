@@ -560,6 +560,40 @@ func TestLoadTokenUsageConfigUsesOpenCodeGoEnv(t *testing.T) {
 	}
 }
 
+func TestLoadSecondaryModelConfig(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":      "xoxb-test",
+		"SLACK_SIGNING_SECRET": "secret",
+		"ALLOWED_SLACK_USERS":  "U123",
+		"DEEPSEEK_API_KEY":     "ds-token",
+		"SECONDARY_PROVIDER":   "opencode-zen",
+		"OPENCODE_ZEN_API_KEY": "secondary-token",
+		"SECONDARY_MODEL":      "mimo-v2.5-free",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.LLM.SecondaryProvider != "opencode-zen" {
+		t.Fatalf("SecondaryProvider = %q, want opencode-zen", cfg.LLM.SecondaryProvider)
+	}
+	if cfg.LLM.SecondaryModel != "mimo-v2.5-free" {
+		t.Fatalf("SecondaryModel = %q, want mimo-v2.5-free", cfg.LLM.SecondaryModel)
+	}
+	if cfg.LLM.SecondaryAPIKey != "secondary-token" {
+		t.Fatalf("SecondaryAPIKey = %q, want secondary-token", cfg.LLM.SecondaryAPIKey)
+	}
+}
+
 func TestLoadOpenCodeGoAnthropicEndpoint(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()

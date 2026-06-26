@@ -148,13 +148,6 @@ func TestIsThreadReply(t *testing.T) {
 	}
 }
 
-func TestGitFetchEnvDisablesTerminalPrompt(t *testing.T) {
-	env := gitFetchEnv()
-	if !containsEnv(env, "GIT_TERMINAL_PROMPT=0") {
-		t.Fatal("git fetch env should disable terminal prompts")
-	}
-}
-
 func TestDiscoverWorkspaceReposIncludesRootAndChildren(t *testing.T) {
 	root := t.TempDir()
 	mkdir(t, root, ".git")
@@ -251,7 +244,7 @@ func TestHomeViewIncludesModelAndAccess(t *testing.T) {
 	}}}
 	view := server.homeView("U1")
 	text := flattenBlockText(view)
-	for _, want := range []string{"斗包", "*Access*", "*Model*", "mimo-v2.5"} {
+	for _, want := range []string{"斗包", "*Access*", ":heavy_check_mark: Allowed", "*主模型*", "*副模型*", "mimo-v2.5"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("home view missing %q in %q", want, text)
 		}
@@ -261,57 +254,60 @@ func TestHomeViewIncludesModelAndAccess(t *testing.T) {
 	}
 }
 
-func TestHomeViewShowsModelDropdownWhenMultipleModels(t *testing.T) {
+func TestHomeViewShowsModelWithoutDropdown(t *testing.T) {
 	server := &Server{cfg: config.Config{LLM: config.LLMConfig{
 		Model:           "mimo-v2.5",
-		AvailableModels: []string{"mimo-v2.5", "mimo-v2.5-pro"},
+		AvailableModels: []string{"mimo-v2.5"},
 	}}}
 	view := server.homeView("U1")
 	blocks, _ := view["blocks"].([]map[string]any)
-	found := false
 	for _, block := range blocks {
-		if block["type"] != "actions" {
-			continue
-		}
-		elements, _ := block["elements"].([]map[string]any)
-		for _, element := range elements {
-			if element["action_id"] == "select_model" {
-				found = true
-			}
+		if block["type"] == "actions" {
+			t.Fatal("home view should not contain actions block (model dropdown removed)")
 		}
 	}
-	if !found {
-		t.Fatal("expected model select dropdown in actions block when multiple models available")
+	text := flattenBlockText(view)
+	if !strings.Contains(text, "*主模型*") || !strings.Contains(text, "*副模型*") || !strings.Contains(text, "mimo-v2.5") {
+		t.Fatal("expected model name in home view")
 	}
 }
 
-func TestHomeViewReflectsUserModelPreference(t *testing.T) {
+func TestHomeViewShowsPrimaryAndSecondaryModels(t *testing.T) {
 	server := &Server{cfg: config.Config{LLM: config.LLMConfig{
-		Model:           "mimo-v2.5",
-		AvailableModels: []string{"mimo-v2.5", "mimo-v2.5-pro"},
+		Model:          "mimo-v2.5",
+		SecondaryModel: "deepseek-v4-flash",
 	}}}
-	server.modelPrefs.Store("U1", "mimo-v2.5-pro")
 	view := server.homeView("U1")
 	blocks, _ := view["blocks"].([]map[string]any)
-	found := false
+	foundPrimary := false
+	foundSecondary := false
 	for _, block := range blocks {
-		if block["type"] != "actions" {
+		if block["type"] != "section" {
 			continue
 		}
-		elements, _ := block["elements"].([]map[string]any)
-		for _, element := range elements {
-			if element["action_id"] != "select_model" {
-				continue
+		for _, field := range blockFields(block) {
+			if strings.Contains(field, "主模型") && strings.Contains(field, "mimo-v2.5") {
+				foundPrimary = true
 			}
-			initial, _ := element["initial_option"].(map[string]any)
-			if initial != nil && initial["value"] == "mimo-v2.5-pro" {
-				found = true
+			if strings.Contains(field, "副模型") && strings.Contains(field, "deepseek-v4-flash") {
+				foundSecondary = true
 			}
 		}
 	}
-	if !found {
-		t.Fatal("expected dropdown initial_option to reflect user's preferred model mimo-v2.5-pro")
+	if !foundPrimary || !foundSecondary {
+		t.Fatalf("expected primary and secondary model fields in home view, primary=%v secondary=%v", foundPrimary, foundSecondary)
 	}
+}
+
+func blockFields(block map[string]any) []string {
+	raw, _ := block["fields"].([]map[string]any)
+	out := make([]string, 0, len(raw))
+	for _, field := range raw {
+		if text, _ := field["text"].(string); text != "" {
+			out = append(out, text)
+		}
+	}
+	return out
 }
 
 func TestHomeViewDoesNotShowTokenUsage(t *testing.T) {
@@ -375,15 +371,6 @@ func mkdir(t *testing.T, parts ...string) {
 	if err := os.MkdirAll(filepath.Join(parts...), 0o700); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func containsEnv(env []string, value string) bool {
-	for _, item := range env {
-		if item == value {
-			return true
-		}
-	}
-	return false
 }
 
 func flattenBlockText(view map[string]any) string {

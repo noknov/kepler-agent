@@ -20,6 +20,7 @@ type Snapshot struct {
 	EstimatedCostUSD float64          `json:"estimated_cost_usd,omitempty"`
 	ToolCalls        map[string]int64 `json:"tool_calls"`
 	ToolErrors       map[string]int64 `json:"tool_errors"`
+	AgentEvents      map[string]int64 `json:"agent_events,omitempty"`
 	ReactionFeedback map[string]int64 `json:"reaction_feedback"`
 	LatencyMS        LatencySummary   `json:"latency_ms"`
 	LLMLatencyMS     LatencySummary   `json:"llm_latency_ms"`
@@ -87,6 +88,7 @@ func NewRecorder() *Recorder {
 			StartedAt:        now,
 			ToolCalls:        map[string]int64{},
 			ToolErrors:       map[string]int64{},
+			AgentEvents:      map[string]int64{},
 			ReactionFeedback: map[string]int64{},
 			RAG: RAGSnapshot{
 				Indexes: map[string]RAGIndexState{},
@@ -139,6 +141,21 @@ func (r *Recorder) ToolCall(name string, d time.Duration, err error) {
 	if err != nil {
 		r.snap.ToolErrors[name]++
 		r.addErrorLocked(name + ": " + err.Error())
+	}
+}
+
+func (r *Recorder) Event(name string, metadata map[string]any) {
+	if name == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.snap.AgentEvents == nil {
+		r.snap.AgentEvents = map[string]int64{}
+	}
+	r.snap.AgentEvents[name]++
+	if errText, ok := metadata["error"].(string); ok && errText != "" {
+		r.addErrorLocked(name + ": " + errText)
 	}
 }
 
@@ -239,6 +256,7 @@ func (r *Recorder) Snapshot() Snapshot {
 	cp := r.snap
 	cp.ToolCalls = copyMap(r.snap.ToolCalls)
 	cp.ToolErrors = copyMap(r.snap.ToolErrors)
+	cp.AgentEvents = copyMap(r.snap.AgentEvents)
 	cp.ReactionFeedback = copyMap(r.snap.ReactionFeedback)
 	cp.RAG.Indexes = copyRAGIndexes(r.snap.RAG.Indexes)
 	cp.LastErrors = append([]string(nil), r.snap.LastErrors...)

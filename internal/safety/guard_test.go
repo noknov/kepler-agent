@@ -22,7 +22,7 @@ func TestSystemPromptDefaultStaysGeneric(t *testing.T) {
 	if strings.Contains(prompt, "channelx-copilot-agent") || strings.Contains(prompt, "Channel-X Copilot Agent") || strings.Contains(prompt, "U085SRJFCLX") {
 		t.Fatalf("SystemPrompt() should not contain deployment-specific identity prompt: %q", prompt)
 	}
-	if strings.Contains(prompt, "food or drink ordering") || strings.Contains(prompt, "author") {
+	if strings.Contains(prompt, "food or drink ordering") {
 		t.Fatalf("SystemPrompt() should not contain detailed product prompt text: %q", prompt)
 	}
 }

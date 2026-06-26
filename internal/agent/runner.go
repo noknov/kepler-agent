@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/memory"
@@ -31,7 +32,13 @@ const (
 	// wrong branch, wrong repo) are technical mistakes the model can fix itself.
 	clarificationErrorThreshold = 4
 	exploreFailureLimit         = 3
-	pivotAfterSteps             = 8
+
+	// Progressive escalation thresholds. Pressure increases at each tier
+	// to prevent aimless searching while still allowing genuine investigations.
+	pivotTierGentle = 4  // gentle nudge: "most questions resolve in 1-3 calls"
+	pivotTierFirm   = 8  // firm pivot: "answer now or justify continuing"
+	pivotTierUrgent = 12 // urgent: "you MUST answer with what you have"
+	pivotTierForce  = 16 // force: strip tools, require text answer
 )
 
 type Observer interface {
@@ -47,6 +54,10 @@ type LLMResponseObserver interface {
 	LLMResponse(resp llm.Response, d time.Duration, err error)
 }
 
+type EventObserver interface {
+	Event(name string, metadata map[string]any)
+}
+
 type StatusUpdater func(status string)
 
 type ObservationFormatter interface {
@@ -60,29 +71,31 @@ type Sanitizer interface {
 type SteeringProvider func() []llm.Message
 
 type Runner struct {
-	LLM          llm.Client
-	Model        string
-	Thinking     string
-	MaxTokens    int
-	Temp         float64
-	Tools        *registry.Registry
-	Capabilities llm.Capabilities
-	Format       ObservationFormatter
-	Sanitize     Sanitizer
-	Observer     Observer
-	MaxSteps     int
-	Compactor    *memory.Compactor
-	StatusUpdate StatusUpdater
-	OnStream     func(StreamEvent)
-	OnUsage      func(llm.Usage)
+	LLM               llm.Client
+	Model             string
+	Thinking          string
+	MaxTokens         int
+	Temp              float64
+	Tools             *registry.Registry
+	Capabilities      llm.Capabilities
+	Format            ObservationFormatter
+	Sanitize          Sanitizer
+	Observer          Observer
+	MaxSteps          int
+	Compactor         *memory.Compactor
+	StatusUpdate      StatusUpdater
+	OnStream          func(StreamEvent)
+	OnUsage           func(llm.Usage)
+	OnLLMStepComplete func()
 }
 
 type Request struct {
-	Messages []llm.Message
-	Runtime  registry.Runtime
-	Locale   string
-	RunID    string
-	Steering SteeringProvider
+	Messages     []llm.Message
+	UserQuestion string
+	Runtime      registry.Runtime
+	Locale       string
+	RunID        string
+	Steering     SteeringProvider
 }
 
 type Result struct {
@@ -127,7 +140,6 @@ var codeReadingTools = map[string]bool{
 	"code-definition":   true,
 	"code-references":   true,
 	"explore-code":      true,
-	"rag-search":        true,
 }
 
 // hasFencedCodeBlock reports whether text contains a fenced code block
@@ -183,7 +195,9 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	retriedRawEvidence := false
 	codeToolCalledThisRun := false
 	afterTools := false
-	pivotInjected := false
+	pivotTier := 0 // 0=none, 1=gentle, 2=firm, 3=urgent, 4=force
+	searchMissPivotInjected := false
+	consecutiveNoMatchSearchRounds := 0
 	toolsWithoutProgress := 0
 	clarificationErrors := newClarificationErrorTracker()
 	control := newRunnerControl()
@@ -192,9 +206,26 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		if r.StatusUpdate != nil {
 			r.StatusUpdate(StepStatus(req.Locale, step))
 		}
-		if step >= pivotAfterSteps && afterTools && !pivotInjected {
-			messages = append(messages, llm.Message{Role: "system", Content: stepBudgetPivotMessage()})
-			pivotInjected = true
+		// Progressive escalation: increasingly strong pressure to stop.
+		if afterTools {
+			if step >= pivotTierForce && pivotTier < 4 {
+				// Strip tools entirely — force text answer on next LLM call.
+				pivotTier = 4
+				messages = append(messages, llm.Message{Role: "system", Content: pivotForceMessage()})
+				r.observeEvent("pivot_force", map[string]any{"step": step})
+			} else if step >= pivotTierUrgent && pivotTier < 3 {
+				pivotTier = 3
+				messages = append(messages, llm.Message{Role: "system", Content: pivotUrgentMessage()})
+				r.observeEvent("pivot_urgent", map[string]any{"step": step})
+			} else if step >= pivotTierFirm && pivotTier < 2 {
+				pivotTier = 2
+				messages = append(messages, llm.Message{Role: "system", Content: stepBudgetPivotMessage()})
+				r.observeEvent("pivot_firm", map[string]any{"step": step})
+			} else if step >= pivotTierGentle && pivotTier < 1 {
+				pivotTier = 1
+				messages = append(messages, llm.Message{Role: "system", Content: pivotGentleMessage()})
+				r.observeEvent("pivot_gentle", map[string]any{"step": step})
+			}
 		}
 		if req.Steering != nil {
 			if steering := req.Steering(); len(steering) > 0 {
@@ -205,10 +236,11 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		if r.Compactor != nil {
 			messages = r.compactMessages(ctx, messages)
 		}
+		messages = memory.PrepareForLLM(messages)
 
 		var toolSpecs []llm.ToolSpec
-		if r.Tools != nil {
-			toolSpecs = control.filterToolSpecs(r.Tools.Specs())
+		if r.Tools != nil && pivotTier < 4 {
+			toolSpecs = r.selectToolSpecs(control.filterToolSpecs(r.Tools.Specs()), req, messages)
 		}
 
 		llmReq := llm.Request{
@@ -276,7 +308,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 						OnUsage:            streamHandler.OnUsage,
 					})
 					guard.Flush()
-					if guard.suppressed || !resp.Streamed {
+					if guard.suppressed || !guard.emitted || !resp.Streamed {
 						useStream = false
 					}
 				} else {
@@ -299,6 +331,9 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			} else {
 				r.Observer.LLMCall(resp.Usage, llmDuration, err)
 			}
+		}
+		if r.OnLLMStepComplete != nil {
+			r.OnLLMStepComplete()
 		}
 		if err != nil {
 			if llm.IsEmptyResponse(err) && !retriedEmptyResponse {
@@ -341,6 +376,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 
 		assistantMsg := resp.Message
 		assistantMsg.Usage = &resp.Usage // attach API-reported token usage for calibration
+		assistantMsg.ToolCalls = memory.NormalizeToolCalls(assistantMsg.ToolCalls)
 		if router != nil {
 			router.finish(len(assistantMsg.ToolCalls) > 0)
 		}
@@ -434,7 +470,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		generated = append(generated, assistantMsg)
 
 		var toolResults []toolResult
-		if streamExec != nil && streamExec.HasResults() {
+		if streamExec != nil && streamExec.HasSubmitted() {
 			toolResults = streamExec.Drain(assistantMsg.ToolCalls)
 		} else {
 			toolResults = r.executeToolCalls(ctx, assistantMsg.ToolCalls, seenToolCalls, seenSearchTerms, req)
@@ -442,11 +478,19 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		if len(toolResults) > 0 {
 			afterTools = true
 		}
+		allSearchesMissed := searchRoundAllNoMatch(toolResults)
+		searchesHadHits := searchRoundHasHits(toolResults)
 		if toolResultsLackProgress(toolResults) {
 			toolsWithoutProgress++
-			if toolsWithoutProgress >= 3 && !pivotInjected {
+			// Accelerate escalation when tools aren't producing useful results.
+			if toolsWithoutProgress >= 3 && pivotTier < 2 {
+				pivotTier = 2
 				messages = append(messages, llm.Message{Role: "system", Content: stepBudgetPivotMessage()})
-				pivotInjected = true
+				r.observeEvent("tool_progress_pivot", map[string]any{"rounds_without_progress": toolsWithoutProgress})
+			} else if toolsWithoutProgress >= 5 && pivotTier < 3 {
+				pivotTier = 3
+				messages = append(messages, llm.Message{Role: "system", Content: pivotUrgentMessage()})
+				r.observeEvent("tool_progress_urgent", map[string]any{"rounds_without_progress": toolsWithoutProgress})
 			}
 		} else if len(toolResults) > 0 {
 			toolsWithoutProgress = 0
@@ -464,6 +508,26 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 					PendingQuestion: tr.message.Content,
 				}, nil
 			}
+		}
+		if allSearchesMissed {
+			consecutiveNoMatchSearchRounds++
+			if consecutiveNoMatchSearchRounds >= 2 && !searchMissPivotInjected {
+				searchMissPivotInjected = true
+				messages = append(messages, llm.Message{Role: "system", Content: searchMissPivotMessage()})
+				r.observeEvent("search_miss_pivot", map[string]any{"consecutive_no_match_rounds": consecutiveNoMatchSearchRounds})
+				// Accelerate escalation when searches keep missing.
+				if pivotTier < 1 {
+					pivotTier = 1
+				}
+			}
+			// 3+ consecutive misses: force firm pivot.
+			if consecutiveNoMatchSearchRounds >= 3 && pivotTier < 2 {
+				pivotTier = 2
+				messages = append(messages, llm.Message{Role: "system", Content: stepBudgetPivotMessage()})
+				r.observeEvent("search_miss_firm", map[string]any{"consecutive_no_match_rounds": consecutiveNoMatchSearchRounds})
+			}
+		} else if searchesHadHits {
+			consecutiveNoMatchSearchRounds = 0
 		}
 		control.finishTurn(toolResults)
 		locale := requestLocale(req.Locale)
@@ -487,6 +551,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	if r.Compactor != nil {
 		messages = r.compactMessages(ctx, messages)
 	}
+	messages = memory.PrepareForLLM(messages)
 	messages = append(messages, llm.Message{Role: "system", Content: "You have reached the investigation step limit. Summarize your findings now based on evidence gathered so far. If you are uncertain, state what is known and what remains unverified."})
 	resp, err := r.LLM.Chat(ctx, llm.Request{
 		Model:       r.Model,
@@ -544,10 +609,12 @@ func (r Runner) compactMessages(ctx context.Context, messages []llm.Message) []l
 	// Always apply micro-compact first (zero cost, clears old tool results).
 	messages = r.Compactor.ApplyMicroCompact(messages)
 	// Only run expensive compaction when near the threshold.
-	compacted, _, err := r.Compactor.CompactIfNeeded(ctx, messages)
+	compacted, result, err := r.Compactor.CompactIfNeeded(ctx, messages)
 	if err != nil {
+		r.observeEvent("compact_error", map[string]any{"error": err.Error(), "mode": "auto"})
 		return messages
 	}
+	r.observeCompactResult(result)
 	return compacted
 }
 
@@ -555,11 +622,125 @@ func (r Runner) compactMessagesAggressive(ctx context.Context, messages []llm.Me
 	if r.Compactor == nil {
 		return messages
 	}
-	compacted, err := r.Compactor.CompactForce(ctx, messages)
+	compacted, result, err := r.Compactor.CompactForce(ctx, messages)
 	if err != nil {
+		r.observeEvent("compact_error", map[string]any{"error": err.Error(), "mode": "force"})
 		return messages
 	}
+	r.observeCompactResult(result)
 	return compacted
+}
+
+func (r Runner) observeCompactResult(result *memory.CompactResult) {
+	if result == nil || result.Layer == "" {
+		return
+	}
+	meta := map[string]any{
+		"layer":       result.Layer,
+		"pre_tokens":  result.PreTokens,
+		"post_tokens": result.PostTokens,
+	}
+	if result.CircuitBreakerHit {
+		meta["circuit_breaker_hit"] = true
+	}
+	r.observeEvent("context_compact", meta)
+}
+
+func (r Runner) observeEvent(name string, metadata map[string]any) {
+	if r.Observer == nil || name == "" {
+		return
+	}
+	if observer, ok := r.Observer.(EventObserver); ok {
+		observer.Event(name, metadata)
+	}
+}
+
+const defaultToolSpecLimit = 18
+
+var coreToolNames = map[string]bool{
+	"tool_search":         true,
+	"plan-update":         true,
+	"code-search":         true,
+	"code-read_file":      true,
+	"git-status":          true,
+	"git-log":             true,
+	"git-show":            true,
+	"system-current_time": true,
+	"skills-load":         true,
+	"slack-ask_user":      true,
+}
+
+var intentToolHints = []struct {
+	terms []string
+	tools []string
+}{
+	{[]string{"github", "workflow", "ci", "action", "pull request", "pr", "deploy", "工作流", "流水线", "构建", "部署", "拉取请求"}, []string{"github-workflow_runs", "github-pr_diff", "github-dispatch_workflow"}},
+	{[]string{"branch", "commit", "ref", "revision", "sha", "tag", "remote", "分支", "提交", "版本", "远程"}, []string{"repo-search", "repo-read_file", "git-fetch_ref", "git-search_ref", "git-read_file_ref"}},
+	{[]string{"log", "gcp", "cloud logging", "k8s", "gke", "pod", "namespace", "error rate", "日志", "报错", "错误率", "命名空间", "集群"}, []string{"gcp-logs", "diagnostics-incident_brief", "diagnostics-timeline", "diagnostics-evidence_board"}},
+	{[]string{"web", "url", "http", "docs", "page", "search internet", "网页", "网站", "文档", "搜索", "互联网"}, []string{"web-search", "web-read_page"}},
+	{[]string{"slack", "file", "screenshot", "json", "文件", "截图", "表格", "附件"}, []string{"slack-file_search", "slack-json_analyze", "slack-send_screenshot"}},
+	{[]string{"browser", "playwright", "click", "screenshot", "ui", "page", "浏览器", "点击", "页面", "截图", "表单"}, []string{"pw-navigate", "pw-snapshot", "pw-click", "pw-type", "pw-fill_form", "pw-screenshot", "pw-get_all_pages", "pw-switch_page", "pw-evaluate"}},
+	{[]string{"notion", "youtrack", "ticket", "issue", "工单", "需求", "缺陷", "问题单"}, []string{"notion-search", "youtrack-search", "youtrack-get_issue"}},
+	{[]string{"symbol", "definition", "reference", "diagnostic", "lsp", "符号", "定义", "引用", "诊断"}, []string{"code-symbols", "code-definition", "code-references", "code-diagnostics"}},
+	{[]string{"rag", "semantic", "embedding", "runbook", "语义", "向量", "预案", "手册"}, []string{"rag-search", "knowledge-runbook_search"}},
+	{[]string{"architecture", "architectural", "refactor", "redesign", "compare", "performance", "accuracy", "agent", "broad", "multi-step", "架构", "重构", "对比", "性能", "效率", "准确", "体验", "效果", "复杂"}, []string{"plan-update", "explore-code", "delegate-run", "rag-search", "code-symbols", "code-definition", "code-references"}},
+}
+
+func (r Runner) selectToolSpecs(specs []llm.ToolSpec, req Request, messages []llm.Message) []llm.ToolSpec {
+	if len(specs) <= defaultToolSpecLimit {
+		return specs
+	}
+	allowed := map[string]bool{}
+	for name := range coreToolNames {
+		allowed[name] = true
+	}
+	intent := strings.ToLower(req.UserQuestion)
+	if strings.TrimSpace(intent) == "" {
+		intent = strings.ToLower(lastUserContent(messages))
+	}
+	for _, hint := range intentToolHints {
+		if containsAny(intent, hint.terms) {
+			for _, name := range hint.tools {
+				allowed[name] = true
+			}
+		}
+	}
+
+	out := make([]llm.ToolSpec, 0, len(specs))
+	for _, spec := range specs {
+		name := spec.Function.Name
+		if allowed[name] {
+			out = append(out, spec)
+		}
+	}
+	if len(out) == 0 {
+		return specs
+	}
+	if len(out) < len(specs) {
+		r.observeEvent("tool_surface_pruned", map[string]any{
+			"before": len(specs),
+			"after":  len(out),
+		})
+	}
+	return out
+}
+
+func lastUserContent(messages []llm.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			return messages[i].Content
+		}
+	}
+	return ""
+}
+
+func containsAny(text string, terms []string) bool {
+	for _, term := range terms {
+		if strings.Contains(text, term) {
+			return true
+		}
+	}
+	return false
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {
@@ -705,9 +886,10 @@ func (r Runner) executeSingleTool(ctx context.Context, call llm.ToolCall, req Re
 	result, err := r.Tools.Execute(ctx, name, args, req.Runtime)
 	duration := time.Since(start)
 	content := ""
+	needsUserInput := result.NeedsUserInput || result.WaitForUser
 	if err != nil {
 		content = "[tool error] " + err.Error()
-	} else if result.WaitForUser {
+	} else if needsUserInput {
 		content = r.sanitize(result.Content)
 	} else {
 		content = r.format(name, r.sanitize(result.Content))
@@ -715,7 +897,7 @@ func (r Runner) executeSingleTool(ctx context.Context, call llm.ToolCall, req Re
 	content = maybeSpillResult(spillRunID(req.RunID), name, call.ID, content)
 	return toolResult{
 		message:     llm.Message{Role: "tool", ToolCallID: call.ID, Name: name, Content: content},
-		waitForUser: err == nil && result.WaitForUser,
+		waitForUser: err == nil && needsUserInput,
 		name:        name,
 		args:        args,
 		duration:    duration,
@@ -959,8 +1141,24 @@ func (r Runner) duplicateToolCall(call llm.ToolCall, seenToolCalls, seenSearchTe
 	return false, ""
 }
 
+func pivotGentleMessage() string {
+	return prompts.RunnerPrompt("pivot_gentle", "You have used several tool calls. Most questions resolve in 1-3 calls. If you already have enough evidence, answer now. If not, make your next call count — use the single most decisive search or read.")
+}
+
 func stepBudgetPivotMessage() string {
-	return "You have used several investigation steps. If you have enough evidence for a useful partial answer, stop searching and summarize your findings now. State what is known, what remains uncertain, and suggest the next concrete check the user could try."
+	return prompts.RunnerPrompt("pivot_firm", "You have used many investigation steps without answering. STOP broadening your search. Summarize your findings now: what is known, what is uncertain, and the single next check. If you cannot find what you are looking for, say so — do not keep trying variations of the same search.")
+}
+
+func pivotUrgentMessage() string {
+	return prompts.RunnerPrompt("pivot_urgent", "URGENT: You have spent too many steps on this investigation. You MUST provide an answer NOW with whatever evidence you have gathered. Further searching is very unlikely to help and is degrading the user experience. Summarize findings, state uncertainties, and stop.")
+}
+
+func pivotForceMessage() string {
+	return prompts.RunnerPrompt("pivot_force", "FINAL: Tools are no longer available. Give your answer now using only the evidence already gathered. Be direct and concise.")
+}
+
+func searchMissPivotMessage() string {
+	return prompts.RunnerPrompt("search_miss_pivot", "Recent searches returned no matches. Before repeating similar search terms, diagnose the failed assumption: wrong repository/root, wrong branch/ref, wrong path, wrong product wording, generated code, missing external tool, or unavailable data source. Try a different evidence source or a meaningfully different naming pattern. If that still misses, answer with what is known and what remains unverified instead of continuing to guess.")
 }
 
 func toolResultsLackProgress(results []toolResult) bool {
@@ -989,6 +1187,57 @@ func emptyToolResult(content string) bool {
 		return true
 	}
 	return strings.HasPrefix(content, "no matching code found")
+}
+
+func unwrapEvidenceContent(content string) string {
+	content = strings.TrimSpace(content)
+	if !strings.Contains(content, "<evidence") {
+		return content
+	}
+	start := strings.Index(content, ">")
+	end := strings.LastIndex(content, "</evidence>")
+	if start < 0 || end <= start {
+		return content
+	}
+	return strings.TrimSpace(content[start+1 : end])
+}
+
+func isNoMatchResult(content string) bool {
+	inner := unwrapEvidenceContent(content)
+	switch inner {
+	case "", "no matches", "no web results":
+		return true
+	}
+	return strings.HasPrefix(inner, "no matching code found")
+}
+
+func searchRoundAllNoMatch(results []toolResult) bool {
+	if len(results) == 0 {
+		return false
+	}
+	searches := 0
+	for _, result := range results {
+		if !searchDedupTools[result.name] {
+			continue
+		}
+		searches++
+		if !isNoMatchResult(result.message.Content) {
+			return false
+		}
+	}
+	return searches > 0
+}
+
+func searchRoundHasHits(results []toolResult) bool {
+	for _, result := range results {
+		if !searchDedupTools[result.name] {
+			continue
+		}
+		if !isNoMatchResult(result.message.Content) {
+			return true
+		}
+	}
+	return false
 }
 
 func looksRepetitive(text string) bool {
@@ -1066,10 +1315,9 @@ func (sr *streamRouter) text(delta string) {
 	if delta == "" {
 		return
 	}
-	if sr.toolTurn {
-		sr.emit(StreamEvent{Kind: StreamNarration, Delta: delta})
-		return
-	}
+	// Always buffer — never emit text deltas directly during streaming.
+	// The buffer is flushed as a whole in finish/toolCallsStarted, where
+	// we can detect and strip textual tool-call markup.
 	sr.buf.WriteString(delta)
 }
 
@@ -1088,11 +1336,7 @@ func (sr *streamRouter) finish(hasToolCalls bool) {
 		}
 		return
 	}
-	if sr.buf.Len() == 0 {
-		return
-	}
-	sr.emit(StreamEvent{Kind: StreamAnswer, Delta: sr.buf.String()})
-	sr.buf.Reset()
+	sr.flushAs(StreamAnswer)
 }
 
 func (sr *streamRouter) flushAs(kind StreamKind) {
@@ -1104,16 +1348,22 @@ func (sr *streamRouter) flushAs(kind StreamKind) {
 	if text == "" {
 		return
 	}
-	if sr.afterTools {
+	if llm.LooksLikeTextualToolCall(text) {
+		text = strings.TrimSpace(llm.StripTextualToolCallMarkup(text))
+		if text == "" {
+			return
+		}
+	}
+	if kind == StreamNarration && sr.afterTools {
 		text = "\n\n" + text
 	}
 	sr.emit(StreamEvent{Kind: kind, Delta: text})
 }
 
 func (r Runner) useStreamGuard() bool {
-	// RepairTextualToolCalls takes priority: even models that support native
-	// tool calls can occasionally fall back to textual markup, so the guard
-	// must be active to suppress that output before it reaches the user.
+	// Active when RepairTextualToolCalls is set. Even Anthropic-compatible
+	// providers (MiMo) may emit tool-call markup in text blocks, so the
+	// guard must be on for all providers to prevent leaking markup to users.
 	if r.Capabilities.RepairTextualToolCalls {
 		return true
 	}
@@ -1128,45 +1378,76 @@ func (r Runner) useStreamGuard() bool {
 type streamGuard struct {
 	downstream llm.StreamCallback
 	buf        strings.Builder
-	flushed    bool
+	emitted    bool
 	suppressed bool
 }
 
-const streamGuardThreshold = 24
+const (
+	streamGuardThreshold = 160
+	streamGuardTail      = 96
+)
 
 func (g *streamGuard) Write(delta string) {
-	if g.suppressed {
-		return
-	}
-	if g.flushed {
-		g.downstream(delta)
+	if g.suppressed || delta == "" {
 		return
 	}
 	g.buf.WriteString(delta)
-	if g.buf.Len() >= streamGuardThreshold {
-		if llm.LooksLikeTextualToolCall(g.buf.String()) {
-			g.suppressed = true
-			return
-		}
-		g.flushed = true
-		g.downstream(g.buf.String())
+	g.flushSafePrefix(false)
+}
+
+func (g *streamGuard) flushSafePrefix(force bool) {
+	if g.buf.Len() == 0 || g.suppressed {
+		return
+	}
+	text := g.buf.String()
+	if llm.LooksLikeTextualToolCall(text) {
+		g.suppressed = true
 		g.buf.Reset()
+		return
+	}
+	if !force && (g.buf.Len() < streamGuardThreshold || llm.MayBecomeTextualToolCall(text)) {
+		return
+	}
+
+	flushLen := len(text)
+	if !force && flushLen > streamGuardTail {
+		flushLen -= streamGuardTail
+	}
+	flushLen = utf8SafeCut(text, flushLen)
+	if flushLen <= 0 {
+		return
+	}
+	chunk := text[:flushLen]
+	rest := text[flushLen:]
+	g.downstream(chunk)
+	g.emitted = true
+	g.buf.Reset()
+	if rest != "" {
+		g.buf.WriteString(rest)
 	}
 }
 
 // Flush delivers any buffered content that hasn't been flushed yet.
 // Must be called after the stream ends to handle short responses.
 func (g *streamGuard) Flush() {
-	if g.suppressed || g.flushed {
+	if g.suppressed {
 		return
 	}
-	if g.buf.Len() > 0 {
-		if llm.LooksLikeTextualToolCall(g.buf.String()) {
-			g.suppressed = true
-			return
-		}
-		g.flushed = true
-		g.downstream(g.buf.String())
-		g.buf.Reset()
+	g.flushSafePrefix(true)
+}
+
+// utf8SafeCut returns the largest prefix length <= maxBytes that does not split
+// a UTF-8 code point. Prevents replacement-character corruption when the
+// stream guard flushes buffered CJK text at byte boundaries.
+func utf8SafeCut(s string, maxBytes int) int {
+	if maxBytes <= 0 {
+		return 0
 	}
+	if maxBytes >= len(s) {
+		return len(s)
+	}
+	for maxBytes > 0 && !utf8.ValidString(s[:maxBytes]) {
+		maxBytes--
+	}
+	return maxBytes
 }

@@ -142,7 +142,15 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		return Response{}, NewProviderError(c.providerName()+" stream", resp.StatusCode, compactBody(data), resp.Header.Get("Retry-After"))
+		providerErr := NewProviderError(c.providerName()+" stream", resp.StatusCode, compactBody(data), resp.Header.Get("Retry-After"))
+		// Fallback: retry retryable stream errors as non-stream request.
+		if isRetryableStatus(resp.StatusCode) {
+			fallback, fallbackErr := c.Chat(ctx, req)
+			if fallbackErr == nil {
+				return fallback, nil
+			}
+		}
+		return Response{}, providerErr
 	}
 
 	var msg Message
@@ -150,6 +158,8 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 	var finishReason string
 	var usage openAIUsage
 	toolCallsStarted := false
+	// Track tool call completion state for OnToolCallComplete.
+	completedToolIndices := map[int]bool{}
 
 	err = readSSE(resp.Body, func(ev sseEvent) bool {
 		if ev.Data == "[DONE]" {
@@ -203,6 +213,13 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 					h.OnToolCallsStarted()
 				}
 			}
+			// A new tool call ID on an existing index means the previous call is complete.
+			if tc.ID != "" && tc.Index < len(msg.ToolCalls) && msg.ToolCalls[tc.Index].ID != "" && msg.ToolCalls[tc.Index].ID != tc.ID {
+				if h.OnToolCallComplete != nil && !completedToolIndices[tc.Index] {
+					completedToolIndices[tc.Index] = true
+					h.OnToolCallComplete(msg.ToolCalls[tc.Index])
+				}
+			}
 			for len(msg.ToolCalls) <= tc.Index {
 				msg.ToolCalls = append(msg.ToolCalls, ToolCall{Type: "function"})
 			}
@@ -229,7 +246,22 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 		return true
 	})
 	if err != nil {
+		// Stream broke mid-way with no content — fallback to non-stream.
+		if strings.TrimSpace(msg.Content) == "" && len(msg.ToolCalls) == 0 {
+			fallback, fallbackErr := c.Chat(ctx, req)
+			if fallbackErr == nil {
+				return fallback, nil
+			}
+		}
 		return Response{}, err
+	}
+	// Emit OnToolCallComplete for all completed tool calls at stream end.
+	if h.OnToolCallComplete != nil {
+		for i, tc := range msg.ToolCalls {
+			if !completedToolIndices[i] && strings.TrimSpace(tc.Function.Name) != "" {
+				h.OnToolCallComplete(tc)
+			}
+		}
 	}
 	return Response{
 		Message:      msg,

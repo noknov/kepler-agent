@@ -12,16 +12,19 @@ type Capabilities struct {
 }
 
 // CapabilitiesFor returns default capabilities for a configured provider/protocol pair.
+//
+// RepairTextualToolCalls is enabled for all providers. Even Anthropic-compatible
+// endpoints (e.g. MiMo) may emit tool-call markup inside text content blocks
+// instead of proper tool_use blocks — their compatibility is imperfect.
 func CapabilitiesFor(provider, protocol string) Capabilities {
 	provider = normalizeProviderName(provider)
 	protocol = normalizeProtocolName(protocol)
-	caps := Capabilities{
+	return Capabilities{
 		Provider:               provider,
 		Protocol:               protocol,
 		NativeToolCalls:        true,
 		RepairTextualToolCalls: true,
 	}
-	return caps
 }
 
 func normalizeProviderName(provider string) string {
