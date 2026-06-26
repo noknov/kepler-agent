@@ -16,6 +16,8 @@ var (
 	reTable      = regexp.MustCompile(`(?m)^(\|.+\|)\n(\|[-| :]+\|)\n((?:\|.+\|\n?)+)`)
 	reBareUserID = regexp.MustCompile(`(^|[^<A-Za-z0-9_])@([UW][A-Z0-9]{8,})\b`)
 	reBlankLines = regexp.MustCompile(`\n{3,}`)
+	// Slack code blocks don't support language hints — strip them.
+	reFencedLang = regexp.MustCompile("(?m)^```[a-zA-Z0-9_+-]+\\s*$")
 )
 
 // MarkdownToMrkdwn converts standard Markdown to Slack's mrkdwn format.
@@ -33,6 +35,7 @@ func MarkdownToMrkdwn(md string) string {
 	s = reHR.ReplaceAllString(s, "───")
 	s = reBareUserID.ReplaceAllString(s, "$1<@$2>")
 
+	s = reFencedLang.ReplaceAllString(s, "```")
 	s = reBlankLines.ReplaceAllString(s, "\n\n")
 	return strings.TrimSpace(s)
 }
