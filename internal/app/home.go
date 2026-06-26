@@ -23,7 +23,7 @@ func (s *Server) handleAppHome(ctx context.Context, ev slack.Event) {
 
 func (s *Server) homeView(userID string) map[string]any {
 	allowed := s.access.AllowsUser(userID)
-	statusEmoji := ":white_check_mark:"
+	statusEmoji := ":heavy_check_mark:"
 	statusText := "Allowed"
 	if !allowed {
 		statusEmoji = ":no_entry:"
@@ -35,15 +35,19 @@ func (s *Server) homeView(userID string) map[string]any {
 		mentionText = fmt.Sprintf("mention `<@%s>`", s.cfg.Slack.BotUserID)
 	}
 
-	modelInfo := "*Model* `" + s.cfg.LLM.Model + "`"
-	if s.cfg.LLM.ExploreModel != "" {
-		modelInfo += "\n*Explorer* `" + s.cfg.LLM.ExploreModel + "`"
+	modelFields := []map[string]any{
+		mrkdwnField("*主模型*\n`" + s.cfg.LLM.Model + "`"),
 	}
+	secondary := strings.TrimSpace(s.cfg.LLM.SecondaryModel)
+	if secondary == "" {
+		secondary = s.cfg.LLM.Model
+	}
+	modelFields = append(modelFields, mrkdwnField("*副模型*\n`"+secondary+"`"))
 
 	blocks := []map[string]any{
 		headerBlock("斗包"),
-		sectionBlock(fmt.Sprintf("*Access* %s\n%s", statusText, statusEmoji)),
-		sectionBlock(modelInfo),
+		sectionBlock(fmt.Sprintf("*Access* %s %s", statusEmoji, statusText)),
+		sectionBlockWithFields("", modelFields...),
 	}
 	blocks = append(blocks,
 		dividerBlock(),
@@ -57,6 +61,13 @@ func (s *Server) homeView(userID string) map[string]any {
 	return map[string]any{
 		"type":   "home",
 		"blocks": blocks,
+	}
+}
+
+func mrkdwnField(text string) map[string]any {
+	return map[string]any{
+		"type": "mrkdwn",
+		"text": text,
 	}
 }
 

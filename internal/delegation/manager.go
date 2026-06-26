@@ -35,9 +35,9 @@ type Manager struct {
 	explore      ExploreProfile
 	policyPrompt string
 
-	exploreClient       llm.Client
-	exploreStreamClient llm.StreamClient
-	exploreModel        string
+	secondaryClient       llm.Client
+	secondaryStreamClient llm.StreamClient
+	secondaryModel        string
 }
 
 type ToolExecutor interface {
@@ -118,11 +118,11 @@ func (m *Manager) SetExploreProfile(profile ExploreProfile) {
 	m.explore = profile
 }
 
-func (m *Manager) SetExploreClient(client llm.Client, model string) {
-	m.exploreClient = client
-	m.exploreModel = model
+func (m *Manager) SetSecondaryClient(client llm.Client, model string) {
+	m.secondaryClient = client
+	m.secondaryModel = model
 	if sc, ok := client.(llm.StreamClient); ok {
-		m.exploreStreamClient = sc
+		m.secondaryStreamClient = sc
 	}
 }
 
@@ -142,9 +142,9 @@ func (m *Manager) RulesAndSkillsPrompt() string {
 	return m.policyPrompt
 }
 
-func (m *Manager) resolveExploreModel() string {
-	if m.exploreModel != "" {
-		return m.exploreModel
+func (m *Manager) resolveSecondaryModel() string {
+	if m.secondaryModel != "" {
+		return m.secondaryModel
 	}
 	return m.model
 }

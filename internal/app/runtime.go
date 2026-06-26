@@ -43,11 +43,18 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *obs
 		MaxSummaryChars:  cfg.Sessions.MaxSummaryChars,
 		MaxContextTokens: cfg.Sessions.MaxContextTokens,
 	}
-	exploreClient, exploreModel := newExploreLLMClient(cfg)
-	tools := newToolRegistry(cfg, slackClient, llmClient, exploreClient, exploreModel, workspacePolicy, commandPolicy)
+	secondaryClient, secondaryModel := newSecondaryLLMClient(cfg)
+	tools := newToolRegistry(cfg, slackClient, llmClient, secondaryClient, secondaryModel, workspacePolicy, commandPolicy)
 
 	// Build the 4-layer context compactor.
 	compactModel := cfg.Sessions.CompactModel
+	if compactModel == "" {
+		compactModel = secondaryModel
+	}
+	compactClient := llmClient
+	if secondaryClient != nil && compactModel != "" {
+		compactClient = secondaryClient
+	}
 	if compactModel == "" {
 		compactModel = cfg.LLM.Model
 	}
@@ -58,7 +65,7 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *obs
 		KeepRecentTools:     memory.DefaultKeepRecentTools,
 		MaxToolResultTokens: cfg.Sessions.MaxToolResultTokens,
 		ClearableTools:      defaultClearableTools(),
-		LLMClient:           llmClient,
+		LLMClient:           compactClient,
 		CompactModel:        compactModel,
 	}
 
@@ -111,12 +118,12 @@ func newLLMClient(cfg config.Config) llm.Client {
 	return buildLLMClient(cfg.LLM.Provider, cfg.LLM.Protocol, cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout, cfg.LLM.AnthropicFlavor)
 }
 
-func newExploreLLMClient(cfg config.Config) (llm.Client, string) {
-	if cfg.LLM.ExploreProvider == "" {
+func newSecondaryLLMClient(cfg config.Config) (llm.Client, string) {
+	if cfg.LLM.SecondaryProvider == "" {
 		return nil, ""
 	}
-	client := buildLLMClient(cfg.LLM.ExploreProvider, cfg.LLM.ExploreProtocol, cfg.LLM.ExploreBaseURL, cfg.LLM.ExploreAPIKey, cfg.LLM.Timeout, "")
-	return client, cfg.LLM.ExploreModel
+	client := buildLLMClient(cfg.LLM.SecondaryProvider, cfg.LLM.SecondaryProtocol, cfg.LLM.SecondaryBaseURL, cfg.LLM.SecondaryAPIKey, cfg.LLM.Timeout, "")
+	return client, cfg.LLM.SecondaryModel
 }
 
 func buildLLMClient(provider, protocol, baseURL, apiKey string, timeout time.Duration, anthropicFlavor string) llm.Client {

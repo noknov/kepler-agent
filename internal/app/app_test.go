@@ -251,7 +251,7 @@ func TestHomeViewIncludesModelAndAccess(t *testing.T) {
 	}}}
 	view := server.homeView("U1")
 	text := flattenBlockText(view)
-	for _, want := range []string{"斗包", "*Access*", "*Model*", "mimo-v2.5"} {
+	for _, want := range []string{"斗包", "*Access*", ":heavy_check_mark: Allowed", "*主模型*", "*副模型*", "mimo-v2.5"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("home view missing %q in %q", want, text)
 		}
@@ -273,45 +273,48 @@ func TestHomeViewShowsModelWithoutDropdown(t *testing.T) {
 			t.Fatal("home view should not contain actions block (model dropdown removed)")
 		}
 	}
-	foundModel := false
-	for _, block := range blocks {
-		if block["type"] != "section" {
-			continue
-		}
-		text, _ := block["text"].(map[string]any)
-		if text != nil {
-			if s, ok := text["text"].(string); ok && strings.Contains(s, "mimo-v2.5") {
-				foundModel = true
-			}
-		}
-	}
-	if !foundModel {
+	text := flattenBlockText(view)
+	if !strings.Contains(text, "*主模型*") || !strings.Contains(text, "*副模型*") || !strings.Contains(text, "mimo-v2.5") {
 		t.Fatal("expected model name in home view")
 	}
 }
 
-func TestHomeViewShowsExploreModel(t *testing.T) {
+func TestHomeViewShowsPrimaryAndSecondaryModels(t *testing.T) {
 	server := &Server{cfg: config.Config{LLM: config.LLMConfig{
-		Model:        "mimo-v2.5",
-		ExploreModel: "deepseek-v4-flash",
+		Model:          "mimo-v2.5",
+		SecondaryModel: "deepseek-v4-flash",
 	}}}
 	view := server.homeView("U1")
 	blocks, _ := view["blocks"].([]map[string]any)
-	foundExplore := false
+	foundPrimary := false
+	foundSecondary := false
 	for _, block := range blocks {
 		if block["type"] != "section" {
 			continue
 		}
-		text, _ := block["text"].(map[string]any)
-		if text != nil {
-			if s, ok := text["text"].(string); ok && strings.Contains(s, "deepseek-v4-flash") {
-				foundExplore = true
+		for _, field := range blockFields(block) {
+			if strings.Contains(field, "主模型") && strings.Contains(field, "mimo-v2.5") {
+				foundPrimary = true
+			}
+			if strings.Contains(field, "副模型") && strings.Contains(field, "deepseek-v4-flash") {
+				foundSecondary = true
 			}
 		}
 	}
-	if !foundExplore {
-		t.Fatal("expected explore model name in home view")
+	if !foundPrimary || !foundSecondary {
+		t.Fatalf("expected primary and secondary model fields in home view, primary=%v secondary=%v", foundPrimary, foundSecondary)
 	}
+}
+
+func blockFields(block map[string]any) []string {
+	raw, _ := block["fields"].([]map[string]any)
+	out := make([]string, 0, len(raw))
+	for _, field := range raw {
+		if text, _ := field["text"].(string); text != "" {
+			out = append(out, text)
+		}
+	}
+	return out
 }
 
 func TestHomeViewDoesNotShowTokenUsage(t *testing.T) {

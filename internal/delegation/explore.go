@@ -127,7 +127,7 @@ func (m *Manager) Explore(ctx context.Context, task, boundaries string, rt regis
 			specs = nil
 		}
 		resp, err := m.exploreChat(ctx, llm.Request{
-			Model:       m.resolveExploreModel(),
+			Model:       m.resolveSecondaryModel(),
 			Thinking:    "", // disable thinking in explore for speed
 			Messages:    messages,
 			Tools:       specs,
@@ -225,9 +225,9 @@ func (m *Manager) exploreChat(ctx context.Context, req llm.Request) (llm.Respons
 	client := m.client
 	sc := m.streamClient
 
-	if m.exploreClient != nil {
-		client = m.exploreClient
-		sc = m.exploreStreamClient
+	if m.secondaryClient != nil {
+		client = m.secondaryClient
+		sc = m.secondaryStreamClient
 	}
 
 	if sc == nil {

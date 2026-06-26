@@ -27,7 +27,7 @@ import (
 	youtrackTools "github.com/wati/oncall-agent/internal/toolkit/tools/youtrack"
 )
 
-func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm.Client, exploreClient llm.Client, exploreModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) *registry.Registry {
+func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) *registry.Registry {
 	tools := registry.NewReadOnly()
 	registerDeferredDiagnosticsTools(tools)
 	registerCodeTools(tools, cfg, workspacePolicy, commandPolicy)
@@ -35,7 +35,7 @@ func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm
 	registerKnowledgeTools(tools, cfg)
 	registerSlackTools(tools, slackClient)
 	registerSystemTools(tools)
-	registerAgentControlTools(tools, cfg, llmClient, exploreClient, exploreModel)
+	registerAgentControlTools(tools, cfg, llmClient, secondaryClient, secondaryModel)
 	tools.Register(registry.ToolSearchTool{Registry: tools})
 	return tools
 }
@@ -143,10 +143,10 @@ func registerSystemTools(tools *registry.Registry) {
 	tools.Register(systemTools.CurrentTimeTool{})
 }
 
-func registerAgentControlTools(tools *registry.Registry, cfg config.Config, llmClient llm.Client, exploreClient llm.Client, exploreModel string) {
+func registerAgentControlTools(tools *registry.Registry, cfg config.Config, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string) {
 	delegates := delegation.NewManager(llmClient, cfg.LLM.Model, cfg.LLM.Thinking)
-	if exploreClient != nil && exploreModel != "" {
-		delegates.SetExploreClient(exploreClient, exploreModel)
+	if secondaryClient != nil && secondaryModel != "" {
+		delegates.SetSecondaryClient(secondaryClient, secondaryModel)
 	}
 	delegates.SetPolicyPrompt(prompts.RulesAndSkillsPrompt())
 	delegates.SetTools(tools)
