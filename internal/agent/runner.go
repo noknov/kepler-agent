@@ -1272,9 +1272,9 @@ func (sr *streamRouter) flushAs(kind StreamKind) {
 }
 
 func (r Runner) useStreamGuard() bool {
-	// RepairTextualToolCalls takes priority: even models that support native
-	// tool calls can occasionally fall back to textual markup, so the guard
-	// must be active to suppress that output before it reaches the user.
+	// Active when RepairTextualToolCalls is set. Even Anthropic-compatible
+	// providers (MiMo) may emit tool-call markup in text blocks, so the
+	// guard must be on for all providers to prevent leaking markup to users.
 	if r.Capabilities.RepairTextualToolCalls {
 		return true
 	}
