@@ -87,6 +87,66 @@ func TestExploreRejectsUnavailableTools(t *testing.T) {
 	}
 }
 
+func TestExploreProfileRestrictsAllowedTools(t *testing.T) {
+	client := &exploreFakeClient{responses: []llm.Response{
+		{Message: llm.Message{Role: "assistant", Content: "Finding: search only."}},
+	}}
+	manager := NewManager(client, "test-model", "")
+	manager.SetTools(&exploreFakeTools{})
+	manager.SetExploreProfile(ExploreProfile{
+		MaxSteps:     4,
+		MaxTokens:    512,
+		Parallelism:  2,
+		AllowedTools: map[string]bool{"code-search": true},
+		SystemPrompt: "explore",
+		FinalPrompt:  "final",
+	})
+
+	if _, err := manager.Explore(context.Background(), "search only", "", registry.Runtime{}); err != nil {
+		t.Fatalf("Explore() error = %v", err)
+	}
+	if got := len(client.requests[0].Tools); got != 1 {
+		t.Fatalf("Tools len = %d, want 1", got)
+	}
+	if name := client.requests[0].Tools[0].Function.Name; name != "code-search" {
+		t.Fatalf("tool = %q, want code-search", name)
+	}
+}
+
+func TestExploreToolRunsBatchedTasksInParallel(t *testing.T) {
+	client := &exploreBatchFakeClient{delay: 50 * time.Millisecond}
+	manager := NewManager(client, "test-model", "")
+	manager.SetTools(&exploreFakeTools{})
+	manager.SetExploreProfile(ExploreProfile{
+		MaxSteps:     4,
+		MaxTokens:    512,
+		Parallelism:  2,
+		MaxWorkers:   2,
+		AllowedTools: map[string]bool{"code-search": true},
+		SystemPrompt: "explore",
+		FinalPrompt:  "final",
+	})
+	tool := ExploreTool{Manager: manager}
+	if !tool.Parallel() {
+		t.Fatal("explore-code should be runner-parallel so multiple calls can run concurrently")
+	}
+
+	start := time.Now()
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"tasks":[{"task":"find routes"},{"task":"find storage"}]}`), registry.Runtime{})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 95*time.Millisecond {
+		t.Fatalf("batched explorers took %v, expected parallel execution under 95ms", elapsed)
+	}
+	if client.maxConcurrent < 2 {
+		t.Fatalf("maxConcurrent = %d, want 2", client.maxConcurrent)
+	}
+	if !strings.Contains(result.Content, "Explorer 1: find routes") || !strings.Contains(result.Content, "Explorer 2: find storage") {
+		t.Fatalf("combined report = %q", result.Content)
+	}
+}
+
 func TestExploreRetriesTextReportWhenFinalStepRequestsTools(t *testing.T) {
 	responses := make([]llm.Response, 0, exploreMaxSteps)
 	for i := 0; i < exploreMaxSteps-2; i++ {
@@ -290,9 +350,9 @@ func (f *exploreFakeClient) Chat(_ context.Context, req llm.Request) (llm.Respon
 }
 
 type exploreStreamFakeClient struct {
-	responses    []llm.Response
-	streamCalls  int
-	chatCalls    int
+	responses   []llm.Response
+	streamCalls int
+	chatCalls   int
 }
 
 func (f *exploreStreamFakeClient) Chat(_ context.Context, _ llm.Request) (llm.Response, error) {
@@ -308,6 +368,39 @@ func (f *exploreStreamFakeClient) ChatStream(_ context.Context, _ llm.Request, _
 	resp := f.responses[0]
 	f.responses = f.responses[1:]
 	return resp, nil
+}
+
+type exploreBatchFakeClient struct {
+	mu            sync.Mutex
+	requests      []llm.Request
+	active        int
+	maxConcurrent int
+	delay         time.Duration
+}
+
+func (f *exploreBatchFakeClient) Chat(_ context.Context, req llm.Request) (llm.Response, error) {
+	f.mu.Lock()
+	f.active++
+	if f.active > f.maxConcurrent {
+		f.maxConcurrent = f.active
+	}
+	f.requests = append(f.requests, req)
+	f.mu.Unlock()
+
+	time.Sleep(f.delay)
+
+	f.mu.Lock()
+	f.active--
+	f.mu.Unlock()
+
+	task := "unknown"
+	if len(req.Messages) > 1 {
+		task = strings.TrimPrefix(req.Messages[1].Content, "Investigation task:\n")
+		if idx := strings.Index(task, "\n\nBoundaries:\n"); idx >= 0 {
+			task = task[:idx]
+		}
+	}
+	return llm.Response{Message: llm.Message{Role: "assistant", Content: "Finding: " + task}}, nil
 }
 
 type exploreParallelFakeTools struct {

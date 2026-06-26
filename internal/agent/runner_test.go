@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/memory"
@@ -384,6 +386,48 @@ func TestRunnerRetriesRawEvidenceFinal(t *testing.T) {
 	}
 }
 
+func TestRunnerInjectsSearchMissPivotAfterRepeatedNoMatches(t *testing.T) {
+	client := &searchMissAwareClient{}
+	tools := registry.New()
+	tools.Register(fakeNoMatchSearchTool{})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 5}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "changed search strategy" {
+		t.Fatalf("Final = %q, want changed search strategy", result.Final)
+	}
+	if !client.sawPivot {
+		t.Fatal("search miss pivot was not injected")
+	}
+}
+
+func TestStreamingToolExecutorDoesNotDoubleExecuteInFlightTool(t *testing.T) {
+	var calls int32
+	tools := registry.New()
+	tools.Register(countingSlowTool{calls: &calls})
+	call := llm.ToolCall{
+		ID:   "slow_1",
+		Type: "function",
+		Function: llm.ToolFunction{
+			Name:      "slow",
+			Arguments: `{}`,
+		},
+	}
+	exec := newStreamingToolExecutor(context.Background(), Runner{Tools: tools}, Request{}, map[string]int{}, map[string]int{})
+
+	exec.Submit(call)
+	results := exec.Drain([]llm.ToolCall{call})
+
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("tool executions = %d, want 1", got)
+	}
+	if len(results) != 1 || results[0].err != nil {
+		t.Fatalf("results = %#v", results)
+	}
+}
+
 func TestStripRawEvidenceDump(t *testing.T) {
 	raw := "Summary\n- [code-search] <evidence source=\"code-search\">\npath/to/file.ts:10\n</evidence>\nConclusion"
 	got := stripRawEvidenceDump(raw)
@@ -445,6 +489,26 @@ func (f *longSearchFakeClient) Chat(_ context.Context, req llm.Request) (llm.Res
 type parallelBurstFakeClient struct {
 	requests []llm.Request
 	turns    int
+}
+
+type searchMissAwareClient struct {
+	requests []llm.Request
+	calls    int
+	sawPivot bool
+}
+
+func (f *searchMissAwareClient) Chat(_ context.Context, req llm.Request) (llm.Response, error) {
+	f.requests = append(f.requests, req)
+	for _, msg := range req.Messages {
+		if msg.Role == "system" && strings.Contains(msg.Content, "Recent searches returned no matches") {
+			f.sawPivot = true
+		}
+	}
+	f.calls++
+	if f.calls <= 2 {
+		return llm.Response{Message: codeSearchToolCallMessage(fmt.Sprintf("miss_%d", f.calls), fmt.Sprintf(`{"query":"missing-%d"}`, f.calls))}, nil
+	}
+	return llm.Response{Message: llm.Message{Role: "assistant", Content: "changed search strategy"}}, nil
 }
 
 func (f *parallelBurstFakeClient) Chat(_ context.Context, req llm.Request) (llm.Response, error) {
@@ -1326,6 +1390,35 @@ func TestRunnerRetriesOnFileLineClaimWithoutCodeTool(t *testing.T) {
 	}
 }
 
+func TestRunnerDoesNotTreatRAGSearchAsCodeEvidence(t *testing.T) {
+	answer := "The guard is in internal/app/runtime.go:45."
+	client := &fakeClient{responses: []llm.Response{
+		{Message: llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{{
+			ID:   "rag_1",
+			Type: "function",
+			Function: llm.ToolFunction{
+				Name:      "rag-search",
+				Arguments: `{"query":"runtime guard"}`,
+			},
+		}}}},
+		{Message: llm.Message{Role: "assistant", Content: answer}},
+		{Message: llm.Message{Role: "assistant", Content: "I need to read the file before making that claim."}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeRAGSearchTool{})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 5}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "I need to read the file before making that claim." {
+		t.Fatalf("Final = %q", result.Final)
+	}
+	if len(client.requests) != 3 {
+		t.Fatalf("expected 3 LLM calls (rag, retry, final), got %d", len(client.requests))
+	}
+}
+
 func TestRunnerNoCodeClaimRetryWhenCodeToolCalled(t *testing.T) {
 	codeAnswer := "Here is the code:\n```csharp\nif (x.test) { return; }\n```"
 	client := &fakeClient{responses: []llm.Response{
@@ -1421,6 +1514,23 @@ func (fakeCodeTool) Spec() llm.ToolSpec {
 
 func (fakeCodeTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
 	return registry.Result{Content: string(args)}, nil
+}
+
+type fakeRAGSearchTool struct{}
+
+func (fakeRAGSearchTool) Spec() llm.ToolSpec {
+	return llm.ToolSpec{
+		Type: "function",
+		Function: llm.ToolSpecFunction{
+			Name:        "rag-search",
+			Description: "search semantic code index",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}
+}
+
+func (fakeRAGSearchTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	return registry.Result{Content: "semantic hit: " + string(args)}, nil
 }
 
 type fakeTool struct{}
@@ -1519,6 +1629,46 @@ func (fakeCodeSearchTool) Execute(_ context.Context, args json.RawMessage, _ reg
 	return registry.Result{Content: string(args)}, nil
 }
 
+type fakeNoMatchSearchTool struct{}
+
+func (fakeNoMatchSearchTool) Spec() llm.ToolSpec {
+	return llm.ToolSpec{
+		Type: "function",
+		Function: llm.ToolSpecFunction{
+			Name:        "code-search",
+			Description: "search code",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}
+}
+
+func (fakeNoMatchSearchTool) Execute(_ context.Context, _ json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	return registry.Result{Content: "no matches"}, nil
+}
+
+type countingSlowTool struct {
+	calls *int32
+}
+
+func (countingSlowTool) Parallel() bool { return true }
+
+func (countingSlowTool) Spec() llm.ToolSpec {
+	return llm.ToolSpec{
+		Type: "function",
+		Function: llm.ToolSpecFunction{
+			Name:        "slow",
+			Description: "slow read-only tool",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}
+}
+
+func (t countingSlowTool) Execute(context.Context, json.RawMessage, registry.Runtime) (registry.Result, error) {
+	atomic.AddInt32(t.calls, 1)
+	time.Sleep(25 * time.Millisecond)
+	return registry.Result{Content: "ok"}, nil
+}
+
 type fakeExploreErrorTool struct{}
 
 func (fakeExploreErrorTool) Spec() llm.ToolSpec {
@@ -1556,7 +1706,7 @@ func (fakeWaitTool) Execute(_ context.Context, raw json.RawMessage, _ registry.R
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
 	}
-	return registry.Result{Content: args.Question, WaitForUser: true}, nil
+	return registry.Result{Content: args.Question, NeedsUserInput: true, WaitForUser: true}, nil
 }
 
 type fakeObservationFormatter struct{}

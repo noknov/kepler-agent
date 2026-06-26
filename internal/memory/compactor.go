@@ -189,7 +189,9 @@ func (c *Compactor) CompactIfNeeded(ctx context.Context, messages []llm.Message)
 		c.mu.Lock()
 		c.consecutiveFailures++
 		c.mu.Unlock()
-		return msgs, nil, err
+		result.Layer = "llm_compact_failed"
+		result.PostTokens = tokens
+		return msgs, result, nil
 	}
 
 	// Reset circuit breaker on success.
@@ -207,30 +209,53 @@ func (c *Compactor) CompactIfNeeded(ctx context.Context, messages []llm.Message)
 
 // CompactForce runs all compression layers regardless of token threshold.
 // Used reactively when the provider rejects a request for exceeding context limits.
-func (c *Compactor) CompactForce(ctx context.Context, messages []llm.Message) ([]llm.Message, error) {
+func (c *Compactor) CompactForce(ctx context.Context, messages []llm.Message) ([]llm.Message, *CompactResult, error) {
 	if len(messages) == 0 {
-		return messages, nil
+		return messages, nil, nil
 	}
 
+	result := &CompactResult{PreTokens: CountTokensWithCalibration(messages)}
 	msgs := c.microCompact(messages)
 	msgs = c.compressToolResults(msgs)
 	msgs, _ = c.foldHistory(msgs)
+	tokens := CountTokensWithCalibration(msgs)
 
 	if c.LLMClient == nil {
-		return msgs, nil
+		result.Layer = "force_history_folding"
+		result.PostTokens = tokens
+		return msgs, result, nil
+	}
+
+	c.mu.Lock()
+	failures := c.consecutiveFailures
+	c.mu.Unlock()
+	if failures >= MaxConsecutiveCompactFailures {
+		result.Layer = "force_circuit_breaker"
+		result.PostTokens = tokens
+		result.CircuitBreakerHit = true
+		return msgs, result, nil
 	}
 
 	model := c.CompactModel
 	summary, err := GenerateCompactSummary(ctx, c.LLMClient, model, msgs, "")
 	if err != nil {
-		return msgs, err
+		c.mu.Lock()
+		c.consecutiveFailures++
+		c.mu.Unlock()
+		result.Layer = "force_llm_compact_failed"
+		result.PostTokens = tokens
+		return msgs, result, nil
 	}
 
 	c.mu.Lock()
 	c.consecutiveFailures = 0
 	c.mu.Unlock()
 
-	return c.applyCompactBoundary(msgs, summary), nil
+	compacted := c.applyCompactBoundary(msgs, summary)
+	result.Layer = "force_llm_compact"
+	result.PostTokens = CountTokensWithCalibration(compacted)
+	result.Summary = summary
+	return compacted, result, nil
 }
 
 // RecordCompactSuccess resets the circuit breaker.
