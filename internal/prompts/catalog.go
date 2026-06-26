@@ -180,8 +180,11 @@ func newCatalog() Catalog {
 }
 
 func loadCatalogDir(dir string, catalog *Catalog) {
-	readText(filepath.Join(dir, "system.md"), &catalog.System)
-	readText(filepath.Join(dir, "agent.md"), &catalog.System)
+	var systemPrompt string
+	var agentAddendum string
+	readText(filepath.Join(dir, "system.md"), &systemPrompt)
+	readText(filepath.Join(dir, "agent.md"), &agentAddendum)
+	catalog.System = appendPrompt(systemPrompt, agentAddendum)
 	readJSON(filepath.Join(dir, "delegates.json"), &catalog.Delegates)
 	readJSON(filepath.Join(dir, "app_messages.json"), &catalog.AppMessages)
 	readJSON(filepath.Join(dir, "tools.json"), &catalog.Tools)

@@ -23,7 +23,7 @@ func TestMaybeSpillResultLargeContent(t *testing.T) {
 	if got == content {
 		t.Fatal("large content should be spilled")
 	}
-	if !strings.Contains(got, "Full result") {
+	if !strings.Contains(got, "<persisted-output>") || !strings.Contains(got, "Full output saved to") {
 		t.Fatalf("spilled content should include reference, got %q", got)
 	}
 	path := filepath.Join(dir, "code-read_file-call1234.txt")

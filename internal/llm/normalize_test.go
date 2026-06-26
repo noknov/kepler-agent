@@ -13,6 +13,7 @@ func TestLooksLikeTextualToolCall(t *testing.T) {
 		{"I'll call <function=git-log> next.", true},
 		{"normal markdown with `code` only", false},
 		{`<tool_invocation name="repo-search" arguments={"query": "foo", "repo": "bar"} />`, true},
+		{`<tool_invocation name="repo-search" arguments='{"query":"foo"}' />`, true},
 		{`<tool_invocation name="x" arguments={} /><tool_invocation name="y" arguments={} />`, true},
 		{`<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="code-search"></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>`, true},
 	}
@@ -56,7 +57,7 @@ func TestStripTextualToolCallMarkup(t *testing.T) {
 
 func TestNormalizeAssistantMessageStripsMarkupWhenStructuredCallsPresent(t *testing.T) {
 	msg := Message{
-		Role: "assistant",
+		Role:    "assistant",
 		Content: "Planning...\n<tool_call><function=code-search></function></tool_call>",
 		ToolCalls: []ToolCall{{
 			ID:   "call_1",
@@ -92,6 +93,13 @@ func TestParseTextualToolCalls(t *testing.T) {
 			wantArgs:  `{"query": "foo", "repo": "bar"}`,
 		},
 		{
+			name:      "quoted tool_invocation args",
+			content:   `<tool_invocation name="repo-search" arguments='{"query":"foo"}' />`,
+			wantCount: 1,
+			wantName:  "repo-search",
+			wantArgs:  `{"query":"foo"}`,
+		},
+		{
 			name:      "tool_invocation with body",
 			content:   `<tool_invocation name="code-search" arguments={"query":"test"}>body</tool_invocation>`,
 			wantCount: 1,
@@ -123,6 +131,13 @@ func TestParseTextualToolCalls(t *testing.T) {
 			wantName:  "system-current_time",
 			wantArgs:  "{}",
 		},
+		{
+			name:      "tool_name parameters",
+			content:   `<tool_name>code-search</tool_name><parameters>{"query":"handler"}</parameters>`,
+			wantCount: 1,
+			wantName:  "code-search",
+			wantArgs:  `{"query":"handler"}`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -137,6 +152,24 @@ func TestParseTextualToolCalls(t *testing.T) {
 				t.Fatalf("args = %q, want %q", calls[0].Function.Arguments, tc.wantArgs)
 			}
 		})
+	}
+}
+
+func TestMayBecomeTextualToolCall(t *testing.T) {
+	cases := []struct {
+		content string
+		want    bool
+	}{
+		{"normal prose", false},
+		{"normal prose <", true},
+		{"normal prose <tool_", true},
+		{"normal prose <function", true},
+		{"normal prose ```", true},
+	}
+	for _, tc := range cases {
+		if got := MayBecomeTextualToolCall(tc.content); got != tc.want {
+			t.Fatalf("MayBecomeTextualToolCall(%q) = %v, want %v", tc.content, got, tc.want)
+		}
 	}
 }
 

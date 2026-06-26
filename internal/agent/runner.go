@@ -239,7 +239,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 
 		var toolSpecs []llm.ToolSpec
 		if r.Tools != nil && pivotTier < 4 {
-			toolSpecs = control.filterToolSpecs(r.Tools.Specs())
+			toolSpecs = r.selectToolSpecs(control.filterToolSpecs(r.Tools.Specs()), req, messages)
 		}
 
 		llmReq := llm.Request{
@@ -307,7 +307,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 						OnUsage:            streamHandler.OnUsage,
 					})
 					guard.Flush()
-					if guard.suppressed || !resp.Streamed {
+					if guard.suppressed || !guard.emitted || !resp.Streamed {
 						useStream = false
 					}
 				} else {
@@ -652,6 +652,96 @@ func (r Runner) observeEvent(name string, metadata map[string]any) {
 	if observer, ok := r.Observer.(EventObserver); ok {
 		observer.Event(name, metadata)
 	}
+}
+
+const defaultToolSpecLimit = 18
+
+var coreToolNames = map[string]bool{
+	"tool_search":              true,
+	"code-search":              true,
+	"code-read_file":           true,
+	"git-status":               true,
+	"git-log":                  true,
+	"git-show":                 true,
+	"repo-search":              true,
+	"repo-read_file":           true,
+	"system-current_time":      true,
+	"skills-load":              true,
+	"delegate-run":             true,
+	"explore-code":             true,
+	"knowledge-runbook_search": true,
+	"slack-ask_user":           true,
+}
+
+var intentToolHints = []struct {
+	terms []string
+	tools []string
+}{
+	{[]string{"github", "workflow", "ci", "action", "pull request", "pr", "deploy", "工作流", "流水线", "构建", "部署", "拉取请求"}, []string{"github-workflow_runs", "github-pr_diff", "github-dispatch_workflow"}},
+	{[]string{"log", "gcp", "cloud logging", "k8s", "gke", "pod", "namespace", "error rate", "日志", "报错", "错误率", "命名空间", "集群"}, []string{"gcp-logs", "diagnostics-incident_brief", "diagnostics-timeline", "diagnostics-evidence_board"}},
+	{[]string{"web", "url", "http", "docs", "page", "search internet", "网页", "网站", "文档", "搜索", "互联网"}, []string{"web-search", "web-read_page"}},
+	{[]string{"slack", "file", "screenshot", "json", "文件", "截图", "表格", "附件"}, []string{"slack-file_search", "slack-json_analyze", "slack-send_screenshot"}},
+	{[]string{"browser", "playwright", "click", "screenshot", "ui", "page", "浏览器", "点击", "页面", "截图", "表单"}, []string{"pw-navigate", "pw-snapshot", "pw-click", "pw-type", "pw-fill_form", "pw-screenshot", "pw-get_all_pages", "pw-switch_page", "pw-evaluate"}},
+	{[]string{"notion", "youtrack", "ticket", "issue", "工单", "需求", "缺陷", "问题单"}, []string{"notion-search", "youtrack-search", "youtrack-get_issue"}},
+	{[]string{"symbol", "definition", "reference", "diagnostic", "lsp", "符号", "定义", "引用", "诊断"}, []string{"code-symbols", "code-definition", "code-references", "code-diagnostics"}},
+	{[]string{"rag", "semantic", "embedding", "runbook", "语义", "向量", "预案", "手册"}, []string{"rag-search", "knowledge-runbook_search"}},
+}
+
+func (r Runner) selectToolSpecs(specs []llm.ToolSpec, req Request, messages []llm.Message) []llm.ToolSpec {
+	if len(specs) <= defaultToolSpecLimit {
+		return specs
+	}
+	allowed := map[string]bool{}
+	for name := range coreToolNames {
+		allowed[name] = true
+	}
+	intent := strings.ToLower(req.UserQuestion)
+	if strings.TrimSpace(intent) == "" {
+		intent = strings.ToLower(lastUserContent(messages))
+	}
+	for _, hint := range intentToolHints {
+		if containsAny(intent, hint.terms) {
+			for _, name := range hint.tools {
+				allowed[name] = true
+			}
+		}
+	}
+
+	out := make([]llm.ToolSpec, 0, len(specs))
+	for _, spec := range specs {
+		name := spec.Function.Name
+		if allowed[name] {
+			out = append(out, spec)
+		}
+	}
+	if len(out) == 0 {
+		return specs
+	}
+	if len(out) < len(specs) {
+		r.observeEvent("tool_surface_pruned", map[string]any{
+			"before": len(specs),
+			"after":  len(out),
+		})
+	}
+	return out
+}
+
+func lastUserContent(messages []llm.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			return messages[i].Content
+		}
+	}
+	return ""
+}
+
+func containsAny(text string, terms []string) bool {
+	for _, term := range terms {
+		if strings.Contains(text, term) {
+			return true
+		}
+	}
+	return false
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {
@@ -1289,45 +1379,59 @@ func (r Runner) useStreamGuard() bool {
 type streamGuard struct {
 	downstream llm.StreamCallback
 	buf        strings.Builder
-	flushed    bool
+	emitted    bool
 	suppressed bool
 }
 
-const streamGuardThreshold = 24
+const (
+	streamGuardThreshold = 160
+	streamGuardTail      = 96
+)
 
 func (g *streamGuard) Write(delta string) {
-	if g.suppressed {
-		return
-	}
-	if g.flushed {
-		g.downstream(delta)
+	if g.suppressed || delta == "" {
 		return
 	}
 	g.buf.WriteString(delta)
-	if g.buf.Len() >= streamGuardThreshold {
-		if llm.LooksLikeTextualToolCall(g.buf.String()) {
-			g.suppressed = true
-			return
-		}
-		g.flushed = true
-		g.downstream(g.buf.String())
+	g.flushSafePrefix(false)
+}
+
+func (g *streamGuard) flushSafePrefix(force bool) {
+	if g.buf.Len() == 0 || g.suppressed {
+		return
+	}
+	text := g.buf.String()
+	if llm.LooksLikeTextualToolCall(text) {
+		g.suppressed = true
 		g.buf.Reset()
+		return
+	}
+	if !force && (g.buf.Len() < streamGuardThreshold || llm.MayBecomeTextualToolCall(text)) {
+		return
+	}
+
+	flushLen := len(text)
+	if !force && flushLen > streamGuardTail {
+		flushLen -= streamGuardTail
+	}
+	if flushLen <= 0 {
+		return
+	}
+	chunk := text[:flushLen]
+	rest := text[flushLen:]
+	g.downstream(chunk)
+	g.emitted = true
+	g.buf.Reset()
+	if rest != "" {
+		g.buf.WriteString(rest)
 	}
 }
 
 // Flush delivers any buffered content that hasn't been flushed yet.
 // Must be called after the stream ends to handle short responses.
 func (g *streamGuard) Flush() {
-	if g.suppressed || g.flushed {
+	if g.suppressed {
 		return
 	}
-	if g.buf.Len() > 0 {
-		if llm.LooksLikeTextualToolCall(g.buf.String()) {
-			g.suppressed = true
-			return
-		}
-		g.flushed = true
-		g.downstream(g.buf.String())
-		g.buf.Reset()
-	}
+	g.flushSafePrefix(true)
 }
