@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/wati/oncall-agent/internal/safety"
+	"github.com/wati/oncall-agent/internal/toolkit/gitcache"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
@@ -66,7 +67,7 @@ func TestFetchRefUsesOriginHEADDefaultBranch(t *testing.T) {
 	}
 }
 
-func TestFetchRefRefreshesAdvancedBranchWithinRuntime(t *testing.T) {
+func TestFetchRefUsesProcessFetchCacheWithinTTL(t *testing.T) {
 	root, work := testRepo(t)
 	base := Base{
 		Paths:   safety.WorkspacePolicy{Roots: []string{root}},
@@ -80,22 +81,19 @@ func TestFetchRefRefreshesAdvancedBranchWithinRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstRef := regexp.MustCompile(`(?m)^ref=([0-9a-f]{40})$`).FindStringSubmatch(first.Content)[1]
-
-	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("new remote content\n"), 0o600); err != nil {
+	if !strings.Contains(first.Content, "branch=main") {
+		t.Fatalf("first content = %q, want branch snapshot", first.Content)
+	}
+	if err := os.Rename(filepath.Join(root, "origin.git"), filepath.Join(root, "origin.git.offline")); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, work, "add", "README.md")
-	runGit(t, work, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "advance")
-	runGit(t, work, "push", "origin", "main")
 
 	second, err := tool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main"}`), rt)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("second fetch should reuse process cache within TTL, got %v", err)
 	}
-	secondRef := regexp.MustCompile(`(?m)^ref=([0-9a-f]{40})$`).FindStringSubmatch(second.Content)[1]
-	if secondRef == firstRef {
-		t.Fatalf("ref did not refresh after branch advanced: %s", second.Content)
+	if !strings.Contains(second.Content, "branch=main") {
+		t.Fatalf("second content = %q, want cached branch snapshot", second.Content)
 	}
 }
 
@@ -158,7 +156,7 @@ func TestRepoToolsReadFetchedSnapshotNotWorkingTree(t *testing.T) {
 	}
 }
 
-func TestRepoToolsFetchOnEachRequest(t *testing.T) {
+func TestRepoToolsUseProcessFetchCacheWithinTTL(t *testing.T) {
 	root, work := testRepo(t)
 	base := Base{
 		Paths:   safety.WorkspacePolicy{Roots: []string{root}},
@@ -175,18 +173,27 @@ func TestRepoToolsFetchOnEachRequest(t *testing.T) {
 	}
 
 	readTool := RepoReadFileTool{Base: base}
-	if _, err := readTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","path":"README.md"}`), rt); err == nil {
-		t.Fatal("read should fetch again and fail after origin becomes unavailable")
+	result, err := readTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","path":"README.md"}`), rt)
+	if err != nil {
+		t.Fatalf("read should reuse process cache within TTL after origin becomes unavailable: %v", err)
+	}
+	if !strings.Contains(result.Content, "hello") {
+		t.Fatalf("read content = %q, want cached remote snapshot", result.Content)
 	}
 
-	_, err := readTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","path":"README.md"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
-	if err == nil {
-		t.Fatal("read with a fresh runtime should fetch again and fail while origin is unavailable")
+	gitcache.ResetForTest()
+	stale, err := readTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","path":"README.md"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	if err != nil {
+		t.Fatalf("read with expired process cache should fall back to cached refs while origin is unavailable: %v", err)
+	}
+	if !strings.Contains(stale.Content, "refresh_failed_using_cached_refs") {
+		t.Fatalf("read content = %q, want stale fetch status", stale.Content)
 	}
 }
 
 func testRepo(t *testing.T) (string, string) {
 	t.Helper()
+	gitcache.ResetForTest()
 	root := t.TempDir()
 	origin := filepath.Join(root, "origin.git")
 	work := filepath.Join(root, "work")

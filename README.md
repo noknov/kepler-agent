@@ -162,6 +162,19 @@ SECONDARY_MODEL=mimo-v2.5-free
 When `SESSION_COMPACT_MODEL` is unset, compact summaries use `SECONDARY_MODEL`
 when configured, otherwise they fall back to the primary model.
 
+### Repository freshness
+
+Code-reading tools keep Claude Code-style snapshot semantics without fetching
+on every request. The first code/repo read for a repository refreshes `origin`
+refs only when that repo has not been fetched in the last 5 minutes, then reads
+from the upstream ref with `git show`/`git grep` without touching the working
+tree. This keeps Slack responses responsive while avoiding stale branch
+analysis for long-running sessions.
+
+Set `WORKSPACE_AUTO_FETCH=true` to also refresh workspace repositories in the
+background every 5 minutes. The background fetch shares the same process-wide
+cache as on-demand tool reads.
+
 ### 💬 Streaming responsiveness
 
 Final answer streaming is flushed in small batches to keep the UI responsive without sending one request per token. These settings can be tuned from the environment; duration values accept either milliseconds as a number or Go duration strings such as `35ms`.

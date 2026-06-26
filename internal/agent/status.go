@@ -132,6 +132,7 @@ var toolHintsZH = map[string][]string{
 	"diagnostics-incident_brief": {"梳理事件摘要..."},
 	"diagnostics-timeline":       {"重建时间线..."},
 	"diagnostics-evidence_board": {"整理证据链..."},
+	"plan-update":                {"整理计划中..."},
 	"delegate-run":               {"子进程展开中..."},
 	"explore-code":               {"代码探索中..."},
 }
@@ -167,6 +168,7 @@ var toolHintsEN = map[string]string{
 	"diagnostics-incident_brief": "Summarizing incident...",
 	"diagnostics-timeline":       "Building timeline...",
 	"diagnostics-evidence_board": "Gathering evidence...",
+	"plan-update":                "Updating plan...",
 	"delegate-run":               "Spawning sub-analysis...",
 	"explore-code":               "Exploring codebase...",
 }

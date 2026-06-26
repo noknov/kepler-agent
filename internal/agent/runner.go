@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/memory"
@@ -657,20 +658,16 @@ func (r Runner) observeEvent(name string, metadata map[string]any) {
 const defaultToolSpecLimit = 18
 
 var coreToolNames = map[string]bool{
-	"tool_search":              true,
-	"code-search":              true,
-	"code-read_file":           true,
-	"git-status":               true,
-	"git-log":                  true,
-	"git-show":                 true,
-	"repo-search":              true,
-	"repo-read_file":           true,
-	"system-current_time":      true,
-	"skills-load":              true,
-	"delegate-run":             true,
-	"explore-code":             true,
-	"knowledge-runbook_search": true,
-	"slack-ask_user":           true,
+	"tool_search":         true,
+	"plan-update":         true,
+	"code-search":         true,
+	"code-read_file":      true,
+	"git-status":          true,
+	"git-log":             true,
+	"git-show":            true,
+	"system-current_time": true,
+	"skills-load":         true,
+	"slack-ask_user":      true,
 }
 
 var intentToolHints = []struct {
@@ -678,6 +675,7 @@ var intentToolHints = []struct {
 	tools []string
 }{
 	{[]string{"github", "workflow", "ci", "action", "pull request", "pr", "deploy", "工作流", "流水线", "构建", "部署", "拉取请求"}, []string{"github-workflow_runs", "github-pr_diff", "github-dispatch_workflow"}},
+	{[]string{"branch", "commit", "ref", "revision", "sha", "tag", "remote", "分支", "提交", "版本", "远程"}, []string{"repo-search", "repo-read_file", "git-fetch_ref", "git-search_ref", "git-read_file_ref"}},
 	{[]string{"log", "gcp", "cloud logging", "k8s", "gke", "pod", "namespace", "error rate", "日志", "报错", "错误率", "命名空间", "集群"}, []string{"gcp-logs", "diagnostics-incident_brief", "diagnostics-timeline", "diagnostics-evidence_board"}},
 	{[]string{"web", "url", "http", "docs", "page", "search internet", "网页", "网站", "文档", "搜索", "互联网"}, []string{"web-search", "web-read_page"}},
 	{[]string{"slack", "file", "screenshot", "json", "文件", "截图", "表格", "附件"}, []string{"slack-file_search", "slack-json_analyze", "slack-send_screenshot"}},
@@ -685,6 +683,7 @@ var intentToolHints = []struct {
 	{[]string{"notion", "youtrack", "ticket", "issue", "工单", "需求", "缺陷", "问题单"}, []string{"notion-search", "youtrack-search", "youtrack-get_issue"}},
 	{[]string{"symbol", "definition", "reference", "diagnostic", "lsp", "符号", "定义", "引用", "诊断"}, []string{"code-symbols", "code-definition", "code-references", "code-diagnostics"}},
 	{[]string{"rag", "semantic", "embedding", "runbook", "语义", "向量", "预案", "手册"}, []string{"rag-search", "knowledge-runbook_search"}},
+	{[]string{"architecture", "architectural", "refactor", "redesign", "compare", "performance", "accuracy", "agent", "broad", "multi-step", "架构", "重构", "对比", "性能", "效率", "准确", "体验", "效果", "复杂"}, []string{"plan-update", "explore-code", "delegate-run", "rag-search", "code-symbols", "code-definition", "code-references"}},
 }
 
 func (r Runner) selectToolSpecs(specs []llm.ToolSpec, req Request, messages []llm.Message) []llm.ToolSpec {
@@ -1414,6 +1413,7 @@ func (g *streamGuard) flushSafePrefix(force bool) {
 	if !force && flushLen > streamGuardTail {
 		flushLen -= streamGuardTail
 	}
+	flushLen = utf8SafeCut(text, flushLen)
 	if flushLen <= 0 {
 		return
 	}
@@ -1434,4 +1434,20 @@ func (g *streamGuard) Flush() {
 		return
 	}
 	g.flushSafePrefix(true)
+}
+
+// utf8SafeCut returns the largest prefix length <= maxBytes that does not split
+// a UTF-8 code point. Prevents replacement-character corruption when the
+// stream guard flushes buffered CJK text at byte boundaries.
+func utf8SafeCut(s string, maxBytes int) int {
+	if maxBytes <= 0 {
+		return 0
+	}
+	if maxBytes >= len(s) {
+		return len(s)
+	}
+	for maxBytes > 0 && !utf8.ValidString(s[:maxBytes]) {
+		maxBytes--
+	}
+	return maxBytes
 }

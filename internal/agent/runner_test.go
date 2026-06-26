@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/memory"
@@ -1181,6 +1182,77 @@ func TestRepeatableToolAllowsDuplicateCalls(t *testing.T) {
 	}
 }
 
+func TestSelectToolSpecsPrunesHeavySnapshotToolsUntilIntentMatches(t *testing.T) {
+	specs := []llm.ToolSpec{
+		namedSpec("tool_search"),
+		namedSpec("plan-update"),
+		namedSpec("code-search"),
+		namedSpec("code-read_file"),
+		namedSpec("git-status"),
+		namedSpec("git-log"),
+		namedSpec("git-show"),
+		namedSpec("repo-search"),
+		namedSpec("repo-read_file"),
+		namedSpec("git-fetch_ref"),
+		namedSpec("git-search_ref"),
+		namedSpec("git-read_file_ref"),
+		namedSpec("system-current_time"),
+		namedSpec("skills-load"),
+		namedSpec("slack-ask_user"),
+		namedSpec("explore-code"),
+		namedSpec("delegate-run"),
+		namedSpec("rag-search"),
+		namedSpec("code-symbols"),
+		namedSpec("code-definition"),
+	}
+	runner := Runner{}
+
+	ordinary := runner.selectToolSpecs(specs, Request{UserQuestion: "查一下登录逻辑"}, nil)
+	if hasSpec(ordinary, "repo-search") || hasSpec(ordinary, "repo-read_file") {
+		t.Fatalf("ordinary code lookup should not expose repo snapshot tools: %v", specNames(ordinary))
+	}
+	if !hasSpec(ordinary, "plan-update") || !hasSpec(ordinary, "code-search") {
+		t.Fatalf("ordinary code lookup should keep plan and code tools: %v", specNames(ordinary))
+	}
+
+	broad := runner.selectToolSpecs(specs, Request{UserQuestion: "对比 agent 架构和准确性问题"}, nil)
+	if !hasSpec(broad, "explore-code") || !hasSpec(broad, "delegate-run") || !hasSpec(broad, "plan-update") {
+		t.Fatalf("broad agent question should expose planning and exploration tools: %v", specNames(broad))
+	}
+
+	branch := runner.selectToolSpecs(specs, Request{UserQuestion: "检查 release 分支上的提交"}, nil)
+	if !hasSpec(branch, "repo-search") || !hasSpec(branch, "git-read_file_ref") {
+		t.Fatalf("branch/ref question should expose repo snapshot tools: %v", specNames(branch))
+	}
+}
+
+func namedSpec(name string) llm.ToolSpec {
+	return llm.ToolSpec{
+		Type: "function",
+		Function: llm.ToolSpecFunction{
+			Name:       name,
+			Parameters: map[string]any{"type": "object"},
+		},
+	}
+}
+
+func hasSpec(specs []llm.ToolSpec, name string) bool {
+	for _, spec := range specs {
+		if spec.Function.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func specNames(specs []llm.ToolSpec) []string {
+	names := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		names = append(names, spec.Function.Name)
+	}
+	return names
+}
+
 func TestRunnerDisablesExploreAfterFailure(t *testing.T) {
 	client := &exploreFailureAwareClient{}
 	tools := registry.New()
@@ -1713,6 +1785,38 @@ type fakeObservationFormatter struct{}
 
 func (fakeObservationFormatter) ToolObservation(toolName string, output string) string {
 	return "<evidence source=\"" + toolName + "\">\n" + output + "\n</evidence>"
+}
+
+func TestStreamGuardPreservesUTF8AcrossFlushes(t *testing.T) {
+	// Build text long enough to trigger incremental flushes with a CJK tail.
+	text := strings.Repeat("已有的 CommentReplyRuleProcessor 模式，", 20)
+	var chunks []string
+	guard := &streamGuard{downstream: func(delta string) { chunks = append(chunks, delta) }}
+	for _, r := range text {
+		guard.Write(string(r))
+	}
+	guard.Flush()
+
+	got := strings.Join(chunks, "")
+	if got != text {
+		t.Fatalf("stream guard corrupted UTF-8:\nwant %q\ngot  %q", text, got)
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("output is not valid UTF-8: %q", got)
+	}
+	if strings.Contains(got, "\uFFFD") {
+		t.Fatalf("output contains replacement characters: %q", got)
+	}
+}
+
+func TestUTF8SafeCut(t *testing.T) {
+	s := "AutomationRule（Team-Inbox）"
+	for cut := 1; cut < len(s); cut++ {
+		n := utf8SafeCut(s, cut)
+		if !utf8.ValidString(s[:n]) {
+			t.Fatalf("utf8SafeCut(%q, %d) = %d, invalid prefix %q", s, cut, n, s[:n])
+		}
+	}
 }
 
 // TestUseStreamGuard verifies that RepairTextualToolCalls takes priority over NativeToolCalls

@@ -123,6 +123,18 @@
     "description": "Read the current date and time from the server system clock. Use when the user asks about today, now, current date/time, relative dates, deadlines, or when an investigation needs an absolute date anchor.",
     "parameters": {}
   },
+  "plan-update": {
+    "description": "Create or update the current execution plan for a complex multi-step task. Use proactively for substantial coding, debugging, architecture review, broad comparison, or any request with 3+ meaningful steps. Do not use for trivial one-step lookups.",
+    "parameters": {
+      "items": "Ordered task list. Keep each item concrete, outcome-oriented, and small enough to finish or verify.",
+      "items.items": "One task in the ordered plan.",
+      "items.items.id": "Short stable identifier, such as 1, 2, or verify.",
+      "items.items.task": "Concrete task in imperative form.",
+      "items.items.status": "One of pending, in_progress, completed, blocked. Keep at most one item in_progress.",
+      "items.items.note": "Optional blocker, verification result, or important detail.",
+      "summary": "Optional short reason for this plan update."
+    }
+  },
   "code-symbols": {
     "description": "Search symbols using language-server code intelligence. More precise than text search for finding functions, methods, classes, and interfaces. This is read-only.",
     "parameters": {

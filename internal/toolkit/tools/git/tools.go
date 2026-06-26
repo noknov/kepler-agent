@@ -14,6 +14,7 @@ import (
 
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/safety"
+	"github.com/wati/oncall-agent/internal/toolkit/gitcache"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
@@ -83,11 +84,12 @@ func (t FetchRefTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 }
 
 type snapshot struct {
-	Repo      string
-	Branch    string
-	BranchRef string
-	Ref       string
-	Commit    string
+	Repo        string
+	Branch      string
+	BranchRef   string
+	Ref         string
+	Commit      string
+	FetchStatus string
 }
 
 type SearchRefTool struct{ Base }
@@ -498,10 +500,14 @@ func (b Base) explicitRepo(path string) (string, error) {
 
 func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string, rt registry.Runtime) (snapshot, error) {
 	branch := strings.TrimSpace(rawBranch)
-	// Use --force to handle force-pushed branches without ref lock errors.
-	// Snapshot tools must not silently answer from stale origin refs.
-	if _, err := b.run(ctx, repo, "fetch", "--prune", "--force", "--no-write-fetch-head", "origin"); err != nil {
-		return snapshot{}, err
+	// Refresh origin refs on a short process-wide TTL. This preserves the
+	// snapshot semantics while avoiding a network fetch for every individual
+	// request or every repo-search/repo-read_file pair.
+	fetchCtx, cancel := context.WithTimeout(ctx, b.timeout())
+	defer cancel()
+	fetchStatus := "origin_refs_current_or_recent"
+	if err := gitcache.FetchOrigin(fetchCtx, repo, gitcache.DefaultFetchTTL); err != nil {
+		fetchStatus = "refresh_failed_using_cached_refs: " + err.Error()
 	}
 	if branch == "" {
 		var err error
@@ -515,6 +521,9 @@ func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string, rt regi
 	}
 	ref := "origin/" + branch
 	if !b.refExists(ctx, repo, ref) {
+		if strings.HasPrefix(fetchStatus, "refresh_failed") {
+			return snapshot{}, fmt.Errorf("%s; branch %q is not available in cached origin refs", fetchStatus, branch)
+		}
 		return snapshot{}, fmt.Errorf("branch %q does not exist on origin", branch)
 	}
 	commit, err := b.run(ctx, repo, "rev-parse", ref)
@@ -526,11 +535,12 @@ func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string, rt regi
 		return snapshot{}, err
 	}
 	snap := snapshot{
-		Repo:      repoLabel(repo),
-		Branch:    branch,
-		BranchRef: ref,
-		Ref:       strings.TrimSpace(commit),
-		Commit:    strings.TrimSpace(short),
+		Repo:        repoLabel(repo),
+		Branch:      branch,
+		BranchRef:   ref,
+		Ref:         strings.TrimSpace(commit),
+		Commit:      strings.TrimSpace(short),
+		FetchStatus: fetchStatus,
 	}
 	cacheKey := "git-snapshot\x00" + repo + "\x00" + branch
 	rt.Cache.Set(cacheKey, snap)
@@ -541,7 +551,7 @@ func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string, rt regi
 }
 
 func (s snapshot) header() string {
-	return fmt.Sprintf("repo=%s\nbranch=%s\nbranch_ref=%s\nref=%s\ncommit=%s\nworking_tree_changed=false", s.Repo, s.Branch, s.BranchRef, s.Ref, s.Commit)
+	return fmt.Sprintf("repo=%s\nbranch=%s\nbranch_ref=%s\nref=%s\ncommit=%s\nfetch_status=%s\nworking_tree_changed=false", s.Repo, s.Branch, s.BranchRef, s.Ref, s.Commit, s.FetchStatus)
 }
 
 func (b Base) defaultBranch(ctx context.Context, repo string) (string, error) {
@@ -556,6 +566,13 @@ func (b Base) defaultBranch(ctx context.Context, repo string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("could not find default branch from origin/HEAD, main, or master")
+}
+
+func (b Base) timeout() time.Duration {
+	if b.Timeout > 0 {
+		return b.Timeout
+	}
+	return 30 * time.Second
 }
 
 func (b Base) resolveRef(ctx context.Context, repo, raw string) (string, error) {
