@@ -15,6 +15,16 @@ type Profile struct {
 	SystemPrompt string
 }
 
+type ExploreProfile struct {
+	MaxSteps     int
+	MaxTokens    int
+	Parallelism  int
+	MaxWorkers   int
+	AllowedTools map[string]bool
+	SystemPrompt string
+	FinalPrompt  string
+}
+
 type Manager struct {
 	client       llm.Client
 	streamClient llm.StreamClient
@@ -22,7 +32,12 @@ type Manager struct {
 	thinking     string
 	tools        ToolExecutor
 	profiles     map[string]Profile
+	explore      ExploreProfile
 	policyPrompt string
+
+	secondaryClient       llm.Client
+	secondaryStreamClient llm.StreamClient
+	secondaryModel        string
 }
 
 type ToolExecutor interface {
@@ -46,11 +61,69 @@ func NewManager(client llm.Client, model, thinking string) *Manager {
 				SystemPrompt: prompts.Delegate("incident", ""),
 			},
 		},
+		explore: DefaultExploreProfile(),
 	}
 	if sc, ok := client.(llm.StreamClient); ok {
 		m.streamClient = sc
 	}
 	return m
+}
+
+func DefaultExploreProfile() ExploreProfile {
+	return ExploreProfile{
+		MaxSteps:    exploreMaxSteps,
+		MaxTokens:   exploreMaxTokens,
+		Parallelism: 10,
+		MaxWorkers:  3,
+		AllowedTools: map[string]bool{
+			"code-search":       true,
+			"code-read_file":    true,
+			"code-symbols":      true,
+			"code-definition":   true,
+			"code-references":   true,
+			"code-diagnostics":  true,
+			"repo-search":       true,
+			"repo-read_file":    true,
+			"git-search_ref":    true,
+			"git-read_file_ref": true,
+			"rag-search":        true,
+		},
+		SystemPrompt: prompts.Delegate("explore", defaultExploreSystemPrompt()),
+		FinalPrompt:  defaultExploreFinalReportPrompt(),
+	}
+}
+
+func (m *Manager) SetExploreProfile(profile ExploreProfile) {
+	if profile.MaxSteps <= 0 {
+		profile.MaxSteps = exploreMaxSteps
+	}
+	if profile.MaxTokens <= 0 {
+		profile.MaxTokens = exploreMaxTokens
+	}
+	if profile.Parallelism <= 0 {
+		profile.Parallelism = 10
+	}
+	if profile.MaxWorkers <= 0 {
+		profile.MaxWorkers = 3
+	}
+	if len(profile.AllowedTools) == 0 {
+		profile.AllowedTools = DefaultExploreProfile().AllowedTools
+	}
+	if profile.SystemPrompt == "" {
+		profile.SystemPrompt = DefaultExploreProfile().SystemPrompt
+	}
+	if profile.FinalPrompt == "" {
+		profile.FinalPrompt = DefaultExploreProfile().FinalPrompt
+	}
+	m.explore = profile
+}
+
+func (m *Manager) SetSecondaryClient(client llm.Client, model string) {
+	m.secondaryClient = client
+	m.secondaryModel = model
+	if sc, ok := client.(llm.StreamClient); ok {
+		m.secondaryStreamClient = sc
+	}
 }
 
 func (m *Manager) SetStreamClient(client llm.StreamClient) {
@@ -67,6 +140,13 @@ func (m *Manager) SetPolicyPrompt(prompt string) {
 
 func (m *Manager) RulesAndSkillsPrompt() string {
 	return m.policyPrompt
+}
+
+func (m *Manager) resolveSecondaryModel() string {
+	if m.secondaryModel != "" {
+		return m.secondaryModel
+	}
+	return m.model
 }
 
 func (m *Manager) Run(ctx context.Context, profileName, task, contextText string) (string, error) {

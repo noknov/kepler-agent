@@ -147,6 +147,34 @@ that per request.
 OPENCODE_GO_AVAILABLE_MODELS=glm-5.2,kimi-k2.7-code,mimo-v2.5
 ```
 
+### 🧠 Primary and secondary models
+
+The primary model handles user-facing answers. The optional secondary model is
+used for cheaper/faster background work such as read-only code exploration and
+context compact summaries.
+
+```bash
+SECONDARY_PROVIDER=opencode-zen
+OPENCODE_ZEN_API_KEY=...
+SECONDARY_MODEL=mimo-v2.5-free
+```
+
+When `SESSION_COMPACT_MODEL` is unset, compact summaries use `SECONDARY_MODEL`
+when configured, otherwise they fall back to the primary model.
+
+### Repository freshness
+
+Code-reading tools keep Claude Code-style snapshot semantics without fetching
+on every request. The first code/repo read for a repository refreshes `origin`
+refs only when that repo has not been fetched in the last 5 minutes, then reads
+from the upstream ref with `git show`/`git grep` without touching the working
+tree. This keeps Slack responses responsive while avoiding stale branch
+analysis for long-running sessions.
+
+Set `WORKSPACE_AUTO_FETCH=true` to also refresh workspace repositories in the
+background every 5 minutes. The background fetch shares the same process-wide
+cache as on-demand tool reads.
+
 ### 💬 Streaming responsiveness
 
 Final answer streaming is flushed in small batches to keep the UI responsive without sending one request per token. These settings can be tuned from the environment; duration values accept either milliseconds as a number or Go duration strings such as `35ms`.
@@ -160,9 +188,9 @@ Final answer streaming is flushed in small batches to keep the UI responsive wit
 | `STREAM_FLUSH_INTERVAL` | `35ms` | Shared fallback used when the Slack-specific interval is not set. |
 | `STREAM_FLUSH_CHARS` | `32` | Shared fallback used when the Slack-specific character threshold is not set. |
 
-### 🖼️ Multimodal and model switching
+### 🖼️ Multimodal and model display
 
-`<PROVIDER>_AVAILABLE_MODELS` enables a model selector in the Slack App Home tab for the active provider, such as `MIMO_AVAILABLE_MODELS`, `OPENCODE_ZEN_AVAILABLE_MODELS`, or `OPENCODE_GO_AVAILABLE_MODELS`. `MULTIMODAL_MODELS` controls which models receive image parts; images sent to non-listed models are stripped and replaced with a text description prompt.
+`<PROVIDER>_AVAILABLE_MODELS` controls which models the web UI can expose for the active provider, such as `MIMO_AVAILABLE_MODELS`, `OPENCODE_ZEN_AVAILABLE_MODELS`, or `OPENCODE_GO_AVAILABLE_MODELS`. The Slack App Home tab shows the primary and secondary models side by side. `MULTIMODAL_MODELS` controls which models receive image parts; images sent to non-listed models are stripped and replaced with a text description prompt.
 
 ## 📝 Prompt configuration
 
@@ -287,7 +315,7 @@ Event subscriptions: `app_mention`, `message.channels`, `message.groups`, `messa
 - `ALLOWED_SLACK_CHANNELS` controls which channels the bot responds to in channel threads.
 - `ALLOWED_SLACK_USERS` controls who can use the bot in app DMs.
 
-The App Home tab shows the configured provider, model, base URL, and protocol. It also includes a model selector when the active provider's `<PROVIDER>_AVAILABLE_MODELS` is set.
+The App Home tab shows access status plus the configured primary and secondary models.
 
 ## 🛠️ Tools
 

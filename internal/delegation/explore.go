@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/wati/oncall-agent/internal/llm"
-	"github.com/wati/oncall-agent/internal/prompts"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
@@ -18,22 +17,8 @@ const (
 
 	exploreMicroCompactThreshold = 6
 	exploreKeepRecentToolResults = 4
-	exploreToolResultClearedMsg    = "[Previous tool result cleared for context management]"
+	exploreToolResultClearedMsg  = "[Previous tool result cleared for context management]"
 )
-
-var exploreAllowedTools = map[string]bool{
-	"code-search":       true,
-	"code-read_file":    true,
-	"code-symbols":      true,
-	"code-definition":   true,
-	"code-references":   true,
-	"code-diagnostics":  true,
-	"repo-search":       true,
-	"repo-read_file":    true,
-	"git-search_ref":    true,
-	"git-read_file_ref": true,
-	"rag-search":        true,
-}
 
 type ExploreTool struct {
 	Manager *Manager
@@ -41,17 +26,37 @@ type ExploreTool struct {
 
 func (ExploreTool) Repeatable() bool { return true }
 
-func (ExploreTool) Parallel() bool { return false }
+func (ExploreTool) Parallel() bool { return true }
 
 func (t ExploreTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"explore-code",
-		"",
-		registry.ObjectSchema([]string{"task"}, map[string]any{
+		"Run one or more read-only exploration sub-agents. Use tasks for independent investigation directions that can run in parallel.",
+		registry.ObjectSchema(nil, map[string]any{
 			"task":       map[string]any{"type": "string", "description": ""},
 			"boundaries": map[string]any{"type": "string", "description": ""},
+			"tasks": map[string]any{
+				"type":        "array",
+				"description": "Independent exploration jobs to run concurrently. Prefer 2-4 focused tasks over one broad task when latency matters.",
+				"items": registry.ObjectSchema([]string{"task"}, map[string]any{
+					"task":       map[string]any{"type": "string", "description": ""},
+					"boundaries": map[string]any{"type": "string", "description": ""},
+				}),
+			},
 		}),
 	)
+}
+
+type ExploreJob struct {
+	Task       string `json:"task"`
+	Boundaries string `json:"boundaries"`
+}
+
+type exploreReport struct {
+	index int
+	job   ExploreJob
+	out   string
+	err   error
 }
 
 func (t ExploreTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
@@ -59,21 +64,45 @@ func (t ExploreTool) Execute(ctx context.Context, raw json.RawMessage, rt regist
 		return registry.Result{}, fmt.Errorf("explore manager is not configured")
 	}
 	var args struct {
-		Task       string `json:"task"`
-		Boundaries string `json:"boundaries"`
+		Task       string       `json:"task"`
+		Boundaries string       `json:"boundaries"`
+		Tasks      []ExploreJob `json:"tasks"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
 	}
-	task := strings.TrimSpace(args.Task)
-	if task == "" {
-		return registry.Result{}, fmt.Errorf("task is required")
+	jobs := normalizeExploreJobs(args.Task, args.Boundaries, args.Tasks)
+	if len(jobs) == 0 {
+		return registry.Result{}, fmt.Errorf("task or tasks is required")
 	}
-	out, err := t.Manager.Explore(ctx, task, strings.TrimSpace(args.Boundaries), rt)
+	if len(jobs) == 1 {
+		out, err := t.Manager.Explore(ctx, jobs[0].Task, jobs[0].Boundaries, rt)
+		if err != nil {
+			return registry.Result{}, err
+		}
+		return registry.Result{Content: out}, nil
+	}
+	out, err := t.Manager.ExploreMany(ctx, jobs, rt)
 	if err != nil {
 		return registry.Result{}, err
 	}
 	return registry.Result{Content: out}, nil
+}
+
+func normalizeExploreJobs(task, boundaries string, tasks []ExploreJob) []ExploreJob {
+	var jobs []ExploreJob
+	if task = strings.TrimSpace(task); task != "" {
+		jobs = append(jobs, ExploreJob{Task: task, Boundaries: strings.TrimSpace(boundaries)})
+	}
+	for _, job := range tasks {
+		job.Task = strings.TrimSpace(job.Task)
+		job.Boundaries = strings.TrimSpace(job.Boundaries)
+		if job.Task == "" {
+			continue
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs
 }
 
 func (m *Manager) Explore(ctx context.Context, task, boundaries string, rt registry.Runtime) (string, error) {
@@ -81,26 +110,28 @@ func (m *Manager) Explore(ctx context.Context, task, boundaries string, rt regis
 	if len(toolSpecs) == 0 {
 		return "", fmt.Errorf("no read-only exploration tools are available")
 	}
+	profile := m.exploreProfile()
 	user := "Investigation task:\n" + task
 	if boundaries != "" {
 		user += "\n\nBoundaries:\n" + boundaries
 	}
 	messages := []llm.Message{
-		{Role: "system", Content: exploreSystemPrompt() + m.RulesAndSkillsPrompt()},
+		{Role: "system", Content: profile.SystemPrompt + m.RulesAndSkillsPrompt()},
 		{Role: "user", Content: user},
 	}
 	retriedSynthesis := false
-	for step := 0; step < exploreMaxSteps; step++ {
+	maxSteps := profile.MaxSteps
+	for step := 0; step < maxSteps; step++ {
 		specs := toolSpecs
-		if step >= exploreMaxSteps-2 {
+		if step >= maxSteps-2 {
 			specs = nil
 		}
 		resp, err := m.exploreChat(ctx, llm.Request{
-			Model:       m.model,
+			Model:       m.resolveSecondaryModel(),
 			Thinking:    "", // disable thinking in explore for speed
 			Messages:    messages,
 			Tools:       specs,
-			MaxTokens:   exploreMaxTokens,
+			MaxTokens:   profile.MaxTokens,
 			Temperature: 0.1,
 		})
 		if err != nil {
@@ -114,7 +145,7 @@ func (m *Manager) Explore(ctx context.Context, task, boundaries string, rt regis
 			if retriedSynthesis {
 				return partialExploreReport(messages), nil
 			}
-			messages = append(messages, llm.Message{Role: "system", Content: exploreFinalReportPrompt()})
+			messages = append(messages, llm.Message{Role: "system", Content: profile.FinalPrompt})
 			retriedSynthesis = true
 			continue
 		}
@@ -123,20 +154,91 @@ func (m *Manager) Explore(ctx context.Context, task, boundaries string, rt regis
 		messages = append(messages, m.executeExploreToolCalls(ctx, msg.ToolCalls, rt)...)
 		messages = applyExploreMicroCompact(messages)
 	}
-	return "", fmt.Errorf("explore did not converge within %d steps", exploreMaxSteps)
+	return "", fmt.Errorf("explore did not converge within %d steps", maxSteps)
+}
+
+func (m *Manager) ExploreMany(ctx context.Context, jobs []ExploreJob, rt registry.Runtime) (string, error) {
+	jobs = normalizeExploreJobs("", "", jobs)
+	if len(jobs) == 0 {
+		return "", fmt.Errorf("at least one exploration task is required")
+	}
+	if len(jobs) == 1 {
+		return m.Explore(ctx, jobs[0].Task, jobs[0].Boundaries, rt)
+	}
+	profile := m.exploreProfile()
+	workers := profile.MaxWorkers
+	if workers > len(jobs) {
+		workers = len(jobs)
+	}
+	reports := make([]exploreReport, len(jobs))
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	wg.Add(len(jobs))
+	for i, job := range jobs {
+		go func(i int, job ExploreJob) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				reports[i] = exploreReport{index: i, job: job, err: ctx.Err()}
+				return
+			}
+			out, err := m.Explore(ctx, job.Task, job.Boundaries, rt)
+			reports[i] = exploreReport{index: i, job: job, out: out, err: err}
+		}(i, job)
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return formatExploreReports(reports), nil
+}
+
+func formatExploreReports(reports []exploreReport) string {
+	var b strings.Builder
+	b.WriteString("Parallel exploration reports:")
+	for _, report := range reports {
+		b.WriteString("\n\n")
+		b.WriteString(fmt.Sprintf("## Explorer %d: %s\n", report.index+1, report.job.Task))
+		if report.job.Boundaries != "" {
+			b.WriteString("Boundaries: ")
+			b.WriteString(report.job.Boundaries)
+			b.WriteString("\n")
+		}
+		if report.err != nil {
+			b.WriteString("Finding: exploration failed.\nEvidence:\n- [tool error] ")
+			b.WriteString(report.err.Error())
+			b.WriteString("\nExcluded: not determined.\nNext decisive checks: retry this direction with narrower boundaries.")
+			continue
+		}
+		out := strings.TrimSpace(report.out)
+		if out == "" {
+			out = "Finding: exploration produced no report.\nEvidence:\n- No evidence returned.\nExcluded: not determined.\nNext decisive checks: retry this direction with a narrower task."
+		}
+		b.WriteString(out)
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func (m *Manager) exploreChat(ctx context.Context, req llm.Request) (llm.Response, error) {
+	client := m.client
 	sc := m.streamClient
+
+	if m.secondaryClient != nil {
+		client = m.secondaryClient
+		sc = m.secondaryStreamClient
+	}
+
 	if sc == nil {
-		if c, ok := m.client.(llm.StreamClient); ok {
+		if c, ok := client.(llm.StreamClient); ok {
 			sc = c
 		}
 	}
 	if sc != nil {
 		return sc.ChatStream(ctx, req, llm.StreamHandler{})
 	}
-	return m.client.Chat(ctx, req)
+	return client.Chat(ctx, req)
 }
 
 func applyExploreMicroCompact(messages []llm.Message) []llm.Message {
@@ -215,18 +317,31 @@ func partialExploreReport(messages []llm.Message) string {
 }
 
 func (m *Manager) exploreToolSpecs() []llm.ToolSpec {
+	allowed := m.exploreProfile().AllowedTools
 	specs := m.tools.Specs()
 	out := make([]llm.ToolSpec, 0, len(specs))
 	for _, spec := range specs {
-		if exploreAllowedTools[spec.Function.Name] {
+		if allowed[spec.Function.Name] {
 			out = append(out, spec)
 		}
 	}
 	return out
 }
 
-func exploreSystemPrompt() string {
-	return prompts.Delegate("explore", `You are a read-only code exploration sub-agent.
+func (m *Manager) exploreProfile() ExploreProfile {
+	if m == nil {
+		return DefaultExploreProfile()
+	}
+	profile := m.explore
+	if profile.MaxSteps <= 0 || profile.MaxTokens <= 0 || profile.Parallelism <= 0 || len(profile.AllowedTools) == 0 || profile.SystemPrompt == "" || profile.FinalPrompt == "" {
+		m.SetExploreProfile(profile)
+		profile = m.explore
+	}
+	return profile
+}
+
+func defaultExploreSystemPrompt() string {
+	return `You are a read-only code exploration sub-agent.
 
 Your job is to search and read code in an isolated context, then return a concise report to the main agent.
 
@@ -242,10 +357,10 @@ Output format:
 - Finding: one concise answer or orientation.
 - Evidence: bullet list with file paths, line numbers, and exact facts from tool evidence.
 - Excluded: what you checked and ruled out.
-- Next decisive checks: at most 3 targeted reads/searches if uncertainty remains.`)
+- Next decisive checks: at most 3 targeted reads/searches if uncertainty remains.`
 }
 
-func exploreFinalReportPrompt() string {
+func defaultExploreFinalReportPrompt() string {
 	return `Tool calls are no longer available in this exploration sub-agent. Return a concise text report now using only evidence already gathered.
 
 Output format:
@@ -261,7 +376,7 @@ func (m *Manager) executeExploreToolCalls(ctx context.Context, calls []llm.ToolC
 		out[0] = m.executeExploreToolCall(ctx, calls[0], rt)
 		return out
 	}
-	sem := make(chan struct{}, 10)
+	sem := make(chan struct{}, m.exploreProfile().Parallelism)
 	var wg sync.WaitGroup
 	wg.Add(len(calls))
 	for i, call := range calls {
@@ -278,7 +393,7 @@ func (m *Manager) executeExploreToolCalls(ctx context.Context, calls []llm.ToolC
 
 func (m *Manager) executeExploreToolCall(ctx context.Context, call llm.ToolCall, rt registry.Runtime) llm.Message {
 	name := call.Function.Name
-	if !exploreAllowedTools[name] {
+	if !m.exploreProfile().AllowedTools[name] {
 		return llm.Message{Role: "tool", ToolCallID: call.ID, Name: name, Content: "[tool error] tool is not available in read-only exploration"}
 	}
 	result, err := m.tools.Execute(ctx, name, json.RawMessage(call.Function.Arguments), rt)

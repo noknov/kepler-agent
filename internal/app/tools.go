@@ -18,22 +18,25 @@ import (
 	knowledgeTools "github.com/wati/oncall-agent/internal/toolkit/tools/knowledge"
 	luckinTools "github.com/wati/oncall-agent/internal/toolkit/tools/luckin"
 	notionTools "github.com/wati/oncall-agent/internal/toolkit/tools/notion"
+	plannerTools "github.com/wati/oncall-agent/internal/toolkit/tools/planner"
 	playwrightTools "github.com/wati/oncall-agent/internal/toolkit/tools/playwright"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 	skillTools "github.com/wati/oncall-agent/internal/toolkit/tools/skills"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/slacktool"
+	systemTools "github.com/wati/oncall-agent/internal/toolkit/tools/system"
 	webSearchTools "github.com/wati/oncall-agent/internal/toolkit/tools/websearch"
 	youtrackTools "github.com/wati/oncall-agent/internal/toolkit/tools/youtrack"
 )
 
-func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm.Client, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) *registry.Registry {
+func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) *registry.Registry {
 	tools := registry.NewReadOnly()
 	registerDeferredDiagnosticsTools(tools)
 	registerCodeTools(tools, cfg, workspacePolicy, commandPolicy)
 	registerIntegrationTools(tools, cfg, commandPolicy)
 	registerKnowledgeTools(tools, cfg)
 	registerSlackTools(tools, slackClient)
-	registerAgentControlTools(tools, cfg, llmClient)
+	registerSystemTools(tools)
+	registerAgentControlTools(tools, cfg, llmClient, secondaryClient, secondaryModel)
 	tools.Register(registry.ToolSearchTool{Registry: tools})
 	return tools
 }
@@ -137,10 +140,18 @@ func registerSlackTools(tools *registry.Registry, slackClient *slack.Client) {
 	tools.Register(slacktool.SendScreenshotTool{Slack: slackClient})
 }
 
-func registerAgentControlTools(tools *registry.Registry, cfg config.Config, llmClient llm.Client) {
+func registerSystemTools(tools *registry.Registry) {
+	tools.Register(systemTools.CurrentTimeTool{})
+}
+
+func registerAgentControlTools(tools *registry.Registry, cfg config.Config, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string) {
 	delegates := delegation.NewManager(llmClient, cfg.LLM.Model, cfg.LLM.Thinking)
+	if secondaryClient != nil && secondaryModel != "" {
+		delegates.SetSecondaryClient(secondaryClient, secondaryModel)
+	}
 	delegates.SetPolicyPrompt(prompts.RulesAndSkillsPrompt())
 	delegates.SetTools(tools)
+	tools.Register(plannerTools.PlanTool{})
 	tools.Register(skillTools.LoadTool{})
 	tools.Register(delegation.Tool{Manager: delegates})
 	tools.Register(delegation.ExploreTool{Manager: delegates})

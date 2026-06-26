@@ -49,7 +49,7 @@ func TestLoadDirAppendsSystemPromptAndOverridesStructuredPrompts(t *testing.T) {
 	}
 }
 
-func TestAgentPromptSupersedesSystemPromptWithinSameDir(t *testing.T) {
+func TestAgentPromptAppendsToSystemPromptWithinSameDir(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "system.md"), []byte("legacy system\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -63,7 +63,7 @@ func TestAgentPromptSupersedesSystemPromptWithinSameDir(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = LoadDirs(PublicDir) })
 
-	if got := System("fallback"); got != "agent system" {
+	if got := System("fallback"); got != "legacy system\n\nagent system" {
 		t.Fatalf("System() = %q", got)
 	}
 }

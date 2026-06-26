@@ -58,6 +58,14 @@ type LLMConfig struct {
 	MaxTokens        int
 	Temperature      float64
 	Timeout          time.Duration
+
+	// Secondary model is used for cheaper/faster background work such as
+	// read-only code exploration and compact summaries.
+	SecondaryProvider string
+	SecondaryBaseURL  string
+	SecondaryAPIKey   string
+	SecondaryModel    string
+	SecondaryProtocol string
 }
 
 type TokenUsageConfig struct {
@@ -85,7 +93,7 @@ type SessionConfig struct {
 	MaxSummaryChars     int
 	MaxContextTokens    int    // context window token limit (default 200000)
 	AutocompactBuffer   int    // reserved token headroom before auto-compact (default 13000)
-	CompactModel        string // model used for compact summaries (empty = main model)
+	CompactModel        string // model used for compact summaries (empty = secondary model, then main model)
 	MaxToolResultTokens int    // per-tool-result token cap (default 5000)
 }
 
@@ -160,6 +168,19 @@ func Load() (Config, error) {
 	if llmProvider == "mimo" && providerThinking(llmProvider) == "" {
 		llmThinking = "disabled"
 	}
+
+	secondaryProvider := strings.TrimSpace(os.Getenv("SECONDARY_PROVIDER"))
+	var secondaryBaseURL, secondaryAPIKey, secondaryModel, secondaryProtocol string
+	if secondaryProvider != "" {
+		secondaryBaseURL = providerBaseURL(secondaryProvider)
+		secondaryAPIKey = providerAPIKey(secondaryProvider)
+		secondaryProtocol = providerProtocol(secondaryProvider)
+		secondaryModel = strings.TrimSpace(os.Getenv("SECONDARY_MODEL"))
+		if secondaryModel == "" {
+			secondaryModel = providerModel(secondaryProvider)
+		}
+	}
+
 	cfg := Config{
 		HTTP: HTTPConfig{
 			Addr: env("HTTP_ADDR", ":8080"),
@@ -188,6 +209,12 @@ func Load() (Config, error) {
 			MaxTokens:       providerMaxTokens(llmProvider),
 			Temperature:     providerTemperature(llmProvider),
 			Timeout:         providerTimeout(llmProvider),
+
+			SecondaryProvider: secondaryProvider,
+			SecondaryBaseURL:  trimRightSlash(secondaryBaseURL),
+			SecondaryAPIKey:   secondaryAPIKey,
+			SecondaryModel:    secondaryModel,
+			SecondaryProtocol: secondaryProtocol,
 		},
 		Security: SecurityConfig{
 			AllowedUsers:               envCSV("ALLOWED_SLACK_USERS"),
@@ -520,11 +547,7 @@ func providerThinking(provider string) string {
 	case "kimi", "moonshot":
 		return firstEnv("KIMI_THINKING")
 	case "deepseek":
-		v := firstEnv("DEEPSEEK_THINKING")
-		if v == "" {
-			return "enabled"
-		}
-		return v
+		return firstEnv("DEEPSEEK_THINKING")
 	default:
 		return ""
 	}

@@ -134,7 +134,7 @@ func TestCompressThreadContextPreservesEdgesAndRelevantMiddle(t *testing.T) {
 	}
 }
 
-func TestBuildWithPartsUsesThreadCompression(t *testing.T) {
+func TestBuildWithPartsIncludesFullThreadContext(t *testing.T) {
 	builder := Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 900, MaxSummaryChars: 1000}
 	thread := "U1: first report\n" + strings.Repeat("U2: filler update with repeated low signal details and timestamps\n", 40) + "U3: latest user clarification"
 	messages := builder.BuildWithParts("system", thread, "what happened?", nil, "", nil)
@@ -142,11 +142,11 @@ func TestBuildWithPartsUsesThreadCompression(t *testing.T) {
 		t.Fatalf("messages = %#v", messages)
 	}
 	threadMessage := messages[1].Content
-	if !strings.Contains(threadMessage, "Thread context compressed") {
-		t.Fatalf("thread context was not compressed: %q", threadMessage)
-	}
 	if !strings.Contains(threadMessage, "first report") || !strings.Contains(threadMessage, "latest user clarification") {
-		t.Fatalf("compressed thread lost edge context: %q", threadMessage)
+		t.Fatalf("thread context lost edge content: %q", threadMessage)
+	}
+	if !strings.Contains(threadMessage, "filler update") {
+		t.Fatalf("thread context should include full content without compression: %q", threadMessage)
 	}
 }
 

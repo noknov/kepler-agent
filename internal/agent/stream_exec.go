@@ -22,6 +22,7 @@ type streamingToolExecutor struct {
 
 	mu      sync.Mutex
 	results map[string]toolResult
+	started map[string]bool
 	wg      sync.WaitGroup
 	sem     chan struct{}
 }
@@ -34,6 +35,7 @@ func newStreamingToolExecutor(ctx context.Context, r Runner, req Request, seenTo
 		seenToolCalls:   seenToolCalls,
 		seenSearchTerms: seenSearchTerms,
 		results:         make(map[string]toolResult),
+		started:         make(map[string]bool),
 		sem:             make(chan struct{}, maxStreamingConcurrency),
 	}
 }
@@ -51,6 +53,11 @@ func (e *streamingToolExecutor) Submit(call llm.ToolCall) {
 	}
 
 	e.mu.Lock()
+	if e.started[call.ID] {
+		e.mu.Unlock()
+		return
+	}
+	e.started[call.ID] = true
 	if dup, content := e.runner.duplicateToolCall(call, e.seenToolCalls, e.seenSearchTerms); dup {
 		e.results[call.ID] = toolResult{
 			message: llm.Message{
@@ -78,13 +85,13 @@ func (e *streamingToolExecutor) Submit(call llm.ToolCall) {
 	}()
 }
 
-// HasResults reports whether any tool calls were executed during streaming.
-func (e *streamingToolExecutor) HasResults() bool {
+// HasSubmitted reports whether any tool execution began during streaming.
+func (e *streamingToolExecutor) HasSubmitted() bool {
 	if e == nil {
 		return false
 	}
 	e.mu.Lock()
-	n := len(e.results)
+	n := len(e.started)
 	e.mu.Unlock()
 	return n > 0
 }
@@ -129,4 +136,3 @@ func (e *streamingToolExecutor) Drain(calls []llm.ToolCall) []toolResult {
 	e.runner.observeToolResults(results)
 	return results
 }
-

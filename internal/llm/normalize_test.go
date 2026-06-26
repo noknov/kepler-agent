@@ -13,6 +13,7 @@ func TestLooksLikeTextualToolCall(t *testing.T) {
 		{"I'll call <function=git-log> next.", true},
 		{"normal markdown with `code` only", false},
 		{`<tool_invocation name="repo-search" arguments={"query": "foo", "repo": "bar"} />`, true},
+		{`<tool_invocation name="repo-search" arguments='{"query":"foo"}' />`, true},
 		{`<tool_invocation name="x" arguments={} /><tool_invocation name="y" arguments={} />`, true},
 		{`<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="code-search"></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>`, true},
 	}
@@ -56,7 +57,7 @@ func TestStripTextualToolCallMarkup(t *testing.T) {
 
 func TestNormalizeAssistantMessageStripsMarkupWhenStructuredCallsPresent(t *testing.T) {
 	msg := Message{
-		Role: "assistant",
+		Role:    "assistant",
 		Content: "Planning...\n<tool_call><function=code-search></function></tool_call>",
 		ToolCalls: []ToolCall{{
 			ID:   "call_1",
@@ -73,5 +74,133 @@ func TestNormalizeAssistantMessageStripsMarkupWhenStructuredCallsPresent(t *test
 	}
 	if len(out.ToolCalls) != 1 {
 		t.Fatalf("tool calls were dropped: %#v", out.ToolCalls)
+	}
+}
+
+func TestParseTextualToolCalls(t *testing.T) {
+	cases := []struct {
+		name      string
+		content   string
+		wantCount int
+		wantName  string
+		wantArgs  string
+	}{
+		{
+			name:      "tool_invocation self-closing",
+			content:   `<tool_invocation name="repo-search" arguments={"query": "foo", "repo": "bar"} />`,
+			wantCount: 1,
+			wantName:  "repo-search",
+			wantArgs:  `{"query": "foo", "repo": "bar"}`,
+		},
+		{
+			name:      "quoted tool_invocation args",
+			content:   `<tool_invocation name="repo-search" arguments='{"query":"foo"}' />`,
+			wantCount: 1,
+			wantName:  "repo-search",
+			wantArgs:  `{"query":"foo"}`,
+		},
+		{
+			name:      "tool_invocation with body",
+			content:   `<tool_invocation name="code-search" arguments={"query":"test"}>body</tool_invocation>`,
+			wantCount: 1,
+			wantName:  "code-search",
+			wantArgs:  `{"query":"test"}`,
+		},
+		{
+			name:      "multiple tool_invocations",
+			content:   `<tool_invocation name="x" arguments={"a":1} /><tool_invocation name="y" arguments={"b":2} />`,
+			wantCount: 2,
+			wantName:  "x",
+		},
+		{
+			name:      "function tag",
+			content:   `<tool_call><function=code-search>{"query":"hello"}</function></tool_call>`,
+			wantCount: 1,
+			wantName:  "code-search",
+			wantArgs:  `{"query":"hello"}`,
+		},
+		{
+			name:      "no match",
+			content:   "plain text answer",
+			wantCount: 0,
+		},
+		{
+			name:      "empty args",
+			content:   `<tool_invocation name="system-current_time" arguments={} />`,
+			wantCount: 1,
+			wantName:  "system-current_time",
+			wantArgs:  "{}",
+		},
+		{
+			name:      "tool_name parameters",
+			content:   `<tool_name>code-search</tool_name><parameters>{"query":"handler"}</parameters>`,
+			wantCount: 1,
+			wantName:  "code-search",
+			wantArgs:  `{"query":"handler"}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := ParseTextualToolCalls(tc.content)
+			if len(calls) != tc.wantCount {
+				t.Fatalf("got %d calls, want %d: %#v", len(calls), tc.wantCount, calls)
+			}
+			if tc.wantCount > 0 && calls[0].Function.Name != tc.wantName {
+				t.Fatalf("name = %q, want %q", calls[0].Function.Name, tc.wantName)
+			}
+			if tc.wantArgs != "" && calls[0].Function.Arguments != tc.wantArgs {
+				t.Fatalf("args = %q, want %q", calls[0].Function.Arguments, tc.wantArgs)
+			}
+		})
+	}
+}
+
+func TestMayBecomeTextualToolCall(t *testing.T) {
+	cases := []struct {
+		content string
+		want    bool
+	}{
+		{"normal prose", false},
+		{"normal prose <", true},
+		{"normal prose <tool_", true},
+		{"normal prose <function", true},
+		{"normal prose ```", true},
+	}
+	for _, tc := range cases {
+		if got := MayBecomeTextualToolCall(tc.content); got != tc.want {
+			t.Fatalf("MayBecomeTextualToolCall(%q) = %v, want %v", tc.content, got, tc.want)
+		}
+	}
+}
+
+func TestNormalizeAssistantMessageParsesTextualCalls(t *testing.T) {
+	msg := Message{
+		Role:    "assistant",
+		Content: `I'll search for that. <tool_invocation name="code-search" arguments={"query":"handler"} />`,
+	}
+	// OpenAI-compatible protocol enables textual tool call repair.
+	caps := CapabilitiesFor("deepseek", "openai")
+	out := NormalizeAssistantMessage(caps, msg, nil)
+	if len(out.ToolCalls) != 1 {
+		t.Fatalf("expected 1 parsed tool call, got %d", len(out.ToolCalls))
+	}
+	if out.ToolCalls[0].Function.Name != "code-search" {
+		t.Fatalf("name = %q, want code-search", out.ToolCalls[0].Function.Name)
+	}
+	if LooksLikeTextualToolCall(out.Content) {
+		t.Fatalf("content still has markup: %q", out.Content)
+	}
+}
+
+func TestNormalizeAssistantMessageRepairsForAllProtocols(t *testing.T) {
+	msg := Message{
+		Role:    "assistant",
+		Content: `Some text with <tool_invocation name="code-search" arguments={"query":"x"} />`,
+	}
+	// Even Anthropic-compatible providers (MiMo) may leak markup into text blocks.
+	caps := CapabilitiesFor("mimo", "anthropic")
+	out := NormalizeAssistantMessage(caps, msg, nil)
+	if len(out.ToolCalls) != 1 {
+		t.Fatalf("expected repair to parse 1 tool call, got %d", len(out.ToolCalls))
 	}
 }

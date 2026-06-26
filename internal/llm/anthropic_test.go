@@ -52,6 +52,24 @@ func TestAnthropicMessagesConvertToolCallsAndResults(t *testing.T) {
 	}
 }
 
+func TestAnthropicSystemBlocksSplitsDynamicContextForCache(t *testing.T) {
+	system := "static rules\n\n---DYNAMIC_CONTEXT_BELOW---\n\ndynamic repo inventory"
+	raw := anthropicSystemBlocks([]Message{{Role: "system", Content: system}})
+	blocks, ok := raw.([]map[string]any)
+	if !ok {
+		t.Fatalf("system blocks type = %T", raw)
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("len(blocks) = %d, want 2: %#v", len(blocks), blocks)
+	}
+	if _, ok := blocks[0]["cache_control"]; !ok {
+		t.Fatalf("static block should be cacheable: %#v", blocks[0])
+	}
+	if _, ok := blocks[1]["cache_control"]; ok {
+		t.Fatalf("dynamic block should not be cacheable: %#v", blocks[1])
+	}
+}
+
 func TestAnthropicMessagesConvertImageParts(t *testing.T) {
 	messages := anthropicMessages([]Message{{
 		Role: "user",

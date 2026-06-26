@@ -99,6 +99,19 @@ func (o *Observer) ToolCallWithMetadata(name string, args json.RawMessage, d tim
 	})
 }
 
+func (o *Observer) Event(name string, metadata map[string]any) {
+	if o == nil || name == "" {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.appendStepLocked(Step{
+		Type:     "event",
+		Name:     name,
+		Metadata: metadata,
+	})
+}
+
 func (o *Observer) RecordErrorStack(stack string) {
 	if o == nil || o.Run == nil || stack == "" {
 		return
