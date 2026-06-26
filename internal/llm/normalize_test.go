@@ -145,7 +145,8 @@ func TestNormalizeAssistantMessageParsesTextualCalls(t *testing.T) {
 		Role:    "assistant",
 		Content: `I'll search for that. <tool_invocation name="code-search" arguments={"query":"handler"} />`,
 	}
-	caps := CapabilitiesFor("mimo", "anthropic")
+	// OpenAI-compatible protocol enables textual tool call repair.
+	caps := CapabilitiesFor("deepseek", "openai")
 	out := NormalizeAssistantMessage(caps, msg, nil)
 	if len(out.ToolCalls) != 1 {
 		t.Fatalf("expected 1 parsed tool call, got %d", len(out.ToolCalls))
@@ -155,5 +156,18 @@ func TestNormalizeAssistantMessageParsesTextualCalls(t *testing.T) {
 	}
 	if LooksLikeTextualToolCall(out.Content) {
 		t.Fatalf("content still has markup: %q", out.Content)
+	}
+}
+
+func TestNormalizeAssistantMessageRepairsForAllProtocols(t *testing.T) {
+	msg := Message{
+		Role:    "assistant",
+		Content: `Some text with <tool_invocation name="code-search" arguments={"query":"x"} />`,
+	}
+	// Even Anthropic-compatible providers (MiMo) may leak markup into text blocks.
+	caps := CapabilitiesFor("mimo", "anthropic")
+	out := NormalizeAssistantMessage(caps, msg, nil)
+	if len(out.ToolCalls) != 1 {
+		t.Fatalf("expected repair to parse 1 tool call, got %d", len(out.ToolCalls))
 	}
 }
