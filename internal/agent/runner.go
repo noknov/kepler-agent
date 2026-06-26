@@ -1226,10 +1226,9 @@ func (sr *streamRouter) text(delta string) {
 	if delta == "" {
 		return
 	}
-	if sr.toolTurn {
-		sr.emit(StreamEvent{Kind: StreamNarration, Delta: delta})
-		return
-	}
+	// Always buffer — never emit text deltas directly during streaming.
+	// The buffer is flushed as a whole in finish/toolCallsStarted, where
+	// we can detect and strip textual tool-call markup.
 	sr.buf.WriteString(delta)
 }
 
@@ -1248,11 +1247,7 @@ func (sr *streamRouter) finish(hasToolCalls bool) {
 		}
 		return
 	}
-	if sr.buf.Len() == 0 {
-		return
-	}
-	sr.emit(StreamEvent{Kind: StreamAnswer, Delta: sr.buf.String()})
-	sr.buf.Reset()
+	sr.flushAs(StreamAnswer)
 }
 
 func (sr *streamRouter) flushAs(kind StreamKind) {
@@ -1264,7 +1259,13 @@ func (sr *streamRouter) flushAs(kind StreamKind) {
 	if text == "" {
 		return
 	}
-	if sr.afterTools {
+	if llm.LooksLikeTextualToolCall(text) {
+		text = strings.TrimSpace(llm.StripTextualToolCallMarkup(text))
+		if text == "" {
+			return
+		}
+	}
+	if kind == StreamNarration && sr.afterTools {
 		text = "\n\n" + text
 	}
 	sr.emit(StreamEvent{Kind: kind, Delta: text})
