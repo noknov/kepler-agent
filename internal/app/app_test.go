@@ -261,56 +261,56 @@ func TestHomeViewIncludesModelAndAccess(t *testing.T) {
 	}
 }
 
-func TestHomeViewShowsModelDropdownWhenMultipleModels(t *testing.T) {
+func TestHomeViewShowsModelWithoutDropdown(t *testing.T) {
 	server := &Server{cfg: config.Config{LLM: config.LLMConfig{
 		Model:           "mimo-v2.5",
-		AvailableModels: []string{"mimo-v2.5", "mimo-v2.5-pro"},
+		AvailableModels: []string{"mimo-v2.5"},
 	}}}
 	view := server.homeView("U1")
 	blocks, _ := view["blocks"].([]map[string]any)
-	found := false
 	for _, block := range blocks {
-		if block["type"] != "actions" {
+		if block["type"] == "actions" {
+			t.Fatal("home view should not contain actions block (model dropdown removed)")
+		}
+	}
+	foundModel := false
+	for _, block := range blocks {
+		if block["type"] != "section" {
 			continue
 		}
-		elements, _ := block["elements"].([]map[string]any)
-		for _, element := range elements {
-			if element["action_id"] == "select_model" {
-				found = true
+		text, _ := block["text"].(map[string]any)
+		if text != nil {
+			if s, ok := text["text"].(string); ok && strings.Contains(s, "mimo-v2.5") {
+				foundModel = true
 			}
 		}
 	}
-	if !found {
-		t.Fatal("expected model select dropdown in actions block when multiple models available")
+	if !foundModel {
+		t.Fatal("expected model name in home view")
 	}
 }
 
-func TestHomeViewReflectsUserModelPreference(t *testing.T) {
+func TestHomeViewShowsExploreModel(t *testing.T) {
 	server := &Server{cfg: config.Config{LLM: config.LLMConfig{
-		Model:           "mimo-v2.5",
-		AvailableModels: []string{"mimo-v2.5", "mimo-v2.5-pro"},
+		Model:        "mimo-v2.5",
+		ExploreModel: "deepseek-v4-flash",
 	}}}
-	server.modelPrefs.Store("U1", "mimo-v2.5-pro")
 	view := server.homeView("U1")
 	blocks, _ := view["blocks"].([]map[string]any)
-	found := false
+	foundExplore := false
 	for _, block := range blocks {
-		if block["type"] != "actions" {
+		if block["type"] != "section" {
 			continue
 		}
-		elements, _ := block["elements"].([]map[string]any)
-		for _, element := range elements {
-			if element["action_id"] != "select_model" {
-				continue
-			}
-			initial, _ := element["initial_option"].(map[string]any)
-			if initial != nil && initial["value"] == "mimo-v2.5-pro" {
-				found = true
+		text, _ := block["text"].(map[string]any)
+		if text != nil {
+			if s, ok := text["text"].(string); ok && strings.Contains(s, "deepseek-v4-flash") {
+				foundExplore = true
 			}
 		}
 	}
-	if !found {
-		t.Fatal("expected dropdown initial_option to reflect user's preferred model mimo-v2.5-pro")
+	if !foundExplore {
+		t.Fatal("expected explore model name in home view")
 	}
 }
 

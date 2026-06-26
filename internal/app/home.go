@@ -35,20 +35,15 @@ func (s *Server) homeView(userID string) map[string]any {
 		mentionText = fmt.Sprintf("mention `<@%s>`", s.cfg.Slack.BotUserID)
 	}
 
-	currentModel := s.cfg.LLM.Model
-	if v, ok := s.modelPrefs.Load(userID); ok {
-		currentModel = v.(string)
+	modelInfo := "*Model* `" + s.cfg.LLM.Model + "`"
+	if s.cfg.LLM.ExploreModel != "" {
+		modelInfo += "\n*Explorer* `" + s.cfg.LLM.ExploreModel + "`"
 	}
-
-	models := s.cfg.LLM.AvailableModels
 
 	blocks := []map[string]any{
 		headerBlock("斗包"),
 		sectionBlock(fmt.Sprintf("*Access* %s\n%s", statusText, statusEmoji)),
-		sectionBlock("*Model* `" + currentModel + "`"),
-	}
-	if len(models) > 1 {
-		blocks = append(blocks, actionsBlock(modelSelectMenu(models, currentModel)))
+		sectionBlock(modelInfo),
 	}
 	blocks = append(blocks,
 		dividerBlock(),

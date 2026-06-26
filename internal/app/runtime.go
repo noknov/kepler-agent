@@ -2,6 +2,7 @@ package app
 
 import (
 	"log"
+	"time"
 
 	"github.com/wati/oncall-agent/internal/agent"
 	"github.com/wati/oncall-agent/internal/config"
@@ -42,7 +43,8 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *obs
 		MaxSummaryChars:  cfg.Sessions.MaxSummaryChars,
 		MaxContextTokens: cfg.Sessions.MaxContextTokens,
 	}
-	tools := newToolRegistry(cfg, slackClient, llmClient, workspacePolicy, commandPolicy)
+	exploreClient, exploreModel := newExploreLLMClient(cfg)
+	tools := newToolRegistry(cfg, slackClient, llmClient, exploreClient, exploreModel, workspacePolicy, commandPolicy)
 
 	// Build the 4-layer context compactor.
 	compactModel := cfg.Sessions.CompactModel
@@ -106,15 +108,27 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *obs
 }
 
 func newLLMClient(cfg config.Config) llm.Client {
-	var client llm.Client
-	if cfg.LLM.Provider == "opencode-go" {
-		client = llm.NewOpenCodeGoClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout)
-	} else if cfg.LLM.Protocol == "anthropic" {
-		client = llm.NewAnthropicClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout, cfg.LLM.AnthropicFlavor)
-	} else {
-		client = llm.NewOpenAICompatibleClient(cfg.LLM.Provider, cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout)
+	return buildLLMClient(cfg.LLM.Provider, cfg.LLM.Protocol, cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout, cfg.LLM.AnthropicFlavor)
+}
+
+func newExploreLLMClient(cfg config.Config) (llm.Client, string) {
+	if cfg.LLM.ExploreProvider == "" {
+		return nil, ""
 	}
-	return llm.WrapClient(client, llm.CapabilitiesFor(cfg.LLM.Provider, cfg.LLM.Protocol))
+	client := buildLLMClient(cfg.LLM.ExploreProvider, cfg.LLM.ExploreProtocol, cfg.LLM.ExploreBaseURL, cfg.LLM.ExploreAPIKey, cfg.LLM.Timeout, "")
+	return client, cfg.LLM.ExploreModel
+}
+
+func buildLLMClient(provider, protocol, baseURL, apiKey string, timeout time.Duration, anthropicFlavor string) llm.Client {
+	var client llm.Client
+	if provider == "opencode-go" {
+		client = llm.NewOpenCodeGoClient(baseURL, apiKey, timeout)
+	} else if protocol == "anthropic" {
+		client = llm.NewAnthropicClient(baseURL, apiKey, timeout, anthropicFlavor)
+	} else {
+		client = llm.NewOpenAICompatibleClient(provider, baseURL, apiKey, timeout)
+	}
+	return llm.WrapClient(client, llm.CapabilitiesFor(provider, protocol))
 }
 
 func costRates(cfg config.Config) observability.CostRates {

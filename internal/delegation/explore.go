@@ -127,7 +127,7 @@ func (m *Manager) Explore(ctx context.Context, task, boundaries string, rt regis
 			specs = nil
 		}
 		resp, err := m.exploreChat(ctx, llm.Request{
-			Model:       m.model,
+			Model:       m.resolveExploreModel(),
 			Thinking:    "", // disable thinking in explore for speed
 			Messages:    messages,
 			Tools:       specs,
@@ -222,16 +222,23 @@ func formatExploreReports(reports []exploreReport) string {
 }
 
 func (m *Manager) exploreChat(ctx context.Context, req llm.Request) (llm.Response, error) {
+	client := m.client
 	sc := m.streamClient
+
+	if m.exploreClient != nil {
+		client = m.exploreClient
+		sc = m.exploreStreamClient
+	}
+
 	if sc == nil {
-		if c, ok := m.client.(llm.StreamClient); ok {
+		if c, ok := client.(llm.StreamClient); ok {
 			sc = c
 		}
 	}
 	if sc != nil {
 		return sc.ChatStream(ctx, req, llm.StreamHandler{})
 	}
-	return m.client.Chat(ctx, req)
+	return client.Chat(ctx, req)
 }
 
 func applyExploreMicroCompact(messages []llm.Message) []llm.Message {

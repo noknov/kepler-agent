@@ -24,9 +24,9 @@ func TestPrepareForLLMFillsMissingToolResponses(t *testing.T) {
 	}
 }
 
-func TestPrepareForLLMStripsReasoningAndEmptyToolCalls(t *testing.T) {
+func TestPrepareForLLMKeepsReasoningAndStripsEmptyToolCalls(t *testing.T) {
 	messages := []llm.Message{
-		{Role: "assistant", ReasoningContent: "hidden", ToolCalls: []llm.ToolCall{
+		{Role: "assistant", ReasoningContent: "thinking...", ToolCalls: []llm.ToolCall{
 			{Type: "function", Function: llm.ToolFunction{Name: "", Arguments: `{}`}},
 			{ID: "call_a", Type: "function", Function: llm.ToolFunction{Name: "code-search", Arguments: `{}`}},
 		}},
@@ -34,8 +34,8 @@ func TestPrepareForLLMStripsReasoningAndEmptyToolCalls(t *testing.T) {
 	}
 
 	out := PrepareForLLM(messages)
-	if out[0].ReasoningContent != "" {
-		t.Fatal("reasoning content should be stripped")
+	if out[0].ReasoningContent != "thinking..." {
+		t.Fatal("reasoning content should be preserved for providers that require it")
 	}
 	if len(out[0].ToolCalls) != 1 {
 		t.Fatalf("empty tool calls should be removed: %#v", out[0].ToolCalls)

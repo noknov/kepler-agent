@@ -31,7 +31,13 @@ const (
 	// wrong branch, wrong repo) are technical mistakes the model can fix itself.
 	clarificationErrorThreshold = 4
 	exploreFailureLimit         = 3
-	pivotAfterSteps             = 8
+
+	// Progressive escalation thresholds. Pressure increases at each tier
+	// to prevent aimless searching while still allowing genuine investigations.
+	pivotTierGentle = 4  // gentle nudge: "most questions resolve in 1-3 calls"
+	pivotTierFirm   = 8  // firm pivot: "answer now or justify continuing"
+	pivotTierUrgent = 12 // urgent: "you MUST answer with what you have"
+	pivotTierForce  = 16 // force: strip tools, require text answer
 )
 
 type Observer interface {
@@ -188,7 +194,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	retriedRawEvidence := false
 	codeToolCalledThisRun := false
 	afterTools := false
-	pivotInjected := false
+	pivotTier := 0 // 0=none, 1=gentle, 2=firm, 3=urgent, 4=force
 	searchMissPivotInjected := false
 	consecutiveNoMatchSearchRounds := 0
 	toolsWithoutProgress := 0
@@ -199,10 +205,26 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		if r.StatusUpdate != nil {
 			r.StatusUpdate(StepStatus(req.Locale, step))
 		}
-		if step >= pivotAfterSteps && afterTools && !pivotInjected {
-			messages = append(messages, llm.Message{Role: "system", Content: stepBudgetPivotMessage()})
-			pivotInjected = true
-			r.observeEvent("step_budget_pivot", map[string]any{"step": step})
+		// Progressive escalation: increasingly strong pressure to stop.
+		if afterTools {
+			if step >= pivotTierForce && pivotTier < 4 {
+				// Strip tools entirely — force text answer on next LLM call.
+				pivotTier = 4
+				messages = append(messages, llm.Message{Role: "system", Content: pivotForceMessage()})
+				r.observeEvent("pivot_force", map[string]any{"step": step})
+			} else if step >= pivotTierUrgent && pivotTier < 3 {
+				pivotTier = 3
+				messages = append(messages, llm.Message{Role: "system", Content: pivotUrgentMessage()})
+				r.observeEvent("pivot_urgent", map[string]any{"step": step})
+			} else if step >= pivotTierFirm && pivotTier < 2 {
+				pivotTier = 2
+				messages = append(messages, llm.Message{Role: "system", Content: stepBudgetPivotMessage()})
+				r.observeEvent("pivot_firm", map[string]any{"step": step})
+			} else if step >= pivotTierGentle && pivotTier < 1 {
+				pivotTier = 1
+				messages = append(messages, llm.Message{Role: "system", Content: pivotGentleMessage()})
+				r.observeEvent("pivot_gentle", map[string]any{"step": step})
+			}
 		}
 		if req.Steering != nil {
 			if steering := req.Steering(); len(steering) > 0 {
@@ -216,7 +238,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		messages = memory.PrepareForLLM(messages)
 
 		var toolSpecs []llm.ToolSpec
-		if r.Tools != nil {
+		if r.Tools != nil && pivotTier < 4 {
 			toolSpecs = control.filterToolSpecs(r.Tools.Specs())
 		}
 
@@ -443,7 +465,6 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			}
 		}
 		assistantMsg.Content = ""
-		assistantMsg.ReasoningContent = ""
 		messages = append(messages, assistantMsg)
 		generated = append(generated, assistantMsg)
 
@@ -460,10 +481,15 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		searchesHadHits := searchRoundHasHits(toolResults)
 		if toolResultsLackProgress(toolResults) {
 			toolsWithoutProgress++
-			if toolsWithoutProgress >= 3 && !pivotInjected {
+			// Accelerate escalation when tools aren't producing useful results.
+			if toolsWithoutProgress >= 3 && pivotTier < 2 {
+				pivotTier = 2
 				messages = append(messages, llm.Message{Role: "system", Content: stepBudgetPivotMessage()})
-				pivotInjected = true
 				r.observeEvent("tool_progress_pivot", map[string]any{"rounds_without_progress": toolsWithoutProgress})
+			} else if toolsWithoutProgress >= 5 && pivotTier < 3 {
+				pivotTier = 3
+				messages = append(messages, llm.Message{Role: "system", Content: pivotUrgentMessage()})
+				r.observeEvent("tool_progress_urgent", map[string]any{"rounds_without_progress": toolsWithoutProgress})
 			}
 		} else if len(toolResults) > 0 {
 			toolsWithoutProgress = 0
@@ -485,9 +511,19 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		if allSearchesMissed {
 			consecutiveNoMatchSearchRounds++
 			if consecutiveNoMatchSearchRounds >= 2 && !searchMissPivotInjected {
-				messages = append(messages, llm.Message{Role: "system", Content: searchMissPivotMessage()})
 				searchMissPivotInjected = true
+				messages = append(messages, llm.Message{Role: "system", Content: searchMissPivotMessage()})
 				r.observeEvent("search_miss_pivot", map[string]any{"consecutive_no_match_rounds": consecutiveNoMatchSearchRounds})
+				// Accelerate escalation when searches keep missing.
+				if pivotTier < 1 {
+					pivotTier = 1
+				}
+			}
+			// 3+ consecutive misses: force firm pivot.
+			if consecutiveNoMatchSearchRounds >= 3 && pivotTier < 2 {
+				pivotTier = 2
+				messages = append(messages, llm.Message{Role: "system", Content: stepBudgetPivotMessage()})
+				r.observeEvent("search_miss_firm", map[string]any{"consecutive_no_match_rounds": consecutiveNoMatchSearchRounds})
 			}
 		} else if searchesHadHits {
 			consecutiveNoMatchSearchRounds = 0
@@ -1016,8 +1052,20 @@ func (r Runner) duplicateToolCall(call llm.ToolCall, seenToolCalls, seenSearchTe
 	return false, ""
 }
 
+func pivotGentleMessage() string {
+	return prompts.RunnerPrompt("pivot_gentle", "You have used several tool calls. Most questions resolve in 1-3 calls. If you already have enough evidence, answer now. If not, make your next call count — use the single most decisive search or read.")
+}
+
 func stepBudgetPivotMessage() string {
-	return "You have used several investigation steps. If you have enough evidence for a useful partial answer, stop searching and summarize your findings now. State what is known, what remains uncertain, and suggest the next concrete check the user could try."
+	return prompts.RunnerPrompt("pivot_firm", "You have used many investigation steps without answering. STOP broadening your search. Summarize your findings now: what is known, what is uncertain, and the single next check. If you cannot find what you are looking for, say so — do not keep trying variations of the same search.")
+}
+
+func pivotUrgentMessage() string {
+	return prompts.RunnerPrompt("pivot_urgent", "URGENT: You have spent too many steps on this investigation. You MUST provide an answer NOW with whatever evidence you have gathered. Further searching is very unlikely to help and is degrading the user experience. Summarize findings, state uncertainties, and stop.")
+}
+
+func pivotForceMessage() string {
+	return prompts.RunnerPrompt("pivot_force", "FINAL: Tools are no longer available. Give your answer now using only the evidence already gathered. Be direct and concise.")
 }
 
 func searchMissPivotMessage() string {
