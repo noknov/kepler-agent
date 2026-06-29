@@ -122,6 +122,14 @@ func codeClaimRetryPrompt() string {
 	return prompts.RunnerPrompt("code_claim_retry", "")
 }
 
+func planRequiredRetryPrompt() string {
+	return prompts.RunnerPrompt("plan_required_retry", "This is a complex multi-step task. Before continuing, call plan-update with concrete investigation steps and exactly one in_progress item. Do not answer directly until the plan exists and you have executed the next evidence-gathering step.")
+}
+
+func evidenceRequiredRetryPrompt() string {
+	return prompts.RunnerPrompt("evidence_required_retry", "You are about to answer an investigation or debugging question without tool evidence from this run. First gather evidence with targeted read/search/log/runbook/code-intelligence tools. Do not give root causes, architecture judgments, or code behavior claims from memory alone.")
+}
+
 func rawEvidenceRetryPrompt() string {
 	return prompts.RunnerPrompt("raw_evidence_retry", "")
 }
@@ -140,6 +148,37 @@ var codeReadingTools = map[string]bool{
 	"code-definition":   true,
 	"code-references":   true,
 	"explore-code":      true,
+}
+
+var evidenceTools = map[string]bool{
+	"code-search":                true,
+	"code-read_file":             true,
+	"code-symbols":               true,
+	"code-definition":            true,
+	"code-references":            true,
+	"code-diagnostics":           true,
+	"git-status":                 true,
+	"git-log":                    true,
+	"git-show":                   true,
+	"git-fetch_ref":              true,
+	"git-search_ref":             true,
+	"git-read_file_ref":          true,
+	"repo-search":                true,
+	"repo-read_file":             true,
+	"rag-search":                 true,
+	"knowledge-runbook_search":   true,
+	"web-search":                 true,
+	"web-read_page":              true,
+	"gcp-logs":                   true,
+	"github-workflow_runs":       true,
+	"github-pr_diff":             true,
+	"slack-file_search":          true,
+	"slack-json_analyze":         true,
+	"diagnostics-incident_brief": true,
+	"diagnostics-timeline":       true,
+	"diagnostics-evidence_board": true,
+	"explore-code":               true,
+	"delegate-run":               true,
 }
 
 // hasFencedCodeBlock reports whether text contains a fenced code block
@@ -192,8 +231,14 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	const maxOverloadRetries = 3
 	retriedPromptTooLong := false
 	retriedCodeClaim := false
+	retriedPlanRequired := false
+	retriedEvidenceRequired := false
 	retriedRawEvidence := false
 	codeToolCalledThisRun := false
+	evidenceToolCalledThisRun := false
+	planCalledThisRun := false
+	planRequired := requiresPlan(req)
+	evidenceRequired := requiresEvidence(req)
 	afterTools := false
 	pivotTier := 0 // 0=none, 1=gentle, 2=firm, 3=urgent, 4=force
 	searchMissPivotInjected := false
@@ -438,6 +483,22 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 				}
 				return Result{Generated: generated}, ErrRepetitiveOutput
 			}
+			if planRequired && !planCalledThisRun && !retriedPlanRequired {
+				retriedPlanRequired = true
+				messages = append(messages, llm.Message{Role: "system", Content: planRequiredRetryPrompt()})
+				if r.StatusUpdate != nil {
+					r.StatusUpdate(RetryStatus(req.Locale))
+				}
+				continue
+			}
+			if evidenceRequired && !evidenceToolCalledThisRun && !retriedEvidenceRequired {
+				retriedEvidenceRequired = true
+				messages = append(messages, llm.Message{Role: "system", Content: evidenceRequiredRetryPrompt()})
+				if r.StatusUpdate != nil {
+					r.StatusUpdate(RetryStatus(req.Locale))
+				}
+				continue
+			}
 			// Unverified code claim check: applies in both streaming and
 			// non-streaming modes. If the model references specific code
 			// (functions, guards, conditionals) without having called any
@@ -500,6 +561,12 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			generated = append(generated, tr.message)
 			if codeReadingTools[tr.name] {
 				codeToolCalledThisRun = true
+			}
+			if tr.name == "plan-update" && tr.err == nil {
+				planCalledThisRun = true
+			}
+			if evidenceTools[tr.name] && tr.err == nil {
+				evidenceToolCalledThisRun = true
 			}
 			if tr.waitForUser {
 				return Result{
@@ -741,6 +808,44 @@ func containsAny(text string, terms []string) bool {
 		}
 	}
 	return false
+}
+
+func requiresPlan(req Request) bool {
+	text := requestIntentText(req)
+	if text == "" {
+		return false
+	}
+	return containsAny(text, []string{
+		"architecture", "architectural", "refactor", "redesign", "compare", "performance", "accuracy",
+		"multi-step", "migration", "全面", "架构", "重构", "对比", "准确", "效率", "性能",
+		"复杂", "设计", "迁移",
+	})
+}
+
+func requiresEvidence(req Request) bool {
+	text := requestIntentText(req)
+	if text == "" {
+		return false
+	}
+	return containsAny(text, []string{
+		"why", "root cause", "bug", "broken", "error", "exception", "incident", "regression", "debug",
+		"investigate", "trace", "diagnose", "architecture", "performance", "accuracy", "compare",
+		"为什么", "原因", "根因", "报错", "错误", "异常", "故障", "事故", "回归", "排查",
+		"查 bug", "查问题", "诊断", "架构", "性能", "准确", "对比",
+	})
+}
+
+func requestIntentText(req Request) string {
+	text := strings.ToLower(strings.TrimSpace(req.UserQuestion))
+	if text != "" {
+		return text
+	}
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" {
+			return strings.ToLower(req.Messages[i].Content)
+		}
+	}
+	return ""
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {
