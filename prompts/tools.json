@@ -234,7 +234,7 @@
     }
   },
   "notion-get_page": {
-    "description": "Read the full text content of a Notion page. ALWAYS use this tool for any app.notion.com or notion.so URL instead of web-read_page. Accepts a page ID (UUID) or any Notion page URL.",
+    "description": "Read the full text content of a Notion page by ID or URL (app.notion.com or notion.so). Use this for any Notion link — it handles authentication via the configured PAT.",
     "parameters": {
       "page_id": "Notion page ID (UUID) or full Notion page URL (app.notion.com or notion.so).",
       "depth": "How many levels of nested blocks to expand. Defaults to 2, max 4."
