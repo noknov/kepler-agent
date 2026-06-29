@@ -215,6 +215,56 @@ func hasUnverifiedCodeClaim(text string) bool {
 	return hasFencedCodeBlock(text) || fileLineRefPattern.MatchString(text)
 }
 
+// filePathPattern matches path-like references in prose, e.g.
+// "connectionService.go:182", "controller/v2/handler.go", "settingRepository.go:173".
+var filePathPattern = regexp.MustCompile(`(?:[\w/.-]+/)?(\w+\.(?:go|ts|tsx|js|jsx|cs|py|java|rb|rs|yml|yaml|json))\b`)
+
+// extractReferencedFiles returns base filenames referenced in the answer text.
+func extractReferencedFiles(text string) map[string]struct{} {
+	matches := filePathPattern.FindAllStringSubmatch(text, -1)
+	files := make(map[string]struct{}, len(matches))
+	for _, m := range matches {
+		files[m[1]] = struct{}{}
+	}
+	return files
+}
+
+// extractFilesFromToolResults returns base filenames that appeared in code
+// tool results (search hits, file reads).
+func extractFilesFromToolResults(messages []llm.Message) map[string]struct{} {
+	files := make(map[string]struct{})
+	for _, msg := range messages {
+		if msg.Role != "tool" {
+			continue
+		}
+		for _, m := range filePathPattern.FindAllStringSubmatch(msg.Content, -1) {
+			files[m[1]] = struct{}{}
+		}
+	}
+	return files
+}
+
+// hasUnevidencedFileReference checks whether the answer references code files
+// that never appeared in any tool result from this run. This catches the case
+// where the model read file A but makes claims about file B it never read.
+func hasUnevidencedFileReference(answerText string, toolMessages []llm.Message) bool {
+	referenced := extractReferencedFiles(answerText)
+	if len(referenced) == 0 {
+		return false
+	}
+	evidenced := extractFilesFromToolResults(toolMessages)
+	for f := range referenced {
+		if _, ok := evidenced[f]; !ok {
+			return true
+		}
+	}
+	return false
+}
+
+func unevidencedFileRetryPrompt() string {
+	return prompts.RunnerPrompt("unevidenced_file_retry", "Your answer references code files that do not appear in any tool result from this run. Before answering, read the specific file(s) you are making claims about. Do not infer behavior from files you have not read — the same function name or pattern can behave differently in different files or code paths.")
+}
+
 func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	maxSteps := r.MaxSteps
 	if maxSteps <= 0 {
@@ -237,6 +287,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	const maxOverloadRetries = 3
 	retriedPromptTooLong := false
 	retriedCodeClaim := false
+	retriedUnevidencedFile := false
 	retriedPlanRequired := false
 	retriedEvidenceRequired := false
 	retriedRawEvidence := false
@@ -528,6 +579,18 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			if !retriedCodeClaim && !codeToolCalledThisRun && hasUnverifiedCodeClaim(final) {
 				retriedCodeClaim = true
 				messages = append(messages, llm.Message{Role: "system", Content: codeClaimRetryPrompt()})
+				if r.StatusUpdate != nil {
+					r.StatusUpdate(RetryStatus(req.Locale))
+				}
+				continue
+			}
+			// Unevidenced file reference check: the model called code tools
+			// but its answer references files that never appeared in tool
+			// results. This catches the case where the model read file A
+			// but makes conclusions about behavior in file B.
+			if !retriedUnevidencedFile && codeToolCalledThisRun && hasUnverifiedCodeClaim(final) && hasUnevidencedFileReference(final, generated) {
+				retriedUnevidencedFile = true
+				messages = append(messages, llm.Message{Role: "system", Content: unevidencedFileRetryPrompt()})
 				if r.StatusUpdate != nil {
 					r.StatusUpdate(RetryStatus(req.Locale))
 				}
@@ -849,8 +912,10 @@ func requiresEvidence(req Request) bool {
 	return containsAny(text, []string{
 		"why", "root cause", "bug", "broken", "error", "exception", "incident", "regression", "debug",
 		"investigate", "trace", "diagnose", "architecture", "performance", "accuracy", "compare",
+		"what happens", "will it", "does it", "is it", "when does", "how does",
 		"为什么", "原因", "根因", "报错", "错误", "异常", "故障", "事故", "回归", "排查",
 		"查 bug", "查问题", "诊断", "架构", "性能", "准确", "对比",
+		"会不会", "是否", "如果", "什么时候", "怎么", "会自动",
 	})
 }
 

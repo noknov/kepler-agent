@@ -556,19 +556,19 @@ func providerThinking(provider string) string {
 func providerMaxTokens(provider string) int {
 	switch provider {
 	case "mimo":
-		return envIntAliases(8192, "MIMO_MAX_TOKENS")
+		return envIntAliases(20000, "MIMO_MAX_TOKENS")
 	case "anthropic":
-		return envIntAliases(8192, "ANTHROPIC_MAX_TOKENS", "CLAUDE_CODE_MAX_OUTPUT_TOKENS")
+		return envIntAliases(20000, "ANTHROPIC_MAX_TOKENS", "CLAUDE_CODE_MAX_OUTPUT_TOKENS")
 	case "kimi", "moonshot":
-		return envIntAliases(8192, "KIMI_MAX_TOKENS")
+		return envIntAliases(20000, "KIMI_MAX_TOKENS")
 	case "opencode-go":
 		return 0
 	case "opencode-zen":
 		return 0
 	case "deepseek":
-		return envIntAliases(8192, "DEEPSEEK_MAX_TOKENS")
+		return envIntAliases(20000, "DEEPSEEK_MAX_TOKENS")
 	default:
-		return envIntAliases(8192, "OPENAI_MAX_TOKENS")
+		return envIntAliases(20000, "OPENAI_MAX_TOKENS")
 	}
 }
 
