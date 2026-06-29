@@ -1491,6 +1491,60 @@ func TestRunnerDoesNotTreatRAGSearchAsCodeEvidence(t *testing.T) {
 	}
 }
 
+func TestRunnerRequiresPlanForComplexInvestigation(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{Message: llm.Message{Role: "assistant", Content: "直接结论"}},
+		{Message: namedToolCallMessage("plan_1", "plan-update", `{"items":[{"task":"梳理边界","status":"in_progress"}]}`)},
+		{Message: namedToolCallMessage("search_1", "code-search", `{"query":"runner"}`)},
+		{Message: llm.Message{Role: "assistant", Content: "基于证据的结论"}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeNamedTool{name: "plan-update"})
+	tools.Register(fakeNamedTool{name: "code-search"})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 8}.Run(context.Background(), Request{
+		UserQuestion: "对比 agent 架构和准确性问题",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "基于证据的结论" {
+		t.Fatalf("Final = %q", result.Final)
+	}
+	if len(client.requests) != 4 {
+		t.Fatalf("expected direct answer retry, plan, evidence, final; got %d calls", len(client.requests))
+	}
+	if !strings.Contains(lastSystemContent(client.requests[1].Messages), "complex multi-step") {
+		t.Fatalf("second request did not include plan-required retry prompt")
+	}
+}
+
+func TestRunnerRequiresEvidenceForDebuggingQuestion(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{Message: llm.Message{Role: "assistant", Content: "这是因为缓存坏了。"}},
+		{Message: namedToolCallMessage("search_1", "code-search", `{"query":"cache"}`)},
+		{Message: llm.Message{Role: "assistant", Content: "证据显示缓存路径需要继续检查。"}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeNamedTool{name: "code-search"})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 6}.Run(context.Background(), Request{
+		UserQuestion: "为什么登录报错，帮我查 bug",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "证据显示缓存路径需要继续检查。" {
+		t.Fatalf("Final = %q", result.Final)
+	}
+	if len(client.requests) != 3 {
+		t.Fatalf("expected evidence retry, tool, final; got %d calls", len(client.requests))
+	}
+	if !strings.Contains(lastSystemContent(client.requests[1].Messages), "without evidence") {
+		t.Fatalf("second request did not include evidence-required retry prompt")
+	}
+}
+
 func TestRunnerNoCodeClaimRetryWhenCodeToolCalled(t *testing.T) {
 	codeAnswer := "Here is the code:\n```csharp\nif (x.test) { return; }\n```"
 	client := &fakeClient{responses: []llm.Response{
@@ -1556,13 +1610,17 @@ func TestRunnerCodeClaimRetryOnlyOnce(t *testing.T) {
 }
 
 func codeToolCallMessage(id, args string) llm.Message {
+	return namedToolCallMessage(id, "git-read_file_ref", args)
+}
+
+func namedToolCallMessage(id, name, args string) llm.Message {
 	return llm.Message{
 		Role: "assistant",
 		ToolCalls: []llm.ToolCall{{
 			ID:   id,
 			Type: "function",
 			Function: llm.ToolFunction{
-				Name:      "git-read_file_ref",
+				Name:      name,
 				Arguments: args,
 			},
 		}},
@@ -1605,6 +1663,27 @@ func (fakeRAGSearchTool) Execute(_ context.Context, args json.RawMessage, _ regi
 	return registry.Result{Content: "semantic hit: " + string(args)}, nil
 }
 
+type fakeNamedTool struct {
+	name string
+}
+
+func (t fakeNamedTool) Parallel() bool { return true }
+
+func (t fakeNamedTool) Spec() llm.ToolSpec {
+	return llm.ToolSpec{
+		Type: "function",
+		Function: llm.ToolSpecFunction{
+			Name:        t.name,
+			Description: "fake named tool",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}
+}
+
+func (t fakeNamedTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	return registry.Result{Content: t.name + ": " + string(args)}, nil
+}
+
 type fakeTool struct{}
 
 func (fakeTool) Parallel() bool { return true }
@@ -1622,6 +1701,15 @@ func (fakeTool) Spec() llm.ToolSpec {
 
 func (fakeTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
 	return registry.Result{Content: string(args)}, nil
+}
+
+func lastSystemContent(messages []llm.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "system" {
+			return messages[i].Content
+		}
+	}
+	return ""
 }
 
 type fakeRepeatableTool struct{}

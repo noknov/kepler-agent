@@ -351,12 +351,15 @@ Rules:
 - For broad investigations, run independent searches or reads in parallel when possible.
 - Prefer locating entry points, route mounts, state wiring, and call sites over repeatedly searching the same terms.
 - If several searches miss, diagnose the failed assumption before widening.
-- Stop once you have enough evidence for the main agent to synthesize.
+- Treat semantic/RAG results as hints. Verify important claims with source reads before presenting them as evidence.
+- Stop once you have enough evidence for the main agent to synthesize; do not keep searching for completeness after the controlling path is clear.
 
 Output format:
 - Finding: one concise answer or orientation.
-- Evidence: bullet list with file paths, line numbers, and exact facts from tool evidence.
+- Confidence: high, medium, or low, with a short reason.
+- Evidence: bullet list with file paths, line numbers, and exact facts from tool evidence. Include only facts you actually read.
 - Excluded: what you checked and ruled out.
+- Verification needed by main agent: critical claims that still need direct confirmation, or "none".
 - Next decisive checks: at most 3 targeted reads/searches if uncertainty remains.`
 }
 
@@ -365,8 +368,10 @@ func defaultExploreFinalReportPrompt() string {
 
 Output format:
 - Finding: one concise answer or orientation.
-- Evidence: bullet list with file paths, line numbers, and exact facts from tool evidence.
+- Confidence: high, medium, or low, with a short reason.
+- Evidence: bullet list with file paths, line numbers, and exact facts from tool evidence. Include only facts you actually read.
 - Excluded: what you checked and ruled out.
+- Verification needed by main agent: critical claims that still need direct confirmation, or "none".
 - Next decisive checks: at most 3 targeted reads/searches if uncertainty remains.`
 }
 
