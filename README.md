@@ -337,9 +337,10 @@ The App Home tab shows access status plus the configured primary and secondary m
 | `code.definition` | Go to symbol definition |
 | `code.references` | Find symbol references |
 | `code.diagnostics` | LSP diagnostics for a file |
-| `rag-search` | Hybrid semantic + full-text code search across indexed repositories |
+| `rag-search` | Optional hybrid semantic + full-text code search across indexed repositories |
 
 `repo-search` and `repo-read_file` fetch only the requested repository on demand and resolve the branch to an immutable snapshot, so concurrent users can inspect different branches without checkout conflicts.
+By default, code questions are handled with agentic search across grep, repo snapshots, file reads, and LSP tools. Enable `rag-search` only when semantic recall is useful as a hint source.
 
 ### 🐙 GitHub
 
@@ -438,9 +439,11 @@ Available tools: `pw-navigate`, `pw-snapshot`, `pw-click`, `pw-type`, `pw-fill_f
 
 `/metrics` and `/runs` require `Authorization: Bearer <token>` or `X-Admin-Token: <token>` matching `OBSERVABILITY_TOKEN`. Set `OBSERVABILITY_ALLOW_UNAUTHENTICATED=true` only for direct loopback development access.
 
-## 🧠 RAG semantic code search
+## 🧠 Optional RAG semantic code search
 
-RAG indexes repositories into PostgreSQL with pgvector and provides hybrid search combining vector similarity (70%), full-text (30%), and grep.
+Code questions use agentic search by default: the assistant chooses among grep, immutable repo snapshot search, file reads, and LSP symbol/definition/reference tools. RAG can be enabled as an additional hint source for architectural or fuzzy natural-language queries.
+
+When enabled, RAG indexes repositories into PostgreSQL with pgvector and provides hybrid search combining vector similarity (70%), full-text (30%), and grep.
 
 **Start the local database:**
 
@@ -451,7 +454,7 @@ docker compose -f docker-compose.rag.yml up -d
 **Configuration:**
 
 ```bash
-RAG_ENABLED=true
+RAG_ENABLED=false
 RAG_POSTGRES_DSN=postgres://oncall:oncall@localhost:5432/oncall_rag?sslmode=disable
 
 # Embedding provider — any OpenAI-compatible /v1/embeddings endpoint works:
