@@ -39,6 +39,8 @@ const (
 	pivotTierFirm   = 8  // firm pivot: "answer now or justify continuing"
 	pivotTierUrgent = 12 // urgent: "you MUST answer with what you have"
 	pivotTierForce  = 16 // force: strip tools, require text answer
+
+	maxOutputTokensRecoveryLimit = 3
 )
 
 type Observer interface {
@@ -116,6 +118,10 @@ func textualToolCallRetryPrompt() string {
 
 func emptyResponseRetryPrompt() string {
 	return prompts.RunnerPrompt("empty_response_retry", "")
+}
+
+func maxOutputTokensRecoveryPrompt() string {
+	return prompts.RunnerPrompt("max_output_tokens_recovery", "Output token limit hit. Resume directly - no apology, no recap of what you were doing. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces.")
 }
 
 func codeClaimRetryPrompt() string {
@@ -234,6 +240,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	retriedPlanRequired := false
 	retriedEvidenceRequired := false
 	retriedRawEvidence := false
+	maxOutputTokensRecoveryCount := 0
 	codeToolCalledThisRun := false
 	evidenceToolCalledThisRun := false
 	planCalledThisRun := false
@@ -278,10 +285,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			}
 		}
 
-		if r.Compactor != nil {
-			messages = r.compactMessages(ctx, messages)
-		}
-		messages = memory.PrepareForLLM(messages)
+		messages = r.prepareMessagesForQuery(ctx, messages, req)
 
 		var toolSpecs []llm.ToolSpec
 		if r.Tools != nil && pivotTier < 4 {
@@ -410,7 +414,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			}
 			if llm.IsPromptTooLong(err) && r.Compactor != nil && !retriedPromptTooLong {
 				retriedPromptTooLong = true
-				messages = r.compactMessagesAggressive(ctx, messages)
+				messages = r.prepareMessagesForOverflowRetry(ctx, messages, req)
 				if r.StatusUpdate != nil {
 					r.StatusUpdate(RetryStatus(req.Locale))
 				}
@@ -429,6 +433,24 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			useStream = false
 		}
 		if len(assistantMsg.ToolCalls) == 0 {
+			if isMaxOutputTokensResponse(resp) && maxOutputTokensRecoveryCount < maxOutputTokensRecoveryLimit {
+				maxOutputTokensRecoveryCount++
+				partial := strings.TrimSpace(r.sanitize(assistantMsg.Content))
+				if partial != "" {
+					assistantMsg.Content = partial
+					messages = append(messages, assistantMsg)
+					generated = append(generated, assistantMsg)
+				}
+				messages = append(messages, llm.Message{
+					Role:    "user",
+					Content: maxOutputTokensRecoveryPrompt(),
+				})
+				r.observeEvent("max_output_tokens_recovery", map[string]any{"attempt": maxOutputTokensRecoveryCount})
+				if r.StatusUpdate != nil {
+					r.StatusUpdate(RetryStatus(req.Locale))
+				}
+				continue
+			}
 			if !useStream && r.StatusUpdate != nil {
 				r.StatusUpdate(GeneratingStatus(req.Locale))
 			}
@@ -615,10 +637,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	if r.StatusUpdate != nil {
 		r.StatusUpdate(GeneratingStatus(req.Locale))
 	}
-	if r.Compactor != nil {
-		messages = r.compactMessages(ctx, messages)
-	}
-	messages = memory.PrepareForLLM(messages)
+	messages = r.prepareMessagesForQuery(ctx, messages, req)
 	messages = append(messages, llm.Message{Role: "system", Content: "You have reached the investigation step limit. Summarize your findings now based on evidence gathered so far. If you are uncertain, state what is known and what remains unverified."})
 	resp, err := r.LLM.Chat(ctx, llm.Request{
 		Model:       r.Model,
@@ -848,6 +867,16 @@ func requestIntentText(req Request) string {
 	return ""
 }
 
+func isMaxOutputTokensResponse(resp llm.Response) bool {
+	reason := strings.ToLower(strings.TrimSpace(resp.FinishReason))
+	switch reason {
+	case "max_tokens", "length", "max_output_tokens":
+		return true
+	default:
+		return strings.Contains(reason, "max") && strings.Contains(reason, "token")
+	}
+}
+
 func sleepCtx(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
 		return nil
@@ -926,8 +955,34 @@ func (r Runner) executeToolCalls(ctx context.Context, calls []llm.ToolCall, seen
 	}
 
 	results := make([]toolResult, len(calls))
-	var parallel []indexedCall
-	var serial []indexedCall
+	var parallelBatch []indexedCall
+
+	flushParallel := func() {
+		if len(parallelBatch) == 0 {
+			return
+		}
+		if r.StatusUpdate != nil {
+			names := make([]string, 0, len(parallelBatch))
+			for _, ic := range parallelBatch {
+				names = append(names, ic.call.Function.Name)
+			}
+			r.StatusUpdate(ToolHint(strings.Join(names, ", "), req.Locale))
+		}
+
+		sem := make(chan struct{}, maxStreamingConcurrency)
+		var wg sync.WaitGroup
+		wg.Add(len(parallelBatch))
+		for _, ic := range parallelBatch {
+			go func(ic indexedCall) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				results[ic.index] = r.executeSingleTool(ctx, ic.call, req, false)
+			}(ic)
+		}
+		wg.Wait()
+		parallelBatch = nil
+	}
 
 	for i, call := range calls {
 		name := call.Function.Name
@@ -942,40 +997,13 @@ func (r Runner) executeToolCalls(ctx context.Context, calls []llm.ToolCall, seen
 		}
 		ic := indexedCall{index: i, call: call}
 		if r.Tools.CanRunInParallel(name) {
-			parallel = append(parallel, ic)
+			parallelBatch = append(parallelBatch, ic)
 		} else {
-			serial = append(serial, ic)
+			flushParallel()
+			results[ic.index] = r.executeSingleTool(ctx, ic.call, req, true)
 		}
 	}
-
-	// Run concurrency-safe tools in parallel (up to maxStreamingConcurrency).
-	if len(parallel) > 0 {
-		if r.StatusUpdate != nil {
-			names := make([]string, 0, len(parallel))
-			for _, ic := range parallel {
-				names = append(names, ic.call.Function.Name)
-			}
-			r.StatusUpdate(ToolHint(strings.Join(names, ", "), req.Locale))
-		}
-
-		sem := make(chan struct{}, maxStreamingConcurrency)
-		var wg sync.WaitGroup
-		wg.Add(len(parallel))
-		for _, ic := range parallel {
-			go func(ic indexedCall) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-				results[ic.index] = r.executeSingleTool(ctx, ic.call, req, false)
-			}(ic)
-		}
-		wg.Wait()
-	}
-
-	// Run non-parallel tools sequentially.
-	for _, ic := range serial {
-		results[ic.index] = r.executeSingleTool(ctx, ic.call, req, true)
-	}
+	flushParallel()
 
 	r.observeToolResults(results)
 	return results

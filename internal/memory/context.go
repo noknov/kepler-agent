@@ -70,8 +70,6 @@ func (b Builder) BuildWithParts(systemPrompt, threadContext, userText string, us
 		})
 	}
 
-	history := trimHistory(FilterPersistentTurns(turns), b.MaxMessages)
-	messages = append(messages, ToLLM(history)...)
 	userMessage := llm.Message{Role: "user", Content: userText}
 	if len(userParts) > 0 {
 		parts := make([]llm.ContentPart, 0, len(userParts)+1)
@@ -81,6 +79,8 @@ func (b Builder) BuildWithParts(systemPrompt, threadContext, userText string, us
 		parts = append(parts, userParts...)
 		userMessage.ContentParts = parts
 	}
+	history := trimHistory(FilterPersistentTurns(turns), b.MaxMessages)
+	messages = append(messages, ToLLM(history)...)
 	messages = append(messages, userMessage)
 	return messages
 }
@@ -203,7 +203,6 @@ func ToLLM(turns []Turn) []llm.Message {
 
 // trimHistory keeps the last ~max turns but never splits a tool_calls/tool
 // group, which would cause "tool must follow tool_calls" API errors.
-// When MaxContextTokens is set on the Builder, it also respects the token budget.
 func trimHistory(turns []Turn, max int) []Turn {
 	if max <= 0 || len(turns) <= max {
 		return turns
