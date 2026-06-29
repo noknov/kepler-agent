@@ -233,11 +233,20 @@
       "limit": "Maximum results. Defaults to 10, max 50."
     }
   },
-  "notion-create_page": {
-    "description": "Create a Notion page in the configured database. Use only when the user explicitly asks to write a report or preserve a summary.",
+  "notion-get_page": {
+    "description": "Read the full text content of a Notion page. ALWAYS use this tool for any app.notion.com or notion.so URL instead of web-read_page. Accepts a page ID (UUID) or any Notion page URL.",
     "parameters": {
-      "title": "Page title.",
-      "body": "Plain text body. Stored as a paragraph block."
+      "page_id": "Notion page ID (UUID) or full Notion page URL (app.notion.com or notion.so).",
+      "depth": "How many levels of nested blocks to expand. Defaults to 2, max 4."
+    }
+  },
+  "notion-query_database": {
+    "description": "Query a Notion database with optional filters and sorts. Use to look up structured records such as incident history, on-call schedules, or known issues.",
+    "parameters": {
+      "database_id": "Database ID or URL. Defaults to the configured NOTION_DATABASE_ID when omitted.",
+      "filter": "Notion filter object (see Notion API docs). Optional.",
+      "sorts": "Array of Notion sort descriptors. Optional.",
+      "limit": "Maximum rows to return. Defaults to 20, max 100."
     }
   },
   "youtrack-get_issue": {
