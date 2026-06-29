@@ -84,8 +84,15 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 		TitleProperty: cfg.Tools.NotionTitleProperty,
 		Version:       cfg.Tools.NotionVersion,
 	}
-	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, notionTools.SearchTool{Client: notionClient}))
-	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, notionTools.CreatePageTool{Client: notionClient}))
+	if notionClient.Token != "" {
+		tools.Register(notionTools.SearchTool{Client: notionClient})
+		tools.Register(notionTools.GetPageTool{Client: notionClient})
+		tools.Register(notionTools.QueryDatabaseTool{Client: notionClient})
+	} else {
+		tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, notionTools.SearchTool{Client: notionClient}))
+		tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, notionTools.GetPageTool{Client: notionClient}))
+		tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, notionTools.QueryDatabaseTool{Client: notionClient}))
+	}
 
 	youtrackClient := youtrackTools.Client{BaseURL: cfg.Tools.YouTrackURL, Token: cfg.Tools.YouTrackToken}
 	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, youtrackTools.GetIssueTool{Client: youtrackClient}))
@@ -126,9 +133,9 @@ func registerKnowledgeTools(tools *registry.Registry, cfg config.Config) {
 		SerpAPIKey:     cfg.Tools.WebSearchSerpAPIKey,
 		SerpAPIBaseURL: cfg.Tools.WebSearchSerpAPIURL,
 	}
-	tools.Register(webSearchTools.ReadPageTool{Client: webClient})
+	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, webSearchTools.ReadPageTool{Client: webClient}))
 	if webClient.GoogleAPIKey != "" || webClient.SerpAPIKey != "" {
-		tools.Register(webSearchTools.SearchTool{Client: webClient})
+		tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, webSearchTools.SearchTool{Client: webClient}))
 	}
 	tools.Register(knowledgeTools.RunbookSearchTool{})
 }
