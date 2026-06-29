@@ -23,8 +23,11 @@ type streamingToolExecutor struct {
 	mu      sync.Mutex
 	results map[string]toolResult
 	started map[string]bool
-	wg      sync.WaitGroup
-	sem     chan struct{}
+	// Once a non-parallel tool appears in the streamed call list, later calls
+	// must wait for Drain so execution order matches the model's intent.
+	serialBarrier bool
+	wg            sync.WaitGroup
+	sem           chan struct{}
 }
 
 func newStreamingToolExecutor(ctx context.Context, r Runner, req Request, seenToolCalls, seenSearchTerms map[string]int) *streamingToolExecutor {
@@ -49,11 +52,14 @@ func (e *streamingToolExecutor) Submit(call llm.ToolCall) {
 		return
 	}
 	if !e.runner.Tools.CanRunInParallel(name) {
+		e.mu.Lock()
+		e.serialBarrier = true
+		e.mu.Unlock()
 		return
 	}
 
 	e.mu.Lock()
-	if e.started[call.ID] {
+	if e.serialBarrier || e.started[call.ID] {
 		e.mu.Unlock()
 		return
 	}

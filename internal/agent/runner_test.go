@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -631,6 +632,110 @@ func parallelCodeSearchToolCallMessage(count int) llm.Message {
 		}
 	}
 	return llm.Message{Role: "assistant", ToolCalls: calls}
+}
+
+func mixedToolCallMessage() llm.Message {
+	return llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{
+		{ID: "p1", Type: "function", Function: llm.ToolFunction{Name: "parallel-before", Arguments: `{}`}},
+		{ID: "s1", Type: "function", Function: llm.ToolFunction{Name: "serial-middle", Arguments: `{}`}},
+		{ID: "p2", Type: "function", Function: llm.ToolFunction{Name: "parallel-after", Arguments: `{}`}},
+	}}
+}
+
+func TestRunnerPreservesToolOrderAcrossParallelAndSerialBatches(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{Message: mixedToolCallMessage()},
+		{Message: llm.Message{Role: "assistant", Content: "done"}},
+	}}
+	var mu sync.Mutex
+	var order []string
+	tools := registry.New()
+	tools.Register(recordingTool{name: "parallel-before", parallel: true, mu: &mu, order: &order})
+	tools.Register(recordingTool{name: "serial-middle", mu: &mu, order: &order})
+	tools.Register(recordingTool{name: "parallel-after", parallel: true, mu: &mu, order: &order})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 3}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "done" {
+		t.Fatalf("Final = %q, want done", result.Final)
+	}
+	got := strings.Join(order, ",")
+	want := "parallel-before,serial-middle,parallel-after"
+	if got != want {
+		t.Fatalf("tool execution order = %s, want %s", got, want)
+	}
+}
+
+func TestRunnerAppliesToolResultBudgetBeforeModelCall(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{Message: llm.Message{Role: "assistant", Content: "done"}},
+	}}
+	messages := []llm.Message{
+		{Role: "system", Content: "system"},
+		{
+			Role: "assistant",
+			ToolCalls: []llm.ToolCall{{
+				ID:       "tool_1",
+				Type:     "function",
+				Function: llm.ToolFunction{Name: "echo", Arguments: `{}`},
+			}},
+		},
+		{Role: "tool", Name: "echo", ToolCallID: "tool_1", Content: strings.Repeat("x", maxToolResultChars+1000)},
+	}
+
+	result, err := Runner{LLM: client, Tools: registry.New(), MaxSteps: 1}.Run(context.Background(), Request{
+		Messages: messages,
+		RunID:    "budget-test",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "done" {
+		t.Fatalf("Final = %q, want done", result.Final)
+	}
+	found := false
+	for _, msg := range client.requests[0].Messages {
+		if msg.Role == "tool" && strings.Contains(msg.Content, "<persisted-output>") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("large historical tool result was not persisted before model call: %#v", client.requests[0].Messages)
+	}
+}
+
+func TestRunnerRecoversFromMaxOutputTokens(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{
+			Message:      llm.Message{Role: "assistant", Content: "partial"},
+			FinishReason: "max_tokens",
+		},
+		{Message: llm.Message{Role: "assistant", Content: "complete"}},
+	}}
+
+	result, err := Runner{LLM: client, Tools: registry.New(), MaxSteps: 3}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "complete" {
+		t.Fatalf("Final = %q, want complete", result.Final)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("Chat calls = %d, want 2", len(client.requests))
+	}
+	foundRecoveryPrompt := false
+	for _, msg := range client.requests[1].Messages {
+		if msg.Role == "user" && strings.Contains(msg.Content, "Output token limit hit") {
+			foundRecoveryPrompt = true
+			break
+		}
+	}
+	if !foundRecoveryPrompt {
+		t.Fatalf("max output token recovery prompt missing from retry: %#v", client.requests[1].Messages)
+	}
 }
 
 func TestMicroCompactClearsOldToolResults(t *testing.T) {
@@ -1682,6 +1787,33 @@ func (t fakeNamedTool) Spec() llm.ToolSpec {
 
 func (t fakeNamedTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
 	return registry.Result{Content: t.name + ": " + string(args)}, nil
+}
+
+type recordingTool struct {
+	name     string
+	parallel bool
+	mu       *sync.Mutex
+	order    *[]string
+}
+
+func (t recordingTool) Parallel() bool { return t.parallel }
+
+func (t recordingTool) Spec() llm.ToolSpec {
+	return llm.ToolSpec{
+		Type: "function",
+		Function: llm.ToolSpecFunction{
+			Name:        t.name,
+			Description: "record execution order",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}
+}
+
+func (t recordingTool) Execute(_ context.Context, _ json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	t.mu.Lock()
+	*t.order = append(*t.order, t.name)
+	t.mu.Unlock()
+	return registry.Result{Content: t.name}, nil
 }
 
 type fakeTool struct{}
