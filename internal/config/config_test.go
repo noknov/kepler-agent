@@ -69,6 +69,59 @@ func TestLoadPrefersDotEnvWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestLoadUsesLargerDefaultMaxTokens(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":      "xoxb-test",
+		"SLACK_SIGNING_SECRET": "secret",
+		"ALLOWED_SLACK_USERS":  "U123",
+		"LLM_PROVIDER":         "anthropic",
+		"ANTHROPIC_API_KEY":    "anthropic-token",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.LLM.MaxTokens != 20000 {
+		t.Fatalf("LLM.MaxTokens = %d, want 20000", cfg.LLM.MaxTokens)
+	}
+}
+
+func TestLoadMaxTokensOverrideStillWins(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":      "xoxb-test",
+		"SLACK_SIGNING_SECRET": "secret",
+		"ALLOWED_SLACK_USERS":  "U123",
+		"LLM_PROVIDER":         "anthropic",
+		"ANTHROPIC_API_KEY":    "anthropic-token",
+		"ANTHROPIC_MAX_TOKENS": "12000",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.LLM.MaxTokens != 12000 {
+		t.Fatalf("LLM.MaxTokens = %d, want override 12000", cfg.LLM.MaxTokens)
+	}
+}
+
 func TestLoadAllowsAnthropicCodingEndpointWithoutExperimentalOptIn(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
