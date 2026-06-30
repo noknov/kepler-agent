@@ -132,8 +132,8 @@ func registerKnowledgeTools(tools *registry.Registry, cfg config.Config) {
 		SerpAPIBaseURL: cfg.Tools.WebSearchSerpAPIURL,
 		SearXNGBaseURL: cfg.Tools.WebSearchSearXNGURL,
 	}
+	tools.Register(webSearchTools.SearchTool{Client: webClient})
 	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, webSearchTools.ReadPageTool{Client: webClient}))
-	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, webSearchTools.SearchTool{Client: webClient}))
 	tools.Register(knowledgeTools.RunbookSearchTool{})
 }
 
