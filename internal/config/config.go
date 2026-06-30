@@ -66,6 +66,11 @@ type LLMConfig struct {
 	SecondaryAPIKey   string
 	SecondaryModel    string
 	SecondaryProtocol string
+
+	// DynamicStatus enables async secondary-model status summaries that
+	// replace the static tool hints with a short description of what the
+	// current tool call is actually doing.
+	DynamicStatus bool
 }
 
 type TokenUsageConfig struct {
@@ -216,6 +221,7 @@ func Load() (Config, error) {
 			SecondaryAPIKey:   secondaryAPIKey,
 			SecondaryModel:    secondaryModel,
 			SecondaryProtocol: secondaryProtocol,
+			DynamicStatus:     envBool("DYNAMIC_STATUS", false),
 		},
 		Security: SecurityConfig{
 			AllowedUsers:               envCSV("ALLOWED_SLACK_USERS"),

@@ -86,6 +86,7 @@ type Runner struct {
 	MaxSteps          int
 	Compactor         *memory.Compactor
 	StatusUpdate      StatusUpdater
+	StatusSummarizer  *StatusSummarizer
 	OnStream          func(StreamEvent)
 	OnUsage           func(llm.Usage)
 	OnLLMStepComplete func()
@@ -1077,6 +1078,7 @@ func (r Runner) executeSingleTool(ctx context.Context, call llm.ToolCall, req Re
 	name := call.Function.Name
 	if emitStatus && r.StatusUpdate != nil {
 		r.StatusUpdate(ToolHint(name, req.Locale))
+		r.StatusSummarizer.Summarize(ctx, name, call.Function.Arguments, req.Locale, r.StatusUpdate)
 	}
 	args := json.RawMessage(call.Function.Arguments)
 	start := time.Now()

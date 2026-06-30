@@ -46,6 +46,15 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *obs
 	secondaryClient, secondaryModel := newSecondaryLLMClient(cfg)
 	tools := newToolRegistry(cfg, slackClient, llmClient, secondaryClient, secondaryModel, workspacePolicy, commandPolicy)
 
+	var statusSummarizer *agent.StatusSummarizer
+	if cfg.LLM.DynamicStatus && secondaryClient != nil && secondaryModel != "" {
+		statusSummarizer = &agent.StatusSummarizer{
+			Client:  secondaryClient,
+			Model:   secondaryModel,
+			Timeout: 5 * time.Second,
+		}
+	}
+
 	// Build the 4-layer context compactor.
 	compactModel := cfg.Sessions.CompactModel
 	if compactModel == "" {
@@ -92,18 +101,19 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *obs
 
 	return agentRuntime{
 		Runner: agent.Runner{
-			LLM:          llmClient,
-			Model:        cfg.LLM.Model,
-			Thinking:     cfg.LLM.Thinking,
-			MaxTokens:    cfg.LLM.MaxTokens,
-			Temp:         cfg.LLM.Temperature,
-			Tools:        tools,
-			Capabilities: llmCapabilities,
-			Format:       mem,
-			Sanitize:     redactor,
-			Observer:     recorder,
-			MaxSteps:     cfg.Tools.AgentMaxSteps,
-			Compactor:    compactor,
+			LLM:              llmClient,
+			Model:            cfg.LLM.Model,
+			Thinking:         cfg.LLM.Thinking,
+			MaxTokens:        cfg.LLM.MaxTokens,
+			Temp:             cfg.LLM.Temperature,
+			Tools:            tools,
+			Capabilities:     llmCapabilities,
+			Format:           mem,
+			Sanitize:         redactor,
+			Observer:         recorder,
+			MaxSteps:         cfg.Tools.AgentMaxSteps,
+			Compactor:        compactor,
+			StatusSummarizer: statusSummarizer,
 		},
 		Memory:     mem,
 		Prompt:     promptPolicy,
