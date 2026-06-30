@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wati/oncall-agent/internal/prompts"
 )
@@ -16,7 +17,7 @@ func TestSystemPromptDefaultStaysGeneric(t *testing.T) {
 	t.Cleanup(func() { _ = prompts.LoadDirs(prompts.PublicDir) })
 
 	prompt := (PromptPolicy{}).SystemPrompt()
-	if !strings.Contains(prompt, "capable engineering assistant") {
+	if !strings.Contains(prompt, "general-purpose intelligent assistant") {
 		t.Fatalf("SystemPrompt() should keep the public default assistant role: %q", prompt)
 	}
 	if strings.Contains(prompt, "channelx-copilot-agent") || strings.Contains(prompt, "Channel-X Copilot Agent") || strings.Contains(prompt, "U085SRJFCLX") {
@@ -24,6 +25,27 @@ func TestSystemPromptDefaultStaysGeneric(t *testing.T) {
 	}
 	if strings.Contains(prompt, "food or drink ordering") {
 		t.Fatalf("SystemPrompt() should not contain detailed product prompt text: %q", prompt)
+	}
+}
+
+func TestSystemPromptIncludesRuntimeDateContext(t *testing.T) {
+	if err := prompts.LoadDirs(prompts.PublicDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = prompts.LoadDirs(prompts.PublicDir) })
+
+	now := time.Date(2026, 6, 30, 9, 15, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
+	prompt := (PromptPolicy{Now: func() time.Time { return now }}).SystemPrompt()
+	for _, want := range []string{
+		"Runtime context:",
+		"Current date: 2026-06-30",
+		"Current year: 2026",
+		"今年",
+		"include 2026 in the search query",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("SystemPrompt() missing %q:\n%s", want, prompt)
+		}
 	}
 }
 

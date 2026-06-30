@@ -119,10 +119,6 @@
       "limit": "Maximum runbook matches. Defaults to 5, max 20."
     }
   },
-  "system-current_time": {
-    "description": "Read the current date and time from the server system clock. Use when the user asks about today, now, current date/time, relative dates, deadlines, or when an investigation needs an absolute date anchor.",
-    "parameters": {}
-  },
   "plan-update": {
     "description": "Create or update the current execution plan for a complex multi-step task. Use proactively for substantial coding, debugging, architecture review, broad comparison, or any request with 3+ meaningful steps. Do not use for trivial one-step lookups.",
     "parameters": {

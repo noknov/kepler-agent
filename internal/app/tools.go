@@ -23,7 +23,6 @@ import (
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 	skillTools "github.com/wati/oncall-agent/internal/toolkit/tools/skills"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/slacktool"
-	systemTools "github.com/wati/oncall-agent/internal/toolkit/tools/system"
 	webSearchTools "github.com/wati/oncall-agent/internal/toolkit/tools/websearch"
 	youtrackTools "github.com/wati/oncall-agent/internal/toolkit/tools/youtrack"
 )
@@ -35,7 +34,6 @@ func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm
 	registerIntegrationTools(tools, cfg, commandPolicy)
 	registerKnowledgeTools(tools, cfg)
 	registerSlackTools(tools, slackClient)
-	registerSystemTools(tools)
 	registerAgentControlTools(tools, cfg, llmClient, secondaryClient, secondaryModel)
 	tools.Register(registry.ToolSearchTool{Registry: tools})
 	return tools
@@ -144,10 +142,6 @@ func registerSlackTools(tools *registry.Registry, slackClient *slack.Client) {
 	tools.Register(slacktool.FileSearchTool{Slack: slackClient})
 	tools.Register(slacktool.JSONAnalyzeTool{Slack: slackClient})
 	tools.Register(slacktool.SendScreenshotTool{Slack: slackClient})
-}
-
-func registerSystemTools(tools *registry.Registry) {
-	tools.Register(systemTools.CurrentTimeTool{})
 }
 
 func registerAgentControlTools(tools *registry.Registry, cfg config.Config, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string) {

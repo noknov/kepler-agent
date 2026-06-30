@@ -807,16 +807,15 @@ func (r Runner) observeEvent(name string, metadata map[string]any) {
 const defaultToolSpecLimit = 18
 
 var coreToolNames = map[string]bool{
-	"tool_search":         true,
-	"plan-update":         true,
-	"code-search":         true,
-	"code-read_file":      true,
-	"git-status":          true,
-	"git-log":             true,
-	"git-show":            true,
-	"system-current_time": true,
-	"skills-load":         true,
-	"slack-ask_user":      true,
+	"tool_search":    true,
+	"plan-update":    true,
+	"code-search":    true,
+	"code-read_file": true,
+	"git-status":     true,
+	"git-log":        true,
+	"git-show":       true,
+	"skills-load":    true,
+	"slack-ask_user": true,
 }
 
 var intentToolHints = []struct {

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/wati/oncall-agent/internal/prompts"
 )
@@ -20,14 +21,31 @@ var secretPatterns = []*regexp.Regexp{
 type PromptPolicy struct {
 	WorkspaceRoots             []string
 	IncludeRepositoryInventory bool
+	Now                        func() time.Time
 }
 
 func (p PromptPolicy) SystemPrompt() string {
 	base := prompts.StaticSystemPrompt()
+	base += p.runtimeDatePrompt()
 	if p.IncludeRepositoryInventory {
 		base += prompts.DynamicSystemPrompt(p.discoverRepos())
 	}
 	return base
+}
+
+func (p PromptPolicy) runtimeDatePrompt() string {
+	now := time.Now()
+	if p.Now != nil {
+		now = p.Now()
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	zone := strings.TrimSpace(now.Location().String())
+	if zone == "" {
+		zone = "Local"
+	}
+	return fmt.Sprintf("\n\nRuntime context:\n- Current date: %s\n- Current year: %d\n- Timezone: %s\n- Resolve relative date phrases such as today, yesterday, tomorrow, this year, current year, 今年, 本年, 今年高考, and latest against this runtime date. For current-year web searches, include %d in the search query unless the user explicitly asks for a different year.", now.Format("2006-01-02"), now.Year(), zone, now.Year())
 }
 
 func (p PromptPolicy) discoverRepos() string {
