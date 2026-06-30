@@ -1037,7 +1037,7 @@ func (r Runner) executeToolCalls(ctx context.Context, calls []llm.ToolCall, seen
 		if len(parallelBatch) == 0 {
 			return
 		}
-		if r.StatusUpdate != nil {
+		if r.StatusUpdate != nil && r.StatusSummarizer == nil {
 			names := make([]string, 0, len(parallelBatch))
 			for _, ic := range parallelBatch {
 				names = append(names, ic.call.Function.Name)
@@ -1087,7 +1087,7 @@ func (r Runner) executeToolCalls(ctx context.Context, calls []llm.ToolCall, seen
 
 func (r Runner) executeSingleTool(ctx context.Context, call llm.ToolCall, req Request, emitStatus bool) toolResult {
 	name := call.Function.Name
-	if emitStatus && r.StatusUpdate != nil {
+	if emitStatus && r.StatusUpdate != nil && r.StatusSummarizer == nil {
 		r.StatusUpdate(ToolHint(name, req.Locale))
 	}
 	args := json.RawMessage(call.Function.Arguments)
