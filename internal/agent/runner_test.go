@@ -1301,7 +1301,6 @@ func TestSelectToolSpecsPrunesHeavySnapshotToolsUntilIntentMatches(t *testing.T)
 		namedSpec("git-fetch_ref"),
 		namedSpec("git-search_ref"),
 		namedSpec("git-read_file_ref"),
-		namedSpec("system-current_time"),
 		namedSpec("skills-load"),
 		namedSpec("slack-ask_user"),
 		namedSpec("explore-code"),

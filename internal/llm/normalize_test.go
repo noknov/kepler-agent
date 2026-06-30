@@ -126,9 +126,9 @@ func TestParseTextualToolCalls(t *testing.T) {
 		},
 		{
 			name:      "empty args",
-			content:   `<tool_invocation name="system-current_time" arguments={} />`,
+			content:   `<tool_invocation name="demo-tool" arguments={} />`,
 			wantCount: 1,
-			wantName:  "system-current_time",
+			wantName:  "demo-tool",
 			wantArgs:  "{}",
 		},
 		{
