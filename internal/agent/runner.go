@@ -308,7 +308,11 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 
 	for step := 0; step < maxSteps; step++ {
 		if r.StatusUpdate != nil {
-			r.StatusUpdate(StepStatus(req.Locale, step))
+			if r.StatusSummarizer != nil {
+				r.StatusUpdate(ThinkingStatus(req.Locale))
+			} else {
+				r.StatusUpdate(StepStatus(req.Locale, step))
+			}
 		}
 		// Progressive escalation: increasingly strong pressure to stop.
 		if afterTools {
