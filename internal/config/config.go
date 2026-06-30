@@ -341,6 +341,8 @@ func inferLLMProviderFrom(get func(string) string) string {
 		return provider
 	}
 	switch {
+	case firstNonEmpty(get("LONGCAT_API_KEY"), get("LONGCAT_BASE_URL"), get("LONGCAT_MODEL"), get("LONGCAT_PROTOCOL")) != "":
+		return "longcat"
 	case firstNonEmpty(get("MIMO_API_KEY"), get("MIMO_BASE_URL"), get("MIMO_MODEL"), get("MIMO_PROTOCOL")) != "":
 		return "mimo"
 	case firstNonEmpty(get("ANTHROPIC_API_KEY"), get("ANTHROPIC_AUTH_TOKEN"), get("ANTHROPIC_BASE_URL"), get("ANTHROPIC_MODEL"), get("ANTHROPIC_PROTOCOL")) != "":
@@ -363,6 +365,12 @@ func inferLLMProviderFrom(get func(string) string) string {
 
 func providerProtocol(provider string) string {
 	switch provider {
+	case "longcat":
+		protocol := normalizeLLMProtocol(firstEnv("LONGCAT_PROTOCOL", "LLM_PROTOCOL"))
+		if protocol == "" {
+			return "anthropic"
+		}
+		return protocol
 	case "mimo":
 		protocol := normalizeLLMProtocol(firstEnv("MIMO_PROTOCOL", "LLM_PROTOCOL"))
 		if protocol == "" {
@@ -398,6 +406,8 @@ func providerProtocol(provider string) string {
 
 func providerBaseURL(provider string) string {
 	switch provider {
+	case "longcat":
+		return env("LONGCAT_BASE_URL", "https://api.longcat.chat/anthropic")
 	case "mimo":
 		return env("MIMO_BASE_URL", "https://token-plan-cn.xiaomimimo.com/anthropic")
 	case "anthropic":
@@ -419,6 +429,8 @@ func providerBaseURL(provider string) string {
 
 func providerModel(provider string) string {
 	switch provider {
+	case "longcat":
+		return env("LONGCAT_MODEL", "LongCat-2.0")
 	case "mimo":
 		return env("MIMO_MODEL", "mimo-v2.5")
 	case "anthropic":
@@ -523,6 +535,8 @@ func deepSeekModels() []string {
 
 func providerAPIKey(provider string) string {
 	switch provider {
+	case "longcat":
+		return firstEnv("LONGCAT_API_KEY")
 	case "mimo":
 		return firstEnv("MIMO_API_KEY")
 	case "anthropic":

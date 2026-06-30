@@ -46,7 +46,21 @@ The server loads `.env` automatically on startup. Expose `POST /slack/events` th
 
 `LLM_PROVIDER` selects the active provider. Each provider has its own env namespace so credentials are never shared between providers unintentionally.
 
-**DeepSeek (default)**
+**LongCat (default)**
+
+LongCat 2.0 is a high-performance Agentic model with a 1M-token context window and 128K max output. It exposes both OpenAI-compatible and Anthropic-compatible endpoints; the integration uses the OpenAI-compatible path by default.
+
+```bash
+LLM_PROVIDER=longcat
+LONGCAT_API_KEY=Bearer lc-...
+LONGCAT_BASE_URL=https://api.longcat.chat/anthropic
+LONGCAT_MODEL=LongCat-2.0
+LONGCAT_PROTOCOL=anthropic
+```
+
+The API key must be prefixed with `Bearer ` (e.g. `Bearer lc-abc123`) so the client sends the correct `Authorization` header. To use the OpenAI-compatible endpoint instead, set `LONGCAT_BASE_URL=https://api.longcat.chat/openai`, `LONGCAT_PROTOCOL=openai`, and drop the `Bearer ` prefix.
+
+**DeepSeek**
 
 DeepSeek uses the OpenAI-compatible `/chat/completions` protocol, including
 structured function/tool calls. The default model is the official flash model;
