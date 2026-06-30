@@ -378,7 +378,6 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			switch ev.Kind {
 			case agent.StreamNarration:
 				updateLiveUsage(ev.Delta)
-				progressMarkdown.Write(ev.Delta)
 			case agent.StreamAnswer:
 				updateLiveUsage(ev.Delta)
 				startAnswerStream().Write(ev.Delta)
