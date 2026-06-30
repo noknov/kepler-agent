@@ -1019,11 +1019,9 @@ type toolResult struct {
 
 func (r Runner) executeToolCalls(ctx context.Context, calls []llm.ToolCall, seenToolCalls, seenSearchTerms map[string]int, req Request) []toolResult {
 	// Fire one dynamic status summary per agent turn (covers the full tool batch).
-	// Show a thinking placeholder immediately; the LLM summary overwrites it when ready.
+	// The main loop already shows ThinkingStatus while the LLM generates; the
+	// summary overwrites that without an extra intermediate update here.
 	if len(calls) > 0 && r.StatusSummarizer != nil {
-		if r.StatusUpdate != nil {
-			r.StatusUpdate(ThinkingStatus(req.Locale))
-		}
 		names := make([]string, len(calls))
 		for i, c := range calls {
 			names[i] = c.Function.Name
