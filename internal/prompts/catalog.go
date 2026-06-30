@@ -533,7 +533,9 @@ func parseSkill(fallbackName, content string) Skill {
 	if strings.HasPrefix(content, "---\n") {
 		if end := strings.Index(content[len("---\n"):], "\n---"); end >= 0 {
 			frontmatter := content[len("---\n") : len("---\n")+end]
-			for _, line := range strings.Split(frontmatter, "\n") {
+			lines := strings.Split(frontmatter, "\n")
+			for i := 0; i < len(lines); i++ {
+				line := lines[i]
 				// Skip indented lines (YAML arrays, nested maps) and
 				// bare list items that belong to a preceding key.
 				if len(line) > 0 && (line[0] == ' ' || line[0] == '\t' || line[0] == '-') {
@@ -550,7 +552,13 @@ func parseSkill(fallbackName, content string) Skill {
 						name = value
 					}
 				case "description":
-					description = value
+					if value == "|" || value == ">" {
+						block, next := readFrontmatterBlock(lines, i+1)
+						i = next - 1
+						description = block
+					} else {
+						description = value
+					}
 				}
 			}
 		}
@@ -560,6 +568,22 @@ func parseSkill(fallbackName, content string) Skill {
 		Description: description,
 		Content:     content,
 	}
+}
+
+func readFrontmatterBlock(lines []string, start int) (string, int) {
+	var out []string
+	for i := start; i < len(lines); i++ {
+		line := lines[i]
+		if strings.TrimSpace(line) == "" {
+			out = append(out, "")
+			continue
+		}
+		if line[0] != ' ' && line[0] != '\t' {
+			return strings.TrimSpace(strings.Join(out, "\n")), i
+		}
+		out = append(out, strings.TrimSpace(line))
+	}
+	return strings.TrimSpace(strings.Join(out, "\n")), len(lines)
 }
 
 func readJSON[T any](path string, out *T) {

@@ -245,3 +245,44 @@ Full workflow body.
 		t.Fatalf("LoadSkill() did not return body:\n%s", skill.Content)
 	}
 }
+
+func TestLoadDirParsesMultilineSkillDescription(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "skills", "zhangxuefeng-zhiyuan"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillBody := `---
+name: zhangxuefeng-zhiyuan
+description: |
+  张雪峰的思维框架与表达方式，专注高考志愿填报与职业规划。
+  当用户提到「高考」「志愿」「填报」「选专业」「分数线」「位次」时使用。
+keywords:
+  - 高考
+  - 志愿
+---
+
+# Body
+`
+	if err := os.WriteFile(filepath.Join(dir, "skills", "zhangxuefeng-zhiyuan", "SKILL.md"), []byte(skillBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := LoadDirs(PublicDir, dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = LoadDirs(PublicDir) })
+
+	got := SkillsPrompt()
+	for _, want := range []string{"zhangxuefeng-zhiyuan", "高考志愿填报", "分数线", "位次"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("SkillsPrompt() missing %q:\n%s", want, got)
+		}
+	}
+	skill, ok := LoadSkill("zhangxuefeng-zhiyuan")
+	if !ok {
+		t.Fatal("LoadSkill() did not find zhangxuefeng-zhiyuan")
+	}
+	if !strings.Contains(skill.Description, "当用户提到") {
+		t.Fatalf("multiline description not parsed: %#v", skill)
+	}
+}

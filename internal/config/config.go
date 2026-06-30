@@ -124,6 +124,7 @@ type ToolConfig struct {
 	WebSearchGoogleCX   string
 	WebSearchSerpAPIKey string
 	WebSearchSerpAPIURL string
+	WebSearchSearXNGURL string
 }
 
 type ObservingConfig struct {
@@ -256,11 +257,12 @@ func Load() (Config, error) {
 			LuckinMCPToken:      os.Getenv("LUCKIN_MCP_TOKEN"),
 			PlaywrightMCPURL:    trimRightSlash(os.Getenv("PLAYWRIGHT_MCP_URL")),
 			PlaywrightMCPToken:  os.Getenv("PLAYWRIGHT_MCP_TOKEN"),
-			WebSearchProvider:   env("WEB_SEARCH_PROVIDER", "google_cse"),
+			WebSearchProvider:   env("WEB_SEARCH_PROVIDER", "duckduckgo"),
 			WebSearchGoogleKey:  os.Getenv("WEB_SEARCH_GOOGLE_API_KEY"),
 			WebSearchGoogleCX:   os.Getenv("WEB_SEARCH_GOOGLE_CX"),
 			WebSearchSerpAPIKey: os.Getenv("WEB_SEARCH_SERPAPI_KEY"),
 			WebSearchSerpAPIURL: trimRightSlash(env("WEB_SEARCH_SERPAPI_BASE_URL", "https://serpapi.com/search.json")),
+			WebSearchSearXNGURL: trimRightSlash(os.Getenv("WEB_SEARCH_SEARXNG_URL")),
 		},
 		Observing: ObservingConfig{
 			LogLevel:                 env("LOG_LEVEL", "info"),

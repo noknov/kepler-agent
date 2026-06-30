@@ -132,11 +132,10 @@ func registerKnowledgeTools(tools *registry.Registry, cfg config.Config) {
 		GoogleCX:       cfg.Tools.WebSearchGoogleCX,
 		SerpAPIKey:     cfg.Tools.WebSearchSerpAPIKey,
 		SerpAPIBaseURL: cfg.Tools.WebSearchSerpAPIURL,
+		SearXNGBaseURL: cfg.Tools.WebSearchSearXNGURL,
 	}
 	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, webSearchTools.ReadPageTool{Client: webClient}))
-	if webClient.GoogleAPIKey != "" || webClient.SerpAPIKey != "" {
-		tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, webSearchTools.SearchTool{Client: webClient}))
-	}
+	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, webSearchTools.SearchTool{Client: webClient}))
 	tools.Register(knowledgeTools.RunbookSearchTool{})
 }
 

@@ -415,6 +415,120 @@ func TestStreamModePostsNonStreamingFormattedFinalAnswer(t *testing.T) {
 	}
 }
 
+func TestFinalAnswerAppendsWebEvidence(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	llmClient := &sequenceStreamLLM{responses: []llm.Response{
+		{
+			Message: llm.Message{
+				Role: "assistant",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "tool_1",
+					Type: "function",
+					Function: llm.ToolFunction{
+						Name:      "web-search",
+						Arguments: `{"query":"高考志愿"}`,
+					},
+				}},
+			},
+		},
+		{Message: llm.Message{Role: "assistant", Content: "建议先看官方投档规则。"}},
+	}}
+	tools := registry.New()
+	tools.Register(webEvidenceTool{})
+	messenger := &fakeMessenger{streamTS: "200.000"}
+	svc := NewService(
+		store,
+		messenger,
+		agent.Runner{LLM: llmClient, Tools: tools, MaxSteps: 2, Capabilities: llm.Capabilities{NativeToolCalls: true}},
+		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+
+	svc.HandleMention(ctx, Request{
+		EventID:  "E-web-evidence",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "高考志愿怎么填？",
+	})
+
+	if len(messenger.posts) != 1 {
+		t.Fatalf("posts = %#v, want one final post", messenger.posts)
+	}
+	got := messenger.posts[0]
+	if !strings.Contains(got, "建议先看官方投档规则。") ||
+		!strings.Contains(got, "网页证据:") ||
+		!strings.Contains(got, "掌上高考") ||
+		!strings.Contains(got, "https://www.gaokao.cn/") {
+		t.Fatalf("posted final answer missing web evidence: %q", got)
+	}
+}
+
+func TestStreamedFinalAnswerAppendsWebEvidenceToAnswerStream(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	llmClient := &sequenceStreamLLM{responses: []llm.Response{
+		{
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "我查一下最新信息。",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "tool_1",
+					Type: "function",
+					Function: llm.ToolFunction{
+						Name:      "web-search",
+						Arguments: `{"query":"高考志愿"}`,
+					},
+				}},
+			},
+			Streamed: true,
+		},
+		{
+			Message:  llm.Message{Role: "assistant", Content: "建议先看官方投档规则。"},
+			Streamed: true,
+		},
+	}}
+	tools := registry.New()
+	tools.Register(webEvidenceTool{})
+	messenger := &fakeMessenger{streamSeq: []string{"progress.000", "answer.000"}}
+	svc := NewService(
+		store,
+		messenger,
+		agent.Runner{LLM: llmClient, Tools: tools, MaxSteps: 2, Capabilities: llm.Capabilities{NativeToolCalls: true}},
+		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+
+	svc.HandleMention(ctx, Request{
+		EventID:  "E-web-evidence-stream",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "高考志愿怎么填？",
+	})
+
+	answerChunks := chunksOnStream(messenger.appends, "answer.000")
+	if !chunksContainText(answerChunks, "建议先看官方投档规则。") ||
+		!chunksContainText(answerChunks, "网页证据:") ||
+		!chunksContainText(answerChunks, "https://www.gaokao.cn/") {
+		t.Fatalf("answer stream missing web evidence: %#v", answerChunks)
+	}
+	if chunksContainText(chunksOnStream(messenger.appends, "progress.000"), "网页证据:") {
+		t.Fatalf("web evidence should be appended to answer stream, appends: %#v", messenger.appends)
+	}
+}
+
 func TestStreamModePostsNonStreamingFinalAnswer(t *testing.T) {
 	ctx := context.Background()
 	store, err := session.NewFileStore(t.TempDir())
@@ -1476,6 +1590,34 @@ func (echoTool) Spec() llm.ToolSpec {
 
 func (echoTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
 	return registry.Result{Content: string(args)}, nil
+}
+
+type webEvidenceTool struct{}
+
+func (webEvidenceTool) Parallel() bool { return true }
+
+func (webEvidenceTool) Spec() llm.ToolSpec {
+	return llm.ToolSpec{
+		Type: "function",
+		Function: llm.ToolSpecFunction{
+			Name:        "web-search",
+			Description: "search web",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}
+}
+
+func (webEvidenceTool) Execute(context.Context, json.RawMessage, registry.Runtime) (registry.Result, error) {
+	return registry.Result{Content: strings.TrimSpace(`
+Web search results
+1. 掌上高考|2026年高考志愿填报服务平台
+   url: https://www.gaokao.cn/
+   source: searxng
+   snippet: 高考志愿填报服务平台
+2. 重复 URL
+   url: https://www.gaokao.cn/
+   source: searxng
+`)}, nil
 }
 
 type fakeMessenger struct {
