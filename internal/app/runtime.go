@@ -47,10 +47,14 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *obs
 	tools := newToolRegistry(cfg, slackClient, llmClient, secondaryClient, secondaryModel, workspacePolicy, commandPolicy)
 
 	var statusSummarizer *agent.StatusSummarizer
-	if cfg.LLM.DynamicStatus && secondaryClient != nil && secondaryModel != "" {
+	if cfg.LLM.DynamicStatus {
+		summaryClient, summaryModel := secondaryClient, secondaryModel
+		if summaryClient == nil {
+			summaryClient, summaryModel = llmClient, cfg.LLM.Model
+		}
 		statusSummarizer = &agent.StatusSummarizer{
-			Client:  secondaryClient,
-			Model:   secondaryModel,
+			Client:  summaryClient,
+			Model:   summaryModel,
 			Timeout: 5 * time.Second,
 		}
 	}
