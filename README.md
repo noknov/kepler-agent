@@ -1,6 +1,6 @@
 # oncall-agent
 
-A Slack-native intelligent assistant built in Go, powered by configurable LLM backends. It handles engineering investigations, code analysis, CI/CD operations, and general-purpose tasks — all within a Slack thread, with full tool-call support and structured context management.
+A Slack-native general-purpose intelligent assistant built in Go, powered by configurable LLM backends. It helps with everyday questions, research, planning, writing, education, engineering, code analysis, CI/CD operations, and other practical tasks — all within a Slack thread, with full tool-call support and structured context management.
 
 ## ✨ Design principles
 
@@ -365,13 +365,40 @@ Workflow aliases can be defined in `PROMPT_DIR/runtime.json` under `github_workf
 
 | Tool | Description |
 |---|---|
-| `web-search` | Public web search (Google Custom Search or SerpAPI) |
+| `web-search` | Public web search (DuckDuckGo by default, or SearXNG / Google Custom Search / SerpAPI) |
 | `web-read_page` | Fetch and read a public web page |
 | `notion.search` | Search Notion pages |
 | `notion.create_page` | Create a Notion page |
 | `youtrack.get_issue` | Fetch a YouTrack issue |
 | `youtrack.search` | Search YouTrack issues |
 | `knowledge.runbook_search` | Search local runbooks under `PROMPT_DIR/runbooks/` |
+
+Final Slack answers automatically append a concise "Web Evidence" / "网页证据" section when the turn used `web-search` or `web-read_page`, so URLs remain visible even if the model forgets to list sources.
+
+`web-search` is available without paid credentials by default through DuckDuckGo HTML search:
+
+```bash
+WEB_SEARCH_PROVIDER=duckduckgo
+```
+
+For a local/self-hosted search stack, run SearXNG and point the agent at it:
+
+```bash
+WEB_SEARCH_PROVIDER=searxng
+WEB_SEARCH_SEARXNG_URL=http://127.0.0.1:8097
+```
+
+Google Custom Search and SerpAPI remain supported for deployments that already have keys:
+
+```bash
+WEB_SEARCH_PROVIDER=google_cse
+WEB_SEARCH_GOOGLE_API_KEY=...
+WEB_SEARCH_GOOGLE_CX=...
+
+WEB_SEARCH_PROVIDER=serpapi
+WEB_SEARCH_SERPAPI_KEY=...
+WEB_SEARCH_SERPAPI_BASE_URL=https://serpapi.com/search.json
+```
 
 ### 💬 Slack
 

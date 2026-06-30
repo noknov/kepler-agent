@@ -17,8 +17,10 @@ import (
 )
 
 const (
-	ProviderGoogleCSE = "google_cse"
-	ProviderSerpAPI   = "serpapi"
+	ProviderGoogleCSE  = "google_cse"
+	ProviderSerpAPI    = "serpapi"
+	ProviderDuckDuckGo = "duckduckgo"
+	ProviderSearXNG    = "searxng"
 )
 
 type Client struct {
@@ -27,6 +29,7 @@ type Client struct {
 	GoogleCX       string
 	SerpAPIKey     string
 	SerpAPIBaseURL string
+	SearXNGBaseURL string
 	HTTP           *http.Client
 }
 
@@ -46,13 +49,13 @@ func (SearchTool) Parallel() bool { return true }
 func (t SearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"web-search",
-		"",
+		"Search the public web for current information. Prefer this before web-read_page when the user needs recent facts, recommendations, admissions data, prices, policies, news, or other information beyond model memory. Return URLs in the final answer for claims based on search results.",
 		registry.ObjectSchema([]string{"query"}, map[string]any{
-			"query":    map[string]any{"type": "string", "description": ""},
-			"provider": map[string]any{"type": "string", "description": ""},
-			"engine":   map[string]any{"type": "string", "description": ""},
-			"site":     map[string]any{"type": "string", "description": ""},
-			"limit":    map[string]any{"type": "integer", "description": ""},
+			"query":    map[string]any{"type": "string", "description": "Search query. Include the current year for current or time-sensitive information."},
+			"provider": map[string]any{"type": "string", "description": "Optional provider: duckduckgo, searxng, google_cse, or serpapi."},
+			"engine":   map[string]any{"type": "string", "description": "Optional provider-specific engine, such as baidu for serpapi."},
+			"site":     map[string]any{"type": "string", "description": "Optional domain filter. Example: hbea.edu.cn"},
+			"limit":    map[string]any{"type": "integer", "description": "Maximum results to return, default 5 and max 10."},
 		}),
 	)
 }
@@ -66,10 +69,10 @@ func (ReadPageTool) Parallel() bool { return true }
 func (t ReadPageTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"web-read_page",
-		"",
+		"Read a public URL and extract readable text. Use after web-search returns a promising result, or when the user provides a URL. Search result pages are weak evidence; prefer reading the actual source pages.",
 		registry.ObjectSchema([]string{"url"}, map[string]any{
-			"url":       map[string]any{"type": "string", "description": ""},
-			"max_chars": map[string]any{"type": "integer", "description": ""},
+			"url":       map[string]any{"type": "string", "description": "HTTP or HTTPS URL to read."},
+			"max_chars": map[string]any{"type": "integer", "description": "Maximum extracted characters, default 12000 and max 50000."},
 		}),
 	)
 }
@@ -155,13 +158,17 @@ func (c Client) Search(ctx context.Context, req SearchRequest) ([]ResultItem, er
 		provider = strings.TrimSpace(c.Provider)
 	}
 	if provider == "" {
-		provider = ProviderGoogleCSE
+		provider = ProviderDuckDuckGo
 	}
 	switch provider {
 	case ProviderGoogleCSE:
 		return c.searchGoogleCSE(ctx, req)
 	case ProviderSerpAPI:
 		return c.searchSerpAPI(ctx, req)
+	case ProviderDuckDuckGo:
+		return c.searchDuckDuckGo(ctx, req)
+	case ProviderSearXNG:
+		return c.searchSearXNG(ctx, req)
 	default:
 		return nil, fmt.Errorf("unsupported web search provider %q", provider)
 	}
@@ -271,6 +278,129 @@ func (c Client) searchSerpAPI(ctx context.Context, req SearchRequest) ([]ResultI
 		})
 	}
 	return items, nil
+}
+
+func (c Client) searchDuckDuckGo(ctx context.Context, req SearchRequest) ([]ResultItem, error) {
+	values := url.Values{}
+	values.Set("q", req.Query)
+	endpoint := "https://html.duckduckgo.com/html/?" + values.Encode()
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Accept", "text/html, application/xhtml+xml;q=0.9")
+	httpReq.Header.Set("User-Agent", "Mozilla/5.0 (compatible; wati-oncall-agent/1.0)")
+	resp, err := c.httpClient().Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("duckduckgo search status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	return parseDuckDuckGoHTML(string(data), req.Limit), nil
+}
+
+func (c Client) searchSearXNG(ctx context.Context, req SearchRequest) ([]ResultItem, error) {
+	base := strings.TrimRight(strings.TrimSpace(c.SearXNGBaseURL), "/")
+	if base == "" {
+		return nil, fmt.Errorf("SearXNG web search is not configured: WEB_SEARCH_SEARXNG_URL is required")
+	}
+	values := url.Values{}
+	values.Set("q", req.Query)
+	values.Set("format", "json")
+	endpoint := base + "/search?" + values.Encode()
+	var parsed struct {
+		Results []struct {
+			Title   string `json:"title"`
+			URL     string `json:"url"`
+			Content string `json:"content"`
+		} `json:"results"`
+	}
+	if err := c.getJSON(ctx, endpoint, &parsed); err != nil {
+		return nil, err
+	}
+	items := make([]ResultItem, 0, len(parsed.Results))
+	for _, item := range parsed.Results {
+		items = append(items, ResultItem{
+			Title:   cleanWhitespace(html.UnescapeString(item.Title)),
+			URL:     item.URL,
+			Snippet: cleanWhitespace(html.UnescapeString(item.Content)),
+			Source:  "searxng",
+		})
+	}
+	return limitItems(items, req.Limit), nil
+}
+
+func parseDuckDuckGoHTML(data string, limit int) []ResultItem {
+	blockRe := regexp.MustCompile(`(?is)<div[^>]+class="[^"]*result[^"]*"[^>]*>(.*?)</div>\s*</div>`)
+	linkRe := regexp.MustCompile(`(?is)<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>`)
+	snippetRe := regexp.MustCompile(`(?is)<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>|<div[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</div>`)
+	blocks := blockRe.FindAllStringSubmatch(data, -1)
+	items := make([]ResultItem, 0, len(blocks))
+	for _, block := range blocks {
+		htmlBlock := block[1]
+		link := linkRe.FindStringSubmatch(htmlBlock)
+		if len(link) < 3 {
+			continue
+		}
+		resultURL := decodeDuckDuckGoURL(html.UnescapeString(link[1]))
+		if resultURL == "" {
+			continue
+		}
+		snippet := ""
+		if match := snippetRe.FindStringSubmatch(htmlBlock); len(match) > 0 {
+			for _, part := range match[1:] {
+				if strings.TrimSpace(part) != "" {
+					snippet = htmlToText(part)
+					break
+				}
+			}
+		}
+		items = append(items, ResultItem{
+			Title:   htmlToText(link[2]),
+			URL:     resultURL,
+			Snippet: snippet,
+			Source:  "duckduckgo",
+		})
+	}
+	return limitItems(items, limit)
+}
+
+func decodeDuckDuckGoURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err == nil {
+		if uddg := parsed.Query().Get("uddg"); uddg != "" {
+			return uddg
+		}
+		if parsed.Scheme == "http" || parsed.Scheme == "https" {
+			return parsed.String()
+		}
+	}
+	if strings.HasPrefix(raw, "//") {
+		return "https:" + raw
+	}
+	return raw
+}
+
+func htmlToText(raw string) string {
+	text := regexp.MustCompile(`(?s)<[^>]+>`).ReplaceAllString(raw, " ")
+	return cleanWhitespace(html.UnescapeString(text))
+}
+
+func limitItems(items []ResultItem, limit int) []ResultItem {
+	if limit <= 0 || len(items) <= limit {
+		return items
+	}
+	return items[:limit]
 }
 
 func (c Client) getJSON(ctx context.Context, endpoint string, out any) error {

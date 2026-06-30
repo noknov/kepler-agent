@@ -428,6 +428,10 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		RunID:    runID,
 		Steering: s.steering(active),
 	})
+	evidenceText := webEvidenceMarkdown(result.Generated, locale)
+	if answerStream != nil && evidenceText != "" {
+		answerStream.Write(evidenceText)
+	}
 	if answerStream != nil {
 		answerStream.Close()
 	}
@@ -535,6 +539,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}
 	if !result.Pending && result.Final != "" {
 		finalText := s.Redactor.Sanitize(result.Final)
+		finalText = appendWebEvidenceText(finalText, evidenceText)
 		if runObserver != nil {
 			runObserver.Finish("completed", "", nil, finalText)
 		}
@@ -590,6 +595,18 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		runObserver.Finish("pending_user", "", nil, result.PendingQuestion)
 	}
 	return true
+}
+
+func appendWebEvidenceText(text, evidence string) string {
+	text = strings.TrimSpace(text)
+	evidence = strings.TrimSpace(evidence)
+	if evidence == "" {
+		return text
+	}
+	if text == "" {
+		return evidence
+	}
+	return text + "\n\n" + evidence
 }
 
 func (s *Service) newRunObserver(sessionID string, req Request, startedAt time.Time) *runs.Observer {

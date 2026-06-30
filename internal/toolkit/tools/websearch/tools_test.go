@@ -50,6 +50,53 @@ func TestSerpAPIBaiduResults(t *testing.T) {
 	}
 }
 
+func TestDuckDuckGoHTMLResults(t *testing.T) {
+	client := Client{
+		Provider: ProviderDuckDuckGo,
+		HTTP: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Host != "html.duckduckgo.com" {
+				t.Fatalf("host = %q", req.URL.Host)
+			}
+			if got := req.URL.Query().Get("q"); got != "湖北 高考" {
+				t.Fatalf("q = %q", got)
+			}
+			return htmlResponse(`
+				<div class="result">
+				  <h2><a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.edu%2Fpage&amp;rut=x">湖北省教育厅</a></h2>
+				  <a class="result__snippet">一分一段表和录取控制分数线</a>
+				</div></div>
+			`), nil
+		})},
+	}
+	items, err := client.Search(context.Background(), SearchRequest{Query: "湖北 高考", Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Source != "duckduckgo" || items[0].URL != "https://example.edu/page" || items[0].Title != "湖北省教育厅" {
+		t.Fatalf("items = %#v", items)
+	}
+}
+
+func TestSearXNGResults(t *testing.T) {
+	client := Client{
+		Provider:       ProviderSearXNG,
+		SearXNGBaseURL: "http://searxng.test",
+		HTTP: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.String() != "http://searxng.test/search?format=json&q=oncall+agent" {
+				t.Fatalf("url = %q", req.URL.String())
+			}
+			return jsonResponse(`{"results":[{"title":"Result","url":"https://example.com","content":"hello"}]}`), nil
+		})},
+	}
+	items, err := client.Search(context.Background(), SearchRequest{Query: "oncall agent", Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Source != "searxng" || items[0].Snippet != "hello" {
+		t.Fatalf("items = %#v", items)
+	}
+}
+
 func TestMissingProviderConfigReturnsClearError(t *testing.T) {
 	_, err := (Client{Provider: ProviderGoogleCSE}).Search(context.Background(), SearchRequest{Query: "x", Limit: 1})
 	if err == nil || !strings.Contains(err.Error(), "WEB_SEARCH_GOOGLE_API_KEY") {
