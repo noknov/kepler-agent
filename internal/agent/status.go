@@ -185,7 +185,10 @@ func localeSet(locale string) statusSet {
 }
 
 func ThinkingStatus(locale string) string {
-	return pick(localeSet(locale).analyzing)
+	if locale == LocaleZH {
+		return "思考中..."
+	}
+	return "Thinking..."
 }
 
 func StepStatus(locale string, step int) string {
