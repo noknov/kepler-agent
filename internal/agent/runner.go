@@ -1014,6 +1014,17 @@ type toolResult struct {
 }
 
 func (r Runner) executeToolCalls(ctx context.Context, calls []llm.ToolCall, seenToolCalls, seenSearchTerms map[string]int, req Request) []toolResult {
+	// Fire one dynamic status summary per agent turn (covers the full tool batch).
+	// The static ToolHint shown later may be overwritten when the LLM responds.
+	if len(calls) > 0 {
+		names := make([]string, len(calls))
+		for i, c := range calls {
+			names[i] = c.Function.Name
+		}
+		sample := calls[0].Function.Arguments
+		r.StatusSummarizer.Summarize(ctx, strings.Join(names, ", "), sample, req.Locale, r.StatusUpdate)
+	}
+
 	type indexedCall struct {
 		index int
 		call  llm.ToolCall
@@ -1078,7 +1089,6 @@ func (r Runner) executeSingleTool(ctx context.Context, call llm.ToolCall, req Re
 	name := call.Function.Name
 	if emitStatus && r.StatusUpdate != nil {
 		r.StatusUpdate(ToolHint(name, req.Locale))
-		r.StatusSummarizer.Summarize(ctx, name, call.Function.Arguments, req.Locale, r.StatusUpdate)
 	}
 	args := json.RawMessage(call.Function.Arguments)
 	start := time.Now()

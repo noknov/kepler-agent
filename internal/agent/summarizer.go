@@ -22,8 +22,9 @@ type StatusSummarizer struct {
 }
 
 // Summarize launches a background goroutine that generates a short status line
-// and delivers it via update. It is a no-op when s is nil.
-func (s *StatusSummarizer) Summarize(ctx context.Context, name, args, locale string, update StatusUpdater) {
+// describing the current agent step (potentially multiple tools) and delivers
+// it via update. It is a no-op when s is nil.
+func (s *StatusSummarizer) Summarize(ctx context.Context, names, sampleArgs, locale string, update StatusUpdater) {
 	if s == nil || update == nil {
 		return
 	}
@@ -33,7 +34,7 @@ func (s *StatusSummarizer) Summarize(ctx context.Context, name, args, locale str
 
 		resp, err := s.Client.Chat(sctx, llm.Request{
 			Model:     s.Model,
-			Messages:  []llm.Message{{Role: "user", Content: summarizePrompt(name, args, locale)}},
+			Messages:  []llm.Message{{Role: "user", Content: summarizePrompt(names, sampleArgs, locale)}},
 			MaxTokens: 32,
 		})
 		if err != nil || sctx.Err() != nil {
@@ -45,18 +46,18 @@ func (s *StatusSummarizer) Summarize(ctx context.Context, name, args, locale str
 	}()
 }
 
-func summarizePrompt(name, args, locale string) string {
-	if len(args) > 300 {
-		args = args[:300]
+func summarizePrompt(names, sampleArgs, locale string) string {
+	if len(sampleArgs) > 300 {
+		sampleArgs = sampleArgs[:300]
 	}
 	if locale == LocaleZH {
 		return fmt.Sprintf(
-			"用10个字以内描述以下工具调用正在做什么，只回复描述文字，不加标点符号。\n工具：%s\n参数：%s",
-			name, args,
+			"用10个字以内描述 AI 助手当前这一步在做什么，只回复描述文字，不加标点符号。\n工具列表：%s\n首个参数示例：%s",
+			names, sampleArgs,
 		)
 	}
 	return fmt.Sprintf(
-		"In 10 words or fewer, describe what this tool call is doing. Reply ONLY with the description, no punctuation.\nTool: %s\nArgs: %s",
-		name, args,
+		"In 10 words or fewer, describe what the AI is doing in this step. Reply ONLY with the description, no punctuation.\nTools: %s\nSample args: %s",
+		names, sampleArgs,
 	)
 }
