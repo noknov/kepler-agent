@@ -184,6 +184,10 @@ func localeSet(locale string) statusSet {
 	return statusEN
 }
 
+func ThinkingStatus(locale string) string {
+	return pick(localeSet(locale).analyzing)
+}
+
 func StepStatus(locale string, step int) string {
 	s := localeSet(locale)
 	if step == 0 {
