@@ -138,11 +138,14 @@ func newSecondaryLLMClient(cfg config.Config) (llm.Client, string) {
 
 func buildLLMClient(provider, protocol, baseURL, apiKey string, timeout time.Duration, anthropicFlavor string) llm.Client {
 	var client llm.Client
-	if provider == "opencode-go" {
+	switch {
+	case provider == "longcat":
+		client = llm.NewLongCatClient(baseURL, apiKey, timeout)
+	case provider == "opencode-go":
 		client = llm.NewOpenCodeGoClient(baseURL, apiKey, timeout)
-	} else if protocol == "anthropic" {
+	case protocol == "anthropic":
 		client = llm.NewAnthropicClient(baseURL, apiKey, timeout, anthropicFlavor)
-	} else {
+	default:
 		client = llm.NewOpenAICompatibleClient(provider, baseURL, apiKey, timeout)
 	}
 	return llm.WrapClient(client, llm.CapabilitiesFor(provider, protocol))
