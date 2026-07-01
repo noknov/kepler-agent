@@ -488,7 +488,9 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		}
 
 		assistantMsg := resp.Message
-		assistantMsg.Usage = &resp.Usage // attach API-reported token usage for calibration
+		if resp.Usage.PromptTokens > 0 || resp.Usage.CompletionTokens > 0 {
+			assistantMsg.Usage = &resp.Usage
+		}
 		assistantMsg.ToolCalls = memory.NormalizeToolCalls(assistantMsg.ToolCalls)
 		if router != nil {
 			router.finish(len(assistantMsg.ToolCalls) > 0)

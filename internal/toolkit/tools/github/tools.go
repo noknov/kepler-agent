@@ -599,6 +599,7 @@ func truncate(s string, n int) string {
 	return s[:n] + "..."
 }
 
+
 // PRDiffTool fetches a pull request's metadata and diff from GitHub API.
 type PRDiffTool struct {
 	Client Client
@@ -682,7 +683,7 @@ func (t PRDiffTool) Execute(ctx context.Context, raw json.RawMessage, _ registry
 		return registry.Result{}, fmt.Errorf("fetch PR diff: %w", err)
 	}
 	defer diffResp.Body.Close()
-	diffBody, err := io.ReadAll(io.LimitReader(diffResp.Body, 512<<10)) // 512KB max
+	diffBody, err := io.ReadAll(io.LimitReader(diffResp.Body, 2<<20)) // 2MB max from API
 	if err != nil {
 		return registry.Result{}, fmt.Errorf("read PR diff: %w", err)
 	}
@@ -691,9 +692,6 @@ func (t PRDiffTool) Execute(ctx context.Context, raw json.RawMessage, _ registry
 	}
 
 	diff := string(diffBody)
-	if len(diff) > 100000 {
-		diff = diff[:100000] + "\n\n... [diff truncated, showing first 100KB] ..."
-	}
 
 	// Build output
 	var out strings.Builder
