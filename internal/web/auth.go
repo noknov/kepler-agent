@@ -178,8 +178,8 @@ func newAuthHandlers(bot BotMessenger, sessions *sessionStore, allowedUsers []st
 		sessions:     sessions,
 		otps:         newOTPStore(),
 		allowedUsers: allowed,
-		sendLimit:   newRateLimiter(1, time.Minute),
-		verifyLimit: newRateLimiter(1, time.Minute),
+		sendLimit:    newRateLimiter(1, time.Minute),
+		verifyLimit:  newRateLimiter(1, time.Minute),
 	}
 }
 
@@ -243,6 +243,7 @@ func (h *authHandlers) handleVerifyCode(w http.ResponseWriter, r *http.Request) 
 		Value:    sessionID,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   isHTTPSRequest(r),
 		SameSite: http.SameSiteLaxMode,
 		// No MaxAge/Expires → session cookie; gone when browser closes.
 	})
@@ -260,6 +261,7 @@ func (h *authHandlers) handleSignOut(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
+		Secure:   isHTTPSRequest(r),
 	})
 	http.Redirect(w, r, "/", http.StatusFound)
 }
@@ -277,6 +279,16 @@ func writeAuthJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func isHTTPSRequest(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if r.TLS != nil {
+		return true
+	}
+	return r.Header.Get("X-Forwarded-Proto") == "https"
 }
 
 func randomToken(n int) string {

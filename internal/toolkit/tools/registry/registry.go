@@ -92,7 +92,8 @@ type DeferredTool interface {
 }
 
 type CapabilityPolicy struct {
-	AllowWrites bool
+	AllowWrites       bool
+	AllowedWriteTools map[string]bool
 }
 
 const (
@@ -146,6 +147,18 @@ func NewWithPolicy(policy CapabilityPolicy) *Registry {
 // Execute still refuses write tools as a defense-in-depth fallback for stale contexts.
 func NewReadOnly() *Registry {
 	return NewWithPolicy(CapabilityPolicy{AllowWrites: false})
+}
+
+// NewReadOnlyWithAllowedWrites creates a registry that hides write tools except
+// for explicit, product-approved exceptions.
+func NewReadOnlyWithAllowedWrites(names ...string) *Registry {
+	allowed := make(map[string]bool, len(names))
+	for _, name := range names {
+		if name != "" {
+			allowed[name] = true
+		}
+	}
+	return NewWithPolicy(CapabilityPolicy{AllowedWriteTools: allowed})
 }
 
 func (r *Registry) Register(tool Tool) {
@@ -204,7 +217,7 @@ func (r *Registry) ActivateTool(name string) bool {
 	if !ok {
 		return false
 	}
-	if !r.canExpose(tool) {
+	if !r.canExpose(name, tool) {
 		return false
 	}
 	r.tools[name] = tool
@@ -220,7 +233,7 @@ func (r *Registry) DeferredCategories() []string {
 		}
 		pending := 0
 		for _, name := range names {
-			if tool, ok := r.deferred[name]; ok && r.canExpose(tool) {
+			if tool, ok := r.deferred[name]; ok && r.canExpose(name, tool) {
 				pending++
 			}
 		}
@@ -236,7 +249,7 @@ func (r *Registry) DeferredToolNames(category string) []string {
 	names := append([]string(nil), r.categories[category]...)
 	pending := make([]string, 0, len(names))
 	for _, name := range names {
-		if tool, ok := r.deferred[name]; ok && r.canExpose(tool) {
+		if tool, ok := r.deferred[name]; ok && r.canExpose(name, tool) {
 			pending = append(pending, name)
 		}
 	}
@@ -256,7 +269,7 @@ func (r *Registry) Specs() []llm.ToolSpec {
 func (r *Registry) Names() []string {
 	names := make([]string, 0, len(r.tools))
 	for name, tool := range r.tools {
-		if !r.canExpose(tool) {
+		if !r.canExpose(name, tool) {
 			continue
 		}
 		names = append(names, name)
@@ -275,14 +288,17 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 	if !ok {
 		return Result{}, fmt.Errorf("unknown tool %q", name)
 	}
-	if !r.policy.AllowWrites && IsWriteOp(tool) {
+	if !r.canExpose(name, tool) {
 		return Result{}, fmt.Errorf("tool %q is a write operation and is disabled by server capability policy", name)
 	}
 	return tool.Execute(ctx, args, rt)
 }
 
-func (r *Registry) canExpose(tool Tool) bool {
-	return r.policy.AllowWrites || !IsWriteOp(tool)
+func (r *Registry) canExpose(name string, tool Tool) bool {
+	if !IsWriteOp(tool) {
+		return true
+	}
+	return r.policy.AllowWrites || r.policy.AllowedWriteTools[name]
 }
 
 func (r *Registry) IsRepeatable(name string) bool {

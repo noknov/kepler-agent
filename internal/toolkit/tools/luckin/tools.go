@@ -33,6 +33,8 @@ func (t MCPTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(t.LocalName, t.Description, t.Parameters)
 }
 
+func (t MCPTool) IsWrite() bool { return t.SideEffect }
+
 func (t MCPTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
 	if t.Client == nil || !t.Client.enabled() {
 		return registry.Result{}, fmt.Errorf("Luckin MCP is not configured: LUCKIN_MCP_TOKEN is required")

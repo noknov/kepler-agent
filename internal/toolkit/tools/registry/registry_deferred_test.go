@@ -78,6 +78,28 @@ func TestReadOnlyRegistryDoesNotExposeWriteTools(t *testing.T) {
 	}
 }
 
+func TestReadOnlyRegistryAllowsExplicitWriteTools(t *testing.T) {
+	reg := NewReadOnlyWithAllowedWrites("approved-write-tool")
+	reg.Register(stubWriteTool{stubTool{name: "approved-write-tool"}})
+	reg.Register(stubWriteTool{stubTool{name: "blocked-write-tool"}})
+	reg.RegisterDeferred(AsDeferred(CategoryIntegration, stubWriteTool{stubTool{name: "approved-deferred-write-tool"}}))
+	reg.policy.AllowedWriteTools["approved-deferred-write-tool"] = true
+
+	names := reg.Names()
+	if len(names) != 1 || names[0] != "approved-write-tool" {
+		t.Fatalf("Names() = %#v, want only approved-write-tool", names)
+	}
+	if _, err := reg.Execute(context.Background(), "approved-write-tool", nil, Runtime{}); err != nil {
+		t.Fatalf("approved write execution failed: %v", err)
+	}
+	if _, err := reg.Execute(context.Background(), "blocked-write-tool", nil, Runtime{}); err == nil {
+		t.Fatal("blocked write execution should fail")
+	}
+	if !reg.ActivateTool("approved-deferred-write-tool") {
+		t.Fatal("approved deferred write tool should activate")
+	}
+}
+
 func TestToolSearchListAndActivate(t *testing.T) {
 	reg := New()
 	reg.RegisterDeferred(AsDeferred(CategoryBrowser, stubTool{name: "pw-snapshot"}))
