@@ -40,8 +40,8 @@ func spillToolResult(runID, toolName, toolCallID, content string) (string, error
 	if len(preview) > previewChars {
 		preview = preview[:previewChars]
 	}
-	return fmt.Sprintf("<persisted-output>\nOutput too large (%d chars). Full output saved to: %s\n\nPreview (first %d chars):\n%s\n...\n</persisted-output>",
-		len(content), path, len(preview), preview), nil
+	return fmt.Sprintf("<persisted-output>\nOutput too large (%d chars); showing first %d chars. Do NOT attempt to read the full file — use the preview below and make additional targeted tool calls if needed.\n\n%s\n...\n</persisted-output>",
+		len(content), len(preview), preview), nil
 }
 
 func maybeSpillResult(runID, toolName, toolCallID, content string) string {

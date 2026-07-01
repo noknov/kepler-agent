@@ -40,6 +40,13 @@ func (c Client) httpClient() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second}
 }
 
+func (c Client) logHTTPClient() *http.Client {
+	if c.HTTP != nil {
+		return c.HTTP
+	}
+	return &http.Client{Timeout: 90 * time.Second}
+}
+
 func (c Client) baseURL() string {
 	baseURL := strings.TrimRight(strings.TrimSpace(c.APIBaseURL), "/")
 	if baseURL == "" {
@@ -505,11 +512,7 @@ func (c Client) fetchJobLog(ctx context.Context, owner, repo string, jobID int64
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 
-	client := c.httpClient()
-	// Follow redirects manually so we can stream the log body.
-	client.CheckRedirect = func(r *http.Request, via []*http.Request) error {
-		return nil
-	}
+	client := c.logHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
