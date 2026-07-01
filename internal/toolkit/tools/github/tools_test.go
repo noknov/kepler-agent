@@ -176,6 +176,38 @@ func TestJobLogsTool_DirectJobID(t *testing.T) {
 	}
 }
 
+func TestJobLogsTool_StringRunID(t *testing.T) {
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(r.URL.Path, "/jobs") {
+			return response(http.StatusOK, `{"jobs":[
+				{"id":300,"name":"test","status":"completed","conclusion":"failure","steps":[]}
+			]}`), nil
+		}
+		if strings.Contains(r.URL.Path, "/jobs/300/logs") {
+			return response(http.StatusOK, "FAIL test\n"), nil
+		}
+		t.Fatalf("unexpected path: %s", r.URL.Path)
+		return nil, nil
+	})
+
+	tool := JobLogsTool{Client: Client{
+		Token:      "ghp-test",
+		APIBaseURL: "https://api.github.test",
+		Owner:      "example",
+		Repo:       "myrepo",
+		HTTP:       &http.Client{Transport: transport},
+	}}
+	// LLMs often pass numbers as strings
+	result, err := tool.Execute(context.Background(),
+		json.RawMessage(`{"run_id":"28497898370"}`), registry.Runtime{})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.Contains(result.Content, "FAIL test") {
+		t.Fatalf("expected log content, got: %s", result.Content)
+	}
+}
+
 func TestExtractFailureSection_Short(t *testing.T) {
 	log := "line1\nline2\nFAIL something\nline4\n"
 	result := extractFailureSection(log)
