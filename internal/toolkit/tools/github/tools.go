@@ -383,9 +383,9 @@ func (t JobLogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 		return registry.Result{}, fmt.Errorf("GitHub is not configured: GITHUB_TOKEN is required")
 	}
 	var args struct {
-		Repository string `json:"repository"`
-		RunID      int64  `json:"run_id"`
-		JobID      int64  `json:"job_id"`
+		Repository string      `json:"repository"`
+		RunID      json.Number `json:"run_id"`
+		JobID      json.Number `json:"job_id"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
@@ -397,7 +397,9 @@ func (t JobLogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 	if repository == "" {
 		return registry.Result{}, fmt.Errorf("repository is required")
 	}
-	if args.RunID <= 0 {
+	runID, _ := args.RunID.Int64()
+	jobID, _ := args.JobID.Int64()
+	if runID <= 0 {
 		return registry.Result{}, fmt.Errorf("run_id is required")
 	}
 	owner, repo, err := splitRepository(repository)
@@ -406,8 +408,8 @@ func (t JobLogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 	}
 
 	// If a specific job_id is provided, fetch its log directly.
-	if args.JobID > 0 {
-		log, err := t.Client.fetchJobLog(ctx, owner, repo, args.JobID)
+	if jobID > 0 {
+		log, err := t.Client.fetchJobLog(ctx, owner, repo, jobID)
 		if err != nil {
 			return registry.Result{}, fmt.Errorf("fetch job log: %w", err)
 		}
@@ -415,7 +417,7 @@ func (t JobLogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 	}
 
 	// Otherwise list jobs for the run, find failed ones, and fetch their logs.
-	jobs, err := t.Client.listRunJobs(ctx, owner, repo, args.RunID)
+	jobs, err := t.Client.listRunJobs(ctx, owner, repo, runID)
 	if err != nil {
 		return registry.Result{}, fmt.Errorf("list run jobs: %w", err)
 	}
@@ -440,7 +442,7 @@ func (t JobLogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 	}
 
 	var out strings.Builder
-	fmt.Fprintf(&out, "Run %d: %d jobs total, %d failed\n\n", args.RunID, len(jobs), len(failed))
+	fmt.Fprintf(&out, "Run %d: %d jobs total, %d failed\n\n", runID, len(jobs), len(failed))
 
 	for i, j := range jobs {
 		marker := " "
