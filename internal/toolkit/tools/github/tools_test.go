@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -30,13 +31,7 @@ func TestDispatchWorkflowTool(t *testing.T) {
 		return response(http.StatusNoContent, ""), nil
 	})
 
-	tool := DispatchWorkflowTool{Client: Client{
-		Token:      "ghp-test",
-		APIBaseURL: "https://api.github.test",
-		Owner:      "example",
-		Repo:       "deployments",
-		HTTP:       &http.Client{Transport: transport},
-	}}
+	tool := DispatchWorkflowTool{Client: testClient("example", "deployments", transport)}
 
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{
 		"workflow":"deploy.yml",
@@ -60,13 +55,7 @@ func TestDispatchWorkflowExecutesDirectly(t *testing.T) {
 		called = true
 		return response(http.StatusNoContent, ""), nil
 	})
-	tool := DispatchWorkflowTool{Client: Client{
-		Token:      "ghp-test",
-		APIBaseURL: "https://api.github.test",
-		Owner:      "example",
-		Repo:       "deployments",
-		HTTP:       &http.Client{Transport: transport},
-	}}
+	tool := DispatchWorkflowTool{Client: testClient("example", "deployments", transport)}
 	raw := json.RawMessage(`{"workflow":"deploy.yml","ref":"main"}`)
 
 	result, err := tool.Execute(context.Background(), raw, registry.Runtime{})
@@ -89,13 +78,7 @@ func TestWorkflowRunsTool(t *testing.T) {
 		return response(http.StatusOK, `{"workflow_runs":[{"id":123,"name":"deploy","head_branch":"main","head_sha":"abcdef123","status":"completed","conclusion":"success","event":"workflow_dispatch","html_url":"https://github.test/run","created_at":"now"}]}`), nil
 	})
 
-	tool := WorkflowRunsTool{Client: Client{
-		Token:      "ghp-test",
-		APIBaseURL: "https://api.github.test",
-		Owner:      "example",
-		Repo:       "deployments",
-		HTTP:       &http.Client{Transport: transport},
-	}}
+	tool := WorkflowRunsTool{Client: testClient("example", "deployments", transport)}
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{"workflow":"all.yml","branch":"main","limit":2}`), registry.Runtime{})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -125,13 +108,8 @@ func TestJobLogsTool_ListsAndFetchesFailedJobs(t *testing.T) {
 		return nil, nil
 	})
 
-	tool := JobLogsTool{Client: Client{
-		Token:      "ghp-test",
-		APIBaseURL: "https://api.github.test",
-		Owner:      "example",
-		Repo:       "myrepo",
-		HTTP:       &http.Client{Transport: transport},
-	}}
+	tool := JobLogsTool{Client: testClient("example", "myrepo", transport)}
+
 	result, err := tool.Execute(context.Background(),
 		json.RawMessage(`{"run_id":999}`), registry.Runtime{})
 	if err != nil {
@@ -159,13 +137,8 @@ func TestJobLogsTool_DirectJobID(t *testing.T) {
 		return response(http.StatusOK, "error: build failed\n"), nil
 	})
 
-	tool := JobLogsTool{Client: Client{
-		Token:      "ghp-test",
-		APIBaseURL: "https://api.github.test",
-		Owner:      "example",
-		Repo:       "myrepo",
-		HTTP:       &http.Client{Transport: transport},
-	}}
+	tool := JobLogsTool{Client: testClient("example", "myrepo", transport)}
+
 	result, err := tool.Execute(context.Background(),
 		json.RawMessage(`{"run_id":999,"job_id":42}`), registry.Runtime{})
 	if err != nil {
@@ -190,14 +163,8 @@ func TestJobLogsTool_StringRunID(t *testing.T) {
 		return nil, nil
 	})
 
-	tool := JobLogsTool{Client: Client{
-		Token:      "ghp-test",
-		APIBaseURL: "https://api.github.test",
-		Owner:      "example",
-		Repo:       "myrepo",
-		HTTP:       &http.Client{Transport: transport},
-	}}
-	// LLMs often pass numbers as strings
+	tool := JobLogsTool{Client: testClient("example", "myrepo", transport)}
+
 	result, err := tool.Execute(context.Background(),
 		json.RawMessage(`{"run_id":"28497898370"}`), registry.Runtime{})
 	if err != nil {
@@ -208,59 +175,104 @@ func TestJobLogsTool_StringRunID(t *testing.T) {
 	}
 }
 
-func TestExtractFailureSection_Short(t *testing.T) {
-	log := "line1\nline2\nFAIL something\nline4\n"
-	result := extractFailureSection(log)
-	if result != log {
-		t.Fatalf("short logs should be returned as-is, got: %s", result)
+func TestPaginateLog_DefaultTail(t *testing.T) {
+	var lines []string
+	for i := 1; i <= 500; i++ {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	content := strings.Join(lines, "\n")
+	result := paginateLog(content, 0, 200)
+
+	if !strings.Contains(result, "lines 301-500 of 500 total") {
+		t.Fatalf("expected tail position header, got: %s", result[:80])
+	}
+	if !strings.Contains(result, "line 500") {
+		t.Fatal("should contain the last line")
+	}
+	if strings.Contains(result, "line 1\n") {
+		t.Fatal("should not contain the first line")
 	}
 }
 
-func TestExtractFailureSection_Long(t *testing.T) {
+func TestPaginateLog_StartLine(t *testing.T) {
 	var lines []string
-	for i := 0; i < 1000; i++ {
-		lines = append(lines, "ok line")
+	for i := 1; i <= 100; i++ {
+		lines = append(lines, fmt.Sprintf("line %d", i))
 	}
-	lines[500] = "FAIL TestFoo: expected 1 got 2"
-	log := strings.Join(lines, "\n")
-	result := extractFailureSection(log)
-	if !strings.Contains(result, "FAIL TestFoo") {
-		t.Fatal("should contain failure line")
+	content := strings.Join(lines, "\n")
+	result := paginateLog(content, 10, 20)
+
+	if !strings.Contains(result, "lines 10-29 of 100 total") {
+		t.Fatalf("expected correct position header, got: %s", result[:60])
 	}
-	if len(strings.Split(result, "\n")) >= 900 {
-		t.Fatalf("should have trimmed output, got %d lines", len(strings.Split(result, "\n")))
+	if !strings.Contains(result, "line 10") || !strings.Contains(result, "line 29") {
+		t.Fatal("should contain requested range")
 	}
 }
 
-func TestExtractFailureSection_DotNetBuildWarnings(t *testing.T) {
+func TestPaginateLog_NegativeStartLine(t *testing.T) {
 	var lines []string
-	// Simulate .NET build warnings (contain "error" in warning codes like CS8632)
-	for i := 0; i < 500; i++ {
-		lines = append(lines, "  /home/runner/work/repo/file.cs(1,1): warning CS8632: The annotation for nullable reference types")
+	for i := 1; i <= 100; i++ {
+		lines = append(lines, fmt.Sprintf("line %d", i))
 	}
-	// Actual test failure at the end
-	lines = append(lines, "  [xUnit.net 00:00:18.76]     MyTests.TestFoo [FAIL]")
-	lines = append(lines, "  Failed MyTests.TestFoo [8 s]")
-	lines = append(lines, "  Error Message:")
-	lines = append(lines, "   Expected outcome.IsSuccess to be true, but found False.")
-	lines = append(lines, "  Stack Trace:")
-	lines = append(lines, "     at FluentAssertions.Execution.XUnit2TestFramework.Throw(String message)")
-	for i := 0; i < 10; i++ {
-		lines = append(lines, "ok trailing line")
-	}
-	log := strings.Join(lines, "\n")
-	result := extractFailureSection(log)
+	content := strings.Join(lines, "\n")
+	result := paginateLog(content, -50, 30)
 
-	if !strings.Contains(result, "[FAIL]") {
-		t.Fatal("should contain [FAIL] marker")
+	if !strings.Contains(result, "lines 51-80 of 100 total") {
+		t.Fatalf("expected correct position header, got: %s", result[:60])
 	}
-	if !strings.Contains(result, "Error Message:") {
-		t.Fatal("should contain Error Message")
+}
+
+func TestPaginateLog_ShortLog(t *testing.T) {
+	content := "line 1\nline 2\nline 3"
+	result := paginateLog(content, 0, 200)
+
+	if !strings.Contains(result, "lines 1-3 of 3 total") {
+		t.Fatalf("short log should return all lines, got: %s", result)
 	}
-	// Should NOT include hundreds of build warning lines
-	warningCount := strings.Count(result, "CS8632")
-	if warningCount > 20 {
-		t.Fatalf("should not include bulk build warnings, got %d occurrences", warningCount)
+	if strings.Contains(result, "start_line=1") {
+		t.Fatal("should not suggest start_line when showing from beginning")
+	}
+}
+
+func TestJobLogsTool_Pagination(t *testing.T) {
+	var lines []string
+	for i := 1; i <= 300; i++ {
+		lines = append(lines, fmt.Sprintf("log line %d", i))
+	}
+	logContent := strings.Join(lines, "\n")
+
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.Contains(r.URL.Path, "/jobs/42/logs") {
+			return response(http.StatusOK, logContent), nil
+		}
+		t.Fatalf("unexpected path: %s", r.URL.Path)
+		return nil, nil
+	})
+
+	tool := JobLogsTool{Client: testClient("example", "myrepo", transport)}
+
+	// First call: default tail
+	result, err := tool.Execute(context.Background(),
+		json.RawMessage(`{"run_id":999,"job_id":42}`), registry.Runtime{})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.Contains(result.Content, "lines 101-300 of 300 total") {
+		t.Fatalf("expected tail pagination, got: %s", result.Content[:80])
+	}
+
+	// Second call: request beginning
+	result, err = tool.Execute(context.Background(),
+		json.RawMessage(`{"run_id":999,"job_id":42,"start_line":1,"max_lines":100}`), registry.Runtime{})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.Contains(result.Content, "lines 1-100 of 300 total") {
+		t.Fatalf("expected head pagination, got: %s", result.Content[:80])
+	}
+	if !strings.Contains(result.Content, "log line 1") {
+		t.Fatal("should contain first line")
 	}
 }
 
@@ -270,16 +282,26 @@ func TestResolveWorkflow(t *testing.T) {
 	}
 }
 
+// test helpers
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
-func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
-	return f(r)
-}
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func response(status int, body string) *http.Response {
 	return &http.Response{
 		StatusCode: status,
 		Body:       io.NopCloser(bytes.NewBufferString(body)),
 		Header:     http.Header{},
+	}
+}
+
+func testClient(owner, repo string, transport roundTripFunc) Client {
+	return Client{
+		Token:      "ghp-test",
+		APIBaseURL: "https://api.github.test",
+		Owner:      owner,
+		Repo:       repo,
+		HTTP:       &http.Client{Transport: transport},
 	}
 }

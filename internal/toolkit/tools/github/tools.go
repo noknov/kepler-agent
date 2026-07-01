@@ -360,9 +360,16 @@ func summarizeRuns(runs []workflowRun) string {
 }
 
 // JobLogsTool fetches GitHub Actions job logs for a specific workflow run.
+// Supports pagination via start_line and max_lines so the LLM can browse
+// through large logs in multiple calls.
 type JobLogsTool struct {
 	Client Client
 }
+
+const (
+	defaultLogPageLines = 200
+	maxLogPageLines     = 500
+)
 
 func (JobLogsTool) Parallel() bool { return true }
 
@@ -374,6 +381,8 @@ func (t JobLogsTool) Spec() llm.ToolSpec {
 			"repository": map[string]any{"type": "string", "description": ""},
 			"run_id":     map[string]any{"type": "integer", "description": ""},
 			"job_id":     map[string]any{"type": "integer", "description": ""},
+			"start_line": map[string]any{"type": "integer", "description": ""},
+			"max_lines":  map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }
@@ -386,6 +395,8 @@ func (t JobLogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 		Repository string      `json:"repository"`
 		RunID      json.Number `json:"run_id"`
 		JobID      json.Number `json:"job_id"`
+		StartLine  json.Number `json:"start_line"`
+		MaxLines   json.Number `json:"max_lines"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
@@ -402,21 +413,30 @@ func (t JobLogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 	if runID <= 0 {
 		return registry.Result{}, fmt.Errorf("run_id is required")
 	}
+	startLine, _ := args.StartLine.Int64()
+	maxLines, _ := args.MaxLines.Int64()
+	if maxLines <= 0 {
+		maxLines = defaultLogPageLines
+	}
+	if maxLines > maxLogPageLines {
+		maxLines = maxLogPageLines
+	}
+
 	owner, repo, err := splitRepository(repository)
 	if err != nil {
 		return registry.Result{}, err
 	}
 
-	// If a specific job_id is provided, fetch its log directly.
+	// If a specific job_id is provided, fetch and paginate its log.
 	if jobID > 0 {
-		log, err := t.Client.fetchJobLog(ctx, owner, repo, jobID)
+		content, err := t.Client.fetchJobLog(ctx, owner, repo, jobID)
 		if err != nil {
 			return registry.Result{}, fmt.Errorf("fetch job log: %w", err)
 		}
-		return registry.Result{Content: log}, nil
+		return registry.Result{Content: paginateLog(content, int(startLine), int(maxLines))}, nil
 	}
 
-	// Otherwise list jobs for the run, find failed ones, and fetch their logs.
+	// Otherwise list jobs for the run.
 	jobs, err := t.Client.listRunJobs(ctx, owner, repo, runID)
 	if err != nil {
 		return registry.Result{}, fmt.Errorf("list run jobs: %w", err)
@@ -435,8 +455,6 @@ func (t JobLogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 	if len(targets) == 0 {
 		targets = jobs
 	}
-
-	// Cap at 3 jobs to keep output manageable.
 	if len(targets) > 3 {
 		targets = targets[:3]
 	}
@@ -459,15 +477,57 @@ func (t JobLogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 	}
 
 	for _, j := range targets {
-		log, err := t.Client.fetchJobLog(ctx, owner, repo, j.ID)
+		content, err := t.Client.fetchJobLog(ctx, owner, repo, j.ID)
 		if err != nil {
 			fmt.Fprintf(&out, "\n--- %s (id=%d) ---\nerror fetching log: %v\n", j.Name, j.ID, err)
 			continue
 		}
-		fmt.Fprintf(&out, "\n--- %s (id=%d) ---\n%s\n", j.Name, j.ID, log)
+		fmt.Fprintf(&out, "\n--- %s (id=%d) ---\n%s\n", j.Name, j.ID, paginateLog(content, int(startLine), int(maxLines)))
 	}
 
 	return registry.Result{Content: out.String()}, nil
+}
+
+// paginateLog slices a log string into a page of lines.
+// If startLine is 0, defaults to showing the tail (last maxLines lines).
+// If startLine is negative, counts from the end (-1 = last line).
+// Returns the page content prefixed with a position header.
+func paginateLog(content string, startLine, maxLines int) string {
+	lines := strings.Split(content, "\n")
+	total := len(lines)
+
+	if startLine == 0 {
+		// Default: show tail
+		startLine = total - maxLines + 1
+		if startLine < 1 {
+			startLine = 1
+		}
+	} else if startLine < 0 {
+		startLine = total + startLine + 1
+		if startLine < 1 {
+			startLine = 1
+		}
+	}
+
+	// Clamp to valid range (1-based).
+	if startLine > total {
+		startLine = total
+	}
+	endLine := startLine + maxLines - 1
+	if endLine > total {
+		endLine = total
+	}
+
+	slice := lines[startLine-1 : endLine]
+
+	var out strings.Builder
+	fmt.Fprintf(&out, "[lines %d-%d of %d total]", startLine, endLine, total)
+	if startLine > 1 {
+		fmt.Fprintf(&out, " (use start_line=1 to see from the beginning)")
+	}
+	out.WriteString("\n")
+	out.WriteString(strings.Join(slice, "\n"))
+	return out.String()
 }
 
 type runJob struct {
@@ -529,108 +589,7 @@ func (c Client) fetchJobLog(ctx context.Context, owner, repo string, jobID int64
 		return "", fmt.Errorf("github status %d: %s", resp.StatusCode, truncate(string(data), 500))
 	}
 
-	log := string(data)
-	log = extractFailureSection(log)
-	if len(log) > 12000 {
-		log = log[len(log)-12000:]
-		if idx := strings.Index(log, "\n"); idx >= 0 {
-			log = log[idx+1:]
-		}
-		log = "... [log trimmed, showing tail] ...\n" + log
-	}
-	return log, nil
-}
-
-// extractFailureSection tries to extract the most relevant parts of a CI log.
-// It uses a two-tier pattern strategy: first tries high-precision test failure
-// markers, then falls back to broader patterns. If nothing matches, returns
-// the tail of the log where test results typically appear.
-func extractFailureSection(log string) string {
-	lines := strings.Split(log, "\n")
-	if len(lines) <= 400 {
-		return log
-	}
-
-	// Tier 1: high-precision test failure markers (won't match build warnings).
-	tier1 := []string{
-		"[FAIL]", "FAILED", "##[error]",
-		"Error Message:", "Stack Trace:", "Assert",
-		"Result:         Failed",
-		"Failed!", "FAIL ",
-	}
-	// Tier 2: broader patterns, used only if tier 1 finds nothing.
-	tier2 := []string{
-		"Exception", "Expected", "expected",
-		"error:", "Error:",
-	}
-
-	regions := matchRegions(lines, tier1)
-	if len(regions) == 0 {
-		regions = matchRegions(lines, tier2)
-	}
-	if len(regions) == 0 {
-		tail := lines[len(lines)-400:]
-		return strings.Join(tail, "\n")
-	}
-
-	merged := mergeRegions(regions)
-
-	var out strings.Builder
-	totalLines := 0
-	for _, r := range merged {
-		if totalLines > 600 {
-			out.WriteString("\n... [additional failure context truncated] ...\n")
-			break
-		}
-		if out.Len() > 0 {
-			out.WriteString("\n...\n\n")
-		}
-		chunk := lines[r.start:r.end]
-		out.WriteString(strings.Join(chunk, "\n"))
-		totalLines += len(chunk)
-	}
-	return out.String()
-}
-
-type logRegion struct{ start, end int }
-
-func matchRegions(lines []string, patterns []string) []logRegion {
-	var regions []logRegion
-	for i, line := range lines {
-		for _, pat := range patterns {
-			if strings.Contains(line, pat) {
-				start := i - 10
-				if start < 0 {
-					start = 0
-				}
-				end := i + 20
-				if end > len(lines) {
-					end = len(lines)
-				}
-				regions = append(regions, logRegion{start, end})
-				break
-			}
-		}
-	}
-	return regions
-}
-
-func mergeRegions(regions []logRegion) []logRegion {
-	if len(regions) == 0 {
-		return nil
-	}
-	merged := []logRegion{regions[0]}
-	for _, r := range regions[1:] {
-		last := &merged[len(merged)-1]
-		if r.start <= last.end {
-			if r.end > last.end {
-				last.end = r.end
-			}
-		} else {
-			merged = append(merged, r)
-		}
-	}
-	return merged
+	return string(data), nil
 }
 
 func truncate(s string, n int) string {
