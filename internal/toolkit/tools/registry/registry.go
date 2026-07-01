@@ -97,9 +97,10 @@ type CapabilityPolicy struct {
 }
 
 const (
-	CategoryDiagnostics = "diagnostics"
-	CategoryBrowser     = "browser"
-	CategoryIntegration = "integration"
+	CategoryDiagnostics    = "diagnostics"
+	CategoryBrowser        = "browser"
+	CategoryIntegration    = "integration"
+	CategoryInfrastructure = "infrastructure"
 )
 
 func IsRepeatable(tool Tool) bool {

@@ -15,6 +15,7 @@ import (
 	gcpTools "github.com/wati/oncall-agent/internal/toolkit/tools/gcp"
 	gitTools "github.com/wati/oncall-agent/internal/toolkit/tools/git"
 	githubTools "github.com/wati/oncall-agent/internal/toolkit/tools/github"
+	k8sTools "github.com/wati/oncall-agent/internal/toolkit/tools/k8s"
 	knowledgeTools "github.com/wati/oncall-agent/internal/toolkit/tools/knowledge"
 	luckinTools "github.com/wati/oncall-agent/internal/toolkit/tools/luckin"
 	notionTools "github.com/wati/oncall-agent/internal/toolkit/tools/notion"
@@ -23,17 +24,19 @@ import (
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 	skillTools "github.com/wati/oncall-agent/internal/toolkit/tools/skills"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/slacktool"
+	ttsTools "github.com/wati/oncall-agent/internal/toolkit/tools/tts"
 	webSearchTools "github.com/wati/oncall-agent/internal/toolkit/tools/websearch"
 	youtrackTools "github.com/wati/oncall-agent/internal/toolkit/tools/youtrack"
 )
 
 func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) *registry.Registry {
-	tools := registry.NewReadOnlyWithAllowedWrites("luckin-create_order", "luckin-cancel_order")
+	tools := registry.NewReadOnlyWithAllowedWrites("luckin-create_order", "luckin-cancel_order", "slack-create_canvas", "tts-speak")
 	registerDeferredDiagnosticsTools(tools)
+	registerDeferredK8sTools(tools, cfg, commandPolicy)
 	registerCodeTools(tools, cfg, workspacePolicy, commandPolicy)
 	registerIntegrationTools(tools, cfg, commandPolicy)
 	registerKnowledgeTools(tools, cfg)
-	registerSlackTools(tools, slackClient)
+	registerSlackTools(tools, slackClient, cfg)
 	registerAgentControlTools(tools, cfg, llmClient, secondaryClient, secondaryModel)
 	tools.Register(registry.ToolSearchTool{Registry: tools})
 	return tools
@@ -137,11 +140,42 @@ func registerKnowledgeTools(tools *registry.Registry, cfg config.Config) {
 	tools.Register(knowledgeTools.RunbookSearchTool{})
 }
 
-func registerSlackTools(tools *registry.Registry, slackClient *slack.Client) {
+func registerDeferredK8sTools(tools *registry.Registry, cfg config.Config, commandPolicy safety.CommandPolicy) {
+	base := k8sTools.Base{
+		KubectlPath:    cfg.Tools.KubectlPath,
+		DefaultContext: cfg.Tools.K8sDefaultContext,
+		DefaultCluster: cfg.Tools.K8sDefaultCluster,
+		Guard:          commandPolicy,
+		Timeout:        cfg.Tools.CommandTimeout,
+	}
+	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryInfrastructure, k8sTools.GetPodsTool{Base: base}))
+	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryInfrastructure, k8sTools.DescribeTool{Base: base}))
+	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryInfrastructure, k8sTools.LogsTool{Base: base}))
+	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryInfrastructure, k8sTools.TopTool{Base: base}))
+}
+
+func registerSlackTools(tools *registry.Registry, slackClient *slack.Client, cfg config.Config) {
 	tools.Register(slacktool.AskUserTool{Slack: slackClient})
 	tools.Register(slacktool.FileSearchTool{Slack: slackClient})
 	tools.Register(slacktool.JSONAnalyzeTool{Slack: slackClient})
 	tools.Register(slacktool.SendScreenshotTool{Slack: slackClient})
+	tools.Register(slacktool.CreateCanvasTool{Slack: slackClient})
+
+	if cfg.Tools.TTSAPIKey != "" {
+		tools.Register(ttsTools.SpeakTool{
+			Slack:   slackClient,
+			APIKey:  cfg.Tools.TTSAPIKey,
+			BaseURL: cfg.Tools.TTSBaseURL,
+			Model:   cfg.Tools.TTSModel,
+		})
+	} else {
+		tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, ttsTools.SpeakTool{
+			Slack:   slackClient,
+			APIKey:  cfg.Tools.TTSAPIKey,
+			BaseURL: cfg.Tools.TTSBaseURL,
+			Model:   cfg.Tools.TTSModel,
+		}))
+	}
 }
 
 func registerAgentControlTools(tools *registry.Registry, cfg config.Config, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string) {
