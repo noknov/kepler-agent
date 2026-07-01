@@ -108,6 +108,7 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 	tools.Register(githubTools.DispatchWorkflowTool{Client: githubClient})
 	tools.Register(githubTools.WorkflowRunsTool{Client: githubClient})
 	tools.Register(githubTools.PRDiffTool{Client: githubClient})
+	tools.Register(githubTools.JobLogsTool{Client: githubClient})
 
 	luckinTools.RegisterDeferredAll(tools, &luckinTools.Client{
 		MCP: &mcp.Client{

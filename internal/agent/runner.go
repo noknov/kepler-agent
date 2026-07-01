@@ -183,6 +183,7 @@ var evidenceTools = map[string]bool{
 	"k8s-top":                    true,
 	"github-workflow_runs":       true,
 	"github-pr_diff":             true,
+	"github-job_logs":            true,
 	"slack-file_search":          true,
 	"slack-json_analyze":         true,
 	"diagnostics-incident_brief": true,
@@ -282,6 +283,9 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		req.RunID = runs.NewID()
 	}
 	messages := append([]llm.Message(nil), req.Messages...)
+	if hint := localeHint(req.Locale); hint != "" {
+		messages = append(messages, llm.Message{Role: "system", Content: hint})
+	}
 	var generated []llm.Message
 	seenToolCalls := map[string]int{}
 	seenSearchTerms := map[string]int{}
@@ -831,7 +835,7 @@ var intentToolHints = []struct {
 	terms []string
 	tools []string
 }{
-	{[]string{"github", "workflow", "ci", "action", "pull request", "pr", "deploy", "工作流", "流水线", "构建", "部署", "拉取请求"}, []string{"github-workflow_runs", "github-pr_diff", "github-dispatch_workflow"}},
+	{[]string{"github", "workflow", "ci", "action", "pull request", "pr", "deploy", "工作流", "流水线", "构建", "部署", "拉取请求"}, []string{"github-workflow_runs", "github-pr_diff", "github-dispatch_workflow", "github-job_logs"}},
 	{[]string{"branch", "commit", "ref", "revision", "sha", "tag", "remote", "分支", "提交", "版本", "远程"}, []string{"repo-search", "repo-read_file", "git-fetch_ref", "git-search_ref", "git-read_file_ref"}},
 	{[]string{"log", "gcp", "cloud logging", "k8s", "gke", "pod", "namespace", "error rate", "kubectl", "kubernetes", "日志", "报错", "错误率", "命名空间", "集群", "容器", "重启"}, []string{"gcp-logs", "k8s-get_pods", "k8s-describe", "k8s-logs", "k8s-top", "diagnostics-incident_brief", "diagnostics-timeline", "diagnostics-evidence_board"}},
 	{[]string{"web", "url", "http", "docs", "page", "search internet", "网页", "网站", "文档", "搜索", "互联网"}, []string{"web-search", "web-read_page"}},
@@ -1011,6 +1015,15 @@ func (c *runnerControl) finishTurn(results []toolResult) {
 
 func requestLocale(locale string) string {
 	return strings.TrimSpace(locale)
+}
+
+func localeHint(locale string) string {
+	switch strings.TrimSpace(locale) {
+	case LocaleZH:
+		return "用户语言：中文。所有回复必须使用中文，代码、日志原文、文件路径除外。"
+	default:
+		return ""
+	}
 }
 
 type toolResult struct {
