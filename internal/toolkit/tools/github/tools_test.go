@@ -232,6 +232,38 @@ func TestExtractFailureSection_Long(t *testing.T) {
 	}
 }
 
+func TestExtractFailureSection_DotNetBuildWarnings(t *testing.T) {
+	var lines []string
+	// Simulate .NET build warnings (contain "error" in warning codes like CS8632)
+	for i := 0; i < 500; i++ {
+		lines = append(lines, "  /home/runner/work/repo/file.cs(1,1): warning CS8632: The annotation for nullable reference types")
+	}
+	// Actual test failure at the end
+	lines = append(lines, "  [xUnit.net 00:00:18.76]     MyTests.TestFoo [FAIL]")
+	lines = append(lines, "  Failed MyTests.TestFoo [8 s]")
+	lines = append(lines, "  Error Message:")
+	lines = append(lines, "   Expected outcome.IsSuccess to be true, but found False.")
+	lines = append(lines, "  Stack Trace:")
+	lines = append(lines, "     at FluentAssertions.Execution.XUnit2TestFramework.Throw(String message)")
+	for i := 0; i < 10; i++ {
+		lines = append(lines, "ok trailing line")
+	}
+	log := strings.Join(lines, "\n")
+	result := extractFailureSection(log)
+
+	if !strings.Contains(result, "[FAIL]") {
+		t.Fatal("should contain [FAIL] marker")
+	}
+	if !strings.Contains(result, "Error Message:") {
+		t.Fatal("should contain Error Message")
+	}
+	// Should NOT include hundreds of build warning lines
+	warningCount := strings.Count(result, "CS8632")
+	if warningCount > 20 {
+		t.Fatalf("should not include bulk build warnings, got %d occurrences", warningCount)
+	}
+}
+
 func TestResolveWorkflow(t *testing.T) {
 	if got := resolveWorkflow("custom.yml"); got != "custom.yml" {
 		t.Fatalf("resolveWorkflow(custom.yml) = %q", got)

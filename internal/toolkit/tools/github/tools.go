@@ -531,69 +531,54 @@ func (c Client) fetchJobLog(ctx context.Context, owner, repo string, jobID int64
 
 	log := string(data)
 	log = extractFailureSection(log)
-	if len(log) > 80000 {
-		log = log[:80000] + "\n\n... [log truncated at 80KB] ..."
+	if len(log) > 12000 {
+		log = log[len(log)-12000:]
+		if idx := strings.Index(log, "\n"); idx >= 0 {
+			log = log[idx+1:]
+		}
+		log = "... [log trimmed, showing tail] ...\n" + log
 	}
 	return log, nil
 }
 
-// extractFailureSection tries to extract the most relevant parts of a CI log:
-// failed step output and surrounding context. If no failure markers are found,
-// returns the tail of the log.
+// extractFailureSection tries to extract the most relevant parts of a CI log.
+// It uses a two-tier pattern strategy: first tries high-precision test failure
+// markers, then falls back to broader patterns. If nothing matches, returns
+// the tail of the log where test results typically appear.
 func extractFailureSection(log string) string {
 	lines := strings.Split(log, "\n")
 	if len(lines) <= 400 {
 		return log
 	}
 
-	// Look for common failure indicators and keep context around them.
-	type region struct{ start, end int }
-	var regions []region
-	failurePatterns := []string{
-		"FAIL", "FAILED", "Error", "error", "Exception",
-		"Assert", "assert", "Expected", "expected",
-		"##[error]",
+	// Tier 1: high-precision test failure markers (won't match build warnings).
+	tier1 := []string{
+		"[FAIL]", "FAILED", "##[error]",
+		"Error Message:", "Stack Trace:", "Assert",
+		"Result:         Failed",
+		"Failed!", "FAIL ",
 	}
-	for i, line := range lines {
-		for _, pat := range failurePatterns {
-			if strings.Contains(line, pat) {
-				start := i - 20
-				if start < 0 {
-					start = 0
-				}
-				end := i + 30
-				if end > len(lines) {
-					end = len(lines)
-				}
-				regions = append(regions, region{start, end})
-				break
-			}
-		}
+	// Tier 2: broader patterns, used only if tier 1 finds nothing.
+	tier2 := []string{
+		"Exception", "Expected", "expected",
+		"error:", "Error:",
 	}
 
+	regions := matchRegions(lines, tier1)
 	if len(regions) == 0 {
-		// No failure markers — return the last 400 lines.
-		return strings.Join(lines[len(lines)-400:], "\n")
+		regions = matchRegions(lines, tier2)
+	}
+	if len(regions) == 0 {
+		tail := lines[len(lines)-400:]
+		return strings.Join(tail, "\n")
 	}
 
-	// Merge overlapping regions.
-	merged := []region{regions[0]}
-	for _, r := range regions[1:] {
-		last := &merged[len(merged)-1]
-		if r.start <= last.end {
-			if r.end > last.end {
-				last.end = r.end
-			}
-		} else {
-			merged = append(merged, r)
-		}
-	}
+	merged := mergeRegions(regions)
 
-	// Cap total output.
 	var out strings.Builder
 	totalLines := 0
 	for _, r := range merged {
-		if totalLines > 2000 {
+		if totalLines > 600 {
 			out.WriteString("\n... [additional failure context truncated] ...\n")
 			break
 		}
@@ -605,6 +590,47 @@ func extractFailureSection(log string) string {
 		totalLines += len(chunk)
 	}
 	return out.String()
+}
+
+type logRegion struct{ start, end int }
+
+func matchRegions(lines []string, patterns []string) []logRegion {
+	var regions []logRegion
+	for i, line := range lines {
+		for _, pat := range patterns {
+			if strings.Contains(line, pat) {
+				start := i - 10
+				if start < 0 {
+					start = 0
+				}
+				end := i + 20
+				if end > len(lines) {
+					end = len(lines)
+				}
+				regions = append(regions, logRegion{start, end})
+				break
+			}
+		}
+	}
+	return regions
+}
+
+func mergeRegions(regions []logRegion) []logRegion {
+	if len(regions) == 0 {
+		return nil
+	}
+	merged := []logRegion{regions[0]}
+	for _, r := range regions[1:] {
+		last := &merged[len(merged)-1]
+		if r.start <= last.end {
+			if r.end > last.end {
+				last.end = r.end
+			}
+		} else {
+			merged = append(merged, r)
+		}
+	}
+	return merged
 }
 
 func truncate(s string, n int) string {
