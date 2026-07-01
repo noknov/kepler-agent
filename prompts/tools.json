@@ -91,6 +91,14 @@
       "pr": "Pull request number."
     }
   },
+  "github-job_logs": {
+    "description": "Fetch GitHub Actions job logs for a workflow run. Use when investigating CI/CD failures — extract run_id and optional job_id from the GitHub Actions URL. Lists all jobs in the run and fetches logs for failed jobs. Prefer this over github-pr_diff when the user asks about test failures, build errors, or CI status for a specific run.",
+    "parameters": {
+      "repository": "GitHub repository in owner/repo form. Defaults to configured repository when set.",
+      "run_id": "Workflow run ID from the GitHub Actions URL (the number after /actions/runs/).",
+      "job_id": "Optional specific job ID. If omitted, logs for all failed jobs in the run are returned."
+    }
+  },
   "skills-load": {
     "description": "Load the full instructions for an available skill by name. Call this before following that skill's workflow. Do not assume skill instructions until this tool returns them.",
     "parameters": {

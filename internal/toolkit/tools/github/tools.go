@@ -352,6 +352,263 @@ func summarizeRuns(runs []workflowRun) string {
 	return strings.Join(lines, "\n")
 }
 
+// JobLogsTool fetches GitHub Actions job logs for a specific workflow run.
+type JobLogsTool struct {
+	Client Client
+}
+
+func (JobLogsTool) Parallel() bool { return true }
+
+func (t JobLogsTool) Spec() llm.ToolSpec {
+	return registry.FunctionSpec(
+		"github-job_logs",
+		"",
+		registry.ObjectSchema([]string{"run_id"}, map[string]any{
+			"repository": map[string]any{"type": "string", "description": ""},
+			"run_id":     map[string]any{"type": "integer", "description": ""},
+			"job_id":     map[string]any{"type": "integer", "description": ""},
+		}),
+	)
+}
+
+func (t JobLogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	if !t.Client.enabled() {
+		return registry.Result{}, fmt.Errorf("GitHub is not configured: GITHUB_TOKEN is required")
+	}
+	var args struct {
+		Repository string `json:"repository"`
+		RunID      int64  `json:"run_id"`
+		JobID      int64  `json:"job_id"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return registry.Result{}, err
+	}
+	repository := strings.TrimSpace(args.Repository)
+	if repository == "" {
+		repository = t.Client.defaultRepository()
+	}
+	if repository == "" {
+		return registry.Result{}, fmt.Errorf("repository is required")
+	}
+	if args.RunID <= 0 {
+		return registry.Result{}, fmt.Errorf("run_id is required")
+	}
+	owner, repo, err := splitRepository(repository)
+	if err != nil {
+		return registry.Result{}, err
+	}
+
+	// If a specific job_id is provided, fetch its log directly.
+	if args.JobID > 0 {
+		log, err := t.Client.fetchJobLog(ctx, owner, repo, args.JobID)
+		if err != nil {
+			return registry.Result{}, fmt.Errorf("fetch job log: %w", err)
+		}
+		return registry.Result{Content: log}, nil
+	}
+
+	// Otherwise list jobs for the run, find failed ones, and fetch their logs.
+	jobs, err := t.Client.listRunJobs(ctx, owner, repo, args.RunID)
+	if err != nil {
+		return registry.Result{}, fmt.Errorf("list run jobs: %w", err)
+	}
+	if len(jobs) == 0 {
+		return registry.Result{Content: "no jobs found for this run"}, nil
+	}
+
+	var failed []runJob
+	for _, j := range jobs {
+		if j.Conclusion == "failure" {
+			failed = append(failed, j)
+		}
+	}
+	targets := failed
+	if len(targets) == 0 {
+		targets = jobs
+	}
+
+	// Cap at 3 jobs to keep output manageable.
+	if len(targets) > 3 {
+		targets = targets[:3]
+	}
+
+	var out strings.Builder
+	fmt.Fprintf(&out, "Run %d: %d jobs total, %d failed\n\n", args.RunID, len(jobs), len(failed))
+
+	for i, j := range jobs {
+		marker := " "
+		if j.Conclusion == "failure" {
+			marker = "✗"
+		} else if j.Conclusion == "success" {
+			marker = "✓"
+		}
+		fmt.Fprintf(&out, "%s %s (id=%d status=%s conclusion=%s)\n", marker, j.Name, j.ID, j.Status, j.Conclusion)
+		if i >= 19 {
+			fmt.Fprintf(&out, "  ... and %d more\n", len(jobs)-20)
+			break
+		}
+	}
+
+	for _, j := range targets {
+		log, err := t.Client.fetchJobLog(ctx, owner, repo, j.ID)
+		if err != nil {
+			fmt.Fprintf(&out, "\n--- %s (id=%d) ---\nerror fetching log: %v\n", j.Name, j.ID, err)
+			continue
+		}
+		fmt.Fprintf(&out, "\n--- %s (id=%d) ---\n%s\n", j.Name, j.ID, log)
+	}
+
+	return registry.Result{Content: out.String()}, nil
+}
+
+type runJob struct {
+	ID         int64     `json:"id"`
+	Name       string    `json:"name"`
+	Status     string    `json:"status"`
+	Conclusion string    `json:"conclusion"`
+	HTMLURL    string    `json:"html_url"`
+	Steps      []jobStep `json:"steps"`
+}
+
+type jobStep struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	Number     int    `json:"number"`
+}
+
+func (c Client) listRunJobs(ctx context.Context, owner, repo string, runID int64) ([]runJob, error) {
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%d/jobs?per_page=100",
+		c.baseURL(), url.PathEscape(owner), url.PathEscape(repo), runID)
+	data, err := c.do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	var parsed struct {
+		Jobs []runJob `json:"jobs"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return nil, err
+	}
+	return parsed.Jobs, nil
+}
+
+func (c Client) fetchJobLog(ctx context.Context, owner, repo string, jobID int64) (string, error) {
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/actions/jobs/%d/logs",
+		c.baseURL(), url.PathEscape(owner), url.PathEscape(repo), jobID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	client := c.httpClient()
+	// Follow redirects manually so we can stream the log body.
+	client.CheckRedirect = func(r *http.Request, via []*http.Request) error {
+		return nil
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2MB max
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("github status %d: %s", resp.StatusCode, truncate(string(data), 500))
+	}
+
+	log := string(data)
+	log = extractFailureSection(log)
+	if len(log) > 80000 {
+		log = log[:80000] + "\n\n... [log truncated at 80KB] ..."
+	}
+	return log, nil
+}
+
+// extractFailureSection tries to extract the most relevant parts of a CI log:
+// failed step output and surrounding context. If no failure markers are found,
+// returns the tail of the log.
+func extractFailureSection(log string) string {
+	lines := strings.Split(log, "\n")
+	if len(lines) <= 400 {
+		return log
+	}
+
+	// Look for common failure indicators and keep context around them.
+	type region struct{ start, end int }
+	var regions []region
+	failurePatterns := []string{
+		"FAIL", "FAILED", "Error", "error", "Exception",
+		"Assert", "assert", "Expected", "expected",
+		"##[error]",
+	}
+	for i, line := range lines {
+		for _, pat := range failurePatterns {
+			if strings.Contains(line, pat) {
+				start := i - 20
+				if start < 0 {
+					start = 0
+				}
+				end := i + 30
+				if end > len(lines) {
+					end = len(lines)
+				}
+				regions = append(regions, region{start, end})
+				break
+			}
+		}
+	}
+
+	if len(regions) == 0 {
+		// No failure markers — return the last 400 lines.
+		return strings.Join(lines[len(lines)-400:], "\n")
+	}
+
+	// Merge overlapping regions.
+	merged := []region{regions[0]}
+	for _, r := range regions[1:] {
+		last := &merged[len(merged)-1]
+		if r.start <= last.end {
+			if r.end > last.end {
+				last.end = r.end
+			}
+		} else {
+			merged = append(merged, r)
+		}
+	}
+
+	// Cap total output.
+	var out strings.Builder
+	totalLines := 0
+	for _, r := range merged {
+		if totalLines > 2000 {
+			out.WriteString("\n... [additional failure context truncated] ...\n")
+			break
+		}
+		if out.Len() > 0 {
+			out.WriteString("\n...\n\n")
+		}
+		chunk := lines[r.start:r.end]
+		out.WriteString(strings.Join(chunk, "\n"))
+		totalLines += len(chunk)
+	}
+	return out.String()
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
 // PRDiffTool fetches a pull request's metadata and diff from GitHub API.
 type PRDiffTool struct {
 	Client Client
