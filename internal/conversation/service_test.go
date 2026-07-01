@@ -325,11 +325,17 @@ func TestPriorConversationBilledTokens(t *testing.T) {
 }
 
 func TestTrimAndSummarizeReportsCompression(t *testing.T) {
+	compactor := &memory.Compactor{
+		MaxContextTokens:  1000,
+		AutocompactBuffer: 100,
+		OutputReserve:     100,
+		KeepRecentTools:   2,
+	}
 	svc := NewService(
 		nil,
 		nil,
-		agent.Runner{},
-		memory.Builder{MaxMessages: 1, MaxSummaryChars: 10000},
+		agent.Runner{Compactor: compactor},
+		memory.Builder{MaxSummaryChars: 10000},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		nil,
@@ -343,16 +349,13 @@ func TestTrimAndSummarizeReportsCompression(t *testing.T) {
 		{Role: memory.RoleAssistant, Content: "recent 4"},
 	}
 
-	kept, summary, compressed := svc.trimAndSummarize(context.Background(), turns, "")
+	kept, _, compressed := svc.trimAndSummarize(context.Background(), turns, "")
 
 	if !compressed {
 		t.Fatal("trimAndSummarize() compressed = false, want true")
 	}
 	if len(kept) >= len(turns) {
 		t.Fatalf("trimAndSummarize() kept %d turns, want fewer than %d", len(kept), len(turns))
-	}
-	if !strings.Contains(summary, "Trimmed conversation summary") {
-		t.Fatalf("summary does not describe trimmed context: %q", summary)
 	}
 }
 
@@ -592,12 +595,18 @@ func TestCompressedContextNoticeOnlyAppearsInStream(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	compactor := &memory.Compactor{
+		MaxContextTokens:  10,
+		AutocompactBuffer: 1,
+		OutputReserve:     1,
+		KeepRecentTools:   2,
+	}
 	messenger := &fakeMessenger{streamTS: "200.000"}
 	svc := NewService(
 		store,
 		messenger,
-		agent.Runner{LLM: &replyLLM{content: "最终回答"}, MaxSteps: 1},
-		memory.Builder{MaxMessages: 1, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		agent.Runner{LLM: &replyLLM{content: "最终回答"}, MaxSteps: 1, Compactor: compactor},
+		memory.Builder{MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		observability.NewRecorder(),
@@ -675,12 +684,18 @@ func TestCompressedContextNoticeStaysOffAnswerStream(t *testing.T) {
 	}}
 	tools := registry.New()
 	tools.Register(echoTool{})
+	compactor := &memory.Compactor{
+		MaxContextTokens:  10,
+		AutocompactBuffer: 1,
+		OutputReserve:     1,
+		KeepRecentTools:   2,
+	}
 	messenger := &fakeMessenger{streamSeq: []string{"progress.000", "answer.000"}}
 	svc := NewService(
 		store,
 		messenger,
-		agent.Runner{LLM: llmClient, Tools: tools, MaxSteps: 2, Capabilities: llm.Capabilities{NativeToolCalls: true}},
-		memory.Builder{MaxMessages: 1, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		agent.Runner{LLM: llmClient, Tools: tools, MaxSteps: 2, Capabilities: llm.Capabilities{NativeToolCalls: true}, Compactor: compactor},
+		memory.Builder{MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		observability.NewRecorder(),

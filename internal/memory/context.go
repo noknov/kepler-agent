@@ -79,8 +79,7 @@ func (b Builder) BuildWithParts(systemPrompt, threadContext, userText string, us
 		parts = append(parts, userParts...)
 		userMessage.ContentParts = parts
 	}
-	history := trimHistory(FilterPersistentTurns(turns), b.MaxMessages)
-	messages = append(messages, ToLLM(history)...)
+	messages = append(messages, ToLLM(FilterPersistentTurns(turns))...)
 	messages = append(messages, userMessage)
 	return messages
 }
