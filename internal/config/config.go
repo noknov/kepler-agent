@@ -110,6 +110,15 @@ type ToolConfig struct {
 	GCPDefaultNamespace string
 	GKEDefaultCluster   string
 	GKEDefaultRegion    string
+	KubectlPath         string
+	K8sDefaultContext   string
+	K8sDefaultCluster   string
+	TTSAPIKey           string
+	TTSBaseURL          string
+	TTSModel            string
+	TTSAuto             bool
+	TTSDefaultVoice     string
+	TTSDefaultStyle     string
 	NotionToken         string
 	NotionDatabaseID    string
 	NotionTitleProperty string
@@ -249,6 +258,15 @@ func Load() (Config, error) {
 			GCPDefaultNamespace: env("GCP_NAMESPACE", ""),
 			GKEDefaultCluster:   env("GKE_CLUSTER", ""),
 			GKEDefaultRegion:    env("GKE_REGION", ""),
+			KubectlPath:         env("KUBECTL_PATH", "kubectl"),
+			K8sDefaultContext:   os.Getenv("K8S_DEFAULT_CONTEXT"),
+			K8sDefaultCluster:   os.Getenv("K8S_DEFAULT_CLUSTER"),
+			TTSAPIKey:           firstEnv("TTS_API_KEY", "MIMO_API_KEY"),
+			TTSBaseURL:          trimRightSlash(env("TTS_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1")),
+			TTSModel:            env("TTS_MODEL", "mimo-v2.5-tts"),
+			TTSAuto:             envBool("TTS_AUTO", false),
+			TTSDefaultVoice:     env("TTS_DEFAULT_VOICE", "冰糖"),
+			TTSDefaultStyle:     os.Getenv("TTS_DEFAULT_STYLE"),
 			NotionToken:         os.Getenv("NOTION_TOKEN"),
 			NotionDatabaseID:    os.Getenv("NOTION_DATABASE_ID"),
 			NotionTitleProperty: env("NOTION_TITLE_PROPERTY", "Name"),

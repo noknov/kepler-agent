@@ -466,5 +466,62 @@
     "parameters": {
       "index": "Tab index to switch to (integer from pw-get_all_pages output, e.g. 0 for the first tab)."
     }
+  },
+  "k8s-get_pods": {
+    "description": "List Kubernetes pods with status, restart counts, and node placement. Use for quick cluster health checks or to find pods for further investigation with k8s-logs or k8s-describe.",
+    "parameters": {
+      "namespace": "Kubernetes namespace. If omitted and all_namespaces is false, uses kubectl's current namespace.",
+      "label_selector": "Label selector filter, e.g. app=my-service or app.kubernetes.io/name=gateway.",
+      "field_selector": "Field selector, e.g. status.phase=Running or spec.nodeName=node-1.",
+      "all_namespaces": "If true, list pods across all namespaces."
+    }
+  },
+  "k8s-describe": {
+    "description": "Describe a Kubernetes resource showing events, conditions, and configuration details. Use for investigating pod crashes, pending states, or misconfigured resources.",
+    "parameters": {
+      "resource": "Resource type: pod, deployment, service, node, ingress, configmap, hpa, job, cronjob, statefulset, daemonset, etc.",
+      "name": "Resource name. If omitted, describes all resources of this type.",
+      "namespace": "Kubernetes namespace."
+    }
+  },
+  "k8s-logs": {
+    "description": "Fetch container logs from a Kubernetes pod. Faster than GCP Cloud Logging for real-time debugging. Supports previous container logs for crash investigation.",
+    "parameters": {
+      "pod": "Pod name or label selector (e.g. -l app=my-service for all pods matching the label).",
+      "namespace": "Kubernetes namespace.",
+      "container": "Container name within a multi-container pod.",
+      "since": "Duration to look back, e.g. 5m, 1h, 30s.",
+      "tail": "Number of recent log lines. Defaults to 100, max 2000.",
+      "previous": "If true, fetch logs from the previous terminated container instance (crash investigation).",
+      "grep": "Case-insensitive text filter applied to log lines after retrieval.",
+      "timestamps": "If true, include timestamps in log output."
+    }
+  },
+  "k8s-top": {
+    "description": "Show resource usage (CPU and memory) for pods or nodes via kubectl top. Requires metrics-server. Use for capacity planning or spotting resource pressure.",
+    "parameters": {
+      "resource": "One of: pods, nodes. Defaults to pods.",
+      "name": "Optional specific pod or node name.",
+      "namespace": "Kubernetes namespace (pods only).",
+      "label_selector": "Label selector filter (pods only).",
+      "sort_by": "Sort by: cpu or memory.",
+      "containers": "If true, show per-container resource usage (pods only)."
+    }
+  },
+  "slack-create_canvas": {
+    "description": "Create a Slack Canvas with structured Markdown content. Use for sharing investigation summaries, post-mortems, diagnostics reports, or any structured document that benefits from rich formatting. The canvas is attached to the current channel by default.",
+    "parameters": {
+      "title": "Canvas title.",
+      "markdown": "Canvas content in Markdown format. Supports headings, lists, code blocks, bold, italic, links, and tables.",
+      "channel_id": "Optional channel ID to attach the canvas to. Defaults to current conversation channel."
+    }
+  },
+  "tts-speak": {
+    "description": "Convert text to natural speech using MiMo-V2.5-TTS and send the audio message to the current Slack thread. Supports multiple voices and style control for expressive speech. Use when the user asks you to speak, read aloud, or when voice output enhances the experience.",
+    "parameters": {
+      "text": "Text to synthesize into speech. Place in assistant role — this is what gets spoken.",
+      "voice": "Voice name. Built-in voices: 冰糖 (female, Chinese), 茉莉 (female, Chinese), 苏打 (male, Chinese), 白桦 (male, Chinese), Mia (female, English), Chloe (female, English), Milo (male, English), Dean (male, English). Defaults to 冰糖.",
+      "style": "Optional natural language style instruction. Examples: 'warm and cheerful tone, moderate pace' or 'calm bedtime story narrator voice'. Placed in user role to guide speech style."
+    }
   }
 }

@@ -13,9 +13,10 @@ import (
 )
 
 var categoryDescriptions = map[string]string{
-	CategoryDiagnostics: "Incident investigation helpers: incident briefs, timelines, and evidence boards.",
-	CategoryBrowser:     "Playwright browser automation: navigate, snapshot, click, type, screenshots, and page evaluation.",
-	CategoryIntegration: "External integrations: Notion, YouTrack, Luckin MCP, and related APIs.",
+	CategoryDiagnostics:    "Incident investigation helpers: incident briefs, timelines, and evidence boards.",
+	CategoryBrowser:        "Playwright browser automation: navigate, snapshot, click, type, screenshots, and page evaluation.",
+	CategoryIntegration:    "External integrations: Notion, YouTrack, Luckin MCP, TTS, and related APIs.",
+	CategoryInfrastructure: "Kubernetes cluster tools: get pods, describe resources, fetch logs, and check resource usage (kubectl top).",
 }
 
 type ToolSearchTool struct {

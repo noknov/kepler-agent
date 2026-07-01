@@ -111,6 +111,10 @@ func NewServer(cfg config.Config) (*Server, error) {
 	conv.RunModel = cfg.LLM.Model
 	conv.CostRates = runtime.CostRates
 	conv.HealthSummary = healthService.SummaryPrompt
+	if cfg.Tools.TTSAuto && cfg.Tools.TTSAPIKey != "" {
+		conv.AutoTTS = newAutoTTSFunc(cfg, slackClient)
+		conv.TTSSummarizer = newTTSSummarizer(cfg, runtime)
+	}
 
 	var ragManager ragManagerCloser
 	if runtime.RAGManager != nil {

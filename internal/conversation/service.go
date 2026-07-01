@@ -53,6 +53,8 @@ type Service struct {
 	Multimodal    func(model string) bool
 	CostRates     observability.CostRates
 	HealthSummary func() string
+	AutoTTS       AutoTTSFunc
+	TTSSummarizer *TTSSummarizer
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
@@ -554,6 +556,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			if runObserver != nil {
 				runObserver.LinkSlackMessage(req.Channel, answerStream.TS())
 			}
+			s.maybeAutoTTS(req.Channel, req.ThreadTS, finalText)
 		} else {
 			if s.Format != nil {
 				finalText = s.Format(finalText)
@@ -589,6 +592,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			if runObserver != nil {
 				runObserver.LinkSlackMessage(req.Channel, ts)
 			}
+			s.maybeAutoTTS(req.Channel, req.ThreadTS, finalText)
 		}
 	} else if result.Pending && runObserver != nil {
 		runObserver.Finish("pending_user", "", nil, result.PendingQuestion)
