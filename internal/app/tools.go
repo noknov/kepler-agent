@@ -28,7 +28,7 @@ import (
 )
 
 func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) *registry.Registry {
-	tools := registry.NewReadOnly()
+	tools := registry.NewReadOnlyWithAllowedWrites("luckin-create_order", "luckin-cancel_order")
 	registerDeferredDiagnosticsTools(tools)
 	registerCodeTools(tools, cfg, workspacePolicy, commandPolicy)
 	registerIntegrationTools(tools, cfg, commandPolicy)

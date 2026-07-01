@@ -130,8 +130,21 @@ func (t ToolSearchTool) search(query string, limit int) string {
 		}
 		b.WriteString(fmt.Sprintf("- %s [%s]: %s\n", hit.name, state, hit.summary))
 	}
-	b.WriteString("\nTo use deferred matches, call action=activate with tool_names.")
-	b.WriteString(" If you already know the exact tools, call action=search with query=\"select:tool-a,tool-b\" to activate them immediately.")
+	hasActive := false
+	hasDeferred := false
+	for _, hit := range hits {
+		if hit.active {
+			hasActive = true
+		} else {
+			hasDeferred = true
+		}
+	}
+	if hasActive {
+		b.WriteString("\nActive tools ([active]) are ready to call by name — do NOT call tool_search again for them.")
+	}
+	if hasDeferred {
+		b.WriteString("\nTo use deferred tools, call action=activate with tool_names or query=\"select:tool-a,tool-b\".")
+	}
 	return strings.TrimSpace(b.String())
 }
 
@@ -191,13 +204,13 @@ type toolSearchDoc struct {
 func (t ToolSearchTool) toolSearchDocs() []toolSearchDoc {
 	docs := make([]toolSearchDoc, 0, len(t.Registry.tools)+len(t.Registry.deferred))
 	for name, tool := range t.Registry.tools {
-		if !t.Registry.canExpose(tool) {
+		if !t.Registry.canExpose(name, tool) {
 			continue
 		}
 		docs = append(docs, makeToolSearchDoc(name, "", true, tool.Spec()))
 	}
 	for name, tool := range t.Registry.deferred {
-		if !t.Registry.canExpose(tool) {
+		if !t.Registry.canExpose(name, tool) {
 			continue
 		}
 		spec := tool.Spec()

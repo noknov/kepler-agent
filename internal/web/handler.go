@@ -95,6 +95,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if convID == "" {
 		convID = newID()
 	}
+	routeKey := webHubKey("web:"+user.ID, convID)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -103,8 +104,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Register the hub channel before starting the agent to buffer any early events.
-	ch := s.hub.register(convID)
-	defer s.hub.deregister(convID)
+	ch := s.hub.register(routeKey)
+	defer s.hub.deregister(routeKey)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -125,7 +126,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			ThreadTS: convID,
 			Text:     body.Text,
 		})
-		s.hub.send(convID, hubEvent{Kind: kindDone})
+		s.hub.send(routeKey, hubEvent{Kind: kindDone})
 	}()
 
 	for {
