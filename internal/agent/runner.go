@@ -10,8 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
-
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/memory"
 	"github.com/wati/oncall-agent/internal/prompts"
@@ -132,15 +130,10 @@ type loopState struct {
 	messages  []llm.Message
 	generated []llm.Message
 
-	// retry guards — each is a one-shot flag; once set, the corresponding
-	// recovery is exhausted and the next occurrence becomes a hard failure.
-	retriedRepetitiveFinal bool
-	retriedTextualToolCall bool
-	retriedEmptyResponse   bool
-	retriedPromptTooLong   bool
-	retriedCodeClaim       bool
-	retriedUnevidencedFile bool
-	retriedRawEvidence     bool
+	// retried is a one-shot guard set per check name. Once set, the next
+	// failure of that check becomes a hard error instead of triggering another
+	// retry. Adding a new check never requires touching this struct.
+	retried map[string]bool
 
 	// overload / max-output-tokens recovery counters
 	overloadRetries              int
@@ -149,8 +142,7 @@ type loopState struct {
 	// tracking for code-evidence validation
 	codeToolCalledThisRun bool
 
-	// afterTools is true once at least one tool result has been received;
-	// it governs streaming router behaviour and pivot escalation.
+	// afterTools is true once at least one tool result has been received.
 	afterTools bool
 
 	// answerFlushed is true once any StreamAnswer event has been emitted.
@@ -172,6 +164,19 @@ type loopState struct {
 	// per-step streaming components; reset each iteration by callLLM.
 	streamRouter *streamRouter
 	streamExec   *streamingToolExecutor
+}
+
+// retryOnce returns true the first time key is seen, false thereafter.
+// Used to give each validation check exactly one retry attempt.
+func (s *loopState) retryOnce(key string) bool {
+	if s.retried == nil {
+		s.retried = make(map[string]bool)
+	}
+	if s.retried[key] {
+		return false
+	}
+	s.retried[key] = true
+	return true
 }
 
 func repetitiveRetryPrompt() string {
@@ -350,7 +355,7 @@ func (r Runner) runStep(ctx context.Context, step, maxOverloadRetries int, s *lo
 	}
 	s.messages = r.prepareMessagesForQuery(ctx, s.messages, req, toolSpecs)
 
-	resp, useStream, llmErr := r.callLLM(ctx, llm.Request{
+	resp, didStream, llmErr := r.callLLM(ctx, llm.Request{
 		Model:       r.Model,
 		Messages:    s.messages,
 		Tools:       toolSpecs,
@@ -384,12 +389,12 @@ func (r Runner) runStep(ctx context.Context, step, maxOverloadRetries int, s *lo
 		// the answer as pendingAnswer; s.answerFlushed is set only after
 		// commitAnswer() emits it once handleFinalResponse validation passes.
 	}
-	if useStream && !s.streamedText && strings.TrimSpace(assistantMsg.Content) != "" {
-		useStream = false
+	if didStream && !s.streamedText && strings.TrimSpace(assistantMsg.Content) != "" {
+		didStream = false
 	}
 
 	if len(assistantMsg.ToolCalls) == 0 {
-		return r.settleFinalResponse(ctx, resp, assistantMsg, useStream, s, req)
+		return r.settleFinalResponse(ctx, resp, assistantMsg, didStream, s, req)
 	}
 
 	// Tool-call turn: emit narration, execute tools, collect results.
@@ -484,8 +489,7 @@ const (
 // when the loop should continue with the given action, or (_, false) when the
 // error is fatal and should be returned to the caller.
 func (r Runner) handleLLMError(ctx context.Context, err error, maxOverloadRetries int, s *loopState, req Request) (llmErrorAction, bool) {
-	if llm.IsEmptyResponse(err) && !s.retriedEmptyResponse {
-		s.retriedEmptyResponse = true
+	if llm.IsEmptyResponse(err) && s.retryOnce("empty_response") {
 		s.messages = append(s.messages, llm.Message{Role: "system", Content: emptyResponseRetryPrompt()})
 		r.updateStatus(req.Locale, RetryStatus)
 		return llmErrorRetry, true
@@ -505,8 +509,7 @@ func (r Runner) handleLLMError(ctx context.Context, err error, maxOverloadRetrie
 		r.updateStatus(req.Locale, RetryStatus)
 		return llmErrorRetry, true
 	}
-	if llm.IsPromptTooLong(err) && r.Compactor != nil && !s.retriedPromptTooLong {
-		s.retriedPromptTooLong = true
+	if llm.IsPromptTooLong(err) && r.Compactor != nil && s.retryOnce("prompt_too_long") {
 		r.updateStatus(req.Locale, RetryStatus)
 		return llmErrorOverflowRetry, true
 	}
@@ -542,8 +545,8 @@ func (r Runner) handleFinalResponse(ctx context.Context, resp llm.Response, assi
 	final := strings.TrimSpace(r.sanitize(assistantMsg.Content))
 
 	if final == "" {
-		if !s.retriedEmptyResponse {
-			s.retriedEmptyResponse = true
+		if s.retryOnce("empty_response") {
+			
 			s.messages = append(s.messages, llm.Message{Role: "system", Content: emptyResponseRetryPrompt()})
 			r.updateStatus(req.Locale, RetryStatus)
 			return false, true, nil
@@ -552,8 +555,8 @@ func (r Runner) handleFinalResponse(ctx context.Context, resp llm.Response, assi
 	}
 
 	if llm.LooksLikeTextualToolCall(final) {
-		if !s.retriedTextualToolCall {
-			s.retriedTextualToolCall = true
+		if s.retryOnce("textual_tool_call") {
+			
 			s.messages = append(s.messages, llm.Message{Role: "system", Content: textualToolCallRetryPrompt()})
 			r.updateStatus(req.Locale, RetryStatus)
 			return false, true, nil
@@ -565,8 +568,8 @@ func (r Runner) handleFinalResponse(ctx context.Context, resp llm.Response, assi
 	}
 
 	if hasRawEvidenceDump(final) {
-		if !s.retriedRawEvidence {
-			s.retriedRawEvidence = true
+		if s.retryOnce("raw_evidence") {
+			
 			s.messages = append(s.messages, llm.Message{Role: "system", Content: rawEvidenceRetryPrompt()})
 			r.updateStatus(req.Locale, RetryStatus)
 			return false, true, nil
@@ -578,8 +581,8 @@ func (r Runner) handleFinalResponse(ctx context.Context, resp llm.Response, assi
 	}
 
 	if looksRepetitive(final) {
-		if !s.retriedRepetitiveFinal {
-			s.retriedRepetitiveFinal = true
+		if s.retryOnce("repetitive_final") {
+			
 			s.messages = append(s.messages, llm.Message{Role: "system", Content: repetitiveRetryPrompt()})
 			r.updateStatus(req.Locale, RetryStatus)
 			return false, true, nil
@@ -588,14 +591,12 @@ func (r Runner) handleFinalResponse(ctx context.Context, resp llm.Response, assi
 	}
 
 	// Code evidence checks apply in both streaming and non-streaming modes.
-	if !s.retriedCodeClaim && !s.codeToolCalledThisRun && hasUnverifiedCodeClaim(final) {
-		s.retriedCodeClaim = true
+	if !s.codeToolCalledThisRun && hasUnverifiedCodeClaim(final) && s.retryOnce("code_claim") {
 		s.messages = append(s.messages, llm.Message{Role: "system", Content: codeClaimRetryPrompt()})
 		r.updateStatus(req.Locale, RetryStatus)
 		return false, true, nil
 	}
-	if !s.retriedUnevidencedFile && s.codeToolCalledThisRun && hasUnverifiedCodeClaim(final) && hasUnevidencedFileReference(final, s.generated) {
-		s.retriedUnevidencedFile = true
+	if s.codeToolCalledThisRun && hasUnverifiedCodeClaim(final) && hasUnevidencedFileReference(final, s.generated) && s.retryOnce("unevidenced_file") {
 		s.messages = append(s.messages, llm.Message{Role: "system", Content: unevidencedFileRetryPrompt()})
 		r.updateStatus(req.Locale, RetryStatus)
 		return false, true, nil
@@ -627,11 +628,10 @@ func (r Runner) emitStepStatus(locale string, step int, s *loopState) {
 // response plus a bool indicating whether streaming was actually used.
 // Side-effects: updates s.streamedText and s.answerFlushed via callbacks.
 func (r Runner) callLLM(ctx context.Context, llmReq llm.Request, s *loopState, req Request) (llm.Response, bool, error) {
-	useStream := r.OnStream != nil
+	wantStream := r.OnStream != nil
 	llmStart := time.Now()
 
-	// Wrap OnStream to suppress StreamAnswer events after the answer has already
-	// been flushed (prevents retry steps from polluting the answer stream).
+	// Suppress StreamAnswer on retry steps that already flushed the answer.
 	stepOnStream := r.OnStream
 	if s.answerFlushed && r.OnStream != nil {
 		stepOnStream = func(ev StreamEvent) {
@@ -643,7 +643,11 @@ func (r Runner) callLLM(ctx context.Context, llmReq llm.Request, s *loopState, r
 
 	s.streamedText = false
 	s.streamRouter = nil
-	if useStream && len(llmReq.Tools) > 0 {
+	if wantStream {
+		// Always route text through streamRouter so text is never emitted
+		// directly — the router buffers everything and defers the answer until
+		// handleFinalResponse has validated it, eliminating the need for a
+		// separate streamGuard.
 		s.streamRouter = &streamRouter{emit: stepOnStream, afterTools: s.afterTools}
 	}
 
@@ -659,10 +663,9 @@ func (r Runner) callLLM(ctx context.Context, llmReq llm.Request, s *loopState, r
 		}
 	}
 
-	// Streaming tool executor: starts executing tools as they arrive, rather
-	// than waiting for the full LLM response to complete.
+	// Streaming tool executor: starts executing tools as they arrive.
 	var streamExec *streamingToolExecutor
-	if useStream && r.Tools != nil && len(llmReq.Tools) > 0 {
+	if wantStream && r.Tools != nil && len(llmReq.Tools) > 0 {
 		streamExec = newStreamingToolExecutor(ctx, r, req)
 		s.streamExec = streamExec
 	}
@@ -688,33 +691,13 @@ func (r Runner) callLLM(ctx context.Context, llmReq llm.Request, s *loopState, r
 
 	var resp llm.Response
 	var err error
-	if useStream {
+	didStream := false
+	if wantStream {
 		if sc, ok := r.LLM.(llm.StreamClient); ok {
-			if r.useStreamGuard() {
-				threshold := streamGuardThreshold
-				if r.Capabilities.NativeToolCalls {
-					threshold = streamGuardThresholdNative
-				}
-				guard := &streamGuard{downstream: streamText, threshold: threshold}
-				resp, err = sc.ChatStream(ctx, llmReq, llm.StreamHandler{
-					OnText:             guard.Write,
-					OnToolCallsStarted: streamHandler.OnToolCallsStarted,
-					OnToolCallComplete: streamHandler.OnToolCallComplete,
-					OnUsage:            streamHandler.OnUsage,
-				})
-				guard.Flush()
-				if guard.suppressed || !guard.emitted || !resp.Streamed {
-					useStream = false
-				}
-			} else {
-				resp, err = sc.ChatStream(ctx, llmReq, streamHandler)
-				if !resp.Streamed {
-					useStream = false
-				}
-			}
+			resp, err = sc.ChatStream(ctx, llmReq, streamHandler)
+			didStream = resp.Streamed
 		} else {
 			resp, err = r.LLM.Chat(ctx, llmReq)
-			useStream = false
 		}
 	} else {
 		resp, err = r.LLM.Chat(ctx, llmReq)
@@ -729,7 +712,7 @@ func (r Runner) callLLM(ctx context.Context, llmReq llm.Request, s *loopState, r
 		}
 	}
 
-	return resp, useStream, err
+	return resp, didStream, err
 }
 
 // emitNarration emits non-streamed tool-call narration so the UI shows it.
@@ -1124,13 +1107,6 @@ func (t *clarificationErrorTracker) resetWithSuccessfulEvidence(results []toolRe
 	}
 }
 
-func (t *clarificationErrorTracker) resetKeys(keys ...string) {
-	for _, key := range keys {
-		delete(t.counts, key)
-		delete(t.failures, key)
-	}
-}
-
 func clarificationErrorKey(result toolResult) string {
 	errText := strings.ToLower(result.err.Error())
 	switch {
@@ -1195,43 +1171,6 @@ func clarificationQuestion(locale, key string, failures []clarificationFailure) 
 		}
 		return "I've hit an issue I can't resolve automatically and need your help."
 	}
-}
-
-func clarificationDetail(zh bool, key string, failures []clarificationFailure) string {
-	return ""
-}
-
-func failureNames(failures []clarificationFailure) []string {
-	seen := map[string]bool{}
-	var names []string
-	for _, failure := range failures {
-		for _, text := range namedArgValues(failure.Args, []string{"repo", "repository", "path", "branch", "ref", "query", "target", "url", "file", "channel"}) {
-			if !seen[text] {
-				seen[text] = true
-				names = append(names, text)
-			}
-		}
-	}
-	if len(names) > 4 {
-		return names[:4]
-	}
-	return names
-}
-
-func namedArgValues(args map[string]any, keys []string) []string {
-	var values []string
-	for _, key := range keys {
-		value, ok := args[key]
-		if !ok {
-			continue
-		}
-		text := strings.TrimSpace(fmt.Sprint(value))
-		if text == "" || text == "<nil>" {
-			continue
-		}
-		values = append(values, text)
-	}
-	return values
 }
 
 func (r Runner) observeToolResults(results []toolResult) {
@@ -1399,116 +1338,3 @@ func (sr *streamRouter) flushAs(kind StreamKind) {
 	sr.emit(StreamEvent{Kind: kind, Delta: text})
 }
 
-func (r Runner) useStreamGuard() bool {
-	// Native tool call providers (e.g. MiMo, OpenAI) use structured tool_calls
-	// fields and do not emit textual markup — skip the guard entirely unless
-	// RepairTextualToolCalls is also set, in which case we still guard but
-	// use smaller thresholds (see streamGuardThresholdNative) to avoid
-	// delaying short Chinese answers.
-	if r.Capabilities.NativeToolCalls {
-		return r.Capabilities.RepairTextualToolCalls
-	}
-	if r.Capabilities.RepairTextualToolCalls {
-		return true
-	}
-	return r.Capabilities.Provider == "" && r.Capabilities.Protocol == ""
-}
-
-// streamGuard buffers initial tokens and suppresses downstream delivery if
-// the content looks like a textual tool call (e.g. <tool_invocation ...>).
-// threshold controls how many bytes must accumulate before flushing begins;
-// a smaller value means shorter answers stream sooner.
-type streamGuard struct {
-	downstream llm.StreamCallback
-	threshold  int
-	buf        strings.Builder
-	emitted    bool
-	suppressed bool
-}
-
-const (
-	// streamGuardThreshold is the byte-count of buffered text before the guard
-	// begins forwarding to downstream. Large enough to detect markup prefixes
-	// like "<tool_invocation" (16 chars) but small enough that short Chinese
-	// answers (~10 chars = 30 bytes) still stream promptly.
-	streamGuardThreshold = 32
-
-	// streamGuardThresholdNative is used when NativeToolCalls=true. Since
-	// native providers use structured tool_calls fields, textual markup is rare
-	// and the guard only needs a tiny buffer to catch it at the very start.
-	streamGuardThresholdNative = 2
-
-	// streamGuardTail is the byte-count kept buffered after each flush to
-	// ensure MayBecomeTextualToolCall can detect a partial markup prefix at
-	// the end of the emitted text.
-	streamGuardTail = 16
-)
-
-func (g *streamGuard) Write(delta string) {
-	if g.suppressed || delta == "" {
-		return
-	}
-	g.buf.WriteString(delta)
-	g.flushSafePrefix(false)
-}
-
-func (g *streamGuard) flushSafePrefix(force bool) {
-	if g.buf.Len() == 0 || g.suppressed {
-		return
-	}
-	text := g.buf.String()
-	if llm.LooksLikeTextualToolCall(text) {
-		g.suppressed = true
-		g.buf.Reset()
-		return
-	}
-	threshold := g.threshold
-	if threshold <= 0 {
-		threshold = streamGuardThreshold
-	}
-	if !force && (g.buf.Len() < threshold || llm.MayBecomeTextualToolCall(text)) {
-		return
-	}
-
-	flushLen := len(text)
-	if !force && flushLen > streamGuardTail {
-		flushLen -= streamGuardTail
-	}
-	flushLen = utf8SafeCut(text, flushLen)
-	if flushLen <= 0 {
-		return
-	}
-	chunk := text[:flushLen]
-	rest := text[flushLen:]
-	g.downstream(chunk)
-	g.emitted = true
-	g.buf.Reset()
-	if rest != "" {
-		g.buf.WriteString(rest)
-	}
-}
-
-// Flush delivers any buffered content that hasn't been flushed yet.
-// Must be called after the stream ends to handle short responses.
-func (g *streamGuard) Flush() {
-	if g.suppressed {
-		return
-	}
-	g.flushSafePrefix(true)
-}
-
-// utf8SafeCut returns the largest prefix length <= maxBytes that does not split
-// a UTF-8 code point. Prevents replacement-character corruption when the
-// stream guard flushes buffered CJK text at byte boundaries.
-func utf8SafeCut(s string, maxBytes int) int {
-	if maxBytes <= 0 {
-		return 0
-	}
-	if maxBytes >= len(s) {
-		return len(s)
-	}
-	for maxBytes > 0 && !utf8.ValidString(s[:maxBytes]) {
-		maxBytes--
-	}
-	return maxBytes
-}

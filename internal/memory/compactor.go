@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -149,17 +148,7 @@ func (c *Compactor) CompactIfNeededWithReserve(ctx context.Context, messages []l
 		return msgs, result, nil
 	}
 
-	// Layer 3: History folding (trim older messages, keep important ones)
-	msgs, foldedSummary := c.foldHistoryWithThreshold(msgs, threshold)
-	tokens = CountTokensWithCalibration(msgs)
-	if tokens <= threshold {
-		result.Layer = "history_folding"
-		result.PostTokens = tokens
-		result.Summary = foldedSummary
-		return msgs, result, nil
-	}
-
-	// Layer 4: LLM compact (structured summary via API call)
+	// Layer 3: LLM compact (structured summary via API call)
 	c.mu.Lock()
 	failures := c.consecutiveFailures
 	c.mu.Unlock()
@@ -211,11 +200,10 @@ func (c *Compactor) CompactForce(ctx context.Context, messages []llm.Message) ([
 	result := &CompactResult{PreTokens: CountTokensWithCalibration(messages)}
 	msgs := c.microCompact(messages)
 	msgs = c.compressToolResults(msgs)
-	msgs, _ = c.foldHistory(msgs)
 	tokens := CountTokensWithCalibration(msgs)
 
 	if c.LLMClient == nil {
-		result.Layer = "force_history_folding"
+		result.Layer = "force_no_llm_client"
 		result.PostTokens = tokens
 		return msgs, result, nil
 	}
@@ -351,65 +339,7 @@ func (c *Compactor) compressToolResults(messages []llm.Message) []llm.Message {
 	return out
 }
 
-// --- Layer 3: History folding ---
-
-// foldHistory trims older messages at stable conversation boundaries so the
-// remaining history stays coherent and tool_use/tool_result pairs are not split.
-func (c *Compactor) foldHistory(messages []llm.Message) ([]llm.Message, string) {
-	return c.foldHistoryWithThreshold(messages, c.Threshold())
-}
-
-func (c *Compactor) foldHistoryWithThreshold(messages []llm.Message, threshold int) ([]llm.Message, string) {
-	var system []llm.Message
-	var conversation []llm.Message
-	for _, msg := range messages {
-		if msg.Role == "system" && len(system) == 0 {
-			system = append(system, msg)
-			continue
-		}
-		conversation = append(conversation, msg)
-	}
-
-	groups := groupMessagesByStableBoundary(conversation)
-	if len(groups) == 0 {
-		return messages, ""
-	}
-
-	currentTokens := EstimateTokens(system)
-	keepFrom := len(groups) - 1
-	for i := len(groups) - 1; i >= 0; i-- {
-		groupTokens := EstimateTokens(groups[i].messages)
-		shouldKeep := i == len(groups)-1 || currentTokens+groupTokens <= threshold
-		if shouldKeep {
-			currentTokens += groupTokens
-			keepFrom = i
-			continue
-		}
-		break
-	}
-
-	var summaryParts []string
-	for _, group := range groups[:keepFrom] {
-		if desc := describeFoldedGroup(group); desc != "" {
-			summaryParts = append(summaryParts, desc)
-		}
-	}
-
-	folded := make([]llm.Message, 0, len(messages))
-	folded = append(folded, system...)
-	for _, group := range groups[keepFrom:] {
-		folded = append(folded, group.messages...)
-	}
-	folded = repairToolPairing(folded)
-
-	summary := ""
-	if len(summaryParts) > 0 {
-		summary = "Folded conversation history:\n" + strings.Join(summaryParts, "\n")
-	}
-	return folded, summary
-}
-
-// --- Layer 4: LLM compact ---
+// --- Layer 3: LLM compact ---
 
 // applyCompactBoundary replaces the message history with:
 // [system] + [compact summary as user message] + [most recent N messages]
@@ -452,92 +382,6 @@ func (c *Compactor) applyCompactBoundary(messages []llm.Message, summary string)
 	result = append(result, recent...)
 
 	return repairToolPairing(result)
-}
-
-// --- helpers ---
-
-type messageGroup struct {
-	messages []llm.Message
-}
-
-// groupMessagesByStableBoundary splits messages into conversation turns at each
-// "user" role boundary. A turn begins at a user message and includes all
-// subsequent assistant messages and tool call/result pairs until the next user
-// message. This keeps tool_use/tool_result pairs within the same group,
-// preventing orphan tool results when a group is pruned.
-//
-// Previously this function split at every user OR assistant message boundary,
-// which could separate tool_use from its tool_result across groups.
-func groupMessagesByStableBoundary(messages []llm.Message) []messageGroup {
-	groups := make([]messageGroup, 0)
-	current := messageGroup{}
-	for _, msg := range messages {
-		// Start a new group only at user-role boundaries (real turn starts).
-		// assistant, tool, and system messages stay with the preceding user turn.
-		if msg.Role == "user" && len(current.messages) > 0 {
-			groups = append(groups, current)
-			current = messageGroup{}
-		}
-		current.messages = append(current.messages, msg)
-	}
-	if len(current.messages) > 0 {
-		groups = append(groups, current)
-	}
-	return groups
-}
-
-func describeFoldedGroup(group messageGroup) string {
-	if len(group.messages) == 0 {
-		return ""
-	}
-	counts := map[string]int{}
-	tools := make([]string, 0)
-	for _, msg := range group.messages {
-		counts[msg.Role]++
-		if msg.Role == "assistant" {
-			for _, tc := range msg.ToolCalls {
-				tools = append(tools, tc.Function.Name)
-			}
-			continue
-		}
-		if msg.Role == "tool" && msg.Name != "" {
-			tools = append(tools, msg.Name)
-		}
-	}
-	parts := []string{
-		"- conversation segment",
-		"messages=" + strconv.Itoa(len(group.messages)),
-	}
-	if counts["user"] > 0 {
-		parts = append(parts, "user="+strconv.Itoa(counts["user"]))
-	}
-	if counts["assistant"] > 0 {
-		parts = append(parts, "assistant="+strconv.Itoa(counts["assistant"]))
-	}
-	if counts["tool"] > 0 {
-		parts = append(parts, "tool="+strconv.Itoa(counts["tool"]))
-	}
-	if len(tools) > 0 {
-		parts = append(parts, "tools="+strings.Join(uniqueStrings(tools), ","))
-	}
-	return strings.Join(parts, " ")
-}
-
-func uniqueStrings(values []string) []string {
-	if len(values) == 0 {
-		return nil
-	}
-	seen := map[string]bool{}
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" || seen[value] {
-			continue
-		}
-		seen[value] = true
-		out = append(out, value)
-	}
-	return out
 }
 
 // repairToolPairing ensures no orphaned tool results exist (a tool_result

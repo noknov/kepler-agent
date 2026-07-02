@@ -101,78 +101,46 @@ var statusEN = statusSet{
 	steering:  "Conversation guided",
 }
 
-var toolHintsZH = map[string][]string{
-	"code-read_file":             {"扫描源码中..."},
-	"code-search":                {"全文检索中..."},
-	"code-symbols":               {"解析符号表..."},
-	"code-definition":            {"追踪定义源..."},
-	"code-references":            {"扫描引用链..."},
-	"code-diagnostics":           {"诊断代码中..."},
-	"repo-search":                {"仓库全文检索中..."},
-	"repo-read_file":             {"读取文件快照..."},
-	"git-status":                 {"读取仓库状态..."},
-	"git-fetch_ref":              {"拉取远程分支..."},
-	"git-search_ref":             {"分支内检索中..."},
-	"git-read_file_ref":          {"读取分支文件..."},
-	"git-log":                    {"回溯时间线..."},
-	"git-show":                   {"定位变更帧..."},
-	"gcp-logs":                   {"日志流抓取中..."},
-	"gcp-query_logs":             {"日志流抓取中..."},
-	"notion-search":              {"知识库索引中..."},
-	"notion-create_page":         {"写入文档..."},
-	"youtrack-get_issue":         {"加载工单..."},
-	"youtrack-search":            {"检索工单库..."},
-	"github-dispatch_workflow":   {"触发工作流..."},
-	"github-workflow_runs":       {"读取流水线状态..."},
-	"github-pr_diff":             {"拉取 PR 变更..."},
-	"github-job_logs":            {"拉取 CI 日志..."},
-	"slack-ask_user":             {"等待外部输入..."},
-	"slack-json_analyze":         {"解析数据文件..."},
-	"slack-file_search":          {"检索附件中..."},
-	"knowledge-runbook_search":   {"查阅运维手册..."},
-	"diagnostics-incident_brief": {"梳理事件摘要..."},
-	"diagnostics-timeline":       {"重建时间线..."},
-	"diagnostics-evidence_board": {"整理证据链..."},
-	"plan-update":                {"整理计划中..."},
-	"delegate-run":               {"子进程展开中..."},
-	"explore-code":               {"代码探索中..."},
+type toolHint struct {
+	zh string
+	en string
 }
 
-var toolHintsEN = map[string]string{
-	"code-read_file":             "Reading source...",
-	"code-search":                "Searching codebase...",
-	"code-symbols":               "Resolving symbols...",
-	"code-definition":            "Looking up definition...",
-	"code-references":            "Finding references...",
-	"code-diagnostics":           "Running diagnostics...",
-	"repo-search":                "Searching repo...",
-	"repo-read_file":             "Reading file...",
-	"git-status":                 "Checking repo state...",
-	"git-fetch_ref":              "Fetching remote ref...",
-	"git-search_ref":             "Searching branch...",
-	"git-read_file_ref":          "Reading file at ref...",
-	"git-log":                    "Tracing commit history...",
-	"git-show":                   "Inspecting changeset...",
-	"gcp-logs":                   "Fetching log stream...",
-	"gcp-query_logs":             "Fetching log stream...",
-	"notion-search":              "Searching knowledge base...",
-	"notion-create_page":         "Writing document...",
-	"youtrack-get_issue":         "Loading issue...",
-	"youtrack-search":            "Searching issues...",
-	"github-dispatch_workflow":   "Dispatching workflow...",
-	"github-workflow_runs":       "Checking pipeline status...",
-	"github-pr_diff":             "Fetching PR diff...",
-	"github-job_logs":            "Fetching CI logs...",
-	"slack-ask_user":             "Awaiting input...",
-	"slack-json_analyze":         "Analyzing data file...",
-	"slack-file_search":          "Searching attachments...",
-	"knowledge-runbook_search":   "Searching runbooks...",
-	"diagnostics-incident_brief": "Summarizing incident...",
-	"diagnostics-timeline":       "Building timeline...",
-	"diagnostics-evidence_board": "Gathering evidence...",
-	"plan-update":                "Updating plan...",
-	"delegate-run":               "Spawning sub-analysis...",
-	"explore-code":               "Exploring codebase...",
+var toolHints = map[string]toolHint{
+	"code-read_file":             {"扫描源码中...", "Reading source..."},
+	"code-search":                {"全文检索中...", "Searching codebase..."},
+	"code-symbols":               {"解析符号表...", "Resolving symbols..."},
+	"code-definition":            {"追踪定义源...", "Looking up definition..."},
+	"code-references":            {"扫描引用链...", "Finding references..."},
+	"code-diagnostics":           {"诊断代码中...", "Running diagnostics..."},
+	"repo-search":                {"仓库全文检索中...", "Searching repo..."},
+	"repo-read_file":             {"读取文件快照...", "Reading file..."},
+	"git-status":                 {"读取仓库状态...", "Checking repo state..."},
+	"git-fetch_ref":              {"拉取远程分支...", "Fetching remote ref..."},
+	"git-search_ref":             {"分支内检索中...", "Searching branch..."},
+	"git-read_file_ref":          {"读取分支文件...", "Reading file at ref..."},
+	"git-log":                    {"回溯时间线...", "Tracing commit history..."},
+	"git-show":                   {"定位变更帧...", "Inspecting changeset..."},
+	"gcp-logs":                   {"日志流抓取中...", "Fetching log stream..."},
+	"gcp-query_logs":             {"日志流抓取中...", "Fetching log stream..."},
+	"notion-search":              {"知识库索引中...", "Searching knowledge base..."},
+	"notion-create_page":         {"写入文档...", "Writing document..."},
+	"youtrack-get_issue":         {"加载工单...", "Loading issue..."},
+	"youtrack-search":            {"检索工单库...", "Searching issues..."},
+	"github-dispatch_workflow":   {"触发工作流...", "Dispatching workflow..."},
+	"github-workflow_runs":       {"读取流水线状态...", "Checking pipeline status..."},
+	"github-pr_diff":             {"拉取 PR 变更...", "Fetching PR diff..."},
+	"github-job_logs":            {"拉取 CI 日志...", "Fetching CI logs..."},
+	"slack-ask_user":             {"等待外部输入...", "Awaiting input..."},
+	"slack-json_analyze":         {"解析数据文件...", "Analyzing data file..."},
+	"slack-file_search":          {"检索附件中...", "Searching attachments..."},
+	"knowledge-runbook_search":   {"查阅运维手册...", "Searching runbooks..."},
+	"diagnostics-incident_brief": {"梳理事件摘要...", "Summarizing incident..."},
+	"diagnostics-timeline":       {"重建时间线...", "Building timeline..."},
+	"diagnostics-evidence_board": {"整理证据链...", "Gathering evidence..."},
+	"plan-update":                {"整理计划中...", "Updating plan..."},
+	"delegate-run":               {"子进程展开中...", "Spawning sub-analysis..."},
+	"explore-code":               {"代码探索中...", "Exploring codebase..."},
 }
 
 func pick(choices []string) string {
@@ -231,14 +199,14 @@ func SteeringQueuedTitle(locale string) string {
 }
 
 func ToolHint(name, locale string) string {
-	if locale == LocaleZH {
-		if hints, ok := toolHintsZH[name]; ok {
-			return prompts.ToolStatus(name, pick(hints))
+	if h, ok := toolHints[name]; ok {
+		if locale == LocaleZH {
+			return prompts.ToolStatus(name, h.zh)
 		}
-		return pick(statusZH.step)
+		return prompts.ToolStatus(name, h.en)
 	}
-	if hint, ok := toolHintsEN[name]; ok {
-		return prompts.ToolStatus(name, hint)
+	if locale == LocaleZH {
+		return pick(statusZH.step)
 	}
 	return prompts.ToolStatus("default", "Thinking...")
 }
