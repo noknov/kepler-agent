@@ -732,7 +732,11 @@ func (r Runner) callLLM(ctx context.Context, llmReq llm.Request, s *loopState, r
 	if useStream {
 		if sc, ok := r.LLM.(llm.StreamClient); ok {
 			if r.useStreamGuard() {
-				guard := &streamGuard{downstream: streamText}
+				threshold := streamGuardThreshold
+				if r.Capabilities.NativeToolCalls {
+					threshold = streamGuardThresholdNative
+				}
+				guard := &streamGuard{downstream: streamText, threshold: threshold}
 				resp, err = sc.ChatStream(ctx, llmReq, llm.StreamHandler{
 					OnText:             guard.Write,
 					OnToolCallsStarted: streamHandler.OnToolCallsStarted,
@@ -1451,30 +1455,48 @@ func (sr *streamRouter) flushAs(kind StreamKind) {
 }
 
 func (r Runner) useStreamGuard() bool {
-	// Active when RepairTextualToolCalls is set. Even Anthropic-compatible
-	// providers (MiMo) may emit tool-call markup in text blocks, so the
-	// guard must be on for all providers to prevent leaking markup to users.
+	// Native tool call providers (e.g. MiMo, OpenAI) use structured tool_calls
+	// fields and do not emit textual markup — skip the guard entirely unless
+	// RepairTextualToolCalls is also set, in which case we still guard but
+	// use smaller thresholds (see streamGuardThresholdNative) to avoid
+	// delaying short Chinese answers.
+	if r.Capabilities.NativeToolCalls {
+		return r.Capabilities.RepairTextualToolCalls
+	}
 	if r.Capabilities.RepairTextualToolCalls {
 		return true
-	}
-	if r.Capabilities.NativeToolCalls {
-		return false
 	}
 	return r.Capabilities.Provider == "" && r.Capabilities.Protocol == ""
 }
 
 // streamGuard buffers initial tokens and suppresses downstream delivery if
 // the content looks like a textual tool call (e.g. <tool_invocation ...>).
+// threshold controls how many bytes must accumulate before flushing begins;
+// a smaller value means shorter answers stream sooner.
 type streamGuard struct {
 	downstream llm.StreamCallback
+	threshold  int
 	buf        strings.Builder
 	emitted    bool
 	suppressed bool
 }
 
 const (
-	streamGuardThreshold = 160
-	streamGuardTail      = 96
+	// streamGuardThreshold is the byte-count of buffered text before the guard
+	// begins forwarding to downstream. Large enough to detect markup prefixes
+	// like "<tool_invocation" (16 chars) but small enough that short Chinese
+	// answers (~10 chars = 30 bytes) still stream promptly.
+	streamGuardThreshold = 32
+
+	// streamGuardThresholdNative is used when NativeToolCalls=true. Since
+	// native providers use structured tool_calls fields, textual markup is rare
+	// and the guard only needs a tiny buffer to catch it at the very start.
+	streamGuardThresholdNative = 2
+
+	// streamGuardTail is the byte-count kept buffered after each flush to
+	// ensure MayBecomeTextualToolCall can detect a partial markup prefix at
+	// the end of the emitted text.
+	streamGuardTail = 16
 )
 
 func (g *streamGuard) Write(delta string) {
@@ -1495,7 +1517,11 @@ func (g *streamGuard) flushSafePrefix(force bool) {
 		g.buf.Reset()
 		return
 	}
-	if !force && (g.buf.Len() < streamGuardThreshold || llm.MayBecomeTextualToolCall(text)) {
+	threshold := g.threshold
+	if threshold <= 0 {
+		threshold = streamGuardThreshold
+	}
+	if !force && (g.buf.Len() < threshold || llm.MayBecomeTextualToolCall(text)) {
 		return
 	}
 
