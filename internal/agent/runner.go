@@ -390,8 +390,18 @@ func (r Runner) runStep(ctx context.Context, step, maxOverloadRetries int, s *lo
 	// Force pivot: tools were stripped from the request but some models
 	// (e.g. mimo-v2.5) still generate tool_call blocks regardless. Discard
 	// them so the response is treated as a text-only final answer.
+	// If the stripped response has no prose either, inject a targeted prompt
+	// telling the model to answer in plain text and retry, rather than falling
+	// through to the generic emptyResponseRetryPrompt which says "or call a
+	// tool" — which would cause the model to attempt tool calls again.
 	if s.pivotTier >= 4 && len(assistantMsg.ToolCalls) > 0 {
 		assistantMsg.ToolCalls = nil
+		if strings.TrimSpace(assistantMsg.Content) == "" && !s.retriedEmptyResponse {
+			s.retriedEmptyResponse = true
+			s.messages = append(s.messages, llm.Message{Role: "system", Content: pivotNoToolsRetryMessage()})
+			r.observeEvent("pivot_force_empty_retry", nil)
+			return false, Result{}, nil
+		}
 	}
 
 	if s.streamRouter != nil {
@@ -1305,6 +1315,10 @@ func pivotUrgentMessage() string {
 
 func pivotForceMessage() string {
 	return prompts.RunnerPrompt("pivot_force", "FINAL: Tools are no longer available. Give your answer now using only the evidence already gathered. Be direct and concise.")
+}
+
+func pivotNoToolsRetryMessage() string {
+	return prompts.RunnerPrompt("pivot_no_tools_retry", "Your previous response attempted to call a tool, but tools are no longer available and the call was discarded. You MUST write your answer in plain text — do NOT include any tool calls, function calls, XML tags, or tool markup of any kind. Respond now with a plain text answer based on what you have already gathered.")
 }
 
 func looksRepetitive(text string) bool {
