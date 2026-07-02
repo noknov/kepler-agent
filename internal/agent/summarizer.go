@@ -49,35 +49,20 @@ func (s *StatusSummarizer) Summarize(ctx context.Context, names, sampleArgs, loc
 func summarizePrompt(names, sampleArgs, locale string) string {
 	sampleArgs = sanitizeArgs(sampleArgs)
 	if locale == LocaleZH {
-		return fmt.Sprintf(`根据工具和参数，输出一个不超过10个字符的操作描述（含空格和英文标识符）。
-动词要短（查/搜/读/看/追踪），保留最关键的一个标识符，其余省略。禁止主语和标点。
-
-示例：
-kubectl get pods -n mt-prod  → 查 mt-prod Pods
-git log -S QuickReply        → 追 QuickReply 来源
-git blame RuleActionBar.tsx  → 查 RuleActionBar 作者
-code-search ErrorHandler     → 搜 ErrorHandler
-gcp-logs wati-gke            → 读 wati-gke 日志
-github-workflow_runs         → 查 CI 构建
-notion-search                → 搜 Notion 文档
-web-search                   → 网络搜索
-
-工具：%s
-参数：%s`, names, sampleArgs)
+		return fmt.Sprintf(
+			"用不超过10个字描述 AI 助手当前这一步在做什么，只回复描述文字，不加标点符号。"+
+				"以动词开头，描述 AI 的动作而非用户的意图，禁止出现「您想」「用户想」「需要」等说法。\n"+
+				"工具列表：%s\n参数：%s",
+			names, sampleArgs,
+		)
 	}
-	return fmt.Sprintf(`Output a ≤8-word action label. One verb + one key identifier from the args. No subject, no punctuation.
-
-Examples:
-kubectl get pods -n mt-prod  → Checking mt-prod pods
-git log -S QuickReply        → Tracing QuickReply origin
-git blame RuleActionBar.tsx  → Finding RuleActionBar author
-code-search ErrorHandler     → Searching ErrorHandler
-gcp-logs wati-gke            → Reading wati-gke logs
-github-workflow_runs         → Checking CI builds
-notion-search                → Searching Notion
-
-Tools: %s
-Args: %s`, names, sampleArgs)
+	return fmt.Sprintf(
+		"In 10 words or fewer, describe what the AI is doing in this step. "+
+			"Reply ONLY with the description, no punctuation. "+
+			"Start with an action verb. Never write \"You want to\" or \"The user wants\".\n"+
+			"Tools: %s\nArgs: %s",
+		names, sampleArgs,
+	)
 }
 
 // sanitizeArgs trims the raw args JSON to a compact, summarizer-friendly form.
@@ -86,6 +71,10 @@ Args: %s`, names, sampleArgs)
 // long free-text fields that likely contain the user's verbatim question are
 // truncated to prevent the summarizer from paraphrasing user intent.
 func sanitizeArgs(args string) string {
+	trimmed := strings.TrimSpace(args)
+	if trimmed == "" || trimmed == "{}" || trimmed == "null" {
+		return ""
+	}
 	// Keep shell commands fully intact — they contain the most useful context.
 	if strings.Contains(args, `"command"`) {
 		if len(args) > 300 {

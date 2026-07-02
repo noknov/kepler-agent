@@ -36,9 +36,25 @@ type ReadOnlyTool struct {
 func (t ReadOnlyTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"shell",
-		"",
+		"Run a shell command and return its stdout. "+
+			"Supports pipelines with | so you can compose commands like "+
+			"\"kubectl get pods -n mt-prod | grep web\" or "+
+			"\"git -C /path/to/repo log --oneline | head -20\". "+
+			"Allowed commands: git (all read subcommands: log, blame, diff, grep, show, fetch, ls-files, etc.), "+
+			"kubectl (get, describe, logs, top, config), gcloud (list/describe), "+
+			"gh (run/pr/issue list and view), "+
+			"grep, rg, find, jq, awk, sed, cat, head, tail, wc, sort, uniq, tr, cut, date, echo, curl. "+
+			"Write operations (git push/commit, kubectl delete/apply, gcloud mutations, rm) are blocked. "+
+			"Shell operators && ; & > >> are not supported; use | only.",
 		registry.ObjectSchema([]string{"command"}, map[string]any{
-			"command": map[string]any{"type": "string", "description": ""},
+			"command": map[string]any{
+				"type": "string",
+				"description": "The shell command to run, written exactly as you would type it in a terminal. " +
+					"Examples: " +
+					"\"git -C /Users/shelton/Documents/wati/wati-frontend-app log -S 'QuickReply' origin/channel-x/deploy --oneline\", " +
+					"\"kubectl get pods -n mt-prod | grep instagram\", " +
+					"\"grep -r 'MessageType' /Users/shelton/Documents/wati/whatsapp_inbox/netcore-mvc | head -20\"",
+			},
 		}),
 	)
 }
