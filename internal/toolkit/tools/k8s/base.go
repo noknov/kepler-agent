@@ -12,11 +12,12 @@ import (
 )
 
 type Base struct {
-	KubectlPath    string
-	DefaultContext string
-	DefaultCluster string
-	Guard          safety.CommandPolicy
-	Timeout        time.Duration
+	KubectlPath      string
+	DefaultContext   string
+	DefaultCluster   string
+	DefaultNamespace string
+	Guard            safety.CommandPolicy
+	Timeout          time.Duration
 }
 
 func (b Base) kubectl() string {
@@ -31,6 +32,24 @@ func (b Base) timeout() time.Duration {
 		return b.Timeout
 	}
 	return 30 * time.Second
+}
+
+// namespace returns the effective namespace for a command. When the caller
+// provides an explicit namespace it takes priority; otherwise the configured
+// default is used. An empty string means "kubectl's current namespace".
+func (b Base) namespace(explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	return b.DefaultNamespace
+}
+
+// appendNamespace appends -n <ns> to args when a namespace is determined.
+func (b Base) appendNamespace(args []string, explicit string) []string {
+	if ns := b.namespace(explicit); ns != "" {
+		return append(args, "-n", ns)
+	}
+	return args
 }
 
 func (b Base) run(ctx context.Context, args []string) (string, error) {

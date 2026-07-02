@@ -44,9 +44,7 @@ func (t DescribeTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 	if args.Name != "" {
 		cmdArgs = append(cmdArgs, args.Name)
 	}
-	if args.Namespace != "" {
-		cmdArgs = append(cmdArgs, "-n", args.Namespace)
-	}
+	cmdArgs = t.Base.appendNamespace(cmdArgs, args.Namespace)
 
 	out, err := t.Base.run(ctx, cmdArgs)
 	if err != nil {
