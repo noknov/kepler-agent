@@ -101,6 +101,12 @@
       "max_lines": "Maximum lines to return per page. Defaults to 200, max 500."
     }
   },
+  "readonly-shell": {
+    "description": "Run one allowlisted read-only CLI command for operational inspection. Use when the user explicitly asks to run shell/gcloud/kubectl/gh, or when a service status check needs a CLI shape not covered by a dedicated tool. This is not a general shell: no pipes, redirects, command chaining, substitutions, scripts, secrets, or mutating subcommands.",
+    "parameters": {
+      "command": "Single read-only command. Allowed examples: gcloud logging read ..., kubectl get pods ..., kubectl describe deployment ..., kubectl logs ..., kubectl top pods ..., gh run list/view, gh workflow list/view, date."
+    }
+  },
   "skills-load": {
     "description": "Load the full instructions for an available skill by name. Call this before following that skill's workflow. Do not assume skill instructions until this tool returns them.",
     "parameters": {

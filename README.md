@@ -360,9 +360,10 @@ By default, code questions are handled with agentic search across grep, repo sna
 
 | Tool | Description |
 |---|---|
-| `github.dispatch_workflow` | Trigger a `workflow_dispatch` GitHub Actions run |
-| `github.workflow_runs` | List recent workflow run status |
-| `github.pr_diff` | Fetch a PR's metadata and unified diff |
+| `github-dispatch_workflow` | Trigger a `workflow_dispatch` GitHub Actions run |
+| `github-workflow_runs` | List recent workflow run status |
+| `github-pr_diff` | Fetch a PR's metadata and unified diff |
+| `github-job_logs` | Fetch failed-job logs or paginated job logs for a workflow run |
 
 Workflow aliases can be defined in `PROMPT_DIR/runtime.json` under `github_workflows` or in the legacy `PROMPT_DIR/github_workflows.json`. `GITHUB_DEFAULT_OWNER` and `GITHUB_DEFAULT_REPO` set the default repository.
 
@@ -370,10 +371,15 @@ Workflow aliases can be defined in `PROMPT_DIR/runtime.json` under `github_workf
 
 | Tool | Description |
 |---|---|
-| `gcp.logs` | Query GCP Cloud Logging (project, namespace, service, or raw filter) |
-| `diagnostics.incident_brief` | Structured incident diagnostic summary |
-| `diagnostics.timeline` | Incident event timeline |
-| `diagnostics.evidence_board` | Structured evidence board |
+| `gcp-logs` | Query GCP Cloud Logging (project, namespace, service, or raw filter) |
+| `k8s-get_pods` | List Kubernetes pods with status, restarts, and node placement |
+| `k8s-describe` | Describe Kubernetes resources and events |
+| `k8s-logs` | Fetch Kubernetes pod logs |
+| `k8s-top` | Show Kubernetes CPU and memory usage |
+| `readonly-shell` | Run one allowlisted read-only CLI command for `gcloud`, `kubectl`, `gh`, or `date` |
+| `diagnostics-incident_brief` | Structured incident diagnostic summary |
+| `diagnostics-timeline` | Incident event timeline |
+| `diagnostics-evidence_board` | Structured evidence board |
 
 ### 🔎 Knowledge and search
 

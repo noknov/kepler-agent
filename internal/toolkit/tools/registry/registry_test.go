@@ -8,6 +8,32 @@ import (
 	"github.com/wati/oncall-agent/internal/prompts"
 )
 
+func TestToolSearchCategoriesSchemaIncludesInfrastructure(t *testing.T) {
+	spec := ToolSearchTool{}.Spec()
+	properties, ok := spec.Function.Parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("parameters properties missing: %#v", spec.Function.Parameters)
+	}
+	categories, ok := properties["categories"].(map[string]any)
+	if !ok {
+		t.Fatalf("categories property missing: %#v", properties)
+	}
+	items, ok := categories["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("categories items missing: %#v", categories)
+	}
+	rawEnum, ok := items["enum"].([]string)
+	if !ok {
+		t.Fatalf("categories enum has unexpected type: %#v", items["enum"])
+	}
+	for _, got := range rawEnum {
+		if got == CategoryInfrastructure {
+			return
+		}
+	}
+	t.Fatalf("categories enum = %#v, want %q", rawEnum, CategoryInfrastructure)
+}
+
 func TestFunctionSpecAppliesNestedPromptDescriptions(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "tools.json"), []byte(`{
