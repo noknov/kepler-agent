@@ -47,55 +47,91 @@ func (s *StatusSummarizer) Summarize(ctx context.Context, names, sampleArgs, loc
 }
 
 func summarizePrompt(names, sampleArgs, locale string) string {
-	sampleArgs = redactQueryValues(sampleArgs)
-	if len(sampleArgs) > 200 {
-		sampleArgs = sampleArgs[:200]
-	}
+	sampleArgs = sanitizeArgs(sampleArgs)
 	if locale == LocaleZH {
-		return fmt.Sprintf(
-			"用不超过10个字描述 AI 助手正在执行的操作。格式为动词加宾语，例如：读取部署配置、查询 GCP 日志、搜索错误代码。"+
-				"禁止出现您想、用户想、需要等以用户视角描述意图的说法。只输出描述文字，不加标点不加引号。\n"+
-				"工具：%s\n参数上下文：%s",
-			names, sampleArgs,
-		)
+		return fmt.Sprintf(`根据工具名和参数，用5-8个字描述AI当前执行的具体操作。
+
+规则：
+- 格式：动词 + 具体对象（从参数中提取真实名称：仓库名、命名空间、服务名、文件名、关键词等）
+- 禁止：主语、标点、"您想/AI正在"等前缀、模糊宾语（"代码"/"文件"/"内容"）
+- 参数里的具体名称优先于工具名的通用含义
+
+示例：
+shell "kubectl get pods -n mt-prod" → 查询 mt-prod Pod 状态
+shell "git log -S QuickReply"       → 追踪 QuickReply 变更来源
+shell "git blame RuleActionBar.tsx" → 追溯 RuleActionBar 修改者
+shell "git grep InstagramComment"   → 搜索 InstagramComment 引用
+code-search pattern=ErrorHandler    → 搜索 ErrorHandler 实现
+gcp-logs project=wati-gke           → 读取 wati-gke 错误日志
+github-pr_diff repo=wati-frontend   → 查看 wati-frontend PR 差异
+github-workflow_runs                → 检查 CI 构建状态
+notion-search                       → 检索 Notion 文档
+web-search                          → 网络搜索
+
+工具：%s
+参数：%s`, names, sampleArgs)
 	}
-	return fmt.Sprintf(
-		"In 10 words or fewer describe what the AI assistant is DOING right now. "+
-			"Use action-verb form: \"Reading pod logs\", \"Searching error codes\", \"Fetching GCP metrics\". "+
-			"Never write \"You want to\" or \"The user wants to\". Reply ONLY with the description, no punctuation.\n"+
-			"Tools: %s\nContext: %s",
-		names, sampleArgs,
-	)
+	return fmt.Sprintf(`Summarize the AI's current action in 5-8 words. Extract specific names from the args.
+
+Rules:
+- Format: verb + specific object (use real names from args: repo, namespace, service, file, keyword)
+- No subject, no punctuation, no "You want to" or "The user wants"
+- Specific names from args > generic inference from tool name
+
+Examples:
+shell "kubectl get pods -n mt-prod" → Checking pod status in mt-prod
+shell "git log -S QuickReply"       → Tracing QuickReply change history
+shell "git blame RuleActionBar.tsx" → Finding author of RuleActionBar
+code-search pattern=ErrorHandler    → Searching ErrorHandler implementation
+gcp-logs project=wati-gke           → Reading wati-gke error logs
+github-pr_diff repo=wati-frontend   → Reviewing wati-frontend PR diff
+notion-search                       → Searching Notion workspace
+
+Tools: %s
+Args: %s`, names, sampleArgs)
 }
 
-// redactQueryValues replaces the values of common free-text argument keys
-// (query, text, message, input, q) with a short placeholder so the summarizer
-// LLM sees the tool context without being steered by the user's raw words.
-func redactQueryValues(args string) string {
-	for _, key := range []string{`"query"`, `"text"`, `"message"`, `"input"`, `"q"`, `"prompt"`} {
-		if idx := strings.Index(args, key+`:"`); idx != -1 {
-			// JSON shorthand key:"value" — replace the value portion
-			args = redactAfterKey(args, key+`:"`)
-		} else if idx = strings.Index(args, key+`": "`); idx != -1 {
-			args = redactAfterKey(args, key+`": "`)
+// sanitizeArgs trims the raw args JSON to a compact, summarizer-friendly form.
+// Technical parameters (shell commands, repo paths, namespaces) are kept intact
+// because they provide the specific context that makes summaries useful. Only
+// long free-text fields that likely contain the user's verbatim question are
+// truncated to prevent the summarizer from paraphrasing user intent.
+func sanitizeArgs(args string) string {
+	// Keep shell commands fully intact — they contain the most useful context.
+	if strings.Contains(args, `"command"`) {
+		if len(args) > 300 {
+			return args[:300] + "..."
 		}
+		return args
+	}
+	// Truncate long values for free-text query fields only.
+	for _, key := range []string{`"query"`, `"text"`, `"message"`, `"input"`, `"prompt"`, `"q"`} {
+		args = truncateLongStringValue(args, key)
+	}
+	if len(args) > 250 {
+		return args[:250] + "..."
 	}
 	return args
 }
 
-func redactAfterKey(s, prefix string) string {
-	idx := strings.Index(s, prefix)
-	if idx == -1 {
-		return s
-	}
-	start := idx + len(prefix)
-	end := strings.Index(s[start:], `"`)
-	if end == -1 {
-		return s
-	}
-	end += start
-	if end-start > 40 {
-		return s[:start] + s[start:start+40] + "..." + s[end:]
+// truncateLongStringValue shortens the JSON string value for the given key when
+// it exceeds 50 characters. Short values (e.g. a service name or namespace) are
+// left unchanged because they provide useful context.
+func truncateLongStringValue(s, key string) string {
+	for _, sep := range []string{key + `": "`, key + `":"`} {
+		idx := strings.Index(s, sep)
+		if idx == -1 {
+			continue
+		}
+		start := idx + len(sep)
+		end := strings.Index(s[start:], `"`)
+		if end == -1 {
+			continue
+		}
+		end += start
+		if end-start > 50 {
+			s = s[:start] + s[start:start+50] + `..."` + s[end+1:]
+		}
 	}
 	return s
 }

@@ -21,6 +21,10 @@ Establish boundaries from the user's message before widening: repository, branch
 
 When a search misses, diagnose the failed assumption before changing tactics — wrong repo, wrong branch, wrong term, renamed feature, unavailable service. Do not retry with minor wording variations; change the approach. If 2 consecutive searches return empty or irrelevant results, switch data source (code → logs → config → direct read). After 6 tool calls without a clear answer, stop: summarize findings, gaps, and 1-2 next steps.
 
+**Tracing authorship ("who added X", "which commit introduced X"):** Search for the exact literal string as it appears in source — the i18n key, enum value, function name, or UI label text. Then run `git log -S "exact string" <branch> --oneline` (pickaxe) to find the introducing commit in one step. Do not start from `git blame` on a file — pickaxe search is faster and doesn't require knowing the line number. If the string is a UI label, find its translation key first (`git grep` in the locales files), then pickaxe-search that key.
+
+**Avoiding false leads from search:** When a search term matches code in an unrelated service or subsystem (e.g. searching "quick reply button" finds a WhatsApp service when you need an Instagram feature), discard that result immediately and search for the specific UI string, enum, or translation key instead. Domain mismatch (wrong channel, wrong service layer) is a strong signal to change terms, not read the file.
+
 Ask the user only when a single missing constraint **that only they can supply** would change the next deterministic step. Name the missing item. Do not ask them to choose an investigation strategy, confirm a boundary they already provided, or decide which part of their question still matters. Your own tool state (missing credentials, unreachable cluster, unconfigured context) is never a user question — state the limitation as a fact and report what you could find.
 
 For code questions, follow a top-down approach:
