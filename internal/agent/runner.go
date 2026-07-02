@@ -551,7 +551,7 @@ func (r Runner) handleFinalResponse(ctx context.Context, resp llm.Response, assi
 		return false, false, ErrEmptyFinal
 	}
 
-	if !useStream && llm.LooksLikeTextualToolCall(final) {
+	if llm.LooksLikeTextualToolCall(final) {
 		if !s.retriedTextualToolCall {
 			s.retriedTextualToolCall = true
 			s.messages = append(s.messages, llm.Message{Role: "system", Content: textualToolCallRetryPrompt()})
@@ -564,7 +564,7 @@ func (r Runner) handleFinalResponse(ctx context.Context, resp llm.Response, assi
 		}
 	}
 
-	if !useStream && hasRawEvidenceDump(final) {
+	if hasRawEvidenceDump(final) {
 		if !s.retriedRawEvidence {
 			s.retriedRawEvidence = true
 			s.messages = append(s.messages, llm.Message{Role: "system", Content: rawEvidenceRetryPrompt()})
@@ -577,7 +577,7 @@ func (r Runner) handleFinalResponse(ctx context.Context, resp llm.Response, assi
 		}
 	}
 
-	if !useStream && looksRepetitive(final) {
+	if looksRepetitive(final) {
 		if !s.retriedRepetitiveFinal {
 			s.retriedRepetitiveFinal = true
 			s.messages = append(s.messages, llm.Message{Role: "system", Content: repetitiveRetryPrompt()})
