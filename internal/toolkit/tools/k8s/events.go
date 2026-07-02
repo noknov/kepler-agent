@@ -22,11 +22,12 @@ func (t EventsTool) Spec() llm.ToolSpec {
 		"k8s-events",
 		"",
 		registry.ObjectSchema(nil, map[string]any{
-			"namespace":    map[string]any{"type": "string", "description": ""},
+			"namespace":      map[string]any{"type": "string", "description": ""},
 			"all_namespaces": map[string]any{"type": "boolean", "description": ""},
-			"for_object":   map[string]any{"type": "string", "description": ""},
-			"reason":       map[string]any{"type": "string", "description": ""},
-			"type":         map[string]any{"type": "string", "description": ""},
+			"for_object":     map[string]any{"type": "string", "description": ""},
+			"reason":         map[string]any{"type": "string", "description": ""},
+			"type":           map[string]any{"type": "string", "description": ""},
+			"context":        map[string]any{"type": "string", "description": ""},
 		}),
 	)
 }
@@ -38,6 +39,7 @@ func (t EventsTool) Execute(ctx context.Context, raw json.RawMessage, _ registry
 		ForObject     string `json:"for_object"`
 		Reason        string `json:"reason"`
 		Type          string `json:"type"`
+		Context       string `json:"context"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
@@ -65,7 +67,7 @@ func (t EventsTool) Execute(ctx context.Context, raw json.RawMessage, _ registry
 		cmdArgs = append(cmdArgs, "--field-selector="+joinComma(selectors))
 	}
 
-	out, err := t.Base.run(ctx, cmdArgs)
+	out, err := t.Base.run(ctx, args.Context, cmdArgs)
 	if err != nil {
 		return registry.Result{}, err
 	}

@@ -25,6 +25,7 @@ func (t TopTool) Spec() llm.ToolSpec {
 			"label_selector": map[string]any{"type": "string", "description": ""},
 			"sort_by":        map[string]any{"type": "string", "description": ""},
 			"containers":     map[string]any{"type": "boolean", "description": ""},
+			"context":        map[string]any{"type": "string", "description": ""},
 		}),
 	)
 }
@@ -37,6 +38,7 @@ func (t TopTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Ru
 		LabelSelector string `json:"label_selector"`
 		SortBy        string `json:"sort_by"`
 		Containers    bool   `json:"containers"`
+		Context       string `json:"context"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
@@ -67,7 +69,7 @@ func (t TopTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Ru
 		cmdArgs = append(cmdArgs, "--containers")
 	}
 
-	out, err := t.Base.run(ctx, cmdArgs)
+	out, err := t.Base.run(ctx, args.Context, cmdArgs)
 	if err != nil {
 		return registry.Result{}, err
 	}

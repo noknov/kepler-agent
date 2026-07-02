@@ -39,6 +39,7 @@ func (t GetTool) Spec() llm.ToolSpec {
 			"label_selector": map[string]any{"type": "string", "description": ""},
 			"field_selector": map[string]any{"type": "string", "description": ""},
 			"output":         map[string]any{"type": "string", "description": ""},
+			"context":        map[string]any{"type": "string", "description": ""},
 		}),
 	)
 }
@@ -52,6 +53,7 @@ func (t GetTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Ru
 		LabelSelector string `json:"label_selector"`
 		FieldSelector string `json:"field_selector"`
 		Output        string `json:"output"`
+		Context       string `json:"context"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
@@ -96,7 +98,7 @@ func (t GetTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Ru
 		return registry.Result{}, fmt.Errorf("unsupported output format %q; use wide, yaml, json, name, or jsonpath=...", output)
 	}
 
-	out, err := t.Base.run(ctx, cmdArgs)
+	out, err := t.Base.run(ctx, args.Context, cmdArgs)
 	if err != nil {
 		return registry.Result{}, err
 	}

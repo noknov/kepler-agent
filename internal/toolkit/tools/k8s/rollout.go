@@ -28,6 +28,7 @@ func (t RolloutTool) Spec() llm.ToolSpec {
 			"kind":      map[string]any{"type": "string", "description": ""},
 			"action":    map[string]any{"type": "string", "description": ""},
 			"revision":  map[string]any{"type": "integer", "description": ""},
+			"context":   map[string]any{"type": "string", "description": ""},
 		}),
 	)
 }
@@ -39,6 +40,7 @@ func (t RolloutTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 		Kind      string `json:"kind"`
 		Action    string `json:"action"`
 		Revision  int    `json:"revision"`
+		Context   string `json:"context"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
@@ -76,7 +78,7 @@ func (t RolloutTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 		cmdArgs = append(cmdArgs, fmt.Sprintf("--revision=%d", args.Revision))
 	}
 
-	out, err := t.Base.run(ctx, cmdArgs)
+	out, err := t.Base.run(ctx, args.Context, cmdArgs)
 	if err != nil {
 		return registry.Result{}, err
 	}
