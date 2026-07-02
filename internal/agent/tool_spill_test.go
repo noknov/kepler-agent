@@ -1,10 +1,14 @@
 package agent
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
 func TestMaybeSpillResultSmallContent(t *testing.T) {
@@ -39,6 +43,35 @@ func TestMaybeSpillResultLargeContent(t *testing.T) {
 	}
 	if string(data) != content {
 		t.Fatal("spill file should contain full content")
+	}
+}
+
+func TestSpillReadToolReadsQuerySlice(t *testing.T) {
+	runID := "run-spill-read-test"
+	dir := filepath.Join(spillDir, runID)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	content := strings.Repeat("a", maxToolResultChars) + " before NEEDLE after " + strings.Repeat("z", 2000)
+	notice := maybeSpillResult(runID, "code-read_file", "callabcdef123", content)
+	if !strings.Contains(notice, "tool_spill-read") {
+		t.Fatalf("spill notice should mention tool_spill-read, got %q", notice)
+	}
+
+	raw, _ := json.Marshal(map[string]any{
+		"tool_name":    "code-read_file",
+		"tool_call_id": "callabcdef123",
+		"query":        "NEEDLE",
+		"limit":        200,
+	})
+	result, err := (SpillReadTool{}).Execute(context.Background(), raw, registry.Runtime{RunID: runID})
+	if err != nil {
+		t.Fatalf("SpillReadTool.Execute() error = %v", err)
+	}
+	if !strings.Contains(result.Content, "NEEDLE") {
+		t.Fatalf("spill read result did not include query hit: %q", result.Content)
+	}
+	if strings.Contains(result.Content, spillDir) {
+		t.Fatalf("spill read result leaked storage path: %q", result.Content)
 	}
 }
 

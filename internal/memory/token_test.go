@@ -116,6 +116,25 @@ func TestEstimateTokens(t *testing.T) {
 	}
 }
 
+func TestEstimateToolSpecTokens(t *testing.T) {
+	specs := []llm.ToolSpec{{
+		Type: "function",
+		Function: llm.ToolSpecFunction{
+			Name:        "large-tool",
+			Description: "tool with a non-trivial schema",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{"type": "string", "description": "search query"},
+				},
+			},
+		},
+	}}
+	if got := EstimateToolSpecTokens(specs); got <= 0 {
+		t.Fatalf("EstimateToolSpecTokens() = %d, want > 0", got)
+	}
+}
+
 func TestCountTokensWithCalibration(t *testing.T) {
 	// Without any usage data, should fall back to estimation.
 	messages := []llm.Message{

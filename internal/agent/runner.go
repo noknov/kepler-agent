@@ -236,6 +236,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	if strings.TrimSpace(req.RunID) == "" {
 		req.RunID = runs.NewID()
 	}
+	req.Runtime.RunID = req.RunID
 	messages := append([]llm.Message(nil), req.Messages...)
 	if hint := localeHint(req.Locale); hint != "" {
 		messages = append(messages, llm.Message{Role: "system", Content: hint})
@@ -291,12 +292,11 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			}
 		}
 
-		messages = r.prepareMessagesForQuery(ctx, messages, req)
-
 		var toolSpecs []llm.ToolSpec
 		if r.Tools != nil && pivotTier < 4 {
 			toolSpecs = r.Tools.Specs()
 		}
+		messages = r.prepareMessagesForQuery(ctx, messages, req, toolSpecs)
 
 		llmReq := llm.Request{
 			Model:       r.Model,
@@ -597,7 +597,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	if r.StatusUpdate != nil {
 		r.StatusUpdate(GeneratingStatus(req.Locale))
 	}
-	messages = r.prepareMessagesForQuery(ctx, messages, req)
+	messages = r.prepareMessagesForQuery(ctx, messages, req, nil)
 	messages = append(messages, llm.Message{Role: "system", Content: "You have reached the investigation step limit. Summarize your findings now based on evidence gathered so far. If you are uncertain, state what is known and what remains unverified."})
 	resp, err := r.LLM.Chat(ctx, llm.Request{
 		Model:       r.Model,
@@ -648,14 +648,14 @@ func stripRawEvidenceDump(text string) string {
 	return strings.TrimSpace(strings.Join(cleaned, "\n"))
 }
 
-func (r Runner) compactMessages(ctx context.Context, messages []llm.Message) []llm.Message {
+func (r Runner) compactMessages(ctx context.Context, messages []llm.Message, reserveTokens int) []llm.Message {
 	if r.Compactor == nil {
 		return messages
 	}
 	// Always apply micro-compact first (zero cost, clears old tool results).
 	messages = r.Compactor.ApplyMicroCompact(messages)
 	// Only run expensive compaction when near the threshold.
-	compacted, result, err := r.Compactor.CompactIfNeeded(ctx, messages)
+	compacted, result, err := r.Compactor.CompactIfNeededWithReserve(ctx, messages, reserveTokens)
 	if err != nil {
 		r.observeEvent("compact_error", map[string]any{"error": err.Error(), "mode": "auto"})
 		return messages

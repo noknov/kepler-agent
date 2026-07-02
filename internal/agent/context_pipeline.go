@@ -11,9 +11,9 @@ import (
 // prepareMessagesForQuery mirrors Claude Code's per-iteration context pipeline:
 // first project large tool results into persisted references, then run the
 // compaction stack, and only then normalize provider-facing message shape.
-func (r Runner) prepareMessagesForQuery(ctx context.Context, messages []llm.Message, req Request) []llm.Message {
+func (r Runner) prepareMessagesForQuery(ctx context.Context, messages []llm.Message, req Request, toolSpecs []llm.ToolSpec) []llm.Message {
 	messages = r.applyToolResultBudget(messages, req)
-	messages = r.compactMessages(ctx, messages)
+	messages = r.compactMessages(ctx, messages, memory.EstimateToolSpecTokens(toolSpecs))
 	return memory.PrepareForLLM(messages)
 }
 

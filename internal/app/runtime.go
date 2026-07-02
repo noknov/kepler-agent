@@ -180,6 +180,7 @@ func defaultClearableTools() map[string]bool {
 		// Code search and reading
 		"code-read_file", "code-search", "code-symbols",
 		"code-definition", "code-references", "code-diagnostics", "explore-code",
+		"tool_spill-read",
 		// Git reading
 		"git-search_ref", "git-read_file_ref", "git-log", "git-show",
 		"repo-search", "repo-read_file",

@@ -474,16 +474,14 @@ func TestRunnerCompactMessagesUsesCompactIfNeeded(t *testing.T) {
 		{Role: "tool", Name: "code-search", ToolCallID: "new", Content: strings.Repeat("new ", 100)},
 	}
 
-	compacted := r.compactMessages(context.Background(), messages)
-	foundSummary := false
-	for _, msg := range compacted {
-		if strings.Contains(msg.Content, "compact summary") {
-			foundSummary = true
-			break
-		}
+	compacted := r.compactMessages(context.Background(), messages, 0)
+	if len(compacted) >= len(messages) {
+		t.Fatalf("messages were not compacted: %#v", compacted)
 	}
-	if !foundSummary {
-		t.Fatalf("compact summary not found: %#v", compacted)
+	for _, msg := range compacted {
+		if strings.Contains(msg.Content, strings.Repeat("old ", 20)) {
+			t.Fatalf("old oversized tool result survived compaction: %#v", compacted)
+		}
 	}
 }
 
