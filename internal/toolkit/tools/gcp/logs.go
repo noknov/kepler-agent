@@ -27,8 +27,6 @@ type LogsTool struct {
 	Timeout          time.Duration
 }
 
-func (LogsTool) Repeatable() bool { return true }
-
 func (LogsTool) Parallel() bool { return true }
 
 func (t LogsTool) Spec() llm.ToolSpec {

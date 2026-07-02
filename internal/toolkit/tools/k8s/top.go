@@ -12,8 +12,7 @@ type TopTool struct {
 	Base Base
 }
 
-func (TopTool) Repeatable() bool { return true }
-func (TopTool) Parallel() bool   { return true }
+func (TopTool) Parallel() bool { return true }
 
 func (t TopTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(

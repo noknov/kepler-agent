@@ -12,8 +12,7 @@ type GetPodsTool struct {
 	Base Base
 }
 
-func (GetPodsTool) Repeatable() bool { return true }
-func (GetPodsTool) Parallel() bool   { return true }
+func (GetPodsTool) Parallel() bool { return true }
 
 func (t GetPodsTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(

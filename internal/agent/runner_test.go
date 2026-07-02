@@ -236,7 +236,7 @@ func TestRunnerReturnsMaxToolStepsError(t *testing.T) {
 	}
 }
 
-func TestRunnerSkipsDuplicateToolCallInsteadOfFailing(t *testing.T) {
+func TestRunnerExecutesRepeatedToolCalls(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{
 		{Message: toolCallMessage("tool_1", `{"text":"same"}`)},
 		{Message: toolCallMessage("tool_2", `{"text":"same"}`)},
@@ -253,15 +253,45 @@ func TestRunnerSkipsDuplicateToolCallInsteadOfFailing(t *testing.T) {
 	if result.Final != "final" {
 		t.Fatalf("Final = %q, want final", result.Final)
 	}
-	foundDuplicate := false
+	toolMessages := 0
 	for _, msg := range result.Generated {
-		if msg.Role == "tool" && strings.Contains(msg.Content, "duplicate echo call skipped") {
-			foundDuplicate = true
-			break
+		if msg.Role == "tool" {
+			toolMessages++
+			if strings.Contains(msg.Content, "duplicate") {
+				t.Fatalf("runner should not synthesize duplicate tool errors: %q", msg.Content)
+			}
 		}
 	}
-	if !foundDuplicate {
-		t.Fatalf("duplicate tool result not found: %#v", result.Generated)
+	if toolMessages != 3 {
+		t.Fatalf("tool messages = %d, want 3", toolMessages)
+	}
+}
+
+func TestRunnerAllowsSameSearchQueryAcrossDifferentScopes(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{Message: codeSearchToolCallMessage("search_1", `{"query":"login","path":"api"}`)},
+		{Message: codeSearchToolCallMessage("search_2", `{"query":"login","path":"worker"}`)},
+		{Message: codeSearchToolCallMessage("search_3", `{"query":"login","path":"frontend"}`)},
+		{Message: llm.Message{Role: "assistant", Content: "final"}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeCodeSearchTool{})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 5}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "final" {
+		t.Fatalf("Final = %q, want final", result.Final)
+	}
+	var duplicateMessages []string
+	for _, msg := range result.Generated {
+		if msg.Role == "tool" && strings.Contains(msg.Content, "duplicate") {
+			duplicateMessages = append(duplicateMessages, msg.Content)
+		}
+	}
+	if len(duplicateMessages) > 0 {
+		t.Fatalf("same query across different search scopes should not be deduplicated: %#v", duplicateMessages)
 	}
 }
 
@@ -388,23 +418,6 @@ func TestRunnerRetriesRawEvidenceFinal(t *testing.T) {
 	}
 }
 
-func TestRunnerInjectsSearchMissPivotAfterRepeatedNoMatches(t *testing.T) {
-	client := &searchMissAwareClient{}
-	tools := registry.New()
-	tools.Register(fakeNoMatchSearchTool{})
-
-	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 5}.Run(context.Background(), Request{})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if result.Final != "changed search strategy" {
-		t.Fatalf("Final = %q, want changed search strategy", result.Final)
-	}
-	if !client.sawPivot {
-		t.Fatal("search miss pivot was not injected")
-	}
-}
-
 func TestStreamingToolExecutorDoesNotDoubleExecuteInFlightTool(t *testing.T) {
 	var calls int32
 	tools := registry.New()
@@ -417,7 +430,7 @@ func TestStreamingToolExecutorDoesNotDoubleExecuteInFlightTool(t *testing.T) {
 			Arguments: `{}`,
 		},
 	}
-	exec := newStreamingToolExecutor(context.Background(), Runner{Tools: tools}, Request{}, map[string]int{}, map[string]int{})
+	exec := newStreamingToolExecutor(context.Background(), Runner{Tools: tools}, Request{})
 
 	exec.Submit(call)
 	results := exec.Drain([]llm.ToolCall{call})
@@ -491,26 +504,6 @@ func (f *longSearchFakeClient) Chat(_ context.Context, req llm.Request) (llm.Res
 type parallelBurstFakeClient struct {
 	requests []llm.Request
 	turns    int
-}
-
-type searchMissAwareClient struct {
-	requests []llm.Request
-	calls    int
-	sawPivot bool
-}
-
-func (f *searchMissAwareClient) Chat(_ context.Context, req llm.Request) (llm.Response, error) {
-	f.requests = append(f.requests, req)
-	for _, msg := range req.Messages {
-		if msg.Role == "system" && strings.Contains(msg.Content, "Recent searches returned no matches") {
-			f.sawPivot = true
-		}
-	}
-	f.calls++
-	if f.calls <= 2 {
-		return llm.Response{Message: codeSearchToolCallMessage(fmt.Sprintf("miss_%d", f.calls), fmt.Sprintf(`{"query":"missing-%d"}`, f.calls))}, nil
-	}
-	return llm.Response{Message: llm.Message{Role: "assistant", Content: "changed search strategy"}}, nil
 }
 
 func (f *parallelBurstFakeClient) Chat(_ context.Context, req llm.Request) (llm.Response, error) {
@@ -1263,30 +1256,6 @@ func TestRunnerReturnsErrorWhenFinalResponseStaysEmpty(t *testing.T) {
 	}
 }
 
-func TestRepeatableToolAllowsDuplicateCalls(t *testing.T) {
-	client := &fakeClient{responses: []llm.Response{
-		{Message: repeatableToolCallMessage("tool_1", `{"x":"1"}`)},
-		{Message: repeatableToolCallMessage("tool_2", `{"x":"1"}`)},
-		{Message: repeatableToolCallMessage("tool_3", `{"x":"1"}`)},
-		{Message: llm.Message{Role: "assistant", Content: "final"}},
-	}}
-	tools := registry.New()
-	tools.Register(fakeRepeatableTool{})
-
-	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 5}.Run(context.Background(), Request{})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if result.Final != "final" {
-		t.Fatalf("Final = %q, want final", result.Final)
-	}
-	for _, msg := range result.Generated {
-		if msg.Role == "tool" && strings.Contains(msg.Content, "duplicate") {
-			t.Fatal("repeatable tool should never be skipped as duplicate")
-		}
-	}
-}
-
 func TestRunnerPassesAllActiveToolSpecsWithoutIntentKeywordPruning(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{
 		{Message: llm.Message{Role: "assistant", Content: "done"}},
@@ -1353,7 +1322,7 @@ func specNames(specs []llm.ToolSpec) []string {
 	return names
 }
 
-func TestRunnerDisablesExploreAfterFailure(t *testing.T) {
+func TestRunnerKeepsActiveToolsVisibleAfterToolFailure(t *testing.T) {
 	client := &exploreFailureAwareClient{}
 	tools := registry.New()
 	tools.Register(fakeExploreErrorTool{})
@@ -1366,12 +1335,9 @@ func TestRunnerDisablesExploreAfterFailure(t *testing.T) {
 	if result.Final != "continued without explore" {
 		t.Fatalf("Final = %q, want continued without explore", result.Final)
 	}
-	// After exploreFailureLimit (3) failures, explore-code should be removed.
 	lastReq := client.requests[len(client.requests)-1]
-	for _, spec := range lastReq.Tools {
-		if spec.Function.Name == "explore-code" {
-			t.Fatalf("explore-code should be disabled after %d failures", exploreFailureLimit)
-		}
+	if !hasSpec(lastReq.Tools, "explore-code") {
+		t.Fatalf("active tool should remain visible after failures: %v", specNames(lastReq.Tools))
 	}
 }
 
@@ -1383,28 +1349,13 @@ type exploreFailureAwareClient struct {
 func (f *exploreFailureAwareClient) Chat(_ context.Context, req llm.Request) (llm.Response, error) {
 	f.requests = append(f.requests, req)
 	f.calls++
-	// Keep calling explore-code until exploreFailureLimit (3) failures accumulate.
-	if f.calls <= exploreFailureLimit {
+	if f.calls <= 3 {
 		return llm.Response{Message: llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{{
 			ID: "explore_" + fmt.Sprint(f.calls), Type: "function",
 			Function: llm.ToolFunction{Name: "explore-code", Arguments: `{"task":"broad investigation"}`},
 		}}}}, nil
 	}
 	return llm.Response{Message: llm.Message{Role: "assistant", Content: "continued without explore"}}, nil
-}
-
-func repeatableToolCallMessage(id, args string) llm.Message {
-	return llm.Message{
-		Role: "assistant",
-		ToolCalls: []llm.ToolCall{{
-			ID:   id,
-			Type: "function",
-			Function: llm.ToolFunction{
-				Name:      "fetch",
-				Arguments: args,
-			},
-		}},
-	}
 }
 
 func TestParallelToolExecution(t *testing.T) {
@@ -1609,7 +1560,7 @@ func TestRunnerDoesNotKeywordGatePlanOrEvidence(t *testing.T) {
 		t.Fatalf("Final = %q", result.Final)
 	}
 	if len(client.requests) != 1 {
-		t.Fatalf("keyword-based plan/evidence gates should not force retries; got %d calls", len(client.requests))
+		t.Fatalf("lexical plan/evidence gates should not force retries; got %d calls", len(client.requests))
 	}
 }
 
@@ -1807,25 +1758,6 @@ func lastSystemContent(messages []llm.Message) string {
 	return ""
 }
 
-type fakeRepeatableTool struct{}
-
-func (fakeRepeatableTool) Repeatable() bool { return true }
-
-func (fakeRepeatableTool) Spec() llm.ToolSpec {
-	return llm.ToolSpec{
-		Type: "function",
-		Function: llm.ToolSpecFunction{
-			Name:        "fetch",
-			Description: "fetch data",
-			Parameters:  map[string]any{"type": "object"},
-		},
-	}
-}
-
-func (fakeRepeatableTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
-	return registry.Result{Content: string(args)}, nil
-}
-
 type fakeMissingWorkspaceTool struct{}
 
 func (fakeMissingWorkspaceTool) Spec() llm.ToolSpec {
@@ -1882,23 +1814,6 @@ func (fakeCodeSearchTool) Spec() llm.ToolSpec {
 
 func (fakeCodeSearchTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
 	return registry.Result{Content: string(args)}, nil
-}
-
-type fakeNoMatchSearchTool struct{}
-
-func (fakeNoMatchSearchTool) Spec() llm.ToolSpec {
-	return llm.ToolSpec{
-		Type: "function",
-		Function: llm.ToolSpecFunction{
-			Name:        "code-search",
-			Description: "search code",
-			Parameters:  map[string]any{"type": "object"},
-		},
-	}
-}
-
-func (fakeNoMatchSearchTool) Execute(_ context.Context, _ json.RawMessage, _ registry.Runtime) (registry.Result, error) {
-	return registry.Result{Content: "no matches"}, nil
 }
 
 type countingSlowTool struct {

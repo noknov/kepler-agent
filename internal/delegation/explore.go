@@ -24,8 +24,6 @@ type ExploreTool struct {
 	Manager *Manager
 }
 
-func (ExploreTool) Repeatable() bool { return true }
-
 func (ExploreTool) Parallel() bool { return true }
 
 func (t ExploreTool) Spec() llm.ToolSpec {

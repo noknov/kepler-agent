@@ -14,8 +14,6 @@ type Tool struct {
 	Manager *Manager
 }
 
-func (Tool) Repeatable() bool { return true }
-
 func (Tool) Parallel() bool { return true }
 
 func (t Tool) Spec() llm.ToolSpec {

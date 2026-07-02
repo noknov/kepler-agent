@@ -20,7 +20,6 @@ import (
 
 var (
 	ErrRepetitiveOutput = errors.New("model output repeated itself")
-	ErrRepeatedToolCall = errors.New("model repeated the same tool call")
 	ErrTextualToolCall  = errors.New("model returned textual tool invocation instead of structured tool calls")
 	ErrMaxToolSteps     = errors.New("agent exceeded max tool steps")
 	ErrEmptyFinal       = errors.New("model returned empty final response")
@@ -31,7 +30,6 @@ const (
 	// ample opportunity to self-correct first. Most tool errors (wrong path,
 	// wrong branch, wrong repo) are technical mistakes the model can fix itself.
 	clarificationErrorThreshold = 4
-	exploreFailureLimit         = 3
 
 	// Progressive escalation thresholds. Pressure increases at each tier
 	// to prevent aimless searching while still allowing genuine investigations.
@@ -243,8 +241,6 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		messages = append(messages, llm.Message{Role: "system", Content: hint})
 	}
 	var generated []llm.Message
-	seenToolCalls := map[string]int{}
-	seenSearchTerms := map[string]int{}
 	retriedRepetitiveFinal := false
 	retriedTextualToolCall := false
 	retriedEmptyResponse := false
@@ -258,11 +254,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	codeToolCalledThisRun := false
 	afterTools := false
 	pivotTier := 0 // 0=none, 1=gentle, 2=firm, 3=urgent, 4=force
-	searchMissPivotInjected := false
-	consecutiveNoMatchSearchRounds := 0
-	toolsWithoutProgress := 0
 	clarificationErrors := newClarificationErrorTracker()
-	control := newRunnerControl()
 
 	for step := 0; step < maxSteps; step++ {
 		if r.StatusUpdate != nil {
@@ -303,7 +295,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 
 		var toolSpecs []llm.ToolSpec
 		if r.Tools != nil && pivotTier < 4 {
-			toolSpecs = control.filterToolSpecs(r.Tools.Specs())
+			toolSpecs = r.Tools.Specs()
 		}
 
 		llmReq := llm.Request{
@@ -339,7 +331,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		// during streaming, rather than waiting for the full response.
 		var streamExec *streamingToolExecutor
 		if useStream && r.Tools != nil && len(toolSpecs) > 0 {
-			streamExec = newStreamingToolExecutor(ctx, r, req, seenToolCalls, seenSearchTerms)
+			streamExec = newStreamingToolExecutor(ctx, r, req)
 		}
 
 		streamHandler := llm.StreamHandler{
@@ -568,27 +560,10 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		if streamExec != nil && streamExec.HasSubmitted() {
 			toolResults = streamExec.Drain(assistantMsg.ToolCalls)
 		} else {
-			toolResults = r.executeToolCalls(ctx, assistantMsg.ToolCalls, seenToolCalls, seenSearchTerms, req)
+			toolResults = r.executeToolCalls(ctx, assistantMsg.ToolCalls, req)
 		}
 		if len(toolResults) > 0 {
 			afterTools = true
-		}
-		allSearchesMissed := searchRoundAllNoMatch(toolResults)
-		searchesHadHits := searchRoundHasHits(toolResults)
-		if toolResultsLackProgress(toolResults) {
-			toolsWithoutProgress++
-			// Accelerate escalation when tools aren't producing useful results.
-			if toolsWithoutProgress >= 3 && pivotTier < 2 {
-				pivotTier = 2
-				messages = append(messages, llm.Message{Role: "system", Content: stepBudgetPivotMessage()})
-				r.observeEvent("tool_progress_pivot", map[string]any{"rounds_without_progress": toolsWithoutProgress})
-			} else if toolsWithoutProgress >= 5 && pivotTier < 3 {
-				pivotTier = 3
-				messages = append(messages, llm.Message{Role: "system", Content: pivotUrgentMessage()})
-				r.observeEvent("tool_progress_urgent", map[string]any{"rounds_without_progress": toolsWithoutProgress})
-			}
-		} else if len(toolResults) > 0 {
-			toolsWithoutProgress = 0
 		}
 		for _, tr := range toolResults {
 			messages = append(messages, tr.message)
@@ -604,27 +579,6 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 				}, nil
 			}
 		}
-		if allSearchesMissed {
-			consecutiveNoMatchSearchRounds++
-			if consecutiveNoMatchSearchRounds >= 2 && !searchMissPivotInjected {
-				searchMissPivotInjected = true
-				messages = append(messages, llm.Message{Role: "system", Content: searchMissPivotMessage()})
-				r.observeEvent("search_miss_pivot", map[string]any{"consecutive_no_match_rounds": consecutiveNoMatchSearchRounds})
-				// Accelerate escalation when searches keep missing.
-				if pivotTier < 1 {
-					pivotTier = 1
-				}
-			}
-			// 3+ consecutive misses: force firm pivot.
-			if consecutiveNoMatchSearchRounds >= 3 && pivotTier < 2 {
-				pivotTier = 2
-				messages = append(messages, llm.Message{Role: "system", Content: stepBudgetPivotMessage()})
-				r.observeEvent("search_miss_firm", map[string]any{"consecutive_no_match_rounds": consecutiveNoMatchSearchRounds})
-			}
-		} else if searchesHadHits {
-			consecutiveNoMatchSearchRounds = 0
-		}
-		control.finishTurn(toolResults)
 		locale := requestLocale(req.Locale)
 		if question := clarificationErrors.Question(toolResults, locale); question != "" {
 			generated = append(generated, llm.Message{
@@ -771,50 +725,6 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	}
 }
 
-type runnerControl struct {
-	toolFailures  map[string]int
-	disabledTools map[string]bool
-}
-
-func newRunnerControl() *runnerControl {
-	return &runnerControl{
-		toolFailures:  map[string]int{},
-		disabledTools: map[string]bool{},
-	}
-}
-
-func (c *runnerControl) filterToolSpecs(specs []llm.ToolSpec) []llm.ToolSpec {
-	if c == nil || len(c.disabledTools) == 0 {
-		return specs
-	}
-	out := make([]llm.ToolSpec, 0, len(specs))
-	for _, spec := range specs {
-		if c.disabledTools[spec.Function.Name] {
-			continue
-		}
-		out = append(out, spec)
-	}
-	return out
-}
-
-func (c *runnerControl) finishTurn(results []toolResult) {
-	if c == nil || len(results) == 0 {
-		return
-	}
-	for _, result := range results {
-		if result.err != nil {
-			c.toolFailures[result.name]++
-			if result.name == "explore-code" && c.toolFailures[result.name] >= exploreFailureLimit {
-				c.disabledTools[result.name] = true
-			}
-			continue
-		}
-		if result.name != "" {
-			c.toolFailures[result.name] = 0
-		}
-	}
-}
-
 func requestLocale(locale string) string {
 	return strings.TrimSpace(locale)
 }
@@ -837,7 +747,7 @@ type toolResult struct {
 	err         error
 }
 
-func (r Runner) executeToolCalls(ctx context.Context, calls []llm.ToolCall, seenToolCalls, seenSearchTerms map[string]int, req Request) []toolResult {
+func (r Runner) executeToolCalls(ctx context.Context, calls []llm.ToolCall, req Request) []toolResult {
 	// Fire one dynamic status summary per agent turn (covers the full tool batch).
 	// The main loop already shows ThinkingStatus while the LLM generates; the
 	// summary overwrites that without an extra intermediate update here.
@@ -886,15 +796,6 @@ func (r Runner) executeToolCalls(ctx context.Context, calls []llm.ToolCall, seen
 
 	for i, call := range calls {
 		name := call.Function.Name
-		if dup, content := r.duplicateToolCall(call, seenToolCalls, seenSearchTerms); dup {
-			err := fmt.Errorf("%w: %s", ErrRepeatedToolCall, name)
-			results[i] = toolResult{
-				message: llm.Message{Role: "tool", ToolCallID: call.ID, Name: name, Content: content},
-				name:    name,
-				err:     err,
-			}
-			continue
-		}
 		ic := indexedCall{index: i, call: call}
 		if r.Tools.CanRunInParallel(name) {
 			parallelBatch = append(parallelBatch, ic)
@@ -1120,60 +1021,6 @@ func (r Runner) observeToolResults(results []toolResult) {
 	}
 }
 
-func toolCallSignature(call llm.ToolCall) string {
-	args := strings.Join(strings.Fields(call.Function.Arguments), " ")
-	return call.Function.Name + "\x00" + args
-}
-
-var searchDedupTools = map[string]bool{
-	"code-search":              true,
-	"repo-search":              true,
-	"git-search_ref":           true,
-	"rag-search":               true,
-	"knowledge-runbook_search": true,
-	"notion-search":            true,
-	"web-search":               true,
-	"slack-file_search":        true,
-}
-
-func normalizeSearchTerm(s string) string {
-	s = strings.ToLower(s)
-	s = strings.ReplaceAll(s, "_", "")
-	s = strings.ReplaceAll(s, "-", "")
-	s = strings.ReplaceAll(s, " ", "")
-	return s
-}
-
-func searchTermSignature(toolName string, args json.RawMessage) string {
-	if !searchDedupTools[toolName] {
-		return ""
-	}
-	var payload struct {
-		Query string `json:"query"`
-	}
-	if err := json.Unmarshal(args, &payload); err != nil || strings.TrimSpace(payload.Query) == "" {
-		return ""
-	}
-	return toolName + "\x00" + normalizeSearchTerm(payload.Query)
-}
-
-func (r Runner) duplicateToolCall(call llm.ToolCall, seenToolCalls, seenSearchTerms map[string]int) (bool, string) {
-	name := call.Function.Name
-	repeatable := r.Tools != nil && r.Tools.IsRepeatable(name)
-	signature := toolCallSignature(call)
-	seenToolCalls[signature]++
-	if seenToolCalls[signature] > 2 && !repeatable {
-		return true, fmt.Sprintf("[tool error] duplicate %s call skipped. Use the existing tool result already in the conversation, call a different tool with different arguments, or give the final answer now.", name)
-	}
-	if searchSig := searchTermSignature(name, json.RawMessage(call.Function.Arguments)); searchSig != "" {
-		seenSearchTerms[searchSig]++
-		if seenSearchTerms[searchSig] > 2 && !repeatable {
-			return true, fmt.Sprintf("[tool error] duplicate %s call skipped. Use the existing tool result already in the conversation, call a different tool with different arguments, or give the final answer now.", name)
-		}
-	}
-	return false, ""
-}
-
 func pivotGentleMessage() string {
 	return prompts.RunnerPrompt("pivot_gentle", "You have used several tool calls. Most questions resolve in 1-3 calls. If you already have enough evidence, answer now. If not, make your next call count — use the single most decisive search or read.")
 }
@@ -1188,89 +1035,6 @@ func pivotUrgentMessage() string {
 
 func pivotForceMessage() string {
 	return prompts.RunnerPrompt("pivot_force", "FINAL: Tools are no longer available. Give your answer now using only the evidence already gathered. Be direct and concise.")
-}
-
-func searchMissPivotMessage() string {
-	return prompts.RunnerPrompt("search_miss_pivot", "Recent searches returned no matches. Before repeating similar search terms, diagnose the failed assumption: wrong repository/root, wrong branch/ref, wrong path, wrong product wording, generated code, missing external tool, or unavailable data source. Try a different evidence source or a meaningfully different naming pattern. If that still misses, answer with what is known and what remains unverified instead of continuing to guess.")
-}
-
-func toolResultsLackProgress(results []toolResult) bool {
-	if len(results) == 0 {
-		return false
-	}
-	bad := 0
-	for _, result := range results {
-		if result.err != nil || emptyToolResult(result.message.Content) {
-			bad++
-		}
-	}
-	return bad*2 >= len(results)
-}
-
-func emptyToolResult(content string) bool {
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return true
-	}
-	if strings.HasPrefix(content, "[tool error]") {
-		return true
-	}
-	switch content {
-	case "no matches", "no web results":
-		return true
-	}
-	return strings.HasPrefix(content, "no matching code found")
-}
-
-func unwrapEvidenceContent(content string) string {
-	content = strings.TrimSpace(content)
-	if !strings.Contains(content, "<evidence") {
-		return content
-	}
-	start := strings.Index(content, ">")
-	end := strings.LastIndex(content, "</evidence>")
-	if start < 0 || end <= start {
-		return content
-	}
-	return strings.TrimSpace(content[start+1 : end])
-}
-
-func isNoMatchResult(content string) bool {
-	inner := unwrapEvidenceContent(content)
-	switch inner {
-	case "", "no matches", "no web results":
-		return true
-	}
-	return strings.HasPrefix(inner, "no matching code found")
-}
-
-func searchRoundAllNoMatch(results []toolResult) bool {
-	if len(results) == 0 {
-		return false
-	}
-	searches := 0
-	for _, result := range results {
-		if !searchDedupTools[result.name] {
-			continue
-		}
-		searches++
-		if !isNoMatchResult(result.message.Content) {
-			return false
-		}
-	}
-	return searches > 0
-}
-
-func searchRoundHasHits(results []toolResult) bool {
-	for _, result := range results {
-		if !searchDedupTools[result.name] {
-			continue
-		}
-		if !isNoMatchResult(result.message.Content) {
-			return true
-		}
-	}
-	return false
 }
 
 func looksRepetitive(text string) bool {

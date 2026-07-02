@@ -25,8 +25,6 @@ type ReadOnlyTool struct {
 	Timeout     time.Duration
 }
 
-func (ReadOnlyTool) Repeatable() bool { return true }
-
 func (t ReadOnlyTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"readonly-shell",
