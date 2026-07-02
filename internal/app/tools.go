@@ -22,6 +22,7 @@ import (
 	plannerTools "github.com/wati/oncall-agent/internal/toolkit/tools/planner"
 	playwrightTools "github.com/wati/oncall-agent/internal/toolkit/tools/playwright"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	shellTools "github.com/wati/oncall-agent/internal/toolkit/tools/shell"
 	skillTools "github.com/wati/oncall-agent/internal/toolkit/tools/skills"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/slacktool"
 	ttsTools "github.com/wati/oncall-agent/internal/toolkit/tools/tts"
@@ -32,7 +33,7 @@ import (
 func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) *registry.Registry {
 	tools := registry.NewReadOnlyWithAllowedWrites("luckin-create_order", "luckin-cancel_order", "slack-create_canvas", "tts-speak")
 	registerDeferredDiagnosticsTools(tools)
-	registerDeferredK8sTools(tools, cfg, commandPolicy)
+	registerK8sTools(tools, cfg, commandPolicy)
 	registerCodeTools(tools, cfg, workspacePolicy, commandPolicy)
 	registerIntegrationTools(tools, cfg, commandPolicy)
 	registerKnowledgeTools(tools, cfg)
@@ -69,6 +70,13 @@ func registerCodeTools(tools *registry.Registry, cfg config.Config, workspacePol
 }
 
 func registerIntegrationTools(tools *registry.Registry, cfg config.Config, commandPolicy safety.CommandPolicy) {
+	tools.Register(shellTools.ReadOnlyTool{
+		GCloudPath:  cfg.Tools.GCloudPath,
+		KubectlPath: cfg.Tools.KubectlPath,
+		Guard:       commandPolicy,
+		Timeout:     cfg.Tools.CommandTimeout,
+	})
+
 	tools.Register(gcpTools.LogsTool{
 		GCloudPath:       cfg.Tools.GCloudPath,
 		DefaultProject:   cfg.Tools.GCPDefaultProject,
@@ -141,7 +149,7 @@ func registerKnowledgeTools(tools *registry.Registry, cfg config.Config) {
 	tools.Register(knowledgeTools.RunbookSearchTool{})
 }
 
-func registerDeferredK8sTools(tools *registry.Registry, cfg config.Config, commandPolicy safety.CommandPolicy) {
+func registerK8sTools(tools *registry.Registry, cfg config.Config, commandPolicy safety.CommandPolicy) {
 	base := k8sTools.Base{
 		KubectlPath:    cfg.Tools.KubectlPath,
 		DefaultContext: cfg.Tools.K8sDefaultContext,
@@ -149,10 +157,10 @@ func registerDeferredK8sTools(tools *registry.Registry, cfg config.Config, comma
 		Guard:          commandPolicy,
 		Timeout:        cfg.Tools.CommandTimeout,
 	}
-	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryInfrastructure, k8sTools.GetPodsTool{Base: base}))
-	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryInfrastructure, k8sTools.DescribeTool{Base: base}))
-	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryInfrastructure, k8sTools.LogsTool{Base: base}))
-	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryInfrastructure, k8sTools.TopTool{Base: base}))
+	tools.Register(k8sTools.GetPodsTool{Base: base})
+	tools.Register(k8sTools.DescribeTool{Base: base})
+	tools.Register(k8sTools.LogsTool{Base: base})
+	tools.Register(k8sTools.TopTool{Base: base})
 }
 
 func registerSlackTools(tools *registry.Registry, slackClient *slack.Client, cfg config.Config) {

@@ -1287,56 +1287,52 @@ func TestRepeatableToolAllowsDuplicateCalls(t *testing.T) {
 	}
 }
 
-func TestSelectToolSpecsPrunesHeavySnapshotToolsUntilIntentMatches(t *testing.T) {
-	specs := []llm.ToolSpec{
-		namedSpec("tool_search"),
-		namedSpec("plan-update"),
-		namedSpec("code-search"),
-		namedSpec("code-read_file"),
-		namedSpec("git-status"),
-		namedSpec("git-log"),
-		namedSpec("git-show"),
-		namedSpec("repo-search"),
-		namedSpec("repo-read_file"),
-		namedSpec("git-fetch_ref"),
-		namedSpec("git-search_ref"),
-		namedSpec("git-read_file_ref"),
-		namedSpec("skills-load"),
-		namedSpec("slack-ask_user"),
-		namedSpec("explore-code"),
-		namedSpec("delegate-run"),
-		namedSpec("rag-search"),
-		namedSpec("code-symbols"),
-		namedSpec("code-definition"),
+func TestRunnerPassesAllActiveToolSpecsWithoutIntentKeywordPruning(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{Message: llm.Message{Role: "assistant", Content: "done"}},
+	}}
+	tools := registry.New()
+	activeNames := []string{
+		"tool_search",
+		"plan-update",
+		"code-search",
+		"code-read_file",
+		"repo-search",
+		"repo-read_file",
+		"readonly-shell",
+		"gcp-logs",
+		"k8s-get_pods",
+		"k8s-describe",
+		"k8s-logs",
+		"k8s-top",
+		"github-workflow_runs",
+		"github-job_logs",
+		"slack-file_search",
+		"web-search",
+		"rag-search",
+		"delegate-run",
+		"explore-code",
 	}
-	runner := Runner{}
+	for _, name := range activeNames {
+		tools.Register(fakeNamedTool{name: name})
+	}
+	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryBrowser, fakeNamedTool{name: "pw-snapshot"}))
 
-	ordinary := runner.selectToolSpecs(specs, Request{UserQuestion: "查一下登录逻辑"}, nil)
-	if hasSpec(ordinary, "repo-search") || hasSpec(ordinary, "repo-read_file") {
-		t.Fatalf("ordinary code lookup should not expose repo snapshot tools: %v", specNames(ordinary))
+	_, err := Runner{LLM: client, Tools: tools, MaxSteps: 1}.Run(context.Background(), Request{UserQuestion: "服务"})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
 	}
-	if !hasSpec(ordinary, "plan-update") || !hasSpec(ordinary, "code-search") {
-		t.Fatalf("ordinary code lookup should keep plan and code tools: %v", specNames(ordinary))
+	if len(client.requests) != 1 {
+		t.Fatalf("Chat calls = %d, want 1", len(client.requests))
 	}
-
-	broad := runner.selectToolSpecs(specs, Request{UserQuestion: "对比 agent 架构和准确性问题"}, nil)
-	if !hasSpec(broad, "explore-code") || !hasSpec(broad, "delegate-run") || !hasSpec(broad, "plan-update") {
-		t.Fatalf("broad agent question should expose planning and exploration tools: %v", specNames(broad))
+	got := client.requests[0].Tools
+	for _, name := range activeNames {
+		if !hasSpec(got, name) {
+			t.Fatalf("active tool %s should be exposed regardless of user wording: %v", name, specNames(got))
+		}
 	}
-
-	branch := runner.selectToolSpecs(specs, Request{UserQuestion: "检查 release 分支上的提交"}, nil)
-	if !hasSpec(branch, "repo-search") || !hasSpec(branch, "git-read_file_ref") {
-		t.Fatalf("branch/ref question should expose repo snapshot tools: %v", specNames(branch))
-	}
-}
-
-func namedSpec(name string) llm.ToolSpec {
-	return llm.ToolSpec{
-		Type: "function",
-		Function: llm.ToolSpecFunction{
-			Name:       name,
-			Parameters: map[string]any{"type": "object"},
-		},
+	if hasSpec(got, "pw-snapshot") {
+		t.Fatalf("deferred tool should not be exposed before activation: %v", specNames(got))
 	}
 }
 
@@ -1595,57 +1591,25 @@ func TestRunnerDoesNotTreatRAGSearchAsCodeEvidence(t *testing.T) {
 	}
 }
 
-func TestRunnerRequiresPlanForComplexInvestigation(t *testing.T) {
+func TestRunnerDoesNotKeywordGatePlanOrEvidence(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{
-		{Message: llm.Message{Role: "assistant", Content: "直接结论"}},
-		{Message: namedToolCallMessage("plan_1", "plan-update", `{"items":[{"task":"梳理边界","status":"in_progress"}]}`)},
-		{Message: namedToolCallMessage("search_1", "code-search", `{"query":"runner"}`)},
-		{Message: llm.Message{Role: "assistant", Content: "基于证据的结论"}},
+		{Message: llm.Message{Role: "assistant", Content: "这是一个不含代码位置声明的直接结论。"}},
 	}}
 	tools := registry.New()
 	tools.Register(fakeNamedTool{name: "plan-update"})
 	tools.Register(fakeNamedTool{name: "code-search"})
 
 	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 8}.Run(context.Background(), Request{
-		UserQuestion: "对比 agent 架构和准确性问题",
+		UserQuestion: "为什么登录报错，帮我查 bug，并对比 agent 架构和准确性问题",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if result.Final != "基于证据的结论" {
+	if result.Final != "这是一个不含代码位置声明的直接结论。" {
 		t.Fatalf("Final = %q", result.Final)
 	}
-	if len(client.requests) != 4 {
-		t.Fatalf("expected direct answer retry, plan, evidence, final; got %d calls", len(client.requests))
-	}
-	if !strings.Contains(lastSystemContent(client.requests[1].Messages), "complex multi-step") {
-		t.Fatalf("second request did not include plan-required retry prompt")
-	}
-}
-
-func TestRunnerRequiresEvidenceForDebuggingQuestion(t *testing.T) {
-	client := &fakeClient{responses: []llm.Response{
-		{Message: llm.Message{Role: "assistant", Content: "这是因为缓存坏了。"}},
-		{Message: namedToolCallMessage("search_1", "code-search", `{"query":"cache"}`)},
-		{Message: llm.Message{Role: "assistant", Content: "证据显示缓存路径需要继续检查。"}},
-	}}
-	tools := registry.New()
-	tools.Register(fakeNamedTool{name: "code-search"})
-
-	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 6}.Run(context.Background(), Request{
-		UserQuestion: "为什么登录报错，帮我查 bug",
-	})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if result.Final != "证据显示缓存路径需要继续检查。" {
-		t.Fatalf("Final = %q", result.Final)
-	}
-	if len(client.requests) != 3 {
-		t.Fatalf("expected evidence retry, tool, final; got %d calls", len(client.requests))
-	}
-	if !strings.Contains(lastSystemContent(client.requests[1].Messages), "without evidence") {
-		t.Fatalf("second request did not include evidence-required retry prompt")
+	if len(client.requests) != 1 {
+		t.Fatalf("keyword-based plan/evidence gates should not force retries; got %d calls", len(client.requests))
 	}
 }
 

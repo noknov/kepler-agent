@@ -35,7 +35,7 @@ func (ToolSearchTool) Spec() llm.ToolSpec {
 			},
 			"query": map[string]any{
 				"type":        "string",
-				"description": "Task, capability, service, or keyword to match against tool names, descriptions, parameters, and categories. With action=search, prefix select: to activate exact tool names immediately.",
+				"description": "Task, capability, service, or other search text to match against tool names, descriptions, parameters, and categories. With action=search, prefix select: to activate exact tool names immediately.",
 			},
 			"limit": map[string]any{
 				"type":        "integer",
@@ -45,7 +45,7 @@ func (ToolSearchTool) Spec() llm.ToolSpec {
 				"type": "array",
 				"items": map[string]any{
 					"type": "string",
-					"enum": []string{CategoryDiagnostics, CategoryBrowser, CategoryIntegration},
+					"enum": []string{CategoryDiagnostics, CategoryBrowser, CategoryIntegration, CategoryInfrastructure},
 				},
 				"description": "Deferred categories to activate. Optional with action=activate.",
 			},

@@ -129,14 +129,6 @@ func codeClaimRetryPrompt() string {
 	return prompts.RunnerPrompt("code_claim_retry", "")
 }
 
-func planRequiredRetryPrompt() string {
-	return prompts.RunnerPrompt("plan_required_retry", "This is a complex multi-step task. Before continuing, call plan-update with concrete investigation steps and exactly one in_progress item. Do not answer directly until the plan exists and you have executed the next evidence-gathering step.")
-}
-
-func evidenceRequiredRetryPrompt() string {
-	return prompts.RunnerPrompt("evidence_required_retry", "You are about to answer an investigation or debugging question without tool evidence from this run. First gather evidence with targeted read/search/log/runbook/code-intelligence tools. Do not give root causes, architecture judgments, or code behavior claims from memory alone.")
-}
-
 func rawEvidenceRetryPrompt() string {
 	return prompts.RunnerPrompt("raw_evidence_retry", "")
 }
@@ -155,42 +147,6 @@ var codeReadingTools = map[string]bool{
 	"code-definition":   true,
 	"code-references":   true,
 	"explore-code":      true,
-}
-
-var evidenceTools = map[string]bool{
-	"code-search":                true,
-	"code-read_file":             true,
-	"code-symbols":               true,
-	"code-definition":            true,
-	"code-references":            true,
-	"code-diagnostics":           true,
-	"git-status":                 true,
-	"git-log":                    true,
-	"git-show":                   true,
-	"git-fetch_ref":              true,
-	"git-search_ref":             true,
-	"git-read_file_ref":          true,
-	"repo-search":                true,
-	"repo-read_file":             true,
-	"rag-search":                 true,
-	"knowledge-runbook_search":   true,
-	"web-search":                 true,
-	"web-read_page":              true,
-	"gcp-logs":                   true,
-	"k8s-get_pods":               true,
-	"k8s-describe":               true,
-	"k8s-logs":                   true,
-	"k8s-top":                    true,
-	"github-workflow_runs":       true,
-	"github-pr_diff":             true,
-	"github-job_logs":            true,
-	"slack-file_search":          true,
-	"slack-json_analyze":         true,
-	"diagnostics-incident_brief": true,
-	"diagnostics-timeline":       true,
-	"diagnostics-evidence_board": true,
-	"explore-code":               true,
-	"delegate-run":               true,
 }
 
 // hasFencedCodeBlock reports whether text contains a fenced code block
@@ -297,15 +253,9 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	retriedPromptTooLong := false
 	retriedCodeClaim := false
 	retriedUnevidencedFile := false
-	retriedPlanRequired := false
-	retriedEvidenceRequired := false
 	retriedRawEvidence := false
 	maxOutputTokensRecoveryCount := 0
 	codeToolCalledThisRun := false
-	evidenceToolCalledThisRun := false
-	planCalledThisRun := false
-	planRequired := requiresPlan(req)
-	evidenceRequired := requiresEvidence(req)
 	afterTools := false
 	pivotTier := 0 // 0=none, 1=gentle, 2=firm, 3=urgent, 4=force
 	searchMissPivotInjected := false
@@ -353,7 +303,7 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 
 		var toolSpecs []llm.ToolSpec
 		if r.Tools != nil && pivotTier < 4 {
-			toolSpecs = r.selectToolSpecs(control.filterToolSpecs(r.Tools.Specs()), req, messages)
+			toolSpecs = control.filterToolSpecs(r.Tools.Specs())
 		}
 
 		llmReq := llm.Request{
@@ -571,22 +521,6 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 				}
 				return Result{Generated: generated}, ErrRepetitiveOutput
 			}
-			if planRequired && !planCalledThisRun && !retriedPlanRequired {
-				retriedPlanRequired = true
-				messages = append(messages, llm.Message{Role: "system", Content: planRequiredRetryPrompt()})
-				if r.StatusUpdate != nil {
-					r.StatusUpdate(RetryStatus(req.Locale))
-				}
-				continue
-			}
-			if evidenceRequired && !evidenceToolCalledThisRun && !retriedEvidenceRequired {
-				retriedEvidenceRequired = true
-				messages = append(messages, llm.Message{Role: "system", Content: evidenceRequiredRetryPrompt()})
-				if r.StatusUpdate != nil {
-					r.StatusUpdate(RetryStatus(req.Locale))
-				}
-				continue
-			}
 			// Unverified code claim check: applies in both streaming and
 			// non-streaming modes. If the model references specific code
 			// (functions, guards, conditionals) without having called any
@@ -661,12 +595,6 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			generated = append(generated, tr.message)
 			if codeReadingTools[tr.name] {
 				codeToolCalledThisRun = true
-			}
-			if tr.name == "plan-update" && tr.err == nil {
-				planCalledThisRun = true
-			}
-			if evidenceTools[tr.name] && tr.err == nil {
-				evidenceToolCalledThisRun = true
 			}
 			if tr.waitForUser {
 				return Result{
@@ -817,134 +745,6 @@ func (r Runner) observeEvent(name string, metadata map[string]any) {
 	if observer, ok := r.Observer.(EventObserver); ok {
 		observer.Event(name, metadata)
 	}
-}
-
-const defaultToolSpecLimit = 18
-
-var coreToolNames = map[string]bool{
-	"tool_search":    true,
-	"plan-update":    true,
-	"code-search":    true,
-	"code-read_file": true,
-	"git-status":     true,
-	"git-log":        true,
-	"git-show":       true,
-	"skills-load":    true,
-	"slack-ask_user": true,
-}
-
-var intentToolHints = []struct {
-	terms []string
-	tools []string
-}{
-	{[]string{"github", "workflow", "ci", "action", "pull request", "pr", "deploy", "工作流", "流水线", "构建", "部署", "拉取请求"}, []string{"github-workflow_runs", "github-pr_diff", "github-dispatch_workflow", "github-job_logs"}},
-	{[]string{"branch", "commit", "ref", "revision", "sha", "tag", "remote", "分支", "提交", "版本", "远程"}, []string{"repo-search", "repo-read_file", "git-fetch_ref", "git-search_ref", "git-read_file_ref"}},
-	{[]string{"log", "gcp", "cloud logging", "k8s", "gke", "pod", "namespace", "error rate", "kubectl", "kubernetes", "日志", "报错", "错误率", "命名空间", "集群", "容器", "重启"}, []string{"gcp-logs", "k8s-get_pods", "k8s-describe", "k8s-logs", "k8s-top", "diagnostics-incident_brief", "diagnostics-timeline", "diagnostics-evidence_board"}},
-	{[]string{"web", "url", "http", "docs", "page", "search internet", "网页", "网站", "文档", "搜索", "互联网"}, []string{"web-search", "web-read_page"}},
-	{[]string{"slack", "file", "screenshot", "json", "canvas", "文件", "截图", "表格", "附件", "画布"}, []string{"slack-file_search", "slack-json_analyze", "slack-send_screenshot", "slack-create_canvas"}},
-	{[]string{"speak", "voice", "audio", "tts", "read aloud", "说话", "语音", "朗读", "读出来", "念", "播报"}, []string{"tts-speak"}},
-	{[]string{"browser", "playwright", "click", "screenshot", "ui", "page", "浏览器", "点击", "页面", "截图", "表单"}, []string{"pw-navigate", "pw-snapshot", "pw-click", "pw-type", "pw-fill_form", "pw-screenshot", "pw-get_all_pages", "pw-switch_page", "pw-evaluate"}},
-	{[]string{"notion", "youtrack", "ticket", "issue", "工单", "需求", "缺陷", "问题单"}, []string{"notion-search", "youtrack-search", "youtrack-get_issue"}},
-	{[]string{"symbol", "definition", "reference", "diagnostic", "lsp", "符号", "定义", "引用", "诊断"}, []string{"code-symbols", "code-definition", "code-references", "code-diagnostics"}},
-	{[]string{"rag", "semantic", "embedding", "runbook", "语义", "向量", "预案", "手册"}, []string{"rag-search", "knowledge-runbook_search"}},
-	{[]string{"architecture", "architectural", "refactor", "redesign", "compare", "performance", "accuracy", "agent", "broad", "multi-step", "架构", "重构", "对比", "性能", "效率", "准确", "体验", "效果", "复杂"}, []string{"plan-update", "explore-code", "delegate-run", "rag-search", "code-symbols", "code-definition", "code-references"}},
-}
-
-func (r Runner) selectToolSpecs(specs []llm.ToolSpec, req Request, messages []llm.Message) []llm.ToolSpec {
-	if len(specs) <= defaultToolSpecLimit {
-		return specs
-	}
-	allowed := map[string]bool{}
-	for name := range coreToolNames {
-		allowed[name] = true
-	}
-	intent := strings.ToLower(req.UserQuestion)
-	if strings.TrimSpace(intent) == "" {
-		intent = strings.ToLower(lastUserContent(messages))
-	}
-	for _, hint := range intentToolHints {
-		if containsAny(intent, hint.terms) {
-			for _, name := range hint.tools {
-				allowed[name] = true
-			}
-		}
-	}
-
-	out := make([]llm.ToolSpec, 0, len(specs))
-	for _, spec := range specs {
-		name := spec.Function.Name
-		if allowed[name] {
-			out = append(out, spec)
-		}
-	}
-	if len(out) == 0 {
-		return specs
-	}
-	if len(out) < len(specs) {
-		r.observeEvent("tool_surface_pruned", map[string]any{
-			"before": len(specs),
-			"after":  len(out),
-		})
-	}
-	return out
-}
-
-func lastUserContent(messages []llm.Message) string {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" {
-			return messages[i].Content
-		}
-	}
-	return ""
-}
-
-func containsAny(text string, terms []string) bool {
-	for _, term := range terms {
-		if strings.Contains(text, term) {
-			return true
-		}
-	}
-	return false
-}
-
-func requiresPlan(req Request) bool {
-	text := requestIntentText(req)
-	if text == "" {
-		return false
-	}
-	return containsAny(text, []string{
-		"architecture", "architectural", "refactor", "redesign", "compare", "performance", "accuracy",
-		"multi-step", "migration", "全面", "架构", "重构", "对比", "准确", "效率", "性能",
-		"复杂", "设计", "迁移",
-	})
-}
-
-func requiresEvidence(req Request) bool {
-	text := requestIntentText(req)
-	if text == "" {
-		return false
-	}
-	return containsAny(text, []string{
-		"why", "root cause", "bug", "broken", "error", "exception", "incident", "regression", "debug",
-		"investigate", "trace", "diagnose", "architecture", "performance", "accuracy", "compare",
-		"what happens", "will it", "does it", "is it", "when does", "how does",
-		"为什么", "原因", "根因", "报错", "错误", "异常", "故障", "事故", "回归", "排查",
-		"查 bug", "查问题", "诊断", "架构", "性能", "准确", "对比",
-		"会不会", "是否", "如果", "什么时候", "怎么", "会自动",
-	})
-}
-
-func requestIntentText(req Request) string {
-	text := strings.ToLower(strings.TrimSpace(req.UserQuestion))
-	if text != "" {
-		return text
-	}
-	for i := len(req.Messages) - 1; i >= 0; i-- {
-		if req.Messages[i].Role == "user" {
-			return strings.ToLower(req.Messages[i].Content)
-		}
-	}
-	return ""
 }
 
 func isMaxOutputTokensResponse(resp llm.Response) bool {

@@ -126,6 +126,21 @@ func TestToolSearchListAndActivate(t *testing.T) {
 	}
 }
 
+func TestToolSearchReturnsActiveSearchResults(t *testing.T) {
+	reg := New()
+	reg.Register(stubTool{name: "k8s-get_pods"})
+	reg.Register(stubTool{name: "code-search"})
+	search := ToolSearchTool{Registry: reg}
+
+	result, err := search.Execute(context.Background(), json.RawMessage(`{"action":"search","query":"kubernetes pods","limit":5}`), Runtime{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, "k8s-get_pods") {
+		t.Fatalf("search result = %q, want k8s-get_pods", result.Content)
+	}
+}
+
 func TestToolSearchFindsAndActivatesSpecificDeferredTool(t *testing.T) {
 	reg := New()
 	reg.Register(stubTool{name: "code-search"})
