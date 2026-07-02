@@ -1,6 +1,7 @@
 package app
 
 import (
+	agentTools "github.com/wati/oncall-agent/internal/agent"
 	"github.com/wati/oncall-agent/internal/codeintel"
 	"github.com/wati/oncall-agent/internal/config"
 	"github.com/wati/oncall-agent/internal/delegation"
@@ -196,6 +197,7 @@ func registerAgentControlTools(tools *registry.Registry, cfg config.Config, llmC
 	delegates.SetTools(tools)
 	tools.Register(plannerTools.PlanTool{})
 	tools.Register(skillTools.LoadTool{})
+	tools.Register(agentTools.SpillReadTool{})
 	tools.Register(delegation.Tool{Manager: delegates})
 	tools.Register(delegation.ExploreTool{Manager: delegates})
 }

@@ -15,6 +15,7 @@ type Runtime struct {
 	UserID   string
 	Channel  string
 	ThreadTS string
+	RunID    string
 	Cache    *RuntimeCache
 }
 

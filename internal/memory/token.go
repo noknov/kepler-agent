@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/wati/oncall-agent/internal/llm"
@@ -61,6 +62,20 @@ func EstimateTokens(messages []llm.Message) int {
 	total := 0
 	for i := range messages {
 		total += estimateMessageTokens(&messages[i])
+	}
+	return total
+}
+
+func EstimateToolSpecTokens(specs []llm.ToolSpec) int {
+	total := 0
+	for _, spec := range specs {
+		data, err := json.Marshal(spec)
+		if err != nil {
+			total += RoughTokenEstimate(spec.Function.Name)
+			total += RoughTokenEstimate(spec.Function.Description)
+			continue
+		}
+		total += RoughTokenEstimateForToolResult(string(data))
 	}
 	return total
 }

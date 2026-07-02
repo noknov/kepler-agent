@@ -106,31 +106,25 @@ func (c *Compactor) ApplyMicroCompact(messages []llm.Message) []llm.Message {
 // It is called between conversation turns (not every step) to manage
 // persistent session context.
 func (c *Compactor) CompactIfNeeded(ctx context.Context, messages []llm.Message) ([]llm.Message, *CompactResult, error) {
+	return c.CompactIfNeededWithReserve(ctx, messages, 0)
+}
+
+// CompactIfNeededWithReserve runs compaction while reserving additional tokens
+// for transient request payload such as tool schemas. The returned PreTokens and
+// PostTokens describe message tokens only; reserveTokens only lowers the
+// effective threshold.
+func (c *Compactor) CompactIfNeededWithReserve(ctx context.Context, messages []llm.Message, reserveTokens int) ([]llm.Message, *CompactResult, error) {
 	if len(messages) == 0 {
 		return messages, nil, nil
 	}
 
 	result := &CompactResult{}
-
-	// Fast path: use API-reported token usage if available (avoids expensive
-	// full-message estimation). This mirrors Claude Code's optimization where
-	// real usage data from the last API call is trusted over heuristics.
-	threshold := c.Threshold()
-	if usage := LastUsage(messages); usage != nil {
-		apiTokens := TokenCountFromUsage(*usage)
-		if apiTokens > 0 && apiTokens <= threshold {
-			result.PreTokens = apiTokens
-			result.PostTokens = apiTokens
-			return messages, result, nil
-		}
-		if apiTokens > 0 {
-			result.PreTokens = apiTokens
-		}
+	threshold := c.Threshold() - reserveTokens
+	if threshold < 1 {
+		threshold = 1
 	}
 
-	if result.PreTokens == 0 {
-		result.PreTokens = CountTokensWithCalibration(messages)
-	}
+	result.PreTokens = CountTokensWithCalibration(messages)
 
 	if result.PreTokens <= threshold {
 		result.PostTokens = result.PreTokens
@@ -140,7 +134,7 @@ func (c *Compactor) CompactIfNeeded(ctx context.Context, messages []llm.Message)
 	// Layer 1: Micro-compact (clear old tool results)
 	msgs := c.microCompact(messages)
 	tokens := CountTokensWithCalibration(msgs)
-	if tokens <= c.Threshold() {
+	if tokens <= threshold {
 		result.Layer = "micro_compact"
 		result.PostTokens = tokens
 		return msgs, result, nil
@@ -149,16 +143,16 @@ func (c *Compactor) CompactIfNeeded(ctx context.Context, messages []llm.Message)
 	// Layer 2: Tool result compression (per-result token cap)
 	msgs = c.compressToolResults(msgs)
 	tokens = CountTokensWithCalibration(msgs)
-	if tokens <= c.Threshold() {
+	if tokens <= threshold {
 		result.Layer = "tool_result_compression"
 		result.PostTokens = tokens
 		return msgs, result, nil
 	}
 
 	// Layer 3: History folding (trim older messages, keep important ones)
-	msgs, foldedSummary := c.foldHistory(msgs)
+	msgs, foldedSummary := c.foldHistoryWithThreshold(msgs, threshold)
 	tokens = CountTokensWithCalibration(msgs)
-	if tokens <= c.Threshold() {
+	if tokens <= threshold {
 		result.Layer = "history_folding"
 		result.PostTokens = tokens
 		result.Summary = foldedSummary
@@ -362,8 +356,10 @@ func (c *Compactor) compressToolResults(messages []llm.Message) []llm.Message {
 // foldHistory trims older messages at stable conversation boundaries so the
 // remaining history stays coherent and tool_use/tool_result pairs are not split.
 func (c *Compactor) foldHistory(messages []llm.Message) ([]llm.Message, string) {
-	threshold := c.Threshold()
+	return c.foldHistoryWithThreshold(messages, c.Threshold())
+}
 
+func (c *Compactor) foldHistoryWithThreshold(messages []llm.Message, threshold int) ([]llm.Message, string) {
 	var system []llm.Message
 	var conversation []llm.Message
 	for _, msg := range messages {

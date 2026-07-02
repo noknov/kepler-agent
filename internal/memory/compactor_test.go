@@ -127,6 +127,58 @@ func TestCompactorCompressToolResults(t *testing.T) {
 	}
 }
 
+func TestCompactIfNeededCountsMessagesAfterLastUsage(t *testing.T) {
+	c := &Compactor{
+		MaxContextTokens:    120,
+		AutocompactBuffer:   10,
+		OutputReserve:       10,
+		MaxToolResultTokens: 10,
+	}
+	usage := llm.Usage{PromptTokens: 20, CompletionTokens: 5}
+	messages := []llm.Message{
+		{Role: "assistant", Content: "baseline", Usage: &usage},
+		{Role: "tool", Name: "code-search", ToolCallID: "call_1", Content: strings.Repeat("large result ", 200)},
+	}
+
+	compacted, result, err := c.CompactIfNeeded(context.Background(), messages)
+	if err != nil {
+		t.Fatalf("CompactIfNeeded() error = %v", err)
+	}
+	if result == nil || result.Layer == "" {
+		t.Fatalf("expected compaction after large post-usage tool result, got result=%#v", result)
+	}
+	if compacted[1].Content == messages[1].Content {
+		t.Fatal("post-usage tool result should be compressed or folded, not skipped by LastUsage fast path")
+	}
+}
+
+func TestCompactIfNeededWithReserveUsesLowerThreshold(t *testing.T) {
+	c := &Compactor{
+		MaxContextTokens:  120,
+		AutocompactBuffer: 10,
+		OutputReserve:     10,
+	}
+	messages := []llm.Message{
+		{Role: "user", Content: strings.Repeat("small ", 20)},
+	}
+
+	_, withoutReserve, err := c.CompactIfNeeded(context.Background(), messages)
+	if err != nil {
+		t.Fatalf("CompactIfNeeded() error = %v", err)
+	}
+	if withoutReserve != nil && withoutReserve.Layer != "" {
+		t.Fatalf("did not expect compaction without reserve, got %#v", withoutReserve)
+	}
+
+	_, withReserve, err := c.CompactIfNeededWithReserve(context.Background(), messages, 100)
+	if err != nil {
+		t.Fatalf("CompactIfNeededWithReserve() error = %v", err)
+	}
+	if withReserve == nil || withReserve.Layer == "" {
+		t.Fatalf("expected reserve to trigger compaction path, got %#v", withReserve)
+	}
+}
+
 func TestCompactorThreshold(t *testing.T) {
 	c := &Compactor{
 		MaxContextTokens:  200000,
