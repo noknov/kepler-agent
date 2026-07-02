@@ -377,8 +377,9 @@ func (t JobLogsTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"github-job_logs",
 		"",
-		registry.ObjectSchema([]string{"run_id"}, map[string]any{
+		registry.ObjectSchema(nil, map[string]any{
 			"repository": map[string]any{"type": "string", "description": ""},
+			"url":        map[string]any{"type": "string", "description": "Optional GitHub Actions run or job URL. When provided, repository, run_id, and job_id are extracted from it."},
 			"run_id":     map[string]any{"type": "integer", "description": ""},
 			"job_id":     map[string]any{"type": "integer", "description": ""},
 			"start_line": map[string]any{"type": "integer", "description": ""},
@@ -393,12 +394,26 @@ func (t JobLogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 	}
 	var args struct {
 		Repository string      `json:"repository"`
+		URL        string      `json:"url"`
 		RunID      json.Number `json:"run_id"`
 		JobID      json.Number `json:"job_id"`
 		StartLine  json.Number `json:"start_line"`
 		MaxLines   json.Number `json:"max_lines"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
+		return registry.Result{}, err
+	}
+	if parsed, err := parseActionsURL(args.URL); err == nil {
+		if args.Repository == "" {
+			args.Repository = parsed.repository
+		}
+		if args.RunID == "" && parsed.runID > 0 {
+			args.RunID = json.Number(fmt.Sprintf("%d", parsed.runID))
+		}
+		if args.JobID == "" && parsed.jobID > 0 {
+			args.JobID = json.Number(fmt.Sprintf("%d", parsed.jobID))
+		}
+	} else if strings.TrimSpace(args.URL) != "" {
 		return registry.Result{}, err
 	}
 	repository := strings.TrimSpace(args.Repository)
@@ -547,19 +562,74 @@ type jobStep struct {
 }
 
 func (c Client) listRunJobs(ctx context.Context, owner, repo string, runID int64) ([]runJob, error) {
-	endpoint := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%d/jobs?per_page=100",
-		c.baseURL(), url.PathEscape(owner), url.PathEscape(repo), runID)
-	data, err := c.do(ctx, http.MethodGet, endpoint, nil)
+	var all []runJob
+	for page := 1; page <= 20; page++ {
+		endpoint := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%d/jobs?per_page=100&page=%d",
+			c.baseURL(), url.PathEscape(owner), url.PathEscape(repo), runID, page)
+		data, err := c.do(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		var parsed struct {
+			Jobs []runJob `json:"jobs"`
+		}
+		if err := json.Unmarshal(data, &parsed); err != nil {
+			return nil, err
+		}
+		all = append(all, parsed.Jobs...)
+		if len(parsed.Jobs) < 100 {
+			return all, nil
+		}
+	}
+	return all, nil
+}
+
+type actionsURLParts struct {
+	repository string
+	runID      int64
+	jobID      int64
+}
+
+func parseActionsURL(raw string) (actionsURLParts, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return actionsURLParts{}, nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return actionsURLParts{}, fmt.Errorf("url must be a GitHub Actions URL")
+	}
+	if !strings.EqualFold(parsed.Host, "github.com") {
+		return actionsURLParts{}, fmt.Errorf("url host must be github.com")
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(parts) < 5 || parts[2] != "actions" || parts[3] != "runs" {
+		return actionsURLParts{}, fmt.Errorf("url must look like https://github.com/owner/repo/actions/runs/<run_id>[/job/<job_id>]")
+	}
+	runID, err := parsePositiveInt64(parts[4], "run_id")
 	if err != nil {
-		return nil, err
+		return actionsURLParts{}, err
 	}
-	var parsed struct {
-		Jobs []runJob `json:"jobs"`
+	var jobID int64
+	if len(parts) >= 7 && parts[5] == "job" {
+		jobID, err = parsePositiveInt64(parts[6], "job_id")
+		if err != nil {
+			return actionsURLParts{}, err
+		}
 	}
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		return nil, err
+	return actionsURLParts{
+		repository: parts[0] + "/" + parts[1],
+		runID:      runID,
+		jobID:      jobID,
+	}, nil
+}
+
+func parsePositiveInt64(value, name string) (int64, error) {
+	n, err := json.Number(value).Int64()
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("%s in GitHub Actions URL must be a positive integer", name)
 	}
-	return parsed.Jobs, nil
+	return n, nil
 }
 
 func (c Client) fetchJobLog(ctx context.Context, owner, repo string, jobID int64) (string, error) {
@@ -598,7 +668,6 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
-
 
 // PRDiffTool fetches a pull request's metadata and diff from GitHub API.
 type PRDiffTool struct {

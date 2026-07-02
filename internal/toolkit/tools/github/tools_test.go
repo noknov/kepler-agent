@@ -149,6 +149,25 @@ func TestJobLogsTool_DirectJobID(t *testing.T) {
 	}
 }
 
+func TestJobLogsTool_ExtractsDirectJobFromURL(t *testing.T) {
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/repos/ClareAI/whatsapp_inbox/actions/jobs/84468047388/logs" {
+			t.Fatalf("expected direct job log fetch from URL, got: %s", r.URL.Path)
+		}
+		return response(http.StatusOK, "Expected outcome.IsSuccess to be true, but found False.\n"), nil
+	})
+
+	tool := JobLogsTool{Client: testClient("", "", transport)}
+	result, err := tool.Execute(context.Background(),
+		json.RawMessage(`{"url":"https://github.com/ClareAI/whatsapp_inbox/actions/runs/28497898370/job/84468047388?pr=15027"}`), registry.Runtime{})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.Contains(result.Content, "outcome.IsSuccess") {
+		t.Fatalf("expected direct job log content, got: %s", result.Content)
+	}
+}
+
 func TestJobLogsTool_StringRunID(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if strings.HasSuffix(r.URL.Path, "/jobs") {
@@ -172,6 +191,40 @@ func TestJobLogsTool_StringRunID(t *testing.T) {
 	}
 	if !strings.Contains(result.Content, "FAIL test") {
 		t.Fatalf("expected log content, got: %s", result.Content)
+	}
+}
+
+func TestJobLogsTool_PaginatesRunJobs(t *testing.T) {
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if !strings.HasSuffix(r.URL.Path, "/jobs") {
+			if strings.Contains(r.URL.Path, "/jobs/150/logs") {
+				return response(http.StatusOK, "page two failure log\n"), nil
+			}
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		switch r.URL.Query().Get("page") {
+		case "1":
+			var jobs []string
+			for i := 1; i <= 100; i++ {
+				jobs = append(jobs, fmt.Sprintf(`{"id":%d,"name":"job-%d","status":"completed","conclusion":"success"}`, i, i))
+			}
+			return response(http.StatusOK, `{"jobs":[`+strings.Join(jobs, ",")+`]}`), nil
+		case "2":
+			return response(http.StatusOK, `{"jobs":[{"id":150,"name":"late-test","status":"completed","conclusion":"failure"}]}`), nil
+		default:
+			t.Fatalf("unexpected page: %s", r.URL.RawQuery)
+			return nil, nil
+		}
+	})
+
+	tool := JobLogsTool{Client: testClient("example", "myrepo", transport)}
+	result, err := tool.Execute(context.Background(),
+		json.RawMessage(`{"run_id":999}`), registry.Runtime{})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.Contains(result.Content, "late-test") || !strings.Contains(result.Content, "page two failure log") {
+		t.Fatalf("expected failed job from page two, got: %s", result.Content)
 	}
 }
 
