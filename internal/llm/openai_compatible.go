@@ -120,6 +120,9 @@ func (c *OpenAICompatibleClient) chatBody(req Request) map[string]any {
 func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h StreamHandler) (Response, error) {
 	body := c.chatBody(req)
 	body["stream"] = true
+	// Request per-stream usage stats so token counts are accurate even when
+	// the provider does not include them in the final delta by default.
+	body["stream_options"] = map[string]any{"include_usage": true}
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return Response{}, err
