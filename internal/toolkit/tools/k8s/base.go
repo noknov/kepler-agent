@@ -52,9 +52,15 @@ func (b Base) appendNamespace(args []string, explicit string) []string {
 	return args
 }
 
-func (b Base) run(ctx context.Context, args []string) (string, error) {
-	if b.DefaultContext != "" {
-		args = append([]string{"--context", b.DefaultContext}, args...)
+// run executes a kubectl command. k8sContext overrides DefaultContext when
+// non-empty, allowing per-call cluster switching without modifying Base config.
+func (b Base) run(ctx context.Context, k8sContext string, args []string) (string, error) {
+	kctx := k8sContext
+	if kctx == "" {
+		kctx = b.DefaultContext
+	}
+	if kctx != "" {
+		args = append([]string{"--context", kctx}, args...)
 	}
 	display := b.kubectl() + " " + strings.Join(args, " ")
 	if err := b.Guard.Check(display); err != nil {

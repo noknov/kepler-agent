@@ -487,10 +487,11 @@
   "k8s-get_pods": {
     "description": "List Kubernetes pods with status, restart counts, and node placement. Use for quick cluster health checks or to find pods for further investigation with k8s-logs or k8s-describe.",
     "parameters": {
-      "namespace": "Kubernetes namespace. If omitted and all_namespaces is false, uses kubectl's current namespace.",
+      "namespace": "Kubernetes namespace. Defaults to K8S_DEFAULT_NAMESPACE. Pass explicitly to query a different namespace.",
       "label_selector": "Label selector filter, e.g. app=my-service or app.kubernetes.io/name=gateway.",
       "field_selector": "Field selector, e.g. status.phase=Running or spec.nodeName=node-1.",
-      "all_namespaces": "If true, list pods across all namespaces."
+      "all_namespaces": "If true, list pods across all namespaces.",
+      "context": "kubectl context name to override the default. Use to query a different cluster, e.g. gke_project_region_cluster-name."
     }
   },
   "k8s-describe": {
@@ -498,20 +499,22 @@
     "parameters": {
       "resource": "Resource type: pod, deployment, service, node, ingress, configmap, hpa, job, cronjob, statefulset, daemonset, etc.",
       "name": "Resource name. If omitted, describes all resources of this type.",
-      "namespace": "Kubernetes namespace."
+      "namespace": "Kubernetes namespace. Defaults to K8S_DEFAULT_NAMESPACE.",
+      "context": "kubectl context name to override the default. Use to query a different cluster."
     }
   },
   "k8s-logs": {
     "description": "Fetch container logs from a Kubernetes pod. Faster than GCP Cloud Logging for real-time debugging. Supports previous container logs for crash investigation. Pass a label selector (e.g. app=my-service) in the pod field to stream logs from all matching pods.",
     "parameters": {
       "pod": "Pod name (e.g. my-pod-abc12) or label selector value (e.g. app=my-service). If the value contains '=', kubectl logs -l is used automatically.",
-      "namespace": "Kubernetes namespace. Defaults to configured K8S_DEFAULT_NAMESPACE.",
+      "namespace": "Kubernetes namespace. Defaults to K8S_DEFAULT_NAMESPACE.",
       "container": "Container name within a multi-container pod.",
       "since": "Duration to look back, e.g. 5m, 1h, 30s.",
       "tail": "Number of recent log lines. Defaults to 100, max 2000.",
       "previous": "If true, fetch logs from the previous terminated container instance (crash investigation).",
       "grep": "Case-insensitive text filter applied to log lines after retrieval.",
-      "timestamps": "If true, include timestamps in log output."
+      "timestamps": "If true, include timestamps in log output.",
+      "context": "kubectl context name to override the default. Use to query a different cluster."
     }
   },
   "k8s-top": {
@@ -519,10 +522,11 @@
     "parameters": {
       "resource": "One of: pods, nodes. Defaults to pods.",
       "name": "Optional specific pod or node name.",
-      "namespace": "Kubernetes namespace (pods only).",
+      "namespace": "Kubernetes namespace (pods only). Defaults to K8S_DEFAULT_NAMESPACE.",
       "label_selector": "Label selector filter (pods only).",
       "sort_by": "Sort by: cpu or memory.",
-      "containers": "If true, show per-container resource usage (pods only)."
+      "containers": "If true, show per-container resource usage (pods only).",
+      "context": "kubectl context name to override the default. Use to query a different cluster."
     }
   },
   "slack-create_canvas": {
@@ -544,21 +548,23 @@
   "k8s-events": {
     "description": "List Kubernetes events sorted by last-seen timestamp. This is the first tool to reach for when a pod is CrashLooping, stuck in Pending, or failing to schedule — events show scheduler decisions, image pull failures, OOMKilled reasons, and liveness probe failures before they appear in logs.",
     "parameters": {
-      "namespace": "Kubernetes namespace. Defaults to configured K8S_DEFAULT_NAMESPACE.",
+      "namespace": "Kubernetes namespace. Defaults to K8S_DEFAULT_NAMESPACE.",
       "all_namespaces": "If true, show events across all namespaces.",
       "for_object": "Filter events for a specific object name, e.g. a pod or deployment name.",
       "reason": "Filter by reason field, e.g. BackOff, OOMKilling, FailedScheduling, Pulled, Started.",
-      "type": "Filter by event type: Warning or Normal. Omit to see both."
+      "type": "Filter by event type: Warning or Normal. Omit to see both.",
+      "context": "kubectl context name to override the default. Use to query a different cluster."
     }
   },
   "k8s-rollout": {
     "description": "Check rollout status or history of a Kubernetes workload. Use status to verify a deployment is progressing or complete after a release; use history to see revision changelog and spot when a regression was introduced.",
     "parameters": {
       "name": "Deployment, StatefulSet, or DaemonSet name.",
-      "namespace": "Kubernetes namespace. Defaults to configured K8S_DEFAULT_NAMESPACE.",
+      "namespace": "Kubernetes namespace. Defaults to K8S_DEFAULT_NAMESPACE.",
       "kind": "Workload kind: deployment (default), statefulset, or daemonset.",
       "action": "One of: status (default) or history.",
-      "revision": "For history action, show details for a specific revision number."
+      "revision": "For history action, show details for a specific revision number.",
+      "context": "kubectl context name to override the default. Use to query a different cluster."
     }
   },
   "k8s-get": {
@@ -566,11 +572,12 @@
     "parameters": {
       "resource": "Resource type, e.g. deployment, service, ingress, hpa, job, cronjob, node, pvc.",
       "name": "Optional resource name. If omitted, lists all resources of this type.",
-      "namespace": "Kubernetes namespace. Defaults to configured K8S_DEFAULT_NAMESPACE.",
+      "namespace": "Kubernetes namespace. Defaults to K8S_DEFAULT_NAMESPACE.",
       "all_namespaces": "If true, list across all namespaces.",
       "label_selector": "Label selector, e.g. app=my-service.",
       "field_selector": "Field selector, e.g. status.phase=Running.",
-      "output": "Output format: wide (default), yaml, json, name, or jsonpath=..."
+      "output": "Output format: wide (default), yaml, json, name, or jsonpath=...",
+      "context": "kubectl context name to override the default. Use to query a different cluster."
     }
   },
   "gcp-run_services": {

@@ -45,6 +45,7 @@ Ask the user only when a constraint **that only they can supply** would change t
 
 Use dedicated tools only when they provide something shell cannot:
 - `gcp-logs` — structured log querying with server-side filters
+- `k8s-*` — per-call namespace and context switching; use `context` param to target a different cluster without re-configuring kubeconfig
 - `github-*` — authenticated GitHub API (workflow runs, PR diffs, job logs)
 - `notion-*`, `youtrack-*` — external service APIs
 - `code-search`, `repo-search` — multi-repo indexed search across `origin/main`

@@ -23,6 +23,7 @@ func (t DescribeTool) Spec() llm.ToolSpec {
 			"resource":  map[string]any{"type": "string", "description": ""},
 			"name":      map[string]any{"type": "string", "description": ""},
 			"namespace": map[string]any{"type": "string", "description": ""},
+			"context":   map[string]any{"type": "string", "description": ""},
 		}),
 	)
 }
@@ -32,6 +33,7 @@ func (t DescribeTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 		Resource  string `json:"resource"`
 		Name      string `json:"name"`
 		Namespace string `json:"namespace"`
+		Context   string `json:"context"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
@@ -46,7 +48,7 @@ func (t DescribeTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 	}
 	cmdArgs = t.Base.appendNamespace(cmdArgs, args.Namespace)
 
-	out, err := t.Base.run(ctx, cmdArgs)
+	out, err := t.Base.run(ctx, args.Context, cmdArgs)
 	if err != nil {
 		return registry.Result{}, err
 	}

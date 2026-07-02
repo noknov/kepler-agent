@@ -30,6 +30,7 @@ func (t LogsTool) Spec() llm.ToolSpec {
 			"previous":   map[string]any{"type": "boolean", "description": ""},
 			"grep":       map[string]any{"type": "string", "description": ""},
 			"timestamps": map[string]any{"type": "boolean", "description": ""},
+			"context":    map[string]any{"type": "string", "description": ""},
 		}),
 	)
 }
@@ -44,6 +45,7 @@ func (t LogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.R
 		Previous   bool   `json:"previous"`
 		Grep       string `json:"grep"`
 		Timestamps bool   `json:"timestamps"`
+		Context    string `json:"context"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
@@ -82,7 +84,7 @@ func (t LogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.R
 		cmdArgs = append(cmdArgs, "--timestamps")
 	}
 
-	out, err := t.Base.run(ctx, cmdArgs)
+	out, err := t.Base.run(ctx, args.Context, cmdArgs)
 	if err != nil {
 		return registry.Result{}, err
 	}

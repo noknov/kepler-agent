@@ -23,6 +23,7 @@ func (t GetPodsTool) Spec() llm.ToolSpec {
 			"label_selector": map[string]any{"type": "string", "description": ""},
 			"field_selector": map[string]any{"type": "string", "description": ""},
 			"all_namespaces": map[string]any{"type": "boolean", "description": ""},
+			"context":        map[string]any{"type": "string", "description": ""},
 		}),
 	)
 }
@@ -33,6 +34,7 @@ func (t GetPodsTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 		LabelSelector string `json:"label_selector"`
 		FieldSelector string `json:"field_selector"`
 		AllNamespaces bool   `json:"all_namespaces"`
+		Context       string `json:"context"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
@@ -51,7 +53,7 @@ func (t GetPodsTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 		cmdArgs = append(cmdArgs, "--field-selector", args.FieldSelector)
 	}
 
-	out, err := t.Base.run(ctx, cmdArgs)
+	out, err := t.Base.run(ctx, args.Context, cmdArgs)
 	if err != nil {
 		return registry.Result{}, err
 	}
