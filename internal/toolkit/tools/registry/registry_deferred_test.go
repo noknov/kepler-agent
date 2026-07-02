@@ -27,6 +27,12 @@ type stubWriteTool struct {
 
 func (stubWriteTool) IsWrite() bool { return true }
 
+type stubParallelWriteTool struct {
+	stubWriteTool
+}
+
+func (stubParallelWriteTool) Parallel() bool { return true }
+
 func TestRegisterDeferredExcludesFromSpecsUntilActivated(t *testing.T) {
 	reg := New()
 	reg.Register(stubTool{name: "active-tool"})
@@ -49,6 +55,48 @@ func TestRegisterDeferredExcludesFromSpecsUntilActivated(t *testing.T) {
 	}
 	if len(reg.Specs()) != 3 {
 		t.Fatalf("Specs() after activation len = %d, want 3", len(reg.Specs()))
+	}
+}
+
+func TestCloneIsolatesDeferredActivation(t *testing.T) {
+	reg := New()
+	reg.Register(stubTool{name: "active-tool"})
+	reg.RegisterDeferred(AsDeferred(CategoryBrowser, stubTool{name: "pw-snapshot"}))
+	reg.Register(ToolSearchTool{Registry: reg})
+
+	clone := reg.Clone()
+	search := ToolSearchTool{Registry: clone}
+	result, err := search.Execute(context.Background(), json.RawMessage(`{"action":"activate","tool_names":["pw-snapshot"]}`), Runtime{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, "pw-snapshot") {
+		t.Fatalf("activation result = %q, want pw-snapshot", result.Content)
+	}
+	if !clone.Has("pw-snapshot") {
+		t.Fatal("clone should activate pw-snapshot")
+	}
+	if reg.Has("pw-snapshot") {
+		t.Fatal("base registry should keep pw-snapshot deferred")
+	}
+}
+
+func TestClonedToolSearchActivatesClone(t *testing.T) {
+	reg := New()
+	reg.RegisterDeferred(AsDeferred(CategoryBrowser, stubTool{name: "pw-snapshot"}))
+	reg.Register(ToolSearchTool{Registry: reg})
+
+	clone := reg.Clone()
+	raw := json.RawMessage(`{"action":"search","query":"select:pw-snapshot"}`)
+	result, err := clone.Execute(context.Background(), "tool_search", raw, Runtime{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, "pw-snapshot") || !clone.Has("pw-snapshot") {
+		t.Fatalf("cloned tool_search result = %q, clone Has = %v", result.Content, clone.Has("pw-snapshot"))
+	}
+	if reg.Has("pw-snapshot") {
+		t.Fatal("cloned tool_search should not mutate the base registry")
 	}
 }
 
@@ -75,6 +123,15 @@ func TestReadOnlyRegistryDoesNotExposeWriteTools(t *testing.T) {
 	}
 	if _, err := reg.Execute(context.Background(), "write-tool", nil, Runtime{}); err == nil {
 		t.Fatal("execution should still refuse hidden write tool if called directly")
+	}
+}
+
+func TestWriteToolsNeverRunInParallel(t *testing.T) {
+	reg := NewReadOnlyWithAllowedWrites("approved-write-tool")
+	reg.Register(stubParallelWriteTool{stubWriteTool{stubTool{name: "approved-write-tool"}}})
+
+	if reg.CanRunInParallel("approved-write-tool") {
+		t.Fatal("write tools should not run in parallel even when they declare Parallel")
 	}
 }
 

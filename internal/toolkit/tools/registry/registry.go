@@ -84,6 +84,12 @@ type DeferredTool interface {
 	Category() string
 }
 
+// CloneableTool lets tools that hold a registry pointer re-bind themselves when
+// a per-run registry clone is created.
+type CloneableTool interface {
+	CloneForRegistry(*Registry) Tool
+}
+
 type CapabilityPolicy struct {
 	AllowWrites       bool
 	AllowedWriteTools map[string]bool
@@ -111,6 +117,7 @@ func IsWriteOp(tool Tool) bool {
 }
 
 type Registry struct {
+	mu         sync.RWMutex
 	tools      map[string]Tool
 	deferred   map[string]Tool
 	categories map[string][]string
@@ -148,7 +155,57 @@ func NewReadOnlyWithAllowedWrites(names ...string) *Registry {
 	return NewWithPolicy(CapabilityPolicy{AllowedWriteTools: allowed})
 }
 
+// Clone creates an isolated registry for a single agent run. Tool instances are
+// shared unless they opt into CloneableTool, so expensive clients remain reused
+// while dynamic activation state stays local to the run.
+func (r *Registry) Clone() *Registry {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	clone := &Registry{
+		tools:      make(map[string]Tool, len(r.tools)),
+		deferred:   make(map[string]Tool, len(r.deferred)),
+		categories: make(map[string][]string, len(r.categories)),
+		policy: CapabilityPolicy{
+			AllowWrites:       r.policy.AllowWrites,
+			AllowedWriteTools: copyBoolMap(r.policy.AllowedWriteTools),
+		},
+	}
+	for name, tool := range r.tools {
+		clone.tools[name] = cloneToolForRegistry(tool, clone)
+	}
+	for name, tool := range r.deferred {
+		clone.deferred[name] = cloneToolForRegistry(tool, clone)
+	}
+	for category, names := range r.categories {
+		clone.categories[category] = append([]string(nil), names...)
+	}
+	return clone
+}
+
+func cloneToolForRegistry(tool Tool, reg *Registry) Tool {
+	if ct, ok := tool.(CloneableTool); ok {
+		return ct.CloneForRegistry(reg)
+	}
+	return tool
+}
+
+func copyBoolMap(in map[string]bool) map[string]bool {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
 func (r *Registry) Register(tool Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.tools[tool.Spec().Function.Name] = tool
 }
 
@@ -169,12 +226,19 @@ func (t categorizedTool) IsWrite() bool {
 	return IsWriteOp(t.Tool)
 }
 
+func (t categorizedTool) CloneForRegistry(reg *Registry) Tool {
+	t.Tool = cloneToolForRegistry(t.Tool, reg)
+	return t
+}
+
 // AsDeferred wraps a tool with a deferred-tool category label.
 func AsDeferred(category string, tool Tool) DeferredTool {
 	return categorizedTool{Tool: tool, category: category}
 }
 
 func (r *Registry) RegisterDeferred(tool DeferredTool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	name := tool.Spec().Function.Name
 	r.deferred[name] = tool
 	category := tool.Category()
@@ -184,10 +248,16 @@ func (r *Registry) RegisterDeferred(tool DeferredTool) {
 // ActivateCategory moves deferred tools in category into the active tool set.
 // Returns the names of tools that were activated. Already-active tools are skipped.
 func (r *Registry) ActivateCategory(category string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.activateCategoryLocked(category)
+}
+
+func (r *Registry) activateCategoryLocked(category string) []string {
 	names := append([]string(nil), r.categories[category]...)
 	activated := make([]string, 0, len(names))
 	for _, name := range names {
-		if r.ActivateTool(name) {
+		if r.activateToolLocked(name) {
 			activated = append(activated, name)
 		}
 	}
@@ -196,6 +266,12 @@ func (r *Registry) ActivateCategory(category string) []string {
 
 // ActivateTool moves one deferred tool into the active tool set.
 func (r *Registry) ActivateTool(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.activateToolLocked(name)
+}
+
+func (r *Registry) activateToolLocked(name string) bool {
 	tool, ok := r.deferred[name]
 	if !ok {
 		return false
@@ -209,6 +285,8 @@ func (r *Registry) ActivateTool(name string) bool {
 }
 
 func (r *Registry) DeferredCategories() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	categories := make([]string, 0, len(r.categories))
 	for category, names := range r.categories {
 		if len(names) == 0 {
@@ -229,6 +307,8 @@ func (r *Registry) DeferredCategories() []string {
 }
 
 func (r *Registry) DeferredToolNames(category string) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	names := append([]string(nil), r.categories[category]...)
 	pending := make([]string, 0, len(names))
 	for _, name := range names {
@@ -241,7 +321,9 @@ func (r *Registry) DeferredToolNames(category string) []string {
 }
 
 func (r *Registry) Specs() []llm.ToolSpec {
-	names := r.Names()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	names := r.namesLocked()
 	out := make([]llm.ToolSpec, 0, len(names))
 	for _, name := range names {
 		out = append(out, r.tools[name].Spec())
@@ -250,6 +332,12 @@ func (r *Registry) Specs() []llm.ToolSpec {
 }
 
 func (r *Registry) Names() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.namesLocked()
+}
+
+func (r *Registry) namesLocked() []string {
 	names := make([]string, 0, len(r.tools))
 	for name, tool := range r.tools {
 		if !r.canExpose(name, tool) {
@@ -262,18 +350,24 @@ func (r *Registry) Names() []string {
 }
 
 func (r *Registry) Has(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	_, ok := r.tools[name]
 	return ok
 }
 
 func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessage, rt Runtime) (Result, error) {
+	r.mu.RLock()
 	tool, ok := r.tools[name]
 	if !ok {
+		r.mu.RUnlock()
 		return Result{}, fmt.Errorf("unknown tool %q", name)
 	}
 	if !r.canExpose(name, tool) {
+		r.mu.RUnlock()
 		return Result{}, fmt.Errorf("tool %q is a write operation and is disabled by server capability policy", name)
 	}
+	r.mu.RUnlock()
 	return tool.Execute(ctx, args, rt)
 }
 
@@ -285,11 +379,13 @@ func (r *Registry) canExpose(name string, tool Tool) bool {
 }
 
 func (r *Registry) CanRunInParallel(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	tool, ok := r.tools[name]
 	if !ok {
 		return false
 	}
-	return CanRunInParallel(tool)
+	return !IsWriteOp(tool) && CanRunInParallel(tool)
 }
 
 func FunctionSpec(name, description string, parameters map[string]any) llm.ToolSpec {

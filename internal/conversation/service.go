@@ -84,10 +84,10 @@ func NewService(store session.Store, messenger Messenger, runner agent.Runner, m
 		Prompt:    prompt,
 		Redactor:  redactor,
 		Metrics:   metrics,
-		locks:   map[string]*sync.Mutex{},
-		seen:    map[string]time.Time{},
-		active:  map[string]*activeRun{},
-		seenTTL: 10 * time.Minute,
+		locks:     map[string]*sync.Mutex{},
+		seen:      map[string]time.Time{},
+		active:    map[string]*activeRun{},
+		seenTTL:   10 * time.Minute,
 	}
 }
 
@@ -193,6 +193,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}()
 
 	runner := s.Runner
+	runner.Tools = runner.Tools.Clone()
 	if s.ModelOverride != nil {
 		if m := s.ModelOverride(req.UserID); m != "" {
 			runner.Model = m

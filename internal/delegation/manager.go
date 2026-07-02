@@ -134,6 +134,15 @@ func (m *Manager) SetTools(tools ToolExecutor) {
 	m.tools = tools
 }
 
+func (m *Manager) WithTools(tools ToolExecutor) *Manager {
+	if m == nil {
+		return nil
+	}
+	clone := *m
+	clone.tools = tools
+	return &clone
+}
+
 func (m *Manager) SetPolicyPrompt(prompt string) {
 	m.policyPrompt = prompt
 }
