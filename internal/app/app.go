@@ -631,6 +631,13 @@ func (s *Server) handleChannelReply(ctx context.Context, eventID string, ev slac
 	if !isThreadReply(ev) || !isUserMessageSubtype(ev.Subtype) || ev.BotID != "" || ev.User == "" || ev.User == s.cfg.Slack.BotUserID {
 		return
 	}
+	// When a user @-mentions the bot in a thread, Slack fires both an
+	// app_mention event (handled by handleMention) AND a message event here.
+	// Skip the message event for @mentions to avoid double-processing: the
+	// app_mention handler already starts a new run or enqueues the request.
+	if s.cfg.Slack.BotUserID != "" && strings.Contains(ev.Text, "<@"+s.cfg.Slack.BotUserID+">") {
+		return
+	}
 	if !s.access.AllowsChannel(ev.Channel) {
 		s.metrics.Denied()
 		return
