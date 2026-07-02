@@ -254,13 +254,19 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	maxOutputTokensRecoveryCount := 0
 	codeToolCalledThisRun := false
 	afterTools := false
-	pivotTier := 0 // 0=none, 1=gentle, 2=firm, 3=urgent, 4=force
+	answerFlushed := false // true once any StreamAnswer event is emitted; prevents retry steps from polluting the answer stream
+	pivotTier := 0         // 0=none, 1=gentle, 2=firm, 3=urgent, 4=force
 	clarificationErrors := newClarificationErrorTracker()
 
 	for step := 0; step < maxSteps; step++ {
 		if r.StatusUpdate != nil {
 			if r.StatusSummarizer != nil {
-				r.StatusUpdate(ThinkingStatus(req.Locale))
+				// Only show "思考中" at the very start; the summarizer updates
+				// the status for each subsequent tool-call step. Resetting to
+				// "思考中" on every step would wipe out the summarizer's labels.
+				if step == 0 {
+					r.StatusUpdate(ThinkingStatus(req.Locale))
+				}
 			} else {
 				r.StatusUpdate(StepStatus(req.Locale, step))
 			}
@@ -313,8 +319,20 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		var err error
 		streamedText := false
 		var router *streamRouter
+		// Once the answer has been streamed in a previous step, subsequent
+		// retry steps must not write more text to the answer stream.  Wrap
+		// OnStream so that StreamAnswer events are silently dropped while
+		// StreamNarration events still pass through for token accounting.
+		stepOnStream := r.OnStream
+		if answerFlushed && r.OnStream != nil {
+			stepOnStream = func(ev StreamEvent) {
+				if ev.Kind != StreamAnswer {
+					r.OnStream(ev)
+				}
+			}
+		}
 		if useStream && len(toolSpecs) > 0 {
-			router = &streamRouter{emit: r.OnStream, afterTools: afterTools}
+			router = &streamRouter{emit: stepOnStream, afterTools: afterTools}
 		}
 		streamText := func(delta string) {
 			if delta != "" {
@@ -322,8 +340,9 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 			}
 			if router != nil {
 				router.text(delta)
-			} else {
-				r.OnStream(StreamEvent{Kind: StreamAnswer, Delta: delta})
+			} else if stepOnStream != nil {
+				stepOnStream(StreamEvent{Kind: StreamAnswer, Delta: delta})
+				answerFlushed = true
 			}
 		}
 
@@ -436,6 +455,9 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		assistantMsg.ToolCalls = memory.NormalizeToolCalls(assistantMsg.ToolCalls)
 		if router != nil {
 			router.finish(len(assistantMsg.ToolCalls) > 0)
+			if router.answerFlushed {
+				answerFlushed = true
+			}
 		}
 		if useStream && !streamedText && strings.TrimSpace(assistantMsg.Content) != "" {
 			useStream = false
@@ -1102,10 +1124,11 @@ func (r Runner) sanitize(text string) string {
 // (i.e. the second+ LLM round with tools available) where we cannot know
 // upfront whether text is narration or a final answer.
 type streamRouter struct {
-	emit       func(StreamEvent)
-	afterTools bool
-	buf        strings.Builder
-	toolTurn   bool
+	emit          func(StreamEvent)
+	afterTools    bool
+	buf           strings.Builder
+	toolTurn      bool
+	answerFlushed bool
 }
 
 func (sr *streamRouter) text(delta string) {
@@ -1153,6 +1176,9 @@ func (sr *streamRouter) flushAs(kind StreamKind) {
 	}
 	if kind == StreamNarration && sr.afterTools {
 		text = "\n\n" + text
+	}
+	if kind == StreamAnswer {
+		sr.answerFlushed = true
 	}
 	sr.emit(StreamEvent{Kind: kind, Delta: text})
 }
