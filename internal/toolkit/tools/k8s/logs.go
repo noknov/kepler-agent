@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
@@ -51,10 +52,15 @@ func (t LogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.R
 		return registry.Result{}, fmt.Errorf("pod name or label selector is required")
 	}
 
-	cmdArgs := []string{"logs", args.Pod}
-	if args.Namespace != "" {
-		cmdArgs = append(cmdArgs, "-n", args.Namespace)
+	// kubectl logs supports label selectors: pass -l flag when the value
+	// looks like a selector (contains '=') rather than a pod name.
+	var cmdArgs []string
+	if strings.Contains(args.Pod, "=") {
+		cmdArgs = []string{"logs", "-l", args.Pod}
+	} else {
+		cmdArgs = []string{"logs", args.Pod}
 	}
+	cmdArgs = t.Base.appendNamespace(cmdArgs, args.Namespace)
 	if args.Container != "" {
 		cmdArgs = append(cmdArgs, "-c", args.Container)
 	}

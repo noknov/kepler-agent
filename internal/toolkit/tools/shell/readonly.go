@@ -239,47 +239,121 @@ func validateGCloud(args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("gcloud requires a group and subcommand")
 	}
-	if containsMutationFlag(args[1:]) {
+	if containsMutationFlag(args) {
 		return fmt.Errorf("gcloud command contains a write/mutation flag")
 	}
-	group := args[0]
-	sub := args[1]
-	readSubs := map[string]bool{"list": true, "describe": true, "read": true, "log": true, "get-health": true, "view": true}
+
+	// Strip global flags (--project, --region, --zone, --format, --filter,
+	// --limit, --sort-by, --flatten, --verbosity, --log-http, --quiet, etc.)
+	// so that "gcloud run services list --project=foo" parses correctly as
+	// group="run" resource="services" sub="list".
+	stripped := stripGlobalFlags(args)
+	if len(stripped) < 2 {
+		return fmt.Errorf("gcloud requires a group and subcommand after flags")
+	}
+
+	group := stripped[0]
+	rest := stripped[1:]
+	readSubs := map[string]bool{
+		"list": true, "describe": true, "read": true,
+		"log": true, "get-health": true, "view": true, "get": true,
+		"get-iam-policy": true,
+	}
+
 	switch group {
 	case "logging":
-		if sub == "read" {
+		if len(rest) >= 1 && oneOf(rest[0], "read", "logs", "list") {
 			return nil
 		}
 	case "container":
-		if len(args) >= 3 && readSubs[args[2]] {
+		// gcloud container clusters list/describe
+		// gcloud container node-pools list/describe
+		// gcloud container images list/describe
+		if len(rest) >= 2 && readSubs[rest[1]] {
 			return nil
 		}
 	case "run":
-		if len(args) >= 3 && readSubs[args[2]] {
+		// gcloud run services list/describe
+		// gcloud run revisions list/describe
+		// gcloud run jobs list/describe
+		if len(rest) >= 2 && readSubs[rest[1]] {
 			return nil
 		}
 	case "builds":
-		if readSubs[sub] {
+		if len(rest) >= 1 && readSubs[rest[0]] {
 			return nil
 		}
 	case "compute":
-		if len(args) >= 3 && readSubs[args[2]] {
+		// gcloud compute instances list/describe, forwarding-rules, etc.
+		if len(rest) >= 2 && readSubs[rest[1]] {
 			return nil
 		}
 	case "projects":
-		if readSubs[sub] {
+		if len(rest) >= 1 && readSubs[rest[0]] {
 			return nil
 		}
 	case "artifacts":
-		if len(args) >= 3 && readSubs[args[2]] {
+		if len(rest) >= 2 && readSubs[rest[1]] {
+			return nil
+		}
+	case "monitoring":
+		// gcloud monitoring dashboards list/describe
+		// gcloud monitoring metrics list
+		if len(rest) >= 2 && readSubs[rest[1]] {
+			return nil
+		}
+		if len(rest) >= 1 && readSubs[rest[0]] {
+			return nil
+		}
+	case "iam":
+		// gcloud iam service-accounts list/describe
+		if len(rest) >= 2 && readSubs[rest[1]] {
 			return nil
 		}
 	case "config":
-		if oneOf(sub, "list", "get", "set") {
+		if len(rest) >= 1 && oneOf(rest[0], "list", "get-value") {
 			return nil
 		}
+	case "info":
+		return nil
+	case "version":
+		return nil
 	}
-	return fmt.Errorf("gcloud %s %s is not read-only allowlisted", group, sub)
+	return fmt.Errorf("gcloud %s is not read-only allowlisted", group)
+}
+
+// stripGlobalFlags removes positional-flag pairs and single-token --flag=value
+// arguments that are common gcloud globals so that resource/sub parsing works
+// regardless of flag placement.
+func stripGlobalFlags(args []string) []string {
+	globalFlags := map[string]bool{
+		"--project": true, "--region": true, "--zone": true,
+		"--format": true, "--filter": true, "--limit": true,
+		"--sort-by": true, "--flatten": true, "--verbosity": true,
+		"--account": true, "--configuration": true, "--impersonate-service-account": true,
+	}
+	result := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "--") {
+			// --flag=value: skip only this token.
+			if strings.Contains(arg, "=") {
+				continue
+			}
+			// --flag value: skip flag and next token.
+			if globalFlags[arg] {
+				i++
+				continue
+			}
+			// --quiet, --log-http, --no-user-output-enabled etc.: single booleans.
+			if oneOf(arg, "--quiet", "--log-http", "--no-user-output-enabled", "--user-output-enabled") {
+				continue
+			}
+			// Unknown --flag: keep it (may be resource-specific).
+		}
+		result = append(result, arg)
+	}
+	return result
 }
 
 func validateGH(args []string) error {
@@ -320,7 +394,10 @@ func containsMutationFlag(args []string) bool {
 		if arg == "--method" && i+1 < len(args) && !strings.EqualFold(args[i+1], "GET") {
 			return true
 		}
-		if oneOf(arg, "--delete", "--force", "--quiet", "--async") {
+		// --delete and --force are clear mutation signals; --async is used by
+		// write operations. --quiet is NOT a mutation flag (it suppresses output
+		// on reads too), so it is intentionally excluded here.
+		if oneOf(arg, "--delete", "--force", "--async") {
 			return true
 		}
 	}

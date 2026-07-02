@@ -110,9 +110,10 @@ type ToolConfig struct {
 	GCPDefaultNamespace string
 	GKEDefaultCluster   string
 	GKEDefaultRegion    string
-	KubectlPath         string
-	K8sDefaultContext   string
-	K8sDefaultCluster   string
+	KubectlPath          string
+	K8sDefaultContext    string
+	K8sDefaultCluster    string
+	K8sDefaultNamespace  string
 	TTSAPIKey           string
 	TTSBaseURL          string
 	TTSModel            string
@@ -259,8 +260,9 @@ func Load() (Config, error) {
 			GKEDefaultCluster:   env("GKE_CLUSTER", ""),
 			GKEDefaultRegion:    env("GKE_REGION", ""),
 			KubectlPath:         env("KUBECTL_PATH", "kubectl"),
-			K8sDefaultContext:   os.Getenv("K8S_DEFAULT_CONTEXT"),
-			K8sDefaultCluster:   os.Getenv("K8S_DEFAULT_CLUSTER"),
+			K8sDefaultContext:    os.Getenv("K8S_DEFAULT_CONTEXT"),
+			K8sDefaultCluster:    os.Getenv("K8S_DEFAULT_CLUSTER"),
+			K8sDefaultNamespace:  env("K8S_DEFAULT_NAMESPACE", ""),
 			TTSAPIKey:           firstEnv("TTS_API_KEY", "MIMO_API_KEY"),
 			TTSBaseURL:          trimRightSlash(env("TTS_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1")),
 			TTSModel:            env("TTS_MODEL", "mimo-v2.5-tts"),

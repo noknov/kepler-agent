@@ -41,8 +41,8 @@ func (t GetPodsTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 	cmdArgs := []string{"get", "pods", "-o", "wide"}
 	if args.AllNamespaces {
 		cmdArgs = append(cmdArgs, "--all-namespaces")
-	} else if args.Namespace != "" {
-		cmdArgs = append(cmdArgs, "-n", args.Namespace)
+	} else {
+		cmdArgs = t.Base.appendNamespace(cmdArgs, args.Namespace)
 	}
 	if args.LabelSelector != "" {
 		cmdArgs = append(cmdArgs, "-l", args.LabelSelector)

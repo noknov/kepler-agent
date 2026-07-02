@@ -102,10 +102,10 @@
       "max_lines": "Maximum lines to return per page. Defaults to 200, max 500."
     }
   },
-  "readonly-shell": {
-    "description": "Run one allowlisted read-only CLI command for operational inspection. Use when the user explicitly asks to run shell/gcloud/kubectl/gh, or when a service status check needs a CLI shape not covered by a dedicated tool. This is not a general shell: no pipes, redirects, command chaining, substitutions, scripts, secrets, or mutating subcommands.",
+  "shell": {
+    "description": "Run a read-only shell command for operational inspection. Supports pipelines with | for idiomatic one-liners like \"kubectl get pods -n mt-prod | grep Crash\" or \"git log --oneline | head -20\". Allowed programs: git (all read subcommands), kubectl (get/describe/logs/top/rollout/config/explain/version), gcloud (logging read, container/run/compute/artifacts/monitoring list/describe), gh (run/pr/issue/workflow list and view), helm (list/status/history/get/show), plus Unix utilities (grep, rg, jq, awk, sed, cat, head, tail, find, wc, sort, uniq, cut, tr, curl, date, echo, df, du, ps). Shell meta-operators && ; & > >> are blocked; | only.",
     "parameters": {
-      "command": "Single read-only command. Allowed examples: gcloud logging read ..., kubectl get pods ..., kubectl describe deployment ..., kubectl logs ..., kubectl top pods ..., gh run list/view, gh workflow list/view, date."
+      "command": "The shell command to run. Supports pipelines. Examples: \"kubectl get pods -n mt-prod | grep -v Running\", \"gcloud logging read 'severity>=ERROR' --project=my-proj --freshness=1h --limit=20\", \"git -C /path/to/repo log --oneline -20\", \"helm list -n default | grep -v DEPLOYED\"."
     }
   },
   "skills-load": {
@@ -502,10 +502,10 @@
     }
   },
   "k8s-logs": {
-    "description": "Fetch container logs from a Kubernetes pod. Faster than GCP Cloud Logging for real-time debugging. Supports previous container logs for crash investigation.",
+    "description": "Fetch container logs from a Kubernetes pod. Faster than GCP Cloud Logging for real-time debugging. Supports previous container logs for crash investigation. Pass a label selector (e.g. app=my-service) in the pod field to stream logs from all matching pods.",
     "parameters": {
-      "pod": "Pod name or label selector (e.g. -l app=my-service for all pods matching the label).",
-      "namespace": "Kubernetes namespace.",
+      "pod": "Pod name (e.g. my-pod-abc12) or label selector value (e.g. app=my-service). If the value contains '=', kubectl logs -l is used automatically.",
+      "namespace": "Kubernetes namespace. Defaults to configured K8S_DEFAULT_NAMESPACE.",
       "container": "Container name within a multi-container pod.",
       "since": "Duration to look back, e.g. 5m, 1h, 30s.",
       "tail": "Number of recent log lines. Defaults to 100, max 2000.",
@@ -539,6 +539,66 @@
       "text": "Text to synthesize into speech. Place in assistant role — this is what gets spoken.",
       "voice": "Voice name. Built-in voices: 冰糖 (female, Chinese), 茉莉 (female, Chinese), 苏打 (male, Chinese), 白桦 (male, Chinese), Mia (female, English), Chloe (female, English), Milo (male, English), Dean (male, English). Defaults to 冰糖.",
       "style": "Optional natural language style instruction. Examples: 'warm and cheerful tone, moderate pace' or 'calm bedtime story narrator voice'. Placed in user role to guide speech style."
+    }
+  },
+  "k8s-events": {
+    "description": "List Kubernetes events sorted by last-seen timestamp. This is the first tool to reach for when a pod is CrashLooping, stuck in Pending, or failing to schedule — events show scheduler decisions, image pull failures, OOMKilled reasons, and liveness probe failures before they appear in logs.",
+    "parameters": {
+      "namespace": "Kubernetes namespace. Defaults to configured K8S_DEFAULT_NAMESPACE.",
+      "all_namespaces": "If true, show events across all namespaces.",
+      "for_object": "Filter events for a specific object name, e.g. a pod or deployment name.",
+      "reason": "Filter by reason field, e.g. BackOff, OOMKilling, FailedScheduling, Pulled, Started.",
+      "type": "Filter by event type: Warning or Normal. Omit to see both."
+    }
+  },
+  "k8s-rollout": {
+    "description": "Check rollout status or history of a Kubernetes workload. Use status to verify a deployment is progressing or complete after a release; use history to see revision changelog and spot when a regression was introduced.",
+    "parameters": {
+      "name": "Deployment, StatefulSet, or DaemonSet name.",
+      "namespace": "Kubernetes namespace. Defaults to configured K8S_DEFAULT_NAMESPACE.",
+      "kind": "Workload kind: deployment (default), statefulset, or daemonset.",
+      "action": "One of: status (default) or history.",
+      "revision": "For history action, show details for a specific revision number."
+    }
+  },
+  "k8s-get": {
+    "description": "General-purpose kubectl get for any Kubernetes resource type: deployment, service, ingress, configmap, hpa, job, cronjob, statefulset, daemonset, node, pv, pvc, namespace, etc. Use k8s-get_pods for pod-specific output. Secrets are blocked.",
+    "parameters": {
+      "resource": "Resource type, e.g. deployment, service, ingress, hpa, job, cronjob, node, pvc.",
+      "name": "Optional resource name. If omitted, lists all resources of this type.",
+      "namespace": "Kubernetes namespace. Defaults to configured K8S_DEFAULT_NAMESPACE.",
+      "all_namespaces": "If true, list across all namespaces.",
+      "label_selector": "Label selector, e.g. app=my-service.",
+      "field_selector": "Field selector, e.g. status.phase=Running.",
+      "output": "Output format: wide (default), yaml, json, name, or jsonpath=..."
+    }
+  },
+  "gcp-run_services": {
+    "description": "List or describe Cloud Run services in a GCP project. Use list to see all deployed services, their URLs, and last-deploy times; use describe to inspect a specific service's configuration, traffic splits, and container settings.",
+    "parameters": {
+      "action": "One of: list (default) or describe.",
+      "service": "Service name. Required for action=describe.",
+      "project": "GCP project. Defaults to configured GCP_PROJECT.",
+      "region": "Cloud Run region. Defaults to configured GKE_REGION."
+    }
+  },
+  "gcp-run_revisions": {
+    "description": "List Cloud Run service revisions to audit deployment history or investigate a traffic split. Shows revision name, creation time, serving status, and container image digest. Useful for confirming which revision is live after a deploy or rolling back investigation.",
+    "parameters": {
+      "service": "Service name filter. If omitted, lists revisions across all services.",
+      "project": "GCP project. Defaults to configured GCP_PROJECT.",
+      "region": "Cloud Run region. Defaults to configured GKE_REGION.",
+      "limit": "Maximum revisions. Defaults to 20, max 100."
+    }
+  },
+  "gcp-clusters": {
+    "description": "List or describe GKE clusters in a GCP project. Use list for a high-level overview of all clusters (status, version, node count, region); use describe for full configuration of a specific cluster.",
+    "parameters": {
+      "action": "One of: list (default) or describe.",
+      "cluster": "Cluster name. Required for action=describe.",
+      "project": "GCP project. Defaults to configured GCP_PROJECT.",
+      "region": "GKE region. Defaults to configured GKE_REGION.",
+      "zone": "GKE zone (for zonal clusters). Takes precedence over region."
     }
   }
 }

@@ -54,8 +54,8 @@ func (t TopTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Ru
 	if args.Name != "" {
 		cmdArgs = append(cmdArgs, args.Name)
 	}
-	if args.Namespace != "" {
-		cmdArgs = append(cmdArgs, "-n", args.Namespace)
+	if resource != "nodes" && resource != "node" {
+		cmdArgs = t.Base.appendNamespace(cmdArgs, args.Namespace)
 	}
 	if args.LabelSelector != "" {
 		cmdArgs = append(cmdArgs, "-l", args.LabelSelector)

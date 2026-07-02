@@ -77,22 +77,25 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 		Timeout:     cfg.Tools.CommandTimeout,
 	})
 
-	// K8s native tools: dedicated kubectl wrappers for pods, logs, describe, top.
-	// These provide richer structured output and safer arg handling than the
-	// general shell tool. They are registered eagerly (not deferred) because
-	// kubectl availability can be assumed when a context is configured.
+	// K8s native tools: dedicated kubectl wrappers for pods, logs, describe, top,
+	// events, rollout, and general get. These provide richer structured output and
+	// safer arg handling than the generic shell tool.
 	if cfg.Tools.KubectlPath != "" || cfg.Tools.K8sDefaultContext != "" || cfg.Tools.K8sDefaultCluster != "" {
 		k8sBase := k8sTools.Base{
-			KubectlPath:    cfg.Tools.KubectlPath,
-			DefaultContext: cfg.Tools.K8sDefaultContext,
-			DefaultCluster: cfg.Tools.K8sDefaultCluster,
-			Guard:          commandPolicy,
-			Timeout:        cfg.Tools.CommandTimeout,
+			KubectlPath:      cfg.Tools.KubectlPath,
+			DefaultContext:   cfg.Tools.K8sDefaultContext,
+			DefaultCluster:   cfg.Tools.K8sDefaultCluster,
+			DefaultNamespace: cfg.Tools.K8sDefaultNamespace,
+			Guard:            commandPolicy,
+			Timeout:          cfg.Tools.CommandTimeout,
 		}
 		tools.Register(k8sTools.GetPodsTool{Base: k8sBase})
 		tools.Register(k8sTools.LogsTool{Base: k8sBase})
 		tools.Register(k8sTools.DescribeTool{Base: k8sBase})
 		tools.Register(k8sTools.TopTool{Base: k8sBase})
+		tools.Register(k8sTools.EventsTool{Base: k8sBase})
+		tools.Register(k8sTools.RolloutTool{Base: k8sBase})
+		tools.Register(k8sTools.GetTool{Base: k8sBase})
 	}
 
 	tools.Register(gcpTools.LogsTool{
@@ -103,6 +106,27 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 		DefaultRegion:    cfg.Tools.GKEDefaultRegion,
 		Guard:            commandPolicy,
 		Timeout:          cfg.Tools.CommandTimeout,
+	})
+	tools.Register(gcpTools.RunServicesTool{
+		GCloudPath:     cfg.Tools.GCloudPath,
+		DefaultProject: cfg.Tools.GCPDefaultProject,
+		DefaultRegion:  cfg.Tools.GKEDefaultRegion,
+		Guard:          commandPolicy,
+		Timeout:        cfg.Tools.CommandTimeout,
+	})
+	tools.Register(gcpTools.RunRevisionsTool{
+		GCloudPath:     cfg.Tools.GCloudPath,
+		DefaultProject: cfg.Tools.GCPDefaultProject,
+		DefaultRegion:  cfg.Tools.GKEDefaultRegion,
+		Guard:          commandPolicy,
+		Timeout:        cfg.Tools.CommandTimeout,
+	})
+	tools.Register(gcpTools.ClustersTool{
+		GCloudPath:     cfg.Tools.GCloudPath,
+		DefaultProject: cfg.Tools.GCPDefaultProject,
+		DefaultRegion:  cfg.Tools.GKEDefaultRegion,
+		Guard:          commandPolicy,
+		Timeout:        cfg.Tools.CommandTimeout,
 	})
 
 	notionClient := notionTools.Client{
