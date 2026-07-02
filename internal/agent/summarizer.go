@@ -49,43 +49,32 @@ func (s *StatusSummarizer) Summarize(ctx context.Context, names, sampleArgs, loc
 func summarizePrompt(names, sampleArgs, locale string) string {
 	sampleArgs = sanitizeArgs(sampleArgs)
 	if locale == LocaleZH {
-		return fmt.Sprintf(`根据工具名和参数，用5-8个字描述AI当前执行的具体操作。
-
-规则：
-- 格式：动词 + 具体对象（从参数中提取真实名称：仓库名、命名空间、服务名、文件名、关键词等）
-- 禁止：主语、标点、"您想/AI正在"等前缀、模糊宾语（"代码"/"文件"/"内容"）
-- 参数里的具体名称优先于工具名的通用含义
+		return fmt.Sprintf(`根据工具和参数，输出一个不超过10个字符的操作描述（含空格和英文标识符）。
+动词要短（查/搜/读/看/追踪），保留最关键的一个标识符，其余省略。禁止主语和标点。
 
 示例：
-shell "kubectl get pods -n mt-prod" → 查询 mt-prod Pod 状态
-shell "git log -S QuickReply"       → 追踪 QuickReply 变更来源
-shell "git blame RuleActionBar.tsx" → 追溯 RuleActionBar 修改者
-shell "git grep InstagramComment"   → 搜索 InstagramComment 引用
-code-search pattern=ErrorHandler    → 搜索 ErrorHandler 实现
-gcp-logs project=wati-gke           → 读取 wati-gke 错误日志
-github-pr_diff repo=wati-frontend   → 查看 wati-frontend PR 差异
-github-workflow_runs                → 检查 CI 构建状态
-notion-search                       → 检索 Notion 文档
-web-search                          → 网络搜索
+kubectl get pods -n mt-prod  → 查 mt-prod Pods
+git log -S QuickReply        → 追 QuickReply 来源
+git blame RuleActionBar.tsx  → 查 RuleActionBar 作者
+code-search ErrorHandler     → 搜 ErrorHandler
+gcp-logs wati-gke            → 读 wati-gke 日志
+github-workflow_runs         → 查 CI 构建
+notion-search                → 搜 Notion 文档
+web-search                   → 网络搜索
 
 工具：%s
 参数：%s`, names, sampleArgs)
 	}
-	return fmt.Sprintf(`Summarize the AI's current action in 5-8 words. Extract specific names from the args.
-
-Rules:
-- Format: verb + specific object (use real names from args: repo, namespace, service, file, keyword)
-- No subject, no punctuation, no "You want to" or "The user wants"
-- Specific names from args > generic inference from tool name
+	return fmt.Sprintf(`Output a ≤8-word action label. One verb + one key identifier from the args. No subject, no punctuation.
 
 Examples:
-shell "kubectl get pods -n mt-prod" → Checking pod status in mt-prod
-shell "git log -S QuickReply"       → Tracing QuickReply change history
-shell "git blame RuleActionBar.tsx" → Finding author of RuleActionBar
-code-search pattern=ErrorHandler    → Searching ErrorHandler implementation
-gcp-logs project=wati-gke           → Reading wati-gke error logs
-github-pr_diff repo=wati-frontend   → Reviewing wati-frontend PR diff
-notion-search                       → Searching Notion workspace
+kubectl get pods -n mt-prod  → Checking mt-prod pods
+git log -S QuickReply        → Tracing QuickReply origin
+git blame RuleActionBar.tsx  → Finding RuleActionBar author
+code-search ErrorHandler     → Searching ErrorHandler
+gcp-logs wati-gke            → Reading wati-gke logs
+github-workflow_runs         → Checking CI builds
+notion-search                → Searching Notion
 
 Tools: %s
 Args: %s`, names, sampleArgs)
