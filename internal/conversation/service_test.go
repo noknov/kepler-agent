@@ -1015,6 +1015,75 @@ func TestStreamModeFallsBackWhenAppendFails(t *testing.T) {
 	// "streaming delivery failed" prefix was removed — just verify the answer arrived.
 }
 
+func TestProgressStreamRestartsWhenSlackStreamExpires(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	messenger := &fakeMessenger{
+		streamSeq: []string{"progress.000", "progress.001", "answer.000"},
+		taskErrs:  []error{errors.New("slack chat.appendStream failed: not_in_streaming_state")},
+	}
+	svc := NewService(
+		store,
+		messenger,
+		agent.Runner{LLM: &streamLLM{content: "final answer"}, MaxSteps: 1},
+		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+
+	svc.HandleMention(ctx, Request{
+		EventID:  "E5-progress-expired",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "hi",
+	})
+
+	if !taskUpdateOnStream(messenger.appends, "progress.001", agent.ThinkingStatus(agent.LocaleEN)) {
+		t.Fatalf("progress task update was not retried on fresh stream: %#v", messenger.appends)
+	}
+}
+
+func TestAnswerStreamRestartsWhenSlackStreamExpires(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	messenger := &fakeMessenger{
+		streamSeq:    []string{"progress.000", "answer.000", "answer.001"},
+		markdownErrs: []error{errors.New("slack chat.appendStream failed: not_in_streaming_state")},
+	}
+	svc := NewService(
+		store,
+		messenger,
+		agent.Runner{LLM: &streamLLM{content: "final answer"}, MaxSteps: 1},
+		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+
+	svc.HandleMention(ctx, Request{
+		EventID:  "E5-answer-expired",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "hi",
+	})
+
+	if len(messenger.posts) > 0 {
+		t.Fatalf("answer stream should recover without fallback post, posts: %#v", messenger.posts)
+	}
+	if !chunksContainText(chunksOnStream(messenger.appends, "answer.001"), "final answer") {
+		t.Fatalf("answer markdown was not retried on fresh stream: %#v", messenger.appends)
+	}
+}
+
 func TestStreamStatusFailureDoesNotAffectFinalAnswer(t *testing.T) {
 	ctx := context.Background()
 	store, err := session.NewFileStore(t.TempDir())
@@ -1357,14 +1426,16 @@ Web search results
 }
 
 type fakeMessenger struct {
-	posts      []string
-	streamTS   string
-	streamSeq  []string
-	startDelay time.Duration
-	appendErr  error
-	statusErr  error
-	chunks     []map[string]any
-	appends    []streamAppend
+	posts        []string
+	streamTS     string
+	streamSeq    []string
+	startDelay   time.Duration
+	appendErr    error
+	taskErrs     []error
+	markdownErrs []error
+	statusErr    error
+	chunks       []map[string]any
+	appends      []streamAppend
 }
 
 type streamAppend struct {
@@ -1459,6 +1530,16 @@ func (m *fakeMessenger) StartStream(context.Context, string, string, string) (st
 func (m *fakeMessenger) AppendStream(_ context.Context, _, ts string, chunks []map[string]any) error {
 	m.appends = append(m.appends, streamAppend{ts: ts, chunks: chunks})
 	m.chunks = append(m.chunks, chunks...)
+	if isOnlyTaskUpdate(chunks) && len(m.taskErrs) > 0 {
+		err := m.taskErrs[0]
+		m.taskErrs = m.taskErrs[1:]
+		return err
+	}
+	if containsMarkdownText(chunks) && len(m.markdownErrs) > 0 {
+		err := m.markdownErrs[0]
+		m.markdownErrs = m.markdownErrs[1:]
+		return err
+	}
 	if m.statusErr != nil && isOnlyTaskUpdate(chunks) {
 		return m.statusErr
 	}
@@ -1470,6 +1551,15 @@ func isOnlyTaskUpdate(chunks []map[string]any) bool {
 		return false
 	}
 	return chunks[0]["type"] == "task_update"
+}
+
+func containsMarkdownText(chunks []map[string]any) bool {
+	for _, chunk := range chunks {
+		if chunk["type"] == "markdown_text" {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *fakeMessenger) StopStream(_ context.Context, _, _ string) error {

@@ -170,6 +170,18 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}
 	progressTS := streamTS
 	progressStopped := false
+	restartProgressStream := func() bool {
+		newTS, err := s.Messenger.StartStream(ctx, req.Channel, req.ThreadTS, req.UserID)
+		if err != nil || newTS == "" {
+			if err != nil {
+				s.recordDeliveryError(req, progressTS, err)
+			}
+			progressStopped = true
+			return false
+		}
+		progressTS = newTS
+		return true
+	}
 	defer func() {
 		if s.Metrics != nil {
 			s.Metrics.Latency(time.Since(start))
@@ -238,14 +250,19 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if err == nil {
 			return
 		}
-		if !strings.Contains(err.Error(), "not_in_streaming_state") {
+		if !isSlackStreamExpired(err) {
 			s.recordDeliveryError(req, progressTS, err)
 			return
 		}
-		// The stream timed out on Slack's side. Starting a new stream would
-		// create a second visible card alongside the timed-out one. Stop
-		// instead and let the final answer fall back to PostMessage.
-		progressStopped = true
+		// Slack streams expire after a few minutes. Open a fresh stream and
+		// retry the current chunk so long-running tasks keep showing progress.
+		if !restartProgressStream() {
+			return
+		}
+		if retryErr := s.Messenger.AppendStream(ctx, req.Channel, progressTS, chunks); retryErr != nil {
+			s.recordDeliveryError(req, progressTS, retryErr)
+			progressStopped = true
+		}
 	}
 	appendProgressMarkdown := func(text string) error {
 		if !useStream || progressStopped || text == "" {
@@ -257,11 +274,23 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if err == nil {
 			return nil
 		}
-		if !strings.Contains(err.Error(), "not_in_streaming_state") {
+		if !isSlackStreamExpired(err) {
 			s.recordDeliveryError(req, progressTS, err)
+			progressStopped = true
+			return err
 		}
-		progressStopped = true
-		return err
+		if !restartProgressStream() {
+			return err
+		}
+		retryErr := s.Messenger.AppendStream(ctx, req.Channel, progressTS, []map[string]any{
+			{"type": "markdown_text", "text": text},
+		})
+		if retryErr != nil {
+			s.recordDeliveryError(req, progressTS, retryErr)
+			progressStopped = true
+			return retryErr
+		}
+		return nil
 	}
 	appendTaskUpdate := func(title, status string) {
 		if title != "" {
@@ -878,6 +907,13 @@ func (s *Service) recordDeliveryError(req Request, streamTS string, err error) {
 	}
 }
 
+func isSlackStreamExpired(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "not_in_streaming_state")
+}
+
 func (s *Service) lockFor(sessionID string) *sync.Mutex {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1293,6 +1329,23 @@ func (w *dmStreamWriter) flushBuffered() {
 	})
 	if err == nil {
 		return
+	}
+	if isSlackStreamExpired(err) {
+		newTS, startErr := w.messenger.StartStream(w.ctx, w.channel, w.threadTS, w.userID)
+		if startErr == nil && newTS != "" {
+			w.mu.Lock()
+			w.streamTS = newTS
+			w.mu.Unlock()
+			retryErr := w.messenger.AppendStream(w.ctx, w.channel, newTS, []map[string]any{
+				{"type": "markdown_text", "text": text},
+			})
+			if retryErr == nil {
+				return
+			}
+			err = retryErr
+		} else if startErr != nil {
+			err = startErr
+		}
 	}
 	w.mu.Lock()
 	if w.err == nil {
