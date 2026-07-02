@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +40,12 @@ const (
 	pivotTierForce  = 16 // force: strip tools, require text answer
 
 	maxOutputTokensRecoveryLimit = 3
+
+	// maxIdenticalCallAttempts is the number of times the same tool can be
+	// called with identical arguments before the circuit breaker short-circuits
+	// subsequent identical calls with an error. Prevents infinite loops where
+	// the model ignores error feedback and keeps repeating the same failing call.
+	maxIdenticalCallAttempts = 3
 )
 
 type Observer interface {
@@ -163,6 +170,12 @@ type loopState struct {
 
 	// clarificationErrors tracks persistent tool failures that require user input.
 	clarificationErrors *clarificationErrorTracker
+
+	// identicalCallCounts is the circuit breaker for identical repeated tool
+	// calls. Keyed by "toolName::sha256(args)" → attempt count. When a key
+	// exceeds maxIdenticalCallAttempts the call is short-circuited with an
+	// error instead of being executed, preventing infinite retry loops.
+	identicalCallCounts map[string]int
 
 	// per-step streaming components; reset each iteration by callLLM.
 	streamRouter *streamRouter
@@ -290,7 +303,7 @@ func unevidencedFileRetryPrompt() string {
 func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	maxSteps := r.MaxSteps
 	if maxSteps <= 0 {
-		maxSteps = 200 // effectively unlimited; context window is the real constraint
+		maxSteps = 80 // hard ceiling; investigations rarely need more than 30–40 steps
 	}
 	if req.Runtime.Cache == nil {
 		req.Runtime.Cache = registry.NewRuntimeCache()
@@ -374,11 +387,18 @@ func (r Runner) runStep(ctx context.Context, step, maxOverloadRetries int, s *lo
 	}
 	assistantMsg.ToolCalls = memory.NormalizeToolCalls(assistantMsg.ToolCalls)
 
+	// Force pivot: tools were stripped from the request but some models
+	// (e.g. mimo-v2.5) still generate tool_call blocks regardless. Discard
+	// them so the response is treated as a text-only final answer.
+	if s.pivotTier >= 4 && len(assistantMsg.ToolCalls) > 0 {
+		assistantMsg.ToolCalls = nil
+	}
+
 	if s.streamRouter != nil {
 		s.streamRouter.finish(len(assistantMsg.ToolCalls) > 0)
-		if s.streamRouter.answerFlushed {
-			s.answerFlushed = true
-		}
+		// Note: do NOT propagate answerFlushed here. The streamRouter stores
+		// the answer as pendingAnswer; s.answerFlushed is set only after
+		// commitAnswer() emits it once handleFinalResponse validation passes.
 	}
 	if useStream && !s.streamedText && strings.TrimSpace(assistantMsg.Content) != "" {
 		useStream = false
@@ -430,6 +450,11 @@ func (r Runner) runStep(ctx context.Context, step, maxOverloadRetries int, s *lo
 func (r Runner) settleFinalResponse(ctx context.Context, resp llm.Response, assistantMsg llm.Message, useStream bool, s *loopState, req Request) (done bool, result Result, err error) {
 	ok, cont, finalErr := r.handleFinalResponse(ctx, resp, &assistantMsg, useStream, s, req)
 	if cont {
+		// Validation failed; discard any buffered pending answer so it is not
+		// emitted on subsequent retries. The next LLM call will buffer a fresh one.
+		if s.streamRouter != nil {
+			s.streamRouter.pendingAnswer = ""
+		}
 		return false, Result{}, nil // retry within loop
 	}
 	if finalErr != nil {
@@ -443,6 +468,15 @@ func (r Runner) settleFinalResponse(ctx context.Context, resp llm.Response, assi
 		return true, Result{Generated: s.generated, TerminationReason: reason}, finalErr
 	}
 	if ok {
+		// Validation passed — now it is safe to flush the deferred answer
+		// to the output stream. This ensures users never see intermediate
+		// answers that the agent later rejects and retries.
+		if s.streamRouter != nil {
+			s.streamRouter.commitAnswer()
+			if s.streamRouter.answerFlushed {
+				s.answerFlushed = true
+			}
+		}
 		return true, Result{
 			Generated:         s.generated,
 			Final:             assistantMsg.Content,
@@ -759,7 +793,57 @@ func (r Runner) runToolCalls(ctx context.Context, calls []llm.ToolCall, s *loopS
 		return results
 	}
 	s.streamExec = nil
-	return r.executeToolCalls(ctx, calls, req)
+
+	// Circuit breaker: short-circuit calls that have been attempted with the
+	// same arguments more than maxIdenticalCallAttempts times. The model is
+	// stuck in a retry loop and executing again will only produce the same
+	// error — we inject a synthetic error result instead.
+	if s.identicalCallCounts == nil {
+		s.identicalCallCounts = make(map[string]int)
+	}
+	toExecute := make([]llm.ToolCall, 0, len(calls))
+	toExecuteIdx := make([]int, 0, len(calls))
+	results := make([]toolResult, len(calls))
+
+	for i, call := range calls {
+		key := identicalCallKey(call)
+		s.identicalCallCounts[key]++
+		if s.identicalCallCounts[key] > maxIdenticalCallAttempts {
+			blocker := fmt.Errorf("identical call blocked: this exact %s call has been attempted %d times already",
+				call.Function.Name, maxIdenticalCallAttempts)
+			results[i] = toolResult{
+				message: llm.Message{
+					Role:       "tool",
+					ToolCallID: call.ID,
+					Name:       call.Function.Name,
+					Content: fmt.Sprintf("[tool error] This exact call was already attempted %d times with identical arguments and kept failing. "+
+						"You MUST change your approach: use different parameters, try a different tool, or answer with the information already gathered.",
+						maxIdenticalCallAttempts),
+				},
+				name: call.Function.Name,
+				args: json.RawMessage(call.Function.Arguments),
+				err:  blocker,
+			}
+		} else {
+			toExecute = append(toExecute, call)
+			toExecuteIdx = append(toExecuteIdx, i)
+		}
+	}
+
+	if len(toExecute) > 0 {
+		executed := r.executeToolCalls(ctx, toExecute, req)
+		for j, res := range executed {
+			results[toExecuteIdx[j]] = res
+		}
+	}
+	return results
+}
+
+// identicalCallKey returns a stable key for a tool call based on its name and
+// a short hash of its arguments. Used by the identical-call circuit breaker.
+func identicalCallKey(call llm.ToolCall) string {
+	h := sha256.Sum256([]byte(call.Function.Arguments))
+	return call.Function.Name + "::" + fmt.Sprintf("%x", h[:4])
 }
 
 // handleMaxSteps is called when the agent exhausts its step budget. It makes
@@ -1283,12 +1367,19 @@ func (r Runner) sanitize(text string) string {
 // turn ends, then emits typed StreamEvents. Only used when afterTools is true
 // (i.e. the second+ LLM round with tools available) where we cannot know
 // upfront whether text is narration or a final answer.
+//
+// Deferred answer flushing: when the model produces text without tool calls
+// (potential final answer), the text is stored in pendingAnswer rather than
+// immediately emitted. Only commitAnswer() actually writes it to the output
+// stream. This prevents incomplete or invalid intermediate answers from
+// appearing in the Slack thread before handleFinalResponse validation passes.
 type streamRouter struct {
 	emit          func(StreamEvent)
 	afterTools    bool
 	buf           strings.Builder
 	toolTurn      bool
 	answerFlushed bool
+	pendingAnswer string // validated-and-ready text; set by finish(), emitted by commitAnswer()
 }
 
 func (sr *streamRouter) text(delta string) {
@@ -1319,6 +1410,18 @@ func (sr *streamRouter) finish(hasToolCalls bool) {
 	sr.flushAs(StreamAnswer)
 }
 
+// commitAnswer emits the deferred pending answer to the output stream.
+// Must be called only after handleFinalResponse has validated the answer.
+func (sr *streamRouter) commitAnswer() {
+	if sr.pendingAnswer == "" {
+		return
+	}
+	text := sr.pendingAnswer
+	sr.pendingAnswer = ""
+	sr.answerFlushed = true
+	sr.emit(StreamEvent{Kind: StreamAnswer, Delta: text})
+}
+
 func (sr *streamRouter) flushAs(kind StreamKind) {
 	if sr.buf.Len() == 0 {
 		return
@@ -1338,7 +1441,11 @@ func (sr *streamRouter) flushAs(kind StreamKind) {
 		text = "\n\n" + text
 	}
 	if kind == StreamAnswer {
-		sr.answerFlushed = true
+		// Defer: store for commitAnswer() rather than emitting immediately.
+		// handleFinalResponse will call commitAnswer() once the response passes
+		// all validation checks (code evidence, repetition, textual tool calls, etc.).
+		sr.pendingAnswer = text
+		return
 	}
 	sr.emit(StreamEvent{Kind: kind, Delta: text})
 }
