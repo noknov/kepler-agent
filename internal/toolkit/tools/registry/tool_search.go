@@ -23,6 +23,11 @@ type ToolSearchTool struct {
 	Registry *Registry
 }
 
+func (t ToolSearchTool) CloneForRegistry(reg *Registry) Tool {
+	t.Registry = reg
+	return t
+}
+
 func (ToolSearchTool) Spec() llm.ToolSpec {
 	return FunctionSpec(
 		"tool_search",
@@ -203,6 +208,8 @@ type toolSearchDoc struct {
 }
 
 func (t ToolSearchTool) toolSearchDocs() []toolSearchDoc {
+	t.Registry.mu.RLock()
+	defer t.Registry.mu.RUnlock()
 	docs := make([]toolSearchDoc, 0, len(t.Registry.tools)+len(t.Registry.deferred))
 	for name, tool := range t.Registry.tools {
 		if !t.Registry.canExpose(name, tool) {
@@ -392,7 +399,7 @@ func (t ToolSearchTool) activate(categories []string, toolNames []string) string
 		if category == "" {
 			continue
 		}
-		if len(t.Registry.DeferredToolNames(category)) == 0 && !containsCategory(t.Registry.categories, category) {
+		if len(t.Registry.DeferredToolNames(category)) == 0 && !t.Registry.hasCategory(category) {
 			unknown = append(unknown, category)
 			continue
 		}
@@ -417,8 +424,10 @@ func (t ToolSearchTool) activate(categories []string, toolNames []string) string
 	return strings.TrimSpace(b.String())
 }
 
-func containsCategory(categories map[string][]string, category string) bool {
-	_, ok := categories[category]
+func (r *Registry) hasCategory(category string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.categories[category]
 	return ok
 }
 

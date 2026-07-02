@@ -26,6 +26,11 @@ type ExploreTool struct {
 
 func (ExploreTool) Parallel() bool { return true }
 
+func (t ExploreTool) CloneForRegistry(reg *registry.Registry) registry.Tool {
+	t.Manager = t.Manager.WithTools(reg)
+	return t
+}
+
 func (t ExploreTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"explore-code",

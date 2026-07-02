@@ -16,6 +16,11 @@ type Tool struct {
 
 func (Tool) Parallel() bool { return true }
 
+func (t Tool) CloneForRegistry(reg *registry.Registry) registry.Tool {
+	t.Manager = t.Manager.WithTools(reg)
+	return t
+}
+
 func (t Tool) Spec() llm.ToolSpec {
 	profiles := "[]"
 	if t.Manager != nil {
