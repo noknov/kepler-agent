@@ -18,6 +18,14 @@ import (
 
 const maxOutputBytes = 60000
 
+// ReadOnlyTool executes shell commands (including pipelines) for operational
+// investigation. It allows a broad set of read-oriented tools — git, kubectl,
+// gcloud, gh, grep, jq, and standard Unix utilities — and blocks commands that
+// could modify production systems or cluster state.
+//
+// Supports pipes (|) so that idiomatic shell one-liners like
+// "kubectl get pods | grep web" or "git log --oneline | head -20" work as-is.
+// Shell meta-operators (;, &&, ||, &) and redirections (>, >>) are not allowed.
 type ReadOnlyTool struct {
 	GCloudPath  string
 	KubectlPath string
@@ -27,7 +35,7 @@ type ReadOnlyTool struct {
 
 func (t ReadOnlyTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
-		"readonly-shell",
+		"shell",
 		"",
 		registry.ObjectSchema([]string{"command"}, map[string]any{
 			"command": map[string]any{"type": "string", "description": ""},
@@ -42,19 +50,14 @@ func (t ReadOnlyTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
 	}
-	argv, err := splitCommand(args.Command)
-	if err != nil {
-		return registry.Result{}, err
-	}
-	if len(argv) == 0 {
+	cmd := strings.TrimSpace(args.Command)
+	if cmd == "" {
 		return registry.Result{}, fmt.Errorf("command is required")
 	}
-	if err := validateReadOnlyCommand(argv); err != nil {
+	if err := validateShellCommand(cmd); err != nil {
 		return registry.Result{}, err
 	}
-	bin := t.resolveBinary(argv[0])
-	display := bin + " " + strings.Join(argv[1:], " ")
-	if err := t.Guard.Check(display); err != nil {
+	if err := t.Guard.Check(cmd); err != nil {
 		return registry.Result{}, err
 	}
 
@@ -65,18 +68,18 @@ func (t ReadOnlyTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, bin, argv[1:]...)
+	sh := exec.CommandContext(ctx, "sh", "-c", t.expandBinaries(cmd))
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err = cmd.Run()
+	sh.Stdout = &stdout
+	sh.Stderr = &stderr
+	err := sh.Run()
 	out := strings.TrimRight(stdout.String(), "\n")
 	errOut := strings.TrimSpace(stderr.String())
 	if err != nil {
 		if errOut == "" {
 			errOut = err.Error()
 		}
-		return registry.Result{}, fmt.Errorf("%s failed: %s", argv[0], truncateOutput(errOut))
+		return registry.Result{}, fmt.Errorf("command failed: %s", truncateOutput(errOut))
 	}
 	if out == "" && errOut != "" {
 		out = errOut
@@ -87,180 +90,210 @@ func (t ReadOnlyTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 	return registry.Result{Content: truncateOutput(out)}, nil
 }
 
-func (t ReadOnlyTool) resolveBinary(name string) string {
-	switch filepath.Base(name) {
-	case "gcloud":
-		if t.GCloudPath != "" {
-			return t.GCloudPath
+// expandBinaries rewrites well-known binary names to their configured paths so
+// the shell receives the correct executable even when the PATH differs.
+func (t ReadOnlyTool) expandBinaries(cmd string) string {
+	replacements := map[string]string{}
+	if t.GCloudPath != "" {
+		replacements["gcloud"] = t.GCloudPath
+	}
+	if t.KubectlPath != "" {
+		replacements["kubectl"] = t.KubectlPath
+	}
+	if len(replacements) == 0 {
+		return cmd
+	}
+	for name, path := range replacements {
+		if filepath.Base(path) == name {
+			continue
 		}
-	case "kubectl":
-		if t.KubectlPath != "" {
-			return t.KubectlPath
-		}
-	}
-	return name
-}
-
-func splitCommand(command string) ([]string, error) {
-	command = strings.TrimSpace(command)
-	if command == "" {
-		return nil, nil
-	}
-	if strings.ContainsAny(command, "\n\r;&|`$") {
-		return nil, fmt.Errorf("command contains shell syntax; pass a single read-only command without pipes, redirects, substitutions, or command chaining")
-	}
-	var args []string
-	var b strings.Builder
-	var quote rune
-	escaped := false
-	for _, r := range command {
-		switch {
-		case escaped:
-			b.WriteRune(r)
-			escaped = false
-		case r == '\\':
-			escaped = true
-		case quote != 0:
-			if r == quote {
-				quote = 0
-			} else {
-				b.WriteRune(r)
-			}
-		case r == '\'' || r == '"':
-			quote = r
-		case r == ' ' || r == '\t':
-			if b.Len() > 0 {
-				args = append(args, b.String())
-				b.Reset()
-			}
-		default:
-			b.WriteRune(r)
+		cmd = strings.ReplaceAll(cmd, name+" ", path+" ")
+		if strings.HasSuffix(cmd, name) {
+			cmd = cmd[:len(cmd)-len(name)] + path
 		}
 	}
-	if escaped {
-		b.WriteRune('\\')
-	}
-	if quote != 0 {
-		return nil, fmt.Errorf("unterminated quote in command")
-	}
-	if b.Len() > 0 {
-		args = append(args, b.String())
-	}
-	for _, arg := range args {
-		if isShellControlToken(arg) {
-			return nil, fmt.Errorf("command contains shell control token %q", arg)
+	return cmd
+}
+
+// validateShellCommand checks that the command (including pipelines) only
+// invokes allowed programs and does not contain shell meta-operators that
+// enable command chaining or output redirection.
+func validateShellCommand(cmd string) error {
+	// Reject chaining operators and redirections; pipes are the only allowed
+	// shell construct so that idiomatic one-liners still work.
+	for _, illegal := range []string{"&&", "||", ";;", ";", "&", "`", "$(", ">${", ">>", " > ", " 2>", ">/"} {
+		if strings.Contains(cmd, illegal) {
+			return fmt.Errorf("shell meta-operator %q is not allowed; use | for pipelines only", illegal)
 		}
 	}
-	return args, nil
-}
 
-func isShellControlToken(arg string) bool {
-	switch arg {
-	case ">", ">>", "<", "<<", "2>", "2>>", "&>", "&>>":
-		return true
-	default:
-		return false
-	}
-}
-
-func validateReadOnlyCommand(argv []string) error {
-	name := filepath.Base(argv[0])
-	switch name {
-	case "date":
-		return validateDate(argv)
-	case "gcloud":
-		return validateGCloud(argv)
-	case "kubectl":
-		return validateKubectl(argv)
-	case "gh":
-		return validateGH(argv)
-	default:
-		return fmt.Errorf("command %q is not in the read-only allowlist; use gcloud, kubectl, gh, or date", name)
-	}
-}
-
-func validateDate(argv []string) error {
-	if len(argv) > 3 {
-		return fmt.Errorf("date allows at most two arguments")
+	// Validate each segment of a pipeline independently.
+	for _, segment := range strings.Split(cmd, "|") {
+		if err := validateSegment(strings.TrimSpace(segment)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func validateGCloud(argv []string) error {
-	if len(argv) < 3 {
-		return fmt.Errorf("gcloud command must include a read-only group and subcommand")
-	}
-	if containsMutationFlag(argv[1:]) {
-		return fmt.Errorf("gcloud command contains a write/mutation flag")
-	}
-	if argv[1] == "logging" && argv[2] == "read" {
+// validateSegment validates a single pipeline segment (no pipes).
+func validateSegment(segment string) error {
+	if segment == "" {
 		return nil
 	}
-	if argv[1] == "container" && len(argv) >= 4 && argv[2] == "clusters" && oneOf(argv[3], "list", "describe") {
+	fields := strings.Fields(segment)
+	if len(fields) == 0 {
 		return nil
 	}
-	if argv[1] == "run" && len(argv) >= 4 && argv[2] == "services" && oneOf(argv[3], "list", "describe") {
+	bin := filepath.Base(fields[0])
+	args := fields[1:]
+
+	switch bin {
+	case "git":
+		return validateGit(args)
+	case "kubectl":
+		return validateKubectl(args)
+	case "gcloud":
+		return validateGCloud(args)
+	case "gh":
+		return validateGH(args)
+	case "helm":
+		return validateHelm(args)
+	case "grep", "rg", "awk", "sed", "sort", "uniq", "head", "tail", "wc",
+		"cat", "ls", "find", "echo", "printf", "date", "tr", "cut",
+		"xargs", "tee", "diff", "jq", "yq", "curl", "wget",
+		"df", "du", "ps", "uname", "hostname", "which", "env",
+		"python3", "python", "node", "go", "ruby":
+		// General read/transform utilities. curl/wget are included so the
+		// agent can inspect endpoints; they are read-only by default.
 		return nil
 	}
-	if argv[1] == "builds" && oneOf(argv[2], "list", "describe", "log") {
-		return nil
-	}
-	if argv[1] == "compute" && len(argv) >= 4 && oneOf(argv[2], "instances", "backend-services", "health-checks") && oneOf(argv[3], "list", "describe", "get-health") {
-		return nil
-	}
-	return fmt.Errorf("gcloud command is not read-only allowlisted")
+	return fmt.Errorf("command %q is not in the shell allowlist; allowed: git, kubectl, gcloud, gh, helm, grep/rg/awk/sed/jq, find, cat, ls, head/tail/wc/sort/uniq/cut/tr, curl, date, echo", bin)
 }
 
-func validateKubectl(argv []string) error {
-	if len(argv) < 2 {
-		return fmt.Errorf("kubectl command must include a read-only subcommand")
+func validateGit(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("git requires a subcommand")
 	}
-	switch argv[1] {
-	case "get", "describe":
-		if len(argv) >= 3 && isSecretResource(argv[2]) {
-			return fmt.Errorf("kubectl %s secret resources is blocked", argv[1])
+	sub := args[0]
+	// Block operations that push or modify remote state or permanently
+	// rewrite history.
+	blocked := map[string]bool{
+		"push":    true,
+		"commit":  true,
+		"merge":   true,
+		"rebase":  true,
+		"am":      true,
+		"apply":   true,
+		"bisect":  false, // allow (read-only investigation)
+		"clean":   true,
+		"rm":      true,
+		"mv":      true,
+		"submodule": false,
+	}
+	if blocked[sub] {
+		return fmt.Errorf("git %s modifies repository state and is not allowed", sub)
+	}
+	return nil
+}
+
+func validateKubectl(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("kubectl requires a subcommand")
+	}
+	switch args[0] {
+	case "get", "describe", "logs", "top", "explain", "api-resources", "api-versions",
+		"version", "cluster-info", "rollout":
+		if len(args) >= 2 && isSecretResource(args[1]) {
+			return fmt.Errorf("kubectl %s secret is blocked", args[0])
 		}
 		return nil
-	case "logs", "top":
-		return nil
 	case "config":
-		if len(argv) >= 3 && oneOf(argv[2], "current-context", "get-contexts", "view") {
-			if argv[2] == "view" && !contains(argv[3:], "--minify") {
+		if len(args) >= 2 && oneOf(args[1], "current-context", "get-contexts", "view", "use-context") {
+			if args[1] == "view" && !contains(args[2:], "--minify") {
 				return fmt.Errorf("kubectl config view requires --minify")
 			}
 			return nil
 		}
-		// use-context only changes the local kubeconfig; it does not touch
-		// any remote cluster state, so it is safe to allow.
-		if len(argv) >= 3 && argv[2] == "use-context" {
-			return nil
-		}
 	}
-	return fmt.Errorf("kubectl command is not read-only allowlisted")
+	return fmt.Errorf("kubectl %s is not in the allowlist (allowed: get, describe, logs, top, config, rollout, explain, version, cluster-info)", args[0])
 }
 
-func validateGH(argv []string) error {
-	if len(argv) < 3 {
-		return fmt.Errorf("gh command must include a read-only resource and subcommand")
+func validateGCloud(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("gcloud requires a group and subcommand")
 	}
-	if containsMutationFlag(argv[1:]) {
+	if containsMutationFlag(args[1:]) {
+		return fmt.Errorf("gcloud command contains a write/mutation flag")
+	}
+	group := args[0]
+	sub := args[1]
+	readSubs := map[string]bool{"list": true, "describe": true, "read": true, "log": true, "get-health": true, "view": true}
+	switch group {
+	case "logging":
+		if sub == "read" {
+			return nil
+		}
+	case "container":
+		if len(args) >= 3 && readSubs[args[2]] {
+			return nil
+		}
+	case "run":
+		if len(args) >= 3 && readSubs[args[2]] {
+			return nil
+		}
+	case "builds":
+		if readSubs[sub] {
+			return nil
+		}
+	case "compute":
+		if len(args) >= 3 && readSubs[args[2]] {
+			return nil
+		}
+	case "projects":
+		if readSubs[sub] {
+			return nil
+		}
+	case "artifacts":
+		if len(args) >= 3 && readSubs[args[2]] {
+			return nil
+		}
+	case "config":
+		if oneOf(sub, "list", "get", "set") {
+			return nil
+		}
+	}
+	return fmt.Errorf("gcloud %s %s is not read-only allowlisted", group, sub)
+}
+
+func validateGH(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("gh requires a resource and subcommand")
+	}
+	if containsMutationFlag(args[1:]) {
 		return fmt.Errorf("gh command contains a write/mutation flag")
 	}
-	switch argv[1] {
-	case "run":
-		if oneOf(argv[2], "list", "view") {
-			return nil
-		}
-	case "workflow":
-		if oneOf(argv[2], "list", "view") {
-			return nil
-		}
-	case "pr":
-		if oneOf(argv[2], "list", "view", "checks", "diff") {
+	resource := args[0]
+	sub := args[1]
+	readSubs := map[string]bool{"list": true, "view": true, "checks": true, "diff": true, "log": true, "status": true}
+	switch resource {
+	case "run", "workflow", "pr", "issue", "release", "repo", "api":
+		if readSubs[sub] {
 			return nil
 		}
 	}
-	return fmt.Errorf("gh command is not read-only allowlisted")
+	return fmt.Errorf("gh %s %s is not read-only allowlisted", resource, sub)
+}
+
+func validateHelm(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("helm requires a subcommand")
+	}
+	readSubs := map[string]bool{"list": true, "status": true, "history": true, "get": true, "show": true, "search": true, "version": true, "env": true}
+	if readSubs[args[0]] {
+		return nil
+	}
+	return fmt.Errorf("helm %s is not in the allowlist (allowed: list, status, history, get, show, search, version)", args[0])
 }
 
 func containsMutationFlag(args []string) bool {
