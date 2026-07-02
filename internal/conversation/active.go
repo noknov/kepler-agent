@@ -89,6 +89,7 @@ func (a *activeRun) drainMessages() []llm.Message {
 	if appendProgress != nil {
 		appendProgress([]map[string]any{
 			{"type": "task_update", "id": "thinking", "title": agent.SteeringQueuedTitle(locale), "status": "in_progress"},
+			{"type": "markdown_text", "text": steeringAppliedMessage(locale)},
 		})
 	}
 	content := formatSteeringMessages(queued)
