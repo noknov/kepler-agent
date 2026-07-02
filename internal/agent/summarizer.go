@@ -24,6 +24,9 @@ type StatusSummarizer struct {
 // Summarize launches a background goroutine that generates a short status line
 // describing the current agent step (potentially multiple tools) and delivers
 // it via update. It is a no-op when s is nil.
+//
+// The update is only delivered if the parent ctx is still live when the LLM
+// responds. This prevents stale status text from appearing after the run ends.
 func (s *StatusSummarizer) Summarize(ctx context.Context, names, sampleArgs, locale string, update StatusUpdater) {
 	if s == nil || update == nil {
 		return
@@ -37,8 +40,17 @@ func (s *StatusSummarizer) Summarize(ctx context.Context, names, sampleArgs, loc
 			Messages:  []llm.Message{{Role: "user", Content: summarizePrompt(names, sampleArgs, locale)}},
 			MaxTokens: 32,
 		})
-		if err != nil || sctx.Err() != nil {
+		if err != nil {
 			return
+		}
+		// Double-check the parent context after the LLM call returns.
+		// The timeout context (sctx) may have succeeded just as the parent was
+		// cancelled, so we must check both to avoid a TOCTOU race where the run
+		// has ended but we still deliver a status update.
+		select {
+		case <-ctx.Done():
+			return
+		default:
 		}
 		if text := strings.TrimSpace(resp.Message.Content); text != "" {
 			update(text)

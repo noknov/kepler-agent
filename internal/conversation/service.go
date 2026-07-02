@@ -116,7 +116,14 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	defer func() {
 		lock.Unlock()
 		if followUp, ok := combineQueuedFollowUps(followUps); ok {
-			go s.process(context.Background(), followUp, false)
+			// Use a fresh background context with a generous timeout instead of
+			// context.Background() so the follow-up can still be cancelled by the
+			// server shutdown, and we avoid inheriting a cancelled parent context.
+			followCtx, followCancel := context.WithTimeout(context.Background(), 30*time.Minute)
+			go func() {
+				defer followCancel()
+				s.process(followCtx, followUp, false)
+			}()
 		}
 	}()
 
@@ -608,7 +615,9 @@ func (s *Service) priorConversationBilledTokens(ctx context.Context, sessionID s
 	if s.RunStore == nil || sessionID == "" {
 		return 0
 	}
-	runsList, err := s.RunStore.List(ctx, 10_000)
+	// ListBySession filters by sessionID server-side, avoiding a full scan of
+	// all run files (previously: List(ctx, 10_000) then filter in memory).
+	runsList, err := s.RunStore.ListBySession(ctx, sessionID)
 	if err != nil {
 		log.Printf("failed to list prior runs for session=%s: %v", sessionID, err)
 		return 0
@@ -619,7 +628,7 @@ func (s *Service) priorConversationBilledTokens(ctx context.Context, sessionID s
 	}
 	total := 0
 	for _, run := range runsList {
-		if run.SessionID != sessionID || run.ID == currentID {
+		if run.ID == currentID {
 			continue
 		}
 		total += runs.BilledTokens(run.Usage)

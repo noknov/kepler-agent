@@ -460,11 +460,21 @@ type messageGroup struct {
 	messages []llm.Message
 }
 
+// groupMessagesByStableBoundary splits messages into conversation turns at each
+// "user" role boundary. A turn begins at a user message and includes all
+// subsequent assistant messages and tool call/result pairs until the next user
+// message. This keeps tool_use/tool_result pairs within the same group,
+// preventing orphan tool results when a group is pruned.
+//
+// Previously this function split at every user OR assistant message boundary,
+// which could separate tool_use from its tool_result across groups.
 func groupMessagesByStableBoundary(messages []llm.Message) []messageGroup {
 	groups := make([]messageGroup, 0)
 	current := messageGroup{}
 	for _, msg := range messages {
-		if (msg.Role == "user" || msg.Role == "assistant") && len(current.messages) > 0 {
+		// Start a new group only at user-role boundaries (real turn starts).
+		// assistant, tool, and system messages stay with the preceding user turn.
+		if msg.Role == "user" && len(current.messages) > 0 {
 			groups = append(groups, current)
 			current = messageGroup{}
 		}

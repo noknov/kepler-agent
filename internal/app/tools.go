@@ -16,6 +16,7 @@ import (
 	gcpTools "github.com/wati/oncall-agent/internal/toolkit/tools/gcp"
 	gitTools "github.com/wati/oncall-agent/internal/toolkit/tools/git"
 	githubTools "github.com/wati/oncall-agent/internal/toolkit/tools/github"
+	k8sTools "github.com/wati/oncall-agent/internal/toolkit/tools/k8s"
 	knowledgeTools "github.com/wati/oncall-agent/internal/toolkit/tools/knowledge"
 	luckinTools "github.com/wati/oncall-agent/internal/toolkit/tools/luckin"
 	notionTools "github.com/wati/oncall-agent/internal/toolkit/tools/notion"
@@ -75,6 +76,24 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 		Guard:       commandPolicy,
 		Timeout:     cfg.Tools.CommandTimeout,
 	})
+
+	// K8s native tools: dedicated kubectl wrappers for pods, logs, describe, top.
+	// These provide richer structured output and safer arg handling than the
+	// general shell tool. They are registered eagerly (not deferred) because
+	// kubectl availability can be assumed when a context is configured.
+	if cfg.Tools.KubectlPath != "" || cfg.Tools.K8sDefaultContext != "" || cfg.Tools.K8sDefaultCluster != "" {
+		k8sBase := k8sTools.Base{
+			KubectlPath:    cfg.Tools.KubectlPath,
+			DefaultContext: cfg.Tools.K8sDefaultContext,
+			DefaultCluster: cfg.Tools.K8sDefaultCluster,
+			Guard:          commandPolicy,
+			Timeout:        cfg.Tools.CommandTimeout,
+		}
+		tools.Register(k8sTools.GetPodsTool{Base: k8sBase})
+		tools.Register(k8sTools.LogsTool{Base: k8sBase})
+		tools.Register(k8sTools.DescribeTool{Base: k8sBase})
+		tools.Register(k8sTools.TopTool{Base: k8sBase})
+	}
 
 	tools.Register(gcpTools.LogsTool{
 		GCloudPath:       cfg.Tools.GCloudPath,

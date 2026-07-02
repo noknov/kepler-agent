@@ -99,12 +99,74 @@ type Request struct {
 	Steering     SteeringProvider
 }
 
+// TerminationReason describes why the agent loop exited. It is analogous to
+// claude-code's Terminal.reason enum and is used for observability and testing.
+type TerminationReason string
+
+const (
+	TerminationCompleted    TerminationReason = "completed"     // normal text answer
+	TerminationPending      TerminationReason = "pending_user"  // waiting for user input
+	TerminationMaxSteps     TerminationReason = "max_steps"     // hit step budget
+	TerminationCanceled     TerminationReason = "canceled"      // context canceled
+	TerminationModelError   TerminationReason = "model_error"   // unrecoverable LLM error
+	TerminationEmptyFinal   TerminationReason = "empty_final"   // persistent empty response
+	TerminationRepetitive   TerminationReason = "repetitive"    // model looping
+	TerminationTextualTool  TerminationReason = "textual_tool"  // model hallucinating tool calls
+)
+
 type Result struct {
-	Generated       []llm.Message
-	Final           string
-	Pending         bool
-	PendingQuestion string
-	Streamed        bool
+	Generated         []llm.Message
+	Final             string
+	Pending           bool
+	PendingQuestion   string
+	Streamed          bool
+	TerminationReason TerminationReason
+}
+
+// loopState holds all mutable per-run state that was previously scattered as
+// local boolean variables in the agent loop. Grouping them here mirrors
+// claude-code's explicit State struct and makes the loop logic easier to follow.
+type loopState struct {
+	messages  []llm.Message
+	generated []llm.Message
+
+	// retry guards — each is a one-shot flag; once set, the corresponding
+	// recovery is exhausted and the next occurrence becomes a hard failure.
+	retriedRepetitiveFinal bool
+	retriedTextualToolCall bool
+	retriedEmptyResponse   bool
+	retriedPromptTooLong   bool
+	retriedCodeClaim       bool
+	retriedUnevidencedFile bool
+	retriedRawEvidence     bool
+
+	// overload / max-output-tokens recovery counters
+	overloadRetries              int
+	maxOutputTokensRecoveryCount int
+
+	// tracking for code-evidence validation
+	codeToolCalledThisRun bool
+
+	// afterTools is true once at least one tool result has been received;
+	// it governs streaming router behaviour and pivot escalation.
+	afterTools bool
+
+	// answerFlushed is true once any StreamAnswer event has been emitted.
+	// Subsequent retry steps must not write more text to the answer stream.
+	answerFlushed bool
+
+	// streamedText tracks whether any text was emitted in the current step.
+	streamedText bool
+
+	// pivotTier tracks progressive escalation pressure (0=none … 4=force).
+	pivotTier int
+
+	// clarificationErrors tracks persistent tool failures that require user input.
+	clarificationErrors *clarificationErrorTracker
+
+	// per-step streaming components; reset each iteration by callLLM.
+	streamRouter *streamRouter
+	streamExec   *streamingToolExecutor
 }
 
 func repetitiveRetryPrompt() string {
@@ -237,394 +299,484 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		req.RunID = runs.NewID()
 	}
 	req.Runtime.RunID = req.RunID
-	messages := append([]llm.Message(nil), req.Messages...)
-	if hint := localeHint(req.Locale); hint != "" {
-		messages = append(messages, llm.Message{Role: "system", Content: hint})
+
+	// Initialise loop state. Mirrors claude-code's explicit State struct so
+	// the loop body only reads/writes s.* rather than scattered local vars.
+	s := &loopState{
+		messages:            append([]llm.Message(nil), req.Messages...),
+		clarificationErrors: newClarificationErrorTracker(),
 	}
-	var generated []llm.Message
-	retriedRepetitiveFinal := false
-	retriedTextualToolCall := false
-	retriedEmptyResponse := false
-	overloadRetries := 0
+	if hint := localeHint(req.Locale); hint != "" {
+		s.messages = append(s.messages, llm.Message{Role: "system", Content: hint})
+	}
+
 	const maxOverloadRetries = 3
-	retriedPromptTooLong := false
-	retriedCodeClaim := false
-	retriedUnevidencedFile := false
-	retriedRawEvidence := false
-	maxOutputTokensRecoveryCount := 0
-	codeToolCalledThisRun := false
-	afterTools := false
-	answerFlushed := false // true once any StreamAnswer event is emitted; prevents retry steps from polluting the answer stream
-	pivotTier := 0         // 0=none, 1=gentle, 2=firm, 3=urgent, 4=force
-	clarificationErrors := newClarificationErrorTracker()
 
 	for step := 0; step < maxSteps; step++ {
-		if r.StatusUpdate != nil {
-			if r.StatusSummarizer != nil {
-				// Only show "思考中" at the very start; the summarizer updates
-				// the status for each subsequent tool-call step. Resetting to
-				// "思考中" on every step would wipe out the summarizer's labels.
-				if step == 0 {
-					r.StatusUpdate(ThinkingStatus(req.Locale))
-				}
-			} else {
-				r.StatusUpdate(StepStatus(req.Locale, step))
-			}
+		if done, result, err := r.runStep(ctx, step, maxOverloadRetries, s, req); done {
+			return result, err
 		}
-		// Progressive escalation: increasingly strong pressure to stop.
-		if afterTools {
-			if step >= pivotTierForce && pivotTier < 4 {
-				// Strip tools entirely — force text answer on next LLM call.
-				pivotTier = 4
-				messages = append(messages, llm.Message{Role: "system", Content: pivotForceMessage()})
-				r.observeEvent("pivot_force", map[string]any{"step": step})
-			} else if step >= pivotTierUrgent && pivotTier < 3 {
-				pivotTier = 3
-				messages = append(messages, llm.Message{Role: "system", Content: pivotUrgentMessage()})
-				r.observeEvent("pivot_urgent", map[string]any{"step": step})
-			} else if step >= pivotTierFirm && pivotTier < 2 {
-				pivotTier = 2
-				messages = append(messages, llm.Message{Role: "system", Content: stepBudgetPivotMessage()})
-				r.observeEvent("pivot_firm", map[string]any{"step": step})
-			} else if step >= pivotTierGentle && pivotTier < 1 {
-				pivotTier = 1
-				messages = append(messages, llm.Message{Role: "system", Content: pivotGentleMessage()})
-				r.observeEvent("pivot_gentle", map[string]any{"step": step})
-			}
-		}
-		if req.Steering != nil {
-			if steering := req.Steering(); len(steering) > 0 {
-				messages = append(messages, steering...)
-			}
-		}
+	}
 
-		var toolSpecs []llm.ToolSpec
-		if r.Tools != nil && pivotTier < 4 {
-			toolSpecs = r.Tools.Specs()
-		}
-		messages = r.prepareMessagesForQuery(ctx, messages, req, toolSpecs)
+	// Max steps reached: one final tool-free LLM call to force a summary answer.
+	return r.handleMaxSteps(ctx, s, req)
+}
 
-		llmReq := llm.Request{
-			Model:       r.Model,
-			Messages:    messages,
-			Tools:       toolSpecs,
-			MaxTokens:   r.MaxTokens,
-			Temperature: r.Temp,
-			Thinking:    r.Thinking,
-		}
+// runStep executes one iteration of the agent loop (one LLM call + tool round).
+// Returns (true, result, err) when the loop should terminate, (false, _, _) to continue.
+func (r Runner) runStep(ctx context.Context, step, maxOverloadRetries int, s *loopState, req Request) (done bool, result Result, err error) {
+	// Bail early on context cancellation so we return a clean error rather
+	// than letting the LLM call fail with a confusing wrapped error.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return true, Result{Generated: s.generated, TerminationReason: TerminationCanceled}, ctxErr
+	}
 
-		useStream := r.OnStream != nil
-		llmStart := time.Now()
-		var resp llm.Response
-		var err error
-		streamedText := false
-		var router *streamRouter
-		// Once the answer has been streamed in a previous step, subsequent
-		// retry steps must not write more text to the answer stream.  Wrap
-		// OnStream so that StreamAnswer events are silently dropped while
-		// StreamNarration events still pass through for token accounting.
-		stepOnStream := r.OnStream
-		if answerFlushed && r.OnStream != nil {
-			stepOnStream = func(ev StreamEvent) {
-				if ev.Kind != StreamAnswer {
-					r.OnStream(ev)
-				}
-			}
-		}
-		if useStream && len(toolSpecs) > 0 {
-			router = &streamRouter{emit: stepOnStream, afterTools: afterTools}
-		}
-		streamText := func(delta string) {
-			if delta != "" {
-				streamedText = true
-			}
-			if router != nil {
-				router.text(delta)
-			} else if stepOnStream != nil {
-				stepOnStream(StreamEvent{Kind: StreamAnswer, Delta: delta})
-				answerFlushed = true
-			}
-		}
+	r.emitStepStatus(req.Locale, step, s)
+	r.applyPivotEscalation(step, s, req)
 
-		// Streaming tool executor: start executing tools as they complete
-		// during streaming, rather than waiting for the full response.
-		var streamExec *streamingToolExecutor
-		if useStream && r.Tools != nil && len(toolSpecs) > 0 {
-			streamExec = newStreamingToolExecutor(ctx, r, req)
+	if req.Steering != nil {
+		if steering := req.Steering(); len(steering) > 0 {
+			s.messages = append(s.messages, steering...)
 		}
+	}
 
-		streamHandler := llm.StreamHandler{
-			OnText: streamText,
-			OnToolCallsStarted: func() {
-				if router != nil {
-					router.toolCallsStarted()
-				}
-			},
-			OnToolCallComplete: func(call llm.ToolCall) {
-				if streamExec != nil {
-					streamExec.Submit(call)
-				}
-			},
-			OnUsage: func(usage llm.Usage) {
-				if r.OnUsage != nil {
-					r.OnUsage(usage)
-				}
-			},
-		}
-		if useStream {
-			if sc, ok := r.LLM.(llm.StreamClient); ok {
-				if r.useStreamGuard() {
-					guard := &streamGuard{downstream: streamText}
-					resp, err = sc.ChatStream(ctx, llmReq, llm.StreamHandler{
-						OnText:             guard.Write,
-						OnToolCallsStarted: streamHandler.OnToolCallsStarted,
-						OnToolCallComplete: streamHandler.OnToolCallComplete,
-						OnUsage:            streamHandler.OnUsage,
-					})
-					guard.Flush()
-					if guard.suppressed || !guard.emitted || !resp.Streamed {
-						useStream = false
-					}
-				} else {
-					resp, err = sc.ChatStream(ctx, llmReq, streamHandler)
-					if !resp.Streamed {
-						useStream = false
-					}
-				}
-			} else {
-				resp, err = r.LLM.Chat(ctx, llmReq)
-				useStream = false
-			}
-		} else {
-			resp, err = r.LLM.Chat(ctx, llmReq)
-		}
-		if r.Observer != nil {
-			llmDuration := time.Since(llmStart)
-			if observer, ok := r.Observer.(LLMResponseObserver); ok {
-				observer.LLMResponse(resp, llmDuration, err)
-			} else {
-				r.Observer.LLMCall(resp.Usage, llmDuration, err)
-			}
-		}
-		if r.OnLLMStepComplete != nil {
-			r.OnLLMStepComplete()
-		}
-		if err != nil {
-			if llm.IsEmptyResponse(err) && !retriedEmptyResponse {
-				retriedEmptyResponse = true
-				messages = append(messages, llm.Message{Role: "system", Content: emptyResponseRetryPrompt()})
-				if r.StatusUpdate != nil {
-					r.StatusUpdate(RetryStatus(req.Locale))
-				}
-				continue
-			}
-			if llm.IsTemporaryOverload(err) && overloadRetries < maxOverloadRetries && !streamedText {
-				overloadRetries++
-				if llm.IsRateLimited(err) {
-					var pe llm.ProviderError
-					if errors.As(err, &pe) && pe.RetryAfter > 0 {
-						if sleepErr := sleepCtx(ctx, pe.RetryAfter); sleepErr != nil {
-							return Result{Generated: generated}, sleepErr
-						}
-					} else if sleepErr := sleepCtx(ctx, llm.RetryDelay(overloadRetries)); sleepErr != nil {
-						return Result{Generated: generated}, sleepErr
-					}
-				} else if sleepErr := sleepCtx(ctx, llm.RetryDelay(overloadRetries)); sleepErr != nil {
-					return Result{Generated: generated}, sleepErr
-				}
-				if r.StatusUpdate != nil {
-					r.StatusUpdate(RetryStatus(req.Locale))
-				}
-				continue
-			}
-			if llm.IsPromptTooLong(err) && r.Compactor != nil && !retriedPromptTooLong {
-				retriedPromptTooLong = true
-				messages = r.prepareMessagesForOverflowRetry(ctx, messages, req)
-				if r.StatusUpdate != nil {
-					r.StatusUpdate(RetryStatus(req.Locale))
-				}
-				continue
-			}
-			return Result{Generated: generated}, err
-		}
+	var toolSpecs []llm.ToolSpec
+	if r.Tools != nil && s.pivotTier < 4 {
+		toolSpecs = r.Tools.Specs()
+	}
+	s.messages = r.prepareMessagesForQuery(ctx, s.messages, req, toolSpecs)
 
-		assistantMsg := resp.Message
-		if resp.Usage.PromptTokens > 0 || resp.Usage.CompletionTokens > 0 {
-			assistantMsg.Usage = &resp.Usage
+	resp, useStream, llmErr := r.callLLM(ctx, llm.Request{
+		Model:       r.Model,
+		Messages:    s.messages,
+		Tools:       toolSpecs,
+		MaxTokens:   r.MaxTokens,
+		Temperature: r.Temp,
+		Thinking:    r.Thinking,
+	}, s, req)
+	if r.OnLLMStepComplete != nil {
+		r.OnLLMStepComplete()
+	}
+	if llmErr != nil {
+		action, cont := r.handleLLMError(ctx, llmErr, maxOverloadRetries, s, req)
+		if cont {
+			if action == llmErrorOverflowRetry {
+				s.messages = r.prepareMessagesForOverflowRetry(ctx, s.messages, req)
+			}
+			return false, Result{}, nil // continue loop
 		}
-		assistantMsg.ToolCalls = memory.NormalizeToolCalls(assistantMsg.ToolCalls)
-		if router != nil {
-			router.finish(len(assistantMsg.ToolCalls) > 0)
-			if router.answerFlushed {
-				answerFlushed = true
-			}
-		}
-		if useStream && !streamedText && strings.TrimSpace(assistantMsg.Content) != "" {
-			useStream = false
-		}
-		if len(assistantMsg.ToolCalls) == 0 {
-			if isMaxOutputTokensResponse(resp) && maxOutputTokensRecoveryCount < maxOutputTokensRecoveryLimit {
-				maxOutputTokensRecoveryCount++
-				partial := strings.TrimSpace(r.sanitize(assistantMsg.Content))
-				if partial != "" {
-					assistantMsg.Content = partial
-					messages = append(messages, assistantMsg)
-					generated = append(generated, assistantMsg)
-				}
-				messages = append(messages, llm.Message{
-					Role:    "user",
-					Content: maxOutputTokensRecoveryPrompt(),
-				})
-				r.observeEvent("max_output_tokens_recovery", map[string]any{"attempt": maxOutputTokensRecoveryCount})
-				if r.StatusUpdate != nil {
-					r.StatusUpdate(RetryStatus(req.Locale))
-				}
-				continue
-			}
-			if !useStream && r.StatusUpdate != nil {
-				r.StatusUpdate(GeneratingStatus(req.Locale))
-			}
-			final := strings.TrimSpace(r.sanitize(assistantMsg.Content))
-			if final == "" {
-				if !retriedEmptyResponse {
-					retriedEmptyResponse = true
-					messages = append(messages, llm.Message{Role: "system", Content: emptyResponseRetryPrompt()})
-					if r.StatusUpdate != nil {
-						r.StatusUpdate(RetryStatus(req.Locale))
-					}
-					continue
-				}
-				return Result{Generated: generated}, ErrEmptyFinal
-			}
-			if !useStream && llm.LooksLikeTextualToolCall(final) {
-				if !retriedTextualToolCall {
-					retriedTextualToolCall = true
-					messages = append(messages, llm.Message{Role: "system", Content: textualToolCallRetryPrompt()})
-					if r.StatusUpdate != nil {
-						r.StatusUpdate(RetryStatus(req.Locale))
-					}
-					continue
-				}
-				final = llm.StripTextualToolCallMarkup(final)
-				if final == "" {
-					return Result{Generated: generated}, ErrTextualToolCall
-				}
-			}
-			if !useStream && hasRawEvidenceDump(final) {
-				if !retriedRawEvidence {
-					retriedRawEvidence = true
-					messages = append(messages, llm.Message{Role: "system", Content: rawEvidenceRetryPrompt()})
-					if r.StatusUpdate != nil {
-						r.StatusUpdate(RetryStatus(req.Locale))
-					}
-					continue
-				}
-				final = stripRawEvidenceDump(final)
-				if final == "" {
-					return Result{Generated: generated}, ErrTextualToolCall
-				}
-			}
-			if !useStream && looksRepetitive(final) {
-				if !retriedRepetitiveFinal {
-					retriedRepetitiveFinal = true
-					messages = append(messages, llm.Message{Role: "system", Content: repetitiveRetryPrompt()})
-					if r.StatusUpdate != nil {
-						r.StatusUpdate(RetryStatus(req.Locale))
-					}
-					continue
-				}
-				return Result{Generated: generated}, ErrRepetitiveOutput
-			}
-			// Unverified code claim check: applies in both streaming and
-			// non-streaming modes. If the model references specific code
-			// (functions, guards, conditionals) without having called any
-			// code tool, force it to verify with actual tool calls first.
-			if !retriedCodeClaim && !codeToolCalledThisRun && hasUnverifiedCodeClaim(final) {
-				retriedCodeClaim = true
-				messages = append(messages, llm.Message{Role: "system", Content: codeClaimRetryPrompt()})
-				if r.StatusUpdate != nil {
-					r.StatusUpdate(RetryStatus(req.Locale))
-				}
-				continue
-			}
-			// Unevidenced file reference check: the model called code tools
-			// but its answer references files that never appeared in tool
-			// results. This catches the case where the model read file A
-			// but makes conclusions about behavior in file B.
-			if !retriedUnevidencedFile && codeToolCalledThisRun && hasUnverifiedCodeClaim(final) && hasUnevidencedFileReference(final, generated) {
-				retriedUnevidencedFile = true
-				messages = append(messages, llm.Message{Role: "system", Content: unevidencedFileRetryPrompt()})
-				if r.StatusUpdate != nil {
-					r.StatusUpdate(RetryStatus(req.Locale))
-				}
-				continue
-			}
-			assistantMsg.Content = final
-			messages = append(messages, assistantMsg)
-			generated = append(generated, assistantMsg)
-			return Result{Generated: generated, Final: final, Streamed: useStream}, nil
-		}
+		return true, Result{Generated: s.generated, TerminationReason: TerminationModelError}, llmErr
+	}
 
-		// Emit non-streamed narration as a batch event so the UI still shows it.
-		if narration := strings.TrimSpace(assistantMsg.Content); narration != "" && r.OnStream != nil && !streamedText {
-			if !llm.LooksLikeTextualToolCall(narration) {
-				if afterTools {
-					narration = "\n\n" + narration
-				}
-				r.OnStream(StreamEvent{Kind: StreamNarration, Delta: narration})
-			}
-		}
-		assistantMsg.Content = ""
-		messages = append(messages, assistantMsg)
-		generated = append(generated, assistantMsg)
+	assistantMsg := resp.Message
+	if resp.Usage.PromptTokens > 0 || resp.Usage.CompletionTokens > 0 {
+		assistantMsg.Usage = &resp.Usage
+	}
+	assistantMsg.ToolCalls = memory.NormalizeToolCalls(assistantMsg.ToolCalls)
 
-		var toolResults []toolResult
-		if streamExec != nil && streamExec.HasSubmitted() {
-			toolResults = streamExec.Drain(assistantMsg.ToolCalls)
-		} else {
-			toolResults = r.executeToolCalls(ctx, assistantMsg.ToolCalls, req)
+	if s.streamRouter != nil {
+		s.streamRouter.finish(len(assistantMsg.ToolCalls) > 0)
+		if s.streamRouter.answerFlushed {
+			s.answerFlushed = true
 		}
-		if len(toolResults) > 0 {
-			afterTools = true
+	}
+	if useStream && !s.streamedText && strings.TrimSpace(assistantMsg.Content) != "" {
+		useStream = false
+	}
+
+	if len(assistantMsg.ToolCalls) == 0 {
+		return r.settleFinalResponse(ctx, resp, assistantMsg, useStream, s, req)
+	}
+
+	// Tool-call turn: emit narration, execute tools, collect results.
+	r.emitNarration(assistantMsg, s)
+	assistantMsg.Content = ""
+	s.messages = append(s.messages, assistantMsg)
+	s.generated = append(s.generated, assistantMsg)
+
+	toolResults := r.runToolCalls(ctx, assistantMsg.ToolCalls, s, req)
+	for _, tr := range toolResults {
+		s.messages = append(s.messages, tr.message)
+		s.generated = append(s.generated, tr.message)
+		if codeReadingTools[tr.name] {
+			s.codeToolCalledThisRun = true
 		}
-		for _, tr := range toolResults {
-			messages = append(messages, tr.message)
-			generated = append(generated, tr.message)
-			if codeReadingTools[tr.name] {
-				codeToolCalledThisRun = true
-			}
-			if tr.waitForUser {
-				return Result{
-					Generated:       generated,
-					Pending:         true,
-					PendingQuestion: tr.message.Content,
-				}, nil
-			}
-		}
-		locale := requestLocale(req.Locale)
-		if question := clarificationErrors.Question(toolResults, locale); question != "" {
-			generated = append(generated, llm.Message{
-				Role:    "assistant",
-				Content: question,
-			})
-			return Result{
-				Generated:       generated,
-				Pending:         true,
-				PendingQuestion: question,
+		if tr.waitForUser {
+			return true, Result{
+				Generated:         s.generated,
+				Pending:           true,
+				PendingQuestion:   tr.message.Content,
+				TerminationReason: TerminationPending,
 			}, nil
 		}
 	}
-	// Max steps reached: attempt one final LLM call without tools to force a
-	// summary answer rather than returning a hard error to the user.
+	if len(toolResults) > 0 {
+		s.afterTools = true
+	}
+	if question := s.clarificationErrors.Question(toolResults, requestLocale(req.Locale)); question != "" {
+		s.generated = append(s.generated, llm.Message{Role: "assistant", Content: question})
+		return true, Result{
+			Generated:         s.generated,
+			Pending:           true,
+			PendingQuestion:   question,
+			TerminationReason: TerminationPending,
+		}, nil
+	}
+	return false, Result{}, nil // continue loop
+}
+
+// settleFinalResponse handles a no-tool-call LLM response; delegates to
+// handleFinalResponse and maps its three-value return into the runStep contract.
+func (r Runner) settleFinalResponse(ctx context.Context, resp llm.Response, assistantMsg llm.Message, useStream bool, s *loopState, req Request) (done bool, result Result, err error) {
+	ok, cont, finalErr := r.handleFinalResponse(ctx, resp, &assistantMsg, useStream, s, req)
+	if cont {
+		return false, Result{}, nil // retry within loop
+	}
+	if finalErr != nil {
+		reason := TerminationRepetitive
+		switch {
+		case errors.Is(finalErr, ErrEmptyFinal):
+			reason = TerminationEmptyFinal
+		case errors.Is(finalErr, ErrTextualToolCall):
+			reason = TerminationTextualTool
+		}
+		return true, Result{Generated: s.generated, TerminationReason: reason}, finalErr
+	}
+	if ok {
+		return true, Result{
+			Generated:         s.generated,
+			Final:             assistantMsg.Content,
+			Streamed:          useStream,
+			TerminationReason: TerminationCompleted,
+		}, nil
+	}
+	return true, Result{Generated: s.generated, TerminationReason: TerminationRepetitive}, ErrRepetitiveOutput
+}
+
+// llmErrorAction describes what the caller should do after an LLM error.
+type llmErrorAction int
+
+const (
+	llmErrorRetry        llmErrorAction = iota // simple retry (sleep if needed)
+	llmErrorOverflowRetry                      // retry with aggressive compaction
+	llmErrorFatal                              // non-recoverable; return to caller
+)
+
+// handleLLMError inspects err and updates loopState. It returns (action, true)
+// when the loop should continue with the given action, or (_, false) when the
+// error is fatal and should be returned to the caller.
+func (r Runner) handleLLMError(ctx context.Context, err error, maxOverloadRetries int, s *loopState, req Request) (llmErrorAction, bool) {
+	if llm.IsEmptyResponse(err) && !s.retriedEmptyResponse {
+		s.retriedEmptyResponse = true
+		s.messages = append(s.messages, llm.Message{Role: "system", Content: emptyResponseRetryPrompt()})
+		r.updateStatus(req.Locale, RetryStatus)
+		return llmErrorRetry, true
+	}
+	if llm.IsTemporaryOverload(err) && s.overloadRetries < maxOverloadRetries && !s.streamedText {
+		s.overloadRetries++
+		var pe llm.ProviderError
+		var delay time.Duration
+		if llm.IsRateLimited(err) && errors.As(err, &pe) && pe.RetryAfter > 0 {
+			delay = pe.RetryAfter
+		} else {
+			delay = llm.RetryDelay(s.overloadRetries)
+		}
+		if sleepErr := sleepCtx(ctx, delay); sleepErr != nil {
+			return llmErrorFatal, false
+		}
+		r.updateStatus(req.Locale, RetryStatus)
+		return llmErrorRetry, true
+	}
+	if llm.IsPromptTooLong(err) && r.Compactor != nil && !s.retriedPromptTooLong {
+		s.retriedPromptTooLong = true
+		r.updateStatus(req.Locale, RetryStatus)
+		return llmErrorOverflowRetry, true
+	}
+	return llmErrorFatal, false
+}
+
+// handleFinalResponse processes a no-tool-call response from the LLM.
+//
+// Return values:
+//   - emitted=true, continueLoop=false, err=nil → answer is ready, return to caller
+//   - emitted=false, continueLoop=true,  err=nil → recovery injected, continue step loop
+//   - emitted=false, continueLoop=false, err!=nil → non-recoverable, return error to caller
+func (r Runner) handleFinalResponse(ctx context.Context, resp llm.Response, assistantMsg *llm.Message, useStream bool, s *loopState, req Request) (emitted bool, continueLoop bool, err error) {
+	// max_output_tokens: partial content was streamed; ask the model to resume.
+	if isMaxOutputTokensResponse(resp) && s.maxOutputTokensRecoveryCount < maxOutputTokensRecoveryLimit {
+		s.maxOutputTokensRecoveryCount++
+		partial := strings.TrimSpace(r.sanitize(assistantMsg.Content))
+		if partial != "" {
+			assistantMsg.Content = partial
+			s.messages = append(s.messages, *assistantMsg)
+			s.generated = append(s.generated, *assistantMsg)
+		}
+		s.messages = append(s.messages, llm.Message{Role: "user", Content: maxOutputTokensRecoveryPrompt()})
+		r.observeEvent("max_output_tokens_recovery", map[string]any{"attempt": s.maxOutputTokensRecoveryCount})
+		r.updateStatus(req.Locale, RetryStatus)
+		return false, true, nil
+	}
+
+	if !useStream && r.StatusUpdate != nil {
+		r.StatusUpdate(GeneratingStatus(req.Locale))
+	}
+
+	final := strings.TrimSpace(r.sanitize(assistantMsg.Content))
+
+	if final == "" {
+		if !s.retriedEmptyResponse {
+			s.retriedEmptyResponse = true
+			s.messages = append(s.messages, llm.Message{Role: "system", Content: emptyResponseRetryPrompt()})
+			r.updateStatus(req.Locale, RetryStatus)
+			return false, true, nil
+		}
+		return false, false, ErrEmptyFinal
+	}
+
+	if !useStream && llm.LooksLikeTextualToolCall(final) {
+		if !s.retriedTextualToolCall {
+			s.retriedTextualToolCall = true
+			s.messages = append(s.messages, llm.Message{Role: "system", Content: textualToolCallRetryPrompt()})
+			r.updateStatus(req.Locale, RetryStatus)
+			return false, true, nil
+		}
+		final = llm.StripTextualToolCallMarkup(final)
+		if final == "" {
+			return false, false, ErrTextualToolCall
+		}
+	}
+
+	if !useStream && hasRawEvidenceDump(final) {
+		if !s.retriedRawEvidence {
+			s.retriedRawEvidence = true
+			s.messages = append(s.messages, llm.Message{Role: "system", Content: rawEvidenceRetryPrompt()})
+			r.updateStatus(req.Locale, RetryStatus)
+			return false, true, nil
+		}
+		final = stripRawEvidenceDump(final)
+		if final == "" {
+			return false, false, ErrTextualToolCall
+		}
+	}
+
+	if !useStream && looksRepetitive(final) {
+		if !s.retriedRepetitiveFinal {
+			s.retriedRepetitiveFinal = true
+			s.messages = append(s.messages, llm.Message{Role: "system", Content: repetitiveRetryPrompt()})
+			r.updateStatus(req.Locale, RetryStatus)
+			return false, true, nil
+		}
+		return false, false, ErrRepetitiveOutput
+	}
+
+	// Code evidence checks apply in both streaming and non-streaming modes.
+	if !s.retriedCodeClaim && !s.codeToolCalledThisRun && hasUnverifiedCodeClaim(final) {
+		s.retriedCodeClaim = true
+		s.messages = append(s.messages, llm.Message{Role: "system", Content: codeClaimRetryPrompt()})
+		r.updateStatus(req.Locale, RetryStatus)
+		return false, true, nil
+	}
+	if !s.retriedUnevidencedFile && s.codeToolCalledThisRun && hasUnverifiedCodeClaim(final) && hasUnevidencedFileReference(final, s.generated) {
+		s.retriedUnevidencedFile = true
+		s.messages = append(s.messages, llm.Message{Role: "system", Content: unevidencedFileRetryPrompt()})
+		r.updateStatus(req.Locale, RetryStatus)
+		return false, true, nil
+	}
+
+	assistantMsg.Content = final
+	s.messages = append(s.messages, *assistantMsg)
+	s.generated = append(s.generated, *assistantMsg)
+	return true, false, nil
+}
+
+// emitStepStatus updates the status indicator at the start of each step.
+func (r Runner) emitStepStatus(locale string, step int, s *loopState) {
+	if r.StatusUpdate == nil {
+		return
+	}
+	if r.StatusSummarizer != nil {
+		if step == 0 {
+			r.StatusUpdate(ThinkingStatus(locale))
+		}
+		// Subsequent steps: the summarizer overwrites the status asynchronously.
+	} else {
+		r.StatusUpdate(StepStatus(locale, step))
+	}
+}
+
+// applyPivotEscalation injects progressive-pressure system messages to steer
+// the model toward an answer when it has used too many steps.
+func (r Runner) applyPivotEscalation(step int, s *loopState, req Request) {
+	if !s.afterTools {
+		return
+	}
+	switch {
+	case step >= pivotTierForce && s.pivotTier < 4:
+		s.pivotTier = 4
+		s.messages = append(s.messages, llm.Message{Role: "system", Content: pivotForceMessage()})
+		r.observeEvent("pivot_force", map[string]any{"step": step})
+	case step >= pivotTierUrgent && s.pivotTier < 3:
+		s.pivotTier = 3
+		s.messages = append(s.messages, llm.Message{Role: "system", Content: pivotUrgentMessage()})
+		r.observeEvent("pivot_urgent", map[string]any{"step": step})
+	case step >= pivotTierFirm && s.pivotTier < 2:
+		s.pivotTier = 2
+		s.messages = append(s.messages, llm.Message{Role: "system", Content: stepBudgetPivotMessage()})
+		r.observeEvent("pivot_firm", map[string]any{"step": step})
+	case step >= pivotTierGentle && s.pivotTier < 1:
+		s.pivotTier = 1
+		s.messages = append(s.messages, llm.Message{Role: "system", Content: pivotGentleMessage()})
+		r.observeEvent("pivot_gentle", map[string]any{"step": step})
+	}
+}
+
+// callLLM invokes the LLM (streaming or non-streaming) and returns the
+// response plus a bool indicating whether streaming was actually used.
+// Side-effects: updates s.streamedText and s.answerFlushed via callbacks.
+func (r Runner) callLLM(ctx context.Context, llmReq llm.Request, s *loopState, req Request) (llm.Response, bool, error) {
+	useStream := r.OnStream != nil
+	llmStart := time.Now()
+
+	// Wrap OnStream to suppress StreamAnswer events after the answer has already
+	// been flushed (prevents retry steps from polluting the answer stream).
+	stepOnStream := r.OnStream
+	if s.answerFlushed && r.OnStream != nil {
+		stepOnStream = func(ev StreamEvent) {
+			if ev.Kind != StreamAnswer {
+				r.OnStream(ev)
+			}
+		}
+	}
+
+	s.streamedText = false
+	s.streamRouter = nil
+	if useStream && len(llmReq.Tools) > 0 {
+		s.streamRouter = &streamRouter{emit: stepOnStream, afterTools: s.afterTools}
+	}
+
+	streamText := func(delta string) {
+		if delta != "" {
+			s.streamedText = true
+		}
+		if s.streamRouter != nil {
+			s.streamRouter.text(delta)
+		} else if stepOnStream != nil {
+			stepOnStream(StreamEvent{Kind: StreamAnswer, Delta: delta})
+			s.answerFlushed = true
+		}
+	}
+
+	// Streaming tool executor: starts executing tools as they arrive, rather
+	// than waiting for the full LLM response to complete.
+	var streamExec *streamingToolExecutor
+	if useStream && r.Tools != nil && len(llmReq.Tools) > 0 {
+		streamExec = newStreamingToolExecutor(ctx, r, req)
+		s.streamExec = streamExec
+	}
+
+	streamHandler := llm.StreamHandler{
+		OnText: streamText,
+		OnToolCallsStarted: func() {
+			if s.streamRouter != nil {
+				s.streamRouter.toolCallsStarted()
+			}
+		},
+		OnToolCallComplete: func(call llm.ToolCall) {
+			if streamExec != nil {
+				streamExec.Submit(call)
+			}
+		},
+		OnUsage: func(usage llm.Usage) {
+			if r.OnUsage != nil {
+				r.OnUsage(usage)
+			}
+		},
+	}
+
+	var resp llm.Response
+	var err error
+	if useStream {
+		if sc, ok := r.LLM.(llm.StreamClient); ok {
+			if r.useStreamGuard() {
+				guard := &streamGuard{downstream: streamText}
+				resp, err = sc.ChatStream(ctx, llmReq, llm.StreamHandler{
+					OnText:             guard.Write,
+					OnToolCallsStarted: streamHandler.OnToolCallsStarted,
+					OnToolCallComplete: streamHandler.OnToolCallComplete,
+					OnUsage:            streamHandler.OnUsage,
+				})
+				guard.Flush()
+				if guard.suppressed || !guard.emitted || !resp.Streamed {
+					useStream = false
+				}
+			} else {
+				resp, err = sc.ChatStream(ctx, llmReq, streamHandler)
+				if !resp.Streamed {
+					useStream = false
+				}
+			}
+		} else {
+			resp, err = r.LLM.Chat(ctx, llmReq)
+			useStream = false
+		}
+	} else {
+		resp, err = r.LLM.Chat(ctx, llmReq)
+	}
+
+	if r.Observer != nil {
+		llmDuration := time.Since(llmStart)
+		if observer, ok := r.Observer.(LLMResponseObserver); ok {
+			observer.LLMResponse(resp, llmDuration, err)
+		} else {
+			r.Observer.LLMCall(resp.Usage, llmDuration, err)
+		}
+	}
+
+	return resp, useStream, err
+}
+
+// emitNarration emits non-streamed tool-call narration so the UI shows it.
+func (r Runner) emitNarration(assistantMsg llm.Message, s *loopState) {
+	narration := strings.TrimSpace(assistantMsg.Content)
+	if narration == "" || r.OnStream == nil || s.streamedText {
+		return
+	}
+	if llm.LooksLikeTextualToolCall(narration) {
+		return
+	}
+	if s.afterTools {
+		narration = "\n\n" + narration
+	}
+	r.OnStream(StreamEvent{Kind: StreamNarration, Delta: narration})
+}
+
+// runToolCalls executes the tool calls from an assistant message, preferring
+// the streaming executor when it has already started executing them.
+func (r Runner) runToolCalls(ctx context.Context, calls []llm.ToolCall, s *loopState, req Request) []toolResult {
+	if s.streamExec != nil && s.streamExec.HasSubmitted() {
+		results := s.streamExec.Drain(calls)
+		s.streamExec = nil
+		return results
+	}
+	s.streamExec = nil
+	return r.executeToolCalls(ctx, calls, req)
+}
+
+// handleMaxSteps is called when the agent exhausts its step budget. It makes
+// one final tool-free LLM call to force a summary answer.
+func (r Runner) handleMaxSteps(ctx context.Context, s *loopState, req Request) (Result, error) {
 	if r.StatusUpdate != nil {
 		r.StatusUpdate(GeneratingStatus(req.Locale))
 	}
-	messages = r.prepareMessagesForQuery(ctx, messages, req, nil)
-	messages = append(messages, llm.Message{Role: "system", Content: "You have reached the investigation step limit. Summarize your findings now based on evidence gathered so far. If you are uncertain, state what is known and what remains unverified."})
+	s.messages = r.prepareMessagesForQuery(ctx, s.messages, req, nil)
+	s.messages = append(s.messages, llm.Message{
+		Role:    "system",
+		Content: "You have reached the investigation step limit. Summarize your findings now based on evidence gathered so far. If you are uncertain, state what is known and what remains unverified.",
+	})
 	resp, err := r.LLM.Chat(ctx, llm.Request{
 		Model:       r.Model,
-		Messages:    messages,
-		Tools:       nil, // no tools — force text answer
+		Messages:    s.messages,
+		Tools:       nil,
 		MaxTokens:   r.MaxTokens,
 		Temperature: r.Temp,
 		Thinking:    r.Thinking,
@@ -633,10 +785,18 @@ func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 		final := strings.TrimSpace(r.sanitize(resp.Message.Content))
 		msg := resp.Message
 		msg.Content = final
-		generated = append(generated, msg)
-		return Result{Generated: generated, Final: final}, nil
+		s.generated = append(s.generated, msg)
+		return Result{Generated: s.generated, Final: final, TerminationReason: TerminationMaxSteps}, nil
 	}
-	return Result{Generated: generated}, ErrMaxToolSteps
+	return Result{Generated: s.generated, TerminationReason: TerminationMaxSteps}, ErrMaxToolSteps
+}
+
+// updateStatus is a convenience helper that calls r.StatusUpdate(fn(locale))
+// when StatusUpdate is set.
+func (r Runner) updateStatus(locale string, fn func(string) string) {
+	if r.StatusUpdate != nil {
+		r.StatusUpdate(fn(locale))
+	}
 }
 
 func hasRawEvidenceDump(text string) bool {
