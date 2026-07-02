@@ -47,17 +47,55 @@ func (s *StatusSummarizer) Summarize(ctx context.Context, names, sampleArgs, loc
 }
 
 func summarizePrompt(names, sampleArgs, locale string) string {
-	if len(sampleArgs) > 300 {
-		sampleArgs = sampleArgs[:300]
+	sampleArgs = redactQueryValues(sampleArgs)
+	if len(sampleArgs) > 200 {
+		sampleArgs = sampleArgs[:200]
 	}
 	if locale == LocaleZH {
 		return fmt.Sprintf(
-			"用10个字以内描述 AI 助手当前这一步在做什么，只回复描述文字，不加标点符号。\n工具列表：%s\n首个参数示例：%s",
+			"用不超过10个字描述 AI 助手正在执行的操作。格式为动词加宾语，例如：读取部署配置、查询 GCP 日志、搜索错误代码。"+
+				"禁止出现您想、用户想、需要等以用户视角描述意图的说法。只输出描述文字，不加标点不加引号。\n"+
+				"工具：%s\n参数上下文：%s",
 			names, sampleArgs,
 		)
 	}
 	return fmt.Sprintf(
-		"In 10 words or fewer, describe what the AI is doing in this step. Reply ONLY with the description, no punctuation.\nTools: %s\nSample args: %s",
+		"In 10 words or fewer describe what the AI assistant is DOING right now. "+
+			"Use action-verb form: \"Reading pod logs\", \"Searching error codes\", \"Fetching GCP metrics\". "+
+			"Never write \"You want to\" or \"The user wants to\". Reply ONLY with the description, no punctuation.\n"+
+			"Tools: %s\nContext: %s",
 		names, sampleArgs,
 	)
+}
+
+// redactQueryValues replaces the values of common free-text argument keys
+// (query, text, message, input, q) with a short placeholder so the summarizer
+// LLM sees the tool context without being steered by the user's raw words.
+func redactQueryValues(args string) string {
+	for _, key := range []string{`"query"`, `"text"`, `"message"`, `"input"`, `"q"`, `"prompt"`} {
+		if idx := strings.Index(args, key+`:"`); idx != -1 {
+			// JSON shorthand key:"value" — replace the value portion
+			args = redactAfterKey(args, key+`:"`)
+		} else if idx = strings.Index(args, key+`": "`); idx != -1 {
+			args = redactAfterKey(args, key+`": "`)
+		}
+	}
+	return args
+}
+
+func redactAfterKey(s, prefix string) string {
+	idx := strings.Index(s, prefix)
+	if idx == -1 {
+		return s
+	}
+	start := idx + len(prefix)
+	end := strings.Index(s[start:], `"`)
+	if end == -1 {
+		return s
+	}
+	end += start
+	if end-start > 40 {
+		return s[:start] + s[start:start+40] + "..." + s[end:]
+	}
+	return s
 }
