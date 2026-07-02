@@ -100,6 +100,8 @@ func (c *OpenAICompatibleClient) chatBody(req Request) map[string]any {
 	}
 	if len(req.Tools) == 0 {
 		delete(body, "tools")
+	} else if req.ToolChoice != "" {
+		body["tool_choice"] = req.ToolChoice
 	}
 	if isMiMoEndpoint(c.baseURL, req.Model) {
 		delete(body, "max_tokens")

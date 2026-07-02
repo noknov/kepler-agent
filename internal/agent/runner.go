@@ -354,8 +354,16 @@ func (r Runner) runStep(ctx context.Context, step, maxOverloadRetries int, s *lo
 	}
 
 	var toolSpecs []llm.ToolSpec
-	if r.Tools != nil && s.pivotTier < 4 {
+	var toolChoice string
+	if r.Tools != nil {
 		toolSpecs = r.Tools.Specs()
+		if s.pivotTier >= 4 {
+			// Keep schema so the model still knows parameter formats, but
+			// use tool_choice:"none" to prohibit calls at the API level.
+			// This is cleaner than clearing toolSpecs, which causes models
+			// to hallucinate tool_call blocks with missing arguments.
+			toolChoice = "none"
+		}
 	}
 	s.messages = r.prepareMessagesForQuery(ctx, s.messages, req, toolSpecs)
 
@@ -363,6 +371,7 @@ func (r Runner) runStep(ctx context.Context, step, maxOverloadRetries int, s *lo
 		Model:       r.Model,
 		Messages:    s.messages,
 		Tools:       toolSpecs,
+		ToolChoice:  toolChoice,
 		MaxTokens:   r.MaxTokens,
 		Temperature: r.Temp,
 		Thinking:    r.Thinking,
@@ -387,21 +396,13 @@ func (r Runner) runStep(ctx context.Context, step, maxOverloadRetries int, s *lo
 	}
 	assistantMsg.ToolCalls = memory.NormalizeToolCalls(assistantMsg.ToolCalls)
 
-	// Force pivot: tools were stripped from the request but some models
-	// (e.g. mimo-v2.5) still generate tool_call blocks regardless. Discard
-	// them so the response is treated as a text-only final answer.
-	// If the stripped response has no prose either, inject a targeted prompt
-	// telling the model to answer in plain text and retry, rather than falling
-	// through to the generic emptyResponseRetryPrompt which says "or call a
-	// tool" — which would cause the model to attempt tool calls again.
-	if s.pivotTier >= 4 && len(assistantMsg.ToolCalls) > 0 {
+	// tool_choice:"none" is set at the API level when pivotTier>=4, so the
+	// provider should not return any tool_calls. If one slips through anyway
+	// (provider non-compliance), discard it and continue to final-response
+	// handling — the model's text content, if any, is still usable.
+	if toolChoice == "none" && len(assistantMsg.ToolCalls) > 0 {
+		r.observeEvent("tool_choice_none_violated", map[string]any{"tool_calls": len(assistantMsg.ToolCalls)})
 		assistantMsg.ToolCalls = nil
-		if strings.TrimSpace(assistantMsg.Content) == "" && !s.retriedEmptyResponse {
-			s.retriedEmptyResponse = true
-			s.messages = append(s.messages, llm.Message{Role: "system", Content: pivotNoToolsRetryMessage()})
-			r.observeEvent("pivot_force_empty_retry", nil)
-			return false, Result{}, nil
-		}
 	}
 
 	if s.streamRouter != nil {
@@ -1317,9 +1318,6 @@ func pivotForceMessage() string {
 	return prompts.RunnerPrompt("pivot_force", "FINAL: Tools are no longer available. Give your answer now using only the evidence already gathered. Be direct and concise.")
 }
 
-func pivotNoToolsRetryMessage() string {
-	return prompts.RunnerPrompt("pivot_no_tools_retry", "Your previous response attempted to call a tool, but tools are no longer available and the call was discarded. You MUST write your answer in plain text — do NOT include any tool calls, function calls, XML tags, or tool markup of any kind. Respond now with a plain text answer based on what you have already gathered.")
-}
 
 func looksRepetitive(text string) bool {
 	normalized := strings.TrimSpace(text)

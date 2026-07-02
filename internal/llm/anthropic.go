@@ -43,6 +43,8 @@ func (c *AnthropicClient) Chat(ctx context.Context, req Request) (Response, erro
 	}
 	if len(body.Tools) == 0 {
 		body.Tools = nil
+	} else if req.ToolChoice != "" {
+		body.ToolChoice = map[string]string{"type": req.ToolChoice}
 	}
 
 	payload, err := json.Marshal(body)
@@ -110,6 +112,8 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 	}
 	if len(body.Tools) == 0 {
 		body.Tools = nil
+	} else if req.ToolChoice != "" {
+		body.ToolChoice = map[string]string{"type": req.ToolChoice}
 	}
 
 	payload, err := json.Marshal(body)
@@ -341,6 +345,7 @@ type anthropicRequest struct {
 	System      any                `json:"system,omitempty"`
 	Messages    []anthropicMessage `json:"messages"`
 	Tools       []anthropicTool    `json:"tools,omitempty"`
+	ToolChoice  any                `json:"tool_choice,omitempty"`
 	MaxTokens   int                `json:"max_tokens"`
 	Temperature float64            `json:"temperature,omitempty"`
 	Stream      bool               `json:"stream,omitempty"`

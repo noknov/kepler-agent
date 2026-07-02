@@ -124,6 +124,10 @@ type Request struct {
 	Model       string
 	Messages    []Message
 	Tools       []ToolSpec
+	// ToolChoice controls how the model selects tools. The empty string means
+	// the provider default (typically "auto"). Use "none" to let the model see
+	// tool schemas (so it knows parameter formats) while prohibiting tool calls.
+	ToolChoice  string
 	MaxTokens   int
 	Temperature float64
 	Thinking    string
