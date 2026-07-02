@@ -34,11 +34,6 @@ const (
 
 	// Progressive escalation thresholds. Pressure increases at each tier
 	// to prevent aimless searching while still allowing genuine investigations.
-	pivotTierGentle = 4  // gentle nudge: "most questions resolve in 1-3 calls"
-	pivotTierFirm   = 8  // firm pivot: "answer now or justify continuing"
-	pivotTierUrgent = 12 // urgent: "you MUST answer with what you have"
-	pivotTierForce  = 16 // force: strip tools, require text answer
-
 	maxOutputTokensRecoveryLimit = 3
 
 	// maxIdenticalCallAttempts is the number of times the same tool can be
@@ -164,9 +159,6 @@ type loopState struct {
 
 	// streamedText tracks whether any text was emitted in the current step.
 	streamedText bool
-
-	// pivotTier tracks progressive escalation pressure (0=none … 4=force).
-	pivotTier int
 
 	// clarificationErrors tracks persistent tool failures that require user input.
 	clarificationErrors *clarificationErrorTracker
@@ -345,7 +337,6 @@ func (r Runner) runStep(ctx context.Context, step, maxOverloadRetries int, s *lo
 	}
 
 	r.emitStepStatus(req.Locale, step, s)
-	r.applyPivotEscalation(step, s, req)
 
 	if req.Steering != nil {
 		if steering := req.Steering(); len(steering) > 0 {
@@ -354,16 +345,8 @@ func (r Runner) runStep(ctx context.Context, step, maxOverloadRetries int, s *lo
 	}
 
 	var toolSpecs []llm.ToolSpec
-	var toolChoice string
 	if r.Tools != nil {
 		toolSpecs = r.Tools.Specs()
-		if s.pivotTier >= 4 {
-			// Keep schema so the model still knows parameter formats, but
-			// use tool_choice:"none" to prohibit calls at the API level.
-			// This is cleaner than clearing toolSpecs, which causes models
-			// to hallucinate tool_call blocks with missing arguments.
-			toolChoice = "none"
-		}
 	}
 	s.messages = r.prepareMessagesForQuery(ctx, s.messages, req, toolSpecs)
 
@@ -371,7 +354,6 @@ func (r Runner) runStep(ctx context.Context, step, maxOverloadRetries int, s *lo
 		Model:       r.Model,
 		Messages:    s.messages,
 		Tools:       toolSpecs,
-		ToolChoice:  toolChoice,
 		MaxTokens:   r.MaxTokens,
 		Temperature: r.Temp,
 		Thinking:    r.Thinking,
@@ -395,15 +377,6 @@ func (r Runner) runStep(ctx context.Context, step, maxOverloadRetries int, s *lo
 		assistantMsg.Usage = &resp.Usage
 	}
 	assistantMsg.ToolCalls = memory.NormalizeToolCalls(assistantMsg.ToolCalls)
-
-	// tool_choice:"none" is set at the API level when pivotTier>=4, so the
-	// provider should not return any tool_calls. If one slips through anyway
-	// (provider non-compliance), discard it and continue to final-response
-	// handling — the model's text content, if any, is still usable.
-	if toolChoice == "none" && len(assistantMsg.ToolCalls) > 0 {
-		r.observeEvent("tool_choice_none_violated", map[string]any{"tool_calls": len(assistantMsg.ToolCalls)})
-		assistantMsg.ToolCalls = nil
-	}
 
 	if s.streamRouter != nil {
 		s.streamRouter.finish(len(assistantMsg.ToolCalls) > 0)
@@ -649,31 +622,6 @@ func (r Runner) emitStepStatus(locale string, step int, s *loopState) {
 	}
 }
 
-// applyPivotEscalation injects progressive-pressure system messages to steer
-// the model toward an answer when it has used too many steps.
-func (r Runner) applyPivotEscalation(step int, s *loopState, req Request) {
-	if !s.afterTools {
-		return
-	}
-	switch {
-	case step >= pivotTierForce && s.pivotTier < 4:
-		s.pivotTier = 4
-		s.messages = append(s.messages, llm.Message{Role: "system", Content: pivotForceMessage()})
-		r.observeEvent("pivot_force", map[string]any{"step": step})
-	case step >= pivotTierUrgent && s.pivotTier < 3:
-		s.pivotTier = 3
-		s.messages = append(s.messages, llm.Message{Role: "system", Content: pivotUrgentMessage()})
-		r.observeEvent("pivot_urgent", map[string]any{"step": step})
-	case step >= pivotTierFirm && s.pivotTier < 2:
-		s.pivotTier = 2
-		s.messages = append(s.messages, llm.Message{Role: "system", Content: stepBudgetPivotMessage()})
-		r.observeEvent("pivot_firm", map[string]any{"step": step})
-	case step >= pivotTierGentle && s.pivotTier < 1:
-		s.pivotTier = 1
-		s.messages = append(s.messages, llm.Message{Role: "system", Content: pivotGentleMessage()})
-		r.observeEvent("pivot_gentle", map[string]any{"step": step})
-	}
-}
 
 // callLLM invokes the LLM (streaming or non-streaming) and returns the
 // response plus a bool indicating whether streaming was actually used.
@@ -1302,21 +1250,6 @@ func (r Runner) observeToolResults(results []toolResult) {
 	}
 }
 
-func pivotGentleMessage() string {
-	return prompts.RunnerPrompt("pivot_gentle", "You have used several tool calls. Most questions resolve in 1-3 calls. If you already have enough evidence, answer now. If not, make your next call count — use the single most decisive search or read.")
-}
-
-func stepBudgetPivotMessage() string {
-	return prompts.RunnerPrompt("pivot_firm", "You have used many investigation steps without answering. STOP broadening your search. Summarize your findings now: what is known, what is uncertain, and the single next check. If you cannot find what you are looking for, say so — do not keep trying variations of the same search.")
-}
-
-func pivotUrgentMessage() string {
-	return prompts.RunnerPrompt("pivot_urgent", "URGENT: You have spent too many steps on this investigation. You MUST provide an answer NOW with whatever evidence you have gathered. Further searching is very unlikely to help and is degrading the user experience. Summarize findings, state uncertainties, and stop.")
-}
-
-func pivotForceMessage() string {
-	return prompts.RunnerPrompt("pivot_force", "FINAL: Tools are no longer available. Give your answer now using only the evidence already gathered. Be direct and concise.")
-}
 
 
 func looksRepetitive(text string) bool {
