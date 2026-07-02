@@ -16,7 +16,6 @@ import (
 	gcpTools "github.com/wati/oncall-agent/internal/toolkit/tools/gcp"
 	gitTools "github.com/wati/oncall-agent/internal/toolkit/tools/git"
 	githubTools "github.com/wati/oncall-agent/internal/toolkit/tools/github"
-	k8sTools "github.com/wati/oncall-agent/internal/toolkit/tools/k8s"
 	knowledgeTools "github.com/wati/oncall-agent/internal/toolkit/tools/knowledge"
 	luckinTools "github.com/wati/oncall-agent/internal/toolkit/tools/luckin"
 	notionTools "github.com/wati/oncall-agent/internal/toolkit/tools/notion"
@@ -34,7 +33,6 @@ import (
 func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) *registry.Registry {
 	tools := registry.NewReadOnlyWithAllowedWrites("luckin-create_order", "luckin-cancel_order", "slack-create_canvas", "tts-speak")
 	registerDeferredDiagnosticsTools(tools)
-	registerK8sTools(tools, cfg, commandPolicy)
 	registerCodeTools(tools, cfg, workspacePolicy, commandPolicy)
 	registerIntegrationTools(tools, cfg, commandPolicy)
 	registerKnowledgeTools(tools, cfg)
@@ -148,20 +146,6 @@ func registerKnowledgeTools(tools *registry.Registry, cfg config.Config) {
 	tools.Register(webSearchTools.SearchTool{Client: webClient})
 	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, webSearchTools.ReadPageTool{Client: webClient}))
 	tools.Register(knowledgeTools.RunbookSearchTool{})
-}
-
-func registerK8sTools(tools *registry.Registry, cfg config.Config, commandPolicy safety.CommandPolicy) {
-	base := k8sTools.Base{
-		KubectlPath:    cfg.Tools.KubectlPath,
-		DefaultContext: cfg.Tools.K8sDefaultContext,
-		DefaultCluster: cfg.Tools.K8sDefaultCluster,
-		Guard:          commandPolicy,
-		Timeout:        cfg.Tools.CommandTimeout,
-	}
-	tools.Register(k8sTools.GetPodsTool{Base: base})
-	tools.Register(k8sTools.DescribeTool{Base: base})
-	tools.Register(k8sTools.LogsTool{Base: base})
-	tools.Register(k8sTools.TopTool{Base: base})
 }
 
 func registerSlackTools(tools *registry.Registry, slackClient *slack.Client, cfg config.Config) {
