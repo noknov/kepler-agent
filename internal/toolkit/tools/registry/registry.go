@@ -67,13 +67,6 @@ type Tool interface {
 	Execute(ctx context.Context, args json.RawMessage, rt Runtime) (Result, error)
 }
 
-// RepeatableTool marks a side-effect-free tool whose results may change across
-// identical calls (e.g. git fetch, log queries, LLM delegates). The runner
-// skips duplicate-call detection for these tools.
-type RepeatableTool interface {
-	Repeatable() bool
-}
-
 type ParallelTool interface {
 	Parallel() bool
 }
@@ -102,13 +95,6 @@ const (
 	CategoryIntegration    = "integration"
 	CategoryInfrastructure = "infrastructure"
 )
-
-func IsRepeatable(tool Tool) bool {
-	if rt, ok := tool.(RepeatableTool); ok {
-		return rt.Repeatable()
-	}
-	return false
-}
 
 func CanRunInParallel(tool Tool) bool {
 	if pt, ok := tool.(ParallelTool); ok {
@@ -173,10 +159,6 @@ type categorizedTool struct {
 
 func (t categorizedTool) Category() string {
 	return t.category
-}
-
-func (t categorizedTool) Repeatable() bool {
-	return IsRepeatable(t.Tool)
 }
 
 func (t categorizedTool) Parallel() bool {
@@ -300,14 +282,6 @@ func (r *Registry) canExpose(name string, tool Tool) bool {
 		return true
 	}
 	return r.policy.AllowWrites || r.policy.AllowedWriteTools[name]
-}
-
-func (r *Registry) IsRepeatable(name string) bool {
-	tool, ok := r.tools[name]
-	if !ok {
-		return false
-	}
-	return IsRepeatable(tool)
 }
 
 func (r *Registry) CanRunInParallel(name string) bool {

@@ -14,11 +14,9 @@ const maxStreamingConcurrency = 10
 // Claude Code's StreamingToolExecutor pattern and dramatically reduces
 // perceived latency for multi-tool responses.
 type streamingToolExecutor struct {
-	ctx             context.Context
-	runner          Runner
-	req             Request
-	seenToolCalls   map[string]int
-	seenSearchTerms map[string]int
+	ctx    context.Context
+	runner Runner
+	req    Request
 
 	mu      sync.Mutex
 	results map[string]toolResult
@@ -30,16 +28,14 @@ type streamingToolExecutor struct {
 	sem           chan struct{}
 }
 
-func newStreamingToolExecutor(ctx context.Context, r Runner, req Request, seenToolCalls, seenSearchTerms map[string]int) *streamingToolExecutor {
+func newStreamingToolExecutor(ctx context.Context, r Runner, req Request) *streamingToolExecutor {
 	return &streamingToolExecutor{
-		ctx:             ctx,
-		runner:          r,
-		req:             req,
-		seenToolCalls:   seenToolCalls,
-		seenSearchTerms: seenSearchTerms,
-		results:         make(map[string]toolResult),
-		started:         make(map[string]bool),
-		sem:             make(chan struct{}, maxStreamingConcurrency),
+		ctx:     ctx,
+		runner:  r,
+		req:     req,
+		results: make(map[string]toolResult),
+		started: make(map[string]bool),
+		sem:     make(chan struct{}, maxStreamingConcurrency),
 	}
 }
 
@@ -64,18 +60,6 @@ func (e *streamingToolExecutor) Submit(call llm.ToolCall) {
 		return
 	}
 	e.started[call.ID] = true
-	if dup, content := e.runner.duplicateToolCall(call, e.seenToolCalls, e.seenSearchTerms); dup {
-		e.results[call.ID] = toolResult{
-			message: llm.Message{
-				Role: "tool", ToolCallID: call.ID, Name: name,
-				Content: content,
-			},
-			name: name,
-			err:  ErrRepeatedToolCall,
-		}
-		e.mu.Unlock()
-		return
-	}
 	e.mu.Unlock()
 
 	e.wg.Add(1)
@@ -125,17 +109,6 @@ func (e *streamingToolExecutor) Drain(calls []llm.ToolCall) []toolResult {
 	// Execute tools that weren't pre-executed (non-parallel or submitted late)
 	for _, i := range remaining {
 		call := calls[i]
-		if dup, content := e.runner.duplicateToolCall(call, e.seenToolCalls, e.seenSearchTerms); dup {
-			results[i] = toolResult{
-				message: llm.Message{
-					Role: "tool", ToolCallID: call.ID, Name: call.Function.Name,
-					Content: content,
-				},
-				name: call.Function.Name,
-				err:  ErrRepeatedToolCall,
-			}
-			continue
-		}
 		results[i] = e.runner.executeSingleTool(e.ctx, call, e.req, true)
 	}
 

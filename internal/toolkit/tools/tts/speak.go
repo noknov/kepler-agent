@@ -27,9 +27,8 @@ type SpeakTool struct {
 	HTTPClient *http.Client
 }
 
-func (SpeakTool) IsWrite() bool    { return true }
-func (SpeakTool) Parallel() bool   { return true }
-func (SpeakTool) Repeatable() bool { return true }
+func (SpeakTool) IsWrite() bool  { return true }
+func (SpeakTool) Parallel() bool { return true }
 
 func (t SpeakTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(

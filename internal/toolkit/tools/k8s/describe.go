@@ -13,8 +13,7 @@ type DescribeTool struct {
 	Base Base
 }
 
-func (DescribeTool) Repeatable() bool { return true }
-func (DescribeTool) Parallel() bool   { return true }
+func (DescribeTool) Parallel() bool { return true }
 
 func (t DescribeTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(

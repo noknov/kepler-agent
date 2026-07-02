@@ -26,12 +26,12 @@ type ToolSearchTool struct {
 func (ToolSearchTool) Spec() llm.ToolSpec {
 	return FunctionSpec(
 		"tool_search",
-		"Discover active and deferred tools by task intent, then activate deferred tools when needed. Use action=search with query for tool discovery; use query=\"select:tool-a,tool-b\" or action=activate with tool_names/categories to load tools for subsequent steps.",
+		"Discover active and deferred tools by task or capability description, then activate deferred tools when needed. Use action=search with query for tool discovery; use query=\"select:tool-a,tool-b\" or action=activate with tool_names/categories to load tools for subsequent steps.",
 		ObjectSchema([]string{"action"}, map[string]any{
 			"action": map[string]any{
 				"type":        "string",
 				"enum":        []string{"search", "list", "activate"},
-				"description": "search: find tools by task intent; list: show deferred categories; activate: load requested tools or categories.",
+				"description": "search: find tools by task or capability description; list: show deferred categories; activate: load requested tools or categories.",
 			},
 			"query": map[string]any{
 				"type":        "string",
