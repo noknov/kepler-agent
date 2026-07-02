@@ -230,6 +230,11 @@ func validateKubectl(argv []string) error {
 			}
 			return nil
 		}
+		// use-context only changes the local kubeconfig; it does not touch
+		// any remote cluster state, so it is safe to allow.
+		if len(argv) >= 3 && argv[2] == "use-context" {
+			return nil
+		}
 	}
 	return fmt.Errorf("kubectl command is not read-only allowlisted")
 }

@@ -204,7 +204,6 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}
 	var answerStream *dmStreamWriter
 	var progressMarkdown *streamMarkdownBuffer
-	var progressAppendFailed bool
 	currentStatus := agent.StepStatus(locale, 0)
 	// displayedUsageTokens and cumulativeTokens are declared before appendProgress
 	// so the closure can capture them by reference.
@@ -232,25 +231,13 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if err == nil {
 			return
 		}
-		for _, chunk := range chunks {
-			if chunk["type"] == "markdown_text" {
-				progressAppendFailed = true
-				break
-			}
-		}
 		if !strings.Contains(err.Error(), "not_in_streaming_state") {
 			s.recordDeliveryError(req, progressTS, err)
 			return
 		}
 		// The stream timed out on Slack's side. Starting a new stream would
-		// create a second visible card alongside the timed-out one. Instead,
-		// mark streaming as failed so the final answer falls back to PostMessage.
-		for _, chunk := range chunks {
-			if chunk["type"] == "markdown_text" {
-				progressAppendFailed = true
-				break
-			}
-		}
+		// create a second visible card alongside the timed-out one. Stop
+		// instead and let the final answer fall back to PostMessage.
 		progressStopped = true
 	}
 	appendProgressMarkdown := func(text string) error {
@@ -263,11 +250,9 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if err == nil {
 			return nil
 		}
-		progressAppendFailed = true
 		if !strings.Contains(err.Error(), "not_in_streaming_state") {
 			s.recordDeliveryError(req, progressTS, err)
 		}
-		// Same as above: do not restart the stream to avoid a second card.
 		progressStopped = true
 		return err
 	}
@@ -421,18 +406,6 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	if answerStream != nil && evidenceText != "" {
 		answerStream.Write(evidenceText)
 	}
-	// Determine steering before closing answerStream so the notice can be
-	// appended to the live stream rather than a separate post.
-	steeringConsumed := false
-	for _, queued := range active.consumedRequests() {
-		if strings.TrimSpace(queued.Text) != "" {
-			steeringConsumed = true
-			break
-		}
-	}
-	if answerStream != nil && steeringConsumed {
-		answerStream.Write(steeringAppliedMessage(locale))
-	}
 	if answerStream != nil {
 		answerStream.Close()
 	}
@@ -541,12 +514,6 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	if !result.Pending && result.Final != "" {
 		finalText := s.Redactor.Sanitize(result.Final)
 		finalText = appendWebEvidenceText(finalText, evidenceText)
-		// In the non-streaming path (answerStream == nil), append the steering
-		// notice to the final text. In the streaming path it was already written
-		// to the answer stream before Close.
-		if steeringConsumed && answerStream == nil {
-			finalText = strings.TrimRight(finalText, "\n") + "\n\n" + steeringAppliedMessage(locale)
-		}
 		if runObserver != nil {
 			runObserver.Finish("completed", "", nil, finalText)
 		}
@@ -566,11 +533,6 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		} else {
 			if s.Format != nil {
 				finalText = s.Format(finalText)
-			}
-			if answerStream != nil && answerStream.Failed() {
-				finalText = "_streaming delivery failed, here is the answer:_\n\n" + finalText
-			} else if progressAppendFailed {
-				finalText = "_streaming delivery failed, here is the answer:_\n\n" + finalText
 			}
 			if !useStream && (contextUsage != "" || compressed || runObserver != nil) {
 				var notices []string
