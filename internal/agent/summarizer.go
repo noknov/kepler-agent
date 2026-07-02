@@ -50,17 +50,14 @@ func summarizePrompt(names, sampleArgs, locale string) string {
 	sampleArgs = sanitizeArgs(sampleArgs)
 	if locale == LocaleZH {
 		return fmt.Sprintf(
-			"用不超过10个字描述 AI 助手当前这一步在做什么，只回复描述文字，不加标点符号。"+
-				"以动词开头，描述 AI 的动作而非用户的意图，禁止出现「您想」「用户想」「需要」等说法。\n"+
-				"工具列表：%s\n参数：%s",
+			"用不超过10个字写一条操作状态，格式像进程日志或系统监控（例：读取配置文件、搜索提交记录、查询 Pod 日志）。"+
+				"只输出动作本身，不加标点，不加主语。\n工具：%s\n参数：%s",
 			names, sampleArgs,
 		)
 	}
 	return fmt.Sprintf(
-		"In 10 words or fewer, describe what the AI is doing in this step. "+
-			"Reply ONLY with the description, no punctuation. "+
-			"Start with an action verb. Never write \"You want to\" or \"The user wants\".\n"+
-			"Tools: %s\nArgs: %s",
+		"Write a ≤10-word operation status, like a system process log entry (e.g. \"Reading config\", \"Fetching pod logs\", \"Searching commit history\"). "+
+			"Output only the action, no punctuation, no subject.\nTools: %s\nArgs: %s",
 		names, sampleArgs,
 	)
 }
