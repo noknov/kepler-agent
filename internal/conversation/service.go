@@ -242,14 +242,16 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			s.recordDeliveryError(req, progressTS, err)
 			return
 		}
-		newTS, startErr := s.Messenger.StartStream(ctx, req.Channel, req.ThreadTS, req.UserID)
-		if startErr != nil {
-			s.recordDeliveryError(req, progressTS, startErr)
-			return
+		// The stream timed out on Slack's side. Starting a new stream would
+		// create a second visible card alongside the timed-out one. Instead,
+		// mark streaming as failed so the final answer falls back to PostMessage.
+		for _, chunk := range chunks {
+			if chunk["type"] == "markdown_text" {
+				progressAppendFailed = true
+				break
+			}
 		}
-		progressTS = newTS
-		streamTS = newTS
-		_ = s.Messenger.AppendStream(ctx, req.Channel, progressTS, chunks)
+		progressStopped = true
 	}
 	appendProgressMarkdown := func(text string) error {
 		if !useStream || progressStopped || text == "" {
@@ -261,26 +263,13 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if err == nil {
 			return nil
 		}
+		progressAppendFailed = true
 		if !strings.Contains(err.Error(), "not_in_streaming_state") {
-			progressAppendFailed = true
 			s.recordDeliveryError(req, progressTS, err)
-			return err
 		}
-		newTS, startErr := s.Messenger.StartStream(ctx, req.Channel, req.ThreadTS, req.UserID)
-		if startErr != nil {
-			progressAppendFailed = true
-			s.recordDeliveryError(req, progressTS, startErr)
-			return startErr
-		}
-		progressTS = newTS
-		streamTS = newTS
-		if err := s.Messenger.AppendStream(ctx, req.Channel, progressTS, []map[string]any{
-			{"type": "markdown_text", "text": text},
-		}); err != nil {
-			progressAppendFailed = true
-			return err
-		}
-		return nil
+		// Same as above: do not restart the stream to avoid a second card.
+		progressStopped = true
+		return err
 	}
 	appendTaskUpdate := func(title, status string) {
 		if title != "" {
@@ -432,6 +421,18 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	if answerStream != nil && evidenceText != "" {
 		answerStream.Write(evidenceText)
 	}
+	// Determine steering before closing answerStream so the notice can be
+	// appended to the live stream rather than a separate post.
+	steeringConsumed := false
+	for _, queued := range active.consumedRequests() {
+		if strings.TrimSpace(queued.Text) != "" {
+			steeringConsumed = true
+			break
+		}
+	}
+	if answerStream != nil && steeringConsumed {
+		answerStream.Write(steeringAppliedMessage(locale))
+	}
 	if answerStream != nil {
 		answerStream.Close()
 	}
@@ -540,6 +541,12 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	if !result.Pending && result.Final != "" {
 		finalText := s.Redactor.Sanitize(result.Final)
 		finalText = appendWebEvidenceText(finalText, evidenceText)
+		// In the non-streaming path (answerStream == nil), append the steering
+		// notice to the final text. In the streaming path it was already written
+		// to the answer stream before Close.
+		if steeringConsumed && answerStream == nil {
+			finalText = strings.TrimRight(finalText, "\n") + "\n\n" + steeringAppliedMessage(locale)
+		}
 		if runObserver != nil {
 			runObserver.Finish("completed", "", nil, finalText)
 		}

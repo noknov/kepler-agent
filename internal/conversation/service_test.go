@@ -776,23 +776,22 @@ func TestActiveReplySteeringShowsSeparatedStatusInChinese(t *testing.T) {
 	cardTitle := agent.SteeringQueuedTitle(agent.LocaleZH)
 	bodyText := steeringAppliedMessage(agent.LocaleZH)
 	foundCard := false
-	foundBody := false
 	for _, chunk := range messenger.chunks {
 		if chunk["type"] == "task_update" && strings.HasPrefix(chunk["title"].(string), cardTitle) {
 			foundCard = true
-		}
-		if chunk["type"] == "markdown_text" && chunk["text"] == bodyText {
-			foundBody = true
-		}
-		if chunk["type"] == "markdown_text" && strings.HasSuffix(chunk["text"].(string), "\n\n") {
-			t.Fatalf("steering markdown should not end with blank line: %q", chunk["text"])
 		}
 	}
 	if !foundCard {
 		t.Fatalf("steering card title %q not found: %#v", cardTitle, messenger.chunks)
 	}
-	if !foundBody {
-		t.Fatalf("steering body text %q not found: %#v", bodyText, messenger.chunks)
+	// The "已引导对话" notice is now appended to the final answer (not the
+	// progress card). Since this test's LLM does not support streaming, the
+	// answer is delivered via PostMessage.
+	if len(messenger.posts) == 0 {
+		t.Fatalf("expected a PostMessage with the final answer, got none")
+	}
+	if !strings.Contains(messenger.posts[len(messenger.posts)-1], strings.TrimSpace(bodyText)) {
+		t.Fatalf("steering body text %q not found in posted answer: %q", bodyText, messenger.posts)
 	}
 }
 
@@ -1121,20 +1120,24 @@ func TestActiveReplyIsInjectedIntoNextStep(t *testing.T) {
 		t.Fatalf("queued guidance not injected into next step: %#v", requests[1].Messages)
 	}
 	foundStatus := false
-	foundText := false
 	for _, chunk := range svc.Messenger.(*fakeMessenger).chunks {
 		if chunk["type"] == "task_update" && strings.HasPrefix(chunk["title"].(string), "Conversation guided") {
 			foundStatus = true
-		}
-		if chunk["type"] == "markdown_text" && chunk["text"] == "\n\n_Conversation guided_\n" {
-			foundText = true
 		}
 	}
 	if !foundStatus {
 		t.Fatalf("steering status not found: %#v", svc.Messenger.(*fakeMessenger).chunks)
 	}
-	if !foundText {
-		t.Fatalf("steering stream text not found: %#v", svc.Messenger.(*fakeMessenger).chunks)
+	// The "Conversation guided" notice is now appended to the final answer
+	// (not the progress card). Since this test's LLM does not support
+	// streaming, the answer is delivered via PostMessage.
+	bodyText := steeringAppliedMessage(agent.LocaleEN)
+	fm := svc.Messenger.(*fakeMessenger)
+	if len(fm.posts) == 0 {
+		t.Fatalf("expected a PostMessage with the final answer, got none")
+	}
+	if !strings.Contains(fm.posts[len(fm.posts)-1], strings.TrimSpace(bodyText)) {
+		t.Fatalf("steering text not found in posted answer: %q", fm.posts)
 	}
 }
 
