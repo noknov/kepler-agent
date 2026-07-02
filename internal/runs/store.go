@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -82,6 +83,10 @@ type Store interface {
 	Save(ctx context.Context, run Run) error
 	Get(ctx context.Context, id string) (Run, bool, error)
 	List(ctx context.Context, limit int) ([]Run, error)
+	// ListBySession returns all runs for the given session, ordered newest first.
+	// Implementations must avoid full-scan when possible; callers should prefer
+	// this over List when a sessionID filter is needed.
+	ListBySession(ctx context.Context, sessionID string) ([]Run, error)
 	AddFeedback(ctx context.Context, runID string, feedback Feedback) error
 	AddFeedbackForMessage(ctx context.Context, channel, messageTS string, feedback Feedback) (string, bool, error)
 }
@@ -253,6 +258,50 @@ func (s *FileStore) List(ctx context.Context, limit int) ([]Run, error) {
 	if len(out) > limit {
 		out = out[:limit]
 	}
+	return out, nil
+}
+
+func (s *FileStore) ListBySession(ctx context.Context, sessionID string) ([]Run, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	if sessionID == "" {
+		return nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	var out []Run
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(s.dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		// Fast path: skip JSON decode if session ID is not in the raw bytes.
+		// session_id values are always plain ASCII, so a bytes search is safe.
+		if !bytes.Contains(data, []byte(sessionID)) {
+			continue
+		}
+		var run Run
+		if err := json.Unmarshal(data, &run); err != nil {
+			continue
+		}
+		if run.SessionID != sessionID {
+			continue
+		}
+		out = append(out, run)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].StartedAt.After(out[j].StartedAt)
+	})
 	return out, nil
 }
 
