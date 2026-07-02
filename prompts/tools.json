@@ -92,9 +92,10 @@
     }
   },
   "github-job_logs": {
-    "description": "Fetch GitHub Actions job logs for a workflow run. Use when investigating CI/CD failures — extract run_id and optional job_id from the GitHub Actions URL. Lists all jobs in the run and fetches logs for failed jobs. Supports pagination: defaults to showing the last 200 lines (tail) where test results typically appear. Call again with different start_line to browse other sections.",
+    "description": "Fetch GitHub Actions job logs for a workflow run or specific job. When the user provides a GitHub Actions URL, pass it as url directly; do not manually retype IDs unless needed. Lists all jobs in the run and fetches logs for failed jobs. Supports pagination: defaults to showing the last 200 lines (tail) where test results typically appear. Call again with different start_line to browse other sections.",
     "parameters": {
       "repository": "GitHub repository in owner/repo form. Defaults to configured repository when set.",
+      "url": "GitHub Actions run or job URL. Prefer this when the user pasted a URL; repository, run_id, and job_id are extracted automatically.",
       "run_id": "Workflow run ID from the GitHub Actions URL (the number after /actions/runs/).",
       "job_id": "Optional specific job ID. If omitted, logs for all failed jobs in the run are returned.",
       "start_line": "1-based start line. Negative values count from end (e.g. -500 shows last 500 lines). Defaults to tail (last max_lines lines).",
