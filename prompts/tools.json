@@ -530,10 +530,10 @@
     }
   },
   "slack-create_canvas": {
-    "description": "Create a Slack Canvas with structured Markdown content. Use for sharing investigation summaries, post-mortems, diagnostics reports, or any structured document that benefits from rich formatting. The canvas is attached to the current channel by default.",
+    "description": "Create a Slack Canvas with structured Markdown content. Use only when the user asks for a canvas/document, or when the result is too long or too structured for a normal Slack reply, such as post-mortems, incident reports, runbooks, decision records, migration plans, or multi-section investigation summaries. Do not use for ordinary short answers, status updates, or simple bullet lists. The canvas is attached to the current channel by default.",
     "parameters": {
       "title": "Canvas title.",
-      "markdown": "Canvas content in Markdown format. Supports headings, lists, code blocks, bold, italic, links, and tables.",
+      "markdown": "Canvas content in Slack Canvas Markdown. Good fits include headings, paragraphs, checklists, ordered/unordered lists, code blocks, links, and simple tables. Avoid raw HTML, Mermaid, images, interactive widgets, or layouts that require precise visual positioning.",
       "channel_id": "Optional channel ID to attach the canvas to. Defaults to current conversation channel."
     }
   },
