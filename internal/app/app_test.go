@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,7 +13,10 @@ import (
 	"time"
 
 	"github.com/wati/oncall-agent/internal/config"
+	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/slack"
+	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
 func TestFileShareIsUserMessageSubtype(t *testing.T) {
@@ -134,6 +138,51 @@ func TestIsChannelMention(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDefaultToolRegistryDefersHeavyToolFamilies(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Tools.KubectlPath = "kubectl"
+	cfg.Tools.GCloudPath = "gcloud"
+	reg := newToolRegistry(cfg, &slack.Client{}, nil, nil, "", safety.WorkspacePolicy{}, safety.CommandPolicy{})
+
+	for _, name := range []string{
+		"github-workflow_runs",
+		"github-job_logs",
+		"k8s-get_pods",
+		"k8s-logs",
+		"gcp-logs",
+		"slack-create_canvas",
+	} {
+		if registryHasSpec(reg.Specs(), name) {
+			t.Fatalf("%s should be deferred by default to keep prompt small", name)
+		}
+	}
+	if !registryHasSpec(reg.Specs(), "tool_search") {
+		t.Fatal("tool_search must remain active so deferred capabilities are discoverable")
+	}
+
+	_, err := reg.Execute(context.Background(), "tool_search", json.RawMessage(`{
+		"action":"activate",
+		"tool_names":["github-workflow_runs","k8s-get_pods","gcp-logs","slack-create_canvas"]
+	}`), registry.Runtime{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"github-workflow_runs", "k8s-get_pods", "gcp-logs", "slack-create_canvas"} {
+		if !registryHasSpec(reg.Specs(), name) {
+			t.Fatalf("%s should be available after tool_search activation", name)
+		}
+	}
+}
+
+func registryHasSpec(specs []llm.ToolSpec, name string) bool {
+	for _, spec := range specs {
+		if spec.Function.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func TestIsThreadReply(t *testing.T) {

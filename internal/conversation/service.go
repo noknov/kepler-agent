@@ -224,11 +224,10 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	var answerStream *dmStreamWriter
 	var progressMarkdown *streamMarkdownBuffer
 	currentStatus := agent.StepStatus(locale, 0)
-	// displayedUsageTokens and cumulativeTokens are declared before appendProgress
-	// so the closure can capture them by reference.
-	displayedUsageTokens := 0
+	// displayedContextTokens is the estimated/current prompt length for the
+	// active request. It intentionally excludes cumulative billed usage.
+	displayedContextTokens := 0
 	priorConversationTokens := s.priorConversationBilledTokens(ctx, sessionID, runObserver)
-	cumulativeTokens := 0 // total billed tokens across all LLM calls (provider dashboard number)
 	appendProgress := func(chunks []map[string]any) {
 		if !useStream || progressStopped {
 			return
@@ -237,14 +236,14 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			if chunk["type"] != "task_update" {
 				continue
 			}
-			if cumulativeTokens <= 0 && displayedUsageTokens <= 0 {
+			if displayedContextTokens <= 0 {
 				continue
 			}
 			title, _ := chunk["title"].(string)
 			if title == "" {
 				title = currentStatus
 			}
-			chunk["title"] = streamingTaskTitle(title, cumulativeTokens, displayedUsageTokens, s.Memory.MaxContextTokens)
+			chunk["title"] = streamingTaskTitle(title, displayedContextTokens, s.Memory.MaxContextTokens)
 		}
 		err := s.Messenger.AppendStream(ctx, req.Channel, progressTS, chunks)
 		if err == nil {
@@ -301,48 +300,35 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		})
 	}
 	baseContextTokens := 0
-	liveStreamTokens := 0
 	lastUsageUpdate := time.Time{}
 	setCurrentUsage := func(used int) bool {
 		if used <= 0 {
 			return false
 		}
-		if displayedUsageTokens > 0 && used < displayedUsageTokens {
+		if displayedContextTokens > 0 && used < displayedContextTokens {
 			return false
 		}
-		displayedUsageTokens = used
+		displayedContextTokens = used
 		return true
 	}
 	updateLiveUsage := func(delta string) {
 		if !useStream || delta == "" {
 			return
 		}
-		liveStreamTokens += memory.RoughTokenEstimate(delta)
-		if baseContextTokens <= 0 || liveStreamTokens <= 0 {
+		if baseContextTokens <= 0 {
 			return
 		}
-		if time.Since(lastUsageUpdate) < 750*time.Millisecond && liveStreamTokens%250 != 0 {
+		if time.Since(lastUsageUpdate) < 750*time.Millisecond {
 			return
 		}
 		lastUsageUpdate = time.Now()
-		if setCurrentUsage(baseContextTokens + liveStreamTokens) {
+		if setCurrentUsage(baseContextTokens) {
 			appendTaskUpdate(currentStatus, "in_progress")
 		}
 	}
-	syncCumulativeTokens := func() {
-		if runObserver == nil {
-			return
-		}
-		// Authoritative billing total from completed LLM responses only.
-		// Always replace (not max) so any stream-time over-estimate is corrected.
-		cumulativeTokens = priorConversationTokens + runObserver.BilledTokens()
-	}
 	updateAPIUsage := func(usage llm.Usage) {
-		// Stream usage events can report inflated or cumulative numbers that do
-		// not match the final billed usage recorded by the observer.  Only use
-		// stream usage for context-window % display; cumulative billing is
-		// synced from the observer after each LLM step completes.
-		if setCurrentUsage(contextTokensFromStreamUsage(usage, baseContextTokens)) {
+		// Display current prompt/context length, not cumulative billed tokens.
+		if setCurrentUsage(contextTokensFromUsage(usage, baseContextTokens)) {
 			appendTaskUpdate(currentStatus, "in_progress")
 		}
 	}
@@ -400,11 +386,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}
 	runner.OnUsage = updateAPIUsage
 	runner.OnLLMStepComplete = func() {
-		prev := cumulativeTokens
-		syncCumulativeTokens()
-		if cumulativeTokens != prev {
-			appendTaskUpdate(currentStatus, "in_progress")
-		}
+		appendTaskUpdate(currentStatus, "in_progress")
 	}
 
 	contentParts := req.ContentParts
@@ -423,7 +405,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		sess.Turns,
 	)
 	baseContextTokens = memory.CountTokensWithCalibration(messages)
-	if memory.LastUsage(messages) != nil && baseContextTokens > 0 {
+	if baseContextTokens > 0 {
 		setCurrentUsage(baseContextTokens)
 	}
 	result, err := runner.Run(runCtx, agent.Request{
@@ -555,7 +537,6 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}
 		// Mark the progress stream as complete when the answer stayed on it.
 		if !progressStopped {
-			syncCumulativeTokens()
 			appendTaskUpdate(agent.CompleteTitle(locale), "complete")
 			stopProgress()
 		}
@@ -679,7 +660,7 @@ func contextUsageTokenCount(base, generated []llm.Message) int {
 	return memory.CountTokensWithCalibration(messages)
 }
 
-func contextTokensFromStreamUsage(usage llm.Usage, baseContextTokens int) int {
+func contextTokensFromUsage(usage llm.Usage, baseContextTokens int) int {
 	// For OpenAI-compatible APIs, CacheReadInputTokens is already included in
 	// PromptTokens, so we must not add it again. For Anthropic, cache tokens
 	// are independent fields that must be summed in.
@@ -690,15 +671,12 @@ func contextTokensFromStreamUsage(usage llm.Usage, baseContextTokens int) int {
 		inputTokens = usage.PromptTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
 	}
 	if inputTokens > 0 {
-		return inputTokens + usage.CompletionTokens
+		return inputTokens
 	}
 	if baseContextTokens > 0 {
-		return baseContextTokens + usage.CompletionTokens
+		return baseContextTokens
 	}
-	if usage.TotalTokens > 0 {
-		return usage.TotalTokens
-	}
-	return usage.CompletionTokens
+	return 0
 }
 
 func contextUsageText(maxContextTokens, used int) string {
@@ -726,16 +704,12 @@ func titleWithContext(title, contextUsage string) string {
 
 // streamingTaskTitle builds the task-update title in the format:
 //
-//	"xx,xxx tokens · xx% · {status}"
+//	"xx,xxx ctx · xx% · {status}"
 //
-// where "xx,xxx tokens" is the cumulative billed count across all LLM calls
-// and "xx%" is the current context-window occupancy.  Either or both metric
-// parts are omitted when the data is not yet available.
-func streamingTaskTitle(status string, cumulTokens, ctxTokens, maxCtxTokens int) string {
+// where the token count and percentage describe the current request's prompt
+// length/context-window occupancy, not cumulative billed usage.
+func streamingTaskTitle(status string, ctxTokens, maxCtxTokens int) string {
 	var parts []string
-	if cumulTokens > 0 {
-		parts = append(parts, formatTokenCount(cumulTokens)+" tokens")
-	}
 	if ctxTokens > 0 {
 		limit := maxCtxTokens
 		if limit <= 0 {
@@ -745,7 +719,7 @@ func streamingTaskTitle(status string, cumulTokens, ctxTokens, maxCtxTokens int)
 		if pct == 0 {
 			pct = 1
 		}
-		parts = append(parts, strconv.Itoa(pct)+"%")
+		parts = append(parts, formatTokenCount(ctxTokens)+" ctx", strconv.Itoa(pct)+"%")
 	}
 	if status != "" {
 		parts = append(parts, status)

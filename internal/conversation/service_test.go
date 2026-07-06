@@ -189,16 +189,16 @@ func TestFailedTitleIncludesErrorID(t *testing.T) {
 	}
 }
 
-func TestContextTokensFromStreamUsageUsesBaseWhenInputMissing(t *testing.T) {
-	got := contextTokensFromStreamUsage(llm.Usage{CompletionTokens: 1200, TotalTokens: 1200}, 20_000)
-	if got != 21_200 {
-		t.Fatalf("contextTokensFromStreamUsage() = %d, want base plus completion", got)
+func TestContextTokensFromUsageUsesBaseWhenInputMissing(t *testing.T) {
+	got := contextTokensFromUsage(llm.Usage{CompletionTokens: 1200, TotalTokens: 1200}, 20_000)
+	if got != 20_000 {
+		t.Fatalf("contextTokensFromUsage() = %d, want base prompt tokens", got)
 	}
 }
 
-func TestContextTokensFromStreamUsageUsesInputWhenPresent(t *testing.T) {
+func TestContextTokensFromUsageUsesInputWhenPresent(t *testing.T) {
 	// Anthropic-style: cache tokens are independent of PromptTokens.
-	got := contextTokensFromStreamUsage(llm.Usage{
+	got := contextTokensFromUsage(llm.Usage{
 		PromptTokens:             18_000,
 		CacheCreationInputTokens: 500,
 		CacheReadInputTokens:     1_000,
@@ -206,23 +206,23 @@ func TestContextTokensFromStreamUsageUsesInputWhenPresent(t *testing.T) {
 		TotalTokens:              19_700,
 		CacheIncludedInPrompt:    false,
 	}, 20_000)
-	if got != 19_700 {
-		t.Fatalf("contextTokensFromStreamUsage() anthropic = %d, want 19700 (18000+500+1000+200)", got)
+	if got != 19_500 {
+		t.Fatalf("contextTokensFromUsage() anthropic = %d, want 19500 input tokens", got)
 	}
 }
 
-func TestContextTokensFromStreamUsageOpenAIStyle(t *testing.T) {
+func TestContextTokensFromUsageOpenAIStyle(t *testing.T) {
 	// OpenAI-style: CacheReadInputTokens is a subset of PromptTokens.
 	// Adding it again would over-count by 5000.
-	got := contextTokensFromStreamUsage(llm.Usage{
+	got := contextTokensFromUsage(llm.Usage{
 		PromptTokens:          20_000,
 		CacheReadInputTokens:  5_000, // already inside PromptTokens
 		CompletionTokens:      500,
 		TotalTokens:           20_500,
 		CacheIncludedInPrompt: true,
 	}, 20_000)
-	if got != 20_500 {
-		t.Fatalf("contextTokensFromStreamUsage() openai = %d, want 20500 (20000+500, no double-count)", got)
+	if got != 20_000 {
+		t.Fatalf("contextTokensFromUsage() openai = %d, want 20000 prompt tokens", got)
 	}
 }
 
@@ -230,7 +230,6 @@ func TestStreamingTaskTitle(t *testing.T) {
 	tests := []struct {
 		name         string
 		status       string
-		cumulTokens  int
 		ctxTokens    int
 		maxCtxTokens int
 		want         string
@@ -238,39 +237,35 @@ func TestStreamingTaskTitle(t *testing.T) {
 		{
 			name:         "all present",
 			status:       "思考中...",
-			cumulTokens:  45678,
 			ctxTokens:    20000,
 			maxCtxTokens: 200000,
-			want:         "45,678 tokens · 10% · 思考中...",
+			want:         "20,000 ctx · 10% · 思考中...",
 		},
 		{
-			name:         "no cumulative yet",
+			name:         "context only",
 			status:       "搜索中...",
-			cumulTokens:  0,
 			ctxTokens:    15000,
 			maxCtxTokens: 200000,
-			want:         "7% · 搜索中...",
+			want:         "15,000 ctx · 7% · 搜索中...",
 		},
 		{
 			name:         "no context yet",
 			status:       "启动中...",
-			cumulTokens:  5000,
 			ctxTokens:    0,
 			maxCtxTokens: 200000,
-			want:         "5,000 tokens · 启动中...",
+			want:         "启动中...",
 		},
 		{
-			name:         "complete with both",
+			name:         "complete with context",
 			status:       "完成",
-			cumulTokens:  120000,
 			ctxTokens:    25000,
 			maxCtxTokens: 200000,
-			want:         "120,000 tokens · 12% · 完成",
+			want:         "25,000 ctx · 12% · 完成",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := streamingTaskTitle(tt.status, tt.cumulTokens, tt.ctxTokens, tt.maxCtxTokens)
+			got := streamingTaskTitle(tt.status, tt.ctxTokens, tt.maxCtxTokens)
 			if got != tt.want {
 				t.Errorf("streamingTaskTitle() = %q, want %q", got, tt.want)
 			}
@@ -778,7 +773,7 @@ func TestActiveReplySteeringShowsSeparatedStatusInChinese(t *testing.T) {
 	foundCard := false
 	foundBody := false
 	for _, chunk := range messenger.chunks {
-		if chunk["type"] == "task_update" && strings.HasPrefix(chunk["title"].(string), cardTitle) {
+		if chunk["type"] == "task_update" && strings.Contains(chunk["title"].(string), cardTitle) {
 			foundCard = true
 		}
 		if chunk["type"] == "markdown_text" && chunk["text"] == bodyText {
@@ -1190,7 +1185,7 @@ func TestActiveReplyIsInjectedIntoNextStep(t *testing.T) {
 	foundStatus := false
 	foundText := false
 	for _, chunk := range svc.Messenger.(*fakeMessenger).chunks {
-		if chunk["type"] == "task_update" && strings.HasPrefix(chunk["title"].(string), "Conversation guided") {
+		if chunk["type"] == "task_update" && strings.Contains(chunk["title"].(string), "Conversation guided") {
 			foundStatus = true
 		}
 		if chunk["type"] == "markdown_text" && chunk["text"] == "\n\n_Conversation guided_\n" {

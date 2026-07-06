@@ -44,9 +44,13 @@ func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm
 }
 
 func registerDeferredDiagnosticsTools(tools *registry.Registry) {
-	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryDiagnostics, diagnosticsTools.IncidentBriefTool{}))
-	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryDiagnostics, diagnosticsTools.TimelineTool{}))
-	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryDiagnostics, diagnosticsTools.EvidenceBoardTool{}))
+	registerDeferredTools(
+		tools,
+		registry.CategoryDiagnostics,
+		diagnosticsTools.IncidentBriefTool{},
+		diagnosticsTools.TimelineTool{},
+		diagnosticsTools.EvidenceBoardTool{},
+	)
 }
 
 func registerCodeTools(tools *registry.Registry, cfg config.Config, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) {
@@ -89,45 +93,53 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 			Guard:            commandPolicy,
 			Timeout:          cfg.Tools.CommandTimeout,
 		}
-		tools.Register(k8sTools.GetPodsTool{Base: k8sBase})
-		tools.Register(k8sTools.LogsTool{Base: k8sBase})
-		tools.Register(k8sTools.DescribeTool{Base: k8sBase})
-		tools.Register(k8sTools.TopTool{Base: k8sBase})
-		tools.Register(k8sTools.EventsTool{Base: k8sBase})
-		tools.Register(k8sTools.RolloutTool{Base: k8sBase})
-		tools.Register(k8sTools.GetTool{Base: k8sBase})
+		registerDeferredTools(
+			tools,
+			registry.CategoryInfrastructure,
+			k8sTools.GetPodsTool{Base: k8sBase},
+			k8sTools.LogsTool{Base: k8sBase},
+			k8sTools.DescribeTool{Base: k8sBase},
+			k8sTools.TopTool{Base: k8sBase},
+			k8sTools.EventsTool{Base: k8sBase},
+			k8sTools.RolloutTool{Base: k8sBase},
+			k8sTools.GetTool{Base: k8sBase},
+		)
 	}
 
-	tools.Register(gcpTools.LogsTool{
-		GCloudPath:       cfg.Tools.GCloudPath,
-		DefaultProject:   cfg.Tools.GCPDefaultProject,
-		DefaultNamespace: cfg.Tools.GCPDefaultNamespace,
-		DefaultCluster:   cfg.Tools.GKEDefaultCluster,
-		DefaultRegion:    cfg.Tools.GKEDefaultRegion,
-		Guard:            commandPolicy,
-		Timeout:          cfg.Tools.CommandTimeout,
-	})
-	tools.Register(gcpTools.RunServicesTool{
-		GCloudPath:     cfg.Tools.GCloudPath,
-		DefaultProject: cfg.Tools.GCPDefaultProject,
-		DefaultRegion:  cfg.Tools.GKEDefaultRegion,
-		Guard:          commandPolicy,
-		Timeout:        cfg.Tools.CommandTimeout,
-	})
-	tools.Register(gcpTools.RunRevisionsTool{
-		GCloudPath:     cfg.Tools.GCloudPath,
-		DefaultProject: cfg.Tools.GCPDefaultProject,
-		DefaultRegion:  cfg.Tools.GKEDefaultRegion,
-		Guard:          commandPolicy,
-		Timeout:        cfg.Tools.CommandTimeout,
-	})
-	tools.Register(gcpTools.ClustersTool{
-		GCloudPath:     cfg.Tools.GCloudPath,
-		DefaultProject: cfg.Tools.GCPDefaultProject,
-		DefaultRegion:  cfg.Tools.GKEDefaultRegion,
-		Guard:          commandPolicy,
-		Timeout:        cfg.Tools.CommandTimeout,
-	})
+	registerDeferredTools(
+		tools,
+		registry.CategoryInfrastructure,
+		gcpTools.LogsTool{
+			GCloudPath:       cfg.Tools.GCloudPath,
+			DefaultProject:   cfg.Tools.GCPDefaultProject,
+			DefaultNamespace: cfg.Tools.GCPDefaultNamespace,
+			DefaultCluster:   cfg.Tools.GKEDefaultCluster,
+			DefaultRegion:    cfg.Tools.GKEDefaultRegion,
+			Guard:            commandPolicy,
+			Timeout:          cfg.Tools.CommandTimeout,
+		},
+		gcpTools.RunServicesTool{
+			GCloudPath:     cfg.Tools.GCloudPath,
+			DefaultProject: cfg.Tools.GCPDefaultProject,
+			DefaultRegion:  cfg.Tools.GKEDefaultRegion,
+			Guard:          commandPolicy,
+			Timeout:        cfg.Tools.CommandTimeout,
+		},
+		gcpTools.RunRevisionsTool{
+			GCloudPath:     cfg.Tools.GCloudPath,
+			DefaultProject: cfg.Tools.GCPDefaultProject,
+			DefaultRegion:  cfg.Tools.GKEDefaultRegion,
+			Guard:          commandPolicy,
+			Timeout:        cfg.Tools.CommandTimeout,
+		},
+		gcpTools.ClustersTool{
+			GCloudPath:     cfg.Tools.GCloudPath,
+			DefaultProject: cfg.Tools.GCPDefaultProject,
+			DefaultRegion:  cfg.Tools.GKEDefaultRegion,
+			Guard:          commandPolicy,
+			Timeout:        cfg.Tools.CommandTimeout,
+		},
+	)
 
 	notionClient := notionTools.Client{
 		Token:         cfg.Tools.NotionToken,
@@ -155,10 +167,14 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 		Owner:      cfg.Tools.GitHubDefaultOwner,
 		Repo:       cfg.Tools.GitHubDefaultRepo,
 	}
-	tools.Register(githubTools.DispatchWorkflowTool{Client: githubClient})
-	tools.Register(githubTools.WorkflowRunsTool{Client: githubClient})
-	tools.Register(githubTools.PRDiffTool{Client: githubClient})
-	tools.Register(githubTools.JobLogsTool{Client: githubClient})
+	registerDeferredTools(
+		tools,
+		registry.CategoryIntegration,
+		githubTools.DispatchWorkflowTool{Client: githubClient},
+		githubTools.WorkflowRunsTool{Client: githubClient},
+		githubTools.PRDiffTool{Client: githubClient},
+		githubTools.JobLogsTool{Client: githubClient},
+	)
 
 	luckinTools.RegisterDeferredAll(tools, &luckinTools.Client{
 		MCP: &mcp.Client{
@@ -196,7 +212,7 @@ func registerSlackTools(tools *registry.Registry, slackClient *slack.Client, cfg
 	tools.Register(slacktool.FileSearchTool{Slack: slackClient})
 	tools.Register(slacktool.JSONAnalyzeTool{Slack: slackClient})
 	tools.Register(slacktool.SendScreenshotTool{Slack: slackClient})
-	tools.Register(slacktool.CreateCanvasTool{Slack: slackClient})
+	registerDeferredTools(tools, registry.CategoryIntegration, slacktool.CreateCanvasTool{Slack: slackClient})
 
 	if cfg.Tools.TTSAPIKey != "" {
 		tools.Register(ttsTools.SpeakTool{
@@ -212,6 +228,12 @@ func registerSlackTools(tools *registry.Registry, slackClient *slack.Client, cfg
 			BaseURL: cfg.Tools.TTSBaseURL,
 			Model:   cfg.Tools.TTSModel,
 		}))
+	}
+}
+
+func registerDeferredTools(reg *registry.Registry, category string, tools ...registry.Tool) {
+	for _, tool := range tools {
+		reg.RegisterDeferred(registry.AsDeferred(category, tool))
 	}
 }
 

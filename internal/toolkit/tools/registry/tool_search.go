@@ -15,8 +15,8 @@ import (
 var categoryDescriptions = map[string]string{
 	CategoryDiagnostics:    "Incident investigation helpers: incident briefs, timelines, and evidence boards.",
 	CategoryBrowser:        "Playwright browser automation: navigate, snapshot, click, type, screenshots, and page evaluation.",
-	CategoryIntegration:    "External integrations: Notion, YouTrack, Luckin MCP, TTS, and related APIs.",
-	CategoryInfrastructure: "Kubernetes cluster tools: get pods, describe resources, fetch logs, and check resource usage (kubectl top).",
+	CategoryIntegration:    "External integrations: GitHub, Notion, YouTrack, Slack Canvas, Luckin MCP, TTS, and related APIs.",
+	CategoryInfrastructure: "Infrastructure and operations tools: Kubernetes, GCP Cloud Logging, Cloud Run, clusters, pods, logs, events, and rollouts.",
 }
 
 type ToolSearchTool struct {
@@ -31,7 +31,7 @@ func (t ToolSearchTool) CloneForRegistry(reg *Registry) Tool {
 func (ToolSearchTool) Spec() llm.ToolSpec {
 	return FunctionSpec(
 		"tool_search",
-		"Discover active and deferred tools by task or capability description, then activate deferred tools when needed. Use action=search with query for tool discovery; use query=\"select:tool-a,tool-b\" or action=activate with tool_names/categories to load tools for subsequent steps.",
+		"Capability router for tools that are intentionally not loaded by default to save context. Deferred capabilities include GitHub PRs/workflows/job logs, Kubernetes pods/logs/events/rollouts, GCP logs/Cloud Run/GKE, Slack Canvas documents, browser automation, Notion, YouTrack, TTS, and diagnostics. When the needed capability is absent from the current tool list, call this first. Use action=search with query for discovery; use query=\"select:tool-a,tool-b\" or action=activate with tool_names/categories to load tools for subsequent steps.",
 		ObjectSchema([]string{"action"}, map[string]any{
 			"action": map[string]any{
 				"type":        "string",
