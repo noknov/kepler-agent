@@ -309,7 +309,7 @@
     }
   },
   "slack-send_screenshot": {
-    "description": "Upload the latest browser screenshot to the current Slack thread. Always call this immediately after pw-screenshot — the image was stored internally by pw-screenshot and will be retrieved automatically. Do not pass data_uri unless you have a specific image string to share.",
+    "description": "Upload the latest Playwright browser screenshot to the current Slack thread. Only call this when the user explicitly asks to see a screenshot AND pw-screenshot has already been called in the current Playwright flow. Do not call this speculatively or outside a Playwright automation context.",
     "parameters": {
       "data_uri": "Leave empty to use the screenshot from the last pw-screenshot call (recommended). Only set if you have a specific data URI to upload.",
       "filename": "Optional filename for the uploaded file (e.g. login-page.png). Defaults to screenshot.png."
@@ -447,7 +447,7 @@
     }
   },
   "pw-screenshot": {
-    "description": "Capture a screenshot of the current browser page. The image is stored internally — you will NOT receive the image data directly. Always call slack-send_screenshot immediately after to share it in the Slack thread. Do not skip the slack-send_screenshot step.",
+    "description": "Capture a screenshot of the current browser page inside a Playwright automation flow. The image is stored internally — you will NOT receive the image data directly. Call slack-send_screenshot afterward only when the user explicitly asks to see the screenshot.",
     "parameters": {
       "type": "Image format: png or jpeg. Optional, defaults to png.",
       "fullPage": "Set to true to capture the full scrollable page instead of just the viewport.",

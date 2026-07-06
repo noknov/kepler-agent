@@ -73,7 +73,7 @@ func (t MCPTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.R
 		if summary != "" {
 			summary += "\n"
 		}
-		summary += fmt.Sprintf("Screenshot captured (~%dKB). Call slack-send_screenshot to share it in the Slack thread.", sizeKB)
+		summary += fmt.Sprintf("Screenshot captured (~%dKB). Call slack-send_screenshot only if the user explicitly asked to see it.", sizeKB)
 		return registry.Result{Content: summary}, nil
 	}
 	// Strip internal .playwright-mcp/ file paths from all tool output — not just snapshots.

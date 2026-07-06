@@ -29,10 +29,12 @@ func (t SendScreenshotTool) Spec() llm.ToolSpec {
 	// strings through LLM context.
 	return registry.FunctionSpec(
 		"slack-send_screenshot",
-		"",
+		"Upload the most recent Playwright browser screenshot to the current Slack thread. "+
+			"Only call this tool after pw-screenshot has been called; do NOT call it speculatively "+
+			"or as a general-purpose screen-capture — it only works inside a Playwright automation flow.",
 		registry.ObjectSchema(nil, map[string]any{
-			"data_uri": map[string]any{"type": "string", "description": ""},
-			"filename": map[string]any{"type": "string", "description": ""},
+			"data_uri": map[string]any{"type": "string", "description": "Optional base64 data URI of the screenshot; omit to use the latest pw-screenshot result from cache."},
+			"filename": map[string]any{"type": "string", "description": "Optional filename for the uploaded image (e.g. 'result.png')."},
 		}),
 	)
 }
