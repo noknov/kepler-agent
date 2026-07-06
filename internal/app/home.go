@@ -43,10 +43,10 @@ func (s *Server) homeView(userID string) map[string]any {
 	}
 
 	webSearchOn := s.webSearchPreference(userID)
-	webSearchStatus := ":large_green_circle:  On — model can search the web freely."
+	webSearchStatus := ":large_green_circle:  On"
 	webSearchBtnStyle := "primary"
 	if !webSearchOn {
-		webSearchStatus = ":white_circle:  Off — web-search tool is disabled."
+		webSearchStatus = ":white_circle:  Off"
 		webSearchBtnStyle = ""
 	}
 
