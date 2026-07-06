@@ -58,7 +58,6 @@ type Step struct {
 	Error            string         `json:"error,omitempty"`
 	FinishReason     string         `json:"finish_reason,omitempty"`
 	Content          string         `json:"content,omitempty"`
-	ReasoningContent string         `json:"reasoning_content,omitempty"`
 	ToolCallNames    []string       `json:"tool_call_names,omitempty"`
 	Metadata         map[string]any `json:"metadata,omitempty"`
 }

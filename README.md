@@ -7,7 +7,7 @@ A Slack-native general-purpose intelligent assistant built in Go, powered by con
 - 💬 **Slack-native conversation model.** Events arrive via the Slack Events API (`app_mention`, `message`, `file_shared`, `app_home_opened`). Each thread has its own session; follow-up mentions and pending clarification replies reuse existing context without re-reading thread history.
 - 🔧 **Structured tool calls, not prompt parsing.** The model communicates with tools through the provider's native function-calling API (OpenAI-compatible or Anthropic-compatible), so arguments are typed and validated rather than parsed from free-form text.
 - 🔒 **Layered runtime safety.** Slack user/channel authorization, system prompt guardrails, post-response secret redaction, workspace path allowlists, command deny rules, and per-tool read-only vs. action boundaries are all code-enforced.
-- 📦 **Explicit context budgets.** Thread context, session history, and tool observations are bounded and compressed before reaching the model. Large Slack files stay searchable by file ID without flooding the context window.
+- 📦 **Explicit context boundaries.** Slack thread context and agent conversation history are preserved as-is unless an LLM compact summary is produced. Tool results are the only locally lossy context: large outputs are persisted for `tool_spill-read` slice-by-slice analysis, and old tool results may be cleared or capped to protect the context window.
 - 🗂️ **Layered prompt configuration.** Generic prompts live in the committed `prompts/` directory. Only small sensitive deployment addenda, such as company-specific repository names, workflow aliases, and internal runbook references, belong in a local `PROMPT_DIR` overlay (defaults to `.prompts/`, gitignored).
 
 ## 📁 Project layout
@@ -17,8 +17,8 @@ cmd/oncall-agent/          Process entrypoint
 internal/app/              HTTP server, Slack event routing, dependency wiring
 internal/slack/            Signature verification, Events API types, Web API client
 internal/conversation/     Thread lifecycle, per-session locks, idempotency, pending replies
-internal/agent/            Provider-agnostic tool-call runner with step budget and context compression
-internal/memory/           Conversation turns, context packing, tool-result formatting
+internal/agent/            Provider-agnostic tool-call runner with step budget, tool-result spill, and LLM compaction
+internal/memory/           Conversation turns, context packing, tool-result formatting, and compaction helpers
 internal/session/          File-backed Slack thread sessions
 internal/safety/           Access policy, prompt policy, secret redaction, workspace and command policy
 internal/health/           Tool and RAG health probing, health dashboard
