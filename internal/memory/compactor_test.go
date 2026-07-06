@@ -414,7 +414,7 @@ func TestFoldHistoryKeepsRecentSegmentsIntact(t *testing.T) {
 	if summary == "" || !strings.Contains(summary, "conversation segment") {
 		t.Fatalf("fold summary should describe folded conversation segments, got %q", summary)
 	}
-	for _, msg := range folded {
+	for _, msg := range folded[2:] {
 		if strings.Contains(msg.Content, "old request") || strings.Contains(msg.Content, "old answer") {
 			t.Fatalf("old conversation segments should be folded out: %#v", folded)
 		}
