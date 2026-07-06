@@ -36,14 +36,14 @@ const (
 	ToolResultClearedMsg = "[Old tool result content cleared]"
 )
 
-// Compactor orchestrates 4 layers of context compression, from cheapest
-// (zero API cost) to most expensive (LLM call). Each layer is tried in order;
-// the next layer catches overflow that the previous couldn't resolve.
+// Compactor orchestrates context compression from cheapest (zero API cost) to
+// most expensive (LLM call). Only tool results are locally lossy; conversation
+// and thread context may only be reduced by the LLM compact layer.
 type Compactor struct {
 	// MaxContextTokens is the context window limit in tokens.
 	MaxContextTokens int
 
-	// AutocompactBuffer is the token headroom before Layer 4 triggers.
+	// AutocompactBuffer is the token headroom before LLM compact triggers.
 	AutocompactBuffer int
 
 	// OutputReserve is tokens reserved for model output.
@@ -58,10 +58,10 @@ type Compactor struct {
 	// ClearableTools lists tool names whose results can be cleared in Layer 1.
 	ClearableTools map[string]bool
 
-	// LLMClient is used by Layer 4 for LLM-driven summaries.
+	// LLMClient is used for LLM-driven summaries.
 	LLMClient llm.Client
 
-	// CompactModel is the model used for Layer 4 summaries (can be cheaper).
+	// CompactModel is the model used for compact summaries (can be cheaper).
 	CompactModel string
 
 	// circuit breaker state
@@ -74,11 +74,11 @@ type CompactResult struct {
 	Layer             string // which layer performed the compression
 	PreTokens         int    // estimated tokens before compression
 	PostTokens        int    // estimated tokens after compression
-	Summary           string // Layer 4 summary (empty for layers 1-3)
-	CircuitBreakerHit bool   // true if Layer 4 is disabled due to failures
+	Summary           string // LLM compact summary (empty for tool-only layers)
+	CircuitBreakerHit bool   // true if LLM compact is disabled due to failures
 }
 
-// Threshold returns the token count at which Layer 4 (LLM compact) triggers.
+// Threshold returns the token count at which LLM compact triggers.
 func (c *Compactor) Threshold() int {
 	maxTokens := c.MaxContextTokens
 	if maxTokens <= 0 {
@@ -162,7 +162,7 @@ func (c *Compactor) CompactIfNeededWithReserve(ctx context.Context, messages []l
 	}
 
 	if c.LLMClient == nil {
-		// No LLM client configured — cannot do Layer 4.
+		// No LLM client configured — cannot compact conversation context.
 		result.Layer = "no_llm_client"
 		result.PostTokens = tokens
 		return msgs, result, nil

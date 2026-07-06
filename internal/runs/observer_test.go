@@ -38,7 +38,7 @@ func TestObserverRecordsTraceMetadataAndStack(t *testing.T) {
 	}
 }
 
-func TestObserverRecordsLLMResponseOutput(t *testing.T) {
+func TestObserverRecordsLLMResponseOutputWithoutReasoning(t *testing.T) {
 	store, err := NewFileStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -66,9 +66,6 @@ func TestObserverRecordsLLMResponseOutput(t *testing.T) {
 	step := run.Steps[0]
 	if step.Content != "final answer" {
 		t.Fatalf("Content = %q", step.Content)
-	}
-	if step.ReasoningContent != "private-ish reasoning excerpt" {
-		t.Fatalf("ReasoningContent = %q", step.ReasoningContent)
 	}
 	if step.FinishReason != "stop" {
 		t.Fatalf("FinishReason = %q", step.FinishReason)

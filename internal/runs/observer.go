@@ -49,10 +49,9 @@ func (o *Observer) LLMCall(usage llm.Usage, d time.Duration, err error) {
 
 func (o *Observer) LLMResponse(resp llm.Response, d time.Duration, err error) {
 	step := Step{
-		FinishReason:     resp.FinishReason,
-		Content:          resp.Message.Content,
-		ReasoningContent: resp.Message.ReasoningContent,
-		ToolCallNames:    toolCallNames(resp.Message.ToolCalls),
+		FinishReason:  resp.FinishReason,
+		Content:       resp.Message.Content,
+		ToolCallNames: toolCallNames(resp.Message.ToolCalls),
 	}
 	o.recordLLMStep(resp.Usage, d, err, step)
 }
