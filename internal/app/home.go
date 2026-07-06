@@ -42,6 +42,14 @@ func (s *Server) homeView(userID string) map[string]any {
 		mrkdwnField("*Explorer / Summary*\n`" + secondary + "`"),
 	}
 
+	webSearchOn := s.webSearchPreference(userID)
+	webSearchStatus := ":large_green_circle:  On — model can search the web freely."
+	webSearchBtnStyle := "primary"
+	if !webSearchOn {
+		webSearchStatus = ":white_circle:  Off — web-search tool is disabled."
+		webSearchBtnStyle = ""
+	}
+
 	return map[string]any{
 		"type": "home",
 		"blocks": []map[string]any{
@@ -50,6 +58,12 @@ func (s *Server) homeView(userID string) map[string]any {
 			dividerBlock(),
 			headerBlock("Model"),
 			sectionBlockWithFields("", modelFields...),
+			dividerBlock(),
+			headerBlock("Web Search"),
+			sectionBlockWithAccessory(
+				"*Auto-search*\n"+webSearchStatus,
+				toggleButton("toggle_web_search", boolLabel(webSearchOn), webSearchBtnStyle),
+			),
 			dividerBlock(),
 		},
 	}
@@ -118,8 +132,43 @@ func modelSelectMenu(models []string, current string) map[string]any {
 	return menu
 }
 
+func boolLabel(on bool) string {
+	if on {
+		return "On"
+	}
+	return "Off"
+}
+
 func sectionBlock(text string) map[string]any {
 	return sectionBlockWithFields(text)
+}
+
+func sectionBlockWithAccessory(text string, accessory map[string]any) map[string]any {
+	return map[string]any{
+		"type": "section",
+		"text": map[string]any{
+			"type": "mrkdwn",
+			"text": text,
+		},
+		"accessory": accessory,
+	}
+}
+
+func toggleButton(actionID, label, style string) map[string]any {
+	btn := map[string]any{
+		"type":      "button",
+		"action_id": actionID,
+		"text": map[string]any{
+			"type":  "plain_text",
+			"text":  label,
+			"emoji": true,
+		},
+		"value": label,
+	}
+	if style != "" {
+		btn["style"] = style
+	}
+	return btn
 }
 
 func dividerBlock() map[string]any {
