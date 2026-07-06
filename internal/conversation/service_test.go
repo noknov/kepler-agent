@@ -31,7 +31,7 @@ func TestHandleReplyIgnoresThreadWithoutPendingQuestion(t *testing.T) {
 		store,
 		&fakeMessenger{},
 		agent.Runner{LLM: &replyLLM{}, MaxSteps: 1},
-		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		memory.Builder{},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		metrics,
@@ -76,7 +76,7 @@ func TestHandleReplyConsumesPendingQuestion(t *testing.T) {
 		store,
 		&fakeMessenger{},
 		agent.Runner{LLM: &replyLLM{}, MaxSteps: 1},
-		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		memory.Builder{},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		metrics,
@@ -122,7 +122,7 @@ func TestProcessInjectsToolHealthSummary(t *testing.T) {
 		store,
 		&fakeMessenger{},
 		agent.Runner{LLM: llmClient, Tools: registry.New(), MaxSteps: 1},
-		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		memory.Builder{},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		observability.NewRecorder(),
@@ -325,12 +325,13 @@ func TestTrimAndSummarizeReportsCompression(t *testing.T) {
 		AutocompactBuffer: 100,
 		OutputReserve:     100,
 		KeepRecentTools:   2,
+		LLMClient:         &replyLLM{content: "<summary>LLM compact summary</summary>"},
 	}
 	svc := NewService(
 		nil,
 		nil,
 		agent.Runner{Compactor: compactor},
-		memory.Builder{MaxSummaryChars: 10000},
+		memory.Builder{},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		nil,
@@ -344,10 +345,13 @@ func TestTrimAndSummarizeReportsCompression(t *testing.T) {
 		{Role: memory.RoleAssistant, Content: "recent 4"},
 	}
 
-	kept, _, compressed := svc.trimAndSummarize(context.Background(), turns, "")
+	kept, summary, compressed := svc.trimAndSummarize(context.Background(), turns, "")
 
 	if !compressed {
 		t.Fatal("trimAndSummarize() compressed = false, want true")
+	}
+	if summary != "LLM compact summary" {
+		t.Fatalf("summary = %q, want LLM compact summary", summary)
 	}
 	if len(kept) >= len(turns) {
 		t.Fatalf("trimAndSummarize() kept %d turns, want fewer than %d", len(kept), len(turns))
@@ -372,7 +376,7 @@ func TestStreamModePostsNonStreamingFormattedFinalAnswer(t *testing.T) {
 		store,
 		messenger,
 		agent.Runner{LLM: &replyLLM{content: "Author: @U085SRJFCLX"}, MaxSteps: 1},
-		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		memory.Builder{},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		observability.NewRecorder(),
@@ -442,7 +446,7 @@ func TestFinalAnswerAppendsWebEvidence(t *testing.T) {
 		store,
 		messenger,
 		agent.Runner{LLM: llmClient, Tools: tools, MaxSteps: 2, Capabilities: llm.Capabilities{NativeToolCalls: true}},
-		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		memory.Builder{},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		observability.NewRecorder(),
@@ -502,7 +506,7 @@ func TestStreamedFinalAnswerAppendsWebEvidenceToAnswerStream(t *testing.T) {
 		store,
 		messenger,
 		agent.Runner{LLM: llmClient, Tools: tools, MaxSteps: 2, Capabilities: llm.Capabilities{NativeToolCalls: true}},
-		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		memory.Builder{},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		observability.NewRecorder(),
@@ -539,7 +543,7 @@ func TestStreamModePostsNonStreamingFinalAnswer(t *testing.T) {
 		store,
 		messenger,
 		agent.Runner{LLM: &replyLLM{content: final}, MaxSteps: 1},
-		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		memory.Builder{},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		observability.NewRecorder(),
@@ -595,13 +599,14 @@ func TestCompressedContextNoticeOnlyAppearsInStream(t *testing.T) {
 		AutocompactBuffer: 1,
 		OutputReserve:     1,
 		KeepRecentTools:   2,
+		LLMClient:         &replyLLM{content: "<summary>压缩摘要</summary>"},
 	}
 	messenger := &fakeMessenger{streamTS: "200.000"}
 	svc := NewService(
 		store,
 		messenger,
 		agent.Runner{LLM: &replyLLM{content: "最终回答"}, MaxSteps: 1, Compactor: compactor},
-		memory.Builder{MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		memory.Builder{},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		observability.NewRecorder(),
@@ -684,13 +689,14 @@ func TestCompressedContextNoticeStaysOffAnswerStream(t *testing.T) {
 		AutocompactBuffer: 1,
 		OutputReserve:     1,
 		KeepRecentTools:   2,
+		LLMClient:         &replyLLM{content: "<summary>压缩摘要</summary>"},
 	}
 	messenger := &fakeMessenger{streamSeq: []string{"progress.000", "answer.000"}}
 	svc := NewService(
 		store,
 		messenger,
 		agent.Runner{LLM: llmClient, Tools: tools, MaxSteps: 2, Capabilities: llm.Capabilities{NativeToolCalls: true}, Compactor: compactor},
-		memory.Builder{MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		memory.Builder{},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		observability.NewRecorder(),
@@ -736,7 +742,7 @@ func TestActiveReplySteeringShowsSeparatedStatusInChinese(t *testing.T) {
 		store,
 		messenger,
 		agent.Runner{LLM: llmClient, Tools: tools, MaxSteps: 3},
-		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		memory.Builder{},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		observability.NewRecorder(),
@@ -895,7 +901,7 @@ func TestStreamModeUsesNativeStreamWhenToolsAreOmitted(t *testing.T) {
 		store,
 		messenger,
 		agent.Runner{LLM: llmClient, Tools: registry.New(), MaxSteps: 3},
-		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		memory.Builder{},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		observability.NewRecorder(),
@@ -928,7 +934,7 @@ func TestStreamModeStreamsTokens(t *testing.T) {
 		store,
 		messenger,
 		agent.Runner{LLM: &streamLLM{content: "hello world"}, MaxSteps: 1},
-		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		memory.Builder{},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		observability.NewRecorder(),
@@ -986,7 +992,7 @@ func TestStreamModeFallsBackWhenAppendFails(t *testing.T) {
 		store,
 		messenger,
 		agent.Runner{LLM: &streamLLM{content: "fallback answer"}, MaxSteps: 1},
-		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		memory.Builder{},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		observability.NewRecorder(),
@@ -1024,7 +1030,7 @@ func TestProgressStreamRestartsWhenSlackStreamExpires(t *testing.T) {
 		store,
 		messenger,
 		agent.Runner{LLM: &streamLLM{content: "final answer"}, MaxSteps: 1},
-		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		memory.Builder{},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		observability.NewRecorder(),
@@ -1057,7 +1063,7 @@ func TestAnswerStreamRestartsWhenSlackStreamExpires(t *testing.T) {
 		store,
 		messenger,
 		agent.Runner{LLM: &streamLLM{content: "final answer"}, MaxSteps: 1},
-		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		memory.Builder{},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		observability.NewRecorder(),
@@ -1090,7 +1096,7 @@ func TestStreamStatusFailureDoesNotAffectFinalAnswer(t *testing.T) {
 		store,
 		messenger,
 		agent.Runner{LLM: &replyLLM{content: "final answer"}, MaxSteps: 1},
-		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		memory.Builder{},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		observability.NewRecorder(),
@@ -1136,7 +1142,7 @@ func TestActiveReplyIsInjectedIntoNextStep(t *testing.T) {
 		store,
 		&fakeMessenger{streamTS: "200.000"},
 		agent.Runner{LLM: llmClient, Tools: tools, MaxSteps: 3},
-		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		memory.Builder{},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		observability.NewRecorder(),
@@ -1212,7 +1218,7 @@ func TestActiveReplyCanCancelRun(t *testing.T) {
 		store,
 		messenger,
 		agent.Runner{LLM: llmClient, Tools: registry.New(), MaxSteps: 1},
-		memory.Builder{MaxMessages: 10, MaxToolChars: 1000, MaxThreadChars: 1000, MaxSummaryChars: 1000},
+		memory.Builder{},
 		safety.PromptPolicy{},
 		safety.Redactor{},
 		observability.NewRecorder(),

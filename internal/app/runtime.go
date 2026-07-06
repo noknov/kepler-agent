@@ -37,10 +37,6 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *obs
 		IncludeRepositoryInventory: cfg.Security.PromptIncludeRepoInventory,
 	}
 	mem := memory.Builder{
-		MaxMessages:      cfg.Sessions.MaxMessages,
-		MaxToolChars:     cfg.Sessions.MaxToolChars,
-		MaxThreadChars:   cfg.Sessions.MaxThreadChars,
-		MaxSummaryChars:  cfg.Sessions.MaxSummaryChars,
 		MaxContextTokens: cfg.Sessions.MaxContextTokens,
 	}
 	secondaryClient, secondaryModel := newSecondaryLLMClient(cfg)

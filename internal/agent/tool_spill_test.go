@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
@@ -43,6 +44,16 @@ func TestMaybeSpillResultLargeContent(t *testing.T) {
 	}
 	if string(data) != content {
 		t.Fatal("spill file should contain full content")
+	}
+}
+
+func TestMaybeSpillResultFallbackKeepsUTF8Valid(t *testing.T) {
+	got := truncateRunes(strings.Repeat("界", maxToolResultChars+10), maxToolResultChars)
+	if !utf8.ValidString(got) {
+		t.Fatalf("fallback truncation produced invalid UTF-8")
+	}
+	if len([]rune(got)) != maxToolResultChars {
+		t.Fatalf("rune length = %d, want %d", len([]rune(got)), maxToolResultChars)
 	}
 }
 

@@ -132,7 +132,7 @@
   "knowledge-runbook_search": {
     "description": "Search local runbooks for operational procedures, ownership, known alerts, dashboards, and escalation paths.",
     "parameters": {
-      "query": "Service, alert, symptom, dashboard, or runbook keyword.",
+      "query": "Service, alert, symptom, dashboard, or runbook search term.",
       "limit": "Maximum runbook matches. Defaults to 5, max 20."
     }
   },
@@ -276,7 +276,7 @@
     }
   },
   "rag-search": {
-    "description": "Semantic code search using RAG. Use for architectural or behavioral questions where keyword search is insufficient. For exact symbol or string matching, prefer code-search or repo-search instead. Results are hints only; confirm important claims with code/repo read tools before quoting or explaining code.",
+    "description": "Semantic code search using RAG. Use for architectural or behavioral questions where exact string search is insufficient. For exact symbol or string matching, prefer code-search or repo-search instead. Results are hints only; confirm important claims with code/repo read tools before quoting or explaining code.",
     "parameters": {
       "query": "Natural language or code-related query.",
       "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
