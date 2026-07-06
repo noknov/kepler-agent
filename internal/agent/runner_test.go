@@ -920,7 +920,7 @@ func TestRunnerExecutesToolCallsFromStreamResponse(t *testing.T) {
 	}
 }
 
-func TestRunnerBypassesStreamGuardForNativeToolCalls(t *testing.T) {
+func TestRunnerCommitsValidatedFinalOverRawStreamDelta(t *testing.T) {
 	client := &fakeStreamClient{
 		fakeClient: fakeClient{responses: []llm.Response{
 			{Message: llm.Message{Role: "assistant", Content: "hello world"}},
@@ -938,12 +938,12 @@ func TestRunnerBypassesStreamGuardForNativeToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if got := streamed.String(); got != "hi" {
-		t.Fatalf("streamed text = %q, want immediate native delta", got)
+	if got := streamed.String(); got != "hello world" {
+		t.Fatalf("streamed text = %q, want validated final", got)
 	}
 }
 
-func TestRunnerUsesStreamGuardForUnknownCapabilities(t *testing.T) {
+func TestRunnerDoesNotCommitRawTextualToolCallStreamDelta(t *testing.T) {
 	client := &fakeStreamClient{
 		fakeClient: fakeClient{responses: []llm.Response{
 			{Message: llm.Message{Role: "assistant", Content: "normal final"}},
@@ -960,11 +960,11 @@ func TestRunnerUsesStreamGuardForUnknownCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if got := streamed.String(); got != "" {
-		t.Fatalf("streamed text = %q, want suppressed textual tool call", got)
+	if got := streamed.String(); got != "normal final" {
+		t.Fatalf("streamed text = %q, want validated final", got)
 	}
-	if result.Streamed {
-		t.Fatal("result should not be marked streamed when guard suppresses output")
+	if !result.Streamed {
+		t.Fatal("result should be marked streamed when final answer is committed")
 	}
 }
 
@@ -1883,80 +1883,49 @@ func (fakeObservationFormatter) ToolObservation(toolName string, output string) 
 	return "<evidence source=\"" + toolName + "\">\n" + output + "\n</evidence>"
 }
 
-func TestStreamGuardPreservesUTF8AcrossFlushes(t *testing.T) {
-	// Build text long enough to trigger incremental flushes with a CJK tail.
+func TestStreamRouterPreservesUTF8UntilAnswerCommit(t *testing.T) {
 	text := strings.Repeat("已有的 CommentReplyRuleProcessor 模式，", 20)
 	var chunks []string
-	guard := &streamGuard{downstream: func(delta string) { chunks = append(chunks, delta) }}
+	router := &streamRouter{emit: func(ev StreamEvent) {
+		if ev.Kind == StreamAnswer {
+			chunks = append(chunks, ev.Delta)
+		}
+	}}
 	for _, r := range text {
-		guard.Write(string(r))
+		router.text(string(r))
 	}
-	guard.Flush()
+	router.finish(false)
+	if len(chunks) != 0 {
+		t.Fatalf("answer should be deferred until commit, got chunks %#v", chunks)
+	}
+	router.commitAnswer(text)
 
 	got := strings.Join(chunks, "")
-	if got != text {
-		t.Fatalf("stream guard corrupted UTF-8:\nwant %q\ngot  %q", text, got)
-	}
-	if !utf8.ValidString(got) {
-		t.Fatalf("output is not valid UTF-8: %q", got)
+	if got != text || !utf8.ValidString(got) {
+		t.Fatalf("stream router corrupted UTF-8:\nwant %q\ngot  %q", text, got)
 	}
 	if strings.Contains(got, "\uFFFD") {
 		t.Fatalf("output contains replacement characters: %q", got)
 	}
 }
 
-func TestUTF8SafeCut(t *testing.T) {
-	s := "AutomationRule（Team-Inbox）"
-	for cut := 1; cut < len(s); cut++ {
-		n := utf8SafeCut(s, cut)
-		if !utf8.ValidString(s[:n]) {
-			t.Fatalf("utf8SafeCut(%q, %d) = %d, invalid prefix %q", s, cut, n, s[:n])
-		}
+func TestStreamRouterEmitsToolTurnAsNarration(t *testing.T) {
+	var events []StreamEvent
+	router := &streamRouter{
+		afterTools: true,
+		emit: func(ev StreamEvent) {
+			events = append(events, ev)
+		},
 	}
-}
 
-// TestUseStreamGuard verifies that RepairTextualToolCalls takes priority over NativeToolCalls
-// so that the streaming guard is active even for providers that support structured tool calls.
-// Regression test for: NativeToolCalls short-circuiting RepairTextualToolCalls check,
-// causing textual tool call markup to be streamed to the user undetected.
-func TestUseStreamGuard(t *testing.T) {
-	cases := []struct {
-		name      string
-		caps      llm.Capabilities
-		wantGuard bool
-	}{
-		{
-			name:      "RepairTextual wins over NativeToolCalls",
-			caps:      llm.Capabilities{NativeToolCalls: true, RepairTextualToolCalls: true},
-			wantGuard: true,
-		},
-		{
-			name:      "RepairTextual alone enables guard",
-			caps:      llm.Capabilities{NativeToolCalls: false, RepairTextualToolCalls: true},
-			wantGuard: true,
-		},
-		{
-			name:      "NativeToolCalls alone disables guard",
-			caps:      llm.Capabilities{NativeToolCalls: true, RepairTextualToolCalls: false},
-			wantGuard: false,
-		},
-		{
-			name:      "both false, unknown provider enables guard",
-			caps:      llm.Capabilities{Provider: "", Protocol: ""},
-			wantGuard: true,
-		},
-		{
-			name:      "both false, known provider disables guard",
-			caps:      llm.Capabilities{Provider: "openai", Protocol: "openai"},
-			wantGuard: false,
-		},
+	router.text("我先查看文件")
+	router.toolCallsStarted()
+	router.finish(true)
+
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one narration event", events)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			r := Runner{Capabilities: tc.caps}
-			if got := r.useStreamGuard(); got != tc.wantGuard {
-				t.Errorf("useStreamGuard() = %v, want %v", got, tc.wantGuard)
-			}
-		})
+	if events[0].Kind != StreamNarration || events[0].Delta != "\n\n我先查看文件" {
+		t.Fatalf("event = %#v, want after-tools narration", events[0])
 	}
 }

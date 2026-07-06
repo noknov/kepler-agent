@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/memory"
 	"github.com/wati/oncall-agent/internal/prompts"
@@ -104,14 +105,14 @@ type Request struct {
 type TerminationReason string
 
 const (
-	TerminationCompleted    TerminationReason = "completed"     // normal text answer
-	TerminationPending      TerminationReason = "pending_user"  // waiting for user input
-	TerminationMaxSteps     TerminationReason = "max_steps"     // hit step budget
-	TerminationCanceled     TerminationReason = "canceled"      // context canceled
-	TerminationModelError   TerminationReason = "model_error"   // unrecoverable LLM error
-	TerminationEmptyFinal   TerminationReason = "empty_final"   // persistent empty response
-	TerminationRepetitive   TerminationReason = "repetitive"    // model looping
-	TerminationTextualTool  TerminationReason = "textual_tool"  // model hallucinating tool calls
+	TerminationCompleted   TerminationReason = "completed"    // normal text answer
+	TerminationPending     TerminationReason = "pending_user" // waiting for user input
+	TerminationMaxSteps    TerminationReason = "max_steps"    // hit step budget
+	TerminationCanceled    TerminationReason = "canceled"     // context canceled
+	TerminationModelError  TerminationReason = "model_error"  // unrecoverable LLM error
+	TerminationEmptyFinal  TerminationReason = "empty_final"  // persistent empty response
+	TerminationRepetitive  TerminationReason = "repetitive"   // model looping
+	TerminationTextualTool TerminationReason = "textual_tool" // model hallucinating tool calls
 )
 
 type Result struct {
@@ -442,7 +443,7 @@ func (r Runner) settleFinalResponse(ctx context.Context, resp llm.Response, assi
 		// Validation failed; discard any buffered pending answer so it is not
 		// emitted on subsequent retries. The next LLM call will buffer a fresh one.
 		if s.streamRouter != nil {
-			s.streamRouter.pendingAnswer = ""
+			s.streamRouter.discardAnswer()
 		}
 		return false, Result{}, nil // retry within loop
 	}
@@ -460,8 +461,8 @@ func (r Runner) settleFinalResponse(ctx context.Context, resp llm.Response, assi
 		// Validation passed — now it is safe to flush the deferred answer
 		// to the output stream. This ensures users never see intermediate
 		// answers that the agent later rejects and retries.
-		if s.streamRouter != nil {
-			s.streamRouter.commitAnswer()
+		if useStream && s.streamRouter != nil {
+			s.streamRouter.commitAnswer(assistantMsg.Content)
 			if s.streamRouter.answerFlushed {
 				s.answerFlushed = true
 			}
@@ -480,9 +481,9 @@ func (r Runner) settleFinalResponse(ctx context.Context, resp llm.Response, assi
 type llmErrorAction int
 
 const (
-	llmErrorRetry        llmErrorAction = iota // simple retry (sleep if needed)
-	llmErrorOverflowRetry                      // retry with aggressive compaction
-	llmErrorFatal                              // non-recoverable; return to caller
+	llmErrorRetry         llmErrorAction = iota // simple retry (sleep if needed)
+	llmErrorOverflowRetry                       // retry with aggressive compaction
+	llmErrorFatal                               // non-recoverable; return to caller
 )
 
 // handleLLMError inspects err and updates loopState. It returns (action, true)
@@ -546,7 +547,7 @@ func (r Runner) handleFinalResponse(ctx context.Context, resp llm.Response, assi
 
 	if final == "" {
 		if s.retryOnce("empty_response") {
-			
+
 			s.messages = append(s.messages, llm.Message{Role: "system", Content: emptyResponseRetryPrompt()})
 			r.updateStatus(req.Locale, RetryStatus)
 			return false, true, nil
@@ -556,7 +557,7 @@ func (r Runner) handleFinalResponse(ctx context.Context, resp llm.Response, assi
 
 	if llm.LooksLikeTextualToolCall(final) {
 		if s.retryOnce("textual_tool_call") {
-			
+
 			s.messages = append(s.messages, llm.Message{Role: "system", Content: textualToolCallRetryPrompt()})
 			r.updateStatus(req.Locale, RetryStatus)
 			return false, true, nil
@@ -569,7 +570,7 @@ func (r Runner) handleFinalResponse(ctx context.Context, resp llm.Response, assi
 
 	if hasRawEvidenceDump(final) {
 		if s.retryOnce("raw_evidence") {
-			
+
 			s.messages = append(s.messages, llm.Message{Role: "system", Content: rawEvidenceRetryPrompt()})
 			r.updateStatus(req.Locale, RetryStatus)
 			return false, true, nil
@@ -582,7 +583,7 @@ func (r Runner) handleFinalResponse(ctx context.Context, resp llm.Response, assi
 
 	if looksRepetitive(final) {
 		if s.retryOnce("repetitive_final") {
-			
+
 			s.messages = append(s.messages, llm.Message{Role: "system", Content: repetitiveRetryPrompt()})
 			r.updateStatus(req.Locale, RetryStatus)
 			return false, true, nil
@@ -622,7 +623,6 @@ func (r Runner) emitStepStatus(locale string, step int, s *loopState) {
 		r.StatusUpdate(StepStatus(locale, step))
 	}
 }
-
 
 // callLLM invokes the LLM (streaming or non-streaming) and returns the
 // response plus a bool indicating whether streaming was actually used.
@@ -1189,8 +1189,6 @@ func (r Runner) observeToolResults(results []toolResult) {
 	}
 }
 
-
-
 func looksRepetitive(text string) bool {
 	normalized := strings.TrimSpace(text)
 	if len([]rune(normalized)) < 160 {
@@ -1250,91 +1248,3 @@ func (r Runner) sanitize(text string) string {
 	}
 	return r.Sanitize.Sanitize(text)
 }
-
-// streamRouter buffers ambiguous post-tool text until tool calls start or the
-// turn ends, then emits typed StreamEvents. Only used when afterTools is true
-// (i.e. the second+ LLM round with tools available) where we cannot know
-// upfront whether text is narration or a final answer.
-//
-// Deferred answer flushing: when the model produces text without tool calls
-// (potential final answer), the text is stored in pendingAnswer rather than
-// immediately emitted. Only commitAnswer() actually writes it to the output
-// stream. This prevents incomplete or invalid intermediate answers from
-// appearing in the Slack thread before handleFinalResponse validation passes.
-type streamRouter struct {
-	emit          func(StreamEvent)
-	afterTools    bool
-	buf           strings.Builder
-	toolTurn      bool
-	answerFlushed bool
-	pendingAnswer string // validated-and-ready text; set by finish(), emitted by commitAnswer()
-}
-
-func (sr *streamRouter) text(delta string) {
-	if delta == "" {
-		return
-	}
-	// Always buffer — never emit text deltas directly during streaming.
-	// The buffer is flushed as a whole in finish/toolCallsStarted, where
-	// we can detect and strip textual tool-call markup.
-	sr.buf.WriteString(delta)
-}
-
-func (sr *streamRouter) toolCallsStarted() {
-	if sr.toolTurn {
-		return
-	}
-	sr.toolTurn = true
-	sr.flushAs(StreamNarration)
-}
-
-func (sr *streamRouter) finish(hasToolCalls bool) {
-	if sr.toolTurn || hasToolCalls {
-		if !sr.toolTurn {
-			sr.flushAs(StreamNarration)
-		}
-		return
-	}
-	sr.flushAs(StreamAnswer)
-}
-
-// commitAnswer emits the deferred pending answer to the output stream.
-// Must be called only after handleFinalResponse has validated the answer.
-func (sr *streamRouter) commitAnswer() {
-	if sr.pendingAnswer == "" {
-		return
-	}
-	text := sr.pendingAnswer
-	sr.pendingAnswer = ""
-	sr.answerFlushed = true
-	sr.emit(StreamEvent{Kind: StreamAnswer, Delta: text})
-}
-
-func (sr *streamRouter) flushAs(kind StreamKind) {
-	if sr.buf.Len() == 0 {
-		return
-	}
-	text := strings.TrimSpace(sr.buf.String())
-	sr.buf.Reset()
-	if text == "" {
-		return
-	}
-	if llm.LooksLikeTextualToolCall(text) {
-		text = strings.TrimSpace(llm.StripTextualToolCallMarkup(text))
-		if text == "" {
-			return
-		}
-	}
-	if kind == StreamNarration && sr.afterTools {
-		text = "\n\n" + text
-	}
-	if kind == StreamAnswer {
-		// Defer: store for commitAnswer() rather than emitting immediately.
-		// handleFinalResponse will call commitAnswer() once the response passes
-		// all validation checks (code evidence, repetition, textual tool calls, etc.).
-		sr.pendingAnswer = text
-		return
-	}
-	sr.emit(StreamEvent{Kind: kind, Delta: text})
-}
-

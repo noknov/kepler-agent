@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -101,7 +102,7 @@ func (c *Compactor) ApplyMicroCompact(messages []llm.Message) []llm.Message {
 	return c.microCompact(messages)
 }
 
-// CompactIfNeeded runs all 4 compression layers as needed.
+// CompactIfNeeded runs all compression layers as needed.
 // It is called between conversation turns (not every step) to manage
 // persistent session context.
 func (c *Compactor) CompactIfNeeded(ctx context.Context, messages []llm.Message) ([]llm.Message, *CompactResult, error) {
@@ -148,7 +149,19 @@ func (c *Compactor) CompactIfNeededWithReserve(ctx context.Context, messages []l
 		return msgs, result, nil
 	}
 
-	// Layer 3: LLM compact (structured summary via API call)
+	// Layer 3: deterministic history folding. This is intentionally before
+	// the LLM call so deployments without a compact model can still shrink
+	// long sessions safely.
+	msgs, foldSummary := c.foldHistoryToThreshold(msgs, threshold, false)
+	tokens = CountTokensWithCalibration(msgs)
+	if foldSummary != "" && tokens <= threshold {
+		result.Layer = "history_fold"
+		result.PostTokens = tokens
+		result.Summary = foldSummary
+		return msgs, result, nil
+	}
+
+	// Layer 4: LLM compact (structured summary via API call)
 	c.mu.Lock()
 	failures := c.consecutiveFailures
 	c.mu.Unlock()
@@ -200,6 +213,7 @@ func (c *Compactor) CompactForce(ctx context.Context, messages []llm.Message) ([
 	result := &CompactResult{PreTokens: CountTokensWithCalibration(messages)}
 	msgs := c.microCompact(messages)
 	msgs = c.compressToolResults(msgs)
+	msgs, _ = c.foldHistoryForce(msgs)
 	tokens := CountTokensWithCalibration(msgs)
 
 	if c.LLMClient == nil {
@@ -339,7 +353,176 @@ func (c *Compactor) compressToolResults(messages []llm.Message) []llm.Message {
 	return out
 }
 
-// --- Layer 3: LLM compact ---
+// --- Layer 3: deterministic history folding ---
+
+type messageSegment struct {
+	start int
+	end   int
+}
+
+func (c *Compactor) foldHistory(messages []llm.Message) ([]llm.Message, string) {
+	return c.foldHistoryToThreshold(messages, c.Threshold(), false)
+}
+
+func (c *Compactor) foldHistoryForce(messages []llm.Message) ([]llm.Message, string) {
+	return c.foldHistoryToThreshold(messages, 1, true)
+}
+
+func (c *Compactor) foldHistoryToThreshold(messages []llm.Message, threshold int, force bool) ([]llm.Message, string) {
+	if len(messages) < 4 || threshold <= 0 || (!force && CountTokensWithCalibration(messages) <= threshold) {
+		return messages, ""
+	}
+
+	system, restStart := leadingSystemMessage(messages)
+	segments := conversationSegments(messages, restStart)
+	if len(segments) < 4 {
+		return messages, ""
+	}
+
+	recentBudget := threshold * 30 / 100
+	if recentBudget < 64 {
+		recentBudget = 64
+	}
+	recentStart := selectRecentSegmentStart(messages, segments, recentBudget, 3)
+	if recentStart <= 0 {
+		return messages, ""
+	}
+
+	foldedSegments := segments[:recentStart]
+	recentSegments := segments[recentStart:]
+	summary := summarizeFoldedSegments(messages, foldedSegments)
+	if summary == "" {
+		return messages, ""
+	}
+
+	out := make([]llm.Message, 0, 2+len(messages)-recentSegments[0].start)
+	if system != nil {
+		out = append(out, *system)
+	}
+	out = append(out, llm.Message{Role: "user", Content: FormatCompactUserMessage(summary)})
+	for _, seg := range recentSegments {
+		out = append(out, messages[seg.start:seg.end]...)
+	}
+	return repairToolPairing(out), summary
+}
+
+func leadingSystemMessage(messages []llm.Message) (*llm.Message, int) {
+	if len(messages) > 0 && messages[0].Role == "system" {
+		return &messages[0], 1
+	}
+	return nil, 0
+}
+
+func conversationSegments(messages []llm.Message, start int) []messageSegment {
+	var segments []messageSegment
+	for i := start; i < len(messages); {
+		if messages[i].Role == "system" || messages[i].Role == "tool" {
+			i++
+			continue
+		}
+		seg := messageSegment{start: i, end: i + 1}
+		if messages[i].Role == "assistant" && len(messages[i].ToolCalls) > 0 {
+			for seg.end < len(messages) && messages[seg.end].Role == "tool" {
+				seg.end++
+			}
+		}
+		segments = append(segments, seg)
+		i = seg.end
+	}
+	return segments
+}
+
+func selectRecentSegmentStart(messages []llm.Message, segments []messageSegment, budget, minSegments int) int {
+	tokens := 0
+	for i := len(segments) - 1; i >= 0; i-- {
+		segTokens := segmentTokens(messages, segments[i])
+		selected := len(segments) - i
+		if selected >= minSegments && tokens+segTokens > budget {
+			return i + 1
+		}
+		tokens += segTokens
+	}
+	return 0
+}
+
+func segmentTokens(messages []llm.Message, seg messageSegment) int {
+	total := 0
+	for i := seg.start; i < seg.end; i++ {
+		total += estimateMessageTokens(&messages[i])
+	}
+	return total
+}
+
+func summarizeFoldedSegments(messages []llm.Message, segments []messageSegment) string {
+	if len(segments) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Folded ")
+	b.WriteString(pluralizeCount(len(segments), "older conversation segment"))
+	b.WriteString(" to reduce context size while preserving the most recent turns.\n")
+	for i, seg := range segments {
+		b.WriteString("- conversation segment ")
+		b.WriteString(strconv.Itoa(i + 1))
+		b.WriteString(": ")
+		b.WriteString(segmentExcerpt(messages, seg))
+		b.WriteString("\n")
+	}
+	return strings.TrimSpace(truncateHeadTail(b.String(), 4_000))
+}
+
+func segmentExcerpt(messages []llm.Message, seg messageSegment) string {
+	var parts []string
+	for i := seg.start; i < seg.end; i++ {
+		msg := messages[i]
+		switch msg.Role {
+		case "assistant":
+			if len(msg.ToolCalls) > 0 {
+				names := make([]string, 0, len(msg.ToolCalls))
+				for _, call := range msg.ToolCalls {
+					names = append(names, call.Function.Name)
+				}
+				parts = append(parts, "assistant called "+strings.Join(names, ", "))
+			}
+			if text := compactExcerpt(msg.Content, 220); text != "" {
+				parts = append(parts, "assistant: "+text)
+			}
+		case "tool":
+			if text := compactExcerpt(msg.Content, 220); text != "" {
+				name := msg.Name
+				if name == "" {
+					name = "tool"
+				}
+				parts = append(parts, name+": "+text)
+			}
+		default:
+			if text := compactExcerpt(msg.Content, 260); text != "" {
+				parts = append(parts, msg.Role+": "+text)
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return "non-text turn preserved only as metadata"
+	}
+	return strings.Join(parts, " | ")
+}
+
+func compactExcerpt(text string, maxRunes int) string {
+	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	if text == "" {
+		return ""
+	}
+	return truncateHeadTail(text, maxRunes)
+}
+
+func pluralizeCount(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return strconv.Itoa(n) + " " + noun + "s"
+}
+
+// --- Layer 4: LLM compact ---
 
 // applyCompactBoundary replaces the message history with:
 // [system] + [compact summary as user message] + [most recent N messages]
