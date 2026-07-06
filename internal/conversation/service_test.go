@@ -239,14 +239,14 @@ func TestStreamingTaskTitle(t *testing.T) {
 			status:       "思考中...",
 			ctxTokens:    20000,
 			maxCtxTokens: 200000,
-			want:         "20,000 ctx · 10% · 思考中...",
+			want:         "20,000 tokens · 10% context · 思考中...",
 		},
 		{
 			name:         "context only",
 			status:       "搜索中...",
 			ctxTokens:    15000,
 			maxCtxTokens: 200000,
-			want:         "15,000 ctx · 7% · 搜索中...",
+			want:         "15,000 tokens · 7% context · 搜索中...",
 		},
 		{
 			name:         "no context yet",
@@ -260,7 +260,7 @@ func TestStreamingTaskTitle(t *testing.T) {
 			status:       "完成",
 			ctxTokens:    25000,
 			maxCtxTokens: 200000,
-			want:         "25,000 ctx · 12% · 完成",
+			want:         "25,000 tokens · 12% context · 完成",
 		},
 	}
 	for _, tt := range tests {

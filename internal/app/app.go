@@ -68,9 +68,10 @@ type Server struct {
 	runStore   runs.Store
 	ragManager ragManagerCloser
 	health     *health.Service
-	mux        *http.ServeMux
-	modelPrefs sync.Map
-	tokenUsage tokenUsageProvider
+	mux            *http.ServeMux
+	modelPrefs     sync.Map
+	webSearchPrefs sync.Map
+	tokenUsage     tokenUsageProvider
 }
 
 type ragManagerCloser interface {
@@ -136,6 +137,9 @@ func NewServer(cfg config.Config) (*Server, error) {
 	}
 	conv.ModelOverride = func(userID string) string {
 		return s.modelPreference(userID)
+	}
+	conv.WebSearchEnabled = func(userID string) bool {
+		return s.webSearchPreference(userID)
 	}
 	if mm := cfg.LLM.MultimodalModels; len(mm) > 0 {
 		mmSet := make(map[string]bool, len(mm))
@@ -301,8 +305,13 @@ func (s *Server) handleSlackInteractions(w http.ResponseWriter, r *http.Request)
 
 	if payload.Type == "block_actions" {
 		for _, action := range payload.Actions {
-			if action.ActionID == "select_model" && action.SelectedOption.Value != "" {
-				s.handleModelSelect(payload.User.ID, action.SelectedOption.Value)
+			switch action.ActionID {
+			case "select_model":
+				if action.SelectedOption.Value != "" {
+					s.handleModelSelect(payload.User.ID, action.SelectedOption.Value)
+				}
+			case "toggle_web_search":
+				s.handleWebSearchToggle(payload.User.ID)
 			}
 		}
 	}
@@ -343,6 +352,23 @@ func (s *Server) setModelPreference(userID, model string) bool {
 		s.modelPrefs.Store(userID, model)
 	}
 	return true
+}
+
+func (s *Server) webSearchPreference(userID string) bool {
+	v, ok := s.webSearchPrefs.Load(userID)
+	if !ok {
+		return true // default On
+	}
+	return v.(bool)
+}
+
+func (s *Server) handleWebSearchToggle(userID string) {
+	s.webSearchPrefs.Store(userID, !s.webSearchPreference(userID))
+	go func() {
+		if err := s.slack.PublishHome(context.Background(), userID, s.homeView(userID)); err != nil {
+			log.Printf("publish home after web search toggle failed: %v", err)
+		}
+	}()
 }
 
 func (s *Server) handleEvent(ctx context.Context, eventID string, ev slack.Event) {

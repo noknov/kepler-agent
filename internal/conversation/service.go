@@ -49,8 +49,12 @@ type Service struct {
 	RunStore      runs.Store
 	RunProvider   string
 	RunModel      string
-	ModelOverride func(userID string) string
-	Multimodal    func(model string) bool
+	ModelOverride    func(userID string) string
+	Multimodal       func(model string) bool
+	// WebSearchEnabled controls whether the web-search tool is available for
+	// a given user. When it returns false the tool is excluded from the LLM
+	// tool list for that request. When nil, search is always available.
+	WebSearchEnabled func(userID string) bool
 	CostRates     observability.CostRates
 	HealthSummary func() string
 	AutoTTS       AutoTTSFunc
@@ -395,9 +399,15 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		contentParts, userText = stripImageParts(contentParts, userText, locale)
 	}
 
+	webSearchOff := s.WebSearchEnabled != nil && !s.WebSearchEnabled(req.UserID)
+	sysPrompt := s.Prompt.SystemPrompt()
+	if webSearchOff {
+		sysPrompt += "\n\nThe web-search tool is currently disabled by the user. If this question would clearly benefit from a live web search, politely note in your reply that enabling Auto-search in App Home would allow you to look it up."
+	}
+
 	threadContext := s.Messenger.ThreadContext(ctx, req.Channel, req.ThreadTS, 0)
 	messages := s.Memory.BuildWithParts(
-		s.Prompt.SystemPrompt(),
+		sysPrompt,
 		threadContext,
 		userText,
 		contentParts,
@@ -408,7 +418,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	if baseContextTokens > 0 {
 		setCurrentUsage(baseContextTokens)
 	}
-	result, err := runner.Run(runCtx, agent.Request{
+	agentReq := agent.Request{
 		Messages:     messages,
 		UserQuestion: userText,
 		Runtime: registry.Runtime{
@@ -419,7 +429,11 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		Locale:   locale,
 		RunID:    runID,
 		Steering: s.steering(active),
-	})
+	}
+	if webSearchOff {
+		agentReq.DisabledTools = []string{"web-search", "web-read_page"}
+	}
+	result, err := runner.Run(runCtx, agentReq)
 	evidenceText := webEvidenceMarkdown(result.Generated, locale)
 	if answerStream != nil && evidenceText != "" {
 		answerStream.Write(evidenceText)
@@ -704,7 +718,7 @@ func titleWithContext(title, contextUsage string) string {
 
 // streamingTaskTitle builds the task-update title in the format:
 //
-//	"xx,xxx ctx · xx% · {status}"
+//	"xx,xxx tokens · xx% context · {status}"
 //
 // where the token count and percentage describe the current request's prompt
 // length/context-window occupancy, not cumulative billed usage.
@@ -719,7 +733,7 @@ func streamingTaskTitle(status string, ctxTokens, maxCtxTokens int) string {
 		if pct == 0 {
 			pct = 1
 		}
-		parts = append(parts, formatTokenCount(ctxTokens)+" ctx", strconv.Itoa(pct)+"%")
+		parts = append(parts, formatTokenCount(ctxTokens)+" tokens", strconv.Itoa(pct)+"% context")
 	}
 	if status != "" {
 		parts = append(parts, status)

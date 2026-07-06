@@ -98,6 +98,10 @@ type Request struct {
 	Locale       string
 	RunID        string
 	Steering     SteeringProvider
+	// DisabledTools lists tool names to exclude from this run's tool spec
+	// list. The tools remain registered; they are simply not offered to the
+	// model for this specific request.
+	DisabledTools []string
 }
 
 // TerminationReason describes why the agent loop exited. It is analogous to
@@ -351,6 +355,19 @@ func (r Runner) runStep(ctx context.Context, step, maxOverloadRetries int, s *lo
 	var toolSpecs []llm.ToolSpec
 	if r.Tools != nil {
 		toolSpecs = r.Tools.Specs()
+		if len(req.DisabledTools) > 0 {
+			disabled := make(map[string]bool, len(req.DisabledTools))
+			for _, name := range req.DisabledTools {
+				disabled[name] = true
+			}
+			filtered := toolSpecs[:0:0]
+			for _, spec := range toolSpecs {
+				if !disabled[spec.Function.Name] {
+					filtered = append(filtered, spec)
+				}
+			}
+			toolSpecs = filtered
+		}
 	}
 	s.messages = r.prepareMessagesForQuery(ctx, s.messages, req, toolSpecs)
 
