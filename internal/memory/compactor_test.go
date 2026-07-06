@@ -386,54 +386,6 @@ func TestCompactForceFallsBackWhenLLMSummaryFails(t *testing.T) {
 	}
 }
 
-func TestFoldHistoryKeepsRecentSegmentsIntact(t *testing.T) {
-	c := &Compactor{
-		MaxContextTokens:  140,
-		AutocompactBuffer: 20,
-		OutputReserve:     20,
-	}
-	messages := []llm.Message{
-		{Role: "system", Content: "system"},
-		{Role: "user", Content: strings.Repeat("old request ", 60)},
-		{Role: "assistant", Content: strings.Repeat("old answer ", 60)},
-		{Role: "user", Content: "recent request"},
-		{Role: "assistant", ToolCalls: []llm.ToolCall{{
-			ID:   "recent-call",
-			Type: "function",
-			Function: llm.ToolFunction{
-				Name:      "code-search",
-				Arguments: `{"query":"recent"}`,
-			},
-		}}},
-		{Role: "tool", Name: "code-search", ToolCallID: "recent-call", Content: "recent result"},
-		{Role: "assistant", Content: "recent answer"},
-	}
-
-	folded, summary := c.foldHistory(messages)
-
-	if summary == "" || !strings.Contains(summary, "conversation segment") {
-		t.Fatalf("fold summary should describe folded conversation segments, got %q", summary)
-	}
-	for _, msg := range folded[2:] {
-		if strings.Contains(msg.Content, "old request") || strings.Contains(msg.Content, "old answer") {
-			t.Fatalf("old conversation segments should be folded out: %#v", folded)
-		}
-	}
-	foundToolCall := false
-	foundToolResult := false
-	for _, msg := range folded {
-		if msg.Role == "assistant" && len(msg.ToolCalls) == 1 && msg.ToolCalls[0].ID == "recent-call" {
-			foundToolCall = true
-		}
-		if msg.Role == "tool" && msg.ToolCallID == "recent-call" {
-			foundToolResult = true
-		}
-	}
-	if !foundToolCall || !foundToolResult {
-		t.Fatalf("recent tool call/result pair not preserved together: %#v", folded)
-	}
-}
-
 func TestRepairToolPairing(t *testing.T) {
 	messages := []llm.Message{
 		{Role: "system", Content: "prompt"},

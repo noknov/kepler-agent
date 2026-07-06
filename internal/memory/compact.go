@@ -113,21 +113,13 @@ func buildCompactMessages(messages []llm.Message, customInstructions string) []l
 			for _, tc := range msg.ToolCalls {
 				conversation.WriteString("\n  → tool_call: " + tc.Function.Name)
 				if tc.Function.Arguments != "" {
-					args := tc.Function.Arguments
-					if len(args) > 500 {
-						args = args[:500] + "...[truncated]"
-					}
-					conversation.WriteString("(" + args + ")")
+					conversation.WriteString("(" + tc.Function.Arguments + ")")
 				}
 			}
 			conversation.WriteString("\n\n")
 		case "tool":
 			conversation.WriteString("[Tool:" + msg.Name + "]")
-			content := msg.Content
-			if len(content) > 1000 {
-				content = truncateForCompact(content, 1000)
-			}
-			conversation.WriteString("\n" + content + "\n\n")
+			conversation.WriteString("\n" + msg.Content + "\n\n")
 		case "user":
 			conversation.WriteString("[User]\n")
 			conversation.WriteString(msg.Content)
@@ -165,17 +157,4 @@ func extractSummary(text string) string {
 
 	// Fallback: return the full text as-is
 	return strings.TrimSpace(text)
-}
-
-// truncateForCompact keeps head and tail of long content for the compact request.
-func truncateForCompact(s string, maxChars int) string {
-	runes := []rune(s)
-	if len(runes) <= maxChars {
-		return s
-	}
-	head := maxChars / 2
-	tail := maxChars - head
-	return strings.TrimSpace(string(runes[:head])) +
-		"\n...[truncated for compact summary]...\n" +
-		strings.TrimSpace(string(runes[len(runes)-tail:]))
 }

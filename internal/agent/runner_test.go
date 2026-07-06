@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -264,6 +266,35 @@ func TestRunnerExecutesRepeatedToolCalls(t *testing.T) {
 	}
 	if toolMessages != 3 {
 		t.Fatalf("tool messages = %d, want 3", toolMessages)
+	}
+}
+
+func TestRunnerBlocksRepeatedIdenticalFailuresOnly(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{Message: repoMissToolCallMessage("tool_1", `{"path":"missing"}`)},
+		{Message: repoMissToolCallMessage("tool_2", `{"path":"missing"}`)},
+		{Message: repoMissToolCallMessage("tool_3", `{"path":"missing"}`)},
+		{Message: repoMissToolCallMessage("tool_4", `{"path":"missing"}`)},
+		{Message: llm.Message{Role: "assistant", Content: "final"}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeMissingWorkspaceTool{})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 6}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "final" {
+		t.Fatalf("Final = %q, want final", result.Final)
+	}
+	blocked := 0
+	for _, msg := range result.Generated {
+		if msg.Role == "tool" && strings.Contains(msg.Content, "failed 3 consecutive times") {
+			blocked++
+		}
+	}
+	if blocked != 1 {
+		t.Fatalf("synthetic repeated-failure blocks = %d, want 1; generated=%#v", blocked, result.Generated)
 	}
 }
 
@@ -695,6 +726,37 @@ func TestRunnerAppliesToolResultBudgetBeforeModelCall(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("large historical tool result was not persisted before model call: %#v", client.requests[0].Messages)
+	}
+}
+
+func TestRunnerSpillsFullToolOutputBeforeFormatting(t *testing.T) {
+	runID := "run-full-tool-spill"
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(spillDir, runID)) })
+	tailMarker := "TAIL_MARKER_AFTER_PREVIEW"
+	largeText := strings.Repeat("x", maxToolResultChars+1000) + tailMarker
+	client := &fakeClient{responses: []llm.Response{
+		{Message: toolCallMessage("tool_fullspill", `{"text":"`+largeText+`"}`)},
+		{Message: llm.Message{Role: "assistant", Content: "done"}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 3, Format: memory.Builder{}}.Run(context.Background(), Request{RunID: runID})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "done" {
+		t.Fatalf("Final = %q, want done", result.Final)
+	}
+	data, err := os.ReadFile(spillPath(runID, "echo", "tool_fullspill"))
+	if err != nil {
+		t.Fatalf("ReadFile(spill) error = %v", err)
+	}
+	if !strings.Contains(string(data), tailMarker) {
+		t.Fatalf("spill file lost tail marker; output was truncated before persistence")
+	}
+	if strings.Contains(string(data), "<evidence source=") {
+		t.Fatalf("spill file should contain raw sanitized tool output, not formatted context wrapper")
 	}
 }
 

@@ -92,10 +92,6 @@ type SecurityConfig struct {
 
 type SessionConfig struct {
 	DataDir             string
-	MaxMessages         int
-	MaxToolChars        int
-	MaxThreadChars      int
-	MaxSummaryChars     int
 	MaxContextTokens    int    // context window token limit (default 200000)
 	AutocompactBuffer   int    // reserved token headroom before auto-compact (default 13000)
 	CompactModel        string // model used for compact summaries (empty = secondary model, then main model)
@@ -110,10 +106,10 @@ type ToolConfig struct {
 	GCPDefaultNamespace string
 	GKEDefaultCluster   string
 	GKEDefaultRegion    string
-	KubectlPath          string
-	K8sDefaultContext    string
-	K8sDefaultCluster    string
-	K8sDefaultNamespace  string
+	KubectlPath         string
+	K8sDefaultContext   string
+	K8sDefaultCluster   string
+	K8sDefaultNamespace string
 	TTSAPIKey           string
 	TTSBaseURL          string
 	TTSModel            string
@@ -242,10 +238,6 @@ func Load() (Config, error) {
 		},
 		Sessions: SessionConfig{
 			DataDir:             env("SESSION_DATA_DIR", filepath.Join(wd, ".data", "sessions")),
-			MaxMessages:         envInt("SESSION_MAX_MESSAGES", 24),
-			MaxToolChars:        envInt("SESSION_MAX_TOOL_CHARS", 40000),
-			MaxThreadChars:      envInt("SESSION_MAX_THREAD_CHARS", 6000),
-			MaxSummaryChars:     envInt("SESSION_MAX_SUMMARY_CHARS", 2500),
 			MaxContextTokens:    envInt("SESSION_MAX_CONTEXT_TOKENS", 200000),
 			AutocompactBuffer:   envInt("SESSION_AUTOCOMPACT_BUFFER", 13000),
 			CompactModel:        env("SESSION_COMPACT_MODEL", ""),
@@ -260,9 +252,9 @@ func Load() (Config, error) {
 			GKEDefaultCluster:   env("GKE_CLUSTER", ""),
 			GKEDefaultRegion:    env("GKE_REGION", ""),
 			KubectlPath:         env("KUBECTL_PATH", "kubectl"),
-			K8sDefaultContext:    os.Getenv("K8S_DEFAULT_CONTEXT"),
-			K8sDefaultCluster:    os.Getenv("K8S_DEFAULT_CLUSTER"),
-			K8sDefaultNamespace:  env("K8S_DEFAULT_NAMESPACE", ""),
+			K8sDefaultContext:   os.Getenv("K8S_DEFAULT_CONTEXT"),
+			K8sDefaultCluster:   os.Getenv("K8S_DEFAULT_CLUSTER"),
+			K8sDefaultNamespace: env("K8S_DEFAULT_NAMESPACE", ""),
 			TTSAPIKey:           firstEnv("TTS_API_KEY", "MIMO_API_KEY"),
 			TTSBaseURL:          trimRightSlash(env("TTS_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1")),
 			TTSModel:            env("TTS_MODEL", "mimo-v2.5-tts"),

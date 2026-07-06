@@ -256,9 +256,6 @@ name: zhangxuefeng-zhiyuan
 description: |
   张雪峰的思维框架与表达方式，专注高考志愿填报与职业规划。
   当用户提到「高考」「志愿」「填报」「选专业」「分数线」「位次」时使用。
-keywords:
-  - 高考
-  - 志愿
 ---
 
 # Body

@@ -48,9 +48,20 @@ func maybeSpillResult(runID, toolName, toolCallID, content string) string {
 	}
 	spilled, err := spillToolResult(runID, toolName, toolCallID, content)
 	if err != nil {
-		return content[:maxToolResultChars] + "\n\n[truncated]"
+		return truncateRunes(content, maxToolResultChars) + "\n\n[truncated]"
 	}
 	return spilled
+}
+
+func truncateRunes(text string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= max {
+		return text
+	}
+	return string(runes[:max])
 }
 
 func spillRunID(runID string) string {

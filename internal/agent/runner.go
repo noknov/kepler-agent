@@ -35,11 +35,11 @@ const (
 	// to prevent aimless searching while still allowing genuine investigations.
 	maxOutputTokensRecoveryLimit = 3
 
-	// maxIdenticalCallAttempts is the number of times the same tool can be
-	// called with identical arguments before the circuit breaker short-circuits
-	// subsequent identical calls with an error. Prevents infinite loops where
-	// the model ignores error feedback and keeps repeating the same failing call.
-	maxIdenticalCallAttempts = 3
+	// maxIdenticalFailedCallAttempts is the number of identical failed tool
+	// calls allowed before the circuit breaker short-circuits a subsequent
+	// identical call. Successful duplicate calls are legitimate for rereads,
+	// polling, or state checks, so only failures count.
+	maxIdenticalFailedCallAttempts = 3
 )
 
 type Observer interface {
@@ -156,11 +156,9 @@ type loopState struct {
 	// clarificationErrors tracks persistent tool failures that require user input.
 	clarificationErrors *clarificationErrorTracker
 
-	// identicalCallCounts is the circuit breaker for identical repeated tool
-	// calls. Keyed by "toolName::sha256(args)" → attempt count. When a key
-	// exceeds maxIdenticalCallAttempts the call is short-circuited with an
-	// error instead of being executed, preventing infinite retry loops.
-	identicalCallCounts map[string]int
+	// identicalCallFailures is the circuit breaker for identical failed tool
+	// calls. Keyed by "toolName::sha256(args)" → consecutive failure count.
+	identicalCallFailures map[string]int
 
 	// per-step streaming components; reset each iteration by callLLM.
 	streamRouter *streamRouter
@@ -751,12 +749,11 @@ func (r Runner) runToolCalls(ctx context.Context, calls []llm.ToolCall, s *loopS
 	}
 	s.streamExec = nil
 
-	// Circuit breaker: short-circuit calls that have been attempted with the
-	// same arguments more than maxIdenticalCallAttempts times. The model is
-	// stuck in a retry loop and executing again will only produce the same
-	// error — we inject a synthetic error result instead.
-	if s.identicalCallCounts == nil {
-		s.identicalCallCounts = make(map[string]int)
+	// Circuit breaker: short-circuit calls that have repeatedly failed with
+	// the same arguments. Successful repeated calls remain allowed; they are
+	// common for rereads, polling, and state checks.
+	if s.identicalCallFailures == nil {
+		s.identicalCallFailures = make(map[string]int)
 	}
 	toExecute := make([]llm.ToolCall, 0, len(calls))
 	toExecuteIdx := make([]int, 0, len(calls))
@@ -764,18 +761,17 @@ func (r Runner) runToolCalls(ctx context.Context, calls []llm.ToolCall, s *loopS
 
 	for i, call := range calls {
 		key := identicalCallKey(call)
-		s.identicalCallCounts[key]++
-		if s.identicalCallCounts[key] > maxIdenticalCallAttempts {
-			blocker := fmt.Errorf("identical call blocked: this exact %s call has been attempted %d times already",
-				call.Function.Name, maxIdenticalCallAttempts)
+		if s.identicalCallFailures[key] >= maxIdenticalFailedCallAttempts {
+			blocker := fmt.Errorf("identical failed call blocked: this exact %s call has failed %d consecutive times already",
+				call.Function.Name, maxIdenticalFailedCallAttempts)
 			results[i] = toolResult{
 				message: llm.Message{
 					Role:       "tool",
 					ToolCallID: call.ID,
 					Name:       call.Function.Name,
-					Content: fmt.Sprintf("[tool error] This exact call was already attempted %d times with identical arguments and kept failing. "+
+					Content: fmt.Sprintf("[tool error] This exact call already failed %d consecutive times with identical arguments. "+
 						"You MUST change your approach: use different parameters, try a different tool, or answer with the information already gathered.",
-						maxIdenticalCallAttempts),
+						maxIdenticalFailedCallAttempts),
 				},
 				name: call.Function.Name,
 				args: json.RawMessage(call.Function.Arguments),
@@ -790,7 +786,14 @@ func (r Runner) runToolCalls(ctx context.Context, calls []llm.ToolCall, s *loopS
 	if len(toExecute) > 0 {
 		executed := r.executeToolCalls(ctx, toExecute, req)
 		for j, res := range executed {
-			results[toExecuteIdx[j]] = res
+			idx := toExecuteIdx[j]
+			results[idx] = res
+			key := identicalCallKey(toExecute[j])
+			if res.err != nil {
+				s.identicalCallFailures[key]++
+			} else {
+				delete(s.identicalCallFailures, key)
+			}
 		}
 	}
 	return results
@@ -1049,9 +1052,11 @@ func (r Runner) executeSingleTool(ctx context.Context, call llm.ToolCall, req Re
 	} else if needsUserInput {
 		content = r.sanitize(result.Content)
 	} else {
-		content = r.format(name, r.sanitize(result.Content))
+		content = r.format(name, maybeSpillResult(spillRunID(req.RunID), name, call.ID, r.sanitize(result.Content)))
 	}
-	content = maybeSpillResult(spillRunID(req.RunID), name, call.ID, content)
+	if err != nil || needsUserInput {
+		content = maybeSpillResult(spillRunID(req.RunID), name, call.ID, content)
+	}
 	return toolResult{
 		message:     llm.Message{Role: "tool", ToolCallID: call.ID, Name: name, Content: content},
 		waitForUser: err == nil && needsUserInput,

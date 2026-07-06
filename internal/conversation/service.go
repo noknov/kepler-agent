@@ -986,31 +986,12 @@ func (s *Service) trimAndSummarize(ctx context.Context, turns []memory.Turn, exi
 				compressed = true
 			}
 			if result.Layer == "llm_compact" && strings.TrimSpace(result.Summary) != "" {
-				summary = trimSummary(result.Summary, s.Memory.MaxSummaryChars)
+				summary = strings.TrimSpace(result.Summary)
 			}
 		}
 	}
 
 	return turns, summary, compressed
-}
-
-// trimSummary trims a summary to fit within the character budget.
-// It preserves the tail (most recent additions) and uses head+tail
-// truncation rather than pure tail truncation.
-func trimSummary(summary string, max int) string {
-	summary = strings.TrimSpace(summary)
-	runes := []rune(summary)
-	if max <= 0 || len(runes) <= max {
-		return summary
-	}
-	// Keep the most recent portion (tail), with a marker.
-	marker := "\n...[older summary truncated]...\n"
-	markerRunes := len([]rune(marker))
-	if max <= markerRunes+100 {
-		return strings.TrimSpace(string(runes[len(runes)-max:]))
-	}
-	tailSize := max - markerRunes
-	return marker + strings.TrimSpace(string(runes[len(runes)-tailSize:]))
 }
 
 func newErrorID() string {
