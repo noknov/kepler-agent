@@ -211,7 +211,7 @@ func registerSlackTools(tools *registry.Registry, slackClient *slack.Client, cfg
 	tools.Register(slacktool.AskUserTool{Slack: slackClient})
 	tools.Register(slacktool.FileSearchTool{Slack: slackClient})
 	tools.Register(slacktool.JSONAnalyzeTool{Slack: slackClient})
-	tools.Register(slacktool.SendScreenshotTool{Slack: slackClient})
+	registerDeferredTools(tools, registry.CategoryBrowser, slacktool.SendScreenshotTool{Slack: slackClient})
 	registerDeferredTools(tools, registry.CategoryIntegration, slacktool.CreateCanvasTool{Slack: slackClient})
 
 	if cfg.Tools.TTSAPIKey != "" {
