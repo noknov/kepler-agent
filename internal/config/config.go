@@ -136,6 +136,8 @@ type ToolConfig struct {
 	WebSearchSerpAPIKey string
 	WebSearchSerpAPIURL string
 	WebSearchSearXNGURL string
+	WebSearchBraveKey   string
+	WebSearchBraveURL   string
 }
 
 type ObservingConfig struct {
@@ -281,6 +283,8 @@ func Load() (Config, error) {
 			WebSearchSerpAPIKey: os.Getenv("WEB_SEARCH_SERPAPI_KEY"),
 			WebSearchSerpAPIURL: trimRightSlash(env("WEB_SEARCH_SERPAPI_BASE_URL", "https://serpapi.com/search.json")),
 			WebSearchSearXNGURL: trimRightSlash(os.Getenv("WEB_SEARCH_SEARXNG_URL")),
+			WebSearchBraveKey:   os.Getenv("WEB_SEARCH_BRAVE_API_KEY"),
+			WebSearchBraveURL:   trimRightSlash(env("WEB_SEARCH_BRAVE_BASE_URL", "https://api.search.brave.com/res/v1/web/search")),
 		},
 		Observing: ObservingConfig{
 			LogLevel:                 env("LOG_LEVEL", "info"),

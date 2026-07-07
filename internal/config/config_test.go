@@ -716,6 +716,8 @@ func TestLoadWebSearchConfig(t *testing.T) {
 		"WEB_SEARCH_PROVIDER":         "serpapi",
 		"WEB_SEARCH_SERPAPI_KEY":      "serp-key",
 		"WEB_SEARCH_SERPAPI_BASE_URL": "https://serpapi.example/search.json",
+		"WEB_SEARCH_BRAVE_API_KEY":    "brave-key",
+		"WEB_SEARCH_BRAVE_BASE_URL":   "https://brave.example/res/v1/web/search",
 	})
 
 	wd, _ := os.Getwd()
@@ -733,6 +735,12 @@ func TestLoadWebSearchConfig(t *testing.T) {
 	}
 	if cfg.Tools.WebSearchSerpAPIURL != "https://serpapi.example/search.json" {
 		t.Fatalf("WebSearchSerpAPIURL = %q", cfg.Tools.WebSearchSerpAPIURL)
+	}
+	if cfg.Tools.WebSearchBraveKey != "brave-key" {
+		t.Fatalf("WebSearchBraveKey = %q", cfg.Tools.WebSearchBraveKey)
+	}
+	if cfg.Tools.WebSearchBraveURL != "https://brave.example/res/v1/web/search" {
+		t.Fatalf("WebSearchBraveURL = %q", cfg.Tools.WebSearchBraveURL)
 	}
 }
 
@@ -890,6 +898,9 @@ func resetConfigEnv(t *testing.T) {
 		"WEB_SEARCH_GOOGLE_CX",
 		"WEB_SEARCH_SERPAPI_KEY",
 		"WEB_SEARCH_SERPAPI_BASE_URL",
+		"WEB_SEARCH_SEARXNG_URL",
+		"WEB_SEARCH_BRAVE_API_KEY",
+		"WEB_SEARCH_BRAVE_BASE_URL",
 		"OBSERVABILITY_TOKEN",
 		"OBSERVABILITY_ALLOW_UNAUTHENTICATED",
 	}

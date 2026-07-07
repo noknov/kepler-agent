@@ -319,7 +319,7 @@
     "description": "Search the public web and return results with titles, URLs, and snippets. Use for current external information not available in Slack, code, or runbooks.",
     "parameters": {
       "query": "Search query.",
-      "provider": "Optional provider override. Defaults to configured WEB_SEARCH_PROVIDER.",
+      "provider": "Optional provider override: brave, duckduckgo, searxng, google_cse, or serpapi. Defaults to configured WEB_SEARCH_PROVIDER.",
       "engine": "Optional search engine.",
       "site": "Optional domain restriction.",
       "limit": "Maximum results. Defaults to 5, max 10."
