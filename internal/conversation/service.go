@@ -49,16 +49,16 @@ type Service struct {
 	RunStore      runs.Store
 	RunProvider   string
 	RunModel      string
-	ModelOverride    func(userID string) string
-	Multimodal       func(model string) bool
+	ModelOverride func(userID string) string
+	Multimodal    func(model string) bool
 	// WebSearchEnabled controls whether the web-search tool is available for
 	// a given user. When it returns false the tool is excluded from the LLM
 	// tool list for that request. When nil, search is always available.
 	WebSearchEnabled func(userID string) bool
-	CostRates     observability.CostRates
-	HealthSummary func() string
-	AutoTTS       AutoTTSFunc
-	TTSSummarizer *TTSSummarizer
+	CostRates        observability.CostRates
+	HealthSummary    func() string
+	AutoTTS          AutoTTSFunc
+	TTSSummarizer    *TTSSummarizer
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
@@ -231,7 +231,6 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	// displayedContextTokens is the estimated/current prompt length for the
 	// active request. It intentionally excludes cumulative billed usage.
 	displayedContextTokens := 0
-	priorConversationTokens := s.priorConversationBilledTokens(ctx, sessionID, runObserver)
 	appendProgress := func(chunks []map[string]any) {
 		if !useStream || progressStopped {
 			return
@@ -518,21 +517,9 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			appendTaskUpdate(agent.WaitingTitle(locale), "complete")
 			stopProgress()
 		}
-		if !useStream && (contextUsage != "" || compressed || runObserver != nil) {
+		if !useStream && contextUsage != "" {
 			var notices []string
-			if runObserver != nil {
-				billed := runObserver.BilledTokens()
-				billed += priorConversationTokens
-				run := runObserver.Run
-				noticeParts := []string{formatTokenCount(billed) + " tokens consumed"}
-				if run != nil && run.EstimatedCostUSD > 0 {
-					noticeParts = append(noticeParts, fmt.Sprintf("~$%.4f", run.EstimatedCostUSD))
-				}
-				notices = append(notices, strings.Join(noticeParts, " · "))
-			}
-			if contextUsage != "" {
-				notices = append(notices, contextUsage+" context")
-			}
+			notices = append(notices, contextUsage)
 			pendingText = appendContextNoticeText(pendingText, notices...)
 		}
 		ts, postErr := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, "<@"+req.UserID+"> "+pendingText)
@@ -565,23 +552,9 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			if s.Format != nil {
 				finalText = s.Format(finalText)
 			}
-			if !useStream && (contextUsage != "" || compressed || runObserver != nil) {
+			if !useStream && contextUsage != "" {
 				var notices []string
-				// Show cumulative billed tokens and cost (what the provider charges).
-				if runObserver != nil {
-					billed := runObserver.BilledTokens()
-					billed += priorConversationTokens
-					run := runObserver.Run
-					noticeParts := []string{formatTokenCount(billed) + " tokens consumed"}
-					if run != nil && run.EstimatedCostUSD > 0 {
-						noticeParts = append(noticeParts, fmt.Sprintf("~$%.4f", run.EstimatedCostUSD))
-					}
-					notices = append(notices, strings.Join(noticeParts, " · "))
-				}
-				// Also show context-window occupancy for compaction awareness.
-				if contextUsage != "" {
-					notices = append(notices, contextUsage+" context")
-				}
+				notices = append(notices, contextUsage)
 				finalText = appendContextNoticeText(finalText, notices...)
 			}
 			ts, postErr := s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, finalText)
@@ -635,31 +608,6 @@ func (s *Service) newRunObserver(sessionID string, req Request, startedAt time.T
 	}, s.CostRates)
 }
 
-func (s *Service) priorConversationBilledTokens(ctx context.Context, sessionID string, current *runs.Observer) int {
-	if s.RunStore == nil || sessionID == "" {
-		return 0
-	}
-	// ListBySession filters by sessionID server-side, avoiding a full scan of
-	// all run files (previously: List(ctx, 10_000) then filter in memory).
-	runsList, err := s.RunStore.ListBySession(ctx, sessionID)
-	if err != nil {
-		log.Printf("failed to list prior runs for session=%s: %v", sessionID, err)
-		return 0
-	}
-	currentID := ""
-	if current != nil && current.Run != nil {
-		currentID = current.Run.ID
-	}
-	total := 0
-	for _, run := range runsList {
-		if run.ID == currentID {
-			continue
-		}
-		total += runs.BilledTokens(run.Usage)
-	}
-	return total
-}
-
 func contextUsageMarkdown(maxContextTokens int, base, generated []llm.Message) string {
 	return contextUsageText(maxContextTokens, contextUsageTokenCount(base, generated))
 }
@@ -705,7 +653,7 @@ func contextUsageText(maxContextTokens, used int) string {
 	if percent == 0 {
 		percent = 1
 	}
-	return formatTokenCount(used) + " tokens (" + strconv.Itoa(percent) + "%)"
+	return strconv.Itoa(percent) + "% context"
 }
 
 func titleWithContext(title, contextUsage string) string {
@@ -716,12 +664,8 @@ func titleWithContext(title, contextUsage string) string {
 	return title + "    ·    " + contextUsage
 }
 
-// streamingTaskTitle builds the task-update title in the format:
-//
-//	"xx,xxx tokens · xx% context · {status}"
-//
-// where the token count and percentage describe the current request's prompt
-// length/context-window occupancy, not cumulative billed usage.
+// streamingTaskTitle builds a task-update title that shows only context-window
+// occupancy for the current request, never cumulative billed tokens.
 func streamingTaskTitle(status string, ctxTokens, maxCtxTokens int) string {
 	var parts []string
 	if ctxTokens > 0 {
@@ -733,7 +677,7 @@ func streamingTaskTitle(status string, ctxTokens, maxCtxTokens int) string {
 		if pct == 0 {
 			pct = 1
 		}
-		parts = append(parts, formatTokenCount(ctxTokens)+" tokens", strconv.Itoa(pct)+"% context")
+		parts = append(parts, strconv.Itoa(pct)+"% context")
 	}
 	if status != "" {
 		parts = append(parts, status)
@@ -785,20 +729,6 @@ func contextCompressingTitle(locale string) string {
 		return "上下文压缩中..."
 	}
 	return "Compressing context..."
-}
-
-func formatTokenCount(n int) string {
-	if n < 1000 {
-		return strconv.Itoa(n)
-	}
-	s := strconv.Itoa(n)
-	var parts []string
-	for len(s) > 3 {
-		parts = append([]string{s[len(s)-3:]}, parts...)
-		s = s[:len(s)-3]
-	}
-	parts = append([]string{s}, parts...)
-	return strings.Join(parts, ",")
 }
 
 func (s *Service) steering(active *activeRun) agent.SteeringProvider {

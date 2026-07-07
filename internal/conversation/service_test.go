@@ -13,7 +13,6 @@ import (
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/memory"
 	"github.com/wati/oncall-agent/internal/observability"
-	"github.com/wati/oncall-agent/internal/runs"
 	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/session"
 	"github.com/wati/oncall-agent/internal/slack"
@@ -160,8 +159,8 @@ func TestStreamNoticeHasBlockBoundaries(t *testing.T) {
 }
 
 func TestCompleteTitleWithContext(t *testing.T) {
-	got := completeTitleWithContext(agent.LocaleZH, "23,769 tokens (11%)")
-	want := "传输完毕    ·    23,769 tokens (11%)"
+	got := completeTitleWithContext(agent.LocaleZH, "11% context")
+	want := "传输完毕    ·    11% context"
 	if got != want {
 		t.Fatalf("completeTitleWithContext() = %q, want %q", got, want)
 	}
@@ -169,12 +168,12 @@ func TestCompleteTitleWithContext(t *testing.T) {
 
 func TestContextUsageTextHidesContextLimit(t *testing.T) {
 	got := contextUsageText(200_000, 23_769)
-	want := "23,769 tokens (11%)"
+	want := "11% context"
 	if got != want {
 		t.Fatalf("contextUsageText() = %q, want %q", got, want)
 	}
-	if strings.Contains(got, "/ 200,000") {
-		t.Fatalf("contextUsageText() exposed context limit: %q", got)
+	if strings.Contains(got, "23,769") || strings.Contains(got, "/ 200,000") {
+		t.Fatalf("contextUsageText() exposed token counts: %q", got)
 	}
 }
 
@@ -239,14 +238,14 @@ func TestStreamingTaskTitle(t *testing.T) {
 			status:       "思考中...",
 			ctxTokens:    20000,
 			maxCtxTokens: 200000,
-			want:         "20,000 tokens · 10% context · 思考中...",
+			want:         "10% context · 思考中...",
 		},
 		{
 			name:         "context only",
 			status:       "搜索中...",
 			ctxTokens:    15000,
 			maxCtxTokens: 200000,
-			want:         "15,000 tokens · 7% context · 搜索中...",
+			want:         "7% context · 搜索中...",
 		},
 		{
 			name:         "no context yet",
@@ -260,7 +259,7 @@ func TestStreamingTaskTitle(t *testing.T) {
 			status:       "完成",
 			ctxTokens:    25000,
 			maxCtxTokens: 200000,
-			want:         "25,000 tokens · 12% context · 完成",
+			want:         "12% context · 完成",
 		},
 	}
 	for _, tt := range tests {
@@ -270,52 +269,6 @@ func TestStreamingTaskTitle(t *testing.T) {
 				t.Errorf("streamingTaskTitle() = %q, want %q", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestPriorConversationBilledTokens(t *testing.T) {
-	ctx := context.Background()
-	store, err := runs.NewFileStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	current := runs.NewObserver(store, runs.Run{
-		ID:        "run-current",
-		SessionID: "C1:100.000",
-		Usage:     llm.Usage{PromptTokens: 100, CompletionTokens: 10},
-	}, observability.CostRates{})
-	for _, run := range []runs.Run{
-		{
-			ID:        "run-prior-1",
-			SessionID: "C1:100.000",
-			Usage:     llm.Usage{PromptTokens: 1000, CompletionTokens: 100},
-		},
-		{
-			ID:        "run-prior-2",
-			SessionID: "C1:100.000",
-			Usage: llm.Usage{
-				PromptTokens:             2000,
-				CacheReadInputTokens:     300,
-				CacheCreationInputTokens: 400,
-				CompletionTokens:         200,
-			},
-		},
-		{
-			ID:        "run-other-session",
-			SessionID: "C2:100.000",
-			Usage:     llm.Usage{PromptTokens: 9000, CompletionTokens: 900},
-		},
-	} {
-		if err := store.Save(ctx, run); err != nil {
-			t.Fatal(err)
-		}
-	}
-	svc := &Service{RunStore: store}
-
-	got := svc.priorConversationBilledTokens(ctx, "C1:100.000", current)
-	want := 4000
-	if got != want {
-		t.Fatalf("priorConversationBilledTokens() = %d, want %d", got, want)
 	}
 }
 

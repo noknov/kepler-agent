@@ -201,6 +201,8 @@ func registerKnowledgeTools(tools *registry.Registry, cfg config.Config) {
 		SerpAPIKey:     cfg.Tools.WebSearchSerpAPIKey,
 		SerpAPIBaseURL: cfg.Tools.WebSearchSerpAPIURL,
 		SearXNGBaseURL: cfg.Tools.WebSearchSearXNGURL,
+		BraveAPIKey:    cfg.Tools.WebSearchBraveKey,
+		BraveBaseURL:   cfg.Tools.WebSearchBraveURL,
 	}
 	tools.Register(webSearchTools.SearchTool{Client: webClient})
 	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, webSearchTools.ReadPageTool{Client: webClient}))

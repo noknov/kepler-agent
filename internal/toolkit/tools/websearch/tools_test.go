@@ -97,6 +97,33 @@ func TestSearXNGResults(t *testing.T) {
 	}
 }
 
+func TestBraveResults(t *testing.T) {
+	client := Client{
+		Provider:     ProviderBrave,
+		BraveAPIKey:  "brave-key",
+		BraveBaseURL: "https://brave.test/res/v1/web/search",
+		HTTP: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if got := req.Header.Get("X-Subscription-Token"); got != "brave-key" {
+				t.Fatalf("subscription token = %q", got)
+			}
+			if got := req.URL.Query().Get("q"); got != "oncall agent" {
+				t.Fatalf("q = %q", got)
+			}
+			if got := req.URL.Query().Get("count"); got != "3" {
+				t.Fatalf("count = %q", got)
+			}
+			return jsonResponse(`{"web":{"results":[{"title":"Result","url":"https://example.com","description":"hello brave"}]}}`), nil
+		})},
+	}
+	items, err := client.Search(context.Background(), SearchRequest{Query: "oncall agent", Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Source != "brave" || items[0].Snippet != "hello brave" {
+		t.Fatalf("items = %#v", items)
+	}
+}
+
 func TestMissingProviderConfigReturnsClearError(t *testing.T) {
 	_, err := (Client{Provider: ProviderGoogleCSE}).Search(context.Background(), SearchRequest{Query: "x", Limit: 1})
 	if err == nil || !strings.Contains(err.Error(), "WEB_SEARCH_GOOGLE_API_KEY") {

@@ -385,7 +385,7 @@ Workflow aliases can be defined in `PROMPT_DIR/runtime.json` under `github_workf
 
 | Tool | Description |
 |---|---|
-| `web-search` | Public web search (DuckDuckGo by default, or SearXNG / Google Custom Search / SerpAPI) |
+| `web-search` | Public web search (DuckDuckGo by default, or Brave / SearXNG / Google Custom Search / SerpAPI) |
 | `web-read_page` | Fetch and read a public web page |
 | `notion.search` | Search Notion pages |
 | `notion.create_page` | Create a Notion page |
@@ -406,6 +406,14 @@ For a local/self-hosted search stack, run SearXNG and point the agent at it:
 ```bash
 WEB_SEARCH_PROVIDER=searxng
 WEB_SEARCH_SEARXNG_URL=http://127.0.0.1:8097
+```
+
+For more reliable hosted JSON search without scraping HTML, configure Brave Search:
+
+```bash
+WEB_SEARCH_PROVIDER=brave
+WEB_SEARCH_BRAVE_API_KEY=...
+WEB_SEARCH_BRAVE_BASE_URL=https://api.search.brave.com/res/v1/web/search
 ```
 
 Google Custom Search and SerpAPI remain supported for deployments that already have keys:

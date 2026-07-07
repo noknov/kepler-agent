@@ -21,6 +21,7 @@ const (
 	ProviderSerpAPI    = "serpapi"
 	ProviderDuckDuckGo = "duckduckgo"
 	ProviderSearXNG    = "searxng"
+	ProviderBrave      = "brave"
 )
 
 type Client struct {
@@ -30,6 +31,8 @@ type Client struct {
 	SerpAPIKey     string
 	SerpAPIBaseURL string
 	SearXNGBaseURL string
+	BraveAPIKey    string
+	BraveBaseURL   string
 	HTTP           *http.Client
 }
 
@@ -52,7 +55,7 @@ func (t SearchTool) Spec() llm.ToolSpec {
 		"Search the public web for current information. Prefer this before web-read_page when the user needs recent facts, recommendations, admissions data, prices, policies, news, or other information beyond model memory. Return URLs in the final answer for claims based on search results.",
 		registry.ObjectSchema([]string{"query"}, map[string]any{
 			"query":    map[string]any{"type": "string", "description": "Search query. Include the current year for current or time-sensitive information."},
-			"provider": map[string]any{"type": "string", "description": "Optional provider: duckduckgo, searxng, google_cse, or serpapi."},
+			"provider": map[string]any{"type": "string", "description": "Optional provider: brave, duckduckgo, searxng, google_cse, or serpapi."},
 			"engine":   map[string]any{"type": "string", "description": "Optional provider-specific engine, such as baidu for serpapi."},
 			"site":     map[string]any{"type": "string", "description": "Optional domain filter. Example: hbea.edu.cn"},
 			"limit":    map[string]any{"type": "integer", "description": "Maximum results to return, default 5 and max 10."},
@@ -169,6 +172,8 @@ func (c Client) Search(ctx context.Context, req SearchRequest) ([]ResultItem, er
 		return c.searchDuckDuckGo(ctx, req)
 	case ProviderSearXNG:
 		return c.searchSearXNG(ctx, req)
+	case ProviderBrave:
+		return c.searchBrave(ctx, req)
 	default:
 		return nil, fmt.Errorf("unsupported web search provider %q", provider)
 	}
@@ -331,6 +336,60 @@ func (c Client) searchSearXNG(ctx context.Context, req SearchRequest) ([]ResultI
 			URL:     item.URL,
 			Snippet: cleanWhitespace(html.UnescapeString(item.Content)),
 			Source:  "searxng",
+		})
+	}
+	return limitItems(items, req.Limit), nil
+}
+
+func (c Client) searchBrave(ctx context.Context, req SearchRequest) ([]ResultItem, error) {
+	if strings.TrimSpace(c.BraveAPIKey) == "" {
+		return nil, fmt.Errorf("Brave web search is not configured: WEB_SEARCH_BRAVE_API_KEY is required")
+	}
+	values := url.Values{}
+	values.Set("q", req.Query)
+	values.Set("count", fmt.Sprintf("%d", req.Limit))
+	endpoint := strings.TrimSpace(c.BraveBaseURL)
+	if endpoint == "" {
+		endpoint = "https://api.search.brave.com/res/v1/web/search"
+	}
+	endpoint = strings.TrimRight(endpoint, "/") + "?" + values.Encode()
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("X-Subscription-Token", c.BraveAPIKey)
+	resp, err := c.httpClient().Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("brave search status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	var parsed struct {
+		Web struct {
+			Results []struct {
+				Title       string `json:"title"`
+				URL         string `json:"url"`
+				Description string `json:"description"`
+			} `json:"results"`
+		} `json:"web"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return nil, err
+	}
+	items := make([]ResultItem, 0, len(parsed.Web.Results))
+	for _, item := range parsed.Web.Results {
+		items = append(items, ResultItem{
+			Title:   cleanWhitespace(html.UnescapeString(item.Title)),
+			URL:     item.URL,
+			Snippet: cleanWhitespace(html.UnescapeString(item.Description)),
+			Source:  "brave",
 		})
 	}
 	return limitItems(items, req.Limit), nil
