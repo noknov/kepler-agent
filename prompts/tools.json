@@ -326,7 +326,7 @@
     }
   },
   "web-read_page": {
-    "description": "Read a public web page and return extracted title, URL, and readable text. Use when the user provides a URL or after web-search returns a promising result.",
+    "description": "Read a public web page and return extracted title, URL, and readable text. Use when the user provides a URL, after web-search returns a promising result, or when you already know a stable source URL and search failed or is unnecessary.",
     "parameters": {
       "url": "Absolute http or https URL to read.",
       "max_chars": "Maximum extracted text characters. Defaults to 12000, max 50000."

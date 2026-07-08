@@ -2,10 +2,13 @@ package websearch
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
 func TestGoogleCSEResults(t *testing.T) {
@@ -121,6 +124,35 @@ func TestBraveResults(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].Source != "brave" || items[0].Snippet != "hello brave" {
 		t.Fatalf("items = %#v", items)
+	}
+}
+
+func TestSearchToolFailureGuidesDirectPageRead(t *testing.T) {
+	client := Client{
+		Provider:       ProviderSearXNG,
+		SearXNGBaseURL: "http://searxng.test",
+		HTTP: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Host != "searxng.test" {
+				t.Fatalf("unexpected host = %q", req.URL.Host)
+			}
+			return &http.Response{
+				StatusCode: http.StatusBadGateway,
+				Body:       io.NopCloser(strings.NewReader("down")),
+			}, nil
+		})},
+	}
+	result, err := (SearchTool{Client: client}).Execute(
+		context.Background(),
+		json.RawMessage(`{"query":"深圳天气","limit":3}`),
+		registry.Runtime{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Web search provider failed", "web-read_page", "https://wttr.in/{city}?format=3", "深圳天气"} {
+		if !strings.Contains(result.Content, want) {
+			t.Fatalf("result content missing %q: %s", want, result.Content)
+		}
 	}
 }
 
