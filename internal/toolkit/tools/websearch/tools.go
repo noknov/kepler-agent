@@ -72,7 +72,7 @@ func (ReadPageTool) Parallel() bool { return true }
 func (t ReadPageTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"web-read_page",
-		"Read a public URL and extract readable text. Use after web-search returns a promising result, or when the user provides a URL. Search result pages are weak evidence; prefer reading the actual source pages.",
+		"Read a public URL and extract readable text. Use after web-search returns a promising result, when the user provides a URL, or when you already know a stable source URL and search failed or is unnecessary. Search result pages are weak evidence; prefer reading the actual source pages.",
 		registry.ObjectSchema([]string{"url"}, map[string]any{
 			"url":       map[string]any{"type": "string", "description": "HTTP or HTTPS URL to read."},
 			"max_chars": map[string]any{"type": "integer", "description": "Maximum extracted characters, default 12000 and max 50000."},
@@ -134,7 +134,7 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, _ registry
 		Limit:    limit,
 	})
 	if err != nil {
-		return registry.Result{}, err
+		return registry.Result{Content: searchFailureGuidance(query, err)}, nil
 	}
 	if len(items) == 0 {
 		return registry.Result{Content: "no web results"}, nil
@@ -177,6 +177,21 @@ func (c Client) Search(ctx context.Context, req SearchRequest) ([]ResultItem, er
 	default:
 		return nil, fmt.Errorf("unsupported web search provider %q", provider)
 	}
+}
+
+func searchFailureGuidance(query string, err error) string {
+	var b strings.Builder
+	b.WriteString("Web search provider failed: ")
+	b.WriteString(err.Error())
+	b.WriteString("\n\n")
+	b.WriteString("Search failure does not mean direct web reading is unavailable. If the answer can be obtained from a known stable source URL, call web-read_page directly instead of telling the user that live information is unavailable.")
+	b.WriteString("\n\n")
+	b.WriteString("For weather/current-condition questions, direct text pages such as https://wttr.in/{city}?format=3 are readable without search; replace {city} with the requested city name, then answer from the page content.")
+	if strings.TrimSpace(query) != "" {
+		b.WriteString("\n\nOriginal query: ")
+		b.WriteString(query)
+	}
+	return b.String()
 }
 
 func (c Client) ReadPage(ctx context.Context, pageURL string, maxChars int) (Page, error) {
