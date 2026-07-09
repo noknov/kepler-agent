@@ -768,6 +768,11 @@ function createAssistantRow() {
 }
 
 function setStatus(title, inProgress) {
+  title = (title || '').trim();
+  if (!title) {
+    if (currentStatusEl) currentStatusEl.style.display = 'none';
+    return;
+  }
   const row = ensureAssistantRow();
   if (!currentStatusEl) {
     const pill = document.createElement('div'); pill.className = 'status-pill';

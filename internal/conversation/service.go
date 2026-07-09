@@ -616,12 +616,14 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if runObserver != nil {
 			runObserver.Finish("completed", "", nil, finalText)
 		}
-		// Mark the progress stream as complete when the answer stayed on it.
-		if !progressStopped {
+		answerStreamOK := result.Streamed && answerStream != nil && !answerStream.Failed() && answerStream.TS() != ""
+		// In native Slack status mode, keep the status visible until the
+		// answer stream is finalized so the UI does not briefly show an empty
+		// handoff between thinking and output.
+		if !progressStopped && !(useNativeStatus && answerStreamOK) {
 			appendTaskUpdate(agent.CompleteTitle(locale), "complete")
 			stopProgress()
 		}
-		answerStreamOK := result.Streamed && answerStream != nil && !answerStream.Failed() && answerStream.TS() != ""
 		if answerStreamOK {
 			_ = s.Messenger.StopStream(ctx, req.Channel, answerStream.TS())
 			if runObserver != nil {

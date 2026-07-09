@@ -385,6 +385,40 @@ func TestFindMainTabIndex(t *testing.T) {
 	}
 }
 
+func TestDetectCrossDomainRedirectAllowsRequestedAuthAutomation(t *testing.T) {
+	got := detectCrossDomainRedirect(
+		"https://app.example.com/login",
+		"https://auth.example.com/login/start",
+	)
+	if got == "" {
+		t.Fatal("expected cross-domain redirect warning")
+	}
+	for _, want := range []string{
+		"redirected to a different host",
+		"user asked you to log in",
+		"credentials or a reusable session are available",
+		"inspect the page with pw-snapshot",
+		"continue with any visible login fields",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("warning %q does not contain %q", got, want)
+		}
+	}
+	if strings.Contains(got, "cannot complete it automatically") {
+		t.Fatalf("warning should not tell the agent to abandon auth automation: %q", got)
+	}
+}
+
+func TestDetectCrossDomainRedirectIgnoresAboutBlank(t *testing.T) {
+	got := detectCrossDomainRedirect(
+		"https://app.example.com/login",
+		"about:blank",
+	)
+	if got != "" {
+		t.Fatalf("about:blank is handled by page stabilization, got warning: %q", got)
+	}
+}
+
 func TestNavigateTool_Normal(t *testing.T) {
 	handlers := map[string]string{
 		"browser_navigate": `navigated to https://example.com`,

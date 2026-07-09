@@ -79,7 +79,7 @@ func summarizePrompt(names, sampleArgs, locale string) string {
 	sampleArgs = sanitizeArgs(sampleArgs)
 	if locale == LocaleZH {
 		return fmt.Sprintf(
-			"用不超过20个字写一条操作状态，需包含具体对象（如服务名、文件名、页面标题等从参数中提取的关键信息）。"+
+			"用不超过20个字写一条操作状态，说清正在做什么和针对什么（从参数提取服务名、文件名、页面等具体对象）。"+
 				"格式像进程日志（例：读取告警处理文档、查询 payment 服务日志、搜索最近部署记录）。"+
 				"只输出动作本身，不加标点，不加主语。"+
 				"禁止输出工具名、函数名、API 路径、内部标识符（如带 -、_、. 的技术名称），用通俗描述代替。\n"+
@@ -88,7 +88,7 @@ func summarizePrompt(names, sampleArgs, locale string) string {
 		)
 	}
 	return fmt.Sprintf(
-		"Write a ≤20-word operation status that includes the specific target (e.g. service name, file name, page title extracted from args). "+
+		"Write a ≤20-word operation status that explains what is happening and the specific target (service, file, page, etc. from args). "+
 			"Format like a process log (e.g. \"Reading alert runbook\", \"Fetching payment service logs\", \"Searching recent deploys\"). "+
 			"Output only the action, no punctuation, no subject. "+
 			"Never include tool names, function names, API paths, or internal identifiers (names with -, _, .) in the output; use plain descriptions instead.\n"+

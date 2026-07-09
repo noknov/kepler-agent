@@ -17,9 +17,9 @@ type nativeThreadStatus struct {
 	locale    string
 	onError   func(error)
 
-	mu                   sync.Mutex
-	lastLoadingMessage   string
-	lastLoadingMessageAt time.Time
+	mu                 sync.Mutex
+	lastLoadingMessage string
+	lastSentAt         time.Time
 }
 
 func newNativeThreadStatus(ctx context.Context, messenger ThreadStatusMessenger, channel, threadTS, locale string, onError func(error)) *nativeThreadStatus {
@@ -46,36 +46,38 @@ func (n *nativeThreadStatus) updateStatic() {
 		return
 	}
 	n.mu.Lock()
-	loadingMessage := n.lastLoadingMessage
+	msg := n.lastLoadingMessage
 	n.mu.Unlock()
-	if loadingMessage != "" {
-		go n.send([]string{loadingMessage})
-		return
-	}
-	go n.send(nil)
+	n.publish(msg)
 }
 
 func (n *nativeThreadStatus) updateLoadingMessage(title string) {
 	if n == nil || n.messenger == nil {
 		return
 	}
-	loadingMessage := assistantLoadingMessageText(title, n.locale)
-	if loadingMessage == "" {
-		return
+	if msg := assistantLoadingMessageText(title); msg != "" {
+		n.publish(msg)
 	}
+}
+
+// publish rate-limits repeated identical messages; new content sends immediately.
+func (n *nativeThreadStatus) publish(message string) {
 	n.mu.Lock()
-	if loadingMessage == n.lastLoadingMessage && time.Since(n.lastLoadingMessageAt) < 5*time.Second {
+	if message == n.lastLoadingMessage && time.Since(n.lastSentAt) < 2*time.Second {
 		n.mu.Unlock()
 		return
 	}
-	if time.Since(n.lastLoadingMessageAt) < 500*time.Millisecond {
-		n.mu.Unlock()
-		return
+	if message != "" {
+		n.lastLoadingMessage = message
 	}
-	n.lastLoadingMessage = loadingMessage
-	n.lastLoadingMessageAt = time.Now()
+	n.lastSentAt = time.Now()
 	n.mu.Unlock()
-	go n.send([]string{loadingMessage})
+
+	if message != "" {
+		go n.send([]string{message})
+		return
+	}
+	go n.send(nil)
 }
 
 func (n *nativeThreadStatus) keepAlive() {
@@ -91,22 +93,19 @@ func (n *nativeThreadStatus) keepAlive() {
 		case <-ticker.C:
 			n.mu.Lock()
 			loadingMessage := n.lastLoadingMessage
-			elapsed := time.Since(n.lastLoadingMessageAt)
-			if loadingMessage != "" && elapsed >= 90*time.Second {
-				n.lastLoadingMessageAt = time.Now()
-			}
+			stale := loadingMessage != "" && time.Since(n.lastSentAt) >= 90*time.Second
 			n.mu.Unlock()
-			if loadingMessage != "" && elapsed >= 90*time.Second {
-				n.send([]string{loadingMessage})
+			if stale {
+				n.publish(loadingMessage)
 			}
 		}
 	}
 }
 
 func (n *nativeThreadStatus) send(loadingMessages []string) {
-	staticStatus := "Thinking"
+	staticStatus := "is thinking"
 	if n.locale == agent.LocaleZH {
-		staticStatus = "思考中"
+		staticStatus = "正在思考"
 	}
 	ctx, cancel := context.WithTimeout(n.ctx, 3*time.Second)
 	defer cancel()
@@ -115,37 +114,12 @@ func (n *nativeThreadStatus) send(loadingMessages []string) {
 	}
 }
 
-func assistantLoadingMessageText(title, locale string) string {
+func assistantLoadingMessageText(title string) string {
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return ""
 	}
-	title = stripContextPrefix(title)
-	if title == "" {
-		return ""
-	}
-	if locale == agent.LocaleZH {
-		if strings.HasPrefix(title, "正在") ||
-			strings.HasSuffix(title, "中") ||
-			strings.HasSuffix(title, "中...") ||
-			strings.HasSuffix(title, "中…") ||
-			strings.Contains(title, "等待") ||
-			strings.Contains(title, "已") {
-			return title
-		}
-		return "正在" + title
-	}
-	lower := strings.ToLower(title)
-	if strings.HasPrefix(lower, "is ") ||
-		strings.HasPrefix(lower, "are ") ||
-		strings.HasPrefix(lower, "has ") ||
-		strings.HasPrefix(lower, "waiting") {
-		return title
-	}
-	if strings.HasSuffix(lower, "ing") || strings.Contains(lower, "ing ") {
-		return "is " + lowerFirstASCII(title)
-	}
-	return "is " + lowerFirstASCII(title)
+	return stripContextPrefix(title)
 }
 
 func stripContextPrefix(title string) string {
@@ -164,15 +138,4 @@ func stripContextPrefix(title string) string {
 		}
 	}
 	return strings.TrimSpace(title)
-}
-
-func lowerFirstASCII(s string) string {
-	if s == "" {
-		return s
-	}
-	b := []byte(s)
-	if b[0] >= 'A' && b[0] <= 'Z' {
-		b[0] += 'a' - 'A'
-	}
-	return string(b)
 }
