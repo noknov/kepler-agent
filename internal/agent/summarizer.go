@@ -38,7 +38,7 @@ func (s *StatusSummarizer) Summarize(ctx context.Context, names, sampleArgs, loc
 		resp, err := s.Client.Chat(sctx, llm.Request{
 			Model:     s.Model,
 			Messages:  []llm.Message{{Role: "user", Content: summarizePrompt(names, sampleArgs, locale)}},
-			MaxTokens: 48,
+			MaxTokens: 64,
 		})
 		if err != nil {
 			return
@@ -62,16 +62,16 @@ func summarizePrompt(names, sampleArgs, locale string) string {
 	sampleArgs = sanitizeArgs(sampleArgs)
 	if locale == LocaleZH {
 		return fmt.Sprintf(
-			"用不超过15个字写一条操作状态，需包含具体对象（如服务名、文件名、页面标题等从参数中提取的关键信息）。"+
-				"格式像进程日志（例：读取告警处理文档、查询 payment 服务日志、搜索最近部署记录）。"+
-				"只输出动作本身，不加标点，不加主语。"+
-				"禁止输出工具名、函数名、API 路径、内部标识符（如带 -、_、. 的技术名称），用通俗描述代替。\n"+
+		"用不超过20个字写一条操作状态，需包含具体对象（如服务名、文件名、页面标题等从参数中提取的关键信息）。"+
+			"格式像进程日志（例：读取告警处理文档、查询 payment 服务日志、搜索最近部署记录）。"+
+			"只输出动作本身，不加标点，不加主语。"+
+			"禁止输出工具名、函数名、API 路径、内部标识符（如带 -、_、. 的技术名称），用通俗描述代替。\n"+
 				"工具：%s\n参数：%s",
 			names, sampleArgs,
 		)
 	}
 	return fmt.Sprintf(
-		"Write a ≤15-word operation status that includes the specific target (e.g. service name, file name, page title extracted from args). "+
+		"Write a ≤20-word operation status that includes the specific target (e.g. service name, file name, page title extracted from args). "+
 			"Format like a process log (e.g. \"Reading alert runbook\", \"Fetching payment service logs\", \"Searching recent deploys\"). "+
 			"Output only the action, no punctuation, no subject. "+
 			"Never include tool names, function names, API paths, or internal identifiers (names with -, _, .) in the output; use plain descriptions instead.\n"+

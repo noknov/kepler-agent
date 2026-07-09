@@ -249,8 +249,20 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	// displayedContextTokens is the estimated/current prompt length for the
 	// active request. It intentionally excludes cumulative billed usage.
 	displayedContextTokens := 0
+	var nativeStatusMu sync.Mutex
 	lastNativeStatus := ""
 	lastNativeStatusAt := time.Time{}
+	sendNativeStatus := func(status string) {
+		staticStatus := "Thinking"
+		if locale == agent.LocaleZH {
+			staticStatus = "思考中"
+		}
+		ctx, cancel := context.WithTimeout(runCtx, 3*time.Second)
+		defer cancel()
+		if err := statusMessenger.SetThreadStatus(ctx, req.Channel, req.ThreadTS, staticStatus, []string{status}); err != nil {
+			s.recordDeliveryError(req, "", err)
+		}
+	}
 	setNativeStatus := func(title string) {
 		if !useNativeStatus || statusMessenger == nil {
 			return
@@ -259,25 +271,45 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if status == "" {
 			return
 		}
+		nativeStatusMu.Lock()
 		if status == lastNativeStatus && time.Since(lastNativeStatusAt) < 5*time.Second {
+			nativeStatusMu.Unlock()
 			return
 		}
 		if time.Since(lastNativeStatusAt) < 500*time.Millisecond {
+			nativeStatusMu.Unlock()
 			return
 		}
 		lastNativeStatus = status
 		lastNativeStatusAt = time.Now()
-		go func(status string) {
-			ctx, cancel := context.WithTimeout(runCtx, 3*time.Second)
-			defer cancel()
-			staticStatus := "Thinking"
-			if locale == agent.LocaleZH {
-				staticStatus = "思考中"
+		nativeStatusMu.Unlock()
+		go sendNativeStatus(status)
+	}
+	// Keep-alive: Slack clears setStatus after 2 minutes with no activity.
+	// Re-send the last known status every 90 seconds to prevent expiry during
+	// long-running tool calls.
+	if useNativeStatus && statusMessenger != nil {
+		go func() {
+			ticker := time.NewTicker(90 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-runCtx.Done():
+					return
+				case <-ticker.C:
+					nativeStatusMu.Lock()
+					status := lastNativeStatus
+					elapsed := time.Since(lastNativeStatusAt)
+					if status != "" && elapsed >= 90*time.Second {
+						lastNativeStatusAt = time.Now()
+					}
+					nativeStatusMu.Unlock()
+					if status != "" && elapsed >= 90*time.Second {
+						sendNativeStatus(status)
+					}
+				}
 			}
-			if err := statusMessenger.SetThreadStatus(ctx, req.Channel, req.ThreadTS, staticStatus, []string{status}); err != nil {
-				s.recordDeliveryError(req, "", err)
-			}
-		}(status)
+		}()
 	}
 	appendProgress := func(chunks []map[string]any) {
 		if useNativeStatus {
