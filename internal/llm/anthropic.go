@@ -40,6 +40,7 @@ func (c *AnthropicClient) Chat(ctx context.Context, req Request) (Response, erro
 		Tools:       anthropicToolsCached(req.Tools),
 		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,
+		Thinking:    anthropicThinkingParam(req.Thinking),
 	}
 	if len(body.Tools) == 0 {
 		body.Tools = nil
@@ -109,6 +110,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,
 		Stream:      true,
+		Thinking:    anthropicThinkingParam(req.Thinking),
 	}
 	if len(body.Tools) == 0 {
 		body.Tools = nil
@@ -341,14 +343,19 @@ func (c *AnthropicClient) doOnce(ctx context.Context, payload []byte) ([]byte, e
 }
 
 type anthropicRequest struct {
-	Model       string             `json:"model"`
-	System      any                `json:"system,omitempty"`
-	Messages    []anthropicMessage `json:"messages"`
-	Tools       []anthropicTool    `json:"tools,omitempty"`
-	ToolChoice  any                `json:"tool_choice,omitempty"`
-	MaxTokens   int                `json:"max_tokens"`
-	Temperature float64            `json:"temperature,omitempty"`
-	Stream      bool               `json:"stream,omitempty"`
+	Model       string              `json:"model"`
+	System      any                 `json:"system,omitempty"`
+	Messages    []anthropicMessage  `json:"messages"`
+	Tools       []anthropicTool     `json:"tools,omitempty"`
+	ToolChoice  any                 `json:"tool_choice,omitempty"`
+	MaxTokens   int                 `json:"max_tokens"`
+	Temperature float64             `json:"temperature,omitempty"`
+	Stream      bool                `json:"stream,omitempty"`
+	Thinking    *anthropicThinking  `json:"thinking,omitempty"`
+}
+
+type anthropicThinking struct {
+	Type string `json:"type"`
 }
 
 type anthropicMessage struct {
@@ -627,6 +634,16 @@ func anthropicMessagesURL(baseURL string) string {
 		return baseURL + "/messages"
 	}
 	return baseURL + "/v1/messages"
+}
+
+// anthropicThinkingParam converts the Request.Thinking hint into the Anthropic
+// API thinking object. Only "disabled" is handled explicitly; other values
+// (empty string, "enabled") are left to the model/server default.
+func anthropicThinkingParam(thinking string) *anthropicThinking {
+	if strings.ToLower(strings.TrimSpace(thinking)) == "disabled" {
+		return &anthropicThinking{Type: "disabled"}
+	}
+	return nil
 }
 
 func setAnthropicAuthHeaders(header http.Header, token, flavor string) {

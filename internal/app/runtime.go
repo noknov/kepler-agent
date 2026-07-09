@@ -48,10 +48,12 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *obs
 		if summaryClient == nil {
 			summaryClient, summaryModel = llmClient, cfg.LLM.Model
 		}
+		// 10s timeout: primary model requests can take 3-8s under load;
+		// 5s was too tight and caused near-constant silent timeouts.
 		statusSummarizer = &agent.StatusSummarizer{
 			Client:  summaryClient,
 			Model:   summaryModel,
-			Timeout: 5 * time.Second,
+			Timeout: 10 * time.Second,
 		}
 	}
 

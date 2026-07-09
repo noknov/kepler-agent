@@ -594,7 +594,7 @@ func providerThinking(provider string) string {
 func providerMaxTokens(provider string) int {
 	switch provider {
 	case "mimo":
-		return envIntAliases(20000, "MIMO_MAX_TOKENS")
+		return envIntAliases(131072, "MIMO_MAX_TOKENS")
 	case "anthropic":
 		return envIntAliases(20000, "ANTHROPIC_MAX_TOKENS", "CLAUDE_CODE_MAX_OUTPUT_TOKENS")
 	case "kimi", "moonshot":
