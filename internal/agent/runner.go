@@ -40,6 +40,13 @@ const (
 	// identical call. Successful duplicate calls are legitimate for rereads,
 	// polling, or state checks, so only failures count.
 	maxIdenticalFailedCallAttempts = 3
+
+	// maxIdenticalSuccessCallAttempts is the number of times the same
+	// successful tool call (same name + args) may repeat before the circuit
+	// breaker injects a warning. A subsequent identical call is blocked. This
+	// catches loops where the model navigates to the same URL, re-reads the same
+	// file, or polls the same endpoint repeatedly without making progress.
+	maxIdenticalSuccessCallAttempts = 5
 )
 
 type Observer interface {
@@ -164,12 +171,21 @@ type loopState struct {
 	// launched for the current tool-call turn.
 	toolStatusStarted bool
 
+	// lastStatusSummaryAt throttles secondary-model status summaries.
+	lastStatusSummaryAt time.Time
+
 	// clarificationErrors tracks persistent tool failures that require user input.
 	clarificationErrors *clarificationErrorTracker
 
 	// identicalCallFailures is the circuit breaker for identical failed tool
 	// calls. Keyed by "toolName::sha256(args)" → consecutive failure count.
 	identicalCallFailures map[string]int
+
+	// identicalCallSuccesses tracks how many times each identical tool call
+	// has succeeded consecutively. Used to detect progress-less loops where
+	// the model keeps calling the same tool with the same args successfully
+	// (e.g. navigating to the same URL repeatedly) without advancing.
+	identicalCallSuccesses map[string]int
 
 	// per-step streaming components; reset each iteration by callLLM.
 	streamRouter *streamRouter
@@ -746,6 +762,9 @@ func (r Runner) startToolStatus(ctx context.Context, calls []llm.ToolCall, s *lo
 	if r.StatusSummarizer == nil || s == nil || s.toolStatusStarted || len(calls) == 0 {
 		return
 	}
+	if time.Since(s.lastStatusSummaryAt) < 3*time.Second {
+		return
+	}
 	names := make([]string, 0, len(calls))
 	sampleArgs := ""
 	for _, call := range calls {
@@ -761,6 +780,7 @@ func (r Runner) startToolStatus(ctx context.Context, calls []llm.ToolCall, s *lo
 		return
 	}
 	s.toolStatusStarted = true
+	s.lastStatusSummaryAt = time.Now()
 	update := r.StatusUpdate
 	if r.LoadingMessageUpdate != nil {
 		update = r.LoadingMessageUpdate
@@ -802,10 +822,13 @@ func (r Runner) runToolCalls(ctx context.Context, calls []llm.ToolCall, s *loopS
 	s.streamExec = nil
 
 	// Circuit breaker: short-circuit calls that have repeatedly failed with
-	// the same arguments. Successful repeated calls remain allowed; they are
-	// common for rereads, polling, and state checks.
+	// the same arguments, or that have succeeded too many times without any
+	// observable change (e.g. navigating to the same URL in a loop).
 	if s.identicalCallFailures == nil {
 		s.identicalCallFailures = make(map[string]int)
+	}
+	if s.identicalCallSuccesses == nil {
+		s.identicalCallSuccesses = make(map[string]int)
 	}
 	toExecute := make([]llm.ToolCall, 0, len(calls))
 	toExecuteIdx := make([]int, 0, len(calls))
@@ -829,6 +852,22 @@ func (r Runner) runToolCalls(ctx context.Context, calls []llm.ToolCall, s *loopS
 				args: json.RawMessage(call.Function.Arguments),
 				err:  blocker,
 			}
+		} else if s.identicalCallSuccesses[key] > maxIdenticalSuccessCallAttempts {
+			blocker := fmt.Errorf("identical successful call blocked: this exact %s call has already succeeded %d consecutive times",
+				call.Function.Name, s.identicalCallSuccesses[key])
+			results[i] = toolResult{
+				message: llm.Message{
+					Role:       "tool",
+					ToolCallID: call.ID,
+					Name:       call.Function.Name,
+					Content: fmt.Sprintf("[tool error] This exact call already succeeded %d consecutive times with identical arguments. "+
+						"Do not run it again. You MUST answer now from the information already gathered, or choose a materially different tool/arguments if more evidence is truly necessary.",
+						s.identicalCallSuccesses[key]),
+				},
+				name: call.Function.Name,
+				args: json.RawMessage(call.Function.Arguments),
+				err:  blocker,
+			}
 		} else {
 			toExecute = append(toExecute, call)
 			toExecuteIdx = append(toExecuteIdx, i)
@@ -839,13 +878,25 @@ func (r Runner) runToolCalls(ctx context.Context, calls []llm.ToolCall, s *loopS
 		executed := r.executeToolCalls(ctx, toExecute, req)
 		for j, res := range executed {
 			idx := toExecuteIdx[j]
-			results[idx] = res
 			key := identicalCallKey(toExecute[j])
 			if res.err != nil {
 				s.identicalCallFailures[key]++
+				delete(s.identicalCallSuccesses, key)
 			} else {
 				delete(s.identicalCallFailures, key)
+				s.identicalCallSuccesses[key]++
+				// Inject one warning into the result when the same successful
+				// call has been repeated too many times. A subsequent identical
+				// call is blocked before execution above.
+				if n := s.identicalCallSuccesses[key]; n == maxIdenticalSuccessCallAttempts+1 {
+					warning := fmt.Sprintf("\n\n[agent warning] This exact %s call has now succeeded %d times with identical arguments. "+
+						"You appear to be stuck in a loop. You MUST change your approach: try different parameters, use a different tool, "+
+						"or synthesize an answer from what you have already gathered.",
+						toExecute[j].Function.Name, n)
+					res.message.Content += warning
+				}
 			}
+			results[idx] = res
 		}
 	}
 	return results

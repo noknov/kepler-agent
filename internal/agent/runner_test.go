@@ -269,6 +269,50 @@ func TestRunnerExecutesRepeatedToolCalls(t *testing.T) {
 	}
 }
 
+func TestRunnerBlocksRepeatedIdenticalSuccessesAfterWarning(t *testing.T) {
+	responses := make([]llm.Response, 0, 9)
+	for i := 1; i <= 8; i++ {
+		responses = append(responses, llm.Response{
+			Message: toolCallMessage(fmt.Sprintf("tool_%d", i), `{"text":"same"}`),
+		})
+	}
+	responses = append(responses, llm.Response{Message: llm.Message{Role: "assistant", Content: "final"}})
+	client := &fakeClient{responses: responses}
+	tools := registry.New()
+	counting := &countingEchoTool{}
+	tools.Register(counting)
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 10}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "final" {
+		t.Fatalf("Final = %q, want final", result.Final)
+	}
+	if counting.calls != maxIdenticalSuccessCallAttempts+1 {
+		t.Fatalf("tool executed %d times, want %d", counting.calls, maxIdenticalSuccessCallAttempts+1)
+	}
+	warnings := 0
+	blocked := 0
+	for _, msg := range result.Generated {
+		if msg.Role != "tool" {
+			continue
+		}
+		if strings.Contains(msg.Content, "[agent warning]") {
+			warnings++
+		}
+		if strings.Contains(msg.Content, "already succeeded 6 consecutive times") {
+			blocked++
+		}
+	}
+	if warnings != 1 {
+		t.Fatalf("warnings = %d, want 1; generated=%#v", warnings, result.Generated)
+	}
+	if blocked != 2 {
+		t.Fatalf("blocked repeated successes = %d, want 2; generated=%#v", blocked, result.Generated)
+	}
+}
+
 func TestRunnerBlocksRepeatedIdenticalFailuresOnly(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{
 		{Message: repoMissToolCallMessage("tool_1", `{"path":"missing"}`)},
@@ -1903,6 +1947,21 @@ func (fakeTool) Spec() llm.ToolSpec {
 }
 
 func (fakeTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	return registry.Result{Content: string(args)}, nil
+}
+
+type countingEchoTool struct {
+	calls int
+}
+
+func (t *countingEchoTool) Parallel() bool { return true }
+
+func (t *countingEchoTool) Spec() llm.ToolSpec {
+	return fakeTool{}.Spec()
+}
+
+func (t *countingEchoTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	t.calls++
 	return registry.Result{Content: string(args)}, nil
 }
 

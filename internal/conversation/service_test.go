@@ -1009,7 +1009,7 @@ func TestNativeThreadStatusSuppressesProgressTaskCards(t *testing.T) {
 	}
 	<-done
 	for _, call := range messenger.Calls() {
-		if call.status != "" && call.status != "Thinking" && call.status != "思考中" {
+		if call.status != "" && call.status != "is thinking" && call.status != "正在思考" {
 			t.Fatalf("status should be static thinking text, got: %q", call.status)
 		}
 		for _, msg := range call.loadingMessages {
@@ -1028,6 +1028,9 @@ func TestNativeThreadStatusSuppressesProgressTaskCards(t *testing.T) {
 	}
 	if !chunksContainText(chunksOnStream(messenger.appends, "answer.000"), "hello world") {
 		t.Fatalf("answer stream did not receive final markdown text: %#v", messenger.appends)
+	}
+	if messenger.emptyStatusBeforeStop("answer.000") {
+		t.Fatalf("native status was cleared before answer stream stopped: %#v", messenger.Events())
 	}
 }
 
@@ -1501,6 +1504,7 @@ type nativeStatusMessenger struct {
 	statuses        []string
 	loadingMessages []string
 	calls           []nativeStatusCall
+	events          []string
 }
 
 type nativeStatusCall struct {
@@ -1517,6 +1521,7 @@ func (m *nativeStatusMessenger) SetThreadStatus(_ context.Context, _, _, status 
 		status:          status,
 		loadingMessages: append([]string(nil), loadingMessages...),
 	})
+	m.events = append(m.events, "status:"+status)
 	if m.statusCh != nil {
 		select {
 		case m.statusCh <- status:
@@ -1524,6 +1529,32 @@ func (m *nativeStatusMessenger) SetThreadStatus(_ context.Context, _, _, status 
 		}
 	}
 	return nil
+}
+
+func (m *nativeStatusMessenger) StopStream(ctx context.Context, channel, ts string) error {
+	m.mu.Lock()
+	m.events = append(m.events, "stop:"+ts)
+	m.mu.Unlock()
+	return m.fakeMessenger.StopStream(ctx, channel, ts)
+}
+
+func (m *nativeStatusMessenger) Events() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.events...)
+}
+
+func (m *nativeStatusMessenger) emptyStatusBeforeStop(ts string) bool {
+	events := m.Events()
+	for _, event := range events {
+		if event == "stop:"+ts {
+			return false
+		}
+		if event == "status:" {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *nativeStatusMessenger) Calls() []nativeStatusCall {

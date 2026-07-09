@@ -95,6 +95,11 @@ func (t MCPTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.R
 const snapshotPathNotice = "Note: .playwright-mcp/* paths are internal to the browser container and cannot be read with code-read_file or other workspace file tools. Use element refs from this output (e.g. ref=s1e4) directly with pw-click, pw-type, or pw-fill_form."
 const pageStateCacheKeyPrefix = "pw-page-state-"
 
+// lastNavigatedURLCacheKey stores the URL most recently passed to pw-navigate.
+// SnapshotTool reads this to perform a cross-domain redirect check that is
+// independent of any site-specific URL patterns.
+const lastNavigatedURLCacheKey = "pw-last-navigated-url"
+
 type pageState struct {
 	Stable bool
 	Href   string
@@ -300,6 +305,12 @@ func (t NavigateTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 		_ = json.Unmarshal(urlRaw, &requestedURL)
 	}
 
+	// Cache the requested URL so SnapshotTool can later detect cross-domain
+	// redirects without relying on site-specific URL patterns.
+	if rt.Cache != nil && requestedURL != "" {
+		rt.Cache.Set(lastNavigatedURLCacheKey, requestedURL)
+	}
+
 	// Prefer networkidle so Playwright waits at the browser-protocol level
 	// until the network goes quiet, catching client-side redirects and SPA
 	// auth flows that fire after the initial load event.
@@ -356,7 +367,8 @@ func isNavigationTimeout(err error) bool {
 // detectCrossDomainRedirect returns a warning when the page ended up on a
 // different hostname than the one that was requested. This is a generic signal
 // that the server redirected the browser — commonly to a login / auth page —
-// without any need to enumerate specific provider URLs.
+// without any need to enumerate specific provider URLs. Auth redirects are not
+// automatically fatal: many apps expect automation to continue on the auth host.
 func detectCrossDomainRedirect(requestedURL, currentHref string) string {
 	if requestedURL == "" || currentHref == "" {
 		return ""
@@ -377,7 +389,8 @@ func detectCrossDomainRedirect(requestedURL, currentHref string) string {
 	}
 	return "[Warning] Navigation to " + reqHost + " redirected to a different host (" + curHost + "). " +
 		"This typically means the server requires authentication or has moved the resource. " +
-		"If this is a login/auth page you cannot complete it automatically — stop and report the situation to the user."
+		"If the user asked you to log in and credentials or a reusable session are available, inspect the page with pw-snapshot and continue with any visible login fields. " +
+		"If no interactive form appears after one targeted recovery attempt, report the current URL, visible state, and tab list."
 }
 
 func ensurePageStable(ctx context.Context, client *mcp.Client, session mcp.Session, cache *registry.RuntimeCache) (notice, currentHref string) {
@@ -524,6 +537,8 @@ func RegisterAll(reg *registry.Registry, client *Client) {
 	}
 	// pw-navigate uses a custom NavigateTool for about:blank auto-recovery.
 	reg.Register(NavigateTool{Client: client})
+	// pw-snapshot uses a custom SnapshotTool for auth-page detection.
+	reg.Register(SnapshotTool{Client: client})
 	for _, tool := range tools(client) {
 		reg.Register(tool)
 	}
@@ -536,20 +551,66 @@ func RegisterDeferredAll(reg *registry.Registry, client *Client, category string
 		return
 	}
 	reg.RegisterDeferred(registry.AsDeferred(category, NavigateTool{Client: client}))
+	reg.RegisterDeferred(registry.AsDeferred(category, SnapshotTool{Client: client}))
 	for _, tool := range tools(client) {
 		reg.RegisterDeferred(registry.AsDeferred(category, tool))
 	}
 }
 
+// SnapshotTool wraps browser_snapshot with automatic auth-page detection.
+// After the page stabilizes it inspects the current URL; if it looks like an
+// auth/login redirect it injects the same cross-domain warning that NavigateTool
+// emits, giving the model a second opportunity to stop and report to the user.
+type SnapshotTool struct {
+	Client *Client
+}
+
+func (t SnapshotTool) Spec() llm.ToolSpec {
+	return registry.FunctionSpec("pw-snapshot", "", registry.ObjectSchema(nil, map[string]any{}))
+}
+
+func (t SnapshotTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+	if t.Client == nil || !t.Client.enabled() {
+		return registry.Result{}, fmt.Errorf("Playwright MCP is not configured: PLAYWRIGHT_MCP_URL is required")
+	}
+	session, err := getOrCreateSession(ctx, t.Client.MCP, rt.Cache)
+	if err != nil {
+		return registry.Result{}, err
+	}
+
+	// Retrieve the last URL the agent explicitly navigated to (set by NavigateTool).
+	// This lets us detect cross-domain redirects that happened since the last
+	// navigation, using the same host-comparison logic as NavigateTool so the
+	// check is not tied to any site-specific URL patterns.
+	var lastNavigatedURL string
+	if rt.Cache != nil {
+		if v, ok := rt.Cache.Get(lastNavigatedURLCacheKey); ok {
+			lastNavigatedURL, _ = v.(string)
+		}
+	}
+
+	var notices []string
+	stabilizeNotice, currentHref := ensurePageStable(ctx, t.Client.MCP, session, rt.Cache)
+	if stabilizeNotice != "" {
+		notices = append(notices, stabilizeNotice)
+	} else if redirectNotice := detectCrossDomainRedirect(lastNavigatedURL, currentHref); redirectNotice != "" {
+		// Cross-domain redirect was missed by NavigateTool (JS fired after networkidle).
+		// Augment the standard warning with login-form guidance.
+		notices = append(notices, redirectNotice+
+			" If a login form is visible, fill all required fields shown by the form before submitting.")
+	}
+
+	out, _, err := callToolWithRetry(ctx, t.Client.MCP, rt.Cache, session, "browser_snapshot", raw)
+	if err != nil {
+		return registry.Result{}, err
+	}
+	return registry.Result{Content: appendNotices(sanitizeSnapshotOutput(out), notices)}, nil
+}
+
 func tools(client *Client) []MCPTool {
+	// Note: pw-navigate and pw-snapshot are registered separately as custom
+	// tool types (NavigateTool, SnapshotTool) and must NOT appear here.
 	return []MCPTool{
-		{
-			Client:          client,
-			LocalName:       "pw-snapshot",
-			RemoteName:      "browser_snapshot",
-			StabilizeBefore: true,
-			Parameters:      registry.ObjectSchema(nil, map[string]any{}),
-		},
 		{
 			Client:         client,
 			LocalName:      "pw-click",
@@ -707,6 +768,12 @@ const pageStatusExpr = `(async function(){` +
 	`var wait=function(ms){return new Promise(function(r){setTimeout(r,ms)})};` +
 	`var started=Date.now();` +
 	`while(document.readyState==='loading'&&Date.now()-started<8000){await wait(100)}` +
-	`await wait(100);` +
+	`var prev=window.location.href;` +
+	`for(var i=0;i<15;i++){` +
+	`await wait(200);` +
+	`var curr=window.location.href;` +
+	`if(curr===prev&&document.readyState!=='loading'){break;}` +
+	`prev=curr;` +
+	`}` +
 	`return JSON.stringify({href:window.location.href,title:document.title,readyState:document.readyState});` +
 	`})()`
