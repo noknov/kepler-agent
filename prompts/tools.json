@@ -416,7 +416,7 @@
     }
   },
   "pw-navigate": {
-    "description": "Open a web page in the headless browser. Use this to access a live web application — login pages, dashboards, staging environments, etc. This is NOT for running test scripts; it controls a real browser to interact with live web pages. Typical flow: pw-navigate → pw-snapshot → pw-click/pw-type → pw-screenshot.",
+    "description": "Open a web page in the headless browser. Use this to access and test a live web application — login pages, dashboards, staging environments, etc. After navigation the tool waits for page state to settle and automatically switches back from about:blank popups when possible. Typical flow: pw-navigate → pw-snapshot → pw-click/pw-type → pw-snapshot or pw-screenshot.",
     "parameters": {
       "url": "Absolute URL to navigate to."
     }
@@ -426,16 +426,18 @@
     "parameters": {}
   },
   "pw-click": {
-    "description": "Click an element on the page. Get the target ref from a pw-snapshot result (e.g. [ref=s1e4]). Use for buttons, links, checkboxes, etc.",
+    "description": "Click an element on the page. Get the ref from a pw-snapshot result (e.g. [ref=s1e4]). Use for buttons, links, checkboxes, etc. The tool waits for navigation/display state to settle after the click and auto-recovers focus from about:blank popups when possible.",
     "parameters": {
-      "target": "Element reference from the accessibility snapshot (e.g. s1e4).",
+      "ref": "Element reference from the accessibility snapshot (e.g. s1e4).",
+      "target": "Deprecated alias for ref; prefer ref.",
       "element": "Human-readable element description for logging."
     }
   },
   "pw-type": {
-    "description": "Type text into an element. Use for input fields, search boxes, login forms, etc. Get the target ref from pw-snapshot.",
+    "description": "Type text into an element. Use for input fields, search boxes, login forms, etc. Get the ref from pw-snapshot. The tool waits for navigation/display state to settle after typing.",
     "parameters": {
-      "target": "Element reference from snapshot (e.g. s1e4).",
+      "ref": "Element reference from snapshot (e.g. s1e4).",
+      "target": "Deprecated alias for ref; prefer ref.",
       "element": "Human-readable element description.",
       "text": "Text to type into the element."
     }
@@ -447,7 +449,7 @@
     }
   },
   "pw-screenshot": {
-    "description": "Capture a screenshot of the current browser page inside a Playwright automation flow. The image is stored internally — you will NOT receive the image data directly. Call slack-send_screenshot afterward only when the user explicitly asks to see the screenshot.",
+    "description": "Capture a screenshot of the current browser page inside a Playwright automation flow. Before capture, the tool checks page focus and auto-recovers from about:blank popups when possible. The image is stored internally — you will NOT receive the image data directly. Call slack-send_screenshot afterward only when the user explicitly asks to see the screenshot.",
     "parameters": {
       "type": "Image format: png or jpeg. Optional, defaults to png.",
       "fullPage": "Set to true to capture the full scrollable page instead of just the viewport.",
@@ -455,7 +457,7 @@
     }
   },
   "pw-press_key": {
-    "description": "Press a keyboard key. Use after pw-type to submit forms (Enter), switch focus (Tab), or dismiss dialogs (Escape).",
+    "description": "Press a keyboard key. Use after pw-type to submit forms (Enter), switch focus (Tab), or dismiss dialogs (Escape). The tool waits for navigation/display state to settle afterward.",
     "parameters": {
       "key": "Key name (e.g. Enter, Tab, Escape, ArrowDown)."
     }

@@ -479,7 +479,15 @@ PLAYWRIGHT_MCP_URL=http://localhost:8931/mcp
 
 > **Stealth mode:** The `-v` mount and `--init-script /stealth.js` flags load `scripts/playwright-stealth.js` into every page context before the page's own JavaScript runs. This suppresses the primary headless-browser detection signals (`navigator.webdriver`, missing `window.chrome`, empty `navigator.plugins`). If you omit the `--init-script`, the agent still injects a lightweight patch via `browser_evaluate` after each navigation, but that runs after page init so it may miss early detection scripts. For best results use `--init-script`.
 
-Available tools: `pw-navigate`, `pw-snapshot`, `pw-click`, `pw-type`, `pw-fill_form`, `pw-screenshot`, `pw-press_key`, `pw-wait`, `pw-evaluate`. Screenshots are returned as data URIs and can be embedded directly in responses. Browser state is scoped to a single agent turn — each new Slack message starts a fresh session.
+Available tools: `pw-navigate`, `pw-snapshot`, `pw-click`, `pw-type`, `pw-fill_form`, `pw-screenshot`, `pw-press_key`, `pw-wait`, `pw-evaluate`, `pw-get_all_pages`, `pw-switch_page`. Use element `ref` values from `pw-snapshot` with `pw-click` and `pw-type`; the older `target` key is still accepted as a compatibility alias. Navigation, screenshots, snapshots, and page-mutating actions include automatic page-state stabilization and about:blank tab recovery, so the recommended test loop is `pw-navigate` → `pw-snapshot` → action → `pw-snapshot`/`pw-screenshot` to verify the result. Screenshots are stored internally for Slack upload instead of being placed directly in LLM context. Browser state is scoped to a single agent turn — each new Slack message starts a fresh session.
+
+Run the real browser smoke test after the MCP server is up:
+
+```bash
+PLAYWRIGHT_MCP_URL=http://127.0.0.1:8931/mcp go test ./internal/toolkit/tools/playwright -run TestIntegration_PlaywrightMCPRealBrowserSmoke -count=1 -v
+```
+
+This test opens a real page through Playwright MCP, reads snapshot refs, types into an input, clicks a button, verifies DOM state, and captures a screenshot. It is skipped unless `PLAYWRIGHT_MCP_URL` is set, so normal `go test ./...` runs do not require a browser.
 
 ## 📊 Observability endpoints
 

@@ -351,9 +351,9 @@ func TestMergeDefaultArgs(t *testing.T) {
 
 func TestFindMainTabIndex(t *testing.T) {
 	cases := []struct {
-		name     string
-		input    string
-		wantIdx  int
+		name    string
+		input   string
+		wantIdx int
 	}{
 		{
 			name:    "single non-blank tab",
@@ -519,6 +519,70 @@ func TestMCPTool_DefaultArgsInjected(t *testing.T) {
 	}
 	if string(args["action"]) != `"list"` {
 		t.Fatalf("expected action=list in forwarded args, got %s", capturedArgs)
+	}
+}
+
+func TestMCPTool_ConvertsTargetToRef(t *testing.T) {
+	var capturedArgs json.RawMessage
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var payload struct {
+			Method string `json:"method"`
+			Params struct {
+				Name      string          `json:"name"`
+				Arguments json.RawMessage `json:"arguments"`
+			} `json:"params"`
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &payload)
+		switch payload.Method {
+		case "initialize":
+			return httpResp(http.StatusOK,
+				map[string]string{"Content-Type": "application/json", "Mcp-Session-Id": "s1"},
+				`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`), nil
+		case "notifications/initialized":
+			return httpResp(http.StatusAccepted, nil, ""), nil
+		case "tools/call":
+			if payload.Params.Name == "browser_click" {
+				capturedArgs = payload.Params.Arguments
+			}
+			return httpResp(http.StatusOK,
+				map[string]string{"Content-Type": "application/json"},
+				`{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"clicked"}]}}`), nil
+		default:
+			return httpResp(http.StatusOK, nil, ""), nil
+		}
+	})
+
+	client := &Client{MCP: &mcp.Client{
+		ServiceName: "playwright",
+		URL:         "http://playwright.test/mcp",
+		HTTP:        &http.Client{Transport: transport},
+	}}
+	tool := MCPTool{Client: client, LocalName: "pw-click", RemoteName: "browser_click"}
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"target":"s1e4","element":"Submit"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var args map[string]json.RawMessage
+	if err := json.Unmarshal(capturedArgs, &args); err != nil {
+		t.Fatalf("capturedArgs not JSON: %v", err)
+	}
+	if string(args["ref"]) != `"s1e4"` {
+		t.Fatalf("expected ref=s1e4 in forwarded args, got %s", capturedArgs)
+	}
+	if _, ok := args["target"]; ok {
+		t.Fatalf("target should not be forwarded to Playwright MCP, got %s", capturedArgs)
+	}
+}
+
+func TestMustJSONRawEscapesStealthExpression(t *testing.T) {
+	raw := mustJSONRaw(map[string]any{"expression": stealthPatchExpr})
+	var args map[string]string
+	if err := json.Unmarshal(raw, &args); err != nil {
+		t.Fatalf("stealth expression JSON must be valid: %v\n%s", err, raw)
+	}
+	if args["expression"] != stealthPatchExpr {
+		t.Fatalf("expression changed during JSON encoding")
 	}
 }
 
