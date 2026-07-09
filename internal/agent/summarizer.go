@@ -63,13 +63,17 @@ func summarizePrompt(names, sampleArgs, locale string) string {
 	if locale == LocaleZH {
 		return fmt.Sprintf(
 			"用不超过10个字写一条操作状态，格式像进程日志或系统监控（例：读取配置文件、搜索提交记录、查询 Pod 日志）。"+
-				"只输出动作本身，不加标点，不加主语。\n工具：%s\n参数：%s",
+				"只输出动作本身，不加标点，不加主语。"+
+				"禁止在输出中包含工具名、函数名、API 路径、内部标识符（如带 -、_、. 的技术名称），用通俗动作描述代替。\n"+
+				"工具：%s\n参数：%s",
 			names, sampleArgs,
 		)
 	}
 	return fmt.Sprintf(
 		"Write a ≤10-word operation status, like a system process log entry (e.g. \"Reading config\", \"Fetching pod logs\", \"Searching commit history\"). "+
-			"Output only the action, no punctuation, no subject.\nTools: %s\nArgs: %s",
+			"Output only the action, no punctuation, no subject. "+
+			"Never include tool names, function names, API paths, or internal identifiers (e.g. names with -, _, .) in the output; use plain action descriptions instead.\n"+
+			"Tools: %s\nArgs: %s",
 		names, sampleArgs,
 	)
 }

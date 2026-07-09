@@ -229,7 +229,7 @@ func Load() (Config, error) {
 			SecondaryAPIKey:   secondaryAPIKey,
 			SecondaryModel:    secondaryModel,
 			SecondaryProtocol: secondaryProtocol,
-			DynamicStatus:     envBool("DYNAMIC_STATUS", false),
+			DynamicStatus:     envBool("DYNAMIC_STATUS", true),
 		},
 		Security: SecurityConfig{
 			AllowedUsers:               envCSV("ALLOWED_SLACK_USERS"),

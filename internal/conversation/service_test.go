@@ -782,6 +782,38 @@ func (l *streamLLM) ChatStream(_ context.Context, _ llm.Request, h llm.StreamHan
 	}, nil
 }
 
+type slowStreamLLM struct {
+	content string
+	delay   time.Duration
+}
+
+func (l *slowStreamLLM) Chat(_ context.Context, _ llm.Request) (llm.Response, error) {
+	return llm.Response{
+		Message: llm.Message{Role: "assistant", Content: l.content},
+		Usage:   llm.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+	}, nil
+}
+
+func (l *slowStreamLLM) ChatStream(ctx context.Context, _ llm.Request, h llm.StreamHandler) (llm.Response, error) {
+	if l.delay > 0 {
+		timer := time.NewTimer(l.delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return llm.Response{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	if h.OnText != nil {
+		h.OnText(l.content)
+	}
+	return llm.Response{
+		Message:  llm.Message{Role: "assistant", Content: l.content},
+		Usage:    llm.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+		Streamed: true,
+	}, nil
+}
+
 type sequenceStreamLLM struct {
 	responses   []llm.Response
 	streamCalls int
@@ -931,6 +963,64 @@ func TestStreamModeStreamsTokens(t *testing.T) {
 	}
 	if !foundComplete {
 		t.Fatal("stream should mark task complete")
+	}
+}
+
+func TestNativeThreadStatusSuppressesProgressTaskCards(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	messenger := &nativeStatusMessenger{
+		fakeMessenger: fakeMessenger{streamTS: "answer.000"},
+		statusCh:      make(chan string, 8),
+	}
+	svc := NewService(
+		store,
+		messenger,
+		agent.Runner{LLM: &slowStreamLLM{content: "hello world", delay: 50 * time.Millisecond}, MaxSteps: 1},
+		memory.Builder{},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		svc.HandleMention(ctx, Request{
+			EventID:  "E4-native-status",
+			UserID:   "U1",
+			Channel:  "C1",
+			ThreadTS: "100.000",
+			Text:     "你好",
+		})
+	}()
+
+	var status string
+	select {
+	case status = <-messenger.statusCh:
+	case <-time.After(time.Second):
+		t.Fatal("native thread status was not updated")
+	}
+	if status == "" {
+		t.Fatal("first native thread status unexpectedly cleared")
+	}
+	<-done
+	if len(messenger.loadingMessages) != 0 {
+		t.Fatalf("native status should not include canned loading messages: %#v", messenger.loadingMessages)
+	}
+
+	for _, append := range messenger.appends {
+		for _, chunk := range append.chunks {
+			if chunk["type"] == "task_update" {
+				t.Fatalf("native status path should not append task_update chunks: %#v", messenger.appends)
+			}
+		}
+	}
+	if !chunksContainText(chunksOnStream(messenger.appends, "answer.000"), "hello world") {
+		t.Fatalf("answer stream did not receive final markdown text: %#v", messenger.appends)
 	}
 }
 
@@ -1395,6 +1485,25 @@ type fakeMessenger struct {
 type streamAppend struct {
 	ts     string
 	chunks []map[string]any
+}
+
+type nativeStatusMessenger struct {
+	fakeMessenger
+	statusCh        chan string
+	statuses        []string
+	loadingMessages []string
+}
+
+func (m *nativeStatusMessenger) SetThreadStatus(_ context.Context, _, _, status string, loadingMessages []string) error {
+	m.statuses = append(m.statuses, status)
+	m.loadingMessages = append(m.loadingMessages, loadingMessages...)
+	if m.statusCh != nil {
+		select {
+		case m.statusCh <- status:
+		default:
+		}
+	}
+	return nil
 }
 
 func chunksContainText(chunks []map[string]any, want string) bool {
