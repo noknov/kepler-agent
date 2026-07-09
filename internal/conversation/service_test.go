@@ -1008,8 +1008,15 @@ func TestNativeThreadStatusSuppressesProgressTaskCards(t *testing.T) {
 		t.Fatal("first native thread status unexpectedly cleared")
 	}
 	<-done
-	if len(messenger.loadingMessages) != 0 {
-		t.Fatalf("native status should not include canned loading messages: %#v", messenger.loadingMessages)
+	for _, s := range messenger.statuses {
+		if s != "" && s != "Thinking" && s != "思考中" {
+			t.Fatalf("status should be static thinking text, got: %q", s)
+		}
+	}
+	for _, msg := range messenger.loadingMessages {
+		if msg == "Thinking" || msg == "思考中" {
+			t.Fatalf("loading messages should be dynamic status, not static: %#v", messenger.loadingMessages)
+		}
 	}
 
 	for _, append := range messenger.appends {

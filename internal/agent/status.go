@@ -98,7 +98,7 @@ var statusEN = statusSet{
 	failed:    "Analysis failed",
 	canceling: "Cancelling...",
 	cancelled: "Cancelled",
-	steering:  "Conversation guided",
+	steering:  "Steering...",
 }
 
 type toolHint struct {

@@ -270,7 +270,11 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		go func(status string) {
 			ctx, cancel := context.WithTimeout(runCtx, 3*time.Second)
 			defer cancel()
-			if err := statusMessenger.SetThreadStatus(ctx, req.Channel, req.ThreadTS, status, nil); err != nil {
+			staticStatus := "Thinking"
+			if locale == agent.LocaleZH {
+				staticStatus = "思考中"
+			}
+			if err := statusMessenger.SetThreadStatus(ctx, req.Channel, req.ThreadTS, staticStatus, []string{status}); err != nil {
 				s.recordDeliveryError(req, "", err)
 			}
 		}(status)

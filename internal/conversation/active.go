@@ -194,5 +194,5 @@ func steeringAppliedMessage(locale string) string {
 	if locale == agent.LocaleZH {
 		return "\n\n_已引导对话_\n"
 	}
-	return "\n\n_Conversation guided_\n"
+	return "\n\n_Conversation Steered_\n"
 }
