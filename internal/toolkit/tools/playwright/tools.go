@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -55,7 +56,7 @@ func (t MCPTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.R
 	}
 	var notices []string
 	if t.StabilizeBefore {
-		if notice := stabilizePage(ctx, t.Client.MCP, session); notice != "" {
+		if notice, _ := ensurePageStable(ctx, t.Client.MCP, session, rt.Cache); notice != "" {
 			notices = append(notices, notice)
 		}
 	}
@@ -64,7 +65,7 @@ func (t MCPTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.R
 		return registry.Result{}, err
 	}
 	if t.StabilizeAfter {
-		if notice := stabilizePage(ctx, t.Client.MCP, session); notice != "" {
+		if notice, _ := stabilizeAndCachePage(ctx, t.Client.MCP, session, rt.Cache); notice != "" {
 			notices = append(notices, notice)
 		}
 	}
@@ -92,6 +93,12 @@ func (t MCPTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.R
 }
 
 const snapshotPathNotice = "Note: .playwright-mcp/* paths are internal to the browser container and cannot be read with code-read_file or other workspace file tools. Use element refs from this output (e.g. ref=s1e4) directly with pw-click, pw-type, or pw-fill_form."
+const pageStateCacheKeyPrefix = "pw-page-state-"
+
+type pageState struct {
+	Stable bool
+	Href   string
+}
 
 var (
 	rePlaywrightMDLink = regexp.MustCompile(`(?m)\[([^\]]*)\]\(\.playwright-mcp/[^)]+\)`)
@@ -233,6 +240,7 @@ func callToolWithRetry(ctx context.Context, client *mcp.Client, cache *registry.
 		if createErr != nil {
 			return "", session, createErr
 		}
+		markPageStateUnknown(cache, client)
 		out, err = client.CallTool(ctx, session, name, args)
 	}
 	return out, session, err
@@ -282,17 +290,143 @@ func (t NavigateTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 	if err != nil {
 		return registry.Result{}, err
 	}
-	out, session, err := callToolWithRetry(ctx, t.Client.MCP, rt.Cache, session, "browser_navigate", raw)
+
+	var argsMap map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &argsMap); err != nil {
+		argsMap = map[string]json.RawMessage{}
+	}
+	var requestedURL string
+	if urlRaw, ok := argsMap["url"]; ok {
+		_ = json.Unmarshal(urlRaw, &requestedURL)
+	}
+
+	// Prefer networkidle so Playwright waits at the browser-protocol level
+	// until the network goes quiet, catching client-side redirects and SPA
+	// auth flows that fire after the initial load event.
+	// Pages with continuous background polling (dashboards, SSE streams) will
+	// never reach networkidle and the MCP will return a timeout error; in that
+	// case we fall back to "load" which is Playwright's default.
+	navigateRaw := buildNavigateArgs(argsMap, "networkidle")
+	out, session, err := callToolWithRetry(ctx, t.Client.MCP, rt.Cache, session, "browser_navigate", navigateRaw)
+	if err != nil && isNavigationTimeout(err) {
+		navigateRaw = buildNavigateArgs(argsMap, "load")
+		out, session, err = callToolWithRetry(ctx, t.Client.MCP, rt.Cache, session, "browser_navigate", navigateRaw)
+	}
 	if err != nil {
 		return registry.Result{}, err
 	}
 
 	out = sanitizeSnapshotOutput(out)
+	applyStealthPatch(ctx, t.Client.MCP, session)
 
-	return registry.Result{Content: appendNotices(out, []string{stabilizePage(ctx, t.Client.MCP, session)})}, nil
+	stabilizeNotice, currentHref := stabilizeAndCachePage(ctx, t.Client.MCP, session, rt.Cache)
+	var notices []string
+	notices = append(notices, stabilizeNotice)
+	if notice := detectCrossDomainRedirect(requestedURL, currentHref); notice != "" {
+		notices = append(notices, notice)
+	}
+	return registry.Result{Content: appendNotices(out, notices)}, nil
 }
 
-func stabilizePage(ctx context.Context, client *mcp.Client, session mcp.Session) string {
+// buildNavigateArgs returns a copy of argsMap with waitUntil set to the given
+// value (only if the caller did not already provide one).
+func buildNavigateArgs(argsMap map[string]json.RawMessage, waitUntil string) json.RawMessage {
+	merged := make(map[string]json.RawMessage, len(argsMap)+1)
+	for k, v := range argsMap {
+		merged[k] = v
+	}
+	if _, has := merged["waitUntil"]; !has {
+		merged["waitUntil"] = json.RawMessage(`"` + waitUntil + `"`)
+	}
+	out, _ := json.Marshal(merged)
+	return out
+}
+
+// isNavigationTimeout reports whether err is a Playwright navigation timeout,
+// which occurs when waitUntil:"networkidle" cannot be satisfied (e.g. a page
+// with continuous background polling). The page is typically still usable.
+func isNavigationTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "timeout") && strings.Contains(msg, "navigat")
+}
+
+// detectCrossDomainRedirect returns a warning when the page ended up on a
+// different hostname than the one that was requested. This is a generic signal
+// that the server redirected the browser — commonly to a login / auth page —
+// without any need to enumerate specific provider URLs.
+func detectCrossDomainRedirect(requestedURL, currentHref string) string {
+	if requestedURL == "" || currentHref == "" {
+		return ""
+	}
+	req, err1 := url.Parse(requestedURL)
+	cur, err2 := url.Parse(currentHref)
+	if err1 != nil || err2 != nil {
+		return ""
+	}
+	reqHost := strings.ToLower(req.Hostname())
+	curHost := strings.ToLower(cur.Hostname())
+	if reqHost == "" || curHost == "" || reqHost == curHost {
+		return ""
+	}
+	// Ignore about:blank — stabilizePage already handles that case.
+	if cur.Scheme == "about" {
+		return ""
+	}
+	return "[Warning] Navigation to " + reqHost + " redirected to a different host (" + curHost + "). " +
+		"This typically means the server requires authentication or has moved the resource. " +
+		"If this is a login/auth page you cannot complete it automatically — stop and report the situation to the user."
+}
+
+func ensurePageStable(ctx context.Context, client *mcp.Client, session mcp.Session, cache *registry.RuntimeCache) (notice, currentHref string) {
+	if state, ok := cachedPageState(cache, client); ok && state.Stable {
+		return "", state.Href
+	}
+	return stabilizeAndCachePage(ctx, client, session, cache)
+}
+
+func stabilizeAndCachePage(ctx context.Context, client *mcp.Client, session mcp.Session, cache *registry.RuntimeCache) (notice, currentHref string) {
+	notice, currentHref = stabilizePage(ctx, client, session)
+	setPageState(cache, client, pageState{
+		Stable: notice == "" && currentHref != "",
+		Href:   currentHref,
+	})
+	return notice, currentHref
+}
+
+func cachedPageState(cache *registry.RuntimeCache, client *mcp.Client) (pageState, bool) {
+	if cache == nil || client == nil {
+		return pageState{}, false
+	}
+	value, ok := cache.Get(pageStateCacheKey(client))
+	if !ok {
+		return pageState{}, false
+	}
+	state, ok := value.(pageState)
+	return state, ok
+}
+
+func setPageState(cache *registry.RuntimeCache, client *mcp.Client, state pageState) {
+	if cache == nil || client == nil {
+		return
+	}
+	cache.Set(pageStateCacheKey(client), state)
+}
+
+func markPageStateUnknown(cache *registry.RuntimeCache, client *mcp.Client) {
+	setPageState(cache, client, pageState{})
+}
+
+func pageStateCacheKey(client *mcp.Client) string {
+	if client == nil {
+		return pageStateCacheKeyPrefix
+	}
+	return pageStateCacheKeyPrefix + client.SessionKey()
+}
+
+func applyStealthPatch(ctx context.Context, client *mcp.Client, session mcp.Session) {
 	// Inject stealth patches via evaluate as a best-effort fallback for when the
 	// Playwright MCP server was not started with --init-script /stealth.js.
 	// This runs after page load so it may miss detection scripts that fire during
@@ -300,30 +434,45 @@ func stabilizePage(ctx context.Context, client *mcp.Client, session mcp.Session)
 	_, _ = client.CallTool(ctx, session, "browser_evaluate", mustJSONRaw(map[string]any{
 		"expression": stealthPatchExpr,
 	}))
+}
 
+// stabilizePage runs post-navigation housekeeping. It returns the notice (may
+// be empty) and the page's current href (extracted from the JS status payload,
+// empty on error). Both values are used by the caller for redirect detection.
+func stabilizePage(ctx context.Context, client *mcp.Client, session mcp.Session) (notice, currentHref string) {
 	statusOut, evalErr := client.CallTool(ctx, session, "browser_evaluate", mustJSONRaw(map[string]any{
 		"expression": pageStatusExpr,
 	}))
 	if evalErr != nil {
-		return ""
+		return "", ""
 	}
+
+	// Extract href from the JSON payload returned by pageStatusExpr.
+	var status struct {
+		Href string `json:"href"`
+	}
+	if idx := strings.Index(statusOut, "{"); idx >= 0 {
+		_ = json.Unmarshal([]byte(statusOut[idx:]), &status)
+	}
+	currentHref = status.Href
+
 	if !strings.Contains(statusOut, "about:blank") {
-		return ""
+		return "", currentHref
 	}
 
 	tabsOut, listErr := client.CallTool(ctx, session, "browser_tabs", json.RawMessage(`{"action":"list"}`))
 	if listErr != nil {
-		return "[Warning] Active page is about:blank and open tabs could not be listed. Use pw-get_all_pages to inspect browser state."
+		return "[Warning] Active page is about:blank and open tabs could not be listed. Use pw-get_all_pages to inspect browser state.", ""
 	}
-	idx := findMainTabIndex(tabsOut)
-	if idx < 0 {
-		return "[Warning] Active page is about:blank and no non-blank page tab was found. Use pw-get_all_pages to inspect browser state."
+	tabIdx := findMainTabIndex(tabsOut)
+	if tabIdx < 0 {
+		return "[Warning] Active page is about:blank and no non-blank page tab was found. Use pw-get_all_pages to inspect browser state.", ""
 	}
 	_, _ = client.CallTool(ctx, session, "browser_tabs", mustJSONRaw(map[string]any{
 		"action": "select",
-		"index":  idx,
+		"index":  tabIdx,
 	}))
-	return "[Auto-recovery] Active page was about:blank, so focus was switched back to the main tab (index " + strconv.Itoa(idx) + "). Call pw-snapshot to see the current page state."
+	return "[Auto-recovery] Active page was about:blank, so focus was switched back to the main tab (index " + strconv.Itoa(tabIdx) + "). Call pw-snapshot to see the current page state.", ""
 }
 
 // findMainTabIndex parses browser_tabs list output and returns the index of the
@@ -555,7 +704,7 @@ const stealthPatchExpr = `(function(){` +
 	`})()`
 
 const pageStatusExpr = `(async function(){` +
-	`var wait=function(ms){return new Promise(function(resolve){setTimeout(resolve,ms)})};` +
+	`var wait=function(ms){return new Promise(function(r){setTimeout(r,ms)})};` +
 	`var started=Date.now();` +
 	`while(document.readyState==='loading'&&Date.now()-started<8000){await wait(100)}` +
 	`await wait(100);` +

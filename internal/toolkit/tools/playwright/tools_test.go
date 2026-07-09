@@ -666,6 +666,76 @@ func TestMCPTool_StripsMCPPaths(t *testing.T) {
 	}
 }
 
+func TestMCPTool_ReusesCachedStablePageForRepeatedReads(t *testing.T) {
+	evaluateCalls := 0
+	snapshotCalls := 0
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var payload struct {
+			Method string `json:"method"`
+			Params struct {
+				Name string `json:"name"`
+			} `json:"params"`
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &payload)
+		switch payload.Method {
+		case "initialize":
+			return httpResp(http.StatusOK,
+				map[string]string{"Content-Type": "application/json", "Mcp-Session-Id": "s1"},
+				`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`), nil
+		case "notifications/initialized":
+			return httpResp(http.StatusAccepted, nil, ""), nil
+		case "tools/call":
+			text := "ok"
+			switch payload.Params.Name {
+			case "browser_evaluate":
+				evaluateCalls++
+				text = `{"href":"https://example.com/","title":"Example","readyState":"complete"}`
+			case "browser_snapshot":
+				snapshotCalls++
+				text = `- button "Submit" [ref=s1e1]`
+			}
+			body, _ := json.Marshal(map[string]any{
+				"jsonrpc": "2.0", "id": 2,
+				"result": map[string]any{"content": []map[string]any{{"type": "text", "text": text}}},
+			})
+			return httpResp(http.StatusOK, map[string]string{"Content-Type": "application/json"}, string(body)), nil
+		default:
+			t.Fatalf("unexpected method %q", payload.Method)
+			return nil, nil
+		}
+	})
+
+	client := &Client{MCP: &mcp.Client{
+		ServiceName: "playwright",
+		URL:         "http://playwright.test/mcp",
+		HTTP:        &http.Client{Transport: transport},
+	}}
+	tool := MCPTool{
+		Client:          client,
+		LocalName:       "pw-snapshot",
+		RemoteName:      "browser_snapshot",
+		StabilizeBefore: true,
+		Parameters:      registry.ObjectSchema(nil, map[string]any{}),
+	}
+	cache := registry.NewRuntimeCache()
+	for i := 0; i < 2; i++ {
+		result, err := tool.Execute(context.Background(), json.RawMessage(`{}`), registry.Runtime{Cache: cache})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(result.Content, `ref=s1e1`) {
+			t.Fatalf("snapshot output missing ref: %q", result.Content)
+		}
+	}
+	if snapshotCalls != 2 {
+		t.Fatalf("snapshot calls = %d, want 2", snapshotCalls)
+	}
+	if evaluateCalls != 1 {
+		t.Fatalf("page health evaluate calls = %d, want 1 cached stabilization check", evaluateCalls)
+	}
+}
+
 func TestScreenshotSchemaTypeNotRequired(t *testing.T) {
 	client := &Client{MCP: &mcp.Client{URL: "http://localhost:8931/mcp"}}
 	for _, tool := range tools(client) {
