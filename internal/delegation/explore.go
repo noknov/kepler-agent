@@ -13,7 +13,7 @@ import (
 
 const (
 	exploreMaxSteps  = 12
-	exploreMaxTokens = 8192
+	exploreMaxTokens = 32768
 
 	exploreMicroCompactThreshold = 6
 	exploreKeepRecentToolResults = 4

@@ -249,67 +249,17 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	// displayedContextTokens is the estimated/current prompt length for the
 	// active request. It intentionally excludes cumulative billed usage.
 	displayedContextTokens := 0
-	var nativeStatusMu sync.Mutex
-	lastNativeStatus := ""
-	lastNativeStatusAt := time.Time{}
-	sendNativeStatus := func(status string) {
-		staticStatus := "Thinking"
-		if locale == agent.LocaleZH {
-			staticStatus = "思考中"
-		}
-		ctx, cancel := context.WithTimeout(runCtx, 3*time.Second)
-		defer cancel()
-		if err := statusMessenger.SetThreadStatus(ctx, req.Channel, req.ThreadTS, staticStatus, []string{status}); err != nil {
+	var nativeStatus *nativeThreadStatus
+	if useNativeStatus && statusMessenger != nil {
+		nativeStatus = newNativeThreadStatus(runCtx, statusMessenger, req.Channel, req.ThreadTS, locale, func(err error) {
 			s.recordDeliveryError(req, "", err)
-		}
-	}
-	setNativeStatus := func(title string) {
-		if !useNativeStatus || statusMessenger == nil {
-			return
-		}
-		status := assistantThreadStatusText(title, locale)
-		if status == "" {
-			return
-		}
-		nativeStatusMu.Lock()
-		if status == lastNativeStatus && time.Since(lastNativeStatusAt) < 5*time.Second {
-			nativeStatusMu.Unlock()
-			return
-		}
-		if time.Since(lastNativeStatusAt) < 500*time.Millisecond {
-			nativeStatusMu.Unlock()
-			return
-		}
-		lastNativeStatus = status
-		lastNativeStatusAt = time.Now()
-		nativeStatusMu.Unlock()
-		go sendNativeStatus(status)
+		})
 	}
 	// Keep-alive: Slack clears setStatus after 2 minutes with no activity.
 	// Re-send the last known status every 90 seconds to prevent expiry during
 	// long-running tool calls.
-	if useNativeStatus && statusMessenger != nil {
-		go func() {
-			ticker := time.NewTicker(90 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-runCtx.Done():
-					return
-				case <-ticker.C:
-					nativeStatusMu.Lock()
-					status := lastNativeStatus
-					elapsed := time.Since(lastNativeStatusAt)
-					if status != "" && elapsed >= 90*time.Second {
-						lastNativeStatusAt = time.Now()
-					}
-					nativeStatusMu.Unlock()
-					if status != "" && elapsed >= 90*time.Second {
-						sendNativeStatus(status)
-					}
-				}
-			}
-		}()
+	if nativeStatus != nil {
+		go nativeStatus.keepAlive()
 	}
 	appendProgress := func(chunks []map[string]any) {
 		if useNativeStatus {
@@ -325,7 +275,6 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 				title, _ := chunk["title"].(string)
 				if title != "" {
 					currentStatus = title
-					setNativeStatus(title)
 				}
 			}
 			return
@@ -495,6 +444,17 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}
 	}
 	runner.StatusUpdate = func(status string) {
+		if nativeStatus != nil {
+			nativeStatus.updateStatic()
+			return
+		}
+		appendTaskUpdate(status, "in_progress")
+	}
+	runner.LoadingMessageUpdate = func(status string) {
+		if nativeStatus != nil {
+			nativeStatus.updateLoadingMessage(status)
+			return
+		}
 		appendTaskUpdate(status, "in_progress")
 	}
 	runner.OnUsage = updateAPIUsage
@@ -572,7 +532,12 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			}
 			sess.Turns, sess.Summary, _ = s.trimAndSummarize(ctx, sess.Turns, sess.Summary)
 			_ = s.Store.Save(ctx, sess)
-			if useStream {
+			if useNativeStatus {
+				// In native status mode the stream task_update path uses runCtx which is
+				// already canceled by the defer; post a real message so the user sees the
+				// cancel confirmation. The post itself clears the setStatus indicator.
+				s.reportError(ctx, req, interruptedMessage(locale))
+			} else if useStream {
 				if progressMarkdown != nil {
 					progressMarkdown.Close()
 				}
@@ -595,7 +560,12 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}
 		sess.Turns, sess.Summary, _ = s.trimAndSummarize(ctx, sess.Turns, sess.Summary)
 		_ = s.Store.Save(ctx, sess)
-		if useStream && !progressStopped {
+		if useNativeStatus {
+			// In native status mode appendProgress uses runCtx (already
+			// canceled by defer). Post a real message so the user receives the error ID.
+			// The post also clears the setStatus indicator automatically.
+			s.reportError(ctx, req, failedMessageWithErrorID(locale, errorID))
+		} else if useStream && !progressStopped {
 			appendProgress([]map[string]any{
 				{"type": "task_update", "id": taskID, "title": failedTitleWithErrorID(locale, errorID), "status": "error"},
 			})
@@ -807,6 +777,20 @@ func failedTitleWithErrorID(locale, errorID string) string {
 	return agent.FailedTitle(locale) + " · " + errorID
 }
 
+func failedMessageWithErrorID(locale, errorID string) string {
+	errorID = strings.TrimSpace(errorID)
+	if locale == agent.LocaleZH {
+		if errorID == "" {
+			return "处理请求时出错，请稍后重试。"
+		}
+		return "处理请求时出错，请稍后重试。（错误码：" + errorID + "）"
+	}
+	if errorID == "" {
+		return "An error occurred while processing your request. Please try again."
+	}
+	return "An error occurred while processing your request. (Error ID: " + errorID + ")"
+}
+
 func clearThreadStatus(ctx context.Context, messenger ThreadStatusMessenger, channel, threadTS string) {
 	if messenger == nil {
 		return
@@ -814,68 +798,6 @@ func clearThreadStatus(ctx context.Context, messenger ThreadStatusMessenger, cha
 	clearCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	_ = messenger.SetThreadStatus(clearCtx, channel, threadTS, "", nil)
-}
-
-func assistantThreadStatusText(title, locale string) string {
-	title = strings.TrimSpace(title)
-	if title == "" {
-		return ""
-	}
-	title = stripContextPrefix(title)
-	if title == "" {
-		return ""
-	}
-	if locale == agent.LocaleZH {
-		if strings.HasPrefix(title, "正在") ||
-			strings.HasSuffix(title, "中") ||
-			strings.HasSuffix(title, "中...") ||
-			strings.HasSuffix(title, "中…") ||
-			strings.Contains(title, "等待") ||
-			strings.Contains(title, "已") {
-			return title
-		}
-		return "正在" + title
-	}
-	lower := strings.ToLower(title)
-	if strings.HasPrefix(lower, "is ") ||
-		strings.HasPrefix(lower, "are ") ||
-		strings.HasPrefix(lower, "has ") ||
-		strings.HasPrefix(lower, "waiting") {
-		return title
-	}
-	if strings.HasSuffix(lower, "ing") || strings.Contains(lower, "ing ") {
-		return "is " + lowerFirstASCII(title)
-	}
-	return "is " + lowerFirstASCII(title)
-}
-
-func stripContextPrefix(title string) string {
-	parts := strings.Split(title, " · ")
-	if len(parts) == 0 {
-		return strings.TrimSpace(title)
-	}
-	if len(parts) > 1 {
-		first := strings.TrimSpace(parts[0])
-		last := strings.TrimSpace(parts[len(parts)-1])
-		if strings.Contains(strings.ToLower(first), "context") {
-			return strings.TrimSpace(strings.Join(parts[1:], " · "))
-		}
-		if strings.Contains(strings.ToLower(last), "context") {
-			return strings.TrimSpace(strings.Join(parts[:len(parts)-1], " · "))
-		}
-	}
-	return strings.TrimSpace(title)
-}
-
-func lowerFirstASCII(s string) string {
-	if s == "" {
-		return s
-	}
-	b := []byte(s)
-	if b[0] >= 'A' && b[0] <= 'Z' {
-		b[0] += 'a' - 'A'
-	}
-	return string(b)
 }
 
 func appendContextNoticeText(text string, notices ...string) string {

@@ -28,20 +28,37 @@ type StatusSummarizer struct {
 // The update is only delivered if the parent ctx is still live when the LLM
 // responds. This prevents stale status text from appearing after the run ends.
 func (s *StatusSummarizer) Summarize(ctx context.Context, names, sampleArgs, locale string, update StatusUpdater) {
-	if s == nil || update == nil {
+	if s == nil || s.Client == nil || update == nil {
 		return
 	}
 	go func() {
-		sctx, cancel := context.WithTimeout(ctx, s.Timeout)
+		timeout := s.Timeout
+		if timeout <= 0 {
+			timeout = 5 * time.Second
+		}
+		sctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
-		resp, err := s.Client.Chat(sctx, llm.Request{
-			Model:     s.Model,
-			Messages:  []llm.Message{{Role: "user", Content: summarizePrompt(names, sampleArgs, locale)}},
-			MaxTokens: 64,
-		})
-		if err != nil {
-			return
+		var text string
+		for attempt := 0; attempt < 2; attempt++ {
+			resp, err := s.Client.Chat(sctx, llm.Request{
+				Model:     s.Model,
+				Messages:  []llm.Message{{Role: "user", Content: summarizePrompt(names, sampleArgs, locale)}},
+				MaxTokens: 64,
+				// Disable extended thinking: reasoning tokens would consume the
+				// entire budget before producing any text output.
+				Thinking: "disabled",
+			})
+			if err != nil {
+				if attempt == 0 && llm.IsTemporaryOverload(err) {
+					continue
+				}
+				return
+			}
+			text = strings.TrimSpace(resp.Message.Content)
+			if text != "" {
+				break
+			}
 		}
 		// Double-check the parent context after the LLM call returns.
 		// The timeout context (sctx) may have succeeded just as the parent was
@@ -52,7 +69,7 @@ func (s *StatusSummarizer) Summarize(ctx context.Context, names, sampleArgs, loc
 			return
 		default:
 		}
-		if text := strings.TrimSpace(resp.Message.Content); text != "" {
+		if text != "" {
 			update(text)
 		}
 	}()
@@ -62,10 +79,10 @@ func summarizePrompt(names, sampleArgs, locale string) string {
 	sampleArgs = sanitizeArgs(sampleArgs)
 	if locale == LocaleZH {
 		return fmt.Sprintf(
-		"用不超过20个字写一条操作状态，需包含具体对象（如服务名、文件名、页面标题等从参数中提取的关键信息）。"+
-			"格式像进程日志（例：读取告警处理文档、查询 payment 服务日志、搜索最近部署记录）。"+
-			"只输出动作本身，不加标点，不加主语。"+
-			"禁止输出工具名、函数名、API 路径、内部标识符（如带 -、_、. 的技术名称），用通俗描述代替。\n"+
+			"用不超过20个字写一条操作状态，需包含具体对象（如服务名、文件名、页面标题等从参数中提取的关键信息）。"+
+				"格式像进程日志（例：读取告警处理文档、查询 payment 服务日志、搜索最近部署记录）。"+
+				"只输出动作本身，不加标点，不加主语。"+
+				"禁止输出工具名、函数名、API 路径、内部标识符（如带 -、_、. 的技术名称），用通俗描述代替。\n"+
 				"工具：%s\n参数：%s",
 			names, sampleArgs,
 		)

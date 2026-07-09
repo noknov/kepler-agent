@@ -7,7 +7,7 @@ import (
 
 func TestSummarizePromptContainsNoLeakInstruction(t *testing.T) {
 	prompt := summarizePrompt("web-search, github-pr_diff", `{"query":"Instagram Webhook docs"}`, LocaleZH)
-	if !strings.Contains(prompt, "禁止在输出中包含工具名") {
+	if !strings.Contains(prompt, "禁止输出工具名") {
 		t.Fatal("ZH prompt missing no-leak instruction")
 	}
 

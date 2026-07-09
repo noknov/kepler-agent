@@ -768,8 +768,24 @@ func TestRunnerRecoversFromMaxOutputTokens(t *testing.T) {
 		},
 		{Message: llm.Message{Role: "assistant", Content: "complete"}},
 	}}
+	compactClient := &fakeClient{responses: []llm.Response{
+		{Message: llm.Message{Role: "assistant", Content: "compact summary"}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeTool{})
 
-	result, err := Runner{LLM: client, Tools: registry.New(), MaxSteps: 3}.Run(context.Background(), Request{})
+	result, err := Runner{
+		LLM:      client,
+		Tools:    tools,
+		MaxSteps: 3,
+		Compactor: &memory.Compactor{
+			MaxContextTokens:  200_000,
+			AutocompactBuffer: 13_000,
+			OutputReserve:     20_000,
+			LLMClient:         compactClient,
+			CompactModel:      "compact-model",
+		},
+	}.Run(context.Background(), Request{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -788,6 +804,12 @@ func TestRunnerRecoversFromMaxOutputTokens(t *testing.T) {
 	}
 	if !foundRecoveryPrompt {
 		t.Fatalf("max output token recovery prompt missing from retry: %#v", client.requests[1].Messages)
+	}
+	if len(client.requests[1].Tools) == 0 {
+		t.Fatal("max output recovery should not hard-disable tools; the prompt should guide concision")
+	}
+	if len(compactClient.requests) != 0 {
+		t.Fatalf("max output recovery should not force LLM compaction when context is below threshold; compact calls = %d", len(compactClient.requests))
 	}
 }
 
@@ -891,8 +913,83 @@ func (f *fakeStreamClient) ChatStream(ctx context.Context, req llm.Request, h ll
 	if len(resp.Message.ToolCalls) > 0 && h.OnToolCallsStarted != nil {
 		h.OnToolCallsStarted()
 	}
+	if h.OnToolCallComplete != nil {
+		for _, call := range resp.Message.ToolCalls {
+			h.OnToolCallComplete(call)
+		}
+	}
 	resp.Streamed = true
 	return resp, nil
+}
+
+type statusFakeClient struct {
+	response string
+	calls    int32
+}
+
+func (f *statusFakeClient) Chat(_ context.Context, _ llm.Request) (llm.Response, error) {
+	atomic.AddInt32(&f.calls, 1)
+	return llm.Response{Message: llm.Message{Role: "assistant", Content: f.response}}, nil
+}
+
+func TestRunnerSendsSummariesToLoadingMessageCallback(t *testing.T) {
+	client := &fakeStreamClient{fakeClient: fakeClient{responses: []llm.Response{
+		{Message: toolCallMessage("tool_1", `{"text":"ok"}`)},
+		{Message: llm.Message{Role: "assistant", Content: "done"}},
+	}}}
+	statusClient := &statusFakeClient{response: "读取 echo 参数"}
+	statuses := make(chan string, 8)
+	loadingMessages := make(chan string, 4)
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	result, err := Runner{
+		LLM:      client,
+		Tools:    tools,
+		MaxSteps: 3,
+		StatusSummarizer: &StatusSummarizer{
+			Client:  statusClient,
+			Model:   "status-model",
+			Timeout: time.Second,
+		},
+		StatusUpdate: func(status string) {
+			statuses <- status
+		},
+		LoadingMessageUpdate: func(status string) {
+			loadingMessages <- status
+		},
+		OnStream: func(StreamEvent) {},
+	}.Run(context.Background(), Request{Locale: LocaleZH})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "done" {
+		t.Fatalf("Final = %q, want done", result.Final)
+	}
+
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case status := <-loadingMessages:
+			if status == "读取 echo 参数" {
+				if got := atomic.LoadInt32(&statusClient.calls); got != 1 {
+					t.Fatalf("status summarizer calls = %d, want 1", got)
+				}
+				for {
+					select {
+					case staticStatus := <-statuses:
+						if staticStatus == "读取 echo 参数" {
+							t.Fatalf("summary was sent to StatusUpdate; statuses=%#v", staticStatus)
+						}
+					default:
+						return
+					}
+				}
+			}
+		case <-deadline:
+			t.Fatalf("dynamic tool status was not emitted; calls=%d", atomic.LoadInt32(&statusClient.calls))
+		}
+	}
 }
 
 func TestRunnerStreamsFinalAnswerWithToolsAvailable(t *testing.T) {

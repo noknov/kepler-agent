@@ -1008,14 +1008,14 @@ func TestNativeThreadStatusSuppressesProgressTaskCards(t *testing.T) {
 		t.Fatal("first native thread status unexpectedly cleared")
 	}
 	<-done
-	for _, s := range messenger.statuses {
-		if s != "" && s != "Thinking" && s != "思考中" {
-			t.Fatalf("status should be static thinking text, got: %q", s)
+	for _, call := range messenger.Calls() {
+		if call.status != "" && call.status != "Thinking" && call.status != "思考中" {
+			t.Fatalf("status should be static thinking text, got: %q", call.status)
 		}
-	}
-	for _, msg := range messenger.loadingMessages {
-		if msg == "Thinking" || msg == "思考中" {
-			t.Fatalf("loading messages should be dynamic status, not static: %#v", messenger.loadingMessages)
+		for _, msg := range call.loadingMessages {
+			if msg == "Thinking" || msg == "思考中" {
+				t.Fatalf("loading messages should be dynamic status, not static: %#v", call.loadingMessages)
+			}
 		}
 	}
 
@@ -1241,10 +1241,10 @@ func TestActiveReplyIsInjectedIntoNextStep(t *testing.T) {
 	foundStatus := false
 	foundText := false
 	for _, chunk := range svc.Messenger.(*fakeMessenger).chunks {
-		if chunk["type"] == "task_update" && strings.Contains(chunk["title"].(string), "Conversation guided") {
+		if chunk["type"] == "task_update" && strings.Contains(chunk["title"].(string), "Steering") {
 			foundStatus = true
 		}
-		if chunk["type"] == "markdown_text" && chunk["text"] == "\n\n_Conversation guided_\n" {
+		if chunk["type"] == "markdown_text" && chunk["text"] == "\n\n_Conversation Steered_\n" {
 			foundText = true
 		}
 	}
@@ -1496,14 +1496,27 @@ type streamAppend struct {
 
 type nativeStatusMessenger struct {
 	fakeMessenger
+	mu              sync.Mutex
 	statusCh        chan string
 	statuses        []string
+	loadingMessages []string
+	calls           []nativeStatusCall
+}
+
+type nativeStatusCall struct {
+	status          string
 	loadingMessages []string
 }
 
 func (m *nativeStatusMessenger) SetThreadStatus(_ context.Context, _, _, status string, loadingMessages []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.statuses = append(m.statuses, status)
 	m.loadingMessages = append(m.loadingMessages, loadingMessages...)
+	m.calls = append(m.calls, nativeStatusCall{
+		status:          status,
+		loadingMessages: append([]string(nil), loadingMessages...),
+	})
 	if m.statusCh != nil {
 		select {
 		case m.statusCh <- status:
@@ -1511,6 +1524,12 @@ func (m *nativeStatusMessenger) SetThreadStatus(_ context.Context, _, _, status 
 		}
 	}
 	return nil
+}
+
+func (m *nativeStatusMessenger) Calls() []nativeStatusCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]nativeStatusCall(nil), m.calls...)
 }
 
 func chunksContainText(chunks []map[string]any, want string) bool {

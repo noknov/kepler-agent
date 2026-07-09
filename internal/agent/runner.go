@@ -72,23 +72,26 @@ type Sanitizer interface {
 type SteeringProvider func() []llm.Message
 
 type Runner struct {
-	LLM               llm.Client
-	Model             string
-	Thinking          string
-	MaxTokens         int
-	Temp              float64
-	Tools             *registry.Registry
-	Capabilities      llm.Capabilities
-	Format            ObservationFormatter
-	Sanitize          Sanitizer
-	Observer          Observer
-	MaxSteps          int
-	Compactor         *memory.Compactor
-	StatusUpdate      StatusUpdater
-	StatusSummarizer  *StatusSummarizer
-	OnStream          func(StreamEvent)
-	OnUsage           func(llm.Usage)
-	OnLLMStepComplete func()
+	LLM          llm.Client
+	Model        string
+	Thinking     string
+	MaxTokens    int
+	Temp         float64
+	Tools        *registry.Registry
+	Capabilities llm.Capabilities
+	Format       ObservationFormatter
+	Sanitize     Sanitizer
+	Observer     Observer
+	MaxSteps     int
+	Compactor    *memory.Compactor
+	StatusUpdate StatusUpdater
+	// LoadingMessageUpdate receives LLM-generated progress summaries for
+	// native loading_messages; StatusUpdate remains the coarse static status.
+	LoadingMessageUpdate StatusUpdater
+	StatusSummarizer     *StatusSummarizer
+	OnStream             func(StreamEvent)
+	OnUsage              func(llm.Usage)
+	OnLLMStepComplete    func()
 }
 
 type Request struct {
@@ -157,6 +160,10 @@ type loopState struct {
 	// streamedText tracks whether any text was emitted in the current step.
 	streamedText bool
 
+	// toolStatusStarted is set once the dynamic status summarizer has been
+	// launched for the current tool-call turn.
+	toolStatusStarted bool
+
 	// clarificationErrors tracks persistent tool failures that require user input.
 	clarificationErrors *clarificationErrorTracker
 
@@ -195,7 +202,7 @@ func emptyResponseRetryPrompt() string {
 }
 
 func maxOutputTokensRecoveryPrompt() string {
-	return prompts.RunnerPrompt("max_output_tokens_recovery", "Output token limit hit. Resume directly - no apology, no recap of what you were doing. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces.")
+	return prompts.RunnerPrompt("max_output_tokens_recovery", "Output token limit hit. Continue from the partial answer above and finish more concisely. Avoid repeating prior text; prefer a short direct conclusion unless more evidence is genuinely required.")
 }
 
 func codeClaimRetryPrompt() string {
@@ -303,7 +310,7 @@ func unevidencedFileRetryPrompt() string {
 func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	maxSteps := r.MaxSteps
 	if maxSteps <= 0 {
-		maxSteps = 80 // hard ceiling; investigations rarely need more than 30–40 steps
+		maxSteps = 120 // hard ceiling; complex agentic tasks may need 60–100 steps
 	}
 	if req.Runtime.Cache == nil {
 		req.Runtime.Cache = registry.NewRuntimeCache()
@@ -392,7 +399,6 @@ func (r Runner) runStep(ctx context.Context, step, maxOverloadRetries int, s *lo
 		}
 		return true, Result{Generated: s.generated, TerminationReason: TerminationModelError}, llmErr
 	}
-
 	assistantMsg := resp.Message
 	if resp.Usage.PromptTokens > 0 || resp.Usage.CompletionTokens > 0 {
 		assistantMsg.Usage = &resp.Usage
@@ -415,6 +421,7 @@ func (r Runner) runStep(ctx context.Context, step, maxOverloadRetries int, s *lo
 
 	// Tool-call turn: emit narration, execute tools, collect results.
 	r.emitNarration(assistantMsg, s)
+	r.startToolStatus(ctx, assistantMsg.ToolCalls, s, req)
 	assistantMsg.Content = ""
 	s.messages = append(s.messages, assistantMsg)
 	s.generated = append(s.generated, assistantMsg)
@@ -630,10 +637,10 @@ func (r Runner) emitStepStatus(locale string, step int, s *loopState) {
 		return
 	}
 	if r.StatusSummarizer != nil {
-		if step == 0 {
-			r.StatusUpdate(ThinkingStatus(locale))
-		}
-		// Subsequent steps: the summarizer overwrites the status asynchronously.
+		// Always refresh on every step so the native Slack status keeps showing
+		// the last known loading message (or the default "thinking" text) while
+		// the LLM generates. The summarizer overwrites this once it resolves.
+		r.StatusUpdate(ThinkingStatus(locale))
 	} else {
 		r.StatusUpdate(StepStatus(locale, step))
 	}
@@ -658,6 +665,7 @@ func (r Runner) callLLM(ctx context.Context, llmReq llm.Request, s *loopState, r
 
 	s.streamedText = false
 	s.streamRouter = nil
+	s.toolStatusStarted = false
 	if wantStream {
 		// Always route text through streamRouter so text is never emitted
 		// directly — the router buffers everything and defers the answer until
@@ -693,6 +701,7 @@ func (r Runner) callLLM(ctx context.Context, llmReq llm.Request, s *loopState, r
 			}
 		},
 		OnToolCallComplete: func(call llm.ToolCall) {
+			r.startToolStatus(ctx, []llm.ToolCall{call}, s, req)
 			if streamExec != nil {
 				streamExec.Submit(call)
 			}
@@ -731,6 +740,32 @@ func (r Runner) callLLM(ctx context.Context, llmReq llm.Request, s *loopState, r
 	}
 
 	return resp, didStream, err
+}
+
+func (r Runner) startToolStatus(ctx context.Context, calls []llm.ToolCall, s *loopState, req Request) {
+	if r.StatusSummarizer == nil || s == nil || s.toolStatusStarted || len(calls) == 0 {
+		return
+	}
+	names := make([]string, 0, len(calls))
+	sampleArgs := ""
+	for _, call := range calls {
+		if call.Function.Name == "" {
+			continue
+		}
+		names = append(names, call.Function.Name)
+		if sampleArgs == "" {
+			sampleArgs = call.Function.Arguments
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	s.toolStatusStarted = true
+	update := r.StatusUpdate
+	if r.LoadingMessageUpdate != nil {
+		update = r.LoadingMessageUpdate
+	}
+	r.StatusSummarizer.Summarize(ctx, strings.Join(names, ", "), sampleArgs, req.Locale, update)
 }
 
 func isZeroUsage(usage llm.Usage) bool {
@@ -991,17 +1026,6 @@ type toolResult struct {
 }
 
 func (r Runner) executeToolCalls(ctx context.Context, calls []llm.ToolCall, req Request) []toolResult {
-	// Fire one dynamic status summary per agent turn (covers the full tool batch).
-	// The main loop already shows ThinkingStatus while the LLM generates; the
-	// summary overwrites that without an extra intermediate update here.
-	if len(calls) > 0 && r.StatusSummarizer != nil {
-		names := make([]string, len(calls))
-		for i, c := range calls {
-			names[i] = c.Function.Name
-		}
-		r.StatusSummarizer.Summarize(ctx, strings.Join(names, ", "), calls[0].Function.Arguments, req.Locale, r.StatusUpdate)
-	}
-
 	type indexedCall struct {
 		index int
 		call  llm.ToolCall

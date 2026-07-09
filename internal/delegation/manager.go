@@ -170,7 +170,7 @@ func (m *Manager) Run(ctx context.Context, profileName, task, contextText string
 			{Role: "system", Content: profile.SystemPrompt + m.RulesAndSkillsPrompt()},
 			{Role: "user", Content: "Task:\n" + task + "\n\nContext:\n" + contextText},
 		},
-		MaxTokens:   4096,
+		MaxTokens:   16384,
 		Temperature: 0.1,
 	})
 	if err != nil {
