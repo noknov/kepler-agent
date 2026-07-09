@@ -1,6 +1,8 @@
 package shell
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestValidateShellCommandAllowsOperationalReads(t *testing.T) {
 	cases := []string{
@@ -77,6 +79,67 @@ func TestValidateShellCommandBlocksWritesAndSecrets(t *testing.T) {
 	for _, cmd := range cases {
 		if err := validateShellCommand(cmd); err == nil {
 			t.Fatalf("validateShellCommand(%q) succeeded, want block", cmd)
+		}
+	}
+}
+
+func TestValidateShellCommandAllowsAmpersandInURL(t *testing.T) {
+	// '&' is a common query-string separator in URLs. When the URL is
+	// properly quoted, stripQuotedStrings removes it before operator checking.
+	cases := []string{
+		`curl 'https://api.example.com/v1/query?foo=1&bar=2&baz=3'`,
+		`curl -X POST 'https://auth.watiapp.io/login?clientId=x&redirect=y'`,
+		`curl -H 'Content-Type: application/json' 'https://host/path?a=1&b=2'`,
+		// semicolon inside a jq filter (single-quoted) must also be allowed
+		`jq '.items[] | select(.name; "foo")' data.json`,
+	}
+	for _, cmd := range cases {
+		if err := validateShellCommand(cmd); err != nil {
+			t.Fatalf("validateShellCommand(%q) unexpected error: %v", cmd, err)
+		}
+	}
+}
+
+func TestValidateShellCommandBlocksBackgroundExecution(t *testing.T) {
+	// Unquoted '&' must still be blocked regardless of position.
+	cases := []string{
+		`curl https://example.com &`,
+		`sleep 5 &`,
+		`date & echo done`,
+		// '&&' outside quotes must still be blocked
+		`curl https://example.com && echo ok`,
+	}
+	for _, cmd := range cases {
+		if err := validateShellCommand(cmd); err == nil {
+			t.Fatalf("validateShellCommand(%q) succeeded, want block (background/chain)", cmd)
+		}
+	}
+}
+
+func TestValidatePathsAllowsTmp(t *testing.T) {
+	tool := ReadOnlyTool{WorkspaceRoots: []string{"/workspace/proj"}}
+	cases := []string{
+		`curl -o /tmp/response.json https://api.example.com`,
+		`cat /tmp/auth.json`,
+		`find /tmp -name "*.json"`,
+	}
+	for _, cmd := range cases {
+		if err := tool.validatePaths(cmd); err != nil {
+			t.Fatalf("validatePaths(%q) unexpected error: %v", cmd, err)
+		}
+	}
+}
+
+func TestValidatePathsBlocksOutsideWorkspace(t *testing.T) {
+	tool := ReadOnlyTool{WorkspaceRoots: []string{"/workspace/proj"}}
+	cases := []string{
+		`cat /etc/passwd`,
+		`ls /Users/other/repo`,
+		`cat /workspace/other-proj/secret.go`,
+	}
+	for _, cmd := range cases {
+		if err := tool.validatePaths(cmd); err == nil {
+			t.Fatalf("validatePaths(%q) succeeded, want block (outside workspace)", cmd)
 		}
 	}
 }

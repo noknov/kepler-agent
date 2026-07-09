@@ -75,10 +75,11 @@ func registerCodeTools(tools *registry.Registry, cfg config.Config, workspacePol
 
 func registerIntegrationTools(tools *registry.Registry, cfg config.Config, commandPolicy safety.CommandPolicy) {
 	tools.Register(shellTools.ReadOnlyTool{
-		GCloudPath:  cfg.Tools.GCloudPath,
-		KubectlPath: cfg.Tools.KubectlPath,
-		Guard:       commandPolicy,
-		Timeout:     cfg.Tools.CommandTimeout,
+		GCloudPath:     cfg.Tools.GCloudPath,
+		KubectlPath:    cfg.Tools.KubectlPath,
+		WorkspaceRoots: cfg.Security.WorkspaceRoots,
+		Guard:          commandPolicy,
+		Timeout:        cfg.Tools.CommandTimeout,
 	})
 
 	// K8s native tools: dedicated kubectl wrappers for pods, logs, describe, top,

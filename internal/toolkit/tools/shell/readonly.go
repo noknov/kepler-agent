@@ -26,11 +26,16 @@ const maxOutputBytes = 60000
 // Supports pipes (|) so that idiomatic shell one-liners like
 // "kubectl get pods | grep web" or "git log --oneline | head -20" work as-is.
 // Shell meta-operators (;, &&, ||, &) and redirections (>, >>) are not allowed.
+//
+// The shell process runs with its working directory set to the first
+// WorkspaceRoot (if any). Absolute path arguments that fall outside all roots
+// are rejected to prevent agents from reading code in unrelated repositories.
 type ReadOnlyTool struct {
-	GCloudPath  string
-	KubectlPath string
-	Guard       safety.CommandPolicy
-	Timeout     time.Duration
+	GCloudPath     string
+	KubectlPath    string
+	WorkspaceRoots []string
+	Guard          safety.CommandPolicy
+	Timeout        time.Duration
 }
 
 func (t ReadOnlyTool) Spec() llm.ToolSpec {
@@ -76,6 +81,9 @@ func (t ReadOnlyTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 	if err := t.Guard.Check(cmd); err != nil {
 		return registry.Result{}, err
 	}
+	if err := t.validatePaths(cmd); err != nil {
+		return registry.Result{}, err
+	}
 
 	timeout := t.Timeout
 	if timeout <= 0 {
@@ -85,6 +93,9 @@ func (t ReadOnlyTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 	defer cancel()
 
 	sh := exec.CommandContext(ctx, "sh", "-c", t.expandBinaries(cmd))
+	if len(t.WorkspaceRoots) > 0 {
+		sh.Dir = t.WorkspaceRoots[0]
+	}
 	var stdout, stderr bytes.Buffer
 	sh.Stdout = &stdout
 	sh.Stderr = &stderr
@@ -131,20 +142,88 @@ func (t ReadOnlyTool) expandBinaries(cmd string) string {
 	return cmd
 }
 
+// stripSingleQuotedStrings removes the content of single-quoted strings only.
+// Single-quoted strings are fully literal in POSIX shell: no variable
+// expansion, no command substitution. Double-quoted strings are left intact
+// because the shell still expands $(...) and `...` inside them — stripping
+// their content would create false negatives for command-injection checks.
+func stripSingleQuotedStrings(s string) string {
+	var b strings.Builder
+	i := 0
+	for i < len(s) {
+		if s[i] != '\'' {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		// Consume the opening quote, skip content, consume closing quote.
+		b.WriteByte('\'')
+		i++
+		for i < len(s) && s[i] != '\'' {
+			i++
+		}
+		if i < len(s) {
+			b.WriteByte('\'')
+			i++
+		}
+	}
+	return b.String()
+}
+
+// splitPipeline splits cmd on '|' characters that are not enclosed by single
+// or double quotes. This prevents a '|' inside a quoted argument (e.g. a jq
+// filter like '.items[] | .name') from being treated as a pipe operator.
+func splitPipeline(cmd string) []string {
+	var segments []string
+	inSingle, inDouble := false, false
+	start := 0
+	for i := 0; i < len(cmd); i++ {
+		switch cmd[i] {
+		case '\'':
+			if !inDouble {
+				inSingle = !inSingle
+			}
+		case '"':
+			if !inSingle {
+				inDouble = !inDouble
+			}
+		case '\\':
+			// Backslash escapes the next char inside double-quoted strings.
+			if inDouble && i+1 < len(cmd) {
+				i++
+			}
+		case '|':
+			if !inSingle && !inDouble {
+				segments = append(segments, cmd[start:i])
+				start = i + 1
+			}
+		}
+	}
+	return append(segments, cmd[start:])
+}
+
 // validateShellCommand checks that the command (including pipelines) only
 // invokes allowed programs and does not contain shell meta-operators that
 // enable command chaining or output redirection.
 func validateShellCommand(cmd string) error {
+	// Strip single-quoted substrings before checking for operators so that
+	// characters inside quoted arguments (e.g. '&' in a URL query string
+	// like curl '...?foo=1&bar=2') do not produce false positives.
+	// Double-quoted content is intentionally left intact: the shell still
+	// expands $(...) and backticks inside double quotes, so those patterns
+	// must remain detectable.
+	unquoted := stripSingleQuotedStrings(cmd)
+
 	// Reject chaining operators and redirections; pipes are the only allowed
 	// shell construct so that idiomatic one-liners still work.
 	for _, illegal := range []string{"&&", "||", ";;", ";", "&", "`", "$(", ">${", ">>", " > ", " 2>", ">/"} {
-		if strings.Contains(cmd, illegal) {
+		if strings.Contains(unquoted, illegal) {
 			return fmt.Errorf("shell meta-operator %q is not allowed; use | for pipelines only", illegal)
 		}
 	}
 
 	// Validate each segment of a pipeline independently.
-	for _, segment := range strings.Split(cmd, "|") {
+	for _, segment := range splitPipeline(cmd) {
 		if err := validateSegment(strings.TrimSpace(segment)); err != nil {
 			return err
 		}
@@ -192,20 +271,28 @@ func validateGit(args []string) error {
 		return fmt.Errorf("git requires a subcommand")
 	}
 	sub := args[0]
-	// Block operations that push or modify remote state or permanently
-	// rewrite history.
+	// Block operations that push or modify remote state, permanently rewrite
+	// history, or mutate the working tree. checkout/switch/reset/restore are
+	// blocked because all users share the same physical repo directories —
+	// switching branches would contaminate other concurrent runs.
 	blocked := map[string]bool{
-		"push":    true,
-		"commit":  true,
-		"merge":   true,
-		"rebase":  true,
-		"am":      true,
-		"apply":   true,
-		"bisect":  false, // allow (read-only investigation)
-		"clean":   true,
-		"rm":      true,
-		"mv":      true,
+		"push":     true,
+		"commit":   true,
+		"merge":    true,
+		"rebase":   true,
+		"am":       true,
+		"apply":    true,
+		"bisect":   false, // allow (read-only investigation)
+		"clean":    true,
+		"rm":       true,
+		"mv":       true,
 		"submodule": false,
+		"checkout": true,
+		"switch":   true,
+		"reset":    true,
+		"restore":  true,
+		"stash":    true,
+		"worktree": true,
 	}
 	if blocked[sub] {
 		return fmt.Errorf("git %s modifies repository state and is not allowed", sub)
@@ -433,4 +520,58 @@ func truncateOutput(out string) string {
 		return out
 	}
 	return out[:maxOutputBytes] + "\n...[truncated after " + strconv.Itoa(maxOutputBytes) + " bytes]"
+}
+
+// validatePaths rejects commands that reference absolute paths outside of the
+// configured workspace roots. This prevents agents from inadvertently reading
+// code or files from unrelated repositories on the same host.
+//
+// The check is best-effort: it scans every whitespace-delimited token that
+// looks like an absolute path (/…) and verifies it falls under at least one
+// workspace root. Tokens that are flags (--foo) or non-path strings are
+// skipped. When no WorkspaceRoots are configured the check is a no-op.
+//
+// /tmp and /var/folders are always allowed as transient scratch space.
+func (t ReadOnlyTool) validatePaths(cmd string) error {
+	if len(t.WorkspaceRoots) == 0 {
+		return nil
+	}
+	// Always-allowed prefixes: temp directories used for transient files.
+	alwaysAllowed := []string{"/tmp/", "/var/folders/", "/var/tmp/"}
+	for _, segment := range strings.Split(cmd, "|") {
+		for _, token := range strings.Fields(segment) {
+			if !strings.HasPrefix(token, "/") {
+				continue
+			}
+			if strings.HasPrefix(token, "--") {
+				continue
+			}
+			clean := filepath.Clean(token)
+			// Allow well-known temp paths unconditionally.
+			allowed := false
+			for _, prefix := range alwaysAllowed {
+				if strings.HasPrefix(clean+"/", prefix) || clean == strings.TrimSuffix(prefix, "/") {
+					allowed = true
+					break
+				}
+			}
+			if allowed {
+				continue
+			}
+			for _, root := range t.WorkspaceRoots {
+				if root == "" {
+					continue
+				}
+				rootClean := filepath.Clean(root)
+				if clean == rootClean || strings.HasPrefix(clean, rootClean+string(filepath.Separator)) {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return fmt.Errorf("path %q is outside the allowed workspace roots; only paths under %v are permitted", token, t.WorkspaceRoots)
+			}
+		}
+	}
+	return nil
 }
