@@ -34,6 +34,10 @@ type MCPTool struct {
 	// forwarding to the remote tool. Default values take precedence over
 	// user-supplied args, so they act as fixed parameters the LLM cannot override.
 	DefaultArgs json.RawMessage
+	// StabilizeBefore checks/fixes active page focus before reading page state.
+	StabilizeBefore bool
+	// StabilizeAfter waits for navigation/display state to settle after an action.
+	StabilizeAfter bool
 }
 
 func (t MCPTool) Spec() llm.ToolSpec {
@@ -44,21 +48,25 @@ func (t MCPTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.R
 	if t.Client == nil || !t.Client.enabled() {
 		return registry.Result{}, fmt.Errorf("Playwright MCP is not configured: PLAYWRIGHT_MCP_URL is required")
 	}
-	args := mergeDefaultArgs(t.DefaultArgs, raw)
+	args := mergeDefaultArgs(t.DefaultArgs, normalizeToolArgs(t.LocalName, raw))
 	session, err := getOrCreateSession(ctx, t.Client.MCP, rt.Cache)
 	if err != nil {
 		return registry.Result{}, err
 	}
-	out, err := t.Client.MCP.CallTool(ctx, session, t.RemoteName, args)
-	if err != nil && isSessionExpired(err) {
-		session, err = createSession(ctx, t.Client.MCP, rt.Cache)
-		if err != nil {
-			return registry.Result{}, err
+	var notices []string
+	if t.StabilizeBefore {
+		if notice := stabilizePage(ctx, t.Client.MCP, session); notice != "" {
+			notices = append(notices, notice)
 		}
-		out, err = t.Client.MCP.CallTool(ctx, session, t.RemoteName, args)
 	}
+	out, session, err := callToolWithRetry(ctx, t.Client.MCP, rt.Cache, session, t.RemoteName, args)
 	if err != nil {
 		return registry.Result{}, err
+	}
+	if t.StabilizeAfter {
+		if notice := stabilizePage(ctx, t.Client.MCP, session); notice != "" {
+			notices = append(notices, notice)
+		}
 	}
 	// Image data URIs must not pass through LLM context (multi-MB base64 strings cause
 	// context overflows and LLM timeouts). The Playwright MCP result is typically a
@@ -74,12 +82,13 @@ func (t MCPTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.R
 			summary += "\n"
 		}
 		summary += fmt.Sprintf("Screenshot captured (~%dKB). Call slack-send_screenshot only if the user explicitly asked to see it.", sizeKB)
+		summary = appendNotices(summary, notices)
 		return registry.Result{Content: summary}, nil
 	}
 	// Strip internal .playwright-mcp/ file paths from all tool output — not just snapshots.
 	// pw-navigate results also contain lines like "[Snapshot](.playwright-mcp/page-xxx.yml)"
 	// which cause the LLM to call code-read_file on container-internal paths.
-	return registry.Result{Content: sanitizeSnapshotOutput(out)}, nil
+	return registry.Result{Content: appendNotices(sanitizeSnapshotOutput(out), notices)}, nil
 }
 
 const snapshotPathNotice = "Note: .playwright-mcp/* paths are internal to the browser container and cannot be read with code-read_file or other workspace file tools. Use element refs from this output (e.g. ref=s1e4) directly with pw-click, pw-type, or pw-fill_form."
@@ -184,6 +193,66 @@ func mergeDefaultArgs(defaults, userArgs json.RawMessage) json.RawMessage {
 	return b
 }
 
+func normalizeToolArgs(localName string, raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	var args map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return raw
+	}
+	switch localName {
+	case "pw-click", "pw-type":
+		if _, hasRef := args["ref"]; !hasRef {
+			if target, hasTarget := args["target"]; hasTarget {
+				args["ref"] = target
+			}
+		}
+		delete(args, "target")
+	}
+	b, err := json.Marshal(args)
+	if err != nil {
+		return raw
+	}
+	return b
+}
+
+func mustJSONRaw(v any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return b
+}
+
+func callToolWithRetry(ctx context.Context, client *mcp.Client, cache *registry.RuntimeCache, session mcp.Session, name string, args json.RawMessage) (string, mcp.Session, error) {
+	out, err := client.CallTool(ctx, session, name, args)
+	if err != nil && isSessionExpired(err) {
+		var createErr error
+		session, createErr = createSession(ctx, client, cache)
+		if createErr != nil {
+			return "", session, createErr
+		}
+		out, err = client.CallTool(ctx, session, name, args)
+	}
+	return out, session, err
+}
+
+func appendNotices(content string, notices []string) string {
+	content = strings.TrimSpace(content)
+	for _, notice := range notices {
+		notice = strings.TrimSpace(notice)
+		if notice == "" {
+			continue
+		}
+		if content != "" {
+			content += "\n\n"
+		}
+		content += notice
+	}
+	return content
+}
+
 // NavigateTool wraps browser_navigate with automatic about:blank recovery.
 //
 // When the page load triggers an OIDC signinPopup() (or any other mechanism
@@ -213,52 +282,48 @@ func (t NavigateTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 	if err != nil {
 		return registry.Result{}, err
 	}
-	out, err := t.Client.MCP.CallTool(ctx, session, "browser_navigate", raw)
-	if err != nil && isSessionExpired(err) {
-		session, err = createSession(ctx, t.Client.MCP, rt.Cache)
-		if err != nil {
-			return registry.Result{}, err
-		}
-		out, err = t.Client.MCP.CallTool(ctx, session, "browser_navigate", raw)
-	}
+	out, session, err := callToolWithRetry(ctx, t.Client.MCP, rt.Cache, session, "browser_navigate", raw)
 	if err != nil {
 		return registry.Result{}, err
 	}
 
 	out = sanitizeSnapshotOutput(out)
 
+	return registry.Result{Content: appendNotices(out, []string{stabilizePage(ctx, t.Client.MCP, session)})}, nil
+}
+
+func stabilizePage(ctx context.Context, client *mcp.Client, session mcp.Session) string {
 	// Inject stealth patches via evaluate as a best-effort fallback for when the
 	// Playwright MCP server was not started with --init-script /stealth.js.
 	// This runs after page load so it may miss detection scripts that fire during
 	// page initialization. For robust stealth, use --init-script in the Docker command.
-	_, _ = t.Client.MCP.CallTool(ctx, session, "browser_evaluate",
-		json.RawMessage(`{"expression":"`+stealthPatchExpr+`"}`))
+	_, _ = client.CallTool(ctx, session, "browser_evaluate", mustJSONRaw(map[string]any{
+		"expression": stealthPatchExpr,
+	}))
 
-	// Check for about:blank redirect caused by OIDC popup or similar JS redirect.
-	hrefOut, evalErr := t.Client.MCP.CallTool(ctx, session, "browser_evaluate",
-		json.RawMessage(`{"expression":"window.location.href"}`))
-	if evalErr == nil && strings.Contains(hrefOut, "about:blank") {
-		// List all open tabs to find the main page.
-		tabsOut, listErr := t.Client.MCP.CallTool(ctx, session, "browser_tabs",
-			json.RawMessage(`{"action":"list"}`))
-		if listErr == nil {
-			idx := findMainTabIndex(tabsOut)
-			if idx >= 0 {
-				switchArgs := json.RawMessage(`{"action":"select","index":` + strconv.Itoa(idx) + `}`)
-				_, _ = t.Client.MCP.CallTool(ctx, session, "browser_tabs", switchArgs)
-				return registry.Result{Content: out + "\n\n[Auto-recovery] Page was redirected to about:blank " +
-					"(likely OIDC auth popup). Switched focus back to main tab (index " + strconv.Itoa(idx) + "). " +
-					"Call pw-snapshot to see current page state. " +
-					"If the page still requires authentication, use pw-get_all_pages to inspect open tabs " +
-					"or navigate directly to the login URL."}, nil
-			}
-		}
-		return registry.Result{Content: out + "\n\n[Warning] Page redirected to about:blank. " +
-			"This is likely an OIDC authentication popup. " +
-			"Use pw-get_all_pages to list all open tabs, or navigate directly to the login URL."}, nil
+	statusOut, evalErr := client.CallTool(ctx, session, "browser_evaluate", mustJSONRaw(map[string]any{
+		"expression": pageStatusExpr,
+	}))
+	if evalErr != nil {
+		return ""
+	}
+	if !strings.Contains(statusOut, "about:blank") {
+		return ""
 	}
 
-	return registry.Result{Content: out}, nil
+	tabsOut, listErr := client.CallTool(ctx, session, "browser_tabs", json.RawMessage(`{"action":"list"}`))
+	if listErr != nil {
+		return "[Warning] Active page is about:blank and open tabs could not be listed. Use pw-get_all_pages to inspect browser state."
+	}
+	idx := findMainTabIndex(tabsOut)
+	if idx < 0 {
+		return "[Warning] Active page is about:blank and no non-blank page tab was found. Use pw-get_all_pages to inspect browser state."
+	}
+	_, _ = client.CallTool(ctx, session, "browser_tabs", mustJSONRaw(map[string]any{
+		"action": "select",
+		"index":  idx,
+	}))
+	return "[Auto-recovery] Active page was about:blank, so focus was switched back to the main tab (index " + strconv.Itoa(idx) + "). Call pw-snapshot to see the current page state."
 }
 
 // findMainTabIndex parses browser_tabs list output and returns the index of the
@@ -266,8 +331,8 @@ func (t NavigateTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 //
 // Expected line format from Playwright MCP:
 //
-//	- 0: (current) [Page Title](https://example.com/)
-//	- 1: [Other Page](https://other.example.com/)
+//   - 0: (current) [Page Title](https://example.com/)
+//   - 1: [Other Page](https://other.example.com/)
 func findMainTabIndex(tabsText string) int {
 	for _, line := range strings.Split(tabsText, "\n") {
 		line = strings.TrimSpace(line)
@@ -330,34 +395,40 @@ func RegisterDeferredAll(reg *registry.Registry, client *Client, category string
 func tools(client *Client) []MCPTool {
 	return []MCPTool{
 		{
-			Client:     client,
-			LocalName:  "pw-snapshot",
-			RemoteName: "browser_snapshot",
-			Parameters: registry.ObjectSchema(nil, map[string]any{}),
+			Client:          client,
+			LocalName:       "pw-snapshot",
+			RemoteName:      "browser_snapshot",
+			StabilizeBefore: true,
+			Parameters:      registry.ObjectSchema(nil, map[string]any{}),
 		},
 		{
-			Client:     client,
-			LocalName:  "pw-click",
-			RemoteName: "browser_click",
-			Parameters: registry.ObjectSchema([]string{"target"}, map[string]any{
-				"target":  map[string]any{"type": "string", "description": "Element ref from pw-snapshot (e.g. s1e4)."},
+			Client:         client,
+			LocalName:      "pw-click",
+			RemoteName:     "browser_click",
+			StabilizeAfter: true,
+			Parameters: registry.ObjectSchema([]string{"ref"}, map[string]any{
+				"ref":     map[string]any{"type": "string", "description": "Element ref from pw-snapshot (e.g. s1e4)."},
+				"target":  map[string]any{"type": "string", "description": "Deprecated alias for ref; prefer ref."},
 				"element": map[string]any{"type": "string", "description": "Human-readable description of the element, for logging."},
 			}),
 		},
 		{
-			Client:     client,
-			LocalName:  "pw-type",
-			RemoteName: "browser_type",
-			Parameters: registry.ObjectSchema([]string{"target", "text"}, map[string]any{
-				"target":  map[string]any{"type": "string", "description": "Element ref from pw-snapshot (e.g. s1e4)."},
+			Client:         client,
+			LocalName:      "pw-type",
+			RemoteName:     "browser_type",
+			StabilizeAfter: true,
+			Parameters: registry.ObjectSchema([]string{"ref", "text"}, map[string]any{
+				"ref":     map[string]any{"type": "string", "description": "Element ref from pw-snapshot (e.g. s1e4)."},
+				"target":  map[string]any{"type": "string", "description": "Deprecated alias for ref; prefer ref."},
 				"element": map[string]any{"type": "string", "description": "Human-readable description of the element, for logging."},
 				"text":    map[string]any{"type": "string", "description": "Text to type into the element."},
 			}),
 		},
 		{
-			Client:     client,
-			LocalName:  "pw-fill_form",
-			RemoteName: "browser_fill_form",
+			Client:         client,
+			LocalName:      "pw-fill_form",
+			RemoteName:     "browser_fill_form",
+			StabilizeAfter: true,
 			Parameters: registry.ObjectSchema([]string{"fields"}, map[string]any{
 				"fields": map[string]any{
 					"type": "array",
@@ -377,9 +448,10 @@ func tools(client *Client) []MCPTool {
 			}),
 		},
 		{
-			Client:     client,
-			LocalName:  "pw-screenshot",
-			RemoteName: "browser_take_screenshot",
+			Client:          client,
+			LocalName:       "pw-screenshot",
+			RemoteName:      "browser_take_screenshot",
+			StabilizeBefore: true,
 			// "type" is optional; omitting it defaults to PNG on the server side.
 			Parameters: registry.ObjectSchema(nil, map[string]any{
 				"type":     map[string]any{"type": "string", "enum": []string{"png", "jpeg"}, "description": "Image format. Defaults to png."},
@@ -388,9 +460,10 @@ func tools(client *Client) []MCPTool {
 			}),
 		},
 		{
-			Client:     client,
-			LocalName:  "pw-press_key",
-			RemoteName: "browser_press_key",
+			Client:         client,
+			LocalName:      "pw-press_key",
+			RemoteName:     "browser_press_key",
+			StabilizeAfter: true,
 			Parameters: registry.ObjectSchema([]string{"key"}, map[string]any{
 				"key": map[string]any{"type": "string", "description": "Key name (e.g. Enter, Tab, Escape, ArrowDown)."},
 			}),
@@ -406,9 +479,10 @@ func tools(client *Client) []MCPTool {
 			}),
 		},
 		{
-			Client:     client,
-			LocalName:  "pw-evaluate",
-			RemoteName: "browser_evaluate",
+			Client:          client,
+			LocalName:       "pw-evaluate",
+			RemoteName:      "browser_evaluate",
+			StabilizeBefore: true,
 			Parameters: registry.ObjectSchema([]string{"expression"}, map[string]any{
 				// Playwright MCP evaluates a JavaScript expression string in the browser context.
 				// Use standard browser globals (document, window, localStorage) — not Playwright's page object.
@@ -423,9 +497,10 @@ func tools(client *Client) []MCPTool {
 			Parameters:  registry.ObjectSchema(nil, map[string]any{}),
 		},
 		{
-			Client:     client,
-			LocalName:  "pw-switch_page",
-			RemoteName: "browser_tabs",
+			Client:         client,
+			LocalName:      "pw-switch_page",
+			RemoteName:     "browser_tabs",
+			StabilizeAfter: true,
 			// "action":"select" is injected by DefaultArgs; the LLM only needs to supply "index".
 			DefaultArgs: json.RawMessage(`{"action":"select"}`),
 			Parameters: registry.ObjectSchema([]string{"index"}, map[string]any{
@@ -477,4 +552,12 @@ const stealthPatchExpr = `(function(){` +
 	`if(ua.indexOf('HeadlessChrome')>=0){` +
 	`Object.defineProperty(navigator,'userAgent',{get:()=>ua.replace(/HeadlessChrome\/[\d.]+ ?/g,''),configurable:true});` +
 	`}}catch(_){}` +
+	`})()`
+
+const pageStatusExpr = `(async function(){` +
+	`var wait=function(ms){return new Promise(function(resolve){setTimeout(resolve,ms)})};` +
+	`var started=Date.now();` +
+	`while(document.readyState==='loading'&&Date.now()-started<8000){await wait(100)}` +
+	`await wait(100);` +
+	`return JSON.stringify({href:window.location.href,title:document.title,readyState:document.readyState});` +
 	`})()`
