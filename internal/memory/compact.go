@@ -11,7 +11,8 @@ import (
 const (
 	// MaxCompactOutputTokens is the max output tokens for the compact summary call.
 	// claude-code uses 20,000 (p99.99 of compact summary output is 17,387 tokens).
-	MaxCompactOutputTokens = 20_000
+	// Raised to 32,000 for more detailed summaries.
+	MaxCompactOutputTokens = 32_000
 )
 
 // CompactSystemPrompt returns the system prompt for the compact summary LLM call.
