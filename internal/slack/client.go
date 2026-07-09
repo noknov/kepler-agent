@@ -99,8 +99,9 @@ func (c *Client) PublishHome(ctx context.Context, userID string, view map[string
 
 func (c *Client) StartStream(ctx context.Context, channel, threadTS, recipientUserID string) (string, error) {
 	payload := map[string]any{
-		"channel":   channel,
-		"thread_ts": threadTS,
+		"channel":           channel,
+		"thread_ts":         threadTS,
+		"task_display_mode": "dense",
 	}
 	if recipientUserID != "" {
 		payload["recipient_user_id"] = recipientUserID
@@ -120,6 +121,31 @@ func (c *Client) StartStream(ctx context.Context, channel, threadTS, recipientUs
 		return "", fmt.Errorf("slack chat.startStream failed: %s", out.Error)
 	}
 	return out.TS, nil
+}
+
+// SetThreadStatus updates the native Slack AI assistant status indicator for a
+// thread. Slack automatically clears the status when the app sends a reply;
+// passing an empty status clears it explicitly.
+func (c *Client) SetThreadStatus(ctx context.Context, channel, threadTS, status string, loadingMessages []string) error {
+	payload := map[string]any{
+		"channel_id": channel,
+		"thread_ts":  threadTS,
+		"status":     status,
+	}
+	if len(loadingMessages) > 0 {
+		payload["loading_messages"] = loadingMessages
+	}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+	}
+	if err := c.postJSON(ctx, "assistant.threads.setStatus", payload, &out); err != nil {
+		return err
+	}
+	if !out.OK {
+		return fmt.Errorf("slack assistant.threads.setStatus failed: %s", out.Error)
+	}
+	return nil
 }
 
 func (c *Client) AppendStream(ctx context.Context, channel, ts string, chunks []map[string]any) error {

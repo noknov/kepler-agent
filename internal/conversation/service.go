@@ -34,6 +34,10 @@ type Messenger interface {
 	ThreadContext(ctx context.Context, channel, threadTS string, limit int) string
 }
 
+type ThreadStatusMessenger interface {
+	SetThreadStatus(ctx context.Context, channel, threadTS, status string, loadingMessages []string) error
+}
+
 type TextFormatter func(string) string
 
 type Service struct {
@@ -162,13 +166,24 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		runID = runObserver.Run.ID
 	}
 
-	streamTS, streamErr := s.Messenger.StartStream(ctx, req.Channel, req.ThreadTS, req.UserID)
-	useStream := streamErr == nil && streamTS != ""
-	if streamErr != nil {
-		log.Printf("stream fallback: %v", streamErr)
+	statusMessenger, useNativeStatus := s.Messenger.(ThreadStatusMessenger)
+	if strings.HasPrefix(req.Channel, "web:") {
+		useNativeStatus = false
+	}
+	var streamTS string
+	var streamErr error
+	useProgressStream := false
+	useStream := useNativeStatus
+	var thinkingTS string
+	if !useNativeStatus {
+		streamTS, streamErr = s.Messenger.StartStream(ctx, req.Channel, req.ThreadTS, req.UserID)
+		useProgressStream = streamErr == nil && streamTS != ""
+		useStream = useProgressStream
+		if streamErr != nil {
+			log.Printf("stream fallback: %v", streamErr)
+		}
 	}
 
-	var thinkingTS string
 	if !useStream {
 		thinkingTS, _ = s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, ":thinking_face: ...")
 	}
@@ -190,7 +205,10 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if s.Metrics != nil {
 			s.Metrics.Latency(time.Since(start))
 		}
-		if useStream && !progressStopped {
+		if useNativeStatus {
+			clearThreadStatus(context.Background(), statusMessenger, req.Channel, req.ThreadTS)
+		}
+		if useProgressStream && !progressStopped {
 			_ = s.Messenger.StopStream(context.Background(), req.Channel, progressTS)
 		} else if thinkingTS != "" {
 			_ = s.Messenger.DeleteMessage(context.Background(), req.Channel, thinkingTS)
@@ -231,7 +249,51 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	// displayedContextTokens is the estimated/current prompt length for the
 	// active request. It intentionally excludes cumulative billed usage.
 	displayedContextTokens := 0
+	lastNativeStatus := ""
+	lastNativeStatusAt := time.Time{}
+	setNativeStatus := func(title string) {
+		if !useNativeStatus || statusMessenger == nil {
+			return
+		}
+		status := assistantThreadStatusText(title, locale)
+		if status == "" {
+			return
+		}
+		if status == lastNativeStatus && time.Since(lastNativeStatusAt) < 5*time.Second {
+			return
+		}
+		if time.Since(lastNativeStatusAt) < 500*time.Millisecond {
+			return
+		}
+		lastNativeStatus = status
+		lastNativeStatusAt = time.Now()
+		go func(status string) {
+			ctx, cancel := context.WithTimeout(runCtx, 3*time.Second)
+			defer cancel()
+			if err := statusMessenger.SetThreadStatus(ctx, req.Channel, req.ThreadTS, status, nil); err != nil {
+				s.recordDeliveryError(req, "", err)
+			}
+		}(status)
+	}
 	appendProgress := func(chunks []map[string]any) {
+		if useNativeStatus {
+			for _, chunk := range chunks {
+				if chunk["type"] != "task_update" {
+					continue
+				}
+				status, _ := chunk["status"].(string)
+				if status == "complete" {
+					clearThreadStatus(context.Background(), statusMessenger, req.Channel, req.ThreadTS)
+					continue
+				}
+				title, _ := chunk["title"].(string)
+				if title != "" {
+					currentStatus = title
+					setNativeStatus(title)
+				}
+			}
+			return
+		}
 		if !useStream || progressStopped {
 			return
 		}
@@ -267,6 +329,9 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}
 	}
 	appendProgressMarkdown := func(text string) error {
+		if useNativeStatus {
+			return nil
+		}
 		if !useStream || progressStopped || text == "" {
 			return nil
 		}
@@ -315,7 +380,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		return true
 	}
 	updateLiveUsage := func(delta string) {
-		if !useStream || delta == "" {
+		if !useProgressStream || delta == "" {
 			return
 		}
 		if baseContextTokens <= 0 {
@@ -331,11 +396,15 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}
 	updateAPIUsage := func(usage llm.Usage) {
 		// Display current prompt/context length, not cumulative billed tokens.
+		if !useProgressStream {
+			_ = setCurrentUsage(contextTokensFromUsage(usage, baseContextTokens))
+			return
+		}
 		if setCurrentUsage(contextTokensFromUsage(usage, baseContextTokens)) {
 			appendTaskUpdate(currentStatus, "in_progress")
 		}
 	}
-	if useStream {
+	if useProgressStream {
 		progressMarkdown = &streamMarkdownBuffer{
 			ctx:     ctx,
 			channel: req.Channel,
@@ -351,6 +420,11 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}()
 	}
 	stopProgress := func() {
+		if useNativeStatus {
+			clearThreadStatus(context.Background(), statusMessenger, req.Channel, req.ThreadTS)
+			progressStopped = true
+			return
+		}
 		if progressStopped || progressTS == "" {
 			return
 		}
@@ -695,6 +769,77 @@ func failedTitleWithErrorID(locale, errorID string) string {
 		return agent.FailedTitle(locale)
 	}
 	return agent.FailedTitle(locale) + " · " + errorID
+}
+
+func clearThreadStatus(ctx context.Context, messenger ThreadStatusMessenger, channel, threadTS string) {
+	if messenger == nil {
+		return
+	}
+	clearCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	_ = messenger.SetThreadStatus(clearCtx, channel, threadTS, "", nil)
+}
+
+func assistantThreadStatusText(title, locale string) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return ""
+	}
+	title = stripContextPrefix(title)
+	if title == "" {
+		return ""
+	}
+	if locale == agent.LocaleZH {
+		if strings.HasPrefix(title, "正在") ||
+			strings.HasSuffix(title, "中") ||
+			strings.HasSuffix(title, "中...") ||
+			strings.HasSuffix(title, "中…") ||
+			strings.Contains(title, "等待") ||
+			strings.Contains(title, "已") {
+			return title
+		}
+		return "正在" + title
+	}
+	lower := strings.ToLower(title)
+	if strings.HasPrefix(lower, "is ") ||
+		strings.HasPrefix(lower, "are ") ||
+		strings.HasPrefix(lower, "has ") ||
+		strings.HasPrefix(lower, "waiting") {
+		return title
+	}
+	if strings.HasSuffix(lower, "ing") || strings.Contains(lower, "ing ") {
+		return "is " + lowerFirstASCII(title)
+	}
+	return "is " + lowerFirstASCII(title)
+}
+
+func stripContextPrefix(title string) string {
+	parts := strings.Split(title, " · ")
+	if len(parts) == 0 {
+		return strings.TrimSpace(title)
+	}
+	if len(parts) > 1 {
+		first := strings.TrimSpace(parts[0])
+		last := strings.TrimSpace(parts[len(parts)-1])
+		if strings.Contains(strings.ToLower(first), "context") {
+			return strings.TrimSpace(strings.Join(parts[1:], " · "))
+		}
+		if strings.Contains(strings.ToLower(last), "context") {
+			return strings.TrimSpace(strings.Join(parts[:len(parts)-1], " · "))
+		}
+	}
+	return strings.TrimSpace(title)
+}
+
+func lowerFirstASCII(s string) string {
+	if s == "" {
+		return s
+	}
+	b := []byte(s)
+	if b[0] >= 'A' && b[0] <= 'Z' {
+		b[0] += 'a' - 'A'
+	}
+	return string(b)
 }
 
 func appendContextNoticeText(text string, notices ...string) string {
