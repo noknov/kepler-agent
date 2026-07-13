@@ -45,12 +45,13 @@ type ExternalEvidence struct {
 }
 
 type BuildRequest struct {
-	SystemPrompt     string
-	ExternalEvidence []ExternalEvidence
-	UserText         string
-	UserParts        []llm.ContentPart
-	Summary          string
-	Turns            []Turn
+	SystemPrompt      string
+	CompactBoundaries []CompactBoundary
+	ExternalEvidence  []ExternalEvidence
+	UserText          string
+	UserParts         []llm.ContentPart
+	Summary           string
+	Turns             []Turn
 }
 
 func (b Builder) Build(systemPrompt, threadContext, userText, summary string, turns []Turn) []llm.Message {
@@ -78,6 +79,18 @@ func (b Builder) BuildRequest(req BuildRequest) []llm.Message {
 			Role:    "user",
 			Content: prompts.MemoryLabel("session_summary", "") + "\n<session_summary>\n" + strings.TrimSpace(req.Summary) + "\n</session_summary>",
 		})
+	}
+	if len(req.CompactBoundaries) > 0 {
+		latest := req.CompactBoundaries[len(req.CompactBoundaries)-1]
+		if latest.Layer != "" {
+			messages = append(messages, llm.Message{
+				Role: "user",
+				Content: prompts.MemoryLabel("compact_boundary", "Conversation compact boundary; context only:") +
+					"\n<compact_boundary id=\"" + latest.ID + "\" layer=\"" + latest.Layer + "\">" +
+					"\nPrevious conversation was compacted. Continue from session summary and current request context." +
+					"\n</compact_boundary>",
+			})
+		}
 	}
 	for _, evidence := range req.ExternalEvidence {
 		if strings.TrimSpace(evidence.Content) == "" {

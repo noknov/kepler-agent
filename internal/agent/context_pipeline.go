@@ -24,15 +24,25 @@ const aggregateToolResultBudget = 60_000
 // first project large tool results into persisted references, then run the
 // compaction stack, and only then normalize provider-facing message shape.
 func (r Runner) prepareMessagesForQuery(ctx context.Context, messages []llm.Message, req Request, toolSpecs []llm.ToolSpec) []llm.Message {
+	r.observeMemoryBreakdown(req, toolSpecs)
 	messages = r.applyToolResultBudget(messages, req)
 	messages = r.compactMessages(ctx, messages, memory.EstimateToolSpecTokens(toolSpecs))
 	return memory.PrepareForLLM(messages)
 }
 
 func (r Runner) prepareMessagesForOverflowRetry(ctx context.Context, messages []llm.Message, req Request) []llm.Message {
+	r.observeMemoryBreakdown(req, nil)
 	messages = r.applyToolResultBudget(messages, req)
 	messages = r.compactMessagesAggressive(ctx, messages)
 	return memory.PrepareForLLM(messages)
+}
+
+func (r Runner) observeMemoryBreakdown(req Request, toolSpecs []llm.ToolSpec) {
+	breakdown := req.MemoryBreakdown.WithToolSchemas(memory.EstimateToolSpecTokens(toolSpecs))
+	if breakdown.Total == 0 {
+		return
+	}
+	r.observeEvent("memory_context_breakdown", breakdown.Metadata())
 }
 
 // applyToolResultBudget enforces two complementary limits:

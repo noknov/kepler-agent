@@ -980,10 +980,54 @@ func TestStatefulToolResultBudgetRecordsFreshReplacement(t *testing.T) {
 	}
 }
 
+func TestPrepareMessagesForQueryEmitsMemoryBreakdown(t *testing.T) {
+	observer := &eventCaptureObserver{}
+	r := Runner{Observer: observer}
+	specs := []llm.ToolSpec{registry.FunctionSpec("code-search", "Search code", registry.ObjectSchema(nil, nil))}
+	req := Request{
+		MemoryBreakdown: memory.TokenBreakdown{
+			ExternalEvidence: 10,
+			SessionSummary:   20,
+			Turns:            30,
+			ToolResults:      40,
+			CompactBoundary:  5,
+			Total:            105,
+		},
+	}
+
+	_ = r.prepareMessagesForQuery(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, req, specs)
+
+	event, ok := observer.events["memory_context_breakdown"]
+	if !ok {
+		t.Fatal("memory_context_breakdown event was not emitted")
+	}
+	if event["external_evidence_tokens"] != 10 || event["session_summary_tokens"] != 20 || event["turn_tokens"] != 30 || event["tool_result_tokens"] != 40 || event["compact_boundary_tokens"] != 5 {
+		t.Fatalf("bad breakdown metadata: %#v", event)
+	}
+	if tokens, _ := event["tool_schema_tokens"].(int); tokens <= 0 {
+		t.Fatalf("tool_schema_tokens = %#v, want positive", event["tool_schema_tokens"])
+	}
+}
+
 type fakeClient struct {
 	responses []llm.Response
 	errors    []error
 	requests  []llm.Request
+}
+
+type eventCaptureObserver struct {
+	events map[string]map[string]any
+}
+
+func (e *eventCaptureObserver) LLMCall(llm.Usage, time.Duration, error) {}
+
+func (e *eventCaptureObserver) ToolCall(string, time.Duration, error) {}
+
+func (e *eventCaptureObserver) Event(name string, metadata map[string]any) {
+	if e.events == nil {
+		e.events = map[string]map[string]any{}
+	}
+	e.events[name] = metadata
 }
 
 func (f *fakeClient) Chat(_ context.Context, req llm.Request) (llm.Response, error) {

@@ -109,6 +109,7 @@ type Request struct {
 	RunID                   string
 	Steering                SteeringProvider
 	ContentReplacementState *memory.ContentReplacementState
+	MemoryBreakdown         memory.TokenBreakdown
 	// DisabledTools lists tool names to exclude from this run's tool spec
 	// list. The tools remain registered; they are simply not offered to the
 	// model for this specific request.

@@ -311,6 +311,29 @@ func TestTrimAndSummarizeReportsCompression(t *testing.T) {
 	}
 }
 
+func TestTrimAndSummarizeWithResultCanRecordCompactBoundary(t *testing.T) {
+	compactor := &memory.Compactor{
+		MaxContextTokens:  1000,
+		AutocompactBuffer: 100,
+		OutputReserve:     100,
+		LLMClient:         &replyLLM{content: "<summary>boundary summary</summary>"},
+	}
+	svc := NewService(nil, nil, agent.Runner{Compactor: compactor}, memory.Builder{}, safety.PromptPolicy{}, safety.Redactor{}, nil)
+	turns := []memory.Turn{
+		memory.UserTurn(strings.Repeat("old context ", 500)),
+		{Role: memory.RoleAssistant, Content: strings.Repeat("old answer ", 500)},
+	}
+
+	_, _, compressed, result := svc.trimAndSummarizeWithResult(context.Background(), turns, "")
+	if !compressed || result.Layer != "llm_compact" {
+		t.Fatalf("compact result = %#v, compressed=%v", result, compressed)
+	}
+	boundaries := appendCompactBoundary(nil, memory.NewCompactBoundary(result.Layer, result.Summary, result.PreTokens, result.PostTokens))
+	if len(boundaries) != 1 || boundaries[0].Layer != "llm_compact" || boundaries[0].Summary != "boundary summary" {
+		t.Fatalf("boundary not recorded correctly: %#v", boundaries)
+	}
+}
+
 func TestNewErrorID(t *testing.T) {
 	got := newErrorID()
 	if !strings.HasPrefix(got, "err-") || len(got) < 8 {
