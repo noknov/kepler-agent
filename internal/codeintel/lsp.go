@@ -50,6 +50,13 @@ type Location struct {
 	Character int    `json:"character"`
 }
 
+type Call struct {
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	Line      int    `json:"line"`
+	Character int    `json:"character"`
+}
+
 type Diagnostic struct {
 	Path      string `json:"path"`
 	Line      int    `json:"line"`
@@ -116,6 +123,18 @@ func (m Manager) References(ctx context.Context, pos Position) ([]Location, erro
 	return m.locationRequest(ctx, pos, "textDocument/references")
 }
 
+func (m Manager) Implementation(ctx context.Context, pos Position) ([]Location, error) {
+	return m.locationRequest(ctx, pos, "textDocument/implementation")
+}
+
+func (m Manager) IncomingCalls(ctx context.Context, pos Position) ([]Call, error) {
+	return m.callHierarchyRequest(ctx, pos, "callHierarchy/incomingCalls")
+}
+
+func (m Manager) OutgoingCalls(ctx context.Context, pos Position) ([]Call, error) {
+	return m.callHierarchyRequest(ctx, pos, "callHierarchy/outgoingCalls")
+}
+
 func (m Manager) Diagnostics(ctx context.Context, repoPath, path string) ([]Diagnostic, error) {
 	repo, server, err := m.repoAndServer(repoPath)
 	if err != nil {
@@ -176,6 +195,9 @@ func (m Manager) locationRequest(ctx context.Context, pos Position, method strin
 		if method == "textDocument/definition" {
 			return m.goLocations(ctx, repo, file, pos, server, "definition")
 		}
+		if method == "textDocument/implementation" {
+			return m.goLocations(ctx, repo, file, pos, server, "implementation")
+		}
 		return m.goLocations(ctx, repo, file, pos, server, "references")
 	}
 	client, err := startClient(ctx, server, serverRoot(repo, server), m.timeout())
@@ -199,6 +221,46 @@ func (m Manager) locationRequest(ctx context.Context, pos Position, method strin
 		return nil, err
 	}
 	return parseLocations(repo, raw)
+}
+
+func (m Manager) callHierarchyRequest(ctx context.Context, pos Position, method string) ([]Call, error) {
+	repo, server, err := m.repoAndServer(pos.Repo)
+	if err != nil {
+		return nil, err
+	}
+	file, err := m.resolveFile(repo, pos.Path)
+	if err != nil {
+		return nil, err
+	}
+	if pos.Line <= 0 || pos.Character <= 0 {
+		return nil, fmt.Errorf("line and character are required and 1-based")
+	}
+	client, err := startClient(ctx, server, serverRoot(repo, server), m.timeout())
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	uri := fileURI(file)
+	if err := client.DidOpen(ctx, uri, languageID(file), file); err != nil {
+		return nil, err
+	}
+	params := map[string]any{
+		"textDocument": map[string]any{"uri": uri},
+		"position":     map[string]any{"line": pos.Line - 1, "character": pos.Character - 1},
+	}
+	var items []callHierarchyItem
+	if err := client.Request(ctx, "textDocument/prepareCallHierarchy", params, &items); err != nil {
+		return nil, err
+	}
+	var out []Call
+	for _, item := range items {
+		var raw json.RawMessage
+		if err := client.Request(ctx, method, map[string]any{"item": item}, &raw); err != nil {
+			return nil, err
+		}
+		out = append(out, parseCalls(repo, method, raw)...)
+	}
+	return out, nil
 }
 
 func (m Manager) repoAndServer(repoPath string) (string, serverSpec, error) {
@@ -585,6 +647,59 @@ type diagnostic struct {
 	Severity int    `json:"severity"`
 	Source   string `json:"source"`
 	Message  string `json:"message"`
+}
+
+type callHierarchyItem struct {
+	Name           string `json:"name"`
+	Kind           int    `json:"kind"`
+	URI            string `json:"uri"`
+	Range          rng    `json:"range"`
+	SelectionRange rng    `json:"selectionRange"`
+}
+
+type incomingCall struct {
+	From       callHierarchyItem `json:"from"`
+	FromRanges []rng             `json:"fromRanges"`
+}
+
+type outgoingCall struct {
+	To         callHierarchyItem `json:"to"`
+	FromRanges []rng             `json:"fromRanges"`
+}
+
+func parseCalls(root, method string, raw json.RawMessage) []Call {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var out []Call
+	if method == "callHierarchy/incomingCalls" {
+		var calls []incomingCall
+		if json.Unmarshal(raw, &calls) != nil {
+			return nil
+		}
+		for _, call := range calls {
+			path, line, char := callItemParts(root, call.From)
+			out = append(out, Call{Name: call.From.Name, Path: path, Line: line, Character: char})
+		}
+		return out
+	}
+	var calls []outgoingCall
+	if json.Unmarshal(raw, &calls) != nil {
+		return nil
+	}
+	for _, call := range calls {
+		path, line, char := callItemParts(root, call.To)
+		out = append(out, Call{Name: call.To.Name, Path: path, Line: line, Character: char})
+	}
+	return out
+}
+
+func callItemParts(root string, item callHierarchyItem) (string, int, int) {
+	loc := location{URI: item.URI, Range: item.SelectionRange}
+	if loc.Range.Start.Line == 0 && loc.Range.Start.Character == 0 && item.Range.Start.Line != 0 {
+		loc.Range = item.Range
+	}
+	return locationParts(root, loc)
 }
 
 func parseLocations(root string, raw json.RawMessage) ([]Location, error) {

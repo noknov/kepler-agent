@@ -235,16 +235,19 @@ func rawEvidenceRetryPrompt() string {
 // claims. A final response containing a fenced code block should be preceded
 // by at least one call to one of these tools in the same run.
 var codeReadingTools = map[string]bool{
-	"git-search_ref":    true,
-	"git-read_file_ref": true,
-	"repo-search":       true,
-	"repo-read_file":    true,
-	"code-search":       true,
-	"code-read_file":    true,
-	"code-symbols":      true,
-	"code-definition":   true,
-	"code-references":   true,
-	"explore-code":      true,
+	"git-search_ref":      true,
+	"git-read_file_ref":   true,
+	"repo-search":         true,
+	"repo-read_file":      true,
+	"code-search":         true,
+	"code-read_file":      true,
+	"code-symbols":        true,
+	"code-definition":     true,
+	"code-references":     true,
+	"code-implementation": true,
+	"code-incoming_calls": true,
+	"code-outgoing_calls": true,
+	"explore-code":        true,
 }
 
 // hasFencedCodeBlock reports whether text contains a fenced code block
@@ -376,6 +379,12 @@ func (r Runner) runStep(ctx context.Context, step, maxOverloadRetries int, s *lo
 			s.messages = append(s.messages, steering...)
 		}
 	}
+	if steering := maybeAutoExplorePrompt(req, req.Runtime, step); len(steering) > 0 {
+		s.messages = append(s.messages, steering...)
+	}
+	if steering := codeContextSteeringMessage(req.Runtime); len(steering) > 0 {
+		s.messages = append(s.messages, steering...)
+	}
 
 	var toolSpecs []llm.ToolSpec
 	if r.Tools != nil {
@@ -450,6 +459,9 @@ func (r Runner) runStep(ctx context.Context, step, maxOverloadRetries int, s *lo
 		s.generated = append(s.generated, tr.message)
 		if codeReadingTools[tr.name] {
 			s.codeToolCalledThisRun = true
+		}
+		if codeReadingTools[tr.name] && tr.err == nil && !tr.waitForUser {
+			recordCodeToolResult(req.Runtime, tr.name, tr.args, tr.message.Content)
 		}
 		if tr.waitForUser {
 			return true, Result{
@@ -637,7 +649,7 @@ func (r Runner) handleFinalResponse(ctx context.Context, resp llm.Response, assi
 		r.updateStatus(req.Locale, RetryStatus)
 		return false, true, nil
 	}
-	if s.codeToolCalledThisRun && hasUnverifiedCodeClaim(final) && hasUnevidencedFileReference(final, s.generated) && s.retryOnce("unevidenced_file") {
+	if s.codeToolCalledThisRun && hasUnverifiedCodeClaim(final) && (hasUnevidencedFileReference(final, s.generated) || finalHasUnevidencedCodeFiles(final, req.Runtime)) && s.retryOnce("unevidenced_file") {
 		s.messages = append(s.messages, llm.Message{Role: "system", Content: unevidencedFileRetryPrompt()})
 		r.updateStatus(req.Locale, RetryStatus)
 		return false, true, nil

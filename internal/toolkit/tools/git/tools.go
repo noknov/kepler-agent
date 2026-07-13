@@ -56,10 +56,10 @@ type FetchRefTool struct{ Base }
 func (t FetchRefTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-fetch_ref",
-		"",
+		"Fetch origin refs and resolve a branch to an immutable commit SHA. Use this first when investigating a specific branch; then pass the returned repo/ref to git-search_ref or git-read_file_ref. This never checks out or updates the working tree, so multiple users can inspect different branches concurrently.",
 		registry.ObjectSchema(nil, map[string]any{
-			"repo":   map[string]any{"type": "string", "description": ""},
-			"branch": map[string]any{"type": "string", "description": ""},
+			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
+			"branch": map[string]any{"type": "string", "description": "Remote branch name. Omit to use origin/HEAD, then mt-main/main/master fallback."},
 		}),
 	)
 }
@@ -97,13 +97,13 @@ func (SearchRefTool) Parallel() bool { return true }
 func (t SearchRefTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-search_ref",
-		"",
+		"Search an immutable git ref returned by git-fetch_ref. Use for branch-specific code investigation without changing the checkout. Search hits are hints; read matching ranges before claiming behavior.",
 		registry.ObjectSchema([]string{"repo", "query", "ref"}, map[string]any{
-			"repo":  map[string]any{"type": "string", "description": ""},
-			"ref":   map[string]any{"type": "string", "description": ""},
-			"query": map[string]any{"type": "string", "description": ""},
-			"path":  map[string]any{"type": "string", "description": ""},
-			"limit": map[string]any{"type": "integer", "description": ""},
+			"repo":  map[string]any{"type": "string", "description": "Repository returned by git-fetch_ref."},
+			"ref":   map[string]any{"type": "string", "description": "Immutable commit SHA returned by git-fetch_ref, or an explicit safe ref."},
+			"query": map[string]any{"type": "string", "description": "Pattern to search."},
+			"path":  map[string]any{"type": "string", "description": "Optional path inside the repo."},
+			"limit": map[string]any{"type": "integer", "description": "Maximum matches, default 50 and max 200."},
 		}),
 	)
 }
@@ -165,13 +165,13 @@ func (RepoSearchTool) Parallel() bool { return true }
 func (t RepoSearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"repo-search",
-		"",
+		"Search the refreshed remote branch snapshot for a repo. Omit branch for origin/HEAD, mt-main/main/master fallback. This reads origin refs and never checks out the branch, so concurrent users can inspect different branches safely.",
 		registry.ObjectSchema([]string{"query"}, map[string]any{
-			"repo":   map[string]any{"type": "string", "description": ""},
-			"branch": map[string]any{"type": "string", "description": ""},
-			"query":  map[string]any{"type": "string", "description": ""},
-			"path":   map[string]any{"type": "string", "description": ""},
-			"limit":  map[string]any{"type": "integer", "description": ""},
+			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
+			"branch": map[string]any{"type": "string", "description": "Remote branch name. Omit for default branch."},
+			"query":  map[string]any{"type": "string", "description": "Pattern to search."},
+			"path":   map[string]any{"type": "string", "description": "Optional path inside the repo."},
+			"limit":  map[string]any{"type": "integer", "description": "Maximum matches, default 50 and max 200."},
 		}),
 	)
 }
@@ -236,13 +236,13 @@ func (ReadFileRefTool) Parallel() bool { return true }
 func (t ReadFileRefTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-read_file_ref",
-		"",
+		"Read a file at an immutable git ref returned by git-fetch_ref. Use this for branch-specific evidence without changing the checkout.",
 		registry.ObjectSchema([]string{"repo", "ref", "path"}, map[string]any{
-			"repo":       map[string]any{"type": "string", "description": ""},
-			"ref":        map[string]any{"type": "string", "description": ""},
-			"path":       map[string]any{"type": "string", "description": ""},
-			"start_line": map[string]any{"type": "integer", "description": ""},
-			"max_lines":  map[string]any{"type": "integer", "description": ""},
+			"repo":       map[string]any{"type": "string", "description": "Repository returned by git-fetch_ref."},
+			"ref":        map[string]any{"type": "string", "description": "Immutable commit SHA returned by git-fetch_ref, or an explicit safe ref."},
+			"path":       map[string]any{"type": "string", "description": "Path inside the repo."},
+			"start_line": map[string]any{"type": "integer", "description": "1-based starting line."},
+			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines, default 240 and max 1000."},
 		}),
 	)
 }
@@ -314,13 +314,13 @@ func (RepoReadFileTool) Parallel() bool { return true }
 func (t RepoReadFileTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"repo-read_file",
-		"",
+		"Read a file from the refreshed remote branch snapshot. Omit branch for origin/HEAD, mt-main/main/master fallback. This never checks out or updates the working tree.",
 		registry.ObjectSchema([]string{"path"}, map[string]any{
-			"repo":       map[string]any{"type": "string", "description": ""},
-			"branch":     map[string]any{"type": "string", "description": ""},
-			"path":       map[string]any{"type": "string", "description": ""},
-			"start_line": map[string]any{"type": "integer", "description": ""},
-			"max_lines":  map[string]any{"type": "integer", "description": ""},
+			"repo":       map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
+			"branch":     map[string]any{"type": "string", "description": "Remote branch name. Omit for default branch."},
+			"path":       map[string]any{"type": "string", "description": "Path inside the repo."},
+			"start_line": map[string]any{"type": "integer", "description": "1-based starting line."},
+			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines, default 240 and max 1000."},
 		}),
 	)
 }
@@ -556,7 +556,7 @@ func (b Base) defaultBranch(ctx context.Context, repo string) (string, error) {
 			return branch, nil
 		}
 	}
-	for _, branch := range []string{"main", "master"} {
+	for _, branch := range []string{"mt-main", "main", "master"} {
 		if b.refExists(ctx, repo, "origin/"+branch) || b.refExists(ctx, repo, branch) {
 			return branch, nil
 		}

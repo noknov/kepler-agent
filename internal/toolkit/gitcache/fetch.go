@@ -53,6 +53,14 @@ func FetchOrigin(ctx context.Context, repoDir string, ttl time.Duration) error {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		err = fetchError(strings.TrimSpace(string(out)))
+	} else {
+		// Keep refs/remotes/origin/HEAD aligned with the remote default branch.
+		// The fetch updates origin/* refs but does not necessarily refresh this
+		// symbolic ref, so default-branch tools could otherwise keep reading an
+		// old main/master after the remote moves to mt-main.
+		headCmd := exec.CommandContext(ctx, "git", "-C", repoDir, "remote", "set-head", "origin", "-a")
+		headCmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+		_ = headCmd.Run()
 	}
 
 	mu.Lock()
