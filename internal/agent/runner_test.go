@@ -1906,6 +1906,52 @@ func TestRunnerNoCodeClaimRetryWhenCodeToolCalled(t *testing.T) {
 	}
 }
 
+func TestRunnerRetriesWhenFinalReferencesUnreadCodeFile(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{Message: namedToolCallMessage("read_1", "code-read_file", `{"path":"internal/app/runtime.go"}`)},
+		{Message: llm.Message{Role: "assistant", Content: "The issue is in internal/app/tools.go:12."}},
+		{Message: llm.Message{Role: "assistant", Content: "I only verified internal/app/runtime.go, not tools.go."}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeReadFileTool{})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 5}.Run(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "I only verified internal/app/runtime.go, not tools.go." {
+		t.Fatalf("Final = %q", result.Final)
+	}
+	if len(client.requests) != 3 {
+		t.Fatalf("expected read, retry, final calls; got %d", len(client.requests))
+	}
+}
+
+func TestRunnerInjectsExploreHintForComplexCodeQuestion(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{Message: llm.Message{Role: "assistant", Content: "我会先查入口和调用链。"}},
+	}}
+	_, err := Runner{LLM: client, Tools: registry.New(), MaxSteps: 2}.Run(context.Background(), Request{
+		UserQuestion: "帮我系统分析当前代码里的 memory pipeline 和 agent 调用链为什么理解会偏差",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(client.requests) != 1 {
+		t.Fatalf("requests = %d", len(client.requests))
+	}
+	found := false
+	for _, msg := range client.requests[0].Messages {
+		if msg.Role == "system" && strings.Contains(msg.Content, "Prefer starting with explore-code") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("explore hint not injected: %#v", client.requests[0].Messages)
+	}
+}
+
 func TestRunnerNoCodeClaimRetryWhenNoCodeBlock(t *testing.T) {
 	answer := "The field `test` is just a boolean on the model."
 	client := &fakeClient{responses: []llm.Response{
@@ -1983,6 +2029,23 @@ func (fakeCodeTool) Spec() llm.ToolSpec {
 
 func (fakeCodeTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
 	return registry.Result{Content: string(args)}, nil
+}
+
+type fakeReadFileTool struct{}
+
+func (fakeReadFileTool) Spec() llm.ToolSpec {
+	return llm.ToolSpec{
+		Type: "function",
+		Function: llm.ToolSpecFunction{
+			Name:        "code-read_file",
+			Description: "read code file",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}
+}
+
+func (fakeReadFileTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	return registry.Result{Content: "[source: git ref=origin/main commit=abc123 fetch_status=ok]\n     1  package app\n     2  func Runtime() {}\n"}, nil
 }
 
 type fakeRAGSearchTool struct{}

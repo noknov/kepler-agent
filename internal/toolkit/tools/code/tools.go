@@ -28,11 +28,12 @@ func (ReadFileTool) Parallel() bool { return true }
 func (t ReadFileTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"code-read_file",
-		"",
+		"Read source code from a workspace file. By default, files inside git repos are read from the refreshed remote default branch (origin/HEAD, mt-main/main/master fallback) so investigations are not affected by the server's current checkout branch or a stale local branch. Use source=working_tree only when the user explicitly asks about uncommitted local changes. Results include line numbers and source metadata; cite these lines before making code behavior claims.",
 		registry.ObjectSchema([]string{"path"}, map[string]any{
-			"path":       map[string]any{"type": "string", "description": ""},
-			"start_line": map[string]any{"type": "integer", "description": ""},
-			"max_lines":  map[string]any{"type": "integer", "description": ""},
+			"path":       map[string]any{"type": "string", "description": "Workspace-relative, root-prefixed, or absolute file path."},
+			"source":     map[string]any{"type": "string", "description": "default_branch (default), working_tree, or a safe git ref such as origin/main or a commit SHA."},
+			"start_line": map[string]any{"type": "integer", "description": "1-based starting line. Omit unless you already know the relevant range."},
+			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines to return, default 240 and max 1000."},
 		}),
 	)
 }
@@ -40,6 +41,7 @@ func (t ReadFileTool) Spec() llm.ToolSpec {
 func (t ReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
 	var args struct {
 		Path      string `json:"path"`
+		Source    string `json:"source"`
 		StartLine int    `json:"start_line"`
 		MaxLines  int    `json:"max_lines"`
 	}
@@ -60,19 +62,35 @@ func (t ReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 		args.MaxLines = 1000
 	}
 
-	// If the file is inside a tracked git repo, lazy-fetch on a process TTL and
-	// read from the upstream tracking ref via "git show".  This guarantees the
-	// agent usually sees recent committed code without paying a remote fetch on
-	// every Slack request and without modifying the working tree.
-	if repoDir := findRepoRoot(t.Paths.Roots, filepath.Dir(path)); repoDir != "" {
-		upstreamRef := lazyFetchRepo(ctx, repoDir, rt)
+	source := strings.TrimSpace(args.Source)
+	if source == "" {
+		source = "default_branch"
+	}
+	if repoDir := findRepoRoot(t.Paths.Roots, filepath.Dir(path)); repoDir != "" && source != "working_tree" {
+		ref, fetchStatus, sourceErr := sourceRef(ctx, repoDir, source, rt)
+		if sourceErr != nil {
+			return registry.Result{}, sourceErr
+		}
 		if relPath, relErr := filepath.Rel(repoDir, path); relErr == nil && !strings.HasPrefix(relPath, "..") {
-			content, gitErr := gitShowFile(ctx, repoDir, upstreamRef, relPath)
+			content, gitErr := gitShowFile(ctx, repoDir, ref, relPath)
 			if gitErr == nil {
-				header := fmt.Sprintf("[source: git %s]\n", upstreamRef)
+				commit := gitRevParse(ctx, repoDir, ref, "--short")
+				header := fmt.Sprintf("[source: git ref=%s commit=%s fetch_status=%s]\n", ref, commit, fetchStatus)
+				recordReadState(rt, readState{
+					Path:      filepath.ToSlash(relPath),
+					Repo:      filepath.Base(repoDir),
+					Source:    "git",
+					Ref:       ref,
+					Commit:    commit,
+					StartLine: args.StartLine,
+					MaxLines:  args.MaxLines,
+				})
 				return registry.Result{Content: header + applyLineRange(content, args.StartLine, args.MaxLines)}, nil
 			}
-			// Fall through on git error (uncommitted file, different branch, etc.)
+			if source != "default_branch" {
+				return registry.Result{}, gitErr
+			}
+			return registry.Result{}, fmt.Errorf("read %s at %s: %w", filepath.ToSlash(relPath), ref, gitErr)
 		}
 	}
 
@@ -111,7 +129,13 @@ func (t ReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 	if err := scanner.Err(); err != nil {
 		return registry.Result{}, err
 	}
-	return registry.Result{Content: b.String()}, nil
+	header := "[source: working_tree"
+	if repoDir := findRepoRoot(t.Paths.Roots, filepath.Dir(path)); repoDir != "" {
+		header += " branch=" + gitRevParse(ctx, repoDir, "HEAD", "--abbrev-ref")
+	}
+	header += "]\n"
+	recordReadState(rt, readState{Path: path, Source: "working_tree", StartLine: args.StartLine, MaxLines: args.MaxLines})
+	return registry.Result{Content: header + b.String()}, nil
 }
 
 type SearchTool struct {
@@ -123,22 +147,26 @@ func (SearchTool) Parallel() bool { return true }
 func (t SearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"code-search",
-		"",
+		"Search source code using git grep on the refreshed remote default branch by default, falling back to rg for non-git files. Search hits are hints; read the matching file/range with code-read_file before claiming behavior. Use source=working_tree only when investigating uncommitted local changes.",
 		registry.ObjectSchema([]string{"query"}, map[string]any{
-			"query": map[string]any{"type": "string", "description": ""},
-			"path":  map[string]any{"type": "string", "description": ""},
-			"glob":  map[string]any{"type": "string", "description": ""},
-			"limit": map[string]any{"type": "integer", "description": ""},
+			"query":         map[string]any{"type": "string", "description": "Regex or literal pattern to search for."},
+			"path":          map[string]any{"type": "string", "description": "Optional workspace-relative directory or file to search."},
+			"glob":          map[string]any{"type": "string", "description": "Optional file glob, for example **/*.go."},
+			"source":        map[string]any{"type": "string", "description": "default_branch (default), working_tree, or a safe git ref such as origin/main or a commit SHA."},
+			"context_lines": map[string]any{"type": "integer", "description": "Optional lines of context around matches, max 5."},
+			"limit":         map[string]any{"type": "integer", "description": "Maximum matching lines, default 50 and max 200."},
 		}),
 	)
 }
 
 func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
 	var args struct {
-		Query string `json:"query"`
-		Path  string `json:"path"`
-		Glob  string `json:"glob"`
-		Limit int    `json:"limit"`
+		Query        string `json:"query"`
+		Path         string `json:"path"`
+		Glob         string `json:"glob"`
+		Source       string `json:"source"`
+		ContextLines int    `json:"context_lines"`
+		Limit        int    `json:"limit"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
@@ -151,6 +179,16 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	}
 	if args.Limit > 200 {
 		args.Limit = 200
+	}
+	if args.ContextLines < 0 {
+		args.ContextLines = 0
+	}
+	if args.ContextLines > 5 {
+		args.ContextLines = 5
+	}
+	source := strings.TrimSpace(args.Source)
+	if source == "" {
+		source = "default_branch"
 	}
 	root := args.Path
 	if root == "" && len(t.Paths.Roots) > 0 {
@@ -165,10 +203,15 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	// upstream tracking ref. This never touches the working tree and is safe
 	// for concurrent multi-user access even when users target different branches.
 	repos := findReposUnder(t.Paths.Roots, searchPath)
-	if len(repos) > 0 {
+	if len(repos) > 0 && source != "working_tree" {
 		var lines []string
+		var headers []string
 		for _, repoDir := range repos {
-			upstreamRef := lazyFetchRepo(ctx, repoDir, rt)
+			ref, fetchStatus, sourceErr := sourceRef(ctx, repoDir, source, rt)
+			if sourceErr != nil {
+				return registry.Result{}, sourceErr
+			}
+			headers = append(headers, fmt.Sprintf("[source: git repo=%s ref=%s commit=%s fetch_status=%s]", filepath.Base(repoDir), ref, gitRevParse(ctx, repoDir, ref, "--short"), fetchStatus))
 			// Compute the pathspec relative to the repo root.
 			relSearch := "."
 			if rel, relErr := filepath.Rel(repoDir, searchPath); relErr == nil &&
@@ -179,7 +222,7 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 			if remaining <= 0 {
 				break
 			}
-			got, grepErr := gitGrep(ctx, repoDir, upstreamRef, args.Query, relSearch, args.Glob, remaining)
+			got, grepErr := gitGrep(ctx, repoDir, ref, args.Query, relSearch, args.Glob, args.ContextLines, remaining)
 			if grepErr != nil {
 				continue
 			}
@@ -187,23 +230,26 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 			// Strip the "<ref>:" prefix and prepend the repo name so the format
 			// matches what rg used to emit after workspace-root stripping.
 			repoName := filepath.Base(repoDir)
-			refPrefix := upstreamRef + ":"
+			refPrefix := ref + ":"
 			for _, l := range got {
 				l = strings.TrimPrefix(l, refPrefix)
 				lines = append(lines, repoName+"/"+l)
 			}
 		}
 		if len(lines) == 0 {
-			return registry.Result{Content: "no matches"}, nil
+			return registry.Result{Content: strings.Join(headers, "\n") + "\n\nno matches"}, nil
 		}
 		if len(lines) > args.Limit {
 			lines = append(lines[:args.Limit], "...[truncated after "+strconv.Itoa(args.Limit)+" matches]")
 		}
-		return registry.Result{Content: strings.Join(lines, "\n")}, nil
+		return registry.Result{Content: strings.Join(headers, "\n") + "\n\nSearch hits are hints; read matching files before claiming behavior.\n" + strings.Join(lines, "\n")}, nil
 	}
 
 	// No git repos found — fall back to rg on the local working tree.
 	cmdArgs := []string{"--line-number", "--no-heading", "--color=never"}
+	if args.ContextLines > 0 {
+		cmdArgs = append(cmdArgs, "-C", strconv.Itoa(args.ContextLines))
+	}
 	if args.Glob != "" {
 		cmdArgs = append(cmdArgs, "--glob", args.Glob)
 	}
@@ -227,28 +273,60 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	if len(resultLines) > args.Limit {
 		resultLines = append(resultLines[:args.Limit], "...[truncated after "+strconv.Itoa(args.Limit)+" matches]")
 	}
-	return registry.Result{Content: strings.Join(resultLines, "\n")}, nil
+	return registry.Result{Content: "[source: working_tree]\n\nSearch hits are hints; read matching files before claiming behavior.\n" + strings.Join(resultLines, "\n")}, nil
 }
 
-// lazyFetchRepo refreshes origin refs on a process-wide TTL. Returns the
-// upstream tracking ref for HEAD (e.g. "origin/main"). Runtime cache still
-// deduplicates repeated calls inside the same run, while gitcache prevents
-// separate user requests from all fetching the same repo.
-func lazyFetchRepo(ctx context.Context, repoDir string, rt registry.Runtime) string {
+func sourceRef(ctx context.Context, repoDir, source string, rt registry.Runtime) (string, string, error) {
+	fetchStatus := refreshRepo(ctx, repoDir, rt)
+	if source != "" && source != "default_branch" {
+		if !safeGitRef(source) {
+			return "", fetchStatus, fmt.Errorf("invalid git source ref %q", source)
+		}
+		return source, fetchStatus, nil
+	}
+	return defaultBranchRef(ctx, repoDir), fetchStatus, nil
+}
+
+func refreshRepo(ctx context.Context, repoDir string, rt registry.Runtime) string {
 	cacheKey := "code-git-fetch\x00" + filepath.Clean(repoDir)
 	if _, ok := rt.Cache.Get(cacheKey); !ok {
 		fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		_ = gitcache.FetchOrigin(fetchCtx, repoDir, gitcache.DefaultFetchTTL) // non-fatal; stale is better than broken
+		if err := gitcache.FetchOrigin(fetchCtx, repoDir, gitcache.DefaultFetchTTL); err != nil {
+			status := "refresh_failed_using_cached_refs: " + err.Error()
+			rt.Cache.Set(cacheKey, status)
+			return status
+		}
 		rt.Cache.Set(cacheKey, true)
 	}
-	// Resolve the upstream tracking ref (fast, no network).
-	out, err := exec.CommandContext(ctx, "git", "-C", repoDir,
-		"rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").Output()
-	if err != nil || strings.TrimSpace(string(out)) == "" {
-		return "origin/main"
+	if value, ok := rt.Cache.Get(cacheKey); ok {
+		if text, ok := value.(string); ok && strings.HasPrefix(text, "refresh_failed") {
+			return text
+		}
 	}
-	return strings.TrimSpace(string(out))
+	return "origin_refs_current_or_recent"
+}
+
+func defaultBranchRef(ctx context.Context, repoDir string) string {
+	if out, err := exec.CommandContext(ctx, "git", "-C", repoDir, "--no-optional-locks", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD").Output(); err == nil {
+		if branch := strings.TrimSpace(string(out)); branch != "" {
+			return branch
+		}
+	}
+	for _, branch := range []string{"origin/mt-main", "origin/main", "origin/master"} {
+		if gitRevParse(ctx, repoDir, branch, "--verify", "--quiet") != "" {
+			return branch
+		}
+	}
+	return "origin/main"
+}
+
+func safeGitRef(ref string) bool {
+	ref = strings.TrimSpace(ref)
+	return ref != "" &&
+		!strings.Contains(ref, "..") &&
+		!strings.HasPrefix(ref, "-") &&
+		!strings.ContainsAny(ref, " \t\n\r~^:?*[\\")
 }
 
 // gitShowFile returns the full text content of relPath inside repoDir at ref.
@@ -259,6 +337,16 @@ func gitShowFile(ctx context.Context, repoDir, ref, relPath string) (string, err
 		return "", err
 	}
 	return string(out), nil
+}
+
+func gitRevParse(ctx context.Context, repoDir, ref string, extra ...string) string {
+	args := append([]string{"-C", repoDir, "--no-optional-locks", "rev-parse"}, extra...)
+	args = append(args, ref)
+	out, err := exec.CommandContext(ctx, "git", args...).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // applyLineRange formats raw file content with 1-based line numbers, applying
@@ -288,8 +376,12 @@ func applyLineRange(content string, startLine, maxLines int) string {
 // gitGrep searches repoDir at ref for query using "git grep -E", returning
 // the raw output lines. relPath restricts the search to a sub-directory;
 // pass "." to search the whole repo. glob filters by file pattern.
-func gitGrep(ctx context.Context, repoDir, ref, query, relPath, glob string, limit int) ([]string, error) {
-	cmdArgs := []string{"-C", repoDir, "grep", "--line-number", "-E", query, ref, "--"}
+func gitGrep(ctx context.Context, repoDir, ref, query, relPath, glob string, contextLines, limit int) ([]string, error) {
+	cmdArgs := []string{"-C", repoDir, "grep", "--line-number", "-E"}
+	if contextLines > 0 {
+		cmdArgs = append(cmdArgs, "-C", strconv.Itoa(contextLines))
+	}
+	cmdArgs = append(cmdArgs, "-e", query, ref, "--")
 	if glob != "" {
 		// Convert rg-style glob to git pathspec magic; add **/ prefix when absent.
 		g := glob
@@ -316,6 +408,34 @@ func gitGrep(ctx context.Context, repoDir, ref, query, relPath, glob string, lim
 		lines = lines[:limit]
 	}
 	return lines, nil
+}
+
+type readState struct {
+	Path      string
+	Repo      string
+	Source    string
+	Ref       string
+	Commit    string
+	StartLine int
+	MaxLines  int
+}
+
+func recordReadState(rt registry.Runtime, state readState) {
+	if rt.Cache == nil {
+		return
+	}
+	const key = "code-read-state"
+	var states []readState
+	if existing, ok := rt.Cache.Get(key); ok {
+		if typed, ok := existing.([]readState); ok {
+			states = typed
+		}
+	}
+	states = append(states, state)
+	if len(states) > 100 {
+		states = states[len(states)-100:]
+	}
+	rt.Cache.Set(key, states)
 }
 
 // findReposUnder returns the git repos that cover dir: if dir is inside a repo,
@@ -350,8 +470,14 @@ func findRepoRoot(roots []string, absPath string) string {
 	for {
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 			clean := filepath.Clean(dir)
+			if realClean, err := filepath.EvalSymlinks(clean); err == nil {
+				clean = realClean
+			}
 			for _, root := range roots {
 				cleanRoot := filepath.Clean(root)
+				if realRoot, err := filepath.EvalSymlinks(cleanRoot); err == nil {
+					cleanRoot = realRoot
+				}
 				if clean == cleanRoot || strings.HasPrefix(clean+"/", cleanRoot+"/") {
 					return clean
 				}

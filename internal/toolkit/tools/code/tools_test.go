@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -96,4 +97,110 @@ func TestSearchAcceptsWorkspaceRootBasenamePrefix(t *testing.T) {
 	if !strings.Contains(result.Content, "connectors/catalog.ts") {
 		t.Fatalf("expected search to resolve prefixed path, got %#v", result)
 	}
+}
+
+func TestGitReadDefaultsToRemoteDefaultBranchNotCurrentCheckout(t *testing.T) {
+	root, work := testGitRepo(t)
+	runGit(t, work, "checkout", "-b", "feature")
+	if err := os.WriteFile(filepath.Join(work, "app.go"), []byte("package app\nconst value = \"feature\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, work, "add", "app.go")
+	runGit(t, work, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "feature")
+	runGit(t, work, "push", "origin", "feature")
+
+	tool := ReadFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"work/app.go"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, "ref=origin/main") || !strings.Contains(result.Content, `"main"`) || strings.Contains(result.Content, `"feature"`) {
+		t.Fatalf("read content = %q, want remote default branch", result.Content)
+	}
+}
+
+func TestGitReadAllowsConcurrentBranchSnapshotsWithoutCheckout(t *testing.T) {
+	root, work := testGitRepo(t)
+	runGit(t, work, "checkout", "-b", "feature")
+	if err := os.WriteFile(filepath.Join(work, "app.go"), []byte("package app\nconst value = \"feature\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, work, "add", "app.go")
+	runGit(t, work, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "feature")
+	runGit(t, work, "push", "origin", "feature")
+
+	tool := ReadFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
+	rt := registry.Runtime{Cache: registry.NewRuntimeCache()}
+	mainResult, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"work/app.go","source":"origin/main"}`), rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	featureResult, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"work/app.go","source":"origin/feature"}`), rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(mainResult.Content, `"main"`) || strings.Contains(mainResult.Content, `"feature"`) {
+		t.Fatalf("main content = %q", mainResult.Content)
+	}
+	if !strings.Contains(featureResult.Content, `"feature"`) || strings.Contains(featureResult.Content, `"main"`) {
+		t.Fatalf("feature content = %q", featureResult.Content)
+	}
+	branch := strings.TrimSpace(runGitOutput(t, work, "branch", "--show-current"))
+	if branch != "feature" {
+		t.Fatalf("branch changed to %q, want feature", branch)
+	}
+}
+
+func TestGitSearchDefaultsToRemoteDefaultBranch(t *testing.T) {
+	root, work := testGitRepo(t)
+	runGit(t, work, "checkout", "-b", "feature")
+	if err := os.WriteFile(filepath.Join(work, "app.go"), []byte("package app\nconst value = \"feature\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, work, "add", "app.go")
+	runGit(t, work, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "feature")
+	runGit(t, work, "push", "origin", "feature")
+
+	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"value"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, "ref=origin/main") || !strings.Contains(result.Content, `"main"`) || strings.Contains(result.Content, `"feature"`) {
+		t.Fatalf("search content = %q, want remote default branch", result.Content)
+	}
+}
+
+func testGitRepo(t *testing.T) (string, string) {
+	t.Helper()
+	root := t.TempDir()
+	origin := filepath.Join(root, "origin.git")
+	work := filepath.Join(root, "work")
+	runGit(t, root, "init", "--bare", origin)
+	runGit(t, root, "init", "-b", "main", work)
+	if err := os.WriteFile(filepath.Join(work, "app.go"), []byte("package app\nconst value = \"main\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, work, "add", "app.go")
+	runGit(t, work, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "init")
+	runGit(t, work, "remote", "add", "origin", origin)
+	runGit(t, work, "push", "-u", "origin", "main")
+	runGit(t, work, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	return root, work
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	_ = runGitOutput(t, dir, args...)
+}
+
+func runGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return string(out)
 }
