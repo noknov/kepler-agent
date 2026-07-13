@@ -15,18 +15,19 @@ import (
 )
 
 type Session struct {
-	ID               string        `json:"id"`
-	Channel          string        `json:"channel"`
-	ThreadTS         string        `json:"thread_ts"`
-	UserID           string        `json:"user_id"`
-	Locale           string        `json:"locale,omitempty"`
-	Summary          string        `json:"summary,omitempty"`
-	Turns            []memory.Turn `json:"turns,omitempty"`
-	PendingUserInput bool          `json:"pending_user_input,omitempty"`
-	PendingUserID    string        `json:"pending_user_id,omitempty"`
-	PendingQuestion  string        `json:"pending_question,omitempty"`
-	CreatedAt        time.Time     `json:"created_at"`
-	UpdatedAt        time.Time     `json:"updated_at"`
+	ID                  string                            `json:"id"`
+	Channel             string                            `json:"channel"`
+	ThreadTS            string                            `json:"thread_ts"`
+	UserID              string                            `json:"user_id"`
+	Locale              string                            `json:"locale,omitempty"`
+	Summary             string                            `json:"summary,omitempty"`
+	Turns               []memory.Turn                     `json:"turns,omitempty"`
+	ContentReplacements []memory.ContentReplacementRecord `json:"content_replacements,omitempty"`
+	PendingUserInput    bool                              `json:"pending_user_input,omitempty"`
+	PendingUserID       string                            `json:"pending_user_id,omitempty"`
+	PendingQuestion     string                            `json:"pending_question,omitempty"`
+	CreatedAt           time.Time                         `json:"created_at"`
+	UpdatedAt           time.Time                         `json:"updated_at"`
 }
 
 type Store interface {

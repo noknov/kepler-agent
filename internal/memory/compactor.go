@@ -34,6 +34,12 @@ const (
 
 	// ToolResultClearedMsg replaces old tool results in Layer 1.
 	ToolResultClearedMsg = "[Old tool result content cleared]"
+
+	// ExternalEvidencePreservedLayer is reported when the remaining over-budget
+	// content includes transient external evidence. External evidence must not
+	// be silently summarized into agent memory.
+	ExternalEvidencePreservedLayer = "external_evidence_preserved"
+	ThreadContextPreservedLayer    = ExternalEvidencePreservedLayer
 )
 
 // Compactor orchestrates context compression from cheapest (zero API cost) to
@@ -57,6 +63,11 @@ type Compactor struct {
 
 	// ClearableTools lists tool names whose results can be cleared in Layer 1.
 	ClearableTools map[string]bool
+
+	// AllowExternalEvidenceCompaction permits LLM compaction to fold transient
+	// external evidence into a summary. The default is false: external evidence
+	// remains verbatim even if that leaves the window over budget.
+	AllowExternalEvidenceCompaction bool
 
 	// LLMClient is used for LLM-driven summaries.
 	LLMClient llm.Client
@@ -148,6 +159,12 @@ func (c *Compactor) CompactIfNeededWithReserve(ctx context.Context, messages []l
 		return msgs, result, nil
 	}
 
+	if c.preserveExternalEvidence() && containsExternalEvidence(msgs) {
+		result.Layer = ExternalEvidencePreservedLayer
+		result.PostTokens = tokens
+		return msgs, result, nil
+	}
+
 	// Layer 3: LLM compact (structured summary via API call). Conversation and
 	// thread context are never locally folded or truncated; only tool results
 	// may be locally cleared/compressed before this point.
@@ -206,6 +223,12 @@ func (c *Compactor) CompactForce(ctx context.Context, messages []llm.Message) ([
 
 	if c.LLMClient == nil {
 		result.Layer = "force_no_llm_client"
+		result.PostTokens = tokens
+		return msgs, result, nil
+	}
+
+	if c.preserveExternalEvidence() && containsExternalEvidence(msgs) {
+		result.Layer = "force_" + ExternalEvidencePreservedLayer
 		result.PostTokens = tokens
 		return msgs, result, nil
 	}
@@ -312,6 +335,24 @@ func (c *Compactor) isClearableTool(name string) bool {
 		return true
 	}
 	return c.ClearableTools[name]
+}
+
+func (c *Compactor) preserveExternalEvidence() bool {
+	return c == nil || !c.AllowExternalEvidenceCompaction
+}
+
+func containsExternalEvidence(messages []llm.Message) bool {
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, "<slack_thread_context>") || strings.Contains(msg.Content, "<external_evidence") {
+			return true
+		}
+		for _, part := range msg.ContentParts {
+			if part.Type == "text" && (strings.Contains(part.Text, "<slack_thread_context>") || strings.Contains(part.Text, "<external_evidence")) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // --- Layer 2: Tool result compression ---
