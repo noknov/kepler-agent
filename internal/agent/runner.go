@@ -102,12 +102,13 @@ type Runner struct {
 }
 
 type Request struct {
-	Messages     []llm.Message
-	UserQuestion string
-	Runtime      registry.Runtime
-	Locale       string
-	RunID        string
-	Steering     SteeringProvider
+	Messages                []llm.Message
+	UserQuestion            string
+	Runtime                 registry.Runtime
+	Locale                  string
+	RunID                   string
+	Steering                SteeringProvider
+	ContentReplacementState *memory.ContentReplacementState
 	// DisabledTools lists tool names to exclude from this run's tool spec
 	// list. The tools remain registered; they are simply not offered to the
 	// model for this specific request.

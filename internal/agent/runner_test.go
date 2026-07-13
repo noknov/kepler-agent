@@ -905,6 +905,81 @@ func TestMicroCompactNoOpUnderLimit(t *testing.T) {
 	}
 }
 
+func TestStatefulToolResultBudgetReappliesReplacement(t *testing.T) {
+	state := memory.NewContentReplacementState()
+	state.AddReplacement("call_1", "<persisted-output>\nold preview\n</persisted-output>")
+	r := Runner{}
+	messages := []llm.Message{
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "call_1", Function: llm.ToolFunction{Name: "code-search"}}}},
+		{Role: "tool", Name: "code-search", ToolCallID: "call_1", Content: strings.Repeat("full result ", 1000)},
+	}
+
+	got := r.applyToolResultBudget(messages, Request{ContentReplacementState: state, RunID: "stateful-reapply"})
+	if got[1].Content != "<persisted-output>\nold preview\n</persisted-output>" {
+		t.Fatalf("replacement was not reapplied: %q", got[1].Content)
+	}
+	if len(state.Records) != 1 {
+		t.Fatalf("records = %d, want 1", len(state.Records))
+	}
+}
+
+func TestStatefulToolResultBudgetFreezesUnreplacedResults(t *testing.T) {
+	state := memory.NewContentReplacementState()
+	r := Runner{}
+	messages := []llm.Message{
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "call_1", Function: llm.ToolFunction{Name: "code-search"}}}},
+		{Role: "tool", Name: "code-search", ToolCallID: "call_1", Content: "small result"},
+	}
+
+	first := r.applyToolResultBudget(messages, Request{ContentReplacementState: state, RunID: "stateful-freeze"})
+	if first[1].Content != "small result" {
+		t.Fatalf("first content = %q", first[1].Content)
+	}
+	if !state.Seen["call_1"] {
+		t.Fatal("tool result should be marked seen")
+	}
+
+	messages[1].Content = strings.Repeat("became huge ", 8000)
+	second := r.applyToolResultBudget(messages, Request{ContentReplacementState: state, RunID: "stateful-freeze"})
+	if second[1].Content != messages[1].Content {
+		t.Fatal("seen unreplaced result should stay unreplaced on later passes")
+	}
+	if len(state.Records) != 0 {
+		t.Fatalf("records = %d, want 0", len(state.Records))
+	}
+}
+
+func TestStatefulToolResultBudgetRecordsFreshReplacement(t *testing.T) {
+	state := memory.NewContentReplacementState()
+	r := Runner{}
+	messages := []llm.Message{
+		{Role: "assistant", ToolCalls: []llm.ToolCall{
+			{ID: "call_1", Function: llm.ToolFunction{Name: "code-search"}},
+			{ID: "call_2", Function: llm.ToolFunction{Name: "code-search"}},
+		}},
+		{Role: "tool", Name: "code-search", ToolCallID: "call_1", Content: strings.Repeat("alpha ", 7000)},
+		{Role: "tool", Name: "code-search", ToolCallID: "call_2", Content: strings.Repeat("beta ", 7000)},
+	}
+
+	got := r.applyToolResultBudget(messages, Request{ContentReplacementState: state, RunID: "stateful-record"})
+	if len(state.Records) == 0 {
+		t.Fatal("expected at least one replacement record")
+	}
+	record := state.Records[0]
+	if record.Kind != memory.ContentReplacementKindToolResult || record.Replacement == "" {
+		t.Fatalf("bad replacement record: %#v", record)
+	}
+	found := false
+	for _, msg := range got {
+		if msg.ToolCallID == record.ToolCallID && msg.Content == record.Replacement {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("recorded replacement was not visible in messages: record=%#v messages=%#v", record, got)
+	}
+}
+
 type fakeClient struct {
 	responses []llm.Response
 	errors    []error

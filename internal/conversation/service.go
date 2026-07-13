@@ -41,20 +41,21 @@ type ThreadStatusMessenger interface {
 type TextFormatter func(string) string
 
 type Service struct {
-	Store         session.Store
-	Messenger     Messenger
-	Runner        agent.Runner
-	Compactor     *memory.Compactor
-	Memory        memory.Builder
-	Prompt        safety.PromptPolicy
-	Redactor      safety.Redactor
-	Metrics       *observability.Recorder
-	Format        TextFormatter
-	RunStore      runs.Store
-	RunProvider   string
-	RunModel      string
-	ModelOverride func(userID string) string
-	Multimodal    func(model string) bool
+	Store          session.Store
+	Messenger      Messenger
+	Runner         agent.Runner
+	Compactor      *memory.Compactor
+	Memory         memory.Builder
+	MemoryPipeline *memory.Pipeline
+	Prompt         safety.PromptPolicy
+	Redactor       safety.Redactor
+	Metrics        *observability.Recorder
+	Format         TextFormatter
+	RunStore       runs.Store
+	RunProvider    string
+	RunModel       string
+	ModelOverride  func(userID string) string
+	Multimodal     func(model string) bool
 	// WebSearchEnabled controls whether the web-search tool is available for
 	// a given user. When it returns false the tool is excluded from the LLM
 	// tool list for that request. When nil, search is always available.
@@ -84,18 +85,19 @@ type Request struct {
 
 func NewService(store session.Store, messenger Messenger, runner agent.Runner, memoryBuilder memory.Builder, prompt safety.PromptPolicy, redactor safety.Redactor, metrics *observability.Recorder) *Service {
 	return &Service{
-		Store:     store,
-		Messenger: messenger,
-		Runner:    runner,
-		Compactor: runner.Compactor,
-		Memory:    memoryBuilder,
-		Prompt:    prompt,
-		Redactor:  redactor,
-		Metrics:   metrics,
-		locks:     map[string]*sync.Mutex{},
-		seen:      map[string]time.Time{},
-		active:    map[string]*activeRun{},
-		seenTTL:   10 * time.Minute,
+		Store:          store,
+		Messenger:      messenger,
+		Runner:         runner,
+		Compactor:      runner.Compactor,
+		Memory:         memoryBuilder,
+		MemoryPipeline: memory.NewPipeline(memoryBuilder, runner.Compactor),
+		Prompt:         prompt,
+		Redactor:       redactor,
+		Metrics:        metrics,
+		locks:          map[string]*sync.Mutex{},
+		seen:           map[string]time.Time{},
+		active:         map[string]*activeRun{},
+		seenTTL:        10 * time.Minute,
 	}
 }
 
@@ -475,15 +477,20 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}
 
 	threadContext := s.Messenger.ThreadContext(ctx, req.Channel, req.ThreadTS, 0)
-	messages := s.Memory.BuildWithParts(
-		sysPrompt,
-		threadContext,
-		userText,
-		contentParts,
-		sess.Summary,
-		sess.Turns,
-	)
-	baseContextTokens = memory.CountTokensWithCalibration(messages)
+	activeMemory := s.pipeline().BuildActiveRequest(memory.ActiveRequestInput{
+		SystemPrompt: sysPrompt,
+		ExternalEvidence: []memory.ExternalEvidence{{
+			Source:  "slack_thread",
+			Content: threadContext,
+		}},
+		UserText:       userText,
+		UserParts:      contentParts,
+		SessionSummary: sess.Summary,
+		Turns:          sess.Turns,
+	})
+	messages := activeMemory.Messages
+	contentReplacementState := memory.ReconstructContentReplacementState(messages, sess.ContentReplacements)
+	baseContextTokens = activeMemory.EstimatedTokens
 	if baseContextTokens > 0 {
 		setCurrentUsage(baseContextTokens)
 	}
@@ -495,9 +502,10 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			Channel:  req.Channel,
 			ThreadTS: req.ThreadTS,
 		},
-		Locale:   locale,
-		RunID:    runID,
-		Steering: s.steering(active),
+		Locale:                  locale,
+		RunID:                   runID,
+		Steering:                s.steering(active),
+		ContentReplacementState: contentReplacementState,
 	}
 	if webSearchOff {
 		agentReq.DisabledTools = []string{"web-search", "web-read_page"}
@@ -574,6 +582,9 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}
 
 	sess.Turns = append(sess.Turns, memory.FilterPersistentTurns(memory.FromLLM(result.Generated))...)
+	if contentReplacementState != nil {
+		sess.ContentReplacements = append([]memory.ContentReplacementRecord(nil), contentReplacementState.Records...)
+	}
 
 	if result.Pending {
 		sess.PendingUserInput = true
@@ -1020,27 +1031,15 @@ func (s *Service) controlActive(req Request) bool {
 }
 
 func (s *Service) trimAndSummarize(ctx context.Context, turns []memory.Turn, existing string) ([]memory.Turn, string, bool) {
-	summary := existing
-	compressed := false
+	result := s.pipeline().CompactSessionConversation(ctx, turns, existing)
+	return result.Turns, result.Summary, result.Compressed
+}
 
-	if s.Compactor != nil && len(turns) > 0 {
-		preTurnCount := len(turns)
-		llmMessages := memory.ToLLM(turns)
-		compacted, result, err := s.Compactor.CompactIfNeeded(ctx, llmMessages)
-		if err != nil {
-			log.Printf("conversation compact error: %v", err)
-		} else if result != nil && result.Layer != "" {
-			turns = memory.FilterPersistentTurns(memory.FromLLM(compacted))
-			if result.PostTokens < result.PreTokens || result.Summary != "" || len(turns) < preTurnCount {
-				compressed = true
-			}
-			if result.Layer == "llm_compact" && strings.TrimSpace(result.Summary) != "" {
-				summary = strings.TrimSpace(result.Summary)
-			}
-		}
+func (s *Service) pipeline() *memory.Pipeline {
+	if s.MemoryPipeline != nil {
+		return s.MemoryPipeline
 	}
-
-	return turns, summary, compressed
+	return memory.NewPipeline(s.Memory, s.Compactor)
 }
 
 func newErrorID() string {
