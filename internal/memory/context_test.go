@@ -102,6 +102,31 @@ func TestBuildWithPartsIncludesFullThreadContext(t *testing.T) {
 	}
 }
 
+func TestBuildRequestInjectsCompactBoundary(t *testing.T) {
+	builder := Builder{}
+	messages := builder.BuildRequest(BuildRequest{
+		SystemPrompt: "system",
+		CompactBoundaries: []CompactBoundary{{
+			ID:    "compact-1",
+			Layer: "llm_compact",
+		}},
+		UserText: "continue",
+	})
+
+	var boundary bool
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, "<compact_boundary") && strings.Contains(msg.Content, "compact-1") {
+			boundary = true
+		}
+		if msg.Role == "system" && msg.Content != "system" {
+			t.Fatalf("only policy should use system role: %#v", msg)
+		}
+	}
+	if !boundary {
+		t.Fatal("compact boundary block was not injected")
+	}
+}
+
 func TestFilterPersistentTurnsKeepsMatchedToolCalls(t *testing.T) {
 	turns := []Turn{
 		{

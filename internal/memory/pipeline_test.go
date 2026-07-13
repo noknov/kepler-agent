@@ -35,6 +35,32 @@ func TestPipelineBuildActiveRequestKeepsExternalEvidenceVerbatim(t *testing.T) {
 	}
 }
 
+func TestPipelineBuildActiveRequestReportsTokenBreakdown(t *testing.T) {
+	p := NewPipeline(Builder{}, nil)
+	active := p.BuildActiveRequest(ActiveRequestInput{
+		SystemPrompt: "system",
+		ExternalEvidence: []ExternalEvidence{{
+			Source:  "slack_thread",
+			Content: "U1: incident update",
+		}},
+		SessionSummary: "older summary",
+		Turns: []Turn{
+			UserTurn("previous user"),
+			{Role: RoleAssistant, Content: "previous assistant"},
+			{Role: RoleTool, ToolCallID: "tool_1", Name: "code-search", Content: "tool result"},
+		},
+		UserText: "next question",
+	})
+
+	breakdown := active.TokenBreakdown
+	if breakdown.ExternalEvidence <= 0 || breakdown.SessionSummary <= 0 || breakdown.Turns <= 0 || breakdown.ToolResults <= 0 {
+		t.Fatalf("incomplete token breakdown: %#v", breakdown)
+	}
+	if breakdown.Total <= 0 {
+		t.Fatalf("Total = %d, want positive", breakdown.Total)
+	}
+}
+
 func TestPipelineCompactSessionConversationExcludesThreadContext(t *testing.T) {
 	client := &countingCompactClient{}
 	p := NewPipeline(Builder{}, &Compactor{

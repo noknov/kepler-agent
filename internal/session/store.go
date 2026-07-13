@@ -22,6 +22,7 @@ type Session struct {
 	Locale              string                            `json:"locale,omitempty"`
 	Summary             string                            `json:"summary,omitempty"`
 	Turns               []memory.Turn                     `json:"turns,omitempty"`
+	CompactBoundaries   []memory.CompactBoundary          `json:"compact_boundaries,omitempty"`
 	ContentReplacements []memory.ContentReplacementRecord `json:"content_replacements,omitempty"`
 	PendingUserInput    bool                              `json:"pending_user_input,omitempty"`
 	PendingUserID       string                            `json:"pending_user_id,omitempty"`

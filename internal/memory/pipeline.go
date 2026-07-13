@@ -3,9 +3,12 @@ package memory
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/wati/oncall-agent/internal/llm"
 )
+
+var timeNowUTC = func() time.Time { return time.Now().UTC() }
 
 // Pipeline is the single entry point for request-time memory management.
 //
@@ -25,19 +28,31 @@ type Pipeline struct {
 }
 
 type ActiveRequestInput struct {
-	SystemPrompt     string
-	ExternalEvidence []ExternalEvidence
-	UserText         string
-	UserParts        []llm.ContentPart
-	SessionSummary   string
-	Turns            []Turn
+	SystemPrompt      string
+	CompactBoundaries []CompactBoundary
+	ExternalEvidence  []ExternalEvidence
+	UserText          string
+	UserParts         []llm.ContentPart
+	SessionSummary    string
+	Turns             []Turn
 }
 
 type ActiveRequest struct {
 	Messages               []llm.Message
 	EstimatedTokens        int
+	TokenBreakdown         TokenBreakdown
 	ExternalEvidenceTokens int
 	ConversationTokens     int
+}
+
+type TokenBreakdown struct {
+	ExternalEvidence int `json:"external_evidence"`
+	SessionSummary   int `json:"session_summary"`
+	Turns            int `json:"turns"`
+	ToolResults      int `json:"tool_results"`
+	CompactBoundary  int `json:"compact_boundary"`
+	ToolSchemas      int `json:"tool_schemas"`
+	Total            int `json:"total"`
 }
 
 type SessionCompactResult struct {
@@ -60,18 +75,50 @@ func NewPipeline(builder Builder, compactor *Compactor) *Pipeline {
 func (p *Pipeline) BuildActiveRequest(input ActiveRequestInput) ActiveRequest {
 	builder := p.builder()
 	messages := builder.BuildRequest(BuildRequest{
-		SystemPrompt:     input.SystemPrompt,
-		ExternalEvidence: input.ExternalEvidence,
-		UserText:         input.UserText,
-		UserParts:        input.UserParts,
-		Summary:          input.SessionSummary,
-		Turns:            input.Turns,
+		SystemPrompt:      input.SystemPrompt,
+		CompactBoundaries: input.CompactBoundaries,
+		ExternalEvidence:  input.ExternalEvidence,
+		UserText:          input.UserText,
+		UserParts:         input.UserParts,
+		Summary:           input.SessionSummary,
+		Turns:             input.Turns,
 	})
 	return ActiveRequest{
 		Messages:               messages,
 		EstimatedTokens:        CountTokensWithCalibration(messages),
+		TokenBreakdown:         buildTokenBreakdown(input, messages),
 		ExternalEvidenceTokens: estimateExternalEvidenceTokens(input.ExternalEvidence),
 		ConversationTokens:     CountTokensWithCalibration(ToLLM(FilterPersistentTurns(input.Turns))),
+	}
+}
+
+func (b TokenBreakdown) WithToolSchemas(tokens int) TokenBreakdown {
+	b.ToolSchemas = tokens
+	b.Total += tokens
+	return b
+}
+
+func (b TokenBreakdown) Metadata() map[string]any {
+	return map[string]any{
+		"external_evidence_tokens": b.ExternalEvidence,
+		"session_summary_tokens":   b.SessionSummary,
+		"turn_tokens":              b.Turns,
+		"tool_result_tokens":       b.ToolResults,
+		"compact_boundary_tokens":  b.CompactBoundary,
+		"tool_schema_tokens":       b.ToolSchemas,
+		"total_tokens":             b.Total,
+	}
+}
+
+func NewCompactBoundary(layer, summary string, preTokens, postTokens int) CompactBoundary {
+	now := timeNowUTC()
+	return CompactBoundary{
+		ID:         now.Format("20060102T150405.000000000Z"),
+		Layer:      strings.TrimSpace(layer),
+		Summary:    strings.TrimSpace(summary),
+		PreTokens:  preTokens,
+		PostTokens: postTokens,
+		CreatedAt:  now,
 	}
 }
 
@@ -120,4 +167,35 @@ func estimateExternalEvidenceTokens(items []ExternalEvidence) int {
 		total += RoughTokenEstimate(item.Content)
 	}
 	return total
+}
+
+func buildTokenBreakdown(input ActiveRequestInput, messages []llm.Message) TokenBreakdown {
+	breakdown := TokenBreakdown{
+		ExternalEvidence: estimateExternalEvidenceTokens(input.ExternalEvidence),
+		SessionSummary:   RoughTokenEstimate(input.SessionSummary),
+		CompactBoundary:  estimateCompactBoundaryTokens(input.CompactBoundaries),
+	}
+	for _, turn := range FilterPersistentTurns(input.Turns) {
+		tokens := estimateMessageTokens(&llm.Message{
+			Role:       string(turn.Role),
+			Content:    turn.Content,
+			Name:       turn.Name,
+			ToolCallID: turn.ToolCallID,
+		})
+		if turn.Role == RoleTool {
+			breakdown.ToolResults += tokens
+		} else {
+			breakdown.Turns += tokens
+		}
+	}
+	breakdown.Total = CountTokensWithCalibration(messages)
+	return breakdown
+}
+
+func estimateCompactBoundaryTokens(boundaries []CompactBoundary) int {
+	if len(boundaries) == 0 {
+		return 0
+	}
+	latest := boundaries[len(boundaries)-1]
+	return RoughTokenEstimate(latest.ID) + RoughTokenEstimate(latest.Layer) + 30
 }

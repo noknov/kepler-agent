@@ -478,7 +478,8 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 
 	threadContext := s.Messenger.ThreadContext(ctx, req.Channel, req.ThreadTS, 0)
 	activeMemory := s.pipeline().BuildActiveRequest(memory.ActiveRequestInput{
-		SystemPrompt: sysPrompt,
+		SystemPrompt:      sysPrompt,
+		CompactBoundaries: sess.CompactBoundaries,
 		ExternalEvidence: []memory.ExternalEvidence{{
 			Source:  "slack_thread",
 			Content: threadContext,
@@ -506,6 +507,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		RunID:                   runID,
 		Steering:                s.steering(active),
 		ContentReplacementState: contentReplacementState,
+		MemoryBreakdown:         activeMemory.TokenBreakdown,
 	}
 	if webSearchOff {
 		agentReq.DisabledTools = []string{"web-search", "web-read_page"}
@@ -592,7 +594,11 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		sess.PendingQuestion = result.PendingQuestion
 	}
 	var compressed bool
-	sess.Turns, sess.Summary, compressed = s.trimAndSummarize(ctx, sess.Turns, sess.Summary)
+	var compactResult memory.SessionCompactResult
+	sess.Turns, sess.Summary, compressed, compactResult = s.trimAndSummarizeWithResult(ctx, sess.Turns, sess.Summary)
+	if compressed && compactResult.Layer != "" {
+		sess.CompactBoundaries = appendCompactBoundary(sess.CompactBoundaries, memory.NewCompactBoundary(compactResult.Layer, compactResult.Summary, compactResult.PreTokens, compactResult.PostTokens))
+	}
 	if err := s.Store.Save(ctx, sess); err != nil && s.Metrics != nil {
 		s.Metrics.Error(err)
 	}
@@ -1035,6 +1041,11 @@ func (s *Service) trimAndSummarize(ctx context.Context, turns []memory.Turn, exi
 	return result.Turns, result.Summary, result.Compressed
 }
 
+func (s *Service) trimAndSummarizeWithResult(ctx context.Context, turns []memory.Turn, existing string) ([]memory.Turn, string, bool, memory.SessionCompactResult) {
+	result := s.pipeline().CompactSessionConversation(ctx, turns, existing)
+	return result.Turns, result.Summary, result.Compressed, result
+}
+
 func (s *Service) pipeline() *memory.Pipeline {
 	if s.MemoryPipeline != nil {
 		return s.MemoryPipeline
@@ -1048,6 +1059,18 @@ func newErrorID() string {
 		return "err-" + time.Now().UTC().Format("20060102150405")
 	}
 	return "err-" + hex.EncodeToString(b[:])
+}
+
+func appendCompactBoundary(boundaries []memory.CompactBoundary, boundary memory.CompactBoundary) []memory.CompactBoundary {
+	if boundary.Layer == "" {
+		return boundaries
+	}
+	const maxBoundaries = 20
+	boundaries = append(boundaries, boundary)
+	if len(boundaries) > maxBoundaries {
+		return append([]memory.CompactBoundary(nil), boundaries[len(boundaries)-maxBoundaries:]...)
+	}
+	return boundaries
 }
 
 func wrapErrorID(errorID string, err error) error {
