@@ -10,6 +10,7 @@ import (
 	"github.com/wati/oncall-agent/internal/memory"
 	"github.com/wati/oncall-agent/internal/observability"
 	"github.com/wati/oncall-agent/internal/rag"
+	"github.com/wati/oncall-agent/internal/reminder"
 	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/slack"
 	ragTools "github.com/wati/oncall-agent/internal/toolkit/tools/rag"
@@ -26,7 +27,7 @@ type agentRuntime struct {
 	RAGManager *rag.Manager
 }
 
-func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *observability.Recorder) agentRuntime {
+func newAgentRuntime(cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, recorder *observability.Recorder) agentRuntime {
 	llmClient := newLLMClient(cfg)
 	llmCapabilities := llm.CapabilitiesFor(cfg.LLM.Provider, cfg.LLM.Protocol)
 	workspacePolicy := safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}
@@ -40,7 +41,7 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, recorder *obs
 		MaxContextTokens: cfg.Sessions.MaxContextTokens,
 	}
 	secondaryClient, secondaryModel := newSecondaryLLMClient(cfg)
-	tools := newToolRegistry(cfg, slackClient, llmClient, secondaryClient, secondaryModel, workspacePolicy, commandPolicy)
+	tools := newToolRegistry(cfg, slackClient, reminderStore, llmClient, secondaryClient, secondaryModel, workspacePolicy, commandPolicy)
 
 	var statusSummarizer *agent.StatusSummarizer
 	if cfg.LLM.DynamicStatus {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/wati/oncall-agent/internal/config"
 	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/wati/oncall-agent/internal/reminder"
 	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/slack"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
@@ -144,7 +145,11 @@ func TestDefaultToolRegistryDefersHeavyToolFamilies(t *testing.T) {
 	cfg := config.Config{}
 	cfg.Tools.KubectlPath = "kubectl"
 	cfg.Tools.GCloudPath = "gcloud"
-	reg := newToolRegistry(cfg, &slack.Client{}, nil, nil, "", safety.WorkspacePolicy{}, safety.CommandPolicy{})
+	reminderStore, err := reminder.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := newToolRegistry(cfg, &slack.Client{}, reminderStore, nil, nil, "", safety.WorkspacePolicy{}, safety.CommandPolicy{})
 
 	for _, name := range []string{
 		"github-workflow_runs",
@@ -162,7 +167,7 @@ func TestDefaultToolRegistryDefersHeavyToolFamilies(t *testing.T) {
 		t.Fatal("tool_search must remain active so deferred capabilities are discoverable")
 	}
 
-	_, err := reg.Execute(context.Background(), "tool_search", json.RawMessage(`{
+	_, err = reg.Execute(context.Background(), "tool_search", json.RawMessage(`{
 		"action":"activate",
 		"tool_names":["github-workflow_runs","k8s-get_pods","gcp-logs","slack-create_canvas"]
 	}`), registry.Runtime{})

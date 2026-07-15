@@ -519,6 +519,7 @@ docker compose -f docker-compose.rag.yml up -d
 ```bash
 RAG_ENABLED=false
 RAG_POSTGRES_DSN=postgres://oncall:oncall@localhost:5432/oncall_rag?sslmode=disable
+REMINDER_POSTGRES_DSN= # optional; defaults to RAG_POSTGRES_DSN
 
 # Embedding provider — any OpenAI-compatible /v1/embeddings endpoint works:
 # 🖥️  Local Ollama:    http://localhost:11434/v1       model: nomic-embed-text  dims: 768

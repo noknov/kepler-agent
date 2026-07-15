@@ -23,6 +23,7 @@ import (
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/observability"
 	"github.com/wati/oncall-agent/internal/prompts"
+	"github.com/wati/oncall-agent/internal/reminder"
 	"github.com/wati/oncall-agent/internal/runs"
 	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/session"
@@ -55,19 +56,23 @@ func Run(ctx context.Context) error {
 	if server.health != nil {
 		go server.health.Start(ctx)
 	}
+	defer server.reminderStore.Close()
+	go server.reminders.Start(ctx)
 	return server.ListenAndServe(ctx)
 }
 
 type Server struct {
-	cfg        config.Config
-	slack      *slack.Client
-	access     safety.AccessPolicy
-	conv       *conversation.Service
-	prompt     safety.PromptPolicy
-	metrics    *observability.Recorder
-	runStore   runs.Store
-	ragManager ragManagerCloser
-	health     *health.Service
+	cfg            config.Config
+	slack          *slack.Client
+	access         safety.AccessPolicy
+	conv           *conversation.Service
+	prompt         safety.PromptPolicy
+	metrics        *observability.Recorder
+	runStore       runs.Store
+	ragManager     ragManagerCloser
+	health         *health.Service
+	reminders      reminder.Scheduler
+	reminderStore  *reminder.PGStore
 	mux            *http.ServeMux
 	modelPrefs     sync.Map
 	webSearchPrefs sync.Map
@@ -89,6 +94,10 @@ func NewServer(cfg config.Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	reminderStore, err := reminder.NewPGStore(context.Background(), cfg.Reminders.PostgresDSN)
+	if err != nil {
+		return nil, err
+	}
 
 	slackClient := slack.NewClient(cfg.Slack.BotToken, cfg.Slack.BotUserID)
 	if cfg.Slack.BotUserID == "" {
@@ -102,7 +111,7 @@ func NewServer(cfg config.Config) (*Server, error) {
 	}
 
 	recorder := observability.NewRecorder()
-	runtime := newAgentRuntime(cfg, slackClient, recorder)
+	runtime := newAgentRuntime(cfg, slackClient, reminderStore, recorder)
 	healthService := health.NewService(runtime.Tools, cfg.Security.WorkspaceRoots, recorder, runtime.RAGManager != nil)
 	recorder.SetCostRates(runtime.CostRates)
 	conv := conversation.NewService(store, slackClient, runtime.Runner, runtime.Memory, runtime.Prompt, runtime.Redactor, recorder)
@@ -123,17 +132,19 @@ func NewServer(cfg config.Config) (*Server, error) {
 	}
 
 	s := &Server{
-		cfg:        cfg,
-		slack:      slackClient,
-		access:     safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
-		conv:       conv,
-		prompt:     runtime.Prompt,
-		metrics:    recorder,
-		runStore:   runStore,
-		ragManager: ragManager,
-		health:     healthService,
-		mux:        http.NewServeMux(),
-		tokenUsage: newTokenUsageProvider(cfg.LLM.Provider, cfg.LLM.TokenUsage),
+		cfg:           cfg,
+		slack:         slackClient,
+		access:        safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
+		conv:          conv,
+		prompt:        runtime.Prompt,
+		metrics:       recorder,
+		runStore:      runStore,
+		ragManager:    ragManager,
+		health:        healthService,
+		reminders:     reminder.Scheduler{Store: reminderStore, Messenger: slackClient},
+		reminderStore: reminderStore,
+		mux:           http.NewServeMux(),
+		tokenUsage:    newTokenUsageProvider(cfg.LLM.Provider, cfg.LLM.TokenUsage),
 	}
 	conv.ModelOverride = func(userID string) string {
 		return s.modelPreference(userID)
