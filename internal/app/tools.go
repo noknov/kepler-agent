@@ -8,6 +8,7 @@ import (
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/mcp"
 	"github.com/wati/oncall-agent/internal/prompts"
+	"github.com/wati/oncall-agent/internal/reminder"
 	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/slack"
 	codeTools "github.com/wati/oncall-agent/internal/toolkit/tools/code"
@@ -23,6 +24,7 @@ import (
 	plannerTools "github.com/wati/oncall-agent/internal/toolkit/tools/planner"
 	playwrightTools "github.com/wati/oncall-agent/internal/toolkit/tools/playwright"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	reminderTools "github.com/wati/oncall-agent/internal/toolkit/tools/reminder"
 	shellTools "github.com/wati/oncall-agent/internal/toolkit/tools/shell"
 	skillTools "github.com/wati/oncall-agent/internal/toolkit/tools/skills"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/slacktool"
@@ -31,8 +33,11 @@ import (
 	youtrackTools "github.com/wati/oncall-agent/internal/toolkit/tools/youtrack"
 )
 
-func newToolRegistry(cfg config.Config, slackClient *slack.Client, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) *registry.Registry {
-	tools := registry.NewReadOnlyWithAllowedWrites("luckin-create_order", "luckin-cancel_order", "slack-create_canvas", "tts-speak")
+func newToolRegistry(cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) *registry.Registry {
+	tools := registry.NewReadOnlyWithAllowedWrites("luckin-create_order", "luckin-cancel_order", "slack-create_canvas", "tts-speak", "reminder-create", "reminder-cancel")
+	tools.Register(reminderTools.CreateTool{Store: reminderStore})
+	tools.Register(reminderTools.ListTool{Store: reminderStore})
+	tools.Register(reminderTools.CancelTool{Store: reminderStore})
 	registerDeferredDiagnosticsTools(tools)
 	registerCodeTools(tools, cfg, workspacePolicy, commandPolicy)
 	registerIntegrationTools(tools, cfg, commandPolicy)

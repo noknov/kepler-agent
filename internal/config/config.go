@@ -20,6 +20,7 @@ type Config struct {
 	Tools     ToolConfig
 	Observing ObservingConfig
 	RAG       RAGConfig
+	Reminders ReminderConfig
 }
 
 type RAGConfig struct {
@@ -33,6 +34,8 @@ type RAGConfig struct {
 	IndexInterval    time.Duration
 	BatchDelay       time.Duration
 }
+
+type ReminderConfig struct{ PostgresDSN string }
 
 type HTTPConfig struct {
 	Addr string
@@ -307,6 +310,7 @@ func Load() (Config, error) {
 			IndexInterval:    envDuration("RAG_INDEX_INTERVAL", 5*time.Minute),
 			BatchDelay:       envDuration("RAG_BATCH_DELAY", 200*time.Millisecond),
 		},
+		Reminders: ReminderConfig{PostgresDSN: firstNonEmpty(os.Getenv("REMINDER_POSTGRES_DSN"), os.Getenv("RAG_POSTGRES_DSN"))},
 	}
 
 	if cfg.Slack.SigningSecret == "" {
