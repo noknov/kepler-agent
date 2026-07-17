@@ -182,6 +182,7 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 		githubTools.DispatchWorkflowTool{Client: githubClient},
 		githubTools.WorkflowRunsTool{Client: githubClient},
 		githubTools.PRDiffTool{Client: githubClient},
+		githubTools.PRFileDiffTool{},
 		githubTools.JobLogsTool{Client: githubClient},
 	)
 

@@ -67,6 +67,23 @@ func TestFetchRefUsesOriginHEADDefaultBranch(t *testing.T) {
 	}
 }
 
+func TestFetchRefUsesPRHeadBranchWhenBranchOmitted(t *testing.T) {
+	root, work := testRepo(t)
+	runGit(t, work, "checkout", "-b", "feature")
+	runGit(t, work, "push", "origin", "feature")
+	head := strings.TrimSpace(runGitOutput(t, work, "rev-parse", "HEAD"))
+	rt := registry.Runtime{Cache: registry.NewRuntimeCache()}
+	registry.SetPRContext(rt, registry.PRContext{Repository: "example/work", RepoPath: "work", HeadRef: "feature", HeadSHA: head})
+	tool := FetchRefTool{Base: Base{Paths: safety.WorkspacePolicy{Roots: []string{root}}, Guard: safety.NewCommandPolicy(), Timeout: 10 * time.Second}}
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{}`), rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, "branch=feature") || !strings.Contains(result.Content, "ref="+head) {
+		t.Fatalf("PR fetch must use the head branch, got %q", result.Content)
+	}
+}
+
 func TestFetchRefUsesProcessFetchCacheWithinTTL(t *testing.T) {
 	root, work := testRepo(t)
 	base := Base{
@@ -217,4 +234,15 @@ func runGit(t *testing.T, dir string, args ...string) {
 	if err != nil {
 		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
+}
+
+func runGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return string(out)
 }

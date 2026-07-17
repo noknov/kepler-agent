@@ -49,6 +49,34 @@ func TestDispatchWorkflowTool(t *testing.T) {
 	}
 }
 
+func TestPRDiffStoresReviewContextAndIndexesFiles(t *testing.T) {
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.Header.Get("Accept") {
+		case "application/vnd.github.diff":
+			return response(http.StatusOK, "diff --git a/src/a.ts b/src/a.ts\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/src/b.ts b/src/b.ts\n@@ -4,0 +5 @@\n+added\n"), nil
+		default:
+			return response(http.StatusOK, `{"title":"Review me","state":"open","commits":1,"head":{"ref":"feature/pr","sha":"0123456789abcdef"},"base":{"ref":"main"}}`), nil
+		}
+	})
+	rt := registry.Runtime{Cache: registry.NewRuntimeCache()}
+	tool := PRDiffTool{Client: testClient("example", "repo", transport)}
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"pr":42}`), rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(result.Content, "-old\n+new") || !strings.Contains(result.Content, "src/a.ts (hunks=1 +1/-1)") {
+		t.Fatalf("expected compact diff manifest, got %q", result.Content)
+	}
+	pr, ok := registry.PRContextFromRuntime(rt)
+	if !ok || pr.Repository != "example/repo" || pr.RepoPath != "repo" || pr.HeadSHA != "0123456789abcdef" || len(pr.ChangedFiles) != 2 {
+		t.Fatalf("PR context = %#v, ok=%v", pr, ok)
+	}
+	fileResult, err := (PRFileDiffTool{}).Execute(context.Background(), json.RawMessage(`{"path":"src/a.ts"}`), rt)
+	if err != nil || !strings.Contains(fileResult.Content, "-old\n+new") || strings.Contains(fileResult.Content, "src/b.ts") {
+		t.Fatalf("file diff = %#v, err=%v", fileResult, err)
+	}
+}
+
 func TestDispatchWorkflowExecutesDirectly(t *testing.T) {
 	called := false
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
