@@ -27,7 +27,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.auth.currentUser(r)
+	_, ok := s.auth.currentUser(r)
 	if !ok {
 		http.Error(w, `{"error":"unauthenticated"}`, http.StatusUnauthorized)
 		return
@@ -36,11 +36,6 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		current := s.models.DefaultModel
-		if s.models.Get != nil {
-			if pref := s.models.Get(user.ID); pref != "" {
-				current = pref
-			}
-		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"default_model": s.models.DefaultModel,
@@ -48,18 +43,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			"models":        s.models.Models,
 		})
 	case http.MethodPost:
-		var body struct {
-			Model string `json:"model"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Model == "" {
-			http.Error(w, `{"error":"missing model"}`, http.StatusBadRequest)
-			return
-		}
-		if s.models.Set == nil || !s.models.Set(user.ID, body.Model) {
-			http.Error(w, `{"error":"unknown model"}`, http.StatusBadRequest)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
+		http.Error(w, `{"error":"model selection disabled"}`, http.StatusForbidden)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}

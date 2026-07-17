@@ -291,6 +291,12 @@ func TestLoadDefaultsToMiMo(t *testing.T) {
 	if cfg.LLM.Model != "mimo-v2.5" {
 		t.Fatalf("LLM.Model = %q, want mimo-v2.5", cfg.LLM.Model)
 	}
+	if cfg.LLM.MultimodalModel != "" {
+		t.Fatalf("LLM.MultimodalModel = %q, want empty default", cfg.LLM.MultimodalModel)
+	}
+	if len(cfg.LLM.MultimodalModels) != 0 {
+		t.Fatalf("LLM.MultimodalModels = %#v, want empty default", cfg.LLM.MultimodalModels)
+	}
 	if cfg.LLM.APIKey != "mimo-token" {
 		t.Fatalf("LLM.APIKey = %q, want mimo-token", cfg.LLM.APIKey)
 	}
@@ -837,6 +843,9 @@ func resetConfigEnv(t *testing.T) {
 		"MIMO_MAX_TOKENS",
 		"MIMO_TEMPERATURE",
 		"MIMO_TIMEOUT",
+		"MODEL_ROUTING_MULTIMODAL_MODEL",
+		"MULTIMODAL_MODEL",
+		"MULTIMODAL_MODELS",
 		"KIMI_PROTOCOL",
 		"ANTHROPIC_PROTOCOL",
 		"ANTHROPIC_FLAVOR",

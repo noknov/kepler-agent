@@ -204,7 +204,16 @@ Final answer streaming is flushed in small batches to keep the UI responsive wit
 
 ### 🖼️ Multimodal and model display
 
-`<PROVIDER>_AVAILABLE_MODELS` controls which models the web UI can expose for the active provider, such as `MIMO_AVAILABLE_MODELS`, `OPENCODE_ZEN_AVAILABLE_MODELS`, or `OPENCODE_GO_AVAILABLE_MODELS`. The Slack App Home tab shows the primary and secondary models side by side. `MULTIMODAL_MODELS` controls which models receive image parts; images sent to non-listed models are stripped and replaced with a text description prompt.
+The web UI shows the configured primary model, and Slack App Home shows the
+primary plus Explorer / Summary models. Users do not choose models.
+`MODEL_ROUTING_MULTIMODAL_MODEL` controls the internal model used for
+image-containing turns, while `MULTIMODAL_MODELS` controls which models receive
+image parts; images sent to non-listed models are stripped and replaced with a
+text description prompt. The multimodal routing model is not exposed in the UI.
+
+For deployments with separate text and vision-capable models, set the primary
+provider model as usual, then set `MODEL_ROUTING_MULTIMODAL_MODEL` to the
+vision-capable model and include it in `MULTIMODAL_MODELS`.
 
 ## 📝 Prompt configuration
 
@@ -329,7 +338,7 @@ Event subscriptions: `app_mention`, `message.channels`, `message.groups`, `messa
 - `ALLOWED_SLACK_CHANNELS` controls which channels the bot responds to in channel threads.
 - `ALLOWED_SLACK_USERS` controls who can use the bot in app DMs.
 
-The App Home tab shows access status plus the configured primary and secondary models.
+The App Home tab shows access status plus the configured primary and Explorer / Summary models.
 
 ## 🛠️ Tools
 

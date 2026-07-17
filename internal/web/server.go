@@ -22,8 +22,6 @@ type Server struct {
 type ModelSettings struct {
 	DefaultModel string
 	Models       []string
-	Get          func(userID string) string
-	Set          func(userID, model string) bool
 }
 
 // New creates a Server. bot is used only to send OTP DMs; the full Slack client

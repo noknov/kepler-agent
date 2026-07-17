@@ -108,30 +108,6 @@ func actionsBlock(elements ...map[string]any) map[string]any {
 	}
 }
 
-func modelSelectMenu(models []string, current string) map[string]any {
-	options := make([]map[string]any, len(models))
-	var initial map[string]any
-	for i, m := range models {
-		opt := map[string]any{
-			"text":  map[string]any{"type": "plain_text", "text": m},
-			"value": m,
-		}
-		options[i] = opt
-		if m == current {
-			initial = opt
-		}
-	}
-	menu := map[string]any{
-		"type":      "static_select",
-		"action_id": "select_model",
-		"options":   options,
-	}
-	if initial != nil {
-		menu["initial_option"] = initial
-	}
-	return menu
-}
-
 func boolLabel(on bool) string {
 	if on {
 		return "On"

@@ -53,6 +53,7 @@ type LLMConfig struct {
 	APIKey           string
 	Model            string
 	AvailableModels  []string
+	MultimodalModel  string
 	MultimodalModels []string
 	TokenUsage       TokenUsageConfig
 	Protocol         string
@@ -180,7 +181,8 @@ func Load() (Config, error) {
 	}
 	llmModel := providerModel(llmProvider)
 	llmAvailableModels := availableModels(llmProvider, llmModel)
-	llmMultimodalModels := envCSV("MULTIMODAL_MODELS")
+	llmMultimodalModel := providerMultimodalModel(llmProvider)
+	llmMultimodalModels := envCSVDefault("MULTIMODAL_MODELS", defaultMultimodalModels(llmMultimodalModel))
 	llmThinking := providerThinking(llmProvider)
 	if llmProvider == "mimo" && providerThinking(llmProvider) == "" {
 		llmThinking = "disabled"
@@ -213,6 +215,7 @@ func Load() (Config, error) {
 			APIKey:           providerAPIKey(llmProvider),
 			Model:            llmModel,
 			AvailableModels:  llmAvailableModels,
+			MultimodalModel:  llmMultimodalModel,
 			MultimodalModels: llmMultimodalModels,
 			TokenUsage: TokenUsageConfig{
 				OpenCodeGo: OpenCodeGoTokenUsageConfig{
@@ -477,6 +480,20 @@ func providerModel(provider string) string {
 	default:
 		return env("OPENAI_MODEL", "gpt-4o-mini")
 	}
+}
+
+func providerMultimodalModel(provider string) string {
+	if model := firstEnv("MODEL_ROUTING_MULTIMODAL_MODEL", "MULTIMODAL_MODEL"); model != "" {
+		return model
+	}
+	return ""
+}
+
+func defaultMultimodalModels(model string) []string {
+	if model == "" {
+		return nil
+	}
+	return []string{model}
 }
 
 func availableModels(provider, defaultModel string) []string {

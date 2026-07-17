@@ -151,6 +151,93 @@ func TestProcessInjectsToolHealthSummary(t *testing.T) {
 	}
 }
 
+func TestProcessRoutesImageInputToMultimodalModel(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	llmClient := &captureLLM{}
+	svc := NewService(
+		store,
+		&fakeMessenger{},
+		agent.Runner{LLM: llmClient, Model: "default-text-model", Tools: registry.New(), MaxSteps: 1},
+		memory.Builder{},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+	svc.RunModel = "default-text-model"
+	svc.ModelRouter = ModelRouter{
+		DefaultModel:    "default-text-model",
+		MultimodalModel: "vision-model",
+	}
+	svc.Multimodal = func(model string) bool {
+		return model == "vision-model"
+	}
+
+	svc.HandleMention(ctx, Request{
+		EventID:      "E-image-route",
+		UserID:       "U1",
+		Channel:      "C1",
+		ThreadTS:     "100.000",
+		Text:         "看下这个截图",
+		ContentParts: []llm.ContentPart{llm.ImageURLPart("data:image/png;base64,abc")},
+	})
+
+	req := llmClient.LastRequest()
+	if req.Model != "vision-model" {
+		t.Fatalf("LLM model = %q, want vision-model", req.Model)
+	}
+	var hasImage bool
+	for _, msg := range req.Messages {
+		for _, part := range msg.ContentParts {
+			if part.ImageURL != nil {
+				hasImage = true
+			}
+		}
+	}
+	if !hasImage {
+		t.Fatalf("routed multimodal request should keep image parts: %#v", req.Messages)
+	}
+}
+
+func TestProcessRoutesTextInputToDefaultModel(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	llmClient := &captureLLM{}
+	svc := NewService(
+		store,
+		&fakeMessenger{},
+		agent.Runner{LLM: llmClient, Model: "default-text-model", Tools: registry.New(), MaxSteps: 1},
+		memory.Builder{},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+	svc.RunModel = "default-text-model"
+	svc.ModelRouter = ModelRouter{
+		DefaultModel:    "default-text-model",
+		MultimodalModel: "vision-model",
+	}
+
+	svc.HandleMention(ctx, Request{
+		EventID:  "E-text-route",
+		UserID:   "U1",
+		Channel:  "C1",
+		ThreadTS: "100.000",
+		Text:     "查一下最近的错误",
+	})
+
+	req := llmClient.LastRequest()
+	if req.Model != "default-text-model" {
+		t.Fatalf("LLM model = %q, want default-text-model", req.Model)
+	}
+}
+
 func TestStreamNoticeHasBlockBoundaries(t *testing.T) {
 	got := streamNotice("上下文已压缩")
 	if got != "\n\n_上下文已压缩_\n\n" {
