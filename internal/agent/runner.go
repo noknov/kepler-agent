@@ -331,7 +331,7 @@ func unevidencedFileRetryPrompt() string {
 func (r Runner) Run(ctx context.Context, req Request) (Result, error) {
 	maxSteps := r.MaxSteps
 	if maxSteps <= 0 {
-		maxSteps = 120 // hard ceiling; complex agentic tasks may need 60–100 steps
+		maxSteps = 256 // safe fallback when Runner is constructed outside config loading
 	}
 	if req.Runtime.Cache == nil {
 		req.Runtime.Cache = registry.NewRuntimeCache()
