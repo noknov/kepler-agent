@@ -54,7 +54,7 @@ type Service struct {
 	RunStore       runs.Store
 	RunProvider    string
 	RunModel       string
-	ModelOverride  func(userID string) string
+	ModelRouter    ModelRouter
 	Multimodal     func(model string) bool
 	// WebSearchEnabled controls whether the web-search tool is available for
 	// a given user. When it returns false the tool is excluded from the LLM
@@ -162,7 +162,8 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	sess.Turns = memory.FilterPersistentTurns(sess.Turns)
 
 	start := time.Now()
-	runObserver := s.newRunObserver(sessionID, req, start)
+	route := s.routeModel(req)
+	runObserver := s.newRunObserver(sessionID, req, start, route)
 	runID := ""
 	if runObserver != nil && runObserver.Run != nil {
 		runID = runObserver.Run.ID
@@ -237,10 +238,8 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 
 	runner := s.Runner
 	runner.Tools = runner.Tools.Clone()
-	if s.ModelOverride != nil {
-		if m := s.ModelOverride(req.UserID); m != "" {
-			runner.Model = m
-		}
+	if route.Model != "" {
+		runner.Model = route.Model
 	}
 	if runObserver != nil {
 		runner.Observer = multiObserver{s.Metrics, runObserver}
@@ -683,15 +682,21 @@ func appendWebEvidenceText(text, evidence string) string {
 	return text + "\n\n" + evidence
 }
 
-func (s *Service) newRunObserver(sessionID string, req Request, startedAt time.Time) *runs.Observer {
-	if s.RunStore == nil {
-		return nil
+func (s *Service) routeModel(req Request) ModelRoute {
+	route := s.ModelRouter.Route(req)
+	if route.Model != "" {
+		return route
 	}
 	model := s.RunModel
-	if s.ModelOverride != nil {
-		if m := s.ModelOverride(req.UserID); m != "" {
-			model = m
-		}
+	if model == "" {
+		model = s.Runner.Model
+	}
+	return ModelRoute{Model: model, Reason: "default"}
+}
+
+func (s *Service) newRunObserver(sessionID string, req Request, startedAt time.Time, route ModelRoute) *runs.Observer {
+	if s.RunStore == nil {
+		return nil
 	}
 	return runs.NewObserver(s.RunStore, runs.Run{
 		ID:        runs.NewID(),
@@ -701,7 +706,7 @@ func (s *Service) newRunObserver(sessionID string, req Request, startedAt time.T
 		Channel:   req.Channel,
 		ThreadTS:  req.ThreadTS,
 		Provider:  s.RunProvider,
-		Model:     model,
+		Model:     route.Model,
 		Status:    "running",
 		StartedAt: startedAt.UTC(),
 	}, s.CostRates)

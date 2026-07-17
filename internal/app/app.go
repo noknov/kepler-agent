@@ -74,7 +74,6 @@ type Server struct {
 	reminders      reminder.Scheduler
 	reminderStore  *reminder.PGStore
 	mux            *http.ServeMux
-	modelPrefs     sync.Map
 	webSearchPrefs sync.Map
 	tokenUsage     tokenUsageProvider
 }
@@ -119,6 +118,10 @@ func NewServer(cfg config.Config) (*Server, error) {
 	conv.RunStore = runStore
 	conv.RunProvider = cfg.LLM.Provider
 	conv.RunModel = cfg.LLM.Model
+	conv.ModelRouter = conversation.ModelRouter{
+		DefaultModel:    cfg.LLM.Model,
+		MultimodalModel: cfg.LLM.MultimodalModel,
+	}
 	conv.CostRates = runtime.CostRates
 	conv.HealthSummary = healthService.SummaryPrompt
 	if cfg.Tools.TTSAuto && cfg.Tools.TTSAPIKey != "" {
@@ -146,21 +149,10 @@ func NewServer(cfg config.Config) (*Server, error) {
 		mux:           http.NewServeMux(),
 		tokenUsage:    newTokenUsageProvider(cfg.LLM.Provider, cfg.LLM.TokenUsage),
 	}
-	conv.ModelOverride = func(userID string) string {
-		return s.modelPreference(userID)
-	}
 	conv.WebSearchEnabled = func(userID string) bool {
 		return s.webSearchPreference(userID)
 	}
-	if mm := cfg.LLM.MultimodalModels; len(mm) > 0 {
-		mmSet := make(map[string]bool, len(mm))
-		for _, m := range mm {
-			mmSet[m] = true
-		}
-		conv.Multimodal = func(model string) bool {
-			return mmSet[model]
-		}
-	}
+	conv.Multimodal = multimodalPredicate(cfg.LLM.MultimodalModels)
 	s.routes(cfg, store, runtime, runStore, recorder, healthService, runtime.Tools)
 	return s, nil
 }
@@ -189,19 +181,32 @@ func (s *Server) routes(cfg config.Config, store session.Store, runtime agentRun
 	webConv.RunStore = runStore
 	webConv.RunProvider = cfg.LLM.Provider
 	webConv.RunModel = cfg.LLM.Model
+	webConv.ModelRouter = conversation.ModelRouter{
+		DefaultModel:    cfg.LLM.Model,
+		MultimodalModel: cfg.LLM.MultimodalModel,
+	}
 	webConv.CostRates = runtime.CostRates
 	webConv.HealthSummary = healthService.SummaryPrompt
-	webConv.ModelOverride = func(userID string) string {
-		return s.modelPreference(userID)
-	}
+	webConv.Multimodal = multimodalPredicate(cfg.LLM.MultimodalModels)
 	web.New(s.slack, webConv, webHub, cfg.Security.AllowedUsers, web.ModelSettings{
 		DefaultModel: cfg.LLM.Model,
-		Models:       cfg.LLM.AvailableModels,
-		Get:          s.modelPreference,
-		Set:          s.setModelPreference,
+		Models:       []string{cfg.LLM.Model},
 	}).RegisterRoutes(s.mux)
 
 	log.Printf("oncall-agent configured, tools=%s", strings.Join(tools.Names(), ", "))
+}
+
+func multimodalPredicate(models []string) func(string) bool {
+	if len(models) == 0 {
+		return nil
+	}
+	mmSet := make(map[string]bool, len(models))
+	for _, m := range models {
+		mmSet[m] = true
+	}
+	return func(model string) bool {
+		return mmSet[model]
+	}
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
@@ -317,52 +322,11 @@ func (s *Server) handleSlackInteractions(w http.ResponseWriter, r *http.Request)
 	if payload.Type == "block_actions" {
 		for _, action := range payload.Actions {
 			switch action.ActionID {
-			case "select_model":
-				if action.SelectedOption.Value != "" {
-					s.handleModelSelect(payload.User.ID, action.SelectedOption.Value)
-				}
 			case "toggle_web_search":
 				s.handleWebSearchToggle(payload.User.ID)
 			}
 		}
 	}
-}
-
-func (s *Server) handleModelSelect(userID, model string) {
-	if !s.setModelPreference(userID, model) {
-		return
-	}
-	go func() {
-		if err := s.slack.PublishHome(context.Background(), userID, s.homeView(userID)); err != nil {
-			log.Printf("publish home after model select failed: %v", err)
-		}
-	}()
-}
-
-func (s *Server) modelPreference(userID string) string {
-	if v, ok := s.modelPrefs.Load(userID); ok {
-		return v.(string)
-	}
-	return ""
-}
-
-func (s *Server) setModelPreference(userID, model string) bool {
-	allowed := false
-	for _, m := range s.cfg.LLM.AvailableModels {
-		if m == model {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
-		return false
-	}
-	if model == s.cfg.LLM.Model {
-		s.modelPrefs.Delete(userID)
-	} else {
-		s.modelPrefs.Store(userID, model)
-	}
-	return true
 }
 
 func (s *Server) webSearchPreference(userID string) bool {
