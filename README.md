@@ -88,15 +88,22 @@ MIMO_THINKING=disabled
 
 MiMo thinking is disabled by default because multi-turn tool calls must preserve provider-specific reasoning fields across turns. Enable it only after validating that path.
 
-**Kimi For Coding**
+**CLIProxyAPI (Kimi or Codex through a local gateway)**
 
 ```bash
-LLM_PROTOCOL=anthropic
-LLM_ANTHROPIC_FLAVOR=claude-code
-ANTHROPIC_BASE_URL=https://api.kimi.com/coding/
-ANTHROPIC_AUTH_TOKEN=sk-...
-ANTHROPIC_MODEL=kimi-for-coding
+LLM_PROVIDER=cliproxyapi
+CLIPROXYAPI_BASE_URL=http://127.0.0.1:8317/v1
+CLIPROXYAPI_API_KEY=your-local-gateway-key
+CLIPROXYAPI_MODEL=kimi/kimi-k2.7-code
+CLIPROXYAPI_AVAILABLE_MODELS=kimi/kimi-k2.7-code,codex/gpt-5-codex
 ```
+
+Run and authenticate [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)
+locally first. It exposes OpenAI-compatible endpoints and manages provider
+authentication separately; this application stores only the gateway API key.
+For Codex, complete the gateway's supported login flow and select the model
+name exposed by its `/v1/models` endpoint. Direct requests to Kimi's
+`/coding` endpoint that imitate another client are intentionally unsupported.
 
 **Anthropic**
 

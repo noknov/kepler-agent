@@ -42,10 +42,9 @@ func TestLoadPrefersDotEnvWhenConfigured(t *testing.T) {
 		"SLACK_BOT_TOKEN":      "xoxb-test",
 		"SLACK_SIGNING_SECRET": "secret",
 		"ALLOWED_SLACK_USERS":  "U123",
-		"LLM_PROTOCOL":         "anthropic",
-		"ANTHROPIC_BASE_URL":   "https://api.kimi.com/coding/",
-		"ANTHROPIC_AUTH_TOKEN": "dotenv-token",
-		"ANTHROPIC_MODEL":      "kimi-for-coding",
+		"LLM_PROVIDER":         "cliproxyapi",
+		"CLIPROXYAPI_API_KEY":  "dotenv-token",
+		"CLIPROXYAPI_MODEL":    "kimi/kimi-k2.7-code",
 	})
 	t.Setenv("OPENAI_BASE_URL", "https://api.deepseek.com")
 	t.Setenv("OPENAI_API_KEY", "shell-key")
@@ -61,11 +60,11 @@ func TestLoadPrefersDotEnvWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v, want nil", err)
 	}
-	if cfg.LLM.Protocol != "anthropic" {
-		t.Fatalf("LLM.Protocol = %q, want anthropic", cfg.LLM.Protocol)
+	if cfg.LLM.Protocol != "openai" {
+		t.Fatalf("LLM.Protocol = %q, want openai", cfg.LLM.Protocol)
 	}
-	if cfg.LLM.Model != "kimi-for-coding" {
-		t.Fatalf("LLM.Model = %q, want kimi-for-coding", cfg.LLM.Model)
+	if cfg.LLM.Model != "kimi/kimi-k2.7-code" {
+		t.Fatalf("LLM.Model = %q, want kimi/kimi-k2.7-code", cfg.LLM.Model)
 	}
 }
 
@@ -122,7 +121,7 @@ func TestLoadMaxTokensOverrideStillWins(t *testing.T) {
 	}
 }
 
-func TestLoadAllowsAnthropicCodingEndpointWithoutExperimentalOptIn(t *testing.T) {
+func TestLoadRejectsDirectKimiCodingEndpoint(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
 	writeEnvFile(t, dir, map[string]string{
@@ -141,12 +140,9 @@ func TestLoadAllowsAnthropicCodingEndpointWithoutExperimentalOptIn(t *testing.T)
 		t.Fatal(err)
 	}
 
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v, want nil", err)
-	}
-	if cfg.LLM.Protocol != "anthropic" {
-		t.Fatalf("LLM.Protocol = %q, want anthropic", cfg.LLM.Protocol)
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "not supported directly") {
+		t.Fatalf("Load() error = %v, want direct coding endpoint rejection", err)
 	}
 }
 
@@ -685,7 +681,7 @@ func TestLoadOpenCodeGoAnthropicEndpoint(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsOpenAICodingEndpointWithoutExplicitOptIn(t *testing.T) {
+func TestLoadRejectsDirectKimiCodingEndpointRegardlessOfProtocol(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
 	writeEnvFile(t, dir, map[string]string{
@@ -705,8 +701,8 @@ func TestLoadRejectsOpenAICodingEndpointWithoutExplicitOptIn(t *testing.T) {
 	}
 
 	_, err := Load()
-	if err == nil || !strings.Contains(err.Error(), "ALLOW_EXPERIMENTAL_CODING_ENDPOINT") {
-		t.Fatalf("Load() error = %v, want coding opt-in error", err)
+	if err == nil || !strings.Contains(err.Error(), "not supported directly") {
+		t.Fatalf("Load() error = %v, want direct coding endpoint rejection", err)
 	}
 }
 
@@ -847,6 +843,15 @@ func resetConfigEnv(t *testing.T) {
 		"MULTIMODAL_MODEL",
 		"MULTIMODAL_MODELS",
 		"KIMI_PROTOCOL",
+		"CLIPROXYAPI_PROTOCOL",
+		"CLIPROXYAPI_API_KEY",
+		"CLIPROXYAPI_BASE_URL",
+		"CLIPROXYAPI_MODEL",
+		"CLIPROXYAPI_AVAILABLE_MODELS",
+		"CLIPROXYAPI_THINKING",
+		"CLIPROXYAPI_MAX_TOKENS",
+		"CLIPROXYAPI_TEMPERATURE",
+		"CLIPROXYAPI_TIMEOUT",
 		"ANTHROPIC_PROTOCOL",
 		"ANTHROPIC_FLAVOR",
 		"OPENAI_API_KEY",

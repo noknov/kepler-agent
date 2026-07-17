@@ -322,8 +322,8 @@ func Load() (Config, error) {
 	if cfg.Slack.BotToken == "" {
 		return cfg, fmt.Errorf("SLACK_BOT_TOKEN is required")
 	}
-	if strings.Contains(cfg.LLM.BaseURL, "api.kimi.com/coding") && cfg.LLM.Protocol != "anthropic" && !envBool("ALLOW_EXPERIMENTAL_CODING_ENDPOINT", false) {
-		return cfg, fmt.Errorf("the coding endpoint %q is disabled for oncall-agent by default; switch to an OpenAI-compatible provider or set ALLOW_EXPERIMENTAL_CODING_ENDPOINT=true to continue deliberately", cfg.LLM.BaseURL)
+	if strings.Contains(cfg.LLM.BaseURL, "api.kimi.com/coding") {
+		return cfg, fmt.Errorf("the Kimi coding endpoint is not supported directly; use LLM_PROVIDER=cliproxyapi and connect to a locally authenticated CLIProxyAPI instance, or configure KIMI_BASE_URL with Kimi's documented API endpoint")
 	}
 	if cfg.LLM.APIKey == "" {
 		return cfg, fmt.Errorf("%s API key is required", strings.ToUpper(cfg.LLM.Provider))
@@ -376,6 +376,8 @@ func inferLLMProviderFrom(get func(string) string) string {
 		return "mimo"
 	case firstNonEmpty(get("ANTHROPIC_API_KEY"), get("ANTHROPIC_AUTH_TOKEN"), get("ANTHROPIC_BASE_URL"), get("ANTHROPIC_MODEL"), get("ANTHROPIC_PROTOCOL")) != "":
 		return "anthropic"
+	case firstNonEmpty(get("CLIPROXYAPI_API_KEY"), get("CLIPROXYAPI_BASE_URL"), get("CLIPROXYAPI_MODEL")) != "":
+		return "cliproxyapi"
 	case firstNonEmpty(get("KIMI_API_KEY"), get("KIMI_BASE_URL"), get("KIMI_MODEL"), get("KIMI_PROTOCOL")) != "":
 		return "kimi"
 	case firstNonEmpty(get("MOONSHOT_API_KEY"), get("MOONSHOT_BASE_URL"), get("MOONSHOT_MODEL")) != "":
@@ -410,6 +412,12 @@ func providerProtocol(provider string) string {
 		return normalizeLLMProtocol(firstEnv("ANTHROPIC_PROTOCOL", "LLM_PROTOCOL"))
 	case "kimi":
 		return normalizeLLMProtocol(firstEnv("KIMI_PROTOCOL", "LLM_PROTOCOL"))
+	case "cliproxyapi":
+		protocol := normalizeLLMProtocol(firstEnv("CLIPROXYAPI_PROTOCOL", "LLM_PROTOCOL"))
+		if protocol == "" {
+			return "openai"
+		}
+		return protocol
 	case "opencode-go":
 		protocol := normalizeLLMProtocol(firstEnv("OPENCODE_GO_PROTOCOL", "LLM_PROTOCOL"))
 		if protocol == "" {
@@ -443,6 +451,8 @@ func providerBaseURL(provider string) string {
 		return env("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 	case "kimi":
 		return env("KIMI_BASE_URL", "https://api.moonshot.ai/v1")
+	case "cliproxyapi":
+		return env("CLIPROXYAPI_BASE_URL", "http://127.0.0.1:8317/v1")
 	case "moonshot":
 		return env("MOONSHOT_BASE_URL", "https://api.moonshot.ai/v1")
 	case "opencode-go":
@@ -469,6 +479,8 @@ func providerModel(provider string) string {
 			return env("KIMI_MODEL", "kimi-for-coding")
 		}
 		return env("KIMI_MODEL", "kimi-k2.6")
+	case "cliproxyapi":
+		return env("CLIPROXYAPI_MODEL", "kimi/kimi-k2.7-code")
 	case "moonshot":
 		return env("MOONSHOT_MODEL", "kimi-k2.6")
 	case "opencode-go":
@@ -586,6 +598,8 @@ func providerAPIKey(provider string) string {
 		return firstEnv("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 	case "kimi":
 		return firstEnv("KIMI_API_KEY")
+	case "cliproxyapi":
+		return firstEnv("CLIPROXYAPI_API_KEY")
 	case "moonshot":
 		return firstEnv("MOONSHOT_API_KEY")
 	case "opencode-go":
@@ -605,6 +619,8 @@ func providerThinking(provider string) string {
 		return firstEnv("MIMO_THINKING")
 	case "kimi", "moonshot":
 		return firstEnv("KIMI_THINKING")
+	case "cliproxyapi":
+		return firstEnv("CLIPROXYAPI_THINKING")
 	case "deepseek":
 		return firstEnv("DEEPSEEK_THINKING")
 	default:
@@ -620,6 +636,8 @@ func providerMaxTokens(provider string) int {
 		return envIntAliases(20000, "ANTHROPIC_MAX_TOKENS", "CLAUDE_CODE_MAX_OUTPUT_TOKENS")
 	case "kimi", "moonshot":
 		return envIntAliases(20000, "KIMI_MAX_TOKENS")
+	case "cliproxyapi":
+		return envIntAliases(20000, "CLIPROXYAPI_MAX_TOKENS")
 	case "opencode-go":
 		return 0
 	case "opencode-zen":
@@ -637,6 +655,8 @@ func providerTemperature(provider string) float64 {
 		return envFloatAliases(0, "MIMO_TEMPERATURE")
 	case "kimi", "moonshot":
 		return envFloatAliases(0, "KIMI_TEMPERATURE")
+	case "cliproxyapi":
+		return envFloatAliases(0, "CLIPROXYAPI_TEMPERATURE")
 	case "opencode-go":
 		return envFloatAliases(0, "OPENCODE_GO_TEMPERATURE")
 	case "opencode-zen":
@@ -656,6 +676,8 @@ func providerTimeout(provider string) time.Duration {
 		return envDurationAliases(120*time.Second, "ANTHROPIC_TIMEOUT", "API_TIMEOUT_MS")
 	case "kimi", "moonshot":
 		return envDurationAliases(120*time.Second, "KIMI_TIMEOUT", "API_TIMEOUT_MS")
+	case "cliproxyapi":
+		return envDurationAliases(120*time.Second, "CLIPROXYAPI_TIMEOUT", "API_TIMEOUT_MS")
 	case "opencode-go":
 		return envDurationAliases(120*time.Second, "OPENCODE_GO_TIMEOUT", "API_TIMEOUT_MS")
 	case "opencode-zen":
@@ -855,6 +877,8 @@ func inferAnthropicFlavor(raw string) string {
 
 func providerEnvPrefix(provider string) string {
 	switch provider {
+	case "cliproxyapi":
+		return "CLIPROXYAPI"
 	case "opencode-go":
 		return "OPENCODE_GO"
 	case "opencode-zen":
