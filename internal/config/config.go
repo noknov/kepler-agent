@@ -38,7 +38,11 @@ type RAGConfig struct {
 type ReminderConfig struct{ PostgresDSN string }
 
 type HTTPConfig struct {
-	Addr string
+	Addr                string
+	EventWorkers        int
+	EventQueueSize      int
+	EventEnqueueTimeout time.Duration
+	EventTimeout        time.Duration
 }
 
 type SlackConfig struct {
@@ -103,45 +107,46 @@ type SessionConfig struct {
 }
 
 type ToolConfig struct {
-	CommandTimeout      time.Duration
-	AgentMaxSteps       int
-	GCloudPath          string
-	GCPDefaultProject   string
-	GCPDefaultNamespace string
-	GKEDefaultCluster   string
-	GKEDefaultRegion    string
-	KubectlPath         string
-	K8sDefaultContext   string
-	K8sDefaultCluster   string
-	K8sDefaultNamespace string
-	TTSAPIKey           string
-	TTSBaseURL          string
-	TTSModel            string
-	TTSAuto             bool
-	TTSDefaultVoice     string
-	TTSDefaultStyle     string
-	NotionToken         string
-	NotionDatabaseID    string
-	NotionTitleProperty string
-	NotionVersion       string
-	YouTrackURL         string
-	YouTrackToken       string
-	GitHubToken         string
-	GitHubAPIBaseURL    string
-	GitHubDefaultOwner  string
-	GitHubDefaultRepo   string
-	LuckinMCPURL        string
-	LuckinMCPToken      string
-	PlaywrightMCPURL    string
-	PlaywrightMCPToken  string
-	WebSearchProvider   string
-	WebSearchGoogleKey  string
-	WebSearchGoogleCX   string
-	WebSearchSerpAPIKey string
-	WebSearchSerpAPIURL string
-	WebSearchSearXNGURL string
-	WebSearchBraveKey   string
-	WebSearchBraveURL   string
+	CommandTimeout         time.Duration
+	AgentMaxSteps          int
+	AgentMaxConcurrentRuns int
+	GCloudPath             string
+	GCPDefaultProject      string
+	GCPDefaultNamespace    string
+	GKEDefaultCluster      string
+	GKEDefaultRegion       string
+	KubectlPath            string
+	K8sDefaultContext      string
+	K8sDefaultCluster      string
+	K8sDefaultNamespace    string
+	TTSAPIKey              string
+	TTSBaseURL             string
+	TTSModel               string
+	TTSAuto                bool
+	TTSDefaultVoice        string
+	TTSDefaultStyle        string
+	NotionToken            string
+	NotionDatabaseID       string
+	NotionTitleProperty    string
+	NotionVersion          string
+	YouTrackURL            string
+	YouTrackToken          string
+	GitHubToken            string
+	GitHubAPIBaseURL       string
+	GitHubDefaultOwner     string
+	GitHubDefaultRepo      string
+	LuckinMCPURL           string
+	LuckinMCPToken         string
+	PlaywrightMCPURL       string
+	PlaywrightMCPToken     string
+	WebSearchProvider      string
+	WebSearchGoogleKey     string
+	WebSearchGoogleCX      string
+	WebSearchSerpAPIKey    string
+	WebSearchSerpAPIURL    string
+	WebSearchSearXNGURL    string
+	WebSearchBraveKey      string
+	WebSearchBraveURL      string
 }
 
 type ObservingConfig struct {
@@ -202,7 +207,11 @@ func Load() (Config, error) {
 
 	cfg := Config{
 		HTTP: HTTPConfig{
-			Addr: env("HTTP_ADDR", ":8080"),
+			Addr:                env("HTTP_ADDR", ":8080"),
+			EventWorkers:        envInt("SLACK_EVENT_WORKERS", 8),
+			EventQueueSize:      envInt("SLACK_EVENT_QUEUE_SIZE", 512),
+			EventEnqueueTimeout: envDuration("SLACK_EVENT_ENQUEUE_TIMEOUT", 2*time.Second),
+			EventTimeout:        envDuration("SLACK_EVENT_TIMEOUT", 15*time.Minute),
 		},
 		Slack: SlackConfig{
 			BotToken:      os.Getenv("SLACK_BOT_TOKEN"),
@@ -252,45 +261,46 @@ func Load() (Config, error) {
 			MaxToolResultTokens: envInt("SESSION_MAX_TOOL_RESULT_TOKENS", 8000),
 		},
 		Tools: ToolConfig{
-			CommandTimeout:      envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
-			AgentMaxSteps:       envInt("AGENT_MAX_STEPS", 256),
-			GCloudPath:          env("GCLOUD_PATH", "gcloud"),
-			GCPDefaultProject:   os.Getenv("GCP_PROJECT"),
-			GCPDefaultNamespace: env("GCP_NAMESPACE", ""),
-			GKEDefaultCluster:   env("GKE_CLUSTER", ""),
-			GKEDefaultRegion:    env("GKE_REGION", ""),
-			KubectlPath:         env("KUBECTL_PATH", "kubectl"),
-			K8sDefaultContext:   os.Getenv("K8S_DEFAULT_CONTEXT"),
-			K8sDefaultCluster:   os.Getenv("K8S_DEFAULT_CLUSTER"),
-			K8sDefaultNamespace: env("K8S_DEFAULT_NAMESPACE", ""),
-			TTSAPIKey:           firstEnv("TTS_API_KEY", "MIMO_API_KEY"),
-			TTSBaseURL:          trimRightSlash(env("TTS_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1")),
-			TTSModel:            env("TTS_MODEL", "mimo-v2.5-tts"),
-			TTSAuto:             envBool("TTS_AUTO", false),
-			TTSDefaultVoice:     env("TTS_DEFAULT_VOICE", "冰糖"),
-			TTSDefaultStyle:     os.Getenv("TTS_DEFAULT_STYLE"),
-			NotionToken:         os.Getenv("NOTION_TOKEN"),
-			NotionDatabaseID:    os.Getenv("NOTION_DATABASE_ID"),
-			NotionTitleProperty: env("NOTION_TITLE_PROPERTY", "Name"),
-			NotionVersion:       env("NOTION_VERSION", "2022-06-28"),
-			YouTrackURL:         trimRightSlash(os.Getenv("YOUTRACK_URL")),
-			YouTrackToken:       os.Getenv("YOUTRACK_TOKEN"),
-			GitHubToken:         os.Getenv("GITHUB_TOKEN"),
-			GitHubAPIBaseURL:    trimRightSlash(env("GITHUB_API_BASE_URL", "https://api.github.com")),
-			GitHubDefaultOwner:  os.Getenv("GITHUB_DEFAULT_OWNER"),
-			GitHubDefaultRepo:   os.Getenv("GITHUB_DEFAULT_REPO"),
-			LuckinMCPURL:        trimRightSlash(env("LUCKIN_MCP_URL", "https://gwmcp.lkcoffee.com/order/user/mcp")),
-			LuckinMCPToken:      os.Getenv("LUCKIN_MCP_TOKEN"),
-			PlaywrightMCPURL:    trimRightSlash(os.Getenv("PLAYWRIGHT_MCP_URL")),
-			PlaywrightMCPToken:  os.Getenv("PLAYWRIGHT_MCP_TOKEN"),
-			WebSearchProvider:   env("WEB_SEARCH_PROVIDER", "duckduckgo"),
-			WebSearchGoogleKey:  os.Getenv("WEB_SEARCH_GOOGLE_API_KEY"),
-			WebSearchGoogleCX:   os.Getenv("WEB_SEARCH_GOOGLE_CX"),
-			WebSearchSerpAPIKey: os.Getenv("WEB_SEARCH_SERPAPI_KEY"),
-			WebSearchSerpAPIURL: trimRightSlash(env("WEB_SEARCH_SERPAPI_BASE_URL", "https://serpapi.com/search.json")),
-			WebSearchSearXNGURL: trimRightSlash(os.Getenv("WEB_SEARCH_SEARXNG_URL")),
-			WebSearchBraveKey:   os.Getenv("WEB_SEARCH_BRAVE_API_KEY"),
-			WebSearchBraveURL:   trimRightSlash(env("WEB_SEARCH_BRAVE_BASE_URL", "https://api.search.brave.com/res/v1/web/search")),
+			CommandTimeout:         envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
+			AgentMaxSteps:          envInt("AGENT_MAX_STEPS", 256),
+			AgentMaxConcurrentRuns: envInt("AGENT_MAX_CONCURRENT_RUNS", 16),
+			GCloudPath:             env("GCLOUD_PATH", "gcloud"),
+			GCPDefaultProject:      os.Getenv("GCP_PROJECT"),
+			GCPDefaultNamespace:    env("GCP_NAMESPACE", ""),
+			GKEDefaultCluster:      env("GKE_CLUSTER", ""),
+			GKEDefaultRegion:       env("GKE_REGION", ""),
+			KubectlPath:            env("KUBECTL_PATH", "kubectl"),
+			K8sDefaultContext:      os.Getenv("K8S_DEFAULT_CONTEXT"),
+			K8sDefaultCluster:      os.Getenv("K8S_DEFAULT_CLUSTER"),
+			K8sDefaultNamespace:    env("K8S_DEFAULT_NAMESPACE", ""),
+			TTSAPIKey:              firstEnv("TTS_API_KEY", "MIMO_API_KEY"),
+			TTSBaseURL:             trimRightSlash(env("TTS_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1")),
+			TTSModel:               env("TTS_MODEL", "mimo-v2.5-tts"),
+			TTSAuto:                envBool("TTS_AUTO", false),
+			TTSDefaultVoice:        env("TTS_DEFAULT_VOICE", "冰糖"),
+			TTSDefaultStyle:        os.Getenv("TTS_DEFAULT_STYLE"),
+			NotionToken:            os.Getenv("NOTION_TOKEN"),
+			NotionDatabaseID:       os.Getenv("NOTION_DATABASE_ID"),
+			NotionTitleProperty:    env("NOTION_TITLE_PROPERTY", "Name"),
+			NotionVersion:          env("NOTION_VERSION", "2022-06-28"),
+			YouTrackURL:            trimRightSlash(os.Getenv("YOUTRACK_URL")),
+			YouTrackToken:          os.Getenv("YOUTRACK_TOKEN"),
+			GitHubToken:            os.Getenv("GITHUB_TOKEN"),
+			GitHubAPIBaseURL:       trimRightSlash(env("GITHUB_API_BASE_URL", "https://api.github.com")),
+			GitHubDefaultOwner:     os.Getenv("GITHUB_DEFAULT_OWNER"),
+			GitHubDefaultRepo:      os.Getenv("GITHUB_DEFAULT_REPO"),
+			LuckinMCPURL:           trimRightSlash(env("LUCKIN_MCP_URL", "https://gwmcp.lkcoffee.com/order/user/mcp")),
+			LuckinMCPToken:         os.Getenv("LUCKIN_MCP_TOKEN"),
+			PlaywrightMCPURL:       trimRightSlash(os.Getenv("PLAYWRIGHT_MCP_URL")),
+			PlaywrightMCPToken:     os.Getenv("PLAYWRIGHT_MCP_TOKEN"),
+			WebSearchProvider:      env("WEB_SEARCH_PROVIDER", "duckduckgo"),
+			WebSearchGoogleKey:     os.Getenv("WEB_SEARCH_GOOGLE_API_KEY"),
+			WebSearchGoogleCX:      os.Getenv("WEB_SEARCH_GOOGLE_CX"),
+			WebSearchSerpAPIKey:    os.Getenv("WEB_SEARCH_SERPAPI_KEY"),
+			WebSearchSerpAPIURL:    trimRightSlash(env("WEB_SEARCH_SERPAPI_BASE_URL", "https://serpapi.com/search.json")),
+			WebSearchSearXNGURL:    trimRightSlash(os.Getenv("WEB_SEARCH_SEARXNG_URL")),
+			WebSearchBraveKey:      os.Getenv("WEB_SEARCH_BRAVE_API_KEY"),
+			WebSearchBraveURL:      trimRightSlash(env("WEB_SEARCH_BRAVE_BASE_URL", "https://api.search.brave.com/res/v1/web/search")),
 		},
 		Observing: ObservingConfig{
 			LogLevel:                 env("LOG_LEVEL", "info"),
@@ -336,6 +346,9 @@ func Load() (Config, error) {
 	}
 	if len(cfg.Security.AllowedUsers) == 0 {
 		return cfg, fmt.Errorf("ALLOWED_SLACK_USERS is required")
+	}
+	if cfg.HTTP.EventWorkers <= 0 || cfg.HTTP.EventQueueSize <= 0 || cfg.HTTP.EventEnqueueTimeout <= 0 || cfg.HTTP.EventTimeout <= 0 || cfg.Tools.AgentMaxConcurrentRuns <= 0 {
+		return cfg, fmt.Errorf("SLACK_EVENT_WORKERS, SLACK_EVENT_QUEUE_SIZE, SLACK_EVENT_ENQUEUE_TIMEOUT, SLACK_EVENT_TIMEOUT, and AGENT_MAX_CONCURRENT_RUNS must be positive")
 	}
 	return cfg, nil
 }

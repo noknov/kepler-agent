@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
@@ -516,6 +517,9 @@ func normalizePageURL(raw string) (string, error) {
 		return "", fmt.Errorf("url host is required")
 	}
 	parsed.Fragment = ""
+	if err := safety.ValidatePublicHTTPURL(parsed.String()); err != nil {
+		return "", err
+	}
 	return parsed.String(), nil
 }
 
@@ -576,7 +580,7 @@ func (c Client) httpClient() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
-	return &http.Client{Timeout: 15 * time.Second}
+	return safety.SafeHTTPClient(15 * time.Second)
 }
 
 func formatResults(items []ResultItem) string {

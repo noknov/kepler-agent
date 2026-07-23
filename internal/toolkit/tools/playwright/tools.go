@@ -12,6 +12,7 @@ import (
 
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/mcp"
+	"github.com/wati/oncall-agent/internal/safety"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
 
@@ -303,6 +304,9 @@ func (t NavigateTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 	var requestedURL string
 	if urlRaw, ok := argsMap["url"]; ok {
 		_ = json.Unmarshal(urlRaw, &requestedURL)
+	}
+	if err := safety.ValidatePublicHTTPURL(requestedURL); err != nil {
+		return registry.Result{}, fmt.Errorf("navigation blocked: %w", err)
 	}
 
 	// Cache the requested URL so SnapshotTool can later detect cross-domain

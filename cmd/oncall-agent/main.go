@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/wati/oncall-agent/internal/app"
 )
@@ -11,7 +13,9 @@ import (
 func main() {
 	log.SetOutput(os.Stdout)
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.LUTC)
-	if err := app.Run(context.Background()); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := app.Run(ctx); err != nil {
 		log.Fatal(err)
 	}
 }

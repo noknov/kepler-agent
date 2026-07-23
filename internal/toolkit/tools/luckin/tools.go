@@ -39,14 +39,9 @@ func (t MCPTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.R
 	if t.Client == nil || !t.Client.enabled() {
 		return registry.Result{}, fmt.Errorf("Luckin MCP is not configured: LUCKIN_MCP_TOKEN is required")
 	}
+	// Side-effect capability is authorized by the server registry/policy. Do
+	// not turn a model-generated boolean into a pretend user confirmation.
 	args := json.RawMessage(raw)
-	if t.SideEffect {
-		cleaned, err := requireConfirmation(raw)
-		if err != nil {
-			return registry.Result{}, err
-		}
-		args = cleaned
-	}
 	session, err := getOrCreateSession(ctx, t.Client.MCP, rt.Cache)
 	if err != nil {
 		return registry.Result{}, err
@@ -147,7 +142,7 @@ func tools(client *Client) []MCPTool {
 			Client:     client,
 			LocalName:  "luckin-create_order",
 			RemoteName: "createOrder",
-			Parameters: registry.ObjectSchema([]string{"deptId", "productList", "longitude", "latitude", "confirmed"}, orderProperties(true)),
+			Parameters: registry.ObjectSchema([]string{"deptId", "productList", "longitude", "latitude"}, orderProperties(true)),
 			SideEffect: true,
 		},
 		{
@@ -162,9 +157,8 @@ func tools(client *Client) []MCPTool {
 			Client:     client,
 			LocalName:  "luckin-cancel_order",
 			RemoteName: "cancelOrder",
-			Parameters: registry.ObjectSchema([]string{"orderId", "confirmed"}, map[string]any{
-				"orderId":   map[string]any{"type": "string", "description": ""},
-				"confirmed": map[string]any{"type": "boolean", "description": ""},
+			Parameters: registry.ObjectSchema([]string{"orderId"}, map[string]any{
+				"orderId": map[string]any{"type": "string", "description": ""},
 			}),
 			SideEffect: true,
 		},
@@ -196,29 +190,8 @@ func orderProperties(includeLocation bool) map[string]any {
 			"description": "",
 			"items":       map[string]any{"type": "string"},
 		}
-		props["confirmed"] = map[string]any{"type": "boolean", "description": ""}
 	}
 	return props
-}
-
-func requireConfirmation(raw json.RawMessage) (json.RawMessage, error) {
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, err
-	}
-	var confirmed bool
-	if value, ok := payload["confirmed"]; ok {
-		_ = json.Unmarshal(value, &confirmed)
-	}
-	if !confirmed {
-		return nil, fmt.Errorf("explicit user confirmation is required before this Luckin action")
-	}
-	delete(payload, "confirmed")
-	cleaned, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	return cleaned, nil
 }
 
 func getOrCreateSession(ctx context.Context, client *mcp.Client, cache *registry.RuntimeCache) (mcp.Session, error) {
