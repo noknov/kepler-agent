@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,8 +28,8 @@ func NewPGStore(ctx context.Context, dsn string, dims int) (*PGStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse postgres dsn: %w", err)
 	}
-	cfg.MaxConns = 10
-	cfg.MinConns = 2
+	cfg.MaxConns = int32(envInt("RAG_POSTGRES_MAX_CONNS", envInt("POSTGRES_MAX_CONNS", 10)))
+	cfg.MinConns = int32(envInt("RAG_POSTGRES_MIN_CONNS", 2))
 	cfg.MaxConnLifetime = 30 * time.Minute
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
@@ -39,6 +41,18 @@ func NewPGStore(ctx context.Context, dsn string, dims int) (*PGStore, error) {
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 	return &PGStore{pool: pool, dims: dims}, nil
+}
+
+func envInt(key string, fallback int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return v
 }
 
 func (s *PGStore) Close() error {
