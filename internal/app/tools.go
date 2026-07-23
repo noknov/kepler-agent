@@ -86,7 +86,14 @@ func registerCodeTools(tools *registry.Registry, cfg config.Config, workspacePol
 		registry.CategoryCode,
 		codegraphTools.OverviewTool{Base: codegraphBase},
 		codegraphTools.DependenciesTool{Base: codegraphBase},
+		codegraphTools.SymbolsTool{Base: codegraphBase},
+		codegraphTools.DefinitionTool{Base: codegraphBase},
+		codegraphTools.ReferencesTool{Base: codegraphBase},
+		codegraphTools.ImplementationsTool{Base: codegraphBase},
 		codegraphTools.CallersTool{Base: codegraphBase},
+		codegraphTools.CalleesTool{Base: codegraphBase},
+		codegraphTools.CallgraphTool{Base: codegraphBase},
+		codegraphTools.ImpactTool{Base: codegraphBase},
 	)
 }
 
