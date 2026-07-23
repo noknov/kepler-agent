@@ -12,7 +12,6 @@ func TestValidateShellCommandAllowsOperationalReads(t *testing.T) {
 		`kubectl logs instagram-service-abc -n mt-prod --tail 100`,
 		`kubectl top pods -n mt-prod`,
 		`kubectl config get-contexts`,
-		`kubectl config use-context gke_wati-gke_asia-southeast1_mt-pubsub`,
 		// gcloud
 		`gcloud logging read 'severity>=ERROR' --project wati-gke --limit 10`,
 		`gcloud container clusters describe mt-prod --region asia-southeast1`,
@@ -31,8 +30,7 @@ func TestValidateShellCommandAllowsOperationalReads(t *testing.T) {
 		`git grep "TODO" -- "*.go"`,
 		// unix utilities
 		`grep -r "error" /var/log/app.log`,
-		`find /tmp -name "*.json"`,
-		`cat /etc/hostname`,
+		`cat project/config.json`,
 		`jq '.pods[].name' pods.json`,
 		`date`,
 		// pipelines
@@ -83,15 +81,10 @@ func TestValidateShellCommandBlocksWritesAndSecrets(t *testing.T) {
 	}
 }
 
-func TestValidateShellCommandAllowsAmpersandInURL(t *testing.T) {
-	// '&' is a common query-string separator in URLs. When the URL is
-	// properly quoted, stripQuotedStrings removes it before operator checking.
+func TestValidateShellCommandAllowsOperatorsInsideQuotedArguments(t *testing.T) {
+	// Pipes in jq filters are arguments, not pipeline operators.
 	cases := []string{
-		`curl 'https://api.example.com/v1/query?foo=1&bar=2&baz=3'`,
-		`curl -X POST 'https://auth.watiapp.io/login?clientId=x&redirect=y'`,
-		`curl -H 'Content-Type: application/json' 'https://host/path?a=1&b=2'`,
-		// semicolon inside a jq filter (single-quoted) must also be allowed
-		`jq '.items[] | select(.name; "foo")' data.json`,
+		`jq '.items[] | .name' data.json`,
 	}
 	for _, cmd := range cases {
 		if err := validateShellCommand(cmd); err != nil {
@@ -103,11 +96,15 @@ func TestValidateShellCommandAllowsAmpersandInURL(t *testing.T) {
 func TestValidateShellCommandBlocksBackgroundExecution(t *testing.T) {
 	// Unquoted '&' must still be blocked regardless of position.
 	cases := []string{
-		`curl https://example.com &`,
+		`rg foo &`,
 		`sleep 5 &`,
 		`date & echo done`,
 		// '&&' outside quotes must still be blocked
-		`curl https://example.com && echo ok`,
+		`rg foo && echo ok`,
+		`python3 -c 'print(1)'`,
+		`tee /tmp/out`,
+		`curl https://example.com`,
+		`kubectl config use-context prod`,
 	}
 	for _, cmd := range cases {
 		if err := validateShellCommand(cmd); err == nil {

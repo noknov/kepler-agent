@@ -64,6 +64,9 @@ type Service struct {
 	HealthSummary    func() string
 	AutoTTS          AutoTTSFunc
 	TTSSummarizer    *TTSSummarizer
+	// RunSemaphore bounds expensive LLM/tool executions across ingress paths.
+	// It is shared by the Slack and Web services created by app.Server.
+	RunSemaphore chan struct{}
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
@@ -118,6 +121,14 @@ func (s *Service) HandleReply(ctx context.Context, req Request) bool {
 func (s *Service) process(ctx context.Context, req Request, requirePending bool) bool {
 	if s.Store == nil || s.Messenger == nil {
 		return false
+	}
+	if s.RunSemaphore != nil {
+		select {
+		case s.RunSemaphore <- struct{}{}:
+			defer func() { <-s.RunSemaphore }()
+		case <-ctx.Done():
+			return false
+		}
 	}
 	sessionID := session.ID(req.Channel, req.ThreadTS)
 	lock := s.lockFor(sessionID)

@@ -105,6 +105,7 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 		registerDeferredTools(
 			tools,
 			registry.CategoryInfrastructure,
+			k8sTools.ContextsTool{Base: k8sBase},
 			k8sTools.GetPodsTool{Base: k8sBase},
 			k8sTools.LogsTool{Base: k8sBase},
 			k8sTools.DescribeTool{Base: k8sBase},

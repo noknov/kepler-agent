@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -18,7 +19,10 @@ import (
 
 const maxOutputBytes = 60000
 
-// ReadOnlyTool executes shell commands (including pipelines) for operational
+// ReadOnlyTool executes a deliberately small command language (including
+// pipelines) for operational investigation. It never invokes a shell: doing
+// so would make an LLM-provided command a shell program, not a read-only
+// diagnostic request.
 // investigation. It allows a broad set of read-oriented tools — git, kubectl,
 // gcloud, gh, grep, jq, and standard Unix utilities — and blocks commands that
 // could modify production systems or cluster state.
@@ -41,16 +45,16 @@ type ReadOnlyTool struct {
 func (t ReadOnlyTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"shell",
-		"Run a shell command and return its stdout. "+
+		"Run a read-only diagnostic command and return its stdout. "+
 			"Supports pipelines with | so you can compose commands like "+
 			"\"kubectl get pods -n mt-prod | grep web\" or "+
 			"\"git -C /path/to/repo log --oneline | head -20\". "+
 			"Allowed commands: git (all read subcommands: log, blame, diff, grep, show, fetch, ls-files, etc.), "+
 			"kubectl (get, describe, logs, top, config), gcloud (list/describe), "+
 			"gh (run/pr/issue list and view), "+
-			"grep, rg, find, jq, awk, sed, cat, head, tail, wc, sort, uniq, tr, cut, date, echo, curl. "+
-			"Write operations (git push/commit, kubectl delete/apply, gcloud mutations, rm) are blocked. "+
-			"Shell operators && ; & > >> are not supported; use | only.",
+			"grep, rg, jq, cat, ls, head, tail, wc, sort, uniq, tr, cut, diff, date, echo, printf. "+
+			"No shell expansion, redirection, interpreters, curl/wget, awk/sed, xargs, tee, find -exec, or write operations are supported. "+
+			"Quote arguments containing spaces; use | only for pipelines.",
 		registry.ObjectSchema([]string{"command"}, map[string]any{
 			"command": map[string]any{
 				"type": "string",
@@ -75,13 +79,17 @@ func (t ReadOnlyTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 	if cmd == "" {
 		return registry.Result{}, fmt.Errorf("command is required")
 	}
-	if err := validateShellCommand(cmd); err != nil {
+	pipeline, err := parsePipeline(cmd)
+	if err != nil {
+		return registry.Result{}, err
+	}
+	if err := validatePipeline(pipeline); err != nil {
 		return registry.Result{}, err
 	}
 	if err := t.Guard.Check(cmd); err != nil {
 		return registry.Result{}, err
 	}
-	if err := t.validatePaths(cmd); err != nil {
+	if err := t.validatePipelinePaths(pipeline); err != nil {
 		return registry.Result{}, err
 	}
 
@@ -92,16 +100,7 @@ func (t ReadOnlyTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	sh := exec.CommandContext(ctx, "sh", "-c", t.expandBinaries(cmd))
-	if len(t.WorkspaceRoots) > 0 {
-		sh.Dir = t.WorkspaceRoots[0]
-	}
-	var stdout, stderr bytes.Buffer
-	sh.Stdout = &stdout
-	sh.Stderr = &stderr
-	err := sh.Run()
-	out := strings.TrimRight(stdout.String(), "\n")
-	errOut := strings.TrimSpace(stderr.String())
+	out, errOut, err := t.runPipeline(ctx, pipeline)
 	if err != nil {
 		if errOut == "" {
 			errOut = err.Error()
@@ -117,128 +116,156 @@ func (t ReadOnlyTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 	return registry.Result{Content: truncateOutput(out)}, nil
 }
 
-// expandBinaries rewrites well-known binary names to their configured paths so
-// the shell receives the correct executable even when the PATH differs.
-func (t ReadOnlyTool) expandBinaries(cmd string) string {
-	replacements := map[string]string{}
-	if t.GCloudPath != "" {
-		replacements["gcloud"] = t.GCloudPath
+func (t ReadOnlyTool) binary(name string) string {
+	if name == "gcloud" && t.GCloudPath != "" {
+		return t.GCloudPath
 	}
-	if t.KubectlPath != "" {
-		replacements["kubectl"] = t.KubectlPath
+	if name == "kubectl" && t.KubectlPath != "" {
+		return t.KubectlPath
 	}
-	if len(replacements) == 0 {
-		return cmd
-	}
-	for name, path := range replacements {
-		if filepath.Base(path) == name {
-			continue
-		}
-		cmd = strings.ReplaceAll(cmd, name+" ", path+" ")
-		if strings.HasSuffix(cmd, name) {
-			cmd = cmd[:len(cmd)-len(name)] + path
-		}
-	}
-	return cmd
+	return name
 }
 
-// stripSingleQuotedStrings removes the content of single-quoted strings only.
-// Single-quoted strings are fully literal in POSIX shell: no variable
-// expansion, no command substitution. Double-quoted strings are left intact
-// because the shell still expands $(...) and `...` inside them — stripping
-// their content would create false negatives for command-injection checks.
-func stripSingleQuotedStrings(s string) string {
-	var b strings.Builder
-	i := 0
-	for i < len(s) {
-		if s[i] != '\'' {
-			b.WriteByte(s[i])
-			i++
-			continue
+func (t ReadOnlyTool) runPipeline(ctx context.Context, pipeline [][]string) (string, string, error) {
+	var input io.Reader
+	var stderr bytes.Buffer
+	for i, fields := range pipeline {
+		cmd := exec.CommandContext(ctx, t.binary(fields[0]), fields[1:]...)
+		if len(t.WorkspaceRoots) > 0 {
+			cmd.Dir = t.WorkspaceRoots[0]
 		}
-		// Consume the opening quote, skip content, consume closing quote.
-		b.WriteByte('\'')
-		i++
-		for i < len(s) && s[i] != '\'' {
-			i++
+		cmd.Stdin = input
+		cmd.Stderr = &stderr
+		var output bytes.Buffer
+		cmd.Stdout = &output
+		if err := cmd.Run(); err != nil {
+			return "", strings.TrimSpace(stderr.String()), err
 		}
-		if i < len(s) {
-			b.WriteByte('\'')
-			i++
+		if i == len(pipeline)-1 {
+			return strings.TrimRight(output.String(), "\n"), strings.TrimSpace(stderr.String()), nil
 		}
+		input = bytes.NewReader(output.Bytes())
 	}
-	return b.String()
-}
-
-// splitPipeline splits cmd on '|' characters that are not enclosed by single
-// or double quotes. This prevents a '|' inside a quoted argument (e.g. a jq
-// filter like '.items[] | .name') from being treated as a pipe operator.
-func splitPipeline(cmd string) []string {
-	var segments []string
-	inSingle, inDouble := false, false
-	start := 0
-	for i := 0; i < len(cmd); i++ {
-		switch cmd[i] {
-		case '\'':
-			if !inDouble {
-				inSingle = !inSingle
-			}
-		case '"':
-			if !inSingle {
-				inDouble = !inDouble
-			}
-		case '\\':
-			// Backslash escapes the next char inside double-quoted strings.
-			if inDouble && i+1 < len(cmd) {
-				i++
-			}
-		case '|':
-			if !inSingle && !inDouble {
-				segments = append(segments, cmd[start:i])
-				start = i + 1
-			}
-		}
-	}
-	return append(segments, cmd[start:])
+	return "", strings.TrimSpace(stderr.String()), nil
 }
 
 // validateShellCommand checks that the command (including pipelines) only
 // invokes allowed programs and does not contain shell meta-operators that
 // enable command chaining or output redirection.
 func validateShellCommand(cmd string) error {
-	// Strip single-quoted substrings before checking for operators so that
-	// characters inside quoted arguments (e.g. '&' in a URL query string
-	// like curl '...?foo=1&bar=2') do not produce false positives.
-	// Double-quoted content is intentionally left intact: the shell still
-	// expands $(...) and backticks inside double quotes, so those patterns
-	// must remain detectable.
-	unquoted := stripSingleQuotedStrings(cmd)
-
-	// Reject chaining operators and redirections; pipes are the only allowed
-	// shell construct so that idiomatic one-liners still work.
-	for _, illegal := range []string{"&&", "||", ";;", ";", "&", "`", "$(", ">${", ">>", " > ", " 2>", ">/"} {
-		if strings.Contains(unquoted, illegal) {
-			return fmt.Errorf("shell meta-operator %q is not allowed; use | for pipelines only", illegal)
-		}
+	pipeline, err := parsePipeline(cmd)
+	if err != nil {
+		return err
 	}
+	return validatePipeline(pipeline)
+}
 
-	// Validate each segment of a pipeline independently.
-	for _, segment := range splitPipeline(cmd) {
-		if err := validateSegment(strings.TrimSpace(segment)); err != nil {
+func validatePipeline(pipeline [][]string) error {
+	for _, fields := range pipeline {
+		if err := validateSegmentFields(fields); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// validateSegment validates a single pipeline segment (no pipes).
-func validateSegment(segment string) error {
-	if segment == "" {
+// parsePipeline is intentionally a lexer, not a shell parser. Quotes and
+// backslash escapes only group literal arguments; there is no substitution,
+// glob expansion, redirection, variable expansion, or command chaining.
+func parsePipeline(cmd string) ([][]string, error) {
+	if strings.Contains(cmd, "$(") || strings.Contains(cmd, "${") {
+		return nil, fmt.Errorf("shell substitution is not allowed")
+	}
+	var pipeline [][]string
+	var fields []string
+	var word strings.Builder
+	inSingle, inDouble, escaped := false, false, false
+	flushWord := func() {
+		if word.Len() > 0 {
+			fields = append(fields, word.String())
+			word.Reset()
+		}
+	}
+	flushSegment := func() error {
+		flushWord()
+		if len(fields) == 0 {
+			return fmt.Errorf("empty pipeline segment")
+		}
+		pipeline = append(pipeline, fields)
+		fields = nil
 		return nil
 	}
-	fields := strings.Fields(segment)
+	for _, r := range cmd {
+		if escaped {
+			word.WriteRune(r)
+			escaped = false
+			continue
+		}
+		if r == '\\' && !inSingle {
+			escaped = true
+			continue
+		}
+		switch r {
+		case '\'':
+			if !inDouble {
+				inSingle = !inSingle
+			} else {
+				word.WriteRune(r)
+			}
+		case '"':
+			if !inSingle {
+				inDouble = !inDouble
+			} else {
+				word.WriteRune(r)
+			}
+		case '|':
+			if inSingle || inDouble {
+				word.WriteRune(r)
+				continue
+			}
+			if err := flushSegment(); err != nil {
+				return nil, err
+			}
+		case ';', '&', '`', '>', '<':
+			if inSingle || inDouble {
+				word.WriteRune(r)
+				continue
+			}
+			return nil, fmt.Errorf("shell operator %q is not allowed", string(r))
+		case ' ', '\t', '\n':
+			if inSingle || inDouble {
+				word.WriteRune(r)
+			} else {
+				flushWord()
+			}
+		default:
+			word.WriteRune(r)
+		}
+	}
+	if escaped || inSingle || inDouble {
+		return nil, fmt.Errorf("unterminated escape or quote")
+	}
+	if err := flushSegment(); err != nil {
+		return nil, err
+	}
+	return pipeline, nil
+}
+
+// validateSegment validates a single pipeline segment (no pipes).
+func validateSegment(segment string) error {
+	pipeline, err := parsePipeline(segment)
+	if err != nil {
+		return err
+	}
+	if len(pipeline) != 1 {
+		return fmt.Errorf("pipeline is not allowed in a segment")
+	}
+	return validateSegmentFields(pipeline[0])
+}
+
+func validateSegmentFields(fields []string) error {
 	if len(fields) == 0 {
-		return nil
+		return fmt.Errorf("empty command")
 	}
 	bin := filepath.Base(fields[0])
 	args := fields[1:]
@@ -254,16 +281,27 @@ func validateSegment(segment string) error {
 		return validateGH(args)
 	case "helm":
 		return validateHelm(args)
-	case "grep", "rg", "awk", "sed", "sort", "uniq", "head", "tail", "wc",
+	case "grep", "rg", "sort", "uniq", "head", "tail", "wc",
 		"cat", "ls", "find", "echo", "printf", "date", "tr", "cut",
-		"xargs", "tee", "diff", "jq", "yq", "curl", "wget",
-		"df", "du", "ps", "uname", "hostname", "which", "env",
-		"python3", "python", "node", "go", "ruby":
-		// General read/transform utilities. curl/wget are included so the
-		// agent can inspect endpoints; they are read-only by default.
+		"diff", "jq", "yq", "df", "du", "ps", "uname", "hostname", "which":
+		if bin == "find" {
+			return fmt.Errorf("find is not supported; use rg or a repository-specific code tool")
+		}
+		if bin == "jq" || bin == "yq" {
+			return validateJSONQuery(args)
+		}
 		return nil
 	}
 	return fmt.Errorf("command %q is not in the shell allowlist; allowed: git, kubectl, gcloud, gh, helm, grep/rg/awk/sed/jq, find, cat, ls, head/tail/wc/sort/uniq/cut/tr, curl, date, echo", bin)
+}
+
+func validateJSONQuery(args []string) error {
+	for _, arg := range args {
+		if oneOf(arg, "--rawfile", "--slurpfile", "--from-file", "-f") || strings.HasPrefix(arg, "--rawfile=") || strings.HasPrefix(arg, "--slurpfile=") {
+			return fmt.Errorf("jq/yq file-loading options are not allowed")
+		}
+	}
+	return nil
 }
 
 func validateGit(args []string) error {
@@ -276,26 +314,31 @@ func validateGit(args []string) error {
 	// blocked because all users share the same physical repo directories —
 	// switching branches would contaminate other concurrent runs.
 	blocked := map[string]bool{
-		"push":     true,
-		"commit":   true,
-		"merge":    true,
-		"rebase":   true,
-		"am":       true,
-		"apply":    true,
-		"bisect":   false, // allow (read-only investigation)
-		"clean":    true,
-		"rm":       true,
-		"mv":       true,
+		"push":      true,
+		"commit":    true,
+		"merge":     true,
+		"rebase":    true,
+		"am":        true,
+		"apply":     true,
+		"bisect":    false, // allow (read-only investigation)
+		"clean":     true,
+		"rm":        true,
+		"mv":        true,
 		"submodule": false,
-		"checkout": true,
-		"switch":   true,
-		"reset":    true,
-		"restore":  true,
-		"stash":    true,
-		"worktree": true,
+		"checkout":  true,
+		"switch":    true,
+		"reset":     true,
+		"restore":   true,
+		"stash":     true,
+		"worktree":  true,
 	}
 	if blocked[sub] {
 		return fmt.Errorf("git %s modifies repository state and is not allowed", sub)
+	}
+	for _, arg := range args {
+		if arg == "-c" || arg == "--config-env" || strings.HasPrefix(arg, "-c") || strings.HasPrefix(arg, "--upload-pack") || strings.HasPrefix(arg, "--receive-pack") {
+			return fmt.Errorf("git configuration or custom transport options are not allowed")
+		}
 	}
 	return nil
 }
@@ -312,7 +355,7 @@ func validateKubectl(args []string) error {
 		}
 		return nil
 	case "config":
-		if len(args) >= 2 && oneOf(args[1], "current-context", "get-contexts", "view", "use-context") {
+		if len(args) >= 2 && oneOf(args[1], "current-context", "get-contexts", "view") {
 			if args[1] == "view" && !contains(args[2:], "--minify") {
 				return fmt.Errorf("kubectl config view requires --minify")
 			}
@@ -533,13 +576,21 @@ func truncateOutput(out string) string {
 //
 // /tmp and /var/folders are always allowed as transient scratch space.
 func (t ReadOnlyTool) validatePaths(cmd string) error {
+	pipeline, err := parsePipeline(cmd)
+	if err != nil {
+		return err
+	}
+	return t.validatePipelinePaths(pipeline)
+}
+
+func (t ReadOnlyTool) validatePipelinePaths(pipeline [][]string) error {
 	if len(t.WorkspaceRoots) == 0 {
 		return nil
 	}
 	// Always-allowed prefixes: temp directories used for transient files.
 	alwaysAllowed := []string{"/tmp/", "/var/folders/", "/var/tmp/"}
-	for _, segment := range strings.Split(cmd, "|") {
-		for _, token := range strings.Fields(segment) {
+	for _, segment := range pipeline {
+		for _, token := range segment[1:] {
 			if !strings.HasPrefix(token, "/") {
 				continue
 			}

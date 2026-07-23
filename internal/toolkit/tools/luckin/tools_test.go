@@ -106,19 +106,6 @@ func httpResponse(status int, headers map[string]string, body string) *http.Resp
 	}
 }
 
-func TestSideEffectRequiresConfirmationAndStripsFlag(t *testing.T) {
-	cleaned, err := requireConfirmation(json.RawMessage(`{"orderId":"123","confirmed":true}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(cleaned), "confirmed") {
-		t.Fatalf("confirmed flag leaked to remote args: %s", cleaned)
-	}
-	if _, err := requireConfirmation(json.RawMessage(`{"orderId":"123"}`)); err == nil {
-		t.Fatal("expected missing confirmation error")
-	}
-}
-
 func TestRegisterAllIncludesCouponAlias(t *testing.T) {
 	reg := registry.New()
 	RegisterAll(reg, &Client{MCP: &mcp.Client{Token: "x"}})

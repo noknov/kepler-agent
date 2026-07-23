@@ -62,20 +62,30 @@ func Run(ctx context.Context) error {
 }
 
 type Server struct {
-	cfg            config.Config
-	slack          *slack.Client
-	access         safety.AccessPolicy
-	conv           *conversation.Service
-	prompt         safety.PromptPolicy
-	metrics        *observability.Recorder
-	runStore       runs.Store
-	ragManager     ragManagerCloser
-	health         *health.Service
-	reminders      reminder.Scheduler
-	reminderStore  *reminder.PGStore
-	mux            *http.ServeMux
-	webSearchPrefs sync.Map
-	tokenUsage     tokenUsageProvider
+	cfg                 config.Config
+	slack               *slack.Client
+	access              safety.AccessPolicy
+	conv                *conversation.Service
+	prompt              safety.PromptPolicy
+	metrics             *observability.Recorder
+	runStore            runs.Store
+	ragManager          ragManagerCloser
+	health              *health.Service
+	reminders           reminder.Scheduler
+	reminderStore       *reminder.PGStore
+	mux                 *http.ServeMux
+	webSearchPrefs      sync.Map
+	tokenUsage          tokenUsageProvider
+	eventQueue          chan slackEventJob
+	eventWorkers        int
+	eventEnqueueTimeout time.Duration
+	eventTimeout        time.Duration
+	runSemaphore        chan struct{}
+}
+
+type slackEventJob struct {
+	eventID string
+	event   slack.Event
 }
 
 type ragManagerCloser interface {
@@ -114,6 +124,8 @@ func NewServer(cfg config.Config) (*Server, error) {
 	healthService := health.NewService(runtime.Tools, cfg.Security.WorkspaceRoots, recorder, runtime.RAGManager != nil)
 	recorder.SetCostRates(runtime.CostRates)
 	conv := conversation.NewService(store, slackClient, runtime.Runner, runtime.Memory, runtime.Prompt, runtime.Redactor, recorder)
+	runSemaphore := make(chan struct{}, cfg.Tools.AgentMaxConcurrentRuns)
+	conv.RunSemaphore = runSemaphore
 	conv.Format = slack.MarkdownToMrkdwn
 	conv.RunStore = runStore
 	conv.RunProvider = cfg.LLM.Provider
@@ -135,19 +147,24 @@ func NewServer(cfg config.Config) (*Server, error) {
 	}
 
 	s := &Server{
-		cfg:           cfg,
-		slack:         slackClient,
-		access:        safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
-		conv:          conv,
-		prompt:        runtime.Prompt,
-		metrics:       recorder,
-		runStore:      runStore,
-		ragManager:    ragManager,
-		health:        healthService,
-		reminders:     reminder.Scheduler{Store: reminderStore, Messenger: slackClient},
-		reminderStore: reminderStore,
-		mux:           http.NewServeMux(),
-		tokenUsage:    newTokenUsageProvider(cfg.LLM.Provider, cfg.LLM.TokenUsage),
+		cfg:                 cfg,
+		slack:               slackClient,
+		access:              safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
+		conv:                conv,
+		prompt:              runtime.Prompt,
+		metrics:             recorder,
+		runStore:            runStore,
+		ragManager:          ragManager,
+		health:              healthService,
+		reminders:           reminder.Scheduler{Store: reminderStore, Messenger: slackClient},
+		reminderStore:       reminderStore,
+		mux:                 http.NewServeMux(),
+		tokenUsage:          newTokenUsageProvider(cfg.LLM.Provider, cfg.LLM.TokenUsage),
+		eventQueue:          make(chan slackEventJob, cfg.HTTP.EventQueueSize),
+		eventWorkers:        cfg.HTTP.EventWorkers,
+		eventEnqueueTimeout: cfg.HTTP.EventEnqueueTimeout,
+		eventTimeout:        cfg.HTTP.EventTimeout,
+		runSemaphore:        runSemaphore,
 	}
 	conv.WebSearchEnabled = func(userID string) bool {
 		return s.webSearchPreference(userID)
@@ -178,6 +195,7 @@ func (s *Server) routes(cfg config.Config, store session.Store, runtime agentRun
 		IncludeRepositoryInventory: cfg.Security.PromptIncludeRepoInventory,
 	}
 	webConv := conversation.NewService(store, webMessenger, runtime.Runner, runtime.Memory, webPrompt, runtime.Redactor, recorder)
+	webConv.RunSemaphore = s.runSemaphore
 	webConv.RunStore = runStore
 	webConv.RunProvider = cfg.LLM.Provider
 	webConv.RunModel = cfg.LLM.Model
@@ -217,6 +235,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+	s.startEventWorkers(ctx)
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -264,13 +283,52 @@ func (s *Server) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
-
 	if envelope.Type != "event_callback" {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
 		return
 	}
-	go s.handleEvent(context.Background(), envelope.EventID, envelope.Event)
+	if !s.enqueueSlackEvent(r.Context(), envelope.EventID, envelope.Event) {
+		http.Error(w, "event queue is full; please retry", http.StatusServiceUnavailable)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok"))
+}
+
+func (s *Server) startEventWorkers(ctx context.Context) {
+	workers := s.eventWorkers
+	if workers <= 0 {
+		workers = 1
+	}
+	for i := 0; i < workers; i++ {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case job := <-s.eventQueue:
+					eventCtx, cancel := context.WithTimeout(ctx, s.eventTimeout)
+					s.handleEvent(eventCtx, job.eventID, job.event)
+					cancel()
+				}
+			}
+		}()
+	}
+}
+
+func (s *Server) enqueueSlackEvent(ctx context.Context, eventID string, event slack.Event) bool {
+	if timeout := s.eventEnqueueTimeout; timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	select {
+	case s.eventQueue <- slackEventJob{eventID: eventID, event: event}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func (s *Server) handleSlackInteractions(w http.ResponseWriter, r *http.Request) {

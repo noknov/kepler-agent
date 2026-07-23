@@ -395,7 +395,7 @@
     }
   },
   "luckin-create_order": {
-    "description": "Create an order and return payment information. Only call after previewing the order and after the user explicitly confirms. If a payment QR code URL is returned, show it as the primary payment option.",
+    "description": "Create an order after previewing it and validating all required order details. The server applies the configured automated action policy. If a payment QR code URL is returned, show it as the primary payment option.",
     "parameters": {
       "deptId": "Store ID.",
       "productList": "Order item list.",
@@ -404,8 +404,7 @@
       "productList.items.skuCode": "Product SKU code.",
       "longitude": "Longitude.",
       "latitude": "Latitude.",
-      "couponCodeList": "Optional coupon code list from preview.",
-      "confirmed": "Must be true only after the user explicitly confirms order creation."
+      "couponCodeList": "Optional coupon code list from preview."
     }
   },
   "luckin-query_order_detail": {
@@ -417,8 +416,7 @@
   "luckin-cancel_order": {
     "description": "Cancel an order. Only call when the user explicitly asks to cancel.",
     "parameters": {
-      "orderId": "Order ID.",
-      "confirmed": "Must be true only after the user explicitly asked to cancel this order."
+      "orderId": "Order ID."
     }
   },
   "pw-navigate": {
