@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wati/oncall-agent/internal/safety"
-	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/internal/safety"
+	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
 
 func TestReadFileReturnsContentDirectly(t *testing.T) {

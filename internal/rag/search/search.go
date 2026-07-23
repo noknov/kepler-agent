@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/rag/embedding"
-	"github.com/wati/oncall-agent/internal/rag/store"
+	"github.com/noknov/slack-copilot-agent/internal/rag/embedding"
+	"github.com/noknov/slack-copilot-agent/internal/rag/store"
 )
 
 type Engine struct {

@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 
-	"github.com/wati/oncall-agent/internal/rag/chunk"
+	"github.com/noknov/slack-copilot-agent/internal/rag/chunk"
 )
 
 type ChunkRecord struct {

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/memory"
+	"github.com/noknov/slack-copilot-agent/internal/memory"
 )
 
 type Session struct {

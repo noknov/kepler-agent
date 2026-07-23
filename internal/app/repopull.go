@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/toolkit/gitcache"
+	"github.com/noknov/slack-copilot-agent/internal/toolkit/gitcache"
 )
 
 // pullWorkspaceRepos periodically runs "git fetch origin" for each sub-repo

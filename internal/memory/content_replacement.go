@@ -1,6 +1,6 @@
 package memory
 
-import "github.com/wati/oncall-agent/internal/llm"
+import "github.com/noknov/slack-copilot-agent/internal/llm"
 
 // ContentReplacementRecord is the persisted form of a model-visible content
 // replacement decision. It mirrors Claude Code's transcript record: store the

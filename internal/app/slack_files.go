@@ -7,8 +7,8 @@ import (
 	"log"
 	"strings"
 
-	"github.com/wati/oncall-agent/internal/llm"
-	"github.com/wati/oncall-agent/internal/slack"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/slack"
 )
 
 func appendSlackFiles(text string, files []slack.File) string {

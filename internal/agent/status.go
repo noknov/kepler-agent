@@ -4,7 +4,7 @@ import (
 	"math/rand"
 	"unicode"
 
-	"github.com/wati/oncall-agent/internal/prompts"
+	"github.com/noknov/slack-copilot-agent/internal/prompts"
 )
 
 const (

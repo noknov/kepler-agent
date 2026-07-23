@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/safety"
+	"github.com/noknov/slack-copilot-agent/internal/safety"
 )
 
 type Base struct {

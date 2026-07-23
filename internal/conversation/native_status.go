@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/agent"
+	"github.com/noknov/slack-copilot-agent/internal/agent"
 )
 
 type nativeThreadStatus struct {

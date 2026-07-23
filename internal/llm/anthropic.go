@@ -343,15 +343,15 @@ func (c *AnthropicClient) doOnce(ctx context.Context, payload []byte) ([]byte, e
 }
 
 type anthropicRequest struct {
-	Model       string              `json:"model"`
-	System      any                 `json:"system,omitempty"`
-	Messages    []anthropicMessage  `json:"messages"`
-	Tools       []anthropicTool     `json:"tools,omitempty"`
-	ToolChoice  any                 `json:"tool_choice,omitempty"`
-	MaxTokens   int                 `json:"max_tokens"`
-	Temperature float64             `json:"temperature,omitempty"`
-	Stream      bool                `json:"stream,omitempty"`
-	Thinking    *anthropicThinking  `json:"thinking,omitempty"`
+	Model       string             `json:"model"`
+	System      any                `json:"system,omitempty"`
+	Messages    []anthropicMessage `json:"messages"`
+	Tools       []anthropicTool    `json:"tools,omitempty"`
+	ToolChoice  any                `json:"tool_choice,omitempty"`
+	MaxTokens   int                `json:"max_tokens"`
+	Temperature float64            `json:"temperature,omitempty"`
+	Stream      bool               `json:"stream,omitempty"`
+	Thinking    *anthropicThinking `json:"thinking,omitempty"`
 }
 
 type anthropicThinking struct {
@@ -660,6 +660,6 @@ func setAnthropicAuthHeaders(header http.Header, token, flavor string) {
 	if flavor == "claude-code" {
 		header.Set("Authorization", "Bearer "+token)
 		header.Set("x-app", "cli")
-		header.Set("User-Agent", "claude-cli/1.0 oncall-agent")
+		header.Set("User-Agent", "claude-cli/1.0 slack-copilot-agent")
 	}
 }

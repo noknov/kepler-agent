@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
 )
 
 var categoryDescriptions = map[string]string{

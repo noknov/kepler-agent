@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/wati/oncall-agent/internal/llm"
-	playwrightTools "github.com/wati/oncall-agent/internal/toolkit/tools/playwright"
-	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
+	playwrightTools "github.com/noknov/slack-copilot-agent/internal/toolkit/tools/playwright"
+	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
 
 // Uploader can upload a file to a Slack channel thread.

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/safety"
+	"github.com/noknov/slack-copilot-agent/internal/safety"
 )
 
 func TestGoSymbolsWithGopls(t *testing.T) {

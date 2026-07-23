@@ -1,4 +1,4 @@
-module github.com/wati/oncall-agent
+module github.com/noknov/slack-copilot-agent
 
 go 1.25.0
 

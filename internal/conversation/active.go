@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/agent"
-	"github.com/wati/oncall-agent/internal/llm"
-	"github.com/wati/oncall-agent/internal/prompts"
+	"github.com/noknov/slack-copilot-agent/internal/agent"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/prompts"
 )
 
 type progressAppender func([]map[string]any)

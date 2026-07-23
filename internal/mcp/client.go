@@ -25,10 +25,10 @@ type Client struct {
 	Token       string // Bearer token; empty means no Authorization header
 	// HTTP overrides the shared HTTP client. Set in tests to inject a mock transport.
 	// Leave nil to use the lazily-initialized shared client (keep-alives enabled, 60s timeout).
-	HTTP        *http.Client
-	nextID      atomic.Int64
-	sharedOnce  sync.Once
-	sharedHTTP  *http.Client
+	HTTP       *http.Client
+	nextID     atomic.Int64
+	sharedOnce sync.Once
+	sharedHTTP *http.Client
 }
 
 // Session holds the MCP session state after initialization.
@@ -62,7 +62,7 @@ func (c *Client) Initialize(ctx context.Context) (Session, error) {
 		"protocolVersion": "2025-03-26",
 		"capabilities":    map[string]any{},
 		"clientInfo": map[string]string{
-			"name":    "wati-oncall-agent",
+			"name":    "slack-copilot-agent",
 			"version": "0.1.0",
 		},
 	})

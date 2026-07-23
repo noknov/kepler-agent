@@ -3,7 +3,7 @@ package agent
 import (
 	"strings"
 
-	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
 )
 
 // streamRouter buffers ambiguous streamed text until the turn shape is known.

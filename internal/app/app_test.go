@@ -12,15 +12,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/config"
-	"github.com/wati/oncall-agent/internal/eventinbox"
-	"github.com/wati/oncall-agent/internal/llm"
-	"github.com/wati/oncall-agent/internal/reminder"
-	"github.com/wati/oncall-agent/internal/runs"
-	"github.com/wati/oncall-agent/internal/safety"
-	"github.com/wati/oncall-agent/internal/session"
-	"github.com/wati/oncall-agent/internal/slack"
-	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/internal/config"
+	"github.com/noknov/slack-copilot-agent/internal/eventinbox"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/reminder"
+	"github.com/noknov/slack-copilot-agent/internal/runs"
+	"github.com/noknov/slack-copilot-agent/internal/safety"
+	"github.com/noknov/slack-copilot-agent/internal/session"
+	"github.com/noknov/slack-copilot-agent/internal/slack"
+	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
 
 func TestFileShareIsUserMessageSubtype(t *testing.T) {

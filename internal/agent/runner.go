@@ -11,11 +11,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/llm"
-	"github.com/wati/oncall-agent/internal/memory"
-	"github.com/wati/oncall-agent/internal/prompts"
-	"github.com/wati/oncall-agent/internal/runs"
-	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/memory"
+	"github.com/noknov/slack-copilot-agent/internal/prompts"
+	"github.com/noknov/slack-copilot-agent/internal/runs"
+	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
 
 var (

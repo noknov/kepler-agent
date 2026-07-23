@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
 )
 
 func TestPipelineBuildActiveRequestKeepsExternalEvidenceVerbatim(t *testing.T) {

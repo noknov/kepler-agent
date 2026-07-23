@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/wati/oncall-agent/internal/prompts"
+	"github.com/noknov/slack-copilot-agent/internal/prompts"
 )
 
 func TestToolSearchCategoriesSchemaIncludesInfrastructure(t *testing.T) {

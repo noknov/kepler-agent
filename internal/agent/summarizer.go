@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
 )
 
 // StatusSummarizer calls a secondary LLM to produce a short, dynamic status

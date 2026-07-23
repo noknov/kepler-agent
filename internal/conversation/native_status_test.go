@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/agent"
+	"github.com/noknov/slack-copilot-agent/internal/agent"
 )
 
 func TestNativeThreadStatusRoutesStaticAndLoadingMessages(t *testing.T) {

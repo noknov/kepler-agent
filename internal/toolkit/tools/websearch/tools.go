@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/llm"
-	"github.com/wati/oncall-agent/internal/safety"
-	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/safety"
+	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
 
 const (
@@ -205,7 +205,7 @@ func (c Client) ReadPage(ctx context.Context, pageURL string, maxChars int) (Pag
 		return Page{}, err
 	}
 	req.Header.Set("Accept", "text/html, text/plain;q=0.9, application/xhtml+xml;q=0.8")
-	req.Header.Set("User-Agent", "wati-oncall-agent/1.0")
+	req.Header.Set("User-Agent", "slack-copilot-agent/1.0")
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return Page{}, err
@@ -310,7 +310,7 @@ func (c Client) searchDuckDuckGo(ctx context.Context, req SearchRequest) ([]Resu
 		return nil, err
 	}
 	httpReq.Header.Set("Accept", "text/html, application/xhtml+xml;q=0.9")
-	httpReq.Header.Set("User-Agent", "Mozilla/5.0 (compatible; wati-oncall-agent/1.0)")
+	httpReq.Header.Set("User-Agent", "Mozilla/5.0 (compatible; slack-copilot-agent/1.0)")
 	resp, err := c.httpClient().Do(httpReq)
 	if err != nil {
 		return nil, err

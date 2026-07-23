@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/llm"
-	reminderStore "github.com/wati/oncall-agent/internal/reminder"
-	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
+	reminderStore "github.com/noknov/slack-copilot-agent/internal/reminder"
+	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
 
 type CreateTool struct{ Store reminderStore.Store }

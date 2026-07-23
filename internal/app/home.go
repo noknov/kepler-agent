@@ -6,7 +6,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/wati/oncall-agent/internal/slack"
+	"github.com/noknov/slack-copilot-agent/internal/slack"
 )
 
 func (s *Server) handleAppHome(ctx context.Context, ev slack.Event) {
