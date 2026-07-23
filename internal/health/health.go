@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/internal/observability"
 	"github.com/noknov/slack-copilot-agent/internal/prompts"
 	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
@@ -29,7 +28,6 @@ type Snapshot struct {
 	Overall   Status      `json:"overall"`
 	CheckedAt time.Time   `json:"checked_at"`
 	Tools     []ToolState `json:"tools"`
-	RAG       RAGState    `json:"rag"`
 }
 
 type ToolState struct {
@@ -42,41 +40,19 @@ type ToolState struct {
 	Details     map[string]any `json:"details,omitempty"`
 }
 
-type RAGState struct {
-	Enabled bool             `json:"enabled"`
-	Status  Status           `json:"status"`
-	Indexes []RAGIndexHealth `json:"indexes,omitempty"`
-	Message string           `json:"message,omitempty"`
-}
-
-type RAGIndexHealth struct {
-	Repo           string    `json:"repo"`
-	Branch         string    `json:"branch"`
-	CurrentCommit  string    `json:"current_commit,omitempty"`
-	IndexedCommit  string    `json:"indexed_commit,omitempty"`
-	LastIndexedAt  time.Time `json:"last_indexed_at,omitempty"`
-	LastError      string    `json:"last_error,omitempty"`
-	Stale          bool      `json:"stale"`
-	LastDurationMS int64     `json:"last_duration_ms,omitempty"`
-}
-
 type Service struct {
 	Registry       *registry.Registry
 	WorkspaceRoots []string
-	Metrics        *observability.Recorder
-	RAGEnabled     bool
 	Interval       time.Duration
 
 	mu       sync.RWMutex
 	snapshot Snapshot
 }
 
-func NewService(reg *registry.Registry, roots []string, metrics *observability.Recorder, ragEnabled bool) *Service {
+func NewService(reg *registry.Registry, roots []string) *Service {
 	return &Service{
 		Registry:       reg,
 		WorkspaceRoots: append([]string(nil), roots...),
-		Metrics:        metrics,
-		RAGEnabled:     ragEnabled,
 		Interval:       time.Minute,
 		snapshot: Snapshot{
 			Overall:   StatusUnknown,
@@ -110,15 +86,12 @@ func (s *Service) Probe(ctx context.Context) Snapshot {
 		s.probeRegisteredTool(now, "code-read_file", "critical"),
 		s.probeRegisteredTool(now, "repo-search", "critical"),
 		s.probeRegisteredTool(now, "repo-read_file", "critical"),
-		s.probeRegisteredTool(now, "rag-search", "critical"),
 	}
 	tools = append(tools, s.probeWorkspace(now), s.probeGitRepo(ctx, now), s.probeRipgrep(ctx, now))
-	rag := s.probeRAG(ctx, now)
 	snap := Snapshot{
-		Overall:   overallStatus(tools, rag),
+		Overall:   overallStatus(tools),
 		CheckedAt: now,
 		Tools:     tools,
-		RAG:       rag,
 	}
 	s.mu.Lock()
 	s.snapshot = snap
@@ -149,19 +122,8 @@ func (s *Service) SummaryPrompt() string {
 		}
 		b.WriteString("\n")
 	}
-	if snap.RAG.Status != StatusHealthy && snap.RAG.Status != "" {
-		b.WriteString(fmt.Sprintf("- rag: %s", snap.RAG.Status))
-		if snap.RAG.Message != "" {
-			b.WriteString(" (" + snap.RAG.Message + ")")
-		}
-		b.WriteString("\n")
-	}
 	b.WriteString(prompts.HealthPrompt("summary_rules", ""))
 	return strings.TrimSpace(b.String())
-}
-
-func (s *Service) RAGSnapshot() RAGState {
-	return s.Snapshot().RAG
 }
 
 func (s *Service) probeRegisteredTool(now time.Time, name, criticality string) ToolState {
@@ -278,44 +240,7 @@ func (s *Service) probeRipgrep(ctx context.Context, now time.Time) ToolState {
 	return state
 }
 
-func (s *Service) probeRAG(ctx context.Context, now time.Time) RAGState {
-	if !s.RAGEnabled {
-		return RAGState{Enabled: false, Status: StatusUnknown, Message: "RAG is disabled"}
-	}
-	if s.Metrics == nil {
-		return RAGState{Enabled: true, Status: StatusUnknown, Message: "metrics recorder unavailable"}
-	}
-	metrics := s.Metrics.Snapshot()
-	if len(metrics.RAG.Indexes) == 0 {
-		return RAGState{Enabled: true, Status: StatusDegraded, Message: "no RAG index state observed yet"}
-	}
-	state := RAGState{Enabled: true, Status: StatusHealthy}
-	for _, idx := range metrics.RAG.Indexes {
-		current := resolveCommit(ctx, idx.Repo, idx.Branch)
-		stale := current != "" && idx.LastCommit != "" && current != idx.LastCommit
-		item := RAGIndexHealth{
-			Repo:           idx.Repo,
-			Branch:         idx.Branch,
-			CurrentCommit:  shortSHA(current),
-			IndexedCommit:  shortSHA(idx.LastCommit),
-			LastIndexedAt:  idx.LastIndexedAt,
-			LastError:      idx.LastError,
-			Stale:          stale,
-			LastDurationMS: idx.LastDurationMS,
-		}
-		state.Indexes = append(state.Indexes, item)
-		if idx.LastError != "" {
-			state.Status = worseStatus(state.Status, StatusUnhealthy)
-			state.Message = "one or more RAG indexes have errors"
-		} else if stale {
-			state.Status = worseStatus(state.Status, StatusDegraded)
-			state.Message = "one or more RAG indexes are stale"
-		}
-	}
-	return state
-}
-
-func overallStatus(tools []ToolState, rag RAGState) Status {
+func overallStatus(tools []ToolState) Status {
 	overall := StatusHealthy
 	for _, tool := range tools {
 		if tool.Criticality == "critical" {
@@ -323,9 +248,6 @@ func overallStatus(tools []ToolState, rag RAGState) Status {
 		} else if tool.Status == StatusUnhealthy {
 			overall = worseStatus(overall, StatusDegraded)
 		}
-	}
-	if rag.Enabled {
-		overall = worseStatus(overall, rag.Status)
 	}
 	return overall
 }
@@ -415,11 +337,4 @@ func gitCommandOutput(ctx context.Context, repo string, args ...string) string {
 		return ""
 	}
 	return strings.TrimSpace(stdout.String())
-}
-
-func shortSHA(sha string) string {
-	if len(sha) > 12 {
-		return sha[:12]
-	}
-	return sha
 }

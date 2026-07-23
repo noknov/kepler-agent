@@ -13,7 +13,6 @@ func (a *ObservabilityAPI) Register(mux *http.ServeMux) {
 	mux.Handle("/metrics", s.observabilityHandler(s.metrics))
 	mux.HandleFunc("/health/dashboard", s.handleHealthDashboard)
 	mux.HandleFunc("/health/tools", s.handleToolHealth)
-	mux.HandleFunc("/health/tools/rag", s.handleRAGHealth)
 	mux.HandleFunc("/runs", s.handleRuns)
 	mux.HandleFunc("/runs/", s.handleRun)
 }

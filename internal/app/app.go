@@ -46,16 +46,6 @@ func Run(ctx context.Context) error {
 			pullWorkspaceRepos(ctx, cfg.Security.WorkspaceRoots, gitcache.DefaultFetchTTL)
 		})
 	}
-	if server.ragManager != nil && cfg.RAG.BackgroundIndex {
-		defer server.ragManager.Close()
-		log.Printf("rag/indexer: starting async background prewarm loop")
-		server.Go(func(ctx context.Context) {
-			server.ragManager.StartIndexLoop(ctx)
-		})
-	} else if server.ragManager != nil {
-		defer server.ragManager.Close()
-		log.Printf("rag/indexer: background prewarm disabled; on-demand indexing will be used")
-	}
 	if server.health != nil {
 		server.Go(func(ctx context.Context) {
 			server.health.Start(ctx)
@@ -76,7 +66,6 @@ type Server struct {
 	prompt              safety.PromptPolicy
 	metrics             *observability.Recorder
 	runStore            runs.Store
-	ragManager          ragManagerCloser
 	health              *health.Service
 	reminders           reminder.Scheduler
 	reminderStore       *reminder.PGStore
@@ -126,11 +115,6 @@ type slackEventJob struct {
 	event   slack.Event
 }
 
-type ragManagerCloser interface {
-	StartIndexLoop(ctx context.Context)
-	Close()
-}
-
 func NewServer(cfg config.Config) (*Server, error) {
 	prompts.LoadFromEnv()
 	serviceCtx, serviceCancel := context.WithCancel(context.Background())
@@ -178,7 +162,7 @@ func NewServer(cfg config.Config) (*Server, error) {
 
 	recorder := observability.NewRecorder()
 	runtime := newAgentRuntime(cfg, slackClient, reminderStore, recorder)
-	healthService := health.NewService(runtime.Tools, cfg.Security.WorkspaceRoots, recorder, runtime.RAGManager != nil)
+	healthService := health.NewService(runtime.Tools, cfg.Security.WorkspaceRoots)
 	recorder.SetCostRates(runtime.CostRates)
 	conv := conversation.NewService(store, slackClient, runtime.Runner, runtime.Memory, runtime.Prompt, runtime.Redactor, recorder)
 	runSemaphore := make(chan struct{}, cfg.Tools.AgentMaxConcurrentRuns)
@@ -199,11 +183,6 @@ func NewServer(cfg config.Config) (*Server, error) {
 		conv.TTSSummarizer = newTTSSummarizer(cfg, runtime)
 	}
 
-	var ragManager ragManagerCloser
-	if runtime.RAGManager != nil {
-		ragManager = runtime.RAGManager
-	}
-
 	s := &Server{
 		cfg:                 cfg,
 		slack:               slackClient,
@@ -214,7 +193,6 @@ func NewServer(cfg config.Config) (*Server, error) {
 		runStore:            runStore,
 		sessionStore:        store,
 		runPGStore:          runStore,
-		ragManager:          ragManager,
 		health:              healthService,
 		reminders:           reminder.Scheduler{Store: reminderStore, Messenger: slackClient},
 		reminderStore:       reminderStore,
@@ -324,11 +302,11 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDrain(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		s.writeHTTPError(w, r, http.StatusMethodNotAllowed, "method not allowed", nil)
 		return
 	}
 	if !isLocalRequest(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		s.writeHTTPError(w, r, http.StatusForbidden, "forbidden", nil)
 		return
 	}
 	s.draining.Store(true)
@@ -338,16 +316,16 @@ func (s *Server) handleDrain(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 	if s.draining.Load() {
-		http.Error(w, "server is draining", http.StatusServiceUnavailable)
+		s.writeHTTPError(w, r, http.StatusServiceUnavailable, "server is draining", nil)
 		return
 	}
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		s.writeHTTPError(w, r, http.StatusMethodNotAllowed, "method not allowed", nil)
 		return
 	}
 	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
 	if err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		s.writeHTTPError(w, r, http.StatusBadRequest, "bad request", err)
 		return
 	}
 
@@ -359,13 +337,13 @@ func (s *Server) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 		r.Header.Get("X-Slack-Signature"),
 		time.Now(),
 	); err != nil {
-		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		s.writeHTTPError(w, r, http.StatusUnauthorized, "invalid signature", err)
 		return
 	}
 
 	var envelope slack.EventEnvelope
 	if err := json.Unmarshal(bodyBytes, &envelope); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
+		s.writeHTTPError(w, r, http.StatusBadRequest, "bad json", err)
 		return
 	}
 	if envelope.Type == "url_verification" {
@@ -381,7 +359,7 @@ func (s *Server) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	claimed, err := s.eventInbox.Claim(r.Context(), envelope.EventID, envelope.Event)
 	if err != nil {
-		http.Error(w, "failed to persist event", http.StatusServiceUnavailable)
+		s.writeHTTPError(w, r, http.StatusServiceUnavailable, "failed to persist event", err)
 		return
 	}
 	if !claimed {
@@ -390,7 +368,7 @@ func (s *Server) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.enqueueSlackEvent(r.Context(), envelope.EventID, envelope.Event) {
-		http.Error(w, "event queue is full; please retry", http.StatusServiceUnavailable)
+		s.writeHTTPError(w, r, http.StatusServiceUnavailable, "event queue is full; please retry", nil)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -399,16 +377,16 @@ func (s *Server) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSlackInteractions(w http.ResponseWriter, r *http.Request) {
 	if s.draining.Load() {
-		http.Error(w, "server is draining", http.StatusServiceUnavailable)
+		s.writeHTTPError(w, r, http.StatusServiceUnavailable, "server is draining", nil)
 		return
 	}
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		s.writeHTTPError(w, r, http.StatusMethodNotAllowed, "method not allowed", nil)
 		return
 	}
 	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
 	if err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		s.writeHTTPError(w, r, http.StatusBadRequest, "bad request", err)
 		return
 	}
 	rawBody := string(bodyBytes)
@@ -419,12 +397,12 @@ func (s *Server) handleSlackInteractions(w http.ResponseWriter, r *http.Request)
 		r.Header.Get("X-Slack-Signature"),
 		time.Now(),
 	); err != nil {
-		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		s.writeHTTPError(w, r, http.StatusUnauthorized, "invalid signature", err)
 		return
 	}
 	body := extractFormPayload(rawBody)
 	if body == "" {
-		http.Error(w, "missing payload", http.StatusBadRequest)
+		s.writeHTTPError(w, r, http.StatusBadRequest, "missing payload", nil)
 		return
 	}
 
@@ -441,7 +419,7 @@ func (s *Server) handleSlackInteractions(w http.ResponseWriter, r *http.Request)
 		} `json:"actions"`
 	}
 	if err := json.Unmarshal([]byte(body), &payload); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
+		s.writeHTTPError(w, r, http.StatusBadRequest, "bad json", err)
 		return
 	}
 
@@ -522,11 +500,11 @@ func (s *Server) recordReactionFeedback(ctx context.Context, ev slack.Event) {
 
 func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		s.writeHTTPError(w, r, http.StatusMethodNotAllowed, "method not allowed", nil)
 		return
 	}
 	if !s.authorizeObservability(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		s.writeHTTPError(w, r, http.StatusForbidden, "forbidden", nil)
 		return
 	}
 	limit := 20
@@ -537,7 +515,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	runsList, err := s.runStore.List(r.Context(), limit)
 	if err != nil {
-		http.Error(w, "failed to list runs", http.StatusInternalServerError)
+		s.writeHTTPError(w, r, http.StatusInternalServerError, "failed to list runs", err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -546,17 +524,17 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		s.writeHTTPError(w, r, http.StatusMethodNotAllowed, "method not allowed", nil)
 		return
 	}
 	if !s.authorizeObservability(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		s.writeHTTPError(w, r, http.StatusForbidden, "forbidden", nil)
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/runs/")
 	run, ok, err := s.runStore.Get(r.Context(), id)
 	if err != nil {
-		http.Error(w, "failed to read run", http.StatusInternalServerError)
+		s.writeHTTPError(w, r, http.StatusInternalServerError, "failed to read run", err)
 		return
 	}
 	if !ok {
@@ -569,15 +547,15 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleToolHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		s.writeHTTPError(w, r, http.StatusMethodNotAllowed, "method not allowed", nil)
 		return
 	}
 	if !s.authorizeObservability(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		s.writeHTTPError(w, r, http.StatusForbidden, "forbidden", nil)
 		return
 	}
 	if s.health == nil {
-		http.Error(w, "tool health monitor unavailable", http.StatusServiceUnavailable)
+		s.writeHTTPError(w, r, http.StatusServiceUnavailable, "tool health monitor unavailable", nil)
 		return
 	}
 	snapshot := s.health.Snapshot()
@@ -588,34 +566,29 @@ func (s *Server) handleToolHealth(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(snapshot)
 }
 
-func (s *Server) handleRAGHealth(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !s.authorizeObservability(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	if s.health == nil {
-		http.Error(w, "tool health monitor unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	if strings.EqualFold(r.URL.Query().Get("refresh"), "true") {
-		_ = s.health.Probe(r.Context())
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(s.health.RAGSnapshot())
-}
-
 func (s *Server) observabilityHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.authorizeObservability(r) {
-			http.Error(w, "forbidden", http.StatusForbidden)
+			s.writeHTTPError(w, r, http.StatusForbidden, "forbidden", nil)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) writeHTTPError(w http.ResponseWriter, r *http.Request, status int, message string, err error) {
+	if err != nil {
+		log.Printf("http error method=%s path=%s status=%d remote=%s msg=%q err=%v", r.Method, r.URL.Path, status, r.RemoteAddr, message, err)
+		if s.metrics != nil && status >= 500 {
+			s.metrics.Error(fmt.Errorf("http %s %s: %s: %w", r.Method, r.URL.Path, message, err))
+		}
+	} else {
+		log.Printf("http warning method=%s path=%s status=%d remote=%s msg=%q", r.Method, r.URL.Path, status, r.RemoteAddr, message)
+		if s.metrics != nil && status >= 500 {
+			s.metrics.Error(fmt.Errorf("http %s %s: %s", r.Method, r.URL.Path, message))
+		}
+	}
+	http.Error(w, message, status)
 }
 
 func (s *Server) authorizeObservability(r *http.Request) bool {

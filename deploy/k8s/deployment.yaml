@@ -45,8 +45,6 @@ spec:
               value: "90s"
             - name: POSTGRES_MAX_CONNS
               value: "4"
-            - name: RAG_BACKGROUND_INDEX
-              value: "false"
             - name: WORKSPACE_AUTO_FETCH
               value: "false"
           readinessProbe:

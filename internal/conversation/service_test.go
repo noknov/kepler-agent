@@ -127,7 +127,7 @@ func TestProcessInjectsToolHealthSummary(t *testing.T) {
 		observability.NewRecorder(),
 	)
 	svc.HealthSummary = func() string {
-		return "Tool health summary:\n- rag-search: degraded"
+		return "Tool health summary:\n- code-search: degraded"
 	}
 
 	svc.HandleMention(ctx, Request{
@@ -141,7 +141,7 @@ func TestProcessInjectsToolHealthSummary(t *testing.T) {
 	req := llmClient.LastRequest()
 	found := false
 	for _, msg := range req.Messages {
-		if msg.Role == "system" && strings.Contains(msg.Content, "rag-search: degraded") {
+		if msg.Role == "system" && strings.Contains(msg.Content, "code-search: degraded") {
 			found = true
 			break
 		}

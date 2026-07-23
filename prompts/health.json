@@ -1,5 +1,4 @@
 {
   "summary_header": "Tool health summary:\n",
-  "summary_rules": "Rules: do not make high-confidence code claims when critical code tools are unhealthy. Treat stale RAG results as hints only, and verify with repo or code read tools before final claims."
+  "summary_rules": "Rules: do not make high-confidence code claims when critical code tools are unhealthy. Verify search or graph hints with repo or code read tools before final claims."
 }
-

@@ -56,11 +56,11 @@
     }
   },
   "git-log": {
-    "description": "Read recent commit history. This is read-only.",
+    "description": "Read recent commit history from a refreshed remote branch snapshot. This is read-only and does not checkout branches.",
     "parameters": {
       "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
-      "ref": "Optional branch, tag, or commit ref.",
-      "limit": "Maximum commits. Defaults to 20, max 100."
+      "branch": "Optional remote branch name. Pass this when the user asks about a specific branch's latest commits.",
+      "limit": "Maximum commits. Defaults to 10, max 50."
     }
   },
   "git-show": {
@@ -70,6 +70,31 @@
       "rev": "Commit SHA, branch, tag, or ref.",
       "path": "Optional file path inside repo.",
       "max_chars": "Maximum characters. Defaults to 12000, max 50000."
+    }
+  },
+  "codegraph-overview": {
+    "description": "Build a lightweight Go code graph for a refreshed git branch snapshot. Use for architecture orientation before reading specific files.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "branch": "Optional remote branch name.",
+      "limit": "Maximum packages and edges to show. Defaults to 40, max 120."
+    }
+  },
+  "codegraph-dependencies": {
+    "description": "Show internal imports and importers for one Go package in a refreshed git branch snapshot.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "branch": "Optional remote branch name.",
+      "package": "Package import path, directory, name, or unique fragment."
+    }
+  },
+  "codegraph-callers": {
+    "description": "Find simple Go call sites for a function or method name in a refreshed git branch snapshot. Treat as a static hint and confirm with source reads.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "branch": "Optional remote branch name.",
+      "symbol": "Function or method name.",
+      "limit": "Maximum callers. Defaults to 50, max 200."
     }
   },
   "github-dispatch_workflow": {
@@ -279,15 +304,6 @@
     "parameters": {
       "query": "Issue tracker query.",
       "limit": "Maximum results. Defaults to 10, max 50."
-    }
-  },
-  "rag-search": {
-    "description": "Semantic code search using RAG. Use for architectural or behavioral questions where exact string search is insufficient. For exact symbol or string matching, prefer code-search or repo-search instead. Results are hints only; confirm important claims with code/repo read tools before quoting or explaining code.",
-    "parameters": {
-      "query": "Natural language or code-related query.",
-      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
-      "branch": "Branch to search. Defaults to the repo's default branch.",
-      "limit": "Maximum results. Defaults to 10, max 20."
     }
   },
   "slack-ask_user": {

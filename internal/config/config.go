@@ -19,25 +19,12 @@ type Config struct {
 	Sessions  SessionConfig
 	Tools     ToolConfig
 	Observing ObservingConfig
-	RAG       RAGConfig
 	Storage   StorageConfig
 }
 
-// StorageConfig owns all durable operational state. RAG may use a different
-// database, but sessions, runs, inbox and reminders must share this DSN.
+// StorageConfig owns all durable operational state for sessions, runs, inbox,
+// and reminders.
 type StorageConfig struct{ PostgresDSN string }
-
-type RAGConfig struct {
-	Enabled          bool
-	BackgroundIndex  bool
-	PostgresDSN      string
-	EmbeddingBaseURL string
-	EmbeddingAPIKey  string
-	EmbeddingModel   string
-	EmbeddingDims    int
-	IndexInterval    time.Duration
-	BatchDelay       time.Duration
-}
 
 type HTTPConfig struct {
 	Addr                string
@@ -314,18 +301,7 @@ func Load() (Config, error) {
 			CacheReadCostPerMTok:     envFloat("LLM_CACHE_READ_COST_PER_MTOK", -1),
 			CacheCreationCostPerMTok: envFloat("LLM_CACHE_CREATION_COST_PER_MTOK", -1),
 		},
-		RAG: RAGConfig{
-			Enabled:          envBool("RAG_ENABLED", false),
-			BackgroundIndex:  envBool("RAG_BACKGROUND_INDEX", false),
-			PostgresDSN:      os.Getenv("RAG_POSTGRES_DSN"),
-			EmbeddingBaseURL: trimRightSlash(env("RAG_EMBEDDING_BASE_URL", "https://api.openai.com/v1")),
-			EmbeddingAPIKey:  os.Getenv("RAG_EMBEDDING_API_KEY"),
-			EmbeddingModel:   env("RAG_EMBEDDING_MODEL", "text-embedding-3-small"),
-			EmbeddingDims:    envInt("RAG_EMBEDDING_DIMS", 1536),
-			IndexInterval:    envDuration("RAG_INDEX_INTERVAL", 5*time.Minute),
-			BatchDelay:       envDuration("RAG_BATCH_DELAY", 200*time.Millisecond),
-		},
-		Storage: StorageConfig{PostgresDSN: firstNonEmpty(os.Getenv("POSTGRES_DSN"), os.Getenv("REMINDER_POSTGRES_DSN"), os.Getenv("RAG_POSTGRES_DSN"))},
+		Storage: StorageConfig{PostgresDSN: firstNonEmpty(os.Getenv("POSTGRES_DSN"), os.Getenv("REMINDER_POSTGRES_DSN"))},
 	}
 
 	if cfg.Slack.SigningSecret == "" {
