@@ -13,10 +13,7 @@ func NewAccessPolicy(allowedUsers, allowedChannels []string) AccessPolicy {
 }
 
 func (p AccessPolicy) IsAllowed(userID, channelID string) bool {
-	if len(p.channels) > 0 {
-		return p.AllowsChannel(channelID)
-	}
-	return p.AllowsUser(userID)
+	return p.AllowsUser(userID) && p.AllowsChannel(channelID)
 }
 
 func (p AccessPolicy) AllowsUser(userID string) bool {

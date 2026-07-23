@@ -19,7 +19,7 @@ internal/slack/            Signature verification, Events API types, Web API cli
 internal/conversation/     Thread lifecycle, per-session locks, idempotency, pending replies
 internal/agent/            Provider-agnostic tool-call runner with step budget, tool-result spill, and LLM compaction
 internal/memory/           Conversation turns, context packing, tool-result formatting, and compaction helpers
-internal/session/          File-backed Slack thread sessions
+internal/session/          PostgreSQL-backed Slack thread sessions
 internal/safety/           Access policy, prompt policy, secret redaction, workspace and command policy
 internal/health/           Tool and RAG health probing, health dashboard
 internal/prompts/          Prompt catalog: loads public defaults, then private PROMPT_DIR overrides
@@ -64,7 +64,7 @@ The API key must be prefixed with `Bearer ` (e.g. `Bearer lc-abc123`) so the cli
 
 DeepSeek uses the OpenAI-compatible `/chat/completions` protocol, including
 structured function/tool calls. The default model is the official flash model;
-`DEEPSEEK_AVAILABLE_MODELS` exposes both official V4 models in Slack and the Web UI.
+`DEEPSEEK_AVAILABLE_MODELS` exposes both official V4 models in Slack.
 
 ```bash
 LLM_PROVIDER=deepseek
@@ -147,8 +147,7 @@ OPENCODE_ZEN_AVAILABLE_MODELS=mimo-v2.5-free,minimax-m3-free,nemotron-3-ultra-fr
 OpenCode exposes selected subscription models through OpenAI-compatible
 `/chat/completions` and Anthropic-compatible `/messages` endpoints. The default
 here uses the OpenAI-compatible endpoint and `glm-5.2`. When `OPENCODE_GO_AVAILABLE_MODELS`
-is omitted, the app exposes the full OpenCode model list in both Slack and
-the Web UI model selectors. The runtime routes each selected model to the
+is omitted, the app exposes the full OpenCode model list in Slack. The runtime routes each selected model to the
 documented OpenAI-compatible or Anthropic-compatible endpoint automatically.
 
 ```bash
@@ -211,8 +210,7 @@ Final answer streaming is flushed in small batches to keep the UI responsive wit
 
 ### 🖼️ Multimodal and model display
 
-The web UI shows the configured primary model, and Slack App Home shows the
-primary plus Explorer / Summary models. Users do not choose models.
+Slack App Home shows the configured primary plus Explorer / Summary models.
 `MODEL_ROUTING_MULTIMODAL_MODEL` controls the internal model used for
 image-containing turns, while `MULTIMODAL_MODELS` controls which models receive
 image parts; images sent to non-listed models are stripped and replaced with a
@@ -534,8 +532,8 @@ docker compose -f docker-compose.rag.yml up -d
 
 ```bash
 RAG_ENABLED=false
-RAG_POSTGRES_DSN=postgres://oncall:oncall@localhost:5432/oncall_rag?sslmode=disable
-REMINDER_POSTGRES_DSN= # optional; defaults to RAG_POSTGRES_DSN
+POSTGRES_DSN=postgres://oncall:oncall@localhost:5432/oncall?sslmode=disable
+RAG_POSTGRES_DSN= # optional; defaults to POSTGRES_DSN
 
 # Embedding provider — any OpenAI-compatible /v1/embeddings endpoint works:
 # 🖥️  Local Ollama:    http://localhost:11434/v1       model: nomic-embed-text  dims: 768

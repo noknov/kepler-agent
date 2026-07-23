@@ -19,6 +19,7 @@ import (
 
 	"github.com/wati/oncall-agent/internal/config"
 	"github.com/wati/oncall-agent/internal/conversation"
+	"github.com/wati/oncall-agent/internal/eventinbox"
 	"github.com/wati/oncall-agent/internal/health"
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/observability"
@@ -30,7 +31,6 @@ import (
 	"github.com/wati/oncall-agent/internal/slack"
 	"github.com/wati/oncall-agent/internal/toolkit/gitcache"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
-	"github.com/wati/oncall-agent/internal/web"
 )
 
 func Run(ctx context.Context) error {
@@ -56,7 +56,7 @@ func Run(ctx context.Context) error {
 	if server.health != nil {
 		go server.health.Start(ctx)
 	}
-	defer server.reminderStore.Close()
+	defer server.Close()
 	go server.reminders.Start(ctx)
 	return server.ListenAndServe(ctx)
 }
@@ -73,6 +73,9 @@ type Server struct {
 	health              *health.Service
 	reminders           reminder.Scheduler
 	reminderStore       *reminder.PGStore
+	sessionStore        *session.PGStore
+	runPGStore          *runs.PGStore
+	eventInbox          *eventinbox.PGStore
 	mux                 *http.ServeMux
 	webSearchPrefs      sync.Map
 	tokenUsage          tokenUsageProvider
@@ -81,6 +84,22 @@ type Server struct {
 	eventEnqueueTimeout time.Duration
 	eventTimeout        time.Duration
 	runSemaphore        chan struct{}
+	observabilityAPI    *ObservabilityAPI
+}
+
+func (s *Server) Close() {
+	if s.eventInbox != nil {
+		s.eventInbox.Close()
+	}
+	if s.runPGStore != nil {
+		s.runPGStore.Close()
+	}
+	if s.sessionStore != nil {
+		s.sessionStore.Close()
+	}
+	if s.reminderStore != nil {
+		s.reminderStore.Close()
+	}
 }
 
 type slackEventJob struct {
@@ -95,18 +114,35 @@ type ragManagerCloser interface {
 
 func NewServer(cfg config.Config) (*Server, error) {
 	prompts.LoadFromEnv()
-	store, err := session.NewFileStore(cfg.Sessions.DataDir)
+	var cleanup []func()
+	closeOnError := func() {
+		for i := len(cleanup) - 1; i >= 0; i-- {
+			cleanup[i]()
+		}
+	}
+	store, err := session.NewPGStore(context.Background(), cfg.Storage.PostgresDSN)
 	if err != nil {
 		return nil, err
 	}
-	runStore, err := runs.NewFileStore(cfg.Observing.RunsDir)
+	cleanup = append(cleanup, store.Close)
+	runStore, err := runs.NewPGStore(context.Background(), cfg.Storage.PostgresDSN)
 	if err != nil {
+		closeOnError()
 		return nil, err
 	}
-	reminderStore, err := reminder.NewPGStore(context.Background(), cfg.Reminders.PostgresDSN)
+	cleanup = append(cleanup, runStore.Close)
+	reminderStore, err := reminder.NewPGStore(context.Background(), cfg.Storage.PostgresDSN)
 	if err != nil {
+		closeOnError()
 		return nil, err
 	}
+	cleanup = append(cleanup, reminderStore.Close)
+	eventInbox, err := eventinbox.NewPGStore(context.Background(), cfg.Storage.PostgresDSN)
+	if err != nil {
+		closeOnError()
+		return nil, err
+	}
+	cleanup = append(cleanup, eventInbox.Close)
 
 	slackClient := slack.NewClient(cfg.Slack.BotToken, cfg.Slack.BotUserID)
 	if cfg.Slack.BotUserID == "" {
@@ -154,10 +190,13 @@ func NewServer(cfg config.Config) (*Server, error) {
 		prompt:              runtime.Prompt,
 		metrics:             recorder,
 		runStore:            runStore,
+		sessionStore:        store,
+		runPGStore:          runStore,
 		ragManager:          ragManager,
 		health:              healthService,
 		reminders:           reminder.Scheduler{Store: reminderStore, Messenger: slackClient},
 		reminderStore:       reminderStore,
+		eventInbox:          eventInbox,
 		mux:                 http.NewServeMux(),
 		tokenUsage:          newTokenUsageProvider(cfg.LLM.Provider, cfg.LLM.TokenUsage),
 		eventQueue:          make(chan slackEventJob, cfg.HTTP.EventQueueSize),
@@ -166,50 +205,24 @@ func NewServer(cfg config.Config) (*Server, error) {
 		eventTimeout:        cfg.HTTP.EventTimeout,
 		runSemaphore:        runSemaphore,
 	}
+	s.observabilityAPI = newObservabilityAPI(s)
 	conv.WebSearchEnabled = func(userID string) bool {
 		return s.webSearchPreference(userID)
 	}
 	conv.Multimodal = multimodalPredicate(cfg.LLM.MultimodalModels)
-	s.routes(cfg, store, runtime, runStore, recorder, healthService, runtime.Tools)
+	s.routes(cfg, runtime, recorder, healthService, runtime.Tools)
+	cleanup = nil
 	return s, nil
 }
 
-func (s *Server) routes(cfg config.Config, store session.Store, runtime agentRuntime, runStore runs.Store, recorder *observability.Recorder, healthService *health.Service, tools *registry.Registry) {
-	s.mux.Handle("/metrics", s.observabilityHandler(s.metrics))
-	s.mux.HandleFunc("/health/dashboard", s.handleHealthDashboard)
-	s.mux.HandleFunc("/health/tools", s.handleToolHealth)
-	s.mux.HandleFunc("/health/tools/rag", s.handleRAGHealth)
-	s.mux.HandleFunc("/runs", s.handleRuns)
-	s.mux.HandleFunc("/runs/", s.handleRun)
+func (s *Server) routes(cfg config.Config, runtime agentRuntime, recorder *observability.Recorder, healthService *health.Service, tools *registry.Registry) {
+	s.observabilityAPI.Register(s.mux)
 	s.mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
 	s.mux.HandleFunc("/slack/events", s.handleSlackEvents)
 	s.mux.HandleFunc("/slack/interactions", s.handleSlackInteractions)
-
-	webHub := web.NewHub()
-	webMessenger := web.NewHubMessenger(webHub)
-	webPrompt := safety.PromptPolicy{
-		WorkspaceRoots:             cfg.Security.WorkspaceRoots,
-		IncludeRepositoryInventory: cfg.Security.PromptIncludeRepoInventory,
-	}
-	webConv := conversation.NewService(store, webMessenger, runtime.Runner, runtime.Memory, webPrompt, runtime.Redactor, recorder)
-	webConv.RunSemaphore = s.runSemaphore
-	webConv.RunStore = runStore
-	webConv.RunProvider = cfg.LLM.Provider
-	webConv.RunModel = cfg.LLM.Model
-	webConv.ModelRouter = conversation.ModelRouter{
-		DefaultModel:    cfg.LLM.Model,
-		MultimodalModel: cfg.LLM.MultimodalModel,
-	}
-	webConv.CostRates = runtime.CostRates
-	webConv.HealthSummary = healthService.SummaryPrompt
-	webConv.Multimodal = multimodalPredicate(cfg.LLM.MultimodalModels)
-	web.New(s.slack, webConv, webHub, cfg.Security.AllowedUsers, web.ModelSettings{
-		DefaultModel: cfg.LLM.Model,
-		Models:       []string{cfg.LLM.Model},
-	}).RegisterRoutes(s.mux)
 
 	log.Printf("oncall-agent configured, tools=%s", strings.Join(tools.Names(), ", "))
 }
@@ -288,6 +301,16 @@ func (s *Server) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 		return
 	}
+	claimed, err := s.eventInbox.Claim(r.Context(), envelope.EventID, envelope.Event)
+	if err != nil {
+		http.Error(w, "failed to persist event", http.StatusServiceUnavailable)
+		return
+	}
+	if !claimed {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+		return
+	}
 	if !s.enqueueSlackEvent(r.Context(), envelope.EventID, envelope.Event) {
 		http.Error(w, "event queue is full; please retry", http.StatusServiceUnavailable)
 		return
@@ -297,6 +320,10 @@ func (s *Server) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) startEventWorkers(ctx context.Context) {
+	if err := s.eventInbox.Recover(ctx); err != nil {
+		log.Printf("recover durable Slack inbox: %v", err)
+	}
+	s.replayQueuedEvents(ctx)
 	workers := s.eventWorkers
 	if workers <= 0 {
 		workers = 1
@@ -308,12 +335,64 @@ func (s *Server) startEventWorkers(ctx context.Context) {
 				case <-ctx.Done():
 					return
 				case job := <-s.eventQueue:
+					claimed, err := s.eventInbox.Start(ctx, job.eventID)
+					if err != nil {
+						log.Printf("claim Slack inbox event %s: %v", job.eventID, err)
+						continue
+					}
+					if !claimed {
+						continue
+					}
 					eventCtx, cancel := context.WithTimeout(ctx, s.eventTimeout)
-					s.handleEvent(eventCtx, job.eventID, job.event)
+					err = s.handleEvent(eventCtx, job.eventID, job.event)
 					cancel()
+					if err != nil {
+						log.Printf("handle Slack inbox event %s: %v", job.eventID, err)
+						if requeueErr := s.eventInbox.Requeue(context.Background(), job.eventID); requeueErr != nil {
+							log.Printf("requeue Slack inbox event %s: %v", job.eventID, requeueErr)
+						}
+						continue
+					}
+					if err := s.eventInbox.Complete(context.Background(), job.eventID); err != nil {
+						log.Printf("complete Slack inbox event %s: %v", job.eventID, err)
+					}
 				}
 			}
 		}()
+	}
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.replayQueuedEvents(ctx)
+			}
+		}
+	}()
+}
+
+// replayQueuedEvents keeps the database inbox as the source of truth when the
+// in-memory worker queue is full. Worker-side Start makes replay idempotent.
+func (s *Server) replayQueuedEvents(ctx context.Context) {
+	pending, err := s.eventInbox.Pending(ctx, cap(s.eventQueue))
+	if err != nil {
+		log.Printf("load durable Slack inbox: %v", err)
+		return
+	}
+	for _, item := range pending {
+		var event slack.Event
+		if err := json.Unmarshal(item.Payload, &event); err != nil {
+			log.Printf("decode queued Slack event %s: %v", item.ID, err)
+			continue
+		}
+		select {
+		case s.eventQueue <- slackEventJob{eventID: item.ID, event: event}:
+		default:
+			return
+		}
 	}
 }
 
@@ -404,22 +483,29 @@ func (s *Server) handleWebSearchToggle(userID string) {
 	}()
 }
 
-func (s *Server) handleEvent(ctx context.Context, eventID string, ev slack.Event) {
+func (s *Server) handleEvent(ctx context.Context, eventID string, ev slack.Event) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("panic while handling Slack event %s: %v", eventID, recovered)
+		}
+	}()
 	switch ev.Type {
 	case "app_home_opened":
 		s.handleAppHome(ctx, ev)
+		return nil
 	case "app_mention":
-		s.handleMention(ctx, eventID, ev)
+		return s.handleMention(ctx, eventID, ev)
 	case "message":
-		s.handleMessage(ctx, eventID, ev)
+		return s.handleMessage(ctx, eventID, ev)
 	case "file_shared":
-		s.handleFileShared(ctx, eventID, ev)
+		return s.handleFileShared(ctx, eventID, ev)
 	case "reaction_added":
 		if ev.Item.Type == "message" {
 			s.metrics.Reaction(ev.Reaction)
 			s.recordReactionFeedback(ctx, ev)
 		}
 	}
+	return nil
 }
 
 func (s *Server) recordReactionFeedback(ctx context.Context, ev slack.Event) {
@@ -571,92 +657,97 @@ func isLocalRequest(r *http.Request) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func (s *Server) handleMention(ctx context.Context, eventID string, ev slack.Event) {
+func (s *Server) handleMention(ctx context.Context, eventID string, ev slack.Event) error {
 	if !isChannelMention(ev) {
-		return
+		return nil
 	}
 	if ev.User == "" || ev.User == s.cfg.Slack.BotUserID || ev.BotID != "" {
-		return
+		return nil
 	}
 	threadTS := ev.ConversationThreadTS()
 	if !s.access.IsAllowed(ev.User, ev.Channel) {
 		s.metrics.Denied()
 		_, _ = s.slack.PostMessage(ctx, ev.Channel, threadTS, "<@"+ev.User+"> Sorry, you don't have permission to use this bot here.")
-		return
+		return nil
 	}
 	text := s.prompt.CleanUserText(s.cfg.Slack.BotUserID, ev.Text)
 	text, parts := s.attachSlackFiles(ctx, text, ev.Files)
 	if text == "" {
 		text = prompts.AppMessage("empty_mention", "")
 	}
-	s.conv.HandleMention(ctx, conversation.Request{
+	if !s.conv.HandleMention(ctx, conversation.Request{
 		EventID:      eventID,
 		UserID:       ev.User,
 		Channel:      ev.Channel,
 		ThreadTS:     threadTS,
 		Text:         text,
 		ContentParts: parts,
-	})
-}
-
-func (s *Server) handleMessage(ctx context.Context, eventID string, ev slack.Event) {
-	if isAppDM(ev) {
-		s.handleDirectMessage(ctx, eventID, ev)
-		return
+	}) {
+		return fmt.Errorf("conversation did not accept app_mention event")
 	}
-	s.handleChannelReply(ctx, eventID, ev)
+	return nil
 }
 
-func (s *Server) handleFileShared(ctx context.Context, eventID string, ev slack.Event) {
+func (s *Server) handleMessage(ctx context.Context, eventID string, ev slack.Event) error {
+	if isAppDM(ev) {
+		return s.handleDirectMessage(ctx, eventID, ev)
+	}
+	return s.handleChannelReply(ctx, eventID, ev)
+}
+
+func (s *Server) handleFileShared(ctx context.Context, eventID string, ev slack.Event) error {
 	userID := firstNonEmpty(ev.User, ev.UserID)
 	channelID := firstNonEmpty(ev.Channel, ev.ChannelID)
 	if userID == "" || userID == s.cfg.Slack.BotUserID || channelID == "" {
-		return
+		return nil
 	}
 	// Channel file uploads are only handled when Slack also emits an app_mention
 	// event for the uploaded message. Standalone file_shared events have no
 	// mention text, so responding there would violate the no-mention contract.
 	if !isDMChannel(channelID) {
-		return
+		return nil
 	}
 	file := ev.File
 	if file.ID == "" {
 		file.ID = ev.FileID
 	}
 	if file.ID == "" {
-		return
+		return nil
 	}
 	if ev.ConversationThreadTS() == "" {
 		log.Printf("skip slack file_shared %s: no message timestamp; waiting for message.file_share event", file.ID)
-		return
+		return nil
 	}
 	if !s.access.AllowsUser(userID) {
 		s.metrics.Denied()
 		_, _ = s.slack.PostMessage(ctx, channelID, ev.ConversationThreadTS(), "<@"+userID+"> Sorry, you don't have permission to use this bot.")
-		return
+		return nil
 	}
 	text, parts := s.attachSlackFiles(ctx, "", []slack.File{file})
 	if text == "" {
 		text = prompts.AppMessage("empty_dm_with_file", "")
 	}
-	s.conv.HandleMention(ctx, conversation.Request{
+	if !s.conv.HandleMention(ctx, conversation.Request{
 		EventID:      eventID,
 		UserID:       userID,
 		Channel:      channelID,
 		ThreadTS:     ev.ConversationThreadTS(),
 		Text:         text,
 		ContentParts: parts,
-	})
+	}) {
+		return fmt.Errorf("conversation did not accept file_shared event")
+	}
+	return nil
 }
 
-func (s *Server) handleDirectMessage(ctx context.Context, eventID string, ev slack.Event) {
+func (s *Server) handleDirectMessage(ctx context.Context, eventID string, ev slack.Event) error {
 	if !isUserMessageSubtype(ev.Subtype) || ev.BotID != "" || ev.User == "" || ev.User == s.cfg.Slack.BotUserID {
-		return
+		return nil
 	}
 	if !s.access.AllowsUser(ev.User) {
 		s.metrics.Denied()
 		_, _ = s.slack.PostMessage(ctx, ev.Channel, ev.ConversationThreadTS(), "<@"+ev.User+"> Sorry, you don't have permission to use this bot.")
-		return
+		return nil
 	}
 	if isThreadReply(ev) {
 		text, parts := s.attachSlackFiles(ctx, strings.TrimSpace(ev.Text), ev.Files)
@@ -668,7 +759,7 @@ func (s *Server) handleDirectMessage(ctx context.Context, eventID string, ev sla
 			Text:         text,
 			ContentParts: parts,
 		}) {
-			return
+			return nil
 		}
 	}
 	text := strings.TrimSpace(ev.Text)
@@ -676,34 +767,37 @@ func (s *Server) handleDirectMessage(ctx context.Context, eventID string, ev sla
 	if text == "" {
 		text = prompts.AppMessage("empty_dm", "")
 	}
-	s.conv.HandleMention(ctx, conversation.Request{
+	if !s.conv.HandleMention(ctx, conversation.Request{
 		EventID:      eventID,
 		UserID:       ev.User,
 		Channel:      ev.Channel,
 		ThreadTS:     ev.ConversationThreadTS(),
 		Text:         text,
 		ContentParts: parts,
-	})
+	}) {
+		return fmt.Errorf("conversation did not accept direct message event")
+	}
+	return nil
 }
 
-func (s *Server) handleChannelReply(ctx context.Context, eventID string, ev slack.Event) {
+func (s *Server) handleChannelReply(ctx context.Context, eventID string, ev slack.Event) error {
 	if !isThreadReply(ev) || !isUserMessageSubtype(ev.Subtype) || ev.BotID != "" || ev.User == "" || ev.User == s.cfg.Slack.BotUserID {
-		return
+		return nil
 	}
 	// When a user @-mentions the bot in a thread, Slack fires both an
 	// app_mention event (handled by handleMention) AND a message event here.
 	// Skip the message event for @mentions to avoid double-processing: the
 	// app_mention handler already starts a new run or enqueues the request.
 	if s.cfg.Slack.BotUserID != "" && strings.Contains(ev.Text, "<@"+s.cfg.Slack.BotUserID+">") {
-		return
+		return nil
 	}
-	if !s.access.AllowsChannel(ev.Channel) {
+	if !s.access.IsAllowed(ev.User, ev.Channel) {
 		s.metrics.Denied()
-		return
+		return nil
 	}
 	text, parts := s.attachSlackFiles(ctx, strings.TrimSpace(ev.Text), ev.Files)
 	if text == "" {
-		return
+		return nil
 	}
 	_ = s.conv.HandleReply(ctx, conversation.Request{
 		EventID:      eventID,
@@ -713,6 +807,7 @@ func (s *Server) handleChannelReply(ctx context.Context, eventID string, ev slac
 		Text:         text,
 		ContentParts: parts,
 	})
+	return nil
 }
 
 func isAppDM(ev slack.Event) bool {

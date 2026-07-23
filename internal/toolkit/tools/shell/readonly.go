@@ -308,7 +308,19 @@ func validateGit(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("git requires a subcommand")
 	}
-	sub := args[0]
+	for _, arg := range args {
+		if arg == "-c" || arg == "--config-env" || strings.HasPrefix(arg, "-c") || strings.HasPrefix(arg, "--upload-pack") || strings.HasPrefix(arg, "--receive-pack") {
+			return fmt.Errorf("git configuration or custom transport options are not allowed")
+		}
+		if arg == "--git-dir" || strings.HasPrefix(arg, "--git-dir=") || arg == "--work-tree" || strings.HasPrefix(arg, "--work-tree=") ||
+			arg == "--namespace" || strings.HasPrefix(arg, "--namespace=") || strings.HasPrefix(arg, "--exec-path") {
+			return fmt.Errorf("git repository/environment override option %q is not allowed", arg)
+		}
+	}
+	sub, err := gitSubcommand(args)
+	if err != nil {
+		return err
+	}
 	// Block operations that push or modify remote state, permanently rewrite
 	// history, or mutate the working tree. checkout/switch/reset/restore are
 	// blocked because all users share the same physical repo directories —
@@ -335,12 +347,31 @@ func validateGit(args []string) error {
 	if blocked[sub] {
 		return fmt.Errorf("git %s modifies repository state and is not allowed", sub)
 	}
-	for _, arg := range args {
-		if arg == "-c" || arg == "--config-env" || strings.HasPrefix(arg, "-c") || strings.HasPrefix(arg, "--upload-pack") || strings.HasPrefix(arg, "--receive-pack") {
-			return fmt.Errorf("git configuration or custom transport options are not allowed")
+	return nil
+}
+
+func gitSubcommand(args []string) (string, error) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-C":
+			i++
+			if i >= len(args) {
+				return "", fmt.Errorf("git -C requires a path")
+			}
+		case strings.HasPrefix(arg, "-C") && arg != "-C":
+			return "", fmt.Errorf("git -C must pass the path as a separate argument")
+		case arg == "--no-pager" || arg == "--no-optional-locks" || arg == "--bare":
+			continue
+		case strings.HasPrefix(arg, "--"):
+			return "", fmt.Errorf("git global option %q is not allowed", arg)
+		case strings.HasPrefix(arg, "-"):
+			return "", fmt.Errorf("git global option %q is not allowed", arg)
+		default:
+			return arg, nil
 		}
 	}
-	return nil
+	return "", fmt.Errorf("git requires a subcommand")
 }
 
 func validateKubectl(args []string) error {
