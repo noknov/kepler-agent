@@ -119,27 +119,6 @@ func TestGitReadDefaultsToRemoteDefaultBranchNotCurrentCheckout(t *testing.T) {
 	}
 }
 
-func TestPRContextPinsBareDiffPathToPRHead(t *testing.T) {
-	root, work := testGitRepo(t)
-	runGit(t, work, "checkout", "-b", "feature")
-	if err := os.WriteFile(filepath.Join(work, "app.go"), []byte("package app\nconst value = \"pr-head\"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, work, "add", "app.go")
-	runGit(t, work, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "feature")
-	runGit(t, work, "push", "origin", "feature")
-	head := strings.TrimSpace(runGitOutput(t, work, "rev-parse", "HEAD"))
-	rt := registry.Runtime{Cache: registry.NewRuntimeCache()}
-	registry.SetPRContext(rt, registry.PRContext{Repository: "example/work", RepoPath: "work", HeadRef: "feature", HeadSHA: head, ChangedFiles: []string{"app.go"}})
-	result, err := (ReadFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}).Execute(context.Background(), json.RawMessage(`{"path":"app.go"}`), rt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(result.Content, "pr-head") || !strings.Contains(result.Content, "ref="+head) {
-		t.Fatalf("PR read must use the head SHA, got %q", result.Content)
-	}
-}
-
 func TestGitReadAllowsConcurrentBranchSnapshotsWithoutCheckout(t *testing.T) {
 	root, work := testGitRepo(t)
 	runGit(t, work, "checkout", "-b", "feature")

@@ -48,7 +48,6 @@ func (t ReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
 	}
-	applyPRReadContext(&args.Path, &args.Source, rt)
 	path, err := resolveReadableFile(t.Paths, args.Path)
 	if err != nil {
 		return registry.Result{}, err
@@ -139,27 +138,6 @@ func (t ReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 	return registry.Result{Content: header + b.String()}, nil
 }
 
-// applyPRReadContext makes normal code reads safe for PR review. Git diffs
-// contain paths relative to the repository, while workspace roots may contain
-// many repositories; reading them as workspace-relative paths is ambiguous.
-func applyPRReadContext(path, source *string, rt registry.Runtime) {
-	pr, ok := registry.PRContextFromRuntime(rt)
-	if !ok || path == nil || source == nil {
-		return
-	}
-	clean := strings.Trim(strings.TrimSpace(*path), "/")
-	if clean == "" || filepath.IsAbs(clean) || strings.HasPrefix(clean, pr.RepoPath+"/") {
-		if clean != "" && !filepath.IsAbs(clean) && strings.TrimSpace(*source) == "" {
-			*source = pr.HeadSHA
-		}
-		return
-	}
-	*path = filepath.ToSlash(filepath.Join(pr.RepoPath, clean))
-	if strings.TrimSpace(*source) == "" || strings.TrimSpace(*source) == "default_branch" {
-		*source = pr.HeadSHA
-	}
-}
-
 type SearchTool struct {
 	Paths safety.WorkspacePolicy
 }
@@ -193,7 +171,6 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
 	}
-	applyPRSearchContext(&args.Path, &args.Source, rt)
 	if strings.TrimSpace(args.Query) == "" {
 		return registry.Result{}, fmt.Errorf("query is required")
 	}
@@ -297,21 +274,6 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 		resultLines = append(resultLines[:args.Limit], "...[truncated after "+strconv.Itoa(args.Limit)+" matches]")
 	}
 	return registry.Result{Content: "[source: working_tree]\n\nSearch hits are hints; read matching files before claiming behavior.\n" + strings.Join(resultLines, "\n")}, nil
-}
-
-func applyPRSearchContext(path, source *string, rt registry.Runtime) {
-	pr, ok := registry.PRContextFromRuntime(rt)
-	if !ok || path == nil || source == nil {
-		return
-	}
-	if strings.TrimSpace(*path) == "" {
-		*path = pr.RepoPath
-	} else {
-		applyPRReadContext(path, source, rt)
-	}
-	if strings.TrimSpace(*source) == "" || strings.TrimSpace(*source) == "default_branch" {
-		*source = pr.HeadSHA
-	}
 }
 
 func sourceRef(ctx context.Context, repoDir, source string, rt registry.Runtime) (string, string, error) {

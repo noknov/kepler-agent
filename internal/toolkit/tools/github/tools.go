@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -680,7 +679,7 @@ func (PRDiffTool) Parallel() bool { return true }
 func (t PRDiffTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"github-pr_diff",
-		"Start a pull-request review. Stores the repository, immutable head SHA, base branch, and changed-file manifest for this run. Use github-pr_file_diff for a targeted file diff; code and git reads for this PR automatically use the stored head SHA.",
+		"Read a compact pull-request review manifest. Use github-pr_file_diff for a targeted file diff instead of paging a whole PR diff.",
 		registry.ObjectSchema([]string{"pr"}, map[string]any{
 			"repository": map[string]any{"type": "string", "description": ""},
 			"pr":         map[string]any{"type": "integer", "description": ""},
@@ -764,9 +763,8 @@ func (t PRDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	diff := string(diffBody)
 
 	files := diffFileIndex(diff)
-	registry.SetPRContext(rt, registry.PRContext{
+	setPRDiffContext(rt, prDiffContext{
 		Repository: repository,
-		RepoPath:   filepath.Base(repo),
 		Number:     args.PR,
 		HeadRef:    prMeta.Head.Ref,
 		HeadSHA:    prMeta.Head.SHA,
@@ -785,7 +783,7 @@ func (t PRDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	// through github-pr_file_diff so it never forces the model to paginate a
 	// giant spill blob before it can inspect code at the PR head.
 	var out strings.Builder
-	fmt.Fprintf(&out, "PR review context established\nrepository=%s\nlocal_repo=%s\npr=%d\nhead_ref=%s\nhead_sha=%s\nbase_ref=%s\n", repository, filepath.Base(repo), args.PR, prMeta.Head.Ref, prMeta.Head.SHA, prMeta.Base.Ref)
+	fmt.Fprintf(&out, "PR diff context established\nrepository=%s\npr=%d\nhead_ref=%s\nhead_sha=%s\nbase_ref=%s\n", repository, args.PR, prMeta.Head.Ref, prMeta.Head.SHA, prMeta.Base.Ref)
 	fmt.Fprintf(&out, "\nPR #%d: %s\n", args.PR, prMeta.Title)
 	fmt.Fprintf(&out, "State: %s | Merged: %t | Commits: %d\n", prMeta.State, prMeta.Merged, prMeta.Commits)
 	fmt.Fprintf(&out, "Base: %s ← Head: %s (%s)\n", prMeta.Base.Ref, prMeta.Head.Ref, prMeta.Head.SHA[:min(7, len(prMeta.Head.SHA))])
@@ -799,9 +797,54 @@ func (t PRDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	for _, file := range files {
 		fmt.Fprintf(&out, "- %s (hunks=%d +%d/-%d)\n", file.Path, file.Hunks, file.Additions, file.Deletions)
 	}
-	fmt.Fprint(&out, "\nUse github-pr_file_diff with one changed path for a focused patch. For surrounding source, use code-read_file or git-read_file_ref; this PR context pins those reads to head_sha.\n")
+	fmt.Fprint(&out, "\nUse github-pr_file_diff with one changed path for a focused patch. For surrounding source, pass the shown repository and head_sha/head_ref explicitly to git or code tools.\n")
 
 	return registry.Result{Content: out.String()}, nil
+}
+
+type prDiffContext struct {
+	Repository   string
+	Number       int
+	HeadRef      string
+	HeadSHA      string
+	BaseRef      string
+	ChangedFiles []string
+	Diff         string
+}
+
+const prDiffContextCacheKey = "github-pr-diff-context"
+
+func setPRDiffContext(rt registry.Runtime, ctx prDiffContext) {
+	if rt.Cache == nil {
+		return
+	}
+	ctx.Repository = strings.TrimSpace(ctx.Repository)
+	ctx.HeadRef = strings.TrimSpace(ctx.HeadRef)
+	ctx.HeadSHA = strings.TrimSpace(ctx.HeadSHA)
+	ctx.BaseRef = strings.TrimSpace(ctx.BaseRef)
+	rt.Cache.Set(prDiffContextCacheKey, ctx)
+}
+
+func prDiffContextFromRuntime(rt registry.Runtime) (prDiffContext, bool) {
+	if rt.Cache == nil {
+		return prDiffContext{}, false
+	}
+	v, ok := rt.Cache.Get(prDiffContextCacheKey)
+	if !ok {
+		return prDiffContext{}, false
+	}
+	ctx, ok := v.(prDiffContext)
+	return ctx, ok && ctx.Repository != "" && ctx.HeadSHA != ""
+}
+
+func (p prDiffContext) containsPath(path string) bool {
+	path = strings.Trim(strings.TrimSpace(path), "/")
+	for _, changed := range p.ChangedFiles {
+		if path == strings.Trim(changed, "/") {
+			return true
+		}
+	}
+	return false
 }
 
 type diffFile struct {
@@ -852,12 +895,12 @@ func (PRFileDiffTool) Execute(_ context.Context, raw json.RawMessage, rt registr
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
 	}
-	pr, ok := registry.PRContextFromRuntime(rt)
+	pr, ok := prDiffContextFromRuntime(rt)
 	if !ok {
 		return registry.Result{}, fmt.Errorf("no PR review context; call github-pr_diff first")
 	}
 	path := strings.Trim(strings.TrimSpace(args.Path), "/")
-	if !pr.ContainsPath(path) {
+	if !pr.containsPath(path) {
 		return registry.Result{}, fmt.Errorf("%q is not a changed file in %s#%d", path, pr.Repository, pr.Number)
 	}
 	needle := "diff --git a/" + path + " b/" + path

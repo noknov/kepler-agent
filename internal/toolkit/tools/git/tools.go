@@ -70,7 +70,6 @@ func (t FetchRefTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 		Branch string `json:"branch"`
 	}
 	_ = json.Unmarshal(raw, &args)
-	applyPRFetchContext(&args.Repo, &args.Branch, rt)
 	repo, err := t.repo(args.Repo)
 	if err != nil {
 		return registry.Result{}, err
@@ -80,32 +79,6 @@ func (t FetchRefTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 		return registry.Result{}, err
 	}
 	return registry.Result{Content: snap.header()}, nil
-}
-
-func applyPRFetchContext(repo, branch *string, rt registry.Runtime) {
-	pr, ok := registry.PRContextFromRuntime(rt)
-	if !ok || repo == nil || branch == nil {
-		return
-	}
-	if strings.TrimSpace(*repo) == "" {
-		*repo = pr.RepoPath
-	}
-	if strings.TrimSpace(*branch) == "" {
-		*branch = pr.HeadRef
-	}
-}
-
-func applyPRRefContext(repo, ref *string, rt registry.Runtime) {
-	pr, ok := registry.PRContextFromRuntime(rt)
-	if !ok || repo == nil || ref == nil {
-		return
-	}
-	if strings.TrimSpace(*repo) == "" {
-		*repo = pr.RepoPath
-	}
-	if strings.TrimSpace(*ref) == "" {
-		*ref = pr.HeadSHA
-	}
 }
 
 type snapshot struct {
@@ -125,9 +98,9 @@ func (t SearchRefTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-search_ref",
 		"Search an immutable git ref returned by git-fetch_ref. Use for branch-specific code investigation without changing the checkout. Search hits are hints; read matching ranges before claiming behavior.",
-		registry.ObjectSchema([]string{"query"}, map[string]any{
-			"repo":  map[string]any{"type": "string", "description": "Repository returned by git-fetch_ref. Defaults to the active PR repository."},
-			"ref":   map[string]any{"type": "string", "description": "Immutable commit SHA returned by git-fetch_ref. Defaults to the active PR head SHA."},
+		registry.ObjectSchema([]string{"repo", "query", "ref"}, map[string]any{
+			"repo":  map[string]any{"type": "string", "description": "Repository returned by git-fetch_ref."},
+			"ref":   map[string]any{"type": "string", "description": "Immutable commit SHA returned by git-fetch_ref, or an explicit safe ref."},
 			"query": map[string]any{"type": "string", "description": "Pattern to search."},
 			"path":  map[string]any{"type": "string", "description": "Optional path inside the repo."},
 			"limit": map[string]any{"type": "integer", "description": "Maximum matches, default 50 and max 200."},
@@ -146,7 +119,6 @@ func (t SearchRefTool) Execute(ctx context.Context, raw json.RawMessage, rt regi
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
 	}
-	applyPRRefContext(&args.Repo, &args.Ref, rt)
 	if strings.TrimSpace(args.Query) == "" {
 		return registry.Result{}, fmt.Errorf("query is required")
 	}
@@ -193,7 +165,7 @@ func (RepoSearchTool) Parallel() bool { return true }
 func (t RepoSearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"repo-search",
-		"Search a remote branch snapshot. In an active PR review, omitted repo and branch default to the PR repository and head branch; this never checks out a branch.",
+		"Search the refreshed remote branch snapshot for a repo. Omit branch for origin/HEAD, mt-main/main/master fallback. This reads origin refs and never checks out the branch, so concurrent users can inspect different branches safely.",
 		registry.ObjectSchema([]string{"query"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch": map[string]any{"type": "string", "description": "Remote branch name. Omit for default branch."},
@@ -215,7 +187,6 @@ func (t RepoSearchTool) Execute(ctx context.Context, raw json.RawMessage, rt reg
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
 	}
-	applyPRFetchContext(&args.Repo, &args.Branch, rt)
 	if strings.TrimSpace(args.Query) == "" {
 		return registry.Result{}, fmt.Errorf("query is required")
 	}
@@ -266,9 +237,9 @@ func (t ReadFileRefTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-read_file_ref",
 		"Read a file at an immutable git ref returned by git-fetch_ref. Use this for branch-specific evidence without changing the checkout.",
-		registry.ObjectSchema([]string{"path"}, map[string]any{
-			"repo":       map[string]any{"type": "string", "description": "Repository returned by git-fetch_ref. Defaults to the active PR repository."},
-			"ref":        map[string]any{"type": "string", "description": "Immutable commit SHA returned by git-fetch_ref. Defaults to the active PR head SHA."},
+		registry.ObjectSchema([]string{"repo", "ref", "path"}, map[string]any{
+			"repo":       map[string]any{"type": "string", "description": "Repository returned by git-fetch_ref."},
+			"ref":        map[string]any{"type": "string", "description": "Immutable commit SHA returned by git-fetch_ref, or an explicit safe ref."},
 			"path":       map[string]any{"type": "string", "description": "Path inside the repo."},
 			"start_line": map[string]any{"type": "integer", "description": "1-based starting line."},
 			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines, default 240 and max 1000."},
@@ -287,7 +258,6 @@ func (t ReadFileRefTool) Execute(ctx context.Context, raw json.RawMessage, rt re
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
 	}
-	applyPRRefContext(&args.Repo, &args.Ref, rt)
 	repo, err := t.explicitRepo(args.Repo)
 	if err != nil {
 		return registry.Result{}, err
@@ -344,7 +314,7 @@ func (RepoReadFileTool) Parallel() bool { return true }
 func (t RepoReadFileTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"repo-read_file",
-		"Read a file from a remote branch snapshot. In an active PR review, omitted repo and branch default to the PR repository and head branch; this never checks out the working tree.",
+		"Read a file from the refreshed remote branch snapshot. Omit branch for origin/HEAD, mt-main/main/master fallback. This never checks out or updates the working tree.",
 		registry.ObjectSchema([]string{"path"}, map[string]any{
 			"repo":       map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch":     map[string]any{"type": "string", "description": "Remote branch name. Omit for default branch."},
@@ -366,7 +336,6 @@ func (t RepoReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt r
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
 	}
-	applyPRFetchContext(&args.Repo, &args.Branch, rt)
 	repo, err := t.repo(args.Repo)
 	if err != nil {
 		return registry.Result{}, err
