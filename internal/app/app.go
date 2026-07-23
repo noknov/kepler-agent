@@ -17,19 +17,19 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/config"
-	"github.com/wati/oncall-agent/internal/conversation"
-	"github.com/wati/oncall-agent/internal/eventinbox"
-	"github.com/wati/oncall-agent/internal/health"
-	"github.com/wati/oncall-agent/internal/observability"
-	"github.com/wati/oncall-agent/internal/prompts"
-	"github.com/wati/oncall-agent/internal/reminder"
-	"github.com/wati/oncall-agent/internal/runs"
-	"github.com/wati/oncall-agent/internal/safety"
-	"github.com/wati/oncall-agent/internal/session"
-	"github.com/wati/oncall-agent/internal/slack"
-	"github.com/wati/oncall-agent/internal/toolkit/gitcache"
-	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/internal/config"
+	"github.com/noknov/slack-copilot-agent/internal/conversation"
+	"github.com/noknov/slack-copilot-agent/internal/eventinbox"
+	"github.com/noknov/slack-copilot-agent/internal/health"
+	"github.com/noknov/slack-copilot-agent/internal/observability"
+	"github.com/noknov/slack-copilot-agent/internal/prompts"
+	"github.com/noknov/slack-copilot-agent/internal/reminder"
+	"github.com/noknov/slack-copilot-agent/internal/runs"
+	"github.com/noknov/slack-copilot-agent/internal/safety"
+	"github.com/noknov/slack-copilot-agent/internal/session"
+	"github.com/noknov/slack-copilot-agent/internal/slack"
+	"github.com/noknov/slack-copilot-agent/internal/toolkit/gitcache"
+	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
 
 func Run(ctx context.Context) error {
@@ -256,7 +256,7 @@ func (s *Server) routes(cfg config.Config, runtime agentRuntime, recorder *obser
 	s.mux.HandleFunc("/slack/events", s.handleSlackEvents)
 	s.mux.HandleFunc("/slack/interactions", s.handleSlackInteractions)
 
-	log.Printf("oncall-agent configured, tools=%s", strings.Join(tools.Names(), ", "))
+	log.Printf("slack-copilot-agent configured, tools=%s", strings.Join(tools.Names(), ", "))
 }
 
 func multimodalPredicate(models []string) func(string) bool {
@@ -296,7 +296,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			s.cancel()
 		}
 	}()
-	log.Printf("oncall-agent listening on %s", s.cfg.HTTP.Addr)
+	log.Printf("slack-copilot-agent listening on %s", s.cfg.HTTP.Addr)
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		if s.cancel != nil {
 			s.cancel()
@@ -623,7 +623,10 @@ func (s *Server) authorizeObservability(r *http.Request) bool {
 	if token == "" {
 		return s.cfg.Observing.AllowUnauthenticated && isLocalRequest(r)
 	}
-	got := strings.TrimSpace(r.Header.Get("X-Oncall-Agent-Admin-Token"))
+	got := strings.TrimSpace(r.Header.Get("X-Slack-Copilot-Agent-Admin-Token"))
+	if got == "" {
+		got = strings.TrimSpace(r.Header.Get("X-Oncall-Agent-Admin-Token"))
+	}
 	if got == "" {
 		auth := strings.TrimSpace(r.Header.Get("Authorization"))
 		if strings.HasPrefix(strings.ToLower(auth), "bearer ") {

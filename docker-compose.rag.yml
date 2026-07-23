@@ -1,20 +1,20 @@
 services:
   pgvector:
     image: pgvector/pgvector:pg17
-    container_name: oncall-rag-pgvector
+    container_name: slack-copilot-rag-pgvector
     ports:
       - "127.0.0.1:5432:5432"
     environment:
-      POSTGRES_USER: oncall
-      POSTGRES_PASSWORD: oncall
-      POSTGRES_DB: oncall_rag
+      POSTGRES_USER: slack_copilot
+      POSTGRES_PASSWORD: slack_copilot
+      POSTGRES_DB: slack_copilot_rag
     volumes:
       - rag_pgdata:/var/lib/postgresql/data
     restart: unless-stopped
 
   pgadmin:
     image: dpage/pgadmin4:latest
-    container_name: oncall-rag-pgadmin
+    container_name: slack-copilot-rag-pgadmin
     ports:
       - "127.0.0.1:5480:80"
     environment:

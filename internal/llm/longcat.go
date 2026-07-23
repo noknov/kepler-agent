@@ -72,11 +72,11 @@ func enrichLongCatCalls(resp Response) Response {
 
 // ─── XML parsing ─────────────────────────────────────────────────────────────
 
-const lcOpen  = "<longcat_tool_call>"
+const lcOpen = "<longcat_tool_call>"
 const lcClose = "</longcat_tool_call>"
 
 var lcBlockRE = regexp.MustCompile(`(?s)<longcat_tool_call>(.*?)</longcat_tool_call>`)
-var lcArgRE   = regexp.MustCompile(`(?s)<longcat_arg_key>(.*?)</longcat_arg_key>\s*<longcat_arg_value>(.*?)</longcat_arg_value>`)
+var lcArgRE = regexp.MustCompile(`(?s)<longcat_arg_key>(.*?)</longcat_arg_key>\s*<longcat_arg_value>(.*?)</longcat_arg_value>`)
 
 func parseLongCatXML(text string) []ToolCall {
 	blocks := lcBlockRE.FindAllStringSubmatch(text, -1)

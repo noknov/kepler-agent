@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
 )
 
 type Snapshot struct {

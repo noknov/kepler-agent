@@ -809,7 +809,7 @@ func TestLoadObservabilityAuthConfig(t *testing.T) {
 func writeEnvFile(t *testing.T, dir string, values map[string]string) {
 	t.Helper()
 	if _, ok := values["POSTGRES_DSN"]; !ok {
-		values["POSTGRES_DSN"] = "postgres://test:test@localhost:5432/oncall?sslmode=disable"
+		values["POSTGRES_DSN"] = "postgres://test:test@localhost:5432/slack_copilot?sslmode=disable"
 	}
 	lines := make([]string, 0, len(values))
 	for key, value := range values {

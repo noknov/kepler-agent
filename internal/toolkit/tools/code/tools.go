@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/llm"
-	"github.com/wati/oncall-agent/internal/safety"
-	"github.com/wati/oncall-agent/internal/toolkit/gitcache"
-	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/safety"
+	"github.com/noknov/slack-copilot-agent/internal/toolkit/gitcache"
+	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
 
 type ReadFileTool struct {

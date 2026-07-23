@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/wati/oncall-agent/internal/app"
+	"github.com/noknov/slack-copilot-agent/internal/app"
 )
 
 func main() {

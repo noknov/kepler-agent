@@ -12,7 +12,7 @@ import (
 )
 
 // PGStore is a PostgreSQL-backed reminder store. Due atomically leases rows,
-// making delivery safe when several oncall-agent instances are running.
+// making delivery safe when several slack-copilot-agent instances are running.
 type PGStore struct{ pool *pgxpool.Pool }
 
 func NewPGStore(ctx context.Context, dsn string) (*PGStore, error) {

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wati/oncall-agent/internal/llm"
-	"github.com/wati/oncall-agent/internal/prompts"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/prompts"
 )
 
 func TestFilterPersistentTurnsRemovesToolErrors(t *testing.T) {

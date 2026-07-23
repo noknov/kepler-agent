@@ -3,10 +3,10 @@ package app
 import (
 	"context"
 
-	"github.com/wati/oncall-agent/internal/config"
-	"github.com/wati/oncall-agent/internal/conversation"
-	"github.com/wati/oncall-agent/internal/slack"
-	ttsTools "github.com/wati/oncall-agent/internal/toolkit/tools/tts"
+	"github.com/noknov/slack-copilot-agent/internal/config"
+	"github.com/noknov/slack-copilot-agent/internal/conversation"
+	"github.com/noknov/slack-copilot-agent/internal/slack"
+	ttsTools "github.com/noknov/slack-copilot-agent/internal/toolkit/tools/tts"
 )
 
 func newAutoTTSFunc(cfg config.Config, slackClient *slack.Client) conversation.AutoTTSFunc {

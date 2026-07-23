@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/prompts"
+	"github.com/noknov/slack-copilot-agent/internal/prompts"
 )
 
 func TestSystemPromptDefaultStaysGeneric(t *testing.T) {

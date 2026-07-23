@@ -14,9 +14,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/wati/oncall-agent/internal/llm"
-	"github.com/wati/oncall-agent/internal/memory"
-	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/memory"
+	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
 
 func TestLooksRepetitive(t *testing.T) {

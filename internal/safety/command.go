@@ -18,7 +18,7 @@ type CommandPolicy struct {
 // It blocks destructive patterns that could appear via argument injection.
 func NewCommandPolicy() CommandPolicy {
 	patterns := []string{
-		`(?i)\brm\s+.*-[^\s]*r[^\s]*f`,           // rm -rf, rm -fr, rm --recursive --force
+		`(?i)\brm\s+.*-[^\s]*r[^\s]*f`,            // rm -rf, rm -fr, rm --recursive --force
 		`(?i)\brm\s+-rf\b`,                        // explicit rm -rf
 		`(?i)\b(terraform|tofu)\s+destroy\b`,      // terraform destroy
 		`(?i)\bkubectl\s+delete\b`,                // kubectl delete anything
@@ -30,7 +30,7 @@ func NewCommandPolicy() CommandPolicy {
 		`(?i)\bchmod\s+777\b`,                     // open world-writable
 		`(?i)\bcurl\b.*\|\s*(ba)?sh`,              // pipe curl to shell
 		`(?i)\bwget\b.*\|\s*(ba)?sh`,              // pipe wget to shell
-		`(?i);|\|.*sh\s+-c|&&\s*rm\b`,            // shell injection attempts
+		`(?i);|\|.*sh\s+-c|&&\s*rm\b`,             // shell injection attempts
 	}
 	compiled := make([]*regexp.Regexp, 0, len(patterns))
 	for _, p := range patterns {

@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/rag/embedding"
-	"github.com/wati/oncall-agent/internal/rag/indexer"
-	"github.com/wati/oncall-agent/internal/rag/search"
-	"github.com/wati/oncall-agent/internal/rag/store"
+	"github.com/noknov/slack-copilot-agent/internal/rag/embedding"
+	"github.com/noknov/slack-copilot-agent/internal/rag/indexer"
+	"github.com/noknov/slack-copilot-agent/internal/rag/search"
+	"github.com/noknov/slack-copilot-agent/internal/rag/store"
 )
 
 type Config struct {

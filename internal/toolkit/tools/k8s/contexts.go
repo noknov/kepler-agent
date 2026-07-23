@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/wati/oncall-agent/internal/llm"
-	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
 
 // ContextsTool lists pre-provisioned kubeconfig contexts without exposing

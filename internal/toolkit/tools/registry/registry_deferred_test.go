@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
 )
 
 type stubTool struct {

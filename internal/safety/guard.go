@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/prompts"
+	"github.com/noknov/slack-copilot-agent/internal/prompts"
 )
 
 var secretPatterns = []*regexp.Regexp{

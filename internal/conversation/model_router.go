@@ -1,6 +1,6 @@
 package conversation
 
-import "github.com/wati/oncall-agent/internal/llm"
+import "github.com/noknov/slack-copilot-agent/internal/llm"
 
 type ModelRoute struct {
 	Model  string

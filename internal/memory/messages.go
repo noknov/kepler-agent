@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
 )
 
 // PrepareForLLM normalizes conversation history before sending it back to

@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/config"
+	"github.com/noknov/slack-copilot-agent/internal/config"
 )
 
 type tokenUsageProvider interface {
@@ -102,7 +102,7 @@ func (c *opencodeTokenUsageClient) fetch(ctx context.Context, _ time.Time) (toke
 		return tokenUsageSummary{}, err
 	}
 	req.Header.Set("Accept", "text/html")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; oncall-agent/1.0)")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; slack-copilot-agent/1.0)")
 	req.Header.Set("Cookie", c.authCookie)
 
 	resp, err := c.httpClient.Do(req)

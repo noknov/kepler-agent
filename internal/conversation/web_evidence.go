@@ -5,8 +5,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/wati/oncall-agent/internal/agent"
-	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/agent"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
 )
 
 const maxWebEvidenceItems = 5

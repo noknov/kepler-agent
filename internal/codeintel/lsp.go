@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/safety"
+	"github.com/noknov/slack-copilot-agent/internal/safety"
 )
 
 type Manager struct {
@@ -864,7 +864,7 @@ func runCommand(ctx context.Context, dir, name string, timeout time.Duration, ar
 func isolatedGoEnv(repo string) ([]string, error) {
 	sum := sha256.Sum256([]byte(filepath.Clean(repo)))
 	key := hex.EncodeToString(sum[:8])
-	base := filepath.Join(os.TempDir(), "oncall-agent-codeintel", key)
+	base := filepath.Join(os.TempDir(), "slack-copilot-agent-codeintel", key)
 	dirs := []string{
 		filepath.Join(base, "home"),
 		filepath.Join(base, "go-build"),

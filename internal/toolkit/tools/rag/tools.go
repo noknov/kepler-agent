@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/wati/oncall-agent/internal/llm"
-	internrag "github.com/wati/oncall-agent/internal/rag"
-	"github.com/wati/oncall-agent/internal/rag/store"
-	"github.com/wati/oncall-agent/internal/safety"
-	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
+	internrag "github.com/noknov/slack-copilot-agent/internal/rag"
+	"github.com/noknov/slack-copilot-agent/internal/rag/store"
+	"github.com/noknov/slack-copilot-agent/internal/safety"
+	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
 
 type SearchTool struct {

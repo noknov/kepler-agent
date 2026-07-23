@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	reminderStore "github.com/wati/oncall-agent/internal/reminder"
-	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	reminderStore "github.com/noknov/slack-copilot-agent/internal/reminder"
+	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
 
 func TestCreateListAndCancelReminder(t *testing.T) {

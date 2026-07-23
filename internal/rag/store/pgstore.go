@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	pgvector "github.com/pgvector/pgvector-go"
 
-	"github.com/wati/oncall-agent/internal/rag/chunk"
+	"github.com/noknov/slack-copilot-agent/internal/rag/chunk"
 )
 
 type PGStore struct {

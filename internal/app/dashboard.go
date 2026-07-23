@@ -160,14 +160,14 @@ const healthDashboardHTML = `<!doctype html>
     </div>
   </main>
   <script>
-    const tokenKey = "oncallAgentAdminToken";
+    const tokenKey = "slackCopilotAgentAdminToken";
     const statusHTML = status => '<span class="status ' + esc(status || "unknown") + '"><span class="dot"></span>' + esc(status || "unknown") + '</span>';
     const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
     const short = value => value ? String(value).slice(0, 10) : "-";
     const fmtDate = value => value ? new Date(value).toLocaleString() : "-";
     const headers = () => {
       const token = localStorage.getItem(tokenKey) || "";
-      return token ? { "X-Oncall-Agent-Admin-Token": token } : {};
+      return token ? { "X-Slack-Copilot-Agent-Admin-Token": token } : {};
     };
     async function getJSON(path) {
       const res = await fetch(path, { headers: headers() });

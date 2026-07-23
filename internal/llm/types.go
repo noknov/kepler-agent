@@ -121,9 +121,9 @@ type ToolSpecFunction struct {
 }
 
 type Request struct {
-	Model       string
-	Messages    []Message
-	Tools       []ToolSpec
+	Model    string
+	Messages []Message
+	Tools    []ToolSpec
 	// ToolChoice controls how the model selects tools. The empty string means
 	// the provider default (typically "auto"). Use "none" to let the model see
 	// tool schemas (so it knows parameter formats) while prohibiting tool calls.
@@ -164,10 +164,10 @@ type StreamCallback func(delta string)
 
 // StreamHandler receives typed streaming events from ChatStream.
 type StreamHandler struct {
-	OnText              func(delta string)
-	OnToolCallsStarted  func()
-	OnToolCallComplete  func(call ToolCall)
-	OnUsage             func(usage Usage)
+	OnText             func(delta string)
+	OnToolCallsStarted func()
+	OnToolCallComplete func(call ToolCall)
+	OnUsage            func(usage Usage)
 }
 
 func TextStream(cb StreamCallback) StreamHandler {

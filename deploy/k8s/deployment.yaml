@@ -1,31 +1,31 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: oncall-agent
-  namespace: oncall-agent
+  name: slack-copilot-agent
+  namespace: slack-copilot-agent
   labels:
-    app.kubernetes.io/name: oncall-agent
+    app.kubernetes.io/name: slack-copilot-agent
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: oncall-agent
+      app.kubernetes.io/name: slack-copilot-agent
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: oncall-agent
+        app.kubernetes.io/name: slack-copilot-agent
     spec:
       terminationGracePeriodSeconds: 120
       containers:
-        - name: oncall-agent
-          image: ghcr.io/your-org/oncall-agent:latest
+        - name: slack-copilot-agent
+          image: ghcr.io/your-org/slack-copilot-agent:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8080
           envFrom:
             - secretRef:
-                name: oncall-agent-secrets
+                name: slack-copilot-agent-secrets
           env:
             - name: HTTP_ADDR
               value: ":8080"
@@ -34,7 +34,7 @@ spec:
             - name: ALLOWED_SLACK_USERS
               valueFrom:
                 secretKeyRef:
-                  name: oncall-agent-secrets
+                  name: slack-copilot-agent-secrets
                   key: ALLOWED_SLACK_USERS
                   optional: true
             - name: SLACK_EVENT_TIMEOUT

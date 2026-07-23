@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
 
 type fakeUploader struct {

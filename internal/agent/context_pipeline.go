@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/wati/oncall-agent/internal/llm"
-	"github.com/wati/oncall-agent/internal/memory"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/memory"
 )
 
 // aggregateToolResultBudget is the total character limit for all tool results

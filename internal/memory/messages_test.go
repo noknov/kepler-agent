@@ -3,7 +3,7 @@ package memory
 import (
 	"testing"
 
-	"github.com/wati/oncall-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
 )
 
 func TestPrepareForLLMFillsMissingToolResponses(t *testing.T) {

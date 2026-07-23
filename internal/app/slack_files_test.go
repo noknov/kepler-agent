@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wati/oncall-agent/internal/slack"
+	"github.com/noknov/slack-copilot-agent/internal/slack"
 )
 
 func TestAppendSlackFilesWithPDFMetadata(t *testing.T) {

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/mcp"
-	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/internal/mcp"
+	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
 
 func TestIntegration_PlaywrightMCPRealBrowserSmoke(t *testing.T) {

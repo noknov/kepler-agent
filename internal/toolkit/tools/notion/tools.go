@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/llm"
-	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
 
 // notionBlock represents a minimal Notion block used for text extraction.
@@ -19,10 +19,10 @@ type notionBlock struct {
 	ID   string `json:"id"`
 	Type string `json:"type"`
 	// Heading levels share the same rich_text structure.
-	Heading1  *richTextBlock `json:"heading_1"`
-	Heading2  *richTextBlock `json:"heading_2"`
-	Heading3  *richTextBlock `json:"heading_3"`
-	Paragraph *richTextBlock `json:"paragraph"`
+	Heading1         *richTextBlock `json:"heading_1"`
+	Heading2         *richTextBlock `json:"heading_2"`
+	Heading3         *richTextBlock `json:"heading_3"`
+	Paragraph        *richTextBlock `json:"paragraph"`
 	BulletedListItem *richTextBlock `json:"bulleted_list_item"`
 	NumberedListItem *richTextBlock `json:"numbered_list_item"`
 	ToDo             *richTextBlock `json:"to_do"`
@@ -30,7 +30,7 @@ type notionBlock struct {
 	Quote            *richTextBlock `json:"quote"`
 	Callout          *richTextBlock `json:"callout"`
 	Code             *richTextBlock `json:"code"`
-	HasChildren bool `json:"has_children"`
+	HasChildren      bool           `json:"has_children"`
 }
 
 type richTextBlock struct {
@@ -120,7 +120,6 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, _ registry
 	}
 	return registry.Result{Content: summarizeNotionSearch(data)}, nil
 }
-
 
 func (c Client) do(ctx context.Context, method, endpoint string, payload any) ([]byte, error) {
 	var reqBody io.Reader

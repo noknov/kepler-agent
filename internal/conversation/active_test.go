@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wati/oncall-agent/internal/agent"
+	"github.com/noknov/slack-copilot-agent/internal/agent"
 )
 
 func TestSteeringAppliedMessageFormatting(t *testing.T) {

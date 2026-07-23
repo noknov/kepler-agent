@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	engine "github.com/wati/oncall-agent/internal/codeintel"
-	"github.com/wati/oncall-agent/internal/llm"
-	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	engine "github.com/noknov/slack-copilot-agent/internal/codeintel"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
 
 type SymbolsTool struct {

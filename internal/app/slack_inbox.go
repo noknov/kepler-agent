@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/slack"
+	"github.com/noknov/slack-copilot-agent/internal/slack"
 )
 
 func (s *Server) startEventWorkers(ctx context.Context) {

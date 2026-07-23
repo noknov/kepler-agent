@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/rag/chunk"
-	"github.com/wati/oncall-agent/internal/rag/store"
+	"github.com/noknov/slack-copilot-agent/internal/rag/chunk"
+	"github.com/noknov/slack-copilot-agent/internal/rag/store"
 )
 
 func TestParseNameStatus(t *testing.T) {

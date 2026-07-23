@@ -9,14 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wati/oncall-agent/internal/agent"
-	"github.com/wati/oncall-agent/internal/llm"
-	"github.com/wati/oncall-agent/internal/memory"
-	"github.com/wati/oncall-agent/internal/observability"
-	"github.com/wati/oncall-agent/internal/safety"
-	"github.com/wati/oncall-agent/internal/session"
-	"github.com/wati/oncall-agent/internal/slack"
-	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/internal/agent"
+	"github.com/noknov/slack-copilot-agent/internal/llm"
+	"github.com/noknov/slack-copilot-agent/internal/memory"
+	"github.com/noknov/slack-copilot-agent/internal/observability"
+	"github.com/noknov/slack-copilot-agent/internal/safety"
+	"github.com/noknov/slack-copilot-agent/internal/session"
+	"github.com/noknov/slack-copilot-agent/internal/slack"
+	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
 
 func TestHandleReplyIgnoresThreadWithoutPendingQuestion(t *testing.T) {
