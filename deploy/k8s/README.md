@@ -43,5 +43,5 @@ limits and Slack event retry behavior are validated.
   lease expires.
 - For multiple replicas, keep `POSTGRES_MAX_CONNS` low enough that
   `replicas * per-store pools` stays below the database limit.
-- RAG indexing and workspace auto-fetch should stay disabled in the main
-  deployment until they are split into a separate worker or CronJob.
+- Workspace auto-fetch should stay disabled in the main deployment until its
+  network and freshness trade-offs are understood for the cluster.

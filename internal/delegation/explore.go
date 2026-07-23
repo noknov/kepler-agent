@@ -354,7 +354,7 @@ Rules:
 - For broad investigations, run independent searches or reads in parallel when possible.
 - Prefer locating entry points, route mounts, state wiring, and call sites over repeatedly searching the same terms.
 - If several searches miss, diagnose the failed assumption before widening.
-- Treat semantic/RAG results as hints. Verify important claims with source reads before presenting them as evidence.
+- Treat search and codegraph results as hints. Verify important claims with source reads before presenting them as evidence.
 - Stop once you have enough evidence for the main agent to synthesize; do not keep searching for completeness after the controlling path is clear.
 
 Output format:

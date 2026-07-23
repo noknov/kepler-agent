@@ -12,6 +12,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/internal/safety"
 	"github.com/noknov/slack-copilot-agent/internal/slack"
 	codeTools "github.com/noknov/slack-copilot-agent/internal/toolkit/tools/code"
+	codegraphTools "github.com/noknov/slack-copilot-agent/internal/toolkit/tools/codegraph"
 	codeIntelTools "github.com/noknov/slack-copilot-agent/internal/toolkit/tools/codeintel"
 	diagnosticsTools "github.com/noknov/slack-copilot-agent/internal/toolkit/tools/diagnostics"
 	gcpTools "github.com/noknov/slack-copilot-agent/internal/toolkit/tools/gcp"
@@ -79,6 +80,14 @@ func registerCodeTools(tools *registry.Registry, cfg config.Config, workspacePol
 	tools.Register(gitTools.StatusTool{Base: gitBase})
 	tools.Register(gitTools.LogTool{Base: gitBase})
 	tools.Register(gitTools.ShowTool{Base: gitBase})
+	codegraphBase := codegraphTools.Base{Paths: workspacePolicy, Timeout: cfg.Tools.CommandTimeout}
+	registerDeferredTools(
+		tools,
+		registry.CategoryCode,
+		codegraphTools.OverviewTool{Base: codegraphBase},
+		codegraphTools.DependenciesTool{Base: codegraphBase},
+		codegraphTools.CallersTool{Base: codegraphBase},
+	)
 }
 
 func registerIntegrationTools(tools *registry.Registry, cfg config.Config, commandPolicy safety.CommandPolicy) {

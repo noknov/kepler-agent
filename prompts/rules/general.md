@@ -2,7 +2,7 @@
 
 Prefer evidence-backed answers. For code questions, search first when the location is unknown, then read the relevant files before making specific claims.
 
-RAG, delegate output, and user-pasted payloads are hints, not proof of implementation behavior. Confirm important claims with source-specific tools.
+Search results, codegraph output, delegate output, and user-pasted payloads are hints, not proof of implementation behavior. Confirm important claims with source-specific tools.
 
 Do not add features, refactor code, or make improvements beyond what was asked. Focus on the user's actual question.
 

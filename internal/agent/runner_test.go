@@ -1598,7 +1598,7 @@ func TestRunnerPassesAllActiveToolSpecsWithoutIntentKeywordPruning(t *testing.T)
 		"github-job_logs",
 		"slack-file_search",
 		"web-search",
-		"rag-search",
+		"codegraph-overview",
 		"delegate-run",
 		"explore-code",
 	}
@@ -1833,22 +1833,22 @@ func TestRunnerRetriesOnFileLineClaimWithoutCodeTool(t *testing.T) {
 	}
 }
 
-func TestRunnerDoesNotTreatRAGSearchAsCodeEvidence(t *testing.T) {
+func TestRunnerDoesNotTreatCodegraphAsCodeEvidence(t *testing.T) {
 	answer := "The guard is in internal/app/runtime.go:45."
 	client := &fakeClient{responses: []llm.Response{
 		{Message: llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{{
-			ID:   "rag_1",
+			ID:   "graph_1",
 			Type: "function",
 			Function: llm.ToolFunction{
-				Name:      "rag-search",
-				Arguments: `{"query":"runtime guard"}`,
+				Name:      "codegraph-overview",
+				Arguments: `{"repo":"."}`,
 			},
 		}}}},
 		{Message: llm.Message{Role: "assistant", Content: answer}},
 		{Message: llm.Message{Role: "assistant", Content: "I need to read the file before making that claim."}},
 	}}
 	tools := registry.New()
-	tools.Register(fakeRAGSearchTool{})
+	tools.Register(fakeCodegraphTool{})
 
 	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 5}.Run(context.Background(), Request{})
 	if err != nil {
@@ -1858,7 +1858,7 @@ func TestRunnerDoesNotTreatRAGSearchAsCodeEvidence(t *testing.T) {
 		t.Fatalf("Final = %q", result.Final)
 	}
 	if len(client.requests) != 3 {
-		t.Fatalf("expected 3 LLM calls (rag, retry, final), got %d", len(client.requests))
+		t.Fatalf("expected 3 LLM calls (graph, retry, final), got %d", len(client.requests))
 	}
 }
 
@@ -2048,21 +2048,21 @@ func (fakeReadFileTool) Execute(_ context.Context, args json.RawMessage, _ regis
 	return registry.Result{Content: "[source: git ref=origin/main commit=abc123 fetch_status=ok]\n     1  package app\n     2  func Runtime() {}\n"}, nil
 }
 
-type fakeRAGSearchTool struct{}
+type fakeCodegraphTool struct{}
 
-func (fakeRAGSearchTool) Spec() llm.ToolSpec {
+func (fakeCodegraphTool) Spec() llm.ToolSpec {
 	return llm.ToolSpec{
 		Type: "function",
 		Function: llm.ToolSpecFunction{
-			Name:        "rag-search",
-			Description: "search semantic code index",
+			Name:        "codegraph-overview",
+			Description: "build code graph",
 			Parameters:  map[string]any{"type": "object"},
 		},
 	}
 }
 
-func (fakeRAGSearchTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
-	return registry.Result{Content: "semantic hit: " + string(args)}, nil
+func (fakeCodegraphTool) Execute(_ context.Context, args json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+	return registry.Result{Content: "graph hit: " + string(args)}, nil
 }
 
 type fakeNamedTool struct {

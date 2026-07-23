@@ -358,18 +358,20 @@ func (LogTool) Parallel() bool { return true }
 func (t LogTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-log",
-		"",
+		"Show commit history from a refreshed remote branch snapshot. Pass branch when the user asks about a specific branch's latest commits; this never checks out or updates the working tree.",
 		registry.ObjectSchema(nil, map[string]any{
-			"repo":  map[string]any{"type": "string", "description": ""},
-			"limit": map[string]any{"type": "integer", "description": ""},
+			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
+			"branch": map[string]any{"type": "string", "description": "Remote branch name. Omit for origin/HEAD, then mt-main/main/master fallback."},
+			"limit":  map[string]any{"type": "integer", "description": "Maximum commits, default 10 and max 50."},
 		}),
 	)
 }
 
-func (t LogTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t LogTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
 	var args struct {
-		Repo  string `json:"repo"`
-		Limit int    `json:"limit"`
+		Repo   string `json:"repo"`
+		Branch string `json:"branch"`
+		Limit  int    `json:"limit"`
 	}
 	_ = json.Unmarshal(raw, &args)
 	if args.Limit <= 0 {
@@ -382,8 +384,12 @@ func (t LogTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Ru
 	if err != nil {
 		return registry.Result{}, err
 	}
-	out, err := t.run(ctx, repo, "log", "--oneline", "-n", strconv.Itoa(args.Limit))
-	return registry.Result{Content: out}, err
+	snap, err := t.fetchSnapshot(ctx, repo, args.Branch, rt)
+	if err != nil {
+		return registry.Result{}, err
+	}
+	out, err := t.run(ctx, repo, "log", "--oneline", "-n", strconv.Itoa(args.Limit), snap.Ref)
+	return registry.Result{Content: snap.header() + "\n\n" + out}, err
 }
 
 type ShowTool struct{ Base }
@@ -496,14 +502,20 @@ func (b Base) explicitRepo(path string) (string, error) {
 
 func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string, rt registry.Runtime) (snapshot, error) {
 	branch := strings.TrimSpace(rawBranch)
-	// Refresh origin refs on a short process-wide TTL. This preserves the
-	// snapshot semantics while avoiding a network fetch for every individual
-	// request or every repo-search/repo-read_file pair.
 	fetchCtx, cancel := context.WithTimeout(ctx, b.timeout())
 	defer cancel()
 	fetchStatus := "origin_refs_current_or_recent"
-	if err := gitcache.FetchOrigin(fetchCtx, repo, gitcache.DefaultFetchTTL); err != nil {
-		fetchStatus = "refresh_failed_using_cached_refs: " + err.Error()
+	var fetchErr error
+	if branch != "" {
+		fetchErr = gitcache.FetchOriginFresh(fetchCtx, repo)
+		fetchStatus = "origin_refs_refreshed"
+	} else {
+		// Default-branch reads keep the short process-wide TTL to avoid paying a
+		// network fetch for every repo-search/repo-read_file pair.
+		fetchErr = gitcache.FetchOrigin(fetchCtx, repo, gitcache.DefaultFetchTTL)
+	}
+	if fetchErr != nil {
+		fetchStatus = "refresh_failed_using_cached_refs: " + fetchErr.Error()
 	}
 	if branch == "" {
 		var err error

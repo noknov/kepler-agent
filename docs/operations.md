@@ -9,7 +9,6 @@
 | `POST /drain` | Local-only drain switch used by Kubernetes `preStop` |
 | `GET /health/dashboard` | Interactive health dashboard |
 | `GET /health/tools` | Tool health status JSON |
-| `GET /health/tools/rag` | RAG health status JSON |
 | `GET /metrics` | Run and cost metrics |
 | `GET /runs?limit=20` | Recent run list |
 | `GET /runs/<run_id>` | Run detail with LLM/tool steps and cost |
@@ -50,7 +49,7 @@ kubectl apply -f deploy/k8s/
 ```
 
 Start with one replica. Scale after PostgreSQL capacity, Slack retries, and
-workspace/RAG background jobs are understood for your environment.
+workspace fetch behavior are understood for your environment.
 
 Important knobs:
 
@@ -59,7 +58,6 @@ SLACK_EVENT_TIMEOUT=15m
 SLACK_EVENT_INBOX_LEASE=16m
 HTTP_SHUTDOWN_TIMEOUT=90s
 POSTGRES_MAX_CONNS=4
-RAG_BACKGROUND_INDEX=false
 WORKSPACE_AUTO_FETCH=false
 ```
 
@@ -151,61 +149,6 @@ Run the real browser smoke test after the MCP server is up:
 PLAYWRIGHT_MCP_URL=http://127.0.0.1:8931/mcp go test ./internal/toolkit/tools/playwright -run TestIntegration_PlaywrightMCPRealBrowserSmoke -count=1 -v
 ```
 
-## Optional RAG
-
-Code questions use agentic search by default: grep, immutable repo snapshots,
-file reads, and LSP tools. RAG adds semantic recall for architectural or fuzzy
-natural-language queries, but it depends on an embeddings endpoint and a
-maintained Postgres/pgvector index.
-
-The current RAG store does not use BM25. Its full-text side uses PostgreSQL
-`tsvector` plus `ts_rank`, and `rag-search` blends that with pgvector similarity
-before appending a small `git grep` fallback. If embeddings are disabled,
-`rag-search` is not a pure BM25/grep replacement; use `code-search`,
-`repo-search`, file reads, and LSP tools instead.
-
-```bash
-docker compose -f docker-compose.rag.yml up -d
-```
-
-```bash
-RAG_ENABLED=false
-RAG_POSTGRES_DSN=
-RAG_EMBEDDING_BASE_URL=http://localhost:11434/v1
-RAG_EMBEDDING_API_KEY=ollama
-RAG_EMBEDDING_MODEL=nomic-embed-text
-RAG_EMBEDDING_DIMS=768
-RAG_BACKGROUND_INDEX=false
-RAG_INDEX_INTERVAL=5m
-```
-
-Any OpenAI-compatible `/v1/embeddings` endpoint works. Examples:
-
-| Provider | Base URL | Model | Dims |
-|---|---|---|---:|
-| Ollama | `http://localhost:11434/v1` | `nomic-embed-text` | 768 |
-| SiliconFlow | `https://api.siliconflow.cn/v1` | `BAAI/bge-m3` | 1024 |
-| OpenAI | `https://api.openai.com/v1` | `text-embedding-3-small` | 1536 |
-
-Indexing is incremental: changed files are re-chunked, and only changed chunks
-are re-embedded. `rag-search` also queues per-repo indexing on demand.
-
-### Code Graph Direction
-
-If embedding RAG is disabled because index freshness and embedding operations
-are hard to maintain, prefer replacing its product role with a code graph rather
-than a lexical-only search index. The intended boundary is:
-
-| Need | Preferred tool family |
-|---|---|
-| Exact strings, config keys, log snippets | `code-search`, `repo-search`, `git.search_ref` |
-| Symbol definition, references, diagnostics | LSP-backed `code.*` tools |
-| Package dependencies, callers/callees, implementation graph, impact analysis | future `codegraph-*` tools |
-| Fuzzy natural-language recall | embedding RAG, only when enabled and fresh |
-
-Keep code graph tools read-only and deferred by default. They should expose
-small graph queries such as overview, dependencies, callers, callees, and impact
-analysis, then require source reads before final behavioral claims.
 
 ## Cost Tracking
 

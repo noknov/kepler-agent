@@ -1,7 +1,6 @@
 package app
 
 import (
-	"log"
 	"time"
 
 	"github.com/noknov/slack-copilot-agent/internal/agent"
@@ -9,22 +8,19 @@ import (
 	"github.com/noknov/slack-copilot-agent/internal/llm"
 	"github.com/noknov/slack-copilot-agent/internal/memory"
 	"github.com/noknov/slack-copilot-agent/internal/observability"
-	"github.com/noknov/slack-copilot-agent/internal/rag"
 	"github.com/noknov/slack-copilot-agent/internal/reminder"
 	"github.com/noknov/slack-copilot-agent/internal/safety"
 	"github.com/noknov/slack-copilot-agent/internal/slack"
-	ragTools "github.com/noknov/slack-copilot-agent/internal/toolkit/tools/rag"
 	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
 
 type agentRuntime struct {
-	Runner     agent.Runner
-	Memory     memory.Builder
-	Prompt     safety.PromptPolicy
-	Redactor   safety.Redactor
-	Tools      *registry.Registry
-	CostRates  observability.CostRates
-	RAGManager *rag.Manager
+	Runner    agent.Runner
+	Memory    memory.Builder
+	Prompt    safety.PromptPolicy
+	Redactor  safety.Redactor
+	Tools     *registry.Registry
+	CostRates observability.CostRates
 }
 
 func newAgentRuntime(cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, recorder *observability.Recorder) agentRuntime {
@@ -81,27 +77,6 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, reminderStore
 		CompactModel:        compactModel,
 	}
 
-	var ragMgr *rag.Manager
-	if cfg.RAG.Enabled {
-		var err error
-		ragMgr, err = rag.NewManager(rag.Config{
-			PostgresDSN:      cfg.RAG.PostgresDSN,
-			EmbeddingBaseURL: cfg.RAG.EmbeddingBaseURL,
-			EmbeddingAPIKey:  cfg.RAG.EmbeddingAPIKey,
-			EmbeddingModel:   cfg.RAG.EmbeddingModel,
-			EmbeddingDims:    cfg.RAG.EmbeddingDims,
-			BatchDelay:       cfg.RAG.BatchDelay,
-			IndexInterval:    cfg.RAG.IndexInterval,
-			WorkspaceRoots:   cfg.Security.WorkspaceRoots,
-			Observer:         recorder,
-		})
-		if err != nil {
-			log.Printf("rag: failed to initialize, continuing without RAG: %v", err)
-		} else {
-			tools.Register(ragTools.SearchTool{Manager: ragMgr, Paths: workspacePolicy, Observer: recorder})
-		}
-	}
-
 	return agentRuntime{
 		Runner: agent.Runner{
 			LLM:              llmClient,
@@ -118,12 +93,11 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, reminderStore
 			Compactor:        compactor,
 			StatusSummarizer: statusSummarizer,
 		},
-		Memory:     mem,
-		Prompt:     promptPolicy,
-		Redactor:   redactor,
-		Tools:      tools,
-		CostRates:  costRates(cfg),
-		RAGManager: ragMgr,
+		Memory:    mem,
+		Prompt:    promptPolicy,
+		Redactor:  redactor,
+		Tools:     tools,
+		CostRates: costRates(cfg),
 	}
 }
 
@@ -180,12 +154,13 @@ func defaultClearableTools() map[string]bool {
 		"code-read_file", "code-search", "code-symbols",
 		"code-definition", "code-references", "code-implementation",
 		"code-incoming_calls", "code-outgoing_calls", "code-diagnostics", "explore-code",
+		"codegraph-overview", "codegraph-dependencies", "codegraph-callers",
 		"tool_spill-read",
 		// Git reading
 		"git-search_ref", "git-read_file_ref", "git-log", "git-show",
 		"repo-search", "repo-read_file",
 		// Web and knowledge
-		"web-read_page", "knowledge-runbook_search", "rag-search",
+		"web-read_page", "knowledge-runbook_search",
 		// Diagnostics
 		"diagnostics-timeline", "diagnostics-incident_brief", "diagnostics-evidence_board",
 		// GCP logs

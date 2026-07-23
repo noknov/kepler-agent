@@ -95,10 +95,9 @@ internal/agent/            Provider-agnostic tool-call runner
 internal/memory/           Context packing, turns, compaction helpers
 internal/session/          PostgreSQL-backed Slack thread sessions
 internal/safety/           Access policy, redaction, command/workspace policy
-internal/health/           Tool and RAG health checks
+internal/health/           Tool health checks
 internal/prompts/          Prompt catalog and private overlay loader
 internal/llm/              Anthropic and OpenAI-compatible clients
-internal/rag/              Optional semantic code search
 internal/toolkit/tools/    Tool implementations
 prompts/                   Committed generic prompt defaults
 deploy/k8s/                Starter Kubernetes manifests
@@ -122,7 +121,7 @@ Workers claim events with a time-bounded lease, which makes retries safe during
 crashes and rolling updates.
 
 See [Operations](docs/operations.md) for Docker, Kubernetes, graceful shutdown,
-observability, RAG, ngrok, and browser automation details.
+observability, ngrok, and browser automation details.
 
 ## Documentation
 
@@ -131,8 +130,8 @@ observability, RAG, ngrok, and browser automation details.
 - [Prompts](docs/prompts.md): committed prompt catalog and private overlays.
 - [Tools](docs/tools.md): code, GitHub, Kubernetes/GCP, search, Slack, browser,
   reminders, and agent-control tools.
-- [Operations](docs/operations.md): deployment, health, shutdown, RAG, costs,
-  and Playwright MCP.
+- [Operations](docs/operations.md): deployment, health, shutdown, costs, and
+  Playwright MCP.
 
 ## Development
 

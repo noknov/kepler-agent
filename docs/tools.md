@@ -17,19 +17,16 @@ families are deferred by default and become available through `tool_search`.
 | `git.status` | Working tree and branch status |
 | `git.log` | Recent commit history |
 | `git.show` | Commit diff or file at a revision |
+| `codegraph-overview` | Package dependency and function overview for a git branch snapshot |
+| `codegraph-dependencies` | Internal imports and importers for one Go package |
+| `codegraph-callers` | Simple Go call sites for a function or method name |
 | `code.symbols` | Find Go/C# symbols via language server |
 | `code.definition` | Go to symbol definition |
 | `code.references` | Find symbol references |
 | `code.diagnostics` | LSP diagnostics for a file |
-| `rag-search` | Optional embedding + PostgreSQL full-text + grep code search |
 
 `repo-search` and `repo-read_file` resolve branches to immutable snapshots, so
 concurrent users can inspect different refs without checkout conflicts.
-
-`rag-search` is not BM25. It uses pgvector similarity, PostgreSQL `ts_rank`
-full-text ranking, and a small `git grep` fallback. When embeddings are disabled,
-prefer the direct code, repo, git, and LSP tools until a code graph tool family
-is available.
 
 ## GitHub
 

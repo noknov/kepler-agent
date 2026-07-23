@@ -97,6 +97,42 @@ func TestFetchRefUsesProcessFetchCacheWithinTTL(t *testing.T) {
 	}
 }
 
+func TestGitLogRefreshesExplicitBranchWithinFetchTTL(t *testing.T) {
+	root, work := testRepo(t)
+	base := Base{
+		Paths:   safety.WorkspacePolicy{Roots: []string{root}},
+		Guard:   safety.NewCommandPolicy(),
+		Timeout: 10 * time.Second,
+	}
+	rt := registry.Runtime{Cache: registry.NewRuntimeCache()}
+	tool := LogTool{Base: base}
+	first, err := tool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","limit":1}`), rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(first.Content, "init") {
+		t.Fatalf("first content = %q, want initial commit", first.Content)
+	}
+
+	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("hello\nfresh branch tip\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, work, "add", "README.md")
+	runGit(t, work, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "fresh tip")
+	runGit(t, work, "push", "origin", "main")
+
+	second, err := tool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","limit":1}`), rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(second.Content, "fresh tip") {
+		t.Fatalf("second content = %q, want fresh remote branch tip despite fetch TTL", second.Content)
+	}
+	if !strings.Contains(second.Content, "fetch_status=origin_refs_refreshed") {
+		t.Fatalf("second content = %q, want explicit refresh status", second.Content)
+	}
+}
+
 func TestRefToolsRequireExplicitRepo(t *testing.T) {
 	root, work := testRepo(t)
 	base := Base{

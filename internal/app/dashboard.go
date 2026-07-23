@@ -133,8 +133,6 @@ const healthDashboardHTML = `<!doctype html>
     <div class="summary">
       <div class="metric"><span class="muted">Overall</span><strong id="overall">-</strong></div>
       <div class="metric"><span class="muted">Tools</span><strong id="toolCounts">-</strong></div>
-      <div class="metric"><span class="muted">RAG Search</span><strong id="ragSearch">-</strong></div>
-      <div class="metric"><span class="muted">Large Chunks</span><strong id="largeChunks">-</strong></div>
     </div>
     <div class="grid">
       <section>
@@ -145,13 +143,6 @@ const healthDashboardHTML = `<!doctype html>
         </table>
       </section>
       <div class="stack">
-        <section>
-          <h2>RAG Indexes</h2>
-          <table>
-            <thead><tr><th>Repo</th><th>Status</th><th>Commit</th><th>Duration</th></tr></thead>
-            <tbody id="indexes"></tbody>
-          </table>
-        </section>
         <section>
           <h2>Recent Errors</h2>
           <div id="errors" class="muted">-</div>
@@ -183,8 +174,6 @@ const healthDashboardHTML = `<!doctype html>
     }
     function render(snapshot, metrics) {
       const tools = snapshot.tools || [];
-      const rag = snapshot.rag || {};
-      const ragMetrics = (metrics && metrics.rag) || {};
       const counts = tools.reduce((acc, tool) => {
         acc[tool.status || "unknown"] = (acc[tool.status || "unknown"] || 0) + 1;
         return acc;
@@ -192,15 +181,7 @@ const healthDashboardHTML = `<!doctype html>
       document.getElementById("checked").textContent = "Checked " + fmtDate(snapshot.checked_at);
       document.getElementById("overall").innerHTML = statusHTML(snapshot.overall);
       document.getElementById("toolCounts").textContent = tools.length + " total, " + (counts.healthy || 0) + " healthy";
-      document.getElementById("ragSearch").textContent = (ragMetrics.searches || 0) + " searches";
-      document.getElementById("largeChunks").textContent = (ragMetrics.large_chunks_split || 0) + " split, " + (ragMetrics.large_chunks_skipped || 0) + " skipped";
       document.getElementById("tools").innerHTML = tools.map(tool => '<tr><td><code>' + esc(tool.name) + '</code><div class="muted">' + esc(tool.criticality || "") + '</div></td><td>' + statusHTML(tool.status) + '</td><td>' + esc(tool.message || "-") + '</td><td>' + esc(tool.latency_ms || 0) + ' ms</td></tr>').join("");
-      const indexes = rag.indexes || [];
-      document.getElementById("indexes").innerHTML = indexes.length ? indexes.map(idx => {
-        const state = idx.last_error ? "unhealthy" : (idx.stale ? "degraded" : "healthy");
-        const msg = idx.last_error ? '<div class="error">' + esc(idx.last_error) + '</div>' : '<div class="muted">' + esc(idx.branch || "-") + '</div>';
-        return '<tr><td><code>' + esc(idx.repo) + '</code>' + msg + '</td><td>' + statusHTML(state) + '</td><td><span class="muted">current</span> ' + short(idx.current_commit) + '<br><span class="muted">indexed</span> ' + short(idx.indexed_commit) + '</td><td>' + esc(idx.last_duration_ms || 0) + ' ms<br><span class="muted">' + esc(fmtDate(idx.last_indexed_at)) + '</span></td></tr>';
-      }).join("") : '<tr><td colspan="4" class="muted">' + esc(rag.message || "No RAG indexes reported") + '</td></tr>';
       const errs = (metrics && metrics.last_errors) || [];
       document.getElementById("errors").innerHTML = errs.length ? errs.map(err => '<p class="error">' + esc(err) + '</p>').join("") : '<span class="muted">No recent errors</span>';
     }
