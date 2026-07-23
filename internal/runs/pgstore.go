@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -21,7 +23,8 @@ func NewPGStore(ctx context.Context, dsn string) (*PGStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse runs postgres dsn: %w", err)
 	}
-	cfg.MaxConns, cfg.MinConns = 8, 1
+	cfg.MaxConns = int32(envInt("POSTGRES_RUNS_MAX_CONNS", envInt("POSTGRES_MAX_CONNS", 8)))
+	cfg.MinConns = int32(envInt("POSTGRES_RUNS_MIN_CONNS", 1))
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("connect runs postgres: %w", err)
@@ -32,6 +35,18 @@ func NewPGStore(ctx context.Context, dsn string) (*PGStore, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+func envInt(key string, fallback int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return v
 }
 func (s *PGStore) Close() {
 	if s != nil && s.pool != nil {

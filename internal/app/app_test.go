@@ -13,9 +13,12 @@ import (
 	"time"
 
 	"github.com/wati/oncall-agent/internal/config"
+	"github.com/wati/oncall-agent/internal/eventinbox"
 	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/reminder"
+	"github.com/wati/oncall-agent/internal/runs"
 	"github.com/wati/oncall-agent/internal/safety"
+	"github.com/wati/oncall-agent/internal/session"
 	"github.com/wati/oncall-agent/internal/slack"
 	"github.com/wati/oncall-agent/internal/toolkit/tools/registry"
 )
@@ -288,6 +291,65 @@ func TestHealthDashboardRequiresObservabilityAccess(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "斗包 Tool Health") || !strings.Contains(body, "/health/tools?refresh=true") {
 		t.Fatalf("dashboard body missing expected content:\n%s", body)
+	}
+}
+
+func TestReadyzReflectsDrainState(t *testing.T) {
+	server := &Server{}
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	server.handleReady(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readyz without stores status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+
+	server = &Server{
+		eventInbox:    &eventinbox.PGStore{},
+		sessionStore:  &session.PGStore{},
+		runPGStore:    &runs.PGStore{},
+		reminderStore: &reminder.PGStore{},
+	}
+	rec = httptest.NewRecorder()
+	server.handleReady(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("readyz status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	server.draining.Store(true)
+	rec = httptest.NewRecorder()
+	server.handleReady(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readyz while draining status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestDrainRequiresLocalPostAndMarksServerDraining(t *testing.T) {
+	server := &Server{}
+	req := httptest.NewRequest(http.MethodGet, "/drain", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	rec := httptest.NewRecorder()
+	server.handleDrain(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET /drain status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/drain", nil)
+	req.RemoteAddr = "203.0.113.10:1234"
+	rec = httptest.NewRecorder()
+	server.handleDrain(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("remote POST /drain status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/drain", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	rec = httptest.NewRecorder()
+	server.handleDrain(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("local POST /drain status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !server.draining.Load() {
+		t.Fatal("server should be marked draining")
 	}
 }
 

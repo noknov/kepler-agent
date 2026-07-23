@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -14,20 +16,40 @@ type Record struct {
 	ID      string
 	Payload json.RawMessage
 }
-type PGStore struct{ pool *pgxpool.Pool }
+type PGStore struct {
+	pool  *pgxpool.Pool
+	owner string
+}
 
 func NewPGStore(ctx context.Context, dsn string) (*PGStore, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse inbox postgres dsn: %w", err)
 	}
-	cfg.MaxConns, cfg.MinConns = 6, 1
+	cfg.MaxConns = int32(envInt("POSTGRES_INBOX_MAX_CONNS", envInt("POSTGRES_MAX_CONNS", 6)))
+	cfg.MinConns = int32(envInt("POSTGRES_INBOX_MIN_CONNS", 1))
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("connect inbox postgres: %w", err)
 	}
-	s := &PGStore{pool: pool}
-	_, err = pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS slack_event_inbox (event_id TEXT PRIMARY KEY, payload JSONB NOT NULL, status TEXT NOT NULL DEFAULT 'queued', received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), completed_at TIMESTAMPTZ); CREATE INDEX IF NOT EXISTS idx_slack_event_inbox_pending ON slack_event_inbox(received_at) WHERE status='queued';`)
+	s := &PGStore{pool: pool, owner: defaultOwner()}
+	_, err = pool.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS slack_event_inbox (
+	event_id TEXT PRIMARY KEY,
+	payload JSONB NOT NULL,
+	status TEXT NOT NULL DEFAULT 'queued',
+	received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	started_at TIMESTAMPTZ,
+	claim_until TIMESTAMPTZ,
+	claim_owner TEXT NOT NULL DEFAULT '',
+	completed_at TIMESTAMPTZ
+);
+ALTER TABLE slack_event_inbox ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+ALTER TABLE slack_event_inbox ADD COLUMN IF NOT EXISTS claim_until TIMESTAMPTZ;
+ALTER TABLE slack_event_inbox ADD COLUMN IF NOT EXISTS claim_owner TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_slack_event_inbox_pending ON slack_event_inbox(received_at) WHERE status='queued';
+CREATE INDEX IF NOT EXISTS idx_slack_event_inbox_expired ON slack_event_inbox(claim_until) WHERE status='processing';
+`)
 	if err != nil {
 		pool.Close()
 		return nil, err
@@ -48,26 +70,31 @@ func (s *PGStore) Claim(ctx context.Context, id string, payload any) (bool, erro
 	return tag.RowsAffected() == 1, err
 }
 func (s *PGStore) Complete(ctx context.Context, id string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE slack_event_inbox SET status='completed',completed_at=NOW() WHERE event_id=$1`, id)
+	_, err := s.pool.Exec(ctx, `UPDATE slack_event_inbox SET status='completed',completed_at=NOW(),claim_until=NULL WHERE event_id=$1 AND claim_owner=$2`, id, s.owner)
 	return err
 }
 
 func (s *PGStore) Requeue(ctx context.Context, id string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE slack_event_inbox SET status='queued' WHERE event_id=$1 AND status='processing'`, id)
+	_, err := s.pool.Exec(ctx, `UPDATE slack_event_inbox SET status='queued',claim_until=NULL,claim_owner='' WHERE event_id=$1 AND status='processing' AND claim_owner=$2`, id, s.owner)
 	return err
 }
 
 // Start atomically claims one queued event. Duplicate webhook deliveries may
 // enqueue duplicate in-memory jobs, but only one worker gets true here.
-func (s *PGStore) Start(ctx context.Context, id string) (bool, error) {
-	tag, err := s.pool.Exec(ctx, `UPDATE slack_event_inbox SET status='processing' WHERE event_id=$1 AND status='queued'`, id)
+func (s *PGStore) Start(ctx context.Context, id string, lease time.Duration) (bool, error) {
+	if lease <= 0 {
+		lease = 16 * time.Minute
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE slack_event_inbox SET status='processing',started_at=COALESCE(started_at,NOW()),claim_until=NOW()+$3::interval,claim_owner=$2 WHERE event_id=$1 AND status='queued'`, id, s.owner, intervalLiteral(lease))
 	return tag.RowsAffected() == 1, err
 }
 
-// Recover resets work interrupted by a process crash before pending events are
-// replayed. Processing is deliberately not terminal until Complete succeeds.
-func (s *PGStore) Recover(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, `UPDATE slack_event_inbox SET status='queued' WHERE status='processing'`)
+// RecoverExpired releases events whose worker stopped renewing ownership before
+// finishing. Unlike a blanket processing reset, this is safe with many replicas:
+// a healthy pod keeps its unexpired claim, while work abandoned by a dead pod is
+// retried after the lease expires.
+func (s *PGStore) RecoverExpired(ctx context.Context) error {
+	_, err := s.pool.Exec(ctx, `UPDATE slack_event_inbox SET status='queued',claim_until=NULL,claim_owner='' WHERE status='processing' AND (claim_until IS NULL OR claim_until < NOW())`)
 	return err
 }
 func (s *PGStore) Pending(ctx context.Context, limit int) ([]Record, error) {
@@ -92,4 +119,28 @@ func (s *PGStore) Pending(ctx context.Context, limit int) ([]Record, error) {
 func (s *PGStore) Prune(ctx context.Context, olderThan time.Duration) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM slack_event_inbox WHERE status='completed' AND completed_at < NOW()-$1::interval`, fmt.Sprintf("%f seconds", olderThan.Seconds()))
 	return err
+}
+
+func defaultOwner() string {
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "unknown-host"
+	}
+	return host + ":" + strconv.Itoa(os.Getpid())
+}
+
+func intervalLiteral(d time.Duration) string {
+	return fmt.Sprintf("%f seconds", d.Seconds())
+}
+
+func envInt(key string, fallback int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return v
 }

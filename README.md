@@ -42,6 +42,35 @@ go run ./cmd/oncall-agent
 
 The server loads `.env` automatically on startup. Expose `POST /slack/events` through a public HTTPS URL (see [ngrok](#-ngrok) below).
 
+### Health and shutdown
+
+The service exposes lightweight operational endpoints:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /livez` | Liveness probe. Returns `ok` while the process is alive. |
+| `GET /readyz` | Readiness probe. Fails while the process is draining or storage wiring is unavailable. |
+| `POST /drain` | Local-only drain switch used by Kubernetes `preStop`; it stops new Slack work before SIGTERM. |
+
+Slack events are first written to a durable PostgreSQL inbox and then claimed by
+workers with a time-bounded lease. Tune `SLACK_EVENT_TIMEOUT` for the maximum
+duration of one event and `SLACK_EVENT_INBOX_LEASE` for how long a claimed event
+can stay owned before another worker may retry it. By default the lease is one
+minute longer than the event timeout.
+
+For multi-replica deployments, keep database connections bounded with
+`POSTGRES_MAX_CONNS` or the per-store overrides:
+`POSTGRES_SESSION_MAX_CONNS`, `POSTGRES_RUNS_MAX_CONNS`,
+`POSTGRES_REMINDER_MAX_CONNS`, `POSTGRES_INBOX_MAX_CONNS`, and
+`RAG_POSTGRES_MAX_CONNS`.
+
+### Docker and Kubernetes
+
+A production-oriented Dockerfile and starter Kubernetes manifests live under
+`deploy/k8s/`. Start with one replica, then scale after PostgreSQL capacity,
+Slack retries, and any workspace/RAG background jobs are understood for your
+environment.
+
 ## 🤖 LLM configuration
 
 `LLM_PROVIDER` selects the active provider. Each provider has its own env namespace so credentials are never shared between providers unintentionally.

@@ -1,0 +1,12 @@
+.git
+.cache
+.tmp-gocache
+.data
+.docker
+.env
+.env.*
+.prompts
+dist
+node_modules
+coverage.out
+*.log

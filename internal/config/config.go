@@ -45,6 +45,8 @@ type HTTPConfig struct {
 	EventQueueSize      int
 	EventEnqueueTimeout time.Duration
 	EventTimeout        time.Duration
+	EventInboxLease     time.Duration
+	ShutdownTimeout     time.Duration
 }
 
 type SlackConfig struct {
@@ -212,6 +214,8 @@ func Load() (Config, error) {
 			EventQueueSize:      envInt("SLACK_EVENT_QUEUE_SIZE", 512),
 			EventEnqueueTimeout: envDuration("SLACK_EVENT_ENQUEUE_TIMEOUT", 2*time.Second),
 			EventTimeout:        envDuration("SLACK_EVENT_TIMEOUT", 15*time.Minute),
+			EventInboxLease:     envDuration("SLACK_EVENT_INBOX_LEASE", 0),
+			ShutdownTimeout:     envDuration("HTTP_SHUTDOWN_TIMEOUT", 30*time.Second),
 		},
 		Slack: SlackConfig{
 			BotToken:      os.Getenv("SLACK_BOT_TOKEN"),
@@ -348,8 +352,11 @@ func Load() (Config, error) {
 	if cfg.Storage.PostgresDSN == "" {
 		return cfg, fmt.Errorf("POSTGRES_DSN is required for durable session, event, run, and reminder storage")
 	}
-	if cfg.HTTP.EventWorkers <= 0 || cfg.HTTP.EventQueueSize <= 0 || cfg.HTTP.EventEnqueueTimeout <= 0 || cfg.HTTP.EventTimeout <= 0 || cfg.Tools.AgentMaxConcurrentRuns <= 0 {
-		return cfg, fmt.Errorf("SLACK_EVENT_WORKERS, SLACK_EVENT_QUEUE_SIZE, SLACK_EVENT_ENQUEUE_TIMEOUT, SLACK_EVENT_TIMEOUT, and AGENT_MAX_CONCURRENT_RUNS must be positive")
+	if cfg.HTTP.EventInboxLease <= 0 {
+		cfg.HTTP.EventInboxLease = cfg.HTTP.EventTimeout + time.Minute
+	}
+	if cfg.HTTP.EventWorkers <= 0 || cfg.HTTP.EventQueueSize <= 0 || cfg.HTTP.EventEnqueueTimeout <= 0 || cfg.HTTP.EventTimeout <= 0 || cfg.HTTP.EventInboxLease <= 0 || cfg.HTTP.ShutdownTimeout <= 0 || cfg.Tools.AgentMaxConcurrentRuns <= 0 {
+		return cfg, fmt.Errorf("SLACK_EVENT_WORKERS, SLACK_EVENT_QUEUE_SIZE, SLACK_EVENT_ENQUEUE_TIMEOUT, SLACK_EVENT_TIMEOUT, SLACK_EVENT_INBOX_LEASE, HTTP_SHUTDOWN_TIMEOUT, and AGENT_MAX_CONCURRENT_RUNS must be positive")
 	}
 	return cfg, nil
 }

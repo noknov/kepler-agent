@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"crypto/subtle"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,13 +14,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wati/oncall-agent/internal/config"
 	"github.com/wati/oncall-agent/internal/conversation"
 	"github.com/wati/oncall-agent/internal/eventinbox"
 	"github.com/wati/oncall-agent/internal/health"
-	"github.com/wati/oncall-agent/internal/llm"
 	"github.com/wati/oncall-agent/internal/observability"
 	"github.com/wati/oncall-agent/internal/prompts"
 	"github.com/wati/oncall-agent/internal/reminder"
@@ -43,21 +42,29 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	if cfg.Security.WorkspaceAutoFetch {
-		go pullWorkspaceRepos(ctx, cfg.Security.WorkspaceRoots, gitcache.DefaultFetchTTL)
+		server.Go(func(ctx context.Context) {
+			pullWorkspaceRepos(ctx, cfg.Security.WorkspaceRoots, gitcache.DefaultFetchTTL)
+		})
 	}
 	if server.ragManager != nil && cfg.RAG.BackgroundIndex {
 		defer server.ragManager.Close()
 		log.Printf("rag/indexer: starting async background prewarm loop")
-		go server.ragManager.StartIndexLoop(ctx)
+		server.Go(func(ctx context.Context) {
+			server.ragManager.StartIndexLoop(ctx)
+		})
 	} else if server.ragManager != nil {
 		defer server.ragManager.Close()
 		log.Printf("rag/indexer: background prewarm disabled; on-demand indexing will be used")
 	}
 	if server.health != nil {
-		go server.health.Start(ctx)
+		server.Go(func(ctx context.Context) {
+			server.health.Start(ctx)
+		})
 	}
 	defer server.Close()
-	go server.reminders.Start(ctx)
+	server.Go(func(ctx context.Context) {
+		server.reminders.Start(ctx)
+	})
 	return server.ListenAndServe(ctx)
 }
 
@@ -83,11 +90,23 @@ type Server struct {
 	eventWorkers        int
 	eventEnqueueTimeout time.Duration
 	eventTimeout        time.Duration
+	eventInboxLease     time.Duration
 	runSemaphore        chan struct{}
 	observabilityAPI    *ObservabilityAPI
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	wg                  sync.WaitGroup
+	eventMu             sync.Mutex
+	eventCond           *sync.Cond
+	activeEvents        int
+	draining            atomic.Bool
 }
 
 func (s *Server) Close() {
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.Wait(5 * time.Second)
 	if s.eventInbox != nil {
 		s.eventInbox.Close()
 	}
@@ -114,8 +133,10 @@ type ragManagerCloser interface {
 
 func NewServer(cfg config.Config) (*Server, error) {
 	prompts.LoadFromEnv()
+	serviceCtx, serviceCancel := context.WithCancel(context.Background())
 	var cleanup []func()
 	closeOnError := func() {
+		serviceCancel()
 		for i := len(cleanup) - 1; i >= 0; i-- {
 			cleanup[i]()
 		}
@@ -162,6 +183,7 @@ func NewServer(cfg config.Config) (*Server, error) {
 	conv := conversation.NewService(store, slackClient, runtime.Runner, runtime.Memory, runtime.Prompt, runtime.Redactor, recorder)
 	runSemaphore := make(chan struct{}, cfg.Tools.AgentMaxConcurrentRuns)
 	conv.RunSemaphore = runSemaphore
+	conv.FollowUpContext = serviceCtx
 	conv.Format = slack.MarkdownToMrkdwn
 	conv.RunStore = runStore
 	conv.RunProvider = cfg.LLM.Provider
@@ -203,8 +225,12 @@ func NewServer(cfg config.Config) (*Server, error) {
 		eventWorkers:        cfg.HTTP.EventWorkers,
 		eventEnqueueTimeout: cfg.HTTP.EventEnqueueTimeout,
 		eventTimeout:        cfg.HTTP.EventTimeout,
+		eventInboxLease:     cfg.HTTP.EventInboxLease,
 		runSemaphore:        runSemaphore,
+		ctx:                 serviceCtx,
+		cancel:              serviceCancel,
 	}
+	s.eventCond = sync.NewCond(&s.eventMu)
 	s.observabilityAPI = newObservabilityAPI(s)
 	conv.WebSearchEnabled = func(userID string) bool {
 		return s.webSearchPreference(userID)
@@ -217,10 +243,16 @@ func NewServer(cfg config.Config) (*Server, error) {
 
 func (s *Server) routes(cfg config.Config, runtime agentRuntime, recorder *observability.Recorder, healthService *health.Service, tools *registry.Registry) {
 	s.observabilityAPI.Register(s.mux)
+	s.mux.HandleFunc("/livez", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
 	s.mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	s.mux.HandleFunc("/readyz", s.handleReady)
+	s.mux.HandleFunc("/drain", s.handleDrain)
 	s.mux.HandleFunc("/slack/events", s.handleSlackEvents)
 	s.mux.HandleFunc("/slack/interactions", s.handleSlackInteractions)
 
@@ -248,21 +280,67 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-	s.startEventWorkers(ctx)
+	s.startEventWorkers(s.ctx)
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		s.draining.Store(true)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.HTTP.ShutdownTimeout)
 		defer cancel()
 		_ = httpServer.Shutdown(shutdownCtx)
+		if !s.waitEvents(s.cfg.HTTP.ShutdownTimeout) {
+			log.Printf("shutdown: timed out waiting for in-flight Slack events")
+		}
+		if s.cancel != nil {
+			s.cancel()
+		}
 	}()
 	log.Printf("oncall-agent listening on %s", s.cfg.HTTP.Addr)
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if s.cancel != nil {
+			s.cancel()
+		}
 		return err
+	}
+	if ctx.Err() != nil {
+		<-shutdownDone
 	}
 	return nil
 }
 
+func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	if s.draining.Load() {
+		http.Error(w, "draining", http.StatusServiceUnavailable)
+		return
+	}
+	if s.eventInbox == nil || s.sessionStore == nil || s.runPGStore == nil || s.reminderStore == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ready"))
+}
+
+func (s *Server) handleDrain(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !isLocalRequest(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	s.draining.Store(true)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("draining"))
+}
+
 func (s *Server) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
+	if s.draining.Load() {
+		http.Error(w, "server is draining", http.StatusServiceUnavailable)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -319,98 +397,11 @@ func (s *Server) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("ok"))
 }
 
-func (s *Server) startEventWorkers(ctx context.Context) {
-	if err := s.eventInbox.Recover(ctx); err != nil {
-		log.Printf("recover durable Slack inbox: %v", err)
-	}
-	s.replayQueuedEvents(ctx)
-	workers := s.eventWorkers
-	if workers <= 0 {
-		workers = 1
-	}
-	for i := 0; i < workers; i++ {
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case job := <-s.eventQueue:
-					claimed, err := s.eventInbox.Start(ctx, job.eventID)
-					if err != nil {
-						log.Printf("claim Slack inbox event %s: %v", job.eventID, err)
-						continue
-					}
-					if !claimed {
-						continue
-					}
-					eventCtx, cancel := context.WithTimeout(ctx, s.eventTimeout)
-					err = s.handleEvent(eventCtx, job.eventID, job.event)
-					cancel()
-					if err != nil {
-						log.Printf("handle Slack inbox event %s: %v", job.eventID, err)
-						if requeueErr := s.eventInbox.Requeue(context.Background(), job.eventID); requeueErr != nil {
-							log.Printf("requeue Slack inbox event %s: %v", job.eventID, requeueErr)
-						}
-						continue
-					}
-					if err := s.eventInbox.Complete(context.Background(), job.eventID); err != nil {
-						log.Printf("complete Slack inbox event %s: %v", job.eventID, err)
-					}
-				}
-			}
-		}()
-	}
-	go func() {
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				s.replayQueuedEvents(ctx)
-			}
-		}
-	}()
-}
-
-// replayQueuedEvents keeps the database inbox as the source of truth when the
-// in-memory worker queue is full. Worker-side Start makes replay idempotent.
-func (s *Server) replayQueuedEvents(ctx context.Context) {
-	pending, err := s.eventInbox.Pending(ctx, cap(s.eventQueue))
-	if err != nil {
-		log.Printf("load durable Slack inbox: %v", err)
+func (s *Server) handleSlackInteractions(w http.ResponseWriter, r *http.Request) {
+	if s.draining.Load() {
+		http.Error(w, "server is draining", http.StatusServiceUnavailable)
 		return
 	}
-	for _, item := range pending {
-		var event slack.Event
-		if err := json.Unmarshal(item.Payload, &event); err != nil {
-			log.Printf("decode queued Slack event %s: %v", item.ID, err)
-			continue
-		}
-		select {
-		case s.eventQueue <- slackEventJob{eventID: item.ID, event: event}:
-		default:
-			return
-		}
-	}
-}
-
-func (s *Server) enqueueSlackEvent(ctx context.Context, eventID string, event slack.Event) bool {
-	if timeout := s.eventEnqueueTimeout; timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
-	}
-	select {
-	case s.eventQueue <- slackEventJob{eventID: eventID, event: event}:
-		return true
-	case <-ctx.Done():
-		return false
-	}
-}
-
-func (s *Server) handleSlackInteractions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -830,182 +821,6 @@ func isThreadReply(ev slack.Event) bool {
 	return ev.ThreadTS != "" && ev.ThreadTS != ev.TS
 }
 
-func appendSlackFiles(text string, files []slack.File) string {
-	filesText := slack.FormatFiles(files)
-	if filesText == "" {
-		return strings.TrimSpace(text)
-	}
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return filesText
-	}
-	return text + "\n\n" + filesText
-}
-
-func (s *Server) attachSlackFiles(ctx context.Context, text string, files []slack.File) (string, []llm.ContentPart) {
-	text = appendSlackFiles(text, files)
-	if excerpt := s.slackPDFExcerpts(ctx, files); excerpt != "" {
-		text = strings.TrimSpace(text)
-		if text == "" {
-			text = excerpt
-		} else {
-			text += "\n\n" + excerpt
-		}
-	}
-	if excerpt := s.slackTextExcerpts(ctx, files); excerpt != "" {
-		text = strings.TrimSpace(text)
-		if text == "" {
-			text = excerpt
-		} else {
-			text += "\n\n" + excerpt
-		}
-	}
-	return text, s.slackImageParts(ctx, files)
-}
-
-func (s *Server) slackPDFExcerpts(ctx context.Context, files []slack.File) string {
-	blocks := make([]string, 0, len(files))
-	for _, file := range files {
-		if !slack.IsPDFFile(file) {
-			continue
-		}
-		if file.Size > maxSlackPDFBytes {
-			log.Printf("skip slack pdf %s: size %d exceeds limit %d", file.ID, file.Size, maxSlackPDFBytes)
-			blocks = append(blocks, slack.FormatPDFExcerpt(slack.FileDisplayName(file), "[PDF too large to extract; max "+formatBytes(maxSlackPDFBytes)+"]"))
-			continue
-		}
-		data, err := s.slack.DownloadFile(ctx, file, maxSlackPDFBytes)
-		if err != nil {
-			log.Printf("skip slack pdf %s: download failed: %v", file.ID, err)
-			blocks = append(blocks, slack.FormatPDFExcerpt(slack.FileDisplayName(file), "[Could not download PDF from Slack: "+err.Error()+"]"))
-			continue
-		}
-		if !slack.IsPDFData(data) {
-			log.Printf("skip slack pdf %s: downloaded content is not a PDF", file.ID)
-			blocks = append(blocks, slack.FormatPDFExcerpt(slack.FileDisplayName(file), "[Downloaded file is not a valid PDF]"))
-			continue
-		}
-		text, err := slack.ExtractPDFText(data, maxSlackPDFTextChars)
-		if err != nil {
-			log.Printf("skip slack pdf %s: extract failed: %v", file.ID, err)
-			blocks = append(blocks, slack.FormatPDFExcerpt(slack.FileDisplayName(file), "[Could not extract text from PDF; it may be scanned/image-only. Ask the user to paste key details or send a screenshot.]"))
-			continue
-		}
-		blocks = append(blocks, slack.FormatPDFExcerpt(slack.FileDisplayName(file), text))
-	}
-	return strings.Join(blocks, "\n\n")
-}
-
-func (s *Server) slackTextExcerpts(ctx context.Context, files []slack.File) string {
-	blocks := make([]string, 0, len(files))
-	for _, file := range files {
-		if !shouldAttemptSlackTextExcerpt(file) {
-			continue
-		}
-		declaredText := slack.IsTextFile(file)
-		if file.Size > maxSlackTextBytes {
-			log.Printf("skip slack text %s: size %d exceeds limit %d", file.ID, file.Size, maxSlackTextBytes)
-			if declaredText {
-				blocks = append(blocks, slack.FormatTextExcerpt(slack.FileDisplayName(file), "[Text file too large to read; max "+formatBytes(maxSlackTextBytes)+"]"))
-			}
-			continue
-		}
-		data, err := s.slack.DownloadFile(ctx, file, maxSlackTextBytes)
-		if err != nil {
-			log.Printf("skip slack text %s: download failed: %v", file.ID, err)
-			if declaredText {
-				blocks = append(blocks, slack.FormatTextExcerpt(slack.FileDisplayName(file), "[Could not download text file from Slack: "+err.Error()+"]"))
-			}
-			continue
-		}
-		text, err := slack.ExtractTextFile(data, maxSlackTextChars)
-		if err != nil {
-			log.Printf("skip slack text %s: extract failed: %v", file.ID, err)
-			if declaredText {
-				blocks = append(blocks, slack.FormatTextExcerpt(slack.FileDisplayName(file), "[Could not read text file: "+err.Error()+"]"))
-			}
-			continue
-		}
-		blocks = append(blocks, slack.FormatTextExcerpt(slack.FileDisplayName(file), text))
-	}
-	return strings.Join(blocks, "\n\n")
-}
-
-func shouldAttemptSlackTextExcerpt(file slack.File) bool {
-	return !slack.IsPDFFile(file) && normalizedImageMIME(file) == ""
-}
-
-func formatBytes(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	div, exp := int64(unit), 0
-	for v := n / unit; v >= unit; v /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.0f %cB", float64(n)/float64(div), "KMGTPE"[exp])
-}
-
-func (s *Server) slackImageParts(ctx context.Context, files []slack.File) []llm.ContentPart {
-	parts := make([]llm.ContentPart, 0, len(files))
-	for _, file := range files {
-		mime := normalizedImageMIME(file)
-		if mime == "" {
-			continue
-		}
-		if file.Size > maxSlackImageBytes {
-			log.Printf("skip slack image %s: size %d exceeds limit %d", file.ID, file.Size, maxSlackImageBytes)
-			continue
-		}
-		data, err := s.slack.DownloadFile(ctx, file, maxSlackImageBytes)
-		if err != nil {
-			log.Printf("skip slack image %s: %v", file.ID, err)
-			continue
-		}
-		actualMIME := sniffImageMIME(data)
-		if actualMIME == "" {
-			log.Printf("skip slack image %s: downloaded content is not a supported image", file.ID)
-			continue
-		}
-		if actualMIME != mime {
-			log.Printf("slack image %s declared %s but detected %s", file.ID, mime, actualMIME)
-		}
-		dataURL := "data:" + actualMIME + ";base64," + base64.StdEncoding.EncodeToString(data)
-		parts = append(parts, llm.ImageURLPart(dataURL))
-	}
-	return parts
-}
-
-const (
-	maxSlackImageBytes   = 8 << 20
-	maxSlackPDFBytes     = 16 << 20
-	maxSlackPDFTextChars = slack.DefaultMaxPDFExtractChars
-	maxSlackTextBytes    = 16 << 20
-	maxSlackTextChars    = slack.DefaultMaxTextExtractChars
-)
-
-func normalizedImageMIME(file slack.File) string {
-	mime := strings.ToLower(strings.TrimSpace(file.Mimetype))
-	switch mime {
-	case "image/png", "image/jpeg", "image/webp", "image/gif":
-		return mime
-	}
-	switch strings.ToLower(strings.TrimSpace(file.Filetype)) {
-	case "png":
-		return "image/png"
-	case "jpg", "jpeg":
-		return "image/jpeg"
-	case "webp":
-		return "image/webp"
-	case "gif":
-		return "image/gif"
-	default:
-		return ""
-	}
-}
-
 func extractFormPayload(body string) string {
 	values, err := url.ParseQuery(body)
 	if err != nil {
@@ -1020,32 +835,6 @@ func firstNonEmpty(values ...string) string {
 		if value != "" {
 			return value
 		}
-	}
-	return ""
-}
-
-func sniffImageMIME(data []byte) string {
-	if len(data) >= 8 &&
-		data[0] == 0x89 &&
-		data[1] == 'P' &&
-		data[2] == 'N' &&
-		data[3] == 'G' &&
-		data[4] == '\r' &&
-		data[5] == '\n' &&
-		data[6] == 0x1a &&
-		data[7] == '\n' {
-		return "image/png"
-	}
-	if len(data) >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff {
-		return "image/jpeg"
-	}
-	if len(data) >= 12 &&
-		string(data[0:4]) == "RIFF" &&
-		string(data[8:12]) == "WEBP" {
-		return "image/webp"
-	}
-	if len(data) >= 6 && (string(data[0:6]) == "GIF87a" || string(data[0:6]) == "GIF89a") {
-		return "image/gif"
 	}
 	return ""
 }

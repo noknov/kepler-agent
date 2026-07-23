@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: oncall-agent
+  namespace: oncall-agent
+  labels:
+    app.kubernetes.io/name: oncall-agent
+spec:
+  selector:
+    app.kubernetes.io/name: oncall-agent
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
