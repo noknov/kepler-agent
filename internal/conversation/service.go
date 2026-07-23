@@ -198,56 +198,6 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		runID = runObserver.Run.ID
 	}
 
-	statusMessenger, useNativeStatus := s.Messenger.(ThreadStatusMessenger)
-	if strings.HasPrefix(req.Channel, "web:") {
-		useNativeStatus = false
-	}
-	var streamTS string
-	var streamErr error
-	useProgressStream := false
-	useStream := useNativeStatus
-	var thinkingTS string
-	if !useNativeStatus {
-		streamTS, streamErr = s.Messenger.StartStream(ctx, req.Channel, req.ThreadTS, req.UserID)
-		useProgressStream = streamErr == nil && streamTS != ""
-		useStream = useProgressStream
-		if streamErr != nil {
-			log.Printf("stream fallback: %v", streamErr)
-		}
-	}
-
-	if !useStream {
-		thinkingTS, _ = s.Messenger.PostMessage(ctx, req.Channel, req.ThreadTS, ":thinking_face: ...")
-	}
-	progressTS := streamTS
-	progressStopped := false
-	restartProgressStream := func() bool {
-		newTS, err := s.Messenger.StartStream(ctx, req.Channel, req.ThreadTS, req.UserID)
-		if err != nil || newTS == "" {
-			if err != nil {
-				s.recordDeliveryError(req, progressTS, err)
-			}
-			progressStopped = true
-			return false
-		}
-		progressTS = newTS
-		return true
-	}
-	defer func() {
-		if s.Metrics != nil {
-			s.Metrics.Latency(time.Since(start))
-		}
-		if useNativeStatus {
-			clearThreadStatus(context.Background(), statusMessenger, req.Channel, req.ThreadTS)
-		}
-		if useProgressStream && !progressStopped {
-			_ = s.Messenger.StopStream(context.Background(), req.Channel, progressTS)
-		} else if thinkingTS != "" {
-			_ = s.Messenger.DeleteMessage(context.Background(), req.Channel, thinkingTS)
-		}
-	}()
-
-	const taskID = "thinking"
 	// Use session-stored locale for consistency across the thread.
 	// Only detect from text on the first message.
 	locale := sess.Locale
@@ -255,10 +205,17 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		locale = agent.DetectLocale(req.Text)
 		sess.Locale = locale
 	}
-	_ = strings.HasPrefix(req.Channel, "D") // isDM — reserved for future per-channel behavior
 	runCtx, cancelRun := context.WithCancel(ctx)
 	active := newActiveRun(sessionID, req.UserID, cancelRun)
 	s.registerActive(sessionID, active)
+	progress := newTurnProgress(ctx, runCtx, s, req, locale)
+	active.setProgress(locale, progress.ProgressAppender())
+	defer func() {
+		if s.Metrics != nil {
+			s.Metrics.Latency(time.Since(start))
+		}
+		progress.cleanup()
+	}()
 	defer func() {
 		s.unregisterActive(sessionID, active)
 		followUps = append(followUps, active.remainingQueued()...)
@@ -273,224 +230,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	if runObserver != nil {
 		runner.Observer = multiObserver{s.Metrics, runObserver}
 	}
-	var answerStream *dmStreamWriter
-	var progressMarkdown *streamMarkdownBuffer
-	currentStatus := agent.StepStatus(locale, 0)
-	// displayedContextTokens is the estimated/current prompt length for the
-	// active request. It intentionally excludes cumulative billed usage.
-	displayedContextTokens := 0
-	var nativeStatus *nativeThreadStatus
-	if useNativeStatus && statusMessenger != nil {
-		nativeStatus = newNativeThreadStatus(runCtx, statusMessenger, req.Channel, req.ThreadTS, locale, func(err error) {
-			s.recordDeliveryError(req, "", err)
-		})
-	}
-	// Keep-alive: Slack clears setStatus after 2 minutes with no activity.
-	// Re-send the last known status every 90 seconds to prevent expiry during
-	// long-running tool calls.
-	if nativeStatus != nil {
-		go nativeStatus.keepAlive()
-	}
-	appendProgress := func(chunks []map[string]any) {
-		if useNativeStatus {
-			for _, chunk := range chunks {
-				if chunk["type"] != "task_update" {
-					continue
-				}
-				status, _ := chunk["status"].(string)
-				if status == "complete" {
-					clearThreadStatus(context.Background(), statusMessenger, req.Channel, req.ThreadTS)
-					continue
-				}
-				title, _ := chunk["title"].(string)
-				if title != "" {
-					currentStatus = title
-				}
-			}
-			return
-		}
-		if !useStream || progressStopped {
-			return
-		}
-		for _, chunk := range chunks {
-			if chunk["type"] != "task_update" {
-				continue
-			}
-			if displayedContextTokens <= 0 {
-				continue
-			}
-			title, _ := chunk["title"].(string)
-			if title == "" {
-				title = currentStatus
-			}
-			chunk["title"] = streamingTaskTitle(title, displayedContextTokens, s.Memory.MaxContextTokens)
-		}
-		err := s.Messenger.AppendStream(ctx, req.Channel, progressTS, chunks)
-		if err == nil {
-			return
-		}
-		if !isSlackStreamExpired(err) {
-			s.recordDeliveryError(req, progressTS, err)
-			return
-		}
-		// Slack streams expire after a few minutes. Open a fresh stream and
-		// retry the current chunk so long-running tasks keep showing progress.
-		if !restartProgressStream() {
-			return
-		}
-		if retryErr := s.Messenger.AppendStream(ctx, req.Channel, progressTS, chunks); retryErr != nil {
-			s.recordDeliveryError(req, progressTS, retryErr)
-			progressStopped = true
-		}
-	}
-	appendProgressMarkdown := func(text string) error {
-		if useNativeStatus {
-			return nil
-		}
-		if !useStream || progressStopped || text == "" {
-			return nil
-		}
-		err := s.Messenger.AppendStream(ctx, req.Channel, progressTS, []map[string]any{
-			{"type": "markdown_text", "text": text},
-		})
-		if err == nil {
-			return nil
-		}
-		if !isSlackStreamExpired(err) {
-			s.recordDeliveryError(req, progressTS, err)
-			progressStopped = true
-			return err
-		}
-		if !restartProgressStream() {
-			return err
-		}
-		retryErr := s.Messenger.AppendStream(ctx, req.Channel, progressTS, []map[string]any{
-			{"type": "markdown_text", "text": text},
-		})
-		if retryErr != nil {
-			s.recordDeliveryError(req, progressTS, retryErr)
-			progressStopped = true
-			return retryErr
-		}
-		return nil
-	}
-	appendTaskUpdate := func(title, status string) {
-		if title != "" {
-			currentStatus = title
-		}
-		appendProgress([]map[string]any{
-			{"type": "task_update", "id": taskID, "title": currentStatus, "status": status},
-		})
-	}
-	baseContextTokens := 0
-	lastUsageUpdate := time.Time{}
-	setCurrentUsage := func(used int) bool {
-		if used <= 0 {
-			return false
-		}
-		if displayedContextTokens > 0 && used < displayedContextTokens {
-			return false
-		}
-		displayedContextTokens = used
-		return true
-	}
-	updateLiveUsage := func(delta string) {
-		if !useProgressStream || delta == "" {
-			return
-		}
-		if baseContextTokens <= 0 {
-			return
-		}
-		if time.Since(lastUsageUpdate) < 750*time.Millisecond {
-			return
-		}
-		lastUsageUpdate = time.Now()
-		if setCurrentUsage(baseContextTokens) {
-			appendTaskUpdate(currentStatus, "in_progress")
-		}
-	}
-	updateAPIUsage := func(usage llm.Usage) {
-		// Display current prompt/context length, not cumulative billed tokens.
-		if !useProgressStream {
-			_ = setCurrentUsage(contextTokensFromUsage(usage, baseContextTokens))
-			return
-		}
-		if setCurrentUsage(contextTokensFromUsage(usage, baseContextTokens)) {
-			appendTaskUpdate(currentStatus, "in_progress")
-		}
-	}
-	if useProgressStream {
-		progressMarkdown = &streamMarkdownBuffer{
-			ctx:     ctx,
-			channel: req.Channel,
-			append:  appendProgressMarkdown,
-			canFlush: func() bool {
-				return !progressStopped && progressTS != ""
-			},
-		}
-		defer func() {
-			if progressMarkdown != nil {
-				progressMarkdown.Close()
-			}
-		}()
-	}
-	stopProgress := func() {
-		if useNativeStatus {
-			clearThreadStatus(context.Background(), statusMessenger, req.Channel, req.ThreadTS)
-			progressStopped = true
-			return
-		}
-		if progressStopped || progressTS == "" {
-			return
-		}
-		progressStopped = true
-		_ = s.Messenger.StopStream(context.Background(), req.Channel, progressTS)
-	}
-	startAnswerStream := func() *dmStreamWriter {
-		if answerStream != nil {
-			return answerStream
-		}
-		if progressMarkdown != nil {
-			progressMarkdown.Close()
-		}
-		appendTaskUpdate(agent.GeneratingStatus(locale), "in_progress")
-		answerStream = &dmStreamWriter{
-			ctx: ctx, messenger: s.Messenger,
-			channel: req.Channel, threadTS: req.ThreadTS,
-			userID: req.UserID,
-		}
-		return answerStream
-	}
-	active.setProgress(locale, appendProgress)
-	if useStream {
-		runner.OnStream = func(ev agent.StreamEvent) {
-			switch ev.Kind {
-			case agent.StreamNarration:
-				updateLiveUsage(ev.Delta)
-			case agent.StreamAnswer:
-				updateLiveUsage(ev.Delta)
-				startAnswerStream().Write(ev.Delta)
-			}
-		}
-	}
-	runner.StatusUpdate = func(status string) {
-		if nativeStatus != nil {
-			nativeStatus.updateStatic()
-			return
-		}
-		appendTaskUpdate(status, "in_progress")
-	}
-	runner.LoadingMessageUpdate = func(status string) {
-		if nativeStatus != nil {
-			nativeStatus.updateLoadingMessage(status)
-			return
-		}
-		appendTaskUpdate(status, "in_progress")
-	}
-	runner.OnUsage = updateAPIUsage
-	runner.OnLLMStepComplete = func() {
-		appendTaskUpdate(currentStatus, "in_progress")
-	}
+	progress.WireRunner(&runner)
 
 	contentParts := req.ContentParts
 	userText := req.Text
@@ -519,10 +259,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	})
 	messages := activeMemory.Messages
 	contentReplacementState := memory.ReconstructContentReplacementState(messages, sess.ContentReplacements)
-	baseContextTokens = activeMemory.EstimatedTokens
-	if baseContextTokens > 0 {
-		setCurrentUsage(baseContextTokens)
-	}
+	progress.SetBaseContextTokens(activeMemory.EstimatedTokens)
 	agentReq := agent.Request{
 		Messages:     messages,
 		UserQuestion: userText,
@@ -542,15 +279,13 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	}
 	result, err := runner.Run(runCtx, agentReq)
 	evidenceText := webEvidenceMarkdown(result.Generated, locale)
-	if answerStream != nil && evidenceText != "" {
-		answerStream.Write(evidenceText)
+	if progress.AnswerStream() != nil && evidenceText != "" {
+		progress.AnswerStream().Write(evidenceText)
 	}
-	if answerStream != nil {
-		answerStream.Close()
-	}
+	progress.CloseAnswerStream()
 	contextUsageTokens := contextUsageTokenCount(messages, result.Generated)
 	contextUsage := contextUsageText(s.Memory.MaxContextTokens, contextUsageTokens)
-	setCurrentUsage(contextUsageTokens)
+	progress.SetContextUsage(contextUsageTokens)
 
 	sess.UserID = req.UserID
 	sess.PendingUserInput = false
@@ -570,18 +305,14 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 			}
 			sess.Turns, sess.Summary, _ = s.trimAndSummarize(ctx, sess.Turns, sess.Summary)
 			_ = s.Store.Save(ctx, sess)
-			if useNativeStatus {
+			if progress.UseNativeStatus() {
 				// In native status mode the stream task_update path uses runCtx which is
 				// already canceled by the defer; post a real message so the user sees the
 				// cancel confirmation. The post itself clears the setStatus indicator.
 				s.reportError(ctx, req, interruptedMessage(locale))
-			} else if useStream {
-				if progressMarkdown != nil {
-					progressMarkdown.Close()
-				}
-				appendProgress([]map[string]any{
-					{"type": "task_update", "id": taskID, "title": agent.CancelledTitle(locale), "status": "complete"},
-				})
+			} else if progress.UseStream() {
+				progress.CloseMarkdown()
+				progress.AppendTaskUpdate(agent.CancelledTitle(locale), "complete")
 			} else {
 				s.reportError(ctx, req, interruptedMessage(locale))
 			}
@@ -598,15 +329,13 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}
 		sess.Turns, sess.Summary, _ = s.trimAndSummarize(ctx, sess.Turns, sess.Summary)
 		_ = s.Store.Save(ctx, sess)
-		if useNativeStatus {
+		if progress.UseNativeStatus() {
 			// In native status mode appendProgress uses runCtx (already
 			// canceled by defer). Post a real message so the user receives the error ID.
 			// The post also clears the setStatus indicator automatically.
 			s.reportError(ctx, req, failedMessageWithErrorID(locale, errorID))
-		} else if useStream && !progressStopped {
-			appendProgress([]map[string]any{
-				{"type": "task_update", "id": taskID, "title": failedTitleWithErrorID(locale, errorID), "status": "error"},
-			})
+		} else if progress.UseStream() && !progress.Stopped() {
+			progress.AppendTaskUpdate(failedTitleWithErrorID(locale, errorID), "error")
 		}
 		return true
 	}
@@ -630,19 +359,19 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	if err := s.Store.Save(ctx, sess); err != nil && s.Metrics != nil {
 		s.Metrics.Error(err)
 	}
-	if useStream && compressed && !progressStopped {
-		appendTaskUpdate(contextCompressingTitle(locale), "in_progress")
+	if progress.UseStream() && compressed && !progress.Stopped() {
+		progress.AppendTaskUpdate(contextCompressingTitle(locale), "in_progress")
 	}
 	if result.Pending && result.PendingQuestion != "" {
 		pendingText := s.Redactor.Sanitize(result.PendingQuestion)
 		if s.Format != nil {
 			pendingText = s.Format(pendingText)
 		}
-		if useStream {
-			appendTaskUpdate(agent.WaitingTitle(locale), "complete")
-			stopProgress()
+		if progress.UseStream() {
+			progress.AppendTaskUpdate(agent.WaitingTitle(locale), "complete")
+			progress.Stop()
 		}
-		if !useStream && contextUsage != "" {
+		if !progress.UseStream() && contextUsage != "" {
 			var notices []string
 			notices = append(notices, contextUsage)
 			pendingText = appendContextNoticeText(pendingText, notices...)
@@ -661,25 +390,25 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		if runObserver != nil {
 			runObserver.Finish("completed", "", nil, finalText)
 		}
-		answerStreamOK := result.Streamed && answerStream != nil && !answerStream.Failed() && answerStream.TS() != ""
+		answerStreamOK := progress.AnswerStreamOK(result.Streamed)
 		// In native Slack status mode, keep the status visible until the
 		// answer stream is finalized so the UI does not briefly show an empty
 		// handoff between thinking and output.
-		if !progressStopped && !(useNativeStatus && answerStreamOK) {
-			appendTaskUpdate(agent.CompleteTitle(locale), "complete")
-			stopProgress()
+		if !progress.Stopped() && !(progress.UseNativeStatus() && answerStreamOK) {
+			progress.AppendTaskUpdate(agent.CompleteTitle(locale), "complete")
+			progress.Stop()
 		}
 		if answerStreamOK {
-			_ = s.Messenger.StopStream(ctx, req.Channel, answerStream.TS())
+			_ = s.Messenger.StopStream(ctx, req.Channel, progress.AnswerStream().TS())
 			if runObserver != nil {
-				runObserver.LinkSlackMessage(req.Channel, answerStream.TS())
+				runObserver.LinkSlackMessage(req.Channel, progress.AnswerStream().TS())
 			}
 			s.maybeAutoTTS(req.Channel, req.ThreadTS, finalText)
 		} else {
 			if s.Format != nil {
 				finalText = s.Format(finalText)
 			}
-			if !useStream && contextUsage != "" {
+			if !progress.UseStream() && contextUsage != "" {
 				var notices []string
 				notices = append(notices, contextUsage)
 				finalText = appendContextNoticeText(finalText, notices...)

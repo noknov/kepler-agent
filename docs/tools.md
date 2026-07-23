@@ -21,10 +21,15 @@ families are deferred by default and become available through `tool_search`.
 | `code.definition` | Go to symbol definition |
 | `code.references` | Find symbol references |
 | `code.diagnostics` | LSP diagnostics for a file |
-| `rag-search` | Optional hybrid semantic/full-text code search |
+| `rag-search` | Optional embedding + PostgreSQL full-text + grep code search |
 
 `repo-search` and `repo-read_file` resolve branches to immutable snapshots, so
 concurrent users can inspect different refs without checkout conflicts.
+
+`rag-search` is not BM25. It uses pgvector similarity, PostgreSQL `ts_rank`
+full-text ranking, and a small `git grep` fallback. When embeddings are disabled,
+prefer the direct code, repo, git, and LSP tools until a code graph tool family
+is available.
 
 ## GitHub
 
