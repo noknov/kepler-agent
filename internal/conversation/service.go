@@ -104,11 +104,11 @@ func NewService(store session.Store, messenger Messenger, runner agent.Runner, m
 	}
 }
 
-func (s *Service) HandleMention(ctx context.Context, req Request) {
+func (s *Service) HandleMention(ctx context.Context, req Request) bool {
 	if s.controlActive(req) {
-		return
+		return true
 	}
-	_ = s.process(ctx, req, false)
+	return s.process(ctx, req, false)
 }
 
 func (s *Service) HandleReply(ctx context.Context, req Request) bool {
@@ -131,11 +131,22 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		}
 	}
 	sessionID := session.ID(req.Channel, req.ThreadTS)
-	lock := s.lockFor(sessionID)
-	lock.Lock()
+	var unlock func()
+	if locker, ok := s.Store.(session.Locker); ok {
+		var err error
+		unlock, err = locker.Lock(ctx, sessionID)
+		if err != nil {
+			s.reportError(ctx, req, "Failed to lock session: "+s.Redactor.Sanitize(err.Error()))
+			return false
+		}
+	} else {
+		lock := s.lockFor(sessionID)
+		lock.Lock()
+		unlock = lock.Unlock
+	}
 	var followUps []Request
 	defer func() {
-		lock.Unlock()
+		unlock()
 		if followUp, ok := combineQueuedFollowUps(followUps); ok {
 			// Use a fresh background context with a generous timeout instead of
 			// context.Background() so the follow-up can still be cancelled by the
@@ -991,16 +1002,6 @@ func (s *Service) markEvent(eventID string) bool {
 	for id, seenAt := range s.seen {
 		if now.Sub(seenAt) > s.seenTTL {
 			delete(s.seen, id)
-		}
-	}
-	// Prune session locks that are no longer held and have no active run.
-	for id, lock := range s.locks {
-		if s.active[id] != nil {
-			continue
-		}
-		if lock.TryLock() {
-			lock.Unlock()
-			delete(s.locks, id)
 		}
 	}
 	if _, ok := s.seen[eventID]; ok {

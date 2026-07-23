@@ -36,6 +36,12 @@ type Store interface {
 	Save(ctx context.Context, s Session) error
 }
 
+// Locker is implemented by durable stores that can serialize an entire turn.
+// The PostgreSQL implementation uses advisory locks, which work across pods.
+type Locker interface {
+	Lock(ctx context.Context, id string) (unlock func(), err error)
+}
+
 // FileStore persists sessions as JSON files with per-session locking.
 // Unlike a global mutex, concurrent sessions on different threads never
 // contend with each other — matching Claude Code's session isolation.
@@ -50,8 +56,6 @@ type sessionLock struct {
 	sync.Mutex
 	lastUsed time.Time
 }
-
-const lockEvictAge = 30 * time.Minute
 
 func NewFileStore(dir string) (*FileStore, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -68,17 +72,6 @@ func ID(channel, threadTS string) string {
 func (s *FileStore) lockFor(id string) *sessionLock {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	// Evict stale locks periodically (amortized O(1) — only when map is large)
-	if len(s.locks) > 100 {
-		now := time.Now()
-		for k, v := range s.locks {
-			if now.Sub(v.lastUsed) > lockEvictAge {
-				delete(s.locks, k)
-			}
-		}
-	}
-
 	lock, ok := s.locks[id]
 	if !ok {
 		lock = &sessionLock{}

@@ -22,6 +22,8 @@ func TestValidateShellCommandAllowsOperationalReads(t *testing.T) {
 		`gh pr list`,
 		// git
 		`git log --oneline -20`,
+		`git -C /workspace/repo log --oneline -20`,
+		`git --no-pager -C /workspace/repo show HEAD:README.md`,
 		`git blame internal/app/tools.go`,
 		`git diff HEAD~1`,
 		`git show HEAD:README.md`,
@@ -64,6 +66,10 @@ func TestValidateShellCommandBlocksWritesAndSecrets(t *testing.T) {
 		`git commit -m "foo"`,
 		`git rebase origin/main`,
 		`git clean -fd`,
+		`git -C /workspace/repo checkout main`,
+		`git --no-pager -C /workspace/repo reset --hard`,
+		`git --git-dir=/tmp/repo/.git log`,
+		`git -c core.sshCommand=sh log`,
 		// disallowed bins
 		`bash -c date`,
 		`sh -c whoami`,

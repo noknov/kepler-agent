@@ -808,6 +808,9 @@ func TestLoadObservabilityAuthConfig(t *testing.T) {
 
 func writeEnvFile(t *testing.T, dir string, values map[string]string) {
 	t.Helper()
+	if _, ok := values["POSTGRES_DSN"]; !ok {
+		values["POSTGRES_DSN"] = "postgres://test:test@localhost:5432/oncall?sslmode=disable"
+	}
 	lines := make([]string, 0, len(values))
 	for key, value := range values {
 		lines = append(lines, key+"="+value)
@@ -898,6 +901,7 @@ func resetConfigEnv(t *testing.T) {
 		"OPENAI_AVAILABLE_MODELS",
 		"ALLOW_ENV_MIXING",
 		"PREFER_DOTENV",
+		"POSTGRES_DSN",
 		"ALLOW_EXPERIMENTAL_CODING_ENDPOINT",
 		"WORKSPACE_AUTO_FETCH",
 		"PROMPT_INCLUDE_REPO_INVENTORY",

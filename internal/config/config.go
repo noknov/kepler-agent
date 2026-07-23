@@ -20,8 +20,12 @@ type Config struct {
 	Tools     ToolConfig
 	Observing ObservingConfig
 	RAG       RAGConfig
-	Reminders ReminderConfig
+	Storage   StorageConfig
 }
+
+// StorageConfig owns all durable operational state. RAG may use a different
+// database, but sessions, runs, inbox and reminders must share this DSN.
+type StorageConfig struct{ PostgresDSN string }
 
 type RAGConfig struct {
 	Enabled          bool
@@ -34,8 +38,6 @@ type RAGConfig struct {
 	IndexInterval    time.Duration
 	BatchDelay       time.Duration
 }
-
-type ReminderConfig struct{ PostgresDSN string }
 
 type HTTPConfig struct {
 	Addr                string
@@ -99,7 +101,6 @@ type SecurityConfig struct {
 }
 
 type SessionConfig struct {
-	DataDir             string
 	MaxContextTokens    int    // context window token limit (default 200000)
 	AutocompactBuffer   int    // reserved token headroom before auto-compact (default 13000)
 	CompactModel        string // model used for compact summaries (empty = secondary model, then main model)
@@ -151,7 +152,6 @@ type ToolConfig struct {
 
 type ObservingConfig struct {
 	LogLevel                 string
-	RunsDir                  string
 	AdminToken               string
 	AllowUnauthenticated     bool
 	InputCostPerMTok         float64
@@ -254,7 +254,6 @@ func Load() (Config, error) {
 			PromptIncludeRepoInventory: envBool("PROMPT_INCLUDE_REPO_INVENTORY", true),
 		},
 		Sessions: SessionConfig{
-			DataDir:             env("SESSION_DATA_DIR", filepath.Join(wd, ".data", "sessions")),
 			MaxContextTokens:    envInt("SESSION_MAX_CONTEXT_TOKENS", 200000),
 			AutocompactBuffer:   envInt("SESSION_AUTOCOMPACT_BUFFER", 13000),
 			CompactModel:        env("SESSION_COMPACT_MODEL", ""),
@@ -304,7 +303,6 @@ func Load() (Config, error) {
 		},
 		Observing: ObservingConfig{
 			LogLevel:                 env("LOG_LEVEL", "info"),
-			RunsDir:                  env("RUN_DATA_DIR", filepath.Join(wd, ".data", "runs")),
 			AdminToken:               os.Getenv("OBSERVABILITY_TOKEN"),
 			AllowUnauthenticated:     envBool("OBSERVABILITY_ALLOW_UNAUTHENTICATED", false),
 			InputCostPerMTok:         envFloat("LLM_INPUT_COST_PER_MTOK", -1),
@@ -323,7 +321,7 @@ func Load() (Config, error) {
 			IndexInterval:    envDuration("RAG_INDEX_INTERVAL", 5*time.Minute),
 			BatchDelay:       envDuration("RAG_BATCH_DELAY", 200*time.Millisecond),
 		},
-		Reminders: ReminderConfig{PostgresDSN: firstNonEmpty(os.Getenv("REMINDER_POSTGRES_DSN"), os.Getenv("RAG_POSTGRES_DSN"))},
+		Storage: StorageConfig{PostgresDSN: firstNonEmpty(os.Getenv("POSTGRES_DSN"), os.Getenv("REMINDER_POSTGRES_DSN"), os.Getenv("RAG_POSTGRES_DSN"))},
 	}
 
 	if cfg.Slack.SigningSecret == "" {
@@ -346,6 +344,9 @@ func Load() (Config, error) {
 	}
 	if len(cfg.Security.AllowedUsers) == 0 {
 		return cfg, fmt.Errorf("ALLOWED_SLACK_USERS is required")
+	}
+	if cfg.Storage.PostgresDSN == "" {
+		return cfg, fmt.Errorf("POSTGRES_DSN is required for durable session, event, run, and reminder storage")
 	}
 	if cfg.HTTP.EventWorkers <= 0 || cfg.HTTP.EventQueueSize <= 0 || cfg.HTTP.EventEnqueueTimeout <= 0 || cfg.HTTP.EventTimeout <= 0 || cfg.Tools.AgentMaxConcurrentRuns <= 0 {
 		return cfg, fmt.Errorf("SLACK_EVENT_WORKERS, SLACK_EVENT_QUEUE_SIZE, SLACK_EVENT_ENQUEUE_TIMEOUT, SLACK_EVENT_TIMEOUT, and AGENT_MAX_CONCURRENT_RUNS must be positive")

@@ -15,7 +15,7 @@ type PGStore struct{ pool *pgxpool.Pool }
 
 func NewPGStore(ctx context.Context, dsn string) (*PGStore, error) {
 	if dsn == "" {
-		return nil, fmt.Errorf("REMINDER_POSTGRES_DSN (or RAG_POSTGRES_DSN) is required")
+		return nil, fmt.Errorf("POSTGRES_DSN is required")
 	}
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
