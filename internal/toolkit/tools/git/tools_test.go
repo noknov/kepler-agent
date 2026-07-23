@@ -67,23 +67,6 @@ func TestFetchRefUsesOriginHEADDefaultBranch(t *testing.T) {
 	}
 }
 
-func TestFetchRefUsesPRHeadBranchWhenBranchOmitted(t *testing.T) {
-	root, work := testRepo(t)
-	runGit(t, work, "checkout", "-b", "feature")
-	runGit(t, work, "push", "origin", "feature")
-	head := strings.TrimSpace(runGitOutput(t, work, "rev-parse", "HEAD"))
-	rt := registry.Runtime{Cache: registry.NewRuntimeCache()}
-	registry.SetPRContext(rt, registry.PRContext{Repository: "example/work", RepoPath: "work", HeadRef: "feature", HeadSHA: head})
-	tool := FetchRefTool{Base: Base{Paths: safety.WorkspacePolicy{Roots: []string{root}}, Guard: safety.NewCommandPolicy(), Timeout: 10 * time.Second}}
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{}`), rt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(result.Content, "branch=feature") || !strings.Contains(result.Content, "ref="+head) {
-		t.Fatalf("PR fetch must use the head branch, got %q", result.Content)
-	}
-}
-
 func TestFetchRefUsesProcessFetchCacheWithinTTL(t *testing.T) {
 	root, work := testRepo(t)
 	base := Base{

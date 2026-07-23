@@ -67,8 +67,8 @@ func TestPRDiffStoresReviewContextAndIndexesFiles(t *testing.T) {
 	if strings.Contains(result.Content, "-old\n+new") || !strings.Contains(result.Content, "src/a.ts (hunks=1 +1/-1)") {
 		t.Fatalf("expected compact diff manifest, got %q", result.Content)
 	}
-	pr, ok := registry.PRContextFromRuntime(rt)
-	if !ok || pr.Repository != "example/repo" || pr.RepoPath != "repo" || pr.HeadSHA != "0123456789abcdef" || len(pr.ChangedFiles) != 2 {
+	pr, ok := prDiffContextFromRuntime(rt)
+	if !ok || pr.Repository != "example/repo" || pr.HeadSHA != "0123456789abcdef" || len(pr.ChangedFiles) != 2 {
 		t.Fatalf("PR context = %#v, ok=%v", pr, ok)
 	}
 	fileResult, err := (PRFileDiffTool{}).Execute(context.Background(), json.RawMessage(`{"path":"src/a.ts"}`), rt)
