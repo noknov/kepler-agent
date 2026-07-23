@@ -155,7 +155,14 @@ PLAYWRIGHT_MCP_URL=http://127.0.0.1:8931/mcp go test ./internal/toolkit/tools/pl
 
 Code questions use agentic search by default: grep, immutable repo snapshots,
 file reads, and LSP tools. RAG adds semantic recall for architectural or fuzzy
-natural-language queries.
+natural-language queries, but it depends on an embeddings endpoint and a
+maintained Postgres/pgvector index.
+
+The current RAG store does not use BM25. Its full-text side uses PostgreSQL
+`tsvector` plus `ts_rank`, and `rag-search` blends that with pgvector similarity
+before appending a small `git grep` fallback. If embeddings are disabled,
+`rag-search` is not a pure BM25/grep replacement; use `code-search`,
+`repo-search`, file reads, and LSP tools instead.
 
 ```bash
 docker compose -f docker-compose.rag.yml up -d
@@ -182,6 +189,23 @@ Any OpenAI-compatible `/v1/embeddings` endpoint works. Examples:
 
 Indexing is incremental: changed files are re-chunked, and only changed chunks
 are re-embedded. `rag-search` also queues per-repo indexing on demand.
+
+### Code Graph Direction
+
+If embedding RAG is disabled because index freshness and embedding operations
+are hard to maintain, prefer replacing its product role with a code graph rather
+than a lexical-only search index. The intended boundary is:
+
+| Need | Preferred tool family |
+|---|---|
+| Exact strings, config keys, log snippets | `code-search`, `repo-search`, `git.search_ref` |
+| Symbol definition, references, diagnostics | LSP-backed `code.*` tools |
+| Package dependencies, callers/callees, implementation graph, impact analysis | future `codegraph-*` tools |
+| Fuzzy natural-language recall | embedding RAG, only when enabled and fresh |
+
+Keep code graph tools read-only and deferred by default. They should expose
+small graph queries such as overview, dependencies, callers, callees, and impact
+analysis, then require source reads before final behavioral claims.
 
 ## Cost Tracking
 
