@@ -73,7 +73,7 @@
     }
   },
   "codegraph-overview": {
-    "description": "Build a lightweight Go code graph for a refreshed git branch snapshot. Use for architecture orientation before reading specific files.",
+    "description": "Build a lightweight Go/C# code graph for a refreshed git branch snapshot. Use for architecture orientation before reading specific files.",
     "parameters": {
       "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
       "branch": "Optional remote branch name.",
@@ -81,20 +81,84 @@
     }
   },
   "codegraph-dependencies": {
-    "description": "Show internal imports and importers for one Go package in a refreshed git branch snapshot.",
+    "description": "Show internal imports and importers for one package in a refreshed git branch snapshot.",
     "parameters": {
       "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
       "branch": "Optional remote branch name.",
       "package": "Package import path, directory, name, or unique fragment."
     }
   },
+  "codegraph-symbols": {
+    "description": "Search static Go/C# symbols in a refreshed git branch snapshot without requiring gopls or csharp-ls.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "branch": "Optional remote branch name.",
+      "query": "Symbol name or substring.",
+      "limit": "Maximum symbols. Defaults to 50, max 200."
+    }
+  },
+  "codegraph-definition": {
+    "description": "Find static Go/C# symbol definitions by name in a refreshed git branch snapshot. Use as a fallback when LSP definition fails.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "branch": "Optional remote branch name.",
+      "symbol": "Symbol name, for example AddCommentRoutes or CommentController.GetPostList.",
+      "limit": "Maximum definitions. Defaults to 20, max 100."
+    }
+  },
+  "codegraph-references": {
+    "description": "Find static Go/C# references to a symbol name in a refreshed git branch snapshot. Use as a fallback when LSP references fail.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "branch": "Optional remote branch name.",
+      "symbol": "Symbol name, type name, function name, or method name.",
+      "limit": "Maximum references. Defaults to 100, max 300."
+    }
+  },
+  "codegraph-implementations": {
+    "description": "Find static Go interface implementers or C# interface/base implementations in a refreshed git branch snapshot.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "branch": "Optional remote branch name.",
+      "symbol": "Interface, base type, or type name.",
+      "limit": "Maximum implementations. Defaults to 50, max 200."
+    }
+  },
   "codegraph-callers": {
-    "description": "Find simple Go call sites for a function or method name in a refreshed git branch snapshot. Treat as a static hint and confirm with source reads.",
+    "description": "Find simple Go/C# call sites for a function or method name in a refreshed git branch snapshot. Treat as a static hint and confirm with source reads.",
     "parameters": {
       "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
       "branch": "Optional remote branch name.",
       "symbol": "Function or method name.",
       "limit": "Maximum callers. Defaults to 50, max 200."
+    }
+  },
+  "codegraph-callees": {
+    "description": "Find simple Go/C# outgoing calls made by a function or method in a refreshed git branch snapshot.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "branch": "Optional remote branch name.",
+      "symbol": "Function or method name.",
+      "limit": "Maximum callees. Defaults to 80, max 300."
+    }
+  },
+  "codegraph-callgraph": {
+    "description": "List static Go/C# call edges in a refreshed git branch snapshot, optionally filtered by caller, callee, package, or file.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "branch": "Optional remote branch name.",
+      "filter": "Optional substring matched against caller, callee, or file.",
+      "package": "Optional package/path substring.",
+      "limit": "Maximum call edges. Defaults to 120, max 500."
+    }
+  },
+  "codegraph-impact": {
+    "description": "Estimate static impact for a package or symbol in a refreshed git branch snapshot. Shows package importers and direct callers.",
+    "parameters": {
+      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "branch": "Optional remote branch name.",
+      "target": "Package path/name or function/method symbol.",
+      "limit": "Maximum callers/importers. Defaults to 80, max 300."
     }
   },
   "github-dispatch_workflow": {

@@ -154,7 +154,9 @@ func defaultClearableTools() map[string]bool {
 		"code-read_file", "code-search", "code-symbols",
 		"code-definition", "code-references", "code-implementation",
 		"code-incoming_calls", "code-outgoing_calls", "code-diagnostics", "explore-code",
-		"codegraph-overview", "codegraph-dependencies", "codegraph-callers",
+		"codegraph-overview", "codegraph-dependencies", "codegraph-symbols",
+		"codegraph-definition", "codegraph-references", "codegraph-implementations",
+		"codegraph-callers", "codegraph-callees", "codegraph-callgraph", "codegraph-impact",
 		"tool_spill-read",
 		// Git reading
 		"git-search_ref", "git-read_file_ref", "git-log", "git-show",
