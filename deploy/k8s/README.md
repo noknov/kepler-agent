@@ -16,14 +16,16 @@ Redis dependencies for local or small test clusters.
    ```
 
 2. Create the secret from your environment. `REDIS_URL` should point at the
-   Redis service in this namespace, unless you use an external Redis:
+   Redis service in this namespace, unless you use an external Redis.
+   `POSTGRES_DSN` should point at the PostgreSQL service in this namespace,
+   unless you use external PostgreSQL:
 
    ```bash
    kubectl create namespace slack-copilot-agent
    kubectl -n slack-copilot-agent create secret generic slack-copilot-agent-secrets \
      --from-literal=SLACK_BOT_TOKEN='xoxb-...' \
      --from-literal=SLACK_SIGNING_SECRET='...' \
-     --from-literal=POSTGRES_DSN='postgres://...' \
+     --from-literal=POSTGRES_DSN='postgres://slack_copilot:slack_copilot@slack-copilot-postgres:5432/slack_copilot?sslmode=disable' \
      --from-literal=REDIS_URL='redis://slack-copilot-redis:6379/0' \
      --from-literal=MIMO_API_KEY='...'
    ```
@@ -46,6 +48,8 @@ Redis dependencies for local or small test clusters.
   lease expires.
 - For multiple replicas, keep `POSTGRES_MAX_CONNS` low enough that
   `replicas * per-store pools` stays below the database limit.
+- For production, replace the starter PostgreSQL StatefulSet with managed
+  PostgreSQL or a database setup with your normal backup and upgrade process.
 - For production, replace the starter Redis deployment with managed Redis or
   another durable Redis-compatible service if you need persistence guarantees.
 - Workspace auto-fetch should stay disabled in the main deployment until its
