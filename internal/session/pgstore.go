@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
-	"os"
-	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -16,44 +14,22 @@ import (
 
 // PGStore is the production session store. Session state is a single JSONB
 // document so schema evolution remains compatible with old conversations.
-type PGStore struct{ pool *pgxpool.Pool }
+type PGStore struct {
+	pool    *pgxpool.Pool
+	ownPool bool
+}
 
-func NewPGStore(ctx context.Context, dsn string) (*PGStore, error) {
-	if dsn == "" {
-		return nil, fmt.Errorf("POSTGRES_DSN is required for session storage")
-	}
-	cfg, err := pgxpool.ParseConfig(dsn)
-	if err != nil {
-		return nil, fmt.Errorf("parse session postgres dsn: %w", err)
-	}
-	cfg.MaxConns = int32(envInt("POSTGRES_SESSION_MAX_CONNS", envInt("POSTGRES_MAX_CONNS", 12)))
-	cfg.MinConns = int32(envInt("POSTGRES_SESSION_MIN_CONNS", 1))
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("connect session postgres: %w", err)
-	}
+// NewPGStoreWithPool creates a PGStore using an externally managed pool.
+func NewPGStoreWithPool(ctx context.Context, pool *pgxpool.Pool) (*PGStore, error) {
 	s := &PGStore{pool: pool}
 	if err := s.migrate(ctx); err != nil {
-		pool.Close()
 		return nil, err
 	}
 	return s, nil
 }
 
-func envInt(key string, fallback int) int {
-	raw := os.Getenv(key)
-	if raw == "" {
-		return fallback
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil {
-		return fallback
-	}
-	return v
-}
-
 func (s *PGStore) Close() {
-	if s != nil && s.pool != nil {
+	if s != nil && s.pool != nil && s.ownPool {
 		s.pool.Close()
 	}
 }

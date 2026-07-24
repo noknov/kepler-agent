@@ -24,7 +24,10 @@ type Config struct {
 
 // StorageConfig owns all durable operational state for sessions, runs, inbox,
 // and reminders.
-type StorageConfig struct{ PostgresDSN string }
+type StorageConfig struct {
+	PostgresDSN string
+	RedisURL    string
+}
 
 type HTTPConfig struct {
 	Addr                string
@@ -301,7 +304,10 @@ func Load() (Config, error) {
 			CacheReadCostPerMTok:     envFloat("LLM_CACHE_READ_COST_PER_MTOK", -1),
 			CacheCreationCostPerMTok: envFloat("LLM_CACHE_CREATION_COST_PER_MTOK", -1),
 		},
-		Storage: StorageConfig{PostgresDSN: firstNonEmpty(os.Getenv("POSTGRES_DSN"), os.Getenv("REMINDER_POSTGRES_DSN"))},
+		Storage: StorageConfig{
+			PostgresDSN: firstNonEmpty(os.Getenv("POSTGRES_DSN"), os.Getenv("REMINDER_POSTGRES_DSN")),
+			RedisURL:    firstNonEmpty(os.Getenv("REDIS_URL"), os.Getenv("REDIS_DSN")),
+		},
 	}
 
 	if cfg.Slack.SigningSecret == "" {
@@ -327,6 +333,9 @@ func Load() (Config, error) {
 	}
 	if cfg.Storage.PostgresDSN == "" {
 		return cfg, fmt.Errorf("POSTGRES_DSN is required for durable session, event, run, and reminder storage")
+	}
+	if cfg.Storage.RedisURL == "" {
+		return cfg, fmt.Errorf("REDIS_URL is required for cross-instance caching and event pub/sub")
 	}
 	if cfg.HTTP.EventInboxLease <= 0 {
 		cfg.HTTP.EventInboxLease = cfg.HTTP.EventTimeout + time.Minute
@@ -391,104 +400,54 @@ func inferLLMProviderFrom(get func(string) string) string {
 	return ""
 }
 
+type providerDefaults struct {
+	defaultProtocol string
+	defaultBaseURL  string
+	defaultModel    string
+	apiKeyEnvs      []string
+}
+
+var providerTable = map[string]providerDefaults{
+	"longcat":     {defaultProtocol: "anthropic", defaultBaseURL: "https://api.longcat.chat/anthropic", defaultModel: "LongCat-2.0", apiKeyEnvs: []string{"LONGCAT_API_KEY"}},
+	"mimo":        {defaultProtocol: "anthropic", defaultBaseURL: "https://token-plan-cn.xiaomimimo.com/anthropic", defaultModel: "mimo-v2.5", apiKeyEnvs: []string{"MIMO_API_KEY"}},
+	"anthropic":   {defaultProtocol: "", defaultBaseURL: "https://api.anthropic.com", defaultModel: "claude-sonnet-4-5-20250929", apiKeyEnvs: []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}},
+	"kimi":        {defaultProtocol: "", defaultBaseURL: "https://api.moonshot.ai/v1", defaultModel: "kimi-k2.6", apiKeyEnvs: []string{"KIMI_API_KEY"}},
+	"cliproxyapi": {defaultProtocol: "openai", defaultBaseURL: "http://127.0.0.1:8317/v1", defaultModel: "kimi/kimi-k2.7-code", apiKeyEnvs: []string{"CLIPROXYAPI_API_KEY"}},
+	"moonshot":    {defaultProtocol: "", defaultBaseURL: "https://api.moonshot.ai/v1", defaultModel: "kimi-k2.6", apiKeyEnvs: []string{"MOONSHOT_API_KEY"}},
+	"opencode-go": {defaultProtocol: "openai", defaultBaseURL: "https://opencode.ai/zen/go/v1", defaultModel: "glm-5.2", apiKeyEnvs: []string{"OPENCODE_GO_API_KEY"}},
+	"opencode-zen": {defaultProtocol: "openai", defaultBaseURL: "https://opencode.ai/zen/v1", defaultModel: "mimo-v2.5-free", apiKeyEnvs: []string{"OPENCODE_ZEN_API_KEY"}},
+	"deepseek":    {defaultProtocol: "openai", defaultBaseURL: "https://api.deepseek.com", defaultModel: "deepseek-v4-flash", apiKeyEnvs: []string{"DEEPSEEK_API_KEY"}},
+}
+
 func providerProtocol(provider string) string {
-	switch provider {
-	case "longcat":
-		protocol := normalizeLLMProtocol(firstEnv("LONGCAT_PROTOCOL", "LLM_PROTOCOL"))
-		if protocol == "" {
-			return "anthropic"
-		}
+	prefix := providerEnvPrefix(provider)
+	protocol := normalizeLLMProtocol(firstEnv(prefix+"_PROTOCOL", "LLM_PROTOCOL"))
+	if protocol != "" {
 		return protocol
-	case "mimo":
-		protocol := normalizeLLMProtocol(firstEnv("MIMO_PROTOCOL", "LLM_PROTOCOL"))
-		if protocol == "" {
-			return "anthropic"
-		}
-		return protocol
-	case "anthropic":
-		return normalizeLLMProtocol(firstEnv("ANTHROPIC_PROTOCOL", "LLM_PROTOCOL"))
-	case "kimi":
-		return normalizeLLMProtocol(firstEnv("KIMI_PROTOCOL", "LLM_PROTOCOL"))
-	case "cliproxyapi":
-		protocol := normalizeLLMProtocol(firstEnv("CLIPROXYAPI_PROTOCOL", "LLM_PROTOCOL"))
-		if protocol == "" {
-			return "openai"
-		}
-		return protocol
-	case "opencode-go":
-		protocol := normalizeLLMProtocol(firstEnv("OPENCODE_GO_PROTOCOL", "LLM_PROTOCOL"))
-		if protocol == "" {
-			return "openai"
-		}
-		return protocol
-	case "opencode-zen":
-		protocol := normalizeLLMProtocol(firstEnv("OPENCODE_ZEN_PROTOCOL", "LLM_PROTOCOL"))
-		if protocol == "" {
-			return "openai"
-		}
-		return protocol
-	case "deepseek":
-		protocol := normalizeLLMProtocol(firstEnv("DEEPSEEK_PROTOCOL", "LLM_PROTOCOL"))
-		if protocol == "" {
-			return "openai"
-		}
-		return protocol
-	default:
-		return normalizeLLMProtocol(firstEnv("LLM_PROTOCOL"))
 	}
+	if defaults, ok := providerTable[provider]; ok && defaults.defaultProtocol != "" {
+		return defaults.defaultProtocol
+	}
+	return normalizeLLMProtocol(firstEnv("LLM_PROTOCOL"))
 }
 
 func providerBaseURL(provider string) string {
-	switch provider {
-	case "longcat":
-		return env("LONGCAT_BASE_URL", "https://api.longcat.chat/anthropic")
-	case "mimo":
-		return env("MIMO_BASE_URL", "https://token-plan-cn.xiaomimimo.com/anthropic")
-	case "anthropic":
-		return env("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
-	case "kimi":
-		return env("KIMI_BASE_URL", "https://api.moonshot.ai/v1")
-	case "cliproxyapi":
-		return env("CLIPROXYAPI_BASE_URL", "http://127.0.0.1:8317/v1")
-	case "moonshot":
-		return env("MOONSHOT_BASE_URL", "https://api.moonshot.ai/v1")
-	case "opencode-go":
-		return env("OPENCODE_GO_BASE_URL", "https://opencode.ai/zen/go/v1")
-	case "opencode-zen":
-		return env("OPENCODE_ZEN_BASE_URL", "https://opencode.ai/zen/v1")
-	case "deepseek":
-		return env("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-	default:
-		return env("OPENAI_BASE_URL", "https://api.openai.com/v1")
+	prefix := providerEnvPrefix(provider)
+	if defaults, ok := providerTable[provider]; ok {
+		return env(prefix+"_BASE_URL", defaults.defaultBaseURL)
 	}
+	return env("OPENAI_BASE_URL", "https://api.openai.com/v1")
 }
 
 func providerModel(provider string) string {
-	switch provider {
-	case "longcat":
-		return env("LONGCAT_MODEL", "LongCat-2.0")
-	case "mimo":
-		return env("MIMO_MODEL", "mimo-v2.5")
-	case "anthropic":
-		return env("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
-	case "kimi":
-		if strings.Contains(providerBaseURL("kimi"), "api.kimi.com/coding") {
-			return env("KIMI_MODEL", "kimi-for-coding")
-		}
-		return env("KIMI_MODEL", "kimi-k2.6")
-	case "cliproxyapi":
-		return env("CLIPROXYAPI_MODEL", "kimi/kimi-k2.7-code")
-	case "moonshot":
-		return env("MOONSHOT_MODEL", "kimi-k2.6")
-	case "opencode-go":
-		return env("OPENCODE_GO_MODEL", "glm-5.2")
-	case "opencode-zen":
-		return env("OPENCODE_ZEN_MODEL", "mimo-v2.5-free")
-	case "deepseek":
-		return env("DEEPSEEK_MODEL", "deepseek-v4-flash")
-	default:
-		return env("OPENAI_MODEL", "gpt-4o-mini")
+	prefix := providerEnvPrefix(provider)
+	if provider == "kimi" && strings.Contains(providerBaseURL("kimi"), "api.kimi.com/coding") {
+		return env("KIMI_MODEL", "kimi-for-coding")
 	}
+	if defaults, ok := providerTable[provider]; ok {
+		return env(prefix+"_MODEL", defaults.defaultModel)
+	}
+	return env("OPENAI_MODEL", "gpt-4o-mini")
 }
 
 func providerMultimodalModel(provider string) string {
@@ -586,28 +545,10 @@ func deepSeekModels() []string {
 }
 
 func providerAPIKey(provider string) string {
-	switch provider {
-	case "longcat":
-		return firstEnv("LONGCAT_API_KEY")
-	case "mimo":
-		return firstEnv("MIMO_API_KEY")
-	case "anthropic":
-		return firstEnv("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
-	case "kimi":
-		return firstEnv("KIMI_API_KEY")
-	case "cliproxyapi":
-		return firstEnv("CLIPROXYAPI_API_KEY")
-	case "moonshot":
-		return firstEnv("MOONSHOT_API_KEY")
-	case "opencode-go":
-		return firstEnv("OPENCODE_GO_API_KEY")
-	case "opencode-zen":
-		return firstEnv("OPENCODE_ZEN_API_KEY")
-	case "deepseek":
-		return firstEnv("DEEPSEEK_API_KEY")
-	default:
-		return firstEnv("OPENAI_API_KEY")
+	if defaults, ok := providerTable[provider]; ok {
+		return firstEnv(defaults.apiKeyEnvs...)
 	}
+	return firstEnv("OPENAI_API_KEY")
 }
 
 func providerThinking(provider string) string {
@@ -626,64 +567,39 @@ func providerThinking(provider string) string {
 }
 
 func providerMaxTokens(provider string) int {
+	prefix := providerEnvPrefix(provider)
 	switch provider {
 	case "mimo":
-		return envIntAliases(131072, "MIMO_MAX_TOKENS")
+		return envIntAliases(131072, prefix+"_MAX_TOKENS")
 	case "anthropic":
-		return envIntAliases(20000, "ANTHROPIC_MAX_TOKENS", "CLAUDE_CODE_MAX_OUTPUT_TOKENS")
+		return envIntAliases(20000, prefix+"_MAX_TOKENS", "CLAUDE_CODE_MAX_OUTPUT_TOKENS")
+	case "opencode-go", "opencode-zen":
+		return 0
 	case "kimi", "moonshot":
 		return envIntAliases(20000, "KIMI_MAX_TOKENS")
-	case "cliproxyapi":
-		return envIntAliases(20000, "CLIPROXYAPI_MAX_TOKENS")
-	case "opencode-go":
-		return 0
-	case "opencode-zen":
-		return 0
-	case "deepseek":
-		return envIntAliases(20000, "DEEPSEEK_MAX_TOKENS")
 	default:
-		return envIntAliases(20000, "OPENAI_MAX_TOKENS")
+		return envIntAliases(20000, prefix+"_MAX_TOKENS")
 	}
 }
 
 func providerTemperature(provider string) float64 {
-	switch provider {
-	case "mimo":
-		return envFloatAliases(0, "MIMO_TEMPERATURE")
-	case "kimi", "moonshot":
+	prefix := providerEnvPrefix(provider)
+	if provider == "kimi" || provider == "moonshot" {
 		return envFloatAliases(0, "KIMI_TEMPERATURE")
-	case "cliproxyapi":
-		return envFloatAliases(0, "CLIPROXYAPI_TEMPERATURE")
-	case "opencode-go":
-		return envFloatAliases(0, "OPENCODE_GO_TEMPERATURE")
-	case "opencode-zen":
-		return envFloatAliases(0, "OPENCODE_ZEN_TEMPERATURE")
-	case "deepseek":
-		return envFloatAliases(0, "DEEPSEEK_TEMPERATURE")
-	default:
-		return envFloatAliases(0, "OPENAI_TEMPERATURE", "ANTHROPIC_TEMPERATURE")
 	}
+	fallbackKeys := []string{prefix + "_TEMPERATURE"}
+	if provider == "openai" || provider == "" {
+		fallbackKeys = append(fallbackKeys, "ANTHROPIC_TEMPERATURE")
+	}
+	return envFloatAliases(0, fallbackKeys...)
 }
 
 func providerTimeout(provider string) time.Duration {
-	switch provider {
-	case "mimo":
-		return envDurationAliases(120*time.Second, "MIMO_TIMEOUT")
-	case "anthropic":
-		return envDurationAliases(120*time.Second, "ANTHROPIC_TIMEOUT", "API_TIMEOUT_MS")
-	case "kimi", "moonshot":
+	prefix := providerEnvPrefix(provider)
+	if provider == "kimi" || provider == "moonshot" {
 		return envDurationAliases(120*time.Second, "KIMI_TIMEOUT", "API_TIMEOUT_MS")
-	case "cliproxyapi":
-		return envDurationAliases(120*time.Second, "CLIPROXYAPI_TIMEOUT", "API_TIMEOUT_MS")
-	case "opencode-go":
-		return envDurationAliases(120*time.Second, "OPENCODE_GO_TIMEOUT", "API_TIMEOUT_MS")
-	case "opencode-zen":
-		return envDurationAliases(120*time.Second, "OPENCODE_ZEN_TIMEOUT", "API_TIMEOUT_MS")
-	case "deepseek":
-		return envDurationAliases(120*time.Second, "DEEPSEEK_TIMEOUT", "API_TIMEOUT_MS")
-	default:
-		return envDurationAliases(120*time.Second, "OPENAI_TIMEOUT", "API_TIMEOUT_MS")
 	}
+	return envDurationAliases(120*time.Second, prefix+"_TIMEOUT", "API_TIMEOUT_MS")
 }
 
 func envCSV(key string) []string {

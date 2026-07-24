@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/noknov/slack-copilot-agent/internal/agent"
+	"github.com/noknov/slack-copilot-agent/internal/infra/redisclient"
 	"github.com/noknov/slack-copilot-agent/internal/llm"
 	"github.com/noknov/slack-copilot-agent/internal/memory"
 	"github.com/noknov/slack-copilot-agent/internal/observability"
@@ -63,9 +64,14 @@ type Service struct {
 	HealthSummary    func() string
 	AutoTTS          AutoTTSFunc
 	TTSSummarizer    *TTSSummarizer
+	Redis            *redisclient.Client
+	// PodID identifies this process instance for cross-pod active run routing.
+	PodID string
 	// RunSemaphore bounds expensive LLM/tool executions across ingress paths.
 	// It is shared by the Slack and Web services created by app.Server.
 	RunSemaphore chan struct{}
+	// MaxConcurrentRuns is the cluster-wide limit enforced via Redis.
+	MaxConcurrentRuns int
 	// FollowUpContext is the service lifecycle context used for queued
 	// follow-up turns. It lets shutdown cancel work that was spawned after the
 	// original Slack request context had already ended.
@@ -73,11 +79,9 @@ type Service struct {
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
-	seen  map[string]time.Time
 	// active is intentionally separate from per-session locks: in-flight
 	// replies must be queued/cancelled without blocking on the running turn.
-	active  map[string]*activeRun
-	seenTTL time.Duration
+	active map[string]*activeRun
 }
 
 type Request struct {
@@ -101,9 +105,7 @@ func NewService(store session.Store, messenger Messenger, runner agent.Runner, m
 		Redactor:       redactor,
 		Metrics:        metrics,
 		locks:          map[string]*sync.Mutex{},
-		seen:           map[string]time.Time{},
 		active:         map[string]*activeRun{},
-		seenTTL:        10 * time.Minute,
 	}
 }
 
@@ -125,14 +127,11 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	if s.Store == nil || s.Messenger == nil {
 		return false
 	}
-	if s.RunSemaphore != nil {
-		select {
-		case s.RunSemaphore <- struct{}{}:
-			defer func() { <-s.RunSemaphore }()
-		case <-ctx.Done():
-			return false
-		}
+	releaseRunSlot, ok := s.acquireRunSlot(ctx)
+	if !ok {
+		return false
 	}
+	defer releaseRunSlot()
 	sessionID := session.ID(req.Channel, req.ThreadTS)
 	var unlock func()
 	if locker, ok := s.Store.(session.Locker); ok {
@@ -244,7 +243,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		sysPrompt += "\n\nThe web-search tool is currently disabled by the user. If this question would clearly benefit from a live web search, politely note in your reply that enabling Auto-search in App Home would allow you to look it up."
 	}
 
-	threadContext := s.Messenger.ThreadContext(ctx, req.Channel, req.ThreadTS, 0)
+	threadContext := s.cachedThreadContext(ctx, req.Channel, req.ThreadTS)
 	activeMemory := s.pipeline().BuildActiveRequest(memory.ActiveRequestInput{
 		SystemPrompt:      sysPrompt,
 		CompactBoundaries: sess.CompactBoundaries,
@@ -728,24 +727,44 @@ func (s *Service) lockFor(sessionID string) *sync.Mutex {
 	return lock
 }
 
+const (
+	eventSeenTTL     = 10 * time.Minute
+	threadContextTTL = 30 * time.Second
+)
+
+func (s *Service) cachedThreadContext(ctx context.Context, channel, threadTS string) string {
+	if channel == "" || threadTS == "" {
+		return ""
+	}
+	key := "slack:thread:" + channel + ":" + threadTS
+	if s.Redis != nil {
+		if cached, err := s.Redis.Get(ctx, key); err == nil && cached != "" {
+			return cached
+		}
+	}
+	result := s.Messenger.ThreadContext(ctx, channel, threadTS, 0)
+	if s.Redis != nil && result != "" {
+		_ = s.Redis.Set(ctx, key, result, threadContextTTL)
+	}
+	return result
+}
+
 func (s *Service) markEvent(eventID string) bool {
 	if eventID == "" {
 		return true
 	}
-	now := time.Now()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for id, seenAt := range s.seen {
-		if now.Sub(seenAt) > s.seenTTL {
-			delete(s.seen, id)
-		}
+	if s.Redis == nil {
+		return true
 	}
-	if _, ok := s.seen[eventID]; ok {
-		return false
+	ok, err := s.Redis.SetNX(context.Background(), "event:seen:"+eventID, "1", eventSeenTTL)
+	if err != nil {
+		log.Printf("markEvent redis SetNX: %v (falling through)", err)
+		return true
 	}
-	s.seen[eventID] = now
-	return true
+	return ok
 }
+
+const activeRunTTL = 30 * time.Minute
 
 func (s *Service) registerActive(sessionID string, run *activeRun) {
 	s.mu.Lock()
@@ -754,6 +773,9 @@ func (s *Service) registerActive(sessionID string, run *activeRun) {
 		s.active = map[string]*activeRun{}
 	}
 	s.active[sessionID] = run
+	if s.Redis != nil {
+		_ = s.Redis.Set(context.Background(), "active:"+sessionID, s.PodID, activeRunTTL)
+	}
 }
 
 func (s *Service) unregisterActive(sessionID string, run *activeRun) {
@@ -761,6 +783,9 @@ func (s *Service) unregisterActive(sessionID string, run *activeRun) {
 	defer s.mu.Unlock()
 	if s.active[sessionID] == run {
 		delete(s.active, sessionID)
+	}
+	if s.Redis != nil {
+		_ = s.Redis.Del(context.Background(), "active:"+sessionID)
 	}
 }
 
@@ -774,19 +799,84 @@ func (s *Service) controlActive(req Request) bool {
 	if strings.TrimSpace(req.ThreadTS) == "" {
 		return false
 	}
-	active := s.activeFor(session.ID(req.Channel, req.ThreadTS))
-	if active == nil || active.userID != req.UserID {
+	sessionID := session.ID(req.Channel, req.ThreadTS)
+
+	if local := s.activeFor(sessionID); local != nil && local.userID == req.UserID {
+		if !s.markEvent(req.EventID) {
+			return true
+		}
+		if isCancelRequest(req.Text) {
+			local.interrupt()
+			return true
+		}
+		local.enqueue(req)
+		return true
+	}
+
+	if s.Redis == nil {
+		return false
+	}
+	ownerPod, err := s.Redis.Get(context.Background(), "active:"+sessionID)
+	if err != nil || ownerPod == "" || ownerPod == s.PodID {
 		return false
 	}
 	if !s.markEvent(req.EventID) {
 		return true
 	}
+	action := "steer"
 	if isCancelRequest(req.Text) {
-		active.interrupt()
-		return true
+		action = "cancel"
 	}
-	active.enqueue(req)
+	payload, _ := json.Marshal(map[string]string{
+		"session": sessionID,
+		"action":  action,
+		"user":    req.UserID,
+		"event":   req.EventID,
+		"text":    req.Text,
+		"channel": req.Channel,
+		"thread":  req.ThreadTS,
+	})
+	_ = s.Redis.Publish(context.Background(), "pod:control:"+ownerPod, string(payload))
 	return true
+}
+
+// StartControlSubscriber listens for cross-pod cancel/steer commands.
+func (s *Service) StartControlSubscriber(ctx context.Context) {
+	if s.PodID == "" || s.Redis == nil {
+		return
+	}
+	sub := s.Redis.Subscribe(ctx, "pod:control:"+s.PodID)
+	defer sub.Close()
+	ch := sub.Channel()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-ch:
+			if !ok {
+				return
+			}
+			var cmd struct {
+				Session string `json:"session"`
+				Action  string `json:"action"`
+				User    string `json:"user"`
+				Text    string `json:"text"`
+			}
+			if json.Unmarshal([]byte(msg.Payload), &cmd) != nil {
+				continue
+			}
+			active := s.activeFor(cmd.Session)
+			if active == nil || active.userID != cmd.User {
+				continue
+			}
+			switch cmd.Action {
+			case "cancel":
+				active.interrupt()
+			case "steer":
+				active.enqueue(Request{UserID: cmd.User, Text: cmd.Text})
+			}
+		}
+	}
 }
 
 func (s *Service) trimAndSummarize(ctx context.Context, turns []memory.Turn, existing string) ([]memory.Turn, string, bool) {
@@ -804,6 +894,55 @@ func (s *Service) pipeline() *memory.Pipeline {
 		return s.MemoryPipeline
 	}
 	return memory.NewPipeline(s.Memory, s.Compactor)
+}
+
+const redisRunSemKey = "agent:runs:active"
+
+func (s *Service) acquireRunSlot(ctx context.Context) (func(), bool) {
+	localAcquired := false
+	redisAcquired := false
+	if s.RunSemaphore != nil {
+		select {
+		case s.RunSemaphore <- struct{}{}:
+			localAcquired = true
+		case <-ctx.Done():
+			return nil, false
+		}
+	}
+	if s.Redis == nil {
+		return func() { s.releaseRunSlot(localAcquired, false) }, true
+	}
+	limit := s.MaxConcurrentRuns
+	if limit <= 0 {
+		limit = 16
+	}
+	for {
+		n, err := s.Redis.Incr(ctx, redisRunSemKey)
+		if err != nil {
+			return func() { s.releaseRunSlot(localAcquired, false) }, true
+		}
+		if n <= int64(limit) {
+			_ = s.Redis.Expire(ctx, redisRunSemKey, 10*time.Minute)
+			redisAcquired = true
+			return func() { s.releaseRunSlot(localAcquired, redisAcquired) }, true
+		}
+		_, _ = s.Redis.Decr(ctx, redisRunSemKey)
+		select {
+		case <-ctx.Done():
+			s.releaseRunSlot(localAcquired, false)
+			return nil, false
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+func (s *Service) releaseRunSlot(localAcquired, redisAcquired bool) {
+	if redisAcquired && s.Redis != nil {
+		_, _ = s.Redis.Decr(context.Background(), redisRunSemKey)
+	}
+	if localAcquired && s.RunSemaphore != nil {
+		<-s.RunSemaphore
+	}
 }
 
 func newErrorID() string {

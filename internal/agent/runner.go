@@ -2,10 +2,10 @@ package agent
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"regexp"
 	"strings"
 	"sync"
@@ -917,10 +917,11 @@ func (r Runner) runToolCalls(ctx context.Context, calls []llm.ToolCall, s *loopS
 }
 
 // identicalCallKey returns a stable key for a tool call based on its name and
-// a short hash of its arguments. Used by the identical-call circuit breaker.
+// a short hash of its arguments. Uses FNV-1a for speed (non-cryptographic).
 func identicalCallKey(call llm.ToolCall) string {
-	h := sha256.Sum256([]byte(call.Function.Arguments))
-	return call.Function.Name + "::" + fmt.Sprintf("%x", h[:4])
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(call.Function.Arguments))
+	return call.Function.Name + "::" + fmt.Sprintf("%x", h.Sum64())
 }
 
 // handleMaxSteps is called when the agent exhausts its step budget. It makes
@@ -1222,9 +1223,10 @@ func looksRepetitive(text string) bool {
 	return false
 }
 
+var sentenceSplitter = regexp.MustCompile(`[。！？!?;\n]+`)
+
 func repeatedUnits(text string) []string {
-	splitter := regexp.MustCompile(`[。！？!?;\n]+`)
-	raw := splitter.Split(text, -1)
+	raw := sentenceSplitter.Split(text, -1)
 	units := make([]string, 0, len(raw))
 	for _, unit := range raw {
 		unit = strings.Join(strings.Fields(strings.TrimSpace(unit)), " ")

@@ -5,6 +5,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Set REMINDER_TEST_POSTGRES_DSN to run this against a real PostgreSQL server.
@@ -14,11 +16,15 @@ func TestPGStoreIntegration(t *testing.T) {
 		t.Skip("REMINDER_TEST_POSTGRES_DSN is not set")
 	}
 	ctx := context.Background()
-	store, err := NewPGStore(ctx, dsn)
+	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer pool.Close()
+	store, err := NewPGStoreWithPool(ctx, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
 	id := "test-reminder-" + time.Now().UTC().Format("20060102150405.000000000")
 	t.Cleanup(func() { _, _ = store.pool.Exec(ctx, "DELETE FROM reminders WHERE id=$1", id) })
 	if _, err := store.Create(ctx, Reminder{ID: id, UserID: "U-test", Channel: "C-test", Message: "test", RunAt: time.Now().Add(-time.Second)}); err != nil {

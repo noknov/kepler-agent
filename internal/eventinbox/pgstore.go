@@ -17,23 +17,22 @@ type Record struct {
 	Payload json.RawMessage
 }
 type PGStore struct {
-	pool  *pgxpool.Pool
-	owner string
+	pool    *pgxpool.Pool
+	owner   string
+	ownPool bool
 }
 
-func NewPGStore(ctx context.Context, dsn string) (*PGStore, error) {
-	cfg, err := pgxpool.ParseConfig(dsn)
-	if err != nil {
-		return nil, fmt.Errorf("parse inbox postgres dsn: %w", err)
-	}
-	cfg.MaxConns = int32(envInt("POSTGRES_INBOX_MAX_CONNS", envInt("POSTGRES_MAX_CONNS", 6)))
-	cfg.MinConns = int32(envInt("POSTGRES_INBOX_MIN_CONNS", 1))
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("connect inbox postgres: %w", err)
-	}
+// NewPGStoreWithPool creates a PGStore using an externally managed pool.
+func NewPGStoreWithPool(ctx context.Context, pool *pgxpool.Pool) (*PGStore, error) {
 	s := &PGStore{pool: pool, owner: defaultOwner()}
-	_, err = pool.Exec(ctx, `
+	if err := s.migrate(ctx); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *PGStore) migrate(ctx context.Context) error {
+	_, err := s.pool.Exec(ctx, `
 CREATE TABLE IF NOT EXISTS slack_event_inbox (
 	event_id TEXT PRIMARY KEY,
 	payload JSONB NOT NULL,
@@ -50,14 +49,11 @@ ALTER TABLE slack_event_inbox ADD COLUMN IF NOT EXISTS claim_owner TEXT NOT NULL
 CREATE INDEX IF NOT EXISTS idx_slack_event_inbox_pending ON slack_event_inbox(received_at) WHERE status='queued';
 CREATE INDEX IF NOT EXISTS idx_slack_event_inbox_expired ON slack_event_inbox(claim_until) WHERE status='processing';
 `)
-	if err != nil {
-		pool.Close()
-		return nil, err
-	}
-	return s, nil
+	return err
 }
+
 func (s *PGStore) Close() {
-	if s != nil && s.pool != nil {
+	if s != nil && s.pool != nil && s.ownPool {
 		s.pool.Close()
 	}
 }

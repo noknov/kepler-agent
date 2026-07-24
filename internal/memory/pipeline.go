@@ -83,12 +83,14 @@ func (p *Pipeline) BuildActiveRequest(input ActiveRequestInput) ActiveRequest {
 		Summary:           input.SessionSummary,
 		Turns:             input.Turns,
 	})
+	estimatedTokens := CountTokensWithCalibration(messages)
+	persistentTurns := FilterPersistentTurns(input.Turns)
 	return ActiveRequest{
 		Messages:               messages,
-		EstimatedTokens:        CountTokensWithCalibration(messages),
-		TokenBreakdown:         buildTokenBreakdown(input, messages),
+		EstimatedTokens:        estimatedTokens,
+		TokenBreakdown:         buildTokenBreakdownCached(input, messages, estimatedTokens, persistentTurns),
 		ExternalEvidenceTokens: estimateExternalEvidenceTokens(input.ExternalEvidence),
-		ConversationTokens:     CountTokensWithCalibration(ToLLM(FilterPersistentTurns(input.Turns))),
+		ConversationTokens:     CountTokensWithCalibration(ToLLM(persistentTurns)),
 	}
 }
 
@@ -170,12 +172,16 @@ func estimateExternalEvidenceTokens(items []ExternalEvidence) int {
 }
 
 func buildTokenBreakdown(input ActiveRequestInput, messages []llm.Message) TokenBreakdown {
+	return buildTokenBreakdownCached(input, messages, CountTokensWithCalibration(messages), FilterPersistentTurns(input.Turns))
+}
+
+func buildTokenBreakdownCached(input ActiveRequestInput, messages []llm.Message, totalTokens int, persistentTurns []Turn) TokenBreakdown {
 	breakdown := TokenBreakdown{
 		ExternalEvidence: estimateExternalEvidenceTokens(input.ExternalEvidence),
 		SessionSummary:   RoughTokenEstimate(input.SessionSummary),
 		CompactBoundary:  estimateCompactBoundaryTokens(input.CompactBoundaries),
 	}
-	for _, turn := range FilterPersistentTurns(input.Turns) {
+	for _, turn := range persistentTurns {
 		tokens := estimateMessageTokens(&llm.Message{
 			Role:       string(turn.Role),
 			Content:    turn.Content,
@@ -188,7 +194,7 @@ func buildTokenBreakdown(input ActiveRequestInput, messages []llm.Message) Token
 			breakdown.Turns += tokens
 		}
 	}
-	breakdown.Total = CountTokensWithCalibration(messages)
+	breakdown.Total = totalTokens
 	return breakdown
 }
 

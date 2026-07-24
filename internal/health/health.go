@@ -3,6 +3,7 @@ package health
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/noknov/slack-copilot-agent/internal/infra/redisclient"
 	"github.com/noknov/slack-copilot-agent/internal/prompts"
 	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
@@ -44,10 +46,18 @@ type Service struct {
 	Registry       *registry.Registry
 	WorkspaceRoots []string
 	Interval       time.Duration
+	Redis          *redisclient.Client
 
 	mu       sync.RWMutex
 	snapshot Snapshot
 }
+
+const (
+	healthSnapshotKey = "health:snapshot"
+	healthProbeLock   = "health:probe:lock"
+	healthSnapshotTTL = 2 * time.Minute
+	healthLockTTL     = 90 * time.Second
+)
 
 func NewService(reg *registry.Registry, roots []string) *Service {
 	return &Service{
@@ -62,7 +72,7 @@ func NewService(reg *registry.Registry, roots []string) *Service {
 }
 
 func (s *Service) Start(ctx context.Context) {
-	s.Probe(ctx)
+	s.probeOrFetchCached(ctx)
 	interval := s.Interval
 	if interval <= 0 {
 		interval = time.Minute
@@ -74,7 +84,30 @@ func (s *Service) Start(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.Probe(ctx)
+			s.probeOrFetchCached(ctx)
+		}
+	}
+}
+
+func (s *Service) probeOrFetchCached(ctx context.Context) {
+	if s.Redis == nil {
+		s.Probe(ctx)
+		return
+	}
+	acquired, _ := s.Redis.SetNX(ctx, healthProbeLock, "1", healthLockTTL)
+	if acquired {
+		snap := s.Probe(ctx)
+		if data, err := json.Marshal(snap); err == nil {
+			_ = s.Redis.Set(ctx, healthSnapshotKey, string(data), healthSnapshotTTL)
+		}
+		return
+	}
+	if cached, err := s.Redis.Get(ctx, healthSnapshotKey); err == nil && cached != "" {
+		var snap Snapshot
+		if json.Unmarshal([]byte(cached), &snap) == nil {
+			s.mu.Lock()
+			s.snapshot = snap
+			s.mu.Unlock()
 		}
 	}
 }

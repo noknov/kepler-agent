@@ -14,7 +14,10 @@ import (
 	"github.com/noknov/slack-copilot-agent/internal/toolkit/tools/registry"
 )
 
-type CreateTool struct{ Store reminderStore.Store }
+type CreateTool struct {
+	Store    reminderStore.Store
+	OnCreate func(context.Context)
+}
 
 func (CreateTool) IsWrite() bool { return true }
 func (t CreateTool) Spec() llm.ToolSpec {
@@ -48,6 +51,9 @@ func (t CreateTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	r, err := t.Store.Create(ctx, reminderStore.Reminder{ID: id, UserID: rt.UserID, Channel: rt.Channel, ThreadTS: rt.ThreadTS, Message: strings.TrimSpace(a.Message), RunAt: runAt.UTC()})
 	if err != nil {
 		return registry.Result{}, err
+	}
+	if t.OnCreate != nil {
+		t.OnCreate(ctx)
 	}
 	return registry.Result{Content: fmt.Sprintf("提醒已创建：ID %s，将在 %s 提醒“%s”。", r.ID, r.RunAt.Format(time.RFC3339), r.Message)}, nil
 }

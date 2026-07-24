@@ -124,6 +124,9 @@ type Registry struct {
 	deferred   map[string]Tool
 	categories map[string][]string
 	policy     CapabilityPolicy
+	specsCache []llm.ToolSpec
+	namesCache []string
+	cacheValid bool
 }
 
 func New() *Registry {
@@ -209,6 +212,7 @@ func (r *Registry) Register(tool Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tools[tool.Spec().Function.Name] = tool
+	r.cacheValid = false
 }
 
 type categorizedTool struct {
@@ -245,6 +249,7 @@ func (r *Registry) RegisterDeferred(tool DeferredTool) {
 	r.deferred[name] = tool
 	category := tool.Category()
 	r.categories[category] = append(r.categories[category], name)
+	r.cacheValid = false
 }
 
 // ActivateCategory moves deferred tools in category into the active tool set.
@@ -283,6 +288,7 @@ func (r *Registry) activateToolLocked(name string) bool {
 	}
 	r.tools[name] = tool
 	delete(r.deferred, name)
+	r.cacheValid = false
 	return true
 }
 
@@ -324,19 +330,51 @@ func (r *Registry) DeferredToolNames(category string) []string {
 
 func (r *Registry) Specs() []llm.ToolSpec {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	names := r.namesLocked()
-	out := make([]llm.ToolSpec, 0, len(names))
-	for _, name := range names {
-		out = append(out, r.tools[name].Spec())
+	if r.cacheValid && r.specsCache != nil {
+		out := make([]llm.ToolSpec, len(r.specsCache))
+		copy(out, r.specsCache)
+		r.mu.RUnlock()
+		return out
 	}
+	r.mu.RUnlock()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cacheValid && r.specsCache != nil {
+		out := make([]llm.ToolSpec, len(r.specsCache))
+		copy(out, r.specsCache)
+		return out
+	}
+	names := r.namesLocked()
+	specs := make([]llm.ToolSpec, 0, len(names))
+	for _, name := range names {
+		specs = append(specs, r.tools[name].Spec())
+	}
+	r.specsCache = specs
+	r.namesCache = names
+	r.cacheValid = true
+	out := make([]llm.ToolSpec, len(specs))
+	copy(out, specs)
 	return out
 }
 
 func (r *Registry) Names() []string {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.namesLocked()
+	if r.cacheValid && r.namesCache != nil {
+		out := make([]string, len(r.namesCache))
+		copy(out, r.namesCache)
+		r.mu.RUnlock()
+		return out
+	}
+	r.mu.RUnlock()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	names := r.namesLocked()
+	r.namesCache = names
+	out := make([]string, len(names))
+	copy(out, names)
+	return out
 }
 
 func (r *Registry) namesLocked() []string {
