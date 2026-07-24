@@ -6,20 +6,23 @@
   "reminder-list": {"description": "List the requesting user's pending reminders.", "parameters": {}},
   "reminder-cancel": {"description": "Cancel one of the requesting user's pending reminders. Use reminder-list first if the reminder ID is unknown.", "parameters": {"id": "Reminder ID returned by reminder-create or reminder-list."}},
   "code-search": {
-    "description": "Search code with ripgrep under an allowed workspace root. Prefer this for symbols, error messages, routes, config keys, or string patterns in the local working tree. For broad investigations, narrow by repo/path/glob before expanding.",
+    "description": "Search source code using git grep on the refreshed remote default branch by default, falling back to rg for non-git files. Search hits are hints; read the matching file/range with code-read_file before claiming behavior. Use source=working_tree only when investigating uncommitted local changes.",
     "parameters": {
-      "query": "Literal string or regex pattern for ripgrep.",
-      "path": "Directory or file under WORKSPACE_ROOTS. Defaults to first root.",
-      "glob": "Optional rg glob filter, for example '*.go' or '!vendor'.",
-      "limit": "Maximum matching lines. Defaults to 50, max 200."
+      "query": "Regex or literal pattern to search for.",
+      "path": "Optional workspace-relative directory or file to search.",
+      "glob": "Optional file glob, for example **/*.go.",
+      "source": "default_branch (default), working_tree, or a safe git ref such as origin/main or a commit SHA.",
+      "context_lines": "Optional lines of context around matches, max 5.",
+      "limit": "Maximum matching lines, default 50 and max 200."
     }
   },
   "code-read_file": {
-    "description": "Read a text file from an allowed workspace root. Use start_line and max_lines for large files. Read targeted ranges before making claims about file contents.",
+    "description": "Read source code from a workspace file. By default, files inside git repos are read from the refreshed remote default branch (origin/HEAD, mt-main/main/master fallback) so investigations are not affected by the server's current checkout branch or a stale local branch. Use source=working_tree only when the user explicitly asks about uncommitted local changes. Results include line numbers and source metadata; cite these lines before making code behavior claims.",
     "parameters": {
-      "path": "File path under one of WORKSPACE_ROOTS.",
-      "start_line": "1-based start line. Defaults to 1.",
-      "max_lines": "Maximum lines to return. Defaults to 240, max 1000."
+      "path": "Workspace-relative, root-prefixed, or absolute file path.",
+      "source": "default_branch (default), working_tree, or a safe git ref such as origin/main or a commit SHA.",
+      "start_line": "1-based starting line. Omit unless you already know the relevant range.",
+      "max_lines": "Maximum lines to return, default 240 and max 1000."
     }
   },
   "git-status": {
@@ -198,7 +201,7 @@
     }
   },
   "shell": {
-    "description": "Run a read-only shell command for operational inspection. Supports pipelines with | for idiomatic one-liners like \"kubectl get pods -n mt-prod | grep Crash\" or \"git log --oneline | head -20\". Allowed programs: git (all read subcommands), kubectl (get/describe/logs/top/rollout/config/explain/version), gcloud (logging read, container/run/compute/artifacts/monitoring list/describe), gh (run/pr/issue/workflow list and view), helm (list/status/history/get/show), plus Unix utilities (grep, rg, jq, awk, sed, cat, head, tail, find, wc, sort, uniq, cut, tr, curl, date, echo, df, du, ps). Shell meta-operators && ; & > >> are blocked; | only.",
+    "description": "Run a read-only shell command for operational inspection. Supports pipelines with | for idiomatic one-liners like \"kubectl get pods -n mt-prod | grep Crash\" or \"git log --oneline | head -20\". Allowed programs: git (read-only subcommands), kubectl (get/describe/logs/top/rollout/config/explain/version), gcloud (logging read, container/run/compute/artifacts/monitoring list/describe), gh (run/pr/issue/workflow list and view), helm (list/status/history/get/show), plus Unix utilities (grep, rg, jq, yq, cat, ls, head, tail, wc, sort, uniq, cut, tr, diff, date, echo, printf, df, du, ps, uname, hostname, which). Use `rg --files` for repository file discovery; `find`, `curl/wget`, `awk/sed`, interpreters, xargs, tee, shell expansion, redirection, and write operations are not supported. Shell meta-operators && ; & > >> < are blocked; | only.",
     "parameters": {
       "command": "The shell command to run. Supports pipelines. Examples: \"kubectl get pods -n mt-prod | grep -v Running\", \"gcloud logging read 'severity>=ERROR' --project=my-proj --freshness=1h --limit=20\", \"git -C /path/to/repo log --oneline -20\", \"helm list -n default | grep -v DEPLOYED\"."
     }

@@ -32,6 +32,7 @@ Do not start from `git blame` — pickaxe search (`-S`) is faster and doesn't re
 **Avoiding false leads:** When a search term hits code in an unrelated service or channel (e.g. WhatsApp service when looking for Instagram feature), discard immediately and re-search with the exact UI string or enum value. Domain mismatch = wrong term, not wrong file to read.
 
 **For code questions**, follow the call chain top-down:
+- Prefer `code-search` and `code-read_file` for source search and targeted reads. These read the refreshed remote default branch by default; pass `source=working_tree` only when investigating uncommitted local changes. Use shell `rg`/`rg --files` when you need CLI composition, git-specific behavior, or a quick file list.
 - Start from the entry point (route/handler/API endpoint) and follow into business logic.
 - When results span multiple layers, read the service/business-logic layer first.
 - Never quote code that did not appear verbatim in tool output this run.
@@ -41,7 +42,7 @@ Ask the user only when a constraint **that only they can supply** would change t
 
 # Tool Use
 
-**Shell first.** For git, kubectl, gcloud, grep, find, jq, awk, sed, cat, and any other CLI tool — use the `shell` tool and write the command exactly as you would in a terminal. Do not look for a dedicated wrapper when a shell command does the job.
+**Shell first for operational reads.** For git, kubectl, gcloud, grep, rg, jq, cat, ls, head/tail, wc, sort/uniq, cut/tr, diff, date, and other allowlisted read-only CLI tools — use the `shell` tool and write the command exactly as you would in a terminal. For repository file discovery, use `rg --files` instead of `find`. Do not use unsupported shell programs or operators.
 
 Use dedicated tools only when they provide something shell cannot:
 - `gcp-logs` — structured log querying with server-side filters
@@ -52,7 +53,7 @@ Use dedicated tools only when they provide something shell cannot:
 
 **Repo paths:** The private context provides exact paths for each repository. Always use `git -C <absolute-repo-path>` for git commands. Never guess or abbreviate paths.
 
-**Branch-specific queries:** `code-search` and `code-read_file` read from `origin/main` only. For any other branch or ref, use `git -C <repo> show <branch>:<file>` or `git -C <repo> grep <pattern> <branch>` via shell.
+**Branch-specific queries:** `code-search` and `code-read_file` read the refreshed remote default branch unless `source` is set. For a specific branch or ref, pass `source=origin/<branch>` or an immutable commit SHA, or use `git-fetch_ref` followed by `git-search_ref`/`git-read_file_ref`.
 
 - Make independent tool calls in parallel where possible.
 - If a shell call fails, read the error, fix the command, and retry — do not fall back to asking the user.

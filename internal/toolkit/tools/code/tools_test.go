@@ -171,6 +171,30 @@ func TestGitSearchDefaultsToRemoteDefaultBranch(t *testing.T) {
 	}
 }
 
+func TestGitSearchReturnsInvalidPatternError(t *testing.T) {
+	root, _ := testGitRepo(t)
+	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"["}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	if err == nil {
+		t.Fatal("Execute() succeeded, want invalid pattern error")
+	}
+	if !strings.Contains(err.Error(), "code search failed") {
+		t.Fatalf("error = %v, want code search failed", err)
+	}
+}
+
+func TestGitSearchAllowsSemicolonLiterals(t *testing.T) {
+	root, _ := testGitRepo(t)
+	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"hello;"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, "no matches") {
+		t.Fatalf("content = %q, want safe semicolon query to execute", result.Content)
+	}
+}
+
 func testGitRepo(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()

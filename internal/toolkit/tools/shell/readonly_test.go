@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -110,11 +111,29 @@ func TestValidateShellCommandBlocksBackgroundExecution(t *testing.T) {
 		`python3 -c 'print(1)'`,
 		`tee /tmp/out`,
 		`curl https://example.com`,
+		`find . -name "*.go"`,
 		`kubectl config use-context prod`,
 	}
 	for _, cmd := range cases {
 		if err := validateShellCommand(cmd); err == nil {
 			t.Fatalf("validateShellCommand(%q) succeeded, want block (background/chain)", cmd)
+		}
+	}
+}
+
+func TestValidateShellCommandErrorMessagesMatchAllowlist(t *testing.T) {
+	err := validateShellCommand(`find . -name "*.go"`)
+	if err == nil || !strings.Contains(err.Error(), "use rg or a repository-specific code tool") {
+		t.Fatalf("find error = %v, want rg guidance", err)
+	}
+
+	err = validateShellCommand(`python3 -c 'print(1)'`)
+	if err == nil {
+		t.Fatal("python3 succeeded, want block")
+	}
+	for _, unsupported := range []string{"find", "curl", "awk/sed"} {
+		if strings.Contains(err.Error(), unsupported) {
+			t.Fatalf("unknown-command error mentions unsupported tool %q: %v", unsupported, err)
 		}
 	}
 }

@@ -206,6 +206,7 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	if len(repos) > 0 && source != "working_tree" {
 		var lines []string
 		var headers []string
+		var grepErrors []string
 		for _, repoDir := range repos {
 			ref, fetchStatus, sourceErr := sourceRef(ctx, repoDir, source, rt)
 			if sourceErr != nil {
@@ -224,6 +225,7 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 			}
 			got, grepErr := gitGrep(ctx, repoDir, ref, args.Query, relSearch, args.Glob, args.ContextLines, remaining)
 			if grepErr != nil {
+				grepErrors = append(grepErrors, fmt.Sprintf("%s: %v", filepath.Base(repoDir), grepErr))
 				continue
 			}
 			// git grep output for tree searches: "<ref>:<path>:<linenum>:<content>"
@@ -237,6 +239,9 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 			}
 		}
 		if len(lines) == 0 {
+			if len(grepErrors) > 0 {
+				return registry.Result{}, fmt.Errorf("code search failed: %s", strings.Join(grepErrors, "; "))
+			}
 			return registry.Result{Content: strings.Join(headers, "\n") + "\n\nno matches"}, nil
 		}
 		if len(lines) > args.Limit {
@@ -245,7 +250,7 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 		return registry.Result{Content: strings.Join(headers, "\n") + "\n\nSearch hits are hints; read matching files before claiming behavior.\n" + strings.Join(lines, "\n")}, nil
 	}
 
-	// No git repos found — fall back to rg on the local working tree.
+	// Non-git paths, or explicit working_tree reads, fall back to rg locally.
 	cmdArgs := []string{"--line-number", "--no-heading", "--color=never"}
 	if args.ContextLines > 0 {
 		cmdArgs = append(cmdArgs, "-C", strconv.Itoa(args.ContextLines))

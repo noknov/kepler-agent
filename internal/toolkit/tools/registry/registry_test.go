@@ -8,7 +8,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/internal/prompts"
 )
 
-func TestToolSearchCategoriesSchemaIncludesInfrastructure(t *testing.T) {
+func TestToolSearchCategoriesSchemaIncludesDeferredCategories(t *testing.T) {
 	spec := ToolSearchTool{}.Spec()
 	properties, ok := spec.Function.Parameters["properties"].(map[string]any)
 	if !ok {
@@ -26,12 +26,18 @@ func TestToolSearchCategoriesSchemaIncludesInfrastructure(t *testing.T) {
 	if !ok {
 		t.Fatalf("categories enum has unexpected type: %#v", items["enum"])
 	}
-	for _, got := range rawEnum {
-		if got == CategoryInfrastructure {
-			return
+	for _, want := range []string{CategoryDiagnostics, CategoryBrowser, CategoryCode, CategoryIntegration, CategoryInfrastructure} {
+		found := false
+		for _, got := range rawEnum {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("categories enum = %#v, want %q", rawEnum, want)
 		}
 	}
-	t.Fatalf("categories enum = %#v, want %q", rawEnum, CategoryInfrastructure)
 }
 
 func TestFunctionSpecAppliesNestedPromptDescriptions(t *testing.T) {
