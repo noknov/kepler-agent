@@ -24,7 +24,7 @@ Actions, Kubernetes/GCP diagnostics, runbooks, reminders, and browser tasks.
 
 ```bash
 cp .env.example .env
-# Fill Slack, LLM, PostgreSQL, and ALLOWED_SLACK_USERS values.
+# Fill Slack, LLM, PostgreSQL, Redis, and ALLOWED_SLACK_USERS values.
 go run ./cmd/slack-copilot-agent
 ```
 
@@ -49,6 +49,7 @@ SLACK_BOT_TOKEN=xoxb-...
 SLACK_SIGNING_SECRET=...
 ALLOWED_SLACK_USERS=U11111111,U22222222
 POSTGRES_DSN=postgres://user:pass@localhost:5432/slack_copilot?sslmode=disable
+REDIS_URL=redis://localhost:6379/0
 
 LLM_PROVIDER=longcat
 LONGCAT_API_KEY=Bearer lc-...
