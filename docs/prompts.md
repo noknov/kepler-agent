@@ -27,7 +27,7 @@ or a short local identity addendum.
 | `texts.json` | Shared prompt snippets and context wrappers |
 | `rules/*.md` | Markdown rules injected into the main agent and delegates |
 | `skills/<name>/SKILL.md` | Skill definitions with frontmatter |
-| `runbooks/*.md` | Service runbooks searched by `knowledge.runbook_search` |
+| `runbooks/*.md` | Service runbooks searched by `knowledge-runbook_search` |
 
 Only skill metadata appears in the base prompt. Full skill instructions are
 loaded on demand through `skills-load`.

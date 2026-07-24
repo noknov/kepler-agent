@@ -292,7 +292,7 @@ func validateSegmentFields(fields []string) error {
 		}
 		return nil
 	}
-	return fmt.Errorf("command %q is not in the shell allowlist; allowed: git, kubectl, gcloud, gh, helm, grep/rg/awk/sed/jq, find, cat, ls, head/tail/wc/sort/uniq/cut/tr, curl, date, echo", bin)
+	return fmt.Errorf("command %q is not in the shell allowlist; allowed: git, kubectl, gcloud, gh, helm, grep/rg/jq/yq, cat, ls, head/tail/wc/sort/uniq/cut/tr, diff, date, echo/printf, df/du/ps, uname/hostname/which", bin)
 }
 
 func validateJSONQuery(args []string) error {
