@@ -1,6 +1,7 @@
 package safety
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/noknov/slack-copilot-agent/internal/infra/redisclient"
 	"github.com/noknov/slack-copilot-agent/internal/prompts"
 )
 
@@ -22,15 +24,32 @@ type PromptPolicy struct {
 	WorkspaceRoots             []string
 	IncludeRepositoryInventory bool
 	Now                        func() time.Time
+	Redis                      *redisclient.Client
 }
+
+const repoInventoryTTL = 5 * time.Minute
 
 func (p PromptPolicy) SystemPrompt() string {
 	base := prompts.StaticSystemPrompt()
 	base += p.runtimeDatePrompt()
 	if p.IncludeRepositoryInventory {
-		base += prompts.DynamicSystemPrompt(p.discoverRepos())
+		base += prompts.DynamicSystemPrompt(p.cachedRepoInventory())
 	}
 	return base
+}
+
+func (p PromptPolicy) cachedRepoInventory() string {
+	const key = "prompt:repo_inventory"
+	if p.Redis != nil {
+		if cached, err := p.Redis.Get(context.Background(), key); err == nil && cached != "" {
+			return cached
+		}
+	}
+	result := p.discoverRepos()
+	if p.Redis != nil && result != "" {
+		_ = p.Redis.Set(context.Background(), key, result, repoInventoryTTL)
+	}
+	return result
 }
 
 func (p PromptPolicy) runtimeDatePrompt() string {

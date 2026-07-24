@@ -472,9 +472,10 @@ func FormatFiles(files []File) string {
 	return strings.Join(lines, "\n")
 }
 
+var mentionPattern = regexp.MustCompile(`<@([A-Z0-9]+)>`)
+
 func NormalizeMentions(text, botUserID string) string {
-	re := regexp.MustCompile(`<@([A-Z0-9]+)>`)
-	return re.ReplaceAllStringFunc(text, func(match string) string {
+	return mentionPattern.ReplaceAllStringFunc(text, func(match string) string {
 		id := strings.TrimSuffix(strings.TrimPrefix(match, "<@"), ">")
 		if id == botUserID {
 			return "@bot"

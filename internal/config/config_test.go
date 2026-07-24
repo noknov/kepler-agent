@@ -759,6 +759,9 @@ func writeEnvFile(t *testing.T, dir string, values map[string]string) {
 	if _, ok := values["POSTGRES_DSN"]; !ok {
 		values["POSTGRES_DSN"] = "postgres://test:test@localhost:5432/slack_copilot?sslmode=disable"
 	}
+	if _, ok := values["REDIS_URL"]; !ok {
+		values["REDIS_URL"] = "redis://localhost:6379/0"
+	}
 	lines := make([]string, 0, len(values))
 	for key, value := range values {
 		lines = append(lines, key+"="+value)
@@ -850,6 +853,8 @@ func resetConfigEnv(t *testing.T) {
 		"ALLOW_ENV_MIXING",
 		"PREFER_DOTENV",
 		"POSTGRES_DSN",
+		"REDIS_URL",
+		"REDIS_DSN",
 		"ALLOW_EXPERIMENTAL_CODING_ENDPOINT",
 		"WORKSPACE_AUTO_FETCH",
 		"PROMPT_INCLUDE_REPO_INVENTORY",

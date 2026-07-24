@@ -9,6 +9,11 @@ import (
 	"github.com/noknov/slack-copilot-agent/internal/slack"
 )
 
+const (
+	redisEventChannel  = "slack_event_inbox:new"
+	fallbackPollPeriod = 60 * time.Second
+)
+
 func (s *Server) startEventWorkers(ctx context.Context) {
 	if err := s.eventInbox.RecoverExpired(ctx); err != nil {
 		log.Printf("recover expired Slack inbox events: %v", err)
@@ -30,8 +35,13 @@ func (s *Server) startEventWorkers(ctx context.Context) {
 			}
 		})
 	}
+
 	s.Go(func(ctx context.Context) {
-		ticker := time.NewTicker(time.Second)
+		s.subscribeRedisEvents(ctx)
+	})
+
+	s.Go(func(ctx context.Context) {
+		ticker := time.NewTicker(fallbackPollPeriod)
 		defer ticker.Stop()
 		for {
 			select {
@@ -48,6 +58,42 @@ func (s *Server) startEventWorkers(ctx context.Context) {
 			}
 		}
 	})
+}
+
+// subscribeRedisEvents listens to Redis pub/sub for new event notifications,
+// replacing the old 1-second polling loop with event-driven processing.
+func (s *Server) subscribeRedisEvents(ctx context.Context) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		sub := s.redis.Subscribe(ctx, redisEventChannel)
+		ch := sub.Channel()
+		for {
+			select {
+			case <-ctx.Done():
+				_ = sub.Close()
+				return
+			case _, ok := <-ch:
+				if !ok {
+					_ = sub.Close()
+					goto reconnect
+				}
+				if s.draining.Load() {
+					_ = sub.Close()
+					return
+				}
+				s.replayQueuedEvents(ctx)
+			}
+		}
+	reconnect:
+		log.Printf("redis pub/sub disconnected, reconnecting in 2s")
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 func (s *Server) handleQueuedSlackEvent(ctx context.Context, job slackEventJob) {
@@ -114,6 +160,7 @@ func (s *Server) enqueueSlackEvent(ctx context.Context, eventID string, event sl
 	}
 	select {
 	case s.eventQueue <- slackEventJob{eventID: eventID, event: event}:
+		_ = s.redis.Publish(ctx, redisEventChannel, eventID)
 		return true
 	case <-ctx.Done():
 		return false

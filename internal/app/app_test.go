@@ -152,7 +152,7 @@ func TestDefaultToolRegistryDefersHeavyToolFamilies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg := newToolRegistry(cfg, &slack.Client{}, reminderStore, nil, nil, "", safety.WorkspacePolicy{}, safety.CommandPolicy{})
+	reg := newToolRegistry(cfg, &slack.Client{}, reminderStore, nil, nil, "", safety.WorkspacePolicy{}, safety.CommandPolicy{}, nil)
 
 	for _, name := range []string{
 		"github-workflow_runs",

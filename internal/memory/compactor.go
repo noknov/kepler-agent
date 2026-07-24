@@ -399,16 +399,22 @@ func (c *Compactor) applyCompactBoundary(messages []llm.Message, summary string)
 	// Keep recent messages that fit in ~30% of the threshold.
 	tokenBudget := c.Threshold() * 30 / 100
 	accumulated := 0
+	// Collect in reverse order first, then reverse once to avoid O(n²) prepend.
+	var recentReversed []llm.Message
 	for i := len(messages) - 1; i >= 0; i-- {
 		tokens := estimateMessageTokens(&messages[i])
-		if accumulated+tokens > tokenBudget && len(recent) > 0 {
+		if accumulated+tokens > tokenBudget && len(recentReversed) > 0 {
 			break
 		}
 		if messages[i].Role == "system" {
-			continue // system already handled
+			continue
 		}
 		accumulated += tokens
-		recent = append([]llm.Message{messages[i]}, recent...)
+		recentReversed = append(recentReversed, messages[i])
+	}
+	recent = make([]llm.Message, len(recentReversed))
+	for i, msg := range recentReversed {
+		recent[len(recentReversed)-1-i] = msg
 	}
 
 	// Build the compacted message list.

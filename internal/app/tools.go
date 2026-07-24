@@ -1,10 +1,13 @@
 package app
 
 import (
+	"context"
+
 	agentTools "github.com/noknov/slack-copilot-agent/internal/agent"
 	"github.com/noknov/slack-copilot-agent/internal/codeintel"
 	"github.com/noknov/slack-copilot-agent/internal/config"
 	"github.com/noknov/slack-copilot-agent/internal/delegation"
+	"github.com/noknov/slack-copilot-agent/internal/infra/redisclient"
 	"github.com/noknov/slack-copilot-agent/internal/llm"
 	"github.com/noknov/slack-copilot-agent/internal/mcp"
 	"github.com/noknov/slack-copilot-agent/internal/prompts"
@@ -34,9 +37,16 @@ import (
 	youtrackTools "github.com/noknov/slack-copilot-agent/internal/toolkit/tools/youtrack"
 )
 
-func newToolRegistry(cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) *registry.Registry {
+func newToolRegistry(cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy, rdb *redisclient.Client) *registry.Registry {
 	tools := registry.NewReadOnlyWithAllowedWrites("luckin-create_order", "luckin-cancel_order", "slack-create_canvas", "tts-speak", "reminder-create", "reminder-cancel")
-	tools.Register(reminderTools.CreateTool{Store: reminderStore})
+	tools.Register(reminderTools.CreateTool{
+		Store: reminderStore,
+		OnCreate: func(ctx context.Context) {
+			if rdb != nil {
+				_ = rdb.Publish(ctx, "reminders:new", "1")
+			}
+		},
+	})
 	tools.Register(reminderTools.ListTool{Store: reminderStore})
 	tools.Register(reminderTools.CancelTool{Store: reminderStore})
 	registerDeferredDiagnosticsTools(tools)

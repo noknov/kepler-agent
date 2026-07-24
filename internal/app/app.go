@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,10 +19,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/noknov/slack-copilot-agent/internal/config"
 	"github.com/noknov/slack-copilot-agent/internal/conversation"
 	"github.com/noknov/slack-copilot-agent/internal/eventinbox"
 	"github.com/noknov/slack-copilot-agent/internal/health"
+	"github.com/noknov/slack-copilot-agent/internal/infra/envutil"
+	"github.com/noknov/slack-copilot-agent/internal/infra/redisclient"
 	"github.com/noknov/slack-copilot-agent/internal/observability"
 	"github.com/noknov/slack-copilot-agent/internal/prompts"
 	"github.com/noknov/slack-copilot-agent/internal/reminder"
@@ -55,6 +60,9 @@ func Run(ctx context.Context) error {
 	server.Go(func(ctx context.Context) {
 		server.reminders.Start(ctx)
 	})
+	server.Go(func(ctx context.Context) {
+		server.conv.StartControlSubscriber(ctx)
+	})
 	return server.ListenAndServe(ctx)
 }
 
@@ -72,8 +80,9 @@ type Server struct {
 	sessionStore        *session.PGStore
 	runPGStore          *runs.PGStore
 	eventInbox          *eventinbox.PGStore
+	pgPool              *pgxpool.Pool
+	redis               *redisclient.Client
 	mux                 *http.ServeMux
-	webSearchPrefs      sync.Map
 	tokenUsage          tokenUsageProvider
 	eventQueue          chan slackEventJob
 	eventWorkers        int
@@ -96,6 +105,9 @@ func (s *Server) Close() {
 		s.cancel()
 	}
 	s.Wait(5 * time.Second)
+	if s.redis != nil {
+		_ = s.redis.Close()
+	}
 	if s.eventInbox != nil {
 		s.eventInbox.Close()
 	}
@@ -107,6 +119,9 @@ func (s *Server) Close() {
 	}
 	if s.reminderStore != nil {
 		s.reminderStore.Close()
+	}
+	if s.pgPool != nil {
+		s.pgPool.Close()
 	}
 }
 
@@ -125,29 +140,50 @@ func NewServer(cfg config.Config) (*Server, error) {
 			cleanup[i]()
 		}
 	}
-	store, err := session.NewPGStore(context.Background(), cfg.Storage.PostgresDSN)
+
+	pgCfg, err := pgxpool.ParseConfig(cfg.Storage.PostgresDSN)
 	if err != nil {
-		return nil, err
+		serviceCancel()
+		return nil, fmt.Errorf("parse postgres dsn: %w", err)
 	}
-	cleanup = append(cleanup, store.Close)
-	runStore, err := runs.NewPGStore(context.Background(), cfg.Storage.PostgresDSN)
+	pgCfg.MaxConns = int32(envutil.Int("POSTGRES_MAX_CONNS", 20))
+	pgCfg.MinConns = int32(envutil.Int("POSTGRES_MIN_CONNS", 2))
+	pgPool, err := pgxpool.NewWithConfig(context.Background(), pgCfg)
+	if err != nil {
+		serviceCancel()
+		return nil, fmt.Errorf("connect postgres: %w", err)
+	}
+	cleanup = append(cleanup, pgPool.Close)
+
+	rdb, err := redisclient.New(cfg.Storage.RedisURL)
+	if err != nil {
+		closeOnError()
+		return nil, fmt.Errorf("redis: %w", err)
+	}
+	cleanup = append(cleanup, func() { _ = rdb.Close() })
+
+	store, err := session.NewPGStoreWithPool(context.Background(), pgPool)
 	if err != nil {
 		closeOnError()
 		return nil, err
 	}
-	cleanup = append(cleanup, runStore.Close)
-	reminderStore, err := reminder.NewPGStore(context.Background(), cfg.Storage.PostgresDSN)
+	runStore, err := runs.NewPGStoreWithPool(context.Background(), pgPool)
 	if err != nil {
 		closeOnError()
 		return nil, err
 	}
-	cleanup = append(cleanup, reminderStore.Close)
-	eventInbox, err := eventinbox.NewPGStore(context.Background(), cfg.Storage.PostgresDSN)
+	reminderStore, err := reminder.NewPGStoreWithPool(context.Background(), pgPool)
 	if err != nil {
 		closeOnError()
 		return nil, err
 	}
-	cleanup = append(cleanup, eventInbox.Close)
+	eventInbox, err := eventinbox.NewPGStoreWithPool(context.Background(), pgPool)
+	if err != nil {
+		closeOnError()
+		return nil, err
+	}
+
+	gitcache.SetRedis(rdb)
 
 	slackClient := slack.NewClient(cfg.Slack.BotToken, cfg.Slack.BotUserID)
 	if cfg.Slack.BotUserID == "" {
@@ -161,12 +197,16 @@ func NewServer(cfg config.Config) (*Server, error) {
 	}
 
 	recorder := observability.NewRecorder()
-	runtime := newAgentRuntime(cfg, slackClient, reminderStore, recorder)
+	runtime := newAgentRuntime(cfg, slackClient, reminderStore, recorder, rdb)
 	healthService := health.NewService(runtime.Tools, cfg.Security.WorkspaceRoots)
+	healthService.Redis = rdb
 	recorder.SetCostRates(runtime.CostRates)
 	conv := conversation.NewService(store, slackClient, runtime.Runner, runtime.Memory, runtime.Prompt, runtime.Redactor, recorder)
 	runSemaphore := make(chan struct{}, cfg.Tools.AgentMaxConcurrentRuns)
 	conv.RunSemaphore = runSemaphore
+	conv.MaxConcurrentRuns = cfg.Tools.AgentMaxConcurrentRuns
+	conv.Redis = rdb
+	conv.PodID = generatePodID()
 	conv.FollowUpContext = serviceCtx
 	conv.Format = slack.MarkdownToMrkdwn
 	conv.RunStore = runStore
@@ -194,9 +234,11 @@ func NewServer(cfg config.Config) (*Server, error) {
 		sessionStore:        store,
 		runPGStore:          runStore,
 		health:              healthService,
-		reminders:           reminder.Scheduler{Store: reminderStore, Messenger: slackClient},
+		reminders:           reminder.Scheduler{Store: reminderStore, Messenger: slackClient, Redis: rdb},
 		reminderStore:       reminderStore,
 		eventInbox:          eventInbox,
+		pgPool:              pgPool,
+		redis:               rdb,
 		mux:                 http.NewServeMux(),
 		tokenUsage:          newTokenUsageProvider(cfg.LLM.Provider, cfg.LLM.TokenUsage),
 		eventQueue:          make(chan slackEventJob, cfg.HTTP.EventQueueSize),
@@ -436,15 +478,17 @@ func (s *Server) handleSlackInteractions(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) webSearchPreference(userID string) bool {
-	v, ok := s.webSearchPrefs.Load(userID)
-	if !ok {
-		return true // default On
+	if s.redis == nil {
+		return true
 	}
-	return v.(bool)
+	return s.redis.GetBool(context.Background(), "websearch:"+userID, true)
 }
 
 func (s *Server) handleWebSearchToggle(userID string) {
-	s.webSearchPrefs.Store(userID, !s.webSearchPreference(userID))
+	if s.redis == nil {
+		return
+	}
+	_ = s.redis.SetBool(context.Background(), "websearch:"+userID, !s.webSearchPreference(userID))
 	go func() {
 		if err := s.slack.PublishHome(context.Background(), userID, s.homeView(userID)); err != nil {
 			log.Printf("publish home after web search toggle failed: %v", err)
@@ -813,4 +857,13 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func generatePodID() string {
+	if v := strings.TrimSpace(envutil.Env("HOSTNAME", "")); v != "" {
+		return v
+	}
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return "pod-" + hex.EncodeToString(b[:])
 }
