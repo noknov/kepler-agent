@@ -57,7 +57,6 @@ type LLMConfig struct {
 	Protocol         string
 	AnthropicFlavor  string
 	Thinking         string
-	MaxTokens        int
 	Temperature      float64
 	Timeout          time.Duration
 
@@ -229,7 +228,6 @@ func Load() (Config, error) {
 			Protocol:        llmProtocol,
 			AnthropicFlavor: anthropicFlavor,
 			Thinking:        llmThinking,
-			MaxTokens:       providerMaxTokens(llmProvider),
 			Temperature:     providerTemperature(llmProvider),
 			Timeout:         providerTimeout(llmProvider),
 
@@ -408,15 +406,15 @@ type providerDefaults struct {
 }
 
 var providerTable = map[string]providerDefaults{
-	"longcat":     {defaultProtocol: "anthropic", defaultBaseURL: "https://api.longcat.chat/anthropic", defaultModel: "LongCat-2.0", apiKeyEnvs: []string{"LONGCAT_API_KEY"}},
-	"mimo":        {defaultProtocol: "anthropic", defaultBaseURL: "https://token-plan-cn.xiaomimimo.com/anthropic", defaultModel: "mimo-v2.5", apiKeyEnvs: []string{"MIMO_API_KEY"}},
-	"anthropic":   {defaultProtocol: "", defaultBaseURL: "https://api.anthropic.com", defaultModel: "claude-sonnet-4-5-20250929", apiKeyEnvs: []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}},
-	"kimi":        {defaultProtocol: "", defaultBaseURL: "https://api.moonshot.ai/v1", defaultModel: "kimi-k2.6", apiKeyEnvs: []string{"KIMI_API_KEY"}},
-	"cliproxyapi": {defaultProtocol: "openai", defaultBaseURL: "http://127.0.0.1:8317/v1", defaultModel: "kimi/kimi-k2.7-code", apiKeyEnvs: []string{"CLIPROXYAPI_API_KEY"}},
-	"moonshot":    {defaultProtocol: "", defaultBaseURL: "https://api.moonshot.ai/v1", defaultModel: "kimi-k2.6", apiKeyEnvs: []string{"MOONSHOT_API_KEY"}},
-	"opencode-go": {defaultProtocol: "openai", defaultBaseURL: "https://opencode.ai/zen/go/v1", defaultModel: "glm-5.2", apiKeyEnvs: []string{"OPENCODE_GO_API_KEY"}},
+	"longcat":      {defaultProtocol: "anthropic", defaultBaseURL: "https://api.longcat.chat/anthropic", defaultModel: "LongCat-2.0", apiKeyEnvs: []string{"LONGCAT_API_KEY"}},
+	"mimo":         {defaultProtocol: "anthropic", defaultBaseURL: "https://token-plan-cn.xiaomimimo.com/anthropic", defaultModel: "mimo-v2.5", apiKeyEnvs: []string{"MIMO_API_KEY"}},
+	"anthropic":    {defaultProtocol: "", defaultBaseURL: "https://api.anthropic.com", defaultModel: "claude-sonnet-4-5-20250929", apiKeyEnvs: []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}},
+	"kimi":         {defaultProtocol: "", defaultBaseURL: "https://api.moonshot.ai/v1", defaultModel: "kimi-k2.6", apiKeyEnvs: []string{"KIMI_API_KEY"}},
+	"cliproxyapi":  {defaultProtocol: "openai", defaultBaseURL: "http://127.0.0.1:8317/v1", defaultModel: "kimi/kimi-k2.7-code", apiKeyEnvs: []string{"CLIPROXYAPI_API_KEY"}},
+	"moonshot":     {defaultProtocol: "", defaultBaseURL: "https://api.moonshot.ai/v1", defaultModel: "kimi-k2.6", apiKeyEnvs: []string{"MOONSHOT_API_KEY"}},
+	"opencode-go":  {defaultProtocol: "openai", defaultBaseURL: "https://opencode.ai/zen/go/v1", defaultModel: "glm-5.2", apiKeyEnvs: []string{"OPENCODE_GO_API_KEY"}},
 	"opencode-zen": {defaultProtocol: "openai", defaultBaseURL: "https://opencode.ai/zen/v1", defaultModel: "mimo-v2.5-free", apiKeyEnvs: []string{"OPENCODE_ZEN_API_KEY"}},
-	"deepseek":    {defaultProtocol: "openai", defaultBaseURL: "https://api.deepseek.com", defaultModel: "deepseek-v4-flash", apiKeyEnvs: []string{"DEEPSEEK_API_KEY"}},
+	"deepseek":     {defaultProtocol: "openai", defaultBaseURL: "https://api.deepseek.com", defaultModel: "deepseek-v4-flash", apiKeyEnvs: []string{"DEEPSEEK_API_KEY"}},
 }
 
 func providerProtocol(provider string) string {
@@ -563,22 +561,6 @@ func providerThinking(provider string) string {
 		return firstEnv("DEEPSEEK_THINKING")
 	default:
 		return ""
-	}
-}
-
-func providerMaxTokens(provider string) int {
-	prefix := providerEnvPrefix(provider)
-	switch provider {
-	case "mimo":
-		return envIntAliases(131072, prefix+"_MAX_TOKENS")
-	case "anthropic":
-		return envIntAliases(20000, prefix+"_MAX_TOKENS", "CLAUDE_CODE_MAX_OUTPUT_TOKENS")
-	case "opencode-go", "opencode-zen":
-		return 0
-	case "kimi", "moonshot":
-		return envIntAliases(20000, "KIMI_MAX_TOKENS")
-	default:
-		return envIntAliases(20000, prefix+"_MAX_TOKENS")
 	}
 }
 

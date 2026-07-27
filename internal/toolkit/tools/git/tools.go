@@ -358,7 +358,7 @@ func (LogTool) Parallel() bool { return true }
 func (t LogTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-log",
-		"Show commit history from a refreshed remote branch snapshot. Pass branch when the user asks about a specific branch's latest commits; this never checks out or updates the working tree.",
+		"Show commit history from a refreshed remote branch snapshot, including commit hash, author name/email, author date, and subject. Pass branch when the user asks about a specific branch's latest commits; this never checks out or updates the working tree.",
 		registry.ObjectSchema(nil, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch": map[string]any{"type": "string", "description": "Remote branch name. Omit for origin/HEAD, then mt-main/main/master fallback."},
@@ -388,7 +388,8 @@ func (t LogTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.R
 	if err != nil {
 		return registry.Result{}, err
 	}
-	out, err := t.run(ctx, repo, "log", "--oneline", "-n", strconv.Itoa(args.Limit), snap.Ref)
+	format := "%h%x09%an%x09%ae%x09%ad%x09%s"
+	out, err := t.run(ctx, repo, "log", "--date=iso-strict", "--format="+format, "-n", strconv.Itoa(args.Limit), snap.Ref)
 	return registry.Result{Content: snap.header() + "\n\n" + out}, err
 }
 

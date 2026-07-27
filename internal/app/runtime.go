@@ -84,7 +84,6 @@ func newAgentRuntime(cfg config.Config, slackClient *slack.Client, reminderStore
 			LLM:              llmClient,
 			Model:            cfg.LLM.Model,
 			Thinking:         cfg.LLM.Thinking,
-			MaxTokens:        cfg.LLM.MaxTokens,
 			Temp:             cfg.LLM.Temperature,
 			Tools:            tools,
 			Capabilities:     llmCapabilities,

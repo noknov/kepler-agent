@@ -17,7 +17,6 @@ type Profile struct {
 
 type ExploreProfile struct {
 	MaxSteps     int
-	MaxTokens    int
 	Parallelism  int
 	MaxWorkers   int
 	AllowedTools map[string]bool
@@ -72,7 +71,6 @@ func NewManager(client llm.Client, model, thinking string) *Manager {
 func DefaultExploreProfile() ExploreProfile {
 	return ExploreProfile{
 		MaxSteps:    exploreMaxSteps,
-		MaxTokens:   exploreMaxTokens,
 		Parallelism: 10,
 		MaxWorkers:  3,
 		AllowedTools: map[string]bool{
@@ -105,9 +103,6 @@ func DefaultExploreProfile() ExploreProfile {
 func (m *Manager) SetExploreProfile(profile ExploreProfile) {
 	if profile.MaxSteps <= 0 {
 		profile.MaxSteps = exploreMaxSteps
-	}
-	if profile.MaxTokens <= 0 {
-		profile.MaxTokens = exploreMaxTokens
 	}
 	if profile.Parallelism <= 0 {
 		profile.Parallelism = 10
@@ -179,7 +174,6 @@ func (m *Manager) Run(ctx context.Context, profileName, task, contextText string
 			{Role: "system", Content: profile.SystemPrompt + m.RulesAndSkillsPrompt()},
 			{Role: "user", Content: "Task:\n" + task + "\n\nContext:\n" + contextText},
 		},
-		MaxTokens:   16384,
 		Temperature: 0.1,
 	})
 	if err != nil {

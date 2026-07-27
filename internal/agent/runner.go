@@ -82,7 +82,6 @@ type Runner struct {
 	LLM          llm.Client
 	Model        string
 	Thinking     string
-	MaxTokens    int
 	Temp         float64
 	Tools        *registry.Registry
 	Capabilities llm.Capabilities
@@ -409,7 +408,6 @@ func (r Runner) runStep(ctx context.Context, step, maxOverloadRetries int, s *lo
 		Model:       r.Model,
 		Messages:    s.messages,
 		Tools:       toolSpecs,
-		MaxTokens:   r.MaxTokens,
 		Temperature: r.Temp,
 		Thinking:    r.Thinking,
 	}, s, req)
@@ -939,7 +937,6 @@ func (r Runner) handleMaxSteps(ctx context.Context, s *loopState, req Request) (
 		Model:       r.Model,
 		Messages:    s.messages,
 		Tools:       nil,
-		MaxTokens:   r.MaxTokens,
 		Temperature: r.Temp,
 		Thinking:    r.Thinking,
 	})

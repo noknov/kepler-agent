@@ -8,15 +8,29 @@ type ModelRoute struct {
 }
 
 type ModelRouter struct {
-	DefaultModel    string
-	MultimodalModel string
+	DefaultModel            string
+	MultimodalFallbackModel string
+	SupportsMultimodal      func(model string) bool
 }
 
 func (r ModelRouter) Route(req Request) ModelRoute {
-	if r.MultimodalModel != "" && hasMultimodalInput(req.ContentParts) {
-		return ModelRoute{Model: r.MultimodalModel, Reason: "multimodal_input"}
+	if !hasMultimodalInput(req.ContentParts) {
+		return ModelRoute{Model: r.DefaultModel, Reason: "default"}
+	}
+	if r.supportsMultimodal(r.DefaultModel) {
+		return ModelRoute{Model: r.DefaultModel, Reason: "default_multimodal"}
+	}
+	if r.MultimodalFallbackModel != "" && r.supportsMultimodal(r.MultimodalFallbackModel) {
+		return ModelRoute{Model: r.MultimodalFallbackModel, Reason: "multimodal_fallback"}
+	}
+	if r.MultimodalFallbackModel != "" && r.SupportsMultimodal == nil {
+		return ModelRoute{Model: r.MultimodalFallbackModel, Reason: "multimodal_fallback"}
 	}
 	return ModelRoute{Model: r.DefaultModel, Reason: "default"}
+}
+
+func (r ModelRouter) supportsMultimodal(model string) bool {
+	return r.SupportsMultimodal != nil && r.SupportsMultimodal(model)
 }
 
 func hasMultimodalInput(parts []llm.ContentPart) bool {

@@ -627,7 +627,7 @@ func parseActionsURL(raw string) (actionsURLParts, error) {
 func parsePositiveInt64(value, name string) (int64, error) {
 	n, err := json.Number(value).Int64()
 	if err != nil || n <= 0 {
-		return 0, fmt.Errorf("%s in GitHub Actions URL must be a positive integer", name)
+		return 0, fmt.Errorf("%s in GitHub URL must be a positive integer", name)
 	}
 	return n, nil
 }
@@ -680,9 +680,10 @@ func (t PRDiffTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"github-pr_diff",
 		"Read a compact pull-request review manifest. Use github-pr_file_diff for a targeted file diff instead of paging a whole PR diff.",
-		registry.ObjectSchema([]string{"pr"}, map[string]any{
-			"repository": map[string]any{"type": "string", "description": ""},
-			"pr":         map[string]any{"type": "integer", "description": ""},
+		registry.ObjectSchema(nil, map[string]any{
+			"repository": map[string]any{"type": "string", "description": "GitHub repository in owner/repo form. Optional when url is provided or defaults are configured."},
+			"url":        map[string]any{"type": "string", "description": "GitHub pull request URL. Prefer this when the user pasted a PR URL; repository and pr are extracted from it."},
+			"pr":         map[string]any{"type": "integer", "description": "Pull request number. Optional when url is provided."},
 		}),
 	)
 }
@@ -692,10 +693,21 @@ func (t PRDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 		return registry.Result{}, fmt.Errorf("GitHub is not configured: GITHUB_TOKEN is required")
 	}
 	var args struct {
-		Repository string `json:"repository"`
-		PR         int    `json:"pr"`
+		Repository string      `json:"repository"`
+		URL        string      `json:"url"`
+		PR         json.Number `json:"pr"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
+		return registry.Result{}, err
+	}
+	if parsed, err := parsePullURL(args.URL); err == nil {
+		if args.Repository == "" {
+			args.Repository = parsed.repository
+		}
+		if args.PR == "" && parsed.number > 0 {
+			args.PR = json.Number(fmt.Sprintf("%d", parsed.number))
+		}
+	} else if strings.TrimSpace(args.URL) != "" {
 		return registry.Result{}, err
 	}
 	repository := strings.TrimSpace(args.Repository)
@@ -705,7 +717,8 @@ func (t PRDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	if repository == "" {
 		return registry.Result{}, fmt.Errorf("repository is required")
 	}
-	if args.PR <= 0 {
+	prNumber, _ := args.PR.Int64()
+	if prNumber <= 0 {
 		return registry.Result{}, fmt.Errorf("pr number is required")
 	}
 
@@ -715,10 +728,10 @@ func (t PRDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	}
 
 	// Fetch PR metadata
-	metaURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", t.Client.baseURL(), owner, repo, args.PR)
+	metaURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", t.Client.baseURL(), owner, repo, prNumber)
 	metaData, err := t.Client.do(ctx, http.MethodGet, metaURL, nil)
 	if err != nil {
-		return registry.Result{}, fmt.Errorf("fetch PR metadata: %w", err)
+		return registry.Result{}, fmt.Errorf("fetch PR metadata for %s#%d: %w", repository, prNumber, err)
 	}
 	var prMeta struct {
 		Title   string `json:"title"`
@@ -739,7 +752,7 @@ func (t PRDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	}
 
 	// Fetch diff
-	diffURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", t.Client.baseURL(), owner, repo, args.PR)
+	diffURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", t.Client.baseURL(), owner, repo, prNumber)
 	diffReq, err := http.NewRequestWithContext(ctx, http.MethodGet, diffURL, nil)
 	if err != nil {
 		return registry.Result{}, err
@@ -757,7 +770,7 @@ func (t PRDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 		return registry.Result{}, fmt.Errorf("read PR diff: %w", err)
 	}
 	if diffResp.StatusCode >= 300 {
-		return registry.Result{}, fmt.Errorf("github diff status %d: %s", diffResp.StatusCode, string(diffBody))
+		return registry.Result{}, fmt.Errorf("github diff status %d for %s#%d: %s", diffResp.StatusCode, repository, prNumber, string(diffBody))
 	}
 
 	diff := string(diffBody)
@@ -765,7 +778,7 @@ func (t PRDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	files := diffFileIndex(diff)
 	setPRDiffContext(rt, prDiffContext{
 		Repository: repository,
-		Number:     args.PR,
+		Number:     int(prNumber),
 		HeadRef:    prMeta.Head.Ref,
 		HeadSHA:    prMeta.Head.SHA,
 		BaseRef:    prMeta.Base.Ref,
@@ -783,8 +796,8 @@ func (t PRDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	// through github-pr_file_diff so it never forces the model to paginate a
 	// giant spill blob before it can inspect code at the PR head.
 	var out strings.Builder
-	fmt.Fprintf(&out, "PR diff context established\nrepository=%s\npr=%d\nhead_ref=%s\nhead_sha=%s\nbase_ref=%s\n", repository, args.PR, prMeta.Head.Ref, prMeta.Head.SHA, prMeta.Base.Ref)
-	fmt.Fprintf(&out, "\nPR #%d: %s\n", args.PR, prMeta.Title)
+	fmt.Fprintf(&out, "PR diff context established\nrepository=%s\npr=%d\nhead_ref=%s\nhead_sha=%s\nbase_ref=%s\n", repository, prNumber, prMeta.Head.Ref, prMeta.Head.SHA, prMeta.Base.Ref)
+	fmt.Fprintf(&out, "\nPR #%d: %s\n", prNumber, prMeta.Title)
 	fmt.Fprintf(&out, "State: %s | Merged: %t | Commits: %d\n", prMeta.State, prMeta.Merged, prMeta.Commits)
 	fmt.Fprintf(&out, "Base: %s ← Head: %s (%s)\n", prMeta.Base.Ref, prMeta.Head.Ref, prMeta.Head.SHA[:min(7, len(prMeta.Head.SHA))])
 	if body := strings.TrimSpace(prMeta.Body); body != "" {
@@ -800,6 +813,34 @@ func (t PRDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	fmt.Fprint(&out, "\nUse github-pr_file_diff with one changed path for a focused patch. For surrounding source, pass the shown repository and head_sha/head_ref explicitly to git or code tools.\n")
 
 	return registry.Result{Content: out.String()}, nil
+}
+
+type pullURLParts struct {
+	repository string
+	number     int64
+}
+
+func parsePullURL(raw string) (pullURLParts, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return pullURLParts{}, nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return pullURLParts{}, fmt.Errorf("url must be a GitHub pull request URL")
+	}
+	if !strings.EqualFold(parsed.Host, "github.com") {
+		return pullURLParts{}, fmt.Errorf("url host must be github.com")
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(parts) < 4 || parts[2] != "pull" {
+		return pullURLParts{}, fmt.Errorf("url must look like https://github.com/owner/repo/pull/<pr_number>")
+	}
+	n, err := parsePositiveInt64(parts[3], "pr")
+	if err != nil {
+		return pullURLParts{}, err
+	}
+	return pullURLParts{repository: parts[0] + "/" + parts[1], number: n}, nil
 }
 
 type prDiffContext struct {

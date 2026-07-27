@@ -12,6 +12,26 @@ stay aligned. Use the private overlay only for narrow sensitive details such as
 company-specific repository names, workflow aliases, private runbook references,
 or a short local identity addendum.
 
+## Design Principles
+
+Prompt space is layered by stability:
+
+- `system.md` is the small kernel: identity, confidentiality, evidence,
+  autonomy, communication, and safety. It should not contain project details,
+  one-off incidents, long workflows, or tool-specific recipes.
+- `rules/*.md` contains reusable operating policy such as investigation style,
+  evidence discipline, safety boundaries, and communication norms.
+- `tools.json` owns tool-specific routing and parameter guidance.
+- `delegates.json`, `runner.json`, `health.json`, and prompt-specific files own
+  specialized utility behavior instead of bloating the main agent prompt.
+- Private overlays should contain only deployment-specific context such as
+  repository names, environment mappings, and workflow aliases.
+
+When adding prompt text, prefer the lowest layer that can carry the instruction
+reliably. A useful rule of thumb: if an instruction names a company repo,
+workflow, tenant, branch pattern, incident, or tool implementation detail, it
+does not belong in `system.md`.
+
 ## Committed Prompt Catalog
 
 | File | Purpose |

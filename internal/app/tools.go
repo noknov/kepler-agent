@@ -38,7 +38,7 @@ import (
 )
 
 func newToolRegistry(cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy, rdb *redisclient.Client) *registry.Registry {
-	tools := registry.NewReadOnlyWithAllowedWrites("luckin-create_order", "luckin-cancel_order", "slack-create_canvas", "tts-speak", "reminder-create", "reminder-cancel")
+	tools := registry.NewReadOnlyWithAllowedWrites("github-dispatch_workflow", "luckin-create_order", "luckin-cancel_order", "slack-create_canvas", "tts-speak", "reminder-create", "reminder-cancel")
 	tools.Register(reminderTools.CreateTool{
 		Store: reminderStore,
 		OnCreate: func(ctx context.Context) {

@@ -50,8 +50,8 @@ func (t ReadOnlyTool) Spec() llm.ToolSpec {
 			"\"kubectl get pods -n mt-prod | grep web\" or "+
 			"\"git -C /path/to/repo log --oneline | head -20\". "+
 			"Allowed commands: git (all read subcommands: log, blame, diff, grep, show, fetch, ls-files, etc.), "+
-			"kubectl (get, describe, logs, top, config), gcloud (list/describe), "+
-			"gh (run/pr/issue list and view), "+
+			"kubectl (get, describe, logs, top, auth can-i, config, rollout status/history), gcloud (list/describe), "+
+			"gh (run/pr/issue/search list and view, api GET/HEAD), "+
 			"grep, rg, jq, cat, ls, head, tail, wc, sort, uniq, tr, cut, diff, date, echo, printf. "+
 			"No shell expansion, redirection, interpreters, curl/wget, awk/sed, xargs, tee, find -exec, or write operations are supported. "+
 			"Quote arguments containing spaces; use | only for pipelines.",
@@ -380,11 +380,19 @@ func validateKubectl(args []string) error {
 	}
 	switch args[0] {
 	case "get", "describe", "logs", "top", "explain", "api-resources", "api-versions",
-		"version", "cluster-info", "rollout":
+		"version", "cluster-info":
 		if len(args) >= 2 && isSecretResource(args[1]) {
 			return fmt.Errorf("kubectl %s secret is blocked", args[0])
 		}
 		return nil
+	case "auth":
+		if len(args) >= 2 && args[1] == "can-i" {
+			return nil
+		}
+	case "rollout":
+		if len(args) >= 2 && oneOf(args[1], "status", "history") {
+			return nil
+		}
 	case "config":
 		if len(args) >= 2 && oneOf(args[1], "current-context", "get-contexts", "view") {
 			if args[1] == "view" && !contains(args[2:], "--minify") {
@@ -393,7 +401,7 @@ func validateKubectl(args []string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("kubectl %s is not in the allowlist (allowed: get, describe, logs, top, config, rollout, explain, version, cluster-info)", args[0])
+	return fmt.Errorf("kubectl %s is not in the allowlist (allowed: get, describe, logs, top, auth can-i, config, rollout status/history, explain, version, cluster-info)", args[0])
 }
 
 func validateGCloud(args []string) error {
@@ -527,13 +535,84 @@ func validateGH(args []string) error {
 	resource := args[0]
 	sub := args[1]
 	readSubs := map[string]bool{"list": true, "view": true, "checks": true, "diff": true, "log": true, "status": true}
+	if resource == "api" {
+		return validateGHAPI(args[1:])
+	}
+	if resource == "search" {
+		if oneOf(sub, "code", "commits", "issues", "prs", "repos") {
+			return nil
+		}
+		return fmt.Errorf("gh search %s is not read-only allowlisted", sub)
+	}
 	switch resource {
-	case "run", "workflow", "pr", "issue", "release", "repo", "api":
+	case "run", "workflow", "pr", "issue", "release", "repo":
 		if readSubs[sub] {
 			return nil
 		}
 	}
 	return fmt.Errorf("gh %s %s is not read-only allowlisted", resource, sub)
+}
+
+func validateGHAPI(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("gh api requires an endpoint")
+	}
+	method := "GET"
+	endpoint := ""
+	flagsWithValues := map[string]bool{
+		"--cache":    true,
+		"--header":   true,
+		"-H":         true,
+		"--hostname": true,
+		"--jq":       true,
+		"-q":         true,
+		"--template": true,
+		"-t":         true,
+	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--method" || arg == "-X":
+			if i+1 >= len(args) {
+				return fmt.Errorf("gh api %s requires a value", arg)
+			}
+			method = strings.ToUpper(strings.TrimSpace(args[i+1]))
+			i++
+		case strings.HasPrefix(arg, "--method="):
+			method = strings.ToUpper(strings.TrimSpace(strings.TrimPrefix(arg, "--method=")))
+		case strings.HasPrefix(arg, "-X") && len(arg) > 2:
+			method = strings.ToUpper(strings.TrimSpace(strings.TrimPrefix(arg, "-X")))
+		case oneOf(arg, "--field", "-f", "--raw-field", "-F", "--input"):
+			return fmt.Errorf("gh api request fields/input are not allowed")
+		case strings.HasPrefix(arg, "--field=") || strings.HasPrefix(arg, "-f=") ||
+			strings.HasPrefix(arg, "--raw-field=") || strings.HasPrefix(arg, "-F=") ||
+			strings.HasPrefix(arg, "--input="):
+			return fmt.Errorf("gh api request fields/input are not allowed")
+		case flagsWithValues[arg]:
+			if i+1 >= len(args) {
+				return fmt.Errorf("gh api %s requires a value", arg)
+			}
+			i++
+		case strings.HasPrefix(arg, "-"):
+			// Other supported gh api flags here only alter output shape,
+			// pagination, or verbosity. Request body flags are blocked above.
+			continue
+		case endpoint == "":
+			endpoint = arg
+		}
+	}
+	if method != "GET" && method != "HEAD" {
+		return fmt.Errorf("gh api only allows GET or HEAD")
+	}
+	endpoint = strings.Trim(endpoint, "/")
+	if endpoint == "" {
+		return fmt.Errorf("gh api requires an endpoint")
+	}
+	lowerEndpoint := strings.ToLower(endpoint)
+	if lowerEndpoint == "graphql" || strings.Contains(lowerEndpoint, "/secrets") || strings.Contains(lowerEndpoint, "/secret-scanning") {
+		return fmt.Errorf("gh api endpoint is not read-only allowlisted")
+	}
+	return nil
 }
 
 func validateHelm(args []string) error {

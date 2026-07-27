@@ -59,7 +59,7 @@
     }
   },
   "git-log": {
-    "description": "Read recent commit history from a refreshed remote branch snapshot. This is read-only and does not checkout branches.",
+    "description": "Read recent commit history from a refreshed remote branch snapshot, including commit hash, author name/email, author date, and subject. This is read-only and does not checkout branches.",
     "parameters": {
       "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
       "branch": "Optional remote branch name. Pass this when the user asks about a specific branch's latest commits.",
@@ -183,10 +183,11 @@
     }
   },
   "github-pr_diff": {
-    "description": "Fetch GitHub pull request metadata and unified diff for review or investigation.",
+    "description": "Fetch GitHub pull request metadata and unified diff for review or investigation. When the user provides a GitHub PR URL, pass it as url directly; do not manually retype owner/repo/pr unless needed. This does not require the repository to exist in the local workspace.",
     "parameters": {
-      "repository": "GitHub repository in owner/repo form. Defaults to configured repository when set.",
-      "pr": "Pull request number."
+      "repository": "GitHub repository in owner/repo form. Optional when url is provided or defaults are configured.",
+      "url": "GitHub pull request URL. Prefer this when the user pasted a PR URL; repository and pr are extracted from it.",
+      "pr": "Pull request number. Optional when url is provided."
     }
   },
   "github-job_logs": {
@@ -201,7 +202,7 @@
     }
   },
   "shell": {
-    "description": "Run a read-only shell command for operational inspection. Supports pipelines with | for idiomatic one-liners like \"kubectl get pods -n mt-prod | grep Crash\" or \"git log --oneline | head -20\". Allowed programs: git (read-only subcommands), kubectl (get/describe/logs/top/rollout/config/explain/version), gcloud (logging read, container/run/compute/artifacts/monitoring list/describe), gh (run/pr/issue/workflow list and view), helm (list/status/history/get/show), plus Unix utilities (grep, rg, jq, yq, cat, ls, head, tail, wc, sort, uniq, cut, tr, diff, date, echo, printf, df, du, ps, uname, hostname, which). Use `rg --files` for repository file discovery; `find`, `curl/wget`, `awk/sed`, interpreters, xargs, tee, shell expansion, redirection, and write operations are not supported. Shell meta-operators && ; & > >> < are blocked; | only.",
+    "description": "Run a read-only shell command for operational inspection. Use this shell tool for read-only GitHub CLI commands, including gh api with GET/HEAD, or activate structured github-* tools with tool_search. Supports pipelines with | for idiomatic one-liners like \"kubectl get pods -n mt-prod | grep Crash\" or \"git log --oneline | head -20\". Allowed programs: git (read-only subcommands), kubectl (get/describe/logs/top/auth can-i/rollout status/history/config/explain/version), gcloud (logging read, container/run/compute/artifacts/monitoring list/describe), gh (run/pr/issue/workflow/search list and view, api GET/HEAD), helm (list/status/history/get/show), plus Unix utilities (grep, rg, jq, yq, cat, ls, head, tail, wc, sort, uniq, cut, tr, diff, date, echo, printf, df, du, ps, uname, hostname, which). Use `rg --files` for repository file discovery; `find`, `curl/wget`, `awk/sed`, interpreters, xargs, tee, shell expansion, redirection, and write operations are not supported. Shell meta-operators && ; & > >> < are blocked; | only.",
     "parameters": {
       "command": "The shell command to run. Supports pipelines. Examples: \"kubectl get pods -n mt-prod | grep -v Running\", \"gcloud logging read 'severity>=ERROR' --project=my-proj --freshness=1h --limit=20\", \"git -C /path/to/repo log --oneline -20\", \"helm list -n default | grep -v DEPLOYED\"."
     }

@@ -12,8 +12,7 @@ import (
 )
 
 const (
-	exploreMaxSteps  = 12
-	exploreMaxTokens = 32768
+	exploreMaxSteps = 12
 
 	exploreMicroCompactThreshold = 6
 	exploreKeepRecentToolResults = 4
@@ -134,7 +133,6 @@ func (m *Manager) Explore(ctx context.Context, task, boundaries string, rt regis
 			Thinking:    "", // disable thinking in explore for speed
 			Messages:    messages,
 			Tools:       specs,
-			MaxTokens:   profile.MaxTokens,
 			Temperature: 0.1,
 		})
 		if err != nil {
@@ -336,7 +334,7 @@ func (m *Manager) exploreProfile() ExploreProfile {
 		return DefaultExploreProfile()
 	}
 	profile := m.explore
-	if profile.MaxSteps <= 0 || profile.MaxTokens <= 0 || profile.Parallelism <= 0 || len(profile.AllowedTools) == 0 || profile.SystemPrompt == "" || profile.FinalPrompt == "" {
+	if profile.MaxSteps <= 0 || profile.Parallelism <= 0 || len(profile.AllowedTools) == 0 || profile.SystemPrompt == "" || profile.FinalPrompt == "" {
 		m.SetExploreProfile(profile)
 		profile = m.explore
 	}

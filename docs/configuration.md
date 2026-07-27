@@ -155,16 +155,17 @@ Final answers are flushed in small batches:
 ## Multimodal Routing
 
 Slack App Home shows the configured primary plus Explorer/Summary models.
-`MODEL_ROUTING_MULTIMODAL_MODEL` controls the internal model used for turns with
-image input. `MULTIMODAL_MODELS` controls which models receive image parts.
+`MULTIMODAL_MODELS` declares which models can receive image parts.
+`MODEL_ROUTING_MULTIMODAL_MODEL` is an optional fallback used only when an
+image arrives and the primary model is not listed in `MULTIMODAL_MODELS`.
 
 ```bash
 MODEL_ROUTING_MULTIMODAL_MODEL=
 MULTIMODAL_MODELS=
 ```
 
-If a user attaches an image and the selected model is not listed as multimodal,
-the image is stripped and replaced with a text note asking for a description.
+If neither the selected model nor the fallback is listed as multimodal, the
+image is stripped and replaced with a text note asking for a description.
 
 ## Storage and Concurrency
 

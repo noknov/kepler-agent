@@ -77,6 +77,50 @@ func TestPRDiffStoresReviewContextAndIndexesFiles(t *testing.T) {
 	}
 }
 
+func TestPRDiffUsesPullURLInsteadOfDefaultRepository(t *testing.T) {
+	seenPaths := map[string]int{}
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		seenPaths[r.URL.Path]++
+		if !strings.HasPrefix(r.URL.Path, "/repos/ClareAI/wati-workflow-service/pulls/63") {
+			t.Fatalf("unexpected path = %q", r.URL.Path)
+		}
+		switch r.Header.Get("Accept") {
+		case "application/vnd.github.diff":
+			return response(http.StatusOK, "diff --git a/service.go b/service.go\n@@ -1 +1 @@\n-old\n+new\n"), nil
+		default:
+			return response(http.StatusOK, `{"title":"Review me","state":"open","commits":1,"head":{"ref":"feature/pr","sha":"0123456789abcdef"},"base":{"ref":"main"}}`), nil
+		}
+	})
+	rt := registry.Runtime{Cache: registry.NewRuntimeCache()}
+	tool := PRDiffTool{Client: testClient("ClareAI", "devops-github-workflow", transport)}
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://github.com/ClareAI/wati-workflow-service/pull/63"}`), rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, "repository=ClareAI/wati-workflow-service") || !strings.Contains(result.Content, "pr=63") {
+		t.Fatalf("result = %q", result.Content)
+	}
+	if seenPaths["/repos/ClareAI/wati-workflow-service/pulls/63"] != 2 {
+		t.Fatalf("seen paths = %#v", seenPaths)
+	}
+}
+
+func TestPRDiffNotFoundMentionsResolvedPullTarget(t *testing.T) {
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return response(http.StatusNotFound, `{"message":"Not Found"}`), nil
+	})
+	tool := PRDiffTool{Client: testClient("ClareAI", "devops-github-workflow", transport)}
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://github.com/ClareAl/wati-workflow-service/pull/63"}`), registry.Runtime{})
+	if err == nil {
+		t.Fatal("Execute() succeeded, want 404 error")
+	}
+	for _, want := range []string{"ClareAl/wati-workflow-service#63", "github status 404"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q, want %q", err.Error(), want)
+		}
+	}
+}
+
 func TestDispatchWorkflowExecutesDirectly(t *testing.T) {
 	called := false
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {

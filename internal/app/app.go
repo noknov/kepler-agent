@@ -212,9 +212,11 @@ func NewServer(cfg config.Config) (*Server, error) {
 	conv.RunStore = runStore
 	conv.RunProvider = cfg.LLM.Provider
 	conv.RunModel = cfg.LLM.Model
+	multimodal := multimodalPredicate(cfg.LLM.MultimodalModels)
 	conv.ModelRouter = conversation.ModelRouter{
-		DefaultModel:    cfg.LLM.Model,
-		MultimodalModel: cfg.LLM.MultimodalModel,
+		DefaultModel:            cfg.LLM.Model,
+		MultimodalFallbackModel: cfg.LLM.MultimodalModel,
+		SupportsMultimodal:      multimodal,
 	}
 	conv.CostRates = runtime.CostRates
 	conv.HealthSummary = healthService.SummaryPrompt
@@ -255,7 +257,7 @@ func NewServer(cfg config.Config) (*Server, error) {
 	conv.WebSearchEnabled = func(userID string) bool {
 		return s.webSearchPreference(userID)
 	}
-	conv.Multimodal = multimodalPredicate(cfg.LLM.MultimodalModels)
+	conv.Multimodal = multimodal
 	s.routes(cfg, runtime, recorder, healthService, runtime.Tools)
 	cleanup = nil
 	return s, nil

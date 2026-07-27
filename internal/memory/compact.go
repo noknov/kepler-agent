@@ -8,13 +8,6 @@ import (
 	"github.com/noknov/slack-copilot-agent/internal/prompts"
 )
 
-const (
-	// MaxCompactOutputTokens is the max output tokens for the compact summary call.
-	// claude-code uses 20,000 (p99.99 of compact summary output is 17,387 tokens).
-	// Raised to 32,000 for more detailed summaries.
-	MaxCompactOutputTokens = 32_000
-)
-
 // CompactSystemPrompt returns the system prompt for the compact summary LLM call.
 // It includes a strict no-tools preamble (matching claude-code's NO_TOOLS_PREAMBLE)
 // and the structured summary prompt with 9 required sections.
@@ -73,7 +66,6 @@ func GenerateCompactSummary(ctx context.Context, client llm.Client, model string
 	req := llm.Request{
 		Model:       model,
 		Messages:    compactMessages,
-		MaxTokens:   MaxCompactOutputTokens,
 		Temperature: 0,
 		// Thinking is intentionally disabled (empty string) to save tokens.
 	}
