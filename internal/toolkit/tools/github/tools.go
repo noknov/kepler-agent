@@ -3,12 +3,15 @@ package github
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -810,7 +813,7 @@ func (t PRDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	for _, file := range files {
 		fmt.Fprintf(&out, "- %s (hunks=%d +%d/-%d)\n", file.Path, file.Hunks, file.Additions, file.Deletions)
 	}
-	fmt.Fprint(&out, "\nUse github-pr_file_diff with one changed path for a focused patch. For surrounding source, pass the shown repository and head_sha/head_ref explicitly to git or code tools.\n")
+	fmt.Fprint(&out, "\nUse github-pr_file_diff with one changed path for a focused patch and PR-head line-numbered source context. Do not cite local main/default-branch line numbers for PR-head code.\n")
 
 	return registry.Result{Content: out.String()}, nil
 }
@@ -919,17 +922,19 @@ func diffFileIndex(diff string) []diffFile {
 	return files
 }
 
-type PRFileDiffTool struct{}
+type PRFileDiffTool struct {
+	Client Client
+}
 
 func (PRFileDiffTool) Parallel() bool { return true }
 
 func (PRFileDiffTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec("github-pr_file_diff", "Read the diff for one changed file in the PR established by github-pr_diff. Use this instead of paging a whole PR diff.", registry.ObjectSchema([]string{"path"}, map[string]any{
+	return registry.FunctionSpec("github-pr_file_diff", "Read the diff for one changed file in the PR established by github-pr_diff, including line-numbered source context from the PR head when available. Use these PR-head line numbers for review citations instead of reading the local default branch.", registry.ObjectSchema([]string{"path"}, map[string]any{
 		"path": map[string]any{"type": "string", "description": "Repository-relative path from the changed-file manifest."},
 	}))
 }
 
-func (PRFileDiffTool) Execute(_ context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t PRFileDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
 	var args struct {
 		Path string `json:"path"`
 	}
@@ -953,5 +958,149 @@ func (PRFileDiffTool) Execute(_ context.Context, raw json.RawMessage, rt registr
 	if next := strings.Index(rest, "\ndiff --git a/"); next >= 0 {
 		rest = rest[:next]
 	}
-	return registry.Result{Content: "PR " + pr.Repository + "#" + fmt.Sprint(pr.Number) + " head=" + pr.HeadSHA + "\n" + needle + rest}, nil
+	var out strings.Builder
+	fileDiff := needle + rest
+	fmt.Fprintf(&out, "PR %s#%d head=%s file=%s\n", pr.Repository, pr.Number, pr.HeadSHA, path)
+	out.WriteString(fileDiff)
+	if source, err := t.prHeadFileSource(ctx, pr, path); err == nil && strings.TrimSpace(source) != "" {
+		if contextText := lineNumberedHunkContext(source, fileDiff, 3, 260); strings.TrimSpace(contextText) != "" {
+			fmt.Fprintf(&out, "\n\nPR-head source context for %s at %s. Cite these line numbers for PR-head code:\n%s", path, pr.HeadSHA, contextText)
+		}
+	}
+	return registry.Result{Content: out.String()}, nil
+}
+
+func (t PRFileDiffTool) prHeadFileSource(ctx context.Context, pr prDiffContext, path string) (string, error) {
+	if !t.Client.enabled() {
+		return "", fmt.Errorf("GitHub is not configured")
+	}
+	owner, repo, err := splitRepository(pr.Repository)
+	if err != nil {
+		return "", err
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s",
+		t.Client.baseURL(),
+		url.PathEscape(owner),
+		url.PathEscape(repo),
+		escapePathSegments(path),
+		url.QueryEscape(pr.HeadSHA),
+	)
+	data, err := t.Client.do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	var parsed struct {
+		Type     string `json:"type"`
+		Encoding string `json:"encoding"`
+		Content  string `json:"content"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return "", err
+	}
+	if parsed.Type != "" && parsed.Type != "file" {
+		return "", fmt.Errorf("path is not a file")
+	}
+	if parsed.Encoding != "base64" {
+		return "", fmt.Errorf("unsupported content encoding %q", parsed.Encoding)
+	}
+	raw := strings.ReplaceAll(parsed.Content, "\n", "")
+	decoded, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		return "", err
+	}
+	return string(decoded), nil
+}
+
+func escapePathSegments(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	for i, part := range parts {
+		parts[i] = url.PathEscape(part)
+	}
+	return strings.Join(parts, "/")
+}
+
+var unifiedHunkHeader = regexp.MustCompile(`@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
+
+type lineRange struct {
+	start int
+	end   int
+}
+
+func lineNumberedHunkContext(source, diff string, padding, maxLines int) string {
+	lines := strings.Split(strings.ReplaceAll(source, "\r\n", "\n"), "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	ranges := sourceRangesForDiff(diff, len(lines), padding)
+	if len(ranges) == 0 {
+		if len(lines) == 0 {
+			return ""
+		}
+		ranges = []lineRange{{start: 1, end: min(len(lines), maxLines)}}
+	}
+	ranges = mergeLineRanges(ranges)
+	var out strings.Builder
+	written := 0
+	for i, r := range ranges {
+		if written >= maxLines {
+			break
+		}
+		if i > 0 {
+			out.WriteString("...\n")
+		}
+		for lineNo := r.start; lineNo <= r.end && lineNo <= len(lines) && written < maxLines; lineNo++ {
+			fmt.Fprintf(&out, "%5d | %s\n", lineNo, lines[lineNo-1])
+			written++
+		}
+	}
+	if written >= maxLines {
+		out.WriteString("...[truncated]\n")
+	}
+	return strings.TrimRight(out.String(), "\n")
+}
+
+func sourceRangesForDiff(diff string, sourceLineCount, padding int) []lineRange {
+	var ranges []lineRange
+	for _, line := range strings.Split(diff, "\n") {
+		m := unifiedHunkHeader.FindStringSubmatch(line)
+		if len(m) == 0 {
+			continue
+		}
+		start, _ := strconv.Atoi(m[1])
+		count := 1
+		if len(m) > 2 && m[2] != "" {
+			count, _ = strconv.Atoi(m[2])
+		}
+		if count < 1 {
+			count = 1
+		}
+		end := start + count - 1
+		if sourceLineCount > 0 {
+			start = max(1, start-padding)
+			end = min(sourceLineCount, end+padding)
+		}
+		ranges = append(ranges, lineRange{start: start, end: end})
+	}
+	return ranges
+}
+
+func mergeLineRanges(ranges []lineRange) []lineRange {
+	if len(ranges) == 0 {
+		return nil
+	}
+	sort.Slice(ranges, func(i, j int) bool {
+		return ranges[i].start < ranges[j].start
+	})
+	merged := []lineRange{ranges[0]}
+	for _, r := range ranges[1:] {
+		last := &merged[len(merged)-1]
+		if r.start <= last.end+1 {
+			if r.end > last.end {
+				last.end = r.end
+			}
+			continue
+		}
+		merged = append(merged, r)
+	}
+	return merged
 }

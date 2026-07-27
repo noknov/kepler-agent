@@ -51,6 +51,12 @@ func TestDispatchWorkflowTool(t *testing.T) {
 
 func TestPRDiffStoresReviewContextAndIndexesFiles(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/repos/example/repo/contents/src/a.ts" {
+			if r.URL.Query().Get("ref") != "0123456789abcdef" {
+				t.Fatalf("contents ref = %q", r.URL.Query().Get("ref"))
+			}
+			return response(http.StatusOK, `{"type":"file","encoding":"base64","content":"bmV3Cm5leHQK"}`), nil
+		}
 		switch r.Header.Get("Accept") {
 		case "application/vnd.github.diff":
 			return response(http.StatusOK, "diff --git a/src/a.ts b/src/a.ts\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/src/b.ts b/src/b.ts\n@@ -4,0 +5 @@\n+added\n"), nil
@@ -71,9 +77,12 @@ func TestPRDiffStoresReviewContextAndIndexesFiles(t *testing.T) {
 	if !ok || pr.Repository != "example/repo" || pr.HeadSHA != "0123456789abcdef" || len(pr.ChangedFiles) != 2 {
 		t.Fatalf("PR context = %#v, ok=%v", pr, ok)
 	}
-	fileResult, err := (PRFileDiffTool{}).Execute(context.Background(), json.RawMessage(`{"path":"src/a.ts"}`), rt)
+	fileResult, err := (PRFileDiffTool{Client: testClient("example", "repo", transport)}).Execute(context.Background(), json.RawMessage(`{"path":"src/a.ts"}`), rt)
 	if err != nil || !strings.Contains(fileResult.Content, "-old\n+new") || strings.Contains(fileResult.Content, "src/b.ts") {
 		t.Fatalf("file diff = %#v, err=%v", fileResult, err)
+	}
+	if !strings.Contains(fileResult.Content, "PR-head source context") || !strings.Contains(fileResult.Content, "    1 | new") {
+		t.Fatalf("file diff missing PR-head line context:\n%s", fileResult.Content)
 	}
 }
 
