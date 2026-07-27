@@ -155,6 +155,7 @@ func TestDefaultToolRegistryDefersHeavyToolFamilies(t *testing.T) {
 	reg := newToolRegistry(cfg, &slack.Client{}, reminderStore, nil, nil, "", safety.WorkspacePolicy{}, safety.CommandPolicy{}, nil)
 
 	for _, name := range []string{
+		"github-dispatch_workflow",
 		"github-workflow_runs",
 		"github-job_logs",
 		"k8s-get_pods",
@@ -172,12 +173,12 @@ func TestDefaultToolRegistryDefersHeavyToolFamilies(t *testing.T) {
 
 	_, err = reg.Execute(context.Background(), "tool_search", json.RawMessage(`{
 		"action":"activate",
-		"tool_names":["github-workflow_runs","k8s-get_pods","gcp-logs","slack-create_canvas"]
+		"tool_names":["github-dispatch_workflow","github-workflow_runs","k8s-get_pods","gcp-logs","slack-create_canvas"]
 	}`), registry.Runtime{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"github-workflow_runs", "k8s-get_pods", "gcp-logs", "slack-create_canvas"} {
+	for _, name := range []string{"github-dispatch_workflow", "github-workflow_runs", "k8s-get_pods", "gcp-logs", "slack-create_canvas"} {
 		if !registryHasSpec(reg.Specs(), name) {
 			t.Fatalf("%s should be available after tool_search activation", name)
 		}

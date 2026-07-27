@@ -169,8 +169,11 @@ func TestProcessRoutesImageInputToMultimodalModel(t *testing.T) {
 	)
 	svc.RunModel = "default-text-model"
 	svc.ModelRouter = ModelRouter{
-		DefaultModel:    "default-text-model",
-		MultimodalModel: "vision-model",
+		DefaultModel:            "default-text-model",
+		MultimodalFallbackModel: "vision-model",
+		SupportsMultimodal: func(model string) bool {
+			return model == "vision-model"
+		},
 	}
 	svc.Multimodal = func(model string) bool {
 		return model == "vision-model"
@@ -202,6 +205,60 @@ func TestProcessRoutesImageInputToMultimodalModel(t *testing.T) {
 	}
 }
 
+func TestProcessKeepsImageInputOnMultimodalDefaultModel(t *testing.T) {
+	ctx := context.Background()
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	llmClient := &captureLLM{}
+	svc := NewService(
+		store,
+		&fakeMessenger{},
+		agent.Runner{LLM: llmClient, Model: "minimax-m3", Tools: registry.New(), MaxSteps: 1},
+		memory.Builder{},
+		safety.PromptPolicy{},
+		safety.Redactor{},
+		observability.NewRecorder(),
+	)
+	svc.RunModel = "minimax-m3"
+	svc.ModelRouter = ModelRouter{
+		DefaultModel:            "minimax-m3",
+		MultimodalFallbackModel: "mimo-v2.5",
+		SupportsMultimodal: func(model string) bool {
+			return model == "minimax-m3" || model == "mimo-v2.5"
+		},
+	}
+	svc.Multimodal = func(model string) bool {
+		return model == "minimax-m3" || model == "mimo-v2.5"
+	}
+
+	svc.HandleMention(ctx, Request{
+		EventID:      "E-image-default-multimodal",
+		UserID:       "U1",
+		Channel:      "C1",
+		ThreadTS:     "100.000",
+		Text:         "看下这个截图",
+		ContentParts: []llm.ContentPart{llm.ImageURLPart("data:image/png;base64,abc")},
+	})
+
+	req := llmClient.LastRequest()
+	if req.Model != "minimax-m3" {
+		t.Fatalf("LLM model = %q, want minimax-m3", req.Model)
+	}
+	var hasImage bool
+	for _, msg := range req.Messages {
+		for _, part := range msg.ContentParts {
+			if part.ImageURL != nil {
+				hasImage = true
+			}
+		}
+	}
+	if !hasImage {
+		t.Fatalf("multimodal default request should keep image parts: %#v", req.Messages)
+	}
+}
+
 func TestProcessRoutesTextInputToDefaultModel(t *testing.T) {
 	ctx := context.Background()
 	store, err := session.NewFileStore(t.TempDir())
@@ -220,8 +277,8 @@ func TestProcessRoutesTextInputToDefaultModel(t *testing.T) {
 	)
 	svc.RunModel = "default-text-model"
 	svc.ModelRouter = ModelRouter{
-		DefaultModel:    "default-text-model",
-		MultimodalModel: "vision-model",
+		DefaultModel:            "default-text-model",
+		MultimodalFallbackModel: "vision-model",
 	}
 
 	svc.HandleMention(ctx, Request{

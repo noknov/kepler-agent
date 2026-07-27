@@ -13,6 +13,9 @@ func TestValidateShellCommandAllowsOperationalReads(t *testing.T) {
 		`kubectl logs instagram-service-abc -n mt-prod --tail 100`,
 		`kubectl top pods -n mt-prod`,
 		`kubectl config get-contexts`,
+		`kubectl auth can-i get pods -n mt-prod`,
+		`kubectl rollout status deployment/instagram-service -n mt-prod`,
+		`kubectl rollout history deployment/instagram-service -n mt-prod`,
 		// gcloud
 		`gcloud logging read 'severity>=ERROR' --project wati-gke --limit 10`,
 		`gcloud container clusters describe mt-prod --region asia-southeast1`,
@@ -21,6 +24,12 @@ func TestValidateShellCommandAllowsOperationalReads(t *testing.T) {
 		`gh run list --repo ClareAI/devops-github-workflow --limit 5`,
 		`gh run view 123456 --log-failed`,
 		`gh pr list`,
+		`gh search prs "repo:ClareAI/wati-workflow-service review:required" --limit 10`,
+		`gh search issues "repo:ClareAI/wati-workflow-service bug" --limit 10`,
+		`gh api repos/ClareAI/wati-workflow-service/pulls/63/comments --paginate`,
+		`gh api /repos/ClareAI/wati-workflow-service/issues/63/comments --jq '.[].body'`,
+		`gh api repos/owner/repo/pulls/63/reviews --method GET`,
+		`gh api repos/owner/repo/pulls/63/comments -X HEAD`,
 		// git
 		`git log --oneline -20`,
 		`git -C /workspace/repo log --oneline -20`,
@@ -56,12 +65,20 @@ func TestValidateShellCommandBlocksWritesAndSecrets(t *testing.T) {
 		`kubectl get secrets -n mt-prod`,
 		`kubectl describe secret app-token -n mt-prod`,
 		`kubectl exec pod -- env`,
+		`kubectl rollout restart deployment/instagram-service -n mt-prod`,
+		`kubectl rollout undo deployment/instagram-service -n mt-prod`,
+		`kubectl auth reconcile -f roles.yaml`,
 		// gcloud writes
 		`gcloud run services update instagram-service`,
 		`gcloud container clusters get-credentials mt-prod`,
 		// gh writes
 		`gh workflow run deploy.yml`,
 		`gh run cancel 123456`,
+		`gh api repos/owner/repo/issues -f title=test`,
+		`gh api repos/owner/repo/issues --method POST`,
+		`gh api repos/owner/repo/issues -XPATCH`,
+		`gh api graphql -f query='query { viewer { login } }'`,
+		`gh api repos/owner/repo/actions/secrets`,
 		// git writes
 		`git push origin main`,
 		`git commit -m "foo"`,

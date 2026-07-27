@@ -42,7 +42,6 @@ func (s *TTSSummarizer) Summarize(ctx context.Context, text string) (string, err
 		Messages: []llm.Message{
 			{Role: "user", Content: ttsSummaryPrompt + text},
 		},
-		MaxTokens:   300,
 		Temperature: 0.3,
 	})
 	if err != nil {

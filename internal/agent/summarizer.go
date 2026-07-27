@@ -45,9 +45,7 @@ func (s *StatusSummarizer) Summarize(ctx context.Context, names, sampleArgs, loc
 				Model:     s.Model,
 				Messages:  []llm.Message{{Role: "user", Content: summarizePrompt(names, sampleArgs, locale)}},
 				MaxTokens: 64,
-				// Disable extended thinking: reasoning tokens would consume the
-				// entire budget before producing any text output.
-				Thinking: "disabled",
+				Thinking:  "disabled",
 			})
 			if err != nil {
 				if attempt == 0 && llm.IsTemporaryOverload(err) {

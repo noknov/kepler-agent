@@ -68,59 +68,6 @@ func TestLoadPrefersDotEnvWhenConfigured(t *testing.T) {
 	}
 }
 
-func TestLoadUsesLargerDefaultMaxTokens(t *testing.T) {
-	resetConfigEnv(t)
-	dir := t.TempDir()
-	writeEnvFile(t, dir, map[string]string{
-		"SLACK_BOT_TOKEN":      "xoxb-test",
-		"SLACK_SIGNING_SECRET": "secret",
-		"ALLOWED_SLACK_USERS":  "U123",
-		"LLM_PROVIDER":         "anthropic",
-		"ANTHROPIC_API_KEY":    "anthropic-token",
-	})
-
-	wd, _ := os.Getwd()
-	defer func() { _ = os.Chdir(wd) }()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v, want nil", err)
-	}
-	if cfg.LLM.MaxTokens != 20000 {
-		t.Fatalf("LLM.MaxTokens = %d, want 20000", cfg.LLM.MaxTokens)
-	}
-}
-
-func TestLoadMaxTokensOverrideStillWins(t *testing.T) {
-	resetConfigEnv(t)
-	dir := t.TempDir()
-	writeEnvFile(t, dir, map[string]string{
-		"SLACK_BOT_TOKEN":      "xoxb-test",
-		"SLACK_SIGNING_SECRET": "secret",
-		"ALLOWED_SLACK_USERS":  "U123",
-		"LLM_PROVIDER":         "anthropic",
-		"ANTHROPIC_API_KEY":    "anthropic-token",
-		"ANTHROPIC_MAX_TOKENS": "12000",
-	})
-
-	wd, _ := os.Getwd()
-	defer func() { _ = os.Chdir(wd) }()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v, want nil", err)
-	}
-	if cfg.LLM.MaxTokens != 12000 {
-		t.Fatalf("LLM.MaxTokens = %d, want override 12000", cfg.LLM.MaxTokens)
-	}
-}
-
 func TestLoadRejectsDirectKimiCodingEndpoint(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
@@ -387,9 +334,6 @@ func TestLoadOpenCodeGoDefaults(t *testing.T) {
 	if cfg.LLM.APIKey != "oc-go-token" {
 		t.Fatalf("LLM.APIKey = %q, want oc-go-token", cfg.LLM.APIKey)
 	}
-	if cfg.LLM.MaxTokens != 0 {
-		t.Fatalf("LLM.MaxTokens = %d, want 0 for opencode-go", cfg.LLM.MaxTokens)
-	}
 	for _, want := range []string{"glm-5.2", "kimi-k2.7-code", "minimax-m3", "qwen3.7-max", "deepseek-v4-flash"} {
 		if !containsString(cfg.LLM.AvailableModels, want) {
 			t.Fatalf("AvailableModels = %#v, want %q", cfg.LLM.AvailableModels, want)
@@ -431,9 +375,6 @@ func TestLoadOpenCodeZenDefaults(t *testing.T) {
 	}
 	if cfg.LLM.APIKey != "oc-zen-token" {
 		t.Fatalf("LLM.APIKey = %q, want oc-zen-token", cfg.LLM.APIKey)
-	}
-	if cfg.LLM.MaxTokens != 0 {
-		t.Fatalf("LLM.MaxTokens = %d, want 0 for opencode-zen", cfg.LLM.MaxTokens)
 	}
 	for _, want := range []string{"mimo-v2.5-free", "minimax-m3-free", "nemotron-3-ultra-free", "north-mini-code-free"} {
 		if !containsString(cfg.LLM.AvailableModels, want) {
@@ -790,7 +731,6 @@ func resetConfigEnv(t *testing.T) {
 		"MIMO_MODEL",
 		"MIMO_AVAILABLE_MODELS",
 		"MIMO_THINKING",
-		"MIMO_MAX_TOKENS",
 		"MIMO_TEMPERATURE",
 		"MIMO_TIMEOUT",
 		"MODEL_ROUTING_MULTIMODAL_MODEL",
@@ -803,7 +743,6 @@ func resetConfigEnv(t *testing.T) {
 		"CLIPROXYAPI_MODEL",
 		"CLIPROXYAPI_AVAILABLE_MODELS",
 		"CLIPROXYAPI_THINKING",
-		"CLIPROXYAPI_MAX_TOKENS",
 		"CLIPROXYAPI_TEMPERATURE",
 		"CLIPROXYAPI_TIMEOUT",
 		"ANTHROPIC_PROTOCOL",
@@ -817,7 +756,6 @@ func resetConfigEnv(t *testing.T) {
 		"DEEPSEEK_MODEL",
 		"DEEPSEEK_AVAILABLE_MODELS",
 		"DEEPSEEK_THINKING",
-		"DEEPSEEK_MAX_TOKENS",
 		"DEEPSEEK_TEMPERATURE",
 		"DEEPSEEK_TIMEOUT",
 		"KIMI_API_KEY",

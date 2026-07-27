@@ -113,6 +113,9 @@ func TestGitLogRefreshesExplicitBranchWithinFetchTTL(t *testing.T) {
 	if !strings.Contains(first.Content, "init") {
 		t.Fatalf("first content = %q, want initial commit", first.Content)
 	}
+	if !strings.Contains(first.Content, "test@example.com") || !strings.Contains(first.Content, "test\t") {
+		t.Fatalf("first content = %q, want author identity", first.Content)
+	}
 
 	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("hello\nfresh branch tip\n"), 0o600); err != nil {
 		t.Fatal(err)

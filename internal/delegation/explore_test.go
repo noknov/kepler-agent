@@ -95,7 +95,6 @@ func TestExploreProfileRestrictsAllowedTools(t *testing.T) {
 	manager.SetTools(&exploreFakeTools{})
 	manager.SetExploreProfile(ExploreProfile{
 		MaxSteps:     4,
-		MaxTokens:    512,
 		Parallelism:  2,
 		AllowedTools: map[string]bool{"code-search": true},
 		SystemPrompt: "explore",
@@ -119,7 +118,6 @@ func TestExploreToolRunsBatchedTasksInParallel(t *testing.T) {
 	manager.SetTools(&exploreFakeTools{})
 	manager.SetExploreProfile(ExploreProfile{
 		MaxSteps:     4,
-		MaxTokens:    512,
 		Parallelism:  2,
 		MaxWorkers:   2,
 		AllowedTools: map[string]bool{"code-search": true},
