@@ -27,8 +27,6 @@ spec:
             - secretRef:
                 name: slack-copilot-worker-secrets
           env:
-            - name: LLM_PROVIDER
-              value: "mimo"
             - name: SLACK_EVENT_TIMEOUT
               value: "15m"
             - name: SLACK_EVENT_INBOX_LEASE
