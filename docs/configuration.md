@@ -1,9 +1,43 @@
 # Configuration
 
-`slack-copilot-agent` loads `.env` automatically at startup. Copy
-`.env.example`, fill the required values, and keep secrets out of git.
+`slack-copilot-agent` loads an env file automatically at startup. The
+compatibility all-in-one process prefers `cmd/slack-copilot-agent/.env`. Split
+services prefer service-specific files:
+
+| Entrypoint | Env file |
+|---|---|
+| `./gateway/cmd/gateway` | `gateway/.env` |
+| `./worker/cmd/worker` | `worker/.env` |
+| `./observability/cmd/observability` | `observability/.env` |
+| `./cmd/slack-copilot-agent` | `cmd/slack-copilot-agent/.env` |
+
+Set `SLACK_COPILOT_ENV_FILE=/path/to/file` to force a specific file. Keep
+secrets out of git; the `*.example` files are templates only.
+
+The packaged `slack-copilot` CLI is local-first and does not require Redis,
+PostgreSQL, Slack, or LLM service configuration for its built-in read-only
+commands.
+
+For local split deployment:
+
+```bash
+cp gateway/.env.example gateway/.env
+cp worker/.env.example worker/.env
+cp observability/.env.example observability/.env
+```
 
 ## Required Values
+
+Required values now depend on the service:
+
+| Service | Required values |
+|---|---|
+| Gateway | `SLACK_SIGNING_SECRET`, `POSTGRES_DSN`, `REDIS_URL` |
+| Worker | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `ALLOWED_SLACK_USERS`, `POSTGRES_DSN`, `REDIS_URL`, provider API key |
+| Observability | `POSTGRES_DSN`, `REDIS_URL`; `OBSERVABILITY_TOKEN` for non-local access |
+| All-in-one | Worker requirements plus HTTP settings |
+
+All-in-one example:
 
 ```bash
 SLACK_BOT_TOKEN=xoxb-...

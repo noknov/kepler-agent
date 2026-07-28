@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/noknov/slack-copilot-agent/internal/app"
+	slackbot "github.com/noknov/slack-copilot-agent/packages/slackbot"
 )
 
 func main() {
@@ -15,7 +15,7 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.LUTC)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := app.Run(ctx); err != nil {
+	if err := slackbot.Run(ctx); err != nil {
 		log.Fatal(err)
 	}
 }

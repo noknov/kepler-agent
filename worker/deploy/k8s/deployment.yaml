@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: slack-copilot-worker
+  namespace: slack-copilot-agent
+  labels:
+    app.kubernetes.io/name: slack-copilot-worker
+    app.kubernetes.io/part-of: slack-copilot-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: slack-copilot-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: slack-copilot-worker
+        app.kubernetes.io/part-of: slack-copilot-agent
+    spec:
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: worker
+          image: ghcr.io/your-org/slack-copilot-agent:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/app/slack-copilot-worker"]
+          envFrom:
+            - secretRef:
+                name: slack-copilot-worker-secrets
+          env:
+            - name: LLM_PROVIDER
+              value: "mimo"
+            - name: SLACK_EVENT_TIMEOUT
+              value: "15m"
+            - name: SLACK_EVENT_INBOX_LEASE
+              value: "16m"
+            - name: HTTP_SHUTDOWN_TIMEOUT
+              value: "90s"
+            - name: POSTGRES_MAX_CONNS
+              value: "8"
+            - name: WORKSPACE_AUTO_FETCH
+              value: "false"
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi

@@ -1,4 +1,8 @@
 .env
+gateway/.env
+worker/.env
+observability/.env
+cmd/slack-copilot-agent/.env
 .DS_Store
 .idea/
 .data/
@@ -6,7 +10,7 @@
 .tmp-gocache/
 bin/
 dist/
-.prompts/
+worker/.prompts/
 copilot-agent-avatar-*.png
 cmd/slack-broadcast/
 slack-broadcast

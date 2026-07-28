@@ -9,16 +9,16 @@
 | `POST /drain` | Local-only drain switch used by Kubernetes `preStop` |
 | `GET /health/dashboard` | Interactive health dashboard |
 | `GET /health/tools` | Tool health status JSON |
-| `GET /metrics` | Run and cost metrics |
+| `GET /metrics` | Durable run and cost metrics from observability |
 | `GET /runs?limit=20` | Recent run list |
 | `GET /runs/<run_id>` | Run detail with LLM/tool steps and cost |
 
 `/metrics`, `/runs`, and the health dashboard require
 `Authorization: Bearer <token>` or
 `X-Slack-Copilot-Agent-Admin-Token: <token>` matching `OBSERVABILITY_TOKEN`.
-The older `X-Oncall-Agent-Admin-Token` header is still accepted for
-compatibility. Set `OBSERVABILITY_ALLOW_UNAUTHENTICATED=true` only for direct
-loopback development access.
+`X-Slack-Copilot-Admin-Token` is also accepted as a shorter equivalent. Set
+`OBSERVABILITY_ALLOW_UNAUTHENTICATED=true` only for direct loopback development
+access.
 
 Slack events are first written to a durable PostgreSQL inbox. Workers claim
 events with `claim_owner` and `claim_until`; abandoned events become retryable
@@ -35,7 +35,9 @@ The runtime image includes `git`, `ripgrep`, `curl`, CA certificates, and
 
 ## Kubernetes
 
-Starter manifests live in `deploy/k8s/`.
+Starter manifests are split by ownership: shared infrastructure lives in
+`deploy/shared/k8s/`, while service manifests live in `gateway/deploy/k8s/`,
+`worker/deploy/k8s/`, and `observability/deploy/k8s/`.
 
 ```bash
 kubectl create namespace slack-copilot-agent
@@ -45,11 +47,16 @@ kubectl -n slack-copilot-agent create secret generic slack-copilot-agent-secrets
   --from-literal=POSTGRES_DSN='postgres://...' \
   --from-literal=LONGCAT_API_KEY='Bearer lc-...'
 
-kubectl apply -f deploy/k8s/
+kubectl apply -f deploy/shared/k8s/
+kubectl apply -f gateway/deploy/k8s/
+kubectl apply -f worker/deploy/k8s/
+kubectl apply -f observability/deploy/k8s/
 ```
 
-Start with one replica. Scale after PostgreSQL capacity, Slack retries, and
-workspace fetch behavior are understood for your environment.
+Start with one worker replica. Gateway can scale horizontally because Slack
+events are persisted before processing. Scale workers only after PostgreSQL
+capacity, Slack retries, and workspace fetch behavior are understood for your
+environment.
 
 Important knobs:
 
@@ -91,7 +98,7 @@ WEB_SEARCH_PROVIDER=duckduckgo
 For self-hosted search:
 
 ```bash
-docker compose -f docker-compose.search.yml up -d
+docker compose -f deploy/local/compose/search.yml up -d
 
 WEB_SEARCH_PROVIDER=searxng
 WEB_SEARCH_SEARXNG_URL=http://127.0.0.1:8097
@@ -146,7 +153,7 @@ signals before page JavaScript runs.
 Run the real browser smoke test after the MCP server is up:
 
 ```bash
-PLAYWRIGHT_MCP_URL=http://127.0.0.1:8931/mcp go test ./internal/toolkit/tools/playwright -run TestIntegration_PlaywrightMCPRealBrowserSmoke -count=1 -v
+PLAYWRIGHT_MCP_URL=http://127.0.0.1:8931/mcp go test ./packages/toolkit/tools/playwright -run TestIntegration_PlaywrightMCPRealBrowserSmoke -count=1 -v
 ```
 
 
