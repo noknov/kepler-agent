@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: slack-copilot-observability
+  namespace: slack-copilot-agent
+  labels:
+    app.kubernetes.io/name: slack-copilot-observability
+    app.kubernetes.io/part-of: slack-copilot-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: slack-copilot-observability
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: slack-copilot-observability
+        app.kubernetes.io/part-of: slack-copilot-agent
+    spec:
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: observability
+          image: ghcr.io/your-org/slack-copilot-agent:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/app/slack-copilot-observability"]
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: slack-copilot-observability-secrets
+          env:
+            - name: HTTP_ADDR
+              value: ":8080"
+            - name: POSTGRES_MAX_CONNS
+              value: "4"
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "curl -fsS -X POST http://127.0.0.1:8080/drain || true; sleep 5"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi

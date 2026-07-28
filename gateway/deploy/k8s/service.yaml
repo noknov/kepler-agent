@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: slack-copilot-gateway
+  namespace: slack-copilot-agent
+  labels:
+    app.kubernetes.io/name: slack-copilot-gateway
+    app.kubernetes.io/part-of: slack-copilot-agent
+spec:
+  selector:
+    app.kubernetes.io/name: slack-copilot-gateway
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

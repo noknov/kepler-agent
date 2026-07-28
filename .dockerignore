@@ -5,7 +5,11 @@
 .docker
 .env
 .env.*
-.prompts
+gateway/.env
+worker/.env
+observability/.env
+cmd/slack-copilot-agent/.env
+worker/.prompts
 dist
 node_modules
 coverage.out

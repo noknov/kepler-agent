@@ -23,10 +23,35 @@ Actions, Kubernetes/GCP diagnostics, runbooks, reminders, and browser tasks.
 ## Quick Start
 
 ```bash
-cp .env.example .env
+cp cmd/slack-copilot-agent/.env.example cmd/slack-copilot-agent/.env
 # Fill Slack, LLM, PostgreSQL, Redis, and ALLOWED_SLACK_USERS values.
 go run ./cmd/slack-copilot-agent
 ```
+
+For split local services, use service-specific env files:
+
+```bash
+cp gateway/.env.example gateway/.env
+cp worker/.env.example worker/.env
+cp observability/.env.example observability/.env
+```
+
+The legacy `slack-copilot-agent` binary still runs all responsibilities in one
+process. New service entrypoints live at the repository root:
+
+```bash
+go run ./gateway/cmd/gateway   # Slack Events / Interactions HTTP ingress
+go run ./worker/cmd/worker     # Durable inbox consumer and agent runner
+go run ./observability/cmd/observability
+go run ./cli/cmd/slack-copilot tools list
+```
+
+The packaged `slack-copilot` CLI is local-first; its built-in read-only
+commands do not require Redis, PostgreSQL, Slack, or LLM service env files.
+
+The compatibility all-in-one process is kept for local development and rollback,
+but split deployment should run `gateway`, `worker`, and `observability` as
+separate services.
 
 Expose the server to Slack with a public HTTPS URL such as ngrok:
 
@@ -89,19 +114,17 @@ controls who can use the bot in channels and DMs.
 ## Project Layout
 
 ```text
-cmd/slack-copilot-agent/   Process entrypoint
-internal/app/              HTTP server, Slack routing, dependency wiring
-internal/conversation/     Thread lifecycle, session locks, pending replies
-internal/agent/            Provider-agnostic tool-call runner
-internal/memory/           Context packing, turns, compaction helpers
-internal/session/          PostgreSQL-backed Slack thread sessions
-internal/safety/           Access policy, redaction, command/workspace policy
-internal/health/           Tool health checks
-internal/prompts/          Prompt catalog and private overlay loader
-internal/llm/              Anthropic and OpenAI-compatible clients
-internal/toolkit/tools/    Tool implementations
-prompts/                   Committed generic prompt defaults
-deploy/k8s/                Starter Kubernetes manifests
+gateway/                   Independent Slack HTTP ingress service
+worker/                    Durable Slack event worker service
+observability/             Independent metrics, runs, and tool health service
+cli/                       Local CLI shell for future packaged agent workflows
+cmd/slack-copilot-agent/   Compatibility all-in-one process entrypoint
+packages/                  Shared libraries: agent, conversation, runtime, tools, storage
+packages/prompts/defaults/ Committed generic prompt defaults
+deploy/shared/k8s/         Shared starter Kubernetes infrastructure
+gateway/deploy/k8s/        Gateway Kubernetes manifests
+worker/deploy/k8s/         Worker Kubernetes manifests
+observability/deploy/k8s/  Observability Kubernetes manifests
 ```
 
 ## Operations
@@ -113,7 +136,7 @@ Health endpoints:
 | `GET /livez` | Liveness probe |
 | `GET /readyz` | Readiness probe; fails while draining |
 | `POST /drain` | Local-only drain switch for Kubernetes `preStop` |
-| `GET /metrics` | Run and cost metrics |
+| `GET /metrics` | Durable run and cost metrics from observability |
 | `GET /runs?limit=20` | Recent run list |
 | `GET /health/dashboard` | Browser health dashboard |
 
@@ -139,6 +162,7 @@ observability, ngrok, and browser automation details.
 ```bash
 go test ./...
 go build ./cmd/slack-copilot-agent
+go build ./gateway/cmd/gateway ./worker/cmd/worker ./observability/cmd/observability ./cli/cmd/slack-copilot
 ```
 
 Some tests use `httptest.NewServer` and need permission to bind a local loopback

@@ -2,10 +2,10 @@
 
 Prompt text is loaded in two layers:
 
-1. `prompts/` contains committed, generic defaults that are safe to maintain in
-   git.
-2. `PROMPT_DIR`, default `.prompts/`, adds small deployment-specific overlays
-   that should stay gitignored.
+1. `packages/prompts/defaults/` contains committed, generic defaults that are
+   safe to maintain in git.
+2. `PROMPT_DIR`, default `worker/.prompts/`, adds small deployment-specific
+   overlays that should stay gitignored.
 
 Keep the main assistant behavior in git so remote branches and local deployments
 stay aligned. Use the private overlay only for narrow sensitive details such as
@@ -62,10 +62,10 @@ PROMPT_INCLUDE_REPO_INVENTORY=true
 
 ## Private Overlay
 
-A minimal `.prompts/` setup:
+A minimal `worker/.prompts/` setup:
 
 ```text
-.prompts/
+worker/.prompts/
   agent.md
   tools.json
   runtime.json
@@ -74,7 +74,8 @@ A minimal `.prompts/` setup:
   skills/
 ```
 
-`agent.md` should stay short. The main behavior belongs in `prompts/system.md`:
+`agent.md` should stay short. The main behavior belongs in
+`packages/prompts/defaults/system.md`:
 
 ```markdown
 Identity:
@@ -111,4 +112,4 @@ Deployment-specific CI/CD:
 ```
 
 Private files are merged on top of public defaults at startup. See
-`internal/prompts/catalog.go` for merge semantics.
+`packages/prompts/catalog.go` for merge semantics.
