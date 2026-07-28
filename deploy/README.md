@@ -56,7 +56,6 @@ Local-only dependency stacks live under `deploy/local/compose/`:
 
 ```bash
 docker compose -f deploy/local/compose/search.yml up -d
-docker compose -f deploy/local/compose/rag.yml up -d
 ```
 
 ## Notes

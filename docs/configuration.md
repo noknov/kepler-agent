@@ -11,8 +11,8 @@ services prefer service-specific files:
 | `./observability/cmd/observability` | `observability/.env` |
 | `./cmd/slack-copilot-agent` | `cmd/slack-copilot-agent/.env` |
 
-Set `SLACK_COPILOT_ENV_FILE=/path/to/file` to force a specific file. Keep
-secrets out of git; the `*.example` files are templates only.
+Set `SLACK_COPILOT_ENV_FILE=/path/to/file` only for one-off local debugging.
+Keep secrets out of git; the `*.example` files are templates only.
 
 The packaged `slack-copilot` CLI is local-first and does not require Redis,
 PostgreSQL, Slack, or LLM service configuration for its built-in read-only

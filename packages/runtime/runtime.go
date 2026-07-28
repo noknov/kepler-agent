@@ -32,7 +32,7 @@ func NewAgentRuntime(cfg config.Config, slackClient *slack.Client, reminderStore
 	redactor := safety.Redactor{WorkspaceRoots: cfg.Security.WorkspaceRoots}
 	promptPolicy := safety.PromptPolicy{
 		WorkspaceRoots:             cfg.Security.WorkspaceRoots,
-		IncludeRepositoryInventory: cfg.Security.PromptIncludeRepoInventory,
+		IncludeRepositoryInventory: true,
 		Redis:                      rdb,
 	}
 	mem := memory.Builder{

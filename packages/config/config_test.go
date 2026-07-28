@@ -7,38 +7,10 @@ import (
 	"testing"
 )
 
-func TestLoadRejectsCrossProviderEnvMixing(t *testing.T) {
+func TestLoadPrefersDotEnvOverShellEnv(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
 	writeEnvFile(t, dir, map[string]string{
-		"SLACK_BOT_TOKEN":      "xoxb-test",
-		"SLACK_SIGNING_SECRET": "secret",
-		"ALLOWED_SLACK_USERS":  "U123",
-		"ANTHROPIC_BASE_URL":   "https://api.kimi.com/coding/",
-		"ANTHROPIC_AUTH_TOKEN": "dotenv-token",
-		"ANTHROPIC_MODEL":      "kimi-for-coding",
-	})
-	t.Setenv("OPENAI_BASE_URL", "https://api.deepseek.com")
-	t.Setenv("OPENAI_API_KEY", "shell-key")
-	t.Setenv("OPENAI_MODEL", "deepseek-chat")
-
-	wd, _ := os.Getwd()
-	defer func() { _ = os.Chdir(wd) }()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := Load()
-	if err == nil || !strings.Contains(err.Error(), "ALLOW_ENV_MIXING") {
-		t.Fatalf("Load() error = %v, want provider mixing error", err)
-	}
-}
-
-func TestLoadPrefersDotEnvWhenConfigured(t *testing.T) {
-	resetConfigEnv(t)
-	dir := t.TempDir()
-	writeEnvFile(t, dir, map[string]string{
-		"PREFER_DOTENV":        "true",
 		"SLACK_BOT_TOKEN":      "xoxb-test",
 		"SLACK_SIGNING_SECRET": "secret",
 		"ALLOWED_SLACK_USERS":  "U123",
@@ -147,9 +119,6 @@ func TestLoadKeepsWorkspaceAutoFetchOptIn(t *testing.T) {
 	}
 	if cfg.Security.WorkspaceAutoFetch {
 		t.Fatal("WorkspaceAutoFetch = true, want false by default")
-	}
-	if cfg.Security.PromptIncludeRepoInventory {
-		t.Fatal("PromptIncludeRepoInventory = true, want false by default")
 	}
 }
 
@@ -826,7 +795,6 @@ func resetConfigEnv(t *testing.T) {
 		"ALLOWED_SLACK_CHANNELS",
 		"LLM_PROTOCOL",
 		"LLM_PROVIDER",
-		"LLM_VENDOR",
 		"LLM_ANTHROPIC_FLAVOR",
 		"MIMO_PROTOCOL",
 		"MIMO_API_KEY",
@@ -891,14 +859,9 @@ func resetConfigEnv(t *testing.T) {
 		"ANTHROPIC_MODEL",
 		"ANTHROPIC_AVAILABLE_MODELS",
 		"OPENAI_AVAILABLE_MODELS",
-		"ALLOW_ENV_MIXING",
-		"PREFER_DOTENV",
 		"POSTGRES_DSN",
 		"REDIS_URL",
-		"REDIS_DSN",
-		"ALLOW_EXPERIMENTAL_CODING_ENDPOINT",
 		"WORKSPACE_AUTO_FETCH",
-		"PROMPT_INCLUDE_REPO_INVENTORY",
 		"GITHUB_TOKEN",
 		"GITHUB_API_BASE_URL",
 		"GITHUB_DEFAULT_OWNER",

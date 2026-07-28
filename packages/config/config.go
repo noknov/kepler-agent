@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -84,11 +83,10 @@ type OpenCodeGoTokenUsageConfig struct {
 }
 
 type SecurityConfig struct {
-	AllowedUsers               []string
-	AllowedChannels            []string
-	WorkspaceRoots             []string
-	WorkspaceAutoFetch         bool
-	PromptIncludeRepoInventory bool
+	AllowedUsers       []string
+	AllowedChannels    []string
+	WorkspaceRoots     []string
+	WorkspaceAutoFetch bool
 }
 
 type SessionConfig struct {
@@ -178,13 +176,7 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	allowEnvMixing := envBoolValue(firstNonEmpty(os.Getenv("ALLOW_ENV_MIXING"), dotenvValues["ALLOW_ENV_MIXING"]))
-	preferDotEnv := envBoolValue(firstNonEmpty(os.Getenv("PREFER_DOTENV"), dotenvValues["PREFER_DOTENV"]))
-	conflicts := providerEnvConflicts(dotenvValues)
-	if len(conflicts) > 0 && !allowEnvMixing && !preferDotEnv {
-		return Config{}, fmt.Errorf("%s conflicts with existing shell environment for %s; clear the shell variables, set PREFER_DOTENV=true to use the env file, or set ALLOW_ENV_MIXING=true", dotenvPath, strings.Join(conflicts, ", "))
-	}
-	applyDotEnv(dotenvValues, preferDotEnv)
+	applyDotEnv(dotenvValues)
 	wd, _ := os.Getwd()
 	llmProvider := inferLLMProvider()
 	llmProtocol := providerProtocol(llmProvider)
@@ -261,11 +253,10 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			DynamicStatus:     envBool("DYNAMIC_STATUS", true),
 		},
 		Security: SecurityConfig{
-			AllowedUsers:               envCSV("ALLOWED_SLACK_USERS"),
-			AllowedChannels:            envCSV("ALLOWED_SLACK_CHANNELS"),
-			WorkspaceRoots:             normalizeRoots(envCSVDefault("WORKSPACE_ROOTS", []string{wd})),
-			WorkspaceAutoFetch:         envBool("WORKSPACE_AUTO_FETCH", false),
-			PromptIncludeRepoInventory: envBool("PROMPT_INCLUDE_REPO_INVENTORY", false),
+			AllowedUsers:       envCSV("ALLOWED_SLACK_USERS"),
+			AllowedChannels:    envCSV("ALLOWED_SLACK_CHANNELS"),
+			WorkspaceRoots:     normalizeRoots(envCSVDefault("WORKSPACE_ROOTS", []string{wd})),
+			WorkspaceAutoFetch: envBool("WORKSPACE_AUTO_FETCH", false),
 		},
 		Sessions: SessionConfig{
 			MaxContextTokens:    envInt("SESSION_MAX_CONTEXT_TOKENS", 200000),
@@ -325,8 +316,8 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			CacheCreationCostPerMTok: envFloat("LLM_CACHE_CREATION_COST_PER_MTOK", -1),
 		},
 		Storage: StorageConfig{
-			PostgresDSN: firstNonEmpty(os.Getenv("POSTGRES_DSN"), os.Getenv("REMINDER_POSTGRES_DSN")),
-			RedisURL:    firstNonEmpty(os.Getenv("REDIS_URL"), os.Getenv("REDIS_DSN")),
+			PostgresDSN: os.Getenv("POSTGRES_DSN"),
+			RedisURL:    os.Getenv("REDIS_URL"),
 		},
 	}
 
@@ -334,7 +325,7 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 }
 
 func dotenvPath(profile RuntimeProfile) string {
-	if path := strings.TrimSpace(firstNonEmpty(os.Getenv("SLACK_COPILOT_ENV_FILE"), os.Getenv("ENV_FILE"))); path != "" {
+	if path := strings.TrimSpace(os.Getenv("SLACK_COPILOT_ENV_FILE")); path != "" {
 		return path
 	}
 	switch profile {
@@ -430,7 +421,7 @@ func inferLLMProvider() string {
 }
 
 func inferLLMProviderFrom(get func(string) string) string {
-	provider := strings.ToLower(strings.TrimSpace(firstNonEmpty(get("LLM_PROVIDER"), get("LLM_VENDOR"))))
+	provider := strings.ToLower(strings.TrimSpace(get("LLM_PROVIDER")))
 	if provider != "" {
 		return provider
 	}
@@ -883,43 +874,10 @@ func readDotEnv(path string) (map[string]string, error) {
 	return values, scanner.Err()
 }
 
-func applyDotEnv(values map[string]string, overwrite bool) {
+func applyDotEnv(values map[string]string) {
 	for key, value := range values {
-		if os.Getenv(key) != "" && !overwrite {
-			continue
-		}
 		_ = os.Setenv(key, value)
 	}
-}
-
-func providerEnvConflicts(dotenvValues map[string]string) []string {
-	shell := providerSnapshot(func(key string) string { return os.Getenv(key) })
-	dotenv := providerSnapshot(func(key string) string { return dotenvValues[key] })
-	if !shell.configured() || !dotenv.configured() {
-		return nil
-	}
-
-	conflicts := make([]string, 0, 4)
-	if shell.Provider != dotenv.Provider {
-		conflicts = append(conflicts, "LLM_PROVIDER")
-	}
-	if shell.Protocol != dotenv.Protocol {
-		conflicts = append(conflicts, "LLM_PROTOCOL")
-	}
-	if shell.AnthropicFlavor != dotenv.AnthropicFlavor {
-		conflicts = append(conflicts, "LLM_ANTHROPIC_FLAVOR")
-	}
-	if shell.BaseURL != dotenv.BaseURL {
-		conflicts = append(conflicts, "LLM_BASE_URL")
-	}
-	if shell.Model != dotenv.Model {
-		conflicts = append(conflicts, "LLM_MODEL")
-	}
-	if shell.APIKey != dotenv.APIKey {
-		conflicts = append(conflicts, "LLM_API_KEY")
-	}
-	sort.Strings(conflicts)
-	return conflicts
 }
 
 func firstNonEmpty(values ...string) string {
@@ -929,62 +887,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-type llmEnvSnapshot struct {
-	Provider        string
-	Protocol        string
-	AnthropicFlavor string
-	BaseURL         string
-	Model           string
-	APIKey          string
-}
-
-func (s llmEnvSnapshot) configured() bool {
-	return s.Provider != "" || s.Protocol != "" || s.AnthropicFlavor != "" || s.BaseURL != "" || s.Model != "" || s.APIKey != ""
-}
-
-func providerSnapshot(get func(string) string) llmEnvSnapshot {
-	provider := inferLLMProviderFrom(get)
-	if provider == "" {
-		return llmEnvSnapshot{}
-	}
-	prefix := providerEnvPrefix(provider)
-	protocol := normalizeLLMProtocol(firstNonEmpty(get(prefix+"_PROTOCOL"), get("LLM_PROTOCOL")))
-	if protocol == "" && provider == "mimo" {
-		protocol = "anthropic"
-	}
-	if protocol == "" && (provider == "opencode-go" || provider == "opencode-zen" || provider == "deepseek") {
-		protocol = "openai"
-	}
-	anthropicFlavor := normalizeAnthropicFlavor(firstNonEmpty(
-		get("LLM_ANTHROPIC_FLAVOR"),
-		get("ANTHROPIC_FLAVOR"),
-	))
-	baseURL := firstNonEmpty(get(prefix + "_BASE_URL"))
-	baseURL = normalizeLLMBaseURL(baseURL, protocol)
-	if protocol == "" && baseURL != "" {
-		protocol = inferLLMProtocol(baseURL)
-	}
-	if anthropicFlavor == "" && protocol == "anthropic" {
-		anthropicFlavor = inferAnthropicFlavor(baseURL)
-	}
-	snapshot := llmEnvSnapshot{
-		Provider:        provider,
-		Protocol:        protocol,
-		AnthropicFlavor: anthropicFlavor,
-		BaseURL:         trimRightSlash(baseURL),
-		Model:           firstNonEmpty(get(prefix + "_MODEL")),
-		APIKey:          providerSnapshotAPIKey(provider, get),
-	}
-	return snapshot
-}
-
-func providerSnapshotAPIKey(provider string, get func(string) string) string {
-	switch provider {
-	case "anthropic":
-		return firstNonEmpty(get("ANTHROPIC_API_KEY"), get("ANTHROPIC_AUTH_TOKEN"))
-	default:
-		return firstNonEmpty(get(providerEnvPrefix(provider) + "_API_KEY"))
-	}
 }
