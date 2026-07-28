@@ -8,6 +8,7 @@ metadata:
     app.kubernetes.io/part-of: slack-copilot-agent
 spec:
   replicas: 2
+  revisionHistoryLimit: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: slack-copilot-gateway
