@@ -52,13 +52,9 @@ does not belong in `system.md`.
 Only skill metadata appears in the base prompt. Full skill instructions are
 loaded on demand through `skills-load`.
 
-Repository inventory is not injected into the system prompt by default because
-repository names can be sensitive. Enable it only when sending local repository
-names to the model provider is acceptable:
-
-```bash
-PROMPT_INCLUDE_REPO_INVENTORY=true
-```
+Repository inventory from `WORKSPACE_ROOTS` is injected into the runtime prompt
+so the internal debugging agent can route questions to the right codebase before
+opening files.
 
 ## Private Overlay
 
