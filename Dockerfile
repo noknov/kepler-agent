@@ -22,7 +22,6 @@ COPY --from=build /out/slack-copilot-gateway /app/slack-copilot-gateway
 COPY --from=build /out/slack-copilot-worker /app/slack-copilot-worker
 COPY --from=build /out/slack-copilot-observability /app/slack-copilot-observability
 COPY --from=build /out/slack-copilot /app/slack-copilot
-COPY prompts /app/prompts
 
 ENV HTTP_ADDR=:8080
 EXPOSE 8080
