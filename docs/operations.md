@@ -41,11 +41,24 @@ Starter manifests are split by ownership: shared infrastructure lives in
 
 ```bash
 kubectl create namespace slack-copilot-agent
-kubectl -n slack-copilot-agent create secret generic slack-copilot-agent-secrets \
-  --from-literal=SLACK_BOT_TOKEN='xoxb-...' \
+kubectl -n slack-copilot-agent create secret generic slack-copilot-gateway-secrets \
   --from-literal=SLACK_SIGNING_SECRET='...' \
   --from-literal=POSTGRES_DSN='postgres://...' \
+  --from-literal=REDIS_URL='redis://slack-copilot-redis:6379/0'
+
+kubectl -n slack-copilot-agent create secret generic slack-copilot-worker-secrets \
+  --from-literal=SLACK_BOT_TOKEN='xoxb-...' \
+  --from-literal=SLACK_SIGNING_SECRET='...' \
+  --from-literal=ALLOWED_SLACK_USERS='U11111111,U22222222' \
+  --from-literal=POSTGRES_DSN='postgres://...' \
+  --from-literal=REDIS_URL='redis://slack-copilot-redis:6379/0' \
+  --from-literal=LLM_PROVIDER='longcat' \
   --from-literal=LONGCAT_API_KEY='Bearer lc-...'
+
+kubectl -n slack-copilot-agent create secret generic slack-copilot-observability-secrets \
+  --from-literal=POSTGRES_DSN='postgres://...' \
+  --from-literal=REDIS_URL='redis://slack-copilot-redis:6379/0' \
+  --from-literal=OBSERVABILITY_TOKEN='...'
 
 kubectl apply -f deploy/shared/k8s/
 kubectl apply -f gateway/deploy/k8s/
@@ -67,6 +80,14 @@ HTTP_SHUTDOWN_TIMEOUT=90s
 POSTGRES_MAX_CONNS=4
 WORKSPACE_AUTO_FETCH=false
 ```
+
+Keep business configuration out of Deployment manifests. Store non-sensitive,
+environment-specific defaults in a ConfigMap, Helm values file, or Kustomize
+overlay that can be reviewed in git. Store credentials, tokens, API keys, and
+DSNs with embedded passwords in Secret or an external secret manager, then sync
+them into Kubernetes during deployment. Deployment-level env overrides should be
+reserved for topology wiring such as service DNS names, ports, and replica-safe
+runtime limits.
 
 `preStop` calls local `/drain`, making `/readyz` fail before SIGTERM so
 Kubernetes can remove the pod from endpoints before shutdown completes.
