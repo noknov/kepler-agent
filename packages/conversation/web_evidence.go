@@ -22,9 +22,9 @@ func webEvidenceMarkdown(messages []llm.Message, locale string) string {
 		return ""
 	}
 
-	title := "Web Evidence"
+	title := "🔎 Sources"
 	if locale == agent.LocaleZH {
-		title = "网页证据"
+		title = "🔎 参考来源"
 	}
 	var b strings.Builder
 	b.WriteString("\n\n")
