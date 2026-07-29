@@ -18,11 +18,13 @@ import (
 	codegraphTools "github.com/noknov/slack-copilot-agent/packages/toolkit/tools/codegraph"
 	codeIntelTools "github.com/noknov/slack-copilot-agent/packages/toolkit/tools/codeintel"
 	diagnosticsTools "github.com/noknov/slack-copilot-agent/packages/toolkit/tools/diagnostics"
+	editTools "github.com/noknov/slack-copilot-agent/packages/toolkit/tools/edit"
 	gcpTools "github.com/noknov/slack-copilot-agent/packages/toolkit/tools/gcp"
 	gitTools "github.com/noknov/slack-copilot-agent/packages/toolkit/tools/git"
 	githubTools "github.com/noknov/slack-copilot-agent/packages/toolkit/tools/github"
 	k8sTools "github.com/noknov/slack-copilot-agent/packages/toolkit/tools/k8s"
 	knowledgeTools "github.com/noknov/slack-copilot-agent/packages/toolkit/tools/knowledge"
+	localExecTools "github.com/noknov/slack-copilot-agent/packages/toolkit/tools/localexec"
 	luckinTools "github.com/noknov/slack-copilot-agent/packages/toolkit/tools/luckin"
 	notionTools "github.com/noknov/slack-copilot-agent/packages/toolkit/tools/notion"
 	plannerTools "github.com/noknov/slack-copilot-agent/packages/toolkit/tools/planner"
@@ -38,7 +40,42 @@ import (
 )
 
 func NewToolRegistry(cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy, rdb *redisclient.Client) *registry.Registry {
-	tools := registry.NewReadOnlyWithAllowedWrites("github-dispatch_workflow", "luckin-create_order", "luckin-cancel_order", "slack-create_canvas", "tts-speak", "reminder-create", "reminder-cancel")
+	return newToolRegistryWithPolicy(
+		cfg,
+		slackClient,
+		reminderStore,
+		llmClient,
+		secondaryClient,
+		secondaryModel,
+		workspacePolicy,
+		commandPolicy,
+		rdb,
+		registry.CapabilityPolicy{AllowedWriteTools: map[string]bool{
+			"github-dispatch_workflow": true,
+			"luckin-create_order":      true,
+			"luckin-cancel_order":      true,
+			"slack-create_canvas":      true,
+			"tts-speak":                true,
+			"reminder-create":          true,
+			"reminder-cancel":          true,
+		}},
+	)
+}
+
+func NewCodingToolRegistry(cfg config.Config, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) *registry.Registry {
+	tools := newToolRegistryWithPolicy(cfg, nil, nil, llmClient, secondaryClient, secondaryModel, workspacePolicy, commandPolicy, nil, registry.CapabilityPolicy{AllowedWriteTools: map[string]bool{
+		"code-write_file": true,
+		"code-replace":    true,
+		"local-command":   true,
+	}})
+	tools.Register(editTools.WriteFileTool{Paths: workspacePolicy})
+	tools.Register(editTools.ReplaceTool{Paths: workspacePolicy})
+	tools.Register(localExecTools.CommandTool{WorkspaceRoots: workspacePolicy.Roots, Guard: commandPolicy, Timeout: cfg.Tools.CommandTimeout})
+	return tools
+}
+
+func newToolRegistryWithPolicy(cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy, rdb *redisclient.Client, policy registry.CapabilityPolicy) *registry.Registry {
+	tools := registry.NewWithPolicy(policy)
 	tools.Register(reminderTools.CreateTool{
 		Store: reminderStore,
 		OnCreate: func(ctx context.Context) {
@@ -53,7 +90,9 @@ func NewToolRegistry(cfg config.Config, slackClient *slack.Client, reminderStore
 	registerCodeTools(tools, cfg, workspacePolicy, commandPolicy)
 	registerIntegrationTools(tools, cfg, commandPolicy)
 	registerKnowledgeTools(tools, cfg)
-	registerSlackTools(tools, slackClient, cfg)
+	if slackClient != nil {
+		registerSlackTools(tools, slackClient, cfg)
+	}
 	registerAgentControlTools(tools, cfg, llmClient, secondaryClient, secondaryModel)
 	tools.Register(registry.ToolSearchTool{Registry: tools})
 	return tools

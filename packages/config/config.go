@@ -170,6 +170,20 @@ func LoadFor(profile RuntimeProfile) (Config, error) {
 	return validateForProfile(cfg, profile)
 }
 
+func LoadLocalAgent() (Config, error) {
+	cfg, err := loadRaw(ProfileAllInOne)
+	if err != nil {
+		return cfg, err
+	}
+	if cfg.HTTP.EventInboxLease <= 0 {
+		cfg.HTTP.EventInboxLease = cfg.HTTP.EventTimeout + time.Minute
+	}
+	if cfg.HTTP.EventWorkers <= 0 || cfg.HTTP.EventQueueSize <= 0 || cfg.HTTP.EventEnqueueTimeout <= 0 || cfg.HTTP.EventTimeout <= 0 || cfg.HTTP.EventInboxLease <= 0 || cfg.HTTP.ShutdownTimeout <= 0 || cfg.Tools.AgentMaxConcurrentRuns <= 0 {
+		return cfg, fmt.Errorf("SLACK_EVENT_WORKERS, SLACK_EVENT_QUEUE_SIZE, SLACK_EVENT_ENQUEUE_TIMEOUT, SLACK_EVENT_TIMEOUT, SLACK_EVENT_INBOX_LEASE, HTTP_SHUTDOWN_TIMEOUT, and AGENT_MAX_CONCURRENT_RUNS must be positive")
+	}
+	return validateLocalAgentRuntime(cfg)
+}
+
 func loadRaw(profile RuntimeProfile) (Config, error) {
 	dotenvPath := dotenvPath(profile)
 	dotenvValues, err := readDotEnv(dotenvPath)
@@ -392,6 +406,22 @@ func validateAgentRuntime(cfg Config) (Config, error) {
 	}
 	if len(cfg.Security.AllowedUsers) == 0 {
 		return cfg, fmt.Errorf("ALLOWED_SLACK_USERS is required")
+	}
+	return cfg, nil
+}
+
+func validateLocalAgentRuntime(cfg Config) (Config, error) {
+	if strings.Contains(cfg.LLM.BaseURL, "api.kimi.com/coding") {
+		return cfg, fmt.Errorf("the Kimi coding endpoint is not supported directly; use LLM_PROVIDER=cliproxyapi and connect to a locally authenticated CLIProxyAPI instance, or configure KIMI_BASE_URL with Kimi's documented API endpoint")
+	}
+	if cfg.LLM.APIKey == "" {
+		return cfg, fmt.Errorf("%s API key is required", strings.ToUpper(cfg.LLM.Provider))
+	}
+	if cfg.LLM.Protocol != "openai" && cfg.LLM.Protocol != "anthropic" {
+		return cfg, fmt.Errorf("LLM_PROTOCOL must be openai or anthropic")
+	}
+	if cfg.LLM.AnthropicFlavor != "" && cfg.LLM.AnthropicFlavor != "official" && cfg.LLM.AnthropicFlavor != "claude-code" {
+		return cfg, fmt.Errorf("LLM_ANTHROPIC_FLAVOR must be official or claude-code")
 	}
 	return cfg, nil
 }

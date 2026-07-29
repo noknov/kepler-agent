@@ -10,6 +10,7 @@ cmd/slack-copilot-agent/.env
 .tmp-gocache/
 bin/
 dist/
+runs/
 worker/.prompts/
 copilot-agent-avatar-*.png
 cmd/slack-broadcast/
