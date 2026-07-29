@@ -9,6 +9,9 @@ services prefer service-specific files:
 | `./gateway/cmd/gateway` | `gateway/.env` |
 | `./worker/cmd/worker` | `worker/.env` |
 | `./observability/cmd/observability` | `observability/.env` |
+| local agent runtime | `local-agent/.env` |
+| benchmark self-agent | `benchmark/.env` |
+| packaged CLI | `cli/.env` |
 | `./cmd/slack-copilot-agent` | `cmd/slack-copilot-agent/.env` |
 
 Set `SLACK_COPILOT_ENV_FILE=/path/to/file` only for one-off local debugging.
@@ -35,6 +38,8 @@ Required values now depend on the service:
 | Gateway | `SLACK_SIGNING_SECRET`, `POSTGRES_DSN`, `REDIS_URL` |
 | Worker | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `ALLOWED_SLACK_USERS`, `POSTGRES_DSN`, `REDIS_URL`, provider API key |
 | Observability | `POSTGRES_DSN`, `REDIS_URL`; `OBSERVABILITY_TOKEN` for non-local access |
+| Local agent / benchmark | provider API key |
+| CLI | none for built-in local read-only commands |
 | All-in-one | Worker requirements plus HTTP settings |
 
 All-in-one example:
@@ -224,3 +229,22 @@ POSTGRES_RUNS_MAX_CONNS=
 POSTGRES_REMINDER_MAX_CONNS=
 POSTGRES_INBOX_MAX_CONNS=
 ```
+
+## Agent Runtime Policy
+
+The Slack worker keeps strict production defaults: code claims must be backed by
+code-tool evidence, repeated identical tool calls are interrupted, and truncated
+model responses get a small number of recovery attempts.
+
+Local and benchmark profiles can tune those guardrails without changing the
+agent loop:
+
+```bash
+AGENT_DISABLE_EVIDENCE_VALIDATION=false
+AGENT_MAX_OUTPUT_TOKEN_RECOVERIES=0
+AGENT_MAX_IDENTICAL_FAILED_TOOL_CALLS=0
+AGENT_MAX_IDENTICAL_SUCCESSFUL_TOOL_CALLS=0
+```
+
+For the numeric values, `0` means use the production default. Negative values
+disable that guard.

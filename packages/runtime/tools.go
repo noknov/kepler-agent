@@ -50,42 +50,68 @@ func NewToolRegistry(cfg config.Config, slackClient *slack.Client, reminderStore
 		workspacePolicy,
 		commandPolicy,
 		rdb,
-		registry.CapabilityPolicy{AllowedWriteTools: map[string]bool{
-			"github-dispatch_workflow": true,
-			"luckin-create_order":      true,
-			"luckin-cancel_order":      true,
-			"slack-create_canvas":      true,
-			"tts-speak":                true,
-			"reminder-create":          true,
-			"reminder-cancel":          true,
-		}},
+		policyForSurface(cfg, "slack", slackClient, reminderStore),
 	)
 }
 
 func NewCodingToolRegistry(cfg config.Config, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) *registry.Registry {
-	tools := newToolRegistryWithPolicy(cfg, nil, nil, llmClient, secondaryClient, secondaryModel, workspacePolicy, commandPolicy, nil, registry.CapabilityPolicy{AllowedWriteTools: map[string]bool{
-		"code-write_file": true,
-		"code-replace":    true,
-		"local-command":   true,
-	}})
-	tools.Register(editTools.WriteFileTool{Paths: workspacePolicy})
-	tools.Register(editTools.ReplaceTool{Paths: workspacePolicy})
-	tools.Register(localExecTools.CommandTool{WorkspaceRoots: workspacePolicy.Roots, Guard: commandPolicy, Timeout: cfg.Tools.CommandTimeout})
+	tools := newToolRegistryWithPolicy(cfg, nil, nil, llmClient, secondaryClient, secondaryModel, workspacePolicy, commandPolicy, nil, policyForSurface(cfg, "coding", nil, nil))
+	tools.Register(codingWrite(editTools.WriteFileTool{Paths: workspacePolicy}))
+	tools.Register(codingWrite(editTools.ReplaceTool{Paths: workspacePolicy}))
+	tools.Register(codingWrite(localExecTools.CommandTool{WorkspaceRoots: workspacePolicy.Roots, Guard: commandPolicy, Timeout: cfg.Tools.CommandTimeout}))
 	return tools
+}
+
+func policyForSurface(cfg config.Config, surface string, slackClient *slack.Client, reminderStore reminder.Store) registry.CapabilityPolicy {
+	return registry.CapabilityPolicy{
+		Surface: surface,
+		AvailableDeps: map[string]bool{
+			"github":     cfg.Tools.GitHubToken != "",
+			"luckin":     cfg.Tools.LuckinMCPToken != "",
+			"notion":     cfg.Tools.NotionToken != "",
+			"playwright": cfg.Tools.PlaywrightMCPURL != "",
+			"reminder":   reminderStore != nil,
+			"slack":      slackClient != nil,
+			"tts":        cfg.Tools.TTSAPIKey != "",
+			"youtrack":   cfg.Tools.YouTrackURL != "" && cfg.Tools.YouTrackToken != "",
+		},
+	}
+}
+
+func slackExternalWrite(tool registry.Tool, deps ...string) registry.Tool {
+	return registry.WithMetadata(tool, registry.ToolMetadata{
+		Risk:         registry.RiskExternalWrite,
+		Dependencies: append([]string{"slack"}, deps...),
+		Surfaces:     []string{"slack"},
+	})
+}
+
+func codingWrite(tool registry.Tool) registry.Tool {
+	return registry.WithMetadata(tool, registry.ToolMetadata{
+		Risk:     registry.RiskWrite,
+		Surfaces: []string{"coding"},
+	})
+}
+
+func runtimeRead(tool registry.Tool, deps ...string) registry.Tool {
+	return registry.WithMetadata(tool, registry.ToolMetadata{
+		Risk:         registry.RiskRead,
+		Dependencies: deps,
+	})
 }
 
 func newToolRegistryWithPolicy(cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy, rdb *redisclient.Client, policy registry.CapabilityPolicy) *registry.Registry {
 	tools := registry.NewWithPolicy(policy)
-	tools.Register(reminderTools.CreateTool{
+	tools.Register(slackExternalWrite(reminderTools.CreateTool{
 		Store: reminderStore,
 		OnCreate: func(ctx context.Context) {
 			if rdb != nil {
 				_ = rdb.Publish(ctx, "reminders:new", "1")
 			}
 		},
-	})
-	tools.Register(reminderTools.ListTool{Store: reminderStore})
-	tools.Register(reminderTools.CancelTool{Store: reminderStore})
+	}, "reminder"))
+	tools.Register(runtimeRead(reminderTools.ListTool{Store: reminderStore}, "reminder"))
+	tools.Register(slackExternalWrite(reminderTools.CancelTool{Store: reminderStore}, "reminder"))
 	registerDeferredDiagnosticsTools(tools)
 	registerCodeTools(tools, cfg, workspacePolicy, commandPolicy)
 	registerIntegrationTools(tools, cfg, commandPolicy)
@@ -223,18 +249,18 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 		Version:       cfg.Tools.NotionVersion,
 	}
 	if notionClient.Token != "" {
-		tools.Register(notionTools.SearchTool{Client: notionClient})
-		tools.Register(notionTools.GetPageTool{Client: notionClient})
-		tools.Register(notionTools.QueryDatabaseTool{Client: notionClient})
+		tools.Register(runtimeRead(notionTools.SearchTool{Client: notionClient}, "notion"))
+		tools.Register(runtimeRead(notionTools.GetPageTool{Client: notionClient}, "notion"))
+		tools.Register(runtimeRead(notionTools.QueryDatabaseTool{Client: notionClient}, "notion"))
 	} else {
-		tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, notionTools.SearchTool{Client: notionClient}))
-		tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, notionTools.GetPageTool{Client: notionClient}))
-		tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, notionTools.QueryDatabaseTool{Client: notionClient}))
+		tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, runtimeRead(notionTools.SearchTool{Client: notionClient}, "notion")))
+		tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, runtimeRead(notionTools.GetPageTool{Client: notionClient}, "notion")))
+		tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, runtimeRead(notionTools.QueryDatabaseTool{Client: notionClient}, "notion")))
 	}
 
 	youtrackClient := youtrackTools.Client{BaseURL: cfg.Tools.YouTrackURL, Token: cfg.Tools.YouTrackToken}
-	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, youtrackTools.GetIssueTool{Client: youtrackClient}))
-	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, youtrackTools.SearchTool{Client: youtrackClient}))
+	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, runtimeRead(youtrackTools.GetIssueTool{Client: youtrackClient}, "youtrack")))
+	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, runtimeRead(youtrackTools.SearchTool{Client: youtrackClient}, "youtrack")))
 
 	githubClient := githubTools.Client{
 		Token:      cfg.Tools.GitHubToken,
@@ -245,7 +271,7 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 	registerDeferredTools(
 		tools,
 		registry.CategoryIntegration,
-		githubTools.DispatchWorkflowTool{Client: githubClient},
+		slackExternalWrite(githubTools.DispatchWorkflowTool{Client: githubClient}),
 		githubTools.WorkflowRunsTool{Client: githubClient},
 		githubTools.PRDiffTool{Client: githubClient},
 		githubTools.PRFileDiffTool{Client: githubClient},
@@ -286,26 +312,26 @@ func registerKnowledgeTools(tools *registry.Registry, cfg config.Config) {
 }
 
 func registerSlackTools(tools *registry.Registry, slackClient *slack.Client, cfg config.Config) {
-	tools.Register(slacktool.AskUserTool{Slack: slackClient})
-	tools.Register(slacktool.FileSearchTool{Slack: slackClient})
-	tools.Register(slacktool.JSONAnalyzeTool{Slack: slackClient})
-	registerDeferredTools(tools, registry.CategoryBrowser, slacktool.SendScreenshotTool{Slack: slackClient})
-	registerDeferredTools(tools, registry.CategoryIntegration, slacktool.CreateCanvasTool{Slack: slackClient})
+	tools.Register(runtimeRead(slacktool.AskUserTool{Slack: slackClient}, "slack"))
+	tools.Register(runtimeRead(slacktool.FileSearchTool{Slack: slackClient}, "slack"))
+	tools.Register(runtimeRead(slacktool.JSONAnalyzeTool{Slack: slackClient}, "slack"))
+	registerDeferredTools(tools, registry.CategoryBrowser, slackExternalWrite(slacktool.SendScreenshotTool{Slack: slackClient}))
+	registerDeferredTools(tools, registry.CategoryIntegration, slackExternalWrite(slacktool.CreateCanvasTool{Slack: slackClient}))
 
 	if cfg.Tools.TTSAPIKey != "" {
-		tools.Register(ttsTools.SpeakTool{
+		tools.Register(slackExternalWrite(ttsTools.SpeakTool{
 			Slack:   slackClient,
 			APIKey:  cfg.Tools.TTSAPIKey,
 			BaseURL: cfg.Tools.TTSBaseURL,
 			Model:   cfg.Tools.TTSModel,
-		})
+		}, "tts"))
 	} else {
-		tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, ttsTools.SpeakTool{
+		tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, slackExternalWrite(ttsTools.SpeakTool{
 			Slack:   slackClient,
 			APIKey:  cfg.Tools.TTSAPIKey,
 			BaseURL: cfg.Tools.TTSBaseURL,
 			Model:   cfg.Tools.TTSModel,
-		}))
+		}, "tts")))
 	}
 }
 

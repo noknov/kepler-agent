@@ -35,6 +35,18 @@ func (t MCPTool) Spec() llm.ToolSpec {
 
 func (t MCPTool) IsWrite() bool { return t.SideEffect }
 
+func (t MCPTool) Metadata() registry.ToolMetadata {
+	risk := registry.RiskRead
+	if t.SideEffect {
+		risk = registry.RiskExternalWrite
+	}
+	return registry.ToolMetadata{
+		Risk:         risk,
+		Dependencies: []string{"luckin"},
+		Surfaces:     []string{"slack"},
+	}
+}
+
 func (t MCPTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
 	if t.Client == nil || !t.Client.enabled() {
 		return registry.Result{}, fmt.Errorf("Luckin MCP is not configured: LUCKIN_MCP_TOKEN is required")

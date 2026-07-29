@@ -78,6 +78,24 @@ type WriteTool interface {
 	IsWrite() bool
 }
 
+type ToolRisk string
+
+const (
+	RiskRead          ToolRisk = "read"
+	RiskWrite         ToolRisk = "write"
+	RiskExternalWrite ToolRisk = "external_write"
+)
+
+type ToolMetadata struct {
+	Risk         ToolRisk
+	Dependencies []string
+	Surfaces     []string
+}
+
+type MetadataTool interface {
+	Metadata() ToolMetadata
+}
+
 // DeferredTool is registered but excluded from default Specs() until its category
 // is activated via ActivateCategory or the tool_search tool.
 type DeferredTool interface {
@@ -92,8 +110,11 @@ type CloneableTool interface {
 }
 
 type CapabilityPolicy struct {
+	Surface           string
 	AllowWrites       bool
 	AllowedWriteTools map[string]bool
+	AllowedRisks      map[ToolRisk]bool
+	AvailableDeps     map[string]bool
 }
 
 const (
@@ -112,10 +133,24 @@ func CanRunInParallel(tool Tool) bool {
 }
 
 func IsWriteOp(tool Tool) bool {
+	meta := MetadataOf(tool)
+	if meta.Risk == RiskWrite || meta.Risk == RiskExternalWrite {
+		return true
+	}
 	if wt, ok := tool.(WriteTool); ok {
 		return wt.IsWrite()
 	}
 	return false
+}
+
+func MetadataOf(tool Tool) ToolMetadata {
+	if mt, ok := tool.(MetadataTool); ok {
+		return mt.Metadata()
+	}
+	if wt, ok := tool.(WriteTool); ok && wt.IsWrite() {
+		return ToolMetadata{Risk: RiskWrite}
+	}
+	return ToolMetadata{Risk: RiskRead}
 }
 
 type Registry struct {
@@ -175,7 +210,10 @@ func (r *Registry) Clone() *Registry {
 		categories: make(map[string][]string, len(r.categories)),
 		policy: CapabilityPolicy{
 			AllowWrites:       r.policy.AllowWrites,
+			Surface:           r.policy.Surface,
 			AllowedWriteTools: copyBoolMap(r.policy.AllowedWriteTools),
+			AllowedRisks:      copyRiskMap(r.policy.AllowedRisks),
+			AvailableDeps:     copyBoolMap(r.policy.AvailableDeps),
 		},
 	}
 	for name, tool := range r.tools {
@@ -208,6 +246,17 @@ func copyBoolMap(in map[string]bool) map[string]bool {
 	return out
 }
 
+func copyRiskMap(in map[ToolRisk]bool) map[ToolRisk]bool {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[ToolRisk]bool, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
 func (r *Registry) Register(tool Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -232,6 +281,10 @@ func (t categorizedTool) IsWrite() bool {
 	return IsWriteOp(t.Tool)
 }
 
+func (t categorizedTool) Metadata() ToolMetadata {
+	return MetadataOf(t.Tool)
+}
+
 func (t categorizedTool) CloneForRegistry(reg *Registry) Tool {
 	t.Tool = cloneToolForRegistry(t.Tool, reg)
 	return t
@@ -240,6 +293,42 @@ func (t categorizedTool) CloneForRegistry(reg *Registry) Tool {
 // AsDeferred wraps a tool with a deferred-tool category label.
 func AsDeferred(category string, tool Tool) DeferredTool {
 	return categorizedTool{Tool: tool, category: category}
+}
+
+type metadataTool struct {
+	Tool
+	metadata ToolMetadata
+}
+
+func WithMetadata(tool Tool, metadata ToolMetadata) Tool {
+	return metadataTool{Tool: tool, metadata: metadata}
+}
+
+func (t metadataTool) Metadata() ToolMetadata {
+	base := MetadataOf(t.Tool)
+	if t.metadata.Risk != "" {
+		base.Risk = t.metadata.Risk
+	}
+	if len(t.metadata.Dependencies) > 0 {
+		base.Dependencies = append([]string(nil), t.metadata.Dependencies...)
+	}
+	if len(t.metadata.Surfaces) > 0 {
+		base.Surfaces = append([]string(nil), t.metadata.Surfaces...)
+	}
+	return base
+}
+
+func (t metadataTool) IsWrite() bool {
+	return IsWriteOp(t.Tool)
+}
+
+func (t metadataTool) Parallel() bool {
+	return CanRunInParallel(t.Tool)
+}
+
+func (t metadataTool) CloneForRegistry(reg *Registry) Tool {
+	t.Tool = cloneToolForRegistry(t.Tool, reg)
+	return t
 }
 
 func (r *Registry) RegisterDeferred(tool DeferredTool) {
@@ -392,8 +481,8 @@ func (r *Registry) namesLocked() []string {
 func (r *Registry) Has(name string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	_, ok := r.tools[name]
-	return ok
+	tool, ok := r.tools[name]
+	return ok && r.canExpose(name, tool)
 }
 
 func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessage, rt Runtime) (Result, error) {
@@ -412,10 +501,38 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 }
 
 func (r *Registry) canExpose(name string, tool Tool) bool {
-	if !IsWriteOp(tool) {
+	meta := MetadataOf(tool)
+	if r.policy.AvailableDeps != nil {
+		for _, dep := range meta.Dependencies {
+			if dep != "" && !r.policy.AvailableDeps[dep] {
+				return false
+			}
+		}
+	}
+	surfaceMatched := r.policy.Surface != "" && len(meta.Surfaces) > 0 && stringInSet(r.policy.Surface, meta.Surfaces)
+	surfaceAllowed := r.policy.Surface == "" || len(meta.Surfaces) == 0 || surfaceMatched
+	if !surfaceAllowed {
+		return false
+	}
+	if meta.Risk == "" || meta.Risk == RiskRead {
+		return true
+	}
+	if surfaceMatched {
+		return true
+	}
+	if r.policy.AllowedRisks[meta.Risk] {
 		return true
 	}
 	return r.policy.AllowWrites || r.policy.AllowedWriteTools[name]
+}
+
+func stringInSet(value string, set []string) bool {
+	for _, item := range set {
+		if item == value {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Registry) CanRunInParallel(name string) bool {

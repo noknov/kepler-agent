@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/noknov/slack-copilot-agent/benchmarks/benchcli"
+	"github.com/noknov/slack-copilot-agent/packages/config"
 	"github.com/noknov/slack-copilot-agent/packages/observability"
 	appruntime "github.com/noknov/slack-copilot-agent/packages/runtime"
 )
@@ -56,7 +57,11 @@ func configDoctor() error {
 func listTools(ctx context.Context) error {
 	_ = ctx
 	recorder := observability.NewRecorder()
-	runtime := appruntime.NewAgentRuntime(appruntime.LocalCLIConfig(), nil, nil, recorder, nil)
+	cfg, err := config.LoadCLI()
+	if err != nil {
+		cfg = appruntime.LocalCLIConfig()
+	}
+	runtime := appruntime.NewAgentRuntime(cfg, nil, nil, recorder, nil)
 	specs := runtime.Tools.Specs()
 	names := make([]string, 0, len(specs))
 	for _, spec := range specs {

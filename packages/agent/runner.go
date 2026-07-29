@@ -84,6 +84,7 @@ type Runner struct {
 	Thinking     string
 	Temp         float64
 	Tools        *registry.Registry
+	Policy       RunnerPolicy
 	Capabilities llm.Capabilities
 	Format       ObservationFormatter
 	Sanitize     Sanitizer
@@ -98,6 +99,43 @@ type Runner struct {
 	OnStream             func(StreamEvent)
 	OnUsage              func(llm.Usage)
 	OnLLMStepComplete    func()
+}
+
+type RunnerPolicy struct {
+	// DisableEvidenceValidation skips final-answer retries that require code
+	// claims to be backed by code tool output. Keep false for Slack; benchmarks
+	// may set true when graders validate correctness instead.
+	DisableEvidenceValidation bool
+
+	// Zero means use the production default. Negative disables recovery.
+	MaxOutputTokenRecoveries int
+
+	// Zero means use the production default. Negative disables the breaker.
+	MaxIdenticalFailedToolCalls int
+
+	// Zero means use the production default. Negative disables the breaker.
+	MaxIdenticalSuccessfulToolCalls int
+}
+
+func (p RunnerPolicy) maxOutputTokenRecoveries() int {
+	if p.MaxOutputTokenRecoveries == 0 {
+		return maxOutputTokensRecoveryLimit
+	}
+	return p.MaxOutputTokenRecoveries
+}
+
+func (p RunnerPolicy) maxIdenticalFailedToolCalls() int {
+	if p.MaxIdenticalFailedToolCalls == 0 {
+		return maxIdenticalFailedCallAttempts
+	}
+	return p.MaxIdenticalFailedToolCalls
+}
+
+func (p RunnerPolicy) maxIdenticalSuccessfulToolCalls() int {
+	if p.MaxIdenticalSuccessfulToolCalls == 0 {
+		return maxIdenticalSuccessCallAttempts
+	}
+	return p.MaxIdenticalSuccessfulToolCalls
 }
 
 type Request struct {
@@ -575,7 +613,8 @@ func (r Runner) handleLLMError(ctx context.Context, err error, maxOverloadRetrie
 //   - emitted=false, continueLoop=false, err!=nil → non-recoverable, return error to caller
 func (r Runner) handleFinalResponse(ctx context.Context, resp llm.Response, assistantMsg *llm.Message, useStream bool, s *loopState, req Request) (emitted bool, continueLoop bool, err error) {
 	// max_output_tokens: partial content was streamed; ask the model to resume.
-	if isMaxOutputTokensResponse(resp) && s.maxOutputTokensRecoveryCount < maxOutputTokensRecoveryLimit {
+	maxRecoveries := r.Policy.maxOutputTokenRecoveries()
+	if maxRecoveries >= 0 && isMaxOutputTokensResponse(resp) && s.maxOutputTokensRecoveryCount < maxRecoveries {
 		s.maxOutputTokensRecoveryCount++
 		partial := strings.TrimSpace(r.sanitize(assistantMsg.Content))
 		if partial != "" {
@@ -642,15 +681,17 @@ func (r Runner) handleFinalResponse(ctx context.Context, resp llm.Response, assi
 	}
 
 	// Code evidence checks apply in both streaming and non-streaming modes.
-	if !s.codeToolCalledThisRun && hasUnverifiedCodeClaim(final) && s.retryOnce("code_claim") {
-		s.messages = append(s.messages, llm.Message{Role: "system", Content: codeClaimRetryPrompt()})
-		r.updateStatus(req.Locale, RetryStatus)
-		return false, true, nil
-	}
-	if s.codeToolCalledThisRun && hasUnverifiedCodeClaim(final) && (hasUnevidencedFileReference(final, s.generated) || finalHasUnevidencedCodeFiles(final, req.Runtime)) && s.retryOnce("unevidenced_file") {
-		s.messages = append(s.messages, llm.Message{Role: "system", Content: unevidencedFileRetryPrompt()})
-		r.updateStatus(req.Locale, RetryStatus)
-		return false, true, nil
+	if !r.Policy.DisableEvidenceValidation {
+		if !s.codeToolCalledThisRun && hasUnverifiedCodeClaim(final) && s.retryOnce("code_claim") {
+			s.messages = append(s.messages, llm.Message{Role: "system", Content: codeClaimRetryPrompt()})
+			r.updateStatus(req.Locale, RetryStatus)
+			return false, true, nil
+		}
+		if s.codeToolCalledThisRun && hasUnverifiedCodeClaim(final) && (hasUnevidencedFileReference(final, s.generated) || finalHasUnevidencedCodeFiles(final, req.Runtime)) && s.retryOnce("unevidenced_file") {
+			s.messages = append(s.messages, llm.Message{Role: "system", Content: unevidencedFileRetryPrompt()})
+			r.updateStatus(req.Locale, RetryStatus)
+			return false, true, nil
+		}
 	}
 
 	assistantMsg.Content = final
@@ -846,11 +887,13 @@ func (r Runner) runToolCalls(ctx context.Context, calls []llm.ToolCall, s *loopS
 	toExecuteIdx := make([]int, 0, len(calls))
 	results := make([]toolResult, len(calls))
 
+	maxFailed := r.Policy.maxIdenticalFailedToolCalls()
+	maxSucceeded := r.Policy.maxIdenticalSuccessfulToolCalls()
 	for i, call := range calls {
 		key := identicalCallKey(call)
-		if s.identicalCallFailures[key] >= maxIdenticalFailedCallAttempts {
+		if maxFailed >= 0 && s.identicalCallFailures[key] >= maxFailed {
 			blocker := fmt.Errorf("identical failed call blocked: this exact %s call has failed %d consecutive times already",
-				call.Function.Name, maxIdenticalFailedCallAttempts)
+				call.Function.Name, maxFailed)
 			results[i] = toolResult{
 				message: llm.Message{
 					Role:       "tool",
@@ -858,13 +901,13 @@ func (r Runner) runToolCalls(ctx context.Context, calls []llm.ToolCall, s *loopS
 					Name:       call.Function.Name,
 					Content: fmt.Sprintf("[tool error] This exact call already failed %d consecutive times with identical arguments. "+
 						"You MUST change your approach: use different parameters, try a different tool, or answer with the information already gathered.",
-						maxIdenticalFailedCallAttempts),
+						maxFailed),
 				},
 				name: call.Function.Name,
 				args: json.RawMessage(call.Function.Arguments),
 				err:  blocker,
 			}
-		} else if s.identicalCallSuccesses[key] > maxIdenticalSuccessCallAttempts {
+		} else if maxSucceeded >= 0 && s.identicalCallSuccesses[key] > maxSucceeded {
 			blocker := fmt.Errorf("identical successful call blocked: this exact %s call has already succeeded %d consecutive times",
 				call.Function.Name, s.identicalCallSuccesses[key])
 			results[i] = toolResult{
@@ -900,7 +943,7 @@ func (r Runner) runToolCalls(ctx context.Context, calls []llm.ToolCall, s *loopS
 				// Inject one warning into the result when the same successful
 				// call has been repeated too many times. A subsequent identical
 				// call is blocked before execution above.
-				if n := s.identicalCallSuccesses[key]; n == maxIdenticalSuccessCallAttempts+1 {
+				if n := s.identicalCallSuccesses[key]; maxSucceeded >= 0 && n == maxSucceeded+1 {
 					warning := fmt.Sprintf("\n\n[agent warning] This exact %s call has now succeeded %d times with identical arguments. "+
 						"You appear to be stuck in a loop. You MUST change your approach: try different parameters, use a different tool, "+
 						"or synthesize an answer from what you have already gathered.",

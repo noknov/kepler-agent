@@ -86,6 +86,7 @@ func NewAgentRuntime(cfg config.Config, slackClient *slack.Client, reminderStore
 			Thinking:         cfg.LLM.Thinking,
 			Temp:             cfg.LLM.Temperature,
 			Tools:            tools,
+			Policy:           RunnerPolicy(cfg),
 			Capabilities:     llmCapabilities,
 			Format:           mem,
 			Sanitize:         redactor,
@@ -99,6 +100,15 @@ func NewAgentRuntime(cfg config.Config, slackClient *slack.Client, reminderStore
 		Redactor:  redactor,
 		Tools:     tools,
 		CostRates: CostRates(cfg),
+	}
+}
+
+func RunnerPolicy(cfg config.Config) agent.RunnerPolicy {
+	return agent.RunnerPolicy{
+		DisableEvidenceValidation:       cfg.Agent.DisableEvidenceValidation,
+		MaxOutputTokenRecoveries:        cfg.Agent.MaxOutputTokenRecoveries,
+		MaxIdenticalFailedToolCalls:     cfg.Agent.MaxIdenticalFailedToolCalls,
+		MaxIdenticalSuccessfulToolCalls: cfg.Agent.MaxIdenticalSuccessfulToolCalls,
 	}
 }
 

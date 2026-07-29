@@ -13,6 +13,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/benchmarks/benchkit"
 	"github.com/noknov/slack-copilot-agent/packages/config"
 	"github.com/noknov/slack-copilot-agent/packages/observability"
+	"github.com/noknov/slack-copilot-agent/packages/prompts"
 	appruntime "github.com/noknov/slack-copilot-agent/packages/runtime"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 )
@@ -239,7 +240,7 @@ func benchAgent(opts benchkit.RunOptions, args []string) (benchkit.Agent, error)
 		args = args[1:]
 	}
 	if opts.Agent == "self" {
-		cfg, err := config.LoadLocalAgent()
+		cfg, err := config.LoadBenchmark()
 		if err != nil {
 			return nil, err
 		}
@@ -262,10 +263,13 @@ func (a localAgent) RunCase(ctx context.Context, c benchkit.Case) (benchkit.Agen
 	}
 	recorder := observability.NewRecorder()
 	rt := appruntime.NewAgentRuntime(cfg, nil, nil, recorder, nil)
+	rt.Runner.Policy.MaxIdenticalSuccessfulToolCalls = 20
 	workspacePolicy := safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}
-	commandPolicy := safety.NewCommandPolicy()
+	commandPolicy := safety.NewLocalCommandPolicy()
 	tools := appruntime.NewCodingToolRegistry(cfg, rt.Runner.LLM, nil, "", workspacePolicy, commandPolicy)
 	rt.Tools = tools
 	rt.Runner.Tools = tools
-	return benchkit.RunnerAgent{Runner: rt.Runner}.RunCase(ctx, c)
+	prompts.LoadFromEnv()
+	systemPrompt := rt.Prompt.SystemPrompt() + "\n\nBenchmark context:\n- You are running inside an isolated software engineering benchmark workspace.\n- Complete the task using the available local code, edit, and command tools.\n- Prefer concise final answers; graders will inspect files, commands, and patches."
+	return benchkit.RunnerAgent{Runner: rt.Runner, SystemPrompt: systemPrompt}.RunCase(ctx, c)
 }
