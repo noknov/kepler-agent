@@ -65,3 +65,7 @@ docker compose -f deploy/local/compose/search.yml up -d
 - Worker has no Service because it only consumes the durable inbox.
 - Replace the starter PostgreSQL and Redis manifests with managed services for
   production.
+- Keep non-sensitive environment config in reviewed ConfigMap, Helm values, or
+  Kustomize overlay files. Keep credentials and connection strings containing
+  passwords out of git and inject them through Kubernetes Secret or an external
+  secret manager during CI/CD.
