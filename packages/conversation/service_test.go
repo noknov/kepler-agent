@@ -585,7 +585,7 @@ func TestFinalAnswerAppendsWebEvidence(t *testing.T) {
 	}
 	got := messenger.posts[0]
 	if !strings.Contains(got, "建议先看官方投档规则。") ||
-		!strings.Contains(got, "网页证据:") ||
+		!strings.Contains(got, "🔎 参考来源:") ||
 		!strings.Contains(got, "掌上高考") ||
 		!strings.Contains(got, "https://www.gaokao.cn/") {
 		t.Fatalf("posted final answer missing web evidence: %q", got)
@@ -642,11 +642,11 @@ func TestStreamedFinalAnswerAppendsWebEvidenceToAnswerStream(t *testing.T) {
 
 	answerChunks := chunksOnStream(messenger.appends, "answer.000")
 	if !chunksContainText(answerChunks, "建议先看官方投档规则。") ||
-		!chunksContainText(answerChunks, "网页证据:") ||
+		!chunksContainText(answerChunks, "🔎 参考来源:") ||
 		!chunksContainText(answerChunks, "https://www.gaokao.cn/") {
 		t.Fatalf("answer stream missing web evidence: %#v", answerChunks)
 	}
-	if chunksContainText(chunksOnStream(messenger.appends, "progress.000"), "网页证据:") {
+	if chunksContainText(chunksOnStream(messenger.appends, "progress.000"), "🔎 参考来源:") {
 		t.Fatalf("web evidence should be appended to answer stream, appends: %#v", messenger.appends)
 	}
 }
