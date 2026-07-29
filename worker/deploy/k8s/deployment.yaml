@@ -27,17 +27,6 @@ spec:
           envFrom:
             - secretRef:
                 name: slack-copilot-worker-secrets
-          env:
-            - name: SLACK_EVENT_TIMEOUT
-              value: "15m"
-            - name: SLACK_EVENT_INBOX_LEASE
-              value: "16m"
-            - name: HTTP_SHUTDOWN_TIMEOUT
-              value: "90s"
-            - name: POSTGRES_MAX_CONNS
-              value: "8"
-            - name: WORKSPACE_AUTO_FETCH
-              value: "false"
           resources:
             requests:
               cpu: 200m

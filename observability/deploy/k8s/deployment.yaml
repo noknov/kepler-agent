@@ -30,11 +30,6 @@ spec:
           envFrom:
             - secretRef:
                 name: slack-copilot-observability-secrets
-          env:
-            - name: HTTP_ADDR
-              value: ":8080"
-            - name: POSTGRES_MAX_CONNS
-              value: "4"
           readinessProbe:
             httpGet:
               path: /readyz
