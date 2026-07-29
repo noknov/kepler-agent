@@ -255,3 +255,32 @@ func TestToolSearchDoesNotSuggestReadOnlyWriteTools(t *testing.T) {
 		t.Fatalf("search result = %q, want notion-search", result.Content)
 	}
 }
+
+func TestMetadataPolicyFiltersByDependencyAndSurface(t *testing.T) {
+	slackWrite := WithMetadata(stubTool{name: "slack-write"}, ToolMetadata{
+		Risk:         RiskExternalWrite,
+		Dependencies: []string{"slack"},
+		Surfaces:     []string{"slack"},
+	})
+
+	reg := NewWithPolicy(CapabilityPolicy{Surface: "coding", AvailableDeps: map[string]bool{"slack": true}})
+	reg.Register(slackWrite)
+	if reg.Has("slack-write") {
+		t.Fatal("Has should not expose a tool for a different surface")
+	}
+	if _, err := reg.Execute(context.Background(), "slack-write", nil, Runtime{}); err == nil {
+		t.Fatal("Execute should reject a tool for a different surface")
+	}
+
+	reg = NewWithPolicy(CapabilityPolicy{Surface: "slack", AvailableDeps: map[string]bool{"slack": false}})
+	reg.Register(slackWrite)
+	if len(reg.Names()) != 0 {
+		t.Fatalf("Names() = %#v, want hidden missing-dependency tool", reg.Names())
+	}
+
+	reg = NewWithPolicy(CapabilityPolicy{Surface: "slack", AvailableDeps: map[string]bool{"slack": true}})
+	reg.Register(slackWrite)
+	if _, err := reg.Execute(context.Background(), "slack-write", nil, Runtime{}); err != nil {
+		t.Fatalf("Execute allowed metadata write failed: %v", err)
+	}
+}

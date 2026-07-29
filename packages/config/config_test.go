@@ -736,6 +736,57 @@ func TestLoadForUsesProfileEnvFile(t *testing.T) {
 	}
 }
 
+func TestLoadForSlackWorkerUsesWorkerEnvFile(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFileNamed(t, dir, filepath.Join("worker", ".env"), map[string]string{
+		"SLACK_BOT_TOKEN":      "xoxb-worker",
+		"SLACK_SIGNING_SECRET": "worker-secret",
+		"ALLOWED_SLACK_USERS":  "U123",
+		"MIMO_API_KEY":         "mimo-token",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadFor(ProfileSlackWorker)
+	if err != nil {
+		t.Fatalf("LoadFor(ProfileSlackWorker) error = %v", err)
+	}
+	if cfg.Slack.BotToken != "xoxb-worker" || cfg.Slack.SigningSecret != "worker-secret" {
+		t.Fatalf("Slack config = %#v", cfg.Slack)
+	}
+}
+
+func TestLoadBenchmarkDoesNotRequireServerStorageOrSlack(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, "benchmark", ".env")
+	if err := os.MkdirAll(filepath.Dir(envPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(envPath, []byte("MIMO_API_KEY=mimo-token\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadBenchmark()
+	if err != nil {
+		t.Fatalf("LoadBenchmark() error = %v", err)
+	}
+	if cfg.Storage.PostgresDSN != "" || cfg.Storage.RedisURL != "" {
+		t.Fatalf("benchmark storage = %#v, want empty", cfg.Storage)
+	}
+}
+
 func TestLoadForHonorsExplicitEnvFile(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()

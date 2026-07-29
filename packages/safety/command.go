@@ -39,6 +39,25 @@ func NewCommandPolicy() CommandPolicy {
 	return CommandPolicy{deny: compiled}
 }
 
+func NewLocalCommandPolicy() CommandPolicy {
+	patterns := []string{
+		`(?i)\brm\s+.*-[^\s]*r[^\s]*f`,
+		`(?i)\brm\s+-rf\b`,
+		`(?i)\b(terraform|tofu)\s+destroy\b`,
+		`(?i)\bkubectl\s+delete\b`,
+		`(?i)\bdocker\s+(rm|rmi|stop|kill)\b`,
+		`(?i)\b(shutdown|reboot|halt|poweroff)\b`,
+		`(?i)\bmkfs\b`,
+		`(?i)\bdd\s+`,
+		`(?i)\bchmod\s+777\b`,
+	}
+	compiled := make([]*regexp.Regexp, 0, len(patterns))
+	for _, p := range patterns {
+		compiled = append(compiled, regexp.MustCompile(p))
+	}
+	return CommandPolicy{deny: compiled}
+}
+
 func (g CommandPolicy) Check(command string) error {
 	if len(g.deny) == 0 {
 		return nil

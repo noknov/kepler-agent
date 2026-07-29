@@ -16,6 +16,7 @@ type Config struct {
 	LLM       LLMConfig
 	Security  SecurityConfig
 	Sessions  SessionConfig
+	Agent     AgentPolicyConfig
 	Tools     ToolConfig
 	Observing ObservingConfig
 	Storage   StorageConfig
@@ -96,6 +97,13 @@ type SessionConfig struct {
 	MaxToolResultTokens int    // per-tool-result token cap (default 5000)
 }
 
+type AgentPolicyConfig struct {
+	DisableEvidenceValidation       bool
+	MaxOutputTokenRecoveries        int
+	MaxIdenticalFailedToolCalls     int
+	MaxIdenticalSuccessfulToolCalls int
+}
+
 type ToolConfig struct {
 	CommandTimeout         time.Duration
 	AgentMaxSteps          int
@@ -154,8 +162,12 @@ type RuntimeProfile string
 const (
 	ProfileAllInOne      RuntimeProfile = "all-in-one"
 	ProfileGateway       RuntimeProfile = "gateway"
-	ProfileWorker        RuntimeProfile = "worker"
+	ProfileSlackWorker   RuntimeProfile = "slack-worker"
+	ProfileWorker        RuntimeProfile = "worker" // compatibility alias
 	ProfileObservability RuntimeProfile = "observability"
+	ProfileLocalAgent    RuntimeProfile = "local-agent"
+	ProfileBenchmark     RuntimeProfile = "benchmark"
+	ProfileCLI           RuntimeProfile = "cli"
 )
 
 func Load() (Config, error) {
@@ -171,17 +183,15 @@ func LoadFor(profile RuntimeProfile) (Config, error) {
 }
 
 func LoadLocalAgent() (Config, error) {
-	cfg, err := loadRaw(ProfileAllInOne)
-	if err != nil {
-		return cfg, err
-	}
-	if cfg.HTTP.EventInboxLease <= 0 {
-		cfg.HTTP.EventInboxLease = cfg.HTTP.EventTimeout + time.Minute
-	}
-	if cfg.HTTP.EventWorkers <= 0 || cfg.HTTP.EventQueueSize <= 0 || cfg.HTTP.EventEnqueueTimeout <= 0 || cfg.HTTP.EventTimeout <= 0 || cfg.HTTP.EventInboxLease <= 0 || cfg.HTTP.ShutdownTimeout <= 0 || cfg.Tools.AgentMaxConcurrentRuns <= 0 {
-		return cfg, fmt.Errorf("SLACK_EVENT_WORKERS, SLACK_EVENT_QUEUE_SIZE, SLACK_EVENT_ENQUEUE_TIMEOUT, SLACK_EVENT_TIMEOUT, SLACK_EVENT_INBOX_LEASE, HTTP_SHUTDOWN_TIMEOUT, and AGENT_MAX_CONCURRENT_RUNS must be positive")
-	}
-	return validateLocalAgentRuntime(cfg)
+	return LoadFor(ProfileLocalAgent)
+}
+
+func LoadBenchmark() (Config, error) {
+	return LoadFor(ProfileBenchmark)
+}
+
+func LoadCLI() (Config, error) {
+	return LoadFor(ProfileCLI)
 }
 
 func loadRaw(profile RuntimeProfile) (Config, error) {
@@ -278,6 +288,12 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			CompactModel:        env("SESSION_COMPACT_MODEL", ""),
 			MaxToolResultTokens: envInt("SESSION_MAX_TOOL_RESULT_TOKENS", 8000),
 		},
+		Agent: AgentPolicyConfig{
+			DisableEvidenceValidation:       envBool("AGENT_DISABLE_EVIDENCE_VALIDATION", false),
+			MaxOutputTokenRecoveries:        envInt("AGENT_MAX_OUTPUT_TOKEN_RECOVERIES", 0),
+			MaxIdenticalFailedToolCalls:     envInt("AGENT_MAX_IDENTICAL_FAILED_TOOL_CALLS", 0),
+			MaxIdenticalSuccessfulToolCalls: envInt("AGENT_MAX_IDENTICAL_SUCCESSFUL_TOOL_CALLS", 0),
+		},
 		Tools: ToolConfig{
 			CommandTimeout:         envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
 			AgentMaxSteps:          envInt("AGENT_MAX_STEPS", 256),
@@ -345,10 +361,16 @@ func dotenvPath(profile RuntimeProfile) string {
 	switch profile {
 	case ProfileGateway:
 		return "gateway/.env"
-	case ProfileWorker:
+	case ProfileSlackWorker, ProfileWorker:
 		return "worker/.env"
 	case ProfileObservability:
 		return "observability/.env"
+	case ProfileLocalAgent:
+		return "local-agent/.env"
+	case ProfileBenchmark:
+		return "benchmark/.env"
+	case ProfileCLI:
+		return "cli/.env"
 	case ProfileAllInOne, "":
 		return "cmd/slack-copilot-agent/.env"
 	default:
@@ -362,6 +384,12 @@ func validateForProfile(cfg Config, profile RuntimeProfile) (Config, error) {
 	}
 	if cfg.HTTP.EventWorkers <= 0 || cfg.HTTP.EventQueueSize <= 0 || cfg.HTTP.EventEnqueueTimeout <= 0 || cfg.HTTP.EventTimeout <= 0 || cfg.HTTP.EventInboxLease <= 0 || cfg.HTTP.ShutdownTimeout <= 0 || cfg.Tools.AgentMaxConcurrentRuns <= 0 {
 		return cfg, fmt.Errorf("SLACK_EVENT_WORKERS, SLACK_EVENT_QUEUE_SIZE, SLACK_EVENT_ENQUEUE_TIMEOUT, SLACK_EVENT_TIMEOUT, SLACK_EVENT_INBOX_LEASE, HTTP_SHUTDOWN_TIMEOUT, and AGENT_MAX_CONCURRENT_RUNS must be positive")
+	}
+	switch profile {
+	case ProfileLocalAgent, ProfileBenchmark:
+		return validateLocalAgentRuntime(cfg)
+	case ProfileCLI:
+		return cfg, nil
 	}
 	if cfg.Storage.PostgresDSN == "" {
 		return cfg, fmt.Errorf("POSTGRES_DSN is required for durable session, event, run, and reminder storage")
@@ -378,7 +406,7 @@ func validateForProfile(cfg Config, profile RuntimeProfile) (Config, error) {
 		return cfg, nil
 	case ProfileObservability:
 		return cfg, nil
-	case ProfileAllInOne, ProfileWorker, "":
+	case ProfileAllInOne, ProfileSlackWorker, ProfileWorker, "":
 		return validateAgentRuntime(cfg)
 	default:
 		return cfg, fmt.Errorf("unknown runtime profile %q", profile)

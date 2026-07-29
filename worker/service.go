@@ -47,7 +47,7 @@ type Service struct {
 }
 
 func Run(ctx context.Context) error {
-	cfg, err := config.LoadFor(config.ProfileWorker)
+	cfg, err := config.LoadFor(config.ProfileSlackWorker)
 	if err != nil {
 		return err
 	}

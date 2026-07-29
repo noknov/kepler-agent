@@ -10,8 +10,9 @@ import (
 )
 
 type RunnerAgent struct {
-	Runner agent.Runner
-	Locale string
+	Runner       agent.Runner
+	Locale       string
+	SystemPrompt string
 }
 
 func (a RunnerAgent) RunCase(ctx context.Context, c Case) (AgentResult, error) {
@@ -21,9 +22,13 @@ func (a RunnerAgent) RunCase(ctx context.Context, c Case) (AgentResult, error) {
 	runner.OnLLMStepComplete = func() {
 		observer.LLMStep()
 	}
+	systemPrompt := a.SystemPrompt
+	if systemPrompt == "" {
+		systemPrompt = "You are being evaluated in a software engineering benchmark. Use available tools for code evidence, be concise, and complete the requested task."
+	}
 	req := agent.Request{
 		Messages: []llm.Message{
-			{Role: "system", Content: "You are being evaluated in a software engineering benchmark. Use available tools for code evidence, be concise, and complete the requested task."},
+			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: c.Prompt},
 		},
 		UserQuestion: c.Prompt,

@@ -46,6 +46,13 @@ func (t MCPTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(t.LocalName, t.Description, t.Parameters)
 }
 
+func (t MCPTool) Metadata() registry.ToolMetadata {
+	return registry.ToolMetadata{
+		Risk:         registry.RiskRead,
+		Dependencies: []string{"playwright"},
+	}
+}
+
 func (t MCPTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
 	if t.Client == nil || !t.Client.enabled() {
 		return registry.Result{}, fmt.Errorf("Playwright MCP is not configured: PLAYWRIGHT_MCP_URL is required")
