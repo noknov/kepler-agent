@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/noknov/slack-copilot-agent/benchmarks/benchcli"
 	"github.com/noknov/slack-copilot-agent/packages/observability"
 	appruntime "github.com/noknov/slack-copilot-agent/packages/runtime"
 )
@@ -24,6 +25,8 @@ func Run(ctx context.Context, args []string) error {
 		if len(args) >= 2 && args[1] == "list" {
 			return listTools(ctx)
 		}
+	case "bench":
+		return benchcli.Run(ctx, args[1:])
 	case "chat", "run":
 		return fmt.Errorf("%s is reserved for the local agent loop; the local editing runtime is not wired yet", args[0])
 	}
@@ -36,8 +39,12 @@ func printUsage() {
 Usage:
   slack-copilot config doctor
   slack-copilot tools list
+  slack-copilot bench ...
   slack-copilot chat "message"   (reserved)
-  slack-copilot run "task"       (reserved)`)
+  slack-copilot run "task"       (reserved)
+
+Benchmark commands also have a standalone entrypoint:
+  go run ./benchmarks/cmd/slack-copilot-bench help`)
 }
 
 func configDoctor() error {
