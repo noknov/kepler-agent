@@ -130,7 +130,8 @@ func fetchOrigin(ctx context.Context, repoDir string, ttl time.Duration, force b
 }
 
 func runFetch(ctx context.Context, repoDir string) error {
-	cmd := exec.CommandContext(ctx, "git", "-C", repoDir, "fetch", "--prune", "--force", "--no-write-fetch-head", "origin")
+	args := gitCommandArgs("-C", repoDir, "fetch", "--prune", "--force", "--no-write-fetch-head", "origin")
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -140,10 +141,23 @@ func runFetch(ctx context.Context, repoDir string) error {
 	// The fetch updates origin/* refs but does not necessarily refresh this
 	// symbolic ref, so default-branch tools could otherwise keep reading an
 	// old main/master after the remote moves to mt-main.
-	headCmd := exec.CommandContext(ctx, "git", "-C", repoDir, "remote", "set-head", "origin", "-a")
+	headCmd := exec.CommandContext(ctx, "git", gitCommandArgs("-C", repoDir, "remote", "set-head", "origin", "-a")...)
 	headCmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	_ = headCmd.Run()
 	return nil
+}
+
+func gitCommandArgs(args ...string) []string {
+	token := os.Getenv("GITHUB_TOKEN")
+	if token == "" {
+		return args
+	}
+
+	gitArgs := []string{
+		"-c", "credential.helper=",
+		"-c", "credential.helper=!f() { test \"$1\" = get && printf 'username=x-access-token\\npassword=%s\\n' \"$GITHUB_TOKEN\"; }; f",
+	}
+	return append(gitArgs, args...)
 }
 
 func ResetForTest() {
