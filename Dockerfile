@@ -24,7 +24,14 @@ FROM debian:bookworm-slim AS runtime-base
 
 WORKDIR /app
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends ca-certificates curl git openssh-client ripgrep \
+	&& apt-get install -y --no-install-recommends ca-certificates curl git gnupg openssh-client ripgrep \
+	&& curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg \
+	&& echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list \
+	&& apt-get update \
+	&& apt-get install -y --no-install-recommends google-cloud-cli google-cloud-cli-gke-gcloud-auth-plugin \
+	&& arch="$(dpkg --print-architecture)" \
+	&& curl -fsSL "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/${arch}/kubectl" -o /usr/local/bin/kubectl \
+	&& chmod +x /usr/local/bin/kubectl \
 	&& rm -rf /var/lib/apt/lists/* \
 	&& useradd --create-home --uid 10001 --shell /usr/sbin/nologin slackcopilot
 ENV HTTP_ADDR=:8080
