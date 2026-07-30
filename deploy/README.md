@@ -1,6 +1,6 @@
 # Kubernetes Deployment
 
-Shared cluster resources live in `deploy/shared/k8s/`. Service-owned
+Example starter dependencies live in `deploy/starter/k8s/`. Service-owned
 Kubernetes manifests live beside the service:
 
 | Service | Manifests |
@@ -18,10 +18,15 @@ docker build -t ghcr.io/your-org/slack-copilot-agent:latest .
 docker push ghcr.io/your-org/slack-copilot-agent:latest
 ```
 
+Apply starter dependencies:
+
+```bash
+kubectl apply -f deploy/starter/k8s/
+```
+
 Create service-specific secrets:
 
 ```bash
-kubectl create namespace slack-copilot-agent
 kubectl -n slack-copilot-agent create secret generic slack-copilot-gateway-secrets \
   --from-literal=SLACK_SIGNING_SECRET='...' \
   --from-literal=POSTGRES_DSN='postgres://slack_copilot:slack_copilot@slack-copilot-postgres:5432/slack_copilot?sslmode=disable' \
@@ -41,10 +46,9 @@ kubectl -n slack-copilot-agent create secret generic slack-copilot-observability
   --from-literal=OBSERVABILITY_TOKEN='...'
 ```
 
-Apply shared resources and services:
+Apply services:
 
 ```bash
-kubectl apply -f deploy/shared/k8s/
 kubectl apply -f gateway/deploy/k8s/
 kubectl apply -f worker/deploy/k8s/
 kubectl apply -f observability/deploy/k8s/
@@ -52,7 +56,8 @@ kubectl apply -f observability/deploy/k8s/
 
 ## Local Compose
 
-Local-only dependency stacks live under `deploy/local/compose/`:
+Local-only dependency stacks live under `deploy/local/compose/`. They are
+development conveniences, not production infrastructure:
 
 ```bash
 docker compose -f deploy/local/compose/search.yml up -d
@@ -63,8 +68,8 @@ docker compose -f deploy/local/compose/search.yml up -d
 - Slack Events and Interactions route to `slack-copilot-gateway`.
 - Operational dashboards and `/runs` route to `slack-copilot-observability`.
 - Worker has no Service because it only consumes the durable inbox.
-- Replace the starter PostgreSQL and Redis manifests with managed services for
-  production.
+- The PostgreSQL and Redis manifests under `deploy/starter/k8s/` are examples
+  for development and evaluation. Prefer managed services for production.
 - Keep non-sensitive environment config in reviewed ConfigMap, Helm values, or
   Kustomize overlay files. Keep credentials and connection strings containing
   passwords out of git and inject them through Kubernetes Secret or an external
