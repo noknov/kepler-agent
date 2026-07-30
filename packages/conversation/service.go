@@ -802,6 +802,7 @@ func (s *Service) controlActive(req Request) bool {
 		return false
 	}
 	sessionID := session.ID(req.Channel, req.ThreadTS)
+	activeKey := "active:" + sessionID
 
 	if local := s.activeFor(sessionID); local != nil && local.userID == req.UserID {
 		if !s.markEvent(req.EventID) {
@@ -818,7 +819,7 @@ func (s *Service) controlActive(req Request) bool {
 	if s.Redis == nil {
 		return false
 	}
-	ownerPod, err := s.Redis.Get(context.Background(), "active:"+sessionID)
+	ownerPod, err := s.Redis.Get(context.Background(), activeKey)
 	if err != nil || ownerPod == "" || ownerPod == s.PodID {
 		return false
 	}
@@ -838,8 +839,26 @@ func (s *Service) controlActive(req Request) bool {
 		"channel": req.Channel,
 		"thread":  req.ThreadTS,
 	})
-	_ = s.Redis.Publish(context.Background(), "pod:control:"+ownerPod, string(payload))
+	subscribers, err := s.Redis.PublishCount(context.Background(), "pod:control:"+ownerPod, string(payload))
+	if err != nil {
+		s.unmarkEvent(req.EventID)
+		log.Printf("active run control publish failed session=%s owner=%s err=%v", sessionID, ownerPod, err)
+		return false
+	}
+	if subscribers == 0 {
+		s.unmarkEvent(req.EventID)
+		_ = s.Redis.Del(context.Background(), activeKey)
+		log.Printf("active run owner unavailable session=%s owner=%s; handling event locally", sessionID, ownerPod)
+		return false
+	}
 	return true
+}
+
+func (s *Service) unmarkEvent(eventID string) {
+	if eventID == "" || s.Redis == nil {
+		return
+	}
+	_ = s.Redis.Del(context.Background(), "event:seen:"+eventID)
 }
 
 // StartControlSubscriber listens for cross-pod cancel/steer commands.
