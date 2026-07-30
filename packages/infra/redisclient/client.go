@@ -54,6 +54,12 @@ func (c *Client) Publish(ctx context.Context, channel, message string) error {
 	return c.rdb.Publish(ctx, channel, message).Err()
 }
 
+// PublishCount publishes a message and returns the number of subscribers that
+// received it.
+func (c *Client) PublishCount(ctx context.Context, channel, message string) (int64, error) {
+	return c.rdb.Publish(ctx, channel, message).Result()
+}
+
 // Subscribe returns a PubSub subscription for the given channels.
 func (c *Client) Subscribe(ctx context.Context, channels ...string) *redis.PubSub {
 	return c.rdb.Subscribe(ctx, channels...)
