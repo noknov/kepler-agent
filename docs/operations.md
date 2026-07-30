@@ -35,36 +35,40 @@ The runtime image includes `git`, `ripgrep`, `curl`, CA certificates, and
 
 ## Kubernetes
 
-Starter manifests are split by ownership: shared infrastructure lives in
-`deploy/shared/k8s/`, while service manifests live in `gateway/deploy/k8s/`,
+Starter manifests are split by ownership: example dependencies live in
+`deploy/starter/k8s/`, while service manifests live in `gateway/deploy/k8s/`,
 `worker/deploy/k8s/`, and `observability/deploy/k8s/`.
 
 ```bash
-kubectl create namespace slack-copilot-agent
+kubectl apply -f deploy/starter/k8s/
+
 kubectl -n slack-copilot-agent create secret generic slack-copilot-gateway-secrets \
   --from-literal=SLACK_SIGNING_SECRET='...' \
-  --from-literal=POSTGRES_DSN='postgres://...' \
+  --from-literal=POSTGRES_DSN='postgres://slack_copilot:slack_copilot@slack-copilot-postgres:5432/slack_copilot?sslmode=disable' \
   --from-literal=REDIS_URL='redis://slack-copilot-redis:6379/0'
 
 kubectl -n slack-copilot-agent create secret generic slack-copilot-worker-secrets \
   --from-literal=SLACK_BOT_TOKEN='xoxb-...' \
   --from-literal=SLACK_SIGNING_SECRET='...' \
   --from-literal=ALLOWED_SLACK_USERS='U11111111,U22222222' \
-  --from-literal=POSTGRES_DSN='postgres://...' \
+  --from-literal=POSTGRES_DSN='postgres://slack_copilot:slack_copilot@slack-copilot-postgres:5432/slack_copilot?sslmode=disable' \
   --from-literal=REDIS_URL='redis://slack-copilot-redis:6379/0' \
   --from-literal=LLM_PROVIDER='longcat' \
   --from-literal=LONGCAT_API_KEY='Bearer lc-...'
 
 kubectl -n slack-copilot-agent create secret generic slack-copilot-observability-secrets \
-  --from-literal=POSTGRES_DSN='postgres://...' \
+  --from-literal=POSTGRES_DSN='postgres://slack_copilot:slack_copilot@slack-copilot-postgres:5432/slack_copilot?sslmode=disable' \
   --from-literal=REDIS_URL='redis://slack-copilot-redis:6379/0' \
   --from-literal=OBSERVABILITY_TOKEN='...'
 
-kubectl apply -f deploy/shared/k8s/
 kubectl apply -f gateway/deploy/k8s/
 kubectl apply -f worker/deploy/k8s/
 kubectl apply -f observability/deploy/k8s/
 ```
+
+For production, prefer managed PostgreSQL and Redis over the starter in-cluster
+database manifests, with DSN values delivered through Secret or an external
+secret manager.
 
 Start with one worker replica. Gateway can scale horizontally because Slack
 events are persisted before processing. Scale workers only after PostgreSQL

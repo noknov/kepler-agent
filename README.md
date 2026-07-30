@@ -121,7 +121,8 @@ cli/                       Local CLI shell for future packaged agent workflows
 cmd/slack-copilot-agent/   Compatibility all-in-one process entrypoint
 packages/                  Shared libraries: agent, conversation, runtime, tools, storage
 packages/prompts/defaults/ Committed generic prompt defaults
-deploy/shared/k8s/         Shared starter Kubernetes infrastructure
+deploy/starter/k8s/        Example Kubernetes starter dependencies
+deploy/local/compose/      Optional local development dependencies
 gateway/deploy/k8s/        Gateway Kubernetes manifests
 worker/deploy/k8s/         Worker Kubernetes manifests
 observability/deploy/k8s/  Observability Kubernetes manifests
