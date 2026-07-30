@@ -12,9 +12,13 @@ import (
 
 const DefaultDir = "worker/.prompts"
 const PublicDir = "packages/prompts/defaults"
+const PrivateDir = "packages/prompts/private"
 
 //go:embed defaults
 var embeddedDefaults embed.FS
+
+//go:embed all:private
+var embeddedPrivate embed.FS
 
 // DynamicBoundaryMarker separates cacheable static prompt content from runtime
 // context so LLM providers can set prompt-cache breakpoints after the static portion.
@@ -64,15 +68,16 @@ var current = struct {
 }
 
 func init() {
-	_ = LoadDirs(PublicDir)
+	_ = LoadDirs(PublicDir, PrivateDir)
 }
 
 func LoadFromEnv() {
 	dir := strings.TrimSpace(os.Getenv("PROMPT_DIR"))
 	if dir == "" {
-		dir = DefaultDir
+		_ = LoadDirs(PublicDir, PrivateDir)
+		return
 	}
-	_ = LoadDirs(PublicDir, dir)
+	_ = LoadDirs(PublicDir, PrivateDir, dir)
 }
 
 func Dir() string {
@@ -152,6 +157,11 @@ func isPublicDirRef(dir string) bool {
 	return dir == PublicDir || strings.HasSuffix(dir, "/"+PublicDir)
 }
 
+func isPrivateDirRef(dir string) bool {
+	dir = filepath.ToSlash(filepath.Clean(strings.TrimSpace(dir)))
+	return dir == PrivateDir || strings.HasSuffix(dir, "/"+PrivateDir)
+}
+
 func looksLikeCatalogDir(dir string) bool {
 	info, err := os.Stat(dir)
 	if err != nil || !info.IsDir() {
@@ -195,6 +205,10 @@ func newCatalog() Catalog {
 func loadCatalogDir(dir string, catalog *Catalog) {
 	if isPublicDirRef(dir) {
 		loadCatalogFS(embeddedDefaults, "defaults", catalog)
+		return
+	}
+	if isPrivateDirRef(dir) {
+		loadCatalogFS(embeddedPrivate, "private", catalog)
 		return
 	}
 	loadCatalogFS(os.DirFS(dir), ".", catalog)
