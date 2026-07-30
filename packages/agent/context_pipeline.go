@@ -25,14 +25,14 @@ const aggregateToolResultBudget = 60_000
 // compaction stack, and only then normalize provider-facing message shape.
 func (r Runner) prepareMessagesForQuery(ctx context.Context, messages []llm.Message, req Request, toolSpecs []llm.ToolSpec) []llm.Message {
 	r.observeMemoryBreakdown(req, toolSpecs)
-	messages = r.applyToolResultBudget(messages, req)
+	messages = r.applyToolResultBudget(ctx, messages, req)
 	messages = r.compactMessages(ctx, messages, memory.EstimateToolSpecTokens(toolSpecs))
 	return memory.PrepareForLLM(messages)
 }
 
 func (r Runner) prepareMessagesForOverflowRetry(ctx context.Context, messages []llm.Message, req Request) []llm.Message {
 	r.observeMemoryBreakdown(req, nil)
-	messages = r.applyToolResultBudget(messages, req)
+	messages = r.applyToolResultBudget(ctx, messages, req)
 	messages = r.compactMessagesAggressive(ctx, messages)
 	return memory.PrepareForLLM(messages)
 }
@@ -55,7 +55,7 @@ func (r Runner) observeMemoryBreakdown(req Request, toolSpecs []llm.ToolSpec) {
 //     largest remaining results are spilled one by one until we are under budget.
 //     This prevents many moderate-sized results from collectively blowing out
 //     the context window even though each individually passes the per-result cap.
-func (r Runner) applyToolResultBudget(messages []llm.Message, req Request) []llm.Message {
+func (r Runner) applyToolResultBudget(ctx context.Context, messages []llm.Message, req Request) []llm.Message {
 	if len(messages) == 0 {
 		return messages
 	}
@@ -84,7 +84,7 @@ func (r Runner) applyToolResultBudget(messages []llm.Message, req Request) []llm
 			out = make([]llm.Message, len(messages))
 			copy(out, messages)
 		}
-		replacement := maybeSpillResult(spillRunID(req.RunID), msg.Name, msg.ToolCallID, msg.Content)
+		replacement := maybeSpillResult(ctx, req.Runtime.ToolSpillStore, spillRunID(req.RunID), msg.Name, msg.ToolCallID, msg.Content)
 		out[i].Content = replacement
 		if req.ContentReplacementState != nil && replacement != msg.Content {
 			req.ContentReplacementState.AddReplacement(msg.ToolCallID, replacement)
@@ -95,7 +95,7 @@ func (r Runner) applyToolResultBudget(messages []llm.Message, req Request) []llm
 		out = nil
 	}
 	if req.ContentReplacementState != nil {
-		return r.applyStatefulToolResultBudget(messages, req)
+		return r.applyStatefulToolResultBudget(ctx, messages, req)
 	}
 
 	// Pass 2: aggregate budget check on the most recent tool-call batch.
@@ -145,7 +145,7 @@ func (r Runner) applyToolResultBudget(messages []llm.Message, req Request) []llm
 			continue // already spilled by pass 1
 		}
 		spilled++
-		newContent := maybeSpillResult(spillRunID(req.RunID), msg.Name, msg.ToolCallID, msg.Content)
+		newContent := maybeSpillResult(ctx, req.Runtime.ToolSpillStore, spillRunID(req.RunID), msg.Name, msg.ToolCallID, msg.Content)
 		total -= entry.n - len(newContent)
 		out[entry.idx].Content = newContent
 	}
@@ -155,7 +155,7 @@ func (r Runner) applyToolResultBudget(messages []llm.Message, req Request) []llm
 	return out
 }
 
-func (r Runner) applyStatefulToolResultBudget(messages []llm.Message, req Request) []llm.Message {
+func (r Runner) applyStatefulToolResultBudget(ctx context.Context, messages []llm.Message, req Request) []llm.Message {
 	state := req.ContentReplacementState
 	if state == nil {
 		return messages
@@ -226,7 +226,7 @@ func (r Runner) applyStatefulToolResultBudget(messages []llm.Message, req Reques
 		}
 		replacement := msg.Content
 		if !strings.HasPrefix(strings.TrimSpace(replacement), "<persisted-output>") {
-			replacement = maybeSpillResult(spillRunID(req.RunID), msg.Name, msg.ToolCallID, msg.Content)
+			replacement = maybeSpillResult(ctx, req.Runtime.ToolSpillStore, spillRunID(req.RunID), msg.Name, msg.ToolCallID, msg.Content)
 		}
 		out[entry.idx].Content = replacement
 		state.AddReplacement(msg.ToolCallID, replacement)

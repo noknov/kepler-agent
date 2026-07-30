@@ -1199,10 +1199,10 @@ func (r Runner) executeSingleTool(ctx context.Context, call llm.ToolCall, req Re
 	} else if needsUserInput {
 		content = r.sanitize(result.Content)
 	} else {
-		content = r.format(name, maybeSpillResult(spillRunID(req.RunID), name, call.ID, r.sanitize(result.Content)))
+		content = maybeSpillResult(ctx, req.Runtime.ToolSpillStore, spillRunID(req.RunID), name, call.ID, r.format(name, r.sanitize(result.Content)))
 	}
 	if err != nil || needsUserInput {
-		content = maybeSpillResult(spillRunID(req.RunID), name, call.ID, content)
+		content = maybeSpillResult(ctx, req.Runtime.ToolSpillStore, spillRunID(req.RunID), name, call.ID, content)
 	}
 	return toolResult{
 		message:     llm.Message{Role: "tool", ToolCallID: call.ID, Name: name, Content: content},

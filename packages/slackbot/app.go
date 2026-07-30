@@ -189,6 +189,7 @@ func NewServerWithOptions(cfg config.Config, opts Options) (*Server, error) {
 	conv.FollowUpContext = serviceCtx
 	conv.Format = slack.MarkdownToMrkdwn
 	conv.RunStore = runStore
+	conv.ToolSpillStore = runStore
 	conv.RunProvider = cfg.LLM.Provider
 	conv.RunModel = cfg.LLM.Model
 	multimodal := multimodalPredicate(cfg.LLM.MultimodalModels)
