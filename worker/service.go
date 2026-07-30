@@ -105,6 +105,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	conv.FollowUpContext = serviceCtx
 	conv.Format = slack.MarkdownToMrkdwn
 	conv.RunStore = stores.Runs
+	conv.ToolSpillStore = stores.Runs
 	conv.RunProvider = cfg.LLM.Provider
 	conv.RunModel = cfg.LLM.Model
 	multimodal := multimodalPredicate(cfg.LLM.MultimodalModels)

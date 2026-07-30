@@ -773,7 +773,7 @@ func TestRunnerAppliesToolResultBudgetBeforeModelCall(t *testing.T) {
 	}
 }
 
-func TestRunnerSpillsFullToolOutputBeforeFormatting(t *testing.T) {
+func TestRunnerSpillsFullFormattedToolOutput(t *testing.T) {
 	runID := "run-full-tool-spill"
 	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(spillDir, runID)) })
 	tailMarker := "TAIL_MARKER_AFTER_PREVIEW"
@@ -799,8 +799,41 @@ func TestRunnerSpillsFullToolOutputBeforeFormatting(t *testing.T) {
 	if !strings.Contains(string(data), tailMarker) {
 		t.Fatalf("spill file lost tail marker; output was truncated before persistence")
 	}
-	if strings.Contains(string(data), "<evidence source=") {
-		t.Fatalf("spill file should contain raw sanitized tool output, not formatted context wrapper")
+	if !strings.Contains(string(data), "<evidence source=") {
+		t.Fatalf("spill file should contain final formatted tool output")
+	}
+	if strings.Contains(string(data), "[truncated]") {
+		t.Fatalf("spill file should contain full content, not fallback truncation")
+	}
+}
+
+func TestRunnerSpillsWhenFormattingPushesToolOutputOverLimit(t *testing.T) {
+	runID := "run-format-boundary-spill"
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(spillDir, runID)) })
+	nearLimitText := strings.Repeat("x", maxToolResultChars-20)
+	client := &fakeClient{responses: []llm.Response{
+		{Message: toolCallMessage("tool_format_boundary", `{"text":"`+nearLimitText+`"}`)},
+		{Message: llm.Message{Role: "assistant", Content: "done"}},
+	}}
+	tools := registry.New()
+	tools.Register(fakeTool{})
+
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 3, Format: memory.Builder{}}.Run(context.Background(), Request{RunID: runID})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Final != "done" {
+		t.Fatalf("Final = %q, want done", result.Final)
+	}
+	data, err := os.ReadFile(spillPath(runID, "echo", "tool_format_boundary"))
+	if err != nil {
+		t.Fatalf("ReadFile(spill) error = %v", err)
+	}
+	if !strings.Contains(string(data), "<evidence source=\"echo\">") {
+		t.Fatalf("formatted output should have been spilled once wrapper pushed it over the limit")
+	}
+	if strings.Contains(string(data), "[truncated]") {
+		t.Fatalf("formatted spill should not be hard-truncated")
 	}
 }
 
@@ -914,7 +947,7 @@ func TestStatefulToolResultBudgetReappliesReplacement(t *testing.T) {
 		{Role: "tool", Name: "code-search", ToolCallID: "call_1", Content: strings.Repeat("full result ", 1000)},
 	}
 
-	got := r.applyToolResultBudget(messages, Request{ContentReplacementState: state, RunID: "stateful-reapply"})
+	got := r.applyToolResultBudget(context.Background(), messages, Request{ContentReplacementState: state, RunID: "stateful-reapply"})
 	if got[1].Content != "<persisted-output>\nold preview\n</persisted-output>" {
 		t.Fatalf("replacement was not reapplied: %q", got[1].Content)
 	}
@@ -931,7 +964,7 @@ func TestStatefulToolResultBudgetFreezesUnreplacedResults(t *testing.T) {
 		{Role: "tool", Name: "code-search", ToolCallID: "call_1", Content: "small result"},
 	}
 
-	first := r.applyToolResultBudget(messages, Request{ContentReplacementState: state, RunID: "stateful-freeze"})
+	first := r.applyToolResultBudget(context.Background(), messages, Request{ContentReplacementState: state, RunID: "stateful-freeze"})
 	if first[1].Content != "small result" {
 		t.Fatalf("first content = %q", first[1].Content)
 	}
@@ -940,7 +973,7 @@ func TestStatefulToolResultBudgetFreezesUnreplacedResults(t *testing.T) {
 	}
 
 	messages[1].Content = strings.Repeat("became huge ", 8000)
-	second := r.applyToolResultBudget(messages, Request{ContentReplacementState: state, RunID: "stateful-freeze"})
+	second := r.applyToolResultBudget(context.Background(), messages, Request{ContentReplacementState: state, RunID: "stateful-freeze"})
 	if second[1].Content != messages[1].Content {
 		t.Fatal("seen unreplaced result should stay unreplaced on later passes")
 	}
@@ -961,7 +994,7 @@ func TestStatefulToolResultBudgetRecordsFreshReplacement(t *testing.T) {
 		{Role: "tool", Name: "code-search", ToolCallID: "call_2", Content: strings.Repeat("beta ", 7000)},
 	}
 
-	got := r.applyToolResultBudget(messages, Request{ContentReplacementState: state, RunID: "stateful-record"})
+	got := r.applyToolResultBudget(context.Background(), messages, Request{ContentReplacementState: state, RunID: "stateful-record"})
 	if len(state.Records) == 0 {
 		t.Fatal("expected at least one replacement record")
 	}

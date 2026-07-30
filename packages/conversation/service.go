@@ -52,6 +52,7 @@ type Service struct {
 	Metrics        *observability.Recorder
 	Format         TextFormatter
 	RunStore       runs.Store
+	ToolSpillStore registry.ToolSpillStore
 	RunProvider    string
 	RunModel       string
 	ModelRouter    ModelRouter
@@ -263,9 +264,10 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		Messages:     messages,
 		UserQuestion: userText,
 		Runtime: registry.Runtime{
-			UserID:   req.UserID,
-			Channel:  req.Channel,
-			ThreadTS: req.ThreadTS,
+			UserID:         req.UserID,
+			Channel:        req.Channel,
+			ThreadTS:       req.ThreadTS,
+			ToolSpillStore: s.ToolSpillStore,
 		},
 		Locale:                  locale,
 		RunID:                   runID,

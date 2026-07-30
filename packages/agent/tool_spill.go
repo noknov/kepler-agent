@@ -23,7 +23,14 @@ const (
 
 var unsafeSpillNameChars = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
-func spillToolResult(runID, toolName, toolCallID, content string) (string, error) {
+func spillToolResult(ctx context.Context, store registry.ToolSpillStore, runID, toolName, toolCallID, content string) (string, error) {
+	if store != nil {
+		if err := store.SaveToolSpill(ctx, spillRunID(runID), toolName, toolCallID, content); err != nil {
+			return "", err
+		}
+		return spillNotice(toolName, toolCallID, content), nil
+	}
+
 	dir := filepath.Join(spillDir, runID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
@@ -34,19 +41,23 @@ func spillToolResult(runID, toolName, toolCallID, content string) (string, error
 		return "", err
 	}
 
+	return spillNotice(toolName, toolCallID, content), nil
+}
+
+func spillNotice(toolName, toolCallID, content string) string {
 	preview := content
 	if len([]rune(preview)) > previewChars {
 		preview = string([]rune(preview)[:previewChars])
 	}
 	return fmt.Sprintf("<persisted-output>\nOutput too large (%d chars); showing first %d chars. To inspect more, call tool_spill-read with tool_name=%q and tool_call_id=%q. Prefer query for targeted evidence, or offset/limit for a bounded slice.\n\n%s\n...\n</persisted-output>",
-		len(content), len(preview), toolName, toolCallID, preview), nil
+		len(content), len(preview), toolName, toolCallID, preview)
 }
 
-func maybeSpillResult(runID, toolName, toolCallID, content string) string {
+func maybeSpillResult(ctx context.Context, store registry.ToolSpillStore, runID, toolName, toolCallID, content string) string {
 	if len(content) <= maxToolResultChars {
 		return content
 	}
-	spilled, err := spillToolResult(runID, toolName, toolCallID, content)
+	spilled, err := spillToolResult(ctx, store, runID, toolName, toolCallID, content)
 	if err != nil {
 		return truncateRunes(content, maxToolResultChars) + "\n\n[truncated]"
 	}
@@ -115,7 +126,7 @@ func (SpillReadTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (SpillReadTool) Execute(_ context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (SpillReadTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
 	var args struct {
 		ToolName   string `json:"tool_name"`
 		ToolCallID string `json:"tool_call_id"`
@@ -141,11 +152,21 @@ func (SpillReadTool) Execute(_ context.Context, raw json.RawMessage, rt registry
 	if limit > maxSpillReadLimit {
 		limit = maxSpillReadLimit
 	}
-	data, err := os.ReadFile(spillPath(rt.RunID, args.ToolName, args.ToolCallID))
-	if err != nil {
-		return registry.Result{}, fmt.Errorf("persisted output not found for tool_name=%q tool_call_id=%q", args.ToolName, args.ToolCallID)
+	var rawContent string
+	if rt.ToolSpillStore != nil {
+		content, err := rt.ToolSpillStore.ReadToolSpill(ctx, spillRunID(rt.RunID), args.ToolName, args.ToolCallID)
+		if err != nil {
+			return registry.Result{}, fmt.Errorf("persisted output not found for tool_name=%q tool_call_id=%q", args.ToolName, args.ToolCallID)
+		}
+		rawContent = content
+	} else {
+		data, err := os.ReadFile(spillPath(rt.RunID, args.ToolName, args.ToolCallID))
+		if err != nil {
+			return registry.Result{}, fmt.Errorf("persisted output not found for tool_name=%q tool_call_id=%q", args.ToolName, args.ToolCallID)
+		}
+		rawContent = string(data)
 	}
-	content := []rune(string(data))
+	content := []rune(rawContent)
 	offset := args.Offset
 	queryNotice := ""
 	if query := strings.TrimSpace(args.Query); query != "" {

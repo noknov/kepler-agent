@@ -12,11 +12,17 @@ import (
 )
 
 type Runtime struct {
-	UserID   string
-	Channel  string
-	ThreadTS string
-	RunID    string
-	Cache    *RuntimeCache
+	UserID         string
+	Channel        string
+	ThreadTS       string
+	RunID          string
+	Cache          *RuntimeCache
+	ToolSpillStore ToolSpillStore
+}
+
+type ToolSpillStore interface {
+	SaveToolSpill(ctx context.Context, runID, toolName, toolCallID, content string) error
+	ReadToolSpill(ctx context.Context, runID, toolName, toolCallID string) (string, error)
 }
 
 type RuntimeCache struct {

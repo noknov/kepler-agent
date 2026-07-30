@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -36,7 +37,17 @@ CREATE TABLE IF NOT EXISTS agent_runs (
  id TEXT PRIMARY KEY, session_id TEXT NOT NULL, started_at TIMESTAMPTZ NOT NULL, slack_channel TEXT NOT NULL DEFAULT '', slack_message_ts TEXT NOT NULL DEFAULT '', payload JSONB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_agent_runs_session_started ON agent_runs(session_id, started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_slack_message ON agent_runs(slack_channel, slack_message_ts) WHERE slack_message_ts <> '';`)
+CREATE INDEX IF NOT EXISTS idx_agent_runs_slack_message ON agent_runs(slack_channel, slack_message_ts) WHERE slack_message_ts <> '';
+CREATE TABLE IF NOT EXISTS agent_tool_spills (
+ run_id TEXT NOT NULL,
+ tool_name TEXT NOT NULL,
+ tool_call_id TEXT NOT NULL,
+ content TEXT NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ PRIMARY KEY (run_id, tool_name, tool_call_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_tool_spills_updated ON agent_tool_spills(updated_at DESC);`)
 	return err
 }
 func (s *PGStore) Save(ctx context.Context, run Run) error {
@@ -119,4 +130,32 @@ func (s *PGStore) AddFeedbackForMessage(ctx context.Context, ch, ts string, fb F
 	r.Feedback = append(r.Feedback, fb)
 	r.Quality = scoreRun(r)
 	return r.ID, true, s.Save(ctx, r)
+}
+
+func (s *PGStore) SaveToolSpill(ctx context.Context, runID, toolName, toolCallID, content string) error {
+	if s == nil || s.pool == nil {
+		return fmt.Errorf("run store is unavailable")
+	}
+	content = strings.ReplaceAll(content, "\x00", "")
+	_, err := s.pool.Exec(ctx, `INSERT INTO agent_tool_spills(run_id,tool_name,tool_call_id,content,created_at,updated_at)
+VALUES($1,$2,$3,$4,NOW(),NOW())
+ON CONFLICT(run_id, tool_name, tool_call_id) DO UPDATE SET content=EXCLUDED.content, updated_at=NOW()`,
+		runID, toolName, toolCallID, content)
+	return err
+}
+
+func (s *PGStore) ReadToolSpill(ctx context.Context, runID, toolName, toolCallID string) (string, error) {
+	if s == nil || s.pool == nil {
+		return "", fmt.Errorf("run store is unavailable")
+	}
+	var content string
+	err := s.pool.QueryRow(ctx, `SELECT content FROM agent_tool_spills WHERE run_id=$1 AND tool_name=$2 AND tool_call_id=$3`,
+		runID, toolName, toolCallID).Scan(&content)
+	if err == pgx.ErrNoRows {
+		return "", fmt.Errorf("persisted output not found")
+	}
+	if err != nil {
+		return "", err
+	}
+	return content, nil
 }
