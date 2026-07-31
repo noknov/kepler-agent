@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/noknov/slack-copilot-agent/packages/appsupport"
+	"github.com/noknov/slack-copilot-agent/packages/audit"
 	"github.com/noknov/slack-copilot-agent/packages/config"
 	"github.com/noknov/slack-copilot-agent/packages/conversation"
 	"github.com/noknov/slack-copilot-agent/packages/eventinbox"
@@ -68,6 +69,11 @@ func (s *Server) StartBackground() {
 			s.health.Start(ctx)
 		})
 	}
+	if s.auditEmails != nil {
+		s.Go(func(ctx context.Context) {
+			s.auditEmails.Start(ctx)
+		})
+	}
 	s.Go(func(ctx context.Context) {
 		s.reminders.Start(ctx)
 	})
@@ -88,6 +94,7 @@ type Server struct {
 	runStore            runs.Store
 	health              *health.Service
 	reminders           reminder.Scheduler
+	auditEmails         *audit.Scheduler
 	reminderStore       *reminder.PGStore
 	sessionStore        *session.PGStore
 	runPGStore          *runs.PGStore
@@ -262,8 +269,15 @@ func NewServerWithOptions(cfg config.Config, opts Options) (*Server, error) {
 		userPrefsStore: userPrefsStore,
 		health:         healthService,
 		reminders:      reminder.Scheduler{Store: reminderStore, Messenger: slackClient, Redis: rdb},
-		reminderStore:  reminderStore,
-		eventInbox:     eventInbox,
+		auditEmails: &audit.Scheduler{
+			Config:       cfg.Audit,
+			AllowedUsers: cfg.Security.AllowedUsers,
+			Runs:         runStore,
+			Slack:        slackClient,
+			Redis:        rdb,
+		},
+		reminderStore: reminderStore,
+		eventInbox:    eventInbox,
 		slackWorker: &slackevents.Worker{
 			Inbox:        eventInbox,
 			Redis:        rdb,

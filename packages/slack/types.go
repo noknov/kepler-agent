@@ -48,6 +48,19 @@ type Message struct {
 	Files    []File `json:"files,omitempty"`
 }
 
+type User struct {
+	ID       string      `json:"id,omitempty"`
+	Name     string      `json:"name,omitempty"`
+	RealName string      `json:"real_name,omitempty"`
+	Profile  UserProfile `json:"profile,omitempty"`
+}
+
+type UserProfile struct {
+	Email       string `json:"email,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
+	RealName    string `json:"real_name,omitempty"`
+}
+
 type File struct {
 	ID                 string `json:"id,omitempty"`
 	Name               string `json:"name,omitempty"`
