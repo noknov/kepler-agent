@@ -96,8 +96,7 @@ func (t ClustersTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 	if bin == "" {
 		bin = "gcloud"
 	}
-	display := bin + " " + strings.Join(cmdArgs, " ")
-	if err := t.Guard.Check(display); err != nil {
+	if err := t.Guard.CheckArgv(append([]string{bin}, cmdArgs...)); err != nil {
 		return registry.Result{}, err
 	}
 

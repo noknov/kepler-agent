@@ -54,13 +54,7 @@ func (t CommandTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 	if len(args.Argv) == 0 || strings.TrimSpace(args.Argv[0]) == "" {
 		return registry.Result{}, fmt.Errorf("argv is required")
 	}
-	for _, arg := range args.Argv {
-		if strings.Contains(arg, "\x00") {
-			return registry.Result{}, fmt.Errorf("argv contains NUL byte")
-		}
-	}
-	display := strings.Join(args.Argv, " ")
-	if err := t.Guard.Check(display); err != nil {
+	if err := t.Guard.CheckArgv(args.Argv); err != nil {
 		return registry.Result{}, err
 	}
 	dir, err := t.resolveWorkdir(args.Workdir)

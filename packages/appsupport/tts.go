@@ -11,14 +11,15 @@ import (
 )
 
 func NewAutoTTSFunc(cfg config.Config, slackClient *slack.Client) conversation.AutoTTSFunc {
+	tts := cfg.Integrations.TTS
 	synth := &ttsTools.SpeakTool{
 		Slack:   slackClient,
-		APIKey:  cfg.Tools.TTSAPIKey,
-		BaseURL: cfg.Tools.TTSBaseURL,
-		Model:   cfg.Tools.TTSModel,
+		APIKey:  tts.APIKey,
+		BaseURL: tts.BaseURL,
+		Model:   tts.Model,
 	}
-	voice := cfg.Tools.TTSDefaultVoice
-	style := cfg.Tools.TTSDefaultStyle
+	voice := tts.DefaultVoice
+	style := tts.DefaultStyle
 
 	return func(ctx context.Context, channel, threadTS, text string) (string, error) {
 		return synth.Synthesize(ctx, channel, threadTS, text, voice, style)

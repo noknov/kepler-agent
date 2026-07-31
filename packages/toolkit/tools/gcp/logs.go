@@ -99,8 +99,7 @@ func (t LogsTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.
 		"--limit", strconv.Itoa(args.Limit),
 		"--format", format,
 	}
-	display := bin + " " + strings.Join(cmdArgs, " ")
-	if err := t.Guard.Check(display); err != nil {
+	if err := t.Guard.CheckArgv(append([]string{bin}, cmdArgs...)); err != nil {
 		return registry.Result{}, err
 	}
 	timeout := t.Timeout

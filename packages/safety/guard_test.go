@@ -158,6 +158,36 @@ func TestCommandPolicyBlocksDangerousCommands(t *testing.T) {
 	}
 }
 
+func TestCommandPolicyChecksArgv(t *testing.T) {
+	guard := NewCommandPolicy()
+	if err := guard.CheckArgv([]string{"git", "status", "--short"}); err != nil {
+		t.Fatalf("expected safe argv allowed: %v", err)
+	}
+	if err := guard.CheckArgv([]string{"kubectl", "delete", "pod", "api-1"}); err == nil {
+		t.Fatal("expected dangerous argv blocked")
+	}
+	if err := guard.CheckArgv([]string{"git", "status\x00"}); err == nil {
+		t.Fatal("expected argv with NUL byte blocked")
+	}
+}
+
+func TestRepoInventoryCacheKeyIncludesWorkspaceRoots(t *testing.T) {
+	a := filepath.Join(t.TempDir(), "a")
+	b := filepath.Join(t.TempDir(), "b")
+	keyAB := (PromptPolicy{WorkspaceRoots: []string{a, b}}).repoInventoryCacheKey()
+	keyBA := (PromptPolicy{WorkspaceRoots: []string{b, a}}).repoInventoryCacheKey()
+	keyA := (PromptPolicy{WorkspaceRoots: []string{a}}).repoInventoryCacheKey()
+	if keyAB == "prompt:repo_inventory" {
+		t.Fatalf("cache key should not use the legacy global key: %q", keyAB)
+	}
+	if keyAB != keyBA {
+		t.Fatalf("cache key should be order-independent: %q vs %q", keyAB, keyBA)
+	}
+	if keyAB == keyA {
+		t.Fatalf("cache key should differ for different roots: %q", keyAB)
+	}
+}
+
 func TestWorkspacePolicyRejectsSymlinkEscape(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()

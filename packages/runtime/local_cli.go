@@ -27,15 +27,29 @@ func LocalCLIConfig() config.Config {
 			CommandTimeout:         30 * time.Second,
 			AgentMaxSteps:          256,
 			AgentMaxConcurrentRuns: 1,
-			GCloudPath:             "gcloud",
-			KubectlPath:            "kubectl",
-			GitHubAPIBaseURL:       "https://api.github.com",
-			LuckinMCPURL:           "https://gwmcp.lkcoffee.com/order/user/mcp",
-			TTSBaseURL:             "https://token-plan-cn.xiaomimimo.com/v1",
-			TTSModel:               "mimo-v2.5-tts",
-			WebSearchProvider:      "duckduckgo",
-			WebSearchSerpAPIURL:    "https://serpapi.com/search.json",
-			WebSearchBraveURL:      "https://api.search.brave.com/res/v1/web/search",
+		},
+		Integrations: config.IntegrationConfig{
+			GCP: config.GCPConfig{
+				GCloudPath: "gcloud",
+			},
+			K8s: config.K8sConfig{
+				KubectlPath: "kubectl",
+			},
+			GitHub: config.GitHubConfig{
+				APIBaseURL: "https://api.github.com",
+			},
+			Luckin: config.LuckinConfig{
+				MCPURL: "https://gwmcp.lkcoffee.com/order/user/mcp",
+			},
+			TTS: config.TTSConfig{
+				BaseURL: "https://token-plan-cn.xiaomimimo.com/v1",
+				Model:   "mimo-v2.5-tts",
+			},
+			WebSearch: config.WebSearchConfig{
+				Provider:   "duckduckgo",
+				SerpAPIURL: "https://serpapi.com/search.json",
+				BraveURL:   "https://api.search.brave.com/res/v1/web/search",
+			},
 		},
 	}
 }

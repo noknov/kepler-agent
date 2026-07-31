@@ -2,10 +2,13 @@ package safety
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -39,7 +42,7 @@ func (p PromptPolicy) SystemPrompt() string {
 }
 
 func (p PromptPolicy) cachedRepoInventory() string {
-	const key = "prompt:repo_inventory"
+	key := p.repoInventoryCacheKey()
 	if p.Redis != nil {
 		if cached, err := p.Redis.Get(context.Background(), key); err == nil && cached != "" {
 			return cached
@@ -50,6 +53,26 @@ func (p PromptPolicy) cachedRepoInventory() string {
 		_ = p.Redis.Set(context.Background(), key, result, repoInventoryTTL)
 	}
 	return result
+}
+
+func (p PromptPolicy) repoInventoryCacheKey() string {
+	roots := make([]string, 0, len(p.WorkspaceRoots))
+	for _, root := range p.WorkspaceRoots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(root); err == nil {
+			root = abs
+		}
+		roots = append(roots, filepath.Clean(root))
+	}
+	sort.Strings(roots)
+	if len(roots) == 0 {
+		return "prompt:repo_inventory:none"
+	}
+	h := sha256.Sum256([]byte(strings.Join(roots, "\x00")))
+	return "prompt:repo_inventory:" + hex.EncodeToString(h[:8])
 }
 
 func (p PromptPolicy) runtimeDatePrompt() string {

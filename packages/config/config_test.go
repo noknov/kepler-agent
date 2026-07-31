@@ -88,11 +88,81 @@ func TestLoadGitHubConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v, want nil", err)
 	}
-	if cfg.Tools.GitHubToken != "github-token" {
-		t.Fatalf("GitHubToken = %q, want github-token", cfg.Tools.GitHubToken)
+	if cfg.Integrations.GitHub.Token != "github-token" {
+		t.Fatalf("GitHub token = %q, want github-token", cfg.Integrations.GitHub.Token)
 	}
-	if cfg.Tools.GitHubDefaultOwner != "owner" || cfg.Tools.GitHubDefaultRepo != "repo" {
-		t.Fatalf("GitHub defaults = %s/%s", cfg.Tools.GitHubDefaultOwner, cfg.Tools.GitHubDefaultRepo)
+	if cfg.Integrations.GitHub.DefaultOwner != "owner" || cfg.Integrations.GitHub.DefaultRepo != "repo" {
+		t.Fatalf("GitHub defaults = %s/%s", cfg.Integrations.GitHub.DefaultOwner, cfg.Integrations.GitHub.DefaultRepo)
+	}
+}
+
+func TestLoadIntegrationConfig(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":          "xoxb-test",
+		"SLACK_SIGNING_SECRET":     "secret",
+		"ALLOWED_SLACK_USERS":      "U123",
+		"MIMO_API_KEY":             "mimo-token",
+		"GITHUB_TOKEN":             "github-token",
+		"GITHUB_DEFAULT_OWNER":     "owner",
+		"GITHUB_DEFAULT_REPO":      "repo",
+		"NOTION_TOKEN":             "notion-token",
+		"WEB_SEARCH_PROVIDER":      "brave",
+		"WEB_SEARCH_BRAVE_API_KEY": "brave-token",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.Integrations.GitHub.Token != "github-token" || cfg.Integrations.GitHub.DefaultRepo != "repo" {
+		t.Fatalf("GitHub integration config = %#v", cfg.Integrations.GitHub)
+	}
+	if cfg.Integrations.Notion.Token != "notion-token" {
+		t.Fatalf("Notion token = %q, want notion-token", cfg.Integrations.Notion.Token)
+	}
+	if cfg.Integrations.WebSearch.Provider != "brave" || cfg.Integrations.WebSearch.BraveKey != "brave-token" {
+		t.Fatalf("WebSearch integration config = %#v", cfg.Integrations.WebSearch)
+	}
+}
+
+func TestLoadMaxOutputTokensIsOptional(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":      "xoxb-test",
+		"SLACK_SIGNING_SECRET": "secret",
+		"ALLOWED_SLACK_USERS":  "U123",
+		"MIMO_API_KEY":         "mimo-token",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.LLM.MaxOutputTokens != 0 {
+		t.Fatalf("MaxOutputTokens = %d, want provider default sentinel 0", cfg.LLM.MaxOutputTokens)
+	}
+
+	t.Setenv("LLM_MAX_OUTPUT_TOKEN", "8192")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() with LLM_MAX_OUTPUT_TOKEN error = %v, want nil", err)
+	}
+	if cfg.LLM.MaxOutputTokens != 8192 {
+		t.Fatalf("MaxOutputTokens = %d, want 8192", cfg.LLM.MaxOutputTokens)
 	}
 }
 
@@ -593,17 +663,18 @@ func TestLoadWebSearchConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.Tools.WebSearchProvider != "serpapi" || cfg.Tools.WebSearchSerpAPIKey != "serp-key" {
-		t.Fatalf("web search config = %#v", cfg.Tools)
+	webSearch := cfg.Integrations.WebSearch
+	if webSearch.Provider != "serpapi" || webSearch.SerpAPIKey != "serp-key" {
+		t.Fatalf("web search config = %#v", webSearch)
 	}
-	if cfg.Tools.WebSearchSerpAPIURL != "https://serpapi.example/search.json" {
-		t.Fatalf("WebSearchSerpAPIURL = %q", cfg.Tools.WebSearchSerpAPIURL)
+	if webSearch.SerpAPIURL != "https://serpapi.example/search.json" {
+		t.Fatalf("SerpAPIURL = %q", webSearch.SerpAPIURL)
 	}
-	if cfg.Tools.WebSearchBraveKey != "brave-key" {
-		t.Fatalf("WebSearchBraveKey = %q", cfg.Tools.WebSearchBraveKey)
+	if webSearch.BraveKey != "brave-key" {
+		t.Fatalf("BraveKey = %q", webSearch.BraveKey)
 	}
-	if cfg.Tools.WebSearchBraveURL != "https://brave.example/res/v1/web/search" {
-		t.Fatalf("WebSearchBraveURL = %q", cfg.Tools.WebSearchBraveURL)
+	if webSearch.BraveURL != "https://brave.example/res/v1/web/search" {
+		t.Fatalf("BraveURL = %q", webSearch.BraveURL)
 	}
 }
 
@@ -629,11 +700,11 @@ func TestLoadLuckinMCPConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.Tools.LuckinMCPURL != "https://example.test/mcp" {
-		t.Fatalf("LuckinMCPURL = %q", cfg.Tools.LuckinMCPURL)
+	if cfg.Integrations.Luckin.MCPURL != "https://example.test/mcp" {
+		t.Fatalf("LuckinMCPURL = %q", cfg.Integrations.Luckin.MCPURL)
 	}
-	if cfg.Tools.LuckinMCPToken != "luckin-token" {
-		t.Fatalf("LuckinMCPToken = %q", cfg.Tools.LuckinMCPToken)
+	if cfg.Integrations.Luckin.MCPToken != "luckin-token" {
+		t.Fatalf("LuckinMCPToken = %q", cfg.Integrations.Luckin.MCPToken)
 	}
 }
 
@@ -910,15 +981,39 @@ func resetConfigEnv(t *testing.T) {
 		"ANTHROPIC_MODEL",
 		"ANTHROPIC_AVAILABLE_MODELS",
 		"OPENAI_AVAILABLE_MODELS",
+		"LLM_MAX_OUTPUT_TOKEN",
 		"POSTGRES_DSN",
 		"REDIS_URL",
 		"WORKSPACE_AUTO_FETCH",
+		"GCLOUD_PATH",
+		"GCP_PROJECT",
+		"GCP_NAMESPACE",
+		"GKE_CLUSTER",
+		"GKE_REGION",
+		"KUBECTL_PATH",
+		"K8S_DEFAULT_CONTEXT",
+		"K8S_DEFAULT_CLUSTER",
+		"K8S_DEFAULT_NAMESPACE",
+		"TTS_API_KEY",
+		"TTS_BASE_URL",
+		"TTS_MODEL",
+		"TTS_AUTO",
+		"TTS_DEFAULT_VOICE",
+		"TTS_DEFAULT_STYLE",
 		"GITHUB_TOKEN",
 		"GITHUB_API_BASE_URL",
 		"GITHUB_DEFAULT_OWNER",
 		"GITHUB_DEFAULT_REPO",
+		"NOTION_TOKEN",
+		"NOTION_DATABASE_ID",
+		"NOTION_TITLE_PROPERTY",
+		"NOTION_VERSION",
+		"YOUTRACK_URL",
+		"YOUTRACK_TOKEN",
 		"LUCKIN_MCP_URL",
 		"LUCKIN_MCP_TOKEN",
+		"PLAYWRIGHT_MCP_URL",
+		"PLAYWRIGHT_MCP_TOKEN",
 		"WEB_SEARCH_PROVIDER",
 		"WEB_SEARCH_GOOGLE_API_KEY",
 		"WEB_SEARCH_GOOGLE_CX",

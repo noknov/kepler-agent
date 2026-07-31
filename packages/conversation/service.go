@@ -292,12 +292,7 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	sess.PendingUserInput = false
 	sess.PendingUserID = ""
 	sess.PendingQuestion = ""
-	sess.Turns = append(sess.Turns, memory.UserTurn(req.Text))
-	for _, queued := range active.consumedRequests() {
-		if strings.TrimSpace(queued.Text) != "" {
-			sess.Turns = append(sess.Turns, memory.UserTurn(queued.Text))
-		}
-	}
+	s.appendUserTurns(&sess, req, active)
 
 	if err != nil {
 		if active.wasCanceled() || errors.Is(err, context.Canceled) {
@@ -427,6 +422,15 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		runObserver.Finish("pending_user", "", nil, result.PendingQuestion)
 	}
 	return true
+}
+
+func (s *Service) appendUserTurns(sess *session.Session, req Request, active *activeRun) {
+	sess.Turns = append(sess.Turns, memory.UserTurn(req.Text))
+	for _, queued := range active.consumedRequests() {
+		if strings.TrimSpace(queued.Text) != "" {
+			sess.Turns = append(sess.Turns, memory.UserTurn(queued.Text))
+		}
+	}
 }
 
 func appendWebEvidenceText(text, evidence string) string {

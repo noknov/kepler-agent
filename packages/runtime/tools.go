@@ -63,17 +63,18 @@ func NewCodingToolRegistry(cfg config.Config, llmClient llm.Client, secondaryCli
 }
 
 func policyForSurface(cfg config.Config, surface string, slackClient *slack.Client, reminderStore reminder.Store) registry.CapabilityPolicy {
+	integrations := cfg.Integrations
 	return registry.CapabilityPolicy{
 		Surface: surface,
 		AvailableDeps: map[string]bool{
-			"github":     cfg.Tools.GitHubToken != "",
-			"luckin":     cfg.Tools.LuckinMCPToken != "",
-			"notion":     cfg.Tools.NotionToken != "",
-			"playwright": cfg.Tools.PlaywrightMCPURL != "",
+			"github":     integrations.GitHub.Token != "",
+			"luckin":     integrations.Luckin.MCPToken != "",
+			"notion":     integrations.Notion.Token != "",
+			"playwright": integrations.Playwright.MCPURL != "",
 			"reminder":   reminderStore != nil,
 			"slack":      slackClient != nil,
-			"tts":        cfg.Tools.TTSAPIKey != "",
-			"youtrack":   cfg.Tools.YouTrackURL != "" && cfg.Tools.YouTrackToken != "",
+			"tts":        integrations.TTS.APIKey != "",
+			"youtrack":   integrations.YouTrack.URL != "" && integrations.YouTrack.Token != "",
 		},
 	}
 }
@@ -173,9 +174,10 @@ func registerCodeTools(tools *registry.Registry, cfg config.Config, workspacePol
 }
 
 func registerIntegrationTools(tools *registry.Registry, cfg config.Config, commandPolicy safety.CommandPolicy) {
+	integrations := cfg.Integrations
 	tools.Register(shellTools.ReadOnlyTool{
-		GCloudPath:     cfg.Tools.GCloudPath,
-		KubectlPath:    cfg.Tools.KubectlPath,
+		GCloudPath:     integrations.GCP.GCloudPath,
+		KubectlPath:    integrations.K8s.KubectlPath,
 		WorkspaceRoots: cfg.Security.WorkspaceRoots,
 		Guard:          commandPolicy,
 		Timeout:        cfg.Tools.CommandTimeout,
@@ -184,12 +186,12 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 	// K8s native tools: dedicated kubectl wrappers for pods, logs, describe, top,
 	// events, rollout, and general get. These provide richer structured output and
 	// safer arg handling than the generic shell tool.
-	if cfg.Tools.KubectlPath != "" || cfg.Tools.K8sDefaultContext != "" || cfg.Tools.K8sDefaultCluster != "" {
+	if integrations.K8s.KubectlPath != "" || integrations.K8s.DefaultContext != "" || integrations.K8s.DefaultCluster != "" {
 		k8sBase := k8sTools.Base{
-			KubectlPath:      cfg.Tools.KubectlPath,
-			DefaultContext:   cfg.Tools.K8sDefaultContext,
-			DefaultCluster:   cfg.Tools.K8sDefaultCluster,
-			DefaultNamespace: cfg.Tools.K8sDefaultNamespace,
+			KubectlPath:      integrations.K8s.KubectlPath,
+			DefaultContext:   integrations.K8s.DefaultContext,
+			DefaultCluster:   integrations.K8s.DefaultCluster,
+			DefaultNamespace: integrations.K8s.DefaultNamespace,
 			Guard:            commandPolicy,
 			Timeout:          cfg.Tools.CommandTimeout,
 		}
@@ -211,42 +213,42 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 		tools,
 		registry.CategoryInfrastructure,
 		gcpTools.LogsTool{
-			GCloudPath:       cfg.Tools.GCloudPath,
-			DefaultProject:   cfg.Tools.GCPDefaultProject,
-			DefaultNamespace: cfg.Tools.GCPDefaultNamespace,
-			DefaultCluster:   cfg.Tools.GKEDefaultCluster,
-			DefaultRegion:    cfg.Tools.GKEDefaultRegion,
+			GCloudPath:       integrations.GCP.GCloudPath,
+			DefaultProject:   integrations.GCP.DefaultProject,
+			DefaultNamespace: integrations.GCP.DefaultNamespace,
+			DefaultCluster:   integrations.GCP.DefaultCluster,
+			DefaultRegion:    integrations.GCP.DefaultRegion,
 			Guard:            commandPolicy,
 			Timeout:          cfg.Tools.CommandTimeout,
 		},
 		gcpTools.RunServicesTool{
-			GCloudPath:     cfg.Tools.GCloudPath,
-			DefaultProject: cfg.Tools.GCPDefaultProject,
-			DefaultRegion:  cfg.Tools.GKEDefaultRegion,
+			GCloudPath:     integrations.GCP.GCloudPath,
+			DefaultProject: integrations.GCP.DefaultProject,
+			DefaultRegion:  integrations.GCP.DefaultRegion,
 			Guard:          commandPolicy,
 			Timeout:        cfg.Tools.CommandTimeout,
 		},
 		gcpTools.RunRevisionsTool{
-			GCloudPath:     cfg.Tools.GCloudPath,
-			DefaultProject: cfg.Tools.GCPDefaultProject,
-			DefaultRegion:  cfg.Tools.GKEDefaultRegion,
+			GCloudPath:     integrations.GCP.GCloudPath,
+			DefaultProject: integrations.GCP.DefaultProject,
+			DefaultRegion:  integrations.GCP.DefaultRegion,
 			Guard:          commandPolicy,
 			Timeout:        cfg.Tools.CommandTimeout,
 		},
 		gcpTools.ClustersTool{
-			GCloudPath:     cfg.Tools.GCloudPath,
-			DefaultProject: cfg.Tools.GCPDefaultProject,
-			DefaultRegion:  cfg.Tools.GKEDefaultRegion,
+			GCloudPath:     integrations.GCP.GCloudPath,
+			DefaultProject: integrations.GCP.DefaultProject,
+			DefaultRegion:  integrations.GCP.DefaultRegion,
 			Guard:          commandPolicy,
 			Timeout:        cfg.Tools.CommandTimeout,
 		},
 	)
 
 	notionClient := notionTools.Client{
-		Token:         cfg.Tools.NotionToken,
-		DatabaseID:    cfg.Tools.NotionDatabaseID,
-		TitleProperty: cfg.Tools.NotionTitleProperty,
-		Version:       cfg.Tools.NotionVersion,
+		Token:         integrations.Notion.Token,
+		DatabaseID:    integrations.Notion.DatabaseID,
+		TitleProperty: integrations.Notion.TitleProperty,
+		Version:       integrations.Notion.Version,
 	}
 	if notionClient.Token != "" {
 		tools.Register(runtimeRead(notionTools.SearchTool{Client: notionClient}, "notion"))
@@ -258,15 +260,15 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 		tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, runtimeRead(notionTools.QueryDatabaseTool{Client: notionClient}, "notion")))
 	}
 
-	youtrackClient := youtrackTools.Client{BaseURL: cfg.Tools.YouTrackURL, Token: cfg.Tools.YouTrackToken}
+	youtrackClient := youtrackTools.Client{BaseURL: integrations.YouTrack.URL, Token: integrations.YouTrack.Token}
 	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, runtimeRead(youtrackTools.GetIssueTool{Client: youtrackClient}, "youtrack")))
 	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, runtimeRead(youtrackTools.SearchTool{Client: youtrackClient}, "youtrack")))
 
 	githubClient := githubTools.Client{
-		Token:      cfg.Tools.GitHubToken,
-		APIBaseURL: cfg.Tools.GitHubAPIBaseURL,
-		Owner:      cfg.Tools.GitHubDefaultOwner,
-		Repo:       cfg.Tools.GitHubDefaultRepo,
+		Token:      integrations.GitHub.Token,
+		APIBaseURL: integrations.GitHub.APIBaseURL,
+		Owner:      integrations.GitHub.DefaultOwner,
+		Repo:       integrations.GitHub.DefaultRepo,
 	}
 	registerDeferredTools(
 		tools,
@@ -281,30 +283,31 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 	luckinTools.RegisterDeferredAll(tools, &luckinTools.Client{
 		MCP: &mcp.Client{
 			ServiceName: "luckin",
-			URL:         cfg.Tools.LuckinMCPURL,
-			Token:       cfg.Tools.LuckinMCPToken,
+			URL:         integrations.Luckin.MCPURL,
+			Token:       integrations.Luckin.MCPToken,
 		},
 	}, registry.CategoryIntegration)
 
 	playwrightTools.RegisterDeferredAll(tools, &playwrightTools.Client{
 		MCP: &mcp.Client{
 			ServiceName: "playwright",
-			URL:         cfg.Tools.PlaywrightMCPURL,
-			Token:       cfg.Tools.PlaywrightMCPToken,
+			URL:         integrations.Playwright.MCPURL,
+			Token:       integrations.Playwright.MCPToken,
 		},
 	}, registry.CategoryBrowser)
 }
 
 func registerKnowledgeTools(tools *registry.Registry, cfg config.Config) {
+	webSearch := cfg.Integrations.WebSearch
 	webClient := webSearchTools.Client{
-		Provider:       cfg.Tools.WebSearchProvider,
-		GoogleAPIKey:   cfg.Tools.WebSearchGoogleKey,
-		GoogleCX:       cfg.Tools.WebSearchGoogleCX,
-		SerpAPIKey:     cfg.Tools.WebSearchSerpAPIKey,
-		SerpAPIBaseURL: cfg.Tools.WebSearchSerpAPIURL,
-		SearXNGBaseURL: cfg.Tools.WebSearchSearXNGURL,
-		BraveAPIKey:    cfg.Tools.WebSearchBraveKey,
-		BraveBaseURL:   cfg.Tools.WebSearchBraveURL,
+		Provider:       webSearch.Provider,
+		GoogleAPIKey:   webSearch.GoogleKey,
+		GoogleCX:       webSearch.GoogleCX,
+		SerpAPIKey:     webSearch.SerpAPIKey,
+		SerpAPIBaseURL: webSearch.SerpAPIURL,
+		SearXNGBaseURL: webSearch.SearXNGURL,
+		BraveAPIKey:    webSearch.BraveKey,
+		BraveBaseURL:   webSearch.BraveURL,
 	}
 	tools.Register(webSearchTools.SearchTool{Client: webClient})
 	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, webSearchTools.ReadPageTool{Client: webClient}))
@@ -312,25 +315,26 @@ func registerKnowledgeTools(tools *registry.Registry, cfg config.Config) {
 }
 
 func registerSlackTools(tools *registry.Registry, slackClient *slack.Client, cfg config.Config) {
+	tts := cfg.Integrations.TTS
 	tools.Register(runtimeRead(slacktool.AskUserTool{Slack: slackClient}, "slack"))
 	tools.Register(runtimeRead(slacktool.FileSearchTool{Slack: slackClient}, "slack"))
 	tools.Register(runtimeRead(slacktool.JSONAnalyzeTool{Slack: slackClient}, "slack"))
 	registerDeferredTools(tools, registry.CategoryBrowser, slackExternalWrite(slacktool.SendScreenshotTool{Slack: slackClient}))
 	registerDeferredTools(tools, registry.CategoryIntegration, slackExternalWrite(slacktool.CreateCanvasTool{Slack: slackClient}))
 
-	if cfg.Tools.TTSAPIKey != "" {
+	if tts.APIKey != "" {
 		tools.Register(slackExternalWrite(ttsTools.SpeakTool{
 			Slack:   slackClient,
-			APIKey:  cfg.Tools.TTSAPIKey,
-			BaseURL: cfg.Tools.TTSBaseURL,
-			Model:   cfg.Tools.TTSModel,
+			APIKey:  tts.APIKey,
+			BaseURL: tts.BaseURL,
+			Model:   tts.Model,
 		}, "tts"))
 	} else {
 		tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, slackExternalWrite(ttsTools.SpeakTool{
 			Slack:   slackClient,
-			APIKey:  cfg.Tools.TTSAPIKey,
-			BaseURL: cfg.Tools.TTSBaseURL,
-			Model:   cfg.Tools.TTSModel,
+			APIKey:  tts.APIKey,
+			BaseURL: tts.BaseURL,
+			Model:   tts.Model,
 		}, "tts")))
 	}
 }
