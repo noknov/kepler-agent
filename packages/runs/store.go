@@ -45,6 +45,20 @@ type Run struct {
 	Quality          *QualityScore `json:"quality,omitempty"`
 }
 
+type UserAuditSummary struct {
+	UserID           string
+	Requests         int
+	Conversations    int
+	Completed        int
+	Failed           int
+	PromptTokens     int64
+	CompletionTokens int64
+	TotalTokens      int64
+	EstimatedCostUSD float64
+	FirstStartedAt   time.Time
+	LastStartedAt    time.Time
+}
+
 type Step struct {
 	ID               string         `json:"id"`
 	SpanID           string         `json:"span_id,omitempty"`
@@ -86,6 +100,7 @@ type Store interface {
 	// Implementations must avoid full-scan when possible; callers should prefer
 	// this over List when a sessionID filter is needed.
 	ListBySession(ctx context.Context, sessionID string) ([]Run, error)
+	UserAuditSummaries(ctx context.Context, start, end time.Time) ([]UserAuditSummary, error)
 	AddFeedback(ctx context.Context, runID string, feedback Feedback) error
 	AddFeedbackForMessage(ctx context.Context, channel, messageTS string, feedback Feedback) (string, bool, error)
 }
@@ -300,6 +315,59 @@ func (s *FileStore) ListBySession(ctx context.Context, sessionID string) ([]Run,
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].StartedAt.After(out[j].StartedAt)
+	})
+	return out, nil
+}
+
+func (s *FileStore) UserAuditSummaries(ctx context.Context, start, end time.Time) ([]UserAuditSummary, error) {
+	all, err := s.List(ctx, 100000)
+	if err != nil {
+		return nil, err
+	}
+	byUser := map[string]*UserAuditSummary{}
+	conversations := map[string]map[string]bool{}
+	for _, run := range all {
+		if run.UserID == "" || run.StartedAt.Before(start) || !run.StartedAt.Before(end) {
+			continue
+		}
+		summary := byUser[run.UserID]
+		if summary == nil {
+			summary = &UserAuditSummary{UserID: run.UserID, FirstStartedAt: run.StartedAt, LastStartedAt: run.StartedAt}
+			byUser[run.UserID] = summary
+			conversations[run.UserID] = map[string]bool{}
+		}
+		summary.Requests++
+		switch run.Status {
+		case "completed":
+			summary.Completed++
+		case "error":
+			summary.Failed++
+		}
+		summary.PromptTokens += int64(run.Usage.PromptTokens)
+		summary.CompletionTokens += int64(run.Usage.CompletionTokens)
+		summary.TotalTokens += int64(BilledTokens(run.Usage))
+		summary.EstimatedCostUSD += run.EstimatedCostUSD
+		if run.StartedAt.Before(summary.FirstStartedAt) {
+			summary.FirstStartedAt = run.StartedAt
+		}
+		if run.StartedAt.After(summary.LastStartedAt) {
+			summary.LastStartedAt = run.StartedAt
+		}
+		key := run.SessionID
+		if key == "" {
+			key = run.Channel + ":" + run.ThreadTS
+		}
+		if key != "" {
+			conversations[run.UserID][key] = true
+		}
+	}
+	out := make([]UserAuditSummary, 0, len(byUser))
+	for userID, summary := range byUser {
+		summary.Conversations = len(conversations[userID])
+		out = append(out, *summary)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].LastStartedAt.After(out[j].LastStartedAt)
 	})
 	return out, nil
 }

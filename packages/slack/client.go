@@ -233,6 +233,27 @@ func (c *Client) DeleteMessage(ctx context.Context, channel, ts string) error {
 	return nil
 }
 
+func (c *Client) UserInfo(ctx context.Context, userID string) (User, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return User{}, fmt.Errorf("slack user id is required")
+	}
+	values := url.Values{}
+	values.Set("user", userID)
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+		User  User   `json:"user,omitempty"`
+	}
+	if err := c.get(ctx, "users.info", values, &out); err != nil {
+		return User{}, err
+	}
+	if !out.OK {
+		return User{}, fmt.Errorf("slack users.info failed: %s", out.Error)
+	}
+	return out.User, nil
+}
+
 // UploadFile uploads data to Slack using the v2 upload API and shares it into
 // a channel thread. filename should include an extension (e.g. "screenshot.png").
 // Returns the file permalink on success.

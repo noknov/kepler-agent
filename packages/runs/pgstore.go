@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -82,6 +83,45 @@ func (s *PGStore) List(ctx context.Context, limit int) ([]Run, error) {
 func (s *PGStore) ListBySession(ctx context.Context, id string) ([]Run, error) {
 	return s.list(ctx, `SELECT payload FROM agent_runs WHERE session_id=$1 ORDER BY started_at DESC`, id)
 }
+
+func (s *PGStore) UserAuditSummaries(ctx context.Context, start, end time.Time) ([]UserAuditSummary, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT
+ payload->>'user_id' AS user_id,
+ COUNT(*)::int AS requests,
+ COUNT(DISTINCT NULLIF(payload->>'session_id', ''))::int AS conversations,
+ COUNT(*) FILTER (WHERE payload->>'status' = 'completed')::int AS completed,
+ COUNT(*) FILTER (WHERE payload->>'status' = 'error')::int AS failed,
+ COALESCE(SUM((payload->'usage'->>'prompt_tokens')::bigint), 0) AS prompt_tokens,
+ COALESCE(SUM((payload->'usage'->>'completion_tokens')::bigint), 0) AS completion_tokens,
+ COALESCE(SUM(COALESCE(NULLIF(payload->'usage'->>'total_tokens', '')::bigint,
+   COALESCE((payload->'usage'->>'prompt_tokens')::bigint, 0) +
+   COALESCE((payload->'usage'->>'completion_tokens')::bigint, 0) +
+   COALESCE((payload->'usage'->>'cache_read_input_tokens')::bigint, 0) +
+   COALESCE((payload->'usage'->>'cache_creation_input_tokens')::bigint, 0)
+ )), 0) AS total_tokens,
+ COALESCE(SUM((payload->>'estimated_cost_usd')::double precision), 0) AS estimated_cost_usd,
+ MIN(started_at) AS first_started_at,
+ MAX(started_at) AS last_started_at
+FROM agent_runs
+WHERE started_at >= $1 AND started_at < $2 AND payload->>'user_id' <> ''
+GROUP BY payload->>'user_id'
+ORDER BY last_started_at DESC`, start.UTC(), end.UTC())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UserAuditSummary
+	for rows.Next() {
+		var summary UserAuditSummary
+		if err := rows.Scan(&summary.UserID, &summary.Requests, &summary.Conversations, &summary.Completed, &summary.Failed, &summary.PromptTokens, &summary.CompletionTokens, &summary.TotalTokens, &summary.EstimatedCostUSD, &summary.FirstStartedAt, &summary.LastStartedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, summary)
+	}
+	return out, rows.Err()
+}
+
 func (s *PGStore) list(ctx context.Context, q string, args ...any) ([]Run, error) {
 	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
