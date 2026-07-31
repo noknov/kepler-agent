@@ -675,8 +675,7 @@ func repoLabel(repo string) string {
 }
 
 func (b Base) run(ctx context.Context, repo string, args ...string) (string, error) {
-	display := "git -C " + repo + " " + strings.Join(args, " ")
-	if err := b.Guard.Check(display); err != nil {
+	if err := b.Guard.CheckArgv(append([]string{"git", "-C", repo}, args...)); err != nil {
 		return "", err
 	}
 	timeout := b.Timeout

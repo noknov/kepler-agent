@@ -70,3 +70,15 @@ func (g CommandPolicy) Check(command string) error {
 	}
 	return nil
 }
+
+func (g CommandPolicy) CheckArgv(argv []string) error {
+	if len(argv) == 0 {
+		return nil
+	}
+	for _, arg := range argv {
+		if strings.Contains(arg, "\x00") {
+			return fmt.Errorf("command blocked by safety policy: argv contains NUL byte")
+		}
+	}
+	return g.Check(strings.Join(argv, " "))
+}

@@ -24,10 +24,9 @@ const maxOutputBytes = 60000
 // ReadOnlyTool executes a deliberately small command language (including
 // pipelines) for operational investigation. It never invokes a shell: doing
 // so would make an LLM-provided command a shell program, not a read-only
-// diagnostic request.
-// investigation. It allows a broad set of read-oriented tools — git, kubectl,
-// gcloud, gh, grep, jq, and standard Unix utilities — and blocks commands that
-// could modify production systems or cluster state.
+// diagnostic request. It allows a broad set of read-oriented tools — git,
+// kubectl, gcloud, gh, grep, jq, and standard Unix utilities — and blocks
+// commands that could modify production systems or cluster state.
 //
 // Supports pipes (|) so that idiomatic shell one-liners like
 // "kubectl get pods | grep web" work as-is. Bare "git log" is normalized to

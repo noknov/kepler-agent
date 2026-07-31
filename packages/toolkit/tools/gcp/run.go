@@ -54,8 +54,7 @@ func (b runBase) run(ctx context.Context, args []string, project, region string)
 	}
 	cmdArgs = append(cmdArgs, "--format", "json")
 
-	display := b.gcloud() + " " + strings.Join(cmdArgs, " ")
-	if err := b.Guard.Check(display); err != nil {
+	if err := b.Guard.CheckArgv(append([]string{b.gcloud()}, cmdArgs...)); err != nil {
 		return "", err
 	}
 

@@ -54,6 +54,16 @@ POSTGRES_DSN=postgres://user:pass@localhost:5432/slack_copilot?sslmode=disable
 `LLM_PROVIDER` selects the active model provider. Each provider has its own env
 namespace so credentials do not accidentally leak between providers.
 
+Optional output limit:
+
+```bash
+LLM_MAX_OUTPUT_TOKEN=8192
+```
+
+When set to a positive value, the agent sends that value as `max_tokens` /
+`max_completion_tokens`. When unset or set to `0`, the field is omitted and
+output length is left to the provider default.
+
 ## LLM Providers
 
 ### LongCat

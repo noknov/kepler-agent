@@ -116,7 +116,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 	conv.CostRates = rt.CostRates
 	conv.HealthSummary = healthService.SummaryPrompt
-	if cfg.Tools.TTSAuto && cfg.Tools.TTSAPIKey != "" {
+	if cfg.Integrations.TTS.Auto && cfg.Integrations.TTS.APIKey != "" {
 		conv.AutoTTS = appsupport.NewAutoTTSFunc(cfg, slackClient)
 		conv.TTSSummarizer = appsupport.NewTTSSummarizer(cfg, rt)
 	}

@@ -62,8 +62,7 @@ func (b Base) run(ctx context.Context, k8sContext string, args []string) (string
 	if kctx != "" {
 		args = append([]string{"--context", kctx}, args...)
 	}
-	display := b.kubectl() + " " + strings.Join(args, " ")
-	if err := b.Guard.Check(display); err != nil {
+	if err := b.Guard.CheckArgv(append([]string{b.kubectl()}, args...)); err != nil {
 		return "", err
 	}
 	ctx, cancel := context.WithTimeout(ctx, b.timeout())

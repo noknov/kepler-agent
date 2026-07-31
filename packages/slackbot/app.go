@@ -138,6 +138,48 @@ func NewServer(cfg config.Config) (*Server, error) {
 	return NewServerWithOptions(cfg, AllInOneOptions())
 }
 
+type conversationDeps struct {
+	cfg            config.Config
+	slackClient    *slack.Client
+	runtime        appruntime.AgentRuntime
+	recorder       *observability.Recorder
+	sessionStore   session.Store
+	runStore       runs.Store
+	toolSpillStore registry.ToolSpillStore
+	redis          *redisclient.Client
+	runSemaphore   chan struct{}
+	serviceCtx     context.Context
+	multimodal     func(model string) bool
+	healthSummary  func() string
+}
+
+func newConversationService(deps conversationDeps) *conversation.Service {
+	conv := conversation.NewService(deps.sessionStore, deps.slackClient, deps.runtime.Runner, deps.runtime.Memory, deps.runtime.Prompt, deps.runtime.Redactor, deps.recorder)
+	conv.RunSemaphore = deps.runSemaphore
+	conv.MaxConcurrentRuns = deps.cfg.Tools.AgentMaxConcurrentRuns
+	conv.Redis = deps.redis
+	conv.PodID = appsupport.GeneratePodID()
+	conv.FollowUpContext = deps.serviceCtx
+	conv.Format = slack.MarkdownToMrkdwn
+	conv.RunStore = deps.runStore
+	conv.ToolSpillStore = deps.toolSpillStore
+	conv.RunProvider = deps.cfg.LLM.Provider
+	conv.RunModel = deps.cfg.LLM.Model
+	conv.ModelRouter = conversation.ModelRouter{
+		DefaultModel:            deps.cfg.LLM.Model,
+		MultimodalFallbackModel: deps.cfg.LLM.MultimodalModel,
+		SupportsMultimodal:      deps.multimodal,
+	}
+	conv.CostRates = deps.runtime.CostRates
+	conv.HealthSummary = deps.healthSummary
+	tts := deps.cfg.Integrations.TTS
+	if tts.Auto && tts.APIKey != "" {
+		conv.AutoTTS = appsupport.NewAutoTTSFunc(deps.cfg, deps.slackClient)
+		conv.TTSSummarizer = appsupport.NewTTSSummarizer(deps.cfg, deps.runtime)
+	}
+	return conv
+}
+
 func NewServerWithOptions(cfg config.Config, opts Options) (*Server, error) {
 	prompts.LoadFromEnv()
 	serviceCtx, serviceCancel := context.WithCancel(context.Background())
@@ -180,30 +222,22 @@ func NewServerWithOptions(cfg config.Config, opts Options) (*Server, error) {
 	healthService := health.NewService(runtime.Tools, cfg.Security.WorkspaceRoots)
 	healthService.Redis = rdb
 	recorder.SetCostRates(runtime.CostRates)
-	conv := conversation.NewService(store, slackClient, runtime.Runner, runtime.Memory, runtime.Prompt, runtime.Redactor, recorder)
 	runSemaphore := make(chan struct{}, cfg.Tools.AgentMaxConcurrentRuns)
-	conv.RunSemaphore = runSemaphore
-	conv.MaxConcurrentRuns = cfg.Tools.AgentMaxConcurrentRuns
-	conv.Redis = rdb
-	conv.PodID = appsupport.GeneratePodID()
-	conv.FollowUpContext = serviceCtx
-	conv.Format = slack.MarkdownToMrkdwn
-	conv.RunStore = runStore
-	conv.ToolSpillStore = runStore
-	conv.RunProvider = cfg.LLM.Provider
-	conv.RunModel = cfg.LLM.Model
 	multimodal := multimodalPredicate(cfg.LLM.MultimodalModels)
-	conv.ModelRouter = conversation.ModelRouter{
-		DefaultModel:            cfg.LLM.Model,
-		MultimodalFallbackModel: cfg.LLM.MultimodalModel,
-		SupportsMultimodal:      multimodal,
-	}
-	conv.CostRates = runtime.CostRates
-	conv.HealthSummary = healthService.SummaryPrompt
-	if cfg.Tools.TTSAuto && cfg.Tools.TTSAPIKey != "" {
-		conv.AutoTTS = appsupport.NewAutoTTSFunc(cfg, slackClient)
-		conv.TTSSummarizer = appsupport.NewTTSSummarizer(cfg, runtime)
-	}
+	conv := newConversationService(conversationDeps{
+		cfg:            cfg,
+		slackClient:    slackClient,
+		runtime:        runtime,
+		recorder:       recorder,
+		sessionStore:   store,
+		runStore:       runStore,
+		toolSpillStore: runStore,
+		redis:          rdb,
+		runSemaphore:   runSemaphore,
+		serviceCtx:     serviceCtx,
+		multimodal:     multimodal,
+		healthSummary:  healthService.SummaryPrompt,
+	})
 
 	s := &Server{
 		opts:          opts,

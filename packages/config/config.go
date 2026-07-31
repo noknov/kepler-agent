@@ -11,15 +11,16 @@ import (
 )
 
 type Config struct {
-	HTTP      HTTPConfig
-	Slack     SlackConfig
-	LLM       LLMConfig
-	Security  SecurityConfig
-	Sessions  SessionConfig
-	Agent     AgentPolicyConfig
-	Tools     ToolConfig
-	Observing ObservingConfig
-	Storage   StorageConfig
+	HTTP         HTTPConfig
+	Slack        SlackConfig
+	LLM          LLMConfig
+	Security     SecurityConfig
+	Sessions     SessionConfig
+	Agent        AgentPolicyConfig
+	Tools        ToolConfig
+	Integrations IntegrationConfig
+	Observing    ObservingConfig
+	Storage      StorageConfig
 }
 
 // StorageConfig owns all durable operational state for sessions, runs, inbox,
@@ -50,6 +51,7 @@ type LLMConfig struct {
 	BaseURL          string
 	APIKey           string
 	Model            string
+	MaxOutputTokens  int
 	AvailableModels  []string
 	MultimodalModel  string
 	MultimodalModels []string
@@ -94,7 +96,7 @@ type SessionConfig struct {
 	MaxContextTokens    int    // context window token limit (default 200000)
 	AutocompactBuffer   int    // reserved token headroom before auto-compact (default 13000)
 	CompactModel        string // model used for compact summaries (empty = secondary model, then main model)
-	MaxToolResultTokens int    // per-tool-result token cap (default 5000)
+	MaxToolResultTokens int    // per-tool-result token cap (default 8000)
 }
 
 type AgentPolicyConfig struct {
@@ -108,43 +110,82 @@ type ToolConfig struct {
 	CommandTimeout         time.Duration
 	AgentMaxSteps          int
 	AgentMaxConcurrentRuns int
-	GCloudPath             string
-	GCPDefaultProject      string
-	GCPDefaultNamespace    string
-	GKEDefaultCluster      string
-	GKEDefaultRegion       string
-	KubectlPath            string
-	K8sDefaultContext      string
-	K8sDefaultCluster      string
-	K8sDefaultNamespace    string
-	TTSAPIKey              string
-	TTSBaseURL             string
-	TTSModel               string
-	TTSAuto                bool
-	TTSDefaultVoice        string
-	TTSDefaultStyle        string
-	NotionToken            string
-	NotionDatabaseID       string
-	NotionTitleProperty    string
-	NotionVersion          string
-	YouTrackURL            string
-	YouTrackToken          string
-	GitHubToken            string
-	GitHubAPIBaseURL       string
-	GitHubDefaultOwner     string
-	GitHubDefaultRepo      string
-	LuckinMCPURL           string
-	LuckinMCPToken         string
-	PlaywrightMCPURL       string
-	PlaywrightMCPToken     string
-	WebSearchProvider      string
-	WebSearchGoogleKey     string
-	WebSearchGoogleCX      string
-	WebSearchSerpAPIKey    string
-	WebSearchSerpAPIURL    string
-	WebSearchSearXNGURL    string
-	WebSearchBraveKey      string
-	WebSearchBraveURL      string
+}
+
+type IntegrationConfig struct {
+	GCP        GCPConfig
+	GitHub     GitHubConfig
+	K8s        K8sConfig
+	Luckin     LuckinConfig
+	Notion     NotionConfig
+	Playwright PlaywrightConfig
+	TTS        TTSConfig
+	WebSearch  WebSearchConfig
+	YouTrack   YouTrackConfig
+}
+
+type GCPConfig struct {
+	GCloudPath       string
+	DefaultProject   string
+	DefaultNamespace string
+	DefaultCluster   string
+	DefaultRegion    string
+}
+
+type GitHubConfig struct {
+	Token        string
+	APIBaseURL   string
+	DefaultOwner string
+	DefaultRepo  string
+}
+
+type K8sConfig struct {
+	KubectlPath      string
+	DefaultContext   string
+	DefaultCluster   string
+	DefaultNamespace string
+}
+
+type LuckinConfig struct {
+	MCPURL   string
+	MCPToken string
+}
+
+type NotionConfig struct {
+	Token         string
+	DatabaseID    string
+	TitleProperty string
+	Version       string
+}
+
+type PlaywrightConfig struct {
+	MCPURL   string
+	MCPToken string
+}
+
+type TTSConfig struct {
+	APIKey       string
+	BaseURL      string
+	Model        string
+	Auto         bool
+	DefaultVoice string
+	DefaultStyle string
+}
+
+type WebSearchConfig struct {
+	Provider   string
+	GoogleKey  string
+	GoogleCX   string
+	SerpAPIKey string
+	SerpAPIURL string
+	SearXNGURL string
+	BraveKey   string
+	BraveURL   string
+}
+
+type YouTrackConfig struct {
+	URL   string
+	Token string
 }
 
 type ObservingConfig struct {
@@ -254,6 +295,7 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			BaseURL:          trimRightSlash(llmBaseURL),
 			APIKey:           providerAPIKey(llmProvider),
 			Model:            llmModel,
+			MaxOutputTokens:  envInt("LLM_MAX_OUTPUT_TOKEN", 0),
 			AvailableModels:  llmAvailableModels,
 			MultimodalModel:  llmMultimodalModel,
 			MultimodalModels: llmMultimodalModels,
@@ -298,44 +340,8 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			CommandTimeout:         envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
 			AgentMaxSteps:          envInt("AGENT_MAX_STEPS", 256),
 			AgentMaxConcurrentRuns: envInt("AGENT_MAX_CONCURRENT_RUNS", 16),
-			GCloudPath:             env("GCLOUD_PATH", "gcloud"),
-			GCPDefaultProject:      os.Getenv("GCP_PROJECT"),
-			GCPDefaultNamespace:    env("GCP_NAMESPACE", ""),
-			GKEDefaultCluster:      env("GKE_CLUSTER", ""),
-			GKEDefaultRegion:       env("GKE_REGION", ""),
-			KubectlPath:            env("KUBECTL_PATH", "kubectl"),
-			K8sDefaultContext:      os.Getenv("K8S_DEFAULT_CONTEXT"),
-			K8sDefaultCluster:      os.Getenv("K8S_DEFAULT_CLUSTER"),
-			K8sDefaultNamespace:    env("K8S_DEFAULT_NAMESPACE", ""),
-			TTSAPIKey:              firstEnv("TTS_API_KEY", "MIMO_API_KEY"),
-			TTSBaseURL:             trimRightSlash(env("TTS_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1")),
-			TTSModel:               env("TTS_MODEL", "mimo-v2.5-tts"),
-			TTSAuto:                envBool("TTS_AUTO", false),
-			TTSDefaultVoice:        env("TTS_DEFAULT_VOICE", "冰糖"),
-			TTSDefaultStyle:        os.Getenv("TTS_DEFAULT_STYLE"),
-			NotionToken:            os.Getenv("NOTION_TOKEN"),
-			NotionDatabaseID:       os.Getenv("NOTION_DATABASE_ID"),
-			NotionTitleProperty:    env("NOTION_TITLE_PROPERTY", "Name"),
-			NotionVersion:          env("NOTION_VERSION", "2022-06-28"),
-			YouTrackURL:            trimRightSlash(os.Getenv("YOUTRACK_URL")),
-			YouTrackToken:          os.Getenv("YOUTRACK_TOKEN"),
-			GitHubToken:            os.Getenv("GITHUB_TOKEN"),
-			GitHubAPIBaseURL:       trimRightSlash(env("GITHUB_API_BASE_URL", "https://api.github.com")),
-			GitHubDefaultOwner:     os.Getenv("GITHUB_DEFAULT_OWNER"),
-			GitHubDefaultRepo:      os.Getenv("GITHUB_DEFAULT_REPO"),
-			LuckinMCPURL:           trimRightSlash(env("LUCKIN_MCP_URL", "https://gwmcp.lkcoffee.com/order/user/mcp")),
-			LuckinMCPToken:         os.Getenv("LUCKIN_MCP_TOKEN"),
-			PlaywrightMCPURL:       trimRightSlash(os.Getenv("PLAYWRIGHT_MCP_URL")),
-			PlaywrightMCPToken:     os.Getenv("PLAYWRIGHT_MCP_TOKEN"),
-			WebSearchProvider:      env("WEB_SEARCH_PROVIDER", "duckduckgo"),
-			WebSearchGoogleKey:     os.Getenv("WEB_SEARCH_GOOGLE_API_KEY"),
-			WebSearchGoogleCX:      os.Getenv("WEB_SEARCH_GOOGLE_CX"),
-			WebSearchSerpAPIKey:    os.Getenv("WEB_SEARCH_SERPAPI_KEY"),
-			WebSearchSerpAPIURL:    trimRightSlash(env("WEB_SEARCH_SERPAPI_BASE_URL", "https://serpapi.com/search.json")),
-			WebSearchSearXNGURL:    trimRightSlash(os.Getenv("WEB_SEARCH_SEARXNG_URL")),
-			WebSearchBraveKey:      os.Getenv("WEB_SEARCH_BRAVE_API_KEY"),
-			WebSearchBraveURL:      trimRightSlash(env("WEB_SEARCH_BRAVE_BASE_URL", "https://api.search.brave.com/res/v1/web/search")),
 		},
+		Integrations: loadIntegrations(),
 		Observing: ObservingConfig{
 			LogLevel:                 env("LOG_LEVEL", "info"),
 			AdminToken:               os.Getenv("OBSERVABILITY_TOKEN"),
@@ -350,8 +356,67 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			RedisURL:    os.Getenv("REDIS_URL"),
 		},
 	}
-
 	return cfg, nil
+}
+
+func loadIntegrations() IntegrationConfig {
+	return IntegrationConfig{
+		GCP: GCPConfig{
+			GCloudPath:       env("GCLOUD_PATH", "gcloud"),
+			DefaultProject:   os.Getenv("GCP_PROJECT"),
+			DefaultNamespace: env("GCP_NAMESPACE", ""),
+			DefaultCluster:   env("GKE_CLUSTER", ""),
+			DefaultRegion:    env("GKE_REGION", ""),
+		},
+		K8s: K8sConfig{
+			KubectlPath:      env("KUBECTL_PATH", "kubectl"),
+			DefaultContext:   os.Getenv("K8S_DEFAULT_CONTEXT"),
+			DefaultCluster:   os.Getenv("K8S_DEFAULT_CLUSTER"),
+			DefaultNamespace: env("K8S_DEFAULT_NAMESPACE", ""),
+		},
+		TTS: TTSConfig{
+			APIKey:       firstEnv("TTS_API_KEY", "MIMO_API_KEY"),
+			BaseURL:      trimRightSlash(env("TTS_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1")),
+			Model:        env("TTS_MODEL", "mimo-v2.5-tts"),
+			Auto:         envBool("TTS_AUTO", false),
+			DefaultVoice: env("TTS_DEFAULT_VOICE", "冰糖"),
+			DefaultStyle: os.Getenv("TTS_DEFAULT_STYLE"),
+		},
+		Notion: NotionConfig{
+			Token:         os.Getenv("NOTION_TOKEN"),
+			DatabaseID:    os.Getenv("NOTION_DATABASE_ID"),
+			TitleProperty: env("NOTION_TITLE_PROPERTY", "Name"),
+			Version:       env("NOTION_VERSION", "2022-06-28"),
+		},
+		YouTrack: YouTrackConfig{
+			URL:   trimRightSlash(os.Getenv("YOUTRACK_URL")),
+			Token: os.Getenv("YOUTRACK_TOKEN"),
+		},
+		GitHub: GitHubConfig{
+			Token:        os.Getenv("GITHUB_TOKEN"),
+			APIBaseURL:   trimRightSlash(env("GITHUB_API_BASE_URL", "https://api.github.com")),
+			DefaultOwner: os.Getenv("GITHUB_DEFAULT_OWNER"),
+			DefaultRepo:  os.Getenv("GITHUB_DEFAULT_REPO"),
+		},
+		Luckin: LuckinConfig{
+			MCPURL:   trimRightSlash(env("LUCKIN_MCP_URL", "https://gwmcp.lkcoffee.com/order/user/mcp")),
+			MCPToken: os.Getenv("LUCKIN_MCP_TOKEN"),
+		},
+		Playwright: PlaywrightConfig{
+			MCPURL:   trimRightSlash(os.Getenv("PLAYWRIGHT_MCP_URL")),
+			MCPToken: os.Getenv("PLAYWRIGHT_MCP_TOKEN"),
+		},
+		WebSearch: WebSearchConfig{
+			Provider:   env("WEB_SEARCH_PROVIDER", "duckduckgo"),
+			GoogleKey:  os.Getenv("WEB_SEARCH_GOOGLE_API_KEY"),
+			GoogleCX:   os.Getenv("WEB_SEARCH_GOOGLE_CX"),
+			SerpAPIKey: os.Getenv("WEB_SEARCH_SERPAPI_KEY"),
+			SerpAPIURL: trimRightSlash(env("WEB_SEARCH_SERPAPI_BASE_URL", "https://serpapi.com/search.json")),
+			SearXNGURL: trimRightSlash(os.Getenv("WEB_SEARCH_SEARXNG_URL")),
+			BraveKey:   os.Getenv("WEB_SEARCH_BRAVE_API_KEY"),
+			BraveURL:   trimRightSlash(env("WEB_SEARCH_BRAVE_BASE_URL", "https://api.search.brave.com/res/v1/web/search")),
+		},
+	}
 }
 
 func dotenvPath(profile RuntimeProfile) string {

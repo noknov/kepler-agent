@@ -147,8 +147,8 @@ func TestIsChannelMention(t *testing.T) {
 
 func TestDefaultToolRegistryDefersHeavyToolFamilies(t *testing.T) {
 	cfg := config.Config{}
-	cfg.Tools.KubectlPath = "kubectl"
-	cfg.Tools.GCloudPath = "gcloud"
+	cfg.Integrations.K8s.KubectlPath = "kubectl"
+	cfg.Integrations.GCP.GCloudPath = "gcloud"
 	reminderStore, err := reminder.NewFileStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
