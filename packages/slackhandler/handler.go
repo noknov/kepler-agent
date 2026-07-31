@@ -41,6 +41,9 @@ func (h *Handler) Handle(ctx context.Context, eventID string, ev slack.Event) (e
 	case "app_home_opened":
 		h.handleAppHome(ctx, ev)
 		return nil
+	case "app_context_changed":
+		h.handleAppContextChanged(ctx, ev)
+		return nil
 	case "app_mention":
 		return h.handleMention(ctx, eventID, ev)
 	case "message":
@@ -202,12 +205,24 @@ func (h *Handler) handleAppHome(ctx context.Context, ev slack.Event) {
 	if ev.User == "" {
 		return
 	}
-	if ev.Tab != "" && ev.Tab != "home" {
+	switch ev.Tab {
+	case "", "home":
+		if err := h.Home.Publish(ctx, ev.User); err != nil {
+			log.Printf("publish home failed: %v", err)
+		}
+	case "messages":
+		// Agent messaging experience: user opened the DM Messages tab.
+		// Suggested prompts are pinned to the top of the tab (not per-thread).
+		// Hook for future assistant.threads.setSuggestedPrompts integration.
+	}
+}
+
+func (h *Handler) handleAppContextChanged(ctx context.Context, ev slack.Event) {
+	if ev.User == "" || len(ev.Context.Entities) == 0 {
 		return
 	}
-	if err := h.Home.Publish(ctx, ev.User); err != nil {
-		log.Printf("publish home failed: %v", err)
-	}
+	// Reserved for tailoring responses to the user's active Slack context.
+	_ = ctx
 }
 
 func (h *Handler) recordReactionFeedback(ctx context.Context, ev slack.Event) {
