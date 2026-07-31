@@ -61,7 +61,7 @@ func listTools(ctx context.Context) error {
 	if err != nil {
 		cfg = appruntime.LocalCLIConfig()
 	}
-	runtime := appruntime.NewAgentRuntime(cfg, nil, nil, recorder, nil)
+	runtime := appruntime.NewAgentRuntime(cfg, nil, nil, recorder, nil, nil)
 	specs := runtime.Tools.Specs()
 	names := make([]string, 0, len(specs))
 	for _, spec := range specs {

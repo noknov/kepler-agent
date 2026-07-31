@@ -90,7 +90,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 
 	recorder := observability.NewRecorder()
-	rt := appruntime.NewAgentRuntime(cfg, slackClient, stores.Reminders, recorder, stores.Redis)
+	rt := appruntime.NewAgentRuntime(cfg, slackClient, stores.Reminders, recorder, stores.Redis, stores.UserPrefs)
 	recorder.SetCostRates(rt.CostRates)
 
 	healthService := health.NewService(rt.Tools, cfg.Security.WorkspaceRoots)
@@ -106,6 +106,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	conv.Format = slack.MarkdownToMrkdwn
 	conv.RunStore = stores.Runs
 	conv.ToolSpillStore = stores.Runs
+	conv.UserPrefs = stores.UserPrefs
 	conv.RunProvider = cfg.LLM.Provider
 	conv.RunModel = cfg.LLM.Model
 	multimodal := multimodalPredicate(cfg.LLM.MultimodalModels)
@@ -123,18 +124,19 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 
 	access := safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels)
 	handler := &slackhandler.Handler{
-		Cfg:     cfg,
-		Slack:   slackClient,
-		Access:  access,
-		Conv:    conv,
-		Prompt:  rt.Prompt,
-		Metrics: recorder,
-		Runs:    stores.Runs,
+		Cfg:       cfg,
+		Slack:     slackClient,
+		Access:    access,
+		Conv:      conv,
+		Prompt:    rt.Prompt,
+		Metrics:   recorder,
+		Runs:      stores.Runs,
+		UserPrefs: stores.UserPrefs,
 		Home: slackhome.Controller{
 			Cfg:    cfg,
 			Access: access,
-			Redis:  stores.Redis,
 			Slack:  slackClient,
+			Store:  stores.UserPrefs,
 		},
 	}
 	conv.WebSearchEnabled = handler.WebSearchPreference

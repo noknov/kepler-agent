@@ -28,5 +28,9 @@ func (s *Server) homeView(userID string) map[string]any {
 }
 
 func (s *Server) homeController() slackhome.Controller {
-	return slackhome.Controller{Cfg: s.cfg, Access: s.access, Redis: s.redis, Slack: s.slack}
+	controller := slackhome.Controller{Cfg: s.cfg, Access: s.access, Slack: s.slack}
+	if s.userPrefsStore != nil {
+		controller.Store = s.userPrefsStore
+	}
+	return controller
 }

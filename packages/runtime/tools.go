@@ -37,9 +37,10 @@ import (
 	ttsTools "github.com/noknov/slack-copilot-agent/packages/toolkit/tools/tts"
 	webSearchTools "github.com/noknov/slack-copilot-agent/packages/toolkit/tools/websearch"
 	youtrackTools "github.com/noknov/slack-copilot-agent/packages/toolkit/tools/youtrack"
+	"github.com/noknov/slack-copilot-agent/packages/userprefs"
 )
 
-func NewToolRegistry(cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy, rdb *redisclient.Client) *registry.Registry {
+func NewToolRegistry(cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy, rdb *redisclient.Client, userPrefs userprefs.Store) *registry.Registry {
 	return newToolRegistryWithPolicy(
 		cfg,
 		slackClient,
@@ -50,12 +51,13 @@ func NewToolRegistry(cfg config.Config, slackClient *slack.Client, reminderStore
 		workspacePolicy,
 		commandPolicy,
 		rdb,
+		userPrefs,
 		policyForSurface(cfg, "slack", slackClient, reminderStore),
 	)
 }
 
 func NewCodingToolRegistry(cfg config.Config, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) *registry.Registry {
-	tools := newToolRegistryWithPolicy(cfg, nil, nil, llmClient, secondaryClient, secondaryModel, workspacePolicy, commandPolicy, nil, policyForSurface(cfg, "coding", nil, nil))
+	tools := newToolRegistryWithPolicy(cfg, nil, nil, llmClient, secondaryClient, secondaryModel, workspacePolicy, commandPolicy, nil, nil, policyForSurface(cfg, "coding", nil, nil))
 	tools.Register(codingWrite(editTools.WriteFileTool{Paths: workspacePolicy}))
 	tools.Register(codingWrite(editTools.ReplaceTool{Paths: workspacePolicy}))
 	tools.Register(codingWrite(localExecTools.CommandTool{WorkspaceRoots: workspacePolicy.Roots, Guard: commandPolicy, Timeout: cfg.Tools.CommandTimeout}))
@@ -101,7 +103,7 @@ func runtimeRead(tool registry.Tool, deps ...string) registry.Tool {
 	})
 }
 
-func newToolRegistryWithPolicy(cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy, rdb *redisclient.Client, policy registry.CapabilityPolicy) *registry.Registry {
+func newToolRegistryWithPolicy(cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy, rdb *redisclient.Client, userPrefs userprefs.Store, policy registry.CapabilityPolicy) *registry.Registry {
 	tools := registry.NewWithPolicy(policy)
 	tools.Register(slackExternalWrite(reminderTools.CreateTool{
 		Store: reminderStore,
@@ -120,7 +122,7 @@ func newToolRegistryWithPolicy(cfg config.Config, slackClient *slack.Client, rem
 	if slackClient != nil {
 		registerSlackTools(tools, slackClient, cfg)
 	}
-	registerAgentControlTools(tools, cfg, llmClient, secondaryClient, secondaryModel)
+	registerAgentControlTools(tools, cfg, llmClient, secondaryClient, secondaryModel, userPrefs)
 	tools.Register(registry.ToolSearchTool{Registry: tools})
 	return tools
 }
@@ -345,7 +347,7 @@ func registerDeferredTools(reg *registry.Registry, category string, tools ...reg
 	}
 }
 
-func registerAgentControlTools(tools *registry.Registry, cfg config.Config, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string) {
+func registerAgentControlTools(tools *registry.Registry, cfg config.Config, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, userPrefs userprefs.Store) {
 	delegates := delegation.NewManager(llmClient, cfg.LLM.Model, cfg.LLM.Thinking)
 	if secondaryClient != nil && secondaryModel != "" {
 		delegates.SetSecondaryClient(secondaryClient, secondaryModel)
@@ -353,7 +355,7 @@ func registerAgentControlTools(tools *registry.Registry, cfg config.Config, llmC
 	delegates.SetPolicyPrompt(prompts.RulesAndSkillsPrompt())
 	delegates.SetTools(tools)
 	tools.Register(plannerTools.PlanTool{})
-	tools.Register(skillTools.LoadTool{})
+	tools.Register(skillTools.LoadTool{UserPrefs: userPrefs})
 	tools.Register(agentTools.SpillReadTool{})
 	tools.Register(delegation.Tool{Manager: delegates})
 	tools.Register(delegation.ExploreTool{Manager: delegates})

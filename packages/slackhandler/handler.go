@@ -14,18 +14,21 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/runs"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/slack"
+	"github.com/noknov/slack-copilot-agent/packages/slackgateway"
 	"github.com/noknov/slack-copilot-agent/packages/slackhome"
+	"github.com/noknov/slack-copilot-agent/packages/userprefs"
 )
 
 type Handler struct {
-	Cfg     config.Config
-	Slack   *slack.Client
-	Access  safety.AccessPolicy
-	Conv    *conversation.Service
-	Prompt  safety.PromptPolicy
-	Metrics *observability.Recorder
-	Runs    runs.Store
-	Home    slackhome.Controller
+	Cfg       config.Config
+	Slack     *slack.Client
+	Access    safety.AccessPolicy
+	Conv      *conversation.Service
+	Prompt    safety.PromptPolicy
+	Metrics   *observability.Recorder
+	Runs      runs.Store
+	Home      slackhome.Controller
+	UserPrefs userprefs.Store
 }
 
 func (h *Handler) Handle(ctx context.Context, eventID string, ev slack.Event) (err error) {
@@ -61,6 +64,138 @@ func (h *Handler) WebSearchPreference(userID string) bool {
 
 func (h *Handler) ToggleWebSearch(userID string) {
 	go h.Home.ToggleWebSearch(context.Background(), userID)
+}
+
+func (h *Handler) HandleInteraction(ctx context.Context, interaction slackgateway.Interaction) {
+	if interaction.UserID == "" {
+		return
+	}
+	switch interaction.Type {
+	case "block_actions":
+		h.handleBlockActions(ctx, interaction)
+	case "view_submission":
+		h.handleViewSubmission(ctx, interaction)
+	}
+}
+
+func (h *Handler) handleBlockActions(ctx context.Context, interaction slackgateway.Interaction) {
+	for _, action := range interaction.Actions {
+		switch action.ActionID {
+		case "toggle_user_setting":
+			if action.Value == "web_search" {
+				h.Home.ToggleWebSearch(ctx, interaction.UserID)
+			}
+		case "manage_rules":
+			h.openAssetModal(ctx, interaction.TriggerID, interaction.UserID, userprefs.KindRule)
+		case "manage_skills":
+			h.openAssetModal(ctx, interaction.TriggerID, interaction.UserID, userprefs.KindSkill)
+		case "delete_asset":
+			h.deleteAsset(ctx, interaction, action.Value)
+		}
+	}
+}
+
+func (h *Handler) openAssetModal(ctx context.Context, triggerID, userID string, kind userprefs.AssetKind) {
+	if h.Slack == nil || h.UserPrefs == nil || triggerID == "" {
+		return
+	}
+	assets := h.listAssets(ctx, userID, kind)
+	if err := h.Slack.OpenView(ctx, triggerID, assetModal(kind, assets)); err != nil {
+		log.Printf("open %s modal failed: %v", kind, err)
+		if userID != "" {
+			_, _ = h.Slack.PostMessage(ctx, userID, "", fmt.Sprintf("Couldn't open %s manager: %v", kind, err))
+		}
+	}
+}
+
+func (h *Handler) deleteAsset(ctx context.Context, interaction slackgateway.Interaction, value string) {
+	kind, id, ok := parseAssetActionValue(value)
+	if !ok || h.UserPrefs == nil {
+		return
+	}
+	if err := h.UserPrefs.DeleteAsset(ctx, interaction.UserID, kind, id); err != nil {
+		log.Printf("delete %s failed user=%s id=%s err=%v", kind, interaction.UserID, id, err)
+		return
+	}
+	assets := h.listAssets(ctx, interaction.UserID, kind)
+	if h.Slack != nil && interaction.View.ID != "" {
+		if err := h.Slack.UpdateView(ctx, interaction.View.ID, assetModal(kind, assets)); err != nil {
+			log.Printf("refresh %s modal failed user=%s err=%v", kind, interaction.UserID, err)
+		}
+	}
+	if err := h.Home.Publish(context.Background(), interaction.UserID); err != nil {
+		log.Printf("publish home after %s delete failed: %v", kind, err)
+	}
+}
+
+func (h *Handler) handleViewSubmission(ctx context.Context, interaction slackgateway.Interaction) {
+	kind, ok := assetKindFromCallback(interaction.View.CallbackID)
+	if !ok || h.UserPrefs == nil || h.Slack == nil {
+		return
+	}
+	var saved int
+	for _, file := range selectedFiles(interaction.View.State) {
+		if file.ID == "" || !userprefs.AllowedUploadFile(file) {
+			continue
+		}
+		info, err := h.Slack.FileInfo(ctx, file.ID)
+		if err != nil {
+			log.Printf("load uploaded %s file info failed user=%s file=%s err=%v", kind, interaction.UserID, file.ID, err)
+			continue
+		}
+		file = mergeSlackFile(file, info)
+		if !userprefs.AllowedUploadFile(file) || file.Size > userprefs.MaxUploadBytes {
+			log.Printf("skip uploaded %s file user=%s file=%s: unsupported type or too large", kind, interaction.UserID, file.ID)
+			continue
+		}
+		data, err := h.Slack.DownloadFile(ctx, file, userprefs.MaxUploadBytes)
+		if err != nil {
+			log.Printf("download uploaded %s file failed user=%s file=%s err=%v", kind, interaction.UserID, file.ID, err)
+			continue
+		}
+		asset, err := userprefs.BuildAsset(kind, interaction.UserID, file, data)
+		if err != nil {
+			log.Printf("parse uploaded %s file failed user=%s file=%s err=%v", kind, interaction.UserID, file.ID, err)
+			continue
+		}
+		if _, err := h.UserPrefs.UpsertAsset(ctx, asset); err != nil {
+			log.Printf("save uploaded %s file failed user=%s file=%s err=%v", kind, interaction.UserID, file.ID, err)
+			continue
+		}
+		saved++
+	}
+	if text, name := submittedTextAsset(interaction.View.State); text != "" && name != "" {
+		asset := userprefs.Asset{
+			UserID:      interaction.UserID,
+			Kind:        kind,
+			Name:        name,
+			Description: submittedDescription(interaction.View.State),
+			Content:     text,
+			Active:      true,
+		}
+		if _, err := h.UserPrefs.UpsertAsset(ctx, asset); err != nil {
+			log.Printf("save pasted %s failed user=%s err=%v", kind, interaction.UserID, err)
+		} else {
+			saved++
+		}
+	}
+	if saved > 0 {
+		if err := h.Home.Publish(context.Background(), interaction.UserID); err != nil {
+			log.Printf("publish home after %s upload failed: %v", kind, err)
+		}
+	}
+}
+
+func (h *Handler) listAssets(ctx context.Context, userID string, kind userprefs.AssetKind) []userprefs.Asset {
+	if h.UserPrefs == nil {
+		return nil
+	}
+	assets, err := h.UserPrefs.ListAssets(ctx, userID, kind)
+	if err != nil {
+		log.Printf("list %s assets failed user=%s err=%v", kind, userID, err)
+		return nil
+	}
+	return assets
 }
 
 func (h *Handler) handleAppHome(ctx context.Context, ev slack.Event) {

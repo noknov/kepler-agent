@@ -10,6 +10,7 @@ import (
 
 	"github.com/noknov/slack-copilot-agent/packages/prompts"
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/userprefs"
 )
 
 func TestLoadToolReturnsSkillBody(t *testing.T) {
@@ -40,5 +41,28 @@ Follow these detailed steps.
 	}
 	if !strings.Contains(result.Content, "Follow these detailed steps.") {
 		t.Fatalf("skill body missing:\n%s", result.Content)
+	}
+}
+
+func TestLoadToolPrefersUserSkill(t *testing.T) {
+	ctx := context.Background()
+	store := userprefs.NewMemoryStore()
+	if _, err := store.UpsertAsset(ctx, userprefs.Asset{
+		UserID:      "U1",
+		Kind:        userprefs.KindSkill,
+		Name:        "demo",
+		Description: "User override.",
+		Content:     "Follow the user's detailed workflow.",
+		Active:      true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := (LoadTool{UserPrefs: store}).Execute(ctx, json.RawMessage(`{"name":"demo"}`), registry.Runtime{UserID: "U1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, "User override.") || !strings.Contains(result.Content, "Slack user upload") {
+		t.Fatalf("user skill body missing:\n%s", result.Content)
 	}
 }

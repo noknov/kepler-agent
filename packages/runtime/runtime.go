@@ -13,6 +13,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/slack"
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/userprefs"
 )
 
 type AgentRuntime struct {
@@ -24,7 +25,7 @@ type AgentRuntime struct {
 	CostRates observability.CostRates
 }
 
-func NewAgentRuntime(cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, recorder *observability.Recorder, rdb *redisclient.Client) AgentRuntime {
+func NewAgentRuntime(cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, recorder *observability.Recorder, rdb *redisclient.Client, userPrefs userprefs.Store) AgentRuntime {
 	llmClient := NewLLMClient(cfg)
 	llmCapabilities := llm.CapabilitiesFor(cfg.LLM.Provider, cfg.LLM.Protocol)
 	workspacePolicy := safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}
@@ -39,7 +40,7 @@ func NewAgentRuntime(cfg config.Config, slackClient *slack.Client, reminderStore
 		MaxContextTokens: cfg.Sessions.MaxContextTokens,
 	}
 	secondaryClient, secondaryModel := NewSecondaryLLMClient(cfg)
-	tools := NewToolRegistry(cfg, slackClient, reminderStore, llmClient, secondaryClient, secondaryModel, workspacePolicy, commandPolicy, rdb)
+	tools := NewToolRegistry(cfg, slackClient, reminderStore, llmClient, secondaryClient, secondaryModel, workspacePolicy, commandPolicy, rdb, userPrefs)
 
 	var statusSummarizer *agent.StatusSummarizer
 	if cfg.LLM.DynamicStatus {

@@ -23,6 +23,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/session"
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/userprefs"
 )
 
 type Messenger interface {
@@ -61,6 +62,7 @@ type Service struct {
 	// a given user. When it returns false the tool is excluded from the LLM
 	// tool list for that request. When nil, search is always available.
 	WebSearchEnabled func(userID string) bool
+	UserPrefs        userprefs.Store
 	CostRates        observability.CostRates
 	HealthSummary    func() string
 	AutoTTS          AutoTTSFunc
@@ -240,6 +242,8 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 
 	webSearchOff := s.WebSearchEnabled != nil && !s.WebSearchEnabled(req.UserID)
 	sysPrompt := s.Prompt.SystemPrompt()
+	sysPrompt += userprefs.RulesPrompt(ctx, s.UserPrefs, req.UserID)
+	sysPrompt += userprefs.SkillsMetadataPrompt(ctx, s.UserPrefs, req.UserID)
 	if webSearchOff {
 		sysPrompt += "\n\nThe web-search tool is currently disabled by the user. If this question would clearly benefit from a live web search, politely note in your reply that enabling Auto-search in App Home would allow you to look it up."
 	}

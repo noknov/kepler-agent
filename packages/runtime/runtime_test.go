@@ -11,7 +11,7 @@ import (
 func TestNewAgentRuntimeCarriesMaxOutputTokens(t *testing.T) {
 	cfg := LocalCLIConfig()
 	cfg.LLM.MaxOutputTokens = 8192
-	rt := NewAgentRuntime(cfg, nil, nil, nil, nil)
+	rt := NewAgentRuntime(cfg, nil, nil, nil, nil, nil)
 	if rt.Runner.MaxTokens != 8192 {
 		t.Fatalf("Runner.MaxTokens = %d, want 8192", rt.Runner.MaxTokens)
 	}
@@ -32,7 +32,7 @@ func TestToolRegistryUsesIntegrationConfigForManualConfig(t *testing.T) {
 			},
 		},
 	}
-	reg := NewToolRegistry(cfg, nil, nil, nil, nil, "", safety.WorkspacePolicy{}, safety.CommandPolicy{}, nil)
+	reg := NewToolRegistry(cfg, nil, nil, nil, nil, "", safety.WorkspacePolicy{}, safety.CommandPolicy{}, nil, nil)
 	if !reg.ActivateTool("github-pr_diff") {
 		t.Fatal("expected github-pr_diff to activate when only legacy ToolConfig GitHub token is set")
 	}
