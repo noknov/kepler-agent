@@ -93,6 +93,7 @@ Required OAuth scopes:
 - `app_mentions:read`
 - `channels:history`, `groups:history`, `im:history`
 - `chat:write`
+- `assistant:write`
 - `files:read`
 - `chat:delete` if you want the bot to remove temporary thinking indicators
 
@@ -104,9 +105,14 @@ message.channels
 message.groups
 message.im
 app_home_opened
+app_context_changed
 file_shared
 reaction_added
 ```
+
+For Slack's Agent messaging experience, configure the app manifest with `agent_view`
+instead of the legacy `assistant_view`. Subscribe to `app_context_changed` and
+ensure `assistant:write` is granted when Agents is enabled.
 
 Set `ALLOWED_SLACK_CHANNELS` to restrict channel use. `ALLOWED_SLACK_USERS`
 controls who can use the bot in channels and DMs.

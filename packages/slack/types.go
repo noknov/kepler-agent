@@ -26,6 +26,7 @@ type Event struct {
 	BotID       string `json:"bot_id,omitempty"`
 	Reaction    string `json:"reaction,omitempty"`
 	Tab         string `json:"tab,omitempty"`
+	Context     AppContext `json:"context,omitempty"`
 	Item        Item   `json:"item,omitempty"`
 	Files       []File `json:"files,omitempty"`
 	File        File   `json:"file,omitempty"`
@@ -37,6 +38,16 @@ type Item struct {
 	Type    string `json:"type"`
 	Channel string `json:"channel,omitempty"`
 	TS      string `json:"ts,omitempty"`
+}
+
+type AppContext struct {
+	Entities []ContextEntity `json:"entities,omitempty"`
+}
+
+type ContextEntity struct {
+	Type   string `json:"type"`
+	Value  string `json:"value"`
+	TeamID string `json:"team_id,omitempty"`
 }
 
 type Message struct {
