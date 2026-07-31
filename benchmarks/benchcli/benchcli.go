@@ -262,7 +262,7 @@ func (a localAgent) RunCase(ctx context.Context, c benchkit.Case) (benchkit.Agen
 		cfg.Security.WorkspaceRoots = []string{c.Workspace}
 	}
 	recorder := observability.NewRecorder()
-	rt := appruntime.NewAgentRuntime(cfg, nil, nil, recorder, nil)
+	rt := appruntime.NewAgentRuntime(cfg, nil, nil, recorder, nil, nil)
 	rt.Runner.Policy.MaxIdenticalSuccessfulToolCalls = 20
 	workspacePolicy := safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}
 	commandPolicy := safety.NewLocalCommandPolicy()

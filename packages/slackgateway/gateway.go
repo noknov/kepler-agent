@@ -23,8 +23,34 @@ type Gateway struct {
 	IsDraining    func() bool
 	Enqueue       func(context.Context, string, slack.Event) bool
 	Publish       func(context.Context, string)
-	OnWebSearch   func(string)
+	OnInteraction func(context.Context, Interaction)
 	WriteError    ErrorWriter
+}
+
+type Interaction struct {
+	Type      string
+	UserID    string
+	TriggerID string
+	Actions   []InteractionAction
+	View      InteractionView
+}
+
+type InteractionAction struct {
+	ActionID string
+	Value    string
+}
+
+type InteractionView struct {
+	ID         string
+	CallbackID string
+	State      map[string]map[string]InteractionValue
+}
+
+type InteractionValue struct {
+	Type           string
+	Value          string
+	SelectedFiles  []slack.File
+	SelectedValues []string
 }
 
 func (g Gateway) HandleEvents(w http.ResponseWriter, r *http.Request) {
@@ -127,16 +153,32 @@ func (g Gateway) HandleInteractions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var payload struct {
-		Type string `json:"type"`
-		User struct {
+		Type      string `json:"type"`
+		TriggerID string `json:"trigger_id,omitempty"`
+		User      struct {
 			ID string `json:"id"`
 		} `json:"user"`
 		Actions []struct {
 			ActionID       string `json:"action_id"`
+			Value          string `json:"value,omitempty"`
 			SelectedOption struct {
 				Value string `json:"value"`
 			} `json:"selected_option"`
 		} `json:"actions"`
+		View struct {
+			ID         string `json:"id,omitempty"`
+			CallbackID string `json:"callback_id,omitempty"`
+			State      struct {
+				Values map[string]map[string]struct {
+					Type            string       `json:"type,omitempty"`
+					Value           string       `json:"value,omitempty"`
+					SelectedFiles   []slack.File `json:"files,omitempty"`
+					SelectedOptions []struct {
+						Value string `json:"value"`
+					} `json:"selected_options,omitempty"`
+				} `json:"values,omitempty"`
+			} `json:"state,omitempty"`
+		} `json:"view,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(body), &payload); err != nil {
 		g.error(w, r, http.StatusBadRequest, "bad json", err)
@@ -144,14 +186,44 @@ func (g Gateway) HandleInteractions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	if payload.Type != "block_actions" || g.OnWebSearch == nil {
+	if g.OnInteraction == nil {
 		return
 	}
+	interaction := Interaction{
+		Type:      payload.Type,
+		UserID:    payload.User.ID,
+		TriggerID: payload.TriggerID,
+		View: InteractionView{
+			ID:         payload.View.ID,
+			CallbackID: payload.View.CallbackID,
+			State:      map[string]map[string]InteractionValue{},
+		},
+	}
 	for _, action := range payload.Actions {
-		if action.ActionID == "toggle_web_search" {
-			g.OnWebSearch(payload.User.ID)
+		value := action.Value
+		if value == "" {
+			value = action.SelectedOption.Value
+		}
+		interaction.Actions = append(interaction.Actions, InteractionAction{ActionID: action.ActionID, Value: value})
+	}
+	for blockID, actions := range payload.View.State.Values {
+		interaction.View.State[blockID] = map[string]InteractionValue{}
+		for actionID, value := range actions {
+			var selected []string
+			for _, option := range value.SelectedOptions {
+				if option.Value != "" {
+					selected = append(selected, option.Value)
+				}
+			}
+			interaction.View.State[blockID][actionID] = InteractionValue{
+				Type:           value.Type,
+				Value:          value.Value,
+				SelectedFiles:  value.SelectedFiles,
+				SelectedValues: selected,
+			}
 		}
 	}
+	go g.OnInteraction(context.Background(), interaction)
 }
 
 func (g Gateway) draining() bool {

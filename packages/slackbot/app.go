@@ -37,6 +37,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/slackhome"
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/gitcache"
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/userprefs"
 )
 
 func Run(ctx context.Context) error {
@@ -90,6 +91,7 @@ type Server struct {
 	reminderStore       *reminder.PGStore
 	sessionStore        *session.PGStore
 	runPGStore          *runs.PGStore
+	userPrefsStore      *userprefs.PGStore
 	eventInbox          *eventinbox.PGStore
 	slackWorker         *slackevents.Worker
 	slackGateway        *slackgateway.Gateway
@@ -123,6 +125,9 @@ func (s *Server) Close() {
 	if s.runPGStore != nil {
 		s.runPGStore.Close()
 	}
+	if s.userPrefsStore != nil {
+		s.userPrefsStore.Close()
+	}
 	if s.sessionStore != nil {
 		s.sessionStore.Close()
 	}
@@ -146,6 +151,7 @@ type conversationDeps struct {
 	sessionStore   session.Store
 	runStore       runs.Store
 	toolSpillStore registry.ToolSpillStore
+	userPrefs      userprefs.Store
 	redis          *redisclient.Client
 	runSemaphore   chan struct{}
 	serviceCtx     context.Context
@@ -163,6 +169,7 @@ func newConversationService(deps conversationDeps) *conversation.Service {
 	conv.Format = slack.MarkdownToMrkdwn
 	conv.RunStore = deps.runStore
 	conv.ToolSpillStore = deps.toolSpillStore
+	conv.UserPrefs = deps.userPrefs
 	conv.RunProvider = deps.cfg.LLM.Provider
 	conv.RunModel = deps.cfg.LLM.Model
 	conv.ModelRouter = conversation.ModelRouter{
@@ -203,6 +210,7 @@ func NewServerWithOptions(cfg config.Config, opts Options) (*Server, error) {
 	runStore := stores.Runs
 	reminderStore := stores.Reminders
 	eventInbox := stores.Events
+	userPrefsStore := stores.UserPrefs
 
 	gitcache.SetRedis(rdb)
 
@@ -218,7 +226,7 @@ func NewServerWithOptions(cfg config.Config, opts Options) (*Server, error) {
 	}
 
 	recorder := observability.NewRecorder()
-	runtime := appruntime.NewAgentRuntime(cfg, slackClient, reminderStore, recorder, rdb)
+	runtime := appruntime.NewAgentRuntime(cfg, slackClient, reminderStore, recorder, rdb, userPrefsStore)
 	healthService := health.NewService(runtime.Tools, cfg.Security.WorkspaceRoots)
 	healthService.Redis = rdb
 	recorder.SetCostRates(runtime.CostRates)
@@ -232,6 +240,7 @@ func NewServerWithOptions(cfg config.Config, opts Options) (*Server, error) {
 		sessionStore:   store,
 		runStore:       runStore,
 		toolSpillStore: runStore,
+		userPrefs:      userPrefsStore,
 		redis:          rdb,
 		runSemaphore:   runSemaphore,
 		serviceCtx:     serviceCtx,
@@ -240,20 +249,21 @@ func NewServerWithOptions(cfg config.Config, opts Options) (*Server, error) {
 	})
 
 	s := &Server{
-		opts:          opts,
-		cfg:           cfg,
-		slack:         slackClient,
-		access:        safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
-		conv:          conv,
-		prompt:        runtime.Prompt,
-		metrics:       recorder,
-		runStore:      runStore,
-		sessionStore:  store,
-		runPGStore:    runStore,
-		health:        healthService,
-		reminders:     reminder.Scheduler{Store: reminderStore, Messenger: slackClient, Redis: rdb},
-		reminderStore: reminderStore,
-		eventInbox:    eventInbox,
+		opts:           opts,
+		cfg:            cfg,
+		slack:          slackClient,
+		access:         safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
+		conv:           conv,
+		prompt:         runtime.Prompt,
+		metrics:        recorder,
+		runStore:       runStore,
+		sessionStore:   store,
+		runPGStore:     runStore,
+		userPrefsStore: userPrefsStore,
+		health:         healthService,
+		reminders:      reminder.Scheduler{Store: reminderStore, Messenger: slackClient, Redis: rdb},
+		reminderStore:  reminderStore,
+		eventInbox:     eventInbox,
 		slackWorker: &slackevents.Worker{
 			Inbox:        eventInbox,
 			Redis:        rdb,
@@ -274,18 +284,19 @@ func NewServerWithOptions(cfg config.Config, opts Options) (*Server, error) {
 	}
 	s.eventCond = sync.NewCond(&s.eventMu)
 	s.handler = &slackhandler.Handler{
-		Cfg:     cfg,
-		Slack:   slackClient,
-		Access:  s.access,
-		Conv:    conv,
-		Prompt:  runtime.Prompt,
-		Metrics: recorder,
-		Runs:    runStore,
+		Cfg:       cfg,
+		Slack:     slackClient,
+		Access:    s.access,
+		Conv:      conv,
+		Prompt:    runtime.Prompt,
+		Metrics:   recorder,
+		Runs:      runStore,
+		UserPrefs: userPrefsStore,
 		Home: slackhome.Controller{
 			Cfg:    cfg,
 			Access: s.access,
-			Redis:  rdb,
 			Slack:  slackClient,
+			Store:  userPrefsStore,
 		},
 	}
 	s.slackWorker.Handler = s.handler.Handle
@@ -297,7 +308,7 @@ func NewServerWithOptions(cfg config.Config, opts Options) (*Server, error) {
 		SigningSecret: cfg.Slack.SigningSecret,
 		Inbox:         eventInbox,
 		IsDraining:    func() bool { return s.draining.Load() },
-		OnWebSearch:   s.handler.ToggleWebSearch,
+		OnInteraction: s.handler.HandleInteraction,
 		WriteError:    s.writeHTTPError,
 	}
 	if opts.SlackWorker {

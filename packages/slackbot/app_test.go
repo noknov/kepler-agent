@@ -3,7 +3,6 @@ package slackbot
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -153,7 +152,7 @@ func TestDefaultToolRegistryDefersHeavyToolFamilies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg := appruntime.NewToolRegistry(cfg, &slack.Client{}, reminderStore, nil, nil, "", safety.WorkspacePolicy{}, safety.CommandPolicy{}, nil)
+	reg := appruntime.NewToolRegistry(cfg, &slack.Client{}, reminderStore, nil, nil, "", safety.WorkspacePolicy{}, safety.CommandPolicy{}, nil, nil)
 
 	for _, name := range []string{
 		"github-dispatch_workflow",
@@ -355,26 +354,6 @@ func TestDrainRequiresLocalPostAndMarksServerDraining(t *testing.T) {
 	}
 }
 
-func TestHomeViewDoesNotShowTokenUsage(t *testing.T) {
-	server := &Server{cfg: config.Config{LLM: config.LLMConfig{
-		Provider:        "opencode-go",
-		Model:           "glm-5.2",
-		AvailableModels: []string{"glm-5.2", "deepseek-v4-flash"},
-	}}}
-	server.tokenUsage = &opencodeTokenUsageClient{
-		cached: tokenUsageSummary{
-			Rolling: &tokenUsageWindow{UsagePercent: 33, PercentRemaining: 67, ResetInSec: 12_300},
-		},
-		cachedAt: time.Now(),
-		cacheTTL: time.Hour,
-	}
-	view := server.homeView("U1")
-	text := flattenBlockText(view)
-	if strings.Contains(text, "*Usage*") || strings.Contains(text, "/5h") {
-		t.Fatalf("home view should not show usage: %q", text)
-	}
-}
-
 func TestParseOpenCodeGoUsageHTML(t *testing.T) {
 	html := `rollingUsage:$R[1]={usagePercent:33,resetInSec:12300}
 weeklyUsage:$R[2]={resetInSec:259200,usagePercent:50}
@@ -416,21 +395,4 @@ func mkdir(t *testing.T, parts ...string) {
 	if err := os.MkdirAll(filepath.Join(parts...), 0o700); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func flattenBlockText(view map[string]any) string {
-	var out strings.Builder
-	blocks, _ := view["blocks"].([]map[string]any)
-	for _, block := range blocks {
-		if text, ok := block["text"].(map[string]any); ok {
-			out.WriteString(firstNonEmpty(fmt.Sprint(text["text"]), ""))
-			out.WriteString("\n")
-		}
-		fields, _ := block["fields"].([]map[string]any)
-		for _, field := range fields {
-			out.WriteString(firstNonEmpty(fmt.Sprint(field["text"]), ""))
-			out.WriteString("\n")
-		}
-	}
-	return out.String()
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/reminder"
 	"github.com/noknov/slack-copilot-agent/packages/runs"
 	"github.com/noknov/slack-copilot-agent/packages/session"
+	"github.com/noknov/slack-copilot-agent/packages/userprefs"
 )
 
 // Stores owns the durable dependencies shared by app entrypoints.
@@ -22,12 +23,14 @@ type Stores struct {
 	Runs      *runs.PGStore
 	Reminders *reminder.PGStore
 	Events    *eventinbox.PGStore
+	UserPrefs *userprefs.PGStore
 }
 
 type EventIngressStores struct {
-	PGPool *pgxpool.Pool
-	Redis  *redisclient.Client
-	Events *eventinbox.PGStore
+	PGPool    *pgxpool.Pool
+	Redis     *redisclient.Client
+	Events    *eventinbox.PGStore
+	UserPrefs *userprefs.PGStore
 }
 
 func NewStores(ctx context.Context, cfg config.StorageConfig) (*Stores, error) {
@@ -73,6 +76,12 @@ func NewStores(ctx context.Context, cfg config.StorageConfig) (*Stores, error) {
 	}
 	stores.Events = eventInbox
 
+	userPrefsStore, err := userprefs.NewPGStoreWithPool(ctx, pgPool)
+	if err != nil {
+		return nil, err
+	}
+	stores.UserPrefs = userPrefsStore
+
 	result := stores
 	stores = nil
 	return result, nil
@@ -102,6 +111,12 @@ func NewEventIngressStores(ctx context.Context, cfg config.StorageConfig) (*Even
 	}
 	stores.Events = eventInbox
 
+	userPrefsStore, err := userprefs.NewPGStoreWithPool(ctx, pgPool)
+	if err != nil {
+		return nil, err
+	}
+	stores.UserPrefs = userPrefsStore
+
 	result := stores
 	stores = nil
 	return result, nil
@@ -123,6 +138,9 @@ func (s *Stores) Close() {
 	if s.Reminders != nil {
 		s.Reminders.Close()
 	}
+	if s.UserPrefs != nil {
+		s.UserPrefs.Close()
+	}
 	if s.Redis != nil {
 		_ = s.Redis.Close()
 	}
@@ -137,6 +155,9 @@ func (s *EventIngressStores) Close() {
 	}
 	if s.Events != nil {
 		s.Events.Close()
+	}
+	if s.UserPrefs != nil {
+		s.UserPrefs.Close()
 	}
 	if s.Redis != nil {
 		_ = s.Redis.Close()

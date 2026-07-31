@@ -16,6 +16,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/slack"
 	"github.com/noknov/slack-copilot-agent/packages/slackevents"
 	"github.com/noknov/slack-copilot-agent/packages/slackgateway"
+	"github.com/noknov/slack-copilot-agent/packages/slackhandler"
 	"github.com/noknov/slack-copilot-agent/packages/slackhome"
 )
 
@@ -53,8 +54,14 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	s.home = slackhome.Controller{
 		Cfg:    cfg,
 		Access: safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
-		Redis:  stores.Redis,
 		Slack:  slackClient,
+		Store:  stores.UserPrefs,
+	}
+	handler := &slackhandler.Handler{
+		Cfg:       cfg,
+		Slack:     slackClient,
+		Home:      s.home,
+		UserPrefs: stores.UserPrefs,
 	}
 	s.gateway = slackgateway.Gateway{
 		SigningSecret: cfg.Slack.SigningSecret,
@@ -63,10 +70,8 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		Publish: func(ctx context.Context, eventID string) {
 			_ = stores.Redis.Publish(ctx, slackevents.RedisEventChannel, eventID)
 		},
-		OnWebSearch: func(userID string) {
-			s.home.ToggleWebSearch(context.Background(), userID)
-		},
-		WriteError: s.writeHTTPError,
+		OnInteraction: handler.HandleInteraction,
+		WriteError:    s.writeHTTPError,
 	}
 	return s, nil
 }

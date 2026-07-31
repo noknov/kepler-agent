@@ -7,16 +7,16 @@ import (
 	"strings"
 
 	"github.com/noknov/slack-copilot-agent/packages/config"
-	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/slack"
+	"github.com/noknov/slack-copilot-agent/packages/userprefs"
 )
 
 type Controller struct {
 	Cfg    config.Config
 	Access safety.AccessPolicy
-	Redis  *redisclient.Client
 	Slack  *slack.Client
+	Store  userprefs.Store
 }
 
 func (c Controller) Publish(ctx context.Context, userID string) error {
@@ -27,20 +27,24 @@ func (c Controller) Publish(ctx context.Context, userID string) error {
 }
 
 func (c Controller) ToggleWebSearch(ctx context.Context, userID string) {
-	if c.Redis == nil || userID == "" {
+	if c.Store == nil || userID == "" {
 		return
 	}
-	_ = c.Redis.SetBool(ctx, WebSearchKey(userID), !c.WebSearchEnabled(userID))
+	_ = c.Store.SetWebSearchEnabled(ctx, userID, !c.WebSearchEnabled(userID))
 	if err := c.Publish(context.Background(), userID); err != nil {
 		log.Printf("publish home after web search toggle failed: %v", err)
 	}
 }
 
 func (c Controller) WebSearchEnabled(userID string) bool {
-	if c.Redis == nil {
+	if c.Store == nil {
 		return true
 	}
-	return c.Redis.GetBool(context.Background(), WebSearchKey(userID), true)
+	settings, err := c.Store.GetSettings(context.Background(), userID)
+	if err != nil {
+		return true
+	}
+	return settings.WebSearchEnabled
 }
 
 func (c Controller) View(userID string) map[string]any {
@@ -68,9 +72,13 @@ func (c Controller) View(userID string) map[string]any {
 	webSearchStatus := ":large_green_circle:  On"
 	webSearchBtnStyle := "primary"
 	if !webSearchOn {
-		webSearchStatus = ":white_circle:  Off"
+		webSearchStatus = "Off  :white_circle:"
 		webSearchBtnStyle = ""
+	} else {
+		webSearchStatus = "On  :large_green_circle:"
 	}
+	ruleCount := userprefs.CountByKind(context.Background(), c.Store, userID, userprefs.KindRule)
+	skillCount := userprefs.CountByKind(context.Background(), c.Store, userID, userprefs.KindSkill)
 
 	return map[string]any{
 		"type": "home",
@@ -81,18 +89,24 @@ func (c Controller) View(userID string) map[string]any {
 			headerBlock("Model"),
 			sectionBlockWithFields("", modelFields...),
 			dividerBlock(),
-			headerBlock("Web Search"),
+			headerBlock("Personalization"),
 			sectionBlockWithAccessory(
-				"*Auto-search*\n"+webSearchStatus,
-				toggleButton("toggle_web_search", boolLabel(webSearchOn), webSearchBtnStyle),
+				fmt.Sprintf("*Rules*  %d active", ruleCount),
+				actionButton("manage_rules", "Manage Rules", "rule", ""),
+			),
+			sectionBlockWithAccessory(
+				fmt.Sprintf("*Skills*  %d active", skillCount),
+				actionButton("manage_skills", "Manage Skills", "skill", ""),
+			),
+			dividerBlock(),
+			headerBlock("Settings"),
+			sectionBlockWithAccessory(
+				"*Web Search*  "+webSearchStatus,
+				actionButton("toggle_user_setting", boolLabel(webSearchOn), "web_search", webSearchBtnStyle),
 			),
 			dividerBlock(),
 		},
 	}
-}
-
-func WebSearchKey(userID string) string {
-	return "websearch:" + userID
 }
 
 func mrkdwnField(text string) map[string]any {
@@ -140,7 +154,14 @@ func sectionBlockWithAccessory(text string, accessory map[string]any) map[string
 	}
 }
 
-func toggleButton(actionID, label, style string) map[string]any {
+func actionsBlock(elements ...map[string]any) map[string]any {
+	return map[string]any{
+		"type":     "actions",
+		"elements": elements,
+	}
+}
+
+func actionButton(actionID, label, value, style string) map[string]any {
 	btn := map[string]any{
 		"type":      "button",
 		"action_id": actionID,
@@ -149,7 +170,7 @@ func toggleButton(actionID, label, style string) map[string]any {
 			"text":  label,
 			"emoji": true,
 		},
-		"value": label,
+		"value": value,
 	}
 	if style != "" {
 		btn["style"] = style

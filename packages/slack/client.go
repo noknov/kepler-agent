@@ -97,6 +97,42 @@ func (c *Client) PublishHome(ctx context.Context, userID string, view map[string
 	return nil
 }
 
+func (c *Client) OpenView(ctx context.Context, triggerID string, view map[string]any) error {
+	payload := map[string]any{
+		"trigger_id": triggerID,
+		"view":       view,
+	}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+	}
+	if err := c.postJSON(ctx, "views.open", payload, &out); err != nil {
+		return err
+	}
+	if !out.OK {
+		return fmt.Errorf("slack views.open failed: %s", out.Error)
+	}
+	return nil
+}
+
+func (c *Client) UpdateView(ctx context.Context, viewID string, view map[string]any) error {
+	payload := map[string]any{
+		"view_id": viewID,
+		"view":    view,
+	}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+	}
+	if err := c.postJSON(ctx, "views.update", payload, &out); err != nil {
+		return err
+	}
+	if !out.OK {
+		return fmt.Errorf("slack views.update failed: %s", out.Error)
+	}
+	return nil
+}
+
 func (c *Client) StartStream(ctx context.Context, channel, threadTS, recipientUserID string) (string, error) {
 	payload := map[string]any{
 		"channel":           channel,
@@ -468,7 +504,7 @@ func FormatFiles(files []File) string {
 		}
 		lines = append(lines, line)
 	}
-	lines = append(lines, "Note: on the current turn, supported image files are sent to the model as images, and PDF, Markdown, JSON, and plain-text files as extracted text. For JSON statistics use slack-json_analyze with the file id; for large text/PDF files use slack-file_search with the file id to retrieve relevant sections.")
+	lines = append(lines, "Note: supported image files are sent to the model as images, and PDFs may include extracted text. Markdown, JSON, and plain-text files are listed by metadata only; use slack-file_search with the file id to retrieve relevant sections, or slack-json_analyze for JSON statistics.")
 	return strings.Join(lines, "\n")
 }
 

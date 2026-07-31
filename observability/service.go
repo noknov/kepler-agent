@@ -50,7 +50,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		return nil, err
 	}
 	recorder := observability.NewRecorder()
-	rt := runtime.NewAgentRuntime(cfg, nil, stores.Reminders, recorder, stores.Redis)
+	rt := runtime.NewAgentRuntime(cfg, nil, stores.Reminders, recorder, stores.Redis, nil)
 	healthService := health.NewService(rt.Tools, cfg.Security.WorkspaceRoots)
 	healthService.Redis = stores.Redis
 	return &Service{
