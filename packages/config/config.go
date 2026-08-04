@@ -16,7 +16,6 @@ type Config struct {
 	LLM          LLMConfig
 	Security     SecurityConfig
 	Sessions     SessionConfig
-	Audit        AuditConfig
 	Agent        AgentPolicyConfig
 	Tools        ToolConfig
 	Integrations IntegrationConfig
@@ -98,14 +97,6 @@ type SessionConfig struct {
 	AutocompactBuffer   int    // reserved token headroom before auto-compact (default 13000)
 	CompactModel        string // model used for compact summaries (empty = secondary model, then main model)
 	MaxToolResultTokens int    // per-tool-result token cap (default 8000)
-}
-
-type AuditConfig struct {
-	EmailEnabled  bool
-	EmailTime     string
-	Timezone      string
-	MaxRecipients int
-	CLIPath       string
 }
 
 type AgentPolicyConfig struct {
@@ -338,13 +329,6 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			AutocompactBuffer:   envInt("SESSION_AUTOCOMPACT_BUFFER", 13000),
 			CompactModel:        env("SESSION_COMPACT_MODEL", ""),
 			MaxToolResultTokens: envInt("SESSION_MAX_TOOL_RESULT_TOKENS", 8000),
-		},
-		Audit: AuditConfig{
-			EmailEnabled:  envBool("AUDIT_EMAIL_ENABLED", false),
-			EmailTime:     env("AUDIT_EMAIL_TIME", "10:00"),
-			Timezone:      env("AUDIT_EMAIL_TIMEZONE", "Asia/Shanghai"),
-			MaxRecipients: envInt("AUDIT_EMAIL_MAX_RECIPIENTS", 45),
-			CLIPath:       env("AGENTLY_CLI_PATH", "agently-cli"),
 		},
 		Agent: AgentPolicyConfig{
 			DisableEvidenceValidation:       envBool("AGENT_DISABLE_EVIDENCE_VALIDATION", false),
