@@ -19,9 +19,37 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/tools/registry"
 )
 
+type testSessionStore struct {
+	mu       sync.Mutex
+	sessions map[string]session.Session
+}
+
+func newTestSessionStore() (*testSessionStore, error) {
+	return &testSessionStore{sessions: map[string]session.Session{}}, nil
+}
+
+func (s *testSessionStore) Get(_ context.Context, id string) (session.Session, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.sessions[id]
+	return sess, ok, nil
+}
+
+func (s *testSessionStore) Save(_ context.Context, sess session.Session) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	if sess.CreatedAt.IsZero() {
+		sess.CreatedAt = now
+	}
+	sess.UpdatedAt = now
+	s.sessions[sess.ID] = sess
+	return nil
+}
+
 func TestHandleReplyIgnoresThreadWithoutPendingQuestion(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +82,7 @@ func TestHandleReplyIgnoresThreadWithoutPendingQuestion(t *testing.T) {
 
 func TestHandleReplyConsumesPendingQuestion(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +140,7 @@ func TestHandleReplyConsumesPendingQuestion(t *testing.T) {
 
 func TestProcessInjectsToolHealthSummary(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +181,7 @@ func TestProcessInjectsToolHealthSummary(t *testing.T) {
 
 func TestProcessRoutesImageInputToMultimodalModel(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +235,7 @@ func TestProcessRoutesImageInputToMultimodalModel(t *testing.T) {
 
 func TestProcessKeepsImageInputOnMultimodalDefaultModel(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +289,7 @@ func TestProcessKeepsImageInputOnMultimodalDefaultModel(t *testing.T) {
 
 func TestProcessRoutesTextInputToDefaultModel(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -487,7 +515,7 @@ func TestNewErrorID(t *testing.T) {
 
 func TestStreamModePostsNonStreamingFormattedFinalAnswer(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -539,7 +567,7 @@ func TestStreamModePostsNonStreamingFormattedFinalAnswer(t *testing.T) {
 
 func TestFinalAnswerAppendsWebEvidence(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +622,7 @@ func TestFinalAnswerAppendsWebEvidence(t *testing.T) {
 
 func TestStreamedFinalAnswerAppendsWebEvidenceToAnswerStream(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -653,7 +681,7 @@ func TestStreamedFinalAnswerAppendsWebEvidenceToAnswerStream(t *testing.T) {
 
 func TestStreamModePostsNonStreamingFinalAnswer(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -695,7 +723,7 @@ func TestStreamModePostsNonStreamingFinalAnswer(t *testing.T) {
 
 func TestCompressedContextNoticeOnlyAppearsInStream(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -762,7 +790,7 @@ func TestCompressedContextNoticeOnlyAppearsInStream(t *testing.T) {
 
 func TestCompressedContextNoticeStaysOffAnswerStream(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -849,7 +877,7 @@ func TestCompressedContextNoticeStaysOffAnswerStream(t *testing.T) {
 
 func TestActiveReplySteeringShowsSeparatedStatusInChinese(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1043,7 +1071,7 @@ func (l *streamingToolLLM) ChatStream(_ context.Context, _ llm.Request, h llm.St
 
 func TestStreamModeUsesNativeStreamWhenToolsAreOmitted(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1077,7 +1105,7 @@ func TestStreamModeUsesNativeStreamWhenToolsAreOmitted(t *testing.T) {
 
 func TestStreamModeStreamsTokens(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1135,7 +1163,7 @@ func TestStreamModeStreamsTokens(t *testing.T) {
 
 func TestNativeThreadStatusSuppressesProgressTaskCards(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1203,7 +1231,7 @@ func TestNativeThreadStatusSuppressesProgressTaskCards(t *testing.T) {
 
 func TestStreamModeFallsBackWhenAppendFails(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1238,7 +1266,7 @@ func TestStreamModeFallsBackWhenAppendFails(t *testing.T) {
 
 func TestProgressStreamRestartsWhenSlackStreamExpires(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1271,7 +1299,7 @@ func TestProgressStreamRestartsWhenSlackStreamExpires(t *testing.T) {
 
 func TestAnswerStreamRestartsWhenSlackStreamExpires(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1307,7 +1335,7 @@ func TestAnswerStreamRestartsWhenSlackStreamExpires(t *testing.T) {
 
 func TestStreamStatusFailureDoesNotAffectFinalAnswer(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1350,7 +1378,7 @@ func TestStreamStatusFailureDoesNotAffectFinalAnswer(t *testing.T) {
 
 func TestActiveReplyIsInjectedIntoNextStep(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1428,7 +1456,7 @@ func TestActiveReplyIsInjectedIntoNextStep(t *testing.T) {
 
 func TestActiveReplyCanCancelRun(t *testing.T) {
 	ctx := context.Background()
-	store, err := session.NewFileStore(t.TempDir())
+	store, err := newTestSessionStore()
 	if err != nil {
 		t.Fatal(err)
 	}

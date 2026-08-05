@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent"
+	"github.com/noknov/slack-copilot-agent/packages/agentcore"
 	"github.com/noknov/slack-copilot-agent/packages/llm"
 )
 
@@ -257,6 +258,20 @@ func (p *turnProgress) WireRunner(runner *agent.Runner) {
 	runner.OnUsage = p.UpdateAPIUsage
 	runner.OnLLMStepComplete = func() {
 		p.AppendTaskUpdate(p.currentStatus, "in_progress")
+	}
+}
+
+// CoreHooks keeps Slack presentation callbacks outside the reusable agent
+// engine while preserving streaming and status behavior for this adapter.
+func (p *turnProgress) CoreHooks() agentcore.Hooks {
+	var runner agent.Runner
+	p.WireRunner(&runner)
+	return agentcore.Hooks{
+		Stream:          runner.OnStream,
+		Status:          runner.StatusUpdate,
+		LoadingMessage:  runner.LoadingMessageUpdate,
+		Usage:           runner.OnUsage,
+		LLMStepComplete: runner.OnLLMStepComplete,
 	}
 }
 

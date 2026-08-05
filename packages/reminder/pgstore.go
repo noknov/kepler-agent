@@ -12,38 +12,11 @@ import (
 // PGStore is a PostgreSQL-backed reminder store. Due atomically leases rows,
 // making delivery safe when several slack-copilot-agent instances are running.
 type PGStore struct {
-	pool    *pgxpool.Pool
-	ownPool bool
+	pool *pgxpool.Pool
 }
 
-// NewPGStoreWithPool creates a PGStore using an externally managed pool.
-func NewPGStoreWithPool(ctx context.Context, pool *pgxpool.Pool) (*PGStore, error) {
-	store := &PGStore{pool: pool}
-	if err := store.migrate(ctx); err != nil {
-		return nil, err
-	}
-	return store, nil
-}
-
-func (s *PGStore) Close() {
-	if s != nil && s.pool != nil && s.ownPool {
-		s.pool.Close()
-	}
-}
-func (s *PGStore) migrate(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, `
-CREATE TABLE IF NOT EXISTS reminders (
- id TEXT PRIMARY KEY, user_id TEXT NOT NULL, channel TEXT NOT NULL, thread_ts TEXT NOT NULL DEFAULT '',
- message TEXT NOT NULL, run_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
- sent_at TIMESTAMPTZ, claim_until TIMESTAMPTZ
-);
-CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders (run_at) WHERE sent_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_reminders_user_pending ON reminders (user_id, run_at) WHERE sent_at IS NULL;`)
-	if err != nil {
-		return fmt.Errorf("migrate reminders: %w", err)
-	}
-	return nil
-}
+// NewPGStore uses a shared pool and assumes schema/postgres.sql is installed.
+func NewPGStore(pool *pgxpool.Pool) *PGStore { return &PGStore{pool: pool} }
 func (s *PGStore) Create(ctx context.Context, r Reminder) (Reminder, error) {
 	err := s.pool.QueryRow(ctx, `INSERT INTO reminders (id,user_id,channel,thread_ts,message,run_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING created_at`, r.ID, r.UserID, r.Channel, r.ThreadTS, r.Message, r.RunAt).Scan(&r.CreatedAt)
 	if err != nil {

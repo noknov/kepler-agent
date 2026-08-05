@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -49,89 +48,6 @@ type Store interface {
 	UpsertAsset(ctx context.Context, asset Asset) (Asset, error)
 	DeleteAsset(ctx context.Context, userID string, kind AssetKind, id string) error
 	DeleteAssets(ctx context.Context, userID string, kind AssetKind) error
-}
-
-type MemoryStore struct {
-	mu       sync.Mutex
-	settings map[string]Settings
-	assets   map[string]Asset
-}
-
-func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{
-		settings: map[string]Settings{},
-		assets:   map[string]Asset{},
-	}
-}
-
-func (s *MemoryStore) GetSettings(_ context.Context, userID string) (Settings, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if settings, ok := s.settings[userID]; ok {
-		return settings, nil
-	}
-	return Settings{UserID: userID, WebSearchEnabled: true}, nil
-}
-
-func (s *MemoryStore) SetWebSearchEnabled(_ context.Context, userID string, enabled bool) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := time.Now().UTC()
-	s.settings[userID] = Settings{UserID: userID, WebSearchEnabled: enabled, UpdatedAt: now}
-	return nil
-}
-
-func (s *MemoryStore) ListAssets(_ context.Context, userID string, kind AssetKind) ([]Asset, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var out []Asset
-	for _, asset := range s.assets {
-		if asset.UserID == userID && asset.Kind == kind && asset.Active {
-			out = append(out, asset)
-		}
-	}
-	sortAssets(out)
-	return out, nil
-}
-
-func (s *MemoryStore) UpsertAsset(_ context.Context, asset Asset) (Asset, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	asset = normalizeAsset(asset)
-	if err := validateAsset(asset); err != nil {
-		return Asset{}, err
-	}
-	now := time.Now().UTC()
-	if existing, ok := s.assets[asset.ID]; ok && !existing.CreatedAt.IsZero() {
-		asset.CreatedAt = existing.CreatedAt
-	} else {
-		asset.CreatedAt = now
-	}
-	asset.UpdatedAt = now
-	asset.Active = true
-	s.assets[asset.ID] = asset
-	return asset, nil
-}
-
-func (s *MemoryStore) DeleteAssets(_ context.Context, userID string, kind AssetKind) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for id, asset := range s.assets {
-		if asset.UserID == userID && asset.Kind == kind {
-			delete(s.assets, id)
-		}
-	}
-	return nil
-}
-
-func (s *MemoryStore) DeleteAsset(_ context.Context, userID string, kind AssetKind, id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	asset, ok := s.assets[id]
-	if ok && asset.UserID == userID && asset.Kind == kind {
-		delete(s.assets, id)
-	}
-	return nil
 }
 
 func BuildAsset(kind AssetKind, userID string, file slack.File, data []byte) (Asset, error) {

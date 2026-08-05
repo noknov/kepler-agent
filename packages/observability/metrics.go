@@ -1,13 +1,16 @@
 package observability
 
 import (
+	"context"
 	"encoding/json"
 	"log"
+	"math"
 	"net/http"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/noknov/slack-copilot-agent/packages/agentprotocol"
 	"github.com/noknov/slack-copilot-agent/packages/llm"
 )
 
@@ -33,6 +36,9 @@ type LatencySummary struct {
 	Count int64 `json:"count"`
 	Avg   int64 `json:"avg"`
 	Max   int64 `json:"max"`
+	P50   int64 `json:"p50"`
+	P95   int64 `json:"p95"`
+	P99   int64 `json:"p99"`
 }
 
 type TokenUsage struct {
@@ -45,13 +51,16 @@ type TokenUsage struct {
 }
 
 type Recorder struct {
-	mu         sync.Mutex
-	startedAt  time.Time
-	snap       Snapshot
-	latSum     int64
-	llmLatSum  int64
-	toolLatSum int64
-	rates      CostRates
+	mu                 sync.Mutex
+	startedAt          time.Time
+	snap               Snapshot
+	latSum             int64
+	llmLatSum          int64
+	toolLatSum         int64
+	latencySamples     []int64
+	llmLatencySamples  []int64
+	toolLatencySamples []int64
+	rates              CostRates
 }
 
 func NewRecorder() *Recorder {
@@ -130,6 +139,22 @@ func (r *Recorder) Event(name string, metadata map[string]any) {
 	}
 }
 
+func (r *Recorder) Publish(_ context.Context, event agentprotocol.Event) {
+	metadata := map[string]any{
+		"thread_id": event.ThreadID,
+		"turn_id":   event.TurnID,
+		"status":    string(event.Status),
+	}
+	if event.Item != nil {
+		metadata["item_kind"] = event.Item.Kind
+		metadata["item_name"] = event.Item.Name
+		if event.Item.Error != "" {
+			metadata["error"] = event.Item.Error
+		}
+	}
+	r.Event(string(event.Type), metadata)
+}
+
 func (r *Recorder) Reaction(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -149,6 +174,14 @@ func (r *Recorder) addLatencyLocked(summary *LatencySummary, sum *int64, d time.
 	summary.Avg = *sum / summary.Count
 	if ms > summary.Max {
 		summary.Max = ms
+	}
+	switch summary {
+	case &r.snap.LatencyMS:
+		r.latencySamples = appendBounded(r.latencySamples, ms)
+	case &r.snap.LLMLatencyMS:
+		r.llmLatencySamples = appendBounded(r.llmLatencySamples, ms)
+	case &r.snap.ToolLatencyMS:
+		r.toolLatencySamples = appendBounded(r.toolLatencySamples, ms)
 	}
 }
 
@@ -170,7 +203,9 @@ func (r *Recorder) Snapshot() Snapshot {
 	cp.AgentEvents = copyMap(r.snap.AgentEvents)
 	cp.ReactionFeedback = copyMap(r.snap.ReactionFeedback)
 	cp.LastErrors = append([]string(nil), r.snap.LastErrors...)
-	sort.Strings(cp.LastErrors)
+	setPercentiles(&cp.LatencyMS, r.latencySamples)
+	setPercentiles(&cp.LLMLatencyMS, r.llmLatencySamples)
+	setPercentiles(&cp.ToolLatencyMS, r.toolLatencySamples)
 	return cp
 }
 
@@ -193,4 +228,37 @@ func copyMap(in map[string]int64) map[string]int64 {
 		out[k] = v
 	}
 	return out
+}
+
+const latencySampleLimit = 4096
+
+func appendBounded(samples []int64, value int64) []int64 {
+	if len(samples) < latencySampleLimit {
+		return append(samples, value)
+	}
+	copy(samples, samples[1:])
+	samples[len(samples)-1] = value
+	return samples
+}
+
+func setPercentiles(summary *LatencySummary, samples []int64) {
+	if len(samples) == 0 {
+		return
+	}
+	values := append([]int64(nil), samples...)
+	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	summary.P50 = percentile(values, 0.50)
+	summary.P95 = percentile(values, 0.95)
+	summary.P99 = percentile(values, 0.99)
+}
+
+func percentile(values []int64, quantile float64) int64 {
+	index := int(math.Ceil(float64(len(values))*quantile)) - 1
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(values) {
+		index = len(values) - 1
+	}
+	return values[index]
 }

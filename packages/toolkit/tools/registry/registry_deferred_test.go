@@ -278,7 +278,7 @@ func TestMetadataPolicyFiltersByDependencyAndSurface(t *testing.T) {
 		t.Fatalf("Names() = %#v, want hidden missing-dependency tool", reg.Names())
 	}
 
-	reg = NewWithPolicy(CapabilityPolicy{Surface: "slack", AvailableDeps: map[string]bool{"slack": true}})
+	reg = NewWithPolicy(CapabilityPolicy{Surface: "slack", AvailableDeps: map[string]bool{"slack": true}, AllowedWriteTools: map[string]bool{"slack-write": true}})
 	reg.Register(slackWrite)
 	if _, err := reg.Execute(context.Background(), "slack-write", nil, Runtime{}); err != nil {
 		t.Fatalf("Execute allowed metadata write failed: %v", err)

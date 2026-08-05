@@ -100,6 +100,16 @@ type Runner struct {
 	OnStream             func(StreamEvent)
 	OnUsage              func(llm.Usage)
 	OnLLMStepComplete    func()
+	OnToolEvent          func(ToolEvent)
+}
+
+type ToolEvent struct {
+	Phase     string
+	ID        string
+	Name      string
+	StartedAt time.Time
+	Duration  time.Duration
+	Error     error
 }
 
 type RunnerPolicy struct {
@@ -1193,10 +1203,16 @@ func (r Runner) executeSingleTool(ctx context.Context, call llm.ToolCall, req Re
 	}
 	args := json.RawMessage(call.Function.Arguments)
 	start := time.Now()
+	if r.OnToolEvent != nil {
+		r.OnToolEvent(ToolEvent{Phase: "started", ID: call.ID, Name: name, StartedAt: start.UTC()})
+	}
 	result, err := r.Tools.Execute(ctx, name, args, req.Runtime)
 	duration := time.Since(start)
+	if r.OnToolEvent != nil {
+		r.OnToolEvent(ToolEvent{Phase: "completed", ID: call.ID, Name: name, StartedAt: start.UTC(), Duration: duration, Error: err})
+	}
 	content := ""
-	needsUserInput := result.NeedsUserInput || result.WaitForUser
+	needsUserInput := result.NeedsUserInput
 	if err != nil {
 		content = "[tool error] " + err.Error()
 	} else if needsUserInput {

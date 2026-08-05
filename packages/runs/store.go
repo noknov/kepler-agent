@@ -1,18 +1,11 @@
 package runs
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
-	"errors"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/llm"
@@ -105,16 +98,10 @@ type Store interface {
 	AddFeedbackForMessage(ctx context.Context, channel, messageTS string, feedback Feedback) (string, bool, error)
 }
 
-type FileStore struct {
-	dir string
-	mu  sync.Mutex
-}
-
-func NewFileStore(dir string) (*FileStore, error) {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, err
-	}
-	return &FileStore{dir: dir}, nil
+// StepStore is implemented by stores that persist run items append-only. It
+// avoids rewriting an ever-growing Run document after every agent step.
+type StepStore interface {
+	AppendStep(ctx context.Context, runID string, step Step) error
 }
 
 func NewID() string {
@@ -144,254 +131,6 @@ func NewSpanID() string {
 func HashText(text string) string {
 	sum := sha256.Sum256([]byte(text))
 	return "sha256:" + hex.EncodeToString(sum[:8])
-}
-
-func (s *FileStore) Save(ctx context.Context, run Run) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.saveLocked(run)
-}
-
-func (s *FileStore) Get(ctx context.Context, id string) (Run, bool, error) {
-	select {
-	case <-ctx.Done():
-		return Run{}, false, ctx.Err()
-	default:
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	data, err := os.ReadFile(s.path(id))
-	if errors.Is(err, os.ErrNotExist) {
-		return Run{}, false, nil
-	}
-	if err != nil {
-		return Run{}, false, err
-	}
-	var run Run
-	if err := json.Unmarshal(data, &run); err != nil {
-		return Run{}, false, err
-	}
-	return run, true, nil
-}
-
-func (s *FileStore) AddFeedback(ctx context.Context, runID string, feedback Feedback) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	data, err := os.ReadFile(s.path(runID))
-	if err != nil {
-		return err
-	}
-	var run Run
-	if err := json.Unmarshal(data, &run); err != nil {
-		return err
-	}
-	run.Feedback = append(run.Feedback, feedback)
-	run.Quality = scoreFeedback(run.Feedback)
-	return s.saveLocked(run)
-}
-
-func (s *FileStore) AddFeedbackForMessage(ctx context.Context, channel, messageTS string, feedback Feedback) (string, bool, error) {
-	select {
-	case <-ctx.Done():
-		return "", false, ctx.Err()
-	default:
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	entries, err := os.ReadDir(s.dir)
-	if err != nil {
-		return "", false, err
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(s.dir, entry.Name()))
-		if err != nil {
-			return "", false, err
-		}
-		var run Run
-		if err := json.Unmarshal(data, &run); err != nil {
-			continue
-		}
-		if run.SlackChannel == channel && run.SlackMessageTS == messageTS {
-			run.Feedback = append(run.Feedback, feedback)
-			run.Quality = scoreRun(run)
-			if err := s.saveLocked(run); err != nil {
-				return "", false, err
-			}
-			return run.ID, true, nil
-		}
-	}
-	return "", false, nil
-}
-
-func (s *FileStore) List(ctx context.Context, limit int) ([]Run, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if limit <= 0 {
-		limit = 20
-	}
-	entries, err := os.ReadDir(s.dir)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Run, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(s.dir, entry.Name()))
-		if err != nil {
-			continue
-		}
-		var run Run
-		if err := json.Unmarshal(data, &run); err != nil {
-			continue
-		}
-		out = append(out, run)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].StartedAt.After(out[j].StartedAt)
-	})
-	if len(out) > limit {
-		out = out[:limit]
-	}
-	return out, nil
-}
-
-func (s *FileStore) ListBySession(ctx context.Context, sessionID string) ([]Run, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-	if sessionID == "" {
-		return nil, nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	entries, err := os.ReadDir(s.dir)
-	if err != nil {
-		return nil, err
-	}
-	var out []Run
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(s.dir, entry.Name()))
-		if err != nil {
-			continue
-		}
-		// Fast path: skip JSON decode if session ID is not in the raw bytes.
-		// session_id values are always plain ASCII, so a bytes search is safe.
-		if !bytes.Contains(data, []byte(sessionID)) {
-			continue
-		}
-		var run Run
-		if err := json.Unmarshal(data, &run); err != nil {
-			continue
-		}
-		if run.SessionID != sessionID {
-			continue
-		}
-		out = append(out, run)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].StartedAt.After(out[j].StartedAt)
-	})
-	return out, nil
-}
-
-func (s *FileStore) UserAuditSummaries(ctx context.Context, start, end time.Time) ([]UserAuditSummary, error) {
-	all, err := s.List(ctx, 100000)
-	if err != nil {
-		return nil, err
-	}
-	byUser := map[string]*UserAuditSummary{}
-	conversations := map[string]map[string]bool{}
-	for _, run := range all {
-		if run.UserID == "" || run.StartedAt.Before(start) || !run.StartedAt.Before(end) {
-			continue
-		}
-		summary := byUser[run.UserID]
-		if summary == nil {
-			summary = &UserAuditSummary{UserID: run.UserID, FirstStartedAt: run.StartedAt, LastStartedAt: run.StartedAt}
-			byUser[run.UserID] = summary
-			conversations[run.UserID] = map[string]bool{}
-		}
-		summary.Requests++
-		switch run.Status {
-		case "completed":
-			summary.Completed++
-		case "error":
-			summary.Failed++
-		}
-		summary.PromptTokens += int64(run.Usage.PromptTokens)
-		summary.CompletionTokens += int64(run.Usage.CompletionTokens)
-		summary.TotalTokens += int64(BilledTokens(run.Usage))
-		summary.EstimatedCostUSD += run.EstimatedCostUSD
-		if run.StartedAt.Before(summary.FirstStartedAt) {
-			summary.FirstStartedAt = run.StartedAt
-		}
-		if run.StartedAt.After(summary.LastStartedAt) {
-			summary.LastStartedAt = run.StartedAt
-		}
-		key := run.SessionID
-		if key == "" {
-			key = run.Channel + ":" + run.ThreadTS
-		}
-		if key != "" {
-			conversations[run.UserID][key] = true
-		}
-	}
-	out := make([]UserAuditSummary, 0, len(byUser))
-	for userID, summary := range byUser {
-		summary.Conversations = len(conversations[userID])
-		out = append(out, *summary)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].LastStartedAt.After(out[j].LastStartedAt)
-	})
-	return out, nil
-}
-
-func (s *FileStore) saveLocked(run Run) error {
-	data, err := json.MarshalIndent(run, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := s.path(run.ID) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path(run.ID))
-}
-
-func (s *FileStore) path(id string) string {
-	id = strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			return r
-		}
-		return '_'
-	}, id)
-	return filepath.Join(s.dir, id+".json")
 }
 
 func scoreFeedback(feedback []Feedback) *QualityScore {

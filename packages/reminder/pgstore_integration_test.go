@@ -21,10 +21,7 @@ func TestPGStoreIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	store, err := NewPGStoreWithPool(ctx, pool)
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := NewPGStore(pool)
 	id := "test-reminder-" + time.Now().UTC().Format("20060102150405.000000000")
 	t.Cleanup(func() { _, _ = store.pool.Exec(ctx, "DELETE FROM reminders WHERE id=$1", id) })
 	if _, err := store.Create(ctx, Reminder{ID: id, UserID: "U-test", Channel: "C-test", Message: "test", RunAt: time.Now().Add(-time.Second)}); err != nil {

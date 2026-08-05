@@ -2,7 +2,10 @@ package worker
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -11,6 +14,8 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/config"
 	"github.com/noknov/slack-copilot-agent/packages/conversation"
 	"github.com/noknov/slack-copilot-agent/packages/health"
+	"github.com/noknov/slack-copilot-agent/packages/infra/httpguard"
+	sharedlogging "github.com/noknov/slack-copilot-agent/packages/infra/logging"
 	"github.com/noknov/slack-copilot-agent/packages/observability"
 	"github.com/noknov/slack-copilot-agent/packages/platform"
 	"github.com/noknov/slack-copilot-agent/packages/prompts"
@@ -44,6 +49,7 @@ type Service struct {
 	eventCond    *sync.Cond
 	activeEvents int
 	draining     atomic.Bool
+	serveErr     chan error
 }
 
 func Run(ctx context.Context) error {
@@ -51,6 +57,7 @@ func Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	sharedlogging.Configure(cfg.Observing.LogLevel)
 	service, err := New(ctx, cfg)
 	if err != nil {
 		return err
@@ -97,6 +104,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	healthService.Redis = stores.Redis
 
 	conv := conversation.NewService(stores.Sessions, slackClient, rt.Runner, rt.Memory, rt.Prompt, rt.Redactor, recorder)
+	conv.Core = rt.Core
 	runSemaphore := make(chan struct{}, cfg.Tools.AgentMaxConcurrentRuns)
 	conv.RunSemaphore = runSemaphore
 	conv.MaxConcurrentRuns = cfg.Tools.AgentMaxConcurrentRuns
@@ -141,6 +149,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 	conv.WebSearchEnabled = handler.WebSearchPreference
 	conv.Multimodal = multimodal
+	conv.Events = recorder
 
 	s := &Service{
 		cfg:       cfg,
@@ -154,6 +163,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		handler:   handler,
 		ctx:       serviceCtx,
 		cancel:    serviceCancel,
+		serveErr:  make(chan error, 1),
 	}
 	s.eventCond = sync.NewCond(&s.eventMu)
 	s.slackWorker = &slackevents.Worker{
@@ -164,6 +174,9 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		QueueSize:      cfg.HTTP.EventQueueSize,
 		EventTimeout:   cfg.HTTP.EventTimeout,
 		InboxLease:     cfg.HTTP.EventInboxLease,
+		MaxAttempts:    cfg.HTTP.EventMaxAttempts,
+		RetryBase:      cfg.HTTP.EventRetryBase,
+		RetryMax:       cfg.HTTP.EventRetryMax,
 		IsDraining:     func() bool { return s.draining.Load() },
 		BeginEvent:     s.beginEvent,
 		EndEvent:       s.endEvent,
@@ -197,10 +210,15 @@ func (s *Service) StartBackground() {
 	if s.slackWorker != nil {
 		s.slackWorker.Start(s.ctx)
 	}
+	s.Go(s.serveHealth)
 }
 
 func (s *Service) RunUntilDone(ctx context.Context) error {
-	<-ctx.Done()
+	var runErr error
+	select {
+	case <-ctx.Done():
+	case runErr = <-s.serveErr:
+	}
 	s.draining.Store(true)
 	if !s.waitEvents(s.cfg.HTTP.ShutdownTimeout) {
 		log.Printf("shutdown: timed out waiting for in-flight Slack events")
@@ -208,7 +226,70 @@ func (s *Service) RunUntilDone(ctx context.Context) error {
 	if s.cancel != nil {
 		s.cancel()
 	}
-	return nil
+	return runErr
+}
+
+func (s *Service) serveHealth(ctx context.Context) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/livez", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+	mux.HandleFunc("/readyz", s.handleReady)
+	mux.Handle("/metrics", s.metrics)
+	mux.HandleFunc("/drain", s.handleDrain)
+	server := &http.Server{
+		Addr: s.cfg.HTTP.Addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second,
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.HTTP.ShutdownTimeout)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	}()
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		select {
+		case s.serveErr <- fmt.Errorf("worker health server: %w", err):
+		default:
+		}
+		return
+	}
+	<-done
+}
+
+func (s *Service) handleReady(w http.ResponseWriter, r *http.Request) {
+	if s.draining.Load() {
+		http.Error(w, "draining", http.StatusServiceUnavailable)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if s.stores == nil || s.stores.PGPool == nil || s.stores.Redis == nil {
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.stores.PGPool.Ping(ctx); err != nil {
+		http.Error(w, "postgres unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.stores.Redis.Ping(ctx); err != nil {
+		http.Error(w, "redis unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	_, _ = w.Write([]byte("ready"))
+}
+
+func (s *Service) handleDrain(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !httpguard.IsDirectLoopback(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	s.draining.Store(true)
+	_, _ = w.Write([]byte("draining"))
 }
 
 func (s *Service) Close() {

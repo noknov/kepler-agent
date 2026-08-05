@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent"
+	"github.com/noknov/slack-copilot-agent/packages/agentcore"
+	"github.com/noknov/slack-copilot-agent/packages/agentprotocol"
 	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
 	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/memory"
@@ -45,6 +47,7 @@ type Service struct {
 	Store          session.Store
 	Messenger      Messenger
 	Runner         agent.Runner
+	Core           *agentcore.Core
 	Compactor      *memory.Compactor
 	Memory         memory.Builder
 	MemoryPipeline *memory.Pipeline
@@ -64,6 +67,7 @@ type Service struct {
 	WebSearchEnabled func(userID string) bool
 	UserPrefs        userprefs.Store
 	CostRates        observability.CostRates
+	Events           agentprotocol.Sink
 	HealthSummary    func() string
 	AutoTTS          AutoTTSFunc
 	TTSSummarizer    *TTSSummarizer
@@ -101,6 +105,7 @@ func NewService(store session.Store, messenger Messenger, runner agent.Runner, m
 		Store:          store,
 		Messenger:      messenger,
 		Runner:         runner,
+		Core:           &agentcore.Core{Runner: runner},
 		Compactor:      runner.Compactor,
 		Memory:         memoryBuilder,
 		MemoryPipeline: memory.NewPipeline(memoryBuilder, runner.Compactor),
@@ -224,19 +229,20 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		cancelRun()
 	}()
 
-	runner := s.Runner
-	runner.Tools = runner.Tools.Clone()
-	if route.Model != "" {
-		runner.Model = route.Model
+	model := route.Model
+	if model == "" {
+		model = s.Runner.Model
 	}
+	var observer agent.Observer
 	if runObserver != nil {
-		runner.Observer = multiObserver{s.Metrics, runObserver}
+		observer = multiObserver{s.Metrics, runObserver}
+	} else {
+		observer = s.Metrics
 	}
-	progress.WireRunner(&runner)
 
 	contentParts := req.ContentParts
 	userText := req.Text
-	if len(contentParts) > 0 && s.Multimodal != nil && !s.Multimodal(runner.Model) {
+	if len(contentParts) > 0 && s.Multimodal != nil && !s.Multimodal(model) {
 		contentParts, userText = stripImageParts(contentParts, userText, locale)
 	}
 
@@ -282,7 +288,20 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 	if webSearchOff {
 		agentReq.DisabledTools = []string{"web-search", "web-read_page"}
 	}
-	result, err := runner.Run(runCtx, agentReq)
+	core := s.Core
+	if core == nil {
+		core = &agentcore.Core{Runner: s.Runner}
+	}
+	turnResult, err := core.Execute(runCtx, agentcore.TurnRequest{
+		ThreadID: sessionID,
+		TurnID:   runID,
+		Model:    model,
+		Agent:    agentReq,
+		Observer: observer,
+		Hooks:    progress.CoreHooks(),
+		Events:   s.Events,
+	})
+	result := turnResult.Agent
 	evidenceText := webEvidenceMarkdown(result.Generated, locale)
 	if progress.AnswerStream() != nil && evidenceText != "" {
 		progress.AnswerStream().Write(evidenceText)
@@ -465,7 +484,7 @@ func (s *Service) newRunObserver(sessionID string, req Request, startedAt time.T
 	if s.RunStore == nil {
 		return nil
 	}
-	return runs.NewObserver(s.RunStore, runs.Run{
+	observer := runs.NewObserver(s.RunStore, runs.Run{
 		ID:        runs.NewID(),
 		SessionID: sessionID,
 		EventID:   req.EventID,
@@ -477,6 +496,13 @@ func (s *Service) newRunObserver(sessionID string, req Request, startedAt time.T
 		Status:    "running",
 		StartedAt: startedAt.UTC(),
 	}, s.CostRates)
+	if s.Metrics != nil {
+		observer.OnPersistenceError = s.Metrics.Error
+		if err := observer.PersistenceError(); err != nil {
+			s.Metrics.Error(err)
+		}
+	}
+	return observer
 }
 
 func contextUsageMarkdown(maxContextTokens int, base, generated []llm.Message) string {

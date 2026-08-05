@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,6 +20,8 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/conversation"
 	"github.com/noknov/slack-copilot-agent/packages/eventinbox"
 	"github.com/noknov/slack-copilot-agent/packages/health"
+	"github.com/noknov/slack-copilot-agent/packages/infra/httpguard"
+	sharedlogging "github.com/noknov/slack-copilot-agent/packages/infra/logging"
 	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
 	"github.com/noknov/slack-copilot-agent/packages/observability"
 	"github.com/noknov/slack-copilot-agent/packages/platform"
@@ -45,6 +46,7 @@ func Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	sharedlogging.Configure(cfg.Observing.LogLevel)
 	server, err := NewServerWithOptions(cfg, AllInOneOptions())
 	if err != nil {
 		return err
@@ -119,21 +121,6 @@ func (s *Server) Close() {
 	if s.redis != nil {
 		_ = s.redis.Close()
 	}
-	if s.eventInbox != nil {
-		s.eventInbox.Close()
-	}
-	if s.runPGStore != nil {
-		s.runPGStore.Close()
-	}
-	if s.userPrefsStore != nil {
-		s.userPrefsStore.Close()
-	}
-	if s.sessionStore != nil {
-		s.sessionStore.Close()
-	}
-	if s.reminderStore != nil {
-		s.reminderStore.Close()
-	}
 	if s.pgPool != nil {
 		s.pgPool.Close()
 	}
@@ -161,6 +148,7 @@ type conversationDeps struct {
 
 func newConversationService(deps conversationDeps) *conversation.Service {
 	conv := conversation.NewService(deps.sessionStore, deps.slackClient, deps.runtime.Runner, deps.runtime.Memory, deps.runtime.Prompt, deps.runtime.Redactor, deps.recorder)
+	conv.Core = deps.runtime.Core
 	conv.RunSemaphore = deps.runSemaphore
 	conv.MaxConcurrentRuns = deps.cfg.Tools.AgentMaxConcurrentRuns
 	conv.Redis = deps.redis
@@ -247,6 +235,7 @@ func NewServerWithOptions(cfg config.Config, opts Options) (*Server, error) {
 		multimodal:     multimodal,
 		healthSummary:  healthService.SummaryPrompt,
 	})
+	conv.Events = recorder
 
 	s := &Server{
 		opts:           opts,
@@ -272,6 +261,9 @@ func NewServerWithOptions(cfg config.Config, opts Options) (*Server, error) {
 			QueueSize:    cfg.HTTP.EventQueueSize,
 			EventTimeout: cfg.HTTP.EventTimeout,
 			InboxLease:   cfg.HTTP.EventInboxLease,
+			MaxAttempts:  cfg.HTTP.EventMaxAttempts,
+			RetryBase:    cfg.HTTP.EventRetryBase,
+			RetryMax:     cfg.HTTP.EventRetryMax,
 		},
 		pgPool:              pgPool,
 		redis:               rdb,
@@ -433,7 +425,7 @@ func (s *Server) handleDrain(w http.ResponseWriter, r *http.Request) {
 		s.writeHTTPError(w, r, http.StatusMethodNotAllowed, "method not allowed", nil)
 		return
 	}
-	if !isLocalRequest(r) {
+	if !httpguard.IsDirectLoopback(r) {
 		s.writeHTTPError(w, r, http.StatusForbidden, "forbidden", nil)
 		return
 	}
@@ -554,7 +546,7 @@ func (s *Server) writeHTTPError(w http.ResponseWriter, r *http.Request, status i
 func (s *Server) authorizeObservability(r *http.Request) bool {
 	token := strings.TrimSpace(s.cfg.Observing.AdminToken)
 	if token == "" {
-		return s.cfg.Observing.AllowUnauthenticated && isLocalRequest(r)
+		return s.cfg.Observing.AllowUnauthenticated && httpguard.IsDirectLoopback(r)
 	}
 	got := strings.TrimSpace(r.Header.Get("X-Slack-Copilot-Agent-Admin-Token"))
 	if got == "" {
@@ -570,18 +562,6 @@ func (s *Server) authorizeObservability(r *http.Request) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1
-}
-
-func isLocalRequest(r *http.Request) bool {
-	if r.Header.Get("Forwarded") != "" || r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("X-Real-IP") != "" {
-		return false
-	}
-	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
-	if err != nil {
-		host = strings.TrimSpace(r.RemoteAddr)
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 func isAppDM(ev slack.Event) bool {

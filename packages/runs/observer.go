@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -15,13 +16,15 @@ import (
 )
 
 type Observer struct {
-	Store    Store
-	Run      *Run
-	Rates    observability.CostRates
-	mu       sync.Mutex
-	stepSeq  int
-	started  time.Time
-	finished bool
+	Store              Store
+	Run                *Run
+	Rates              observability.CostRates
+	mu                 sync.Mutex
+	stepSeq            int
+	started            time.Time
+	finished           bool
+	persistErr         error
+	OnPersistenceError func(error)
 }
 
 func NewObserver(store Store, run Run, rates observability.CostRates) *Observer {
@@ -39,7 +42,7 @@ func NewObserver(store Store, run Run, rates observability.CostRates) *Observer 
 		run.Status = "running"
 	}
 	o := &Observer{Store: store, Run: &run, Rates: rates, started: run.StartedAt}
-	o.save(context.Background())
+	o.saveWithTimeout()
 	return o
 }
 
@@ -118,7 +121,7 @@ func (o *Observer) RecordErrorStack(stack string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.Run.ErrorStack = stack
-	o.saveLocked(context.Background())
+	o.saveLockedWithTimeout()
 }
 
 func (o *Observer) Finish(status, errorID string, err error, final string) {
@@ -137,7 +140,7 @@ func (o *Observer) Finish(status, errorID string, err error, final string) {
 	o.Run.EndedAt = time.Now().UTC()
 	o.Run.DurationMS = o.Run.EndedAt.Sub(o.Run.StartedAt).Milliseconds()
 	o.Run.Quality = scoreRun(*o.Run)
-	o.saveLocked(context.Background())
+	o.saveLockedWithTimeout()
 }
 
 // BilledTokens returns the total number of tokens billed across all completed
@@ -171,7 +174,7 @@ func (o *Observer) LinkSlackMessage(channel, messageTS string) {
 	defer o.mu.Unlock()
 	o.Run.SlackChannel = channel
 	o.Run.SlackMessageTS = messageTS
-	o.saveLocked(context.Background())
+	o.saveLockedWithTimeout()
 }
 
 func (o *Observer) appendStepLocked(step Step) {
@@ -181,7 +184,13 @@ func (o *Observer) appendStepLocked(step Step) {
 	step.ParentSpanID = o.Run.TraceID
 	step.StartedAt = time.Now().UTC().Add(-time.Duration(step.DurationMS) * time.Millisecond)
 	o.Run.Steps = append(o.Run.Steps, step)
-	o.saveLocked(context.Background())
+	if store, ok := o.Store.(StepStore); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		o.recordPersistenceErrorLocked(store.AppendStep(ctx, o.Run.ID, step))
+		cancel()
+	} else {
+		o.saveLockedWithTimeout()
+	}
 }
 
 func toolCallNames(calls []llm.ToolCall) []string {
@@ -206,11 +215,42 @@ func (o *Observer) save(ctx context.Context) {
 	o.saveLocked(ctx)
 }
 
+func (o *Observer) saveWithTimeout() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	o.save(ctx)
+}
+
+func (o *Observer) saveLockedWithTimeout() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	o.saveLocked(ctx)
+}
+
 func (o *Observer) saveLocked(ctx context.Context) {
 	if o.Store == nil || o.Run == nil {
 		return
 	}
-	_ = o.Store.Save(ctx, *o.Run)
+	o.recordPersistenceErrorLocked(o.Store.Save(ctx, *o.Run))
+}
+
+func (o *Observer) PersistenceError() error {
+	if o == nil {
+		return nil
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.persistErr
+}
+
+func (o *Observer) recordPersistenceErrorLocked(err error) {
+	if err == nil {
+		return
+	}
+	o.persistErr = errors.Join(o.persistErr, err)
+	if o.OnPersistenceError != nil {
+		o.OnPersistenceError(err)
+	}
 }
 
 func errorString(err error) string {

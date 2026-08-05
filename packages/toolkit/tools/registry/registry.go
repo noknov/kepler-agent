@@ -63,10 +63,6 @@ type Result struct {
 	// the model lacks a preference, direction, or missing detail from the user.
 	// This is not a permission approval mechanism.
 	NeedsUserInput bool
-
-	// WaitForUser is kept for compatibility with older tools/tests. New tools
-	// should set NeedsUserInput instead.
-	WaitForUser bool
 }
 
 type Tool interface {
@@ -521,9 +517,6 @@ func (r *Registry) canExpose(name string, tool Tool) bool {
 		return false
 	}
 	if meta.Risk == "" || meta.Risk == RiskRead {
-		return true
-	}
-	if surfaceMatched {
 		return true
 	}
 	if r.policy.AllowedRisks[meta.Risk] {
