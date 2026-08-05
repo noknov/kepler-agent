@@ -46,17 +46,14 @@ Follow these detailed steps.
 
 func TestLoadToolPrefersUserSkill(t *testing.T) {
 	ctx := context.Background()
-	store := userprefs.NewMemoryStore()
-	if _, err := store.UpsertAsset(ctx, userprefs.Asset{
+	store := &skillTestStore{asset: userprefs.Asset{
 		UserID:      "U1",
 		Kind:        userprefs.KindSkill,
 		Name:        "demo",
 		Description: "User override.",
 		Content:     "Follow the user's detailed workflow.",
 		Active:      true,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	}}
 
 	result, err := (LoadTool{UserPrefs: store}).Execute(ctx, json.RawMessage(`{"name":"demo"}`), registry.Runtime{UserID: "U1"})
 	if err != nil {
@@ -66,3 +63,24 @@ func TestLoadToolPrefersUserSkill(t *testing.T) {
 		t.Fatalf("user skill body missing:\n%s", result.Content)
 	}
 }
+
+type skillTestStore struct{ asset userprefs.Asset }
+
+func (s *skillTestStore) GetSettings(_ context.Context, userID string) (userprefs.Settings, error) {
+	return userprefs.Settings{UserID: userID, WebSearchEnabled: true}, nil
+}
+func (s *skillTestStore) SetWebSearchEnabled(context.Context, string, bool) error { return nil }
+func (s *skillTestStore) ListAssets(_ context.Context, userID string, kind userprefs.AssetKind) ([]userprefs.Asset, error) {
+	if s.asset.UserID == userID && s.asset.Kind == kind {
+		return []userprefs.Asset{s.asset}, nil
+	}
+	return nil, nil
+}
+func (s *skillTestStore) UpsertAsset(_ context.Context, asset userprefs.Asset) (userprefs.Asset, error) {
+	s.asset = asset
+	return asset, nil
+}
+func (s *skillTestStore) DeleteAsset(context.Context, string, userprefs.AssetKind, string) error {
+	return nil
+}
+func (s *skillTestStore) DeleteAssets(context.Context, string, userprefs.AssetKind) error { return nil }

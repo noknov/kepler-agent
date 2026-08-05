@@ -14,24 +14,24 @@ type Authorization struct {
 }
 
 type Event struct {
-	Type        string `json:"type"`
-	Subtype     string `json:"subtype,omitempty"`
-	User        string `json:"user,omitempty"`
-	UserID      string `json:"user_id,omitempty"`
-	Text        string `json:"text,omitempty"`
-	Channel     string `json:"channel,omitempty"`
-	ChannelType string `json:"channel_type,omitempty"`
-	TS          string `json:"ts,omitempty"`
-	ThreadTS    string `json:"thread_ts,omitempty"`
-	BotID       string `json:"bot_id,omitempty"`
-	Reaction    string `json:"reaction,omitempty"`
-	Tab         string `json:"tab,omitempty"`
+	Type        string     `json:"type"`
+	Subtype     string     `json:"subtype,omitempty"`
+	User        string     `json:"user,omitempty"`
+	UserID      string     `json:"user_id,omitempty"`
+	Text        string     `json:"text,omitempty"`
+	Channel     string     `json:"channel,omitempty"`
+	ChannelType string     `json:"channel_type,omitempty"`
+	TS          string     `json:"ts,omitempty"`
+	ThreadTS    string     `json:"thread_ts,omitempty"`
+	BotID       string     `json:"bot_id,omitempty"`
+	Reaction    string     `json:"reaction,omitempty"`
+	Tab         string     `json:"tab,omitempty"`
 	Context     AppContext `json:"context,omitempty"`
-	Item        Item   `json:"item,omitempty"`
-	Files       []File `json:"files,omitempty"`
-	File        File   `json:"file,omitempty"`
-	FileID      string `json:"file_id,omitempty"`
-	ChannelID   string `json:"channel_id,omitempty"`
+	Item        Item       `json:"item,omitempty"`
+	Files       []File     `json:"files,omitempty"`
+	File        File       `json:"file,omitempty"`
+	FileID      string     `json:"file_id,omitempty"`
+	ChannelID   string     `json:"channel_id,omitempty"`
 }
 
 type Item struct {

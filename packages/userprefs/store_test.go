@@ -28,7 +28,7 @@ func TestBuildAssetAcceptsOnlySmallUTF8PromptFiles(t *testing.T) {
 
 func TestRulesPromptMarksUserRulesLowPriority(t *testing.T) {
 	ctx := context.Background()
-	store := NewMemoryStore()
+	store := &promptTestStore{}
 	if _, err := store.UpsertAsset(ctx, Asset{
 		UserID:  "U1",
 		Kind:    KindRule,
@@ -45,3 +45,27 @@ func TestRulesPromptMarksUserRulesLowPriority(t *testing.T) {
 		}
 	}
 }
+
+type promptTestStore struct{ assets []Asset }
+
+func (s *promptTestStore) GetSettings(_ context.Context, userID string) (Settings, error) {
+	return Settings{UserID: userID, WebSearchEnabled: true}, nil
+}
+func (s *promptTestStore) SetWebSearchEnabled(context.Context, string, bool) error { return nil }
+func (s *promptTestStore) ListAssets(_ context.Context, userID string, kind AssetKind) ([]Asset, error) {
+	var out []Asset
+	for _, asset := range s.assets {
+		if asset.UserID == userID && asset.Kind == kind && asset.Active {
+			out = append(out, asset)
+		}
+	}
+	return out, nil
+}
+func (s *promptTestStore) UpsertAsset(_ context.Context, asset Asset) (Asset, error) {
+	asset = normalizeAsset(asset)
+	asset.Active = true
+	s.assets = append(s.assets, asset)
+	return asset, nil
+}
+func (s *promptTestStore) DeleteAsset(context.Context, string, AssetKind, string) error { return nil }
+func (s *promptTestStore) DeleteAssets(context.Context, string, AssetKind) error        { return nil }

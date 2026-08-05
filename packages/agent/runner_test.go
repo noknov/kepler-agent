@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -750,10 +748,12 @@ func TestRunnerAppliesToolResultBudgetBeforeModelCall(t *testing.T) {
 		},
 		{Role: "tool", Name: "echo", ToolCallID: "tool_1", Content: strings.Repeat("x", maxToolResultChars+1000)},
 	}
+	store := &fakeSpillStore{items: map[string]string{}}
 
 	result, err := Runner{LLM: client, Tools: registry.New(), MaxSteps: 1}.Run(context.Background(), Request{
 		Messages: messages,
 		RunID:    "budget-test",
+		Runtime:  registry.Runtime{ToolSpillStore: store},
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -775,7 +775,7 @@ func TestRunnerAppliesToolResultBudgetBeforeModelCall(t *testing.T) {
 
 func TestRunnerSpillsFullFormattedToolOutput(t *testing.T) {
 	runID := "run-full-tool-spill"
-	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(spillDir, runID)) })
+	store := &fakeSpillStore{items: map[string]string{}}
 	tailMarker := "TAIL_MARKER_AFTER_PREVIEW"
 	largeText := strings.Repeat("x", maxToolResultChars+1000) + tailMarker
 	client := &fakeClient{responses: []llm.Response{
@@ -785,31 +785,28 @@ func TestRunnerSpillsFullFormattedToolOutput(t *testing.T) {
 	tools := registry.New()
 	tools.Register(fakeTool{})
 
-	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 3, Format: memory.Builder{}}.Run(context.Background(), Request{RunID: runID})
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 3, Format: memory.Builder{}}.Run(context.Background(), Request{RunID: runID, Runtime: registry.Runtime{ToolSpillStore: store}})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if result.Final != "done" {
 		t.Fatalf("Final = %q, want done", result.Final)
 	}
-	data, err := os.ReadFile(spillPath(runID, "echo", "tool_fullspill"))
-	if err != nil {
-		t.Fatalf("ReadFile(spill) error = %v", err)
-	}
-	if !strings.Contains(string(data), tailMarker) {
+	data := store.items[runID+"/echo/tool_fullspill"]
+	if !strings.Contains(data, tailMarker) {
 		t.Fatalf("spill file lost tail marker; output was truncated before persistence")
 	}
-	if !strings.Contains(string(data), "<evidence source=") {
+	if !strings.Contains(data, "<evidence source=") {
 		t.Fatalf("spill file should contain final formatted tool output")
 	}
-	if strings.Contains(string(data), "[truncated]") {
+	if strings.Contains(data, "[truncated]") {
 		t.Fatalf("spill file should contain full content, not fallback truncation")
 	}
 }
 
 func TestRunnerSpillsWhenFormattingPushesToolOutputOverLimit(t *testing.T) {
 	runID := "run-format-boundary-spill"
-	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(spillDir, runID)) })
+	store := &fakeSpillStore{items: map[string]string{}}
 	nearLimitText := strings.Repeat("x", maxToolResultChars-20)
 	client := &fakeClient{responses: []llm.Response{
 		{Message: toolCallMessage("tool_format_boundary", `{"text":"`+nearLimitText+`"}`)},
@@ -818,21 +815,18 @@ func TestRunnerSpillsWhenFormattingPushesToolOutputOverLimit(t *testing.T) {
 	tools := registry.New()
 	tools.Register(fakeTool{})
 
-	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 3, Format: memory.Builder{}}.Run(context.Background(), Request{RunID: runID})
+	result, err := Runner{LLM: client, Tools: tools, MaxSteps: 3, Format: memory.Builder{}}.Run(context.Background(), Request{RunID: runID, Runtime: registry.Runtime{ToolSpillStore: store}})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if result.Final != "done" {
 		t.Fatalf("Final = %q, want done", result.Final)
 	}
-	data, err := os.ReadFile(spillPath(runID, "echo", "tool_format_boundary"))
-	if err != nil {
-		t.Fatalf("ReadFile(spill) error = %v", err)
-	}
-	if !strings.Contains(string(data), "<evidence source=\"echo\">") {
+	data := store.items[runID+"/echo/tool_format_boundary"]
+	if !strings.Contains(data, "<evidence source=\"echo\">") {
 		t.Fatalf("formatted output should have been spilled once wrapper pushed it over the limit")
 	}
-	if strings.Contains(string(data), "[truncated]") {
+	if strings.Contains(data, "[truncated]") {
 		t.Fatalf("formatted spill should not be hard-truncated")
 	}
 }
@@ -1756,7 +1750,7 @@ func TestParallelToolExecution(t *testing.T) {
 	}
 }
 
-func TestWaitForUserToolResultIsNotEvidenceWrapped(t *testing.T) {
+func TestNeedsUserInputResultIsNotEvidenceWrapped(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{
 		{Message: llm.Message{
 			Role: "assistant",
@@ -2307,7 +2301,7 @@ func (fakeWaitTool) Execute(_ context.Context, raw json.RawMessage, _ registry.R
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
 	}
-	return registry.Result{Content: args.Question, NeedsUserInput: true, WaitForUser: true}, nil
+	return registry.Result{Content: args.Question, NeedsUserInput: true}, nil
 }
 
 type fakeObservationFormatter struct{}

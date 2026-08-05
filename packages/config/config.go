@@ -37,6 +37,9 @@ type HTTPConfig struct {
 	EventEnqueueTimeout time.Duration
 	EventTimeout        time.Duration
 	EventInboxLease     time.Duration
+	EventMaxAttempts    int
+	EventRetryBase      time.Duration
+	EventRetryMax       time.Duration
 	ShutdownTimeout     time.Duration
 }
 
@@ -110,6 +113,7 @@ type ToolConfig struct {
 	CommandTimeout         time.Duration
 	AgentMaxSteps          int
 	AgentMaxConcurrentRuns int
+	AllowedWriteTools      []string
 }
 
 type IntegrationConfig struct {
@@ -204,7 +208,7 @@ const (
 	ProfileAllInOne      RuntimeProfile = "all-in-one"
 	ProfileGateway       RuntimeProfile = "gateway"
 	ProfileSlackWorker   RuntimeProfile = "slack-worker"
-	ProfileWorker        RuntimeProfile = "worker" // compatibility alias
+	ProfileAppServer     RuntimeProfile = "app-server"
 	ProfileObservability RuntimeProfile = "observability"
 	ProfileLocalAgent    RuntimeProfile = "local-agent"
 	ProfileBenchmark     RuntimeProfile = "benchmark"
@@ -283,6 +287,9 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			EventEnqueueTimeout: envDuration("SLACK_EVENT_ENQUEUE_TIMEOUT", 2*time.Second),
 			EventTimeout:        envDuration("SLACK_EVENT_TIMEOUT", 15*time.Minute),
 			EventInboxLease:     envDuration("SLACK_EVENT_INBOX_LEASE", 0),
+			EventMaxAttempts:    envInt("SLACK_EVENT_MAX_ATTEMPTS", 5),
+			EventRetryBase:      envDuration("SLACK_EVENT_RETRY_BASE", time.Second),
+			EventRetryMax:       envDuration("SLACK_EVENT_RETRY_MAX", time.Minute),
 			ShutdownTimeout:     envDuration("HTTP_SHUTDOWN_TIMEOUT", 30*time.Second),
 		},
 		Slack: SlackConfig{
@@ -340,6 +347,9 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			CommandTimeout:         envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
 			AgentMaxSteps:          envInt("AGENT_MAX_STEPS", 256),
 			AgentMaxConcurrentRuns: envInt("AGENT_MAX_CONCURRENT_RUNS", 16),
+			AllowedWriteTools: envCSVDefault("AGENT_ALLOWED_WRITE_TOOLS", []string{
+				"reminder-create", "reminder-cancel", "slack-send_screenshot", "slack-create_canvas", "tts-speak",
+			}),
 		},
 		Integrations: loadIntegrations(),
 		Observing: ObservingConfig{
@@ -426,10 +436,12 @@ func dotenvPath(profile RuntimeProfile) string {
 	switch profile {
 	case ProfileGateway:
 		return "gateway/.env"
-	case ProfileSlackWorker, ProfileWorker:
+	case ProfileSlackWorker:
 		return "worker/.env"
 	case ProfileObservability:
 		return "observability/.env"
+	case ProfileAppServer:
+		return "appserver/.env"
 	case ProfileLocalAgent:
 		return "local-agent/.env"
 	case ProfileBenchmark:
@@ -447,8 +459,21 @@ func validateForProfile(cfg Config, profile RuntimeProfile) (Config, error) {
 	if cfg.HTTP.EventInboxLease <= 0 {
 		cfg.HTTP.EventInboxLease = cfg.HTTP.EventTimeout + time.Minute
 	}
-	if cfg.HTTP.EventWorkers <= 0 || cfg.HTTP.EventQueueSize <= 0 || cfg.HTTP.EventEnqueueTimeout <= 0 || cfg.HTTP.EventTimeout <= 0 || cfg.HTTP.EventInboxLease <= 0 || cfg.HTTP.ShutdownTimeout <= 0 || cfg.Tools.AgentMaxConcurrentRuns <= 0 {
-		return cfg, fmt.Errorf("SLACK_EVENT_WORKERS, SLACK_EVENT_QUEUE_SIZE, SLACK_EVENT_ENQUEUE_TIMEOUT, SLACK_EVENT_TIMEOUT, SLACK_EVENT_INBOX_LEASE, HTTP_SHUTDOWN_TIMEOUT, and AGENT_MAX_CONCURRENT_RUNS must be positive")
+	if cfg.HTTP.EventInboxLease <= cfg.HTTP.EventTimeout {
+		return cfg, fmt.Errorf("SLACK_EVENT_INBOX_LEASE must be greater than SLACK_EVENT_TIMEOUT")
+	}
+	if cfg.HTTP.EventWorkers <= 0 || cfg.HTTP.EventQueueSize <= 0 || cfg.HTTP.EventEnqueueTimeout <= 0 || cfg.HTTP.EventTimeout <= 0 || cfg.HTTP.EventMaxAttempts <= 0 || cfg.HTTP.EventRetryBase <= 0 || cfg.HTTP.EventRetryMax < cfg.HTTP.EventRetryBase || cfg.HTTP.ShutdownTimeout <= 0 || cfg.Tools.AgentMaxConcurrentRuns <= 0 {
+		return cfg, fmt.Errorf("event worker, queue, timeout, retry, shutdown, and agent concurrency settings must be positive and internally consistent")
+	}
+	seenWriteTools := make(map[string]bool, len(cfg.Tools.AllowedWriteTools))
+	for _, name := range cfg.Tools.AllowedWriteTools {
+		if !validToolName(name) {
+			return cfg, fmt.Errorf("AGENT_ALLOWED_WRITE_TOOLS contains invalid tool name %q", name)
+		}
+		if seenWriteTools[name] {
+			return cfg, fmt.Errorf("AGENT_ALLOWED_WRITE_TOOLS contains duplicate tool name %q", name)
+		}
+		seenWriteTools[name] = true
 	}
 	switch profile {
 	case ProfileLocalAgent, ProfileBenchmark:
@@ -471,11 +496,26 @@ func validateForProfile(cfg Config, profile RuntimeProfile) (Config, error) {
 		return cfg, nil
 	case ProfileObservability:
 		return cfg, nil
-	case ProfileAllInOne, ProfileSlackWorker, ProfileWorker, "":
+	case ProfileAppServer:
+		return validateModelRuntime(cfg)
+	case ProfileAllInOne, ProfileSlackWorker, "":
 		return validateAgentRuntime(cfg)
 	default:
 		return cfg, fmt.Errorf("unknown runtime profile %q", profile)
 	}
+}
+
+func validToolName(name string) bool {
+	if len(name) == 0 || len(name) > 128 {
+		return false
+	}
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func validateAgentRuntime(cfg Config) (Config, error) {
@@ -485,17 +525,10 @@ func validateAgentRuntime(cfg Config) (Config, error) {
 	if cfg.Slack.BotToken == "" {
 		return cfg, fmt.Errorf("SLACK_BOT_TOKEN is required")
 	}
-	if strings.Contains(cfg.LLM.BaseURL, "api.kimi.com/coding") {
-		return cfg, fmt.Errorf("the Kimi coding endpoint is not supported directly; use LLM_PROVIDER=cliproxyapi and connect to a locally authenticated CLIProxyAPI instance, or configure KIMI_BASE_URL with Kimi's documented API endpoint")
-	}
-	if cfg.LLM.APIKey == "" {
-		return cfg, fmt.Errorf("%s API key is required", strings.ToUpper(cfg.LLM.Provider))
-	}
-	if cfg.LLM.Protocol != "openai" && cfg.LLM.Protocol != "anthropic" {
-		return cfg, fmt.Errorf("LLM_PROTOCOL must be openai or anthropic")
-	}
-	if cfg.LLM.AnthropicFlavor != "" && cfg.LLM.AnthropicFlavor != "official" && cfg.LLM.AnthropicFlavor != "claude-code" {
-		return cfg, fmt.Errorf("LLM_ANTHROPIC_FLAVOR must be official or claude-code")
+	var err error
+	cfg, err = validateModelRuntime(cfg)
+	if err != nil {
+		return cfg, err
 	}
 	if len(cfg.Security.AllowedUsers) == 0 {
 		return cfg, fmt.Errorf("ALLOWED_SLACK_USERS is required")
@@ -504,6 +537,10 @@ func validateAgentRuntime(cfg Config) (Config, error) {
 }
 
 func validateLocalAgentRuntime(cfg Config) (Config, error) {
+	return validateModelRuntime(cfg)
+}
+
+func validateModelRuntime(cfg Config) (Config, error) {
 	if strings.Contains(cfg.LLM.BaseURL, "api.kimi.com/coding") {
 		return cfg, fmt.Errorf("the Kimi coding endpoint is not supported directly; use LLM_PROVIDER=cliproxyapi and connect to a locally authenticated CLIProxyAPI instance, or configure KIMI_BASE_URL with Kimi's documented API endpoint")
 	}

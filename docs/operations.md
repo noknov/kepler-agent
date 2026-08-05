@@ -6,7 +6,7 @@
 |---|---|
 | `GET /livez` | Liveness check |
 | `GET /readyz` | Readiness check; fails during drain |
-| `POST /drain` | Local-only drain switch used by Kubernetes `preStop` |
+| `POST /drain` | Local-only drain switch for an orchestrator shutdown hook |
 | `GET /health/dashboard` | Interactive health dashboard |
 | `GET /health/tools` | Tool health status JSON |
 | `GET /metrics` | Durable run and cost metrics from observability |
@@ -22,79 +22,61 @@ access.
 
 Slack events are first written to a durable PostgreSQL inbox. Workers claim
 events with `claim_owner` and `claim_until`; abandoned events become retryable
-after the lease expires.
+after the lease expires. Active workers renew leases, failures use bounded
+exponential backoff, and malformed or exhausted events become dead letters.
 
-## Docker
+## Packaging Contract
 
-```bash
-docker build -t ghcr.io/your-org/slack-copilot-agent:latest .
-```
+This repository does not prescribe a production topology or include Compose,
+Kubernetes, database, or Redis manifests. Run the binaries directly or package
+them with the orchestrator of your choice. All modes use environment-based
+configuration and the health/shutdown endpoints above.
 
-The runtime image includes `git`, `ripgrep`, `curl`, CA certificates, and
-`openssh-client` because the code, repo, and preStop workflows need them.
-
-## Kubernetes
-
-Starter manifests are split by ownership: example dependencies live in
-`deploy/starter/k8s/`, while service manifests live in `gateway/deploy/k8s/`,
-`worker/deploy/k8s/`, and `observability/deploy/k8s/`.
+The generic Dockerfile exposes independent targets:
 
 ```bash
-kubectl apply -f deploy/starter/k8s/
-
-kubectl -n slack-copilot-agent create secret generic slack-copilot-gateway-secrets \
-  --from-literal=SLACK_SIGNING_SECRET='...' \
-  --from-literal=POSTGRES_DSN='postgres://slack_copilot:slack_copilot@slack-copilot-postgres:5432/slack_copilot?sslmode=disable' \
-  --from-literal=REDIS_URL='redis://slack-copilot-redis:6379/0'
-
-kubectl -n slack-copilot-agent create secret generic slack-copilot-worker-secrets \
-  --from-literal=SLACK_BOT_TOKEN='xoxb-...' \
-  --from-literal=SLACK_SIGNING_SECRET='...' \
-  --from-literal=ALLOWED_SLACK_USERS='U11111111,U22222222' \
-  --from-literal=POSTGRES_DSN='postgres://slack_copilot:slack_copilot@slack-copilot-postgres:5432/slack_copilot?sslmode=disable' \
-  --from-literal=REDIS_URL='redis://slack-copilot-redis:6379/0' \
-  --from-literal=LLM_PROVIDER='longcat' \
-  --from-literal=LONGCAT_API_KEY='Bearer lc-...'
-
-kubectl -n slack-copilot-agent create secret generic slack-copilot-observability-secrets \
-  --from-literal=POSTGRES_DSN='postgres://slack_copilot:slack_copilot@slack-copilot-postgres:5432/slack_copilot?sslmode=disable' \
-  --from-literal=REDIS_URL='redis://slack-copilot-redis:6379/0' \
-  --from-literal=OBSERVABILITY_TOKEN='...'
-
-kubectl apply -f gateway/deploy/k8s/
-kubectl apply -f worker/deploy/k8s/
-kubectl apply -f observability/deploy/k8s/
+docker build --target gateway -t slack-copilot-gateway .
+docker build --target worker -t slack-copilot-worker .
+docker build --target observability -t slack-copilot-observability .
+docker build --target app-server -t slack-copilot-app-server .
+docker build --target all-in-one -t slack-copilot-agent .
 ```
 
-For production, prefer managed PostgreSQL and Redis over the starter in-cluster
-database manifests, with DSN values delivered through Secret or an external
-secret manager.
+Gateway and observability use a minimal CA-only runtime. Worker and all-in-one
+add Git, ripgrep, curl, and SSH for repository access. Infrastructure CLIs such
+as `kubectl` and `gcloud` are deliberately not bundled; derive a worker image or
+mount administrator-pinned binaries when those optional tools are enabled.
 
-Start with one worker replica. Gateway can scale horizontally because Slack
-events are persisted before processing. Scale workers only after PostgreSQL
-capacity, Slack retries, and workspace fetch behavior are understood for your
-environment.
+An orchestrator should:
 
-Important knobs:
+- send ingress traffic only while `/readyz` succeeds;
+- call local `POST /drain` before termination;
+- allow at least `HTTP_SHUTDOWN_TIMEOUT` for graceful shutdown;
+- keep `/metrics` and observability endpoints private;
+- inject credentials through its own secret mechanism;
+- pin built images by immutable digest.
+
+Important runtime knobs:
 
 ```bash
 SLACK_EVENT_TIMEOUT=15m
 SLACK_EVENT_INBOX_LEASE=16m
+SLACK_EVENT_MAX_ATTEMPTS=5
 HTTP_SHUTDOWN_TIMEOUT=90s
 POSTGRES_MAX_CONNS=4
 WORKSPACE_AUTO_FETCH=false
 ```
 
-Keep business configuration out of Deployment manifests. Store non-sensitive,
-environment-specific defaults in a ConfigMap, Helm values file, or Kustomize
-overlay that can be reviewed in git. Store credentials, tokens, API keys, and
-DSNs with embedded passwords in Secret or an external secret manager, then sync
-them into Kubernetes during deployment. Deployment-level env overrides should be
-reserved for topology wiring such as service DNS names, ports, and replica-safe
-runtime limits.
+Application processes never create or alter database objects. For a new
+PostgreSQL database, apply the repository's current schema contract with your
+preferred administration tool before starting services, for example:
 
-`preStop` calls local `/drain`, making `/readyz` fail before SIGTERM so
-Kubernetes can remove the pod from endpoints before shutdown completes.
+```bash
+psql "$POSTGRES_DSN" -f schema/postgres.sql
+```
+
+Startup fails with the names of missing tables. This keeps DDL privileges and
+database lifecycle policy outside the agent's business code.
 
 ## ngrok
 
@@ -120,11 +102,9 @@ DuckDuckGo HTML search works without paid credentials:
 WEB_SEARCH_PROVIDER=duckduckgo
 ```
 
-For self-hosted search:
+For a separately managed SearXNG instance:
 
 ```bash
-docker compose -f deploy/local/compose/search.yml up -d
-
 WEB_SEARCH_PROVIDER=searxng
 WEB_SEARCH_SEARXNG_URL=http://127.0.0.1:8097
 ```

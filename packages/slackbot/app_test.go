@@ -148,10 +148,9 @@ func TestDefaultToolRegistryDefersHeavyToolFamilies(t *testing.T) {
 	cfg := config.Config{}
 	cfg.Integrations.K8s.KubectlPath = "kubectl"
 	cfg.Integrations.GCP.GCloudPath = "gcloud"
-	reminderStore, err := reminder.NewFileStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	// This test isolates deferred activation from server authorization.
+	cfg.Tools.AllowedWriteTools = []string{"github-dispatch_workflow", "slack-create_canvas"}
+	reminderStore := &reminder.PGStore{}
 	reg := appruntime.NewToolRegistry(cfg, &slack.Client{}, reminderStore, nil, nil, "", safety.WorkspacePolicy{}, safety.CommandPolicy{}, nil, nil)
 
 	for _, name := range []string{
@@ -171,7 +170,7 @@ func TestDefaultToolRegistryDefersHeavyToolFamilies(t *testing.T) {
 		t.Fatal("tool_search must remain active so deferred capabilities are discoverable")
 	}
 
-	_, err = reg.Execute(context.Background(), "tool_search", json.RawMessage(`{
+	_, err := reg.Execute(context.Background(), "tool_search", json.RawMessage(`{
 		"action":"activate",
 		"tool_names":["github-dispatch_workflow","github-workflow_runs","k8s-get_pods","gcp-logs","slack-create_canvas"]
 	}`), registry.Runtime{})

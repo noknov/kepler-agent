@@ -34,6 +34,17 @@ func TestToolRegistryUsesIntegrationConfigForManualConfig(t *testing.T) {
 	}
 	reg := NewToolRegistry(cfg, nil, nil, nil, nil, "", safety.WorkspacePolicy{}, safety.CommandPolicy{}, nil, nil)
 	if !reg.ActivateTool("github-pr_diff") {
-		t.Fatal("expected github-pr_diff to activate when only legacy ToolConfig GitHub token is set")
+		t.Fatal("expected github-pr_diff to activate from integration config")
+	}
+}
+
+func TestAppServerRuntimeExcludesSlackSpecificTools(t *testing.T) {
+	cfg := LocalCLIConfig()
+	rt := NewAppServerAgentRuntime(cfg, nil, nil, nil)
+	for _, spec := range rt.Tools.Specs() {
+		switch spec.Function.Name {
+		case "reminder-create", "reminder-list", "reminder-cancel", "slack-ask_user":
+			t.Fatalf("app-server exposed adapter-specific tool %q", spec.Function.Name)
+		}
 	}
 }

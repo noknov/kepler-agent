@@ -39,5 +39,5 @@ func (t AskUserTool) Execute(ctx context.Context, raw json.RawMessage, rt regist
 	}
 	_ = ctx
 	_ = rt
-	return registry.Result{Content: args.Question, NeedsUserInput: true, WaitForUser: true}, nil
+	return registry.Result{Content: args.Question, NeedsUserInput: true}, nil
 }

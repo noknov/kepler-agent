@@ -4,9 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/noknov/slack-copilot-agent/packages/llm"
@@ -18,29 +15,15 @@ const (
 	previewChars       = 2000
 	spillReadLimit     = 4000
 	maxSpillReadLimit  = 12000
-	spillDir           = ".data/tool-spill"
 )
 
-var unsafeSpillNameChars = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
-
 func spillToolResult(ctx context.Context, store registry.ToolSpillStore, runID, toolName, toolCallID, content string) (string, error) {
-	if store != nil {
-		if err := store.SaveToolSpill(ctx, spillRunID(runID), toolName, toolCallID, content); err != nil {
-			return "", err
-		}
-		return spillNotice(toolName, toolCallID, content), nil
+	if store == nil {
+		return "", fmt.Errorf("PostgreSQL tool spill store is required")
 	}
-
-	dir := filepath.Join(spillDir, runID)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := store.SaveToolSpill(ctx, spillRunID(runID), toolName, toolCallID, content); err != nil {
 		return "", err
 	}
-
-	path := spillPath(runID, toolName, toolCallID)
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		return "", err
-	}
-
 	return spillNotice(toolName, toolCallID, content), nil
 }
 
@@ -81,31 +64,6 @@ func spillRunID(runID string) string {
 		return runID
 	}
 	return "unknown"
-}
-
-func spillPath(runID, toolName, toolCallID string) string {
-	return filepath.Join(spillDir, spillRunID(runID), spillFilename(toolName, toolCallID))
-}
-
-func spillFilename(toolName, toolCallID string) string {
-	suffix := sanitizeSpillName(toolCallID)
-	if len(suffix) > 8 {
-		suffix = suffix[:8]
-	}
-	if suffix == "" {
-		suffix = "result"
-	}
-	return fmt.Sprintf("%s-%s.txt", sanitizeSpillName(toolName), suffix)
-}
-
-func sanitizeSpillName(name string) string {
-	name = strings.TrimSpace(name)
-	name = unsafeSpillNameChars.ReplaceAllString(name, "-")
-	name = strings.Trim(name, ".-")
-	if name == "" {
-		return "unknown"
-	}
-	return name
 }
 
 type SpillReadTool struct{}
@@ -152,19 +110,12 @@ func (SpillReadTool) Execute(ctx context.Context, raw json.RawMessage, rt regist
 	if limit > maxSpillReadLimit {
 		limit = maxSpillReadLimit
 	}
-	var rawContent string
-	if rt.ToolSpillStore != nil {
-		content, err := rt.ToolSpillStore.ReadToolSpill(ctx, spillRunID(rt.RunID), args.ToolName, args.ToolCallID)
-		if err != nil {
-			return registry.Result{}, fmt.Errorf("persisted output not found for tool_name=%q tool_call_id=%q", args.ToolName, args.ToolCallID)
-		}
-		rawContent = content
-	} else {
-		data, err := os.ReadFile(spillPath(rt.RunID, args.ToolName, args.ToolCallID))
-		if err != nil {
-			return registry.Result{}, fmt.Errorf("persisted output not found for tool_name=%q tool_call_id=%q", args.ToolName, args.ToolCallID)
-		}
-		rawContent = string(data)
+	if rt.ToolSpillStore == nil {
+		return registry.Result{}, fmt.Errorf("PostgreSQL tool spill store is required")
+	}
+	rawContent, err := rt.ToolSpillStore.ReadToolSpill(ctx, spillRunID(rt.RunID), args.ToolName, args.ToolCallID)
+	if err != nil {
+		return registry.Result{}, fmt.Errorf("persisted output not found for tool_name=%q tool_call_id=%q", args.ToolName, args.ToolCallID)
 	}
 	content := []rune(rawContent)
 	offset := args.Offset

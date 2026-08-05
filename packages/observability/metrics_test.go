@@ -1,6 +1,10 @@
 package observability
 
-import "testing"
+import (
+	"errors"
+	"testing"
+	"time"
+)
 
 func TestRecorderTracksAgentEvents(t *testing.T) {
 	rec := NewRecorder()
@@ -23,5 +27,21 @@ func TestRecorderTracksAgentEvents(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("LastErrors = %#v, want compact error", snap.LastErrors)
+	}
+}
+
+func TestRecorderReportsPercentilesAndPreservesErrorOrder(t *testing.T) {
+	rec := NewRecorder()
+	for _, latency := range []time.Duration{time.Millisecond, 2 * time.Millisecond, 10 * time.Millisecond, 100 * time.Millisecond} {
+		rec.Latency(latency)
+	}
+	rec.Error(errors.New("first"))
+	rec.Error(errors.New("second"))
+	snap := rec.Snapshot()
+	if snap.LatencyMS.P50 != 2 || snap.LatencyMS.P95 != 100 || snap.LatencyMS.P99 != 100 {
+		t.Fatalf("latency percentiles = %#v", snap.LatencyMS)
+	}
+	if len(snap.LastErrors) != 2 || snap.LastErrors[0] != "first" || snap.LastErrors[1] != "second" {
+		t.Fatalf("LastErrors lost chronology: %#v", snap.LastErrors)
 	}
 }

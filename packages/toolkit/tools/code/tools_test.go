@@ -25,7 +25,7 @@ func TestReadFileReturnsContentDirectly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if result.WaitForUser || result.Content == "" {
+	if result.NeedsUserInput || result.Content == "" {
 		t.Fatalf("expected file content, got %#v", result)
 	}
 }
@@ -74,7 +74,7 @@ func TestSearchReturnsResultsDirectly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if result.WaitForUser || result.Content == "" || result.Content == "no matches" {
+	if result.NeedsUserInput || result.Content == "" || result.Content == "no matches" {
 		t.Fatalf("expected search results, got %#v", result)
 	}
 }

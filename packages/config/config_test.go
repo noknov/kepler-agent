@@ -40,6 +40,19 @@ func TestLoadPrefersDotEnvOverShellEnv(t *testing.T) {
 	}
 }
 
+func TestValidToolName(t *testing.T) {
+	for _, name := range []string{"reminder-create", "slack_create", "Tool123"} {
+		if !validToolName(name) {
+			t.Fatalf("validToolName(%q) = false", name)
+		}
+	}
+	for _, name := range []string{"", "tool name", "tool:*"} {
+		if validToolName(name) {
+			t.Fatalf("validToolName(%q) = true", name)
+		}
+	}
+}
+
 func TestLoadRejectsDirectKimiCodingEndpoint(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
@@ -984,6 +997,10 @@ func resetConfigEnv(t *testing.T) {
 		"LLM_MAX_OUTPUT_TOKEN",
 		"POSTGRES_DSN",
 		"REDIS_URL",
+		"SLACK_EVENT_MAX_ATTEMPTS",
+		"SLACK_EVENT_RETRY_BASE",
+		"SLACK_EVENT_RETRY_MAX",
+		"AGENT_ALLOWED_WRITE_TOOLS",
 		"WORKSPACE_AUTO_FETCH",
 		"GCLOUD_PATH",
 		"GCP_PROJECT",

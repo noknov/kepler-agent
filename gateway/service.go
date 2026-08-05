@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"log"
-	"net"
 	"net/http"
-	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/config"
+	"github.com/noknov/slack-copilot-agent/packages/infra/httpguard"
+	sharedlogging "github.com/noknov/slack-copilot-agent/packages/infra/logging"
 	"github.com/noknov/slack-copilot-agent/packages/platform"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/slack"
@@ -33,6 +33,7 @@ func Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	sharedlogging.Configure(cfg.Observing.LogLevel)
 	service, err := New(ctx, cfg)
 	if err != nil {
 		return err
@@ -135,7 +136,7 @@ func (s *Service) handleDrain(w http.ResponseWriter, r *http.Request) {
 		s.writeHTTPError(w, r, http.StatusMethodNotAllowed, "method not allowed", nil)
 		return
 	}
-	if !isLocalRequest(r) {
+	if !httpguard.IsDirectLoopback(r) {
 		s.writeHTTPError(w, r, http.StatusForbidden, "forbidden", nil)
 		return
 	}
@@ -158,16 +159,4 @@ func ok(body string) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(body))
 	}
-}
-
-func isLocalRequest(r *http.Request) bool {
-	if r.Header.Get("Forwarded") != "" || r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("X-Real-IP") != "" {
-		return false
-	}
-	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
-	if err != nil {
-		host = strings.TrimSpace(r.RemoteAddr)
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }

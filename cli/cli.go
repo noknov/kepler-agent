@@ -28,8 +28,6 @@ func Run(ctx context.Context, args []string) error {
 		}
 	case "bench":
 		return benchcli.Run(ctx, args[1:])
-	case "chat", "run":
-		return fmt.Errorf("%s is reserved for the local agent loop; the local editing runtime is not wired yet", args[0])
 	}
 	return fmt.Errorf("unknown command %q", strings.Join(args, " "))
 }
@@ -39,10 +37,8 @@ func printUsage() {
 
 Usage:
   slack-copilot config doctor
-  slack-copilot tools list
-  slack-copilot bench ...
-  slack-copilot chat "message"   (reserved)
-  slack-copilot run "task"       (reserved)
+	  slack-copilot tools list
+	  slack-copilot bench ...
 
 Benchmark commands also have a standalone entrypoint:
   go run ./benchmarks/cmd/slack-copilot-bench help`)

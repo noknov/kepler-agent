@@ -39,6 +39,13 @@ func (c *Client) Close() error {
 	return c.rdb.Close()
 }
 
+func (c *Client) Ping(ctx context.Context) error {
+	if c == nil || c.rdb == nil {
+		return fmt.Errorf("redis client is unavailable")
+	}
+	return c.rdb.Ping(ctx).Err()
+}
+
 // Get retrieves a string value.
 func (c *Client) Get(ctx context.Context, key string) (string, error) {
 	return c.rdb.Get(ctx, key).Result()

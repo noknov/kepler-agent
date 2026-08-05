@@ -11,42 +11,7 @@ type PGStore struct {
 	pool *pgxpool.Pool
 }
 
-func NewPGStoreWithPool(ctx context.Context, pool *pgxpool.Pool) (*PGStore, error) {
-	s := &PGStore{pool: pool}
-	if err := s.migrate(ctx); err != nil {
-		return nil, err
-	}
-	return s, nil
-}
-
-func (s *PGStore) Close() {}
-
-func (s *PGStore) migrate(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, `
-CREATE TABLE IF NOT EXISTS user_settings (
- user_id TEXT PRIMARY KEY,
- web_search_enabled BOOLEAN NOT NULL DEFAULT TRUE,
- updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS user_prompt_assets (
- id TEXT PRIMARY KEY,
- user_id TEXT NOT NULL,
- kind TEXT NOT NULL,
- name TEXT NOT NULL,
- description TEXT NOT NULL DEFAULT '',
- content TEXT NOT NULL,
- source_file_id TEXT NOT NULL DEFAULT '',
- active BOOLEAN NOT NULL DEFAULT TRUE,
- created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
- updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS user_prompt_assets_user_kind_idx
- ON user_prompt_assets(user_id, kind, active, name);
-`)
-	return err
-}
+func NewPGStore(pool *pgxpool.Pool) *PGStore { return &PGStore{pool: pool} }
 
 func (s *PGStore) GetSettings(ctx context.Context, userID string) (Settings, error) {
 	var out Settings

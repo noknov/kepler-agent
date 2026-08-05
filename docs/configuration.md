@@ -218,7 +218,8 @@ image is stripped and replaced with a text note asking for a description.
 
 ## Storage and Concurrency
 
-All durable operational state uses PostgreSQL:
+All session, run, reminder, user preference, tool spill, and event inbox state
+uses PostgreSQL. The services do not contain a filesystem persistence fallback:
 
 ```bash
 POSTGRES_DSN=postgres://user:pass@localhost:5432/slack_copilot?sslmode=disable
@@ -227,17 +228,25 @@ SLACK_EVENT_QUEUE_SIZE=512
 SLACK_EVENT_ENQUEUE_TIMEOUT=2s
 SLACK_EVENT_TIMEOUT=15m
 SLACK_EVENT_INBOX_LEASE=16m
+SLACK_EVENT_MAX_ATTEMPTS=5
+SLACK_EVENT_RETRY_BASE=1s
+SLACK_EVENT_RETRY_MAX=1m
 AGENT_MAX_CONCURRENT_RUNS=16
 ```
+
+Workers renew the inbox lease while an event is running. Failed events use
+bounded exponential backoff and move to `dead_letter` after the configured
+attempt limit; malformed payloads are dead-lettered immediately. The inbox
+lease must be greater than the event timeout.
+
+Services verify the required tables at startup but never execute DDL. Initialize
+a new PostgreSQL database with `schema/postgres.sql` using the administration
+workflow of your choice. The runtime database role only needs data access.
 
 For multi-replica deployments, keep database connections bounded:
 
 ```bash
 POSTGRES_MAX_CONNS=4
-POSTGRES_SESSION_MAX_CONNS=
-POSTGRES_RUNS_MAX_CONNS=
-POSTGRES_REMINDER_MAX_CONNS=
-POSTGRES_INBOX_MAX_CONNS=
 ```
 
 ## Agent Runtime Policy
@@ -258,3 +267,16 @@ AGENT_MAX_IDENTICAL_SUCCESSFUL_TOOL_CALLS=0
 
 For the numeric values, `0` means use the production default. Negative values
 disable that guard.
+
+Write and external-write tools are authorized entirely by server policy; users
+are never asked to approve access to the host running the agent. The default
+allowlist contains only reminder, Slack screenshot/Canvas, and TTS operations.
+Operators can replace it with an exact, comma-separated allowlist:
+
+```bash
+AGENT_ALLOWED_WRITE_TOOLS=reminder-create,reminder-cancel,slack-create_canvas
+```
+
+A tool's surface annotation limits where it may run; it never grants write
+permission by itself. Repository edits, local commands, workflow dispatch, and
+third-party MCP mutations therefore remain disabled unless explicitly enabled.

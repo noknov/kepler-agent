@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent"
+	"github.com/noknov/slack-copilot-agent/packages/agentcore"
 	"github.com/noknov/slack-copilot-agent/packages/config"
 	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
 	"github.com/noknov/slack-copilot-agent/packages/llm"
@@ -18,6 +19,7 @@ import (
 
 type AgentRuntime struct {
 	Runner    agent.Runner
+	Core      *agentcore.Core
 	Memory    memory.Builder
 	Prompt    safety.PromptPolicy
 	Redactor  safety.Redactor
@@ -26,6 +28,14 @@ type AgentRuntime struct {
 }
 
 func NewAgentRuntime(cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, recorder *observability.Recorder, rdb *redisclient.Client, userPrefs userprefs.Store) AgentRuntime {
+	return newAgentRuntime(cfg, slackClient, reminderStore, recorder, rdb, userPrefs, false)
+}
+
+func NewAppServerAgentRuntime(cfg config.Config, recorder *observability.Recorder, rdb *redisclient.Client, userPrefs userprefs.Store) AgentRuntime {
+	return newAgentRuntime(cfg, nil, nil, recorder, rdb, userPrefs, true)
+}
+
+func newAgentRuntime(cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, recorder *observability.Recorder, rdb *redisclient.Client, userPrefs userprefs.Store, appServer bool) AgentRuntime {
 	llmClient := NewLLMClient(cfg)
 	llmCapabilities := llm.CapabilitiesFor(cfg.LLM.Provider, cfg.LLM.Protocol)
 	workspacePolicy := safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}
@@ -41,6 +51,9 @@ func NewAgentRuntime(cfg config.Config, slackClient *slack.Client, reminderStore
 	}
 	secondaryClient, secondaryModel := NewSecondaryLLMClient(cfg)
 	tools := NewToolRegistry(cfg, slackClient, reminderStore, llmClient, secondaryClient, secondaryModel, workspacePolicy, commandPolicy, rdb, userPrefs)
+	if appServer {
+		tools = NewAppServerToolRegistry(cfg, llmClient, secondaryClient, secondaryModel, workspacePolicy, commandPolicy, rdb, userPrefs)
+	}
 
 	var statusSummarizer *agent.StatusSummarizer
 	if cfg.LLM.DynamicStatus {
@@ -80,23 +93,26 @@ func NewAgentRuntime(cfg config.Config, slackClient *slack.Client, reminderStore
 		CompactModel:        compactModel,
 	}
 
+	runner := agent.Runner{
+		LLM:              llmClient,
+		Model:            cfg.LLM.Model,
+		Thinking:         cfg.LLM.Thinking,
+		Temp:             cfg.LLM.Temperature,
+		MaxTokens:        cfg.LLM.MaxOutputTokens,
+		Tools:            tools,
+		Policy:           RunnerPolicy(cfg),
+		Capabilities:     llmCapabilities,
+		Format:           mem,
+		Sanitize:         redactor,
+		Observer:         recorder,
+		MaxSteps:         cfg.Tools.AgentMaxSteps,
+		Compactor:        compactor,
+		StatusSummarizer: statusSummarizer,
+	}
+
 	return AgentRuntime{
-		Runner: agent.Runner{
-			LLM:              llmClient,
-			Model:            cfg.LLM.Model,
-			Thinking:         cfg.LLM.Thinking,
-			Temp:             cfg.LLM.Temperature,
-			MaxTokens:        cfg.LLM.MaxOutputTokens,
-			Tools:            tools,
-			Policy:           RunnerPolicy(cfg),
-			Capabilities:     llmCapabilities,
-			Format:           mem,
-			Sanitize:         redactor,
-			Observer:         recorder,
-			MaxSteps:         cfg.Tools.AgentMaxSteps,
-			Compactor:        compactor,
-			StatusSummarizer: statusSummarizer,
-		},
+		Runner:    runner,
+		Core:      &agentcore.Core{Runner: runner},
 		Memory:    mem,
 		Prompt:    promptPolicy,
 		Redactor:  redactor,

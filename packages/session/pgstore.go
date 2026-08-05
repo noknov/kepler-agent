@@ -15,32 +15,12 @@ import (
 // PGStore is the production session store. Session state is a single JSONB
 // document so schema evolution remains compatible with old conversations.
 type PGStore struct {
-	pool    *pgxpool.Pool
-	ownPool bool
+	pool *pgxpool.Pool
 }
 
-// NewPGStoreWithPool creates a PGStore using an externally managed pool.
-func NewPGStoreWithPool(ctx context.Context, pool *pgxpool.Pool) (*PGStore, error) {
-	s := &PGStore{pool: pool}
-	if err := s.migrate(ctx); err != nil {
-		return nil, err
-	}
-	return s, nil
-}
-
-func (s *PGStore) Close() {
-	if s != nil && s.pool != nil && s.ownPool {
-		s.pool.Close()
-	}
-}
-
-func (s *PGStore) migrate(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, `
-CREATE TABLE IF NOT EXISTS agent_sessions (
- id TEXT PRIMARY KEY, payload JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);`)
-	return err
-}
+// NewPGStore uses a shared pool. Database schema is an external runtime
+// contract; stores never execute DDL.
+func NewPGStore(pool *pgxpool.Pool) *PGStore { return &PGStore{pool: pool} }
 
 func (s *PGStore) Get(ctx context.Context, id string) (Session, bool, error) {
 	var data []byte
@@ -98,7 +78,9 @@ func (s *PGStore) Lock(ctx context.Context, id string) (func(), error) {
 		}
 		if locked {
 			return func() {
-				_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, key)
+				unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_, _ = conn.Exec(unlockCtx, `SELECT pg_advisory_unlock($1)`, key)
 				conn.Release()
 			}, nil
 		}

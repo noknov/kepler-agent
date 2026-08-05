@@ -56,8 +56,34 @@ func NewToolRegistry(cfg config.Config, slackClient *slack.Client, reminderStore
 	)
 }
 
+// NewAppServerToolRegistry builds the transport-neutral tool surface. Slack
+// delivery and reminder tools are intentionally absent; transports may add
+// their own adapter-specific capabilities around agentcore.
+func NewAppServerToolRegistry(cfg config.Config, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy, rdb *redisclient.Client, userPrefs userprefs.Store) *registry.Registry {
+	return newToolRegistryWithPolicy(
+		cfg,
+		nil,
+		nil,
+		llmClient,
+		secondaryClient,
+		secondaryModel,
+		workspacePolicy,
+		commandPolicy,
+		rdb,
+		userPrefs,
+		policyForSurface(cfg, "app-server", nil, nil),
+	)
+}
+
 func NewCodingToolRegistry(cfg config.Config, llmClient llm.Client, secondaryClient llm.Client, secondaryModel string, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) *registry.Registry {
-	tools := newToolRegistryWithPolicy(cfg, nil, nil, llmClient, secondaryClient, secondaryModel, workspacePolicy, commandPolicy, nil, nil, policyForSurface(cfg, "coding", nil, nil))
+	policy := policyForSurface(cfg, "coding", nil, nil)
+	// The coding runtime is created only for caller-provided isolated
+	// workspaces. Its three mutation tools are part of that surface's contract,
+	// while the production Slack surface never receives them.
+	for _, name := range []string{"code-write_file", "code-replace", "local-command"} {
+		policy.AllowedWriteTools[name] = true
+	}
+	tools := newToolRegistryWithPolicy(cfg, nil, nil, llmClient, secondaryClient, secondaryModel, workspacePolicy, commandPolicy, nil, nil, policy)
 	tools.Register(codingWrite(editTools.WriteFileTool{Paths: workspacePolicy}))
 	tools.Register(codingWrite(editTools.ReplaceTool{Paths: workspacePolicy}))
 	tools.Register(codingWrite(localExecTools.CommandTool{WorkspaceRoots: workspacePolicy.Roots, Guard: commandPolicy, Timeout: cfg.Tools.CommandTimeout}))
@@ -66,8 +92,15 @@ func NewCodingToolRegistry(cfg config.Config, llmClient llm.Client, secondaryCli
 
 func policyForSurface(cfg config.Config, surface string, slackClient *slack.Client, reminderStore reminder.Store) registry.CapabilityPolicy {
 	integrations := cfg.Integrations
+	allowedWrites := make(map[string]bool, len(cfg.Tools.AllowedWriteTools))
+	for _, name := range cfg.Tools.AllowedWriteTools {
+		if name != "" {
+			allowedWrites[name] = true
+		}
+	}
 	return registry.CapabilityPolicy{
-		Surface: surface,
+		Surface:           surface,
+		AllowedWriteTools: allowedWrites,
 		AvailableDeps: map[string]bool{
 			"github":     integrations.GitHub.Token != "",
 			"luckin":     integrations.Luckin.MCPToken != "",

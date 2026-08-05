@@ -14,45 +14,18 @@ import (
 
 // PGStore replaces the directory-of-JSON implementation in production.
 type PGStore struct {
-	pool    *pgxpool.Pool
-	ownPool bool
+	pool *pgxpool.Pool
 }
 
-// NewPGStoreWithPool creates a PGStore using an externally managed pool.
-func NewPGStoreWithPool(ctx context.Context, pool *pgxpool.Pool) (*PGStore, error) {
-	s := &PGStore{pool: pool}
-	if err := s.migrate(ctx); err != nil {
-		return nil, err
-	}
-	return s, nil
-}
-
-func (s *PGStore) Close() {
-	if s != nil && s.pool != nil && s.ownPool {
-		s.pool.Close()
-	}
-}
-func (s *PGStore) migrate(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, `
-CREATE TABLE IF NOT EXISTS agent_runs (
- id TEXT PRIMARY KEY, session_id TEXT NOT NULL, started_at TIMESTAMPTZ NOT NULL, slack_channel TEXT NOT NULL DEFAULT '', slack_message_ts TEXT NOT NULL DEFAULT '', payload JSONB NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_session_started ON agent_runs(session_id, started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_slack_message ON agent_runs(slack_channel, slack_message_ts) WHERE slack_message_ts <> '';
-CREATE TABLE IF NOT EXISTS agent_tool_spills (
- run_id TEXT NOT NULL,
- tool_name TEXT NOT NULL,
- tool_call_id TEXT NOT NULL,
- content TEXT NOT NULL,
- created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
- updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
- PRIMARY KEY (run_id, tool_name, tool_call_id)
-);
-CREATE INDEX IF NOT EXISTS idx_agent_tool_spills_updated ON agent_tool_spills(updated_at DESC);`)
-	return err
-}
+func NewPGStore(pool *pgxpool.Pool) *PGStore { return &PGStore{pool: pool} }
 func (s *PGStore) Save(ctx context.Context, run Run) error {
-	b, err := json.Marshal(run)
+	// Steps and feedback are append-only child records. Keeping them out of the
+	// aggregate payload prevents quadratic write amplification and stale writers
+	// from overwriting feedback received while a run is still active.
+	aggregate := run
+	aggregate.Steps = nil
+	aggregate.Feedback = nil
+	b, err := json.Marshal(aggregate)
 	if err != nil {
 		return err
 	}
@@ -71,8 +44,13 @@ func (s *PGStore) Get(ctx context.Context, id string) (Run, bool, error) {
 		return Run{}, false, err
 	}
 	var r Run
-	err = json.Unmarshal(b, &r)
-	return r, err == nil, err
+	if err = json.Unmarshal(b, &r); err != nil {
+		return Run{}, false, err
+	}
+	if err = s.loadChildren(ctx, &r); err != nil {
+		return Run{}, false, err
+	}
+	return r, true, nil
 }
 func (s *PGStore) List(ctx context.Context, limit int) ([]Run, error) {
 	if limit <= 0 {
@@ -138,21 +116,15 @@ func (s *PGStore) list(ctx context.Context, q string, args ...any) ([]Run, error
 		if err := json.Unmarshal(b, &r); err != nil {
 			return nil, err
 		}
+		if err := s.loadChildren(ctx, &r); err != nil {
+			return nil, err
+		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
 }
 func (s *PGStore) AddFeedback(ctx context.Context, id string, fb Feedback) error {
-	r, ok, err := s.Get(ctx, id)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("run not found")
-	}
-	r.Feedback = append(r.Feedback, fb)
-	r.Quality = scoreRun(r)
-	return s.Save(ctx, r)
+	return s.insertFeedback(ctx, id, fb)
 }
 func (s *PGStore) AddFeedbackForMessage(ctx context.Context, ch, ts string, fb Feedback) (string, bool, error) {
 	var b []byte
@@ -167,9 +139,80 @@ func (s *PGStore) AddFeedbackForMessage(ctx context.Context, ch, ts string, fb F
 	if err := json.Unmarshal(b, &r); err != nil {
 		return "", false, err
 	}
-	r.Feedback = append(r.Feedback, fb)
-	r.Quality = scoreRun(r)
-	return r.ID, true, s.Save(ctx, r)
+	return r.ID, true, s.insertFeedback(ctx, r.ID, fb)
+}
+
+func (s *PGStore) AppendStep(ctx context.Context, runID string, step Step) error {
+	b, err := json.Marshal(step)
+	if err != nil {
+		return err
+	}
+	b = bytes.ReplaceAll(b, []byte(`\u0000`), nil)
+	_, err = s.pool.Exec(ctx, `INSERT INTO agent_run_steps(run_id,step_id,started_at,payload) VALUES($1,$2,$3,$4) ON CONFLICT(run_id,step_id) DO NOTHING`, runID, step.ID, step.StartedAt, b)
+	return err
+}
+
+func (s *PGStore) loadChildren(ctx context.Context, run *Run) error {
+	rows, err := s.pool.Query(ctx, `SELECT payload FROM agent_run_steps WHERE run_id=$1 ORDER BY seq`, run.ID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var b []byte
+		if err := rows.Scan(&b); err != nil {
+			return err
+		}
+		var step Step
+		if err := json.Unmarshal(b, &step); err != nil {
+			return err
+		}
+		run.Steps = append(run.Steps, step)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	feedbackRows, err := s.pool.Query(ctx, `SELECT source,value,user_id,channel,message_ts,created_at FROM agent_run_feedback WHERE run_id=$1 ORDER BY created_at`, run.ID)
+	if err != nil {
+		return err
+	}
+	defer feedbackRows.Close()
+	for feedbackRows.Next() {
+		var fb Feedback
+		if err := feedbackRows.Scan(&fb.Source, &fb.Value, &fb.UserID, &fb.Channel, &fb.MessageTS, &fb.CreatedAt); err != nil {
+			return err
+		}
+		run.Feedback = append(run.Feedback, fb)
+	}
+	if err := feedbackRows.Err(); err != nil {
+		return err
+	}
+	if len(run.Feedback) > 0 {
+		run.Quality = scoreRun(*run)
+	}
+	return nil
+}
+
+func (s *PGStore) insertFeedback(ctx context.Context, runID string, fb Feedback) error {
+	if fb.CreatedAt.IsZero() {
+		fb.CreatedAt = time.Now().UTC()
+	}
+	tag, err := s.pool.Exec(ctx, `INSERT INTO agent_run_feedback(run_id,source,value,user_id,channel,message_ts,created_at)
+SELECT id,$2,$3,$4,$5,$6,$7 FROM agent_runs WHERE id=$1
+ON CONFLICT DO NOTHING`, runID, fb.Source, fb.Value, fb.UserID, fb.Channel, fb.MessageTS, fb.CreatedAt)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		var exists bool
+		if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM agent_runs WHERE id=$1)`, runID).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("run not found")
+		}
+	}
+	return nil
 }
 
 func (s *PGStore) SaveToolSpill(ctx context.Context, runID, toolName, toolCallID, content string) error {

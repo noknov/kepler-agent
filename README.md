@@ -16,7 +16,8 @@ Actions, Kubernetes/GCP diagnostics, runbooks, reminders, and browser tasks.
 - **Safe code access:** workspace allowlists, read-only command policy, secret
   redaction, immutable git snapshots, and per-tool action boundaries.
 - **Production lifecycle:** `/livez`, `/readyz`, local-only `/drain`, inbox
-  leases, graceful shutdown, Docker, and starter Kubernetes manifests.
+  lease renewal, bounded retries/dead letters, graceful shutdown, and neutral
+  container targets.
 - **Configurable models:** OpenAI-compatible and Anthropic-compatible providers,
   optional secondary model, multimodal routing, and context compaction.
 
@@ -25,6 +26,7 @@ Actions, Kubernetes/GCP diagnostics, runbooks, reminders, and browser tasks.
 ```bash
 cp cmd/slack-copilot-agent/.env.example cmd/slack-copilot-agent/.env
 # Fill Slack, LLM, PostgreSQL, Redis, and ALLOWED_SLACK_USERS values.
+psql "$POSTGRES_DSN" -f schema/postgres.sql
 go run ./cmd/slack-copilot-agent
 ```
 
@@ -36,22 +38,25 @@ cp worker/.env.example worker/.env
 cp observability/.env.example observability/.env
 ```
 
-The legacy `slack-copilot-agent` binary still runs all responsibilities in one
-process. New service entrypoints live at the repository root:
+The `slack-copilot-agent` binary runs all responsibilities in one process.
+Independent service entrypoints live at the repository root:
 
 ```bash
 go run ./gateway/cmd/gateway   # Slack Events / Interactions HTTP ingress
 go run ./worker/cmd/worker     # Durable inbox consumer and agent runner
 go run ./observability/cmd/observability
+go run ./appserver/cmd/app-server # Transport-neutral JSON-RPC agent server
 go run ./cli/cmd/slack-copilot tools list
 ```
 
-The packaged `slack-copilot` CLI is local-first; its built-in read-only
+The packaged `slack-copilot` CLI provides lightweight diagnostic commands; its built-in read-only
 commands do not require Redis, PostgreSQL, Slack, or LLM service env files.
+All durable agent state uses PostgreSQL. There is no filesystem persistence
+fallback.
 
-The compatibility all-in-one process is kept for local development and rollback,
-but split deployment should run `gateway`, `worker`, and `observability` as
-separate services.
+Use the integrated process for a simple local setup, or run `gateway`, `worker`,
+and `observability` separately. The repository does not prescribe a deployment
+topology.
 
 Expose the server to Slack with a public HTTPS URL such as ngrok:
 
@@ -123,16 +128,16 @@ controls who can use the bot in channels and DMs.
 gateway/                   Independent Slack HTTP ingress service
 worker/                    Durable Slack event worker service
 observability/             Independent metrics, runs, and tool health service
+appserver/                 Transport-neutral JSON-RPC agent service
 cli/                       Local CLI shell for future packaged agent workflows
 cmd/slack-copilot-agent/   Compatibility all-in-one process entrypoint
 packages/                  Shared libraries: agent, conversation, runtime, tools, storage
 packages/prompts/defaults/ Committed generic prompt defaults
-deploy/starter/k8s/        Example Kubernetes starter dependencies
-deploy/local/compose/      Optional local development dependencies
-gateway/deploy/k8s/        Gateway Kubernetes manifests
-worker/deploy/k8s/         Worker Kubernetes manifests
-observability/deploy/k8s/  Observability Kubernetes manifests
 ```
+
+Infrastructure manifests intentionally live outside this functional repository.
+Users may run the binaries directly, build one of the Docker targets, or supply
+their own Compose/Kubernetes/systemd packaging against the same runtime contract.
 
 ## Operations
 
@@ -142,16 +147,16 @@ Health endpoints:
 |---|---|
 | `GET /livez` | Liveness probe |
 | `GET /readyz` | Readiness probe; fails while draining |
-| `POST /drain` | Local-only drain switch for Kubernetes `preStop` |
+| `POST /drain` | Local-only drain switch for orchestrator shutdown hooks |
 | `GET /metrics` | Durable run and cost metrics from observability |
 | `GET /runs?limit=20` | Recent run list |
 | `GET /health/dashboard` | Browser health dashboard |
 
 Slack events are written to a durable PostgreSQL inbox before processing.
-Workers claim events with a time-bounded lease, which makes retries safe during
-crashes and rolling updates.
+Workers renew their ownership lease while running. Failures use bounded backoff,
+and exhausted or malformed events move to a dead-letter state.
 
-See [Operations](docs/operations.md) for Docker, Kubernetes, graceful shutdown,
+See [Operations](docs/operations.md) for packaging, graceful shutdown,
 observability, ngrok, and browser automation details.
 
 ## Documentation
@@ -161,16 +166,19 @@ observability, ngrok, and browser automation details.
 - [Prompts](docs/prompts.md): committed prompt catalog and private overlays.
 - [Tools](docs/tools.md): code, GitHub, Kubernetes/GCP, search, Slack, browser,
   reminders, and agent-control tools.
-- [Operations](docs/operations.md): deployment, health, shutdown, costs, and
+- [Operations](docs/operations.md): packaging, health, shutdown, costs, and
   Playwright MCP.
+- [Agent protocol](docs/agent-protocol.md): versioned lifecycle events and the
+  JSON-RPC app-server contract.
 
 ## Development
 
 ```bash
-go test ./...
-go build ./cmd/slack-copilot-agent
-go build ./gateway/cmd/gateway ./worker/cmd/worker ./observability/cmd/observability ./cli/cmd/slack-copilot
+make check
 ```
+
+Individual `make fmt-check`, `make vet`, `make test`, `make test-race`, and
+`make build` targets use a repository-local Go build cache for reproducibility.
 
 Some tests use `httptest.NewServer` and need permission to bind a local loopback
 port in restricted environments.
