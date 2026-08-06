@@ -1203,6 +1203,17 @@ func (r Runner) executeSingleTool(ctx context.Context, call llm.ToolCall, req Re
 	}
 	args := json.RawMessage(call.Function.Arguments)
 	start := time.Now()
+	decision := registry.PolicyDecision{Allowed: false, Reason: "tool registry is unavailable"}
+	if r.Tools != nil {
+		decision = r.Tools.PolicyDecision(name)
+	}
+	r.observeEvent("tool_policy_decision", map[string]any{
+		"tool":    name,
+		"allowed": decision.Allowed,
+		"reason":  decision.Reason,
+		"risk":    string(decision.Risk),
+		"surface": decision.Surface,
+	})
 	if r.OnToolEvent != nil {
 		r.OnToolEvent(ToolEvent{Phase: "started", ID: call.ID, Name: name, StartedAt: start.UTC()})
 	}

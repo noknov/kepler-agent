@@ -25,6 +25,7 @@ type Snapshot struct {
 	ToolCalls        map[string]int64 `json:"tool_calls"`
 	ToolErrors       map[string]int64 `json:"tool_errors"`
 	AgentEvents      map[string]int64 `json:"agent_events,omitempty"`
+	EventInbox       EventInboxStats  `json:"event_inbox,omitempty"`
 	ReactionFeedback map[string]int64 `json:"reaction_feedback"`
 	LatencyMS        LatencySummary   `json:"latency_ms"`
 	LLMLatencyMS     LatencySummary   `json:"llm_latency_ms"`
@@ -50,6 +51,12 @@ type TokenUsage struct {
 	ReasoningTokens          int64 `json:"reasoning_tokens,omitempty"`
 }
 
+type EventInboxStats struct {
+	QueueDepth    int              `json:"queue_depth,omitempty"`
+	QueueCapacity int              `json:"queue_capacity,omitempty"`
+	Jobs          map[string]int64 `json:"jobs,omitempty"`
+}
+
 type Recorder struct {
 	mu                 sync.Mutex
 	startedAt          time.Time
@@ -72,6 +79,7 @@ func NewRecorder() *Recorder {
 			ToolCalls:        map[string]int64{},
 			ToolErrors:       map[string]int64{},
 			AgentEvents:      map[string]int64{},
+			EventInbox:       EventInboxStats{Jobs: map[string]int64{}},
 			ReactionFeedback: map[string]int64{},
 		},
 	}
@@ -139,6 +147,28 @@ func (r *Recorder) Event(name string, metadata map[string]any) {
 	}
 }
 
+func (r *Recorder) EventInboxQueue(depth, capacity int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.snap.EventInbox.QueueDepth = depth
+	r.snap.EventInbox.QueueCapacity = capacity
+	if r.snap.EventInbox.Jobs == nil {
+		r.snap.EventInbox.Jobs = map[string]int64{}
+	}
+}
+
+func (r *Recorder) EventInboxJob(result string) {
+	if result == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.snap.EventInbox.Jobs == nil {
+		r.snap.EventInbox.Jobs = map[string]int64{}
+	}
+	r.snap.EventInbox.Jobs[result]++
+}
+
 func (r *Recorder) Publish(_ context.Context, event agentprotocol.Event) {
 	metadata := map[string]any{
 		"thread_id": event.ThreadID,
@@ -201,6 +231,7 @@ func (r *Recorder) Snapshot() Snapshot {
 	cp.ToolCalls = copyMap(r.snap.ToolCalls)
 	cp.ToolErrors = copyMap(r.snap.ToolErrors)
 	cp.AgentEvents = copyMap(r.snap.AgentEvents)
+	cp.EventInbox.Jobs = copyMap(r.snap.EventInbox.Jobs)
 	cp.ReactionFeedback = copyMap(r.snap.ReactionFeedback)
 	cp.LastErrors = append([]string(nil), r.snap.LastErrors...)
 	setPercentiles(&cp.LatencyMS, r.latencySamples)

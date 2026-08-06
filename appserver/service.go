@@ -26,8 +26,12 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 
 	recorder := observability.NewRecorder()
 	runtime := appruntime.NewAppServerAgentRuntime(cfg, recorder, stores.Redis, stores.UserPrefs)
+	if runtime.Core != nil {
+		runtime.Core.Events = nil
+	}
 	server := protocolserver.New(runtime.Core)
 	server.Runs = stores.Runs
+	server.EventStore = stores.Protocol
 	server.Rates = runtime.CostRates
 	server.Provider = cfg.LLM.Provider
 	server.Model = cfg.LLM.Model

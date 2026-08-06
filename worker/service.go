@@ -98,6 +98,9 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 
 	recorder := observability.NewRecorder()
 	rt := appruntime.NewAgentRuntime(cfg, slackClient, stores.Reminders, recorder, stores.Redis, stores.UserPrefs)
+	if rt.Core != nil {
+		rt.Core.Events = stores.Protocol
+	}
 	recorder.SetCostRates(rt.CostRates)
 
 	healthService := health.NewService(rt.Tools, cfg.Security.WorkspaceRoots)
@@ -181,6 +184,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		BeginEvent:     s.beginEvent,
 		EndEvent:       s.endEvent,
 		StartGoroutine: s.Go,
+		Observer:       recorder,
 	}
 
 	cleanup = false

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/noknov/slack-copilot-agent/packages/agentprotocol"
 	"github.com/noknov/slack-copilot-agent/packages/config"
 	"github.com/noknov/slack-copilot-agent/packages/eventinbox"
 	"github.com/noknov/slack-copilot-agent/packages/infra/envutil"
@@ -22,6 +23,7 @@ type Stores struct {
 	Redis     *redisclient.Client
 	Sessions  *session.PGStore
 	Runs      *runs.PGStore
+	Protocol  *agentprotocol.PGStore
 	Reminders *reminder.PGStore
 	Events    *eventinbox.PGStore
 	UserPrefs *userprefs.PGStore
@@ -40,6 +42,7 @@ type CoreStores struct {
 	PGPool    *pgxpool.Pool
 	Redis     *redisclient.Client
 	Runs      *runs.PGStore
+	Protocol  *agentprotocol.PGStore
 	UserPrefs *userprefs.PGStore
 }
 
@@ -64,6 +67,7 @@ func NewStores(ctx context.Context, cfg config.StorageConfig) (*Stores, error) {
 		Redis:     rdb,
 		Sessions:  session.NewPGStore(pgPool),
 		Runs:      runs.NewPGStore(pgPool),
+		Protocol:  agentprotocol.NewPGStore(pgPool),
 		Reminders: reminder.NewPGStore(pgPool),
 		Events:    eventinbox.NewPGStore(pgPool),
 		UserPrefs: userprefs.NewPGStore(pgPool),
@@ -111,6 +115,7 @@ func NewCoreStores(ctx context.Context, cfg config.StorageConfig) (*CoreStores, 
 		PGPool:    pgPool,
 		Redis:     rdb,
 		Runs:      runs.NewPGStore(pgPool),
+		Protocol:  agentprotocol.NewPGStore(pgPool),
 		UserPrefs: userprefs.NewPGStore(pgPool),
 	}, nil
 }
@@ -171,15 +176,15 @@ func newPGPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 
 var allTables = []string{
 	"agent_sessions", "agent_runs", "agent_tool_spills", "agent_run_steps",
-	"agent_run_feedback", "reminders", "slack_event_inbox", "user_settings",
-	"user_prompt_assets",
+	"agent_run_feedback", "agent_protocol_events", "reminders",
+	"slack_event_inbox", "user_settings", "user_prompt_assets",
 }
 
 var ingressTables = []string{"slack_event_inbox", "user_settings", "user_prompt_assets"}
 
 var coreTables = []string{
 	"agent_runs", "agent_tool_spills", "agent_run_steps", "agent_run_feedback",
-	"user_settings", "user_prompt_assets",
+	"agent_protocol_events", "user_settings", "user_prompt_assets",
 }
 
 // requireSchema performs a read-only startup check. Application processes do

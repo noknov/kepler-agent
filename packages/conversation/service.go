@@ -302,6 +302,9 @@ func (s *Service) process(ctx context.Context, req Request, requirePending bool)
 		Events:   s.Events,
 	})
 	result := turnResult.Agent
+	if runObserver != nil && result.TerminationReason != "" {
+		runObserver.Event("termination", map[string]any{"reason": string(result.TerminationReason)})
+	}
 	evidenceText := webEvidenceMarkdown(result.Generated, locale)
 	if progress.AnswerStream() != nil && evidenceText != "" {
 		progress.AnswerStream().Write(evidenceText)

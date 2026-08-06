@@ -36,6 +36,94 @@ func TestInitializeAdvertisesProtocolVersion(t *testing.T) {
 	}
 }
 
+func TestInitializeAdvertisesEventReplayWhenStoreConfigured(t *testing.T) {
+	server := New(&agentcore.Core{})
+	server.EventStore = &memoryEventStore{}
+	var output bytes.Buffer
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize"}` + "\n")
+	if err := server.Serve(context.Background(), input, &output); err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		Result struct {
+			Capabilities map[string]bool `json:"capabilities"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.Result.Capabilities["eventReplay"] {
+		t.Fatalf("eventReplay capability = false, want true")
+	}
+}
+
+func TestEventsReplayReturnsStoredEvents(t *testing.T) {
+	store := &memoryEventStore{}
+	stored, err := store.Append(context.Background(), agentprotocol.Event{Type: agentprotocol.ThreadStarted, ThreadID: "thread-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := New(&agentcore.Core{})
+	server.EventStore = store
+	var output bytes.Buffer
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"events/replay","params":{"threadId":"thread-1","after":0}}` + "\n")
+	if err := server.Serve(context.Background(), input, &output); err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		Result struct {
+			Events []agentprotocol.Event `json:"events"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Result.Events) != 1 || response.Result.Events[0].ID != stored.ID || response.Result.Events[0].Sequence != 1 {
+		t.Fatalf("events = %#v, want stored replay", response.Result.Events)
+	}
+}
+
+type memoryEventStore struct {
+	mu       sync.Mutex
+	sequence map[string]uint64
+	events   []agentprotocol.Event
+}
+
+func (s *memoryEventStore) Publish(ctx context.Context, event agentprotocol.Event) {
+	_, _ = s.Append(ctx, event)
+}
+
+func (s *memoryEventStore) Append(_ context.Context, event agentprotocol.Event) (agentprotocol.Event, error) {
+	event = agentprotocol.Normalize(event)
+	if err := event.Validate(); err != nil {
+		return agentprotocol.Event{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sequence == nil {
+		s.sequence = map[string]uint64{}
+	}
+	s.sequence[event.ThreadID]++
+	event.Sequence = s.sequence[event.ThreadID]
+	s.events = append(s.events, event)
+	return event, nil
+}
+
+func (s *memoryEventStore) Replay(_ context.Context, threadID string, after uint64, limit int) ([]agentprotocol.Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []agentprotocol.Event
+	for _, event := range s.events {
+		if event.ThreadID == threadID && event.Sequence > after {
+			out = append(out, event)
+		}
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 type lockedBuffer struct {
 	mu sync.Mutex
 	b  bytes.Buffer

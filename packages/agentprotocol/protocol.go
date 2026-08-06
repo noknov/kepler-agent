@@ -139,6 +139,15 @@ type Sink interface {
 	Publish(context.Context, Event)
 }
 
+// EventStore persists lifecycle events and supports replay by per-thread
+// sequence. It intentionally extends Sink so durable stores can be wired into
+// Core without changing transport adapters.
+type EventStore interface {
+	Sink
+	Append(context.Context, Event) (Event, error)
+	Replay(context.Context, string, uint64, int) ([]Event, error)
+}
+
 type SinkFunc func(context.Context, Event)
 
 func (f SinkFunc) Publish(ctx context.Context, event Event) {
