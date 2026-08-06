@@ -161,6 +161,8 @@ observability, ngrok, and browser automation details.
 
 ## Documentation
 
+- [Architecture guide](https://noknov.github.io/slack-copilot-agent/): bilingual,
+  visual introduction to the system from ingress to distributed execution.
 - [Configuration](docs/configuration.md): model providers, env vars, streaming,
   multimodal routing, repository freshness.
 - [Prompts](docs/prompts.md): committed prompt catalog and private overlays.

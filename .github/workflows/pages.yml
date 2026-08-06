@@ -1,0 +1,39 @@
+name: architecture-pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - architecture-site/**
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: architecture-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    # Never publish from forks or repositories copied under another owner.
+    if: github.repository == 'noknov/slack-copilot-agent' && github.ref == 'refs/heads/main'
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: architecture-site
+      - name: Deploy architecture guide
+        id: deployment
+        uses: actions/deploy-pages@v4
