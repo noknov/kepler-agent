@@ -119,6 +119,13 @@ type CapabilityPolicy struct {
 	AvailableDeps     map[string]bool
 }
 
+type PolicyDecision struct {
+	Allowed bool     `json:"allowed"`
+	Reason  string   `json:"reason"`
+	Risk    ToolRisk `json:"risk,omitempty"`
+	Surface string   `json:"surface,omitempty"`
+}
+
 const (
 	CategoryDiagnostics    = "diagnostics"
 	CategoryBrowser        = "browser"
@@ -494,35 +501,78 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 		r.mu.RUnlock()
 		return Result{}, fmt.Errorf("unknown tool %q", name)
 	}
-	if !r.canExpose(name, tool) {
+	decision := r.policyDecisionLocked(name, tool)
+	if !decision.Allowed {
 		r.mu.RUnlock()
-		return Result{}, fmt.Errorf("tool %q is a write operation and is disabled by server capability policy", name)
+		return Result{}, fmt.Errorf("tool %q is disabled by server capability policy: %s", name, decision.Reason)
 	}
 	r.mu.RUnlock()
 	return tool.Execute(ctx, args, rt)
 }
 
 func (r *Registry) canExpose(name string, tool Tool) bool {
+	return r.policyDecisionLocked(name, tool).Allowed
+}
+
+func (r *Registry) PolicyDecision(name string) PolicyDecision {
+	if r == nil {
+		return PolicyDecision{Allowed: false, Reason: "registry is unavailable"}
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if tool, ok := r.tools[name]; ok {
+		return r.policyDecisionLocked(name, tool)
+	}
+	if tool, ok := r.deferred[name]; ok {
+		decision := r.policyDecisionLocked(name, tool)
+		if decision.Allowed {
+			decision.Allowed = false
+			decision.Reason = "tool is deferred and must be activated before use"
+		}
+		return decision
+	}
+	return PolicyDecision{Allowed: false, Reason: "tool is not registered"}
+}
+
+func (r *Registry) policyDecisionLocked(name string, tool Tool) PolicyDecision {
 	meta := MetadataOf(tool)
+	decision := PolicyDecision{Allowed: false, Risk: meta.Risk, Surface: r.policy.Surface}
 	if r.policy.AvailableDeps != nil {
 		for _, dep := range meta.Dependencies {
 			if dep != "" && !r.policy.AvailableDeps[dep] {
-				return false
+				decision.Reason = "missing dependency: " + dep
+				return decision
 			}
 		}
 	}
 	surfaceMatched := r.policy.Surface != "" && len(meta.Surfaces) > 0 && stringInSet(r.policy.Surface, meta.Surfaces)
 	surfaceAllowed := r.policy.Surface == "" || len(meta.Surfaces) == 0 || surfaceMatched
 	if !surfaceAllowed {
-		return false
+		decision.Reason = "tool is unavailable on surface: " + r.policy.Surface
+		return decision
 	}
 	if meta.Risk == "" || meta.Risk == RiskRead {
-		return true
+		decision.Allowed = true
+		decision.Reason = "read tool"
+		return decision
 	}
 	if r.policy.AllowedRisks[meta.Risk] {
-		return true
+		decision.Allowed = true
+		decision.Reason = "risk class allowed"
+		return decision
 	}
-	return r.policy.AllowWrites || r.policy.AllowedWriteTools[name]
+	if r.policy.AllowWrites {
+		decision.Allowed = true
+		decision.Reason = "writes allowed by policy"
+		return decision
+	}
+	if r.policy.AllowedWriteTools[name] {
+		decision.Allowed = true
+		decision.Reason = "tool explicitly allowlisted"
+		return decision
+	}
+	decision.Reason = "write risk is not allowlisted"
+	return decision
 }
 
 func stringInSet(value string, set []string) bool {

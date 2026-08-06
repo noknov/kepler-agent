@@ -26,6 +26,7 @@ const JSONRPCVersion = "2.0"
 type Server struct {
 	Core       *agentcore.Core
 	Runs       runs.Store
+	EventStore agentprotocol.EventStore
 	Rates      observability.CostRates
 	Provider   string
 	Model      string
@@ -104,10 +105,31 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 func (s *Server) handle(ctx context.Context, request Request) {
 	switch request.Method {
 	case "initialize":
+		eventReplay := s.EventStore != nil
 		s.respond(request.ID, map[string]any{
 			"protocolVersion": agentprotocol.Version,
-			"capabilities":    map[string]bool{"streaming": true, "cancel": true, "steering": true, "eventReplay": false},
+			"capabilities":    map[string]bool{"streaming": true, "cancel": true, "steering": true, "eventReplay": eventReplay},
 		}, nil)
+	case "events/replay":
+		var params struct {
+			ThreadID string `json:"threadId"`
+			After    uint64 `json:"after,omitempty"`
+			Limit    int    `json:"limit,omitempty"`
+		}
+		if json.Unmarshal(request.Params, &params) != nil || params.ThreadID == "" {
+			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "threadId and valid params are required"})
+			return
+		}
+		if s.EventStore == nil {
+			s.respond(request.ID, nil, &ResponseError{Code: -32004, Message: "event replay is not configured"})
+			return
+		}
+		events, err := s.EventStore.Replay(ctx, params.ThreadID, params.After, params.Limit)
+		if err != nil {
+			s.respond(request.ID, nil, &ResponseError{Code: -32000, Message: err.Error()})
+			return
+		}
+		s.respond(request.ID, map[string]any{"events": events}, nil)
 	case "turn/start":
 		var params TurnStartParams
 		if err := json.Unmarshal(request.Params, &params); err != nil || params.ThreadID == "" {
@@ -198,6 +220,9 @@ func (s *Server) execute(ctx context.Context, params TurnStartParams, active *ac
 	}
 	result, err := s.Core.Execute(ctx, turnRequest)
 	if observer != nil {
+		if result.Agent.TerminationReason != "" {
+			observer.Event("termination", map[string]any{"reason": string(result.Agent.TerminationReason)})
+		}
 		status := "completed"
 		final := result.Agent.Final
 		if errors.Is(err, context.Canceled) {
@@ -234,8 +259,16 @@ func agentRequest(params TurnStartParams, spill registry.ToolSpillStore, steerin
 func (s *Server) Publish(_ context.Context, event agentprotocol.Event) {
 	event = agentprotocol.Normalize(event)
 	s.writeMu.Lock()
-	s.sequence[event.ThreadID]++
-	event.Sequence = s.sequence[event.ThreadID]
+	if s.EventStore != nil {
+		if persisted, err := s.EventStore.Append(context.Background(), event); err == nil {
+			event = persisted
+			s.sequence[event.ThreadID] = event.Sequence
+		}
+	}
+	if event.Sequence == 0 {
+		s.sequence[event.ThreadID]++
+		event.Sequence = s.sequence[event.ThreadID]
+	}
 	if s.writer != nil {
 		_ = json.NewEncoder(s.writer).Encode(map[string]any{"jsonrpc": JSONRPCVersion, "method": "event", "params": event})
 	}

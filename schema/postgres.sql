@@ -65,6 +65,25 @@ CREATE TABLE IF NOT EXISTS agent_run_feedback (
 CREATE INDEX IF NOT EXISTS idx_agent_run_feedback_run
     ON agent_run_feedback(run_id, created_at);
 
+CREATE TABLE IF NOT EXISTS agent_protocol_events (
+    event_id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL,
+    turn_id TEXT NOT NULL DEFAULT '',
+    sequence BIGINT NOT NULL CHECK (sequence > 0),
+    type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT '',
+    at TIMESTAMPTZ NOT NULL,
+    payload JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (thread_id, sequence)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_protocol_events_thread_replay
+    ON agent_protocol_events(thread_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_agent_protocol_events_turn
+    ON agent_protocol_events(turn_id, sequence)
+    WHERE turn_id <> '';
+
 CREATE TABLE IF NOT EXISTS reminders (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,

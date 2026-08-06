@@ -1,10 +1,13 @@
 package registry
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/prompts"
 )
 
@@ -106,4 +109,34 @@ func TestFunctionSpecAppliesNestedPromptDescriptions(t *testing.T) {
 	if got := item["properties"].(map[string]any)["name"].(map[string]any)["description"]; got != "item name prompt" {
 		t.Fatalf("item name description = %q", got)
 	}
+}
+
+func TestPolicyDecisionExplainsWriteDenial(t *testing.T) {
+	reg := NewReadOnly()
+	reg.Register(writeFixtureTool{})
+
+	decision := reg.PolicyDecision("demo-write")
+	if decision.Allowed {
+		t.Fatalf("decision allowed write tool in read-only registry")
+	}
+	if decision.Risk != RiskWrite || decision.Reason == "" {
+		t.Fatalf("decision = %#v, want write risk and reason", decision)
+	}
+	if _, err := reg.Execute(context.Background(), "demo-write", json.RawMessage(`{}`), Runtime{}); err == nil {
+		t.Fatalf("Execute succeeded, want policy denial")
+	}
+}
+
+type writeFixtureTool struct{}
+
+func (writeFixtureTool) Spec() llm.ToolSpec {
+	return FunctionSpec("demo-write", "demo write", ObjectSchema(nil, map[string]any{}))
+}
+
+func (writeFixtureTool) Execute(context.Context, json.RawMessage, Runtime) (Result, error) {
+	return Result{Content: "ok"}, nil
+}
+
+func (writeFixtureTool) Metadata() ToolMetadata {
+	return ToolMetadata{Risk: RiskWrite}
 }

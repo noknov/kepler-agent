@@ -21,6 +21,11 @@ const (
 
 type Handler func(context.Context, string, slack.Event) error
 
+type Observer interface {
+	EventInboxQueue(depth, capacity int)
+	EventInboxJob(result string)
+}
+
 type Worker struct {
 	Inbox          eventinbox.Store
 	Redis          *redisclient.Client
@@ -36,6 +41,7 @@ type Worker struct {
 	BeginEvent     func() bool
 	EndEvent       func()
 	StartGoroutine func(func(context.Context))
+	Observer       Observer
 
 	queue chan job
 }
@@ -116,11 +122,17 @@ func (w *Worker) Notify(ctx context.Context, eventID string, event slack.Event, 
 	}
 	select {
 	case w.queue <- job{eventID: eventID, event: event}:
+		w.observeQueue()
 		if w.Redis != nil {
 			_ = w.Redis.Publish(ctx, RedisEventChannel, eventID)
 		}
 		return true
 	case <-ctx.Done():
+		w.observeJob("notify_timeout")
+		return false
+	default:
+		w.observeQueue()
+		w.observeJob("queue_full")
 		return false
 	}
 }
@@ -170,15 +182,18 @@ func (w *Worker) subscribeRedisEvents(ctx context.Context) {
 
 func (w *Worker) handle(ctx context.Context, job job) {
 	if !w.begin() {
+		w.observeJob("begin_rejected")
 		return
 	}
 	defer w.end()
 	claimed, err := w.Inbox.Start(ctx, job.eventID, w.InboxLease)
 	if err != nil {
 		log.Printf("claim Slack inbox event %s: %v", job.eventID, err)
+		w.observeJob("claim_error")
 		return
 	}
 	if !claimed {
+		w.observeJob("claim_skipped")
 		return
 	}
 	eventCtx, cancel := context.WithTimeout(ctx, w.EventTimeout)
@@ -196,7 +211,9 @@ func (w *Worker) handle(ctx context.Context, job job) {
 			log.Printf("fail Slack inbox event %s: %v", job.eventID, failErr)
 		} else if dead {
 			log.Printf("dead-lettered Slack inbox event %s after %d attempts", job.eventID, w.maxAttempts())
+			w.observeJob("dead_letter")
 		}
+		w.observeJob("handler_error")
 		return
 	}
 	finalCtx, finalCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -204,7 +221,10 @@ func (w *Worker) handle(ctx context.Context, job job) {
 	finalCancel()
 	if err != nil {
 		log.Printf("complete Slack inbox event %s: %v", job.eventID, err)
+		w.observeJob("complete_error")
+		return
 	}
+	w.observeJob("completed")
 }
 
 func (w *Worker) replay(ctx context.Context) {
@@ -227,7 +247,10 @@ func (w *Worker) replay(ctx context.Context) {
 		}
 		select {
 		case w.queue <- job{eventID: item.ID, event: event, attempt: item.Attempts}:
+			w.observeQueue()
 		default:
+			w.observeQueue()
+			w.observeJob("replay_queue_full")
 			return
 		}
 	}
@@ -249,6 +272,11 @@ func (w *Worker) renewLease(ctx context.Context, eventID string, done chan<- str
 			if err := w.Inbox.Renew(ctx, eventID, w.InboxLease); err != nil {
 				if !errors.Is(err, context.Canceled) && !errors.Is(err, eventinbox.ErrLeaseLost) {
 					log.Printf("renew Slack inbox event %s: %v", eventID, err)
+				}
+				if errors.Is(err, eventinbox.ErrLeaseLost) {
+					w.observeJob("lease_lost")
+				} else if !errors.Is(err, context.Canceled) {
+					w.observeJob("renew_error")
 				}
 				return
 			}
@@ -309,4 +337,19 @@ func (w *Worker) end() {
 	if w.EndEvent != nil {
 		w.EndEvent()
 	}
+}
+
+func (w *Worker) observeQueue() {
+	if w == nil || w.Observer == nil || w.queue == nil {
+		return
+	}
+	w.Observer.EventInboxQueue(len(w.queue), cap(w.queue))
+}
+
+func (w *Worker) observeJob(result string) {
+	if w == nil || w.Observer == nil {
+		return
+	}
+	w.Observer.EventInboxJob(result)
+	w.observeQueue()
 }

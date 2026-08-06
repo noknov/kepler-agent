@@ -31,6 +31,11 @@ error
 after a sequence cursor. Slow subscribers never block agent execution; they
 reconnect and replay from their last sequence.
 
+Production services can also wire `agentprotocol.PGStore` as a durable
+append-only event log. It assigns the same per-thread `sequence` contract in
+PostgreSQL, so transports can replay lifecycle events after process restarts or
+when a different worker owns the next turn.
+
 ## JSON-RPC app server
 
 `slack-copilot-app-server` reads JSON-RPC 2.0 objects from stdin and writes one
@@ -57,6 +62,15 @@ injects queued guidance before the next model step.
 
 Close a thread with `thread/close` and `{"threadId":"thread-1"}`. Closing
 ends the transport lifecycle; persisted runs remain in PostgreSQL.
+
+Replay durable events with:
+
+```json
+{"jsonrpc":"2.0","id":4,"method":"events/replay","params":{"threadId":"thread-1","after":42,"limit":200}}
+```
+
+The response contains `events` ordered by `sequence`. Hosts should persist their
+last observed sequence and call replay before subscribing to fresh events.
 
 The stdio transport is intentionally small. Authentication, public networking,
 and deployment topology belong outside this process.

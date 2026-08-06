@@ -79,10 +79,11 @@ type Feedback struct {
 }
 
 type QualityScore struct {
-	Automatic float64   `json:"automatic,omitempty"`
-	Manual    float64   `json:"manual,omitempty"`
-	Notes     []string  `json:"notes,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Automatic float64        `json:"automatic,omitempty"`
+	Manual    float64        `json:"manual,omitempty"`
+	Signals   map[string]int `json:"signals,omitempty"`
+	Notes     []string       `json:"notes,omitempty"`
+	UpdatedAt time.Time      `json:"updated_at"`
 }
 
 type Store interface {
@@ -162,32 +163,78 @@ func scoreFeedback(feedback []Feedback) *QualityScore {
 func scoreRun(run Run) *QualityScore {
 	score := 0.75
 	notes := []string{}
+	signals := map[string]int{}
 	switch run.Status {
 	case "completed":
 		score += 0.15
+		signals["completed"]++
 	case "pending_user":
 		score += 0.05
+		signals["pending_user"]++
 		notes = append(notes, "pending_user")
 	case "error":
 		score -= 0.45
+		signals["run_error"]++
 		notes = append(notes, "run_error")
 	}
 	toolSteps := 0
+	llmSteps := 0
+	retries := 0
 	for _, step := range run.Steps {
 		if step.Error != "" {
 			score -= 0.1
+			signals["step_error"]++
 			notes = append(notes, "step_error:"+step.Name)
 		}
 		if step.Type == "tool" {
 			toolSteps++
 		}
+		if step.Type == "llm" {
+			llmSteps++
+			if step.FinishReason == "max_tokens" || step.FinishReason == "length" {
+				score -= 0.05
+				signals["llm_length_stop"]++
+			}
+		}
+		if step.Type == "event" {
+			switch step.Name {
+			case "max_output_tokens_recovery", "compact_error", "context_compact", "aggregate_budget_applied", "stateful_aggregate_budget_applied":
+				signals[step.Name]++
+			}
+			if strings.Contains(step.Name, "retry") || strings.Contains(step.Name, "recovery") {
+				retries++
+			}
+			if step.Name == "tool_policy_decision" {
+				if allowed, _ := step.Metadata["allowed"].(bool); !allowed {
+					score -= 0.08
+					signals["tool_policy_denied"]++
+				}
+			}
+			if step.Name == "termination" {
+				if reason, _ := step.Metadata["reason"].(string); reason != "" && reason != "completed" {
+					score -= 0.08
+					signals["termination_"+reason]++
+					notes = append(notes, "termination:"+reason)
+				}
+			}
+		}
 	}
 	if toolSteps > 0 {
 		score += 0.1
+		signals["tool_evidence"] = toolSteps
 		notes = append(notes, "tool_evidence")
+	}
+	if llmSteps > 4 {
+		score -= 0.03
+		signals["many_llm_steps"]++
+	}
+	if retries > 0 {
+		score -= 0.03 * float64(retries)
+		signals["retries"] = retries
 	}
 	if run.FinalHash == "" && run.Status == "completed" {
 		score -= 0.15
+		signals["missing_final"]++
 		notes = append(notes, "missing_final")
 	}
 	if score < 0 {
@@ -196,7 +243,7 @@ func scoreRun(run Run) *QualityScore {
 	if score > 1 {
 		score = 1
 	}
-	quality := &QualityScore{Automatic: score, Notes: notes, UpdatedAt: time.Now().UTC()}
+	quality := &QualityScore{Automatic: score, Signals: signals, Notes: notes, UpdatedAt: time.Now().UTC()}
 	if manual := scoreFeedback(run.Feedback); manual != nil {
 		quality.Manual = manual.Manual
 		quality.Notes = append(quality.Notes, manual.Notes...)
