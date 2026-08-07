@@ -25,6 +25,9 @@ CREATE INDEX IF NOT EXISTS idx_agent_runs_session_started
 CREATE INDEX IF NOT EXISTS idx_agent_runs_slack_message
     ON agent_runs(slack_channel, slack_message_ts)
     WHERE slack_message_ts <> '';
+CREATE INDEX IF NOT EXISTS idx_agent_runs_user_started
+    ON agent_runs((payload->>'user_id'), started_at DESC)
+    WHERE payload->>'user_id' <> '';
 
 CREATE TABLE IF NOT EXISTS agent_tool_spills (
     run_id TEXT NOT NULL,
