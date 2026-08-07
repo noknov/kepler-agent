@@ -49,63 +49,49 @@ func (c Controller) WebSearchEnabled(userID string) bool {
 
 func (c Controller) View(userID string) map[string]any {
 	allowed := c.Access.AllowsUser(userID)
-	accessHeader := "Access  :heavy_check_mark:"
+	accessStatus := "Allowed"
 	if !allowed {
-		accessHeader = "Access  :no_entry:  Not allowlisted"
-	}
-
-	botMention := "the bot"
-	if c.Cfg.Slack.BotUserID != "" {
-		botMention = fmt.Sprintf("<@%s>", c.Cfg.Slack.BotUserID)
+		accessStatus = "Not allowlisted"
 	}
 
 	secondary := strings.TrimSpace(c.Cfg.LLM.SecondaryModel)
 	if secondary == "" {
 		secondary = c.Cfg.LLM.Model
 	}
-	modelFields := []map[string]any{
-		mrkdwnField("*Primary*\n`" + c.Cfg.LLM.Model + "`"),
-		mrkdwnField("*Explorer / Summary*\n`" + secondary + "`"),
-	}
-
 	webSearchOn := c.WebSearchEnabled(userID)
-	webSearchStatus := ":large_green_circle:  On"
+	webSearchStatus := "On"
 	webSearchBtnStyle := "primary"
 	if !webSearchOn {
-		webSearchStatus = "Off  :white_circle:"
+		webSearchStatus = "Off"
 		webSearchBtnStyle = ""
-	} else {
-		webSearchStatus = "On  :large_green_circle:"
 	}
 	ruleCount := userprefs.CountByKind(context.Background(), c.Store, userID, userprefs.KindRule)
 	skillCount := userprefs.CountByKind(context.Background(), c.Store, userID, userprefs.KindSkill)
+	statusFields := []map[string]any{
+		mrkdwnField("*Access*\n" + accessStatus),
+		mrkdwnField("*Web Search*\n" + webSearchStatus),
+		mrkdwnField(fmt.Sprintf("*Rules*\n%d active", ruleCount)),
+		mrkdwnField(fmt.Sprintf("*Skills*\n%d active", skillCount)),
+		mrkdwnField("*Primary Model*\n`" + c.Cfg.LLM.Model + "`"),
+		mrkdwnField("*Explorer / Summary*\n`" + secondary + "`"),
+	}
+	blocks := []map[string]any{
+		contextBlock("Mention the agent in a channel or use the Messages tab to start a private thread."),
+		dividerBlock(),
+		headerBlock(":signal_strength: Status"),
+		sectionBlockWithFields("", statusFields...),
+		dividerBlock(),
+		headerBlock(":control_knobs: Controls"),
+		actionsBlock(
+			actionButton("manage_rules", "Manage Rules", "rule", ""),
+			actionButton("manage_skills", "Manage Skills", "skill", ""),
+			actionButton("toggle_user_setting", "Web Search "+boolLabel(webSearchOn), "web_search", webSearchBtnStyle),
+		),
+	}
 
 	return map[string]any{
-		"type": "home",
-		"blocks": []map[string]any{
-			sectionBlock(botMention + " — chat in any channel or DM"),
-			headerBlock(accessHeader),
-			dividerBlock(),
-			headerBlock("Model"),
-			sectionBlockWithFields("", modelFields...),
-			dividerBlock(),
-			headerBlock("Personalization"),
-			sectionBlockWithAccessory(
-				fmt.Sprintf("*Rules*  %d active", ruleCount),
-				actionButton("manage_rules", "Manage Rules", "rule", ""),
-			),
-			sectionBlockWithAccessory(
-				fmt.Sprintf("*Skills*  %d active", skillCount),
-				actionButton("manage_skills", "Manage Skills", "skill", ""),
-			),
-			dividerBlock(),
-			headerBlock("Settings"),
-			sectionBlockWithAccessory(
-				"*Web Search*  "+webSearchStatus,
-				actionButton("toggle_user_setting", boolLabel(webSearchOn), "web_search", webSearchBtnStyle),
-			),
-			dividerBlock(),
-		},
+		"type":   "home",
+		"blocks": blocks,
 	}
 }
 
@@ -144,6 +130,16 @@ func boolLabel(on bool) string {
 
 func sectionBlock(text string) map[string]any {
 	return sectionBlockWithFields(text)
+}
+
+func contextBlock(text string) map[string]any {
+	return map[string]any{
+		"type": "context",
+		"elements": []map[string]any{{
+			"type": "mrkdwn",
+			"text": text,
+		}},
+	}
 }
 
 func sectionBlockWithAccessory(text string, accessory map[string]any) map[string]any {
