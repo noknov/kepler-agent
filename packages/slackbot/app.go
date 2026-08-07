@@ -76,6 +76,11 @@ func (s *Server) StartBackground() {
 	s.Go(func(ctx context.Context) {
 		s.conv.StartControlSubscriber(ctx)
 	})
+	if s.handler != nil {
+		s.Go(func(ctx context.Context) {
+			s.handler.Home.StartRefreshSubscriber(ctx)
+		})
+	}
 }
 
 type Server struct {
@@ -289,6 +294,7 @@ func NewServerWithOptions(cfg config.Config, opts Options) (*Server, error) {
 			Access: s.access,
 			Slack:  slackClient,
 			Store:  userPrefsStore,
+			Redis:  rdb,
 		},
 	}
 	s.slackWorker.Handler = s.handler.Handle
