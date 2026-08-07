@@ -57,6 +57,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		Access: safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
 		Slack:  slackClient,
 		Store:  stores.UserPrefs,
+		Redis:  stores.Redis,
 	}
 	handler := &slackhandler.Handler{
 		Cfg:       cfg,

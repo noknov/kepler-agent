@@ -126,8 +126,8 @@ func (h *Handler) deleteAsset(ctx context.Context, interaction slackgateway.Inte
 			log.Printf("refresh %s modal failed user=%s err=%v", kind, interaction.UserID, err)
 		}
 	}
-	if err := h.Home.Publish(context.Background(), interaction.UserID); err != nil {
-		log.Printf("publish home after %s delete failed: %v", kind, err)
+	if err := h.Home.RequestRefresh(context.Background(), interaction.UserID); err != nil {
+		log.Printf("refresh home after %s delete failed: %v", kind, err)
 	}
 }
 
@@ -183,8 +183,8 @@ func (h *Handler) handleViewSubmission(ctx context.Context, interaction slackgat
 		}
 	}
 	if saved > 0 {
-		if err := h.Home.Publish(context.Background(), interaction.UserID); err != nil {
-			log.Printf("publish home after %s upload failed: %v", kind, err)
+		if err := h.Home.RequestRefresh(context.Background(), interaction.UserID); err != nil {
+			log.Printf("refresh home after %s upload failed: %v", kind, err)
 		}
 	}
 }

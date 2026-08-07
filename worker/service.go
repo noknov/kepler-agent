@@ -148,6 +148,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 			Access: access,
 			Slack:  slackClient,
 			Store:  stores.UserPrefs,
+			Redis:  stores.Redis,
 		},
 	}
 	conv.WebSearchEnabled = handler.WebSearchPreference
@@ -211,6 +212,11 @@ func (s *Service) StartBackground() {
 	s.Go(func(ctx context.Context) {
 		s.conv.StartControlSubscriber(ctx)
 	})
+	if s.handler != nil {
+		s.Go(func(ctx context.Context) {
+			s.handler.Home.StartRefreshSubscriber(ctx)
+		})
+	}
 	if s.slackWorker != nil {
 		s.slackWorker.Start(s.ctx)
 	}
