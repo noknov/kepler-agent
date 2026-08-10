@@ -13,6 +13,7 @@ import (
 )
 
 const refreshChannel = "slack:home:refresh"
+const conversationModePrefix = "user:conversation_mode:"
 
 type Publisher interface {
 	PublishHome(context.Context, string, map[string]any) error
@@ -91,6 +92,34 @@ func (c Controller) WebSearchEnabled(userID string) bool {
 	return settings.WebSearchEnabled
 }
 
+func (c Controller) ConversationMode(userID string) string {
+	if c.Redis == nil || strings.TrimSpace(userID) == "" {
+		return "steer"
+	}
+	mode, err := c.Redis.Get(context.Background(), conversationModePrefix+userID)
+	if err != nil || mode != "queue" {
+		return "steer"
+	}
+	return mode
+}
+
+func (c Controller) ToggleConversationMode(ctx context.Context, userID string) {
+	if c.Redis == nil || strings.TrimSpace(userID) == "" {
+		return
+	}
+	mode := "queue"
+	if c.ConversationMode(userID) == "queue" {
+		mode = "steer"
+	}
+	if err := c.Redis.Set(ctx, conversationModePrefix+userID, mode, 0); err != nil {
+		log.Printf("save conversation mode failed: %v", err)
+		return
+	}
+	if err := c.RequestRefresh(context.Background(), userID); err != nil {
+		log.Printf("refresh home after conversation mode toggle failed: %v", err)
+	}
+}
+
 func (c Controller) View(userID string) map[string]any {
 	allowed := c.Access.AllowsUser(userID)
 	accessStatus := "Allowed"
@@ -103,6 +132,11 @@ func (c Controller) View(userID string) map[string]any {
 		secondary = c.Cfg.LLM.Model
 	}
 	webSearchOn := c.WebSearchEnabled(userID)
+	conversationMode := c.ConversationMode(userID)
+	conversationLabel := "Steer"
+	if conversationMode == "queue" {
+		conversationLabel = "Queue"
+	}
 	webSearchStatus := "On"
 	webSearchBtnStyle := "primary"
 	if !webSearchOn {
@@ -114,6 +148,7 @@ func (c Controller) View(userID string) map[string]any {
 	statusFields := []map[string]any{
 		mrkdwnField("*Access*\n" + accessStatus),
 		mrkdwnField("*Web Search*\n" + webSearchStatus),
+		mrkdwnField("*Active-turn input*\n" + conversationLabel),
 		mrkdwnField(fmt.Sprintf("*Rules*\n%d active", ruleCount)),
 		mrkdwnField(fmt.Sprintf("*Skills*\n%d active", skillCount)),
 		mrkdwnField("*Primary Model*\n`" + c.Cfg.LLM.Model + "`"),
@@ -130,6 +165,7 @@ func (c Controller) View(userID string) map[string]any {
 			actionButton("manage_rules", "Manage Rules", "rule", ""),
 			actionButton("manage_skills", "Manage Skills", "skill", ""),
 			actionButton("toggle_user_setting", "Web Search "+boolLabel(webSearchOn), "web_search", webSearchBtnStyle),
+			actionButton("toggle_user_setting", "Input: "+conversationLabel, "conversation_mode", ""),
 		),
 	}
 

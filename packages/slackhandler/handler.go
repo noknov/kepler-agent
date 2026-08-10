@@ -23,12 +23,17 @@ type Handler struct {
 	Cfg       config.Config
 	Slack     *slack.Client
 	Access    safety.AccessPolicy
-	Conv      *conversation.Service
+	Conv      Conversation
 	Prompt    safety.PromptPolicy
 	Metrics   *observability.Recorder
 	Runs      runs.Store
 	Home      slackhome.Controller
 	UserPrefs userprefs.Store
+}
+
+type Conversation interface {
+	HandleMention(context.Context, conversation.Request) bool
+	HandleReply(context.Context, conversation.Request) bool
 }
 
 func (h *Handler) Handle(ctx context.Context, eventID string, ev slack.Event) (err error) {
@@ -87,6 +92,8 @@ func (h *Handler) handleBlockActions(ctx context.Context, interaction slackgatew
 		case "toggle_user_setting":
 			if action.Value == "web_search" {
 				h.Home.ToggleWebSearch(ctx, interaction.UserID)
+			} else if action.Value == "conversation_mode" {
+				h.Home.ToggleConversationMode(ctx, interaction.UserID)
 			}
 		case "manage_rules":
 			h.openAssetModal(ctx, interaction.TriggerID, interaction.UserID, userprefs.KindRule)

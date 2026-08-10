@@ -1,0 +1,71 @@
+package hosted
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/noknov/slack-copilot-agent/packages/agentv2/transcript"
+)
+
+// PGTranscript stores canonical v2 events in the existing append-only event
+// table. The storage key is namespaced so v1 protocol replay cannot interpret
+// v2 payloads, while Event.SessionID remains transport-neutral.
+type PGTranscript struct{ Pool *pgxpool.Pool }
+
+func (s PGTranscript) Append(ctx context.Context, event transcript.Event) (transcript.Event, error) {
+	if s.Pool == nil {
+		return transcript.Event{}, fmt.Errorf("v2 transcript store is unavailable")
+	}
+	key := "v2:" + event.SessionID
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return transcript.Event{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, key); err != nil {
+		return transcript.Event{}, err
+	}
+	if err = tx.QueryRow(ctx, `SELECT COALESCE(MAX(sequence), 0) + 1 FROM agent_protocol_events WHERE thread_id=$1`, key).Scan(&event.Sequence); err != nil {
+		return transcript.Event{}, err
+	}
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return transcript.Event{}, err
+	}
+	payload = bytes.ReplaceAll(payload, []byte(`\u0000`), nil)
+	_, err = tx.Exec(ctx, `INSERT INTO agent_protocol_events(event_id,thread_id,turn_id,sequence,type,status,at,payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(event_id) DO NOTHING`, event.ID, key, event.TurnID, event.Sequence, string(event.Type), event.Status, event.Timestamp, payload)
+	if err != nil {
+		return transcript.Event{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return transcript.Event{}, err
+	}
+	return event, nil
+}
+
+func (s PGTranscript) Load(ctx context.Context, sessionID string, after uint64) ([]transcript.Event, error) {
+	if s.Pool == nil {
+		return nil, fmt.Errorf("v2 transcript store is unavailable")
+	}
+	rows, err := s.Pool.Query(ctx, `SELECT payload FROM agent_protocol_events WHERE thread_id=$1 AND sequence>$2 ORDER BY sequence`, "v2:"+sessionID, after)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var events []transcript.Event
+	for rows.Next() {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
+			return nil, err
+		}
+		var event transcript.Event
+		if err := json.Unmarshal(payload, &event); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}

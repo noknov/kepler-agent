@@ -251,6 +251,9 @@ POSTGRES_MAX_CONNS=4
 
 ## Agent Runtime Policy
 
+The split Slack worker uses the shared hosted v2 harness by default. Set
+`AGENT_RUNTIME_VERSION=v1` only for focused compatibility checks.
+
 The Slack worker keeps strict production defaults: code claims must be backed by
 code-tool evidence, repeated identical tool calls are interrupted, and truncated
 model responses get a small number of recovery attempts.
