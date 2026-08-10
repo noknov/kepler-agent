@@ -16,7 +16,6 @@ type Config struct {
 	LLM          LLMConfig
 	Security     SecurityConfig
 	Sessions     SessionConfig
-	Agent        AgentPolicyConfig
 	Tools        ToolConfig
 	Integrations IntegrationConfig
 	Observing    ObservingConfig
@@ -72,11 +71,6 @@ type LLMConfig struct {
 	SecondaryAPIKey   string
 	SecondaryModel    string
 	SecondaryProtocol string
-
-	// DynamicStatus enables async secondary-model status summaries that
-	// replace the static tool hints with a short description of what the
-	// current tool call is actually doing.
-	DynamicStatus bool
 }
 
 type TokenUsageConfig struct {
@@ -100,13 +94,6 @@ type SessionConfig struct {
 	AutocompactBuffer   int    // reserved token headroom before auto-compact (default 13000)
 	CompactModel        string // model used for compact summaries (empty = secondary model, then main model)
 	MaxToolResultTokens int    // per-tool-result token cap (default 8000)
-}
-
-type AgentPolicyConfig struct {
-	DisableEvidenceValidation       bool
-	MaxOutputTokenRecoveries        int
-	MaxIdenticalFailedToolCalls     int
-	MaxIdenticalSuccessfulToolCalls int
 }
 
 type ToolConfig struct {
@@ -171,7 +158,6 @@ type TTSConfig struct {
 	APIKey       string
 	BaseURL      string
 	Model        string
-	Auto         bool
 	DefaultVoice string
 	DefaultStyle string
 }
@@ -205,18 +191,13 @@ type ObservingConfig struct {
 type RuntimeProfile string
 
 const (
-	ProfileAllInOne      RuntimeProfile = "all-in-one"
 	ProfileGateway       RuntimeProfile = "gateway"
 	ProfileSlackWorker   RuntimeProfile = "slack-worker"
-	ProfileAppServer     RuntimeProfile = "app-server"
 	ProfileObservability RuntimeProfile = "observability"
-	ProfileLocalAgent    RuntimeProfile = "local-agent"
-	ProfileBenchmark     RuntimeProfile = "benchmark"
-	ProfileCLI           RuntimeProfile = "cli"
 )
 
 func Load() (Config, error) {
-	return LoadFor(ProfileAllInOne)
+	return LoadFor(ProfileSlackWorker)
 }
 
 func LoadFor(profile RuntimeProfile) (Config, error) {
@@ -225,18 +206,6 @@ func LoadFor(profile RuntimeProfile) (Config, error) {
 		return cfg, err
 	}
 	return validateForProfile(cfg, profile)
-}
-
-func LoadLocalAgent() (Config, error) {
-	return LoadFor(ProfileLocalAgent)
-}
-
-func LoadBenchmark() (Config, error) {
-	return LoadFor(ProfileBenchmark)
-}
-
-func LoadCLI() (Config, error) {
-	return LoadFor(ProfileCLI)
 }
 
 func loadRaw(profile RuntimeProfile) (Config, error) {
@@ -323,7 +292,6 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			SecondaryAPIKey:   secondaryAPIKey,
 			SecondaryModel:    secondaryModel,
 			SecondaryProtocol: secondaryProtocol,
-			DynamicStatus:     envBool("DYNAMIC_STATUS", true),
 		},
 		Security: SecurityConfig{
 			AllowedUsers:       envCSV("ALLOWED_SLACK_USERS"),
@@ -336,12 +304,6 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			AutocompactBuffer:   envInt("SESSION_AUTOCOMPACT_BUFFER", 13000),
 			CompactModel:        env("SESSION_COMPACT_MODEL", ""),
 			MaxToolResultTokens: envInt("SESSION_MAX_TOOL_RESULT_TOKENS", 8000),
-		},
-		Agent: AgentPolicyConfig{
-			DisableEvidenceValidation:       envBool("AGENT_DISABLE_EVIDENCE_VALIDATION", false),
-			MaxOutputTokenRecoveries:        envInt("AGENT_MAX_OUTPUT_TOKEN_RECOVERIES", 0),
-			MaxIdenticalFailedToolCalls:     envInt("AGENT_MAX_IDENTICAL_FAILED_TOOL_CALLS", 0),
-			MaxIdenticalSuccessfulToolCalls: envInt("AGENT_MAX_IDENTICAL_SUCCESSFUL_TOOL_CALLS", 0),
 		},
 		Tools: ToolConfig{
 			CommandTimeout:         envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
@@ -388,7 +350,6 @@ func loadIntegrations() IntegrationConfig {
 			APIKey:       firstEnv("TTS_API_KEY", "MIMO_API_KEY"),
 			BaseURL:      trimRightSlash(env("TTS_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1")),
 			Model:        env("TTS_MODEL", "mimo-v2.5-tts"),
-			Auto:         envBool("TTS_AUTO", false),
 			DefaultVoice: env("TTS_DEFAULT_VOICE", "冰糖"),
 			DefaultStyle: os.Getenv("TTS_DEFAULT_STYLE"),
 		},
@@ -440,18 +401,10 @@ func dotenvPath(profile RuntimeProfile) string {
 		return "worker/.env"
 	case ProfileObservability:
 		return "observability/.env"
-	case ProfileAppServer:
-		return "appserver/.env"
-	case ProfileLocalAgent:
-		return "local-agent/.env"
-	case ProfileBenchmark:
-		return "benchmark/.env"
-	case ProfileCLI:
-		return "cli/.env"
-	case ProfileAllInOne, "":
-		return "cmd/slack-copilot-agent/.env"
+	case "":
+		return "worker/.env"
 	default:
-		return "cmd/slack-copilot-agent/.env"
+		return "worker/.env"
 	}
 }
 
@@ -475,12 +428,6 @@ func validateForProfile(cfg Config, profile RuntimeProfile) (Config, error) {
 		}
 		seenWriteTools[name] = true
 	}
-	switch profile {
-	case ProfileLocalAgent, ProfileBenchmark:
-		return validateLocalAgentRuntime(cfg)
-	case ProfileCLI:
-		return cfg, nil
-	}
 	if cfg.Storage.PostgresDSN == "" {
 		return cfg, fmt.Errorf("POSTGRES_DSN is required for durable session, event, run, and reminder storage")
 	}
@@ -496,9 +443,7 @@ func validateForProfile(cfg Config, profile RuntimeProfile) (Config, error) {
 		return cfg, nil
 	case ProfileObservability:
 		return cfg, nil
-	case ProfileAppServer:
-		return validateModelRuntime(cfg)
-	case ProfileAllInOne, ProfileSlackWorker, "":
+	case ProfileSlackWorker, "":
 		return validateAgentRuntime(cfg)
 	default:
 		return cfg, fmt.Errorf("unknown runtime profile %q", profile)
@@ -534,10 +479,6 @@ func validateAgentRuntime(cfg Config) (Config, error) {
 		return cfg, fmt.Errorf("ALLOWED_SLACK_USERS is required")
 	}
 	return cfg, nil
-}
-
-func validateLocalAgentRuntime(cfg Config) (Config, error) {
-	return validateModelRuntime(cfg)
 }
 
 func validateModelRuntime(cfg Config) (Config, error) {

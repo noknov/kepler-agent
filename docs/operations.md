@@ -38,12 +38,10 @@ The generic Dockerfile exposes independent targets:
 docker build --target gateway -t slack-copilot-gateway .
 docker build --target worker -t slack-copilot-worker .
 docker build --target observability -t slack-copilot-observability .
-docker build --target app-server -t slack-copilot-app-server .
-docker build --target all-in-one -t slack-copilot-agent .
 ```
 
-Gateway and observability use a minimal CA-only runtime. Worker and all-in-one
-add Git, ripgrep, curl, and SSH for repository access. Infrastructure CLIs such
+Gateway and observability use a minimal CA-only runtime. Worker adds Git,
+ripgrep, curl, and SSH for repository access. Infrastructure CLIs such
 as `kubectl` and `gcloud` are deliberately not bundled; derive a worker image or
 mount administrator-pinned binaries when those optional tools are enabled.
 

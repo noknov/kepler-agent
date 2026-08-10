@@ -14,6 +14,16 @@ type Message struct {
 	ToolCallID       string     `json:"tool_call_id,omitempty"`
 	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 	Usage            *Usage     `json:"-"` // API-reported token usage; set on assistant messages after each LLM call
+	Citations        []Citation `json:"-"`
+}
+
+// Citation preserves provider-supplied provenance independently from rendered
+// answer text. Product adapters can render it without parsing model prose.
+type Citation struct {
+	URL        string
+	Title      string
+	StartIndex int
+	EndIndex   int
 }
 
 type ContentPart struct {

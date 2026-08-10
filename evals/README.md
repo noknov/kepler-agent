@@ -1,6 +1,6 @@
 # Agent harness evaluation
 
-This module compares agent **harnesses**, not native models. Every candidate is configured to use the same model endpoint and model identifier. The evaluator is intentionally independent from `packages/agentv2`, `agentcore`, and all provider packages: it launches each product as a black-box subprocess, inspects the resulting workspace, and records machine-readable evidence.
+This module compares agent **harnesses**, not native models. Every candidate is configured to use the same model endpoint and model identifier. The evaluator is intentionally independent from `packages/agentv2` and all provider packages: it launches each product as a black-box subprocess, inspects the resulting workspace, and records machine-readable evidence.
 
 ## What is implemented
 

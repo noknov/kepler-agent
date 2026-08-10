@@ -10,16 +10,15 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/transcript"
 )
 
-// PGTranscript stores canonical v2 events in the existing append-only event
-// table. The storage key is namespaced so v1 protocol replay cannot interpret
-// v2 payloads, while Event.SessionID remains transport-neutral.
+// PGTranscript stores canonical events as the durable conversation source of
+// truth. Run records and UI state are projections of this event stream.
 type PGTranscript struct{ Pool *pgxpool.Pool }
 
 func (s PGTranscript) Append(ctx context.Context, event transcript.Event) (transcript.Event, error) {
 	if s.Pool == nil {
 		return transcript.Event{}, fmt.Errorf("v2 transcript store is unavailable")
 	}
-	key := "v2:" + event.SessionID
+	key := event.SessionID
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return transcript.Event{}, err
@@ -28,7 +27,7 @@ func (s PGTranscript) Append(ctx context.Context, event transcript.Event) (trans
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, key); err != nil {
 		return transcript.Event{}, err
 	}
-	if err = tx.QueryRow(ctx, `SELECT COALESCE(MAX(sequence), 0) + 1 FROM agent_protocol_events WHERE thread_id=$1`, key).Scan(&event.Sequence); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT COALESCE(MAX(sequence), 0) + 1 FROM agent_transcript_events WHERE session_id=$1`, key).Scan(&event.Sequence); err != nil {
 		return transcript.Event{}, err
 	}
 	payload, err := json.Marshal(event)
@@ -36,7 +35,7 @@ func (s PGTranscript) Append(ctx context.Context, event transcript.Event) (trans
 		return transcript.Event{}, err
 	}
 	payload = bytes.ReplaceAll(payload, []byte(`\u0000`), nil)
-	_, err = tx.Exec(ctx, `INSERT INTO agent_protocol_events(event_id,thread_id,turn_id,sequence,type,status,at,payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(event_id) DO NOTHING`, event.ID, key, event.TurnID, event.Sequence, string(event.Type), event.Status, event.Timestamp, payload)
+	_, err = tx.Exec(ctx, `INSERT INTO agent_transcript_events(event_id,session_id,turn_id,sequence,type,status,at,payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(event_id) DO NOTHING`, event.ID, key, event.TurnID, event.Sequence, string(event.Type), event.Status, event.Timestamp, payload)
 	if err != nil {
 		return transcript.Event{}, err
 	}
@@ -50,7 +49,7 @@ func (s PGTranscript) Load(ctx context.Context, sessionID string, after uint64) 
 	if s.Pool == nil {
 		return nil, fmt.Errorf("v2 transcript store is unavailable")
 	}
-	rows, err := s.Pool.Query(ctx, `SELECT payload FROM agent_protocol_events WHERE thread_id=$1 AND sequence>$2 ORDER BY sequence`, "v2:"+sessionID, after)
+	rows, err := s.Pool.Query(ctx, `SELECT payload FROM agent_transcript_events WHERE session_id=$1 AND sequence>$2 ORDER BY sequence`, sessionID, after)
 	if err != nil {
 		return nil, err
 	}

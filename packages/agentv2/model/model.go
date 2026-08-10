@@ -20,6 +20,7 @@ type ContentType string
 
 const (
 	ContentText       ContentType = "text"
+	ContentImage      ContentType = "image"
 	ContentReasoning  ContentType = "reasoning"
 	ContentJSON       ContentType = "json"
 	ContentToolCall   ContentType = "tool_call"
@@ -36,6 +37,18 @@ type Content struct {
 	ToolCall   *ToolCall       `json:"tool_call,omitempty"`
 	ToolResult *ToolResult     `json:"tool_result,omitempty"`
 	Artifact   *Artifact       `json:"artifact,omitempty"`
+	ImageURL   string          `json:"image_url,omitempty"`
+	Citations  []Citation      `json:"citations,omitempty"`
+}
+
+// Citation is structured evidence attached to the exact content block that
+// uses it. Presentation surfaces decide how to render it; prompts only control
+// citation style, never reconstruct source provenance from prose.
+type Citation struct {
+	URL        string `json:"url"`
+	Title      string `json:"title,omitempty"`
+	StartIndex int    `json:"start_index,omitempty"`
+	EndIndex   int    `json:"end_index,omitempty"`
 }
 
 type ToolCall struct {
@@ -77,6 +90,14 @@ func (m Message) Text() string {
 		}
 	}
 	return value
+}
+
+func (m Message) Citations() []Citation {
+	var citations []Citation
+	for _, block := range m.Content {
+		citations = append(citations, block.Citations...)
+	}
+	return citations
 }
 
 func (m Message) ToolCalls() []ToolCall {

@@ -231,6 +231,10 @@ func encodeMessages(messages []model.Message) (string, []map[string]any) {
 			switch block.Type {
 			case model.ContentText:
 				blocks = append(blocks, map[string]any{"type": "text", "text": block.Text})
+			case model.ContentImage:
+				if block.ImageURL != "" {
+					blocks = append(blocks, map[string]any{"type": "image", "source": map[string]any{"type": "url", "url": block.ImageURL}})
+				}
 			case model.ContentToolCall:
 				if block.ToolCall != nil {
 					var input any

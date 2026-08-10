@@ -33,3 +33,14 @@ func TestGenerateMessagesStream(t *testing.T) {
 		t.Fatalf("response=%+v", response)
 	}
 }
+
+func TestEncodeMessagesPreservesImages(t *testing.T) {
+	_, messages := encodeMessages([]model.Message{{Role: model.RoleUser, Content: []model.Content{
+		{Type: model.ContentText, Text: "inspect"},
+		{Type: model.ContentImage, ImageURL: "https://example.test/image.png"},
+	}}})
+	blocks := messages[0]["content"].([]map[string]any)
+	if len(blocks) != 2 || blocks[1]["type"] != "image" {
+		t.Fatalf("encoded content = %#v", blocks)
+	}
+}

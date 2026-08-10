@@ -797,7 +797,7 @@ func TestLoadForUsesProfileEnvFile(t *testing.T) {
 	dir := t.TempDir()
 	writeEnvFile(t, dir, map[string]string{
 		"SLACK_BOT_TOKEN":      "xoxb-test",
-		"SLACK_SIGNING_SECRET": "all-in-one-secret",
+		"SLACK_SIGNING_SECRET": "worker-secret",
 		"ALLOWED_SLACK_USERS":  "U123",
 		"MIMO_API_KEY":         "mimo-token",
 	})
@@ -845,32 +845,6 @@ func TestLoadForSlackWorkerUsesWorkerEnvFile(t *testing.T) {
 	}
 }
 
-func TestLoadBenchmarkDoesNotRequireServerStorageOrSlack(t *testing.T) {
-	resetConfigEnv(t)
-	dir := t.TempDir()
-	envPath := filepath.Join(dir, "benchmark", ".env")
-	if err := os.MkdirAll(filepath.Dir(envPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(envPath, []byte("MIMO_API_KEY=mimo-token\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	wd, _ := os.Getwd()
-	defer func() { _ = os.Chdir(wd) }()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := LoadBenchmark()
-	if err != nil {
-		t.Fatalf("LoadBenchmark() error = %v", err)
-	}
-	if cfg.Storage.PostgresDSN != "" || cfg.Storage.RedisURL != "" {
-		t.Fatalf("benchmark storage = %#v, want empty", cfg.Storage)
-	}
-}
-
 func TestLoadForHonorsExplicitEnvFile(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
@@ -895,7 +869,7 @@ func TestLoadForHonorsExplicitEnvFile(t *testing.T) {
 }
 
 func writeEnvFile(t *testing.T, dir string, values map[string]string) {
-	writeEnvFileNamed(t, dir, filepath.Join("cmd", "slack-copilot-agent", ".env"), values)
+	writeEnvFileNamed(t, dir, filepath.Join("worker", ".env"), values)
 }
 
 func writeEnvFileNamed(t *testing.T, dir, name string, values map[string]string) {
@@ -1014,7 +988,6 @@ func resetConfigEnv(t *testing.T) {
 		"TTS_API_KEY",
 		"TTS_BASE_URL",
 		"TTS_MODEL",
-		"TTS_AUTO",
 		"TTS_DEFAULT_VOICE",
 		"TTS_DEFAULT_STYLE",
 		"GITHUB_TOKEN",

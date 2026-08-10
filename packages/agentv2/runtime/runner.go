@@ -45,7 +45,12 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 			return result, err
 		}
 	}
-	if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.TurnStarted, Status: "running"}); err != nil {
+	modelName := request.Model
+	if modelName == "" {
+		modelName = r.config.Model
+	}
+	turnMetadata, _ := json.Marshal(map[string]any{"user_id": request.Scope.UserID, "workspace": request.Scope.Workspace, "scope": request.Scope.Values, "model": modelName})
+	if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.TurnStarted, Status: "running", Metadata: turnMetadata}); err != nil {
 		return result, err
 	}
 	if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.UserInput, Message: &request.Input}); err != nil {
@@ -154,8 +159,12 @@ func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, syste
 }
 
 func (r *Runtime) generate(ctx context.Context, turn TurnRequest, messages []model.Message) (model.Response, error) {
+	modelName := turn.Model
+	if modelName == "" {
+		modelName = r.config.Model
+	}
 	request := model.Request{
-		Model: r.config.Model, Messages: messages, Tools: r.deps.Tools.ActiveDefinitions(turn.SessionID),
+		Model: modelName, Messages: messages, Tools: r.deps.Tools.ActiveDefinitions(turn.SessionID),
 		ReasoningEffort: r.config.ReasoningEffort, MaxOutputTokens: r.config.MaxOutputTokens,
 		Metadata: map[string]string{"session_id": turn.SessionID, "turn_id": turn.TurnID},
 	}
@@ -170,6 +179,10 @@ func (r *Runtime) generate(ctx context.Context, turn TurnRequest, messages []mod
 			return recordErr
 		})
 		if err == nil {
+			completed, _ := json.Marshal(map[string]any{"attempt": attempt + 1, "model": request.Model, "finish_reason": response.FinishReason, "usage": response.Usage})
+			if _, recordErr := r.record(ctx, transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelCompleted, Metadata: completed}); recordErr != nil {
+				return model.Response{}, recordErr
+			}
 			return response, nil
 		}
 		lastErr = err

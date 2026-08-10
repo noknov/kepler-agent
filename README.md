@@ -1,21 +1,17 @@
 # slack-copilot-agent
 
 An open-source agent platform for code-assisted diagnosis and operational work.
-It currently ships as a hosted Slack agent and is evolving toward a shared
-harness used by both the hosted product and a full local coding-agent CLI.
-
-> **Status:** the split Slack worker now runs the hosted v2 harness by default;
-> set `AGENT_RUNTIME_VERSION=v1` for the compatibility path. v2 remains under
-> sustained validation and is not described as stable.
+It ships as a hosted Slack agent and a local coding-agent CLI built on one
+shared harness.
 
 ## Products
 
 | Product | Runtime | Workspace | Status |
 |---|---|---|---|
-| Hosted Agent | Server-side; Slack is the current ingress | Server-owned, read-only by default | v2 worker path available; v1 fallback retained |
-| Local CLI | Runs the complete harness on the user machine | Local workspace-write sandbox | v2 available for trials |
+| Hosted Agent | Server-side; Slack is the current ingress | Server-owned, read-only by default | supported |
+| Local CLI | Runs the complete harness on the user machine | Local workspace-write sandbox | supported |
 
-Both v2 profiles share the agent loop, model and tool contracts, prompt
+Both profiles share the agent loop, model and tool contracts, prompt
 composition, context projection, transcript, retries, termination, and event
 semantics. They intentionally differ in execution, storage, policy, and
 presentation.
@@ -23,7 +19,7 @@ presentation.
 ## What is included
 
 - Slack mentions, DMs, threads, files, App Home, and reaction feedback.
-- Durable event processing, sessions, run traces, reminders, and protocol
+- Durable event processing, transcripts, run traces, and reminders
   replay backed by PostgreSQL; Redis provides coordination and wakeups.
 - Structured tools for code, GitHub, Kubernetes/GCP, runbooks, web, browser,
   Slack, and operational diagnostics.
@@ -31,7 +27,7 @@ presentation.
   multimodal input, retries, and context compaction.
 - Server-side capability policy, workspace boundaries, credential redaction,
   event leases, dead letters, health checks, and graceful draining.
-- v2 local JSONL sessions, TTY/headless operation, steering or queued input,
+- Local JSONL sessions, TTY/headless operation, steering or queued input,
   OS sandboxing, scoped approvals, file skills, and MCP tools.
 - Independent black-box evaluation across this agent, Codex, Claude Code, Pi,
   and OpenCode through one controlled model gateway.
@@ -39,10 +35,9 @@ presentation.
 ## Architecture
 
 ```text
-Slack / API / App Server ─┐
-                          ├─ hosted profile ─┐
-Local TTY / headless CLI ─┘                 │
-                                            ├─ shared v2 harness
+Slack ──────────────────── hosted profile ─┐
+Local TTY / headless CLI ─ local profile ──┤
+                                          ├─ shared harness
 Model providers ────────────────────────────┤  loop · context · transcript
 Built-ins / MCP / skills ───────────────────┘  tools · policy · events
 ```
@@ -51,29 +46,29 @@ Slack is an ingress and presentation surface, not a separate agent. The local
 CLI executes locally; the hosted profile executes against server workspaces
 under server-owned policy. See the bilingual
 [architecture guide](https://noknov.github.io/slack-copilot-agent/) for the
-current v1 topology and the v2 engineering plan.
+current architecture.
 
-## Try the v2 local CLI
+## Try the local CLI
 
 ```bash
-go build -o bin/slack-copilot-v2 ./v2/cmd/slack-copilot
-cp v2/config.example.toml ~/.config/slack-copilot-agent/config.toml
+go build -o bin/slack-copilot ./cli/cmd/slack-copilot
+cp cli/config.example.toml ~/.config/slack-copilot-agent/config.toml
 export OPENAI_API_KEY=...
-bin/slack-copilot-v2 --cwd /path/to/project
+bin/slack-copilot --cwd /path/to/project
 ```
 
 The same binary adapts to automation when given a prompt or piped input:
 
 ```bash
-bin/slack-copilot-v2 --cwd . "diagnose the failing tests"
-printf "review this repository\n" | bin/slack-copilot-v2 --cwd . --output jsonl
-bin/slack-copilot-v2 --resume
+bin/slack-copilot --cwd . "diagnose the failing tests"
+printf "review this repository\n" | bin/slack-copilot --cwd . --output jsonl
+bin/slack-copilot --resume
 ```
 
 The default shell profile writes only inside the workspace and denies network
 access. Network and external effects require approval; grants may apply once,
 for the process session, or to the exact command and project. See
-[v2 usage and security](v2/README.md).
+[local CLI usage and security](docs/local-cli.md).
 
 ## Run the hosted Slack agent
 
@@ -81,27 +76,19 @@ Prerequisites: Go 1.25, PostgreSQL, Redis, a Slack app, and a supported model
 provider.
 
 ```bash
-cp cmd/slack-copilot-agent/.env.example cmd/slack-copilot-agent/.env
+cp gateway/.env.example gateway/.env
+cp worker/.env.example worker/.env
+cp observability/.env.example observability/.env
 # Configure Slack, model, PostgreSQL, Redis, and ALLOWED_SLACK_USERS.
 psql "$POSTGRES_DSN" -f schema/postgres.sql
-go run ./cmd/slack-copilot-agent
-```
-
-The all-in-one binary is convenient locally. Production responsibilities can
-also be split without changing the storage contract:
-
-```bash
 go run ./gateway/cmd/gateway
 go run ./worker/cmd/worker
 go run ./observability/cmd/observability
-go run ./appserver/cmd/app-server
 ```
 
 The gateway verifies and persists Slack events, workers claim and execute
-them, observability serves run and cost views, and app-server exposes the
-transport-neutral JSON-RPC surface. Runtime code performs no database DDL.
-The split worker selects hosted v2 by default; set
-`AGENT_RUNTIME_VERSION=v1` to exercise the retained compatibility path.
+them, and observability serves run and cost views. Runtime code performs no
+database DDL.
 
 ### Slack app
 
@@ -128,7 +115,7 @@ streaming, storage, and Slack options are documented in
 
 ## Evaluate harnesses
 
-`evals/` is deliberately independent from v1 and v2 runtime packages. It
+`evals/` is deliberately independent from runtime packages. It
 copies each fixture into an isolated workspace and HOME, invokes every agent as
 a subprocess, runs the task grader, and retains logs, exit states, duration,
 and aggregate results.
@@ -149,14 +136,13 @@ model gateway before drawing comparisons. See [evaluation protocol](evals/README
 ## Repository map
 
 ```text
-packages/agentv2/          Shared v2 harness and local/hosted profiles
-v2/                        Full local CLI, example config, and v2 guide
+packages/agentv2/          Shared harness and local/hosted profiles
+cli/                       Local CLI and example config
 evals/                     Independent harness evaluation and gateway example
 gateway/                   Slack HTTP ingress
 worker/                    Durable inbox consumer and hosted execution
 observability/             Runs, costs, metrics, and tool health
-appserver/                 Transport-neutral JSON-RPC service
-packages/                  v1 agent, Slack, storage, tools, and infrastructure
+packages/                  Slack adapters, storage, tools, and infrastructure
 schema/postgres.sql        Authoritative database schema
 architecture-site/         Bilingual architecture guide
 ```
@@ -182,12 +168,12 @@ See [operations](docs/operations.md) for deployment and failure semantics.
 
 ## Documentation
 
-- [v2 guide](v2/README.md)
+- [local CLI](docs/local-cli.md)
 - [architecture](https://noknov.github.io/slack-copilot-agent/)
 - [configuration](docs/configuration.md)
 - [tools](docs/tools.md)
 - [prompts and private overlays](docs/prompts.md)
-- [agent protocol](docs/agent-protocol.md)
+- [shared runtime](docs/runtime.md)
 - [operations](docs/operations.md)
 
 ## Development

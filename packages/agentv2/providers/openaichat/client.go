@@ -212,10 +212,15 @@ func encodeMessages(messages []model.Message) []chatMessage {
 	for _, message := range messages {
 		item := chatMessage{Role: string(message.Role)}
 		var texts []string
+		var images []string
 		for _, block := range message.Content {
 			switch block.Type {
 			case model.ContentText:
 				texts = append(texts, block.Text)
+			case model.ContentImage:
+				if block.ImageURL != "" {
+					images = append(images, block.ImageURL)
+				}
 			case model.ContentToolCall:
 				if block.ToolCall != nil {
 					call := chatToolCall{ID: block.ToolCall.ID, Type: "function"}
@@ -229,7 +234,16 @@ func encodeMessages(messages []model.Message) []chatMessage {
 				}
 			}
 		}
-		if len(texts) > 0 {
+		if len(images) > 0 {
+			parts := make([]map[string]any, 0, len(texts)+len(images))
+			for _, text := range texts {
+				parts = append(parts, map[string]any{"type": "text", "text": text})
+			}
+			for _, image := range images {
+				parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]string{"url": image}})
+			}
+			item.Content = parts
+		} else if len(texts) > 0 {
 			item.Content = strings.Join(texts, "")
 		}
 		if item.Content != nil || len(item.ToolCalls) > 0 || item.Role == "system" || item.Role == "user" {

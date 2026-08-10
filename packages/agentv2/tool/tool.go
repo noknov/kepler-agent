@@ -157,6 +157,11 @@ func (c *Catalog) Get(name string) (Tool, bool) {
 	return item, ok
 }
 
+func (c *Catalog) Has(name string) bool {
+	_, ok := c.Get(name)
+	return ok
+}
+
 func (c *Catalog) GetActive(sessionID, name string) (Tool, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

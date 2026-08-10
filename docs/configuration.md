@@ -1,18 +1,12 @@
 # Configuration
 
-`slack-copilot-agent` loads an env file automatically at startup. The
-compatibility all-in-one process prefers `cmd/slack-copilot-agent/.env`. Split
-services prefer service-specific files:
+Each service loads its service-specific env file automatically at startup:
 
 | Entrypoint | Env file |
 |---|---|
 | `./gateway/cmd/gateway` | `gateway/.env` |
 | `./worker/cmd/worker` | `worker/.env` |
 | `./observability/cmd/observability` | `observability/.env` |
-| local agent runtime | `local-agent/.env` |
-| benchmark self-agent | `benchmark/.env` |
-| packaged CLI | `cli/.env` |
-| `./cmd/slack-copilot-agent` | `cmd/slack-copilot-agent/.env` |
 
 Set `SLACK_COPILOT_ENV_FILE=/path/to/file` only for one-off local debugging.
 Keep secrets out of git; the `*.example` files are templates only.
@@ -251,25 +245,9 @@ POSTGRES_MAX_CONNS=4
 
 ## Agent Runtime Policy
 
-The split Slack worker uses the shared hosted v2 harness by default. Set
-`AGENT_RUNTIME_VERSION=v1` only for focused compatibility checks.
-
-The Slack worker keeps strict production defaults: code claims must be backed by
-code-tool evidence, repeated identical tool calls are interrupted, and truncated
-model responses get a small number of recovery attempts.
-
-Local and benchmark profiles can tune those guardrails without changing the
-agent loop:
-
-```bash
-AGENT_DISABLE_EVIDENCE_VALIDATION=false
-AGENT_MAX_OUTPUT_TOKEN_RECOVERIES=0
-AGENT_MAX_IDENTICAL_FAILED_TOOL_CALLS=0
-AGENT_MAX_IDENTICAL_SUCCESSFUL_TOOL_CALLS=0
-```
-
-For the numeric values, `0` means use the production default. Negative values
-disable that guard.
+Hosted and local products execute the same harness. The hosted profile applies
+authoritative server policy; the local profile applies its sandbox and scoped
+approval policy.
 
 Write and external-write tools are authorized entirely by server policy; users
 are never asked to approve access to the host running the agent. The default
