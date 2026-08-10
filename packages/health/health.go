@@ -14,7 +14,6 @@ import (
 
 	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
 	"github.com/noknov/slack-copilot-agent/packages/prompts"
-	"github.com/noknov/slack-copilot-agent/packages/toolkit/tools/registry"
 )
 
 type Status string
@@ -43,7 +42,7 @@ type ToolState struct {
 }
 
 type Service struct {
-	Registry       *registry.Registry
+	Registry       ToolCatalog
 	WorkspaceRoots []string
 	Interval       time.Duration
 	Redis          *redisclient.Client
@@ -52,6 +51,8 @@ type Service struct {
 	snapshot Snapshot
 }
 
+type ToolCatalog interface{ Has(string) bool }
+
 const (
 	healthSnapshotKey = "health:snapshot"
 	healthProbeLock   = "health:probe:lock"
@@ -59,7 +60,7 @@ const (
 	healthLockTTL     = 90 * time.Second
 )
 
-func NewService(reg *registry.Registry, roots []string) *Service {
+func NewService(reg ToolCatalog, roots []string) *Service {
 	return &Service{
 		Registry:       reg,
 		WorkspaceRoots: append([]string(nil), roots...),

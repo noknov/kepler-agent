@@ -4,6 +4,7 @@ package transcript
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/model"
@@ -20,6 +21,7 @@ const (
 	RuntimeInstruction EventType = "runtime_instruction"
 	ContextProjected   EventType = "context_projected"
 	ModelRequested     EventType = "model_requested"
+	ModelCompleted     EventType = "model_completed"
 	ModelStreamed      EventType = "model_streamed"
 	AssistantMessage   EventType = "assistant_message"
 	ToolCallStarted    EventType = "tool_call_started"
@@ -69,5 +71,28 @@ func (s MultiSink) Publish(ctx context.Context, event Event) {
 		if sink != nil {
 			sink.Publish(ctx, event)
 		}
+	}
+}
+
+type Fanout struct {
+	mu    sync.RWMutex
+	sinks []Sink
+}
+
+func NewFanout(sinks ...Sink) *Fanout { return &Fanout{sinks: append([]Sink(nil), sinks...)} }
+func (f *Fanout) Add(sink Sink) {
+	if sink == nil {
+		return
+	}
+	f.mu.Lock()
+	f.sinks = append(f.sinks, sink)
+	f.mu.Unlock()
+}
+func (f *Fanout) Publish(ctx context.Context, event Event) {
+	f.mu.RLock()
+	sinks := append([]Sink(nil), f.sinks...)
+	f.mu.RUnlock()
+	for _, sink := range sinks {
+		sink.Publish(ctx, event)
 	}
 }

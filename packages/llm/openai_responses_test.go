@@ -22,7 +22,7 @@ func TestOpenAIResponsesClientPostsResponsesBody(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"status":"completed",
-			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}],
+			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done","annotations":[{"type":"url_citation","url":"https://example.test/source","title":"Primary source","start_index":0,"end_index":4}]}]}],
 			"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12,"input_tokens_details":{"cached_tokens":4}}
 		}`))
 	}))
@@ -55,6 +55,9 @@ func TestOpenAIResponsesClientPostsResponsesBody(t *testing.T) {
 	}
 	if resp.Message.Content != "done" {
 		t.Fatalf("content = %q, want done", resp.Message.Content)
+	}
+	if len(resp.Message.Citations) != 1 || resp.Message.Citations[0].URL != "https://example.test/source" {
+		t.Fatalf("citations = %#v", resp.Message.Citations)
 	}
 	if resp.Usage.PromptTokens != 10 || resp.Usage.CacheReadInputTokens != 4 || !resp.Usage.CacheIncludedInPrompt {
 		t.Fatalf("usage = %#v", resp.Usage)

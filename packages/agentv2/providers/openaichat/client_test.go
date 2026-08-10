@@ -46,3 +46,14 @@ func TestGenerateStreamsTextToolAndUsage(t *testing.T) {
 		t.Fatalf("usage=%+v events=%+v", response.Usage, events)
 	}
 }
+
+func TestEncodeMessagesPreservesImages(t *testing.T) {
+	messages := encodeMessages([]model.Message{{Role: model.RoleUser, Content: []model.Content{
+		{Type: model.ContentText, Text: "inspect"},
+		{Type: model.ContentImage, ImageURL: "https://example.test/image.png"},
+	}}})
+	parts, ok := messages[0].Content.([]map[string]any)
+	if !ok || len(parts) != 2 || parts[1]["type"] != "image_url" {
+		t.Fatalf("encoded content = %#v", messages[0].Content)
+	}
+}

@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/local"
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/localtools"
@@ -21,12 +20,12 @@ import (
 type Policy struct{ Allowed map[string]bool }
 
 func (p Policy) Decide(_ context.Context, request tool.PolicyRequest) (tool.Decision, error) {
-	if p.Allowed != nil && !p.Allowed[request.Call.Name] {
-		return tool.Decision{Type: tool.DecisionDeny, Reason: "tool is not in the operator allowlist"}, nil
+	if request.Call.Name == "web-search" && request.Call.Scope.Values["web_search"] == "disabled" {
+		return tool.Decision{Type: tool.DecisionDeny, Reason: "web search is disabled for this user"}, nil
 	}
 	for _, effect := range request.Descriptor.Effects {
-		if effect != tool.EffectRead {
-			return tool.Decision{Type: tool.DecisionDeny, Reason: "hosted profile is read-only"}, nil
+		if effect != tool.EffectRead && !p.Allowed[request.Call.Name] {
+			return tool.Decision{Type: tool.DecisionDeny, Reason: "write tool is not in the operator allowlist"}, nil
 		}
 	}
 	return tool.Decision{Type: tool.DecisionAllow}, nil
@@ -106,20 +105,23 @@ type Agent struct {
 	Prompt  []prompt.Fragment
 }
 type Request struct {
-	SessionID, TurnID, UserID, Workspace, Text string
-	Steering                                   agentruntime.InputSource
-	Prompt                                     []prompt.Fragment
-	ScopeValues                                map[string]string
+	SessionID, TurnID, UserID, Workspace string
+	Input                                model.Message
+	Model                                string
+	Steering                             agentruntime.InputSource
+	Prompt                               []prompt.Fragment
+	ScopeValues                          map[string]string
 }
 
 func (a Agent) Run(ctx context.Context, request Request) (agentruntime.TurnResult, error) {
 	if a.Runtime == nil {
 		return agentruntime.TurnResult{}, fmt.Errorf("hosted runtime is not configured")
 	}
-	if strings.TrimSpace(request.Text) == "" {
+	if len(request.Input.Content) == 0 {
 		return agentruntime.TurnResult{}, fmt.Errorf("input is empty")
 	}
+	request.Input.Role = model.RoleUser
 	fragments := append([]prompt.Fragment(nil), a.Prompt...)
 	fragments = append(fragments, request.Prompt...)
-	return a.Runtime.RunTurn(ctx, agentruntime.TurnRequest{SessionID: request.SessionID, TurnID: request.TurnID, Input: model.TextMessage(model.RoleUser, request.Text), Prompt: fragments, Scope: tool.Scope{SessionID: request.SessionID, TurnID: request.TurnID, UserID: request.UserID, Workspace: request.Workspace, Values: request.ScopeValues}, Steering: request.Steering})
+	return a.Runtime.RunTurn(ctx, agentruntime.TurnRequest{SessionID: request.SessionID, TurnID: request.TurnID, Input: request.Input, Prompt: fragments, Scope: tool.Scope{SessionID: request.SessionID, TurnID: request.TurnID, UserID: request.UserID, Workspace: request.Workspace, Values: request.ScopeValues}, Steering: request.Steering, Model: request.Model})
 }

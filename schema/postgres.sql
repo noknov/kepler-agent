@@ -4,13 +4,6 @@
 -- this file with the database administration workflow of your choice before
 -- starting a service. The statements are idempotent for clean installations.
 
-CREATE TABLE IF NOT EXISTS agent_sessions (
-    id TEXT PRIMARY KEY,
-    payload JSONB NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 CREATE TABLE IF NOT EXISTS agent_runs (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
@@ -68,9 +61,9 @@ CREATE TABLE IF NOT EXISTS agent_run_feedback (
 CREATE INDEX IF NOT EXISTS idx_agent_run_feedback_run
     ON agent_run_feedback(run_id, created_at);
 
-CREATE TABLE IF NOT EXISTS agent_protocol_events (
+CREATE TABLE IF NOT EXISTS agent_transcript_events (
     event_id TEXT PRIMARY KEY,
-    thread_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
     turn_id TEXT NOT NULL DEFAULT '',
     sequence BIGINT NOT NULL CHECK (sequence > 0),
     type TEXT NOT NULL,
@@ -78,13 +71,13 @@ CREATE TABLE IF NOT EXISTS agent_protocol_events (
     at TIMESTAMPTZ NOT NULL,
     payload JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (thread_id, sequence)
+    UNIQUE (session_id, sequence)
 );
 
-CREATE INDEX IF NOT EXISTS idx_agent_protocol_events_thread_replay
-    ON agent_protocol_events(thread_id, sequence);
-CREATE INDEX IF NOT EXISTS idx_agent_protocol_events_turn
-    ON agent_protocol_events(turn_id, sequence)
+CREATE INDEX IF NOT EXISTS idx_agent_transcript_events_session_replay
+    ON agent_transcript_events(session_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_agent_transcript_events_turn
+    ON agent_transcript_events(turn_id, sequence)
     WHERE turn_id <> '';
 
 CREATE TABLE IF NOT EXISTS reminders (

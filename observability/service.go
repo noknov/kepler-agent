@@ -13,13 +13,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/noknov/slack-copilot-agent/packages/agentv2/hosted"
 	"github.com/noknov/slack-copilot-agent/packages/config"
 	"github.com/noknov/slack-copilot-agent/packages/health"
+	"github.com/noknov/slack-copilot-agent/packages/hostedtools"
 	"github.com/noknov/slack-copilot-agent/packages/infra/httpguard"
 	sharedlogging "github.com/noknov/slack-copilot-agent/packages/infra/logging"
 	"github.com/noknov/slack-copilot-agent/packages/observability"
 	"github.com/noknov/slack-copilot-agent/packages/platform"
-	"github.com/noknov/slack-copilot-agent/packages/runtime"
+	"github.com/noknov/slack-copilot-agent/packages/safety"
 )
 
 type Service struct {
@@ -52,8 +54,13 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		return nil, err
 	}
 	recorder := observability.NewRecorder()
-	rt := runtime.NewAgentRuntime(cfg, nil, stores.Reminders, recorder, stores.Redis, nil)
-	healthService := health.NewService(rt.Tools, cfg.Security.WorkspaceRoots)
+	registry := hostedtools.NewCatalog(cfg, nil, stores.Reminders, safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}, safety.NewCommandPolicy(), stores.Redis, nil)
+	catalog, err := hosted.AdaptRegistry(registry)
+	if err != nil {
+		stores.Close()
+		return nil, fmt.Errorf("build health tool catalog: %w", err)
+	}
+	healthService := health.NewService(catalog, cfg.Security.WorkspaceRoots)
 	healthService.Redis = stores.Redis
 	return &Service{
 		cfg:     cfg,

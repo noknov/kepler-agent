@@ -146,6 +146,7 @@ type TurnRequest struct {
 	Prompt    []prompt.Fragment
 	Scope     tool.Scope
 	Steering  InputSource
+	Model     string
 }
 
 type TurnResult struct {

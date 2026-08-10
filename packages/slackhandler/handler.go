@@ -8,12 +8,12 @@ import (
 	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/config"
-	"github.com/noknov/slack-copilot-agent/packages/conversation"
 	"github.com/noknov/slack-copilot-agent/packages/observability"
 	"github.com/noknov/slack-copilot-agent/packages/prompts"
 	"github.com/noknov/slack-copilot-agent/packages/runs"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/slack"
+	"github.com/noknov/slack-copilot-agent/packages/slackconversation"
 	"github.com/noknov/slack-copilot-agent/packages/slackgateway"
 	"github.com/noknov/slack-copilot-agent/packages/slackhome"
 	"github.com/noknov/slack-copilot-agent/packages/userprefs"
@@ -23,17 +23,12 @@ type Handler struct {
 	Cfg       config.Config
 	Slack     *slack.Client
 	Access    safety.AccessPolicy
-	Conv      Conversation
+	Conv      slackconversation.Conversation
 	Prompt    safety.PromptPolicy
 	Metrics   *observability.Recorder
 	Runs      runs.Store
 	Home      slackhome.Controller
 	UserPrefs userprefs.Store
-}
-
-type Conversation interface {
-	HandleMention(context.Context, conversation.Request) bool
-	HandleReply(context.Context, conversation.Request) bool
 }
 
 func (h *Handler) Handle(ctx context.Context, eventID string, ev slack.Event) (err error) {
@@ -273,13 +268,13 @@ func (h *Handler) handleMention(ctx context.Context, eventID string, ev slack.Ev
 	if text == "" {
 		text = prompts.AppMessage("empty_mention", "")
 	}
-	if !h.Conv.HandleMention(ctx, conversation.Request{
-		EventID:      eventID,
-		UserID:       ev.User,
-		Channel:      ev.Channel,
-		ThreadTS:     threadTS,
-		Text:         text,
-		ContentParts: parts,
+	if !h.Conv.HandleMention(ctx, slackconversation.Request{
+		EventID:  eventID,
+		UserID:   ev.User,
+		Channel:  ev.Channel,
+		ThreadTS: threadTS,
+		Text:     text,
+		Content:  canonicalContent(parts),
 	}) {
 		return fmt.Errorf("conversation did not accept app_mention event")
 	}
@@ -324,13 +319,13 @@ func (h *Handler) handleFileShared(ctx context.Context, eventID string, ev slack
 	if text == "" {
 		text = prompts.AppMessage("empty_dm_with_file", "")
 	}
-	if !h.Conv.HandleMention(ctx, conversation.Request{
-		EventID:      eventID,
-		UserID:       userID,
-		Channel:      channelID,
-		ThreadTS:     ev.ConversationThreadTS(),
-		Text:         text,
-		ContentParts: parts,
+	if !h.Conv.HandleMention(ctx, slackconversation.Request{
+		EventID:  eventID,
+		UserID:   userID,
+		Channel:  channelID,
+		ThreadTS: ev.ConversationThreadTS(),
+		Text:     text,
+		Content:  canonicalContent(parts),
 	}) {
 		return fmt.Errorf("conversation did not accept file_shared event")
 	}
@@ -350,13 +345,13 @@ func (h *Handler) handleDirectMessage(ctx context.Context, eventID string, ev sl
 	}
 	if IsThreadReply(ev) {
 		text, parts := h.attachSlackFiles(ctx, strings.TrimSpace(ev.Text), ev.Files)
-		if text != "" && h.Conv.HandleReply(ctx, conversation.Request{
-			EventID:      eventID,
-			UserID:       ev.User,
-			Channel:      ev.Channel,
-			ThreadTS:     ev.ThreadTS,
-			Text:         text,
-			ContentParts: parts,
+		if text != "" && h.Conv.HandleReply(ctx, slackconversation.Request{
+			EventID:  eventID,
+			UserID:   ev.User,
+			Channel:  ev.Channel,
+			ThreadTS: ev.ThreadTS,
+			Text:     text,
+			Content:  canonicalContent(parts),
 		}) {
 			return nil
 		}
@@ -366,13 +361,13 @@ func (h *Handler) handleDirectMessage(ctx context.Context, eventID string, ev sl
 	if text == "" {
 		text = prompts.AppMessage("empty_dm", "")
 	}
-	if !h.Conv.HandleMention(ctx, conversation.Request{
-		EventID:      eventID,
-		UserID:       ev.User,
-		Channel:      ev.Channel,
-		ThreadTS:     ev.ConversationThreadTS(),
-		Text:         text,
-		ContentParts: parts,
+	if !h.Conv.HandleMention(ctx, slackconversation.Request{
+		EventID:  eventID,
+		UserID:   ev.User,
+		Channel:  ev.Channel,
+		ThreadTS: ev.ConversationThreadTS(),
+		Text:     text,
+		Content:  canonicalContent(parts),
 	}) {
 		return fmt.Errorf("conversation did not accept direct message event")
 	}
@@ -396,13 +391,13 @@ func (h *Handler) handleChannelReply(ctx context.Context, eventID string, ev sla
 	if text == "" {
 		return nil
 	}
-	_ = h.Conv.HandleReply(ctx, conversation.Request{
-		EventID:      eventID,
-		UserID:       ev.User,
-		Channel:      ev.Channel,
-		ThreadTS:     ev.ThreadTS,
-		Text:         text,
-		ContentParts: parts,
+	_ = h.Conv.HandleReply(ctx, slackconversation.Request{
+		EventID:  eventID,
+		UserID:   ev.User,
+		Channel:  ev.Channel,
+		ThreadTS: ev.ThreadTS,
+		Text:     text,
+		Content:  canonicalContent(parts),
 	})
 	return nil
 }

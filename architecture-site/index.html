@@ -118,19 +118,17 @@
           <section class="doc-section" id="zh-processes">
             <span class="section-number">02 / RUNTIME TOPOLOGY</span>
             <h2>系统以哪些进程运行</h2>
-            <p>系统可以用一个 all-in-one 进程运行，也可以拆分为多个服务进程。拆分形态下，入口、执行、观测和通用协议服务分别部署。</p>
+            <p>系统拆分为入口、执行和观测服务；Local CLI 作为独立本地产品运行。</p>
             <table class="data-table">
               <thead><tr><th>进程</th><th>负责什么</th><th>主要依赖</th></tr></thead>
               <tbody>
                 <tr><td><code>gateway</code></td><td>Slack Events / Interactions HTTP 入口；验签并持久化事件</td><td>PostgreSQL、Redis</td></tr>
                 <tr><td><code>worker</code></td><td>领取 inbox 事件，通过 hosted v2 adapter 执行 Agent，回复 Slack，运行后台任务</td><td>PG、Redis、LLM、Slack API</td></tr>
                 <tr><td><code>observability</code></td><td>运行记录、成本指标、工具健康检查和 dashboard</td><td>PostgreSQL、Redis</td></tr>
-                <tr><td><code>app-server</code></td><td>通过 stdio JSON-RPC 暴露现有 Core；尚未接入 v2 profile</td><td>PG、Redis、LLM</td></tr>
-                <tr><td><code>slack-copilot-agent</code></td><td>保留的 all-in-one 入口</td><td>以上全部</td></tr>
               </tbody>
             </table>
             <h3>进程关系</h3>
-            <p><code>gateway</code> 负责接入和入队；<code>worker</code> 负责领取事件并执行 Agent；<code>observability</code> 读取运行记录并提供指标视图；<code>app-server</code> 通过 JSON-RPC 暴露 transport-neutral Agent Core。</p>
+            <p><code>gateway</code> 负责接入和入队；<code>worker</code> 负责领取事件并执行共享 Agent runtime；<code>observability</code> 读取运行投影并提供指标视图。</p>
           </section>
 
           <section class="doc-section" id="zh-slack-flow">
@@ -217,7 +215,7 @@
               <div class="flow-step"><b>compaction_created</b><span>记录上下文压缩</span></div>
               <div class="flow-step"><b>turn_*</b><span>完成、失败或取消</span></div>
             </div>
-            <p>Local profile 写入每个 session 的 JSONL 文件。Hosted profile 将事件写入 <code>agent_protocol_events</code>，以 <code>v2:</code> 命名空间隔离存储 key，并用 PostgreSQL advisory lock 分配 session 内单调 sequence。</p>
+            <p>Local profile 写入每个 session 的 JSONL 文件。Hosted profile 将 canonical 事件写入 <code>agent_transcript_events</code>，并用 PostgreSQL advisory lock 分配 session 内单调 sequence。</p>
           </section>
 
           <section class="doc-section" id="zh-storage">
@@ -231,7 +229,7 @@
               </tbody>
             </table>
             <h3>运行记录</h3>
-            <p>现有观测链路将聚合摘要写入 <code>agent_runs</code>，模型与工具步骤写入 <code>agent_run_steps</code>，反馈写入 <code>agent_run_feedback</code>。Hosted v2 当前将 canonical transcript 写入 <code>agent_protocol_events</code>；run/cost 视图的对齐列在工程工作中。</p>
+            <p>Canonical transcript 写入 <code>agent_transcript_events</code>；观测投影将聚合摘要写入 <code>agent_runs</code>，模型与工具步骤写入 <code>agent_run_steps</code>，反馈写入 <code>agent_run_feedback</code>。</p>
             <h3>Schema 管理</h3>
             <p>DDL 是创建或改变数据库结构的 SQL，例如 <code>CREATE TABLE</code> 和 <code>ALTER TABLE</code>。运行时代码不执行 DDL，只做只读的完整性检查。当前目标结构集中在 <code>schema/postgres.sql</code>，数据库升级由 operator 或部署仓库中的轻量 migration 流程负责。</p>
             <h3>并发控制</h3>
@@ -269,7 +267,7 @@
             <h2>当前边界</h2>
             <div class="card-grid">
               <div class="card"><span class="tag">Implemented</span><h3>v2 主路径</h3><ul><li>共享 runtime 与 canonical contracts</li><li>Local CLI 与 hosted Slack profiles</li><li>Local JSONL 与 hosted PG transcript</li><li>耐久 Slack inbox</li><li>Local approval 与 hosted read-only policy</li><li>Steer、queue 和 cancel</li></ul></div>
-              <div class="card risk"><span class="tag">Known gaps</span><h3>待补强</h3><ul><li>Hosted v2 run/cost 观测对齐</li><li>Slack 多媒体输入投影</li><li>恢复与故障注入覆盖</li><li>App Server v2 adapter</li><li>标准 OpenTelemetry 导出</li><li>更强的本地 sandbox 边界</li></ul></div>
+              <div class="card risk"><span class="tag">Known gaps</span><h3>待补强</h3><ul><li>恢复与故障注入覆盖</li><li>标准 OpenTelemetry 导出</li><li>更强的本地 sandbox 边界</li></ul></div>
             </div>
             <h3>容量边界</h3>
             <p>PG advisory lock 会在整个 hosted turn 期间占用连接；活动运行的 Redis owner key 使用 TTL；Slack inbox 的处理上限由 worker 数量、事件队列和数据库连接池共同约束。</p>
@@ -281,10 +279,10 @@
             <ol class="reading-path">
               <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/slackgateway/gateway.go">packages/slackgateway/gateway.go</a></li>
               <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/slackevents/worker.go">packages/slackevents/worker.go</a></li>
-              <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/conversationv2/service.go">packages/conversationv2/service.go</a></li>
+              <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/slackagent/service.go">packages/slackagent/service.go</a></li>
               <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agentv2/runtime/runner.go">packages/agentv2/runtime/runner.go</a></li>
               <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agentv2/runtime/context.go">packages/agentv2/runtime/context.go</a></li>
-              <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agentv2/legacy/tools.go">packages/agentv2/legacy/tools.go</a></li>
+              <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agentv2/hosted/profile.go">packages/agentv2/hosted/profile.go</a></li>
               <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agentv2/hosted/pgtranscript.go">packages/agentv2/hosted/pgtranscript.go</a></li>
               <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/toolkit/tools/registry/registry.go">packages/toolkit/tools/registry/registry.go</a></li>
               <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/schema/postgres.sql">schema/postgres.sql</a></li>
@@ -347,20 +345,18 @@
               <div class="arch-layer"><div class="arch-label">Infrastructure</div><div class="arch-nodes"><span class="node">PostgreSQL · authority</span><span class="node">Redis · coordination</span><span class="node">LLM Providers</span><span class="node">External Systems</span></div></div>
             </div>
             <div class="callout"><p><strong>Module boundary:</strong> <code>packages/agentv2</code> does not depend on Slack. Slack conversations, established model and tool implementations, and PostgreSQL transcripts connect through adapters.</p></div>
-            <div class="card-grid three"><div class="card"><span class="tag">Durable</span><h3>PostgreSQL stores facts</h3><p>Sessions, runs, steps, protocol events, feedback, reminders, and large tool outputs are authoritative in PG.</p></div><div class="card"><span class="tag">Ephemeral</span><h3>Redis coordinates</h3><p>Wakeups, caches, active-run ownership, cross-worker control, and user input mode live here.</p></div><div class="card"><span class="tag">Shared</span><h3>Runtime is not Slack-specific</h3><p>The local CLI and hosted Slack worker use the same v2 turn loop and canonical contracts.</p></div></div>
+            <div class="card-grid three"><div class="card"><span class="tag">Durable</span><h3>PostgreSQL stores facts</h3><p>Canonical transcripts, run projections, feedback, reminders, and large tool outputs are authoritative in PG.</p></div><div class="card"><span class="tag">Ephemeral</span><h3>Redis coordinates</h3><p>Wakeups, caches, active-run ownership, cross-worker control, and user input mode live here.</p></div><div class="card"><span class="tag">Shared</span><h3>Runtime is not Slack-specific</h3><p>The local CLI and hosted Slack worker use the same turn loop and canonical contracts.</p></div></div>
           </section>
 
           <section class="doc-section" id="en-processes">
             <span class="section-number">02 / RUNTIME TOPOLOGY</span><h2>Runtime processes</h2>
-            <p>The system can run as an all-in-one process or as separate services. In the split topology, ingress, execution, observability, and generic protocol serving are deployed as distinct processes.</p>
+            <p>The system is split into ingress, execution, and observability services; the local CLI runs as a separate local product.</p>
             <table class="data-table"><thead><tr><th>Process</th><th>Responsibility</th><th>Main dependencies</th></tr></thead><tbody>
               <tr><td><code>gateway</code></td><td>Slack Events / Interactions ingress; verifies and persists events</td><td>PostgreSQL, Redis</td></tr>
               <tr><td><code>worker</code></td><td>Claims inbox events, runs the hosted v2 adapter, replies to Slack, and runs background jobs</td><td>PG, Redis, LLM, Slack API</td></tr>
               <tr><td><code>observability</code></td><td>Run history, cost metrics, tool health, and dashboard</td><td>PostgreSQL, Redis</td></tr>
-              <tr><td><code>app-server</code></td><td>Exposes the existing Core over stdio JSON-RPC; it is not yet a v2 profile</td><td>PG, Redis, LLM</td></tr>
-              <tr><td><code>slack-copilot-agent</code></td><td>Retained all-in-one entrypoint</td><td>All of the above</td></tr>
             </tbody></table>
-            <h3>Process relationships</h3><p><code>gateway</code> handles ingress and enqueueing; <code>worker</code> claims events and executes agents; <code>observability</code> reads run records and exposes metrics views; <code>app-server</code> exposes the transport-neutral Agent Core over JSON-RPC.</p>
+            <h3>Process relationships</h3><p><code>gateway</code> handles ingress and enqueueing; <code>worker</code> claims events and executes the shared Agent runtime; <code>observability</code> reads run projections and exposes metrics views.</p>
           </section>
 
           <section class="doc-section" id="en-slack-flow">
@@ -399,13 +395,13 @@
             <span class="section-number">07 / CANONICAL TRANSCRIPT</span><h2>Canonical transcript</h2>
             <p>v2 records sessions and turns as provider-neutral, append-only events. Model messages, stream events, tool calls and results, steering, compaction, and termination share one structure.</p>
             <div class="flow"><div class="flow-step"><b>session_started</b><span>Session begins</span></div><div class="flow-step"><b>turn_started</b><span>Request begins</span></div><div class="flow-step"><b>model / tool events</b><span>Messages, deltas, calls, results</span></div><div class="flow-step"><b>compaction_created</b><span>Context compaction</span></div><div class="flow-step"><b>turn_*</b><span>Complete, fail, or cancel</span></div></div>
-            <p>The local profile writes one JSONL event log per session. The hosted profile writes to <code>agent_protocol_events</code>, namespaces storage keys with <code>v2:</code>, and uses a PostgreSQL advisory lock to allocate monotonic session sequences.</p>
+            <p>The local profile writes one JSONL event log per session. The hosted profile writes canonical events to <code>agent_transcript_events</code> and uses a PostgreSQL advisory lock to allocate monotonic session sequences.</p>
           </section>
 
           <section class="doc-section" id="en-storage">
             <span class="section-number">08 / DATA &amp; CONCURRENCY</span><h2>Data and concurrency</h2>
-            <table class="data-table"><thead><tr><th>Store</th><th>Responsibility</th><th>Failure behavior</th></tr></thead><tbody><tr><td>PostgreSQL</td><td>Sessions, runs, steps, feedback, spills, inbox, protocol events, reminders, preferences</td><td>Durable operations reject work when unavailable</td></tr><tr><td>Redis</td><td>Wakeups, caches, deduplication, active owner, pod control, global counters</td><td>Selected paths fail open or fall back to PG polling</td></tr></tbody></table>
-            <h3>Run records</h3><p>The established observability path writes aggregate summaries to <code>agent_runs</code>, model and tool steps to <code>agent_run_steps</code>, and feedback to <code>agent_run_feedback</code>. Hosted v2 currently writes its canonical transcript to <code>agent_protocol_events</code>; aligning run and cost views is listed as engineering work.</p>
+            <table class="data-table"><thead><tr><th>Store</th><th>Responsibility</th><th>Failure behavior</th></tr></thead><tbody><tr><td>PostgreSQL</td><td>Transcripts, run projections, feedback, spills, inbox, reminders, preferences</td><td>Durable operations reject work when unavailable</td></tr><tr><td>Redis</td><td>Wakeups, caches, deduplication, active owner, pod control, global counters</td><td>Selected paths fail open or fall back to PG polling</td></tr></tbody></table>
+            <h3>Run records</h3><p>The canonical transcript is written to <code>agent_transcript_events</code>. The observability projection writes aggregate summaries to <code>agent_runs</code>, model and tool steps to <code>agent_run_steps</code>, and feedback to <code>agent_run_feedback</code>.</p>
             <h3>Schema management</h3><p>Runtime code executes no DDL; it only verifies required tables. <code>schema/postgres.sql</code> is the current contract, while operators or the deploy repository's lightweight migration flow own upgrades.</p>
             <h3>Concurrency control</h3><p>A local semaphore limits each process, a Redis counter approximates the cluster total, and a PG advisory lock serializes a session.</p>
           </section>
@@ -427,13 +423,13 @@
 
           <section class="doc-section" id="en-boundaries">
             <span class="section-number">11 / CURRENT LIMITS</span><h2>Current boundaries</h2>
-            <div class="card-grid"><div class="card"><span class="tag">Implemented</span><h3>v2 main path</h3><ul><li>Shared runtime and canonical contracts</li><li>Local CLI and hosted Slack profiles</li><li>Local JSONL and hosted PG transcripts</li><li>Durable Slack inbox</li><li>Local approval and hosted read-only policy</li><li>Steer, queue, and cancel</li></ul></div><div class="card risk"><span class="tag">Known gaps</span><h3>Needs hardening</h3><ul><li>Hosted v2 run and cost view alignment</li><li>Slack multimodal input projection</li><li>Recovery and fault-injection coverage</li><li>App Server v2 adapter</li><li>Standard OpenTelemetry export</li><li>Stronger local sandbox boundary</li></ul></div></div>
+            <div class="card-grid"><div class="card"><span class="tag">Implemented</span><h3>Shared main path</h3><ul><li>Shared runtime and canonical contracts</li><li>Local CLI and hosted Slack profiles</li><li>Local JSONL and hosted PG transcripts</li><li>Durable Slack inbox</li><li>Local approval and hosted read-only policy</li><li>Steer, queue, and cancel</li></ul></div><div class="card risk"><span class="tag">Known gaps</span><h3>Needs hardening</h3><ul><li>Recovery and fault-injection coverage</li><li>Standard OpenTelemetry export</li><li>Stronger local sandbox boundary</li></ul></div></div>
             <h3>Capacity boundaries</h3><p>A PG advisory lock holds a connection for the full hosted turn; the Redis active-owner key uses a TTL; worker count, event queues, and the database pool jointly bound Slack throughput.</p>
           </section>
 
           <section class="doc-section" id="en-reading">
             <span class="section-number">12 / CODE READING PATH</span><h2>Main code entrypoints</h2>
-            <ol class="reading-path"><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/slackgateway/gateway.go">packages/slackgateway/gateway.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/slackevents/worker.go">packages/slackevents/worker.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/conversationv2/service.go">packages/conversationv2/service.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agentv2/runtime/runner.go">packages/agentv2/runtime/runner.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agentv2/runtime/context.go">packages/agentv2/runtime/context.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agentv2/legacy/tools.go">packages/agentv2/legacy/tools.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agentv2/hosted/pgtranscript.go">packages/agentv2/hosted/pgtranscript.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/toolkit/tools/registry/registry.go">packages/toolkit/tools/registry/registry.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/schema/postgres.sql">schema/postgres.sql</a></li></ol>
+            <ol class="reading-path"><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/slackgateway/gateway.go">packages/slackgateway/gateway.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/slackevents/worker.go">packages/slackevents/worker.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/slackagent/service.go">packages/slackagent/service.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agentv2/runtime/runner.go">packages/agentv2/runtime/runner.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agentv2/runtime/context.go">packages/agentv2/runtime/context.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agentv2/hosted/profile.go">packages/agentv2/hosted/profile.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agentv2/hosted/pgtranscript.go">packages/agentv2/hosted/pgtranscript.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/toolkit/tools/registry/registry.go">packages/toolkit/tools/registry/registry.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/schema/postgres.sql">schema/postgres.sql</a></li></ol>
           </section>
         </div>
       </div>

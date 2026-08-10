@@ -5,9 +5,6 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 
-FROM build-base AS build-agent
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/slack-copilot-agent ./cmd/slack-copilot-agent
-
 FROM build-base AS build-gateway
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/slack-copilot-gateway ./gateway/cmd/gateway
 
@@ -19,9 +16,6 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/slack-c
 
 FROM build-base AS build-cli
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/slack-copilot ./cli/cmd/slack-copilot
-
-FROM build-base AS build-app-server
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/slack-copilot-app-server ./appserver/cmd/app-server
 
 FROM debian:bookworm-slim AS runtime-minimal
 
@@ -49,20 +43,6 @@ FROM runtime-worker AS worker
 COPY --from=build-worker /out/slack-copilot-worker /app/slack-copilot-worker
 ENTRYPOINT ["/app/slack-copilot-worker"]
 
-FROM runtime-worker AS app-server
-COPY --from=build-app-server /out/slack-copilot-app-server /app/slack-copilot-app-server
-ENTRYPOINT ["/app/slack-copilot-app-server"]
-
 FROM runtime-minimal AS observability
 COPY --from=build-observability /out/slack-copilot-observability /app/slack-copilot-observability
 ENTRYPOINT ["/app/slack-copilot-observability"]
-
-FROM runtime-worker AS all-in-one
-COPY --from=build-agent /out/slack-copilot-agent /app/slack-copilot-agent
-COPY --from=build-gateway /out/slack-copilot-gateway /app/slack-copilot-gateway
-COPY --from=build-worker /out/slack-copilot-worker /app/slack-copilot-worker
-COPY --from=build-observability /out/slack-copilot-observability /app/slack-copilot-observability
-COPY --from=build-cli /out/slack-copilot /app/slack-copilot
-COPY --from=build-app-server /out/slack-copilot-app-server /app/slack-copilot-app-server
-
-ENTRYPOINT ["/app/slack-copilot-agent"]

@@ -153,6 +153,8 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 				usage = done.Response.Usage
 				if msg.Content == "" && len(msg.ToolCalls) == 0 {
 					msg = done.Response.message()
+				} else {
+					msg.Citations = done.Response.message().Citations
 				}
 				if h.OnUsage != nil {
 					h.OnUsage(usage.toUsage())
@@ -359,8 +361,17 @@ type responsesOutput struct {
 }
 
 type responsesOutputContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type        string                `json:"type"`
+	Text        string                `json:"text"`
+	Annotations []responsesAnnotation `json:"annotations"`
+}
+
+type responsesAnnotation struct {
+	Type       string `json:"type"`
+	URL        string `json:"url"`
+	Title      string `json:"title"`
+	StartIndex int    `json:"start_index"`
+	EndIndex   int    `json:"end_index"`
 }
 
 type responsesUsage struct {
@@ -383,6 +394,11 @@ func (r responsesResponse) message() Message {
 			for _, content := range item.Content {
 				if content.Type == "output_text" && content.Text != "" {
 					msg.Content += content.Text
+					for _, annotation := range content.Annotations {
+						if annotation.Type == "url_citation" && annotation.URL != "" {
+							msg.Citations = append(msg.Citations, Citation{URL: annotation.URL, Title: annotation.Title, StartIndex: annotation.StartIndex, EndIndex: annotation.EndIndex})
+						}
+					}
 				}
 			}
 		case "function_call":
