@@ -6,13 +6,19 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/noknov/slack-copilot-agent/packages/agentv2/hosted"
+	"github.com/noknov/slack-copilot-agent/packages/agentv2/legacy"
+	agentruntimev2 "github.com/noknov/slack-copilot-agent/packages/agentv2/runtime"
 	"github.com/noknov/slack-copilot-agent/packages/appsupport"
 	"github.com/noknov/slack-copilot-agent/packages/config"
 	"github.com/noknov/slack-copilot-agent/packages/conversation"
+	"github.com/noknov/slack-copilot-agent/packages/conversationv2"
 	"github.com/noknov/slack-copilot-agent/packages/health"
 	"github.com/noknov/slack-copilot-agent/packages/infra/httpguard"
 	sharedlogging "github.com/noknov/slack-copilot-agent/packages/infra/logging"
@@ -29,6 +35,19 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/gitcache"
 )
 
+type controlledConversation interface {
+	slackhandler.Conversation
+	StartControlSubscriber(context.Context)
+}
+
+func runtimeVersion() string {
+	version := strings.ToLower(strings.TrimSpace(os.Getenv("AGENT_RUNTIME_VERSION")))
+	if version == "v1" {
+		return "v1"
+	}
+	return "v2"
+}
+
 type Service struct {
 	cfg         config.Config
 	stores      *platform.Stores
@@ -37,7 +56,7 @@ type Service struct {
 	metrics     *observability.Recorder
 	health      *health.Service
 	reminders   reminder.Scheduler
-	conv        *conversation.Service
+	conv        controlledConversation
 	handler     *slackhandler.Handler
 	slackWorker *slackevents.Worker
 
@@ -106,31 +125,56 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	healthService := health.NewService(rt.Tools, cfg.Security.WorkspaceRoots)
 	healthService.Redis = stores.Redis
 
-	conv := conversation.NewService(stores.Sessions, slackClient, rt.Runner, rt.Memory, rt.Prompt, rt.Redactor, recorder)
-	conv.Core = rt.Core
+	convV1 := conversation.NewService(stores.Sessions, slackClient, rt.Runner, rt.Memory, rt.Prompt, rt.Redactor, recorder)
+	conv := controlledConversation(convV1)
+	convV1.Core = rt.Core
 	runSemaphore := make(chan struct{}, cfg.Tools.AgentMaxConcurrentRuns)
-	conv.RunSemaphore = runSemaphore
-	conv.MaxConcurrentRuns = cfg.Tools.AgentMaxConcurrentRuns
-	conv.Redis = stores.Redis
-	conv.PodID = appsupport.GeneratePodID()
-	conv.FollowUpContext = serviceCtx
-	conv.Format = slack.MarkdownToMrkdwn
-	conv.RunStore = stores.Runs
-	conv.ToolSpillStore = stores.Runs
-	conv.UserPrefs = stores.UserPrefs
-	conv.RunProvider = cfg.LLM.Provider
-	conv.RunModel = cfg.LLM.Model
+	convV1.RunSemaphore = runSemaphore
+	convV1.MaxConcurrentRuns = cfg.Tools.AgentMaxConcurrentRuns
+	convV1.Redis = stores.Redis
+	podID := appsupport.GeneratePodID()
+	convV1.PodID = podID
+	convV1.FollowUpContext = serviceCtx
+	convV1.Format = slack.MarkdownToMrkdwn
+	convV1.RunStore = stores.Runs
+	convV1.ToolSpillStore = stores.Runs
+	convV1.UserPrefs = stores.UserPrefs
+	convV1.RunProvider = cfg.LLM.Provider
+	convV1.RunModel = cfg.LLM.Model
 	multimodal := multimodalPredicate(cfg.LLM.MultimodalModels)
-	conv.ModelRouter = conversation.ModelRouter{
+	convV1.ModelRouter = conversation.ModelRouter{
 		DefaultModel:            cfg.LLM.Model,
 		MultimodalFallbackModel: cfg.LLM.MultimodalModel,
 		SupportsMultimodal:      multimodal,
 	}
-	conv.CostRates = rt.CostRates
-	conv.HealthSummary = healthService.SummaryPrompt
+	convV1.CostRates = rt.CostRates
+	convV1.HealthSummary = healthService.SummaryPrompt
 	if cfg.Integrations.TTS.Auto && cfg.Integrations.TTS.APIKey != "" {
-		conv.AutoTTS = appsupport.NewAutoTTSFunc(cfg, slackClient)
-		conv.TTSSummarizer = appsupport.NewTTSSummarizer(cfg, rt)
+		convV1.AutoTTS = appsupport.NewAutoTTSFunc(cfg, slackClient)
+		convV1.TTSSummarizer = appsupport.NewTTSSummarizer(cfg, rt)
+	}
+
+	if runtimeVersion() == "v2" {
+		catalog, catalogErr := legacy.Catalog(rt.Tools.Clone())
+		if catalogErr != nil {
+			return nil, fmt.Errorf("build v2 tool catalog: %w", catalogErr)
+		}
+		v2conv := conversationv2.New(hosted.Agent{}, slackClient, rt.Prompt, rt.Redactor, stores.UserPrefs)
+		runner, runnerErr := agentruntimev2.New(agentruntimev2.Config{Model: cfg.LLM.Model, ReasoningEffort: cfg.LLM.Thinking, MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxSteps: cfg.Tools.AgentMaxSteps, Context: agentruntimev2.ContextConfig{MaxTokens: cfg.Sessions.MaxContextTokens}}, agentruntimev2.Dependencies{Model: legacy.Model{Client: appruntime.NewLLMClient(cfg)}, Tools: catalog, Policy: hosted.Policy{}, Transcript: hosted.PGTranscript{Pool: stores.PGPool}, Events: v2conv.EventSink()})
+		if runnerErr != nil {
+			return nil, fmt.Errorf("build hosted v2 runtime: %w", runnerErr)
+		}
+		v2conv.Agent.Runtime = runner
+		v2conv.Redis, v2conv.PodID, v2conv.Lifecycle = stores.Redis, podID, serviceCtx
+		v2conv.Locker = stores.Sessions
+		v2conv.Format = slack.MarkdownToMrkdwn
+		if len(cfg.Security.WorkspaceRoots) > 0 {
+			v2conv.Workspace = cfg.Security.WorkspaceRoots[0]
+		}
+		conv = v2conv
+		log.Printf("worker agent runtime: v2 hosted")
+	} else {
+		log.Printf("worker agent runtime: v1")
 	}
 
 	access := safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels)
@@ -151,9 +195,14 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 			Redis:  stores.Redis,
 		},
 	}
-	conv.WebSearchEnabled = handler.WebSearchPreference
-	conv.Multimodal = multimodal
-	conv.Events = recorder
+	convV1.WebSearchEnabled = handler.WebSearchPreference
+	convV1.Multimodal = multimodal
+	convV1.Events = recorder
+	if v2conv, ok := conv.(*conversationv2.Service); ok {
+		v2conv.ModeForUser = func(userID string) conversationv2.ConversationMode {
+			return conversationv2.ConversationMode(handler.Home.ConversationMode(userID))
+		}
+	}
 
 	s := &Service{
 		cfg:       cfg,

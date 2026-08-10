@@ -109,6 +109,7 @@ type Request struct {
 	SessionID, TurnID, UserID, Workspace, Text string
 	Steering                                   agentruntime.InputSource
 	Prompt                                     []prompt.Fragment
+	ScopeValues                                map[string]string
 }
 
 func (a Agent) Run(ctx context.Context, request Request) (agentruntime.TurnResult, error) {
@@ -120,5 +121,5 @@ func (a Agent) Run(ctx context.Context, request Request) (agentruntime.TurnResul
 	}
 	fragments := append([]prompt.Fragment(nil), a.Prompt...)
 	fragments = append(fragments, request.Prompt...)
-	return a.Runtime.RunTurn(ctx, agentruntime.TurnRequest{SessionID: request.SessionID, TurnID: request.TurnID, Input: model.TextMessage(model.RoleUser, request.Text), Prompt: fragments, Scope: tool.Scope{SessionID: request.SessionID, TurnID: request.TurnID, UserID: request.UserID, Workspace: request.Workspace}, Steering: request.Steering})
+	return a.Runtime.RunTurn(ctx, agentruntime.TurnRequest{SessionID: request.SessionID, TurnID: request.TurnID, Input: model.TextMessage(model.RoleUser, request.Text), Prompt: fragments, Scope: tool.Scope{SessionID: request.SessionID, TurnID: request.TurnID, UserID: request.UserID, Workspace: request.Workspace, Values: request.ScopeValues}, Steering: request.Steering})
 }

@@ -24,3 +24,18 @@ func TestDrainIsLocalOnly(t *testing.T) {
 		t.Fatalf("local drain code=%d draining=%v", localRecorder.Code, service.draining.Load())
 	}
 }
+
+func TestRuntimeVersionDefaultsToV2WithExplicitV1Fallback(t *testing.T) {
+	t.Setenv("AGENT_RUNTIME_VERSION", "")
+	if got := runtimeVersion(); got != "v2" {
+		t.Fatalf("default runtime = %q", got)
+	}
+	t.Setenv("AGENT_RUNTIME_VERSION", "v1")
+	if got := runtimeVersion(); got != "v1" {
+		t.Fatalf("fallback runtime = %q", got)
+	}
+	t.Setenv("AGENT_RUNTIME_VERSION", "unexpected")
+	if got := runtimeVersion(); got != "v2" {
+		t.Fatalf("unknown runtime = %q", got)
+	}
+}

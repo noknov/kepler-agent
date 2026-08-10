@@ -4,15 +4,15 @@ An open-source agent platform for code-assisted diagnosis and operational work.
 It currently ships as a hosted Slack agent and is evolving toward a shared
 harness used by both the hosted product and a full local coding-agent CLI.
 
-> **Status:** v1 remains the stable production path. v2 is implemented as a
-> parallel, testable vertical slice and is ready for sustained local trials;
-> it does not yet serve production Slack traffic.
+> **Status:** the split Slack worker now runs the hosted v2 harness by default;
+> set `AGENT_RUNTIME_VERSION=v1` for the compatibility path. v2 remains under
+> sustained validation and is not described as stable.
 
 ## Products
 
 | Product | Runtime | Workspace | Status |
 |---|---|---|---|
-| Hosted Agent | Server-side; Slack is the current ingress | Server-owned, read-only by default | v1 stable; v2 adapter implemented |
+| Hosted Agent | Server-side; Slack is the current ingress | Server-owned, read-only by default | v2 worker path available; v1 fallback retained |
 | Local CLI | Runs the complete harness on the user machine | Local workspace-write sandbox | v2 available for trials |
 
 Both v2 profiles share the agent loop, model and tool contracts, prompt
@@ -100,6 +100,8 @@ go run ./appserver/cmd/app-server
 The gateway verifies and persists Slack events, workers claim and execute
 them, observability serves run and cost views, and app-server exposes the
 transport-neutral JSON-RPC surface. Runtime code performs no database DDL.
+The split worker selects hosted v2 by default; set
+`AGENT_RUNTIME_VERSION=v1` to exercise the retained compatibility path.
 
 ### Slack app
 
