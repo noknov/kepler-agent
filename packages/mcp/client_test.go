@@ -146,3 +146,25 @@ func TestInitialize_PropagatesNotifyError(t *testing.T) {
 		t.Fatalf("error should mention notifications/initialized: %v", err)
 	}
 }
+
+func TestListToolsFollowsCursor(t *testing.T) {
+	calls := 0
+	c := &Client{ServiceName: "test", URL: "http://example.test", HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var payload struct {
+			Params map[string]any `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		calls++
+		if calls == 1 {
+			return httpResp(200, map[string]string{"Content-Type": "application/json"}, `{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"one","inputSchema":{"type":"object"}}],"nextCursor":"next"}}`), nil
+		}
+		if payload.Params["cursor"] != "next" {
+			t.Fatalf("params=%v", payload.Params)
+		}
+		return httpResp(200, map[string]string{"Content-Type": "application/json"}, `{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"two","inputSchema":{"type":"object"}}]}}`), nil
+	})}}
+	tools, err := c.ListTools(context.Background(), Session{ID: "s1", Initialized: true})
+	if err != nil || len(tools) != 2 || tools[1].Name != "two" {
+		t.Fatalf("tools=%+v err=%v", tools, err)
+	}
+}
