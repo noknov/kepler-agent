@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/noknov/slack-copilot-agent/packages/agent"
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/hosted"
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/model"
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/prompt"
@@ -71,14 +72,17 @@ func New(agent hosted.Agent, messenger conversation.Messenger, policy safety.Pro
 func (s *Service) EventSink() transcript.Sink { return s.router }
 
 func (r *eventRouter) Publish(_ context.Context, event transcript.Event) {
-	if event.Type != transcript.ModelStreamed || event.Model == nil || event.Model.Type != model.StreamTextDelta || event.Model.Text == "" {
-		return
-	}
 	r.mu.RLock()
 	stream := r.streams[event.TurnID]
 	r.mu.RUnlock()
-	if stream != nil {
+	if stream == nil {
+		return
+	}
+	if event.Type == transcript.ModelStreamed && event.Model != nil && event.Model.Type == model.StreamTextDelta && event.Model.Text != "" {
 		stream.Write(event.Model.Text)
+	}
+	if event.Type == transcript.AssistantMessage && event.Message != nil {
+		stream.CommitStep(len(event.Message.ToolCalls()) > 0)
 	}
 }
 
@@ -337,69 +341,59 @@ type slackStream struct {
 	req       conversation.Request
 	mu        sync.Mutex
 	ts        string
-	buf       strings.Builder
+	pending   strings.Builder
 	streamed  bool
-	done      chan struct{}
-	finished  chan struct{}
+	status    conversation.ThreadStatusMessenger
 }
 
 func newSlackStream(ctx context.Context, messenger conversation.Messenger, req conversation.Request) *slackStream {
-	return &slackStream{ctx: ctx, messenger: messenger, req: req, done: make(chan struct{}), finished: make(chan struct{})}
+	return &slackStream{ctx: ctx, messenger: messenger, req: req}
 }
 func (s *slackStream) Start() {
-	ts, err := s.messenger.StartStream(s.ctx, s.req.Channel, s.req.ThreadTS, s.req.UserID)
-	if err == nil {
-		s.ts = ts
-		_ = s.messenger.AppendStream(s.ctx, s.req.Channel, ts, []map[string]any{{"type": "task_update", "id": "thinking", "title": "Thinking…", "status": "in_progress"}})
+	status, ok := s.messenger.(conversation.ThreadStatusMessenger)
+	if !ok {
+		return
 	}
-	go s.flushLoop()
+	s.status = status
+	statusText, loading := "is thinking", "Thinking..."
+	if agent.DetectLocale(s.req.Text) == agent.LocaleZH {
+		statusText, loading = "正在思考", "思考中..."
+	}
+	_ = status.SetThreadStatus(s.ctx, s.req.Channel, s.req.ThreadTS, statusText, []string{loading})
 }
 func (s *slackStream) Write(text string) {
 	s.mu.Lock()
-	s.buf.WriteString(text)
+	s.pending.WriteString(text)
+	s.mu.Unlock()
+}
+func (s *slackStream) CommitStep(hasToolCalls bool) {
+	s.mu.Lock()
+	text := s.pending.String()
+	s.pending.Reset()
+	ts := s.ts
+	s.mu.Unlock()
+	if hasToolCalls || text == "" {
+		return
+	}
+	if ts == "" {
+		var err error
+		ts, err = s.messenger.StartStream(s.ctx, s.req.Channel, s.req.ThreadTS, s.req.UserID)
+		if err != nil || ts == "" {
+			return
+		}
+		s.mu.Lock()
+		s.ts = ts
+		s.mu.Unlock()
+	}
+	if err := s.messenger.AppendStream(s.ctx, s.req.Channel, ts, []map[string]any{{"type": "markdown_text", "text": text}}); err != nil {
+		log.Printf("v2 Slack answer stream append failed: %v", err)
+		return
+	}
+	s.mu.Lock()
 	s.streamed = true
 	s.mu.Unlock()
 }
-func (s *slackStream) flushLoop() {
-	defer close(s.finished)
-	ticker := time.NewTicker(75 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			s.flush()
-		case <-s.done:
-			s.flush()
-			return
-		case <-s.ctx.Done():
-			s.flush()
-			return
-		}
-	}
-}
-func (s *slackStream) flush() {
-	s.mu.Lock()
-	text := s.buf.String()
-	s.buf.Reset()
-	ts := s.ts
-	s.mu.Unlock()
-	if text != "" && ts != "" {
-		if err := s.messenger.AppendStream(context.Background(), s.req.Channel, ts, []map[string]any{{"type": "markdown_text", "text": text}}); err != nil {
-			log.Printf("v2 Slack stream append failed: %v", err)
-		}
-	}
-}
-func (s *slackStream) finish() {
-	select {
-	case <-s.done:
-	default:
-		close(s.done)
-	}
-	<-s.finished
-	s.flush()
-}
 func (s *slackStream) Complete(final string) {
-	s.finish()
 	s.mu.Lock()
 	ts, streamed := s.ts, s.streamed
 	s.mu.Unlock()
@@ -407,28 +401,36 @@ func (s *slackStream) Complete(final string) {
 		if !streamed && final != "" {
 			_ = s.messenger.AppendStream(context.Background(), s.req.Channel, ts, []map[string]any{{"type": "markdown_text", "text": final}})
 		}
-		_ = s.messenger.AppendStream(context.Background(), s.req.Channel, ts, []map[string]any{{"type": "task_update", "id": "thinking", "title": "Complete", "status": "complete"}})
 		_ = s.messenger.StopStream(context.Background(), s.req.Channel, ts)
+		s.clearStatus()
 		return
 	}
+	s.clearStatus()
 	if final != "" {
 		_, _ = s.messenger.PostMessage(context.Background(), s.req.Channel, s.req.ThreadTS, final)
 	}
 }
 func (s *slackStream) Fail(message string, canceled bool) {
-	s.finish()
 	s.mu.Lock()
 	ts := s.ts
 	s.mu.Unlock()
-	title := "Failed"
 	if canceled {
-		title = "Cancelled"
 		message = "Cancelled this request."
+		if agent.DetectLocale(s.req.Text) == agent.LocaleZH {
+			message = "已中止本次请求。"
+		}
 	}
 	if ts != "" {
-		_ = s.messenger.AppendStream(context.Background(), s.req.Channel, ts, []map[string]any{{"type": "task_update", "id": "thinking", "title": title, "status": "error"}})
 		_ = s.messenger.StopStream(context.Background(), s.req.Channel, ts)
-		return
 	}
-	_, _ = s.messenger.PostMessage(context.Background(), s.req.Channel, s.req.ThreadTS, message)
+	s.clearStatus()
+	if message != "" {
+		_, _ = s.messenger.PostMessage(context.Background(), s.req.Channel, s.req.ThreadTS, message)
+	}
+}
+
+func (s *slackStream) clearStatus() {
+	if s.status != nil {
+		_ = s.status.SetThreadStatus(context.Background(), s.req.Channel, s.req.ThreadTS, "", nil)
+	}
 }

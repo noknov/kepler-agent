@@ -22,10 +22,11 @@ func (replyModel) Generate(_ context.Context, _ model.Request, sink model.EventS
 }
 
 type fakeMessenger struct {
-	mu      sync.Mutex
-	chunks  []map[string]any
-	stopped bool
-	posts   []string
+	mu       sync.Mutex
+	chunks   []map[string]any
+	stopped  bool
+	posts    []string
+	statuses []string
 }
 
 func (m *fakeMessenger) PostMessage(_ context.Context, _, _, text string) (string, error) {
@@ -53,6 +54,12 @@ func (m *fakeMessenger) DeleteMessage(context.Context, string, string) error { r
 func (m *fakeMessenger) ThreadContext(context.Context, string, string, int) string {
 	return "prior Slack context"
 }
+func (m *fakeMessenger) SetThreadStatus(_ context.Context, _, _, status string, _ []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.statuses = append(m.statuses, status)
+	return nil
+}
 
 func TestServiceRunsHostedHarnessAndStreamsAnswer(t *testing.T) {
 	catalog, err := tool.NewCatalog()
@@ -76,11 +83,17 @@ func TestServiceRunsHostedHarnessAndStreamsAnswer(t *testing.T) {
 	}
 	found := false
 	for _, chunk := range messenger.chunks {
+		if chunk["type"] == "task_update" {
+			t.Fatalf("native Slack path rendered a task card: %#v", messenger.chunks)
+		}
 		if chunk["type"] == "markdown_text" && chunk["text"] == "hello" {
 			found = true
 		}
 	}
 	if !found {
 		t.Fatalf("stream chunks = %#v", messenger.chunks)
+	}
+	if len(messenger.statuses) < 2 || messenger.statuses[0] != "is thinking" || messenger.statuses[len(messenger.statuses)-1] != "" {
+		t.Fatalf("thread statuses = %#v", messenger.statuses)
 	}
 }
