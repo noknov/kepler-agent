@@ -1,0 +1,11 @@
+{
+  "tasks": [
+    {
+      "id": "go-palindrome-bug",
+      "fixture": "../../benchmarks/fixtures/go-palindrome-bug",
+      "prompt": "Fix the palindrome implementation. Inspect the repository, make the smallest correct change, and run the tests.",
+      "test": ["go", "test", "./..."],
+      "timeout_seconds": 300
+    }
+  ]
+}

@@ -1,0 +1,174 @@
+// Package runtime implements the transport-neutral agent v2 execution loop.
+package runtime
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"time"
+
+	"github.com/noknov/slack-copilot-agent/packages/agentv2/model"
+	"github.com/noknov/slack-copilot-agent/packages/agentv2/prompt"
+	"github.com/noknov/slack-copilot-agent/packages/agentv2/tool"
+	"github.com/noknov/slack-copilot-agent/packages/agentv2/transcript"
+)
+
+type TerminationReason string
+
+const (
+	TerminationCompleted       TerminationReason = "completed"
+	TerminationCanceled        TerminationReason = "canceled"
+	TerminationModelError      TerminationReason = "model_error"
+	TerminationMaxSteps        TerminationReason = "max_steps"
+	TerminationPendingApproval TerminationReason = "pending_approval"
+	TerminationEmptyResponse   TerminationReason = "empty_response"
+	TerminationLoopDetected    TerminationReason = "loop_detected"
+)
+
+type Config struct {
+	Model                string
+	ReasoningEffort      string
+	MaxOutputTokens      int
+	MaxSteps             int
+	MaxModelRetries      int
+	MaxRepeatedToolCalls int
+	RetryBaseDelay       time.Duration
+	Context              ContextConfig
+	ToolResults          ToolResultConfig
+}
+
+func (c Config) withDefaults() Config {
+	if c.MaxSteps <= 0 {
+		c.MaxSteps = 32
+	}
+	if c.MaxModelRetries < 0 {
+		c.MaxModelRetries = 0
+	} else if c.MaxModelRetries == 0 {
+		c.MaxModelRetries = 2
+	}
+	if c.MaxRepeatedToolCalls <= 0 {
+		c.MaxRepeatedToolCalls = 3
+	}
+	if c.RetryBaseDelay <= 0 {
+		c.RetryBaseDelay = 500 * time.Millisecond
+	}
+	if c.Context.MaxTokens <= 0 {
+		c.Context.MaxTokens = 96_000
+	}
+	if c.Context.ReserveTokens <= 0 {
+		c.Context.ReserveTokens = 8_000
+	}
+	if c.ToolResults.MaxInlineBytes <= 0 {
+		c.ToolResults.MaxInlineBytes = 64 << 10
+	}
+	return c
+}
+
+type Dependencies struct {
+	Model      model.Client
+	Tools      *tool.Catalog
+	Policy     tool.Policy
+	Approver   tool.Approver
+	Transcript transcript.Store
+	Events     transcript.Sink
+	Projector  Projector
+	Compactor  Compactor
+	Artifacts  ArtifactStore
+	IDs        IDGenerator
+	Clock      func() time.Time
+	Sleep      func(context.Context, time.Duration) error
+}
+
+type Runtime struct {
+	config Config
+	deps   Dependencies
+	locks  sync.Map
+}
+
+func New(config Config, deps Dependencies) (*Runtime, error) {
+	if deps.Model == nil {
+		return nil, errors.New("model client is required")
+	}
+	if deps.Tools == nil {
+		return nil, errors.New("tool catalog is required")
+	}
+	if deps.Transcript == nil {
+		return nil, errors.New("transcript store is required")
+	}
+	if deps.Policy == nil {
+		deps.Policy = tool.AllowAllPolicy{}
+	}
+	if deps.IDs == nil {
+		deps.IDs = RandomIDs{}
+	}
+	if deps.Clock == nil {
+		deps.Clock = func() time.Time { return time.Now().UTC() }
+	}
+	if deps.Sleep == nil {
+		deps.Sleep = sleepContext
+	}
+	config = config.withDefaults()
+	if deps.Projector == nil {
+		deps.Projector = NewBoundedProjector(config.Context)
+	}
+	return &Runtime{config: config, deps: deps}, nil
+}
+
+type InputSource interface {
+	Drain() []model.Message
+}
+
+// InputBuffer is a concurrency-safe steering inbox shared by interactive
+// surfaces and the runtime. Drain atomically transfers all pending messages.
+type InputBuffer struct {
+	mu       sync.Mutex
+	messages []model.Message
+}
+
+func (b *InputBuffer) Push(message model.Message) {
+	b.mu.Lock()
+	b.messages = append(b.messages, message)
+	b.mu.Unlock()
+}
+
+func (b *InputBuffer) Drain() []model.Message {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	messages := append([]model.Message(nil), b.messages...)
+	b.messages = b.messages[:0]
+	return messages
+}
+
+type TurnRequest struct {
+	SessionID string
+	TurnID    string
+	Input     model.Message
+	Prompt    []prompt.Fragment
+	Scope     tool.Scope
+	Steering  InputSource
+}
+
+type TurnResult struct {
+	SessionID   string
+	TurnID      string
+	Message     model.Message
+	Usage       model.Usage
+	Steps       int
+	Termination TerminationReason
+}
+
+func (r *Runtime) sessionLock(sessionID string) *sync.Mutex {
+	value, _ := r.locks.LoadOrStore(sessionID, &sync.Mutex{})
+	return value.(*sync.Mutex)
+}
+
+func sleepContext(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}

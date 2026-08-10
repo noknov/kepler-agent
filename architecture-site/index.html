@@ -31,9 +31,9 @@
   <main id="main">
     <article data-locale="zh">
       <section class="hero" id="top">
-        <p class="eyebrow">Architecture overview · v1</p>
+        <p class="eyebrow">Architecture overview · v1 stable + v2 in development</p>
         <h1>Slack Copilot Agent<br><span>系统架构</span></h1>
-        <p class="hero-copy">Slack Copilot Agent 是一个运行在 Slack 里的云端 Agent 服务。系统由 Slack 入口、耐久事件队列、Agent 执行内核、工具能力层、持久化存储和观测服务组成。</p>
+        <p class="hero-copy">Slack Copilot Agent 当前稳定版本是以 Slack 为主要入口的云端 Agent 服务。仓库同时正在开发 v2：让本地 CLI 与 hosted Agent 共享一套执行 harness，并由不同 profile 保持权限和运行环境差异。</p>
         <div class="hero-meta" aria-label="技术摘要">
           <span class="pill">Go 1.25</span>
           <span class="pill">PostgreSQL</span>
@@ -47,6 +47,7 @@
       <div class="shell">
         <nav class="toc" aria-label="本文目录">
           <p class="toc-title">目录</p>
+          <a href="#zh-v2">00 · v2 状态与方向</a>
           <a href="#zh-mental-model">01 · 系统边界</a>
           <a href="#zh-processes">02 · 运行进程</a>
           <a href="#zh-slack-flow">03 · Slack 链路</a>
@@ -62,6 +63,35 @@
         </nav>
 
         <div class="content">
+          <section class="doc-section" id="zh-v2">
+            <span class="section-number">00 / V2 DEVELOPMENT STATUS</span>
+            <h2>v2：共享 harness，区分产品 profile</h2>
+            <p class="lead">v2 不是把 CLI 变成远端服务的薄客户端，也不是为 Slack 再造一套循环。目标是让本地 CLI 和 hosted Agent 复用模型、工具、上下文、事件与终止语义；Slack 只负责 hosted 产品的交互入口。</p>
+            <div class="callout"><p><strong>状态说明：</strong>v1 仍是当前稳定和生产路径。v2 已在仓库中形成可编译、可测试的独立实现，但尚未接管 Slack/worker 生产链路，也没有发布稳定性声明。</p></div>
+            <div class="architecture-map" role="img" aria-label="v2 共享 harness 与产品 profile">
+              <div class="arch-layer"><div class="arch-label">产品入口</div><div class="arch-nodes"><span class="node">Local CLI · TTY / Headless</span><span class="node">Hosted · Slack / API / App Server</span></div></div>
+              <div class="arch-layer"><div class="arch-label">共享 v2 harness</div><div class="arch-nodes"><span class="node core">Agent Loop</span><span class="node core">Canonical Transcript</span><span class="node core">Context Projection</span><span class="node core">Prompt Layers</span><span class="node core">Tool Contracts</span></div></div>
+              <div class="arch-layer"><div class="arch-label">运行 profile</div><div class="arch-nodes"><span class="node">Local · workspace-write + approval</span><span class="node">Hosted · server-owned read-only policy</span></div></div>
+            </div>
+            <div class="card-grid three">
+              <div class="card"><span class="tag">Implemented</span><h3>共享执行核心</h3><p>Provider-neutral 模型与工具契约、串行 session turn、并行安全工具、重试、循环检测、steering、追加式 transcript、上下文投影与模型压缩。</p></div>
+              <div class="card"><span class="tag">Implemented</span><h3>本地 CLI 垂直切片</h3><p>同一入口自动适配 TTY/headless；本地 JSONL 会话、resume、steer/queue 设置、OpenAI/Anthropic 协议、工作区工具、OS sandbox 和 once/session/project 审批。</p></div>
+              <div class="card"><span class="tag">Implemented seam</span><h3>Hosted profile</h3><p>同一 runtime 的服务端适配面、只读权威 policy、operator allowlist 与无 shell 的 argv executor 接口已经存在；Slack 生产接线仍待迁移验证。</p></div>
+            </div>
+            <h3>评测与工程工作计划</h3>
+            <p>独立的 <code>evals/</code> 模块通过 CLI 黑盒运行，不导入 agentcore 或 v2 包；它可以在同一受控模型网关下比较本项目、Codex、Claude Code、Pi 和 OpenCode，并保留每个 case 的日志、测试结果与耗时。当前只提供评测基础设施和 smoke fixture，不公布尚未实际运行的质量结论。</p>
+            <table class="data-table">
+              <thead><tr><th>工作流</th><th>主要工作</th><th>验证标准</th></tr></thead>
+              <tbody>
+                <tr><td>CLI 可靠性</td><td>持续用于真实代码诊断与修改；修正工具、sandbox、上下文和交互问题</td><td>关键工作流有回归测试，session 可恢复，安全边界可重复验证</td></tr>
+                <tr><td>受控评测</td><td>在同一模型下重复运行 Terminal-Bench/Harbor；随后加入 YouTrack ticket + 对应 PR 回归集</td><td>记录版本、方差、失败类型、耗时和原始日志，不只报告单一分数</td></tr>
+                <tr><td>Hosted 适配</td><td>实现 PG transcript、既有 connector/tool、run trace 和 Slack presentation 的 v2 adapter</td><td>保持 hosted 只读与 operator policy；steering、取消和恢复语义通过集成测试</td></tr>
+                <tr><td>可观测与恢复</td><td>统一 local/hosted 的 termination、usage、tool trace、错误分类与恢复证据</td><td>失败可定位，关键状态可 replay，重试和恢复行为有故障注入测试</td></tr>
+                <tr><td>兼容性整理</td><td>记录 v1/v2 数据、配置和运维差异，识别可复用 adapter 与必要兼容层</td><td>差异清单、迁移前置条件和回滚约束有代码或文档证据</td></tr>
+              </tbody>
+            </table>
+            <div class="callout"><p><strong>范围说明：</strong>这里记录的是工程工作与验证标准，不是发布、灰度、切流或 v1 下线计划。相关产品决策将在验证证据充分后单独制定。</p></div>
+          </section>
           <section class="doc-section" id="zh-mental-model">
             <span class="section-number">01 / MENTAL MODEL</span>
             <h2>系统边界</h2>
@@ -277,9 +307,9 @@
 
     <article data-locale="en">
       <section class="hero" id="top-en">
-        <p class="eyebrow">Architecture overview · v1</p>
+		<p class="eyebrow">Architecture overview · v1 stable + v2 in development</p>
         <h1>Slack Copilot Agent<br><span>System Architecture</span></h1>
-        <p class="hero-copy">Slack Copilot Agent is a cloud agent service for Slack. It is composed of Slack ingress, a durable event inbox, an agent execution core, a tool capability layer, persistent storage, and operational observability.</p>
+        <p class="hero-copy">Slack Copilot Agent currently ships as a hosted agent with Slack as its primary ingress. A parallel v2 is in development so the local CLI and hosted agent can share one execution harness while retaining different runtime and permission profiles.</p>
         <div class="hero-meta" aria-label="Technology summary">
           <span class="pill">Go 1.25</span><span class="pill">PostgreSQL</span><span class="pill">Redis</span><span class="pill">Slack Events API</span><span class="pill">JSON-RPC 2.0</span><span class="pill">Protocol 1.0</span>
         </div>
@@ -288,10 +318,39 @@
       <div class="shell">
         <nav class="toc" aria-label="On this page">
           <p class="toc-title">Contents</p>
-          <a href="#en-mental-model">01 · Boundary</a><a href="#en-processes">02 · Processes</a><a href="#en-slack-flow">03 · Slack flow</a><a href="#en-core">04 · Core & Runner</a><a href="#en-memory">05 · Memory</a><a href="#en-tools">06 · Tools</a><a href="#en-protocol">07 · Protocol</a><a href="#en-storage">08 · Data</a><a href="#en-safety">09 · Safety</a><a href="#en-operations">10 · Operations</a><a href="#en-boundaries">11 · Boundaries</a><a href="#en-reading">12 · Code entrypoints</a>
+          <a href="#en-v2">00 · v2 status</a><a href="#en-mental-model">01 · Boundary</a><a href="#en-processes">02 · Processes</a><a href="#en-slack-flow">03 · Slack flow</a><a href="#en-core">04 · Core & Runner</a><a href="#en-memory">05 · Memory</a><a href="#en-tools">06 · Tools</a><a href="#en-protocol">07 · Protocol</a><a href="#en-storage">08 · Data</a><a href="#en-safety">09 · Safety</a><a href="#en-operations">10 · Operations</a><a href="#en-boundaries">11 · Boundaries</a><a href="#en-reading">12 · Code entrypoints</a>
         </nav>
 
         <div class="content">
+          <section class="doc-section" id="en-v2">
+            <span class="section-number">00 / V2 DEVELOPMENT STATUS</span>
+            <h2>v2: one harness, distinct product profiles</h2>
+            <p class="lead">v2 does not turn the CLI into a thin remote client and does not create a Slack-specific agent loop. Local CLI and hosted Agent share model, tool, context, event, retry, and termination semantics; Slack remains a presentation and ingress surface for the hosted product.</p>
+            <div class="callout"><p><strong>Status:</strong> v1 remains the stable production path. The repository now contains a compiling, tested, independent v2 implementation, but v2 has not taken over the Slack/worker production path and is not described as stable.</p></div>
+            <div class="architecture-map" role="img" aria-label="v2 shared harness profiles">
+              <div class="arch-layer"><div class="arch-label">Product surfaces</div><div class="arch-nodes"><span class="node">Local CLI · TTY / Headless</span><span class="node">Hosted · Slack / API / App Server</span></div></div>
+              <div class="arch-layer"><div class="arch-label">Shared v2 harness</div><div class="arch-nodes"><span class="node core">Agent Loop</span><span class="node core">Canonical Transcript</span><span class="node core">Context Projection</span><span class="node core">Prompt Layers</span><span class="node core">Tool Contracts</span></div></div>
+              <div class="arch-layer"><div class="arch-label">Runtime profiles</div><div class="arch-nodes"><span class="node">Local · workspace-write + approval</span><span class="node">Hosted · server-owned read-only policy</span></div></div>
+            </div>
+            <div class="card-grid three">
+              <div class="card"><span class="tag">Implemented</span><h3>Shared execution core</h3><p>Provider-neutral contracts, serial session turns, parallel-safe tools, retry and loop detection, steering, append-only transcripts, bounded projection, and model compaction.</p></div>
+              <div class="card"><span class="tag">Implemented</span><h3>Local CLI vertical slice</h3><p>One TTY/headless entrypoint, JSONL sessions and resume, steer/queue settings, OpenAI/Anthropic protocols, workspace tools, OS sandboxing, and once/session/project approval.</p></div>
+              <div class="card"><span class="tag">Implemented seam</span><h3>Hosted profile</h3><p>A server adapter around the same runtime, authoritative read-only policy, operator allowlist, and shell-free argv executor contract exist. Slack production wiring still requires migration and validation.</p></div>
+            </div>
+            <h3>Evaluation and engineering plan</h3>
+            <p>The independent <code>evals/</code> module runs agents as CLI black boxes and imports no v1 or v2 runtime package. It can compare this project, Codex, Claude Code, Pi, and OpenCode through one controlled model gateway while retaining per-case logs, tests, and timing. Only infrastructure and a smoke fixture are checked in; no unrun quality result is claimed.</p>
+            <table class="data-table">
+              <thead><tr><th>Workstream</th><th>Work</th><th>Validation</th></tr></thead>
+              <tbody>
+                <tr><td>CLI reliability</td><td>Use v2 for real diagnosis and code changes; fix tool, sandbox, context, and interaction defects</td><td>Critical workflows have regressions, sessions resume, and security boundaries are repeatable</td></tr>
+                <tr><td>Controlled evaluation</td><td>Repeat Terminal-Bench/Harbor on one model, then add YouTrack-ticket/PR workspace cases</td><td>Record versions, variance, failure classes, timing, and raw logs—not only one score</td></tr>
+                <tr><td>Hosted adapters</td><td>Implement v2 adapters for PG transcripts, existing connectors/tools, run traces, and Slack presentation</td><td>Read-only/operator policy remains intact; steering, cancellation, and recovery pass integration tests</td></tr>
+                <tr><td>Observability and recovery</td><td>Align local/hosted termination, usage, tool traces, error classes, and recovery evidence</td><td>Failures are diagnosable, key state is replayable, and retry/recovery has fault-injection coverage</td></tr>
+                <tr><td>Compatibility analysis</td><td>Document v1/v2 data, configuration, and operational differences; identify reusable adapters and compatibility layers</td><td>Differences, prerequisites, and rollback constraints are supported by code or documentation evidence</td></tr>
+              </tbody>
+            </table>
+            <div class="callout"><p><strong>Scope:</strong> this is an engineering and validation plan, not a release, rollout, traffic-cutover, or v1 retirement schedule. Product decisions will be made separately when enough evidence exists.</p></div>
+          </section>
           <section class="doc-section" id="en-mental-model">
             <span class="section-number">01 / SYSTEM BOUNDARY</span><h2>System boundary</h2>
             <p class="lead">The system turns a Slack user request into an agent turn and maintains the conversation context, model/tool loop, tool policy, lifecycle events, and run records around that turn.</p>

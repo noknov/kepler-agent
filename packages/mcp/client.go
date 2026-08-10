@@ -37,6 +37,42 @@ type Session struct {
 	Initialized bool
 }
 
+type ToolDefinition struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"inputSchema"`
+}
+
+func (c *Client) ListTools(ctx context.Context, session Session) ([]ToolDefinition, error) {
+	result, _, err := c.rpc(ctx, session.ID, "tools/list", map[string]any{})
+	if err != nil {
+		return nil, err
+	}
+	var page struct {
+		Tools      []ToolDefinition `json:"tools"`
+		NextCursor string           `json:"nextCursor"`
+	}
+	if err := json.Unmarshal(result, &page); err != nil {
+		return nil, err
+	}
+	tools := append([]ToolDefinition(nil), page.Tools...)
+	for page.NextCursor != "" {
+		result, _, err = c.rpc(ctx, session.ID, "tools/list", map[string]any{"cursor": page.NextCursor})
+		if err != nil {
+			return nil, err
+		}
+		page = struct {
+			Tools      []ToolDefinition `json:"tools"`
+			NextCursor string           `json:"nextCursor"`
+		}{}
+		if err := json.Unmarshal(result, &page); err != nil {
+			return nil, err
+		}
+		tools = append(tools, page.Tools...)
+	}
+	return tools, nil
+}
+
 // Endpoint returns the MCP server URL.
 func (c *Client) Endpoint() string { return c.URL }
 
