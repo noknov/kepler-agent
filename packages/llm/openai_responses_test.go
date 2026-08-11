@@ -141,6 +141,23 @@ func TestOpenAIResponsesClientStreamPreservesFunctionCallID(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponsesClientInfersMissingCompletedStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"output":[{"type":"function_call","call_id":"call_1","name":"echo","arguments":"{}"}]}`))
+	}))
+	defer server.Close()
+
+	client := NewOpenAIResponsesClient("test", server.URL, "token", 0)
+	resp, err := client.Chat(context.Background(), Request{Model: "test"})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if resp.FinishReason != "tool_calls" {
+		t.Fatalf("FinishReason = %q, want tool_calls", resp.FinishReason)
+	}
+}
+
 func TestResponsesInputSkipsToolHistoryWithoutCallID(t *testing.T) {
 	input := responsesInput([]Message{
 		{Role: "assistant", ToolCalls: []ToolCall{{Type: "function", Function: ToolFunction{Name: "broken", Arguments: `{}`}}}},

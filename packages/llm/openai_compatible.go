@@ -55,7 +55,7 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, req Request) (Respons
 	}
 	return Response{
 		Message:      parsed.Choices[0].Message,
-		FinishReason: parsed.Choices[0].FinishReason,
+		FinishReason: completedFinishReason(parsed.Choices[0].FinishReason, parsed.Choices[0].Message),
 		Usage:        parsed.Usage.toUsage(),
 		Raw:          data,
 	}, nil
@@ -154,6 +154,7 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 	var msg Message
 	msg.Role = "assistant"
 	var finishReason string
+	completed := false
 	var usage openAIUsage
 	toolCallsStarted := false
 	// Track tool call completion state for OnToolCallComplete.
@@ -161,6 +162,7 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 
 	err = readSSE(resp.Body, func(ev sseEvent) bool {
 		if ev.Data == "[DONE]" {
+			completed = true
 			return false
 		}
 		var chunk struct {
@@ -245,6 +247,9 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 	})
 	if err != nil {
 		return Response{}, err
+	}
+	if completed {
+		finishReason = completedFinishReason(finishReason, msg)
 	}
 	// Emit OnToolCallComplete for all completed tool calls at stream end.
 	if h.OnToolCallComplete != nil {
