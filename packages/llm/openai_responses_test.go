@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -102,5 +103,56 @@ func TestOpenAIResponsesClientParsesFunctionCalls(t *testing.T) {
 	call := resp.Message.ToolCalls[0]
 	if call.ID != "call_1" || call.Function.Name != "code-search" || call.Function.Arguments != `{"query":"x"}` {
 		t.Fatalf("call = %#v", call)
+	}
+}
+
+func TestOpenAIResponsesClientStreamPreservesFunctionCallID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		events := []string{
+			`{"type":"response.output_item.added","output_index":0,"item":{"id":"fc_tmp_1","type":"function_call","status":"in_progress","name":"echo","call_id":"call_1","arguments":""}}`,
+			`{"type":"response.function_call_arguments.done","output_index":0,"item_id":"fc_tmp_1","arguments":"{\"text\":\"hello\"}","name":"echo"}`,
+			`{"type":"response.output_item.done","output_index":0,"item":{"id":"fc_tmp_1","type":"function_call","status":"completed","name":"echo","call_id":"call_1","arguments":"{\"text\":\"hello\"}"}}`,
+			`{"type":"response.completed","response":{"status":"completed","output":[{"id":"fc_tmp_1","type":"function_call","status":"completed","name":"echo","call_id":"call_1","arguments":"{\"text\":\"hello\"}"}],"usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}}`,
+		}
+		for _, event := range events {
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", event)
+		}
+	}))
+	defer server.Close()
+
+	var streamed []ToolCall
+	client := NewOpenAIResponsesClient("opencode-go", server.URL, "token", 0)
+	resp, err := client.ChatStream(context.Background(), Request{Model: "gpt-5.6-luna", Messages: []Message{{Role: "user", Content: "echo"}}}, StreamHandler{
+		OnToolCallComplete: func(call ToolCall) { streamed = append(streamed, call) },
+	})
+	if err != nil {
+		t.Fatalf("ChatStream() error = %v", err)
+	}
+	if len(resp.Message.ToolCalls) != 1 {
+		t.Fatalf("ToolCalls = %#v, want one", resp.Message.ToolCalls)
+	}
+	call := resp.Message.ToolCalls[0]
+	if call.ID != "call_1" || call.Function.Name != "echo" || call.Function.Arguments != `{"text":"hello"}` {
+		t.Fatalf("call = %#v", call)
+	}
+	if len(streamed) != 1 || streamed[0].ID != "call_1" {
+		t.Fatalf("streamed calls = %#v, want one call with preserved ID", streamed)
+	}
+}
+
+func TestResponsesInputSkipsToolHistoryWithoutCallID(t *testing.T) {
+	input := responsesInput([]Message{
+		{Role: "assistant", ToolCalls: []ToolCall{{Type: "function", Function: ToolFunction{Name: "broken", Arguments: `{}`}}}},
+		{Role: "tool", Name: "broken", Content: "result"},
+		{Role: "user", Content: "continue"},
+	})
+
+	if len(input) != 1 {
+		t.Fatalf("input = %#v, want only the valid user message", input)
+	}
+	message := input[0].(map[string]any)
+	if message["role"] != "user" {
+		t.Fatalf("message = %#v, want user message", message)
 	}
 }
