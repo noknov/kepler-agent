@@ -3,9 +3,7 @@ package localtools
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
@@ -29,18 +27,16 @@ func NewCatalog(workspace local.Workspace, sandbox local.Sandbox) (*tool.Catalog
 type ToolSearch struct{ Catalog *tool.Catalog }
 
 func (ToolSearch) Descriptor() tool.Descriptor {
-	return tool.Descriptor{Name: "tool_search", Description: "Discover and activate deferred tools available in this session.", InputSchema: schema(`{"query":{"type":"string"},"names":{"type":"array","items":{"type":"string"}}}`, "query"), Effects: []tool.Effect{tool.EffectRead}, Exposure: tool.ExposureEager}
+	return tool.Descriptor{Name: "tool_search", Description: "List deferred tools or activate them by exact name for this session.", InputSchema: schema(`{"names":{"type":"array","items":{"type":"string"}}}`), Effects: []tool.Effect{tool.EffectRead}, Exposure: tool.ExposureEager}
 }
 
 func (t ToolSearch) Execute(_ context.Context, call tool.Call) (tool.Result, error) {
 	var arguments struct {
-		Query string   `json:"query"`
 		Names []string `json:"names"`
 	}
 	if err := json.Unmarshal(call.Arguments, &arguments); err != nil {
 		return tool.Result{}, err
 	}
-	query := strings.ToLower(strings.TrimSpace(arguments.Query))
 	requested := make(map[string]bool, len(arguments.Names))
 	for _, name := range arguments.Names {
 		requested[name] = true
@@ -50,13 +46,12 @@ func (t ToolSearch) Execute(_ context.Context, call tool.Call) (tool.Result, err
 		if descriptor.Name == "tool_search" || descriptor.Exposure == tool.ExposureDisabled {
 			continue
 		}
-		haystack := strings.ToLower(descriptor.Name + " " + descriptor.Description + " " + strings.Join(descriptor.Tags, " "))
-		if requested[descriptor.Name] || query == "" || strings.Contains(haystack, query) {
+		if len(requested) == 0 || requested[descriptor.Name] {
 			matches = append(matches, descriptor)
 		}
 	}
 	if len(matches) == 0 {
-		return tool.TextResult("No matching tools."), nil
+		return tool.TextResult("No matching tools. Use exact names returned by tool_search."), nil
 	}
 	activated := make([]string, 0, len(matches))
 	for _, match := range matches {
@@ -74,7 +69,7 @@ func (t ToolSearch) Execute(_ context.Context, call tool.Call) (tool.Result, err
 	}
 	data, err := json.Marshal(items)
 	if err != nil {
-		return tool.Result{}, fmt.Errorf("encode tool search: %w", err)
+		return tool.Result{}, err
 	}
 	return tool.Result{Content: []model.Content{{Type: model.ContentJSON, JSON: data}}, Metadata: map[string]any{"activated": activated}}, nil
 }

@@ -81,25 +81,6 @@ func TestCloneIsolatesDeferredActivation(t *testing.T) {
 	}
 }
 
-func TestClonedToolSearchActivatesClone(t *testing.T) {
-	reg := New()
-	reg.RegisterDeferred(AsDeferred(CategoryIntegration, stubTool{name: "demo-inspect"}))
-	reg.Register(ToolSearchTool{Registry: reg})
-
-	clone := reg.Clone()
-	raw := json.RawMessage(`{"action":"search","query":"select:demo-inspect"}`)
-	result, err := clone.Execute(context.Background(), "tool_search", raw, Runtime{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(result.Content, "demo-inspect") || !clone.Has("demo-inspect") {
-		t.Fatalf("cloned tool_search result = %q, clone Has = %v", result.Content, clone.Has("demo-inspect"))
-	}
-	if reg.Has("demo-inspect") {
-		t.Fatal("cloned tool_search should not mutate the base registry")
-	}
-}
-
 func TestReadOnlyRegistryDoesNotExposeWriteTools(t *testing.T) {
 	reg := NewReadOnly()
 	reg.Register(stubTool{name: "read-tool"})
@@ -180,79 +161,6 @@ func TestToolSearchListAndActivate(t *testing.T) {
 	}
 	if reg.Has("notion-search") {
 		t.Fatal("notion-search should remain deferred")
-	}
-}
-
-func TestToolSearchReturnsActiveSearchResults(t *testing.T) {
-	reg := New()
-	reg.Register(stubTool{name: "k8s-get_pods"})
-	reg.Register(stubTool{name: "code-search"})
-	search := ToolSearchTool{Registry: reg}
-
-	result, err := search.Execute(context.Background(), json.RawMessage(`{"action":"search","query":"kubernetes pods","limit":5}`), Runtime{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(result.Content, "k8s-get_pods") {
-		t.Fatalf("search result = %q, want k8s-get_pods", result.Content)
-	}
-}
-
-func TestToolSearchFindsAndActivatesSpecificDeferredTool(t *testing.T) {
-	reg := New()
-	reg.Register(stubTool{name: "code-search"})
-	reg.RegisterDeferred(AsDeferred(CategoryIntegration, stubTool{name: "demo-export"}))
-	search := ToolSearchTool{Registry: reg}
-
-	result, err := search.Execute(context.Background(), json.RawMessage(`{"action":"search","query":"demo export","limit":5}`), Runtime{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(result.Content, "demo-export") {
-		t.Fatalf("search result = %q, want demo-export", result.Content)
-	}
-	if reg.Has("demo-export") {
-		t.Fatal("search should not activate deferred tools")
-	}
-
-	activated, err := search.Execute(context.Background(), json.RawMessage(`{"action":"activate","tool_names":["demo-export"]}`), Runtime{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(activated.Content, "demo-export") || !reg.Has("demo-export") {
-		t.Fatalf("activate result = %q, Has = %v", activated.Content, reg.Has("demo-export"))
-	}
-}
-
-func TestToolSearchSelectQueryActivatesExactTools(t *testing.T) {
-	reg := New()
-	reg.RegisterDeferred(AsDeferred(CategoryIntegration, stubTool{name: "demo-export"}))
-	search := ToolSearchTool{Registry: reg}
-
-	result, err := search.Execute(context.Background(), json.RawMessage(`{"action":"search","query":"select:demo-export"}`), Runtime{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(result.Content, "demo-export") || !reg.Has("demo-export") {
-		t.Fatalf("select result = %q, Has = %v", result.Content, reg.Has("demo-export"))
-	}
-}
-
-func TestToolSearchDoesNotSuggestReadOnlyWriteTools(t *testing.T) {
-	reg := NewReadOnly()
-	reg.RegisterDeferred(AsDeferred(CategoryIntegration, stubWriteTool{stubTool{name: "notion-create_page"}}))
-	reg.RegisterDeferred(AsDeferred(CategoryIntegration, stubTool{name: "notion-search"}))
-	search := ToolSearchTool{Registry: reg}
-
-	result, err := search.Execute(context.Background(), json.RawMessage(`{"action":"search","query":"notion create page search","limit":5}`), Runtime{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(result.Content, "notion-create_page") {
-		t.Fatalf("search result exposed write tool: %q", result.Content)
-	}
-	if !strings.Contains(result.Content, "notion-search") {
-		t.Fatalf("search result = %q, want notion-search", result.Content)
 	}
 }
 

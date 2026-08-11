@@ -32,11 +32,9 @@ Required values now depend on the service:
 | Gateway | `SLACK_SIGNING_SECRET`, `POSTGRES_DSN`, `REDIS_URL` |
 | Worker | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `ALLOWED_SLACK_USERS`, `POSTGRES_DSN`, `REDIS_URL`, provider API key |
 | Observability | `POSTGRES_DSN`, `REDIS_URL`; `OBSERVABILITY_TOKEN` for non-local access |
-| Local agent / benchmark | provider API key |
-| CLI | none for built-in local read-only commands |
-| All-in-one | Worker requirements plus HTTP settings |
+| Local CLI / benchmark | provider configuration and API key |
 
-All-in-one example:
+Worker example:
 
 ```bash
 SLACK_BOT_TOKEN=xoxb-...
@@ -110,6 +108,25 @@ CLIPROXYAPI_MODEL=kimi/kimi-k2.7-code
 
 Run and authenticate CLIProxyAPI locally first. It exposes OpenAI-compatible
 endpoints and owns provider authentication separately.
+
+### Kimi / Moonshot
+
+Both names use the Moonshot OpenAI-compatible endpoint; choose the namespace
+that matches the credential you operate.
+
+```bash
+LLM_PROVIDER=kimi
+KIMI_API_KEY=...
+KIMI_BASE_URL=https://api.moonshot.ai/v1
+KIMI_MODEL=kimi-k2.6
+```
+
+```bash
+LLM_PROVIDER=moonshot
+MOONSHOT_API_KEY=...
+MOONSHOT_BASE_URL=https://api.moonshot.ai/v1
+MOONSHOT_MODEL=kimi-k2.6
+```
 
 ### Anthropic
 
@@ -265,11 +282,11 @@ approval policy.
 
 Write and external-write tools are authorized entirely by server policy; users
 are never asked to approve access to the host running the agent. The default
-allowlist contains only reminder, Slack screenshot/Canvas, and TTS operations.
+allowlist contains only reminder, Slack Canvas, and TTS operations.
 Operators can replace it with an exact, comma-separated allowlist:
 
 ```bash
-AGENT_ALLOWED_WRITE_TOOLS=reminder-create,reminder-cancel,slack-create_canvas
+AGENT_ALLOWED_WRITE_TOOLS=reminder-create,reminder-cancel,slack-create_canvas,tts-speak
 ```
 
 A tool's surface annotation limits where it may run; it never grants write

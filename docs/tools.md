@@ -1,7 +1,9 @@
 # Tools
 
 The agent exposes tools through structured function-calling. Many heavier tool
-families are deferred by default and become available through `tool_search`.
+families are deferred by default. `tool_search` lists their stable categories
+and exact names; the model then activates only the named tools or categories it
+needs. Discovery is explicit and deterministic rather than relevance-ranked.
 
 ## Code and Repository
 

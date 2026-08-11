@@ -185,9 +185,7 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	active := &activeRun{userID: req.UserID, cancel: cancel, steering: &agentruntime.InputBuffer{}}
 	if existing := s.register(sessionID, active); existing != nil {
 		cancel()
-		if isCancel(req.Text) {
-			existing.cancel()
-		} else if s.mode(req.UserID) == ModeQueue {
+		if s.mode(req.UserID) == ModeQueue {
 			existing.enqueue(req)
 		} else {
 			existing.steering.Push(model.TextMessage(model.RoleUser, steeringText(req)))
@@ -305,10 +303,6 @@ func (s *Service) controlActive(sessionID string, req slackconversation.Request)
 	active := s.active[sessionID]
 	s.mu.Unlock()
 	if active != nil && active.userID == req.UserID {
-		if isCancel(req.Text) {
-			active.cancel()
-			return true
-		}
 		if s.mode(req.UserID) == ModeQueue {
 			s.enqueue(sessionID, active, req)
 		} else {
@@ -324,9 +318,6 @@ func (s *Service) controlActive(sessionID string, req slackconversation.Request)
 		return false
 	}
 	action := string(s.mode(req.UserID))
-	if isCancel(req.Text) {
-		action = "cancel"
-	}
 	payload, _ := json.Marshal(control{Session: sessionID, Action: action, Request: req})
 	queuedPersisted := false
 	if action == string(ModeQueue) {
@@ -394,8 +385,6 @@ func (s *Service) StartControlSubscriber(ctx context.Context) {
 				continue
 			}
 			switch cmd.Action {
-			case "cancel":
-				active.cancel()
 			case string(ModeQueue):
 				if s.Queue == nil {
 					active.enqueue(cmd.Request)
@@ -455,14 +444,6 @@ func combine(requests []slackconversation.Request) slackconversation.Request {
 
 func steeringText(req slackconversation.Request) string {
 	return "New guidance from <@" + req.UserID + "> while this turn is running:\n" + strings.TrimSpace(req.Text)
-}
-func isCancel(text string) bool {
-	text = strings.Trim(strings.ToLower(strings.TrimSpace(text)), " .!！。")
-	switch text {
-	case "cancel", "stop", "abort", "interrupt", "中止", "停止", "取消":
-		return true
-	}
-	return false
 }
 
 type slackStream struct {

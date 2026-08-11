@@ -21,8 +21,8 @@ presentation.
 - Slack mentions, DMs, threads, files, App Home, and reaction feedback.
 - Durable event processing, transcripts, run traces, and reminders
   replay backed by PostgreSQL; Redis provides coordination and wakeups.
-- Structured tools for code, GitHub, Kubernetes/GCP, runbooks, web, browser,
-  Slack, and operational diagnostics.
+- Structured tools for code, GitHub, Kubernetes/GCP, runbooks, web, Slack,
+  and operational diagnostics.
 - OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages protocols, streaming,
   multimodal input, retries, and context compaction.
 - Server-side capability policy, workspace boundaries, credential redaction,
@@ -133,14 +133,11 @@ python3 evals/run.py \
   --output /tmp/slack-copilot-eval
 ```
 
-The checked-in smoke task validates the evaluator; it is not a published
+The checked-in smoke task validates evaluator wiring; it is not a published
 quality result. Pin tool versions and route every candidate through the same
 model gateway before drawing comparisons. See [evaluation protocol](evals/README.md).
-Terminal-Bench/Harbor-style task directories are the first public benchmark
-adapter target and should run through a pinned container boundary; SWE-bench
-Lite / SWE-bench Verified are planned after the local coding harness schema is
-stable. CI runs only the lightweight dry-run evaluator checks; real benchmark
-runs belong in a credentialed manual or scheduled environment.
+CI runs only the lightweight dry-run evaluator checks; real benchmark runs
+belong in a credentialed manual or scheduled environment.
 
 ## Repository map
 
@@ -181,8 +178,6 @@ See [operations](docs/operations.md) for deployment and failure semantics.
 
 ## Documentation
 
-- [version policy and v1 archive](docs/versions.md)
-- [v2 overview](docs/v2/README.md)
 - [local CLI](docs/local-cli.md)
 - [architecture](https://noknov.github.io/slack-copilot-agent/)
 - [configuration](docs/configuration.md)

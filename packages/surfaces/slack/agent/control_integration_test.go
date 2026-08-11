@@ -13,7 +13,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/conversation"
 )
 
-func TestIntegrationCrossWorkerSteerQueueAndCancel(t *testing.T) {
+func TestIntegrationCrossWorkerSteerAndQueue(t *testing.T) {
 	url := os.Getenv("REDIS_TEST_URL")
 	if url == "" {
 		t.Skip("REDIS_TEST_URL is not set")
@@ -26,8 +26,7 @@ func TestIntegrationCrossWorkerSteerQueueAndCancel(t *testing.T) {
 	sessionID := "integration-control-" + time.Now().UTC().Format("20060102150405.000000000")
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
-	runCtx, cancelRun := context.WithCancel(context.Background())
-	active := &activeRun{userID: "U1", cancel: cancelRun, steering: &runtime.InputBuffer{}}
+	active := &activeRun{userID: "U1", cancel: func() {}, steering: &runtime.InputBuffer{}}
 	owner := New(hosted.Agent{}, &fakeMessenger{}, safety.PromptPolicy{}, safety.Redactor{}, nil)
 	owner.Redis, owner.PodID = client, "owner"
 	owner.Queue = RedisQueue{Client: client, TTL: time.Minute}
@@ -53,9 +52,6 @@ func TestIntegrationCrossWorkerSteerQueueAndCancel(t *testing.T) {
 		t.Fatalf("queued=%+v", items)
 	}
 
-	cancel := slackconversation.Request{EventID: "cancel", UserID: "U1", ThreadTS: "T", Text: "cancel"}
-	eventuallyControl(t, func() bool { return peer.controlActive(sessionID, cancel) })
-	eventually(t, func() bool { return runCtx.Err() == context.Canceled })
 }
 
 func eventuallyControl(t *testing.T, fn func() bool) {
