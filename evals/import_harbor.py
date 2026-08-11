@@ -10,6 +10,8 @@ def main() -> int:
     parser.add_argument("root", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=900)
+    parser.add_argument("--container-image", required=True, help="Pinned image reference or digest used by the Harbor/Terminal-Bench executor.")
+    parser.add_argument("--container-runtime", default="harbor", help="External container executor responsible for public benchmark isolation.")
     args = parser.parse_args()
     tasks = []
     for directory in sorted(path for path in args.root.iterdir() if path.is_dir()):
@@ -25,7 +27,15 @@ def main() -> int:
             "test": test,
             "timeout_seconds": args.timeout,
             "tags": ["harbor"],
-            "metadata": {},
+            "metadata": {
+                "benchmark": "terminal-bench/harbor",
+                "isolation": {
+                    "kind": "container",
+                    "runtime": args.container_runtime,
+                    "image": args.container_image,
+                    "enforced_by": "benchmark-adapter",
+                },
+            },
         })
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps({

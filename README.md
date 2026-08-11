@@ -120,7 +120,8 @@ streaming, storage, and Slack options are documented in
 `evals/` is deliberately independent from runtime packages. It
 copies each fixture into an isolated workspace and HOME, invokes every agent as
 a subprocess, runs the task grader, and retains logs, exit states, duration,
-and aggregate results.
+aggregate results, candidate versions, workspace diffs, and a `run.json`
+manifest for CI or dashboard ingestion.
 
 ```bash
 make build
@@ -135,8 +136,10 @@ The checked-in smoke task validates the evaluator; it is not a published
 quality result. Pin tool versions and route every candidate through the same
 model gateway before drawing comparisons. See [evaluation protocol](evals/README.md).
 Terminal-Bench/Harbor-style task directories are the first public benchmark
-adapter target; SWE-bench Lite / SWE-bench Verified are planned after the local
-coding harness schema is stable.
+adapter target and should run through a pinned container boundary; SWE-bench
+Lite / SWE-bench Verified are planned after the local coding harness schema is
+stable. CI runs only the lightweight dry-run evaluator checks; real benchmark
+runs belong in a credentialed manual or scheduled environment.
 
 ## Repository map
 

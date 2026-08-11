@@ -3,12 +3,14 @@
     {
       "name": "slack-copilot",
       "command": ["{repo}/bin/slack-copilot", "--cwd", "{workspace}", "--provider", "openai", "--protocol", "responses", "--model", "{candidate_model}", "--base-url", "{env_openai_base}", "{prompt}"],
-      "model": "{model}"
+      "model": "{model}",
+      "version_command": ["git", "-C", "{repo}", "rev-parse", "--short", "HEAD"]
     },
     {
       "name": "codex",
       "command": ["codex", "exec", "--ephemeral", "--model", "{candidate_model}", "--sandbox", "workspace-write", "-C", "{workspace}", "{prompt}"],
       "model": "{model}",
+      "version_command": ["codex", "--version"],
       "env": {"CODEX_HOME": "{home}/.codex"},
       "files": {
         ".codex/config.toml": "model_provider = \"eval\"\n[model_providers.eval]\nname = \"controlled gateway\"\nbase_url = \"{env_openai_base}\"\nenv_key = \"OPENAI_API_KEY\"\nwire_api = \"responses\"\n"
@@ -18,12 +20,14 @@
       "name": "claude-code",
       "command": ["claude", "--model", "{candidate_model}", "--permission-mode", "acceptEdits", "--print", "{prompt}"],
       "model": "{model}",
+      "version_command": ["claude", "--version"],
       "env": {"ANTHROPIC_BASE_URL": "{env_anthropic_base}"}
     },
     {
       "name": "pi",
       "command": ["pi", "--provider", "eval", "--model", "{candidate_model}", "-p", "{prompt}"],
       "model": "{model}",
+      "version_command": ["pi", "--version"],
       "files": {
         ".pi/agent/models.json": "{\"providers\":{\"eval\":{\"baseUrl\":\"{env_openai_base}\",\"api\":\"openai-completions\",\"apiKey\":\"OPENAI_API_KEY\",\"authHeader\":true,\"models\":[{\"id\":\"{model}\",\"reasoning\":true,\"contextWindow\":128000,\"maxTokens\":16384}]}}}"
       }
@@ -32,6 +36,7 @@
       "name": "opencode",
       "command": ["opencode", "run", "--model", "eval/{candidate_model}", "{prompt}"],
       "model": "{model}",
+      "version_command": ["opencode", "--version"],
       "files": {
         ".config/opencode/opencode.json": "{\"$schema\":\"https://opencode.ai/config.json\",\"model\":\"eval/{model}\",\"provider\":{\"eval\":{\"npm\":\"@ai-sdk/openai-compatible\",\"options\":{\"baseURL\":\"{env_openai_base}\",\"apiKey\":\"{env:OPENAI_API_KEY}\"},\"models\":{\"{model}\":{}}}}}"
       }
