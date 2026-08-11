@@ -20,23 +20,22 @@ const (
 	TerminationCanceled        TerminationReason = "canceled"
 	TerminationModelError      TerminationReason = "model_error"
 	TerminationMaxSteps        TerminationReason = "max_steps"
+	TerminationOutputLimit     TerminationReason = "output_limit"
 	TerminationPendingApproval TerminationReason = "pending_approval"
 	TerminationPendingInput    TerminationReason = "pending_input"
 	TerminationEmptyResponse   TerminationReason = "empty_response"
-	TerminationLoopDetected    TerminationReason = "loop_detected"
 )
 
 type Config struct {
-	Model                string
-	ReasoningEffort      string
-	Temperature          float64
-	MaxOutputTokens      int
-	MaxSteps             int
-	MaxModelRetries      int
-	MaxRepeatedToolCalls int
-	RetryBaseDelay       time.Duration
-	Context              ContextConfig
-	ToolResults          ToolResultConfig
+	Model           string
+	ReasoningEffort string
+	Temperature     float64
+	MaxOutputTokens int
+	MaxSteps        int
+	MaxModelRetries int
+	RetryBaseDelay  time.Duration
+	Context         ContextConfig
+	ToolResults     ToolResultConfig
 }
 
 func (c Config) withDefaults() Config {
@@ -47,9 +46,6 @@ func (c Config) withDefaults() Config {
 		c.MaxModelRetries = 0
 	} else if c.MaxModelRetries == 0 {
 		c.MaxModelRetries = 2
-	}
-	if c.MaxRepeatedToolCalls <= 0 {
-		c.MaxRepeatedToolCalls = 3
 	}
 	if c.RetryBaseDelay <= 0 {
 		c.RetryBaseDelay = 500 * time.Millisecond

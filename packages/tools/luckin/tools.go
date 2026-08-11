@@ -62,10 +62,7 @@ func (t MCPTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.R
 	if err != nil {
 		return registry.Result{}, err
 	}
-	if t.RemoteName == "createOrder" {
-		out = annotateCreateOrderPayment(out)
-	}
-	return registry.Result{Content: out}, nil
+	return registry.Result{Content: out.Content}, nil
 }
 
 func RegisterAll(reg *registry.Registry, client *Client) {
@@ -146,12 +143,6 @@ func tools(client *Client) []MCPTool {
 		},
 		{
 			Client:     client,
-			LocalName:  "luckin-query_coupons",
-			RemoteName: "previewOrder",
-			Parameters: registry.ObjectSchema([]string{"deptId", "productList"}, orderProperties(false)),
-		},
-		{
-			Client:     client,
 			LocalName:  "luckin-create_order",
 			RemoteName: "createOrder",
 			Parameters: registry.ObjectSchema([]string{"deptId", "productList", "longitude", "latitude"}, orderProperties(true)),
@@ -223,69 +214,4 @@ func getOrCreateSession(ctx context.Context, client *mcp.Client, cache *registry
 		cache.Set(key, s)
 	}
 	return s, nil
-}
-
-func annotateCreateOrderPayment(out string) string {
-	data := extractLuckinData(out)
-	if len(data) == 0 {
-		return out
-	}
-	payURL, _ := data["payOrderUrl"].(string)
-	qrURL, _ := data["payOrderQrCodeUrl"].(string)
-	if payURL == "" && qrURL == "" {
-		return out
-	}
-	var lines []string
-	lines = append(lines, "Luckin order payment information:")
-	if orderID := stringifyJSONValue(data["orderIdStr"]); orderID != "" {
-		lines = append(lines, "orderId="+orderID)
-	} else if orderID := stringifyJSONValue(data["orderId"]); orderID != "" {
-		lines = append(lines, "orderId="+orderID)
-	}
-	if price := stringifyJSONValue(data["discountPrice"]); price != "" {
-		lines = append(lines, "discountPrice="+price)
-	}
-	if needPay := stringifyJSONValue(data["needPay"]); needPay != "" {
-		lines = append(lines, "needPay="+needPay)
-	}
-	if qrURL != "" {
-		lines = append(lines, "payQrCodeUrl="+qrURL)
-	}
-	if payURL != "" {
-		lines = append(lines, "wechatPayUrl="+payURL)
-	}
-	lines = append(lines, "Payment note: Slack or desktop clients may only jump to WeChat for the WeChat Pay URL and may not finish payment directly. Show payQrCodeUrl as the primary payment option so the user can scan/open it in WeChat.")
-	lines = append(lines, "Raw response:")
-	lines = append(lines, out)
-	return strings.Join(lines, "\n")
-}
-
-func extractLuckinData(out string) map[string]any {
-	var parsed map[string]any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &parsed); err != nil {
-		return nil
-	}
-	if data, ok := parsed["data"].(map[string]any); ok {
-		return data
-	}
-	return parsed
-}
-
-func stringifyJSONValue(value any) string {
-	switch v := value.(type) {
-	case nil:
-		return ""
-	case string:
-		return v
-	case float64:
-		return fmt.Sprintf("%v", v)
-	case bool:
-		return fmt.Sprintf("%t", v)
-	default:
-		data, err := json.Marshal(v)
-		if err != nil {
-			return ""
-		}
-		return string(data)
-	}
 }

@@ -14,7 +14,6 @@ import (
 
 var categoryDescriptions = map[string]string{
 	CategoryDiagnostics:    "Incident investigation helpers: incident briefs, timelines, and evidence boards.",
-	CategoryBrowser:        "Playwright browser automation: navigate, snapshot, click, type, screenshots, and page evaluation.",
 	CategoryCode:           "Advanced code intelligence: static package graphs, symbols, definitions, references, callers, callees, callgraphs, and impact analysis.",
 	CategoryIntegration:    "External integrations: GitHub, Notion, YouTrack, Slack Canvas, Luckin MCP, TTS, and related APIs.",
 	CategoryInfrastructure: "Infrastructure and operations tools: Kubernetes, GCP Cloud Logging, Cloud Run, clusters, pods, logs, events, and rollouts.",
@@ -32,7 +31,7 @@ func (t ToolSearchTool) CloneForRegistry(reg *Registry) Tool {
 func (ToolSearchTool) Spec() llm.ToolSpec {
 	return FunctionSpec(
 		"tool_search",
-		"Capability router for tools that are intentionally not loaded by default to save context. Deferred capabilities include advanced code intelligence, GitHub PRs/workflows/job logs, Kubernetes pods/logs/events/rollouts, GCP logs/Cloud Run/GKE, Slack Canvas documents, browser automation, Notion, YouTrack, TTS, and diagnostics. When the needed capability is absent from the current tool list, call this first. Use action=search with query for discovery; use query=\"select:tool-a,tool-b\" or action=activate with tool_names/categories to load tools for subsequent steps.",
+		"Capability router for tools that are intentionally not loaded by default to save context. Deferred capabilities include advanced code intelligence, GitHub PRs/workflows/job logs, Kubernetes pods/logs/events/rollouts, GCP logs/Cloud Run/GKE, Slack Canvas documents, Notion, YouTrack, TTS, and diagnostics. When the needed capability is absent from the current tool list, call this first. Use action=search with query for discovery; use query=\"select:tool-a,tool-b\" or action=activate with tool_names/categories to load tools for subsequent steps.",
 		ObjectSchema([]string{"action"}, map[string]any{
 			"action": map[string]any{
 				"type":        "string",
@@ -51,7 +50,7 @@ func (ToolSearchTool) Spec() llm.ToolSpec {
 				"type": "array",
 				"items": map[string]any{
 					"type": "string",
-					"enum": []string{CategoryDiagnostics, CategoryBrowser, CategoryCode, CategoryIntegration, CategoryInfrastructure},
+					"enum": []string{CategoryDiagnostics, CategoryCode, CategoryIntegration, CategoryInfrastructure},
 				},
 				"description": "Deferred categories to activate. Optional with action=activate.",
 			},

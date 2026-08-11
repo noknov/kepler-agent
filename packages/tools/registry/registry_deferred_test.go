@@ -61,41 +61,41 @@ func TestRegisterDeferredExcludesFromSpecsUntilActivated(t *testing.T) {
 func TestCloneIsolatesDeferredActivation(t *testing.T) {
 	reg := New()
 	reg.Register(stubTool{name: "active-tool"})
-	reg.RegisterDeferred(AsDeferred(CategoryBrowser, stubTool{name: "pw-snapshot"}))
+	reg.RegisterDeferred(AsDeferred(CategoryIntegration, stubTool{name: "demo-inspect"}))
 	reg.Register(ToolSearchTool{Registry: reg})
 
 	clone := reg.Clone()
 	search := ToolSearchTool{Registry: clone}
-	result, err := search.Execute(context.Background(), json.RawMessage(`{"action":"activate","tool_names":["pw-snapshot"]}`), Runtime{})
+	result, err := search.Execute(context.Background(), json.RawMessage(`{"action":"activate","tool_names":["demo-inspect"]}`), Runtime{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, "pw-snapshot") {
-		t.Fatalf("activation result = %q, want pw-snapshot", result.Content)
+	if !strings.Contains(result.Content, "demo-inspect") {
+		t.Fatalf("activation result = %q, want demo-inspect", result.Content)
 	}
-	if !clone.Has("pw-snapshot") {
-		t.Fatal("clone should activate pw-snapshot")
+	if !clone.Has("demo-inspect") {
+		t.Fatal("clone should activate demo-inspect")
 	}
-	if reg.Has("pw-snapshot") {
-		t.Fatal("base registry should keep pw-snapshot deferred")
+	if reg.Has("demo-inspect") {
+		t.Fatal("base registry should keep demo-inspect deferred")
 	}
 }
 
 func TestClonedToolSearchActivatesClone(t *testing.T) {
 	reg := New()
-	reg.RegisterDeferred(AsDeferred(CategoryBrowser, stubTool{name: "pw-snapshot"}))
+	reg.RegisterDeferred(AsDeferred(CategoryIntegration, stubTool{name: "demo-inspect"}))
 	reg.Register(ToolSearchTool{Registry: reg})
 
 	clone := reg.Clone()
-	raw := json.RawMessage(`{"action":"search","query":"select:pw-snapshot"}`)
+	raw := json.RawMessage(`{"action":"search","query":"select:demo-inspect"}`)
 	result, err := clone.Execute(context.Background(), "tool_search", raw, Runtime{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, "pw-snapshot") || !clone.Has("pw-snapshot") {
-		t.Fatalf("cloned tool_search result = %q, clone Has = %v", result.Content, clone.Has("pw-snapshot"))
+	if !strings.Contains(result.Content, "demo-inspect") || !clone.Has("demo-inspect") {
+		t.Fatalf("cloned tool_search result = %q, clone Has = %v", result.Content, clone.Has("demo-inspect"))
 	}
-	if reg.Has("pw-snapshot") {
+	if reg.Has("demo-inspect") {
 		t.Fatal("cloned tool_search should not mutate the base registry")
 	}
 }
@@ -159,7 +159,7 @@ func TestReadOnlyRegistryAllowsExplicitWriteTools(t *testing.T) {
 
 func TestToolSearchListAndActivate(t *testing.T) {
 	reg := New()
-	reg.RegisterDeferred(AsDeferred(CategoryBrowser, stubTool{name: "pw-snapshot"}))
+	reg.RegisterDeferred(AsDeferred(CategoryIntegration, stubTool{name: "demo-inspect"}))
 	reg.RegisterDeferred(AsDeferred(CategoryIntegration, stubTool{name: "notion-search"}))
 	search := ToolSearchTool{Registry: reg}
 
@@ -171,12 +171,12 @@ func TestToolSearchListAndActivate(t *testing.T) {
 		t.Fatal("expected list output")
 	}
 
-	activate, err := search.Execute(context.Background(), json.RawMessage(`{"action":"activate","categories":["browser"]}`), Runtime{})
+	activate, err := search.Execute(context.Background(), json.RawMessage(`{"action":"activate","tool_names":["demo-inspect"]}`), Runtime{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if activate.Content == "" || !reg.Has("pw-snapshot") {
-		t.Fatalf("activate result = %q, Has(pw-snapshot) = %v", activate.Content, reg.Has("pw-snapshot"))
+	if activate.Content == "" || !reg.Has("demo-inspect") {
+		t.Fatalf("activate result = %q, Has(demo-inspect) = %v", activate.Content, reg.Has("demo-inspect"))
 	}
 	if reg.Has("notion-search") {
 		t.Fatal("notion-search should remain deferred")
@@ -201,40 +201,40 @@ func TestToolSearchReturnsActiveSearchResults(t *testing.T) {
 func TestToolSearchFindsAndActivatesSpecificDeferredTool(t *testing.T) {
 	reg := New()
 	reg.Register(stubTool{name: "code-search"})
-	reg.RegisterDeferred(AsDeferred(CategoryBrowser, stubTool{name: "playwright-screenshot"}))
+	reg.RegisterDeferred(AsDeferred(CategoryIntegration, stubTool{name: "demo-export"}))
 	search := ToolSearchTool{Registry: reg}
 
-	result, err := search.Execute(context.Background(), json.RawMessage(`{"action":"search","query":"browser screenshot","limit":5}`), Runtime{})
+	result, err := search.Execute(context.Background(), json.RawMessage(`{"action":"search","query":"demo export","limit":5}`), Runtime{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, "playwright-screenshot") {
-		t.Fatalf("search result = %q, want playwright-screenshot", result.Content)
+	if !strings.Contains(result.Content, "demo-export") {
+		t.Fatalf("search result = %q, want demo-export", result.Content)
 	}
-	if reg.Has("playwright-screenshot") {
+	if reg.Has("demo-export") {
 		t.Fatal("search should not activate deferred tools")
 	}
 
-	activated, err := search.Execute(context.Background(), json.RawMessage(`{"action":"activate","tool_names":["playwright-screenshot"]}`), Runtime{})
+	activated, err := search.Execute(context.Background(), json.RawMessage(`{"action":"activate","tool_names":["demo-export"]}`), Runtime{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(activated.Content, "playwright-screenshot") || !reg.Has("playwright-screenshot") {
-		t.Fatalf("activate result = %q, Has = %v", activated.Content, reg.Has("playwright-screenshot"))
+	if !strings.Contains(activated.Content, "demo-export") || !reg.Has("demo-export") {
+		t.Fatalf("activate result = %q, Has = %v", activated.Content, reg.Has("demo-export"))
 	}
 }
 
 func TestToolSearchSelectQueryActivatesExactTools(t *testing.T) {
 	reg := New()
-	reg.RegisterDeferred(AsDeferred(CategoryBrowser, stubTool{name: "playwright-screenshot"}))
+	reg.RegisterDeferred(AsDeferred(CategoryIntegration, stubTool{name: "demo-export"}))
 	search := ToolSearchTool{Registry: reg}
 
-	result, err := search.Execute(context.Background(), json.RawMessage(`{"action":"search","query":"select:playwright-screenshot"}`), Runtime{})
+	result, err := search.Execute(context.Background(), json.RawMessage(`{"action":"search","query":"select:demo-export"}`), Runtime{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, "playwright-screenshot") || !reg.Has("playwright-screenshot") {
-		t.Fatalf("select result = %q, Has = %v", result.Content, reg.Has("playwright-screenshot"))
+	if !strings.Contains(result.Content, "demo-export") || !reg.Has("demo-export") {
+		t.Fatalf("select result = %q, Has = %v", result.Content, reg.Has("demo-export"))
 	}
 }
 

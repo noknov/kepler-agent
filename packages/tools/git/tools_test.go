@@ -46,28 +46,27 @@ func TestFetchRefReturnsImmutableCommitRef(t *testing.T) {
 	}
 }
 
-func TestFetchRefUsesOriginHEADDefaultBranch(t *testing.T) {
+func TestFetchRefUsesExplicitBranch(t *testing.T) {
 	root, work := testRepo(t)
 	runGit(t, work, "branch", "-m", "main", "mt-main")
 	runGit(t, work, "push", "origin", ":main", "mt-main")
 	runGit(t, work, "fetch", "origin")
-	runGit(t, work, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/mt-main")
 
 	tool := FetchRefTool{Base: Base{
 		Paths:   safety.WorkspacePolicy{Roots: []string{root}},
 		Guard:   safety.NewCommandPolicy(),
 		Timeout: 10 * time.Second,
 	}}
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`"}`), registry.Runtime{})
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"mt-main"}`), registry.Runtime{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(result.Content, "branch=mt-main") || !strings.Contains(result.Content, "branch_ref=origin/mt-main") {
-		t.Fatalf("content = %q, want origin/HEAD default branch mt-main", result.Content)
+		t.Fatalf("content = %q, want explicit branch mt-main", result.Content)
 	}
 }
 
-func TestFetchRefUsesProcessFetchCacheWithinTTL(t *testing.T) {
+func TestFetchRefFailsWhenOriginBecomesUnavailable(t *testing.T) {
 	root, work := testRepo(t)
 	base := Base{
 		Paths:   safety.WorkspacePolicy{Roots: []string{root}},
@@ -88,12 +87,9 @@ func TestFetchRefUsesProcessFetchCacheWithinTTL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	second, err := tool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main"}`), rt)
-	if err != nil {
-		t.Fatalf("second fetch should reuse process cache within TTL, got %v", err)
-	}
-	if !strings.Contains(second.Content, "branch=main") {
-		t.Fatalf("second content = %q, want cached branch snapshot", second.Content)
+	_, err = tool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main"}`), rt)
+	if err == nil {
+		t.Fatal("second fetch should fail when origin is unavailable")
 	}
 }
 
@@ -170,14 +166,14 @@ func TestRepoToolsReadFetchedSnapshotNotWorkingTree(t *testing.T) {
 		Timeout: 10 * time.Second,
 	}
 	searchTool := RepoSearchTool{Base: base}
-	searchResult, err := searchTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","query":"hello"}`), registry.Runtime{})
+	searchResult, err := searchTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","query":"hello"}`), registry.Runtime{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(searchResult.Content, "README.md:1:hello") {
 		t.Fatalf("search content = %q, want remote snapshot match", searchResult.Content)
 	}
-	noMatch, err := searchTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","query":"local only"}`), registry.Runtime{})
+	noMatch, err := searchTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","query":"local only"}`), registry.Runtime{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +182,7 @@ func TestRepoToolsReadFetchedSnapshotNotWorkingTree(t *testing.T) {
 	}
 
 	readTool := RepoReadFileTool{Base: base}
-	readResult, err := readTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","path":"README.md"}`), registry.Runtime{})
+	readResult, err := readTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","path":"README.md"}`), registry.Runtime{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +191,7 @@ func TestRepoToolsReadFetchedSnapshotNotWorkingTree(t *testing.T) {
 	}
 }
 
-func TestRepoToolsUseProcessFetchCacheWithinTTL(t *testing.T) {
+func TestRepoToolsDoNotUseStaleRefsWhenOriginIsUnavailable(t *testing.T) {
 	root, work := testRepo(t)
 	base := Base{
 		Paths:   safety.WorkspacePolicy{Roots: []string{root}},
@@ -204,7 +200,7 @@ func TestRepoToolsUseProcessFetchCacheWithinTTL(t *testing.T) {
 	}
 	rt := registry.Runtime{Cache: registry.NewRuntimeCache()}
 	searchTool := RepoSearchTool{Base: base}
-	if _, err := searchTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","query":"hello"}`), rt); err != nil {
+	if _, err := searchTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","query":"hello"}`), rt); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Rename(filepath.Join(root, "origin.git"), filepath.Join(root, "origin.git.offline")); err != nil {
@@ -212,21 +208,15 @@ func TestRepoToolsUseProcessFetchCacheWithinTTL(t *testing.T) {
 	}
 
 	readTool := RepoReadFileTool{Base: base}
-	result, err := readTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","path":"README.md"}`), rt)
-	if err != nil {
-		t.Fatalf("read should reuse process cache within TTL after origin becomes unavailable: %v", err)
-	}
-	if !strings.Contains(result.Content, "hello") {
-		t.Fatalf("read content = %q, want cached remote snapshot", result.Content)
+	_, err := readTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","path":"README.md"}`), rt)
+	if err == nil {
+		t.Fatal("read should fail when origin becomes unavailable")
 	}
 
 	gitcache.ResetForTest()
-	stale, err := readTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","path":"README.md"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
-	if err != nil {
-		t.Fatalf("read with expired process cache should fall back to cached refs while origin is unavailable: %v", err)
-	}
-	if !strings.Contains(stale.Content, "refresh_failed_using_cached_refs") {
-		t.Fatalf("read content = %q, want stale fetch status", stale.Content)
+	_, err = readTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","path":"README.md"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	if err == nil {
+		t.Fatal("read should not fall back to cached refs when origin is unavailable")
 	}
 }
 

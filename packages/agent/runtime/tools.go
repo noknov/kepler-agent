@@ -25,24 +25,14 @@ type preparedCall struct {
 }
 
 type toolOutcome struct {
-	looped  bool
 	pending *model.Message
 }
 
-func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls []model.ToolCall, repeated map[string]int) (toolOutcome, error) {
+func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls []model.ToolCall) (toolOutcome, error) {
 	prepared := make([]preparedCall, len(calls))
-	blockedByLoop := 0
 	for index, modelCall := range calls {
 		call := tool.Call{ID: modelCall.ID, Name: modelCall.Name, Arguments: modelCall.Arguments, Scope: request.Scope}
 		prepared[index] = preparedCall{index: index, call: call}
-		key := toolCallKey(modelCall)
-		repeated[key]++
-		if repeated[key] > r.config.MaxRepeatedToolCalls {
-			blockedByLoop++
-			result := tool.Result{Content: []model.Content{{Type: model.ContentText, Text: "Repeated identical tool call blocked by loop policy."}}, IsError: true, ErrorCode: "repeated_tool_call"}
-			prepared[index].result = &result
-			continue
-		}
 		item, ok := r.deps.Tools.GetActive(request.SessionID, call.Name)
 		if !ok {
 			result := tool.Result{Content: []model.Content{{Type: model.ContentText, Text: fmt.Sprintf("Unknown tool %q.", call.Name)}}, IsError: true, ErrorCode: "unknown_tool"}
@@ -123,7 +113,7 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 			pending = &message
 		}
 	}
-	return toolOutcome{looped: blockedByLoop == len(calls), pending: pending}, nil
+	return toolOutcome{pending: pending}, nil
 }
 
 func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entry *preparedCall) {

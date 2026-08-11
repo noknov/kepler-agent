@@ -14,23 +14,28 @@ conversation state store.
 Model providers translate their wire formats into canonical messages and typed
 stream events. Web citations remain structured provenance on content blocks.
 Prompts decide when and how to cite; presentation adapters decide how to render
-the provider-supplied citation records. Dynamic status uses deterministic
-runtime and tool lifecycle events, so it does not require a second status model.
-For tool steps, the primary model includes a short action-and-target narration
-in the same tool-call turn; Slack projects that assistant event into transient
-`loading_messages`. Turn, context, compaction, retry, approval, tool, and
-terminal events provide lifecycle states. If a tool-call turn has no narration,
-Slack keeps the existing localized `Thinking...` state; it never substitutes a
-tool name or a synthetic tool-status fallback. Status display is not
-conversation state beyond the canonical assistant event.
+the provider-supplied citation records. Dynamic status remains a projection of
+canonical runtime events rather than a second execution-state model. Slack may
+use the optional secondary model to turn the redacted user request and confirmed
+tool names into a structured action-and-target label. That label is
+presentation-only: it is never written to the transcript, returned to the
+runtime, or placed in model context.
+If no secondary model is configured, it fails, or its output violates the label
+schema, Slack keeps the localized `Thinking...` state. Context projection and
+compaction do not replace it with momentary status flashes.
 
-The current loop preserves the product-critical behavior from v1 without its
-heuristic repair layers: only the owner of a `pending_input` turn can continue
-it with an unmentioned thread reply; unsupported image parts are removed before
-provider dispatch; parallel tool results share an aggregate inline budget; an
-empty response is retried; and reaching the tool-step limit triggers one final,
-tool-free synthesis pass. Slack falls back to a normal thread message if final
-stream delivery fails.
+The current loop has no model-output repair layer. Only the owner of a
+`pending_input` turn can continue it with an unmentioned thread reply;
+unsupported image parts are removed before provider dispatch; and parallel tool
+results share an aggregate inline budget. Empty model output fails the turn,
+the tool-step limit stops without an extra synthesis request, and retryable
+typed provider failures are retried only by the runtime. Slack buffers the final
+answer and posts one complete Block Kit `markdown` message. It does not create a
+streaming placeholder or rewrite Markdown with regular expressions.
+
+Git-backed code tools require an explicit branch or ref. Repository-specific
+default refs belong in the private deployment prompt, not in runtime discovery
+or branch-name guessing.
 
 Hosted capability policy is authoritative and non-interactive. Local tools use
 the workspace sandbox and scoped approvals. TTS is an optional external-write

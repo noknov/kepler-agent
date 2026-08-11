@@ -17,7 +17,6 @@ import (
 type Client struct {
 	token      string
 	botUserID  string
-	teamID     string
 	httpClient *http.Client
 }
 
@@ -42,7 +41,6 @@ func (c *Client) AuthTest(ctx context.Context) (string, error) {
 		OK     bool   `json:"ok"`
 		Error  string `json:"error,omitempty"`
 		UserID string `json:"user_id,omitempty"`
-		TeamID string `json:"team_id,omitempty"`
 	}
 	if err := c.postJSON(ctx, "auth.test", map[string]any{}, &out); err != nil {
 		return "", err
@@ -50,13 +48,19 @@ func (c *Client) AuthTest(ctx context.Context) (string, error) {
 	if !out.OK {
 		return "", fmt.Errorf("slack auth.test failed: %s", out.Error)
 	}
-	if out.TeamID != "" {
-		c.teamID = out.TeamID
-	}
 	return out.UserID, nil
 }
 
 func (c *Client) PostMessage(ctx context.Context, channel, threadTS, text string) (string, error) {
+	return c.postMessage(ctx, channel, threadTS, text, nil)
+}
+
+func (c *Client) PostMarkdownMessage(ctx context.Context, channel, threadTS, markdown string) (string, error) {
+	blocks := []map[string]any{{"type": "markdown", "text": markdown}}
+	return c.postMessage(ctx, channel, threadTS, markdown, blocks)
+}
+
+func (c *Client) postMessage(ctx context.Context, channel, threadTS, text string, blocks []map[string]any) (string, error) {
 	payload := map[string]any{
 		"channel":      channel,
 		"text":         text,
@@ -64,6 +68,9 @@ func (c *Client) PostMessage(ctx context.Context, channel, threadTS, text string
 	}
 	if threadTS != "" {
 		payload["thread_ts"] = threadTS
+	}
+	if len(blocks) > 0 {
+		payload["blocks"] = blocks
 	}
 	var out struct {
 		OK    bool   `json:"ok"`
@@ -133,32 +140,6 @@ func (c *Client) UpdateView(ctx context.Context, viewID string, view map[string]
 	return nil
 }
 
-func (c *Client) StartStream(ctx context.Context, channel, threadTS, recipientUserID string) (string, error) {
-	payload := map[string]any{
-		"channel":           channel,
-		"thread_ts":         threadTS,
-		"task_display_mode": "dense",
-	}
-	if recipientUserID != "" {
-		payload["recipient_user_id"] = recipientUserID
-	}
-	if c.teamID != "" {
-		payload["recipient_team_id"] = c.teamID
-	}
-	var out struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error,omitempty"`
-		TS    string `json:"ts,omitempty"`
-	}
-	if err := c.postJSON(ctx, "chat.startStream", payload, &out); err != nil {
-		return "", err
-	}
-	if !out.OK {
-		return "", fmt.Errorf("slack chat.startStream failed: %s", out.Error)
-	}
-	return out.TS, nil
-}
-
 // SetThreadStatus updates the native Slack AI assistant status indicator for a
 // thread. Slack automatically clears the status when the app sends a reply;
 // passing an empty status clears it explicitly.
@@ -180,55 +161,6 @@ func (c *Client) SetThreadStatus(ctx context.Context, channel, threadTS, status 
 	}
 	if !out.OK {
 		return fmt.Errorf("slack assistant.threads.setStatus failed: %s", out.Error)
-	}
-	return nil
-}
-
-func (c *Client) AppendStream(ctx context.Context, channel, ts string, chunks []map[string]any) error {
-	payload := map[string]any{
-		"channel": channel,
-		"ts":      ts,
-		"chunks":  chunks,
-	}
-	var out struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error,omitempty"`
-	}
-	if err := c.postJSON(ctx, "chat.appendStream", payload, &out); err != nil {
-		return err
-	}
-	if !out.OK {
-		return fmt.Errorf("slack chat.appendStream failed: %s", out.Error)
-	}
-	return nil
-}
-
-func (c *Client) StopStream(ctx context.Context, channel, ts string) error {
-	payload := map[string]any{"channel": channel, "ts": ts}
-	var out struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error,omitempty"`
-	}
-	if err := c.postJSON(ctx, "chat.stopStream", payload, &out); err != nil {
-		return err
-	}
-	if !out.OK {
-		return fmt.Errorf("slack chat.stopStream failed: %s", out.Error)
-	}
-	return nil
-}
-
-func (c *Client) DeleteMessage(ctx context.Context, channel, ts string) error {
-	payload := map[string]any{"channel": channel, "ts": ts}
-	var out struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error,omitempty"`
-	}
-	if err := c.postJSON(ctx, "chat.delete", payload, &out); err != nil {
-		return err
-	}
-	if !out.OK {
-		return fmt.Errorf("slack chat.delete failed: %s", out.Error)
 	}
 	return nil
 }

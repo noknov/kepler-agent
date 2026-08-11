@@ -53,31 +53,6 @@ func TestValidToolName(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsDirectKimiCodingEndpoint(t *testing.T) {
-	resetConfigEnv(t)
-	dir := t.TempDir()
-	writeEnvFile(t, dir, map[string]string{
-		"SLACK_BOT_TOKEN":      "xoxb-test",
-		"SLACK_SIGNING_SECRET": "secret",
-		"ALLOWED_SLACK_USERS":  "U123",
-		"LLM_PROTOCOL":         "anthropic",
-		"ANTHROPIC_BASE_URL":   "https://api.kimi.com/coding/",
-		"ANTHROPIC_AUTH_TOKEN": "token",
-		"ANTHROPIC_MODEL":      "kimi-for-coding",
-	})
-
-	wd, _ := os.Getwd()
-	defer func() { _ = os.Chdir(wd) }()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := Load()
-	if err == nil || !strings.Contains(err.Error(), "not supported directly") {
-		t.Fatalf("Load() error = %v, want direct coding endpoint rejection", err)
-	}
-}
-
 func TestLoadGitHubConfig(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
@@ -169,10 +144,10 @@ func TestLoadMaxOutputTokensIsOptional(t *testing.T) {
 		t.Fatalf("MaxOutputTokens = %d, want provider default sentinel 0", cfg.LLM.MaxOutputTokens)
 	}
 
-	t.Setenv("LLM_MAX_OUTPUT_TOKEN", "8192")
+	t.Setenv("LLM_MAX_OUTPUT_TOKENS", "8192")
 	cfg, err = Load()
 	if err != nil {
-		t.Fatalf("Load() with LLM_MAX_OUTPUT_TOKEN error = %v, want nil", err)
+		t.Fatalf("Load() with LLM_MAX_OUTPUT_TOKENS error = %v, want nil", err)
 	}
 	if cfg.LLM.MaxOutputTokens != 8192 {
 		t.Fatalf("MaxOutputTokens = %d, want 8192", cfg.LLM.MaxOutputTokens)
@@ -316,6 +291,7 @@ func TestLoadDeepSeekDefaults(t *testing.T) {
 		"SLACK_BOT_TOKEN":      "xoxb-test",
 		"SLACK_SIGNING_SECRET": "secret",
 		"ALLOWED_SLACK_USERS":  "U123",
+		"LLM_PROVIDER":         "deepseek",
 		"DEEPSEEK_API_KEY":     "ds-token",
 	})
 
@@ -356,6 +332,7 @@ func TestLoadOpenCodeGoDefaults(t *testing.T) {
 		"SLACK_BOT_TOKEN":      "xoxb-test",
 		"SLACK_SIGNING_SECRET": "secret",
 		"ALLOWED_SLACK_USERS":  "U123",
+		"LLM_PROVIDER":         "opencode-go",
 		"OPENCODE_GO_API_KEY":  "oc-go-token",
 	})
 
@@ -393,6 +370,7 @@ func TestLoadOpenCodeZenDefaults(t *testing.T) {
 		"SLACK_BOT_TOKEN":      "xoxb-test",
 		"SLACK_SIGNING_SECRET": "secret",
 		"ALLOWED_SLACK_USERS":  "U123",
+		"LLM_PROVIDER":         "opencode-zen",
 		"OPENCODE_ZEN_API_KEY": "oc-zen-token",
 	})
 
@@ -430,6 +408,7 @@ func TestLoadSecondaryModelConfig(t *testing.T) {
 		"SLACK_BOT_TOKEN":      "xoxb-test",
 		"SLACK_SIGNING_SECRET": "secret",
 		"ALLOWED_SLACK_USERS":  "U123",
+		"LLM_PROVIDER":         "deepseek",
 		"DEEPSEEK_API_KEY":     "ds-token",
 		"SECONDARY_PROVIDER":   "opencode-zen",
 		"OPENCODE_ZEN_API_KEY": "secondary-token",
@@ -486,31 +465,6 @@ func TestLoadOpenCodeGoAnthropicEndpoint(t *testing.T) {
 	}
 	if cfg.LLM.Model != "minimax-m3" {
 		t.Fatalf("LLM.Model = %q, want minimax-m3", cfg.LLM.Model)
-	}
-}
-
-func TestLoadRejectsDirectKimiCodingEndpointRegardlessOfProtocol(t *testing.T) {
-	resetConfigEnv(t)
-	dir := t.TempDir()
-	writeEnvFile(t, dir, map[string]string{
-		"SLACK_BOT_TOKEN":      "xoxb-test",
-		"SLACK_SIGNING_SECRET": "secret",
-		"ALLOWED_SLACK_USERS":  "U123",
-		"LLM_PROTOCOL":         "openai",
-		"ANTHROPIC_BASE_URL":   "https://api.kimi.com/coding/",
-		"ANTHROPIC_AUTH_TOKEN": "token",
-		"ANTHROPIC_MODEL":      "kimi-for-coding",
-	})
-
-	wd, _ := os.Getwd()
-	defer func() { _ = os.Chdir(wd) }()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := Load()
-	if err == nil || !strings.Contains(err.Error(), "not supported directly") {
-		t.Fatalf("Load() error = %v, want direct coding endpoint rejection", err)
 	}
 }
 
@@ -778,7 +732,6 @@ func resetConfigEnv(t *testing.T) {
 		"MIMO_TEMPERATURE",
 		"MIMO_TIMEOUT",
 		"MODEL_ROUTING_MULTIMODAL_MODEL",
-		"MULTIMODAL_MODEL",
 		"MULTIMODAL_MODELS",
 		"KIMI_PROTOCOL",
 		"CLIPROXYAPI_PROTOCOL",
@@ -790,7 +743,6 @@ func resetConfigEnv(t *testing.T) {
 		"CLIPROXYAPI_TEMPERATURE",
 		"CLIPROXYAPI_TIMEOUT",
 		"ANTHROPIC_PROTOCOL",
-		"ANTHROPIC_FLAVOR",
 		"OPENAI_API_KEY",
 		"OPENAI_BASE_URL",
 		"OPENAI_MODEL",
@@ -825,7 +777,7 @@ func resetConfigEnv(t *testing.T) {
 		"ANTHROPIC_MODEL",
 		"ANTHROPIC_AVAILABLE_MODELS",
 		"OPENAI_AVAILABLE_MODELS",
-		"LLM_MAX_OUTPUT_TOKEN",
+		"LLM_MAX_OUTPUT_TOKENS",
 		"POSTGRES_DSN",
 		"REDIS_URL",
 		"SLACK_EVENT_MAX_ATTEMPTS",
@@ -859,8 +811,6 @@ func resetConfigEnv(t *testing.T) {
 		"YOUTRACK_TOKEN",
 		"LUCKIN_MCP_URL",
 		"LUCKIN_MCP_TOKEN",
-		"PLAYWRIGHT_MCP_URL",
-		"PLAYWRIGHT_MCP_TOKEN",
 		"WEB_SEARCH_PROVIDER",
 		"WEB_SEARCH_GOOGLE_API_KEY",
 		"WEB_SEARCH_GOOGLE_CX",

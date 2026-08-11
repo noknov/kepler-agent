@@ -51,7 +51,7 @@ namespace so credentials do not accidentally leak between providers.
 Optional output limit:
 
 ```bash
-LLM_MAX_OUTPUT_TOKEN=8192
+LLM_MAX_OUTPUT_TOKENS=8192
 ```
 
 When set to a positive value, the agent sends that value as `max_tokens` /
@@ -158,11 +158,12 @@ OPENCODE_GO_PROTOCOL=openai
 
 ## Secondary Model
 
-The optional secondary model is used for compact summaries. Dynamic status is
-a projection of runtime lifecycle and primary-model assistant events. The
-primary model writes the current-step summary in the same tool-call turn, so
-status never invokes a second model. When that summary is absent, the existing
-localized thinking state remains unchanged.
+The optional secondary model is used for compact summaries and
+presentation-only Slack progress wording. Progress wording is generated from
+the redacted user request and confirmed tool names, and never enters the
+transcript or execution context. If the secondary model is not configured or
+cannot produce a valid structured label, the localized thinking state remains
+unchanged.
 
 ```bash
 SECONDARY_PROVIDER=opencode-zen
@@ -190,10 +191,12 @@ are never attached. With no OTLP endpoint configured, tracing is a no-op.
 
 ## Repository Freshness
 
-Code-reading tools use immutable snapshot semantics. The first code/repo read
-for a repository refreshes `origin` refs only when that repo has not been
-fetched recently, then reads with `git show` or `git grep` without touching the
-working tree.
+Code-reading tools use immutable snapshot semantics. Each git-backed call
+requires an explicit branch or ref, refreshes `origin` according to the tool's
+cache contract, then reads with `git show` or `git grep` without touching the
+working tree. A refresh failure is returned to the caller; tools do not use
+stale refs or guess a default branch. Deployment-specific default refs belong
+in the private prompt overlay.
 
 ```bash
 WORKSPACE_ROOTS=/path/to/repos
@@ -201,19 +204,6 @@ WORKSPACE_AUTO_FETCH=false
 ```
 
 Set `WORKSPACE_AUTO_FETCH=true` only when background refreshes are acceptable.
-
-## Streaming
-
-Final answers are flushed in small batches:
-
-| Variable | Default | Purpose |
-|---|---:|---|
-| `WEB_STREAM_FLUSH_INTERVAL` | `16ms` | Max time to buffer web SSE chunks |
-| `WEB_STREAM_FLUSH_CHARS` | `16` | Max buffered web characters |
-| `SLACK_STREAM_FLUSH_INTERVAL` | `50ms` | Max time to buffer Slack stream chunks |
-| `SLACK_STREAM_FLUSH_CHARS` | `48` | Max buffered Slack characters |
-| `STREAM_FLUSH_INTERVAL` | `35ms` | Shared fallback interval |
-| `STREAM_FLUSH_CHARS` | `32` | Shared fallback character threshold |
 
 ## Multimodal Routing
 

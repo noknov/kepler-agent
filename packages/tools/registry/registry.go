@@ -140,7 +140,6 @@ type PolicyDecision struct {
 
 const (
 	CategoryDiagnostics    = "diagnostics"
-	CategoryBrowser        = "browser"
 	CategoryCode           = "code"
 	CategoryIntegration    = "integration"
 	CategoryInfrastructure = "infrastructure"

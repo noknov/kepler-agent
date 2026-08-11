@@ -81,7 +81,11 @@ func (t DispatchWorkflowTool) Spec() llm.ToolSpec {
 			"repository": map[string]any{"type": "string", "description": ""},
 			"workflow":   map[string]any{"type": "string", "description": ""},
 			"ref":        map[string]any{"type": "string", "description": ""},
-			"inputs":     map[string]any{"type": "object", "description": ""},
+			"inputs": map[string]any{
+				"type":                 "object",
+				"additionalProperties": map[string]any{"type": "string"},
+				"description":          "",
+			},
 		}),
 	)
 }
@@ -91,10 +95,10 @@ func (t DispatchWorkflowTool) Execute(ctx context.Context, raw json.RawMessage, 
 		return registry.Result{}, fmt.Errorf("GitHub is not configured: GITHUB_TOKEN is required")
 	}
 	var args struct {
-		Repository string         `json:"repository"`
-		Workflow   string         `json:"workflow"`
-		Ref        string         `json:"ref"`
-		Inputs     map[string]any `json:"inputs"`
+		Repository string            `json:"repository"`
+		Workflow   string            `json:"workflow"`
+		Ref        string            `json:"ref"`
+		Inputs     map[string]string `json:"inputs"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return registry.Result{}, err
@@ -114,11 +118,10 @@ func (t DispatchWorkflowTool) Execute(ctx context.Context, raw json.RawMessage, 
 	if ref == "" {
 		return registry.Result{}, fmt.Errorf("ref is required")
 	}
-	inputs := normalizeInputs(args.Inputs)
-	if err := t.Client.dispatch(ctx, repository, workflow, ref, inputs); err != nil {
+	if err := t.Client.dispatch(ctx, repository, workflow, ref, args.Inputs); err != nil {
 		return registry.Result{}, err
 	}
-	return registry.Result{Content: fmt.Sprintf("dispatched GitHub workflow repository=%s workflow=%s ref=%s inputs=%s", repository, workflow, ref, formatInputs(inputs))}, nil
+	return registry.Result{Content: fmt.Sprintf("dispatched GitHub workflow repository=%s workflow=%s ref=%s inputs=%s", repository, workflow, ref, formatInputs(args.Inputs))}, nil
 }
 
 type WorkflowRunsTool struct {
@@ -298,33 +301,6 @@ func splitRepository(repository string) (string, string, error) {
 		return "", "", fmt.Errorf("repository must be in owner/repo form")
 	}
 	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
-}
-
-func normalizeInputs(inputs map[string]any) map[string]string {
-	if len(inputs) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(inputs))
-	for key, value := range inputs {
-		key = strings.TrimSpace(key)
-		if key == "" || value == nil {
-			continue
-		}
-		switch v := value.(type) {
-		case string:
-			out[key] = v
-		case bool:
-			out[key] = fmt.Sprintf("%t", v)
-		case float64:
-			out[key] = strings.TrimRight(strings.TrimRight(fmt.Sprintf("%f", v), "0"), ".")
-		default:
-			out[key] = fmt.Sprintf("%v", v)
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 func formatInputs(inputs map[string]string) string {

@@ -92,15 +92,14 @@ type ToolConfig struct {
 }
 
 type IntegrationConfig struct {
-	GCP        GCPConfig
-	GitHub     GitHubConfig
-	K8s        K8sConfig
-	Luckin     LuckinConfig
-	Notion     NotionConfig
-	Playwright PlaywrightConfig
-	TTS        TTSConfig
-	WebSearch  WebSearchConfig
-	YouTrack   YouTrackConfig
+	GCP       GCPConfig
+	GitHub    GitHubConfig
+	K8s       K8sConfig
+	Luckin    LuckinConfig
+	Notion    NotionConfig
+	TTS       TTSConfig
+	WebSearch WebSearchConfig
+	YouTrack  YouTrackConfig
 }
 
 type GCPConfig struct {
@@ -135,11 +134,6 @@ type NotionConfig struct {
 	DatabaseID    string
 	TitleProperty string
 	Version       string
-}
-
-type PlaywrightConfig struct {
-	MCPURL   string
-	MCPToken string
 }
 
 type TTSConfig struct {
@@ -204,22 +198,15 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 	}
 	applyDotEnv(dotenvValues)
 	wd, _ := os.Getwd()
-	llmProvider := inferLLMProvider()
+	llmProvider := strings.ToLower(env("LLM_PROVIDER", "mimo"))
 	llmProtocol := providerProtocol(llmProvider)
 	llmBaseURL := providerBaseURL(llmProvider)
-	llmBaseURL = normalizeLLMBaseURL(llmBaseURL, llmProtocol)
-	if llmProtocol == "" {
-		llmProtocol = inferLLMProtocol(llmBaseURL)
-	}
-	anthropicFlavor := normalizeAnthropicFlavor(firstEnv("LLM_ANTHROPIC_FLAVOR", "ANTHROPIC_FLAVOR"))
-	if anthropicFlavor == "" && llmProtocol == "anthropic" {
-		anthropicFlavor = inferAnthropicFlavor(llmBaseURL)
-	}
+	anthropicFlavor := providerAnthropicFlavor(llmProvider)
 	llmModel := providerModel(llmProvider)
-	llmMultimodalModel := providerMultimodalModel(llmProvider)
+	llmMultimodalModel := multimodalModel()
 	llmMultimodalModels := envCSVDefault("MULTIMODAL_MODELS", defaultMultimodalModels(llmMultimodalModel))
 	llmThinking := providerThinking(llmProvider)
-	if llmProvider == "mimo" && providerThinking(llmProvider) == "" {
+	if llmProvider == "mimo" && llmThinking == "" {
 		llmThinking = "disabled"
 	}
 
@@ -258,7 +245,7 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			BaseURL:          trimRightSlash(llmBaseURL),
 			APIKey:           providerAPIKey(llmProvider),
 			Model:            llmModel,
-			MaxOutputTokens:  envInt("LLM_MAX_OUTPUT_TOKEN", 0),
+			MaxOutputTokens:  envInt("LLM_MAX_OUTPUT_TOKENS", 0),
 			MultimodalModel:  llmMultimodalModel,
 			MultimodalModels: llmMultimodalModels,
 			Protocol:         llmProtocol,
@@ -289,7 +276,7 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			CommandTimeout: envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
 			AgentMaxSteps:  envInt("AGENT_MAX_STEPS", 256),
 			AllowedWriteTools: envCSVDefault("AGENT_ALLOWED_WRITE_TOOLS", []string{
-				"reminder-create", "reminder-cancel", "slack-send_screenshot", "slack-create_canvas", "tts-speak",
+				"reminder-create", "reminder-cancel", "slack-create_canvas", "tts-speak",
 			}),
 		},
 		Integrations: loadIntegrations(),
@@ -326,7 +313,7 @@ func loadIntegrations() IntegrationConfig {
 			DefaultNamespace: env("K8S_DEFAULT_NAMESPACE", ""),
 		},
 		TTS: TTSConfig{
-			APIKey:       firstEnv("TTS_API_KEY", "MIMO_API_KEY"),
+			APIKey:       os.Getenv("TTS_API_KEY"),
 			BaseURL:      trimRightSlash(env("TTS_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1")),
 			Model:        env("TTS_MODEL", "mimo-v2.5-tts"),
 			DefaultVoice: env("TTS_DEFAULT_VOICE", "冰糖"),
@@ -351,10 +338,6 @@ func loadIntegrations() IntegrationConfig {
 		Luckin: LuckinConfig{
 			MCPURL:   trimRightSlash(env("LUCKIN_MCP_URL", "https://gwmcp.lkcoffee.com/order/user/mcp")),
 			MCPToken: os.Getenv("LUCKIN_MCP_TOKEN"),
-		},
-		Playwright: PlaywrightConfig{
-			MCPURL:   trimRightSlash(os.Getenv("PLAYWRIGHT_MCP_URL")),
-			MCPToken: os.Getenv("PLAYWRIGHT_MCP_TOKEN"),
 		},
 		WebSearch: WebSearchConfig{
 			Provider:   env("WEB_SEARCH_PROVIDER", "duckduckgo"),
@@ -461,14 +444,11 @@ func validateAgentRuntime(cfg Config) (Config, error) {
 }
 
 func validateModelRuntime(cfg Config) (Config, error) {
-	if strings.Contains(cfg.LLM.BaseURL, "api.kimi.com/coding") {
-		return cfg, fmt.Errorf("the Kimi coding endpoint is not supported directly; use LLM_PROVIDER=cliproxyapi and connect to a locally authenticated CLIProxyAPI instance, or configure KIMI_BASE_URL with Kimi's documented API endpoint")
-	}
 	if cfg.LLM.APIKey == "" {
 		return cfg, fmt.Errorf("%s API key is required", strings.ToUpper(cfg.LLM.Provider))
 	}
-	if cfg.LLM.Protocol != "openai" && cfg.LLM.Protocol != "anthropic" {
-		return cfg, fmt.Errorf("LLM_PROTOCOL must be openai or anthropic")
+	if cfg.LLM.Protocol != "openai" && cfg.LLM.Protocol != "anthropic" && cfg.LLM.Protocol != "responses" {
+		return cfg, fmt.Errorf("model protocol must be openai, anthropic, or responses")
 	}
 	if cfg.LLM.AnthropicFlavor != "" && cfg.LLM.AnthropicFlavor != "official" && cfg.LLM.AnthropicFlavor != "claude-code" {
 		return cfg, fmt.Errorf("LLM_ANTHROPIC_FLAVOR must be official or claude-code")
@@ -492,99 +472,57 @@ func firstEnv(keys ...string) string {
 	return ""
 }
 
-func inferLLMProvider() string {
-	provider := inferLLMProviderFrom(func(key string) string { return os.Getenv(key) })
-	if provider == "" {
-		return "mimo"
-	}
-	return provider
-}
-
-func inferLLMProviderFrom(get func(string) string) string {
-	provider := strings.ToLower(strings.TrimSpace(get("LLM_PROVIDER")))
-	if provider != "" {
-		return provider
-	}
-	switch {
-	case firstNonEmpty(get("LONGCAT_API_KEY"), get("LONGCAT_BASE_URL"), get("LONGCAT_MODEL"), get("LONGCAT_PROTOCOL")) != "":
-		return "longcat"
-	case firstNonEmpty(get("MIMO_API_KEY"), get("MIMO_BASE_URL"), get("MIMO_MODEL"), get("MIMO_PROTOCOL")) != "":
-		return "mimo"
-	case firstNonEmpty(get("ANTHROPIC_API_KEY"), get("ANTHROPIC_AUTH_TOKEN"), get("ANTHROPIC_BASE_URL"), get("ANTHROPIC_MODEL"), get("ANTHROPIC_PROTOCOL")) != "":
-		return "anthropic"
-	case firstNonEmpty(get("CLIPROXYAPI_API_KEY"), get("CLIPROXYAPI_BASE_URL"), get("CLIPROXYAPI_MODEL")) != "":
-		return "cliproxyapi"
-	case firstNonEmpty(get("KIMI_API_KEY"), get("KIMI_BASE_URL"), get("KIMI_MODEL"), get("KIMI_PROTOCOL")) != "":
-		return "kimi"
-	case firstNonEmpty(get("MOONSHOT_API_KEY"), get("MOONSHOT_BASE_URL"), get("MOONSHOT_MODEL")) != "":
-		return "moonshot"
-	case firstNonEmpty(get("OPENCODE_ZEN_API_KEY"), get("OPENCODE_ZEN_BASE_URL"), get("OPENCODE_ZEN_MODEL"), get("OPENCODE_ZEN_PROTOCOL")) != "":
-		return "opencode-zen"
-	case firstNonEmpty(get("OPENCODE_GO_API_KEY"), get("OPENCODE_GO_BASE_URL"), get("OPENCODE_GO_MODEL"), get("OPENCODE_GO_PROTOCOL")) != "":
-		return "opencode-go"
-	case firstNonEmpty(get("DEEPSEEK_API_KEY"), get("DEEPSEEK_BASE_URL"), get("DEEPSEEK_MODEL"), get("DEEPSEEK_PROTOCOL")) != "":
-		return "deepseek"
-	case firstNonEmpty(get("OPENAI_API_KEY"), get("OPENAI_BASE_URL"), get("OPENAI_MODEL")) != "":
-		return "openai"
-	}
-	return ""
-}
-
 type providerDefaults struct {
-	defaultProtocol string
-	defaultBaseURL  string
-	defaultModel    string
+	protocol        string
+	baseURL         string
+	model           string
+	anthropicFlavor string
 	apiKeyEnvs      []string
 }
 
 var providerTable = map[string]providerDefaults{
-	"longcat":      {defaultProtocol: "anthropic", defaultBaseURL: "https://api.longcat.chat/anthropic", defaultModel: "LongCat-2.0", apiKeyEnvs: []string{"LONGCAT_API_KEY"}},
-	"mimo":         {defaultProtocol: "anthropic", defaultBaseURL: "https://token-plan-cn.xiaomimimo.com/anthropic", defaultModel: "mimo-v2.5", apiKeyEnvs: []string{"MIMO_API_KEY"}},
-	"anthropic":    {defaultProtocol: "", defaultBaseURL: "https://api.anthropic.com", defaultModel: "claude-sonnet-4-5-20250929", apiKeyEnvs: []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}},
-	"kimi":         {defaultProtocol: "", defaultBaseURL: "https://api.moonshot.ai/v1", defaultModel: "kimi-k2.6", apiKeyEnvs: []string{"KIMI_API_KEY"}},
-	"cliproxyapi":  {defaultProtocol: "openai", defaultBaseURL: "http://127.0.0.1:8317/v1", defaultModel: "kimi/kimi-k2.7-code", apiKeyEnvs: []string{"CLIPROXYAPI_API_KEY"}},
-	"moonshot":     {defaultProtocol: "", defaultBaseURL: "https://api.moonshot.ai/v1", defaultModel: "kimi-k2.6", apiKeyEnvs: []string{"MOONSHOT_API_KEY"}},
-	"opencode-go":  {defaultProtocol: "openai", defaultBaseURL: "https://opencode.ai/zen/go/v1", defaultModel: "glm-5.2", apiKeyEnvs: []string{"OPENCODE_GO_API_KEY"}},
-	"opencode-zen": {defaultProtocol: "openai", defaultBaseURL: "https://opencode.ai/zen/v1", defaultModel: "mimo-v2.5-free", apiKeyEnvs: []string{"OPENCODE_ZEN_API_KEY"}},
-	"deepseek":     {defaultProtocol: "openai", defaultBaseURL: "https://api.deepseek.com", defaultModel: "deepseek-v4-flash", apiKeyEnvs: []string{"DEEPSEEK_API_KEY"}},
+	"longcat":      {protocol: "anthropic", baseURL: "https://api.longcat.chat/anthropic", model: "LongCat-2.0", anthropicFlavor: "official", apiKeyEnvs: []string{"LONGCAT_API_KEY"}},
+	"mimo":         {protocol: "anthropic", baseURL: "https://token-plan-cn.xiaomimimo.com/anthropic", model: "mimo-v2.5", anthropicFlavor: "claude-code", apiKeyEnvs: []string{"MIMO_API_KEY"}},
+	"anthropic":    {protocol: "anthropic", baseURL: "https://api.anthropic.com", model: "claude-sonnet-4-5-20250929", anthropicFlavor: "official", apiKeyEnvs: []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}},
+	"openai":       {protocol: "openai", baseURL: "https://api.openai.com/v1", model: "gpt-4o-mini", apiKeyEnvs: []string{"OPENAI_API_KEY"}},
+	"kimi":         {protocol: "openai", baseURL: "https://api.moonshot.ai/v1", model: "kimi-k2.6", apiKeyEnvs: []string{"KIMI_API_KEY"}},
+	"cliproxyapi":  {protocol: "openai", baseURL: "http://127.0.0.1:8317/v1", model: "kimi/kimi-k2.7-code", apiKeyEnvs: []string{"CLIPROXYAPI_API_KEY"}},
+	"moonshot":     {protocol: "openai", baseURL: "https://api.moonshot.ai/v1", model: "kimi-k2.6", apiKeyEnvs: []string{"MOONSHOT_API_KEY"}},
+	"opencode-go":  {protocol: "openai", baseURL: "https://opencode.ai/zen/go/v1", model: "glm-5.2", apiKeyEnvs: []string{"OPENCODE_GO_API_KEY"}},
+	"opencode-zen": {protocol: "openai", baseURL: "https://opencode.ai/zen/v1", model: "mimo-v2.5-free", apiKeyEnvs: []string{"OPENCODE_ZEN_API_KEY"}},
+	"deepseek":     {protocol: "openai", baseURL: "https://api.deepseek.com", model: "deepseek-v4-flash", apiKeyEnvs: []string{"DEEPSEEK_API_KEY"}},
 }
 
 func providerProtocol(provider string) string {
 	prefix := providerEnvPrefix(provider)
-	protocol := normalizeLLMProtocol(firstEnv(prefix+"_PROTOCOL", "LLM_PROTOCOL"))
+	protocol := strings.ToLower(firstEnv(prefix+"_PROTOCOL", "LLM_PROTOCOL"))
 	if protocol != "" {
 		return protocol
 	}
-	if defaults, ok := providerTable[provider]; ok && defaults.defaultProtocol != "" {
-		return defaults.defaultProtocol
+	if defaults, ok := providerTable[provider]; ok {
+		return defaults.protocol
 	}
-	return normalizeLLMProtocol(firstEnv("LLM_PROTOCOL"))
+	return ""
 }
 
 func providerBaseURL(provider string) string {
 	prefix := providerEnvPrefix(provider)
 	if defaults, ok := providerTable[provider]; ok {
-		return env(prefix+"_BASE_URL", defaults.defaultBaseURL)
+		return env(prefix+"_BASE_URL", defaults.baseURL)
 	}
-	return env("OPENAI_BASE_URL", "https://api.openai.com/v1")
+	return strings.TrimSpace(os.Getenv(prefix + "_BASE_URL"))
 }
 
 func providerModel(provider string) string {
 	prefix := providerEnvPrefix(provider)
-	if provider == "kimi" && strings.Contains(providerBaseURL("kimi"), "api.kimi.com/coding") {
-		return env("KIMI_MODEL", "kimi-for-coding")
-	}
 	if defaults, ok := providerTable[provider]; ok {
-		return env(prefix+"_MODEL", defaults.defaultModel)
+		return env(prefix+"_MODEL", defaults.model)
 	}
-	return env("OPENAI_MODEL", "gpt-4o-mini")
+	return strings.TrimSpace(os.Getenv(prefix + "_MODEL"))
 }
 
-func providerMultimodalModel(provider string) string {
-	if model := firstEnv("MODEL_ROUTING_MULTIMODAL_MODEL", "MULTIMODAL_MODEL"); model != "" {
-		return model
-	}
-	return ""
+func multimodalModel() string {
+	return strings.TrimSpace(os.Getenv("MODEL_ROUTING_MULTIMODAL_MODEL"))
 }
 
 func defaultMultimodalModels(model string) []string {
@@ -598,7 +536,14 @@ func providerAPIKey(provider string) string {
 	if defaults, ok := providerTable[provider]; ok {
 		return firstEnv(defaults.apiKeyEnvs...)
 	}
-	return firstEnv("OPENAI_API_KEY")
+	return strings.TrimSpace(os.Getenv(providerEnvPrefix(provider) + "_API_KEY"))
+}
+
+func providerAnthropicFlavor(provider string) string {
+	if flavor := strings.ToLower(strings.TrimSpace(os.Getenv("LLM_ANTHROPIC_FLAVOR"))); flavor != "" {
+		return flavor
+	}
+	return providerTable[provider].anthropicFlavor
 }
 
 func providerThinking(provider string) string {
@@ -617,23 +562,11 @@ func providerThinking(provider string) string {
 }
 
 func providerTemperature(provider string) float64 {
-	prefix := providerEnvPrefix(provider)
-	if provider == "kimi" || provider == "moonshot" {
-		return envFloatAliases(0, "KIMI_TEMPERATURE")
-	}
-	fallbackKeys := []string{prefix + "_TEMPERATURE"}
-	if provider == "openai" || provider == "" {
-		fallbackKeys = append(fallbackKeys, "ANTHROPIC_TEMPERATURE")
-	}
-	return envFloatAliases(0, fallbackKeys...)
+	return envFloat(providerEnvPrefix(provider)+"_TEMPERATURE", 0)
 }
 
 func providerTimeout(provider string) time.Duration {
-	prefix := providerEnvPrefix(provider)
-	if provider == "kimi" || provider == "moonshot" {
-		return envDurationAliases(120*time.Second, "KIMI_TIMEOUT", "API_TIMEOUT_MS")
-	}
-	return envDurationAliases(120*time.Second, prefix+"_TIMEOUT", "API_TIMEOUT_MS")
+	return envDuration(providerEnvPrefix(provider)+"_TIMEOUT", 120*time.Second)
 }
 
 func envCSV(key string) []string {
@@ -668,20 +601,6 @@ func envInt(key string, fallback int) int {
 	return v
 }
 
-func envIntAliases(fallback int, keys ...string) int {
-	for _, key := range keys {
-		raw := strings.TrimSpace(os.Getenv(key))
-		if raw == "" {
-			continue
-		}
-		v, err := strconv.Atoi(raw)
-		if err == nil {
-			return v
-		}
-	}
-	return fallback
-}
-
 func envFloat(key string, fallback float64) float64 {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
@@ -694,20 +613,6 @@ func envFloat(key string, fallback float64) float64 {
 	return v
 }
 
-func envFloatAliases(fallback float64, keys ...string) float64 {
-	for _, key := range keys {
-		raw := strings.TrimSpace(os.Getenv(key))
-		if raw == "" {
-			continue
-		}
-		v, err := strconv.ParseFloat(raw, 64)
-		if err == nil {
-			return v
-		}
-	}
-	return fallback
-}
-
 func envDuration(key string, fallback time.Duration) time.Duration {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
@@ -718,27 +623,6 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 	}
 	if seconds, err := strconv.Atoi(raw); err == nil {
 		return time.Duration(seconds) * time.Second
-	}
-	return fallback
-}
-
-func envDurationAliases(fallback time.Duration, keys ...string) time.Duration {
-	for _, key := range keys {
-		raw := strings.TrimSpace(os.Getenv(key))
-		if raw == "" {
-			continue
-		}
-		if strings.HasSuffix(key, "_MS") {
-			if ms, err := strconv.Atoi(raw); err == nil {
-				return time.Duration(ms) * time.Millisecond
-			}
-		}
-		if d, err := time.ParseDuration(raw); err == nil {
-			return d
-		}
-		if seconds, err := strconv.Atoi(raw); err == nil {
-			return time.Duration(seconds) * time.Second
-		}
 	}
 	return fallback
 }
@@ -779,49 +663,6 @@ func trimRightSlash(s string) string {
 	return strings.TrimRight(strings.TrimSpace(s), "/")
 }
 
-func normalizeLLMProtocol(raw string) string {
-	return strings.ToLower(strings.TrimSpace(raw))
-}
-
-func normalizeLLMBaseURL(raw, protocol string) string {
-	raw = trimRightSlash(raw)
-	if raw == "" {
-		return ""
-	}
-	if protocol != "anthropic" && strings.Contains(raw, "api.kimi.com/coding") && !strings.HasSuffix(raw, "/v1") {
-		return raw + "/v1"
-	}
-	return raw
-}
-
-func inferLLMProtocol(raw string) string {
-	raw = trimRightSlash(raw)
-	if strings.Contains(raw, "api.kimi.com/coding") && !strings.HasSuffix(raw, "/v1") {
-		return "anthropic"
-	}
-	return "openai"
-}
-
-func normalizeAnthropicFlavor(raw string) string {
-	raw = strings.ToLower(strings.TrimSpace(raw))
-	switch raw {
-	case "claudecode", "claude_code", "claude-code":
-		return "claude-code"
-	default:
-		return raw
-	}
-}
-
-func inferAnthropicFlavor(raw string) string {
-	if strings.Contains(trimRightSlash(raw), "api.kimi.com/coding") {
-		return "claude-code"
-	}
-	if strings.Contains(trimRightSlash(raw), "xiaomimimo.com/anthropic") {
-		return "claude-code"
-	}
-	return "official"
-}
-
 func providerEnvPrefix(provider string) string {
 	switch provider {
 	case "cliproxyapi":
@@ -833,12 +674,6 @@ func providerEnvPrefix(provider string) string {
 	default:
 		return strings.ToUpper(provider)
 	}
-}
-
-func isMiMoConfig(baseURL, model string) bool {
-	baseURL = strings.ToLower(trimRightSlash(baseURL))
-	model = strings.ToLower(strings.TrimSpace(model))
-	return strings.Contains(baseURL, "xiaomimimo.com") || strings.HasPrefix(model, "mimo-")
 }
 
 func readDotEnv(path string) (map[string]string, error) {
@@ -878,13 +713,4 @@ func applyDotEnv(values map[string]string) {
 	for key, value := range values {
 		_ = os.Setenv(key, value)
 	}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }

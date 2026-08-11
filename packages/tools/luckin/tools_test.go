@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/noknov/slack-copilot-agent/packages/mcp"
@@ -103,33 +102,5 @@ func httpResponse(status int, headers map[string]string, body string) *http.Resp
 		StatusCode: status,
 		Header:     h,
 		Body:       io.NopCloser(bytes.NewBufferString(body)),
-	}
-}
-
-func TestRegisterAllIncludesCouponAlias(t *testing.T) {
-	reg := registry.New()
-	RegisterAll(reg, &Client{MCP: &mcp.Client{Token: "x"}})
-	names := strings.Join(reg.Names(), "\n")
-	if !strings.Contains(names, "luckin-query_coupons") {
-		t.Fatalf("registered names missing coupon alias:\n%s", names)
-	}
-}
-
-func TestCreateOrderResultAnnotatesPaymentURLs(t *testing.T) {
-	out := mcp.FormatToolResult(json.RawMessage(`{
-		"content": [{
-			"type": "text",
-			"text": "{\"code\":0,\"data\":{\"orderIdStr\":\"7620\",\"discountPrice\":9.9,\"needPay\":true,\"payOrderUrl\":\"weixin://pay\",\"payOrderQrCodeUrl\":\"https://example.test/qr.png\"}}"
-		}]
-	}`))
-	got := annotateCreateOrderPayment(out)
-	for _, want := range []string{
-		"payQrCodeUrl=https://example.test/qr.png",
-		"wechatPayUrl=weixin://pay",
-		"Show payQrCodeUrl as the primary payment option",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("formatted result missing %q:\n%s", want, got)
-		}
 	}
 }

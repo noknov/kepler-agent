@@ -53,7 +53,7 @@ func (c *AnthropicClient) Chat(ctx context.Context, req Request) (Response, erro
 		return Response{}, err
 	}
 
-	data, err := c.doWithRetry(ctx, payload)
+	data, err := c.doOnce(ctx, payload)
 	if err != nil {
 		return Response{}, err
 	}
@@ -142,7 +142,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		return Response{}, NewProviderError("anthropic stream", resp.StatusCode, compactBody(data), resp.Header.Get("Retry-After"))
+		return Response{}, NewProviderError("anthropic stream", resp.StatusCode, compactBody(data))
 	}
 
 	var msg Message
@@ -299,24 +299,6 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 	}, nil
 }
 
-func (c *AnthropicClient) doWithRetry(ctx context.Context, payload []byte) ([]byte, error) {
-	var lastErr error
-	for attempt := 0; attempt < MaxRetries; attempt++ {
-		data, err := c.doOnce(ctx, payload)
-		if err == nil {
-			return data, nil
-		}
-		lastErr = err
-		if !IsTemporaryOverload(err) || attempt == MaxRetries-1 {
-			return nil, err
-		}
-		if err := sleepBeforeRetry(ctx, attempt, lastErr); err != nil {
-			return nil, err
-		}
-	}
-	return nil, lastErr
-}
-
 func (c *AnthropicClient) doOnce(ctx context.Context, payload []byte) ([]byte, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicMessagesURL(c.baseURL), bytes.NewReader(payload))
 	if err != nil {
@@ -337,7 +319,7 @@ func (c *AnthropicClient) doOnce(ctx context.Context, payload []byte) ([]byte, e
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, NewProviderError("anthropic messages", resp.StatusCode, compactBody(data), resp.Header.Get("Retry-After"))
+		return nil, NewProviderError("anthropic messages", resp.StatusCode, compactBody(data))
 	}
 	return data, nil
 }

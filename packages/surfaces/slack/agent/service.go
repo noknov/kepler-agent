@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -18,7 +17,6 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
 	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
 	"github.com/noknov/slack-copilot-agent/packages/profiles/hosted"
-	"github.com/noknov/slack-copilot-agent/packages/prompts"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/session"
 	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/conversation"
@@ -38,7 +36,6 @@ type Service struct {
 	Prompt           safety.PromptPolicy
 	Redactor         safety.Redactor
 	UserPrefs        userprefs.Store
-	Format           slackconversation.TextFormatter
 	Workspace        string
 	Redis            *redisclient.Client
 	PodID            string
@@ -47,6 +44,7 @@ type Service struct {
 	ModelFor         func(slackconversation.Request) string
 	Multimodal       func(string) bool
 	WebSearchEnabled func(string) bool
+	Progress         *ProgressSummarizer
 	Locker           session.Locker
 	Queue            QueueStore
 
@@ -115,9 +113,6 @@ func (r *eventRouter) Publish(_ context.Context, event transcript.Event) {
 		return
 	}
 	stream.Lifecycle(event)
-	if event.Type == transcript.ModelStreamed && event.Model != nil && event.Model.Type == model.StreamTextDelta && event.Model.Text != "" {
-		stream.Write(event.Model.Text)
-	}
 	if event.Type == transcript.AssistantMessage && event.Message != nil {
 		stream.CommitStep(*event.Message)
 	}
@@ -217,7 +212,7 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 		turnID = fmt.Sprintf("slack-%d", time.Now().UnixNano())
 	}
 	stream := newSlackStream(runCtx, s.Messenger, req)
-	stream.sanitize = s.Redactor.Sanitize
+	stream.progress = s.Progress
 	s.router.set(turnID, stream)
 	defer s.router.set(turnID, nil)
 	stream.Start()
@@ -225,7 +220,6 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	threadContext := s.Messenger.ThreadContext(runCtx, req.Channel, req.ThreadTS, 0)
 	fragments := []prompt.Fragment{
 		{ID: "hosted-core", Version: "1", Layer: prompt.LayerCore, Content: s.Prompt.SystemPrompt()},
-		{ID: "slack-progress", Version: "1", Layer: prompt.LayerProduct, Content: prompts.ToolStatus("instruction", defaultStatusInstruction)},
 		{ID: "user-rules", Layer: prompt.LayerUser, Content: userprefs.RulesPrompt(runCtx, s.UserPrefs, req.UserID)},
 		{ID: "user-skills", Layer: prompt.LayerSkill, Content: userprefs.SkillsMetadataPrompt(runCtx, s.UserPrefs, req.UserID)},
 	}
@@ -250,9 +244,6 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 		return
 	}
 	final := s.Redactor.Sanitize(renderAnswer(result.Message))
-	if s.Format != nil {
-		final = s.Format(final)
-	}
 	stream.Complete(final)
 }
 
@@ -475,17 +466,15 @@ func isCancel(text string) bool {
 }
 
 type slackStream struct {
-	ctx            context.Context
-	messenger      slackconversation.Messenger
-	req            slackconversation.Request
-	mu             sync.Mutex
-	ts             string
-	pending        strings.Builder
-	streamed       bool
-	deliveryFailed bool
-	status         slackconversation.ThreadStatusMessenger
-	lastStatus     string
-	sanitize       func(string) string
+	ctx         context.Context
+	messenger   slackconversation.Messenger
+	req         slackconversation.Request
+	mu          sync.Mutex
+	statusMu    sync.Mutex
+	status      slackconversation.ThreadStatusMessenger
+	lastStatus  string
+	statusEpoch uint64
+	progress    *ProgressSummarizer
 }
 
 func newSlackStream(ctx context.Context, messenger slackconversation.Messenger, req slackconversation.Request) *slackStream {
@@ -498,82 +487,23 @@ func (s *slackStream) Start() {
 	}
 	s.status = status
 }
-func (s *slackStream) Write(text string) {
-	s.mu.Lock()
-	s.pending.WriteString(text)
-	s.mu.Unlock()
-}
 func (s *slackStream) CommitStep(message model.Message) {
-	s.mu.Lock()
-	text := s.pending.String()
-	s.pending.Reset()
-	ts := s.ts
-	s.mu.Unlock()
-	if text == "" {
-		text = message.Text()
+	if calls := message.ToolCalls(); len(calls) > 0 {
+		s.ToolStep(calls)
 	}
-	if len(message.ToolCalls()) > 0 {
-		s.StepSummary(text)
-		return
-	}
-	if text == "" {
-		return
-	}
-	if ts == "" {
-		var err error
-		ts, err = s.messenger.StartStream(s.ctx, s.req.Channel, s.req.ThreadTS, s.req.UserID)
-		if err != nil || ts == "" {
-			return
-		}
-		s.mu.Lock()
-		s.ts = ts
-		s.mu.Unlock()
-	}
-	if err := s.messenger.AppendStream(s.ctx, s.req.Channel, ts, []map[string]any{{"type": "markdown_text", "text": text}}); err != nil {
-		log.Printf("Slack answer stream append failed: %v", err)
-		s.mu.Lock()
-		s.deliveryFailed = true
-		s.mu.Unlock()
-		return
-	}
-	s.mu.Lock()
-	s.streamed = true
-	s.mu.Unlock()
 }
 func (s *slackStream) Complete(final string) {
-	s.mu.Lock()
-	ts, streamed, deliveryFailed := s.ts, s.streamed, s.deliveryFailed
-	s.mu.Unlock()
-	if ts != "" {
-		if !streamed && final != "" {
-			if err := s.messenger.AppendStream(context.Background(), s.req.Channel, ts, []map[string]any{{"type": "markdown_text", "text": final}}); err != nil {
-				deliveryFailed = true
-			}
-		}
-		_ = s.messenger.StopStream(context.Background(), s.req.Channel, ts)
-		s.clearStatus()
-		if deliveryFailed && final != "" {
-			_, _ = s.messenger.PostMessage(context.Background(), s.req.Channel, s.req.ThreadTS, final)
-		}
-		return
-	}
 	s.clearStatus()
 	if final != "" {
-		_, _ = s.messenger.PostMessage(context.Background(), s.req.Channel, s.req.ThreadTS, final)
+		_, _ = s.messenger.PostMarkdownMessage(context.Background(), s.req.Channel, s.req.ThreadTS, final)
 	}
 }
 func (s *slackStream) Fail(message string, canceled bool) {
-	s.mu.Lock()
-	ts := s.ts
-	s.mu.Unlock()
 	if canceled {
 		message = "Cancelled this request."
 		if slackconversation.IsCJK(s.req.Text) {
 			message = "已中止本次请求。"
 		}
-	}
-	if ts != "" {
-		_ = s.messenger.StopStream(context.Background(), s.req.Channel, ts)
 	}
 	s.clearStatus()
 	if message != "" {
@@ -583,7 +513,10 @@ func (s *slackStream) Fail(message string, canceled bool) {
 
 func (s *slackStream) clearStatus() {
 	if s.status != nil {
+		s.statusMu.Lock()
+		defer s.statusMu.Unlock()
 		s.mu.Lock()
+		s.statusEpoch++
 		if s.lastStatus == "\x00" {
 			s.mu.Unlock()
 			return

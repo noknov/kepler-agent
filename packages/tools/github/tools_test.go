@@ -36,7 +36,7 @@ func TestDispatchWorkflowTool(t *testing.T) {
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{
 		"workflow":"deploy.yml",
 		"ref":"main",
-		"inputs":{"branch":"main","deploy":true,"count":2}
+		"inputs":{"branch":"main","deploy":"true","count":"2"}
 	}`), registry.Runtime{})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)

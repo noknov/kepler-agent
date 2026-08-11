@@ -28,10 +28,10 @@ func (ReadFileTool) Parallel() bool { return true }
 func (t ReadFileTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"code-read_file",
-		"Read source code from a workspace file. By default, files inside git repos are read from the refreshed remote default branch (origin/HEAD, mt-main/main/master fallback) so investigations are not affected by the server's current checkout branch or a stale local branch. Use source=working_tree only when the user explicitly asks about uncommitted local changes. Results include line numbers and source metadata; cite these lines before making code behavior claims.",
-		registry.ObjectSchema([]string{"path"}, map[string]any{
+		"Read source code from an explicit git ref or from the working tree. Results include line numbers and source metadata; cite these lines before making code behavior claims.",
+		registry.ObjectSchema([]string{"path", "source"}, map[string]any{
 			"path":       map[string]any{"type": "string", "description": "Workspace-relative, root-prefixed, or absolute file path."},
-			"source":     map[string]any{"type": "string", "description": "default_branch (default), working_tree, or a safe git ref such as origin/main or a commit SHA."},
+			"source":     map[string]any{"type": "string", "description": "working_tree or an explicit safe git ref such as origin/main or a commit SHA."},
 			"start_line": map[string]any{"type": "integer", "description": "1-based starting line. Omit unless you already know the relevant range."},
 			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines to return, default 240 and max 1000."},
 		}),
@@ -64,9 +64,13 @@ func (t ReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 
 	source := strings.TrimSpace(args.Source)
 	if source == "" {
-		source = "default_branch"
+		return registry.Result{}, fmt.Errorf("source is required")
 	}
-	if repoDir := findRepoRoot(t.Paths.Roots, filepath.Dir(path)); repoDir != "" && source != "working_tree" {
+	repoDir := findRepoRoot(t.Paths.Roots, filepath.Dir(path))
+	if source != "working_tree" {
+		if repoDir == "" {
+			return registry.Result{}, fmt.Errorf("source %q requires a file inside a git repository", source)
+		}
 		ref, fetchStatus, sourceErr := sourceRef(ctx, repoDir, source, rt)
 		if sourceErr != nil {
 			return registry.Result{}, sourceErr
@@ -87,14 +91,12 @@ func (t ReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 				})
 				return registry.Result{Content: header + applyLineRange(content, args.StartLine, args.MaxLines)}, nil
 			}
-			if source != "default_branch" {
-				return registry.Result{}, gitErr
-			}
 			return registry.Result{}, fmt.Errorf("read %s at %s: %w", filepath.ToSlash(relPath), ref, gitErr)
 		}
+		return registry.Result{}, fmt.Errorf("path %q is outside repository %q", path, repoDir)
 	}
 
-	// Non-git file or git-show failed: read from working tree.
+	// Working-tree access is explicit, including for files outside git repos.
 	file, err := os.Open(path)
 	if err != nil {
 		return registry.Result{}, err
@@ -130,7 +132,7 @@ func (t ReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 		return registry.Result{}, err
 	}
 	header := "[source: working_tree"
-	if repoDir := findRepoRoot(t.Paths.Roots, filepath.Dir(path)); repoDir != "" {
+	if repoDir != "" {
 		header += " branch=" + gitRevParse(ctx, repoDir, "HEAD", "--abbrev-ref")
 	}
 	header += "]\n"
@@ -147,12 +149,12 @@ func (SearchTool) Parallel() bool { return true }
 func (t SearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"code-search",
-		"Search source code using git grep on the refreshed remote default branch by default, falling back to rg for non-git files. Search hits are hints; read the matching file/range with code-read_file before claiming behavior. Use source=working_tree only when investigating uncommitted local changes.",
-		registry.ObjectSchema([]string{"query"}, map[string]any{
+		"Search source code at an explicit git ref or in the working tree. Search hits are hints; read the matching file/range with code-read_file before claiming behavior.",
+		registry.ObjectSchema([]string{"query", "source"}, map[string]any{
 			"query":         map[string]any{"type": "string", "description": "Regex or literal pattern to search for."},
 			"path":          map[string]any{"type": "string", "description": "Optional workspace-relative directory or file to search."},
 			"glob":          map[string]any{"type": "string", "description": "Optional file glob, for example **/*.go."},
-			"source":        map[string]any{"type": "string", "description": "default_branch (default), working_tree, or a safe git ref such as origin/main or a commit SHA."},
+			"source":        map[string]any{"type": "string", "description": "working_tree or an explicit safe git ref such as origin/main or a commit SHA."},
 			"context_lines": map[string]any{"type": "integer", "description": "Optional lines of context around matches, max 5."},
 			"limit":         map[string]any{"type": "integer", "description": "Maximum matching lines, default 50 and max 200."},
 		}),
@@ -188,7 +190,7 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	}
 	source := strings.TrimSpace(args.Source)
 	if source == "" {
-		source = "default_branch"
+		return registry.Result{}, fmt.Errorf("source is required")
 	}
 	root := args.Path
 	if root == "" && len(t.Paths.Roots) > 0 {
@@ -249,8 +251,11 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 		}
 		return registry.Result{Content: strings.Join(headers, "\n") + "\n\nSearch hits are hints; read matching files before claiming behavior.\n" + strings.Join(lines, "\n")}, nil
 	}
+	if source != "working_tree" {
+		return registry.Result{}, fmt.Errorf("source %q requires a search path containing a git repository", source)
+	}
 
-	// Non-git paths, or explicit working_tree reads, fall back to rg locally.
+	// Working-tree search is explicit and uses rg locally.
 	cmdArgs := []string{"--line-number", "--no-heading", "--color=never"}
 	if args.ContextLines > 0 {
 		cmdArgs = append(cmdArgs, "-C", strconv.Itoa(args.ContextLines))
@@ -282,48 +287,30 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 }
 
 func sourceRef(ctx context.Context, repoDir, source string, rt registry.Runtime) (string, string, error) {
-	fetchStatus := refreshRepo(ctx, repoDir, rt)
-	if source != "" && source != "default_branch" {
-		if !safeGitRef(source) {
-			return "", fetchStatus, fmt.Errorf("invalid git source ref %q", source)
-		}
-		return source, fetchStatus, nil
+	if strings.TrimSpace(source) == "" {
+		return "", "", fmt.Errorf("explicit git source ref is required")
 	}
-	return defaultBranchRef(ctx, repoDir), fetchStatus, nil
+	if err := refreshRepo(ctx, repoDir, rt); err != nil {
+		return "", "", err
+	}
+	fetchStatus := "origin_refs_current_or_recent"
+	if !safeGitRef(source) {
+		return "", fetchStatus, fmt.Errorf("invalid git source ref %q", source)
+	}
+	return source, fetchStatus, nil
 }
 
-func refreshRepo(ctx context.Context, repoDir string, rt registry.Runtime) string {
+func refreshRepo(ctx context.Context, repoDir string, rt registry.Runtime) error {
 	cacheKey := "code-git-fetch\x00" + filepath.Clean(repoDir)
 	if _, ok := rt.Cache.Get(cacheKey); !ok {
 		fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		if err := gitcache.FetchOrigin(fetchCtx, repoDir, gitcache.DefaultFetchTTL); err != nil {
-			status := "refresh_failed_using_cached_refs: " + err.Error()
-			rt.Cache.Set(cacheKey, status)
-			return status
+			return fmt.Errorf("refresh origin refs: %w", err)
 		}
 		rt.Cache.Set(cacheKey, true)
 	}
-	if value, ok := rt.Cache.Get(cacheKey); ok {
-		if text, ok := value.(string); ok && strings.HasPrefix(text, "refresh_failed") {
-			return text
-		}
-	}
-	return "origin_refs_current_or_recent"
-}
-
-func defaultBranchRef(ctx context.Context, repoDir string) string {
-	if out, err := exec.CommandContext(ctx, "git", "-C", repoDir, "--no-optional-locks", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD").Output(); err == nil {
-		if branch := strings.TrimSpace(string(out)); branch != "" {
-			return branch
-		}
-	}
-	for _, branch := range []string{"origin/mt-main", "origin/main", "origin/master"} {
-		if gitRevParse(ctx, repoDir, branch, "--verify", "--quiet") != "" {
-			return branch
-		}
-	}
-	return "origin/main"
+	return nil
 }
 
 func safeGitRef(ref string) bool {
