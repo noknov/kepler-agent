@@ -159,11 +159,10 @@ func TestOpenAICompatibleChatStreamParsesToolCallDeltas(t *testing.T) {
 	}
 }
 
-func TestOpenAICompatibleChatStreamInfersFinishReasonAfterDone(t *testing.T) {
+func TestOpenAICompatibleChatStreamDefaultsFinishReasonAfterCleanEOF(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n"))
-		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer server.Close()
 

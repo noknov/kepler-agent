@@ -154,7 +154,6 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 	var msg Message
 	msg.Role = "assistant"
 	var finishReason string
-	completed := false
 	var usage openAIUsage
 	toolCallsStarted := false
 	// Track tool call completion state for OnToolCallComplete.
@@ -162,7 +161,6 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 
 	err = readSSE(resp.Body, func(ev sseEvent) bool {
 		if ev.Data == "[DONE]" {
-			completed = true
 			return false
 		}
 		var chunk struct {
@@ -248,9 +246,9 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 	if err != nil {
 		return Response{}, err
 	}
-	if completed {
-		finishReason = completedFinishReason(finishReason, msg)
-	}
+	// A clean EOF is a successful HTTP stream completion. [DONE] is an
+	// OpenAI convention, but compatible providers are permitted to omit it.
+	finishReason = completedFinishReason(finishReason, msg)
 	// Emit OnToolCallComplete for all completed tool calls at stream end.
 	if h.OnToolCallComplete != nil {
 		for i, tc := range msg.ToolCalls {
