@@ -18,7 +18,7 @@ func TestIntegrationJSONQueueIsOrderedDeduplicatedAndDrainable(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	key := "test:v2-queue:" + time.Now().UTC().Format("20060102150405.000000000")
+	key := "test:agent-queue:" + time.Now().UTC().Format("20060102150405.000000000")
 	defer client.Del(context.Background(), key+":data", key+":order")
 	type item struct {
 		Value string `json:"value"`

@@ -1,11 +1,11 @@
 # Agent harness evaluation
 
-This module compares agent **harnesses**, not native models. Every candidate is configured to use the same model endpoint and model identifier. The evaluator is intentionally independent from `packages/agentv2` and all provider packages: it launches each product as a black-box subprocess, inspects the resulting workspace, and records machine-readable evidence.
+This module compares agent **harnesses**, not native models. Every candidate is configured to use the same model endpoint and model identifier. The evaluator is intentionally independent from `packages/agent` and all provider packages: it launches each product as a black-box subprocess, inspects the resulting workspace, and records machine-readable evidence.
 
 ## What is implemented
 
 - A deterministic local task runner with isolated workspace copies, wall-clock limits, command/test grading, JSONL case records, and an aggregate JSON report.
-- Command adapters for slack-copilot v2, Codex CLI, Claude Code, Pi, and OpenCode. Commands are data, so version-specific flags can be changed without changing the evaluator.
+- Command adapters for slack-copilot, Codex CLI, Claude Code, Pi, and OpenCode. Commands are data, so version-specific flags can be changed without changing the evaluator.
 - A shared gateway contract (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, and one model ID) and a LiteLLM deployment example exposing both OpenAI-compatible and Anthropic-compatible routes.
 - Importers for Terminal-Bench/Harbor-style task directories and a neutral task manifest for repository-specific YouTrack/PR cases later.
 

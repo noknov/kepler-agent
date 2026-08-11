@@ -213,21 +213,6 @@
       "name": "Skill name from the Available skills list."
     }
   },
-  "delegate-run": {
-    "description": "Run a focused delegate for bounded analysis using only supplied context. Delegates cannot call tools or read files directly; they analyze only what you provide.",
-    "parameters": {
-      "profile": "Delegate profile name.",
-      "task": "Specific question or analysis task for the delegate.",
-      "context": "Evidence and context the delegate may use. Include relevant code, logs, or tool output."
-    }
-  },
-  "explore-code": {
-    "description": "Launch a read-only code exploration sub-agent for genuinely broad investigations spanning multiple services or unclear ownership. Do NOT use for simple lookups (feature flags, config checks, single-function reads, API routes) — use code-search/code-read_file directly instead. The sub-agent runs in isolation and returns a summarized report which may lose nuance; always verify critical details from its report with targeted reads before citing them.",
-    "parameters": {
-      "task": "Specific investigation question for the read-only explorer.",
-      "boundaries": "Known repo/root, branch/ref, service, feature surface, candidate files, or constraints. Include what has already been ruled out when useful."
-    }
-  },
   "knowledge-runbook_search": {
     "description": "Search local runbooks for operational procedures, ownership, known alerts, dashboards, and escalation paths.",
     "parameters": {

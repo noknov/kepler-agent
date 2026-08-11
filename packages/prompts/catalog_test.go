@@ -26,9 +26,6 @@ func TestLoadDirAppendsSystemPromptAndOverridesStructuredPrompts(t *testing.T) {
 	}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "delegates.json"), []byte(`{"code":"delegate override"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	if err := LoadDirs(public, dir); err != nil {
 		t.Fatal(err)
@@ -44,14 +41,11 @@ func TestLoadDirAppendsSystemPromptAndOverridesStructuredPrompts(t *testing.T) {
 	if got := ParamDescription("demo-tool", "query", "fallback"); got != "query override" {
 		t.Fatalf("ParamDescription() = %q", got)
 	}
-	if got := Delegate("code", "fallback"); got != "delegate override" {
-		t.Fatalf("Delegate() = %q", got)
-	}
 }
 
 func TestAgentPromptAppendsToSystemPromptWithinSameDir(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "system.md"), []byte("legacy system\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "system.md"), []byte("base system\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "agent.md"), []byte("agent system\n"), 0o644); err != nil {
@@ -63,7 +57,7 @@ func TestAgentPromptAppendsToSystemPromptWithinSameDir(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = LoadDirs(PublicDir) })
 
-	if got := System("fallback"); got != "legacy system\n\nagent system" {
+	if got := System("fallback"); got != "base system\n\nagent system" {
 		t.Fatalf("System() = %q", got)
 	}
 }
@@ -132,7 +126,6 @@ func TestPublicPromptFilesAreRuntimeContent(t *testing.T) {
 func TestRuntimeJSONOverridesPromptSections(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "runtime.json"), []byte(`{
-		"runner": {"empty_response_retry": "retry from runtime"},
 		"texts": {"rules_header": "Rules from runtime:\n"},
 		"app_messages": {"empty_mention": "hello"}
 	}`), 0o644); err != nil {
@@ -144,9 +137,6 @@ func TestRuntimeJSONOverridesPromptSections(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = LoadDirs(PublicDir) })
 
-	if got := RunnerPrompt("empty_response_retry", "fallback"); got != "retry from runtime" {
-		t.Fatalf("RunnerPrompt() = %q", got)
-	}
 	if got := PromptText("rules_header", "fallback"); got != "Rules from runtime:\n" {
 		t.Fatalf("PromptText() = %q", got)
 	}

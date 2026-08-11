@@ -1,5 +1,6 @@
 {
   "default": "Thinking...",
+  "instruction": "When an assistant turn calls one or more tools, include one short plain-language progress line in that same turn's text content. Describe the concrete action and target from the planned calls, such as \"Reading the alert runbook\" or \"查询 payment 服务日志\". Match the user's language, use at most 20 words or 20 Chinese characters, and output only that progress line before the structured tool calls. Do not mention tool names, function names, API paths, internal identifiers, or results you have not obtained. This line is transient Slack status, not part of the final answer.",
   "thinking": "Thinking...",
   "thinking_zh": "思考中...",
   "context": "Reviewing context...",

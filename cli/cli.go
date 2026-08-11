@@ -17,16 +17,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/local"
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/localtools"
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/mcptools"
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/model"
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/prompt"
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/providers"
-	agentruntime "github.com/noknov/slack-copilot-agent/packages/agentv2/runtime"
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/skills"
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/tool"
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/transcript"
+	"github.com/noknov/slack-copilot-agent/packages/agent/local"
+	"github.com/noknov/slack-copilot-agent/packages/agent/localtools"
+	"github.com/noknov/slack-copilot-agent/packages/agent/mcptools"
+	"github.com/noknov/slack-copilot-agent/packages/agent/model"
+	"github.com/noknov/slack-copilot-agent/packages/agent/prompt"
+	"github.com/noknov/slack-copilot-agent/packages/agent/providers"
+	agentruntime "github.com/noknov/slack-copilot-agent/packages/agent/runtime"
+	"github.com/noknov/slack-copilot-agent/packages/agent/skills"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
 	"github.com/noknov/slack-copilot-agent/packages/infra/telemetry"
 	"github.com/noknov/slack-copilot-agent/packages/mcp"
 )
@@ -252,7 +252,7 @@ func modelClient(config local.Config) (model.Client, error) {
 
 func prompts(config local.Config, root, skillPrompt string) ([]prompt.Fragment, error) {
 	fragments := []prompt.Fragment{
-		{ID: "core-v2", Version: "2", Layer: prompt.LayerCore, Content: "You are a coding agent. Inspect evidence before making claims. Use tools to complete the user request, verify material changes, preserve unrelated work, and report limitations precisely."},
+		{ID: "cli-core", Version: "1", Layer: prompt.LayerCore, Content: "You are a coding agent. Inspect evidence before making claims. Use tools to complete the user request, verify material changes, preserve unrelated work, and report limitations precisely."},
 		{ID: "local-product", Version: "2", Layer: prompt.LayerProduct, Content: "You are running locally. Filesystem writes must stay within the workspace. Shell network access requires explicit approval. Never seek or expose credentials."},
 		{ID: "local-environment", Layer: prompt.LayerEnvironment, Content: "Workspace: " + root},
 	}
@@ -298,7 +298,7 @@ func interactiveLoop(ctx context.Context, runner *agentruntime.Runtime, session,
 	lines := make(chan string)
 	scanErrors := make(chan error, 1)
 	go scanLines(os.Stdin, lines, scanErrors)
-	fmt.Fprintf(os.Stderr, "slack-copilot v2 · session %s · %s mode\n", session, routing)
+	fmt.Fprintf(os.Stderr, "slack-copilot · session %s · %s mode\n", session, routing)
 	var queued []string
 	inputClosed := false
 	for {

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/hosted"
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/runtime"
+	"github.com/noknov/slack-copilot-agent/packages/agent/hosted"
+	"github.com/noknov/slack-copilot-agent/packages/agent/runtime"
 	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/slackconversation"

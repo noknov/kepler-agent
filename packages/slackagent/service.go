@@ -12,12 +12,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/hosted"
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/model"
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/prompt"
-	v2runtime "github.com/noknov/slack-copilot-agent/packages/agentv2/runtime"
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/transcript"
+	"github.com/noknov/slack-copilot-agent/packages/agent/hosted"
+	"github.com/noknov/slack-copilot-agent/packages/agent/model"
+	"github.com/noknov/slack-copilot-agent/packages/agent/prompt"
+	agentruntime "github.com/noknov/slack-copilot-agent/packages/agent/runtime"
+	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
 	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
+	"github.com/noknov/slack-copilot-agent/packages/prompts"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/session"
 	"github.com/noknov/slack-copilot-agent/packages/slackconversation"
@@ -44,6 +45,7 @@ type Service struct {
 	Lifecycle        context.Context
 	ModeForUser      func(string) ConversationMode
 	ModelFor         func(slackconversation.Request) string
+	Multimodal       func(string) bool
 	WebSearchEnabled func(string) bool
 	Locker           session.Locker
 	Queue            QueueStore
@@ -67,11 +69,11 @@ func (q RedisQueue) Enqueue(ctx context.Context, sessionID string, request slack
 	if strings.TrimSpace(request.EventID) == "" {
 		request.EventID = fmt.Sprintf("queued-%d", time.Now().UnixNano())
 	}
-	return q.Client.EnqueueJSON(ctx, "queue:v2:"+sessionID, request.EventID, request, q.TTL)
+	return q.Client.EnqueueJSON(ctx, "agent:queue:"+sessionID, request.EventID, request, q.TTL)
 }
 
 func (q RedisQueue) Drain(ctx context.Context, sessionID string) ([]slackconversation.Request, error) {
-	values, err := q.Client.DrainJSONQueue(ctx, "queue:v2:"+sessionID)
+	values, err := q.Client.DrainJSONQueue(ctx, "agent:queue:"+sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +90,7 @@ func (q RedisQueue) Drain(ctx context.Context, sessionID string) ([]slackconvers
 type activeRun struct {
 	userID   string
 	cancel   context.CancelFunc
-	steering *v2runtime.InputBuffer
+	steering *agentruntime.InputBuffer
 	mu       sync.Mutex
 	queued   []slackconversation.Request
 }
@@ -117,7 +119,7 @@ func (r *eventRouter) Publish(_ context.Context, event transcript.Event) {
 		stream.Write(event.Model.Text)
 	}
 	if event.Type == transcript.AssistantMessage && event.Message != nil {
-		stream.CommitStep(len(event.Message.ToolCalls()) > 0)
+		stream.CommitStep(*event.Message)
 	}
 }
 
@@ -135,7 +137,19 @@ func (s *Service) HandleMention(ctx context.Context, req slackconversation.Reque
 	return s.handle(ctx, req)
 }
 func (s *Service) HandleReply(ctx context.Context, req slackconversation.Request) bool {
-	return s.handle(ctx, req)
+	if s.Messenger == nil || s.Agent.Runtime == nil {
+		return false
+	}
+	sessionID := session.ID(req.Channel, req.ThreadTS)
+	if s.controlActive(sessionID, req) {
+		return true
+	}
+	waiting, err := s.Agent.Runtime.WaitingForInput(ctx, sessionID, req.UserID)
+	if err != nil || !waiting {
+		return false
+	}
+	s.run(ctx, sessionID, req)
+	return true
 }
 
 func (s *Service) handle(ctx context.Context, req slackconversation.Request) bool {
@@ -173,7 +187,7 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	if queued := s.drainQueue(sessionID, nil); len(queued) > 0 {
 		req = combine(append(queued, req))
 	}
-	active := &activeRun{userID: req.UserID, cancel: cancel, steering: &v2runtime.InputBuffer{}}
+	active := &activeRun{userID: req.UserID, cancel: cancel, steering: &agentruntime.InputBuffer{}}
 	if existing := s.register(sessionID, active); existing != nil {
 		cancel()
 		if isCancel(req.Text) {
@@ -203,13 +217,15 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 		turnID = fmt.Sprintf("slack-%d", time.Now().UnixNano())
 	}
 	stream := newSlackStream(runCtx, s.Messenger, req)
+	stream.sanitize = s.Redactor.Sanitize
 	s.router.set(turnID, stream)
 	defer s.router.set(turnID, nil)
 	stream.Start()
 
 	threadContext := s.Messenger.ThreadContext(runCtx, req.Channel, req.ThreadTS, 0)
 	fragments := []prompt.Fragment{
-		{ID: "hosted-core", Version: "v2", Layer: prompt.LayerCore, Content: s.Prompt.SystemPrompt()},
+		{ID: "hosted-core", Version: "1", Layer: prompt.LayerCore, Content: s.Prompt.SystemPrompt()},
+		{ID: "slack-progress", Version: "1", Layer: prompt.LayerProduct, Content: prompts.ToolStatus("instruction", defaultStatusInstruction)},
 		{ID: "user-rules", Layer: prompt.LayerUser, Content: userprefs.RulesPrompt(runCtx, s.UserPrefs, req.UserID)},
 		{ID: "user-skills", Layer: prompt.LayerSkill, Content: userprefs.SkillsMetadataPrompt(runCtx, s.UserPrefs, req.UserID)},
 	}
@@ -224,7 +240,11 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	if s.WebSearchEnabled != nil && !s.WebSearchEnabled(req.UserID) {
 		webSearch = "disabled"
 	}
-	result, err := s.Agent.Run(runCtx, hosted.Request{SessionID: sessionID, TurnID: turnID, UserID: req.UserID, Workspace: s.Workspace, Input: req.Message(), Model: modelName, Steering: active.steering, Prompt: fragments, ScopeValues: map[string]string{"channel": req.Channel, "thread_ts": req.ThreadTS, "web_search": webSearch}})
+	input := req.Message()
+	if s.Multimodal != nil && !s.Multimodal(modelName) {
+		input = withoutUnsupportedImages(input, slackconversation.IsCJK(req.Text))
+	}
+	result, err := s.Agent.Run(runCtx, hosted.Request{SessionID: sessionID, TurnID: turnID, UserID: req.UserID, Workspace: s.Workspace, Input: input, Model: modelName, Steering: active.steering, Prompt: fragments, ScopeValues: map[string]string{"channel": req.Channel, "thread_ts": req.ThreadTS, "web_search": webSearch}})
 	if err != nil {
 		stream.Fail(s.Redactor.Sanitize(err.Error()), errors.Is(err, context.Canceled))
 		return
@@ -258,6 +278,28 @@ func renderAnswer(message model.Message) string {
 	return answer + "\n\nSources: " + strings.Join(sources, ", ")
 }
 
+func withoutUnsupportedImages(message model.Message, cjk bool) model.Message {
+	content := make([]model.Content, 0, len(message.Content)+1)
+	removed := 0
+	for _, block := range message.Content {
+		if block.Type == model.ContentImage {
+			removed++
+			continue
+		}
+		content = append(content, block)
+	}
+	if removed == 0 {
+		return message
+	}
+	note := fmt.Sprintf("[%d image attachment(s) omitted because the selected model does not support images.]", removed)
+	if cjk {
+		note = fmt.Sprintf("[已省略 %d 个图片附件：当前选择的模型不支持图片。]", removed)
+	}
+	content = append(content, model.Content{Type: model.ContentText, Text: note})
+	message.Content = content
+	return message
+}
+
 func (s *Service) mode(userID string) ConversationMode {
 	if s.ModeForUser != nil {
 		if mode := s.ModeForUser(userID); mode == ModeQueue {
@@ -286,7 +328,7 @@ func (s *Service) controlActive(sessionID string, req slackconversation.Request)
 	if s.Redis == nil || strings.TrimSpace(req.ThreadTS) == "" {
 		return false
 	}
-	owner, err := s.Redis.Get(context.Background(), "active:v2:"+sessionID)
+	owner, err := s.Redis.Get(context.Background(), "agent:active:"+sessionID)
 	if err != nil || owner == "" || owner == s.PodID {
 		return false
 	}
@@ -302,7 +344,7 @@ func (s *Service) controlActive(sessionID string, req slackconversation.Request)
 		}
 		queuedPersisted = true
 	}
-	count, err := s.Redis.PublishCount(context.Background(), "pod:control:v2:"+owner, string(payload))
+	count, err := s.Redis.PublishCount(context.Background(), "agent:control:"+owner, string(payload))
 	return queuedPersisted || (err == nil && count > 0)
 }
 
@@ -314,7 +356,7 @@ func (s *Service) register(sessionID string, run *activeRun) *activeRun {
 	}
 	s.active[sessionID] = run
 	if s.Redis != nil {
-		_ = s.Redis.Set(context.Background(), "active:v2:"+sessionID, s.PodID, 35*time.Minute)
+		_ = s.Redis.Set(context.Background(), "agent:active:"+sessionID, s.PodID, 35*time.Minute)
 	}
 	return nil
 }
@@ -326,7 +368,7 @@ func (s *Service) unregister(sessionID string, run *activeRun) {
 		delete(s.active, sessionID)
 	}
 	if s.Redis != nil {
-		_ = s.Redis.Del(context.Background(), "active:v2:"+sessionID)
+		_ = s.Redis.Del(context.Background(), "agent:active:"+sessionID)
 	}
 }
 
@@ -340,7 +382,7 @@ func (s *Service) StartControlSubscriber(ctx context.Context) {
 	if s.Redis == nil || s.PodID == "" {
 		return
 	}
-	sub := s.Redis.Subscribe(ctx, "pod:control:v2:"+s.PodID)
+	sub := s.Redis.Subscribe(ctx, "agent:control:"+s.PodID)
 	defer sub.Close()
 	for {
 		select {
@@ -433,15 +475,17 @@ func isCancel(text string) bool {
 }
 
 type slackStream struct {
-	ctx        context.Context
-	messenger  slackconversation.Messenger
-	req        slackconversation.Request
-	mu         sync.Mutex
-	ts         string
-	pending    strings.Builder
-	streamed   bool
-	status     slackconversation.ThreadStatusMessenger
-	lastStatus string
+	ctx            context.Context
+	messenger      slackconversation.Messenger
+	req            slackconversation.Request
+	mu             sync.Mutex
+	ts             string
+	pending        strings.Builder
+	streamed       bool
+	deliveryFailed bool
+	status         slackconversation.ThreadStatusMessenger
+	lastStatus     string
+	sanitize       func(string) string
 }
 
 func newSlackStream(ctx context.Context, messenger slackconversation.Messenger, req slackconversation.Request) *slackStream {
@@ -459,13 +503,20 @@ func (s *slackStream) Write(text string) {
 	s.pending.WriteString(text)
 	s.mu.Unlock()
 }
-func (s *slackStream) CommitStep(hasToolCalls bool) {
+func (s *slackStream) CommitStep(message model.Message) {
 	s.mu.Lock()
 	text := s.pending.String()
 	s.pending.Reset()
 	ts := s.ts
 	s.mu.Unlock()
-	if hasToolCalls || text == "" {
+	if text == "" {
+		text = message.Text()
+	}
+	if len(message.ToolCalls()) > 0 {
+		s.StepSummary(text)
+		return
+	}
+	if text == "" {
 		return
 	}
 	if ts == "" {
@@ -479,7 +530,10 @@ func (s *slackStream) CommitStep(hasToolCalls bool) {
 		s.mu.Unlock()
 	}
 	if err := s.messenger.AppendStream(s.ctx, s.req.Channel, ts, []map[string]any{{"type": "markdown_text", "text": text}}); err != nil {
-		log.Printf("v2 Slack answer stream append failed: %v", err)
+		log.Printf("Slack answer stream append failed: %v", err)
+		s.mu.Lock()
+		s.deliveryFailed = true
+		s.mu.Unlock()
 		return
 	}
 	s.mu.Lock()
@@ -488,14 +542,19 @@ func (s *slackStream) CommitStep(hasToolCalls bool) {
 }
 func (s *slackStream) Complete(final string) {
 	s.mu.Lock()
-	ts, streamed := s.ts, s.streamed
+	ts, streamed, deliveryFailed := s.ts, s.streamed, s.deliveryFailed
 	s.mu.Unlock()
 	if ts != "" {
 		if !streamed && final != "" {
-			_ = s.messenger.AppendStream(context.Background(), s.req.Channel, ts, []map[string]any{{"type": "markdown_text", "text": final}})
+			if err := s.messenger.AppendStream(context.Background(), s.req.Channel, ts, []map[string]any{{"type": "markdown_text", "text": final}}); err != nil {
+				deliveryFailed = true
+			}
 		}
 		_ = s.messenger.StopStream(context.Background(), s.req.Channel, ts)
 		s.clearStatus()
+		if deliveryFailed && final != "" {
+			_, _ = s.messenger.PostMessage(context.Background(), s.req.Channel, s.req.ThreadTS, final)
+		}
 		return
 	}
 	s.clearStatus()

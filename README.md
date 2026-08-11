@@ -138,7 +138,7 @@ model gateway before drawing comparisons. See [evaluation protocol](evals/README
 ## Repository map
 
 ```text
-packages/agentv2/          Shared harness and local/hosted profiles
+packages/agent/          Shared harness and local/hosted profiles
 cli/                       Local CLI and example config
 evals/                     Independent harness evaluation and gateway example
 gateway/                   Slack HTTP ingress
@@ -186,6 +186,6 @@ See [operations](docs/operations.md) for deployment and failure semantics.
 make check
 ```
 
-This runs formatting checks, vet, the complete v2 test suite, all binary
+This runs formatting checks, vet, the complete agent test suite, all binary
 builds, and an evaluation dry-run. Some existing HTTP tests bind a local
 loopback port and therefore need that permission in restricted environments.

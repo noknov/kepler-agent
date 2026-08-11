@@ -1,6 +1,6 @@
 # Shared Agent Runtime
 
-The hosted Slack agent and local CLI use `packages/agentv2/runtime` as their
+The hosted Slack agent and local CLI use `packages/agent/runtime` as their
 only model/tool loop. Product profiles inject storage, policy, tools, model
 providers, and presentation; they do not implement another loop.
 
@@ -16,9 +16,21 @@ stream events. Web citations remain structured provenance on content blocks.
 Prompts decide when and how to cite; presentation adapters decide how to render
 the provider-supplied citation records. Dynamic status uses deterministic
 runtime and tool lifecycle events, so it does not require a second status model.
-Slack projects turn, context, compaction, retry, approval, tool, and terminal
-events into localized status text through the prompt catalog; status display is
-not conversation state and is not replayed into model context.
+For tool steps, the primary model includes a short action-and-target narration
+in the same tool-call turn; Slack projects that assistant event into transient
+`loading_messages`. Turn, context, compaction, retry, approval, tool, and
+terminal events provide lifecycle states. If a tool-call turn has no narration,
+Slack keeps the existing localized `Thinking...` state; it never substitutes a
+tool name or a synthetic tool-status fallback. Status display is not
+conversation state beyond the canonical assistant event.
+
+The current loop preserves the product-critical behavior from v1 without its
+heuristic repair layers: only the owner of a `pending_input` turn can continue
+it with an unmentioned thread reply; unsupported image parts are removed before
+provider dispatch; parallel tool results share an aggregate inline budget; an
+empty response is retried; and reaching the tool-step limit triggers one final,
+tool-free synthesis pass. Slack falls back to a normal thread message if final
+stream delivery fails.
 
 Hosted capability policy is authoritative and non-interactive. Local tools use
 the workspace sandbox and scoped approvals. TTS is an optional external-write

@@ -159,8 +159,10 @@ OPENCODE_GO_PROTOCOL=openai
 ## Secondary Model
 
 The optional secondary model is used for compact summaries. Dynamic status is
-a deterministic projection of runtime/tool lifecycle events and never invokes
-a second model.
+a projection of runtime lifecycle and primary-model assistant events. The
+primary model writes the current-step summary in the same tool-call turn, so
+status never invokes a second model. When that summary is absent, the existing
+localized thinking state remains unchanged.
 
 ```bash
 SECONDARY_PROVIDER=opencode-zen

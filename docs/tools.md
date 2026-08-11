@@ -85,12 +85,11 @@ Final Slack answers append a concise evidence section when the turn used
 | `slack-file_search` | Search a large uploaded Slack file |
 | `slack-json_analyze` | Structurally analyze uploaded JSON |
 
-## Agent Control
+## Agent Skills
 
 | Tool | Description |
 |---|---|
 | `skills-load` | Load full instructions for a named skill |
-| `delegate-run` | Run a focused sub-agent for bounded analysis |
 
 ## Browser Automation
 
