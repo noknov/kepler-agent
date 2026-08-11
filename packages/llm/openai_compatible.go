@@ -55,7 +55,7 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, req Request) (Respons
 	}
 	return Response{
 		Message:      parsed.Choices[0].Message,
-		FinishReason: completedFinishReason(parsed.Choices[0].FinishReason, parsed.Choices[0].Message),
+		FinishReason: parsed.Choices[0].FinishReason,
 		Usage:        parsed.Usage.toUsage(),
 		Raw:          data,
 	}, nil
@@ -238,7 +238,7 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 				call.Function.Name = tc.Function.Name
 			}
 			if tc.Function.Arguments != "" {
-				call.Function.Arguments = mergeToolArguments(call.Function.Arguments, tc.Function.Arguments)
+				call.Function.Arguments += tc.Function.Arguments
 			}
 		}
 		if chunk.Choices[0].FinishReason != nil {
@@ -251,7 +251,7 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 	}
 	// A clean EOF is a successful HTTP stream completion. [DONE] is an
 	// OpenAI convention, but compatible providers are permitted to omit it.
-	finishReason = completedFinishReason(finishReason, msg)
+	finishReason = completedOpenAICompatibleFinishReason(finishReason, msg)
 	// Emit OnToolCallComplete for all completed tool calls at stream end.
 	if h.OnToolCallComplete != nil {
 		for i, tc := range msg.ToolCalls {
@@ -268,14 +268,16 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 	}, nil
 }
 
-// mergeToolArguments accepts both OpenAI delta fragments and the cumulative
-// argument snapshots emitted by some OpenAI-compatible providers. A cumulative
-// snapshot has the previous value as its prefix; other updates are fragments.
-func mergeToolArguments(previous, update string) string {
-	if previous == "" || strings.HasPrefix(update, previous) {
-		return update
+// completedOpenAICompatibleFinishReason normalizes providers that terminate a
+// successfully read chat-completions stream without a final finish_reason.
+func completedOpenAICompatibleFinishReason(reason string, message Message) string {
+	if strings.TrimSpace(reason) != "" {
+		return reason
 	}
-	return previous + update
+	if len(message.ToolCalls) > 0 {
+		return "tool_calls"
+	}
+	return "stop"
 }
 
 func (c *OpenAICompatibleClient) setHeaders(httpReq *http.Request) {

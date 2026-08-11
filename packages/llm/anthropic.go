@@ -95,7 +95,7 @@ func (c *AnthropicClient) Chat(ctx context.Context, req Request) (Response, erro
 
 	return Response{
 		Message:      message,
-		FinishReason: completedFinishReason(parsed.StopReason, message),
+		FinishReason: parsed.StopReason,
 		Usage:        anthropicUsage(parsed),
 		Raw:          data,
 	}, nil
@@ -148,7 +148,6 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 	var msg Message
 	msg.Role = "assistant"
 	var stopReason string
-	completed := false
 	var usage struct {
 		InputTokens              int
 		OutputTokens             int
@@ -279,16 +278,12 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 				}
 			}
 		case "message_stop":
-			completed = true
 			return false
 		}
 		return true
 	})
 	if err != nil {
 		return Response{}, err
-	}
-	if completed {
-		stopReason = completedFinishReason(stopReason, msg)
 	}
 	return Response{
 		Message:      msg,
