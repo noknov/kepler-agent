@@ -31,14 +31,16 @@ const (
 )
 
 type Descriptor struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"input_schema"`
-	Effects     []Effect        `json:"effects,omitempty"`
-	Exposure    Exposure        `json:"exposure,omitempty"`
-	Parallel    bool            `json:"parallel,omitempty"`
-	Timeout     time.Duration   `json:"timeout,omitempty"`
-	Tags        []string        `json:"tags,omitempty"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description"`
+	InputSchema  json.RawMessage `json:"input_schema"`
+	Effects      []Effect        `json:"effects,omitempty"`
+	Exposure     Exposure        `json:"exposure,omitempty"`
+	Parallel     bool            `json:"parallel,omitempty"`
+	Timeout      time.Duration   `json:"timeout,omitempty"`
+	Tags         []string        `json:"tags,omitempty"`
+	Dependencies []string        `json:"dependencies,omitempty"`
+	Surfaces     []string        `json:"surfaces,omitempty"`
 }
 
 func (d Descriptor) Definition() model.ToolDefinition {
@@ -61,13 +63,14 @@ type Call struct {
 }
 
 type Result struct {
-	Content   []model.Content `json:"content,omitempty"`
-	IsError   bool            `json:"is_error,omitempty"`
-	ErrorCode string          `json:"error_code,omitempty"`
-	Retryable bool            `json:"retryable,omitempty"`
-	Metadata  map[string]any  `json:"metadata,omitempty"`
-	Truncated bool            `json:"truncated,omitempty"`
-	Spill     *model.Artifact `json:"spill,omitempty"`
+	Content        []model.Content `json:"content,omitempty"`
+	IsError        bool            `json:"is_error,omitempty"`
+	ErrorCode      string          `json:"error_code,omitempty"`
+	Retryable      bool            `json:"retryable,omitempty"`
+	Metadata       map[string]any  `json:"metadata,omitempty"`
+	Truncated      bool            `json:"truncated,omitempty"`
+	Spill          *model.Artifact `json:"spill,omitempty"`
+	NeedsUserInput bool            `json:"needs_user_input,omitempty"`
 }
 
 func TextResult(value string) Result {
@@ -77,6 +80,13 @@ func TextResult(value string) Result {
 type Tool interface {
 	Descriptor() Descriptor
 	Execute(ctx context.Context, call Call) (Result, error)
+}
+
+// TurnLifecycle lets an adapter release turn-scoped state after every exit
+// path. Implementations must be idempotent because a catalog may contain
+// multiple tools backed by the same adapter.
+type TurnLifecycle interface {
+	EndTurn(sessionID, turnID string)
 }
 
 type DecisionType string
@@ -219,4 +229,18 @@ func (c *Catalog) Descriptors() []Descriptor {
 	}
 	sort.Slice(descriptors, func(i, j int) bool { return descriptors[i].Name < descriptors[j].Name })
 	return descriptors
+}
+
+func (c *Catalog) EndTurn(sessionID, turnID string) {
+	c.mu.RLock()
+	items := make([]Tool, 0, len(c.tools))
+	for _, item := range c.tools {
+		items = append(items, item)
+	}
+	c.mu.RUnlock()
+	for _, item := range items {
+		if lifecycle, ok := item.(TurnLifecycle); ok {
+			lifecycle.EndTurn(sessionID, turnID)
+		}
+	}
 }

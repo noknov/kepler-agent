@@ -6,6 +6,20 @@
       "prompt": "Fix the palindrome implementation. Inspect the repository, make the smallest correct change, and run the tests.",
       "test": ["go", "test", "./..."],
       "timeout_seconds": 300
+    },
+    {
+      "id": "go-sort-bug",
+      "fixture": "../../benchmarks/fixtures/go-sort-bug",
+      "prompt": "Fix StableUnique so it removes duplicates while preserving first-seen order. Run the tests.",
+      "test": ["go", "test", "./..."],
+      "timeout_seconds": 300
+    },
+    {
+      "id": "python-slug-bug",
+      "fixture": "../../benchmarks/fixtures/python-slug-bug",
+      "prompt": "Fix slugify according to the tests. Keep the implementation small and run the test suite.",
+      "test": ["python3", "-m", "unittest", "-v"],
+      "timeout_seconds": 300
     }
   ]
 }

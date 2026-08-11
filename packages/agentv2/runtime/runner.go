@@ -31,9 +31,9 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	}
 	request.Scope.SessionID = request.SessionID
 	request.Scope.TurnID = request.TurnID
-	lock := r.sessionLock(request.SessionID)
-	lock.Lock()
-	defer lock.Unlock()
+	unlock := r.lockSession(request.SessionID)
+	defer unlock()
+	defer r.deps.Tools.EndTurn(request.SessionID, request.TurnID)
 
 	result := TurnResult{SessionID: request.SessionID, TurnID: request.TurnID}
 	events, err := r.deps.Transcript.Load(ctx, request.SessionID, 0)
@@ -114,14 +114,17 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 			result.Message = response.Message
 			return r.finishTurn(ctx, result, response.Message, TerminationCompleted, nil)
 		}
-		looped, err := r.executeTools(ctx, request, calls, repeated)
+		outcome, err := r.executeTools(ctx, request, calls, repeated)
 		if errors.Is(err, errPendingApproval) {
 			return r.finishTurn(ctx, result, response.Message, TerminationPendingApproval, err)
 		}
 		if err != nil {
 			return r.failTurn(ctx, result, err)
 		}
-		if looped {
+		if outcome.pending != nil {
+			return r.finishTurn(ctx, result, *outcome.pending, TerminationPendingInput, nil)
+		}
+		if outcome.looped {
 			return r.finishTurn(ctx, result, response.Message, TerminationLoopDetected, errors.New("repeated tool-call loop detected"))
 		}
 	}
@@ -165,7 +168,7 @@ func (r *Runtime) generate(ctx context.Context, turn TurnRequest, messages []mod
 	}
 	request := model.Request{
 		Model: modelName, Messages: messages, Tools: r.deps.Tools.ActiveDefinitions(turn.SessionID),
-		ReasoningEffort: r.config.ReasoningEffort, MaxOutputTokens: r.config.MaxOutputTokens,
+		ReasoningEffort: r.config.ReasoningEffort, Temperature: r.config.Temperature, MaxOutputTokens: r.config.MaxOutputTokens,
 		Metadata: map[string]string{"session_id": turn.SessionID, "turn_id": turn.TurnID},
 	}
 	var lastErr error
@@ -187,6 +190,10 @@ func (r *Runtime) generate(ctx context.Context, turn TurnRequest, messages []mod
 		}
 		lastErr = err
 		var typed *model.Error
+		failed, _ := json.Marshal(map[string]any{"attempt": attempt + 1, "model": request.Model, "kind": model.ErrorKindOf(err), "retryable": errors.As(err, &typed) && typed.Retryable})
+		if _, recordErr := r.record(context.WithoutCancel(ctx), transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelFailed, Error: err.Error(), Metadata: failed}); recordErr != nil {
+			return model.Response{}, recordErr
+		}
 		if !errors.As(err, &typed) || !typed.Retryable || attempt == r.config.MaxModelRetries {
 			break
 		}

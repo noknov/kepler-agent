@@ -83,7 +83,6 @@ DEEPSEEK_PROTOCOL=openai
 DEEPSEEK_API_KEY=sk-...
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-flash
-DEEPSEEK_AVAILABLE_MODELS=deepseek-v4-flash,deepseek-v4-pro
 ```
 
 ### MiMo
@@ -107,7 +106,6 @@ LLM_PROVIDER=cliproxyapi
 CLIPROXYAPI_BASE_URL=http://127.0.0.1:8317/v1
 CLIPROXYAPI_API_KEY=your-local-gateway-key
 CLIPROXYAPI_MODEL=kimi/kimi-k2.7-code
-CLIPROXYAPI_AVAILABLE_MODELS=kimi/kimi-k2.7-code,codex/gpt-5-codex
 ```
 
 Run and authenticate CLIProxyAPI locally first. It exposes OpenAI-compatible
@@ -132,6 +130,10 @@ OPENAI_API_KEY=...
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-4o-mini
 ```
+
+Set `LLM_PROTOCOL=responses` for an OpenAI Responses endpoint. `openai`,
+`responses`, and `anthropic` all adapt into the same canonical model contract;
+the local CLI exposes the same choice as `--protocol`.
 
 ### OpenCode
 
@@ -225,13 +227,17 @@ SLACK_EVENT_INBOX_LEASE=16m
 SLACK_EVENT_MAX_ATTEMPTS=5
 SLACK_EVENT_RETRY_BASE=1s
 SLACK_EVENT_RETRY_MAX=1m
-AGENT_MAX_CONCURRENT_RUNS=16
 ```
 
 Workers renew the inbox lease while an event is running. Failed events use
 bounded exponential backoff and move to `dead_letter` after the configured
 attempt limit; malformed payloads are dead-lettered immediately. The inbox
 lease must be greater than the event timeout.
+
+`SLACK_EVENT_WORKERS` is the worker-level execution concurrency limit. Inputs
+that arrive while a session is active are durably queued in Redis and drained
+by the session owner; the PostgreSQL inbox remains the source of truth for
+Slack event delivery.
 
 Services verify the required tables at startup but never execute DDL. Initialize
 a new PostgreSQL database with `schema/postgres.sql` using the administration

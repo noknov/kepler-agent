@@ -66,6 +66,7 @@
             <span class="section-number">00 / V2 ARCHITECTURE &amp; WORK</span>
             <h2>v2：共享 harness，区分产品 profile</h2>
             <p class="lead">本地 CLI 和 hosted Agent 共享模型、工具、上下文、事件与终止语义。Local profile 在用户机器上运行并管理本地写权限；hosted profile 在服务端工作区运行，Slack 负责交互与呈现。</p>
+            <div class="callout"><p><strong>版本策略：</strong><code>main</code> 是 v2；v1 已于 2026-08-11 停止维护并冻结在 <code>v1-final</code> 标签。v2 不包含旧 app-server 或 benchmark CLI 兼容层。</p></div>
             <div class="architecture-map" role="img" aria-label="v2 共享 harness 与产品 profile">
               <div class="arch-layer"><div class="arch-label">产品入口</div><div class="arch-nodes"><span class="node">Local CLI · TTY / Headless</span><span class="node">Hosted · Slack</span></div></div>
               <div class="arch-layer"><div class="arch-label">共享 v2 harness</div><div class="arch-nodes"><span class="node core">Agent Loop</span><span class="node core">Canonical Transcript</span><span class="node core">Context Projection</span><span class="node core">Prompt Layers</span><span class="node core">Tool Contracts</span></div></div>
@@ -85,7 +86,7 @@
                 <tr><td>受控评测</td><td>在同一模型下重复运行 Terminal-Bench/Harbor；随后加入 YouTrack ticket + 对应 PR 回归集</td><td>记录版本、方差、失败类型、耗时和原始日志，不只报告单一分数</td></tr>
                 <tr><td>Hosted 加固</td><td>补强 v2 run trace、成本指标、恢复路径和多媒体输入，并持续压测 Slack presentation</td><td>保持 hosted 只读与 operator policy；steering、queue、取消和恢复语义通过集成测试</td></tr>
                 <tr><td>可观测与恢复</td><td>统一 local/hosted 的 termination、usage、tool trace、错误分类与恢复证据</td><td>失败可定位，关键状态可 replay，重试和恢复行为有故障注入测试</td></tr>
-                <tr><td>兼容性整理</td><td>记录 v1/v2 数据、配置和运维差异，识别可复用 adapter 与必要兼容层</td><td>差异清单有代码或文档证据，adapter contract tests 覆盖两条路径</td></tr>
+                <tr><td>版本边界</td><td>main 只保留 v2；v1 冻结在 <code>v1-final</code> 标签，不保留运行时兼容层</td><td>v1 文档归档，v2 provider 与工具 adapter contract tests 覆盖本地和 hosted profiles</td></tr>
               </tbody>
             </table>
           </section>
@@ -259,7 +260,7 @@
               <div class="card"><span class="tag">Evidence</span><h3>持久 Transcript</h3><p>Hosted v2 按 session sequence 记录 turn、模型增量、工具调用、结果、错误和终止状态。</p></div>
             </div>
             <p>Worker 提供 <code>/livez</code>、<code>/readyz</code>、本机限定的 <code>/drain</code> 和 <code>/metrics</code>；Slack inbox 记录队列水位、lease 丢失、dead letter、queue full 和完成计数。</p>
-            <p>Hosted v2 的 transcript 已持久化；run/cost dashboard 与 v2 usage、tool trace 的对齐仍属于工程工作。</p>
+            <p>Hosted v2 的 transcript 已持久化；启动时会重放未完成 run，模型失败、usage、tool trace 与终止状态以幂等 projection 对齐到 run/cost dashboard。</p>
           </section>
 
           <section class="doc-section" id="zh-boundaries">
@@ -312,6 +313,7 @@
           <section class="doc-section" id="en-v2">
             <span class="section-number">00 / V2 ARCHITECTURE &amp; WORK</span>
             <h2>v2: one harness, distinct product profiles</h2>
+            <div class="callout"><p><strong>Version policy:</strong> <code>main</code> is v2. v1 reached end of maintenance on 2026-08-11 and is frozen at <code>v1-final</code>. v2 contains no legacy app-server or benchmark CLI compatibility layer.</p></div>
             <p class="lead">The local CLI and hosted Agent share model, tool, context, event, retry, and termination semantics. The local profile runs on the user's machine and manages local write permissions; the hosted profile runs against server workspaces, with Slack providing interaction and presentation.</p>
             <div class="architecture-map" role="img" aria-label="v2 shared harness profiles">
               <div class="arch-layer"><div class="arch-label">Product surfaces</div><div class="arch-nodes"><span class="node">Local CLI · TTY / Headless</span><span class="node">Hosted · Slack</span></div></div>
@@ -332,7 +334,7 @@
                 <tr><td>Controlled evaluation</td><td>Repeat Terminal-Bench/Harbor on one model, then add YouTrack-ticket/PR workspace cases</td><td>Record versions, variance, failure classes, timing, and raw logs—not only one score</td></tr>
                 <tr><td>Hosted hardening</td><td>Strengthen v2 run traces, cost metrics, recovery, multimodal input, and Slack presentation under load</td><td>Read-only/operator policy remains intact; steering, queueing, cancellation, and recovery pass integration tests</td></tr>
                 <tr><td>Observability and recovery</td><td>Align local/hosted termination, usage, tool traces, error classes, and recovery evidence</td><td>Failures are diagnosable, key state is replayable, and retry/recovery has fault-injection coverage</td></tr>
-                <tr><td>Compatibility analysis</td><td>Document v1/v2 data, configuration, and operational differences; identify reusable adapters and compatibility layers</td><td>Differences are supported by code or documentation evidence, with adapter contract tests covering both paths</td></tr>
+                <tr><td>Version boundary</td><td>Keep only v2 on main; freeze v1 at the <code>v1-final</code> tag without runtime compatibility layers</td><td>v1 is documented as an archive; v2 provider and tool adapter contract tests cover local and hosted profiles</td></tr>
               </tbody>
             </table>
           </section>
@@ -418,7 +420,7 @@
             <span class="section-number">10 / RELIABILITY &amp; OBSERVABILITY</span><h2>Reliability and observability</h2>
             <div class="card-grid three"><div class="card"><span class="tag">Lifecycle</span><h3>Drain and shutdown</h3><p>Stop claiming new work, wait for active events, then close HTTP and background tasks within deadlines.</p></div><div class="card"><span class="tag">Recovery</span><h3>Retry and dead letter</h3><p>Backoff, jitter, bounded attempts, and expired-lease recovery protect the inbox.</p></div><div class="card"><span class="tag">Evidence</span><h3>Durable transcript</h3><p>Hosted v2 records turns, model deltas, tool calls and results, errors, and termination by session sequence.</p></div></div>
             <p>The worker exposes <code>/livez</code>, <code>/readyz</code>, loopback-only <code>/drain</code>, and <code>/metrics</code>. The Slack inbox reports queue depth, lease loss, dead letters, queue-full events, and completion counts.</p>
-            <p>The hosted v2 transcript is durable. Aligning run and cost views with v2 usage and tool traces remains engineering work.</p>
+            <p>The hosted v2 transcript is durable. Startup replays unfinished runs, and an idempotent projection aligns model failures, usage, tool traces, and termination with the run/cost dashboard.</p>
           </section>
 
           <section class="doc-section" id="en-boundaries">

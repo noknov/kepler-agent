@@ -21,7 +21,12 @@ type preparedCall struct {
 	result     *tool.Result
 }
 
-func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls []model.ToolCall, repeated map[string]int) (bool, error) {
+type toolOutcome struct {
+	looped  bool
+	pending *model.Message
+}
+
+func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls []model.ToolCall, repeated map[string]int) (toolOutcome, error) {
 	prepared := make([]preparedCall, len(calls))
 	blockedByLoop := 0
 	for index, modelCall := range calls {
@@ -46,7 +51,7 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 		policyRequest := tool.PolicyRequest{Descriptor: prepared[index].descriptor, Call: call}
 		decision, err := r.deps.Policy.Decide(ctx, policyRequest)
 		if err != nil {
-			return false, err
+			return toolOutcome{}, err
 		}
 		switch decision.Type {
 		case tool.DecisionAllow:
@@ -56,25 +61,25 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 		case tool.DecisionRequireApproval:
 			metadata, _ := json.Marshal(decision)
 			if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.ApprovalRequested, ToolCall: &call, Metadata: metadata}); err != nil {
-				return false, err
+				return toolOutcome{}, err
 			}
 			if r.deps.Approver == nil {
-				return false, errPendingApproval
+				return toolOutcome{}, errPendingApproval
 			}
 			approved, approveErr := r.deps.Approver.Approve(ctx, policyRequest, decision)
 			if approveErr != nil {
-				return false, approveErr
+				return toolOutcome{}, approveErr
 			}
 			approvalMetadata, _ := json.Marshal(map[string]bool{"approved": approved})
 			if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.ApprovalResolved, ToolCall: &call, Metadata: approvalMetadata}); err != nil {
-				return false, err
+				return toolOutcome{}, err
 			}
 			if !approved {
 				result := tool.Result{Content: []model.Content{{Type: model.ContentText, Text: "User declined this tool call."}}, IsError: true, ErrorCode: "approval_declined"}
 				prepared[index].result = &result
 			}
 		default:
-			return false, fmt.Errorf("unsupported policy decision %q", decision.Type)
+			return toolOutcome{}, fmt.Errorf("unsupported policy decision %q", decision.Type)
 		}
 	}
 
@@ -93,10 +98,11 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 		r.runPreparedTool(ctx, request, entry)
 	}
 	wait.Wait()
+	var pending *model.Message
 	for index := range prepared {
 		entry := &prepared[index]
 		if entry.result == nil {
-			return false, errors.New("tool execution produced no result")
+			return toolOutcome{}, errors.New("tool execution produced no result")
 		}
 		eventType := transcript.ToolCallCompleted
 		if entry.result.IsError {
@@ -106,10 +112,14 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 			SessionID: request.SessionID, TurnID: request.TurnID, Type: eventType,
 			ToolCall: &entry.call, ToolResult: entry.result,
 		}); err != nil {
-			return false, err
+			return toolOutcome{}, err
+		}
+		if pending == nil && entry.result.NeedsUserInput && len(entry.result.Content) > 0 {
+			message := model.Message{Role: model.RoleAssistant, Content: append([]model.Content(nil), entry.result.Content...)}
+			pending = &message
 		}
 	}
-	return blockedByLoop == len(calls), nil
+	return toolOutcome{looped: blockedByLoop == len(calls), pending: pending}, nil
 }
 
 func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entry *preparedCall) {

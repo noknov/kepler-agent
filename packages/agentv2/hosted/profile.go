@@ -6,14 +6,14 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/providers/hosted"
+	"github.com/noknov/slack-copilot-agent/packages/agentv2/model"
+	"github.com/noknov/slack-copilot-agent/packages/agentv2/providers"
 	agentruntime "github.com/noknov/slack-copilot-agent/packages/agentv2/runtime"
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/tool"
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/transcript"
 	"github.com/noknov/slack-copilot-agent/packages/config"
 	"github.com/noknov/slack-copilot-agent/packages/hostedtools"
 	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
-	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/observability"
 	"github.com/noknov/slack-copilot-agent/packages/reminder"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
@@ -43,8 +43,14 @@ type ProfileDependencies struct {
 }
 
 func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
-	primary := buildModelClient(cfg.LLM.Provider, cfg.LLM.Protocol, cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout, cfg.LLM.AnthropicFlavor)
-	secondary, secondaryModel := secondaryModelClient(cfg)
+	primary, err := buildModelClient(cfg.LLM.Provider, cfg.LLM.Protocol, cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout, cfg.LLM.AnthropicFlavor)
+	if err != nil {
+		return Profile{}, err
+	}
+	secondary, secondaryModel, err := secondaryModelClient(cfg)
+	if err != nil {
+		return Profile{}, err
+	}
 	workspacePolicy := safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}
 	hostedTools := hostedtools.NewCatalog(cfg, deps.Slack, deps.Reminders, workspacePolicy, safety.NewCommandPolicy(), deps.Redis, deps.UserPrefs)
 	catalog, err := AdaptRegistry(hostedTools)
@@ -57,10 +63,10 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 			return Profile{}, err
 		}
 	}
-	client := hostedmodel.Model{Client: primary}
+	client := model.Client(primary)
 	compactClient, compactModel := client, cfg.Sessions.CompactModel
 	if secondary != nil {
-		compactClient = hostedmodel.Model{Client: secondary}
+		compactClient = secondary
 		if compactModel == "" {
 			compactModel = secondaryModel
 		}
@@ -69,7 +75,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		compactModel = cfg.LLM.Model
 	}
 	runner, err := agentruntime.New(agentruntime.Config{
-		Model: cfg.LLM.Model, ReasoningEffort: cfg.LLM.Thinking,
+		Model: cfg.LLM.Model, ReasoningEffort: cfg.LLM.Thinking, Temperature: cfg.LLM.Temperature,
 		MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxSteps: cfg.Tools.AgentMaxSteps,
 		Context:     agentruntime.ContextConfig{MaxTokens: cfg.Sessions.MaxContextTokens, ReserveTokens: cfg.Sessions.AutocompactBuffer},
 		ToolResults: agentruntime.ToolResultConfig{MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)},
@@ -98,28 +104,16 @@ func operatorAllowlist(names []string) map[string]bool {
 	return allowed
 }
 
-func buildModelClient(provider, protocol, baseURL, apiKey string, timeout time.Duration, anthropicFlavor string) llm.Client {
-	// Keep provider selection at the hosted boundary. The v2 runtime only sees
-	// canonical model events through hostedmodel.Model.
-	var client llm.Client
-	switch {
-	case provider == "longcat":
-		client = llm.NewLongCatClient(baseURL, apiKey, timeout)
-	case provider == "opencode-go":
-		client = llm.NewOpenCodeGoClient(baseURL, apiKey, timeout)
-	case protocol == "anthropic":
-		client = llm.NewAnthropicClient(baseURL, apiKey, timeout, anthropicFlavor)
-	default:
-		client = llm.NewOpenAICompatibleClient(provider, baseURL, apiKey, timeout)
-	}
-	return llm.WrapClient(client, llm.CapabilitiesFor(provider, protocol))
+func buildModelClient(provider, protocol, baseURL, apiKey string, timeout time.Duration, anthropicFlavor string) (model.Client, error) {
+	return providers.New(providers.Config{Provider: provider, Protocol: protocol, BaseURL: baseURL, APIKey: apiKey, Timeout: timeout, AnthropicFlavor: anthropicFlavor})
 }
 
-func secondaryModelClient(cfg config.Config) (llm.Client, string) {
+func secondaryModelClient(cfg config.Config) (model.Client, string, error) {
 	if strings.TrimSpace(cfg.LLM.SecondaryProvider) == "" {
-		return nil, ""
+		return nil, "", nil
 	}
-	return buildModelClient(cfg.LLM.SecondaryProvider, cfg.LLM.SecondaryProtocol, cfg.LLM.SecondaryBaseURL, cfg.LLM.SecondaryAPIKey, cfg.LLM.Timeout, ""), cfg.LLM.SecondaryModel
+	client, err := buildModelClient(cfg.LLM.SecondaryProvider, cfg.LLM.SecondaryProtocol, cfg.LLM.SecondaryBaseURL, cfg.LLM.SecondaryAPIKey, cfg.LLM.Timeout, "")
+	return client, cfg.LLM.SecondaryModel, err
 }
 
 func maxToolResultBytes(tokens int) int {

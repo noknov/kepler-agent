@@ -1,6 +1,6 @@
 # Controlled model gateway
 
-The gateway provides one auditable model alias to every harness. LiteLLM exposes OpenAI Chat Completions at `/v1/chat/completions`, OpenAI Responses at `/v1/responses`, and Anthropic Messages-compatible requests at `/v1/messages`. Verify all three routes against the pinned image before a benchmark run: this project and Pi use Chat Completions in the example, Codex uses Responses, and Claude Code uses Messages.
+The gateway provides one auditable model alias to every harness. LiteLLM exposes OpenAI Chat Completions at `/v1/chat/completions`, OpenAI Responses at `/v1/responses`, and Anthropic Messages-compatible requests at `/v1/messages`. Verify all three routes against the pinned image before a benchmark run: this project and Codex use Responses in the example, Pi uses Chat Completions, and Claude Code uses Messages.
 
 ```sh
 docker compose -f evals/gateway/compose.yaml up -d

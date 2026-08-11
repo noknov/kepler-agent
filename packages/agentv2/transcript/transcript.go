@@ -21,6 +21,7 @@ const (
 	RuntimeInstruction EventType = "runtime_instruction"
 	ContextProjected   EventType = "context_projected"
 	ModelRequested     EventType = "model_requested"
+	ModelFailed        EventType = "model_failed"
 	ModelCompleted     EventType = "model_completed"
 	ModelStreamed      EventType = "model_streamed"
 	AssistantMessage   EventType = "assistant_message"

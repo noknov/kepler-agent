@@ -46,10 +46,43 @@ type Service struct {
 	ModelFor         func(slackconversation.Request) string
 	WebSearchEnabled func(string) bool
 	Locker           session.Locker
+	Queue            QueueStore
 
 	mu     sync.Mutex
 	active map[string]*activeRun
 	router *eventRouter
+}
+
+type QueueStore interface {
+	Enqueue(context.Context, string, slackconversation.Request) error
+	Drain(context.Context, string) ([]slackconversation.Request, error)
+}
+
+type RedisQueue struct {
+	Client *redisclient.Client
+	TTL    time.Duration
+}
+
+func (q RedisQueue) Enqueue(ctx context.Context, sessionID string, request slackconversation.Request) error {
+	if strings.TrimSpace(request.EventID) == "" {
+		request.EventID = fmt.Sprintf("queued-%d", time.Now().UnixNano())
+	}
+	return q.Client.EnqueueJSON(ctx, "queue:v2:"+sessionID, request.EventID, request, q.TTL)
+}
+
+func (q RedisQueue) Drain(ctx context.Context, sessionID string) ([]slackconversation.Request, error) {
+	values, err := q.Client.DrainJSONQueue(ctx, "queue:v2:"+sessionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]slackconversation.Request, 0, len(values))
+	for _, value := range values {
+		var request slackconversation.Request
+		if json.Unmarshal(value, &request) == nil {
+			out = append(out, request)
+		}
+	}
+	return out, nil
 }
 
 type activeRun struct {
@@ -139,6 +172,9 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 		}
 		defer unlock()
 	}
+	if queued := s.drainQueue(sessionID, nil); len(queued) > 0 {
+		req = combine(append(queued, req))
+	}
 	active := &activeRun{userID: req.UserID, cancel: cancel, steering: &v2runtime.InputBuffer{}}
 	if existing := s.register(sessionID, active); existing != nil {
 		cancel()
@@ -154,7 +190,7 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	defer func() {
 		cancel()
 		s.unregister(sessionID, active)
-		if queued := active.drainQueue(); len(queued) > 0 {
+		if queued := s.drainQueue(sessionID, active); len(queued) > 0 {
 			follow := combine(queued)
 			followCtx := s.Lifecycle
 			if followCtx == nil {
@@ -243,7 +279,7 @@ func (s *Service) controlActive(sessionID string, req slackconversation.Request)
 			return true
 		}
 		if s.mode(req.UserID) == ModeQueue {
-			active.enqueue(req)
+			s.enqueue(sessionID, active, req)
 		} else {
 			active.steering.Push(model.TextMessage(model.RoleUser, steeringText(req)))
 		}
@@ -261,8 +297,15 @@ func (s *Service) controlActive(sessionID string, req slackconversation.Request)
 		action = "cancel"
 	}
 	payload, _ := json.Marshal(control{Session: sessionID, Action: action, Request: req})
+	queuedPersisted := false
+	if action == string(ModeQueue) {
+		if s.Queue == nil || s.Queue.Enqueue(context.Background(), sessionID, req) != nil {
+			return false
+		}
+		queuedPersisted = true
+	}
 	count, err := s.Redis.PublishCount(context.Background(), "pod:control:v2:"+owner, string(payload))
-	return err == nil && count > 0
+	return queuedPersisted || (err == nil && count > 0)
 }
 
 func (s *Service) register(sessionID string, run *activeRun) *activeRun {
@@ -323,12 +366,34 @@ func (s *Service) StartControlSubscriber(ctx context.Context) {
 			case "cancel":
 				active.cancel()
 			case string(ModeQueue):
-				active.enqueue(cmd.Request)
+				if s.Queue == nil {
+					active.enqueue(cmd.Request)
+				}
 			default:
 				active.steering.Push(model.TextMessage(model.RoleUser, steeringText(cmd.Request)))
 			}
 		}
 	}
+}
+
+func (s *Service) enqueue(sessionID string, active *activeRun, request slackconversation.Request) {
+	if s.Queue != nil && s.Queue.Enqueue(context.Background(), sessionID, request) == nil {
+		return
+	}
+	active.enqueue(request)
+}
+
+func (s *Service) drainQueue(sessionID string, active *activeRun) []slackconversation.Request {
+	var out []slackconversation.Request
+	if s.Queue != nil {
+		if queued, err := s.Queue.Drain(context.Background(), sessionID); err == nil {
+			out = append(out, queued...)
+		}
+	}
+	if active != nil {
+		out = append(out, active.drainQueue()...)
+	}
+	return out
 }
 
 func (a *activeRun) enqueue(req slackconversation.Request) {

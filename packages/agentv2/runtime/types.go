@@ -21,6 +21,7 @@ const (
 	TerminationModelError      TerminationReason = "model_error"
 	TerminationMaxSteps        TerminationReason = "max_steps"
 	TerminationPendingApproval TerminationReason = "pending_approval"
+	TerminationPendingInput    TerminationReason = "pending_input"
 	TerminationEmptyResponse   TerminationReason = "empty_response"
 	TerminationLoopDetected    TerminationReason = "loop_detected"
 )
@@ -28,6 +29,7 @@ const (
 type Config struct {
 	Model                string
 	ReasoningEffort      string
+	Temperature          float64
 	MaxOutputTokens      int
 	MaxSteps             int
 	MaxModelRetries      int
@@ -82,7 +84,13 @@ type Dependencies struct {
 type Runtime struct {
 	config Config
 	deps   Dependencies
-	locks  sync.Map
+	lockMu sync.Mutex
+	locks  map[string]*sessionMutex
+}
+
+type sessionMutex struct {
+	mu   sync.Mutex
+	refs int
 }
 
 func New(config Config, deps Dependencies) (*Runtime, error) {
@@ -111,7 +119,7 @@ func New(config Config, deps Dependencies) (*Runtime, error) {
 	if deps.Projector == nil {
 		deps.Projector = NewBoundedProjector(config.Context)
 	}
-	return &Runtime{config: config, deps: deps}, nil
+	return &Runtime{config: config, deps: deps, locks: make(map[string]*sessionMutex)}, nil
 }
 
 type InputSource interface {
@@ -158,9 +166,25 @@ type TurnResult struct {
 	Termination TerminationReason
 }
 
-func (r *Runtime) sessionLock(sessionID string) *sync.Mutex {
-	value, _ := r.locks.LoadOrStore(sessionID, &sync.Mutex{})
-	return value.(*sync.Mutex)
+func (r *Runtime) lockSession(sessionID string) func() {
+	r.lockMu.Lock()
+	entry := r.locks[sessionID]
+	if entry == nil {
+		entry = &sessionMutex{}
+		r.locks[sessionID] = entry
+	}
+	entry.refs++
+	r.lockMu.Unlock()
+	entry.mu.Lock()
+	return func() {
+		entry.mu.Unlock()
+		r.lockMu.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(r.locks, sessionID)
+		}
+		r.lockMu.Unlock()
+	}
 }
 
 func sleepContext(ctx context.Context, duration time.Duration) error {

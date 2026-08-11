@@ -103,6 +103,9 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	rates := hosted.CostRates(cfg)
 	recorder.SetCostRates(rates)
 	runSink := &hosted.RunSink{Store: stores.Runs, Provider: cfg.LLM.Provider, Model: cfg.LLM.Model, Rates: rates, Metrics: recorder}
+	if err := runSink.Recover(ctx, stores.PGPool); err != nil {
+		return nil, fmt.Errorf("recover v2 run projections: %w", err)
+	}
 	events := transcript.NewFanout(runSink)
 	profile, profileErr := hosted.NewProfile(cfg, hosted.ProfileDependencies{
 		Slack: slackClient, Reminders: stores.Reminders, Redis: stores.Redis, UserPrefs: stores.UserPrefs,
@@ -115,6 +118,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	healthService.Redis = stores.Redis
 	v2conv := slackagent.New(profile.Agent, slackClient, profile.Prompt, profile.Redactor, stores.UserPrefs)
 	v2conv.Redis, v2conv.PodID, v2conv.Lifecycle = stores.Redis, podID, serviceCtx
+	v2conv.Queue = slackagent.RedisQueue{Client: stores.Redis, TTL: 24 * time.Hour}
 	v2conv.Locker = stores.Sessions
 	v2conv.Format = slack.MarkdownToMrkdwn
 	if len(cfg.Security.WorkspaceRoots) > 0 {

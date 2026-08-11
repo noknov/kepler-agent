@@ -121,6 +121,7 @@ type Request struct {
 	Messages        []Message         `json:"messages"`
 	Tools           []ToolDefinition  `json:"tools,omitempty"`
 	ReasoningEffort string            `json:"reasoning_effort,omitempty"`
+	Temperature     float64           `json:"temperature,omitempty"`
 	MaxOutputTokens int               `json:"max_output_tokens,omitempty"`
 	Metadata        map[string]string `json:"metadata,omitempty"`
 }

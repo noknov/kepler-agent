@@ -14,7 +14,7 @@ This does not claim benchmark results. The checked-in smoke suite validates the 
 ## Quick start
 
 ```sh
-go build -o bin/slack-copilot-v2 ./v2/cmd/slack-copilot
+go build -o bin/slack-copilot ./cli/cmd/slack-copilot
 python3 evals/run.py \
   --suite evals/suites/smoke.json \
   --candidates evals/candidates.example.json \
@@ -22,7 +22,7 @@ python3 evals/run.py \
   --output evals/results/smoke
 ```
 
-Set `EVAL_OPENAI_BASE_URL` and `EVAL_ANTHROPIC_BASE_URL` to the same gateway. Each candidate command receives `EVAL_MODEL`, `OPENAI_MODEL`, and `ANTHROPIC_MODEL`. Run `python3 evals/run.py --help` for filtering, repetitions, and dry-run options.
+Set `EVAL_OPENAI_BASE_URL` and `EVAL_ANTHROPIC_BASE_URL` to the same gateway. The slack-copilot candidate uses `--protocol responses`, so it exercises the same canonical provider adapter and Responses wire client available to the hosted profile. Each candidate command receives `EVAL_MODEL`, `OPENAI_MODEL`, and `ANTHROPIC_MODEL`. Run `python3 evals/run.py --help` for filtering, repetitions, and dry-run options.
 
 ## Fair comparison protocol
 

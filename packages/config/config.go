@@ -54,10 +54,8 @@ type LLMConfig struct {
 	APIKey           string
 	Model            string
 	MaxOutputTokens  int
-	AvailableModels  []string
 	MultimodalModel  string
 	MultimodalModels []string
-	TokenUsage       TokenUsageConfig
 	Protocol         string
 	AnthropicFlavor  string
 	Thinking         string
@@ -71,15 +69,6 @@ type LLMConfig struct {
 	SecondaryAPIKey   string
 	SecondaryModel    string
 	SecondaryProtocol string
-}
-
-type TokenUsageConfig struct {
-	OpenCodeGo OpenCodeGoTokenUsageConfig
-}
-
-type OpenCodeGoTokenUsageConfig struct {
-	WorkspaceID string
-	AuthCookie  string
 }
 
 type SecurityConfig struct {
@@ -97,10 +86,9 @@ type SessionConfig struct {
 }
 
 type ToolConfig struct {
-	CommandTimeout         time.Duration
-	AgentMaxSteps          int
-	AgentMaxConcurrentRuns int
-	AllowedWriteTools      []string
+	CommandTimeout    time.Duration
+	AgentMaxSteps     int
+	AllowedWriteTools []string
 }
 
 type IntegrationConfig struct {
@@ -228,7 +216,6 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 		anthropicFlavor = inferAnthropicFlavor(llmBaseURL)
 	}
 	llmModel := providerModel(llmProvider)
-	llmAvailableModels := availableModels(llmProvider, llmModel)
 	llmMultimodalModel := providerMultimodalModel(llmProvider)
 	llmMultimodalModels := envCSVDefault("MULTIMODAL_MODELS", defaultMultimodalModels(llmMultimodalModel))
 	llmThinking := providerThinking(llmProvider)
@@ -272,20 +259,13 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			APIKey:           providerAPIKey(llmProvider),
 			Model:            llmModel,
 			MaxOutputTokens:  envInt("LLM_MAX_OUTPUT_TOKEN", 0),
-			AvailableModels:  llmAvailableModels,
 			MultimodalModel:  llmMultimodalModel,
 			MultimodalModels: llmMultimodalModels,
-			TokenUsage: TokenUsageConfig{
-				OpenCodeGo: OpenCodeGoTokenUsageConfig{
-					WorkspaceID: os.Getenv("OPENCODE_GO_WORKSPACE_ID"),
-					AuthCookie:  os.Getenv("OPENCODE_GO_AUTH_COOKIE"),
-				},
-			},
-			Protocol:        llmProtocol,
-			AnthropicFlavor: anthropicFlavor,
-			Thinking:        llmThinking,
-			Temperature:     providerTemperature(llmProvider),
-			Timeout:         providerTimeout(llmProvider),
+			Protocol:         llmProtocol,
+			AnthropicFlavor:  anthropicFlavor,
+			Thinking:         llmThinking,
+			Temperature:      providerTemperature(llmProvider),
+			Timeout:          providerTimeout(llmProvider),
 
 			SecondaryProvider: secondaryProvider,
 			SecondaryBaseURL:  trimRightSlash(secondaryBaseURL),
@@ -306,9 +286,8 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			MaxToolResultTokens: envInt("SESSION_MAX_TOOL_RESULT_TOKENS", 8000),
 		},
 		Tools: ToolConfig{
-			CommandTimeout:         envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
-			AgentMaxSteps:          envInt("AGENT_MAX_STEPS", 256),
-			AgentMaxConcurrentRuns: envInt("AGENT_MAX_CONCURRENT_RUNS", 16),
+			CommandTimeout: envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
+			AgentMaxSteps:  envInt("AGENT_MAX_STEPS", 256),
 			AllowedWriteTools: envCSVDefault("AGENT_ALLOWED_WRITE_TOOLS", []string{
 				"reminder-create", "reminder-cancel", "slack-send_screenshot", "slack-create_canvas", "tts-speak",
 			}),
@@ -415,8 +394,8 @@ func validateForProfile(cfg Config, profile RuntimeProfile) (Config, error) {
 	if cfg.HTTP.EventInboxLease <= cfg.HTTP.EventTimeout {
 		return cfg, fmt.Errorf("SLACK_EVENT_INBOX_LEASE must be greater than SLACK_EVENT_TIMEOUT")
 	}
-	if cfg.HTTP.EventWorkers <= 0 || cfg.HTTP.EventQueueSize <= 0 || cfg.HTTP.EventEnqueueTimeout <= 0 || cfg.HTTP.EventTimeout <= 0 || cfg.HTTP.EventMaxAttempts <= 0 || cfg.HTTP.EventRetryBase <= 0 || cfg.HTTP.EventRetryMax < cfg.HTTP.EventRetryBase || cfg.HTTP.ShutdownTimeout <= 0 || cfg.Tools.AgentMaxConcurrentRuns <= 0 {
-		return cfg, fmt.Errorf("event worker, queue, timeout, retry, shutdown, and agent concurrency settings must be positive and internally consistent")
+	if cfg.HTTP.EventWorkers <= 0 || cfg.HTTP.EventQueueSize <= 0 || cfg.HTTP.EventEnqueueTimeout <= 0 || cfg.HTTP.EventTimeout <= 0 || cfg.HTTP.EventMaxAttempts <= 0 || cfg.HTTP.EventRetryBase <= 0 || cfg.HTTP.EventRetryMax < cfg.HTTP.EventRetryBase || cfg.HTTP.ShutdownTimeout <= 0 {
+		return cfg, fmt.Errorf("event worker, queue, timeout, retry, and shutdown settings must be positive and internally consistent")
 	}
 	seenWriteTools := make(map[string]bool, len(cfg.Tools.AllowedWriteTools))
 	for _, name := range cfg.Tools.AllowedWriteTools {
@@ -613,86 +592,6 @@ func defaultMultimodalModels(model string) []string {
 		return nil
 	}
 	return []string{model}
-}
-
-func availableModels(provider, defaultModel string) []string {
-	raw := strings.TrimSpace(os.Getenv(providerEnvPrefix(provider) + "_AVAILABLE_MODELS"))
-	if raw == "" {
-		if provider == "opencode-go" {
-			return ensureDefaultModel(defaultModel, opencodeGoModels())
-		}
-		if provider == "opencode-zen" {
-			return ensureDefaultModel(defaultModel, opencodeZenModels())
-		}
-		if provider == "deepseek" {
-			return ensureDefaultModel(defaultModel, deepSeekModels())
-		}
-		return []string{defaultModel}
-	}
-	seen := map[string]bool{}
-	var models []string
-	for _, m := range strings.Split(raw, ",") {
-		m = strings.TrimSpace(m)
-		if m != "" && !seen[m] {
-			seen[m] = true
-			models = append(models, m)
-		}
-	}
-	if len(models) == 0 {
-		return []string{defaultModel}
-	}
-	return ensureDefaultModel(defaultModel, models)
-}
-
-func ensureDefaultModel(defaultModel string, models []string) []string {
-	seen := map[string]bool{}
-	out := make([]string, 0, len(models)+1)
-	for _, model := range models {
-		if model == "" || seen[model] {
-			continue
-		}
-		seen[model] = true
-		out = append(out, model)
-	}
-	if defaultModel != "" && !seen[defaultModel] {
-		out = append([]string{defaultModel}, out...)
-	}
-	return out
-}
-
-func opencodeGoModels() []string {
-	return []string{
-		"glm-5.2",
-		"glm-5.1",
-		"kimi-k2.7-code",
-		"kimi-k2.6",
-		"mimo-v2.5",
-		"mimo-v2.5-pro",
-		"minimax-m3",
-		"minimax-m2.7",
-		"minimax-m2.5",
-		"qwen3.7-max",
-		"qwen3.7-plus",
-		"qwen3.6-plus",
-		"deepseek-v4-pro",
-		"deepseek-v4-flash",
-	}
-}
-
-func opencodeZenModels() []string {
-	return []string{
-		"mimo-v2.5-free",
-		"minimax-m3-free",
-		"nemotron-3-ultra-free",
-		"north-mini-code-free",
-	}
-}
-
-func deepSeekModels() []string {
-	return []string{
-		"deepseek-v4-flash",
-		"deepseek-v4-pro",
-	}
 }
 
 func providerAPIKey(provider string) string {
