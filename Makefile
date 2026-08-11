@@ -22,7 +22,7 @@ test:
 	GOCACHE=$(GOCACHE) go test ./...
 
 test-race:
-	GOCACHE=$(GOCACHE) go test -race ./packages/agentv2/runtime ./packages/slackagent ./packages/runs ./packages/safety ./packages/slackevents ./packages/toolkit/tools/registry
+	GOCACHE=$(GOCACHE) go test -race ./packages/agent/runtime ./packages/slackagent ./packages/runs ./packages/safety ./packages/slackevents ./packages/toolkit/tools/registry
 
 build:
 	mkdir -p bin

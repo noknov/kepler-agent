@@ -32,13 +32,10 @@ var staticPromptCache struct {
 
 type Catalog struct {
 	System          string                `json:"system,omitempty"`
-	Delegates       map[string]string     `json:"delegates,omitempty"`
 	AppMessages     map[string]string     `json:"app_messages,omitempty"`
 	Tools           map[string]ToolPrompt `json:"tools,omitempty"`
-	MemoryLabels    map[string]string     `json:"memory_labels,omitempty"`
 	ToolStatuses    map[string]string     `json:"tool_statuses,omitempty"`
 	GitHubWorkflows map[string]string     `json:"github_workflows,omitempty"`
-	Runner          map[string]string     `json:"runner,omitempty"`
 	Health          map[string]string     `json:"health,omitempty"`
 	Texts           map[string]string     `json:"texts,omitempty"`
 	Rules           []string              `json:"-"`
@@ -169,11 +166,8 @@ func looksLikeCatalogDir(dir string) bool {
 	}
 	markers := []string{
 		"system.md",
-		"delegates.json",
 		"app_messages.json",
 		"tools.json",
-		"memory.json",
-		"runner.json",
 		"health.json",
 		"texts.json",
 		"rules",
@@ -190,13 +184,10 @@ func looksLikeCatalogDir(dir string) bool {
 
 func newCatalog() Catalog {
 	return Catalog{
-		Delegates:       map[string]string{},
 		AppMessages:     map[string]string{},
 		Tools:           map[string]ToolPrompt{},
-		MemoryLabels:    map[string]string{},
 		ToolStatuses:    map[string]string{},
 		GitHubWorkflows: map[string]string{},
-		Runner:          map[string]string{},
 		Health:          map[string]string{},
 		Texts:           map[string]string{},
 	}
@@ -220,13 +211,10 @@ func loadCatalogFS(fsys fs.FS, root string, catalog *Catalog) {
 	readTextFS(fsys, fsPath(root, "system.md"), &systemPrompt)
 	readTextFS(fsys, fsPath(root, "agent.md"), &agentAddendum)
 	catalog.System = appendPrompt(systemPrompt, agentAddendum)
-	readJSONFS(fsys, fsPath(root, "delegates.json"), &catalog.Delegates)
 	readJSONFS(fsys, fsPath(root, "app_messages.json"), &catalog.AppMessages)
 	readJSONFS(fsys, fsPath(root, "tools.json"), &catalog.Tools)
-	readJSONFS(fsys, fsPath(root, "memory.json"), &catalog.MemoryLabels)
 	readJSONFS(fsys, fsPath(root, "tool_statuses.json"), &catalog.ToolStatuses)
 	readJSONFS(fsys, fsPath(root, "github_workflows.json"), &catalog.GitHubWorkflows)
-	readJSONFS(fsys, fsPath(root, "runner.json"), &catalog.Runner)
 	readJSONFS(fsys, fsPath(root, "health.json"), &catalog.Health)
 	readJSONFS(fsys, fsPath(root, "texts.json"), &catalog.Texts)
 	readRuntimeJSONFS(fsys, fsPath(root, "runtime.json"), catalog)
@@ -247,13 +235,10 @@ func pathJoin(parts ...string) string {
 
 func mergeCatalog(dst *Catalog, src Catalog) {
 	dst.System = appendPrompt(dst.System, src.System)
-	mergeStringMap(dst.Delegates, src.Delegates)
 	mergeStringMap(dst.AppMessages, src.AppMessages)
 	mergeToolMap(dst.Tools, src.Tools)
-	mergeStringMap(dst.MemoryLabels, src.MemoryLabels)
 	mergeStringMap(dst.ToolStatuses, src.ToolStatuses)
 	mergeStringMap(dst.GitHubWorkflows, src.GitHubWorkflows)
-	mergeStringMap(dst.Runner, src.Runner)
 	mergeStringMap(dst.Health, src.Health)
 	mergeStringMap(dst.Texts, src.Texts)
 	dst.RuleKeys, dst.Rules = mergeRules(dst.RuleKeys, dst.Rules, src.RuleKeys, src.Rules)
@@ -276,19 +261,15 @@ func appendPrompt(base, addendum string) string {
 func readRuntimeJSONFS(fsys fs.FS, path string, catalog *Catalog) {
 	var runtime struct {
 		AppMessages     map[string]string `json:"app_messages,omitempty"`
-		MemoryLabels    map[string]string `json:"memory_labels,omitempty"`
 		ToolStatuses    map[string]string `json:"tool_statuses,omitempty"`
 		GitHubWorkflows map[string]string `json:"github_workflows,omitempty"`
-		Runner          map[string]string `json:"runner,omitempty"`
 		Health          map[string]string `json:"health,omitempty"`
 		Texts           map[string]string `json:"texts,omitempty"`
 	}
 	readJSONFS(fsys, path, &runtime)
 	mergeStringMap(catalog.AppMessages, runtime.AppMessages)
-	mergeStringMap(catalog.MemoryLabels, runtime.MemoryLabels)
 	mergeStringMap(catalog.ToolStatuses, runtime.ToolStatuses)
 	mergeStringMap(catalog.GitHubWorkflows, runtime.GitHubWorkflows)
-	mergeStringMap(catalog.Runner, runtime.Runner)
 	mergeStringMap(catalog.Health, runtime.Health)
 	mergeStringMap(catalog.Texts, runtime.Texts)
 }
@@ -360,12 +341,6 @@ func System(fallback string) string {
 	return choose(current.catalog.System, fallback)
 }
 
-func Delegate(name, fallback string) string {
-	current.RLock()
-	defer current.RUnlock()
-	return choose(current.catalog.Delegates[name], fallback)
-}
-
 func AppMessage(name, fallback string) string {
 	current.RLock()
 	defer current.RUnlock()
@@ -384,12 +359,6 @@ func ParamDescription(tool, param, fallback string) string {
 	return choose(current.catalog.Tools[tool].Parameters[param], fallback)
 }
 
-func MemoryLabel(name, fallback string) string {
-	current.RLock()
-	defer current.RUnlock()
-	return choose(current.catalog.MemoryLabels[name], fallback)
-}
-
 func ToolStatus(name, fallback string) string {
 	current.RLock()
 	defer current.RUnlock()
@@ -400,12 +369,6 @@ func GitHubWorkflow(name, fallback string) string {
 	current.RLock()
 	defer current.RUnlock()
 	return choose(current.catalog.GitHubWorkflows[name], fallback)
-}
-
-func RunnerPrompt(name, fallback string) string {
-	current.RLock()
-	defer current.RUnlock()
-	return choose(current.catalog.Runner[name], fallback)
 }
 
 func HealthPrompt(name, fallback string) string {

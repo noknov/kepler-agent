@@ -2,7 +2,7 @@
 
 ## Scope
 
-`packages/agentv2` contains transport-neutral agent behavior and lifecycle
+`packages/agent` contains transport-neutral agent behavior and lifecycle
 contracts. Slack, CLI, provider, and PostgreSQL packages are adapters. Do not
 introduce Slack, deployment, or wire transport assumptions into the shared
 runtime packages.

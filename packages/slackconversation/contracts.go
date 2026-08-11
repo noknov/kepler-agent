@@ -7,7 +7,7 @@ import (
 	"context"
 	"unicode"
 
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/model"
+	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 )
 
 type Request struct {

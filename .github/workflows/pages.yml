@@ -14,8 +14,8 @@ concurrency:
 
 jobs:
   deploy:
-    # Never publish from forks or repositories copied under another owner.
-    if: github.repository == 'noknov/slack-copilot-agent' && github.ref == 'refs/heads/main'
+    # Manual runs publish the selected branch, including feature branches.
+    if: github.repository == 'noknov/slack-copilot-agent'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -23,6 +23,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - name: Validate architecture site
+        run: test -s architecture-site/index.html
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

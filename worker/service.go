@@ -10,9 +10,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/hosted"
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/model"
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/transcript"
+	"github.com/noknov/slack-copilot-agent/packages/agent/hosted"
+	"github.com/noknov/slack-copilot-agent/packages/agent/model"
+	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
 	"github.com/noknov/slack-copilot-agent/packages/appsupport"
 	"github.com/noknov/slack-copilot-agent/packages/config"
 	"github.com/noknov/slack-copilot-agent/packages/health"
@@ -114,7 +114,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	recorder.SetCostRates(rates)
 	runSink := &hosted.RunSink{Store: stores.Runs, Provider: cfg.LLM.Provider, Model: cfg.LLM.Model, Rates: rates, Metrics: recorder}
 	if err := runSink.Recover(ctx, stores.PGPool); err != nil {
-		return nil, fmt.Errorf("recover v2 run projections: %w", err)
+		return nil, fmt.Errorf("recover agent run projections: %w", err)
 	}
 	events := transcript.NewFanout(runSink)
 	profile, profileErr := hosted.NewProfile(cfg, hosted.ProfileDependencies{
@@ -126,25 +126,26 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 	healthService := health.NewService(profile.Tools, cfg.Security.WorkspaceRoots)
 	healthService.Redis = stores.Redis
-	v2conv := slackagent.New(profile.Agent, slackClient, profile.Prompt, profile.Redactor, stores.UserPrefs)
-	v2conv.Redis, v2conv.PodID, v2conv.Lifecycle = stores.Redis, podID, serviceCtx
-	v2conv.Queue = slackagent.RedisQueue{Client: stores.Redis, TTL: 24 * time.Hour}
-	v2conv.Locker = stores.Sessions
-	v2conv.Format = slack.MarkdownToMrkdwn
+	conversation := slackagent.New(profile.Agent, slackClient, profile.Prompt, profile.Redactor, stores.UserPrefs)
+	conversation.Redis, conversation.PodID, conversation.Lifecycle = stores.Redis, podID, serviceCtx
+	conversation.Queue = slackagent.RedisQueue{Client: stores.Redis, TTL: 24 * time.Hour}
+	conversation.Locker = stores.Sessions
+	conversation.Format = slack.MarkdownToMrkdwn
 	if len(cfg.Security.WorkspaceRoots) > 0 {
-		v2conv.Workspace = cfg.Security.WorkspaceRoots[0]
+		conversation.Workspace = cfg.Security.WorkspaceRoots[0]
 	}
 	multimodal := multimodalPredicate(cfg.LLM.MultimodalModels)
-	v2conv.ModelFor = func(req slackconversation.Request) string {
+	conversation.Multimodal = multimodal
+	conversation.ModelFor = func(req slackconversation.Request) string {
 		for _, content := range req.Content {
-			if content.Type == model.ContentImage && !multimodal(cfg.LLM.Model) && cfg.LLM.MultimodalModel != "" {
+			if content.Type == model.ContentImage && multimodal != nil && !multimodal(cfg.LLM.Model) && cfg.LLM.MultimodalModel != "" {
 				return cfg.LLM.MultimodalModel
 			}
 		}
 		return cfg.LLM.Model
 	}
-	events.Add(v2conv.EventSink())
-	conv := slackconversation.ControlledConversation(v2conv)
+	events.Add(conversation.EventSink())
+	conv := slackconversation.ControlledConversation(conversation)
 	log.Printf("worker agent runtime: shared")
 
 	access := safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels)
@@ -165,8 +166,8 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 			Redis:  stores.Redis,
 		},
 	}
-	v2conv.WebSearchEnabled = handler.WebSearchPreference
-	v2conv.ModeForUser = func(userID string) slackagent.ConversationMode {
+	conversation.WebSearchEnabled = handler.WebSearchPreference
+	conversation.ModeForUser = func(userID string) slackagent.ConversationMode {
 		return slackagent.ConversationMode(handler.Home.ConversationMode(userID))
 	}
 

@@ -40,8 +40,6 @@ func TestAnthropicChatParsesToolUseBlocks(t *testing.T) {
 			},
 		})
 	}
-	message = NormalizeAssistantMessage(CapabilitiesFor("mimo", "anthropic"), message, nil)
-
 	if len(message.ToolCalls) != 1 {
 		t.Fatalf("ToolCalls = %#v", message.ToolCalls)
 	}

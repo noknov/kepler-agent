@@ -41,7 +41,7 @@ The hosted profile has no end-user host approvals. Its policy rejects mutation e
 
 ## Shared contracts
 
-`packages/agentv2` contains provider-neutral messages and events, structured tools/effects, deterministic prompt layers, an append-only transcript, bounded context projection and compaction, retry/termination logic, session-level deferred tools, and product profiles. OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages adapters convert wire events into the same canonical model. The local and hosted profiles construct those adapters through one factory, so CLI harness evaluation covers production provider behavior.
+`packages/agent` contains provider-neutral messages and events, structured tools/effects, deterministic prompt layers, an append-only transcript, bounded context projection and compaction, retry/termination logic, session-level deferred tools, and product profiles. OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages adapters convert wire events into the same canonical model. The local and hosted profiles construct those adapters through one factory, so CLI harness evaluation covers production provider behavior.
 
 Prompt order is fixed: core, product, environment, project, user overlay, skill, turn. Repository `AGENTS.md` is loaded as project guidance. Private overlays are read only from explicit `prompt_files`; do not commit internal repository instructions to this public project.
 

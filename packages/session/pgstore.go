@@ -9,7 +9,7 @@ import (
 )
 
 // PGStore owns the cross-process turn lock. Conversation state lives in the
-// append-only v2 transcript rather than a mutable session document.
+// append-only agent transcript rather than a mutable session document.
 type PGStore struct {
 	pool *pgxpool.Pool
 }

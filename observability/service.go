@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/hosted"
+	"github.com/noknov/slack-copilot-agent/packages/agent/hosted"
 	"github.com/noknov/slack-copilot-agent/packages/config"
 	"github.com/noknov/slack-copilot-agent/packages/health"
 	"github.com/noknov/slack-copilot-agent/packages/hostedtools"

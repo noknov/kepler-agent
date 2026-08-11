@@ -3,7 +3,7 @@ package slackhandler
 import (
 	"context"
 
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/model"
+	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/slack"
 	"github.com/noknov/slack-copilot-agent/packages/slackfiles"
