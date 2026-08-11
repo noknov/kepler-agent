@@ -7,6 +7,7 @@ cmd/slack-copilot-agent/.env
 .idea/
 .data/
 .cache/
+.gocache/
 .tmp-gocache/
 bin/
 dist/

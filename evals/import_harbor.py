@@ -16,9 +16,24 @@ def main() -> int:
         instruction = next((path for path in (directory / "instruction.md", directory / "task.md", directory / "README.md") if path.exists()), None)
         if instruction is None: continue
         test = ["bash", "tests/test.sh"] if (directory / "tests" / "test.sh").exists() else ["bash", "test.sh"]
-        tasks.append({"id": directory.name, "fixture": str(directory.resolve()), "prompt": instruction.read_text(), "test": test, "timeout_seconds": args.timeout})
+        tasks.append({
+            "id": directory.name,
+            "category": "benchmark",
+            "source": "harbor",
+            "fixture": str(directory.resolve()),
+            "prompt": instruction.read_text(),
+            "test": test,
+            "timeout_seconds": args.timeout,
+            "tags": ["harbor"],
+            "metadata": {},
+        })
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps({"tasks": tasks}, indent=2) + "\n")
+    args.output.write_text(json.dumps({
+        "schema_version": 1,
+        "name": args.root.name,
+        "description": "Imported Harbor/Terminal-Bench-style tasks.",
+        "tasks": tasks,
+    }, indent=2) + "\n")
     print(f"imported {len(tasks)} tasks")
     return 0
 

@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/noknov/slack-copilot-agent/packages/llm"
-	"github.com/noknov/slack-copilot-agent/packages/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
 )
 
 func TestServiceReportsMissingCriticalTools(t *testing.T) {

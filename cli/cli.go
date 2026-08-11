@@ -17,18 +17,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/local"
-	"github.com/noknov/slack-copilot-agent/packages/agent/localtools"
-	"github.com/noknov/slack-copilot-agent/packages/agent/mcptools"
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	"github.com/noknov/slack-copilot-agent/packages/agent/prompt"
-	"github.com/noknov/slack-copilot-agent/packages/agent/providers"
 	agentruntime "github.com/noknov/slack-copilot-agent/packages/agent/runtime"
-	"github.com/noknov/slack-copilot-agent/packages/agent/skills"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
 	"github.com/noknov/slack-copilot-agent/packages/infra/telemetry"
 	"github.com/noknov/slack-copilot-agent/packages/mcp"
+	"github.com/noknov/slack-copilot-agent/packages/profiles/local"
+	"github.com/noknov/slack-copilot-agent/packages/providers"
+	"github.com/noknov/slack-copilot-agent/packages/tools/local"
+	"github.com/noknov/slack-copilot-agent/packages/tools/mcp"
+	"github.com/noknov/slack-copilot-agent/packages/tools/skills"
 )
 
 type options struct {

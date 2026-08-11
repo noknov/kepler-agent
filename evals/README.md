@@ -11,6 +11,13 @@ This module compares agent **harnesses**, not native models. Every candidate is 
 
 This does not claim benchmark results. The checked-in smoke suite validates the evaluator itself; meaningful comparisons require pinning candidate versions, supplying credentials, and running an established suite such as Terminal-Bench through Harbor.
 
+## Roadmap
+
+- Harden the Terminal-Bench/Harbor-style importer as the first public benchmark path.
+- Add larger local-coding suites for multi-file edits, failing command recovery, repo navigation, and long-context tasks.
+- Add SWE-bench Lite / SWE-bench Verified adapters after the local harness schema is stable.
+- Add hosted ops and Slack surface suites separately from local coding benchmarks, so product-surface behavior does not distort CLI harness comparisons.
+
 ## Quick start
 
 ```sh
@@ -23,6 +30,18 @@ python3 evals/run.py \
 ```
 
 Set `EVAL_OPENAI_BASE_URL` and `EVAL_ANTHROPIC_BASE_URL` to the same gateway. The slack-copilot candidate uses `--protocol responses`, so it exercises the same canonical provider adapter and Responses wire client available to the hosted profile. Each candidate command receives `EVAL_MODEL`, `OPENAI_MODEL`, and `ANTHROPIC_MODEL`. Run `python3 evals/run.py --help` for filtering, repetitions, and dry-run options.
+
+## Suite schema
+
+Suites must use `schema_version: 1`; older ad-hoc suite shapes are intentionally unsupported.
+
+Each task declares:
+
+- `id`, `category`, `source`, `fixture`, `prompt`, `test`, `timeout_seconds`
+- `tags`, for filtering and aggregate analysis
+- `metadata`, for benchmark-specific fields that should be preserved in records
+
+The runner copies `fixture` into an isolated workspace and records `category`, `source`, `tags`, and `metadata` in every case record.
 
 ## Fair comparison protocol
 

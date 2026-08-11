@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/hosted"
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
 	"github.com/noknov/slack-copilot-agent/packages/appsupport"
@@ -21,16 +20,19 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/infra/telemetry"
 	"github.com/noknov/slack-copilot-agent/packages/observability"
 	"github.com/noknov/slack-copilot-agent/packages/platform"
+	"github.com/noknov/slack-copilot-agent/packages/profiles/hosted"
 	"github.com/noknov/slack-copilot-agent/packages/prompts"
 	"github.com/noknov/slack-copilot-agent/packages/reminder"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
-	"github.com/noknov/slack-copilot-agent/packages/slack"
-	"github.com/noknov/slack-copilot-agent/packages/slackagent"
-	"github.com/noknov/slack-copilot-agent/packages/slackconversation"
-	"github.com/noknov/slack-copilot-agent/packages/slackevents"
-	"github.com/noknov/slack-copilot-agent/packages/slackhandler"
-	"github.com/noknov/slack-copilot-agent/packages/slackhome"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/agent"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/conversation"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/events"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/handler"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/home"
+	slackTools "github.com/noknov/slack-copilot-agent/packages/surfaces/slack/tools"
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/gitcache"
+	hostedTools "github.com/noknov/slack-copilot-agent/packages/tools/hosted"
 )
 
 type Service struct {
@@ -117,9 +119,21 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		return nil, fmt.Errorf("recover agent run projections: %w", err)
 	}
 	events := transcript.NewFanout(runSink)
+	workspacePolicy := safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}
+	baseRegistry := hostedTools.NewCatalog(cfg, workspacePolicy, safety.NewCommandPolicy(), stores.UserPrefs, hostedTools.SurfaceOptions{
+		Name: "slack",
+		AvailableDeps: map[string]bool{
+			"slack":    slackClient != nil,
+			"reminder": stores.Reminders != nil,
+		},
+	})
+	slackTools.AddToRegistry(baseRegistry, cfg, slackClient, stores.Reminders, stores.Redis)
+	catalog, err := hosted.AdaptRegistry(baseRegistry)
+	if err != nil {
+		return nil, fmt.Errorf("build hosted tool catalog: %w", err)
+	}
 	profile, profileErr := hosted.NewProfile(cfg, hosted.ProfileDependencies{
-		Slack: slackClient, Reminders: stores.Reminders, Redis: stores.Redis, UserPrefs: stores.UserPrefs,
-		Postgres: stores.PGPool, ToolSpills: stores.Runs, Events: events,
+		Tools: catalog, Postgres: stores.PGPool, Redis: stores.Redis, ToolSpills: stores.Runs, Events: events,
 	})
 	if profileErr != nil {
 		return nil, fmt.Errorf("build hosted profile: %w", profileErr)

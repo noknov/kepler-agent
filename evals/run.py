@@ -26,23 +26,52 @@ class Candidate:
 @dataclasses.dataclass(frozen=True)
 class Task:
     id: str
+    category: str
+    source: str
     prompt: str
     fixture: Path
     test: list[str]
     timeout_seconds: int
+    tags: list[str]
+    metadata: dict[str, Any]
 
 def load_candidates(path: Path) -> list[Candidate]:
     data = json.loads(path.read_text())
     return [Candidate(item["name"], item["command"], item.get("env", {}), item.get("files", {}), item.get("model", "{model}")) for item in data["candidates"]]
 
+def require_string(item: dict[str, Any], field: str) -> str:
+    value = item.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"task {item.get('id', '<unknown>')} requires non-empty {field}")
+    return value
+
+def require_string_list(item: dict[str, Any], field: str) -> list[str]:
+    value = item.get(field)
+    if not isinstance(value, list) or not all(isinstance(part, str) and part for part in value):
+        raise ValueError(f"task {item.get('id', '<unknown>')} requires string list {field}")
+    return value
+
 def load_tasks(path: Path) -> list[Task]:
     data = json.loads(path.read_text())
+    if data.get("schema_version") != 1:
+        raise ValueError(f"{path} must declare schema_version: 1")
+    if not isinstance(data.get("name"), str) or not data["name"].strip():
+        raise ValueError(f"{path} must declare non-empty name")
     base = path.parent
     tasks = []
     for item in data["tasks"]:
-        fixture = Path(item["fixture"])
+        task_id = require_string(item, "id")
+        category = require_string(item, "category")
+        source = require_string(item, "source")
+        prompt = require_string(item, "prompt")
+        test = require_string_list(item, "test")
+        tags = require_string_list(item, "tags")
+        metadata = item.get("metadata")
+        if not isinstance(metadata, dict):
+            raise ValueError(f"task {task_id} requires metadata object")
+        fixture = Path(require_string(item, "fixture"))
         if not fixture.is_absolute(): fixture = (base / fixture).resolve()
-        tasks.append(Task(item["id"], item["prompt"], fixture, item["test"], int(item.get("timeout_seconds", 900))))
+        tasks.append(Task(task_id, category, source, prompt, fixture, test, int(item["timeout_seconds"]), tags, metadata))
     return tasks
 
 def expand(values: list[str], mapping: dict[str, str]) -> list[str]:
@@ -90,7 +119,11 @@ def run_case(candidate: Candidate, task: Task, model: str, run_root: Path, repet
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(render(content, mapping))
     command = expand(candidate.command, mapping)
-    record: dict[str, Any] = {"task": task.id, "candidate": candidate.name, "repetition": repetition, "command": command, "model": model}
+    record: dict[str, Any] = {
+        "task": task.id, "category": task.category, "source": task.source,
+        "tags": task.tags, "metadata": task.metadata,
+        "candidate": candidate.name, "repetition": repetition, "command": command, "model": model,
+    }
     if dry_run:
         record["status"] = "dry_run"
         return record
@@ -119,16 +152,23 @@ def run_case(candidate: Candidate, task: Task, model: str, run_root: Path, repet
 
 def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
     candidates: dict[str, dict[str, Any]] = {}
+    categories: dict[str, dict[str, Any]] = {}
     for record in records:
         summary = candidates.setdefault(record["candidate"], {"total": 0, "passed": 0, "failed": 0, "timeout": 0, "agent_error": 0, "launch_error": 0, "duration_seconds": 0.0})
         summary["total"] += 1
         status = record["status"]
         if status in summary: summary[status] += 1
         summary["duration_seconds"] += record.get("duration_seconds", 0.0)
+        category_key = f'{record["candidate"]}:{record["category"]}'
+        category = categories.setdefault(category_key, {"candidate": record["candidate"], "category": record["category"], "total": 0, "passed": 0, "failed": 0, "timeout": 0, "agent_error": 0, "launch_error": 0})
+        category["total"] += 1
+        if status in category: category[status] += 1
     for summary in candidates.values():
         summary["pass_rate"] = summary["passed"] / summary["total"] if summary["total"] else 0
         summary["duration_seconds"] = round(summary["duration_seconds"], 3)
-    return {"candidates": candidates, "records": len(records)}
+    for category in categories.values():
+        category["pass_rate"] = category["passed"] / category["total"] if category["total"] else 0
+    return {"candidates": candidates, "categories": categories, "records": len(records)}
 
 def main() -> int:
     parser = argparse.ArgumentParser()

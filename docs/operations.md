@@ -156,7 +156,7 @@ signals before page JavaScript runs.
 Run the real browser smoke test after the MCP server is up:
 
 ```bash
-PLAYWRIGHT_MCP_URL=http://127.0.0.1:8931/mcp go test ./packages/toolkit/tools/playwright -run TestIntegration_PlaywrightMCPRealBrowserSmoke -count=1 -v
+PLAYWRIGHT_MCP_URL=http://127.0.0.1:8931/mcp go test ./packages/tools/playwright -run TestIntegration_PlaywrightMCPRealBrowserSmoke -count=1 -v
 ```
 
 
