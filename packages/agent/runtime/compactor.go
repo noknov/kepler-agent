@@ -13,7 +13,7 @@ type ModelCompactor struct {
 	MaxOutputTokens int
 }
 
-func (c ModelCompactor) Compact(ctx context.Context, messages []model.Message, _ int) (model.Message, error) {
+func (c ModelCompactor) Compact(ctx context.Context, messages []model.Message, targetTokens int) (model.Message, error) {
 	if c.Client == nil {
 		return model.Message{}, fmt.Errorf("compactor model client is required")
 	}
@@ -22,6 +22,9 @@ func (c ModelCompactor) Compact(ctx context.Context, messages []model.Message, _
 	requestMessages = append(requestMessages, instructions)
 	requestMessages = append(requestMessages, messages...)
 	maxTokens := c.MaxOutputTokens
+	if targetTokens > 0 && (maxTokens <= 0 || targetTokens < maxTokens) {
+		maxTokens = targetTokens
+	}
 	if maxTokens <= 0 {
 		maxTokens = 4_096
 	}

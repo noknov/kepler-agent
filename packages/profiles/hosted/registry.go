@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
@@ -63,20 +64,35 @@ type toolBridge struct {
 	sessions map[string]*bridgeSession
 }
 
+const sessionIdleTTL = 24 * time.Hour
+
 type bridgeSession struct {
 	registry *registry.Registry
 	caches   map[string]*registry.RuntimeCache
+	lastUsed time.Time
 }
 
 func (b *toolBridge) state(sessionID string) *bridgeSession {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.pruneLocked(time.Now())
 	state := b.sessions[sessionID]
 	if state == nil {
-		state = &bridgeSession{registry: b.source.Clone(), caches: make(map[string]*registry.RuntimeCache)}
+		state = &bridgeSession{registry: b.source.Clone(), caches: make(map[string]*registry.RuntimeCache), lastUsed: time.Now()}
 		b.sessions[sessionID] = state
 	}
+	state.lastUsed = time.Now()
 	return state
+}
+
+func (b *toolBridge) pruneLocked(now time.Time) {
+	for sessionID, state := range b.sessions {
+		if now.Sub(state.lastUsed) < sessionIdleTTL {
+			continue
+		}
+		delete(b.sessions, sessionID)
+		b.catalog.Deactivate(sessionID)
+	}
 }
 
 func (b *toolBridge) cache(state *bridgeSession, turnID string) *registry.RuntimeCache {

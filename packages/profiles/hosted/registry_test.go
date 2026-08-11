@@ -89,6 +89,19 @@ func TestAdaptRegistryKeepsSessionActivationAndTurnCacheIsolated(t *testing.T) {
 	}
 	activate("s2")
 
+	bridge := set.(bridgedTool).bridge
+	bridge.mu.Lock()
+	bridge.sessions["s1"].lastUsed = time.Now().Add(-sessionIdleTTL)
+	bridge.pruneLocked(time.Now())
+	_, retained := bridge.sessions["s1"]
+	bridge.mu.Unlock()
+	if retained {
+		t.Fatal("idle session bridge state was retained")
+	}
+	if _, ok := catalog.GetActive("s1", "later"); ok {
+		t.Fatal("idle session activation was retained")
+	}
+
 	descriptors := catalog.Descriptors()
 	for _, descriptor := range descriptors {
 		if descriptor.Name == "cache-set" {

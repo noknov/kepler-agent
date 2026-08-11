@@ -244,3 +244,11 @@ func (c *Catalog) EndTurn(sessionID, turnID string) {
 		}
 	}
 }
+
+// Deactivate releases session-scoped deferred-tool visibility. Product
+// adapters call this when they evict an inactive session.
+func (c *Catalog) Deactivate(sessionID string) {
+	c.mu.Lock()
+	delete(c.active, sessionID)
+	c.mu.Unlock()
+}
