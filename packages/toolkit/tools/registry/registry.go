@@ -94,6 +94,16 @@ type ToolMetadata struct {
 	Surfaces     []string
 }
 
+// ToolInfo is an immutable catalog view used by product adapters. Deferred
+// tools remain discoverable without mutating the registry that owns them.
+type ToolInfo struct {
+	Spec     llm.ToolSpec
+	Metadata ToolMetadata
+	Parallel bool
+	Deferred bool
+	Category string
+}
+
 type MetadataTool interface {
 	Metadata() ToolMetadata
 }
@@ -235,6 +245,36 @@ func (r *Registry) Clone() *Registry {
 		clone.categories[category] = append([]string(nil), names...)
 	}
 	return clone
+}
+
+// Inventory returns every policy-visible eager and deferred tool. Unlike
+// Specs, it never activates deferred tools or changes registry state.
+func (r *Registry) Inventory() []ToolInfo {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	items := make([]ToolInfo, 0, len(r.tools)+len(r.deferred))
+	for _, item := range r.tools {
+		name := item.Spec().Function.Name
+		if r.canExpose(name, item) {
+			items = append(items, ToolInfo{Spec: item.Spec(), Metadata: MetadataOf(item), Parallel: !IsWriteOp(item) && CanRunInParallel(item)})
+		}
+	}
+	for _, item := range r.deferred {
+		name := item.Spec().Function.Name
+		if !r.canExpose(name, item) {
+			continue
+		}
+		category := ""
+		if deferred, ok := item.(DeferredTool); ok {
+			category = deferred.Category()
+		}
+		items = append(items, ToolInfo{Spec: item.Spec(), Metadata: MetadataOf(item), Parallel: !IsWriteOp(item) && CanRunInParallel(item), Deferred: true, Category: category})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Spec.Function.Name < items[j].Spec.Function.Name })
+	return items
 }
 
 func cloneToolForRegistry(tool Tool, reg *Registry) Tool {

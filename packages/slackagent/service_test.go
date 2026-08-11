@@ -29,6 +29,28 @@ type fakeMessenger struct {
 	statuses []string
 }
 
+type memoryQueue struct {
+	mu    sync.Mutex
+	items map[string][]slackconversation.Request
+}
+
+func (q *memoryQueue) Enqueue(_ context.Context, session string, request slackconversation.Request) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.items == nil {
+		q.items = make(map[string][]slackconversation.Request)
+	}
+	q.items[session] = append(q.items[session], request)
+	return nil
+}
+func (q *memoryQueue) Drain(_ context.Context, session string) ([]slackconversation.Request, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := append([]slackconversation.Request(nil), q.items[session]...)
+	delete(q.items, session)
+	return out, nil
+}
+
 func (m *fakeMessenger) PostMessage(_ context.Context, _, _, text string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -110,5 +132,21 @@ func TestRenderAnswerUsesStructuredCitations(t *testing.T) {
 	want := "Supported claim.\n\nSources: [Primary source](https://example.test/source)"
 	if got := renderAnswer(message); got != want {
 		t.Fatalf("renderAnswer() = %q, want %q", got, want)
+	}
+}
+
+func TestQueuedInputSurvivesServiceReplacement(t *testing.T) {
+	queue := &memoryQueue{}
+	first := New(hosted.Agent{}, &fakeMessenger{}, safety.PromptPolicy{}, safety.Redactor{}, nil)
+	first.Queue = queue
+	active := &activeRun{}
+	request := slackconversation.Request{EventID: "event-queued", UserID: "U1", Text: "follow up"}
+	first.enqueue("session", active, request)
+
+	second := New(hosted.Agent{}, &fakeMessenger{}, safety.PromptPolicy{}, safety.Redactor{}, nil)
+	second.Queue = queue
+	queued := second.drainQueue("session", nil)
+	if len(queued) != 1 || queued[0].EventID != request.EventID {
+		t.Fatalf("queued=%+v", queued)
 	}
 }

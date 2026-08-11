@@ -6,12 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
 
 type Config struct {
 	Provider             string            `toml:"provider"`
+	Protocol             string            `toml:"protocol"`
+	AnthropicFlavor      string            `toml:"anthropic_flavor"`
 	Model                string            `toml:"model"`
 	BaseURL              string            `toml:"base_url"`
 	APIKeyEnv            string            `toml:"api_key_env"`
@@ -20,6 +23,7 @@ type Config struct {
 	Output               string            `toml:"output"`
 	MaxSteps             int               `toml:"max_steps"`
 	MaxOutputTokens      int               `toml:"max_output_tokens"`
+	Timeout              time.Duration     `toml:"timeout"`
 	UnsafeAllowNoSandbox bool              `toml:"unsafe_allow_no_sandbox"`
 	AdditionalReadRoots  []string          `toml:"additional_read_roots"`
 	PromptFiles          []string          `toml:"prompt_files"`
@@ -35,7 +39,7 @@ type MCPServerConfig struct {
 }
 
 func DefaultConfig() Config {
-	return Config{Provider: "openai", InputRouting: "steer", Output: "text", MaxSteps: 32, MaxOutputTokens: 16384}
+	return Config{Provider: "openai", Protocol: "openai", InputRouting: "steer", Output: "text", MaxSteps: 32, MaxOutputTokens: 16384, Timeout: 30 * time.Minute}
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -64,8 +68,11 @@ func LoadConfig(path string) (Config, error) {
 }
 
 func (config Config) Validate() error {
-	if config.Provider != "openai" && config.Provider != "openai-compatible" && config.Provider != "anthropic" {
-		return fmt.Errorf("provider must be openai, openai-compatible, or anthropic")
+	if strings.TrimSpace(config.Provider) == "" {
+		return fmt.Errorf("provider is required")
+	}
+	if config.Protocol != "openai" && config.Protocol != "anthropic" && config.Protocol != "responses" {
+		return fmt.Errorf("protocol must be openai, responses, or anthropic")
 	}
 	if config.InputRouting != "steer" && config.InputRouting != "queue" {
 		return fmt.Errorf("input_routing must be steer or queue")

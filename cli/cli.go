@@ -21,8 +21,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/mcptools"
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/model"
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/prompt"
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/providers/anthropic"
-	"github.com/noknov/slack-copilot-agent/packages/agentv2/providers/openaichat"
+	"github.com/noknov/slack-copilot-agent/packages/agentv2/providers"
 	agentruntime "github.com/noknov/slack-copilot-agent/packages/agentv2/runtime"
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/skills"
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/tool"
@@ -31,8 +30,8 @@ import (
 )
 
 type options struct {
-	configPath, cwd, stateDir, provider, model, baseURL, apiKeyEnv, routing, output, session, approval string
-	resume, unsafe                                                                                     bool
+	configPath, cwd, stateDir, provider, protocol, model, baseURL, apiKeyEnv, routing, output, session, approval string
+	resume, unsafe                                                                                               bool
 }
 
 type turnDone struct {
@@ -51,6 +50,7 @@ func Run() error {
 	flag.StringVar(&values.cwd, "cwd", ".", "workspace root")
 	flag.StringVar(&values.stateDir, "state-dir", "", "session and approval state directory")
 	flag.StringVar(&values.provider, "provider", "", "openai or anthropic")
+	flag.StringVar(&values.protocol, "protocol", "", "openai, responses, or anthropic")
 	flag.StringVar(&values.model, "model", "", "model name")
 	flag.StringVar(&values.baseURL, "base-url", "", "provider API base URL")
 	flag.StringVar(&values.apiKeyEnv, "api-key-env", "", "environment variable containing the API key")
@@ -70,6 +70,9 @@ func Run() error {
 	flag.Visit(func(item *flag.Flag) { visited[item.Name] = true })
 	if visited["provider"] {
 		config.Provider = values.provider
+	}
+	if visited["protocol"] {
+		config.Protocol = values.protocol
 	}
 	if visited["model"] {
 		config.Model = values.model
@@ -221,29 +224,19 @@ func modelClient(config local.Config) (model.Client, error) {
 	key := ""
 	keyEnv := config.APIKeyEnv
 	if keyEnv == "" {
-		if config.Provider == "anthropic" {
+		switch config.Provider {
+		case "anthropic":
 			keyEnv = "ANTHROPIC_API_KEY"
-		} else {
+		case "opencode-go":
+			keyEnv = "OPENCODE_GO_API_KEY"
+		case "longcat":
+			keyEnv = "LONGCAT_API_KEY"
+		default:
 			keyEnv = "OPENAI_API_KEY"
 		}
 	}
 	key = os.Getenv(keyEnv)
-	switch config.Provider {
-	case "openai", "openai-compatible":
-		base := config.BaseURL
-		if base == "" {
-			base = "https://api.openai.com/v1"
-		}
-		return &openaichat.Client{BaseURL: base, APIKey: key}, nil
-	case "anthropic":
-		base := config.BaseURL
-		if base == "" {
-			base = "https://api.anthropic.com"
-		}
-		return &anthropic.Client{BaseURL: base, APIKey: key}, nil
-	default:
-		return nil, fmt.Errorf("unsupported provider %q", config.Provider)
-	}
+	return providers.New(providers.Config{Provider: config.Provider, Protocol: config.Protocol, BaseURL: config.BaseURL, APIKey: key, AnthropicFlavor: config.AnthropicFlavor, Timeout: config.Timeout})
 }
 
 func prompts(config local.Config, root, skillPrompt string) ([]prompt.Fragment, error) {

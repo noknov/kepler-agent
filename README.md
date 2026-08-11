@@ -23,7 +23,7 @@ presentation.
   replay backed by PostgreSQL; Redis provides coordination and wakeups.
 - Structured tools for code, GitHub, Kubernetes/GCP, runbooks, web, browser,
   Slack, and operational diagnostics.
-- OpenAI-compatible and Anthropic-compatible model protocols, streaming,
+- OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages protocols, streaming,
   multimodal input, retries, and context compaction.
 - Server-side capability policy, workspace boundaries, credential redaction,
   event leases, dead letters, health checks, and graceful draining.
@@ -168,6 +168,8 @@ See [operations](docs/operations.md) for deployment and failure semantics.
 
 ## Documentation
 
+- [version policy and v1 archive](docs/versions.md)
+- [v2 overview](docs/v2/README.md)
 - [local CLI](docs/local-cli.md)
 - [architecture](https://noknov.github.io/slack-copilot-agent/)
 - [configuration](docs/configuration.md)
@@ -182,6 +184,6 @@ See [operations](docs/operations.md) for deployment and failure semantics.
 make check
 ```
 
-This runs formatting checks, vet, the complete v1/v2 test suite, all binary
+This runs formatting checks, vet, the complete v2 test suite, all binary
 builds, and an evaluation dry-run. Some existing HTTP tests bind a local
 loopback port and therefore need that permission in restricted environments.

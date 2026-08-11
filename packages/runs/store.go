@@ -251,6 +251,9 @@ func scoreRun(run Run) *QualityScore {
 	return quality
 }
 
+// Score derives the stable automatic quality projection for a completed run.
+func Score(run Run) *QualityScore { return scoreRun(run) }
+
 func reactionScore(value string) (float64, bool) {
 	switch strings.ToLower(strings.Trim(value, ": ")) {
 	case "+1", "thumbsup", "white_check_mark", "heavy_check_mark":

@@ -347,11 +347,6 @@ func TestLoadDeepSeekDefaults(t *testing.T) {
 	if cfg.LLM.Thinking != "" {
 		t.Fatalf("LLM.Thinking = %q, want empty DeepSeek default", cfg.LLM.Thinking)
 	}
-	for _, want := range []string{"deepseek-v4-flash", "deepseek-v4-pro"} {
-		if !containsString(cfg.LLM.AvailableModels, want) {
-			t.Fatalf("AvailableModels = %#v, want %q", cfg.LLM.AvailableModels, want)
-		}
-	}
 }
 
 func TestLoadOpenCodeGoDefaults(t *testing.T) {
@@ -389,11 +384,6 @@ func TestLoadOpenCodeGoDefaults(t *testing.T) {
 	if cfg.LLM.APIKey != "oc-go-token" {
 		t.Fatalf("LLM.APIKey = %q, want oc-go-token", cfg.LLM.APIKey)
 	}
-	for _, want := range []string{"glm-5.2", "kimi-k2.7-code", "minimax-m3", "qwen3.7-max", "deepseek-v4-flash"} {
-		if !containsString(cfg.LLM.AvailableModels, want) {
-			t.Fatalf("AvailableModels = %#v, want %q", cfg.LLM.AvailableModels, want)
-		}
-	}
 }
 
 func TestLoadOpenCodeZenDefaults(t *testing.T) {
@@ -430,132 +420,6 @@ func TestLoadOpenCodeZenDefaults(t *testing.T) {
 	}
 	if cfg.LLM.APIKey != "oc-zen-token" {
 		t.Fatalf("LLM.APIKey = %q, want oc-zen-token", cfg.LLM.APIKey)
-	}
-	for _, want := range []string{"mimo-v2.5-free", "minimax-m3-free", "nemotron-3-ultra-free", "north-mini-code-free"} {
-		if !containsString(cfg.LLM.AvailableModels, want) {
-			t.Fatalf("AvailableModels = %#v, want %q", cfg.LLM.AvailableModels, want)
-		}
-	}
-}
-
-func TestLoadOpenCodeUsesProviderSpecificAvailableModels(t *testing.T) {
-	resetConfigEnv(t)
-	dir := t.TempDir()
-	writeEnvFile(t, dir, map[string]string{
-		"SLACK_BOT_TOKEN":              "xoxb-test",
-		"SLACK_SIGNING_SECRET":         "secret",
-		"ALLOWED_SLACK_USERS":          "U123",
-		"LLM_PROVIDER":                 "opencode-go",
-		"OPENCODE_GO_API_KEY":          "oc-token",
-		"OPENCODE_GO_MODEL":            "glm-5.2",
-		"OPENCODE_GO_AVAILABLE_MODELS": "glm-5.2,kimi-k2.7-code,mimo-v2.5",
-		"MIMO_AVAILABLE_MODELS":        "mimo-v2.5-pro",
-	})
-
-	wd, _ := os.Getwd()
-	defer func() { _ = os.Chdir(wd) }()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v, want nil", err)
-	}
-	want := []string{"glm-5.2", "kimi-k2.7-code", "mimo-v2.5"}
-	if !equalStrings(cfg.LLM.AvailableModels, want) {
-		t.Fatalf("AvailableModels = %#v, want %#v", cfg.LLM.AvailableModels, want)
-	}
-}
-
-func TestLoadOpenCodeZenUsesProviderSpecificAvailableModels(t *testing.T) {
-	resetConfigEnv(t)
-	dir := t.TempDir()
-	writeEnvFile(t, dir, map[string]string{
-		"SLACK_BOT_TOKEN":               "xoxb-test",
-		"SLACK_SIGNING_SECRET":          "secret",
-		"ALLOWED_SLACK_USERS":           "U123",
-		"LLM_PROVIDER":                  "opencode-zen",
-		"OPENCODE_ZEN_API_KEY":          "oc-zen-token",
-		"OPENCODE_ZEN_MODEL":            "mimo-v2.5-free",
-		"OPENCODE_ZEN_AVAILABLE_MODELS": "mimo-v2.5-free,minimax-m3-free",
-		"OPENCODE_GO_AVAILABLE_MODELS":  "glm-5.2,kimi-k2.7-code",
-	})
-
-	wd, _ := os.Getwd()
-	defer func() { _ = os.Chdir(wd) }()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v, want nil", err)
-	}
-	want := []string{"mimo-v2.5-free", "minimax-m3-free"}
-	if !equalStrings(cfg.LLM.AvailableModels, want) {
-		t.Fatalf("AvailableModels = %#v, want %#v", cfg.LLM.AvailableModels, want)
-	}
-}
-
-func TestLoadMiMoUsesProviderSpecificAvailableModels(t *testing.T) {
-	resetConfigEnv(t)
-	dir := t.TempDir()
-	writeEnvFile(t, dir, map[string]string{
-		"SLACK_BOT_TOKEN":              "xoxb-test",
-		"SLACK_SIGNING_SECRET":         "secret",
-		"ALLOWED_SLACK_USERS":          "U123",
-		"LLM_PROVIDER":                 "mimo",
-		"MIMO_API_KEY":                 "mimo-token",
-		"MIMO_MODEL":                   "mimo-v2.5",
-		"MIMO_AVAILABLE_MODELS":        "mimo-v2.5,mimo-v2.5-pro",
-		"OPENCODE_GO_AVAILABLE_MODELS": "glm-5.2,kimi-k2.7-code",
-	})
-
-	wd, _ := os.Getwd()
-	defer func() { _ = os.Chdir(wd) }()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v, want nil", err)
-	}
-	want := []string{"mimo-v2.5", "mimo-v2.5-pro"}
-	if !equalStrings(cfg.LLM.AvailableModels, want) {
-		t.Fatalf("AvailableModels = %#v, want %#v", cfg.LLM.AvailableModels, want)
-	}
-}
-
-func TestLoadTokenUsageConfigUsesOpenCodeGoEnv(t *testing.T) {
-	resetConfigEnv(t)
-	dir := t.TempDir()
-	writeEnvFile(t, dir, map[string]string{
-		"SLACK_BOT_TOKEN":          "xoxb-test",
-		"SLACK_SIGNING_SECRET":     "secret",
-		"ALLOWED_SLACK_USERS":      "U123",
-		"LLM_PROVIDER":             "opencode-go",
-		"OPENCODE_GO_API_KEY":      "oc-go-token",
-		"OPENCODE_GO_WORKSPACE_ID": "wrk_opencode",
-		"OPENCODE_GO_AUTH_COOKIE":  "auth=opencode",
-	})
-
-	wd, _ := os.Getwd()
-	defer func() { _ = os.Chdir(wd) }()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v, want nil", err)
-	}
-	if cfg.LLM.TokenUsage.OpenCodeGo.WorkspaceID != "wrk_opencode" {
-		t.Fatalf("TokenUsage.OpenCodeGo.WorkspaceID = %q, want OpenCode Go env value", cfg.LLM.TokenUsage.OpenCodeGo.WorkspaceID)
-	}
-	if cfg.LLM.TokenUsage.OpenCodeGo.AuthCookie != "auth=opencode" {
-		t.Fatalf("TokenUsage.OpenCodeGo.AuthCookie = %q, want OpenCode Go env value", cfg.LLM.TokenUsage.OpenCodeGo.AuthCookie)
 	}
 }
 
@@ -934,34 +798,27 @@ func resetConfigEnv(t *testing.T) {
 		"DEEPSEEK_API_KEY",
 		"DEEPSEEK_BASE_URL",
 		"DEEPSEEK_MODEL",
-		"DEEPSEEK_AVAILABLE_MODELS",
 		"DEEPSEEK_THINKING",
 		"DEEPSEEK_TEMPERATURE",
 		"DEEPSEEK_TIMEOUT",
 		"KIMI_API_KEY",
 		"KIMI_BASE_URL",
 		"KIMI_MODEL",
-		"KIMI_AVAILABLE_MODELS",
 		"OPENCODE_GO_PROTOCOL",
 		"OPENCODE_GO_API_KEY",
 		"OPENCODE_GO_BASE_URL",
 		"OPENCODE_GO_MODEL",
-		"OPENCODE_GO_AVAILABLE_MODELS",
 		"OPENCODE_GO_TEMPERATURE",
 		"OPENCODE_GO_TIMEOUT",
-		"OPENCODE_GO_WORKSPACE_ID",
-		"OPENCODE_GO_AUTH_COOKIE",
 		"OPENCODE_ZEN_PROTOCOL",
 		"OPENCODE_ZEN_API_KEY",
 		"OPENCODE_ZEN_BASE_URL",
 		"OPENCODE_ZEN_MODEL",
-		"OPENCODE_ZEN_AVAILABLE_MODELS",
 		"OPENCODE_ZEN_TEMPERATURE",
 		"OPENCODE_ZEN_TIMEOUT",
 		"MOONSHOT_API_KEY",
 		"MOONSHOT_BASE_URL",
 		"MOONSHOT_MODEL",
-		"MOONSHOT_AVAILABLE_MODELS",
 		"ANTHROPIC_BASE_URL",
 		"ANTHROPIC_API_KEY",
 		"ANTHROPIC_AUTH_TOKEN",
@@ -1018,25 +875,4 @@ func resetConfigEnv(t *testing.T) {
 	for _, key := range keys {
 		t.Setenv(key, "")
 	}
-}
-
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
-}
-
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

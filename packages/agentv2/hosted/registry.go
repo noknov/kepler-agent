@@ -11,58 +11,91 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/tools/registry"
 )
 
-// Catalog preserves the existing production tool implementations and their
-// capability policy while exposing v2 descriptors and scope.
+// AdaptRegistry exposes production tools through the canonical catalog. The
+// source registry is an immutable template; each v2 session gets an isolated
+// clone for deferred activation, and each turn gets one shared runtime cache.
 func AdaptRegistry(source *registry.Registry) (*v2tool.Catalog, error) {
 	if source == nil {
 		return nil, fmt.Errorf("hosted tool registry is nil")
 	}
-	bridge := &toolBridge{source: source, known: make(map[string]bool)}
+	bridge := &toolBridge{source: source, sessions: make(map[string]*bridgeSession)}
 	catalog, err := v2tool.NewCatalog()
 	if err != nil {
 		return nil, err
 	}
 	bridge.catalog = catalog
-	if err := bridge.sync(""); err != nil {
-		return nil, err
+	for _, info := range source.Inventory() {
+		raw, err := json.Marshal(info.Spec.Function.Parameters)
+		if err != nil {
+			return nil, err
+		}
+		descriptor := v2tool.Descriptor{
+			Name: info.Spec.Function.Name, Description: info.Spec.Function.Description,
+			InputSchema: raw, Effects: effectsFor(info.Metadata.Risk), Parallel: info.Parallel,
+			Dependencies: append([]string(nil), info.Metadata.Dependencies...), Surfaces: append([]string(nil), info.Metadata.Surfaces...),
+		}
+		if info.Deferred {
+			descriptor.Exposure = v2tool.ExposureDeferred
+			descriptor.Tags = []string{info.Category}
+		}
+		if err := catalog.Register(bridgedTool{bridge: bridge, descriptor: descriptor}); err != nil {
+			return nil, err
+		}
 	}
 	return catalog, nil
 }
 
-type toolBridge struct {
-	mu      sync.Mutex
-	source  *registry.Registry
-	catalog *v2tool.Catalog
-	known   map[string]bool
+func effectsFor(risk registry.ToolRisk) []v2tool.Effect {
+	switch risk {
+	case registry.RiskWrite:
+		return []v2tool.Effect{v2tool.EffectWorkspaceWrite}
+	case registry.RiskExternalWrite:
+		return []v2tool.Effect{v2tool.EffectExternalWrite}
+	default:
+		return []v2tool.Effect{v2tool.EffectRead}
+	}
 }
 
-func (b *toolBridge) sync(sessionID string) error {
+type toolBridge struct {
+	mu       sync.Mutex
+	source   *registry.Registry
+	catalog  *v2tool.Catalog
+	sessions map[string]*bridgeSession
+}
+
+type bridgeSession struct {
+	registry *registry.Registry
+	caches   map[string]*registry.RuntimeCache
+}
+
+func (b *toolBridge) state(sessionID string) *bridgeSession {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for _, spec := range b.source.Specs() {
-		name := spec.Function.Name
-		if b.known[name] {
-			continue
-		}
-		raw, err := json.Marshal(spec.Function.Parameters)
-		if err != nil {
-			return err
-		}
-		descriptor := v2tool.Descriptor{Name: name, Description: spec.Function.Description, InputSchema: raw, Effects: []v2tool.Effect{v2tool.EffectRead}, Parallel: false}
-		if sessionID != "" {
-			descriptor.Exposure = v2tool.ExposureDeferred
-		}
-		if decision := b.source.PolicyDecision(name); decision.Risk == registry.RiskWrite {
-			descriptor.Effects = []v2tool.Effect{v2tool.EffectWorkspaceWrite}
-		} else if decision.Risk == registry.RiskExternalWrite {
-			descriptor.Effects = []v2tool.Effect{v2tool.EffectExternalWrite}
-		}
-		if err := b.catalog.Register(bridgedTool{bridge: b, descriptor: descriptor}); err != nil {
-			return err
-		}
-		b.known[name] = true
-		if sessionID != "" {
-			_ = b.catalog.Activate(sessionID, name)
+	state := b.sessions[sessionID]
+	if state == nil {
+		state = &bridgeSession{registry: b.source.Clone(), caches: make(map[string]*registry.RuntimeCache)}
+		b.sessions[sessionID] = state
+	}
+	return state
+}
+
+func (b *toolBridge) cache(state *bridgeSession, turnID string) *registry.RuntimeCache {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	cache := state.caches[turnID]
+	if cache == nil {
+		cache = registry.NewRuntimeCache()
+		state.caches[turnID] = cache
+	}
+	return cache
+}
+
+func (b *toolBridge) syncActive(sessionID string, state *bridgeSession) error {
+	for _, spec := range state.registry.Specs() {
+		if b.catalog.Has(spec.Function.Name) {
+			if err := b.catalog.Activate(sessionID, spec.Function.Name); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -75,16 +108,26 @@ type bridgedTool struct {
 
 func (t bridgedTool) Descriptor() v2tool.Descriptor { return t.descriptor }
 
+func (t bridgedTool) EndTurn(sessionID, turnID string) {
+	t.bridge.mu.Lock()
+	defer t.bridge.mu.Unlock()
+	if state := t.bridge.sessions[sessionID]; state != nil {
+		delete(state.caches, turnID)
+	}
+}
+
 func (t bridgedTool) Execute(ctx context.Context, call v2tool.Call) (v2tool.Result, error) {
+	state := t.bridge.state(call.Scope.SessionID)
 	values := call.Scope.Values
-	result, err := t.bridge.source.Execute(ctx, call.Name, call.Arguments, registry.Runtime{UserID: call.Scope.UserID, Channel: values["channel"], ThreadTS: values["thread_ts"], RunID: call.Scope.TurnID, Cache: registry.NewRuntimeCache()})
+	result, err := state.registry.Execute(ctx, call.Name, call.Arguments, registry.Runtime{
+		UserID: call.Scope.UserID, Channel: values["channel"], ThreadTS: values["thread_ts"],
+		RunID: call.Scope.TurnID, Cache: t.bridge.cache(state, call.Scope.TurnID),
+	})
 	if err != nil {
 		return v2tool.Result{}, err
 	}
-	// tool-search may have activated deferred hosted tools. Make those visible
-	// only to the current v2 session on the next model step.
-	if err := t.bridge.sync(call.Scope.SessionID); err != nil {
+	if err := t.bridge.syncActive(call.Scope.SessionID, state); err != nil {
 		return v2tool.Result{}, err
 	}
-	return v2tool.Result{Content: []model.Content{{Type: model.ContentText, Text: result.Content}}, Metadata: map[string]any{"needs_user_input": result.NeedsUserInput}}, nil
+	return v2tool.Result{Content: []model.Content{{Type: model.ContentText, Text: result.Content}}, NeedsUserInput: result.NeedsUserInput}, nil
 }

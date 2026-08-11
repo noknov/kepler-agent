@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -40,6 +42,46 @@ type echoTool struct{}
 
 func (echoTool) Descriptor() tool.Descriptor {
 	return tool.Descriptor{Name: "echo", InputSchema: json.RawMessage(`{"type":"object"}`), Parallel: true}
+}
+
+type askTool struct{}
+
+func (askTool) Descriptor() tool.Descriptor {
+	return tool.Descriptor{Name: "ask", InputSchema: json.RawMessage(`{"type":"object"}`)}
+}
+
+type blockingModel struct{}
+
+func (blockingModel) Generate(ctx context.Context, _ model.Request, _ model.EventSink) (model.Response, error) {
+	<-ctx.Done()
+	return model.Response{}, ctx.Err()
+}
+
+type parallelProbeTool struct {
+	name    string
+	started chan<- string
+	release <-chan struct{}
+}
+
+func (t parallelProbeTool) Descriptor() tool.Descriptor {
+	return tool.Descriptor{Name: t.name, InputSchema: json.RawMessage(`{"type":"object"}`), Parallel: true}
+}
+func (t parallelProbeTool) Execute(context.Context, tool.Call) (tool.Result, error) {
+	t.started <- t.name
+	<-t.release
+	return tool.TextResult("ok"), nil
+}
+
+type recordingCompactor struct{ called bool }
+
+func (c *recordingCompactor) Compact(_ context.Context, _ []model.Message, _ int) (model.Message, error) {
+	c.called = true
+	return model.TextMessage(model.RoleSystem, "compacted"), nil
+}
+func (askTool) Execute(context.Context, tool.Call) (tool.Result, error) {
+	result := tool.TextResult("Which environment should I use?")
+	result.NeedsUserInput = true
+	return result, nil
 }
 func (echoTool) Execute(_ context.Context, call tool.Call) (tool.Result, error) {
 	return tool.TextResult(string(call.Arguments)), nil
@@ -148,5 +190,110 @@ func TestRunTurnReturnsModelErrorAfterRetryBudget(t *testing.T) {
 	result, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "s4", Input: model.TextMessage(model.RoleUser, "hi")})
 	if err == nil || result.Termination != TerminationModelError {
 		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+func TestRunTurnStopsWhenToolNeedsUserInput(t *testing.T) {
+	client := &scriptedModel{responses: []model.Response{{
+		Message:      model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "ask-1", Name: "ask", Arguments: json.RawMessage(`{}`)}}}},
+		FinishReason: model.FinishToolCalls,
+	}}}
+	catalog, _ := tool.NewCatalog(askTool{})
+	store := transcript.NewMemoryStore()
+	runner, err := New(Config{Model: "test"}, Dependencies{Model: client, Tools: catalog, Transcript: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "pending", Input: model.TextMessage(model.RoleUser, "deploy")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Termination != TerminationPendingInput || result.Message.Text() != "Which environment should I use?" || len(client.requests) != 1 {
+		t.Fatalf("result=%+v requests=%d", result, len(client.requests))
+	}
+}
+
+func TestRunTurnRunsParallelSafeToolsConcurrently(t *testing.T) {
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	call := func(id, name string) model.Content {
+		return model.Content{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: id, Name: name, Arguments: json.RawMessage(`{}`)}}
+	}
+	client := &scriptedModel{responses: []model.Response{
+		{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{call("1", "a"), call("2", "b")}}, FinishReason: model.FinishToolCalls},
+		{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop},
+	}}
+	catalog, _ := tool.NewCatalog(parallelProbeTool{name: "a", started: started, release: release}, parallelProbeTool{name: "b", started: started, release: release})
+	runner, _ := New(Config{Model: "test"}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
+	done := make(chan error, 1)
+	go func() {
+		_, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "parallel", Input: model.TextMessage(model.RoleUser, "run")})
+		done <- err
+	}()
+	seen := map[string]bool{<-started: true, <-started: true}
+	if !seen["a"] || !seen["b"] {
+		t.Fatalf("started=%v", seen)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunTurnRecordsCancellationAndReleasesSessionLock(t *testing.T) {
+	catalog, _ := tool.NewCatalog()
+	store := transcript.NewMemoryStore()
+	runner, _ := New(Config{Model: "test"}, Dependencies{Model: blockingModel{}, Tools: catalog, Transcript: store})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := runner.RunTurn(ctx, TurnRequest{SessionID: "cancel", Input: model.TextMessage(model.RoleUser, "wait")})
+	if err == nil || result.Termination != TerminationCanceled {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	runner.lockMu.Lock()
+	locks := len(runner.locks)
+	runner.lockMu.Unlock()
+	if locks != 0 {
+		t.Fatalf("session locks retained=%d", locks)
+	}
+	events, _ := store.Load(context.Background(), "cancel", 0)
+	if events[len(events)-1].Type != transcript.TurnCanceled {
+		t.Fatalf("last event=%+v", events[len(events)-1])
+	}
+}
+
+func TestRunTurnProjectsSteeringBeforeModelCall(t *testing.T) {
+	client := &scriptedModel{responses: []model.Response{{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop}}}
+	catalog, _ := tool.NewCatalog()
+	steering := &InputBuffer{}
+	steering.Push(model.TextMessage(model.RoleUser, "focus on postgres"))
+	runner, _ := New(Config{Model: "test"}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
+	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "steer", Input: model.TextMessage(model.RoleUser, "diagnose"), Steering: steering}); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, message := range client.requests[0].Messages {
+		found = found || message.Text() == "focus on postgres"
+	}
+	if !found {
+		t.Fatalf("messages=%+v", client.requests[0].Messages)
+	}
+}
+
+func TestRunTurnCompactsDroppedContext(t *testing.T) {
+	store := transcript.NewMemoryStore()
+	for index := 0; index < 6; index++ {
+		message := model.TextMessage(model.RoleUser, strings.Repeat("history ", 50))
+		_, _ = store.Append(context.Background(), transcript.Event{ID: fmt.Sprintf("old-%d", index), SessionID: "compact", Type: transcript.UserInput, Message: &message})
+	}
+	client := &scriptedModel{responses: []model.Response{{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop}}}
+	catalog, _ := tool.NewCatalog()
+	compactor := &recordingCompactor{}
+	runner, _ := New(Config{Model: "test", Context: ContextConfig{MaxTokens: 120, ReserveTokens: 20}}, Dependencies{Model: client, Tools: catalog, Transcript: store, Compactor: compactor})
+	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "compact", Input: model.TextMessage(model.RoleUser, "new")}); err != nil {
+		t.Fatal(err)
+	}
+	if !compactor.called {
+		t.Fatal("compactor was not called")
 	}
 }

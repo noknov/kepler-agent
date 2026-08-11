@@ -2,7 +2,7 @@
   "candidates": [
     {
       "name": "slack-copilot",
-      "command": ["{repo}/bin/slack-copilot", "--cwd", "{workspace}", "--model", "{candidate_model}", "--base-url", "{env_openai_base}", "{prompt}"],
+      "command": ["{repo}/bin/slack-copilot", "--cwd", "{workspace}", "--provider", "openai", "--protocol", "responses", "--model", "{candidate_model}", "--base-url", "{env_openai_base}", "{prompt}"],
       "model": "{model}"
     },
     {
