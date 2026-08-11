@@ -101,6 +101,11 @@ func sensitivePath(path string) bool {
 		}
 	}
 	normalized := "/" + strings.ToLower(filepath.ToSlash(path))
+	for _, suffix := range []string{"/.git/config", "/.git/credentials", "/.netrc", "/.npmrc", "/.pypirc", "/.docker/config.json", "/.config/gh/hosts.yml"} {
+		if strings.HasSuffix(normalized, suffix) {
+			return true
+		}
+	}
 	for _, part := range []string{"/.aws/", "/.gcloud/", "/.kube/", "/secrets/", "/credentials/"} {
 		if strings.Contains(normalized, part) {
 			return true
@@ -110,7 +115,18 @@ func sensitivePath(path string) bool {
 }
 
 func (w Workspace) SensitivePaths() ([]string, error) {
-	var paths []string
+	paths := make([]string, 0, 16)
+	seen := make(map[string]bool)
+	for _, relative := range []string{
+		".git/config", ".git/credentials", ".netrc", ".npmrc", ".pypirc",
+		".docker/config.json", ".config/gh/hosts.yml",
+	} {
+		path := filepath.Join(w.Root, filepath.FromSlash(relative))
+		if _, err := os.Lstat(path); err == nil {
+			paths = append(paths, path)
+			seen[path] = true
+		}
+	}
 	err := filepath.WalkDir(w.Root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -121,8 +137,9 @@ func (w Workspace) SensitivePaths() ([]string, error) {
 		if entry.IsDir() && (entry.Name() == ".git" || entry.Name() == "node_modules") {
 			return filepath.SkipDir
 		}
-		if sensitivePath(path) {
+		if sensitivePath(path) && !seen[path] {
 			paths = append(paths, path)
+			seen[path] = true
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}

@@ -112,14 +112,12 @@ func (r *eventRouter) Publish(_ context.Context, event transcript.Event) {
 	if stream == nil {
 		return
 	}
+	stream.Lifecycle(event)
 	if event.Type == transcript.ModelStreamed && event.Model != nil && event.Model.Type == model.StreamTextDelta && event.Model.Text != "" {
 		stream.Write(event.Model.Text)
 	}
 	if event.Type == transcript.AssistantMessage && event.Message != nil {
 		stream.CommitStep(len(event.Message.ToolCalls()) > 0)
-	}
-	if event.Type == transcript.ToolCallStarted && event.ToolCall != nil {
-		stream.Status(event.ToolCall.Name)
 	}
 }
 
@@ -435,14 +433,15 @@ func isCancel(text string) bool {
 }
 
 type slackStream struct {
-	ctx       context.Context
-	messenger slackconversation.Messenger
-	req       slackconversation.Request
-	mu        sync.Mutex
-	ts        string
-	pending   strings.Builder
-	streamed  bool
-	status    slackconversation.ThreadStatusMessenger
+	ctx        context.Context
+	messenger  slackconversation.Messenger
+	req        slackconversation.Request
+	mu         sync.Mutex
+	ts         string
+	pending    strings.Builder
+	streamed   bool
+	status     slackconversation.ThreadStatusMessenger
+	lastStatus string
 }
 
 func newSlackStream(ctx context.Context, messenger slackconversation.Messenger, req slackconversation.Request) *slackStream {
@@ -454,23 +453,6 @@ func (s *slackStream) Start() {
 		return
 	}
 	s.status = status
-	statusText, loading := "is thinking", "Thinking..."
-	if slackconversation.IsCJK(s.req.Text) {
-		statusText, loading = "正在思考", "思考中..."
-	}
-	_ = status.SetThreadStatus(s.ctx, s.req.Channel, s.req.ThreadTS, statusText, []string{loading})
-}
-
-func (s *slackStream) Status(toolName string) {
-	if s.status == nil || toolName == "" {
-		return
-	}
-	label := "Using " + toolName
-	status := "is working"
-	if slackconversation.IsCJK(s.req.Text) {
-		label, status = "正在使用 "+toolName, "正在处理"
-	}
-	_ = s.status.SetThreadStatus(s.ctx, s.req.Channel, s.req.ThreadTS, status, []string{label})
 }
 func (s *slackStream) Write(text string) {
 	s.mu.Lock()
@@ -542,6 +524,13 @@ func (s *slackStream) Fail(message string, canceled bool) {
 
 func (s *slackStream) clearStatus() {
 	if s.status != nil {
+		s.mu.Lock()
+		if s.lastStatus == "\x00" {
+			s.mu.Unlock()
+			return
+		}
+		s.lastStatus = "\x00"
+		s.mu.Unlock()
 		_ = s.status.SetThreadStatus(context.Background(), s.req.Channel, s.req.ThreadTS, "", nil)
 	}
 }

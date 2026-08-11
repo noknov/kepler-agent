@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -53,6 +54,10 @@ func (s Sandbox) Run(ctx context.Context, request CommandRequest) (CommandResult
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("scan sensitive workspace paths: %w", err)
 	}
+	readRoots, err := canonicalReadRoots(s.AdditionalReadRoots)
+	if err != nil {
+		return CommandResult{}, err
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		path := "/usr/bin/sandbox-exec"
@@ -65,7 +70,7 @@ func (s Sandbox) Run(ctx context.Context, request CommandRequest) (CommandResult
 			profile += "(deny file-read* (subpath " + strconv.Quote(home) + "))\n"
 		}
 		profile += "(allow file-read* (subpath " + strconv.Quote(s.Workspace.Root) + "))\n"
-		for _, root := range s.AdditionalReadRoots {
+		for _, root := range readRoots {
 			profile += "(allow file-read* (subpath " + strconv.Quote(root) + "))\n"
 		}
 		for _, path := range sensitive {
@@ -80,7 +85,7 @@ func (s Sandbox) Run(ctx context.Context, request CommandRequest) (CommandResult
 		if lookupErr != nil {
 			return s.unsandboxed(ctx, request, workdir, shell, lookupErr)
 		}
-		args := []string{"--die-with-parent", "--new-session", "--ro-bind", "/", "/"}
+		args := []string{"--die-with-parent", "--new-session", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try", "--cap-drop", "ALL", "--ro-bind", "/", "/"}
 		if home, homeErr := os.UserHomeDir(); homeErr == nil && home != "/" {
 			args = append(args, "--tmpfs", home)
 			args = append(args, bindParentArgs(home, s.Workspace.Root)...)
@@ -97,7 +102,7 @@ func (s Sandbox) Run(ctx context.Context, request CommandRequest) (CommandResult
 				args = append(args, "--ro-bind", "/dev/null", hidden)
 			}
 		}
-		for _, root := range s.AdditionalReadRoots {
+		for _, root := range readRoots {
 			args = append(args, "--ro-bind", root, root)
 		}
 		args = append(args, "--chdir", workdir, "--proc", "/proc", "--dev", "/dev")
@@ -178,8 +183,45 @@ func safeEnvironment(isolatedHome string, extra []string) []string {
 		}
 	}
 	values = append(values, "HOME="+isolatedHome)
-	values = append(values, extra...)
+	for _, entry := range extra {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok || !allowed[key] || key == "PATH" || key == "TMPDIR" || key == "SHELL" {
+			continue
+		}
+		values = append(values, entry)
+	}
 	return values
+}
+
+func canonicalReadRoots(values []string) ([]string, error) {
+	home, _ := os.UserHomeDir()
+	seen := make(map[string]bool, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		abs, err := filepath.Abs(value)
+		if err != nil {
+			return nil, fmt.Errorf("resolve additional read root: %w", err)
+		}
+		real, err := filepath.EvalSymlinks(abs)
+		if err != nil {
+			return nil, fmt.Errorf("resolve additional read root %q: %w", value, err)
+		}
+		info, err := os.Stat(real)
+		if err != nil || !info.IsDir() {
+			return nil, fmt.Errorf("additional read root %q must be an existing directory", value)
+		}
+		if real == string(filepath.Separator) || (home != "" && real == home) {
+			return nil, fmt.Errorf("additional read root %q is too broad", value)
+		}
+		if !seen[real] {
+			seen[real] = true
+			out = append(out, real)
+		}
+	}
+	return out, nil
 }
 
 func bindParentArgs(home, target string) []string {

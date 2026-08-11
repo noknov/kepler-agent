@@ -11,6 +11,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/config"
 	"github.com/noknov/slack-copilot-agent/packages/infra/httpguard"
 	sharedlogging "github.com/noknov/slack-copilot-agent/packages/infra/logging"
+	"github.com/noknov/slack-copilot-agent/packages/infra/telemetry"
 	"github.com/noknov/slack-copilot-agent/packages/platform"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/slack"
@@ -34,6 +35,15 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	sharedlogging.Configure(cfg.Observing.LogLevel)
+	shutdownTelemetry, err := telemetry.Setup(ctx, "slack-copilot-gateway")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTelemetry(shutdownCtx)
+	}()
 	service, err := New(ctx, cfg)
 	if err != nil {
 		return err

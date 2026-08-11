@@ -2,6 +2,7 @@ package slackagent
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 
@@ -27,6 +28,7 @@ type fakeMessenger struct {
 	stopped  bool
 	posts    []string
 	statuses []string
+	loading  [][]string
 }
 
 type memoryQueue struct {
@@ -76,10 +78,11 @@ func (m *fakeMessenger) DeleteMessage(context.Context, string, string) error { r
 func (m *fakeMessenger) ThreadContext(context.Context, string, string, int) string {
 	return "prior Slack context"
 }
-func (m *fakeMessenger) SetThreadStatus(_ context.Context, _, _, status string, _ []string) error {
+func (m *fakeMessenger) SetThreadStatus(_ context.Context, _, _, status string, loading []string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.statuses = append(m.statuses, status)
+	m.loading = append(m.loading, append([]string(nil), loading...))
 	return nil
 }
 
@@ -117,6 +120,34 @@ func TestServiceRunsHostedHarnessAndStreamsAnswer(t *testing.T) {
 	}
 	if len(messenger.statuses) < 2 || messenger.statuses[0] != "is thinking" || messenger.statuses[len(messenger.statuses)-1] != "" {
 		t.Fatalf("thread statuses = %#v", messenger.statuses)
+	}
+}
+
+func TestLifecycleStatusUsesCanonicalEventsAndCatalogFallback(t *testing.T) {
+	messenger := &fakeMessenger{}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T", Text: "diagnose"})
+	stream.Start()
+	if len(messenger.statuses) != 0 {
+		t.Fatalf("Start emitted status without a runtime event: %#v", messenger.statuses)
+	}
+	stream.Lifecycle(transcript.Event{Type: transcript.TurnStarted})
+	stream.Lifecycle(transcript.Event{Type: transcript.ToolCallStarted, ToolCall: &tool.Call{Name: "repo-search"}})
+	stream.Lifecycle(transcript.Event{Type: transcript.TurnCompleted})
+	if got := messenger.statuses; len(got) != 3 || got[0] != "is thinking" || got[1] != "is working" || got[2] != "" {
+		t.Fatalf("statuses=%#v", got)
+	}
+	if got := messenger.loading[1]; len(got) != 1 || got[0] != "Using repo search..." {
+		t.Fatalf("tool loading=%#v", got)
+	}
+}
+
+func TestLifecycleStatusShowsOnlyRetryableModelFailures(t *testing.T) {
+	retryable := json.RawMessage(`{"retryable":true}`)
+	if status, _, ok := lifecycleStatus(transcript.Event{Type: transcript.ModelFailed, Metadata: retryable}, false); !ok || status != "is retrying" {
+		t.Fatalf("retryable failure status=%q ok=%v", status, ok)
+	}
+	if _, _, ok := lifecycleStatus(transcript.Event{Type: transcript.ModelFailed, Metadata: json.RawMessage(`{"retryable":false}`)}, false); ok {
+		t.Fatal("non-retryable model failure emitted an intermediate status")
 	}
 }
 

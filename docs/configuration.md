@@ -158,8 +158,9 @@ OPENCODE_GO_PROTOCOL=openai
 
 ## Secondary Model
 
-The optional secondary model is used for cheaper/faster background work such as
-read-only code exploration, dynamic statuses, and compact summaries.
+The optional secondary model is used for compact summaries. Dynamic status is
+a deterministic projection of runtime/tool lifecycle events and never invokes
+a second model.
 
 ```bash
 SECONDARY_PROVIDER=opencode-zen
@@ -169,6 +170,21 @@ SECONDARY_MODEL=mimo-v2.5-free
 
 When `SESSION_COMPACT_MODEL` is unset, compact summaries use `SECONDARY_MODEL`
 when configured, otherwise the primary model.
+
+## OpenTelemetry
+
+The gateway, worker, observability service, and local CLI support standard
+OTLP/HTTP trace export through the OpenTelemetry environment contract:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+OTEL_SERVICE_NAME=slack-copilot-worker
+```
+
+The shared runtime emits nested `agent.turn`, `model.generate`, and
+`tool.execute` spans. Session/turn IDs and tool/model names are attributes;
+prompt text, tool arguments, model output, credentials, and Slack message text
+are never attached. With no OTLP endpoint configured, tracing is a no-op.
 
 ## Repository Freshness
 

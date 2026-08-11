@@ -16,6 +16,9 @@ stream events. Web citations remain structured provenance on content blocks.
 Prompts decide when and how to cite; presentation adapters decide how to render
 the provider-supplied citation records. Dynamic status uses deterministic
 runtime and tool lifecycle events, so it does not require a second status model.
+Slack projects turn, context, compaction, retry, approval, tool, and terminal
+events into localized status text through the prompt catalog; status display is
+not conversation state and is not replayed into model context.
 
 Hosted capability policy is authoritative and non-interactive. Local tools use
 the workspace sandbox and scoped approvals. TTS is an optional external-write

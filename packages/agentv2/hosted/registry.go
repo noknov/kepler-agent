@@ -32,7 +32,7 @@ func AdaptRegistry(source *registry.Registry) (*v2tool.Catalog, error) {
 		descriptor := v2tool.Descriptor{
 			Name: info.Spec.Function.Name, Description: info.Spec.Function.Description,
 			InputSchema: raw, Effects: effectsFor(info.Metadata.Risk), Parallel: info.Parallel,
-			Dependencies: append([]string(nil), info.Metadata.Dependencies...), Surfaces: append([]string(nil), info.Metadata.Surfaces...),
+			Dependencies: append([]string(nil), info.Metadata.Dependencies...), Surfaces: append([]string(nil), info.Metadata.Surfaces...), Timeout: info.Metadata.Timeout,
 		}
 		if info.Deferred {
 			descriptor.Exposure = v2tool.ExposureDeferred

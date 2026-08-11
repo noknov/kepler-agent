@@ -8,6 +8,7 @@ input_routing = "steer"
 output = "text"
 max_steps = 32
 max_output_tokens = 16384
+temperature = 0
 unsafe_allow_no_sandbox = false
 
 # Readable by sandboxed commands in addition to the workspace. Keep this small.

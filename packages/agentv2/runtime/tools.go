@@ -11,6 +11,9 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/model"
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/tool"
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/transcript"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type preparedCall struct {
@@ -134,9 +137,16 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 		toolCtx, cancel = context.WithTimeout(ctx, entry.descriptor.Timeout)
 	}
 	defer cancel()
+	toolCtx, span := runtimeTracer.Start(toolCtx, "tool.execute", trace.WithAttributes(
+		attribute.String("gen_ai.tool.name", call.Name),
+		attribute.String("gen_ai.tool.call.id", call.ID),
+	))
+	defer span.End()
 	started := time.Now()
 	result, err := entry.item.Execute(toolCtx, call)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "tool execution failed")
 		result.IsError = true
 		if result.ErrorCode == "" {
 			result.ErrorCode = "tool_error"
@@ -149,6 +159,7 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 		result.Metadata = make(map[string]any)
 	}
 	result.Metadata["duration_ms"] = time.Since(started).Milliseconds()
+	span.SetAttributes(attribute.Int64("agent.tool.duration_ms", time.Since(started).Milliseconds()), attribute.Bool("agent.tool.error", result.IsError))
 	result = limitToolResult(toolCtx, result, call, r.config.ToolResults, r.deps.Artifacts)
 	entry.result = &result
 }

@@ -213,6 +213,54 @@ func TestRunTurnStopsWhenToolNeedsUserInput(t *testing.T) {
 	}
 }
 
+func TestPendingInputContinuesAsANormalNextTurn(t *testing.T) {
+	client := &scriptedModel{responses: []model.Response{
+		{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "ask-1", Name: "ask", Arguments: json.RawMessage(`{}`)}}}}, FinishReason: model.FinishToolCalls},
+		{Message: model.TextMessage(model.RoleAssistant, "Deploying to staging."), FinishReason: model.FinishStop},
+	}}
+	catalog, _ := tool.NewCatalog(askTool{})
+	runner, _ := New(Config{Model: "test"}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
+	first, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "pending-followup", TurnID: "first", Input: model.TextMessage(model.RoleUser, "deploy")})
+	if err != nil || first.Termination != TerminationPendingInput {
+		t.Fatalf("first=%+v err=%v", first, err)
+	}
+	second, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "pending-followup", TurnID: "second", Input: model.TextMessage(model.RoleUser, "staging")})
+	if err != nil || second.Message.Text() != "Deploying to staging." {
+		t.Fatalf("second=%+v err=%v", second, err)
+	}
+	request := client.requests[1]
+	var sawQuestion, sawAnswer bool
+	for _, message := range request.Messages {
+		sawAnswer = sawAnswer || message.Text() == "staging"
+		for _, content := range message.Content {
+			if content.ToolResult != nil {
+				for _, resultContent := range content.ToolResult.Content {
+					sawQuestion = sawQuestion || resultContent.Text == "Which environment should I use?"
+				}
+			}
+		}
+	}
+	if !sawQuestion || !sawAnswer {
+		t.Fatalf("follow-up context=%+v", request.Messages)
+	}
+}
+
+func TestRunTurnTerminatesRepeatedToolLoop(t *testing.T) {
+	call := model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "same", Name: "echo", Arguments: json.RawMessage(`{"value":"same"}`)}}}}
+	client := &scriptedModel{responses: []model.Response{
+		{Message: call, FinishReason: model.FinishToolCalls},
+		{Message: call, FinishReason: model.FinishToolCalls},
+		{Message: call, FinishReason: model.FinishToolCalls},
+		{Message: call, FinishReason: model.FinishToolCalls},
+	}}
+	catalog, _ := tool.NewCatalog(echoTool{})
+	runner, _ := New(Config{Model: "test", MaxRepeatedToolCalls: 3}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
+	result, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "loop", Input: model.TextMessage(model.RoleUser, "repeat")})
+	if err == nil || result.Termination != TerminationLoopDetected || len(client.requests) != 4 {
+		t.Fatalf("result=%+v requests=%d err=%v", result, len(client.requests), err)
+	}
+}
+
 func TestRunTurnRunsParallelSafeToolsConcurrently(t *testing.T) {
 	started := make(chan string, 2)
 	release := make(chan struct{})
