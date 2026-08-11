@@ -232,7 +232,10 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 				call.Type = "function"
 			}
 			if tc.Function.Name != "" {
-				call.Function.Name += tc.Function.Name
+				// function.name identifies the call; unlike arguments it is not a
+				// token stream. Compatible providers may repeat it on subsequent
+				// chunks, so retain the latest complete identifier.
+				call.Function.Name = tc.Function.Name
 			}
 			if tc.Function.Arguments != "" {
 				call.Function.Arguments += tc.Function.Arguments
