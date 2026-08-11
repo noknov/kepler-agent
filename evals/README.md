@@ -31,6 +31,23 @@ python3 evals/run.py \
 
 Set `EVAL_OPENAI_BASE_URL` and `EVAL_ANTHROPIC_BASE_URL` to the same gateway. The slack-copilot candidate uses `--protocol responses`, so it exercises the same canonical provider adapter and Responses wire client available to the hosted profile. Each candidate command receives `EVAL_MODEL`, `OPENAI_MODEL`, and `ANTHROPIC_MODEL`. Run `python3 evals/run.py --help` for filtering, repetitions, and dry-run options.
 
+Task filters are composable:
+
+- multiple `--task`, `--category`, `--source`, or `--tag` values are OR within the same field
+- different filter fields are ANDed together
+
+Example:
+
+```sh
+python3 evals/run.py \
+  --suite evals/suites/smoke.json \
+  --candidates evals/candidates.example.json \
+  --model your-controlled-model \
+  --category bugfix \
+  --tag go \
+  --output evals/results/go-bugfix
+```
+
 ## Suite schema
 
 Suites must use `schema_version: 1`; older ad-hoc suite shapes are intentionally unsupported.
@@ -42,6 +59,12 @@ Each task declares:
 - `metadata`, for benchmark-specific fields that should be preserved in records
 
 The runner copies `fixture` into an isolated workspace and records `category`, `source`, `tags`, and `metadata` in every case record.
+
+For non-dry runs, every case directory also keeps:
+
+- `original/`, the pristine copied fixture
+- `workspace/`, the candidate's final workspace
+- `workspace.diff`, a unified recursive diff from `original/` to `workspace/`
 
 ## Fair comparison protocol
 

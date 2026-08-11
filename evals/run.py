@@ -74,6 +74,24 @@ def load_tasks(path: Path) -> list[Task]:
         tasks.append(Task(task_id, category, source, prompt, fixture, test, int(item["timeout_seconds"]), tags, metadata))
     return tasks
 
+def filter_tasks(tasks: list[Task], ids: list[str], categories: list[str], sources: list[str], tags: list[str]) -> list[Task]:
+    id_set = set(ids)
+    category_set = set(categories)
+    source_set = set(sources)
+    tag_set = set(tags)
+    out = []
+    for task in tasks:
+        if id_set and task.id not in id_set:
+            continue
+        if category_set and task.category not in category_set:
+            continue
+        if source_set and task.source not in source_set:
+            continue
+        if tag_set and not tag_set.intersection(task.tags):
+            continue
+        out.append(task)
+    return out
+
 def expand(values: list[str], mapping: dict[str, str]) -> list[str]:
     return [render(value, mapping) for value in values]
 
@@ -99,11 +117,22 @@ def clean_environment(candidate: Candidate, model: str, workspace: Path, home: P
     env.update({key: render(value, mapping) for key, value in candidate.env.items()})
     return env
 
+def capture_workspace_diff(original: Path, workspace: Path, case_root: Path) -> str:
+    diff_path = case_root / "workspace.diff"
+    try:
+        diff = subprocess.run(["diff", "-ruN", str(original), str(workspace)], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+        diff_path.write_text(diff.stdout)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        diff_path.write_text(f"workspace diff unavailable: {error}\n")
+    return str(diff_path)
+
 def run_case(candidate: Candidate, task: Task, model: str, run_root: Path, repetition: int, dry_run: bool) -> dict[str, Any]:
     case_root = run_root / f"{task.id}__{candidate.name}__{repetition}"
+    original = case_root / "original"
     workspace = case_root / "workspace"
     case_root.mkdir(parents=True, exist_ok=False)
-    shutil.copytree(task.fixture, workspace, symlinks=True)
+    shutil.copytree(task.fixture, original, symlinks=True)
+    shutil.copytree(original, workspace, symlinks=True)
     mapping = {
         "workspace": str(workspace), "prompt": task.prompt, "model": model, "case_root": str(case_root),
         "repo": str(Path(__file__).resolve().parent.parent),
@@ -147,6 +176,7 @@ def run_case(candidate: Candidate, task: Task, model: str, run_root: Path, repet
     except OSError as error:
         record["status"] = "launch_error"
         record["error"] = str(error)
+    record["workspace_diff"] = capture_workspace_diff(original, workspace, case_root)
     record["duration_seconds"] = round(time.monotonic() - started, 3)
     return record
 
@@ -180,10 +210,13 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--candidate", action="append", default=[])
     parser.add_argument("--task", action="append", default=[])
+    parser.add_argument("--category", action="append", default=[])
+    parser.add_argument("--source", action="append", default=[])
+    parser.add_argument("--tag", action="append", default=[])
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     candidates = [item for item in load_candidates(args.candidates) if not args.candidate or item.name in args.candidate]
-    tasks = [item for item in load_tasks(args.suite) if not args.task or item.id in args.task]
+    tasks = filter_tasks(load_tasks(args.suite), args.task, args.category, args.source, args.tag)
     if not candidates or not tasks: parser.error("candidate/task selection is empty")
     args.output.mkdir(parents=True, exist_ok=False)
     plan = [(candidate, task, repetition) for repetition in range(1, args.repetitions + 1) for task in tasks for candidate in candidates]
