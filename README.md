@@ -134,17 +134,24 @@ python3 evals/run.py \
 The checked-in smoke task validates the evaluator; it is not a published
 quality result. Pin tool versions and route every candidate through the same
 model gateway before drawing comparisons. See [evaluation protocol](evals/README.md).
+Terminal-Bench/Harbor-style task directories are the first public benchmark
+adapter target; SWE-bench Lite / SWE-bench Verified are planned after the local
+coding harness schema is stable.
 
 ## Repository map
 
 ```text
-packages/agent/          Shared harness and local/hosted profiles
+packages/agent/          Canonical model, tool, transcript, prompt, and runtime
+packages/profiles/       Local and hosted runtime composition
+packages/surfaces/       Product ingress and presentation adapters, including Slack
+packages/tools/          Capability-oriented tool implementations and registry
+packages/providers/      Canonical model provider adapters
 cli/                       Local CLI and example config
 evals/                     Independent harness evaluation and gateway example
 gateway/                   Slack HTTP ingress
 worker/                    Durable inbox consumer and hosted execution
 observability/             Runs, costs, metrics, and tool health
-packages/                  Slack adapters, storage, tools, and infrastructure
+packages/                  Storage, prompts, safety, observability, and infrastructure
 schema/postgres.sql        Authoritative database schema
 architecture-site/         Bilingual architecture guide
 ```

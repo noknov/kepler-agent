@@ -1,25 +1,40 @@
 {
+  "schema_version": 1,
+  "name": "local-coding-smoke",
+  "description": "Small local coding tasks that validate evaluator wiring and basic harness behavior.",
   "tasks": [
     {
       "id": "go-palindrome-bug",
+      "category": "bugfix",
+      "source": "internal-smoke",
       "fixture": "../../benchmarks/fixtures/go-palindrome-bug",
       "prompt": "Fix the palindrome implementation. Inspect the repository, make the smallest correct change, and run the tests.",
-      "test": ["go", "test", "./..."],
-      "timeout_seconds": 300
+      "test": ["go", "test", "-count=1", "./..."],
+      "timeout_seconds": 300,
+      "tags": ["go", "single-file", "unit-test"],
+      "metadata": {}
     },
     {
       "id": "go-sort-bug",
+      "category": "bugfix",
+      "source": "internal-smoke",
       "fixture": "../../benchmarks/fixtures/go-sort-bug",
       "prompt": "Fix StableUnique so it removes duplicates while preserving first-seen order. Run the tests.",
-      "test": ["go", "test", "./..."],
-      "timeout_seconds": 300
+      "test": ["go", "test", "-count=1", "./..."],
+      "timeout_seconds": 300,
+      "tags": ["go", "single-file", "unit-test"],
+      "metadata": {}
     },
     {
       "id": "python-slug-bug",
+      "category": "bugfix",
+      "source": "internal-smoke",
       "fixture": "../../benchmarks/fixtures/python-slug-bug",
       "prompt": "Fix slugify according to the tests. Keep the implementation small and run the test suite.",
       "test": ["python3", "-m", "unittest", "-v"],
-      "timeout_seconds": 300
+      "timeout_seconds": 300,
+      "tags": ["python", "single-file", "unit-test"],
+      "metadata": {}
     }
   ]
 }

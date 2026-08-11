@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/noknov/slack-copilot-agent/packages/slack"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
 )
 
 type AssetKind string

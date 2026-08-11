@@ -14,11 +14,11 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/infra/telemetry"
 	"github.com/noknov/slack-copilot-agent/packages/platform"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
-	"github.com/noknov/slack-copilot-agent/packages/slack"
-	"github.com/noknov/slack-copilot-agent/packages/slackevents"
-	"github.com/noknov/slack-copilot-agent/packages/slackgateway"
-	"github.com/noknov/slack-copilot-agent/packages/slackhandler"
-	"github.com/noknov/slack-copilot-agent/packages/slackhome"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/events"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/gateway"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/handler"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/home"
 )
 
 type Service struct {
