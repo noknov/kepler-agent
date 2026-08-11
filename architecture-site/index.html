@@ -78,12 +78,12 @@
               <div class="card"><span class="tag">Implemented</span><h3>Hosted profile</h3><p>Slack worker 通过适配层接入 agent runtime、现有模型客户端与只读工具，并使用 PostgreSQL transcript、Slack 流式呈现、会话锁和跨 worker 控制。</p></div>
             </div>
             <h3>评测与工程工作计划</h3>
-            <p>独立的 <code>evals/</code> 模块通过 CLI 黑盒运行，在同一受控模型网关下比较本项目、Codex、Claude Code、Pi 和 OpenCode，并保留每个 case 的日志、测试结果与耗时。Smoke fixture 用于验证评测链路。</p>
+            <p>独立的 <code>evals/</code> 模块通过 CLI 黑盒运行，在同一受控模型网关下比较本项目、Codex、Claude Code、Pi 和 OpenCode，并保留每个 case 的日志、测试结果与耗时。Smoke fixture 用于验证评测链路；公开 benchmark 通过 Harbor/Terminal-Bench adapter 保持容器隔离，而不是把本地 runner 当安全边界。</p>
             <table class="data-table">
               <thead><tr><th>工作流</th><th>主要工作</th><th>验证标准</th></tr></thead>
               <tbody>
                 <tr><td>CLI 可靠性</td><td>持续用于真实代码诊断与修改；修正工具、sandbox、上下文和交互问题</td><td>关键工作流有回归测试，session 可恢复，安全边界可重复验证</td></tr>
-                <tr><td>受控评测</td><td>在同一模型下重复运行 Terminal-Bench/Harbor；随后加入 SWE-bench Lite / Verified adapter，以及 YouTrack ticket + 对应 PR 回归集</td><td>记录版本、方差、失败类型、耗时和原始日志，不只报告单一分数</td></tr>
+                <tr><td>受控评测</td><td>在同一模型下通过容器化 Harbor/Terminal-Bench adapter 重复运行；随后加入 SWE-bench Lite / Verified adapter，以及 YouTrack ticket + 对应 PR 回归集</td><td>记录版本、方差、失败类型、耗时和原始日志，不只报告单一分数</td></tr>
                 <tr><td>Hosted 加固</td><td>补强 Agent run trace、成本指标、恢复路径和多媒体输入，并持续压测 Slack presentation</td><td>保持 hosted 只读与 operator policy；steering、queue、取消和恢复语义通过集成测试</td></tr>
                 <tr><td>可观测与恢复</td><td>统一 local/hosted 的 termination、usage、tool trace、错误分类与恢复证据</td><td>失败可定位，关键状态可 replay，重试和恢复行为有故障注入测试</td></tr>
                 <tr><td>版本边界</td><td>main 只保留 v2；v1 冻结在 <code>v1-final</code> 标签，不保留运行时兼容层</td><td>v1 文档归档，v2 provider 与工具 adapter contract tests 覆盖本地和 hosted profiles</td></tr>
@@ -326,12 +326,12 @@
               <div class="card"><span class="tag">Implemented</span><h3>Hosted profile</h3><p>The Slack worker adapts the agent runtime to the established model clients and read-only tools, with PostgreSQL transcripts, Slack streaming, session locks, and cross-worker controls.</p></div>
             </div>
             <h3>Evaluation and engineering plan</h3>
-            <p>The independent <code>evals/</code> module runs agents as CLI black boxes, comparing this project, Codex, Claude Code, Pi, and OpenCode through one controlled model gateway while retaining per-case logs, tests, and timing. The smoke fixture verifies evaluator wiring.</p>
+            <p>The independent <code>evals/</code> module runs agents as CLI black boxes, comparing this project, Codex, Claude Code, Pi, and OpenCode through one controlled model gateway while retaining per-case logs, tests, and timing. The smoke fixture verifies evaluator wiring; public benchmarks keep container isolation in the Harbor/Terminal-Bench adapter rather than treating the local runner as a security boundary.</p>
             <table class="data-table">
               <thead><tr><th>Workstream</th><th>Work</th><th>Validation</th></tr></thead>
               <tbody>
                 <tr><td>CLI reliability</td><td>Use the shared agent for real diagnosis and code changes; fix tool, sandbox, context, and interaction defects</td><td>Critical workflows have regressions, sessions resume, and security boundaries are repeatable</td></tr>
-                <tr><td>Controlled evaluation</td><td>Repeat Terminal-Bench/Harbor on one model, then add SWE-bench Lite / Verified adapters and YouTrack-ticket/PR workspace cases</td><td>Record versions, variance, failure classes, timing, and raw logs—not only one score</td></tr>
+                <tr><td>Controlled evaluation</td><td>Repeat Terminal-Bench/Harbor through a containerized adapter on one model, then add SWE-bench Lite / Verified adapters and YouTrack-ticket/PR workspace cases</td><td>Record versions, variance, failure classes, timing, and raw logs—not only one score</td></tr>
                 <tr><td>Hosted hardening</td><td>Strengthen the agent run traces, cost metrics, recovery, multimodal input, and Slack presentation under load</td><td>Read-only/operator policy remains intact; steering, queueing, cancellation, and recovery pass integration tests</td></tr>
                 <tr><td>Observability and recovery</td><td>Align local/hosted termination, usage, tool traces, error classes, and recovery evidence</td><td>Failures are diagnosable, key state is replayable, and retry/recovery has fault-injection coverage</td></tr>
                 <tr><td>Version boundary</td><td>Keep only v2 on main; freeze v1 at the <code>v1-final</code> tag without runtime compatibility layers</td><td>v1 is documented as an archive; v2 provider and tool adapter contract tests cover local and hosted profiles</td></tr>

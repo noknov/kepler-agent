@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import datetime
 import json
 import os
 import random
@@ -15,6 +16,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parent.parent
+
 @dataclasses.dataclass(frozen=True)
 class Candidate:
     name: str
@@ -22,6 +25,7 @@ class Candidate:
     env: dict[str, str]
     files: dict[str, str]
     model: str
+    version_command: list[str]
 
 @dataclasses.dataclass(frozen=True)
 class Task:
@@ -37,7 +41,64 @@ class Task:
 
 def load_candidates(path: Path) -> list[Candidate]:
     data = json.loads(path.read_text())
-    return [Candidate(item["name"], item["command"], item.get("env", {}), item.get("files", {}), item.get("model", "{model}")) for item in data["candidates"]]
+    return [Candidate(item["name"], item["command"], item.get("env", {}), item.get("files", {}), item.get("model", "{model}"), item.get("version_command", [])) for item in data["candidates"]]
+
+def utc_now() -> str:
+    return datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+def git_output(args: list[str]) -> str:
+    return subprocess.check_output(["git", "-C", str(ROOT), *args], text=True, stderr=subprocess.STDOUT, timeout=10).strip()
+
+def git_metadata() -> dict[str, Any]:
+    try:
+        status = git_output(["status", "--porcelain"])
+        return {
+            "commit": git_output(["rev-parse", "HEAD"]),
+            "branch": git_output(["branch", "--show-current"]),
+            "dirty": bool(status),
+            "status_porcelain": status.splitlines(),
+        }
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        return {"error": str(error)}
+
+def write_run_manifest(path: Path, manifest: dict[str, Any]) -> None:
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+
+def probe_environment(home: Path) -> dict[str, str]:
+    allowed = ("PATH", "TMPDIR", "LANG", "LC_ALL", "TERM", "SSL_CERT_FILE", "SSL_CERT_DIR")
+    env = {key: value for key, value in os.environ.items() if key in allowed}
+    env.update({
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "XDG_DATA_HOME": str(home / ".local" / "share"),
+        "XDG_STATE_HOME": str(home / ".local" / "state"),
+    })
+    return env
+
+def candidate_versions(candidates: list[Candidate], mapping: dict[str, str]) -> dict[str, dict[str, Any]]:
+    versions: dict[str, dict[str, Any]] = {}
+    with tempfile.TemporaryDirectory(prefix="slack-copilot-version-") as temp:
+        home = Path(temp) / "home"
+        home.mkdir()
+        env = probe_environment(home)
+        scoped_mapping = dict(mapping)
+        scoped_mapping["home"] = str(home)
+        for candidate in candidates:
+            record: dict[str, Any] = {"command": expand(candidate.version_command, scoped_mapping) if candidate.version_command else []}
+            if not candidate.version_command:
+                record["status"] = "not_configured"
+                versions[candidate.name] = record
+                continue
+            try:
+                result = subprocess.run(record["command"], cwd=ROOT, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
+                record["status"] = "ok" if result.returncode == 0 else "error"
+                record["exit_code"] = result.returncode
+                record["output"] = result.stdout.strip()
+            except (OSError, subprocess.TimeoutExpired) as error:
+                record["status"] = "error"
+                record["error"] = str(error)
+            versions[candidate.name] = record
+    return versions
 
 def require_string(item: dict[str, Any], field: str) -> str:
     value = item.get(field)
@@ -126,7 +187,18 @@ def capture_workspace_diff(original: Path, workspace: Path, case_root: Path) -> 
         diff_path.write_text(f"workspace diff unavailable: {error}\n")
     return str(diff_path)
 
-def run_case(candidate: Candidate, task: Task, model: str, run_root: Path, repetition: int, dry_run: bool) -> dict[str, Any]:
+def set_status(record: dict[str, Any], status: str) -> None:
+    record["status"] = status
+    failure_classes = {
+        "launch_error": "launch",
+        "agent_error": "agent_exit",
+        "timeout": "timeout",
+        "failed": "test_failure",
+    }
+    if status in failure_classes:
+        record["failure_class"] = failure_classes[status]
+
+def run_case(candidate: Candidate, task: Task, model: str, run_root: Path, repetition: int, dry_run: bool, versions: dict[str, dict[str, Any]]) -> dict[str, Any]:
     case_root = run_root / f"{task.id}__{candidate.name}__{repetition}"
     original = case_root / "original"
     workspace = case_root / "workspace"
@@ -135,7 +207,7 @@ def run_case(candidate: Candidate, task: Task, model: str, run_root: Path, repet
     shutil.copytree(original, workspace, symlinks=True)
     mapping = {
         "workspace": str(workspace), "prompt": task.prompt, "model": model, "case_root": str(case_root),
-        "repo": str(Path(__file__).resolve().parent.parent),
+        "repo": str(ROOT),
         "env_openai_base": os.environ.get("EVAL_OPENAI_BASE_URL", "https://api.openai.com/v1"),
         "env_anthropic_base": os.environ.get("EVAL_ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
     }
@@ -152,9 +224,10 @@ def run_case(candidate: Candidate, task: Task, model: str, run_root: Path, repet
         "task": task.id, "category": task.category, "source": task.source,
         "tags": task.tags, "metadata": task.metadata,
         "candidate": candidate.name, "repetition": repetition, "command": command, "model": model,
+        "candidate_version": versions.get(candidate.name, {}),
     }
     if dry_run:
-        record["status"] = "dry_run"
+        set_status(record, "dry_run")
         return record
     started = time.monotonic()
     try:
@@ -162,43 +235,50 @@ def run_case(candidate: Candidate, task: Task, model: str, run_root: Path, repet
         (case_root / "agent.log").write_text(agent.stdout)
         record["agent_exit_code"] = agent.returncode
         if agent.returncode != 0:
-            record["status"] = "agent_error"
+            set_status(record, "agent_error")
         else:
             test = subprocess.run(task.test, cwd=workspace, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=task.timeout_seconds)
             (case_root / "test.log").write_text(test.stdout)
             record["test_exit_code"] = test.returncode
-            record["status"] = "passed" if test.returncode == 0 else "failed"
+            set_status(record, "passed" if test.returncode == 0 else "failed")
     except subprocess.TimeoutExpired as error:
         output = error.stdout or ""
         if isinstance(output, bytes): output = output.decode(errors="replace")
         (case_root / "timeout.log").write_text(output)
-        record["status"] = "timeout"
+        set_status(record, "timeout")
     except OSError as error:
-        record["status"] = "launch_error"
+        set_status(record, "launch_error")
         record["error"] = str(error)
     record["workspace_diff"] = capture_workspace_diff(original, workspace, case_root)
     record["duration_seconds"] = round(time.monotonic() - started, 3)
     return record
 
-def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize(records: list[dict[str, Any]], versions: dict[str, dict[str, Any]]) -> dict[str, Any]:
     candidates: dict[str, dict[str, Any]] = {}
     categories: dict[str, dict[str, Any]] = {}
     for record in records:
-        summary = candidates.setdefault(record["candidate"], {"total": 0, "passed": 0, "failed": 0, "timeout": 0, "agent_error": 0, "launch_error": 0, "duration_seconds": 0.0})
+        summary = candidates.setdefault(record["candidate"], {"total": 0, "passed": 0, "failed": 0, "timeout": 0, "agent_error": 0, "launch_error": 0, "dry_run": 0, "duration_seconds": 0.0})
         summary["total"] += 1
         status = record["status"]
         if status in summary: summary[status] += 1
+        failure_class = record.get("failure_class")
+        if failure_class:
+            classes = summary.setdefault("failure_classes", {})
+            classes[failure_class] = classes.get(failure_class, 0) + 1
         summary["duration_seconds"] += record.get("duration_seconds", 0.0)
         category_key = f'{record["candidate"]}:{record["category"]}'
-        category = categories.setdefault(category_key, {"candidate": record["candidate"], "category": record["category"], "total": 0, "passed": 0, "failed": 0, "timeout": 0, "agent_error": 0, "launch_error": 0})
+        category = categories.setdefault(category_key, {"candidate": record["candidate"], "category": record["category"], "total": 0, "passed": 0, "failed": 0, "timeout": 0, "agent_error": 0, "launch_error": 0, "dry_run": 0})
         category["total"] += 1
         if status in category: category[status] += 1
+        if failure_class:
+            classes = category.setdefault("failure_classes", {})
+            classes[failure_class] = classes.get(failure_class, 0) + 1
     for summary in candidates.values():
         summary["pass_rate"] = summary["passed"] / summary["total"] if summary["total"] else 0
         summary["duration_seconds"] = round(summary["duration_seconds"], 3)
     for category in categories.values():
         category["pass_rate"] = category["passed"] / category["total"] if category["total"] else 0
-    return {"candidates": candidates, "categories": categories, "records": len(records)}
+    return {"candidates": candidates, "categories": categories, "candidate_versions": versions, "records": len(records)}
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -219,17 +299,68 @@ def main() -> int:
     tasks = filter_tasks(load_tasks(args.suite), args.task, args.category, args.source, args.tag)
     if not candidates or not tasks: parser.error("candidate/task selection is empty")
     args.output.mkdir(parents=True, exist_ok=False)
+    run_manifest = {
+        "schema_version": 1,
+        "status": "running",
+        "started_at": utc_now(),
+        "ended_at": None,
+        "repo": str(ROOT),
+        "git": git_metadata(),
+        "inputs": {
+            "suite": str(args.suite),
+            "candidates": str(args.candidates),
+            "model": args.model,
+            "dry_run": args.dry_run,
+            "repetitions": args.repetitions,
+            "seed": args.seed,
+            "filters": {
+                "candidate": args.candidate,
+                "task": args.task,
+                "category": args.category,
+                "source": args.source,
+                "tag": args.tag,
+            },
+        },
+        "selection": {
+            "candidates": [candidate.name for candidate in candidates],
+            "tasks": [task.id for task in tasks],
+        },
+        "outputs": {
+            "summary": "summary.json",
+            "records": "records.jsonl",
+            "candidate_versions": "candidate_versions.json",
+            "report": "report.html",
+            "cases": "<task>__<candidate>__<repetition>/",
+        },
+    }
+    write_run_manifest(args.output / "run.json", run_manifest)
+    versions = candidate_versions(candidates, {"repo": str(ROOT), "model": args.model})
+    (args.output / "candidate_versions.json").write_text(json.dumps(versions, indent=2, sort_keys=True) + "\n")
     plan = [(candidate, task, repetition) for repetition in range(1, args.repetitions + 1) for task in tasks for candidate in candidates]
     random.Random(args.seed).shuffle(plan)
+    run_manifest["plan"] = {
+        "cases": len(plan),
+        "order": [{"candidate": candidate.name, "task": task.id, "repetition": repetition} for candidate, task, repetition in plan],
+    }
+    write_run_manifest(args.output / "run.json", run_manifest)
     records = []
     with (args.output / "records.jsonl").open("w") as stream:
         for candidate, task, repetition in plan:
-            record = run_case(candidate, task, args.model, args.output, repetition, args.dry_run)
+            record = run_case(candidate, task, args.model, args.output, repetition, args.dry_run, versions)
             records.append(record)
             stream.write(json.dumps(record, sort_keys=True) + "\n")
             stream.flush()
             print(f'{record["status"]:>12}  {task.id}  {candidate.name}')
-    (args.output / "summary.json").write_text(json.dumps(summarize(records), indent=2, sort_keys=True) + "\n")
-    return 0 if all(record["status"] in ("passed", "dry_run") for record in records) else 1
+    summary = summarize(records, versions)
+    (args.output / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    ok = all(record["status"] in ("passed", "dry_run") for record in records)
+    run_manifest["status"] = "passed" if ok else "failed"
+    run_manifest["ended_at"] = utc_now()
+    run_manifest["summary"] = {
+        "records": summary["records"],
+        "candidates": summary["candidates"],
+    }
+    write_run_manifest(args.output / "run.json", run_manifest)
+    return 0 if ok else 1
 
 if __name__ == "__main__": raise SystemExit(main())
