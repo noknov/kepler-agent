@@ -238,7 +238,7 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 				call.Function.Name = tc.Function.Name
 			}
 			if tc.Function.Arguments != "" {
-				call.Function.Arguments += tc.Function.Arguments
+				call.Function.Arguments = mergeToolArguments(call.Function.Arguments, tc.Function.Arguments)
 			}
 		}
 		if chunk.Choices[0].FinishReason != nil {
@@ -266,6 +266,16 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 		Usage:        usage.toUsage(),
 		Streamed:     true,
 	}, nil
+}
+
+// mergeToolArguments accepts both OpenAI delta fragments and the cumulative
+// argument snapshots emitted by some OpenAI-compatible providers. A cumulative
+// snapshot has the previous value as its prefix; other updates are fragments.
+func mergeToolArguments(previous, update string) string {
+	if previous == "" || strings.HasPrefix(update, previous) {
+		return update
+	}
+	return previous + update
 }
 
 func (c *OpenAICompatibleClient) setHeaders(httpReq *http.Request) {

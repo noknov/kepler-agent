@@ -115,7 +115,7 @@ func TestOpenAICompatibleChatStreamParsesToolCallDeltas(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"text\\\":\"}}]}}]}\n\n"))
-		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"echo\",\"arguments\":\"\\\"ok\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"text\\\":\\\"ok\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}\n\n"))
 		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer server.Close()
@@ -173,5 +173,51 @@ func TestOpenAICompatibleChatStreamDefaultsFinishReasonAfterCleanEOF(t *testing.
 	}
 	if resp.FinishReason != "stop" {
 		t.Fatalf("FinishReason = %q, want stop", resp.FinishReason)
+	}
+}
+
+func TestOpenAICompatibleChatStreamParsesCumulativeToolCallSnapshots(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"code-search\",\"arguments\":\"{\\\"query\\\":\\\"hel\"}}]}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"code-search\",\"arguments\":\"{\\\"query\\\":\\\"hello\\\"}\"}}]}}]}\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewOpenAICompatibleClient("opencode-go", server.URL, "token", 0)
+	response, err := client.ChatStream(context.Background(), Request{Model: "test"}, StreamHandler{})
+	if err != nil {
+		t.Fatalf("ChatStream() error = %v", err)
+	}
+	if response.FinishReason != "tool_calls" {
+		t.Fatalf("FinishReason = %q, want tool_calls", response.FinishReason)
+	}
+	calls := response.Message.ToolCalls
+	if len(calls) != 1 {
+		t.Fatalf("ToolCalls = %#v, want one", calls)
+	}
+	if call := calls[0]; call.Function.Name != "code-search" || call.Function.Arguments != `{"query":"hello"}` {
+		t.Fatalf("tool call = %#v", call)
+	}
+}
+
+func TestMergeToolArguments(t *testing.T) {
+	tests := []struct {
+		name     string
+		previous string
+		update   string
+		want     string
+	}{
+		{name: "first fragment", update: `{"query":"`, want: `{"query":"`},
+		{name: "delta fragment", previous: `{"query":"`, update: `hello"}`, want: `{"query":"hello"}`},
+		{name: "repeated snapshot", previous: `{"query":"hel`, update: `{"query":"hel`, want: `{"query":"hel`},
+		{name: "extended snapshot", previous: `{"query":"hel`, update: `{"query":"hello"}`, want: `{"query":"hello"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := mergeToolArguments(test.previous, test.update); got != test.want {
+				t.Fatalf("mergeToolArguments(%q, %q) = %q, want %q", test.previous, test.update, got, test.want)
+			}
+		})
 	}
 }
