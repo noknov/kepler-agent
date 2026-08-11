@@ -96,7 +96,43 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 	var finishReason string
 	var usage responsesUsage
 	toolCallsStarted := false
+	functionCalls := make(map[string]responsesOutput)
+	emittedFunctionCalls := make(map[string]bool)
 	var streamErr error
+	emitFunctionCall := func(itemID string, call responsesOutput) {
+		if call.Type != "" && call.Type != "function_call" {
+			return
+		}
+		if call.CallID == "" || call.Name == "" {
+			return
+		}
+		key := itemID
+		if key == "" {
+			key = call.CallID
+		}
+		if emittedFunctionCalls[key] {
+			return
+		}
+		emittedFunctionCalls[key] = true
+		if !toolCallsStarted {
+			toolCallsStarted = true
+			if h.OnToolCallsStarted != nil {
+				h.OnToolCallsStarted()
+			}
+		}
+		tc := ToolCall{
+			ID:   call.CallID,
+			Type: "function",
+			Function: ToolFunction{
+				Name:      call.Name,
+				Arguments: call.Arguments,
+			},
+		}
+		msg.ToolCalls = append(msg.ToolCalls, tc)
+		if h.OnToolCallComplete != nil {
+			h.OnToolCallComplete(tc)
+		}
+	}
 	err = readSSE(resp.Body, func(ev sseEvent) bool {
 		if ev.Data == "[DONE]" {
 			return false
@@ -118,31 +154,38 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 					h.OnText(delta.Delta)
 				}
 			}
+		case "response.output_item.added", "response.output_item.done":
+			var output struct {
+				Item responsesOutput `json:"item"`
+			}
+			if json.Unmarshal([]byte(ev.Data), &output) == nil && output.Item.Type == "function_call" {
+				functionCalls[output.Item.ID] = output.Item
+				if typ.Type == "response.output_item.done" {
+					emitFunctionCall(output.Item.ID, output.Item)
+				}
+			}
 		case "response.function_call_arguments.done":
 			var call struct {
+				ItemID    string `json:"item_id"`
 				CallID    string `json:"call_id"`
 				Name      string `json:"name"`
 				Arguments string `json:"arguments"`
 			}
 			if json.Unmarshal([]byte(ev.Data), &call) == nil {
-				if !toolCallsStarted {
-					toolCallsStarted = true
-					if h.OnToolCallsStarted != nil {
-						h.OnToolCallsStarted()
-					}
+				item := functionCalls[call.ItemID]
+				if item.ID == "" {
+					item.ID = call.ItemID
 				}
-				tc := ToolCall{
-					ID:   call.CallID,
-					Type: "function",
-					Function: ToolFunction{
-						Name:      call.Name,
-						Arguments: call.Arguments,
-					},
+				if call.CallID != "" {
+					item.CallID = call.CallID
 				}
-				msg.ToolCalls = append(msg.ToolCalls, tc)
-				if h.OnToolCallComplete != nil {
-					h.OnToolCallComplete(tc)
+				if call.Name != "" {
+					item.Name = call.Name
 				}
+				item.Type = "function_call"
+				item.Arguments = call.Arguments
+				functionCalls[call.ItemID] = item
+				emitFunctionCall(call.ItemID, item)
 			}
 		case "response.completed":
 			var done struct {
@@ -151,10 +194,15 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 			if json.Unmarshal([]byte(ev.Data), &done) == nil {
 				finishReason = done.Response.Status
 				usage = done.Response.Usage
-				if msg.Content == "" && len(msg.ToolCalls) == 0 {
-					msg = done.Response.message()
-				} else {
-					msg.Citations = done.Response.message().Citations
+				completedMessage := done.Response.message()
+				if msg.Content == "" {
+					msg.Content = completedMessage.Content
+				}
+				msg.Citations = completedMessage.Citations
+				for _, item := range done.Response.Output {
+					if item.Type == "function_call" {
+						emitFunctionCall(item.ID, item)
+					}
 				}
 				if h.OnUsage != nil {
 					h.OnUsage(usage.toUsage())
@@ -217,6 +265,9 @@ func responsesInput(messages []Message) []any {
 	for _, msg := range messages {
 		switch msg.Role {
 		case "tool":
+			if strings.TrimSpace(msg.ToolCallID) == "" {
+				continue
+			}
 			input = append(input, map[string]any{
 				"type":    "function_call_output",
 				"call_id": msg.ToolCallID,
@@ -231,6 +282,9 @@ func responsesInput(messages []Message) []any {
 				})
 			}
 			for _, call := range msg.ToolCalls {
+				if strings.TrimSpace(call.ID) == "" {
+					continue
+				}
 				input = append(input, map[string]any{
 					"type":      "function_call",
 					"call_id":   call.ID,
