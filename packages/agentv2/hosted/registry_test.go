@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	v2tool "github.com/noknov/slack-copilot-agent/packages/agentv2/tool"
 	"github.com/noknov/slack-copilot-agent/packages/llm"
@@ -21,6 +22,9 @@ func (t bridgeFixtureTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(t.name, t.name, registry.ObjectSchema(nil, nil))
 }
 func (t bridgeFixtureTool) Parallel() bool { return t.parallel }
+func (t bridgeFixtureTool) Metadata() registry.ToolMetadata {
+	return registry.ToolMetadata{Timeout: 17 * time.Second}
+}
 func (t bridgeFixtureTool) Execute(_ context.Context, _ json.RawMessage, runtime registry.Runtime) (registry.Result, error) {
 	switch t.name {
 	case "cache-set":
@@ -87,8 +91,13 @@ func TestAdaptRegistryKeepsSessionActivationAndTurnCacheIsolated(t *testing.T) {
 
 	descriptors := catalog.Descriptors()
 	for _, descriptor := range descriptors {
-		if descriptor.Name == "cache-set" && !descriptor.Parallel {
-			t.Fatal("parallel metadata was lost")
+		if descriptor.Name == "cache-set" {
+			if !descriptor.Parallel {
+				t.Fatal("parallel metadata was lost")
+			}
+			if descriptor.Timeout != 17*time.Second {
+				t.Fatalf("timeout metadata = %s", descriptor.Timeout)
+			}
 		}
 	}
 }

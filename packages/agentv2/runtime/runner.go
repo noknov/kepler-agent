@@ -12,9 +12,14 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/model"
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/prompt"
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/transcript"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var errPendingApproval = errors.New("tool call is waiting for approval")
+var runtimeTracer = otel.Tracer("github.com/noknov/slack-copilot-agent/agentv2/runtime")
 
 func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult, error) {
 	if request.SessionID == "" {
@@ -23,6 +28,11 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	if request.TurnID == "" {
 		request.TurnID = r.deps.IDs.New("turn")
 	}
+	ctx, span := runtimeTracer.Start(ctx, "agent.turn", trace.WithAttributes(
+		attribute.String("agent.session.id", request.SessionID),
+		attribute.String("agent.turn.id", request.TurnID),
+	))
+	defer span.End()
 	if request.Input.Role == "" {
 		request.Input.Role = model.RoleUser
 	}
@@ -66,7 +76,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	for step := 1; step <= r.config.MaxSteps; step++ {
 		result.Steps = step
 		if err := ctx.Err(); err != nil {
-			return r.cancelTurn(result, err)
+			return r.cancelTurn(ctx, result, err)
 		}
 		if err := r.appendSteering(ctx, request); err != nil {
 			return r.failTurn(ctx, result, err)
@@ -177,10 +187,7 @@ func (r *Runtime) generate(ctx context.Context, turn TurnRequest, messages []mod
 		if _, err := r.record(ctx, transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelRequested, Metadata: metadata}); err != nil {
 			return model.Response{}, err
 		}
-		response, err := r.deps.Model.Generate(ctx, request, func(event model.StreamEvent) error {
-			_, recordErr := r.record(ctx, transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelStreamed, Model: &event})
-			return recordErr
-		})
+		response, err := r.generateAttempt(ctx, turn, request, attempt+1)
 		if err == nil {
 			completed, _ := json.Marshal(map[string]any{"attempt": attempt + 1, "model": request.Model, "finish_reason": response.FinishReason, "usage": response.Usage})
 			if _, recordErr := r.record(ctx, transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelCompleted, Metadata: completed}); recordErr != nil {
@@ -202,6 +209,28 @@ func (r *Runtime) generate(ctx context.Context, turn TurnRequest, messages []mod
 		}
 	}
 	return model.Response{}, lastErr
+}
+
+func (r *Runtime) generateAttempt(ctx context.Context, turn TurnRequest, request model.Request, attempt int) (response model.Response, err error) {
+	ctx, span := runtimeTracer.Start(ctx, "model.generate", trace.WithAttributes(
+		attribute.String("gen_ai.request.model", request.Model),
+		attribute.Int("agent.model.attempt", attempt),
+	))
+	defer func() {
+		span.SetAttributes(
+			attribute.Int64("gen_ai.usage.input_tokens", response.Usage.InputTokens),
+			attribute.Int64("gen_ai.usage.output_tokens", response.Usage.OutputTokens),
+		)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "model request failed")
+		}
+		span.End()
+	}()
+	return r.deps.Model.Generate(ctx, request, func(event model.StreamEvent) error {
+		_, recordErr := r.record(ctx, transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelStreamed, Model: &event})
+		return recordErr
+	})
 }
 
 func (r *Runtime) appendSteering(ctx context.Context, request TurnRequest) error {
@@ -248,6 +277,12 @@ func (r *Runtime) record(ctx context.Context, event transcript.Event) (transcrip
 }
 
 func (r *Runtime) finishTurn(ctx context.Context, result TurnResult, message model.Message, reason TerminationReason, err error) (TurnResult, error) {
+	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(attribute.String("agent.termination", string(reason)), attribute.Int("agent.steps", result.Steps))
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, string(reason))
+	}
 	result.Message = message
 	result.Termination = reason
 	eventType := transcript.TurnCompleted
@@ -271,15 +306,15 @@ func (r *Runtime) finishTurn(ctx context.Context, result TurnResult, message mod
 
 func (r *Runtime) failTurn(ctx context.Context, result TurnResult, err error) (TurnResult, error) {
 	if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
-		return r.cancelTurn(result, err)
+		return r.cancelTurn(ctx, result, err)
 	}
 	result.Termination = TerminationModelError
 	return r.finishTurn(ctx, result, result.Message, result.Termination, err)
 }
 
-func (r *Runtime) cancelTurn(result TurnResult, err error) (TurnResult, error) {
+func (r *Runtime) cancelTurn(ctx context.Context, result TurnResult, err error) (TurnResult, error) {
 	result.Termination = TerminationCanceled
-	return r.finishTurn(context.Background(), result, result.Message, result.Termination, err)
+	return r.finishTurn(ctx, result, result.Message, result.Termination, err)
 }
 
 func toolCallKey(call model.ToolCall) string {

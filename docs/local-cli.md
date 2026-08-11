@@ -30,6 +30,13 @@ The local profile resolves file operations beneath the canonical workspace, bloc
 
 If the OS sandbox is unavailable, command execution fails closed. `unsafe_allow_no_sandbox` / `--unsafe-allow-no-sandbox` is an explicit development escape hatch and should not be used for untrusted repositories or prompts.
 
+The sandbox canonicalizes additional read roots and rejects broad `/` or home
+directory grants. Linux execution also isolates PID, IPC, UTS, cgroup, and
+network namespaces and drops capabilities. Subprocess environments cannot
+override `HOME`, `PATH`, `TMPDIR`, or inject loader variables. Common repository
+credential files—including `.git/config` when it contains an embedded remote
+credential—are denied to file tools and sandboxed commands.
+
 The hosted profile has no end-user host approvals. Its policy rejects mutation effects and requires an operator allowlist. Optional command execution is an injected argv executor with no shell string; deployment code remains responsible for the container or kernel sandbox.
 
 ## Shared contracts

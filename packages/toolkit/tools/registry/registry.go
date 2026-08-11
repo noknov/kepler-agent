@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/prompts"
@@ -92,6 +93,7 @@ type ToolMetadata struct {
 	Risk         ToolRisk
 	Dependencies []string
 	Surfaces     []string
+	Timeout      time.Duration
 }
 
 // ToolInfo is an immutable catalog view used by product adapters. Deferred

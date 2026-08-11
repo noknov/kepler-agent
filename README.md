@@ -27,6 +27,8 @@ presentation.
   multimodal input, retries, and context compaction.
 - Server-side capability policy, workspace boundaries, credential redaction,
   event leases, dead letters, health checks, and graceful draining.
+- Lifecycle-event-driven Slack status and vendor-neutral OpenTelemetry traces;
+  neither path adds a second model or conversation state.
 - Local JSONL sessions, TTY/headless operation, steering or queued input,
   OS sandboxing, scoped approvals, file skills, and MCP tools.
 - Independent black-box evaluation across this agent, Codex, Claude Code, Pi,

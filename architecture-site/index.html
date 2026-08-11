@@ -268,7 +268,7 @@
             <h2>当前边界</h2>
             <div class="card-grid">
               <div class="card"><span class="tag">Implemented</span><h3>v2 主路径</h3><ul><li>共享 runtime 与 canonical contracts</li><li>Local CLI 与 hosted Slack profiles</li><li>Local JSONL 与 hosted PG transcript</li><li>耐久 Slack inbox</li><li>Local approval 与 hosted read-only policy</li><li>Steer、queue 和 cancel</li></ul></div>
-              <div class="card risk"><span class="tag">Known gaps</span><h3>待补强</h3><ul><li>恢复与故障注入覆盖</li><li>标准 OpenTelemetry 导出</li><li>更强的本地 sandbox 边界</li></ul></div>
+              <div class="card"><span class="tag">Hardened</span><h3>P1 / P2 收口</h3><ul><li>Transcript/run 重放与 PG/Redis 故障测试</li><li>标准 OpenTelemetry OTLP/HTTP traces</li><li>本地 sandbox namespace、capability、环境与凭据边界</li><li>由 lifecycle events 驱动的动态状态</li></ul></div>
             </div>
             <h3>容量边界</h3>
             <p>PG advisory lock 会在整个 hosted turn 期间占用连接；活动运行的 Redis owner key 使用 TTL；Slack inbox 的处理上限由 worker 数量、事件队列和数据库连接池共同约束。</p>
@@ -425,7 +425,7 @@
 
           <section class="doc-section" id="en-boundaries">
             <span class="section-number">11 / CURRENT LIMITS</span><h2>Current boundaries</h2>
-            <div class="card-grid"><div class="card"><span class="tag">Implemented</span><h3>Shared main path</h3><ul><li>Shared runtime and canonical contracts</li><li>Local CLI and hosted Slack profiles</li><li>Local JSONL and hosted PG transcripts</li><li>Durable Slack inbox</li><li>Local approval and hosted read-only policy</li><li>Steer, queue, and cancel</li></ul></div><div class="card risk"><span class="tag">Known gaps</span><h3>Needs hardening</h3><ul><li>Recovery and fault-injection coverage</li><li>Standard OpenTelemetry export</li><li>Stronger local sandbox boundary</li></ul></div></div>
+            <div class="card-grid"><div class="card"><span class="tag">Implemented</span><h3>Shared main path</h3><ul><li>Shared runtime and canonical contracts</li><li>Local CLI and hosted Slack profiles</li><li>Local JSONL and hosted PG transcripts</li><li>Durable Slack inbox</li><li>Local approval and hosted read-only policy</li><li>Steer, queue, and cancel</li></ul></div><div class="card"><span class="tag">Hardened</span><h3>P1 / P2 closure</h3><ul><li>Transcript/run replay and PG/Redis fault tests</li><li>Standard OpenTelemetry OTLP/HTTP traces</li><li>Local sandbox namespace, capability, environment, and credential boundaries</li><li>Lifecycle-event-driven dynamic status</li></ul></div></div>
             <h3>Capacity boundaries</h3><p>A PG advisory lock holds a connection for the full hosted turn; the Redis active-owner key uses a TTL; worker count, event queues, and the database pool jointly bound Slack throughput.</p>
           </section>
 

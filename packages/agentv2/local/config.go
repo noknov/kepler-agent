@@ -23,6 +23,7 @@ type Config struct {
 	Output               string            `toml:"output"`
 	MaxSteps             int               `toml:"max_steps"`
 	MaxOutputTokens      int               `toml:"max_output_tokens"`
+	Temperature          float64           `toml:"temperature"`
 	Timeout              time.Duration     `toml:"timeout"`
 	UnsafeAllowNoSandbox bool              `toml:"unsafe_allow_no_sandbox"`
 	AdditionalReadRoots  []string          `toml:"additional_read_roots"`

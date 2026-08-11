@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/local"
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/localtools"
@@ -26,6 +27,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/skills"
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/tool"
 	"github.com/noknov/slack-copilot-agent/packages/agentv2/transcript"
+	"github.com/noknov/slack-copilot-agent/packages/infra/telemetry"
 	"github.com/noknov/slack-copilot-agent/packages/mcp"
 )
 
@@ -196,7 +198,7 @@ func Run() error {
 		}
 	}
 
-	runner, err := agentruntime.New(agentruntime.Config{Model: config.Model, ReasoningEffort: config.ReasoningEffort, MaxOutputTokens: config.MaxOutputTokens, MaxSteps: config.MaxSteps}, agentruntime.Dependencies{
+	runner, err := agentruntime.New(agentruntime.Config{Model: config.Model, ReasoningEffort: config.ReasoningEffort, MaxOutputTokens: config.MaxOutputTokens, Temperature: config.Temperature, MaxSteps: config.MaxSteps}, agentruntime.Dependencies{
 		Model: client, Tools: catalog, Policy: local.WorkspacePolicy{}, Approver: approver, Transcript: store, Events: renderer,
 		Compactor: agentruntime.ModelCompactor{Client: client, Model: config.Model}, Artifacts: local.ArtifactStore{Root: filepath.Join(values.stateDir, "sessions")},
 	})
@@ -205,6 +207,15 @@ func Run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	shutdownTelemetry, err := telemetry.Setup(ctx, "slack-copilot-cli")
+	if err != nil {
+		return fmt.Errorf("configure telemetry: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTelemetry(shutdownCtx)
+	}()
 	if interactive {
 		return interactiveLoop(ctx, runner, values.session, workspace.Root, fragments, config.InputRouting, questions)
 	}
