@@ -63,9 +63,9 @@ func (t OverviewTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"codegraph-overview",
 		"Build a lightweight code graph for a refreshed git branch snapshot and summarize packages, internal dependencies, and function counts. Use for architecture orientation before detailed code reads.",
-		registry.ObjectSchema(nil, map[string]any{
+		registry.ObjectSchema([]string{"branch"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
-			"branch": map[string]any{"type": "string", "description": "Remote branch name. Omit for origin/HEAD, then mt-main/main/master fallback."},
+			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"limit":  map[string]any{"type": "integer", "description": "Maximum packages/edges to show, default 40 and max 120."},
 		}),
 	)
@@ -111,9 +111,9 @@ func (t DependenciesTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"codegraph-dependencies",
 		"Show internal imports and importers for one package in a refreshed git branch snapshot. Use to understand package coupling before reading files.",
-		registry.ObjectSchema([]string{"package"}, map[string]any{
+		registry.ObjectSchema([]string{"branch", "package"}, map[string]any{
 			"repo":    map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
-			"branch":  map[string]any{"type": "string", "description": "Remote branch name. Omit for origin/HEAD, then mt-main/main/master fallback."},
+			"branch":  map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"package": map[string]any{"type": "string", "description": "Package import path, directory, or package name fragment."},
 		}),
 	)
@@ -149,9 +149,9 @@ func (t SymbolsTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"codegraph-symbols",
 		"Search static Go/C# symbols in a refreshed git branch snapshot without requiring language servers. Use when LSP symbols are unavailable or for branch-specific symbol discovery.",
-		registry.ObjectSchema([]string{"query"}, map[string]any{
+		registry.ObjectSchema([]string{"branch", "query"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
-			"branch": map[string]any{"type": "string", "description": "Remote branch name. Omit for origin/HEAD, then mt-main/main/master fallback."},
+			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"query":  map[string]any{"type": "string", "description": "Symbol name or substring."},
 			"limit":  map[string]any{"type": "integer", "description": "Maximum symbols, default 50 and max 200."},
 		}),
@@ -199,9 +199,9 @@ func (t DefinitionTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"codegraph-definition",
 		"Find static Go/C# symbol definitions by name in a refreshed git branch snapshot. This does not require gopls or csharp-ls.",
-		registry.ObjectSchema([]string{"symbol"}, map[string]any{
+		registry.ObjectSchema([]string{"branch", "symbol"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
-			"branch": map[string]any{"type": "string", "description": "Remote branch name. Omit for origin/HEAD, then mt-main/main/master fallback."},
+			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"symbol": map[string]any{"type": "string", "description": "Symbol name, for example AddCommentRoutes or CommentController.GetPostList."},
 			"limit":  map[string]any{"type": "integer", "description": "Maximum definitions, default 20 and max 100."},
 		}),
@@ -249,9 +249,9 @@ func (t ReferencesTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"codegraph-references",
 		"Find static Go/C# references to a symbol name in a refreshed git branch snapshot. Use as a fallback when LSP references are unavailable.",
-		registry.ObjectSchema([]string{"symbol"}, map[string]any{
+		registry.ObjectSchema([]string{"branch", "symbol"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
-			"branch": map[string]any{"type": "string", "description": "Remote branch name. Omit for origin/HEAD, then mt-main/main/master fallback."},
+			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"symbol": map[string]any{"type": "string", "description": "Symbol name, type name, function name, or method name."},
 			"limit":  map[string]any{"type": "integer", "description": "Maximum references, default 100 and max 300."},
 		}),
@@ -305,9 +305,9 @@ func (t ImplementationsTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"codegraph-implementations",
 		"Find static Go interface implementers or C# interface/base implementations in a refreshed git branch snapshot. Use as a fallback when LSP implementation lookup is unavailable.",
-		registry.ObjectSchema([]string{"symbol"}, map[string]any{
+		registry.ObjectSchema([]string{"branch", "symbol"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
-			"branch": map[string]any{"type": "string", "description": "Remote branch name. Omit for origin/HEAD, then mt-main/main/master fallback."},
+			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"symbol": map[string]any{"type": "string", "description": "Interface, base type, or type name."},
 			"limit":  map[string]any{"type": "integer", "description": "Maximum implementations, default 50 and max 200."},
 		}),
@@ -355,9 +355,9 @@ func (t CallersTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"codegraph-callers",
 		"Find simple Go/C# call sites for a function or method name in a refreshed git branch snapshot. This is a static hint; read source ranges before making final behavior claims.",
-		registry.ObjectSchema([]string{"symbol"}, map[string]any{
+		registry.ObjectSchema([]string{"branch", "symbol"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
-			"branch": map[string]any{"type": "string", "description": "Remote branch name. Omit for origin/HEAD, then mt-main/main/master fallback."},
+			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"symbol": map[string]any{"type": "string", "description": "Function or method name, for example FetchOrigin or Manager.Start."},
 			"limit":  map[string]any{"type": "integer", "description": "Maximum callers to show, default 50 and max 200."},
 		}),
@@ -411,9 +411,9 @@ func (t CalleesTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"codegraph-callees",
 		"Find simple Go/C# outgoing calls made by a function or method in a refreshed git branch snapshot. Use when LSP outgoing calls are unavailable.",
-		registry.ObjectSchema([]string{"symbol"}, map[string]any{
+		registry.ObjectSchema([]string{"branch", "symbol"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
-			"branch": map[string]any{"type": "string", "description": "Remote branch name. Omit for origin/HEAD, then mt-main/main/master fallback."},
+			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"symbol": map[string]any{"type": "string", "description": "Function or method name, for example getPostList or CommentController.GetPostList."},
 			"limit":  map[string]any{"type": "integer", "description": "Maximum callees to show, default 80 and max 300."},
 		}),
@@ -467,9 +467,9 @@ func (t CallgraphTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"codegraph-callgraph",
 		"List static Go/C# call edges in a refreshed git branch snapshot, optionally filtered by caller/callee/package/file substring.",
-		registry.ObjectSchema(nil, map[string]any{
+		registry.ObjectSchema([]string{"branch"}, map[string]any{
 			"repo":    map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
-			"branch":  map[string]any{"type": "string", "description": "Remote branch name. Omit for origin/HEAD, then mt-main/main/master fallback."},
+			"branch":  map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"filter":  map[string]any{"type": "string", "description": "Optional substring matched against caller, callee, or file."},
 			"package": map[string]any{"type": "string", "description": "Optional package/path substring."},
 			"limit":   map[string]any{"type": "integer", "description": "Maximum edges, default 120 and max 500."},
@@ -530,9 +530,9 @@ func (t ImpactTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"codegraph-impact",
 		"Estimate static impact for a Go/C# package or symbol in a refreshed git branch snapshot. Shows package importers and direct callers; read sources before final claims.",
-		registry.ObjectSchema([]string{"target"}, map[string]any{
+		registry.ObjectSchema([]string{"branch", "target"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
-			"branch": map[string]any{"type": "string", "description": "Remote branch name. Omit for origin/HEAD, then mt-main/main/master fallback."},
+			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"target": map[string]any{"type": "string", "description": "Package path/name or function/method symbol."},
 			"limit":  map[string]any{"type": "integer", "description": "Maximum callers/importers to show, default 80 and max 300."},
 		}),
@@ -607,21 +607,15 @@ func (b Base) load(ctx context.Context, repoArg, branchArg string, rt registry.R
 		return nil, err
 	}
 	branch := strings.TrimSpace(branchArg)
+	if branch == "" {
+		return nil, fmt.Errorf("branch is required")
+	}
 	fetchCtx, cancel := context.WithTimeout(ctx, b.timeout())
 	defer cancel()
-	fetchStatus := "origin_refs_current_or_recent"
-	if branch != "" {
-		if err := gitcache.FetchOriginFresh(fetchCtx, repo); err != nil {
-			fetchStatus = "refresh_failed_using_cached_refs: " + err.Error()
-		} else {
-			fetchStatus = "origin_refs_refreshed"
-		}
-	} else if err := gitcache.FetchOrigin(fetchCtx, repo, gitcache.DefaultFetchTTL); err != nil {
-		fetchStatus = "refresh_failed_using_cached_refs: " + err.Error()
+	if err := gitcache.FetchOriginFresh(fetchCtx, repo); err != nil {
+		return nil, fmt.Errorf("refresh origin refs: %w", err)
 	}
-	if branch == "" {
-		branch = defaultBranch(ctx, repo)
-	}
+	fetchStatus := "origin_refs_refreshed"
 	if !safeRef(branch) {
 		return nil, fmt.Errorf("invalid branch %q", branch)
 	}
@@ -983,20 +977,6 @@ func (b Base) repo(path string) (string, error) {
 func isGitRepo(dir string) bool {
 	info, err := os.Stat(filepath.Join(dir, ".git"))
 	return err == nil && info.IsDir()
-}
-
-func defaultBranch(ctx context.Context, repo string) string {
-	if out, err := git(ctx, repo, 10*time.Second, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); err == nil {
-		if branch := strings.TrimPrefix(strings.TrimSpace(out), "origin/"); branch != "" {
-			return branch
-		}
-	}
-	for _, branch := range []string{"mt-main", "main", "master"} {
-		if _, err := git(ctx, repo, 10*time.Second, "rev-parse", "--verify", "--quiet", "origin/"+branch); err == nil {
-			return branch
-		}
-	}
-	return "main"
 }
 
 func modulePath(ctx context.Context, repo, ref string, timeout time.Duration) string {

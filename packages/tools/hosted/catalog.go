@@ -17,7 +17,6 @@ import (
 	luckinTools "github.com/noknov/slack-copilot-agent/packages/tools/luckin"
 	notionTools "github.com/noknov/slack-copilot-agent/packages/tools/notion"
 	plannerTools "github.com/noknov/slack-copilot-agent/packages/tools/planner"
-	playwrightTools "github.com/noknov/slack-copilot-agent/packages/tools/playwright"
 	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
 	shellTools "github.com/noknov/slack-copilot-agent/packages/tools/shell"
 	skillTools "github.com/noknov/slack-copilot-agent/packages/tools/skills"
@@ -50,12 +49,11 @@ func policyForSurface(cfg config.Config, surface SurfaceOptions) registry.Capabi
 		}
 	}
 	availableDeps := map[string]bool{
-		"github":     integrations.GitHub.Token != "",
-		"luckin":     integrations.Luckin.MCPToken != "",
-		"notion":     integrations.Notion.Token != "",
-		"playwright": integrations.Playwright.MCPURL != "",
-		"tts":        integrations.TTS.APIKey != "",
-		"youtrack":   integrations.YouTrack.URL != "" && integrations.YouTrack.Token != "",
+		"github":   integrations.GitHub.Token != "",
+		"luckin":   integrations.Luckin.MCPToken != "",
+		"notion":   integrations.Notion.Token != "",
+		"tts":      integrations.TTS.APIKey != "",
+		"youtrack": integrations.YouTrack.URL != "" && integrations.YouTrack.Token != "",
 	}
 	for name, available := range surface.AvailableDeps {
 		availableDeps[name] = available
@@ -248,13 +246,6 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 		},
 	}, registry.CategoryIntegration)
 
-	playwrightTools.RegisterDeferredAll(tools, &playwrightTools.Client{
-		MCP: &mcp.Client{
-			ServiceName: "playwright",
-			URL:         integrations.Playwright.MCPURL,
-			Token:       integrations.Playwright.MCPToken,
-		},
-	}, registry.CategoryBrowser)
 }
 
 func registerKnowledgeTools(tools *registry.Registry, cfg config.Config) {

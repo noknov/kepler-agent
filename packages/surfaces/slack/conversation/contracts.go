@@ -40,18 +40,13 @@ type ControlledConversation interface {
 
 type Messenger interface {
 	PostMessage(ctx context.Context, channel, threadTS, text string) (string, error)
-	StartStream(ctx context.Context, channel, threadTS, recipientUserID string) (string, error)
-	AppendStream(ctx context.Context, channel, ts string, chunks []map[string]any) error
-	StopStream(ctx context.Context, channel, ts string) error
-	DeleteMessage(ctx context.Context, channel, ts string) error
+	PostMarkdownMessage(ctx context.Context, channel, threadTS, markdown string) (string, error)
 	ThreadContext(ctx context.Context, channel, threadTS string, limit int) string
 }
 
 type ThreadStatusMessenger interface {
 	SetThreadStatus(ctx context.Context, channel, threadTS, status string, loadingMessages []string) error
 }
-
-type TextFormatter func(string) string
 
 func IsCJK(text string) bool {
 	for _, value := range text {

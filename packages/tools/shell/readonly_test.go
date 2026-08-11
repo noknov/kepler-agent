@@ -67,7 +67,7 @@ func TestValidateShellCommandAllowsOperationalReads(t *testing.T) {
 	}
 }
 
-func TestShellGitLogDefaultsToFetchedOriginHEAD(t *testing.T) {
+func TestShellDoesNotRewriteGitRefs(t *testing.T) {
 	root, work := shellTestRepo(t)
 	first := runGitOutput(t, work, "rev-parse", "HEAD")
 
@@ -88,32 +88,8 @@ func TestShellGitLogDefaultsToFetchedOriginHEAD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(result.Content) != "fresh remote" {
-		t.Fatalf("shell git log content = %q, want remote origin/HEAD tip", result.Content)
-	}
-}
-
-func TestNormalizeBareGitLogKeepsExplicitRef(t *testing.T) {
-	got := normalizeGitDefaultRef([]string{"git", "-C", "/workspace/repo", "log", "origin/main", "--oneline", "-1"})
-	if strings.Join(got, " ") != "git -C /workspace/repo log origin/main --oneline -1" {
-		t.Fatalf("explicit ref was changed: %#v", got)
-	}
-
-	got = normalizeGitDefaultRef([]string{"git", "-C", "/workspace/repo", "log", "--oneline", "-1"})
-	if strings.Join(got, " ") != "git -C /workspace/repo log origin/HEAD --oneline -1" {
-		t.Fatalf("bare log was not normalized: %#v", got)
-	}
-}
-
-func TestNormalizeGitGrepAndShowUseOriginHEAD(t *testing.T) {
-	got := normalizeGitDefaultRef([]string{"git", "-C", "/workspace/repo", "grep", "TODO", "--", "*.go"})
-	if strings.Join(got, " ") != "git -C /workspace/repo grep TODO origin/HEAD -- *.go" {
-		t.Fatalf("bare git grep was not normalized: %#v", got)
-	}
-
-	got = normalizeGitDefaultRef([]string{"git", "-C", "/workspace/repo", "show", "HEAD:README.md"})
-	if strings.Join(got, " ") != "git -C /workspace/repo show origin/HEAD:README.md" {
-		t.Fatalf("git show HEAD:path was not normalized: %#v", got)
+	if strings.TrimSpace(result.Content) != "init" {
+		t.Fatalf("shell git log content = %q, want current checkout", result.Content)
 	}
 }
 
@@ -280,7 +256,6 @@ func shellTestRepo(t *testing.T) (string, string) {
 	runGit(t, work, "remote", "add", "origin", origin)
 	runGit(t, work, "push", "-u", "origin", "main")
 	runGit(t, work, "fetch", "origin")
-	runGit(t, work, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 	return root, work
 }
 

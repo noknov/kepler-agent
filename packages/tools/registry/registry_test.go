@@ -29,7 +29,7 @@ func TestToolSearchCategoriesSchemaIncludesDeferredCategories(t *testing.T) {
 	if !ok {
 		t.Fatalf("categories enum has unexpected type: %#v", items["enum"])
 	}
-	for _, want := range []string{CategoryDiagnostics, CategoryBrowser, CategoryCode, CategoryIntegration, CategoryInfrastructure} {
+	for _, want := range []string{CategoryDiagnostics, CategoryCode, CategoryIntegration, CategoryInfrastructure} {
 		found := false
 		for _, got := range rawEnum {
 			if got == want {

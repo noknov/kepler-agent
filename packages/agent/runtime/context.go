@@ -110,7 +110,7 @@ func (p BoundedProjector) Project(_ context.Context, events []transcript.Event, 
 
 func eventMessage(event transcript.Event) (model.Message, bool) {
 	switch event.Type {
-	case transcript.UserInput, transcript.SteeringInput, transcript.RuntimeInstruction, transcript.AssistantMessage:
+	case transcript.UserInput, transcript.SteeringInput, transcript.AssistantMessage:
 		if event.Message != nil {
 			return *event.Message, true
 		}

@@ -7,8 +7,8 @@ families are deferred by default and become available through `tool_search`.
 
 | Tool | Description |
 |---|---|
-| `code-search` | Search source code from the refreshed remote default branch by default; use `source=working_tree` for uncommitted local changes |
-| `code-read_file` | Read a source file from the refreshed remote default branch by default; use `source=working_tree` for uncommitted local changes |
+| `code-search` | Search source code at an explicit git ref, or use `source=working_tree` for local changes |
+| `code-read_file` | Read a source file at an explicit git ref, or use `source=working_tree` for local changes |
 | `repo-search` | Fetch a remote repo, pin a commit snapshot, search it |
 | `repo-read_file` | Read a file from a pinned remote repo snapshot |
 | `git-fetch_ref` | Fetch a branch and return an immutable ref |
@@ -90,17 +90,6 @@ Final Slack answers append a concise evidence section when the turn used
 | Tool | Description |
 |---|---|
 | `skills-load` | Load full instructions for a named skill |
-
-## Browser Automation
-
-Playwright MCP tools are enabled only when `PLAYWRIGHT_MCP_URL` is set.
-
-Available tools include `pw-navigate`, `pw-snapshot`, `pw-click`, `pw-type`,
-`pw-fill_form`, `pw-screenshot`, `pw-press_key`, `pw-wait`, `pw-evaluate`,
-`pw-get_all_pages`, and `pw-switch_page`.
-
-Use element `ref` values from `pw-snapshot` with actions. Browser state is scoped
-to a single agent turn; each new Slack message starts a fresh session.
 
 ## Luckin Coffee
 

@@ -154,15 +154,12 @@ func TestRunTurnRetriesTransientModelError(t *testing.T) {
 	}
 }
 
-func TestRunTurnRetriesEmptyModelResponse(t *testing.T) {
-	client := &scriptedModel{responses: []model.Response{
-		{},
-		{Message: model.TextMessage(model.RoleAssistant, "recovered"), FinishReason: model.FinishStop},
-	}}
+func TestRunTurnRejectsEmptyModelResponse(t *testing.T) {
+	client := &scriptedModel{responses: []model.Response{{}}}
 	catalog, _ := tool.NewCatalog()
 	runner, _ := New(Config{Model: "test"}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
 	result, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "empty-retry", Input: model.TextMessage(model.RoleUser, "hi")})
-	if err != nil || result.Message.Text() != "recovered" || len(client.requests) != 2 {
+	if err == nil || result.Termination != TerminationEmptyResponse || len(client.requests) != 1 {
 		t.Fatalf("result=%+v requests=%d err=%v", result, len(client.requests), err)
 	}
 }
@@ -258,36 +255,27 @@ func TestPendingInputContinuesAsANormalNextTurn(t *testing.T) {
 	}
 }
 
-func TestRunTurnTerminatesRepeatedToolLoop(t *testing.T) {
-	call := model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "same", Name: "echo", Arguments: json.RawMessage(`{"value":"same"}`)}}}}
-	client := &scriptedModel{responses: []model.Response{
-		{Message: call, FinishReason: model.FinishToolCalls},
-		{Message: call, FinishReason: model.FinishToolCalls},
-		{Message: call, FinishReason: model.FinishToolCalls},
-		{Message: call, FinishReason: model.FinishToolCalls},
-	}}
-	catalog, _ := tool.NewCatalog(echoTool{})
-	runner, _ := New(Config{Model: "test", MaxRepeatedToolCalls: 3}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
-	result, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "loop", Input: model.TextMessage(model.RoleUser, "repeat")})
-	if err == nil || result.Termination != TerminationLoopDetected || len(client.requests) != 4 {
-		t.Fatalf("result=%+v requests=%d err=%v", result, len(client.requests), err)
-	}
-}
-
-func TestRunTurnSynthesizesFinalAnswerAtStepLimit(t *testing.T) {
+func TestRunTurnStopsAtStepLimitWithoutSyntheticModelCall(t *testing.T) {
 	call := model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "one", Name: "echo", Arguments: json.RawMessage(`{"value":"evidence"}`)}}}}
-	client := &scriptedModel{responses: []model.Response{
-		{Message: call, FinishReason: model.FinishToolCalls},
-		{Message: model.TextMessage(model.RoleAssistant, "Best answer from the gathered evidence."), FinishReason: model.FinishStop},
-	}}
+	client := &scriptedModel{responses: []model.Response{{Message: call, FinishReason: model.FinishToolCalls}}}
 	catalog, _ := tool.NewCatalog(echoTool{})
 	runner, _ := New(Config{Model: "test", MaxSteps: 1}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
 	result, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "step-limit", Input: model.TextMessage(model.RoleUser, "investigate")})
-	if err != nil || result.Termination != TerminationMaxSteps || result.Message.Text() != "Best answer from the gathered evidence." {
+	if err == nil || result.Termination != TerminationMaxSteps {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	if len(client.requests) != 2 || len(client.requests[1].Tools) != 0 {
+	if len(client.requests) != 1 {
 		t.Fatalf("requests=%+v", client.requests)
+	}
+}
+
+func TestRunTurnReturnsLengthLimitedResponseWithoutContinuationPrompt(t *testing.T) {
+	client := &scriptedModel{responses: []model.Response{{Message: model.TextMessage(model.RoleAssistant, "partial"), FinishReason: model.FinishLength}}}
+	catalog, _ := tool.NewCatalog()
+	runner, _ := New(Config{Model: "test"}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
+	result, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "output-limit", Input: model.TextMessage(model.RoleUser, "write")})
+	if err != nil || result.Termination != TerminationOutputLimit || result.Message.Text() != "partial" || len(client.requests) != 1 {
+		t.Fatalf("result=%+v requests=%d err=%v", result, len(client.requests), err)
 	}
 }
 

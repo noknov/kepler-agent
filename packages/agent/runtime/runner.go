@@ -2,12 +2,9 @@ package runtime
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
@@ -73,8 +70,6 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 		return r.failTurn(ctx, result, err)
 	}
 	system := model.TextMessage(model.RoleSystem, composition.Content)
-	repeated := make(map[string]int)
-	emptyResponses := 0
 	for step := 1; step <= r.config.MaxSteps; step++ {
 		result.Steps = step
 		if err := ctx.Err(); err != nil {
@@ -104,27 +99,16 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 			response.Message.Role = model.RoleAssistant
 		}
 		if len(response.Message.Content) == 0 {
-			emptyResponses++
-			if emptyResponses > r.config.MaxModelRetries {
-				return r.finishTurn(ctx, result, model.Message{}, TerminationEmptyResponse, errors.New("model repeatedly returned an empty response"))
-			}
-			instruction := model.TextMessage(model.RoleUser, "Your previous response was empty. Continue the task and return either structured tool calls or a final answer.")
-			if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.RuntimeInstruction, Message: &instruction}); err != nil {
-				return r.failTurn(ctx, result, err)
-			}
-			continue
+			return r.finishTurn(ctx, result, model.Message{}, TerminationEmptyResponse, errors.New("model returned an empty response"))
 		}
 		if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.AssistantMessage, Message: &response.Message}); err != nil {
 			return r.failTurn(ctx, result, err)
 		}
+		result.Message = response.Message
 		calls := response.Message.ToolCalls()
 		if len(calls) == 0 {
 			if response.FinishReason == model.FinishLength {
-				instruction := model.TextMessage(model.RoleUser, "Continue and finish concisely without repeating the previous response.")
-				if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.RuntimeInstruction, Message: &instruction}); err != nil {
-					return r.failTurn(ctx, result, err)
-				}
-				continue
+				return r.finishTurn(ctx, result, response.Message, TerminationOutputLimit, nil)
 			}
 			if count, appendErr := r.appendSteeringCount(ctx, request); appendErr != nil {
 				return r.failTurn(ctx, result, appendErr)
@@ -134,7 +118,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 			result.Message = response.Message
 			return r.finishTurn(ctx, result, response.Message, TerminationCompleted, nil)
 		}
-		outcome, err := r.executeTools(ctx, request, calls, repeated)
+		outcome, err := r.executeTools(ctx, request, calls)
 		if errors.Is(err, errPendingApproval) {
 			return r.finishTurn(ctx, result, response.Message, TerminationPendingApproval, err)
 		}
@@ -144,37 +128,8 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 		if outcome.pending != nil {
 			return r.finishTurn(ctx, result, *outcome.pending, TerminationPendingInput, nil)
 		}
-		if outcome.looped {
-			return r.finishTurn(ctx, result, response.Message, TerminationLoopDetected, errors.New("repeated tool-call loop detected"))
-		}
 	}
-	return r.finishAtStepLimit(ctx, request, result, system)
-}
-
-func (r *Runtime) finishAtStepLimit(ctx context.Context, request TurnRequest, result TurnResult, system model.Message) (TurnResult, error) {
-	instruction := model.TextMessage(model.RoleUser, "Tool step limit reached. Give a concise final answer using only the evidence already gathered. Do not call tools.")
-	if _, err := r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.RuntimeInstruction, Message: &instruction}); err != nil {
-		return r.failTurn(ctx, result, err)
-	}
-	projection, err := r.projectContext(ctx, request, system)
-	if err != nil {
-		return r.failTurn(ctx, result, err)
-	}
-	response, err := r.generateWithTools(ctx, request, projection.Messages, nil)
-	if err != nil {
-		return r.failTurn(ctx, result, err)
-	}
-	addUsage(&result.Usage, response.Usage)
-	if response.Message.Role == "" {
-		response.Message.Role = model.RoleAssistant
-	}
-	if len(response.Message.Content) == 0 || strings.TrimSpace(response.Message.Text()) == "" {
-		return r.finishTurn(ctx, result, model.Message{}, TerminationMaxSteps, errors.New("model returned no final answer at the step limit"))
-	}
-	if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.AssistantMessage, Message: &response.Message}); err != nil {
-		return r.failTurn(ctx, result, err)
-	}
-	return r.finishTurn(ctx, result, response.Message, TerminationMaxSteps, nil)
+	return r.finishTurn(ctx, result, result.Message, TerminationMaxSteps, errors.New("tool step limit reached"))
 }
 
 func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, system model.Message) (Projection, error) {
@@ -355,9 +310,4 @@ func (r *Runtime) failTurn(ctx context.Context, result TurnResult, err error) (T
 func (r *Runtime) cancelTurn(ctx context.Context, result TurnResult, err error) (TurnResult, error) {
 	result.Termination = TerminationCanceled
 	return r.finishTurn(ctx, result, result.Message, result.Termination, err)
-}
-
-func toolCallKey(call model.ToolCall) string {
-	sum := sha256.Sum256(append([]byte(call.Name+"\x00"), call.Arguments...))
-	return hex.EncodeToString(sum[:])
 }

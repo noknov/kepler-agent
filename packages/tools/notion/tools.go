@@ -118,7 +118,8 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, _ registry
 	if err != nil {
 		return registry.Result{}, err
 	}
-	return registry.Result{Content: summarizeNotionSearch(data)}, nil
+	content, err := summarizeNotionSearch(data)
+	return registry.Result{Content: content}, err
 }
 
 func (c Client) do(ctx context.Context, method, endpoint string, payload any) ([]byte, error) {
@@ -154,7 +155,7 @@ func (c Client) do(ctx context.Context, method, endpoint string, payload any) ([
 	return body, nil
 }
 
-func summarizeNotionSearch(data []byte) string {
+func summarizeNotionSearch(data []byte) (string, error) {
 	var parsed struct {
 		Results []struct {
 			ID         string `json:"id"`
@@ -168,7 +169,7 @@ func summarizeNotionSearch(data []byte) string {
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(data, &parsed); err != nil {
-		return string(data)
+		return "", fmt.Errorf("decode Notion search response: %w", err)
 	}
 	var lines []string
 	for _, r := range parsed.Results {
@@ -182,9 +183,9 @@ func summarizeNotionSearch(data []byte) string {
 		lines = append(lines, fmt.Sprintf("- %s %s %s %s", r.Object, r.ID, title, r.URL))
 	}
 	if len(lines) == 0 {
-		return "no results"
+		return "no results", nil
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), nil
 }
 
 func defaultString(v, fallback string) string {
@@ -225,7 +226,10 @@ func (t GetPageTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 	if args.Depth > 4 {
 		args.Depth = 4
 	}
-	pageID := parseNotionID(args.PageID)
+	pageID, err := validateNotionID(args.PageID)
+	if err != nil {
+		return registry.Result{}, fmt.Errorf("page_id: %w", err)
+	}
 	content, err := t.Client.fetchPageContent(ctx, pageID, args.Depth, 0)
 	if err != nil {
 		return registry.Result{}, err
@@ -264,7 +268,10 @@ func (c Client) fetchPageContent(ctx context.Context, blockID string, maxDepth, 
 			}
 			if block.HasChildren && depth+1 < maxDepth {
 				child, err := c.fetchPageContent(ctx, block.ID, maxDepth, depth+1)
-				if err == nil && child != "" {
+				if err != nil {
+					return "", err
+				}
+				if child != "" {
 					for _, cl := range strings.Split(child, "\n") {
 						lines = append(lines, "  "+cl)
 					}
@@ -337,26 +344,29 @@ func (t QueryDatabaseTool) Execute(ctx context.Context, raw json.RawMessage, _ r
 	if args.Limit > 100 {
 		args.Limit = 100
 	}
-	dbID := parseNotionID(args.DatabaseID)
+	dbID := strings.TrimSpace(args.DatabaseID)
 	if dbID == "" {
-		dbID = parseNotionID(t.Client.DatabaseID)
+		dbID = strings.TrimSpace(t.Client.DatabaseID)
 	}
-	if dbID == "" {
-		return registry.Result{}, fmt.Errorf("database_id is required")
+	dbID, err := validateNotionID(dbID)
+	if err != nil {
+		return registry.Result{}, fmt.Errorf("database_id: %w", err)
 	}
 
 	body := map[string]any{"page_size": args.Limit}
 	if len(args.Filter) > 0 && string(args.Filter) != "null" {
 		var f any
-		if err := json.Unmarshal(args.Filter, &f); err == nil {
-			body["filter"] = f
+		if err := json.Unmarshal(args.Filter, &f); err != nil {
+			return registry.Result{}, fmt.Errorf("filter must be valid JSON: %w", err)
 		}
+		body["filter"] = f
 	}
 	if len(args.Sorts) > 0 && string(args.Sorts) != "null" {
 		var s any
-		if err := json.Unmarshal(args.Sorts, &s); err == nil {
-			body["sorts"] = s
+		if err := json.Unmarshal(args.Sorts, &s); err != nil {
+			return registry.Result{}, fmt.Errorf("sorts must be valid JSON: %w", err)
 		}
+		body["sorts"] = s
 	}
 
 	url := fmt.Sprintf("https://api.notion.com/v1/databases/%s/query", dbID)
@@ -364,34 +374,17 @@ func (t QueryDatabaseTool) Execute(ctx context.Context, raw json.RawMessage, _ r
 	if err != nil {
 		return registry.Result{}, err
 	}
-	return registry.Result{Content: summarizeNotionSearch(data)}, nil
+	content, err := summarizeNotionSearch(data)
+	return registry.Result{Content: content}, err
 }
 
-// parseNotionID extracts a Notion UUID from a raw ID or a Notion page URL.
-// Notion URLs look like: https://www.notion.so/Title-<32-hex-chars>
-// or https://www.notion.so/<workspace>/<32-hex-chars>
-func parseNotionID(input string) string {
-	input = strings.TrimSpace(input)
-	// Strip URL prefix if present.
-	if idx := strings.LastIndex(input, "/"); idx >= 0 {
-		input = input[idx+1:]
+func validateNotionID(input string) (string, error) {
+	id := strings.TrimSpace(input)
+	if id == "" {
+		return "", fmt.Errorf("is required")
 	}
-	// Strip query string.
-	if idx := strings.Index(input, "?"); idx >= 0 {
-		input = input[:idx]
+	if strings.ContainsAny(id, "/?# \t\n\r") {
+		return "", fmt.Errorf("must be an ID, not a URL or free-form value")
 	}
-	// Strip fragment.
-	if idx := strings.Index(input, "#"); idx >= 0 {
-		input = input[:idx]
-	}
-	// Some URLs encode the ID as the last 32 hex chars after a dash.
-	if idx := strings.LastIndex(input, "-"); idx >= 0 && len(input)-idx-1 == 32 {
-		input = input[idx+1:]
-	}
-	// Normalize: remove dashes and re-insert in UUID format if it looks like a 32-char hex string.
-	bare := strings.ReplaceAll(input, "-", "")
-	if len(bare) == 32 {
-		return fmt.Sprintf("%s-%s-%s-%s-%s", bare[0:8], bare[8:12], bare[12:16], bare[16:20], bare[20:32])
-	}
-	return input
+	return id, nil
 }

@@ -3,7 +3,6 @@ package slackagent
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -27,13 +26,10 @@ func (m *replyModel) Generate(_ context.Context, request model.Request, sink mod
 }
 
 type fakeMessenger struct {
-	mu        sync.Mutex
-	chunks    []map[string]any
-	stopped   bool
-	posts     []string
-	statuses  []string
-	loading   [][]string
-	appendErr error
+	mu       sync.Mutex
+	posts    []string
+	statuses []string
+	loading  [][]string
 }
 
 type memoryQueue struct {
@@ -64,25 +60,12 @@ func (m *fakeMessenger) PostMessage(_ context.Context, _, _, text string) (strin
 	m.posts = append(m.posts, text)
 	return "post", nil
 }
-func (m *fakeMessenger) StartStream(context.Context, string, string, string) (string, error) {
-	return "stream", nil
-}
-func (m *fakeMessenger) AppendStream(_ context.Context, _ string, _ string, chunks []map[string]any) error {
+func (m *fakeMessenger) PostMarkdownMessage(_ context.Context, _, _, text string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.appendErr != nil {
-		return m.appendErr
-	}
-	m.chunks = append(m.chunks, chunks...)
-	return nil
+	m.posts = append(m.posts, text)
+	return "post", nil
 }
-func (m *fakeMessenger) StopStream(context.Context, string, string) error {
-	m.mu.Lock()
-	m.stopped = true
-	m.mu.Unlock()
-	return nil
-}
-func (m *fakeMessenger) DeleteMessage(context.Context, string, string) error { return nil }
 func (m *fakeMessenger) ThreadContext(context.Context, string, string, int) string {
 	return "prior Slack context"
 }
@@ -94,7 +77,7 @@ func (m *fakeMessenger) SetThreadStatus(_ context.Context, _, _, status string, 
 	return nil
 }
 
-func TestServiceRunsHostedHarnessAndStreamsAnswer(t *testing.T) {
+func TestServiceRunsHostedHarnessAndPostsFormattedAnswer(t *testing.T) {
 	catalog, err := tool.NewCatalog()
 	if err != nil {
 		t.Fatal(err)
@@ -112,23 +95,11 @@ func TestServiceRunsHostedHarnessAndStreamsAnswer(t *testing.T) {
 	}
 	messenger.mu.Lock()
 	defer messenger.mu.Unlock()
-	if !messenger.stopped {
-		t.Fatal("stream was not finalized")
+	if len(messenger.posts) != 1 || messenger.posts[0] != "hello" {
+		t.Fatalf("posts = %#v", messenger.posts)
 	}
-	found := false
-	for _, chunk := range messenger.chunks {
-		if chunk["type"] == "task_update" {
-			t.Fatalf("native Slack path rendered a task card: %#v", messenger.chunks)
-		}
-		if chunk["type"] == "markdown_text" && chunk["text"] == "hello" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("stream chunks = %#v", messenger.chunks)
-	}
-	if client.request == nil || len(client.request.Messages) == 0 || !strings.Contains(client.request.Messages[0].Text(), "transient Slack status") {
-		t.Fatalf("hosted progress instruction missing from model request: %+v", client.request)
+	if client.request == nil || len(client.request.Messages) == 0 || strings.Contains(client.request.Messages[0].Text(), "transient Slack status") {
+		t.Fatalf("primary model received a Slack progress instruction: %+v", client.request)
 	}
 	if len(messenger.statuses) < 2 || messenger.statuses[0] != "is thinking" || messenger.statuses[len(messenger.statuses)-1] != "" {
 		t.Fatalf("thread statuses = %#v", messenger.statuses)
@@ -183,28 +154,17 @@ func TestLifecycleStatusShowsOnlyRetryableModelFailures(t *testing.T) {
 	}
 }
 
-func TestToolStepUsesPrimaryModelSummaryAndKeepsItDuringToolLifecycle(t *testing.T) {
-	messenger := &fakeMessenger{}
-	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T", Text: "查一下支付服务"})
-	stream.Start()
-	stream.Lifecycle(transcript.Event{Type: transcript.ModelRequested})
-	stream.Write("正在查询支付服务的部署记录")
-	stream.CommitStep(model.Message{Role: model.RoleAssistant, Content: []model.Content{
-		{Type: model.ContentText, Text: "正在查询支付服务的部署记录"},
-		{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "call", Name: "notion-search"}},
-	}})
-	stream.Lifecycle(transcript.Event{Type: transcript.ToolCallStarted, ToolCall: &tool.Call{Name: "notion-search"}})
-	if got := messenger.loading; len(got) != 2 || len(got[1]) != 1 || got[1][0] != "正在查询支付服务的部署记录" {
-		t.Fatalf("loading messages=%#v", got)
-	}
-	if len(messenger.chunks) != 0 {
-		t.Fatalf("step summary leaked into answer stream: %#v", messenger.chunks)
+func TestToolLifecycleWithoutProgressSummaryKeepsThinkingStatus(t *testing.T) {
+	if _, _, ok := lifecycleStatus(transcript.Event{Type: transcript.ToolCallStarted, ToolCall: &tool.Call{Name: "private_internal_tool"}}, true); ok {
+		t.Fatal("tool lifecycle replaced the thinking fallback")
 	}
 }
 
-func TestToolLifecycleWithoutPrimarySummaryKeepsThinkingStatus(t *testing.T) {
-	if _, _, ok := lifecycleStatus(transcript.Event{Type: transcript.ToolCallStarted, ToolCall: &tool.Call{Name: "private_internal_tool"}}, true); ok {
-		t.Fatal("tool lifecycle replaced the thinking fallback")
+func TestContextLifecycleDoesNotFlashTransientStatus(t *testing.T) {
+	for _, eventType := range []transcript.EventType{transcript.ContextProjected, transcript.CompactionCreated} {
+		if _, _, ok := lifecycleStatus(transcript.Event{Type: eventType}, true); ok {
+			t.Fatalf("%s emitted a transient presentation status", eventType)
+		}
 	}
 }
 
@@ -224,14 +184,13 @@ func TestUnsupportedImagesAreRemovedWithoutMutatingInput(t *testing.T) {
 	}
 }
 
-func TestCompletePostsFallbackWhenStreamDeliveryFails(t *testing.T) {
-	messenger := &fakeMessenger{appendErr: errors.New("stream unavailable")}
+func TestCompletePostsFinalWithoutStartingEmptyStream(t *testing.T) {
+	messenger := &fakeMessenger{}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T", UserID: "U"})
-	stream.Write("answer")
 	stream.CommitStep(model.TextMessage(model.RoleAssistant, "answer"))
 	stream.Complete("answer")
-	if len(messenger.posts) != 1 || messenger.posts[0] != "answer" || !messenger.stopped {
-		t.Fatalf("posts=%#v stopped=%v", messenger.posts, messenger.stopped)
+	if len(messenger.posts) != 1 || messenger.posts[0] != "answer" {
+		t.Fatalf("posts=%#v", messenger.posts)
 	}
 }
 

@@ -49,9 +49,9 @@ func TestHTTPClientInjection(t *testing.T) {
 
 func TestFormatToolResult_TextOnly(t *testing.T) {
 	raw := json.RawMessage(`{"content":[{"type":"text","text":"hello world"}]}`)
-	got := FormatToolResult(raw)
-	if got != "hello world" {
-		t.Fatalf("got %q", got)
+	got, err := FormatToolResult(raw)
+	if err != nil || got.Content != "hello world" {
+		t.Fatalf("got %#v, err=%v", got, err)
 	}
 }
 
@@ -59,27 +59,25 @@ func TestFormatToolResult_Image(t *testing.T) {
 	// "iVBOR..." is the start of a valid PNG base64 — use a short valid base64 string.
 	b64 := "aGVsbG8=" // base64("hello")
 	raw := json.RawMessage(`{"content":[{"type":"image","data":"` + b64 + `","mimeType":"image/png"}]}`)
-	got := FormatToolResult(raw)
+	got, err := FormatToolResult(raw)
 	want := "data:image/png;base64," + b64
-	if got != want {
-		t.Fatalf("got %q, want %q", got, want)
+	if err != nil || len(got.Images) != 1 || got.Images[0].DataURI() != want {
+		t.Fatalf("got %#v, want %q, err=%v", got, want, err)
 	}
 }
 
-func TestFormatToolResult_ImageDefaultsMimeType(t *testing.T) {
+func TestFormatToolResult_ImageRequiresMimeType(t *testing.T) {
 	b64 := "aGVsbG8="
 	raw := json.RawMessage(`{"content":[{"type":"image","data":"` + b64 + `"}]}`)
-	got := FormatToolResult(raw)
-	if !strings.HasPrefix(got, "data:image/png;base64,") {
-		t.Fatalf("expected image/png default mime type, got %q", got)
+	if _, err := FormatToolResult(raw); err == nil {
+		t.Fatal("missing image mime type was accepted")
 	}
 }
 
 func TestFormatToolResult_ImageInvalidBase64(t *testing.T) {
 	raw := json.RawMessage(`{"content":[{"type":"image","data":"!!!not-base64!!!"}]}`)
-	got := FormatToolResult(raw)
-	if !strings.Contains(got, "invalid base64") {
-		t.Fatalf("expected invalid base64 message, got %q", got)
+	if _, err := FormatToolResult(raw); err == nil {
+		t.Fatal("invalid base64 was accepted")
 	}
 }
 
@@ -89,29 +87,27 @@ func TestFormatToolResult_MixedTextAndImage(t *testing.T) {
 		{"type":"text","text":"caption"},
 		{"type":"image","data":"` + b64 + `","mimeType":"image/jpeg"}
 	]}`)
-	got := FormatToolResult(raw)
-	if !strings.Contains(got, "caption") {
-		t.Fatalf("missing text part: %q", got)
+	got, err := FormatToolResult(raw)
+	if err != nil || !strings.Contains(got.Content, "caption") {
+		t.Fatalf("missing text part: %#v err=%v", got, err)
 	}
-	if !strings.Contains(got, "data:image/jpeg;base64,"+b64) {
-		t.Fatalf("missing image data URI: %q", got)
+	if len(got.Images) != 1 || got.Images[0].DataURI() != "data:image/jpeg;base64,"+b64 {
+		t.Fatalf("missing image: %#v", got)
 	}
 }
 
 func TestFormatToolResult_IsError(t *testing.T) {
 	raw := json.RawMessage(`{"content":[{"type":"text","text":"boom"}],"isError":true}`)
-	got := FormatToolResult(raw)
-	if !strings.HasPrefix(got, "[tool error] ") {
-		t.Fatalf("expected [tool error] prefix, got %q", got)
+	got, err := FormatToolResult(raw)
+	if err != nil || !got.IsError || got.Content != "boom" {
+		t.Fatalf("got %#v err=%v", got, err)
 	}
 }
 
 func TestFormatToolResult_InvalidJSON(t *testing.T) {
 	raw := json.RawMessage(`not json`)
-	got := FormatToolResult(raw)
-	// Falls back to raw string.
-	if got != "not json" {
-		t.Fatalf("got %q", got)
+	if _, err := FormatToolResult(raw); err == nil {
+		t.Fatal("invalid JSON was accepted")
 	}
 }
 

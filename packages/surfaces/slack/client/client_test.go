@@ -2,11 +2,45 @@ package slack
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 )
+
+func TestPostMarkdownMessageUsesNativeMarkdownBlock(t *testing.T) {
+	var payload struct {
+		Channel  string `json:"channel"`
+		ThreadTS string `json:"thread_ts"`
+		Text     string `json:"text"`
+		Blocks   []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"blocks"`
+	}
+	client := &Client{token: "xoxb-test", httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/api/chat.postMessage" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"ts":"123.456"}`)), Request: r}, nil
+	})}}
+
+	markdown := "## Result\n\n- **one**\n- [two](https://example.test)"
+	ts, err := client.PostMarkdownMessage(context.Background(), "C1", "100.000", markdown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts != "123.456" || payload.Channel != "C1" || payload.ThreadTS != "100.000" || payload.Text != markdown {
+		t.Fatalf("response=%q payload=%#v", ts, payload)
+	}
+	if len(payload.Blocks) != 1 || payload.Blocks[0].Type != "markdown" || payload.Blocks[0].Text != markdown {
+		t.Fatalf("blocks=%#v, want one native markdown block", payload.Blocks)
+	}
+}
 
 func TestFormatFilesIncludesImageMetadata(t *testing.T) {
 	text := FormatFiles([]File{{

@@ -223,15 +223,7 @@ func (s *Service) probeGitRepo(ctx context.Context, now time.Time) ToolState {
 			checked = append(checked, item)
 			continue
 		}
-		branch := localDefaultBranch(ctx, repo)
-		if branch == "" {
-			failures = append(failures, filepath.Base(repo)+": default branch ref not resolvable")
-			item["status"] = "default branch unresolved"
-			checked = append(checked, item)
-			continue
-		}
 		item["status"] = "ok"
-		item["default_branch"] = branch
 		checked = append(checked, item)
 	}
 	if len(failures) > 0 {
@@ -241,7 +233,7 @@ func (s *Service) probeGitRepo(ctx context.Context, now time.Time) ToolState {
 		return state
 	}
 	state.Status = StatusHealthy
-	state.Message = "git repos accessible and default refs resolvable; fetch freshness is checked by git tools on request"
+	state.Message = "git repos and origin remotes are accessible; explicit refs are checked by git tools on request"
 	state.Details = map[string]any{"repo_count": len(repos), "repos": checked}
 	return state
 }
@@ -331,33 +323,6 @@ func firstRoot(roots []string) string {
 	for _, root := range roots {
 		if strings.TrimSpace(root) != "" {
 			return root
-		}
-	}
-	return ""
-}
-
-func resolveCommit(ctx context.Context, repo, branch string) string {
-	if repo == "" || branch == "" {
-		return ""
-	}
-	for _, ref := range []string{"origin/" + branch, branch} {
-		cmd := exec.CommandContext(ctx, "git", "-C", repo, "--no-optional-locks", "rev-parse", ref)
-		var stdout bytes.Buffer
-		cmd.Stdout = &stdout
-		if err := cmd.Run(); err == nil {
-			return strings.TrimSpace(stdout.String())
-		}
-	}
-	return ""
-}
-
-func localDefaultBranch(ctx context.Context, repo string) string {
-	if out := gitCommandOutput(ctx, repo, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); out != "" {
-		return strings.TrimPrefix(out, "origin/")
-	}
-	for _, branch := range []string{"main", "master"} {
-		if resolveCommit(ctx, repo, branch) != "" {
-			return branch
 		}
 	}
 	return ""

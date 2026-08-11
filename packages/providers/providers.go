@@ -32,45 +32,26 @@ func New(config Config) (*Client, error) {
 	provider := strings.ToLower(strings.TrimSpace(config.Provider))
 	protocol := strings.ToLower(strings.TrimSpace(config.Protocol))
 	if protocol == "" {
-		protocol = "openai"
+		return nil, fmt.Errorf("model protocol is required")
 	}
 	if config.Timeout <= 0 {
 		config.Timeout = 30 * time.Minute
 	}
 	if strings.TrimSpace(config.BaseURL) == "" {
-		config.BaseURL = defaultBaseURL(provider, protocol)
+		return nil, fmt.Errorf("model base URL is required")
 	}
 	var wire llm.Client
-	switch {
-	case provider == "longcat":
-		wire = llm.NewLongCatClient(config.BaseURL, config.APIKey, config.Timeout)
-	case provider == "opencode-go":
-		wire = llm.NewOpenCodeGoClient(config.BaseURL, config.APIKey, config.Timeout)
-	case protocol == "anthropic":
+	switch protocol {
+	case "anthropic":
 		wire = llm.NewAnthropicClient(config.BaseURL, config.APIKey, config.Timeout, config.AnthropicFlavor)
-	case protocol == "responses":
+	case "responses":
 		wire = llm.NewOpenAIResponsesClient(provider, config.BaseURL, config.APIKey, config.Timeout)
-	case protocol == "openai":
+	case "openai":
 		wire = llm.NewOpenAICompatibleClient(provider, config.BaseURL, config.APIKey, config.Timeout)
 	default:
 		return nil, fmt.Errorf("unsupported model protocol %q", config.Protocol)
 	}
 	return &Client{Wire: wire}, nil
-}
-
-func defaultBaseURL(provider, protocol string) string {
-	switch provider {
-	case "anthropic":
-		return "https://api.anthropic.com"
-	case "opencode-go":
-		return "https://opencode.ai/zen/go/v1"
-	case "longcat":
-		return "https://api.longcat.chat/openai/v1"
-	}
-	if protocol == "anthropic" {
-		return "https://api.anthropic.com"
-	}
-	return "https://api.openai.com/v1"
 }
 
 func (c *Client) Generate(ctx context.Context, request model.Request, sink model.EventSink) (model.Response, error) {
@@ -95,6 +76,7 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 	var err error
 	var sinkMu sync.Mutex
 	var sinkErr error
+	var conversionErr error
 	publish := func(event model.StreamEvent) {
 		if sink == nil {
 			return
@@ -114,7 +96,11 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 				}
 			},
 			OnToolCallComplete: func(call llm.ToolCall) {
-				canonical := toToolCall(call)
+				canonical, convertErr := toToolCall(call)
+				if convertErr != nil {
+					conversionErr = convertErr
+					return
+				}
 				publish(model.StreamEvent{Type: model.StreamToolCallDone, ToolCall: &canonical})
 			},
 			OnUsage: func(usage llm.Usage) {
@@ -128,10 +114,21 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 	if err != nil {
 		return model.Response{}, toModelError(err)
 	}
+	if conversionErr != nil {
+		return model.Response{}, conversionErr
+	}
 	if sinkErr != nil {
 		return model.Response{}, sinkErr
 	}
-	canonical := model.Response{Message: fromWireMessage(response.Message), FinishReason: finishReason(response.FinishReason), Usage: toUsage(response.Usage), RawMetadata: response.Raw}
+	message, err := fromWireMessage(response.Message)
+	if err != nil {
+		return model.Response{}, err
+	}
+	reason, err := finishReason(response.FinishReason)
+	if err != nil {
+		return model.Response{}, err
+	}
+	canonical := model.Response{Message: message, FinishReason: reason, Usage: toUsage(response.Usage), RawMetadata: response.Raw}
 	publish(model.StreamEvent{Type: model.StreamCompleted, ResponseID: canonical.ID, Usage: &canonical.Usage})
 	return canonical, nil
 }
@@ -170,7 +167,7 @@ func toWireMessage(message model.Message) llm.Message {
 	return out
 }
 
-func fromWireMessage(message llm.Message) model.Message {
+func fromWireMessage(message llm.Message) (model.Message, error) {
 	out := model.Message{Role: model.Role(message.Role)}
 	if message.ReasoningContent != "" {
 		out.Content = append(out.Content, model.Content{Type: model.ContentReasoning, Text: message.ReasoningContent})
@@ -183,35 +180,46 @@ func fromWireMessage(message llm.Message) model.Message {
 		out.Content = append(out.Content, model.Content{Type: model.ContentText, Text: message.Content, Citations: citations})
 	}
 	for _, call := range message.ToolCalls {
-		canonical := toToolCall(call)
+		canonical, err := toToolCall(call)
+		if err != nil {
+			return model.Message{}, err
+		}
 		out.Content = append(out.Content, model.Content{Type: model.ContentToolCall, ToolCall: &canonical})
 	}
-	return out
+	return out, nil
 }
 
-func toToolCall(call llm.ToolCall) model.ToolCall {
+func toToolCall(call llm.ToolCall) (model.ToolCall, error) {
+	if strings.TrimSpace(call.ID) == "" || strings.TrimSpace(call.Function.Name) == "" {
+		return model.ToolCall{}, fmt.Errorf("provider returned an incomplete tool call")
+	}
 	arguments := json.RawMessage(call.Function.Arguments)
 	if !json.Valid(arguments) {
-		arguments = json.RawMessage(`{}`)
+		return model.ToolCall{}, fmt.Errorf("provider returned invalid JSON arguments for tool %q", call.Function.Name)
 	}
-	return model.ToolCall{ID: call.ID, Name: call.Function.Name, Arguments: arguments}
+	return model.ToolCall{ID: call.ID, Name: call.Function.Name, Arguments: arguments}, nil
 }
 
 func toUsage(usage llm.Usage) model.Usage {
 	return model.Usage{InputTokens: int64(usage.PromptTokens), OutputTokens: int64(usage.CompletionTokens), CacheReadTokens: int64(usage.CacheReadInputTokens), CacheCreatedTokens: int64(usage.CacheCreationInputTokens)}
 }
 
-func finishReason(reason string) model.FinishReason {
+func finishReason(reason string) (model.FinishReason, error) {
 	switch strings.ToLower(reason) {
 	case "tool_calls", "tool_use":
-		return model.FinishToolCalls
-	case "length", "max_tokens":
-		return model.FinishLength
-	case "content_filter":
-		return model.FinishContent
-	default:
-		return model.FinishStop
+		return model.FinishToolCalls, nil
+	case "length", "max_tokens", "incomplete":
+		return model.FinishLength, nil
+	case "content_filter", "refusal":
+		return model.FinishContent, nil
+	case "stop", "end_turn", "stop_sequence", "completed":
+		return model.FinishStop, nil
+	case "canceled", "cancelled":
+		return model.FinishCanceled, nil
+	case "error", "failed":
+		return model.FinishError, nil
 	}
+	return model.FinishError, fmt.Errorf("provider returned unsupported finish reason %q", reason)
 }
 
 func toModelError(err error) error {
@@ -227,8 +235,6 @@ func toModelError(err error) error {
 			kind = model.ErrorAuth
 		case providerErr.StatusCode == 429:
 			kind = model.ErrorRateLimited
-		case llm.IsPromptTooLong(err):
-			kind = model.ErrorContextLimit
 		case providerErr.StatusCode >= 500:
 			kind = model.ErrorUnavailable
 		}

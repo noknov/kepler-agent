@@ -141,10 +141,12 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	healthService := health.NewService(profile.Tools, cfg.Security.WorkspaceRoots)
 	healthService.Redis = stores.Redis
 	conversation := slackagent.New(profile.Agent, slackClient, profile.Prompt, profile.Redactor, stores.UserPrefs)
+	if profile.SecondaryModel != nil {
+		conversation.Progress = &slackagent.ProgressSummarizer{Client: profile.SecondaryModel, Model: profile.SecondaryModelName, Sanitize: profile.Redactor.Sanitize}
+	}
 	conversation.Redis, conversation.PodID, conversation.Lifecycle = stores.Redis, podID, serviceCtx
 	conversation.Queue = slackagent.RedisQueue{Client: stores.Redis, TTL: 24 * time.Hour}
 	conversation.Locker = stores.Sessions
-	conversation.Format = slack.MarkdownToMrkdwn
 	if len(cfg.Security.WorkspaceRoots) > 0 {
 		conversation.Workspace = cfg.Security.WorkspaceRoots[0]
 	}

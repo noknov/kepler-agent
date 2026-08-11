@@ -34,7 +34,7 @@ func (c *OpenAIResponsesClient) Chat(ctx context.Context, req Request) (Response
 	if err != nil {
 		return Response{}, err
 	}
-	data, err := c.doWithRetry(ctx, payload)
+	data, err := c.doOnce(ctx, payload)
 	if err != nil {
 		return Response{}, err
 	}
@@ -82,13 +82,7 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		providerErr := NewProviderError(c.providerName()+" responses stream", resp.StatusCode, compactBody(data), resp.Header.Get("Retry-After"))
-		if isRetryableStatus(resp.StatusCode) {
-			fallback, fallbackErr := c.Chat(ctx, req)
-			if fallbackErr == nil {
-				return fallback, nil
-			}
-		}
+		providerErr := NewProviderError(c.providerName()+" responses stream", resp.StatusCode, compactBody(data))
 		return Response{}, providerErr
 	}
 
@@ -223,12 +217,6 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 		return Response{}, streamErr
 	}
 	if err != nil {
-		if strings.TrimSpace(msg.Content) == "" && len(msg.ToolCalls) == 0 {
-			fallback, fallbackErr := c.Chat(ctx, req)
-			if fallbackErr == nil {
-				return fallback, nil
-			}
-		}
 		return Response{}, err
 	}
 	return Response{
@@ -352,24 +340,6 @@ func (c *OpenAIResponsesClient) setHeaders(httpReq *http.Request) {
 	httpReq.Header.Set("Content-Type", "application/json")
 }
 
-func (c *OpenAIResponsesClient) doWithRetry(ctx context.Context, payload []byte) ([]byte, error) {
-	var lastErr error
-	for attempt := 0; attempt < MaxRetries; attempt++ {
-		data, err := c.doOnce(ctx, payload)
-		if err == nil {
-			return data, nil
-		}
-		lastErr = err
-		if !IsTemporaryOverload(err) || attempt == MaxRetries-1 {
-			return nil, err
-		}
-		if err := sleepBeforeRetry(ctx, attempt, lastErr); err != nil {
-			return nil, err
-		}
-	}
-	return nil, lastErr
-}
-
 func (c *OpenAIResponsesClient) doOnce(ctx context.Context, payload []byte) ([]byte, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/responses", bytes.NewReader(payload))
 	if err != nil {
@@ -386,7 +356,7 @@ func (c *OpenAIResponsesClient) doOnce(ctx context.Context, payload []byte) ([]b
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, NewProviderError(c.providerName()+" responses", resp.StatusCode, compactBody(data), resp.Header.Get("Retry-After"))
+		return nil, NewProviderError(c.providerName()+" responses", resp.StatusCode, compactBody(data))
 	}
 	return data, nil
 }

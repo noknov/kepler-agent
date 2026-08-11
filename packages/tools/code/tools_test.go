@@ -19,7 +19,7 @@ func TestReadFileReturnsContentDirectly(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := ReadFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	raw := json.RawMessage(`{"path":"app.go"}`)
+	raw := json.RawMessage(`{"path":"app.go","source":"working_tree"}`)
 
 	result, err := tool.Execute(context.Background(), raw, registry.Runtime{})
 	if err != nil {
@@ -41,7 +41,7 @@ func TestReadFileAcceptsWorkspaceRootBasenamePrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := ReadFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	raw := json.RawMessage(`{"path":"wati-frontend-app/domains/connectors/src/Integration/_constants/IntegrationCards.tsx"}`)
+	raw := json.RawMessage(`{"path":"wati-frontend-app/domains/connectors/src/Integration/_constants/IntegrationCards.tsx","source":"working_tree"}`)
 
 	result, err := tool.Execute(context.Background(), raw, registry.Runtime{})
 	if err != nil {
@@ -70,7 +70,7 @@ func TestSearchReturnsResultsDirectly(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"token"}`), registry.Runtime{})
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"token","source":"working_tree"}`), registry.Runtime{})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -90,7 +90,7 @@ func TestSearchAcceptsWorkspaceRootBasenamePrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"catalog","path":"wati-frontend-app/domains"}`), registry.Runtime{})
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"catalog","path":"wati-frontend-app/domains","source":"working_tree"}`), registry.Runtime{})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -99,7 +99,7 @@ func TestSearchAcceptsWorkspaceRootBasenamePrefix(t *testing.T) {
 	}
 }
 
-func TestGitReadDefaultsToRemoteDefaultBranchNotCurrentCheckout(t *testing.T) {
+func TestGitReadUsesExplicitRemoteRefNotCurrentCheckout(t *testing.T) {
 	root, work := testGitRepo(t)
 	runGit(t, work, "checkout", "-b", "feature")
 	if err := os.WriteFile(filepath.Join(work, "app.go"), []byte("package app\nconst value = \"feature\"\n"), 0o600); err != nil {
@@ -110,12 +110,12 @@ func TestGitReadDefaultsToRemoteDefaultBranchNotCurrentCheckout(t *testing.T) {
 	runGit(t, work, "push", "origin", "feature")
 
 	tool := ReadFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"work/app.go"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"work/app.go","source":"origin/main"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(result.Content, "ref=origin/main") || !strings.Contains(result.Content, `"main"`) || strings.Contains(result.Content, `"feature"`) {
-		t.Fatalf("read content = %q, want remote default branch", result.Content)
+		t.Fatalf("read content = %q, want explicit remote ref", result.Content)
 	}
 }
 
@@ -151,7 +151,7 @@ func TestGitReadAllowsConcurrentBranchSnapshotsWithoutCheckout(t *testing.T) {
 	}
 }
 
-func TestGitSearchDefaultsToRemoteDefaultBranch(t *testing.T) {
+func TestGitSearchUsesExplicitRemoteRef(t *testing.T) {
 	root, work := testGitRepo(t)
 	runGit(t, work, "checkout", "-b", "feature")
 	if err := os.WriteFile(filepath.Join(work, "app.go"), []byte("package app\nconst value = \"feature\"\n"), 0o600); err != nil {
@@ -162,19 +162,19 @@ func TestGitSearchDefaultsToRemoteDefaultBranch(t *testing.T) {
 	runGit(t, work, "push", "origin", "feature")
 
 	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"value"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"value","source":"origin/main"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(result.Content, "ref=origin/main") || !strings.Contains(result.Content, `"main"`) || strings.Contains(result.Content, `"feature"`) {
-		t.Fatalf("search content = %q, want remote default branch", result.Content)
+		t.Fatalf("search content = %q, want explicit remote ref", result.Content)
 	}
 }
 
 func TestGitSearchReturnsInvalidPatternError(t *testing.T) {
 	root, _ := testGitRepo(t)
 	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	_, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"["}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"[","source":"origin/main"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
 	if err == nil {
 		t.Fatal("Execute() succeeded, want invalid pattern error")
 	}
@@ -186,7 +186,7 @@ func TestGitSearchReturnsInvalidPatternError(t *testing.T) {
 func TestGitSearchAllowsSemicolonLiterals(t *testing.T) {
 	root, _ := testGitRepo(t)
 	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"hello;"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"hello;","source":"origin/main"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,6 @@ func testGitRepo(t *testing.T) (string, string) {
 	runGit(t, work, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "init")
 	runGit(t, work, "remote", "add", "origin", origin)
 	runGit(t, work, "push", "-u", "origin", "main")
-	runGit(t, work, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 	return root, work
 }
 

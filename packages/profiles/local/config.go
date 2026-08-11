@@ -72,6 +72,12 @@ func (config Config) Validate() error {
 	if strings.TrimSpace(config.Provider) == "" {
 		return fmt.Errorf("provider is required")
 	}
+	if strings.TrimSpace(config.BaseURL) == "" {
+		return fmt.Errorf("base_url is required")
+	}
+	if strings.TrimSpace(config.APIKeyEnv) == "" {
+		return fmt.Errorf("api_key_env is required")
+	}
 	if config.Protocol != "openai" && config.Protocol != "anthropic" && config.Protocol != "responses" {
 		return fmt.Errorf("protocol must be openai, responses, or anthropic")
 	}

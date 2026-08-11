@@ -232,21 +232,10 @@ func Run() error {
 }
 
 func modelClient(config local.Config) (model.Client, error) {
-	key := ""
-	keyEnv := config.APIKeyEnv
-	if keyEnv == "" {
-		switch config.Provider {
-		case "anthropic":
-			keyEnv = "ANTHROPIC_API_KEY"
-		case "opencode-go":
-			keyEnv = "OPENCODE_GO_API_KEY"
-		case "longcat":
-			keyEnv = "LONGCAT_API_KEY"
-		default:
-			keyEnv = "OPENAI_API_KEY"
-		}
+	key := os.Getenv(config.APIKeyEnv)
+	if strings.TrimSpace(key) == "" {
+		return nil, fmt.Errorf("model API key environment variable %s is empty", config.APIKeyEnv)
 	}
-	key = os.Getenv(keyEnv)
 	return providers.New(providers.Config{Provider: config.Provider, Protocol: config.Protocol, BaseURL: config.BaseURL, APIKey: key, AnthropicFlavor: config.AnthropicFlavor, Timeout: config.Timeout})
 }
 

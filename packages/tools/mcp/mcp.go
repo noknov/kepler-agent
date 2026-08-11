@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"strings"
 	"sync"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
@@ -69,8 +68,14 @@ func (t *remoteTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	if err != nil {
 		return tool.Result{}, err
 	}
-	isError := strings.HasPrefix(value, "[tool error] ")
-	return tool.Result{Content: []model.Content{{Type: model.ContentText, Text: value}}, IsError: isError, ErrorCode: mapErrorCode(isError)}, nil
+	content := make([]model.Content, 0, 1+len(value.Images))
+	if value.Content != "" {
+		content = append(content, model.Content{Type: model.ContentText, Text: value.Content})
+	}
+	for _, image := range value.Images {
+		content = append(content, model.Content{Type: model.ContentImage, ImageURL: image.DataURI()})
+	}
+	return tool.Result{Content: content, IsError: value.IsError, ErrorCode: mapErrorCode(value.IsError)}, nil
 }
 
 func mapErrorCode(isError bool) string {

@@ -15,7 +15,6 @@ import (
 
 	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
-	"github.com/noknov/slack-copilot-agent/packages/toolkit/gitcache"
 	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
 )
 
@@ -29,8 +28,8 @@ const maxOutputBytes = 60000
 // commands that could modify production systems or cluster state.
 //
 // Supports pipes (|) so that idiomatic shell one-liners like
-// "kubectl get pods | grep web" work as-is. Bare "git log" is normalized to
-// origin/HEAD so recency checks do not read a stale shared checkout branch.
+// "kubectl get pods | grep web" work as-is. Commands execute exactly as
+// validated; the tool does not rewrite refs or arguments.
 // Shell meta-operators (;, &&, ||, &) and redirections (>, >>) are not allowed.
 //
 // The shell process runs with its working directory set to the first
@@ -50,7 +49,7 @@ func (t ReadOnlyTool) Spec() llm.ToolSpec {
 		"Run a read-only diagnostic command and return its stdout. "+
 			"Supports pipelines with | so you can compose commands like "+
 			"\"kubectl get pods -n mt-prod | grep web\" or "+
-			"\"git -C /path/to/repo log origin/HEAD --oneline | head -20\". "+
+			"\"git -C /path/to/repo log origin/main --oneline | head -20\". "+
 			"Allowed commands: git (all read subcommands: log, blame, diff, grep, show, fetch, ls-files, etc.), "+
 			"kubectl (get, describe, logs, top, auth can-i, config, rollout status/history), gcloud (list/describe), "+
 			"gh (run/pr/issue/search list and view, api GET/HEAD), "+
@@ -105,11 +104,6 @@ func (t ReadOnlyTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 	if err := t.rejectWorkingTreeCodeReads(ctx, pipeline); err != nil {
 		return registry.Result{}, err
 	}
-	pipeline, err = t.prepareGitPipeline(ctx, pipeline)
-	if err != nil {
-		return registry.Result{}, err
-	}
-
 	out, errOut, err := t.runPipeline(ctx, pipeline)
 	if err != nil {
 		if errOut == "" {
@@ -126,32 +120,6 @@ func (t ReadOnlyTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 	return registry.Result{Content: truncateOutput(out)}, nil
 }
 
-func (t ReadOnlyTool) prepareGitPipeline(ctx context.Context, pipeline [][]string) ([][]string, error) {
-	prepared := make([][]string, len(pipeline))
-	copy(prepared, pipeline)
-	for i, fields := range prepared {
-		if filepath.Base(fields[0]) != "git" {
-			continue
-		}
-		_, sub, err := gitSubcommandWithIndex(fields[1:])
-		if err != nil || !oneOf(sub, "log", "grep", "show") {
-			continue
-		}
-		repoDir := t.gitWorkingDir(fields)
-		if repoRoot := gitRepoRoot(ctx, repoDir); repoRoot != "" {
-			if err := gitcache.FetchOrigin(ctx, repoRoot, gitcache.DefaultFetchTTL); err != nil {
-				return nil, fmt.Errorf("git fetch before shell read failed for %s: %w", filepath.Base(repoRoot), err)
-			}
-			repoDir = repoRoot
-		}
-		normalized := normalizeGitDefaultRef(fields)
-		if repoDir != "" && !sameStringSlice(normalized, fields) && gitRepoRoot(ctx, repoDir) != "" {
-			prepared[i] = normalized
-		}
-	}
-	return prepared, nil
-}
-
 func (t ReadOnlyTool) rejectWorkingTreeCodeReads(ctx context.Context, pipeline [][]string) error {
 	for _, fields := range pipeline {
 		bin := filepath.Base(fields[0])
@@ -161,10 +129,10 @@ func (t ReadOnlyTool) rejectWorkingTreeCodeReads(ctx context.Context, pipeline [
 		for _, path := range t.readPathArgs(bin, fields[1:]) {
 			resolved := t.resolveShellPath(path)
 			if repoRoot := gitRepoRoot(ctx, resolved); repoRoot != "" {
-				return fmt.Errorf("%s on source files under git repo %s reads the local checkout; use code-search/code-read_file or git grep origin/HEAD instead", bin, filepath.Base(repoRoot))
+				return fmt.Errorf("%s on source files under git repo %s reads the local checkout; use code-search/code-read_file with an explicit source ref instead", bin, filepath.Base(repoRoot))
 			}
 			if repoRoot := firstGitRepoUnder(resolved); repoRoot != "" {
-				return fmt.Errorf("%s on source files under git repo %s reads the local checkout; use code-search/code-read_file or git grep origin/HEAD instead", bin, filepath.Base(repoRoot))
+				return fmt.Errorf("%s on source files under git repo %s reads the local checkout; use code-search/code-read_file with an explicit source ref instead", bin, filepath.Base(repoRoot))
 			}
 		}
 	}
@@ -347,125 +315,6 @@ func gitRepoRoot(ctx context.Context, dir string) string {
 	return strings.TrimSpace(stdout.String())
 }
 
-func normalizeGitDefaultRef(fields []string) []string {
-	subIdx, sub, err := gitSubcommandWithIndex(fields[1:])
-	if err != nil {
-		return fields
-	}
-	absoluteSubIdx := subIdx + 1
-	switch sub {
-	case "log":
-		return normalizeBareGitLog(fields, absoluteSubIdx)
-	case "grep":
-		return normalizeBareGitGrep(fields, absoluteSubIdx)
-	case "show":
-		return normalizeGitShowHead(fields, absoluteSubIdx)
-	default:
-		return fields
-	}
-}
-
-func normalizeBareGitLog(fields []string, absoluteSubIdx int) []string {
-	if gitLogHasExplicitRef(fields[absoluteSubIdx+1:]) {
-		return fields
-	}
-	out := make([]string, 0, len(fields)+1)
-	out = append(out, fields[:absoluteSubIdx+1]...)
-	out = append(out, "origin/HEAD")
-	out = append(out, fields[absoluteSubIdx+1:]...)
-	return out
-}
-
-func normalizeBareGitGrep(fields []string, absoluteSubIdx int) []string {
-	args := fields[absoluteSubIdx+1:]
-	patternIdx := -1
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			break
-		}
-		if strings.HasPrefix(arg, "-") {
-			if grepFlagTakesValue(arg) {
-				i++
-			}
-			continue
-		}
-		patternIdx = i
-		break
-	}
-	if patternIdx < 0 {
-		return fields
-	}
-	for i := patternIdx + 1; i < len(args); i++ {
-		if args[i] == "--" {
-			out := make([]string, 0, len(fields)+1)
-			insertAt := absoluteSubIdx + 1 + i
-			out = append(out, fields[:insertAt]...)
-			out = append(out, "origin/HEAD")
-			out = append(out, fields[insertAt:]...)
-			return out
-		}
-		if !strings.HasPrefix(args[i], "-") {
-			return fields
-		}
-	}
-	return append(append([]string{}, fields...), "origin/HEAD")
-}
-
-func normalizeGitShowHead(fields []string, absoluteSubIdx int) []string {
-	if absoluteSubIdx+1 >= len(fields) {
-		return fields
-	}
-	rev := fields[absoluteSubIdx+1]
-	switch {
-	case rev == "HEAD":
-		rev = "origin/HEAD"
-	case strings.HasPrefix(rev, "HEAD:"):
-		rev = "origin/HEAD:" + strings.TrimPrefix(rev, "HEAD:")
-	default:
-		return fields
-	}
-	out := append([]string{}, fields...)
-	out[absoluteSubIdx+1] = rev
-	return out
-}
-
-func gitLogHasExplicitRef(args []string) bool {
-	skipNext := false
-	for _, arg := range args {
-		if skipNext {
-			skipNext = false
-			continue
-		}
-		if arg == "--" {
-			return false
-		}
-		if gitLogFlagTakesValue(arg) {
-			skipNext = true
-			continue
-		}
-		if strings.HasPrefix(arg, "--") {
-			continue
-		}
-		if strings.HasPrefix(arg, "-") {
-			continue
-		}
-		return true
-	}
-	return false
-}
-
-func gitLogFlagTakesValue(arg string) bool {
-	if strings.Contains(arg, "=") {
-		return false
-	}
-	return oneOf(arg,
-		"-n", "--max-count", "--skip", "--since", "--after", "--until", "--before",
-		"--author", "--committer", "--grep", "--format", "--pretty", "--date",
-		"-S", "-G",
-	)
-}
-
 func gitSubcommandWithIndex(args []string) (int, string, error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -488,18 +337,6 @@ func gitSubcommandWithIndex(args []string) (int, string, error) {
 		}
 	}
 	return -1, "", fmt.Errorf("git requires a subcommand")
-}
-
-func sameStringSlice(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func (t ReadOnlyTool) binary(name string) string {

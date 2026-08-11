@@ -32,7 +32,7 @@ func (t StatusTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-status",
 		"",
-		registry.ObjectSchema(nil, map[string]any{
+		registry.ObjectSchema([]string{"branch"}, map[string]any{
 			"repo": map[string]any{"type": "string", "description": ""},
 		}),
 	)
@@ -59,7 +59,7 @@ func (t FetchRefTool) Spec() llm.ToolSpec {
 		"Fetch origin refs and resolve a branch to an immutable commit SHA. Use this first when investigating a specific branch; then pass the returned repo/ref to git-search_ref or git-read_file_ref. This never checks out or updates the working tree, so multiple users can inspect different branches concurrently.",
 		registry.ObjectSchema(nil, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
-			"branch": map[string]any{"type": "string", "description": "Remote branch name. Omit to use origin/HEAD, then mt-main/main/master fallback."},
+			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 		}),
 	)
 }
@@ -165,10 +165,10 @@ func (RepoSearchTool) Parallel() bool { return true }
 func (t RepoSearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"repo-search",
-		"Search the refreshed remote branch snapshot for a repo. Omit branch for origin/HEAD, mt-main/main/master fallback. This reads origin refs and never checks out the branch, so concurrent users can inspect different branches safely.",
-		registry.ObjectSchema([]string{"query"}, map[string]any{
+		"Search a refreshed remote branch snapshot without changing the checkout.",
+		registry.ObjectSchema([]string{"branch", "query"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
-			"branch": map[string]any{"type": "string", "description": "Remote branch name. Omit for default branch."},
+			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"query":  map[string]any{"type": "string", "description": "Pattern to search."},
 			"path":   map[string]any{"type": "string", "description": "Optional path inside the repo."},
 			"limit":  map[string]any{"type": "integer", "description": "Maximum matches, default 50 and max 200."},
@@ -314,10 +314,10 @@ func (RepoReadFileTool) Parallel() bool { return true }
 func (t RepoReadFileTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"repo-read_file",
-		"Read a file from the refreshed remote branch snapshot. Omit branch for origin/HEAD, mt-main/main/master fallback. This never checks out or updates the working tree.",
-		registry.ObjectSchema([]string{"path"}, map[string]any{
+		"Read a file from a refreshed remote branch snapshot without changing the working tree.",
+		registry.ObjectSchema([]string{"branch", "path"}, map[string]any{
 			"repo":       map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
-			"branch":     map[string]any{"type": "string", "description": "Remote branch name. Omit for default branch."},
+			"branch":     map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"path":       map[string]any{"type": "string", "description": "Path inside the repo."},
 			"start_line": map[string]any{"type": "integer", "description": "1-based starting line."},
 			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines, default 240 and max 1000."},
@@ -359,9 +359,9 @@ func (t LogTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-log",
 		"Show commit history from a refreshed remote branch snapshot, including commit hash, author name/email, author date, and subject. Pass branch when the user asks about a specific branch's latest commits; this never checks out or updates the working tree.",
-		registry.ObjectSchema(nil, map[string]any{
+		registry.ObjectSchema([]string{"branch"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
-			"branch": map[string]any{"type": "string", "description": "Remote branch name. Omit for origin/HEAD, then mt-main/main/master fallback."},
+			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"limit":  map[string]any{"type": "integer", "description": "Maximum commits, default 10 and max 50."},
 		}),
 	)
@@ -503,36 +503,20 @@ func (b Base) explicitRepo(path string) (string, error) {
 
 func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string, rt registry.Runtime) (snapshot, error) {
 	branch := strings.TrimSpace(rawBranch)
+	if branch == "" {
+		return snapshot{}, fmt.Errorf("branch is required")
+	}
 	fetchCtx, cancel := context.WithTimeout(ctx, b.timeout())
 	defer cancel()
-	fetchStatus := "origin_refs_current_or_recent"
-	var fetchErr error
-	if branch != "" {
-		fetchErr = gitcache.FetchOriginFresh(fetchCtx, repo)
-		fetchStatus = "origin_refs_refreshed"
-	} else {
-		// Default-branch reads keep the short process-wide TTL to avoid paying a
-		// network fetch for every repo-search/repo-read_file pair.
-		fetchErr = gitcache.FetchOrigin(fetchCtx, repo, gitcache.DefaultFetchTTL)
+	if err := gitcache.FetchOriginFresh(fetchCtx, repo); err != nil {
+		return snapshot{}, fmt.Errorf("refresh origin refs: %w", err)
 	}
-	if fetchErr != nil {
-		fetchStatus = "refresh_failed_using_cached_refs: " + fetchErr.Error()
-	}
-	if branch == "" {
-		var err error
-		branch, err = b.defaultBranch(ctx, repo)
-		if err != nil {
-			return snapshot{}, err
-		}
-	}
+	fetchStatus := "origin_refs_refreshed"
 	if err := validateRefPart(branch); err != nil {
 		return snapshot{}, err
 	}
 	ref := "origin/" + branch
 	if !b.refExists(ctx, repo, ref) {
-		if strings.HasPrefix(fetchStatus, "refresh_failed") {
-			return snapshot{}, fmt.Errorf("%s; branch %q is not available in cached origin refs", fetchStatus, branch)
-		}
 		return snapshot{}, fmt.Errorf("branch %q does not exist on origin", branch)
 	}
 	commit, err := b.run(ctx, repo, "rev-parse", ref)
@@ -553,28 +537,11 @@ func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string, rt regi
 	}
 	cacheKey := "git-snapshot\x00" + repo + "\x00" + branch
 	rt.Cache.Set(cacheKey, snap)
-	if rawBranch == "" {
-		rt.Cache.Set("git-snapshot\x00"+repo+"\x00", snap)
-	}
 	return snap, nil
 }
 
 func (s snapshot) header() string {
 	return fmt.Sprintf("repo=%s\nbranch=%s\nbranch_ref=%s\nref=%s\ncommit=%s\nfetch_status=%s\nworking_tree_changed=false", s.Repo, s.Branch, s.BranchRef, s.Ref, s.Commit, s.FetchStatus)
-}
-
-func (b Base) defaultBranch(ctx context.Context, repo string) (string, error) {
-	if out, err := b.run(ctx, repo, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); err == nil {
-		if branch := strings.TrimPrefix(strings.TrimSpace(out), "origin/"); branch != "" {
-			return branch, nil
-		}
-	}
-	for _, branch := range []string{"mt-main", "main", "master"} {
-		if b.refExists(ctx, repo, "origin/"+branch) || b.refExists(ctx, repo, branch) {
-			return branch, nil
-		}
-	}
-	return "", fmt.Errorf("could not find default branch from origin/HEAD, main, or master")
 }
 
 func (b Base) timeout() time.Duration {
@@ -587,11 +554,7 @@ func (b Base) timeout() time.Duration {
 func (b Base) resolveRef(ctx context.Context, repo, raw string) (string, error) {
 	ref := strings.TrimSpace(raw)
 	if ref == "" {
-		branch, err := b.defaultBranch(ctx, repo)
-		if err != nil {
-			return "", err
-		}
-		ref = "origin/" + branch
+		return "", fmt.Errorf("ref is required")
 	}
 	if err := validateRefPart(ref); err != nil {
 		return "", err

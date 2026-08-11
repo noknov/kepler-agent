@@ -35,7 +35,7 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, req Request) (Respons
 		return Response{}, err
 	}
 
-	data, err := c.doWithRetry(ctx, payload)
+	data, err := c.doOnce(ctx, payload)
 	if err != nil {
 		return Response{}, err
 	}
@@ -103,7 +103,7 @@ func (c *OpenAICompatibleClient) chatBody(req Request) map[string]any {
 	} else if req.ToolChoice != "" {
 		body["tool_choice"] = req.ToolChoice
 	}
-	if isMiMoEndpoint(c.baseURL, req.Model) {
+	if c.providerName() == "mimo" {
 		delete(body, "max_tokens")
 		if req.MaxTokens > 0 {
 			body["max_completion_tokens"] = req.MaxTokens
@@ -147,14 +147,7 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		providerErr := NewProviderError(c.providerName()+" stream", resp.StatusCode, compactBody(data), resp.Header.Get("Retry-After"))
-		// Fallback: retry retryable stream errors as non-stream request.
-		if isRetryableStatus(resp.StatusCode) {
-			fallback, fallbackErr := c.Chat(ctx, req)
-			if fallbackErr == nil {
-				return fallback, nil
-			}
-		}
+		providerErr := NewProviderError(c.providerName()+" stream", resp.StatusCode, compactBody(data))
 		return Response{}, providerErr
 	}
 
@@ -251,13 +244,6 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 		return true
 	})
 	if err != nil {
-		// Stream broke mid-way with no content — fallback to non-stream.
-		if strings.TrimSpace(msg.Content) == "" && len(msg.ToolCalls) == 0 {
-			fallback, fallbackErr := c.Chat(ctx, req)
-			if fallbackErr == nil {
-				return fallback, nil
-			}
-		}
 		return Response{}, err
 	}
 	// Emit OnToolCallComplete for all completed tool calls at stream end.
@@ -281,29 +267,11 @@ func (c *OpenAICompatibleClient) setHeaders(httpReq *http.Request) {
 	if hasBearerPrefix(c.apiKey) {
 		httpReq.Header.Set("Authorization", c.apiKey)
 	}
-	if isMiMoEndpoint(c.baseURL, "") {
+	if c.providerName() == "mimo" {
 		httpReq.Header.Del("Authorization")
 		httpReq.Header.Set("api-key", bearerTokenValue(c.apiKey))
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-}
-
-func (c *OpenAICompatibleClient) doWithRetry(ctx context.Context, payload []byte) ([]byte, error) {
-	var lastErr error
-	for attempt := 0; attempt < MaxRetries; attempt++ {
-		data, err := c.doOnce(ctx, payload)
-		if err == nil {
-			return data, nil
-		}
-		lastErr = err
-		if !IsTemporaryOverload(err) || attempt == MaxRetries-1 {
-			return nil, err
-		}
-		if err := sleepBeforeRetry(ctx, attempt, lastErr); err != nil {
-			return nil, err
-		}
-	}
-	return nil, lastErr
 }
 
 func (c *OpenAICompatibleClient) doOnce(ctx context.Context, payload []byte) ([]byte, error) {
@@ -324,7 +292,7 @@ func (c *OpenAICompatibleClient) doOnce(ctx context.Context, payload []byte) ([]
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, NewProviderError(c.providerName()+" chat completion", resp.StatusCode, compactBody(data), resp.Header.Get("Retry-After"))
+		return nil, NewProviderError(c.providerName()+" chat completion", resp.StatusCode, compactBody(data))
 	}
 	return data, nil
 }
@@ -346,10 +314,4 @@ func bearerTokenValue(token string) string {
 		return strings.TrimSpace(token[7:])
 	}
 	return token
-}
-
-func isMiMoEndpoint(baseURL, model string) bool {
-	baseURL = strings.ToLower(strings.TrimSpace(baseURL))
-	model = strings.ToLower(strings.TrimSpace(model))
-	return strings.Contains(baseURL, "xiaomimimo.com") || strings.HasPrefix(model, "mimo-")
 }

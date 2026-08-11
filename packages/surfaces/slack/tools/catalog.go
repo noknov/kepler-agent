@@ -19,7 +19,6 @@ func AddToRegistry(reg *registry.Registry, cfg config.Config, slackClient *slack
 	reg.Register(runtimeRead(AskUserTool{Slack: slackClient}, "slack"))
 	reg.Register(runtimeRead(FileSearchTool{Slack: slackClient}, "slack"))
 	reg.Register(runtimeRead(JSONAnalyzeTool{Slack: slackClient}, "slack"))
-	registerDeferredTools(reg, registry.CategoryBrowser, slackExternalWrite(SendScreenshotTool{Slack: slackClient}))
 	registerDeferredTools(reg, registry.CategoryIntegration, slackExternalWrite(CreateCanvasTool{Slack: slackClient}))
 	if reminderStore != nil {
 		reg.Register(slackExternalWrite(reminderTools.CreateTool{
