@@ -58,7 +58,7 @@ func (c *OpenAIResponsesClient) Chat(ctx context.Context, req Request) (Response
 	}
 	return Response{
 		Message:      msg,
-		FinishReason: completedFinishReason(parsed.Status, msg),
+		FinishReason: parsed.Status,
 		Usage:        parsed.Usage.toUsage(),
 		Raw:          data,
 	}, nil
@@ -88,7 +88,6 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 
 	msg := Message{Role: "assistant"}
 	var finishReason string
-	completed := false
 	var usage responsesUsage
 	toolCallsStarted := false
 	functionCalls := make(map[string]responsesOutput)
@@ -199,7 +198,6 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 						emitFunctionCall(item.ID, item)
 					}
 				}
-				completed = true
 				if h.OnUsage != nil {
 					h.OnUsage(usage.toUsage())
 				}
@@ -220,9 +218,6 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 	}
 	if err != nil {
 		return Response{}, err
-	}
-	if completed {
-		finishReason = completedFinishReason(finishReason, msg)
 	}
 	return Response{
 		Message:      msg,
