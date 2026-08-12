@@ -182,7 +182,7 @@
             <h2>工具与能力</h2>
             <p>每个工具声明名称、JSON Schema、风险、依赖、surface 和并发属性。Registry 控制模型当前可见的工具集合，Capability Policy 控制服务器实际可执行的工具集合。</p>
             <div class="card-grid three">
-              <div class="card"><span class="tag">Read</span><h3>读取与诊断</h3><p>代码搜索、文件读取、Git、Web、Runbook 和基础设施查询。</p></div>
+              <div class="card"><span class="tag">Read</span><h3>读取与诊断</h3><p>代码搜索、文件读取、Git、Web、Runbook 和基础设施查询；远端 ref 读取会先刷新 origin 且不 checkout。</p></div>
               <div class="card"><span class="tag">Local</span><h3>本地写操作</h3><p>Local profile 在 workspace 和 OS sandbox 边界内执行，并按 once、session 或 project scope 请求审批。</p></div>
               <div class="card"><span class="tag">Hosted</span><h3>服务端只读</h3><p>Hosted profile 的 operator policy 只允许 read effect，不通过 Slack 请求主机权限。</p></div>
             </div>
@@ -363,7 +363,7 @@
           <section class="doc-section" id="en-tools">
             <span class="section-number">06 / TOOLS &amp; CAPABILITIES</span><h2>Tools and capabilities</h2>
             <p>Every tool declares a name, JSON Schema, risk, dependencies, surfaces, and concurrency behavior. The Registry controls the model-visible tool set; Capability Policy controls the server-executable tool set.</p>
-            <div class="card-grid three"><div class="card"><span class="tag">Read</span><h3>Read and diagnose</h3><p>Code search, file reads, Git, web, runbooks, and infrastructure queries.</p></div><div class="card"><span class="tag">Local</span><h3>Local writes</h3><p>The local profile operates inside workspace and OS-sandbox boundaries and requests once, session, or project approval scopes.</p></div><div class="card"><span class="tag">Hosted</span><h3>Server-side read only</h3><p>The hosted operator policy allows read effects and does not ask Slack users to grant host permissions.</p></div></div>
+            <div class="card-grid three"><div class="card"><span class="tag">Read</span><h3>Read and diagnose</h3><p>Code search, file reads, Git, web, runbooks, and infrastructure queries; remote ref reads refresh origin first without checking out branches.</p></div><div class="card"><span class="tag">Local</span><h3>Local writes</h3><p>The local profile operates inside workspace and OS-sandbox boundaries and requests once, session, or project approval scopes.</p></div><div class="card"><span class="tag">Hosted</span><h3>Server-side read only</h3><p>The hosted operator policy allows read effects and does not ask Slack users to grant host permissions.</p></div></div>
             <h3>Deferred discovery</h3><p>GitHub, Kubernetes, GCP, code graph, and similar tools are registered by category. The model uses <code>tool_search</code> to list stable categories and exact tool names, then explicitly activates schemas for the current session. There is no natural-language ranking or guessing.</p>
             <h3>Concurrency rules</h3><p>Parallel-safe tools may run concurrently; other tools execute serially. Deferred tool activation is scoped by agent session.</p>
           </section>
