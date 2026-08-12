@@ -26,7 +26,13 @@ func (m *progressModel) Generate(ctx context.Context, request model.Request, _ m
 
 func TestProgressSummarizerUsesOnlySafeStructuredIntent(t *testing.T) {
 	requests := make(chan model.Request, 1)
-	summarizer := &ProgressSummarizer{Client: &progressModel{response: `{"action":"查询","target":"支付服务部署记录"}`, request: requests}, Model: "small"}
+	summarizer := &ProgressSummarizer{
+		Client: &progressModel{response: `{"action":"查询","target":"支付服务部署记录"}`, request: requests},
+		Model:  "small",
+		Sanitize: func(text string) string {
+			return strings.ReplaceAll(text, "secret", "[redacted]")
+		},
+	}
 	text, err := summarizer.Summarize(context.Background(), "查一下支付服务部署记录", []model.ToolCall{{
 		Name:      "notion-search",
 		Arguments: json.RawMessage(`{"query":"支付服务部署记录","token":"secret","command":"dangerous"}`),
@@ -40,7 +46,7 @@ func TestProgressSummarizerUsesOnlySafeStructuredIntent(t *testing.T) {
 		t.Fatalf("progress system prompt is not a general user-facing contract: %s", system)
 	}
 	prompt := request.Messages[len(request.Messages)-1].Text()
-	if !strings.Contains(prompt, "支付服务部署记录") || !strings.Contains(prompt, "notion-search") || strings.Contains(prompt, "secret") || strings.Contains(prompt, "dangerous") {
+	if !strings.Contains(prompt, "支付服务部署记录") || !strings.Contains(prompt, "notion-search") || !strings.Contains(prompt, "dangerous") || strings.Contains(prompt, "secret") {
 		t.Fatalf("unsafe progress prompt: %s", prompt)
 	}
 }

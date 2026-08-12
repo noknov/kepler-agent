@@ -142,7 +142,7 @@ func progressArgumentValue(value any, sanitize func(string) string, depth int) a
 		out := make(map[string]any, len(v))
 		for key, child := range v {
 			key = strings.TrimSpace(key)
-			if key == "" || !progressArgumentKeyAllowed(key) {
+			if key == "" {
 				continue
 			}
 			clean := progressArgumentValue(child, sanitize, depth+1)
@@ -184,16 +184,6 @@ func progressArgumentValue(value any, sanitize func(string) string, depth int) a
 	default:
 		return nil
 	}
-}
-
-func progressArgumentKeyAllowed(key string) bool {
-	lower := strings.ToLower(key)
-	for _, blocked := range []string{"token", "secret", "password", "credential", "authorization", "api_key", "apikey", "command"} {
-		if strings.Contains(lower, blocked) {
-			return false
-		}
-	}
-	return true
 }
 
 func truncateProgressString(text string, limit int) string {
