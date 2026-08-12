@@ -217,7 +217,9 @@ or `git grep` without touching the working tree. If `source` is omitted,
 branch name to read `origin/<branch>` after the refresh. A refresh failure is
 returned to the caller; tools do not use stale refs. Within a turn, repeated
 reads of the same repository reuse the refreshed refs to avoid redundant network
-fetches. Deployment-specific default refs belong in the private prompt overlay.
+fetches. `source=working_tree` is an explicit checkout-view escape hatch, not
+the default code investigation path. Deployment-specific default refs belong in
+the private prompt overlay.
 
 ```bash
 WORKSPACE_ROOTS=/path/to/repos
