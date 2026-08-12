@@ -35,6 +35,10 @@ func TestProgressSummarizerUsesOnlySafeStructuredIntent(t *testing.T) {
 		t.Fatalf("text=%q err=%v", text, err)
 	}
 	request := <-requests
+	system := request.Messages[0].Text()
+	if !strings.Contains(system, "内部证据") || !strings.Contains(system, "参数值") {
+		t.Fatalf("progress system prompt is not a general user-facing contract: %s", system)
+	}
 	prompt := request.Messages[len(request.Messages)-1].Text()
 	if !strings.Contains(prompt, "支付服务部署记录") || !strings.Contains(prompt, "notion-search") || strings.Contains(prompt, "secret") || strings.Contains(prompt, "dangerous") {
 		t.Fatalf("unsafe progress prompt: %s", prompt)
