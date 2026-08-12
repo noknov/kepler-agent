@@ -51,6 +51,32 @@ func TestProgressSummarizerUsesOnlySafeStructuredIntent(t *testing.T) {
 	}
 }
 
+func TestProgressSummarizerIncludesToolDescriptionAsOperationSemantics(t *testing.T) {
+	requests := make(chan model.Request, 1)
+	summarizer := &ProgressSummarizer{
+		Client: &progressModel{response: `{"action":"Fetching","target":"PR diff"}`, request: requests},
+		ToolDescriptions: map[string]string{
+			"github-pr_diff": "Fetch GitHub pull request metadata and unified diff for review or investigation.",
+		},
+	}
+	_, err := summarizer.Summarize(context.Background(), "review PR #123", []model.ToolCall{{
+		Name:      "github-pr_diff",
+		Arguments: json.RawMessage(`{"repository":"owner/repo","pr":123}`),
+	}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := <-requests
+	system := request.Messages[0].Text()
+	if !strings.Contains(system, "do not restate the user's final task") || !strings.Contains(system, "Tool descriptions are the primary semantic source") {
+		t.Fatalf("progress prompt does not prevent task restatement: %s", system)
+	}
+	prompt := request.Messages[len(request.Messages)-1].Text()
+	if !strings.Contains(prompt, "Fetch GitHub pull request metadata and unified diff") || !strings.Contains(prompt, `"pr":123`) {
+		t.Fatalf("progress prompt omitted operation semantics: %s", prompt)
+	}
+}
+
 func TestToolStepProjectsSecondarySummaryWithoutPrimaryNarration(t *testing.T) {
 	messenger := &fakeMessenger{}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T", Text: "查一下支付服务"})

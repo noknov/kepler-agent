@@ -14,10 +14,11 @@ import (
 // ProgressSummarizer turns confirmed tool intent into presentation text. It
 // owns no runtime state and its output never enters the canonical transcript.
 type ProgressSummarizer struct {
-	Client   model.Client
-	Model    string
-	Timeout  time.Duration
-	Sanitize func(string) string
+	Client           model.Client
+	Model            string
+	Timeout          time.Duration
+	Sanitize         func(string) string
+	ToolDescriptions map[string]string
 }
 
 func (p *ProgressSummarizer) Summarize(ctx context.Context, request string, calls []model.ToolCall, cjk bool) (string, error) {
@@ -33,7 +34,7 @@ func (p *ProgressSummarizer) Summarize(ctx context.Context, request string, call
 	response, err := p.Client.Generate(ctx, model.Request{
 		Model: p.Model, Messages: []model.Message{
 			model.TextMessage(model.RoleSystem, progressSystemPrompt(cjk)),
-			model.TextMessage(model.RoleUser, progressPrompt(request, calls, p.Sanitize)),
+			model.TextMessage(model.RoleUser, progressPromptWithDescriptions(request, calls, p.Sanitize, p.ToolDescriptions)),
 		}, ReasoningEffort: "disabled", MaxOutputTokens: 64,
 	}, nil)
 	if err != nil {
@@ -88,21 +89,34 @@ func (s *slackStream) ToolStep(calls []model.ToolCall) {
 
 func progressSystemPrompt(cjk bool) string {
 	if cjk {
-		return `根据用户请求和即将执行的工具调用生成面向用户的当前操作状态。工具名、函数名、参数名和系统标识符只是内部证据，不能作为输出词汇；要用普通用户能理解的动作和对象表达。优先从用户请求和参数值提取具体对象；证据不足时使用概括对象，不要编造未发生的结果。只返回 JSON：{"action":"简短动词","target":"具体对象"}。不加主语、计划、解释、标点。`
+		return `根据用户请求和即将执行的工具调用生成面向用户的当前操作状态。描述正在进行的证据收集或执行动作，不要复述用户的最终任务、意图或预期结论。工具描述是主要语义来源；用户请求和参数值只用于确定具体对象。工具名、函数名、参数名和系统标识符只是内部证据，不能作为输出词汇。证据不足时使用概括对象，不要编造未发生的结果。只返回 JSON：{"action":"简短动词","target":"具体对象"}。不加主语、计划、解释、标点。`
 	}
-	return `Generate a user-facing current-operation status from the user request and the tool calls about to run. Tool names, function names, argument keys, and system identifiers are internal evidence, not output vocabulary; express the action and object in plain user-facing language. Prefer concrete objects from the user request and argument values; when evidence is insufficient, use a general object instead of inventing an unobserved result. Return only JSON: {"action":"short present-participle verb","target":"concrete object"}. Add no subject, plan, explanation, or punctuation.`
+	return `Generate a user-facing current-operation status from the user request and the tool calls about to run. Describe the evidence-gathering or execution action currently underway; do not restate the user's final task, intent, or expected conclusion. Tool descriptions are the primary semantic source; use the user request and argument values only to identify the concrete object. Tool names, function names, argument keys, and system identifiers are internal evidence, not output vocabulary. When evidence is insufficient, use a general object instead of inventing an unobserved result. Return only JSON: {"action":"short present-participle verb","target":"concrete object"}. Add no subject, plan, explanation, or punctuation.`
 }
 
 type progressCall struct {
-	Tool      string         `json:"tool"`
-	Arguments map[string]any `json:"arguments,omitempty"`
+	Tool        string         `json:"tool"`
+	Description string         `json:"description,omitempty"`
+	Arguments   map[string]any `json:"arguments,omitempty"`
 }
 
 func progressPrompt(request string, calls []model.ToolCall, sanitize func(string) string) string {
+	return progressPromptWithDescriptions(request, calls, sanitize, nil)
+}
+
+func progressPromptWithDescriptions(request string, calls []model.ToolCall, sanitize func(string) string, descriptions map[string]string) string {
 	tools := make([]progressCall, 0, len(calls))
 	for _, call := range calls {
 		if name := strings.TrimSpace(call.Name); name != "" {
-			tools = append(tools, progressCall{Tool: name, Arguments: progressArguments(call.Arguments, sanitize)})
+			description := strings.TrimSpace(descriptions[name])
+			if sanitize != nil {
+				description = sanitize(description)
+			}
+			tools = append(tools, progressCall{
+				Tool:        name,
+				Description: truncateProgressString(description, 240),
+				Arguments:   progressArguments(call.Arguments, sanitize),
+			})
 		}
 	}
 	request = strings.TrimSpace(request)

@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
 	"github.com/noknov/slack-copilot-agent/packages/appsupport"
 	"github.com/noknov/slack-copilot-agent/packages/config"
@@ -142,7 +144,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	healthService.Redis = stores.Redis
 	conversation := slackagent.New(profile.Agent, slackClient, profile.Prompt, profile.Redactor, stores.UserPrefs)
 	if profile.SecondaryModel != nil {
-		conversation.Progress = &slackagent.ProgressSummarizer{Client: profile.SecondaryModel, Model: profile.SecondaryModelName, Sanitize: profile.Redactor.Sanitize}
+		conversation.Progress = &slackagent.ProgressSummarizer{Client: profile.SecondaryModel, Model: profile.SecondaryModelName, Sanitize: profile.Redactor.Sanitize, ToolDescriptions: toolDescriptions(profile.Tools)}
 	}
 	conversation.Redis, conversation.PodID, conversation.Lifecycle = stores.Redis, podID, serviceCtx
 	conversation.Queue = slackagent.RedisQueue{Client: stores.Redis, TTL: 24 * time.Hour}
@@ -221,6 +223,24 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 
 	cleanup = false
 	return s, nil
+}
+
+func toolDescriptions(catalog interface{ Descriptors() []tool.Descriptor }) map[string]string {
+	if catalog == nil {
+		return nil
+	}
+	descriptions := make(map[string]string)
+	for _, descriptor := range catalog.Descriptors() {
+		name := strings.TrimSpace(descriptor.Name)
+		description := strings.TrimSpace(descriptor.Description)
+		if name != "" && description != "" {
+			descriptions[name] = description
+		}
+	}
+	if len(descriptions) == 0 {
+		return nil
+	}
+	return descriptions
 }
 
 func (s *Service) StartBackground() {
