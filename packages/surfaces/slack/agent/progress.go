@@ -54,18 +54,36 @@ func (s *slackStream) ToolStep(calls []model.ToolCall) {
 		return
 	}
 	s.mu.Lock()
+	if s.progressSeen == nil {
+		s.progressSeen = make(map[string]bool)
+	}
+	pending := make([]model.ToolCall, 0, len(calls))
+	for _, call := range calls {
+		id := strings.TrimSpace(call.ID)
+		if id != "" {
+			if s.progressSeen[id] {
+				continue
+			}
+			s.progressSeen[id] = true
+		}
+		pending = append(pending, call)
+	}
+	if len(pending) == 0 {
+		s.mu.Unlock()
+		return
+	}
 	s.statusEpoch++
 	epoch := s.statusEpoch
 	s.mu.Unlock()
 	cjk := slackconversation.IsCJK(s.req.Text)
 	go func() {
-		text, err := s.progress.Summarize(s.ctx, s.req.Text, calls, cjk)
+		text, err := s.progress.Summarize(s.ctx, s.req.Text, pending, cjk)
 		if err != nil || text == "" {
 			return
 		}
-		status := "is working"
+		status := "is thinking"
 		if cjk {
-			status = "正在处理"
+			status = "正在思考"
 		}
 		s.setProgressStatus(epoch, status, text)
 	}()

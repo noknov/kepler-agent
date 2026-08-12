@@ -2,6 +2,7 @@ package slackagent
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
 	"github.com/noknov/slack-copilot-agent/packages/prompts"
@@ -18,9 +19,6 @@ func (s *slackStream) Lifecycle(event transcript.Event) {
 	if !ok {
 		return
 	}
-	s.mu.Lock()
-	s.statusEpoch++
-	s.mu.Unlock()
 	s.setStatus(status, loading)
 }
 
@@ -28,11 +26,13 @@ func (s *slackStream) setStatus(status, loading string) {
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()
 	s.mu.Lock()
-	if s.lastStatus == status+"\x00"+loading {
+	key := statusKey(status, loading)
+	if s.lastStatus == key || preservesProgressLoading(s.lastStatus, status, loading) {
 		s.mu.Unlock()
 		return
 	}
-	s.lastStatus = status + "\x00" + loading
+	s.lastStatus = key
+	s.statusEpoch++
 	s.mu.Unlock()
 	var messages []string
 	if loading != "" {
@@ -41,11 +41,39 @@ func (s *slackStream) setStatus(status, loading string) {
 	_ = s.status.SetThreadStatus(s.ctx, s.req.Channel, s.req.ThreadTS, status, messages)
 }
 
+func statusKey(status, loading string) string {
+	return status + "\x00" + loading
+}
+
+func splitStatusKey(key string) (string, string) {
+	status, loading, ok := strings.Cut(key, "\x00")
+	if !ok {
+		return key, ""
+	}
+	return status, loading
+}
+
+func preservesProgressLoading(currentKey, nextStatus, nextLoading string) bool {
+	currentStatus, currentLoading := splitStatusKey(currentKey)
+	if currentStatus != nextStatus || !isThinkingStatus(nextStatus) || !isDefaultThinkingLoading(nextLoading) {
+		return false
+	}
+	return currentLoading != "" && !isDefaultThinkingLoading(currentLoading)
+}
+
+func isThinkingStatus(status string) bool {
+	return status == "is thinking" || status == "正在思考"
+}
+
+func isDefaultThinkingLoading(loading string) bool {
+	return loading == prompts.ToolStatus("thinking", "Thinking...") || loading == prompts.ToolStatus("thinking_zh", "思考中...")
+}
+
 func (s *slackStream) setProgressStatus(epoch uint64, status, loading string) {
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()
 	s.mu.Lock()
-	key := status + "\x00" + loading
+	key := statusKey(status, loading)
 	if s.statusEpoch != epoch || s.lastStatus == "\x00" || s.lastStatus == key {
 		s.mu.Unlock()
 		return
