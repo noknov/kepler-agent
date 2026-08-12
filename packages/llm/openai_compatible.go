@@ -156,15 +156,11 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 	var finishReason string
 	var usage openAIUsage
 	toolCallsStarted := false
-	argumentMode := c.toolArgumentMode()
-	var streamProtocolErr error
+	argumentStreams := map[int]*toolArgumentStream{}
 	// Track tool call completion state for OnToolCallComplete.
 	completedToolIDs := map[string]bool{}
 
 	err = readSSE(resp.Body, func(ev sseEvent) bool {
-		if streamProtocolErr != nil {
-			return false
-		}
 		if ev.Data == "[DONE]" {
 			return false
 		}
@@ -221,9 +217,11 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 				previous := msg.ToolCalls[tc.Index]
 				if h.OnToolCallComplete != nil && !completedToolIDs[previous.ID] {
 					completedToolIDs[previous.ID] = true
+					finalizeToolCallArguments(&previous, argumentStreams[tc.Index])
 					h.OnToolCallComplete(previous)
 				}
 				msg.ToolCalls[tc.Index] = ToolCall{Type: "function"}
+				delete(argumentStreams, tc.Index)
 			}
 			for len(msg.ToolCalls) <= tc.Index {
 				msg.ToolCalls = append(msg.ToolCalls, ToolCall{Type: "function"})
@@ -245,12 +243,12 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 				call.Function.Name = tc.Function.Name
 			}
 			if tc.Function.Arguments != "" {
-				arguments, mergeErr := mergeToolArguments(call.Function.Arguments, tc.Function.Arguments, argumentMode)
-				if mergeErr != nil {
-					streamProtocolErr = mergeErr
-					return false
+				stream := argumentStreams[tc.Index]
+				if stream == nil {
+					stream = &toolArgumentStream{snapshotValid: true}
+					argumentStreams[tc.Index] = stream
 				}
-				call.Function.Arguments = arguments
+				call.Function.Arguments = stream.Append(tc.Function.Arguments)
 			}
 		}
 		if chunk.Choices[0].FinishReason != nil {
@@ -261,8 +259,8 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 	if err != nil {
 		return Response{}, err
 	}
-	if streamProtocolErr != nil {
-		return Response{}, streamProtocolErr
+	for i := range msg.ToolCalls {
+		finalizeToolCallArguments(&msg.ToolCalls[i], argumentStreams[i])
 	}
 	// A clean EOF is a successful HTTP stream completion. [DONE] is an
 	// OpenAI convention, but compatible providers are permitted to omit it.
@@ -283,34 +281,54 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 	}, nil
 }
 
-type toolArgumentMode int
-
-const (
-	toolArgumentsDelta toolArgumentMode = iota
-	toolArgumentsCumulative
-)
-
-func (c *OpenAICompatibleClient) toolArgumentMode() toolArgumentMode {
-	switch c.providerName() {
-	case "opencode-go", "opencode-zen":
-		return toolArgumentsCumulative
-	default:
-		return toolArgumentsDelta
-	}
+type toolArgumentStream struct {
+	delta         string
+	snapshot      string
+	snapshotValid bool
 }
 
-func mergeToolArguments(previous, update string, mode toolArgumentMode) (string, error) {
-	switch mode {
-	case toolArgumentsDelta:
-		return previous + update, nil
-	case toolArgumentsCumulative:
-		if previous == "" || strings.HasPrefix(update, previous) {
-			return update, nil
+func (s *toolArgumentStream) Append(update string) string {
+	s.delta += update
+	if s.snapshotValid {
+		if s.snapshot == "" || strings.HasPrefix(update, s.snapshot) {
+			s.snapshot = update
+		} else {
+			s.snapshotValid = false
 		}
-		return "", fmt.Errorf("provider returned non-cumulative tool arguments snapshot")
-	default:
-		return "", fmt.Errorf("unsupported tool argument mode")
 	}
+	return s.Current()
+}
+
+func (s *toolArgumentStream) Current() string {
+	if s == nil {
+		return ""
+	}
+	if s.snapshotValid {
+		return s.snapshot
+	}
+	return s.delta
+}
+
+func (s *toolArgumentStream) Final() string {
+	if s == nil {
+		return ""
+	}
+	if !s.snapshotValid {
+		return s.delta
+	}
+	deltaValid := json.Valid([]byte(s.delta))
+	snapshotValid := json.Valid([]byte(s.snapshot))
+	if snapshotValid && !deltaValid {
+		return s.snapshot
+	}
+	return s.delta
+}
+
+func finalizeToolCallArguments(call *ToolCall, stream *toolArgumentStream) {
+	if call == nil || stream == nil {
+		return
+	}
+	call.Function.Arguments = stream.Final()
 }
 
 // completedOpenAICompatibleFinishReason normalizes providers that terminate a
