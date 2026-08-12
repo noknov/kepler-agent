@@ -113,6 +113,9 @@ func (r *eventRouter) Publish(_ context.Context, event transcript.Event) {
 		return
 	}
 	stream.Lifecycle(event)
+	if event.Type == transcript.ModelStreamed && event.Model != nil && event.Model.Type == model.StreamToolCallDone && event.Model.ToolCall != nil {
+		stream.ToolStep([]model.ToolCall{*event.Model.ToolCall})
+	}
 	if event.Type == transcript.AssistantMessage && event.Message != nil {
 		stream.CommitStep(*event.Message)
 	}
@@ -447,15 +450,16 @@ func steeringText(req slackconversation.Request) string {
 }
 
 type slackStream struct {
-	ctx         context.Context
-	messenger   slackconversation.Messenger
-	req         slackconversation.Request
-	mu          sync.Mutex
-	statusMu    sync.Mutex
-	status      slackconversation.ThreadStatusMessenger
-	lastStatus  string
-	statusEpoch uint64
-	progress    *ProgressSummarizer
+	ctx          context.Context
+	messenger    slackconversation.Messenger
+	req          slackconversation.Request
+	mu           sync.Mutex
+	statusMu     sync.Mutex
+	status       slackconversation.ThreadStatusMessenger
+	lastStatus   string
+	statusEpoch  uint64
+	progress     *ProgressSummarizer
+	progressSeen map[string]bool
 }
 
 func newSlackStream(ctx context.Context, messenger slackconversation.Messenger, req slackconversation.Request) *slackStream {

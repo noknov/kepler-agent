@@ -17,9 +17,12 @@ Prompts decide when and how to cite; presentation adapters decide how to render
 the provider-supplied citation records. Dynamic status remains a projection of
 canonical runtime events rather than a second execution-state model. Slack may
 use the optional secondary model to turn the redacted user request and confirmed
-tool names into a structured action-and-target label. That label is
+tool names into a structured action-and-target loading message while the native
+Slack assistant status remains the localized thinking status. That label is
 presentation-only: it is never written to the transcript, returned to the
-runtime, or placed in model context.
+runtime, or placed in model context. Once Slack has a specific progress loading
+message, later ordinary model-request lifecycle events do not downgrade it back
+to the generic `Thinking...` loading text.
 If no secondary model is configured, it fails, or its output violates the label
 schema, Slack keeps the localized `Thinking...` state. Context projection and
 compaction do not replace it with momentary status flashes.
