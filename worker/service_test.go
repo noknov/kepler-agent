@@ -1,9 +1,13 @@
 package worker
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 func TestDrainIsLocalOnly(t *testing.T) {
@@ -22,5 +26,31 @@ func TestDrainIsLocalOnly(t *testing.T) {
 	service.handleDrain(localRecorder, local)
 	if localRecorder.Code != http.StatusOK || !service.draining.Load() {
 		t.Fatalf("local drain code=%d draining=%v", localRecorder.Code, service.draining.Load())
+	}
+}
+
+type descriptionTool struct {
+	descriptor tool.Descriptor
+}
+
+func (t descriptionTool) Descriptor() tool.Descriptor { return t.descriptor }
+func (descriptionTool) Execute(context.Context, tool.Call) (tool.Result, error) {
+	return tool.Result{}, nil
+}
+
+func TestToolDescriptionsUsesCatalogDescriptors(t *testing.T) {
+	catalog, err := tool.NewCatalog(
+		descriptionTool{descriptor: tool.Descriptor{Name: "github-pr_diff", Description: "Fetch GitHub pull request metadata and unified diff.", InputSchema: json.RawMessage(`{}`)}},
+		descriptionTool{descriptor: tool.Descriptor{Name: "empty-description", InputSchema: json.RawMessage(`{}`)}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptions := toolDescriptions(catalog)
+	if got := descriptions["github-pr_diff"]; got != "Fetch GitHub pull request metadata and unified diff." {
+		t.Fatalf("github-pr_diff description = %q", got)
+	}
+	if _, ok := descriptions["empty-description"]; ok {
+		t.Fatalf("empty description should be omitted: %#v", descriptions)
 	}
 }
