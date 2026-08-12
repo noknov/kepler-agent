@@ -176,6 +176,81 @@ func TestOpenAICompatibleChatStreamDefaultsFinishReasonAfterCleanEOF(t *testing.
 	}
 }
 
+func TestOpenAICompatibleChatStreamParsesCumulativeToolCallSnapshots(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"code-search\",\"arguments\":\"{\\\"query\\\":\\\"hel\"}}]}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"code-search\",\"arguments\":\"{\\\"query\\\":\\\"hello\\\",\\\"source\\\":\\\"working_tree\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewOpenAICompatibleClient("opencode-go", server.URL, "token", 0)
+	response, err := client.ChatStream(context.Background(), Request{Model: "test"}, StreamHandler{})
+	if err != nil {
+		t.Fatalf("ChatStream() error = %v", err)
+	}
+	if response.FinishReason != "tool_calls" {
+		t.Fatalf("FinishReason = %q, want tool_calls", response.FinishReason)
+	}
+	calls := response.Message.ToolCalls
+	if len(calls) != 1 {
+		t.Fatalf("ToolCalls = %#v, want one", calls)
+	}
+	if call := calls[0]; call.Function.Name != "code-search" || call.Function.Arguments != `{"query":"hello","source":"working_tree"}` {
+		t.Fatalf("tool call = %#v", call)
+	}
+}
+
+func TestOpenAICompatibleChatStreamRejectsInvalidCumulativeSnapshot(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"code-search\",\"arguments\":\"{\\\"query\\\":\\\"hel\"}}]}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"code-search\",\"arguments\":\"lo\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewOpenAICompatibleClient("opencode-go", server.URL, "token", 0)
+	if _, err := client.ChatStream(context.Background(), Request{Model: "test"}, StreamHandler{}); err == nil {
+		t.Fatal("ChatStream() error = nil, want cumulative snapshot protocol error")
+	}
+}
+
+func TestMergeToolArguments(t *testing.T) {
+	tests := []struct {
+		name     string
+		mode     toolArgumentMode
+		previous string
+		update   string
+		want     string
+		wantErr  bool
+	}{
+		{name: "delta first fragment", mode: toolArgumentsDelta, update: `{"query":"`, want: `{"query":"`},
+		{name: "delta next fragment", mode: toolArgumentsDelta, previous: `{"query":"`, update: `hello"}`, want: `{"query":"hello"}`},
+		{name: "delta valid update is still a fragment", mode: toolArgumentsDelta, previous: `{"items":[`, update: `1`, want: `{"items":[1`},
+		{name: "cumulative first snapshot", mode: toolArgumentsCumulative, update: `{"query":"hel`, want: `{"query":"hel`},
+		{name: "cumulative repeated snapshot", mode: toolArgumentsCumulative, previous: `{"query":"hel`, update: `{"query":"hel`, want: `{"query":"hel`},
+		{name: "cumulative extended snapshot", mode: toolArgumentsCumulative, previous: `{"query":"hel`, update: `{"query":"hello"}`, want: `{"query":"hello"}`},
+		{name: "cumulative non-prefix rejected", mode: toolArgumentsCumulative, previous: `{"query":"hel`, update: `lo"}`, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := mergeToolArguments(test.previous, test.update, test.mode)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("mergeToolArguments() error = nil, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("mergeToolArguments() error = %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("mergeToolArguments() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestCompletedOpenAICompatibleFinishReason(t *testing.T) {
 	tests := []struct {
 		name    string

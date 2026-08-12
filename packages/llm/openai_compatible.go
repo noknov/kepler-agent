@@ -156,10 +156,15 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 	var finishReason string
 	var usage openAIUsage
 	toolCallsStarted := false
+	argumentMode := c.toolArgumentMode()
+	var streamProtocolErr error
 	// Track tool call completion state for OnToolCallComplete.
-	completedToolIndices := map[int]bool{}
+	completedToolIDs := map[string]bool{}
 
 	err = readSSE(resp.Body, func(ev sseEvent) bool {
+		if streamProtocolErr != nil {
+			return false
+		}
 		if ev.Data == "[DONE]" {
 			return false
 		}
@@ -213,10 +218,12 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 			}
 			// A new tool call ID on an existing index means the previous call is complete.
 			if tc.ID != "" && tc.Index < len(msg.ToolCalls) && msg.ToolCalls[tc.Index].ID != "" && msg.ToolCalls[tc.Index].ID != tc.ID {
-				if h.OnToolCallComplete != nil && !completedToolIndices[tc.Index] {
-					completedToolIndices[tc.Index] = true
-					h.OnToolCallComplete(msg.ToolCalls[tc.Index])
+				previous := msg.ToolCalls[tc.Index]
+				if h.OnToolCallComplete != nil && !completedToolIDs[previous.ID] {
+					completedToolIDs[previous.ID] = true
+					h.OnToolCallComplete(previous)
 				}
+				msg.ToolCalls[tc.Index] = ToolCall{Type: "function"}
 			}
 			for len(msg.ToolCalls) <= tc.Index {
 				msg.ToolCalls = append(msg.ToolCalls, ToolCall{Type: "function"})
@@ -238,7 +245,12 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 				call.Function.Name = tc.Function.Name
 			}
 			if tc.Function.Arguments != "" {
-				call.Function.Arguments += tc.Function.Arguments
+				arguments, mergeErr := mergeToolArguments(call.Function.Arguments, tc.Function.Arguments, argumentMode)
+				if mergeErr != nil {
+					streamProtocolErr = mergeErr
+					return false
+				}
+				call.Function.Arguments = arguments
 			}
 		}
 		if chunk.Choices[0].FinishReason != nil {
@@ -249,13 +261,16 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 	if err != nil {
 		return Response{}, err
 	}
+	if streamProtocolErr != nil {
+		return Response{}, streamProtocolErr
+	}
 	// A clean EOF is a successful HTTP stream completion. [DONE] is an
 	// OpenAI convention, but compatible providers are permitted to omit it.
 	finishReason = completedOpenAICompatibleFinishReason(finishReason, msg)
 	// Emit OnToolCallComplete for all completed tool calls at stream end.
 	if h.OnToolCallComplete != nil {
-		for i, tc := range msg.ToolCalls {
-			if !completedToolIndices[i] && strings.TrimSpace(tc.Function.Name) != "" {
+		for _, tc := range msg.ToolCalls {
+			if !completedToolIDs[tc.ID] && strings.TrimSpace(tc.Function.Name) != "" {
 				h.OnToolCallComplete(tc)
 			}
 		}
@@ -266,6 +281,36 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 		Usage:        usage.toUsage(),
 		Streamed:     true,
 	}, nil
+}
+
+type toolArgumentMode int
+
+const (
+	toolArgumentsDelta toolArgumentMode = iota
+	toolArgumentsCumulative
+)
+
+func (c *OpenAICompatibleClient) toolArgumentMode() toolArgumentMode {
+	switch c.providerName() {
+	case "opencode-go", "opencode-zen":
+		return toolArgumentsCumulative
+	default:
+		return toolArgumentsDelta
+	}
+}
+
+func mergeToolArguments(previous, update string, mode toolArgumentMode) (string, error) {
+	switch mode {
+	case toolArgumentsDelta:
+		return previous + update, nil
+	case toolArgumentsCumulative:
+		if previous == "" || strings.HasPrefix(update, previous) {
+			return update, nil
+		}
+		return "", fmt.Errorf("provider returned non-cumulative tool arguments snapshot")
+	default:
+		return "", fmt.Errorf("unsupported tool argument mode")
+	}
 }
 
 // completedOpenAICompatibleFinishReason normalizes providers that terminate a
