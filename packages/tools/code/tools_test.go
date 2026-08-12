@@ -171,6 +171,60 @@ func TestGitSearchUsesExplicitRemoteRef(t *testing.T) {
 	}
 }
 
+func TestGitSearchDefaultsToFreshCurrentBranchRemoteRef(t *testing.T) {
+	root, work := testGitRepo(t)
+	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
+	first, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"value"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(first.Content, `"main"`) || !strings.Contains(first.Content, "fetch_status=origin_refs_refreshed") {
+		t.Fatalf("first content = %q, want refreshed origin/main", first.Content)
+	}
+
+	if err := os.WriteFile(filepath.Join(work, "app.go"), []byte("package app\nconst value = \"fresh\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, work, "add", "app.go")
+	runGit(t, work, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "fresh remote tip")
+	runGit(t, work, "push", "origin", "main")
+	runGit(t, work, "reset", "--hard", "HEAD~1")
+
+	second, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"value"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(second.Content, `"fresh"`) || strings.Contains(second.Content, `"main"`) {
+		t.Fatalf("second content = %q, want freshly fetched remote branch tip", second.Content)
+	}
+	if !strings.Contains(second.Content, "fetch_status=origin_refs_refreshed") {
+		t.Fatalf("second content = %q, want refreshed fetch status", second.Content)
+	}
+}
+
+func TestGitReadDefaultsToFreshCurrentBranchRemoteRef(t *testing.T) {
+	root, work := testGitRepo(t)
+	tool := ReadFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
+	if err := os.WriteFile(filepath.Join(work, "app.go"), []byte("package app\nconst value = \"fresh\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, work, "add", "app.go")
+	runGit(t, work, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "fresh remote tip")
+	runGit(t, work, "push", "origin", "main")
+	runGit(t, work, "reset", "--hard", "HEAD~1")
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"work/app.go"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, `ref=origin/main`) || !strings.Contains(result.Content, `"fresh"`) || strings.Contains(result.Content, `"main"`) {
+		t.Fatalf("read content = %q, want fresh remote branch snapshot instead of stale working tree", result.Content)
+	}
+	if !strings.Contains(result.Content, "fetch_status=origin_refs_refreshed") {
+		t.Fatalf("read content = %q, want refreshed fetch status", result.Content)
+	}
+}
+
 func TestGitSearchReturnsInvalidPatternError(t *testing.T) {
 	root, _ := testGitRepo(t)
 	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}

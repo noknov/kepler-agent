@@ -9,8 +9,8 @@ needs. Discovery is explicit and deterministic rather than relevance-ranked.
 
 | Tool | Description |
 |---|---|
-| `code-search` | Search source code at an explicit git ref, or use `source=working_tree` for local changes |
-| `code-read_file` | Read a source file at an explicit git ref, or use `source=working_tree` for local changes |
+| `code-search` | Search source code at a freshly fetched current-branch remote ref by default, or use `source=working_tree` for local changes |
+| `code-read_file` | Read a source file at a freshly fetched current-branch remote ref by default, or use `source=working_tree` for local changes |
 | `repo-search` | Fetch a remote repo, pin a commit snapshot, search it |
 | `repo-read_file` | Read a file from a pinned remote repo snapshot |
 | `git-fetch_ref` | Fetch a branch and return an immutable ref |

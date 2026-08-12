@@ -36,9 +36,11 @@ typed provider failures are retried only by the runtime. Slack buffers the final
 answer and posts one complete Block Kit `markdown` message. It does not create a
 streaming placeholder or rewrite Markdown with regular expressions.
 
-Git-backed code tools require an explicit branch or ref. Repository-specific
-default refs belong in the private deployment prompt, not in runtime discovery
-or branch-name guessing.
+Git-backed code tools refresh `origin` once per turn before reading remote refs.
+When the caller omits a source, code read/search uses the repository's current
+checked-out branch name to read `origin/<branch>` without checkout. Explicit
+repository-specific default refs still belong in the private deployment prompt,
+not in runtime discovery or broad branch-name guessing.
 
 Hosted capability policy is authoritative and non-interactive. Local tools use
 the workspace sandbox and scoped approvals. TTS is an optional external-write

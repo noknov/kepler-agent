@@ -211,11 +211,13 @@ are never attached. With no OTLP endpoint configured, tracing is a no-op.
 ## Repository Freshness
 
 Code-reading tools use immutable snapshot semantics. Each git-backed call
-requires an explicit branch or ref, refreshes `origin` according to the tool's
-cache contract, then reads with `git show` or `git grep` without touching the
-working tree. A refresh failure is returned to the caller; tools do not use
-stale refs or guess a default branch. Deployment-specific default refs belong
-in the private prompt overlay.
+refreshes `origin` once per turn for each repository, then reads with `git show`
+or `git grep` without touching the working tree. If `source` is omitted,
+`code-search` and `code-read_file` use the repository's current checked-out
+branch name to read `origin/<branch>` after the refresh. A refresh failure is
+returned to the caller; tools do not use stale refs. Within a turn, repeated
+reads of the same repository reuse the refreshed refs to avoid redundant network
+fetches. Deployment-specific default refs belong in the private prompt overlay.
 
 ```bash
 WORKSPACE_ROOTS=/path/to/repos
