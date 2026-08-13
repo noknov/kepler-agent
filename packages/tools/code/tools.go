@@ -28,10 +28,10 @@ func (ReadFileTool) Parallel() bool { return true }
 func (t ReadFileTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"code-read_file",
-		"Read source code from a freshly fetched git ref. Omit source to use the file repo's origin-tracked upstream ref; use source=working_tree only when the user explicitly asks for the checkout view or a non-git workspace file. Results include line numbers and source metadata; cite these lines before making code behavior claims.",
+		"Read source code from a freshly fetched git ref. Omit source for normal repository investigation so the tool resolves each file repo's origin-tracked upstream. Set source only when the user explicitly requests the checkout view or an exact git ref; never invent a branch or ref. Results include line numbers and source metadata; cite these lines before making code behavior claims.",
 		registry.ObjectSchema([]string{"path"}, map[string]any{
 			"path":       map[string]any{"type": "string", "description": "Workspace-relative, root-prefixed, or absolute file path."},
-			"source":     map[string]any{"type": "string", "description": "Optional: current_branch (default, the checked-out branch's origin-tracked upstream), working_tree for an explicit checkout view, or an explicit safe git ref such as origin/main or a commit SHA."},
+			"source":     map[string]any{"type": "string", "description": "Optional; omit for normal investigation. Set to working_tree only for an explicitly requested checkout view, or to an exact safe git ref explicitly named by the user."},
 			"start_line": map[string]any{"type": "integer", "description": "1-based starting line. Omit unless you already know the relevant range."},
 			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines to return, default 240 and max 1000."},
 		}),
@@ -149,12 +149,12 @@ func (SearchTool) Parallel() bool { return true }
 func (t SearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"code-search",
-		"Search source code from freshly fetched git refs. Omit source to use each repo's origin-tracked upstream ref; use source=working_tree only when the user explicitly asks for the checkout view or a non-git workspace file. Search hits are hints; read the matching file/range with code-read_file before claiming behavior.",
+		"Search source code from freshly fetched git refs. Omit source for normal repository investigation so each repo's origin-tracked upstream is resolved independently. Set source only when the user explicitly requests the checkout view or an exact git ref; never invent a branch or ref. Search hits are hints; read the matching file/range with code-read_file before claiming behavior.",
 		registry.ObjectSchema([]string{"query"}, map[string]any{
 			"query":         map[string]any{"type": "string", "description": "Regex or literal pattern to search for."},
 			"path":          map[string]any{"type": "string", "description": "Optional workspace-relative directory or file to search."},
 			"glob":          map[string]any{"type": "string", "description": "Optional file glob, for example **/*.go."},
-			"source":        map[string]any{"type": "string", "description": "Optional: current_branch (default, the checked-out branch's origin-tracked upstream), working_tree for an explicit checkout view, or an explicit safe git ref such as origin/main or a commit SHA."},
+			"source":        map[string]any{"type": "string", "description": "Optional; omit for normal investigation. Set to working_tree only for an explicitly requested checkout view, or to an exact safe git ref explicitly named by the user."},
 			"context_lines": map[string]any{"type": "integer", "description": "Optional lines of context around matches, max 5."},
 			"limit":         map[string]any{"type": "integer", "description": "Maximum matching lines, default 50 and max 200."},
 		}),
@@ -212,7 +212,8 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 		for _, repoDir := range repos {
 			ref, fetchStatus, sourceErr := sourceRef(ctx, repoDir, source, rt)
 			if sourceErr != nil {
-				return registry.Result{}, sourceErr
+				grepErrors = append(grepErrors, fmt.Sprintf("%s: %v", filepath.Base(repoDir), sourceErr))
+				continue
 			}
 			headers = append(headers, fmt.Sprintf("[source: git repo=%s ref=%s commit=%s fetch_status=%s]", filepath.Base(repoDir), ref, gitRevParse(ctx, repoDir, ref, "--short"), fetchStatus))
 			// Compute the pathspec relative to the repo root.
@@ -249,7 +250,11 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 		if len(lines) > args.Limit {
 			lines = append(lines[:args.Limit], "...[truncated after "+strconv.Itoa(args.Limit)+" matches]")
 		}
-		return registry.Result{Content: strings.Join(headers, "\n") + "\n\nSearch hits are hints; read matching files before claiming behavior.\n" + strings.Join(lines, "\n")}, nil
+		content := strings.Join(headers, "\n") + "\n\nSearch hits are hints; read matching files before claiming behavior.\n" + strings.Join(lines, "\n")
+		if len(grepErrors) > 0 {
+			content += "\n\nSearch warnings:\n- " + strings.Join(grepErrors, "\n- ")
+		}
+		return registry.Result{Content: content}, nil
 	}
 	if source != "working_tree" {
 		return registry.Result{}, fmt.Errorf("source %q requires a search path containing a git repository", source)

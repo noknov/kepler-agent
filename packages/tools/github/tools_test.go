@@ -84,6 +84,10 @@ func TestPRDiffStoresReviewContextAndIndexesFiles(t *testing.T) {
 	if !strings.Contains(fileResult.Content, "PR-head source context") || !strings.Contains(fileResult.Content, "    1 | new") {
 		t.Fatalf("file diff missing PR-head line context:\n%s", fileResult.Content)
 	}
+	invalidResult, err := (PRFileDiffTool{Client: testClient("example", "repo", transport)}).Execute(context.Background(), json.RawMessage(`{"path":"missing.go"}`), rt)
+	if err != nil || !strings.Contains(invalidResult.Content, "src/a.ts") || !strings.Contains(invalidResult.Content, "Choose one of the changed files") {
+		t.Fatalf("invalid file guidance = %#v, err=%v", invalidResult, err)
+	}
 }
 
 func TestPRDiffUsesPullURLInsteadOfDefaultRepository(t *testing.T) {

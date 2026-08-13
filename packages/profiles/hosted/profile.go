@@ -2,6 +2,7 @@ package hosted
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -99,7 +100,11 @@ func (c observedModel) Generate(ctx context.Context, request model.Request, sink
 	started := time.Now()
 	response, err := c.Client.Generate(ctx, request, sink)
 	if c.Metrics != nil {
-		c.Metrics.LLMCall(recordedUsage(response.Usage), time.Since(started), err)
+		metricErr := err
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			metricErr = nil
+		}
+		c.Metrics.LLMCall(recordedUsage(response.Usage), time.Since(started), metricErr)
 	}
 	return response, err
 }

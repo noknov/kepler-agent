@@ -34,6 +34,10 @@ needs. Discovery is explicit and deterministic rather than relevance-ranked.
 | `code-references` | Find symbol references |
 | `code-diagnostics` | LSP diagnostics for a file |
 
+For ordinary `code-search` and `code-read_file` calls, omit `source`; each
+repository then resolves its own checked-out branch upstream. Set `source` only
+when the user explicitly names an exact ref or requests `working_tree`.
+
 `repo-search` and `repo-read_file` resolve actual remote branches to immutable
 snapshots, so concurrent users can inspect different refs without checkout
 conflicts. GitHub pull requests should use `github-pr_diff` and
