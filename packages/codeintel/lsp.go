@@ -856,6 +856,9 @@ func runCommand(ctx context.Context, dir, name string, timeout time.Duration, ar
 		if msg == "" {
 			msg = strings.TrimSpace(stdout.String())
 		}
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("%s failed: %w", filepath.Base(name), ctx.Err())
+		}
 		return "", fmt.Errorf("%s failed: %s", filepath.Base(name), msg)
 	}
 	return stdout.String(), nil

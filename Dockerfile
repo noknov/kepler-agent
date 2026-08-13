@@ -5,6 +5,9 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 
+FROM golang:1.25-bookworm AS build-gopls
+RUN mkdir -p /out && GOBIN=/out CGO_ENABLED=0 go install golang.org/x/tools/gopls@v0.20.0
+
 FROM build-base AS build-gateway
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/slack-copilot-gateway ./gateway/cmd/gateway
 
@@ -37,9 +40,12 @@ USER root
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends curl git openssh-client ripgrep \
 	&& rm -rf /var/lib/apt/lists/*
+COPY --from=build-gopls /out/gopls /usr/local/bin/gopls
 USER slackcopilot
 
 FROM runtime-worker AS worker
+COPY --from=build-gopls /usr/local/go /usr/local/go
+ENV PATH="/usr/local/go/bin:${PATH}"
 COPY --from=build-worker /out/slack-copilot-worker /app/slack-copilot-worker
 ENTRYPOINT ["/app/slack-copilot-worker"]
 

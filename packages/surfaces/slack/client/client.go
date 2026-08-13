@@ -60,12 +60,23 @@ func (c *Client) PostMessage(ctx context.Context, channel, threadTS, text string
 
 func (c *Client) PostMarkdownMessage(ctx context.Context, channel, threadTS, markdown string) (string, error) {
 	blocks := []map[string]any{{"type": "markdown", "text": markdown}}
-	return c.postMessage(ctx, channel, threadTS, markdown, blocks, "")
+	ts, err := c.postMessage(ctx, channel, threadTS, markdown, blocks, "")
+	if err == nil || !strings.Contains(err.Error(), "invalid_blocks") {
+		return ts, err
+	}
+	// The markdown block is only available to Slack apps with the platform AI
+	// feature enabled. Plain text is a valid fallback for other app installs.
+	return c.postMessage(ctx, channel, threadTS, markdown, nil, "")
 }
 
 func (c *Client) PostMarkdownMessageWithID(ctx context.Context, channel, threadTS, markdown, deliveryID string) (string, error) {
 	blocks := []map[string]any{{"type": "markdown", "text": markdown}}
-	return c.postMessage(ctx, channel, threadTS, markdown, blocks, slackClientMessageID(deliveryID))
+	clientMessageID := slackClientMessageID(deliveryID)
+	ts, err := c.postMessage(ctx, channel, threadTS, markdown, blocks, clientMessageID)
+	if err == nil || !strings.Contains(err.Error(), "invalid_blocks") {
+		return ts, err
+	}
+	return c.postMessage(ctx, channel, threadTS, markdown, nil, clientMessageID)
 }
 
 func (c *Client) postMessage(ctx context.Context, channel, threadTS, text string, blocks []map[string]any, clientMessageID string) (string, error) {

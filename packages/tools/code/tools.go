@@ -28,10 +28,10 @@ func (ReadFileTool) Parallel() bool { return true }
 func (t ReadFileTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"code-read_file",
-		"Read source code from a freshly fetched git ref. Omit source to use the file repo's origin/<current branch> ref; use source=working_tree only when the user explicitly asks for the checkout view or a non-git workspace file. Results include line numbers and source metadata; cite these lines before making code behavior claims.",
+		"Read source code from a freshly fetched git ref. Omit source to use the file repo's origin-tracked upstream ref; use source=working_tree only when the user explicitly asks for the checkout view or a non-git workspace file. Results include line numbers and source metadata; cite these lines before making code behavior claims.",
 		registry.ObjectSchema([]string{"path"}, map[string]any{
 			"path":       map[string]any{"type": "string", "description": "Workspace-relative, root-prefixed, or absolute file path."},
-			"source":     map[string]any{"type": "string", "description": "Optional: current_branch (default, origin/<current branch>), working_tree for an explicit checkout view, or an explicit safe git ref such as origin/main or a commit SHA."},
+			"source":     map[string]any{"type": "string", "description": "Optional: current_branch (default, the checked-out branch's origin-tracked upstream), working_tree for an explicit checkout view, or an explicit safe git ref such as origin/main or a commit SHA."},
 			"start_line": map[string]any{"type": "integer", "description": "1-based starting line. Omit unless you already know the relevant range."},
 			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines to return, default 240 and max 1000."},
 		}),
@@ -149,12 +149,12 @@ func (SearchTool) Parallel() bool { return true }
 func (t SearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"code-search",
-		"Search source code from freshly fetched git refs. Omit source to use each repo's origin/<current branch> ref; use source=working_tree only when the user explicitly asks for the checkout view or a non-git workspace file. Search hits are hints; read the matching file/range with code-read_file before claiming behavior.",
+		"Search source code from freshly fetched git refs. Omit source to use each repo's origin-tracked upstream ref; use source=working_tree only when the user explicitly asks for the checkout view or a non-git workspace file. Search hits are hints; read the matching file/range with code-read_file before claiming behavior.",
 		registry.ObjectSchema([]string{"query"}, map[string]any{
 			"query":         map[string]any{"type": "string", "description": "Regex or literal pattern to search for."},
 			"path":          map[string]any{"type": "string", "description": "Optional workspace-relative directory or file to search."},
 			"glob":          map[string]any{"type": "string", "description": "Optional file glob, for example **/*.go."},
-			"source":        map[string]any{"type": "string", "description": "Optional: current_branch (default, origin/<current branch>), working_tree for an explicit checkout view, or an explicit safe git ref such as origin/main or a commit SHA."},
+			"source":        map[string]any{"type": "string", "description": "Optional: current_branch (default, the checked-out branch's origin-tracked upstream), working_tree for an explicit checkout view, or an explicit safe git ref such as origin/main or a commit SHA."},
 			"context_lines": map[string]any{"type": "integer", "description": "Optional lines of context around matches, max 5."},
 			"limit":         map[string]any{"type": "integer", "description": "Maximum matching lines, default 50 and max 200."},
 		}),
@@ -306,6 +306,11 @@ func sourceRef(ctx context.Context, repoDir, source string, rt registry.Runtime)
 }
 
 func currentBranchOriginRef(ctx context.Context, repoDir string) (string, error) {
+	if upstream := gitRevParse(ctx, repoDir, "@{upstream}", "--abbrev-ref"); strings.HasPrefix(upstream, "origin/") && safeGitRef(upstream) {
+		if commit := gitRevParse(ctx, repoDir, upstream, "--verify"); commit != "" {
+			return upstream, nil
+		}
+	}
 	branch := gitRevParse(ctx, repoDir, "HEAD", "--abbrev-ref")
 	if branch == "" || branch == "HEAD" {
 		return "", fmt.Errorf("current_branch source requires a checked-out branch")

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -142,7 +143,11 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 			log.Printf("project failed model step %s: %v", event.ID, err)
 		}
 		if liveMetrics && s.Metrics != nil {
-			s.Metrics.LLMCall(llm.Usage{}, duration, fmt.Errorf("%s", event.Error))
+			var stepErr error
+			if event.Error != context.Canceled.Error() && event.Error != context.DeadlineExceeded.Error() {
+				stepErr = fmt.Errorf("%s", event.Error)
+			}
+			s.Metrics.LLMCall(llm.Usage{}, duration, stepErr)
 		}
 	case transcript.AssistantMessage:
 		if state != nil && event.Message != nil && len(event.Message.ToolCalls()) == 0 {
@@ -346,8 +351,23 @@ func toolError(event transcript.Event) string {
 	if event.Error != "" {
 		return event.Error
 	}
-	if event.ToolResult != nil && event.ToolResult.ErrorCode != "" {
-		return event.ToolResult.ErrorCode
+	if event.ToolResult != nil {
+		if !event.ToolResult.IsError && event.ToolResult.ErrorCode == "" {
+			return ""
+		}
+		for _, content := range event.ToolResult.Content {
+			if content.Type == model.ContentText {
+				if text := strings.TrimSpace(content.Text); text != "" {
+					if len(text) > 1000 {
+						return text[:1000] + "..."
+					}
+					return text
+				}
+			}
+		}
+		if event.ToolResult.ErrorCode != "" {
+			return event.ToolResult.ErrorCode
+		}
 	}
 	return event.Status
 }

@@ -56,7 +56,7 @@ type FetchRefTool struct{ Base }
 func (t FetchRefTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"git-fetch_ref",
-		"Fetch origin refs and resolve a branch to an immutable commit SHA. Use this first when investigating a specific branch; then pass the returned repo/ref to git-search_ref or git-read_file_ref. This never checks out or updates the working tree, so multiple users can inspect different branches concurrently.",
+		"Fetch origin refs and resolve an actual remote branch to an immutable commit SHA. Do not pass a pull-request number or refs/pull/...; use github-pr_diff for GitHub pull requests. Use this first when investigating a specific branch, then pass the returned repo/ref to git-search_ref or git-read_file_ref. This never checks out or updates the working tree, so multiple users can inspect different branches concurrently.",
 		registry.ObjectSchema(nil, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
@@ -165,7 +165,7 @@ func (RepoSearchTool) Parallel() bool { return true }
 func (t RepoSearchTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"repo-search",
-		"Search a refreshed remote branch snapshot without changing the checkout.",
+		"Search a refreshed remote branch snapshot without changing the checkout. Branch must be an actual remote branch name, not a pull-request number or refs/pull/...; use github-pr_diff for GitHub pull requests.",
 		registry.ObjectSchema([]string{"branch", "query"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
@@ -314,7 +314,7 @@ func (RepoReadFileTool) Parallel() bool { return true }
 func (t RepoReadFileTool) Spec() llm.ToolSpec {
 	return registry.FunctionSpec(
 		"repo-read_file",
-		"Read a file from a refreshed remote branch snapshot without changing the working tree.",
+		"Read a file from a refreshed remote branch snapshot without changing the working tree. Branch must be an actual remote branch name, not a pull-request number or refs/pull/...; use github-pr_diff for GitHub pull requests.",
 		registry.ObjectSchema([]string{"branch", "path"}, map[string]any{
 			"repo":       map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch":     map[string]any{"type": "string", "description": "Explicit remote branch name."},
