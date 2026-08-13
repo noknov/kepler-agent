@@ -40,13 +40,14 @@ the tool-step limit stops without an extra synthesis request, and retryable
 typed provider failures are retried only by the runtime. A zero retry count now
 means zero retries; product profiles opt into their retry budget explicitly.
 Slack buffers the final answer and posts one complete Block Kit `markdown`
-message with a deterministic `client_msg_id`, then persists the Slack message
-link on the run. It does not create a
+message with a deterministic `client_msg_id`; if the Slack app does not support
+that AI-only block, it retries as a plain message. It then persists the Slack
+message link on the run. It does not create a
 streaming placeholder or rewrite Markdown with regular expressions.
 
 Git-backed code tools refresh `origin` once per turn before reading remote refs.
-When the caller omits a source, code read/search uses the repository's current
-checked-out branch name to read `origin/<branch>` without checkout. Explicit
+When the caller omits a source, code read/search uses the repository's
+checked-out branch upstream, normally `origin/<branch>`, without checkout. Explicit
 repository-specific default refs still belong in the private deployment prompt,
 not in runtime discovery or broad branch-name guessing.
 

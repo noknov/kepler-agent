@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
 	"github.com/noknov/slack-copilot-agent/packages/runs"
 )
@@ -81,6 +82,30 @@ func TestRunSinkReplayIsIdempotentAndProjectsFailures(t *testing.T) {
 	}
 	if run.Steps[0].Error != "overloaded" || run.Usage.TotalTokens != 12 || run.FinalHash == "" {
 		t.Fatalf("projection lost failure, usage, or final: %+v", run)
+	}
+}
+
+func TestToolErrorIncludesToolFailureDetail(t *testing.T) {
+	event := transcript.Event{
+		ToolResult: &tool.Result{
+			Content:   []model.Content{{Type: model.ContentText, Text: "gopls is not installed"}},
+			IsError:   true,
+			ErrorCode: "tool_error",
+		},
+	}
+	if got := toolError(event); got != "gopls is not installed" {
+		t.Fatalf("toolError() = %q", got)
+	}
+}
+
+func TestToolErrorIgnoresSuccessfulArtifactSpill(t *testing.T) {
+	event := transcript.Event{
+		ToolResult: &tool.Result{
+			Content: []model.Content{{Type: model.ContentText, Text: "Tool output was stored as artifact spill://run/artifact"}},
+		},
+	}
+	if got := toolError(event); got != "" {
+		t.Fatalf("toolError() = %q, want empty for successful spill", got)
 	}
 }
 

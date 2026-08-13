@@ -42,6 +42,32 @@ func TestPostMarkdownMessageUsesNativeMarkdownBlock(t *testing.T) {
 	}
 }
 
+func TestPostMarkdownMessageFallsBackWhenMarkdownBlockIsUnsupported(t *testing.T) {
+	attempts := 0
+	client := &Client{token: "xoxb-test", httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if attempts == 1 {
+			if _, ok := payload["blocks"]; !ok {
+				t.Fatal("first request should use the markdown block")
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":false,"error":"invalid_blocks"}`)), Request: r}, nil
+		}
+		if _, ok := payload["blocks"]; ok {
+			t.Fatal("fallback request should omit blocks")
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"ts":"123.456"}`)), Request: r}, nil
+	})}}
+
+	ts, err := client.PostMarkdownMessage(context.Background(), "C1", "T1", "answer")
+	if err != nil || ts != "123.456" || attempts != 2 {
+		t.Fatalf("ts=%q err=%v attempts=%d", ts, err, attempts)
+	}
+}
+
 func TestPostMarkdownMessageWithIDUsesStableSlackUUID(t *testing.T) {
 	var first, second string
 	client := &Client{token: "xoxb-test", httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {

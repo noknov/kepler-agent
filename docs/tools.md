@@ -34,8 +34,10 @@ needs. Discovery is explicit and deterministic rather than relevance-ranked.
 | `code-references` | Find symbol references |
 | `code-diagnostics` | LSP diagnostics for a file |
 
-`repo-search` and `repo-read_file` resolve branches to immutable snapshots, so
-concurrent users can inspect different refs without checkout conflicts.
+`repo-search` and `repo-read_file` resolve actual remote branches to immutable
+snapshots, so concurrent users can inspect different refs without checkout
+conflicts. GitHub pull requests should use `github-pr_diff` and
+`github-pr_file_diff`, not a PR number or `refs/pull/...` as a branch.
 
 Code-graph output is explicitly approximate: Go syntax is parsed with the Go
 AST, but call edges are name-matched without type resolution; C# symbols and

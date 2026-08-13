@@ -6,21 +6,21 @@
   "reminder-list": {"description": "List the requesting user's pending reminders.", "parameters": {}},
   "reminder-cancel": {"description": "Cancel one of the requesting user's pending reminders. Use reminder-list first if the reminder ID is unknown.", "parameters": {"id": "Reminder ID returned by reminder-create or reminder-list."}},
   "code-search": {
-    "description": "Search source code from freshly fetched git refs. Omit source to use each repo's origin/<current branch> ref; use source=working_tree only when the user explicitly asks for the checkout view or a non-git workspace file. Search hits are hints; read the matching file/range with code-read_file before claiming behavior.",
+    "description": "Search source code from freshly fetched git refs. Omit source to use each repo's origin-tracked upstream ref; use source=working_tree only when the user explicitly asks for the checkout view or a non-git workspace file. Search hits are hints; read the matching file/range with code-read_file before claiming behavior.",
     "parameters": {
       "query": "Regex or literal pattern to search for.",
       "path": "Optional workspace-relative directory or file to search.",
       "glob": "Optional file glob, for example **/*.go.",
-      "source": "Optional: current_branch (default, origin/<current branch>), working_tree for an explicit checkout view, or an explicit safe git ref such as origin/main or a commit SHA.",
+      "source": "Optional: current_branch (default, the checked-out branch's origin-tracked upstream), working_tree for an explicit checkout view, or an explicit safe git ref such as origin/main or a commit SHA.",
       "context_lines": "Optional lines of context around matches, max 5.",
       "limit": "Maximum matching lines, default 50 and max 200."
     }
   },
   "code-read_file": {
-    "description": "Read source code from a freshly fetched git ref. Omit source to use the file repo's origin/<current branch> ref; use source=working_tree only when the user explicitly asks for the checkout view or a non-git workspace file. Results include line numbers and source metadata; cite these lines before making code behavior claims.",
+    "description": "Read source code from a freshly fetched git ref. Omit source to use the file repo's origin-tracked upstream ref; use source=working_tree only when the user explicitly asks for the checkout view or a non-git workspace file. Results include line numbers and source metadata; cite these lines before making code behavior claims.",
     "parameters": {
       "path": "Workspace-relative, root-prefixed, or absolute file path.",
-      "source": "Optional: current_branch (default, origin/<current branch>), working_tree for an explicit checkout view, or an explicit safe git ref such as origin/main or a commit SHA.",
+      "source": "Optional: current_branch (default, the checked-out branch's origin-tracked upstream), working_tree for an explicit checkout view, or an explicit safe git ref such as origin/main or a commit SHA.",
       "start_line": "1-based starting line. Omit unless you already know the relevant range.",
       "max_lines": "Maximum lines to return, default 240 and max 1000."
     }
@@ -32,7 +32,7 @@
     }
   },
   "git-fetch_ref": {
-    "description": "Fetch origin and resolve a branch to an immutable commit ref without changing the working tree. Use this before git-search_ref or git-read_file_ref.",
+    "description": "Fetch origin and resolve an actual remote branch to an immutable commit ref without changing the working tree. Do not pass a pull-request number or refs/pull/...; use github-pr_diff for GitHub pull requests. Use this before git-search_ref or git-read_file_ref.",
     "parameters": {
       "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
       "branch": "Explicit remote branch to resolve."
@@ -260,7 +260,7 @@
     }
   },
   "repo-search": {
-    "description": "Fetch a repository on demand, pin the requested branch to a commit snapshot, then search code at that snapshot. Prefer this for repository investigations involving a named branch/ref.",
+    "description": "Fetch a repository on demand, pin an actual remote branch to a commit snapshot, then search code at that snapshot. Do not pass a pull-request number or refs/pull/...; use github-pr_diff for GitHub pull requests.",
     "parameters": {
       "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
       "branch": "Explicit remote branch to analyze.",
@@ -270,7 +270,7 @@
     }
   },
   "repo-read_file": {
-    "description": "Fetch a repository on demand, pin the requested branch to a commit snapshot, then read a file at that snapshot. Prefer this for repository file reads involving a named branch/ref.",
+    "description": "Fetch a repository on demand, pin an actual remote branch to a commit snapshot, then read a file at that snapshot. Do not pass a pull-request number or refs/pull/...; use github-pr_diff for GitHub pull requests.",
     "parameters": {
       "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
       "branch": "Explicit remote branch to analyze.",

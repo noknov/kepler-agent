@@ -219,8 +219,8 @@ are never attached. With no OTLP endpoint configured, tracing is a no-op.
 Code-reading tools use immutable snapshot semantics. Each git-backed call
 refreshes `origin` once per turn for each repository, then reads with `git show`
 or `git grep` without touching the working tree. If `source` is omitted,
-`code-search` and `code-read_file` use the repository's current checked-out
-branch name to read `origin/<branch>` after the refresh. A refresh failure is
+`code-search` and `code-read_file` use the repository's checked-out branch
+upstream, normally `origin/<branch>`, after the refresh. A refresh failure is
 returned to the caller; tools do not use stale refs. Within a turn, repeated
 reads of the same repository reuse the refreshed refs to avoid redundant network
 fetches. `source=working_tree` is an explicit checkout-view escape hatch, not

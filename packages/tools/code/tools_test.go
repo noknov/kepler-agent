@@ -202,6 +202,19 @@ func TestGitSearchDefaultsToFreshCurrentBranchRemoteRef(t *testing.T) {
 	}
 }
 
+func TestGitSearchUsesCheckedOutBranchUpstreamRef(t *testing.T) {
+	root, work := testGitRepo(t)
+	runGit(t, work, "branch", "-m", "main", "mt-main")
+	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"value"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, "ref=origin/main") || strings.Contains(result.Content, "origin/mt-main") {
+		t.Fatalf("search content = %q, want the branch upstream ref", result.Content)
+	}
+}
+
 func TestGitReadDefaultsToFreshCurrentBranchRemoteRef(t *testing.T) {
 	root, work := testGitRepo(t)
 	tool := ReadFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
