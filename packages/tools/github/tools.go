@@ -923,7 +923,12 @@ func (t PRFileDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt reg
 	}
 	path := strings.Trim(strings.TrimSpace(args.Path), "/")
 	if !pr.containsPath(path) {
-		return registry.Result{}, fmt.Errorf("%q is not a changed file in %s#%d", path, pr.Repository, pr.Number)
+		var out strings.Builder
+		fmt.Fprintf(&out, "%q is not a changed file in %s#%d. Choose one of the changed files below and call github-pr_file_diff again:\n", path, pr.Repository, pr.Number)
+		for _, changed := range pr.ChangedFiles {
+			fmt.Fprintf(&out, "- %s\n", changed)
+		}
+		return registry.Result{Content: strings.TrimSpace(out.String())}, nil
 	}
 	needle := "diff --git a/" + path + " b/" + path
 	start := strings.Index(pr.Diff, needle)
