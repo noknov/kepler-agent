@@ -268,14 +268,20 @@ func (h *Handler) handleMention(ctx context.Context, eventID string, ev slack.Ev
 	if text == "" {
 		text = prompts.AppMessage("empty_mention", "")
 	}
-	if !h.Conv.HandleMention(ctx, slackconversation.Request{
-		EventID:  eventID,
-		UserID:   ev.User,
-		Channel:  ev.Channel,
-		ThreadTS: threadTS,
-		Text:     text,
-		Content:  canonicalContent(parts),
-	}) {
+	accepted, err := h.Conv.HandleMention(ctx, slackconversation.Request{
+		EventID:   eventID,
+		UserID:    ev.User,
+		Channel:   ev.Channel,
+		ThreadTS:  threadTS,
+		MessageTS: ev.TS,
+		Text:      text,
+		Locale:    h.Cfg.Slack.DefaultLocale,
+		Content:   canonicalContent(parts),
+	})
+	if err != nil {
+		return err
+	}
+	if !accepted {
 		return fmt.Errorf("conversation did not accept app_mention event")
 	}
 	return nil
@@ -319,14 +325,20 @@ func (h *Handler) handleFileShared(ctx context.Context, eventID string, ev slack
 	if text == "" {
 		text = prompts.AppMessage("empty_dm_with_file", "")
 	}
-	if !h.Conv.HandleMention(ctx, slackconversation.Request{
-		EventID:  eventID,
-		UserID:   userID,
-		Channel:  channelID,
-		ThreadTS: ev.ConversationThreadTS(),
-		Text:     text,
-		Content:  canonicalContent(parts),
-	}) {
+	accepted, err := h.Conv.HandleMention(ctx, slackconversation.Request{
+		EventID:   eventID,
+		UserID:    userID,
+		Channel:   channelID,
+		ThreadTS:  ev.ConversationThreadTS(),
+		MessageTS: ev.TS,
+		Text:      text,
+		Locale:    h.Cfg.Slack.DefaultLocale,
+		Content:   canonicalContent(parts),
+	})
+	if err != nil {
+		return err
+	}
+	if !accepted {
 		return fmt.Errorf("conversation did not accept file_shared event")
 	}
 	return nil
@@ -345,15 +357,23 @@ func (h *Handler) handleDirectMessage(ctx context.Context, eventID string, ev sl
 	}
 	if IsThreadReply(ev) {
 		text, parts := h.attachSlackFiles(ctx, strings.TrimSpace(ev.Text), ev.Files)
-		if text != "" && h.Conv.HandleReply(ctx, slackconversation.Request{
-			EventID:  eventID,
-			UserID:   ev.User,
-			Channel:  ev.Channel,
-			ThreadTS: ev.ThreadTS,
-			Text:     text,
-			Content:  canonicalContent(parts),
-		}) {
-			return nil
+		if text != "" {
+			accepted, err := h.Conv.HandleReply(ctx, slackconversation.Request{
+				EventID:   eventID,
+				UserID:    ev.User,
+				Channel:   ev.Channel,
+				ThreadTS:  ev.ThreadTS,
+				MessageTS: ev.TS,
+				Text:      text,
+				Locale:    h.Cfg.Slack.DefaultLocale,
+				Content:   canonicalContent(parts),
+			})
+			if err != nil {
+				return err
+			}
+			if accepted {
+				return nil
+			}
 		}
 	}
 	text := strings.TrimSpace(ev.Text)
@@ -361,14 +381,20 @@ func (h *Handler) handleDirectMessage(ctx context.Context, eventID string, ev sl
 	if text == "" {
 		text = prompts.AppMessage("empty_dm", "")
 	}
-	if !h.Conv.HandleMention(ctx, slackconversation.Request{
-		EventID:  eventID,
-		UserID:   ev.User,
-		Channel:  ev.Channel,
-		ThreadTS: ev.ConversationThreadTS(),
-		Text:     text,
-		Content:  canonicalContent(parts),
-	}) {
+	accepted, err := h.Conv.HandleMention(ctx, slackconversation.Request{
+		EventID:   eventID,
+		UserID:    ev.User,
+		Channel:   ev.Channel,
+		ThreadTS:  ev.ConversationThreadTS(),
+		MessageTS: ev.TS,
+		Text:      text,
+		Locale:    h.Cfg.Slack.DefaultLocale,
+		Content:   canonicalContent(parts),
+	})
+	if err != nil {
+		return err
+	}
+	if !accepted {
 		return fmt.Errorf("conversation did not accept direct message event")
 	}
 	return nil
@@ -391,15 +417,17 @@ func (h *Handler) handleChannelReply(ctx context.Context, eventID string, ev sla
 	if text == "" {
 		return nil
 	}
-	_ = h.Conv.HandleReply(ctx, slackconversation.Request{
-		EventID:  eventID,
-		UserID:   ev.User,
-		Channel:  ev.Channel,
-		ThreadTS: ev.ThreadTS,
-		Text:     text,
-		Content:  canonicalContent(parts),
+	_, err := h.Conv.HandleReply(ctx, slackconversation.Request{
+		EventID:   eventID,
+		UserID:    ev.User,
+		Channel:   ev.Channel,
+		ThreadTS:  ev.ThreadTS,
+		MessageTS: ev.TS,
+		Text:      text,
+		Locale:    h.Cfg.Slack.DefaultLocale,
+		Content:   canonicalContent(parts),
 	})
-	return nil
+	return err
 }
 
 func IsAppDM(ev slack.Event) bool {

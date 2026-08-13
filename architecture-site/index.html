@@ -33,7 +33,7 @@
       <section class="hero" id="top">
         <p class="eyebrow">Architecture overview · shared agent harness</p>
         <h1>Slack Copilot Agent<br><span>系统架构</span></h1>
-        <p class="hero-copy">Slack Copilot Agent 包含以 Slack 为入口的 hosted Agent 和本地 CLI。两者共享 共享 Agent harness，并通过不同 profile 保持权限、存储与运行环境差异。</p>
+        <p class="hero-copy">Slack Copilot Agent 包含以 Slack 为入口的 hosted Agent 和本地 CLI。两者共享 Agent harness，并通过不同 profile 保持权限、存储与运行环境差异。</p>
         <div class="hero-meta" aria-label="技术摘要">
           <span class="pill">Go 1.25</span>
           <span class="pill">PostgreSQL</span>
@@ -69,12 +69,12 @@
             <div class="architecture-map" role="img" aria-label="共享 Agent harness 与产品 profile">
               <div class="arch-layer"><div class="arch-label">产品入口</div><div class="arch-nodes"><span class="node">Local CLI · TTY / Headless</span><span class="node">Hosted · Slack</span></div></div>
               <div class="arch-layer"><div class="arch-label">共享 Agent harness</div><div class="arch-nodes"><span class="node core">Agent Loop</span><span class="node core">Canonical Transcript</span><span class="node core">Context Projection</span><span class="node core">Prompt Layers</span><span class="node core">Tool Contracts</span></div></div>
-              <div class="arch-layer"><div class="arch-label">运行 profile</div><div class="arch-nodes"><span class="node">Local · workspace-write + approval</span><span class="node">Hosted · server-owned read-only policy</span></div></div>
+              <div class="arch-layer"><div class="arch-label">运行 profile</div><div class="arch-nodes"><span class="node">Local · workspace-write + approval</span><span class="node">Hosted · server-owned allowlist policy</span></div></div>
             </div>
             <div class="card-grid three">
               <div class="card"><span class="tag">Implemented</span><h3>共享执行核心</h3><p>Provider-neutral 模型与工具契约、串行 session turn、并行安全工具、有界重试、steering、追加式 transcript、上下文投影与模型压缩。</p></div>
               <div class="card"><span class="tag">Implemented</span><h3>本地 CLI 垂直切片</h3><p>同一入口自动适配 TTY/headless；本地 JSONL 会话、resume、steer/queue 设置、OpenAI/Anthropic 协议、工作区工具、OS sandbox 和 once/session/project 审批。</p></div>
-              <div class="card"><span class="tag">Implemented</span><h3>Hosted profile</h3><p>Slack worker 通过适配层接入 agent runtime、现有模型客户端与只读工具，并使用 PostgreSQL transcript、生命周期状态、会话锁和跨 worker 控制。</p></div>
+              <div class="card"><span class="tag">Implemented</span><h3>Hosted profile</h3><p>Slack worker 组合共享 runtime、provider、canonical tool catalog 与服务端 policy，并使用 PostgreSQL transcript、会话输入租约、会话锁和跨 worker 唤醒。</p></div>
             </div>
           </section>
           <section class="doc-section" id="zh-mental-model">
@@ -95,7 +95,7 @@
                 <div class="arch-nodes"><span class="node">PostgreSQL · 权威状态</span><span class="node">Redis · 协调与缓存</span><span class="node">LLM Providers</span><span class="node">External Systems</span></div>
               </div>
             </div>
-            <div class="callout"><p><strong>模块边界：</strong><code>packages/agent</code> 不依赖 Slack。Slack 会话、现有模型与工具、PostgreSQL transcript 分别通过 adapter 接入共享 runtime。</p></div>
+            <div class="callout"><p><strong>模块边界：</strong><code>packages/agent</code> 不依赖 Slack。Slack 只转换输入和展示事件；模型 provider、tool catalog、policy 和 transcript 由 profile 组合进共享 runtime。</p></div>
             <div class="card-grid three">
               <div class="card"><span class="tag">Durable</span><h3>PostgreSQL 保存事实</h3><p>会话、运行、步骤、协议事件、反馈、提醒和大型工具输出都以 PG 为准。</p></div>
               <div class="card"><span class="tag">Ephemeral</span><h3>Redis 负责协调</h3><p>用于唤醒、缓存、活动运行 owner、跨 Pod 控制和近似并发计数。</p></div>
@@ -133,11 +133,11 @@
             <p>Gateway 校验 Slack 请求后，将事件写入 <code>slack_event_inbox</code> 并返回成功。Redis 发布新事件通知；Worker 同时保留 PostgreSQL 轮询路径。</p>
             <h3>租约、续租与恢复</h3>
             <p>Worker 领取任务后写入 <code>claim_owner</code> 和 <code>claim_until</code>。执行期间按周期续租；Worker 崩溃后租约自然过期，其他实例可以恢复事件。完成、失败和续租都校验当前 owner，防止旧 Worker 覆盖新 Worker。</p>
-            <div class="callout"><p><strong>投递语义：</strong>这是至少一次处理，不是分布式“恰好一次”。如果 Slack 回复成功后、inbox 完成标记前进程崩溃，极小窗口内仍可能出现重复回复。</p></div>
+            <div class="callout"><p><strong>投递语义：</strong>事件处理是至少一次，不宣称分布式“恰好一次”。Runtime 按 turn id 重放终态，Slack 回复使用确定性 <code>client_msg_id</code>，成功后把 message ts 链接到 run；这些机制缩小重复窗口，但外部 API 和数据库之间没有原子事务。</p></div>
             <h3>会话串行化</h3>
             <p>Hosted agent 使用 PostgreSQL advisory lock 串行化同一个 Slack thread 的 turn。Canonical transcript 在同一 session 下按 sequence 追加。</p>
             <h3>Steering 与 Queue</h3>
-            <p>用户可在 App Home 选择将运行中的新消息注入下一模型步骤，或排队为后续 turn。活动运行的 owner worker 记录在 Redis，其他实例通过控制频道转发输入。</p>
+            <p>运行中的新消息统一写入 PostgreSQL <code>agent_session_inputs</code>，以 owner、lease、claim/ack 管理；steering 在模型边界进入当前 turn，queue 逐条成为后续 turn。Redis 只保存短期 owner 提示并发布唤醒，漏掉唤醒时由 PG 扫描恢复，不保存第二份队列。</p>
           </section>
 
           <section class="doc-section" id="zh-core">
@@ -145,7 +145,7 @@
             <h2>Agent Runtime</h2>
             <p class="lead">共享 runtime 管理 turn 生命周期、上下文投影、模型调用、工具执行、steering 和终止状态。产品 profile 通过适配器提供模型、工具、policy、transcript、artifact 和事件 sink。</p>
             <div class="card-grid">
-              <div class="card"><span class="tag">Runtime</span><h3>Turn 边界</h3><p>同一 session 的 turn 串行执行；每次运行生成稳定的 session、turn、event 和 tool call 标识，并追加 canonical transcript。</p></div>
+              <div class="card"><span class="tag">Runtime</span><h3>Turn 边界</h3><p>同一 session 的 turn 串行执行；入口提供稳定的 session/turn 标识，runtime 为追加事件分配 ID，并保留 provider 返回的 tool call ID。</p></div>
               <div class="card"><span class="tag">Loop</span><h3>模型—工具循环</h3><p>投影上下文、调用模型、执行允许的工具、记录结果并继续，直到完成、取消、达到限制或等待审批。</p></div>
             </div>
             <h3>每步执行</h3>
@@ -163,13 +163,13 @@
           <section class="doc-section" id="zh-memory">
             <span class="section-number">05 / MEMORY</span>
             <h2>上下文投影</h2>
-            <p>模型上下文从 canonical transcript 投影。Prompt fragments 按 core、product、environment、project、user、skill 和 turn 分层组合；Slack thread context 作为 hosted environment fragment 注入。</p>
+            <p>模型上下文从 canonical transcript 投影。Prompt fragments 按 core、product、environment、project、user、skill 和 turn 分层组合。首次接入已有 Slack thread 时，历史消息以不可信 user/assistant history 导入，而不是伪装成 system/environment 指令。</p>
             <table class="data-table">
               <thead><tr><th>层次</th><th>内容</th><th>生命周期</th></tr></thead>
               <tbody>
-                <tr><td>Canonical history</td><td>User、assistant、tool 与 runtime instruction events</td><td>Session 生命周期</td></tr>
+                <tr><td>Canonical history</td><td>User、assistant、tool result 与 compaction 消息</td><td>Session 生命周期</td></tr>
                 <tr><td>Prompt composition</td><td>版本化、分层 fragments</td><td>每个 Turn 重新组合</td></tr>
-                <tr><td>外部上下文</td><td>Slack thread context 与 workspace 信息</td><td>当前 Turn</td></tr>
+                <tr><td>外部上下文</td><td>结构化 Slack 历史与 workspace 信息</td><td>首次导入 / 当前 Turn</td></tr>
                 <tr><td>压缩与 Artifact</td><td>Compaction event 与大型工具结果引用</td><td>按上下文预算生成</td></tr>
               </tbody>
             </table>
@@ -180,26 +180,26 @@
           <section class="doc-section" id="zh-tools">
             <span class="section-number">06 / TOOLS &amp; CAPABILITIES</span>
             <h2>工具与能力</h2>
-            <p>每个工具声明名称、JSON Schema、风险、依赖、surface 和并发属性。Registry 控制模型当前可见的工具集合，Capability Policy 控制服务器实际可执行的工具集合。</p>
+            <p>每个工具声明名称、JSON Schema、effect、依赖、surface、并发和 exclusive 属性。Canonical catalog 独占模型可见性、turn 激活和执行入口；每次调用再由 profile policy 判定。构建期 registry 只枚举实现，没有 runtime dispatch 或 activation API；启动适配器将实现映射进 canonical catalog。</p>
             <div class="card-grid three">
               <div class="card"><span class="tag">Read</span><h3>读取与诊断</h3><p>代码搜索、文件读取、Git、Web、Runbook 和基础设施查询；远端 ref 读取会先刷新 origin 且不 checkout。</p></div>
-              <div class="card"><span class="tag">Local</span><h3>本地写操作</h3><p>Local profile 在 workspace 和 OS sandbox 边界内执行，并按 once、session 或 project scope 请求审批。</p></div>
-              <div class="card"><span class="tag">Hosted</span><h3>服务端只读</h3><p>Hosted profile 的 operator policy 只允许 read effect，不通过 Slack 请求主机权限。</p></div>
+              <div class="card"><span class="tag">Local</span><h3>本地执行</h3><p>Workspace write 由路径和 OS sandbox 限界；network、external-write 与 privileged effect 按 once、session 或 project scope 请求审批。</p></div>
+              <div class="card"><span class="tag">Hosted</span><h3>服务端 policy</h3><p>Hosted 默认允许 read；write、external-write 和 privileged effect 只允许精确 operator allowlist，不通过 Slack 请求主机权限，也不提供通用 shell。</p></div>
             </div>
             <h3>延迟工具发现</h3>
-            <p>GitHub、Kubernetes、GCP、代码图谱等工具按类别延迟注册。模型通过 <code>tool_search</code> 列出稳定类别和精确工具名，再显式激活当前 session 需要的 schema；没有自然语言排序或猜测。</p>
+            <p>GitHub、Kubernetes、GCP、代码图谱等工具按类别延迟注册。模型通过 <code>tool_search</code> 列出稳定类别和精确工具名，再显式激活当前 turn 需要的 schema；turn 结束后释放，没有自然语言排序或猜测。</p>
             <h3>并发规则</h3>
-            <p>声明为 parallel 的安全工具可以并发执行；其他工具串行执行。Deferred tool activation 按 agent session 记录。</p>
+            <p>声明为 parallel 的安全工具可以并发执行；其他工具串行执行。Exclusive 工具必须是模型该批次中的唯一调用。</p>
           </section>
 
           <section class="doc-section" id="zh-protocol">
             <span class="section-number">07 / CANONICAL TRANSCRIPT</span>
             <h2>Canonical Transcript</h2>
-            <p>Session 和 turn 使用 provider-neutral、append-only 事件记录。模型消息、stream event、工具调用、工具结果、steering、compaction 与终止状态使用同一套结构。</p>
+            <p>Session 和 turn 使用 provider-neutral、append-only 事件记录。完成的模型消息、工具调用与结果、steering、compaction 和终止状态持久化为同一事件结构；token stream delta 只发给瞬时展示 sink，不写 durable transcript。</p>
             <div class="flow">
               <div class="flow-step"><b>session_started</b><span>Session 建立</span></div>
               <div class="flow-step"><b>turn_started</b><span>一次请求开始</span></div>
-              <div class="flow-step"><b>model / tool events</b><span>消息、增量、调用和结果</span></div>
+              <div class="flow-step"><b>model / tool events</b><span>完成消息、调用和结果</span></div>
               <div class="flow-step"><b>compaction_created</b><span>记录上下文压缩</span></div>
               <div class="flow-step"><b>turn_*</b><span>完成、失败或取消</span></div>
             </div>
@@ -212,8 +212,8 @@
             <table class="data-table">
               <thead><tr><th>存储</th><th>职责</th><th>故障后的行为</th></tr></thead>
               <tbody>
-                <tr><td>PostgreSQL</td><td>Session、Run、Step、Feedback、Spill、Inbox、Protocol Events、Reminder、User Preferences</td><td>不可用时拒绝需要持久状态的工作</td></tr>
-                <tr><td>Redis</td><td>唤醒、缓存、去重、活动 owner、跨 Pod 控制、全局计数</td><td>部分路径 fail-open 或退化为 PG 轮询</td></tr>
+                <tr><td>PostgreSQL</td><td>Session、Run、Step、Feedback、Spill、Inbox、Session Input、Protocol Events、Reminder、User Preferences</td><td>不可用时拒绝需要持久状态的工作</td></tr>
+                <tr><td>Redis</td><td>唤醒、缓存、活动 owner 提示、全局计数</td><td>服务启动时要求可用；运行中漏掉或失败的唤醒由 PG 轮询恢复，不承载 durable queue</td></tr>
               </tbody>
             </table>
             <h3>运行记录</h3>
@@ -227,15 +227,15 @@
           <section class="doc-section" id="zh-safety">
             <span class="section-number">09 / SAFETY BOUNDARY</span>
             <h2>安全边界</h2>
-            <p>工具调用先经过 profile policy。Local policy 根据 effect、workspace、sandbox 和审批 scope 判定；hosted policy 由服务端配置并拒绝非只读 effect。</p>
+            <p>工具调用先经过 profile policy。Local policy 根据 effect、workspace、sandbox 和审批 scope 判定；hosted policy 由服务端配置，write、external-write 和 privileged effect 必须命中 operator allowlist，网络能力另受工具配置和用户设置约束。</p>
             <div class="card-grid">
               <div class="card"><span class="tag">Identity</span><h3>入口身份</h3><p>Slack HMAC 和时间戳验证；允许用户和频道列表限制谁可以发起任务。</p></div>
               <div class="card"><span class="tag">Filesystem</span><h3>工作区边界</h3><p>真实路径和符号链接必须落在配置根目录；敏感密钥、云凭据和环境文件默认拒绝。</p></div>
               <div class="card"><span class="tag">Commands</span><h3>argv 执行</h3><p>命令不通过 shell 拼接，策略检查程序、参数、工作目录和危险模式。</p></div>
-              <div class="card risk"><span class="tag">Boundary</span><h3>Sandbox 边界</h3><p>当前主要是应用层策略约束，不等同于进程、容器或内核级隔离。</p></div>
+              <div class="card risk"><span class="tag">Boundary</span><h3>Sandbox 边界</h3><p>Local argv 使用 macOS Seatbelt 或 Linux bubblewrap，缺失时默认拒绝；unsafe escape hatch 只面向开发。Hosted 不提供通用命令工具，部署隔离仍由 operator 负责。</p></div>
             </div>
             <p>Canonical transcript 记录 tool call、完成、失败以及 local approval 请求和结果。</p>
-            <p>公共 HTTP 客户端拒绝 localhost、私网和特殊地址，并在 DNS 解析后复查，降低 SSRF 与 DNS rebinding 风险。Redactor 会从日志和错误中清理 token、Authorization header、私钥和工作区绝对路径。</p>
+            <p>接受模型或用户 URL 的公共抓取路径拒绝 localhost、私网和特殊地址，并在 DNS 解析后复查，降低 SSRF 与 DNS rebinding 风险。Redactor 会从日志和错误中清理 token、Authorization header、私钥和工作区绝对路径。</p>
           </section>
 
           <section class="doc-section" id="zh-operations">
@@ -244,7 +244,7 @@
             <div class="card-grid three">
               <div class="card"><span class="tag">Lifecycle</span><h3>Drain 与优雅退出</h3><p>停止领取新任务，等待活跃事件，在超时内关闭 HTTP 和后台任务。</p></div>
               <div class="card"><span class="tag">Recovery</span><h3>重试与 Dead Letter</h3><p>事件使用退避、抖动和最大尝试次数；租约过期任务可自动恢复。</p></div>
-              <div class="card"><span class="tag">Evidence</span><h3>持久 Transcript</h3><p>Hosted agent 按 session sequence 记录 turn、模型增量、工具调用、结果、错误和终止状态。</p></div>
+              <div class="card"><span class="tag">Evidence</span><h3>持久 Transcript</h3><p>Hosted agent 按 session sequence 记录 turn、完整模型结果、工具调用、结果、错误和终止状态；流式 delta 仅用于展示。</p></div>
             </div>
             <p>Worker 提供 <code>/livez</code>、<code>/readyz</code>、本机限定的 <code>/drain</code> 和 <code>/metrics</code>；Slack inbox 记录队列水位、lease 丢失、dead letter、queue full 和完成计数。</p>
             <p>Hosted agent 的 transcript 已持久化；启动时会重放未完成 run，模型失败、usage、tool trace 与终止状态以幂等 projection 对齐到 run/cost dashboard。</p>
@@ -254,11 +254,13 @@
             <span class="section-number">11 / CURRENT LIMITS</span>
             <h2>当前边界</h2>
             <div class="card-grid">
-              <div class="card"><span class="tag">Scope</span><h3>共享部分</h3><ul><li>Runtime、模型、工具与 transcript contracts</li><li>Local CLI 与 hosted Slack profiles</li><li>Local JSONL 与 hosted PG transcript</li><li>耐久 Slack inbox</li></ul></div>
-              <div class="card"><span class="tag">Different by profile</span><h3>产品差异</h3><ul><li>Local approval 与 workspace sandbox</li><li>Hosted server-owned read-only policy</li><li>本地 TTY 与 Slack presentation</li><li>各自的存储和工具 adapter</li></ul></div>
+              <div class="card"><span class="tag">Scope</span><h3>共享部分</h3><ul><li>Runtime、模型、工具与 transcript contracts</li><li>Local CLI 与 hosted Slack profiles</li><li>Local JSONL 与 hosted PG transcript</li><li>耐久 Slack inbox 与 session inputs</li></ul></div>
+              <div class="card"><span class="tag">Different by profile</span><h3>产品差异</h3><ul><li>Local approval 与 workspace sandbox</li><li>Hosted server-owned allowlist policy</li><li>本地 TTY 与 Slack presentation</li><li>各自的存储与 presentation 组合</li></ul></div>
             </div>
             <h3>容量边界</h3>
             <p>PG advisory lock 会在整个 hosted turn 期间占用连接；活动运行的 Redis owner key 使用 TTL；Slack inbox 的处理上限由 worker 数量、事件队列和数据库连接池共同约束。</p>
+            <h3>尚未隐藏的限制</h3>
+            <p>Context token 预算是保守估算，不是 provider tokenizer；如果 provider 仍返回 context-limit，当前 turn 会明确失败，尚未做基于该错误的二次强制压缩。Hosted 的既有工具实现仍通过一个启动期 ABI bridge 转成 canonical descriptor/result，但可见性、激活、policy 和执行调度只有一套。Secondary compaction/progress 调用进入聚合 LLM 指标，但尚未分摊到单个 run 成本。Slack 展示语言目前使用 operator 配置的默认 locale，不做逐用户语言探测。</p>
           </section>
 
           <section class="doc-section" id="zh-reading">
@@ -272,7 +274,8 @@
               <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agent/runtime/context.go">packages/agent/runtime/context.go</a></li>
               <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/profiles/hosted/profile.go">packages/profiles/hosted/profile.go</a></li>
               <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/profiles/hosted/pgtranscript.go">packages/profiles/hosted/pgtranscript.go</a></li>
-              <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/tools/registry/registry.go">packages/tools/registry/registry.go</a></li>
+              <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agent/tool/tool.go">packages/agent/tool/tool.go</a></li>
+              <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/sessioninput/store.go">packages/sessioninput/store.go</a></li>
               <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/schema/postgres.sql">schema/postgres.sql</a></li>
             </ol>
           </section>
@@ -284,7 +287,7 @@
       <section class="hero" id="top-en">
 		<p class="eyebrow">Architecture overview · shared agent harness</p>
         <h1>Slack Copilot Agent<br><span>System Architecture</span></h1>
-        <p class="hero-copy">Slack Copilot Agent includes a hosted agent with Slack as an ingress and a local CLI. Both share the shared agent harness while distinct profiles preserve their permission, storage, and runtime differences.</p>
+        <p class="hero-copy">Slack Copilot Agent includes a hosted agent with Slack as an ingress and a local CLI. Both use one agent harness, while distinct profiles preserve their permission, storage, and runtime differences.</p>
         <div class="hero-meta" aria-label="Technology summary">
           <span class="pill">Go 1.25</span><span class="pill">PostgreSQL</span><span class="pill">Redis</span><span class="pill">Slack Events API</span>
         </div>
@@ -305,12 +308,12 @@
             <div class="architecture-map" role="img" aria-label="shared agent harness profiles">
               <div class="arch-layer"><div class="arch-label">Product surfaces</div><div class="arch-nodes"><span class="node">Local CLI · TTY / Headless</span><span class="node">Hosted · Slack</span></div></div>
               <div class="arch-layer"><div class="arch-label">Shared agent harness</div><div class="arch-nodes"><span class="node core">Agent Loop</span><span class="node core">Canonical Transcript</span><span class="node core">Context Projection</span><span class="node core">Prompt Layers</span><span class="node core">Tool Contracts</span></div></div>
-              <div class="arch-layer"><div class="arch-label">Runtime profiles</div><div class="arch-nodes"><span class="node">Local · workspace-write + approval</span><span class="node">Hosted · server-owned read-only policy</span></div></div>
+              <div class="arch-layer"><div class="arch-label">Runtime profiles</div><div class="arch-nodes"><span class="node">Local · workspace-write + approval</span><span class="node">Hosted · server-owned allowlist policy</span></div></div>
             </div>
             <div class="card-grid three">
               <div class="card"><span class="tag">Implemented</span><h3>Shared execution core</h3><p>Provider-neutral contracts, serial session turns, parallel-safe tools, bounded retry, steering, append-only transcripts, bounded projection, and model compaction.</p></div>
               <div class="card"><span class="tag">Implemented</span><h3>Local CLI vertical slice</h3><p>One TTY/headless entrypoint, JSONL sessions and resume, steer/queue settings, OpenAI/Anthropic protocols, workspace tools, OS sandboxing, and once/session/project approval.</p></div>
-              <div class="card"><span class="tag">Implemented</span><h3>Hosted profile</h3><p>The Slack worker adapts the agent runtime to the established model clients and read-only tools, with PostgreSQL transcripts, lifecycle status, session locks, and cross-worker controls.</p></div>
+              <div class="card"><span class="tag">Implemented</span><h3>Hosted profile</h3><p>The Slack worker composes the shared runtime, providers, canonical tool catalog, and server policy, with PostgreSQL transcripts, session-input leases, session locks, and cross-worker wakeups.</p></div>
             </div>
           </section>
           <section class="doc-section" id="en-mental-model">
@@ -321,8 +324,8 @@
               <div class="arch-layer"><div class="arch-label">Shared harness</div><div class="arch-nodes"><span class="node core">Agent Runtime</span><span class="node core">Context Projector</span><span class="node core">Tool Catalog</span><span class="node core">Canonical Transcript</span></div></div>
               <div class="arch-layer"><div class="arch-label">Infrastructure</div><div class="arch-nodes"><span class="node">PostgreSQL · authority</span><span class="node">Redis · coordination</span><span class="node">LLM Providers</span><span class="node">External Systems</span></div></div>
             </div>
-            <div class="callout"><p><strong>Module boundary:</strong> <code>packages/agent</code> does not depend on Slack. Slack conversations, established model and tool implementations, and PostgreSQL transcripts connect through adapters.</p></div>
-            <div class="card-grid three"><div class="card"><span class="tag">Durable</span><h3>PostgreSQL stores facts</h3><p>Canonical transcripts, run projections, feedback, reminders, and large tool outputs are authoritative in PG.</p></div><div class="card"><span class="tag">Ephemeral</span><h3>Redis coordinates</h3><p>Wakeups, caches, active-run ownership, cross-worker control, and user input mode live here.</p></div><div class="card"><span class="tag">Shared</span><h3>Runtime is not Slack-specific</h3><p>The local CLI and hosted Slack worker use the same turn loop and canonical contracts.</p></div></div>
+            <div class="callout"><p><strong>Module boundary:</strong> <code>packages/agent</code> does not depend on Slack. Slack converts input and presents events; the profile composes model providers, the tool catalog, policy, and transcript into the shared runtime.</p></div>
+            <div class="card-grid three"><div class="card"><span class="tag">Durable</span><h3>PostgreSQL stores facts</h3><p>Canonical transcripts, session inputs, run projections, feedback, reminders, and large tool outputs are authoritative in PG.</p></div><div class="card"><span class="tag">Ephemeral</span><h3>Redis coordinates</h3><p>Redis carries wakeups, caches, active-owner hints, and approximate counters; it is not a durable queue.</p></div><div class="card"><span class="tag">Shared</span><h3>Runtime is not Slack-specific</h3><p>The local CLI and hosted Slack worker use the same turn loop and canonical contracts.</p></div></div>
           </section>
 
           <section class="doc-section" id="en-processes">
@@ -340,44 +343,44 @@
             <span class="section-number">03 / REQUEST LIFECYCLE</span><h2>Slack request flow</h2>
             <div class="flow" aria-label="Slack request flow"><div class="flow-step"><b>1 · Verify</b><span>Signature, timestamp, and size</span></div><div class="flow-step"><b>2 · Persist</b><span>Deduplicate by event_id in PG</span></div><div class="flow-step"><b>3 · Claim</b><span>Worker obtains a timed lease</span></div><div class="flow-step"><b>4 · Execute</b><span>Lock session, run the agent and tools</span></div><div class="flow-step"><b>5 · Complete</b><span>Append transcript and reply</span></div></div>
             <h3>Leases and recovery</h3><p>A claim records <code>claim_owner</code> and <code>claim_until</code>. The worker renews the lease while executing. After a crash, the lease expires and another worker recovers the event. Completion, failure, and renewal are owner-checked.</p>
-            <div class="callout"><p><strong>Delivery semantics:</strong> processing is at-least-once, not distributed exactly-once. A crash after an external Slack write but before inbox completion leaves a narrow duplicate-reply window.</p></div>
+            <div class="callout"><p><strong>Delivery semantics:</strong> processing is at-least-once, not distributed exactly-once. Terminal runtime state is replayed by turn id, Slack posts use a deterministic <code>client_msg_id</code>, and successful message timestamps are linked to runs. These controls narrow duplication, but no transaction spans Slack and PostgreSQL.</p></div>
             <h3>Session serialization</h3><p>Hosted agent serializes turns for the same Slack thread with a PostgreSQL advisory lock. The canonical transcript appends events by sequence within that session.</p>
-            <h3>Steering and queueing</h3><p>App Home lets each user inject active-turn input before the next model step or queue it as a later turn. Active-run ownership lives in Redis so another worker can forward input to the owner.</p>
+            <h3>Steering and queueing</h3><p>New input is written once to PostgreSQL <code>agent_session_inputs</code> and managed with owner-checked lease and claim/ack operations. Steering enters at a model boundary; queue items become later turns one at a time. Redis carries only owner hints and wakeups, while PostgreSQL polling recovers missed notifications.</p>
           </section>
 
           <section class="doc-section" id="en-core">
             <span class="section-number">04 / EXECUTION ENGINE</span><h2>Agent Runtime</h2>
             <p class="lead">The shared runtime manages turn lifecycle, context projection, model calls, tool execution, steering, and termination. Product profiles provide model, tool, policy, transcript, artifact, and event-sink adapters.</p>
-            <div class="card-grid"><div class="card"><span class="tag">Runtime</span><h3>Turn boundary</h3><p>Turns in one session run serially. Each run assigns stable session, turn, event, and tool-call identifiers and appends a canonical transcript.</p></div><div class="card"><span class="tag">Loop</span><h3>Model–tool loop</h3><p>Project context, call the model, execute allowed tools, record results, and continue until completion, cancellation, a limit, or pending approval.</p></div></div>
+            <div class="card-grid"><div class="card"><span class="tag">Runtime</span><h3>Turn boundary</h3><p>Turns in one session run serially. Ingress supplies stable session/turn identities; the runtime identifies appended events and preserves provider tool-call IDs.</p></div><div class="card"><span class="tag">Loop</span><h3>Model–tool loop</h3><p>Project context, call the model, execute allowed tools, record results, and continue until completion, cancellation, a limit, or pending approval.</p></div></div>
             <h3>Each step</h3><ol class="status-list"><li>Check cancellation and append new steering to the transcript.</li><li>Project bounded model context and invoke the compactor when required.</li><li>Call a model adapter with canonical messages and tool schemas.</li><li>Apply policy, execute tools, and record calls, results, or failures.</li><li>Record model errors, empty output, truncation, and step limits.</li></ol>
             <h3>Termination and recovery</h3><p>The runtime records completed, canceled, model_error, max_steps, output_limit, pending_approval, pending_input, and empty_response states. Retryable model errors use bounded backoff; truncated output preserves the partial response and ends the current turn; every outcome is appended to the transcript.</p>
           </section>
 
           <section class="doc-section" id="en-memory">
             <span class="section-number">05 / CONTEXT</span><h2>Context projection</h2>
-            <p>Model context is projected from the canonical transcript. Prompt fragments compose in core, product, environment, project, user, skill, and turn layers; Slack thread context enters as a hosted environment fragment.</p>
-            <table class="data-table"><thead><tr><th>Layer</th><th>Content</th><th>Lifetime</th></tr></thead><tbody><tr><td>Canonical history</td><td>User, assistant, tool, and runtime-instruction events</td><td>Session lifetime</td></tr><tr><td>Prompt composition</td><td>Versioned layered fragments</td><td>Recomposed per turn</td></tr><tr><td>External context</td><td>Slack thread context and workspace information</td><td>Current turn</td></tr><tr><td>Compaction and artifacts</td><td>Compaction events and references to large tool results</td><td>Created under context pressure</td></tr></tbody></table>
+            <p>Model context is projected from the canonical transcript. Prompt fragments compose in core, product, environment, project, user, skill, and turn layers. Existing Slack thread messages are imported once as untrusted user/assistant history, not injected as system or environment instructions.</p>
+            <table class="data-table"><thead><tr><th>Layer</th><th>Content</th><th>Lifetime</th></tr></thead><tbody><tr><td>Canonical history</td><td>User, assistant, tool-result, and compaction messages</td><td>Session lifetime</td></tr><tr><td>Prompt composition</td><td>Versioned layered fragments</td><td>Recomposed per turn</td></tr><tr><td>External context</td><td>Structured Slack history and workspace information</td><td>Initial import / current turn</td></tr><tr><td>Compaction and artifacts</td><td>Compaction events and references to large tool results</td><td>Created under context pressure</td></tr></tbody></table>
             <h3>Budget and compaction</h3><p>The bounded projector reserves output tokens and selects transcript messages within budget. It invokes the compactor when needed; large tool results use the profile's artifact store and leave references in the transcript.</p>
           </section>
 
           <section class="doc-section" id="en-tools">
             <span class="section-number">06 / TOOLS &amp; CAPABILITIES</span><h2>Tools and capabilities</h2>
-            <p>Every tool declares a name, JSON Schema, risk, dependencies, surfaces, and concurrency behavior. The Registry controls the model-visible tool set; Capability Policy controls the server-executable tool set.</p>
-            <div class="card-grid three"><div class="card"><span class="tag">Read</span><h3>Read and diagnose</h3><p>Code search, file reads, Git, web, runbooks, and infrastructure queries; remote ref reads refresh origin first without checking out branches.</p></div><div class="card"><span class="tag">Local</span><h3>Local writes</h3><p>The local profile operates inside workspace and OS-sandbox boundaries and requests once, session, or project approval scopes.</p></div><div class="card"><span class="tag">Hosted</span><h3>Server-side read only</h3><p>The hosted operator policy allows read effects and does not ask Slack users to grant host permissions.</p></div></div>
-            <h3>Deferred discovery</h3><p>GitHub, Kubernetes, GCP, code graph, and similar tools are registered by category. The model uses <code>tool_search</code> to list stable categories and exact tool names, then explicitly activates schemas for the current session. There is no natural-language ranking or guessing.</p>
-            <h3>Concurrency rules</h3><p>Parallel-safe tools may run concurrently; other tools execute serially. Deferred tool activation is scoped by agent session.</p>
+            <p>Every tool declares a name, JSON Schema, effects, dependencies, surfaces, concurrency, and exclusive behavior. The canonical catalog alone owns model visibility, turn activation, and execution; the profile policy decides each call. The construction registry only enumerates implementations and has no runtime dispatch or activation API; a startup adapter maps them into the canonical catalog.</p>
+            <div class="card-grid three"><div class="card"><span class="tag">Read</span><h3>Read and diagnose</h3><p>Code search, file reads, Git, web, runbooks, and infrastructure queries; remote ref reads refresh origin first without checking out branches.</p></div><div class="card"><span class="tag">Local</span><h3>Local execution</h3><p>Workspace writes are bounded by path checks and the OS sandbox; network, external-write, and privileged effects request once, session, or project approval.</p></div><div class="card"><span class="tag">Hosted</span><h3>Server policy</h3><p>Read effects are allowed; write, external-write, and privileged effects require an exact operator allowlist entry. Hosted exposes no generic shell.</p></div></div>
+            <h3>Deferred discovery</h3><p>GitHub, Kubernetes, GCP, code graph, and similar tools are registered by category. The model uses <code>tool_search</code> to list stable categories and exact tool names, then explicitly activates schemas for the current turn. Activation is released at the turn boundary; there is no natural-language ranking or guessing.</p>
+            <h3>Concurrency rules</h3><p>Parallel-safe tools may run concurrently; other tools execute serially. Exclusive calls must be the only call in a model-produced batch.</p>
           </section>
 
           <section class="doc-section" id="en-protocol">
             <span class="section-number">07 / CANONICAL TRANSCRIPT</span><h2>Canonical transcript</h2>
-            <p>Sessions and turns are recorded as provider-neutral, append-only events. Model messages, stream events, tool calls and results, steering, compaction, and termination share one structure.</p>
-            <div class="flow"><div class="flow-step"><b>session_started</b><span>Session begins</span></div><div class="flow-step"><b>turn_started</b><span>Request begins</span></div><div class="flow-step"><b>model / tool events</b><span>Messages, deltas, calls, results</span></div><div class="flow-step"><b>compaction_created</b><span>Context compaction</span></div><div class="flow-step"><b>turn_*</b><span>Complete, fail, or cancel</span></div></div>
+            <p>Sessions and turns are recorded as provider-neutral, append-only events. Completed model messages, tool calls and results, steering, compaction, and termination are durable. Token stream deltas go only to transient presentation sinks.</p>
+            <div class="flow"><div class="flow-step"><b>session_started</b><span>Session begins</span></div><div class="flow-step"><b>turn_started</b><span>Request begins</span></div><div class="flow-step"><b>model / tool events</b><span>Completed messages, calls, results</span></div><div class="flow-step"><b>compaction_created</b><span>Context compaction</span></div><div class="flow-step"><b>turn_*</b><span>Complete, fail, or cancel</span></div></div>
             <p>The local profile writes one JSONL event log per session. The hosted profile writes canonical events to <code>agent_transcript_events</code> and uses a PostgreSQL advisory lock to allocate monotonic session sequences.</p>
           </section>
 
           <section class="doc-section" id="en-storage">
             <span class="section-number">08 / DATA &amp; CONCURRENCY</span><h2>Data and concurrency</h2>
-            <table class="data-table"><thead><tr><th>Store</th><th>Responsibility</th><th>Failure behavior</th></tr></thead><tbody><tr><td>PostgreSQL</td><td>Transcripts, run projections, feedback, spills, inbox, reminders, preferences</td><td>Durable operations reject work when unavailable</td></tr><tr><td>Redis</td><td>Wakeups, caches, deduplication, active owner, pod control, global counters</td><td>Selected paths fail open or fall back to PG polling</td></tr></tbody></table>
+            <table class="data-table"><thead><tr><th>Store</th><th>Responsibility</th><th>Failure behavior</th></tr></thead><tbody><tr><td>PostgreSQL</td><td>Transcripts, session inputs, run projections, feedback, spills, inbox, reminders, preferences</td><td>Durable operations reject work when unavailable</td></tr><tr><td>Redis</td><td>Wakeups, caches, active-owner hints, and approximate counters</td><td>Required at service startup; missed or failed runtime wakeups recover through PG polling, and Redis is not a durable queue</td></tr></tbody></table>
             <h3>Run records</h3><p>The canonical transcript is written to <code>agent_transcript_events</code>. The observability projection writes aggregate summaries to <code>agent_runs</code>, model and tool steps to <code>agent_run_steps</code>, and feedback to <code>agent_run_feedback</code>.</p>
             <h3>Schema management</h3><p>Runtime code executes no DDL; it only verifies required tables. <code>schema/postgres.sql</code> is the current contract, while operators or the deploy repository's lightweight migration flow own upgrades.</p>
             <h3>Concurrency control</h3><p>A local semaphore limits each process, a Redis counter approximates the cluster total, and a PG advisory lock serializes a session.</p>
@@ -385,28 +388,29 @@
 
           <section class="doc-section" id="en-safety">
             <span class="section-number">09 / SAFETY BOUNDARY</span><h2>Safety boundary</h2>
-            <p>Every tool call passes through the profile policy. Local policy evaluates effects, workspace, sandbox, and approval scope; hosted policy is server-owned and rejects non-read effects.</p>
-            <div class="card-grid"><div class="card"><span class="tag">Identity</span><h3>Ingress identity</h3><p>Slack HMAC and timestamps verify requests; user and channel allowlists restrict initiation.</p></div><div class="card"><span class="tag">Filesystem</span><h3>Workspace boundary</h3><p>Resolved paths and symlinks must remain under configured roots; credentials and secret files are denied.</p></div><div class="card"><span class="tag">Commands</span><h3>argv execution</h3><p>No shell string assembly; policy checks programs, arguments, working directories, and dangerous patterns.</p></div><div class="card risk"><span class="tag">Boundary</span><h3>Sandbox boundary</h3><p>The current controls are application-level policies, not process, container, or kernel isolation.</p></div></div>
+            <p>Every tool call passes through the profile policy. Local policy evaluates effects, workspace, sandbox, and approval scope. Hosted policy is server-owned: write, external-write, and privileged effects require an operator allowlist match; network capabilities are also constrained by tool configuration and user settings.</p>
+            <div class="card-grid"><div class="card"><span class="tag">Identity</span><h3>Ingress identity</h3><p>Slack HMAC and timestamps verify requests; user and channel allowlists restrict initiation.</p></div><div class="card"><span class="tag">Filesystem</span><h3>Workspace boundary</h3><p>Resolved paths and symlinks must remain under configured roots; credentials and secret files are denied.</p></div><div class="card"><span class="tag">Commands</span><h3>Local argv execution</h3><p>The local tool passes argv directly; policy checks effects and working directories before OS sandbox execution.</p></div><div class="card risk"><span class="tag">Boundary</span><h3>Sandbox boundary</h3><p>Local uses macOS Seatbelt or Linux bubblewrap and fails closed unless the development-only unsafe escape hatch is explicit. Hosted exposes no generic command tool; deployment isolation remains operator-owned.</p></div></div>
             <p>The canonical transcript records tool calls, completion, failure, and local approval requests and outcomes.</p>
-            <p>Public HTTP clients reject localhost, private, and special-use addresses and re-check resolved IPs. Redaction removes tokens, Authorization headers, private keys, and absolute workspace prefixes from logs and errors.</p>
+            <p>Public URL-fetch paths that accept model or user input reject localhost, private, and special-use addresses and re-check resolved IPs. Redaction removes tokens, Authorization headers, private keys, and absolute workspace prefixes from logs and errors.</p>
           </section>
 
           <section class="doc-section" id="en-operations">
             <span class="section-number">10 / RELIABILITY &amp; OBSERVABILITY</span><h2>Reliability and observability</h2>
-            <div class="card-grid three"><div class="card"><span class="tag">Lifecycle</span><h3>Drain and shutdown</h3><p>Stop claiming new work, wait for active events, then close HTTP and background tasks within deadlines.</p></div><div class="card"><span class="tag">Recovery</span><h3>Retry and dead letter</h3><p>Backoff, jitter, bounded attempts, and expired-lease recovery protect the inbox.</p></div><div class="card"><span class="tag">Evidence</span><h3>Durable transcript</h3><p>Hosted agent records turns, model deltas, tool calls and results, errors, and termination by session sequence.</p></div></div>
+            <div class="card-grid three"><div class="card"><span class="tag">Lifecycle</span><h3>Drain and shutdown</h3><p>Stop claiming new work, wait for active events, then close HTTP and background tasks within deadlines.</p></div><div class="card"><span class="tag">Recovery</span><h3>Retry and dead letter</h3><p>Backoff, jitter, bounded attempts, and expired-lease recovery protect the inbox.</p></div><div class="card"><span class="tag">Evidence</span><h3>Durable transcript</h3><p>Hosted records turns, completed model results, tool calls and results, errors, and exact termination reasons; stream deltas remain presentation-only.</p></div></div>
             <p>The worker exposes <code>/livez</code>, <code>/readyz</code>, loopback-only <code>/drain</code>, and <code>/metrics</code>. The Slack inbox reports queue depth, lease loss, dead letters, queue-full events, and completion counts.</p>
             <p>The hosted agent transcript is durable. Startup replays unfinished runs, and an idempotent projection aligns model failures, usage, tool traces, and termination with the run/cost dashboard.</p>
           </section>
 
           <section class="doc-section" id="en-boundaries">
             <span class="section-number">11 / CURRENT LIMITS</span><h2>Current boundaries</h2>
-            <div class="card-grid"><div class="card"><span class="tag">Scope</span><h3>Shared components</h3><ul><li>Runtime, model, tool, and transcript contracts</li><li>Local CLI and hosted Slack profiles</li><li>Local JSONL and hosted PG transcripts</li><li>Durable Slack inbox</li></ul></div><div class="card"><span class="tag">Different by profile</span><h3>Product-specific concerns</h3><ul><li>Local approvals and workspace sandbox</li><li>Hosted server-owned read-only policy</li><li>TTY and Slack presentation</li><li>Storage and tool adapters</li></ul></div></div>
+            <div class="card-grid"><div class="card"><span class="tag">Scope</span><h3>Shared components</h3><ul><li>Runtime, model, tool, and transcript contracts</li><li>Local CLI and hosted Slack profiles</li><li>Local JSONL and hosted PG transcripts</li><li>Durable Slack inbox and session inputs</li></ul></div><div class="card"><span class="tag">Different by profile</span><h3>Product-specific concerns</h3><ul><li>Local approvals and workspace sandbox</li><li>Hosted server-owned allowlist policy</li><li>TTY and Slack presentation</li><li>Profile-specific storage and presentation composition</li></ul></div></div>
             <h3>Capacity boundaries</h3><p>A PG advisory lock holds a connection for the full hosted turn; the Redis active-owner key uses a TTL; worker count, event queues, and the database pool jointly bound Slack throughput.</p>
+            <h3>Visible limitations</h3><p>Context budgeting is a conservative estimate, not a provider tokenizer; a remaining provider context-limit error fails the turn explicitly instead of triggering a second forced compaction. Existing hosted tool implementations still cross one startup-time ABI bridge into canonical descriptors and results, while visibility, activation, policy, and scheduling have only one runtime owner. Secondary compaction and progress calls enter aggregate LLM metrics but are not allocated to an individual run's cost. Slack presentation uses an operator-configured default locale rather than per-user language discovery.</p>
           </section>
 
           <section class="doc-section" id="en-reading">
             <span class="section-number">12 / CODE READING PATH</span><h2>Main code entrypoints</h2>
-            <ol class="reading-path"><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/surfaces/slack/gateway/gateway.go">packages/surfaces/slack/gateway/gateway.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/surfaces/slack/events/worker.go">packages/surfaces/slack/events/worker.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/surfaces/slack/agent/service.go">packages/surfaces/slack/agent/service.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agent/runtime/runner.go">packages/agent/runtime/runner.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agent/runtime/context.go">packages/agent/runtime/context.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/profiles/hosted/profile.go">packages/profiles/hosted/profile.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/profiles/hosted/pgtranscript.go">packages/profiles/hosted/pgtranscript.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/tools/registry/registry.go">packages/tools/registry/registry.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/schema/postgres.sql">schema/postgres.sql</a></li></ol>
+            <ol class="reading-path"><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/surfaces/slack/gateway/gateway.go">packages/surfaces/slack/gateway/gateway.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/surfaces/slack/events/worker.go">packages/surfaces/slack/events/worker.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/surfaces/slack/agent/service.go">packages/surfaces/slack/agent/service.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agent/runtime/runner.go">packages/agent/runtime/runner.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agent/runtime/context.go">packages/agent/runtime/context.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agent/tool/tool.go">packages/agent/tool/tool.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/sessioninput/store.go">packages/sessioninput/store.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/profiles/hosted/profile.go">packages/profiles/hosted/profile.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/profiles/hosted/pgtranscript.go">packages/profiles/hosted/pgtranscript.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/schema/postgres.sql">schema/postgres.sql</a></li></ol>
           </section>
         </div>
       </div>

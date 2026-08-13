@@ -23,6 +23,8 @@ type Config struct {
 	Output               string            `toml:"output"`
 	MaxSteps             int               `toml:"max_steps"`
 	MaxOutputTokens      int               `toml:"max_output_tokens"`
+	MaxContextTokens     int               `toml:"max_context_tokens"`
+	AutocompactBuffer    int               `toml:"autocompact_buffer"`
 	Temperature          float64           `toml:"temperature"`
 	Timeout              time.Duration     `toml:"timeout"`
 	UnsafeAllowNoSandbox bool              `toml:"unsafe_allow_no_sandbox"`
@@ -40,7 +42,7 @@ type MCPServerConfig struct {
 }
 
 func DefaultConfig() Config {
-	return Config{Provider: "openai", Protocol: "openai", InputRouting: "steer", Output: "text", MaxSteps: 32, MaxOutputTokens: 16384, Timeout: 30 * time.Minute}
+	return Config{Provider: "openai", Protocol: "openai", InputRouting: "steer", Output: "text", MaxSteps: 32, MaxOutputTokens: 16384, MaxContextTokens: 96_000, AutocompactBuffer: 8_000, Timeout: 30 * time.Minute}
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -86,6 +88,9 @@ func (config Config) Validate() error {
 	}
 	if config.Output != "text" && config.Output != "jsonl" {
 		return fmt.Errorf("output must be text or jsonl")
+	}
+	if config.MaxContextTokens <= 0 || config.AutocompactBuffer < 0 || config.AutocompactBuffer >= config.MaxContextTokens {
+		return fmt.Errorf("max_context_tokens must be positive and autocompact_buffer must be smaller")
 	}
 	return nil
 }

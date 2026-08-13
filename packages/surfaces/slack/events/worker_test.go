@@ -19,6 +19,7 @@ type fakeInbox struct {
 	deadLetters int
 	dead        bool
 	pending     []eventinbox.Record
+	renewErr    error
 }
 
 func (f *fakeInbox) Start(context.Context, string, time.Duration) (bool, error) { return true, nil }
@@ -26,7 +27,29 @@ func (f *fakeInbox) Renew(context.Context, string, time.Duration) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.renews++
-	return nil
+	return f.renewErr
+}
+
+func TestWorkerCancelsHandlerWhenLeaseIsLost(t *testing.T) {
+	inbox := &fakeInbox{renewErr: eventinbox.ErrLeaseLost}
+	canceled := make(chan struct{})
+	w := &Worker{
+		Inbox: inbox, InboxLease: 15 * time.Millisecond, EventTimeout: time.Second,
+		Handler: func(ctx context.Context, _ string, _ slack.Event) error {
+			<-ctx.Done()
+			close(canceled)
+			return ctx.Err()
+		},
+	}
+	w.handle(context.Background(), job{eventID: "lease-lost"})
+	select {
+	case <-canceled:
+	default:
+		t.Fatal("handler was not canceled")
+	}
+	if inbox.completed != 0 || inbox.failed != 0 {
+		t.Fatalf("former owner finalized event: completed=%d failed=%d", inbox.completed, inbox.failed)
+	}
 }
 func (f *fakeInbox) Complete(context.Context, string) error {
 	f.mu.Lock()
@@ -66,6 +89,36 @@ func TestWorkerRenewsLeaseAndCompletes(t *testing.T) {
 	if inbox.renews == 0 {
 		t.Fatal("expected the worker to renew a long-running event lease")
 	}
+	if inbox.completed != 1 || inbox.failed != 0 {
+		t.Fatalf("completed=%d failed=%d", inbox.completed, inbox.failed)
+	}
+}
+
+type cancelingRenewInbox struct {
+	fakeInbox
+	started chan struct{}
+}
+
+func (f *cancelingRenewInbox) Renew(ctx context.Context, _ string, _ time.Duration) error {
+	select {
+	case <-f.started:
+	default:
+		close(f.started)
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestWorkerTreatsCanceledInflightRenewalAsNormalCompletion(t *testing.T) {
+	inbox := &cancelingRenewInbox{started: make(chan struct{})}
+	w := &Worker{
+		Inbox: inbox, InboxLease: 3 * time.Millisecond, EventTimeout: time.Second,
+		Handler: func(context.Context, string, slack.Event) error {
+			<-inbox.started
+			return nil
+		},
+	}
+	w.handle(context.Background(), job{eventID: "renew-canceled-after-handler"})
 	if inbox.completed != 1 || inbox.failed != 0 {
 		t.Fatalf("completed=%d failed=%d", inbox.completed, inbox.failed)
 	}

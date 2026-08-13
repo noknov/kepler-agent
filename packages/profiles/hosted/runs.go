@@ -3,7 +3,9 @@ package hosted
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -30,8 +32,33 @@ type RunSink struct {
 }
 
 type runState struct {
+	mu         sync.Mutex
 	modelStart time.Time
 	final      string
+}
+
+func (s *RunSink) LinkSlackMessage(ctx context.Context, turnID, channel, messageTS string) error {
+	if s == nil || s.Store == nil || turnID == "" || channel == "" || messageTS == "" {
+		return fmt.Errorf("complete Slack delivery link is required")
+	}
+	run, ok, err := s.Store.Get(ctx, turnID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("run %q not found", turnID)
+	}
+	run.SlackChannel = channel
+	run.SlackMessageTS = messageTS
+	return s.Store.Save(ctx, run)
+}
+
+func (s *RunSink) SlackMessageDelivered(ctx context.Context, turnID string) (bool, error) {
+	if s == nil || s.Store == nil || turnID == "" {
+		return false, nil
+	}
+	run, ok, err := s.Store.Get(ctx, turnID)
+	return ok && run.SlackChannel != "" && run.SlackMessageTS != "", err
 }
 
 func (s *RunSink) Publish(ctx context.Context, event transcript.Event) {
@@ -42,12 +69,23 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 	if s == nil || s.Store == nil || event.TurnID == "" {
 		return
 	}
+	if event.Type == transcript.ModelStreamed {
+		return
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.active == nil {
 		s.active = make(map[string]*runState)
 	}
 	state := s.active[event.TurnID]
+	if event.Type == transcript.TurnStarted && state == nil {
+		state = &runState{}
+		s.active[event.TurnID] = state
+	}
+	s.mu.Unlock()
+	if state != nil {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+	}
 	switch event.Type {
 	case transcript.TurnStarted:
 		var metadata struct {
@@ -66,9 +104,12 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		}
 		existing.UserID, existing.Channel, existing.ThreadTS = metadata.UserID, metadata.Scope["channel"], metadata.Scope["thread_ts"]
 		existing.Provider, existing.Model, existing.Status = s.Provider, modelName, "running"
-		_ = s.Store.Save(ctx, existing)
-		state = &runState{}
-		s.active[event.TurnID] = state
+		if err := s.saveRun(ctx, existing); err != nil {
+			log.Printf("project agent run start %s: %v", event.TurnID, err)
+		}
+		if liveMetrics && s.Metrics != nil {
+			s.Metrics.Request()
+		}
 	case transcript.ModelRequested:
 		if state != nil {
 			state.modelStart = event.Timestamp
@@ -85,7 +126,9 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		usage := recordedUsage(metadata.Usage)
 		duration := event.Timestamp.Sub(state.modelStart)
 		step := runs.Step{ID: event.ID, SpanID: event.ID, Type: "llm", Name: s.modelFor(ctx, event.TurnID), StartedAt: state.modelStart, DurationMS: duration.Milliseconds(), Usage: usage, FinishReason: string(metadata.FinishReason), EstimatedCostUSD: s.Rates.EstimateUSD(usage)}
-		s.appendStep(ctx, event.TurnID, step)
+		if err := s.appendStep(ctx, event.TurnID, step); err != nil {
+			log.Printf("project model step %s: %v", event.ID, err)
+		}
 		if liveMetrics && s.Metrics != nil {
 			s.Metrics.LLMCall(usage, duration, nil)
 		}
@@ -95,7 +138,9 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		}
 		duration := event.Timestamp.Sub(state.modelStart)
 		step := runs.Step{ID: event.ID, SpanID: event.ID, Type: "llm", Name: s.modelFor(ctx, event.TurnID), StartedAt: state.modelStart, DurationMS: duration.Milliseconds(), Error: event.Error, Metadata: rawMetadata(event.Metadata)}
-		s.appendStep(ctx, event.TurnID, step)
+		if err := s.appendStep(ctx, event.TurnID, step); err != nil {
+			log.Printf("project failed model step %s: %v", event.ID, err)
+		}
 		if liveMetrics && s.Metrics != nil {
 			s.Metrics.LLMCall(llm.Usage{}, duration, fmt.Errorf("%s", event.Error))
 		}
@@ -112,7 +157,9 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		if event.Type == transcript.ToolCallFailed {
 			step.Error = toolError(event)
 		}
-		s.appendStep(ctx, event.TurnID, step)
+		if err := s.appendStep(ctx, event.TurnID, step); err != nil {
+			log.Printf("project tool step %s: %v", event.ID, err)
+		}
 		if liveMetrics && s.Metrics != nil {
 			var stepErr error
 			if step.Error != "" {
@@ -128,9 +175,12 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		if !ok {
 			return
 		}
+		run.Termination = event.Status
 		run.Status = "completed"
 		if event.Status == string(agentruntimeTerminationPendingInput) {
 			run.Status = "pending_user"
+		} else if event.Type == transcript.TurnCompleted && event.Status != "" && event.Status != "completed" {
+			run.Status = "incomplete"
 		}
 		if event.Type == transcript.TurnCanceled {
 			run.Status = "canceled"
@@ -146,9 +196,30 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		}
 		recomputeRun(&run)
 		run.Quality = runs.Score(run)
-		_ = s.Store.Save(ctx, run)
+		if err := s.saveRun(ctx, run); err != nil {
+			log.Printf("project agent run terminal %s: %v", event.TurnID, err)
+		}
+		if liveMetrics && s.Metrics != nil {
+			s.Metrics.Latency(time.Duration(run.DurationMS) * time.Millisecond)
+		}
+		s.mu.Lock()
 		delete(s.active, event.TurnID)
+		s.mu.Unlock()
 	}
+}
+
+func (s *RunSink) saveRun(ctx context.Context, run runs.Run) error {
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err = s.Store.Save(ctx, run); err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return errors.Join(err, ctx.Err())
+		}
+		time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
+	}
+	return err
 }
 
 // Recover replays transcript events for runs left in running state. Projection
@@ -157,7 +228,10 @@ func (s *RunSink) Recover(ctx context.Context, pool *pgxpool.Pool) error {
 	if s == nil || pool == nil {
 		return nil
 	}
-	rows, err := pool.Query(ctx, `SELECT t.payload FROM agent_transcript_events t JOIN agent_runs r ON r.id=t.turn_id WHERE r.payload->>'status'='running' ORDER BY t.turn_id,t.sequence`)
+	rows, err := pool.Query(ctx, `SELECT t.payload FROM agent_transcript_events t
+LEFT JOIN agent_runs r ON r.id=t.turn_id
+WHERE t.turn_id<>'' AND (r.id IS NULL OR r.payload->>'status'='running')
+ORDER BY t.turn_id,t.sequence`)
 	if err != nil {
 		return err
 	}
@@ -180,23 +254,32 @@ type terminationMarker string
 
 const agentruntimeTerminationPendingInput terminationMarker = "pending_input"
 
-func (s *RunSink) appendStep(ctx context.Context, runID string, step runs.Step) {
+func (s *RunSink) appendStep(ctx context.Context, runID string, step runs.Step) error {
 	if store, ok := s.Store.(runs.StepStore); ok {
-		_ = store.AppendStep(ctx, runID, step)
-	} else if run, exists, _ := s.Store.Get(ctx, runID); exists {
+		if err := store.AppendStep(ctx, runID, step); err != nil {
+			return err
+		}
+	} else if run, exists, err := s.Store.Get(ctx, runID); err != nil {
+		return err
+	} else if exists {
 		seen := false
 		for _, existing := range run.Steps {
 			seen = seen || existing.ID == step.ID
 		}
 		if !seen {
 			run.Steps = append(run.Steps, step)
-			_ = s.Store.Save(ctx, run)
+			if err := s.saveRun(ctx, run); err != nil {
+				return err
+			}
 		}
 	}
-	if run, exists, _ := s.Store.Get(ctx, runID); exists {
+	if run, exists, err := s.Store.Get(ctx, runID); err != nil {
+		return err
+	} else if exists {
 		recomputeRun(&run)
-		_ = s.Store.Save(ctx, run)
+		return s.saveRun(ctx, run)
 	}
+	return nil
 }
 
 func (s *RunSink) modelFor(ctx context.Context, runID string) string {
@@ -224,7 +307,7 @@ func recomputeRun(run *runs.Run) {
 }
 
 func recordedUsage(value model.Usage) llm.Usage {
-	return llm.Usage{PromptTokens: int(value.InputTokens), CompletionTokens: int(value.OutputTokens), TotalTokens: int(value.InputTokens + value.OutputTokens), CacheReadInputTokens: int(value.CacheReadTokens), CacheCreationInputTokens: int(value.CacheCreatedTokens)}
+	return llm.Usage{PromptTokens: int(value.InputTokens), CompletionTokens: int(value.OutputTokens), TotalTokens: int(value.InputTokens + value.OutputTokens), CacheReadInputTokens: int(value.CacheReadTokens), CacheCreationInputTokens: int(value.CacheCreatedTokens), CacheIncludedInPrompt: value.CacheTokensIncludedInInput}
 }
 
 func rawMetadata(raw json.RawMessage) map[string]any {

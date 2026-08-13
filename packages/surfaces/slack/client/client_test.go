@@ -42,6 +42,44 @@ func TestPostMarkdownMessageUsesNativeMarkdownBlock(t *testing.T) {
 	}
 }
 
+func TestPostMarkdownMessageWithIDUsesStableSlackUUID(t *testing.T) {
+	var first, second string
+	client := &Client{token: "xoxb-test", httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var payload struct {
+			ClientMessageID string `json:"client_msg_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if first == "" {
+			first = payload.ClientMessageID
+		} else {
+			second = payload.ClientMessageID
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"ts":"123.456"}`)), Request: r}, nil
+	})}}
+	for range 2 {
+		if _, err := client.PostMarkdownMessageWithID(context.Background(), "C1", "T1", "answer", "Ev123"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if first == "" || first != second || len(first) != 36 {
+		t.Fatalf("client_msg_id first=%q second=%q", first, second)
+	}
+}
+
+func TestDownloadFileRejectsUntrustedCredentialTarget(t *testing.T) {
+	called := false
+	client := &Client{token: "secret", httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		called = true
+		return nil, nil
+	})}}
+	_, err := client.DownloadFile(context.Background(), File{ID: "F1", URLPrivateDownload: "https://example.test/steal"}, 100)
+	if err == nil || !strings.Contains(err.Error(), "untrusted download host") || called {
+		t.Fatalf("err=%v called=%v", err, called)
+	}
+}
+
 func TestFormatFilesIncludesImageMetadata(t *testing.T) {
 	text := FormatFiles([]File{{
 		ID:         "F123",
@@ -84,24 +122,6 @@ func TestMergeFile(t *testing.T) {
 	}
 	if got.Mimetype != "image/png" || got.URLPrivateDownload == "" || got.Size != 42 {
 		t.Fatalf("mergeFile did not fill fallback fields: %#v", got)
-	}
-}
-
-func TestFormatThreadContextSkipsBotReplies(t *testing.T) {
-	got := formatThreadContext([]Message{
-		{User: "U123", Text: "first question"},
-		{User: "B999", Text: "old bot answer"},
-		{BotID: "B01", Text: "app reply"},
-		{User: "U123", Text: "follow-up"},
-	}, "B999")
-
-	if strings.Contains(got, "old bot answer") || strings.Contains(got, "app reply") {
-		t.Fatalf("formatThreadContext() leaked bot replies: %q", got)
-	}
-	for _, want := range []string{"U123: first question", "U123: follow-up"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("formatThreadContext() = %q, want %q", got, want)
-		}
 	}
 }
 

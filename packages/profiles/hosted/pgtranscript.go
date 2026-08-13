@@ -35,9 +35,18 @@ func (s PGTranscript) Append(ctx context.Context, event transcript.Event) (trans
 		return transcript.Event{}, err
 	}
 	payload = bytes.ReplaceAll(payload, []byte(`\u0000`), nil)
-	_, err = tx.Exec(ctx, `INSERT INTO agent_transcript_events(event_id,session_id,turn_id,sequence,type,status,at,payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(event_id) DO NOTHING`, event.ID, key, event.TurnID, event.Sequence, string(event.Type), event.Status, event.Timestamp, payload)
+	tag, err := tx.Exec(ctx, `INSERT INTO agent_transcript_events(event_id,session_id,turn_id,sequence,type,status,at,payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(event_id) DO NOTHING`, event.ID, key, event.TurnID, event.Sequence, string(event.Type), event.Status, event.Timestamp, payload)
 	if err != nil {
 		return transcript.Event{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		var existingPayload []byte
+		if err := tx.QueryRow(ctx, `SELECT payload FROM agent_transcript_events WHERE event_id=$1`, event.ID).Scan(&existingPayload); err != nil {
+			return transcript.Event{}, err
+		}
+		if err := json.Unmarshal(existingPayload, &event); err != nil {
+			return transcript.Event{}, err
+		}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return transcript.Event{}, err

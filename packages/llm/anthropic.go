@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -123,9 +124,6 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 		return Response{}, err
 	}
 
-	// Use a separate HTTP client for streaming without the global timeout.
-	// Streaming connections stay open for the duration of generation.
-	streamClient := &http.Client{}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicMessagesURL(c.baseURL), bytes.NewReader(payload))
 	if err != nil {
 		return Response{}, err
@@ -134,7 +132,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 	setAnthropicAuthHeaders(httpReq.Header, c.apiKey, c.flavor)
 
-	resp, err := streamClient.Do(httpReq)
+	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return Response{}, err
 	}
@@ -157,9 +155,23 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 	inTextBlock := false
 	toolBlocks := map[int]*ToolCall{}
 	currentBlockIndex := -1
+	var streamErr error
 
 	err = readSSE(resp.Body, func(ev sseEvent) bool {
 		switch ev.Event {
+		case "error":
+			var failure struct {
+				Error struct {
+					Type    string `json:"type"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if json.Unmarshal([]byte(ev.Data), &failure) == nil && failure.Error.Message != "" {
+				streamErr = fmt.Errorf("anthropic stream %s: %s", failure.Error.Type, failure.Error.Message)
+			} else {
+				streamErr = fmt.Errorf("anthropic stream error")
+			}
+			return false
 		case "content_block_start":
 			var block struct {
 				Index        int `json:"index"`
@@ -282,6 +294,9 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 		}
 		return true
 	})
+	if streamErr != nil {
+		return Response{}, streamErr
+	}
 	if err != nil {
 		return Response{}, err
 	}

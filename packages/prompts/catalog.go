@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/noknov/slack-copilot-agent/packages/frontmatter"
 	"sync"
 )
 
@@ -533,60 +535,21 @@ func readSkillsDirFS(fsys fs.FS, dir string) []Skill {
 func parseSkill(fallbackName, content string) Skill {
 	name := fallbackName
 	description := ""
-	if strings.HasPrefix(content, "---\n") {
-		if end := strings.Index(content[len("---\n"):], "\n---"); end >= 0 {
-			frontmatter := content[len("---\n") : len("---\n")+end]
-			lines := strings.Split(frontmatter, "\n")
-			for i := 0; i < len(lines); i++ {
-				line := lines[i]
-				// Skip indented lines (YAML arrays, nested maps) and
-				// bare list items that belong to a preceding key.
-				if len(line) > 0 && (line[0] == ' ' || line[0] == '\t' || line[0] == '-') {
-					continue
-				}
-				key, value, ok := strings.Cut(line, ":")
-				if !ok {
-					continue
-				}
-				value = strings.Trim(strings.TrimSpace(value), `"'`)
-				switch strings.TrimSpace(key) {
-				case "name":
-					if value != "" {
-						name = value
-					}
-				case "description":
-					if value == "|" || value == ">" {
-						block, next := readFrontmatterBlock(lines, i+1)
-						i = next - 1
-						description = block
-					} else {
-						description = value
-					}
-				}
-			}
+	var header struct {
+		Name        string `yaml:"name"`
+		Description string `yaml:"description"`
+	}
+	if _, found, err := frontmatter.Decode(content, &header); err == nil && found {
+		if strings.TrimSpace(header.Name) != "" {
+			name = strings.TrimSpace(header.Name)
 		}
+		description = strings.TrimSpace(header.Description)
 	}
 	return Skill{
 		Name:        name,
 		Description: description,
 		Content:     content,
 	}
-}
-
-func readFrontmatterBlock(lines []string, start int) (string, int) {
-	var out []string
-	for i := start; i < len(lines); i++ {
-		line := lines[i]
-		if strings.TrimSpace(line) == "" {
-			out = append(out, "")
-			continue
-		}
-		if line[0] != ' ' && line[0] != '\t' {
-			return strings.TrimSpace(strings.Join(out, "\n")), i
-		}
-		out = append(out, strings.TrimSpace(line))
-	}
-	return strings.TrimSpace(strings.Join(out, "\n")), len(lines)
 }
 
 func readJSONFS[T any](fsys fs.FS, path string, out *T) {

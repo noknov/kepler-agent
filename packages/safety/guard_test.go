@@ -213,3 +213,16 @@ func TestWorkspacePolicyRejectsSensitivePath(t *testing.T) {
 		t.Fatal("expected sensitive path to be rejected")
 	}
 }
+
+func TestWorkspacePolicyRejectsSymlinkToSensitivePathInsideWorkspace(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("TOKEN=secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, ".env"), filepath.Join(root, "notes.txt")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := (WorkspacePolicy{Roots: []string{root}}).ResolveReadableFile("notes.txt"); err == nil {
+		t.Fatal("expected symlink to sensitive in-workspace target to be rejected")
+	}
+}

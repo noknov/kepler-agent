@@ -79,7 +79,7 @@ func TestProgressSummarizerIncludesToolDescriptionAsOperationSemantics(t *testin
 
 func TestToolStepProjectsSecondarySummaryWithoutPrimaryNarration(t *testing.T) {
 	messenger := &fakeMessenger{}
-	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T", Text: "查一下支付服务"})
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T", Text: "查一下支付服务", Locale: "zh-CN"})
 	stream.progress = &ProgressSummarizer{Client: &progressModel{response: `{"action":"查询","target":"支付服务部署记录"}`}}
 	stream.Start()
 	stream.Lifecycle(transcript.Event{Type: transcript.ModelRequested})

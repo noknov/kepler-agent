@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	agentruntime "github.com/noknov/slack-copilot-agent/packages/agent/runtime"
@@ -14,6 +15,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/profiles/hosted"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/session"
+	"github.com/noknov/slack-copilot-agent/packages/sessioninput"
 	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/conversation"
 )
 
@@ -32,26 +34,82 @@ type fakeMessenger struct {
 	loading  [][]string
 }
 
-type memoryQueue struct {
-	mu    sync.Mutex
-	items map[string][]slackconversation.Request
+type memoryInputs struct {
+	mu      sync.Mutex
+	items   []sessioninput.Item
+	claimed map[string]string
+	acked   map[string]bool
 }
 
-func (q *memoryQueue) Enqueue(_ context.Context, session string, request slackconversation.Request) error {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.items == nil {
-		q.items = make(map[string][]slackconversation.Request)
+func (s *memoryInputs) Enqueue(_ context.Context, item sessioninput.Item) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, existing := range s.items {
+		if existing.ID == item.ID {
+			return nil
+		}
 	}
-	q.items[session] = append(q.items[session], request)
+	item.Sequence = int64(len(s.items) + 1)
+	s.items = append(s.items, item)
 	return nil
 }
-func (q *memoryQueue) Drain(_ context.Context, session string) ([]slackconversation.Request, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	out := append([]slackconversation.Request(nil), q.items[session]...)
-	delete(q.items, session)
+func (s *memoryInputs) Claim(_ context.Context, session string, kind sessioninput.Kind, owner string, _ time.Duration, limit int) ([]sessioninput.Item, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.claimed == nil {
+		s.claimed = make(map[string]string)
+	}
+	var out []sessioninput.Item
+	for _, item := range s.items {
+		if item.SessionID != session || item.Kind != kind || s.acked[item.ID] || (s.claimed[item.ID] != "" && s.claimed[item.ID] != owner) {
+			continue
+		}
+		s.claimed[item.ID] = owner
+		out = append(out, item)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
 	return out, nil
+}
+func (s *memoryInputs) Ack(_ context.Context, id, owner string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.claimed[id] != owner {
+		return sessioninput.ErrClaimLost
+	}
+	if s.acked == nil {
+		s.acked = make(map[string]bool)
+	}
+	s.acked[id] = true
+	return nil
+}
+func (s *memoryInputs) Release(_ context.Context, id, owner string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.claimed[id] != owner {
+		return sessioninput.ErrClaimLost
+	}
+	delete(s.claimed, id)
+	return nil
+}
+func (*memoryInputs) PendingSessions(context.Context, sessioninput.Kind, int) ([]string, error) {
+	return nil, nil
+}
+func (*memoryInputs) PromoteExpiredSteering(context.Context, time.Duration) (int64, error) {
+	return 0, nil
+}
+func (s *memoryInputs) PromoteSteering(_ context.Context, sessionID string) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var changed int64
+	for index := range s.items {
+		if s.items[index].SessionID == sessionID && s.items[index].Kind == sessioninput.KindSteering && !s.acked[s.items[index].ID] {
+			s.items[index].Kind = sessioninput.KindQueue
+			changed++
+		}
+	}
+	return changed, nil
 }
 
 func (m *fakeMessenger) PostMessage(_ context.Context, _, _, text string) (string, error) {
@@ -65,9 +123,6 @@ func (m *fakeMessenger) PostMarkdownMessage(_ context.Context, _, _, text string
 	defer m.mu.Unlock()
 	m.posts = append(m.posts, text)
 	return "post", nil
-}
-func (m *fakeMessenger) ThreadContext(context.Context, string, string, int) string {
-	return "prior Slack context"
 }
 func (m *fakeMessenger) SetThreadStatus(_ context.Context, _, _, status string, loading []string) error {
 	m.mu.Lock()
@@ -90,7 +145,8 @@ func TestServiceRunsHostedHarnessAndPostsFormattedAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	service.Agent.Runtime = runner
-	if !service.HandleMention(context.Background(), slackconversation.Request{EventID: "event-1", UserID: "U1", Channel: "C1", ThreadTS: "T1", Text: "question"}) {
+	accepted, handleErr := service.HandleMention(context.Background(), slackconversation.Request{EventID: "event-1", UserID: "U1", Channel: "C1", ThreadTS: "T1", Text: "question"})
+	if handleErr != nil || !accepted {
 		t.Fatal("request was not handled")
 	}
 	messenger.mu.Lock()
@@ -118,10 +174,12 @@ func TestHandleReplyOnlyConsumesPendingInputFromItsOwner(t *testing.T) {
 	metadata := json.RawMessage(`{"user_id":"U1"}`)
 	_, _ = store.Append(context.Background(), transcript.Event{ID: "start", SessionID: sessionID, TurnID: "first", Type: transcript.TurnStarted, Metadata: metadata})
 	_, _ = store.Append(context.Background(), transcript.Event{ID: "done", SessionID: sessionID, TurnID: "first", Type: transcript.TurnCompleted, Status: string(agentruntime.TerminationPendingInput)})
-	if service.HandleReply(context.Background(), slackconversation.Request{EventID: "wrong", UserID: "U2", Channel: "C", ThreadTS: "T", Text: "production"}) {
+	accepted, err := service.HandleReply(context.Background(), slackconversation.Request{EventID: "wrong", UserID: "U2", Channel: "C", ThreadTS: "T", Text: "production"})
+	if err != nil || accepted {
 		t.Fatal("reply from a different user was consumed")
 	}
-	if !service.HandleReply(context.Background(), slackconversation.Request{EventID: "right", UserID: "U1", Channel: "C", ThreadTS: "T", Text: "production"}) {
+	accepted, err = service.HandleReply(context.Background(), slackconversation.Request{EventID: "right", UserID: "U1", Channel: "C", ThreadTS: "T", Text: "production"})
+	if err != nil || !accepted {
 		t.Fatal("pending reply from the owner was ignored")
 	}
 }
@@ -194,6 +252,28 @@ func TestCompletePostsFinalWithoutStartingEmptyStream(t *testing.T) {
 	}
 }
 
+type contextCheckingMessenger struct{ err error }
+
+func (m *contextCheckingMessenger) PostMessage(ctx context.Context, _, _, _ string) (string, error) {
+	m.err = ctx.Err()
+	return "post", m.err
+}
+
+func (m *contextCheckingMessenger) PostMarkdownMessage(ctx context.Context, _, _, _ string) (string, error) {
+	m.err = ctx.Err()
+	return "post", m.err
+}
+
+func TestFailureDeliveryOutlivesCanceledRunContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	messenger := &contextCheckingMessenger{}
+	stream := newSlackStream(ctx, messenger, slackconversation.Request{Channel: "C", ThreadTS: "T"})
+	if _, err := stream.Fail("failed", false); err != nil || messenger.err != nil {
+		t.Fatalf("failure delivery inherited canceled run: err=%v context=%v", err, messenger.err)
+	}
+}
+
 func TestRenderAnswerUsesStructuredCitations(t *testing.T) {
 	message := model.Message{Role: model.RoleAssistant, Content: []model.Content{{
 		Type: model.ContentText,
@@ -210,17 +290,18 @@ func TestRenderAnswerUsesStructuredCitations(t *testing.T) {
 }
 
 func TestQueuedInputSurvivesServiceReplacement(t *testing.T) {
-	queue := &memoryQueue{}
+	inputs := &memoryInputs{}
 	first := New(hosted.Agent{}, &fakeMessenger{}, safety.PromptPolicy{}, safety.Redactor{}, nil)
-	first.Queue = queue
-	active := &activeRun{}
+	first.Inputs = inputs
 	request := slackconversation.Request{EventID: "event-queued", UserID: "U1", Text: "follow up"}
-	first.enqueue("session", active, request)
+	if err := first.persistInput(context.Background(), "session", sessioninput.KindQueue, request); err != nil {
+		t.Fatal(err)
+	}
 
 	second := New(hosted.Agent{}, &fakeMessenger{}, safety.PromptPolicy{}, safety.Redactor{}, nil)
-	second.Queue = queue
-	queued := second.drainQueue("session", nil)
-	if len(queued) != 1 || queued[0].EventID != request.EventID {
-		t.Fatalf("queued=%+v", queued)
+	second.Inputs = inputs
+	queued, err := second.claimNextQueue(context.Background(), "session")
+	if err != nil || queued == nil || queued.EventID != request.EventID {
+		t.Fatalf("queued=%+v err=%v", queued, err)
 	}
 }

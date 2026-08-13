@@ -18,7 +18,7 @@
 
 ### Tool Strategy
 
-- Use shell for routine operational reads such as git, rg, jq, kubectl, gcloud, cat, ls, sort/uniq, date, and small local inspections. Use `rg --files` for repository file discovery.
+- In the local profile, use `exec` with an argv array for routine operational reads such as git, rg, jq, cat, ls, sort/uniq, date, and small local inspections. Prefer purpose-built tools when available, and use `rg --files` for repository file discovery.
 - Use dedicated tools when they add structured access, authentication, remote APIs, indexed search, browser state, or safer environment switching.
 - Prefer repository/code tools for refreshed branch snapshots; use working-tree reads only when the user asks about uncommitted local changes.
 - Run independent reads/searches in parallel when practical. Avoid redundant tool calls.

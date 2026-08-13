@@ -36,5 +36,12 @@ func readSSE(r io.Reader, fn func(ev sseEvent) bool) error {
 			data.WriteString(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 		}
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	// A final blank line is conventional but not required for a clean EOF.
+	if data.Len() > 0 {
+		fn(sseEvent{Event: event.String(), Data: data.String()})
+	}
+	return nil
 }

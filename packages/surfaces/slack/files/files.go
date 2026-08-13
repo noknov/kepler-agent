@@ -12,9 +12,12 @@ import (
 )
 
 const (
-	MaxImageBytes   = 8 << 20
-	MaxPDFBytes     = 16 << 20
-	MaxPDFTextChars = slack.DefaultMaxPDFExtractChars
+	MaxAttachedFiles   = 20
+	MaxImageCount      = 4
+	MaxImageBytes      = 8 << 20
+	MaxImageTotalBytes = 16 << 20
+	MaxPDFBytes        = 16 << 20
+	MaxPDFTextChars    = slack.DefaultMaxPDFExtractChars
 )
 
 type Downloader interface {
@@ -34,7 +37,15 @@ func Append(text string, files []slack.File) string {
 }
 
 func Attach(ctx context.Context, client Downloader, text string, files []slack.File) (string, []llm.ContentPart) {
+	omitted := 0
+	if len(files) > MaxAttachedFiles {
+		omitted = len(files) - MaxAttachedFiles
+		files = files[:MaxAttachedFiles]
+	}
 	text = Append(text, files)
+	if omitted > 0 {
+		text = strings.TrimSpace(text) + fmt.Sprintf("\n\n[%d additional Slack files omitted; attachment limit is %d]", omitted, MaxAttachedFiles)
+	}
 	if excerpt := PDFExcerpts(ctx, client, files); excerpt != "" {
 		text = strings.TrimSpace(text)
 		if text == "" {
@@ -87,7 +98,11 @@ func ImageParts(ctx context.Context, client Downloader, files []slack.File) []ll
 		return nil
 	}
 	parts := make([]llm.ContentPart, 0, len(files))
+	totalBytes := 0
 	for _, file := range files {
+		if len(parts) >= MaxImageCount {
+			break
+		}
 		mime := NormalizedImageMIME(file)
 		if mime == "" {
 			continue
@@ -96,7 +111,15 @@ func ImageParts(ctx context.Context, client Downloader, files []slack.File) []ll
 			log.Printf("skip slack image %s: size %d exceeds limit %d", file.ID, file.Size, MaxImageBytes)
 			continue
 		}
-		data, err := client.DownloadFile(ctx, file, MaxImageBytes)
+		remaining := MaxImageTotalBytes - totalBytes
+		if remaining <= 0 {
+			break
+		}
+		maxBytes := MaxImageBytes
+		if remaining < maxBytes {
+			maxBytes = remaining
+		}
+		data, err := client.DownloadFile(ctx, file, int64(maxBytes))
 		if err != nil {
 			log.Printf("skip slack image %s: %v", file.ID, err)
 			continue
@@ -109,6 +132,7 @@ func ImageParts(ctx context.Context, client Downloader, files []slack.File) []ll
 		if actualMIME != mime {
 			log.Printf("slack image %s declared %s but detected %s", file.ID, mime, actualMIME)
 		}
+		totalBytes += len(data)
 		dataURL := "data:" + actualMIME + ";base64," + base64.StdEncoding.EncodeToString(data)
 		parts = append(parts, llm.ImageURLPart(dataURL))
 	}

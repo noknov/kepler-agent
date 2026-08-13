@@ -1,6 +1,7 @@
 package hosted
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -15,7 +16,6 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/observability"
 	"github.com/noknov/slack-copilot-agent/packages/providers"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
 )
 
 // Profile owns the complete hosted-agent composition. Product entrypoints
@@ -34,8 +34,9 @@ type ProfileDependencies struct {
 	Tools      *tool.Catalog
 	Postgres   *pgxpool.Pool
 	Redis      *redisclient.Client
-	ToolSpills registry.ToolSpillStore
+	ToolSpills ToolSpillStore
 	Events     transcript.Sink
+	Metrics    *observability.Recorder
 }
 
 func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
@@ -58,8 +59,9 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		}
 	}
 	client := model.Client(primary)
-	compactClient, compactModel := client, cfg.Sessions.CompactModel
+	compactClient, compactModel := model.Client(observedModel{Client: client, Metrics: deps.Metrics}), cfg.Sessions.CompactModel
 	if secondary != nil {
+		secondary = observedModel{Client: secondary, Metrics: deps.Metrics}
 		compactClient = secondary
 		if compactModel == "" {
 			compactModel = secondaryModel
@@ -70,12 +72,12 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	}
 	runner, err := agentruntime.New(agentruntime.Config{
 		Model: cfg.LLM.Model, ReasoningEffort: cfg.LLM.Thinking, Temperature: cfg.LLM.Temperature,
-		MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxSteps: cfg.Tools.AgentMaxSteps,
+		MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxSteps: cfg.Tools.AgentMaxSteps, MaxModelRetries: 2,
 		Context:     agentruntime.ContextConfig{MaxTokens: cfg.Sessions.MaxContextTokens, ReserveTokens: cfg.Sessions.AutocompactBuffer},
 		ToolResults: agentruntime.ToolResultConfig{MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)},
 	}, agentruntime.Dependencies{
 		Model: client, Tools: catalog, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}, Transcript: PGTranscript{Pool: deps.Postgres}, Events: deps.Events,
-		Compactor: agentruntime.ModelCompactor{Client: compactClient, Model: compactModel}, Artifacts: artifacts,
+		Compactor: agentruntime.ModelCompactor{Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer}, Artifacts: artifacts,
 	})
 	if err != nil {
 		return Profile{}, err
@@ -86,6 +88,20 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		Redactor: safety.Redactor{WorkspaceRoots: cfg.Security.WorkspaceRoots}, Tools: catalog,
 		Rates: CostRates(cfg), SecondaryModel: secondary, SecondaryModelName: secondaryModel,
 	}, nil
+}
+
+type observedModel struct {
+	Client  model.Client
+	Metrics *observability.Recorder
+}
+
+func (c observedModel) Generate(ctx context.Context, request model.Request, sink model.EventSink) (model.Response, error) {
+	started := time.Now()
+	response, err := c.Client.Generate(ctx, request, sink)
+	if c.Metrics != nil {
+		c.Metrics.LLMCall(recordedUsage(response.Usage), time.Since(started), err)
+	}
+	return response, err
 }
 
 func operatorAllowlist(names []string) map[string]bool {

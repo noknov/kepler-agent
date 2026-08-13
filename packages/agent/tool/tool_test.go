@@ -12,8 +12,8 @@ func (fakeTool) Execute(context.Context, Call) (Result, error) { return TextResu
 
 func TestCatalogOnlyExposesEagerToolsInitially(t *testing.T) {
 	catalog, err := NewCatalog(
-		fakeTool{descriptor: Descriptor{Name: "eager", Exposure: ExposureEager}},
-		fakeTool{descriptor: Descriptor{Name: "later", Exposure: ExposureDeferred}},
+		fakeTool{descriptor: Descriptor{Name: "eager", Effects: []Effect{EffectRead}, Exposure: ExposureEager}},
+		fakeTool{descriptor: Descriptor{Name: "later", Effects: []Effect{EffectRead}, Exposure: ExposureDeferred}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -33,5 +33,11 @@ func TestCatalogOnlyExposesEagerToolsInitially(t *testing.T) {
 	}
 	if _, ok := catalog.GetActive("s2", "later"); ok {
 		t.Fatal("inactive deferred tool was executable")
+	}
+}
+
+func TestCatalogRejectsToolWithoutEffects(t *testing.T) {
+	if _, err := NewCatalog(fakeTool{descriptor: Descriptor{Name: "implicit"}}); err == nil {
+		t.Fatal("expected missing effects to be rejected")
 	}
 }

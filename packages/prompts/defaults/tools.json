@@ -201,12 +201,6 @@
       "max_lines": "Maximum lines to return per page. Defaults to 200, max 500."
     }
   },
-  "shell": {
-    "description": "Run a read-only shell command for operational inspection. Use this shell tool for read-only GitHub CLI commands, including gh api with GET/HEAD, or activate structured github-* tools with tool_search. Supports pipelines with | for idiomatic one-liners like \"kubectl get pods -n mt-prod | grep Crash\" or \"git log --oneline | head -20\". Allowed programs: git (read-only subcommands), kubectl (get/describe/logs/top/auth can-i/rollout status/history/config/explain/version), gcloud (logging read, container/run/compute/artifacts/monitoring list/describe), gh (run/pr/issue/workflow/search list and view, api GET/HEAD), helm (list/status/history/get/show), plus Unix utilities (grep, rg, jq, yq, cat, ls, head, tail, wc, sort, uniq, cut, tr, diff, date, echo, printf, df, du, ps, uname, hostname, which). Use `rg --files` for repository file discovery; `find`, `curl/wget`, `awk/sed`, interpreters, xargs, tee, shell expansion, redirection, and write operations are not supported. Shell meta-operators && ; & > >> < are blocked; | only.",
-    "parameters": {
-      "command": "The shell command to run. Supports pipelines. Examples: \"kubectl get pods -n mt-prod | grep -v Running\", \"gcloud logging read 'severity>=ERROR' --project=my-proj --freshness=1h --limit=20\", \"git -C /path/to/repo log --oneline -20\", \"helm list -n default | grep -v DEPLOYED\"."
-    }
-  },
   "skills-load": {
     "description": "Load the full instructions for an available skill by name. Call this before following that skill's workflow. Do not assume skill instructions until this tool returns them.",
     "parameters": {

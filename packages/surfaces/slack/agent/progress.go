@@ -73,7 +73,7 @@ func (s *slackStream) ToolStep(calls []model.ToolCall) {
 	s.statusEpoch++
 	epoch := s.statusEpoch
 	s.mu.Unlock()
-	cjk := slackconversation.IsCJK(s.req.Text)
+	cjk := slackconversation.IsChineseLocale(s.req.Locale)
 	go func() {
 		text, err := s.progress.Summarize(s.ctx, s.req.Text, pending, cjk)
 		if err != nil || text == "" {

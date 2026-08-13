@@ -37,10 +37,14 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	if request.Input.Role != model.RoleUser {
 		return TurnResult{}, fmt.Errorf("turn input must have user role")
 	}
+	if request.Input.ID == "" {
+		request.Input.ID = "input:" + request.TurnID
+	}
 	request.Scope.SessionID = request.SessionID
 	request.Scope.TurnID = request.TurnID
 	unlock := r.lockSession(request.SessionID)
 	defer unlock()
+	defer closeInputSource(request.Steering)
 	defer r.deps.Tools.EndTurn(request.SessionID, request.TurnID)
 
 	result := TurnResult{SessionID: request.SessionID, TurnID: request.TurnID}
@@ -48,9 +52,26 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	if err != nil {
 		return result, err
 	}
+	if replayed, replayErr, ok := completedTurn(events, request.TurnID); ok {
+		return replayed, replayErr
+	}
 	if len(events) == 0 {
 		if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, Type: transcript.SessionStarted}); err != nil {
 			return result, err
+		}
+		for index := range request.History {
+			message := request.History[index]
+			if message.Role != model.RoleUser && message.Role != model.RoleAssistant {
+				message.Role = model.RoleUser
+			}
+			eventType := transcript.UserInput
+			if message.Role == model.RoleAssistant {
+				eventType = transcript.AssistantMessage
+			}
+			metadata, _ := json.Marshal(map[string]string{"source": "imported_history"})
+			if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, Type: eventType, Message: &message, Metadata: metadata}); err != nil {
+				return result, err
+			}
 		}
 	}
 	modelName := request.Model
@@ -61,7 +82,8 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.TurnStarted, Status: "running", Metadata: turnMetadata}); err != nil {
 		return result, err
 	}
-	if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.UserInput, Message: &request.Input}); err != nil {
+	durableInput := durableUserInput(request.Input)
+	if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.UserInput, Message: &durableInput}); err != nil {
 		return result, err
 	}
 
@@ -115,6 +137,12 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 			} else if count > 0 {
 				continue
 			}
+			closeInputSource(request.Steering)
+			if count, appendErr := r.appendSteeringCount(ctx, request); appendErr != nil {
+				return r.failTurn(ctx, result, appendErr)
+			} else if count > 0 {
+				continue
+			}
 			result.Message = response.Message
 			return r.finishTurn(ctx, result, response.Message, TerminationCompleted, nil)
 		}
@@ -132,6 +160,52 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	return r.finishTurn(ctx, result, result.Message, TerminationMaxSteps, errors.New("tool step limit reached"))
 }
 
+func completedTurn(events []transcript.Event, turnID string) (TurnResult, error, bool) {
+	if turnID == "" {
+		return TurnResult{}, nil, false
+	}
+	result := TurnResult{TurnID: turnID}
+	var terminal *transcript.Event
+	for index := range events {
+		event := events[index]
+		if event.TurnID != turnID {
+			continue
+		}
+		result.SessionID = event.SessionID
+		switch event.Type {
+		case transcript.ModelCompleted:
+			var metadata struct {
+				Usage model.Usage `json:"usage"`
+			}
+			if json.Unmarshal(event.Metadata, &metadata) == nil {
+				addUsage(&result.Usage, metadata.Usage)
+			}
+		case transcript.AssistantMessage:
+			if event.Message != nil && len(event.Message.ToolCalls()) == 0 {
+				result.Message = *event.Message
+			}
+		case transcript.ToolCallCompleted:
+			if event.ToolResult != nil && event.ToolResult.NeedsUserInput {
+				result.Message = model.Message{Role: model.RoleAssistant, Content: append([]model.Content(nil), event.ToolResult.Content...)}
+			}
+		case transcript.TurnCompleted, transcript.TurnFailed, transcript.TurnCanceled:
+			copyEvent := event
+			terminal = &copyEvent
+		}
+	}
+	if terminal == nil {
+		return TurnResult{}, nil, false
+	}
+	result.Termination = TerminationReason(terminal.Status)
+	if result.Termination == "" {
+		result.Termination = TerminationCompleted
+	}
+	if terminal.Type == transcript.TurnFailed || terminal.Type == transcript.TurnCanceled {
+		return result, errors.New(terminal.Error), true
+	}
+	return result, nil, true
+}
+
 func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, system model.Message) (Projection, error) {
 	events, err := r.deps.Transcript.Load(ctx, request.SessionID, 0)
 	if err != nil {
@@ -142,9 +216,16 @@ func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, syste
 		return Projection{}, err
 	}
 	if len(projection.Dropped) == 0 || r.deps.Compactor == nil {
-		return projection, nil
+		return overlayCurrentInput(projection, request.Input), nil
 	}
-	summary, err := r.deps.Compactor.Compact(ctx, projection.Dropped, r.config.Context.MaxTokens/4)
+	targetTokens := 4_096
+	if smallContextTarget := r.config.Context.MaxTokens / 8; smallContextTarget > 0 && smallContextTarget < targetTokens {
+		targetTokens = smallContextTarget
+	}
+	if targetTokens < 512 {
+		targetTokens = 512
+	}
+	summary, err := r.deps.Compactor.Compact(ctx, projection.Dropped, targetTokens)
 	if err != nil {
 		return Projection{}, err
 	}
@@ -159,7 +240,35 @@ func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, syste
 	if err != nil {
 		return Projection{}, err
 	}
-	return r.deps.Projector.Project(ctx, events, system)
+	projection, err = r.deps.Projector.Project(ctx, events, system)
+	return overlayCurrentInput(projection, request.Input), err
+}
+
+func durableUserInput(message model.Message) model.Message {
+	copyMessage := message
+	copyMessage.Content = make([]model.Content, 0, len(message.Content))
+	for _, block := range message.Content {
+		if block.Type == model.ContentImage {
+			copyMessage.Content = append(copyMessage.Content, model.Content{Type: model.ContentText, Text: "[image attachment was available to the model during its original turn; binary data is not retained in the transcript]"})
+			continue
+		}
+		copyMessage.Content = append(copyMessage.Content, block)
+	}
+	return copyMessage
+}
+
+func overlayCurrentInput(projection Projection, current model.Message) Projection {
+	if current.ID == "" {
+		return projection
+	}
+	for index := len(projection.Messages) - 1; index >= 0; index-- {
+		if projection.Messages[index].ID == current.ID {
+			projection.Messages[index] = current
+			projection.EstimatedTokens = EstimateTokens(projection.Messages)
+			break
+		}
+	}
+	return projection
 }
 
 func (r *Runtime) generate(ctx context.Context, turn TurnRequest, messages []model.Message) (model.Response, error) {
@@ -223,8 +332,11 @@ func (r *Runtime) generateAttempt(ctx context.Context, turn TurnRequest, request
 		span.End()
 	}()
 	return r.deps.Model.Generate(ctx, request, func(event model.StreamEvent) error {
-		_, recordErr := r.record(ctx, transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelStreamed, Model: &event})
-		return recordErr
+		// Stream deltas are presentation events, not canonical durable facts.
+		// Persisting each delta makes PostgreSQL/JSONL cost proportional to token
+		// count. The final assistant message and model lifecycle remain durable.
+		r.emit(ctx, transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelStreamed, Model: &event})
+		return ctx.Err()
 	})
 }
 
@@ -237,17 +349,24 @@ func (r *Runtime) appendSteeringCount(ctx context.Context, request TurnRequest) 
 	if request.Steering == nil {
 		return 0, nil
 	}
-	messages := request.Steering.Drain()
-	for index := range messages {
-		message := messages[index]
+	inputs, err := request.Steering.Claim(ctx, 100)
+	if err != nil {
+		return 0, err
+	}
+	for index := range inputs {
+		message := inputs[index].Message
 		if message.Role == "" {
 			message.Role = model.RoleUser
 		}
-		if _, err := r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.SteeringInput, Message: &message}); err != nil {
+		eventID := "steering:" + request.TurnID + ":" + inputs[index].ID
+		if _, err := r.record(ctx, transcript.Event{ID: eventID, SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.SteeringInput, Message: &message}); err != nil {
+			return index, err
+		}
+		if err := request.Steering.Ack(ctx, inputs[index].ID); err != nil {
 			return index, err
 		}
 	}
-	return len(messages), nil
+	return len(inputs), nil
 }
 
 func addUsage(total *model.Usage, usage model.Usage) {
@@ -255,6 +374,7 @@ func addUsage(total *model.Usage, usage model.Usage) {
 	total.OutputTokens += usage.OutputTokens
 	total.CacheReadTokens += usage.CacheReadTokens
 	total.CacheCreatedTokens += usage.CacheCreatedTokens
+	total.CacheTokensIncludedInInput = total.CacheTokensIncludedInInput || usage.CacheTokensIncludedInInput
 }
 
 func (r *Runtime) record(ctx context.Context, event transcript.Event) (transcript.Event, error) {
@@ -266,9 +386,25 @@ func (r *Runtime) record(ctx context.Context, event transcript.Event) (transcrip
 	}
 	stored, err := r.deps.Transcript.Append(ctx, event)
 	if err == nil && r.deps.Events != nil {
-		r.deps.Events.Publish(ctx, stored)
+		r.emit(ctx, stored)
 	}
 	return stored, err
+}
+
+func (r *Runtime) emit(ctx context.Context, event transcript.Event) {
+	if r.deps.Events == nil {
+		return
+	}
+	if event.ID == "" {
+		event.ID = r.deps.IDs.New("evt_stream")
+	}
+	if event.Timestamp.IsZero() {
+		event.Timestamp = r.deps.Clock()
+	}
+	// Presentation/observability adapters are outside the canonical commit
+	// path. A buggy sink must not crash a worker or roll back a stored event.
+	defer func() { _ = recover() }()
+	r.deps.Events.Publish(ctx, event)
 }
 
 func (r *Runtime) finishTurn(ctx context.Context, result TurnResult, message model.Message, reason TerminationReason, err error) (TurnResult, error) {
@@ -297,6 +433,12 @@ func (r *Runtime) finishTurn(ctx context.Context, result TurnResult, message mod
 		err = recordErr
 	}
 	return result, err
+}
+
+func closeInputSource(source InputSource) {
+	if closable, ok := source.(interface{ Close() }); ok {
+		closable.Close()
+	}
 }
 
 func (r *Runtime) failTurn(ctx context.Context, result TurnResult, err error) (TurnResult, error) {

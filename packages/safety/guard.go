@@ -225,6 +225,9 @@ func (g WorkspacePolicy) ResolveReadableFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if IsSensitivePath(realPath) {
+		return "", fmt.Errorf("refusing to read sensitive file %q", filepath.Base(realPath))
+	}
 	for _, root := range g.Roots {
 		realRoot, err := filepath.EvalSymlinks(filepath.Clean(root))
 		if err != nil {

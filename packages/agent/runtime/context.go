@@ -3,6 +3,9 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"strconv"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
@@ -38,7 +41,12 @@ func NewBoundedProjector(config ContextConfig) BoundedProjector {
 
 type projectedMessage struct {
 	sequence uint64
+	group    string
 	message  model.Message
+}
+
+type projectedGroup struct {
+	entries []projectedMessage
 }
 
 func (p BoundedProjector) Project(_ context.Context, events []transcript.Event, system model.Message) (Projection, error) {
@@ -56,15 +64,24 @@ func (p BoundedProjector) Project(_ context.Context, events []transcript.Event, 
 	}
 	entries := make([]projectedMessage, 0, len(events)+1)
 	if base != nil {
+		base.group = "compaction"
 		entries = append(entries, *base)
 	}
+	fallbackTurn := 0
 	for _, event := range events {
 		if event.Sequence <= baseSequence {
 			continue
 		}
 		message, ok := eventMessage(event)
 		if ok {
-			entries = append(entries, projectedMessage{sequence: event.Sequence, message: message})
+			group := event.TurnID
+			if group == "" {
+				if event.Type == transcript.UserInput || event.Type == transcript.SteeringInput || fallbackTurn == 0 {
+					fallbackTurn++
+				}
+				group = "fallback:" + strconv.Itoa(fallbackTurn)
+			}
+			entries = append(entries, projectedMessage{sequence: event.Sequence, group: group, message: message})
 		}
 	}
 	messages := make([]model.Message, 0, len(entries)+1)
@@ -75,21 +92,30 @@ func (p BoundedProjector) Project(_ context.Context, events []transcript.Event, 
 		messages = append(messages, entry.message)
 	}
 	tokens := EstimateTokens(messages)
-	if tokens <= limit || len(entries) <= 2 {
+	groups := groupProjectedMessages(entries)
+	if tokens <= limit || len(groups) <= 1 {
+		return Projection{Messages: messages, EstimatedTokens: tokens}, nil
+	}
+	keepGroup := 0
+	keptTokens := EstimateTokens([]model.Message{system})
+	for index := len(groups) - 1; index >= 0; index-- {
+		groupMessages := make([]model.Message, 0, len(groups[index].entries))
+		for _, entry := range groups[index].entries {
+			groupMessages = append(groupMessages, entry.message)
+		}
+		groupTokens := EstimateTokens(groupMessages)
+		if keptTokens+groupTokens > limit && index < len(groups)-1 {
+			keepGroup = index + 1
+			break
+		}
+		keptTokens += groupTokens
+	}
+	if keepGroup == 0 {
 		return Projection{Messages: messages, EstimatedTokens: tokens}, nil
 	}
 	keepFrom := 0
-	keptTokens := EstimateTokens([]model.Message{system})
-	for index := len(entries) - 1; index >= 0; index-- {
-		entryTokens := EstimateTokens([]model.Message{entries[index].message})
-		if keptTokens+entryTokens > limit && index < len(entries)-2 {
-			keepFrom = index + 1
-			break
-		}
-		keptTokens += entryTokens
-	}
-	if keepFrom == 0 {
-		return Projection{Messages: messages, EstimatedTokens: tokens}, nil
+	for index := 0; index < keepGroup; index++ {
+		keepFrom += len(groups[index].entries)
 	}
 	dropped := make([]model.Message, 0, keepFrom)
 	for _, entry := range entries[:keepFrom] {
@@ -106,6 +132,18 @@ func (p BoundedProjector) Project(_ context.Context, events []transcript.Event, 
 		Messages: kept, EstimatedTokens: EstimateTokens(kept), Dropped: dropped,
 		CoversThrough: entries[keepFrom-1].sequence,
 	}, nil
+}
+
+func groupProjectedMessages(entries []projectedMessage) []projectedGroup {
+	groups := make([]projectedGroup, 0, len(entries))
+	for _, entry := range entries {
+		if len(groups) == 0 || groups[len(groups)-1].entries[0].group != entry.group {
+			groups = append(groups, projectedGroup{})
+		}
+		last := len(groups) - 1
+		groups[last].entries = append(groups[last].entries, entry)
+	}
+	return groups
 }
 
 func eventMessage(event transcript.Event) (model.Message, bool) {
@@ -137,21 +175,51 @@ func compactionCoverage(event transcript.Event) uint64 {
 }
 
 func EstimateTokens(messages []model.Message) int {
-	bytes := 0
+	tokens := 0
 	for _, message := range messages {
-		bytes += len(message.Role) + 8
+		tokens += estimateText(string(message.Role)) + 4
 		for _, block := range message.Content {
-			bytes += len(block.Text) + len(block.JSON) + 8
+			tokens += estimateText(block.Text) + estimateText(string(block.JSON)) + 4
+			if block.Type == model.ContentImage {
+				// Image tokenization depends on provider and dimensions. Reserve a
+				// conservative fixed cost and account for inline data URLs so large
+				// base64 payloads cannot bypass compaction.
+				tokens += 1024 + estimateText(block.ImageURL)
+			}
+			if block.Artifact != nil {
+				tokens += estimateText(block.Artifact.URI) + estimateText(block.Artifact.Name)
+			}
 			if block.ToolCall != nil {
-				bytes += len(block.ToolCall.Name) + len(block.ToolCall.Arguments) + 16
+				tokens += estimateText(block.ToolCall.Name) + estimateText(string(block.ToolCall.Arguments)) + 8
 			}
 			if block.ToolResult != nil {
-				bytes += len(block.ToolResult.Name) + 16
+				tokens += estimateText(block.ToolResult.Name) + 8
 				for _, nested := range block.ToolResult.Content {
-					bytes += len(nested.Text) + len(nested.JSON)
+					tokens += estimateText(nested.Text) + estimateText(string(nested.JSON))
+					if nested.Type == model.ContentImage {
+						tokens += 1024 + estimateText(nested.ImageURL)
+					}
 				}
 			}
 		}
 	}
-	return (bytes + 3) / 4
+	return tokens
+}
+
+func estimateText(value string) int {
+	if value == "" {
+		return 0
+	}
+	if strings.HasPrefix(value, "data:") {
+		return (len(value) + 3) / 4
+	}
+	ascii, nonASCII := 0, 0
+	for _, r := range value {
+		if r < utf8.RuneSelf {
+			ascii++
+		} else {
+			nonASCII++
+		}
+	}
+	return (ascii+3)/4 + nonASCII
 }

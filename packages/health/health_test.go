@@ -6,14 +6,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/model"
+	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 func TestServiceReportsMissingCriticalTools(t *testing.T) {
 	root := t.TempDir()
-	reg := registry.New()
-	reg.Register(fakeTool{name: "code-search"})
+	reg, err := agenttool.NewCatalog(fakeTool{name: "code-search"})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	service := NewService(reg, []string{root})
 	snap := service.Probe(context.Background())
@@ -30,17 +32,10 @@ type fakeTool struct {
 	name string
 }
 
-func (t fakeTool) Spec() llm.ToolSpec {
-	return llm.ToolSpec{
-		Type: "function",
-		Function: llm.ToolSpecFunction{
-			Name:        t.name,
-			Description: "fake",
-			Parameters:  map[string]any{"type": "object"},
-		},
-	}
+func (t fakeTool) Descriptor() agenttool.Descriptor {
+	return agenttool.Descriptor{Name: t.name, Description: "fake", InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []agenttool.Effect{agenttool.EffectRead}}
 }
 
-func (t fakeTool) Execute(context.Context, json.RawMessage, registry.Runtime) (registry.Result, error) {
-	return registry.Result{Content: "ok"}, nil
+func (t fakeTool) Execute(context.Context, agenttool.Call) (agenttool.Result, error) {
+	return agenttool.Result{Content: []model.Content{{Type: model.ContentText, Text: "ok"}}}, nil
 }

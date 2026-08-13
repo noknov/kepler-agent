@@ -5,18 +5,21 @@ package slackconversation
 
 import (
 	"context"
-	"unicode"
+	"strings"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 )
 
 type Request struct {
-	EventID  string
-	UserID   string
-	Channel  string
-	ThreadTS string
-	Text     string
-	Content  []model.Content
+	EventID   string
+	UserID    string
+	Channel   string
+	ThreadTS  string
+	MessageTS string
+	Text      string
+	Locale    string
+	Content   []model.Content
+	ClaimID   string `json:"-"`
 }
 
 func (r Request) Message() model.Message {
@@ -29,8 +32,8 @@ func (r Request) Message() model.Message {
 }
 
 type Conversation interface {
-	HandleMention(context.Context, Request) bool
-	HandleReply(context.Context, Request) bool
+	HandleMention(context.Context, Request) (bool, error)
+	HandleReply(context.Context, Request) (bool, error)
 }
 
 type ControlledConversation interface {
@@ -41,18 +44,21 @@ type ControlledConversation interface {
 type Messenger interface {
 	PostMessage(ctx context.Context, channel, threadTS, text string) (string, error)
 	PostMarkdownMessage(ctx context.Context, channel, threadTS, markdown string) (string, error)
-	ThreadContext(ctx context.Context, channel, threadTS string, limit int) string
+}
+
+type IdempotentMarkdownMessenger interface {
+	PostMarkdownMessageWithID(ctx context.Context, channel, threadTS, markdown, deliveryID string) (string, error)
 }
 
 type ThreadStatusMessenger interface {
 	SetThreadStatus(ctx context.Context, channel, threadTS, status string, loadingMessages []string) error
 }
 
-func IsCJK(text string) bool {
-	for _, value := range text {
-		if unicode.Is(unicode.Han, value) || unicode.Is(unicode.Katakana, value) || unicode.Is(unicode.Hangul, value) {
-			return true
-		}
-	}
-	return false
+type ThreadHistoryMessenger interface {
+	ThreadHistory(ctx context.Context, channel, threadTS, beforeTS string, limit int) []model.Message
+}
+
+func IsChineseLocale(locale string) bool {
+	locale = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(locale), "_", "-"))
+	return locale == "zh" || strings.HasPrefix(locale, "zh-")
 }

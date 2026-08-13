@@ -12,8 +12,9 @@ Set `SLACK_COPILOT_ENV_FILE=/path/to/file` only for one-off local debugging.
 Keep secrets out of git; the `*.example` files are templates only.
 
 The packaged `slack-copilot` CLI is local-first and does not require Redis,
-PostgreSQL, Slack, or LLM service configuration for its built-in read-only
-commands.
+PostgreSQL, or Slack. It still requires the configured model credential; local
+filesystem and argv tools are governed by the workspace sandbox and approval
+policy.
 
 For local split deployment:
 
@@ -39,9 +40,14 @@ Worker example:
 ```bash
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_SIGNING_SECRET=...
+SLACK_DEFAULT_LOCALE=en-US
 ALLOWED_SLACK_USERS=U11111111,U22222222
 POSTGRES_DSN=postgres://user:pass@localhost:5432/slack_copilot?sslmode=disable
 ```
+
+`SLACK_DEFAULT_LOCALE` controls deterministic Slack status and attachment-note
+localization. `zh` and `zh-*` select Chinese; other values use English. The
+service does not guess locale from message characters.
 
 `LLM_PROVIDER` selects the active model provider. Each provider has its own env
 namespace so credentials do not accidentally leak between providers.
@@ -245,8 +251,9 @@ image is stripped and replaced with a text note asking for a description.
 
 ## Storage and Concurrency
 
-All session, run, reminder, user preference, tool spill, and event inbox state
-uses PostgreSQL. The services do not contain a filesystem persistence fallback:
+All session, session-input, run, reminder, user preference, tool spill, and
+event inbox states use PostgreSQL. The services do not contain a filesystem
+persistence fallback:
 
 ```bash
 POSTGRES_DSN=postgres://user:pass@localhost:5432/slack_copilot?sslmode=disable
@@ -266,9 +273,12 @@ attempt limit; malformed payloads are dead-lettered immediately. The inbox
 lease must be greater than the event timeout.
 
 `SLACK_EVENT_WORKERS` is the worker-level execution concurrency limit. Inputs
-that arrive while a session is active are durably queued in Redis and drained
-by the session owner; the PostgreSQL inbox remains the source of truth for
-Slack event delivery.
+that arrive while a session is active are written to
+`agent_session_inputs` in PostgreSQL and use owner-checked claim/ack leases.
+Redis stores the short-lived active-worker hint and publishes wakeups only; a
+periodic PostgreSQL scan recovers missed wakeups and promotes abandoned
+steering input to queued turns. There is no Redis or process-memory queue
+fallback.
 
 Services verify the required tables at startup but never execute DDL. Initialize
 a new PostgreSQL database with `schema/postgres.sql` using the administration

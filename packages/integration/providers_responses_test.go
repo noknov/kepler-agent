@@ -18,7 +18,7 @@ import (
 type roundTripEcho struct{}
 
 func (roundTripEcho) Descriptor() tool.Descriptor {
-	return tool.Descriptor{Name: "echo", InputSchema: json.RawMessage(`{"type":"object"}`)}
+	return tool.Descriptor{Name: "echo", InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []tool.Effect{tool.EffectRead}}
 }
 
 func (roundTripEcho) Execute(context.Context, tool.Call) (tool.Result, error) {

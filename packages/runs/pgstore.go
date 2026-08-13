@@ -242,3 +242,26 @@ func (s *PGStore) ReadToolSpill(ctx context.Context, runID, toolName, toolCallID
 	}
 	return content, nil
 }
+
+func (s *PGStore) ReadToolSpillForScope(ctx context.Context, runID, toolName, toolCallID, sessionID, userID string) (string, error) {
+	if s == nil || s.pool == nil {
+		return "", fmt.Errorf("run store is unavailable")
+	}
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(userID) == "" {
+		return "", fmt.Errorf("artifact scope is incomplete")
+	}
+	var content string
+	err := s.pool.QueryRow(ctx, `SELECT spill.content
+FROM agent_tool_spills spill
+JOIN agent_runs run ON run.id=spill.run_id
+WHERE spill.run_id=$1 AND spill.tool_name=$2 AND spill.tool_call_id=$3
+  AND run.session_id=$4 AND run.payload->>'user_id'=$5`,
+		runID, toolName, toolCallID, sessionID, userID).Scan(&content)
+	if err == pgx.ErrNoRows {
+		return "", fmt.Errorf("persisted output not found or not authorized")
+	}
+	if err != nil {
+		return "", err
+	}
+	return content, nil
+}

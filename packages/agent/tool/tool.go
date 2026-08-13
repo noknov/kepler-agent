@@ -31,16 +31,20 @@ const (
 )
 
 type Descriptor struct {
-	Name         string          `json:"name"`
-	Description  string          `json:"description"`
-	InputSchema  json.RawMessage `json:"input_schema"`
-	Effects      []Effect        `json:"effects,omitempty"`
-	Exposure     Exposure        `json:"exposure,omitempty"`
-	Parallel     bool            `json:"parallel,omitempty"`
-	Timeout      time.Duration   `json:"timeout,omitempty"`
-	Tags         []string        `json:"tags,omitempty"`
-	Dependencies []string        `json:"dependencies,omitempty"`
-	Surfaces     []string        `json:"surfaces,omitempty"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"input_schema"`
+	Effects     []Effect        `json:"effects,omitempty"`
+	Exposure    Exposure        `json:"exposure,omitempty"`
+	Parallel    bool            `json:"parallel,omitempty"`
+	// Exclusive tools, such as a request for missing user input, must be the
+	// only call in a model-produced tool batch. This prevents a write from being
+	// executed before the run pauses for an answer.
+	Exclusive    bool          `json:"exclusive,omitempty"`
+	Timeout      time.Duration `json:"timeout,omitempty"`
+	Tags         []string      `json:"tags,omitempty"`
+	Dependencies []string      `json:"dependencies,omitempty"`
+	Surfaces     []string      `json:"surfaces,omitempty"`
 }
 
 func (d Descriptor) Definition() model.ToolDefinition {
@@ -123,6 +127,20 @@ func (AllowAllPolicy) Decide(context.Context, PolicyRequest) (Decision, error) {
 	return Decision{Type: DecisionAllow}, nil
 }
 
+// ReadOnlyPolicy is the safe default for embeddings that do not provide a
+// product policy. Mutating, privileged and network effects require an explicit
+// policy decision from the composing profile.
+type ReadOnlyPolicy struct{}
+
+func (ReadOnlyPolicy) Decide(_ context.Context, request PolicyRequest) (Decision, error) {
+	for _, effect := range request.Descriptor.Effects {
+		if effect != EffectRead {
+			return Decision{Type: DecisionDeny, Reason: "non-read effect requires an explicit product policy", Rule: "default-read-only"}, nil
+		}
+	}
+	return Decision{Type: DecisionAllow, Rule: "default-read-only"}, nil
+}
+
 type Catalog struct {
 	mu     sync.RWMutex
 	tools  map[string]Tool
@@ -147,6 +165,9 @@ func (c *Catalog) Register(item Tool) error {
 	descriptor := item.Descriptor()
 	if descriptor.Name == "" {
 		return fmt.Errorf("tool name is required")
+	}
+	if len(descriptor.Effects) == 0 {
+		return fmt.Errorf("tool %q must declare at least one effect", descriptor.Name)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -243,10 +264,10 @@ func (c *Catalog) EndTurn(sessionID, turnID string) {
 			lifecycle.EndTurn(sessionID, turnID)
 		}
 	}
+	c.Deactivate(sessionID)
 }
 
-// Deactivate releases session-scoped deferred-tool visibility. Product
-// adapters call this when they evict an inactive session.
+// Deactivate releases turn-scoped deferred-tool visibility.
 func (c *Catalog) Deactivate(sessionID string) {
 	c.mu.Lock()
 	delete(c.active, sessionID)

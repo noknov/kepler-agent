@@ -18,7 +18,6 @@ import (
 	notionTools "github.com/noknov/slack-copilot-agent/packages/tools/notion"
 	plannerTools "github.com/noknov/slack-copilot-agent/packages/tools/planner"
 	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
-	shellTools "github.com/noknov/slack-copilot-agent/packages/tools/shell"
 	skillTools "github.com/noknov/slack-copilot-agent/packages/tools/skills"
 	webSearchTools "github.com/noknov/slack-copilot-agent/packages/tools/websearch"
 	youtrackTools "github.com/noknov/slack-copilot-agent/packages/tools/youtrack"
@@ -42,12 +41,6 @@ func NewCatalog(cfg config.Config, workspacePolicy safety.WorkspacePolicy, comma
 
 func policyForSurface(cfg config.Config, surface SurfaceOptions) registry.CapabilityPolicy {
 	integrations := cfg.Integrations
-	allowedWrites := make(map[string]bool, len(cfg.Tools.AllowedWriteTools))
-	for _, name := range cfg.Tools.AllowedWriteTools {
-		if name != "" {
-			allowedWrites[name] = true
-		}
-	}
 	availableDeps := map[string]bool{
 		"github":   integrations.GitHub.Token != "",
 		"luckin":   integrations.Luckin.MCPToken != "",
@@ -59,9 +52,8 @@ func policyForSurface(cfg config.Config, surface SurfaceOptions) registry.Capabi
 		availableDeps[name] = available
 	}
 	return registry.CapabilityPolicy{
-		Surface:           surface.Name,
-		AllowedWriteTools: allowedWrites,
-		AvailableDeps:     availableDeps,
+		Surface:       surface.Name,
+		AvailableDeps: availableDeps,
 	}
 }
 
@@ -69,7 +61,12 @@ func runtimeRead(tool registry.Tool, deps ...string) registry.Tool {
 	return registry.WithMetadata(tool, registry.ToolMetadata{
 		Risk:         registry.RiskRead,
 		Dependencies: deps,
+		Network:      true,
 	})
+}
+
+func networkTool(tool registry.Tool, deps ...string) registry.Tool {
+	return registry.WithMetadata(tool, registry.ToolMetadata{Dependencies: deps, Network: true})
 }
 
 func newToolRegistryWithPolicy(cfg config.Config, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy, userPrefs userprefs.Store, policy registry.CapabilityPolicy) *registry.Registry {
@@ -79,7 +76,6 @@ func newToolRegistryWithPolicy(cfg config.Config, workspacePolicy safety.Workspa
 	registerIntegrationTools(tools, cfg, commandPolicy)
 	registerKnowledgeTools(tools, cfg)
 	registerAgentControlTools(tools, userPrefs)
-	tools.Register(registry.ToolSearchTool{Registry: tools})
 	return tools
 }
 
@@ -106,11 +102,11 @@ func registerCodeTools(tools *registry.Registry, cfg config.Config, workspacePol
 	tools.Register(codeTools.ReadFileTool{Paths: workspacePolicy})
 
 	gitBase := gitTools.Base{Paths: workspacePolicy, Guard: commandPolicy, Timeout: cfg.Tools.CommandTimeout}
-	tools.Register(gitTools.RepoSearchTool{Base: gitBase})
-	tools.Register(gitTools.RepoReadFileTool{Base: gitBase})
-	tools.Register(gitTools.FetchRefTool{Base: gitBase})
-	tools.Register(gitTools.SearchRefTool{Base: gitBase})
-	tools.Register(gitTools.ReadFileRefTool{Base: gitBase})
+	tools.Register(runtimeRead(gitTools.RepoSearchTool{Base: gitBase}))
+	tools.Register(runtimeRead(gitTools.RepoReadFileTool{Base: gitBase}))
+	tools.Register(runtimeRead(gitTools.FetchRefTool{Base: gitBase}))
+	tools.Register(runtimeRead(gitTools.SearchRefTool{Base: gitBase}))
+	tools.Register(runtimeRead(gitTools.ReadFileRefTool{Base: gitBase}))
 	tools.Register(gitTools.StatusTool{Base: gitBase})
 	tools.Register(gitTools.LogTool{Base: gitBase})
 	tools.Register(gitTools.ShowTool{Base: gitBase})
@@ -133,14 +129,6 @@ func registerCodeTools(tools *registry.Registry, cfg config.Config, workspacePol
 
 func registerIntegrationTools(tools *registry.Registry, cfg config.Config, commandPolicy safety.CommandPolicy) {
 	integrations := cfg.Integrations
-	tools.Register(shellTools.ReadOnlyTool{
-		GCloudPath:     integrations.GCP.GCloudPath,
-		KubectlPath:    integrations.K8s.KubectlPath,
-		WorkspaceRoots: cfg.Security.WorkspaceRoots,
-		Guard:          commandPolicy,
-		Timeout:        cfg.Tools.CommandTimeout,
-	})
-
 	// K8s native tools: dedicated kubectl wrappers for pods, logs, describe, top,
 	// events, rollout, and general get. These provide richer structured output and
 	// safer arg handling than the generic shell tool.
@@ -157,20 +145,20 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 			tools,
 			registry.CategoryInfrastructure,
 			k8sTools.ContextsTool{Base: k8sBase},
-			k8sTools.GetPodsTool{Base: k8sBase},
-			k8sTools.LogsTool{Base: k8sBase},
-			k8sTools.DescribeTool{Base: k8sBase},
-			k8sTools.TopTool{Base: k8sBase},
-			k8sTools.EventsTool{Base: k8sBase},
-			k8sTools.RolloutTool{Base: k8sBase},
-			k8sTools.GetTool{Base: k8sBase},
+			runtimeRead(k8sTools.GetPodsTool{Base: k8sBase}),
+			runtimeRead(k8sTools.LogsTool{Base: k8sBase}),
+			runtimeRead(k8sTools.DescribeTool{Base: k8sBase}),
+			runtimeRead(k8sTools.TopTool{Base: k8sBase}),
+			runtimeRead(k8sTools.EventsTool{Base: k8sBase}),
+			runtimeRead(k8sTools.RolloutTool{Base: k8sBase}),
+			runtimeRead(k8sTools.GetTool{Base: k8sBase}),
 		)
 	}
 
 	registerDeferredTools(
 		tools,
 		registry.CategoryInfrastructure,
-		gcpTools.LogsTool{
+		runtimeRead(gcpTools.LogsTool{
 			GCloudPath:       integrations.GCP.GCloudPath,
 			DefaultProject:   integrations.GCP.DefaultProject,
 			DefaultNamespace: integrations.GCP.DefaultNamespace,
@@ -178,28 +166,28 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 			DefaultRegion:    integrations.GCP.DefaultRegion,
 			Guard:            commandPolicy,
 			Timeout:          cfg.Tools.CommandTimeout,
-		},
-		gcpTools.RunServicesTool{
+		}),
+		runtimeRead(gcpTools.RunServicesTool{
 			GCloudPath:     integrations.GCP.GCloudPath,
 			DefaultProject: integrations.GCP.DefaultProject,
 			DefaultRegion:  integrations.GCP.DefaultRegion,
 			Guard:          commandPolicy,
 			Timeout:        cfg.Tools.CommandTimeout,
-		},
-		gcpTools.RunRevisionsTool{
+		}),
+		runtimeRead(gcpTools.RunRevisionsTool{
 			GCloudPath:     integrations.GCP.GCloudPath,
 			DefaultProject: integrations.GCP.DefaultProject,
 			DefaultRegion:  integrations.GCP.DefaultRegion,
 			Guard:          commandPolicy,
 			Timeout:        cfg.Tools.CommandTimeout,
-		},
-		gcpTools.ClustersTool{
+		}),
+		runtimeRead(gcpTools.ClustersTool{
 			GCloudPath:     integrations.GCP.GCloudPath,
 			DefaultProject: integrations.GCP.DefaultProject,
 			DefaultRegion:  integrations.GCP.DefaultRegion,
 			Guard:          commandPolicy,
 			Timeout:        cfg.Tools.CommandTimeout,
-		},
+		}),
 	)
 
 	notionClient := notionTools.Client{
@@ -231,11 +219,11 @@ func registerIntegrationTools(tools *registry.Registry, cfg config.Config, comma
 	registerDeferredTools(
 		tools,
 		registry.CategoryIntegration,
-		githubTools.DispatchWorkflowTool{Client: githubClient},
-		githubTools.WorkflowRunsTool{Client: githubClient},
-		githubTools.PRDiffTool{Client: githubClient},
-		githubTools.PRFileDiffTool{Client: githubClient},
-		githubTools.JobLogsTool{Client: githubClient},
+		networkTool(githubTools.DispatchWorkflowTool{Client: githubClient}, "github"),
+		networkTool(githubTools.WorkflowRunsTool{Client: githubClient}, "github"),
+		networkTool(githubTools.PRDiffTool{Client: githubClient}, "github"),
+		networkTool(githubTools.PRFileDiffTool{Client: githubClient}, "github"),
+		networkTool(githubTools.JobLogsTool{Client: githubClient}, "github"),
 	)
 
 	luckinTools.RegisterDeferredAll(tools, &luckinTools.Client{
@@ -260,8 +248,8 @@ func registerKnowledgeTools(tools *registry.Registry, cfg config.Config) {
 		BraveAPIKey:    webSearch.BraveKey,
 		BraveBaseURL:   webSearch.BraveURL,
 	}
-	tools.Register(webSearchTools.SearchTool{Client: webClient})
-	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, webSearchTools.ReadPageTool{Client: webClient}))
+	tools.Register(runtimeRead(webSearchTools.SearchTool{Client: webClient}))
+	tools.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, runtimeRead(webSearchTools.ReadPageTool{Client: webClient})))
 	tools.Register(knowledgeTools.RunbookSearchTool{})
 }
 

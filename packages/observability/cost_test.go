@@ -13,3 +13,12 @@ func TestCostRatesEstimateUSD(t *testing.T) {
 		t.Fatalf("EstimateUSD() = %v, want 2", got)
 	}
 }
+
+func TestCostRatesRespectProviderCacheAccounting(t *testing.T) {
+	rates := CostRates{InputPerMTok: 1, CacheReadPerMTok: 0.1}
+	openAI := rates.EstimateUSD(llm.Usage{PromptTokens: 1_000_000, CacheReadInputTokens: 500_000, CacheIncludedInPrompt: true})
+	anthropic := rates.EstimateUSD(llm.Usage{PromptTokens: 1_000_000, CacheReadInputTokens: 500_000, CacheIncludedInPrompt: false})
+	if openAI != 0.55 || anthropic != 1.05 {
+		t.Fatalf("cache costs: openai=%v anthropic=%v", openAI, anthropic)
+	}
+}

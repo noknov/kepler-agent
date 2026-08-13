@@ -32,10 +32,6 @@ func canonicalContent(parts []llm.ContentPart) []model.Content {
 	return out
 }
 
-func ShouldAttemptSlackTextExcerpt(file slack.File) bool {
-	return !slack.IsPDFFile(file) && slackfiles.NormalizedImageMIME(file) == ""
-}
-
 func formatBytes(n int64) string {
 	return slackfiles.FormatBytes(n)
 }
@@ -52,6 +48,4 @@ const (
 	maxSlackImageBytes   = slackfiles.MaxImageBytes
 	maxSlackPDFBytes     = slackfiles.MaxPDFBytes
 	maxSlackPDFTextChars = slackfiles.MaxPDFTextChars
-	maxSlackTextBytes    = 16 << 20
-	maxSlackTextChars    = slack.DefaultMaxTextExtractChars
 )

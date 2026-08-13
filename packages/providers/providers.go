@@ -77,6 +77,8 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 	var sinkMu sync.Mutex
 	var sinkErr error
 	var conversionErr error
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
 	publish := func(event model.StreamEvent) {
 		if sink == nil {
 			return
@@ -85,11 +87,14 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 		defer sinkMu.Unlock()
 		if sinkErr == nil {
 			sinkErr = sink(event)
+			if sinkErr != nil {
+				cancelStream()
+			}
 		}
 	}
 	if stream, ok := c.Wire.(llm.StreamClient); ok {
 		publish(model.StreamEvent{Type: model.StreamStarted})
-		response, err = stream.ChatStream(ctx, req, llm.StreamHandler{
+		response, err = stream.ChatStream(streamCtx, req, llm.StreamHandler{
 			OnText: func(delta string) {
 				if delta != "" {
 					publish(model.StreamEvent{Type: model.StreamTextDelta, Text: delta})
@@ -111,14 +116,14 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 	} else {
 		response, err = c.Wire.Chat(ctx, req)
 	}
-	if err != nil {
-		return model.Response{}, toModelError(err)
-	}
 	if conversionErr != nil {
 		return model.Response{}, conversionErr
 	}
 	if sinkErr != nil {
 		return model.Response{}, sinkErr
+	}
+	if err != nil {
+		return model.Response{}, toModelError(err)
 	}
 	message, err := fromWireMessage(response.Message)
 	if err != nil {
@@ -135,16 +140,27 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 
 func toWireMessage(message model.Message) llm.Message {
 	out := llm.Message{Role: string(message.Role)}
+	var parts []llm.ContentPart
+	hasImage := false
 	for _, block := range message.Content {
 		switch block.Type {
 		case model.ContentText:
 			out.Content += block.Text
+			if block.Text != "" {
+				parts = append(parts, llm.TextPart(block.Text))
+			}
 		case model.ContentImage:
-			out.ContentParts = append(out.ContentParts, llm.ImageURLPart(block.ImageURL))
+			if strings.TrimSpace(block.ImageURL) != "" {
+				hasImage = true
+				parts = append(parts, llm.ImageURLPart(block.ImageURL))
+			}
 		case model.ContentReasoning:
 			out.ReasoningContent += block.Text
 		case model.ContentJSON:
 			out.Content += string(block.JSON)
+			if len(block.JSON) > 0 {
+				parts = append(parts, llm.TextPart(string(block.JSON)))
+			}
 		case model.ContentToolCall:
 			if block.ToolCall != nil {
 				out.ToolCalls = append(out.ToolCalls, llm.ToolCall{ID: block.ToolCall.ID, Type: "function", Function: llm.ToolFunction{Name: block.ToolCall.Name, Arguments: string(block.ToolCall.Arguments)}})
@@ -163,6 +179,13 @@ func toWireMessage(message model.Message) llm.Message {
 				}
 			}
 		}
+	}
+	// Multimodal wire formats represent the complete message as content parts.
+	// Keeping text only in Content would make MarshalJSON drop it as soon as an
+	// image part is present.
+	if hasImage && out.Role != "tool" {
+		out.ContentParts = parts
+		out.Content = ""
 	}
 	return out
 }
@@ -201,7 +224,7 @@ func toToolCall(call llm.ToolCall) (model.ToolCall, error) {
 }
 
 func toUsage(usage llm.Usage) model.Usage {
-	return model.Usage{InputTokens: int64(usage.PromptTokens), OutputTokens: int64(usage.CompletionTokens), CacheReadTokens: int64(usage.CacheReadInputTokens), CacheCreatedTokens: int64(usage.CacheCreationInputTokens)}
+	return model.Usage{InputTokens: int64(usage.PromptTokens), OutputTokens: int64(usage.CompletionTokens), CacheReadTokens: int64(usage.CacheReadInputTokens), CacheCreatedTokens: int64(usage.CacheCreationInputTokens), CacheTokensIncludedInInput: usage.CacheIncludedInPrompt}
 }
 
 func finishReason(reason string) (model.FinishReason, error) {

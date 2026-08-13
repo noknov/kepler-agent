@@ -14,7 +14,7 @@ import (
 )
 
 type CommandRequest struct {
-	Command     string
+	Argv        []string
 	Workdir     string
 	Network     bool
 	Environment []string
@@ -28,26 +28,20 @@ type CommandResult struct {
 
 type Sandbox struct {
 	Workspace            Workspace
-	Shell                string
 	AdditionalReadRoots  []string
 	UnsafeAllowNoSandbox bool
 }
 
 func (s Sandbox) Run(ctx context.Context, request CommandRequest) (CommandResult, error) {
+	if len(request.Argv) == 0 || strings.TrimSpace(request.Argv[0]) == "" {
+		return CommandResult{}, fmt.Errorf("argv is required")
+	}
 	workdir, err := s.Workspace.Resolve(request.Workdir, false)
 	if request.Workdir == "" {
 		workdir, err = s.Workspace.Root, nil
 	}
 	if err != nil {
 		return CommandResult{}, err
-	}
-	shell := s.Shell
-	if shell == "" {
-		if runtime.GOOS == "darwin" {
-			shell = "/bin/zsh"
-		} else {
-			shell = "/bin/sh"
-		}
 	}
 	var command *exec.Cmd
 	sensitive, err := s.Workspace.SensitivePaths()
@@ -62,11 +56,11 @@ func (s Sandbox) Run(ctx context.Context, request CommandRequest) (CommandResult
 	case "darwin":
 		path := "/usr/bin/sandbox-exec"
 		if _, statErr := os.Stat(path); statErr != nil {
-			return s.unsandboxed(ctx, request, workdir, shell, statErr)
+			return s.unsandboxed(ctx, request, workdir, statErr)
 		}
 		profile := "(version 1)\n(allow default)\n(deny file-write*)\n"
 		profile += "(allow file-write* (subpath " + strconv.Quote(s.Workspace.Root) + ") (subpath " + strconv.Quote(s.Workspace.Temp) + "))\n"
-		if home, homeErr := os.UserHomeDir(); homeErr == nil && !within(s.Workspace.Root, home) {
+		if home, homeErr := os.UserHomeDir(); homeErr == nil {
 			profile += "(deny file-read* (subpath " + strconv.Quote(home) + "))\n"
 		}
 		profile += "(allow file-read* (subpath " + strconv.Quote(s.Workspace.Root) + "))\n"
@@ -79,11 +73,11 @@ func (s Sandbox) Run(ctx context.Context, request CommandRequest) (CommandResult
 		if !request.Network {
 			profile += "(deny network*)\n"
 		}
-		command = exec.CommandContext(ctx, path, "-p", profile, shell, "-lc", request.Command)
+		command = exec.CommandContext(ctx, path, append([]string{"-p", profile, request.Argv[0]}, request.Argv[1:]...)...)
 	case "linux":
 		path, lookupErr := exec.LookPath("bwrap")
 		if lookupErr != nil {
-			return s.unsandboxed(ctx, request, workdir, shell, lookupErr)
+			return s.unsandboxed(ctx, request, workdir, lookupErr)
 		}
 		args := []string{"--die-with-parent", "--new-session", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try", "--cap-drop", "ALL", "--ro-bind", "/", "/"}
 		if home, homeErr := os.UserHomeDir(); homeErr == nil && home != "/" {
@@ -109,7 +103,8 @@ func (s Sandbox) Run(ctx context.Context, request CommandRequest) (CommandResult
 		if !request.Network {
 			args = append(args, "--unshare-net")
 		}
-		args = append(args, "--", shell, "-lc", request.Command)
+		args = append(args, "--")
+		args = append(args, request.Argv...)
 		command = exec.CommandContext(ctx, path, args...)
 	default:
 		return CommandResult{}, fmt.Errorf("sandbox is not supported on %s", runtime.GOOS)
@@ -121,11 +116,11 @@ func (s Sandbox) Run(ctx context.Context, request CommandRequest) (CommandResult
 	return result, runErr
 }
 
-func (s Sandbox) unsandboxed(ctx context.Context, request CommandRequest, workdir, shell string, cause error) (CommandResult, error) {
+func (s Sandbox) unsandboxed(ctx context.Context, request CommandRequest, workdir string, cause error) (CommandResult, error) {
 	if !s.UnsafeAllowNoSandbox {
 		return CommandResult{}, fmt.Errorf("required sandbox is unavailable: %w", cause)
 	}
-	result, runErr := runCommand(exec.CommandContext(ctx, shell, "-lc", request.Command), workdir, request.Environment, s.Workspace.Temp)
+	result, runErr := runCommand(exec.CommandContext(ctx, request.Argv[0], request.Argv[1:]...), workdir, request.Environment, s.Workspace.Temp)
 	if ctx.Err() != nil {
 		return result, ctx.Err()
 	}
