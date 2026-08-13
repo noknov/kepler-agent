@@ -37,6 +37,11 @@ needs. Discovery is explicit and deterministic rather than relevance-ranked.
 `repo-search` and `repo-read_file` resolve branches to immutable snapshots, so
 concurrent users can inspect different refs without checkout conflicts.
 
+Code-graph output is explicitly approximate: Go syntax is parsed with the Go
+AST, but call edges are name-matched without type resolution; C# symbols and
+calls use lexical extraction. Use LSP or source reads before making behavioral
+claims from these results.
+
 ## GitHub
 
 | Tool | Description |
@@ -58,7 +63,6 @@ selection. Workflow aliases can live in `PROMPT_DIR/runtime.json`.
 | `k8s-describe` | Describe Kubernetes resources and events |
 | `k8s-logs` | Fetch Kubernetes pod logs |
 | `k8s-top` | Show Kubernetes CPU and memory usage |
-| `shell` | Run allowlisted read-only CLI commands |
 | `diagnostics-incident_brief` | Structured incident summary |
 | `diagnostics-timeline` | Incident event timeline |
 | `diagnostics-evidence_board` | Structured evidence board |

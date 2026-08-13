@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	"github.com/noknov/slack-copilot-agent/packages/frontmatter"
 )
 
 type Skill struct{ Name, Description, Path string }
@@ -94,28 +95,16 @@ func (t loadTool) Execute(_ context.Context, call tool.Call) (tool.Result, error
 }
 
 func metadata(fallback, body string) (string, string) {
-	name, description := fallback, ""
-	if !strings.HasPrefix(body, "---\n") {
-		return name, description
-	}
-	end := strings.Index(body[4:], "\n---")
-	if end < 0 {
-		return name, description
-	}
-	for _, line := range strings.Split(body[4:4+end], "\n") {
-		key, value, ok := strings.Cut(line, ":")
-		if !ok {
-			continue
+	name := fallback
+	header := struct {
+		Name        string `yaml:"name"`
+		Description string `yaml:"description"`
+	}{}
+	if _, found, err := frontmatter.Decode(body, &header); err == nil && found {
+		if strings.TrimSpace(header.Name) != "" {
+			name = strings.TrimSpace(header.Name)
 		}
-		value = strings.Trim(strings.TrimSpace(value), `"`)
-		switch strings.TrimSpace(key) {
-		case "name":
-			if value != "" {
-				name = value
-			}
-		case "description":
-			description = value
-		}
+		return name, strings.TrimSpace(header.Description)
 	}
-	return name, description
+	return name, ""
 }

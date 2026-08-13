@@ -70,7 +70,7 @@ func TestIntegrationSandboxHidesWorkspaceCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = workspace.Close() })
-	result, err := (Sandbox{Workspace: workspace}).Run(context.Background(), CommandRequest{Command: "cat .git/config"})
+	result, err := (Sandbox{Workspace: workspace}).Run(context.Background(), CommandRequest{Argv: []string{"cat", ".git/config"}})
 	if err != nil {
 		t.Fatal(err)
 	}

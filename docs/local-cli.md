@@ -26,7 +26,7 @@ Inputs typed during an active turn are either injected as steering at the next m
 
 ## Security model
 
-The local profile resolves file operations beneath the canonical workspace, blocks common credential paths, and uses Seatbelt on macOS or bubblewrap on Linux for shell commands. Shell subprocesses receive a minimal environment and do not inherit model API keys. Network is denied unless the tool call requests it and the user grants approval. Grants can apply once, to the current process session, or to the exact command for this project; persistent grants live in the agent state directory, not the repository.
+The local profile resolves file operations beneath the canonical workspace, blocks common credential paths, and uses Seatbelt on macOS or bubblewrap on Linux for argv execution. Subprocesses receive a minimal environment and do not inherit model API keys. Network is denied unless the structured tool call requests it and the user grants approval. Grants can apply once, to the current process session, or to the exact argv request for this project; persistent grants live in the agent state directory, not the repository.
 
 If the OS sandbox is unavailable, command execution fails closed. `unsafe_allow_no_sandbox` / `--unsafe-allow-no-sandbox` is an explicit development escape hatch and should not be used for untrusted repositories or prompts.
 
@@ -37,7 +37,10 @@ override `HOME`, `PATH`, `TMPDIR`, or inject loader variables. Common repository
 credential files—including `.git/config` when it contains an embedded remote
 credential—are denied to file tools and sandboxed commands.
 
-The hosted profile has no end-user host approvals. Its policy rejects mutation effects and requires an operator allowlist. Optional command execution is an injected argv executor with no shell string; deployment code remains responsible for the container or kernel sandbox.
+The hosted profile has no end-user host approvals. Its policy rejects mutation
+effects unless the exact tool is in the operator allowlist. Hosted exposes
+purpose-built Git, Kubernetes, GCP, code, and integration tools; it does not
+register a generic shell or command-execution tool.
 
 ## Shared contracts
 

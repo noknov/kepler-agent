@@ -2,9 +2,11 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
@@ -34,6 +36,32 @@ func TestClientConvertsCanonicalRequestOnceForEveryProfile(t *testing.T) {
 	}
 	if len(wire.request.Tools) != 1 || wire.request.Tools[0].Function.Name != "echo" {
 		t.Fatalf("tools=%+v", wire.request.Tools)
+	}
+}
+
+func TestClientPreservesTextInMultimodalWireMessage(t *testing.T) {
+	wire := &recordingWire{}
+	client := &Client{Wire: wire}
+	_, err := client.Generate(context.Background(), model.Request{
+		Model: "test",
+		Messages: []model.Message{{Role: model.RoleUser, Content: []model.Content{
+			{Type: model.ContentText, Text: "explain this image"},
+			{Type: model.ContentImage, ImageURL: "data:image/png;base64,AAAA"},
+		}}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := wire.request.Messages[0]
+	if message.Content != "" || len(message.ContentParts) != 2 || message.ContentParts[0].Text != "explain this image" {
+		t.Fatalf("wire message = %+v", message)
+	}
+	payload, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(payload), "explain this image") {
+		t.Fatalf("serialized message lost text: %s", payload)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
 )
 
@@ -44,6 +45,47 @@ func TestProjectionUsesLatestCompactionCoverage(t *testing.T) {
 	if len(projection.Messages) != 2 || projection.Messages[0].Text() != "summary" || projection.Messages[1].Text() != "new" {
 		t.Fatalf("messages=%+v", projection.Messages)
 	}
+}
+
+func TestBoundedProjectorNeverSplitsToolCallAndResult(t *testing.T) {
+	call := model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "call-1", Name: "read", Arguments: []byte(`{}`)}}}}
+	result := toolResultEvent("turn-old", 3, "call-1", strings.Repeat("result ", 100))
+	events := []transcript.Event{
+		{Sequence: 1, TurnID: "turn-old", Type: transcript.UserInput, Message: messagePtr(model.TextMessage(model.RoleUser, strings.Repeat("old ", 100)))},
+		{Sequence: 2, TurnID: "turn-old", Type: transcript.AssistantMessage, Message: &call},
+		result,
+		{Sequence: 4, TurnID: "turn-new", Type: transcript.UserInput, Message: messagePtr(model.TextMessage(model.RoleUser, "new question"))},
+		{Sequence: 5, TurnID: "turn-new", Type: transcript.AssistantMessage, Message: messagePtr(model.TextMessage(model.RoleAssistant, "new answer"))},
+		{Sequence: 6, TurnID: "turn-last", Type: transcript.UserInput, Message: messagePtr(model.TextMessage(model.RoleUser, "last question"))},
+	}
+	projection, err := NewBoundedProjector(ContextConfig{MaxTokens: 80}).Project(context.Background(), events, model.Message{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawCall, sawResult bool
+	for _, message := range projection.Messages {
+		sawCall = sawCall || len(message.ToolCalls()) > 0
+		for _, content := range message.Content {
+			sawResult = sawResult || content.ToolResult != nil
+		}
+	}
+	if sawCall != sawResult {
+		t.Fatalf("tool call/result pair was split: messages=%+v", projection.Messages)
+	}
+}
+
+func TestEstimateTokensCountsCJKAndInlineImages(t *testing.T) {
+	text := EstimateTokens([]model.Message{model.TextMessage(model.RoleUser, strings.Repeat("中", 100))})
+	image := EstimateTokens([]model.Message{{Role: model.RoleUser, Content: []model.Content{{Type: model.ContentImage, ImageURL: "data:image/png;base64," + strings.Repeat("A", 4000)}}}})
+	if text < 100 || image < 2000 {
+		t.Fatalf("unexpected estimates: text=%d image=%d", text, image)
+	}
+}
+
+func toolResultEvent(turnID string, sequence uint64, callID, text string) transcript.Event {
+	call := tool.Call{ID: callID, Name: "read"}
+	result := tool.Result{Content: []model.Content{{Type: model.ContentText, Text: text}}}
+	return transcript.Event{Sequence: sequence, TurnID: turnID, Type: transcript.ToolCallCompleted, ToolCall: &call, ToolResult: &result}
 }
 
 func messagePtr(message model.Message) *model.Message { return &message }

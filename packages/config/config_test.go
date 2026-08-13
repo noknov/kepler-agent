@@ -40,6 +40,22 @@ func TestLoadPrefersDotEnvOverShellEnv(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsMalformedTypedEnvironment(t *testing.T) {
+	resetConfigEnv(t)
+	t.Setenv("SLACK_EVENT_WORKERS", "many")
+	if _, err := LoadFor(ProfileGateway); err == nil || !strings.Contains(err.Error(), "SLACK_EVENT_WORKERS") {
+		t.Fatalf("expected keyed integer error, got %v", err)
+	}
+}
+
+func TestLoadRejectsMalformedProviderTypedEnvironment(t *testing.T) {
+	resetConfigEnv(t)
+	t.Setenv("MIMO_TIMEOUT", "eventually")
+	if _, err := LoadFor(ProfileGateway); err == nil || !strings.Contains(err.Error(), "MIMO_TIMEOUT") {
+		t.Fatalf("expected provider timeout error, got %v", err)
+	}
+}
+
 func TestValidToolName(t *testing.T) {
 	for _, name := range []string{"reminder-create", "slack_create", "Tool123"} {
 		if !validToolName(name) {

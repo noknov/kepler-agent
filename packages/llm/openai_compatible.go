@@ -136,10 +136,9 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 	}
 	c.setHeaders(httpReq)
 
-	// Use a timeout-free client for streaming — the global client timeout
-	// would kill long generations mid-stream. Context cancellation still works.
-	streamClient := &http.Client{}
-	resp, err := streamClient.Do(httpReq)
+	// Reuse the configured transport and request deadline. A fresh timeout-free
+	// client bypasses transport settings and can leave a stream hung forever.
+	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return Response{}, err
 	}
@@ -159,9 +158,20 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 	argumentStreams := map[int]*toolArgumentStream{}
 	// Track tool call completion state for OnToolCallComplete.
 	completedToolIDs := map[string]bool{}
+	var streamErr error
 
 	err = readSSE(resp.Body, func(ev sseEvent) bool {
 		if ev.Data == "[DONE]" {
+			return false
+		}
+		var envelope struct {
+			Error *struct {
+				Message string `json:"message"`
+				Type    string `json:"type"`
+			} `json:"error"`
+		}
+		if json.Unmarshal([]byte(ev.Data), &envelope) == nil && envelope.Error != nil {
+			streamErr = fmt.Errorf("%s stream %s: %s", c.providerName(), envelope.Error.Type, envelope.Error.Message)
 			return false
 		}
 		var chunk struct {
@@ -256,6 +266,9 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 		}
 		return true
 	})
+	if streamErr != nil {
+		return Response{}, streamErr
+	}
 	if err != nil {
 		return Response{}, err
 	}

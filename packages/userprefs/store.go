@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/noknov/slack-copilot-agent/packages/frontmatter"
 	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
 )
 
@@ -225,30 +226,17 @@ func sanitizeName(name string) string {
 
 func parseSkillHeader(fallbackName, content string) (string, string) {
 	name := fallbackName
-	description := ""
-	if !strings.HasPrefix(content, "---\n") {
-		return name, description
-	}
-	end := strings.Index(content[len("---\n"):], "\n---")
-	if end < 0 {
-		return name, description
-	}
-	for _, line := range strings.Split(content[len("---\n"):len("---\n")+end], "\n") {
-		key, value, ok := strings.Cut(line, ":")
-		if !ok {
-			continue
+	header := struct {
+		Name        string `yaml:"name"`
+		Description string `yaml:"description"`
+	}{}
+	if _, found, err := frontmatter.Decode(content, &header); err == nil && found {
+		if strings.TrimSpace(header.Name) != "" {
+			name = strings.TrimSpace(header.Name)
 		}
-		value = strings.Trim(strings.TrimSpace(value), `"'`)
-		switch strings.TrimSpace(key) {
-		case "name":
-			if value != "" {
-				name = value
-			}
-		case "description":
-			description = value
-		}
+		return name, strings.TrimSpace(header.Description)
 	}
-	return name, description
+	return name, ""
 }
 
 func sortAssets(assets []Asset) {

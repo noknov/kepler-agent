@@ -135,7 +135,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		return nil, fmt.Errorf("build hosted tool catalog: %w", err)
 	}
 	profile, profileErr := hosted.NewProfile(cfg, hosted.ProfileDependencies{
-		Tools: catalog, Postgres: stores.PGPool, Redis: stores.Redis, ToolSpills: stores.Runs, Events: events,
+		Tools: catalog, Postgres: stores.PGPool, Redis: stores.Redis, ToolSpills: stores.Runs, Events: events, Metrics: recorder,
 	})
 	if profileErr != nil {
 		return nil, fmt.Errorf("build hosted profile: %w", profileErr)
@@ -143,11 +143,13 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	healthService := health.NewService(profile.Tools, cfg.Security.WorkspaceRoots)
 	healthService.Redis = stores.Redis
 	conversation := slackagent.New(profile.Agent, slackClient, profile.Prompt, profile.Redactor, stores.UserPrefs)
+	conversation.OnDelivered = runSink.LinkSlackMessage
+	conversation.AlreadyDelivered = runSink.SlackMessageDelivered
 	if profile.SecondaryModel != nil {
 		conversation.Progress = &slackagent.ProgressSummarizer{Client: profile.SecondaryModel, Model: profile.SecondaryModelName, Sanitize: profile.Redactor.Sanitize, ToolDescriptions: toolDescriptions(profile.Tools)}
 	}
 	conversation.Redis, conversation.PodID, conversation.Lifecycle = stores.Redis, podID, serviceCtx
-	conversation.Queue = slackagent.RedisQueue{Client: stores.Redis, TTL: 24 * time.Hour}
+	conversation.Inputs = stores.Inputs
 	conversation.Locker = stores.Sessions
 	if len(cfg.Security.WorkspaceRoots) > 0 {
 		conversation.Workspace = cfg.Security.WorkspaceRoots[0]
@@ -441,9 +443,6 @@ func (s *Service) endEvent() {
 }
 
 func multimodalPredicate(models []string) func(string) bool {
-	if len(models) == 0 {
-		return nil
-	}
 	mmSet := make(map[string]bool, len(models))
 	for _, m := range models {
 		mmSet[m] = true

@@ -40,8 +40,8 @@ func (descriptionTool) Execute(context.Context, tool.Call) (tool.Result, error) 
 
 func TestToolDescriptionsUsesCatalogDescriptors(t *testing.T) {
 	catalog, err := tool.NewCatalog(
-		descriptionTool{descriptor: tool.Descriptor{Name: "github-pr_diff", Description: "Fetch GitHub pull request metadata and unified diff.", InputSchema: json.RawMessage(`{}`)}},
-		descriptionTool{descriptor: tool.Descriptor{Name: "empty-description", InputSchema: json.RawMessage(`{}`)}},
+		descriptionTool{descriptor: tool.Descriptor{Name: "github-pr_diff", Description: "Fetch GitHub pull request metadata and unified diff.", InputSchema: json.RawMessage(`{}`), Effects: []tool.Effect{tool.EffectRead}}},
+		descriptionTool{descriptor: tool.Descriptor{Name: "empty-description", InputSchema: json.RawMessage(`{}`), Effects: []tool.Effect{tool.EffectRead}}},
 	)
 	if err != nil {
 		t.Fatal(err)

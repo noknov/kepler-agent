@@ -40,10 +40,9 @@ func (t bridgeFixtureTool) Execute(_ context.Context, _ json.RawMessage, runtime
 }
 
 func TestAdaptRegistryKeepsSessionActivationAndTurnCacheIsolated(t *testing.T) {
-	source := registry.NewReadOnly()
+	source := registry.NewWithPolicy(registry.CapabilityPolicy{})
 	source.Register(bridgeFixtureTool{name: "cache-set", parallel: true})
 	source.Register(bridgeFixtureTool{name: "cache-get"})
-	source.Register(registry.ToolSearchTool{Registry: source})
 	source.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, bridgeFixtureTool{name: "later"}))
 	catalog, err := AdaptRegistry(source)
 	if err != nil {
@@ -65,7 +64,7 @@ func TestAdaptRegistryKeepsSessionActivationAndTurnCacheIsolated(t *testing.T) {
 		t.Fatalf("cache leaked across turns: result=%+v err=%v", result, err)
 	}
 	catalog.EndTurn("s1", "t1")
-	if state := set.(bridgedTool).bridge.state("s1"); state.caches["t1"] != nil {
+	if cache := set.(registryToolAdapter).state.caches["t1"]; cache != nil {
 		t.Fatal("turn cache was retained after EndTurn")
 	}
 
@@ -88,18 +87,9 @@ func TestAdaptRegistryKeepsSessionActivationAndTurnCacheIsolated(t *testing.T) {
 		t.Fatal("deferred activation leaked across sessions")
 	}
 	activate("s2")
-
-	bridge := set.(bridgedTool).bridge
-	bridge.mu.Lock()
-	bridge.sessions["s1"].lastUsed = time.Now().Add(-sessionIdleTTL)
-	bridge.pruneLocked(time.Now())
-	_, retained := bridge.sessions["s1"]
-	bridge.mu.Unlock()
-	if retained {
-		t.Fatal("idle session bridge state was retained")
-	}
-	if _, ok := catalog.GetActive("s1", "later"); ok {
-		t.Fatal("idle session activation was retained")
+	catalog.EndTurn("s2", "s2-turn")
+	if _, ok := catalog.GetActive("s2", "later"); ok {
+		t.Fatal("deferred activation survived the turn boundary")
 	}
 
 	descriptors := catalog.Descriptors()
@@ -116,7 +106,7 @@ func TestAdaptRegistryKeepsSessionActivationAndTurnCacheIsolated(t *testing.T) {
 }
 
 func TestAdaptRegistryPreservesNeedsUserInput(t *testing.T) {
-	source := registry.NewReadOnly()
+	source := registry.NewWithPolicy(registry.CapabilityPolicy{})
 	source.Register(bridgeFixtureTool{name: "ask", pause: true})
 	catalog, err := AdaptRegistry(source)
 	if err != nil {
@@ -126,5 +116,12 @@ func TestAdaptRegistryPreservesNeedsUserInput(t *testing.T) {
 	result, err := item.Execute(context.Background(), agenttool.Call{Name: "ask", Scope: agenttool.Scope{SessionID: "s", TurnID: "t", Values: map[string]string{}}})
 	if err != nil || !result.NeedsUserInput || !strings.Contains(result.Content[0].Text, "question") {
 		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestEffectsForPreservesNetworkAndWriteRisk(t *testing.T) {
+	effects := effectsFor(registry.ToolMetadata{Risk: registry.RiskExternalWrite, Network: true})
+	if len(effects) != 2 || effects[0] != agenttool.EffectExternalWrite || effects[1] != agenttool.EffectNetwork {
+		t.Fatalf("effects = %#v", effects)
 	}
 }

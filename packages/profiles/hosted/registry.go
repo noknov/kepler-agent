@@ -4,146 +4,172 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
-	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
 )
 
-// AdaptRegistry exposes production tools through the canonical catalog. The
-// source registry is an immutable template; each agent session gets an isolated
-// clone for deferred activation, and each turn gets one shared runtime cache.
+// AdaptRegistry is a construction-only migration boundary for the existing
+// tool implementations. Runtime visibility, activation, policy and execution
+// are owned exclusively by the canonical agent tool catalog.
 func AdaptRegistry(source *registry.Registry) (*agenttool.Catalog, error) {
 	if source == nil {
-		return nil, fmt.Errorf("hosted tool registry is nil")
+		return nil, fmt.Errorf("hosted tool inventory is nil")
 	}
-	bridge := &toolBridge{source: source, sessions: make(map[string]*bridgeSession)}
 	catalog, err := agenttool.NewCatalog()
 	if err != nil {
 		return nil, err
 	}
-	bridge.catalog = catalog
+	state := &toolRuntimeState{caches: make(map[string]*registry.RuntimeCache)}
 	for _, info := range source.Inventory() {
+		if info.Spec.Function.Name == "tool_search" {
+			continue
+		}
 		raw, err := json.Marshal(info.Spec.Function.Parameters)
 		if err != nil {
 			return nil, err
 		}
 		descriptor := agenttool.Descriptor{
 			Name: info.Spec.Function.Name, Description: info.Spec.Function.Description,
-			InputSchema: raw, Effects: effectsFor(info.Metadata.Risk), Parallel: info.Parallel,
-			Dependencies: append([]string(nil), info.Metadata.Dependencies...), Surfaces: append([]string(nil), info.Metadata.Surfaces...), Timeout: info.Metadata.Timeout,
+			InputSchema: raw, Effects: effectsFor(info.Metadata), Parallel: info.Parallel,
+			Dependencies: append([]string(nil), info.Metadata.Dependencies...), Surfaces: append([]string(nil), info.Metadata.Surfaces...),
+			Timeout: info.Metadata.Timeout, Exclusive: info.Metadata.Exclusive,
 		}
 		if info.Deferred {
 			descriptor.Exposure = agenttool.ExposureDeferred
 			descriptor.Tags = []string{info.Category}
 		}
-		if err := catalog.Register(bridgedTool{bridge: bridge, descriptor: descriptor}); err != nil {
+		if err := catalog.Register(registryToolAdapter{state: state, implementation: info.Tool, descriptor: descriptor}); err != nil {
 			return nil, err
 		}
+	}
+	if err := catalog.Register(catalogSearch{catalog: catalog}); err != nil {
+		return nil, err
 	}
 	return catalog, nil
 }
 
-func effectsFor(risk registry.ToolRisk) []agenttool.Effect {
-	switch risk {
+func effectsFor(metadata registry.ToolMetadata) []agenttool.Effect {
+	var effects []agenttool.Effect
+	switch metadata.Risk {
 	case registry.RiskWrite:
-		return []agenttool.Effect{agenttool.EffectWorkspaceWrite}
+		effects = append(effects, agenttool.EffectWorkspaceWrite)
 	case registry.RiskExternalWrite:
-		return []agenttool.Effect{agenttool.EffectExternalWrite}
+		effects = append(effects, agenttool.EffectExternalWrite)
 	default:
-		return []agenttool.Effect{agenttool.EffectRead}
+		effects = append(effects, agenttool.EffectRead)
 	}
-}
-
-type toolBridge struct {
-	mu       sync.Mutex
-	source   *registry.Registry
-	catalog  *agenttool.Catalog
-	sessions map[string]*bridgeSession
-}
-
-const sessionIdleTTL = 24 * time.Hour
-
-type bridgeSession struct {
-	registry *registry.Registry
-	caches   map[string]*registry.RuntimeCache
-	lastUsed time.Time
-}
-
-func (b *toolBridge) state(sessionID string) *bridgeSession {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.pruneLocked(time.Now())
-	state := b.sessions[sessionID]
-	if state == nil {
-		state = &bridgeSession{registry: b.source.Clone(), caches: make(map[string]*registry.RuntimeCache), lastUsed: time.Now()}
-		b.sessions[sessionID] = state
+	if metadata.Network {
+		effects = append(effects, agenttool.EffectNetwork)
 	}
-	state.lastUsed = time.Now()
-	return state
+	return effects
 }
 
-func (b *toolBridge) pruneLocked(now time.Time) {
-	for sessionID, state := range b.sessions {
-		if now.Sub(state.lastUsed) < sessionIdleTTL {
-			continue
-		}
-		delete(b.sessions, sessionID)
-		b.catalog.Deactivate(sessionID)
-	}
+type toolRuntimeState struct {
+	mu     sync.Mutex
+	caches map[string]*registry.RuntimeCache
 }
 
-func (b *toolBridge) cache(state *bridgeSession, turnID string) *registry.RuntimeCache {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	cache := state.caches[turnID]
+func (s *toolRuntimeState) cache(turnID string) *registry.RuntimeCache {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cache := s.caches[turnID]
 	if cache == nil {
 		cache = registry.NewRuntimeCache()
-		state.caches[turnID] = cache
+		s.caches[turnID] = cache
 	}
 	return cache
 }
 
-func (b *toolBridge) syncActive(sessionID string, state *bridgeSession) error {
-	for _, spec := range state.registry.Specs() {
-		if b.catalog.Has(spec.Function.Name) {
-			if err := b.catalog.Activate(sessionID, spec.Function.Name); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+func (s *toolRuntimeState) endTurn(turnID string) {
+	s.mu.Lock()
+	delete(s.caches, turnID)
+	s.mu.Unlock()
 }
 
-type bridgedTool struct {
-	bridge     *toolBridge
-	descriptor agenttool.Descriptor
+type registryToolAdapter struct {
+	state          *toolRuntimeState
+	implementation registry.Tool
+	descriptor     agenttool.Descriptor
 }
 
-func (t bridgedTool) Descriptor() agenttool.Descriptor { return t.descriptor }
-
-func (t bridgedTool) EndTurn(sessionID, turnID string) {
-	t.bridge.mu.Lock()
-	defer t.bridge.mu.Unlock()
-	if state := t.bridge.sessions[sessionID]; state != nil {
-		delete(state.caches, turnID)
-	}
-}
-
-func (t bridgedTool) Execute(ctx context.Context, call agenttool.Call) (agenttool.Result, error) {
-	state := t.bridge.state(call.Scope.SessionID)
+func (t registryToolAdapter) Descriptor() agenttool.Descriptor { return t.descriptor }
+func (t registryToolAdapter) EndTurn(_, turnID string)         { t.state.endTurn(turnID) }
+func (t registryToolAdapter) Execute(ctx context.Context, call agenttool.Call) (agenttool.Result, error) {
 	values := call.Scope.Values
-	result, err := state.registry.Execute(ctx, call.Name, call.Arguments, registry.Runtime{
+	result, err := t.implementation.Execute(ctx, call.Arguments, registry.Runtime{
 		UserID: call.Scope.UserID, Channel: values["channel"], ThreadTS: values["thread_ts"],
-		RunID: call.Scope.TurnID, Cache: t.bridge.cache(state, call.Scope.TurnID),
+		RunID: call.Scope.TurnID, Cache: t.state.cache(call.Scope.TurnID),
 	})
 	if err != nil {
 		return agenttool.Result{}, err
 	}
-	if err := t.bridge.syncActive(call.Scope.SessionID, state); err != nil {
+	return agenttool.Result{Content: []model.Content{{Type: model.ContentText, Text: result.Content}}, NeedsUserInput: result.NeedsUserInput}, nil
+}
+
+type catalogSearch struct{ catalog *agenttool.Catalog }
+
+func (catalogSearch) Descriptor() agenttool.Descriptor {
+	return agenttool.Descriptor{Name: "tool_search", Description: "List deferred tools and activate them by exact name or category for the current turn.", InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["list","activate"]},"categories":{"type":"array","items":{"type":"string"}},"tool_names":{"type":"array","items":{"type":"string"}}},"required":["action"]}`), Effects: []agenttool.Effect{agenttool.EffectRead}}
+}
+func (t catalogSearch) Execute(_ context.Context, call agenttool.Call) (agenttool.Result, error) {
+	var args struct {
+		Action     string   `json:"action"`
+		Categories []string `json:"categories"`
+		ToolNames  []string `json:"tool_names"`
+	}
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return agenttool.Result{}, err
 	}
-	return agenttool.Result{Content: []model.Content{{Type: model.ContentText, Text: result.Content}}, NeedsUserInput: result.NeedsUserInput}, nil
+	switch args.Action {
+	case "list":
+		var lines []string
+		for _, descriptor := range t.catalog.Descriptors() {
+			if descriptor.Exposure == agenttool.ExposureDeferred {
+				lines = append(lines, descriptor.Name+" ["+strings.Join(descriptor.Tags, ", ")+"]")
+			}
+		}
+		if len(lines) == 0 {
+			return agenttool.TextResult("No deferred tools are available."), nil
+		}
+		return agenttool.TextResult("Deferred tools (activate exact names or categories):\n- " + strings.Join(lines, "\n- ")), nil
+	case "activate":
+		names := append([]string(nil), args.ToolNames...)
+		wanted := make(map[string]bool, len(args.Categories))
+		for _, category := range args.Categories {
+			wanted[category] = true
+		}
+		for _, descriptor := range t.catalog.Descriptors() {
+			for _, tag := range descriptor.Tags {
+				if wanted[tag] {
+					names = append(names, descriptor.Name)
+				}
+			}
+		}
+		sort.Strings(names)
+		names = compactStrings(names)
+		if len(names) == 0 {
+			return agenttool.TextResult("No tools requested."), nil
+		}
+		if err := t.catalog.Activate(call.Scope.SessionID, names...); err != nil {
+			return agenttool.Result{}, err
+		}
+		return agenttool.TextResult("Activated tools:\n- " + strings.Join(names, "\n- ")), nil
+	default:
+		return agenttool.Result{}, fmt.Errorf("action must be list or activate")
+	}
+}
+
+func compactStrings(values []string) []string {
+	out := values[:0]
+	for _, value := range values {
+		if value != "" && (len(out) == 0 || out[len(out)-1] != value) {
+			out = append(out, value)
+		}
+	}
+	return out
 }

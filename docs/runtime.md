@@ -12,7 +12,9 @@ termination all derive from that transcript. `agent_runs` and
 conversation state store.
 
 Model providers translate their wire formats into canonical messages and typed
-stream events. Web citations remain structured provenance on content blocks.
+stream events. Stream deltas are sent only to transient presentation sinks;
+the durable transcript stores completed model messages and lifecycle events so
+replay does not duplicate token fragments. Web citations remain structured provenance on content blocks.
 Prompts decide when and how to cite; presentation adapters decide how to render
 the provider-supplied citation records. Dynamic status remains a projection of
 canonical runtime events rather than a second execution-state model. Slack may
@@ -35,8 +37,11 @@ The current loop has no model-output repair layer. Only the owner of a
 unsupported image parts are removed before provider dispatch; and parallel tool
 results share an aggregate inline budget. Empty model output fails the turn,
 the tool-step limit stops without an extra synthesis request, and retryable
-typed provider failures are retried only by the runtime. Slack buffers the final
-answer and posts one complete Block Kit `markdown` message. It does not create a
+typed provider failures are retried only by the runtime. A zero retry count now
+means zero retries; product profiles opt into their retry budget explicitly.
+Slack buffers the final answer and posts one complete Block Kit `markdown`
+message with a deterministic `client_msg_id`, then persists the Slack message
+link on the run. It does not create a
 streaming placeholder or rewrite Markdown with regular expressions.
 
 Git-backed code tools refresh `origin` once per turn before reading remote refs.
@@ -45,7 +50,11 @@ checked-out branch name to read `origin/<branch>` without checkout. Explicit
 repository-specific default refs still belong in the private deployment prompt,
 not in runtime discovery or broad branch-name guessing.
 
-Hosted capability policy is authoritative and non-interactive. Local tools use
+Hosted capability policy is authoritative and non-interactive. Tool visibility,
+turn activation, policy, and execution are owned by the canonical agent
+catalog; the older tool package is now only a construction inventory for tool
+implementations. Its registry has no runtime dispatch or activation API; a
+startup adapter maps implementations into the canonical catalog. Local tools use
 the workspace sandbox and scoped approvals. TTS is an optional external-write
 tool and is never automatic orchestration.
 

@@ -68,7 +68,7 @@ printf "review this repository\n" | bin/slack-copilot --cwd . --output jsonl
 bin/slack-copilot --resume
 ```
 
-The default shell profile writes only inside the workspace and denies network
+The local `exec` tool runs argv without a shell, writes only inside the workspace, and denies network
 access. Network and external effects require approval; grants may apply once,
 for the process session, or to the exact command and project. See
 [local CLI usage and security](docs/local-cli.md).

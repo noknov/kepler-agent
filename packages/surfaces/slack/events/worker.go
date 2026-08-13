@@ -197,11 +197,19 @@ func (w *Worker) handle(ctx context.Context, job job) {
 		return
 	}
 	eventCtx, cancel := context.WithTimeout(ctx, w.EventTimeout)
-	heartbeatDone := make(chan struct{})
-	go w.renewLease(eventCtx, job.eventID, heartbeatDone)
+	heartbeatDone := make(chan error, 1)
+	go w.renewLease(eventCtx, job.eventID, cancel, heartbeatDone)
 	err = w.Handler(eventCtx, job.eventID, job.event)
 	cancel()
-	<-heartbeatDone
+	leaseErr := <-heartbeatDone
+	if errors.Is(leaseErr, eventinbox.ErrLeaseLost) {
+		// Ownership has moved to another worker. The canceled former owner must
+		// not complete or fail the event and overwrite the new owner's state.
+		return
+	}
+	if leaseErr != nil {
+		err = errors.Join(err, leaseErr)
+	}
 	if err != nil {
 		log.Printf("handle Slack inbox event %s: %v", job.eventID, err)
 		finalCtx, finalCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -256,20 +264,28 @@ func (w *Worker) replay(ctx context.Context) {
 	}
 }
 
-func (w *Worker) renewLease(ctx context.Context, eventID string, done chan<- struct{}) {
-	defer close(done)
-	interval := w.InboxLease / 3
-	if interval <= 0 {
-		interval = time.Minute
+func (w *Worker) renewLease(ctx context.Context, eventID string, cancel context.CancelFunc, done chan<- error) {
+	lease := w.InboxLease
+	if lease <= 0 {
+		lease = 16 * time.Minute
 	}
+	interval := lease / 3
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			done <- nil
 			return
 		case <-ticker.C:
-			if err := w.Inbox.Renew(ctx, eventID, w.InboxLease); err != nil {
+			if err := w.Inbox.Renew(ctx, eventID, lease); err != nil {
+				// The handler cancels eventCtx after it returns. A renewal already in
+				// flight may observe that normal cancellation; it is not a lease or
+				// handler failure and must not turn successful work into a retry.
+				if errors.Is(err, context.Canceled) && ctx.Err() != nil {
+					done <- nil
+					return
+				}
 				if !errors.Is(err, context.Canceled) && !errors.Is(err, eventinbox.ErrLeaseLost) {
 					log.Printf("renew Slack inbox event %s: %v", eventID, err)
 				}
@@ -278,6 +294,8 @@ func (w *Worker) renewLease(ctx context.Context, eventID string, done chan<- str
 				} else if !errors.Is(err, context.Canceled) {
 					w.observeJob("renew_error")
 				}
+				cancel()
+				done <- err
 				return
 			}
 		}

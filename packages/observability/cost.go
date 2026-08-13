@@ -10,9 +10,12 @@ type CostRates struct {
 }
 
 func (r CostRates) EstimateUSD(usage llm.Usage) float64 {
-	inputTokens := usage.PromptTokens - usage.CacheReadInputTokens - usage.CacheCreationInputTokens
-	if inputTokens < 0 {
-		inputTokens = usage.PromptTokens
+	inputTokens := usage.PromptTokens
+	if usage.CacheIncludedInPrompt {
+		inputTokens -= usage.CacheReadInputTokens + usage.CacheCreationInputTokens
+		if inputTokens < 0 {
+			inputTokens = usage.PromptTokens
+		}
 	}
 	cost := float64(inputTokens) * r.InputPerMTok / 1_000_000
 	cost += float64(usage.CompletionTokens) * r.OutputPerMTok / 1_000_000

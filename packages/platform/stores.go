@@ -13,6 +13,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/reminder"
 	"github.com/noknov/slack-copilot-agent/packages/runs"
 	"github.com/noknov/slack-copilot-agent/packages/session"
+	"github.com/noknov/slack-copilot-agent/packages/sessioninput"
 	"github.com/noknov/slack-copilot-agent/packages/userprefs"
 )
 
@@ -25,6 +26,7 @@ type Stores struct {
 	Reminders *reminder.PGStore
 	Events    *eventinbox.PGStore
 	UserPrefs *userprefs.PGStore
+	Inputs    *sessioninput.PGStore
 }
 
 type EventIngressStores struct {
@@ -58,6 +60,7 @@ func NewStores(ctx context.Context, cfg config.StorageConfig) (*Stores, error) {
 		Reminders: reminder.NewPGStore(pgPool),
 		Events:    eventinbox.NewPGStore(pgPool),
 		UserPrefs: userprefs.NewPGStore(pgPool),
+		Inputs:    sessioninput.NewPGStore(pgPool),
 	}, nil
 }
 
@@ -130,6 +133,7 @@ var allTables = []string{
 	"agent_runs", "agent_tool_spills", "agent_run_steps",
 	"agent_run_feedback", "agent_transcript_events", "reminders",
 	"slack_event_inbox", "user_settings", "user_prompt_assets",
+	"agent_session_inputs",
 }
 
 var ingressTables = []string{"slack_event_inbox", "user_settings", "user_prompt_assets"}

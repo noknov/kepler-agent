@@ -16,7 +16,7 @@ func AddToRegistry(reg *registry.Registry, cfg config.Config, slackClient *slack
 	if reg == nil || slackClient == nil {
 		return
 	}
-	reg.Register(runtimeRead(AskUserTool{Slack: slackClient}, "slack"))
+	reg.Register(registry.WithMetadata(AskUserTool{Slack: slackClient}, registry.ToolMetadata{Risk: registry.RiskRead, Dependencies: []string{"slack"}, Exclusive: true, Network: true}))
 	reg.Register(runtimeRead(FileSearchTool{Slack: slackClient}, "slack"))
 	reg.Register(runtimeRead(JSONAnalyzeTool{Slack: slackClient}, "slack"))
 	registerDeferredTools(reg, registry.CategoryIntegration, slackExternalWrite(CreateCanvasTool{Slack: slackClient}))
@@ -40,6 +40,7 @@ func slackExternalWrite(tool registry.Tool, deps ...string) registry.Tool {
 		Risk:         registry.RiskExternalWrite,
 		Dependencies: append([]string{"slack"}, deps...),
 		Surfaces:     []string{"slack"},
+		Network:      true,
 	})
 }
 
@@ -47,6 +48,7 @@ func runtimeRead(tool registry.Tool, deps ...string) registry.Tool {
 	return registry.WithMetadata(tool, registry.ToolMetadata{
 		Risk:         registry.RiskRead,
 		Dependencies: deps,
+		Network:      true,
 	})
 }
 

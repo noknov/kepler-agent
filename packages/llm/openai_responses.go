@@ -75,7 +75,7 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 	}
 	c.setHeaders(httpReq)
 
-	resp, err := (&http.Client{}).Do(httpReq)
+	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return Response{}, err
 	}

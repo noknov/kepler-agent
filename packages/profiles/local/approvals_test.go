@@ -11,7 +11,7 @@ import (
 
 func TestProjectApprovalPersistsWithoutTouchingWorkspace(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "approvals.json")
-	request := tool.PolicyRequest{Descriptor: tool.Descriptor{Name: "shell"}, Call: tool.Call{Name: "shell", Arguments: json.RawMessage(`{"command":"curl example.com","network":true}`)}}
+	request := tool.PolicyRequest{Descriptor: tool.Descriptor{Name: "exec"}, Call: tool.Call{Name: "exec", Arguments: json.RawMessage(`{"argv":["curl","example.com"],"network":true}`)}}
 	decision := tool.Decision{Type: tool.DecisionRequireApproval, Rule: "network"}
 	called := 0
 	first := &ScopedApprover{Project: "/repo", Path: path, Prompt: func(context.Context, tool.PolicyRequest, tool.Decision) (ApprovalScope, error) {

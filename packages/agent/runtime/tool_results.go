@@ -37,8 +37,8 @@ func limitToolResult(ctx context.Context, result tool.Result, call tool.Call, co
 		}
 	}
 	budget := config.MaxInlineBytes
-	if budget < 256 {
-		budget = 256
+	if budget <= 0 {
+		budget = 64 << 10
 	}
 	result.Content = truncateContent(result.Content, budget)
 	result.Content = append(result.Content, model.Content{Type: model.ContentText, Text: "[tool output truncated]"})

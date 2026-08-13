@@ -37,8 +37,11 @@ func TestFileToolsAndCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := catalog.Get("tool_search"); !ok {
-		t.Fatal("tool_search missing")
+	if _, ok := catalog.Get("exec"); !ok {
+		t.Fatal("exec missing")
+	}
+	if _, ok := catalog.Get("tool_search"); ok {
+		t.Fatal("local catalog registered tool_search without any deferred tools")
 	}
 	listed, err := (ListFiles{Workspace: workspace}).Execute(context.Background(), tool.Call{Arguments: json.RawMessage(`{}`)})
 	if err != nil {

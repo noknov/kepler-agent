@@ -41,16 +41,33 @@ func (s *scriptedModel) Generate(_ context.Context, request model.Request, sink 
 type echoTool struct{}
 
 func (echoTool) Descriptor() tool.Descriptor {
-	return tool.Descriptor{Name: "echo", InputSchema: json.RawMessage(`{"type":"object"}`), Parallel: true}
+	return tool.Descriptor{Name: "echo", InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []tool.Effect{tool.EffectRead}, Parallel: true}
 }
 
 type askTool struct{}
 
 func (askTool) Descriptor() tool.Descriptor {
-	return tool.Descriptor{Name: "ask", InputSchema: json.RawMessage(`{"type":"object"}`)}
+	return tool.Descriptor{Name: "ask", InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []tool.Effect{tool.EffectRead}, Exclusive: true}
 }
 
 type blockingModel struct{}
+
+type panicTool struct{}
+
+func (panicTool) Descriptor() tool.Descriptor {
+	return tool.Descriptor{Name: "panic", InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []tool.Effect{tool.EffectRead}, Parallel: true}
+}
+func (panicTool) Execute(context.Context, tool.Call) (tool.Result, error) { panic("boom") }
+
+type countingWriteTool struct{ calls *int }
+
+func (t countingWriteTool) Descriptor() tool.Descriptor {
+	return tool.Descriptor{Name: "write", InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []tool.Effect{tool.EffectExternalWrite}}
+}
+func (t countingWriteTool) Execute(context.Context, tool.Call) (tool.Result, error) {
+	*t.calls++
+	return tool.TextResult("wrote"), nil
+}
 
 func (blockingModel) Generate(ctx context.Context, _ model.Request, _ model.EventSink) (model.Response, error) {
 	<-ctx.Done()
@@ -64,7 +81,7 @@ type parallelProbeTool struct {
 }
 
 func (t parallelProbeTool) Descriptor() tool.Descriptor {
-	return tool.Descriptor{Name: t.name, InputSchema: json.RawMessage(`{"type":"object"}`), Parallel: true}
+	return tool.Descriptor{Name: t.name, InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []tool.Effect{tool.EffectRead}, Parallel: true}
 }
 func (t parallelProbeTool) Execute(context.Context, tool.Call) (tool.Result, error) {
 	t.started <- t.name
@@ -138,7 +155,7 @@ func TestRunTurnRetriesTransientModelError(t *testing.T) {
 		responses: []model.Response{{}, {Message: model.TextMessage(model.RoleAssistant, "ok"), FinishReason: model.FinishStop}},
 	}
 	catalog, _ := tool.NewCatalog()
-	runner, err := New(Config{Model: "test", RetryBaseDelay: time.Nanosecond}, Dependencies{
+	runner, err := New(Config{Model: "test", MaxModelRetries: 1, RetryBaseDelay: time.Nanosecond}, Dependencies{
 		Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore(),
 		Sleep: func(context.Context, time.Duration) error { return nil },
 	})
@@ -151,6 +168,19 @@ func TestRunTurnRetriesTransientModelError(t *testing.T) {
 	}
 	if result.Message.Text() != "ok" || len(client.requests) != 2 {
 		t.Fatalf("result=%#v requests=%d", result, len(client.requests))
+	}
+}
+
+func TestRunTurnZeroRetryBudgetDoesNotRetry(t *testing.T) {
+	client := &scriptedModel{errors: []error{&model.Error{Kind: model.ErrorTransient, Message: "retryable", Retryable: true}}}
+	catalog, _ := tool.NewCatalog()
+	runner, err := New(Config{Model: "test", MaxModelRetries: 0}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runner.RunTurn(context.Background(), TurnRequest{SessionID: "zero-retry", Input: model.TextMessage(model.RoleUser, "hi")})
+	if err == nil || len(client.requests) != 1 {
+		t.Fatalf("err=%v requests=%d, want one attempt", err, len(client.requests))
 	}
 }
 
@@ -220,6 +250,37 @@ func TestRunTurnStopsWhenToolNeedsUserInput(t *testing.T) {
 	}
 	if result.Termination != TerminationPendingInput || result.Message.Text() != "Which environment should I use?" || len(client.requests) != 1 {
 		t.Fatalf("result=%+v requests=%d", result, len(client.requests))
+	}
+}
+
+func TestRunTurnRejectsMixedExclusiveToolBatchWithoutSideEffects(t *testing.T) {
+	call := func(id, name string) model.Content {
+		return model.Content{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: id, Name: name, Arguments: json.RawMessage(`{}`)}}
+	}
+	client := &scriptedModel{responses: []model.Response{
+		{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{call("ask-1", "ask"), call("write-1", "write")}}, FinishReason: model.FinishToolCalls},
+		{Message: model.TextMessage(model.RoleAssistant, "I need to ask separately."), FinishReason: model.FinishStop},
+	}}
+	writes := 0
+	catalog, _ := tool.NewCatalog(askTool{}, countingWriteTool{calls: &writes})
+	runner, _ := New(Config{Model: "test"}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
+	result, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "exclusive", Input: model.TextMessage(model.RoleUser, "deploy")})
+	if err != nil || writes != 0 || result.Message.Text() != "I need to ask separately." {
+		t.Fatalf("result=%+v writes=%d err=%v", result, writes, err)
+	}
+}
+
+func TestParallelToolPanicBecomesToolFailure(t *testing.T) {
+	call := model.Content{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "panic-1", Name: "panic", Arguments: json.RawMessage(`{}`)}}
+	client := &scriptedModel{responses: []model.Response{
+		{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{call}}, FinishReason: model.FinishToolCalls},
+		{Message: model.TextMessage(model.RoleAssistant, "recovered"), FinishReason: model.FinishStop},
+	}}
+	catalog, _ := tool.NewCatalog(panicTool{})
+	runner, _ := New(Config{Model: "test"}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
+	result, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "panic", Input: model.TextMessage(model.RoleUser, "run")})
+	if err != nil || result.Message.Text() != "recovered" {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
 
@@ -343,6 +404,34 @@ func TestRunTurnProjectsSteeringBeforeModelCall(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("messages=%+v", client.requests[0].Messages)
+	}
+}
+
+func TestRunTurnDoesNotPersistInlineImageBytes(t *testing.T) {
+	client := &scriptedModel{responses: []model.Response{{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop}}}
+	catalog, _ := tool.NewCatalog()
+	store := transcript.NewMemoryStore()
+	runner, _ := New(Config{Model: "test"}, Dependencies{Model: client, Tools: catalog, Transcript: store})
+	input := model.Message{Role: model.RoleUser, Content: []model.Content{
+		{Type: model.ContentText, Text: "inspect"},
+		{Type: model.ContentImage, ImageURL: "data:image/png;base64," + strings.Repeat("A", 4096)},
+	}}
+	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "image", TurnID: "image-turn", Input: input}); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.requests) != 1 || client.requests[0].Messages[len(client.requests[0].Messages)-1].Content[1].ImageURL == "" {
+		t.Fatalf("current model request lost image: %+v", client.requests)
+	}
+	events, _ := store.Load(context.Background(), "image", 0)
+	for _, event := range events {
+		if event.Message == nil {
+			continue
+		}
+		for _, content := range event.Message.Content {
+			if strings.HasPrefix(content.ImageURL, "data:") {
+				t.Fatal("inline image bytes were persisted")
+			}
+		}
 	}
 }
 

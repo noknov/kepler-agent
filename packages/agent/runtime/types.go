@@ -4,6 +4,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strconv"
 	"sync"
 	"time"
 
@@ -44,8 +45,6 @@ func (c Config) withDefaults() Config {
 	}
 	if c.MaxModelRetries < 0 {
 		c.MaxModelRetries = 0
-	} else if c.MaxModelRetries == 0 {
-		c.MaxModelRetries = 2
 	}
 	if c.RetryBaseDelay <= 0 {
 		c.RetryBaseDelay = 500 * time.Millisecond
@@ -103,7 +102,7 @@ func New(config Config, deps Dependencies) (*Runtime, error) {
 		return nil, errors.New("transcript store is required")
 	}
 	if deps.Policy == nil {
-		deps.Policy = tool.AllowAllPolicy{}
+		deps.Policy = tool.ReadOnlyPolicy{}
 	}
 	if deps.IDs == nil {
 		deps.IDs = RandomIDs{}
@@ -122,7 +121,13 @@ func New(config Config, deps Dependencies) (*Runtime, error) {
 }
 
 type InputSource interface {
-	Drain() []model.Message
+	Claim(context.Context, int) ([]PendingInput, error)
+	Ack(context.Context, string) error
+}
+
+type PendingInput struct {
+	ID      string
+	Message model.Message
 }
 
 // InputBuffer is a concurrency-safe steering inbox shared by interactive
@@ -130,12 +135,18 @@ type InputSource interface {
 type InputBuffer struct {
 	mu       sync.Mutex
 	messages []model.Message
+	nextID   uint64
+	closed   bool
 }
 
-func (b *InputBuffer) Push(message model.Message) {
+func (b *InputBuffer) Push(message model.Message) bool {
 	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return false
+	}
 	b.messages = append(b.messages, message)
-	b.mu.Unlock()
+	return true
 }
 
 func (b *InputBuffer) Drain() []model.Message {
@@ -146,14 +157,45 @@ func (b *InputBuffer) Drain() []model.Message {
 	return messages
 }
 
+func (b *InputBuffer) Claim(_ context.Context, limit int) ([]PendingInput, error) {
+	messages := b.Drain()
+	if limit > 0 && len(messages) > limit {
+		b.mu.Lock()
+		b.messages = append(messages[limit:], b.messages...)
+		b.mu.Unlock()
+		messages = messages[:limit]
+	}
+	inputs := make([]PendingInput, 0, len(messages))
+	for _, message := range messages {
+		b.mu.Lock()
+		b.nextID++
+		id := strconv.FormatUint(b.nextID, 10)
+		b.mu.Unlock()
+		inputs = append(inputs, PendingInput{ID: id, Message: message})
+	}
+	return inputs, nil
+}
+
+func (*InputBuffer) Ack(context.Context, string) error { return nil }
+
+func (b *InputBuffer) Close() {
+	b.mu.Lock()
+	b.closed = true
+	b.mu.Unlock()
+}
+
 type TurnRequest struct {
 	SessionID string
 	TurnID    string
 	Input     model.Message
-	Prompt    []prompt.Fragment
-	Scope     tool.Scope
-	Steering  InputSource
-	Model     string
+	// History is an optional, bounded transport import used only when the
+	// canonical session has no prior events. It is recorded as ordinary
+	// untrusted conversation messages before the current turn.
+	History  []model.Message
+	Prompt   []prompt.Fragment
+	Scope    tool.Scope
+	Steering InputSource
+	Model    string
 }
 
 type TurnResult struct {

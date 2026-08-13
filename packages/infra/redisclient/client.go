@@ -2,30 +2,12 @@ package redisclient
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
-
-var enqueueScript = redis.NewScript(`
-local added = redis.call('HSETNX', KEYS[1], ARGV[1], ARGV[2])
-if added == 1 then redis.call('ZADD', KEYS[2], ARGV[3], ARGV[1]) end
-redis.call('EXPIRE', KEYS[1], ARGV[4])
-redis.call('EXPIRE', KEYS[2], ARGV[4])
-return added`)
-
-var drainQueueScript = redis.NewScript(`
-local ids = redis.call('ZRANGE', KEYS[2], 0, -1)
-local values = {}
-for _, id in ipairs(ids) do
-  local value = redis.call('HGET', KEYS[1], id)
-  if value then table.insert(values, value) end
-end
-redis.call('DEL', KEYS[1], KEYS[2])
-return values`)
 
 type Client struct {
 	rdb *redis.Client
@@ -131,41 +113,4 @@ func (c *Client) Decr(ctx context.Context, key string) (int64, error) {
 // Expire sets a TTL on an existing key.
 func (c *Client) Expire(ctx context.Context, key string, ttl time.Duration) error {
 	return c.rdb.Expire(ctx, key, ttl).Err()
-}
-
-// EnqueueJSON adds one deduplicated, ordered JSON item to a durable Redis
-// queue. The queue survives worker restarts when Redis persistence is enabled.
-func (c *Client) EnqueueJSON(ctx context.Context, key, id string, value any, ttl time.Duration) error {
-	if c == nil || c.rdb == nil {
-		return fmt.Errorf("redis client is unavailable")
-	}
-	payload, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
-	if ttl <= 0 {
-		ttl = 24 * time.Hour
-	}
-	return enqueueScript.Run(ctx, c.rdb, []string{key + ":data", key + ":order"}, id, payload, time.Now().UnixNano(), int64(ttl/time.Second)).Err()
-}
-
-// DrainJSONQueue atomically returns and removes every queued JSON payload.
-func (c *Client) DrainJSONQueue(ctx context.Context, key string) ([][]byte, error) {
-	if c == nil || c.rdb == nil {
-		return nil, fmt.Errorf("redis client is unavailable")
-	}
-	values, err := drainQueueScript.Run(ctx, c.rdb, []string{key + ":data", key + ":order"}).Slice()
-	if err != nil {
-		return nil, err
-	}
-	out := make([][]byte, 0, len(values))
-	for _, value := range values {
-		switch typed := value.(type) {
-		case string:
-			out = append(out, []byte(typed))
-		case []byte:
-			out = append(out, append([]byte(nil), typed...))
-		}
-	}
-	return out, nil
 }

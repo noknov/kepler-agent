@@ -896,7 +896,7 @@ func buildGraph(ctx context.Context, repo, ref, commit, branch, fetchStatus stri
 }
 
 func (g *Graph) header() string {
-	return fmt.Sprintf("repo=%s\nbranch=%s\nref=%s\ncommit=%s\nfetch_status=%s\nmodule=%s\nworking_tree_changed=false\n", g.Repo, g.Branch, g.Ref, shortCommit(g.Commit), g.FetchStatus, g.Module)
+	return fmt.Sprintf("repo=%s\nbranch=%s\nref=%s\ncommit=%s\nfetch_status=%s\nmodule=%s\nworking_tree_changed=false\nanalysis=static_syntax\nlimitations=Go syntax is AST-derived but calls are name-matched without type resolution; C# symbols and calls are lexical approximations. Verify behavioral claims with source or LSP.\n", g.Repo, g.Branch, g.Ref, shortCommit(g.Commit), g.FetchStatus, g.Module)
 }
 
 func (g *Graph) sortedPackages() []*Package {

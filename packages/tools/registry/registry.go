@@ -3,7 +3,6 @@ package registry
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -13,17 +12,11 @@ import (
 )
 
 type Runtime struct {
-	UserID         string
-	Channel        string
-	ThreadTS       string
-	RunID          string
-	Cache          *RuntimeCache
-	ToolSpillStore ToolSpillStore
-}
-
-type ToolSpillStore interface {
-	SaveToolSpill(ctx context.Context, runID, toolName, toolCallID, content string) error
-	ReadToolSpill(ctx context.Context, runID, toolName, toolCallID string) (string, error)
+	UserID   string
+	Channel  string
+	ThreadTS string
+	RunID    string
+	Cache    *RuntimeCache
 }
 
 type RuntimeCache struct {
@@ -94,11 +87,14 @@ type ToolMetadata struct {
 	Dependencies []string
 	Surfaces     []string
 	Timeout      time.Duration
+	Exclusive    bool
+	Network      bool
 }
 
 // ToolInfo is an immutable catalog view used by product adapters. Deferred
 // tools remain discoverable without mutating the registry that owns them.
 type ToolInfo struct {
+	Tool     Tool
 	Spec     llm.ToolSpec
 	Metadata ToolMetadata
 	Parallel bool
@@ -110,32 +106,16 @@ type MetadataTool interface {
 	Metadata() ToolMetadata
 }
 
-// DeferredTool is registered but excluded from default Specs() until its category
-// is activated via ActivateCategory or the tool_search tool.
+// DeferredTool is registered as a construction-time inventory item. The agent
+// catalog owns all session-scoped activation.
 type DeferredTool interface {
 	Tool
 	Category() string
 }
 
-// CloneableTool lets tools that hold a registry pointer re-bind themselves when
-// a per-run registry clone is created.
-type CloneableTool interface {
-	CloneForRegistry(*Registry) Tool
-}
-
 type CapabilityPolicy struct {
-	Surface           string
-	AllowWrites       bool
-	AllowedWriteTools map[string]bool
-	AllowedRisks      map[ToolRisk]bool
-	AvailableDeps     map[string]bool
-}
-
-type PolicyDecision struct {
-	Allowed bool     `json:"allowed"`
-	Reason  string   `json:"reason"`
-	Risk    ToolRisk `json:"risk,omitempty"`
-	Surface string   `json:"surface,omitempty"`
+	Surface       string
+	AvailableDeps map[string]bool
 }
 
 const (
@@ -174,82 +154,22 @@ func MetadataOf(tool Tool) ToolMetadata {
 }
 
 type Registry struct {
-	mu         sync.RWMutex
-	tools      map[string]Tool
-	deferred   map[string]Tool
-	categories map[string][]string
-	policy     CapabilityPolicy
-	specsCache []llm.ToolSpec
-	namesCache []string
-	cacheValid bool
-}
-
-func New() *Registry {
-	return NewWithPolicy(CapabilityPolicy{AllowWrites: true})
+	mu       sync.RWMutex
+	tools    map[string]Tool
+	deferred map[string]Tool
+	policy   CapabilityPolicy
 }
 
 func NewWithPolicy(policy CapabilityPolicy) *Registry {
 	return &Registry{
-		tools:      map[string]Tool{},
-		deferred:   map[string]Tool{},
-		categories: map[string][]string{},
-		policy:     policy,
+		tools:    map[string]Tool{},
+		deferred: map[string]Tool{},
+		policy:   policy,
 	}
-}
-
-// NewReadOnly creates a registry whose exposed tool surface excludes write tools.
-// Execute still refuses write tools as a defense-in-depth fallback for stale contexts.
-func NewReadOnly() *Registry {
-	return NewWithPolicy(CapabilityPolicy{AllowWrites: false})
-}
-
-// NewReadOnlyWithAllowedWrites creates a registry that hides write tools except
-// for explicit, product-approved exceptions.
-func NewReadOnlyWithAllowedWrites(names ...string) *Registry {
-	allowed := make(map[string]bool, len(names))
-	for _, name := range names {
-		if name != "" {
-			allowed[name] = true
-		}
-	}
-	return NewWithPolicy(CapabilityPolicy{AllowedWriteTools: allowed})
-}
-
-// Clone creates an isolated registry for a single agent run. Tool instances are
-// shared unless they opt into CloneableTool, so expensive clients remain reused
-// while dynamic activation state stays local to the run.
-func (r *Registry) Clone() *Registry {
-	if r == nil {
-		return nil
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	clone := &Registry{
-		tools:      make(map[string]Tool, len(r.tools)),
-		deferred:   make(map[string]Tool, len(r.deferred)),
-		categories: make(map[string][]string, len(r.categories)),
-		policy: CapabilityPolicy{
-			AllowWrites:       r.policy.AllowWrites,
-			Surface:           r.policy.Surface,
-			AllowedWriteTools: copyBoolMap(r.policy.AllowedWriteTools),
-			AllowedRisks:      copyRiskMap(r.policy.AllowedRisks),
-			AvailableDeps:     copyBoolMap(r.policy.AvailableDeps),
-		},
-	}
-	for name, tool := range r.tools {
-		clone.tools[name] = cloneToolForRegistry(tool, clone)
-	}
-	for name, tool := range r.deferred {
-		clone.deferred[name] = cloneToolForRegistry(tool, clone)
-	}
-	for category, names := range r.categories {
-		clone.categories[category] = append([]string(nil), names...)
-	}
-	return clone
 }
 
 // Inventory returns every policy-visible eager and deferred tool. Unlike
-// Specs, it never activates deferred tools or changes registry state.
+// the former runtime registry, it cannot execute or activate tools.
 func (r *Registry) Inventory() []ToolInfo {
 	if r == nil {
 		return nil
@@ -258,60 +178,28 @@ func (r *Registry) Inventory() []ToolInfo {
 	defer r.mu.RUnlock()
 	items := make([]ToolInfo, 0, len(r.tools)+len(r.deferred))
 	for _, item := range r.tools {
-		name := item.Spec().Function.Name
-		if r.canExpose(name, item) {
-			items = append(items, ToolInfo{Spec: item.Spec(), Metadata: MetadataOf(item), Parallel: !IsWriteOp(item) && CanRunInParallel(item)})
+		if r.canExpose(item) {
+			items = append(items, ToolInfo{Tool: item, Spec: item.Spec(), Metadata: MetadataOf(item), Parallel: !IsWriteOp(item) && CanRunInParallel(item)})
 		}
 	}
 	for _, item := range r.deferred {
-		name := item.Spec().Function.Name
-		if !r.canExpose(name, item) {
+		if !r.canExpose(item) {
 			continue
 		}
 		category := ""
 		if deferred, ok := item.(DeferredTool); ok {
 			category = deferred.Category()
 		}
-		items = append(items, ToolInfo{Spec: item.Spec(), Metadata: MetadataOf(item), Parallel: !IsWriteOp(item) && CanRunInParallel(item), Deferred: true, Category: category})
+		items = append(items, ToolInfo{Tool: item, Spec: item.Spec(), Metadata: MetadataOf(item), Parallel: !IsWriteOp(item) && CanRunInParallel(item), Deferred: true, Category: category})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Spec.Function.Name < items[j].Spec.Function.Name })
 	return items
-}
-
-func cloneToolForRegistry(tool Tool, reg *Registry) Tool {
-	if ct, ok := tool.(CloneableTool); ok {
-		return ct.CloneForRegistry(reg)
-	}
-	return tool
-}
-
-func copyBoolMap(in map[string]bool) map[string]bool {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]bool, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
-}
-
-func copyRiskMap(in map[ToolRisk]bool) map[ToolRisk]bool {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[ToolRisk]bool, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
 }
 
 func (r *Registry) Register(tool Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tools[tool.Spec().Function.Name] = tool
-	r.cacheValid = false
 }
 
 type categorizedTool struct {
@@ -333,11 +221,6 @@ func (t categorizedTool) IsWrite() bool {
 
 func (t categorizedTool) Metadata() ToolMetadata {
 	return MetadataOf(t.Tool)
-}
-
-func (t categorizedTool) CloneForRegistry(reg *Registry) Tool {
-	t.Tool = cloneToolForRegistry(t.Tool, reg)
-	return t
 }
 
 // AsDeferred wraps a tool with a deferred-tool category label.
@@ -365,6 +248,8 @@ func (t metadataTool) Metadata() ToolMetadata {
 	if len(t.metadata.Surfaces) > 0 {
 		base.Surfaces = append([]string(nil), t.metadata.Surfaces...)
 	}
+	base.Exclusive = base.Exclusive || t.metadata.Exclusive
+	base.Network = base.Network || t.metadata.Network
 	return base
 }
 
@@ -376,208 +261,20 @@ func (t metadataTool) Parallel() bool {
 	return CanRunInParallel(t.Tool)
 }
 
-func (t metadataTool) CloneForRegistry(reg *Registry) Tool {
-	t.Tool = cloneToolForRegistry(t.Tool, reg)
-	return t
-}
-
 func (r *Registry) RegisterDeferred(tool DeferredTool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	name := tool.Spec().Function.Name
 	r.deferred[name] = tool
-	category := tool.Category()
-	r.categories[category] = append(r.categories[category], name)
-	r.cacheValid = false
 }
 
-// ActivateCategory moves deferred tools in category into the active tool set.
-// Returns the names of tools that were activated. Already-active tools are skipped.
-func (r *Registry) ActivateCategory(category string) []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.activateCategoryLocked(category)
+func (r *Registry) canExpose(tool Tool) bool {
+	return r.policyDecisionLocked(tool).Allowed
 }
 
-func (r *Registry) activateCategoryLocked(category string) []string {
-	names := append([]string(nil), r.categories[category]...)
-	activated := make([]string, 0, len(names))
-	for _, name := range names {
-		if r.activateToolLocked(name) {
-			activated = append(activated, name)
-		}
-	}
-	return activated
-}
-
-// ActivateTool moves one deferred tool into the active tool set.
-func (r *Registry) ActivateTool(name string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.activateToolLocked(name)
-}
-
-func (r *Registry) activateToolLocked(name string) bool {
-	tool, ok := r.deferred[name]
-	if !ok {
-		return false
-	}
-	if !r.canExpose(name, tool) {
-		return false
-	}
-	r.tools[name] = tool
-	delete(r.deferred, name)
-	r.cacheValid = false
-	return true
-}
-
-func (r *Registry) DeferredCategories() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	categories := make([]string, 0, len(r.categories))
-	for category, names := range r.categories {
-		if len(names) == 0 {
-			continue
-		}
-		pending := 0
-		for _, name := range names {
-			if tool, ok := r.deferred[name]; ok && r.canExpose(name, tool) {
-				pending++
-			}
-		}
-		if pending > 0 {
-			categories = append(categories, category)
-		}
-	}
-	sort.Strings(categories)
-	return categories
-}
-
-func (r *Registry) DeferredToolNames(category string) []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	names := append([]string(nil), r.categories[category]...)
-	pending := make([]string, 0, len(names))
-	for _, name := range names {
-		if tool, ok := r.deferred[name]; ok && r.canExpose(name, tool) {
-			pending = append(pending, name)
-		}
-	}
-	sort.Strings(pending)
-	return pending
-}
-
-func (r *Registry) Specs() []llm.ToolSpec {
-	r.mu.RLock()
-	if r.cacheValid && r.specsCache != nil {
-		out := make([]llm.ToolSpec, len(r.specsCache))
-		copy(out, r.specsCache)
-		r.mu.RUnlock()
-		return out
-	}
-	r.mu.RUnlock()
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.cacheValid && r.specsCache != nil {
-		out := make([]llm.ToolSpec, len(r.specsCache))
-		copy(out, r.specsCache)
-		return out
-	}
-	names := r.namesLocked()
-	specs := make([]llm.ToolSpec, 0, len(names))
-	for _, name := range names {
-		specs = append(specs, r.tools[name].Spec())
-	}
-	r.specsCache = specs
-	r.namesCache = names
-	r.cacheValid = true
-	out := make([]llm.ToolSpec, len(specs))
-	copy(out, specs)
-	return out
-}
-
-func (r *Registry) Names() []string {
-	r.mu.RLock()
-	if r.cacheValid && r.namesCache != nil {
-		out := make([]string, len(r.namesCache))
-		copy(out, r.namesCache)
-		r.mu.RUnlock()
-		return out
-	}
-	r.mu.RUnlock()
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	names := r.namesLocked()
-	r.namesCache = names
-	out := make([]string, len(names))
-	copy(out, names)
-	return out
-}
-
-func (r *Registry) namesLocked() []string {
-	names := make([]string, 0, len(r.tools))
-	for name, tool := range r.tools {
-		if !r.canExpose(name, tool) {
-			continue
-		}
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
-func (r *Registry) Has(name string) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	tool, ok := r.tools[name]
-	return ok && r.canExpose(name, tool)
-}
-
-func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessage, rt Runtime) (Result, error) {
-	r.mu.RLock()
-	tool, ok := r.tools[name]
-	if !ok {
-		r.mu.RUnlock()
-		return Result{}, fmt.Errorf("unknown tool %q", name)
-	}
-	decision := r.policyDecisionLocked(name, tool)
-	if !decision.Allowed {
-		r.mu.RUnlock()
-		return Result{}, fmt.Errorf("tool %q is disabled by server capability policy: %s", name, decision.Reason)
-	}
-	r.mu.RUnlock()
-	return tool.Execute(ctx, args, rt)
-}
-
-func (r *Registry) canExpose(name string, tool Tool) bool {
-	return r.policyDecisionLocked(name, tool).Allowed
-}
-
-func (r *Registry) PolicyDecision(name string) PolicyDecision {
-	if r == nil {
-		return PolicyDecision{Allowed: false, Reason: "registry is unavailable"}
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if tool, ok := r.tools[name]; ok {
-		return r.policyDecisionLocked(name, tool)
-	}
-	if tool, ok := r.deferred[name]; ok {
-		decision := r.policyDecisionLocked(name, tool)
-		if decision.Allowed {
-			decision.Allowed = false
-			decision.Reason = "tool is deferred and must be activated before use"
-		}
-		return decision
-	}
-	return PolicyDecision{Allowed: false, Reason: "tool is not registered"}
-}
-
-func (r *Registry) policyDecisionLocked(name string, tool Tool) PolicyDecision {
+func (r *Registry) policyDecisionLocked(tool Tool) policyDecision {
 	meta := MetadataOf(tool)
-	decision := PolicyDecision{Allowed: false, Risk: meta.Risk, Surface: r.policy.Surface}
+	decision := policyDecision{}
 	if r.policy.AvailableDeps != nil {
 		for _, dep := range meta.Dependencies {
 			if dep != "" && !r.policy.AvailableDeps[dep] {
@@ -592,28 +289,14 @@ func (r *Registry) policyDecisionLocked(name string, tool Tool) PolicyDecision {
 		decision.Reason = "tool is unavailable on surface: " + r.policy.Surface
 		return decision
 	}
-	if meta.Risk == "" || meta.Risk == RiskRead {
-		decision.Allowed = true
-		decision.Reason = "read tool"
-		return decision
-	}
-	if r.policy.AllowedRisks[meta.Risk] {
-		decision.Allowed = true
-		decision.Reason = "risk class allowed"
-		return decision
-	}
-	if r.policy.AllowWrites {
-		decision.Allowed = true
-		decision.Reason = "writes allowed by policy"
-		return decision
-	}
-	if r.policy.AllowedWriteTools[name] {
-		decision.Allowed = true
-		decision.Reason = "tool explicitly allowlisted"
-		return decision
-	}
-	decision.Reason = "write risk is not allowlisted"
+	decision.Allowed = true
+	decision.Reason = "available on this surface"
 	return decision
+}
+
+type policyDecision struct {
+	Allowed bool
+	Reason  string
 }
 
 func stringInSet(value string, set []string) bool {
@@ -623,16 +306,6 @@ func stringInSet(value string, set []string) bool {
 		}
 	}
 	return false
-}
-
-func (r *Registry) CanRunInParallel(name string) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	tool, ok := r.tools[name]
-	if !ok {
-		return false
-	}
-	return !IsWriteOp(tool) && CanRunInParallel(tool)
 }
 
 func FunctionSpec(name, description string, parameters map[string]any) llm.ToolSpec {

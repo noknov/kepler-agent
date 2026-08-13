@@ -15,7 +15,7 @@ func (s *slackStream) Lifecycle(event transcript.Event) {
 	if s.status == nil {
 		return
 	}
-	status, loading, ok := lifecycleStatus(event, slackconversation.IsCJK(s.req.Text))
+	status, loading, ok := lifecycleStatus(event, slackconversation.IsChineseLocale(s.req.Locale))
 	if !ok {
 		return
 	}

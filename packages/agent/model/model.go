@@ -138,10 +138,11 @@ const (
 )
 
 type Usage struct {
-	InputTokens        int64 `json:"input_tokens,omitempty"`
-	OutputTokens       int64 `json:"output_tokens,omitempty"`
-	CacheReadTokens    int64 `json:"cache_read_tokens,omitempty"`
-	CacheCreatedTokens int64 `json:"cache_created_tokens,omitempty"`
+	InputTokens                int64 `json:"input_tokens,omitempty"`
+	OutputTokens               int64 `json:"output_tokens,omitempty"`
+	CacheReadTokens            int64 `json:"cache_read_tokens,omitempty"`
+	CacheCreatedTokens         int64 `json:"cache_created_tokens,omitempty"`
+	CacheTokensIncludedInInput bool  `json:"cache_tokens_included_in_input,omitempty"`
 }
 
 type Response struct {

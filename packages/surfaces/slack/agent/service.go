@@ -19,8 +19,10 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/profiles/hosted"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/session"
+	"github.com/noknov/slack-copilot-agent/packages/sessioninput"
 	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/conversation"
 	"github.com/noknov/slack-copilot-agent/packages/userprefs"
+	"github.com/redis/go-redis/v9"
 )
 
 type ConversationMode string
@@ -42,55 +44,66 @@ type Service struct {
 	Lifecycle        context.Context
 	ModeForUser      func(string) ConversationMode
 	ModelFor         func(slackconversation.Request) string
+	OnDelivered      func(context.Context, string, string, string) error
+	AlreadyDelivered func(context.Context, string) (bool, error)
 	Multimodal       func(string) bool
 	WebSearchEnabled func(string) bool
 	Progress         *ProgressSummarizer
 	Locker           session.Locker
-	Queue            QueueStore
+	Inputs           sessioninput.Store
 
 	mu     sync.Mutex
 	active map[string]*activeRun
 	router *eventRouter
 }
 
-type QueueStore interface {
-	Enqueue(context.Context, string, slackconversation.Request) error
-	Drain(context.Context, string) ([]slackconversation.Request, error)
-}
-
-type RedisQueue struct {
-	Client *redisclient.Client
-	TTL    time.Duration
-}
-
-func (q RedisQueue) Enqueue(ctx context.Context, sessionID string, request slackconversation.Request) error {
-	if strings.TrimSpace(request.EventID) == "" {
-		request.EventID = fmt.Sprintf("queued-%d", time.Now().UnixNano())
-	}
-	return q.Client.EnqueueJSON(ctx, "agent:queue:"+sessionID, request.EventID, request, q.TTL)
-}
-
-func (q RedisQueue) Drain(ctx context.Context, sessionID string) ([]slackconversation.Request, error) {
-	values, err := q.Client.DrainJSONQueue(ctx, "agent:queue:"+sessionID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]slackconversation.Request, 0, len(values))
-	for _, value := range values {
-		var request slackconversation.Request
-		if json.Unmarshal(value, &request) == nil {
-			out = append(out, request)
-		}
-	}
-	return out, nil
-}
-
 type activeRun struct {
 	userID   string
 	cancel   context.CancelFunc
-	steering *agentruntime.InputBuffer
-	mu       sync.Mutex
-	queued   []slackconversation.Request
+	steering *steeringInput
+}
+
+type steeringInput struct {
+	store     sessioninput.Store
+	sessionID string
+	owner     string
+}
+
+func (s *steeringInput) Push(request slackconversation.Request) error {
+	if s.store == nil {
+		return fmt.Errorf("durable session input store is unavailable")
+	}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return err
+	}
+	return s.store.Enqueue(context.Background(), sessioninput.Item{ID: request.EventID, SessionID: s.sessionID, Kind: sessioninput.KindSteering, Payload: payload})
+}
+
+func (s *steeringInput) Claim(ctx context.Context, limit int) ([]agentruntime.PendingInput, error) {
+	if s.store == nil {
+		return nil, nil
+	}
+	items, err := s.store.Claim(ctx, s.sessionID, sessioninput.KindSteering, s.owner, 35*time.Minute, limit)
+	if err != nil {
+		return nil, err
+	}
+	inputs := make([]agentruntime.PendingInput, 0, len(items))
+	for _, item := range items {
+		var request slackconversation.Request
+		if err := json.Unmarshal(item.Payload, &request); err != nil {
+			return nil, err
+		}
+		inputs = append(inputs, agentruntime.PendingInput{ID: item.ID, Message: request.Message()})
+	}
+	return inputs, nil
+}
+
+func (s *steeringInput) Ack(ctx context.Context, id string) error {
+	if s.store == nil {
+		return fmt.Errorf("durable session input store is unavailable")
+	}
+	return s.store.Ack(ctx, id, s.owner)
 }
 
 type eventRouter struct {
@@ -131,38 +144,44 @@ func (r *eventRouter) set(turnID string, stream *slackStream) {
 	}
 }
 
-func (s *Service) HandleMention(ctx context.Context, req slackconversation.Request) bool {
+func (s *Service) HandleMention(ctx context.Context, req slackconversation.Request) (bool, error) {
 	return s.handle(ctx, req)
 }
-func (s *Service) HandleReply(ctx context.Context, req slackconversation.Request) bool {
+func (s *Service) HandleReply(ctx context.Context, req slackconversation.Request) (bool, error) {
 	if s.Messenger == nil || s.Agent.Runtime == nil {
-		return false
+		return false, nil
 	}
 	sessionID := session.ID(req.Channel, req.ThreadTS)
-	if s.controlActive(sessionID, req) {
-		return true
+	controlled, controlErr := s.controlActive(sessionID, req)
+	if controlErr != nil {
+		return false, controlErr
+	}
+	if controlled {
+		return true, nil
 	}
 	waiting, err := s.Agent.Runtime.WaitingForInput(ctx, sessionID, req.UserID)
 	if err != nil || !waiting {
-		return false
+		return false, err
 	}
-	s.run(ctx, sessionID, req)
-	return true
+	return true, s.run(ctx, sessionID, req)
 }
 
-func (s *Service) handle(ctx context.Context, req slackconversation.Request) bool {
+func (s *Service) handle(ctx context.Context, req slackconversation.Request) (bool, error) {
 	if s.Messenger == nil || s.Agent.Runtime == nil {
-		return false
+		return false, nil
 	}
 	sessionID := session.ID(req.Channel, req.ThreadTS)
-	if s.controlActive(sessionID, req) {
-		return true
+	controlled, controlErr := s.controlActive(sessionID, req)
+	if controlErr != nil {
+		return false, controlErr
 	}
-	s.run(ctx, sessionID, req)
-	return true
+	if controlled {
+		return true, nil
+	}
+	return true, s.run(ctx, sessionID, req)
 }
 
-func (s *Service) run(eventCtx context.Context, sessionID string, req slackconversation.Request) {
+func (s *Service) run(eventCtx context.Context, sessionID string, req slackconversation.Request) (runErr error) {
 	base := eventCtx
 	if base == nil {
 		base = s.Lifecycle
@@ -177,34 +196,70 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 		unlock, err = s.Locker.Lock(runCtx, "session:"+sessionID)
 		if err != nil {
 			cancel()
-			_, _ = s.Messenger.PostMessage(context.Background(), req.Channel, req.ThreadTS, "Unable to lock this conversation: "+s.Redactor.Sanitize(err.Error()))
-			return
+			_, deliveryErr := s.Messenger.PostMessage(base, req.Channel, req.ThreadTS, "Unable to lock this conversation: "+s.Redactor.Sanitize(err.Error()))
+			if deliveryErr != nil {
+				return errors.Join(err, deliveryErr)
+			}
+			return nil
 		}
 		defer unlock()
 	}
-	if queued := s.drainQueue(sessionID, nil); len(queued) > 0 {
-		req = combine(append(queued, req))
+	if req.ClaimID == "" {
+		queued, err := s.claimNextQueue(runCtx, sessionID)
+		if err != nil {
+			cancel()
+			return err
+		}
+		if queued != nil {
+			if err := s.persistInput(runCtx, sessionID, sessioninput.KindQueue, req); err != nil {
+				cancel()
+				_ = s.releaseClaim(context.Background(), queued.ClaimID)
+				return err
+			}
+			req = *queued
+		}
 	}
-	active := &activeRun{userID: req.UserID, cancel: cancel, steering: &agentruntime.InputBuffer{}}
+	owner := s.PodID
+	if owner == "" {
+		owner = "local-slack-service"
+	}
+	active := &activeRun{userID: req.UserID, cancel: cancel, steering: &steeringInput{store: s.Inputs, sessionID: sessionID, owner: owner}}
 	if existing := s.register(sessionID, active); existing != nil {
 		cancel()
-		if s.mode(req.UserID) == ModeQueue {
-			existing.enqueue(req)
-		} else {
-			existing.steering.Push(model.TextMessage(model.RoleUser, steeringText(req)))
+		if existing.userID != req.UserID {
+			return fmt.Errorf("conversation session is already owned by another user")
 		}
-		return
+		if s.mode(req.UserID) == ModeQueue {
+			if err := s.persistInput(base, sessionID, sessioninput.KindQueue, req); err != nil {
+				return err
+			}
+		} else {
+			if err := existing.steering.Push(req); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	defer func() {
 		cancel()
 		s.unregister(sessionID, active)
-		if queued := s.drainQueue(sessionID, active); len(queued) > 0 {
-			follow := combine(queued)
+		if s.Inputs != nil {
+			promoteCtx, promoteCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_, promoteErr := s.Inputs.PromoteSteering(promoteCtx, sessionID)
+			promoteCancel()
+			if runErr == nil && promoteErr != nil {
+				runErr = promoteErr
+			}
+		}
+		if runErr != nil && req.ClaimID != "" {
+			_ = s.releaseClaim(context.Background(), req.ClaimID)
+		}
+		if runErr == nil {
 			followCtx := s.Lifecycle
 			if followCtx == nil {
 				followCtx = context.Background()
 			}
-			go s.run(followCtx, sessionID, follow)
+			go s.startPending(followCtx, sessionID)
 		}
 	}()
 
@@ -212,20 +267,23 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	if turnID == "" {
 		turnID = fmt.Sprintf("slack-%d", time.Now().UnixNano())
 	}
+	// The same stable identifier drives transcript replay and Slack's
+	// client_msg_id. Keep generated IDs on the request as well as the turn.
+	req.EventID = turnID
 	stream := newSlackStream(runCtx, s.Messenger, req)
 	stream.progress = s.Progress
 	s.router.set(turnID, stream)
 	defer s.router.set(turnID, nil)
 	stream.Start()
 
-	threadContext := s.Messenger.ThreadContext(runCtx, req.Channel, req.ThreadTS, 0)
 	fragments := []prompt.Fragment{
 		{ID: "hosted-core", Version: "1", Layer: prompt.LayerCore, Content: s.Prompt.SystemPrompt()},
 		{ID: "user-rules", Layer: prompt.LayerUser, Content: userprefs.RulesPrompt(runCtx, s.UserPrefs, req.UserID)},
 		{ID: "user-skills", Layer: prompt.LayerSkill, Content: userprefs.SkillsMetadataPrompt(runCtx, s.UserPrefs, req.UserID)},
 	}
-	if strings.TrimSpace(threadContext) != "" {
-		fragments = append(fragments, prompt.Fragment{ID: "slack-thread", Layer: prompt.LayerEnvironment, Content: "Slack thread context supplied by the transport:\n" + threadContext})
+	var history []model.Message
+	if source, ok := s.Messenger.(slackconversation.ThreadHistoryMessenger); ok {
+		history = source.ThreadHistory(runCtx, req.Channel, req.ThreadTS, req.MessageTS, 50)
 	}
 	modelName := ""
 	if s.ModelFor != nil {
@@ -237,15 +295,54 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	}
 	input := req.Message()
 	if s.Multimodal != nil && !s.Multimodal(modelName) {
-		input = withoutUnsupportedImages(input, slackconversation.IsCJK(req.Text))
+		input = withoutUnsupportedImages(input, slackconversation.IsChineseLocale(req.Locale))
 	}
-	result, err := s.Agent.Run(runCtx, hosted.Request{SessionID: sessionID, TurnID: turnID, UserID: req.UserID, Workspace: s.Workspace, Input: input, Model: modelName, Steering: active.steering, Prompt: fragments, ScopeValues: map[string]string{"channel": req.Channel, "thread_ts": req.ThreadTS, "web_search": webSearch}})
+	result, err := s.Agent.Run(runCtx, hosted.Request{SessionID: sessionID, TurnID: turnID, UserID: req.UserID, Workspace: s.Workspace, Input: input, History: history, Model: modelName, Steering: active.steering, Prompt: fragments, ScopeValues: map[string]string{"channel": req.Channel, "thread_ts": req.ThreadTS, "web_search": webSearch}})
+	finalizeCtx, finalizeCancel := context.WithTimeout(context.WithoutCancel(runCtx), 20*time.Second)
+	defer finalizeCancel()
 	if err != nil {
-		stream.Fail(s.Redactor.Sanitize(err.Error()), errors.Is(err, context.Canceled))
-		return
+		if s.AlreadyDelivered != nil {
+			delivered, deliveryStateErr := s.AlreadyDelivered(finalizeCtx, turnID)
+			if deliveryStateErr != nil {
+				return deliveryStateErr
+			}
+			if delivered {
+				stream.clearStatus()
+				return s.ackClaim(finalizeCtx, req.ClaimID)
+			}
+		}
+		messageTS, deliveryErr := stream.Fail(s.Redactor.Sanitize(err.Error()), errors.Is(err, context.Canceled))
+		if deliveryErr != nil {
+			return deliveryErr
+		}
+		if s.OnDelivered != nil && messageTS != "" {
+			if linkErr := s.OnDelivered(finalizeCtx, turnID, req.Channel, messageTS); linkErr != nil {
+				return linkErr
+			}
+		}
+		return s.ackClaim(finalizeCtx, req.ClaimID)
 	}
 	final := s.Redactor.Sanitize(renderAnswer(result.Message))
-	stream.Complete(final)
+	if s.AlreadyDelivered != nil {
+		delivered, deliveryStateErr := s.AlreadyDelivered(finalizeCtx, turnID)
+		if deliveryStateErr != nil {
+			return deliveryStateErr
+		}
+		if delivered {
+			stream.clearStatus()
+			return s.ackClaim(finalizeCtx, req.ClaimID)
+		}
+	}
+	messageTS, err := stream.Complete(final)
+	if err != nil {
+		return err
+	}
+	if s.OnDelivered != nil && messageTS != "" {
+		if err := s.OnDelivered(finalizeCtx, turnID, req.Channel, messageTS); err != nil {
+			return err
+		}
+	}
+	return s.ackClaim(finalizeCtx, req.ClaimID)
 }
 
 func renderAnswer(message model.Message) string {
@@ -301,36 +398,111 @@ func (s *Service) mode(userID string) ConversationMode {
 	return ModeSteer
 }
 
-func (s *Service) controlActive(sessionID string, req slackconversation.Request) bool {
+func (s *Service) controlActive(sessionID string, req slackconversation.Request) (bool, error) {
 	s.mu.Lock()
 	active := s.active[sessionID]
 	s.mu.Unlock()
 	if active != nil && active.userID == req.UserID {
 		if s.mode(req.UserID) == ModeQueue {
-			s.enqueue(sessionID, active, req)
+			if err := s.persistInput(context.Background(), sessionID, sessioninput.KindQueue, req); err != nil {
+				return false, err
+			}
 		} else {
-			active.steering.Push(model.TextMessage(model.RoleUser, steeringText(req)))
+			if err := active.steering.Push(req); err != nil {
+				return false, err
+			}
 		}
-		return true
+		return true, nil
 	}
 	if s.Redis == nil || strings.TrimSpace(req.ThreadTS) == "" {
-		return false
+		return false, nil
 	}
 	owner, err := s.Redis.Get(context.Background(), "agent:active:"+sessionID)
 	if err != nil || owner == "" || owner == s.PodID {
-		return false
+		// Redis is only a routing hint. If it is unavailable or the hint has
+		// expired, the durable inbox and PG session lock still serialize this
+		// request as a later turn.
+		return false, nil
 	}
-	action := string(s.mode(req.UserID))
-	payload, _ := json.Marshal(control{Session: sessionID, Action: action, Request: req})
-	queuedPersisted := false
-	if action == string(ModeQueue) {
-		if s.Queue == nil || s.Queue.Enqueue(context.Background(), sessionID, req) != nil {
-			return false
-		}
-		queuedPersisted = true
+	kind := sessioninput.KindSteering
+	if s.mode(req.UserID) == ModeQueue {
+		kind = sessioninput.KindQueue
 	}
-	count, err := s.Redis.PublishCount(context.Background(), "agent:control:"+owner, string(payload))
-	return queuedPersisted || (err == nil && count > 0)
+	if err := s.persistInput(context.Background(), sessionID, kind, req); err != nil {
+		return false, err
+	}
+	// Pub/Sub is only a latency hint. The request is accepted because it was
+	// durably enqueued, never because a subscriber happened to be present.
+	_, _ = s.Redis.PublishCount(context.Background(), "agent:control:"+owner, sessionID)
+	return true, nil
+}
+
+func (s *Service) persistInput(ctx context.Context, sessionID string, kind sessioninput.Kind, request slackconversation.Request) error {
+	if s.Inputs == nil {
+		return fmt.Errorf("durable session input store is unavailable")
+	}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return err
+	}
+	return s.Inputs.Enqueue(ctx, sessioninput.Item{ID: request.EventID, SessionID: sessionID, Kind: kind, Payload: payload})
+}
+
+func (s *Service) claimNextQueue(ctx context.Context, sessionID string) (*slackconversation.Request, error) {
+	if s.Inputs == nil {
+		return nil, nil
+	}
+	owner := s.PodID
+	if owner == "" {
+		owner = "local-slack-service"
+	}
+	items, err := s.Inputs.Claim(ctx, sessionID, sessioninput.KindQueue, owner, 35*time.Minute, 1)
+	if err != nil || len(items) == 0 {
+		return nil, err
+	}
+	var request slackconversation.Request
+	if err := json.Unmarshal(items[0].Payload, &request); err != nil {
+		_ = s.Inputs.Release(context.Background(), items[0].ID, owner)
+		return nil, err
+	}
+	request.ClaimID = items[0].ID
+	return &request, nil
+}
+
+func (s *Service) ackClaim(ctx context.Context, id string) error {
+	if id == "" || s.Inputs == nil {
+		return nil
+	}
+	owner := s.PodID
+	if owner == "" {
+		owner = "local-slack-service"
+	}
+	return s.Inputs.Ack(ctx, id, owner)
+}
+
+func (s *Service) releaseClaim(ctx context.Context, id string) error {
+	if id == "" || s.Inputs == nil {
+		return nil
+	}
+	owner := s.PodID
+	if owner == "" {
+		owner = "local-slack-service"
+	}
+	return s.Inputs.Release(ctx, id, owner)
+}
+
+func (s *Service) startPending(ctx context.Context, sessionID string) {
+	s.mu.Lock()
+	active := s.active[sessionID]
+	s.mu.Unlock()
+	if active != nil {
+		return
+	}
+	request, err := s.claimNextQueue(ctx, sessionID)
+	if err != nil || request == nil {
+		return
+	}
+	_ = s.run(ctx, sessionID, *request)
 }
 
 func (s *Service) register(sessionID string, run *activeRun) *activeRun {
@@ -357,96 +529,44 @@ func (s *Service) unregister(sessionID string, run *activeRun) {
 	}
 }
 
-type control struct {
-	Session string                    `json:"session"`
-	Action  string                    `json:"action"`
-	Request slackconversation.Request `json:"request"`
-}
-
 func (s *Service) StartControlSubscriber(ctx context.Context) {
-	if s.Redis == nil || s.PodID == "" {
+	if (s.Redis == nil || s.PodID == "") && s.Inputs == nil {
 		return
 	}
-	sub := s.Redis.Subscribe(ctx, "agent:control:"+s.PodID)
-	defer sub.Close()
+	var messages <-chan *redis.Message
+	var closeSub func()
+	if s.Redis != nil && s.PodID != "" {
+		sub := s.Redis.Subscribe(ctx, "agent:control:"+s.PodID)
+		messages = sub.Channel()
+		closeSub = func() { _ = sub.Close() }
+		defer closeSub()
+	}
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case message, ok := <-sub.Channel():
+		case message, ok := <-messages:
 			if !ok {
-				return
-			}
-			var cmd control
-			if json.Unmarshal([]byte(message.Payload), &cmd) != nil {
+				messages = nil
 				continue
 			}
-			s.mu.Lock()
-			active := s.active[cmd.Session]
-			s.mu.Unlock()
-			if active == nil || active.userID != cmd.Request.UserID {
+			s.startPending(ctx, message.Payload)
+		case <-ticker.C:
+			if s.Inputs == nil {
 				continue
 			}
-			switch cmd.Action {
-			case string(ModeQueue):
-				if s.Queue == nil {
-					active.enqueue(cmd.Request)
-				}
-			default:
-				active.steering.Push(model.TextMessage(model.RoleUser, steeringText(cmd.Request)))
+			_, _ = s.Inputs.PromoteExpiredSteering(ctx, 36*time.Minute)
+			sessions, err := s.Inputs.PendingSessions(ctx, sessioninput.KindQueue, 100)
+			if err != nil {
+				continue
+			}
+			for _, sessionID := range sessions {
+				go s.startPending(ctx, sessionID)
 			}
 		}
 	}
-}
-
-func (s *Service) enqueue(sessionID string, active *activeRun, request slackconversation.Request) {
-	if s.Queue != nil && s.Queue.Enqueue(context.Background(), sessionID, request) == nil {
-		return
-	}
-	active.enqueue(request)
-}
-
-func (s *Service) drainQueue(sessionID string, active *activeRun) []slackconversation.Request {
-	var out []slackconversation.Request
-	if s.Queue != nil {
-		if queued, err := s.Queue.Drain(context.Background(), sessionID); err == nil {
-			out = append(out, queued...)
-		}
-	}
-	if active != nil {
-		out = append(out, active.drainQueue()...)
-	}
-	return out
-}
-
-func (a *activeRun) enqueue(req slackconversation.Request) {
-	a.mu.Lock()
-	a.queued = append(a.queued, req)
-	a.mu.Unlock()
-}
-func (a *activeRun) drainQueue() []slackconversation.Request {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	out := append([]slackconversation.Request(nil), a.queued...)
-	a.queued = nil
-	return out
-}
-
-func combine(requests []slackconversation.Request) slackconversation.Request {
-	out := requests[0]
-	var lines []string
-	for _, req := range requests {
-		if text := strings.TrimSpace(req.Text); text != "" {
-			lines = append(lines, "- <@"+req.UserID+">: "+text)
-		}
-	}
-	out.EventID += fmt.Sprintf(":queued:%d", time.Now().UnixNano())
-	out.Text = "Queued follow-up messages:\n" + strings.Join(lines, "\n")
-	return out
-}
-
-func steeringText(req slackconversation.Request) string {
-	return "New guidance from <@" + req.UserID + "> while this turn is running:\n" + strings.TrimSpace(req.Text)
 }
 
 type slackStream struct {
@@ -477,23 +597,35 @@ func (s *slackStream) CommitStep(message model.Message) {
 		s.ToolStep(calls)
 	}
 }
-func (s *slackStream) Complete(final string) {
+func (s *slackStream) Complete(final string) (string, error) {
 	s.clearStatus()
-	if final != "" {
-		_, _ = s.messenger.PostMarkdownMessage(context.Background(), s.req.Channel, s.req.ThreadTS, final)
+	if final == "" {
+		return "", nil
 	}
+	ctx, cancel := s.deliveryContext()
+	defer cancel()
+	if messenger, ok := s.messenger.(slackconversation.IdempotentMarkdownMessenger); ok {
+		return messenger.PostMarkdownMessageWithID(ctx, s.req.Channel, s.req.ThreadTS, final, s.req.EventID)
+	}
+	return s.messenger.PostMarkdownMessage(ctx, s.req.Channel, s.req.ThreadTS, final)
 }
-func (s *slackStream) Fail(message string, canceled bool) {
+func (s *slackStream) Fail(message string, canceled bool) (string, error) {
 	if canceled {
 		message = "Cancelled this request."
-		if slackconversation.IsCJK(s.req.Text) {
+		if slackconversation.IsChineseLocale(s.req.Locale) {
 			message = "已中止本次请求。"
 		}
 	}
 	s.clearStatus()
-	if message != "" {
-		_, _ = s.messenger.PostMessage(context.Background(), s.req.Channel, s.req.ThreadTS, message)
+	if message == "" {
+		return "", nil
 	}
+	ctx, cancel := s.deliveryContext()
+	defer cancel()
+	if messenger, ok := s.messenger.(slackconversation.IdempotentMarkdownMessenger); ok {
+		return messenger.PostMarkdownMessageWithID(ctx, s.req.Channel, s.req.ThreadTS, message, s.req.EventID)
+	}
+	return s.messenger.PostMessage(ctx, s.req.Channel, s.req.ThreadTS, message)
 }
 
 func (s *slackStream) clearStatus() {
@@ -508,6 +640,18 @@ func (s *slackStream) clearStatus() {
 		}
 		s.lastStatus = "\x00"
 		s.mu.Unlock()
-		_ = s.status.SetThreadStatus(context.Background(), s.req.Channel, s.req.ThreadTS, "", nil)
+		ctx, cancel := s.deliveryContext()
+		defer cancel()
+		_ = s.status.SetThreadStatus(ctx, s.req.Channel, s.req.ThreadTS, "", nil)
 	}
+}
+
+func (s *slackStream) deliveryContext() (context.Context, context.CancelFunc) {
+	base := s.ctx
+	if base == nil {
+		base = context.Background()
+	}
+	// Delivery must remain possible after a canceled or timed-out model run,
+	// while still having a strict network deadline.
+	return context.WithTimeout(context.WithoutCancel(base), 20*time.Second)
 }

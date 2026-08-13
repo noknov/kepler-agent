@@ -35,6 +35,23 @@ CREATE TABLE IF NOT EXISTS agent_tool_spills (
 CREATE INDEX IF NOT EXISTS idx_agent_tool_spills_updated
     ON agent_tool_spills(updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS agent_session_inputs (
+    sequence BIGSERIAL UNIQUE,
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('steering', 'queue')),
+    payload JSONB NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    claim_owner TEXT NOT NULL DEFAULT '',
+    claim_until TIMESTAMPTZ,
+    acknowledged_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_inputs_pending
+    ON agent_session_inputs(kind, session_id, sequence)
+    WHERE acknowledged_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS agent_run_steps (
     run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
     seq BIGSERIAL,

@@ -46,6 +46,7 @@ type SlackConfig struct {
 	BotToken      string
 	SigningSecret string
 	BotUserID     string
+	DefaultLocale string
 }
 
 type LLMConfig struct {
@@ -197,6 +198,9 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 		return Config{}, err
 	}
 	applyDotEnv(dotenvValues)
+	if err := validateTypedEnvironment(); err != nil {
+		return Config{}, err
+	}
 	wd, _ := os.Getwd()
 	llmProvider := strings.ToLower(env("LLM_PROVIDER", "mimo"))
 	llmProtocol := providerProtocol(llmProvider)
@@ -210,7 +214,10 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 		llmThinking = "disabled"
 	}
 
-	secondaryProvider := strings.TrimSpace(os.Getenv("SECONDARY_PROVIDER"))
+	secondaryProvider := strings.ToLower(strings.TrimSpace(os.Getenv("SECONDARY_PROVIDER")))
+	if err := validateProviderTypedEnvironment(llmProvider); err != nil {
+		return Config{}, err
+	}
 	var secondaryBaseURL, secondaryAPIKey, secondaryModel, secondaryProtocol string
 	if secondaryProvider != "" {
 		secondaryBaseURL = providerBaseURL(secondaryProvider)
@@ -239,6 +246,7 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			BotToken:      os.Getenv("SLACK_BOT_TOKEN"),
 			SigningSecret: os.Getenv("SLACK_SIGNING_SECRET"),
 			BotUserID:     os.Getenv("SLACK_BOT_USER_ID"),
+			DefaultLocale: env("SLACK_DEFAULT_LOCALE", "en-US"),
 		},
 		LLM: LLMConfig{
 			Provider:         llmProvider,
@@ -453,6 +461,9 @@ func validateModelRuntime(cfg Config) (Config, error) {
 	if cfg.LLM.AnthropicFlavor != "" && cfg.LLM.AnthropicFlavor != "official" && cfg.LLM.AnthropicFlavor != "claude-code" {
 		return cfg, fmt.Errorf("LLM_ANTHROPIC_FLAVOR must be official or claude-code")
 	}
+	if cfg.LLM.Timeout <= 0 {
+		return cfg, fmt.Errorf("%s_TIMEOUT must be positive", providerEnvPrefix(cfg.LLM.Provider))
+	}
 	return cfg, nil
 }
 
@@ -642,6 +653,75 @@ func envBoolValue(raw string) bool {
 	default:
 		return false
 	}
+}
+
+func validateTypedEnvironment() error {
+	integers := []string{"AGENT_MAX_STEPS", "LLM_MAX_OUTPUT_TOKENS", "SESSION_AUTOCOMPACT_BUFFER", "SESSION_MAX_CONTEXT_TOKENS", "SESSION_MAX_TOOL_RESULT_TOKENS", "SLACK_EVENT_MAX_ATTEMPTS", "SLACK_EVENT_QUEUE_SIZE", "SLACK_EVENT_WORKERS"}
+	for _, key := range integers {
+		if raw := strings.TrimSpace(os.Getenv(key)); raw != "" {
+			if _, err := strconv.Atoi(raw); err != nil {
+				return fmt.Errorf("%s must be an integer: %w", key, err)
+			}
+		}
+	}
+	durations := []string{"HTTP_SHUTDOWN_TIMEOUT", "SLACK_EVENT_ENQUEUE_TIMEOUT", "SLACK_EVENT_INBOX_LEASE", "SLACK_EVENT_RETRY_BASE", "SLACK_EVENT_RETRY_MAX", "SLACK_EVENT_TIMEOUT", "TOOL_COMMAND_TIMEOUT"}
+	for _, key := range durations {
+		raw := strings.TrimSpace(os.Getenv(key))
+		if raw == "" {
+			continue
+		}
+		if _, err := time.ParseDuration(raw); err != nil {
+			if _, secondsErr := strconv.Atoi(raw); secondsErr != nil {
+				return fmt.Errorf("%s must be a duration or integer seconds", key)
+			}
+		}
+	}
+	floats := []string{"LLM_CACHE_CREATION_COST_PER_MTOK", "LLM_CACHE_READ_COST_PER_MTOK", "LLM_INPUT_COST_PER_MTOK", "LLM_OUTPUT_COST_PER_MTOK"}
+	for _, key := range floats {
+		if raw := strings.TrimSpace(os.Getenv(key)); raw != "" {
+			if _, err := strconv.ParseFloat(raw, 64); err != nil {
+				return fmt.Errorf("%s must be numeric: %w", key, err)
+			}
+		}
+	}
+	booleans := []string{"OBSERVABILITY_ALLOW_UNAUTHENTICATED", "WORKSPACE_AUTO_FETCH"}
+	for _, key := range booleans {
+		switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+		case "", "1", "true", "yes", "on", "0", "false", "no", "off":
+		default:
+			return fmt.Errorf("%s must be a boolean", key)
+		}
+	}
+	return nil
+}
+
+func validateProviderTypedEnvironment(providers ...string) error {
+	seen := make(map[string]bool, len(providers))
+	for _, provider := range providers {
+		provider = strings.TrimSpace(provider)
+		if provider == "" {
+			continue
+		}
+		prefix := providerEnvPrefix(provider)
+		if seen[prefix] {
+			continue
+		}
+		seen[prefix] = true
+		if key := prefix + "_TEMPERATURE"; strings.TrimSpace(os.Getenv(key)) != "" {
+			if _, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv(key)), 64); err != nil {
+				return fmt.Errorf("%s must be numeric: %w", key, err)
+			}
+		}
+		if key := prefix + "_TIMEOUT"; strings.TrimSpace(os.Getenv(key)) != "" {
+			raw := strings.TrimSpace(os.Getenv(key))
+			if _, err := time.ParseDuration(raw); err != nil {
+				if _, secondsErr := strconv.Atoi(raw); secondsErr != nil {
+					return fmt.Errorf("%s must be a duration or integer seconds", key)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func normalizeRoots(roots []string) []string {

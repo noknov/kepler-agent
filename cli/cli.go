@@ -198,9 +198,9 @@ func Run() error {
 		}
 	}
 
-	runner, err := agentruntime.New(agentruntime.Config{Model: config.Model, ReasoningEffort: config.ReasoningEffort, MaxOutputTokens: config.MaxOutputTokens, Temperature: config.Temperature, MaxSteps: config.MaxSteps}, agentruntime.Dependencies{
+	runner, err := agentruntime.New(agentruntime.Config{Model: config.Model, ReasoningEffort: config.ReasoningEffort, MaxOutputTokens: config.MaxOutputTokens, Temperature: config.Temperature, MaxSteps: config.MaxSteps, MaxModelRetries: 2, Context: agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer}}, agentruntime.Dependencies{
 		Model: client, Tools: catalog, Policy: local.WorkspacePolicy{}, Approver: approver, Transcript: store, Events: renderer,
-		Compactor: agentruntime.ModelCompactor{Client: client, Model: config.Model}, Artifacts: local.ArtifactStore{Root: filepath.Join(values.stateDir, "sessions")},
+		Compactor: agentruntime.ModelCompactor{Client: client, Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer}, Artifacts: local.ArtifactStore{Root: filepath.Join(values.stateDir, "sessions")},
 	})
 	if err != nil {
 		return err
@@ -242,7 +242,7 @@ func modelClient(config local.Config) (model.Client, error) {
 func prompts(config local.Config, root, skillPrompt string) ([]prompt.Fragment, error) {
 	fragments := []prompt.Fragment{
 		{ID: "cli-core", Version: "1", Layer: prompt.LayerCore, Content: "You are a coding agent. Inspect evidence before making claims. Use tools to complete the user request, verify material changes, preserve unrelated work, and report limitations precisely."},
-		{ID: "local-product", Version: "2", Layer: prompt.LayerProduct, Content: "You are running locally. Filesystem writes must stay within the workspace. Shell network access requires explicit approval. Never seek or expose credentials."},
+		{ID: "local-product", Version: "3", Layer: prompt.LayerProduct, Content: "You are running locally. Filesystem writes must stay within the workspace. Exec network access requires explicit approval. Never seek or expose credentials."},
 		{ID: "local-environment", Layer: prompt.LayerEnvironment, Content: "Workspace: " + root},
 	}
 	project, err := local.ProjectInstructions(root)
@@ -348,13 +348,22 @@ func interactiveLoop(ctx context.Context, runner *agentruntime.Runtime, session,
 					continue
 				}
 				if routing == "steer" {
-					steering.Push(model.TextMessage(model.RoleUser, value))
-					fmt.Fprintln(os.Stderr, "\n[steering accepted]")
+					if steering.Push(model.TextMessage(model.RoleUser, value)) {
+						fmt.Fprintln(os.Stderr, "\n[steering accepted]")
+					} else {
+						queued = append(queued, value)
+						fmt.Fprintln(os.Stderr, "\n[turn already finishing; input queued]")
+					}
 				} else {
 					queued = append(queued, value)
 					fmt.Fprintln(os.Stderr, "\n[input queued]")
 				}
 			case outcome := <-done:
+				for _, pending := range steering.Drain() {
+					if text := strings.TrimSpace(pending.Text()); text != "" {
+						queued = append(queued, text)
+					}
+				}
 				fmt.Fprintln(os.Stderr)
 				if outcome.err != nil {
 					fmt.Fprintln(os.Stderr, "turn:", outcome.err)

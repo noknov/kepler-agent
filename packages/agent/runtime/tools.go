@@ -30,6 +30,7 @@ type toolOutcome struct {
 
 func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls []model.ToolCall) (toolOutcome, error) {
 	prepared := make([]preparedCall, len(calls))
+	exclusive := false
 	for index, modelCall := range calls {
 		call := tool.Call{ID: modelCall.ID, Name: modelCall.Name, Arguments: modelCall.Arguments, Scope: request.Scope}
 		prepared[index] = preparedCall{index: index, call: call}
@@ -41,6 +42,20 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 		}
 		prepared[index].item = item
 		prepared[index].descriptor = item.Descriptor()
+		exclusive = exclusive || prepared[index].descriptor.Exclusive
+	}
+	if exclusive && len(calls) != 1 {
+		for index := range prepared {
+			result := tool.Result{Content: []model.Content{{Type: model.ContentText, Text: "An exclusive tool must be called by itself; no tools were executed."}}, IsError: true, ErrorCode: "mixed_exclusive_tool_batch"}
+			prepared[index].result = &result
+		}
+		return r.recordToolResults(ctx, request, prepared)
+	}
+	for index := range prepared {
+		call := prepared[index].call
+		if prepared[index].result != nil {
+			continue
+		}
 		policyRequest := tool.PolicyRequest{Descriptor: prepared[index].descriptor, Call: call}
 		decision, err := r.deps.Policy.Decide(ctx, policyRequest)
 		if err != nil {
@@ -92,6 +107,10 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 	}
 	wait.Wait()
 	limitToolResultBatch(ctx, prepared, r.config.ToolResults, r.deps.Artifacts)
+	return r.recordToolResults(ctx, request, prepared)
+}
+
+func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, prepared []preparedCall) (toolOutcome, error) {
 	var pending *model.Message
 	for index := range prepared {
 		entry := &prepared[index]
@@ -117,6 +136,16 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 }
 
 func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entry *preparedCall) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			entry.result = &tool.Result{
+				Content:   []model.Content{{Type: model.ContentText, Text: fmt.Sprintf("Tool %q failed unexpectedly.", entry.call.Name)}},
+				IsError:   true,
+				ErrorCode: "tool_panic",
+				Metadata:  map[string]any{"panic": fmt.Sprint(recovered)},
+			}
+		}
+	}()
 	call := entry.call
 	if _, err := r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.ToolCallStarted, ToolCall: &call}); err != nil {
 		entry.result = &tool.Result{Content: []model.Content{{Type: model.ContentText, Text: err.Error()}}, IsError: true, ErrorCode: "transcript_error"}
@@ -151,6 +180,6 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 	}
 	result.Metadata["duration_ms"] = time.Since(started).Milliseconds()
 	span.SetAttributes(attribute.Int64("agent.tool.duration_ms", time.Since(started).Milliseconds()), attribute.Bool("agent.tool.error", result.IsError))
-	result = limitToolResult(toolCtx, result, call, r.config.ToolResults, r.deps.Artifacts)
+	result = limitToolResult(ctx, result, call, r.config.ToolResults, r.deps.Artifacts)
 	entry.result = &result
 }

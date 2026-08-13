@@ -67,13 +67,13 @@ func (t MCPTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.R
 
 func RegisterAll(reg *registry.Registry, client *Client) {
 	for _, tool := range tools(client) {
-		reg.Register(tool)
+		reg.Register(registry.WithMetadata(tool, registry.ToolMetadata{Dependencies: []string{"luckin"}, Network: true}))
 	}
 }
 
 func RegisterDeferredAll(reg *registry.Registry, client *Client, category string) {
 	for _, tool := range tools(client) {
-		reg.RegisterDeferred(registry.AsDeferred(category, tool))
+		reg.RegisterDeferred(registry.AsDeferred(category, registry.WithMetadata(tool, registry.ToolMetadata{Dependencies: []string{"luckin"}, Network: true})))
 	}
 }
 

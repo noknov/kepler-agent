@@ -4,13 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"html"
+	stdhtml "html"
 	"io"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
 	"time"
+
+	xhtml "golang.org/x/net/html"
 
 	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
@@ -348,9 +350,9 @@ func (c Client) searchSearXNG(ctx context.Context, req SearchRequest) ([]ResultI
 	items := make([]ResultItem, 0, len(parsed.Results))
 	for _, item := range parsed.Results {
 		items = append(items, ResultItem{
-			Title:   cleanWhitespace(html.UnescapeString(item.Title)),
+			Title:   cleanWhitespace(stdhtml.UnescapeString(item.Title)),
 			URL:     item.URL,
-			Snippet: cleanWhitespace(html.UnescapeString(item.Content)),
+			Snippet: cleanWhitespace(stdhtml.UnescapeString(item.Content)),
 			Source:  "searxng",
 		})
 	}
@@ -402,9 +404,9 @@ func (c Client) searchBrave(ctx context.Context, req SearchRequest) ([]ResultIte
 	items := make([]ResultItem, 0, len(parsed.Web.Results))
 	for _, item := range parsed.Web.Results {
 		items = append(items, ResultItem{
-			Title:   cleanWhitespace(html.UnescapeString(item.Title)),
+			Title:   cleanWhitespace(stdhtml.UnescapeString(item.Title)),
 			URL:     item.URL,
-			Snippet: cleanWhitespace(html.UnescapeString(item.Description)),
+			Snippet: cleanWhitespace(stdhtml.UnescapeString(item.Description)),
 			Source:  "brave",
 		})
 	}
@@ -412,37 +414,35 @@ func (c Client) searchBrave(ctx context.Context, req SearchRequest) ([]ResultIte
 }
 
 func parseDuckDuckGoHTML(data string, limit int) []ResultItem {
-	blockRe := regexp.MustCompile(`(?is)<div[^>]+class="[^"]*result[^"]*"[^>]*>(.*?)</div>\s*</div>`)
-	linkRe := regexp.MustCompile(`(?is)<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>`)
-	snippetRe := regexp.MustCompile(`(?is)<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>|<div[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</div>`)
-	blocks := blockRe.FindAllStringSubmatch(data, -1)
-	items := make([]ResultItem, 0, len(blocks))
-	for _, block := range blocks {
-		htmlBlock := block[1]
-		link := linkRe.FindStringSubmatch(htmlBlock)
-		if len(link) < 3 {
-			continue
+	document, err := xhtml.Parse(strings.NewReader(data))
+	if err != nil {
+		return nil
+	}
+	var items []ResultItem
+	walkElements(document, func(node *xhtml.Node) {
+		if limit > 0 && len(items) >= limit || !hasClass(node, "result") {
+			return
 		}
-		resultURL := decodeDuckDuckGoURL(html.UnescapeString(link[1]))
+		link := findElement(node, func(candidate *xhtml.Node) bool { return hasClass(candidate, "result__a") && candidate.Data == "a" })
+		if link == nil {
+			return
+		}
+		resultURL := decodeDuckDuckGoURL(stdhtml.UnescapeString(attribute(link, "href")))
 		if resultURL == "" {
-			continue
+			return
 		}
+		snippetNode := findElement(node, func(candidate *xhtml.Node) bool { return hasClass(candidate, "result__snippet") })
 		snippet := ""
-		if match := snippetRe.FindStringSubmatch(htmlBlock); len(match) > 0 {
-			for _, part := range match[1:] {
-				if strings.TrimSpace(part) != "" {
-					snippet = htmlToText(part)
-					break
-				}
-			}
+		if snippetNode != nil {
+			snippet = cleanWhitespace(nodeText(snippetNode, false))
 		}
 		items = append(items, ResultItem{
-			Title:   htmlToText(link[2]),
+			Title:   cleanWhitespace(nodeText(link, false)),
 			URL:     resultURL,
 			Snippet: snippet,
 			Source:  "duckduckgo",
 		})
-	}
+	})
 	return limitItems(items, limit)
 }
 
@@ -464,11 +464,6 @@ func decodeDuckDuckGoURL(raw string) string {
 		return "https:" + raw
 	}
 	return raw
-}
-
-func htmlToText(raw string) string {
-	text := regexp.MustCompile(`(?s)<[^>]+>`).ReplaceAllString(raw, " ")
-	return cleanWhitespace(html.UnescapeString(text))
 }
 
 func limitItems(items []ResultItem, limit int) []ResultItem {
@@ -527,26 +522,92 @@ func extractReadableText(data, contentType string) (string, string) {
 	if strings.Contains(contentType, "text/plain") {
 		return "", cleanWhitespace(data)
 	}
-	title := extractTitle(data)
-	text := data
-	text = regexp.MustCompile(`(?is)<head[^>]*>.*?</head>`).ReplaceAllString(text, " ")
-	text = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`).ReplaceAllString(text, " ")
-	text = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`).ReplaceAllString(text, " ")
-	text = regexp.MustCompile(`(?is)<noscript[^>]*>.*?</noscript>`).ReplaceAllString(text, " ")
-	text = regexp.MustCompile(`(?is)<!--.*?-->`).ReplaceAllString(text, " ")
-	text = regexp.MustCompile(`(?i)<br\s*/?>`).ReplaceAllString(text, "\n")
-	text = regexp.MustCompile(`(?i)</(p|div|section|article|li|h[1-6]|tr)>`).ReplaceAllString(text, "\n")
-	text = regexp.MustCompile(`(?s)<[^>]+>`).ReplaceAllString(text, " ")
-	text = html.UnescapeString(text)
-	return title, cleanWhitespace(text)
+	document, err := xhtml.Parse(strings.NewReader(data))
+	if err != nil {
+		return "", ""
+	}
+	titleNode := findElement(document, func(node *xhtml.Node) bool { return node.Data == "title" })
+	title := ""
+	if titleNode != nil {
+		title = cleanWhitespace(nodeText(titleNode, false))
+	}
+	return title, cleanWhitespace(nodeText(document, true))
 }
 
-func extractTitle(data string) string {
-	match := regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`).FindStringSubmatch(data)
-	if len(match) < 2 {
+func walkElements(node *xhtml.Node, visit func(*xhtml.Node)) {
+	if node == nil {
+		return
+	}
+	if node.Type == xhtml.ElementNode {
+		visit(node)
+	}
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		walkElements(child, visit)
+	}
+}
+
+func findElement(node *xhtml.Node, match func(*xhtml.Node) bool) *xhtml.Node {
+	if node == nil {
+		return nil
+	}
+	if node.Type == xhtml.ElementNode && match(node) {
+		return node
+	}
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		if found := findElement(child, match); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func hasClass(node *xhtml.Node, wanted string) bool {
+	for _, className := range strings.Fields(attribute(node, "class")) {
+		if className == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func attribute(node *xhtml.Node, key string) string {
+	if node == nil {
 		return ""
 	}
-	return cleanWhitespace(html.UnescapeString(match[1]))
+	for _, attr := range node.Attr {
+		if attr.Key == key {
+			return attr.Val
+		}
+	}
+	return ""
+}
+
+func nodeText(node *xhtml.Node, readable bool) string {
+	var output strings.Builder
+	var walk func(*xhtml.Node)
+	walk = func(current *xhtml.Node) {
+		if current.Type == xhtml.ElementNode {
+			switch current.Data {
+			case "script", "style", "noscript", "template", "svg", "canvas":
+				return
+			case "head":
+				if readable {
+					return
+				}
+			case "br", "p", "div", "section", "article", "li", "h1", "h2", "h3", "h4", "h5", "h6", "tr":
+				output.WriteByte('\n')
+			}
+		}
+		if current.Type == xhtml.TextNode {
+			output.WriteString(current.Data)
+			output.WriteByte(' ')
+		}
+		for child := current.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(node)
+	return stdhtml.UnescapeString(output.String())
 }
 
 func cleanWhitespace(text string) string {

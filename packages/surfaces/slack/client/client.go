@@ -3,6 +3,7 @@ package slack
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 )
 
 type Client struct {
@@ -52,15 +55,20 @@ func (c *Client) AuthTest(ctx context.Context) (string, error) {
 }
 
 func (c *Client) PostMessage(ctx context.Context, channel, threadTS, text string) (string, error) {
-	return c.postMessage(ctx, channel, threadTS, text, nil)
+	return c.postMessage(ctx, channel, threadTS, text, nil, "")
 }
 
 func (c *Client) PostMarkdownMessage(ctx context.Context, channel, threadTS, markdown string) (string, error) {
 	blocks := []map[string]any{{"type": "markdown", "text": markdown}}
-	return c.postMessage(ctx, channel, threadTS, markdown, blocks)
+	return c.postMessage(ctx, channel, threadTS, markdown, blocks, "")
 }
 
-func (c *Client) postMessage(ctx context.Context, channel, threadTS, text string, blocks []map[string]any) (string, error) {
+func (c *Client) PostMarkdownMessageWithID(ctx context.Context, channel, threadTS, markdown, deliveryID string) (string, error) {
+	blocks := []map[string]any{{"type": "markdown", "text": markdown}}
+	return c.postMessage(ctx, channel, threadTS, markdown, blocks, slackClientMessageID(deliveryID))
+}
+
+func (c *Client) postMessage(ctx context.Context, channel, threadTS, text string, blocks []map[string]any, clientMessageID string) (string, error) {
 	payload := map[string]any{
 		"channel":      channel,
 		"text":         text,
@@ -71,6 +79,9 @@ func (c *Client) postMessage(ctx context.Context, channel, threadTS, text string
 	}
 	if len(blocks) > 0 {
 		payload["blocks"] = blocks
+	}
+	if clientMessageID != "" {
+		payload["client_msg_id"] = clientMessageID
 	}
 	var out struct {
 		OK    bool   `json:"ok"`
@@ -84,6 +95,16 @@ func (c *Client) postMessage(ctx context.Context, channel, threadTS, text string
 		return "", fmt.Errorf("slack chat.postMessage failed: %s", out.Error)
 	}
 	return out.TS, nil
+}
+
+func slackClientMessageID(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(value))
+	sum[6] = (sum[6] & 0x0f) | 0x50
+	sum[8] = (sum[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", sum[0:4], sum[4:6], sum[6:8], sum[8:10], sum[10:16])
 }
 
 func (c *Client) PublishHome(ctx context.Context, userID string, view map[string]any) error {
@@ -287,10 +308,17 @@ func (c *Client) DownloadFile(ctx context.Context, file File, maxBytes int64) ([
 	if fileURL == "" {
 		return nil, fmt.Errorf("slack file %s has no private download URL", file.ID)
 	}
+	parsedURL, err := url.Parse(fileURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid Slack download URL: %w", err)
+	}
+	if parsedURL.Scheme != "https" || parsedURL.User != nil || !isSlackDownloadHost(parsedURL.Hostname()) {
+		return nil, fmt.Errorf("refusing to send Slack credentials to untrusted download host %q", parsedURL.Hostname())
+	}
 	if maxBytes <= 0 {
 		maxBytes = 8 << 20
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsedURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -312,6 +340,11 @@ func (c *Client) DownloadFile(ctx context.Context, file File, maxBytes int64) ([
 		return nil, fmt.Errorf("slack file %s exceeds %d bytes", file.ID, maxBytes)
 	}
 	return data, nil
+}
+
+func isSlackDownloadHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	return host == "slack.com" || strings.HasSuffix(host, ".slack.com") || host == "slack-edge.com" || strings.HasSuffix(host, ".slack-edge.com")
 }
 
 func mergeFile(primary, fallback File) File {
@@ -392,36 +425,43 @@ func (c *Client) Replies(ctx context.Context, channel, threadTS string, limit in
 	}
 }
 
-func (c *Client) ThreadContext(ctx context.Context, channel, threadTS string, limit int) string {
-	replies, err := c.Replies(ctx, channel, threadTS, limit)
-	if err != nil || len(replies) == 0 {
-		return ""
+func (c *Client) ThreadHistory(ctx context.Context, channel, threadTS, beforeTS string, limit int) []model.Message {
+	if limit <= 0 || limit > 50 {
+		limit = 50
 	}
-	return formatThreadContext(replies, c.botUserID)
-}
-
-func formatThreadContext(replies []Message, botUserID string) string {
-	lines := make([]string, 0, len(replies))
+	replies, err := c.Replies(ctx, channel, threadTS, limit+1)
+	if err != nil {
+		return nil
+	}
+	history := make([]model.Message, 0, min(limit, len(replies)))
+	bytesUsed := 0
 	for _, msg := range replies {
-		if msg.User == botUserID || msg.BotID != "" {
+		if beforeTS != "" && msg.TS >= beforeTS {
 			continue
 		}
-		text := strings.TrimSpace(msg.Text)
-		filesText := FormatFiles(msg.Files)
-		if text == "" && filesText == "" {
-			continue
-		}
-		role := msg.User
-		content := NormalizeMentions(text, botUserID)
-		if filesText != "" {
-			if content != "" {
-				content += "\n"
+		text := strings.TrimSpace(NormalizeMentions(msg.Text, c.botUserID))
+		if files := FormatFiles(msg.Files); files != "" {
+			if text != "" {
+				text += "\n"
 			}
-			content += filesText
+			text += files
 		}
-		lines = append(lines, role+": "+content)
+		if text == "" {
+			continue
+		}
+		role := model.RoleUser
+		if msg.User == c.botUserID {
+			role = model.RoleAssistant
+		} else {
+			text = "Slack user " + msg.User + ": " + text
+		}
+		if bytesUsed+len(text) > 64<<10 || len(history) >= limit {
+			break
+		}
+		bytesUsed += len(text)
+		history = append(history, model.TextMessage(role, text))
 	}
-	return strings.Join(lines, "\n")
+	return history
 }
 
 func FormatFiles(files []File) string {

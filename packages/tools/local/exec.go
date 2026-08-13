@@ -10,30 +10,30 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/profiles/local"
 )
 
-type Shell struct {
+type Exec struct {
 	Sandbox local.Sandbox
 }
 
-func (Shell) Descriptor() tool.Descriptor {
+func (Exec) Descriptor() tool.Descriptor {
 	return tool.Descriptor{
-		Name: "shell", Description: "Run a shell command in the workspace sandbox. Network is denied unless explicitly requested and approved.",
-		InputSchema: schema(`{"command":{"type":"string"},"workdir":{"type":"string"},"network":{"type":"boolean"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800}}`, "command"),
-		Effects:     []tool.Effect{tool.EffectWorkspaceWrite}, Exposure: tool.ExposureEager, Timeout: 30 * time.Minute,
+		Name: "exec", Description: "Run one argv command directly in the workspace sandbox without a shell. Network is denied unless explicitly requested and approved.",
+		InputSchema: schema(`{"argv":{"type":"array","items":{"type":"string"},"minItems":1},"workdir":{"type":"string"},"network":{"type":"boolean"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800}}`, "argv"),
+		Effects:     []tool.Effect{tool.EffectWorkspaceWrite, tool.EffectNetwork}, Exposure: tool.ExposureEager, Timeout: 30 * time.Minute,
 	}
 }
 
-func (t Shell) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
+func (t Exec) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var arguments struct {
-		Command string `json:"command"`
-		Workdir string `json:"workdir"`
-		Network bool   `json:"network"`
-		Timeout int    `json:"timeout_seconds"`
+		Argv    []string `json:"argv"`
+		Workdir string   `json:"workdir"`
+		Network bool     `json:"network"`
+		Timeout int      `json:"timeout_seconds"`
 	}
 	if err := json.Unmarshal(call.Arguments, &arguments); err != nil {
 		return tool.Result{}, err
 	}
-	if arguments.Command == "" {
-		return tool.Result{}, fmt.Errorf("command is required")
+	if len(arguments.Argv) == 0 || arguments.Argv[0] == "" {
+		return tool.Result{}, fmt.Errorf("argv is required")
 	}
 	if arguments.Timeout <= 0 {
 		arguments.Timeout = 120
@@ -43,7 +43,7 @@ func (t Shell) Execute(ctx context.Context, call tool.Call) (tool.Result, error)
 	}
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(arguments.Timeout)*time.Second)
 	defer cancel()
-	result, err := t.Sandbox.Run(runCtx, local.CommandRequest{Command: arguments.Command, Workdir: arguments.Workdir, Network: arguments.Network})
+	result, err := t.Sandbox.Run(runCtx, local.CommandRequest{Argv: append([]string(nil), arguments.Argv...), Workdir: arguments.Workdir, Network: arguments.Network})
 	if err != nil {
 		return tool.Result{}, err
 	}
