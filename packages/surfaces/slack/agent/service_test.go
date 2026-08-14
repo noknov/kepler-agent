@@ -197,30 +197,26 @@ func TestLifecycleStatusUsesCanonicalEvents(t *testing.T) {
 	if got := messenger.statuses; len(got) != 2 || got[0] != "is thinking" || got[1] != "" {
 		t.Fatalf("statuses=%#v", got)
 	}
-	if got := messenger.loading[0]; len(got) != 1 || got[0] != "Thinking..." {
+	if got := messenger.loading[0]; len(got) != 0 {
 		t.Fatalf("thinking loading=%#v", got)
 	}
 }
 
-func TestLifecycleStatusShowsOnlyRetryableModelFailures(t *testing.T) {
-	retryable := json.RawMessage(`{"retryable":true}`)
-	if status, _, ok := lifecycleStatus(transcript.Event{Type: transcript.ModelFailed, Metadata: retryable}, false); !ok || status != "is retrying" {
-		t.Fatalf("retryable failure status=%q ok=%v", status, ok)
-	}
-	if _, _, ok := lifecycleStatus(transcript.Event{Type: transcript.ModelFailed, Metadata: json.RawMessage(`{"retryable":false}`)}, false); ok {
-		t.Fatal("non-retryable model failure emitted an intermediate status")
+func TestLifecycleStatusIgnoresModelFailures(t *testing.T) {
+	if _, ok := lifecycleStatus(transcript.Event{Type: transcript.ModelFailed}, false); ok {
+		t.Fatal("model failure is not a presentation phase")
 	}
 }
 
 func TestToolLifecycleWithoutProgressSummaryKeepsThinkingStatus(t *testing.T) {
-	if _, _, ok := lifecycleStatus(transcript.Event{Type: transcript.ToolCallStarted, ToolCall: &tool.Call{Name: "private_internal_tool"}}, true); ok {
+	if _, ok := lifecycleStatus(transcript.Event{Type: transcript.ToolCallStarted, ToolCall: &tool.Call{Name: "private_internal_tool"}}, true); ok {
 		t.Fatal("tool lifecycle replaced the thinking fallback")
 	}
 }
 
 func TestContextLifecycleDoesNotFlashTransientStatus(t *testing.T) {
 	for _, eventType := range []transcript.EventType{transcript.ContextProjected, transcript.CompactionCreated} {
-		if _, _, ok := lifecycleStatus(transcript.Event{Type: eventType}, true); ok {
+		if _, ok := lifecycleStatus(transcript.Event{Type: eventType}, true); ok {
 			t.Fatalf("%s emitted a transient presentation status", eventType)
 		}
 	}

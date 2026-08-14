@@ -104,6 +104,16 @@ func (echoTool) Execute(_ context.Context, call tool.Call) (tool.Result, error) 
 	return tool.TextResult(string(call.Arguments)), nil
 }
 
+type emptyResultTool struct{}
+
+func (emptyResultTool) Descriptor() tool.Descriptor {
+	return tool.Descriptor{Name: "empty", InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []tool.Effect{tool.EffectRead}}
+}
+
+func (emptyResultTool) Execute(context.Context, tool.Call) (tool.Result, error) {
+	return tool.Result{Content: []model.Content{{Type: model.ContentText}}}, nil
+}
+
 func TestRunTurnExecutesToolAndRecordsCanonicalHistory(t *testing.T) {
 	client := &scriptedModel{responses: []model.Response{
 		{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "call-1", Name: "echo", Arguments: json.RawMessage(`{"value":"hi"}`)}}}}, FinishReason: model.FinishToolCalls},
@@ -147,6 +157,34 @@ func TestRunTurnExecutesToolAndRecordsCanonicalHistory(t *testing.T) {
 	if !sawCall || !sawResult {
 		t.Fatalf("missing tool lifecycle events: %#v", events)
 	}
+}
+
+func TestRunTurnNormalizesEmptyToolResult(t *testing.T) {
+	call := model.ToolCall{ID: "empty-1", Name: "empty", Arguments: json.RawMessage(`{}`)}
+	client := &scriptedModel{responses: []model.Response{
+		{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &call}}}, FinishReason: model.FinishToolCalls},
+		{Message: model.TextMessage(model.RoleAssistant, "continued"), FinishReason: model.FinishStop},
+	}}
+	store := transcript.NewMemoryStore()
+	catalog, _ := tool.NewCatalog(emptyResultTool{})
+	runner, err := New(Config{Model: "test"}, Dependencies{Model: client, Tools: catalog, Transcript: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "empty-tool", Input: model.TextMessage(model.RoleUser, "run")}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.Load(context.Background(), "empty-tool", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Type != transcript.ToolCallFailed || event.ToolResult == nil || len(event.ToolResult.Content) == 0 || event.ToolResult.Content[0].Text == "" {
+			continue
+		}
+		return
+	}
+	t.Fatal("empty tool result was not normalized to a non-empty tool failure")
 }
 
 func TestRunTurnRetriesTransientModelError(t *testing.T) {
