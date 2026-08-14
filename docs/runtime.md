@@ -26,11 +26,12 @@ current operation; the user request and arguments only identify the concrete
 object, so progress labels do not merely restate the user's final task. That
 label is presentation-only: it is never written to the transcript, returned to
 the runtime, or placed in model context. Once Slack has a specific progress
-loading message, later ordinary model-request lifecycle events do not downgrade
-it back to the generic `Thinking...` loading text.
+loading message, later ordinary model-request lifecycle events do not replace it
+with hard-coded loading text.
 If no secondary model is configured, it fails, or its output violates the label
-schema, Slack keeps the localized `Thinking...` state. Context projection and
-compaction do not replace it with momentary status flashes.
+schema, Slack keeps the localized native thinking status without a dynamic
+loading message. Context projection and compaction do not replace it with
+momentary status flashes.
 
 The current loop has no model-output repair layer. Only the owner of a
 `pending_input` turn can continue it with an unmentioned thread reply;
