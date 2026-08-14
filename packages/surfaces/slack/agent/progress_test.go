@@ -24,6 +24,17 @@ func (m *progressModel) Generate(ctx context.Context, request model.Request, _ m
 	return model.Response{Message: model.TextMessage(model.RoleAssistant, m.response), FinishReason: model.FinishStop}, nil
 }
 
+type blockingProgressModel struct {
+	requests chan model.Request
+	release  chan struct{}
+}
+
+func (m *blockingProgressModel) Generate(_ context.Context, request model.Request, _ model.EventSink) (model.Response, error) {
+	m.requests <- request
+	<-m.release
+	return model.Response{Message: model.TextMessage(model.RoleAssistant, `{"action":"Reading","target":"records"}`), FinishReason: model.FinishStop}, nil
+}
+
 func TestProgressSummarizerUsesOnlySafeStructuredIntent(t *testing.T) {
 	requests := make(chan model.Request, 1)
 	summarizer := &ProgressSummarizer{
@@ -42,11 +53,11 @@ func TestProgressSummarizerUsesOnlySafeStructuredIntent(t *testing.T) {
 	}
 	request := <-requests
 	system := request.Messages[0].Text()
-	if !strings.Contains(system, "内部证据") || !strings.Contains(system, "参数值") {
+	if !strings.Contains(system, "Slack loading") || !strings.Contains(system, "参数值") {
 		t.Fatalf("progress system prompt is not a general user-facing contract: %s", system)
 	}
 	prompt := request.Messages[len(request.Messages)-1].Text()
-	if !strings.Contains(prompt, "支付服务部署记录") || !strings.Contains(prompt, "notion-search") || !strings.Contains(prompt, "dangerous") || strings.Contains(prompt, "secret") {
+	if !strings.Contains(prompt, "支付服务部署记录") || !strings.Contains(prompt, "dangerous") || strings.Contains(prompt, "notion-search") || strings.Contains(prompt, "secret") {
 		t.Fatalf("unsafe progress prompt: %s", prompt)
 	}
 }
@@ -68,11 +79,11 @@ func TestProgressSummarizerIncludesToolDescriptionAsOperationSemantics(t *testin
 	}
 	request := <-requests
 	system := request.Messages[0].Text()
-	if !strings.Contains(system, "do not restate the user's final task") || !strings.Contains(system, "Tool descriptions are the primary semantic source") {
+	if !strings.Contains(system, "Do not restate the user's task") || !strings.Contains(system, "operation description") {
 		t.Fatalf("progress prompt does not prevent task restatement: %s", system)
 	}
 	prompt := request.Messages[len(request.Messages)-1].Text()
-	if !strings.Contains(prompt, "Fetch GitHub pull request metadata and unified diff") || !strings.Contains(prompt, `"pr":123`) {
+	if !strings.Contains(prompt, "Fetch GitHub pull request metadata and unified diff") || !strings.Contains(prompt, `"pr":123`) || strings.Contains(prompt, "github-pr_diff") {
 		t.Fatalf("progress prompt omitted operation semantics: %s", prompt)
 	}
 }
@@ -190,6 +201,29 @@ func TestToolStepDeduplicatesStreamedAndFinalAssistantCalls(t *testing.T) {
 	case <-requests:
 		t.Fatal("duplicate tool call triggered a second progress summary")
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestToolStepSerializesProgressSummaries(t *testing.T) {
+	modelClient := &blockingProgressModel{requests: make(chan model.Request, 2), release: make(chan struct{})}
+	messenger := &fakeMessenger{}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T", Text: "inspect repo"})
+	stream.progress = &ProgressSummarizer{Client: modelClient, ToolDescriptions: map[string]string{
+		"repo-read": "Read repository files.", "repo-search": "Search repository files.",
+	}}
+	stream.Start()
+	stream.ToolStep([]model.ToolCall{{ID: "one", Name: "repo-read"}})
+	first := <-modelClient.requests
+	stream.ToolStep([]model.ToolCall{{ID: "two", Name: "repo-search"}})
+	select {
+	case <-modelClient.requests:
+		t.Fatal("started a concurrent progress summary")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(modelClient.release)
+	second := <-modelClient.requests
+	if first.Messages[1].Text() == second.Messages[1].Text() || !strings.Contains(second.Messages[1].Text(), "Search repository files") {
+		t.Fatalf("queued progress input = %q, want second operation", second.Messages[1].Text())
 	}
 }
 

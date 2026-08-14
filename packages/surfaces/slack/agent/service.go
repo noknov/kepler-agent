@@ -570,16 +570,18 @@ func (s *Service) StartControlSubscriber(ctx context.Context) {
 }
 
 type slackStream struct {
-	ctx          context.Context
-	messenger    slackconversation.Messenger
-	req          slackconversation.Request
-	mu           sync.Mutex
-	statusMu     sync.Mutex
-	status       slackconversation.ThreadStatusMessenger
-	lastStatus   string
-	statusEpoch  uint64
-	progress     *ProgressSummarizer
-	progressSeen map[string]bool
+	ctx             context.Context
+	messenger       slackconversation.Messenger
+	req             slackconversation.Request
+	mu              sync.Mutex
+	statusMu        sync.Mutex
+	status          slackconversation.ThreadStatusMessenger
+	lastStatus      string
+	statusEpoch     uint64
+	progress        *ProgressSummarizer
+	progressSeen    map[string]bool
+	progressCalls   []model.ToolCall
+	progressRunning bool
 }
 
 func newSlackStream(ctx context.Context, messenger slackconversation.Messenger, req slackconversation.Request) *slackStream {
