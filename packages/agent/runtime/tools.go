@@ -175,6 +175,13 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 			result.Content = []model.Content{{Type: model.ContentText, Text: err.Error()}}
 		}
 	}
+	if !hasWireVisibleToolContent(result.Content) {
+		result.IsError = true
+		if result.ErrorCode == "" {
+			result.ErrorCode = "empty_tool_result"
+		}
+		result.Content = []model.Content{{Type: model.ContentText, Text: fmt.Sprintf("Tool %q returned no output.", call.Name)}}
+	}
 	if result.Metadata == nil {
 		result.Metadata = make(map[string]any)
 	}
@@ -182,4 +189,20 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 	span.SetAttributes(attribute.Int64("agent.tool.duration_ms", time.Since(started).Milliseconds()), attribute.Bool("agent.tool.error", result.IsError))
 	result = limitToolResult(ctx, result, call, r.config.ToolResults, r.deps.Artifacts)
 	entry.result = &result
+}
+
+func hasWireVisibleToolContent(content []model.Content) bool {
+	for _, block := range content {
+		switch block.Type {
+		case model.ContentText:
+			if block.Text != "" {
+				return true
+			}
+		case model.ContentJSON:
+			if len(block.JSON) > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
