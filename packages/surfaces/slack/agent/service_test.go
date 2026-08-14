@@ -154,7 +154,7 @@ func TestServiceRunsHostedHarnessAndPostsFormattedAnswer(t *testing.T) {
 	if len(messenger.posts) != 1 || messenger.posts[0] != "hello" {
 		t.Fatalf("posts = %#v", messenger.posts)
 	}
-	if client.request == nil || len(client.request.Messages) == 0 || strings.Contains(client.request.Messages[0].Text(), "transient Slack status") {
+	if client.request == nil || len(client.request.Messages) == 0 || strings.Contains(client.request.Messages[0].Text(), "transient Slack status") || !strings.Contains(client.request.Messages[0].Text(), slackOutputFormatPrompt) {
 		t.Fatalf("primary model received a Slack progress instruction: %+v", client.request)
 	}
 	if len(messenger.statuses) < 2 || messenger.statuses[0] != "is thinking" || messenger.statuses[len(messenger.statuses)-1] != "" {
@@ -282,6 +282,13 @@ func TestRenderAnswerUsesStructuredCitations(t *testing.T) {
 	want := "Supported claim.\n\nSources: [Primary source](https://example.test/source)"
 	if got := renderAnswer(message); got != want {
 		t.Fatalf("renderAnswer() = %q, want %q", got, want)
+	}
+}
+
+func TestRenderAnswerNormalizesNonBreakingSpaces(t *testing.T) {
+	message := model.TextMessage(model.RoleAssistant, "one\u00a0two\r\nthree")
+	if got := renderAnswer(message); got != "one two\r\nthree" {
+		t.Fatalf("renderAnswer() = %q, want normalized spaces", got)
 	}
 }
 

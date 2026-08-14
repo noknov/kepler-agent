@@ -32,6 +32,8 @@ const (
 	ModeQueue ConversationMode = "queue"
 )
 
+const slackOutputFormatPrompt = `This response is delivered through Slack's Markdown block. Format it as concise, conservative Slack Markdown: use readable paragraphs, simple lists, links, inline code, and code fences when needed. Normalize retrieved evidence instead of copying source-only wrappers, code-fence language labels, or unusual whitespace.`
+
 type Service struct {
 	Agent            hosted.Agent
 	Messenger        slackconversation.Messenger
@@ -278,6 +280,7 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 
 	fragments := []prompt.Fragment{
 		{ID: "hosted-core", Version: "1", Layer: prompt.LayerCore, Content: s.Prompt.SystemPrompt()},
+		{ID: "slack-output-format", Version: "1", Layer: prompt.LayerProduct, Content: slackOutputFormatPrompt},
 		{ID: "user-rules", Layer: prompt.LayerUser, Content: userprefs.RulesPrompt(runCtx, s.UserPrefs, req.UserID)},
 		{ID: "user-skills", Layer: prompt.LayerSkill, Content: userprefs.SkillsMetadataPrompt(runCtx, s.UserPrefs, req.UserID)},
 	}
@@ -346,7 +349,7 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 }
 
 func renderAnswer(message model.Message) string {
-	answer := strings.TrimSpace(message.Text())
+	answer := strings.TrimSpace(strings.ReplaceAll(message.Text(), "\u00a0", " "))
 	seen := make(map[string]bool)
 	var sources []string
 	for _, citation := range message.Citations() {
