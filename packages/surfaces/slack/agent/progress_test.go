@@ -247,6 +247,45 @@ func TestStaleProgressSummaryCannotOverwriteNewLifecycle(t *testing.T) {
 	}
 }
 
+func TestRestoreThreadStatusAfterStreamDelivery(t *testing.T) {
+	messenger := &fakeMessenger{}
+	stream := newSlackStream(context.Background(), &streamingStatusMessenger{
+		fake: messenger,
+	}, slackconversation.Request{Channel: "C1", ThreadTS: "T1", EventID: "Ev1"})
+	stream.Start()
+	stream.mu.Lock()
+	stream.statusEpoch = 1
+	stream.mu.Unlock()
+	stream.setProgressStatus(1, "is thinking", "Searching repository matches")
+	stream.flushStreamUpdate("partial answer", false)
+
+	messenger.mu.Lock()
+	defer messenger.mu.Unlock()
+	if got := messenger.loading; len(got) < 2 || len(got[len(got)-1]) != 1 || got[len(got)-1][0] != "Searching repository matches" {
+		t.Fatalf("loading messages=%#v", got)
+	}
+}
+
+type streamingStatusMessenger struct {
+	fake *fakeMessenger
+}
+
+func (m *streamingStatusMessenger) PostMessage(context.Context, string, string, string) (string, error) {
+	return "1.0", nil
+}
+func (m *streamingStatusMessenger) PostMarkdownMessage(context.Context, string, string, string) (string, error) {
+	return "1.0", nil
+}
+func (m *streamingStatusMessenger) PostMarkdownMessageWithID(_ context.Context, _, _, _ string, _ string) (string, error) {
+	return "1.0", nil
+}
+func (m *streamingStatusMessenger) UpdateMarkdownMessage(context.Context, string, string, string) error {
+	return nil
+}
+func (m *streamingStatusMessenger) SetThreadStatus(ctx context.Context, channel, threadTS, status string, loading []string) error {
+	return m.fake.SetThreadStatus(ctx, channel, threadTS, status, loading)
+}
+
 func TestProgressRequiresStructuredResponse(t *testing.T) {
 	for _, text := range []string{
 		"unstructured response",

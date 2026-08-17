@@ -108,6 +108,7 @@ func (s *slackStream) summarizeProgress(cjk bool) {
 		if len(s.progressCalls) == 0 {
 			s.progressRunning = false
 			s.mu.Unlock()
+			s.flushDeferredStream(false)
 			return
 		}
 		s.mu.Unlock()

@@ -59,6 +59,27 @@ func splitStatusKey(key string) (string, string) {
 	return status, loading
 }
 
+// restoreThreadStatus re-applies dynamic loading after Slack clears thread status
+// on reply delivery.
+func (s *slackStream) restoreThreadStatus() {
+	if s.status == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.streamClosed || s.lastStatus == "" || s.lastStatus == "\x00" {
+		s.mu.Unlock()
+		return
+	}
+	status, loading := splitStatusKey(s.lastStatus)
+	s.mu.Unlock()
+	if loading == "" {
+		return
+	}
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+	_ = s.status.SetThreadStatus(s.ctx, s.req.Channel, s.req.ThreadTS, status, []string{loading})
+}
+
 func (s *slackStream) setProgressStatus(epoch uint64, status, loading string) {
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()
