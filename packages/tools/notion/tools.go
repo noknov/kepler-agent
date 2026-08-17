@@ -10,8 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 // notionBlock represents a minimal Notion block used for text extraction.
@@ -82,27 +81,27 @@ func (c Client) httpClient() *http.Client {
 
 type SearchTool struct{ Client Client }
 
-func (t SearchTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t SearchTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"notion-search",
 		"",
-		registry.ObjectSchema([]string{"query"}, map[string]any{
+		tool.ObjectSchema([]string{"query"}, map[string]any{
 			"query": map[string]any{"type": "string", "description": ""},
 			"limit": map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }
 
-func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	if !t.Client.enabled() {
-		return registry.Result{}, fmt.Errorf("Notion is not configured")
+		return tool.Result{}, fmt.Errorf("Notion is not configured")
 	}
 	var args struct {
 		Query string `json:"query"`
 		Limit int    `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	if args.Limit <= 0 {
 		args.Limit = 10
@@ -116,10 +115,10 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, _ registry
 	}
 	data, err := t.Client.do(ctx, http.MethodPost, "https://api.notion.com/v1/search", body)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	content, err := summarizeNotionSearch(data)
-	return registry.Result{Content: content}, err
+	return tool.TextResult(content), err
 }
 
 func (c Client) do(ctx context.Context, method, endpoint string, payload any) ([]byte, error) {
@@ -198,27 +197,27 @@ func defaultString(v, fallback string) string {
 // GetPageTool reads the full text content of a Notion page.
 type GetPageTool struct{ Client Client }
 
-func (t GetPageTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t GetPageTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"notion-get_page",
 		"",
-		registry.ObjectSchema([]string{"page_id"}, map[string]any{
+		tool.ObjectSchema([]string{"page_id"}, map[string]any{
 			"page_id": map[string]any{"type": "string", "description": ""},
 			"depth":   map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }
 
-func (t GetPageTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t GetPageTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	if !t.Client.enabled() {
-		return registry.Result{}, fmt.Errorf("Notion is not configured")
+		return tool.Result{}, fmt.Errorf("Notion is not configured")
 	}
 	var args struct {
 		PageID string `json:"page_id"`
 		Depth  int    `json:"depth"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	if args.Depth <= 0 {
 		args.Depth = 2
@@ -228,13 +227,13 @@ func (t GetPageTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 	}
 	pageID, err := validateNotionID(args.PageID)
 	if err != nil {
-		return registry.Result{}, fmt.Errorf("page_id: %w", err)
+		return tool.Result{}, fmt.Errorf("page_id: %w", err)
 	}
 	content, err := t.Client.fetchPageContent(ctx, pageID, args.Depth, 0)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	return registry.Result{Content: content}, nil
+	return tool.TextResult(content), nil
 }
 
 // fetchPageContent recursively reads blocks and extracts plain text.
@@ -312,11 +311,11 @@ func blockPrefix(blockType string) string {
 // QueryDatabaseTool queries a Notion database with optional filters and sorts.
 type QueryDatabaseTool struct{ Client Client }
 
-func (t QueryDatabaseTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t QueryDatabaseTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"notion-query_database",
 		"",
-		registry.ObjectSchema([]string{"database_id"}, map[string]any{
+		tool.ObjectSchema([]string{"database_id"}, map[string]any{
 			"database_id": map[string]any{"type": "string", "description": ""},
 			"filter":      map[string]any{"type": "object", "description": ""},
 			"sorts":       map[string]any{"type": "array", "description": ""},
@@ -325,9 +324,9 @@ func (t QueryDatabaseTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t QueryDatabaseTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t QueryDatabaseTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	if !t.Client.enabled() {
-		return registry.Result{}, fmt.Errorf("Notion is not configured")
+		return tool.Result{}, fmt.Errorf("Notion is not configured")
 	}
 	var args struct {
 		DatabaseID string          `json:"database_id"`
@@ -335,8 +334,8 @@ func (t QueryDatabaseTool) Execute(ctx context.Context, raw json.RawMessage, _ r
 		Sorts      json.RawMessage `json:"sorts"`
 		Limit      int             `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	if args.Limit <= 0 {
 		args.Limit = 20
@@ -350,21 +349,21 @@ func (t QueryDatabaseTool) Execute(ctx context.Context, raw json.RawMessage, _ r
 	}
 	dbID, err := validateNotionID(dbID)
 	if err != nil {
-		return registry.Result{}, fmt.Errorf("database_id: %w", err)
+		return tool.Result{}, fmt.Errorf("database_id: %w", err)
 	}
 
 	body := map[string]any{"page_size": args.Limit}
 	if len(args.Filter) > 0 && string(args.Filter) != "null" {
 		var f any
 		if err := json.Unmarshal(args.Filter, &f); err != nil {
-			return registry.Result{}, fmt.Errorf("filter must be valid JSON: %w", err)
+			return tool.Result{}, fmt.Errorf("filter must be valid JSON: %w", err)
 		}
 		body["filter"] = f
 	}
 	if len(args.Sorts) > 0 && string(args.Sorts) != "null" {
 		var s any
 		if err := json.Unmarshal(args.Sorts, &s); err != nil {
-			return registry.Result{}, fmt.Errorf("sorts must be valid JSON: %w", err)
+			return tool.Result{}, fmt.Errorf("sorts must be valid JSON: %w", err)
 		}
 		body["sorts"] = s
 	}
@@ -372,10 +371,10 @@ func (t QueryDatabaseTool) Execute(ctx context.Context, raw json.RawMessage, _ r
 	url := fmt.Sprintf("https://api.notion.com/v1/databases/%s/query", dbID)
 	data, err := t.Client.do(ctx, http.MethodPost, url, body)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	content, err := summarizeNotionSearch(data)
-	return registry.Result{Content: content}, err
+	return tool.TextResult(content), err
 }
 
 func validateNotionID(input string) (string, error) {

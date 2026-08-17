@@ -122,18 +122,18 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 	events := transcript.NewFanout(runSink)
 	workspacePolicy := safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}
-	baseRegistry := hostedTools.NewCatalog(cfg, workspacePolicy, safety.NewCommandPolicy(), stores.UserPrefs, hostedTools.SurfaceOptions{
+	surface := hostedTools.SurfaceOptions{
 		Name: "slack",
 		AvailableDeps: map[string]bool{
 			"slack":    slackClient != nil,
 			"reminder": stores.Reminders != nil,
 		},
-	})
-	slackTools.AddToRegistry(baseRegistry, cfg, slackClient, stores.Reminders, stores.Redis)
-	catalog, err := hosted.AdaptRegistry(baseRegistry)
+	}
+	catalog, err := hostedTools.NewCatalog(cfg, workspacePolicy, safety.NewCommandPolicy(), stores.UserPrefs, surface)
 	if err != nil {
 		return nil, fmt.Errorf("build hosted tool catalog: %w", err)
 	}
+	slackTools.AddToCatalog(catalog, hostedTools.PolicyForSurface(cfg, surface), cfg, slackClient, stores.Reminders, stores.Redis)
 	profile, profileErr := hosted.NewProfile(cfg, hosted.ProfileDependencies{
 		Tools: catalog, Postgres: stores.PGPool, Redis: stores.Redis, ToolSpills: stores.Runs, Events: events, Metrics: recorder,
 	})

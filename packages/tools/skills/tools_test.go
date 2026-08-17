@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/noknov/slack-copilot-agent/packages/prompts"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/userprefs"
 )
 
@@ -35,12 +35,12 @@ Follow these detailed steps.
 	}
 	t.Cleanup(func() { _ = prompts.LoadDirs(prompts.PublicDir) })
 
-	result, err := LoadTool{}.Execute(context.Background(), json.RawMessage(`{"name":"demo"}`), registry.Runtime{})
+	result, err := LoadTool{}.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"name":"demo"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, "Follow these detailed steps.") {
-		t.Fatalf("skill body missing:\n%s", result.Content)
+	if !strings.Contains(result.Text(), "Follow these detailed steps.") {
+		t.Fatalf("skill body missing:\n%s", result.Text())
 	}
 }
 
@@ -55,12 +55,12 @@ func TestLoadToolPrefersUserSkill(t *testing.T) {
 		Active:      true,
 	}}
 
-	result, err := (LoadTool{UserPrefs: store}).Execute(ctx, json.RawMessage(`{"name":"demo"}`), registry.Runtime{UserID: "U1"})
+	result, err := (LoadTool{UserPrefs: store}).Execute(ctx, agenttool.Call{Arguments: json.RawMessage(`{"name":"demo"}`), Scope: agenttool.Scope{UserID: "U1"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, "User override.") || !strings.Contains(result.Content, "Slack user upload") {
-		t.Fatalf("user skill body missing:\n%s", result.Content)
+	if !strings.Contains(result.Text(), "User override.") || !strings.Contains(result.Text(), "Slack user upload") {
+		t.Fatalf("user skill body missing:\n%s", result.Text())
 	}
 }
 

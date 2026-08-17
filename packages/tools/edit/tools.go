@@ -8,65 +8,62 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type WriteFileTool struct {
 	Paths safety.WorkspacePolicy
 }
 
-func (WriteFileTool) IsWrite() bool { return true }
 
-func (t WriteFileTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t WriteFileTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"code-write_file",
 		"Create or replace a workspace file with exact content. Use this only in isolated coding workspaces, after reading the relevant file when replacing existing code.",
-		registry.ObjectSchema([]string{"path", "content"}, map[string]any{
+		tool.ObjectSchema([]string{"path", "content"}, map[string]any{
 			"path":    map[string]any{"type": "string", "description": "Workspace-relative, root-prefixed, or absolute file path."},
 			"content": map[string]any{"type": "string", "description": "The complete file content to write."},
 		}),
 	)
 }
 
-func (t WriteFileTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t WriteFileTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	path, err := resolveWritablePath(t.Paths, args.Path)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	select {
 	case <-ctx.Done():
-		return registry.Result{}, ctx.Err()
+		return tool.Result{}, ctx.Err()
 	default:
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	if err := os.WriteFile(path, []byte(args.Content), 0o600); err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	return registry.Result{Content: fmt.Sprintf("wrote %s (%d bytes)", displayPath(t.Paths, path), len(args.Content))}, nil
+	return tool.TextResult(fmt.Sprintf("wrote %s (%d bytes)", displayPath(t.Paths, path), len(args.Content))), nil
 }
 
 type ReplaceTool struct {
 	Paths safety.WorkspacePolicy
 }
 
-func (ReplaceTool) IsWrite() bool { return true }
 
-func (t ReplaceTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t ReplaceTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"code-replace",
 		"Replace one exact text span in a workspace file. Prefer this over code-write_file for small edits. The old_text must match exactly and must occur exactly once.",
-		registry.ObjectSchema([]string{"path", "old_text", "new_text"}, map[string]any{
+		tool.ObjectSchema([]string{"path", "old_text", "new_text"}, map[string]any{
 			"path":     map[string]any{"type": "string", "description": "Workspace-relative, root-prefixed, or absolute file path."},
 			"old_text": map[string]any{"type": "string", "description": "Exact text to replace. It must occur exactly once."},
 			"new_text": map[string]any{"type": "string", "description": "Replacement text."},
@@ -74,44 +71,44 @@ func (t ReplaceTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t ReplaceTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t ReplaceTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Path    string `json:"path"`
 		OldText string `json:"old_text"`
 		NewText string `json:"new_text"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	if args.OldText == "" {
-		return registry.Result{}, fmt.Errorf("old_text is required")
+		return tool.Result{}, fmt.Errorf("old_text is required")
 	}
 	path, err := t.Paths.ResolveReadableFile(args.Path)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	if safety.IsSensitivePath(path) {
-		return registry.Result{}, fmt.Errorf("refusing to edit sensitive file %q", filepath.Base(path))
+		return tool.Result{}, fmt.Errorf("refusing to edit sensitive file %q", filepath.Base(path))
 	}
 	select {
 	case <-ctx.Done():
-		return registry.Result{}, ctx.Err()
+		return tool.Result{}, ctx.Err()
 	default:
 	}
 	contentBytes, err := os.ReadFile(path)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	content := string(contentBytes)
 	count := strings.Count(content, args.OldText)
 	if count != 1 {
-		return registry.Result{}, fmt.Errorf("old_text matched %d times; expected exactly 1", count)
+		return tool.Result{}, fmt.Errorf("old_text matched %d times; expected exactly 1", count)
 	}
 	updated := strings.Replace(content, args.OldText, args.NewText, 1)
 	if err := os.WriteFile(path, []byte(updated), 0o600); err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	return registry.Result{Content: fmt.Sprintf("replaced text in %s", displayPath(t.Paths, path))}, nil
+	return tool.TextResult(fmt.Sprintf("replaced text in %s", displayPath(t.Paths, path))), nil
 }
 
 func resolveWritablePath(policy safety.WorkspacePolicy, raw string) (string, error) {

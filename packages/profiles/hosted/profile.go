@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/noknov/slack-copilot-agent/packages/agent/environment"
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	agentruntime "github.com/noknov/slack-copilot-agent/packages/agent/runtime"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
@@ -74,16 +75,18 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	runner, err := agentruntime.New(agentruntime.Config{
 		Model: cfg.LLM.Model, ReasoningEffort: cfg.LLM.Thinking, Temperature: cfg.LLM.Temperature,
 		MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxSteps: cfg.Tools.AgentMaxSteps, MaxModelRetries: 2,
-		Context:     agentruntime.ContextConfig{MaxTokens: cfg.Sessions.MaxContextTokens, ReserveTokens: cfg.Sessions.AutocompactBuffer},
-		ToolResults: agentruntime.ToolResultConfig{MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)},
+		Context:        agentruntime.ContextConfig{MaxTokens: cfg.Sessions.MaxContextTokens, ReserveTokens: cfg.Sessions.AutocompactBuffer},
+		ToolResults:    agentruntime.ToolResultConfig{MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)},
+		CircuitBreaker: agentruntime.CircuitBreakerConfig{Enabled: true},
 	}, agentruntime.Dependencies{
 		Model: client, Tools: catalog, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}, Transcript: PGTranscript{Pool: deps.Postgres}, Events: deps.Events,
 		Compactor: agentruntime.ModelCompactor{Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer}, Artifacts: artifacts,
+		Environment: environment.Config{WorkspaceRoots: cfg.Security.WorkspaceRoots},
 	})
 	if err != nil {
 		return Profile{}, err
 	}
-	promptPolicy := safety.PromptPolicy{WorkspaceRoots: cfg.Security.WorkspaceRoots, IncludeRepositoryInventory: true, Redis: deps.Redis}
+	promptPolicy := safety.PromptPolicy{}
 	return Profile{
 		Agent: Agent{Runtime: runner}, Prompt: promptPolicy,
 		Redactor: safety.Redactor{WorkspaceRoots: cfg.Security.WorkspaceRoots}, Tools: catalog,
@@ -104,7 +107,7 @@ func (c observedModel) Generate(ctx context.Context, request model.Request, sink
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			metricErr = nil
 		}
-		c.Metrics.LLMCall(recordedUsage(response.Usage), time.Since(started), metricErr)
+		c.Metrics.LLMCall(observability.UsageFromModel(response.Usage), time.Since(started), metricErr)
 	}
 	return response, err
 }

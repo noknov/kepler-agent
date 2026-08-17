@@ -5,9 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type CanvasCreator interface {
@@ -20,13 +19,12 @@ type CreateCanvasTool struct {
 	Slack CanvasCreator
 }
 
-func (CreateCanvasTool) IsWrite() bool { return true }
 
-func (t CreateCanvasTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t CreateCanvasTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"slack-create_canvas",
 		"",
-		registry.ObjectSchema([]string{"title", "markdown"}, map[string]any{
+		tool.ObjectSchema([]string{"title", "markdown"}, map[string]any{
 			"title":      map[string]any{"type": "string", "description": ""},
 			"markdown":   map[string]any{"type": "string", "description": ""},
 			"channel_id": map[string]any{"type": "string", "description": ""},
@@ -34,20 +32,20 @@ func (t CreateCanvasTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t CreateCanvasTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t CreateCanvasTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Title     string `json:"title"`
 		Markdown  string `json:"markdown"`
 		ChannelID string `json:"channel_id"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	if args.Title == "" {
-		return registry.Result{}, fmt.Errorf("title is required")
+		return tool.Result{}, fmt.Errorf("title is required")
 	}
 	if args.Markdown == "" {
-		return registry.Result{}, fmt.Errorf("markdown content is required")
+		return tool.Result{}, fmt.Errorf("markdown content is required")
 	}
 
 	content := &slack.CanvasContent{
@@ -60,7 +58,7 @@ func (t CreateCanvasTool) Execute(ctx context.Context, raw json.RawMessage, rt r
 
 	channelID := args.ChannelID
 	if channelID == "" {
-		channelID = rt.Channel
+		channelID = call.Scope.Values["channel"]
 	}
 
 	if channelID != "" {
@@ -69,8 +67,8 @@ func (t CreateCanvasTool) Execute(ctx context.Context, raw json.RawMessage, rt r
 		canvasID, err = t.Slack.CreateCanvas(ctx, args.Title, content)
 	}
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 
-	return registry.Result{Content: fmt.Sprintf("Canvas created successfully.\nCanvas ID: %s\nTitle: %s", canvasID, args.Title)}, nil
+	return tool.TextResult(fmt.Sprintf("Canvas created successfully.\nCanvas ID: %s\nTitle: %s", canvasID, args.Title)), nil
 }

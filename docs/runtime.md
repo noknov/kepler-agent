@@ -63,3 +63,10 @@ tool and is never automatic orchestration.
 The `evals` package treats the CLI and other products as black-box processes.
 Because the CLI runs the same harness, its context, tool, retry, and termination
 results exercise the shared runtime used by Slack.
+
+Hosted profiles enable the optional circuit breaker by default. It blocks
+identical repeated tool calls after configurable failure or success thresholds.
+
+The JSON-RPC app server (`appserver/cmd/app-server`) exposes the same local
+runtime over stdio with `turn/start`, `turn/steer`, `turn/cancel`, and
+transcript `event` notifications.

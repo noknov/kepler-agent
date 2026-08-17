@@ -49,9 +49,11 @@ does not belong in `system.md`.
 Only skill metadata appears in the base prompt. Full skill instructions are
 loaded on demand through `skills-load`.
 
-Repository inventory from `WORKSPACE_ROOTS` is injected into the runtime prompt
-so the internal debugging agent can route questions to the right codebase before
-opening files.
+Runtime facts such as the current date, timezone, and configured workspace
+roots are injected as an ephemeral `<environment_context>` user fragment at
+request time. Repository inventories are no longer embedded in the system
+prompt; use the deferred `workspace-list_repos` tool when the model needs a
+repository catalog.
 
 ## Private Overlay
 

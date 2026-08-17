@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 func TestDiscoverPromptAndLoad(t *testing.T) {
@@ -28,8 +28,8 @@ func TestDiscoverPromptAndLoad(t *testing.T) {
 	if !strings.Contains(catalog.Prompt(), "code-review: Review risky changes.") || strings.Contains(catalog.Prompt(), "Full workflow") {
 		t.Fatalf("prompt=%q", catalog.Prompt())
 	}
-	result, err := catalog.Tool().Execute(context.Background(), tool.Call{Arguments: json.RawMessage(`{"name":"code-review"}`)})
-	if err != nil || !strings.Contains(result.Content[0].Text, "Full workflow") {
+	result, err := catalog.Tool().Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"name":"code-review"}`)})
+	if err != nil || !strings.Contains(result.Text(), "Full workflow") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }

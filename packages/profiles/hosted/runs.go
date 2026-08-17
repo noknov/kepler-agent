@@ -13,7 +13,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
-	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/observability"
 	"github.com/noknov/slack-copilot-agent/packages/runs"
 )
@@ -124,7 +123,7 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 			FinishReason model.FinishReason `json:"finish_reason"`
 		}
 		_ = json.Unmarshal(event.Metadata, &metadata)
-		usage := recordedUsage(metadata.Usage)
+		usage := observability.UsageFromModel(metadata.Usage)
 		duration := event.Timestamp.Sub(state.modelStart)
 		step := runs.Step{ID: event.ID, SpanID: event.ID, Type: "llm", Name: s.modelFor(ctx, event.TurnID), StartedAt: state.modelStart, DurationMS: duration.Milliseconds(), Usage: usage, FinishReason: string(metadata.FinishReason), EstimatedCostUSD: s.Rates.EstimateUSD(usage)}
 		if err := s.appendStep(ctx, event.TurnID, step); err != nil {
@@ -147,7 +146,7 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 			if event.Error != context.Canceled.Error() && event.Error != context.DeadlineExceeded.Error() {
 				stepErr = fmt.Errorf("%s", event.Error)
 			}
-			s.Metrics.LLMCall(llm.Usage{}, duration, stepErr)
+			s.Metrics.LLMCall(observability.UsageFromModel(model.Usage{}), duration, stepErr)
 		}
 	case transcript.AssistantMessage:
 		if state != nil && event.Message != nil && len(event.Message.ToolCalls()) == 0 {
@@ -295,7 +294,7 @@ func (s *RunSink) modelFor(ctx context.Context, runID string) string {
 }
 
 func recomputeRun(run *runs.Run) {
-	run.Usage = llm.Usage{}
+	run.Usage = runs.EmptyUsage()
 	run.EstimatedCostUSD = 0
 	for _, step := range run.Steps {
 		if step.Type != "llm" {
@@ -309,10 +308,6 @@ func recomputeRun(run *runs.Run) {
 		run.Usage.ReasoningTokens += step.Usage.ReasoningTokens
 		run.EstimatedCostUSD += step.EstimatedCostUSD
 	}
-}
-
-func recordedUsage(value model.Usage) llm.Usage {
-	return llm.Usage{PromptTokens: int(value.InputTokens), CompletionTokens: int(value.OutputTokens), TotalTokens: int(value.InputTokens + value.OutputTokens), CacheReadInputTokens: int(value.CacheReadTokens), CacheCreationInputTokens: int(value.CacheCreatedTokens), CacheIncludedInPrompt: value.CacheTokensIncludedInInput}
 }
 
 func rawMetadata(raw json.RawMessage) map[string]any {

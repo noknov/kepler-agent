@@ -9,39 +9,37 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/prompts"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type RunbookSearchTool struct {
 	Dir string
 }
 
-func (RunbookSearchTool) Parallel() bool { return true }
 
-func (t RunbookSearchTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t RunbookSearchTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"knowledge-runbook_search",
 		"",
-		registry.ObjectSchema([]string{"query"}, map[string]any{
+		tool.ObjectSchema([]string{"query"}, map[string]any{
 			"query": map[string]any{"type": "string", "description": ""},
 			"limit": map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }
 
-func (t RunbookSearchTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t RunbookSearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Query string `json:"query"`
 		Limit int    `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	query := strings.TrimSpace(args.Query)
 	if query == "" {
-		return registry.Result{}, fmt.Errorf("query is required")
+		return tool.Result{}, fmt.Errorf("query is required")
 	}
 	if args.Limit <= 0 {
 		args.Limit = 5
@@ -55,10 +53,10 @@ func (t RunbookSearchTool) Execute(ctx context.Context, raw json.RawMessage, _ r
 	}
 	matches, err := searchRunbooks(ctx, dir, query, args.Limit)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	if len(matches) == 0 {
-		return registry.Result{Content: "no matching runbooks"}, nil
+		return tool.TextResult("no matching runbooks"), nil
 	}
 	var b strings.Builder
 	b.WriteString("Runbook matches\n")
@@ -66,7 +64,7 @@ func (t RunbookSearchTool) Execute(ctx context.Context, raw json.RawMessage, _ r
 		b.WriteString("- " + match.Name + " score=" + fmt.Sprintf("%d", match.Score) + "\n")
 		b.WriteString(indent(excerpt(match.Content, query), "  ") + "\n")
 	}
-	return registry.Result{Content: strings.TrimSpace(b.String())}, nil
+	return tool.TextResult(strings.TrimSpace(b.String())), nil
 }
 
 type runbookMatch struct {

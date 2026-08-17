@@ -10,8 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type Client struct {
@@ -33,62 +32,60 @@ func (c Client) httpClient() *http.Client {
 
 type GetIssueTool struct{ Client Client }
 
-func (GetIssueTool) Parallel() bool { return true }
 
-func (t GetIssueTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t GetIssueTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"youtrack-get_issue",
 		"",
-		registry.ObjectSchema([]string{"issue_id"}, map[string]any{
+		tool.ObjectSchema([]string{"issue_id"}, map[string]any{
 			"issue_id": map[string]any{"type": "string", "description": ""},
 		}),
 	)
 }
 
-func (t GetIssueTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t GetIssueTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	if !t.Client.enabled() {
-		return registry.Result{}, fmt.Errorf("YouTrack is not configured")
+		return tool.Result{}, fmt.Errorf("YouTrack is not configured")
 	}
 	var args struct {
 		IssueID string `json:"issue_id"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	fields := "idReadable,summary,description,customFields(name,value(name,localizedName,fullName,text)),comments(text,author(fullName),created)"
 	endpoint := t.Client.BaseURL + "/api/issues/" + url.PathEscape(args.IssueID) + "?fields=" + url.QueryEscape(fields)
 	data, err := t.Client.do(ctx, endpoint)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	return registry.Result{Content: string(data)}, nil
+	return tool.TextResult(string(data)), nil
 }
 
 type SearchTool struct{ Client Client }
 
-func (SearchTool) Parallel() bool { return true }
 
-func (t SearchTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t SearchTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"youtrack-search",
 		"",
-		registry.ObjectSchema([]string{"query"}, map[string]any{
+		tool.ObjectSchema([]string{"query"}, map[string]any{
 			"query": map[string]any{"type": "string", "description": ""},
 			"limit": map[string]any{"type": "integer", "description": ""},
 		}),
 	)
 }
 
-func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	if !t.Client.enabled() {
-		return registry.Result{}, fmt.Errorf("YouTrack is not configured")
+		return tool.Result{}, fmt.Errorf("YouTrack is not configured")
 	}
 	var args struct {
 		Query string `json:"query"`
 		Limit int    `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	if args.Limit <= 0 {
 		args.Limit = 10
@@ -104,9 +101,9 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, _ registry
 	endpoint := t.Client.BaseURL + "/api/issues?" + values.Encode()
 	data, err := t.Client.do(ctx, endpoint)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	return registry.Result{Content: summarizeIssues(data)}, nil
+	return tool.TextResult(summarizeIssues(data)), nil
 }
 
 func (c Client) do(ctx context.Context, endpoint string) ([]byte, error) {

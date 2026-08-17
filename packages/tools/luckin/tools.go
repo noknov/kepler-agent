@@ -2,13 +2,11 @@ package luckin
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/mcp"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
 )
 
 // Client wraps a shared MCP client with Luckin-specific behavior.
@@ -29,52 +27,37 @@ type MCPTool struct {
 	SideEffect  bool
 }
 
-func (t MCPTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(t.LocalName, t.Description, t.Parameters)
-}
-
-func (t MCPTool) IsWrite() bool { return t.SideEffect }
-
-func (t MCPTool) Metadata() registry.ToolMetadata {
-	risk := registry.RiskRead
+func (t MCPTool) Descriptor() tool.Descriptor {
+	effects := []tool.Effect{tool.EffectRead, tool.EffectNetwork}
 	if t.SideEffect {
-		risk = registry.RiskExternalWrite
+		effects = []tool.Effect{tool.EffectExternalWrite, tool.EffectNetwork}
 	}
-	return registry.ToolMetadata{
-		Risk:         risk,
-		Dependencies: []string{"luckin"},
-		Surfaces:     []string{"slack"},
-	}
+	return tool.FunctionDescriptor(t.LocalName, t.Description, t.Parameters, tool.WithEffects(effects...), tool.WithDependencies("luckin"), tool.WithSurfaces("slack"))
 }
 
-func (t MCPTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t MCPTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	if t.Client == nil || !t.Client.enabled() {
-		return registry.Result{}, fmt.Errorf("Luckin MCP is not configured: LUCKIN_MCP_TOKEN is required")
+		return tool.Result{}, fmt.Errorf("Luckin MCP is not configured: LUCKIN_MCP_TOKEN is required")
 	}
-	// Side-effect capability is authorized by the server registry/policy. Do
-	// not turn a model-generated boolean into a pretend user confirmation.
-	args := json.RawMessage(raw)
-	session, err := getOrCreateSession(ctx, t.Client.MCP, rt.Cache)
+	session, err := getOrCreateSession(ctx, t.Client.MCP, tool.CacheFor(call.Scope))
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	out, err := t.Client.MCP.CallTool(ctx, session, t.RemoteName, args)
+	out, err := t.Client.MCP.CallTool(ctx, session, t.RemoteName, call.Arguments)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	return registry.Result{Content: out.Content}, nil
+	return tool.TextResult(out.Content), nil
 }
 
-func RegisterAll(reg *registry.Registry, client *Client) {
-	for _, tool := range tools(client) {
-		reg.Register(registry.WithMetadata(tool, registry.ToolMetadata{Dependencies: []string{"luckin"}, Network: true}))
-	}
+// Tools returns the Luckin MCP tool inventory for catalog registration.
+func Tools(client *Client) []MCPTool {
+	return tools(client)
 }
 
-func RegisterDeferredAll(reg *registry.Registry, client *Client, category string) {
-	for _, tool := range tools(client) {
-		reg.RegisterDeferred(registry.AsDeferred(category, registry.WithMetadata(tool, registry.ToolMetadata{Dependencies: []string{"luckin"}, Network: true})))
-	}
+// Annotate applies hosted-catalog metadata for Luckin tools.
+func Annotate(item MCPTool) tool.Tool {
+	return item
 }
 
 func tools(client *Client) []MCPTool {
@@ -83,7 +66,7 @@ func tools(client *Client) []MCPTool {
 			Client:     client,
 			LocalName:  "luckin-query_shop_list",
 			RemoteName: "queryShopList",
-			Parameters: registry.ObjectSchema([]string{"longitude", "latitude"}, map[string]any{
+			Parameters: tool.ObjectSchema([]string{"longitude", "latitude"}, map[string]any{
 				"deptName":  map[string]any{"type": "string", "description": ""},
 				"longitude": map[string]any{"type": "number", "description": ""},
 				"latitude":  map[string]any{"type": "number", "description": ""},
@@ -93,7 +76,7 @@ func tools(client *Client) []MCPTool {
 			Client:     client,
 			LocalName:  "luckin-search_product",
 			RemoteName: "searchProductForMcp",
-			Parameters: registry.ObjectSchema([]string{"deptId", "query"}, map[string]any{
+			Parameters: tool.ObjectSchema([]string{"deptId", "query"}, map[string]any{
 				"deptId": map[string]any{"type": "integer", "description": ""},
 				"query":  map[string]any{"type": "string", "description": ""},
 			}),
@@ -102,7 +85,7 @@ func tools(client *Client) []MCPTool {
 			Client:     client,
 			LocalName:  "luckin-switch_product",
 			RemoteName: "switchProduct",
-			Parameters: registry.ObjectSchema([]string{"deptId", "productId", "skuCode", "attrOperationParam", "amount"}, map[string]any{
+			Parameters: tool.ObjectSchema([]string{"deptId", "productId", "skuCode", "attrOperationParam", "amount"}, map[string]any{
 				"deptId":    map[string]any{"type": "integer", "description": ""},
 				"productId": map[string]any{"type": "integer", "description": ""},
 				"skuCode":   map[string]any{"type": "string", "description": ""},
@@ -130,7 +113,7 @@ func tools(client *Client) []MCPTool {
 			Client:     client,
 			LocalName:  "luckin-query_product_detail",
 			RemoteName: "queryProductDetailInfo",
-			Parameters: registry.ObjectSchema([]string{"deptId", "productId"}, map[string]any{
+			Parameters: tool.ObjectSchema([]string{"deptId", "productId"}, map[string]any{
 				"deptId":    map[string]any{"type": "integer", "description": ""},
 				"productId": map[string]any{"type": "integer", "description": ""},
 			}),
@@ -139,20 +122,20 @@ func tools(client *Client) []MCPTool {
 			Client:     client,
 			LocalName:  "luckin-preview_order",
 			RemoteName: "previewOrder",
-			Parameters: registry.ObjectSchema([]string{"deptId", "productList"}, orderProperties(false)),
+			Parameters: tool.ObjectSchema([]string{"deptId", "productList"}, orderProperties(false)),
 		},
 		{
 			Client:     client,
 			LocalName:  "luckin-create_order",
 			RemoteName: "createOrder",
-			Parameters: registry.ObjectSchema([]string{"deptId", "productList", "longitude", "latitude"}, orderProperties(true)),
+			Parameters: tool.ObjectSchema([]string{"deptId", "productList", "longitude", "latitude"}, orderProperties(true)),
 			SideEffect: true,
 		},
 		{
 			Client:     client,
 			LocalName:  "luckin-query_order_detail",
 			RemoteName: "queryOrderDetailInfo",
-			Parameters: registry.ObjectSchema([]string{"orderId"}, map[string]any{
+			Parameters: tool.ObjectSchema([]string{"orderId"}, map[string]any{
 				"orderId": map[string]any{"type": "string", "description": ""},
 			}),
 		},
@@ -160,7 +143,7 @@ func tools(client *Client) []MCPTool {
 			Client:     client,
 			LocalName:  "luckin-cancel_order",
 			RemoteName: "cancelOrder",
-			Parameters: registry.ObjectSchema([]string{"orderId"}, map[string]any{
+			Parameters: tool.ObjectSchema([]string{"orderId"}, map[string]any{
 				"orderId": map[string]any{"type": "string", "description": ""},
 			}),
 			SideEffect: true,
@@ -197,7 +180,7 @@ func orderProperties(includeLocation bool) map[string]any {
 	return props
 }
 
-func getOrCreateSession(ctx context.Context, client *mcp.Client, cache *registry.RuntimeCache) (mcp.Session, error) {
+func getOrCreateSession(ctx context.Context, client *mcp.Client, cache *tool.TurnCache) (mcp.Session, error) {
 	key := client.SessionKey()
 	if cache != nil {
 		if cached, ok := cache.Get(key); ok {

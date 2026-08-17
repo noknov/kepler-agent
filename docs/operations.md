@@ -73,6 +73,10 @@ preferred administration tool before starting services, for example:
 psql "$POSTGRES_DSN" -f schema/postgres.sql
 ```
 
+Upgrading an existing database is an operator concern. This repository does not
+ship incremental migration SQL; apply your own upgrade process to move an older
+schema forward to match `schema/postgres.sql`.
+
 Startup fails with the names of missing tables. This keeps DDL privileges and
 database lifecycle policy outside the agent's business code.
 

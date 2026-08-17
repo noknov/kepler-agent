@@ -7,19 +7,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type IncidentBriefTool struct{}
 
-func (IncidentBriefTool) Parallel() bool { return true }
 
-func (IncidentBriefTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (IncidentBriefTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"diagnostics-incident_brief",
 		"",
-		registry.ObjectSchema([]string{"service", "symptom"}, map[string]any{
+		tool.ObjectSchema([]string{"service", "symptom"}, map[string]any{
 			"service":     map[string]any{"type": "string", "description": ""},
 			"environment": map[string]any{"type": "string", "description": ""},
 			"symptom":     map[string]any{"type": "string", "description": ""},
@@ -30,13 +28,12 @@ func (IncidentBriefTool) Spec() llm.ToolSpec {
 
 type TimelineTool struct{}
 
-func (TimelineTool) Parallel() bool { return true }
 
-func (TimelineTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (TimelineTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"diagnostics-timeline",
 		"",
-		registry.ObjectSchema([]string{"events"}, map[string]any{
+		tool.ObjectSchema([]string{"events"}, map[string]any{
 			"title": map[string]any{"type": "string", "description": ""},
 			"events": map[string]any{
 				"type":        "array",
@@ -56,10 +53,10 @@ func (TimelineTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (TimelineTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (TimelineTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	select {
 	case <-ctx.Done():
-		return registry.Result{}, ctx.Err()
+		return tool.Result{}, ctx.Err()
 	default:
 	}
 	var args struct {
@@ -72,11 +69,11 @@ func (TimelineTool) Execute(ctx context.Context, raw json.RawMessage, _ registry
 			Evidence string `json:"evidence"`
 		} `json:"events"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	if len(args.Events) == 0 {
-		return registry.Result{}, fmt.Errorf("events are required")
+		return tool.Result{}, fmt.Errorf("events are required")
 	}
 	title := strings.TrimSpace(args.Title)
 	if title == "" {
@@ -102,18 +99,17 @@ func (TimelineTool) Execute(ctx context.Context, raw json.RawMessage, _ registry
 			b.WriteString("   evidence: " + strings.TrimSpace(event.Evidence) + "\n")
 		}
 	}
-	return registry.Result{Content: b.String()}, nil
+	return tool.TextResult(b.String()), nil
 }
 
 type EvidenceBoardTool struct{}
 
-func (EvidenceBoardTool) Parallel() bool { return true }
 
-func (EvidenceBoardTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (EvidenceBoardTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"diagnostics-evidence_board",
 		"",
-		registry.ObjectSchema(nil, map[string]any{
+		tool.ObjectSchema(nil, map[string]any{
 			"facts":       arrayOfStrings(),
 			"hypotheses":  arrayOfStrings(),
 			"risks":       arrayOfStrings(),
@@ -122,10 +118,10 @@ func (EvidenceBoardTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (EvidenceBoardTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (EvidenceBoardTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	select {
 	case <-ctx.Done():
-		return registry.Result{}, ctx.Err()
+		return tool.Result{}, ctx.Err()
 	default:
 	}
 	var args struct {
@@ -134,8 +130,8 @@ func (EvidenceBoardTool) Execute(ctx context.Context, raw json.RawMessage, _ reg
 		Risks      []string `json:"risks"`
 		NextChecks []string `json:"next_checks"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	var b strings.Builder
 	writeList := func(title string, items []string) {
@@ -155,7 +151,7 @@ func (EvidenceBoardTool) Execute(ctx context.Context, raw json.RawMessage, _ reg
 	writeList("Hypotheses", args.Hypotheses)
 	writeList("Risks", args.Risks)
 	writeList("Next checks", args.NextChecks)
-	return registry.Result{Content: b.String()}, nil
+	return tool.TextResult(b.String()), nil
 }
 
 func arrayOfStrings() map[string]any {
@@ -166,10 +162,10 @@ func arrayOfStrings() map[string]any {
 	}
 }
 
-func (IncidentBriefTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (IncidentBriefTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	select {
 	case <-ctx.Done():
-		return registry.Result{}, ctx.Err()
+		return tool.Result{}, ctx.Err()
 	default:
 	}
 	var args struct {
@@ -178,15 +174,15 @@ func (IncidentBriefTool) Execute(ctx context.Context, raw json.RawMessage, _ reg
 		Symptom     string `json:"symptom"`
 		Window      string `json:"window"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	args.Service = strings.TrimSpace(args.Service)
 	args.Environment = strings.TrimSpace(args.Environment)
 	args.Symptom = strings.TrimSpace(args.Symptom)
 	args.Window = strings.TrimSpace(args.Window)
 	if args.Service == "" || args.Symptom == "" {
-		return registry.Result{}, fmt.Errorf("service and symptom are required")
+		return tool.Result{}, fmt.Errorf("service and symptom are required")
 	}
 	if args.Window == "" {
 		args.Window = "30m"
@@ -215,5 +211,5 @@ func (IncidentBriefTool) Execute(ctx context.Context, raw json.RawMessage, _ reg
 	b.WriteString("- notion-search/youtrack-search: look for existing runbooks, incidents, or tickets.\n\n")
 	b.WriteString("Answer format:\n")
 	b.WriteString("- Current status\n- Evidence\n- Hypotheses\n- Next checks\n- User-facing recommendation\n")
-	return registry.Result{Content: b.String()}, nil
+	return tool.TextResult(b.String()), nil
 }

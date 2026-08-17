@@ -12,10 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/gitcache"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type Base struct {
@@ -26,59 +25,58 @@ type Base struct {
 
 type StatusTool struct{ Base }
 
-func (StatusTool) Parallel() bool { return true }
 
-func (t StatusTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t StatusTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"git-status",
 		"",
-		registry.ObjectSchema([]string{"branch"}, map[string]any{
+		tool.ObjectSchema([]string{"branch"}, map[string]any{
 			"repo": map[string]any{"type": "string", "description": ""},
 		}),
 	)
 }
 
-func (t StatusTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t StatusTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Repo string `json:"repo"`
 	}
-	_ = json.Unmarshal(raw, &args)
+	_ = json.Unmarshal(call.Arguments, &args)
 	repo, err := t.repo(args.Repo)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	out, err := t.run(ctx, repo, "status", "--short", "--branch")
-	return registry.Result{Content: out}, err
+	return tool.TextResult(out), err
 }
 
 type FetchRefTool struct{ Base }
 
-func (t FetchRefTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t FetchRefTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"git-fetch_ref",
 		"Fetch origin refs and resolve an actual remote branch to an immutable commit SHA. Do not pass a pull-request number or refs/pull/...; use github-pr_diff for GitHub pull requests. Use this first when investigating a specific branch, then pass the returned repo/ref to git-search_ref or git-read_file_ref. This never checks out or updates the working tree, so multiple users can inspect different branches concurrently.",
-		registry.ObjectSchema(nil, map[string]any{
+		tool.ObjectSchema(nil, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 		}),
 	)
 }
 
-func (t FetchRefTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t FetchRefTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Repo   string `json:"repo"`
 		Branch string `json:"branch"`
 	}
-	_ = json.Unmarshal(raw, &args)
+	_ = json.Unmarshal(call.Arguments, &args)
 	repo, err := t.repo(args.Repo)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	snap, err := t.fetchSnapshot(ctx, repo, args.Branch, rt)
+	snap, err := t.fetchSnapshot(ctx, repo, args.Branch, call.Scope)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	return registry.Result{Content: snap.header()}, nil
+	return tool.TextResult(snap.header()), nil
 }
 
 type snapshot struct {
@@ -92,13 +90,12 @@ type snapshot struct {
 
 type SearchRefTool struct{ Base }
 
-func (SearchRefTool) Parallel() bool { return true }
 
-func (t SearchRefTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t SearchRefTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"git-search_ref",
 		"Search an immutable git ref returned by git-fetch_ref. Use for branch-specific code investigation without changing the checkout. Search hits are hints; read matching ranges before claiming behavior.",
-		registry.ObjectSchema([]string{"repo", "query", "ref"}, map[string]any{
+		tool.ObjectSchema([]string{"repo", "query", "ref"}, map[string]any{
 			"repo":  map[string]any{"type": "string", "description": "Repository returned by git-fetch_ref."},
 			"ref":   map[string]any{"type": "string", "description": "Immutable commit SHA returned by git-fetch_ref, or an explicit safe ref."},
 			"query": map[string]any{"type": "string", "description": "Pattern to search."},
@@ -108,7 +105,7 @@ func (t SearchRefTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t SearchRefTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t SearchRefTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Repo  string `json:"repo"`
 		Ref   string `json:"ref"`
@@ -116,11 +113,11 @@ func (t SearchRefTool) Execute(ctx context.Context, raw json.RawMessage, rt regi
 		Path  string `json:"path"`
 		Limit int    `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	if strings.TrimSpace(args.Query) == "" {
-		return registry.Result{}, fmt.Errorf("query is required")
+		return tool.Result{}, fmt.Errorf("query is required")
 	}
 	if args.Limit <= 0 {
 		args.Limit = 50
@@ -130,15 +127,15 @@ func (t SearchRefTool) Execute(ctx context.Context, raw json.RawMessage, rt regi
 	}
 	repo, err := t.explicitRepo(args.Repo)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	ref, err := t.resolveRef(ctx, repo, args.Ref)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	path, err := cleanGitPath(args.Path)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	cmdArgs := []string{"grep", "-n", "--no-color", "-I", "-e", args.Query, ref, "--"}
 	if path != "" {
@@ -147,26 +144,25 @@ func (t SearchRefTool) Execute(ctx context.Context, raw json.RawMessage, rt regi
 	out, err := t.run(ctx, repo, cmdArgs...)
 	if err != nil {
 		if strings.TrimSpace(out) == "" {
-			return registry.Result{Content: "no matches"}, nil
+			return tool.TextResult("no matches"), nil
 		}
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	if len(lines) > args.Limit {
 		lines = append(lines[:args.Limit], "...[truncated after "+strconv.Itoa(args.Limit)+" matches]")
 	}
-	return registry.Result{Content: strings.Join(lines, "\n")}, nil
+	return tool.TextResult(strings.Join(lines, "\n")), nil
 }
 
 type RepoSearchTool struct{ Base }
 
-func (RepoSearchTool) Parallel() bool { return true }
 
-func (t RepoSearchTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t RepoSearchTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"repo-search",
 		"Search a refreshed remote branch snapshot without changing the checkout. Branch must be an actual remote branch name, not a pull-request number or refs/pull/...; use github-pr_diff for GitHub pull requests.",
-		registry.ObjectSchema([]string{"branch", "query"}, map[string]any{
+		tool.ObjectSchema([]string{"branch", "query"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"query":  map[string]any{"type": "string", "description": "Pattern to search."},
@@ -176,7 +172,7 @@ func (t RepoSearchTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t RepoSearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t RepoSearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Repo   string `json:"repo"`
 		Branch string `json:"branch"`
@@ -184,11 +180,11 @@ func (t RepoSearchTool) Execute(ctx context.Context, raw json.RawMessage, rt reg
 		Path   string `json:"path"`
 		Limit  int    `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	if strings.TrimSpace(args.Query) == "" {
-		return registry.Result{}, fmt.Errorf("query is required")
+		return tool.Result{}, fmt.Errorf("query is required")
 	}
 	if args.Limit <= 0 {
 		args.Limit = 50
@@ -198,15 +194,15 @@ func (t RepoSearchTool) Execute(ctx context.Context, raw json.RawMessage, rt reg
 	}
 	repo, err := t.repo(args.Repo)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	snap, err := t.fetchSnapshot(ctx, repo, args.Branch, rt)
+	snap, err := t.fetchSnapshot(ctx, repo, args.Branch, call.Scope)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	path, err := cleanGitPath(args.Path)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	cmdArgs := []string{"grep", "-n", "--no-color", "-I", "-e", args.Query, snap.Ref, "--"}
 	if path != "" {
@@ -215,9 +211,9 @@ func (t RepoSearchTool) Execute(ctx context.Context, raw json.RawMessage, rt reg
 	out, err := t.run(ctx, repo, cmdArgs...)
 	if err != nil {
 		if strings.TrimSpace(out) == "" {
-			return registry.Result{Content: snap.header() + "\n\nno matches"}, nil
+			return tool.TextResult(snap.header() + "\n\nno matches"), nil
 		}
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	for i, line := range lines {
@@ -226,18 +222,17 @@ func (t RepoSearchTool) Execute(ctx context.Context, raw json.RawMessage, rt reg
 	if len(lines) > args.Limit {
 		lines = append(lines[:args.Limit], "...[truncated after "+strconv.Itoa(args.Limit)+" matches]")
 	}
-	return registry.Result{Content: snap.header() + "\n\n" + strings.Join(lines, "\n")}, nil
+	return tool.TextResult(snap.header() + "\n\n" + strings.Join(lines, "\n")), nil
 }
 
 type ReadFileRefTool struct{ Base }
 
-func (ReadFileRefTool) Parallel() bool { return true }
 
-func (t ReadFileRefTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t ReadFileRefTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"git-read_file_ref",
 		"Read a file at an immutable git ref returned by git-fetch_ref. Use this for branch-specific evidence without changing the checkout.",
-		registry.ObjectSchema([]string{"repo", "ref", "path"}, map[string]any{
+		tool.ObjectSchema([]string{"repo", "ref", "path"}, map[string]any{
 			"repo":       map[string]any{"type": "string", "description": "Repository returned by git-fetch_ref."},
 			"ref":        map[string]any{"type": "string", "description": "Immutable commit SHA returned by git-fetch_ref, or an explicit safe ref."},
 			"path":       map[string]any{"type": "string", "description": "Path inside the repo."},
@@ -247,7 +242,7 @@ func (t ReadFileRefTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t ReadFileRefTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t ReadFileRefTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Repo      string `json:"repo"`
 		Ref       string `json:"ref"`
@@ -255,23 +250,23 @@ func (t ReadFileRefTool) Execute(ctx context.Context, raw json.RawMessage, rt re
 		StartLine int    `json:"start_line"`
 		MaxLines  int    `json:"max_lines"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	repo, err := t.explicitRepo(args.Repo)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	ref, err := t.resolveRef(ctx, repo, args.Ref)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	path, err := cleanGitPath(args.Path)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	if path == "" {
-		return registry.Result{}, fmt.Errorf("path is required")
+		return tool.Result{}, fmt.Errorf("path is required")
 	}
 	if args.StartLine <= 0 {
 		args.StartLine = 1
@@ -284,7 +279,7 @@ func (t ReadFileRefTool) Execute(ctx context.Context, raw json.RawMessage, rt re
 	}
 	out, err := t.run(ctx, repo, "show", ref+":"+path)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	lines := strings.Split(out, "\n")
 	var b strings.Builder
@@ -304,18 +299,17 @@ func (t ReadFileRefTool) Execute(ctx context.Context, raw json.RawMessage, rt re
 			break
 		}
 	}
-	return registry.Result{Content: b.String()}, nil
+	return tool.TextResult(b.String()), nil
 }
 
 type RepoReadFileTool struct{ Base }
 
-func (RepoReadFileTool) Parallel() bool { return true }
 
-func (t RepoReadFileTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t RepoReadFileTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"repo-read_file",
 		"Read a file from a refreshed remote branch snapshot without changing the working tree. Branch must be an actual remote branch name, not a pull-request number or refs/pull/...; use github-pr_diff for GitHub pull requests.",
-		registry.ObjectSchema([]string{"branch", "path"}, map[string]any{
+		tool.ObjectSchema([]string{"branch", "path"}, map[string]any{
 			"repo":       map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch":     map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"path":       map[string]any{"type": "string", "description": "Path inside the repo."},
@@ -325,7 +319,7 @@ func (t RepoReadFileTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t RepoReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t RepoReadFileTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Repo      string `json:"repo"`
 		Branch    string `json:"branch"`
@@ -333,33 +327,32 @@ func (t RepoReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt r
 		StartLine int    `json:"start_line"`
 		MaxLines  int    `json:"max_lines"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	repo, err := t.repo(args.Repo)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	snap, err := t.fetchSnapshot(ctx, repo, args.Branch, rt)
+	snap, err := t.fetchSnapshot(ctx, repo, args.Branch, call.Scope)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	out, err := t.readAtRef(ctx, repo, snap.Ref, args.Path, args.StartLine, args.MaxLines)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	return registry.Result{Content: snap.header() + "\n\n" + out}, nil
+	return tool.TextResult(snap.header() + "\n\n" + out), nil
 }
 
 type LogTool struct{ Base }
 
-func (LogTool) Parallel() bool { return true }
 
-func (t LogTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t LogTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"git-log",
 		"Show commit history from a refreshed remote branch snapshot, including commit hash, author name/email, author date, and subject. Pass branch when the user asks about a specific branch's latest commits; this never checks out or updates the working tree.",
-		registry.ObjectSchema([]string{"branch"}, map[string]any{
+		tool.ObjectSchema([]string{"branch"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"limit":  map[string]any{"type": "integer", "description": "Maximum commits, default 10 and max 50."},
@@ -367,13 +360,13 @@ func (t LogTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t LogTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t LogTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Repo   string `json:"repo"`
 		Branch string `json:"branch"`
 		Limit  int    `json:"limit"`
 	}
-	_ = json.Unmarshal(raw, &args)
+	_ = json.Unmarshal(call.Arguments, &args)
 	if args.Limit <= 0 {
 		args.Limit = 10
 	}
@@ -382,26 +375,25 @@ func (t LogTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.R
 	}
 	repo, err := t.repo(args.Repo)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	snap, err := t.fetchSnapshot(ctx, repo, args.Branch, rt)
+	snap, err := t.fetchSnapshot(ctx, repo, args.Branch, call.Scope)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	format := "%h%x09%an%x09%ae%x09%ad%x09%s"
 	out, err := t.run(ctx, repo, "log", "--date=iso-strict", "--format="+format, "-n", strconv.Itoa(args.Limit), snap.Ref)
-	return registry.Result{Content: snap.header() + "\n\n" + out}, err
+	return tool.TextResult(snap.header() + "\n\n" + out), err
 }
 
 type ShowTool struct{ Base }
 
-func (ShowTool) Parallel() bool { return true }
 
-func (t ShowTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t ShowTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"git-show",
 		"",
-		registry.ObjectSchema([]string{"rev"}, map[string]any{
+		tool.ObjectSchema([]string{"rev"}, map[string]any{
 			"repo":      map[string]any{"type": "string", "description": ""},
 			"rev":       map[string]any{"type": "string", "description": ""},
 			"path":      map[string]any{"type": "string", "description": ""},
@@ -410,15 +402,15 @@ func (t ShowTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t ShowTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t ShowTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Repo     string `json:"repo"`
 		Rev      string `json:"rev"`
 		Path     string `json:"path"`
 		MaxChars int    `json:"max_chars"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	if args.MaxChars <= 0 {
 		args.MaxChars = 12000
@@ -428,15 +420,15 @@ func (t ShowTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.
 	}
 	repo, err := t.repo(args.Repo)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	rev := strings.TrimSpace(args.Rev)
 	if err := validateRefPart(rev); err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	path, err := cleanGitPath(args.Path)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	cmdArgs := []string{"show", "--stat", "--patch", rev}
 	if path != "" {
@@ -446,7 +438,7 @@ func (t ShowTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.
 	if len(out) > args.MaxChars {
 		out = out[:args.MaxChars] + "\n...[truncated]"
 	}
-	return registry.Result{Content: out}, err
+	return tool.TextResult(out), err
 }
 
 func (b Base) repo(path string) (string, error) {
@@ -501,7 +493,7 @@ func (b Base) explicitRepo(path string) (string, error) {
 	return b.Paths.Resolve(path)
 }
 
-func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string, rt registry.Runtime) (snapshot, error) {
+func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string, rt tool.Scope) (snapshot, error) {
 	branch := strings.TrimSpace(rawBranch)
 	if branch == "" {
 		return snapshot{}, fmt.Errorf("branch is required")
@@ -536,7 +528,7 @@ func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string, rt regi
 		FetchStatus: fetchStatus,
 	}
 	cacheKey := "git-snapshot\x00" + repo + "\x00" + branch
-	rt.Cache.Set(cacheKey, snap)
+	tool.CacheFor(rt).Set(cacheKey, snap)
 	return snap, nil
 }
 

@@ -4,21 +4,19 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type TopTool struct {
 	Base Base
 }
 
-func (TopTool) Parallel() bool { return true }
 
-func (t TopTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t TopTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"k8s-top",
 		"",
-		registry.ObjectSchema(nil, map[string]any{
+		tool.ObjectSchema(nil, map[string]any{
 			"resource":       map[string]any{"type": "string", "description": ""},
 			"name":           map[string]any{"type": "string", "description": ""},
 			"namespace":      map[string]any{"type": "string", "description": ""},
@@ -30,7 +28,7 @@ func (t TopTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t TopTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t TopTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Resource      string `json:"resource"`
 		Name          string `json:"name"`
@@ -40,8 +38,8 @@ func (t TopTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Ru
 		Containers    bool   `json:"containers"`
 		Context       string `json:"context"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 
 	resource := args.Resource
@@ -71,7 +69,7 @@ func (t TopTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Ru
 
 	out, err := t.Base.run(ctx, args.Context, cmdArgs)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	return registry.Result{Content: out}, nil
+	return tool.TextResult(out), nil
 }

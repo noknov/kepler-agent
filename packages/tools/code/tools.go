@@ -13,23 +13,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/gitcache"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type ReadFileTool struct {
 	Paths safety.WorkspacePolicy
 }
 
-func (ReadFileTool) Parallel() bool { return true }
 
-func (t ReadFileTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t ReadFileTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"code-read_file",
 		"Read source code from a freshly fetched git ref. Omit source for normal repository investigation so the tool resolves each file repo's origin-tracked upstream. Set source only when the user explicitly requests the checkout view or an exact git ref; never invent a branch or ref. Results include line numbers and source metadata; cite these lines before making code behavior claims.",
-		registry.ObjectSchema([]string{"path"}, map[string]any{
+		tool.ObjectSchema([]string{"path"}, map[string]any{
 			"path":       map[string]any{"type": "string", "description": "Workspace-relative, root-prefixed, or absolute file path."},
 			"source":     map[string]any{"type": "string", "description": "Optional; omit for normal investigation. Set to working_tree only for an explicitly requested checkout view, or to an exact safe git ref explicitly named by the user."},
 			"start_line": map[string]any{"type": "integer", "description": "1-based starting line. Omit unless you already know the relevant range."},
@@ -38,19 +36,19 @@ func (t ReadFileTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t ReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t ReadFileTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Path      string `json:"path"`
 		Source    string `json:"source"`
 		StartLine int    `json:"start_line"`
 		MaxLines  int    `json:"max_lines"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	path, err := resolveReadableFile(t.Paths, args.Path)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	if args.StartLine <= 0 {
 		args.StartLine = 1
@@ -69,18 +67,18 @@ func (t ReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 	repoDir := findRepoRoot(t.Paths.Roots, filepath.Dir(path))
 	if source != "working_tree" {
 		if repoDir == "" {
-			return registry.Result{}, fmt.Errorf("source %q requires a file inside a git repository", source)
+			return tool.Result{}, fmt.Errorf("source %q requires a file inside a git repository", source)
 		}
-		ref, fetchStatus, sourceErr := sourceRef(ctx, repoDir, source, rt)
+		ref, fetchStatus, sourceErr := sourceRef(ctx, repoDir, source, call.Scope)
 		if sourceErr != nil {
-			return registry.Result{}, sourceErr
+			return tool.Result{}, sourceErr
 		}
 		if relPath, relErr := filepath.Rel(repoDir, path); relErr == nil && !strings.HasPrefix(relPath, "..") {
 			content, gitErr := gitShowFile(ctx, repoDir, ref, relPath)
 			if gitErr == nil {
 				commit := gitRevParse(ctx, repoDir, ref, "--short")
 				header := fmt.Sprintf("[source: git ref=%s commit=%s fetch_status=%s]\n", ref, commit, fetchStatus)
-				recordReadState(rt, readState{
+				recordReadState(call.Scope, readState{
 					Path:      filepath.ToSlash(relPath),
 					Repo:      filepath.Base(repoDir),
 					Source:    "git",
@@ -89,17 +87,17 @@ func (t ReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 					StartLine: args.StartLine,
 					MaxLines:  args.MaxLines,
 				})
-				return registry.Result{Content: header + applyLineRange(content, args.StartLine, args.MaxLines)}, nil
+				return tool.TextResult(header + applyLineRange(content, args.StartLine, args.MaxLines)), nil
 			}
-			return registry.Result{}, fmt.Errorf("read %s at %s: %w", filepath.ToSlash(relPath), ref, gitErr)
+			return tool.Result{}, fmt.Errorf("read %s at %s: %w", filepath.ToSlash(relPath), ref, gitErr)
 		}
-		return registry.Result{}, fmt.Errorf("path %q is outside repository %q", path, repoDir)
+		return tool.Result{}, fmt.Errorf("path %q is outside repository %q", path, repoDir)
 	}
 
 	// Working-tree access is explicit, including for files outside git repos.
 	file, err := os.Open(path)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	defer file.Close()
 
@@ -111,7 +109,7 @@ func (t ReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 	for scanner.Scan() {
 		select {
 		case <-ctx.Done():
-			return registry.Result{}, ctx.Err()
+			return tool.Result{}, ctx.Err()
 		default:
 		}
 		lineNo++
@@ -129,28 +127,27 @@ func (t ReadFileTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	header := "[source: working_tree"
 	if repoDir != "" {
 		header += " branch=" + gitRevParse(ctx, repoDir, "HEAD", "--abbrev-ref")
 	}
 	header += "]\n"
-	recordReadState(rt, readState{Path: path, Source: "working_tree", StartLine: args.StartLine, MaxLines: args.MaxLines})
-	return registry.Result{Content: header + b.String()}, nil
+	recordReadState(call.Scope, readState{Path: path, Source: "working_tree", StartLine: args.StartLine, MaxLines: args.MaxLines})
+	return tool.TextResult(header + b.String()), nil
 }
 
 type SearchTool struct {
 	Paths safety.WorkspacePolicy
 }
 
-func (SearchTool) Parallel() bool { return true }
 
-func (t SearchTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t SearchTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"code-search",
 		"Search source code from freshly fetched git refs. Omit source for normal repository investigation so each repo's origin-tracked upstream is resolved independently. Set source only when the user explicitly requests the checkout view or an exact git ref; never invent a branch or ref. Search hits are hints; read the matching file/range with code-read_file before claiming behavior.",
-		registry.ObjectSchema([]string{"query"}, map[string]any{
+		tool.ObjectSchema([]string{"query"}, map[string]any{
 			"query":         map[string]any{"type": "string", "description": "Regex or literal pattern to search for."},
 			"path":          map[string]any{"type": "string", "description": "Optional workspace-relative directory or file to search."},
 			"glob":          map[string]any{"type": "string", "description": "Optional file glob, for example **/*.go."},
@@ -161,7 +158,7 @@ func (t SearchTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Query        string `json:"query"`
 		Path         string `json:"path"`
@@ -170,11 +167,11 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 		ContextLines int    `json:"context_lines"`
 		Limit        int    `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	if strings.TrimSpace(args.Query) == "" {
-		return registry.Result{}, fmt.Errorf("query is required")
+		return tool.Result{}, fmt.Errorf("query is required")
 	}
 	if args.Limit <= 0 {
 		args.Limit = 50
@@ -198,7 +195,7 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	}
 	searchPath, err := resolveWorkspacePath(t.Paths, root)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 
 	// Find all git repos covering the search path and use "git grep" on the
@@ -210,7 +207,7 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 		var headers []string
 		var grepErrors []string
 		for _, repoDir := range repos {
-			ref, fetchStatus, sourceErr := sourceRef(ctx, repoDir, source, rt)
+			ref, fetchStatus, sourceErr := sourceRef(ctx, repoDir, source, call.Scope)
 			if sourceErr != nil {
 				grepErrors = append(grepErrors, fmt.Sprintf("%s: %v", filepath.Base(repoDir), sourceErr))
 				continue
@@ -243,9 +240,9 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 		}
 		if len(lines) == 0 {
 			if len(grepErrors) > 0 {
-				return registry.Result{}, fmt.Errorf("code search failed: %s", strings.Join(grepErrors, "; "))
+				return tool.Result{}, fmt.Errorf("code search failed: %s", strings.Join(grepErrors, "; "))
 			}
-			return registry.Result{Content: strings.Join(headers, "\n") + "\n\nno matches"}, nil
+			return tool.TextResult(strings.Join(headers, "\n") + "\n\nno matches"), nil
 		}
 		if len(lines) > args.Limit {
 			lines = append(lines[:args.Limit], "...[truncated after "+strconv.Itoa(args.Limit)+" matches]")
@@ -254,10 +251,10 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 		if len(grepErrors) > 0 {
 			content += "\n\nSearch warnings:\n- " + strings.Join(grepErrors, "\n- ")
 		}
-		return registry.Result{Content: content}, nil
+		return tool.TextResult(content), nil
 	}
 	if source != "working_tree" {
-		return registry.Result{}, fmt.Errorf("source %q requires a search path containing a git repository", source)
+		return tool.Result{}, fmt.Errorf("source %q requires a search path containing a git repository", source)
 	}
 
 	// Working-tree search is explicit and uses rg locally.
@@ -276,9 +273,9 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	err = cmd.Run()
 	if err != nil {
 		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
-			return registry.Result{Content: "no matches"}, nil
+			return tool.TextResult("no matches"), nil
 		}
-		return registry.Result{}, fmt.Errorf("rg failed: %s", strings.TrimSpace(stderr.String()))
+		return tool.Result{}, fmt.Errorf("rg failed: %s", strings.TrimSpace(stderr.String()))
 	}
 	output := stdout.String()
 	for _, r := range t.Paths.Roots {
@@ -288,15 +285,15 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	if len(resultLines) > args.Limit {
 		resultLines = append(resultLines[:args.Limit], "...[truncated after "+strconv.Itoa(args.Limit)+" matches]")
 	}
-	return registry.Result{Content: "[source: working_tree]\n\nSearch hits are hints; read matching files before claiming behavior.\n" + strings.Join(resultLines, "\n")}, nil
+	return tool.TextResult("[source: working_tree]\n\nSearch hits are hints; read matching files before claiming behavior.\n" + strings.Join(resultLines, "\n")), nil
 }
 
-func sourceRef(ctx context.Context, repoDir, source string, rt registry.Runtime) (string, string, error) {
+func sourceRef(ctx context.Context, repoDir, source string, scope tool.Scope) (string, string, error) {
 	source = strings.TrimSpace(source)
 	if source == "" {
 		source = "current_branch"
 	}
-	if err := refreshRepo(ctx, repoDir, rt); err != nil {
+	if err := refreshRepo(ctx, repoDir, scope); err != nil {
 		return "", "", err
 	}
 	fetchStatus := "origin_refs_refreshed"
@@ -330,15 +327,15 @@ func currentBranchOriginRef(ctx context.Context, repoDir string) (string, error)
 	return ref, nil
 }
 
-func refreshRepo(ctx context.Context, repoDir string, rt registry.Runtime) error {
+func refreshRepo(ctx context.Context, repoDir string, scope tool.Scope) error {
 	cacheKey := "code-git-fetch\x00" + filepath.Clean(repoDir)
-	if _, ok := rt.Cache.Get(cacheKey); !ok {
+	if _, ok := tool.CacheFor(scope).Get(cacheKey); !ok {
 		fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		if err := gitcache.FetchOriginFresh(fetchCtx, repoDir); err != nil {
 			return fmt.Errorf("refresh origin refs: %w", err)
 		}
-		rt.Cache.Set(cacheKey, true)
+		tool.CacheFor(scope).Set(cacheKey, true)
 	}
 	return nil
 }
@@ -442,13 +439,13 @@ type readState struct {
 	MaxLines  int
 }
 
-func recordReadState(rt registry.Runtime, state readState) {
-	if rt.Cache == nil {
+func recordReadState(scope tool.Scope, state readState) {
+	if tool.CacheFor(scope) == nil {
 		return
 	}
 	const key = "code-read-state"
 	var states []readState
-	if existing, ok := rt.Cache.Get(key); ok {
+	if existing, ok := tool.CacheFor(scope).Get(key); ok {
 		if typed, ok := existing.([]readState); ok {
 			states = typed
 		}
@@ -457,7 +454,7 @@ func recordReadState(rt registry.Runtime, state readState) {
 	if len(states) > 100 {
 		states = states[len(states)-100:]
 	}
-	rt.Cache.Set(key, states)
+	tool.CacheFor(scope).Set(key, states)
 }
 
 // findReposUnder returns the git repos that cover dir: if dir is inside a repo,

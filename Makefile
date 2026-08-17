@@ -25,7 +25,7 @@ test:
 	GOCACHE=$(GOCACHE) go test ./...
 
 test-race:
-	GOCACHE=$(GOCACHE) go test -race ./packages/agent/runtime ./packages/surfaces/slack/agent ./packages/runs ./packages/safety ./packages/surfaces/slack/events ./packages/tools/registry
+	GOCACHE=$(GOCACHE) go test -race ./packages/agent/runtime ./packages/surfaces/slack/agent ./packages/runs ./packages/safety ./packages/surfaces/slack/events ./packages/tools/hosted
 
 build:
 	mkdir -p bin
@@ -33,6 +33,7 @@ build:
 	GOCACHE=$(GOCACHE) go build -trimpath -o bin/slack-copilot-worker ./worker/cmd/worker
 	GOCACHE=$(GOCACHE) go build -trimpath -o bin/slack-copilot-observability ./observability/cmd/observability
 	GOCACHE=$(GOCACHE) go build -trimpath -o bin/slack-copilot ./cli/cmd/slack-copilot
+	GOCACHE=$(GOCACHE) go build -trimpath -o bin/slack-copilot-app-server ./appserver/cmd/app-server
 
 eval-check:
 	@tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \

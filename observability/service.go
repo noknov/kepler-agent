@@ -20,7 +20,6 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/infra/telemetry"
 	"github.com/noknov/slack-copilot-agent/packages/observability"
 	"github.com/noknov/slack-copilot-agent/packages/platform"
-	"github.com/noknov/slack-copilot-agent/packages/profiles/hosted"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	hostedTools "github.com/noknov/slack-copilot-agent/packages/tools/hosted"
 )
@@ -64,8 +63,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		return nil, err
 	}
 	recorder := observability.NewRecorder()
-	registry := hostedTools.NewCatalog(cfg, safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}, safety.NewCommandPolicy(), nil, hostedTools.SurfaceOptions{})
-	catalog, err := hosted.AdaptRegistry(registry)
+	catalog, err := hostedTools.NewCatalog(cfg, safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}, safety.NewCommandPolicy(), nil, hostedTools.SurfaceOptions{})
 	if err != nil {
 		stores.Close()
 		return nil, fmt.Errorf("build health tool catalog: %w", err)

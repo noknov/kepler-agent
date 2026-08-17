@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/noknov/slack-copilot-agent/packages/mcp"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 func TestMCPToolCallsStreamableHTTP(t *testing.T) {
@@ -65,22 +65,22 @@ func TestMCPToolCallsStreamableHTTP(t *testing.T) {
 			return nil, nil
 		}),
 	}}}
-	tool := MCPTool{
+	mcpTool := MCPTool{
 		Client:     client,
 		LocalName:  "luckin-query_shop_list",
 		RemoteName: "queryShopList",
-		Parameters: registry.ObjectSchema([]string{"longitude", "latitude"}, map[string]any{
+		Parameters: agenttool.ObjectSchema([]string{"longitude", "latitude"}, map[string]any{
 			"longitude": map[string]any{"type": "number"},
 			"latitude":  map[string]any{"type": "number"},
 		}),
 	}
 
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"longitude":118.08891,"latitude":24.479627}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	result, err := mcpTool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"longitude":118.08891,"latitude":24.479627}`), Scope: agenttool.Scope{SessionID: "test", TurnID: "turn"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Content != "ok" {
-		t.Fatalf("content = %q", result.Content)
+	if result.Text() != "ok" {
+		t.Fatalf("content = %q", result.Text())
 	}
 	if callCount != 1 {
 		t.Fatalf("call count = %d", callCount)

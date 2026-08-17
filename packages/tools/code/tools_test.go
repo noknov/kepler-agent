@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/noknov/slack-copilot-agent/packages/safety"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 func TestReadFileReturnsContentDirectly(t *testing.T) {
@@ -21,11 +21,11 @@ func TestReadFileReturnsContentDirectly(t *testing.T) {
 	tool := ReadFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
 	raw := json.RawMessage(`{"path":"app.go","source":"working_tree"}`)
 
-	result, err := tool.Execute(context.Background(), raw, registry.Runtime{})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: raw, Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if result.NeedsUserInput || result.Content == "" {
+	if result.NeedsUserInput || result.Text() == "" {
 		t.Fatalf("expected file content, got %#v", result)
 	}
 }
@@ -43,11 +43,11 @@ func TestReadFileAcceptsWorkspaceRootBasenamePrefix(t *testing.T) {
 	tool := ReadFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
 	raw := json.RawMessage(`{"path":"wati-frontend-app/domains/connectors/src/Integration/_constants/IntegrationCards.tsx","source":"working_tree"}`)
 
-	result, err := tool.Execute(context.Background(), raw, registry.Runtime{})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: raw, Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !strings.Contains(result.Content, "export const cards") {
+	if !strings.Contains(result.Text(), "export const cards") {
 		t.Fatalf("expected prefixed path to resolve, got %#v", result)
 	}
 }
@@ -58,7 +58,7 @@ func TestReadFileRejectsSensitiveFilesWithoutPrompting(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := ReadFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	_, err := tool.Execute(context.Background(), json.RawMessage(`{"path":".env"}`), registry.Runtime{})
+	_, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"path":".env"}`), Scope: agenttool.Scope{}})
 	if err == nil {
 		t.Fatal("expected sensitive file read to be rejected")
 	}
@@ -70,11 +70,11 @@ func TestSearchReturnsResultsDirectly(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"token","source":"working_tree"}`), registry.Runtime{})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"query":"token","source":"working_tree"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if result.NeedsUserInput || result.Content == "" || result.Content == "no matches" {
+	if result.NeedsUserInput || result.Text() == "" || result.Text() == "no matches" {
 		t.Fatalf("expected search results, got %#v", result)
 	}
 }
@@ -90,11 +90,11 @@ func TestSearchAcceptsWorkspaceRootBasenamePrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"catalog","path":"wati-frontend-app/domains","source":"working_tree"}`), registry.Runtime{})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"query":"catalog","path":"wati-frontend-app/domains","source":"working_tree"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !strings.Contains(result.Content, "connectors/catalog.ts") {
+	if !strings.Contains(result.Text(), "connectors/catalog.ts") {
 		t.Fatalf("expected search to resolve prefixed path, got %#v", result)
 	}
 }
@@ -110,12 +110,12 @@ func TestGitReadUsesExplicitRemoteRefNotCurrentCheckout(t *testing.T) {
 	runGit(t, work, "push", "origin", "feature")
 
 	tool := ReadFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"work/app.go","source":"origin/main"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"path":"work/app.go","source":"origin/main"}`), Scope: agenttool.Scope{SessionID: "test", TurnID: "turn"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, "ref=origin/main") || !strings.Contains(result.Content, `"main"`) || strings.Contains(result.Content, `"feature"`) {
-		t.Fatalf("read content = %q, want explicit remote ref", result.Content)
+	if !strings.Contains(result.Text(), "ref=origin/main") || !strings.Contains(result.Text(), `"main"`) || strings.Contains(result.Text(), `"feature"`) {
+		t.Fatalf("read content = %q, want explicit remote ref", result.Text())
 	}
 }
 
@@ -130,20 +130,20 @@ func TestGitReadAllowsConcurrentBranchSnapshotsWithoutCheckout(t *testing.T) {
 	runGit(t, work, "push", "origin", "feature")
 
 	tool := ReadFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	rt := registry.Runtime{Cache: registry.NewRuntimeCache()}
-	mainResult, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"work/app.go","source":"origin/main"}`), rt)
+	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
+	mainResult, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"path":"work/app.go","source":"origin/main"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
-	featureResult, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"work/app.go","source":"origin/feature"}`), rt)
+	featureResult, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"path":"work/app.go","source":"origin/feature"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(mainResult.Content, `"main"`) || strings.Contains(mainResult.Content, `"feature"`) {
-		t.Fatalf("main content = %q", mainResult.Content)
+	if !strings.Contains(mainResult.Text(), `"main"`) || strings.Contains(mainResult.Text(), `"feature"`) {
+		t.Fatalf("main content = %q", mainResult.Text())
 	}
-	if !strings.Contains(featureResult.Content, `"feature"`) || strings.Contains(featureResult.Content, `"main"`) {
-		t.Fatalf("feature content = %q", featureResult.Content)
+	if !strings.Contains(featureResult.Text(), `"feature"`) || strings.Contains(featureResult.Text(), `"main"`) {
+		t.Fatalf("feature content = %q", featureResult.Text())
 	}
 	branch := strings.TrimSpace(runGitOutput(t, work, "branch", "--show-current"))
 	if branch != "feature" {
@@ -162,24 +162,24 @@ func TestGitSearchUsesExplicitRemoteRef(t *testing.T) {
 	runGit(t, work, "push", "origin", "feature")
 
 	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"value","source":"origin/main"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"query":"value","source":"origin/main"}`), Scope: agenttool.Scope{SessionID: "test", TurnID: "turn"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, "ref=origin/main") || !strings.Contains(result.Content, `"main"`) || strings.Contains(result.Content, `"feature"`) {
-		t.Fatalf("search content = %q, want explicit remote ref", result.Content)
+	if !strings.Contains(result.Text(), "ref=origin/main") || !strings.Contains(result.Text(), `"main"`) || strings.Contains(result.Text(), `"feature"`) {
+		t.Fatalf("search content = %q, want explicit remote ref", result.Text())
 	}
 }
 
 func TestGitSearchDefaultsToFreshCurrentBranchRemoteRef(t *testing.T) {
 	root, work := testGitRepo(t)
 	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	first, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"value"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	first, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"query":"value"}`), Scope: agenttool.Scope{SessionID: "test", TurnID: "turn"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(first.Content, `"main"`) || !strings.Contains(first.Content, "fetch_status=origin_refs_refreshed") {
-		t.Fatalf("first content = %q, want refreshed origin/main", first.Content)
+	if !strings.Contains(first.Text(), `"main"`) || !strings.Contains(first.Text(), "fetch_status=origin_refs_refreshed") {
+		t.Fatalf("first content = %q, want refreshed origin/main", first.Text())
 	}
 
 	if err := os.WriteFile(filepath.Join(work, "app.go"), []byte("package app\nconst value = \"fresh\"\n"), 0o600); err != nil {
@@ -190,15 +190,15 @@ func TestGitSearchDefaultsToFreshCurrentBranchRemoteRef(t *testing.T) {
 	runGit(t, work, "push", "origin", "main")
 	runGit(t, work, "reset", "--hard", "HEAD~1")
 
-	second, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"value"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	second, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"query":"value"}`), Scope: agenttool.Scope{SessionID: "test", TurnID: "turn"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(second.Content, `"fresh"`) || strings.Contains(second.Content, `"main"`) {
-		t.Fatalf("second content = %q, want freshly fetched remote branch tip", second.Content)
+	if !strings.Contains(second.Text(), `"fresh"`) || strings.Contains(second.Text(), `"main"`) {
+		t.Fatalf("second content = %q, want freshly fetched remote branch tip", second.Text())
 	}
-	if !strings.Contains(second.Content, "fetch_status=origin_refs_refreshed") {
-		t.Fatalf("second content = %q, want refreshed fetch status", second.Content)
+	if !strings.Contains(second.Text(), "fetch_status=origin_refs_refreshed") {
+		t.Fatalf("second content = %q, want refreshed fetch status", second.Text())
 	}
 }
 
@@ -206,12 +206,12 @@ func TestGitSearchUsesCheckedOutBranchUpstreamRef(t *testing.T) {
 	root, work := testGitRepo(t)
 	runGit(t, work, "branch", "-m", "main", "mt-main")
 	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"value"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"query":"value"}`), Scope: agenttool.Scope{SessionID: "test", TurnID: "turn"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, "ref=origin/main") || strings.Contains(result.Content, "origin/mt-main") {
-		t.Fatalf("search content = %q, want the branch upstream ref", result.Content)
+	if !strings.Contains(result.Text(), "ref=origin/main") || strings.Contains(result.Text(), "origin/mt-main") {
+		t.Fatalf("search content = %q, want the branch upstream ref", result.Text())
 	}
 }
 
@@ -226,22 +226,22 @@ func TestGitReadDefaultsToFreshCurrentBranchRemoteRef(t *testing.T) {
 	runGit(t, work, "push", "origin", "main")
 	runGit(t, work, "reset", "--hard", "HEAD~1")
 
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"work/app.go"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"path":"work/app.go"}`), Scope: agenttool.Scope{SessionID: "test", TurnID: "turn"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, `ref=origin/main`) || !strings.Contains(result.Content, `"fresh"`) || strings.Contains(result.Content, `"main"`) {
-		t.Fatalf("read content = %q, want fresh remote branch snapshot instead of stale working tree", result.Content)
+	if !strings.Contains(result.Text(), `ref=origin/main`) || !strings.Contains(result.Text(), `"fresh"`) || strings.Contains(result.Text(), `"main"`) {
+		t.Fatalf("read content = %q, want fresh remote branch snapshot instead of stale working tree", result.Text())
 	}
-	if !strings.Contains(result.Content, "fetch_status=origin_refs_refreshed") {
-		t.Fatalf("read content = %q, want refreshed fetch status", result.Content)
+	if !strings.Contains(result.Text(), "fetch_status=origin_refs_refreshed") {
+		t.Fatalf("read content = %q, want refreshed fetch status", result.Text())
 	}
 }
 
 func TestGitSearchReturnsInvalidPatternError(t *testing.T) {
 	root, _ := testGitRepo(t)
 	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	_, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"[","source":"origin/main"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	_, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"query":"[","source":"origin/main"}`), Scope: agenttool.Scope{SessionID: "test", TurnID: "turn"}})
 	if err == nil {
 		t.Fatal("Execute() succeeded, want invalid pattern error")
 	}
@@ -253,12 +253,12 @@ func TestGitSearchReturnsInvalidPatternError(t *testing.T) {
 func TestGitSearchAllowsSemicolonLiterals(t *testing.T) {
 	root, _ := testGitRepo(t)
 	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"hello;","source":"origin/main"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"query":"hello;","source":"origin/main"}`), Scope: agenttool.Scope{SessionID: "test", TurnID: "turn"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, "no matches") {
-		t.Fatalf("content = %q, want safe semicolon query to execute", result.Content)
+	if !strings.Contains(result.Text(), "no matches") {
+		t.Fatalf("content = %q, want safe semicolon query to execute", result.Text())
 	}
 }
 

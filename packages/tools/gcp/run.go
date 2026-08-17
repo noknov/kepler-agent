@@ -9,9 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 // runBase holds shared configuration for Cloud Run tools.
@@ -83,7 +82,6 @@ type RunServicesTool struct {
 	Timeout        time.Duration
 }
 
-func (RunServicesTool) Parallel() bool { return true }
 
 func (t RunServicesTool) base() runBase {
 	return runBase{
@@ -95,11 +93,11 @@ func (t RunServicesTool) base() runBase {
 	}
 }
 
-func (t RunServicesTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t RunServicesTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"gcp-run_services",
 		"",
-		registry.ObjectSchema(nil, map[string]any{
+		tool.ObjectSchema(nil, map[string]any{
 			"action":  map[string]any{"type": "string", "description": ""},
 			"service": map[string]any{"type": "string", "description": ""},
 			"project": map[string]any{"type": "string", "description": ""},
@@ -108,15 +106,15 @@ func (t RunServicesTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t RunServicesTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t RunServicesTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Action  string `json:"action"`
 		Service string `json:"service"`
 		Project string `json:"project"`
 		Region  string `json:"region"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 
 	action := args.Action
@@ -127,20 +125,20 @@ func (t RunServicesTool) Execute(ctx context.Context, raw json.RawMessage, _ reg
 	case "list":
 		out, err := t.base().run(ctx, []string{"run", "services", "list"}, args.Project, args.Region)
 		if err != nil {
-			return registry.Result{}, err
+			return tool.Result{}, err
 		}
-		return registry.Result{Content: out}, nil
+		return tool.TextResult(out), nil
 	case "describe":
 		if args.Service == "" {
-			return registry.Result{}, fmt.Errorf("service name is required for action=describe")
+			return tool.Result{}, fmt.Errorf("service name is required for action=describe")
 		}
 		out, err := t.base().run(ctx, []string{"run", "services", "describe", args.Service}, args.Project, args.Region)
 		if err != nil {
-			return registry.Result{}, err
+			return tool.Result{}, err
 		}
-		return registry.Result{Content: out}, nil
+		return tool.TextResult(out), nil
 	default:
-		return registry.Result{}, fmt.Errorf("unsupported action %q; use list or describe", action)
+		return tool.Result{}, fmt.Errorf("unsupported action %q; use list or describe", action)
 	}
 }
 
@@ -156,7 +154,6 @@ type RunRevisionsTool struct {
 	Timeout        time.Duration
 }
 
-func (RunRevisionsTool) Parallel() bool { return true }
 
 func (t RunRevisionsTool) base() runBase {
 	return runBase{
@@ -168,11 +165,11 @@ func (t RunRevisionsTool) base() runBase {
 	}
 }
 
-func (t RunRevisionsTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t RunRevisionsTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"gcp-run_revisions",
 		"",
-		registry.ObjectSchema(nil, map[string]any{
+		tool.ObjectSchema(nil, map[string]any{
 			"service": map[string]any{"type": "string", "description": ""},
 			"project": map[string]any{"type": "string", "description": ""},
 			"region":  map[string]any{"type": "string", "description": ""},
@@ -181,15 +178,15 @@ func (t RunRevisionsTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t RunRevisionsTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t RunRevisionsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Service string `json:"service"`
 		Project string `json:"project"`
 		Region  string `json:"region"`
 		Limit   int    `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 
 	cmdArgs := []string{"run", "revisions", "list"}
@@ -208,7 +205,7 @@ func (t RunRevisionsTool) Execute(ctx context.Context, raw json.RawMessage, _ re
 
 	out, err := t.base().run(ctx, cmdArgs, args.Project, args.Region)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	return registry.Result{Content: out}, nil
+	return tool.TextResult(out), nil
 }

@@ -7,21 +7,19 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type LogsTool struct {
 	Base Base
 }
 
-func (LogsTool) Parallel() bool { return true }
 
-func (t LogsTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t LogsTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"k8s-logs",
 		"",
-		registry.ObjectSchema([]string{"pod"}, map[string]any{
+		tool.ObjectSchema([]string{"pod"}, map[string]any{
 			"pod":        map[string]any{"type": "string", "description": ""},
 			"namespace":  map[string]any{"type": "string", "description": ""},
 			"container":  map[string]any{"type": "string", "description": ""},
@@ -35,7 +33,7 @@ func (t LogsTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t LogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t LogsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Pod        string `json:"pod"`
 		Namespace  string `json:"namespace"`
@@ -47,11 +45,11 @@ func (t LogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.R
 		Timestamps bool   `json:"timestamps"`
 		Context    string `json:"context"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	if args.Pod == "" {
-		return registry.Result{}, fmt.Errorf("pod name or label selector is required")
+		return tool.Result{}, fmt.Errorf("pod name or label selector is required")
 	}
 
 	// kubectl logs supports label selectors: pass -l flag when the value
@@ -86,13 +84,13 @@ func (t LogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.R
 
 	out, err := t.Base.run(ctx, args.Context, cmdArgs)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 
 	if args.Grep != "" {
 		out = grepLines(out, args.Grep)
 	}
-	return registry.Result{Content: out}, nil
+	return tool.TextResult(out), nil
 }
 
 func grepLines(text, pattern string) string {

@@ -6,8 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 // blockedResources lists resource types that should never be retrieved because
@@ -25,13 +24,12 @@ type GetTool struct {
 	Base Base
 }
 
-func (GetTool) Parallel() bool { return true }
 
-func (t GetTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t GetTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"k8s-get",
 		"",
-		registry.ObjectSchema([]string{"resource"}, map[string]any{
+		tool.ObjectSchema([]string{"resource"}, map[string]any{
 			"resource":       map[string]any{"type": "string", "description": ""},
 			"name":           map[string]any{"type": "string", "description": ""},
 			"namespace":      map[string]any{"type": "string", "description": ""},
@@ -44,7 +42,7 @@ func (t GetTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t GetTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t GetTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Resource      string `json:"resource"`
 		Name          string `json:"name"`
@@ -55,16 +53,16 @@ func (t GetTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Ru
 		Output        string `json:"output"`
 		Context       string `json:"context"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	if args.Resource == "" {
-		return registry.Result{}, fmt.Errorf("resource type is required (e.g. deployment, service, ingress, hpa, job, node)")
+		return tool.Result{}, fmt.Errorf("resource type is required (e.g. deployment, service, ingress, hpa, job, node)")
 	}
 
 	resource := strings.ToLower(strings.TrimSpace(args.Resource))
 	if blockedResources[resource] {
-		return registry.Result{}, fmt.Errorf("resource type %q is blocked for security reasons", args.Resource)
+		return tool.Result{}, fmt.Errorf("resource type %q is blocked for security reasons", args.Resource)
 	}
 
 	cmdArgs := []string{"get", resource}
@@ -95,12 +93,12 @@ func (t GetTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Ru
 		strings.HasPrefix(output, "go-template="):
 		cmdArgs = append(cmdArgs, "-o", output)
 	default:
-		return registry.Result{}, fmt.Errorf("unsupported output format %q; use wide, yaml, json, name, or jsonpath=...", output)
+		return tool.Result{}, fmt.Errorf("unsupported output format %q; use wide, yaml, json, name, or jsonpath=...", output)
 	}
 
 	out, err := t.Base.run(ctx, args.Context, cmdArgs)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	return registry.Result{Content: out}, nil
+	return tool.TextResult(out), nil
 }

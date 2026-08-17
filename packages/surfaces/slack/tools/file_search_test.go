@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 func TestFileSearchFindsTextExcerpt(t *testing.T) {
@@ -15,12 +15,12 @@ func TestFileSearchFindsTextExcerpt(t *testing.T) {
 		file: slack.File{ID: "F123", Name: "app.log", Mimetype: "text/plain", Size: 200},
 		data: []byte("boot ok\ncheckout failed with timeout\npayment ok\n"),
 	}
-	result, err := (FileSearchTool{Slack: client}).Execute(context.Background(), json.RawMessage(`{"file_id":"F123","query":"checkout timeout"}`), registry.Runtime{})
+	result, err := (FileSearchTool{Slack: client}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"file_id":"F123","query":"checkout timeout"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, "checkout failed with timeout") || !strings.Contains(result.Content, "F123") {
-		t.Fatalf("unexpected content: %q", result.Content)
+	if !strings.Contains(result.Text(), "checkout failed with timeout") || !strings.Contains(result.Text(), "F123") {
+		t.Fatalf("unexpected content: %q", result.Text())
 	}
 }
 
@@ -29,12 +29,12 @@ func TestFileSearchWithoutQueryReturnsBeginning(t *testing.T) {
 		file: slack.File{ID: "F123", Name: "runbook.md", Filetype: "md", Size: 200},
 		data: []byte("# Runbook\nfirst step\nsecond step\n"),
 	}
-	result, err := (FileSearchTool{Slack: client}).Execute(context.Background(), json.RawMessage(`{"file_id":"F123"}`), registry.Runtime{})
+	result, err := (FileSearchTool{Slack: client}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"file_id":"F123"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, "# Runbook") {
-		t.Fatalf("unexpected content: %q", result.Content)
+	if !strings.Contains(result.Text(), "# Runbook") {
+		t.Fatalf("unexpected content: %q", result.Text())
 	}
 }
 

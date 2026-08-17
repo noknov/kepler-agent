@@ -5,8 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 // RolloutTool wraps `kubectl rollout status` and `kubectl rollout history`.
@@ -16,13 +15,12 @@ type RolloutTool struct {
 	Base Base
 }
 
-func (RolloutTool) Parallel() bool { return true }
 
-func (t RolloutTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t RolloutTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"k8s-rollout",
 		"",
-		registry.ObjectSchema([]string{"name"}, map[string]any{
+		tool.ObjectSchema([]string{"name"}, map[string]any{
 			"name":      map[string]any{"type": "string", "description": ""},
 			"namespace": map[string]any{"type": "string", "description": ""},
 			"kind":      map[string]any{"type": "string", "description": ""},
@@ -33,7 +31,7 @@ func (t RolloutTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t RolloutTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t RolloutTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Name      string `json:"name"`
 		Namespace string `json:"namespace"`
@@ -42,11 +40,11 @@ func (t RolloutTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 		Revision  int    `json:"revision"`
 		Context   string `json:"context"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	if args.Name == "" {
-		return registry.Result{}, fmt.Errorf("name is required (deployment or statefulset name)")
+		return tool.Result{}, fmt.Errorf("name is required (deployment or statefulset name)")
 	}
 
 	kind := args.Kind
@@ -56,7 +54,7 @@ func (t RolloutTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 	switch kind {
 	case "deployment", "deploy", "statefulset", "sts", "daemonset", "ds":
 	default:
-		return registry.Result{}, fmt.Errorf("unsupported kind %q; use deployment, statefulset, or daemonset", kind)
+		return tool.Result{}, fmt.Errorf("unsupported kind %q; use deployment, statefulset, or daemonset", kind)
 	}
 
 	action := args.Action
@@ -66,7 +64,7 @@ func (t RolloutTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 	switch action {
 	case "status", "history":
 	default:
-		return registry.Result{}, fmt.Errorf("unsupported action %q; use status or history", action)
+		return tool.Result{}, fmt.Errorf("unsupported action %q; use status or history", action)
 	}
 
 	target := kind + "/" + args.Name
@@ -80,7 +78,7 @@ func (t RolloutTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 
 	out, err := t.Base.run(ctx, args.Context, cmdArgs)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	return registry.Result{Content: out}, nil
+	return tool.TextResult(out), nil
 }

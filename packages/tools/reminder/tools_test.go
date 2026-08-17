@@ -10,26 +10,26 @@ import (
 	"time"
 
 	reminderStore "github.com/noknov/slack-copilot-agent/packages/reminder"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 func TestCreateListAndCancelReminder(t *testing.T) {
 	store := newReminderTestStore()
-	rt := registry.Runtime{UserID: "U1", Channel: "C1", ThreadTS: "123.456"}
+	scope := agenttool.Scope{UserID: "U1", Values: map[string]string{"channel": "C1", "thread_ts": "123.456"}}
 	create := CreateTool{Store: store}
 	raw, _ := json.Marshal(map[string]string{"run_at": time.Now().Add(time.Hour).Format(time.RFC3339), "message": "喝水"})
-	result, err := create.Execute(context.Background(), raw, rt)
+	result, err := create.Execute(context.Background(), agenttool.Call{Arguments: raw, Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, "提醒已创建") {
-		t.Fatalf("unexpected create result: %q", result.Content)
+	if !strings.Contains(result.Text(), "提醒已创建") {
+		t.Fatalf("unexpected create result: %q", result.Text())
 	}
 	all, err := store.List(context.Background(), "U1")
 	if err != nil || len(all) != 1 {
 		t.Fatalf("list = %#v, %v", all, err)
 	}
-	_, err = (CancelTool{Store: store}).Execute(context.Background(), json.RawMessage(`{"id":"`+all[0].ID+`"}`), rt)
+	_, err = (CancelTool{Store: store}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"id":"`+all[0].ID+`"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestCancelCannotCrossUserBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = (CancelTool{Store: store}).Execute(context.Background(), json.RawMessage(`{"id":"`+created.ID+`"}`), registry.Runtime{UserID: "U2"})
+	_, err = (CancelTool{Store: store}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"id":"`+created.ID+`"}`), Scope: agenttool.Scope{UserID: "U2"}})
 	if err == nil {
 		t.Fatal("another user must not be able to cancel this reminder")
 	}
@@ -58,7 +58,7 @@ func TestCancelCannotCrossUserBoundary(t *testing.T) {
 func TestCreateRejectsPastTime(t *testing.T) {
 	store := newReminderTestStore()
 	raw := json.RawMessage(`{"run_at":"2000-01-01T00:00:00Z","message":"old"}`)
-	_, err := (CreateTool{Store: store}).Execute(context.Background(), raw, registry.Runtime{UserID: "U1", Channel: "C1"})
+	_, err := (CreateTool{Store: store}).Execute(context.Background(), agenttool.Call{Arguments: raw, Scope: agenttool.Scope{UserID: "U1", Values: map[string]string{"channel": "C1"}}})
 	if err == nil {
 		t.Fatal("expected past reminder to be rejected")
 	}

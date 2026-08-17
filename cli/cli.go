@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/noknov/slack-copilot-agent/packages/agent/environment"
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	"github.com/noknov/slack-copilot-agent/packages/agent/prompt"
 	agentruntime "github.com/noknov/slack-copilot-agent/packages/agent/runtime"
@@ -201,6 +202,7 @@ func Run() error {
 	runner, err := agentruntime.New(agentruntime.Config{Model: config.Model, ReasoningEffort: config.ReasoningEffort, MaxOutputTokens: config.MaxOutputTokens, Temperature: config.Temperature, MaxSteps: config.MaxSteps, MaxModelRetries: 2, Context: agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer}}, agentruntime.Dependencies{
 		Model: client, Tools: catalog, Policy: local.WorkspacePolicy{}, Approver: approver, Transcript: store, Events: renderer,
 		Compactor: agentruntime.ModelCompactor{Client: client, Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer}, Artifacts: local.ArtifactStore{Root: filepath.Join(values.stateDir, "sessions")},
+		Environment: environment.Config{WorkspaceRoots: []string{workspace.Root}},
 	})
 	if err != nil {
 		return err

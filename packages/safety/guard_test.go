@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/noknov/slack-copilot-agent/packages/agent/environment"
 	"github.com/noknov/slack-copilot-agent/packages/prompts"
 )
 
@@ -26,25 +27,26 @@ func TestSystemPromptDefaultStaysGeneric(t *testing.T) {
 	if strings.Contains(prompt, "food or drink ordering") {
 		t.Fatalf("SystemPrompt() should not contain detailed product prompt text: %q", prompt)
 	}
+	if strings.Contains(prompt, "<environment_context>") || strings.Contains(prompt, "Runtime context:") {
+		t.Fatalf("SystemPrompt() should remain static and omit runtime environment facts: %q", prompt)
+	}
 }
 
-func TestSystemPromptIncludesRuntimeDateContext(t *testing.T) {
-	if err := prompts.LoadDirs(prompts.PublicDir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = prompts.LoadDirs(prompts.PublicDir) })
-
+func TestEnvironmentMessageIncludesRuntimeDateContext(t *testing.T) {
 	now := time.Date(2026, 6, 30, 9, 15, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
-	prompt := (PromptPolicy{Now: func() time.Time { return now }}).SystemPrompt()
+	text := (environment.Config{
+		WorkspaceRoots: []string{"/data/workspace"},
+		Now:            func() time.Time { return now },
+	}).Message().Text()
 	for _, want := range []string{
-		"Runtime context:",
-		"Current date: 2026-06-30",
-		"Current year: 2026",
+		"<environment_context>",
+		"<current_date>2026-06-30</current_date>",
+		"<current_year>2026</current_year>",
 		"今年",
 		"include 2026 in the search query",
 	} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("SystemPrompt() missing %q:\n%s", want, prompt)
+		if !strings.Contains(text, want) {
+			t.Fatalf("environment message missing %q:\n%s", want, text)
 		}
 	}
 }
@@ -77,41 +79,6 @@ Full triage workflow body.
 	}
 	if strings.Contains(prompt, "Full triage workflow body.") {
 		t.Fatalf("SystemPrompt() should not include full skill body:\n%s", prompt)
-	}
-}
-
-func TestSystemPromptOmitsRepositoryInventoryByDefault(t *testing.T) {
-	root := t.TempDir()
-	repo := filepath.Join(root, "private-service")
-	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module private-service\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	prompt := (PromptPolicy{WorkspaceRoots: []string{root}}).SystemPrompt()
-	if strings.Contains(prompt, "private-service") {
-		t.Fatalf("SystemPrompt() leaked repo inventory by default:\n%s", prompt)
-	}
-}
-
-func TestSystemPromptIncludesRepositoryInventoryWhenEnabled(t *testing.T) {
-	root := t.TempDir()
-	repo := filepath.Join(root, "private-service")
-	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module private-service\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	prompt := (PromptPolicy{WorkspaceRoots: []string{root}, IncludeRepositoryInventory: true}).SystemPrompt()
-	if !strings.Contains(prompt, "private-service/ (Go)") {
-		t.Fatalf("SystemPrompt() did not include enabled repo inventory:\n%s", prompt)
-	}
-	if !strings.Contains(prompt, prompts.DynamicBoundaryMarker) {
-		t.Fatalf("SystemPrompt() should include dynamic boundary marker:\n%s", prompt)
 	}
 }
 
@@ -168,23 +135,6 @@ func TestCommandPolicyChecksArgv(t *testing.T) {
 	}
 	if err := guard.CheckArgv([]string{"git", "status\x00"}); err == nil {
 		t.Fatal("expected argv with NUL byte blocked")
-	}
-}
-
-func TestRepoInventoryCacheKeyIncludesWorkspaceRoots(t *testing.T) {
-	a := filepath.Join(t.TempDir(), "a")
-	b := filepath.Join(t.TempDir(), "b")
-	keyAB := (PromptPolicy{WorkspaceRoots: []string{a, b}}).repoInventoryCacheKey()
-	keyBA := (PromptPolicy{WorkspaceRoots: []string{b, a}}).repoInventoryCacheKey()
-	keyA := (PromptPolicy{WorkspaceRoots: []string{a}}).repoInventoryCacheKey()
-	if keyAB == "prompt:repo_inventory" {
-		t.Fatalf("cache key should not use the legacy global key: %q", keyAB)
-	}
-	if keyAB != keyBA {
-		t.Fatalf("cache key should be order-independent: %q vs %q", keyAB, keyBA)
-	}
-	if keyAB == keyA {
-		t.Fatalf("cache key should differ for different roots: %q", keyAB)
 	}
 }
 

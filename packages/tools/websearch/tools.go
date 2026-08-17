@@ -14,9 +14,8 @@ import (
 
 	xhtml "golang.org/x/net/html"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 const (
@@ -50,13 +49,12 @@ type SearchTool struct {
 	Client Client
 }
 
-func (SearchTool) Parallel() bool { return true }
 
-func (t SearchTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t SearchTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"web-search",
 		"Search the public web for current information. Prefer this before web-read_page when the user needs recent facts, recommendations, admissions data, prices, policies, news, or other information beyond model memory. Return URLs in the final answer for claims based on search results.",
-		registry.ObjectSchema([]string{"query"}, map[string]any{
+		tool.ObjectSchema([]string{"query"}, map[string]any{
 			"query":    map[string]any{"type": "string", "description": "Search query. Include the current year for current or time-sensitive information."},
 			"provider": map[string]any{"type": "string", "description": "Optional provider: brave, duckduckgo, searxng, google_cse, or serpapi."},
 			"engine":   map[string]any{"type": "string", "description": "Optional provider-specific engine, such as baidu for serpapi."},
@@ -70,26 +68,25 @@ type ReadPageTool struct {
 	Client Client
 }
 
-func (ReadPageTool) Parallel() bool { return true }
 
-func (t ReadPageTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t ReadPageTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"web-read_page",
 		"Read a public URL and extract readable text. Use after web-search returns a promising result, when the user provides a URL, or when you already know a stable source URL and search failed or is unnecessary. Search result pages are weak evidence; prefer reading the actual source pages.",
-		registry.ObjectSchema([]string{"url"}, map[string]any{
+		tool.ObjectSchema([]string{"url"}, map[string]any{
 			"url":       map[string]any{"type": "string", "description": "HTTP or HTTPS URL to read."},
 			"max_chars": map[string]any{"type": "integer", "description": "Maximum extracted characters, default 12000 and max 50000."},
 		}),
 	)
 }
 
-func (t ReadPageTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t ReadPageTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		URL      string `json:"url"`
 		MaxChars int    `json:"max_chars"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	maxChars := args.MaxChars
 	if maxChars <= 0 {
@@ -100,12 +97,12 @@ func (t ReadPageTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 	}
 	page, err := t.Client.ReadPage(ctx, args.URL, maxChars)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	return registry.Result{Content: formatPage(page)}, nil
+	return tool.TextResult(formatPage(page)), nil
 }
 
-func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Query    string `json:"query"`
 		Provider string `json:"provider"`
@@ -113,12 +110,12 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, _ registry
 		Site     string `json:"site"`
 		Limit    int    `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	query := strings.TrimSpace(args.Query)
 	if query == "" {
-		return registry.Result{}, fmt.Errorf("query is required")
+		return tool.Result{}, fmt.Errorf("query is required")
 	}
 	if site := strings.TrimSpace(args.Site); site != "" {
 		query += " site:" + site
@@ -137,12 +134,12 @@ func (t SearchTool) Execute(ctx context.Context, raw json.RawMessage, _ registry
 		Limit:    limit,
 	})
 	if err != nil {
-		return registry.Result{Content: searchFailureGuidance(query, err)}, nil
+		return tool.TextResult(searchFailureGuidance(query, err)), nil
 	}
 	if len(items) == 0 {
-		return registry.Result{Content: "no web results"}, nil
+		return tool.TextResult("no web results"), nil
 	}
-	return registry.Result{Content: formatResults(items)}, nil
+	return tool.TextResult(formatResults(items)), nil
 }
 
 type SearchRequest struct {

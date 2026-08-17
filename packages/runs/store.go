@@ -11,6 +11,8 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/llm"
 )
 
+func EmptyUsage() llm.Usage { return llm.Usage{} }
+
 type Run struct {
 	ID               string        `json:"id"`
 	TraceID          string        `json:"trace_id,omitempty"`

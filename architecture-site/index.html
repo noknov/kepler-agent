@@ -219,7 +219,7 @@
             <h3>运行记录</h3>
             <p>Canonical transcript 写入 <code>agent_transcript_events</code>；观测投影将聚合摘要写入 <code>agent_runs</code>，模型与工具步骤写入 <code>agent_run_steps</code>，反馈写入 <code>agent_run_feedback</code>。</p>
             <h3>Schema 管理</h3>
-            <p>DDL 是创建或改变数据库结构的 SQL，例如 <code>CREATE TABLE</code> 和 <code>ALTER TABLE</code>。运行时代码不执行 DDL，只做只读的完整性检查。当前目标结构集中在 <code>schema/postgres.sql</code>，数据库升级由 operator 或部署仓库中的轻量 migration 流程负责。</p>
+            <p>DDL 是创建或改变数据库结构的 SQL，例如 <code>CREATE TABLE</code> 和 <code>ALTER TABLE</code>。运行时代码不执行 DDL，只做只读的完整性检查。当前目标结构集中在 <code>schema/postgres.sql</code>；已有库的升级由 operator 自行负责，本仓库不提供增量 migration。</p>
             <h3>并发控制</h3>
             <p>进程内 semaphore 限制单 Worker 并发；Redis 计数器近似限制集群并发；PG advisory lock 串行化同一 Session。它们分别解决资源上限、跨 Pod 总量和会话一致性。</p>
           </section>
@@ -382,7 +382,7 @@
             <span class="section-number">08 / DATA &amp; CONCURRENCY</span><h2>Data and concurrency</h2>
             <table class="data-table"><thead><tr><th>Store</th><th>Responsibility</th><th>Failure behavior</th></tr></thead><tbody><tr><td>PostgreSQL</td><td>Transcripts, session inputs, run projections, feedback, spills, inbox, reminders, preferences</td><td>Durable operations reject work when unavailable</td></tr><tr><td>Redis</td><td>Wakeups, caches, active-owner hints, and approximate counters</td><td>Required at service startup; missed or failed runtime wakeups recover through PG polling, and Redis is not a durable queue</td></tr></tbody></table>
             <h3>Run records</h3><p>The canonical transcript is written to <code>agent_transcript_events</code>. The observability projection writes aggregate summaries to <code>agent_runs</code>, model and tool steps to <code>agent_run_steps</code>, and feedback to <code>agent_run_feedback</code>.</p>
-            <h3>Schema management</h3><p>Runtime code executes no DDL; it only verifies required tables. <code>schema/postgres.sql</code> is the current contract, while operators or the deploy repository's lightweight migration flow own upgrades.</p>
+            <h3>Schema management</h3><p>Runtime code executes no DDL; it only verifies required tables. <code>schema/postgres.sql</code> is the current contract for fresh installs. Upgrading an existing database is operator-owned; this repository does not ship incremental migrations.</p>
             <h3>Concurrency control</h3><p>A local semaphore limits each process, a Redis counter approximates the cluster total, and a PG advisory lock serializes a session.</p>
           </section>
 

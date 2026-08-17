@@ -438,16 +438,6 @@ func StaticSystemPrompt() string {
 	return staticPromptCache.prompt
 }
 
-// DynamicSystemPrompt returns the runtime-varying portion of the system prompt.
-// When repoInventory is non-empty it is prefixed with DynamicBoundaryMarker.
-func DynamicSystemPrompt(repoInventory string) string {
-	repoInventory = strings.TrimSpace(repoInventory)
-	if repoInventory == "" {
-		return ""
-	}
-	return DynamicBoundaryMarker + PromptText("repository_inventory_header", "") + repoInventory
-}
-
 func LoadSkill(name string) (Skill, bool) {
 	name = strings.TrimSpace(name)
 	if name == "" {

@@ -8,22 +8,20 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type JSONAnalyzeTool struct {
 	Slack FileSearcher
 }
 
-func (JSONAnalyzeTool) Parallel() bool { return true }
 
-func (t JSONAnalyzeTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t JSONAnalyzeTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"slack-json_analyze",
 		"",
-		registry.ObjectSchema([]string{"file_id"}, map[string]any{
+		tool.ObjectSchema([]string{"file_id"}, map[string]any{
 			"file_id":  map[string]any{"type": "string", "description": ""},
 			"group_by": map[string]any{"type": "string", "description": ""},
 			"metrics": map[string]any{
@@ -41,9 +39,9 @@ func (t JSONAnalyzeTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t JSONAnalyzeTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t JSONAnalyzeTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	if t.Slack == nil {
-		return registry.Result{}, fmt.Errorf("Slack JSON analysis is not configured")
+		return tool.Result{}, fmt.Errorf("Slack JSON analysis is not configured")
 	}
 	var args struct {
 		FileID    string   `json:"file_id"`
@@ -52,13 +50,13 @@ func (t JSONAnalyzeTool) Execute(ctx context.Context, raw json.RawMessage, _ reg
 		TopFields []string `json:"top_fields"`
 		Limit     int      `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	args.FileID = strings.TrimSpace(args.FileID)
 	args.GroupBy = strings.TrimSpace(args.GroupBy)
 	if args.FileID == "" {
-		return registry.Result{}, fmt.Errorf("file_id is required")
+		return tool.Result{}, fmt.Errorf("file_id is required")
 	}
 	if args.Limit <= 0 {
 		args.Limit = 10
@@ -68,21 +66,21 @@ func (t JSONAnalyzeTool) Execute(ctx context.Context, raw json.RawMessage, _ reg
 	}
 	file, err := t.Slack.FileInfo(ctx, args.FileID)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	if !isJSONFile(file) {
-		return registry.Result{}, fmt.Errorf("file does not look like JSON: %s", slack.FileDisplayName(file))
+		return tool.Result{}, fmt.Errorf("file does not look like JSON: %s", slack.FileDisplayName(file))
 	}
 	if file.Size > maxSearchFileBytes {
-		return registry.Result{}, fmt.Errorf("file exceeds analyzable size %s", formatBytes(maxSearchFileBytes))
+		return tool.Result{}, fmt.Errorf("file exceeds analyzable size %s", formatBytes(maxSearchFileBytes))
 	}
 	data, err := t.Slack.DownloadFile(ctx, file, maxSearchFileBytes)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	records, shape, err := parseJSONRecords(data)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	report := analyzeRecords(records, shape, args.GroupBy, args.Metrics, args.TopFields, args.Limit)
 	var b strings.Builder
@@ -90,7 +88,7 @@ func (t JSONAnalyzeTool) Execute(ctx context.Context, raw json.RawMessage, _ reg
 	b.WriteString("file: " + slack.FileDisplayName(file) + "\n")
 	b.WriteString("id: " + args.FileID + "\n")
 	b.WriteString(report)
-	return registry.Result{Content: strings.TrimSpace(b.String())}, nil
+	return tool.TextResult(strings.TrimSpace(b.String())), nil
 }
 
 func isJSONFile(file slack.File) bool {
