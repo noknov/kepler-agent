@@ -40,8 +40,9 @@ results share an aggregate inline budget. Empty model output fails the turn,
 the tool-step limit stops without an extra synthesis request, and retryable
 typed provider failures are retried only by the runtime. A zero retry count now
 means zero retries; product profiles opt into their retry budget explicitly.
-Slack buffers the final answer and posts one complete Block Kit `markdown`
-message with a deterministic `client_msg_id`; if the Slack app does not support
+Slack buffers streamed answer text and updates one Block Kit `markdown`
+message with throttled `chat.update` calls, then finalizes the same message
+with a deterministic `client_msg_id` on first post. If the Slack app does not support
 that AI-only block, it retries as a plain message. It then persists the Slack
 message link on the run. It does not create a
 streaming placeholder or rewrite Markdown with regular expressions.
@@ -66,5 +67,6 @@ Hosted profiles enable the optional circuit breaker by default. It blocks
 identical repeated tool calls after configurable failure or success thresholds.
 
 The JSON-RPC app server (`appserver/cmd/app-server`) exposes the same local
-runtime over stdio with `turn/start`, `turn/steer`, `turn/cancel`, and
-transcript `event` notifications.
+runtime over stdio with `thread/start`, `thread/resume`, `thread/fork`,
+`turn/start`, `turn/steer`, `turn/interrupt`, and Codex-style item
+notifications including `item/agentMessage/delta`.

@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/noknov/slack-copilot-agent/packages/agent/delegation"
 	"github.com/noknov/slack-copilot-agent/packages/agent/environment"
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	"github.com/noknov/slack-copilot-agent/packages/agent/prompt"
@@ -197,6 +198,25 @@ func Run() error {
 		approver.Prompt = func(context.Context, tool.PolicyRequest, tool.Decision) (local.ApprovalScope, error) {
 			return scope, nil
 		}
+	}
+
+	exploreRunner := delegation.Runner{
+		Config: agentruntime.Config{
+			Model: config.Model, ReasoningEffort: config.ReasoningEffort, MaxOutputTokens: config.MaxOutputTokens,
+			Temperature: config.Temperature, MaxSteps: 12,
+			Context: agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
+		},
+		Deps: agentruntime.Dependencies{
+			Model: client, Policy: local.WorkspacePolicy{},
+			Compactor:   agentruntime.ModelCompactor{Client: client, Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
+			Artifacts:   local.ArtifactStore{Root: filepath.Join(values.stateDir, "sessions")},
+			Environment: environment.Config{WorkspaceRoots: []string{workspace.Root}},
+		},
+		ParentCatalog: catalog,
+		AllowedTools:  delegation.DefaultLocalAllowedTools(),
+	}
+	if err := catalog.Register(delegation.ExploreTool{Runner: exploreRunner}); err != nil {
+		return err
 	}
 
 	runner, err := agentruntime.New(agentruntime.Config{Model: config.Model, ReasoningEffort: config.ReasoningEffort, MaxOutputTokens: config.MaxOutputTokens, Temperature: config.Temperature, MaxSteps: config.MaxSteps, MaxModelRetries: 2, Context: agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer}}, agentruntime.Dependencies{

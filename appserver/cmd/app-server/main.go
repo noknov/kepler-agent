@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"path/filepath"
 
+	"github.com/noknov/slack-copilot-agent/packages/agent/delegation"
 	"github.com/noknov/slack-copilot-agent/packages/agent/environment"
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	"github.com/noknov/slack-copilot-agent/packages/agent/prompt"
@@ -54,6 +55,24 @@ func run(ctx context.Context) error {
 	}
 	stateDir, err := local.DefaultStateDir()
 	if err != nil {
+		return err
+	}
+	exploreRunner := delegation.Runner{
+		Config: agentruntime.Config{
+			Model: config.Model, ReasoningEffort: config.ReasoningEffort, MaxOutputTokens: config.MaxOutputTokens,
+			Temperature: config.Temperature, MaxSteps: 12,
+			Context: agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
+		},
+		Deps: agentruntime.Dependencies{
+			Model: model.Client(client), Policy: local.WorkspacePolicy{},
+			Compactor:   agentruntime.ModelCompactor{Client: model.Client(client), Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
+			Artifacts:   local.ArtifactStore{Root: filepath.Join(stateDir, "sessions")},
+			Environment: environment.Config{WorkspaceRoots: []string{workspace.Root}},
+		},
+		ParentCatalog: catalog,
+		AllowedTools:  delegation.DefaultLocalAllowedTools(),
+	}
+	if err := catalog.Register(delegation.ExploreTool{Runner: exploreRunner}); err != nil {
 		return err
 	}
 	store, err := local.NewJSONLStore(filepath.Join(stateDir, "sessions"))

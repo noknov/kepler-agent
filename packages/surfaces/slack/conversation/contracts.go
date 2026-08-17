@@ -50,6 +50,11 @@ type IdempotentMarkdownMessenger interface {
 	PostMarkdownMessageWithID(ctx context.Context, channel, threadTS, markdown, deliveryID string) (string, error)
 }
 
+type StreamingMarkdownMessenger interface {
+	IdempotentMarkdownMessenger
+	UpdateMarkdownMessage(ctx context.Context, channel, messageTS, markdown string) error
+}
+
 type ThreadStatusMessenger interface {
 	SetThreadStatus(ctx context.Context, channel, threadTS, status string, loadingMessages []string) error
 }

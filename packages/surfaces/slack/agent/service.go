@@ -128,8 +128,15 @@ func (r *eventRouter) Publish(_ context.Context, event transcript.Event) {
 		return
 	}
 	stream.Lifecycle(event)
-	if event.Type == transcript.ModelStreamed && event.Model != nil && event.Model.Type == model.StreamToolCallDone && event.Model.ToolCall != nil {
-		stream.ToolStep([]model.ToolCall{*event.Model.ToolCall})
+	if event.Type == transcript.ModelStreamed && event.Model != nil {
+		switch event.Model.Type {
+		case model.StreamTextDelta:
+			stream.AppendDelta(event.Model.Text)
+		case model.StreamToolCallDone:
+			if event.Model.ToolCall != nil {
+				stream.ToolStep([]model.ToolCall{*event.Model.ToolCall})
+			}
+		}
 	}
 	if event.Type == transcript.AssistantMessage && event.Message != nil {
 		stream.CommitStep(*event.Message)
@@ -585,6 +592,12 @@ type slackStream struct {
 	progressSeen    map[string]bool
 	progressCalls   []model.ToolCall
 	progressRunning bool
+	answer          strings.Builder
+	messageTS       string
+	streaming       bool
+	streamClosed    bool
+	lastStreamUpdate time.Time
+	streamTimer     *time.Timer
 }
 
 func newSlackStream(ctx context.Context, messenger slackconversation.Messenger, req slackconversation.Request) *slackStream {
@@ -603,18 +616,37 @@ func (s *slackStream) CommitStep(message model.Message) {
 	}
 }
 func (s *slackStream) Complete(final string) (string, error) {
+	s.stopStreamTimer()
+	s.mu.Lock()
+	s.streamClosed = true
+	messageTS := s.messageTS
+	streaming := s.streaming
+	s.mu.Unlock()
 	s.clearStatus()
 	if final == "" {
-		return "", nil
+		return messageTS, nil
 	}
 	ctx, cancel := s.deliveryContext()
 	defer cancel()
+	if streaming && messageTS != "" {
+		if updater, ok := s.messenger.(slackconversation.StreamingMarkdownMessenger); ok {
+			if err := updater.UpdateMarkdownMessage(ctx, s.req.Channel, messageTS, final); err == nil {
+				return messageTS, nil
+			}
+		}
+	}
 	if messenger, ok := s.messenger.(slackconversation.IdempotentMarkdownMessenger); ok {
 		return messenger.PostMarkdownMessageWithID(ctx, s.req.Channel, s.req.ThreadTS, final, s.req.EventID)
 	}
 	return s.messenger.PostMarkdownMessage(ctx, s.req.Channel, s.req.ThreadTS, final)
 }
 func (s *slackStream) Fail(message string, canceled bool) (string, error) {
+	s.stopStreamTimer()
+	s.mu.Lock()
+	s.streamClosed = true
+	messageTS := s.messageTS
+	streaming := s.streaming
+	s.mu.Unlock()
 	if canceled {
 		message = "Cancelled this request."
 		if slackconversation.IsChineseLocale(s.req.Locale) {
@@ -623,10 +655,17 @@ func (s *slackStream) Fail(message string, canceled bool) (string, error) {
 	}
 	s.clearStatus()
 	if message == "" {
-		return "", nil
+		return messageTS, nil
 	}
 	ctx, cancel := s.deliveryContext()
 	defer cancel()
+	if streaming && messageTS != "" {
+		if updater, ok := s.messenger.(slackconversation.StreamingMarkdownMessenger); ok {
+			if err := updater.UpdateMarkdownMessage(ctx, s.req.Channel, messageTS, message); err == nil {
+				return messageTS, nil
+			}
+		}
+	}
 	if messenger, ok := s.messenger.(slackconversation.IdempotentMarkdownMessenger); ok {
 		return messenger.PostMarkdownMessageWithID(ctx, s.req.Channel, s.req.ThreadTS, message, s.req.EventID)
 	}
