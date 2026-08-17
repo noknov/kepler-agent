@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/noknov/slack-copilot-agent/packages/agent/environment"
+	"github.com/noknov/slack-copilot-agent/packages/agent/delegation"
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	agentruntime "github.com/noknov/slack-copilot-agent/packages/agent/runtime"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
@@ -84,6 +85,24 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		Environment: environment.Config{WorkspaceRoots: cfg.Security.WorkspaceRoots},
 	})
 	if err != nil {
+		return Profile{}, err
+	}
+	exploreRunner := delegation.Runner{
+		Config: agentruntime.Config{
+			Model: cfg.LLM.Model, ReasoningEffort: cfg.LLM.Thinking, Temperature: cfg.LLM.Temperature,
+			MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxSteps: 12,
+			Context:         agentruntime.ContextConfig{MaxTokens: cfg.Sessions.MaxContextTokens, ReserveTokens: cfg.Sessions.AutocompactBuffer},
+			ToolResults:     agentruntime.ToolResultConfig{MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)},
+		},
+		Deps: agentruntime.Dependencies{
+			Model: client, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)},
+			Compactor: agentruntime.ModelCompactor{Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer},
+			Artifacts: artifacts, Environment: environment.Config{WorkspaceRoots: cfg.Security.WorkspaceRoots},
+		},
+		ParentCatalog: catalog,
+		AllowedTools:  delegation.DefaultHostedAllowedTools(),
+	}
+	if err := catalog.Register(delegation.ExploreTool{Runner: exploreRunner}); err != nil {
 		return Profile{}, err
 	}
 	promptPolicy := safety.PromptPolicy{}

@@ -23,6 +23,7 @@ type Server struct {
 	Prompt     []prompt.Fragment
 	Model      string
 	Workspace  string
+	IDs        agentruntime.IDGenerator
 
 	reader  io.Reader
 	writer  io.Writer
@@ -70,6 +71,7 @@ func New(runtime *agentruntime.Runtime, reader io.Reader, writer io.Writer) *Ser
 		reader:  reader,
 		writer:  writer,
 		active:  map[string]*activeTurn{},
+		IDs:     agentruntime.RandomIDs{},
 	}
 }
 
@@ -97,23 +99,21 @@ func (s *Server) handle(ctx context.Context, request Request) {
 	switch request.Method {
 	case "initialize":
 		s.respond(request.ID, map[string]any{
-			"protocol": "v2",
-			"capabilities": []string{
-				"thread/resume",
-				"turn/start",
-				"turn/steer",
-				"turn/cancel",
-				"event",
-				"item/started",
-				"item/completed",
-				"turn/started",
-				"turn/completed",
-			},
+			"protocol":     "v2",
+			"capabilities": DefaultCapabilities(),
 		}, nil)
-	case "thread/resume":
-		var params struct {
-			SessionID string `json:"sessionId"`
+	case "thread/start":
+		var params ThreadStartParams
+		if err := json.Unmarshal(request.Params, &params); err != nil {
+			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "invalid params"})
+			return
 		}
+		if params.SessionID == "" {
+			params.SessionID = NewSessionID(s.IDs)
+		}
+		s.respond(request.ID, map[string]any{"sessionId": params.SessionID, "userId": params.UserID}, nil)
+	case "thread/resume":
+		var params ThreadResumeParams
 		if err := json.Unmarshal(request.Params, &params); err != nil || params.SessionID == "" {
 			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "sessionId is required"})
 			return
@@ -122,12 +122,55 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			s.respond(request.ID, nil, &ResponseError{Code: -32001, Message: "transcript store unavailable"})
 			return
 		}
-		events, err := s.Transcript.Load(ctx, params.SessionID, 0)
+		events, err := s.Transcript.Load(ctx, params.SessionID, params.AfterSequence)
 		if err != nil {
 			s.respond(request.ID, nil, &ResponseError{Code: -32002, Message: err.Error()})
 			return
 		}
-		s.respond(request.ID, map[string]any{"sessionId": params.SessionID, "eventCount": len(events)}, nil)
+		result := map[string]any{"sessionId": params.SessionID, "eventCount": len(events)}
+		if params.IncludeEvents || params.StreamItems {
+			result["items"] = itemsFromEvents(events)
+		}
+		s.respond(request.ID, result, nil)
+		if params.StreamItems {
+			for _, event := range events {
+				s.NotifyEvent(event)
+			}
+		}
+	case "thread/fork":
+		var params ThreadForkParams
+		if err := json.Unmarshal(request.Params, &params); err != nil || params.SourceSessionID == "" {
+			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "sourceSessionId is required"})
+			return
+		}
+		if s.Transcript == nil {
+			s.respond(request.ID, nil, &ResponseError{Code: -32001, Message: "transcript store unavailable"})
+			return
+		}
+		childID := params.ChildSessionID
+		if childID == "" {
+			childID = NewSessionID(s.IDs)
+		}
+		events, err := s.Transcript.Load(ctx, params.SourceSessionID, 0)
+		if err != nil {
+			s.respond(request.ID, nil, &ResponseError{Code: -32002, Message: err.Error()})
+			return
+		}
+		copied := 0
+		for _, event := range events {
+			if params.BeforeSequence > 0 && event.Sequence >= params.BeforeSequence {
+				break
+			}
+			forked := event
+			forked.SessionID = childID
+			forked.ID = ""
+			if _, err := s.Transcript.Append(ctx, forked); err != nil {
+				s.respond(request.ID, nil, &ResponseError{Code: -32003, Message: err.Error()})
+				return
+			}
+			copied++
+		}
+		s.respond(request.ID, map[string]any{"sessionId": childID, "sourceSessionId": params.SourceSessionID, "eventCount": copied}, nil)
 	case "turn/start":
 		var params TurnStartParams
 		if err := json.Unmarshal(request.Params, &params); err != nil || params.SessionID == "" || params.Input == "" {
@@ -135,7 +178,7 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			return
 		}
 		if params.TurnID == "" {
-			params.TurnID = "turn_" + params.SessionID
+			params.TurnID = NewTurnID(s.IDs)
 		}
 		turnCtx, cancel := context.WithCancel(ctx)
 		buffer := &agentruntime.InputBuffer{}
@@ -144,7 +187,7 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			s.respond(request.ID, nil, &ResponseError{Code: -32004, Message: "turn already active"})
 			return
 		}
-		s.respond(request.ID, map[string]string{"turnId": params.TurnID, "status": "started"}, nil)
+		s.respond(request.ID, map[string]string{"turnId": params.TurnID, "sessionId": params.SessionID, "status": "started"}, nil)
 		go s.execute(turnCtx, params, buffer)
 	case "turn/steer":
 		var params struct {
@@ -160,10 +203,8 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			return
 		}
 		s.respond(request.ID, map[string]bool{"queued": true}, nil)
-	case "turn/cancel":
-		var params struct {
-			TurnID string `json:"turnId"`
-		}
+	case "turn/cancel", "turn/interrupt":
+		var params TurnInterruptParams
 		if err := json.Unmarshal(request.Params, &params); err != nil || params.TurnID == "" {
 			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "turnId is required"})
 			return
@@ -196,6 +237,7 @@ func (s *Server) execute(ctx context.Context, params TurnStartParams, steering *
 	})
 	payload := map[string]any{
 		"turnId":      params.TurnID,
+		"sessionId":   params.SessionID,
 		"termination": result.Termination,
 		"message":     result.Message,
 		"usage":       result.Usage,
@@ -218,14 +260,17 @@ func (s *Server) notify(method string, params any) {
 
 // NotifyEvent streams a canonical transcript event to connected clients.
 func (s *Server) NotifyEvent(event transcript.Event) {
-	method := "event"
-	switch event.Type {
-	case transcript.ToolCallStarted:
-		method = "item/started"
-	case transcript.ToolCallCompleted, transcript.ToolCallFailed:
-		method = "item/completed"
+	streamed := event.Type == transcript.ModelStreamed && event.Model != nil && event.Model.Type == model.StreamTextDelta
+	method := NotificationMethod(string(event.Type), streamed)
+	payload := any(itemFromEvent(event))
+	if streamed {
+		payload = map[string]any{
+			"turnId":    event.TurnID,
+			"sessionId": event.SessionID,
+			"delta":     event.Model.Text,
+		}
 	}
-	s.notify(method, event)
+	s.notify(method, payload)
 }
 
 func (s *Server) respond(id json.RawMessage, result any, responseErr *ResponseError) {
