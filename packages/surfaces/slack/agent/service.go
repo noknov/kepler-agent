@@ -596,6 +596,7 @@ type slackStream struct {
 	messageTS       string
 	streaming       bool
 	streamClosed    bool
+	lastStreamText  string
 	lastStreamUpdate time.Time
 	streamTimer     *time.Timer
 }
@@ -617,10 +618,12 @@ func (s *slackStream) CommitStep(message model.Message) {
 }
 func (s *slackStream) Complete(final string) (string, error) {
 	s.stopStreamTimer()
+	s.flushDeferredStream(true)
 	s.mu.Lock()
 	s.streamClosed = true
 	messageTS := s.messageTS
 	streaming := s.streaming
+	streamed := strings.TrimSpace(s.answer.String())
 	s.mu.Unlock()
 	s.clearStatus()
 	if final == "" {
@@ -629,6 +632,9 @@ func (s *slackStream) Complete(final string) (string, error) {
 	ctx, cancel := s.deliveryContext()
 	defer cancel()
 	if streaming && messageTS != "" {
+		if strings.TrimSpace(final) == streamed || strings.TrimSpace(final) == s.streamedText() {
+			return messageTS, nil
+		}
 		if updater, ok := s.messenger.(slackconversation.StreamingMarkdownMessenger); ok {
 			if err := updater.UpdateMarkdownMessage(ctx, s.req.Channel, messageTS, final); err == nil {
 				return messageTS, nil
@@ -642,10 +648,12 @@ func (s *slackStream) Complete(final string) (string, error) {
 }
 func (s *slackStream) Fail(message string, canceled bool) (string, error) {
 	s.stopStreamTimer()
+	s.flushDeferredStream(true)
 	s.mu.Lock()
 	s.streamClosed = true
 	messageTS := s.messageTS
 	streaming := s.streaming
+	streamed := strings.TrimSpace(s.answer.String())
 	s.mu.Unlock()
 	if canceled {
 		message = "Cancelled this request."
@@ -660,6 +668,9 @@ func (s *slackStream) Fail(message string, canceled bool) (string, error) {
 	ctx, cancel := s.deliveryContext()
 	defer cancel()
 	if streaming && messageTS != "" {
+		if strings.TrimSpace(message) == streamed || strings.TrimSpace(message) == s.streamedText() {
+			return messageTS, nil
+		}
 		if updater, ok := s.messenger.(slackconversation.StreamingMarkdownMessenger); ok {
 			if err := updater.UpdateMarkdownMessage(ctx, s.req.Channel, messageTS, message); err == nil {
 				return messageTS, nil
