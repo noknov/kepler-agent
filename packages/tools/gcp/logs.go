@@ -45,6 +45,7 @@ func (t LogsTool) Descriptor() tool.Descriptor {
 			"project":   map[string]any{"type": "string", "description": ""},
 			"format":    map[string]any{"type": "string", "description": ""},
 		}),
+		tool.ReadNetworkParallel()...,
 	)
 }
 

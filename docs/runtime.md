@@ -52,13 +52,11 @@ checked-out branch upstream, normally `origin/<branch>`, without checkout. Expli
 repository-specific default refs still belong in the private deployment prompt,
 not in runtime discovery or broad branch-name guessing.
 
-Hosted capability policy is authoritative and non-interactive. Tool visibility,
-turn activation, policy, and execution are owned by the canonical agent
-catalog; the older tool package is now only a construction inventory for tool
-implementations. Its registry has no runtime dispatch or activation API; a
-startup adapter maps implementations into the canonical catalog. Local tools use
-the workspace sandbox and scoped approvals. TTS is an optional external-write
-tool and is never automatic orchestration.
+Hosted capability policy is authoritative and non-interactive. Tool implementations
+declare neutral capability effects in their descriptors; surface catalogs add
+visibility metadata such as `Surfaces` and integration dependencies at
+registration time. Local tools use the workspace sandbox and scoped approvals. TTS is
+an optional external-write tool and is never automatic orchestration.
 
 The `evals` package treats the CLI and other products as black-box processes.
 Because the CLI runs the same harness, its context, tool, retry, and termination

@@ -16,16 +16,12 @@ func AddToCatalog(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.C
 	if catalog == nil || slackClient == nil {
 		return
 	}
-	_ = catalog.RegisterVisible(policy, tool.Annotate(AskUserTool{Slack: slackClient}, tool.Descriptor{
-		Effects:      []tool.Effect{tool.EffectRead, tool.EffectNetwork},
-		Dependencies: []string{"slack"},
-		Exclusive:    true,
-	}))
-	_ = catalog.RegisterVisible(policy, readTool(FileSearchTool{Slack: slackClient}, "slack"))
-	_ = catalog.RegisterVisible(policy, readTool(JSONAnalyzeTool{Slack: slackClient}, "slack"))
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, externalWrite(CreateCanvasTool{Slack: slackClient}))
+	_ = catalog.RegisterVisible(policy, AskUserTool{Slack: slackClient})
+	_ = catalog.RegisterVisible(policy, FileSearchTool{Slack: slackClient})
+	_ = catalog.RegisterVisible(policy, JSONAnalyzeTool{Slack: slackClient})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, CreateCanvasTool{Slack: slackClient})
 	if reminderStore != nil {
-		_ = catalog.RegisterVisible(policy, externalWrite(reminderTools.CreateTool{
+		_ = catalog.RegisterVisible(policy, bindSurface(reminderTools.CreateTool{
 			Store: reminderStore,
 			OnCreate: func(ctx context.Context) {
 				if rdb != nil {
@@ -33,27 +29,15 @@ func AddToCatalog(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.C
 				}
 			},
 		}, "reminder"))
-		_ = catalog.RegisterVisible(policy, readTool(reminderTools.ListTool{Store: reminderStore}, "reminder"))
-		_ = catalog.RegisterVisible(policy, externalWrite(reminderTools.CancelTool{Store: reminderStore}, "reminder"))
+		_ = catalog.RegisterVisible(policy, bindSurface(reminderTools.ListTool{Store: reminderStore}, "reminder"))
+		_ = catalog.RegisterVisible(policy, bindSurface(reminderTools.CancelTool{Store: reminderStore}, "reminder"))
 	}
 	registerTTS(catalog, policy, cfg, slackClient)
 }
 
-func readTool(item tool.Tool, deps ...string) tool.Tool {
-	return tool.Annotate(item, tool.Descriptor{Effects: []tool.Effect{tool.EffectRead, tool.EffectNetwork}, Parallel: true, Dependencies: deps})
-}
-
-func externalWrite(item tool.Tool, deps ...string) tool.Tool {
-	return tool.Annotate(item, tool.Descriptor{
-		Effects:      []tool.Effect{tool.EffectExternalWrite, tool.EffectNetwork},
-		Dependencies: append([]string{"slack"}, deps...),
-		Surfaces:     []string{"slack"},
-	})
-}
-
 func registerTTS(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.Config, slackClient *slack.Client) {
 	tts := cfg.Integrations.TTS
-	item := externalWrite(ttsTools.SpeakTool{
+	item := bindSurface(ttsTools.SpeakTool{
 		Slack:   slackClient,
 		APIKey:  tts.APIKey,
 		BaseURL: tts.BaseURL,

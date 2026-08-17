@@ -30,6 +30,7 @@ func (t LogsTool) Descriptor() tool.Descriptor {
 			"timestamps": map[string]any{"type": "boolean", "description": ""},
 			"context":    map[string]any{"type": "string", "description": ""},
 		}),
+		tool.ReadNetworkParallel()...,
 	)
 }
 

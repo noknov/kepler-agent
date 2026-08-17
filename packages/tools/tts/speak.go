@@ -26,7 +26,7 @@ type SpeakTool struct {
 	HTTPClient *http.Client
 }
 
-func (SpeakTool) IsWrite() bool  { return true }
+func (SpeakTool) IsWrite() bool { return true }
 
 func (t SpeakTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
@@ -37,6 +37,7 @@ func (t SpeakTool) Descriptor() tool.Descriptor {
 			"voice": map[string]any{"type": "string", "description": ""},
 			"style": map[string]any{"type": "string", "description": ""},
 		}),
+		tool.ExternalWrite()...,
 	)
 }
 

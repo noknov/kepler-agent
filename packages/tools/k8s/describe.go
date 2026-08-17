@@ -23,6 +23,7 @@ func (t DescribeTool) Descriptor() tool.Descriptor {
 			"namespace": map[string]any{"type": "string", "description": ""},
 			"context":   map[string]any{"type": "string", "description": ""},
 		}),
+		tool.ReadNetworkParallel()...,
 	)
 }
 

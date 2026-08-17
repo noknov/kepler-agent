@@ -78,6 +78,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 	server.Runtime = runner
+	server.Transcript = store
 	server.Model = config.Model
 	server.Workspace = workspace.Root
 	server.Prompt = []prompt.Fragment{{ID: "appserver-core", Layer: prompt.LayerCore, Content: "You are a coding agent exposed through the app server protocol."}}

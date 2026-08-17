@@ -114,7 +114,20 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 
 		response, err := r.generate(ctx, request, projection.Messages)
 		if err != nil {
-			return r.failTurn(ctx, result, err)
+			var typed *model.Error
+			if errors.As(err, &typed) && typed.Kind == model.ErrorContextLimit && r.deps.Compactor != nil {
+				if compactErr := r.forceCompactAfterContextLimit(ctx, request, system); compactErr == nil {
+					projection, projErr := r.projectContext(ctx, request, system)
+					if projErr == nil {
+						response, err = r.generate(ctx, request, projection.Messages)
+					} else {
+						err = projErr
+					}
+				}
+			}
+			if err != nil {
+				return r.failTurn(ctx, result, err)
+			}
 		}
 		addUsage(&result.Usage, response.Usage)
 		if response.Message.Role == "" {

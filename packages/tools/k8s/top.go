@@ -25,6 +25,7 @@ func (t TopTool) Descriptor() tool.Descriptor {
 			"containers":     map[string]any{"type": "boolean", "description": ""},
 			"context":        map[string]any{"type": "string", "description": ""},
 		}),
+		tool.ReadNetworkParallel()...,
 	)
 }
 

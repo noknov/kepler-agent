@@ -70,22 +70,6 @@ func policyForSurface(cfg config.Config, surface SurfaceOptions) tool.SurfacePol
 	}
 }
 
-func readTool(item tool.Tool, deps ...string) tool.Tool {
-	return tool.Annotate(item, tool.Descriptor{Effects: []tool.Effect{tool.EffectRead, tool.EffectNetwork}, Parallel: true, Dependencies: deps})
-}
-
-func networkTool(item tool.Tool, deps ...string) tool.Tool {
-	return tool.Annotate(item, tool.Descriptor{Effects: []tool.Effect{tool.EffectNetwork}, Dependencies: deps})
-}
-
-func writeTool(item tool.Tool, deps ...string) tool.Tool {
-	return tool.Annotate(item, tool.Descriptor{Effects: []tool.Effect{tool.EffectWorkspaceWrite}, Dependencies: deps})
-}
-
-func externalWrite(item tool.Tool, deps ...string) tool.Tool {
-	return tool.Annotate(item, tool.Descriptor{Effects: []tool.Effect{tool.EffectExternalWrite, tool.EffectNetwork}, Dependencies: deps, Surfaces: []string{"slack"}})
-}
-
 func registerDeferredDiagnosticsTools(catalog *tool.Catalog, policy tool.SurfacePolicy) {
 	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryDiagnostics, diagnosticsTools.IncidentBriefTool{})
 	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryDiagnostics, diagnosticsTools.TimelineTool{})
@@ -112,11 +96,11 @@ func registerCodeTools(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg con
 	_ = catalog.RegisterVisible(policy, codeTools.ReadFileTool{Paths: workspacePolicy})
 
 	gitBase := gitTools.Base{Paths: workspacePolicy, Guard: commandPolicy, Timeout: cfg.Tools.CommandTimeout}
-	_ = catalog.RegisterVisible(policy, readTool(gitTools.RepoSearchTool{Base: gitBase}))
-	_ = catalog.RegisterVisible(policy, readTool(gitTools.RepoReadFileTool{Base: gitBase}))
-	_ = catalog.RegisterVisible(policy, readTool(gitTools.FetchRefTool{Base: gitBase}))
-	_ = catalog.RegisterVisible(policy, readTool(gitTools.SearchRefTool{Base: gitBase}))
-	_ = catalog.RegisterVisible(policy, readTool(gitTools.ReadFileRefTool{Base: gitBase}))
+	_ = catalog.RegisterVisible(policy, gitTools.RepoSearchTool{Base: gitBase})
+	_ = catalog.RegisterVisible(policy, gitTools.RepoReadFileTool{Base: gitBase})
+	_ = catalog.RegisterVisible(policy, gitTools.FetchRefTool{Base: gitBase})
+	_ = catalog.RegisterVisible(policy, gitTools.SearchRefTool{Base: gitBase})
+	_ = catalog.RegisterVisible(policy, gitTools.ReadFileRefTool{Base: gitBase})
 	_ = catalog.RegisterVisible(policy, gitTools.StatusTool{Base: gitBase})
 	_ = catalog.RegisterVisible(policy, gitTools.LogTool{Base: gitBase})
 	_ = catalog.RegisterVisible(policy, gitTools.ShowTool{Base: gitBase})
@@ -146,16 +130,16 @@ func registerIntegrationTools(catalog *tool.Catalog, policy tool.SurfacePolicy, 
 			Timeout:          cfg.Tools.CommandTimeout,
 		}
 		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.ContextsTool{Base: k8sBase})
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, readTool(k8sTools.GetPodsTool{Base: k8sBase}))
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, readTool(k8sTools.LogsTool{Base: k8sBase}))
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, readTool(k8sTools.DescribeTool{Base: k8sBase}))
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, readTool(k8sTools.TopTool{Base: k8sBase}))
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, readTool(k8sTools.EventsTool{Base: k8sBase}))
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, readTool(k8sTools.RolloutTool{Base: k8sBase}))
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, readTool(k8sTools.GetTool{Base: k8sBase}))
+		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.GetPodsTool{Base: k8sBase})
+		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.LogsTool{Base: k8sBase})
+		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.DescribeTool{Base: k8sBase})
+		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.TopTool{Base: k8sBase})
+		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.EventsTool{Base: k8sBase})
+		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.RolloutTool{Base: k8sBase})
+		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.GetTool{Base: k8sBase})
 	}
 
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, readTool(gcpTools.LogsTool{
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, gcpTools.LogsTool{
 		GCloudPath:       integrations.GCP.GCloudPath,
 		DefaultProject:   integrations.GCP.DefaultProject,
 		DefaultNamespace: integrations.GCP.DefaultNamespace,
@@ -163,28 +147,28 @@ func registerIntegrationTools(catalog *tool.Catalog, policy tool.SurfacePolicy, 
 		DefaultRegion:    integrations.GCP.DefaultRegion,
 		Guard:            commandPolicy,
 		Timeout:          cfg.Tools.CommandTimeout,
-	}))
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, readTool(gcpTools.RunServicesTool{
+	})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, gcpTools.RunServicesTool{
 		GCloudPath:     integrations.GCP.GCloudPath,
 		DefaultProject: integrations.GCP.DefaultProject,
 		DefaultRegion:  integrations.GCP.DefaultRegion,
 		Guard:          commandPolicy,
 		Timeout:        cfg.Tools.CommandTimeout,
-	}))
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, readTool(gcpTools.RunRevisionsTool{
+	})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, gcpTools.RunRevisionsTool{
 		GCloudPath:     integrations.GCP.GCloudPath,
 		DefaultProject: integrations.GCP.DefaultProject,
 		DefaultRegion:  integrations.GCP.DefaultRegion,
 		Guard:          commandPolicy,
 		Timeout:        cfg.Tools.CommandTimeout,
-	}))
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, readTool(gcpTools.ClustersTool{
+	})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, gcpTools.ClustersTool{
 		GCloudPath:     integrations.GCP.GCloudPath,
 		DefaultProject: integrations.GCP.DefaultProject,
 		DefaultRegion:  integrations.GCP.DefaultRegion,
 		Guard:          commandPolicy,
 		Timeout:        cfg.Tools.CommandTimeout,
-	}))
+	})
 
 	notionClient := notionTools.Client{
 		Token:         integrations.Notion.Token,
@@ -193,18 +177,18 @@ func registerIntegrationTools(catalog *tool.Catalog, policy tool.SurfacePolicy, 
 		Version:       integrations.Notion.Version,
 	}
 	if notionClient.Token != "" {
-		_ = catalog.RegisterVisible(policy, readTool(notionTools.SearchTool{Client: notionClient}, "notion"))
-		_ = catalog.RegisterVisible(policy, readTool(notionTools.GetPageTool{Client: notionClient}, "notion"))
-		_ = catalog.RegisterVisible(policy, readTool(notionTools.QueryDatabaseTool{Client: notionClient}, "notion"))
+		_ = catalog.RegisterVisible(policy, notionTools.SearchTool{Client: notionClient})
+		_ = catalog.RegisterVisible(policy, notionTools.GetPageTool{Client: notionClient})
+		_ = catalog.RegisterVisible(policy, notionTools.QueryDatabaseTool{Client: notionClient})
 	} else {
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, readTool(notionTools.SearchTool{Client: notionClient}, "notion"))
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, readTool(notionTools.GetPageTool{Client: notionClient}, "notion"))
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, readTool(notionTools.QueryDatabaseTool{Client: notionClient}, "notion"))
+		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, notionTools.SearchTool{Client: notionClient})
+		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, notionTools.GetPageTool{Client: notionClient})
+		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, notionTools.QueryDatabaseTool{Client: notionClient})
 	}
 
 	youtrackClient := youtrackTools.Client{BaseURL: integrations.YouTrack.URL, Token: integrations.YouTrack.Token}
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, readTool(youtrackTools.GetIssueTool{Client: youtrackClient}, "youtrack"))
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, readTool(youtrackTools.SearchTool{Client: youtrackClient}, "youtrack"))
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, youtrackTools.GetIssueTool{Client: youtrackClient})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, youtrackTools.SearchTool{Client: youtrackClient})
 
 	githubClient := githubTools.Client{
 		Token:      integrations.GitHub.Token,
@@ -212,11 +196,11 @@ func registerIntegrationTools(catalog *tool.Catalog, policy tool.SurfacePolicy, 
 		Owner:      integrations.GitHub.DefaultOwner,
 		Repo:       integrations.GitHub.DefaultRepo,
 	}
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, networkTool(githubTools.DispatchWorkflowTool{Client: githubClient}, "github"))
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, networkTool(githubTools.WorkflowRunsTool{Client: githubClient}, "github"))
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, networkTool(githubTools.PRDiffTool{Client: githubClient}, "github"))
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, networkTool(githubTools.PRFileDiffTool{Client: githubClient}, "github"))
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, networkTool(githubTools.JobLogsTool{Client: githubClient}, "github"))
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.DispatchWorkflowTool{Client: githubClient})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.WorkflowRunsTool{Client: githubClient})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.PRDiffTool{Client: githubClient})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.PRFileDiffTool{Client: githubClient})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.JobLogsTool{Client: githubClient})
 
 	luckinClient := &luckinTools.Client{
 		MCP: &mcp.Client{
@@ -226,11 +210,11 @@ func registerIntegrationTools(catalog *tool.Catalog, policy tool.SurfacePolicy, 
 		},
 	}
 	for _, item := range luckinTools.Tools(luckinClient) {
-		annotated := luckinTools.Annotate(item)
+		item = tool.BindSurface(item, policy.Surface, "luckin")
 		if integrations.Luckin.MCPToken != "" {
-			_ = catalog.RegisterVisible(policy, annotated)
+			_ = catalog.RegisterVisible(policy, item)
 		} else {
-			_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, annotated)
+			_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, item)
 		}
 	}
 }
@@ -247,8 +231,8 @@ func registerKnowledgeTools(catalog *tool.Catalog, policy tool.SurfacePolicy, cf
 		BraveAPIKey:    webSearch.BraveKey,
 		BraveBaseURL:   webSearch.BraveURL,
 	}
-	_ = catalog.RegisterVisible(policy, readTool(webSearchTools.SearchTool{Client: webClient}))
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, readTool(webSearchTools.ReadPageTool{Client: webClient}))
+	_ = catalog.RegisterVisible(policy, webSearchTools.SearchTool{Client: webClient})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, webSearchTools.ReadPageTool{Client: webClient})
 	_ = catalog.RegisterVisible(policy, knowledgeTools.RunbookSearchTool{})
 }
 

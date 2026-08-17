@@ -36,6 +36,7 @@ func (t JSONAnalyzeTool) Descriptor() tool.Descriptor {
 			},
 			"limit": map[string]any{"type": "integer", "description": ""},
 		}),
+		readNetwork()...,
 	)
 }
 

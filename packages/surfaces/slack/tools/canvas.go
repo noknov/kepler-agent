@@ -29,6 +29,7 @@ func (t CreateCanvasTool) Descriptor() tool.Descriptor {
 			"markdown":   map[string]any{"type": "string", "description": ""},
 			"channel_id": map[string]any{"type": "string", "description": ""},
 		}),
+		externalWrite()...,
 	)
 }
 

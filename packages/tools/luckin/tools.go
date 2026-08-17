@@ -32,7 +32,7 @@ func (t MCPTool) Descriptor() tool.Descriptor {
 	if t.SideEffect {
 		effects = []tool.Effect{tool.EffectExternalWrite, tool.EffectNetwork}
 	}
-	return tool.FunctionDescriptor(t.LocalName, t.Description, t.Parameters, tool.WithEffects(effects...), tool.WithDependencies("luckin"), tool.WithSurfaces("slack"))
+	return tool.FunctionDescriptor(t.LocalName, t.Description, t.Parameters, tool.WithEffects(effects...), tool.WithDependencies("luckin"))
 }
 
 func (t MCPTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
@@ -53,11 +53,6 @@ func (t MCPTool) Execute(ctx context.Context, call tool.Call) (tool.Result, erro
 // Tools returns the Luckin MCP tool inventory for catalog registration.
 func Tools(client *Client) []MCPTool {
 	return tools(client)
-}
-
-// Annotate applies hosted-catalog metadata for Luckin tools.
-func Annotate(item MCPTool) tool.Tool {
-	return item
 }
 
 func tools(client *Client) []MCPTool {

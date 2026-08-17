@@ -85,6 +85,7 @@ func (t DispatchWorkflowTool) Descriptor() tool.Descriptor {
 				"description":          "",
 			},
 		}),
+		tool.NetworkIntegration("github")...,
 	)
 }
 
@@ -137,6 +138,7 @@ func (t WorkflowRunsTool) Descriptor() tool.Descriptor {
 			"branch":     map[string]any{"type": "string", "description": ""},
 			"limit":      map[string]any{"type": "integer", "description": ""},
 		}),
+		tool.NetworkIntegration("github")...,
 	)
 }
 
@@ -360,6 +362,7 @@ func (t JobLogsTool) Descriptor() tool.Descriptor {
 			"start_line": map[string]any{"type": "integer", "description": ""},
 			"max_lines":  map[string]any{"type": "integer", "description": ""},
 		}),
+		tool.NetworkIntegration("github")...,
 	)
 }
 
@@ -659,6 +662,7 @@ func (t PRDiffTool) Descriptor() tool.Descriptor {
 			"url":        map[string]any{"type": "string", "description": "GitHub pull request URL. Prefer this when the user pasted a PR URL; repository and pr are extracted from it."},
 			"pr":         map[string]any{"type": "integer", "description": "Pull request number. Optional when url is provided."},
 		}),
+		tool.NetworkIntegration("github")...,
 	)
 }
 
@@ -901,7 +905,7 @@ type PRFileDiffTool struct {
 func (PRFileDiffTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor("github-pr_file_diff", "Read the diff for one changed file in the PR established by github-pr_diff, including line-numbered source context from the PR head when available. Use these PR-head line numbers for review citations instead of reading the local default branch.", tool.ObjectSchema([]string{"path"}, map[string]any{
 		"path": map[string]any{"type": "string", "description": "Repository-relative path from the changed-file manifest."},
-	}))
+	}), tool.NetworkIntegration("github")...)
 }
 
 func (t PRFileDiffTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
