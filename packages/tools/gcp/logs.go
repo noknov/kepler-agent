@@ -11,10 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/prompts"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type LogsTool struct {
@@ -27,17 +26,16 @@ type LogsTool struct {
 	Timeout          time.Duration
 }
 
-func (LogsTool) Parallel() bool { return true }
 
-func (t LogsTool) Spec() llm.ToolSpec {
+func (t LogsTool) Descriptor() tool.Descriptor {
 	dynamicHint := ""
 	if hint := t.defaultHint(); hint != "" {
 		dynamicHint = prompts.PromptText("gcp_defaults_hint_prefix", "") + hint + "."
 	}
-	return registry.FunctionSpec(
+	return tool.FunctionDescriptor(
 		"gcp-logs",
 		dynamicHint,
-		registry.ObjectSchema(nil, map[string]any{
+		tool.ObjectSchema(nil, map[string]any{
 			"filter":    map[string]any{"type": "string", "description": ""},
 			"severity":  map[string]any{"type": "string", "description": ""},
 			"namespace": map[string]any{"type": "string", "description": ""},
@@ -50,7 +48,7 @@ func (t LogsTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t LogsTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t LogsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Filter    string `json:"filter"`
 		Severity  string `json:"severity"`
@@ -61,15 +59,15 @@ func (t LogsTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.
 		Project   string `json:"project"`
 		Format    string `json:"format"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	project := args.Project
 	if project == "" {
 		project = t.DefaultProject
 	}
 	if project == "" {
-		return registry.Result{}, fmt.Errorf("GCP project is required; pass project in tool args or configure GCP_PROJECT as a default")
+		return tool.Result{}, fmt.Errorf("GCP project is required; pass project in tool args or configure GCP_PROJECT as a default")
 	}
 	if args.Freshness == "" {
 		args.Freshness = "30m"
@@ -81,7 +79,7 @@ func (t LogsTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.
 		args.Limit = 200
 	}
 	if args.Severity != "" && !validSeverity(args.Severity) {
-		return registry.Result{}, fmt.Errorf("invalid severity %q", args.Severity)
+		return tool.Result{}, fmt.Errorf("invalid severity %q", args.Severity)
 	}
 	filter := buildFilter(args.Filter, args.Severity, args.Namespace, args.Service)
 	format := args.Format
@@ -100,7 +98,7 @@ func (t LogsTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.
 		"--format", format,
 	}
 	if err := t.Guard.CheckArgv(append([]string{bin}, cmdArgs...)); err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	timeout := t.Timeout
 	if timeout <= 0 {
@@ -114,9 +112,9 @@ func (t LogsTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return registry.Result{}, fmt.Errorf("gcloud logging read failed: %s", strings.TrimSpace(stderr.String()))
+		return tool.Result{}, fmt.Errorf("gcloud logging read failed: %s", strings.TrimSpace(stderr.String()))
 	}
-	return registry.Result{Content: stdout.String()}, nil
+	return tool.TextResult(stdout.String()), nil
 }
 
 func buildFilter(raw, severity, namespace, service string) string {

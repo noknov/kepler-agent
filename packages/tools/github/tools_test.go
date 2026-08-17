@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 func TestDispatchWorkflowTool(t *testing.T) {
@@ -33,19 +33,19 @@ func TestDispatchWorkflowTool(t *testing.T) {
 
 	tool := DispatchWorkflowTool{Client: testClient("example", "deployments", transport)}
 
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{
 		"workflow":"deploy.yml",
 		"ref":"main",
 		"inputs":{"branch":"main","deploy":"true","count":"2"}
-	}`), registry.Runtime{})
+	}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	if gotBody.Ref != "main" || gotBody.Inputs["branch"] != "main" || gotBody.Inputs["deploy"] != "true" || gotBody.Inputs["count"] != "2" {
 		t.Fatalf("body = %#v", gotBody)
 	}
-	if !strings.Contains(result.Content, "deploy.yml") {
-		t.Fatalf("result = %q", result.Content)
+	if !strings.Contains(result.Text(), "deploy.yml") {
+		t.Fatalf("result = %q", result.Text())
 	}
 }
 
@@ -64,28 +64,28 @@ func TestPRDiffStoresReviewContextAndIndexesFiles(t *testing.T) {
 			return response(http.StatusOK, `{"title":"Review me","state":"open","commits":1,"head":{"ref":"feature/pr","sha":"0123456789abcdef"},"base":{"ref":"main"}}`), nil
 		}
 	})
-	rt := registry.Runtime{Cache: registry.NewRuntimeCache()}
+	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
 	tool := PRDiffTool{Client: testClient("example", "repo", transport)}
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"pr":42}`), rt)
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"pr":42}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(result.Content, "-old\n+new") || !strings.Contains(result.Content, "src/a.ts (hunks=1 +1/-1)") {
-		t.Fatalf("expected compact diff manifest, got %q", result.Content)
+	if strings.Contains(result.Text(), "-old\n+new") || !strings.Contains(result.Text(), "src/a.ts (hunks=1 +1/-1)") {
+		t.Fatalf("expected compact diff manifest, got %q", result.Text())
 	}
-	pr, ok := prDiffContextFromRuntime(rt)
+	pr, ok := prDiffContextFromRuntime(scope)
 	if !ok || pr.Repository != "example/repo" || pr.HeadSHA != "0123456789abcdef" || len(pr.ChangedFiles) != 2 {
 		t.Fatalf("PR context = %#v, ok=%v", pr, ok)
 	}
-	fileResult, err := (PRFileDiffTool{Client: testClient("example", "repo", transport)}).Execute(context.Background(), json.RawMessage(`{"path":"src/a.ts"}`), rt)
-	if err != nil || !strings.Contains(fileResult.Content, "-old\n+new") || strings.Contains(fileResult.Content, "src/b.ts") {
+	fileResult, err := (PRFileDiffTool{Client: testClient("example", "repo", transport)}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"path":"src/a.ts"}`), Scope: scope})
+	if err != nil || !strings.Contains(fileResult.Text(), "-old\n+new") || strings.Contains(fileResult.Text(), "src/b.ts") {
 		t.Fatalf("file diff = %#v, err=%v", fileResult, err)
 	}
-	if !strings.Contains(fileResult.Content, "PR-head source context") || !strings.Contains(fileResult.Content, "    1 | new") {
-		t.Fatalf("file diff missing PR-head line context:\n%s", fileResult.Content)
+	if !strings.Contains(fileResult.Text(), "PR-head source context") || !strings.Contains(fileResult.Text(), "    1 | new") {
+		t.Fatalf("file diff missing PR-head line context:\n%s", fileResult.Text())
 	}
-	invalidResult, err := (PRFileDiffTool{Client: testClient("example", "repo", transport)}).Execute(context.Background(), json.RawMessage(`{"path":"missing.go"}`), rt)
-	if err != nil || !strings.Contains(invalidResult.Content, "src/a.ts") || !strings.Contains(invalidResult.Content, "Choose one of the changed files") {
+	invalidResult, err := (PRFileDiffTool{Client: testClient("example", "repo", transport)}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"path":"missing.go"}`), Scope: scope})
+	if err != nil || !strings.Contains(invalidResult.Text(), "src/a.ts") || !strings.Contains(invalidResult.Text(), "Choose one of the changed files") {
 		t.Fatalf("invalid file guidance = %#v, err=%v", invalidResult, err)
 	}
 }
@@ -104,14 +104,14 @@ func TestPRDiffUsesPullURLInsteadOfDefaultRepository(t *testing.T) {
 			return response(http.StatusOK, `{"title":"Review me","state":"open","commits":1,"head":{"ref":"feature/pr","sha":"0123456789abcdef"},"base":{"ref":"main"}}`), nil
 		}
 	})
-	rt := registry.Runtime{Cache: registry.NewRuntimeCache()}
+	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
 	tool := PRDiffTool{Client: testClient("ClareAI", "devops-github-workflow", transport)}
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://github.com/ClareAI/wati-workflow-service/pull/63"}`), rt)
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"url":"https://github.com/ClareAI/wati-workflow-service/pull/63"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, "repository=ClareAI/wati-workflow-service") || !strings.Contains(result.Content, "pr=63") {
-		t.Fatalf("result = %q", result.Content)
+	if !strings.Contains(result.Text(), "repository=ClareAI/wati-workflow-service") || !strings.Contains(result.Text(), "pr=63") {
+		t.Fatalf("result = %q", result.Text())
 	}
 	if seenPaths["/repos/ClareAI/wati-workflow-service/pulls/63"] != 2 {
 		t.Fatalf("seen paths = %#v", seenPaths)
@@ -123,7 +123,7 @@ func TestPRDiffNotFoundMentionsResolvedPullTarget(t *testing.T) {
 		return response(http.StatusNotFound, `{"message":"Not Found"}`), nil
 	})
 	tool := PRDiffTool{Client: testClient("ClareAI", "devops-github-workflow", transport)}
-	_, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://github.com/ClareAl/wati-workflow-service/pull/63"}`), registry.Runtime{})
+	_, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"url":"https://github.com/ClareAl/wati-workflow-service/pull/63"}`), Scope: agenttool.Scope{}})
 	if err == nil {
 		t.Fatal("Execute() succeeded, want 404 error")
 	}
@@ -143,11 +143,11 @@ func TestDispatchWorkflowExecutesDirectly(t *testing.T) {
 	tool := DispatchWorkflowTool{Client: testClient("example", "deployments", transport)}
 	raw := json.RawMessage(`{"workflow":"deploy.yml","ref":"main"}`)
 
-	result, err := tool.Execute(context.Background(), raw, registry.Runtime{})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: raw, Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !called || !strings.Contains(result.Content, "deploy.yml") {
+	if !called || !strings.Contains(result.Text(), "deploy.yml") {
 		t.Fatalf("expected dispatch to execute directly, called=%v result=%#v", called, result)
 	}
 }
@@ -164,12 +164,12 @@ func TestWorkflowRunsTool(t *testing.T) {
 	})
 
 	tool := WorkflowRunsTool{Client: testClient("example", "deployments", transport)}
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"workflow":"all.yml","branch":"main","limit":2}`), registry.Runtime{})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"workflow":"all.yml","branch":"main","limit":2}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !strings.Contains(result.Content, "#123 deploy") || !strings.Contains(result.Content, "conclusion=success") {
-		t.Fatalf("result = %q", result.Content)
+	if !strings.Contains(result.Text(), "#123 deploy") || !strings.Contains(result.Text(), "conclusion=success") {
+		t.Fatalf("result = %q", result.Text())
 	}
 }
 
@@ -195,19 +195,18 @@ func TestJobLogsTool_ListsAndFetchesFailedJobs(t *testing.T) {
 
 	tool := JobLogsTool{Client: testClient("example", "myrepo", transport)}
 
-	result, err := tool.Execute(context.Background(),
-		json.RawMessage(`{"run_id":999}`), registry.Runtime{})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"run_id":999}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !strings.Contains(result.Content, "1 failed") {
-		t.Fatalf("expected failure count, got: %s", result.Content)
+	if !strings.Contains(result.Text(), "1 failed") {
+		t.Fatalf("expected failure count, got: %s", result.Text())
 	}
-	if !strings.Contains(result.Content, "FAIL TestSomething") {
-		t.Fatalf("expected log content, got: %s", result.Content)
+	if !strings.Contains(result.Text(), "FAIL TestSomething") {
+		t.Fatalf("expected log content, got: %s", result.Text())
 	}
-	if !strings.Contains(result.Content, "test (id=200)") {
-		t.Fatalf("expected job name in output, got: %s", result.Content)
+	if !strings.Contains(result.Text(), "test (id=200)") {
+		t.Fatalf("expected job name in output, got: %s", result.Text())
 	}
 	if calls["/repos/example/myrepo/actions/jobs/100/logs"] != 0 {
 		t.Fatal("should not fetch logs for successful job")
@@ -224,13 +223,12 @@ func TestJobLogsTool_DirectJobID(t *testing.T) {
 
 	tool := JobLogsTool{Client: testClient("example", "myrepo", transport)}
 
-	result, err := tool.Execute(context.Background(),
-		json.RawMessage(`{"run_id":999,"job_id":42}`), registry.Runtime{})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"run_id":999,"job_id":42}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !strings.Contains(result.Content, "build failed") {
-		t.Fatalf("expected log content, got: %s", result.Content)
+	if !strings.Contains(result.Text(), "build failed") {
+		t.Fatalf("expected log content, got: %s", result.Text())
 	}
 }
 
@@ -243,13 +241,12 @@ func TestJobLogsTool_ExtractsDirectJobFromURL(t *testing.T) {
 	})
 
 	tool := JobLogsTool{Client: testClient("", "", transport)}
-	result, err := tool.Execute(context.Background(),
-		json.RawMessage(`{"url":"https://github.com/ClareAI/whatsapp_inbox/actions/runs/28497898370/job/84468047388?pr=15027"}`), registry.Runtime{})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"url":"https://github.com/ClareAI/whatsapp_inbox/actions/runs/28497898370/job/84468047388?pr=15027"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !strings.Contains(result.Content, "outcome.IsSuccess") {
-		t.Fatalf("expected direct job log content, got: %s", result.Content)
+	if !strings.Contains(result.Text(), "outcome.IsSuccess") {
+		t.Fatalf("expected direct job log content, got: %s", result.Text())
 	}
 }
 
@@ -269,13 +266,12 @@ func TestJobLogsTool_StringRunID(t *testing.T) {
 
 	tool := JobLogsTool{Client: testClient("example", "myrepo", transport)}
 
-	result, err := tool.Execute(context.Background(),
-		json.RawMessage(`{"run_id":"28497898370"}`), registry.Runtime{})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"run_id":"28497898370"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !strings.Contains(result.Content, "FAIL test") {
-		t.Fatalf("expected log content, got: %s", result.Content)
+	if !strings.Contains(result.Text(), "FAIL test") {
+		t.Fatalf("expected log content, got: %s", result.Text())
 	}
 }
 
@@ -303,13 +299,12 @@ func TestJobLogsTool_PaginatesRunJobs(t *testing.T) {
 	})
 
 	tool := JobLogsTool{Client: testClient("example", "myrepo", transport)}
-	result, err := tool.Execute(context.Background(),
-		json.RawMessage(`{"run_id":999}`), registry.Runtime{})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"run_id":999}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !strings.Contains(result.Content, "late-test") || !strings.Contains(result.Content, "page two failure log") {
-		t.Fatalf("expected failed job from page two, got: %s", result.Content)
+	if !strings.Contains(result.Text(), "late-test") || !strings.Contains(result.Text(), "page two failure log") {
+		t.Fatalf("expected failed job from page two, got: %s", result.Text())
 	}
 }
 
@@ -391,25 +386,23 @@ func TestJobLogsTool_Pagination(t *testing.T) {
 	tool := JobLogsTool{Client: testClient("example", "myrepo", transport)}
 
 	// First call: default tail
-	result, err := tool.Execute(context.Background(),
-		json.RawMessage(`{"run_id":999,"job_id":42}`), registry.Runtime{})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"run_id":999,"job_id":42}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !strings.Contains(result.Content, "lines 101-300 of 300 total") {
-		t.Fatalf("expected tail pagination, got: %s", result.Content[:80])
+	if !strings.Contains(result.Text(), "lines 101-300 of 300 total") {
+		t.Fatalf("expected tail pagination, got: %s", result.Text()[:80])
 	}
 
 	// Second call: request beginning
-	result, err = tool.Execute(context.Background(),
-		json.RawMessage(`{"run_id":999,"job_id":42,"start_line":1,"max_lines":100}`), registry.Runtime{})
+	result, err = tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"run_id":999,"job_id":42,"start_line":1,"max_lines":100}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !strings.Contains(result.Content, "lines 1-100 of 300 total") {
-		t.Fatalf("expected head pagination, got: %s", result.Content[:80])
+	if !strings.Contains(result.Text(), "lines 1-100 of 300 total") {
+		t.Fatalf("expected head pagination, got: %s", result.Text()[:80])
 	}
-	if !strings.Contains(result.Content, "log line 1") {
+	if !strings.Contains(result.Text(), "log line 1") {
 		t.Fatal("should contain first line")
 	}
 }

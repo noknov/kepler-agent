@@ -147,6 +147,10 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 		}
 	}()
 	call := entry.call
+	if err := r.checkCircuit(ctx, call); err != nil {
+		entry.result = &tool.Result{Content: []model.Content{{Type: model.ContentText, Text: err.Error()}}, IsError: true, ErrorCode: "circuit_breaker"}
+		return
+	}
 	if _, err := r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.ToolCallStarted, ToolCall: &call}); err != nil {
 		entry.result = &tool.Result{Content: []model.Content{{Type: model.ContentText, Text: err.Error()}}, IsError: true, ErrorCode: "transcript_error"}
 		return
@@ -188,6 +192,7 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 	result.Metadata["duration_ms"] = time.Since(started).Milliseconds()
 	span.SetAttributes(attribute.Int64("agent.tool.duration_ms", time.Since(started).Milliseconds()), attribute.Bool("agent.tool.error", result.IsError))
 	result = limitToolResult(ctx, result, call, r.config.ToolResults, r.deps.Artifacts)
+	r.recordCircuit(call, result.IsError || err != nil)
 	entry.result = &result
 }
 

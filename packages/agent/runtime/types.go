@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/noknov/slack-copilot-agent/packages/agent/environment"
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	"github.com/noknov/slack-copilot-agent/packages/agent/prompt"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
@@ -37,6 +38,7 @@ type Config struct {
 	RetryBaseDelay  time.Duration
 	Context         ContextConfig
 	ToolResults     ToolResultConfig
+	CircuitBreaker  CircuitBreakerConfig
 }
 
 func (c Config) withDefaults() Config {
@@ -65,18 +67,19 @@ func (c Config) withDefaults() Config {
 }
 
 type Dependencies struct {
-	Model      model.Client
-	Tools      *tool.Catalog
-	Policy     tool.Policy
-	Approver   tool.Approver
-	Transcript transcript.Store
-	Events     transcript.Sink
-	Projector  Projector
-	Compactor  Compactor
-	Artifacts  ArtifactStore
-	IDs        IDGenerator
-	Clock      func() time.Time
-	Sleep      func(context.Context, time.Duration) error
+	Model       model.Client
+	Tools       *tool.Catalog
+	Policy      tool.Policy
+	Approver    tool.Approver
+	Transcript  transcript.Store
+	Events      transcript.Sink
+	Projector   Projector
+	Compactor   Compactor
+	Environment environment.Config
+	Artifacts   ArtifactStore
+	IDs         IDGenerator
+	Clock       func() time.Time
+	Sleep       func(context.Context, time.Duration) error
 }
 
 type Runtime struct {

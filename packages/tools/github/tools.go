@@ -15,9 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/prompts"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 const (
@@ -71,13 +70,12 @@ type DispatchWorkflowTool struct {
 	Client Client
 }
 
-func (DispatchWorkflowTool) IsWrite() bool { return true }
 
-func (t DispatchWorkflowTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t DispatchWorkflowTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"github-dispatch_workflow",
 		"",
-		registry.ObjectSchema([]string{"workflow", "ref"}, map[string]any{
+		tool.ObjectSchema([]string{"workflow", "ref"}, map[string]any{
 			"repository": map[string]any{"type": "string", "description": ""},
 			"workflow":   map[string]any{"type": "string", "description": ""},
 			"ref":        map[string]any{"type": "string", "description": ""},
@@ -90,9 +88,9 @@ func (t DispatchWorkflowTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t DispatchWorkflowTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t DispatchWorkflowTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	if !t.Client.enabled() {
-		return registry.Result{}, fmt.Errorf("GitHub is not configured: GITHUB_TOKEN is required")
+		return tool.Result{}, fmt.Errorf("GitHub is not configured: GITHUB_TOKEN is required")
 	}
 	var args struct {
 		Repository string            `json:"repository"`
@@ -100,41 +98,40 @@ func (t DispatchWorkflowTool) Execute(ctx context.Context, raw json.RawMessage, 
 		Ref        string            `json:"ref"`
 		Inputs     map[string]string `json:"inputs"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	repository := strings.TrimSpace(args.Repository)
 	if repository == "" {
 		repository = t.Client.defaultRepository()
 	}
 	if repository == "" {
-		return registry.Result{}, fmt.Errorf("repository is required unless GITHUB_DEFAULT_OWNER and GITHUB_DEFAULT_REPO are configured")
+		return tool.Result{}, fmt.Errorf("repository is required unless GITHUB_DEFAULT_OWNER and GITHUB_DEFAULT_REPO are configured")
 	}
 	workflow := resolveWorkflow(args.Workflow)
 	if workflow == "" {
-		return registry.Result{}, fmt.Errorf("workflow is required; use inbox or all-services when appropriate")
+		return tool.Result{}, fmt.Errorf("workflow is required; use inbox or all-services when appropriate")
 	}
 	ref := strings.TrimSpace(args.Ref)
 	if ref == "" {
-		return registry.Result{}, fmt.Errorf("ref is required")
+		return tool.Result{}, fmt.Errorf("ref is required")
 	}
 	if err := t.Client.dispatch(ctx, repository, workflow, ref, args.Inputs); err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	return registry.Result{Content: fmt.Sprintf("dispatched GitHub workflow repository=%s workflow=%s ref=%s inputs=%s", repository, workflow, ref, formatInputs(args.Inputs))}, nil
+	return tool.TextResult(fmt.Sprintf("dispatched GitHub workflow repository=%s workflow=%s ref=%s inputs=%s", repository, workflow, ref, formatInputs(args.Inputs))), nil
 }
 
 type WorkflowRunsTool struct {
 	Client Client
 }
 
-func (WorkflowRunsTool) Parallel() bool { return true }
 
-func (t WorkflowRunsTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t WorkflowRunsTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"github-workflow_runs",
 		"",
-		registry.ObjectSchema([]string{"workflow"}, map[string]any{
+		tool.ObjectSchema([]string{"workflow"}, map[string]any{
 			"repository": map[string]any{"type": "string", "description": ""},
 			"workflow":   map[string]any{"type": "string", "description": ""},
 			"branch":     map[string]any{"type": "string", "description": ""},
@@ -143,9 +140,9 @@ func (t WorkflowRunsTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t WorkflowRunsTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t WorkflowRunsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	if !t.Client.enabled() {
-		return registry.Result{}, fmt.Errorf("GitHub is not configured: GITHUB_TOKEN is required")
+		return tool.Result{}, fmt.Errorf("GitHub is not configured: GITHUB_TOKEN is required")
 	}
 	var args struct {
 		Repository string `json:"repository"`
@@ -153,19 +150,19 @@ func (t WorkflowRunsTool) Execute(ctx context.Context, raw json.RawMessage, _ re
 		Branch     string `json:"branch"`
 		Limit      int    `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	repository := strings.TrimSpace(args.Repository)
 	if repository == "" {
 		repository = t.Client.defaultRepository()
 	}
 	if repository == "" {
-		return registry.Result{}, fmt.Errorf("repository is required unless GITHUB_DEFAULT_OWNER and GITHUB_DEFAULT_REPO are configured")
+		return tool.Result{}, fmt.Errorf("repository is required unless GITHUB_DEFAULT_OWNER and GITHUB_DEFAULT_REPO are configured")
 	}
 	workflow := resolveWorkflow(args.Workflow)
 	if workflow == "" {
-		return registry.Result{}, fmt.Errorf("workflow is required; use inbox or all-services when appropriate")
+		return tool.Result{}, fmt.Errorf("workflow is required; use inbox or all-services when appropriate")
 	}
 	if args.Limit <= 0 {
 		args.Limit = 5
@@ -175,9 +172,9 @@ func (t WorkflowRunsTool) Execute(ctx context.Context, raw json.RawMessage, _ re
 	}
 	runs, err := t.Client.workflowRuns(ctx, repository, workflow, strings.TrimSpace(args.Branch), args.Limit)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	return registry.Result{Content: summarizeRuns(runs)}, nil
+	return tool.TextResult(summarizeRuns(runs)), nil
 }
 
 func (c Client) dispatch(ctx context.Context, repository, workflow, ref string, inputs map[string]string) error {
@@ -350,13 +347,12 @@ const (
 	maxLogPageLines     = 500
 )
 
-func (JobLogsTool) Parallel() bool { return true }
 
-func (t JobLogsTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t JobLogsTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"github-job_logs",
 		"",
-		registry.ObjectSchema(nil, map[string]any{
+		tool.ObjectSchema(nil, map[string]any{
 			"repository": map[string]any{"type": "string", "description": ""},
 			"url":        map[string]any{"type": "string", "description": "Optional GitHub Actions run or job URL. When provided, repository, run_id, and job_id are extracted from it."},
 			"run_id":     map[string]any{"type": "integer", "description": ""},
@@ -367,9 +363,9 @@ func (t JobLogsTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t JobLogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t JobLogsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	if !t.Client.enabled() {
-		return registry.Result{}, fmt.Errorf("GitHub is not configured: GITHUB_TOKEN is required")
+		return tool.Result{}, fmt.Errorf("GitHub is not configured: GITHUB_TOKEN is required")
 	}
 	var args struct {
 		Repository string      `json:"repository"`
@@ -379,8 +375,8 @@ func (t JobLogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 		StartLine  json.Number `json:"start_line"`
 		MaxLines   json.Number `json:"max_lines"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	if parsed, err := parseActionsURL(args.URL); err == nil {
 		if args.Repository == "" {
@@ -393,19 +389,19 @@ func (t JobLogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 			args.JobID = json.Number(fmt.Sprintf("%d", parsed.jobID))
 		}
 	} else if strings.TrimSpace(args.URL) != "" {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	repository := strings.TrimSpace(args.Repository)
 	if repository == "" {
 		repository = t.Client.defaultRepository()
 	}
 	if repository == "" {
-		return registry.Result{}, fmt.Errorf("repository is required")
+		return tool.Result{}, fmt.Errorf("repository is required")
 	}
 	runID, _ := args.RunID.Int64()
 	jobID, _ := args.JobID.Int64()
 	if runID <= 0 {
-		return registry.Result{}, fmt.Errorf("run_id is required")
+		return tool.Result{}, fmt.Errorf("run_id is required")
 	}
 	startLine, _ := args.StartLine.Int64()
 	maxLines, _ := args.MaxLines.Int64()
@@ -418,25 +414,25 @@ func (t JobLogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 
 	owner, repo, err := splitRepository(repository)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 
 	// If a specific job_id is provided, fetch and paginate its log.
 	if jobID > 0 {
 		content, err := t.Client.fetchJobLog(ctx, owner, repo, jobID)
 		if err != nil {
-			return registry.Result{}, fmt.Errorf("fetch job log: %w", err)
+			return tool.Result{}, fmt.Errorf("fetch job log: %w", err)
 		}
-		return registry.Result{Content: paginateLog(content, int(startLine), int(maxLines))}, nil
+		return tool.TextResult(paginateLog(content, int(startLine), int(maxLines))), nil
 	}
 
 	// Otherwise list jobs for the run.
 	jobs, err := t.Client.listRunJobs(ctx, owner, repo, runID)
 	if err != nil {
-		return registry.Result{}, fmt.Errorf("list run jobs: %w", err)
+		return tool.Result{}, fmt.Errorf("list run jobs: %w", err)
 	}
 	if len(jobs) == 0 {
-		return registry.Result{Content: "no jobs found for this run"}, nil
+		return tool.TextResult("no jobs found for this run"), nil
 	}
 
 	var failed []runJob
@@ -479,7 +475,7 @@ func (t JobLogsTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 		fmt.Fprintf(&out, "\n--- %s (id=%d) ---\n%s\n", j.Name, j.ID, paginateLog(content, int(startLine), int(maxLines)))
 	}
 
-	return registry.Result{Content: out.String()}, nil
+	return tool.TextResult(out.String()), nil
 }
 
 // paginateLog slices a log string into a page of lines.
@@ -653,13 +649,12 @@ type PRDiffTool struct {
 	Client Client
 }
 
-func (PRDiffTool) Parallel() bool { return true }
 
-func (t PRDiffTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t PRDiffTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"github-pr_diff",
 		"Read a compact pull-request review manifest. Use github-pr_file_diff for a targeted file diff instead of paging a whole PR diff.",
-		registry.ObjectSchema(nil, map[string]any{
+		tool.ObjectSchema(nil, map[string]any{
 			"repository": map[string]any{"type": "string", "description": "GitHub repository in owner/repo form. Optional when url is provided or defaults are configured."},
 			"url":        map[string]any{"type": "string", "description": "GitHub pull request URL. Prefer this when the user pasted a PR URL; repository and pr are extracted from it."},
 			"pr":         map[string]any{"type": "integer", "description": "Pull request number. Optional when url is provided."},
@@ -667,17 +662,17 @@ func (t PRDiffTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t PRDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t PRDiffTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	if !t.Client.enabled() {
-		return registry.Result{}, fmt.Errorf("GitHub is not configured: GITHUB_TOKEN is required")
+		return tool.Result{}, fmt.Errorf("GitHub is not configured: GITHUB_TOKEN is required")
 	}
 	var args struct {
 		Repository string      `json:"repository"`
 		URL        string      `json:"url"`
 		PR         json.Number `json:"pr"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	if parsed, err := parsePullURL(args.URL); err == nil {
 		if args.Repository == "" {
@@ -687,30 +682,30 @@ func (t PRDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 			args.PR = json.Number(fmt.Sprintf("%d", parsed.number))
 		}
 	} else if strings.TrimSpace(args.URL) != "" {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	repository := strings.TrimSpace(args.Repository)
 	if repository == "" {
 		repository = t.Client.defaultRepository()
 	}
 	if repository == "" {
-		return registry.Result{}, fmt.Errorf("repository is required")
+		return tool.Result{}, fmt.Errorf("repository is required")
 	}
 	prNumber, _ := args.PR.Int64()
 	if prNumber <= 0 {
-		return registry.Result{}, fmt.Errorf("pr number is required")
+		return tool.Result{}, fmt.Errorf("pr number is required")
 	}
 
 	owner, repo, err := splitRepository(repository)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 
 	// Fetch PR metadata
 	metaURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", t.Client.baseURL(), owner, repo, prNumber)
 	metaData, err := t.Client.do(ctx, http.MethodGet, metaURL, nil)
 	if err != nil {
-		return registry.Result{}, fmt.Errorf("fetch PR metadata for %s#%d: %w", repository, prNumber, err)
+		return tool.Result{}, fmt.Errorf("fetch PR metadata for %s#%d: %w", repository, prNumber, err)
 	}
 	var prMeta struct {
 		Title   string `json:"title"`
@@ -727,35 +722,35 @@ func (t PRDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 		} `json:"base"`
 	}
 	if err := json.Unmarshal(metaData, &prMeta); err != nil {
-		return registry.Result{}, fmt.Errorf("parse PR metadata: %w", err)
+		return tool.Result{}, fmt.Errorf("parse PR metadata: %w", err)
 	}
 
 	// Fetch diff
 	diffURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", t.Client.baseURL(), owner, repo, prNumber)
 	diffReq, err := http.NewRequestWithContext(ctx, http.MethodGet, diffURL, nil)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	diffReq.Header.Set("Authorization", "Bearer "+t.Client.Token)
 	diffReq.Header.Set("Accept", "application/vnd.github.diff")
 	diffReq.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	diffResp, err := t.Client.httpClient().Do(diffReq)
 	if err != nil {
-		return registry.Result{}, fmt.Errorf("fetch PR diff: %w", err)
+		return tool.Result{}, fmt.Errorf("fetch PR diff: %w", err)
 	}
 	defer diffResp.Body.Close()
 	diffBody, err := io.ReadAll(io.LimitReader(diffResp.Body, 2<<20)) // 2MB max from API
 	if err != nil {
-		return registry.Result{}, fmt.Errorf("read PR diff: %w", err)
+		return tool.Result{}, fmt.Errorf("read PR diff: %w", err)
 	}
 	if diffResp.StatusCode >= 300 {
-		return registry.Result{}, fmt.Errorf("github diff status %d for %s#%d: %s", diffResp.StatusCode, repository, prNumber, string(diffBody))
+		return tool.Result{}, fmt.Errorf("github diff status %d for %s#%d: %s", diffResp.StatusCode, repository, prNumber, string(diffBody))
 	}
 
 	diff := string(diffBody)
 
 	files := diffFileIndex(diff)
-	setPRDiffContext(rt, prDiffContext{
+	setPRDiffContext(call.Scope, prDiffContext{
 		Repository: repository,
 		Number:     int(prNumber),
 		HeadRef:    prMeta.Head.Ref,
@@ -791,7 +786,7 @@ func (t PRDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 	}
 	fmt.Fprint(&out, "\nUse github-pr_file_diff with one changed path for a focused patch and PR-head line-numbered source context. Do not cite local main/default-branch line numbers for PR-head code.\n")
 
-	return registry.Result{Content: out.String()}, nil
+	return tool.TextResult(out.String()), nil
 }
 
 type pullURLParts struct {
@@ -834,22 +829,22 @@ type prDiffContext struct {
 
 const prDiffContextCacheKey = "github-pr-diff-context"
 
-func setPRDiffContext(rt registry.Runtime, ctx prDiffContext) {
-	if rt.Cache == nil {
+func setPRDiffContext(scope tool.Scope, ctx prDiffContext) {
+	if tool.CacheFor(scope) == nil {
 		return
 	}
 	ctx.Repository = strings.TrimSpace(ctx.Repository)
 	ctx.HeadRef = strings.TrimSpace(ctx.HeadRef)
 	ctx.HeadSHA = strings.TrimSpace(ctx.HeadSHA)
 	ctx.BaseRef = strings.TrimSpace(ctx.BaseRef)
-	rt.Cache.Set(prDiffContextCacheKey, ctx)
+	tool.CacheFor(scope).Set(prDiffContextCacheKey, ctx)
 }
 
-func prDiffContextFromRuntime(rt registry.Runtime) (prDiffContext, bool) {
-	if rt.Cache == nil {
+func prDiffContextFromRuntime(scope tool.Scope) (prDiffContext, bool) {
+	if tool.CacheFor(scope) == nil {
 		return prDiffContext{}, false
 	}
-	v, ok := rt.Cache.Get(prDiffContextCacheKey)
+	v, ok := tool.CacheFor(scope).Get(prDiffContextCacheKey)
 	if !ok {
 		return prDiffContext{}, false
 	}
@@ -902,24 +897,23 @@ type PRFileDiffTool struct {
 	Client Client
 }
 
-func (PRFileDiffTool) Parallel() bool { return true }
 
-func (PRFileDiffTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec("github-pr_file_diff", "Read the diff for one changed file in the PR established by github-pr_diff, including line-numbered source context from the PR head when available. Use these PR-head line numbers for review citations instead of reading the local default branch.", registry.ObjectSchema([]string{"path"}, map[string]any{
+func (PRFileDiffTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor("github-pr_file_diff", "Read the diff for one changed file in the PR established by github-pr_diff, including line-numbered source context from the PR head when available. Use these PR-head line numbers for review citations instead of reading the local default branch.", tool.ObjectSchema([]string{"path"}, map[string]any{
 		"path": map[string]any{"type": "string", "description": "Repository-relative path from the changed-file manifest."},
 	}))
 }
 
-func (t PRFileDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t PRFileDiffTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Path string `json:"path"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
-	pr, ok := prDiffContextFromRuntime(rt)
+	pr, ok := prDiffContextFromRuntime(call.Scope)
 	if !ok {
-		return registry.Result{}, fmt.Errorf("no PR review context; call github-pr_diff first")
+		return tool.Result{}, fmt.Errorf("no PR review context; call github-pr_diff first")
 	}
 	path := strings.Trim(strings.TrimSpace(args.Path), "/")
 	if !pr.containsPath(path) {
@@ -928,12 +922,12 @@ func (t PRFileDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt reg
 		for _, changed := range pr.ChangedFiles {
 			fmt.Fprintf(&out, "- %s\n", changed)
 		}
-		return registry.Result{Content: strings.TrimSpace(out.String())}, nil
+		return tool.TextResult(strings.TrimSpace(out.String())), nil
 	}
 	needle := "diff --git a/" + path + " b/" + path
 	start := strings.Index(pr.Diff, needle)
 	if start < 0 {
-		return registry.Result{}, fmt.Errorf("diff for %q is unavailable", path)
+		return tool.Result{}, fmt.Errorf("diff for %q is unavailable", path)
 	}
 	rest := pr.Diff[start+len(needle):]
 	if next := strings.Index(rest, "\ndiff --git a/"); next >= 0 {
@@ -948,7 +942,7 @@ func (t PRFileDiffTool) Execute(ctx context.Context, raw json.RawMessage, rt reg
 			fmt.Fprintf(&out, "\n\nPR-head source context for %s at %s. Cite these line numbers for PR-head code:\n%s", path, pr.HeadSHA, contextText)
 		}
 	}
-	return registry.Result{Content: out.String()}, nil
+	return tool.TextResult(out.String()), nil
 }
 
 func (t PRFileDiffTool) prHeadFileSource(ctx context.Context, pr prDiffContext, path string) (string, error) {

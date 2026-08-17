@@ -4,8 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 // EventsTool runs `kubectl get events` sorted by last-seen timestamp.
@@ -15,13 +14,12 @@ type EventsTool struct {
 	Base Base
 }
 
-func (EventsTool) Parallel() bool { return true }
 
-func (t EventsTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t EventsTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"k8s-events",
 		"",
-		registry.ObjectSchema(nil, map[string]any{
+		tool.ObjectSchema(nil, map[string]any{
 			"namespace":      map[string]any{"type": "string", "description": ""},
 			"all_namespaces": map[string]any{"type": "boolean", "description": ""},
 			"for_object":     map[string]any{"type": "string", "description": ""},
@@ -32,7 +30,7 @@ func (t EventsTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t EventsTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t EventsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Namespace     string `json:"namespace"`
 		AllNamespaces bool   `json:"all_namespaces"`
@@ -41,8 +39,8 @@ func (t EventsTool) Execute(ctx context.Context, raw json.RawMessage, _ registry
 		Type          string `json:"type"`
 		Context       string `json:"context"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 
 	cmdArgs := []string{"get", "events", "--sort-by=.lastTimestamp"}
@@ -69,9 +67,9 @@ func (t EventsTool) Execute(ctx context.Context, raw json.RawMessage, _ registry
 
 	out, err := t.Base.run(ctx, args.Context, cmdArgs)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	return registry.Result{Content: out}, nil
+	return tool.TextResult(out), nil
 }
 
 func joinComma(ss []string) string {

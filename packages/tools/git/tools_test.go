@@ -13,7 +13,7 @@ import (
 
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/gitcache"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 func TestFetchRefReturnsImmutableCommitRef(t *testing.T) {
@@ -24,11 +24,11 @@ func TestFetchRefReturnsImmutableCommitRef(t *testing.T) {
 		Guard:   safety.NewCommandPolicy(),
 		Timeout: 10 * time.Second,
 	}}
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main"}`), registry.Runtime{})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	content := result.Content
+	content := result.Text()
 	if !strings.Contains(content, "repo=work") {
 		t.Fatalf("content = %q, want repo label", content)
 	}
@@ -57,12 +57,12 @@ func TestFetchRefUsesExplicitBranch(t *testing.T) {
 		Guard:   safety.NewCommandPolicy(),
 		Timeout: 10 * time.Second,
 	}}
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"mt-main"}`), registry.Runtime{})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"mt-main"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, "branch=mt-main") || !strings.Contains(result.Content, "branch_ref=origin/mt-main") {
-		t.Fatalf("content = %q, want explicit branch mt-main", result.Content)
+	if !strings.Contains(result.Text(), "branch=mt-main") || !strings.Contains(result.Text(), "branch_ref=origin/mt-main") {
+		t.Fatalf("content = %q, want explicit branch mt-main", result.Text())
 	}
 }
 
@@ -73,21 +73,21 @@ func TestFetchRefFailsWhenOriginBecomesUnavailable(t *testing.T) {
 		Guard:   safety.NewCommandPolicy(),
 		Timeout: 10 * time.Second,
 	}
-	rt := registry.Runtime{Cache: registry.NewRuntimeCache()}
+	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
 	tool := FetchRefTool{Base: base}
 
-	first, err := tool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main"}`), rt)
+	first, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(first.Content, "branch=main") {
-		t.Fatalf("first content = %q, want branch snapshot", first.Content)
+	if !strings.Contains(first.Text(), "branch=main") {
+		t.Fatalf("first content = %q, want branch snapshot", first.Text())
 	}
 	if err := os.Rename(filepath.Join(root, "origin.git"), filepath.Join(root, "origin.git.offline")); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = tool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main"}`), rt)
+	_, err = tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main"}`), Scope: scope})
 	if err == nil {
 		t.Fatal("second fetch should fail when origin is unavailable")
 	}
@@ -100,17 +100,17 @@ func TestGitLogRefreshesExplicitBranchWithinFetchTTL(t *testing.T) {
 		Guard:   safety.NewCommandPolicy(),
 		Timeout: 10 * time.Second,
 	}
-	rt := registry.Runtime{Cache: registry.NewRuntimeCache()}
+	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
 	tool := LogTool{Base: base}
-	first, err := tool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","limit":1}`), rt)
+	first, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","limit":1}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(first.Content, "init") {
-		t.Fatalf("first content = %q, want initial commit", first.Content)
+	if !strings.Contains(first.Text(), "init") {
+		t.Fatalf("first content = %q, want initial commit", first.Text())
 	}
-	if !strings.Contains(first.Content, "test@example.com") || !strings.Contains(first.Content, "test\t") {
-		t.Fatalf("first content = %q, want author identity", first.Content)
+	if !strings.Contains(first.Text(), "test@example.com") || !strings.Contains(first.Text(), "test\t") {
+		t.Fatalf("first content = %q, want author identity", first.Text())
 	}
 
 	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("hello\nfresh branch tip\n"), 0o600); err != nil {
@@ -120,15 +120,15 @@ func TestGitLogRefreshesExplicitBranchWithinFetchTTL(t *testing.T) {
 	runGit(t, work, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "fresh tip")
 	runGit(t, work, "push", "origin", "main")
 
-	second, err := tool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","limit":1}`), rt)
+	second, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","limit":1}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(second.Content, "fresh tip") {
-		t.Fatalf("second content = %q, want fresh remote branch tip despite fetch TTL", second.Content)
+	if !strings.Contains(second.Text(), "fresh tip") {
+		t.Fatalf("second content = %q, want fresh remote branch tip despite fetch TTL", second.Text())
 	}
-	if !strings.Contains(second.Content, "fetch_status=origin_refs_refreshed") {
-		t.Fatalf("second content = %q, want explicit refresh status", second.Content)
+	if !strings.Contains(second.Text(), "fetch_status=origin_refs_refreshed") {
+		t.Fatalf("second content = %q, want explicit refresh status", second.Text())
 	}
 }
 
@@ -139,17 +139,17 @@ func TestRefToolsRequireExplicitRepo(t *testing.T) {
 		Guard:   safety.NewCommandPolicy(),
 		Timeout: 10 * time.Second,
 	}
-	fetchResult, err := (FetchRefTool{Base: base}).Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main"}`), registry.Runtime{})
+	fetchResult, err := (FetchRefTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref := regexp.MustCompile(`(?m)^ref=([0-9a-f]{40})$`).FindStringSubmatch(fetchResult.Content)[1]
+	ref := regexp.MustCompile(`(?m)^ref=([0-9a-f]{40})$`).FindStringSubmatch(fetchResult.Text())[1]
 
-	_, err = (ReadFileRefTool{Base: base}).Execute(context.Background(), json.RawMessage(`{"ref":"`+ref+`","path":"README.md"}`), registry.Runtime{})
+	_, err = (ReadFileRefTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"ref":"`+ref+`","path":"README.md"}`), Scope: agenttool.Scope{}})
 	if err == nil || !strings.Contains(err.Error(), "repo is required") {
 		t.Fatalf("ReadFileRefTool error = %v, want repo required", err)
 	}
-	_, err = (SearchRefTool{Base: base}).Execute(context.Background(), json.RawMessage(`{"ref":"`+ref+`","query":"hello"}`), registry.Runtime{})
+	_, err = (SearchRefTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"ref":"`+ref+`","query":"hello"}`), Scope: agenttool.Scope{}})
 	if err == nil || !strings.Contains(err.Error(), "repo is required") {
 		t.Fatalf("SearchRefTool error = %v, want repo required", err)
 	}
@@ -166,28 +166,28 @@ func TestRepoToolsReadFetchedSnapshotNotWorkingTree(t *testing.T) {
 		Timeout: 10 * time.Second,
 	}
 	searchTool := RepoSearchTool{Base: base}
-	searchResult, err := searchTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","query":"hello"}`), registry.Runtime{})
+	searchResult, err := searchTool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","query":"hello"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(searchResult.Content, "README.md:1:hello") {
-		t.Fatalf("search content = %q, want remote snapshot match", searchResult.Content)
+	if !strings.Contains(searchResult.Text(), "README.md:1:hello") {
+		t.Fatalf("search content = %q, want remote snapshot match", searchResult.Text())
 	}
-	noMatch, err := searchTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","query":"local only"}`), registry.Runtime{})
+	noMatch, err := searchTool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","query":"local only"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(noMatch.Content, "no matches") {
-		t.Fatalf("search content = %q, want no local working tree match", noMatch.Content)
+	if !strings.Contains(noMatch.Text(), "no matches") {
+		t.Fatalf("search content = %q, want no local working tree match", noMatch.Text())
 	}
 
 	readTool := RepoReadFileTool{Base: base}
-	readResult, err := readTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","path":"README.md"}`), registry.Runtime{})
+	readResult, err := readTool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","path":"README.md"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(readResult.Content, "hello") || strings.Contains(readResult.Content, "local only") {
-		t.Fatalf("read content = %q, want remote snapshot only", readResult.Content)
+	if !strings.Contains(readResult.Text(), "hello") || strings.Contains(readResult.Text(), "local only") {
+		t.Fatalf("read content = %q, want remote snapshot only", readResult.Text())
 	}
 }
 
@@ -198,9 +198,9 @@ func TestRepoToolsDoNotUseStaleRefsWhenOriginIsUnavailable(t *testing.T) {
 		Guard:   safety.NewCommandPolicy(),
 		Timeout: 10 * time.Second,
 	}
-	rt := registry.Runtime{Cache: registry.NewRuntimeCache()}
+	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
 	searchTool := RepoSearchTool{Base: base}
-	if _, err := searchTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","query":"hello"}`), rt); err != nil {
+	if _, err := searchTool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","query":"hello"}`), Scope: scope}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Rename(filepath.Join(root, "origin.git"), filepath.Join(root, "origin.git.offline")); err != nil {
@@ -208,13 +208,13 @@ func TestRepoToolsDoNotUseStaleRefsWhenOriginIsUnavailable(t *testing.T) {
 	}
 
 	readTool := RepoReadFileTool{Base: base}
-	_, err := readTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","path":"README.md"}`), rt)
+	_, err := readTool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","path":"README.md"}`), Scope: scope})
 	if err == nil {
 		t.Fatal("read should fail when origin becomes unavailable")
 	}
 
 	gitcache.ResetForTest()
-	_, err = readTool.Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","path":"README.md"}`), registry.Runtime{Cache: registry.NewRuntimeCache()})
+	_, err = readTool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","path":"README.md"}`), Scope: agenttool.Scope{SessionID: "test", TurnID: "turn"}})
 	if err == nil {
 		t.Fatal("read should not fall back to cached refs when origin is unavailable")
 	}

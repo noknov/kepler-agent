@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 func TestGoogleCSEResults(t *testing.T) {
@@ -143,15 +143,14 @@ func TestSearchToolFailureGuidesDirectPageRead(t *testing.T) {
 	}
 	result, err := (SearchTool{Client: client}).Execute(
 		context.Background(),
-		json.RawMessage(`{"query":"深圳天气","limit":3}`),
-		registry.Runtime{},
+		agenttool.Call{Arguments: json.RawMessage(`{"query":"深圳天气","limit":3}`), Scope: agenttool.Scope{}},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"Web search provider failed", "web-read_page", "https://wttr.in/{city}?format=3", "深圳天气"} {
-		if !strings.Contains(result.Content, want) {
-			t.Fatalf("result content missing %q: %s", want, result.Content)
+		if !strings.Contains(result.Text(), want) {
+			t.Fatalf("result content missing %q: %s", want, result.Text())
 		}
 	}
 }

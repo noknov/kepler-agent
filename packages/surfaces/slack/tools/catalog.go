@@ -3,25 +3,29 @@ package slacktool
 import (
 	"context"
 
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/config"
 	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
 	"github.com/noknov/slack-copilot-agent/packages/reminder"
 	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
 	reminderTools "github.com/noknov/slack-copilot-agent/packages/tools/reminder"
 	ttsTools "github.com/noknov/slack-copilot-agent/packages/tools/tts"
 )
 
-func AddToRegistry(reg *registry.Registry, cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, rdb *redisclient.Client) {
-	if reg == nil || slackClient == nil {
+func AddToCatalog(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, rdb *redisclient.Client) {
+	if catalog == nil || slackClient == nil {
 		return
 	}
-	reg.Register(registry.WithMetadata(AskUserTool{Slack: slackClient}, registry.ToolMetadata{Risk: registry.RiskRead, Dependencies: []string{"slack"}, Exclusive: true, Network: true}))
-	reg.Register(runtimeRead(FileSearchTool{Slack: slackClient}, "slack"))
-	reg.Register(runtimeRead(JSONAnalyzeTool{Slack: slackClient}, "slack"))
-	registerDeferredTools(reg, registry.CategoryIntegration, slackExternalWrite(CreateCanvasTool{Slack: slackClient}))
+	_ = catalog.RegisterVisible(policy, tool.Annotate(AskUserTool{Slack: slackClient}, tool.Descriptor{
+		Effects:      []tool.Effect{tool.EffectRead, tool.EffectNetwork},
+		Dependencies: []string{"slack"},
+		Exclusive:    true,
+	}))
+	_ = catalog.RegisterVisible(policy, readTool(FileSearchTool{Slack: slackClient}, "slack"))
+	_ = catalog.RegisterVisible(policy, readTool(JSONAnalyzeTool{Slack: slackClient}, "slack"))
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, externalWrite(CreateCanvasTool{Slack: slackClient}))
 	if reminderStore != nil {
-		reg.Register(slackExternalWrite(reminderTools.CreateTool{
+		_ = catalog.RegisterVisible(policy, externalWrite(reminderTools.CreateTool{
 			Store: reminderStore,
 			OnCreate: func(ctx context.Context) {
 				if rdb != nil {
@@ -29,46 +33,35 @@ func AddToRegistry(reg *registry.Registry, cfg config.Config, slackClient *slack
 				}
 			},
 		}, "reminder"))
-		reg.Register(runtimeRead(reminderTools.ListTool{Store: reminderStore}, "reminder"))
-		reg.Register(slackExternalWrite(reminderTools.CancelTool{Store: reminderStore}, "reminder"))
+		_ = catalog.RegisterVisible(policy, readTool(reminderTools.ListTool{Store: reminderStore}, "reminder"))
+		_ = catalog.RegisterVisible(policy, externalWrite(reminderTools.CancelTool{Store: reminderStore}, "reminder"))
 	}
-	registerTTS(reg, cfg, slackClient)
+	registerTTS(catalog, policy, cfg, slackClient)
 }
 
-func slackExternalWrite(tool registry.Tool, deps ...string) registry.Tool {
-	return registry.WithMetadata(tool, registry.ToolMetadata{
-		Risk:         registry.RiskExternalWrite,
+func readTool(item tool.Tool, deps ...string) tool.Tool {
+	return tool.Annotate(item, tool.Descriptor{Effects: []tool.Effect{tool.EffectRead, tool.EffectNetwork}, Parallel: true, Dependencies: deps})
+}
+
+func externalWrite(item tool.Tool, deps ...string) tool.Tool {
+	return tool.Annotate(item, tool.Descriptor{
+		Effects:      []tool.Effect{tool.EffectExternalWrite, tool.EffectNetwork},
 		Dependencies: append([]string{"slack"}, deps...),
 		Surfaces:     []string{"slack"},
-		Network:      true,
 	})
 }
 
-func runtimeRead(tool registry.Tool, deps ...string) registry.Tool {
-	return registry.WithMetadata(tool, registry.ToolMetadata{
-		Risk:         registry.RiskRead,
-		Dependencies: deps,
-		Network:      true,
-	})
-}
-
-func registerTTS(reg *registry.Registry, cfg config.Config, slackClient *slack.Client) {
+func registerTTS(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.Config, slackClient *slack.Client) {
 	tts := cfg.Integrations.TTS
-	tool := slackExternalWrite(ttsTools.SpeakTool{
+	item := externalWrite(ttsTools.SpeakTool{
 		Slack:   slackClient,
 		APIKey:  tts.APIKey,
 		BaseURL: tts.BaseURL,
 		Model:   tts.Model,
 	}, "tts")
 	if tts.APIKey != "" {
-		reg.Register(tool)
+		_ = catalog.RegisterVisible(policy, item)
 		return
 	}
-	reg.RegisterDeferred(registry.AsDeferred(registry.CategoryIntegration, tool))
-}
-
-func registerDeferredTools(reg *registry.Registry, category string, tools ...registry.Tool) {
-	for _, tool := range tools {
-		reg.RegisterDeferred(registry.AsDeferred(category, tool))
-	}
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, item)
 }

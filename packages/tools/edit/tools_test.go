@@ -9,19 +9,19 @@ import (
 	"testing"
 
 	"github.com/noknov/slack-copilot-agent/packages/safety"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 func TestWriteFileCreatesWorkspaceFile(t *testing.T) {
 	root := t.TempDir()
 	tool := WriteFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
 
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"src/app.go","content":"package app\n"}`), registry.Runtime{})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"path":"src/app.go","content":"package app\n"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !strings.Contains(result.Content, "wrote src/app.go") {
-		t.Fatalf("content = %q", result.Content)
+	if !strings.Contains(result.Text(), "wrote src/app.go") {
+		t.Fatalf("content = %q", result.Text())
 	}
 	got, err := os.ReadFile(filepath.Join(root, "src", "app.go"))
 	if err != nil {
@@ -40,7 +40,7 @@ func TestWriteFileAcceptsWorkspaceRootBasenamePrefix(t *testing.T) {
 	}
 	tool := WriteFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
 
-	_, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"repo/main.go","content":"package main\n"}`), registry.Runtime{})
+	_, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"path":"repo/main.go","content":"package main\n"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -53,7 +53,7 @@ func TestWriteFileRejectsTraversalOutsideWorkspace(t *testing.T) {
 	root := t.TempDir()
 	tool := WriteFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
 
-	_, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"../escape.go","content":"package escape\n"}`), registry.Runtime{})
+	_, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"path":"../escape.go","content":"package escape\n"}`), Scope: agenttool.Scope{}})
 	if err == nil {
 		t.Fatal("expected traversal to be rejected")
 	}
@@ -63,7 +63,7 @@ func TestWriteFileRejectsSensitiveFile(t *testing.T) {
 	root := t.TempDir()
 	tool := WriteFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
 
-	_, err := tool.Execute(context.Background(), json.RawMessage(`{"path":".env","content":"TOKEN=x\n"}`), registry.Runtime{})
+	_, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"path":".env","content":"TOKEN=x\n"}`), Scope: agenttool.Scope{}})
 	if err == nil {
 		t.Fatal("expected sensitive path to be rejected")
 	}
@@ -77,7 +77,7 @@ func TestReplaceRequiresExactlyOneMatch(t *testing.T) {
 	}
 	tool := ReplaceTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
 
-	_, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"app.go","old_text":"one","new_text":"three"}`), registry.Runtime{})
+	_, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"path":"app.go","old_text":"one","new_text":"three"}`), Scope: agenttool.Scope{}})
 	if err == nil || !strings.Contains(err.Error(), "matched 2 times") {
 		t.Fatalf("error = %v, want duplicate match error", err)
 	}
@@ -91,12 +91,12 @@ func TestReplaceUpdatesSingleMatch(t *testing.T) {
 	}
 	tool := ReplaceTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
 
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"app.go","old_text":"two","new_text":"three"}`), registry.Runtime{})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"path":"app.go","old_text":"two","new_text":"three"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !strings.Contains(result.Content, "replaced text") {
-		t.Fatalf("content = %q", result.Content)
+	if !strings.Contains(result.Text(), "replaced text") {
+		t.Fatalf("content = %q", result.Text())
 	}
 	got, err := os.ReadFile(path)
 	if err != nil {

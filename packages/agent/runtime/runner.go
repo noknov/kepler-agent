@@ -216,7 +216,8 @@ func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, syste
 		return Projection{}, err
 	}
 	if len(projection.Dropped) == 0 || r.deps.Compactor == nil {
-		return overlayCurrentInput(projection, request.Input), nil
+		projection.Messages = overlayEnvironment(overlayCurrentInput(projection, request.Input).Messages, r.deps.Environment)
+		return projection, nil
 	}
 	targetTokens := 4_096
 	if smallContextTarget := r.config.Context.MaxTokens / 8; smallContextTarget > 0 && smallContextTarget < targetTokens {
@@ -241,7 +242,11 @@ func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, syste
 		return Projection{}, err
 	}
 	projection, err = r.deps.Projector.Project(ctx, events, system)
-	return overlayCurrentInput(projection, request.Input), err
+	if err != nil {
+		return Projection{}, err
+	}
+	projection.Messages = overlayEnvironment(overlayCurrentInput(projection, request.Input).Messages, r.deps.Environment)
+	return projection, err
 }
 
 func durableUserInput(message model.Message) model.Message {
@@ -432,6 +437,7 @@ func (r *Runtime) finishTurn(ctx context.Context, result TurnResult, message mod
 	if recordErr != nil && err == nil {
 		err = recordErr
 	}
+	r.clearCircuit(result.SessionID)
 	return result, err
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,6 +80,17 @@ type Result struct {
 
 func TextResult(value string) Result {
 	return Result{Content: []model.Content{{Type: model.ContentText, Text: value}}}
+}
+
+// Text returns concatenated text content blocks from a tool result.
+func (r Result) Text() string {
+	var parts []string
+	for _, item := range r.Content {
+		if item.Type == model.ContentText && item.Text != "" {
+			parts = append(parts, item.Text)
+		}
+	}
+	return strings.Join(parts, "")
 }
 
 type Tool interface {
@@ -264,6 +276,7 @@ func (c *Catalog) EndTurn(sessionID, turnID string) {
 			lifecycle.EndTurn(sessionID, turnID)
 		}
 	}
+	ClearTurnCache(sessionID, turnID)
 	c.Deactivate(sessionID)
 }
 

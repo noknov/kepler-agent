@@ -17,10 +17,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/gitcache"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type Base struct {
@@ -47,7 +46,6 @@ type CallgraphTool struct{ Base }
 type ImpactTool struct{ Base }
 
 func (OverviewTool) Parallel() bool     { return true }
-func (DependenciesTool) Parallel() bool { return true }
 func (SymbolsTool) Parallel() bool      { return true }
 func (DefinitionTool) Parallel() bool   { return true }
 func (ReferencesTool) Parallel() bool   { return true }
@@ -56,14 +54,13 @@ func (ImplementationsTool) Parallel() bool {
 }
 func (CallersTool) Parallel() bool   { return true }
 func (CalleesTool) Parallel() bool   { return true }
-func (CallgraphTool) Parallel() bool { return true }
 func (ImpactTool) Parallel() bool    { return true }
 
-func (t OverviewTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t OverviewTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"codegraph-overview",
 		"Build a lightweight code graph for a refreshed git branch snapshot and summarize packages, internal dependencies, and function counts. Use for architecture orientation before detailed code reads.",
-		registry.ObjectSchema([]string{"branch"}, map[string]any{
+		tool.ObjectSchema([]string{"branch"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"limit":  map[string]any{"type": "integer", "description": "Maximum packages/edges to show, default 40 and max 120."},
@@ -71,17 +68,17 @@ func (t OverviewTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t OverviewTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t OverviewTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Repo   string `json:"repo"`
 		Branch string `json:"branch"`
 		Limit  int    `json:"limit"`
 	}
-	_ = json.Unmarshal(raw, &args)
+	_ = json.Unmarshal(call.Arguments, &args)
 	limit := boundedLimit(args.Limit, 40, 120)
-	g, err := t.load(ctx, args.Repo, args.Branch, rt)
+	g, err := t.load(ctx, args.Repo, args.Branch, call.Scope)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	var b strings.Builder
 	b.WriteString(g.header())
@@ -104,14 +101,14 @@ func (t OverviewTool) Execute(ctx context.Context, raw json.RawMessage, rt regis
 			b.WriteString(edge.From + " -> " + edge.To + "\n")
 		}
 	}
-	return registry.Result{Content: b.String()}, nil
+	return tool.TextResult(b.String()), nil
 }
 
-func (t DependenciesTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t DependenciesTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"codegraph-dependencies",
 		"Show internal imports and importers for one package in a refreshed git branch snapshot. Use to understand package coupling before reading files.",
-		registry.ObjectSchema([]string{"branch", "package"}, map[string]any{
+		tool.ObjectSchema([]string{"branch", "package"}, map[string]any{
 			"repo":    map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch":  map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"package": map[string]any{"type": "string", "description": "Package import path, directory, or package name fragment."},
@@ -119,22 +116,22 @@ func (t DependenciesTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t DependenciesTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t DependenciesTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Repo    string `json:"repo"`
 		Branch  string `json:"branch"`
 		Package string `json:"package"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
-	g, err := t.load(ctx, args.Repo, args.Branch, rt)
+	g, err := t.load(ctx, args.Repo, args.Branch, call.Scope)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	pkg, err := g.findPackage(args.Package)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	var b strings.Builder
 	b.WriteString(g.header())
@@ -142,14 +139,14 @@ func (t DependenciesTool) Execute(ctx context.Context, raw json.RawMessage, rt r
 	b.WriteString("files=" + strconv.Itoa(pkg.Files) + " funcs=" + strconv.Itoa(pkg.Funcs) + "\n\n")
 	writeList(&b, "imports", pkg.InternalImports)
 	writeList(&b, "imported_by", pkg.ImportedBy)
-	return registry.Result{Content: b.String()}, nil
+	return tool.TextResult(b.String()), nil
 }
 
-func (t SymbolsTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t SymbolsTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"codegraph-symbols",
 		"Search static Go/C# symbols in a refreshed git branch snapshot without requiring language servers. Use when LSP symbols are unavailable or for branch-specific symbol discovery.",
-		registry.ObjectSchema([]string{"branch", "query"}, map[string]any{
+		tool.ObjectSchema([]string{"branch", "query"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"query":  map[string]any{"type": "string", "description": "Symbol name or substring."},
@@ -158,23 +155,23 @@ func (t SymbolsTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t SymbolsTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t SymbolsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Repo   string `json:"repo"`
 		Branch string `json:"branch"`
 		Query  string `json:"query"`
 		Limit  int    `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	query := strings.TrimSpace(args.Query)
 	if query == "" {
-		return registry.Result{}, fmt.Errorf("query is required")
+		return tool.Result{}, fmt.Errorf("query is required")
 	}
-	g, err := t.load(ctx, args.Repo, args.Branch, rt)
+	g, err := t.load(ctx, args.Repo, args.Branch, call.Scope)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	matches := g.matchSymbols(query)
 	limit := boundedLimit(args.Limit, 50, 200)
@@ -183,7 +180,7 @@ func (t SymbolsTool) Execute(ctx context.Context, raw json.RawMessage, rt regist
 	b.WriteString("\nquery=" + query + "\n\n")
 	if len(matches) == 0 {
 		b.WriteString("no symbols found\n")
-		return registry.Result{Content: b.String()}, nil
+		return tool.TextResult(b.String()), nil
 	}
 	for i, sym := range matches {
 		if i >= limit {
@@ -192,14 +189,14 @@ func (t SymbolsTool) Execute(ctx context.Context, raw json.RawMessage, rt regist
 		}
 		b.WriteString(fmt.Sprintf("%s:%d %s %s package=%s\n", sym.File, sym.Line, sym.Kind, sym.FullName, sym.Package))
 	}
-	return registry.Result{Content: b.String()}, nil
+	return tool.TextResult(b.String()), nil
 }
 
-func (t DefinitionTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t DefinitionTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"codegraph-definition",
 		"Find static Go/C# symbol definitions by name in a refreshed git branch snapshot. This does not require gopls or csharp-ls.",
-		registry.ObjectSchema([]string{"branch", "symbol"}, map[string]any{
+		tool.ObjectSchema([]string{"branch", "symbol"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"symbol": map[string]any{"type": "string", "description": "Symbol name, for example AddCommentRoutes or CommentController.GetPostList."},
@@ -208,23 +205,23 @@ func (t DefinitionTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t DefinitionTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t DefinitionTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Repo   string `json:"repo"`
 		Branch string `json:"branch"`
 		Symbol string `json:"symbol"`
 		Limit  int    `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	symbol := strings.TrimSpace(args.Symbol)
 	if symbol == "" {
-		return registry.Result{}, fmt.Errorf("symbol is required")
+		return tool.Result{}, fmt.Errorf("symbol is required")
 	}
-	g, err := t.load(ctx, args.Repo, args.Branch, rt)
+	g, err := t.load(ctx, args.Repo, args.Branch, call.Scope)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	matches := g.matchDefinitions(symbol)
 	limit := boundedLimit(args.Limit, 20, 100)
@@ -233,7 +230,7 @@ func (t DefinitionTool) Execute(ctx context.Context, raw json.RawMessage, rt reg
 	b.WriteString("\nsymbol=" + symbol + "\n\n")
 	if len(matches) == 0 {
 		b.WriteString("no definitions found\n")
-		return registry.Result{Content: b.String()}, nil
+		return tool.TextResult(b.String()), nil
 	}
 	for i, sym := range matches {
 		if i >= limit {
@@ -242,14 +239,14 @@ func (t DefinitionTool) Execute(ctx context.Context, raw json.RawMessage, rt reg
 		}
 		b.WriteString(fmt.Sprintf("%s:%d %s %s package=%s\n", sym.File, sym.Line, sym.Kind, sym.FullName, sym.Package))
 	}
-	return registry.Result{Content: b.String()}, nil
+	return tool.TextResult(b.String()), nil
 }
 
-func (t ReferencesTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t ReferencesTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"codegraph-references",
 		"Find static Go/C# references to a symbol name in a refreshed git branch snapshot. Use as a fallback when LSP references are unavailable.",
-		registry.ObjectSchema([]string{"branch", "symbol"}, map[string]any{
+		tool.ObjectSchema([]string{"branch", "symbol"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"symbol": map[string]any{"type": "string", "description": "Symbol name, type name, function name, or method name."},
@@ -258,23 +255,23 @@ func (t ReferencesTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t ReferencesTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t ReferencesTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Repo   string `json:"repo"`
 		Branch string `json:"branch"`
 		Symbol string `json:"symbol"`
 		Limit  int    `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	symbol := strings.TrimSpace(args.Symbol)
 	if symbol == "" {
-		return registry.Result{}, fmt.Errorf("symbol is required")
+		return tool.Result{}, fmt.Errorf("symbol is required")
 	}
-	g, err := t.load(ctx, args.Repo, args.Branch, rt)
+	g, err := t.load(ctx, args.Repo, args.Branch, call.Scope)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	var hits []Reference
 	for _, ref := range g.References {
@@ -289,7 +286,7 @@ func (t ReferencesTool) Execute(ctx context.Context, raw json.RawMessage, rt reg
 	b.WriteString("\nsymbol=" + symbol + "\n\n")
 	if len(hits) == 0 {
 		b.WriteString("no references found\n")
-		return registry.Result{Content: b.String()}, nil
+		return tool.TextResult(b.String()), nil
 	}
 	for i, ref := range hits {
 		if i >= limit {
@@ -298,14 +295,14 @@ func (t ReferencesTool) Execute(ctx context.Context, raw json.RawMessage, rt reg
 		}
 		b.WriteString(fmt.Sprintf("%s:%d %s context=%s\n", ref.File, ref.Line, ref.Symbol, ref.Context))
 	}
-	return registry.Result{Content: b.String()}, nil
+	return tool.TextResult(b.String()), nil
 }
 
-func (t ImplementationsTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t ImplementationsTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"codegraph-implementations",
 		"Find static Go interface implementers or C# interface/base implementations in a refreshed git branch snapshot. Use as a fallback when LSP implementation lookup is unavailable.",
-		registry.ObjectSchema([]string{"branch", "symbol"}, map[string]any{
+		tool.ObjectSchema([]string{"branch", "symbol"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"symbol": map[string]any{"type": "string", "description": "Interface, base type, or type name."},
@@ -314,23 +311,23 @@ func (t ImplementationsTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t ImplementationsTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t ImplementationsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Repo   string `json:"repo"`
 		Branch string `json:"branch"`
 		Symbol string `json:"symbol"`
 		Limit  int    `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	symbol := strings.TrimSpace(args.Symbol)
 	if symbol == "" {
-		return registry.Result{}, fmt.Errorf("symbol is required")
+		return tool.Result{}, fmt.Errorf("symbol is required")
 	}
-	g, err := t.load(ctx, args.Repo, args.Branch, rt)
+	g, err := t.load(ctx, args.Repo, args.Branch, call.Scope)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	hits := g.implementations(symbol)
 	limit := boundedLimit(args.Limit, 50, 200)
@@ -339,7 +336,7 @@ func (t ImplementationsTool) Execute(ctx context.Context, raw json.RawMessage, r
 	b.WriteString("\nsymbol=" + symbol + "\n\n")
 	if len(hits) == 0 {
 		b.WriteString("no implementations found\n")
-		return registry.Result{Content: b.String()}, nil
+		return tool.TextResult(b.String()), nil
 	}
 	for i, sym := range hits {
 		if i >= limit {
@@ -348,14 +345,14 @@ func (t ImplementationsTool) Execute(ctx context.Context, raw json.RawMessage, r
 		}
 		b.WriteString(fmt.Sprintf("%s:%d %s %s package=%s\n", sym.File, sym.Line, sym.Kind, sym.FullName, sym.Package))
 	}
-	return registry.Result{Content: b.String()}, nil
+	return tool.TextResult(b.String()), nil
 }
 
-func (t CallersTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t CallersTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"codegraph-callers",
 		"Find simple Go/C# call sites for a function or method name in a refreshed git branch snapshot. This is a static hint; read source ranges before making final behavior claims.",
-		registry.ObjectSchema([]string{"branch", "symbol"}, map[string]any{
+		tool.ObjectSchema([]string{"branch", "symbol"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"symbol": map[string]any{"type": "string", "description": "Function or method name, for example FetchOrigin or Manager.Start."},
@@ -364,23 +361,23 @@ func (t CallersTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t CallersTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t CallersTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Repo   string `json:"repo"`
 		Branch string `json:"branch"`
 		Symbol string `json:"symbol"`
 		Limit  int    `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	symbol := shortSymbol(args.Symbol)
 	if symbol == "" {
-		return registry.Result{}, fmt.Errorf("symbol is required")
+		return tool.Result{}, fmt.Errorf("symbol is required")
 	}
-	g, err := t.load(ctx, args.Repo, args.Branch, rt)
+	g, err := t.load(ctx, args.Repo, args.Branch, call.Scope)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	var hits []Call
 	for _, call := range g.Calls {
@@ -395,7 +392,7 @@ func (t CallersTool) Execute(ctx context.Context, raw json.RawMessage, rt regist
 	b.WriteString("\nsymbol=" + symbol + "\n\n")
 	if len(hits) == 0 {
 		b.WriteString("no callers found\n")
-		return registry.Result{Content: b.String()}, nil
+		return tool.TextResult(b.String()), nil
 	}
 	for i, hit := range hits {
 		if i >= limit {
@@ -404,14 +401,14 @@ func (t CallersTool) Execute(ctx context.Context, raw json.RawMessage, rt regist
 		}
 		b.WriteString(fmt.Sprintf("%s:%d %s -> %s\n", hit.File, hit.Line, hit.Caller, hit.Callee))
 	}
-	return registry.Result{Content: b.String()}, nil
+	return tool.TextResult(b.String()), nil
 }
 
-func (t CalleesTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t CalleesTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"codegraph-callees",
 		"Find simple Go/C# outgoing calls made by a function or method in a refreshed git branch snapshot. Use when LSP outgoing calls are unavailable.",
-		registry.ObjectSchema([]string{"branch", "symbol"}, map[string]any{
+		tool.ObjectSchema([]string{"branch", "symbol"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"symbol": map[string]any{"type": "string", "description": "Function or method name, for example getPostList or CommentController.GetPostList."},
@@ -420,23 +417,23 @@ func (t CalleesTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t CalleesTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t CalleesTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Repo   string `json:"repo"`
 		Branch string `json:"branch"`
 		Symbol string `json:"symbol"`
 		Limit  int    `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	symbol := strings.TrimSpace(args.Symbol)
 	if symbol == "" {
-		return registry.Result{}, fmt.Errorf("symbol is required")
+		return tool.Result{}, fmt.Errorf("symbol is required")
 	}
-	g, err := t.load(ctx, args.Repo, args.Branch, rt)
+	g, err := t.load(ctx, args.Repo, args.Branch, call.Scope)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	var hits []Call
 	for _, call := range g.Calls {
@@ -451,7 +448,7 @@ func (t CalleesTool) Execute(ctx context.Context, raw json.RawMessage, rt regist
 	b.WriteString("\nsymbol=" + symbol + "\n\n")
 	if len(hits) == 0 {
 		b.WriteString("no callees found\n")
-		return registry.Result{Content: b.String()}, nil
+		return tool.TextResult(b.String()), nil
 	}
 	for i, hit := range hits {
 		if i >= limit {
@@ -460,14 +457,14 @@ func (t CalleesTool) Execute(ctx context.Context, raw json.RawMessage, rt regist
 		}
 		b.WriteString(fmt.Sprintf("%s:%d %s -> %s\n", hit.File, hit.Line, hit.Caller, hit.Callee))
 	}
-	return registry.Result{Content: b.String()}, nil
+	return tool.TextResult(b.String()), nil
 }
 
-func (t CallgraphTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t CallgraphTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"codegraph-callgraph",
 		"List static Go/C# call edges in a refreshed git branch snapshot, optionally filtered by caller/callee/package/file substring.",
-		registry.ObjectSchema([]string{"branch"}, map[string]any{
+		tool.ObjectSchema([]string{"branch"}, map[string]any{
 			"repo":    map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch":  map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"filter":  map[string]any{"type": "string", "description": "Optional substring matched against caller, callee, or file."},
@@ -477,7 +474,7 @@ func (t CallgraphTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t CallgraphTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t CallgraphTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Repo    string `json:"repo"`
 		Branch  string `json:"branch"`
@@ -485,12 +482,12 @@ func (t CallgraphTool) Execute(ctx context.Context, raw json.RawMessage, rt regi
 		Package string `json:"package"`
 		Limit   int    `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
-	g, err := t.load(ctx, args.Repo, args.Branch, rt)
+	g, err := t.load(ctx, args.Repo, args.Branch, call.Scope)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	filter := strings.ToLower(strings.TrimSpace(args.Filter))
 	pkgFilter := strings.ToLower(strings.TrimSpace(args.Package))
@@ -514,7 +511,7 @@ func (t CallgraphTool) Execute(ctx context.Context, raw json.RawMessage, rt regi
 	b.WriteString("\n")
 	if len(hits) == 0 {
 		b.WriteString("no call edges found\n")
-		return registry.Result{Content: b.String()}, nil
+		return tool.TextResult(b.String()), nil
 	}
 	for i, hit := range hits {
 		if i >= limit {
@@ -523,14 +520,14 @@ func (t CallgraphTool) Execute(ctx context.Context, raw json.RawMessage, rt regi
 		}
 		b.WriteString(fmt.Sprintf("%s:%d %s -> %s\n", hit.File, hit.Line, hit.Caller, hit.Callee))
 	}
-	return registry.Result{Content: b.String()}, nil
+	return tool.TextResult(b.String()), nil
 }
 
-func (t ImpactTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t ImpactTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"codegraph-impact",
 		"Estimate static impact for a Go/C# package or symbol in a refreshed git branch snapshot. Shows package importers and direct callers; read sources before final claims.",
-		registry.ObjectSchema([]string{"branch", "target"}, map[string]any{
+		tool.ObjectSchema([]string{"branch", "target"}, map[string]any{
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"target": map[string]any{"type": "string", "description": "Package path/name or function/method symbol."},
@@ -539,23 +536,23 @@ func (t ImpactTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t ImpactTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t ImpactTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Repo   string `json:"repo"`
 		Branch string `json:"branch"`
 		Target string `json:"target"`
 		Limit  int    `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	target := strings.TrimSpace(args.Target)
 	if target == "" {
-		return registry.Result{}, fmt.Errorf("target is required")
+		return tool.Result{}, fmt.Errorf("target is required")
 	}
-	g, err := t.load(ctx, args.Repo, args.Branch, rt)
+	g, err := t.load(ctx, args.Repo, args.Branch, call.Scope)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	limit := boundedLimit(args.Limit, 80, 300)
 	var b strings.Builder
@@ -598,10 +595,10 @@ func (t ImpactTool) Execute(ctx context.Context, raw json.RawMessage, rt registr
 			b.WriteString("no package or symbol impact found\n")
 		}
 	}
-	return registry.Result{Content: b.String()}, nil
+	return tool.TextResult(b.String()), nil
 }
 
-func (b Base) load(ctx context.Context, repoArg, branchArg string, rt registry.Runtime) (*Graph, error) {
+func (b Base) load(ctx context.Context, repoArg, branchArg string, rt tool.Scope) (*Graph, error) {
 	repo, err := b.repo(repoArg)
 	if err != nil {
 		return nil, err
@@ -625,8 +622,8 @@ func (b Base) load(ctx context.Context, repoArg, branchArg string, rt registry.R
 		return nil, err
 	}
 	key := "codegraph\x00" + repo + "\x00" + strings.TrimSpace(commit)
-	if rt.Cache != nil {
-		if cached, ok := rt.Cache.Get(key); ok {
+	if tool.CacheFor(rt) != nil {
+		if cached, ok := tool.CacheFor(rt).Get(key); ok {
 			if g, ok := cached.(*Graph); ok {
 				return g, nil
 			}
@@ -636,8 +633,8 @@ func (b Base) load(ctx context.Context, repoArg, branchArg string, rt registry.R
 	if err != nil {
 		return nil, err
 	}
-	if rt.Cache != nil {
-		rt.Cache.Set(key, g)
+	if tool.CacheFor(rt) != nil {
+		tool.CacheFor(rt).Set(key, g)
 	}
 	return g, nil
 }

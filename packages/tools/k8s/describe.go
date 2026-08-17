@@ -5,21 +5,19 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type DescribeTool struct {
 	Base Base
 }
 
-func (DescribeTool) Parallel() bool { return true }
 
-func (t DescribeTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t DescribeTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"k8s-describe",
 		"",
-		registry.ObjectSchema([]string{"resource"}, map[string]any{
+		tool.ObjectSchema([]string{"resource"}, map[string]any{
 			"resource":  map[string]any{"type": "string", "description": ""},
 			"name":      map[string]any{"type": "string", "description": ""},
 			"namespace": map[string]any{"type": "string", "description": ""},
@@ -28,18 +26,18 @@ func (t DescribeTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t DescribeTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t DescribeTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Resource  string `json:"resource"`
 		Name      string `json:"name"`
 		Namespace string `json:"namespace"`
 		Context   string `json:"context"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	if args.Resource == "" {
-		return registry.Result{}, fmt.Errorf("resource type is required (e.g. pod, deployment, service, node)")
+		return tool.Result{}, fmt.Errorf("resource type is required (e.g. pod, deployment, service, node)")
 	}
 
 	cmdArgs := []string{"describe", args.Resource}
@@ -50,7 +48,7 @@ func (t DescribeTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 
 	out, err := t.Base.run(ctx, args.Context, cmdArgs)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	return registry.Result{Content: out}, nil
+	return tool.TextResult(out), nil
 }

@@ -12,7 +12,7 @@ import (
 
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/gitcache"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 func TestCodegraphFindsGoDefinitionsAndCallees(t *testing.T) {
@@ -39,46 +39,46 @@ func getPostList() {
 `,
 	})
 	base := Base{Paths: safety.WorkspacePolicy{Roots: []string{root}}, Timeout: 10 * time.Second}
-	rt := registry.Runtime{Cache: registry.NewRuntimeCache()}
+	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
 
-	def, err := (DefinitionTool{Base: base}).Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"AddCommentRoutes"}`), rt)
+	def, err := (DefinitionTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"AddCommentRoutes"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(def.Content, "go_func AddCommentRoutes") {
-		t.Fatalf("definition content = %q", def.Content)
+	if !strings.Contains(def.Text(), "go_func AddCommentRoutes") {
+		t.Fatalf("definition content = %q", def.Text())
 	}
 
-	callees, err := (CalleesTool{Base: base}).Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"AddCommentRoutes"}`), rt)
+	callees, err := (CalleesTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"AddCommentRoutes"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(callees.Content, "AddCommentRoutes -> getPostList") {
-		t.Fatalf("callees content = %q", callees.Content)
+	if !strings.Contains(callees.Text(), "AddCommentRoutes -> getPostList") {
+		t.Fatalf("callees content = %q", callees.Text())
 	}
 
-	impls, err := (ImplementationsTool{Base: base}).Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"Loader"}`), rt)
+	impls, err := (ImplementationsTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"Loader"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(impls.Content, "go_type Service") {
-		t.Fatalf("implementations content = %q", impls.Content)
+	if !strings.Contains(impls.Text(), "go_type Service") {
+		t.Fatalf("implementations content = %q", impls.Text())
 	}
 
-	refs, err := (ReferencesTool{Base: base}).Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"Loader"}`), rt)
+	refs, err := (ReferencesTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"Loader"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(refs.Content, "Loader context=getPostList") {
-		t.Fatalf("references content = %q", refs.Content)
+	if !strings.Contains(refs.Text(), "Loader context=getPostList") {
+		t.Fatalf("references content = %q", refs.Text())
 	}
 
-	callgraph, err := (CallgraphTool{Base: base}).Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","filter":"LoadPosts"}`), rt)
+	callgraph, err := (CallgraphTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","filter":"LoadPosts"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(callgraph.Content, "getPostList -> LoadPosts") {
-		t.Fatalf("callgraph content = %q", callgraph.Content)
+	if !strings.Contains(callgraph.Text(), "getPostList -> LoadPosts") {
+		t.Fatalf("callgraph content = %q", callgraph.Text())
 	}
 }
 
@@ -100,30 +100,30 @@ public class CommentController : IPostLoader
 `,
 	})
 	base := Base{Paths: safety.WorkspacePolicy{Roots: []string{root}}, Timeout: 10 * time.Second}
-	rt := registry.Runtime{Cache: registry.NewRuntimeCache()}
+	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
 
-	def, err := (DefinitionTool{Base: base}).Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"CommentController.GetPostList"}`), rt)
+	def, err := (DefinitionTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"CommentController.GetPostList"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(def.Content, "CommentController.GetPostList") {
-		t.Fatalf("definition content = %q", def.Content)
+	if !strings.Contains(def.Text(), "CommentController.GetPostList") {
+		t.Fatalf("definition content = %q", def.Text())
 	}
 
-	callers, err := (CallersTool{Base: base}).Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"LoadPosts"}`), rt)
+	callers, err := (CallersTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"LoadPosts"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(callers.Content, "CommentController.GetPostList -> LoadPosts") {
-		t.Fatalf("callers content = %q", callers.Content)
+	if !strings.Contains(callers.Text(), "CommentController.GetPostList -> LoadPosts") {
+		t.Fatalf("callers content = %q", callers.Text())
 	}
 
-	impls, err := (ImplementationsTool{Base: base}).Execute(context.Background(), json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"IPostLoader"}`), rt)
+	impls, err := (ImplementationsTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"IPostLoader"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(impls.Content, "cs_class Messaging.Instagram.Controllers.CommentController") {
-		t.Fatalf("implementations content = %q", impls.Content)
+	if !strings.Contains(impls.Text(), "cs_class Messaging.Instagram.Controllers.CommentController") {
+		t.Fatalf("implementations content = %q", impls.Text())
 	}
 }
 

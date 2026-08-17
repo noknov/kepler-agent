@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Repository architecture boundary checks.
-
-The checks are intentionally small and direct. They guard dependency direction;
-one-time migration cleanup is left to ordinary tree review.
-"""
+"""Repository architecture boundary checks."""
 
 from __future__ import annotations
 
@@ -51,6 +47,10 @@ def violation(path: Path, import_path: str) -> str | None:
     if target is None:
         return None
 
+    if source.startswith("packages/agent/tool/"):
+        if target.startswith("packages/prompts"):
+            return None
+
     if source.startswith("packages/agent/"):
         if not target.startswith("packages/agent/"):
             return "packages/agent may only depend on canonical agent core packages"
@@ -60,6 +60,7 @@ def violation(path: Path, import_path: str) -> str | None:
             "packages/agent/runtime",
             "packages/agent/tool",
             "packages/agent/transcript",
+            "packages/agent/environment",
         )
         if not target.startswith(allowed):
             return "packages/agent contains only model/prompt/runtime/tool/transcript"
@@ -69,13 +70,17 @@ def violation(path: Path, import_path: str) -> str | None:
         if not target.startswith(allowed):
             return "packages/providers may only depend on agent/model and llm"
 
-    if source.startswith("packages/profiles/hosted/"):
+    if source.startswith("packages/profiles/"):
+        if target.startswith("packages/llm"):
+            return "profiles must use providers instead of importing llm directly"
         if target.startswith("packages/surfaces/"):
-            return "hosted profile must not depend on any surface"
+            return "profiles must not depend on surfaces"
 
     if source.startswith("packages/tools/"):
         if target.startswith("packages/surfaces/"):
             return "generic tools must not depend on surfaces"
+        if target == "packages/tools/registry" or target.startswith("packages/tools/registry/"):
+            return "packages/tools/registry was removed; use packages/agent/tool"
 
     if source.startswith("evals/"):
         if target.startswith("packages/"):

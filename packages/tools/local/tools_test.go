@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/profiles/local"
 )
 
@@ -23,11 +23,11 @@ func TestFileToolsAndCatalog(t *testing.T) {
 	}
 	defer workspace.Close()
 	write := WriteFile{Workspace: workspace}
-	if _, err := write.Execute(context.Background(), tool.Call{Arguments: json.RawMessage(`{"path":"a.txt","content":"hello"}`)}); err != nil {
+	if _, err := write.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"path":"a.txt","content":"hello"}`)}); err != nil {
 		t.Fatal(err)
 	}
-	read, err := (ReadFile{Workspace: workspace}).Execute(context.Background(), tool.Call{Arguments: json.RawMessage(`{"path":"a.txt"}`)})
-	if err != nil || len(read.Content) != 1 || read.Content[0].Text != "hello" {
+	read, err := (ReadFile{Workspace: workspace}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"path":"a.txt"}`)})
+	if err != nil || read.Text() != "hello" {
 		t.Fatalf("read=%+v err=%v", read, err)
 	}
 	if string(data(t, root+"/a.txt")) != "hello" {
@@ -43,12 +43,12 @@ func TestFileToolsAndCatalog(t *testing.T) {
 	if _, ok := catalog.Get("tool_search"); ok {
 		t.Fatal("local catalog registered tool_search without any deferred tools")
 	}
-	listed, err := (ListFiles{Workspace: workspace}).Execute(context.Background(), tool.Call{Arguments: json.RawMessage(`{}`)})
+	listed, err := (ListFiles{Workspace: workspace}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(listed.Content[0].Text, ".env") {
-		t.Fatalf("sensitive filename leaked: %s", listed.Content[0].Text)
+	if strings.Contains(listed.Text(), ".env") {
+		t.Fatalf("sensitive filename leaked: %s", listed.Text())
 	}
 }
 

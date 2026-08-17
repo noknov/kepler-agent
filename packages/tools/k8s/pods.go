@@ -4,21 +4,19 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type GetPodsTool struct {
 	Base Base
 }
 
-func (GetPodsTool) Parallel() bool { return true }
 
-func (t GetPodsTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t GetPodsTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"k8s-get_pods",
 		"",
-		registry.ObjectSchema(nil, map[string]any{
+		tool.ObjectSchema(nil, map[string]any{
 			"namespace":      map[string]any{"type": "string", "description": ""},
 			"label_selector": map[string]any{"type": "string", "description": ""},
 			"field_selector": map[string]any{"type": "string", "description": ""},
@@ -28,7 +26,7 @@ func (t GetPodsTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t GetPodsTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t GetPodsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Namespace     string `json:"namespace"`
 		LabelSelector string `json:"label_selector"`
@@ -36,8 +34,8 @@ func (t GetPodsTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 		AllNamespaces bool   `json:"all_namespaces"`
 		Context       string `json:"context"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 
 	cmdArgs := []string{"get", "pods", "-o", "wide"}
@@ -55,7 +53,7 @@ func (t GetPodsTool) Execute(ctx context.Context, raw json.RawMessage, _ registr
 
 	out, err := t.Base.run(ctx, args.Context, cmdArgs)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	return registry.Result{Content: out}, nil
+	return tool.TextResult(out), nil
 }

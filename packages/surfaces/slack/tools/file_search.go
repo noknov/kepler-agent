@@ -7,9 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 const (
@@ -26,13 +25,12 @@ type FileSearchTool struct {
 	Slack FileSearcher
 }
 
-func (FileSearchTool) Parallel() bool { return true }
 
-func (t FileSearchTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t FileSearchTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"slack-file_search",
 		"",
-		registry.ObjectSchema([]string{"file_id"}, map[string]any{
+		tool.ObjectSchema([]string{"file_id"}, map[string]any{
 			"file_id": map[string]any{"type": "string", "description": ""},
 			"query":   map[string]any{"type": "string", "description": ""},
 			"limit":   map[string]any{"type": "integer", "description": ""},
@@ -40,22 +38,22 @@ func (t FileSearchTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t FileSearchTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t FileSearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	if t.Slack == nil {
-		return registry.Result{}, fmt.Errorf("Slack file search is not configured")
+		return tool.Result{}, fmt.Errorf("Slack file search is not configured")
 	}
 	var args struct {
 		FileID string `json:"file_id"`
 		Query  string `json:"query"`
 		Limit  int    `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	args.FileID = strings.TrimSpace(args.FileID)
 	args.Query = strings.TrimSpace(args.Query)
 	if args.FileID == "" {
-		return registry.Result{}, fmt.Errorf("file_id is required")
+		return tool.Result{}, fmt.Errorf("file_id is required")
 	}
 	if args.Limit <= 0 {
 		args.Limit = 5
@@ -65,15 +63,15 @@ func (t FileSearchTool) Execute(ctx context.Context, raw json.RawMessage, _ regi
 	}
 	file, err := t.Slack.FileInfo(ctx, args.FileID)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	text, err := t.extract(ctx, file)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 	excerpts := searchText(text, args.Query, args.Limit)
 	if len(excerpts) == 0 {
-		return registry.Result{Content: "no matching excerpts in " + slack.FileDisplayName(file)}, nil
+		return tool.TextResult("no matching excerpts in " + slack.FileDisplayName(file)), nil
 	}
 	var b strings.Builder
 	b.WriteString("Slack file excerpts\n")
@@ -85,7 +83,7 @@ func (t FileSearchTool) Execute(ctx context.Context, raw json.RawMessage, _ regi
 	for i, excerpt := range excerpts {
 		b.WriteString(fmt.Sprintf("\nExcerpt %d:\n%s\n", i+1, excerpt))
 	}
-	return registry.Result{Content: strings.TrimSpace(b.String())}, nil
+	return tool.TextResult(strings.TrimSpace(b.String())), nil
 }
 
 func (t FileSearchTool) extract(ctx context.Context, file slack.File) (string, error) {

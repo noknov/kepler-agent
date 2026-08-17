@@ -6,8 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 const cacheKey = "agent-plan"
@@ -21,15 +20,15 @@ type Item struct {
 	Note   string `json:"note,omitempty"`
 }
 
-func (PlanTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (PlanTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"plan-update",
 		"Create or replace the current execution plan for a complex multi-step agent task. Use this before substantial work, and update it as steps move through pending, in_progress, completed, or blocked. Skip for trivial one-step questions.",
-		registry.ObjectSchema([]string{"items"}, map[string]any{
+		tool.ObjectSchema([]string{"items"}, map[string]any{
 			"items": map[string]any{
 				"type":        "array",
 				"description": "Ordered task list. Keep items concrete and outcome-oriented.",
-				"items": registry.ObjectSchema([]string{"task", "status"}, map[string]any{
+				"items": tool.ObjectSchema([]string{"task", "status"}, map[string]any{
 					"id": map[string]any{
 						"type":        "string",
 						"description": "Short stable identifier, such as 1, 2, or verify.",
@@ -57,22 +56,22 @@ func (PlanTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (PlanTool) Execute(_ context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (PlanTool) Execute(_ context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Items   []Item `json:"items"`
 		Summary string `json:"summary"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	items, err := normalizeItems(args.Items)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
-	if rt.Cache != nil {
-		rt.Cache.Set(cacheKey, items)
+	if tool.CacheFor(call.Scope) != nil {
+		tool.CacheFor(call.Scope).Set(cacheKey, items)
 	}
-	return registry.Result{Content: formatPlan(strings.TrimSpace(args.Summary), items)}, nil
+	return tool.TextResult(formatPlan(strings.TrimSpace(args.Summary), items)), nil
 }
 
 func normalizeItems(items []Item) ([]Item, error) {

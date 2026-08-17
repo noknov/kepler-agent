@@ -9,9 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 // ClustersTool wraps `gcloud container clusters list/describe` to inspect
@@ -25,13 +24,12 @@ type ClustersTool struct {
 	Timeout        time.Duration
 }
 
-func (ClustersTool) Parallel() bool { return true }
 
-func (t ClustersTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t ClustersTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"gcp-clusters",
 		"",
-		registry.ObjectSchema(nil, map[string]any{
+		tool.ObjectSchema(nil, map[string]any{
 			"action":  map[string]any{"type": "string", "description": ""},
 			"cluster": map[string]any{"type": "string", "description": ""},
 			"project": map[string]any{"type": "string", "description": ""},
@@ -41,7 +39,7 @@ func (t ClustersTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t ClustersTool) Execute(ctx context.Context, raw json.RawMessage, _ registry.Runtime) (registry.Result, error) {
+func (t ClustersTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Action  string `json:"action"`
 		Cluster string `json:"cluster"`
@@ -49,8 +47,8 @@ func (t ClustersTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 		Region  string `json:"region"`
 		Zone    string `json:"zone"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 
 	project := args.Project
@@ -58,7 +56,7 @@ func (t ClustersTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 		project = t.DefaultProject
 	}
 	if project == "" {
-		return registry.Result{}, fmt.Errorf("GCP project is required; pass project in tool args or configure GCP_PROJECT")
+		return tool.Result{}, fmt.Errorf("GCP project is required; pass project in tool args or configure GCP_PROJECT")
 	}
 
 	action := args.Action
@@ -68,7 +66,7 @@ func (t ClustersTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 	switch action {
 	case "list", "describe":
 	default:
-		return registry.Result{}, fmt.Errorf("unsupported action %q; use list or describe", action)
+		return tool.Result{}, fmt.Errorf("unsupported action %q; use list or describe", action)
 	}
 
 	var cmdArgs []string
@@ -76,7 +74,7 @@ func (t ClustersTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 		cmdArgs = []string{"container", "clusters", "list", "--project", project}
 	} else {
 		if args.Cluster == "" {
-			return registry.Result{}, fmt.Errorf("cluster name is required for action=describe")
+			return tool.Result{}, fmt.Errorf("cluster name is required for action=describe")
 		}
 		cmdArgs = []string{"container", "clusters", "describe", args.Cluster, "--project", project}
 	}
@@ -97,7 +95,7 @@ func (t ClustersTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 		bin = "gcloud"
 	}
 	if err := t.Guard.CheckArgv(append([]string{bin}, cmdArgs...)); err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 
 	timeout := t.Timeout
@@ -112,7 +110,7 @@ func (t ClustersTool) Execute(ctx context.Context, raw json.RawMessage, _ regist
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return registry.Result{}, fmt.Errorf("gcloud container clusters failed: %s", strings.TrimSpace(stderr.String()))
+		return tool.Result{}, fmt.Errorf("gcloud container clusters failed: %s", strings.TrimSpace(stderr.String()))
 	}
-	return registry.Result{Content: stdout.String()}, nil
+	return tool.TextResult(stdout.String()), nil
 }

@@ -11,8 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
-	"github.com/noknov/slack-copilot-agent/packages/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type Uploader interface {
@@ -28,13 +27,12 @@ type SpeakTool struct {
 }
 
 func (SpeakTool) IsWrite() bool  { return true }
-func (SpeakTool) Parallel() bool { return true }
 
-func (t SpeakTool) Spec() llm.ToolSpec {
-	return registry.FunctionSpec(
+func (t SpeakTool) Descriptor() tool.Descriptor {
+	return tool.FunctionDescriptor(
 		"tts-speak",
 		"",
-		registry.ObjectSchema([]string{"text"}, map[string]any{
+		tool.ObjectSchema([]string{"text"}, map[string]any{
 			"text":  map[string]any{"type": "string", "description": ""},
 			"voice": map[string]any{"type": "string", "description": ""},
 			"style": map[string]any{"type": "string", "description": ""},
@@ -42,28 +40,28 @@ func (t SpeakTool) Spec() llm.ToolSpec {
 	)
 }
 
-func (t SpeakTool) Execute(ctx context.Context, raw json.RawMessage, rt registry.Runtime) (registry.Result, error) {
+func (t SpeakTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Text  string `json:"text"`
 		Voice string `json:"voice"`
 		Style string `json:"style"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return registry.Result{}, err
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, err
 	}
 	if args.Text == "" {
-		return registry.Result{}, fmt.Errorf("text is required")
+		return tool.Result{}, fmt.Errorf("text is required")
 	}
 	if args.Voice == "" {
 		args.Voice = "冰糖"
 	}
 
-	permalink, err := t.Synthesize(ctx, rt.Channel, rt.ThreadTS, args.Text, args.Voice, args.Style)
+	permalink, err := t.Synthesize(ctx, call.Scope.Values["channel"], call.Scope.Values["thread_ts"], args.Text, args.Voice, args.Style)
 	if err != nil {
-		return registry.Result{}, err
+		return tool.Result{}, err
 	}
 
-	return registry.Result{Content: fmt.Sprintf("Voice message sent successfully (voice: %s).\nPermalink: %s", args.Voice, permalink)}, nil
+	return tool.TextResult(fmt.Sprintf("Voice message sent successfully (voice: %s).\nPermalink: %s", args.Voice, permalink)), nil
 }
 
 // Synthesize generates speech from text and uploads the audio to a Slack thread.

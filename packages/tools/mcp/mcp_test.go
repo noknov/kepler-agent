@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/mcp"
 )
 
@@ -39,15 +39,15 @@ func TestDiscoverAndExecute(t *testing.T) {
 		data, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": payload.ID, "result": json.RawMessage(result)})
 		return response(200, string(data)), nil
 	})}}
-	items, err := Discover(context.Background(), Server{Name: "demo", Client: client, Effects: []tool.Effect{tool.EffectRead}})
+	items, err := Discover(context.Background(), Server{Name: "demo", Client: client, Effects: []agenttool.Effect{agenttool.EffectRead}})
 	if err != nil || len(items) != 1 {
 		t.Fatalf("items=%v err=%v", items, err)
 	}
-	if items[0].Descriptor().Name != "mcp_demo_lookup" || items[0].Descriptor().Exposure != tool.ExposureDeferred {
+	if items[0].Descriptor().Name != "mcp_demo_lookup" || items[0].Descriptor().Exposure != agenttool.ExposureDeferred {
 		t.Fatalf("descriptor=%+v", items[0].Descriptor())
 	}
-	result, err := items[0].Execute(context.Background(), tool.Call{Scope: tool.Scope{SessionID: "s1"}, Arguments: json.RawMessage(`{}`)})
-	if err != nil || result.Content[0].Text != "found" {
+	result, err := items[0].Execute(context.Background(), agenttool.Call{Scope: agenttool.Scope{SessionID: "s1"}, Arguments: json.RawMessage(`{}`)})
+	if err != nil || result.Text() != "found" {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
