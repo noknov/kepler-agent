@@ -210,11 +210,11 @@ func registerIntegrationTools(catalog *tool.Catalog, policy tool.SurfacePolicy, 
 		},
 	}
 	for _, item := range luckinTools.Tools(luckinClient) {
-		item = tool.BindSurface(item, policy.Surface, "luckin")
+		bound := tool.BindSurface(item, policy.Surface, "luckin")
 		if integrations.Luckin.MCPToken != "" {
-			_ = catalog.RegisterVisible(policy, item)
+			_ = catalog.RegisterVisible(policy, bound)
 		} else {
-			_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, item)
+			_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, bound)
 		}
 	}
 }
