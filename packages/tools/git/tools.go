@@ -59,6 +59,7 @@ func (t FetchRefTool) Descriptor() tool.Descriptor {
 			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 		}),
+		tool.ReadNetworkParallel()...,
 	)
 }
 
@@ -102,6 +103,7 @@ func (t SearchRefTool) Descriptor() tool.Descriptor {
 			"path":  map[string]any{"type": "string", "description": "Optional path inside the repo."},
 			"limit": map[string]any{"type": "integer", "description": "Maximum matches, default 50 and max 200."},
 		}),
+		tool.ReadNetworkParallel()...,
 	)
 }
 
@@ -169,6 +171,7 @@ func (t RepoSearchTool) Descriptor() tool.Descriptor {
 			"path":   map[string]any{"type": "string", "description": "Optional path inside the repo."},
 			"limit":  map[string]any{"type": "integer", "description": "Maximum matches, default 50 and max 200."},
 		}),
+		tool.ReadNetworkParallel()...,
 	)
 }
 
@@ -239,6 +242,7 @@ func (t ReadFileRefTool) Descriptor() tool.Descriptor {
 			"start_line": map[string]any{"type": "integer", "description": "1-based starting line."},
 			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines, default 240 and max 1000."},
 		}),
+		tool.ReadNetworkParallel()...,
 	)
 }
 
@@ -316,6 +320,7 @@ func (t RepoReadFileTool) Descriptor() tool.Descriptor {
 			"start_line": map[string]any{"type": "integer", "description": "1-based starting line."},
 			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines, default 240 and max 1000."},
 		}),
+		tool.ReadNetworkParallel()...,
 	)
 }
 

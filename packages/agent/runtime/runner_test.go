@@ -490,3 +490,40 @@ func TestRunTurnCompactsDroppedContext(t *testing.T) {
 		t.Fatal("compactor was not called")
 	}
 }
+
+func TestRunTurnRecoversFromContextLimit(t *testing.T) {
+	store := transcript.NewMemoryStore()
+	for index := 0; index < 4; index++ {
+		message := model.TextMessage(model.RoleUser, strings.Repeat("history ", 40))
+		_, _ = store.Append(context.Background(), transcript.Event{ID: fmt.Sprintf("old-%d", index), SessionID: "limit", Type: transcript.UserInput, Message: &message})
+	}
+	client := &scriptedModel{
+		errors: []error{
+			&model.Error{Kind: model.ErrorContextLimit, Message: "context too large"},
+			nil,
+		},
+		responses: []model.Response{
+			{},
+			{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop},
+		},
+	}
+	catalog, _ := tool.NewCatalog()
+	compactor := &recordingCompactor{}
+	runner, _ := New(
+		Config{Model: "test", Context: ContextConfig{MaxTokens: 4000, ReserveTokens: 500}},
+		Dependencies{Model: client, Tools: catalog, Transcript: store, Compactor: compactor},
+	)
+	result, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "limit", Input: model.TextMessage(model.RoleUser, "continue")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Termination != TerminationCompleted {
+		t.Fatalf("result=%+v", result)
+	}
+	if !compactor.called {
+		t.Fatal("forced compaction was not invoked")
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("requests=%d", len(client.requests))
+	}
+}

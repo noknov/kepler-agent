@@ -260,7 +260,7 @@
             <h3>容量边界</h3>
             <p>PG advisory lock 会在整个 hosted turn 期间占用连接；活动运行的 Redis owner key 使用 TTL；Slack inbox 的处理上限由 worker 数量、事件队列和数据库连接池共同约束。</p>
             <h3>尚未隐藏的限制</h3>
-            <p>Context token 预算是保守估算，不是 provider tokenizer；如果 provider 仍返回 context-limit，当前 turn 会明确失败，尚未做基于该错误的二次强制压缩。Hosted 的既有工具实现仍通过一个启动期 ABI bridge 转成 canonical descriptor/result，但可见性、激活、policy 和执行调度只有一套。Secondary compaction/progress 调用进入聚合 LLM 指标，但尚未分摊到单个 run 成本。Slack 展示语言目前使用 operator 配置的默认 locale，不做逐用户语言探测。</p>
+            <p>Context token 预算是保守估算，不是 provider tokenizer；如果 provider 仍返回 context-limit，runtime 会先做一次 forced compaction 并重试 model 请求，然后才 fail turn。每个工具在自身 descriptor 中声明 effects、dependencies 和 exposure；catalog 只负责按 profile policy 做可见性与激活。Secondary compaction/progress 调用进入聚合 LLM 指标，但尚未分摊到单个 run 成本。Slack 展示语言目前使用 operator 配置的默认 locale，不做逐用户语言探测。</p>
           </section>
 
           <section class="doc-section" id="zh-reading">
@@ -365,7 +365,7 @@
 
           <section class="doc-section" id="en-tools">
             <span class="section-number">06 / TOOLS &amp; CAPABILITIES</span><h2>Tools and capabilities</h2>
-            <p>Every tool declares a name, JSON Schema, effects, dependencies, surfaces, concurrency, and exclusive behavior. The canonical catalog alone owns model visibility, turn activation, and execution; the profile policy decides each call. The construction registry only enumerates implementations and has no runtime dispatch or activation API; a startup adapter maps them into the canonical catalog.</p>
+            <p>Every tool declares a name, JSON Schema, effects, dependencies, surfaces, concurrency, and exclusive behavior in its own descriptor. The canonical catalog owns model visibility, turn activation, and execution; the profile policy decides each call.</p>
             <div class="card-grid three"><div class="card"><span class="tag">Read</span><h3>Read and diagnose</h3><p>Code search, file reads, Git, web, runbooks, and infrastructure queries; remote ref reads refresh origin first without checking out branches.</p></div><div class="card"><span class="tag">Local</span><h3>Local execution</h3><p>Workspace writes are bounded by path checks and the OS sandbox; network, external-write, and privileged effects request once, session, or project approval.</p></div><div class="card"><span class="tag">Hosted</span><h3>Server policy</h3><p>Read effects are allowed; write, external-write, and privileged effects require an exact operator allowlist entry. Hosted exposes no generic shell.</p></div></div>
             <h3>Deferred discovery</h3><p>GitHub, Kubernetes, GCP, code graph, and similar tools are registered by category. The model uses <code>tool_search</code> to list stable categories and exact tool names, then explicitly activates schemas for the current turn. Activation is released at the turn boundary; there is no natural-language ranking or guessing.</p>
             <h3>Concurrency rules</h3><p>Parallel-safe tools may run concurrently; other tools execute serially. Exclusive calls must be the only call in a model-produced batch.</p>
@@ -405,7 +405,7 @@
             <span class="section-number">11 / CURRENT LIMITS</span><h2>Current boundaries</h2>
             <div class="card-grid"><div class="card"><span class="tag">Scope</span><h3>Shared components</h3><ul><li>Runtime, model, tool, and transcript contracts</li><li>Local CLI and hosted Slack profiles</li><li>Local JSONL and hosted PG transcripts</li><li>Durable Slack inbox and session inputs</li></ul></div><div class="card"><span class="tag">Different by profile</span><h3>Product-specific concerns</h3><ul><li>Local approvals and workspace sandbox</li><li>Hosted server-owned allowlist policy</li><li>TTY and Slack presentation</li><li>Profile-specific storage and presentation composition</li></ul></div></div>
             <h3>Capacity boundaries</h3><p>A PG advisory lock holds a connection for the full hosted turn; the Redis active-owner key uses a TTL; worker count, event queues, and the database pool jointly bound Slack throughput.</p>
-            <h3>Visible limitations</h3><p>Context budgeting is a conservative estimate, not a provider tokenizer; a remaining provider context-limit error fails the turn explicitly instead of triggering a second forced compaction. Existing hosted tool implementations still cross one startup-time ABI bridge into canonical descriptors and results, while visibility, activation, policy, and scheduling have only one runtime owner. Secondary compaction and progress calls enter aggregate LLM metrics but are not allocated to an individual run's cost. Slack presentation uses an operator-configured default locale rather than per-user language discovery.</p>
+            <h3>Visible limitations</h3><p>Context budgeting is a conservative estimate, not a provider tokenizer; when a provider still returns a context-limit error, the runtime performs one forced compaction pass and retries the model request before failing the turn. Secondary compaction and progress calls enter aggregate LLM metrics but are not allocated to an individual run's cost. Slack presentation uses an operator-configured default locale rather than per-user language discovery.</p>
           </section>
 
           <section class="doc-section" id="en-reading">

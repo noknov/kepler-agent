@@ -40,6 +40,7 @@ func (t GetIssueTool) Descriptor() tool.Descriptor {
 		tool.ObjectSchema([]string{"issue_id"}, map[string]any{
 			"issue_id": map[string]any{"type": "string", "description": ""},
 		}),
+		tool.ReadNetworkParallel("youtrack")...,
 	)
 }
 
@@ -73,6 +74,7 @@ func (t SearchTool) Descriptor() tool.Descriptor {
 			"query": map[string]any{"type": "string", "description": ""},
 			"limit": map[string]any{"type": "integer", "description": ""},
 		}),
+		tool.ReadNetworkParallel("youtrack")...,
 	)
 }
 

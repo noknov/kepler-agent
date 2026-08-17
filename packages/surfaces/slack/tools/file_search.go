@@ -35,6 +35,7 @@ func (t FileSearchTool) Descriptor() tool.Descriptor {
 			"query":   map[string]any{"type": "string", "description": ""},
 			"limit":   map[string]any{"type": "integer", "description": ""},
 		}),
+		readNetwork()...,
 	)
 }
 

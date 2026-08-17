@@ -41,3 +41,16 @@ func TestCatalogRejectsToolWithoutEffects(t *testing.T) {
 		t.Fatal("expected missing effects to be rejected")
 	}
 }
+
+func TestBindSurfaceAddsPresentationMetadata(t *testing.T) {
+	bound := BindSurface(fakeTool{descriptor: Descriptor{
+		Name:    "reminder-create",
+		Effects: []Effect{EffectExternalWrite, EffectNetwork},
+	}}, "slack", "reminder").Descriptor()
+	if len(bound.Surfaces) != 1 || bound.Surfaces[0] != "slack" {
+		t.Fatalf("surfaces=%v", bound.Surfaces)
+	}
+	if len(bound.Dependencies) != 2 || bound.Dependencies[0] != "slack" || bound.Dependencies[1] != "reminder" {
+		t.Fatalf("dependencies=%v", bound.Dependencies)
+	}
+}

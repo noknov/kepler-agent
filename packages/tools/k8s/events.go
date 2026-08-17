@@ -27,6 +27,7 @@ func (t EventsTool) Descriptor() tool.Descriptor {
 			"type":           map[string]any{"type": "string", "description": ""},
 			"context":        map[string]any{"type": "string", "description": ""},
 		}),
+		tool.ReadNetworkParallel()...,
 	)
 }
 

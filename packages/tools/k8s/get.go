@@ -39,6 +39,7 @@ func (t GetTool) Descriptor() tool.Descriptor {
 			"output":         map[string]any{"type": "string", "description": ""},
 			"context":        map[string]any{"type": "string", "description": ""},
 		}),
+		tool.ReadNetworkParallel()...,
 	)
 }
 

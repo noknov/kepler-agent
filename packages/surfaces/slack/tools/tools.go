@@ -23,6 +23,7 @@ func (t AskUserTool) Descriptor() tool.Descriptor {
 		tool.ObjectSchema([]string{"question"}, map[string]any{
 			"question": map[string]any{"type": "string", "description": ""},
 		}),
+		append(readNetwork(), tool.WithExclusive(true))...,
 	)
 }
 

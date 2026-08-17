@@ -18,10 +18,11 @@ import (
 const JSONRPCVersion = "2.0"
 
 type Server struct {
-	Runtime   *agentruntime.Runtime
-	Prompt    []prompt.Fragment
-	Model     string
-	Workspace string
+	Runtime    *agentruntime.Runtime
+	Transcript transcript.Store
+	Prompt     []prompt.Fragment
+	Model      string
+	Workspace  string
 
 	reader  io.Reader
 	writer  io.Writer
@@ -95,7 +96,38 @@ func (s *Server) Serve(ctx context.Context) error {
 func (s *Server) handle(ctx context.Context, request Request) {
 	switch request.Method {
 	case "initialize":
-		s.respond(request.ID, map[string]string{"protocol": "v2"}, nil)
+		s.respond(request.ID, map[string]any{
+			"protocol": "v2",
+			"capabilities": []string{
+				"thread/resume",
+				"turn/start",
+				"turn/steer",
+				"turn/cancel",
+				"event",
+				"item/started",
+				"item/completed",
+				"turn/started",
+				"turn/completed",
+			},
+		}, nil)
+	case "thread/resume":
+		var params struct {
+			SessionID string `json:"sessionId"`
+		}
+		if err := json.Unmarshal(request.Params, &params); err != nil || params.SessionID == "" {
+			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "sessionId is required"})
+			return
+		}
+		if s.Transcript == nil {
+			s.respond(request.ID, nil, &ResponseError{Code: -32001, Message: "transcript store unavailable"})
+			return
+		}
+		events, err := s.Transcript.Load(ctx, params.SessionID, 0)
+		if err != nil {
+			s.respond(request.ID, nil, &ResponseError{Code: -32002, Message: err.Error()})
+			return
+		}
+		s.respond(request.ID, map[string]any{"sessionId": params.SessionID, "eventCount": len(events)}, nil)
 	case "turn/start":
 		var params TurnStartParams
 		if err := json.Unmarshal(request.Params, &params); err != nil || params.SessionID == "" || params.Input == "" {
@@ -148,6 +180,7 @@ func (s *Server) handle(ctx context.Context, request Request) {
 
 func (s *Server) execute(ctx context.Context, params TurnStartParams, steering *agentruntime.InputBuffer) {
 	defer s.unregister(params.TurnID)
+	s.notify("turn/started", map[string]string{"turnId": params.TurnID, "sessionId": params.SessionID})
 	modelName := params.Model
 	if modelName == "" {
 		modelName = s.Model
@@ -185,7 +218,14 @@ func (s *Server) notify(method string, params any) {
 
 // NotifyEvent streams a canonical transcript event to connected clients.
 func (s *Server) NotifyEvent(event transcript.Event) {
-	s.notify("event", event)
+	method := "event"
+	switch event.Type {
+	case transcript.ToolCallStarted:
+		method = "item/started"
+	case transcript.ToolCallCompleted, transcript.ToolCallFailed:
+		method = "item/completed"
+	}
+	s.notify(method, event)
 }
 
 func (s *Server) respond(id json.RawMessage, result any, responseErr *ResponseError) {

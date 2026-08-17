@@ -41,6 +41,45 @@ func WithSurfaces(surfaces ...string) DescriptorOption {
 	return func(d *Descriptor) { d.Surfaces = append([]string(nil), surfaces...) }
 }
 
+// ReadNetworkParallel marks a read-only tool that may call remote APIs and run
+// concurrently with other parallel-safe tools.
+func ReadNetworkParallel(deps ...string) []DescriptorOption {
+	return []DescriptorOption{
+		WithEffects(EffectRead, EffectNetwork),
+		WithParallel(true),
+		WithDependencies(deps...),
+	}
+}
+
+// NetworkIntegration marks an integration tool that performs network I/O.
+func NetworkIntegration(deps ...string) []DescriptorOption {
+	return []DescriptorOption{
+		WithEffects(EffectNetwork),
+		WithDependencies(deps...),
+	}
+}
+
+// ExternalWrite marks a tool that writes outside the local workspace.
+func ExternalWrite(deps ...string) []DescriptorOption {
+	return []DescriptorOption{
+		WithEffects(EffectExternalWrite, EffectNetwork),
+		WithDependencies(deps...),
+	}
+}
+
+// BindSurface attaches presentation-surface visibility metadata at registration
+// time without changing the underlying tool implementation.
+func BindSurface(item Tool, surface string, extraDeps ...string) Tool {
+	if surface == "" {
+		return item
+	}
+	deps := append([]string{surface}, extraDeps...)
+	return Annotate(item, Descriptor{
+		Dependencies: deps,
+		Surfaces:     []string{surface},
+	})
+}
+
 // FunctionDescriptor builds a tool descriptor with prompt overlays applied to
 // descriptions and parameter help text.
 func FunctionDescriptor(name, description string, parameters map[string]any, opts ...DescriptorOption) Descriptor {

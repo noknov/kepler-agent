@@ -23,6 +23,7 @@ func (t GetPodsTool) Descriptor() tool.Descriptor {
 			"all_namespaces": map[string]any{"type": "boolean", "description": ""},
 			"context":        map[string]any{"type": "string", "description": ""},
 		}),
+		tool.ReadNetworkParallel()...,
 	)
 }
 

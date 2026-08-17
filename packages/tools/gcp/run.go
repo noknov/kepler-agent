@@ -103,6 +103,7 @@ func (t RunServicesTool) Descriptor() tool.Descriptor {
 			"project": map[string]any{"type": "string", "description": ""},
 			"region":  map[string]any{"type": "string", "description": ""},
 		}),
+		tool.ReadNetworkParallel()...,
 	)
 }
 
@@ -175,6 +176,7 @@ func (t RunRevisionsTool) Descriptor() tool.Descriptor {
 			"region":  map[string]any{"type": "string", "description": ""},
 			"limit":   map[string]any{"type": "integer", "description": ""},
 		}),
+		tool.ReadNetworkParallel()...,
 	)
 }
 

@@ -36,6 +36,7 @@ func (t ClustersTool) Descriptor() tool.Descriptor {
 			"region":  map[string]any{"type": "string", "description": ""},
 			"zone":    map[string]any{"type": "string", "description": ""},
 		}),
+		tool.ReadNetworkParallel()...,
 	)
 }
 

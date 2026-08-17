@@ -28,6 +28,7 @@ func (t RolloutTool) Descriptor() tool.Descriptor {
 			"revision":  map[string]any{"type": "integer", "description": ""},
 			"context":   map[string]any{"type": "string", "description": ""},
 		}),
+		tool.ReadNetworkParallel()...,
 	)
 }
 

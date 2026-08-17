@@ -19,7 +19,7 @@ type CreateTool struct {
 }
 
 func (t CreateTool) Descriptor() tool.Descriptor {
-	return tool.FunctionDescriptor("reminder-create", "", tool.ObjectSchema([]string{"run_at", "message"}, map[string]any{"run_at": map[string]any{"type": "string", "description": ""}, "message": map[string]any{"type": "string", "description": ""}}))
+	return tool.FunctionDescriptor("reminder-create", "", tool.ObjectSchema([]string{"run_at", "message"}, map[string]any{"run_at": map[string]any{"type": "string", "description": ""}, "message": map[string]any{"type": "string", "description": ""}}), tool.ExternalWrite()...)
 }
 func (t CreateTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var a struct {
@@ -59,7 +59,7 @@ func (t CreateTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 type ListTool struct{ Store reminderStore.Store }
 
 func (ListTool) Descriptor() tool.Descriptor {
-	return tool.FunctionDescriptor("reminder-list", "", tool.ObjectSchema(nil, map[string]any{}))
+	return tool.FunctionDescriptor("reminder-list", "", tool.ObjectSchema(nil, map[string]any{}), tool.ReadNetworkParallel()...)
 }
 func (t ListTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	all, err := t.Store.List(ctx, call.Scope.UserID)
@@ -79,7 +79,7 @@ func (t ListTool) Execute(ctx context.Context, call tool.Call) (tool.Result, err
 type CancelTool struct{ Store reminderStore.Store }
 
 func (CancelTool) Descriptor() tool.Descriptor {
-	return tool.FunctionDescriptor("reminder-cancel", "", tool.ObjectSchema([]string{"id"}, map[string]any{"id": map[string]any{"type": "string", "description": ""}}))
+	return tool.FunctionDescriptor("reminder-cancel", "", tool.ObjectSchema([]string{"id"}, map[string]any{"id": map[string]any{"type": "string", "description": ""}}), tool.ExternalWrite()...)
 }
 func (t CancelTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var a struct {

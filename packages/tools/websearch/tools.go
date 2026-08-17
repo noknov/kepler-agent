@@ -61,6 +61,7 @@ func (t SearchTool) Descriptor() tool.Descriptor {
 			"site":     map[string]any{"type": "string", "description": "Optional domain filter. Example: hbea.edu.cn"},
 			"limit":    map[string]any{"type": "integer", "description": "Maximum results to return, default 5 and max 10."},
 		}),
+		tool.ReadNetworkParallel()...,
 	)
 }
 
@@ -77,6 +78,7 @@ func (t ReadPageTool) Descriptor() tool.Descriptor {
 			"url":       map[string]any{"type": "string", "description": "HTTP or HTTPS URL to read."},
 			"max_chars": map[string]any{"type": "integer", "description": "Maximum extracted characters, default 12000 and max 50000."},
 		}),
+		tool.ReadNetworkParallel()...,
 	)
 }
 

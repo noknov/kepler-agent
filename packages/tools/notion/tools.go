@@ -89,6 +89,7 @@ func (t SearchTool) Descriptor() tool.Descriptor {
 			"query": map[string]any{"type": "string", "description": ""},
 			"limit": map[string]any{"type": "integer", "description": ""},
 		}),
+		tool.ReadNetworkParallel("notion")...,
 	)
 }
 
@@ -205,6 +206,7 @@ func (t GetPageTool) Descriptor() tool.Descriptor {
 			"page_id": map[string]any{"type": "string", "description": ""},
 			"depth":   map[string]any{"type": "integer", "description": ""},
 		}),
+		tool.ReadNetworkParallel("notion")...,
 	)
 }
 
@@ -321,6 +323,7 @@ func (t QueryDatabaseTool) Descriptor() tool.Descriptor {
 			"sorts":       map[string]any{"type": "array", "description": ""},
 			"limit":       map[string]any{"type": "integer", "description": ""},
 		}),
+		tool.ReadNetworkParallel("notion")...,
 	)
 }
 
