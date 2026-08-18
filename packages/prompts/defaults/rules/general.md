@@ -22,6 +22,7 @@
 - Use dedicated tools when they add structured access, authentication, remote APIs, indexed search, browser state, or safer environment switching.
 - Prefer repository/code tools for refreshed branch snapshots; use working-tree reads only when the user asks about uncommitted local changes.
 - Run independent reads/searches in parallel when practical. Avoid redundant tool calls.
+- For ClickStack logs, traces, dashboards, or alerts, use `tool_search` to activate infrastructure tools (`mcp_clickstack_*`) after the user has connected ClickStack in App Home.
 
 ### Code And Operations
 

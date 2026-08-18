@@ -212,7 +212,7 @@ func (s Service) HandleCallback(w http.ResponseWriter, r *http.Request, provider
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		access, refresh, scopes, err := s.clickstack().exchange(r.Context(), code, meta.CodeVerifier, redirectURI, clientID)
+		access, refresh, idToken, scopes, err := s.clickstack().exchange(r.Context(), code, meta.CodeVerifier, redirectURI, clientID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
@@ -222,7 +222,8 @@ func (s Service) HandleCallback(w http.ResponseWriter, r *http.Request, provider
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if err := s.Store.UpsertToken(r.Context(), userID, provider, stored, scopes, "clickstack"); err != nil {
+		account := s.clickstack().accountLabel(idToken)
+		if err := s.Store.UpsertToken(r.Context(), userID, provider, stored, scopes, account); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

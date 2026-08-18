@@ -2,6 +2,7 @@ package connections
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -38,6 +39,7 @@ func TestClickStackOAuthRegisterAndExchange(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]string{
 				"access_token":  "access-1",
 				"refresh_token": "refresh-1",
+				"id_token":      testIDToken(t, map[string]string{"email": "user@example.com"}),
 				"scope":         "clickstack:access openid",
 			})
 		default:
@@ -58,14 +60,26 @@ func TestClickStackOAuthRegisterAndExchange(t *testing.T) {
 	if registerBody["redirect_uris"] == nil {
 		t.Fatalf("register body = %#v", registerBody)
 	}
-	access, refresh, scopes, err := oauth.exchange(context.Background(), "code-1", "verifier-1", "http://localhost/callback", clientID)
+	access, refresh, idToken, scopes, err := oauth.exchange(context.Background(), "code-1", "verifier-1", "http://localhost/callback", clientID)
 	if err != nil {
 		t.Fatalf("exchange() error = %v", err)
 	}
-	if access != "access-1" || refresh != "refresh-1" || len(scopes) != 2 {
-		t.Fatalf("exchange() = (%q, %q, %#v)", access, refresh, scopes)
+	if access != "access-1" || refresh != "refresh-1" || idToken == "" || len(scopes) != 2 {
+		t.Fatalf("exchange() = (%q, %q, %q, %#v)", access, refresh, idToken, scopes)
+	}
+	if got := oauth.accountLabel(idToken); got != "user@example.com" {
+		t.Fatalf("accountLabel() = %q", got)
 	}
 	if tokenValues.Get("code_verifier") != "verifier-1" {
 		t.Fatalf("token form = %#v", tokenValues)
 	}
+}
+
+func testIDToken(t *testing.T, claims map[string]string) string {
+	t.Helper()
+	raw, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return "header." + base64.RawURLEncoding.EncodeToString(raw) + ".sig"
 }
