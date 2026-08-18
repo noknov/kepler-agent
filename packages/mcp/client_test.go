@@ -126,7 +126,6 @@ func TestInitialize_PropagatesNotifyError(t *testing.T) {
 					map[string]string{"Content-Type": "application/json", "Mcp-Session-Id": "s1"},
 					`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`), nil
 			case "notifications/initialized":
-				// Server rejects the notification.
 				return httpResp(http.StatusInternalServerError, nil, "internal error"), nil
 			default:
 				t.Fatalf("unexpected method %q", payload.Method)
@@ -140,6 +139,28 @@ func TestInitialize_PropagatesNotifyError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "notifications/initialized") {
 		t.Fatalf("error should mention notifications/initialized: %v", err)
+	}
+}
+
+func TestClientAppliesCustomHeaders(t *testing.T) {
+	var gotAuth, gotServiceID string
+	c := &Client{
+		ServiceName: "test",
+		URL:         "http://example.test",
+		Token:       "token",
+		Headers:     map[string]string{"x-service-id": "svc-1"},
+		HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			gotAuth = r.Header.Get("Authorization")
+			gotServiceID = r.Header.Get("x-service-id")
+			return httpResp(http.StatusOK, map[string]string{"Content-Type": "application/json"}, `{"jsonrpc":"2.0","id":1,"result":{}}`), nil
+		})},
+	}
+	_, _, err := c.rpcWithID(context.Background(), "", 1, "initialize", map[string]any{})
+	if err != nil {
+		t.Fatalf("rpcWithID() error = %v", err)
+	}
+	if gotAuth != "Bearer token" || gotServiceID != "svc-1" {
+		t.Fatalf("headers auth=%q service=%q", gotAuth, gotServiceID)
 	}
 }
 

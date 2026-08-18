@@ -23,6 +23,7 @@ type Client struct {
 	ServiceName string // Stable integration name used in the session cache key.
 	URL         string // remote MCP endpoint
 	Token       string // Bearer token; empty means no Authorization header
+	Headers     map[string]string
 	// HTTP overrides the shared HTTP client. Set in tests to inject a mock transport.
 	// Leave nil to use the lazily-initialized shared client (keep-alives enabled, 60s timeout).
 	HTTP       *http.Client
@@ -197,6 +198,12 @@ func (c *Client) rpcWithID(ctx context.Context, sessionID string, id any, method
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint(), bytes.NewReader(data))
 	if err != nil {
 		return nil, nil, err
+	}
+	for key, value := range c.Headers {
+		if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+			continue
+		}
+		req.Header.Set(key, value)
 	}
 	if token := strings.TrimSpace(c.Token); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)

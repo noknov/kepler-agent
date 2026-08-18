@@ -100,6 +100,7 @@ type IntegrationConfig struct {
 	GitHub    GitHubConfig
 	K8s       K8sConfig
 	Luckin    LuckinConfig
+	ClickStack ClickStackConfig
 	Notion    NotionConfig
 	TTS       TTSConfig
 	WebSearch WebSearchConfig
@@ -131,6 +132,17 @@ type K8sConfig struct {
 type LuckinConfig struct {
 	MCPURL   string
 	MCPToken string
+}
+
+type ClickStackConfig struct {
+	MCPURL    string
+	MCPToken  string
+	ServiceID string
+	TeamID    string
+}
+
+func (c ClickStackConfig) Enabled() bool {
+	return strings.TrimSpace(c.MCPToken) != ""
 }
 
 type NotionConfig struct {
@@ -200,6 +212,8 @@ const (
 	ProfileObservability RuntimeProfile = "observability"
 	ProfileCLI           RuntimeProfile = "cli"
 )
+
+const defaultClickStackMCPURL = "https://mcp.clickhouse.cloud/clickstack"
 
 func Load() (Config, error) {
 	return LoadFor(ProfileSlackWorker)
@@ -371,6 +385,12 @@ func loadIntegrations() IntegrationConfig {
 		Luckin: LuckinConfig{
 			MCPURL:   trimRightSlash(env("LUCKIN_MCP_URL", "https://gwmcp.lkcoffee.com/order/user/mcp")),
 			MCPToken: os.Getenv("LUCKIN_MCP_TOKEN"),
+		},
+		ClickStack: ClickStackConfig{
+			MCPURL:    trimRightSlash(env("CLICKSTACK_MCP_URL", defaultClickStackMCPURL)),
+			MCPToken:  os.Getenv("CLICKSTACK_MCP_TOKEN"),
+			ServiceID: os.Getenv("CLICKSTACK_SERVICE_ID"),
+			TeamID:    os.Getenv("CLICKSTACK_TEAM_ID"),
 		},
 		WebSearch: WebSearchConfig{
 			Provider:   env("WEB_SEARCH_PROVIDER", "duckduckgo"),

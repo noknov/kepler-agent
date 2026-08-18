@@ -72,6 +72,25 @@ selection. Workflow aliases can live in `PROMPT_DIR/runtime.json`.
 | `diagnostics-incident_brief` | Structured incident summary |
 | `diagnostics-timeline` | Incident event timeline |
 | `diagnostics-evidence_board` | Structured evidence board |
+| `mcp_clickstack_*` | ClickStack observability MCP tools (logs, traces, dashboards, alerts) |
+
+### ClickStack MCP
+
+ClickStack tools are discovered at worker startup from a configured MCP endpoint.
+Set `CLICKSTACK_MCP_TOKEN` to enable them.
+
+| Deployment | URL | Auth |
+|---|---|---|
+| ClickHouse Cloud managed ClickStack | `https://mcp.clickhouse.cloud/clickstack` (default) | OAuth in Cursor; server deployments need a bearer token obtained from your ClickStack **Team Settings → API & Agents** connection string or a self-hosted Personal API Access Key |
+| Open Source / BYOC ClickStack | `https://<your-clickstack>/api/mcp` | `Authorization: Bearer <Personal API Access Key>` via `CLICKSTACK_MCP_TOKEN` |
+
+Optional routing headers:
+
+- `CLICKSTACK_SERVICE_ID` — `x-service-id` for ClickHouse Cloud when you have multiple services
+- `CLICKSTACK_TEAM_ID` — `x-hdx-team` for OSS/BYOC multi-team setups
+
+Each deployment configures its own URL, token, and service/team IDs. The values copied
+from one Cursor `mcp.json` are account-specific and are not shared across organizations.
 
 ## Knowledge and Search
 

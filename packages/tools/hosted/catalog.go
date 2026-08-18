@@ -1,6 +1,9 @@
 package hostedtools
 
 import (
+	"context"
+	"fmt"
+
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/codeintel"
 	"github.com/noknov/slack-copilot-agent/packages/config"
@@ -10,6 +13,7 @@ import (
 	codeTools "github.com/noknov/slack-copilot-agent/packages/tools/code"
 	codegraphTools "github.com/noknov/slack-copilot-agent/packages/tools/codegraph"
 	codeIntelTools "github.com/noknov/slack-copilot-agent/packages/tools/codeintel"
+	clickstackTools "github.com/noknov/slack-copilot-agent/packages/tools/clickstack"
 	diagnosticsTools "github.com/noknov/slack-copilot-agent/packages/tools/diagnostics"
 	gcpTools "github.com/noknov/slack-copilot-agent/packages/tools/gcp"
 	gitTools "github.com/noknov/slack-copilot-agent/packages/tools/git"
@@ -17,6 +21,7 @@ import (
 	k8sTools "github.com/noknov/slack-copilot-agent/packages/tools/k8s"
 	knowledgeTools "github.com/noknov/slack-copilot-agent/packages/tools/knowledge"
 	luckinTools "github.com/noknov/slack-copilot-agent/packages/tools/luckin"
+	mcptools "github.com/noknov/slack-copilot-agent/packages/tools/mcp"
 	notionTools "github.com/noknov/slack-copilot-agent/packages/tools/notion"
 	plannerTools "github.com/noknov/slack-copilot-agent/packages/tools/planner"
 	skillTools "github.com/noknov/slack-copilot-agent/packages/tools/skills"
@@ -42,6 +47,9 @@ func NewCatalog(cfg config.Config, workspacePolicy safety.WorkspacePolicy, comma
 	registerWorkspaceTools(catalog, policy, workspacePolicy)
 	registerCodeTools(catalog, policy, cfg, workspacePolicy, commandPolicy)
 	registerIntegrationTools(catalog, policy, cfg, commandPolicy, surface.Connections)
+	if err := registerClickStackMCPTools(catalog, policy, cfg); err != nil {
+		return nil, err
+	}
 	registerKnowledgeTools(catalog, policy, cfg)
 	registerAgentControlTools(catalog, policy, userPrefs)
 	if err := catalog.Register(tool.NewSearchTool(catalog)); err != nil {
@@ -57,9 +65,10 @@ func PolicyForSurface(cfg config.Config, surface SurfaceOptions) tool.SurfacePol
 func policyForSurface(cfg config.Config, surface SurfaceOptions) tool.SurfacePolicy {
 	integrations := cfg.Integrations
 	availableDeps := map[string]bool{
-		"github":   integrations.GitHub.Token != "" || cfg.Connections.GitHubOAuthEnabled(),
-		"luckin":   integrations.Luckin.MCPToken != "",
-		"notion":   integrations.Notion.Token != "",
+		"github":     integrations.GitHub.Token != "" || cfg.Connections.GitHubOAuthEnabled(),
+		"luckin":     integrations.Luckin.MCPToken != "",
+		"clickstack": integrations.ClickStack.Enabled(),
+		"notion":     integrations.Notion.Token != "",
 		"tts":      integrations.TTS.APIKey != "",
 		"youtrack": integrations.YouTrack.URL != "" && integrations.YouTrack.Token != "",
 	}
@@ -226,6 +235,28 @@ func registerIntegrationTools(catalog *tool.Catalog, policy tool.SurfacePolicy, 
 			_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, bound)
 		}
 	}
+}
+
+func registerClickStackMCPTools(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.Config) error {
+	clickstack := cfg.Integrations.ClickStack
+	if !clickstack.Enabled() {
+		return nil
+	}
+	items, err := mcptools.Discover(context.Background(), mcptools.Server{
+		Name:    "clickstack",
+		Client:  clickstackTools.NewMCPClient(clickstack),
+		Effects: []tool.Effect{tool.EffectRead},
+	})
+	if err != nil {
+		return fmt.Errorf("discover ClickStack MCP tools: %w", err)
+	}
+	for _, item := range items {
+		bound := tool.BindSurface(item, policy.Surface, "clickstack")
+		if err := catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, bound); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func registerKnowledgeTools(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.Config) {

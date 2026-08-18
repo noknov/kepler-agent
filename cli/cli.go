@@ -159,7 +159,7 @@ func Run() error {
 		if server.Name == "" || server.URL == "" {
 			return errors.New("every mcp_servers entry requires name and url")
 		}
-		items, discoverErr := mcptools.Discover(context.Background(), mcptools.Server{Name: server.Name, Client: &mcp.Client{ServiceName: server.Name, URL: server.URL, Token: os.Getenv(server.TokenEnv)}, Effects: effects(server.Effects)})
+		items, discoverErr := mcptools.Discover(context.Background(), mcptools.Server{Name: server.Name, Client: &mcp.Client{ServiceName: server.Name, URL: server.URL, Token: os.Getenv(server.TokenEnv), Headers: server.Headers}, Effects: effects(server.Effects)})
 		if discoverErr != nil {
 			return fmt.Errorf("discover MCP server %s: %w", server.Name, discoverErr)
 		}

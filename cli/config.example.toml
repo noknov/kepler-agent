@@ -23,7 +23,9 @@ skill_roots = []
 # MCP tools are discovered at startup and deferred from model context until used.
 # Effects default to external_write when omitted, so calls require approval.
 # [[mcp_servers]]
-# name = "example"
-# url = "https://mcp.example.com/mcp"
-# token_env = "EXAMPLE_MCP_TOKEN"
+# name = "clickstack"
+# url = "https://mcp.clickhouse.cloud/clickstack"
+# token_env = "CLICKSTACK_MCP_TOKEN"
 # effects = ["read"]
+# [mcp_servers.headers]
+# x-service-id = "your-service-id"

@@ -555,6 +555,44 @@ func TestLoadLuckinMCPConfig(t *testing.T) {
 	}
 }
 
+func TestLoadClickStackMCPConfig(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":        "xoxb-test",
+		"SLACK_SIGNING_SECRET":   "secret",
+		"ALLOWED_SLACK_USERS":    "U123",
+		"MIMO_API_KEY":           "mimo-token",
+		"CLICKSTACK_MCP_URL":     "https://clickstack.example/api/mcp/",
+		"CLICKSTACK_MCP_TOKEN":   "clickstack-token",
+		"CLICKSTACK_SERVICE_ID":  "svc-1",
+		"CLICKSTACK_TEAM_ID":     "team-1",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Integrations.ClickStack.MCPURL != "https://clickstack.example/api/mcp" {
+		t.Fatalf("ClickStackMCPURL = %q", cfg.Integrations.ClickStack.MCPURL)
+	}
+	if cfg.Integrations.ClickStack.MCPToken != "clickstack-token" {
+		t.Fatalf("ClickStackMCPToken = %q", cfg.Integrations.ClickStack.MCPToken)
+	}
+	if cfg.Integrations.ClickStack.ServiceID != "svc-1" || cfg.Integrations.ClickStack.TeamID != "team-1" {
+		t.Fatalf("ClickStack headers = %#v", cfg.Integrations.ClickStack)
+	}
+	if !cfg.Integrations.ClickStack.Enabled() {
+		t.Fatal("expected ClickStack to be enabled when token is set")
+	}
+}
+
 func TestLoadObservabilityAuthConfig(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
@@ -827,6 +865,10 @@ func resetConfigEnv(t *testing.T) {
 		"YOUTRACK_TOKEN",
 		"LUCKIN_MCP_URL",
 		"LUCKIN_MCP_TOKEN",
+		"CLICKSTACK_MCP_URL",
+		"CLICKSTACK_MCP_TOKEN",
+		"CLICKSTACK_SERVICE_ID",
+		"CLICKSTACK_TEAM_ID",
 		"WEB_SEARCH_PROVIDER",
 		"WEB_SEARCH_GOOGLE_API_KEY",
 		"WEB_SEARCH_GOOGLE_CX",
