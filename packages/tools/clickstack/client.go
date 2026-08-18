@@ -10,8 +10,8 @@ import (
 
 const defaultMCPURL = "https://mcp.clickhouse.cloud/clickstack"
 
-// NewMCPClient builds an MCP client from deployment config.
-func NewMCPClient(cfg config.ClickStackConfig) *mcp.Client {
+// NewMCPClient builds an MCP client from deployment config and an access token.
+func NewMCPClient(cfg config.ClickStackConfig, token string) *mcp.Client {
 	url := strings.TrimSpace(cfg.MCPURL)
 	if url == "" {
 		url = defaultMCPURL
@@ -26,7 +26,7 @@ func NewMCPClient(cfg config.ClickStackConfig) *mcp.Client {
 	return &mcp.Client{
 		ServiceName: "clickstack",
 		URL:         url,
-		Token:       strings.TrimSpace(cfg.MCPToken),
+		Token:       strings.TrimSpace(token),
 		Headers:     headers,
 	}
 }

@@ -136,13 +136,21 @@ type LuckinConfig struct {
 
 type ClickStackConfig struct {
 	MCPURL    string
-	MCPToken  string
 	ServiceID string
 	TeamID    string
 }
 
+func (c ClickStackConfig) Configured() bool {
+	return strings.TrimSpace(c.ServiceID) != "" || customClickStackDeployURL(c.MCPURL)
+}
+
+func customClickStackDeployURL(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	return raw != "" && raw != defaultClickStackMCPURL
+}
+
 func (c ClickStackConfig) Enabled() bool {
-	return strings.TrimSpace(c.MCPToken) != ""
+	return c.Configured()
 }
 
 type NotionConfig struct {
@@ -388,7 +396,6 @@ func loadIntegrations() IntegrationConfig {
 		},
 		ClickStack: ClickStackConfig{
 			MCPURL:    trimRightSlash(env("CLICKSTACK_MCP_URL", defaultClickStackMCPURL)),
-			MCPToken:  os.Getenv("CLICKSTACK_MCP_TOKEN"),
 			ServiceID: os.Getenv("CLICKSTACK_SERVICE_ID"),
 			TeamID:    os.Getenv("CLICKSTACK_TEAM_ID"),
 		},

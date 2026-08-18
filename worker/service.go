@@ -130,10 +130,11 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		"slack":    slackClient != nil,
 		"reminder": stores.Reminders != nil,
 	}, Connections: &connService}
-	catalog, err := hostedTools.NewCatalog(cfg, workspacePolicy, safety.NewCommandPolicy(), stores.UserPrefs, surface)
+	bundle, err := hostedTools.NewCatalog(cfg, workspacePolicy, safety.NewCommandPolicy(), stores.UserPrefs, surface)
 	if err != nil {
 		return nil, fmt.Errorf("build hosted tool catalog: %w", err)
 	}
+	catalog := bundle.Catalog
 	slackTools.AddToCatalog(catalog, hostedTools.PolicyForSurface(cfg, surface), cfg, slackClient, stores.Reminders, stores.Redis, &connService)
 	profile, profileErr := hosted.NewProfile(cfg, hosted.ProfileDependencies{
 		Tools: catalog, Postgres: stores.PGPool, Redis: stores.Redis, ToolSpills: stores.Runs, Events: events, Metrics: recorder,
@@ -144,6 +145,12 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	healthService := health.NewService(profile.Tools, cfg.Security.WorkspaceRoots)
 	healthService.Redis = stores.Redis
 	conversation := slackagent.New(profile.Agent, slackClient, profile.Prompt, profile.Redactor, stores.UserPrefs)
+	if bundle.ClickStack != nil {
+		policy := hostedTools.PolicyForSurface(cfg, surface)
+		conversation.BeforeRun = func(ctx context.Context, userID string) error {
+			return bundle.ClickStack.Ensure(ctx, catalog, policy, userID)
+		}
+	}
 	conversation.OnDelivered = runSink.LinkSlackMessage
 	conversation.AlreadyDelivered = runSink.SlackMessageDelivered
 	if profile.SecondaryModel != nil {

@@ -21,7 +21,6 @@ import (
 	k8sTools "github.com/noknov/slack-copilot-agent/packages/tools/k8s"
 	knowledgeTools "github.com/noknov/slack-copilot-agent/packages/tools/knowledge"
 	luckinTools "github.com/noknov/slack-copilot-agent/packages/tools/luckin"
-	mcptools "github.com/noknov/slack-copilot-agent/packages/tools/mcp"
 	notionTools "github.com/noknov/slack-copilot-agent/packages/tools/notion"
 	plannerTools "github.com/noknov/slack-copilot-agent/packages/tools/planner"
 	skillTools "github.com/noknov/slack-copilot-agent/packages/tools/skills"
@@ -37,25 +36,33 @@ type SurfaceOptions struct {
 	Connections   *connections.Service
 }
 
-func NewCatalog(cfg config.Config, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy, userPrefs userprefs.Store, surface SurfaceOptions) (*tool.Catalog, error) {
+type CatalogBundle struct {
+	Catalog    *tool.Catalog
+	ClickStack *clickstackTools.Registrar
+}
+
+func NewCatalog(cfg config.Config, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy, userPrefs userprefs.Store, surface SurfaceOptions) (CatalogBundle, error) {
 	policy := policyForSurface(cfg, surface)
 	catalog, err := tool.NewCatalog()
 	if err != nil {
-		return nil, err
+		return CatalogBundle{}, err
 	}
 	registerDeferredDiagnosticsTools(catalog, policy)
 	registerWorkspaceTools(catalog, policy, workspacePolicy)
 	registerCodeTools(catalog, policy, cfg, workspacePolicy, commandPolicy)
 	registerIntegrationTools(catalog, policy, cfg, commandPolicy, surface.Connections)
-	if err := registerClickStackMCPTools(catalog, policy, cfg); err != nil {
-		return nil, err
+	clickstackReg := clickstackTools.NewRegistrar(cfg.Integrations.ClickStack, surface.Connections)
+	if clickstackReg != nil {
+		if err := clickstackReg.Ensure(context.Background(), catalog, policy, ""); err != nil {
+			return CatalogBundle{}, fmt.Errorf("register ClickStack MCP tools: %w", err)
+		}
 	}
 	registerKnowledgeTools(catalog, policy, cfg)
 	registerAgentControlTools(catalog, policy, userPrefs)
 	if err := catalog.Register(tool.NewSearchTool(catalog)); err != nil {
-		return nil, err
+		return CatalogBundle{}, err
 	}
-	return catalog, nil
+	return CatalogBundle{Catalog: catalog, ClickStack: clickstackReg}, nil
 }
 
 func PolicyForSurface(cfg config.Config, surface SurfaceOptions) tool.SurfacePolicy {
@@ -77,6 +84,9 @@ func policyForSurface(cfg config.Config, surface SurfaceOptions) tool.SurfacePol
 	}
 	if surface.Connections != nil && surface.Connections.Config.SlackEnabled() {
 		availableDeps["slack-connection"] = true
+	}
+	if surface.Connections != nil && surface.Connections.Config.ClickStackEnabled() {
+		availableDeps["clickstack-connection"] = true
 	}
 	return tool.SurfacePolicy{
 		Surface:       surface.Name,
@@ -235,28 +245,6 @@ func registerIntegrationTools(catalog *tool.Catalog, policy tool.SurfacePolicy, 
 			_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, bound)
 		}
 	}
-}
-
-func registerClickStackMCPTools(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.Config) error {
-	clickstack := cfg.Integrations.ClickStack
-	if !clickstack.Enabled() {
-		return nil
-	}
-	items, err := mcptools.Discover(context.Background(), mcptools.Server{
-		Name:    "clickstack",
-		Client:  clickstackTools.NewMCPClient(clickstack),
-		Effects: []tool.Effect{tool.EffectRead},
-	})
-	if err != nil {
-		return fmt.Errorf("discover ClickStack MCP tools: %w", err)
-	}
-	for _, item := range items {
-		bound := tool.BindSurface(item, policy.Surface, "clickstack")
-		if err := catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, bound); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func registerKnowledgeTools(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.Config) {

@@ -76,21 +76,19 @@ selection. Workflow aliases can live in `PROMPT_DIR/runtime.json`.
 
 ### ClickStack MCP
 
-ClickStack tools are discovered at worker startup from a configured MCP endpoint.
-Set `CLICKSTACK_MCP_TOKEN` to enable them.
+ClickStack tools are discovered from the configured MCP endpoint once a usable token exists.
+For ClickHouse Cloud, set `CLICKSTACK_SERVICE_ID` and have each user connect ClickStack from App Home (OAuth).
+For OSS/BYOC, set `CLICKSTACK_MCP_URL` and connect a Personal API Access Key per user via `slack-copilot connect clickstack` or App Home.
 
 | Deployment | URL | Auth |
 |---|---|---|
-| ClickHouse Cloud managed ClickStack | `https://mcp.clickhouse.cloud/clickstack` (default) | OAuth in Cursor; server deployments need a bearer token obtained from your ClickStack **Team Settings → API & Agents** connection string or a self-hosted Personal API Access Key |
-| Open Source / BYOC ClickStack | `https://<your-clickstack>/api/mcp` | `Authorization: Bearer <Personal API Access Key>` via `CLICKSTACK_MCP_TOKEN` |
+| ClickHouse Cloud managed ClickStack | `https://mcp.clickhouse.cloud/clickstack` (default) | Per-user OAuth via Connections (`x-service-id` from deploy config) |
+| Open Source / BYOC ClickStack | `https://<your-clickstack>/api/mcp` | Per-user Bearer token (Personal API Access Key) |
 
-Optional routing headers:
+Deploy routing headers:
 
-- `CLICKSTACK_SERVICE_ID` — `x-service-id` for ClickHouse Cloud when you have multiple services
+- `CLICKSTACK_SERVICE_ID` — required for Cloud; shared `x-service-id` for the whole team
 - `CLICKSTACK_TEAM_ID` — `x-hdx-team` for OSS/BYOC multi-team setups
-
-Each deployment configures its own URL, token, and service/team IDs. The values copied
-from one Cursor `mcp.json` are account-specific and are not shared across organizations.
 
 ## Knowledge and Search
 

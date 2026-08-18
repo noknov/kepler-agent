@@ -95,44 +95,76 @@ func (s PGStore) Token(ctx context.Context, userID, provider string) (string, er
 	if status != StatusConnected {
 		return "", ErrNotConnected
 	}
-	return decrypt(s.SecretKey, ciphertext)
+	token, err := decrypt(s.SecretKey, ciphertext)
+	if err != nil {
+		return "", err
+	}
+	return decodeStoredToken(token), nil
 }
 
-func (s PGStore) CreateOAuthState(ctx context.Context, userID, provider, state string, expiresAt time.Time) error {
+func (s PGStore) AnyToken(ctx context.Context, provider string) (string, error) {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT token_ciphertext
+		FROM user_connections
+		WHERE provider = $1 AND status = $2
+		ORDER BY updated_at DESC
+		LIMIT 1`, provider, StatusConnected)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return "", ErrNotConnected
+	}
+	var ciphertext string
+	if err := rows.Scan(&ciphertext); err != nil {
+		return "", err
+	}
+	token, err := decrypt(s.SecretKey, ciphertext)
+	if err != nil {
+		return "", err
+	}
+	if token = decodeStoredToken(token); token == "" {
+		return "", ErrNotConnected
+	}
+	return token, rows.Err()
+}
+
+func (s PGStore) CreateOAuthState(ctx context.Context, userID, provider, state string, expiresAt time.Time, meta OAuthStateMeta) error {
 	_, err := s.Pool.Exec(ctx, `
-		INSERT INTO oauth_states (state, user_id, provider, expires_at)
-		VALUES ($1, $2, $3, $4)`, state, userID, provider, expiresAt)
+		INSERT INTO oauth_states (state, user_id, provider, expires_at, code_verifier)
+		VALUES ($1, $2, $3, $4, $5)`, state, userID, provider, expiresAt, meta.CodeVerifier)
 	return err
 }
 
-func (s PGStore) PeekOAuthState(ctx context.Context, state string) (string, string, error) {
+func (s PGStore) PeekOAuthState(ctx context.Context, state string) (string, string, OAuthStateMeta, error) {
 	row := s.Pool.QueryRow(ctx, `
-		SELECT user_id, provider
+		SELECT user_id, provider, code_verifier
 		FROM oauth_states
 		WHERE state = $1 AND expires_at > NOW()`, state)
-	var userID, provider string
-	if err := row.Scan(&userID, &provider); err != nil {
+	var userID, provider, codeVerifier string
+	if err := row.Scan(&userID, &provider, &codeVerifier); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", "", fmt.Errorf("oauth state is invalid or expired")
+			return "", "", OAuthStateMeta{}, fmt.Errorf("oauth state is invalid or expired")
 		}
-		return "", "", err
+		return "", "", OAuthStateMeta{}, err
 	}
-	return userID, provider, nil
+	return userID, provider, OAuthStateMeta{CodeVerifier: codeVerifier}, nil
 }
 
-func (s PGStore) ConsumeOAuthState(ctx context.Context, state string) (string, string, error) {
+func (s PGStore) ConsumeOAuthState(ctx context.Context, state string) (string, string, OAuthStateMeta, error) {
 	row := s.Pool.QueryRow(ctx, `
 		DELETE FROM oauth_states
 		WHERE state = $1 AND expires_at > NOW()
-		RETURNING user_id, provider`, state)
-	var userID, provider string
-	if err := row.Scan(&userID, &provider); err != nil {
+		RETURNING user_id, provider, code_verifier`, state)
+	var userID, provider, codeVerifier string
+	if err := row.Scan(&userID, &provider, &codeVerifier); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", "", fmt.Errorf("oauth state is invalid or expired")
+			return "", "", OAuthStateMeta{}, fmt.Errorf("oauth state is invalid or expired")
 		}
-		return "", "", err
+		return "", "", OAuthStateMeta{}, err
 	}
-	return userID, provider, nil
+	return userID, provider, OAuthStateMeta{CodeVerifier: codeVerifier}, nil
 }
 
 func StatusMap(connections []Connection) map[string]Connection {

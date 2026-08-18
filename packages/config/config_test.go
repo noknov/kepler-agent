@@ -564,7 +564,6 @@ func TestLoadClickStackMCPConfig(t *testing.T) {
 		"ALLOWED_SLACK_USERS":    "U123",
 		"MIMO_API_KEY":           "mimo-token",
 		"CLICKSTACK_MCP_URL":     "https://clickstack.example/api/mcp/",
-		"CLICKSTACK_MCP_TOKEN":   "clickstack-token",
 		"CLICKSTACK_SERVICE_ID":  "svc-1",
 		"CLICKSTACK_TEAM_ID":     "team-1",
 	})
@@ -582,14 +581,11 @@ func TestLoadClickStackMCPConfig(t *testing.T) {
 	if cfg.Integrations.ClickStack.MCPURL != "https://clickstack.example/api/mcp" {
 		t.Fatalf("ClickStackMCPURL = %q", cfg.Integrations.ClickStack.MCPURL)
 	}
-	if cfg.Integrations.ClickStack.MCPToken != "clickstack-token" {
-		t.Fatalf("ClickStackMCPToken = %q", cfg.Integrations.ClickStack.MCPToken)
-	}
 	if cfg.Integrations.ClickStack.ServiceID != "svc-1" || cfg.Integrations.ClickStack.TeamID != "team-1" {
 		t.Fatalf("ClickStack headers = %#v", cfg.Integrations.ClickStack)
 	}
 	if !cfg.Integrations.ClickStack.Enabled() {
-		t.Fatal("expected ClickStack to be enabled when token is set")
+		t.Fatal("expected ClickStack to be enabled when service id is set")
 	}
 }
 
@@ -866,7 +862,6 @@ func resetConfigEnv(t *testing.T) {
 		"LUCKIN_MCP_URL",
 		"LUCKIN_MCP_TOKEN",
 		"CLICKSTACK_MCP_URL",
-		"CLICKSTACK_MCP_TOKEN",
 		"CLICKSTACK_SERVICE_ID",
 		"CLICKSTACK_TEAM_ID",
 		"WEB_SEARCH_PROVIDER",

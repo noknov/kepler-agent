@@ -29,10 +29,10 @@ func TestPolicyForSurfaceEnablesSlackConnectionDeps(t *testing.T) {
 func TestPolicyForSurfaceEnablesClickStackDeps(t *testing.T) {
 	policy := PolicyForSurface(config.Config{
 		Integrations: config.IntegrationConfig{
-			ClickStack: config.ClickStackConfig{MCPToken: "token"},
+			ClickStack: config.ClickStackConfig{ServiceID: "svc-1"},
 		},
 	}, SurfaceOptions{Name: "slack"})
 	if !policy.AvailableDeps["clickstack"] {
-		t.Fatal("expected clickstack dependency when CLICKSTACK_MCP_TOKEN is configured")
+		t.Fatal("expected clickstack dependency when CLICKSTACK_SERVICE_ID is configured")
 	}
 }

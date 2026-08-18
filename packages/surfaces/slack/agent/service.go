@@ -53,6 +53,7 @@ type Service struct {
 	Progress         *ProgressSummarizer
 	Locker           session.Locker
 	Inputs           sessioninput.Store
+	BeforeRun        func(context.Context, string) error
 
 	mu     sync.Mutex
 	active map[string]*activeRun
@@ -271,6 +272,13 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 			go s.startPending(followCtx, sessionID)
 		}
 	}()
+
+	if s.BeforeRun != nil {
+		if err := s.BeforeRun(runCtx, req.UserID); err != nil {
+			cancel()
+			return err
+		}
+	}
 
 	turnID := strings.TrimSpace(req.EventID)
 	if turnID == "" {

@@ -10,15 +10,20 @@ import (
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	"github.com/noknov/slack-copilot-agent/packages/connections"
 	"github.com/noknov/slack-copilot-agent/packages/mcp"
 )
 
 var safeName = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
 
+// TokenResolver returns the bearer token for a tool call.
+type TokenResolver func(ctx context.Context, call tool.Call) (string, error)
+
 type Server struct {
-	Name    string
-	Client  *mcp.Client
-	Effects []tool.Effect
+	Name         string
+	Client       *mcp.Client
+	ResolveToken TokenResolver
+	Effects      []tool.Effect
 }
 type remoteTool struct {
 	server     *serverState
@@ -26,10 +31,10 @@ type remoteTool struct {
 	descriptor tool.Descriptor
 }
 type serverState struct {
-	client    *mcp.Client
-	mu        sync.Mutex
-	sessions  map[string]mcp.Session
-	bootstrap *mcp.Session
+	template     mcp.Client
+	resolveToken TokenResolver
+	mu           sync.Mutex
+	sessions     map[string]mcp.Session
 }
 
 func Discover(ctx context.Context, config Server) ([]tool.Tool, error) {
@@ -44,7 +49,13 @@ func Discover(ctx context.Context, config Server) ([]tool.Tool, error) {
 	if err != nil {
 		return nil, err
 	}
-	state := &serverState{client: config.Client, sessions: make(map[string]mcp.Session), bootstrap: &session}
+	template := *config.Client
+	template.Token = ""
+	state := &serverState{
+		template:     template,
+		resolveToken: config.ResolveToken,
+		sessions:     make(map[string]mcp.Session),
+	}
 	items := make([]tool.Tool, 0, len(definitions))
 	for _, definition := range definitions {
 		name := "mcp_" + safeName.ReplaceAllString(config.Name, "_") + "_" + safeName.ReplaceAllString(definition.Name, "_")
@@ -60,11 +71,20 @@ func Discover(ctx context.Context, config Server) ([]tool.Tool, error) {
 
 func (t *remoteTool) Descriptor() tool.Descriptor { return t.descriptor }
 func (t *remoteTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
-	session, err := t.server.session(ctx, call.Scope.SessionID)
+	if t.server.resolveToken != nil {
+		if _, err := t.server.resolveToken(ctx, call); err != nil {
+			if result, convErr := connections.ToolResult(err); convErr == nil {
+				return result, nil
+			}
+			return tool.Result{}, err
+		}
+	}
+	session, err := t.server.session(ctx, call)
 	if err != nil {
 		return tool.Result{}, err
 	}
-	value, err := t.server.client.CallTool(ctx, session, t.remote.Name, call.Arguments)
+	client := t.server.clientForCall(ctx, call)
+	value, err := client.CallTool(ctx, session, t.remote.Name, call.Arguments)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -85,22 +105,38 @@ func mapErrorCode(isError bool) string {
 	return ""
 }
 
-func (s *serverState) session(ctx context.Context, agentSession string) (mcp.Session, error) {
+func (s *serverState) sessionKey(call tool.Call) string {
+	userID := call.Scope.UserID
+	if userID == "" {
+		userID = "_"
+	}
+	return call.Scope.SessionID + "\x00" + userID
+}
+
+func (s *serverState) session(ctx context.Context, call tool.Call) (mcp.Session, error) {
+	key := s.sessionKey(call)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if session, ok := s.sessions[agentSession]; ok {
+	if session, ok := s.sessions[key]; ok {
 		return session, nil
 	}
-	if s.bootstrap != nil {
-		session := *s.bootstrap
-		s.bootstrap = nil
-		s.sessions[agentSession] = session
-		return session, nil
-	}
-	session, err := s.client.Initialize(ctx)
+	client := s.clientForCall(ctx, call)
+	session, err := client.Initialize(ctx)
 	if err != nil {
 		return mcp.Session{}, err
 	}
-	s.sessions[agentSession] = session
+	s.sessions[key] = session
 	return session, nil
+}
+
+func (s *serverState) clientForCall(ctx context.Context, call tool.Call) *mcp.Client {
+	client := s.template
+	if s.resolveToken == nil {
+		return &client
+	}
+	token, err := s.resolveToken(ctx, call)
+	if err == nil && token != "" {
+		client.Token = token
+	}
+	return &client
 }
