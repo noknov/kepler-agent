@@ -15,7 +15,7 @@ const (
 	maxThreadLimit     = 200
 )
 
-// UserReadThreadTool reads a Slack thread using the requesting user's connected identity.
+// UserReadThreadTool reads Slack messages using the requesting user's connected identity.
 // Registered only from slacktool.AddToCatalog in the Slack worker; never from CLI.
 type UserReadThreadTool struct {
 	Source ThreadReaderSource
@@ -24,15 +24,23 @@ type UserReadThreadTool struct {
 func (t UserReadThreadTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
 		"slack-user_read_thread",
-		"Read Slack messages as the requesting user's connected Slack identity. Use for DMs, channels, or threads the user can access. Defaults to the current conversation; for private-message tabs this loads prior DM history, and for threaded replies it loads the thread.",
+		"Read Slack messages the requesting user can access. Accepts a Slack user (@mention, user ID, or display name), DM/channel ID, or Slack message link. Omit everything to read the current bot conversation. For a person's recent DM, pass user (for example Stella Zhang) without thread_ts.",
 		tool.ObjectSchema([]string{}, map[string]any{
+			"user": map[string]any{
+				"type":        "string",
+				"description": "Slack user ID (U...), @mention, or display/real name to read a direct-message history with that person.",
+			},
 			"channel": map[string]any{
 				"type":        "string",
-				"description": "Slack channel ID (C...) or DM ID (D...). Defaults to the current conversation channel.",
+				"description": "Slack channel ID (C.../D...) or user ID (U...) to open as a DM. Defaults to the current conversation.",
+			},
+			"link": map[string]any{
+				"type":        "string",
+				"description": "Slack message or thread URL. Channel and thread_ts are parsed automatically.",
 			},
 			"thread_ts": map[string]any{
 				"type":        "string",
-				"description": "Parent message timestamp for the thread. Defaults to the current conversation thread.",
+				"description": "Parent message timestamp for a threaded read. Omit to fetch recent non-threaded conversation history.",
 			},
 			"limit": map[string]any{
 				"type":        "integer",
@@ -52,24 +60,18 @@ func (t UserReadThreadTool) Execute(ctx context.Context, call tool.Call) (tool.R
 		return tool.Result{}, err
 	}
 	var args struct {
+		User     string `json:"user"`
 		Channel  string `json:"channel"`
+		Link     string `json:"link"`
 		ThreadTS string `json:"thread_ts"`
 		Limit    int    `json:"limit"`
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
 	}
-	args.Channel = strings.TrimSpace(args.Channel)
-	args.ThreadTS = strings.TrimSpace(args.ThreadTS)
-	if args.Channel == "" {
-		args.Channel = strings.TrimSpace(call.Scope.Values["channel"])
-	}
-	if args.ThreadTS == "" {
-		args.ThreadTS = strings.TrimSpace(call.Scope.Values["thread_ts"])
-	}
-	messageTS := strings.TrimSpace(call.Scope.Values["message_ts"])
-	if args.Channel == "" {
-		return tool.Result{}, fmt.Errorf("channel is required")
+	target, err := resolveReadTarget(ctx, reader, strings.TrimSpace(args.Channel), strings.TrimSpace(args.User), strings.TrimSpace(args.Link), strings.TrimSpace(args.ThreadTS), call.Scope.Values)
+	if err != nil {
+		return tool.Result{}, err
 	}
 	if args.Limit <= 0 {
 		args.Limit = defaultThreadLimit
@@ -78,25 +80,22 @@ func (t UserReadThreadTool) Execute(ctx context.Context, call tool.Call) (tool.R
 		args.Limit = maxThreadLimit
 	}
 	var messages []slack.Message
-	if slack.UseConversationHistory(args.ThreadTS, messageTS) {
-		latest := messageTS
+	if slack.UseConversationHistory(target.ThreadTS, target.LatestTS) {
+		latest := target.LatestTS
 		if latest == "" {
-			latest = args.ThreadTS
+			latest = target.ThreadTS
 		}
-		messages, err = reader.History(ctx, args.Channel, latest, args.Limit)
+		messages, err = reader.History(ctx, target.Channel, latest, args.Limit)
 	} else {
-		if args.ThreadTS == "" {
-			return tool.Result{}, fmt.Errorf("thread_ts is required for threaded reads")
-		}
-		messages, err = reader.Replies(ctx, args.Channel, args.ThreadTS, args.Limit)
+		messages, err = reader.Replies(ctx, target.Channel, target.ThreadTS, args.Limit)
 	}
 	if err != nil {
 		return tool.Result{}, err
 	}
 	if len(messages) == 0 {
-		return tool.TextResult(fmt.Sprintf("No messages found in conversation %s.", args.Channel)), nil
+		return tool.TextResult(fmt.Sprintf("No messages found in conversation %s.", target.Channel)), nil
 	}
-	return tool.TextResult(formatThreadMessages(args.Channel, displayThreadTS(args.ThreadTS, messageTS), messages)), nil
+	return tool.TextResult(formatThreadMessages(target.Channel, displayThreadTS(target.ThreadTS, target.LatestTS), messages)), nil
 }
 
 func displayThreadTS(threadTS, messageTS string) string {
@@ -108,7 +107,7 @@ func displayThreadTS(threadTS, messageTS string) string {
 
 func formatThreadMessages(channel, threadTS string, messages []slack.Message) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Slack thread\nchannel: %s\nthread_ts: %s\n", channel, threadTS))
+	b.WriteString(fmt.Sprintf("Slack conversation\nchannel: %s\nthread_ts: %s\n", channel, threadTS))
 	for i, msg := range messages {
 		author := strings.TrimSpace(msg.User)
 		if author == "" && msg.BotID != "" {

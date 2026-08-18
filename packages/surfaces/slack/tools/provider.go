@@ -130,6 +130,11 @@ type ThreadReader interface {
 	History(ctx context.Context, channel, latest string, limit int) ([]slack.Message, error)
 }
 
+// ConversationResolver resolves flexible Slack conversation references.
+type ConversationResolver interface {
+	ResolveReadTarget(ctx context.Context, in slack.ReadTargetInput) (slack.ReadTarget, error)
+}
+
 // ThreadReaderSource resolves Slack thread APIs for a tool call.
 type ThreadReaderSource interface {
 	ThreadReader(ctx context.Context, call tool.Call) (ThreadReader, error)
@@ -165,6 +170,9 @@ func (s PreferConnectedThreadReader) ThreadReader(ctx context.Context, call tool
 	reader, err := s.Connected.ThreadReader(ctx, call)
 	if err == nil {
 		return reader, nil
+	}
+	if readRequiresUserConnection(call) {
+		return nil, err
 	}
 	var required *connections.RequiredError
 	if errors.As(err, &required) || errors.Is(err, connections.ErrNotConnected) {

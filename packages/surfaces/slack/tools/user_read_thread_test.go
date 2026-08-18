@@ -48,6 +48,44 @@ func TestUserReadThreadDefaultsToScope(t *testing.T) {
 	}
 }
 
+func TestUserReadThreadExplicitChannelIgnoresScope(t *testing.T) {
+	reader := &fakeThreadReader{messages: []slack.Message{{User: "U1", TS: "1.0", Text: "dm"}}}
+	source := stubThreadReaderSource{reader: reader}
+	_, err := (UserReadThreadTool{Source: source}).Execute(context.Background(), tool.Call{
+		Arguments: json.RawMessage(`{"channel":"D0AJSE6PRLH"}`),
+		Scope: tool.Scope{
+			UserID: "U123",
+			Values: map[string]string{"channel": "D_BOT", "thread_ts": "9.9", "message_ts": "9.9"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reader.useHistory || reader.channel != "D0AJSE6PRLH" || reader.latest != "" {
+		t.Fatalf("unexpected reader call: history=%v channel=%q latest=%q", reader.useHistory, reader.channel, reader.latest)
+	}
+}
+
+func (f *fakeThreadReader) ResolveReadTarget(_ context.Context, in slack.ReadTargetInput) (slack.ReadTarget, error) {
+	channel := slack.NormalizeChannelRef(in.Channel)
+	explicit := strings.TrimSpace(in.User) != "" || strings.TrimSpace(in.Link) != "" || (channel != "" && channel != strings.TrimSpace(in.ScopeChannel))
+	if strings.TrimSpace(in.User) != "" {
+		channel = "D_USER"
+	}
+	if channel == "" {
+		channel = strings.TrimSpace(in.ScopeChannel)
+	}
+	threadTS := strings.TrimSpace(in.ThreadTS)
+	latestTS := ""
+	if !explicit {
+		if threadTS == "" {
+			threadTS = strings.TrimSpace(in.ScopeThreadTS)
+		}
+		latestTS = strings.TrimSpace(in.ScopeMessageTS)
+	}
+	return slack.ReadTarget{Channel: channel, ThreadTS: threadTS, LatestTS: latestTS}, nil
+}
+
 type fakeThreadReader struct {
 	channel, threadTS, latest string
 	limit                     int
