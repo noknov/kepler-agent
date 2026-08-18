@@ -60,10 +60,11 @@ type Message struct {
 }
 
 type User struct {
-	ID       string      `json:"id,omitempty"`
-	Name     string      `json:"name,omitempty"`
-	RealName string      `json:"real_name,omitempty"`
-	Profile  UserProfile `json:"profile,omitempty"`
+	ID          string      `json:"id,omitempty"`
+	Name        string      `json:"name,omitempty"`
+	RealName    string      `json:"real_name,omitempty"`
+	DeletedFlag bool        `json:"deleted,omitempty"`
+	Profile     UserProfile `json:"profile,omitempty"`
 }
 
 type UserProfile struct {
