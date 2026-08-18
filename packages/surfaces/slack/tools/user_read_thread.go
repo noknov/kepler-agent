@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	slackfiles "github.com/noknov/slack-copilot-agent/packages/surfaces/slack/files"
 	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
 )
 
@@ -87,7 +89,13 @@ func (t UserReadThreadTool) Execute(ctx context.Context, call tool.Call) (tool.R
 	if label == "" {
 		label = target.LatestTS
 	}
-	return tool.TextResult(formatConversation(target.Channel, label, messages)), nil
+	text := formatConversation(target.Channel, label, messages)
+	budget := slackfiles.ThreadImageBudget()
+	content := []model.Content{{Type: model.ContentText, Text: text}}
+	for _, msg := range messages {
+		content = append(content, slackfiles.ModelContent(slackfiles.ImagePartsWithBudget(ctx, slackClient, msg.Files, budget))...)
+	}
+	return tool.Result{Content: content}, nil
 }
 
 func formatConversation(channel, anchorTS string, messages []slack.Message) string {

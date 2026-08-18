@@ -94,13 +94,20 @@ func PDFExcerpts(ctx context.Context, client Downloader, files []slack.File) str
 }
 
 func ImageParts(ctx context.Context, client Downloader, files []slack.File) []llm.ContentPart {
+	return ImagePartsWithBudget(ctx, client, files, MessageImageBudget())
+}
+
+func ImagePartsWithBudget(ctx context.Context, client Downloader, files []slack.File, budget *ImageBudget) []llm.ContentPart {
 	if client == nil {
 		return nil
 	}
+	if budget == nil {
+		budget = MessageImageBudget()
+	}
 	parts := make([]llm.ContentPart, 0, len(files))
-	totalBytes := 0
 	for _, file := range files {
-		if len(parts) >= MaxImageCount {
+		maxCount, maxBytes := budget.allow()
+		if maxCount <= 0 || maxBytes <= 0 {
 			break
 		}
 		mime := NormalizedImageMIME(file)
@@ -111,15 +118,11 @@ func ImageParts(ctx context.Context, client Downloader, files []slack.File) []ll
 			log.Printf("skip slack image %s: size %d exceeds limit %d", file.ID, file.Size, MaxImageBytes)
 			continue
 		}
-		remaining := MaxImageTotalBytes - totalBytes
-		if remaining <= 0 {
-			break
+		downloadLimit := MaxImageBytes
+		if maxBytes < downloadLimit {
+			downloadLimit = maxBytes
 		}
-		maxBytes := MaxImageBytes
-		if remaining < maxBytes {
-			maxBytes = remaining
-		}
-		data, err := client.DownloadFile(ctx, file, int64(maxBytes))
+		data, err := client.DownloadFile(ctx, file, int64(downloadLimit))
 		if err != nil {
 			log.Printf("skip slack image %s: %v", file.ID, err)
 			continue
@@ -132,9 +135,9 @@ func ImageParts(ctx context.Context, client Downloader, files []slack.File) []ll
 		if actualMIME != mime {
 			log.Printf("slack image %s declared %s but detected %s", file.ID, mime, actualMIME)
 		}
-		totalBytes += len(data)
 		dataURL := "data:" + actualMIME + ";base64," + base64.StdEncoding.EncodeToString(data)
 		parts = append(parts, llm.ImageURLPart(dataURL))
+		budget.take(1, len(data))
 	}
 	return parts
 }
