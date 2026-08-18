@@ -38,10 +38,10 @@ func AddToCatalog(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.C
 		_ = catalog.RegisterVisible(policy, UserPostMessageTool{Source: ConnectedClientSource{Service: *conn}, Attribution: attribution})
 		_ = catalog.RegisterVisible(policy, UserReadThreadTool{Source: PreferConnectedThreadReader{
 			Connected: ConnectedThreadReader{Service: *conn},
-			Bot:       BotThreadReader{Client: slackClient},
+			Bot:       BotThreadReader{Slack: slackClient},
 		}})
 	} else {
-		_ = catalog.RegisterVisible(policy, UserReadThreadTool{Source: BotThreadReader{Client: slackClient}})
+		_ = catalog.RegisterVisible(policy, UserReadThreadTool{Source: BotThreadReader{Slack: slackClient}})
 	}
 	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, CreateCanvasTool{Slack: slackClient})
 	if reminderStore != nil {

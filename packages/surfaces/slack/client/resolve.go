@@ -13,20 +13,59 @@ var (
 	slackUserID      = regexp.MustCompile(`^U[A-Z0-9]+$`)
 )
 
-// ReadTargetInput describes a Slack conversation the caller wants to read.
-type ReadTargetInput struct {
-	Channel, User, Link, ThreadTS string
-	ScopeChannel, ScopeThreadTS, ScopeMessageTS string
+// ResolveReadTarget maps flexible user input into a channel/thread read target.
+func (c *Client) ResolveReadTarget(ctx context.Context, in ReadTargetInput) (ReadTarget, error) {
+	channel := NormalizeChannelRef(in.Channel)
+	threadTS := trim(in.ThreadTS)
+
+	if link := trim(in.Link); link != "" {
+		parsedChannel, parsedThread, err := ParseConversationLink(link)
+		if err != nil {
+			return ReadTarget{}, err
+		}
+		channel = parsedChannel
+		if threadTS == "" {
+			threadTS = parsedThread
+		}
+	}
+
+	if userQuery := trim(in.User); userQuery != "" {
+		userID, err := c.resolveUserQuery(ctx, userQuery)
+		if err != nil {
+			return ReadTarget{}, err
+		}
+		channel, err = c.OpenIM(ctx, userID)
+		if err != nil {
+			return ReadTarget{}, err
+		}
+	}
+
+	if channel != "" && slackUserID.MatchString(channel) {
+		opened, err := c.OpenIM(ctx, channel)
+		if err != nil {
+			return ReadTarget{}, err
+		}
+		channel = opened
+	}
+
+	if channel == "" {
+		channel = trim(in.ScopeChannel)
+	}
+	if channel == "" {
+		return ReadTarget{}, fmt.Errorf("channel, user, or link is required")
+	}
+
+	latestTS := ""
+	if !in.RequiresUserConnection() {
+		if threadTS == "" {
+			threadTS = trim(in.ScopeThreadTS)
+		}
+		latestTS = trim(in.ScopeMessageTS)
+	}
+
+	return ReadTarget{Channel: channel, ThreadTS: threadTS, LatestTS: latestTS}, nil
 }
 
-// ReadTarget is a normalized conversation read request.
-type ReadTarget struct {
-	Channel  string
-	ThreadTS string
-	LatestTS string
-}
-
-// OpenIM opens or reuses a direct-message channel for a Slack user ID.
 func (c *Client) OpenIM(ctx context.Context, userID string) (string, error) {
 	userID = NormalizeUserID(userID)
 	if userID == "" {
@@ -134,63 +173,6 @@ func userMatchesQuery(user User, query string) bool {
 		}
 	}
 	return true
-}
-
-// ResolveReadTarget maps flexible user input into a channel/thread read target.
-func (c *Client) ResolveReadTarget(ctx context.Context, in ReadTargetInput) (ReadTarget, error) {
-	channel := NormalizeChannelRef(in.Channel)
-	threadTS := strings.TrimSpace(in.ThreadTS)
-	latestTS := ""
-	explicit := strings.TrimSpace(in.Link) != "" || strings.TrimSpace(in.User) != "" || channel != ""
-
-	if link := strings.TrimSpace(in.Link); link != "" {
-		parsedChannel, parsedThread, err := ParseConversationLink(link)
-		if err != nil {
-			return ReadTarget{}, err
-		}
-		channel = parsedChannel
-		if threadTS == "" {
-			threadTS = parsedThread
-		}
-		explicit = true
-	}
-
-	if userQuery := strings.TrimSpace(in.User); userQuery != "" {
-		userID, err := c.resolveUserQuery(ctx, userQuery)
-		if err != nil {
-			return ReadTarget{}, err
-		}
-		channel, err = c.OpenIM(ctx, userID)
-		if err != nil {
-			return ReadTarget{}, err
-		}
-		explicit = true
-	}
-
-	if channel != "" && slackUserID.MatchString(channel) {
-		opened, err := c.OpenIM(ctx, channel)
-		if err != nil {
-			return ReadTarget{}, err
-		}
-		channel = opened
-		explicit = true
-	}
-
-	if channel == "" {
-		channel = strings.TrimSpace(in.ScopeChannel)
-	}
-	if channel == "" {
-		return ReadTarget{}, fmt.Errorf("channel, user, or link is required")
-	}
-
-	if !explicit {
-		if threadTS == "" {
-			threadTS = strings.TrimSpace(in.ScopeThreadTS)
-		}
-		latestTS = strings.TrimSpace(in.ScopeMessageTS)
-	}
-
-	return ReadTarget{Channel: channel, ThreadTS: threadTS, LatestTS: latestTS}, nil
 }
 
 func (c *Client) resolveUserQuery(ctx context.Context, query string) (string, error) {

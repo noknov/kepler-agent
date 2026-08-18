@@ -52,7 +52,7 @@ func (t UserReadThreadTool) Descriptor() tool.Descriptor {
 }
 
 func (t UserReadThreadTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
-	reader, early, err := beginThreadRead(ctx, t.Source, call)
+	slackClient, early, err := beginThreadRead(ctx, t.Source, call)
 	if early != nil || err != nil {
 		if early != nil {
 			return *early, err
@@ -60,54 +60,39 @@ func (t UserReadThreadTool) Execute(ctx context.Context, call tool.Call) (tool.R
 		return tool.Result{}, err
 	}
 	var args struct {
-		User     string `json:"user"`
-		Channel  string `json:"channel"`
-		Link     string `json:"link"`
-		ThreadTS string `json:"thread_ts"`
-		Limit    int    `json:"limit"`
+		Limit int `json:"limit"`
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
 	}
-	target, err := resolveReadTarget(ctx, reader, strings.TrimSpace(args.Channel), strings.TrimSpace(args.User), strings.TrimSpace(args.Link), strings.TrimSpace(args.ThreadTS), call.Scope.Values)
+	limit := args.Limit
+	if limit <= 0 {
+		limit = defaultThreadLimit
+	}
+	if limit > maxThreadLimit {
+		limit = maxThreadLimit
+	}
+	target, err := slackClient.ResolveReadTarget(ctx, readTargetInput(call))
 	if err != nil {
 		return tool.Result{}, err
 	}
-	if args.Limit <= 0 {
-		args.Limit = defaultThreadLimit
-	}
-	if args.Limit > maxThreadLimit {
-		args.Limit = maxThreadLimit
-	}
-	var messages []slack.Message
-	if slack.UseConversationHistory(target.ThreadTS, target.LatestTS) {
-		latest := target.LatestTS
-		if latest == "" {
-			latest = target.ThreadTS
-		}
-		messages, err = reader.History(ctx, target.Channel, latest, args.Limit)
-	} else {
-		messages, err = reader.Replies(ctx, target.Channel, target.ThreadTS, args.Limit)
-	}
+	messages, err := slackClient.ReadConversation(ctx, target, limit)
 	if err != nil {
 		return tool.Result{}, err
 	}
 	if len(messages) == 0 {
 		return tool.TextResult(fmt.Sprintf("No messages found in conversation %s.", target.Channel)), nil
 	}
-	return tool.TextResult(formatThreadMessages(target.Channel, displayThreadTS(target.ThreadTS, target.LatestTS), messages)), nil
-}
-
-func displayThreadTS(threadTS, messageTS string) string {
-	if threadTS != "" {
-		return threadTS
+	label := target.ThreadTS
+	if label == "" {
+		label = target.LatestTS
 	}
-	return messageTS
+	return tool.TextResult(formatConversation(target.Channel, label, messages)), nil
 }
 
-func formatThreadMessages(channel, threadTS string, messages []slack.Message) string {
+func formatConversation(channel, anchorTS string, messages []slack.Message) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Slack conversation\nchannel: %s\nthread_ts: %s\n", channel, threadTS))
+	b.WriteString(fmt.Sprintf("Slack conversation\nchannel: %s\nanchor_ts: %s\n", channel, anchorTS))
 	for i, msg := range messages {
 		author := strings.TrimSpace(msg.User)
 		if author == "" && msg.BotID != "" {
