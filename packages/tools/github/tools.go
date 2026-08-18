@@ -67,6 +67,7 @@ func (c Client) defaultRepository() string {
 }
 
 type DispatchWorkflowTool struct {
+	Source ClientSource
 	Client Client
 }
 
@@ -90,8 +91,12 @@ func (t DispatchWorkflowTool) Descriptor() tool.Descriptor {
 }
 
 func (t DispatchWorkflowTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
-	if !t.Client.enabled() {
-		return tool.Result{}, fmt.Errorf("GitHub is not configured: GITHUB_TOKEN is required")
+	client, early, err := begin(ctx, t.Source, t.Client, call)
+	if early != nil || err != nil {
+		if early != nil {
+			return *early, err
+		}
+		return tool.Result{}, err
 	}
 	var args struct {
 		Repository string            `json:"repository"`
@@ -104,7 +109,7 @@ func (t DispatchWorkflowTool) Execute(ctx context.Context, call tool.Call) (tool
 	}
 	repository := strings.TrimSpace(args.Repository)
 	if repository == "" {
-		repository = t.Client.defaultRepository()
+		repository = client.defaultRepository()
 	}
 	if repository == "" {
 		return tool.Result{}, fmt.Errorf("repository is required unless GITHUB_DEFAULT_OWNER and GITHUB_DEFAULT_REPO are configured")
@@ -117,13 +122,14 @@ func (t DispatchWorkflowTool) Execute(ctx context.Context, call tool.Call) (tool
 	if ref == "" {
 		return tool.Result{}, fmt.Errorf("ref is required")
 	}
-	if err := t.Client.dispatch(ctx, repository, workflow, ref, args.Inputs); err != nil {
+	if err := client.dispatch(ctx, repository, workflow, ref, args.Inputs); err != nil {
 		return tool.Result{}, err
 	}
 	return tool.TextResult(fmt.Sprintf("dispatched GitHub workflow repository=%s workflow=%s ref=%s inputs=%s", repository, workflow, ref, formatInputs(args.Inputs))), nil
 }
 
 type WorkflowRunsTool struct {
+	Source ClientSource
 	Client Client
 }
 
@@ -143,8 +149,12 @@ func (t WorkflowRunsTool) Descriptor() tool.Descriptor {
 }
 
 func (t WorkflowRunsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
-	if !t.Client.enabled() {
-		return tool.Result{}, fmt.Errorf("GitHub is not configured: GITHUB_TOKEN is required")
+	client, early, err := begin(ctx, t.Source, t.Client, call)
+	if early != nil || err != nil {
+		if early != nil {
+			return *early, err
+		}
+		return tool.Result{}, err
 	}
 	var args struct {
 		Repository string `json:"repository"`
@@ -157,7 +167,7 @@ func (t WorkflowRunsTool) Execute(ctx context.Context, call tool.Call) (tool.Res
 	}
 	repository := strings.TrimSpace(args.Repository)
 	if repository == "" {
-		repository = t.Client.defaultRepository()
+		repository = client.defaultRepository()
 	}
 	if repository == "" {
 		return tool.Result{}, fmt.Errorf("repository is required unless GITHUB_DEFAULT_OWNER and GITHUB_DEFAULT_REPO are configured")
@@ -172,7 +182,7 @@ func (t WorkflowRunsTool) Execute(ctx context.Context, call tool.Call) (tool.Res
 	if args.Limit > 20 {
 		args.Limit = 20
 	}
-	runs, err := t.Client.workflowRuns(ctx, repository, workflow, strings.TrimSpace(args.Branch), args.Limit)
+	runs, err := client.workflowRuns(ctx, repository, workflow, strings.TrimSpace(args.Branch), args.Limit)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -341,6 +351,7 @@ func summarizeRuns(runs []workflowRun) string {
 // Supports pagination via start_line and max_lines so the LLM can browse
 // through large logs in multiple calls.
 type JobLogsTool struct {
+	Source ClientSource
 	Client Client
 }
 
@@ -367,8 +378,12 @@ func (t JobLogsTool) Descriptor() tool.Descriptor {
 }
 
 func (t JobLogsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
-	if !t.Client.enabled() {
-		return tool.Result{}, fmt.Errorf("GitHub is not configured: GITHUB_TOKEN is required")
+	client, early, err := begin(ctx, t.Source, t.Client, call)
+	if early != nil || err != nil {
+		if early != nil {
+			return *early, err
+		}
+		return tool.Result{}, err
 	}
 	var args struct {
 		Repository string      `json:"repository"`
@@ -396,7 +411,7 @@ func (t JobLogsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	}
 	repository := strings.TrimSpace(args.Repository)
 	if repository == "" {
-		repository = t.Client.defaultRepository()
+		repository = client.defaultRepository()
 	}
 	if repository == "" {
 		return tool.Result{}, fmt.Errorf("repository is required")
@@ -422,7 +437,7 @@ func (t JobLogsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 
 	// If a specific job_id is provided, fetch and paginate its log.
 	if jobID > 0 {
-		content, err := t.Client.fetchJobLog(ctx, owner, repo, jobID)
+		content, err := client.fetchJobLog(ctx, owner, repo, jobID)
 		if err != nil {
 			return tool.Result{}, fmt.Errorf("fetch job log: %w", err)
 		}
@@ -430,7 +445,7 @@ func (t JobLogsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	}
 
 	// Otherwise list jobs for the run.
-	jobs, err := t.Client.listRunJobs(ctx, owner, repo, runID)
+	jobs, err := client.listRunJobs(ctx, owner, repo, runID)
 	if err != nil {
 		return tool.Result{}, fmt.Errorf("list run jobs: %w", err)
 	}
@@ -470,7 +485,7 @@ func (t JobLogsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	}
 
 	for _, j := range targets {
-		content, err := t.Client.fetchJobLog(ctx, owner, repo, j.ID)
+		content, err := client.fetchJobLog(ctx, owner, repo, j.ID)
 		if err != nil {
 			fmt.Fprintf(&out, "\n--- %s (id=%d) ---\nerror fetching log: %v\n", j.Name, j.ID, err)
 			continue
@@ -649,6 +664,7 @@ func truncate(s string, n int) string {
 
 // PRDiffTool fetches a pull request's metadata and diff from GitHub API.
 type PRDiffTool struct {
+	Source ClientSource
 	Client Client
 }
 
@@ -667,8 +683,12 @@ func (t PRDiffTool) Descriptor() tool.Descriptor {
 }
 
 func (t PRDiffTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
-	if !t.Client.enabled() {
-		return tool.Result{}, fmt.Errorf("GitHub is not configured: GITHUB_TOKEN is required")
+	client, early, err := begin(ctx, t.Source, t.Client, call)
+	if early != nil || err != nil {
+		if early != nil {
+			return *early, err
+		}
+		return tool.Result{}, err
 	}
 	var args struct {
 		Repository string      `json:"repository"`
@@ -690,7 +710,7 @@ func (t PRDiffTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 	}
 	repository := strings.TrimSpace(args.Repository)
 	if repository == "" {
-		repository = t.Client.defaultRepository()
+		repository = client.defaultRepository()
 	}
 	if repository == "" {
 		return tool.Result{}, fmt.Errorf("repository is required")
@@ -706,8 +726,8 @@ func (t PRDiffTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 	}
 
 	// Fetch PR metadata
-	metaURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", t.Client.baseURL(), owner, repo, prNumber)
-	metaData, err := t.Client.do(ctx, http.MethodGet, metaURL, nil)
+	metaURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", client.baseURL(), owner, repo, prNumber)
+	metaData, err := client.do(ctx, http.MethodGet, metaURL, nil)
 	if err != nil {
 		return tool.Result{}, fmt.Errorf("fetch PR metadata for %s#%d: %w", repository, prNumber, err)
 	}
@@ -730,15 +750,15 @@ func (t PRDiffTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 	}
 
 	// Fetch diff
-	diffURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", t.Client.baseURL(), owner, repo, prNumber)
+	diffURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", client.baseURL(), owner, repo, prNumber)
 	diffReq, err := http.NewRequestWithContext(ctx, http.MethodGet, diffURL, nil)
 	if err != nil {
 		return tool.Result{}, err
 	}
-	diffReq.Header.Set("Authorization", "Bearer "+t.Client.Token)
+	diffReq.Header.Set("Authorization", "Bearer "+client.Token)
 	diffReq.Header.Set("Accept", "application/vnd.github.diff")
 	diffReq.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	diffResp, err := t.Client.httpClient().Do(diffReq)
+	diffResp, err := client.httpClient().Do(diffReq)
 	if err != nil {
 		return tool.Result{}, fmt.Errorf("fetch PR diff: %w", err)
 	}
@@ -898,6 +918,7 @@ func diffFileIndex(diff string) []diffFile {
 }
 
 type PRFileDiffTool struct {
+	Source ClientSource
 	Client Client
 }
 
@@ -909,6 +930,13 @@ func (PRFileDiffTool) Descriptor() tool.Descriptor {
 }
 
 func (t PRFileDiffTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
+	client, early, err := begin(ctx, t.Source, t.Client, call)
+	if early != nil || err != nil {
+		if early != nil {
+			return *early, err
+		}
+		return tool.Result{}, err
+	}
 	var args struct {
 		Path string `json:"path"`
 	}
@@ -941,7 +969,7 @@ func (t PRFileDiffTool) Execute(ctx context.Context, call tool.Call) (tool.Resul
 	fileDiff := needle + rest
 	fmt.Fprintf(&out, "PR %s#%d head=%s file=%s\n", pr.Repository, pr.Number, pr.HeadSHA, path)
 	out.WriteString(fileDiff)
-	if source, err := t.prHeadFileSource(ctx, pr, path); err == nil && strings.TrimSpace(source) != "" {
+	if source, err := t.prHeadFileSource(ctx, client, pr, path); err == nil && strings.TrimSpace(source) != "" {
 		if contextText := lineNumberedHunkContext(source, fileDiff, 3, 260); strings.TrimSpace(contextText) != "" {
 			fmt.Fprintf(&out, "\n\nPR-head source context for %s at %s. Cite these line numbers for PR-head code:\n%s", path, pr.HeadSHA, contextText)
 		}
@@ -949,8 +977,8 @@ func (t PRFileDiffTool) Execute(ctx context.Context, call tool.Call) (tool.Resul
 	return tool.TextResult(out.String()), nil
 }
 
-func (t PRFileDiffTool) prHeadFileSource(ctx context.Context, pr prDiffContext, path string) (string, error) {
-	if !t.Client.enabled() {
+func (t PRFileDiffTool) prHeadFileSource(ctx context.Context, client Client, pr prDiffContext, path string) (string, error) {
+	if !client.enabled() {
 		return "", fmt.Errorf("GitHub is not configured")
 	}
 	owner, repo, err := splitRepository(pr.Repository)
@@ -958,13 +986,13 @@ func (t PRFileDiffTool) prHeadFileSource(ctx context.Context, pr prDiffContext, 
 		return "", err
 	}
 	endpoint := fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s",
-		t.Client.baseURL(),
+		client.baseURL(),
 		url.PathEscape(owner),
 		url.PathEscape(repo),
 		escapePathSegments(path),
 		url.QueryEscape(pr.HeadSHA),
 	)
-	data, err := t.Client.do(ctx, http.MethodGet, endpoint, nil)
+	data, err := client.do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", err
 	}
