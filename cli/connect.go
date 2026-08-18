@@ -25,6 +25,8 @@ func runConnect(args []string) error {
 		return connectSlack()
 	case connections.ProviderGitHub:
 		return connectGitHub()
+	case connections.ProviderClickStack:
+		return connectClickStack()
 	default:
 		return fmt.Errorf("unsupported provider %q", args[0])
 	}
@@ -179,6 +181,75 @@ func connectSlack() error {
 		defer shutdownCancel()
 		_ = server.Shutdown(shutdownCtx)
 		return errors.New("timed out waiting for Slack authorization")
+	}
+}
+
+func connectClickStack() error {
+	cfg, err := config.LoadFor(config.ProfileCLI)
+	if err != nil {
+		return err
+	}
+	serviceCfg := connections.NewServiceFromConfig(nil, cfg).Config
+	if !serviceCfg.ClickStackEnabled() {
+		return errors.New("set CLICKSTACK_SERVICE_ID and CONNECTIONS_PUBLIC_BASE_URL before connecting ClickStack")
+	}
+	if strings.TrimSpace(cfg.Connections.EncryptionKey) == "" {
+		return errors.New("set CONNECTIONS_ENCRYPTION_KEY before connecting")
+	}
+	stateDir, err := defaultConnectStateDir()
+	if err != nil {
+		return err
+	}
+	store, err := connections.NewFileStore(filepath.Join(stateDir, "connections.json"), cfg.Connections.EncryptionKey)
+	if err != nil {
+		return err
+	}
+	port := cfg.Connections.LocalOAuthPort
+	if port <= 0 {
+		port = 8765
+	}
+	service := connections.NewServiceFromConfig(store, cfg)
+	service.Config.PublicBaseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
+
+	startURL, err := service.StartURL(connections.LocalUserID, connections.ProviderClickStack)
+	if err != nil {
+		return err
+	}
+
+	done := make(chan error, 1)
+	server := &http.Server{
+		Addr:              fmt.Sprintf("127.0.0.1:%d", port),
+		Handler:           connections.NewHTTPHandler(service),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	go func() {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			done <- err
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	go waitForConnection(ctx, store, connections.ProviderClickStack, done)
+
+	fmt.Printf("Open this URL to connect ClickStack:\n%s\n", startURL)
+	_ = openBrowser(startURL)
+
+	select {
+	case err := <-done:
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		_ = server.Shutdown(shutdownCtx)
+		if err != nil {
+			return err
+		}
+		fmt.Println("Connected ClickStack.")
+		return nil
+	case <-ctx.Done():
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		_ = server.Shutdown(shutdownCtx)
+		return errors.New("timed out waiting for ClickStack authorization")
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 
 const ProviderSlack = "slack"
 const ProviderGitHub = "github"
+const ProviderClickStack = "clickstack"
 
 const LocalUserID = "local"
 
@@ -76,6 +77,12 @@ func Plugins() []Plugin {
 			Title:       "GitHub",
 			Description: "Search PRs, workflow runs, and repository metadata with your own GitHub account.",
 			Scopes:      []string{"repo", "read:org", "workflow"},
+		},
+		{
+			ID:          ProviderClickStack,
+			Title:       "ClickStack",
+			Description: "Query logs, traces, dashboards, and alerts in your team's ClickStack workspace with your own ClickHouse Cloud account.",
+			Scopes:      []string{"clickstack:access", "openid", "profile", "email"},
 		},
 	}
 }

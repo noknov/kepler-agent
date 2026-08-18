@@ -21,6 +21,7 @@ type Config struct {
 	SecretKey     string
 	Slack         SlackOAuthConfig
 	GitHub        GitHubOAuthConfig
+	ClickStack    ClickStackOAuthConfig
 }
 
 type SlackOAuthConfig struct {
@@ -42,8 +43,34 @@ func (c Config) GitHubEnabled() bool {
 	return strings.TrimSpace(c.GitHub.ClientID) != "" && strings.TrimSpace(c.GitHub.ClientSecret) != ""
 }
 
+func (c Config) ClickStackEnabled() bool {
+	return strings.TrimSpace(c.PublicBaseURL) != "" && c.ClickStack.Configured()
+}
+
+func (c ClickStackOAuthConfig) Configured() bool {
+	return strings.TrimSpace(c.ServiceID) != "" || customClickStackURL(c.MCPURL)
+}
+
+func customClickStackURL(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	return raw != "" && raw != clickstackDefaultMCPURL
+}
+
 func (c Config) OAuthEnabled() bool {
-	return c.SlackEnabled() || c.GitHubEnabled()
+	return c.SlackEnabled() || c.GitHubEnabled() || c.ClickStackEnabled()
+}
+
+type Service struct {
+	Store         Store
+	Config        Config
+	clickstackOAuth *clickstackOAuth
+}
+
+func (s *Service) clickstack() *clickstackOAuth {
+	if s.clickstackOAuth == nil {
+		s.clickstackOAuth = newClickStackOAuth(s.Config.ClickStack)
+	}
+	return s.clickstackOAuth
 }
 
 func (s Service) ProviderOAuthEnabled(provider string) bool {
@@ -52,14 +79,11 @@ func (s Service) ProviderOAuthEnabled(provider string) bool {
 		return s.Config.SlackEnabled()
 	case ProviderGitHub:
 		return s.Config.GitHubEnabled()
+	case ProviderClickStack:
+		return s.Config.ClickStackEnabled()
 	default:
 		return false
 	}
-}
-
-type Service struct {
-	Store  Store
-	Config Config
 }
 
 func (s Service) StartURL(userID, provider string) (string, error) {
@@ -73,7 +97,15 @@ func (s Service) StartURL(userID, provider string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := s.Store.CreateOAuthState(context.Background(), userID, provider, state, time.Now().UTC().Add(15*time.Minute)); err != nil {
+	meta := OAuthStateMeta{}
+	if provider == ProviderClickStack {
+		verifier, err := newPKCEVerifier()
+		if err != nil {
+			return "", err
+		}
+		meta.CodeVerifier = verifier
+	}
+	if err := s.Store.CreateOAuthState(context.Background(), userID, provider, state, time.Now().UTC().Add(15*time.Minute), meta); err != nil {
 		return "", err
 	}
 	return strings.TrimRight(s.Config.PublicBaseURL, "/") + "/oauth/" + url.PathEscape(provider) + "/start?state=" + url.QueryEscape(state), nil
@@ -84,7 +116,7 @@ func (s Service) HandleStart(w http.ResponseWriter, r *http.Request, provider, s
 		http.Error(w, "state is required", http.StatusBadRequest)
 		return
 	}
-	_, storedProvider, err := s.Store.PeekOAuthState(r.Context(), state)
+	_, storedProvider, meta, err := s.Store.PeekOAuthState(r.Context(), state)
 	if err != nil || storedProvider != provider {
 		http.Error(w, "invalid oauth state", http.StatusBadRequest)
 		return
@@ -114,6 +146,27 @@ func (s Service) HandleStart(w http.ResponseWriter, r *http.Request, provider, s
 			"state":        {state},
 		}
 		http.Redirect(w, r, "https://github.com/login/oauth/authorize?"+values.Encode(), http.StatusFound)
+	case ProviderClickStack:
+		if !s.Config.ClickStackEnabled() {
+			http.Error(w, "clickstack oauth is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		if meta.CodeVerifier == "" {
+			http.Error(w, "invalid oauth state", http.StatusBadRequest)
+			return
+		}
+		redirectURI := s.callbackURL(provider)
+		clientID, err := s.clickstack().ensureClient(r.Context(), redirectURI)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		authorizeURL, err := s.clickstack().buildAuthorizeURL(clientID, redirectURI, state, meta.CodeVerifier)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		http.Redirect(w, r, authorizeURL, http.StatusFound)
 	default:
 		http.Error(w, "unsupported provider", http.StatusNotFound)
 	}
@@ -126,7 +179,7 @@ func (s Service) HandleCallback(w http.ResponseWriter, r *http.Request, provider
 		http.Error(w, "missing code or state", http.StatusBadRequest)
 		return
 	}
-	userID, storedProvider, err := s.Store.ConsumeOAuthState(r.Context(), state)
+	userID, storedProvider, meta, err := s.Store.ConsumeOAuthState(r.Context(), state)
 	if err != nil || storedProvider != provider {
 		http.Error(w, "invalid oauth state", http.StatusBadRequest)
 		return
@@ -149,6 +202,27 @@ func (s Service) HandleCallback(w http.ResponseWriter, r *http.Request, provider
 			return
 		}
 		if err := s.Store.UpsertToken(r.Context(), userID, provider, token, scopes, account); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	case ProviderClickStack:
+		redirectURI := s.callbackURL(provider)
+		clientID, err := s.clickstack().ensureClient(r.Context(), redirectURI)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		access, refresh, scopes, err := s.clickstack().exchange(r.Context(), code, meta.CodeVerifier, redirectURI, clientID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		stored, err := encodeStoredToken(access, refresh)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := s.Store.UpsertToken(r.Context(), userID, provider, stored, scopes, "clickstack"); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

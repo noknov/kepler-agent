@@ -63,12 +63,12 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		return nil, err
 	}
 	recorder := observability.NewRecorder()
-	catalog, err := hostedTools.NewCatalog(cfg, safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}, safety.NewCommandPolicy(), nil, hostedTools.SurfaceOptions{})
+	catalogBundle, err := hostedTools.NewCatalog(cfg, safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}, safety.NewCommandPolicy(), nil, hostedTools.SurfaceOptions{})
 	if err != nil {
 		stores.Close()
 		return nil, fmt.Errorf("build health tool catalog: %w", err)
 	}
-	healthService := health.NewService(catalog, cfg.Security.WorkspaceRoots)
+	healthService := health.NewService(catalogBundle.Catalog, cfg.Security.WorkspaceRoots)
 	healthService.Redis = stores.Redis
 	return &Service{
 		cfg:     cfg,

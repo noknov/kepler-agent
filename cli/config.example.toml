@@ -25,7 +25,6 @@ skill_roots = []
 # [[mcp_servers]]
 # name = "clickstack"
 # url = "https://mcp.clickhouse.cloud/clickstack"
-# token_env = "CLICKSTACK_MCP_TOKEN"
 # effects = ["read"]
 # [mcp_servers.headers]
 # x-service-id = "your-service-id"

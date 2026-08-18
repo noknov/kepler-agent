@@ -9,10 +9,9 @@ import (
 func TestNewMCPClientHeaders(t *testing.T) {
 	client := NewMCPClient(config.ClickStackConfig{
 		MCPURL:    "https://clickstack.example/api/mcp",
-		MCPToken:  "token",
 		ServiceID: "svc-1",
 		TeamID:    "team-1",
-	})
+	}, "token")
 	if client.URL != "https://clickstack.example/api/mcp" {
 		t.Fatalf("URL = %q", client.URL)
 	}
@@ -25,7 +24,7 @@ func TestNewMCPClientHeaders(t *testing.T) {
 }
 
 func TestNewMCPClientDefaultURL(t *testing.T) {
-	client := NewMCPClient(config.ClickStackConfig{MCPToken: "token"})
+	client := NewMCPClient(config.ClickStackConfig{}, "token")
 	if client.URL != defaultMCPURL {
 		t.Fatalf("URL = %q", client.URL)
 	}

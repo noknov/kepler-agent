@@ -22,10 +22,11 @@ type fileRecord struct {
 }
 
 type oauthStateRecord struct {
-	State     string    `json:"state"`
-	UserID    string    `json:"user_id"`
-	Provider  string    `json:"provider"`
-	ExpiresAt time.Time `json:"expires_at"`
+	State        string    `json:"state"`
+	UserID       string    `json:"user_id"`
+	Provider     string    `json:"provider"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	CodeVerifier string    `json:"code_verifier,omitempty"`
 }
 
 type FileStore struct {
@@ -144,55 +145,81 @@ func (s *FileStore) Token(ctx context.Context, userID, provider string) (string,
 	if !ok || item.Status != StatusConnected {
 		return "", ErrNotConnected
 	}
-	return decrypt(s.SecretKey, item.Token)
+	token, err := decrypt(s.SecretKey, item.Token)
+	if err != nil {
+		return "", err
+	}
+	return decodeStoredToken(token), nil
 }
 
-func (s *FileStore) CreateOAuthState(ctx context.Context, userID, provider, state string, expiresAt time.Time) error {
+func (s *FileStore) AnyToken(ctx context.Context, provider string) (string, error) {
+	connections, _, err := s.load()
+	if err != nil {
+		return "", err
+	}
+	for _, item := range connections {
+		if item.Provider != provider || item.Status != StatusConnected {
+			continue
+		}
+		token, err := decrypt(s.SecretKey, item.Token)
+		if err != nil {
+			continue
+		}
+		if token = decodeStoredToken(token); token != "" {
+			return token, nil
+		}
+	}
+	return "", ErrNotConnected
+}
+
+func (s *FileStore) CreateOAuthState(ctx context.Context, userID, provider, state string, expiresAt time.Time, meta OAuthStateMeta) error {
 	connections, states, err := s.load()
 	if err != nil {
 		return err
 	}
-	states = append(states, oauthStateRecord{State: state, UserID: userID, Provider: provider, ExpiresAt: expiresAt})
+	states = append(states, oauthStateRecord{State: state, UserID: userID, Provider: provider, ExpiresAt: expiresAt, CodeVerifier: meta.CodeVerifier})
 	return s.save(connections, states)
 }
 
-func (s *FileStore) PeekOAuthState(ctx context.Context, state string) (string, string, error) {
+func (s *FileStore) PeekOAuthState(ctx context.Context, state string) (string, string, OAuthStateMeta, error) {
 	_, states, err := s.load()
 	if err != nil {
-		return "", "", err
+		return "", "", OAuthStateMeta{}, err
 	}
 	now := time.Now().UTC()
 	for _, item := range states {
 		if item.State == state && item.ExpiresAt.After(now) {
-			return item.UserID, item.Provider, nil
+			return item.UserID, item.Provider, OAuthStateMeta{CodeVerifier: item.CodeVerifier}, nil
 		}
 	}
-	return "", "", fmt.Errorf("oauth state is invalid or expired")
+	return "", "", OAuthStateMeta{}, fmt.Errorf("oauth state is invalid or expired")
 }
 
-func (s *FileStore) ConsumeOAuthState(ctx context.Context, state string) (string, string, error) {
+func (s *FileStore) ConsumeOAuthState(ctx context.Context, state string) (string, string, OAuthStateMeta, error) {
 	connections, states, err := s.load()
 	if err != nil {
-		return "", "", err
+		return "", "", OAuthStateMeta{}, err
 	}
 	now := time.Now().UTC()
 	var userID, provider string
+	var meta OAuthStateMeta
 	remaining := states[:0]
 	for _, item := range states {
 		if item.State == state {
 			if item.ExpiresAt.After(now) {
 				userID, provider = item.UserID, item.Provider
+				meta = OAuthStateMeta{CodeVerifier: item.CodeVerifier}
 				continue
 			}
-			return "", "", fmt.Errorf("oauth state is invalid or expired")
+			return "", "", OAuthStateMeta{}, fmt.Errorf("oauth state is invalid or expired")
 		}
 		remaining = append(remaining, item)
 	}
 	if userID == "" {
-		return "", "", fmt.Errorf("oauth state is invalid or expired")
+		return "", "", OAuthStateMeta{}, fmt.Errorf("oauth state is invalid or expired")
 	}
 	if err := s.save(connections, remaining); err != nil {
-		return "", "", err
+		return "", "", OAuthStateMeta{}, err
 	}
-	return userID, provider, nil
+	return userID, provider, meta, nil
 }

@@ -31,10 +31,10 @@ func TestFileStoreRoundTrip(t *testing.T) {
 		t.Fatalf("NewFileStore() error = %v", err)
 	}
 	ctx := context.Background()
-	if err := store.CreateOAuthState(ctx, LocalUserID, ProviderSlack, "state-1", time.Now().UTC().Add(time.Minute)); err != nil {
+	if err := store.CreateOAuthState(ctx, LocalUserID, ProviderSlack, "state-1", time.Now().UTC().Add(time.Minute), OAuthStateMeta{}); err != nil {
 		t.Fatalf("CreateOAuthState() error = %v", err)
 	}
-	userID, provider, err := store.PeekOAuthState(ctx, "state-1")
+	userID, provider, _, err := store.PeekOAuthState(ctx, "state-1")
 	if err != nil || userID != LocalUserID || provider != ProviderSlack {
 		t.Fatalf("PeekOAuthState() = (%q, %q, %v)", userID, provider, err)
 	}
@@ -45,10 +45,10 @@ func TestFileStoreRoundTrip(t *testing.T) {
 	if err != nil || token != "xoxp-test" {
 		t.Fatalf("Token() = (%q, %v)", token, err)
 	}
-	if _, _, err := store.ConsumeOAuthState(ctx, "state-1"); err != nil {
+	if _, _, _, err := store.ConsumeOAuthState(ctx, "state-1"); err != nil {
 		t.Fatalf("ConsumeOAuthState() error = %v", err)
 	}
-	if _, _, err := store.PeekOAuthState(ctx, "state-1"); err == nil {
+	if _, _, _, err := store.PeekOAuthState(ctx, "state-1"); err == nil {
 		t.Fatal("expected consumed oauth state to be invalid")
 	}
 }

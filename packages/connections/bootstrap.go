@@ -19,6 +19,10 @@ func NewServiceFromConfig(store Store, cfg config.Config) Service {
 				ClientSecret: cfg.Connections.GitHubClientSecret,
 				APIBaseURL:   cfg.Integrations.GitHub.APIBaseURL,
 			},
+			ClickStack: ClickStackOAuthConfig{
+				MCPURL:    cfg.Integrations.ClickStack.MCPURL,
+				ServiceID: cfg.Integrations.ClickStack.ServiceID,
+			},
 		},
 	}
 }
