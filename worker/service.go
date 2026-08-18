@@ -144,7 +144,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 	healthService := health.NewService(profile.Tools, cfg.Security.WorkspaceRoots)
 	healthService.Redis = stores.Redis
-	conversation := slackagent.New(profile.Agent, slackClient, profile.Prompt, profile.Redactor, stores.UserPrefs)
+	conversation := slackagent.New(profile.Agent, slackmessaging.AgentMessenger{Client: slackClient}, profile.Prompt, profile.Redactor, stores.UserPrefs)
 	if bundle.ClickStack != nil {
 		policy := hostedTools.PolicyForSurface(cfg, surface)
 		conversation.BeforeRun = func(ctx context.Context, userID string) error {
@@ -164,6 +164,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 	multimodal := multimodalPredicate(cfg.LLM.MultimodalModels)
 	conversation.Multimodal = multimodal
+	conversation.MultimodalModel = func() string { return cfg.LLM.MultimodalModel }
 	conversation.ModelFor = func(req slackconversation.Request) string {
 		for _, content := range req.Content {
 			if content.Type == model.ContentImage && multimodal != nil && !multimodal(cfg.LLM.Model) && cfg.LLM.MultimodalModel != "" {

@@ -49,6 +49,7 @@ type Service struct {
 	OnDelivered      func(context.Context, string, string, string) error
 	AlreadyDelivered func(context.Context, string) (bool, error)
 	Multimodal       func(string) bool
+	MultimodalModel  func() string
 	WebSearchEnabled func(string) bool
 	Progress         *ProgressSummarizer
 	Locker           session.Locker
@@ -307,13 +308,21 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	if s.ModelFor != nil {
 		modelName = s.ModelFor(req)
 	}
+	input := req.Message()
+	if s.Multimodal != nil && !s.Multimodal(modelName) && messagesContainImages(append([]model.Message{input}, history...)...) {
+		if s.MultimodalModel != nil {
+			if fallback := strings.TrimSpace(s.MultimodalModel()); fallback != "" {
+				modelName = fallback
+			}
+		}
+	}
+	if s.Multimodal != nil && !s.Multimodal(modelName) {
+		input = withoutUnsupportedImages(input, slackconversation.IsChineseLocale(req.Locale))
+		history = stripUnsupportedImages(history, slackconversation.IsChineseLocale(req.Locale))
+	}
 	webSearch := "enabled"
 	if s.WebSearchEnabled != nil && !s.WebSearchEnabled(req.UserID) {
 		webSearch = "disabled"
-	}
-	input := req.Message()
-	if s.Multimodal != nil && !s.Multimodal(modelName) {
-		input = withoutUnsupportedImages(input, slackconversation.IsChineseLocale(req.Locale))
 	}
 	result, err := s.Agent.Run(runCtx, hosted.Request{SessionID: sessionID, TurnID: turnID, UserID: req.UserID, Workspace: s.Workspace, Input: input, History: history, Model: modelName, Steering: active.steering, Prompt: fragments, ScopeValues: map[string]string{"channel": req.Channel, "thread_ts": req.ThreadTS, "message_ts": req.MessageTS, "web_search": webSearch}})
 	finalizeCtx, finalizeCancel := context.WithTimeout(context.WithoutCancel(runCtx), 20*time.Second)
@@ -405,6 +414,28 @@ func withoutUnsupportedImages(message model.Message, cjk bool) model.Message {
 	content = append(content, model.Content{Type: model.ContentText, Text: note})
 	message.Content = content
 	return message
+}
+
+func stripUnsupportedImages(messages []model.Message, cjk bool) []model.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+	out := make([]model.Message, len(messages))
+	for i, message := range messages {
+		out[i] = withoutUnsupportedImages(message, cjk)
+	}
+	return out
+}
+
+func messagesContainImages(messages ...model.Message) bool {
+	for _, message := range messages {
+		for _, block := range message.Content {
+			if block.Type == model.ContentImage {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Service) mode(userID string) ConversationMode {

@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 )
 
 type Client struct {
@@ -524,46 +523,6 @@ func (c *Client) Replies(ctx context.Context, channel, threadTS string, limit in
 		}
 		values.Set("cursor", cursor)
 	}
-}
-
-func (c *Client) ThreadHistory(ctx context.Context, channel, threadTS, beforeTS string, limit int) []model.Message {
-	if limit <= 0 || limit > 50 {
-		limit = 50
-	}
-	raw, err := c.ReadConversation(ctx, ReadTarget{
-		Channel:  channel,
-		ThreadTS: threadTS,
-		LatestTS: beforeTS,
-	}, limit+1)
-	if err != nil {
-		return nil
-	}
-	historyOut := make([]model.Message, 0, min(limit, len(raw)))
-	bytesUsed := 0
-	for _, msg := range raw {
-		text := strings.TrimSpace(NormalizeMentions(msg.Text, c.botUserID))
-		if files := FormatFiles(msg.Files); files != "" {
-			if text != "" {
-				text += "\n"
-			}
-			text += files
-		}
-		if text == "" {
-			continue
-		}
-		role := model.RoleUser
-		if msg.User == c.botUserID {
-			role = model.RoleAssistant
-		} else {
-			text = "Slack user " + msg.User + ": " + text
-		}
-		if bytesUsed+len(text) > 64<<10 || len(historyOut) >= limit {
-			break
-		}
-		bytesUsed += len(text)
-		historyOut = append(historyOut, model.TextMessage(role, text))
-	}
-	return historyOut
 }
 
 func FormatFiles(files []File) string {
