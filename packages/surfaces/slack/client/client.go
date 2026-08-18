@@ -431,6 +431,66 @@ func mergeFile(primary, fallback File) File {
 	return primary
 }
 
+// IsIMChannel reports whether channel is a Slack direct-message channel (D...).
+func IsIMChannel(channel string) bool {
+	return strings.HasPrefix(strings.TrimSpace(channel), "D")
+}
+
+// UseConversationHistory reports whether Slack history should be loaded with
+// conversations.history instead of conversations.replies.
+func UseConversationHistory(threadTS, beforeTS string) bool {
+	threadTS = strings.TrimSpace(threadTS)
+	beforeTS = strings.TrimSpace(beforeTS)
+	if threadTS == "" {
+		return true
+	}
+	return beforeTS != "" && threadTS == beforeTS
+}
+
+func (c *Client) History(ctx context.Context, channel, latest string, limit int) ([]Message, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	values := url.Values{}
+	values.Set("channel", channel)
+	if latest := strings.TrimSpace(latest); latest != "" {
+		values.Set("latest", latest)
+		values.Set("inclusive", "false")
+	}
+	pageLimit := limit
+	if pageLimit > 200 {
+		pageLimit = 200
+	}
+	values.Set("limit", fmt.Sprintf("%d", pageLimit))
+	var messages []Message
+	for len(messages) < limit {
+		var out struct {
+			OK               bool      `json:"ok"`
+			Error            string    `json:"error,omitempty"`
+			Messages         []Message `json:"messages,omitempty"`
+			ResponseMetadata struct {
+				NextCursor string `json:"next_cursor,omitempty"`
+			} `json:"response_metadata,omitempty"`
+		}
+		if err := c.get(ctx, "conversations.history", values, &out); err != nil {
+			return nil, err
+		}
+		if !out.OK {
+			return nil, fmt.Errorf("slack conversations.history failed: %s", out.Error)
+		}
+		messages = append(messages, out.Messages...)
+		if len(messages) >= limit {
+			return messages[:limit], nil
+		}
+		cursor := strings.TrimSpace(out.ResponseMetadata.NextCursor)
+		if cursor == "" {
+			return messages, nil
+		}
+		values.Set("cursor", cursor)
+	}
+	return messages, nil
+}
+
 func (c *Client) Replies(ctx context.Context, channel, threadTS string, limit int) ([]Message, error) {
 	all := limit <= 0
 	values := url.Values{}
@@ -476,14 +536,31 @@ func (c *Client) ThreadHistory(ctx context.Context, channel, threadTS, beforeTS 
 	if limit <= 0 || limit > 50 {
 		limit = 50
 	}
-	replies, err := c.Replies(ctx, channel, threadTS, limit+1)
+	var (
+		raw     []Message
+		err     error
+		history bool
+	)
+	if UseConversationHistory(threadTS, beforeTS) {
+		history = true
+		raw, err = c.History(ctx, channel, beforeTS, limit+1)
+	} else {
+		raw, err = c.Replies(ctx, channel, threadTS, limit+1)
+	}
 	if err != nil {
 		return nil
 	}
-	history := make([]model.Message, 0, min(limit, len(replies)))
+	messages := raw
+	if history {
+		// conversations.history returns newest-first; present oldest-first to the model.
+		for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+			messages[i], messages[j] = messages[j], messages[i]
+		}
+	}
+	historyOut := make([]model.Message, 0, min(limit, len(messages)))
 	bytesUsed := 0
-	for _, msg := range replies {
-		if beforeTS != "" && msg.TS >= beforeTS {
+	for _, msg := range messages {
+		if !history && beforeTS != "" && msg.TS >= beforeTS {
 			continue
 		}
 		text := strings.TrimSpace(NormalizeMentions(msg.Text, c.botUserID))
@@ -502,13 +579,13 @@ func (c *Client) ThreadHistory(ctx context.Context, channel, threadTS, beforeTS 
 		} else {
 			text = "Slack user " + msg.User + ": " + text
 		}
-		if bytesUsed+len(text) > 64<<10 || len(history) >= limit {
+		if bytesUsed+len(text) > 64<<10 || len(historyOut) >= limit {
 			break
 		}
 		bytesUsed += len(text)
-		history = append(history, model.TextMessage(role, text))
+		historyOut = append(historyOut, model.TextMessage(role, text))
 	}
-	return history
+	return historyOut
 }
 
 func FormatFiles(files []File) string {

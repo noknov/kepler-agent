@@ -37,26 +37,36 @@ func TestUserReadThreadDefaultsToScope(t *testing.T) {
 		Arguments: json.RawMessage(`{}`),
 		Scope: tool.Scope{
 			UserID: "U123",
-			Values: map[string]string{"channel": "C9", "thread_ts": "9.9"},
+			Values: map[string]string{"channel": "D9", "thread_ts": "9.9", "message_ts": "9.9"},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reader.channel != "C9" || reader.threadTS != "9.9" {
-		t.Fatalf("unexpected reader call: channel=%q thread_ts=%q", reader.channel, reader.threadTS)
+	if !reader.useHistory || reader.channel != "D9" || reader.latest != "9.9" {
+		t.Fatalf("unexpected reader call: history=%v channel=%q latest=%q", reader.useHistory, reader.channel, reader.latest)
 	}
 }
 
 type fakeThreadReader struct {
-	channel, threadTS string
-	limit             int
-	messages          []slack.Message
+	channel, threadTS, latest string
+	limit                     int
+	useHistory                bool
+	messages                  []slack.Message
 }
 
 func (f *fakeThreadReader) Replies(_ context.Context, channel, threadTS string, limit int) ([]slack.Message, error) {
+	f.useHistory = false
 	f.channel = channel
 	f.threadTS = threadTS
+	f.limit = limit
+	return f.messages, nil
+}
+
+func (f *fakeThreadReader) History(_ context.Context, channel, latest string, limit int) ([]slack.Message, error) {
+	f.useHistory = true
+	f.channel = channel
+	f.latest = latest
 	f.limit = limit
 	return f.messages, nil
 }
