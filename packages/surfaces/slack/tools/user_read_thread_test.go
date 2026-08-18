@@ -3,6 +3,8 @@ package slacktool
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -11,13 +13,12 @@ import (
 )
 
 func TestUserReadThreadFormatsMessages(t *testing.T) {
-	reader := &fakeThreadReader{
-		messages: []slack.Message{
-			{User: "U1", TS: "100.001", Text: "hello <@U2>"},
-			{User: "U2", TS: "100.002", Text: "reply"},
-		},
-	}
-	source := stubThreadReaderSource{reader: reader}
+	source := stubThreadReaderSource{client: slack.NewTestClient(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if !strings.HasSuffix(r.URL.Path, "/api/conversations.replies") {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		return jsonResp(`{"ok":true,"messages":[{"user":"U1","text":"hello <@U2>","ts":"100.001"},{"user":"U2","text":"reply","ts":"100.002"}]}`), nil
+	}))}
 	result, err := (UserReadThreadTool{Source: source}).Execute(context.Background(), tool.Call{
 		Arguments: json.RawMessage(`{"channel":"C123","thread_ts":"100.001","limit":10}`),
 		Scope:     tool.Scope{UserID: "U123"},
@@ -31,8 +32,14 @@ func TestUserReadThreadFormatsMessages(t *testing.T) {
 }
 
 func TestUserReadThreadDefaultsToScope(t *testing.T) {
-	reader := &fakeThreadReader{messages: []slack.Message{{User: "U1", TS: "1.0", Text: "scoped"}}}
-	source := stubThreadReaderSource{reader: reader}
+	var latest string
+	source := stubThreadReaderSource{client: slack.NewTestClient(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if !strings.HasSuffix(r.URL.Path, "/api/conversations.history") {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		latest = r.URL.Query().Get("latest")
+		return jsonResp(`{"ok":true,"messages":[{"user":"U1","text":"scoped","ts":"1.0"}]}`), nil
+	}))}
 	_, err := (UserReadThreadTool{Source: source}).Execute(context.Background(), tool.Call{
 		Arguments: json.RawMessage(`{}`),
 		Scope: tool.Scope{
@@ -43,14 +50,17 @@ func TestUserReadThreadDefaultsToScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reader.useHistory || reader.channel != "D9" || reader.latest != "9.9" {
-		t.Fatalf("unexpected reader call: history=%v channel=%q latest=%q", reader.useHistory, reader.channel, reader.latest)
+	if latest != "9.9" {
+		t.Fatalf("latest = %q", latest)
 	}
 }
 
 func TestUserReadThreadExplicitChannelIgnoresScope(t *testing.T) {
-	reader := &fakeThreadReader{messages: []slack.Message{{User: "U1", TS: "1.0", Text: "dm"}}}
-	source := stubThreadReaderSource{reader: reader}
+	var latest string
+	source := stubThreadReaderSource{client: slack.NewTestClient(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		latest = r.URL.Query().Get("latest")
+		return jsonResp(`{"ok":true,"messages":[{"user":"U1","text":"dm","ts":"1.0"}]}`), nil
+	}))}
 	_, err := (UserReadThreadTool{Source: source}).Execute(context.Background(), tool.Call{
 		Arguments: json.RawMessage(`{"channel":"D0AJSE6PRLH"}`),
 		Scope: tool.Scope{
@@ -61,58 +71,29 @@ func TestUserReadThreadExplicitChannelIgnoresScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reader.useHistory || reader.channel != "D0AJSE6PRLH" || reader.latest != "" {
-		t.Fatalf("unexpected reader call: history=%v channel=%q latest=%q", reader.useHistory, reader.channel, reader.latest)
+	if latest != "" {
+		t.Fatalf("latest = %q, want empty", latest)
 	}
-}
-
-func (f *fakeThreadReader) ResolveReadTarget(_ context.Context, in slack.ReadTargetInput) (slack.ReadTarget, error) {
-	channel := slack.NormalizeChannelRef(in.Channel)
-	explicit := strings.TrimSpace(in.User) != "" || strings.TrimSpace(in.Link) != "" || (channel != "" && channel != strings.TrimSpace(in.ScopeChannel))
-	if strings.TrimSpace(in.User) != "" {
-		channel = "D_USER"
-	}
-	if channel == "" {
-		channel = strings.TrimSpace(in.ScopeChannel)
-	}
-	threadTS := strings.TrimSpace(in.ThreadTS)
-	latestTS := ""
-	if !explicit {
-		if threadTS == "" {
-			threadTS = strings.TrimSpace(in.ScopeThreadTS)
-		}
-		latestTS = strings.TrimSpace(in.ScopeMessageTS)
-	}
-	return slack.ReadTarget{Channel: channel, ThreadTS: threadTS, LatestTS: latestTS}, nil
-}
-
-type fakeThreadReader struct {
-	channel, threadTS, latest string
-	limit                     int
-	useHistory                bool
-	messages                  []slack.Message
-}
-
-func (f *fakeThreadReader) Replies(_ context.Context, channel, threadTS string, limit int) ([]slack.Message, error) {
-	f.useHistory = false
-	f.channel = channel
-	f.threadTS = threadTS
-	f.limit = limit
-	return f.messages, nil
-}
-
-func (f *fakeThreadReader) History(_ context.Context, channel, latest string, limit int) ([]slack.Message, error) {
-	f.useHistory = true
-	f.channel = channel
-	f.latest = latest
-	f.limit = limit
-	return f.messages, nil
 }
 
 type stubThreadReaderSource struct {
-	reader *fakeThreadReader
+	client *slack.Client
 }
 
-func (s stubThreadReaderSource) ThreadReader(context.Context, tool.Call) (ThreadReader, error) {
-	return s.reader, nil
+func (s stubThreadReaderSource) Client(context.Context, tool.Call) (*slack.Client, error) {
+	return s.client, nil
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func jsonResp(body string) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
 }

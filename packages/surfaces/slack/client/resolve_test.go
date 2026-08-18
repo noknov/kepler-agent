@@ -19,6 +19,24 @@ func TestParseConversationLink(t *testing.T) {
 	}
 }
 
+func TestResolveReadTargetKeepsThreadForExplicitChannel(t *testing.T) {
+	client := &Client{}
+	target, err := client.ResolveReadTarget(context.Background(), ReadTargetInput{
+		Channel:  "C123",
+		ThreadTS: "100.001",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Channel != "C123" || target.ThreadTS != "100.001" || target.LatestTS != "" {
+		t.Fatalf("target=%#v", target)
+	}
+	if !UseConversationHistory(target.ThreadTS, target.LatestTS) {
+		return
+	}
+	t.Fatal("expected threaded read")
+}
+
 func TestResolveReadTargetOpensIMFromUserID(t *testing.T) {
 	client := testResolveClient(t, func(r *http.Request) (*http.Response, error) {
 		switch {

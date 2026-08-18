@@ -124,20 +124,9 @@ func beginUserPoster(ctx context.Context, source PosterSource, call tool.Call) (
 	return poster, nil, nil
 }
 
-// ThreadReader loads Slack thread or conversation messages.
-type ThreadReader interface {
-	Replies(ctx context.Context, channel, threadTS string, limit int) ([]slack.Message, error)
-	History(ctx context.Context, channel, latest string, limit int) ([]slack.Message, error)
-}
-
-// ConversationResolver resolves flexible Slack conversation references.
-type ConversationResolver interface {
-	ResolveReadTarget(ctx context.Context, in slack.ReadTargetInput) (slack.ReadTarget, error)
-}
-
-// ThreadReaderSource resolves Slack thread APIs for a tool call.
+// ThreadReaderSource resolves the Slack client used for conversation reads.
 type ThreadReaderSource interface {
-	ThreadReader(ctx context.Context, call tool.Call) (ThreadReader, error)
+	Client(ctx context.Context, call tool.Call) (*slack.Client, error)
 }
 
 // ConnectedThreadReader uses the caller's linked Slack user token.
@@ -145,52 +134,52 @@ type ConnectedThreadReader struct {
 	Service connections.Service
 }
 
-func (s ConnectedThreadReader) ThreadReader(ctx context.Context, call tool.Call) (ThreadReader, error) {
+func (s ConnectedThreadReader) Client(ctx context.Context, call tool.Call) (*slack.Client, error) {
 	return connectedSlackClient(ctx, s.Service, call.Scope.UserID)
 }
 
 // BotThreadReader uses the workspace bot token.
-type BotThreadReader struct{ Client *slack.Client }
+type BotThreadReader struct{ Slack *slack.Client }
 
-func (s BotThreadReader) ThreadReader(_ context.Context, _ tool.Call) (ThreadReader, error) {
-	if s.Client == nil {
+func (s BotThreadReader) Client(_ context.Context, _ tool.Call) (*slack.Client, error) {
+	if s.Slack == nil {
 		return nil, errors.New("slack is not configured")
 	}
-	return s.Client, nil
+	return s.Slack, nil
 }
 
 // PreferConnectedThreadReader uses the caller's linked token when available and
-// falls back to the bot token for the current conversation.
+// falls back to the bot token only for the current conversation.
 type PreferConnectedThreadReader struct {
 	Connected ConnectedThreadReader
 	Bot       BotThreadReader
 }
 
-func (s PreferConnectedThreadReader) ThreadReader(ctx context.Context, call tool.Call) (ThreadReader, error) {
-	reader, err := s.Connected.ThreadReader(ctx, call)
+func (s PreferConnectedThreadReader) Client(ctx context.Context, call tool.Call) (*slack.Client, error) {
+	client, err := s.Connected.Client(ctx, call)
 	if err == nil {
-		return reader, nil
+		return client, nil
 	}
-	if readRequiresUserConnection(call) {
+	if readTargetInput(call).RequiresUserConnection() {
 		return nil, err
 	}
 	var required *connections.RequiredError
 	if errors.As(err, &required) || errors.Is(err, connections.ErrNotConnected) {
-		return s.Bot.ThreadReader(ctx, call)
+		return s.Bot.Client(ctx, call)
 	}
 	return nil, err
 }
 
-func beginThreadRead(ctx context.Context, source ThreadReaderSource, call tool.Call) (ThreadReader, *tool.Result, error) {
+func beginThreadRead(ctx context.Context, source ThreadReaderSource, call tool.Call) (*slack.Client, *tool.Result, error) {
 	if source == nil {
-		return nil, nil, errors.New("slack thread reads require a connected Slack account")
+		return nil, nil, errors.New("slack thread reads are not configured")
 	}
-	reader, err := source.ThreadReader(ctx, call)
+	client, err := source.Client(ctx, call)
 	if err != nil {
 		if result, convErr := connections.ToolResult(err); convErr == nil {
 			return nil, &result, nil
 		}
 		return nil, nil, err
 	}
-	return reader, nil, nil
+	return client, nil, nil
 }

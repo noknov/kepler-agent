@@ -31,6 +31,11 @@ func NewClient(token, botUserID string) *Client {
 	}
 }
 
+// NewTestClient builds a client with a custom HTTP transport for tests.
+func NewTestClient(transport http.RoundTripper) *Client {
+	return &Client{httpClient: &http.Client{Transport: transport}}
+}
+
 func (c *Client) BotUserID() string {
 	return c.botUserID
 }
@@ -436,17 +441,6 @@ func IsIMChannel(channel string) bool {
 	return strings.HasPrefix(strings.TrimSpace(channel), "D")
 }
 
-// UseConversationHistory reports whether Slack history should be loaded with
-// conversations.history instead of conversations.replies.
-func UseConversationHistory(threadTS, beforeTS string) bool {
-	threadTS = strings.TrimSpace(threadTS)
-	beforeTS = strings.TrimSpace(beforeTS)
-	if threadTS == "" {
-		return true
-	}
-	return beforeTS != "" && threadTS == beforeTS
-}
-
 func (c *Client) History(ctx context.Context, channel, latest string, limit int) ([]Message, error) {
 	if limit <= 0 {
 		limit = 50
@@ -536,33 +530,17 @@ func (c *Client) ThreadHistory(ctx context.Context, channel, threadTS, beforeTS 
 	if limit <= 0 || limit > 50 {
 		limit = 50
 	}
-	var (
-		raw     []Message
-		err     error
-		history bool
-	)
-	if UseConversationHistory(threadTS, beforeTS) {
-		history = true
-		raw, err = c.History(ctx, channel, beforeTS, limit+1)
-	} else {
-		raw, err = c.Replies(ctx, channel, threadTS, limit+1)
-	}
+	raw, err := c.ReadConversation(ctx, ReadTarget{
+		Channel:  channel,
+		ThreadTS: threadTS,
+		LatestTS: beforeTS,
+	}, limit+1)
 	if err != nil {
 		return nil
 	}
-	messages := raw
-	if history {
-		// conversations.history returns newest-first; present oldest-first to the model.
-		for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
-			messages[i], messages[j] = messages[j], messages[i]
-		}
-	}
-	historyOut := make([]model.Message, 0, min(limit, len(messages)))
+	historyOut := make([]model.Message, 0, min(limit, len(raw)))
 	bytesUsed := 0
-	for _, msg := range messages {
-		if !history && beforeTS != "" && msg.TS >= beforeTS {
-			continue
-		}
+	for _, msg := range raw {
 		text := strings.TrimSpace(NormalizeMentions(msg.Text, c.botUserID))
 		if files := FormatFiles(msg.Files); files != "" {
 			if text != "" {
