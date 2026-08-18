@@ -35,10 +35,11 @@ type Config struct {
 }
 
 type MCPServerConfig struct {
-	Name     string   `toml:"name"`
-	URL      string   `toml:"url"`
-	TokenEnv string   `toml:"token_env"`
-	Effects  []string `toml:"effects"`
+	Name     string            `toml:"name"`
+	URL      string            `toml:"url"`
+	TokenEnv string            `toml:"token_env"`
+	Effects  []string          `toml:"effects"`
+	Headers  map[string]string `toml:"headers"`
 }
 
 func DefaultConfig() Config {
