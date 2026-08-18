@@ -124,9 +124,10 @@ func beginUserPoster(ctx context.Context, source PosterSource, call tool.Call) (
 	return poster, nil, nil
 }
 
-// ThreadReader loads Slack thread messages.
+// ThreadReader loads Slack thread or conversation messages.
 type ThreadReader interface {
 	Replies(ctx context.Context, channel, threadTS string, limit int) ([]slack.Message, error)
+	History(ctx context.Context, channel, latest string, limit int) ([]slack.Message, error)
 }
 
 // ThreadReaderSource resolves Slack thread APIs for a tool call.
@@ -141,6 +142,35 @@ type ConnectedThreadReader struct {
 
 func (s ConnectedThreadReader) ThreadReader(ctx context.Context, call tool.Call) (ThreadReader, error) {
 	return connectedSlackClient(ctx, s.Service, call.Scope.UserID)
+}
+
+// BotThreadReader uses the workspace bot token.
+type BotThreadReader struct{ Client *slack.Client }
+
+func (s BotThreadReader) ThreadReader(_ context.Context, _ tool.Call) (ThreadReader, error) {
+	if s.Client == nil {
+		return nil, errors.New("slack is not configured")
+	}
+	return s.Client, nil
+}
+
+// PreferConnectedThreadReader uses the caller's linked token when available and
+// falls back to the bot token for the current conversation.
+type PreferConnectedThreadReader struct {
+	Connected ConnectedThreadReader
+	Bot       BotThreadReader
+}
+
+func (s PreferConnectedThreadReader) ThreadReader(ctx context.Context, call tool.Call) (ThreadReader, error) {
+	reader, err := s.Connected.ThreadReader(ctx, call)
+	if err == nil {
+		return reader, nil
+	}
+	var required *connections.RequiredError
+	if errors.As(err, &required) || errors.Is(err, connections.ErrNotConnected) {
+		return s.Bot.ThreadReader(ctx, call)
+	}
+	return nil, err
 }
 
 func beginThreadRead(ctx context.Context, source ThreadReaderSource, call tool.Call) (ThreadReader, *tool.Result, error) {
