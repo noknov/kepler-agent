@@ -2,6 +2,8 @@ package clickstack
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"strings"
 	"sync"
 
@@ -36,7 +38,10 @@ func (r *Registrar) Ensure(ctx context.Context, catalog *tool.Catalog, policy to
 	if r.done {
 		return nil
 	}
-	token := bootstrapToken(ctx, r.conn, userID)
+	token, err := r.bootstrapToken(ctx, userID)
+	if err != nil {
+		return err
+	}
 	if token == "" {
 		return nil
 	}
@@ -47,10 +52,11 @@ func (r *Registrar) Ensure(ctx context.Context, catalog *tool.Catalog, policy to
 		Effects:      []tool.Effect{tool.EffectRead},
 	})
 	if err != nil {
-		return err
+		log.Printf("clickstack: discover failed for user %s: %v", userID, err)
+		return fmt.Errorf("discover ClickStack MCP tools: %w", err)
 	}
 	for _, item := range items {
-		bound := tool.BindSurface(item, policy.Surface, "clickstack")
+		bound := tool.BindSurface(item, policy.Surface, "clickstack", "clickstack-connection")
 		if err := catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, bound); err != nil {
 			if strings.Contains(err.Error(), "already registered") {
 				continue
@@ -59,7 +65,30 @@ func (r *Registrar) Ensure(ctx context.Context, catalog *tool.Catalog, policy to
 		}
 	}
 	r.done = true
+	log.Printf("clickstack: registered %d MCP tools", len(items))
 	return nil
+}
+
+func (r *Registrar) bootstrapToken(ctx context.Context, userID string) (string, error) {
+	if r.conn == nil || r.conn.Store == nil {
+		return "", nil
+	}
+	if userID != "" {
+		if _, err := r.conn.Store.Get(ctx, userID, connections.ProviderClickStack); err == nil {
+			token, err := r.conn.Store.Token(ctx, userID, connections.ProviderClickStack)
+			if err != nil {
+				return "", fmt.Errorf("clickstack is connected but this worker cannot read your token: %w", err)
+			}
+			if token != "" {
+				return token, nil
+			}
+		}
+	}
+	token, err := r.conn.Store.AnyToken(ctx, connections.ProviderClickStack)
+	if err != nil {
+		return "", nil
+	}
+	return token, nil
 }
 
 func (r *Registrar) tokenResolver() mcptools.TokenResolver {
@@ -79,18 +108,4 @@ func (r *Registrar) tokenResolver() mcptools.TokenResolver {
 		}
 		return token, nil
 	}
-}
-
-func bootstrapToken(ctx context.Context, conn *connections.Service, userID string) string {
-	if conn != nil && conn.Store != nil {
-		if userID != "" {
-			if token, err := conn.Store.Token(ctx, userID, connections.ProviderClickStack); err == nil && token != "" {
-				return token
-			}
-		}
-		if token, err := conn.Store.AnyToken(ctx, connections.ProviderClickStack); err == nil && token != "" {
-			return token
-		}
-	}
-	return ""
 }

@@ -137,7 +137,7 @@ func (o *clickstackOAuth) buildAuthorizeURL(clientID, redirectURI, state, codeVe
 	return o.authorizeURL + "?" + values.Encode(), nil
 }
 
-func (o *clickstackOAuth) exchange(ctx context.Context, code, codeVerifier, redirectURI, clientID string) (accessToken, refreshToken string, scopes []string, err error) {
+func (o *clickstackOAuth) exchange(ctx context.Context, code, codeVerifier, redirectURI, clientID string) (accessToken, refreshToken, idToken string, scopes []string, err error) {
 	values := url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
@@ -148,40 +148,71 @@ func (o *clickstackOAuth) exchange(ctx context.Context, code, codeVerifier, redi
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.tokenURL, strings.NewReader(values.Encode()))
 	if err != nil {
-		return "", "", nil, err
+		return "", "", "", nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := o.httpClient.Do(req)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", "", nil, err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return "", "", nil, err
+		return "", "", "", nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", "", nil, fmt.Errorf("clickstack oauth token exchange: status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return "", "", "", nil, fmt.Errorf("clickstack oauth token exchange: status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	var payload struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
+		IDToken      string `json:"id_token"`
 		Scope        string `json:"scope"`
 		Error        string `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return "", "", nil, err
+		return "", "", "", nil, err
 	}
 	if payload.AccessToken == "" {
 		if payload.Error != "" {
-			return "", "", nil, fmt.Errorf("clickstack oauth failed: %s", payload.Error)
+			return "", "", "", nil, fmt.Errorf("clickstack oauth failed: %s", payload.Error)
 		}
-		return "", "", nil, fmt.Errorf("clickstack oauth returned an empty access token")
+		return "", "", "", nil, fmt.Errorf("clickstack oauth returned an empty access token")
 	}
 	if payload.Scope != "" {
 		scopes = strings.Fields(payload.Scope)
 	}
-	return payload.AccessToken, payload.RefreshToken, scopes, nil
+	return payload.AccessToken, payload.RefreshToken, payload.IDToken, scopes, nil
+}
+
+func (o *clickstackOAuth) accountLabel(idToken string) string {
+	return accountFromIDToken(idToken)
+}
+
+func accountFromIDToken(idToken string) string {
+	parts := strings.Split(strings.TrimSpace(idToken), ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		Email             string `json:"email"`
+		PreferredUsername string `json:"preferred_username"`
+		Name              string `json:"name"`
+		Sub               string `json:"sub"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return ""
+	}
+	for _, candidate := range []string{claims.Email, claims.PreferredUsername, claims.Name, claims.Sub} {
+		if label := strings.TrimSpace(candidate); label != "" {
+			return label
+		}
+	}
+	return ""
 }
 
 func newPKCEVerifier() (string, error) {
