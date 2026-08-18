@@ -60,14 +60,14 @@ func TestClickStackOAuthRegisterAndExchange(t *testing.T) {
 	if registerBody["redirect_uris"] == nil {
 		t.Fatalf("register body = %#v", registerBody)
 	}
-	access, refresh, idToken, scopes, err := oauth.exchange(context.Background(), "code-1", "verifier-1", "http://localhost/callback", clientID)
+	response, err := oauth.exchange(context.Background(), "code-1", "verifier-1", "http://localhost/callback", clientID)
 	if err != nil {
 		t.Fatalf("exchange() error = %v", err)
 	}
-	if access != "access-1" || refresh != "refresh-1" || idToken == "" || len(scopes) != 2 {
-		t.Fatalf("exchange() = (%q, %q, %q, %#v)", access, refresh, idToken, scopes)
+	if response.AccessToken != "access-1" || response.RefreshToken != "refresh-1" || response.IDToken == "" || len(response.Scopes) != 2 {
+		t.Fatalf("exchange() = %+v", response)
 	}
-	if got := oauth.accountLabel(idToken); got != "user@example.com" {
+	if got := oauth.accountLabel(response.AccessToken, response.IDToken); got != "user@example.com" {
 		t.Fatalf("accountLabel() = %q", got)
 	}
 	if tokenValues.Get("code_verifier") != "verifier-1" {
