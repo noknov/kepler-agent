@@ -156,3 +156,27 @@ CREATE TABLE IF NOT EXISTS user_prompt_assets (
 
 CREATE INDEX IF NOT EXISTS user_prompt_assets_user_kind_idx
     ON user_prompt_assets(user_id, kind, active, name);
+
+CREATE TABLE IF NOT EXISTS user_connections (
+    user_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'connected',
+    token_ciphertext TEXT NOT NULL DEFAULT '',
+    scopes TEXT[] NOT NULL DEFAULT '{}',
+    account TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, provider)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_connections_provider
+    ON user_connections(provider, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS oauth_states (
+    state TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_oauth_states_expires
+    ON oauth_states(expires_at);

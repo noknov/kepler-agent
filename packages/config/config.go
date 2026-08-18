@@ -18,6 +18,7 @@ type Config struct {
 	Sessions     SessionConfig
 	Tools        ToolConfig
 	Integrations IntegrationConfig
+	Connections ConnectionsConfig
 	Observing    ObservingConfig
 	Storage      StorageConfig
 }
@@ -43,10 +44,12 @@ type HTTPConfig struct {
 }
 
 type SlackConfig struct {
-	BotToken      string
-	SigningSecret string
-	BotUserID     string
-	DefaultLocale string
+	BotToken        string
+	SigningSecret   string
+	BotUserID       string
+	DefaultLocale   string
+	AttributionName string
+	ReplyFooter     string
 }
 
 type LLMConfig struct {
@@ -161,6 +164,24 @@ type YouTrackConfig struct {
 	Token string
 }
 
+type ConnectionsConfig struct {
+	PublicBaseURL      string
+	EncryptionKey      string
+	SlackClientID      string
+	SlackClientSecret  string
+	GitHubClientID     string
+	GitHubClientSecret string
+	LocalOAuthPort     int
+}
+
+func (c ConnectionsConfig) SlackOAuthEnabled() bool {
+	return strings.TrimSpace(c.SlackClientID) != "" && strings.TrimSpace(c.SlackClientSecret) != ""
+}
+
+func (c ConnectionsConfig) GitHubOAuthEnabled() bool {
+	return strings.TrimSpace(c.GitHubClientID) != "" && strings.TrimSpace(c.GitHubClientSecret) != ""
+}
+
 type ObservingConfig struct {
 	LogLevel                 string
 	AdminToken               string
@@ -177,6 +198,7 @@ const (
 	ProfileGateway       RuntimeProfile = "gateway"
 	ProfileSlackWorker   RuntimeProfile = "slack-worker"
 	ProfileObservability RuntimeProfile = "observability"
+	ProfileCLI           RuntimeProfile = "cli"
 )
 
 func Load() (Config, error) {
@@ -243,10 +265,12 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			ShutdownTimeout:     envDuration("HTTP_SHUTDOWN_TIMEOUT", 30*time.Second),
 		},
 		Slack: SlackConfig{
-			BotToken:      os.Getenv("SLACK_BOT_TOKEN"),
-			SigningSecret: os.Getenv("SLACK_SIGNING_SECRET"),
-			BotUserID:     os.Getenv("SLACK_BOT_USER_ID"),
-			DefaultLocale: env("SLACK_DEFAULT_LOCALE", "en-US"),
+			BotToken:        os.Getenv("SLACK_BOT_TOKEN"),
+			SigningSecret:   os.Getenv("SLACK_SIGNING_SECRET"),
+			BotUserID:       os.Getenv("SLACK_BOT_USER_ID"),
+			DefaultLocale:   env("SLACK_DEFAULT_LOCALE", "en-US"),
+			AttributionName: env("SLACK_ATTRIBUTION_NAME", env("ATTRIBUTION_NAME", "斗包")),
+			ReplyFooter:     firstEnv("SLACK_REPLY_FOOTER", "REPLY_FOOTER"),
 		},
 		LLM: LLMConfig{
 			Provider:         llmProvider,
@@ -284,10 +308,11 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			CommandTimeout: envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
 			AgentMaxSteps:  envInt("AGENT_MAX_STEPS", 256),
 			AllowedWriteTools: envCSVDefault("AGENT_ALLOWED_WRITE_TOOLS", []string{
-				"reminder-create", "reminder-cancel", "slack-create_canvas", "tts-speak",
+				"reminder-create", "reminder-cancel", "slack-create_canvas", "slack-user_post_message", "tts-speak",
 			}),
 		},
 		Integrations: loadIntegrations(),
+		Connections:  loadConnections(),
 		Observing: ObservingConfig{
 			LogLevel:                 env("LOG_LEVEL", "info"),
 			AdminToken:               os.Getenv("OBSERVABILITY_TOKEN"),
@@ -360,6 +385,27 @@ func loadIntegrations() IntegrationConfig {
 	}
 }
 
+func loadConnections() ConnectionsConfig {
+	port := envInt("CONNECTIONS_LOCAL_OAUTH_PORT", 8765)
+	clientID := strings.TrimSpace(os.Getenv("SLACK_OAUTH_CLIENT_ID"))
+	if clientID == "" {
+		clientID = strings.TrimSpace(os.Getenv("SLACK_CLIENT_ID"))
+	}
+	clientSecret := strings.TrimSpace(os.Getenv("SLACK_OAUTH_CLIENT_SECRET"))
+	if clientSecret == "" {
+		clientSecret = strings.TrimSpace(os.Getenv("SLACK_CLIENT_SECRET"))
+	}
+	return ConnectionsConfig{
+		PublicBaseURL:      trimRightSlash(os.Getenv("CONNECTIONS_PUBLIC_BASE_URL")),
+		EncryptionKey:      os.Getenv("CONNECTIONS_ENCRYPTION_KEY"),
+		SlackClientID:      clientID,
+		SlackClientSecret:  clientSecret,
+		GitHubClientID:     os.Getenv("GITHUB_OAUTH_CLIENT_ID"),
+		GitHubClientSecret: os.Getenv("GITHUB_OAUTH_CLIENT_SECRET"),
+		LocalOAuthPort:     port,
+	}
+}
+
 func dotenvPath(profile RuntimeProfile) string {
 	if path := strings.TrimSpace(os.Getenv("SLACK_COPILOT_ENV_FILE")); path != "" {
 		return path
@@ -371,6 +417,8 @@ func dotenvPath(profile RuntimeProfile) string {
 		return "worker/.env"
 	case ProfileObservability:
 		return "observability/.env"
+	case ProfileCLI:
+		return "worker/.env"
 	case "":
 		return "worker/.env"
 	default:
@@ -379,6 +427,9 @@ func dotenvPath(profile RuntimeProfile) string {
 }
 
 func validateForProfile(cfg Config, profile RuntimeProfile) (Config, error) {
+	if profile == ProfileCLI {
+		return cfg, nil
+	}
 	if cfg.HTTP.EventInboxLease <= 0 {
 		cfg.HTTP.EventInboxLease = cfg.HTTP.EventTimeout + time.Minute
 	}
@@ -412,6 +463,8 @@ func validateForProfile(cfg Config, profile RuntimeProfile) (Config, error) {
 		}
 		return cfg, nil
 	case ProfileObservability:
+		return cfg, nil
+	case ProfileCLI:
 		return cfg, nil
 	case ProfileSlackWorker, "":
 		return validateAgentRuntime(cfg)
