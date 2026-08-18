@@ -22,7 +22,8 @@ type FileSearcher interface {
 }
 
 type FileSearchTool struct {
-	Slack FileSearcher
+	Source FileSearcherSource
+	Slack  FileSearcher
 }
 
 
@@ -40,7 +41,17 @@ func (t FileSearchTool) Descriptor() tool.Descriptor {
 }
 
 func (t FileSearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
-	if t.Slack == nil {
+	searcher, early, err := beginFileSearch(ctx, t.Source, t.Slack, call)
+	if early != nil || err != nil {
+		if early != nil {
+			return *early, err
+		}
+		return tool.Result{}, err
+	}
+	if searcher == nil {
+		searcher = t.Slack
+	}
+	if searcher == nil {
 		return tool.Result{}, fmt.Errorf("Slack file search is not configured")
 	}
 	var args struct {
@@ -62,11 +73,11 @@ func (t FileSearchTool) Execute(ctx context.Context, call tool.Call) (tool.Resul
 	if args.Limit > 20 {
 		args.Limit = 20
 	}
-	file, err := t.Slack.FileInfo(ctx, args.FileID)
+	file, err := searcher.FileInfo(ctx, args.FileID)
 	if err != nil {
 		return tool.Result{}, err
 	}
-	text, err := t.extract(ctx, file)
+	text, err := t.extract(ctx, searcher, file)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -87,11 +98,11 @@ func (t FileSearchTool) Execute(ctx context.Context, call tool.Call) (tool.Resul
 	return tool.TextResult(strings.TrimSpace(b.String())), nil
 }
 
-func (t FileSearchTool) extract(ctx context.Context, file slack.File) (string, error) {
+func (t FileSearchTool) extract(ctx context.Context, searcher FileSearcher, file slack.File) (string, error) {
 	if file.Size > maxSearchFileBytes {
 		return "", fmt.Errorf("file exceeds searchable size %s", formatBytes(maxSearchFileBytes))
 	}
-	data, err := t.Slack.DownloadFile(ctx, file, maxSearchFileBytes)
+	data, err := searcher.DownloadFile(ctx, file, maxSearchFileBytes)
 	if err != nil {
 		return "", err
 	}

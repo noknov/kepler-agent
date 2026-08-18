@@ -58,6 +58,10 @@ func (c *Client) PostMessage(ctx context.Context, channel, threadTS, text string
 	return c.postMessage(ctx, channel, threadTS, text, nil, "")
 }
 
+func (c *Client) PostMessageBlocks(ctx context.Context, channel, threadTS, text string, blocks []map[string]any) (string, error) {
+	return c.postMessage(ctx, channel, threadTS, text, blocks, "")
+}
+
 func (c *Client) PostMarkdownMessage(ctx context.Context, channel, threadTS, markdown string) (string, error) {
 	blocks := []map[string]any{{"type": "markdown", "text": markdown}}
 	ts, err := c.postMessage(ctx, channel, threadTS, markdown, blocks, "")

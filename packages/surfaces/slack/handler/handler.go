@@ -84,6 +84,10 @@ func (h *Handler) HandleInteraction(ctx context.Context, interaction slackgatewa
 func (h *Handler) handleBlockActions(ctx context.Context, interaction slackgateway.Interaction) {
 	for _, action := range interaction.Actions {
 		switch action.ActionID {
+		case "toggle_web_search":
+			h.Home.ToggleWebSearch(ctx, interaction.UserID)
+		case "toggle_conversation_mode":
+			h.Home.ToggleConversationMode(ctx, interaction.UserID)
 		case "toggle_user_setting":
 			if action.Value == "web_search" {
 				h.Home.ToggleWebSearch(ctx, interaction.UserID)

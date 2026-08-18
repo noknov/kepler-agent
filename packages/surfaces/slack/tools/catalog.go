@@ -5,20 +5,39 @@ import (
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/config"
+	"github.com/noknov/slack-copilot-agent/packages/connections"
 	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
 	"github.com/noknov/slack-copilot-agent/packages/reminder"
 	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
+	slackmessaging "github.com/noknov/slack-copilot-agent/packages/surfaces/slack/messaging"
 	reminderTools "github.com/noknov/slack-copilot-agent/packages/tools/reminder"
 	ttsTools "github.com/noknov/slack-copilot-agent/packages/tools/tts"
 )
 
-func AddToCatalog(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, rdb *redisclient.Client) {
+// AddToCatalog registers Slack-surface tools for the hosted worker only.
+// Messaging and connection tools stay here; they are not exposed through CLI.
+func AddToCatalog(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, rdb *redisclient.Client, conn *connections.Service) {
 	if catalog == nil || slackClient == nil {
 		return
 	}
+	var fileSource FileSearcherSource = BotFileSearcher{Client: slackClient}
+	if conn != nil && conn.Config.SlackEnabled() {
+		fileSource = ConnectedFileSearcher{Service: *conn}
+	}
+	fileTool := FileSearchTool{Source: fileSource, Slack: slackClient}
+	jsonTool := JSONAnalyzeTool{Source: fileSource, Slack: slackClient}
 	_ = catalog.RegisterVisible(policy, AskUserTool{Slack: slackClient})
-	_ = catalog.RegisterVisible(policy, FileSearchTool{Slack: slackClient})
-	_ = catalog.RegisterVisible(policy, JSONAnalyzeTool{Slack: slackClient})
+	_ = catalog.RegisterVisible(policy, fileTool)
+	_ = catalog.RegisterVisible(policy, jsonTool)
+	if conn != nil && conn.Config.SlackEnabled() {
+		attribution := slackmessaging.Attribution{
+			BotUserID: cfg.Slack.BotUserID,
+			Name:      cfg.Slack.AttributionName,
+			Footer:    cfg.Slack.ReplyFooter,
+		}
+		_ = catalog.RegisterVisible(policy, UserPostMessageTool{Source: ConnectedClientSource{Service: *conn}, Attribution: attribution})
+		_ = catalog.RegisterVisible(policy, UserReadThreadTool{Source: ConnectedThreadReader{Service: *conn}})
+	}
 	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, CreateCanvasTool{Slack: slackClient})
 	if reminderStore != nil {
 		_ = catalog.RegisterVisible(policy, bindSurface(reminderTools.CreateTool{

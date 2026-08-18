@@ -4,6 +4,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/codeintel"
 	"github.com/noknov/slack-copilot-agent/packages/config"
+	"github.com/noknov/slack-copilot-agent/packages/connections"
 	"github.com/noknov/slack-copilot-agent/packages/mcp"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	codeTools "github.com/noknov/slack-copilot-agent/packages/tools/code"
@@ -28,6 +29,7 @@ import (
 type SurfaceOptions struct {
 	Name          string
 	AvailableDeps map[string]bool
+	Connections   *connections.Service
 }
 
 func NewCatalog(cfg config.Config, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy, userPrefs userprefs.Store, surface SurfaceOptions) (*tool.Catalog, error) {
@@ -39,7 +41,7 @@ func NewCatalog(cfg config.Config, workspacePolicy safety.WorkspacePolicy, comma
 	registerDeferredDiagnosticsTools(catalog, policy)
 	registerWorkspaceTools(catalog, policy, workspacePolicy)
 	registerCodeTools(catalog, policy, cfg, workspacePolicy, commandPolicy)
-	registerIntegrationTools(catalog, policy, cfg, commandPolicy)
+	registerIntegrationTools(catalog, policy, cfg, commandPolicy, surface.Connections)
 	registerKnowledgeTools(catalog, policy, cfg)
 	registerAgentControlTools(catalog, policy, userPrefs)
 	if err := catalog.Register(tool.NewSearchTool(catalog)); err != nil {
@@ -55,7 +57,7 @@ func PolicyForSurface(cfg config.Config, surface SurfaceOptions) tool.SurfacePol
 func policyForSurface(cfg config.Config, surface SurfaceOptions) tool.SurfacePolicy {
 	integrations := cfg.Integrations
 	availableDeps := map[string]bool{
-		"github":   integrations.GitHub.Token != "",
+		"github":   integrations.GitHub.Token != "" || cfg.Connections.GitHubOAuthEnabled(),
 		"luckin":   integrations.Luckin.MCPToken != "",
 		"notion":   integrations.Notion.Token != "",
 		"tts":      integrations.TTS.APIKey != "",
@@ -63,6 +65,9 @@ func policyForSurface(cfg config.Config, surface SurfaceOptions) tool.SurfacePol
 	}
 	for name, available := range surface.AvailableDeps {
 		availableDeps[name] = available
+	}
+	if surface.Connections != nil && surface.Connections.Config.SlackEnabled() {
+		availableDeps["slack-connection"] = true
 	}
 	return tool.SurfacePolicy{
 		Surface:       surface.Name,
@@ -118,7 +123,7 @@ func registerCodeTools(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg con
 	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryCode, codegraphTools.ImpactTool{Base: codegraphBase})
 }
 
-func registerIntegrationTools(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.Config, commandPolicy safety.CommandPolicy) {
+func registerIntegrationTools(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.Config, commandPolicy safety.CommandPolicy, conn *connections.Service) {
 	integrations := cfg.Integrations
 	if integrations.K8s.KubectlPath != "" || integrations.K8s.DefaultContext != "" || integrations.K8s.DefaultCluster != "" {
 		k8sBase := k8sTools.Base{
@@ -196,11 +201,15 @@ func registerIntegrationTools(catalog *tool.Catalog, policy tool.SurfacePolicy, 
 		Owner:      integrations.GitHub.DefaultOwner,
 		Repo:       integrations.GitHub.DefaultRepo,
 	}
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.DispatchWorkflowTool{Client: githubClient})
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.WorkflowRunsTool{Client: githubClient})
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.PRDiffTool{Client: githubClient})
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.PRFileDiffTool{Client: githubClient})
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.JobLogsTool{Client: githubClient})
+	var githubSource githubTools.ClientSource
+	if conn != nil && conn.Config.GitHubEnabled() {
+		githubSource = githubTools.ConnectedSource{Service: *conn, Defaults: githubClient}
+	}
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.DispatchWorkflowTool{Source: githubSource, Client: githubClient})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.WorkflowRunsTool{Source: githubSource, Client: githubClient})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.PRDiffTool{Source: githubSource, Client: githubClient})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.PRFileDiffTool{Source: githubSource, Client: githubClient})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.JobLogsTool{Source: githubSource, Client: githubClient})
 
 	luckinClient := &luckinTools.Client{
 		MCP: &mcp.Client{

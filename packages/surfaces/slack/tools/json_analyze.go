@@ -13,7 +13,8 @@ import (
 )
 
 type JSONAnalyzeTool struct {
-	Slack FileSearcher
+	Source FileSearcherSource
+	Slack  FileSearcher
 }
 
 
@@ -41,7 +42,17 @@ func (t JSONAnalyzeTool) Descriptor() tool.Descriptor {
 }
 
 func (t JSONAnalyzeTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
-	if t.Slack == nil {
+	searcher, early, err := beginFileSearch(ctx, t.Source, t.Slack, call)
+	if early != nil || err != nil {
+		if early != nil {
+			return *early, err
+		}
+		return tool.Result{}, err
+	}
+	if searcher == nil {
+		searcher = t.Slack
+	}
+	if searcher == nil {
 		return tool.Result{}, fmt.Errorf("Slack JSON analysis is not configured")
 	}
 	var args struct {
@@ -65,7 +76,7 @@ func (t JSONAnalyzeTool) Execute(ctx context.Context, call tool.Call) (tool.Resu
 	if args.Limit > 50 {
 		args.Limit = 50
 	}
-	file, err := t.Slack.FileInfo(ctx, args.FileID)
+	file, err := searcher.FileInfo(ctx, args.FileID)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -75,7 +86,7 @@ func (t JSONAnalyzeTool) Execute(ctx context.Context, call tool.Call) (tool.Resu
 	if file.Size > maxSearchFileBytes {
 		return tool.Result{}, fmt.Errorf("file exceeds analyzable size %s", formatBytes(maxSearchFileBytes))
 	}
-	data, err := t.Slack.DownloadFile(ctx, file, maxSearchFileBytes)
+	data, err := searcher.DownloadFile(ctx, file, maxSearchFileBytes)
 	if err != nil {
 		return tool.Result{}, err
 	}

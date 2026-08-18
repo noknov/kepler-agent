@@ -16,6 +16,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
 	"github.com/noknov/slack-copilot-agent/packages/appsupport"
 	"github.com/noknov/slack-copilot-agent/packages/config"
+	"github.com/noknov/slack-copilot-agent/packages/connections"
 	"github.com/noknov/slack-copilot-agent/packages/health"
 	"github.com/noknov/slack-copilot-agent/packages/infra/httpguard"
 	sharedlogging "github.com/noknov/slack-copilot-agent/packages/infra/logging"
@@ -32,6 +33,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/events"
 	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/handler"
 	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/home"
+	slackmessaging "github.com/noknov/slack-copilot-agent/packages/surfaces/slack/messaging"
 	slackTools "github.com/noknov/slack-copilot-agent/packages/surfaces/slack/tools"
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/gitcache"
 	hostedTools "github.com/noknov/slack-copilot-agent/packages/tools/hosted"
@@ -122,18 +124,17 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 	events := transcript.NewFanout(runSink)
 	workspacePolicy := safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}
-	surface := hostedTools.SurfaceOptions{
-		Name: "slack",
-		AvailableDeps: map[string]bool{
-			"slack":    slackClient != nil,
-			"reminder": stores.Reminders != nil,
-		},
-	}
+	connStore := connections.PGStore{Pool: stores.PGPool, SecretKey: cfg.Connections.EncryptionKey}
+	connService := connections.NewServiceFromConfig(connStore, cfg)
+	surface := hostedTools.SurfaceOptions{Name: "slack", AvailableDeps: map[string]bool{
+		"slack":    slackClient != nil,
+		"reminder": stores.Reminders != nil,
+	}, Connections: &connService}
 	catalog, err := hostedTools.NewCatalog(cfg, workspacePolicy, safety.NewCommandPolicy(), stores.UserPrefs, surface)
 	if err != nil {
 		return nil, fmt.Errorf("build hosted tool catalog: %w", err)
 	}
-	slackTools.AddToCatalog(catalog, hostedTools.PolicyForSurface(cfg, surface), cfg, slackClient, stores.Reminders, stores.Redis)
+	slackTools.AddToCatalog(catalog, hostedTools.PolicyForSurface(cfg, surface), cfg, slackClient, stores.Reminders, stores.Redis, &connService)
 	profile, profileErr := hosted.NewProfile(cfg, hosted.ProfileDependencies{
 		Tools: catalog, Postgres: stores.PGPool, Redis: stores.Redis, ToolSpills: stores.Runs, Events: events, Metrics: recorder,
 	})
@@ -179,11 +180,12 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		Runs:      stores.Runs,
 		UserPrefs: stores.UserPrefs,
 		Home: slackhome.Controller{
-			Cfg:    cfg,
-			Access: access,
-			Slack:  slackClient,
-			Store:  stores.UserPrefs,
-			Redis:  stores.Redis,
+			Cfg:         cfg,
+			Access:      access,
+			Slack:       slackClient,
+			Store:       stores.UserPrefs,
+			Redis:       stores.Redis,
+			Connections: connService,
 		},
 	}
 	conversation.WebSearchEnabled = handler.WebSearchPreference
@@ -197,7 +199,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		slack:     slackClient,
 		metrics:   recorder,
 		health:    healthService,
-		reminders: reminder.Scheduler{Store: stores.Reminders, Messenger: slackClient, Redis: stores.Redis},
+		reminders: reminder.Scheduler{Store: stores.Reminders, Messenger: slackmessaging.BotUserMessenger{Client: slackClient}, Redis: stores.Redis},
 		conv:      conv,
 		handler:   handler,
 		ctx:       serviceCtx,
