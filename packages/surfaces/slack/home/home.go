@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/noknov/slack-copilot-agent/packages/config"
+	"github.com/noknov/slack-copilot-agent/packages/connections"
 	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/userprefs"
@@ -20,11 +21,12 @@ type Publisher interface {
 }
 
 type Controller struct {
-	Cfg    config.Config
-	Access safety.AccessPolicy
-	Slack  Publisher
-	Store  userprefs.Store
-	Redis  *redisclient.Client
+	Cfg         config.Config
+	Access      safety.AccessPolicy
+	Slack       Publisher
+	Store       userprefs.Store
+	Redis       *redisclient.Client
+	Connections connections.Service
 }
 
 func (c Controller) Publish(ctx context.Context, userID string) error {
@@ -164,15 +166,61 @@ func (c Controller) View(userID string) map[string]any {
 		actionsBlock(
 			actionButton("manage_rules", "Manage Rules", "rule", ""),
 			actionButton("manage_skills", "Manage Skills", "skill", ""),
-			actionButton("toggle_user_setting", "Web Search "+boolLabel(webSearchOn), "web_search", webSearchBtnStyle),
-			actionButton("toggle_user_setting", "Input: "+conversationLabel, "conversation_mode", ""),
+			actionButton("toggle_web_search", "Web Search "+boolLabel(webSearchOn), "web_search", webSearchBtnStyle),
+			actionButton("toggle_conversation_mode", "Input: "+conversationLabel, "conversation_mode", ""),
 		),
 	}
+	blocks = append(blocks, c.connectionBlocks(userID)...)
 
 	return map[string]any{
 		"type":   "home",
 		"blocks": blocks,
 	}
+}
+
+func (c Controller) connectionBlocks(userID string) []map[string]any {
+	if c.Connections.Store == nil || !c.Connections.Config.OAuthEnabled() {
+		return nil
+	}
+	statusByProvider := map[string]connections.Connection{}
+	if listed, err := c.Connections.Store.List(context.Background(), userID); err == nil {
+		statusByProvider = connections.StatusMap(listed)
+	}
+	blocks := []map[string]any{
+		dividerBlock(),
+		headerBlock(":electric_plug: Connections"),
+	}
+	for _, plugin := range connections.Plugins() {
+		if !c.Connections.ProviderOAuthEnabled(plugin.ID) {
+			continue
+		}
+		status := "Not connected"
+		account := ""
+		if item, ok := statusByProvider[plugin.ID]; ok && item.Status == connections.StatusConnected {
+			status = "Connected"
+			account = item.Account
+		}
+		text := fmt.Sprintf("*%s*\n%s", plugin.Title, status)
+		if account != "" {
+			text += fmt.Sprintf(" (`%s`)", account)
+		}
+		authURL, err := c.Connections.StartURL(userID, plugin.ID)
+		if err != nil || authURL == "" {
+			blocks = append(blocks, sectionBlock(text))
+			continue
+		}
+		buttonLabel := "Connect"
+		buttonStyle := "primary"
+		if status == "Connected" {
+			buttonLabel = "Reconnect"
+			buttonStyle = ""
+		}
+		blocks = append(blocks, sectionBlockWithAccessory(text, actionButtonURL(buttonLabel, authURL, buttonStyle)))
+	}
+	if len(blocks) <= 2 {
+		return nil
+	}
+	return blocks
 }
 
 func mrkdwnField(text string) map[string]any {
@@ -247,6 +295,22 @@ func actionButton(actionID, label, value, style string) map[string]any {
 			"emoji": true,
 		},
 		"value": value,
+	}
+	if style != "" {
+		btn["style"] = style
+	}
+	return btn
+}
+
+func actionButtonURL(label, url, style string) map[string]any {
+	btn := map[string]any{
+		"type": "button",
+		"text": map[string]any{
+			"type":  "plain_text",
+			"text":  label,
+			"emoji": true,
+		},
+		"url": url,
 	}
 	if style != "" {
 		btn["style"] = style
