@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
@@ -61,9 +62,10 @@ func (c Config) OAuthEnabled() bool {
 }
 
 type Service struct {
-	Store         Store
-	Config        Config
+	Store           Store
+	Config          Config
 	clickstackOAuth *clickstackOAuth
+	clickstackRefresh sync.Map
 }
 
 func (s *Service) clickstack() *clickstackOAuth {
@@ -212,18 +214,12 @@ func (s Service) HandleCallback(w http.ResponseWriter, r *http.Request, provider
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		access, refresh, idToken, scopes, err := s.clickstack().exchange(r.Context(), code, meta.CodeVerifier, redirectURI, clientID)
+		response, err := s.clickstack().exchange(r.Context(), code, meta.CodeVerifier, redirectURI, clientID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		stored, err := encodeStoredToken(access, refresh)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		account := s.clickstack().accountLabel(idToken)
-		if err := s.Store.UpsertToken(r.Context(), userID, provider, stored, scopes, account); err != nil {
+		if err := s.storeClickStackBundle(r.Context(), userID, clientID, redirectURI, response, "", response.Scopes); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

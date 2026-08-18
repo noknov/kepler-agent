@@ -80,6 +80,14 @@ func (s PGStore) Delete(ctx context.Context, userID, provider string) error {
 }
 
 func (s PGStore) Token(ctx context.Context, userID, provider string) (string, error) {
+	raw, err := s.RawToken(ctx, userID, provider)
+	if err != nil {
+		return "", err
+	}
+	return decodeStoredToken(raw), nil
+}
+
+func (s PGStore) RawToken(ctx context.Context, userID, provider string) (string, error) {
 	row := s.Pool.QueryRow(ctx, `
 		SELECT token_ciphertext, status
 		FROM user_connections
@@ -99,35 +107,46 @@ func (s PGStore) Token(ctx context.Context, userID, provider string) (string, er
 	if err != nil {
 		return "", err
 	}
-	return decodeStoredToken(token), nil
+	return token, nil
 }
 
 func (s PGStore) AnyToken(ctx context.Context, provider string) (string, error) {
+	_, raw, err := s.AnyTokenUser(ctx, provider)
+	if err != nil {
+		return "", err
+	}
+	if token := decodeStoredToken(raw); token != "" {
+		return token, nil
+	}
+	return "", ErrNotConnected
+}
+
+func (s PGStore) AnyTokenUser(ctx context.Context, provider string) (string, string, error) {
 	rows, err := s.Pool.Query(ctx, `
-		SELECT token_ciphertext
+		SELECT user_id, token_ciphertext
 		FROM user_connections
 		WHERE provider = $1 AND status = $2
 		ORDER BY updated_at DESC
 		LIMIT 1`, provider, StatusConnected)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer rows.Close()
 	if !rows.Next() {
-		return "", ErrNotConnected
+		return "", "", ErrNotConnected
 	}
-	var ciphertext string
-	if err := rows.Scan(&ciphertext); err != nil {
-		return "", err
+	var userID, ciphertext string
+	if err := rows.Scan(&userID, &ciphertext); err != nil {
+		return "", "", err
 	}
 	token, err := decrypt(s.SecretKey, ciphertext)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	if token = decodeStoredToken(token); token == "" {
-		return "", ErrNotConnected
+	if strings.TrimSpace(token) == "" {
+		return "", "", ErrNotConnected
 	}
-	return token, rows.Err()
+	return userID, token, rows.Err()
 }
 
 func (s PGStore) CreateOAuthState(ctx context.Context, userID, provider, state string, expiresAt time.Time, meta OAuthStateMeta) error {

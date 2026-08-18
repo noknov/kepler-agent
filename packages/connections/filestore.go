@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -137,6 +138,14 @@ func (s *FileStore) Delete(ctx context.Context, userID, provider string) error {
 }
 
 func (s *FileStore) Token(ctx context.Context, userID, provider string) (string, error) {
+	raw, err := s.RawToken(ctx, userID, provider)
+	if err != nil {
+		return "", err
+	}
+	return decodeStoredToken(raw), nil
+}
+
+func (s *FileStore) RawToken(ctx context.Context, userID, provider string) (string, error) {
 	connections, _, err := s.load()
 	if err != nil {
 		return "", err
@@ -145,31 +154,47 @@ func (s *FileStore) Token(ctx context.Context, userID, provider string) (string,
 	if !ok || item.Status != StatusConnected {
 		return "", ErrNotConnected
 	}
-	token, err := decrypt(s.SecretKey, item.Token)
-	if err != nil {
-		return "", err
-	}
-	return decodeStoredToken(token), nil
+	return decrypt(s.SecretKey, item.Token)
 }
 
 func (s *FileStore) AnyToken(ctx context.Context, provider string) (string, error) {
-	connections, _, err := s.load()
+	_, raw, err := s.AnyTokenUser(ctx, provider)
 	if err != nil {
 		return "", err
 	}
+	if token := decodeStoredToken(raw); token != "" {
+		return token, nil
+	}
+	return "", ErrNotConnected
+}
+
+func (s *FileStore) AnyTokenUser(ctx context.Context, provider string) (string, string, error) {
+	connections, _, err := s.load()
+	if err != nil {
+		return "", "", err
+	}
+	var latest fileRecord
+	var found bool
 	for _, item := range connections {
 		if item.Provider != provider || item.Status != StatusConnected {
 			continue
 		}
-		token, err := decrypt(s.SecretKey, item.Token)
-		if err != nil {
-			continue
-		}
-		if token = decodeStoredToken(token); token != "" {
-			return token, nil
+		if !found || item.UpdatedAt.After(latest.UpdatedAt) {
+			latest = item
+			found = true
 		}
 	}
-	return "", ErrNotConnected
+	if !found {
+		return "", "", ErrNotConnected
+	}
+	token, err := decrypt(s.SecretKey, latest.Token)
+	if err != nil {
+		return "", "", err
+	}
+	if strings.TrimSpace(token) == "" {
+		return "", "", ErrNotConnected
+	}
+	return latest.UserID, token, nil
 }
 
 func (s *FileStore) CreateOAuthState(ctx context.Context, userID, provider, state string, expiresAt time.Time, meta OAuthStateMeta) error {

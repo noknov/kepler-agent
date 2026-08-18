@@ -75,7 +75,7 @@ func (r *Registrar) bootstrapToken(ctx context.Context, userID string) (string, 
 	}
 	if userID != "" {
 		if _, err := r.conn.Store.Get(ctx, userID, connections.ProviderClickStack); err == nil {
-			token, err := r.conn.Store.Token(ctx, userID, connections.ProviderClickStack)
+			token, err := r.conn.ClickStackAccessToken(ctx, userID)
 			if err != nil {
 				return "", fmt.Errorf("clickstack is connected but this worker cannot read your token: %w", err)
 			}
@@ -84,9 +84,12 @@ func (r *Registrar) bootstrapToken(ctx context.Context, userID string) (string, 
 			}
 		}
 	}
-	token, err := r.conn.Store.AnyToken(ctx, connections.ProviderClickStack)
+	token, err := r.conn.ClickStackAnyAccessToken(ctx)
 	if err != nil {
-		return "", nil
+		if err == connections.ErrNotConnected {
+			return "", nil
+		}
+		return "", err
 	}
 	return token, nil
 }
@@ -99,7 +102,7 @@ func (r *Registrar) tokenResolver() mcptools.TokenResolver {
 		if strings.TrimSpace(call.Scope.UserID) == "" {
 			return "", connections.ErrNotConnected
 		}
-		token, err := r.conn.Store.Token(ctx, call.Scope.UserID, connections.ProviderClickStack)
+		token, err := r.conn.ClickStackAccessToken(ctx, call.Scope.UserID)
 		if err != nil {
 			if err == connections.ErrNotConnected {
 				return "", r.conn.Required(call.Scope.UserID, connections.ProviderClickStack)
