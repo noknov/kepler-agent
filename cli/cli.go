@@ -49,6 +49,9 @@ type approvalQuestion struct {
 }
 
 func Run() error {
+	if len(os.Args) > 1 && os.Args[1] == "connect" {
+		return runConnect(os.Args[2:])
+	}
 	var values options
 	flag.StringVar(&values.configPath, "config", "", "configuration TOML path")
 	flag.StringVar(&values.cwd, "cwd", ".", "workspace root")

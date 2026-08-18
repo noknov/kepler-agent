@@ -133,10 +133,10 @@ var allTables = []string{
 	"agent_runs", "agent_tool_spills", "agent_run_steps",
 	"agent_run_feedback", "agent_transcript_events", "reminders",
 	"slack_event_inbox", "user_settings", "user_prompt_assets",
-	"agent_session_inputs",
+	"agent_session_inputs", "user_connections", "oauth_states",
 }
 
-var ingressTables = []string{"slack_event_inbox", "user_settings", "user_prompt_assets"}
+var ingressTables = []string{"slack_event_inbox", "user_settings", "user_prompt_assets", "user_connections", "oauth_states"}
 
 // requireSchema performs a read-only startup check. Application processes do
 // not create or alter database objects and can run without DDL privileges.

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/config"
+	"github.com/noknov/slack-copilot-agent/packages/connections"
 	"github.com/noknov/slack-copilot-agent/packages/infra/httpguard"
 	sharedlogging "github.com/noknov/slack-copilot-agent/packages/infra/logging"
 	"github.com/noknov/slack-copilot-agent/packages/infra/telemetry"
@@ -22,11 +23,12 @@ import (
 )
 
 type Service struct {
-	cfg      config.Config
-	stores   *platform.EventIngressStores
-	gateway  slackgateway.Gateway
-	home     slackhome.Controller
-	draining atomic.Bool
+	cfg         config.Config
+	stores      *platform.EventIngressStores
+	gateway     slackgateway.Gateway
+	home        slackhome.Controller
+	connections connections.Service
+	draining    atomic.Bool
 }
 
 func Run(ctx context.Context) error {
@@ -62,12 +64,15 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	if cfg.Slack.BotToken != "" {
 		slackClient = slack.NewClient(cfg.Slack.BotToken, cfg.Slack.BotUserID)
 	}
+	connStore := connections.PGStore{Pool: stores.PGPool, SecretKey: cfg.Connections.EncryptionKey}
+	s.connections = connections.NewServiceFromConfig(connStore, cfg)
 	s.home = slackhome.Controller{
-		Cfg:    cfg,
-		Access: safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
-		Slack:  slackClient,
-		Store:  stores.UserPrefs,
-		Redis:  stores.Redis,
+		Cfg:         cfg,
+		Access:      safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
+		Slack:       slackClient,
+		Store:       stores.UserPrefs,
+		Redis:       stores.Redis,
+		Connections: s.connections,
 	}
 	handler := &slackhandler.Handler{
 		Cfg:       cfg,
@@ -102,6 +107,9 @@ func (s *Service) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/drain", s.handleDrain)
 	mux.HandleFunc("/slack/events", s.gateway.HandleEvents)
 	mux.HandleFunc("/slack/interactions", s.gateway.HandleInteractions)
+	if s.connections.Config.OAuthEnabled() && s.connections.Config.PublicBaseURL != "" {
+		mux.Handle("/oauth/", connections.NewHTTPHandler(s.connections))
+	}
 
 	server := &http.Server{
 		Addr:              s.cfg.HTTP.Addr,
