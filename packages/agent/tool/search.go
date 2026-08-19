@@ -142,22 +142,26 @@ func (t searchTool) search(query string, limit int) (Result, error) {
 		limit = 20
 	}
 	type scored struct {
-		name  string
-		score float64
-		line  string
+		name     string
+		nameHits int
+		score    float64
+		line     string
 	}
 	results := make([]scored, 0)
 	for _, descriptor := range t.catalog.Descriptors() {
 		if descriptor.Exposure != ExposureDeferred {
 			continue
 		}
-		score, line := scoreDeferredTool(descriptor, query)
+		nameHits, score, line := scoreDeferredTool(descriptor, query)
 		if score <= 0 {
 			continue
 		}
-		results = append(results, scored{name: descriptor.Name, score: score, line: line})
+		results = append(results, scored{name: descriptor.Name, nameHits: nameHits, score: score, line: line})
 	}
 	sort.Slice(results, func(i, j int) bool {
+		if results[i].nameHits != results[j].nameHits {
+			return results[i].nameHits > results[j].nameHits
+		}
 		if results[i].score == results[j].score {
 			return results[i].name < results[j].name
 		}
@@ -176,10 +180,14 @@ func (t searchTool) search(query string, limit int) (Result, error) {
 	return TextResult("Deferred tools matching \"" + query + "\":\n- " + strings.Join(lines, "\n- ")), nil
 }
 
-func scoreDeferredTool(descriptor Descriptor, query string) (float64, string) {
+func scoreDeferredTool(descriptor Descriptor, query string) (int, float64, string) {
 	tokens := tokenize(query)
 	if len(tokens) == 0 {
-		return 0, ""
+		return 0, 0, ""
+	}
+	nameTokens := make(map[string]struct{})
+	for _, token := range tokenize(descriptor.Name) {
+		nameTokens[token] = struct{}{}
 	}
 	corpus := strings.ToLower(strings.Join([]string{
 		descriptor.Name,
@@ -188,12 +196,16 @@ func scoreDeferredTool(descriptor Descriptor, query string) (float64, string) {
 		string(descriptor.InputSchema),
 	}, " "))
 	var score float64
+	var nameHits int
 	for _, token := range tokens {
 		if strings.Contains(corpus, token) {
 			score += 1
 		}
 		if strings.Contains(descriptor.Name, token) {
 			score += 2
+		}
+		if _, ok := nameTokens[token]; ok {
+			nameHits++
 		}
 		for _, tag := range descriptor.Tags {
 			if strings.Contains(tag, token) {
@@ -202,10 +214,10 @@ func scoreDeferredTool(descriptor Descriptor, query string) (float64, string) {
 		}
 	}
 	if score == 0 {
-		return 0, ""
+		return 0, 0, ""
 	}
 	tags := strings.Join(descriptor.Tags, ", ")
-	return score, fmt.Sprintf("%s [%s] — %s", descriptor.Name, tags, trimDescription(descriptor.Description, 120))
+	return nameHits, score, fmt.Sprintf("%s [%s] — %s", descriptor.Name, tags, trimDescription(descriptor.Description, 120))
 }
 
 func tokenize(value string) []string {
