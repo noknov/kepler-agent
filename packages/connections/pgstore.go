@@ -61,6 +61,7 @@ func (s PGStore) UpsertToken(ctx context.Context, userID, provider, token string
 	if err != nil {
 		return err
 	}
+	scopes = scopesForStorage(scopes)
 	_, err = s.Pool.Exec(ctx, `
 		INSERT INTO user_connections (user_id, provider, status, token_ciphertext, scopes, account, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, NOW())
@@ -72,6 +73,16 @@ func (s PGStore) UpsertToken(ctx context.Context, userID, provider, token string
 			updated_at = NOW()`,
 		userID, provider, StatusConnected, encrypted, scopes, account)
 	return err
+}
+
+// scopesForStorage keeps the PostgreSQL user_connections.scopes invariant:
+// pgx encodes a nil []string as SQL NULL, while an OAuth provider without
+// scopes must be stored as the empty SQL array ('{}').
+func scopesForStorage(scopes []string) []string {
+	if scopes == nil {
+		return []string{}
+	}
+	return scopes
 }
 
 func (s PGStore) Delete(ctx context.Context, userID, provider string) error {
