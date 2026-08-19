@@ -114,7 +114,7 @@ func ImagePartsWithBudget(ctx context.Context, client Downloader, files []slack.
 		if mime == "" {
 			continue
 		}
-		if file.Size > MaxImageBytes {
+		if file.Size > 0 && file.Size > MaxImageBytes {
 			log.Printf("skip slack image %s: size %d exceeds limit %d", file.ID, file.Size, MaxImageBytes)
 			continue
 		}

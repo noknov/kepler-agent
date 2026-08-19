@@ -145,6 +145,12 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	healthService := health.NewService(profile.Tools, cfg.Security.WorkspaceRoots)
 	healthService.Redis = stores.Redis
 	conversation := slackagent.New(profile.Agent, slackmessaging.AgentMessenger{Client: slackClient}, profile.Prompt, profile.Redactor, stores.UserPrefs)
+	conversation.HistoryClient = func(ctx context.Context, req slackconversation.Request) *slack.Client {
+		if token, err := connStore.Token(ctx, req.UserID, connections.ProviderSlack); err == nil && strings.TrimSpace(token) != "" {
+			return slack.NewClient(token, cfg.Slack.BotUserID)
+		}
+		return slackClient
+	}
 	if bundle.ClickStack != nil {
 		policy := hostedTools.PolicyForSurface(cfg, surface)
 		conversation.BeforeRun = func(ctx context.Context, userID string) error {

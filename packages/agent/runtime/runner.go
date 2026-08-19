@@ -60,7 +60,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 			return result, err
 		}
 		for index := range request.History {
-			message := request.History[index]
+			message := historyForTranscript(request.History[index])
 			if message.Role != model.RoleUser && message.Role != model.RoleAssistant {
 				message.Role = model.RoleUser
 			}
@@ -260,6 +260,18 @@ func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, syste
 	}
 	projection.Messages = overlayEnvironment(overlayCurrentInput(projection, request.Input).Messages, r.deps.Environment)
 	return projection, err
+}
+
+func historyForTranscript(message model.Message) model.Message {
+	content := make([]model.Content, 0, len(message.Content))
+	for _, block := range message.Content {
+		if block.Type == model.ContentImage {
+			continue
+		}
+		content = append(content, block)
+	}
+	message.Content = content
+	return message
 }
 
 func durableUserInput(message model.Message) model.Message {
