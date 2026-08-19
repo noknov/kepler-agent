@@ -62,6 +62,7 @@ func HistoryMessage(ctx context.Context, d Downloader, msg slack.Message, botUse
 		}
 	}
 	parts := ImagePartsWithBudget(ctx, d, msg.Files, budget)
+	text = appendImageDownloadNote(text, msg.Files, len(parts))
 	if text == "" && len(parts) == 0 {
 		return model.Message{}, false
 	}
@@ -91,6 +92,24 @@ func ModelContent(parts []llm.ContentPart) []model.Content {
 		}
 	}
 	return out
+}
+
+func appendImageDownloadNote(text string, files []slack.File, downloaded int) string {
+	expected := 0
+	for _, file := range files {
+		if NormalizedImageMIME(file) != "" {
+			expected++
+		}
+	}
+	if expected == 0 || downloaded > 0 {
+		return text
+	}
+	note := "[Could not download image attachment(s) with your Slack connection. Reconnect Slack in App Home and ensure files:read is granted.]"
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return note
+	}
+	return text + "\n\n" + note
 }
 
 func min(a, b int) int {

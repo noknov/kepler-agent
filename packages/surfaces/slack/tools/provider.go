@@ -138,34 +138,6 @@ func (s ConnectedThreadReader) Client(ctx context.Context, call tool.Call) (*sla
 	return connectedSlackClient(ctx, s.Service, call.Scope.UserID)
 }
 
-// BotThreadReader uses the workspace bot token.
-type BotThreadReader struct{ Slack *slack.Client }
-
-func (s BotThreadReader) Client(_ context.Context, _ tool.Call) (*slack.Client, error) {
-	if s.Slack == nil {
-		return nil, errors.New("slack is not configured")
-	}
-	return s.Slack, nil
-}
-
-// PreferConnectedThreadReader uses the bot token for the current conversation and
-// the caller's linked token only when the read target is outside that scope.
-type PreferConnectedThreadReader struct {
-	Connected ConnectedThreadReader
-	Bot       BotThreadReader
-}
-
-func (s PreferConnectedThreadReader) Client(ctx context.Context, call tool.Call) (*slack.Client, error) {
-	if !readTargetInput(call).RequiresUserConnection() {
-		return s.Bot.Client(ctx, call)
-	}
-	client, err := s.Connected.Client(ctx, call)
-	if err != nil {
-		return nil, err
-	}
-	return client, nil
-}
-
 func beginThreadRead(ctx context.Context, source ThreadReaderSource, call tool.Call) (*slack.Client, *tool.Result, error) {
 	if source == nil {
 		return nil, nil, errors.New("slack thread reads are not configured")

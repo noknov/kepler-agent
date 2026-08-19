@@ -5,37 +5,40 @@ import (
 	"testing"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
+	"github.com/noknov/slack-copilot-agent/packages/connections"
 )
 
-func TestPreferConnectedThreadReaderUsesBotForCurrentConversation(t *testing.T) {
-	bot := slack.NewClient("xoxb-bot", "B1")
-	source := PreferConnectedThreadReader{
-		Connected: ConnectedThreadReader{},
-		Bot:       BotThreadReader{Slack: bot},
+func TestConnectedThreadReaderUsesStoredToken(t *testing.T) {
+	store, err := connections.NewFileStore(t.TempDir()+"/connections.json", "test-secret")
+	if err != nil {
+		t.Fatal(err)
 	}
-	got, err := source.Client(context.Background(), tool.Call{
-		Scope: tool.Scope{Values: map[string]string{"channel": "C1", "thread_ts": "1.0"}},
+	ctx := context.Background()
+	if err := store.UpsertToken(ctx, "U1", connections.ProviderSlack, "xoxp-user", []string{"files:read"}, "U1"); err != nil {
+		t.Fatal(err)
+	}
+	source := ConnectedThreadReader{Service: connections.Service{Store: store}}
+	got, err := source.Client(ctx, tool.Call{
+		Scope: tool.Scope{UserID: "U1", Values: map[string]string{"channel": "C1", "thread_ts": "1.0"}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != bot {
-		t.Fatal("expected bot client for current conversation")
+	if got == nil {
+		t.Fatal("expected connected user client")
 	}
 }
 
-func TestPreferConnectedThreadReaderRequiresConnectionForExternalReads(t *testing.T) {
-	bot := slack.NewClient("xoxb-bot", "B1")
-	source := PreferConnectedThreadReader{
-		Connected: ConnectedThreadReader{},
-		Bot:       BotThreadReader{Slack: bot},
+func TestConnectedThreadReaderRequiresConnection(t *testing.T) {
+	store, err := connections.NewFileStore(t.TempDir()+"/connections.json", "test-secret")
+	if err != nil {
+		t.Fatal(err)
 	}
-	_, err := source.Client(context.Background(), tool.Call{
-		Arguments: []byte(`{"user":"UOTHER"}`),
-		Scope:     tool.Scope{Values: map[string]string{"channel": "C1"}},
+	source := ConnectedThreadReader{Service: connections.Service{Store: store}}
+	_, err = source.Client(context.Background(), tool.Call{
+		Scope: tool.Scope{UserID: "U1", Values: map[string]string{"channel": "C1", "thread_ts": "1.0"}},
 	})
 	if err == nil {
-		t.Fatal("expected error when external read requires user connection")
+		t.Fatal("expected error when user is not connected")
 	}
 }
