@@ -279,7 +279,13 @@ func (m *streamingStatusMessenger) PostMarkdownMessage(context.Context, string, 
 func (m *streamingStatusMessenger) PostMarkdownMessageWithID(_ context.Context, _, _, _ string, _ string) (string, error) {
 	return "1.0", nil
 }
-func (m *streamingStatusMessenger) UpdateMarkdownMessage(context.Context, string, string, string) error {
+func (m *streamingStatusMessenger) StartStream(context.Context, string, string, string) (string, error) {
+	return "1.0", nil
+}
+func (m *streamingStatusMessenger) AppendStream(context.Context, string, string, []map[string]any) error {
+	return nil
+}
+func (m *streamingStatusMessenger) StopStream(context.Context, string, string) error {
 	return nil
 }
 func (m *streamingStatusMessenger) SetThreadStatus(ctx context.Context, channel, threadTS, status string, loading []string) error {

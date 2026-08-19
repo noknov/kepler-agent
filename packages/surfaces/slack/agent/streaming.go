@@ -1,15 +1,19 @@
 package slackagent
 
 import (
+	"context"
 	"strings"
 	"time"
 
 	slackconversation "github.com/noknov/slack-copilot-agent/packages/surfaces/slack/conversation"
 )
 
-const streamUpdateInterval = 400 * time.Millisecond
+const (
+	streamAppendInterval = 35 * time.Millisecond
+	streamAppendMinChars = 32
+)
 
-// AppendDelta buffers streamed assistant text and periodically updates the Slack message.
+// AppendDelta buffers streamed assistant text and periodically delivers it to Slack.
 func (s *slackStream) AppendDelta(delta string) {
 	if delta == "" {
 		return
@@ -41,9 +45,10 @@ func (s *slackStream) scheduleStreamUpdate(text string) {
 		return
 	}
 	now := time.Now()
-	if s.messageTS != "" && now.Sub(s.lastStreamUpdate) < streamUpdateInterval {
+	pending := len(text) - len(s.lastStreamText)
+	if s.messageTS != "" && !s.streamThrottleReady(now, pending) {
 		if s.streamTimer == nil {
-			s.streamTimer = time.AfterFunc(streamUpdateInterval, func() {
+			s.streamTimer = time.AfterFunc(streamAppendInterval, func() {
 				s.mu.Lock()
 				pending := s.answer.String()
 				s.mu.Unlock()
@@ -55,6 +60,13 @@ func (s *slackStream) scheduleStreamUpdate(text string) {
 	}
 	s.mu.Unlock()
 	s.flushStreamUpdate(text, false)
+}
+
+func (s *slackStream) streamThrottleReady(now time.Time, pendingLen int) bool {
+	if s.messageTS == "" {
+		return true
+	}
+	return now.Sub(s.lastStreamUpdate) >= streamAppendInterval || pendingLen >= streamAppendMinChars
 }
 
 func (s *slackStream) shouldDeferStreamDelivery() bool {
@@ -81,8 +93,16 @@ func (s *slackStream) flushStreamUpdate(text string, force bool) {
 	if !force && s.shouldDeferStreamDelivery() {
 		return
 	}
-	streaming, ok := s.messenger.(slackconversation.StreamingMarkdownMessenger)
+	s.flushNativeStream(text)
+}
+
+func (s *slackStream) flushNativeStream(fullText string) {
+	native, ok := s.messenger.(slackconversation.NativeStreamMessenger)
 	if !ok {
+		return
+	}
+	delta := streamSuffix(s.lastStreamText, fullText)
+	if delta == "" {
 		return
 	}
 	s.mu.Lock()
@@ -90,35 +110,71 @@ func (s *slackStream) flushStreamUpdate(text string, force bool) {
 		s.streamTimer.Stop()
 		s.streamTimer = nil
 	}
-	if s.messageTS == "" {
-		ctx, cancel := s.deliveryContext()
-		ts, err := streaming.PostMarkdownMessageWithID(ctx, s.req.Channel, s.req.ThreadTS, text, s.req.EventID)
-		cancel()
+	messageTS := s.messageTS
+	deliveryFailed := s.streamDeliveryFailed
+	s.mu.Unlock()
+
+	if messageTS == "" && deliveryFailed {
+		return
+	}
+
+	ctx, cancel := s.deliveryContext()
+	defer cancel()
+
+	if messageTS == "" {
+		ts, err := native.StartStream(ctx, s.req.Channel, s.req.ThreadTS, s.req.UserID)
 		if err != nil {
+			s.mu.Lock()
+			s.streamDeliveryFailed = true
 			s.mu.Unlock()
 			return
 		}
+		s.mu.Lock()
 		s.messageTS = ts
-		s.streaming = true
-		s.lastStreamText = text
-		s.lastStreamUpdate = time.Now()
+		s.nativeStream = true
+		messageTS = ts
 		s.mu.Unlock()
 		s.restoreThreadStatus()
+	}
+
+	if err := native.AppendStream(ctx, s.req.Channel, messageTS, []map[string]any{
+		{"type": "markdown_text", "text": delta},
+	}); err != nil {
+		if strings.Contains(err.Error(), "not_in_streaming_state") {
+			s.mu.Lock()
+			s.streamDeliveryFailed = true
+			s.mu.Unlock()
+		}
 		return
 	}
-	if text == s.lastStreamText {
-		s.mu.Unlock()
-		return
-	}
-	messageTS := s.messageTS
-	s.lastStreamText = text
+	s.mu.Lock()
+	s.lastStreamText = fullText
 	s.lastStreamUpdate = time.Now()
 	s.mu.Unlock()
-	ctx, cancel := s.deliveryContext()
-	defer cancel()
-	if err := streaming.UpdateMarkdownMessage(ctx, s.req.Channel, messageTS, text); err == nil {
-		s.restoreThreadStatus()
+	s.restoreThreadStatus()
+}
+
+func streamSuffix(streamed, full string) string {
+	full = strings.TrimSpace(full)
+	if full == "" {
+		return ""
 	}
+	streamed = strings.TrimSpace(streamed)
+	if streamed == "" || !strings.HasPrefix(full, streamed) {
+		return full
+	}
+	return full[len(streamed):]
+}
+
+func (s *slackStream) stopNativeStream(ctx context.Context) {
+	if !s.nativeStream || s.messageTS == "" {
+		return
+	}
+	native, ok := s.messenger.(slackconversation.NativeStreamMessenger)
+	if !ok {
+		return
+	}
+	_ = native.StopStream(ctx, s.req.Channel, s.messageTS)
 }
 
 func (s *slackStream) stopStreamTimer() {

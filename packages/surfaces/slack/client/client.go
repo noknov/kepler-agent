@@ -19,6 +19,7 @@ import (
 type Client struct {
 	token      string
 	botUserID  string
+	teamID     string
 	httpClient *http.Client
 }
 
@@ -48,12 +49,16 @@ func (c *Client) AuthTest(ctx context.Context) (string, error) {
 		OK     bool   `json:"ok"`
 		Error  string `json:"error,omitempty"`
 		UserID string `json:"user_id,omitempty"`
+		TeamID string `json:"team_id,omitempty"`
 	}
 	if err := c.postJSON(ctx, "auth.test", map[string]any{}, &out); err != nil {
 		return "", err
 	}
 	if !out.OK {
 		return "", fmt.Errorf("slack auth.test failed: %s", out.Error)
+	}
+	if out.TeamID != "" {
+		c.teamID = out.TeamID
 	}
 	return out.UserID, nil
 }
@@ -85,38 +90,6 @@ func (c *Client) PostMarkdownMessageWithID(ctx context.Context, channel, threadT
 		return ts, err
 	}
 	return c.postMessage(ctx, channel, threadTS, markdown, nil, clientMessageID)
-}
-
-// UpdateMarkdownMessage edits an existing Slack message with markdown content.
-func (c *Client) UpdateMarkdownMessage(ctx context.Context, channel, messageTS, markdown string) error {
-	blocks := []map[string]any{{"type": "markdown", "text": markdown}}
-	err := c.updateMessage(ctx, channel, messageTS, markdown, blocks)
-	if err == nil || !strings.Contains(err.Error(), "invalid_blocks") {
-		return err
-	}
-	return c.updateMessage(ctx, channel, messageTS, markdown, nil)
-}
-
-func (c *Client) updateMessage(ctx context.Context, channel, messageTS, text string, blocks []map[string]any) error {
-	payload := map[string]any{
-		"channel": channel,
-		"ts":      messageTS,
-		"text":    text,
-	}
-	if len(blocks) > 0 {
-		payload["blocks"] = blocks
-	}
-	var out struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error,omitempty"`
-	}
-	if err := c.postJSON(ctx, "chat.update", payload, &out); err != nil {
-		return err
-	}
-	if !out.OK {
-		return fmt.Errorf("slack chat.update failed: %s", out.Error)
-	}
-	return nil
 }
 
 func (c *Client) postMessage(ctx context.Context, channel, threadTS, text string, blocks []map[string]any, clientMessageID string) (string, error) {
@@ -208,6 +181,66 @@ func (c *Client) UpdateView(ctx context.Context, viewID string, view map[string]
 	}
 	if !out.OK {
 		return fmt.Errorf("slack views.update failed: %s", out.Error)
+	}
+	return nil
+}
+
+func (c *Client) StartStream(ctx context.Context, channel, threadTS, recipientUserID string) (string, error) {
+	payload := map[string]any{
+		"channel":           channel,
+		"thread_ts":         threadTS,
+		"task_display_mode": "dense",
+	}
+	if recipientUserID != "" {
+		payload["recipient_user_id"] = recipientUserID
+	}
+	if c.teamID != "" {
+		payload["recipient_team_id"] = c.teamID
+	}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+		TS    string `json:"ts,omitempty"`
+	}
+	if err := c.postJSON(ctx, "chat.startStream", payload, &out); err != nil {
+		return "", err
+	}
+	if !out.OK {
+		return "", fmt.Errorf("slack chat.startStream failed: %s", out.Error)
+	}
+	return out.TS, nil
+}
+
+func (c *Client) AppendStream(ctx context.Context, channel, messageTS string, chunks []map[string]any) error {
+	payload := map[string]any{
+		"channel": channel,
+		"ts":      messageTS,
+		"chunks":  chunks,
+	}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+	}
+	if err := c.postJSON(ctx, "chat.appendStream", payload, &out); err != nil {
+		return err
+	}
+	if !out.OK {
+		return fmt.Errorf("slack chat.appendStream failed: %s", out.Error)
+	}
+	return nil
+}
+
+func (c *Client) StopStream(ctx context.Context, channel, messageTS string) error {
+	payload := map[string]any{"channel": channel, "ts": messageTS}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+	}
+	if err := c.postJSON(ctx, "chat.stopStream", payload, &out); err != nil {
+		return err
+	}
+	if !out.OK {
+		return fmt.Errorf("slack chat.stopStream failed: %s", out.Error)
 	}
 	return nil
 }
