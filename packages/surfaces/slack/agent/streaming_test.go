@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/noknov/slack-copilot-agent/packages/safety"
 	slackconversation "github.com/noknov/slack-copilot-agent/packages/surfaces/slack/conversation"
 )
 
@@ -152,6 +153,23 @@ func TestStreamSuffix(t *testing.T) {
 	}
 	if got := streamSuffix("", "hello"); got != "hello" {
 		t.Fatalf("suffix = %q", got)
+	}
+}
+
+func TestNativeStreamSanitizesDeltasWithoutRewritingTheMessage(t *testing.T) {
+	messenger := &nativeStreamingMessenger{}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1"})
+	stream.redactor = safety.NewStreamRedactor(safety.Redactor{})
+	stream.Start()
+	stream.AppendDelta("the xoxb-secret is hidden")
+	if _, err := stream.Complete("the [redacted] is hidden"); err != nil {
+		t.Fatal(err)
+	}
+	if len(messenger.appends) != 1 || messenger.appends[0] != "the [redacted] is hidden" {
+		t.Fatalf("appends=%#v", messenger.appends)
+	}
+	if len(messenger.posts) != 0 {
+		t.Fatalf("unexpected final rewrite: %#v", messenger.posts)
 	}
 }
 

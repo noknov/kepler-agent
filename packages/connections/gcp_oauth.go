@@ -12,11 +12,11 @@ import (
 )
 
 const (
-	gcpOAuthScope       = "https://www.googleapis.com/auth/logging.read https://www.googleapis.com/auth/cloud-platform.read-only"
-	gcpAuthorizeURL     = "https://accounts.google.com/o/oauth2/v2/auth"
-	gcpTokenURL         = "https://oauth2.googleapis.com/token"
-	gcpUserInfoURL      = "https://www.googleapis.com/oauth2/v2/userinfo"
-	gcpOAuthAccessType  = "offline"
+	gcpOAuthScope      = "https://www.googleapis.com/auth/logging.read https://www.googleapis.com/auth/cloud-platform.read-only"
+	gcpAuthorizeURL    = "https://accounts.google.com/o/oauth2/v2/auth"
+	gcpTokenURL        = "https://oauth2.googleapis.com/token"
+	gcpUserInfoURL     = "https://www.googleapis.com/oauth2/v2/userinfo"
+	gcpOAuthAccessType = "offline"
 )
 
 type GCPOAuthConfig struct {

@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/gitcache"
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type Base struct {
@@ -24,7 +24,6 @@ type Base struct {
 }
 
 type StatusTool struct{ Base }
-
 
 func (t StatusTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
@@ -90,7 +89,6 @@ type snapshot struct {
 }
 
 type SearchRefTool struct{ Base }
-
 
 func (t SearchRefTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
@@ -158,7 +156,6 @@ func (t SearchRefTool) Execute(ctx context.Context, call tool.Call) (tool.Result
 }
 
 type RepoSearchTool struct{ Base }
-
 
 func (t RepoSearchTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
@@ -229,7 +226,6 @@ func (t RepoSearchTool) Execute(ctx context.Context, call tool.Call) (tool.Resul
 }
 
 type ReadFileRefTool struct{ Base }
-
 
 func (t ReadFileRefTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
@@ -308,7 +304,6 @@ func (t ReadFileRefTool) Execute(ctx context.Context, call tool.Call) (tool.Resu
 
 type RepoReadFileTool struct{ Base }
 
-
 func (t RepoReadFileTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
 		"repo-read_file",
@@ -352,7 +347,6 @@ func (t RepoReadFileTool) Execute(ctx context.Context, call tool.Call) (tool.Res
 
 type LogTool struct{ Base }
 
-
 func (t LogTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
 		"git-log",
@@ -392,7 +386,6 @@ func (t LogTool) Execute(ctx context.Context, call tool.Call) (tool.Result, erro
 }
 
 type ShowTool struct{ Base }
-
 
 func (t ShowTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(

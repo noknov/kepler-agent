@@ -23,13 +23,13 @@ const exploreSystemPrompt = `You are a read-only exploration sub-agent. Investig
 
 // Runner executes isolated sub-turns against a filtered tool catalog.
 type Runner struct {
-	Config         agentruntime.Config
-	Deps           agentruntime.Dependencies
-	ParentCatalog  *tool.Catalog
-	AllowedTools   map[string]bool
-	MaxSteps       int
-	MaxWorkers     int
-	SystemPrompt   string
+	Config        agentruntime.Config
+	Deps          agentruntime.Dependencies
+	ParentCatalog *tool.Catalog
+	AllowedTools  map[string]bool
+	MaxSteps      int
+	MaxWorkers    int
+	SystemPrompt  string
 }
 
 type exploreJob struct {

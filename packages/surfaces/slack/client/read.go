@@ -8,7 +8,7 @@ import (
 
 // ReadTargetInput describes a Slack conversation the caller wants to read.
 type ReadTargetInput struct {
-	Channel, User, Link, ThreadTS string
+	Channel, User, Link, ThreadTS               string
 	ScopeChannel, ScopeThreadTS, ScopeMessageTS string
 }
 

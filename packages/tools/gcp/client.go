@@ -48,7 +48,7 @@ type TokenSource interface {
 
 // ConnectedSource uses per-user GCP OAuth tokens.
 type ConnectedSource struct {
-	Service connections.Service
+	Service  connections.Service
 	Defaults Defaults
 }
 

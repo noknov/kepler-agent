@@ -14,8 +14,8 @@ import (
 
 	xhtml "golang.org/x/net/html"
 
-	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	"github.com/noknov/slack-copilot-agent/packages/safety"
 )
 
 const (
@@ -49,7 +49,6 @@ type SearchTool struct {
 	Client Client
 }
 
-
 func (t SearchTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
 		"web-search",
@@ -68,7 +67,6 @@ func (t SearchTool) Descriptor() tool.Descriptor {
 type ReadPageTool struct {
 	Client Client
 }
-
 
 func (t ReadPageTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(

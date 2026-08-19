@@ -298,6 +298,7 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	// client_msg_id. Keep generated IDs on the request as well as the turn.
 	req.EventID = turnID
 	stream := newSlackStream(runCtx, s.Messenger, req)
+	stream.redactor = safety.NewStreamRedactor(s.Redactor)
 	stream.progress = s.Progress
 	s.router.set(turnID, stream)
 	defer s.router.set(turnID, nil)
@@ -598,15 +599,14 @@ func (s *Service) StartConnectionCompletedSubscriber(ctx context.Context) {
 			if !parsed {
 				continue
 			}
-			continuation, found, err := s.Continuations.Load(ctx, userID, provider)
+			continuations, err := s.Continuations.Claim(ctx, userID, provider)
 			if err != nil {
-				log.Printf("connection continuation load failed user=%s provider=%s: %v", userID, provider, err)
+				log.Printf("connection continuation claim failed user=%s provider=%s: %v", userID, provider, err)
 				continue
 			}
-			if !found {
-				continue
+			for _, continuation := range continuations {
+				go s.resumeAfterConnection(ctx, continuation)
 			}
-			go s.resumeAfterConnection(ctx, continuation)
 		}
 	}
 }
@@ -626,7 +626,7 @@ func (s *Service) resumeAfterConnection(parentCtx context.Context, continuation 
 
 	defer func() {
 		if s.Continuations != nil {
-			_ = s.Continuations.Clear(ctx, continuation.UserID, continuation.Provider)
+			_ = s.Continuations.Clear(ctx, continuation)
 		}
 	}()
 
@@ -702,26 +702,28 @@ func (s *Service) StartControlSubscriber(ctx context.Context) {
 }
 
 type slackStream struct {
-	ctx             context.Context
-	messenger       slackconversation.Messenger
-	req             slackconversation.Request
-	mu              sync.Mutex
-	statusMu        sync.Mutex
-	status          slackconversation.ThreadStatusMessenger
-	lastStatus      string
-	statusEpoch     uint64
-	progress        *ProgressSummarizer
-	progressSeen    map[string]bool
-	progressCalls   []model.ToolCall
-	progressRunning bool
+	ctx                  context.Context
+	messenger            slackconversation.Messenger
+	req                  slackconversation.Request
+	mu                   sync.Mutex
+	deliveryMu           sync.Mutex
+	statusMu             sync.Mutex
+	status               slackconversation.ThreadStatusMessenger
+	lastStatus           string
+	statusEpoch          uint64
+	progress             *ProgressSummarizer
+	progressSeen         map[string]bool
+	progressCalls        []model.ToolCall
+	progressRunning      bool
+	redactor             *safety.StreamRedactor
 	answer               strings.Builder
 	messageTS            string
 	nativeStream         bool
 	streamDeliveryFailed bool
 	streamClosed         bool
-	lastStreamText      string
-	lastStreamUpdate    time.Time
-	streamTimer         *time.Timer
+	lastStreamText       string
+	lastStreamUpdate     time.Time
+	streamTimer          *time.Timer
 }
 
 func newSlackStream(ctx context.Context, messenger slackconversation.Messenger, req slackconversation.Request) *slackStream {
@@ -740,6 +742,9 @@ func (s *slackStream) CommitStep(message model.Message) {
 }
 func (s *slackStream) Complete(final string) (string, error) {
 	s.stopStreamTimer()
+	if s.redactor != nil {
+		s.appendSanitizedDelta(s.redactor.Flush())
+	}
 	s.flushDeferredStream(true)
 	s.mu.Lock()
 	s.streamClosed = true
@@ -771,6 +776,15 @@ func (s *slackStream) Complete(final string) (string, error) {
 		return messageTS, nil
 	}
 	return s.postFinalMarkdown(ctx, final)
+}
+
+func (s *slackStream) appendSanitizedDelta(delta string) {
+	if delta == "" {
+		return
+	}
+	s.mu.Lock()
+	s.answer.WriteString(delta)
+	s.mu.Unlock()
 }
 func (s *slackStream) Fail(message string, canceled bool) (string, error) {
 	s.stopStreamTimer()

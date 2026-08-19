@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	reminderStore "github.com/noknov/slack-copilot-agent/packages/reminder"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	reminderStore "github.com/noknov/slack-copilot-agent/packages/reminder"
 )
 
 type CreateTool struct {

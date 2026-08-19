@@ -140,7 +140,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	slackTools.AddToCatalog(catalog, hostedTools.PolicyForSurface(cfg, surface), cfg, slackClient, stores.Reminders, stores.Redis, &connService)
 	profile, profileErr := hosted.NewProfile(cfg, hosted.ProfileDependencies{
 		Tools: catalog, Postgres: stores.PGPool, Redis: stores.Redis, ToolSpills: stores.Runs, Events: events, Metrics: recorder,
-		ConnectionContinuations: continuations,
+		ConnectionContinuations: connections.RuntimeContinuationStore{Store: continuations},
 	})
 	if profileErr != nil {
 		return nil, fmt.Errorf("build hosted profile: %w", profileErr)

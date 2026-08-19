@@ -37,19 +37,19 @@ func TestRedisContinuationStoreRoundTrip(t *testing.T) {
 	if err := store.Save(ctx, cont); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
-	loaded, ok, err := store.Load(ctx, cont.UserID, cont.Provider)
-	if err != nil || !ok {
-		t.Fatalf("Load() = (%+v, %v, %v)", loaded, ok, err)
+	loaded, err := store.Claim(ctx, cont.UserID, cont.Provider)
+	if err != nil || len(loaded) != 1 {
+		t.Fatalf("Claim() = (%+v, %v)", loaded, err)
 	}
-	if loaded.Channel != cont.Channel || loaded.ThreadTS != cont.ThreadTS {
-		t.Fatalf("Load() = %+v, want %+v", loaded, cont)
+	if loaded[0].Channel != cont.Channel || loaded[0].ThreadTS != cont.ThreadTS {
+		t.Fatalf("Claim() = %+v, want %+v", loaded[0], cont)
 	}
-	if err := store.Clear(ctx, cont.UserID, cont.Provider); err != nil {
+	if err := store.Clear(ctx, cont); err != nil {
 		t.Fatalf("Clear() error = %v", err)
 	}
-	_, ok, err = store.Load(ctx, cont.UserID, cont.Provider)
-	if err != nil || ok {
-		t.Fatalf("Load() after clear = (%v, %v)", ok, err)
+	loaded, err = store.Claim(ctx, cont.UserID, cont.Provider)
+	if err != nil || len(loaded) != 0 {
+		t.Fatalf("Claim() after clear = (%+v, %v)", loaded, err)
 	}
 }
 

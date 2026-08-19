@@ -12,8 +12,8 @@ func formatPodsWide(data []byte) (string, error) {
 	var list struct {
 		Items []struct {
 			Metadata struct {
-				Name              string `json:"name"`
-				Namespace         string `json:"namespace"`
+				Name              string    `json:"name"`
+				Namespace         string    `json:"namespace"`
 				CreationTimestamp time.Time `json:"creationTimestamp"`
 			} `json:"metadata"`
 			Status struct {
@@ -113,9 +113,9 @@ func formatRolloutHistory(data []byte) (string, error) {
 	var list struct {
 		Items []struct {
 			Metadata struct {
-				Name string `json:"name"`
-				Annotations map[string]string `json:"annotations"`
-				CreationTimestamp time.Time `json:"creationTimestamp"`
+				Name              string            `json:"name"`
+				Annotations       map[string]string `json:"annotations"`
+				CreationTimestamp time.Time         `json:"creationTimestamp"`
 			} `json:"metadata"`
 		} `json:"items"`
 	}
@@ -296,37 +296,37 @@ func buildGetPath(resource, namespace, name string, allNamespaces bool) (string,
 }
 
 type resourceMeta struct {
-	apiRoot        string
-	collection     string
-	clusterScoped  bool
+	apiRoot       string
+	collection    string
+	clusterScoped bool
 }
 
 var resourceRegistry = map[string]resourceMeta{
-	"pod":          {apiRoot: "/api/v1", collection: "pods"},
-	"pods":         {apiRoot: "/api/v1", collection: "pods"},
-	"deployment":   {apiRoot: "/apis/apps/v1", collection: "deployments"},
-	"deployments":  {apiRoot: "/apis/apps/v1", collection: "deployments"},
-	"service":      {apiRoot: "/api/v1", collection: "services"},
-	"services":     {apiRoot: "/api/v1", collection: "services"},
-	"ingress":      {apiRoot: "/apis/networking.k8s.io/v1", collection: "ingresses"},
-	"ingresses":    {apiRoot: "/apis/networking.k8s.io/v1", collection: "ingresses"},
-	"configmap":    {apiRoot: "/api/v1", collection: "configmaps"},
-	"configmaps":   {apiRoot: "/api/v1", collection: "configmaps"},
-	"hpa":          {apiRoot: "/apis/autoscaling/v2", collection: "horizontalpodautoscalers"},
-	"job":          {apiRoot: "/apis/batch/v1", collection: "jobs"},
-	"jobs":         {apiRoot: "/apis/batch/v1", collection: "jobs"},
-	"cronjob":      {apiRoot: "/apis/batch/v1", collection: "cronjobs"},
-	"cronjobs":     {apiRoot: "/apis/batch/v1", collection: "cronjobs"},
-	"statefulset":  {apiRoot: "/apis/apps/v1", collection: "statefulsets"},
-	"statefulsets": {apiRoot: "/apis/apps/v1", collection: "statefulsets"},
-	"daemonset":    {apiRoot: "/apis/apps/v1", collection: "daemonsets"},
-	"daemonsets":   {apiRoot: "/apis/apps/v1", collection: "daemonsets"},
-	"node":         {apiRoot: "/api/v1", collection: "nodes", clusterScoped: true},
-	"nodes":        {apiRoot: "/api/v1", collection: "nodes", clusterScoped: true},
-	"namespace":    {apiRoot: "/api/v1", collection: "namespaces", clusterScoped: true},
-	"namespaces":   {apiRoot: "/api/v1", collection: "namespaces", clusterScoped: true},
-	"pvc":          {apiRoot: "/api/v1", collection: "persistentvolumeclaims"},
-	"pv":           {apiRoot: "/api/v1", collection: "persistentvolumes", clusterScoped: true},
+	"pod":                    {apiRoot: "/api/v1", collection: "pods"},
+	"pods":                   {apiRoot: "/api/v1", collection: "pods"},
+	"deployment":             {apiRoot: "/apis/apps/v1", collection: "deployments"},
+	"deployments":            {apiRoot: "/apis/apps/v1", collection: "deployments"},
+	"service":                {apiRoot: "/api/v1", collection: "services"},
+	"services":               {apiRoot: "/api/v1", collection: "services"},
+	"ingress":                {apiRoot: "/apis/networking.k8s.io/v1", collection: "ingresses"},
+	"ingresses":              {apiRoot: "/apis/networking.k8s.io/v1", collection: "ingresses"},
+	"configmap":              {apiRoot: "/api/v1", collection: "configmaps"},
+	"configmaps":             {apiRoot: "/api/v1", collection: "configmaps"},
+	"hpa":                    {apiRoot: "/apis/autoscaling/v2", collection: "horizontalpodautoscalers"},
+	"job":                    {apiRoot: "/apis/batch/v1", collection: "jobs"},
+	"jobs":                   {apiRoot: "/apis/batch/v1", collection: "jobs"},
+	"cronjob":                {apiRoot: "/apis/batch/v1", collection: "cronjobs"},
+	"cronjobs":               {apiRoot: "/apis/batch/v1", collection: "cronjobs"},
+	"statefulset":            {apiRoot: "/apis/apps/v1", collection: "statefulsets"},
+	"statefulsets":           {apiRoot: "/apis/apps/v1", collection: "statefulsets"},
+	"daemonset":              {apiRoot: "/apis/apps/v1", collection: "daemonsets"},
+	"daemonsets":             {apiRoot: "/apis/apps/v1", collection: "daemonsets"},
+	"node":                   {apiRoot: "/api/v1", collection: "nodes", clusterScoped: true},
+	"nodes":                  {apiRoot: "/api/v1", collection: "nodes", clusterScoped: true},
+	"namespace":              {apiRoot: "/api/v1", collection: "namespaces", clusterScoped: true},
+	"namespaces":             {apiRoot: "/api/v1", collection: "namespaces", clusterScoped: true},
+	"pvc":                    {apiRoot: "/api/v1", collection: "persistentvolumeclaims"},
+	"pv":                     {apiRoot: "/api/v1", collection: "persistentvolumes", clusterScoped: true},
 	"persistentvolumeclaims": {apiRoot: "/api/v1", collection: "persistentvolumeclaims"},
 	"persistentvolumes":      {apiRoot: "/api/v1", collection: "persistentvolumes", clusterScoped: true},
 }

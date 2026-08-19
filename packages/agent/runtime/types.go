@@ -13,7 +13,6 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/agent/prompt"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
-	"github.com/noknov/slack-copilot-agent/packages/connections"
 )
 
 type TerminationReason string
@@ -30,17 +29,17 @@ const (
 )
 
 type Config struct {
-	Model           string
-	ReasoningEffort string
-	Temperature     float64
-	MaxOutputTokens int
-	MaxSteps        int
+	Model                   string
+	ReasoningEffort         string
+	Temperature             float64
+	MaxOutputTokens         int
+	MaxSteps                int
 	MaxModelRetries         int
 	MaxEmptyResponseRetries int
 	RetryBaseDelay          time.Duration
-	Context         ContextConfig
-	ToolResults     ToolResultConfig
-	CircuitBreaker  CircuitBreakerConfig
+	Context                 ContextConfig
+	ToolResults             ToolResultConfig
+	CircuitBreaker          CircuitBreakerConfig
 }
 
 func (c Config) withDefaults() Config {
@@ -72,20 +71,20 @@ func (c Config) withDefaults() Config {
 }
 
 type Dependencies struct {
-	Model       model.Client
-	Tools       *tool.Catalog
-	Policy      tool.Policy
-	Approver    tool.Approver
-	Transcript  transcript.Store
-	Events      transcript.Sink
-	Projector   Projector
-	Compactor   Compactor
-	Environment environment.Config
-	Artifacts   ArtifactStore
-	IDs         IDGenerator
-	Clock       func() time.Time
-	Sleep       func(context.Context, time.Duration) error
-	ConnectionContinuations connections.ContinuationStore
+	Model                   model.Client
+	Tools                   *tool.Catalog
+	Policy                  tool.Policy
+	Approver                tool.Approver
+	Transcript              transcript.Store
+	Events                  transcript.Sink
+	Projector               Projector
+	Compactor               Compactor
+	Environment             environment.Config
+	Artifacts               ArtifactStore
+	IDs                     IDGenerator
+	Clock                   func() time.Time
+	Sleep                   func(context.Context, time.Duration) error
+	ConnectionContinuations ConnectionContinuationStore
 }
 
 type Runtime struct {

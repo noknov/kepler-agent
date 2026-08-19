@@ -6,14 +6,13 @@ import (
 	"fmt"
 	"strings"
 
-	engine "github.com/noknov/slack-copilot-agent/packages/codeintel"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	engine "github.com/noknov/slack-copilot-agent/packages/codeintel"
 )
 
 type SymbolsTool struct {
 	Manager engine.Manager
 }
-
 
 func (t SymbolsTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
@@ -59,7 +58,6 @@ type DefinitionTool struct {
 	Manager engine.Manager
 }
 
-
 func (t DefinitionTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
 		"code-definition",
@@ -83,7 +81,6 @@ func (t DefinitionTool) Execute(ctx context.Context, call tool.Call) (tool.Resul
 type ReferencesTool struct {
 	Manager engine.Manager
 }
-
 
 func (t ReferencesTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
@@ -109,7 +106,6 @@ type ImplementationTool struct {
 	Manager engine.Manager
 }
 
-
 func (t ImplementationTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
 		"code-implementation",
@@ -133,7 +129,6 @@ func (t ImplementationTool) Execute(ctx context.Context, call tool.Call) (tool.R
 type IncomingCallsTool struct {
 	Manager engine.Manager
 }
-
 
 func (t IncomingCallsTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
@@ -159,7 +154,6 @@ type OutgoingCallsTool struct {
 	Manager engine.Manager
 }
 
-
 func (t OutgoingCallsTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
 		"code-outgoing_calls",
@@ -183,7 +177,6 @@ func (t OutgoingCallsTool) Execute(ctx context.Context, call tool.Call) (tool.Re
 type DiagnosticsTool struct {
 	Manager engine.Manager
 }
-
 
 func (t DiagnosticsTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(

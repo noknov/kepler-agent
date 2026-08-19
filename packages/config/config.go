@@ -18,7 +18,7 @@ type Config struct {
 	Sessions     SessionConfig
 	Tools        ToolConfig
 	Integrations IntegrationConfig
-	Connections ConnectionsConfig
+	Connections  ConnectionsConfig
 	Observing    ObservingConfig
 	Storage      StorageConfig
 }
@@ -96,15 +96,15 @@ type ToolConfig struct {
 }
 
 type IntegrationConfig struct {
-	GCP       GCPConfig
-	GitHub    GitHubConfig
-	K8s       K8sConfig
-	Luckin    LuckinConfig
+	GCP        GCPConfig
+	GitHub     GitHubConfig
+	K8s        K8sConfig
+	Luckin     LuckinConfig
 	ClickStack ClickStackConfig
-	Notion    NotionConfig
-	TTS       TTSConfig
-	WebSearch WebSearchConfig
-	YouTrack  YouTrackConfig
+	Notion     NotionConfig
+	TTS        TTSConfig
+	WebSearch  WebSearchConfig
+	YouTrack   YouTrackConfig
 }
 
 type GCPConfig struct {
@@ -184,17 +184,17 @@ type YouTrackConfig struct {
 }
 
 type ConnectionsConfig struct {
-	PublicBaseURL          string
-	EncryptionKey          string
-	SlackClientID          string
-	SlackClientSecret      string
-	GitHubClientID         string
-	GitHubClientSecret     string
-	GCPOAuthClientID       string
-	GCPOAuthClientSecret   string
-	NotionOAuthClientID    string
+	PublicBaseURL           string
+	EncryptionKey           string
+	SlackClientID           string
+	SlackClientSecret       string
+	GitHubClientID          string
+	GitHubClientSecret      string
+	GCPOAuthClientID        string
+	GCPOAuthClientSecret    string
+	NotionOAuthClientID     string
 	NotionOAuthClientSecret string
-	LocalOAuthPort         int
+	LocalOAuthPort          int
 }
 
 func (c ConnectionsConfig) GCPOAuthEnabled() bool {
@@ -433,17 +433,17 @@ func loadConnections() ConnectionsConfig {
 		clientSecret = strings.TrimSpace(os.Getenv("SLACK_CLIENT_SECRET"))
 	}
 	return ConnectionsConfig{
-		PublicBaseURL:      trimRightSlash(os.Getenv("CONNECTIONS_PUBLIC_BASE_URL")),
-		EncryptionKey:      os.Getenv("CONNECTIONS_ENCRYPTION_KEY"),
-		SlackClientID:      clientID,
-		SlackClientSecret:  clientSecret,
-		GitHubClientID:     os.Getenv("GITHUB_OAUTH_CLIENT_ID"),
-		GitHubClientSecret: os.Getenv("GITHUB_OAUTH_CLIENT_SECRET"),
-		GCPOAuthClientID:     os.Getenv("GCP_OAUTH_CLIENT_ID"),
-		GCPOAuthClientSecret: os.Getenv("GCP_OAUTH_CLIENT_SECRET"),
-		NotionOAuthClientID:  os.Getenv("NOTION_OAUTH_CLIENT_ID"),
+		PublicBaseURL:           trimRightSlash(os.Getenv("CONNECTIONS_PUBLIC_BASE_URL")),
+		EncryptionKey:           os.Getenv("CONNECTIONS_ENCRYPTION_KEY"),
+		SlackClientID:           clientID,
+		SlackClientSecret:       clientSecret,
+		GitHubClientID:          os.Getenv("GITHUB_OAUTH_CLIENT_ID"),
+		GitHubClientSecret:      os.Getenv("GITHUB_OAUTH_CLIENT_SECRET"),
+		GCPOAuthClientID:        os.Getenv("GCP_OAUTH_CLIENT_ID"),
+		GCPOAuthClientSecret:    os.Getenv("GCP_OAUTH_CLIENT_SECRET"),
+		NotionOAuthClientID:     os.Getenv("NOTION_OAUTH_CLIENT_ID"),
 		NotionOAuthClientSecret: os.Getenv("NOTION_OAUTH_CLIENT_SECRET"),
-		LocalOAuthPort:     port,
+		LocalOAuthPort:          port,
 	}
 }
 

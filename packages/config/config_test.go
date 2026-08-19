@@ -555,13 +555,13 @@ func TestLoadClickStackMCPConfig(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
 	writeEnvFile(t, dir, map[string]string{
-		"SLACK_BOT_TOKEN":        "xoxb-test",
-		"SLACK_SIGNING_SECRET":   "secret",
-		"ALLOWED_SLACK_USERS":    "U123",
-		"MIMO_API_KEY":           "mimo-token",
-		"CLICKSTACK_MCP_URL":     "https://clickstack.example/api/mcp/",
-		"CLICKSTACK_SERVICE_ID":  "svc-1",
-		"CLICKSTACK_TEAM_ID":     "team-1",
+		"SLACK_BOT_TOKEN":       "xoxb-test",
+		"SLACK_SIGNING_SECRET":  "secret",
+		"ALLOWED_SLACK_USERS":   "U123",
+		"MIMO_API_KEY":          "mimo-token",
+		"CLICKSTACK_MCP_URL":    "https://clickstack.example/api/mcp/",
+		"CLICKSTACK_SERVICE_ID": "svc-1",
+		"CLICKSTACK_TEAM_ID":    "team-1",
 	})
 
 	wd, _ := os.Getwd()

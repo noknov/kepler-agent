@@ -17,6 +17,11 @@ const (
 
 // AppendDelta buffers streamed assistant text and periodically delivers it to Slack.
 func (s *slackStream) AppendDelta(delta string) {
+	if s.redactor != nil {
+		delta = s.redactor.Append(delta)
+	} else {
+		delta = s.sanitizeText(delta)
+	}
 	if delta == "" {
 		return
 	}
@@ -132,7 +137,13 @@ func (s *slackStream) ensureNativeStream() {
 }
 
 func (s *slackStream) flushNativeStream(fullText string) {
-	delta := streamSuffix(s.lastStreamText, fullText)
+	s.deliveryMu.Lock()
+	defer s.deliveryMu.Unlock()
+
+	s.mu.Lock()
+	streamed := s.lastStreamText
+	s.mu.Unlock()
+	delta := streamSuffix(streamed, fullText)
 	if delta == "" {
 		return
 	}
@@ -158,6 +169,10 @@ func (s *slackStream) flushNativeStream(fullText string) {
 	s.lastStreamUpdate = time.Now()
 	s.mu.Unlock()
 	s.restoreThreadStatus()
+}
+
+func (s *slackStream) sanitizeText(text string) string {
+	return text
 }
 
 func (s *slackStream) appendNativeChunks(delta string) error {

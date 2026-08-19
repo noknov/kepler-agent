@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
+	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/gitcache"
-	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 func TestCodegraphFindsGoDefinitionsAndCallees(t *testing.T) {
@@ -41,7 +41,7 @@ func getPostList() {
 	base := Base{Paths: safety.WorkspacePolicy{Roots: []string{root}}, Timeout: 10 * time.Second}
 	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
 
-	def, err := (DefinitionTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"AddCommentRoutes"}`), Scope: scope})
+	def, err := (DefinitionTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main","symbol":"AddCommentRoutes"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func getPostList() {
 		t.Fatalf("definition content = %q", def.Text())
 	}
 
-	callees, err := (CalleesTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"AddCommentRoutes"}`), Scope: scope})
+	callees, err := (CalleesTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main","symbol":"AddCommentRoutes"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func getPostList() {
 		t.Fatalf("callees content = %q", callees.Text())
 	}
 
-	impls, err := (ImplementationsTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"Loader"}`), Scope: scope})
+	impls, err := (ImplementationsTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main","symbol":"Loader"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func getPostList() {
 		t.Fatalf("implementations content = %q", impls.Text())
 	}
 
-	refs, err := (ReferencesTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"Loader"}`), Scope: scope})
+	refs, err := (ReferencesTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main","symbol":"Loader"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func getPostList() {
 		t.Fatalf("references content = %q", refs.Text())
 	}
 
-	callgraph, err := (CallgraphTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","filter":"LoadPosts"}`), Scope: scope})
+	callgraph, err := (CallgraphTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main","filter":"LoadPosts"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ public class CommentController : IPostLoader
 	base := Base{Paths: safety.WorkspacePolicy{Roots: []string{root}}, Timeout: 10 * time.Second}
 	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
 
-	def, err := (DefinitionTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"CommentController.GetPostList"}`), Scope: scope})
+	def, err := (DefinitionTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main","symbol":"CommentController.GetPostList"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ public class CommentController : IPostLoader
 		t.Fatalf("definition content = %q", def.Text())
 	}
 
-	callers, err := (CallersTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"LoadPosts"}`), Scope: scope})
+	callers, err := (CallersTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main","symbol":"LoadPosts"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ public class CommentController : IPostLoader
 		t.Fatalf("callers content = %q", callers.Text())
 	}
 
-	impls, err := (ImplementationsTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","symbol":"IPostLoader"}`), Scope: scope})
+	impls, err := (ImplementationsTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main","symbol":"IPostLoader"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}

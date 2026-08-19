@@ -23,14 +23,14 @@ const (
 
 // Item is a Codex-style turn item derived from one transcript event.
 type Item struct {
-	ID        string          `json:"id"`
-	Kind      ItemKind        `json:"kind"`
-	SessionID string          `json:"sessionId"`
-	TurnID    string          `json:"turnId,omitempty"`
-	Sequence  uint64          `json:"sequence"`
+	ID        string               `json:"id"`
+	Kind      ItemKind             `json:"kind"`
+	SessionID string               `json:"sessionId"`
+	TurnID    string               `json:"turnId,omitempty"`
+	Sequence  uint64               `json:"sequence"`
 	Type      transcript.EventType `json:"eventType"`
-	Status    string          `json:"status,omitempty"`
-	Payload   json.RawMessage `json:"payload,omitempty"`
+	Status    string               `json:"status,omitempty"`
+	Payload   json.RawMessage      `json:"payload,omitempty"`
 }
 
 func itemFromEvent(event transcript.Event) Item {

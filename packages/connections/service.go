@@ -76,28 +76,49 @@ func (c Config) OAuthEnabled() bool {
 type OAuthCompletedHandler func(ctx context.Context, userID, provider string) error
 
 type Service struct {
-	Store             Store
-	Config            Config
-	Continuations     ContinuationStore
-	OnOAuthCompleted  OAuthCompletedHandler
+	Store            Store
+	Config           Config
+	Continuations    ContinuationStore
+	OnOAuthCompleted OAuthCompletedHandler
+	state            *serviceState
+}
+
+// serviceState holds mutable OAuth state behind a pointer so Service remains a
+// safe, lightweight dependency value. Surface adapters may carry Service by
+// value, but must never copy synchronization primitives themselves.
+type serviceState struct {
+	mu                sync.Mutex
 	clickstackOAuth   *clickstackOAuth
 	gcpOAuth          *gcpOAuth
 	clickstackRefresh sync.Map
 	gcpRefresh        sync.Map
 }
 
-func (s *Service) clickstack() *clickstackOAuth {
-	if s.clickstackOAuth == nil {
-		s.clickstackOAuth = newClickStackOAuth(s.Config.ClickStack)
+func (s *Service) mutableState() *serviceState {
+	if s.state == nil {
+		s.state = &serviceState{}
 	}
-	return s.clickstackOAuth
+	return s.state
+}
+
+func (s *Service) clickstack() *clickstackOAuth {
+	state := s.mutableState()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.clickstackOAuth == nil {
+		state.clickstackOAuth = newClickStackOAuth(s.Config.ClickStack)
+	}
+	return state.clickstackOAuth
 }
 
 func (s *Service) gcp() *gcpOAuth {
-	if s.gcpOAuth == nil {
-		s.gcpOAuth = newGCPOAuth(s.Config.GCP)
+	state := s.mutableState()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.gcpOAuth == nil {
+		state.gcpOAuth = newGCPOAuth(s.Config.GCP)
 	}
-	return s.gcpOAuth
+	return state.gcpOAuth
 }
 
 func (s Service) ProviderOAuthEnabled(provider string) bool {
@@ -327,8 +348,8 @@ func (s Service) exchangeSlack(ctx context.Context, code string) (token, account
 	}
 	defer resp.Body.Close()
 	var payload struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error,omitempty"`
+		OK         bool   `json:"ok"`
+		Error      string `json:"error,omitempty"`
 		AuthedUser struct {
 			ID          string `json:"id"`
 			AccessToken string `json:"access_token"`

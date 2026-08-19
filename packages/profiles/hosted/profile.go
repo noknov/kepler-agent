@@ -8,14 +8,13 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/noknov/slack-copilot-agent/packages/agent/environment"
 	"github.com/noknov/slack-copilot-agent/packages/agent/delegation"
+	"github.com/noknov/slack-copilot-agent/packages/agent/environment"
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	agentruntime "github.com/noknov/slack-copilot-agent/packages/agent/runtime"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
 	"github.com/noknov/slack-copilot-agent/packages/config"
-	"github.com/noknov/slack-copilot-agent/packages/connections"
 	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
 	"github.com/noknov/slack-copilot-agent/packages/observability"
 	"github.com/noknov/slack-copilot-agent/packages/providers"
@@ -41,7 +40,7 @@ type ProfileDependencies struct {
 	ToolSpills              ToolSpillStore
 	Events                  transcript.Sink
 	Metrics                 *observability.Recorder
-	ConnectionContinuations connections.ContinuationStore
+	ConnectionContinuations agentruntime.ConnectionContinuationStore
 }
 
 func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
@@ -84,7 +83,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	}, agentruntime.Dependencies{
 		Model: client, Tools: catalog, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}, Transcript: PGTranscript{Pool: deps.Postgres}, Events: deps.Events,
 		Compactor: agentruntime.ModelCompactor{Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer}, Artifacts: artifacts,
-		Environment: environment.Config{WorkspaceRoots: cfg.Security.WorkspaceRoots},
+		Environment:             environment.Config{WorkspaceRoots: cfg.Security.WorkspaceRoots},
 		ConnectionContinuations: deps.ConnectionContinuations,
 	})
 	if err != nil {
@@ -94,8 +93,8 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		Config: agentruntime.Config{
 			Model: cfg.LLM.Model, ReasoningEffort: cfg.LLM.Thinking, Temperature: cfg.LLM.Temperature,
 			MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxSteps: 12,
-			Context:         agentruntime.ContextConfig{MaxTokens: cfg.Sessions.MaxContextTokens, ReserveTokens: cfg.Sessions.AutocompactBuffer},
-			ToolResults:     agentruntime.ToolResultConfig{MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)},
+			Context:     agentruntime.ContextConfig{MaxTokens: cfg.Sessions.MaxContextTokens, ReserveTokens: cfg.Sessions.AutocompactBuffer},
+			ToolResults: agentruntime.ToolResultConfig{MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)},
 		},
 		Deps: agentruntime.Dependencies{
 			Model: client, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)},

@@ -17,7 +17,7 @@ type LocalTokenSource struct {
 	Timeout    time.Duration
 }
 
-func (s LocalTokenSource) Resolve(ctx context.Context, _ tool.Call) (Client, error) {
+func (s LocalTokenSource) Resolve(ctx context.Context, _ tool.Call) (*Client, error) {
 	path := strings.TrimSpace(s.GCloudPath)
 	if path == "" {
 		path = "gcloud"
@@ -31,11 +31,11 @@ func (s LocalTokenSource) Resolve(ctx context.Context, _ tool.Call) (Client, err
 	cmd := exec.CommandContext(cmdCtx, path, "auth", "print-access-token")
 	out, err := cmd.Output()
 	if err != nil {
-		return Client{}, fmt.Errorf("gcloud auth print-access-token failed: %w (run gcloud auth login or mount valid ~/.config/gcloud)", err)
+		return nil, fmt.Errorf("gcloud auth print-access-token failed: %w (run gcloud auth login or mount valid ~/.config/gcloud)", err)
 	}
 	token := strings.TrimSpace(string(out))
 	if token == "" {
-		return Client{}, fmt.Errorf("gcloud returned an empty access token")
+		return nil, fmt.Errorf("gcloud returned an empty access token")
 	}
-	return Client{AccessToken: token, Defaults: s.Defaults}, nil
+	return &Client{AccessToken: token, Defaults: s.Defaults}, nil
 }

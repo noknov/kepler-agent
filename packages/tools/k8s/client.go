@@ -34,7 +34,7 @@ type clusterSession struct {
 
 // TokenSource resolves a Kubernetes API client for a tool call.
 type TokenSource interface {
-	Resolve(ctx context.Context, call tool.Call) (Client, error)
+	Resolve(ctx context.Context, call tool.Call) (*Client, error)
 }
 
 // ConnectedSource uses per-user GCP OAuth tokens (cloud-platform.read-only covers GKE API).
@@ -43,40 +43,40 @@ type ConnectedSource struct {
 	Defaults Defaults
 }
 
-func (s ConnectedSource) Resolve(ctx context.Context, call tool.Call) (Client, error) {
+func (s ConnectedSource) Resolve(ctx context.Context, call tool.Call) (*Client, error) {
 	if s.Service.Store == nil {
-		return Client{}, fmt.Errorf("kubernetes connections are not configured")
+		return nil, fmt.Errorf("kubernetes connections are not configured")
 	}
 	if call.Scope.UserID == "" {
-		return Client{}, fmt.Errorf("user id is required for kubernetes")
+		return nil, fmt.Errorf("user id is required for kubernetes")
 	}
 	token, err := s.Service.GCPAccessToken(ctx, call.Scope.UserID)
 	if err != nil {
 		if errorsIsNotConnected(err) {
-			return Client{}, s.Service.Required(call.Scope.UserID, connections.ProviderGCP)
+			return nil, s.Service.Required(call.Scope.UserID, connections.ProviderGCP)
 		}
-		return Client{}, err
+		return nil, err
 	}
-	return Client{AccessToken: token, Defaults: s.Defaults}, nil
+	return &Client{AccessToken: token, Defaults: s.Defaults}, nil
 }
 
 func errorsIsNotConnected(err error) bool {
 	return err == connections.ErrNotConnected || strings.Contains(err.Error(), "not connected")
 }
 
-func begin(ctx context.Context, source TokenSource, call tool.Call) (Client, *tool.Result, error) {
+func begin(ctx context.Context, source TokenSource, call tool.Call) (*Client, *tool.Result, error) {
 	if source == nil {
-		return Client{}, nil, fmt.Errorf("kubernetes is not configured: connect Google Cloud in App Home")
+		return nil, nil, fmt.Errorf("kubernetes is not configured: connect Google Cloud in App Home")
 	}
 	client, err := source.Resolve(ctx, call)
 	if err != nil {
 		if result, convErr := toolResult(err); convErr == nil {
-			return Client{}, &result, nil
+			return nil, &result, nil
 		}
-		return Client{}, nil, err
+		return nil, nil, err
 	}
 	if strings.TrimSpace(client.AccessToken) == "" {
-		return Client{}, nil, fmt.Errorf("kubernetes access token is empty")
+		return nil, nil, fmt.Errorf("kubernetes access token is empty")
 	}
 	return client, nil, nil
 }
@@ -137,7 +137,7 @@ type gkeClusterInfo struct {
 	} `json:"masterAuth"`
 }
 
-func (c Client) fetchCluster(ctx context.Context, target ClusterTarget) (gkeClusterInfo, error) {
+func (c *Client) fetchCluster(ctx context.Context, target ClusterTarget) (gkeClusterInfo, error) {
 	location := strings.TrimSpace(target.Location)
 	if location == "" {
 		return gkeClusterInfo{}, fmt.Errorf("cluster location (region or zone) is required; configure GKE_REGION or pass a gke_PROJECT_LOCATION_CLUSTER context")
@@ -159,7 +159,7 @@ func (c Client) fetchCluster(ctx context.Context, target ClusterTarget) (gkeClus
 	return info, nil
 }
 
-func (c Client) doGCP(ctx context.Context, rawURL string) ([]byte, error) {
+func (c *Client) doGCP(ctx context.Context, rawURL string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
@@ -184,7 +184,7 @@ func (c Client) doGCP(ctx context.Context, rawURL string) ([]byte, error) {
 	return data, nil
 }
 
-func (c Client) doAPI(ctx context.Context, target ClusterTarget, method, apiPath string, query url.Values) ([]byte, error) {
+func (c *Client) doAPI(ctx context.Context, target ClusterTarget, method, apiPath string, query url.Values) ([]byte, error) {
 	session, err := c.session(ctx, target)
 	if err != nil {
 		return nil, err
@@ -214,7 +214,7 @@ func (c Client) doAPI(ctx context.Context, target ClusterTarget, method, apiPath
 	return data, nil
 }
 
-func (c Client) listGKEClusters(ctx context.Context, project, location string) ([]byte, error) {
+func (c *Client) listGKEClusters(ctx context.Context, project, location string) ([]byte, error) {
 	if strings.TrimSpace(location) == "" {
 		rawURL := fmt.Sprintf("https://container.googleapis.com/v1/projects/%s/locations/-/clusters", url.PathEscape(project))
 		return c.doGCP(ctx, rawURL)

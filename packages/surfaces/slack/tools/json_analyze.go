@@ -8,15 +8,14 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
 )
 
 type JSONAnalyzeTool struct {
 	Source FileSearcherSource
 	Slack  FileSearcher
 }
-
 
 func (t JSONAnalyzeTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(

@@ -9,14 +9,13 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/prompts"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	"github.com/noknov/slack-copilot-agent/packages/prompts"
 )
 
 type RunbookSearchTool struct {
 	Dir string
 }
-
 
 func (t RunbookSearchTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(

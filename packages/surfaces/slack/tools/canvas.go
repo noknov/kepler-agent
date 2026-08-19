@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
 )
 
 type CanvasCreator interface {
@@ -18,7 +18,6 @@ type CanvasCreator interface {
 type CreateCanvasTool struct {
 	Slack CanvasCreator
 }
-
 
 func (t CreateCanvasTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(

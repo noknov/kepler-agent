@@ -12,7 +12,6 @@ import (
 
 type IncidentBriefTool struct{}
 
-
 func (IncidentBriefTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
 		"diagnostics-incident_brief",
@@ -27,7 +26,6 @@ func (IncidentBriefTool) Descriptor() tool.Descriptor {
 }
 
 type TimelineTool struct{}
-
 
 func (TimelineTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
@@ -103,7 +101,6 @@ func (TimelineTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 }
 
 type EvidenceBoardTool struct{}
-
 
 func (EvidenceBoardTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
