@@ -17,7 +17,7 @@ func TestRequiresUserConnection(t *testing.T) {
 	}
 	in = ReadTargetInput{Channel: "D_BOT", ScopeChannel: "D_BOT"}
 	if in.RequiresUserConnection() {
-		t.Fatal("current channel should allow bot fallback")
+		t.Fatal("current channel may inherit scope defaults without an explicit foreign target")
 	}
 }
 
