@@ -145,12 +145,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	healthService := health.NewService(profile.Tools, cfg.Security.WorkspaceRoots)
 	healthService.Redis = stores.Redis
 	conversation := slackagent.New(profile.Agent, slackClient, profile.Prompt, profile.Redactor, stores.UserPrefs)
-	conversation.ThreadLoader = slackmessaging.ThreadLoader{
-		BotUserID: cfg.Slack.BotUserID,
-		UserToken: func(ctx context.Context, userID string) (string, error) {
-			return connStore.Token(ctx, userID, connections.ProviderSlack)
-		},
-	}
+	conversation.ThreadLoader = slackmessaging.ThreadLoader{Bot: slackClient}
 	if bundle.ClickStack != nil {
 		policy := hostedTools.PolicyForSurface(cfg, surface)
 		conversation.BeforeRun = func(ctx context.Context, userID string) error {
