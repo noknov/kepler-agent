@@ -4,17 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
-// RolloutTool wraps `kubectl rollout status` and `kubectl rollout history`.
-// Use it to check whether a deployment is progressing/complete or to audit
-// the revision history of a workload.
 type RolloutTool struct {
-	Base Base
+	Source   TokenSource
+	Defaults Defaults
+	Timeout  time.Duration
 }
-
 
 func (t RolloutTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
@@ -47,17 +46,15 @@ func (t RolloutTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	if args.Name == "" {
 		return tool.Result{}, fmt.Errorf("name is required (deployment or statefulset name)")
 	}
-
 	kind := args.Kind
 	if kind == "" {
 		kind = "deployment"
 	}
-	switch kind {
-	case "deployment", "deploy", "statefulset", "sts", "daemonset", "ds":
+	switch normalizeWorkloadKind(kind) {
+	case "deployment", "statefulset", "daemonset":
 	default:
 		return tool.Result{}, fmt.Errorf("unsupported kind %q; use deployment, statefulset, or daemonset", kind)
 	}
-
 	action := args.Action
 	if action == "" {
 		action = "status"
@@ -67,19 +64,30 @@ func (t RolloutTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	default:
 		return tool.Result{}, fmt.Errorf("unsupported action %q; use status or history", action)
 	}
-
-	target := kind + "/" + args.Name
-	cmdArgs := []string{"rollout", action, target}
-	cmdArgs = t.Base.appendNamespace(cmdArgs, args.Namespace)
-
-	// For `rollout history`, optionally show a specific revision's details.
-	if action == "history" && args.Revision > 0 {
-		cmdArgs = append(cmdArgs, fmt.Sprintf("--revision=%d", args.Revision))
+	client, pending, err := begin(ctx, t.Source, call)
+	if pending != nil {
+		return *pending, nil
 	}
-
-	out, err := t.Base.run(ctx, args.Context, cmdArgs)
+	if err != nil {
+		return tool.Result{}, err
+	}
+	target, err := resolveClusterTarget(args.Context, t.Defaults, args.Namespace)
+	if err != nil {
+		return tool.Result{}, err
+	}
+	timeout := t.timeout()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	out, err := client.deploymentRollout(ctx, target, args.Name, kind, action, args.Revision)
 	if err != nil {
 		return tool.Result{}, err
 	}
 	return tool.TextResult(out), nil
+}
+
+func (t RolloutTool) timeout() time.Duration {
+	if t.Timeout > 0 {
+		return t.Timeout
+	}
+	return 30 * time.Second
 }

@@ -179,19 +179,23 @@ func (c Controller) View(userID string) map[string]any {
 }
 
 func (c Controller) connectionBlocks(userID string) []map[string]any {
-	if c.Connections.Store == nil || !c.Connections.Config.OAuthEnabled() {
+	if c.Connections.Store == nil || !c.connectionsSectionEnabled() {
 		return nil
 	}
 	statusByProvider := map[string]connections.Connection{}
 	if listed, err := c.Connections.Store.List(context.Background(), userID); err == nil {
 		statusByProvider = connections.StatusMap(listed)
 	}
+	serverCreds := c.serverCredentialConnections()
 	blocks := []map[string]any{
 		dividerBlock(),
 		headerBlock(":electric_plug: Connections"),
 	}
 	for _, plugin := range connections.Plugins() {
 		if !c.Connections.ProviderOAuthEnabled(plugin.ID) {
+			continue
+		}
+		if plugin.ID == connections.ProviderGitHub && c.serverGitHubCredentialsActive() {
 			continue
 		}
 		status := "Not connected"
@@ -217,10 +221,51 @@ func (c Controller) connectionBlocks(userID string) []map[string]any {
 		}
 		blocks = append(blocks, sectionBlockWithAccessory(text, actionButtonURL(buttonLabel, authURL, buttonStyle)))
 	}
+	for _, title := range serverCreds {
+		text := fmt.Sprintf("*%s*\nConnected (`server credentials`)", title)
+		blocks = append(blocks, sectionBlock(text))
+	}
 	if len(blocks) <= 2 {
 		return nil
 	}
 	return blocks
+}
+
+func (c Controller) connectionsSectionEnabled() bool {
+	if c.Connections.Config.OAuthEnabled() {
+		return true
+	}
+	return len(c.serverCredentialConnections()) > 0
+}
+
+func (c Controller) serverCredentialConnections() []string {
+	var titles []string
+	if c.localGCPCredentialsActive() {
+		titles = append(titles, "Google Cloud")
+	}
+	if c.serverYouTrackCredentialsActive() {
+		titles = append(titles, "YouTrack")
+	}
+	if c.serverGitHubCredentialsActive() {
+		titles = append(titles, "GitHub")
+	}
+	return titles
+}
+
+func (c Controller) serverGitHubCredentialsActive() bool {
+	return strings.TrimSpace(c.Cfg.Integrations.GitHub.Token) != ""
+}
+
+func (c Controller) serverYouTrackCredentialsActive() bool {
+	return strings.TrimSpace(c.Cfg.Integrations.YouTrack.URL) != "" &&
+		strings.TrimSpace(c.Cfg.Integrations.YouTrack.Token) != ""
+}
+
+func (c Controller) localGCPCredentialsActive() bool {
+	if c.Connections.Config.GCPEnabled() {
+		return false
+	}
+	return strings.TrimSpace(c.Cfg.Integrations.GCP.DefaultProject) != ""
 }
 
 func mrkdwnField(text string) map[string]any {

@@ -1,29 +1,20 @@
 package gcp
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
-// ClustersTool wraps `gcloud container clusters list/describe` to inspect
-// GKE cluster state, version, node count, and health without needing kubectl
-// credentials pre-configured.
 type ClustersTool struct {
-	GCloudPath     string
-	DefaultProject string
-	DefaultRegion  string
-	Guard          safety.CommandPolicy
-	Timeout        time.Duration
+	Source   TokenSource
+	Defaults Defaults
+	Timeout  time.Duration
 }
-
 
 func (t ClustersTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
@@ -51,15 +42,6 @@ func (t ClustersTool) Execute(ctx context.Context, call tool.Call) (tool.Result,
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
 	}
-
-	project := args.Project
-	if project == "" {
-		project = t.DefaultProject
-	}
-	if project == "" {
-		return tool.Result{}, fmt.Errorf("GCP project is required; pass project in tool args or configure GCP_PROJECT")
-	}
-
 	action := args.Action
 	if action == "" {
 		action = "list"
@@ -70,48 +52,41 @@ func (t ClustersTool) Execute(ctx context.Context, call tool.Call) (tool.Result,
 		return tool.Result{}, fmt.Errorf("unsupported action %q; use list or describe", action)
 	}
 
-	var cmdArgs []string
-	if action == "list" {
-		cmdArgs = []string{"container", "clusters", "list", "--project", project}
-	} else {
-		if args.Cluster == "" {
-			return tool.Result{}, fmt.Errorf("cluster name is required for action=describe")
-		}
-		cmdArgs = []string{"container", "clusters", "describe", args.Cluster, "--project", project}
+	client, pending, err := begin(ctx, t.Source, call)
+	if pending != nil {
+		return *pending, nil
 	}
-
-	region := args.Region
-	if region == "" {
-		region = t.DefaultRegion
-	}
-	if args.Zone != "" {
-		cmdArgs = append(cmdArgs, "--zone", args.Zone)
-	} else if region != "" {
-		cmdArgs = append(cmdArgs, "--region", region)
-	}
-	cmdArgs = append(cmdArgs, "--format", "json")
-
-	bin := t.GCloudPath
-	if bin == "" {
-		bin = "gcloud"
-	}
-	if err := t.Guard.CheckArgv(append([]string{bin}, cmdArgs...)); err != nil {
+	if err != nil {
 		return tool.Result{}, err
 	}
-
-	timeout := t.Timeout
-	if timeout <= 0 {
-		timeout = 30 * time.Second
+	project, err := client.projectID(args.Project)
+	if err != nil {
+		return tool.Result{}, err
 	}
+	timeout := t.timeout()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, bin, cmdArgs...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return tool.Result{}, fmt.Errorf("gcloud container clusters failed: %s", strings.TrimSpace(stderr.String()))
+	var data []byte
+	switch action {
+	case "list":
+		data, err = client.listClusters(ctx, project)
+	case "describe":
+		location := strings.TrimSpace(args.Zone)
+		if location == "" {
+			location = client.region(args.Region)
+		}
+		data, err = client.describeCluster(ctx, project, location, args.Cluster)
 	}
-	return tool.TextResult(stdout.String()), nil
+	if err != nil {
+		return tool.Result{}, err
+	}
+	return tool.TextResult(string(data)), nil
+}
+
+func (t ClustersTool) timeout() time.Duration {
+	if t.Timeout > 0 {
+		return t.Timeout
+	}
+	return 30 * time.Second
 }

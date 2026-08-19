@@ -19,6 +19,9 @@ func TestRequiredErrorToolResult(t *testing.T) {
 	if !result.IsError || result.ErrorCode != "connection_required" {
 		t.Fatalf("unexpected result: %+v", result)
 	}
+	if !result.NeedsUserInput {
+		t.Fatalf("expected NeedsUserInput=true, got %+v", result)
+	}
 	if result.Metadata["auth_url"] == "" {
 		t.Fatalf("expected auth_url metadata, got %+v", result.Metadata)
 	}

@@ -10,6 +10,8 @@ import (
 const ProviderSlack = "slack"
 const ProviderGitHub = "github"
 const ProviderClickStack = "clickstack"
+const ProviderGCP = "gcp"
+const ProviderNotion = "notion"
 
 const LocalUserID = "local"
 
@@ -42,9 +44,10 @@ type Plugin struct {
 
 // RequiredError is returned when a tool needs a user connection.
 type RequiredError struct {
-	Provider string
-	Title    string
-	AuthURL  string
+	Provider    string
+	Title       string
+	AuthURL     string
+	Reauthorize bool
 }
 
 func (e *RequiredError) Error() string {
@@ -83,6 +86,18 @@ func Plugins() []Plugin {
 			Title:       "ClickStack",
 			Description: "Query logs, traces, dashboards, and alerts in your team's ClickStack workspace with your own ClickHouse Cloud account.",
 			Scopes:      []string{"clickstack:access", "openid", "profile", "email"},
+		},
+		{
+			ID:          ProviderGCP,
+			Title:       "Google Cloud",
+			Description: "View Cloud Logging, Cloud Run services, and GKE clusters with your own Google account (read-only).",
+			Scopes:      []string{"logging.read", "cloud-platform.read-only"},
+		},
+		{
+			ID:          ProviderNotion,
+			Title:       "Notion",
+			Description: "Search pages and databases in your Notion workspace with your own account.",
+			Scopes:      []string{"read_content"},
 		},
 	}
 }

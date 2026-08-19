@@ -11,6 +11,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
+	"github.com/noknov/slack-copilot-agent/packages/connections"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -126,6 +127,20 @@ func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, pr
 			ToolCall: &entry.call, ToolResult: entry.result,
 		}); err != nil {
 			return toolOutcome{}, err
+		}
+		if entry.result.ErrorCode == "connection_required" && r.deps.ConnectionContinuations != nil {
+			provider, _ := entry.result.Metadata["provider"].(string)
+			channel := entry.call.Scope.Values["channel"]
+			threadTS := entry.call.Scope.Values["thread_ts"]
+			if provider != "" && entry.call.Scope.UserID != "" && channel != "" {
+				_ = r.deps.ConnectionContinuations.Save(ctx, connections.Continuation{
+					UserID:    entry.call.Scope.UserID,
+					Provider:  provider,
+					SessionID: entry.call.Scope.SessionID,
+					Channel:   channel,
+					ThreadTS:  threadTS,
+				})
+			}
 		}
 		if pending == nil && entry.result.NeedsUserInput && len(entry.result.Content) > 0 {
 			message := model.Message{Role: model.RoleAssistant, Content: append([]model.Content(nil), entry.result.Content...)}

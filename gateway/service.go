@@ -65,15 +65,21 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		slackClient = slack.NewClient(cfg.Slack.BotToken, cfg.Slack.BotUserID)
 	}
 	connStore := connections.PGStore{Pool: stores.PGPool, SecretKey: cfg.Connections.EncryptionKey}
-	s.connections = connections.NewServiceFromConfig(connStore, cfg)
+	continuations := connections.NewRedisContinuationStore(stores.Redis)
+	connService := connections.NewServiceFromConfig(connStore, cfg)
+	connService.Continuations = continuations
 	s.home = slackhome.Controller{
 		Cfg:         cfg,
 		Access:      safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
 		Slack:       slackClient,
 		Store:       stores.UserPrefs,
 		Redis:       stores.Redis,
-		Connections: s.connections,
+		Connections: connService,
 	}
+	connService.OnOAuthCompleted = func(ctx context.Context, userID, provider string) error {
+		return s.home.RequestRefresh(ctx, userID)
+	}
+	s.connections = connService
 	handler := &slackhandler.Handler{
 		Cfg:       cfg,
 		Slack:     slackClient,

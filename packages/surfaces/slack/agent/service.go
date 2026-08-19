@@ -16,6 +16,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/agent/prompt"
 	agentruntime "github.com/noknov/slack-copilot-agent/packages/agent/runtime"
 	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
+	"github.com/noknov/slack-copilot-agent/packages/connections"
 	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
 	"github.com/noknov/slack-copilot-agent/packages/profiles/hosted"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
@@ -48,6 +49,7 @@ type Service struct {
 	UserPrefs        userprefs.Store
 	Workspace        string
 	Redis            *redisclient.Client
+	Continuations    connections.ContinuationStore
 	PodID            string
 	Lifecycle        context.Context
 	ModeForUser      func(string) ConversationMode
@@ -575,6 +577,87 @@ func (s *Service) unregister(sessionID string, run *activeRun) {
 	}
 	if s.Redis != nil {
 		_ = s.Redis.Del(context.Background(), "agent:active:"+sessionID)
+	}
+}
+
+func (s *Service) StartConnectionCompletedSubscriber(ctx context.Context) {
+	if s.Redis == nil || s.Continuations == nil || s.Agent.Runtime == nil {
+		return
+	}
+	sub := s.Redis.Subscribe(ctx, connections.OAuthCompletedChannel)
+	defer func() { _ = sub.Close() }()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case message, ok := <-sub.Channel():
+			if !ok {
+				return
+			}
+			userID, provider, parsed := connections.ParseOAuthCompletedPayload(message.Payload)
+			if !parsed {
+				continue
+			}
+			continuation, found, err := s.Continuations.Load(ctx, userID, provider)
+			if err != nil {
+				log.Printf("connection continuation load failed user=%s provider=%s: %v", userID, provider, err)
+				continue
+			}
+			if !found {
+				continue
+			}
+			go s.resumeAfterConnection(ctx, continuation)
+		}
+	}
+}
+
+func (s *Service) resumeAfterConnection(parentCtx context.Context, continuation connections.Continuation) {
+	if continuation.Channel == "" || continuation.UserID == "" {
+		return
+	}
+	base := s.Lifecycle
+	if base == nil {
+		base = parentCtx
+	}
+	if base == nil {
+		base = context.Background()
+	}
+	ctx := context.WithoutCancel(base)
+
+	defer func() {
+		if s.Continuations != nil {
+			_ = s.Continuations.Clear(ctx, continuation.UserID, continuation.Provider)
+		}
+	}()
+
+	sessionID := session.ID(continuation.Channel, continuation.ThreadTS)
+	waiting, err := s.Agent.Runtime.WaitingForInput(ctx, sessionID, continuation.UserID)
+	if err != nil {
+		log.Printf("connection continuation waiting check failed session=%s: %v", sessionID, err)
+		return
+	}
+	if !waiting {
+		return
+	}
+	req := slackconversation.Request{
+		EventID:  fmt.Sprintf("connection-continue-%s-%d", continuation.Provider, time.Now().UnixNano()),
+		UserID:   continuation.UserID,
+		Channel:  continuation.Channel,
+		ThreadTS: continuation.ThreadTS,
+		Text:     "I've connected. Please continue.",
+	}
+	if s.Messenger != nil {
+		if _, err := s.Messenger.PostMessage(ctx, continuation.Channel, continuation.ThreadTS, "Connected — continuing…"); err != nil {
+			log.Printf("connection continuation status post failed session=%s: %v", sessionID, err)
+		}
+	}
+	accepted, err := s.HandleReply(ctx, req)
+	if err != nil {
+		log.Printf("connection continuation resume failed session=%s: %v", sessionID, err)
+		return
+	}
+	if !accepted {
+		log.Printf("connection continuation resume not accepted session=%s", sessionID)
 	}
 }
 

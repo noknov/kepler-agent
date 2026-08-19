@@ -13,6 +13,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/agent/prompt"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
+	"github.com/noknov/slack-copilot-agent/packages/connections"
 )
 
 type TerminationReason string
@@ -80,6 +81,7 @@ type Dependencies struct {
 	IDs         IDGenerator
 	Clock       func() time.Time
 	Sleep       func(context.Context, time.Duration) error
+	ConnectionContinuations connections.ContinuationStore
 }
 
 type Runtime struct {

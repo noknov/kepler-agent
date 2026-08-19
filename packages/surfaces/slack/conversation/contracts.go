@@ -39,6 +39,7 @@ type Conversation interface {
 type ControlledConversation interface {
 	Conversation
 	StartControlSubscriber(context.Context)
+	StartConnectionCompletedSubscriber(context.Context)
 }
 
 type Messenger interface {

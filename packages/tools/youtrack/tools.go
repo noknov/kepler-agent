@@ -32,7 +32,6 @@ func (c Client) httpClient() *http.Client {
 
 type GetIssueTool struct{ Client Client }
 
-
 func (t GetIssueTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
 		"youtrack-get_issue",
@@ -64,7 +63,6 @@ func (t GetIssueTool) Execute(ctx context.Context, call tool.Call) (tool.Result,
 }
 
 type SearchTool struct{ Client Client }
-
 
 func (t SearchTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(

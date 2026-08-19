@@ -3,14 +3,16 @@ package k8s
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type TopTool struct {
-	Base Base
+	Source   TokenSource
+	Defaults Defaults
+	Timeout  time.Duration
 }
-
 
 func (t TopTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
@@ -42,7 +44,6 @@ func (t TopTool) Execute(ctx context.Context, call tool.Call) (tool.Result, erro
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
 	}
-
 	resource := args.Resource
 	if resource == "" {
 		resource = "pods"
@@ -50,27 +51,34 @@ func (t TopTool) Execute(ctx context.Context, call tool.Call) (tool.Result, erro
 	if resource != "pods" && resource != "nodes" && resource != "pod" && resource != "node" {
 		resource = "pods"
 	}
-
-	cmdArgs := []string{"top", resource}
-	if args.Name != "" {
-		cmdArgs = append(cmdArgs, args.Name)
+	client, pending, err := begin(ctx, t.Source, call)
+	if pending != nil {
+		return *pending, nil
 	}
-	if resource != "nodes" && resource != "node" {
-		cmdArgs = t.Base.appendNamespace(cmdArgs, args.Namespace)
+	if err != nil {
+		return tool.Result{}, err
 	}
-	if args.LabelSelector != "" {
-		cmdArgs = append(cmdArgs, "-l", args.LabelSelector)
+	target, err := resolveClusterTarget(args.Context, t.Defaults, args.Namespace)
+	if err != nil {
+		return tool.Result{}, err
 	}
-	if args.SortBy != "" {
-		cmdArgs = append(cmdArgs, "--sort-by", args.SortBy)
+	timeout := t.timeout()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	data, err := client.metricsTop(ctx, target, resource, args.Name, args.LabelSelector)
+	if err != nil {
+		return tool.Result{}, err
 	}
-	if args.Containers && (resource == "pods" || resource == "pod") {
-		cmdArgs = append(cmdArgs, "--containers")
-	}
-
-	out, err := t.Base.run(ctx, args.Context, cmdArgs)
+	out, err := formatMetricsTable(data, resource)
 	if err != nil {
 		return tool.Result{}, err
 	}
 	return tool.TextResult(out), nil
+}
+
+func (t TopTool) timeout() time.Duration {
+	if t.Timeout > 0 {
+		return t.Timeout
+	}
+	return 30 * time.Second
 }

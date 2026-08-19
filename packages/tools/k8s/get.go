@@ -4,26 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
-// blockedResources lists resource types that should never be retrieved because
-// they contain secrets or sensitive credentials.
+// GetTool is a general-purpose Kubernetes GET wrapper for workload and infra resources.
+type GetTool struct {
+	Source   TokenSource
+	Defaults Defaults
+	Timeout  time.Duration
+}
+
 var blockedResources = map[string]bool{
 	"secret":  true,
 	"secrets": true,
 }
-
-// GetTool is a general-purpose `kubectl get` wrapper that works for any
-// workload or infrastructure resource type (deployment, service, ingress,
-// configmap, hpa, job, cronjob, statefulset, daemonset, node, pv, pvc, …).
-// Use k8s-get_pods for pod-specific output; this covers everything else.
-type GetTool struct {
-	Base Base
-}
-
 
 func (t GetTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
@@ -60,46 +58,61 @@ func (t GetTool) Execute(ctx context.Context, call tool.Call) (tool.Result, erro
 	if args.Resource == "" {
 		return tool.Result{}, fmt.Errorf("resource type is required (e.g. deployment, service, ingress, hpa, job, node)")
 	}
-
 	resource := strings.ToLower(strings.TrimSpace(args.Resource))
 	if blockedResources[resource] {
 		return tool.Result{}, fmt.Errorf("resource type %q is blocked for security reasons", args.Resource)
 	}
-
-	cmdArgs := []string{"get", resource}
-	if args.Name != "" {
-		cmdArgs = append(cmdArgs, args.Name)
-	}
-	if args.AllNamespaces {
-		cmdArgs = append(cmdArgs, "--all-namespaces")
-	} else {
-		cmdArgs = t.Base.appendNamespace(cmdArgs, args.Namespace)
-	}
-	if args.LabelSelector != "" {
-		cmdArgs = append(cmdArgs, "-l", args.LabelSelector)
-	}
-	if args.FieldSelector != "" {
-		cmdArgs = append(cmdArgs, "--field-selector", args.FieldSelector)
-	}
-
-	// Output format: wide (default), yaml, json, name, jsonpath=...
 	output := args.Output
-	if output == "" {
-		output = "wide"
+	if output != "" && output != "wide" && output != "yaml" && output != "json" && output != "name" &&
+		!strings.HasPrefix(output, "jsonpath=") && !strings.HasPrefix(output, "go-template=") {
+		return tool.Result{}, fmt.Errorf("unsupported output format %q; use wide, yaml, json, or name", output)
 	}
-	// Validate output format to avoid injection.
-	switch {
-	case output == "wide", output == "yaml", output == "json", output == "name",
-		strings.HasPrefix(output, "jsonpath="),
-		strings.HasPrefix(output, "go-template="):
-		cmdArgs = append(cmdArgs, "-o", output)
-	default:
-		return tool.Result{}, fmt.Errorf("unsupported output format %q; use wide, yaml, json, name, or jsonpath=...", output)
+	client, pending, err := begin(ctx, t.Source, call)
+	if pending != nil {
+		return *pending, nil
 	}
-
-	out, err := t.Base.run(ctx, args.Context, cmdArgs)
 	if err != nil {
 		return tool.Result{}, err
 	}
-	return tool.TextResult(out), nil
+	target, err := resolveClusterTarget(args.Context, t.Defaults, args.Namespace)
+	if err != nil {
+		return tool.Result{}, err
+	}
+	path, err := buildGetPath(args.Resource, target.Namespace, args.Name, args.AllNamespaces)
+	if err != nil {
+		return tool.Result{}, err
+	}
+	query := listQuery(args.LabelSelector, args.FieldSelector)
+	timeout := t.timeout()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	data, err := client.getResource(ctx, target, path, query)
+	if err != nil {
+		return tool.Result{}, err
+	}
+	if output == "wide" && (resource == "pod" || resource == "pods") {
+		out, ferr := formatPodsWide(data)
+		if ferr == nil {
+			return tool.TextResult(out), nil
+		}
+	}
+	return tool.TextResult(string(data)), nil
+}
+
+func (t GetTool) timeout() time.Duration {
+	if t.Timeout > 0 {
+		return t.Timeout
+	}
+	return 30 * time.Second
+}
+
+func listQuery(labelSelector, fieldSelector string) url.Values {
+	query := url.Values{}
+	if labelSelector != "" {
+		query.Set("labelSelector", labelSelector)
+	}
+	if fieldSelector != "" {
+		query.Set("fieldSelector", fieldSelector)
+	}
+	return query
 }

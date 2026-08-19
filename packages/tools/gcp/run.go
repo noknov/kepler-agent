@@ -1,96 +1,18 @@
 package gcp
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
-	"strings"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
-// runBase holds shared configuration for Cloud Run tools.
-type runBase struct {
-	GCloudPath     string
-	DefaultProject string
-	DefaultRegion  string
-	Guard          safety.CommandPolicy
-	Timeout        time.Duration
-}
-
-func (b runBase) gcloud() string {
-	if b.GCloudPath != "" {
-		return b.GCloudPath
-	}
-	return "gcloud"
-}
-
-func (b runBase) timeout() time.Duration {
-	if b.Timeout > 0 {
-		return b.Timeout
-	}
-	return 30 * time.Second
-}
-
-func (b runBase) run(ctx context.Context, args []string, project, region string) (string, error) {
-	if project == "" {
-		project = b.DefaultProject
-	}
-	if project == "" {
-		return "", fmt.Errorf("GCP project is required; pass project in tool args or configure GCP_PROJECT")
-	}
-	if region == "" {
-		region = b.DefaultRegion
-	}
-
-	cmdArgs := append(args, "--project", project)
-	if region != "" {
-		cmdArgs = append(cmdArgs, "--region", region)
-	}
-	cmdArgs = append(cmdArgs, "--format", "json")
-
-	if err := b.Guard.CheckArgv(append([]string{b.gcloud()}, cmdArgs...)); err != nil {
-		return "", err
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, b.timeout())
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, b.gcloud(), cmdArgs...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("gcloud failed: %s", strings.TrimSpace(stderr.String()))
-	}
-	return stdout.String(), nil
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// RunServicesTool — list and describe Cloud Run services.
-// ─────────────────────────────────────────────────────────────────────────────
-
 type RunServicesTool struct {
-	GCloudPath     string
-	DefaultProject string
-	DefaultRegion  string
-	Guard          safety.CommandPolicy
-	Timeout        time.Duration
-}
-
-
-func (t RunServicesTool) base() runBase {
-	return runBase{
-		GCloudPath:     t.GCloudPath,
-		DefaultProject: t.DefaultProject,
-		DefaultRegion:  t.DefaultRegion,
-		Guard:          t.Guard,
-		Timeout:        t.Timeout,
-	}
+	Source   TokenSource
+	Defaults Defaults
+	Timeout  time.Duration
 }
 
 func (t RunServicesTool) Descriptor() tool.Descriptor {
@@ -117,53 +39,56 @@ func (t RunServicesTool) Execute(ctx context.Context, call tool.Call) (tool.Resu
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
 	}
-
 	action := args.Action
 	if action == "" {
 		action = "list"
 	}
 	switch action {
-	case "list":
-		out, err := t.base().run(ctx, []string{"run", "services", "list"}, args.Project, args.Region)
-		if err != nil {
-			return tool.Result{}, err
-		}
-		return tool.TextResult(out), nil
-	case "describe":
-		if args.Service == "" {
-			return tool.Result{}, fmt.Errorf("service name is required for action=describe")
-		}
-		out, err := t.base().run(ctx, []string{"run", "services", "describe", args.Service}, args.Project, args.Region)
-		if err != nil {
-			return tool.Result{}, err
-		}
-		return tool.TextResult(out), nil
+	case "list", "describe":
 	default:
 		return tool.Result{}, fmt.Errorf("unsupported action %q; use list or describe", action)
 	}
+
+	client, pending, err := begin(ctx, t.Source, call)
+	if pending != nil {
+		return *pending, nil
+	}
+	if err != nil {
+		return tool.Result{}, err
+	}
+	project, err := client.projectID(args.Project)
+	if err != nil {
+		return tool.Result{}, err
+	}
+	region := client.region(args.Region)
+	timeout := t.timeout()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var data []byte
+	switch action {
+	case "list":
+		data, err = client.listRunServices(ctx, project, region)
+	case "describe":
+		data, err = client.describeRunService(ctx, project, region, args.Service)
+	}
+	if err != nil {
+		return tool.Result{}, err
+	}
+	return tool.TextResult(string(data)), nil
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// RunRevisionsTool — list Cloud Run service revisions and traffic splits.
-// ─────────────────────────────────────────────────────────────────────────────
+func (t RunServicesTool) timeout() time.Duration {
+	if t.Timeout > 0 {
+		return t.Timeout
+	}
+	return 30 * time.Second
+}
 
 type RunRevisionsTool struct {
-	GCloudPath     string
-	DefaultProject string
-	DefaultRegion  string
-	Guard          safety.CommandPolicy
-	Timeout        time.Duration
-}
-
-
-func (t RunRevisionsTool) base() runBase {
-	return runBase{
-		GCloudPath:     t.GCloudPath,
-		DefaultProject: t.DefaultProject,
-		DefaultRegion:  t.DefaultRegion,
-		Guard:          t.Guard,
-		Timeout:        t.Timeout,
-	}
+	Source   TokenSource
+	Defaults Defaults
+	Timeout  time.Duration
 }
 
 func (t RunRevisionsTool) Descriptor() tool.Descriptor {
@@ -191,23 +116,31 @@ func (t RunRevisionsTool) Execute(ctx context.Context, call tool.Call) (tool.Res
 		return tool.Result{}, err
 	}
 
-	cmdArgs := []string{"run", "revisions", "list"}
-	if args.Service != "" {
-		cmdArgs = append(cmdArgs, "--service", args.Service)
+	client, pending, err := begin(ctx, t.Source, call)
+	if pending != nil {
+		return *pending, nil
 	}
-
-	limit := args.Limit
-	if limit <= 0 {
-		limit = 20
-	}
-	if limit > 100 {
-		limit = 100
-	}
-	cmdArgs = append(cmdArgs, fmt.Sprintf("--limit=%d", limit))
-
-	out, err := t.base().run(ctx, cmdArgs, args.Project, args.Region)
 	if err != nil {
 		return tool.Result{}, err
 	}
-	return tool.TextResult(out), nil
+	project, err := client.projectID(args.Project)
+	if err != nil {
+		return tool.Result{}, err
+	}
+	region := client.region(args.Region)
+	timeout := t.timeout()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	data, err := client.listRunRevisions(ctx, project, region, args.Service, args.Limit)
+	if err != nil {
+		return tool.Result{}, err
+	}
+	return tool.TextResult(string(data)), nil
+}
+
+func (t RunRevisionsTool) timeout() time.Duration {
+	if t.Timeout > 0 {
+		return t.Timeout
+	}
+	return 30 * time.Second
 }

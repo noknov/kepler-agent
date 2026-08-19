@@ -65,10 +65,10 @@ selection. Workflow aliases can live in `PROMPT_DIR/runtime.json`.
 | Tool | Description |
 |---|---|
 | `gcp-logs` | Query GCP Cloud Logging |
-| `k8s-get_pods` | List Kubernetes pods |
-| `k8s-describe` | Describe Kubernetes resources and events |
-| `k8s-logs` | Fetch Kubernetes pod logs |
-| `k8s-top` | Show Kubernetes CPU and memory usage |
+| `gcp-run_services` | List or describe Cloud Run services |
+| `gcp-run_revisions` | List Cloud Run revisions |
+| `gcp-clusters` | List or describe GKE clusters |
+| `k8s-*` | Kubernetes API (pods, logs, events, rollout, metrics) — requires Google Cloud OAuth connection |
 | `diagnostics-incident_brief` | Structured incident summary |
 | `diagnostics-timeline` | Incident event timeline |
 | `diagnostics-evidence_board` | Structured evidence board |
@@ -84,6 +84,22 @@ For OSS/BYOC, set `CLICKSTACK_MCP_URL` and connect a Personal API Access Key per
 |---|---|---|
 | ClickHouse Cloud managed ClickStack | `https://mcp.clickhouse.cloud/clickstack` (default) | Per-user OAuth via Connections (`x-service-id` from deploy config) |
 | Open Source / BYOC ClickStack | `https://<your-clickstack>/api/mcp` | Per-user Bearer token (Personal API Access Key) |
+
+### Google Cloud (read-only OAuth)
+
+Per-user Google OAuth with read-only scopes (`logging.read`, `cloud-platform.read-only`).
+Users connect from App Home or `slack-copilot connect gcp`. Tools call GCP REST APIs with the user's token.
+
+| Env | Purpose |
+|---|---|
+| `GCP_OAUTH_CLIENT_ID` / `GCP_OAUTH_CLIENT_SECRET` | OAuth app credentials |
+| `CONNECTIONS_PUBLIC_BASE_URL` | OAuth callback base URL |
+| `GCP_PROJECT`, `GKE_REGION`, `GCP_NAMESPACE` | Deployment defaults |
+
+Create a Google Cloud OAuth client (Web application) with redirect URI
+`{CONNECTIONS_PUBLIC_BASE_URL}/oauth/gcp/callback`.
+
+When OAuth is configured, GCP and Kubernetes tools require the same per-user Google Cloud connection and call GCP/GKE APIs with read-only tokens.
 
 Deploy routing headers:
 

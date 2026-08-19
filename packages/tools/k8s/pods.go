@@ -3,14 +3,16 @@ package k8s
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type GetPodsTool struct {
-	Base Base
+	Source   TokenSource
+	Defaults Defaults
+	Timeout  time.Duration
 }
-
 
 func (t GetPodsTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
@@ -38,23 +40,34 @@ func (t GetPodsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
 	}
-
-	cmdArgs := []string{"get", "pods", "-o", "wide"}
-	if args.AllNamespaces {
-		cmdArgs = append(cmdArgs, "--all-namespaces")
-	} else {
-		cmdArgs = t.Base.appendNamespace(cmdArgs, args.Namespace)
+	client, pending, err := begin(ctx, t.Source, call)
+	if pending != nil {
+		return *pending, nil
 	}
-	if args.LabelSelector != "" {
-		cmdArgs = append(cmdArgs, "-l", args.LabelSelector)
+	if err != nil {
+		return tool.Result{}, err
 	}
-	if args.FieldSelector != "" {
-		cmdArgs = append(cmdArgs, "--field-selector", args.FieldSelector)
+	target, err := resolveClusterTarget(args.Context, t.Defaults, args.Namespace)
+	if err != nil {
+		return tool.Result{}, err
 	}
-
-	out, err := t.Base.run(ctx, args.Context, cmdArgs)
+	timeout := t.timeout()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	data, err := client.listPods(ctx, target, args.AllNamespaces, args.LabelSelector, args.FieldSelector)
+	if err != nil {
+		return tool.Result{}, err
+	}
+	out, err := formatPodsWide(data)
 	if err != nil {
 		return tool.Result{}, err
 	}
 	return tool.TextResult(out), nil
+}
+
+func (t GetPodsTool) timeout() time.Duration {
+	if t.Timeout > 0 {
+		return t.Timeout
+	}
+	return 30 * time.Second
 }
