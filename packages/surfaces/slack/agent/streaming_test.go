@@ -83,12 +83,17 @@ func TestNativeSlackStreamAppendsIncrementally(t *testing.T) {
 	}
 }
 
-func TestStreamStartsAtTurnStart(t *testing.T) {
+func TestStreamStartsWithFirstAssistantDelta(t *testing.T) {
 	messenger := &nativeStreamingMessenger{}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1"})
 	stream.Start()
+	if messenger.started != 0 {
+		t.Fatalf("started = %d, want no empty stream before assistant text", messenger.started)
+	}
+	stream.AppendDelta("hello")
+	stream.flushStreamUpdate("hello", false)
 	if messenger.started != 1 {
-		t.Fatalf("started = %d, want 1 at turn start", messenger.started)
+		t.Fatalf("started = %d, want stream start with assistant text", messenger.started)
 	}
 }
 
@@ -96,11 +101,14 @@ func TestStartStreamFailurePostsFinalAnswer(t *testing.T) {
 	messenger := &nativeStreamingMessenger{startErr: context.Canceled}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", EventID: "Ev1"})
 	stream.Start()
-	if messenger.started != 1 {
-		t.Fatalf("started = %d, want 1", messenger.started)
+	if messenger.started != 0 {
+		t.Fatalf("started = %d, want no start before assistant text", messenger.started)
 	}
 	stream.AppendDelta("hello")
 	stream.flushStreamUpdate("hello", false)
+	if messenger.started != 1 {
+		t.Fatalf("started = %d, want one attempted stream start", messenger.started)
+	}
 	if len(messenger.appends) != 0 {
 		t.Fatalf("appends = %#v, want none", messenger.appends)
 	}
@@ -137,13 +145,13 @@ func TestStreamDeliveryDefersWhileProgressRuns(t *testing.T) {
 	stream.progressRunning = true
 	stream.AppendDelta("hello")
 	stream.flushStreamUpdate("hello", false)
-	if messenger.started != 1 || len(messenger.appends) != 0 {
-		t.Fatalf("started=%d appends=%#v, want stream open but answer deferred", messenger.started, messenger.appends)
+	if messenger.started != 0 || len(messenger.appends) != 0 {
+		t.Fatalf("started=%d appends=%#v, want no empty stream while progress runs", messenger.started, messenger.appends)
 	}
 	stream.progressRunning = false
 	stream.flushDeferredStream(false)
-	if len(messenger.appends) != 1 {
-		t.Fatalf("appends=%#v, want delivery after progress finished", messenger.appends)
+	if messenger.started != 1 || len(messenger.appends) != 1 {
+		t.Fatalf("started=%d appends=%#v, want delivery after progress finished", messenger.started, messenger.appends)
 	}
 }
 

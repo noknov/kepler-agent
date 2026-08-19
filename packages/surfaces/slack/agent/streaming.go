@@ -103,9 +103,9 @@ func (s *slackStream) flushStreamUpdate(text string, force bool) {
 	s.flushNativeStream(text)
 }
 
-// ensureNativeStream opens the Slack native stream at turn start, matching the
-// v1 conversation service so users see incremental output instead of a single
-// final post when the model begins responding.
+// ensureNativeStream opens the Slack native stream when the first assistant
+// delta is ready. Tool progress remains a single temporary status until then,
+// instead of creating a second, empty Slack message beside it.
 func (s *slackStream) ensureNativeStream() {
 	native, ok := s.messenger.(slackconversation.NativeStreamMessenger)
 	if !ok {

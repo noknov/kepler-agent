@@ -733,7 +733,6 @@ func (s *slackStream) Start() {
 	if status, ok := s.messenger.(slackconversation.ThreadStatusMessenger); ok {
 		s.status = status
 	}
-	s.ensureNativeStream()
 }
 func (s *slackStream) CommitStep(message model.Message) {
 	if calls := message.ToolCalls(); len(calls) > 0 {
