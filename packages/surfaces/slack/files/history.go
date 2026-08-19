@@ -93,25 +93,6 @@ func ModelContent(parts []llm.ContentPart) []model.Content {
 	return out
 }
 
-// CollectImageContent returns unique image blocks from Slack history messages.
-func CollectImageContent(messages []model.Message) []model.Content {
-	images := make([]model.Content, 0, len(messages))
-	seen := make(map[string]struct{})
-	for _, message := range messages {
-		for _, block := range message.Content {
-			if block.Type != model.ContentImage || block.ImageURL == "" {
-				continue
-			}
-			if _, ok := seen[block.ImageURL]; ok {
-				continue
-			}
-			seen[block.ImageURL] = struct{}{}
-			images = append(images, block)
-		}
-	}
-	return images
-}
-
 func min(a, b int) int {
 	if a < b {
 		return a

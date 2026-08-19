@@ -20,14 +20,17 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/session"
 	"github.com/noknov/slack-copilot-agent/packages/sessioninput"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
 	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/conversation"
-	slackfiles "github.com/noknov/slack-copilot-agent/packages/surfaces/slack/files"
 	"github.com/noknov/slack-copilot-agent/packages/userprefs"
 	"github.com/redis/go-redis/v9"
 )
 
 type ConversationMode string
+
+// ThreadLoader fetches Slack thread history for the current turn.
+type ThreadLoader interface {
+	Load(context.Context, slackconversation.Request) []model.Message
+}
 
 const (
 	ModeSteer ConversationMode = "steer"
@@ -52,7 +55,7 @@ type Service struct {
 	AlreadyDelivered func(context.Context, string) (bool, error)
 	Multimodal       func(string) bool
 	MultimodalModel  func() string
-	HistoryClient    func(context.Context, slackconversation.Request) *slack.Client
+	ThreadLoader     ThreadLoader
 	WebSearchEnabled func(string) bool
 	Progress         *ProgressSummarizer
 	Locker           session.Locker
@@ -304,14 +307,15 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 		{ID: "user-skills", Layer: prompt.LayerSkill, Content: userprefs.SkillsMetadataPrompt(runCtx, s.UserPrefs, req.UserID)},
 	}
 	var history []model.Message
-	history = s.loadThreadHistory(runCtx, req)
+	if s.ThreadLoader != nil {
+		history = s.ThreadLoader.Load(runCtx, req)
+	}
 	modelName := ""
 	if s.ModelFor != nil {
 		modelName = s.ModelFor(req)
 	}
-	input := req.Message()
-	input = enrichInputWithThreadImages(input, history)
-	if s.Multimodal != nil && !s.Multimodal(modelName) && messagesContainImages(append([]model.Message{input}, history...)...) {
+	input := req.Message().WithImages(model.CollectImages(history...))
+	if s.Multimodal != nil && !s.Multimodal(modelName) && model.ContainImages(append([]model.Message{input}, history...)...) {
 		if s.MultimodalModel != nil {
 			if fallback := strings.TrimSpace(s.MultimodalModel()); fallback != "" {
 				modelName = fallback
@@ -427,49 +431,6 @@ func stripUnsupportedImages(messages []model.Message, cjk bool) []model.Message 
 		out[i] = withoutUnsupportedImages(message, cjk)
 	}
 	return out
-}
-
-func messagesContainImages(messages ...model.Message) bool {
-	for _, message := range messages {
-		for _, block := range message.Content {
-			if block.Type == model.ContentImage {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (s *Service) loadThreadHistory(ctx context.Context, req slackconversation.Request) []model.Message {
-	if s.HistoryClient != nil {
-		if client := s.HistoryClient(ctx, req); client != nil {
-			return slackfiles.ThreadHistory(ctx, client, req.Channel, req.ThreadTS, req.MessageTS, 50)
-		}
-	}
-	if source, ok := s.Messenger.(slackconversation.ThreadHistoryMessenger); ok {
-		return source.ThreadHistory(ctx, req.Channel, req.ThreadTS, req.MessageTS, 50)
-	}
-	return nil
-}
-
-func enrichInputWithThreadImages(input model.Message, history []model.Message) model.Message {
-	images := slackfiles.CollectImageContent(history)
-	if len(images) == 0 {
-		return input
-	}
-	seen := make(map[string]struct{})
-	for _, block := range input.Content {
-		if block.Type == model.ContentImage && block.ImageURL != "" {
-			seen[block.ImageURL] = struct{}{}
-		}
-	}
-	for _, image := range images {
-		if _, ok := seen[image.ImageURL]; ok {
-			continue
-		}
-		input.Content = append(input.Content, image)
-	}
-	return input
 }
 
 func (s *Service) mode(userID string) ConversationMode {

@@ -227,7 +227,7 @@ func TestEnrichInputWithThreadImages(t *testing.T) {
 		{Type: model.ContentText, Text: "pets"},
 		{Type: model.ContentImage, ImageURL: "data:image/png;base64,abc"},
 	}}}
-	input := enrichInputWithThreadImages(model.TextMessage(model.RoleUser, "再看看"), history)
+	input := model.TextMessage(model.RoleUser, "再看看").WithImages(model.CollectImages(history...))
 	if len(input.Content) != 2 || input.Content[1].Type != model.ContentImage {
 		t.Fatalf("input=%+v", input.Content)
 	}

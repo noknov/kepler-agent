@@ -110,6 +110,74 @@ func (m Message) ToolCalls() []ToolCall {
 	return calls
 }
 
+// WithoutImages returns a copy with image blocks removed.
+func (m Message) WithoutImages() Message {
+	content := make([]Content, 0, len(m.Content))
+	for _, block := range m.Content {
+		if block.Type == ContentImage {
+			continue
+		}
+		content = append(content, block)
+	}
+	m.Content = content
+	return m
+}
+
+// WithImages appends unique image blocks that are not already present.
+func (m Message) WithImages(images []Content) Message {
+	if len(images) == 0 {
+		return m
+	}
+	seen := make(map[string]struct{})
+	for _, block := range m.Content {
+		if block.Type == ContentImage && block.ImageURL != "" {
+			seen[block.ImageURL] = struct{}{}
+		}
+	}
+	for _, image := range images {
+		if image.Type != ContentImage || image.ImageURL == "" {
+			continue
+		}
+		if _, ok := seen[image.ImageURL]; ok {
+			continue
+		}
+		seen[image.ImageURL] = struct{}{}
+		m.Content = append(m.Content, image)
+	}
+	return m
+}
+
+// CollectImages returns unique image blocks from one or more messages.
+func CollectImages(messages ...Message) []Content {
+	images := make([]Content, 0, len(messages))
+	seen := make(map[string]struct{})
+	for _, message := range messages {
+		for _, block := range message.Content {
+			if block.Type != ContentImage || block.ImageURL == "" {
+				continue
+			}
+			if _, ok := seen[block.ImageURL]; ok {
+				continue
+			}
+			seen[block.ImageURL] = struct{}{}
+			images = append(images, block)
+		}
+	}
+	return images
+}
+
+// ContainImages reports whether any message includes an image block.
+func ContainImages(messages ...Message) bool {
+	for _, message := range messages {
+		for _, block := range message.Content {
+			if block.Type == ContentImage {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 type ToolDefinition struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
