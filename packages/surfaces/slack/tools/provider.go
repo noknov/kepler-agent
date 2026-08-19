@@ -148,26 +148,22 @@ func (s BotThreadReader) Client(_ context.Context, _ tool.Call) (*slack.Client, 
 	return s.Slack, nil
 }
 
-// PreferConnectedThreadReader uses the caller's linked token when available and
-// falls back to the bot token only for the current conversation.
+// PreferConnectedThreadReader uses the bot token for the current conversation and
+// the caller's linked token only when the read target is outside that scope.
 type PreferConnectedThreadReader struct {
 	Connected ConnectedThreadReader
 	Bot       BotThreadReader
 }
 
 func (s PreferConnectedThreadReader) Client(ctx context.Context, call tool.Call) (*slack.Client, error) {
-	client, err := s.Connected.Client(ctx, call)
-	if err == nil {
-		return client, nil
-	}
-	if readTargetInput(call).RequiresUserConnection() {
-		return nil, err
-	}
-	var required *connections.RequiredError
-	if errors.As(err, &required) || errors.Is(err, connections.ErrNotConnected) {
+	if !readTargetInput(call).RequiresUserConnection() {
 		return s.Bot.Client(ctx, call)
 	}
-	return nil, err
+	client, err := s.Connected.Client(ctx, call)
+	if err != nil {
+		return nil, err
+	}
+	return client, nil
 }
 
 func beginThreadRead(ctx context.Context, source ThreadReaderSource, call tool.Call) (*slack.Client, *tool.Result, error) {
