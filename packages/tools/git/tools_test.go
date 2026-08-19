@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
+	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/gitcache"
-	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 func TestFetchRefReturnsImmutableCommitRef(t *testing.T) {
@@ -24,7 +24,7 @@ func TestFetchRefReturnsImmutableCommitRef(t *testing.T) {
 		Guard:   safety.NewCommandPolicy(),
 		Timeout: 10 * time.Second,
 	}}
-	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main"}`), Scope: agenttool.Scope{}})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestFetchRefUsesExplicitBranch(t *testing.T) {
 		Guard:   safety.NewCommandPolicy(),
 		Timeout: 10 * time.Second,
 	}}
-	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"mt-main"}`), Scope: agenttool.Scope{}})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"mt-main"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestFetchRefFailsWhenOriginBecomesUnavailable(t *testing.T) {
 	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
 	tool := FetchRefTool{Base: base}
 
-	first, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main"}`), Scope: scope})
+	first, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestFetchRefFailsWhenOriginBecomesUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main"}`), Scope: scope})
+	_, err = tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main"}`), Scope: scope})
 	if err == nil {
 		t.Fatal("second fetch should fail when origin is unavailable")
 	}
@@ -102,7 +102,7 @@ func TestGitLogRefreshesExplicitBranchWithinFetchTTL(t *testing.T) {
 	}
 	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
 	tool := LogTool{Base: base}
-	first, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","limit":1}`), Scope: scope})
+	first, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main","limit":1}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestGitLogRefreshesExplicitBranchWithinFetchTTL(t *testing.T) {
 	runGit(t, work, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "fresh tip")
 	runGit(t, work, "push", "origin", "main")
 
-	second, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","limit":1}`), Scope: scope})
+	second, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main","limit":1}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,17 +139,17 @@ func TestRefToolsRequireExplicitRepo(t *testing.T) {
 		Guard:   safety.NewCommandPolicy(),
 		Timeout: 10 * time.Second,
 	}
-	fetchResult, err := (FetchRefTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main"}`), Scope: agenttool.Scope{}})
+	fetchResult, err := (FetchRefTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ref := regexp.MustCompile(`(?m)^ref=([0-9a-f]{40})$`).FindStringSubmatch(fetchResult.Text())[1]
 
-	_, err = (ReadFileRefTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"ref":"`+ref+`","path":"README.md"}`), Scope: agenttool.Scope{}})
+	_, err = (ReadFileRefTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"ref":"` + ref + `","path":"README.md"}`), Scope: agenttool.Scope{}})
 	if err == nil || !strings.Contains(err.Error(), "repo is required") {
 		t.Fatalf("ReadFileRefTool error = %v, want repo required", err)
 	}
-	_, err = (SearchRefTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"ref":"`+ref+`","query":"hello"}`), Scope: agenttool.Scope{}})
+	_, err = (SearchRefTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"ref":"` + ref + `","query":"hello"}`), Scope: agenttool.Scope{}})
 	if err == nil || !strings.Contains(err.Error(), "repo is required") {
 		t.Fatalf("SearchRefTool error = %v, want repo required", err)
 	}
@@ -166,14 +166,14 @@ func TestRepoToolsReadFetchedSnapshotNotWorkingTree(t *testing.T) {
 		Timeout: 10 * time.Second,
 	}
 	searchTool := RepoSearchTool{Base: base}
-	searchResult, err := searchTool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","query":"hello"}`), Scope: agenttool.Scope{}})
+	searchResult, err := searchTool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main","query":"hello"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(searchResult.Text(), "README.md:1:hello") {
 		t.Fatalf("search content = %q, want remote snapshot match", searchResult.Text())
 	}
-	noMatch, err := searchTool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","query":"local only"}`), Scope: agenttool.Scope{}})
+	noMatch, err := searchTool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main","query":"local only"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestRepoToolsReadFetchedSnapshotNotWorkingTree(t *testing.T) {
 	}
 
 	readTool := RepoReadFileTool{Base: base}
-	readResult, err := readTool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","path":"README.md"}`), Scope: agenttool.Scope{}})
+	readResult, err := readTool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main","path":"README.md"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestRepoToolsDoNotUseStaleRefsWhenOriginIsUnavailable(t *testing.T) {
 	}
 	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
 	searchTool := RepoSearchTool{Base: base}
-	if _, err := searchTool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","query":"hello"}`), Scope: scope}); err != nil {
+	if _, err := searchTool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main","query":"hello"}`), Scope: scope}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Rename(filepath.Join(root, "origin.git"), filepath.Join(root, "origin.git.offline")); err != nil {
@@ -208,13 +208,13 @@ func TestRepoToolsDoNotUseStaleRefsWhenOriginIsUnavailable(t *testing.T) {
 	}
 
 	readTool := RepoReadFileTool{Base: base}
-	_, err := readTool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","path":"README.md"}`), Scope: scope})
+	_, err := readTool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main","path":"README.md"}`), Scope: scope})
 	if err == nil {
 		t.Fatal("read should fail when origin becomes unavailable")
 	}
 
 	gitcache.ResetForTest()
-	_, err = readTool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"`+work+`","branch":"main","path":"README.md"}`), Scope: agenttool.Scope{SessionID: "test", TurnID: "turn"}})
+	_, err = readTool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main","path":"README.md"}`), Scope: agenttool.Scope{SessionID: "test", TurnID: "turn"}})
 	if err == nil {
 		t.Fatal("read should not fall back to cached refs when origin is unavailable")
 	}

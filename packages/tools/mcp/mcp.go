@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"regexp"
 	"sync"
 
@@ -31,10 +32,19 @@ type remoteTool struct {
 	descriptor tool.Descriptor
 }
 type serverState struct {
-	template     mcp.Client
+	config       clientConfig
 	resolveToken TokenResolver
 	mu           sync.Mutex
 	sessions     map[string]mcp.Session
+}
+
+// clientConfig intentionally contains only immutable transport configuration.
+// A fresh mcp.Client owns its atomic request ID and sync.Once state per call.
+type clientConfig struct {
+	serviceName string
+	url         string
+	headers     map[string]string
+	http        *http.Client
 }
 
 func Discover(ctx context.Context, config Server) ([]tool.Tool, error) {
@@ -49,10 +59,8 @@ func Discover(ctx context.Context, config Server) ([]tool.Tool, error) {
 	if err != nil {
 		return nil, err
 	}
-	template := *config.Client
-	template.Token = ""
 	state := &serverState{
-		template:     template,
+		config:       clientConfig{serviceName: config.Client.ServiceName, url: config.Client.URL, headers: cloneHeaders(config.Client.Headers), http: config.Client.HTTP},
 		resolveToken: config.ResolveToken,
 		sessions:     make(map[string]mcp.Session),
 	}
@@ -130,13 +138,24 @@ func (s *serverState) session(ctx context.Context, call tool.Call) (mcp.Session,
 }
 
 func (s *serverState) clientForCall(ctx context.Context, call tool.Call) *mcp.Client {
-	client := s.template
+	client := &mcp.Client{ServiceName: s.config.serviceName, URL: s.config.url, Headers: cloneHeaders(s.config.headers), HTTP: s.config.http}
 	if s.resolveToken == nil {
-		return &client
+		return client
 	}
 	token, err := s.resolveToken(ctx, call)
 	if err == nil && token != "" {
 		client.Token = token
 	}
-	return &client
+	return client
+}
+
+func cloneHeaders(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	copy := make(map[string]string, len(headers))
+	for key, value := range headers {
+		copy[key] = value
+	}
+	return copy
 }

@@ -9,6 +9,7 @@ import (
 func NewServiceFromConfig(store Store, cfg config.Config) Service {
 	return Service{
 		Store: store,
+		state: &serviceState{},
 		Config: Config{
 			PublicBaseURL: cfg.Connections.PublicBaseURL,
 			SecretKey:     cfg.Connections.EncryptionKey,
@@ -16,7 +17,7 @@ func NewServiceFromConfig(store Store, cfg config.Config) Service {
 				ClientID:     cfg.Connections.SlackClientID,
 				ClientSecret: cfg.Connections.SlackClientSecret,
 			},
-			GitHub:       githubOAuthConfig(cfg),
+			GitHub: githubOAuthConfig(cfg),
 			ClickStack: ClickStackOAuthConfig{
 				MCPURL:    cfg.Integrations.ClickStack.MCPURL,
 				ServiceID: cfg.Integrations.ClickStack.ServiceID,

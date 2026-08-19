@@ -15,10 +15,10 @@ import (
 
 // Registrar lazily discovers ClickStack MCP tools once a usable token exists.
 type Registrar struct {
-	cfg    config.ClickStackConfig
-	conn   *connections.Service
-	mu     sync.Mutex
-	done   bool
+	cfg  config.ClickStackConfig
+	conn *connections.Service
+	mu   sync.Mutex
+	done bool
 }
 
 func NewRegistrar(cfg config.ClickStackConfig, conn *connections.Service) *Registrar {

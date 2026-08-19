@@ -48,9 +48,9 @@ func TestResolveReadTargetOpensIMFromUserID(t *testing.T) {
 		}
 	})
 	target, err := client.ResolveReadTarget(context.Background(), ReadTargetInput{
-		User:         "U0AATUKVA7P",
-		ScopeChannel: "D_BOT",
-		ScopeThreadTS: "9.9",
+		User:           "U0AATUKVA7P",
+		ScopeChannel:   "D_BOT",
+		ScopeThreadTS:  "9.9",
 		ScopeMessageTS: "9.9",
 	})
 	if err != nil || target.Channel != "DOPEN" || target.ThreadTS != "" || target.LatestTS != "" {

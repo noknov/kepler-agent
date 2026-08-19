@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func (c Client) listPods(ctx context.Context, target ClusterTarget, allNamespaces bool, labelSelector, fieldSelector string) ([]byte, error) {
+func (c *Client) listPods(ctx context.Context, target ClusterTarget, allNamespaces bool, labelSelector, fieldSelector string) ([]byte, error) {
 	query := url.Values{}
 	if labelSelector != "" {
 		query.Set("labelSelector", labelSelector)
@@ -29,7 +29,7 @@ func (c Client) listPods(ctx context.Context, target ClusterTarget, allNamespace
 	return c.doAPI(ctx, target, "GET", "/api/v1/namespaces/"+url.PathEscape(ns)+"/pods", query)
 }
 
-func (c Client) listEvents(ctx context.Context, target ClusterTarget, allNamespaces bool, fieldSelectors []string) ([]byte, error) {
+func (c *Client) listEvents(ctx context.Context, target ClusterTarget, allNamespaces bool, fieldSelectors []string) ([]byte, error) {
 	query := url.Values{}
 	if len(fieldSelectors) > 0 {
 		query.Set("fieldSelector", strings.Join(fieldSelectors, ","))
@@ -44,11 +44,11 @@ func (c Client) listEvents(ctx context.Context, target ClusterTarget, allNamespa
 	return c.doAPI(ctx, target, "GET", "/api/v1/namespaces/"+url.PathEscape(ns)+"/events", query)
 }
 
-func (c Client) getResource(ctx context.Context, target ClusterTarget, apiPath string, query url.Values) ([]byte, error) {
+func (c *Client) getResource(ctx context.Context, target ClusterTarget, apiPath string, query url.Values) ([]byte, error) {
 	return c.doAPI(ctx, target, "GET", apiPath, query)
 }
 
-func (c Client) podLogs(ctx context.Context, target ClusterTarget, pod, container string, tail int, since string, previous, timestamps bool) (string, error) {
+func (c *Client) podLogs(ctx context.Context, target ClusterTarget, pod, container string, tail int, since string, previous, timestamps bool) (string, error) {
 	ns := target.Namespace
 	if ns == "" {
 		return "", fmt.Errorf("namespace is required for pod logs")
@@ -104,7 +104,7 @@ func (c Client) podLogs(ctx context.Context, target ClusterTarget, pod, containe
 	return string(data), nil
 }
 
-func (c Client) podLogsBySelector(ctx context.Context, target ClusterTarget, labelSelector string, opts podLogOptions) (string, error) {
+func (c *Client) podLogsBySelector(ctx context.Context, target ClusterTarget, labelSelector string, opts podLogOptions) (string, error) {
 	pods, err := c.listPods(ctx, target, false, labelSelector, "")
 	if err != nil {
 		return "", err
@@ -150,7 +150,7 @@ type podLogOptions struct {
 	timestamps bool
 }
 
-func (c Client) metricsTop(ctx context.Context, target ClusterTarget, resource string, name, labelSelector string) ([]byte, error) {
+func (c *Client) metricsTop(ctx context.Context, target ClusterTarget, resource string, name, labelSelector string) ([]byte, error) {
 	query := url.Values{}
 	if labelSelector != "" {
 		query.Set("labelSelector", labelSelector)
@@ -175,7 +175,7 @@ func (c Client) metricsTop(ctx context.Context, target ClusterTarget, resource s
 	}
 }
 
-func (c Client) deploymentRollout(ctx context.Context, target ClusterTarget, name, kind, action string, revision int) (string, error) {
+func (c *Client) deploymentRollout(ctx context.Context, target ClusterTarget, name, kind, action string, revision int) (string, error) {
 	ns := target.Namespace
 	if ns == "" {
 		return "", fmt.Errorf("namespace is required")
@@ -197,7 +197,7 @@ func (c Client) deploymentRollout(ctx context.Context, target ClusterTarget, nam
 	}
 }
 
-func (c Client) rolloutHistory(ctx context.Context, target ClusterTarget, deployName, kind string, revision int, deployRaw []byte) (string, error) {
+func (c *Client) rolloutHistory(ctx context.Context, target ClusterTarget, deployName, kind string, revision int, deployRaw []byte) (string, error) {
 	var deploy struct {
 		Selector struct {
 			MatchLabels map[string]string `json:"matchLabels"`

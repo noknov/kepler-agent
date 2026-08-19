@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/delegation"
 	"github.com/noknov/slack-copilot-agent/packages/agent/environment"
@@ -20,7 +21,9 @@ import (
 )
 
 func main() {
-	if err := run(signalContext()); err != nil {
+	ctx, stop := signalContext()
+	defer stop()
+	if err := run(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -104,13 +107,8 @@ func run(ctx context.Context) error {
 	return server.Serve(ctx)
 }
 
-func signalContext() context.Context {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	go func() {
-		<-ctx.Done()
-		stop()
-	}()
-	return ctx
+func signalContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
 type eventStream struct {

@@ -13,15 +13,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/gitcache"
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type ReadFileTool struct {
 	Paths safety.WorkspacePolicy
 }
-
 
 func (t ReadFileTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
@@ -141,7 +140,6 @@ func (t ReadFileTool) Execute(ctx context.Context, call tool.Call) (tool.Result,
 type SearchTool struct {
 	Paths safety.WorkspacePolicy
 }
-
 
 func (t SearchTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(

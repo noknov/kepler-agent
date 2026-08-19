@@ -12,10 +12,10 @@ type ThreadStartParams struct {
 
 // ThreadResumeParams loads an existing session transcript.
 type ThreadResumeParams struct {
-	SessionID      string `json:"sessionId"`
-	AfterSequence  uint64 `json:"afterSequence,omitempty"`
-	IncludeEvents  bool   `json:"includeEvents,omitempty"`
-	StreamItems    bool   `json:"streamItems,omitempty"`
+	SessionID     string `json:"sessionId"`
+	AfterSequence uint64 `json:"afterSequence,omitempty"`
+	IncludeEvents bool   `json:"includeEvents,omitempty"`
+	StreamItems   bool   `json:"streamItems,omitempty"`
 }
 
 // ThreadForkParams branches a session at a transcript sequence boundary.

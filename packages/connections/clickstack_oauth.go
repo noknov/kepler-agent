@@ -34,13 +34,13 @@ type clickstackOAuthClient struct {
 }
 
 type clickstackOAuth struct {
-	cfg        ClickStackOAuthConfig
-	httpClient *http.Client
-	registerURL string
+	cfg          ClickStackOAuthConfig
+	httpClient   *http.Client
+	registerURL  string
 	authorizeURL string
 	tokenURL     string
-	mu         sync.Mutex
-	client     *clickstackOAuthClient
+	mu           sync.Mutex
+	client       *clickstackOAuthClient
 }
 
 func newClickStackOAuth(cfg ClickStackOAuthConfig) *clickstackOAuth {
@@ -320,4 +320,3 @@ func pkceChallenge(verifier string) (string, error) {
 	sum := sha256.Sum256([]byte(verifier))
 	return base64.RawURLEncoding.EncodeToString(sum[:]), nil
 }
-

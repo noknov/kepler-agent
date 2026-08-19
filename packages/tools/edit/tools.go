@@ -8,14 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	"github.com/noknov/slack-copilot-agent/packages/safety"
 )
 
 type WriteFileTool struct {
 	Paths safety.WorkspacePolicy
 }
-
 
 func (t WriteFileTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
@@ -57,7 +56,6 @@ func (t WriteFileTool) Execute(ctx context.Context, call tool.Call) (tool.Result
 type ReplaceTool struct {
 	Paths safety.WorkspacePolicy
 }
-
 
 func (t ReplaceTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(

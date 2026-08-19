@@ -159,7 +159,7 @@ func (s *Service) maybeBackfillClickStackAccount(ctx context.Context, userID str
 }
 
 func (s *Service) clickstackRefreshMutex(userID string) *sync.Mutex {
-	value, _ := s.clickstackRefresh.LoadOrStore(userID, &sync.Mutex{})
+	value, _ := s.mutableState().clickstackRefresh.LoadOrStore(userID, &sync.Mutex{})
 	return value.(*sync.Mutex)
 }
 

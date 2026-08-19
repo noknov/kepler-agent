@@ -97,7 +97,7 @@ func (s *Service) ensureFreshGCPBundle(ctx context.Context, userID string, bundl
 }
 
 func (s *Service) gcpRefreshMutex(userID string) *sync.Mutex {
-	value, _ := s.gcpRefresh.LoadOrStore(userID, &sync.Mutex{})
+	value, _ := s.mutableState().gcpRefresh.LoadOrStore(userID, &sync.Mutex{})
 	return value.(*sync.Mutex)
 }
 

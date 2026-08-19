@@ -114,3 +114,26 @@ func (c *Client) Decr(ctx context.Context, key string) (int64, error) {
 func (c *Client) Expire(ctx context.Context, key string, ttl time.Duration) error {
 	return c.rdb.Expire(ctx, key, ttl).Err()
 }
+
+// SAdd adds values to a Redis set and returns the number of new members.
+func (c *Client) SAdd(ctx context.Context, key string, members ...string) (int64, error) {
+	values := make([]any, 0, len(members))
+	for _, member := range members {
+		values = append(values, member)
+	}
+	return c.rdb.SAdd(ctx, key, values...).Result()
+}
+
+// SMembers returns every member in a Redis set.
+func (c *Client) SMembers(ctx context.Context, key string) ([]string, error) {
+	return c.rdb.SMembers(ctx, key).Result()
+}
+
+// SRem removes members from a Redis set.
+func (c *Client) SRem(ctx context.Context, key string, members ...string) (int64, error) {
+	values := make([]any, 0, len(members))
+	for _, member := range members {
+		values = append(values, member)
+	}
+	return c.rdb.SRem(ctx, key, values...).Result()
+}

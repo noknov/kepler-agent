@@ -17,9 +17,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/gitcache"
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type Base struct {
@@ -45,16 +45,16 @@ type CalleesTool struct{ Base }
 type CallgraphTool struct{ Base }
 type ImpactTool struct{ Base }
 
-func (OverviewTool) Parallel() bool     { return true }
-func (SymbolsTool) Parallel() bool      { return true }
-func (DefinitionTool) Parallel() bool   { return true }
-func (ReferencesTool) Parallel() bool   { return true }
+func (OverviewTool) Parallel() bool   { return true }
+func (SymbolsTool) Parallel() bool    { return true }
+func (DefinitionTool) Parallel() bool { return true }
+func (ReferencesTool) Parallel() bool { return true }
 func (ImplementationsTool) Parallel() bool {
 	return true
 }
-func (CallersTool) Parallel() bool   { return true }
-func (CalleesTool) Parallel() bool   { return true }
-func (ImpactTool) Parallel() bool    { return true }
+func (CallersTool) Parallel() bool { return true }
+func (CalleesTool) Parallel() bool { return true }
+func (ImpactTool) Parallel() bool  { return true }
 
 func (t OverviewTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(

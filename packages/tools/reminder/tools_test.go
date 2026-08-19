@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	reminderStore "github.com/noknov/slack-copilot-agent/packages/reminder"
 	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	reminderStore "github.com/noknov/slack-copilot-agent/packages/reminder"
 )
 
 func TestCreateListAndCancelReminder(t *testing.T) {
@@ -29,7 +29,7 @@ func TestCreateListAndCancelReminder(t *testing.T) {
 	if err != nil || len(all) != 1 {
 		t.Fatalf("list = %#v, %v", all, err)
 	}
-	_, err = (CancelTool{Store: store}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"id":"`+all[0].ID+`"}`), Scope: scope})
+	_, err = (CancelTool{Store: store}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"id":"` + all[0].ID + `"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestCancelCannotCrossUserBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = (CancelTool{Store: store}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"id":"`+created.ID+`"}`), Scope: agenttool.Scope{UserID: "U2"}})
+	_, err = (CancelTool{Store: store}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"id":"` + created.ID + `"}`), Scope: agenttool.Scope{UserID: "U2"}})
 	if err == nil {
 		t.Fatal("another user must not be able to cancel this reminder")
 	}

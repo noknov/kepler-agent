@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/noknov/slack-copilot-agent/packages/mcp"
 	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	"github.com/noknov/slack-copilot-agent/packages/mcp"
 )
 
 func TestMCPToolCallsStreamableHTTP(t *testing.T) {

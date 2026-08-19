@@ -86,9 +86,9 @@ func TestClickStackAccessTokenRefreshesBeforeExpiry(t *testing.T) {
 		})
 	}))
 	defer server.Close()
-	service.clickstackOAuth = newClickStackOAuth(ClickStackOAuthConfig{ServiceID: "svc-1"})
-	service.clickstackOAuth.httpClient = server.Client()
-	service.clickstackOAuth.tokenURL = server.URL + "/token"
+	service.mutableState().clickstackOAuth = newClickStackOAuth(ClickStackOAuthConfig{ServiceID: "svc-1"})
+	service.mutableState().clickstackOAuth.httpClient = server.Client()
+	service.mutableState().clickstackOAuth.tokenURL = server.URL + "/token"
 
 	token, err := service.ClickStackAccessToken(ctx, LocalUserID)
 	if err != nil {
