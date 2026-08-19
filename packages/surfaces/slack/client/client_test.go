@@ -68,6 +68,61 @@ func TestPostMarkdownMessageFallsBackWhenMarkdownBlockIsUnsupported(t *testing.T
 	}
 }
 
+func TestStartStreamIncludesRecipientMetadata(t *testing.T) {
+	var payload map[string]any
+	client := &Client{token: "xoxb-test", teamID: "T123", httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/api/chat.startStream" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"ts":"123.456"}`)), Request: r}, nil
+	})}}
+
+	ts, err := client.StartStream(context.Background(), "C1", "100.000", "U1")
+	if err != nil || ts != "123.456" {
+		t.Fatalf("ts=%q err=%v", ts, err)
+	}
+	if payload["channel"] != "C1" || payload["thread_ts"] != "100.000" || payload["recipient_user_id"] != "U1" || payload["recipient_team_id"] != "T123" {
+		t.Fatalf("payload=%#v", payload)
+	}
+}
+
+func TestAppendAndStopStream(t *testing.T) {
+	var appendPayload, stopPayload map[string]any
+	client := &Client{token: "xoxb-test", httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/api/chat.appendStream":
+			if err := json.NewDecoder(r.Body).Decode(&appendPayload); err != nil {
+				t.Fatal(err)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true}`)), Request: r}, nil
+		case "/api/chat.stopStream":
+			if err := json.NewDecoder(r.Body).Decode(&stopPayload); err != nil {
+				t.Fatal(err)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true}`)), Request: r}, nil
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+			return nil, nil
+		}
+	})}}
+
+	if err := client.AppendStream(context.Background(), "C1", "123.456", []map[string]any{{"type": "markdown_text", "text": "hello"}}); err != nil {
+		t.Fatal(err)
+	}
+	if appendPayload["channel"] != "C1" || appendPayload["ts"] != "123.456" {
+		t.Fatalf("append payload=%#v", appendPayload)
+	}
+	if err := client.StopStream(context.Background(), "C1", "123.456"); err != nil {
+		t.Fatal(err)
+	}
+	if stopPayload["channel"] != "C1" || stopPayload["ts"] != "123.456" {
+		t.Fatalf("stop payload=%#v", stopPayload)
+	}
+}
+
 func TestPostMarkdownMessageWithIDUsesStableSlackUUID(t *testing.T) {
 	var first, second string
 	client := &Client{token: "xoxb-test", httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {

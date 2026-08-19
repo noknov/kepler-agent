@@ -40,12 +40,13 @@ results share an aggregate inline budget. Empty model output fails the turn,
 the tool-step limit stops without an extra synthesis request, and retryable
 typed provider failures are retried only by the runtime. A zero retry count now
 means zero retries; product profiles opt into their retry budget explicitly.
-Slack buffers streamed answer text and updates one Block Kit `markdown`
-message with throttled `chat.update` calls, then finalizes the same message
-with a deterministic `client_msg_id` on first post. If the Slack app does not support
-that AI-only block, it retries as a plain message. It then persists the Slack
-message link on the run. It does not create a
-streaming placeholder or rewrite Markdown with regular expressions.
+Slack buffers streamed answer text and delivers it through Slack's native
+`chat.startStream` / `chat.appendStream` / `chat.stopStream` APIs. When stream
+delivery fails, the final answer is posted as a normal markdown message with a
+deterministic `client_msg_id`. If the Slack app does not support that AI-only
+block, it retries as a plain message. It then persists the Slack message link
+on the run. It does not create a streaming placeholder or rewrite Markdown
+with regular expressions.
 
 Git-backed code tools refresh `origin` once per turn before reading remote refs.
 When the caller omits a source, code read/search uses the repository's

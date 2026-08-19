@@ -51,9 +51,12 @@ type IdempotentMarkdownMessenger interface {
 	PostMarkdownMessageWithID(ctx context.Context, channel, threadTS, markdown, deliveryID string) (string, error)
 }
 
-type StreamingMarkdownMessenger interface {
-	IdempotentMarkdownMessenger
-	UpdateMarkdownMessage(ctx context.Context, channel, messageTS, markdown string) error
+// NativeStreamMessenger delivers assistant answers through Slack's chat.startStream,
+// chat.appendStream, and chat.stopStream APIs.
+type NativeStreamMessenger interface {
+	StartStream(ctx context.Context, channel, threadTS, recipientUserID string) (string, error)
+	AppendStream(ctx context.Context, channel, messageTS string, chunks []map[string]any) error
+	StopStream(ctx context.Context, channel, messageTS string) error
 }
 
 type ThreadStatusMessenger interface {
