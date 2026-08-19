@@ -38,8 +38,10 @@ The current loop has no model-output repair layer. Only the owner of a
 unsupported image parts are removed before provider dispatch; and parallel tool
 results share an aggregate inline budget. Empty model output fails the turn,
 the tool-step limit stops without an extra synthesis request, and retryable
-typed provider failures are retried only by the runtime. A zero retry count now
-means zero retries; product profiles opt into their retry budget explicitly.
+typed provider failures are retried only by the runtime. Empty model messages
+without tool calls are retried in place up to `MaxEmptyResponseRetries` before
+the turn terminates as `empty_response`. A zero retry count now means zero
+retries; product profiles opt into their retry budget explicitly.
 Slack buffers streamed answer text and delivers it through Slack's native
 `chat.startStream` / `chat.appendStream` / `chat.stopStream` APIs. When stream
 delivery fails, the final answer is posted as a normal markdown message with a

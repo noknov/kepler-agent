@@ -223,10 +223,35 @@ func TestRunTurnZeroRetryBudgetDoesNotRetry(t *testing.T) {
 }
 
 func TestRunTurnRejectsEmptyModelResponse(t *testing.T) {
+	client := &scriptedModel{responses: []model.Response{{}, {}, {}, {}}}
+	catalog, _ := tool.NewCatalog()
+	runner, _ := New(Config{Model: "test", MaxEmptyResponseRetries: 3, RetryBaseDelay: time.Nanosecond}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
+	result, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "empty-retry", Input: model.TextMessage(model.RoleUser, "hi")})
+	if err == nil || result.Termination != TerminationEmptyResponse || len(client.requests) != 4 {
+		t.Fatalf("result=%+v requests=%d err=%v", result, len(client.requests), err)
+	}
+}
+
+func TestRunTurnRecoversAfterEmptyModelResponse(t *testing.T) {
+	client := &scriptedModel{responses: []model.Response{
+		{},
+		{},
+		{},
+		{Message: model.TextMessage(model.RoleAssistant, "recovered"), FinishReason: model.FinishStop},
+	}}
+	catalog, _ := tool.NewCatalog()
+	runner, _ := New(Config{Model: "test", MaxEmptyResponseRetries: 3, RetryBaseDelay: time.Nanosecond}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
+	result, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "empty-recover", Input: model.TextMessage(model.RoleUser, "hi")})
+	if err != nil || result.Termination != TerminationCompleted || result.Message.Text() != "recovered" || len(client.requests) != 4 {
+		t.Fatalf("result=%+v requests=%d err=%v", result, len(client.requests), err)
+	}
+}
+
+func TestRunTurnSkipsEmptyResponseRetryWhenDisabled(t *testing.T) {
 	client := &scriptedModel{responses: []model.Response{{}}}
 	catalog, _ := tool.NewCatalog()
-	runner, _ := New(Config{Model: "test"}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
-	result, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "empty-retry", Input: model.TextMessage(model.RoleUser, "hi")})
+	runner, _ := New(Config{Model: "test", MaxEmptyResponseRetries: 0}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
+	result, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "empty-no-retry", Input: model.TextMessage(model.RoleUser, "hi")})
 	if err == nil || result.Termination != TerminationEmptyResponse || len(client.requests) != 1 {
 		t.Fatalf("result=%+v requests=%d err=%v", result, len(client.requests), err)
 	}

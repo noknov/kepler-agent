@@ -2,6 +2,8 @@ package slackagent
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -96,11 +98,40 @@ func (s *slackStream) flushStreamUpdate(text string, force bool) {
 	s.flushNativeStream(text)
 }
 
-func (s *slackStream) flushNativeStream(fullText string) {
+// ensureNativeStream opens the Slack native stream at turn start, matching the
+// v1 conversation service so users see incremental output instead of a single
+// final post when the model begins responding.
+func (s *slackStream) ensureNativeStream() {
 	native, ok := s.messenger.(slackconversation.NativeStreamMessenger)
 	if !ok {
 		return
 	}
+	s.mu.Lock()
+	if s.streamClosed || s.streamDeliveryFailed || s.messageTS != "" {
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+
+	ctx, cancel := s.deliveryContext()
+	defer cancel()
+
+	ts, err := native.StartStream(ctx, s.req.Channel, s.req.ThreadTS, s.req.UserID)
+	if err != nil {
+		log.Printf("slack native stream start failed channel=%s thread=%s user=%s: %v",
+			s.req.Channel, s.req.ThreadTS, s.req.UserID, err)
+		s.mu.Lock()
+		s.streamDeliveryFailed = true
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Lock()
+	s.messageTS = ts
+	s.nativeStream = true
+	s.mu.Unlock()
+}
+
+func (s *slackStream) flushNativeStream(fullText string) {
 	delta := streamSuffix(s.lastStreamText, fullText)
 	if delta == "" {
 		return
@@ -110,41 +141,16 @@ func (s *slackStream) flushNativeStream(fullText string) {
 		s.streamTimer.Stop()
 		s.streamTimer = nil
 	}
-	messageTS := s.messageTS
 	deliveryFailed := s.streamDeliveryFailed
 	s.mu.Unlock()
-
-	if messageTS == "" && deliveryFailed {
+	if deliveryFailed {
 		return
 	}
 
-	ctx, cancel := s.deliveryContext()
-	defer cancel()
-
-	if messageTS == "" {
-		ts, err := native.StartStream(ctx, s.req.Channel, s.req.ThreadTS, s.req.UserID)
-		if err != nil {
-			s.mu.Lock()
-			s.streamDeliveryFailed = true
-			s.mu.Unlock()
-			return
-		}
+	if err := s.appendNativeChunks(delta); err != nil {
 		s.mu.Lock()
-		s.messageTS = ts
-		s.nativeStream = true
-		messageTS = ts
+		s.streamDeliveryFailed = true
 		s.mu.Unlock()
-		s.restoreThreadStatus()
-	}
-
-	if err := native.AppendStream(ctx, s.req.Channel, messageTS, []map[string]any{
-		{"type": "markdown_text", "text": delta},
-	}); err != nil {
-		if strings.Contains(err.Error(), "not_in_streaming_state") {
-			s.mu.Lock()
-			s.streamDeliveryFailed = true
-			s.mu.Unlock()
-		}
 		return
 	}
 	s.mu.Lock()
@@ -152,6 +158,50 @@ func (s *slackStream) flushNativeStream(fullText string) {
 	s.lastStreamUpdate = time.Now()
 	s.mu.Unlock()
 	s.restoreThreadStatus()
+}
+
+func (s *slackStream) appendNativeChunks(delta string) error {
+	if delta == "" {
+		return nil
+	}
+	native, ok := s.messenger.(slackconversation.NativeStreamMessenger)
+	if !ok {
+		return fmt.Errorf("native stream messenger unavailable")
+	}
+	s.ensureNativeStream()
+
+	s.mu.Lock()
+	messageTS := s.messageTS
+	s.mu.Unlock()
+	if messageTS == "" {
+		return fmt.Errorf("native stream unavailable")
+	}
+
+	ctx, cancel := s.deliveryContext()
+	defer cancel()
+
+	chunks := []map[string]any{{"type": "markdown_text", "text": delta}}
+	if err := native.AppendStream(ctx, s.req.Channel, messageTS, chunks); err == nil {
+		return nil
+	} else if !strings.Contains(err.Error(), "not_in_streaming_state") {
+		log.Printf("slack native stream append failed channel=%s ts=%s: %v", s.req.Channel, messageTS, err)
+		return err
+	}
+
+	ts, startErr := native.StartStream(ctx, s.req.Channel, s.req.ThreadTS, s.req.UserID)
+	if startErr != nil {
+		log.Printf("slack native stream restart failed channel=%s thread=%s: %v", s.req.Channel, s.req.ThreadTS, startErr)
+		return startErr
+	}
+	s.mu.Lock()
+	s.messageTS = ts
+	s.nativeStream = true
+	s.mu.Unlock()
+	if err := native.AppendStream(ctx, s.req.Channel, ts, chunks); err != nil {
+		log.Printf("slack native stream append after restart failed channel=%s ts=%s: %v", s.req.Channel, ts, err)
+		return err
+	}
+	return nil
 }
 
 func streamSuffix(streamed, full string) string {

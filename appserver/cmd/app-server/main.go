@@ -83,7 +83,7 @@ func run(ctx context.Context) error {
 	stream := &eventStream{server: server}
 	runner, err := agentruntime.New(agentruntime.Config{
 		Model: config.Model, ReasoningEffort: config.ReasoningEffort, MaxOutputTokens: config.MaxOutputTokens,
-		Temperature: config.Temperature, MaxSteps: config.MaxSteps, MaxModelRetries: 2,
+		Temperature: config.Temperature, MaxSteps: config.MaxSteps, MaxModelRetries: 2, MaxEmptyResponseRetries: 3,
 		Context:        agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
 		CircuitBreaker: agentruntime.CircuitBreakerConfig{Enabled: true},
 	}, agentruntime.Dependencies{

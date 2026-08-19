@@ -35,8 +35,9 @@ type Config struct {
 	Temperature     float64
 	MaxOutputTokens int
 	MaxSteps        int
-	MaxModelRetries int
-	RetryBaseDelay  time.Duration
+	MaxModelRetries         int
+	MaxEmptyResponseRetries int
+	RetryBaseDelay          time.Duration
 	Context         ContextConfig
 	ToolResults     ToolResultConfig
 	CircuitBreaker  CircuitBreakerConfig
@@ -48,6 +49,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.MaxModelRetries < 0 {
 		c.MaxModelRetries = 0
+	}
+	if c.MaxEmptyResponseRetries < 0 {
+		c.MaxEmptyResponseRetries = 0
 	}
 	if c.RetryBaseDelay <= 0 {
 		c.RetryBaseDelay = 500 * time.Millisecond
