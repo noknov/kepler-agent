@@ -59,10 +59,6 @@ type ThreadStatusMessenger interface {
 	SetThreadStatus(ctx context.Context, channel, threadTS, status string, loadingMessages []string) error
 }
 
-type ThreadHistoryMessenger interface {
-	ThreadHistory(ctx context.Context, channel, threadTS, beforeTS string, limit int) []model.Message
-}
-
 func IsChineseLocale(locale string) bool {
 	locale = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(locale), "_", "-"))
 	return locale == "zh" || strings.HasPrefix(locale, "zh-")

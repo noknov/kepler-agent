@@ -91,10 +91,14 @@ func (t UserReadThreadTool) Execute(ctx context.Context, call tool.Call) (tool.R
 	}
 	text := formatConversation(target.Channel, label, messages)
 	budget := slackfiles.ThreadImageBudget()
-	content := []model.Content{{Type: model.ContentText, Text: text}}
+	history := make([]model.Message, 0, len(messages))
 	for _, msg := range messages {
-		content = append(content, slackfiles.ModelContent(slackfiles.ImagePartsWithBudget(ctx, slackClient, msg.Files, budget))...)
+		if historyMsg, ok := slackfiles.HistoryMessage(ctx, slackClient, msg, slackClient.BotUserID(), budget); ok {
+			history = append(history, historyMsg)
+		}
 	}
+	content := []model.Content{{Type: model.ContentText, Text: text}}
+	content = append(content, model.CollectImages(history...)...)
 	return tool.Result{Content: content}, nil
 }
 
