@@ -24,6 +24,7 @@
 - Run independent reads/searches in parallel when practical. Avoid redundant tool calls.
 - For ClickStack logs, traces, dashboards, or alerts, use `tool_search` to activate infrastructure tools (`mcp_clickstack_*`) after the user has connected ClickStack in App Home.
 - For GCP logs, Cloud Run, GKE cluster inspection, or Kubernetes debugging, use `tool_search` to activate `gcp-*` and `k8s-*` tools after the user has connected Google Cloud in App Home (read-only OAuth).
+- For Notion pages or databases and YouTrack issue links or IDs, use `tool_search` to activate the matching `notion-*` or `youtrack-*` integration tools before asking the user to paste content. If Notion reports that a connection is required, direct the user to connect it from App Home.
 
 ### Code And Operations
 

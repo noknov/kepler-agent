@@ -325,7 +325,7 @@
     }
   },
   "notion-get_page": {
-    "description": "Read the full text content of a Notion page by ID or URL (app.notion.com or notion.so). Use this for any Notion link — it handles authentication via the configured PAT.",
+    "description": "Read the full text content of a Notion page by ID or URL (app.notion.com or notion.so). Use this for any Notion link — it uses the requesting user's connected Notion account.",
     "parameters": {
       "page_id": "Notion page ID (UUID) or full Notion page URL (app.notion.com or notion.so).",
       "depth": "How many levels of nested blocks to expand. Defaults to 2, max 4."
@@ -341,13 +341,13 @@
     }
   },
   "youtrack-get_issue": {
-    "description": "Fetch an issue tracker issue by ID, including summary, description, state, assignee, and recent comments.",
+    "description": "Fetch a YouTrack issue by ID, including summary, description, state, assignee, and recent comments.",
     "parameters": {
       "issue_id": "Issue ID."
     }
   },
   "youtrack-search": {
-    "description": "Search the issue tracker using its query syntax.",
+    "description": "Search YouTrack issues using its query syntax.",
     "parameters": {
       "query": "Issue tracker query.",
       "limit": "Maximum results. Defaults to 10, max 50."

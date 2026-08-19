@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -39,5 +40,44 @@ func TestSearchToolListsAndActivates(t *testing.T) {
 	}
 	if _, ok := catalog.GetActive("s1", "later-tool"); !ok {
 		t.Fatalf("activation failed: %s", activate.Text())
+	}
+}
+
+type namedDeferredFixture struct {
+	name        string
+	description string
+}
+
+func (f namedDeferredFixture) Descriptor() Descriptor {
+	return Descriptor{Name: f.name, Description: f.description, InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []Effect{EffectRead}, Exposure: ExposureDeferred, Tags: []string{CategoryIntegration}}
+}
+
+func (namedDeferredFixture) Execute(context.Context, Call) (Result, error) {
+	return TextResult("ok"), nil
+}
+
+func TestSearchToolPrioritizesExactToolNameMatches(t *testing.T) {
+	catalog, err := NewCatalog(
+		namedDeferredFixture{name: "generic-review", description: "Read Notion pages and YouTrack issues from links, access project documentation and tickets for review."},
+		namedDeferredFixture{name: "notion-search", description: "Search connected Notion pages and databases."},
+		namedDeferredFixture{name: "youtrack-get_issue", description: "Read a YouTrack issue by ID."},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	search := NewSearchTool(catalog)
+	result, err := search.Execute(context.Background(), Call{
+		Name:      "tool_search",
+		Arguments: json.RawMessage(`{"action":"search","query":"read Notion pages and YouTrack issues from links","limit":2}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := result.Text()
+	if !strings.Contains(text, "notion-search") || !strings.Contains(text, "youtrack-get_issue") {
+		t.Fatalf("exactly named integrations were not prioritized: %s", text)
+	}
+	if strings.Contains(text, "generic-review") {
+		t.Fatalf("generic description match outranked named integrations: %s", text)
 	}
 }
