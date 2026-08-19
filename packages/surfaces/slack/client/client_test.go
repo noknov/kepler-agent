@@ -87,6 +87,32 @@ func TestStartStreamIncludesRecipientMetadata(t *testing.T) {
 	if payload["channel"] != "C1" || payload["thread_ts"] != "100.000" || payload["recipient_user_id"] != "U1" || payload["recipient_team_id"] != "T123" {
 		t.Fatalf("payload=%#v", payload)
 	}
+	if _, ok := payload["task_display_mode"]; ok {
+		t.Fatalf("text stream should not send an unused task display mode: %#v", payload)
+	}
+}
+
+func TestStartStreamOmitsRecipientMetadataForDM(t *testing.T) {
+	var payload map[string]any
+	client := &Client{token: "xoxb-test", teamID: "T123", httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"ts":"123.456"}`)), Request: r}, nil
+	})}}
+
+	if _, err := client.StartStream(context.Background(), "D1", "100.000", "U1"); err != nil {
+		t.Fatal(err)
+	}
+	if payload["channel"] != "D1" || payload["thread_ts"] != "100.000" {
+		t.Fatalf("payload=%#v", payload)
+	}
+	if _, ok := payload["recipient_user_id"]; ok {
+		t.Fatalf("DM stream must omit recipient metadata: %#v", payload)
+	}
+	if _, ok := payload["recipient_team_id"]; ok {
+		t.Fatalf("DM stream must omit recipient metadata: %#v", payload)
+	}
 }
 
 func TestAppendAndStopStream(t *testing.T) {
@@ -114,6 +140,14 @@ func TestAppendAndStopStream(t *testing.T) {
 	}
 	if appendPayload["channel"] != "C1" || appendPayload["ts"] != "123.456" {
 		t.Fatalf("append payload=%#v", appendPayload)
+	}
+	chunks, ok := appendPayload["chunks"].([]any)
+	if !ok || len(chunks) != 1 {
+		t.Fatalf("chunks=%#v, want one markdown chunk", appendPayload["chunks"])
+	}
+	chunk, ok := chunks[0].(map[string]any)
+	if !ok || chunk["type"] != "markdown_text" || chunk["text"] != "hello" {
+		t.Fatalf("chunk=%#v, want Slack markdown_text chunk", chunks[0])
 	}
 	if err := client.StopStream(context.Background(), "C1", "123.456"); err != nil {
 		t.Fatal(err)

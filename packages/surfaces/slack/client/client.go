@@ -186,15 +186,17 @@ func (c *Client) UpdateView(ctx context.Context, viewID string, view map[string]
 
 func (c *Client) StartStream(ctx context.Context, channel, threadTS, recipientUserID string) (string, error) {
 	payload := map[string]any{
-		"channel":           channel,
-		"thread_ts":         threadTS,
-		"task_display_mode": "dense",
+		"channel":   channel,
+		"thread_ts": threadTS,
 	}
-	if recipientUserID != "" {
+	// Slack requires recipient metadata for channel streams; a DM already
+	// identifies its recipient, so its request uses only the documented DM
+	// arguments.
+	if streamingChannelRequiresRecipient(channel) && recipientUserID != "" {
 		payload["recipient_user_id"] = recipientUserID
-	}
-	if c.teamID != "" {
-		payload["recipient_team_id"] = c.teamID
+		if c.teamID != "" {
+			payload["recipient_team_id"] = c.teamID
+		}
 	}
 	var out struct {
 		OK    bool   `json:"ok"`
@@ -208,6 +210,11 @@ func (c *Client) StartStream(ctx context.Context, channel, threadTS, recipientUs
 		return "", fmt.Errorf("slack chat.startStream failed: %s", out.Error)
 	}
 	return out.TS, nil
+}
+
+func streamingChannelRequiresRecipient(channel string) bool {
+	channel = strings.TrimSpace(channel)
+	return strings.HasPrefix(channel, "C") || strings.HasPrefix(channel, "G")
 }
 
 func (c *Client) AppendStream(ctx context.Context, channel, messageTS string, chunks []map[string]any) error {
