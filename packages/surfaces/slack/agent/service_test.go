@@ -222,6 +222,17 @@ func TestContextLifecycleDoesNotFlashTransientStatus(t *testing.T) {
 	}
 }
 
+func TestEnrichInputWithThreadImages(t *testing.T) {
+	history := []model.Message{{Role: model.RoleUser, Content: []model.Content{
+		{Type: model.ContentText, Text: "pets"},
+		{Type: model.ContentImage, ImageURL: "data:image/png;base64,abc"},
+	}}}
+	input := enrichInputWithThreadImages(model.TextMessage(model.RoleUser, "再看看"), history)
+	if len(input.Content) != 2 || input.Content[1].Type != model.ContentImage {
+		t.Fatalf("input=%+v", input.Content)
+	}
+}
+
 func TestUnsupportedImagesAreRemovedWithoutMutatingInput(t *testing.T) {
 	input := model.Message{Role: model.RoleUser, Content: []model.Content{
 		{Type: model.ContentText, Text: "看看"},
