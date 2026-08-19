@@ -111,7 +111,6 @@ func TestLoadIntegrationConfig(t *testing.T) {
 		"GITHUB_TOKEN":             "github-token",
 		"GITHUB_DEFAULT_OWNER":     "owner",
 		"GITHUB_DEFAULT_REPO":      "repo",
-		"NOTION_TOKEN":             "notion-token",
 		"WEB_SEARCH_PROVIDER":      "brave",
 		"WEB_SEARCH_BRAVE_API_KEY": "brave-token",
 	})
@@ -128,9 +127,6 @@ func TestLoadIntegrationConfig(t *testing.T) {
 	}
 	if cfg.Integrations.GitHub.Token != "github-token" || cfg.Integrations.GitHub.DefaultRepo != "repo" {
 		t.Fatalf("GitHub integration config = %#v", cfg.Integrations.GitHub)
-	}
-	if cfg.Integrations.Notion.Token != "notion-token" {
-		t.Fatalf("Notion token = %q, want notion-token", cfg.Integrations.Notion.Token)
 	}
 	if cfg.Integrations.WebSearch.Provider != "brave" || cfg.Integrations.WebSearch.BraveKey != "brave-token" {
 		t.Fatalf("WebSearch integration config = %#v", cfg.Integrations.WebSearch)
@@ -853,7 +849,6 @@ func resetConfigEnv(t *testing.T) {
 		"GITHUB_API_BASE_URL",
 		"GITHUB_DEFAULT_OWNER",
 		"GITHUB_DEFAULT_REPO",
-		"NOTION_TOKEN",
 		"NOTION_DATABASE_ID",
 		"NOTION_TITLE_PROPERTY",
 		"NOTION_VERSION",

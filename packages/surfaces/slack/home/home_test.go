@@ -2,9 +2,12 @@ package slackhome
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/noknov/slack-copilot-agent/packages/config"
+	"github.com/noknov/slack-copilot-agent/packages/connections"
 )
 
 type stubPublisher struct {
@@ -35,5 +38,97 @@ func TestControllerRequestRefreshFallsBackToPublish(t *testing.T) {
 	}
 	if pub.userID != "U123" {
 		t.Fatalf("userID = %q, want U123", pub.userID)
+	}
+}
+
+func TestConnectionBlocksShowsLocalGCPAsConnectedWithoutButton(t *testing.T) {
+	store, err := connections.NewFileStore(t.TempDir()+"/connections.json", "test-secret")
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	controller := Controller{
+		Cfg: config.Config{
+			Integrations: config.IntegrationConfig{
+				GCP: config.GCPConfig{DefaultProject: "my-gcp-project"},
+			},
+		},
+		Connections: connections.Service{
+			Store: store,
+			Config: connections.Config{
+				PublicBaseURL: "https://example.com",
+			},
+		},
+	}
+	blocks := controller.connectionBlocks("U123")
+	if len(blocks) == 0 {
+		t.Fatal("expected connection blocks for local GCP credentials")
+	}
+	raw, err := json.Marshal(blocks)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "Google Cloud") {
+		t.Fatalf("expected Google Cloud in blocks, got %s", body)
+	}
+	if !strings.Contains(body, "Connected") {
+		t.Fatalf("expected Connected status, got %s", body)
+	}
+	if !strings.Contains(body, "server credentials") {
+		t.Fatalf("expected server credentials label, got %s", body)
+	}
+	if strings.Contains(body, `"text":"Connect"`) || strings.Contains(body, `"text":"Reconnect"`) {
+		t.Fatalf("expected no connect button, got %s", body)
+	}
+}
+
+func TestConnectionBlocksShowsGitHubServerCredentials(t *testing.T) {
+	store, err := connections.NewFileStore(t.TempDir()+"/connections.json", "test-secret")
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	controller := Controller{
+		Cfg: config.Config{
+			Integrations: config.IntegrationConfig{
+				GitHub: config.GitHubConfig{Token: "ghp-test"},
+			},
+		},
+		Connections: connections.Service{Store: store},
+	}
+	blocks := controller.connectionBlocks("U123")
+	raw, err := json.Marshal(blocks)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "GitHub") || !strings.Contains(body, "server credentials") {
+		t.Fatalf("expected GitHub server credentials block, got %s", body)
+	}
+}
+
+func TestConnectionBlocksShowsYouTrackServerCredentials(t *testing.T) {
+	store, err := connections.NewFileStore(t.TempDir()+"/connections.json", "test-secret")
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	controller := Controller{
+		Cfg: config.Config{
+			Integrations: config.IntegrationConfig{
+				YouTrack: config.YouTrackConfig{
+					URL:   "https://clareai.youtrack.cloud",
+					Token: "perm-test",
+				},
+			},
+		},
+		Connections: connections.Service{Store: store},
+	}
+	blocks := controller.connectionBlocks("U123")
+	raw, err := json.Marshal(blocks)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "YouTrack") || !strings.Contains(body, "server credentials") {
+		t.Fatalf("expected YouTrack server credentials block, got %s", body)
 	}
 }

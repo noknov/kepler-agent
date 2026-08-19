@@ -15,6 +15,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
 	"github.com/noknov/slack-copilot-agent/packages/config"
+	"github.com/noknov/slack-copilot-agent/packages/connections"
 	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
 	"github.com/noknov/slack-copilot-agent/packages/observability"
 	"github.com/noknov/slack-copilot-agent/packages/providers"
@@ -34,12 +35,13 @@ type Profile struct {
 }
 
 type ProfileDependencies struct {
-	Tools      *tool.Catalog
-	Postgres   *pgxpool.Pool
-	Redis      *redisclient.Client
-	ToolSpills ToolSpillStore
-	Events     transcript.Sink
-	Metrics    *observability.Recorder
+	Tools                   *tool.Catalog
+	Postgres                *pgxpool.Pool
+	Redis                   *redisclient.Client
+	ToolSpills              ToolSpillStore
+	Events                  transcript.Sink
+	Metrics                 *observability.Recorder
+	ConnectionContinuations connections.ContinuationStore
 }
 
 func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
@@ -83,6 +85,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		Model: client, Tools: catalog, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}, Transcript: PGTranscript{Pool: deps.Postgres}, Events: deps.Events,
 		Compactor: agentruntime.ModelCompactor{Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer}, Artifacts: artifacts,
 		Environment: environment.Config{WorkspaceRoots: cfg.Security.WorkspaceRoots},
+		ConnectionContinuations: deps.ConnectionContinuations,
 	})
 	if err != nil {
 		return Profile{}, err

@@ -1,6 +1,7 @@
 package connections
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -23,6 +24,8 @@ type Config struct {
 	Slack         SlackOAuthConfig
 	GitHub        GitHubOAuthConfig
 	ClickStack    ClickStackOAuthConfig
+	GCP           GCPOAuthConfig
+	Notion        NotionOAuthConfig
 }
 
 type SlackOAuthConfig struct {
@@ -57,15 +60,30 @@ func customClickStackURL(raw string) bool {
 	return raw != "" && raw != clickstackDefaultMCPURL
 }
 
-func (c Config) OAuthEnabled() bool {
-	return c.SlackEnabled() || c.GitHubEnabled() || c.ClickStackEnabled()
+func (c Config) GCPEnabled() bool {
+	return strings.TrimSpace(c.PublicBaseURL) != "" && c.GCP.Enabled()
 }
 
+func (c Config) NotionEnabled() bool {
+	return strings.TrimSpace(c.PublicBaseURL) != "" && c.Notion.Enabled()
+}
+
+func (c Config) OAuthEnabled() bool {
+	return c.SlackEnabled() || c.GitHubEnabled() || c.ClickStackEnabled() || c.GCPEnabled() || c.NotionEnabled()
+}
+
+// OAuthCompletedHandler runs after a successful OAuth callback.
+type OAuthCompletedHandler func(ctx context.Context, userID, provider string) error
+
 type Service struct {
-	Store           Store
-	Config          Config
-	clickstackOAuth *clickstackOAuth
+	Store             Store
+	Config            Config
+	Continuations     ContinuationStore
+	OnOAuthCompleted  OAuthCompletedHandler
+	clickstackOAuth   *clickstackOAuth
+	gcpOAuth          *gcpOAuth
 	clickstackRefresh sync.Map
+	gcpRefresh        sync.Map
 }
 
 func (s *Service) clickstack() *clickstackOAuth {
@@ -73,6 +91,13 @@ func (s *Service) clickstack() *clickstackOAuth {
 		s.clickstackOAuth = newClickStackOAuth(s.Config.ClickStack)
 	}
 	return s.clickstackOAuth
+}
+
+func (s *Service) gcp() *gcpOAuth {
+	if s.gcpOAuth == nil {
+		s.gcpOAuth = newGCPOAuth(s.Config.GCP)
+	}
+	return s.gcpOAuth
 }
 
 func (s Service) ProviderOAuthEnabled(provider string) bool {
@@ -83,6 +108,10 @@ func (s Service) ProviderOAuthEnabled(provider string) bool {
 		return s.Config.GitHubEnabled()
 	case ProviderClickStack:
 		return s.Config.ClickStackEnabled()
+	case ProviderGCP:
+		return s.Config.GCPEnabled()
+	case ProviderNotion:
+		return s.Config.NotionEnabled()
 	default:
 		return false
 	}
@@ -169,6 +198,26 @@ func (s Service) HandleStart(w http.ResponseWriter, r *http.Request, provider, s
 			return
 		}
 		http.Redirect(w, r, authorizeURL, http.StatusFound)
+	case ProviderGCP:
+		if !s.Config.GCPEnabled() {
+			http.Error(w, "gcp oauth is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		authorizeURL := s.gcp().buildAuthorizeURL(s.callbackURL(provider), state)
+		http.Redirect(w, r, authorizeURL, http.StatusFound)
+	case ProviderNotion:
+		if !s.Config.NotionEnabled() {
+			http.Error(w, "notion oauth is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		values := url.Values{
+			"client_id":     {s.Config.Notion.ClientID},
+			"response_type": {"code"},
+			"owner":         {"user"},
+			"redirect_uri":  {s.callbackURL(provider)},
+			"state":         {state},
+		}
+		http.Redirect(w, r, "https://api.notion.com/v1/oauth/authorize?"+values.Encode(), http.StatusFound)
 	default:
 		http.Error(w, "unsupported provider", http.StatusNotFound)
 	}
@@ -223,10 +272,35 @@ func (s Service) HandleCallback(w http.ResponseWriter, r *http.Request, provider
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+	case ProviderGCP:
+		if !s.Config.GCPEnabled() {
+			http.Error(w, "gcp oauth is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		response, err := s.gcp().exchange(r.Context(), code, s.callbackURL(provider))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		if err := s.storeGCPBundle(r.Context(), userID, response, "", nil); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	case ProviderNotion:
+		token, account, err := s.exchangeNotion(r.Context(), code)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		if err := s.Store.UpsertToken(r.Context(), userID, provider, token, nil, account); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	default:
 		http.Error(w, "unsupported provider", http.StatusNotFound)
 		return
 	}
+	s.notifyOAuthCompleted(r.Context(), userID, provider)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = io.WriteString(w, "<!doctype html><html><body><h1>Connected</h1><p>You can return to Slack and continue.</p></body></html>")
 }
@@ -318,6 +392,53 @@ func (s Service) exchangeGitHub(ctx context.Context, code string) (token, accoun
 	return payload.AccessToken, account, scopes, nil
 }
 
+func (s Service) exchangeNotion(ctx context.Context, code string) (token, account string, err error) {
+	redirectURI := s.callbackURL(ProviderNotion)
+	body := map[string]string{
+		"grant_type":   "authorization_code",
+		"code":         code,
+		"redirect_uri": redirectURI,
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return "", "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.notion.com/v1/oauth/token", bytes.NewReader(payload))
+	if err != nil {
+		return "", "", err
+	}
+	req.SetBasicAuth(s.Config.Notion.ClientID, s.Config.Notion.ClientSecret)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Notion-Version", "2022-06-28")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", "", err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", "", fmt.Errorf("notion oauth failed: %s", strings.TrimSpace(string(data)))
+	}
+	var parsed struct {
+		AccessToken   string `json:"access_token"`
+		WorkspaceName string `json:"workspace_name"`
+		Error         string `json:"error"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return "", "", err
+	}
+	if parsed.AccessToken == "" {
+		if parsed.Error != "" {
+			return "", "", fmt.Errorf("notion oauth failed: %s", parsed.Error)
+		}
+		return "", "", fmt.Errorf("notion oauth returned an empty token")
+	}
+	return parsed.AccessToken, parsed.WorkspaceName, nil
+}
+
 func (s Service) githubLogin(ctx context.Context, token string) (string, error) {
 	base := strings.TrimRight(s.Config.GitHub.APIBaseURL, "/")
 	if base == "" {
@@ -354,6 +475,16 @@ func (s Service) Required(userID, provider string) error {
 	return &RequiredError{Provider: provider, Title: pluginTitle(provider), AuthURL: authURL}
 }
 
+// Reauthorize returns a connection-required error with a fresh OAuth URL even when
+// a token already exists (for example when Notion returns 403 for a page).
+func (s Service) Reauthorize(userID, provider string) error {
+	authURL, err := s.StartURL(userID, provider)
+	if err != nil {
+		return &RequiredError{Provider: provider, Title: pluginTitle(provider), Reauthorize: true}
+	}
+	return &RequiredError{Provider: provider, Title: pluginTitle(provider), AuthURL: authURL, Reauthorize: true}
+}
+
 func ToolResult(err error) (tool.Result, error) {
 	var required *RequiredError
 	if !AsRequired(err, &required) {
@@ -362,16 +493,35 @@ func ToolResult(err error) (tool.Result, error) {
 		}
 		return tool.Result{}, err
 	}
-	text := fmt.Sprintf("%s is not connected.", required.Title)
+	text := connectionRequiredText(required)
+	return tool.Result{
+		Content:        []model.Content{{Type: model.ContentText, Text: text}},
+		IsError:        true,
+		ErrorCode:      "connection_required",
+		NeedsUserInput: true,
+		Metadata:       map[string]any{"provider": required.Provider, "auth_url": required.AuthURL, "reauthorize": required.Reauthorize},
+	}, nil
+}
+
+func connectionRequiredText(required *RequiredError) string {
+	title := required.Title
+	if title == "" {
+		title = required.Provider
+	}
+	if required.Reauthorize {
+		text := fmt.Sprintf("%s needs additional access.", title)
+		if required.AuthURL != "" {
+			text += fmt.Sprintf("\nReconnect here: %s", required.AuthURL)
+		}
+		text += "\nAfter reconnecting, I will continue automatically in Slack."
+		return text
+	}
+	text := fmt.Sprintf("%s is not connected.", title)
 	if required.AuthURL != "" {
 		text += fmt.Sprintf("\nConnect here: %s", required.AuthURL)
 	}
-	return tool.Result{
-		Content:      []model.Content{{Type: model.ContentText, Text: text}},
-		IsError:      true,
-		ErrorCode:    "connection_required",
-		Metadata:     map[string]any{"provider": required.Provider, "auth_url": required.AuthURL},
-	}, nil
+	text += "\nAfter connecting, I will continue automatically in Slack. You can also reply in this thread to continue."
+	return text
 }
 
 func AsRequired(err error, target **RequiredError) bool {

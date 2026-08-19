@@ -3,6 +3,7 @@ package hostedtools
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 	"github.com/noknov/slack-copilot-agent/packages/codeintel"
@@ -72,12 +73,13 @@ func PolicyForSurface(cfg config.Config, surface SurfaceOptions) tool.SurfacePol
 func policyForSurface(cfg config.Config, surface SurfaceOptions) tool.SurfacePolicy {
 	integrations := cfg.Integrations
 	availableDeps := map[string]bool{
-		"github":     integrations.GitHub.Token != "" || cfg.Connections.GitHubOAuthEnabled(),
+		"github":     integrations.GitHub.Token != "",
 		"luckin":     integrations.Luckin.MCPToken != "",
 		"clickstack": integrations.ClickStack.Enabled(),
-		"notion":     integrations.Notion.Token != "",
-		"tts":      integrations.TTS.APIKey != "",
-		"youtrack": integrations.YouTrack.URL != "" && integrations.YouTrack.Token != "",
+		"gcp":        cfg.Connections.GCPOAuthEnabled() || integrations.GCP.DefaultProject != "" || strings.TrimSpace(integrations.GCP.GCloudPath) != "",
+		"notion":     cfg.Connections.NotionOAuthEnabled(),
+		"tts":        integrations.TTS.APIKey != "",
+		"youtrack":   integrations.YouTrack.URL != "" && integrations.YouTrack.Token != "",
 	}
 	for name, available := range surface.AvailableDeps {
 		availableDeps[name] = available
@@ -87,6 +89,12 @@ func policyForSurface(cfg config.Config, surface SurfaceOptions) tool.SurfacePol
 	}
 	if surface.Connections != nil && surface.Connections.Config.ClickStackEnabled() {
 		availableDeps["clickstack-connection"] = true
+	}
+	if surface.Connections != nil && surface.Connections.Config.GCPEnabled() {
+		availableDeps["gcp-connection"] = true
+	}
+	if surface.Connections != nil && surface.Connections.Config.NotionEnabled() {
+		availableDeps["notion-connection"] = true
 	}
 	return tool.SurfacePolicy{
 		Surface:       surface.Name,
@@ -144,71 +152,82 @@ func registerCodeTools(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg con
 
 func registerIntegrationTools(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.Config, commandPolicy safety.CommandPolicy, conn *connections.Service) {
 	integrations := cfg.Integrations
-	if integrations.K8s.KubectlPath != "" || integrations.K8s.DefaultContext != "" || integrations.K8s.DefaultCluster != "" {
-		k8sBase := k8sTools.Base{
-			KubectlPath:      integrations.K8s.KubectlPath,
-			DefaultContext:   integrations.K8s.DefaultContext,
-			DefaultCluster:   integrations.K8s.DefaultCluster,
-			DefaultNamespace: integrations.K8s.DefaultNamespace,
-			Guard:            commandPolicy,
-			Timeout:          cfg.Tools.CommandTimeout,
-		}
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.ContextsTool{Base: k8sBase})
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.GetPodsTool{Base: k8sBase})
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.LogsTool{Base: k8sBase})
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.DescribeTool{Base: k8sBase})
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.TopTool{Base: k8sBase})
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.EventsTool{Base: k8sBase})
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.RolloutTool{Base: k8sBase})
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.GetTool{Base: k8sBase})
+	k8sDefaults := k8sTools.Defaults{
+		Project:   integrations.GCP.DefaultProject,
+		Region:    integrations.GCP.DefaultRegion,
+		Cluster:   integrations.GCP.DefaultCluster,
+		Namespace: integrations.K8s.DefaultNamespace,
 	}
+	if k8sDefaults.Namespace == "" {
+		k8sDefaults.Namespace = integrations.GCP.DefaultNamespace
+	}
+	gcpDefaults := gcpTools.Defaults{
+		Project:   integrations.GCP.DefaultProject,
+		Namespace: integrations.GCP.DefaultNamespace,
+		Cluster:   integrations.GCP.DefaultCluster,
+		Region:    integrations.GCP.DefaultRegion,
+	}
+	gcpTimeout := cfg.Tools.CommandTimeout
 
+	var k8sSource k8sTools.TokenSource
+	var gcpSource gcpTools.TokenSource
+	if conn != nil && conn.Config.GCPEnabled() {
+		k8sSource = k8sTools.ConnectedSource{Service: *conn, Defaults: k8sDefaults}
+		gcpSource = gcpTools.ConnectedSource{Service: *conn, Defaults: gcpDefaults}
+	} else {
+		local := gcpTools.LocalTokenSource{
+			GCloudPath: integrations.GCP.GCloudPath,
+			Defaults:   gcpDefaults,
+			Timeout:    gcpTimeout,
+		}
+		gcpSource = local
+		k8sSource = k8sTools.LocalTokenSource{
+			GCloudPath: integrations.GCP.GCloudPath,
+			Defaults:   k8sDefaults,
+			Timeout:    gcpTimeout,
+		}
+	}
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.ContextsTool{Source: k8sSource, Defaults: k8sDefaults, Timeout: gcpTimeout})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.GetPodsTool{Source: k8sSource, Defaults: k8sDefaults, Timeout: gcpTimeout})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.LogsTool{Source: k8sSource, Defaults: k8sDefaults, Timeout: gcpTimeout})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.DescribeTool{Source: k8sSource, Defaults: k8sDefaults, Timeout: gcpTimeout})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.TopTool{Source: k8sSource, Defaults: k8sDefaults, Timeout: gcpTimeout})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.EventsTool{Source: k8sSource, Defaults: k8sDefaults, Timeout: gcpTimeout})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.RolloutTool{Source: k8sSource, Defaults: k8sDefaults, Timeout: gcpTimeout})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, k8sTools.GetTool{Source: k8sSource, Defaults: k8sDefaults, Timeout: gcpTimeout})
 	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, gcpTools.LogsTool{
-		GCloudPath:       integrations.GCP.GCloudPath,
-		DefaultProject:   integrations.GCP.DefaultProject,
-		DefaultNamespace: integrations.GCP.DefaultNamespace,
-		DefaultCluster:   integrations.GCP.DefaultCluster,
-		DefaultRegion:    integrations.GCP.DefaultRegion,
-		Guard:            commandPolicy,
-		Timeout:          cfg.Tools.CommandTimeout,
+		Source:   gcpSource,
+		Defaults: gcpDefaults,
+		Timeout:  gcpTimeout,
 	})
 	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, gcpTools.RunServicesTool{
-		GCloudPath:     integrations.GCP.GCloudPath,
-		DefaultProject: integrations.GCP.DefaultProject,
-		DefaultRegion:  integrations.GCP.DefaultRegion,
-		Guard:          commandPolicy,
-		Timeout:        cfg.Tools.CommandTimeout,
+		Source:   gcpSource,
+		Defaults: gcpDefaults,
+		Timeout:  gcpTimeout,
 	})
 	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, gcpTools.RunRevisionsTool{
-		GCloudPath:     integrations.GCP.GCloudPath,
-		DefaultProject: integrations.GCP.DefaultProject,
-		DefaultRegion:  integrations.GCP.DefaultRegion,
-		Guard:          commandPolicy,
-		Timeout:        cfg.Tools.CommandTimeout,
+		Source:   gcpSource,
+		Defaults: gcpDefaults,
+		Timeout:  gcpTimeout,
 	})
 	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, gcpTools.ClustersTool{
-		GCloudPath:     integrations.GCP.GCloudPath,
-		DefaultProject: integrations.GCP.DefaultProject,
-		DefaultRegion:  integrations.GCP.DefaultRegion,
-		Guard:          commandPolicy,
-		Timeout:        cfg.Tools.CommandTimeout,
+		Source:   gcpSource,
+		Defaults: gcpDefaults,
+		Timeout:  gcpTimeout,
 	})
 
 	notionClient := notionTools.Client{
-		Token:         integrations.Notion.Token,
 		DatabaseID:    integrations.Notion.DatabaseID,
 		TitleProperty: integrations.Notion.TitleProperty,
 		Version:       integrations.Notion.Version,
 	}
-	if notionClient.Token != "" {
-		_ = catalog.RegisterVisible(policy, notionTools.SearchTool{Client: notionClient})
-		_ = catalog.RegisterVisible(policy, notionTools.GetPageTool{Client: notionClient})
-		_ = catalog.RegisterVisible(policy, notionTools.QueryDatabaseTool{Client: notionClient})
-	} else {
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, notionTools.SearchTool{Client: notionClient})
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, notionTools.GetPageTool{Client: notionClient})
-		_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, notionTools.QueryDatabaseTool{Client: notionClient})
+	var notionSource notionTools.ClientSource
+	if conn != nil && conn.Config.NotionEnabled() {
+		notionSource = notionTools.ConnectedSource{Service: *conn, Defaults: notionClient}
 	}
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, notionTools.SearchTool{Source: notionSource, Client: notionClient})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, notionTools.GetPageTool{Source: notionSource, Client: notionClient})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, notionTools.QueryDatabaseTool{Source: notionSource, Client: notionClient})
 
 	youtrackClient := youtrackTools.Client{BaseURL: integrations.YouTrack.URL, Token: integrations.YouTrack.Token}
 	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, youtrackTools.GetIssueTool{Client: youtrackClient})
@@ -220,15 +239,11 @@ func registerIntegrationTools(catalog *tool.Catalog, policy tool.SurfacePolicy, 
 		Owner:      integrations.GitHub.DefaultOwner,
 		Repo:       integrations.GitHub.DefaultRepo,
 	}
-	var githubSource githubTools.ClientSource
-	if conn != nil && conn.Config.GitHubEnabled() {
-		githubSource = githubTools.ConnectedSource{Service: *conn, Defaults: githubClient}
-	}
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.DispatchWorkflowTool{Source: githubSource, Client: githubClient})
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.WorkflowRunsTool{Source: githubSource, Client: githubClient})
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.PRDiffTool{Source: githubSource, Client: githubClient})
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.PRFileDiffTool{Source: githubSource, Client: githubClient})
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.JobLogsTool{Source: githubSource, Client: githubClient})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.DispatchWorkflowTool{Client: githubClient})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.WorkflowRunsTool{Client: githubClient})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.PRDiffTool{Client: githubClient})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.PRFileDiffTool{Client: githubClient})
+	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, githubTools.JobLogsTool{Client: githubClient})
 
 	luckinClient := &luckinTools.Client{
 		MCP: &mcp.Client{

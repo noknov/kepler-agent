@@ -4,16 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
+	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
 type LogsTool struct {
-	Base Base
+	Source   TokenSource
+	Defaults Defaults
+	Timeout  time.Duration
 }
-
 
 func (t LogsTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
@@ -52,21 +53,16 @@ func (t LogsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, err
 	if args.Pod == "" {
 		return tool.Result{}, fmt.Errorf("pod name or label selector is required")
 	}
-
-	// kubectl logs supports label selectors: pass -l flag when the value
-	// looks like a selector (contains '=') rather than a pod name.
-	var cmdArgs []string
-	if strings.Contains(args.Pod, "=") {
-		cmdArgs = []string{"logs", "-l", args.Pod}
-	} else {
-		cmdArgs = []string{"logs", args.Pod}
+	client, pending, err := begin(ctx, t.Source, call)
+	if pending != nil {
+		return *pending, nil
 	}
-	cmdArgs = t.Base.appendNamespace(cmdArgs, args.Namespace)
-	if args.Container != "" {
-		cmdArgs = append(cmdArgs, "-c", args.Container)
+	if err != nil {
+		return tool.Result{}, err
 	}
-	if args.Since != "" {
-		cmdArgs = append(cmdArgs, "--since", args.Since)
+	target, err := resolveClusterTarget(args.Context, t.Defaults, args.Namespace)
+	if err != nil {
+		return tool.Result{}, err
 	}
 	tail := args.Tail
 	if tail <= 0 {
@@ -75,23 +71,37 @@ func (t LogsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, err
 	if tail > 2000 {
 		tail = 2000
 	}
-	cmdArgs = append(cmdArgs, "--tail", strconv.Itoa(tail))
-	if args.Previous {
-		cmdArgs = append(cmdArgs, "--previous")
+	opts := podLogOptions{
+		container:  args.Container,
+		tail:       tail,
+		since:      args.Since,
+		previous:   args.Previous,
+		timestamps: args.Timestamps,
 	}
-	if args.Timestamps {
-		cmdArgs = append(cmdArgs, "--timestamps")
-	}
+	timeout := t.timeout()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
-	out, err := t.Base.run(ctx, args.Context, cmdArgs)
+	var out string
+	if strings.Contains(args.Pod, "=") {
+		out, err = client.podLogsBySelector(ctx, target, args.Pod, opts)
+	} else {
+		out, err = client.podLogs(ctx, target, args.Pod, args.Container, tail, args.Since, args.Previous, args.Timestamps)
+	}
 	if err != nil {
 		return tool.Result{}, err
 	}
-
 	if args.Grep != "" {
 		out = grepLines(out, args.Grep)
 	}
 	return tool.TextResult(out), nil
+}
+
+func (t LogsTool) timeout() time.Duration {
+	if t.Timeout > 0 {
+		return t.Timeout
+	}
+	return 30 * time.Second
 }
 
 func grepLines(text, pattern string) string {

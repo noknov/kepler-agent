@@ -1,31 +1,23 @@
 package gcp
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/prompts"
-	"github.com/noknov/slack-copilot-agent/packages/safety"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	"github.com/noknov/slack-copilot-agent/packages/prompts"
 )
 
 type LogsTool struct {
-	GCloudPath       string
-	DefaultProject   string
-	DefaultNamespace string
-	DefaultCluster   string
-	DefaultRegion    string
-	Guard            safety.CommandPolicy
-	Timeout          time.Duration
+	Source   TokenSource
+	Defaults Defaults
+	Timeout  time.Duration
 }
-
 
 func (t LogsTool) Descriptor() tool.Descriptor {
 	dynamicHint := ""
@@ -63,13 +55,6 @@ func (t LogsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, err
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
 	}
-	project := args.Project
-	if project == "" {
-		project = t.DefaultProject
-	}
-	if project == "" {
-		return tool.Result{}, fmt.Errorf("GCP project is required; pass project in tool args or configure GCP_PROJECT as a default")
-	}
 	if args.Freshness == "" {
 		args.Freshness = "30m"
 	}
@@ -83,39 +68,58 @@ func (t LogsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, err
 		return tool.Result{}, fmt.Errorf("invalid severity %q", args.Severity)
 	}
 	filter := buildFilter(args.Filter, args.Severity, args.Namespace, args.Service)
-	format := args.Format
-	if format != "value" {
-		format = "json"
+	if freshnessClause, err := freshnessFilter(args.Freshness); err != nil {
+		return tool.Result{}, err
+	} else if freshnessClause != "" {
+		filter = joinFilters(filter, freshnessClause)
 	}
-	bin := t.GCloudPath
-	if bin == "" {
-		bin = "gcloud"
+
+	client, pending, err := begin(ctx, t.Source, call)
+	if pending != nil {
+		return *pending, nil
 	}
-	cmdArgs := []string{
-		"logging", "read", filter,
-		"--project", project,
-		"--freshness", args.Freshness,
-		"--limit", strconv.Itoa(args.Limit),
-		"--format", format,
-	}
-	if err := t.Guard.CheckArgv(append([]string{bin}, cmdArgs...)); err != nil {
+	if err != nil {
 		return tool.Result{}, err
 	}
-	timeout := t.Timeout
-	if timeout <= 0 {
-		timeout = 30 * time.Second
+	project, err := client.projectID(args.Project)
+	if err != nil {
+		return tool.Result{}, err
 	}
+	timeout := t.timeout()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-
-	cmd := exec.CommandContext(ctx, bin, cmdArgs...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return tool.Result{}, fmt.Errorf("gcloud logging read failed: %s", strings.TrimSpace(stderr.String()))
+	data, err := client.listLogEntries(ctx, project, filter, args.Limit)
+	if err != nil {
+		return tool.Result{}, err
 	}
-	return tool.TextResult(stdout.String()), nil
+	if strings.TrimSpace(args.Format) == "value" {
+		return tool.TextResult(formatLogEntriesValue(data)), nil
+	}
+	return tool.TextResult(string(data)), nil
+}
+
+func (t LogsTool) timeout() time.Duration {
+	if t.Timeout > 0 {
+		return t.Timeout
+	}
+	return 30 * time.Second
+}
+
+func (t LogsTool) defaultHint() string {
+	parts := make([]string, 0, 4)
+	if t.Defaults.Project != "" {
+		parts = append(parts, "project="+t.Defaults.Project)
+	}
+	if t.Defaults.Namespace != "" {
+		parts = append(parts, "namespace="+t.Defaults.Namespace)
+	}
+	if t.Defaults.Cluster != "" {
+		parts = append(parts, "cluster="+t.Defaults.Cluster)
+	}
+	if t.Defaults.Region != "" {
+		parts = append(parts, "region="+t.Defaults.Region)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func buildFilter(raw, severity, namespace, service string) string {
@@ -145,6 +149,58 @@ labels."k8s-pod/app_kubernetes_io/name"="`+service+`"
 	return strings.Join(parts, " AND ")
 }
 
+func joinFilters(parts ...string) string {
+	nonEmpty := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			nonEmpty = append(nonEmpty, part)
+		}
+	}
+	return strings.Join(nonEmpty, " AND ")
+}
+
+func freshnessFilter(freshness string) (string, error) {
+	d, err := parseFreshness(freshness)
+	if err != nil {
+		return "", err
+	}
+	if d <= 0 {
+		return "", nil
+	}
+	start := time.Now().UTC().Add(-d)
+	return fmt.Sprintf(`timestamp>="%s"`, start.Format("2006-01-02T15:04:05Z")), nil
+}
+
+var freshnessRe = regexp.MustCompile(`^(\d+)([smhd])$`)
+
+func parseFreshness(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	if raw == "" {
+		return 0, nil
+	}
+	matches := freshnessRe.FindStringSubmatch(raw)
+	if len(matches) != 3 {
+		return 0, fmt.Errorf("invalid freshness %q; use formats like 30m, 1h, 2d", raw)
+	}
+	value, err := strconv.Atoi(matches[1])
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("invalid freshness %q", raw)
+	}
+	switch matches[2] {
+	case "s":
+		return time.Duration(value) * time.Second, nil
+	case "m":
+		return time.Duration(value) * time.Minute, nil
+	case "h":
+		return time.Duration(value) * time.Hour, nil
+	case "d":
+		return time.Duration(value) * 24 * time.Hour, nil
+	default:
+		return 0, fmt.Errorf("invalid freshness %q", raw)
+	}
+}
+
 var severityRe = regexp.MustCompile(`^[A-Za-z]+$`)
 
 func validSeverity(severity string) bool {
@@ -160,19 +216,32 @@ func filterString(value string) string {
 	return value
 }
 
-func (t LogsTool) defaultHint() string {
-	parts := make([]string, 0, 4)
-	if t.DefaultProject != "" {
-		parts = append(parts, "project="+t.DefaultProject)
+func formatLogEntriesValue(data []byte) string {
+	var payload struct {
+		Entries []struct {
+			Timestamp string `json:"timestamp"`
+			Severity  string `json:"severity"`
+			Text      string `json:"textPayload"`
+			JSON      any    `json:"jsonPayload"`
+		} `json:"entries"`
 	}
-	if t.DefaultNamespace != "" {
-		parts = append(parts, "namespace="+t.DefaultNamespace)
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return string(data)
 	}
-	if t.DefaultCluster != "" {
-		parts = append(parts, "cluster="+t.DefaultCluster)
+	var lines []string
+	for _, entry := range payload.Entries {
+		line := strings.TrimSpace(entry.Timestamp)
+		if entry.Severity != "" {
+			line += " " + entry.Severity
+		}
+		if entry.Text != "" {
+			line += " " + entry.Text
+		} else if entry.JSON != nil {
+			if encoded, err := json.Marshal(entry.JSON); err == nil {
+				line += " " + string(encoded)
+			}
+		}
+		lines = append(lines, strings.TrimSpace(line))
 	}
-	if t.DefaultRegion != "" {
-		parts = append(parts, "region="+t.DefaultRegion)
-	}
-	return strings.Join(parts, ", ")
+	return strings.Join(lines, "\n")
 }

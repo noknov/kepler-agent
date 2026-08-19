@@ -3,36 +3,62 @@ package k8s
 import (
 	"context"
 	"encoding/json"
-	"strings"
+	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
 )
 
-// ContextsTool lists pre-provisioned kubeconfig contexts without exposing
-// credentials. Callers then pass one of these names to a k8s-* tool's context
-// argument; no shared default context is mutated.
-type ContextsTool struct{ Base Base }
-
+// ContextsTool lists GKE clusters available to the connected Google account.
+type ContextsTool struct {
+	Source   TokenSource
+	Defaults Defaults
+	Timeout  time.Duration
+}
 
 func (ContextsTool) Descriptor() tool.Descriptor {
-	return tool.FunctionDescriptor("k8s-list_contexts", "List available Kubernetes contexts. Pass a returned name as the context argument to another k8s tool; this does not change the process-wide kubeconfig default.", tool.ObjectSchema(nil, map[string]any{}))
+	return tool.FunctionDescriptor(
+		"k8s-list_contexts",
+		"List available GKE cluster contexts. Pass a returned gke_PROJECT_LOCATION_CLUSTER name as the context argument to another k8s tool.",
+		tool.ObjectSchema(nil, map[string]any{}),
+		tool.ReadNetworkParallel()...,
+	)
 }
 
 func (t ContextsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
-	// Decode so malformed tool arguments fail consistently with other tools.
 	var ignored map[string]any
 	if len(call.Arguments) > 0 && string(call.Arguments) != "null" {
 		if err := json.Unmarshal(call.Arguments, &ignored); err != nil {
 			return tool.Result{}, err
 		}
 	}
-	out, err := t.Base.run(ctx, "", []string{"config", "get-contexts", "-o", "name"})
+	client, pending, err := begin(ctx, t.Source, call)
+	if pending != nil {
+		return *pending, nil
+	}
 	if err != nil {
 		return tool.Result{}, err
 	}
-	out = strings.TrimSpace(out)
-	if out == "" {
-		out = "no Kubernetes contexts are configured"
+	project := t.Defaults.Project
+	if project == "" {
+		return tool.Result{}, errClusterRequired
+	}
+	timeout := t.timeout()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	data, err := client.listGKEClusters(ctx, project, t.Defaults.Region)
+	if err != nil {
+		return tool.Result{}, err
+	}
+	out, err := formatClusterContexts(data, project, t.Defaults.Region)
+	if err != nil {
+		return tool.Result{}, err
 	}
 	return tool.TextResult(out), nil
+}
+
+func (t ContextsTool) timeout() time.Duration {
+	if t.Timeout > 0 {
+		return t.Timeout
+	}
+	return 30 * time.Second
 }

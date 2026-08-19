@@ -79,7 +79,10 @@ func (c Client) httpClient() *http.Client {
 	return &http.Client{Timeout: 20 * time.Second}
 }
 
-type SearchTool struct{ Client Client }
+type SearchTool struct {
+	Source ClientSource
+	Client Client
+}
 
 func (t SearchTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
@@ -94,8 +97,12 @@ func (t SearchTool) Descriptor() tool.Descriptor {
 }
 
 func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
-	if !t.Client.enabled() {
-		return tool.Result{}, fmt.Errorf("Notion is not configured")
+	client, pending, err := begin(ctx, t.Source, t.Client, call)
+	if pending != nil {
+		return *pending, nil
+	}
+	if err != nil {
+		return tool.Result{}, err
 	}
 	var args struct {
 		Query string `json:"query"`
@@ -114,8 +121,11 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 		"query":     args.Query,
 		"page_size": args.Limit,
 	}
-	data, err := t.Client.do(ctx, http.MethodPost, "https://api.notion.com/v1/search", body)
+	data, err := client.do(ctx, http.MethodPost, "https://api.notion.com/v1/search", body)
 	if err != nil {
+		if result, convErr := toolResult(wrapAPIError(err, t.Source, call.Scope.UserID)); convErr == nil {
+			return result, nil
+		}
 		return tool.Result{}, err
 	}
 	content, err := summarizeNotionSearch(data)
@@ -196,7 +206,10 @@ func defaultString(v, fallback string) string {
 }
 
 // GetPageTool reads the full text content of a Notion page.
-type GetPageTool struct{ Client Client }
+type GetPageTool struct {
+	Source ClientSource
+	Client Client
+}
 
 func (t GetPageTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
@@ -211,8 +224,12 @@ func (t GetPageTool) Descriptor() tool.Descriptor {
 }
 
 func (t GetPageTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
-	if !t.Client.enabled() {
-		return tool.Result{}, fmt.Errorf("Notion is not configured")
+	client, pending, err := begin(ctx, t.Source, t.Client, call)
+	if pending != nil {
+		return *pending, nil
+	}
+	if err != nil {
+		return tool.Result{}, err
 	}
 	var args struct {
 		PageID string `json:"page_id"`
@@ -231,8 +248,11 @@ func (t GetPageTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	if err != nil {
 		return tool.Result{}, fmt.Errorf("page_id: %w", err)
 	}
-	content, err := t.Client.fetchPageContent(ctx, pageID, args.Depth, 0)
+	content, err := client.fetchPageContent(ctx, pageID, args.Depth, 0)
 	if err != nil {
+		if result, convErr := toolResult(wrapAPIError(err, t.Source, call.Scope.UserID)); convErr == nil {
+			return result, nil
+		}
 		return tool.Result{}, err
 	}
 	return tool.TextResult(content), nil
@@ -311,7 +331,10 @@ func blockPrefix(blockType string) string {
 }
 
 // QueryDatabaseTool queries a Notion database with optional filters and sorts.
-type QueryDatabaseTool struct{ Client Client }
+type QueryDatabaseTool struct {
+	Source ClientSource
+	Client Client
+}
 
 func (t QueryDatabaseTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
@@ -328,8 +351,12 @@ func (t QueryDatabaseTool) Descriptor() tool.Descriptor {
 }
 
 func (t QueryDatabaseTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
-	if !t.Client.enabled() {
-		return tool.Result{}, fmt.Errorf("Notion is not configured")
+	client, pending, err := begin(ctx, t.Source, t.Client, call)
+	if pending != nil {
+		return *pending, nil
+	}
+	if err != nil {
+		return tool.Result{}, err
 	}
 	var args struct {
 		DatabaseID string          `json:"database_id"`
@@ -348,9 +375,9 @@ func (t QueryDatabaseTool) Execute(ctx context.Context, call tool.Call) (tool.Re
 	}
 	dbID := strings.TrimSpace(args.DatabaseID)
 	if dbID == "" {
-		dbID = strings.TrimSpace(t.Client.DatabaseID)
+		dbID = strings.TrimSpace(client.DatabaseID)
 	}
-	dbID, err := validateNotionID(dbID)
+	dbID, err = validateNotionID(dbID)
 	if err != nil {
 		return tool.Result{}, fmt.Errorf("database_id: %w", err)
 	}
@@ -372,8 +399,11 @@ func (t QueryDatabaseTool) Execute(ctx context.Context, call tool.Call) (tool.Re
 	}
 
 	url := fmt.Sprintf("https://api.notion.com/v1/databases/%s/query", dbID)
-	data, err := t.Client.do(ctx, http.MethodPost, url, body)
+	data, err := client.do(ctx, http.MethodPost, url, body)
 	if err != nil {
+		if result, convErr := toolResult(wrapAPIError(err, t.Source, call.Scope.UserID)); convErr == nil {
+			return result, nil
+		}
 		return tool.Result{}, err
 	}
 	content, err := summarizeNotionSearch(data)

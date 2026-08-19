@@ -154,7 +154,6 @@ func (c ClickStackConfig) Enabled() bool {
 }
 
 type NotionConfig struct {
-	Token         string
 	DatabaseID    string
 	TitleProperty string
 	Version       string
@@ -185,13 +184,25 @@ type YouTrackConfig struct {
 }
 
 type ConnectionsConfig struct {
-	PublicBaseURL      string
-	EncryptionKey      string
-	SlackClientID      string
-	SlackClientSecret  string
-	GitHubClientID     string
-	GitHubClientSecret string
-	LocalOAuthPort     int
+	PublicBaseURL          string
+	EncryptionKey          string
+	SlackClientID          string
+	SlackClientSecret      string
+	GitHubClientID         string
+	GitHubClientSecret     string
+	GCPOAuthClientID       string
+	GCPOAuthClientSecret   string
+	NotionOAuthClientID    string
+	NotionOAuthClientSecret string
+	LocalOAuthPort         int
+}
+
+func (c ConnectionsConfig) GCPOAuthEnabled() bool {
+	return strings.TrimSpace(c.GCPOAuthClientID) != "" && strings.TrimSpace(c.GCPOAuthClientSecret) != ""
+}
+
+func (c ConnectionsConfig) NotionOAuthEnabled() bool {
+	return strings.TrimSpace(c.NotionOAuthClientID) != "" && strings.TrimSpace(c.NotionOAuthClientSecret) != ""
 }
 
 func (c ConnectionsConfig) SlackOAuthEnabled() bool {
@@ -375,7 +386,6 @@ func loadIntegrations() IntegrationConfig {
 			DefaultStyle: os.Getenv("TTS_DEFAULT_STYLE"),
 		},
 		Notion: NotionConfig{
-			Token:         os.Getenv("NOTION_TOKEN"),
 			DatabaseID:    os.Getenv("NOTION_DATABASE_ID"),
 			TitleProperty: env("NOTION_TITLE_PROPERTY", "Name"),
 			Version:       env("NOTION_VERSION", "2022-06-28"),
@@ -429,6 +439,10 @@ func loadConnections() ConnectionsConfig {
 		SlackClientSecret:  clientSecret,
 		GitHubClientID:     os.Getenv("GITHUB_OAUTH_CLIENT_ID"),
 		GitHubClientSecret: os.Getenv("GITHUB_OAUTH_CLIENT_SECRET"),
+		GCPOAuthClientID:     os.Getenv("GCP_OAUTH_CLIENT_ID"),
+		GCPOAuthClientSecret: os.Getenv("GCP_OAUTH_CLIENT_SECRET"),
+		NotionOAuthClientID:  os.Getenv("NOTION_OAUTH_CLIENT_ID"),
+		NotionOAuthClientSecret: os.Getenv("NOTION_OAUTH_CLIENT_SECRET"),
 		LocalOAuthPort:     port,
 	}
 }

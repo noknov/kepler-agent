@@ -125,7 +125,9 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	events := transcript.NewFanout(runSink)
 	workspacePolicy := safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}
 	connStore := connections.PGStore{Pool: stores.PGPool, SecretKey: cfg.Connections.EncryptionKey}
+	continuations := connections.NewRedisContinuationStore(stores.Redis)
 	connService := connections.NewServiceFromConfig(connStore, cfg)
+	connService.Continuations = continuations
 	surface := hostedTools.SurfaceOptions{Name: "slack", AvailableDeps: map[string]bool{
 		"slack":    slackClient != nil,
 		"reminder": stores.Reminders != nil,
@@ -138,6 +140,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	slackTools.AddToCatalog(catalog, hostedTools.PolicyForSurface(cfg, surface), cfg, slackClient, stores.Reminders, stores.Redis, &connService)
 	profile, profileErr := hosted.NewProfile(cfg, hosted.ProfileDependencies{
 		Tools: catalog, Postgres: stores.PGPool, Redis: stores.Redis, ToolSpills: stores.Runs, Events: events, Metrics: recorder,
+		ConnectionContinuations: continuations,
 	})
 	if profileErr != nil {
 		return nil, fmt.Errorf("build hosted profile: %w", profileErr)
@@ -158,6 +161,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		conversation.Progress = &slackagent.ProgressSummarizer{Client: profile.SecondaryModel, Model: profile.SecondaryModelName, Sanitize: profile.Redactor.Sanitize, ToolDescriptions: toolDescriptions(profile.Tools)}
 	}
 	conversation.Redis, conversation.PodID, conversation.Lifecycle = stores.Redis, podID, serviceCtx
+	conversation.Continuations = continuations
 	conversation.Inputs = stores.Inputs
 	conversation.Locker = stores.Sessions
 	if len(cfg.Security.WorkspaceRoots) > 0 {
@@ -275,6 +279,9 @@ func (s *Service) StartBackground() {
 	})
 	s.Go(func(ctx context.Context) {
 		s.conv.StartControlSubscriber(ctx)
+	})
+	s.Go(func(ctx context.Context) {
+		s.conv.StartConnectionCompletedSubscriber(ctx)
 	})
 	if s.handler != nil {
 		s.Go(func(ctx context.Context) {
