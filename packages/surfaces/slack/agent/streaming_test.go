@@ -2,6 +2,7 @@ package slackagent
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -61,6 +62,7 @@ func (m *nativeStreamingMessenger) StopStream(context.Context, string, string) e
 func TestNativeSlackStreamAppendsIncrementally(t *testing.T) {
 	messenger := &nativeStreamingMessenger{}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1", EventID: "Ev1"})
+	stream.Start()
 	stream.AppendDelta("hel")
 	stream.flushStreamUpdate("hel", false)
 	stream.AppendDelta("lo")
@@ -80,14 +82,24 @@ func TestNativeSlackStreamAppendsIncrementally(t *testing.T) {
 	}
 }
 
+func TestStreamStartsAtTurnStart(t *testing.T) {
+	messenger := &nativeStreamingMessenger{}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1"})
+	stream.Start()
+	if messenger.started != 1 {
+		t.Fatalf("started = %d, want 1 at turn start", messenger.started)
+	}
+}
+
 func TestStartStreamFailurePostsFinalAnswer(t *testing.T) {
 	messenger := &nativeStreamingMessenger{startErr: context.Canceled}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", EventID: "Ev1"})
-	stream.AppendDelta("hello")
-	stream.flushStreamUpdate("hello", false)
+	stream.Start()
 	if messenger.started != 1 {
 		t.Fatalf("started = %d, want 1", messenger.started)
 	}
+	stream.AppendDelta("hello")
+	stream.flushStreamUpdate("hello", false)
 	if len(messenger.appends) != 0 {
 		t.Fatalf("appends = %#v, want none", messenger.appends)
 	}
@@ -102,6 +114,7 @@ func TestStartStreamFailurePostsFinalAnswer(t *testing.T) {
 func TestNativeCompleteAppendsSourcesSuffix(t *testing.T) {
 	messenger := &nativeStreamingMessenger{}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1"})
+	stream.Start()
 	stream.AppendDelta("answer")
 	stream.flushStreamUpdate("answer", false)
 	final := "answer\n\nSources: [doc](https://example.test)"
@@ -119,16 +132,17 @@ func TestNativeCompleteAppendsSourcesSuffix(t *testing.T) {
 func TestStreamDeliveryDefersWhileProgressRuns(t *testing.T) {
 	messenger := &nativeStreamingMessenger{}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1", EventID: "Ev1"})
+	stream.Start()
 	stream.progressRunning = true
 	stream.AppendDelta("hello")
 	stream.flushStreamUpdate("hello", false)
-	if messenger.started != 0 || len(messenger.appends) != 0 {
-		t.Fatalf("started=%d appends=%#v, want deferred delivery", messenger.started, messenger.appends)
+	if messenger.started != 1 || len(messenger.appends) != 0 {
+		t.Fatalf("started=%d appends=%#v, want stream open but answer deferred", messenger.started, messenger.appends)
 	}
 	stream.progressRunning = false
 	stream.flushDeferredStream(false)
-	if messenger.started != 1 || len(messenger.appends) != 1 {
-		t.Fatalf("started=%d appends=%#v, want delivery after progress finished", messenger.started, messenger.appends)
+	if len(messenger.appends) != 1 {
+		t.Fatalf("appends=%#v, want delivery after progress finished", messenger.appends)
 	}
 }
 
@@ -138,5 +152,32 @@ func TestStreamSuffix(t *testing.T) {
 	}
 	if got := streamSuffix("", "hello"); got != "hello" {
 		t.Fatalf("suffix = %q", got)
+	}
+}
+
+type restartStreamingMessenger struct {
+	nativeStreamingMessenger
+	appendCalls int
+}
+
+func (m *restartStreamingMessenger) AppendStream(_ context.Context, _, _ string, chunks []map[string]any) error {
+	m.appendCalls++
+	if m.appendCalls == 1 {
+		return fmt.Errorf("slack chat.appendStream failed: not_in_streaming_state")
+	}
+	return m.nativeStreamingMessenger.AppendStream(context.Background(), "", "", chunks)
+}
+
+func TestNativeStreamRestartsOnNotInStreamingState(t *testing.T) {
+	messenger := &restartStreamingMessenger{}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1"})
+	stream.Start()
+	stream.AppendDelta("hello")
+	stream.flushStreamUpdate("hello", false)
+	if messenger.started != 2 {
+		t.Fatalf("started = %d, want restart after not_in_streaming_state", messenger.started)
+	}
+	if len(messenger.appends) != 1 || messenger.appends[0] != "hello" {
+		t.Fatalf("appends = %#v", messenger.appends)
 	}
 }

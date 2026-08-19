@@ -728,11 +728,10 @@ func newSlackStream(ctx context.Context, messenger slackconversation.Messenger, 
 	return &slackStream{ctx: ctx, messenger: messenger, req: req}
 }
 func (s *slackStream) Start() {
-	status, ok := s.messenger.(slackconversation.ThreadStatusMessenger)
-	if !ok {
-		return
+	if status, ok := s.messenger.(slackconversation.ThreadStatusMessenger); ok {
+		s.status = status
 	}
-	s.status = status
+	s.ensureNativeStream()
 }
 func (s *slackStream) CommitStep(message model.Message) {
 	if calls := message.ToolCalls(); len(calls) > 0 {
@@ -761,12 +760,8 @@ func (s *slackStream) Complete(final string) (string, error) {
 	if nativeStream && messageTS != "" {
 		trimmedFinal := strings.TrimSpace(final)
 		if suffix := streamSuffix(streamed, trimmedFinal); suffix != "" && trimmedFinal != s.streamedText() {
-			if native, ok := s.messenger.(slackconversation.NativeStreamMessenger); ok {
-				if err := native.AppendStream(ctx, s.req.Channel, messageTS, []map[string]any{
-					{"type": "markdown_text", "text": suffix},
-				}); err != nil {
-					deliveryFailed = true
-				}
+			if err := s.appendNativeChunks(suffix); err != nil {
+				deliveryFailed = true
 			}
 		}
 		s.stopNativeStream(ctx)

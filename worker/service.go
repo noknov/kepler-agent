@@ -104,14 +104,14 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	gitcache.SetRedis(stores.Redis)
 
 	slackClient := slack.NewClient(cfg.Slack.BotToken, cfg.Slack.BotUserID)
-	if cfg.Slack.BotUserID == "" {
-		if botUserID, err := slackClient.AuthTest(context.Background()); err == nil {
+	if botUserID, err := slackClient.AuthTest(context.Background()); err == nil {
+		if cfg.Slack.BotUserID == "" {
 			slackClient.SetBotUserID(botUserID)
 			cfg.Slack.BotUserID = botUserID
 			log.Printf("resolved Slack bot user id with auth.test")
-		} else {
-			log.Printf("warning: could not resolve Slack bot user id: %v", err)
 		}
+	} else {
+		log.Printf("warning: slack auth.test failed: %v", err)
 	}
 
 	recorder := observability.NewRecorder()
