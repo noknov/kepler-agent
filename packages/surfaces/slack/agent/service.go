@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -314,7 +315,11 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	if s.ModelFor != nil {
 		modelName = s.ModelFor(req)
 	}
-	input := req.Message().WithImages(model.CollectImages(history...))
+	threadImages := model.CollectImages(history...)
+	input := req.Message().WithImages(threadImages)
+	if len(threadImages) > 0 {
+		log.Printf("slack thread context: %d history messages, %d images attached to turn input", len(history), len(threadImages))
+	}
 	if s.Multimodal != nil && !s.Multimodal(modelName) && model.ContainImages(append([]model.Message{input}, history...)...) {
 		if s.MultimodalModel != nil {
 			if fallback := strings.TrimSpace(s.MultimodalModel()); fallback != "" {
