@@ -106,6 +106,80 @@ func TestConnectionBlocksShowsGitHubServerCredentials(t *testing.T) {
 	}
 }
 
+func TestConnectionBlocksShowsInvalidNotionLegacyToken(t *testing.T) {
+	store, err := connections.NewFileStore(t.TempDir()+"/connections.json", "test-secret")
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	if err := store.UpsertToken(context.Background(), "U123", connections.ProviderNotion, `{"access":"old-token"}`, nil, "old"); err != nil {
+		t.Fatal(err)
+	}
+	controller := Controller{
+		Cfg: config.Config{
+			Integrations: config.IntegrationConfig{
+				Notion: config.NotionConfig{MCPURL: "https://mcp.notion.com/mcp"},
+			},
+		},
+		Connections: connections.Service{
+			Store: store,
+			Config: connections.Config{
+				PublicBaseURL: "https://example.com",
+				SecretKey:     "test-secret",
+				Notion:        connections.NotionOAuthConfig{MCPURL: "https://mcp.notion.com/mcp"},
+			},
+		},
+	}
+	blocks := controller.connectionBlocks("U123")
+	raw, err := json.Marshal(blocks)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "Notion") || !strings.Contains(body, "Invalid") {
+		t.Fatalf("expected invalid Notion status, got %s", body)
+	}
+	if !strings.Contains(body, `"text":"Connect"`) {
+		t.Fatalf("expected Connect button, got %s", body)
+	}
+}
+
+func TestConnectionBlocksShowsInvalidClickStackLegacyOAuthToken(t *testing.T) {
+	store, err := connections.NewFileStore(t.TempDir()+"/connections.json", "test-secret")
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	if err := store.UpsertToken(context.Background(), "U123", connections.ProviderClickStack, `{"access":"old-token"}`, nil, "old"); err != nil {
+		t.Fatal(err)
+	}
+	controller := Controller{
+		Cfg: config.Config{
+			Integrations: config.IntegrationConfig{
+				ClickStack: config.ClickStackConfig{ServiceID: "svc-1"},
+			},
+		},
+		Connections: connections.Service{
+			Store: store,
+			Config: connections.Config{
+				PublicBaseURL: "https://example.com",
+				SecretKey:     "test-secret",
+				ClickStack:    connections.ClickStackOAuthConfig{ServiceID: "svc-1"},
+			},
+		},
+	}
+	blocks := controller.connectionBlocks("U123")
+	raw, err := json.Marshal(blocks)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "ClickStack") || !strings.Contains(body, "Invalid") {
+		t.Fatalf("expected invalid ClickStack status, got %s", body)
+	}
+	if !strings.Contains(body, `"text":"Connect"`) {
+		t.Fatalf("expected Connect button, got %s", body)
+	}
+}
+
 func TestConnectionBlocksShowsYouTrackServerCredentials(t *testing.T) {
 	store, err := connections.NewFileStore(t.TempDir()+"/connections.json", "test-secret")
 	if err != nil {

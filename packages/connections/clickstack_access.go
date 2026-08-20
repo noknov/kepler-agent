@@ -26,18 +26,27 @@ func (s *Service) ClickStackAccessToken(ctx context.Context, userID string) (str
 	return refreshed.Access, nil
 }
 
-// ClickStackAnyAccessToken returns a valid access token from the most recently
-// updated ClickStack connection. Used only for lazy tool discovery bootstrap.
-func (s *Service) ClickStackAnyAccessToken(ctx context.Context) (string, error) {
-	userID, bundle, conn, err := s.loadAnyClickStackBundle(ctx)
-	if err != nil {
-		return "", err
+// ClickStackConnected reports whether the user has a usable ClickStack token stored.
+func (s *Service) ClickStackConnected(ctx context.Context, userID string) bool {
+	if s.Store == nil || strings.TrimSpace(userID) == "" {
+		return false
 	}
-	refreshed, err := s.ensureFreshClickStackBundle(ctx, userID, bundle, conn)
+	raw, err := s.Store.RawToken(ctx, userID, ProviderClickStack)
 	if err != nil {
-		return "", err
+		return false
 	}
-	return refreshed.Access, nil
+	return clickStackStoredTokenUsable(raw, s.Config.ClickStack.OAuthMode())
+}
+
+func clickStackStoredTokenUsable(raw string, oauthMode bool) bool {
+	bundle, err := parseClickStackTokenBundle(raw)
+	if err != nil || strings.TrimSpace(bundle.Access) == "" {
+		return false
+	}
+	if oauthMode {
+		return strings.TrimSpace(bundle.Refresh) != ""
+	}
+	return true
 }
 
 func (s *Service) loadClickStackBundle(ctx context.Context, userID string) (clickStackTokenBundle, Connection, error) {
@@ -54,22 +63,6 @@ func (s *Service) loadClickStackBundle(ctx context.Context, userID string) (clic
 		return clickStackTokenBundle{}, Connection{}, fmt.Errorf("parse clickstack token for %s: %w", userID, err)
 	}
 	return bundle, conn, nil
-}
-
-func (s *Service) loadAnyClickStackBundle(ctx context.Context) (string, clickStackTokenBundle, Connection, error) {
-	userID, raw, err := s.Store.AnyTokenUser(ctx, ProviderClickStack)
-	if err != nil {
-		return "", clickStackTokenBundle{}, Connection{}, err
-	}
-	conn, err := s.Store.Get(ctx, userID, ProviderClickStack)
-	if err != nil {
-		return "", clickStackTokenBundle{}, Connection{}, err
-	}
-	bundle, err := parseClickStackTokenBundle(raw)
-	if err != nil {
-		return "", clickStackTokenBundle{}, Connection{}, fmt.Errorf("parse clickstack token for %s: %w", userID, err)
-	}
-	return userID, bundle, conn, nil
 }
 
 func (s *Service) ensureFreshClickStackBundle(ctx context.Context, userID string, bundle clickStackTokenBundle, conn Connection) (clickStackTokenBundle, error) {

@@ -17,6 +17,8 @@ func NewHTTPHandler(service Service) http.Handler {
 		}
 		provider, action := parts[0], parts[1]
 		switch action {
+		case "connect":
+			service.HandleConnect(w, r, provider)
 		case "start":
 			service.HandleStart(w, r, provider, strings.TrimSpace(r.URL.Query().Get("state")))
 		case "callback":

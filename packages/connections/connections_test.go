@@ -3,6 +3,7 @@ package connections
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -11,7 +12,7 @@ func TestRequiredErrorToolResult(t *testing.T) {
 	result, err := ToolResult(&RequiredError{
 		Provider: ProviderSlack,
 		Title:    "Slack",
-		AuthURL:  "http://localhost/oauth/slack/start?state=abc",
+		AuthURL:  "http://localhost/oauth/slack/connect?user_id=U1&exp=1&sig=abc",
 	})
 	if err != nil {
 		t.Fatalf("ToolResult() error = %v", err)
@@ -77,5 +78,8 @@ func TestServiceRequiredIncludesAuthURL(t *testing.T) {
 	var required *RequiredError
 	if !errors.As(err, &required) || required.AuthURL == "" {
 		t.Fatalf("Required() = %v, want RequiredError with auth url", err)
+	}
+	if !strings.Contains(required.AuthURL, "/oauth/slack/connect?") {
+		t.Fatalf("Required() auth url = %q, want /connect URL", required.AuthURL)
 	}
 }

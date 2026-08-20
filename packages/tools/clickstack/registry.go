@@ -13,7 +13,7 @@ import (
 	mcptools "github.com/noknov/slack-copilot-agent/packages/tools/mcp"
 )
 
-// Registrar lazily discovers ClickStack MCP tools once a usable token exists.
+// Registrar lazily discovers ClickStack MCP tools once a user has connected.
 type Registrar struct {
 	cfg  config.ClickStackConfig
 	conn *connections.Service
@@ -28,9 +28,9 @@ func NewRegistrar(cfg config.ClickStackConfig, conn *connections.Service) *Regis
 	return &Registrar{cfg: cfg, conn: conn}
 }
 
-// Ensure discovers and registers ClickStack tools into the catalog when needed.
+// Ensure discovers and registers ClickStack tools for the given user.
 func (r *Registrar) Ensure(ctx context.Context, catalog *tool.Catalog, policy tool.SurfacePolicy, userID string) error {
-	if r == nil || catalog == nil {
+	if r == nil || catalog == nil || strings.TrimSpace(userID) == "" {
 		return nil
 	}
 	r.mu.Lock()
@@ -70,25 +70,14 @@ func (r *Registrar) Ensure(ctx context.Context, catalog *tool.Catalog, policy to
 }
 
 func (r *Registrar) bootstrapToken(ctx context.Context, userID string) (string, error) {
-	if r.conn == nil || r.conn.Store == nil {
+	if r.conn == nil || strings.TrimSpace(userID) == "" {
 		return "", nil
 	}
-	if userID != "" {
-		if _, err := r.conn.Store.Get(ctx, userID, connections.ProviderClickStack); err == nil {
-			token, err := r.conn.ClickStackAccessToken(ctx, userID)
-			if err != nil {
-				return "", fmt.Errorf("clickstack is connected but this worker cannot read your token: %w", err)
-			}
-			if token != "" {
-				return token, nil
-			}
-		}
+	token, err := r.conn.ClickStackAccessToken(ctx, userID)
+	if err == connections.ErrNotConnected {
+		return "", nil
 	}
-	token, err := r.conn.ClickStackAnyAccessToken(ctx)
 	if err != nil {
-		if err == connections.ErrNotConnected {
-			return "", nil
-		}
 		return "", err
 	}
 	return token, nil

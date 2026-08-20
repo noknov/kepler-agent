@@ -110,6 +110,18 @@ func TestClickStackAccessTokenRefreshesBeforeExpiry(t *testing.T) {
 	}
 }
 
+func TestClickStackStoredTokenUsable(t *testing.T) {
+	if !clickStackStoredTokenUsable(`{"access":"token","refresh":"refresh"}`, true) {
+		t.Fatal("expected oauth bundle with refresh to be usable")
+	}
+	if clickStackStoredTokenUsable(`{"access":"token"}`, true) {
+		t.Fatal("expected oauth bundle without refresh to be unusable")
+	}
+	if !clickStackStoredTokenUsable("plain-api-key", false) {
+		t.Fatal("expected api key token to be usable")
+	}
+}
+
 func TestClickStackAccessTokenBackfillsAccount(t *testing.T) {
 	store, err := NewFileStore(t.TempDir()+"/connections.json", "test-secret")
 	if err != nil {
