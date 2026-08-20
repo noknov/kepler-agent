@@ -14,7 +14,10 @@ import (
 
 const OAuthCompletedChannel = "connection:oauth:completed"
 
-const continuationTTL = 24 * time.Hour
+const (
+	continuationTTL      = 24 * time.Hour
+	continuationClaimTTL = 5 * time.Minute
+)
 
 // Continuation captures a Slack thread that paused for OAuth.
 type Continuation struct {
@@ -29,6 +32,7 @@ type Continuation struct {
 type ContinuationStore interface {
 	Save(ctx context.Context, continuation Continuation) error
 	Claim(ctx context.Context, userID, provider string) ([]Continuation, error)
+	Release(ctx context.Context, continuation Continuation) error
 	Clear(ctx context.Context, continuation Continuation) error
 	PublishCompleted(ctx context.Context, userID, provider string) error
 }
@@ -101,7 +105,7 @@ func (s *RedisContinuationStore) Claim(ctx context.Context, userID, provider str
 	continuations := make([]Continuation, 0, len(sessions))
 	for _, sessionID := range sessions {
 		candidate := Continuation{UserID: userID, Provider: provider, SessionID: sessionID}
-		claimed, err := s.Redis.SetNX(ctx, continuationClaimKey(candidate), "1", continuationTTL)
+		claimed, err := s.Redis.SetNX(ctx, continuationClaimKey(candidate), "1", continuationClaimTTL)
 		if err != nil || !claimed {
 			continue
 		}
@@ -134,6 +138,15 @@ func (s *RedisContinuationStore) Clear(ctx context.Context, continuation Continu
 	}
 	_, err := s.Redis.SRem(ctx, continuationIndexKey(continuation.UserID, continuation.Provider), continuation.SessionID)
 	return err
+}
+
+// Release makes a claimed continuation available for another delivery attempt.
+// It intentionally preserves both the payload and index membership.
+func (s *RedisContinuationStore) Release(ctx context.Context, continuation Continuation) error {
+	if s == nil || s.Redis == nil || continuation.UserID == "" || continuation.Provider == "" || continuation.SessionID == "" {
+		return nil
+	}
+	return s.Redis.Del(ctx, continuationClaimKey(continuation))
 }
 
 func (s *RedisContinuationStore) PublishCompleted(ctx context.Context, userID, provider string) error {

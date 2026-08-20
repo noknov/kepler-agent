@@ -91,6 +91,32 @@ func (c *Client) PostMarkdownMessageWithID(ctx context.Context, channel, threadT
 	return c.postMessage(ctx, channel, threadTS, markdown, nil, clientMessageID)
 }
 
+func (c *Client) UpdateMarkdownMessage(ctx context.Context, channel, messageTS, markdown string) error {
+	blocks := []map[string]any{{"type": "markdown", "text": markdown}}
+	if err := c.updateMessage(ctx, channel, messageTS, markdown, blocks); err == nil || !strings.Contains(err.Error(), "invalid_blocks") {
+		return err
+	}
+	return c.updateMessage(ctx, channel, messageTS, markdown, nil)
+}
+
+func (c *Client) updateMessage(ctx context.Context, channel, messageTS, text string, blocks []map[string]any) error {
+	payload := map[string]any{"channel": channel, "ts": messageTS, "text": text, "unfurl_links": false}
+	if len(blocks) > 0 {
+		payload["blocks"] = blocks
+	}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+	}
+	if err := c.postJSON(ctx, "chat.update", payload, &out); err != nil {
+		return err
+	}
+	if !out.OK {
+		return fmt.Errorf("slack chat.update failed: %s", out.Error)
+	}
+	return nil
+}
+
 func (c *Client) postMessage(ctx context.Context, channel, threadTS, text string, blocks []map[string]any, clientMessageID string) (string, error) {
 	payload := map[string]any{
 		"channel":      channel,

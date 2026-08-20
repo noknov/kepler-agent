@@ -51,6 +51,12 @@ type IdempotentMarkdownMessenger interface {
 	PostMarkdownMessageWithID(ctx context.Context, channel, threadTS, markdown, deliveryID string) (string, error)
 }
 
+// MarkdownMessageUpdater replaces an existing assistant reply. It lets a
+// native stream recover after Slack accepts the message but rejects an append.
+type MarkdownMessageUpdater interface {
+	UpdateMarkdownMessage(ctx context.Context, channel, messageTS, markdown string) error
+}
+
 // NativeStreamMessenger delivers assistant answers through Slack's chat.startStream,
 // chat.appendStream, and chat.stopStream APIs.
 type NativeStreamMessenger interface {

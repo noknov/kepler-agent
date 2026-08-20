@@ -34,7 +34,10 @@ func TestThreadHistoryDownloadsImagesFromReplies(t *testing.T) {
 	}))
 	slackClient.SetBotUserID("B1")
 
-	history := ThreadHistory(context.Background(), slackClient, "C1", "100.000", "200.000", 10)
+	history, err := ThreadHistory(context.Background(), slackClient, "C1", "100.000", "200.000", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(history) != 1 {
 		t.Fatalf("history len = %d", len(history))
 	}

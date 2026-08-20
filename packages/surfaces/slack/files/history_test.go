@@ -24,12 +24,24 @@ func TestThreadHistoryUsesConversationHistoryForFlatDM(t *testing.T) {
 			]}`)),
 		}, nil
 	}))
-	history := ThreadHistory(context.Background(), slackClient, "D1", "200.000", "200.000", 10)
+	history, err := ThreadHistory(context.Background(), slackClient, "D1", "200.000", "200.000", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if called != "/api/conversations.history" {
 		t.Fatalf("api = %q", called)
 	}
 	if len(history) != 2 || history[0].Text() != "Slack user U1: older" || history[1].Role != model.RoleUser {
 		t.Fatalf("history=%#v", history)
+	}
+}
+
+func TestThreadHistoryReturnsConversationReadError(t *testing.T) {
+	slackClient := slack.NewTestClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	}))
+	if _, err := ThreadHistory(context.Background(), slackClient, "C1", "100.000", "200.000", 10); err == nil {
+		t.Fatal("expected history read error")
 	}
 }
 

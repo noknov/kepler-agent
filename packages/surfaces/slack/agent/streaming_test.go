@@ -16,6 +16,7 @@ type nativeStreamingMessenger struct {
 	started  int
 	appends  []string
 	stopped  int
+	updates  []string
 	startErr error
 }
 
@@ -57,6 +58,12 @@ func (m *nativeStreamingMessenger) StopStream(context.Context, string, string) e
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.stopped++
+	return nil
+}
+func (m *nativeStreamingMessenger) UpdateMarkdownMessage(_ context.Context, _, _ string, text string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.updates = append(m.updates, text)
 	return nil
 }
 
@@ -205,5 +212,35 @@ func TestNativeStreamRestartsOnNotInStreamingState(t *testing.T) {
 	}
 	if len(messenger.appends) != 1 || messenger.appends[0] != "hello" {
 		t.Fatalf("appends = %#v", messenger.appends)
+	}
+}
+
+type failingAppendMessenger struct {
+	nativeStreamingMessenger
+	calls int
+}
+
+func (m *failingAppendMessenger) AppendStream(_ context.Context, _, _ string, chunks []map[string]any) error {
+	m.calls++
+	if m.calls == 2 {
+		return fmt.Errorf("transient Slack append failure")
+	}
+	return m.nativeStreamingMessenger.AppendStream(context.Background(), "", "", chunks)
+}
+
+func TestNativeStreamFailureEditsExistingReply(t *testing.T) {
+	messenger := &failingAppendMessenger{}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1"})
+	stream.Start()
+	stream.AppendDelta("partial")
+	stream.flushStreamUpdate("partial", false)
+	stream.AppendDelta(" answer")
+	stream.flushStreamUpdate("partial answer", false)
+	ts, err := stream.Complete("final answer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts != "1.0" || len(messenger.posts) != 0 || len(messenger.updates) != 1 || messenger.updates[0] != "final answer" {
+		t.Fatalf("ts=%q posts=%#v updates=%#v", ts, messenger.posts, messenger.updates)
 	}
 }
