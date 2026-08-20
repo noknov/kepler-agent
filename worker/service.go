@@ -122,7 +122,9 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	if err := runSink.Recover(ctx, stores.PGPool); err != nil {
 		return nil, fmt.Errorf("recover agent run projections: %w", err)
 	}
-	events := transcript.NewFanout(runSink)
+	// Run records are rebuildable transcript projections. Keep them off the
+	// latency-sensitive Slack/model event path.
+	events := transcript.NewFanout(transcript.NewAsyncSink(serviceCtx, runSink, 2048))
 	workspacePolicy := safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}
 	connStore := connections.PGStore{Pool: stores.PGPool, SecretKey: cfg.Connections.EncryptionKey}
 	continuations := connections.NewRedisContinuationStore(stores.Redis)
@@ -149,10 +151,28 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	healthService.Redis = stores.Redis
 	conversation := slackagent.New(profile.Agent, slackClient, profile.Prompt, profile.Redactor, stores.UserPrefs)
 	conversation.ThreadLoader = slackmessaging.ThreadLoader{Bot: slackClient}
+	policy := hostedTools.PolicyForSurface(cfg, surface)
+	var beforeRuns []func(context.Context, string) error
 	if bundle.ClickStack != nil {
-		policy := hostedTools.PolicyForSurface(cfg, surface)
+		clickstackReg := bundle.ClickStack
+		beforeRuns = append(beforeRuns, func(ctx context.Context, userID string) error {
+			return clickstackReg.Ensure(ctx, catalog, policy, userID)
+		})
+	}
+	if bundle.Notion != nil {
+		notionReg := bundle.Notion
+		beforeRuns = append(beforeRuns, func(ctx context.Context, userID string) error {
+			return notionReg.Ensure(ctx, catalog, policy, userID)
+		})
+	}
+	if len(beforeRuns) > 0 {
 		conversation.BeforeRun = func(ctx context.Context, userID string) error {
-			return bundle.ClickStack.Ensure(ctx, catalog, policy, userID)
+			for _, run := range beforeRuns {
+				if err := run(ctx, userID); err != nil {
+					return err
+				}
+			}
+			return nil
 		}
 	}
 	conversation.OnDelivered = runSink.LinkSlackMessage

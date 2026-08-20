@@ -45,7 +45,7 @@ func TestProgressSummarizerUsesOnlySafeStructuredIntent(t *testing.T) {
 		},
 	}
 	text, err := summarizer.Summarize(context.Background(), "查一下支付服务部署记录", []model.ToolCall{{
-		Name:      "notion-search",
+		Name:      "mcp_notion_notion-search",
 		Arguments: json.RawMessage(`{"query":"支付服务部署记录","token":"secret","command":"dangerous"}`),
 	}}, true)
 	if err != nil || text != "查询支付服务部署记录" {
@@ -57,7 +57,7 @@ func TestProgressSummarizerUsesOnlySafeStructuredIntent(t *testing.T) {
 		t.Fatalf("progress system prompt is not a general user-facing contract: %s", system)
 	}
 	prompt := request.Messages[len(request.Messages)-1].Text()
-	if !strings.Contains(prompt, "支付服务部署记录") || !strings.Contains(prompt, "dangerous") || strings.Contains(prompt, "notion-search") || strings.Contains(prompt, "secret") {
+	if !strings.Contains(prompt, "支付服务部署记录") || !strings.Contains(prompt, "dangerous") || strings.Contains(prompt, "mcp_notion_notion-search") || strings.Contains(prompt, "secret") {
 		t.Fatalf("unsafe progress prompt: %s", prompt)
 	}
 }
@@ -96,7 +96,7 @@ func TestToolStepProjectsSecondarySummaryWithoutPrimaryNarration(t *testing.T) {
 	stream.Lifecycle(transcript.Event{Type: transcript.ModelRequested})
 	stream.CommitStep(model.Message{Role: model.RoleAssistant, Content: []model.Content{
 		{Type: model.ContentText, Text: "internal model narration"},
-		{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "call", Name: "notion-search", Arguments: json.RawMessage(`{"query":"支付服务部署记录"}`)}},
+		{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "call", Name: "mcp_notion_notion-search", Arguments: json.RawMessage(`{"query":"支付服务部署记录"}`)}},
 	}})
 
 	deadline := time.Now().Add(time.Second)

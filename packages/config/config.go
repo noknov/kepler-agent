@@ -154,9 +154,11 @@ func (c ClickStackConfig) Enabled() bool {
 }
 
 type NotionConfig struct {
-	DatabaseID    string
-	TitleProperty string
-	Version       string
+	MCPURL string
+}
+
+func (c NotionConfig) Enabled() bool {
+	return true
 }
 
 type TTSConfig struct {
@@ -190,19 +192,13 @@ type ConnectionsConfig struct {
 	SlackClientSecret       string
 	GitHubClientID          string
 	GitHubClientSecret      string
-	GCPOAuthClientID        string
-	GCPOAuthClientSecret    string
-	NotionOAuthClientID     string
-	NotionOAuthClientSecret string
-	LocalOAuthPort          int
+	GCPOAuthClientID     string
+	GCPOAuthClientSecret string
+	LocalOAuthPort       int
 }
 
 func (c ConnectionsConfig) GCPOAuthEnabled() bool {
 	return strings.TrimSpace(c.GCPOAuthClientID) != "" && strings.TrimSpace(c.GCPOAuthClientSecret) != ""
-}
-
-func (c ConnectionsConfig) NotionOAuthEnabled() bool {
-	return strings.TrimSpace(c.NotionOAuthClientID) != "" && strings.TrimSpace(c.NotionOAuthClientSecret) != ""
 }
 
 func (c ConnectionsConfig) SlackOAuthEnabled() bool {
@@ -233,6 +229,7 @@ const (
 )
 
 const defaultClickStackMCPURL = "https://mcp.clickhouse.cloud/clickstack"
+const defaultNotionMCPURL = "https://mcp.notion.com/mcp"
 
 func Load() (Config, error) {
 	return LoadFor(ProfileSlackWorker)
@@ -386,9 +383,7 @@ func loadIntegrations() IntegrationConfig {
 			DefaultStyle: os.Getenv("TTS_DEFAULT_STYLE"),
 		},
 		Notion: NotionConfig{
-			DatabaseID:    os.Getenv("NOTION_DATABASE_ID"),
-			TitleProperty: env("NOTION_TITLE_PROPERTY", "Name"),
-			Version:       env("NOTION_VERSION", "2022-06-28"),
+			MCPURL: trimRightSlash(env("NOTION_MCP_URL", defaultNotionMCPURL)),
 		},
 		YouTrack: YouTrackConfig{
 			URL:   trimRightSlash(os.Getenv("YOUTRACK_URL")),
@@ -439,11 +434,9 @@ func loadConnections() ConnectionsConfig {
 		SlackClientSecret:       clientSecret,
 		GitHubClientID:          os.Getenv("GITHUB_OAUTH_CLIENT_ID"),
 		GitHubClientSecret:      os.Getenv("GITHUB_OAUTH_CLIENT_SECRET"),
-		GCPOAuthClientID:        os.Getenv("GCP_OAUTH_CLIENT_ID"),
-		GCPOAuthClientSecret:    os.Getenv("GCP_OAUTH_CLIENT_SECRET"),
-		NotionOAuthClientID:     os.Getenv("NOTION_OAUTH_CLIENT_ID"),
-		NotionOAuthClientSecret: os.Getenv("NOTION_OAUTH_CLIENT_SECRET"),
-		LocalOAuthPort:          port,
+		GCPOAuthClientID:     os.Getenv("GCP_OAUTH_CLIENT_ID"),
+		GCPOAuthClientSecret: os.Getenv("GCP_OAUTH_CLIENT_SECRET"),
+		LocalOAuthPort:       port,
 	}
 }
 

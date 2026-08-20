@@ -317,29 +317,6 @@
       "next_checks": "Concrete next checks or actions."
     }
   },
-  "notion-search": {
-    "description": "Search Notion pages or databases for incident notes, runbooks, and knowledge base entries.",
-    "parameters": {
-      "query": "Search query.",
-      "limit": "Maximum results. Defaults to 10, max 50."
-    }
-  },
-  "notion-get_page": {
-    "description": "Read the full text content of a Notion page by ID or URL (app.notion.com or notion.so). Use this for any Notion link — it uses the requesting user's connected Notion account.",
-    "parameters": {
-      "page_id": "Notion page ID (UUID) or full Notion page URL (app.notion.com or notion.so).",
-      "depth": "How many levels of nested blocks to expand. Defaults to 2, max 4."
-    }
-  },
-  "notion-query_database": {
-    "description": "Query a Notion database with optional filters and sorts. Use to look up structured records such as incident history, on-call schedules, or known issues.",
-    "parameters": {
-      "database_id": "Database ID or URL. Defaults to the configured NOTION_DATABASE_ID when omitted.",
-      "filter": "Notion filter object (see Notion API docs). Optional.",
-      "sorts": "Array of Notion sort descriptors. Optional.",
-      "limit": "Maximum rows to return. Defaults to 20, max 100."
-    }
-  },
   "youtrack-get_issue": {
     "description": "Fetch a YouTrack issue by ID, including summary, description, state, assignee, and recent comments.",
     "parameters": {

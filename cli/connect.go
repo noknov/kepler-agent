@@ -333,7 +333,7 @@ func connectNotion() error {
 	}
 	serviceCfg := connections.NewServiceFromConfig(nil, cfg).Config
 	if !serviceCfg.NotionEnabled() {
-		return errors.New("set NOTION_OAUTH_CLIENT_ID, NOTION_OAUTH_CLIENT_SECRET, and CONNECTIONS_PUBLIC_BASE_URL before connecting Notion")
+		return errors.New("set CONNECTIONS_PUBLIC_BASE_URL before connecting Notion")
 	}
 	if strings.TrimSpace(cfg.Connections.EncryptionKey) == "" {
 		return errors.New("set CONNECTIONS_ENCRYPTION_KEY before connecting")

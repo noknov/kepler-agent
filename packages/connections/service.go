@@ -1,7 +1,6 @@
 package connections
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -65,7 +64,7 @@ func (c Config) GCPEnabled() bool {
 }
 
 func (c Config) NotionEnabled() bool {
-	return strings.TrimSpace(c.PublicBaseURL) != "" && c.Notion.Enabled()
+	return strings.TrimSpace(c.PublicBaseURL) != "" && c.Notion.Configured()
 }
 
 func (c Config) OAuthEnabled() bool {
@@ -90,8 +89,10 @@ type serviceState struct {
 	mu                sync.Mutex
 	clickstackOAuth   *clickstackOAuth
 	gcpOAuth          *gcpOAuth
+	notionOAuth       *notionOAuth
 	clickstackRefresh sync.Map
 	gcpRefresh        sync.Map
+	notionRefresh     sync.Map
 }
 
 func (s *Service) mutableState() *serviceState {
@@ -119,6 +120,16 @@ func (s *Service) gcp() *gcpOAuth {
 		state.gcpOAuth = newGCPOAuth(s.Config.GCP)
 	}
 	return state.gcpOAuth
+}
+
+func (s *Service) notion() *notionOAuth {
+	state := s.mutableState()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.notionOAuth == nil {
+		state.notionOAuth = newNotionOAuth(s.Config.Notion)
+	}
+	return state.notionOAuth
 }
 
 func (s Service) ProviderOAuthEnabled(provider string) bool {
@@ -150,7 +161,7 @@ func (s Service) StartURL(userID, provider string) (string, error) {
 		return "", err
 	}
 	meta := OAuthStateMeta{}
-	if provider == ProviderClickStack {
+	if provider == ProviderClickStack || provider == ProviderNotion {
 		verifier, err := newPKCEVerifier()
 		if err != nil {
 			return "", err
@@ -231,14 +242,22 @@ func (s Service) HandleStart(w http.ResponseWriter, r *http.Request, provider, s
 			http.Error(w, "notion oauth is not configured", http.StatusServiceUnavailable)
 			return
 		}
-		values := url.Values{
-			"client_id":     {s.Config.Notion.ClientID},
-			"response_type": {"code"},
-			"owner":         {"user"},
-			"redirect_uri":  {s.callbackURL(provider)},
-			"state":         {state},
+		if meta.CodeVerifier == "" {
+			http.Error(w, "invalid oauth state", http.StatusBadRequest)
+			return
 		}
-		http.Redirect(w, r, "https://api.notion.com/v1/oauth/authorize?"+values.Encode(), http.StatusFound)
+		redirectURI := s.callbackURL(provider)
+		clientID, err := s.notion().ensureClient(r.Context(), redirectURI)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		authorizeURL, err := s.notion().buildAuthorizeURL(clientID, redirectURI, state, meta.CodeVerifier)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		http.Redirect(w, r, authorizeURL, http.StatusFound)
 	default:
 		http.Error(w, "unsupported provider", http.StatusNotFound)
 	}
@@ -308,12 +327,22 @@ func (s Service) HandleCallback(w http.ResponseWriter, r *http.Request, provider
 			return
 		}
 	case ProviderNotion:
-		token, account, err := s.exchangeNotion(r.Context(), code)
+		if !s.Config.NotionEnabled() {
+			http.Error(w, "notion oauth is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		redirectURI := s.callbackURL(provider)
+		clientID, err := s.notion().ensureClient(r.Context(), redirectURI)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		if err := s.Store.UpsertToken(r.Context(), userID, provider, token, nil, account); err != nil {
+		response, err := s.notion().exchange(r.Context(), code, meta.CodeVerifier, redirectURI, clientID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		if err := s.storeNotionBundle(r.Context(), userID, clientID, redirectURI, response, "", response.Scopes); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -413,53 +442,6 @@ func (s Service) exchangeGitHub(ctx context.Context, code string) (token, accoun
 	return payload.AccessToken, account, scopes, nil
 }
 
-func (s Service) exchangeNotion(ctx context.Context, code string) (token, account string, err error) {
-	redirectURI := s.callbackURL(ProviderNotion)
-	body := map[string]string{
-		"grant_type":   "authorization_code",
-		"code":         code,
-		"redirect_uri": redirectURI,
-	}
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return "", "", err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.notion.com/v1/oauth/token", bytes.NewReader(payload))
-	if err != nil {
-		return "", "", err
-	}
-	req.SetBasicAuth(s.Config.Notion.ClientID, s.Config.Notion.ClientSecret)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Notion-Version", "2022-06-28")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", "", err
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", "", err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", "", fmt.Errorf("notion oauth failed: %s", strings.TrimSpace(string(data)))
-	}
-	var parsed struct {
-		AccessToken   string `json:"access_token"`
-		WorkspaceName string `json:"workspace_name"`
-		Error         string `json:"error"`
-	}
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		return "", "", err
-	}
-	if parsed.AccessToken == "" {
-		if parsed.Error != "" {
-			return "", "", fmt.Errorf("notion oauth failed: %s", parsed.Error)
-		}
-		return "", "", fmt.Errorf("notion oauth returned an empty token")
-	}
-	return parsed.AccessToken, parsed.WorkspaceName, nil
-}
-
 func (s Service) githubLogin(ctx context.Context, token string) (string, error) {
 	base := strings.TrimRight(s.Config.GitHub.APIBaseURL, "/")
 	if base == "" {
@@ -497,7 +479,7 @@ func (s Service) Required(userID, provider string) error {
 }
 
 // Reauthorize returns a connection-required error with a fresh OAuth URL even when
-// a token already exists (for example when Notion returns 403 for a page).
+// a token already exists.
 func (s Service) Reauthorize(userID, provider string) error {
 	authURL, err := s.StartURL(userID, provider)
 	if err != nil {

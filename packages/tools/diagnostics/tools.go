@@ -205,7 +205,7 @@ func (IncidentBriefTool) Execute(ctx context.Context, call tool.Call) (tool.Resu
 	b.WriteString("- github-workflow_runs: check recent deploy/CI for the repository when relevant.\n")
 	b.WriteString("- gcp-logs: query namespace/service logs for the stated window.\n")
 	b.WriteString("- code-search/code-read_file or git-search_ref/git-read_file_ref: verify code only after narrowing the component.\n")
-	b.WriteString("- notion-search/youtrack-search: look for existing runbooks, incidents, or tickets.\n\n")
+	b.WriteString("- mcp_notion_*/youtrack-search: look for existing runbooks, incidents, or tickets.\n\n")
 	b.WriteString("Answer format:\n")
 	b.WriteString("- Current status\n- Evidence\n- Hypotheses\n- Next checks\n- User-facing recommendation\n")
 	return tool.TextResult(b.String()), nil
