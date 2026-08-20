@@ -13,7 +13,7 @@ import (
 	mcptools "github.com/noknov/slack-copilot-agent/packages/tools/mcp"
 )
 
-// Registrar lazily discovers Notion MCP tools once a usable token exists.
+// Registrar lazily discovers Notion MCP tools once a user has connected.
 type Registrar struct {
 	cfg  config.NotionConfig
 	conn *connections.Service
@@ -28,9 +28,9 @@ func NewRegistrar(cfg config.NotionConfig, conn *connections.Service) *Registrar
 	return &Registrar{cfg: cfg, conn: conn}
 }
 
-// Ensure discovers and registers Notion MCP tools into the catalog when needed.
+// Ensure discovers and registers Notion MCP tools for the given user.
 func (r *Registrar) Ensure(ctx context.Context, catalog *tool.Catalog, policy tool.SurfacePolicy, userID string) error {
-	if r == nil || catalog == nil {
+	if r == nil || catalog == nil || strings.TrimSpace(userID) == "" {
 		return nil
 	}
 	r.mu.Lock()
@@ -70,25 +70,14 @@ func (r *Registrar) Ensure(ctx context.Context, catalog *tool.Catalog, policy to
 }
 
 func (r *Registrar) bootstrapToken(ctx context.Context, userID string) (string, error) {
-	if r.conn == nil || r.conn.Store == nil {
+	if r.conn == nil || strings.TrimSpace(userID) == "" {
 		return "", nil
 	}
-	if userID != "" {
-		if _, err := r.conn.Store.Get(ctx, userID, connections.ProviderNotion); err == nil {
-			token, err := r.conn.NotionAccessToken(ctx, userID)
-			if err != nil {
-				return "", fmt.Errorf("notion is connected but this worker cannot read your token: %w", err)
-			}
-			if token != "" {
-				return token, nil
-			}
-		}
+	token, err := r.conn.NotionAccessToken(ctx, userID)
+	if err == connections.ErrNotConnected {
+		return "", nil
 	}
-	token, err := r.conn.NotionAnyAccessToken(ctx)
 	if err != nil {
-		if err == connections.ErrNotConnected {
-			return "", nil
-		}
 		return "", err
 	}
 	return token, nil

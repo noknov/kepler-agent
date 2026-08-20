@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
@@ -52,6 +51,10 @@ func (c Config) ClickStackEnabled() bool {
 
 func (c ClickStackOAuthConfig) Configured() bool {
 	return strings.TrimSpace(c.ServiceID) != "" || customClickStackURL(c.MCPURL)
+}
+
+func (c ClickStackOAuthConfig) OAuthMode() bool {
+	return strings.TrimSpace(c.ServiceID) != ""
 }
 
 func customClickStackURL(raw string) bool {
@@ -149,118 +152,21 @@ func (s Service) ProviderOAuthEnabled(provider string) bool {
 	}
 }
 
-func (s Service) StartURL(userID, provider string) (string, error) {
-	if strings.TrimSpace(userID) == "" {
-		return "", fmt.Errorf("user id is required")
-	}
-	if s.Config.PublicBaseURL == "" {
-		return "", fmt.Errorf("connections public base URL is not configured")
-	}
-	state, err := randomState()
-	if err != nil {
-		return "", err
-	}
-	meta := OAuthStateMeta{}
-	if provider == ProviderClickStack || provider == ProviderNotion {
-		verifier, err := newPKCEVerifier()
-		if err != nil {
-			return "", err
-		}
-		meta.CodeVerifier = verifier
-	}
-	if err := s.Store.CreateOAuthState(context.Background(), userID, provider, state, time.Now().UTC().Add(15*time.Minute), meta); err != nil {
-		return "", err
-	}
-	return strings.TrimRight(s.Config.PublicBaseURL, "/") + "/oauth/" + url.PathEscape(provider) + "/start?state=" + url.QueryEscape(state), nil
-}
-
 func (s Service) HandleStart(w http.ResponseWriter, r *http.Request, provider, state string) {
 	if state == "" {
 		http.Error(w, "state is required", http.StatusBadRequest)
 		return
 	}
 	_, storedProvider, meta, err := s.Store.PeekOAuthState(r.Context(), state)
-	if err != nil || storedProvider != provider {
-		http.Error(w, "invalid oauth state", http.StatusBadRequest)
+	if err != nil {
+		http.Error(w, "invalid oauth state: not found or expired; reopen App Home and connect again", http.StatusBadRequest)
 		return
 	}
-	switch provider {
-	case ProviderSlack:
-		if !s.Config.SlackEnabled() {
-			http.Error(w, "slack oauth is not configured", http.StatusServiceUnavailable)
-			return
-		}
-		values := url.Values{
-			"client_id":    {s.Config.Slack.ClientID},
-			"user_scope":   {strings.Join(pluginScopes(provider), ",")},
-			"redirect_uri": {s.callbackURL(provider)},
-			"state":        {state},
-		}
-		http.Redirect(w, r, "https://slack.com/oauth/v2/authorize?"+values.Encode(), http.StatusFound)
-	case ProviderGitHub:
-		if !s.Config.GitHubEnabled() {
-			http.Error(w, "github oauth is not configured", http.StatusServiceUnavailable)
-			return
-		}
-		values := url.Values{
-			"client_id":    {s.Config.GitHub.ClientID},
-			"scope":        {strings.Join(pluginScopes(provider), " ")},
-			"redirect_uri": {s.callbackURL(provider)},
-			"state":        {state},
-		}
-		http.Redirect(w, r, "https://github.com/login/oauth/authorize?"+values.Encode(), http.StatusFound)
-	case ProviderClickStack:
-		if !s.Config.ClickStackEnabled() {
-			http.Error(w, "clickstack oauth is not configured", http.StatusServiceUnavailable)
-			return
-		}
-		if meta.CodeVerifier == "" {
-			http.Error(w, "invalid oauth state", http.StatusBadRequest)
-			return
-		}
-		redirectURI := s.callbackURL(provider)
-		clientID, err := s.clickstack().ensureClient(r.Context(), redirectURI)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		authorizeURL, err := s.clickstack().buildAuthorizeURL(clientID, redirectURI, state, meta.CodeVerifier)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		http.Redirect(w, r, authorizeURL, http.StatusFound)
-	case ProviderGCP:
-		if !s.Config.GCPEnabled() {
-			http.Error(w, "gcp oauth is not configured", http.StatusServiceUnavailable)
-			return
-		}
-		authorizeURL := s.gcp().buildAuthorizeURL(s.callbackURL(provider), state)
-		http.Redirect(w, r, authorizeURL, http.StatusFound)
-	case ProviderNotion:
-		if !s.Config.NotionEnabled() {
-			http.Error(w, "notion oauth is not configured", http.StatusServiceUnavailable)
-			return
-		}
-		if meta.CodeVerifier == "" {
-			http.Error(w, "invalid oauth state", http.StatusBadRequest)
-			return
-		}
-		redirectURI := s.callbackURL(provider)
-		clientID, err := s.notion().ensureClient(r.Context(), redirectURI)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		authorizeURL, err := s.notion().buildAuthorizeURL(clientID, redirectURI, state, meta.CodeVerifier)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		http.Redirect(w, r, authorizeURL, http.StatusFound)
-	default:
-		http.Error(w, "unsupported provider", http.StatusNotFound)
+	if storedProvider != provider {
+		http.Error(w, "invalid oauth state: provider mismatch", http.StatusBadRequest)
+		return
 	}
+	s.redirectOAuthAuthorize(w, r, provider, state, meta)
 }
 
 func (s Service) HandleCallback(w http.ResponseWriter, r *http.Request, provider string) {
@@ -271,8 +177,12 @@ func (s Service) HandleCallback(w http.ResponseWriter, r *http.Request, provider
 		return
 	}
 	userID, storedProvider, meta, err := s.Store.ConsumeOAuthState(r.Context(), state)
-	if err != nil || storedProvider != provider {
-		http.Error(w, "invalid oauth state", http.StatusBadRequest)
+	if err != nil {
+		http.Error(w, "invalid oauth state: not found or expired; reopen App Home and connect again", http.StatusBadRequest)
+		return
+	}
+	if storedProvider != provider {
+		http.Error(w, "invalid oauth state: provider mismatch", http.StatusBadRequest)
 		return
 	}
 	switch provider {

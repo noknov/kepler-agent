@@ -1,8 +1,6 @@
 package hostedtools
 
 import (
-	"context"
-	"fmt"
 	"strings"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
@@ -54,17 +52,7 @@ func NewCatalog(cfg config.Config, workspacePolicy safety.WorkspacePolicy, comma
 	registerCodeTools(catalog, policy, cfg, workspacePolicy, commandPolicy)
 	registerIntegrationTools(catalog, policy, cfg, commandPolicy, surface.Connections)
 	clickstackReg := clickstackTools.NewRegistrar(cfg.Integrations.ClickStack, surface.Connections)
-	if clickstackReg != nil {
-		if err := clickstackReg.Ensure(context.Background(), catalog, policy, ""); err != nil {
-			return CatalogBundle{}, fmt.Errorf("register ClickStack MCP tools: %w", err)
-		}
-	}
 	notionReg := notionTools.NewRegistrar(cfg.Integrations.Notion, surface.Connections)
-	if notionReg != nil {
-		if err := notionReg.Ensure(context.Background(), catalog, policy, ""); err != nil {
-			return CatalogBundle{}, fmt.Errorf("register Notion MCP tools: %w", err)
-		}
-	}
 	registerKnowledgeTools(catalog, policy, cfg)
 	registerAgentControlTools(catalog, policy, userPrefs)
 	if err := catalog.Register(tool.NewSearchTool(catalog)); err != nil {

@@ -26,18 +26,21 @@ func (s *Service) NotionAccessToken(ctx context.Context, userID string) (string,
 	return refreshed.Access, nil
 }
 
-// NotionAnyAccessToken returns a valid access token from the most recently
-// updated Notion connection. Used only for lazy tool discovery bootstrap.
-func (s *Service) NotionAnyAccessToken(ctx context.Context) (string, error) {
-	userID, bundle, conn, err := s.loadAnyNotionBundle(ctx)
-	if err != nil {
-		return "", err
+// NotionMCPConnected reports whether the user has a Notion MCP OAuth token stored.
+func (s *Service) NotionMCPConnected(ctx context.Context, userID string) bool {
+	if s.Store == nil || strings.TrimSpace(userID) == "" {
+		return false
 	}
-	refreshed, err := s.ensureFreshNotionBundle(ctx, userID, bundle, conn)
+	raw, err := s.Store.RawToken(ctx, userID, ProviderNotion)
 	if err != nil {
-		return "", err
+		return false
 	}
-	return refreshed.Access, nil
+	return notionMCPOAuthToken(raw)
+}
+
+func notionMCPOAuthToken(raw string) bool {
+	bundle, err := parseNotionTokenBundle(raw)
+	return err == nil && strings.TrimSpace(bundle.Refresh) != ""
 }
 
 func (s *Service) loadNotionBundle(ctx context.Context, userID string) (notionTokenBundle, Connection, error) {
@@ -54,22 +57,6 @@ func (s *Service) loadNotionBundle(ctx context.Context, userID string) (notionTo
 		return notionTokenBundle{}, Connection{}, fmt.Errorf("parse notion token for %s: %w", userID, err)
 	}
 	return bundle, conn, nil
-}
-
-func (s *Service) loadAnyNotionBundle(ctx context.Context) (string, notionTokenBundle, Connection, error) {
-	userID, raw, err := s.Store.AnyTokenUser(ctx, ProviderNotion)
-	if err != nil {
-		return "", notionTokenBundle{}, Connection{}, err
-	}
-	conn, err := s.Store.Get(ctx, userID, ProviderNotion)
-	if err != nil {
-		return "", notionTokenBundle{}, Connection{}, err
-	}
-	bundle, err := parseNotionTokenBundle(raw)
-	if err != nil {
-		return "", notionTokenBundle{}, Connection{}, fmt.Errorf("parse notion token for %s: %w", userID, err)
-	}
-	return userID, bundle, conn, nil
 }
 
 func (s *Service) ensureFreshNotionBundle(ctx context.Context, userID string, bundle notionTokenBundle, conn Connection) (notionTokenBundle, error) {

@@ -201,8 +201,25 @@ func (c Controller) connectionBlocks(userID string) []map[string]any {
 		status := "Not connected"
 		account := ""
 		if item, ok := statusByProvider[plugin.ID]; ok && item.Status == connections.StatusConnected {
-			status = "Connected"
-			account = item.Account
+			switch plugin.ID {
+			case connections.ProviderNotion:
+				if !c.Connections.NotionMCPConnected(context.Background(), userID) {
+					status = "Invalid"
+				} else {
+					status = "Connected"
+					account = item.Account
+				}
+			case connections.ProviderClickStack:
+				if !c.Connections.ClickStackConnected(context.Background(), userID) {
+					status = "Invalid"
+				} else {
+					status = "Connected"
+					account = item.Account
+				}
+			default:
+				status = "Connected"
+				account = item.Account
+			}
 		}
 		text := fmt.Sprintf("*%s*\n%s", plugin.Title, status)
 		if account != "" {
