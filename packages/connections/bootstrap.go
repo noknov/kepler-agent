@@ -27,8 +27,7 @@ func NewServiceFromConfig(store Store, cfg config.Config) Service {
 				ClientSecret: cfg.Connections.GCPOAuthClientSecret,
 			},
 			Notion: NotionOAuthConfig{
-				ClientID:     cfg.Connections.NotionOAuthClientID,
-				ClientSecret: cfg.Connections.NotionOAuthClientSecret,
+				MCPURL: cfg.Integrations.Notion.MCPURL,
 			},
 		},
 	}

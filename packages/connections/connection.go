@@ -96,8 +96,8 @@ func Plugins() []Plugin {
 		{
 			ID:          ProviderNotion,
 			Title:       "Notion",
-			Description: "Search pages and databases in your Notion workspace with your own account.",
-			Scopes:      []string{"read_content"},
+			Description: "Search, read, and update Notion pages and databases with your own account via Notion MCP.",
+			Scopes:      []string{"default"},
 		},
 	}
 }

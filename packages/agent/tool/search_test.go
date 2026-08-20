@@ -59,7 +59,7 @@ func (namedDeferredFixture) Execute(context.Context, Call) (Result, error) {
 func TestSearchToolPrioritizesExactToolNameMatches(t *testing.T) {
 	catalog, err := NewCatalog(
 		namedDeferredFixture{name: "generic-review", description: "Read Notion pages and YouTrack issues from links, access project documentation and tickets for review."},
-		namedDeferredFixture{name: "notion-search", description: "Search connected Notion pages and databases."},
+		namedDeferredFixture{name: "mcp_notion_notion-search", description: "Search connected Notion pages and databases."},
 		namedDeferredFixture{name: "youtrack-get_issue", description: "Read a YouTrack issue by ID."},
 	)
 	if err != nil {
@@ -74,7 +74,7 @@ func TestSearchToolPrioritizesExactToolNameMatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := result.Text()
-	if !strings.Contains(text, "notion-search") || !strings.Contains(text, "youtrack-get_issue") {
+	if !strings.Contains(text, "mcp_notion_notion-search") || !strings.Contains(text, "youtrack-get_issue") {
 		t.Fatalf("exactly named integrations were not prioritized: %s", text)
 	}
 	if strings.Contains(text, "generic-review") {

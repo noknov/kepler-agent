@@ -106,15 +106,23 @@ Deploy routing headers:
 - `CLICKSTACK_SERVICE_ID` — required for Cloud; shared `x-service-id` for the whole team
 - `CLICKSTACK_TEAM_ID` — `x-hdx-team` for OSS/BYOC multi-team setups
 
+### Notion MCP
+
+Notion tools are discovered from the hosted Notion MCP endpoint once a usable token exists.
+Users connect Notion from App Home or `slack-copilot connect notion` (OAuth via `https://mcp.notion.com`).
+
+| Env | Purpose |
+|---|---|
+| `NOTION_MCP_URL` | Notion MCP endpoint (default `https://mcp.notion.com/mcp`) |
+| `CONNECTIONS_PUBLIC_BASE_URL` | OAuth callback base URL |
+
 ## Knowledge and Search
 
 | Tool | Description |
 |---|---|
 | `web-search` | Public web search through DuckDuckGo, Brave, SearXNG, Google CSE, or SerpAPI |
 | `web-read_page` | Fetch and read a public web page |
-| `notion-search` | Search Notion pages |
-| `notion-get_page` | Read a Notion page |
-| `notion-query_database` | Query a Notion database |
+| `mcp_notion_*` | Notion MCP tools (search, fetch, create, update pages and databases) |
 | `youtrack-get_issue` | Fetch a YouTrack issue |
 | `youtrack-search` | Search YouTrack issues |
 | `knowledge-runbook_search` | Search local runbooks under `PROMPT_DIR/runbooks/` |

@@ -36,3 +36,23 @@ func TestPolicyForSurfaceEnablesClickStackDeps(t *testing.T) {
 		t.Fatal("expected clickstack dependency when CLICKSTACK_SERVICE_ID is configured")
 	}
 }
+
+func TestPolicyForSurfaceEnablesNotionDeps(t *testing.T) {
+	conn := &connections.Service{
+		Config: connections.Config{
+			PublicBaseURL: "https://example.com",
+			Notion:        connections.NotionOAuthConfig{MCPURL: "https://mcp.notion.com/mcp"},
+		},
+	}
+	policy := PolicyForSurface(config.Config{
+		Integrations: config.IntegrationConfig{
+			Notion: config.NotionConfig{MCPURL: "https://mcp.notion.com/mcp"},
+		},
+	}, SurfaceOptions{Name: "slack", Connections: conn})
+	if !policy.AvailableDeps["notion"] {
+		t.Fatal("expected notion dependency when Notion MCP is configured")
+	}
+	if !policy.AvailableDeps["notion-connection"] {
+		t.Fatal("expected notion-connection when Notion OAuth is configured")
+	}
+}

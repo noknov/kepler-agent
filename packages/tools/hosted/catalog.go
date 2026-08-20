@@ -40,6 +40,7 @@ type SurfaceOptions struct {
 type CatalogBundle struct {
 	Catalog    *tool.Catalog
 	ClickStack *clickstackTools.Registrar
+	Notion     *notionTools.Registrar
 }
 
 func NewCatalog(cfg config.Config, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy, userPrefs userprefs.Store, surface SurfaceOptions) (CatalogBundle, error) {
@@ -58,12 +59,18 @@ func NewCatalog(cfg config.Config, workspacePolicy safety.WorkspacePolicy, comma
 			return CatalogBundle{}, fmt.Errorf("register ClickStack MCP tools: %w", err)
 		}
 	}
+	notionReg := notionTools.NewRegistrar(cfg.Integrations.Notion, surface.Connections)
+	if notionReg != nil {
+		if err := notionReg.Ensure(context.Background(), catalog, policy, ""); err != nil {
+			return CatalogBundle{}, fmt.Errorf("register Notion MCP tools: %w", err)
+		}
+	}
 	registerKnowledgeTools(catalog, policy, cfg)
 	registerAgentControlTools(catalog, policy, userPrefs)
 	if err := catalog.Register(tool.NewSearchTool(catalog)); err != nil {
 		return CatalogBundle{}, err
 	}
-	return CatalogBundle{Catalog: catalog, ClickStack: clickstackReg}, nil
+	return CatalogBundle{Catalog: catalog, ClickStack: clickstackReg, Notion: notionReg}, nil
 }
 
 func PolicyForSurface(cfg config.Config, surface SurfaceOptions) tool.SurfacePolicy {
@@ -77,7 +84,7 @@ func policyForSurface(cfg config.Config, surface SurfaceOptions) tool.SurfacePol
 		"luckin":     integrations.Luckin.MCPToken != "",
 		"clickstack": integrations.ClickStack.Enabled(),
 		"gcp":        cfg.Connections.GCPOAuthEnabled() || integrations.GCP.DefaultProject != "" || strings.TrimSpace(integrations.GCP.GCloudPath) != "",
-		"notion":     cfg.Connections.NotionOAuthEnabled(),
+		"notion":     integrations.Notion.Enabled(),
 		"tts":        integrations.TTS.APIKey != "",
 		"youtrack":   integrations.YouTrack.URL != "" && integrations.YouTrack.Token != "",
 	}
@@ -215,19 +222,6 @@ func registerIntegrationTools(catalog *tool.Catalog, policy tool.SurfacePolicy, 
 		Defaults: gcpDefaults,
 		Timeout:  gcpTimeout,
 	})
-
-	notionClient := notionTools.Client{
-		DatabaseID:    integrations.Notion.DatabaseID,
-		TitleProperty: integrations.Notion.TitleProperty,
-		Version:       integrations.Notion.Version,
-	}
-	var notionSource notionTools.ClientSource
-	if conn != nil && conn.Config.NotionEnabled() {
-		notionSource = notionTools.ConnectedSource{Service: *conn, Defaults: notionClient}
-	}
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, notionTools.SearchTool{Source: notionSource, Client: notionClient})
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, notionTools.GetPageTool{Source: notionSource, Client: notionClient})
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, notionTools.QueryDatabaseTool{Source: notionSource, Client: notionClient})
 
 	youtrackClient := youtrackTools.Client{BaseURL: integrations.YouTrack.URL, Token: integrations.YouTrack.Token}
 	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, youtrackTools.GetIssueTool{Client: youtrackClient})
