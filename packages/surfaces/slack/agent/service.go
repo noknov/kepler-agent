@@ -31,7 +31,7 @@ type ConversationMode string
 
 // ThreadLoader fetches Slack thread history for the current turn.
 type ThreadLoader interface {
-	Load(context.Context, slackconversation.Request) []model.Message
+	Load(context.Context, slackconversation.Request) ([]model.Message, error)
 }
 
 const (
@@ -312,7 +312,11 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	}
 	var history []model.Message
 	if s.ThreadLoader != nil {
-		history = s.ThreadLoader.Load(runCtx, req)
+		loaded, loadErr := s.ThreadLoader.Load(runCtx, req)
+		if loadErr != nil {
+			return fmt.Errorf("load Slack thread history: %w", loadErr)
+		}
+		history = loaded
 	}
 	modelName := ""
 	if s.ModelFor != nil {
@@ -613,6 +617,9 @@ func (s *Service) StartConnectionCompletedSubscriber(ctx context.Context) {
 
 func (s *Service) resumeAfterConnection(parentCtx context.Context, continuation connections.Continuation) {
 	if continuation.Channel == "" || continuation.UserID == "" {
+		if s.Continuations != nil {
+			_ = s.Continuations.Clear(context.Background(), continuation)
+		}
 		return
 	}
 	base := s.Lifecycle
@@ -624,19 +631,16 @@ func (s *Service) resumeAfterConnection(parentCtx context.Context, continuation 
 	}
 	ctx := context.WithoutCancel(base)
 
-	defer func() {
-		if s.Continuations != nil {
-			_ = s.Continuations.Clear(ctx, continuation)
-		}
-	}()
-
 	sessionID := session.ID(continuation.Channel, continuation.ThreadTS)
 	waiting, err := s.Agent.Runtime.WaitingForInput(ctx, sessionID, continuation.UserID)
 	if err != nil {
 		log.Printf("connection continuation waiting check failed session=%s: %v", sessionID, err)
+		s.releaseContinuation(ctx, continuation)
 		return
 	}
 	if !waiting {
+		// The turn was completed or superseded while OAuth was in progress.
+		_ = s.Continuations.Clear(ctx, continuation)
 		return
 	}
 	req := slackconversation.Request{
@@ -654,10 +658,22 @@ func (s *Service) resumeAfterConnection(parentCtx context.Context, continuation 
 	accepted, err := s.HandleReply(ctx, req)
 	if err != nil {
 		log.Printf("connection continuation resume failed session=%s: %v", sessionID, err)
+		s.releaseContinuation(ctx, continuation)
 		return
 	}
 	if !accepted {
 		log.Printf("connection continuation resume not accepted session=%s", sessionID)
+		s.releaseContinuation(ctx, continuation)
+		return
+	}
+	if s.Continuations != nil {
+		_ = s.Continuations.Clear(ctx, continuation)
+	}
+}
+
+func (s *Service) releaseContinuation(ctx context.Context, continuation connections.Continuation) {
+	if s.Continuations != nil {
+		_ = s.Continuations.Release(ctx, continuation)
 	}
 }
 
@@ -770,6 +786,14 @@ func (s *slackStream) Complete(final string) (string, error) {
 		}
 		s.stopNativeStream(ctx)
 		if deliveryFailed {
+			if updater, ok := s.messenger.(slackconversation.MarkdownMessageUpdater); ok {
+				if err := updater.UpdateMarkdownMessage(ctx, s.req.Channel, messageTS, final); err != nil {
+					return messageTS, err
+				}
+				return messageTS, nil
+			}
+			// A third-party Messenger without update support cannot safely amend
+			// a partial native stream. Posting is its only available fallback.
 			return s.postFinalMarkdown(ctx, final)
 		}
 		return messageTS, nil
@@ -812,6 +836,12 @@ func (s *slackStream) Fail(message string, canceled bool) (string, error) {
 	defer cancel()
 	if nativeStream && messageTS != "" {
 		s.stopNativeStream(ctx)
+		if updater, ok := s.messenger.(slackconversation.MarkdownMessageUpdater); ok {
+			if err := updater.UpdateMarkdownMessage(ctx, s.req.Channel, messageTS, message); err != nil {
+				return messageTS, err
+			}
+			return messageTS, nil
+		}
 	}
 	if messenger, ok := s.messenger.(slackconversation.IdempotentMarkdownMessenger); ok {
 		return messenger.PostMarkdownMessageWithID(ctx, s.req.Channel, s.req.ThreadTS, message, s.req.EventID)

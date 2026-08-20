@@ -12,17 +12,13 @@ import (
 
 // CircuitBreakerConfig optionally blocks repeated identical tool calls.
 type CircuitBreakerConfig struct {
-	Enabled                     bool
-	MaxIdenticalFailedAttempts  int
-	MaxIdenticalSuccessAttempts int
+	Enabled                    bool
+	MaxIdenticalFailedAttempts int
 }
 
 func (c CircuitBreakerConfig) withDefaults() CircuitBreakerConfig {
 	if c.MaxIdenticalFailedAttempts <= 0 {
 		c.MaxIdenticalFailedAttempts = 3
-	}
-	if c.MaxIdenticalSuccessAttempts <= 0 {
-		c.MaxIdenticalSuccessAttempts = 5
 	}
 	return c
 }
@@ -35,13 +31,11 @@ type callFingerprint struct {
 type circuitState struct {
 	mu       sync.Mutex
 	failures map[callFingerprint]int
-	success  map[callFingerprint]int
 }
 
 func newCircuitState() *circuitState {
 	return &circuitState{
 		failures: make(map[callFingerprint]int),
-		success:  make(map[callFingerprint]int),
 	}
 }
 
@@ -55,9 +49,6 @@ func (s *circuitState) check(config CircuitBreakerConfig, call tool.Call) error 
 	defer s.mu.Unlock()
 	if s.failures[fp] >= config.MaxIdenticalFailedAttempts {
 		return fmt.Errorf("circuit breaker blocked repeated failed tool call %q", call.Name)
-	}
-	if s.success[fp] >= config.MaxIdenticalSuccessAttempts {
-		return fmt.Errorf("circuit breaker blocked repeated successful tool call %q", call.Name)
 	}
 	return nil
 }
@@ -74,7 +65,8 @@ func (s *circuitState) record(config CircuitBreakerConfig, call tool.Call, faile
 		s.failures[fp]++
 		return
 	}
-	s.success[fp]++
+	// A successful call is evidence that the operation is healthy. Blocking it
+	// can turn legitimate polling or repeated reads into a false failure.
 }
 
 func fingerprint(call tool.Call) callFingerprint {
@@ -127,10 +119,6 @@ func CircuitWarning(config CircuitBreakerConfig, call tool.Call, failed bool) st
 			return fmt.Sprintf("Warning: tool %q has failed %d times with identical arguments.", call.Name, count)
 		}
 		return ""
-	}
-	count := state.success[fp]
-	if count+1 >= config.MaxIdenticalSuccessAttempts {
-		return fmt.Sprintf("Warning: tool %q succeeded %d times with identical arguments; consider changing approach.", call.Name, count)
 	}
 	return ""
 }

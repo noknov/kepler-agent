@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
@@ -16,9 +17,9 @@ type ThreadLoader struct {
 	Bot *slack.Client
 }
 
-func (l ThreadLoader) Load(ctx context.Context, req slackconversation.Request) []model.Message {
+func (l ThreadLoader) Load(ctx context.Context, req slackconversation.Request) ([]model.Message, error) {
 	if l.Bot == nil {
-		return nil
+		return nil, fmt.Errorf("Slack bot client is unavailable")
 	}
 	return slackfiles.ThreadHistory(ctx, l.Bot, req.Channel, req.ThreadTS, req.MessageTS, slackfiles.MaxThreadHistoryMessages)
 }

@@ -44,6 +44,13 @@ func TestRedisContinuationStoreRoundTrip(t *testing.T) {
 	if loaded[0].Channel != cont.Channel || loaded[0].ThreadTS != cont.ThreadTS {
 		t.Fatalf("Claim() = %+v, want %+v", loaded[0], cont)
 	}
+	if err := store.Release(ctx, cont); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	loaded, err = store.Claim(ctx, cont.UserID, cont.Provider)
+	if err != nil || len(loaded) != 1 {
+		t.Fatalf("Claim() after release = (%+v, %v)", loaded, err)
+	}
 	if err := store.Clear(ctx, cont); err != nil {
 		t.Fatalf("Clear() error = %v", err)
 	}

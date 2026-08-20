@@ -96,3 +96,47 @@ func (f *Fanout) Publish(ctx context.Context, event Event) {
 		sink.Publish(ctx, event)
 	}
 }
+
+// AsyncSink decouples non-authoritative projections from the agent turn. The
+// transcript has already committed before a sink receives an event, so an
+// overloaded projection can be rebuilt by replay rather than delaying model
+// streaming or tool execution.
+type AsyncSink struct {
+	sink  Sink
+	queue chan Event
+}
+
+func NewAsyncSink(ctx context.Context, sink Sink, capacity int) *AsyncSink {
+	if capacity <= 0 {
+		capacity = 1024
+	}
+	s := &AsyncSink{sink: sink, queue: make(chan Event, capacity)}
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event := <-s.queue:
+				if s.sink != nil {
+					s.sink.Publish(context.WithoutCancel(ctx), event)
+				}
+			}
+		}
+	}()
+	return s
+}
+
+func (s *AsyncSink) Publish(_ context.Context, event Event) {
+	if s == nil || s.sink == nil || event.Type == ModelStreamed {
+		return
+	}
+	select {
+	case s.queue <- event:
+	default:
+		// Do not drop terminal/projection facts merely because a projection is
+		// slow. The detached path keeps the turn non-blocking; consumers must be
+		// idempotent by event ID, and canonical transcript replay remains the
+		// recovery mechanism after process loss.
+		go s.sink.Publish(context.Background(), event)
+	}
+}

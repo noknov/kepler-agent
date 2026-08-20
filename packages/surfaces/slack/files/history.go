@@ -16,9 +16,9 @@ const (
 )
 
 // ThreadHistory loads prior Slack messages with file metadata and supported images.
-func ThreadHistory(ctx context.Context, c *slack.Client, channel, threadTS, beforeTS string, limit int) []model.Message {
+func ThreadHistory(ctx context.Context, c *slack.Client, channel, threadTS, beforeTS string, limit int) ([]model.Message, error) {
 	if c == nil {
-		return nil
+		return nil, nil
 	}
 	if limit <= 0 || limit > MaxThreadHistoryMessages {
 		limit = MaxThreadHistoryMessages
@@ -29,7 +29,7 @@ func ThreadHistory(ctx context.Context, c *slack.Client, channel, threadTS, befo
 		LatestTS: beforeTS,
 	}, limit+1)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	out := make([]model.Message, 0, min(limit, len(raw)))
 	bytesUsed := 0
@@ -46,7 +46,7 @@ func ThreadHistory(ctx context.Context, c *slack.Client, channel, threadTS, befo
 		bytesUsed += textSize
 		out = append(out, historyMsg)
 	}
-	return out
+	return out, nil
 }
 
 // HistoryMessage converts one Slack message into model history with attachments.

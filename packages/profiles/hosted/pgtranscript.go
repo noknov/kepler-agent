@@ -24,7 +24,9 @@ func (s PGTranscript) Append(ctx context.Context, event transcript.Event) (trans
 		return transcript.Event{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, key); err != nil {
+	// hashtextextended provides a 64-bit key. hashtext is only 32-bit and can
+	// serialize unrelated high-volume sessions on a collision.
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, key); err != nil {
 		return transcript.Event{}, err
 	}
 	if err = tx.QueryRow(ctx, `SELECT COALESCE(MAX(sequence), 0) + 1 FROM agent_transcript_events WHERE session_id=$1`, key).Scan(&event.Sequence); err != nil {
