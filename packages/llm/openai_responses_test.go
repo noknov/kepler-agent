@@ -9,6 +9,34 @@ import (
 	"testing"
 )
 
+func TestOpenAIResponsesClientOmitsTemperatureForOpenCodeGo(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"status":"completed",
+			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],
+			"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewOpenAIResponsesClient("opencode-go", server.URL, "token", 0)
+	if _, err := client.Chat(context.Background(), Request{
+		Model:       "gpt-5.6-luna",
+		Messages:    []Message{{Role: "user", Content: "look"}},
+		Temperature: 0,
+	}); err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if _, ok := gotBody["temperature"]; ok {
+		t.Fatalf("temperature = %v, want omitted for opencode-go", gotBody["temperature"])
+	}
+}
+
 func TestOpenAIResponsesClientPostsResponsesBody(t *testing.T) {
 	var gotPath string
 	var gotBody map[string]any
@@ -68,6 +96,9 @@ func TestOpenAIResponsesClientPostsResponsesBody(t *testing.T) {
 	}
 	if gotBody["max_output_tokens"].(float64) != 123 {
 		t.Fatalf("max_output_tokens = %v", gotBody["max_output_tokens"])
+	}
+	if _, ok := gotBody["temperature"]; ok {
+		t.Fatalf("temperature = %v, want omitted for opencode-go", gotBody["temperature"])
 	}
 	input := gotBody["input"].([]any)
 	user := input[1].(map[string]any)
