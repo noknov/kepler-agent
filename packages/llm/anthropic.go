@@ -346,7 +346,7 @@ type anthropicRequest struct {
 	Tools       []anthropicTool    `json:"tools,omitempty"`
 	ToolChoice  any                `json:"tool_choice,omitempty"`
 	MaxTokens   int                `json:"max_tokens,omitempty"`
-	Temperature float64            `json:"temperature,omitempty"`
+	Temperature *float64           `json:"temperature,omitempty"`
 	Stream      bool               `json:"stream,omitempty"`
 	Thinking    *anthropicThinking `json:"thinking,omitempty"`
 }

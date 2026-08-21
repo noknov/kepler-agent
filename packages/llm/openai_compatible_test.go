@@ -44,6 +44,9 @@ func TestChatBodyOmitsMaxTokensWhenUnset(t *testing.T) {
 	if _, ok := body["max_completion_tokens"]; ok {
 		t.Fatalf("chatBody should omit max_completion_tokens when MaxTokens is unset: %#v", body)
 	}
+	if _, ok := body["temperature"]; ok {
+		t.Fatalf("chatBody should omit temperature when unset: %#v", body)
+	}
 }
 
 func TestDeepSeekChatBodyUsesOpenAICompatibleToolCalls(t *testing.T) {
@@ -57,7 +60,7 @@ func TestDeepSeekChatBodyUsesOpenAICompatibleToolCalls(t *testing.T) {
 			Parameters:  map[string]any{"type": "object"},
 		}}},
 		MaxTokens:   1234,
-		Temperature: 0,
+		Temperature: float64Ptr(0),
 	})
 
 	if got := body["model"]; got != "deepseek-v4-flash" {
@@ -65,6 +68,9 @@ func TestDeepSeekChatBodyUsesOpenAICompatibleToolCalls(t *testing.T) {
 	}
 	if got := body["max_tokens"]; got != 1234 {
 		t.Fatalf("max_tokens = %#v, want 1234", got)
+	}
+	if got := body["temperature"]; got != float64(0) {
+		t.Fatalf("temperature = %#v, want 0 when explicitly configured", got)
 	}
 	tools, ok := body["tools"].([]ToolSpec)
 	if !ok {

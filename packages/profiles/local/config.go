@@ -25,7 +25,7 @@ type Config struct {
 	MaxOutputTokens      int               `toml:"max_output_tokens"`
 	MaxContextTokens     int               `toml:"max_context_tokens"`
 	AutocompactBuffer    int               `toml:"autocompact_buffer"`
-	Temperature          float64           `toml:"temperature"`
+	Temperature          *float64          `toml:"temperature"`
 	Timeout              time.Duration     `toml:"timeout"`
 	UnsafeAllowNoSandbox bool              `toml:"unsafe_allow_no_sandbox"`
 	AdditionalReadRoots  []string          `toml:"additional_read_roots"`

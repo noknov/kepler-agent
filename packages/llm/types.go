@@ -139,7 +139,7 @@ type Request struct {
 	// tool schemas (so it knows parameter formats) while prohibiting tool calls.
 	ToolChoice  string
 	MaxTokens   int
-	Temperature float64
+	Temperature *float64
 	Thinking    string
 }
 

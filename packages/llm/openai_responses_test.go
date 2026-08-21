@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestOpenAIResponsesClientOmitsTemperatureForOpenCodeGo(t *testing.T) {
+func TestOpenAIResponsesClientOmitsUnsetTemperature(t *testing.T) {
 	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
@@ -26,14 +26,13 @@ func TestOpenAIResponsesClientOmitsTemperatureForOpenCodeGo(t *testing.T) {
 
 	client := NewOpenAIResponsesClient("opencode-go", server.URL, "token", 0)
 	if _, err := client.Chat(context.Background(), Request{
-		Model:       "gpt-5.6-luna",
-		Messages:    []Message{{Role: "user", Content: "look"}},
-		Temperature: 0,
+		Model:    "gpt-5.6-luna",
+		Messages: []Message{{Role: "user", Content: "look"}},
 	}); err != nil {
 		t.Fatalf("Chat() error = %v", err)
 	}
 	if _, ok := gotBody["temperature"]; ok {
-		t.Fatalf("temperature = %v, want omitted for opencode-go", gotBody["temperature"])
+		t.Fatalf("temperature = %v, want omitted when unset", gotBody["temperature"])
 	}
 }
 
@@ -74,7 +73,7 @@ func TestOpenAIResponsesClientPostsResponsesBody(t *testing.T) {
 		}},
 		ToolChoice:  "auto",
 		MaxTokens:   123,
-		Temperature: 0.2,
+		Temperature: float64Ptr(0.2),
 	})
 	if err != nil {
 		t.Fatalf("Chat() error = %v", err)
@@ -97,8 +96,8 @@ func TestOpenAIResponsesClientPostsResponsesBody(t *testing.T) {
 	if gotBody["max_output_tokens"].(float64) != 123 {
 		t.Fatalf("max_output_tokens = %v", gotBody["max_output_tokens"])
 	}
-	if _, ok := gotBody["temperature"]; ok {
-		t.Fatalf("temperature = %v, want omitted for opencode-go", gotBody["temperature"])
+	if gotBody["temperature"].(float64) != 0.2 {
+		t.Fatalf("temperature = %v, want 0.2", gotBody["temperature"])
 	}
 	input := gotBody["input"].([]any)
 	user := input[1].(map[string]any)

@@ -182,8 +182,9 @@ OPENCODE_GO_PROTOCOL=responses
 Use `responses` for OpenCode Go when Slack image attachments or other
 vision-capable models such as `gpt-5.6-luna` are in use. The `openai`
 chat/completions path returns HTTP 400 for those multimodal requests.
-Reasoning models on OpenCode Go also reject `temperature`; leave
-`OPENCODE_GO_TEMPERATURE` unset or omit it from deploy config.
+Leave `OPENCODE_GO_TEMPERATURE` unset unless you explicitly need sampling
+control; unset values are not sent to the provider. Reasoning models such as
+`gpt-5.6-luna` reject `temperature` even when set to `0`.
 
 ## Secondary Model
 
@@ -254,9 +255,8 @@ MULTIMODAL_MODELS=
 
 If neither the selected model nor the fallback is listed as multimodal, the
 image is stripped and replaced with a text note asking for a description.
-OpenCode Go deployments must also set `OPENCODE_GO_PROTOCOL=responses`; listing
-a model in `MULTIMODAL_MODELS` alone is not enough when the wire protocol still
-targets chat/completions.
+Provider temperature env vars are optional: when unset, the runtime omits
+`temperature` from provider requests instead of defaulting it to zero.
 
 ## Storage and Concurrency
 

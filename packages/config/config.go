@@ -63,7 +63,7 @@ type LLMConfig struct {
 	Protocol         string
 	AnthropicFlavor  string
 	Thinking         string
-	Temperature      float64
+	Temperature      *float64
 	Timeout          time.Duration
 
 	// Secondary model is used for cheaper/faster background work such as
@@ -659,8 +659,16 @@ func providerThinking(provider string) string {
 	}
 }
 
-func providerTemperature(provider string) float64 {
-	return envFloat(providerEnvPrefix(provider)+"_TEMPERATURE", 0)
+func providerTemperature(provider string) *float64 {
+	raw := strings.TrimSpace(os.Getenv(providerEnvPrefix(provider) + "_TEMPERATURE"))
+	if raw == "" {
+		return nil
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return nil
+	}
+	return &v
 }
 
 func providerTimeout(provider string) time.Duration {

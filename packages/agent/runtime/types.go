@@ -31,7 +31,7 @@ const (
 type Config struct {
 	Model                   string
 	ReasoningEffort         string
-	Temperature             float64
+	Temperature             *float64
 	MaxOutputTokens         int
 	MaxSteps                int
 	MaxModelRetries         int
