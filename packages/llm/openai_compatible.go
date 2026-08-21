@@ -90,10 +90,12 @@ func (u openAIUsage) toUsage() Usage {
 
 func (c *OpenAICompatibleClient) chatBody(req Request) map[string]any {
 	body := map[string]any{
-		"model":       req.Model,
-		"messages":    req.Messages,
-		"tools":       req.Tools,
-		"temperature": req.Temperature,
+		"model":    req.Model,
+		"messages": req.Messages,
+		"tools":    req.Tools,
+	}
+	if req.Temperature != nil {
+		body["temperature"] = *req.Temperature
 	}
 	if req.MaxTokens > 0 {
 		body["max_tokens"] = req.MaxTokens

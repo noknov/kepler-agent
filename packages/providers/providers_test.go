@@ -23,15 +23,16 @@ func (w *recordingWire) Chat(_ context.Context, request llm.Request) (llm.Respon
 func TestClientConvertsCanonicalRequestOnceForEveryProfile(t *testing.T) {
 	wire := &recordingWire{}
 	client := &Client{Wire: wire}
+	temp := 0.25
 	response, err := client.Generate(context.Background(), model.Request{
-		Model: "test", Temperature: 0.25, MaxOutputTokens: 123,
+		Model: "test", Temperature: &temp, MaxOutputTokens: 123,
 		Messages: []model.Message{model.TextMessage(model.RoleUser, "hello")},
 		Tools:    []model.ToolDefinition{{Name: "echo", InputSchema: []byte(`{"type":"object"}`)}},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Message.Text() != "ok" || wire.request.Model != "test" || wire.request.Temperature != 0.25 || wire.request.MaxTokens != 123 {
+	if response.Message.Text() != "ok" || wire.request.Model != "test" || wire.request.Temperature == nil || *wire.request.Temperature != 0.25 || wire.request.MaxTokens != 123 {
 		t.Fatalf("response=%+v request=%+v", response, wire.request)
 	}
 	if len(wire.request.Tools) != 1 || wire.request.Tools[0].Function.Name != "echo" {

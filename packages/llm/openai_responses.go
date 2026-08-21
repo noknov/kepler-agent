@@ -232,8 +232,8 @@ func (c *OpenAIResponsesClient) responsesBody(req Request, stream bool) map[stri
 		"model": req.Model,
 		"input": responsesInput(req.Messages),
 	}
-	if c.providerName() != "opencode-go" && req.Temperature > 0 {
-		body["temperature"] = req.Temperature
+	if req.Temperature != nil {
+		body["temperature"] = *req.Temperature
 	}
 	if stream {
 		body["stream"] = true
