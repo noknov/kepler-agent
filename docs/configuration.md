@@ -176,8 +176,12 @@ LLM_PROVIDER=opencode-go
 OPENCODE_GO_API_KEY=...
 OPENCODE_GO_BASE_URL=https://opencode.ai/zen/go/v1
 OPENCODE_GO_MODEL=glm-5.2
-OPENCODE_GO_PROTOCOL=openai
+OPENCODE_GO_PROTOCOL=responses
 ```
+
+Use `responses` for OpenCode Go when Slack image attachments or other
+vision-capable models such as `gpt-5.6-luna` are in use. The `openai`
+chat/completions path returns HTTP 400 for those multimodal requests.
 
 ## Secondary Model
 
@@ -248,6 +252,9 @@ MULTIMODAL_MODELS=
 
 If neither the selected model nor the fallback is listed as multimodal, the
 image is stripped and replaced with a text note asking for a description.
+OpenCode Go deployments must also set `OPENCODE_GO_PROTOCOL=responses`; listing
+a model in `MULTIMODAL_MODELS` alone is not enough when the wire protocol still
+targets chat/completions.
 
 ## Storage and Concurrency
 
