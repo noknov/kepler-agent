@@ -182,6 +182,8 @@ OPENCODE_GO_PROTOCOL=responses
 Use `responses` for OpenCode Go when Slack image attachments or other
 vision-capable models such as `gpt-5.6-luna` are in use. The `openai`
 chat/completions path returns HTTP 400 for those multimodal requests.
+Reasoning models on OpenCode Go also reject `temperature`; leave
+`OPENCODE_GO_TEMPERATURE` unset or omit it from deploy config.
 
 ## Secondary Model
 

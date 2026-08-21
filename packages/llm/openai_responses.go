@@ -229,9 +229,11 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 
 func (c *OpenAIResponsesClient) responsesBody(req Request, stream bool) map[string]any {
 	body := map[string]any{
-		"model":       req.Model,
-		"input":       responsesInput(req.Messages),
-		"temperature": req.Temperature,
+		"model": req.Model,
+		"input": responsesInput(req.Messages),
+	}
+	if c.providerName() != "opencode-go" && req.Temperature > 0 {
+		body["temperature"] = req.Temperature
 	}
 	if stream {
 		body["stream"] = true
