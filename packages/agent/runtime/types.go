@@ -18,14 +18,17 @@ import (
 type TerminationReason string
 
 const (
-	TerminationCompleted       TerminationReason = "completed"
-	TerminationCanceled        TerminationReason = "canceled"
-	TerminationModelError      TerminationReason = "model_error"
-	TerminationMaxSteps        TerminationReason = "max_steps"
-	TerminationOutputLimit     TerminationReason = "output_limit"
-	TerminationPendingApproval TerminationReason = "pending_approval"
-	TerminationPendingInput    TerminationReason = "pending_input"
-	TerminationEmptyResponse   TerminationReason = "empty_response"
+	TerminationCompleted         TerminationReason = "completed"
+	TerminationCanceled          TerminationReason = "canceled"
+	TerminationModelError        TerminationReason = "model_error"
+	TerminationMaxSteps          TerminationReason = "max_steps"
+	TerminationOutputLimit       TerminationReason = "output_limit"
+	TerminationPendingApproval   TerminationReason = "pending_approval"
+	TerminationPendingInput      TerminationReason = "pending_input"
+	TerminationEmptyResponse     TerminationReason = "empty_response"
+	TerminationBudgetExhausted   TerminationReason = "budget_exhausted"
+	TerminationProviderCircuit   TerminationReason = "provider_circuit_open"
+	TerminationFallbackExhausted TerminationReason = "fallback_exhausted"
 )
 
 type Config struct {
@@ -44,7 +47,7 @@ type Config struct {
 
 func (c Config) withDefaults() Config {
 	if c.MaxSteps <= 0 {
-		c.MaxSteps = 32
+		c.MaxSteps = 256
 	}
 	if c.MaxModelRetries < 0 {
 		c.MaxModelRetries = 0
