@@ -136,9 +136,13 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 	if err != nil {
 		return model.Response{}, err
 	}
-	reason, err := finishReason(response.FinishReason)
-	if err != nil {
-		return model.Response{}, err
+	reason := finishReason(response.FinishReason)
+	if reason == model.FinishError {
+		return model.Response{}, &model.Error{
+			Kind:      model.ErrorTransient,
+			Message:   fmt.Sprintf("provider finished with error reason %q", response.FinishReason),
+			Retryable: true,
+		}
 	}
 	canonical := model.Response{Message: message, FinishReason: reason, Usage: toUsage(response.Usage), RawMetadata: response.Raw}
 	publish(model.StreamEvent{Type: model.StreamCompleted, ResponseID: canonical.ID, Usage: &canonical.Usage})
@@ -234,22 +238,29 @@ func toUsage(usage llm.Usage) model.Usage {
 	return model.Usage{InputTokens: int64(usage.PromptTokens), OutputTokens: int64(usage.CompletionTokens), CacheReadTokens: int64(usage.CacheReadInputTokens), CacheCreatedTokens: int64(usage.CacheCreationInputTokens), CacheTokensIncludedInInput: usage.CacheIncludedInPrompt}
 }
 
-func finishReason(reason string) (model.FinishReason, error) {
+func finishReason(reason string) model.FinishReason {
+	reason = strings.TrimSpace(reason)
 	switch strings.ToLower(reason) {
 	case "tool_calls", "tool_use":
-		return model.FinishToolCalls, nil
+		return model.FinishToolCalls
 	case "length", "max_tokens", "incomplete":
-		return model.FinishLength, nil
+		return model.FinishLength
 	case "content_filter", "refusal":
-		return model.FinishContent, nil
+		return model.FinishContent
 	case "stop", "end_turn", "stop_sequence", "completed":
-		return model.FinishStop, nil
+		return model.FinishStop
 	case "canceled", "cancelled":
-		return model.FinishCanceled, nil
+		return model.FinishCanceled
 	case "error", "failed":
-		return model.FinishError, nil
+		return model.FinishError
+	case "network_error", "network", "connection_error", "timeout", "timed_out", "server_error", "internal_error", "overloaded", "overload":
+		return model.FinishError
+	case "":
+		return model.FinishStop
 	}
-	return model.FinishError, fmt.Errorf("provider returned unsupported finish reason %q", reason)
+	// Providers extend finish_reason freely. Treat unknown terminal reasons as
+	// provider-side failures instead of failing response conversion.
+	return model.FinishError
 }
 
 func toModelError(err error) error {

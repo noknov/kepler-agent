@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,11 +14,54 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/llm"
 )
 
-type recordingWire struct{ request llm.Request }
+type recordingWire struct {
+	request  llm.Request
+	response llm.Response
+}
 
 func (w *recordingWire) Chat(_ context.Context, request llm.Request) (llm.Response, error) {
 	w.request = request
+	if w.response.FinishReason != "" || w.response.Message.Content != "" {
+		return w.response, nil
+	}
 	return llm.Response{Message: llm.Message{Role: "assistant", Content: "ok"}, FinishReason: "stop"}, nil
+}
+
+func TestFinishReasonMapsNetworkError(t *testing.T) {
+	reason := finishReason("network_error")
+	if reason != model.FinishError {
+		t.Fatalf("finishReason() = %q, want error", reason)
+	}
+}
+
+func TestFinishReasonTreatsUnknownProviderFailureAsError(t *testing.T) {
+	if got := finishReason("upstream_unavailable"); got != model.FinishError {
+		t.Fatalf("finishReason() = %q, want error", got)
+	}
+}
+
+func TestClientMapsProviderFinishErrorToRetryableModelError(t *testing.T) {
+	wire := &recordingWire{
+		response: llm.Response{
+			Message:      llm.Message{Role: "assistant", Content: "partial"},
+			FinishReason: "network_error",
+		},
+	}
+	client := &Client{Wire: wire}
+	_, err := client.Generate(context.Background(), model.Request{
+		Model:    "test",
+		Messages: []model.Message{model.TextMessage(model.RoleUser, "hi")},
+	}, nil)
+	if err == nil {
+		t.Fatal("expected retryable model error")
+	}
+	var typed *model.Error
+	if !errors.As(err, &typed) {
+		t.Fatalf("error = %T, want *model.Error", err)
+	}
+	if !typed.Retryable || typed.Kind != model.ErrorTransient {
+		t.Fatalf("model error = retryable=%v kind=%q, want transient retryable", typed.Retryable, typed.Kind)
+	}
 }
 
 func TestClientConvertsCanonicalRequestOnceForEveryProfile(t *testing.T) {
