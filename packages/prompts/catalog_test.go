@@ -62,6 +62,23 @@ func TestAgentPromptAppendsToSystemPromptWithinSameDir(t *testing.T) {
 	}
 }
 
+func TestSystemPromptIncludesCapabilityBoundary(t *testing.T) {
+	if err := LoadDirs(PublicDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = LoadDirs(PublicDir) })
+
+	got := System("")
+	for _, want := range []string{
+		"active tool catalog and tool results as the authoritative record",
+		"immutable remote-ref inspection",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("public prompt missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestPublicPromptFilesAreRuntimeContent(t *testing.T) {
 	publicDir := resolveDir(PublicDir)
 	var readmes []string
@@ -238,19 +255,19 @@ Full workflow body.
 
 func TestLoadDirParsesMultilineSkillDescription(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "skills", "zhangxuefeng-zhiyuan"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "skills", "multiline-metadata"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	skillBody := `---
-name: zhangxuefeng-zhiyuan
+name: multiline-metadata
 description: |
-  张雪峰的思维框架与表达方式，专注高考志愿填报与职业规划。
-  当用户提到「高考」「志愿」「填报」「选专业」「分数线」「位次」时使用。
+  First line of a multiline skill description.
+  Second line preserves the matching hint.
 ---
 
 # Body
 `
-	if err := os.WriteFile(filepath.Join(dir, "skills", "zhangxuefeng-zhiyuan", "SKILL.md"), []byte(skillBody), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "skills", "multiline-metadata", "SKILL.md"), []byte(skillBody), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -260,16 +277,16 @@ description: |
 	t.Cleanup(func() { _ = LoadDirs(PublicDir) })
 
 	got := SkillsPrompt()
-	for _, want := range []string{"zhangxuefeng-zhiyuan", "高考志愿填报", "分数线", "位次"} {
+	for _, want := range []string{"multiline-metadata", "First line", "Second line", "matching hint"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("SkillsPrompt() missing %q:\n%s", want, got)
 		}
 	}
-	skill, ok := LoadSkill("zhangxuefeng-zhiyuan")
+	skill, ok := LoadSkill("multiline-metadata")
 	if !ok {
-		t.Fatal("LoadSkill() did not find zhangxuefeng-zhiyuan")
+		t.Fatal("LoadSkill() did not find multiline-metadata")
 	}
-	if !strings.Contains(skill.Description, "当用户提到") {
+	if !strings.Contains(skill.Description, "Second line") {
 		t.Fatalf("multiline description not parsed: %#v", skill)
 	}
 }
