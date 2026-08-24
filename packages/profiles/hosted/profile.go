@@ -62,10 +62,29 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 			return Profile{}, err
 		}
 	}
-	client := model.Client(primary)
-	compactClient, compactModel := model.Client(observedModel{Client: client, Metrics: deps.Metrics}), cfg.Sessions.CompactModel
+	primaryObserved := model.Client(observedModel{Client: primary, Metrics: deps.Metrics})
+	client := model.Client(&model.ResilientClient{
+		Primary: primaryObserved, PrimaryProvider: cfg.LLM.Provider,
+		MaxAttempts: cfg.LLM.Resilience.MaxAttempts, RetryDelay: cfg.LLM.Resilience.RetryBaseDelay,
+		MinAttemptBudget: cfg.LLM.Resilience.MinAttemptBudget, FailureThreshold: cfg.LLM.Resilience.FailureThreshold,
+		Cooldown: cfg.LLM.Resilience.CircuitCooldown,
+	})
+	compactClient, compactModel := client, cfg.Sessions.CompactModel
 	if secondary != nil {
 		secondary = observedModel{Client: secondary, Metrics: deps.Metrics}
+		secondary = &model.ResilientClient{
+			Primary: secondary, PrimaryProvider: cfg.LLM.SecondaryProvider,
+			MaxAttempts: cfg.LLM.Resilience.MaxAttempts, RetryDelay: cfg.LLM.Resilience.RetryBaseDelay,
+			MinAttemptBudget: cfg.LLM.Resilience.MinAttemptBudget, FailureThreshold: cfg.LLM.Resilience.FailureThreshold,
+			Cooldown: cfg.LLM.Resilience.CircuitCooldown,
+		}
+		client = &model.ResilientClient{
+			Primary: primaryObserved, PrimaryProvider: cfg.LLM.Provider,
+			Fallback: secondary, FallbackProvider: cfg.LLM.SecondaryProvider, FallbackModel: secondaryModel,
+			MaxAttempts: cfg.LLM.Resilience.MaxAttempts, RetryDelay: cfg.LLM.Resilience.RetryBaseDelay,
+			MinAttemptBudget: cfg.LLM.Resilience.MinAttemptBudget, FailureThreshold: cfg.LLM.Resilience.FailureThreshold,
+			Cooldown: cfg.LLM.Resilience.CircuitCooldown,
+		}
 		compactClient = secondary
 		if compactModel == "" {
 			compactModel = secondaryModel
@@ -76,7 +95,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	}
 	runner, err := agentruntime.New(agentruntime.Config{
 		Model: cfg.LLM.Model, ReasoningEffort: cfg.LLM.Thinking, Temperature: cfg.LLM.Temperature,
-		MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxSteps: cfg.Tools.AgentMaxSteps, MaxModelRetries: 2, MaxEmptyResponseRetries: 3,
+		MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxSteps: cfg.Tools.AgentMaxSteps, MaxModelRetries: 0, MaxEmptyResponseRetries: 3,
 		Context:        agentruntime.ContextConfig{MaxTokens: cfg.Sessions.MaxContextTokens, ReserveTokens: cfg.Sessions.AutocompactBuffer},
 		ToolResults:    agentruntime.ToolResultConfig{MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)},
 		CircuitBreaker: agentruntime.CircuitBreakerConfig{Enabled: true},

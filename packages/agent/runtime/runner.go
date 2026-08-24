@@ -290,6 +290,17 @@ func (r *Runtime) generateWithTools(ctx context.Context, turn TurnRequest, messa
 		ReasoningEffort: r.config.ReasoningEffort, Temperature: r.config.Temperature, MaxOutputTokens: r.config.MaxOutputTokens,
 		Metadata: map[string]string{"session_id": turn.SessionID, "turn_id": turn.TurnID},
 	}
+	ctx = model.WithAttemptObserver(ctx, func(attempt model.Attempt) {
+		metadata, _ := json.Marshal(map[string]any{"attempt": attempt.Number, "provider": attempt.Provider, "model": attempt.Model, "fallback": attempt.Fallback, "outcome": attempt.Outcome, "remaining_ms": attempt.Remaining.Milliseconds(), "kind": model.ErrorKindOf(attempt.Error)})
+		event := transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelRequested, Status: attempt.Outcome, Metadata: metadata}
+		if attempt.Error != nil {
+			event.Type, event.Error = transcript.ModelFailed, attempt.Error.Error()
+		}
+		if attempt.Outcome == "completed" {
+			event.Type = transcript.ModelCompleted
+		}
+		_, _ = r.record(context.WithoutCancel(ctx), event)
+	})
 	var lastErr error
 	for attempt := 0; attempt <= r.config.MaxModelRetries; attempt++ {
 		metadata, _ := json.Marshal(map[string]any{"attempt": attempt + 1, "model": request.Model})
@@ -451,7 +462,16 @@ func (r *Runtime) failTurn(ctx context.Context, result TurnResult, err error) (T
 	if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 		return r.cancelTurn(ctx, result, err)
 	}
-	result.Termination = TerminationModelError
+	switch model.ErrorKindOf(err) {
+	case model.ErrorBudgetExhausted:
+		result.Termination = TerminationBudgetExhausted
+	case model.ErrorCircuitOpen:
+		result.Termination = TerminationProviderCircuit
+	case model.ErrorFallbackExhausted:
+		result.Termination = TerminationFallbackExhausted
+	default:
+		result.Termination = TerminationModelError
+	}
 	return r.finishTurn(ctx, result, result.Message, result.Termination, err)
 }
 

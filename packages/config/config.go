@@ -66,6 +66,7 @@ type LLMConfig struct {
 	Thinking         string
 	Temperature      *float64
 	Timeout          time.Duration
+	Resilience       ResilienceConfig
 
 	// Secondary model is used for cheaper/faster background work such as
 	// read-only code exploration and compact summaries.
@@ -74,6 +75,14 @@ type LLMConfig struct {
 	SecondaryAPIKey   string
 	SecondaryModel    string
 	SecondaryProtocol string
+}
+
+type ResilienceConfig struct {
+	MaxAttempts      int
+	RetryBaseDelay   time.Duration
+	MinAttemptBudget time.Duration
+	FailureThreshold int
+	CircuitCooldown  time.Duration
 }
 
 type SecurityConfig struct {
@@ -319,6 +328,7 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			Thinking:         llmThinking,
 			Temperature:      providerTemperature(llmProvider),
 			Timeout:          providerTimeout(llmProvider),
+			Resilience:       ResilienceConfig{MaxAttempts: envInt("LLM_RESILIENCE_MAX_ATTEMPTS", 3), RetryBaseDelay: envDuration("LLM_RESILIENCE_RETRY_BASE", 500*time.Millisecond), MinAttemptBudget: envDuration("LLM_RESILIENCE_MIN_ATTEMPT_BUDGET", 45*time.Second), FailureThreshold: envInt("LLM_CIRCUIT_FAILURE_THRESHOLD", 3), CircuitCooldown: envDuration("LLM_CIRCUIT_COOLDOWN", 30*time.Second)},
 
 			SecondaryProvider: secondaryProvider,
 			SecondaryBaseURL:  trimRightSlash(secondaryBaseURL),
@@ -340,7 +350,7 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 		},
 		Tools: ToolConfig{
 			CommandTimeout:       envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
-			AgentMaxSteps:        envInt("AGENT_MAX_STEPS", 32),
+			AgentMaxSteps:        envInt("AGENT_MAX_STEPS", 256),
 			AgentExploreMaxSteps: envInt("AGENT_EXPLORE_MAX_STEPS", 8),
 			AgentExploreTimeout:  envDuration("AGENT_EXPLORE_TIMEOUT", 2*time.Minute),
 			AllowedWriteTools: envCSVDefault("AGENT_ALLOWED_WRITE_TOOLS", []string{
@@ -762,7 +772,7 @@ func envBoolValue(raw string) bool {
 }
 
 func validateTypedEnvironment() error {
-	integers := []string{"AGENT_MAX_STEPS", "LLM_MAX_OUTPUT_TOKENS", "SESSION_AUTOCOMPACT_BUFFER", "SESSION_MAX_CONTEXT_TOKENS", "SESSION_MAX_TOOL_RESULT_TOKENS", "SLACK_EVENT_MAX_ATTEMPTS", "SLACK_EVENT_QUEUE_SIZE", "SLACK_EVENT_WORKERS"}
+	integers := []string{"AGENT_MAX_STEPS", "AGENT_EXPLORE_MAX_STEPS", "LLM_MAX_OUTPUT_TOKENS", "LLM_RESILIENCE_MAX_ATTEMPTS", "LLM_CIRCUIT_FAILURE_THRESHOLD", "SESSION_AUTOCOMPACT_BUFFER", "SESSION_MAX_CONTEXT_TOKENS", "SESSION_MAX_TOOL_RESULT_TOKENS", "SLACK_EVENT_MAX_ATTEMPTS", "SLACK_EVENT_QUEUE_SIZE", "SLACK_EVENT_WORKERS"}
 	for _, key := range integers {
 		if raw := strings.TrimSpace(os.Getenv(key)); raw != "" {
 			if _, err := strconv.Atoi(raw); err != nil {
@@ -770,7 +780,7 @@ func validateTypedEnvironment() error {
 			}
 		}
 	}
-	durations := []string{"HTTP_SHUTDOWN_TIMEOUT", "SLACK_EVENT_ENQUEUE_TIMEOUT", "SLACK_EVENT_INBOX_LEASE", "SLACK_EVENT_RETRY_BASE", "SLACK_EVENT_RETRY_MAX", "SLACK_EVENT_TIMEOUT", "TOOL_COMMAND_TIMEOUT"}
+	durations := []string{"HTTP_SHUTDOWN_TIMEOUT", "SLACK_EVENT_ENQUEUE_TIMEOUT", "SLACK_EVENT_INBOX_LEASE", "SLACK_EVENT_RETRY_BASE", "SLACK_EVENT_RETRY_MAX", "SLACK_EVENT_TIMEOUT", "TOOL_COMMAND_TIMEOUT", "AGENT_EXPLORE_TIMEOUT", "LLM_RESILIENCE_RETRY_BASE", "LLM_RESILIENCE_MIN_ATTEMPT_BUDGET", "LLM_CIRCUIT_COOLDOWN"}
 	for _, key := range durations {
 		raw := strings.TrimSpace(os.Getenv(key))
 		if raw == "" {
