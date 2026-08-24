@@ -91,9 +91,11 @@ type SessionConfig struct {
 }
 
 type ToolConfig struct {
-	CommandTimeout    time.Duration
-	AgentMaxSteps     int
-	AllowedWriteTools []string
+	CommandTimeout       time.Duration
+	AgentMaxSteps        int
+	AgentExploreMaxSteps int
+	AgentExploreTimeout  time.Duration
+	AllowedWriteTools    []string
 }
 
 type IntegrationConfig struct {
@@ -187,12 +189,12 @@ type YouTrackConfig struct {
 }
 
 type ConnectionsConfig struct {
-	PublicBaseURL           string
-	EncryptionKey           string
-	SlackClientID           string
-	SlackClientSecret       string
-	GitHubClientID          string
-	GitHubClientSecret      string
+	PublicBaseURL        string
+	EncryptionKey        string
+	SlackClientID        string
+	SlackClientSecret    string
+	GitHubClientID       string
+	GitHubClientSecret   string
 	GCPOAuthClientID     string
 	GCPOAuthClientSecret string
 	LocalOAuthPort       int
@@ -337,8 +339,10 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			MaxToolResultTokens: envInt("SESSION_MAX_TOOL_RESULT_TOKENS", 8000),
 		},
 		Tools: ToolConfig{
-			CommandTimeout: envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
-			AgentMaxSteps:  envInt("AGENT_MAX_STEPS", 256),
+			CommandTimeout:       envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
+			AgentMaxSteps:        envInt("AGENT_MAX_STEPS", 32),
+			AgentExploreMaxSteps: envInt("AGENT_EXPLORE_MAX_STEPS", 8),
+			AgentExploreTimeout:  envDuration("AGENT_EXPLORE_TIMEOUT", 2*time.Minute),
 			AllowedWriteTools: envCSVDefault("AGENT_ALLOWED_WRITE_TOOLS", []string{
 				"reminder-create", "reminder-cancel", "slack-create_canvas", "slack-user_post_message", "tts-speak",
 			}),
@@ -430,12 +434,12 @@ func loadConnections() ConnectionsConfig {
 		clientSecret = strings.TrimSpace(os.Getenv("SLACK_CLIENT_SECRET"))
 	}
 	return ConnectionsConfig{
-		PublicBaseURL:           trimRightSlash(os.Getenv("CONNECTIONS_PUBLIC_BASE_URL")),
-		EncryptionKey:           os.Getenv("CONNECTIONS_ENCRYPTION_KEY"),
-		SlackClientID:           clientID,
-		SlackClientSecret:       clientSecret,
-		GitHubClientID:          os.Getenv("GITHUB_OAUTH_CLIENT_ID"),
-		GitHubClientSecret:      os.Getenv("GITHUB_OAUTH_CLIENT_SECRET"),
+		PublicBaseURL:        trimRightSlash(os.Getenv("CONNECTIONS_PUBLIC_BASE_URL")),
+		EncryptionKey:        os.Getenv("CONNECTIONS_ENCRYPTION_KEY"),
+		SlackClientID:        clientID,
+		SlackClientSecret:    clientSecret,
+		GitHubClientID:       os.Getenv("GITHUB_OAUTH_CLIENT_ID"),
+		GitHubClientSecret:   os.Getenv("GITHUB_OAUTH_CLIENT_SECRET"),
 		GCPOAuthClientID:     os.Getenv("GCP_OAUTH_CLIENT_ID"),
 		GCPOAuthClientSecret: os.Getenv("GCP_OAUTH_CLIENT_SECRET"),
 		LocalOAuthPort:       port,
