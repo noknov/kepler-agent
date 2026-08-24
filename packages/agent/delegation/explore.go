@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	"github.com/noknov/slack-copilot-agent/packages/agent/prompt"
@@ -29,6 +30,7 @@ type Runner struct {
 	AllowedTools  map[string]bool
 	MaxSteps      int
 	MaxWorkers    int
+	Timeout       time.Duration
 	SystemPrompt  string
 }
 
@@ -42,7 +44,7 @@ type ExploreTool struct {
 	Runner Runner
 }
 
-func (ExploreTool) Descriptor() tool.Descriptor {
+func (t ExploreTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
 		"agent-explore",
 		"Run one or more read-only exploration sub-agents. Use tasks for independent investigation directions that can run in parallel.",
@@ -63,8 +65,15 @@ func (ExploreTool) Descriptor() tool.Descriptor {
 		}),
 		tool.WithEffects(tool.EffectRead),
 		tool.WithParallel(true),
-		tool.WithTimeout(0),
+		tool.WithTimeout(t.Runner.timeout()),
 	)
+}
+
+func (r Runner) timeout() time.Duration {
+	if r.Timeout > 0 {
+		return r.Timeout
+	}
+	return 2 * time.Minute
 }
 
 func (t ExploreTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {

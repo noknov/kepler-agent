@@ -92,7 +92,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	exploreRunner := delegation.Runner{
 		Config: agentruntime.Config{
 			Model: cfg.LLM.Model, ReasoningEffort: cfg.LLM.Thinking, Temperature: cfg.LLM.Temperature,
-			MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxSteps: 12,
+			MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxSteps: cfg.Tools.AgentExploreMaxSteps,
 			Context:     agentruntime.ContextConfig{MaxTokens: cfg.Sessions.MaxContextTokens, ReserveTokens: cfg.Sessions.AutocompactBuffer},
 			ToolResults: agentruntime.ToolResultConfig{MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)},
 		},
@@ -103,6 +103,8 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		},
 		ParentCatalog: catalog,
 		AllowedTools:  delegation.DefaultHostedAllowedTools(),
+		MaxSteps:      cfg.Tools.AgentExploreMaxSteps,
+		Timeout:       cfg.Tools.AgentExploreTimeout,
 	}
 	if err := catalog.Register(delegation.ExploreTool{Runner: exploreRunner}); err != nil {
 		return Profile{}, err
