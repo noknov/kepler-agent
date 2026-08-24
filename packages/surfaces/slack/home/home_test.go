@@ -42,8 +42,9 @@ func TestViewShowsModelDisplayNamesWithoutCodeFormatting(t *testing.T) {
 	controller := Controller{
 		Cfg: config.Config{
 			LLM: config.LLMConfig{
-				Model:          "ox-alpha-free",
-				SecondaryModel: "mimo-v2.5",
+				Model:           "ox-alpha-free",
+				MultimodalModel: "gpt-5.6-luna",
+				SecondaryModel:  "mimo-v2.5",
 			},
 		},
 		Access: safety.AccessPolicy{},
@@ -64,7 +65,10 @@ func TestViewShowsModelDisplayNamesWithoutCodeFormatting(t *testing.T) {
 	if !strings.Contains(body, "MiMo V2.5") {
 		t.Fatalf("expected MiMo V2.5 in view, got %s", body)
 	}
-	if strings.Contains(body, "ox-alpha-free") || strings.Contains(body, "`") {
+	if !strings.Contains(body, "GPT-5.6 Luna") {
+		t.Fatalf("expected GPT-5.6 Luna in view, got %s", body)
+	}
+	if strings.Contains(body, "ox-alpha-free") || strings.Contains(body, "gpt-5.6-luna") || strings.Contains(body, "mimo-v2.5") || strings.Contains(body, "`") {
 		t.Fatalf("expected no code model names or backticks, got %s", body)
 	}
 }

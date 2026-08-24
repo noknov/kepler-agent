@@ -133,6 +133,10 @@ func (c Controller) View(userID string) map[string]any {
 	if secondary == "" {
 		secondary = c.Cfg.LLM.Model
 	}
+	imageModel := strings.TrimSpace(c.Cfg.LLM.MultimodalModel)
+	if imageModel == "" {
+		imageModel = c.Cfg.LLM.Model
+	}
 	webSearchOn := c.WebSearchEnabled(userID)
 	conversationMode := c.ConversationMode(userID)
 	conversationLabel := "Steer"
@@ -154,6 +158,7 @@ func (c Controller) View(userID string) map[string]any {
 		mrkdwnField(fmt.Sprintf("*Rules*\n%d active", ruleCount)),
 		mrkdwnField(fmt.Sprintf("*Skills*\n%d active", skillCount)),
 		mrkdwnField("*Primary Model*\n" + modelDisplayName(c.Cfg.LLM.Model)),
+		mrkdwnField("*Image Model*\n" + modelDisplayName(imageModel)),
 		mrkdwnField("*Explorer / Summary*\n" + modelDisplayName(secondary)),
 	}
 	blocks := []map[string]any{
