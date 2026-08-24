@@ -8,6 +8,7 @@ import (
 
 	"github.com/noknov/slack-copilot-agent/packages/config"
 	"github.com/noknov/slack-copilot-agent/packages/connections"
+	"github.com/noknov/slack-copilot-agent/packages/safety"
 )
 
 type stubPublisher struct {
@@ -21,6 +22,51 @@ func (s *stubPublisher) PublishHome(_ context.Context, userID string, view map[s
 	s.view = view
 	s.calls++
 	return nil
+}
+
+func TestModelDisplayName(t *testing.T) {
+	cases := map[string]string{
+		"ox-alpha-free": "Ox Alpha",
+		"mimo-v2.5":     "MiMo V2.5",
+		"gpt-5.6-luna":  "GPT-5.6 Luna",
+		"glm-5.2":       "GLM 5.2",
+	}
+	for model, want := range cases {
+		if got := modelDisplayName(model); got != want {
+			t.Fatalf("modelDisplayName(%q) = %q, want %q", model, got, want)
+		}
+	}
+}
+
+func TestViewShowsModelDisplayNamesWithoutCodeFormatting(t *testing.T) {
+	controller := Controller{
+		Cfg: config.Config{
+			LLM: config.LLMConfig{
+				Model:          "ox-alpha-free",
+				SecondaryModel: "mimo-v2.5",
+			},
+		},
+		Access: safety.AccessPolicy{},
+	}
+	view := controller.View("U123")
+	blocks, ok := view["blocks"].([]map[string]any)
+	if !ok {
+		t.Fatal("expected blocks in view")
+	}
+	raw, err := json.Marshal(blocks)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "Ox Alpha") {
+		t.Fatalf("expected Ox Alpha in view, got %s", body)
+	}
+	if !strings.Contains(body, "MiMo V2.5") {
+		t.Fatalf("expected MiMo V2.5 in view, got %s", body)
+	}
+	if strings.Contains(body, "ox-alpha-free") || strings.Contains(body, "`") {
+		t.Fatalf("expected no code model names or backticks, got %s", body)
+	}
 }
 
 func TestControllerRequestRefreshFallsBackToPublish(t *testing.T) {
