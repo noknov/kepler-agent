@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -372,6 +373,34 @@ func TestLoadOpenCodeGoDefaults(t *testing.T) {
 	}
 	if cfg.LLM.APIKey != "oc-go-token" {
 		t.Fatalf("LLM.APIKey = %q, want oc-go-token", cfg.LLM.APIKey)
+	}
+}
+
+func TestLoadOpenCodeGoResponsesModels(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":              "xoxb-test",
+		"SLACK_SIGNING_SECRET":         "secret",
+		"ALLOWED_SLACK_USERS":          "U123",
+		"LLM_PROVIDER":                 "opencode-go",
+		"OPENCODE_GO_API_KEY":          "oc-go-token",
+		"OPENCODE_GO_RESPONSES_MODELS": "gpt-5.6-luna, gpt-5.6-sol ",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	want := []string{"gpt-5.6-luna", "gpt-5.6-sol"}
+	if !reflect.DeepEqual(cfg.LLM.ResponsesModels, want) {
+		t.Fatalf("LLM.ResponsesModels = %#v, want %#v", cfg.LLM.ResponsesModels, want)
 	}
 }
 
@@ -806,6 +835,7 @@ func resetConfigEnv(t *testing.T) {
 		"OPENCODE_GO_API_KEY",
 		"OPENCODE_GO_BASE_URL",
 		"OPENCODE_GO_MODEL",
+		"OPENCODE_GO_RESPONSES_MODELS",
 		"OPENCODE_GO_TEMPERATURE",
 		"OPENCODE_GO_TIMEOUT",
 		"OPENCODE_ZEN_PROTOCOL",

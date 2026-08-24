@@ -23,6 +23,7 @@ type Config struct {
 	APIKey          string
 	AnthropicFlavor string
 	Timeout         time.Duration
+	ResponsesModels []string
 }
 
 // Client is the sole wire-to-canonical model adapter used by every profile.
@@ -47,7 +48,13 @@ func New(config Config) (*Client, error) {
 	case "responses":
 		wire = llm.NewOpenAIResponsesClient(provider, config.BaseURL, config.APIKey, config.Timeout)
 	case "openai":
-		wire = llm.NewOpenAICompatibleClient(provider, config.BaseURL, config.APIKey, config.Timeout)
+		openAI := llm.NewOpenAICompatibleClient(provider, config.BaseURL, config.APIKey, config.Timeout)
+		if len(config.ResponsesModels) > 0 {
+			responses := llm.NewOpenAIResponsesClient(provider, config.BaseURL, config.APIKey, config.Timeout)
+			wire = llm.NewProtocolRouter(openAI, responses, config.ResponsesModels)
+		} else {
+			wire = openAI
+		}
 	default:
 		return nil, fmt.Errorf("unsupported model protocol %q", config.Protocol)
 	}

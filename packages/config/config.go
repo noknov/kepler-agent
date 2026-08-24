@@ -60,6 +60,7 @@ type LLMConfig struct {
 	MaxOutputTokens  int
 	MultimodalModel  string
 	MultimodalModels []string
+	ResponsesModels  []string
 	Protocol         string
 	AnthropicFlavor  string
 	Thinking         string
@@ -310,6 +311,7 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			MaxOutputTokens:  envInt("LLM_MAX_OUTPUT_TOKENS", 0),
 			MultimodalModel:  llmMultimodalModel,
 			MultimodalModels: llmMultimodalModels,
+			ResponsesModels:  providerResponsesModels(llmProvider),
 			Protocol:         llmProtocol,
 			AnthropicFlavor:  anthropicFlavor,
 			Thinking:         llmThinking,
@@ -617,6 +619,11 @@ func providerModel(provider string) string {
 		return env(prefix+"_MODEL", defaults.model)
 	}
 	return strings.TrimSpace(os.Getenv(prefix + "_MODEL"))
+}
+
+func providerResponsesModels(provider string) []string {
+	prefix := providerEnvPrefix(provider)
+	return envCSV(prefix + "_RESPONSES_MODELS")
 }
 
 func multimodalModel() string {
