@@ -44,7 +44,7 @@ type ProfileDependencies struct {
 }
 
 func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
-	primary, err := buildModelClient(cfg.LLM.Provider, cfg.LLM.Protocol, cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout, cfg.LLM.AnthropicFlavor)
+	primary, err := buildModelClient(cfg.LLM.Provider, cfg.LLM.Protocol, cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout, cfg.LLM.AnthropicFlavor, cfg.LLM.ResponsesModels)
 	if err != nil {
 		return Profile{}, err
 	}
@@ -143,15 +143,23 @@ func operatorAllowlist(names []string) map[string]bool {
 	return allowed
 }
 
-func buildModelClient(provider, protocol, baseURL, apiKey string, timeout time.Duration, anthropicFlavor string) (model.Client, error) {
-	return providers.New(providers.Config{Provider: provider, Protocol: protocol, BaseURL: baseURL, APIKey: apiKey, Timeout: timeout, AnthropicFlavor: anthropicFlavor})
+func buildModelClient(provider, protocol, baseURL, apiKey string, timeout time.Duration, anthropicFlavor string, responsesModels []string) (model.Client, error) {
+	return providers.New(providers.Config{
+		Provider:        provider,
+		Protocol:        protocol,
+		BaseURL:         baseURL,
+		APIKey:          apiKey,
+		Timeout:         timeout,
+		AnthropicFlavor: anthropicFlavor,
+		ResponsesModels: responsesModels,
+	})
 }
 
 func secondaryModelClient(cfg config.Config) (model.Client, string, error) {
 	if strings.TrimSpace(cfg.LLM.SecondaryProvider) == "" {
 		return nil, "", nil
 	}
-	client, err := buildModelClient(cfg.LLM.SecondaryProvider, cfg.LLM.SecondaryProtocol, cfg.LLM.SecondaryBaseURL, cfg.LLM.SecondaryAPIKey, cfg.LLM.Timeout, "")
+	client, err := buildModelClient(cfg.LLM.SecondaryProvider, cfg.LLM.SecondaryProtocol, cfg.LLM.SecondaryBaseURL, cfg.LLM.SecondaryAPIKey, cfg.LLM.Timeout, "", nil)
 	return client, cfg.LLM.SecondaryModel, err
 }
 
