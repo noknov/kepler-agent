@@ -153,8 +153,8 @@ func (c Controller) View(userID string) map[string]any {
 		mrkdwnField("*Active-turn input*\n" + conversationLabel),
 		mrkdwnField(fmt.Sprintf("*Rules*\n%d active", ruleCount)),
 		mrkdwnField(fmt.Sprintf("*Skills*\n%d active", skillCount)),
-		mrkdwnField("*Primary Model*\n`" + c.Cfg.LLM.Model + "`"),
-		mrkdwnField("*Explorer / Summary*\n`" + secondary + "`"),
+		mrkdwnField("*Primary Model*\n" + modelDisplayName(c.Cfg.LLM.Model)),
+		mrkdwnField("*Explorer / Summary*\n" + modelDisplayName(secondary)),
 	}
 	blocks := []map[string]any{
 		contextBlock("Mention the agent in a channel or use the Messages tab to start a private thread."),
@@ -283,6 +283,105 @@ func (c Controller) localGCPCredentialsActive() bool {
 		return false
 	}
 	return strings.TrimSpace(c.Cfg.Integrations.GCP.DefaultProject) != ""
+}
+
+func modelDisplayName(model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return "Unknown"
+	}
+	if label, ok := modelDisplayNames[model]; ok {
+		return label
+	}
+	return formatModelDisplayName(model)
+}
+
+var modelDisplayNames = map[string]string{
+	"ox-alpha-free":        "Ox Alpha",
+	"ox-alpha":             "Ox Alpha",
+	"mimo-v2.5":            "MiMo V2.5",
+	"mimo-v2.5-free":       "MiMo V2.5",
+	"mimo-v2.5-pro":        "MiMo V2.5 Pro",
+	"gpt-5.6-luna":         "GPT-5.6 Luna",
+	"glm-5.2":              "GLM 5.2",
+	"kimi-k2.7-code":       "Kimi K2.7 Code",
+	"kimi-k2.6":            "Kimi K2.6",
+	"kimi/kimi-k2.7-code":  "Kimi K2.7 Code",
+	"minimax-m3":           "MiniMax M3",
+	"minimax-m3-free":      "MiniMax M3",
+	"LongCat-2.0":          "LongCat 2.0",
+	"deepseek-v4-flash":    "DeepSeek V4 Flash",
+	"nemotron-3-ultra-free": "Nemotron 3 Ultra",
+	"north-mini-code-free": "North Mini Code",
+	"claude-sonnet-4-5-20250929": "Claude Sonnet 4.5",
+	"gpt-4o-mini":          "GPT-4o Mini",
+}
+
+func formatModelDisplayName(model string) string {
+	parts := strings.Split(model, "/")
+	model = parts[len(parts)-1]
+	for _, suffix := range []string{"-free", "-pro", "-flash"} {
+		if strings.HasSuffix(model, suffix) && len(model) > len(suffix)+1 {
+			model = strings.TrimSuffix(model, suffix)
+			break
+		}
+	}
+	segments := strings.Split(model, "-")
+	for i, segment := range segments {
+		segments[i] = formatModelSegment(segment)
+	}
+	return strings.Join(segments, " ")
+}
+
+func formatModelSegment(segment string) string {
+	segment = strings.TrimSpace(segment)
+	if segment == "" {
+		return segment
+	}
+	if strings.HasPrefix(strings.ToLower(segment), "v") && len(segment) > 1 {
+		return "V" + segment[1:]
+	}
+	switch strings.ToLower(segment) {
+	case "mimo":
+		return "MiMo"
+	case "gpt":
+		return "GPT"
+	case "glm":
+		return "GLM"
+	case "kimi":
+		return "Kimi"
+	case "minimax":
+		return "MiniMax"
+	case "deepseek":
+		return "DeepSeek"
+	case "longcat":
+		return "LongCat"
+	case "nemotron":
+		return "Nemotron"
+	case "codex":
+		return "Codex"
+	case "ox":
+		return "Ox"
+	case "alpha":
+		return "Alpha"
+	case "luna":
+		return "Luna"
+	case "ultra":
+		return "Ultra"
+	case "mini":
+		return "Mini"
+	case "code":
+		return "Code"
+	case "north":
+		return "North"
+	}
+	if segment[0] >= '0' && segment[0] <= '9' {
+		return segment
+	}
+	if len(segment) == 1 {
+		return strings.ToUpper(segment)
+	}
+	return strings.ToUpper(segment[:1]) + strings.ToLower(segment[1:])
 }
 
 func mrkdwnField(text string) map[string]any {
