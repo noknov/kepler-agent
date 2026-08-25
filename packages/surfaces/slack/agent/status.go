@@ -95,10 +95,8 @@ func (s *slackStream) setProgressStatus(epoch uint64, status, loading string) {
 
 func lifecycleStatus(event transcript.Event) (string, bool) {
 	switch event.Type {
-	case transcript.TurnStarted, transcript.ModelRequested:
-		return thinkingStatus(), true
 	case transcript.ApprovalRequested:
-		return waitingStatus(), true
+		return "is waiting", true
 	case transcript.TurnCompleted, transcript.TurnFailed, transcript.TurnCanceled:
 		return "", true
 	default:

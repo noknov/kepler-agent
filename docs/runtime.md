@@ -17,14 +17,13 @@ the durable transcript stores completed model messages and lifecycle events so
 replay does not duplicate token fragments. Web citations remain structured provenance on content blocks.
 Prompts decide when and how to cite; presentation adapters decide how to render
 the provider-supplied citation records. Dynamic status remains a projection of
-canonical runtime events rather than a second execution-state model. Slack uses
-deterministic English labels: `Thinking` while the model is active, `Working`
-once a tool call is ready to execute, and `Waiting` for an approval. The labels
-never inspect user requests, tool arguments, or tool descriptions, and no
-secondary model participates. Status is presentation-only: it is never written
-to the transcript, returned to the runtime, or placed in model context. Once a
-tool label is present, later model lifecycle events retain it until the turn
-changes state.
+canonical runtime events rather than a second execution-state model. Slack does
+not set a status while the model is considering the request. Once a tool call is
+ready to execute, a secondary model generates one English loading message from
+the sanitized tool intent. Slack displays that message through
+`loading_messages`; no model text is used to decide whether a message is shown.
+Status is presentation-only: it is never written to the transcript, returned to
+the runtime, or placed in model context.
 
 The current loop has no model-output repair layer. Only the owner of a
 `pending_input` turn can continue it with an unmentioned thread reply;
