@@ -31,6 +31,8 @@ type Profile struct {
 	Rates              observability.CostRates
 	SecondaryModel     model.Client
 	SecondaryModelName string
+	ProgressModel      model.Client
+	ProgressModelName  string
 }
 
 type ProfileDependencies struct {
@@ -52,6 +54,10 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	if err != nil {
 		return Profile{}, err
 	}
+	progress, progressModel, err := progressModelClient(cfg)
+	if err != nil {
+		return Profile{}, err
+	}
 	catalog := deps.Tools
 	if catalog == nil {
 		return Profile{}, fmt.Errorf("hosted tool catalog is required")
@@ -63,12 +69,14 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		}
 	}
 	primaryObserved := model.Client(observedModel{Client: primary, Metrics: deps.Metrics})
-	client := model.Client(&model.ResilientClient{
+	primaryClient := model.Client(&model.ResilientClient{
 		Primary: primaryObserved, PrimaryProvider: cfg.LLM.Provider,
 		MaxAttempts: cfg.LLM.Resilience.MaxAttempts, RetryDelay: cfg.LLM.Resilience.RetryBaseDelay,
 		MinAttemptBudget: cfg.LLM.Resilience.MinAttemptBudget, FailureThreshold: cfg.LLM.Resilience.FailureThreshold,
 		Cooldown: cfg.LLM.Resilience.CircuitCooldown,
 	})
+	client := primaryClient
+	exploreClient, exploreModel := client, cfg.LLM.Model
 	compactClient, compactModel := client, cfg.Sessions.CompactModel
 	if secondary != nil {
 		secondary = observedModel{Client: secondary, Metrics: deps.Metrics}
@@ -85,6 +93,14 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 			MinAttemptBudget: cfg.LLM.Resilience.MinAttemptBudget, FailureThreshold: cfg.LLM.Resilience.FailureThreshold,
 			Cooldown: cfg.LLM.Resilience.CircuitCooldown,
 		}
+		exploreClient = &model.ResilientClient{
+			Primary: secondary, PrimaryProvider: cfg.LLM.SecondaryProvider,
+			Fallback: primaryClient, FallbackProvider: cfg.LLM.Provider, FallbackModel: cfg.LLM.Model,
+			MaxAttempts: cfg.LLM.Resilience.MaxAttempts, RetryDelay: cfg.LLM.Resilience.RetryBaseDelay,
+			MinAttemptBudget: cfg.LLM.Resilience.MinAttemptBudget, FailureThreshold: cfg.LLM.Resilience.FailureThreshold,
+			Cooldown: cfg.LLM.Resilience.CircuitCooldown,
+		}
+		exploreModel = secondaryModel
 		compactClient = secondary
 		if compactModel == "" {
 			compactModel = secondaryModel
@@ -110,13 +126,13 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	}
 	exploreRunner := delegation.Runner{
 		Config: agentruntime.Config{
-			Model: cfg.LLM.Model, ReasoningEffort: cfg.LLM.Thinking, Temperature: cfg.LLM.Temperature,
+			Model: exploreModel, ReasoningEffort: cfg.LLM.Thinking, Temperature: cfg.LLM.Temperature,
 			MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxSteps: cfg.Tools.AgentExploreMaxSteps,
 			Context:     agentruntime.ContextConfig{MaxTokens: cfg.Sessions.MaxContextTokens, ReserveTokens: cfg.Sessions.AutocompactBuffer},
 			ToolResults: agentruntime.ToolResultConfig{MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)},
 		},
 		Deps: agentruntime.Dependencies{
-			Model: client, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)},
+			Model: exploreClient, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)},
 			Compactor: agentruntime.ModelCompactor{Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer},
 			Artifacts: artifacts, Environment: environment.Config{WorkspaceRoots: cfg.Security.WorkspaceRoots},
 		},
@@ -133,6 +149,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		Agent: Agent{Runtime: runner}, Prompt: promptPolicy,
 		Redactor: safety.Redactor{WorkspaceRoots: cfg.Security.WorkspaceRoots}, Tools: catalog,
 		Rates: CostRates(cfg), SecondaryModel: secondary, SecondaryModelName: secondaryModel,
+		ProgressModel: progress, ProgressModelName: progressModel,
 	}, nil
 }
 
@@ -182,6 +199,17 @@ func secondaryModelClient(cfg config.Config) (model.Client, string, error) {
 	}
 	client, err := buildModelClient(cfg.LLM.SecondaryProvider, cfg.LLM.SecondaryProtocol, cfg.LLM.SecondaryBaseURL, cfg.LLM.SecondaryAPIKey, cfg.LLM.Timeout, "", nil)
 	return client, cfg.LLM.SecondaryModel, err
+}
+
+func progressModelClient(cfg config.Config) (model.Client, string, error) {
+	if strings.TrimSpace(cfg.Progress.Provider) == "" {
+		return nil, "", nil
+	}
+	client, err := buildModelClient(cfg.Progress.Provider, cfg.Progress.Protocol, cfg.Progress.BaseURL, cfg.Progress.APIKey, cfg.LLM.Timeout, "", nil)
+	if err != nil {
+		return nil, "", err
+	}
+	return observedModel{Client: client, Metrics: nil}, cfg.Progress.Model, nil
 }
 
 func maxToolResultBytes(tokens int) int {
