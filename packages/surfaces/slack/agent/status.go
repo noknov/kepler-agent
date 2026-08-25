@@ -6,7 +6,10 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
 )
 
-const initialThreadStatus = "is thinking..."
+const (
+	initialThreadStatus = "is thinking..."
+	typingThreadStatus  = "is typing..."
+)
 
 // Lifecycle projects canonical runtime events into Slack presentation state.
 // It is deterministic and never invokes a model or creates conversation state.
@@ -37,6 +40,33 @@ func (s *slackStream) startStatus() {
 	ctx, cancel := s.deliveryContext()
 	defer cancel()
 	_ = s.status.SetThreadStatus(ctx, s.req.Channel, s.req.ThreadTS, initialThreadStatus, nil)
+}
+
+// startTypingStatus replaces progress once the final assistant response starts
+// streaming. A text delta is a canonical output event, so this never depends
+// on model reasoning or prose classification.
+func (s *slackStream) startTypingStatus() {
+	if s.status == nil {
+		return
+	}
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+	s.mu.Lock()
+	if s.lastStatus == "\x00" || s.streamClosed {
+		s.mu.Unlock()
+		return
+	}
+	status, loading := splitStatusKey(s.lastStatus)
+	if status == typingThreadStatus && loading == "" {
+		s.mu.Unlock()
+		return
+	}
+	s.lastStatus = statusKey(typingThreadStatus, "")
+	s.statusEpoch++
+	s.mu.Unlock()
+	ctx, cancel := s.deliveryContext()
+	defer cancel()
+	_ = s.status.SetThreadStatus(ctx, s.req.Channel, s.req.ThreadTS, typingThreadStatus, nil)
 }
 
 func statusKey(status, loading string) string {
