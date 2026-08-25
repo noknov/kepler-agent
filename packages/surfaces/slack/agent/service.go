@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/noknov/slack-copilot-agent/packages/agent/failure"
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	"github.com/noknov/slack-copilot-agent/packages/agent/prompt"
 	agentruntime "github.com/noknov/slack-copilot-agent/packages/agent/runtime"
@@ -216,7 +217,8 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 		unlock, err = s.Locker.Lock(runCtx, "session:"+sessionID)
 		if err != nil {
 			cancel()
-			_, deliveryErr := s.Messenger.PostMessage(base, req.Channel, req.ThreadTS, "Unable to lock this conversation: "+s.Redactor.Sanitize(err.Error()))
+			log.Printf("slack conversation lock failed session=%s: %v", sessionID, err)
+			_, deliveryErr := s.Messenger.PostMessage(base, req.Channel, req.ThreadTS, failure.PublicMessage(err))
 			if deliveryErr != nil {
 				return errors.Join(err, deliveryErr)
 			}
@@ -356,7 +358,8 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 				return s.ackClaim(finalizeCtx, req.ClaimID)
 			}
 		}
-		messageTS, deliveryErr := stream.Fail(s.Redactor.Sanitize(err.Error()), errors.Is(err, context.Canceled))
+		log.Printf("slack agent run failed session=%s turn=%s: %v", sessionID, turnID, err)
+		messageTS, deliveryErr := stream.Fail(failure.PublicMessage(err), errors.Is(err, context.Canceled))
 		if deliveryErr != nil {
 			return deliveryErr
 		}

@@ -2,7 +2,6 @@ package llm
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 )
 
@@ -25,16 +24,6 @@ func TestTemporaryOverloadErrors(t *testing.T) {
 	}
 	if !IsTemporaryOverload(ProviderError{Provider: "opencode-zen chat completion", StatusCode: 400, Body: "{}"}) {
 		t.Fatal("expected 400 from an aggregator gateway to be temporary overload")
-	}
-}
-
-func TestUserFacingTemporaryOverloadError(t *testing.T) {
-	msg := UserFacingError(ProviderError{Provider: "anthropic messages", StatusCode: 503, Body: "busy"})
-	if !strings.Contains(msg, "temporarily overloaded") {
-		t.Fatalf("UserFacingError() = %q, want friendly overload message", msg)
-	}
-	if strings.Contains(msg, "status=503") {
-		t.Fatalf("UserFacingError() leaked provider status: %q", msg)
 	}
 }
 
