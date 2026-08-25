@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	initialThreadStatus = "is thinking..."
-	typingThreadStatus  = "is typing..."
+	initialThreadStatus = "is thinking"
+	typingThreadStatus  = "is typing"
 )
 
 // Lifecycle projects canonical runtime events into Slack presentation state.
