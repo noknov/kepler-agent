@@ -74,6 +74,7 @@ type Artifact struct {
 
 type Message struct {
 	ID      string    `json:"id,omitempty"`
+	Phase   string    `json:"phase,omitempty"`
 	Role    Role      `json:"role"`
 	Content []Content `json:"content"`
 }
@@ -237,6 +238,8 @@ const (
 type StreamEvent struct {
 	Type       StreamEventType `json:"type"`
 	ResponseID string          `json:"response_id,omitempty"`
+	ItemID     string          `json:"item_id,omitempty"`
+	Phase      string          `json:"phase,omitempty"`
 	Text       string          `json:"text,omitempty"`
 	ToolCall   *ToolCall       `json:"tool_call,omitempty"`
 	Usage      *Usage          `json:"usage,omitempty"`

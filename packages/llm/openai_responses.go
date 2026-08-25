@@ -147,7 +147,7 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 			if json.Unmarshal([]byte(ev.Data), &delta) == nil && delta.Delta != "" && isFinalAnswerPhase(messagePhases[delta.ItemID]) {
 				msg.Content += delta.Delta
 				if h.OnText != nil {
-					h.OnText(delta.Delta)
+					h.OnText(TextDelta{Text: delta.Delta, ItemID: delta.ItemID, Phase: messagePhases[delta.ItemID]})
 				}
 			}
 		case "response.output_item.added", "response.output_item.done":
@@ -429,6 +429,7 @@ func (r responsesResponse) message() Message {
 				continue
 			}
 			for _, content := range item.Content {
+				msg.Phase = item.Phase
 				if content.Type == "output_text" && content.Text != "" {
 					msg.Content += content.Text
 					for _, annotation := range content.Annotations {
