@@ -30,6 +30,7 @@ func TestModelDisplayName(t *testing.T) {
 		"mimo-v2.5":     "MiMo V2.5",
 		"gpt-5.6-luna":  "GPT-5.6 Luna",
 		"glm-5.2":       "GLM 5.2",
+		"hy3":           "Hy3",
 	}
 	for model, want := range cases {
 		if got := modelDisplayName(model); got != want {
@@ -65,26 +66,14 @@ func TestViewShowsModelDisplayNamesWithoutCodeFormatting(t *testing.T) {
 	if !strings.Contains(body, "MiMo V2.5") {
 		t.Fatalf("expected MiMo V2.5 in view, got %s", body)
 	}
-	if !strings.Contains(body, "GPT-5.6 Luna + MiMo V2.5") {
-		t.Fatalf("expected combined explorer/summary label, got %s", body)
+	if !strings.Contains(body, "Explorer Model") {
+		t.Fatalf("expected explorer model label, got %s", body)
 	}
 	if strings.Contains(body, "Active-turn") || strings.Contains(body, "Image Model") || strings.Contains(body, "toggle_conversation_mode") {
 		t.Fatalf("expected no active-turn or image model fields, got %s", body)
 	}
 	if strings.Contains(body, "deepseek-v4-flash-vision-exp") || strings.Contains(body, "gpt-5.6-luna") || strings.Contains(body, "mimo-v2.5") || strings.Contains(body, "`") {
 		t.Fatalf("expected no code model names or backticks, got %s", body)
-	}
-}
-
-func TestExplorerSummaryDisplayName(t *testing.T) {
-	if got := explorerSummaryDisplayName("mimo-v2.5", ""); got != "MiMo V2.5" {
-		t.Fatalf("explorerSummaryDisplayName() = %q, want MiMo V2.5", got)
-	}
-	if got := explorerSummaryDisplayName("mimo-v2.5", "gpt-5.6-luna"); got != "GPT-5.6 Luna + MiMo V2.5" {
-		t.Fatalf("explorerSummaryDisplayName() = %q, want GPT-5.6 Luna + MiMo V2.5", got)
-	}
-	if got := explorerSummaryDisplayName("mimo-v2.5", "mimo-v2.5"); got != "MiMo V2.5" {
-		t.Fatalf("explorerSummaryDisplayName() = %q, want MiMo V2.5 when image model matches secondary", got)
 	}
 }
 

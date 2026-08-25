@@ -129,9 +129,9 @@ func (c Controller) View(userID string) map[string]any {
 		accessStatus = "Not allowlisted"
 	}
 
-	secondary := strings.TrimSpace(c.Cfg.LLM.SecondaryModel)
-	if secondary == "" {
-		secondary = c.Cfg.LLM.Model
+	explorer := strings.TrimSpace(c.Cfg.LLM.SecondaryModel)
+	if explorer == "" {
+		explorer = c.Cfg.LLM.Model
 	}
 	webSearchOn := c.WebSearchEnabled(userID)
 	webSearchStatus := "On"
@@ -148,7 +148,7 @@ func (c Controller) View(userID string) map[string]any {
 		mrkdwnField(fmt.Sprintf("*Rules*\n%d active", ruleCount)),
 		mrkdwnField(fmt.Sprintf("*Skills*\n%d active", skillCount)),
 		mrkdwnField("*Primary Model*\n" + modelDisplayName(c.Cfg.LLM.Model)),
-		mrkdwnField("*Explorer / Summary*\n" + explorerSummaryDisplayName(secondary, c.Cfg.LLM.MultimodalModel)),
+		mrkdwnField("*Explorer Model*\n" + modelDisplayName(explorer)),
 	}
 	blocks := []map[string]any{
 		contextBlock("Mention the agent in a channel or use the Messages tab to start a private thread."),
@@ -317,6 +317,7 @@ var modelDisplayNames = map[string]string{
 	"minimax-m3-free":      "MiniMax M3",
 	"LongCat-2.0":          "LongCat 2.0",
 	"deepseek-v4-flash":           "DeepSeek V4 Flash",
+	"hy3":                         "Hy3",
 	"deepseek-v4-flash-vision-exp": "DeepSeek V4 Flash Vision Exp",
 	"nemotron-3-ultra-free": "Nemotron 3 Ultra",
 	"north-mini-code-free": "North Mini Code",
