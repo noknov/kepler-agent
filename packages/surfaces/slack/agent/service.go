@@ -749,6 +749,7 @@ func newSlackStream(ctx context.Context, messenger slackconversation.Messenger, 
 func (s *slackStream) Start() {
 	if status, ok := s.messenger.(slackconversation.ThreadStatusMessenger); ok {
 		s.status = status
+		s.startStatus()
 	}
 }
 func (s *slackStream) CommitStep(message model.Message) {

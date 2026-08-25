@@ -37,3 +37,9 @@ func TestArtifactReadToolReturnsInlineBoundedFragment(t *testing.T) {
 		t.Fatalf("fragment does not provide a continuation: %q", result.Text())
 	}
 }
+
+func TestArtifactReadToolIsEagerAfterRuntimeSpill(t *testing.T) {
+	if got := (ArtifactReadTool{}).Descriptor().Exposure; got != tool.ExposureEager {
+		t.Fatalf("artifact reader exposure = %q, want eager", got)
+	}
+}

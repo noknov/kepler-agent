@@ -15,7 +15,7 @@ func (progressModel) Generate(context.Context, model.Request, model.EventSink) (
 	return model.Response{Message: model.TextMessage(model.RoleAssistant, `{"action":"Reading","target":"records"}`)}, nil
 }
 
-func TestToolStepAddsGeneratedStatusWithoutInitialStatus(t *testing.T) {
+func TestToolStepReplacesInitialLoadingWithGeneratedStatus(t *testing.T) {
 	messenger := &fakeMessenger{}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T"})
 	stream.progress = &ProgressSummarizer{Client: progressModel{}}
@@ -25,7 +25,7 @@ func TestToolStepAddsGeneratedStatusWithoutInitialStatus(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for {
 		messenger.mu.Lock()
-		ready := len(messenger.statuses) == 1
+		ready := len(messenger.statuses) == 2
 		messenger.mu.Unlock()
 		if ready || time.Now().After(deadline) {
 			break
@@ -34,10 +34,10 @@ func TestToolStepAddsGeneratedStatusWithoutInitialStatus(t *testing.T) {
 	}
 	messenger.mu.Lock()
 	defer messenger.mu.Unlock()
-	if got := messenger.statuses; len(got) != 1 || got[0] != "is working" {
+	if got := messenger.statuses; len(got) != 2 || got[0] != initialThreadStatus || got[1] != initialThreadStatus {
 		t.Fatalf("statuses = %#v", got)
 	}
-	if got := messenger.loading; len(got) != 1 || len(got[0]) != 1 || got[0][0] != "Reading records" {
+	if got := messenger.loading; len(got) != 2 || len(got[0]) != 0 || len(got[1]) != 1 || got[1][0] != "Reading records" {
 		t.Fatalf("loading messages = %#v", got)
 	}
 }

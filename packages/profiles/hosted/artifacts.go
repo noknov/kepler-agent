@@ -35,7 +35,10 @@ type ArtifactReadTool struct {
 }
 
 func (ArtifactReadTool) Descriptor() tool.Descriptor {
-	return tool.Descriptor{Name: "artifact_read", Description: "Read one byte range from a large tool result referenced by a spill:// artifact URI. Use next_offset to request the following range.", InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"uri":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["uri"]}`), Effects: []tool.Effect{tool.EffectRead}, Exposure: tool.ExposureDeferred}
+	// Artifact references are emitted by the runtime itself. The reader must be
+	// visible in the very next model step, without relying on deferred-tool
+	// discovery after a spill has already occurred.
+	return tool.Descriptor{Name: "artifact_read", Description: "Read one byte range from a large tool result referenced by a spill:// artifact URI. Use next_offset to request the following range.", InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"uri":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["uri"]}`), Effects: []tool.Effect{tool.EffectRead}, Exposure: tool.ExposureEager}
 }
 
 func (t ArtifactReadTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {

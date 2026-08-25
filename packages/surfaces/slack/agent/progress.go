@@ -71,7 +71,7 @@ func (s *slackStream) ToolStep(calls []model.ToolCall) {
 	s.mu.Unlock()
 	go func() {
 		if label, err := s.progress.Summarize(s.ctx, s.req.Text, pending); err == nil && label != "" {
-			s.setProgressStatus(epoch, "is working", label)
+			s.setProgressStatus(epoch, label)
 		}
 	}()
 }
