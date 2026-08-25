@@ -157,8 +157,8 @@ func TestServiceRunsHostedHarnessAndPostsFormattedAnswer(t *testing.T) {
 	if client.request == nil || len(client.request.Messages) == 0 || strings.Contains(client.request.Messages[0].Text(), "transient Slack status") || !strings.Contains(client.request.Messages[0].Text(), slackOutputFormatPrompt) {
 		t.Fatalf("primary model received a Slack progress instruction: %+v", client.request)
 	}
-	if len(messenger.statuses) != 0 {
-		t.Fatalf("thread statuses = %#v", messenger.statuses)
+	if got := messenger.statuses; len(got) != 2 || got[0] != initialThreadStatus || got[1] != "" {
+		t.Fatalf("thread statuses = %#v", got)
 	}
 }
 
@@ -184,38 +184,18 @@ func TestHandleReplyOnlyConsumesPendingInputFromItsOwner(t *testing.T) {
 	}
 }
 
-func TestLifecycleStatusUsesCanonicalEvents(t *testing.T) {
+func TestStreamStartsStatusBeforeRuntimeEvents(t *testing.T) {
 	messenger := &fakeMessenger{}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T", Text: "diagnose"})
 	stream.Start()
-	if len(messenger.statuses) != 0 {
-		t.Fatalf("Start emitted status without a runtime event: %#v", messenger.statuses)
+	if got := messenger.statuses; len(got) != 1 || got[0] != initialThreadStatus || len(messenger.loading[0]) != 0 {
+		t.Fatalf("Start status = %#v loading=%#v", got, messenger.loading)
 	}
 	stream.Lifecycle(transcript.Event{Type: transcript.TurnStarted})
 	stream.Lifecycle(transcript.Event{Type: transcript.ToolCallStarted, ToolCall: &tool.Call{Name: "repo-search"}})
 	stream.Lifecycle(transcript.Event{Type: transcript.TurnCompleted})
-	if got := messenger.statuses; len(got) != 0 {
+	if got := messenger.statuses; len(got) != 2 || got[1] != "" {
 		t.Fatalf("statuses=%#v", got)
-	}
-}
-
-func TestLifecycleStatusIgnoresModelFailures(t *testing.T) {
-	if _, ok := lifecycleStatus(transcript.Event{Type: transcript.ModelFailed}); ok {
-		t.Fatal("model failure is not a presentation phase")
-	}
-}
-
-func TestToolLifecycleWithoutProgressSummaryKeepsThinkingStatus(t *testing.T) {
-	if _, ok := lifecycleStatus(transcript.Event{Type: transcript.ToolCallStarted, ToolCall: &tool.Call{Name: "private_internal_tool"}}); ok {
-		t.Fatal("tool lifecycle replaced the thinking fallback")
-	}
-}
-
-func TestContextLifecycleDoesNotFlashTransientStatus(t *testing.T) {
-	for _, eventType := range []transcript.EventType{transcript.ContextProjected, transcript.CompactionCreated} {
-		if _, ok := lifecycleStatus(transcript.Event{Type: eventType}); ok {
-			t.Fatalf("%s emitted a transient presentation status", eventType)
-		}
 	}
 }
 

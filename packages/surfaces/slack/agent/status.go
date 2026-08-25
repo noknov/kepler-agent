@@ -6,44 +6,37 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
 )
 
+const initialThreadStatus = "is thinking..."
+
 // Lifecycle projects canonical runtime events into Slack presentation state.
 // It is deterministic and never invokes a model or creates conversation state.
 func (s *slackStream) Lifecycle(event transcript.Event) {
 	if s.status == nil {
 		return
 	}
-	status, ok := lifecycleStatus(event)
-	if !ok {
-		return
-	}
-	if status == "" {
+	switch event.Type {
+	case transcript.TurnCompleted, transcript.TurnFailed, transcript.TurnCanceled:
 		s.clearStatus()
-		return
 	}
-	s.setLifecycleStatus(status)
 }
 
-// setLifecycleStatus changes only Slack's native phase label. The loading
-// message belongs to the dynamic progress projector and must survive later
-// model lifecycle events.
-func (s *slackStream) setLifecycleStatus(status string) {
+// startStatus starts Slack's native processing indicator as soon as the agent
+// accepts a turn. Loading messages remain unset so Slack owns the initial UI;
+// a later concrete tool operation may replace only that loading state.
+func (s *slackStream) startStatus() {
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()
 	s.mu.Lock()
-	currentStatus, currentLoading := splitStatusKey(s.lastStatus)
-	if currentStatus == status {
+	if s.lastStatus != "" {
 		s.mu.Unlock()
 		return
 	}
-	key := statusKey(status, currentLoading)
-	s.lastStatus = key
+	s.lastStatus = statusKey(initialThreadStatus, "")
 	s.statusEpoch++
 	s.mu.Unlock()
-	var messages []string
-	if currentLoading != "" {
-		messages = []string{currentLoading}
-	}
-	_ = s.status.SetThreadStatus(s.ctx, s.req.Channel, s.req.ThreadTS, status, messages)
+	ctx, cancel := s.deliveryContext()
+	defer cancel()
+	_ = s.status.SetThreadStatus(ctx, s.req.Channel, s.req.ThreadTS, initialThreadStatus, nil)
 }
 
 func statusKey(status, loading string) string {
@@ -79,10 +72,14 @@ func (s *slackStream) restoreThreadStatus() {
 	_ = s.status.SetThreadStatus(s.ctx, s.req.Channel, s.req.ThreadTS, status, []string{loading})
 }
 
-func (s *slackStream) setProgressStatus(epoch uint64, status, loading string) {
+func (s *slackStream) setProgressStatus(epoch uint64, loading string) {
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()
 	s.mu.Lock()
+	status, _ := splitStatusKey(s.lastStatus)
+	if status == "" {
+		status = initialThreadStatus
+	}
 	key := statusKey(status, loading)
 	if s.statusEpoch != epoch || s.lastStatus == "\x00" || s.lastStatus == key {
 		s.mu.Unlock()
@@ -90,16 +87,7 @@ func (s *slackStream) setProgressStatus(epoch uint64, status, loading string) {
 	}
 	s.lastStatus = key
 	s.mu.Unlock()
-	_ = s.status.SetThreadStatus(s.ctx, s.req.Channel, s.req.ThreadTS, status, []string{loading})
-}
-
-func lifecycleStatus(event transcript.Event) (string, bool) {
-	switch event.Type {
-	case transcript.ApprovalRequested:
-		return "is waiting", true
-	case transcript.TurnCompleted, transcript.TurnFailed, transcript.TurnCanceled:
-		return "", true
-	default:
-		return "", false
-	}
+	ctx, cancel := s.deliveryContext()
+	defer cancel()
+	_ = s.status.SetThreadStatus(ctx, s.req.Channel, s.req.ThreadTS, status, []string{loading})
 }
