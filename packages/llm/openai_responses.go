@@ -91,6 +91,7 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 	var usage responsesUsage
 	toolCallsStarted := false
 	functionCalls := make(map[string]responsesOutput)
+	messagePhases := make(map[string]string)
 	emittedFunctionCalls := make(map[string]bool)
 	var streamErr error
 	emitFunctionCall := func(itemID string, call responsesOutput) {
@@ -140,9 +141,10 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 		switch typ.Type {
 		case "response.output_text.delta":
 			var delta struct {
-				Delta string `json:"delta"`
+				Delta  string `json:"delta"`
+				ItemID string `json:"item_id"`
 			}
-			if json.Unmarshal([]byte(ev.Data), &delta) == nil && delta.Delta != "" {
+			if json.Unmarshal([]byte(ev.Data), &delta) == nil && delta.Delta != "" && isFinalAnswerPhase(messagePhases[delta.ItemID]) {
 				msg.Content += delta.Delta
 				if h.OnText != nil {
 					h.OnText(delta.Delta)
@@ -152,10 +154,15 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 			var output struct {
 				Item responsesOutput `json:"item"`
 			}
-			if json.Unmarshal([]byte(ev.Data), &output) == nil && output.Item.Type == "function_call" {
-				functionCalls[output.Item.ID] = output.Item
-				if typ.Type == "response.output_item.done" {
-					emitFunctionCall(output.Item.ID, output.Item)
+			if json.Unmarshal([]byte(ev.Data), &output) == nil {
+				if output.Item.Type == "message" {
+					messagePhases[output.Item.ID] = output.Item.Phase
+				}
+				if output.Item.Type == "function_call" {
+					functionCalls[output.Item.ID] = output.Item
+					if typ.Type == "response.output_item.done" {
+						emitFunctionCall(output.Item.ID, output.Item)
+					}
 				}
 			}
 		case "response.function_call_arguments.done":
@@ -380,6 +387,7 @@ type responsesOutput struct {
 	Type      string                   `json:"type"`
 	ID        string                   `json:"id"`
 	Role      string                   `json:"role"`
+	Phase     string                   `json:"phase"`
 	Content   []responsesOutputContent `json:"content"`
 	CallID    string                   `json:"call_id"`
 	Name      string                   `json:"name"`
@@ -417,6 +425,9 @@ func (r responsesResponse) message() Message {
 	for _, item := range r.Output {
 		switch item.Type {
 		case "message":
+			if !isFinalAnswerPhase(item.Phase) {
+				continue
+			}
 			for _, content := range item.Content {
 				if content.Type == "output_text" && content.Text != "" {
 					msg.Content += content.Text
@@ -439,6 +450,13 @@ func (r responsesResponse) message() Message {
 		}
 	}
 	return msg
+}
+
+// isFinalAnswerPhase keeps provider-declared commentary out of the durable
+// assistant reply. Older Responses-compatible providers omit phase; their
+// message output remains backward compatible and is treated as final.
+func isFinalAnswerPhase(phase string) bool {
+	return phase == "" || phase == "final_answer"
 }
 
 func (r responsesResponse) contentTypes() []string {

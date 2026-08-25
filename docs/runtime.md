@@ -17,21 +17,14 @@ the durable transcript stores completed model messages and lifecycle events so
 replay does not duplicate token fragments. Web citations remain structured provenance on content blocks.
 Prompts decide when and how to cite; presentation adapters decide how to render
 the provider-supplied citation records. Dynamic status remains a projection of
-canonical runtime events rather than a second execution-state model. Slack may
-use the optional secondary model to turn the redacted user request, confirmed
-tool calls, and published tool descriptions into a structured action-and-target
-loading message while the native Slack assistant status remains the localized
-thinking status. Tool descriptions are the primary semantic source for the
-current operation; the user request and arguments only identify the concrete
-object, so progress labels do not merely restate the user's final task. That
-label is presentation-only: it is never written to the transcript, returned to
-the runtime, or placed in model context. Once Slack has a specific progress
-loading message, later ordinary model-request lifecycle events do not replace it
-with hard-coded loading text.
-If no secondary model is configured, it fails, or its output violates the label
-schema, Slack keeps the localized native thinking status without a dynamic
-loading message. Context projection and compaction do not replace it with
-momentary status flashes.
+canonical runtime events rather than a second execution-state model. Slack uses
+deterministic English labels: `Thinking` while the model is active, `Working`
+once a tool call is ready to execute, and `Waiting` for an approval. The labels
+never inspect user requests, tool arguments, or tool descriptions, and no
+secondary model participates. Status is presentation-only: it is never written
+to the transcript, returned to the runtime, or placed in model context. Once a
+tool label is present, later model lifecycle events retain it until the turn
+changes state.
 
 The current loop has no model-output repair layer. Only the owner of a
 `pending_input` turn can continue it with an unmentioned thread reply;

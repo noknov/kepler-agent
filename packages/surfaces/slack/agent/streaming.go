@@ -76,15 +76,6 @@ func (s *slackStream) streamThrottleReady(now time.Time, pendingLen int) bool {
 	return now.Sub(s.lastStreamUpdate) >= streamAppendInterval || pendingLen >= streamAppendMinChars
 }
 
-func (s *slackStream) shouldDeferStreamDelivery() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.streamClosed {
-		return true
-	}
-	return s.progressRunning || len(s.progressCalls) > 0
-}
-
 func (s *slackStream) flushDeferredStream(force bool) {
 	s.mu.Lock()
 	pending := s.answer.String()
@@ -95,9 +86,6 @@ func (s *slackStream) flushDeferredStream(force bool) {
 func (s *slackStream) flushStreamUpdate(text string, force bool) {
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return
-	}
-	if !force && s.shouldDeferStreamDelivery() {
 		return
 	}
 	s.flushNativeStream(text)
