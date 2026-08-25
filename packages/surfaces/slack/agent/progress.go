@@ -23,7 +23,7 @@ type ProgressSummarizer struct {
 
 const (
 	progressMaxOutputTokens = 32
-	progressTimeout         = 15 * time.Second
+	progressTimeout         = 45 * time.Second
 	progressMaxLabelRunes   = 120
 )
 
@@ -80,11 +80,7 @@ func (s *slackStream) ToolStep(calls []model.ToolCall) {
 		label, err := s.progress.Summarize(s.ctx, s.req.Text, pending)
 		if err != nil {
 			if !errors.Is(err, context.Canceled) {
-				outcome := "model_error"
-				if errors.Is(err, context.DeadlineExceeded) {
-					outcome = "deadline"
-				}
-				log.Printf("slack dynamic status unavailable turn=%s outcome=%s", s.req.EventID, outcome)
+				log.Printf("slack dynamic status unavailable turn=%s outcome=%s", s.req.EventID, progressErrorOutcome(err))
 			}
 			return
 		}
@@ -94,6 +90,17 @@ func (s *slackStream) ToolStep(calls []model.ToolCall) {
 		}
 		s.setProgressStatus(epoch, label)
 	}()
+}
+
+func progressErrorOutcome(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "deadline"
+	}
+	kind := model.ErrorKindOf(err)
+	if kind != model.ErrorUnknown {
+		return string(kind)
+	}
+	return "model_error"
 }
 
 func progressPrompt(request string, calls []model.ToolCall, sanitize func(string) string, descriptions map[string]string) string {

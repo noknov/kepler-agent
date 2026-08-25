@@ -42,6 +42,13 @@ func TestDecodeProgressAcceptsSingleLineLabel(t *testing.T) {
 	}
 }
 
+func TestProgressErrorOutcomeDoesNotExposeProviderDetails(t *testing.T) {
+	err := &model.Error{Kind: model.ErrorRateLimited, Message: "provider response body must stay private", StatusCode: 429}
+	if got := progressErrorOutcome(err); got != "rate_limited" {
+		t.Fatalf("progressErrorOutcome() = %q", got)
+	}
+}
+
 func TestToolStepReplacesInitialLoadingWithGeneratedStatus(t *testing.T) {
 	messenger := &fakeMessenger{}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T"})
