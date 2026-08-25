@@ -77,6 +77,7 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 		if err := json.Unmarshal(definition.InputSchema, &parameters); err != nil {
 			return model.Response{}, fmt.Errorf("decode tool schema for %s: %w", definition.Name, err)
 		}
+		normalizeJSONSchema(parameters)
 		req.Tools = append(req.Tools, llm.ToolSpec{Type: "function", Function: llm.ToolSpecFunction{Name: definition.Name, Description: definition.Description, Parameters: parameters}})
 	}
 	var response llm.Response
@@ -164,6 +165,28 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 	}
 	publish(model.StreamEvent{Type: model.StreamCompleted, ResponseID: canonical.ID, Usage: &canonical.Usage})
 	return canonical, nil
+}
+
+// normalizeJSONSchema enforces the JSON Schema wire contract at the one
+// provider-neutral boundary shared by every model protocol. In JSON Schema,
+// "properties" is an object when it is present; a null value is rejected by
+// strict OpenAI-compatible providers. Remote MCP descriptors may bypass the
+// local ObjectSchema constructor, so normalize recursively rather than relying
+// on tool authors to produce one particular representation.
+func normalizeJSONSchema(value any) {
+	switch node := value.(type) {
+	case map[string]any:
+		if properties, exists := node["properties"]; exists && properties == nil {
+			node["properties"] = map[string]any{}
+		}
+		for _, child := range node {
+			normalizeJSONSchema(child)
+		}
+	case []any:
+		for _, child := range node {
+			normalizeJSONSchema(child)
+		}
+	}
 }
 
 // toolCallOnlyMessage prevents process narration attached to a tool request

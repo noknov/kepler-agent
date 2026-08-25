@@ -97,6 +97,31 @@ func TestClientConvertsCanonicalRequestOnceForEveryProfile(t *testing.T) {
 	}
 }
 
+func TestClientNormalizesSchemasForEveryWireProtocol(t *testing.T) {
+	wire := &recordingWire{}
+	client := &Client{Wire: wire}
+	_, err := client.Generate(context.Background(), model.Request{
+		Model: "test",
+		Tools: []model.ToolDefinition{{
+			Name:        "remote-empty-tool",
+			InputSchema: json.RawMessage(`{"type":"object","properties":null,"items":{"type":"object","properties":null}}`),
+		}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wire.request.Tools) != 1 {
+		t.Fatalf("tools = %#v, want one tool", wire.request.Tools)
+	}
+	encoded, err := json.Marshal(wire.request.Tools[0].Function.Parameters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"properties":null`) {
+		t.Fatalf("provider schema retained null properties: %s", encoded)
+	}
+}
+
 func TestClientPreservesTextInMultimodalWireMessage(t *testing.T) {
 	wire := &recordingWire{}
 	client := &Client{Wire: wire}
