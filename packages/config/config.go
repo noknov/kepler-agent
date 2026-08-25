@@ -79,8 +79,8 @@ type LLMConfig struct {
 	Timeout          time.Duration
 	Resilience       ResilienceConfig
 
-	// Secondary model is used for cheaper/faster background work such as
-	// read-only code exploration and compact summaries.
+	// Secondary model is the preferred Explorer model and the primary agent's
+	// fallback. Compact summaries use it when no explicit compact model exists.
 	SecondaryProvider string
 	SecondaryBaseURL  string
 	SecondaryAPIKey   string
