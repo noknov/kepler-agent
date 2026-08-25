@@ -209,7 +209,7 @@ func progressModelClient(cfg config.Config) (model.Client, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	return observedModel{Client: client, Metrics: nil}, cfg.Progress.Model, nil
+	return client, cfg.Progress.Model, nil
 }
 
 func maxToolResultBytes(tokens int) int {
