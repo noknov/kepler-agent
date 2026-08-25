@@ -95,6 +95,9 @@ func FunctionDescriptor(name, description string, parameters map[string]any, opt
 }
 
 func ObjectSchema(required []string, properties map[string]any) map[string]any {
+	if properties == nil {
+		properties = map[string]any{}
+	}
 	schema := map[string]any{
 		"type":       "object",
 		"properties": properties,

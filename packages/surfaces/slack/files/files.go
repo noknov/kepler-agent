@@ -74,7 +74,7 @@ func PDFExcerpts(ctx context.Context, client Downloader, files []slack.File) str
 		data, err := client.DownloadFile(ctx, file, MaxPDFBytes)
 		if err != nil {
 			log.Printf("skip slack pdf %s: download failed: %v", file.ID, err)
-			blocks = append(blocks, slack.FormatPDFExcerpt(slack.FileDisplayName(file), "[Could not download PDF from Slack: "+err.Error()+"]"))
+			blocks = append(blocks, slack.FormatPDFExcerpt(slack.FileDisplayName(file), "[Could not download this PDF from Slack.]"))
 			continue
 		}
 		if !slack.IsPDFData(data) {

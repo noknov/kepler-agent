@@ -76,13 +76,6 @@ func isNetworkTimeout(err error) bool {
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
-func UserFacingError(err error) string {
-	if IsTemporaryOverload(err) {
-		return "The service is temporarily overloaded. I've already retried but it didn't go through — please try again in a moment."
-	}
-	return "Error: " + err.Error()
-}
-
 func isRetryableStatus(status int) bool {
 	switch status {
 	case 429, 500, 502, 503, 504, 522:
