@@ -24,13 +24,11 @@ import (
 // Profile owns the complete hosted-agent composition. Product entrypoints
 // depend on this profile instead of constructing a second agent runtime first.
 type Profile struct {
-	Agent              Agent
-	Prompt             safety.PromptPolicy
-	Redactor           safety.Redactor
-	Tools              *tool.Catalog
-	Rates              observability.CostRates
-	SecondaryModel     model.Client
-	SecondaryModelName string
+	Agent    Agent
+	Prompt   safety.PromptPolicy
+	Redactor safety.Redactor
+	Tools    *tool.Catalog
+	Rates    observability.CostRates
 }
 
 type ProfileDependencies struct {
@@ -58,7 +56,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	}
 	artifacts := PGArtifactStore{Store: deps.ToolSpills}
 	if deps.ToolSpills != nil {
-		if err := catalog.Register(ArtifactReadTool{Store: deps.ToolSpills}); err != nil {
+		if err := catalog.Register(ArtifactReadTool{Store: deps.ToolSpills, MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)}); err != nil {
 			return Profile{}, err
 		}
 	}
@@ -132,7 +130,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	return Profile{
 		Agent: Agent{Runtime: runner}, Prompt: promptPolicy,
 		Redactor: safety.Redactor{WorkspaceRoots: cfg.Security.WorkspaceRoots}, Tools: catalog,
-		Rates: CostRates(cfg), SecondaryModel: secondary, SecondaryModelName: secondaryModel,
+		Rates: CostRates(cfg),
 	}, nil
 }
 

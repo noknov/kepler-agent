@@ -60,7 +60,6 @@ type Service struct {
 	MultimodalModel  func() string
 	ThreadLoader     ThreadLoader
 	WebSearchEnabled func(string) bool
-	Progress         *ProgressSummarizer
 	Locker           session.Locker
 	Inputs           sessioninput.Store
 	BeforeRun        func(context.Context, string) error
@@ -299,7 +298,6 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	req.EventID = turnID
 	stream := newSlackStream(runCtx, s.Messenger, req)
 	stream.redactor = safety.NewStreamRedactor(s.Redactor)
-	stream.progress = s.Progress
 	s.router.set(turnID, stream)
 	defer s.router.set(turnID, nil)
 	stream.Start()
@@ -727,10 +725,7 @@ type slackStream struct {
 	status               slackconversation.ThreadStatusMessenger
 	lastStatus           string
 	statusEpoch          uint64
-	progress             *ProgressSummarizer
 	progressSeen         map[string]bool
-	progressCalls        []model.ToolCall
-	progressRunning      bool
 	redactor             *safety.StreamRedactor
 	answer               strings.Builder
 	messageTS            string

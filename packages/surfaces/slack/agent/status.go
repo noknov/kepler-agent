@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/conversation"
 )
 
 // Lifecycle projects canonical runtime events into Slack presentation state.
@@ -13,7 +12,7 @@ func (s *slackStream) Lifecycle(event transcript.Event) {
 	if s.status == nil {
 		return
 	}
-	status, ok := lifecycleStatus(event, slackconversation.IsChineseLocale(s.req.Locale))
+	status, ok := lifecycleStatus(event)
 	if !ok {
 		return
 	}
@@ -94,18 +93,12 @@ func (s *slackStream) setProgressStatus(epoch uint64, status, loading string) {
 	_ = s.status.SetThreadStatus(s.ctx, s.req.Channel, s.req.ThreadTS, status, []string{loading})
 }
 
-func lifecycleStatus(event transcript.Event, cjk bool) (string, bool) {
+func lifecycleStatus(event transcript.Event) (string, bool) {
 	switch event.Type {
 	case transcript.TurnStarted, transcript.ModelRequested:
-		if cjk {
-			return "正在思考", true
-		}
-		return "is thinking", true
+		return thinkingStatus(), true
 	case transcript.ApprovalRequested:
-		if cjk {
-			return "正在等待", true
-		}
-		return "is waiting", true
+		return waitingStatus(), true
 	case transcript.TurnCompleted, transcript.TurnFailed, transcript.TurnCanceled:
 		return "", true
 	default:

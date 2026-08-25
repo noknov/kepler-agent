@@ -145,20 +145,14 @@ func TestNativeCompleteAppendsSourcesSuffix(t *testing.T) {
 	}
 }
 
-func TestStreamDeliveryDefersWhileProgressRuns(t *testing.T) {
+func TestStreamDeliveryDoesNotWaitForProgressText(t *testing.T) {
 	messenger := &nativeStreamingMessenger{}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1", EventID: "Ev1"})
 	stream.Start()
-	stream.progressRunning = true
 	stream.AppendDelta("hello")
 	stream.flushStreamUpdate("hello", false)
-	if messenger.started != 0 || len(messenger.appends) != 0 {
-		t.Fatalf("started=%d appends=%#v, want no empty stream while progress runs", messenger.started, messenger.appends)
-	}
-	stream.progressRunning = false
-	stream.flushDeferredStream(false)
 	if messenger.started != 1 || len(messenger.appends) != 1 {
-		t.Fatalf("started=%d appends=%#v, want delivery after progress finished", messenger.started, messenger.appends)
+		t.Fatalf("started=%d appends=%#v, want immediate delivery", messenger.started, messenger.appends)
 	}
 }
 

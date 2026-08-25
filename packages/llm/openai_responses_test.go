@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -133,6 +134,46 @@ func TestOpenAIResponsesClientParsesFunctionCalls(t *testing.T) {
 	call := resp.Message.ToolCalls[0]
 	if call.ID != "call_1" || call.Function.Name != "code-search" || call.Function.Arguments != `{"query":"x"}` {
 		t.Fatalf("call = %#v", call)
+	}
+}
+
+func TestResponsesMessageExcludesCommentaryPhase(t *testing.T) {
+	response := responsesResponse{Output: []responsesOutput{
+		{Type: "message", Role: "assistant", Phase: "commentary", Content: []responsesOutputContent{{Type: "output_text", Text: "Let me inspect the document."}}},
+		{Type: "message", Role: "assistant", Phase: "final_answer", Content: []responsesOutputContent{{Type: "output_text", Text: "The document is ready."}}},
+	}}
+	if got := response.message().Content; got != "The document is ready." {
+		t.Fatalf("content = %q", got)
+	}
+}
+
+func TestOpenAIResponsesClientStreamSkipsCommentaryPhase(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		events := []string{
+			`{"type":"response.output_item.added","item":{"id":"commentary","type":"message","role":"assistant","phase":"commentary"}}`,
+			`{"type":"response.output_text.delta","item_id":"commentary","delta":"Let me inspect this."}`,
+			`{"type":"response.output_item.added","item":{"id":"final","type":"message","role":"assistant","phase":"final_answer"}}`,
+			`{"type":"response.output_text.delta","item_id":"final","delta":"The inspection is complete."}`,
+			`{"type":"response.completed","response":{"status":"completed","output":[{"id":"commentary","type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Let me inspect this."}]},{"id":"final","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"The inspection is complete."}]}]}}`,
+		}
+		for _, event := range events {
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", event)
+		}
+	}))
+	defer server.Close()
+
+	var deltas []string
+	client := NewOpenAIResponsesClient("openai", server.URL, "token", 0)
+	response, err := client.ChatStream(context.Background(), Request{Model: "gpt-5.6-luna"}, StreamHandler{OnText: func(delta string) { deltas = append(deltas, delta) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(deltas, ""); got != "The inspection is complete." {
+		t.Fatalf("streamed text = %q", got)
+	}
+	if got := response.Message.Content; got != "The inspection is complete." {
+		t.Fatalf("response content = %q", got)
 	}
 }
 

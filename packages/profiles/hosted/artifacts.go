@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/model"
 	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
@@ -28,15 +29,20 @@ func (s PGArtifactStore) Put(ctx context.Context, scope tool.Scope, name string,
 	return model.Artifact{ID: callID, Name: name, MediaType: "application/json", URI: "spill://" + scope.TurnID + "/agent-artifact/" + callID, SizeBytes: int64(len(content))}, nil
 }
 
-type ArtifactReadTool struct{ Store ToolSpillStore }
+type ArtifactReadTool struct {
+	Store          ToolSpillStore
+	MaxInlineBytes int
+}
 
 func (ArtifactReadTool) Descriptor() tool.Descriptor {
-	return tool.Descriptor{Name: "artifact_read", Description: "Read a large tool result referenced by a spill:// artifact URI.", InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"uri":{"type":"string"}},"required":["uri"]}`), Effects: []tool.Effect{tool.EffectRead}, Exposure: tool.ExposureDeferred}
+	return tool.Descriptor{Name: "artifact_read", Description: "Read one byte range from a large tool result referenced by a spill:// artifact URI. Use next_offset to request the following range.", InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"uri":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["uri"]}`), Effects: []tool.Effect{tool.EffectRead}, Exposure: tool.ExposureDeferred}
 }
 
 func (t ArtifactReadTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
-		URI string `json:"uri"`
+		URI    string `json:"uri"`
+		Offset int    `json:"offset"`
+		Limit  int    `json:"limit"`
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
@@ -52,5 +58,59 @@ func (t ArtifactReadTool) Execute(ctx context.Context, call tool.Call) (tool.Res
 	if err != nil {
 		return tool.Result{}, err
 	}
-	return tool.TextResult(content), nil
+	if args.Offset < 0 || args.Offset > len(content) {
+		return tool.Result{}, fmt.Errorf("artifact offset is outside the artifact")
+	}
+	limit := args.Limit
+	if limit <= 0 || limit > t.maxPayloadBytes() {
+		limit = t.maxPayloadBytes()
+	}
+	end := min(args.Offset+limit, len(content))
+	end = utf8Boundary(content, args.Offset, end)
+	fragment := artifactFragment(content[args.Offset:end], args.Offset, end, len(content))
+	for encodedResultBytes(fragment) > t.maxInlineBytes() && end > args.Offset {
+		end = utf8Boundary(content, args.Offset, args.Offset+(end-args.Offset)/2)
+		fragment = artifactFragment(content[args.Offset:end], args.Offset, end, len(content))
+	}
+	if end == args.Offset && args.Offset < len(content) {
+		return tool.Result{}, fmt.Errorf("artifact inline budget is too small to return one UTF-8 character")
+	}
+	return tool.TextResult(fragment), nil
+}
+
+func (t ArtifactReadTool) maxInlineBytes() int {
+	if t.MaxInlineBytes <= 0 {
+		return 64 << 10
+	}
+	return t.MaxInlineBytes
+}
+
+func (t ArtifactReadTool) maxPayloadBytes() int {
+	return t.maxInlineBytes()
+}
+
+func artifactFragment(content string, offset, end, total int) string {
+	next := ""
+	if end < total {
+		next = fmt.Sprintf(" next_offset=%d", end)
+	}
+	return fmt.Sprintf("Artifact bytes %d-%d of %d.%s\n%s", offset, end, total, next, content)
+}
+
+func encodedResultBytes(text string) int {
+	data, _ := json.Marshal(tool.TextResult(text).Content)
+	return len(data)
+}
+
+func utf8Boundary(content string, start, end int) int {
+	if end >= len(content) {
+		return len(content)
+	}
+	if end <= start {
+		return start
+	}
+	for end > start && !utf8.RuneStart(content[end]) {
+		end--
+	}
+	return end
 }

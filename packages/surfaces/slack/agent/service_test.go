@@ -157,7 +157,7 @@ func TestServiceRunsHostedHarnessAndPostsFormattedAnswer(t *testing.T) {
 	if client.request == nil || len(client.request.Messages) == 0 || strings.Contains(client.request.Messages[0].Text(), "transient Slack status") || !strings.Contains(client.request.Messages[0].Text(), slackOutputFormatPrompt) {
 		t.Fatalf("primary model received a Slack progress instruction: %+v", client.request)
 	}
-	if len(messenger.statuses) < 2 || messenger.statuses[0] != "is thinking" || messenger.statuses[len(messenger.statuses)-1] != "" {
+	if len(messenger.statuses) < 2 || messenger.statuses[0] != "Thinking" || messenger.statuses[len(messenger.statuses)-1] != "" {
 		t.Fatalf("thread statuses = %#v", messenger.statuses)
 	}
 }
@@ -194,7 +194,7 @@ func TestLifecycleStatusUsesCanonicalEvents(t *testing.T) {
 	stream.Lifecycle(transcript.Event{Type: transcript.TurnStarted})
 	stream.Lifecycle(transcript.Event{Type: transcript.ToolCallStarted, ToolCall: &tool.Call{Name: "repo-search"}})
 	stream.Lifecycle(transcript.Event{Type: transcript.TurnCompleted})
-	if got := messenger.statuses; len(got) != 2 || got[0] != "is thinking" || got[1] != "" {
+	if got := messenger.statuses; len(got) != 2 || got[0] != "Thinking" || got[1] != "" {
 		t.Fatalf("statuses=%#v", got)
 	}
 	if got := messenger.loading[0]; len(got) != 0 {
@@ -203,20 +203,20 @@ func TestLifecycleStatusUsesCanonicalEvents(t *testing.T) {
 }
 
 func TestLifecycleStatusIgnoresModelFailures(t *testing.T) {
-	if _, ok := lifecycleStatus(transcript.Event{Type: transcript.ModelFailed}, false); ok {
+	if _, ok := lifecycleStatus(transcript.Event{Type: transcript.ModelFailed}); ok {
 		t.Fatal("model failure is not a presentation phase")
 	}
 }
 
 func TestToolLifecycleWithoutProgressSummaryKeepsThinkingStatus(t *testing.T) {
-	if _, ok := lifecycleStatus(transcript.Event{Type: transcript.ToolCallStarted, ToolCall: &tool.Call{Name: "private_internal_tool"}}, true); ok {
+	if _, ok := lifecycleStatus(transcript.Event{Type: transcript.ToolCallStarted, ToolCall: &tool.Call{Name: "private_internal_tool"}}); ok {
 		t.Fatal("tool lifecycle replaced the thinking fallback")
 	}
 }
 
 func TestContextLifecycleDoesNotFlashTransientStatus(t *testing.T) {
 	for _, eventType := range []transcript.EventType{transcript.ContextProjected, transcript.CompactionCreated} {
-		if _, ok := lifecycleStatus(transcript.Event{Type: eventType}, true); ok {
+		if _, ok := lifecycleStatus(transcript.Event{Type: eventType}); ok {
 			t.Fatalf("%s emitted a transient presentation status", eventType)
 		}
 	}
