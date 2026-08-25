@@ -211,7 +211,7 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 		if delta.Content != "" {
 			msg.Content += delta.Content
 			if h.OnText != nil {
-				h.OnText(delta.Content)
+				h.OnText(TextDelta{Text: delta.Content})
 			}
 		}
 		if delta.ReasoningContent != "" {

@@ -108,7 +108,7 @@ func TestAnthropicChatStreamParsesToolUseBlocks(t *testing.T) {
 			Parameters: map[string]any{"type": "object"},
 		}}},
 	}, StreamHandler{
-		OnText:             func(delta string) { streamed += delta },
+		OnText:             func(delta TextDelta) { streamed += delta.Text },
 		OnToolCallsStarted: func() { toolStarted = true },
 		OnUsage:            func(usage Usage) { usageEvents = append(usageEvents, usage) },
 	})

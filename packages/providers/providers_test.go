@@ -27,7 +27,7 @@ func (w streamingWire) Chat(context.Context, llm.Request) (llm.Response, error) 
 
 func (w streamingWire) ChatStream(_ context.Context, _ llm.Request, handler llm.StreamHandler) (llm.Response, error) {
 	if handler.OnText != nil {
-		handler.OnText("Let me inspect this.")
+		handler.OnText(llm.TextDelta{Text: "Let me inspect this."})
 	}
 	return w.response, nil
 }

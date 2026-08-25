@@ -165,7 +165,7 @@ func TestOpenAIResponsesClientStreamSkipsCommentaryPhase(t *testing.T) {
 
 	var deltas []string
 	client := NewOpenAIResponsesClient("openai", server.URL, "token", 0)
-	response, err := client.ChatStream(context.Background(), Request{Model: "gpt-5.6-luna"}, StreamHandler{OnText: func(delta string) { deltas = append(deltas, delta) }})
+	response, err := client.ChatStream(context.Background(), Request{Model: "gpt-5.6-luna"}, StreamHandler{OnText: func(delta TextDelta) { deltas = append(deltas, delta.Text) }})
 	if err != nil {
 		t.Fatal(err)
 	}

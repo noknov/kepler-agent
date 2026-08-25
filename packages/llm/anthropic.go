@@ -218,7 +218,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 			case inTextBlock && delta.Delta.Type == "text_delta" && delta.Delta.Text != "":
 				msg.Content += delta.Delta.Text
 				if h.OnText != nil {
-					h.OnText(delta.Delta.Text)
+					h.OnText(TextDelta{Text: delta.Delta.Text})
 				}
 			case delta.Delta.Type == "input_json_delta" && delta.Delta.PartialJSON != "":
 				call := toolBlocks[delta.Index]

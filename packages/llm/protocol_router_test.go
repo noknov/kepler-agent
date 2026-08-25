@@ -18,7 +18,7 @@ func (s *stubWireClient) Chat(_ context.Context, req Request) (Response, error) 
 func (s *stubWireClient) ChatStream(ctx context.Context, req Request, h StreamHandler) (Response, error) {
 	s.lastModel = req.Model
 	if h.OnText != nil {
-		h.OnText(s.name)
+		h.OnText(TextDelta{Text: s.name})
 	}
 	return s.Chat(ctx, req)
 }

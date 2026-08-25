@@ -175,7 +175,7 @@ func TestOpenAICompatibleChatStreamParsesToolCallDeltas(t *testing.T) {
 			Parameters: map[string]any{"type": "object"},
 		}}},
 	}, StreamHandler{
-		OnText:             func(delta string) { streamed += delta },
+		OnText:             func(delta TextDelta) { streamed += delta.Text },
 		OnToolCallsStarted: func() { toolStarted = true },
 	})
 	if err != nil {

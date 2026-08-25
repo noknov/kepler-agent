@@ -7,6 +7,7 @@ import (
 
 type Message struct {
 	Role             string `json:"role"`
+	Phase            string `json:"phase,omitempty"`
 	Content          string `json:"-"`
 	ContentParts     []ContentPart
 	ReasoningContent string     `json:"reasoning_content,omitempty"`
@@ -170,11 +171,17 @@ type Client interface {
 	Chat(ctx context.Context, req Request) (Response, error)
 }
 
-type StreamCallback func(delta string)
+type StreamCallback func(delta TextDelta)
+
+type TextDelta struct {
+	Text   string
+	ItemID string
+	Phase  string
+}
 
 // StreamHandler receives typed streaming events from ChatStream.
 type StreamHandler struct {
-	OnText             func(delta string)
+	OnText             func(delta TextDelta)
 	OnToolCallsStarted func()
 	OnToolCallComplete func(call ToolCall)
 	OnUsage            func(usage Usage)

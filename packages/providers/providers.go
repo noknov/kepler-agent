@@ -85,6 +85,7 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 	var sinkErr error
 	var conversionErr error
 	var streamedText strings.Builder
+	var hasPhasedText bool
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
 	publish := func(event model.StreamEvent) {
@@ -103,10 +104,18 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 	if stream, ok := c.Wire.(llm.StreamClient); ok {
 		publish(model.StreamEvent{Type: model.StreamStarted})
 		response, err = stream.ChatStream(streamCtx, req, llm.StreamHandler{
-			OnText: func(delta string) {
-				if delta != "" {
-					streamedText.WriteString(delta)
+			OnText: func(delta llm.TextDelta) {
+				if delta.Text == "" {
+					return
 				}
+				if delta.Phase != "" {
+					hasPhasedText = true
+					if delta.Phase == "final_answer" {
+						publish(model.StreamEvent{Type: model.StreamTextDelta, Text: delta.Text, ItemID: delta.ItemID, Phase: delta.Phase})
+					}
+					return
+				}
+				streamedText.WriteString(delta.Text)
 			},
 			OnToolCallComplete: func(call llm.ToolCall) {
 				canonical, convertErr := toToolCall(call)
@@ -140,6 +149,7 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 	if len(message.ToolCalls()) > 0 {
 		message = toolCallOnlyMessage(message)
 	}
+	message.Phase = response.Message.Phase
 	reason := finishReason(response.FinishReason)
 	if reason == model.FinishError {
 		return model.Response{}, &model.Error{
@@ -149,7 +159,7 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 		}
 	}
 	canonical := model.Response{Message: message, FinishReason: reason, Usage: toUsage(response.Usage), RawMetadata: response.Raw}
-	if len(canonical.Message.ToolCalls()) == 0 && streamedText.Len() > 0 {
+	if !hasPhasedText && len(canonical.Message.ToolCalls()) == 0 && streamedText.Len() > 0 {
 		publish(model.StreamEvent{Type: model.StreamTextDelta, Text: streamedText.String()})
 	}
 	publish(model.StreamEvent{Type: model.StreamCompleted, ResponseID: canonical.ID, Usage: &canonical.Usage})
