@@ -15,6 +15,24 @@ func (progressModel) Generate(context.Context, model.Request, model.EventSink) (
 	return model.Response{Message: model.TextMessage(model.RoleAssistant, `{"action":"Reading","target":"records"}`)}, nil
 }
 
+type recordingProgressModel struct{ request model.Request }
+
+func (m *recordingProgressModel) Generate(_ context.Context, request model.Request, _ model.EventSink) (model.Response, error) {
+	m.request = request
+	return model.Response{Message: model.TextMessage(model.RoleAssistant, `{"action":"Reading","target":"records"}`)}, nil
+}
+
+func TestProgressSummaryUsesBoundedToolFreeRequest(t *testing.T) {
+	client := &recordingProgressModel{}
+	summary, err := (&ProgressSummarizer{Client: client, Model: "mimo-v2.5"}).Summarize(context.Background(), "read records", []model.ToolCall{{Name: "artifact_read"}})
+	if err != nil || summary != "Reading records" {
+		t.Fatalf("summary=%q err=%v", summary, err)
+	}
+	if client.request.MaxOutputTokens != progressMaxOutputTokens || client.request.ReasoningEffort != "disabled" || len(client.request.Tools) != 0 {
+		t.Fatalf("progress request = %+v", client.request)
+	}
+}
+
 func TestToolStepReplacesInitialLoadingWithGeneratedStatus(t *testing.T) {
 	messenger := &fakeMessenger{}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T"})
