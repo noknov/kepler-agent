@@ -133,6 +133,10 @@ func (c Controller) View(userID string) map[string]any {
 	if explorer == "" {
 		explorer = c.Cfg.LLM.Model
 	}
+	progress := strings.TrimSpace(c.Cfg.Progress.Model)
+	if progress == "" {
+		progress = "Not configured"
+	}
 	webSearchOn := c.WebSearchEnabled(userID)
 	webSearchStatus := "On"
 	webSearchBtnStyle := "primary"
@@ -149,6 +153,7 @@ func (c Controller) View(userID string) map[string]any {
 		mrkdwnField(fmt.Sprintf("*Skills*\n%d active", skillCount)),
 		mrkdwnField("*Primary Model*\n" + modelDisplayName(c.Cfg.LLM.Model)),
 		mrkdwnField("*Explorer Model*\n" + modelDisplayName(explorer)),
+		mrkdwnField("*Progress Model*\n" + modelDisplayName(progress)),
 	}
 	blocks := []map[string]any{
 		contextBlock("Mention the agent in a channel or use the Messages tab to start a private thread."),
