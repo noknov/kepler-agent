@@ -177,9 +177,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 	conversation.OnDelivered = runSink.LinkSlackMessage
 	conversation.AlreadyDelivered = runSink.SlackMessageDelivered
-	if profile.SecondaryModel != nil {
-		conversation.Progress = &slackagent.ProgressSummarizer{Client: profile.SecondaryModel, Model: profile.SecondaryModelName, Sanitize: profile.Redactor.Sanitize, ToolDescriptions: toolDescriptions(profile.Tools)}
-	}
+	conversation.Progress = &slackagent.ProgressSummarizer{Client: profile.ProgressModel, Model: profile.ProgressModelName, Sanitize: profile.Redactor.Sanitize, ToolDescriptions: toolDescriptions(profile.Tools)}
 	conversation.Redis, conversation.PodID, conversation.Lifecycle = stores.Redis, podID, serviceCtx
 	conversation.Continuations = continuations
 	conversation.Inputs = stores.Inputs
