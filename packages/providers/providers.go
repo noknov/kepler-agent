@@ -168,24 +168,80 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 }
 
 // normalizeJSONSchema enforces the JSON Schema wire contract at the one
-// provider-neutral boundary shared by every model protocol. In JSON Schema,
-// "properties" is an object when it is present; a null value is rejected by
-// strict OpenAI-compatible providers. Remote MCP descriptors may bypass the
-// local ObjectSchema constructor, so normalize recursively rather than relying
-// on tool authors to produce one particular representation.
-func normalizeJSONSchema(value any) {
-	switch node := value.(type) {
+// provider-neutral boundary shared by every model protocol. Remote MCP
+// descriptors may bypass the local ObjectSchema constructor. Only locations
+// defined by JSON Schema to contain schemas are traversed, so examples,
+// defaults, and vendor metadata remain byte-for-byte semantically unchanged.
+func normalizeJSONSchema(schema map[string]any) {
+	normalizeSchema(schema)
+}
+
+func normalizeSchema(schema map[string]any) {
+	if schema == nil {
+		return
+	}
+	if properties, exists := schema["properties"]; exists {
+		switch properties := properties.(type) {
+		case nil:
+			schema["properties"] = map[string]any{}
+		case map[string]any:
+			normalizeSchemaMap(properties)
+		}
+	}
+
+	for _, key := range []string{
+		"additionalItems", "additionalProperties", "contains", "contentSchema",
+		"else", "if", "items", "not", "propertyNames", "then",
+		"unevaluatedItems", "unevaluatedProperties",
+	} {
+		normalizeSchemaValue(schema[key])
+	}
+	for _, key := range []string{"allOf", "anyOf", "oneOf", "prefixItems"} {
+		normalizeSchemaList(schema[key])
+	}
+	for _, key := range []string{"$defs", "definitions", "dependentSchemas", "patternProperties"} {
+		normalizeSchemaMapValue(schema[key])
+	}
+
+	// Draft-07 uses dependencies for both property-name arrays and schemas.
+	// Only map values are schemas; arrays are dependency names and are left as-is.
+	if dependencies, ok := schema["dependencies"].(map[string]any); ok {
+		for _, dependency := range dependencies {
+			normalizeSchemaValue(dependency)
+		}
+	}
+}
+
+func normalizeSchemaValue(value any) {
+	switch value := value.(type) {
 	case map[string]any:
-		if properties, exists := node["properties"]; exists && properties == nil {
-			node["properties"] = map[string]any{}
-		}
-		for _, child := range node {
-			normalizeJSONSchema(child)
-		}
+		normalizeSchema(value)
 	case []any:
-		for _, child := range node {
-			normalizeJSONSchema(child)
-		}
+		normalizeSchemaList(value)
+	}
+}
+
+func normalizeSchemaList(value any) {
+	items, ok := value.([]any)
+	if !ok {
+		return
+	}
+	for _, item := range items {
+		normalizeSchemaValue(item)
+	}
+}
+
+func normalizeSchemaMapValue(value any) {
+	items, ok := value.(map[string]any)
+	if !ok {
+		return
+	}
+	normalizeSchemaMap(items)
+}
+
+func normalizeSchemaMap(items map[string]any) {
+	for _, item := range items {
+		normalizeSchemaValue(item)
 	}
 }
 
