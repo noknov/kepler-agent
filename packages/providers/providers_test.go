@@ -19,6 +19,19 @@ type recordingWire struct {
 	response llm.Response
 }
 
+type streamingWire struct{ response llm.Response }
+
+func (w streamingWire) Chat(context.Context, llm.Request) (llm.Response, error) {
+	return w.response, nil
+}
+
+func (w streamingWire) ChatStream(_ context.Context, _ llm.Request, handler llm.StreamHandler) (llm.Response, error) {
+	if handler.OnText != nil {
+		handler.OnText("Let me inspect this.")
+	}
+	return w.response, nil
+}
+
 func (w *recordingWire) Chat(_ context.Context, request llm.Request) (llm.Response, error) {
 	w.request = request
 	if w.response.FinishReason != "" || w.response.Message.Content != "" {
@@ -107,6 +120,26 @@ func TestClientPreservesTextInMultimodalWireMessage(t *testing.T) {
 	}
 	if !strings.Contains(string(payload), "explain this image") {
 		t.Fatalf("serialized message lost text: %s", payload)
+	}
+}
+
+func TestClientDoesNotStreamTextFromToolCallStep(t *testing.T) {
+	client := &Client{Wire: streamingWire{response: llm.Response{Message: llm.Message{Role: "assistant", Content: "Let me inspect this.", ToolCalls: []llm.ToolCall{{ID: "call", Type: "function", Function: llm.ToolFunction{Name: "read", Arguments: `{}`}}}}, FinishReason: "tool_calls"}}}
+	var text string
+	response, err := client.Generate(context.Background(), model.Request{Model: "test"}, func(event model.StreamEvent) error {
+		if event.Type == model.StreamTextDelta {
+			text += event.Text
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "" {
+		t.Fatalf("streamed text = %q", text)
+	}
+	if got := response.Message.Text(); got != "" {
+		t.Fatalf("durable text = %q", got)
 	}
 }
 

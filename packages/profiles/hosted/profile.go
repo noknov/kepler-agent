@@ -24,11 +24,13 @@ import (
 // Profile owns the complete hosted-agent composition. Product entrypoints
 // depend on this profile instead of constructing a second agent runtime first.
 type Profile struct {
-	Agent    Agent
-	Prompt   safety.PromptPolicy
-	Redactor safety.Redactor
-	Tools    *tool.Catalog
-	Rates    observability.CostRates
+	Agent              Agent
+	Prompt             safety.PromptPolicy
+	Redactor           safety.Redactor
+	Tools              *tool.Catalog
+	Rates              observability.CostRates
+	SecondaryModel     model.Client
+	SecondaryModelName string
 }
 
 type ProfileDependencies struct {
@@ -130,7 +132,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	return Profile{
 		Agent: Agent{Runtime: runner}, Prompt: promptPolicy,
 		Redactor: safety.Redactor{WorkspaceRoots: cfg.Security.WorkspaceRoots}, Tools: catalog,
-		Rates: CostRates(cfg),
+		Rates: CostRates(cfg), SecondaryModel: secondary, SecondaryModelName: secondaryModel,
 	}, nil
 }
 

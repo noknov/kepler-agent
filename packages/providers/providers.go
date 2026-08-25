@@ -84,6 +84,7 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 	var sinkMu sync.Mutex
 	var sinkErr error
 	var conversionErr error
+	var streamedText strings.Builder
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
 	publish := func(event model.StreamEvent) {
@@ -104,7 +105,7 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 		response, err = stream.ChatStream(streamCtx, req, llm.StreamHandler{
 			OnText: func(delta string) {
 				if delta != "" {
-					publish(model.StreamEvent{Type: model.StreamTextDelta, Text: delta})
+					streamedText.WriteString(delta)
 				}
 			},
 			OnToolCallComplete: func(call llm.ToolCall) {
@@ -136,6 +137,9 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 	if err != nil {
 		return model.Response{}, err
 	}
+	if len(message.ToolCalls()) > 0 {
+		message = toolCallOnlyMessage(message)
+	}
 	reason := finishReason(response.FinishReason)
 	if reason == model.FinishError {
 		return model.Response{}, &model.Error{
@@ -145,8 +149,25 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 		}
 	}
 	canonical := model.Response{Message: message, FinishReason: reason, Usage: toUsage(response.Usage), RawMetadata: response.Raw}
+	if len(canonical.Message.ToolCalls()) == 0 && streamedText.Len() > 0 {
+		publish(model.StreamEvent{Type: model.StreamTextDelta, Text: streamedText.String()})
+	}
 	publish(model.StreamEvent{Type: model.StreamCompleted, ResponseID: canonical.ID, Usage: &canonical.Usage})
 	return canonical, nil
+}
+
+// toolCallOnlyMessage prevents process narration attached to a tool request
+// from becoming user-visible output or future conversation context. This is a
+// structural distinction in the provider response, not a text classification.
+func toolCallOnlyMessage(message model.Message) model.Message {
+	content := make([]model.Content, 0, len(message.Content))
+	for _, block := range message.Content {
+		if block.Type == model.ContentToolCall {
+			content = append(content, block)
+		}
+	}
+	message.Content = content
+	return message
 }
 
 func toWireMessage(message model.Message) llm.Message {
