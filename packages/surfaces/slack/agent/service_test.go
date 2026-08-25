@@ -199,6 +199,21 @@ func TestStreamStartsStatusBeforeRuntimeEvents(t *testing.T) {
 	}
 }
 
+func TestFirstFinalDeltaChangesThinkingToTyping(t *testing.T) {
+	messenger := &fakeMessenger{}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T"})
+	stream.Start()
+	stream.AppendDelta("final answer")
+	messenger.mu.Lock()
+	defer messenger.mu.Unlock()
+	if got := messenger.statuses; len(got) != 2 || got[0] != initialThreadStatus || got[1] != typingThreadStatus {
+		t.Fatalf("statuses = %#v", got)
+	}
+	if got := messenger.loading; len(got) != 2 || len(got[1]) != 0 {
+		t.Fatalf("loading messages = %#v", got)
+	}
+}
+
 func TestEnrichInputWithThreadImages(t *testing.T) {
 	history := []model.Message{{Role: model.RoleUser, Content: []model.Content{
 		{Type: model.ContentText, Text: "pets"},
