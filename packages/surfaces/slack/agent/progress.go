@@ -23,7 +23,7 @@ type ProgressSummarizer struct {
 
 const (
 	progressMaxOutputTokens = 32
-	progressTimeout         = 45 * time.Second
+	progressTimeout         = 15 * time.Second
 	progressMaxLabelRunes   = 120
 )
 
