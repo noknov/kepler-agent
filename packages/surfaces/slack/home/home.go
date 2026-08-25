@@ -133,16 +133,7 @@ func (c Controller) View(userID string) map[string]any {
 	if secondary == "" {
 		secondary = c.Cfg.LLM.Model
 	}
-	imageModel := strings.TrimSpace(c.Cfg.LLM.MultimodalModel)
-	if imageModel == "" {
-		imageModel = c.Cfg.LLM.Model
-	}
 	webSearchOn := c.WebSearchEnabled(userID)
-	conversationMode := c.ConversationMode(userID)
-	conversationLabel := "Steer"
-	if conversationMode == "queue" {
-		conversationLabel = "Queue"
-	}
 	webSearchStatus := "On"
 	webSearchBtnStyle := "primary"
 	if !webSearchOn {
@@ -154,12 +145,10 @@ func (c Controller) View(userID string) map[string]any {
 	statusFields := []map[string]any{
 		mrkdwnField("*Access*\n" + accessStatus),
 		mrkdwnField("*Web Search*\n" + webSearchStatus),
-		mrkdwnField("*Active-turn input*\n" + conversationLabel),
 		mrkdwnField(fmt.Sprintf("*Rules*\n%d active", ruleCount)),
 		mrkdwnField(fmt.Sprintf("*Skills*\n%d active", skillCount)),
 		mrkdwnField("*Primary Model*\n" + modelDisplayName(c.Cfg.LLM.Model)),
-		mrkdwnField("*Image Model*\n" + modelDisplayName(imageModel)),
-		mrkdwnField("*Explorer / Summary*\n" + modelDisplayName(secondary)),
+		mrkdwnField("*Explorer / Summary*\n" + explorerSummaryDisplayName(secondary, c.Cfg.LLM.MultimodalModel)),
 	}
 	blocks := []map[string]any{
 		contextBlock("Mention the agent in a channel or use the Messages tab to start a private thread."),
@@ -172,7 +161,6 @@ func (c Controller) View(userID string) map[string]any {
 			actionButton("manage_rules", "Manage Rules", "rule", ""),
 			actionButton("manage_skills", "Manage Skills", "skill", ""),
 			actionButton("toggle_web_search", "Web Search "+boolLabel(webSearchOn), "web_search", webSearchBtnStyle),
-			actionButton("toggle_conversation_mode", "Input: "+conversationLabel, "conversation_mode", ""),
 		),
 	}
 	blocks = append(blocks, c.connectionBlocks(userID)...)
@@ -290,6 +278,19 @@ func (c Controller) localGCPCredentialsActive() bool {
 	return strings.TrimSpace(c.Cfg.Integrations.GCP.DefaultProject) != ""
 }
 
+func explorerSummaryDisplayName(secondaryModel, imageModel string) string {
+	secondary := modelDisplayName(secondaryModel)
+	imageModel = strings.TrimSpace(imageModel)
+	if imageModel == "" {
+		return secondary
+	}
+	image := modelDisplayName(imageModel)
+	if image == secondary {
+		return secondary
+	}
+	return image + " + " + secondary
+}
+
 func modelDisplayName(model string) string {
 	model = strings.TrimSpace(model)
 	if model == "" {
@@ -315,7 +316,8 @@ var modelDisplayNames = map[string]string{
 	"minimax-m3":           "MiniMax M3",
 	"minimax-m3-free":      "MiniMax M3",
 	"LongCat-2.0":          "LongCat 2.0",
-	"deepseek-v4-flash":    "DeepSeek V4 Flash",
+	"deepseek-v4-flash":           "DeepSeek V4 Flash",
+	"deepseek-v4-flash-vision-exp": "DeepSeek V4 Flash Vision Exp",
 	"nemotron-3-ultra-free": "Nemotron 3 Ultra",
 	"north-mini-code-free": "North Mini Code",
 	"claude-sonnet-4-5-20250929": "Claude Sonnet 4.5",
