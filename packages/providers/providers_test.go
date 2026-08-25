@@ -97,14 +97,14 @@ func TestClientConvertsCanonicalRequestOnceForEveryProfile(t *testing.T) {
 	}
 }
 
-func TestClientNormalizesSchemasForEveryWireProtocol(t *testing.T) {
+func TestClientNormalizesSchemaBeforeWireEncoding(t *testing.T) {
 	wire := &recordingWire{}
 	client := &Client{Wire: wire}
 	_, err := client.Generate(context.Background(), model.Request{
 		Model: "test",
 		Tools: []model.ToolDefinition{{
 			Name:        "remote-empty-tool",
-			InputSchema: json.RawMessage(`{"type":"object","properties":null,"items":{"type":"object","properties":null}}`),
+			InputSchema: json.RawMessage(`{"type":"object","properties":null,"items":{"type":"object","properties":null},"examples":[{"properties":null}]}`),
 		}},
 	}, nil)
 	if err != nil {
@@ -117,8 +117,56 @@ func TestClientNormalizesSchemasForEveryWireProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(encoded), `"properties":null`) {
-		t.Fatalf("provider schema retained null properties: %s", encoded)
+	var schema map[string]any
+	if err := json.Unmarshal(encoded, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if schema["properties"] == nil {
+		t.Fatalf("root properties = null, want empty object: %s", encoded)
+	}
+	items := schema["items"].(map[string]any)
+	if items["properties"] == nil {
+		t.Fatalf("nested properties = null, want empty object: %s", encoded)
+	}
+	examples := schema["examples"].([]any)
+	example := examples[0].(map[string]any)
+	if _, exists := example["properties"]; !exists || example["properties"] != nil {
+		t.Fatalf("example data was modified: %#v", example)
+	}
+}
+
+func TestNormalizeJSONSchemaTraversesOnlySchemaKeywords(t *testing.T) {
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(`{
+		"$defs":{"named":{"type":"object","properties":null}},
+		"allOf":[{"type":"object","properties":null}],
+		"dependencies":{"schema":{"type":"object","properties":null},"names":["enabled"]},
+		"default":{"properties":null},
+		"x-ui":{"properties":null}
+	}`), &schema); err != nil {
+		t.Fatal(err)
+	}
+
+	normalizeJSONSchema(schema)
+
+	if got := schema["$defs"].(map[string]any)["named"].(map[string]any)["properties"]; got == nil {
+		t.Fatal("$defs schema properties = null, want empty object")
+	}
+	if got := schema["allOf"].([]any)[0].(map[string]any)["properties"]; got == nil {
+		t.Fatal("allOf schema properties = null, want empty object")
+	}
+	dependencies := schema["dependencies"].(map[string]any)
+	if got := dependencies["schema"].(map[string]any)["properties"]; got == nil {
+		t.Fatal("dependency schema properties = null, want empty object")
+	}
+	if got := dependencies["names"].([]any); len(got) != 1 || got[0] != "enabled" {
+		t.Fatalf("dependency names were modified: %#v", got)
+	}
+	if got := schema["default"].(map[string]any)["properties"]; got != nil {
+		t.Fatalf("default was modified: %#v", schema["default"])
+	}
+	if got := schema["x-ui"].(map[string]any)["properties"]; got != nil {
+		t.Fatalf("vendor metadata was modified: %#v", schema["x-ui"])
 	}
 }
 
