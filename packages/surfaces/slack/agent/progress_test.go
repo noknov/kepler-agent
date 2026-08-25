@@ -12,14 +12,14 @@ import (
 type progressModel struct{}
 
 func (progressModel) Generate(context.Context, model.Request, model.EventSink) (model.Response, error) {
-	return model.Response{Message: model.TextMessage(model.RoleAssistant, `{"action":"Reading","target":"records"}`)}, nil
+	return model.Response{Message: model.TextMessage(model.RoleAssistant, "Reading records")}, nil
 }
 
 type recordingProgressModel struct{ request model.Request }
 
 func (m *recordingProgressModel) Generate(_ context.Context, request model.Request, _ model.EventSink) (model.Response, error) {
 	m.request = request
-	return model.Response{Message: model.TextMessage(model.RoleAssistant, `{"action":"Reading","target":"records"}`)}, nil
+	return model.Response{Message: model.TextMessage(model.RoleAssistant, "Reading records")}, nil
 }
 
 func TestProgressSummaryUsesBoundedToolFreeRequest(t *testing.T) {
@@ -33,12 +33,12 @@ func TestProgressSummaryUsesBoundedToolFreeRequest(t *testing.T) {
 	}
 }
 
-func TestDecodeProgressAcceptsStrictJSONInsideStandardFence(t *testing.T) {
-	if got := decodeProgress("```json\n{\"action\":\"Reading\",\"target\":\"records\"}\n```"); got != "Reading records" {
+func TestDecodeProgressAcceptsSingleLineLabel(t *testing.T) {
+	if got := decodeProgress(" Reading records "); got != "Reading records" {
 		t.Fatalf("decodeProgress() = %q", got)
 	}
-	if got := decodeProgress("A label: {\"action\":\"Reading\",\"target\":\"records\"}"); got != "" {
-		t.Fatalf("decodeProgress() accepted prose: %q", got)
+	if got := decodeProgress("Reading\nrecords"); got != "" {
+		t.Fatalf("decodeProgress() accepted multiline label: %q", got)
 	}
 }
 
@@ -66,5 +66,36 @@ func TestToolStepReplacesInitialLoadingWithGeneratedStatus(t *testing.T) {
 	}
 	if got := messenger.loading; len(got) != 2 || len(got[0]) != 0 || len(got[1]) != 1 || got[1][0] != "Reading records" {
 		t.Fatalf("loading messages = %#v", got)
+	}
+}
+
+func TestStatusRefreshKeepsCurrentLoadingVisible(t *testing.T) {
+	messenger := &fakeMessenger{}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T"})
+	stream.Start()
+	stream.setProgressStatus(stream.statusEpoch, "Reading records")
+	stream.refreshStatus()
+	stream.stopStatusRefresh()
+
+	messenger.mu.Lock()
+	defer messenger.mu.Unlock()
+	if got := messenger.statuses; len(got) != 3 || got[2] != initialThreadStatus {
+		t.Fatalf("statuses = %#v", got)
+	}
+	if got := messenger.loading; len(got) != 3 || len(got[2]) != 1 || got[2][0] != "Reading records" {
+		t.Fatalf("loading messages = %#v", got)
+	}
+}
+
+func TestClearStatusStopsRefresh(t *testing.T) {
+	messenger := &fakeMessenger{}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T"})
+	stream.Start()
+	stream.clearStatus()
+	stream.mu.Lock()
+	timer := stream.statusTimer
+	stream.mu.Unlock()
+	if timer != nil {
+		t.Fatal("status refresh timer remains armed after clear")
 	}
 }

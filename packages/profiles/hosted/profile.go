@@ -24,13 +24,13 @@ import (
 // Profile owns the complete hosted-agent composition. Product entrypoints
 // depend on this profile instead of constructing a second agent runtime first.
 type Profile struct {
-	Agent             Agent
-	Prompt            safety.PromptPolicy
-	Redactor          safety.Redactor
-	Tools             *tool.Catalog
-	Rates             observability.CostRates
-	ProgressModel     model.Client
-	ProgressModelName string
+	Agent              Agent
+	Prompt             safety.PromptPolicy
+	Redactor           safety.Redactor
+	Tools              *tool.Catalog
+	Rates              observability.CostRates
+	SecondaryModel     model.Client
+	SecondaryModelName string
 }
 
 type ProfileDependencies struct {
@@ -93,7 +93,6 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	if compactModel == "" {
 		compactModel = cfg.LLM.Model
 	}
-	progressClient, progressModel := selectProgressModel(primaryObserved, cfg.LLM.Model, secondary, secondaryModel)
 	runner, err := agentruntime.New(agentruntime.Config{
 		Model: cfg.LLM.Model, ReasoningEffort: cfg.LLM.Thinking, Temperature: cfg.LLM.Temperature,
 		MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxSteps: cfg.Tools.AgentMaxSteps, MaxModelRetries: 0, MaxEmptyResponseRetries: 3,
@@ -133,19 +132,8 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	return Profile{
 		Agent: Agent{Runtime: runner}, Prompt: promptPolicy,
 		Redactor: safety.Redactor{WorkspaceRoots: cfg.Security.WorkspaceRoots}, Tools: catalog,
-		Rates: CostRates(cfg), ProgressModel: progressClient, ProgressModelName: progressModel,
+		Rates: CostRates(cfg), SecondaryModel: secondary, SecondaryModelName: secondaryModel,
 	}, nil
-}
-
-// selectProgressModel keeps dynamic Slack status available without requiring a
-// second provider. When one is configured, use it to isolate status generation
-// from the primary response path; otherwise, use the primary model with the
-// summarizer's short, tool-free request.
-func selectProgressModel(primary model.Client, primaryName string, secondary model.Client, secondaryName string) (model.Client, string) {
-	if secondary != nil {
-		return secondary, secondaryName
-	}
-	return primary, primaryName
 }
 
 type observedModel struct {

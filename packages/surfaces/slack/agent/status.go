@@ -1,7 +1,9 @@
 package slackagent
 
 import (
+	"log"
 	"strings"
+	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
 )
@@ -9,6 +11,7 @@ import (
 const (
 	initialThreadStatus = "is thinking"
 	typingThreadStatus  = "is typing"
+	statusRefreshPeriod = 90 * time.Second
 )
 
 // Lifecycle projects canonical runtime events into Slack presentation state.
@@ -37,9 +40,8 @@ func (s *slackStream) startStatus() {
 	s.lastStatus = statusKey(initialThreadStatus, "")
 	s.statusEpoch++
 	s.mu.Unlock()
-	ctx, cancel := s.deliveryContext()
-	defer cancel()
-	_ = s.status.SetThreadStatus(ctx, s.req.Channel, s.req.ThreadTS, initialThreadStatus, nil)
+	s.sendThreadStatus(initialThreadStatus, nil, "start")
+	s.armStatusRefresh()
 }
 
 // startTypingStatus replaces progress once the final assistant response starts
@@ -64,9 +66,8 @@ func (s *slackStream) startTypingStatus() {
 	s.lastStatus = statusKey(typingThreadStatus, "")
 	s.statusEpoch++
 	s.mu.Unlock()
-	ctx, cancel := s.deliveryContext()
-	defer cancel()
-	_ = s.status.SetThreadStatus(ctx, s.req.Channel, s.req.ThreadTS, typingThreadStatus, nil)
+	s.sendThreadStatus(typingThreadStatus, nil, "typing")
+	s.armStatusRefresh()
 }
 
 func statusKey(status, loading string) string {
@@ -99,7 +100,8 @@ func (s *slackStream) restoreThreadStatus() {
 	}
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()
-	_ = s.status.SetThreadStatus(s.ctx, s.req.Channel, s.req.ThreadTS, status, []string{loading})
+	s.sendThreadStatus(status, []string{loading}, "restore")
+	s.armStatusRefresh()
 }
 
 func (s *slackStream) setProgressStatus(epoch uint64, loading string) {
@@ -117,7 +119,58 @@ func (s *slackStream) setProgressStatus(epoch uint64, loading string) {
 	}
 	s.lastStatus = key
 	s.mu.Unlock()
+	s.sendThreadStatus(status, []string{loading}, "progress")
+	s.armStatusRefresh()
+}
+
+func (s *slackStream) sendThreadStatus(status string, loading []string, source string) {
 	ctx, cancel := s.deliveryContext()
 	defer cancel()
-	_ = s.status.SetThreadStatus(ctx, s.req.Channel, s.req.ThreadTS, status, []string{loading})
+	if err := s.status.SetThreadStatus(ctx, s.req.Channel, s.req.ThreadTS, status, loading); err != nil {
+		log.Printf("slack thread status unavailable turn=%s source=%s", s.req.EventID, source)
+	}
+}
+
+// Slack automatically removes a thread status after two minutes without a
+// message. Refresh the current canonical status before that deadline while the
+// turn remains active; this is independent of tool execution and model output.
+func (s *slackStream) armStatusRefresh() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.status == nil || s.streamClosed || s.lastStatus == "" || s.lastStatus == "\x00" {
+		return
+	}
+	if s.statusTimer != nil {
+		s.statusTimer.Stop()
+	}
+	s.statusTimer = time.AfterFunc(statusRefreshPeriod, s.refreshStatus)
+}
+
+func (s *slackStream) stopStatusRefresh() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.statusTimer != nil {
+		s.statusTimer.Stop()
+		s.statusTimer = nil
+	}
+}
+
+func (s *slackStream) refreshStatus() {
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+	s.mu.Lock()
+	if s.status == nil || s.streamClosed || s.lastStatus == "" || s.lastStatus == "\x00" {
+		s.statusTimer = nil
+		s.mu.Unlock()
+		return
+	}
+	status, loading := splitStatusKey(s.lastStatus)
+	s.statusTimer = nil
+	s.mu.Unlock()
+	var loadingMessages []string
+	if loading != "" {
+		loadingMessages = []string{loading}
+	}
+	s.sendThreadStatus(status, loadingMessages, "refresh")
+	s.armStatusRefresh()
 }

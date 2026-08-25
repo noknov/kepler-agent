@@ -741,6 +741,7 @@ type slackStream struct {
 	lastStreamText       string
 	lastStreamUpdate     time.Time
 	streamTimer          *time.Timer
+	statusTimer          *time.Timer
 }
 
 func newSlackStream(ctx context.Context, messenger slackconversation.Messenger, req slackconversation.Request) *slackStream {
@@ -859,6 +860,7 @@ func (s *slackStream) postFinalMarkdown(ctx context.Context, final string) (stri
 }
 
 func (s *slackStream) clearStatus() {
+	s.stopStatusRefresh()
 	if s.status != nil {
 		s.statusMu.Lock()
 		defer s.statusMu.Unlock()
