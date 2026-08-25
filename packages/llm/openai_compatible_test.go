@@ -2,8 +2,10 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -46,6 +48,41 @@ func TestChatBodyOmitsMaxTokensWhenUnset(t *testing.T) {
 	}
 	if _, ok := body["temperature"]; ok {
 		t.Fatalf("chatBody should omit temperature when unset: %#v", body)
+	}
+}
+
+func TestDeepSeekChatBodyPreservesMultimodalContent(t *testing.T) {
+	client := NewOpenAICompatibleClient("deepseek", "https://api.deepseek.com", "token", 0)
+	message := Message{
+		Role: "user",
+		ContentParts: []ContentPart{
+			TextPart("describe this image"),
+			ImageURLPart("data:image/png;base64,AAAA"),
+		},
+	}
+	body := client.chatBody(Request{
+		Model:    "deepseek-v4-flash-vision-exp",
+		Messages: []Message{message},
+	})
+
+	messages, ok := body["messages"].([]Message)
+	if !ok || len(messages) != 1 {
+		t.Fatalf("messages = %#v, want one Message", body["messages"])
+	}
+	payload, err := json.Marshal(messages[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	bodyText := string(payload)
+	for _, want := range []string{
+		`"type":"text"`,
+		`"type":"image_url"`,
+		"describe this image",
+		"data:image/png;base64,AAAA",
+	} {
+		if !strings.Contains(bodyText, want) {
+			t.Fatalf("serialized message missing %q: %s", want, bodyText)
+		}
 	}
 }
 

@@ -42,7 +42,7 @@ func TestViewShowsModelDisplayNamesWithoutCodeFormatting(t *testing.T) {
 	controller := Controller{
 		Cfg: config.Config{
 			LLM: config.LLMConfig{
-				Model:           "ox-alpha-free",
+				Model:           "deepseek-v4-flash-vision-exp",
 				MultimodalModel: "gpt-5.6-luna",
 				SecondaryModel:  "mimo-v2.5",
 			},
@@ -59,17 +59,32 @@ func TestViewShowsModelDisplayNamesWithoutCodeFormatting(t *testing.T) {
 		t.Fatalf("Marshal() error = %v", err)
 	}
 	body := string(raw)
-	if !strings.Contains(body, "Ox Alpha") {
-		t.Fatalf("expected Ox Alpha in view, got %s", body)
+	if !strings.Contains(body, "DeepSeek V4 Flash Vision Exp") {
+		t.Fatalf("expected DeepSeek V4 Flash Vision Exp in view, got %s", body)
 	}
 	if !strings.Contains(body, "MiMo V2.5") {
 		t.Fatalf("expected MiMo V2.5 in view, got %s", body)
 	}
-	if !strings.Contains(body, "GPT-5.6 Luna") {
-		t.Fatalf("expected GPT-5.6 Luna in view, got %s", body)
+	if !strings.Contains(body, "GPT-5.6 Luna + MiMo V2.5") {
+		t.Fatalf("expected combined explorer/summary label, got %s", body)
 	}
-	if strings.Contains(body, "ox-alpha-free") || strings.Contains(body, "gpt-5.6-luna") || strings.Contains(body, "mimo-v2.5") || strings.Contains(body, "`") {
+	if strings.Contains(body, "Active-turn") || strings.Contains(body, "Image Model") || strings.Contains(body, "toggle_conversation_mode") {
+		t.Fatalf("expected no active-turn or image model fields, got %s", body)
+	}
+	if strings.Contains(body, "deepseek-v4-flash-vision-exp") || strings.Contains(body, "gpt-5.6-luna") || strings.Contains(body, "mimo-v2.5") || strings.Contains(body, "`") {
 		t.Fatalf("expected no code model names or backticks, got %s", body)
+	}
+}
+
+func TestExplorerSummaryDisplayName(t *testing.T) {
+	if got := explorerSummaryDisplayName("mimo-v2.5", ""); got != "MiMo V2.5" {
+		t.Fatalf("explorerSummaryDisplayName() = %q, want MiMo V2.5", got)
+	}
+	if got := explorerSummaryDisplayName("mimo-v2.5", "gpt-5.6-luna"); got != "GPT-5.6 Luna + MiMo V2.5" {
+		t.Fatalf("explorerSummaryDisplayName() = %q, want GPT-5.6 Luna + MiMo V2.5", got)
+	}
+	if got := explorerSummaryDisplayName("mimo-v2.5", "mimo-v2.5"); got != "MiMo V2.5" {
+		t.Fatalf("explorerSummaryDisplayName() = %q, want MiMo V2.5 when image model matches secondary", got)
 	}
 }
 
