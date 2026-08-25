@@ -33,6 +33,15 @@ func TestProgressSummaryUsesBoundedToolFreeRequest(t *testing.T) {
 	}
 }
 
+func TestDecodeProgressAcceptsStrictJSONInsideStandardFence(t *testing.T) {
+	if got := decodeProgress("```json\n{\"action\":\"Reading\",\"target\":\"records\"}\n```"); got != "Reading records" {
+		t.Fatalf("decodeProgress() = %q", got)
+	}
+	if got := decodeProgress("A label: {\"action\":\"Reading\",\"target\":\"records\"}"); got != "" {
+		t.Fatalf("decodeProgress() accepted prose: %q", got)
+	}
+}
+
 func TestToolStepReplacesInitialLoadingWithGeneratedStatus(t *testing.T) {
 	messenger := &fakeMessenger{}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T"})
