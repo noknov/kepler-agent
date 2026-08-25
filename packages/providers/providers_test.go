@@ -32,6 +32,43 @@ func (w streamingWire) ChatStream(_ context.Context, _ llm.Request, handler llm.
 	return w.response, nil
 }
 
+type dualModeWire struct {
+	chatCalls   int
+	streamCalls int
+}
+
+func (w *dualModeWire) Chat(context.Context, llm.Request) (llm.Response, error) {
+	w.chatCalls++
+	return llm.Response{Message: llm.Message{Role: "assistant", Content: "complete"}, FinishReason: "stop"}, nil
+}
+
+func (w *dualModeWire) ChatStream(_ context.Context, _ llm.Request, _ llm.StreamHandler) (llm.Response, error) {
+	w.streamCalls++
+	return llm.Response{Message: llm.Message{Role: "assistant", Content: "streamed"}, FinishReason: "stop"}, nil
+}
+
+func TestClientUsesCompletionWithoutEventSink(t *testing.T) {
+	wire := &dualModeWire{}
+	response, err := (&Client{Wire: wire}).Generate(context.Background(), model.Request{Model: "test"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Message.Text() != "complete" || wire.chatCalls != 1 || wire.streamCalls != 0 {
+		t.Fatalf("response=%q chat=%d stream=%d", response.Message.Text(), wire.chatCalls, wire.streamCalls)
+	}
+}
+
+func TestClientUsesStreamingWithEventSink(t *testing.T) {
+	wire := &dualModeWire{}
+	_, err := (&Client{Wire: wire}).Generate(context.Background(), model.Request{Model: "test"}, func(model.StreamEvent) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wire.chatCalls != 0 || wire.streamCalls != 1 {
+		t.Fatalf("chat=%d stream=%d", wire.chatCalls, wire.streamCalls)
+	}
+}
+
 func (w *recordingWire) Chat(_ context.Context, request llm.Request) (llm.Response, error) {
 	w.request = request
 	if w.response.FinishReason != "" || w.response.Message.Content != "" {
@@ -233,7 +270,7 @@ func TestFactoryResponsesPreservesCallID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := client.Generate(context.Background(), model.Request{Model: "test", Messages: []model.Message{model.TextMessage(model.RoleUser, "call")}}, nil)
+	response, err := client.Generate(context.Background(), model.Request{Model: "test", Messages: []model.Message{model.TextMessage(model.RoleUser, "call")}}, func(model.StreamEvent) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}

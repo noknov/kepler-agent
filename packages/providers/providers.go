@@ -102,7 +102,10 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 			}
 		}
 	}
-	if stream, ok := c.Wire.(llm.StreamClient); ok {
+	// Streaming exists to deliver incremental events. Callers without an event
+	// sink do not benefit from an SSE connection and should use the provider's
+	// ordinary completion endpoint instead.
+	if stream, ok := c.Wire.(llm.StreamClient); ok && sink != nil {
 		publish(model.StreamEvent{Type: model.StreamStarted})
 		response, err = stream.ChatStream(streamCtx, req, llm.StreamHandler{
 			OnText: func(delta llm.TextDelta) {
