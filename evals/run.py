@@ -10,6 +10,7 @@ import json
 import os
 import random
 import shutil
+import statistics
 import subprocess
 import tempfile
 import time
@@ -26,6 +27,7 @@ class Candidate:
     files: dict[str, str]
     model: str
     version_command: list[str]
+    capabilities: frozenset[str]
 
 @dataclasses.dataclass(frozen=True)
 class Task:
@@ -38,10 +40,21 @@ class Task:
     timeout_seconds: int
     tags: list[str]
     metadata: dict[str, Any]
+    required_capabilities: frozenset[str]
+    weight: float
 
 def load_candidates(path: Path) -> list[Candidate]:
     data = json.loads(path.read_text())
-    return [Candidate(item["name"], item["command"], item.get("env", {}), item.get("files", {}), item.get("model", "{model}"), item.get("version_command", [])) for item in data["candidates"]]
+    candidates = []
+    for item in data["candidates"]:
+        capabilities = item.get("capabilities", [])
+        if not isinstance(capabilities, list) or not all(isinstance(value, str) and value for value in capabilities):
+            raise ValueError(f"candidate {item.get('name', '<unknown>')} capabilities must be a string list")
+        candidates.append(Candidate(
+            item["name"], item["command"], item.get("env", {}), item.get("files", {}),
+            item.get("model", "{model}"), item.get("version_command", []), frozenset(capabilities),
+        ))
+    return candidates
 
 def utc_now() -> str:
     return datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -112,6 +125,12 @@ def require_string_list(item: dict[str, Any], field: str) -> list[str]:
         raise ValueError(f"task {item.get('id', '<unknown>')} requires string list {field}")
     return value
 
+def optional_string_list(item: dict[str, Any], field: str) -> list[str]:
+    value = item.get(field, [])
+    if not isinstance(value, list) or not all(isinstance(part, str) and part for part in value):
+        raise ValueError(f"task {item.get('id', '<unknown>')} {field} must be a string list")
+    return value
+
 def load_tasks(path: Path) -> list[Task]:
     data = json.loads(path.read_text())
     if data.get("schema_version") != 1:
@@ -132,7 +151,11 @@ def load_tasks(path: Path) -> list[Task]:
             raise ValueError(f"task {task_id} requires metadata object")
         fixture = Path(require_string(item, "fixture"))
         if not fixture.is_absolute(): fixture = (base / fixture).resolve()
-        tasks.append(Task(task_id, category, source, prompt, fixture, test, int(item["timeout_seconds"]), tags, metadata))
+        required_capabilities = frozenset(optional_string_list(item, "required_capabilities"))
+        weight = float(item.get("weight", 1))
+        if weight <= 0:
+            raise ValueError(f"task {task_id} weight must be positive")
+        tasks.append(Task(task_id, category, source, prompt, fixture, test, int(item["timeout_seconds"]), tags, metadata, required_capabilities, weight))
     return tasks
 
 def filter_tasks(tasks: list[Task], ids: list[str], categories: list[str], sources: list[str], tags: list[str]) -> list[Task]:
@@ -222,10 +245,16 @@ def run_case(candidate: Candidate, task: Task, model: str, run_root: Path, repet
     command = expand(candidate.command, mapping)
     record: dict[str, Any] = {
         "task": task.id, "category": task.category, "source": task.source,
-        "tags": task.tags, "metadata": task.metadata,
+        "tags": task.tags, "metadata": task.metadata, "required_capabilities": sorted(task.required_capabilities), "weight": task.weight,
         "candidate": candidate.name, "repetition": repetition, "command": command, "model": model,
-        "candidate_version": versions.get(candidate.name, {}),
+        "candidate_version": versions.get(candidate.name, {}), "candidate_capabilities": sorted(candidate.capabilities),
     }
+    missing_capabilities = sorted(task.required_capabilities - candidate.capabilities)
+    if missing_capabilities:
+        set_status(record, "skipped")
+        record["skip_reason"] = "missing_capabilities"
+        record["missing_capabilities"] = missing_capabilities
+        return record
     if dry_run:
         set_status(record, "dry_run")
         return record
@@ -256,29 +285,77 @@ def run_case(candidate: Candidate, task: Task, model: str, run_root: Path, repet
 def summarize(records: list[dict[str, Any]], versions: dict[str, dict[str, Any]]) -> dict[str, Any]:
     candidates: dict[str, dict[str, Any]] = {}
     categories: dict[str, dict[str, Any]] = {}
+    tags: dict[str, dict[str, Any]] = {}
+    profiles: dict[str, list[str]] = {}
     for record in records:
-        summary = candidates.setdefault(record["candidate"], {"total": 0, "passed": 0, "failed": 0, "timeout": 0, "agent_error": 0, "launch_error": 0, "dry_run": 0, "duration_seconds": 0.0})
-        summary["total"] += 1
-        status = record["status"]
-        if status in summary: summary[status] += 1
-        failure_class = record.get("failure_class")
-        if failure_class:
-            classes = summary.setdefault("failure_classes", {})
-            classes[failure_class] = classes.get(failure_class, 0) + 1
-        summary["duration_seconds"] += record.get("duration_seconds", 0.0)
-        category_key = f'{record["candidate"]}:{record["category"]}'
-        category = categories.setdefault(category_key, {"candidate": record["candidate"], "category": record["category"], "total": 0, "passed": 0, "failed": 0, "timeout": 0, "agent_error": 0, "launch_error": 0, "dry_run": 0})
-        category["total"] += 1
-        if status in category: category[status] += 1
-        if failure_class:
-            classes = category.setdefault("failure_classes", {})
-            classes[failure_class] = classes.get(failure_class, 0) + 1
-    for summary in candidates.values():
-        summary["pass_rate"] = summary["passed"] / summary["total"] if summary["total"] else 0
-        summary["duration_seconds"] = round(summary["duration_seconds"], 3)
-    for category in categories.values():
-        category["pass_rate"] = category["passed"] / category["total"] if category["total"] else 0
-    return {"candidates": candidates, "categories": categories, "candidate_versions": versions, "records": len(records)}
+        candidate_name = record["candidate"]
+        profiles[candidate_name] = record.get("candidate_capabilities", [])
+        summary = candidates.setdefault(candidate_name, new_summary())
+        accumulate(summary, record)
+        category_key = f'{candidate_name}:{record["category"]}'
+        category = categories.setdefault(category_key, {**new_summary(), "candidate": candidate_name, "category": record["category"]})
+        accumulate(category, record)
+        for tag in record["tags"]:
+            tag_key = f"{candidate_name}:{tag}"
+            tag_summary = tags.setdefault(tag_key, {**new_summary(), "candidate": candidate_name, "tag": tag})
+            accumulate(tag_summary, record)
+    for summary in [*candidates.values(), *categories.values(), *tags.values()]:
+        finalize_summary(summary)
+    return {
+        "candidates": candidates,
+        "categories": categories,
+        "tags": tags,
+        "candidate_capabilities": profiles,
+        "candidate_versions": versions,
+        "records": len(records),
+    }
+
+def new_summary() -> dict[str, Any]:
+    return {
+        "total": 0, "eligible": 0, "passed": 0, "failed": 0, "timeout": 0,
+        "agent_error": 0, "launch_error": 0, "dry_run": 0, "skipped": 0,
+        "duration_seconds": 0.0, "weighted_total": 0.0, "weighted_passed": 0.0,
+        "_durations": [],
+    }
+
+def accumulate(summary: dict[str, Any], record: dict[str, Any]) -> None:
+    summary["total"] += 1
+    status = record["status"]
+    if status in summary:
+        summary[status] += 1
+    if status != "skipped":
+        summary["eligible"] += 1
+        weight = float(record.get("weight", 1))
+        summary["weighted_total"] += weight
+        if status == "passed":
+            summary["weighted_passed"] += weight
+    if "duration_seconds" in record:
+        duration = float(record["duration_seconds"])
+        summary["duration_seconds"] += duration
+        summary["_durations"].append(duration)
+    failure_class = record.get("failure_class")
+    if failure_class:
+        classes = summary.setdefault("failure_classes", {})
+        classes[failure_class] = classes.get(failure_class, 0) + 1
+
+def percentile(values: list[float], fraction: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * fraction
+    lower, upper = int(position), min(int(position) + 1, len(ordered) - 1)
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+
+def finalize_summary(summary: dict[str, Any]) -> None:
+    eligible = summary["eligible"]
+    summary["pass_rate"] = summary["passed"] / eligible if eligible else 0
+    summary["weighted_pass_rate"] = summary["weighted_passed"] / summary["weighted_total"] if summary["weighted_total"] else 0
+    durations = summary.pop("_durations")
+    summary["duration_seconds"] = round(summary["duration_seconds"], 3)
+    summary["median_duration_seconds"] = round(statistics.median(durations), 3) if durations else 0.0
+    summary["p95_duration_seconds"] = round(percentile(durations, 0.95), 3)
+    summary["weighted_total"] = round(summary["weighted_total"], 3)
+    summary["weighted_passed"] = round(summary["weighted_passed"], 3)
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -295,6 +372,8 @@ def main() -> int:
     parser.add_argument("--tag", action="append", default=[])
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    if args.repetitions <= 0:
+        parser.error("--repetitions must be positive")
     candidates = [item for item in load_candidates(args.candidates) if not args.candidate or item.name in args.candidate]
     tasks = filter_tasks(load_tasks(args.suite), args.task, args.category, args.source, args.tag)
     if not candidates or not tasks: parser.error("candidate/task selection is empty")
@@ -323,6 +402,7 @@ def main() -> int:
         },
         "selection": {
             "candidates": [candidate.name for candidate in candidates],
+            "candidate_capabilities": {candidate.name: sorted(candidate.capabilities) for candidate in candidates},
             "tasks": [task.id for task in tasks],
         },
         "outputs": {

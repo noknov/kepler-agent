@@ -39,6 +39,7 @@ eval-check:
 	@tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \
 	python3 evals/run.py --suite evals/suites/smoke.json --candidates evals/candidates.example.json --model dry-run --output "$$tmp/results" --dry-run >/dev/null; \
 	python3 evals/report.py "$$tmp/results" --output "$$tmp/report.html" >/dev/null; \
-	python3 -c 'compile(open("evals/run.py", "rb").read(), "evals/run.py", "exec"); compile(open("evals/import_harbor.py", "rb").read(), "evals/import_harbor.py", "exec"); compile(open("evals/report.py", "rb").read(), "evals/report.py", "exec")'
+	python3 -m unittest evals/test_evaluator.py; \
+	python3 -c 'compile(open("evals/run.py", "rb").read(), "evals/run.py", "exec"); compile(open("evals/import_harbor.py", "rb").read(), "evals/import_harbor.py", "exec"); compile(open("evals/run_harbor.py", "rb").read(), "evals/run_harbor.py", "exec"); compile(open("evals/harbor_agents/slack_copilot.py", "rb").read(), "evals/harbor_agents/slack_copilot.py", "exec"); compile(open("evals/report.py", "rb").read(), "evals/report.py", "exec")'
 
 check: fmt-check boundaries vet test build eval-check
