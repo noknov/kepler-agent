@@ -1,5 +1,6 @@
 .git
 .cache
+.gocache
 .tmp-gocache
 .data
 .docker
@@ -11,6 +12,7 @@ observability/.env
 cmd/slack-copilot-agent/.env
 worker/.prompts
 dist
+bin
 node_modules
 coverage.out
 *.log
