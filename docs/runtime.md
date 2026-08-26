@@ -17,11 +17,11 @@ the durable transcript stores completed model messages and lifecycle events so
 replay does not duplicate token fragments. Web citations remain structured provenance on content blocks.
 Prompts decide when and how to cite; presentation adapters decide how to render
 the provider-supplied citation records. Dynamic status remains a projection of
-canonical runtime events rather than a second execution-state model. Slack does
-not set a status while the model is considering the request. Once a tool call is
-ready to execute, a secondary model generates one English loading message from
-the sanitized tool intent. Slack displays that message through
-`loading_messages`; no model text is used to decide whether a message is shown.
+canonical runtime events rather than a second execution-state model. Slack sets
+its native initial status when execution starts. Once a tool call is ready to
+execute, an optional progress model generates one English loading message from
+sanitized tool intent. Slack displays that message through `loading_messages`;
+the progress model does not decide whether a status is shown or change execution.
 Status is presentation-only: it is never written to the transcript, returned to
 the runtime, or placed in model context.
 
@@ -29,11 +29,13 @@ The current loop has no model-output repair layer. Only the owner of a
 `pending_input` turn can continue it with an unmentioned thread reply;
 unsupported image parts are removed before provider dispatch; and parallel tool
 results share an aggregate inline budget. Empty model output fails the turn,
-the tool-step limit stops without an extra synthesis request, and retryable
-typed provider failures are retried only by the runtime. Empty model messages
-without tool calls are retried in place up to `MaxEmptyResponseRetries` before
-the turn terminates as `empty_response`. A zero retry count now means zero
-retries; product profiles opt into their retry budget explicitly.
+and the tool-step limit stops without an extra synthesis request. Empty model
+messages without tool calls are retried in place up to
+`MaxEmptyResponseRetries` before the turn terminates as `empty_response`. A
+zero retry count means zero retries; product profiles opt into their retry
+budget explicitly. Provider retries, primary/fallback selection, and circuit
+breaking are handled by the profile's resilient model client rather than an
+extra runtime loop.
 Slack buffers streamed answer text and delivers it through Slack's native
 `chat.startStream` / `chat.appendStream` / `chat.stopStream` APIs. When stream
 delivery fails, the final answer is posted as a normal markdown message with a
@@ -65,3 +67,8 @@ The JSON-RPC app server (`appserver/cmd/app-server`) exposes the same local
 runtime over stdio with `thread/start`, `thread/resume`, `thread/fork`,
 `turn/start`, `turn/steer`, `turn/interrupt`, and Codex-style item
 notifications including `item/agentMessage/delta`.
+
+`agent-explore` is a hosted read-only tool, not a second product runtime. It
+creates isolated child turns from a filtered catalog, records a parent link and
+its own transcript, and returns a factual report to the parent. Child stream
+events are not sent to the parent Slack presentation sink.

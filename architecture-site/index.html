@@ -123,12 +123,13 @@
           <a href="#zh-core">04 · Agent Runtime</a>
           <a href="#zh-memory">05 · 上下文</a>
           <a href="#zh-tools">06 · 工具与能力</a>
-          <a href="#zh-protocol">07 · Transcript</a>
-          <a href="#zh-storage">08 · 数据与并发</a>
-          <a href="#zh-safety">09 · 安全边界</a>
-          <a href="#zh-operations">10 · 可用性与观测</a>
-          <a href="#zh-boundaries">11 · 当前边界</a>
-          <a href="#zh-reading">12 · 代码入口</a>
+          <a href="#zh-integrations">07 · 连接与呈现</a>
+          <a href="#zh-protocol">08 · Transcript</a>
+          <a href="#zh-storage">09 · 数据与并发</a>
+          <a href="#zh-safety">10 · 安全边界</a>
+          <a href="#zh-operations">11 · 可用性与观测</a>
+          <a href="#zh-boundaries">12 · 当前边界</a>
+          <a href="#zh-reading">13 · 代码入口</a>
         </nav>
 
         <div class="content">
@@ -184,10 +185,11 @@
                 <tr><td><code>gateway</code></td><td>Slack Events / Interactions HTTP 入口；验签并持久化事件</td><td>PostgreSQL、Redis</td></tr>
                 <tr><td><code>worker</code></td><td>领取 inbox 事件，通过 hosted agent adapter 执行 Agent，回复 Slack，运行后台任务</td><td>PG、Redis、LLM、Slack API</td></tr>
                 <tr><td><code>observability</code></td><td>运行记录、成本指标、工具健康检查和 dashboard</td><td>PostgreSQL、Redis</td></tr>
+                <tr><td><code>app-server</code></td><td>通过 stdio 暴露 local profile 的 JSON-RPC 接口</td><td>本地配置、provider、workspace</td></tr>
               </tbody>
             </table>
             <h3>进程关系</h3>
-            <p><code>gateway</code> 负责接入和入队；<code>worker</code> 负责领取事件并执行共享 Agent runtime；<code>observability</code> 读取运行投影并提供指标视图。</p>
+            <p><code>gateway</code> 负责接入和入队；<code>worker</code> 负责领取事件并执行 hosted profile；<code>observability</code> 读取运行投影并提供指标视图。<code>app-server</code> 不参与 Slack worker 链路，它是同一个 local profile 的 stdio/JSON-RPC 入口。</p>
           </section>
 
           <section class="doc-section" id="zh-slack-flow">
@@ -228,13 +230,13 @@
               <li>记录模型错误、空响应、输出截断和最大步骤限制。</li>
             </ol>
             <h3>终止与恢复</h3>
-            <p>Runtime 使用明确的 completed、canceled、model_error、max_steps、output_limit、pending_approval、pending_input 和 empty_response 状态。可重试模型错误使用有界退避；输出截断会保留已生成内容并终止当前 turn；每种终止结果都写入 transcript。</p>
+            <p>Runtime 使用明确的 completed、canceled、model_error、max_steps、output_limit、pending_approval、pending_input、empty_response、budget_exhausted、provider_circuit_open 和 fallback_exhausted 状态。hosted profile 将 provider 的重试、primary/fallback 选择与 circuit breaker 放在 resilient client 中；runtime 自己只按配置重试空模型响应。输出截断会保留已生成内容并终止当前 turn；每种终止结果都写入 transcript。</p>
           </section>
 
           <section class="doc-section" id="zh-memory">
             <span class="section-number">05 / MEMORY</span>
             <h2>上下文投影</h2>
-            <p>模型上下文从 canonical transcript 投影。Prompt fragments 按 core、product、environment、project、user、skill 和 turn 分层组合。首次接入已有 Slack thread 时，历史消息以不可信 user/assistant history 导入，而不是伪装成 system/environment 指令。</p>
+            <p>模型上下文从 canonical transcript 投影。Prompt fragments 按 core、product、environment、project、user、skill 和 turn 分层组合；runtime facts（日期、时区、workspace roots）作为每次请求的 environment fragment 注入。首次接入已有 Slack thread 时，历史消息以不可信 user/assistant history 导入，而不是伪装成 system/environment 指令。</p>
             <table class="data-table">
               <thead><tr><th>层次</th><th>内容</th><th>生命周期</th></tr></thead>
               <tbody>
@@ -245,7 +247,7 @@
               </tbody>
             </table>
             <h3>预算与压缩</h3>
-            <p>Bounded projector 为输出预留 token，并选择预算内的 transcript 消息。超过预算时调用 compactor；大型工具结果按 profile 的 artifact store 保存，并在 transcript 中保留引用。</p>
+            <p>Bounded projector 为输出预留 token，并选择预算内的 transcript 消息。超过预算时调用 compactor；大型工具结果按 profile 的 artifact store 保存，并在 transcript 中保留引用。Skill 的完整 <code>SKILL.md</code> 不默认进入 prompt：启动时仅暴露元数据，模型需要时通过 <code>skills-load</code> 按需读取。</p>
           </section>
 
           <section class="doc-section" id="zh-tools">
@@ -263,8 +265,23 @@
             <p>声明为 parallel 的安全工具可以并发执行；其他工具串行执行。Exclusive 工具必须是模型该批次中的唯一调用。</p>
           </section>
 
+          <section class="doc-section" id="zh-integrations">
+            <span class="section-number">07 / CONNECTIONS &amp; PRESENTATION</span>
+            <h2>连接、子任务与 Slack 呈现</h2>
+            <p class="lead">集成认证、子任务和消息展示都在共享 runtime 外围实现。它们使用 runtime 的工具、transcript 和终止契约，但不再实现另一套 Agent loop。</p>
+            <div class="card-grid three">
+              <div class="card"><span class="tag">Connections</span><h3>按用户保存 OAuth</h3><p>Slack、GitHub、ClickStack、Google Cloud 和 Notion 可由部署启用。连接状态和 token 属于用户；工具缺少连接时返回可连接结果并暂停，OAuth 完成后 Slack worker 可继续原 turn。</p></div>
+              <div class="card"><span class="tag">MCP</span><h3>作为受控工具接入</h3><p>Hosted Notion 和 ClickStack，及 local profile 配置的 Streamable HTTP MCP，进入 catalog 后仍经过 effect policy 和当前 surface 的可见性控制。配置 MCP endpoint 是信任决定，不等于自动允许外部写入。</p></div>
+              <div class="card"><span class="tag">Explore</span><h3>只读并行探索</h3><p><code>agent-explore</code> 创建隔离的 child turn，使用过滤后的只读工具集合。子 turn 有独立 transcript 和 parent link；其 stream 不会混入父 turn 的 Slack 输出。</p></div>
+            </div>
+            <h3>Slack 的职责是呈现，而不是执行状态机</h3>
+            <p>worker 在收到请求后设置原生状态；工具调用准备执行时可用独立 progress model 从经过清理的工具意图生成短 loading label。最终回答的 delta 通过 Slack 原生 <code>chat.startStream</code>/<code>chat.appendStream</code>/<code>chat.stopStream</code> 输出。状态和 delta 都不写入 canonical transcript；原生 stream 失败时才以确定性 <code>client_msg_id</code> 发送普通最终消息。</p>
+            <h3>Local app-server</h3>
+            <p>app-server 通过 stdio 提供 JSON-RPC 2.0：<code>thread/start</code>、<code>thread/resume</code>、<code>thread/fork</code>、<code>turn/start</code>、<code>turn/steer</code> 和 <code>turn/interrupt</code>；它发出 Codex-style item notifications。它复用 local profile，而不是 hosted 服务的远程控制接口。</p>
+          </section>
+
           <section class="doc-section" id="zh-protocol">
-            <span class="section-number">07 / CANONICAL TRANSCRIPT</span>
+            <span class="section-number">08 / CANONICAL TRANSCRIPT</span>
             <h2>Canonical Transcript</h2>
             <p>Session 和 turn 使用 provider-neutral、append-only 事件记录。完成的模型消息、工具调用与结果、steering、compaction 和终止状态持久化为同一事件结构；token stream delta 只发给瞬时展示 sink，不写 durable transcript。</p>
             <div class="flow">
@@ -278,12 +295,12 @@
           </section>
 
           <section class="doc-section" id="zh-storage">
-            <span class="section-number">08 / DATA &amp; CONCURRENCY</span>
+            <span class="section-number">09 / DATA &amp; CONCURRENCY</span>
             <h2>数据与并发</h2>
             <table class="data-table">
               <thead><tr><th>存储</th><th>职责</th><th>故障后的行为</th></tr></thead>
               <tbody>
-                <tr><td>PostgreSQL</td><td>Session、Run、Step、Feedback、Spill、Inbox、Session Input、Protocol Events、Reminder、User Preferences</td><td>不可用时拒绝需要持久状态的工作</td></tr>
+                <tr><td>PostgreSQL</td><td>Transcript、Run、Step、Feedback、Spill、Inbox、Session Input、Reminder、User Preferences、User Connections、OAuth States</td><td>不可用时拒绝需要持久状态的工作</td></tr>
                 <tr><td>Redis</td><td>唤醒、缓存、活动 owner 提示、全局计数</td><td>服务启动时要求可用；运行中漏掉或失败的唤醒由 PG 轮询恢复，不承载 durable queue</td></tr>
               </tbody>
             </table>
@@ -296,7 +313,7 @@
           </section>
 
           <section class="doc-section" id="zh-safety">
-            <span class="section-number">09 / SAFETY BOUNDARY</span>
+            <span class="section-number">10 / SAFETY BOUNDARY</span>
             <h2>安全边界</h2>
             <p>工具调用先经过 profile policy。Local policy 根据 effect、workspace、sandbox 和审批 scope 判定；hosted policy 由服务端配置，write、external-write 和 privileged effect 必须命中 operator allowlist，网络能力另受工具配置和用户设置约束。</p>
             <div class="card-grid">
@@ -310,7 +327,7 @@
           </section>
 
           <section class="doc-section" id="zh-operations">
-            <span class="section-number">10 / RELIABILITY &amp; OBSERVABILITY</span>
+            <span class="section-number">11 / RELIABILITY &amp; OBSERVABILITY</span>
             <h2>可用性与观测</h2>
             <div class="card-grid three">
               <div class="card"><span class="tag">Lifecycle</span><h3>Drain 与优雅退出</h3><p>停止领取新任务，等待活跃事件，在超时内关闭 HTTP 和后台任务。</p></div>
@@ -322,7 +339,7 @@
           </section>
 
           <section class="doc-section" id="zh-boundaries">
-            <span class="section-number">11 / CURRENT LIMITS</span>
+            <span class="section-number">12 / CURRENT LIMITS</span>
             <h2>当前边界</h2>
             <div class="card-grid">
               <div class="card"><span class="tag">Scope</span><h3>共享部分</h3><ul><li>Runtime、模型、工具与 transcript contracts</li><li>Local CLI 与 hosted Slack profiles</li><li>Local JSONL 与 hosted PG transcript</li><li>耐久 Slack inbox 与 session inputs</li></ul></div>
@@ -335,7 +352,7 @@
           </section>
 
           <section class="doc-section" id="zh-reading">
-            <span class="section-number">12 / CODE READING PATH</span>
+            <span class="section-number">13 / CODE READING PATH</span>
             <h2>主要代码入口</h2>
             <ol class="reading-path">
               <li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/surfaces/slack/gateway/gateway.go">packages/surfaces/slack/gateway/gateway.go</a></li>
@@ -346,7 +363,10 @@
               <li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/profiles/hosted/profile.go">packages/profiles/hosted/profile.go</a></li>
               <li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/profiles/hosted/pgtranscript.go">packages/profiles/hosted/pgtranscript.go</a></li>
               <li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/tool/tool.go">packages/agent/tool/tool.go</a></li>
+              <li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/delegation/explore.go">packages/agent/delegation/explore.go</a></li>
               <li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/sessioninput/store.go">packages/sessioninput/store.go</a></li>
+              <li><a class="code-link" href="https://github.com/noknov/kepler-agent/tree/main/packages/connections">packages/connections</a></li>
+              <li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/appserver/server.go">packages/appserver/server.go</a></li>
               <li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/schema/postgres.sql">schema/postgres.sql</a></li>
             </ol>
           </section>
@@ -367,7 +387,7 @@
       <div class="shell">
         <nav class="toc" aria-label="On this page">
           <p class="toc-title">Contents</p>
-          <a href="#en-architecture">00 · Architecture</a><a href="#en-mental-model">01 · Boundary</a><a href="#en-processes">02 · Processes</a><a href="#en-slack-flow">03 · Slack flow</a><a href="#en-core">04 · Runtime</a><a href="#en-memory">05 · Context</a><a href="#en-tools">06 · Tools</a><a href="#en-protocol">07 · Transcript</a><a href="#en-storage">08 · Data</a><a href="#en-safety">09 · Safety</a><a href="#en-operations">10 · Operations</a><a href="#en-boundaries">11 · Boundaries</a><a href="#en-reading">12 · Code entrypoints</a>
+          <a href="#en-architecture">00 · Architecture</a><a href="#en-mental-model">01 · Boundary</a><a href="#en-processes">02 · Processes</a><a href="#en-slack-flow">03 · Slack flow</a><a href="#en-core">04 · Runtime</a><a href="#en-memory">05 · Context</a><a href="#en-tools">06 · Tools</a><a href="#en-integrations">07 · Connections</a><a href="#en-protocol">08 · Transcript</a><a href="#en-storage">09 · Data</a><a href="#en-safety">10 · Safety</a><a href="#en-operations">11 · Operations</a><a href="#en-boundaries">12 · Boundaries</a><a href="#en-reading">13 · Code entrypoints</a>
         </nav>
 
         <div class="content">
@@ -406,8 +426,9 @@
               <tr><td><code>gateway</code></td><td>Slack Events / Interactions ingress; verifies and persists events</td><td>PostgreSQL, Redis</td></tr>
               <tr><td><code>worker</code></td><td>Claims inbox events, runs the hosted agent adapter, replies to Slack, and runs background jobs</td><td>PG, Redis, LLM, Slack API</td></tr>
               <tr><td><code>observability</code></td><td>Run history, cost metrics, tool health, and dashboard</td><td>PostgreSQL, Redis</td></tr>
+              <tr><td><code>app-server</code></td><td>Exposes the local profile through a stdio JSON-RPC interface</td><td>Local config, provider, workspace</td></tr>
             </tbody></table>
-            <h3>Process relationships</h3><p><code>gateway</code> handles ingress and enqueueing; <code>worker</code> claims events and executes the shared Agent runtime; <code>observability</code> reads run projections and exposes metrics views.</p>
+            <h3>Process relationships</h3><p><code>gateway</code> handles ingress and enqueueing; <code>worker</code> claims events and executes the hosted profile; <code>observability</code> reads run projections and exposes metrics views. <code>app-server</code> is not part of the Slack worker path: it is a stdio/JSON-RPC entrypoint for the same local profile.</p>
           </section>
 
           <section class="doc-section" id="en-slack-flow">
@@ -424,14 +445,14 @@
             <p class="lead">The shared runtime manages turn lifecycle, context projection, model calls, tool execution, steering, and termination. Product profiles provide model, tool, policy, transcript, artifact, and event-sink adapters.</p>
             <div class="card-grid"><div class="card"><span class="tag">Runtime</span><h3>Turn boundary</h3><p>Turns in one session run serially. Ingress supplies stable session/turn identities; the runtime identifies appended events and preserves provider tool-call IDs.</p></div><div class="card"><span class="tag">Loop</span><h3>Model–tool loop</h3><p>Project context, call the model, execute allowed tools, record results, and continue until completion, cancellation, a limit, or pending approval.</p></div></div>
             <h3>Each step</h3><ol class="status-list"><li>Check cancellation and append new steering to the transcript.</li><li>Project bounded model context and invoke the compactor when required.</li><li>Call a model adapter with canonical messages and tool schemas.</li><li>Apply policy, execute tools, and record calls, results, or failures.</li><li>Record model errors, empty output, truncation, and step limits.</li></ol>
-            <h3>Termination and recovery</h3><p>The runtime records completed, canceled, model_error, max_steps, output_limit, pending_approval, pending_input, and empty_response states. Retryable model errors use bounded backoff; truncated output preserves the partial response and ends the current turn; every outcome is appended to the transcript.</p>
+            <h3>Termination and recovery</h3><p>The runtime records completed, canceled, model_error, max_steps, output_limit, pending_approval, pending_input, empty_response, budget_exhausted, provider_circuit_open, and fallback_exhausted states. In the hosted profile, provider retries, primary/fallback selection, and circuit breaking belong to the resilient client; the runtime itself retries only empty model responses as configured. Truncated output preserves the partial response and ends the current turn; every outcome is appended to the transcript.</p>
           </section>
 
           <section class="doc-section" id="en-memory">
             <span class="section-number">05 / CONTEXT</span><h2>Context projection</h2>
-            <p>Model context is projected from the canonical transcript. Prompt fragments compose in core, product, environment, project, user, skill, and turn layers. Existing Slack thread messages are imported once as untrusted user/assistant history, not injected as system or environment instructions.</p>
+            <p>Model context is projected from the canonical transcript. Prompt fragments compose in core, product, environment, project, user, skill, and turn layers; runtime facts such as date, timezone, and workspace roots arrive as an environment fragment per request. Existing Slack thread messages are imported once as untrusted user/assistant history, not injected as system or environment instructions.</p>
             <table class="data-table"><thead><tr><th>Layer</th><th>Content</th><th>Lifetime</th></tr></thead><tbody><tr><td>Canonical history</td><td>User, assistant, tool-result, and compaction messages</td><td>Session lifetime</td></tr><tr><td>Prompt composition</td><td>Versioned layered fragments</td><td>Recomposed per turn</td></tr><tr><td>External context</td><td>Structured Slack history and workspace information</td><td>Initial import / current turn</td></tr><tr><td>Compaction and artifacts</td><td>Compaction events and references to large tool results</td><td>Created under context pressure</td></tr></tbody></table>
-            <h3>Budget and compaction</h3><p>The bounded projector reserves output tokens and selects transcript messages within budget. It invokes the compactor when needed; large tool results use the profile's artifact store and leave references in the transcript.</p>
+            <h3>Budget and compaction</h3><p>The bounded projector reserves output tokens and selects transcript messages within budget. It invokes the compactor when needed; large tool results use the profile's artifact store and leave references in the transcript. A skill's full <code>SKILL.md</code> is not put in the base prompt: startup exposes metadata only, and the model loads instructions on demand with <code>skills-load</code>.</p>
           </section>
 
           <section class="doc-section" id="en-tools">
@@ -442,23 +463,31 @@
             <h3>Concurrency rules</h3><p>Parallel-safe tools may run concurrently; other tools execute serially. Exclusive calls must be the only call in a model-produced batch.</p>
           </section>
 
+          <section class="doc-section" id="en-integrations">
+            <span class="section-number">07 / CONNECTIONS &amp; PRESENTATION</span><h2>Connections, child work, and Slack presentation</h2>
+            <p class="lead">Integration authentication, child work, and message delivery live around the shared runtime. They use its tool, transcript, and termination contracts; they do not implement another agent loop.</p>
+            <div class="card-grid three"><div class="card"><span class="tag">Connections</span><h3>OAuth is per user</h3><p>Slack, GitHub, ClickStack, Google Cloud, and Notion can be enabled by a deployment. Connection state and tokens belong to a user; a missing connection returns a connectable result and pauses work, and the Slack worker can resume the original turn after OAuth completes.</p></div><div class="card"><span class="tag">MCP</span><h3>Connected as controlled tools</h3><p>Hosted Notion and ClickStack, plus Streamable HTTP MCP configured for the local profile, enter the catalog but remain subject to effect policy and surface visibility. Configuring an endpoint is a trust decision, not automatic permission for external writes.</p></div><div class="card"><span class="tag">Explore</span><h3>Read-only parallel exploration</h3><p><code>agent-explore</code> creates isolated child turns with a filtered read-only tool set. Each child has its own transcript and parent link; child streams are not mixed into the parent's Slack output.</p></div></div>
+            <h3>Slack presents work; it is not the execution state machine</h3><p>The worker sets a native status when it receives a request. Once tool calls are ready to run, an optional progress model can generate a short loading label from sanitized tool intent. Final-answer deltas use Slack native <code>chat.startStream</code>/<code>chat.appendStream</code>/<code>chat.stopStream</code>. Neither status nor deltas enter the canonical transcript; only when native delivery fails does the worker send a regular final message with a deterministic <code>client_msg_id</code>.</p>
+            <h3>Local app-server</h3><p>The app-server exposes JSON-RPC 2.0 over stdio: <code>thread/start</code>, <code>thread/resume</code>, <code>thread/fork</code>, <code>turn/start</code>, <code>turn/steer</code>, and <code>turn/interrupt</code>, plus Codex-style item notifications. It reuses the local profile; it is not a remote-control interface for the hosted service.</p>
+          </section>
+
           <section class="doc-section" id="en-protocol">
-            <span class="section-number">07 / CANONICAL TRANSCRIPT</span><h2>Canonical transcript</h2>
+            <span class="section-number">08 / CANONICAL TRANSCRIPT</span><h2>Canonical transcript</h2>
             <p>Sessions and turns are recorded as provider-neutral, append-only events. Completed model messages, tool calls and results, steering, compaction, and termination are durable. Token stream deltas go only to transient presentation sinks.</p>
             <div class="flow"><div class="flow-step"><b>session_started</b><span>Session begins</span></div><div class="flow-step"><b>turn_started</b><span>Request begins</span></div><div class="flow-step"><b>model / tool events</b><span>Completed messages, calls, results</span></div><div class="flow-step"><b>compaction_created</b><span>Context compaction</span></div><div class="flow-step"><b>turn_*</b><span>Complete, fail, or cancel</span></div></div>
             <p>The local profile writes one JSONL event log per session. The hosted profile writes canonical events to <code>agent_transcript_events</code> and uses a PostgreSQL advisory lock to allocate monotonic session sequences.</p>
           </section>
 
           <section class="doc-section" id="en-storage">
-            <span class="section-number">08 / DATA &amp; CONCURRENCY</span><h2>Data and concurrency</h2>
-            <table class="data-table"><thead><tr><th>Store</th><th>Responsibility</th><th>Failure behavior</th></tr></thead><tbody><tr><td>PostgreSQL</td><td>Transcripts, session inputs, run projections, feedback, spills, inbox, reminders, preferences</td><td>Durable operations reject work when unavailable</td></tr><tr><td>Redis</td><td>Wakeups, caches, active-owner hints, and approximate counters</td><td>Required at service startup; missed or failed runtime wakeups recover through PG polling, and Redis is not a durable queue</td></tr></tbody></table>
+            <span class="section-number">09 / DATA &amp; CONCURRENCY</span><h2>Data and concurrency</h2>
+            <table class="data-table"><thead><tr><th>Store</th><th>Responsibility</th><th>Failure behavior</th></tr></thead><tbody><tr><td>PostgreSQL</td><td>Transcripts, session inputs, run projections, feedback, spills, inbox, reminders, preferences, user connections, OAuth states</td><td>Durable operations reject work when unavailable</td></tr><tr><td>Redis</td><td>Wakeups, caches, active-owner hints, and approximate counters</td><td>Required at service startup; missed or failed runtime wakeups recover through PG polling, and Redis is not a durable queue</td></tr></tbody></table>
             <h3>Run records</h3><p>The canonical transcript is written to <code>agent_transcript_events</code>. The observability projection writes aggregate summaries to <code>agent_runs</code>, model and tool steps to <code>agent_run_steps</code>, and feedback to <code>agent_run_feedback</code>.</p>
             <h3>Schema management</h3><p>Runtime code executes no DDL; it only verifies required tables. <code>schema/postgres.sql</code> is the current contract for fresh installs. Upgrading an existing database is operator-owned; this repository does not ship incremental migrations.</p>
             <h3>Concurrency control</h3><p>A local semaphore limits each process, a Redis counter approximates the cluster total, and a PG advisory lock serializes a session.</p>
           </section>
 
           <section class="doc-section" id="en-safety">
-            <span class="section-number">09 / SAFETY BOUNDARY</span><h2>Safety boundary</h2>
+            <span class="section-number">10 / SAFETY BOUNDARY</span><h2>Safety boundary</h2>
             <p>Every tool call passes through the profile policy. Local policy evaluates effects, workspace, sandbox, and approval scope. Hosted policy is server-owned: write, external-write, and privileged effects require an operator allowlist match; network capabilities are also constrained by tool configuration and user settings.</p>
             <div class="card-grid"><div class="card"><span class="tag">Identity</span><h3>Ingress identity</h3><p>Slack HMAC and timestamps verify requests; user and channel allowlists restrict initiation.</p></div><div class="card"><span class="tag">Filesystem</span><h3>Workspace boundary</h3><p>Resolved paths and symlinks must remain under configured roots; credentials and secret files are denied.</p></div><div class="card"><span class="tag">Commands</span><h3>Local argv execution</h3><p>The local tool passes argv directly; policy checks effects and working directories before OS sandbox execution.</p></div><div class="card risk"><span class="tag">Boundary</span><h3>Sandbox boundary</h3><p>Local uses macOS Seatbelt or Linux bubblewrap and fails closed unless the development-only unsafe escape hatch is explicit. Hosted exposes no generic command tool; deployment isolation remains operator-owned.</p></div></div>
             <p>The canonical transcript records tool calls, completion, failure, and local approval requests and outcomes.</p>
@@ -466,22 +495,22 @@
           </section>
 
           <section class="doc-section" id="en-operations">
-            <span class="section-number">10 / RELIABILITY &amp; OBSERVABILITY</span><h2>Reliability and observability</h2>
+            <span class="section-number">11 / RELIABILITY &amp; OBSERVABILITY</span><h2>Reliability and observability</h2>
             <div class="card-grid three"><div class="card"><span class="tag">Lifecycle</span><h3>Drain and shutdown</h3><p>Stop claiming new work, wait for active events, then close HTTP and background tasks within deadlines.</p></div><div class="card"><span class="tag">Recovery</span><h3>Retry and dead letter</h3><p>Backoff, jitter, bounded attempts, and expired-lease recovery protect the inbox.</p></div><div class="card"><span class="tag">Evidence</span><h3>Durable transcript</h3><p>Hosted records turns, completed model results, tool calls and results, errors, and exact termination reasons; stream deltas remain presentation-only.</p></div></div>
             <p>The worker exposes <code>/livez</code>, <code>/readyz</code>, loopback-only <code>/drain</code>, and <code>/metrics</code>. The Slack inbox reports queue depth, lease loss, dead letters, queue-full events, and completion counts.</p>
             <p>The hosted agent transcript is durable. Startup replays unfinished runs, and an idempotent projection aligns model failures, usage, tool traces, and termination with the run/cost dashboard.</p>
           </section>
 
           <section class="doc-section" id="en-boundaries">
-            <span class="section-number">11 / CURRENT LIMITS</span><h2>Current boundaries</h2>
+            <span class="section-number">12 / CURRENT LIMITS</span><h2>Current boundaries</h2>
             <div class="card-grid"><div class="card"><span class="tag">Scope</span><h3>Shared components</h3><ul><li>Runtime, model, tool, and transcript contracts</li><li>Local CLI and hosted Slack profiles</li><li>Local JSONL and hosted PG transcripts</li><li>Durable Slack inbox and session inputs</li></ul></div><div class="card"><span class="tag">Different by profile</span><h3>Product-specific concerns</h3><ul><li>Local approvals and workspace sandbox</li><li>Hosted server-owned allowlist policy</li><li>TTY and Slack presentation</li><li>Profile-specific storage and presentation composition</li></ul></div></div>
             <h3>Capacity boundaries</h3><p>A PG advisory lock holds a connection for the full hosted turn; the Redis active-owner key uses a TTL; worker count, event queues, and the database pool jointly bound Slack throughput.</p>
             <h3>Visible limitations</h3><p>Context budgeting is a conservative estimate, not a provider tokenizer; when a provider still returns a context-limit error, the runtime performs one forced compaction pass and retries the model request before failing the turn. Secondary compaction and progress calls enter aggregate LLM metrics but are not allocated to an individual run's cost. Slack presentation uses an operator-configured default locale rather than per-user language discovery.</p>
           </section>
 
           <section class="doc-section" id="en-reading">
-            <span class="section-number">12 / CODE READING PATH</span><h2>Main code entrypoints</h2>
-            <ol class="reading-path"><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/surfaces/slack/gateway/gateway.go">packages/surfaces/slack/gateway/gateway.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/surfaces/slack/events/worker.go">packages/surfaces/slack/events/worker.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/surfaces/slack/agent/service.go">packages/surfaces/slack/agent/service.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/runtime/runner.go">packages/agent/runtime/runner.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/runtime/context.go">packages/agent/runtime/context.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/tool/tool.go">packages/agent/tool/tool.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/sessioninput/store.go">packages/sessioninput/store.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/profiles/hosted/profile.go">packages/profiles/hosted/profile.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/profiles/hosted/pgtranscript.go">packages/profiles/hosted/pgtranscript.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/schema/postgres.sql">schema/postgres.sql</a></li></ol>
+            <span class="section-number">13 / CODE READING PATH</span><h2>Main code entrypoints</h2>
+            <ol class="reading-path"><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/surfaces/slack/gateway/gateway.go">packages/surfaces/slack/gateway/gateway.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/surfaces/slack/events/worker.go">packages/surfaces/slack/events/worker.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/surfaces/slack/agent/service.go">packages/surfaces/slack/agent/service.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/runtime/runner.go">packages/agent/runtime/runner.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/runtime/context.go">packages/agent/runtime/context.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/tool/tool.go">packages/agent/tool/tool.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/delegation/explore.go">packages/agent/delegation/explore.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/sessioninput/store.go">packages/sessioninput/store.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/tree/main/packages/connections">packages/connections</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/appserver/server.go">packages/appserver/server.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/profiles/hosted/profile.go">packages/profiles/hosted/profile.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/profiles/hosted/pgtranscript.go">packages/profiles/hosted/pgtranscript.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/schema/postgres.sql">schema/postgres.sql</a></li></ol>
           </section>
         </div>
       </div>
