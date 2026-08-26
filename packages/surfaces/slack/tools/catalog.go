@@ -3,15 +3,15 @@ package slacktool
 import (
 	"context"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	"github.com/noknov/slack-copilot-agent/packages/config"
-	"github.com/noknov/slack-copilot-agent/packages/connections"
-	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
-	"github.com/noknov/slack-copilot-agent/packages/reminder"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
-	slackmessaging "github.com/noknov/slack-copilot-agent/packages/surfaces/slack/messaging"
-	reminderTools "github.com/noknov/slack-copilot-agent/packages/tools/reminder"
-	ttsTools "github.com/noknov/slack-copilot-agent/packages/tools/tts"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/config"
+	"github.com/noknov/kepler-agent/packages/connections"
+	"github.com/noknov/kepler-agent/packages/infra/redisclient"
+	"github.com/noknov/kepler-agent/packages/reminder"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
+	slackmessaging "github.com/noknov/kepler-agent/packages/surfaces/slack/messaging"
+	reminderTools "github.com/noknov/kepler-agent/packages/tools/reminder"
+	ttsTools "github.com/noknov/kepler-agent/packages/tools/tts"
 )
 
 // AddToCatalog registers Slack-surface tools for the hosted worker only.

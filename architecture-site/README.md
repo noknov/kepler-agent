@@ -18,5 +18,5 @@ server. No build step or package installation is required.
 - Source-code links target the `main` branch of this repository.
 
 The GitHub Pages workflow publishes this directory only from the canonical
-`noknov/slack-copilot-agent` repository. Forks skip the deployment job even if
+`noknov/kepler-agent` repository. Forks skip the deployment job even if
 GitHub Actions is enabled.

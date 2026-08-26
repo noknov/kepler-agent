@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	agentruntime "github.com/noknov/slack-copilot-agent/packages/agent/runtime"
-	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
+	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
+	"github.com/noknov/kepler-agent/packages/infra/redisclient"
 	"github.com/redis/go-redis/v9"
 )
 

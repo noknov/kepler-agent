@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/noknov/slack-copilot-agent/gateway"
+	"github.com/noknov/kepler-agent/gateway"
 )
 
 func main() {

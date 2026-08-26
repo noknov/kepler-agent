@@ -1,6 +1,6 @@
 package slacktool
 
-import "github.com/noknov/slack-copilot-agent/packages/agent/tool"
+import "github.com/noknov/kepler-agent/packages/agent/tool"
 
 const surfaceName = "slack"
 

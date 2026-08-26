@@ -3,10 +3,10 @@ package slackhandler
 import (
 	"context"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/model"
-	"github.com/noknov/slack-copilot-agent/packages/llm"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/files"
+	"github.com/noknov/kepler-agent/packages/agent/model"
+	"github.com/noknov/kepler-agent/packages/llm"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/files"
 )
 
 func appendSlackFiles(text string, files []slack.File) string {

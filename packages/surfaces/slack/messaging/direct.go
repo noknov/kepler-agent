@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
 )
 
 // SendBotUserMessage delivers a proactive bot DM to a Slack user.

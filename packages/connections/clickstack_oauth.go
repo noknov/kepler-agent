@@ -80,7 +80,7 @@ func (o *clickstackOAuth) ensureClient(ctx context.Context, redirectURI string) 
 
 func (o *clickstackOAuth) registerClient(ctx context.Context, redirectURI string) (string, error) {
 	payload := map[string]any{
-		"client_name":                "slack-copilot-agent",
+		"client_name":                "kepler-agent",
 		"redirect_uris":              []string{redirectURI},
 		"grant_types":                []string{"authorization_code", "refresh_token"},
 		"response_types":             []string{"code"},

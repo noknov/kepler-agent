@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
 )
 
 // LocalTokenSource resolves GKE API credentials from the local gcloud CLI.

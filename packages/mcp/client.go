@@ -135,7 +135,7 @@ func (c *Client) Initialize(ctx context.Context) (Session, error) {
 		"protocolVersion": "2025-03-26",
 		"capabilities":    map[string]any{},
 		"clientInfo": map[string]string{
-			"name":    "slack-copilot-agent",
+			"name":    "kepler-agent",
 			"version": "0.1.0",
 		},
 	})

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/prompts"
+	"github.com/noknov/kepler-agent/packages/prompts"
 )
 
 type DescriptorOption func(*Descriptor)

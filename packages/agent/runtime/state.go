@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
+	"github.com/noknov/kepler-agent/packages/agent/transcript"
 )
 
 // WaitingForInput reports whether the latest completed turn paused for input

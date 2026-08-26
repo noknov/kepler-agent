@@ -55,6 +55,8 @@ type MCPServerConfig struct {
 	Headers  map[string]string `toml:"headers"`
 }
 
+const configDirectory = "kepler-agent"
+
 func DefaultConfig() Config {
 	return Config{Provider: "openai", Protocol: "openai", InputRouting: "steer", Output: "text", MaxSteps: 32, MaxOutputTokens: 16384, MaxContextTokens: 96_000, AutocompactBuffer: 8_000, Timeout: 30 * time.Minute}
 }
@@ -146,7 +148,7 @@ func DefaultConfigPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, "slack-copilot-agent", "config.toml"), nil
+	return filepath.Join(root, configDirectory, "config.toml"), nil
 }
 
 func DefaultStateDir() (string, error) {
@@ -154,7 +156,7 @@ func DefaultStateDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, "slack-copilot-agent"), nil
+	return filepath.Join(root, configDirectory), nil
 }
 
 func LoadPromptFiles(paths []string) ([]string, error) {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
 )
 
 var errSlackClientRequired = errors.New("slack client is not configured")

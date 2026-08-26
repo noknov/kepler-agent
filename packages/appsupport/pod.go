@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/infra/envutil"
+	"github.com/noknov/kepler-agent/packages/infra/envutil"
 )
 
 func GeneratePodID() string {

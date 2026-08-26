@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
+	"github.com/noknov/kepler-agent/packages/llm"
 )
 
 func EmptyUsage() llm.Usage { return llm.Usage{} }

@@ -6,10 +6,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/model"
-	"github.com/noknov/slack-copilot-agent/packages/agent/prompt"
-	agentruntime "github.com/noknov/slack-copilot-agent/packages/agent/runtime"
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/agent/model"
+	"github.com/noknov/kepler-agent/packages/agent/prompt"
+	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
 )
 
 // Policy is authoritative and non-interactive. Hosted users never approve

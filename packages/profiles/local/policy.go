@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
 )
 
 // WorkspacePolicy allows reads and writes enforced by the local sandbox, and

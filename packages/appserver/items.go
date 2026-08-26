@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strconv"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
+	"github.com/noknov/kepler-agent/packages/agent/transcript"
 )
 
 func itoa(value uint64) string { return strconv.FormatUint(value, 10) }

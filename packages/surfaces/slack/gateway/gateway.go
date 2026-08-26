@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
 )
 
 type Inbox interface {

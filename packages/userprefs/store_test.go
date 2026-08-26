@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
 )
 
 func TestBuildAssetAcceptsOnlySmallUTF8PromptFiles(t *testing.T) {

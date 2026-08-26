@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/environment"
-	"github.com/noknov/slack-copilot-agent/packages/prompts"
+	"github.com/noknov/kepler-agent/packages/agent/environment"
+	"github.com/noknov/kepler-agent/packages/prompts"
 )
 
 func TestSystemPromptDefaultStaysGeneric(t *testing.T) {
@@ -21,7 +21,7 @@ func TestSystemPromptDefaultStaysGeneric(t *testing.T) {
 	if !strings.Contains(prompt, "general-purpose intelligent assistant") {
 		t.Fatalf("SystemPrompt() should keep the public default assistant role: %q", prompt)
 	}
-	if strings.Contains(prompt, "channelx-copilot-agent") || strings.Contains(prompt, "Channel-X Copilot Agent") || strings.Contains(prompt, "U085SRJFCLX") {
+	if strings.Contains(prompt, "channelx-kepler-agent") || strings.Contains(prompt, "Channel-X Copilot Agent") || strings.Contains(prompt, "U085SRJFCLX") {
 		t.Fatalf("SystemPrompt() should not contain deployment-specific identity prompt: %q", prompt)
 	}
 	if strings.Contains(prompt, "food or drink ordering") {

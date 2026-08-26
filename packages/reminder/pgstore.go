@@ -10,7 +10,7 @@ import (
 )
 
 // PGStore is a PostgreSQL-backed reminder store. Due atomically leases rows,
-// making delivery safe when several slack-copilot-agent instances are running.
+// making delivery safe when several kepler-agent instances are running.
 type PGStore struct {
 	pool *pgxpool.Pool
 }

@@ -15,10 +15,9 @@
 
 `/metrics`, `/runs`, and the health dashboard require
 `Authorization: Bearer <token>` or
-`X-Slack-Copilot-Agent-Admin-Token: <token>` matching `OBSERVABILITY_TOKEN`.
-`X-Slack-Copilot-Admin-Token` is also accepted as a shorter equivalent. Set
-`OBSERVABILITY_ALLOW_UNAUTHENTICATED=true` only for direct loopback development
-access.
+`X-Kepler-Agent-Admin-Token: <token>` matching `OBSERVABILITY_TOKEN`.
+Set `OBSERVABILITY_ALLOW_UNAUTHENTICATED=true` only for direct loopback
+development access.
 
 Slack events are first written to a durable PostgreSQL inbox. Workers claim
 events with `claim_owner` and `claim_until`; abandoned events become retryable
@@ -35,9 +34,9 @@ configuration and the health/shutdown endpoints above.
 The generic Dockerfile exposes independent targets:
 
 ```bash
-docker build --target gateway -t slack-copilot-gateway .
-docker build --target worker -t slack-copilot-worker .
-docker build --target observability -t slack-copilot-observability .
+docker build --target gateway -t kepler-agent-gateway .
+docker build --target worker -t kepler-agent-worker .
+docker build --target observability -t kepler-agent-observability .
 ```
 
 Gateway and observability use a minimal CA-only runtime. Worker adds Git,

@@ -1,4 +1,4 @@
--- Current PostgreSQL schema contract for Slack Copilot Agent.
+-- Current PostgreSQL schema contract for Kepler Agent.
 --
 -- Services only read and write these objects; they never execute DDL. Apply
 -- this file with the database administration workflow of your choice before

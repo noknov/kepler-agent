@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	reminderStore "github.com/noknov/slack-copilot-agent/packages/reminder"
+	agenttool "github.com/noknov/kepler-agent/packages/agent/tool"
+	reminderStore "github.com/noknov/kepler-agent/packages/reminder"
 )
 
 func TestCreateListAndCancelReminder(t *testing.T) {

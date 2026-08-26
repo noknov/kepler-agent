@@ -8,10 +8,10 @@ Each service loads its service-specific env file automatically at startup:
 | `./worker/cmd/worker` | `worker/.env` |
 | `./observability/cmd/observability` | `observability/.env` |
 
-Set `SLACK_COPILOT_ENV_FILE=/path/to/file` only for one-off local debugging.
+Set `KEPLER_AGENT_ENV_FILE=/path/to/file` only for one-off local debugging.
 Keep secrets out of git; the `*.example` files are templates only.
 
-The packaged `slack-copilot` CLI is local-first and does not require Redis,
+The packaged `kepler-agent` CLI is local-first and does not require Redis,
 PostgreSQL, or Slack. It still requires the configured model credential; local
 filesystem and argv tools are governed by the workspace sandbox and approval
 policy.
@@ -213,7 +213,7 @@ OTLP/HTTP trace export through the OpenTelemetry environment contract:
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
-OTEL_SERVICE_NAME=slack-copilot-worker
+OTEL_SERVICE_NAME=kepler-agent-worker
 ```
 
 The shared runtime emits nested `agent.turn`, `model.generate`, and

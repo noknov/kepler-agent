@@ -6,15 +6,15 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/noknov/slack-copilot-agent/packages/config"
-	"github.com/noknov/slack-copilot-agent/packages/eventinbox"
-	"github.com/noknov/slack-copilot-agent/packages/infra/envutil"
-	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
-	"github.com/noknov/slack-copilot-agent/packages/reminder"
-	"github.com/noknov/slack-copilot-agent/packages/runs"
-	"github.com/noknov/slack-copilot-agent/packages/session"
-	"github.com/noknov/slack-copilot-agent/packages/sessioninput"
-	"github.com/noknov/slack-copilot-agent/packages/userprefs"
+	"github.com/noknov/kepler-agent/packages/config"
+	"github.com/noknov/kepler-agent/packages/eventinbox"
+	"github.com/noknov/kepler-agent/packages/infra/envutil"
+	"github.com/noknov/kepler-agent/packages/infra/redisclient"
+	"github.com/noknov/kepler-agent/packages/reminder"
+	"github.com/noknov/kepler-agent/packages/runs"
+	"github.com/noknov/kepler-agent/packages/session"
+	"github.com/noknov/kepler-agent/packages/sessioninput"
+	"github.com/noknov/kepler-agent/packages/userprefs"
 )
 
 // Stores owns the durable dependencies shared by app entrypoints.

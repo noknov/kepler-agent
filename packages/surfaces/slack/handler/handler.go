@@ -7,16 +7,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/config"
-	"github.com/noknov/slack-copilot-agent/packages/observability"
-	"github.com/noknov/slack-copilot-agent/packages/prompts"
-	"github.com/noknov/slack-copilot-agent/packages/runs"
-	"github.com/noknov/slack-copilot-agent/packages/safety"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/conversation"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/gateway"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/home"
-	"github.com/noknov/slack-copilot-agent/packages/userprefs"
+	"github.com/noknov/kepler-agent/packages/config"
+	"github.com/noknov/kepler-agent/packages/observability"
+	"github.com/noknov/kepler-agent/packages/prompts"
+	"github.com/noknov/kepler-agent/packages/runs"
+	"github.com/noknov/kepler-agent/packages/safety"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/gateway"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/home"
+	"github.com/noknov/kepler-agent/packages/userprefs"
 )
 
 type Handler struct {

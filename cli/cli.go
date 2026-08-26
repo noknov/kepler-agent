@@ -17,20 +17,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/delegation"
-	"github.com/noknov/slack-copilot-agent/packages/agent/environment"
-	"github.com/noknov/slack-copilot-agent/packages/agent/model"
-	"github.com/noknov/slack-copilot-agent/packages/agent/prompt"
-	agentruntime "github.com/noknov/slack-copilot-agent/packages/agent/runtime"
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
-	"github.com/noknov/slack-copilot-agent/packages/infra/telemetry"
-	"github.com/noknov/slack-copilot-agent/packages/mcp"
-	"github.com/noknov/slack-copilot-agent/packages/profiles/local"
-	"github.com/noknov/slack-copilot-agent/packages/providers"
-	"github.com/noknov/slack-copilot-agent/packages/tools/local"
-	"github.com/noknov/slack-copilot-agent/packages/tools/mcp"
-	"github.com/noknov/slack-copilot-agent/packages/tools/skills"
+	"github.com/noknov/kepler-agent/packages/agent/delegation"
+	"github.com/noknov/kepler-agent/packages/agent/environment"
+	"github.com/noknov/kepler-agent/packages/agent/model"
+	"github.com/noknov/kepler-agent/packages/agent/prompt"
+	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/agent/transcript"
+	"github.com/noknov/kepler-agent/packages/infra/telemetry"
+	"github.com/noknov/kepler-agent/packages/mcp"
+	"github.com/noknov/kepler-agent/packages/profiles/local"
+	"github.com/noknov/kepler-agent/packages/providers"
+	"github.com/noknov/kepler-agent/packages/tools/local"
+	"github.com/noknov/kepler-agent/packages/tools/mcp"
+	"github.com/noknov/kepler-agent/packages/tools/skills"
 )
 
 type options struct {
@@ -50,7 +50,7 @@ type approvalQuestion struct {
 
 func Run() error {
 	if len(os.Args) == 2 && (os.Args[1] == "--version" || os.Args[1] == "-version") {
-		fmt.Fprintln(os.Stdout, "copilot-agent (local CLI harness)")
+		fmt.Fprintln(os.Stdout, "kepler-agent (local CLI harness)")
 		return nil
 	}
 	if len(os.Args) > 1 && os.Args[1] == "connect" {
@@ -244,7 +244,7 @@ func Run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	shutdownTelemetry, err := telemetry.Setup(ctx, "slack-copilot-cli")
+	shutdownTelemetry, err := telemetry.Setup(ctx, "kepler-agent-cli")
 	if err != nil {
 		return fmt.Errorf("configure telemetry: %w", err)
 	}
@@ -505,10 +505,10 @@ func (r *eventRenderer) paint(value, code string) string {
 
 func (r *eventRenderer) welcome(session, workspace string, config local.Config, routing string) {
 	if !r.color {
-		fmt.Fprintf(r.stderr, "copilot-agent · %s · %s\n", config.Model, workspace)
+		fmt.Fprintf(r.stderr, "kepler-agent · %s · %s\n", config.Model, workspace)
 		return
 	}
-	fmt.Fprintf(r.stderr, "\n%s\n%s  %s  %s\n%s\n\n", r.paint("✦  copilot-agent", "1;36"), r.paint(config.Model, "1;37"), r.paint(config.Provider+"/"+config.Protocol, "2"), r.paint("session "+session[len(session)-8:], "2"), r.paint("workspace  "+workspace+"  ·  /help for commands  ·  /exit to quit", "2"))
+	fmt.Fprintf(r.stderr, "\n%s\n%s  %s  %s\n%s\n\n", r.paint("✦  kepler-agent", "1;36"), r.paint(config.Model, "1;37"), r.paint(config.Provider+"/"+config.Protocol, "2"), r.paint("session "+session[len(session)-8:], "2"), r.paint("workspace  "+workspace+"  ·  /help for commands  ·  /exit to quit", "2"))
 }
 
 func (r *eventRenderer) command(input, session, workspace string, config local.Config) bool {

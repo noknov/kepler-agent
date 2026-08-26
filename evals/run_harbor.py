@@ -20,7 +20,7 @@ BENCHMARKS = {
     "harbor-index-1.0": "harbor-index/harbor-index-1.0",
 }
 BUILTIN_AGENTS = {"codex", "claude-code", "opencode", "pi"}
-COPILOT_AGENT = "evals.harbor_agents.slack_copilot:CopilotAgent"
+KEPLER_AGENT = "evals.harbor_agents.kepler_agent:KeplerAgent"
 FULL_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -37,7 +37,7 @@ def main() -> int:
     )
     parser.add_argument("--benchmark", choices=BENCHMARKS, required=True)
     parser.add_argument(
-        "--candidate", choices=["copilot-agent", *sorted(BUILTIN_AGENTS)], required=True
+        "--candidate", choices=["kepler-agent", *sorted(BUILTIN_AGENTS)], required=True
     )
     parser.add_argument("--model", required=True)
     parser.add_argument("--output", type=Path, required=True, help="Harbor jobs directory")
@@ -50,7 +50,7 @@ def main() -> int:
     )
     parser.add_argument("--tasks", type=int, help="Optional sampled task count; omit for full suite")
     parser.add_argument("--include-task", action="append", default=[])
-    parser.add_argument("--source-ref", help="Required full commit SHA for copilot-agent")
+    parser.add_argument("--source-ref", help="Required full commit SHA for kepler-agent")
     parser.add_argument(
         "--agent-kwarg",
         action="append",
@@ -67,16 +67,16 @@ def main() -> int:
         parser.error("--tasks must be positive")
     if args.agent_setup_timeout_multiplier is not None and args.agent_setup_timeout_multiplier <= 0:
         parser.error("--agent-setup-timeout-multiplier must be positive")
-    if args.candidate == "copilot-agent" and not args.source_ref:
-        parser.error("--source-ref is required for copilot-agent")
+    if args.candidate == "kepler-agent" and not args.source_ref:
+        parser.error("--source-ref is required for kepler-agent")
     if args.source_ref and not FULL_GIT_SHA.fullmatch(args.source_ref):
         parser.error("--source-ref must be a full 40-character Git commit SHA")
-    if args.candidate != "copilot-agent" and args.source_ref:
-        parser.error("--source-ref only applies to copilot-agent")
+    if args.candidate != "kepler-agent" and args.source_ref:
+        parser.error("--source-ref only applies to kepler-agent")
     if any("=" not in item or item.startswith("=") for item in args.agent_kwarg):
         parser.error("--agent-kwarg must use key=value form")
 
-    agent = COPILOT_AGENT if args.candidate == "copilot-agent" else args.candidate
+    agent = KEPLER_AGENT if args.candidate == "kepler-agent" else args.candidate
     command = [
         args.harbor,
         "run",
@@ -99,7 +99,7 @@ def main() -> int:
         command.extend(["--agent-setup-timeout-multiplier", str(args.agent_setup_timeout_multiplier)])
     for task_name in args.include_task:
         command.extend(["--include-task-name", task_name])
-    if args.candidate == "copilot-agent":
+    if args.candidate == "kepler-agent":
         command.extend(["--agent-kwarg", f"source_ref={args.source_ref}"])
     for item in args.agent_kwarg:
         command.extend(["--agent-kwarg", item])

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
+	agenttool "github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
 )
 
 func TestJSONAnalyzeSummarizesArray(t *testing.T) {

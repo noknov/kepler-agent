@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/model"
-	"github.com/noknov/slack-copilot-agent/packages/agent/prompt"
-	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
+	"github.com/noknov/kepler-agent/packages/agent/model"
+	"github.com/noknov/kepler-agent/packages/agent/prompt"
+	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -17,7 +17,7 @@ import (
 )
 
 var errPendingApproval = errors.New("tool call is waiting for approval")
-var runtimeTracer = otel.Tracer("github.com/noknov/slack-copilot-agent/agent/runtime")
+var runtimeTracer = otel.Tracer("github.com/noknov/kepler-agent/agent/runtime")
 
 func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult, error) {
 	if request.SessionID == "" {

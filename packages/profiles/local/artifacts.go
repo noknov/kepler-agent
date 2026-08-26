@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/model"
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/agent/model"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
 )
 
 var safeArtifactName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)

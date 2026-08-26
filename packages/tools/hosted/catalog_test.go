@@ -3,8 +3,8 @@ package hostedtools
 import (
 	"testing"
 
-	"github.com/noknov/slack-copilot-agent/packages/config"
-	"github.com/noknov/slack-copilot-agent/packages/connections"
+	"github.com/noknov/kepler-agent/packages/config"
+	"github.com/noknov/kepler-agent/packages/connections"
 )
 
 func TestPolicyForSurfaceEnablesSlackConnectionDeps(t *testing.T) {

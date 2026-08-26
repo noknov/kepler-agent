@@ -15,7 +15,7 @@ concurrency:
 jobs:
   deploy:
     # Manual runs publish the selected branch, including feature branches.
-    if: github.repository == 'noknov/slack-copilot-agent'
+    if: github.repository == 'noknov/kepler-agent'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

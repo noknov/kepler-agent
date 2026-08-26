@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	agenttool "github.com/noknov/kepler-agent/packages/agent/tool"
 )
 
 func TestDispatchWorkflowTool(t *testing.T) {

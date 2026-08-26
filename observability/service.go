@@ -13,15 +13,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/config"
-	"github.com/noknov/slack-copilot-agent/packages/health"
-	"github.com/noknov/slack-copilot-agent/packages/infra/httpguard"
-	sharedlogging "github.com/noknov/slack-copilot-agent/packages/infra/logging"
-	"github.com/noknov/slack-copilot-agent/packages/infra/telemetry"
-	"github.com/noknov/slack-copilot-agent/packages/observability"
-	"github.com/noknov/slack-copilot-agent/packages/platform"
-	"github.com/noknov/slack-copilot-agent/packages/safety"
-	hostedTools "github.com/noknov/slack-copilot-agent/packages/tools/hosted"
+	"github.com/noknov/kepler-agent/packages/config"
+	"github.com/noknov/kepler-agent/packages/health"
+	"github.com/noknov/kepler-agent/packages/infra/httpguard"
+	sharedlogging "github.com/noknov/kepler-agent/packages/infra/logging"
+	"github.com/noknov/kepler-agent/packages/infra/telemetry"
+	"github.com/noknov/kepler-agent/packages/observability"
+	"github.com/noknov/kepler-agent/packages/platform"
+	"github.com/noknov/kepler-agent/packages/safety"
+	hostedTools "github.com/noknov/kepler-agent/packages/tools/hosted"
 )
 
 type Service struct {
@@ -39,7 +39,7 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	sharedlogging.Configure(cfg.Observing.LogLevel)
-	shutdownTelemetry, err := telemetry.Setup(ctx, "slack-copilot-observability")
+	shutdownTelemetry, err := telemetry.Setup(ctx, "kepler-agent-observability")
 	if err != nil {
 		return err
 	}
@@ -118,7 +118,7 @@ func (s *Service) ListenAndServe(ctx context.Context) error {
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
 	}()
-	log.Printf("slack-copilot observability listening on %s", s.cfg.HTTP.Addr)
+	log.Printf("kepler-agent observability listening on %s", s.cfg.HTTP.Addr)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
@@ -321,10 +321,7 @@ func (s *Service) authorize(r *http.Request) bool {
 	if token == "" {
 		return s.cfg.Observing.AllowUnauthenticated && httpguard.IsDirectLoopback(r)
 	}
-	got := strings.TrimSpace(r.Header.Get("X-Slack-Copilot-Agent-Admin-Token"))
-	if got == "" {
-		got = strings.TrimSpace(r.Header.Get("X-Slack-Copilot-Admin-Token"))
-	}
+	got := strings.TrimSpace(r.Header.Get("X-Kepler-Agent-Admin-Token"))
 	if got == "" {
 		auth := strings.TrimSpace(r.Header.Get("Authorization"))
 		if strings.HasPrefix(strings.ToLower(auth), "bearer ") {

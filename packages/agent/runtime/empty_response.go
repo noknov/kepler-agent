@@ -6,8 +6,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/model"
-	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
+	"github.com/noknov/kepler-agent/packages/agent/model"
+	"github.com/noknov/kepler-agent/packages/agent/transcript"
 )
 
 var errEmptyModelResponse = errors.New("model returned an empty response")

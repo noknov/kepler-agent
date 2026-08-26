@@ -12,8 +12,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	"github.com/noknov/slack-copilot-agent/packages/profiles/local"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/profiles/local"
 )
 
 type ReadFile struct{ Workspace local.Workspace }

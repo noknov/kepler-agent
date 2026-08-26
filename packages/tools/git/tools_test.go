@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	"github.com/noknov/slack-copilot-agent/packages/safety"
-	"github.com/noknov/slack-copilot-agent/packages/toolkit/gitcache"
+	agenttool "github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/safety"
+	"github.com/noknov/kepler-agent/packages/toolkit/gitcache"
 )
 
 func TestFetchRefReturnsImmutableCommitRef(t *testing.T) {

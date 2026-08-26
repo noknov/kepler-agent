@@ -8,18 +8,18 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/config"
-	"github.com/noknov/slack-copilot-agent/packages/connections"
-	"github.com/noknov/slack-copilot-agent/packages/infra/httpguard"
-	sharedlogging "github.com/noknov/slack-copilot-agent/packages/infra/logging"
-	"github.com/noknov/slack-copilot-agent/packages/infra/telemetry"
-	"github.com/noknov/slack-copilot-agent/packages/platform"
-	"github.com/noknov/slack-copilot-agent/packages/safety"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/events"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/gateway"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/handler"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/home"
+	"github.com/noknov/kepler-agent/packages/config"
+	"github.com/noknov/kepler-agent/packages/connections"
+	"github.com/noknov/kepler-agent/packages/infra/httpguard"
+	sharedlogging "github.com/noknov/kepler-agent/packages/infra/logging"
+	"github.com/noknov/kepler-agent/packages/infra/telemetry"
+	"github.com/noknov/kepler-agent/packages/platform"
+	"github.com/noknov/kepler-agent/packages/safety"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/events"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/gateway"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/handler"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/home"
 )
 
 type Service struct {
@@ -37,7 +37,7 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	sharedlogging.Configure(cfg.Observing.LogLevel)
-	shutdownTelemetry, err := telemetry.Setup(ctx, "slack-copilot-gateway")
+	shutdownTelemetry, err := telemetry.Setup(ctx, "kepler-agent-gateway")
 	if err != nil {
 		return err
 	}
@@ -133,7 +133,7 @@ func (s *Service) ListenAndServe(ctx context.Context) error {
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
 	}()
-	log.Printf("slack-copilot gateway listening on %s", s.cfg.HTTP.Addr)
+	log.Printf("kepler-agent gateway listening on %s", s.cfg.HTTP.Addr)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

@@ -31,7 +31,7 @@ func NewWorkspace(root string) (Workspace, error) {
 	if !info.IsDir() {
 		return Workspace{}, fmt.Errorf("workspace root is not a directory")
 	}
-	temp, err := os.MkdirTemp("", "slack-copilot-*")
+	temp, err := os.MkdirTemp("", "kepler-agent-*")
 	if err != nil {
 		return Workspace{}, err
 	}

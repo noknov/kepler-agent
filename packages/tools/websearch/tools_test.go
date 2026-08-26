@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	agenttool "github.com/noknov/kepler-agent/packages/agent/tool"
 )
 
 func TestGoogleCSEResults(t *testing.T) {
@@ -17,13 +17,13 @@ func TestGoogleCSEResults(t *testing.T) {
 		GoogleAPIKey: "key",
 		GoogleCX:     "cx",
 		HTTP: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			if got := req.URL.Query().Get("q"); got != "slack copilot agent" {
+			if got := req.URL.Query().Get("q"); got != "kepler agent" {
 				t.Fatalf("q = %q", got)
 			}
 			return jsonResponse(`{"items":[{"title":"Result","link":"https://example.com","snippet":"hello world"}]}`), nil
 		})},
 	}
-	items, err := client.Search(context.Background(), SearchRequest{Query: "slack copilot agent", Limit: 3})
+	items, err := client.Search(context.Background(), SearchRequest{Query: "kepler agent", Limit: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,13 +85,13 @@ func TestSearXNGResults(t *testing.T) {
 		Provider:       ProviderSearXNG,
 		SearXNGBaseURL: "http://searxng.test",
 		HTTP: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			if req.URL.String() != "http://searxng.test/search?format=json&q=slack+copilot+agent" {
+			if req.URL.String() != "http://searxng.test/search?format=json&q=kepler+agent" {
 				t.Fatalf("url = %q", req.URL.String())
 			}
 			return jsonResponse(`{"results":[{"title":"Result","url":"https://example.com","content":"hello"}]}`), nil
 		})},
 	}
-	items, err := client.Search(context.Background(), SearchRequest{Query: "slack copilot agent", Limit: 3})
+	items, err := client.Search(context.Background(), SearchRequest{Query: "kepler agent", Limit: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestBraveResults(t *testing.T) {
 			if got := req.Header.Get("X-Subscription-Token"); got != "brave-key" {
 				t.Fatalf("subscription token = %q", got)
 			}
-			if got := req.URL.Query().Get("q"); got != "slack copilot agent" {
+			if got := req.URL.Query().Get("q"); got != "kepler agent" {
 				t.Fatalf("q = %q", got)
 			}
 			if got := req.URL.Query().Get("count"); got != "3" {
@@ -118,7 +118,7 @@ func TestBraveResults(t *testing.T) {
 			return jsonResponse(`{"web":{"results":[{"title":"Result","url":"https://example.com","description":"hello brave"}]}}`), nil
 		})},
 	}
-	items, err := client.Search(context.Background(), SearchRequest{Query: "slack copilot agent", Limit: 3})
+	items, err := client.Search(context.Background(), SearchRequest{Query: "kepler agent", Limit: 3})
 	if err != nil {
 		t.Fatal(err)
 	}

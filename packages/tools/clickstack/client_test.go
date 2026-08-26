@@ -3,7 +3,7 @@ package clickstack
 import (
 	"testing"
 
-	"github.com/noknov/slack-copilot-agent/packages/config"
+	"github.com/noknov/kepler-agent/packages/config"
 )
 
 func TestNewMCPClientHeaders(t *testing.T) {

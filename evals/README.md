@@ -5,26 +5,26 @@ This module compares agent **harnesses**, not native models. Every candidate is 
 ## What is implemented
 
 - A deterministic local task runner with isolated workspace copies, wall-clock limits, command/test grading, JSONL case records, and an aggregate JSON report.
-- Command adapters for the local `copilot-agent` CLI, Codex CLI, Claude Code, Pi, and OpenCode. Commands are data, so version-specific flags can be changed without changing the evaluator.
+- Command adapters for the local `kepler-agent` CLI, Codex CLI, Claude Code, Pi, and OpenCode. Commands are data, so version-specific flags can be changed without changing the evaluator.
 - Optional candidate version probes, recorded once per run and copied into every case record.
 - Capability-aware eligibility: tasks declare the minimum capabilities they exercise; a candidate that does not declare a requirement is recorded as `skipped`, never as a failed run.
 - Per-candidate, category, and tag coverage with weighted pass rate, median latency, p95 latency, and failure-class breakdowns in JSON and the static report.
 - A shared gateway contract (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, and one model ID) and a LiteLLM deployment example exposing both OpenAI-compatible and Anthropic-compatible routes.
 - A direct Harbor public-benchmark launcher for Terminal-Bench 2.1, SWE-bench Verified, and Harbor Index. Harbor owns task images, sandboxing, and grading; the local runner is never used to grade those datasets.
-- A custom Harbor adapter for slack-copilot-agent. It builds a full, supplied Git commit inside each task environment, so the evaluated product revision is explicit and does not depend on the operator's local binary.
+- A custom Harbor adapter for kepler-agent. It builds a full, supplied Git commit inside each task environment, so the evaluated product revision is explicit and does not depend on the operator's local binary.
 
 This does not claim benchmark results. The checked-in smoke suite validates evaluator mechanics only. Product comparisons must use Harbor's public datasets and their native grader.
 
 ## Roadmap
 
 - Add a result normalizer that combines completed Harbor job directories into a single cross-agent report without modifying raw Harbor results.
-- Add a published environment image for slack-copilot-agent, removing setup-time package installation while retaining the same pinned source-ref contract.
+- Add a published environment image for kepler-agent, removing setup-time package installation while retaining the same pinned source-ref contract.
 - Add hosted operations and Slack-surface evaluations separately from coding benchmarks, so product-specific surfaces do not distort the public CLI-harness score.
 
 ## Quick start
 
 ```sh
-go build -o bin/copilot-agent ./cli/cmd/copilot-agent
+go build -o bin/kepler-agent ./cli/cmd/kepler-agent
 python3 evals/run.py \
   --suite evals/suites/smoke.json \
   --candidates evals/candidates.example.json \
@@ -32,7 +32,7 @@ python3 evals/run.py \
   --output evals/results/smoke
 ```
 
-Set `EVAL_OPENAI_BASE_URL` and `EVAL_ANTHROPIC_BASE_URL` to the same gateway. The `copilot-agent` candidate invokes the local CLI with its own provider configuration and `--protocol responses`; it never routes through the Slack surface or a cloud-hosted Slack agent. Each candidate command receives `EVAL_MODEL`, `OPENAI_MODEL`, and `ANTHROPIC_MODEL`. Run `python3 evals/run.py --help` for filtering, repetitions, and dry-run options.
+Set `EVAL_OPENAI_BASE_URL` and `EVAL_ANTHROPIC_BASE_URL` to the same gateway. The `kepler-agent` candidate invokes the local CLI with its own provider configuration and `--protocol responses`; it never routes through the Slack surface or a cloud-hosted Slack agent. Each candidate command receives `EVAL_MODEL`, `OPENAI_MODEL`, and `ANTHROPIC_MODEL`. Run `python3 evals/run.py --help` for filtering, repetitions, and dry-run options.
 
 Task filters are composable:
 
@@ -65,17 +65,17 @@ this evaluator; do not use its score in external harness comparisons.
 Harbor is the only execution path for public datasets. Its task images,
 verifier, lifecycle, and result schema remain intact. The launcher writes an
 `invocation.json` next to Harbor's jobs before it starts, recording the exact
-dataset, candidate, model, command, and (for `copilot-agent`) source commit.
+dataset, candidate, model, command, and (for `kepler-agent`) source commit.
 
 First inspect the invocation. This is side-effect-free:
 
 ```sh
 python3 evals/run_harbor.py \
   --benchmark terminal-bench-2.1 \
-  --candidate copilot-agent \
+  --candidate kepler-agent \
   --source-ref "$(git rev-parse HEAD)" \
   --model controlled-model \
-  --output evals/results/terminal-bench-2.1/copilot-agent \
+  --output evals/results/terminal-bench-2.1/kepler-agent \
   --dry-run
 ```
 
@@ -103,7 +103,7 @@ Available public suites:
 - `harbor-index-1.0`: broader agent-index tasks; report separately rather than averaging it with code repair.
 
 The built-in Harbor candidates are `codex`, `claude-code`, `opencode`, and
-`pi`. `copilot-agent` uses this repository's custom adapter and requires a full
+`pi`. `kepler-agent` uses this repository's custom adapter and requires a full
 40-character `--source-ref`; this is intentionally mandatory. Candidate tools
 can differ in provider authentication and model controls, so record those
 agent-specific settings with the Harbor job rather than asserting model parity

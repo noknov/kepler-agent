@@ -2,7 +2,7 @@
 gateway/.env
 worker/.env
 observability/.env
-cmd/slack-copilot-agent/.env
+cmd/kepler-agent/.env
 .DS_Store
 .idea/
 .data/
@@ -15,6 +15,6 @@ bin/
 dist/
 runs/
 worker/.prompts/
-copilot-agent-avatar-*.png
+kepler-agent-avatar-*.png
 cmd/slack-broadcast/
 slack-broadcast

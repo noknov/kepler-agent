@@ -1,8 +1,8 @@
 package observability
 
 import (
-	"github.com/noknov/slack-copilot-agent/packages/agent/model"
-	"github.com/noknov/slack-copilot-agent/packages/llm"
+	"github.com/noknov/kepler-agent/packages/agent/model"
+	"github.com/noknov/kepler-agent/packages/llm"
 )
 
 type CostRates struct {

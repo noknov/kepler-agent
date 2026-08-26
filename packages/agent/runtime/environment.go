@@ -3,8 +3,8 @@ package runtime
 import (
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/environment"
-	"github.com/noknov/slack-copilot-agent/packages/agent/model"
+	"github.com/noknov/kepler-agent/packages/agent/environment"
+	"github.com/noknov/kepler-agent/packages/agent/model"
 )
 
 func insertEnvironmentFragment(messages []model.Message, fragment model.Message) []model.Message {

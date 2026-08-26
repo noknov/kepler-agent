@@ -7,7 +7,7 @@ import re
 import sys
 from pathlib import Path
 
-MODULE = "github.com/noknov/slack-copilot-agent/"
+MODULE = "github.com/noknov/kepler-agent/"
 ROOT = Path(__file__).resolve().parent.parent
 
 

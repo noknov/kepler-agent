@@ -486,7 +486,7 @@ func loadConnections() ConnectionsConfig {
 }
 
 func dotenvPath(profile RuntimeProfile) string {
-	if path := strings.TrimSpace(os.Getenv("SLACK_COPILOT_ENV_FILE")); path != "" {
+	if path := strings.TrimSpace(os.Getenv("KEPLER_AGENT_ENV_FILE")); path != "" {
 		return path
 	}
 	switch profile {

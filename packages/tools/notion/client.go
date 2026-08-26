@@ -4,8 +4,8 @@ package notion
 import (
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/config"
-	"github.com/noknov/slack-copilot-agent/packages/mcp"
+	"github.com/noknov/kepler-agent/packages/config"
+	"github.com/noknov/kepler-agent/packages/mcp"
 )
 
 const defaultMCPURL = "https://mcp.notion.com/mcp"

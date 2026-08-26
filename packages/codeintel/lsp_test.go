@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/safety"
+	"github.com/noknov/kepler-agent/packages/safety"
 )
 
 func TestGoSymbolsWithGopls(t *testing.T) {

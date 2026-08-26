@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/prompts"
+	"github.com/noknov/kepler-agent/packages/prompts"
 )
 
 var secretPatterns = []*regexp.Regexp{

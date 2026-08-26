@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
+	"github.com/noknov/kepler-agent/packages/infra/redisclient"
 )
 
 const (

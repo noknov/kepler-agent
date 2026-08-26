@@ -7,11 +7,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
-	"github.com/noknov/slack-copilot-agent/packages/profiles/hosted"
-	"github.com/noknov/slack-copilot-agent/packages/safety"
-	"github.com/noknov/slack-copilot-agent/packages/sessioninput"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/conversation"
+	"github.com/noknov/kepler-agent/packages/infra/redisclient"
+	"github.com/noknov/kepler-agent/packages/profiles/hosted"
+	"github.com/noknov/kepler-agent/packages/safety"
+	"github.com/noknov/kepler-agent/packages/sessioninput"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
 
 func TestIntegrationCrossWorkerSteerAndQueue(t *testing.T) {

@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	"github.com/noknov/slack-copilot-agent/packages/prompts"
-	"github.com/noknov/slack-copilot-agent/packages/userprefs"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/prompts"
+	"github.com/noknov/kepler-agent/packages/userprefs"
 )
 
 type LoadTool struct {

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	"github.com/noknov/slack-copilot-agent/packages/connections"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/connections"
 )
 
 // ClientSource resolves a GitHub API client for a tool call.

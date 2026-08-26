@@ -12,13 +12,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/config"
-	"github.com/noknov/slack-copilot-agent/packages/connections"
+	"github.com/noknov/kepler-agent/packages/config"
+	"github.com/noknov/kepler-agent/packages/connections"
 )
 
 func runConnect(args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: slack-copilot connect <provider>")
+		return errors.New("usage: kepler-agent connect <provider>")
 	}
 	switch strings.ToLower(strings.TrimSpace(args[0])) {
 	case connections.ProviderSlack:
@@ -416,7 +416,7 @@ func defaultConnectStateDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(home, ".slack-copilot")
+	dir := filepath.Join(home, ".kepler-agent")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}

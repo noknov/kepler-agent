@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	observabilitysvc "github.com/noknov/slack-copilot-agent/observability"
+	observabilitysvc "github.com/noknov/kepler-agent/observability"
 )
 
 func main() {

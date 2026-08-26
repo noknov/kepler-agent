@@ -8,15 +8,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/model"
-	agentruntime "github.com/noknov/slack-copilot-agent/packages/agent/runtime"
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
-	"github.com/noknov/slack-copilot-agent/packages/profiles/hosted"
-	"github.com/noknov/slack-copilot-agent/packages/safety"
-	"github.com/noknov/slack-copilot-agent/packages/session"
-	"github.com/noknov/slack-copilot-agent/packages/sessioninput"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/conversation"
+	"github.com/noknov/kepler-agent/packages/agent/model"
+	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/agent/transcript"
+	"github.com/noknov/kepler-agent/packages/profiles/hosted"
+	"github.com/noknov/kepler-agent/packages/safety"
+	"github.com/noknov/kepler-agent/packages/session"
+	"github.com/noknov/kepler-agent/packages/sessioninput"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
 
 type replyModel struct{ request *model.Request }

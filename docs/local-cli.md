@@ -8,18 +8,18 @@ The local CLI and hosted Slack agent execute the same canonical harness:
 ## Build and run
 
 ```sh
-go build -o bin/copilot-agent ./cli/cmd/copilot-agent
-cp cli/config.example.toml ~/.config/slack-copilot-agent/config.toml
+go build -o bin/kepler-agent ./cli/cmd/kepler-agent
+cp cli/config.example.toml ~/.config/kepler-agent/config.toml
 export OPENAI_API_KEY=...
-bin/copilot-agent --cwd /path/to/project
+bin/kepler-agent --cwd /path/to/project
 ```
 
 Interactive mode starts when stdin is a terminal and no prompt argument is supplied. Otherwise the same binary runs headlessly:
 
 ```sh
-bin/copilot-agent --cwd . "diagnose the failing tests"
-printf "review this repository\n" | bin/copilot-agent --cwd . --output jsonl
-bin/copilot-agent --resume
+bin/kepler-agent --cwd . "diagnose the failing tests"
+printf "review this repository\n" | bin/kepler-agent --cwd . --output jsonl
+bin/kepler-agent --resume
 ```
 
 ## Model profiles
@@ -29,9 +29,9 @@ agent's model or credentials. Create a user-only configuration file, then
 select a named profile for a session:
 
 ```sh
-copilot-agent config init
+kepler-agent config init
 export DEEPSEEK_API_KEY=...
-copilot-agent --profile deepseek --cwd /path/to/project
+kepler-agent --profile deepseek --cwd /path/to/project
 ```
 
 `provider`, `protocol`, `model`, `base_url`, and `api_key_env` can be set in

@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
-	slackconversation "github.com/noknov/slack-copilot-agent/packages/surfaces/slack/conversation"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
+	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
 
 func TestThreadLoaderUsesBotClient(t *testing.T) {

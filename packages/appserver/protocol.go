@@ -1,7 +1,7 @@
 package appserver
 
 import (
-	agentruntime "github.com/noknov/slack-copilot-agent/packages/agent/runtime"
+	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
 )
 
 // ThreadStartParams creates a new conversation session.

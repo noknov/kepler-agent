@@ -14,8 +14,8 @@
     document.body.dataset.lang = next;
     document.documentElement.lang = next === "zh" ? "zh-CN" : "en";
     document.title = next === "zh"
-      ? "架构指南 · Slack Copilot Agent"
-      : "Architecture Guide · Slack Copilot Agent";
+      ? "架构指南 · Kepler Agent"
+      : "Architecture Guide · Kepler Agent";
 
     document.querySelectorAll("[data-set-lang]").forEach((button) => {
       const active = button.dataset.setLang === next;

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
-	"github.com/noknov/slack-copilot-agent/packages/observability"
+	"github.com/noknov/kepler-agent/packages/llm"
+	"github.com/noknov/kepler-agent/packages/observability"
 )
 
 func TestObserverRecordsTraceMetadataAndStack(t *testing.T) {

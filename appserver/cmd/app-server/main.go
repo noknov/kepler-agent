@@ -8,16 +8,16 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/delegation"
-	"github.com/noknov/slack-copilot-agent/packages/agent/environment"
-	"github.com/noknov/slack-copilot-agent/packages/agent/model"
-	"github.com/noknov/slack-copilot-agent/packages/agent/prompt"
-	agentruntime "github.com/noknov/slack-copilot-agent/packages/agent/runtime"
-	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
-	"github.com/noknov/slack-copilot-agent/packages/appserver"
-	"github.com/noknov/slack-copilot-agent/packages/profiles/local"
-	"github.com/noknov/slack-copilot-agent/packages/providers"
-	localtools "github.com/noknov/slack-copilot-agent/packages/tools/local"
+	"github.com/noknov/kepler-agent/packages/agent/delegation"
+	"github.com/noknov/kepler-agent/packages/agent/environment"
+	"github.com/noknov/kepler-agent/packages/agent/model"
+	"github.com/noknov/kepler-agent/packages/agent/prompt"
+	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
+	"github.com/noknov/kepler-agent/packages/agent/transcript"
+	"github.com/noknov/kepler-agent/packages/appserver"
+	"github.com/noknov/kepler-agent/packages/profiles/local"
+	"github.com/noknov/kepler-agent/packages/providers"
+	localtools "github.com/noknov/kepler-agent/packages/tools/local"
 )
 
 func main() {

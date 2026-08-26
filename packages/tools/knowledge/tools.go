@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	"github.com/noknov/slack-copilot-agent/packages/prompts"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/prompts"
 )
 
 type RunbookSearchTool struct {

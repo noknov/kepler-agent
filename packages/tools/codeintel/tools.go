@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	engine "github.com/noknov/slack-copilot-agent/packages/codeintel"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
+	engine "github.com/noknov/kepler-agent/packages/codeintel"
 )
 
 type SymbolsTool struct {

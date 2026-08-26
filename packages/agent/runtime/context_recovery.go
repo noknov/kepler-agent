@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/model"
-	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
+	"github.com/noknov/kepler-agent/packages/agent/model"
+	"github.com/noknov/kepler-agent/packages/agent/transcript"
 )
 
 // forceCompactAfterContextLimit shrinks durable history when a provider rejects a

@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
-	"github.com/noknov/slack-copilot-agent/packages/prompts"
+	"github.com/noknov/kepler-agent/packages/infra/redisclient"
+	"github.com/noknov/kepler-agent/packages/prompts"
 )
 
 type Status string

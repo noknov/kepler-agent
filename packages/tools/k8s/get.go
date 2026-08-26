@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
 )
 
 // GetTool is a general-purpose Kubernetes GET wrapper for workload and infra resources.

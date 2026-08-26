@@ -3,7 +3,7 @@ package observability
 import (
 	"testing"
 
-	"github.com/noknov/slack-copilot-agent/packages/llm"
+	"github.com/noknov/kepler-agent/packages/llm"
 )
 
 func TestCostRatesEstimateUSD(t *testing.T) {

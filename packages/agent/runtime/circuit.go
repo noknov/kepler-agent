@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
 )
 
 // CircuitBreakerConfig optionally blocks repeated identical tool calls.

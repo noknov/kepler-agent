@@ -7,10 +7,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	"github.com/noknov/slack-copilot-agent/packages/config"
-	"github.com/noknov/slack-copilot-agent/packages/connections"
-	mcptools "github.com/noknov/slack-copilot-agent/packages/tools/mcp"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/config"
+	"github.com/noknov/kepler-agent/packages/connections"
+	mcptools "github.com/noknov/kepler-agent/packages/tools/mcp"
 )
 
 // Registrar lazily discovers ClickStack MCP tools once a user has connected.

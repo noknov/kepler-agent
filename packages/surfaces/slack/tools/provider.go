@@ -5,9 +5,9 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	"github.com/noknov/slack-copilot-agent/packages/connections"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/connections"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
 )
 
 // ConnectedClientSource resolves a Slack API client for the caller's linked user token.

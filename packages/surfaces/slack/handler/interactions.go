@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/gateway"
-	"github.com/noknov/slack-copilot-agent/packages/userprefs"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/gateway"
+	"github.com/noknov/kepler-agent/packages/userprefs"
 )
 
 const (

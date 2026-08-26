@@ -1,4 +1,4 @@
-# slack-copilot-agent
+# Kepler Agent
 
 An open-source agent platform for code-assisted diagnosis and operational work.
 It ships as a hosted Slack agent and a local coding-agent CLI built on one
@@ -48,29 +48,29 @@ Built-ins / MCP / skills ──────────────────�
 Slack is an ingress and presentation surface, not a separate agent. The local
 CLI executes locally; the hosted profile executes against server workspaces
 under server-owned policy. See the bilingual
-[architecture guide](https://noknov.github.io/slack-copilot-agent/) for the
+[architecture guide](https://noknov.github.io/kepler-agent/) for the
 current architecture.
 
 ## Try the local CLI
 
 ```bash
-go build -o bin/copilot-agent ./cli/cmd/copilot-agent
-cp cli/config.example.toml ~/.config/slack-copilot-agent/config.toml
+go build -o bin/kepler-agent ./cli/cmd/kepler-agent
+cp cli/config.example.toml ~/.config/kepler-agent/config.toml
 export OPENAI_API_KEY=...
-bin/copilot-agent --cwd /path/to/project
+bin/kepler-agent --cwd /path/to/project
 ```
 
 The same binary adapts to automation when given a prompt or piped input:
 
 ```bash
-bin/copilot-agent --cwd . "diagnose the failing tests"
-printf "review this repository\n" | bin/copilot-agent --cwd . --output jsonl
-bin/copilot-agent --resume
+bin/kepler-agent --cwd . "diagnose the failing tests"
+printf "review this repository\n" | bin/kepler-agent --cwd . --output jsonl
+bin/kepler-agent --resume
 ```
 
-The CLI model connection is local and configurable. Run `copilot-agent config
+The CLI model connection is local and configurable. Run `kepler-agent config
 init`, set the API key environment variable for a profile, then start with
-`copilot-agent --profile <name> --cwd <project>`. It does not reuse the hosted
+`kepler-agent --profile <name> --cwd <project>`. It does not reuse the hosted
 Slack agent's provider or credentials.
 
 The local `exec` tool runs argv without a shell, writes only inside the workspace, and denies network
@@ -135,7 +135,7 @@ python3 evals/run.py \
   --suite evals/suites/smoke.json \
   --candidates evals/candidates.example.json \
   --model controlled-model \
-  --output /tmp/slack-copilot-eval
+  --output /tmp/kepler-agent-eval
 ```
 
 The checked-in smoke task validates evaluator wiring; it is not a published
@@ -184,7 +184,7 @@ See [operations](docs/operations.md) for deployment and failure semantics.
 ## Documentation
 
 - [local CLI](docs/local-cli.md)
-- [architecture](https://noknov.github.io/slack-copilot-agent/)
+- [architecture](https://noknov.github.io/kepler-agent/)
 - [configuration](docs/configuration.md)
 - [tools](docs/tools.md)
 - [prompts and private overlays](docs/prompts.md)

@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="A bilingual architecture guide for Slack Copilot Agent, from first request to distributed execution.">
+  <meta name="description" content="A bilingual architecture guide for Kepler Agent, from first request to distributed execution.">
   <meta name="theme-color" content="#07100f">
-  <title>架构指南 · Slack Copilot Agent</title>
+  <title>架构指南 · Kepler Agent</title>
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="assets/architecture.css">
   <script src="assets/architecture.js" defer></script>
@@ -14,12 +14,12 @@
   <a class="skip-link" href="#main">Skip to content</a>
   <header class="site-header">
     <div class="header-inner">
-      <a class="brand" href="#top" aria-label="Slack Copilot Agent architecture guide">
+      <a class="brand" href="#top" aria-label="Kepler Agent architecture guide">
         <span class="brand-mark" aria-hidden="true"></span>
-        <span class="brand-text">Slack Copilot Agent · Architecture</span>
+        <span class="brand-text">Kepler Agent · Architecture</span>
       </a>
       <div class="header-actions">
-        <a class="github-link" href="https://github.com/noknov/slack-copilot-agent">GitHub ↗</a>
+        <a class="github-link" href="https://github.com/noknov/kepler-agent">GitHub ↗</a>
         <div class="language-switch" role="group" aria-label="Language">
           <button type="button" data-set-lang="zh" aria-pressed="true">中</button>
           <button type="button" data-set-lang="en" aria-pressed="false">EN</button>
@@ -32,8 +32,8 @@
     <article data-locale="zh">
       <section class="hero" id="top">
         <p class="eyebrow">Architecture overview · shared agent harness</p>
-        <h1>Slack Copilot Agent<br><span>系统架构</span></h1>
-        <p class="hero-copy">Slack Copilot Agent 包含以 Slack 为入口的 hosted Agent 和本地 CLI。两者共享 Agent harness，并通过不同 profile 保持权限、存储与运行环境差异。</p>
+        <h1>Kepler Agent<br><span>系统架构</span></h1>
+        <p class="hero-copy">Kepler Agent 包含以 Slack 为入口的 hosted Agent 和本地 CLI。两者共享 Agent harness，并通过不同 profile 保持权限、存储与运行环境差异。</p>
         <div class="hero-meta" aria-label="技术摘要">
           <span class="pill">Go 1.25</span>
           <span class="pill">PostgreSQL</span>
@@ -267,16 +267,16 @@
             <span class="section-number">12 / CODE READING PATH</span>
             <h2>主要代码入口</h2>
             <ol class="reading-path">
-              <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/surfaces/slack/gateway/gateway.go">packages/surfaces/slack/gateway/gateway.go</a></li>
-              <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/surfaces/slack/events/worker.go">packages/surfaces/slack/events/worker.go</a></li>
-              <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/surfaces/slack/agent/service.go">packages/surfaces/slack/agent/service.go</a></li>
-              <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agent/runtime/runner.go">packages/agent/runtime/runner.go</a></li>
-              <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agent/runtime/context.go">packages/agent/runtime/context.go</a></li>
-              <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/profiles/hosted/profile.go">packages/profiles/hosted/profile.go</a></li>
-              <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/profiles/hosted/pgtranscript.go">packages/profiles/hosted/pgtranscript.go</a></li>
-              <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agent/tool/tool.go">packages/agent/tool/tool.go</a></li>
-              <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/sessioninput/store.go">packages/sessioninput/store.go</a></li>
-              <li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/schema/postgres.sql">schema/postgres.sql</a></li>
+              <li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/surfaces/slack/gateway/gateway.go">packages/surfaces/slack/gateway/gateway.go</a></li>
+              <li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/surfaces/slack/events/worker.go">packages/surfaces/slack/events/worker.go</a></li>
+              <li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/surfaces/slack/agent/service.go">packages/surfaces/slack/agent/service.go</a></li>
+              <li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/runtime/runner.go">packages/agent/runtime/runner.go</a></li>
+              <li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/runtime/context.go">packages/agent/runtime/context.go</a></li>
+              <li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/profiles/hosted/profile.go">packages/profiles/hosted/profile.go</a></li>
+              <li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/profiles/hosted/pgtranscript.go">packages/profiles/hosted/pgtranscript.go</a></li>
+              <li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/tool/tool.go">packages/agent/tool/tool.go</a></li>
+              <li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/sessioninput/store.go">packages/sessioninput/store.go</a></li>
+              <li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/schema/postgres.sql">schema/postgres.sql</a></li>
             </ol>
           </section>
         </div>
@@ -286,8 +286,8 @@
     <article data-locale="en">
       <section class="hero" id="top-en">
 		<p class="eyebrow">Architecture overview · shared agent harness</p>
-        <h1>Slack Copilot Agent<br><span>System Architecture</span></h1>
-        <p class="hero-copy">Slack Copilot Agent includes a hosted agent with Slack as an ingress and a local CLI. Both use one agent harness, while distinct profiles preserve their permission, storage, and runtime differences.</p>
+        <h1>Kepler Agent<br><span>System Architecture</span></h1>
+        <p class="hero-copy">Kepler Agent includes a hosted agent with Slack as an ingress and a local CLI. Both use one agent harness, while distinct profiles preserve their permission, storage, and runtime differences.</p>
         <div class="hero-meta" aria-label="Technology summary">
           <span class="pill">Go 1.25</span><span class="pill">PostgreSQL</span><span class="pill">Redis</span><span class="pill">Slack Events API</span>
         </div>
@@ -410,13 +410,13 @@
 
           <section class="doc-section" id="en-reading">
             <span class="section-number">12 / CODE READING PATH</span><h2>Main code entrypoints</h2>
-            <ol class="reading-path"><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/surfaces/slack/gateway/gateway.go">packages/surfaces/slack/gateway/gateway.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/surfaces/slack/events/worker.go">packages/surfaces/slack/events/worker.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/surfaces/slack/agent/service.go">packages/surfaces/slack/agent/service.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agent/runtime/runner.go">packages/agent/runtime/runner.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agent/runtime/context.go">packages/agent/runtime/context.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/agent/tool/tool.go">packages/agent/tool/tool.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/sessioninput/store.go">packages/sessioninput/store.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/profiles/hosted/profile.go">packages/profiles/hosted/profile.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/packages/profiles/hosted/pgtranscript.go">packages/profiles/hosted/pgtranscript.go</a></li><li><a class="code-link" href="https://github.com/noknov/slack-copilot-agent/blob/main/schema/postgres.sql">schema/postgres.sql</a></li></ol>
+            <ol class="reading-path"><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/surfaces/slack/gateway/gateway.go">packages/surfaces/slack/gateway/gateway.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/surfaces/slack/events/worker.go">packages/surfaces/slack/events/worker.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/surfaces/slack/agent/service.go">packages/surfaces/slack/agent/service.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/runtime/runner.go">packages/agent/runtime/runner.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/runtime/context.go">packages/agent/runtime/context.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/tool/tool.go">packages/agent/tool/tool.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/sessioninput/store.go">packages/sessioninput/store.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/profiles/hosted/profile.go">packages/profiles/hosted/profile.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/packages/profiles/hosted/pgtranscript.go">packages/profiles/hosted/pgtranscript.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/main/schema/postgres.sql">schema/postgres.sql</a></li></ol>
           </section>
         </div>
       </div>
     </article>
   </main>
 
-  <footer class="site-footer">Maintained with the source · Slack Copilot Agent Architecture Guide</footer>
+  <footer class="site-footer">Maintained with the source · Kepler Agent Architecture Guide</footer>
 </body>
 </html>

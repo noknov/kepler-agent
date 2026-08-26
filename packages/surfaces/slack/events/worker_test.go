@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/eventinbox"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
+	"github.com/noknov/kepler-agent/packages/eventinbox"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
 )
 
 type fakeInbox struct {

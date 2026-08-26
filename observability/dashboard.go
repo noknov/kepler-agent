@@ -44,11 +44,11 @@ const healthDashboardHTML = `<!doctype html>
     <div class="grid"><section><h2>Tools</h2><table><thead><tr><th>Name</th><th>Status</th><th>Message</th><th>Latency</th></tr></thead><tbody id="tools"></tbody></table></section><div class="stack"><section><h2>Recent Errors</h2><div id="errors" class="muted">-</div></section></div></div>
   </main>
   <script>
-    const tokenKey="slackCopilotAgentAdminToken";
+    const tokenKey="keplerAgentAdminToken";
     const esc=value=>String(value??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
     const statusHTML=status=>'<span class="status '+esc(status||"unknown")+'"><span class="dot"></span>'+esc(status||"unknown")+'</span>';
     const fmtDate=value=>value?new Date(value).toLocaleString():"-";
-    const headers=()=>{const token=localStorage.getItem(tokenKey)||""; return token?{"X-Slack-Copilot-Agent-Admin-Token":token}:{};};
+    const headers=()=>{const token=localStorage.getItem(tokenKey)||""; return token?{"X-Kepler-Agent-Admin-Token":token}:{};};
     async function getJSON(path){const res=await fetch(path,{headers:headers()}); if(res.status===403){const token=prompt("Admin token"); if(token){localStorage.setItem(tokenKey,token); return getJSON(path);}} if(!res.ok) throw new Error(path+" returned "+res.status); return res.json();}
     function render(snapshot,metrics){const tools=snapshot.tools||[]; const counts=tools.reduce((acc,tool)=>{acc[tool.status||"unknown"]=(acc[tool.status||"unknown"]||0)+1; return acc;},{}); document.getElementById("checked").textContent="Checked "+fmtDate(snapshot.checked_at); document.getElementById("overall").innerHTML=statusHTML(snapshot.overall); document.getElementById("toolCounts").textContent=tools.length+" total, "+(counts.healthy||0)+" healthy"; document.getElementById("tools").innerHTML=tools.map(tool=>'<tr><td><code>'+esc(tool.name)+'</code><div class="muted">'+esc(tool.criticality||"")+'</div></td><td>'+statusHTML(tool.status)+'</td><td>'+esc(tool.message||"-")+'</td><td>'+esc(tool.latency_ms||0)+' ms</td></tr>').join(""); const errs=(metrics&&metrics.last_errors)||[]; document.getElementById("errors").innerHTML=errs.length?errs.map(err=>'<p class="error">'+esc(err)+'</p>').join(""):'<span class="muted">No recent errors</span>';}
     async function load(){document.getElementById("refresh").disabled=true; try{const [snapshot,metrics]=await Promise.all([getJSON("/health/tools?refresh=true"),getJSON("/metrics")]); render(snapshot,metrics);} catch(err){document.getElementById("checked").textContent=err.message;} finally{document.getElementById("refresh").disabled=false;}}

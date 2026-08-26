@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
 )
 
 type RolloutTool struct {

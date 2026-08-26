@@ -78,7 +78,7 @@ selection. Workflow aliases can live in `PROMPT_DIR/runtime.json`.
 
 ClickStack tools are discovered from the configured MCP endpoint once a usable token exists.
 For ClickHouse Cloud, set `CLICKSTACK_SERVICE_ID` and have each user connect ClickStack from App Home (OAuth).
-For OSS/BYOC, set `CLICKSTACK_MCP_URL` and connect a Personal API Access Key per user via `slack-copilot connect clickstack` or App Home.
+For OSS/BYOC, set `CLICKSTACK_MCP_URL` and connect a Personal API Access Key per user via `kepler-agent connect clickstack` or App Home.
 
 | Deployment | URL | Auth |
 |---|---|---|
@@ -88,7 +88,7 @@ For OSS/BYOC, set `CLICKSTACK_MCP_URL` and connect a Personal API Access Key per
 ### Google Cloud (read-only OAuth)
 
 Per-user Google OAuth with read-only scopes (`logging.read`, `cloud-platform.read-only`).
-Users connect from App Home or `slack-copilot connect gcp`. Tools call GCP REST APIs with the user's token.
+Users connect from App Home or `kepler-agent connect gcp`. Tools call GCP REST APIs with the user's token.
 
 | Env | Purpose |
 |---|---|
@@ -109,7 +109,7 @@ Deploy routing headers:
 ### Notion MCP
 
 Notion tools are discovered from the hosted Notion MCP endpoint once a usable token exists.
-Users connect Notion from App Home or `slack-copilot connect notion` (OAuth via `https://mcp.notion.com`).
+Users connect Notion from App Home or `kepler-agent connect notion` (OAuth via `https://mcp.notion.com`).
 
 | Env | Purpose |
 |---|---|

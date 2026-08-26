@@ -1,4 +1,4 @@
-module github.com/noknov/slack-copilot-agent
+module github.com/noknov/kepler-agent
 
 go 1.25.0
 

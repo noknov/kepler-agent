@@ -744,7 +744,7 @@ func TestLoadForHonorsExplicitEnvFile(t *testing.T) {
 	writeEnvFileNamed(t, dir, "custom.env", map[string]string{
 		"SLACK_SIGNING_SECRET": "custom-secret",
 	})
-	t.Setenv("SLACK_COPILOT_ENV_FILE", filepath.Join(dir, "custom.env"))
+	t.Setenv("KEPLER_AGENT_ENV_FILE", filepath.Join(dir, "custom.env"))
 
 	wd, _ := os.Getwd()
 	defer func() { _ = os.Chdir(wd) }()
@@ -791,6 +791,7 @@ func resetConfigEnv(t *testing.T) {
 	t.Helper()
 	keys := []string{
 		"SLACK_BOT_TOKEN",
+		"KEPLER_AGENT_ENV_FILE",
 		"SLACK_SIGNING_SECRET",
 		"SLACK_BOT_USER_ID",
 		"ALLOWED_SLACK_USERS",

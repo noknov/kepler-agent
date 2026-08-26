@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/model"
+	"github.com/noknov/kepler-agent/packages/agent/model"
 )
 
 type compactorClient struct{ request model.Request }

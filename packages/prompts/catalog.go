@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/frontmatter"
+	"github.com/noknov/kepler-agent/packages/frontmatter"
 	"sync"
 )
 

@@ -657,6 +657,6 @@ func setAnthropicAuthHeaders(header http.Header, token, flavor string) {
 	if flavor == "claude-code" {
 		header.Set("Authorization", "Bearer "+token)
 		header.Set("x-app", "cli")
-		header.Set("User-Agent", "claude-cli/1.0 slack-copilot-agent")
+		header.Set("User-Agent", "claude-cli/1.0 kepler-agent")
 	}
 }

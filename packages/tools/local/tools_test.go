@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	"github.com/noknov/slack-copilot-agent/packages/profiles/local"
+	agenttool "github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/profiles/local"
 )
 
 func TestFileToolsAndCatalog(t *testing.T) {

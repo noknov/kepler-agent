@@ -90,7 +90,7 @@ def probe_environment(home: Path) -> dict[str, str]:
 
 def candidate_versions(candidates: list[Candidate], mapping: dict[str, str]) -> dict[str, dict[str, Any]]:
     versions: dict[str, dict[str, Any]] = {}
-    with tempfile.TemporaryDirectory(prefix="slack-copilot-version-") as temp:
+    with tempfile.TemporaryDirectory(prefix="kepler-agent-version-") as temp:
         home = Path(temp) / "home"
         home.mkdir()
         env = probe_environment(home)

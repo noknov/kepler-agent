@@ -3,7 +3,7 @@ package notion
 import (
 	"testing"
 
-	"github.com/noknov/slack-copilot-agent/packages/config"
+	"github.com/noknov/kepler-agent/packages/config"
 )
 
 func TestNewMCPClientDefaultURL(t *testing.T) {

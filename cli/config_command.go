@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/noknov/slack-copilot-agent/packages/profiles/local"
+	"github.com/noknov/kepler-agent/packages/profiles/local"
 )
 
 //go:embed config.example.toml
@@ -16,7 +16,7 @@ var defaultConfig []byte
 
 func runConfig(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: copilot-agent config <init|show>")
+		return errors.New("usage: kepler-agent config <init|show>")
 	}
 	switch args[0] {
 	case "show":
@@ -49,7 +49,7 @@ func runConfig(args []string) error {
 		if err := os.WriteFile(*path, defaultConfig, 0600); err != nil {
 			return err
 		}
-		fmt.Printf("Created %s\nSet the selected profile's API key environment variable, then run: copilot-agent --profile deepseek --cwd .\n", *path)
+		fmt.Printf("Created %s\nSet the selected profile's API key environment variable, then run: kepler-agent --profile deepseek --cwd .\n", *path)
 		return nil
 	default:
 		return fmt.Errorf("unknown config command %q (use init or show)", args[0])

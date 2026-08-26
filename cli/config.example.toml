@@ -11,7 +11,7 @@ max_output_tokens = 16384
 temperature = 0
 unsafe_allow_no_sandbox = false
 
-# Select a profile with: copilot-agent --profile deepseek
+# Select a profile with: kepler-agent --profile deepseek
 # The API key itself remains in the named environment variable.
 [profiles.deepseek]
 provider = "deepseek"

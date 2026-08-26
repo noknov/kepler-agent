@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/toolkit/gitcache"
+	"github.com/noknov/kepler-agent/packages/toolkit/gitcache"
 )
 
 func PullWorkspaceRepos(ctx context.Context, roots []string, interval time.Duration) {

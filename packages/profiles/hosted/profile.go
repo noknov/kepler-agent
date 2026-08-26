@@ -8,17 +8,17 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/noknov/slack-copilot-agent/packages/agent/delegation"
-	"github.com/noknov/slack-copilot-agent/packages/agent/environment"
-	"github.com/noknov/slack-copilot-agent/packages/agent/model"
-	agentruntime "github.com/noknov/slack-copilot-agent/packages/agent/runtime"
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
-	"github.com/noknov/slack-copilot-agent/packages/config"
-	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
-	"github.com/noknov/slack-copilot-agent/packages/observability"
-	"github.com/noknov/slack-copilot-agent/packages/providers"
-	"github.com/noknov/slack-copilot-agent/packages/safety"
+	"github.com/noknov/kepler-agent/packages/agent/delegation"
+	"github.com/noknov/kepler-agent/packages/agent/environment"
+	"github.com/noknov/kepler-agent/packages/agent/model"
+	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/agent/transcript"
+	"github.com/noknov/kepler-agent/packages/config"
+	"github.com/noknov/kepler-agent/packages/infra/redisclient"
+	"github.com/noknov/kepler-agent/packages/observability"
+	"github.com/noknov/kepler-agent/packages/providers"
+	"github.com/noknov/kepler-agent/packages/safety"
 )
 
 // Profile owns the complete hosted-agent composition. Product entrypoints

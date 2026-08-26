@@ -12,8 +12,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	"github.com/noknov/slack-copilot-agent/packages/frontmatter"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/frontmatter"
 )
 
 type Skill struct{ Name, Description, Path string }

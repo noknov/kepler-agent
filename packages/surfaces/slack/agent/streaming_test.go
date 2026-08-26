@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/noknov/slack-copilot-agent/packages/safety"
-	slackconversation "github.com/noknov/slack-copilot-agent/packages/surfaces/slack/conversation"
+	"github.com/noknov/kepler-agent/packages/safety"
+	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
 
 type nativeStreamingMessenger struct {

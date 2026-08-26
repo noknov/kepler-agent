@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"testing"
 
-	agenttool "github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	"github.com/noknov/slack-copilot-agent/packages/mcp"
+	agenttool "github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/mcp"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

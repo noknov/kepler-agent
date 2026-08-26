@@ -79,7 +79,7 @@ class EvaluatorTests(unittest.TestCase):
                     "--benchmark",
                     "terminal-bench-2.1",
                     "--candidate",
-                    "copilot-agent",
+                    "kepler-agent",
                     "--source-ref",
                     "2f9f18001bfd9e0f51bb92b026e853f65974ed6a",
                     "--model",
@@ -96,7 +96,7 @@ class EvaluatorTests(unittest.TestCase):
             invocation = json.loads((output / "invocation.json").read_text())
             self.assertEqual(invocation["dataset"], "terminal-bench/terminal-bench-2-1")
             self.assertEqual(invocation["source_ref"], "2f9f18001bfd9e0f51bb92b026e853f65974ed6a")
-            self.assertIn("evals.harbor_agents.slack_copilot:CopilotAgent", result.stdout)
+            self.assertIn("evals.harbor_agents.kepler_agent:KeplerAgent", result.stdout)
 
 
 if __name__ == "__main__":

@@ -9,8 +9,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/noknov/slack-copilot-agent/packages/frontmatter"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
+	"github.com/noknov/kepler-agent/packages/frontmatter"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
 )
 
 type AssetKind string

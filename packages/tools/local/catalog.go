@@ -1,8 +1,8 @@
 package localtools
 
 import (
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	"github.com/noknov/slack-copilot-agent/packages/profiles/local"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/profiles/local"
 )
 
 func NewCatalog(workspace local.Workspace, sandbox local.Sandbox) (*tool.Catalog, error) {

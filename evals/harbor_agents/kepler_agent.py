@@ -1,4 +1,4 @@
-"""Harbor adapter for a pinned slack-copilot-agent source revision."""
+"""Harbor adapter for a pinned kepler-agent source revision."""
 
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
 
-class CopilotAgent(BaseAgent):
-    """Run the local copilot-agent CLI inside Harbor's task environment.
+class KeplerAgent(BaseAgent):
+    """Run the local kepler-agent CLI inside Harbor's task environment.
 
     The adapter deliberately builds from an immutable Git commit in each task
     environment.  This makes a benchmark result attributable to a product
@@ -23,9 +23,9 @@ class CopilotAgent(BaseAgent):
     """
 
     _COMMIT = re.compile(r"^[0-9a-f]{40}$")
-    _DEFAULT_SOURCE_REPO = "https://github.com/noknov/slack-copilot-agent.git"
-    _BINARY = "/usr/local/bin/copilot-agent"
-    _LOG = "/logs/agent/copilot-agent.txt"
+    _DEFAULT_SOURCE_REPO = "https://github.com/noknov/kepler-agent.git"
+    _BINARY = "/usr/local/bin/kepler-agent"
+    _LOG = "/logs/agent/kepler-agent.txt"
 
     def __init__(
         self,
@@ -65,7 +65,7 @@ class CopilotAgent(BaseAgent):
     @staticmethod
     @override
     def name() -> str:
-        return "copilot-agent"
+        return "kepler-agent"
 
     @override
     def version(self) -> str:
@@ -99,11 +99,11 @@ class CopilotAgent(BaseAgent):
             )
             if result.return_code != 0:
                 raise RuntimeError(
-                    result.stderr or result.stdout or "copilot-agent binary install failed"
+                    result.stderr or result.stdout or "kepler-agent binary install failed"
                 )
             return
 
-        source = "/opt/slack-copilot-agent"
+        source = "/opt/kepler-agent"
         quoted_repo = shlex.quote(self._source_repo)
         quoted_ref = shlex.quote(self._source_ref)
         result = await environment.exec(
@@ -116,15 +116,15 @@ class CopilotAgent(BaseAgent):
                 f"git -C {source} checkout --detach {quoted_ref}; "
                 f'test "$(git -C {source} rev-parse HEAD)" = {quoted_ref}; '
                 f"cd {source}; "
-                "GOCACHE=/tmp/copilot-agent-go-build "
-                f"go build -trimpath -o {self._BINARY} ./cli/cmd/copilot-agent; "
+                "GOCACHE=/tmp/kepler-agent-go-build "
+                f"go build -trimpath -o {self._BINARY} ./cli/cmd/kepler-agent; "
                 f"mkdir -p {Path(self._LOG).parent}"
             ),
             user="root",
             timeout_sec=900,
         )
         if result.return_code != 0:
-            raise RuntimeError(result.stderr or result.stdout or "copilot-agent setup failed")
+            raise RuntimeError(result.stderr or result.stdout or "kepler-agent setup failed")
 
     @override
     async def run(
@@ -134,7 +134,7 @@ class CopilotAgent(BaseAgent):
         context: AgentContext,
     ) -> None:
         if not self.model_name:
-            raise ValueError("Harbor requires --model for copilot-agent")
+            raise ValueError("Harbor requires --model for kepler-agent")
 
         api_key = self._env_value(self._api_key_env)
         base_url = self._env_value(self._base_url_env)
@@ -181,4 +181,4 @@ class CopilotAgent(BaseAgent):
             "protocol": self._protocol,
         }
         if result.return_code != 0:
-            raise RuntimeError(result.stderr or result.stdout or "copilot-agent failed")
+            raise RuntimeError(result.stderr or result.stdout or "kepler-agent failed")

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	slackmessaging "github.com/noknov/slack-copilot-agent/packages/surfaces/slack/messaging"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
+	slackmessaging "github.com/noknov/kepler-agent/packages/surfaces/slack/messaging"
 )
 
 // UserPostMessageTool posts to Slack using the requesting user's connected identity.

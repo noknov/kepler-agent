@@ -9,7 +9,7 @@
 gateway/.env
 worker/.env
 observability/.env
-cmd/slack-copilot-agent/.env
+cmd/kepler-agent/.env
 worker/.prompts
 dist
 bin

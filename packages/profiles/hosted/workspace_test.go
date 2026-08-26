@@ -3,7 +3,7 @@ package hosted
 import (
 	"testing"
 
-	"github.com/noknov/slack-copilot-agent/packages/profiles/local"
+	"github.com/noknov/kepler-agent/packages/profiles/local"
 )
 
 func testWorkspace(t *testing.T) local.Workspace {

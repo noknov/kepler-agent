@@ -11,32 +11,32 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/model"
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
-	"github.com/noknov/slack-copilot-agent/packages/appsupport"
-	"github.com/noknov/slack-copilot-agent/packages/config"
-	"github.com/noknov/slack-copilot-agent/packages/connections"
-	"github.com/noknov/slack-copilot-agent/packages/health"
-	"github.com/noknov/slack-copilot-agent/packages/infra/httpguard"
-	sharedlogging "github.com/noknov/slack-copilot-agent/packages/infra/logging"
-	"github.com/noknov/slack-copilot-agent/packages/infra/telemetry"
-	"github.com/noknov/slack-copilot-agent/packages/observability"
-	"github.com/noknov/slack-copilot-agent/packages/platform"
-	"github.com/noknov/slack-copilot-agent/packages/profiles/hosted"
-	"github.com/noknov/slack-copilot-agent/packages/prompts"
-	"github.com/noknov/slack-copilot-agent/packages/reminder"
-	"github.com/noknov/slack-copilot-agent/packages/safety"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/agent"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/conversation"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/events"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/handler"
-	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/home"
-	slackmessaging "github.com/noknov/slack-copilot-agent/packages/surfaces/slack/messaging"
-	slackTools "github.com/noknov/slack-copilot-agent/packages/surfaces/slack/tools"
-	"github.com/noknov/slack-copilot-agent/packages/toolkit/gitcache"
-	hostedTools "github.com/noknov/slack-copilot-agent/packages/tools/hosted"
+	"github.com/noknov/kepler-agent/packages/agent/model"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/agent/transcript"
+	"github.com/noknov/kepler-agent/packages/appsupport"
+	"github.com/noknov/kepler-agent/packages/config"
+	"github.com/noknov/kepler-agent/packages/connections"
+	"github.com/noknov/kepler-agent/packages/health"
+	"github.com/noknov/kepler-agent/packages/infra/httpguard"
+	sharedlogging "github.com/noknov/kepler-agent/packages/infra/logging"
+	"github.com/noknov/kepler-agent/packages/infra/telemetry"
+	"github.com/noknov/kepler-agent/packages/observability"
+	"github.com/noknov/kepler-agent/packages/platform"
+	"github.com/noknov/kepler-agent/packages/profiles/hosted"
+	"github.com/noknov/kepler-agent/packages/prompts"
+	"github.com/noknov/kepler-agent/packages/reminder"
+	"github.com/noknov/kepler-agent/packages/safety"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/agent"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/events"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/handler"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/home"
+	slackmessaging "github.com/noknov/kepler-agent/packages/surfaces/slack/messaging"
+	slackTools "github.com/noknov/kepler-agent/packages/surfaces/slack/tools"
+	"github.com/noknov/kepler-agent/packages/toolkit/gitcache"
+	hostedTools "github.com/noknov/kepler-agent/packages/tools/hosted"
 )
 
 type Service struct {
@@ -67,7 +67,7 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	sharedlogging.Configure(cfg.Observing.LogLevel)
-	shutdownTelemetry, err := telemetry.Setup(ctx, "slack-copilot-worker")
+	shutdownTelemetry, err := telemetry.Setup(ctx, "kepler-agent-worker")
 	if err != nil {
 		return fmt.Errorf("configure telemetry: %w", err)
 	}

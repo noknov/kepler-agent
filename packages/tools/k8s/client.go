@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
-	"github.com/noknov/slack-copilot-agent/packages/connections"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/connections"
 )
 
 // Client performs read-only Kubernetes API calls on GKE using a user OAuth token.

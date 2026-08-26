@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/noknov/slack-copilot-agent/cli"
+	"github.com/noknov/kepler-agent/cli"
 )
 
 func main() {
