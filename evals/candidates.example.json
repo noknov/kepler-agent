@@ -2,12 +2,15 @@
   "candidates": [
     {
       "name": "slack-copilot",
+
+      "capabilities": ["workspace_read", "workspace_write", "shell", "mcp", "skills"],
       "command": ["{repo}/bin/slack-copilot", "--cwd", "{workspace}", "--provider", "openai", "--protocol", "responses", "--model", "{candidate_model}", "--base-url", "{env_openai_base}", "{prompt}"],
       "model": "{model}",
       "version_command": ["git", "-C", "{repo}", "rev-parse", "--short", "HEAD"]
     },
     {
       "name": "codex",
+      "capabilities": ["workspace_read", "workspace_write", "shell", "mcp", "skills"],
       "command": ["codex", "exec", "--ephemeral", "--model", "{candidate_model}", "--sandbox", "workspace-write", "-C", "{workspace}", "{prompt}"],
       "model": "{model}",
       "version_command": ["codex", "--version"],
@@ -18,6 +21,7 @@
     },
     {
       "name": "claude-code",
+      "capabilities": ["workspace_read", "workspace_write", "shell", "mcp"],
       "command": ["claude", "--model", "{candidate_model}", "--permission-mode", "acceptEdits", "--print", "{prompt}"],
       "model": "{model}",
       "version_command": ["claude", "--version"],
@@ -25,6 +29,7 @@
     },
     {
       "name": "pi",
+      "capabilities": ["workspace_read", "workspace_write", "shell", "mcp"],
       "command": ["pi", "--provider", "eval", "--model", "{candidate_model}", "-p", "{prompt}"],
       "model": "{model}",
       "version_command": ["pi", "--version"],
@@ -34,6 +39,7 @@
     },
     {
       "name": "opencode",
+      "capabilities": ["workspace_read", "workspace_write", "shell", "mcp"],
       "command": ["opencode", "run", "--model", "eval/{candidate_model}", "{prompt}"],
       "model": "{model}",
       "version_command": ["opencode", "--version"],

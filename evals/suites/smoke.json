@@ -12,6 +12,8 @@
       "test": ["go", "test", "-count=1", "./..."],
       "timeout_seconds": 300,
       "tags": ["go", "single-file", "unit-test"],
+      "required_capabilities": ["workspace_read", "workspace_write", "shell"],
+      "weight": 1,
       "metadata": {}
     },
     {
@@ -23,6 +25,8 @@
       "test": ["go", "test", "-count=1", "./..."],
       "timeout_seconds": 300,
       "tags": ["go", "single-file", "unit-test"],
+      "required_capabilities": ["workspace_read", "workspace_write", "shell"],
+      "weight": 1,
       "metadata": {}
     },
     {
@@ -34,6 +38,8 @@
       "test": ["python3", "-m", "unittest", "-v"],
       "timeout_seconds": 300,
       "tags": ["python", "single-file", "unit-test"],
+      "required_capabilities": ["workspace_read", "workspace_write", "shell"],
+      "weight": 1,
       "metadata": {}
     }
   ]
