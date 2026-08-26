@@ -96,7 +96,7 @@ def main() -> int:
     if args.tasks is not None:
         command.extend(["--n-tasks", str(args.tasks)])
     if args.agent_setup_timeout_seconds is not None:
-        command.extend(["--agent-setup-timeout-sec", str(args.agent_setup_timeout_seconds)])
+        command.extend(["--agent-setup-timeout", str(args.agent_setup_timeout_seconds)])
     for task_name in args.include_task:
         command.extend(["--include-task-name", task_name])
     if args.candidate == "slack-copilot":
