@@ -144,11 +144,11 @@ func (config Config) WithProfile(name string) (Config, error) {
 }
 
 func DefaultConfigPath() (string, error) {
-	root, err := os.UserConfigDir()
+	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, configDirectory, "config.toml"), nil
+	return filepath.Join(home, ".config", configDirectory, "config.toml"), nil
 }
 
 func DefaultStateDir() (string, error) {
