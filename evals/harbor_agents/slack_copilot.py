@@ -14,8 +14,8 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
 
-class SlackCopilot(BaseAgent):
-    """Run slack-copilot-agent inside Harbor's task environment.
+class CopilotAgent(BaseAgent):
+    """Run the local copilot-agent CLI inside Harbor's task environment.
 
     The adapter deliberately builds from an immutable Git commit in each task
     environment.  This makes a benchmark result attributable to a product
@@ -24,8 +24,8 @@ class SlackCopilot(BaseAgent):
 
     _COMMIT = re.compile(r"^[0-9a-f]{40}$")
     _DEFAULT_SOURCE_REPO = "https://github.com/noknov/slack-copilot-agent.git"
-    _BINARY = "/usr/local/bin/slack-copilot"
-    _LOG = "/logs/agent/slack-copilot.txt"
+    _BINARY = "/usr/local/bin/copilot-agent"
+    _LOG = "/logs/agent/copilot-agent.txt"
 
     def __init__(
         self,
@@ -65,7 +65,7 @@ class SlackCopilot(BaseAgent):
     @staticmethod
     @override
     def name() -> str:
-        return "slack-copilot"
+        return "copilot-agent"
 
     @override
     def version(self) -> str:
@@ -99,7 +99,7 @@ class SlackCopilot(BaseAgent):
             )
             if result.return_code != 0:
                 raise RuntimeError(
-                    result.stderr or result.stdout or "slack-copilot binary install failed"
+                    result.stderr or result.stdout or "copilot-agent binary install failed"
                 )
             return
 
@@ -116,15 +116,15 @@ class SlackCopilot(BaseAgent):
                 f"git -C {source} checkout --detach {quoted_ref}; "
                 f'test "$(git -C {source} rev-parse HEAD)" = {quoted_ref}; '
                 f"cd {source}; "
-                "GOCACHE=/tmp/slack-copilot-go-build "
-                f"go build -trimpath -o {self._BINARY} ./cli/cmd/slack-copilot; "
+                "GOCACHE=/tmp/copilot-agent-go-build "
+                f"go build -trimpath -o {self._BINARY} ./cli/cmd/copilot-agent; "
                 f"mkdir -p {Path(self._LOG).parent}"
             ),
             user="root",
             timeout_sec=900,
         )
         if result.return_code != 0:
-            raise RuntimeError(result.stderr or result.stdout or "slack-copilot setup failed")
+            raise RuntimeError(result.stderr or result.stdout or "copilot-agent setup failed")
 
     @override
     async def run(
@@ -134,7 +134,7 @@ class SlackCopilot(BaseAgent):
         context: AgentContext,
     ) -> None:
         if not self.model_name:
-            raise ValueError("Harbor requires --model for slack-copilot")
+            raise ValueError("Harbor requires --model for copilot-agent")
 
         api_key = self._env_value(self._api_key_env)
         base_url = self._env_value(self._base_url_env)
@@ -181,4 +181,4 @@ class SlackCopilot(BaseAgent):
             "protocol": self._protocol,
         }
         if result.return_code != 0:
-            raise RuntimeError(result.stderr or result.stdout or "slack-copilot failed")
+            raise RuntimeError(result.stderr or result.stdout or "copilot-agent failed")

@@ -32,6 +32,7 @@ build:
 	GOCACHE=$(GOCACHE) go build -trimpath -o bin/slack-copilot-gateway ./gateway/cmd/gateway
 	GOCACHE=$(GOCACHE) go build -trimpath -o bin/slack-copilot-worker ./worker/cmd/worker
 	GOCACHE=$(GOCACHE) go build -trimpath -o bin/slack-copilot-observability ./observability/cmd/observability
+	GOCACHE=$(GOCACHE) go build -trimpath -o bin/copilot-agent ./cli/cmd/copilot-agent
 	GOCACHE=$(GOCACHE) go build -trimpath -o bin/slack-copilot ./cli/cmd/slack-copilot
 	GOCACHE=$(GOCACHE) go build -trimpath -o bin/slack-copilot-app-server ./appserver/cmd/app-server
 

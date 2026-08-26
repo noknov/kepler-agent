@@ -49,6 +49,10 @@ type approvalQuestion struct {
 }
 
 func Run() error {
+	if len(os.Args) == 2 && (os.Args[1] == "--version" || os.Args[1] == "-version") {
+		fmt.Fprintln(os.Stdout, "copilot-agent (local CLI harness)")
+		return nil
+	}
 	if len(os.Args) > 1 && os.Args[1] == "connect" {
 		return runConnect(os.Args[2:])
 	}

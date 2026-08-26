@@ -1,12 +1,12 @@
 {
   "candidates": [
     {
-      "name": "slack-copilot",
+      "name": "copilot-agent",
 
       "capabilities": ["workspace_read", "workspace_write", "shell", "mcp", "skills"],
-      "command": ["{repo}/bin/slack-copilot", "--cwd", "{workspace}", "--provider", "openai", "--protocol", "responses", "--model", "{candidate_model}", "--base-url", "{env_openai_base}", "{prompt}"],
+      "command": ["{repo}/bin/copilot-agent", "--cwd", "{workspace}", "--provider", "openai", "--protocol", "responses", "--model", "{candidate_model}", "--base-url", "{env_openai_base}", "--approval", "project", "{prompt}"],
       "model": "{model}",
-      "version_command": ["git", "-C", "{repo}", "rev-parse", "--short", "HEAD"]
+      "version_command": ["{repo}/bin/copilot-agent", "--version"]
     },
     {
       "name": "codex",
