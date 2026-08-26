@@ -68,6 +68,11 @@ printf "review this repository\n" | bin/copilot-agent --cwd . --output jsonl
 bin/copilot-agent --resume
 ```
 
+The CLI model connection is local and configurable. Run `copilot-agent config
+init`, set the API key environment variable for a profile, then start with
+`copilot-agent --profile <name> --cwd <project>`. It does not reuse the hosted
+Slack agent's provider or credentials.
+
 The local `exec` tool runs argv without a shell, writes only inside the workspace, and denies network
 access. Network and external effects require approval; grants may apply once,
 for the process session, or to the exact command and project. See

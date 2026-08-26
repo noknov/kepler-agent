@@ -22,6 +22,26 @@ printf "review this repository\n" | bin/copilot-agent --cwd . --output jsonl
 bin/copilot-agent --resume
 ```
 
+## Model profiles
+
+The CLI owns its provider configuration; it does not inherit the hosted Slack
+agent's model or credentials. Create a user-only configuration file, then
+select a named profile for a session:
+
+```sh
+copilot-agent config init
+export DEEPSEEK_API_KEY=...
+copilot-agent --profile deepseek --cwd /path/to/project
+```
+
+`provider`, `protocol`, `model`, `base_url`, and `api_key_env` can be set in
+the root configuration or any `[profiles.<name>]` block. API key values are
+never written to TOML: `api_key_env` only names the environment variable to
+read. CLI flags still override the selected profile for one-off calls.
+
+Interactive sessions include a compact terminal status header and live tool
+progress. Use `/help`, `/status`, `/clear`, and `/exit` at the prompt.
+
 Inputs typed during an active turn are either injected as steering at the next model boundary or queued as the next turn, controlled by `input_routing`. This setting belongs to the session surface; it is not hard-coded by Slack versus CLI.
 
 ## Security model

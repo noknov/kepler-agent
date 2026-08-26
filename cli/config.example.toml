@@ -11,6 +11,22 @@ max_output_tokens = 16384
 temperature = 0
 unsafe_allow_no_sandbox = false
 
+# Select a profile with: copilot-agent --profile deepseek
+# The API key itself remains in the named environment variable.
+[profiles.deepseek]
+provider = "deepseek"
+protocol = "openai"
+model = "deepseek-chat"
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"
+
+[profiles.anthropic]
+provider = "anthropic"
+protocol = "anthropic"
+model = "claude-sonnet-4-5"
+base_url = "https://api.anthropic.com"
+api_key_env = "ANTHROPIC_API_KEY"
+
 # Readable by sandboxed commands in addition to the workspace. Keep this small.
 additional_read_roots = []
 
