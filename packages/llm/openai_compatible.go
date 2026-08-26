@@ -35,7 +35,7 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, req Request) (Respons
 		return Response{}, err
 	}
 
-	data, err := c.doWithRetry(ctx, payload)
+	data, err := c.doOnce(ctx, payload)
 	if err != nil {
 		return Response{}, err
 	}
@@ -90,10 +90,12 @@ func (u openAIUsage) toUsage() Usage {
 
 func (c *OpenAICompatibleClient) chatBody(req Request) map[string]any {
 	body := map[string]any{
-		"model":       req.Model,
-		"messages":    req.Messages,
-		"tools":       req.Tools,
-		"temperature": req.Temperature,
+		"model":    req.Model,
+		"messages": req.Messages,
+		"tools":    req.Tools,
+	}
+	if req.Temperature != nil {
+		body["temperature"] = *req.Temperature
 	}
 	if req.MaxTokens > 0 {
 		body["max_tokens"] = req.MaxTokens
@@ -103,7 +105,7 @@ func (c *OpenAICompatibleClient) chatBody(req Request) map[string]any {
 	} else if req.ToolChoice != "" {
 		body["tool_choice"] = req.ToolChoice
 	}
-	if isMiMoEndpoint(c.baseURL, req.Model) {
+	if c.providerName() == "mimo" {
 		delete(body, "max_tokens")
 		if req.MaxTokens > 0 {
 			body["max_completion_tokens"] = req.MaxTokens
@@ -136,10 +138,9 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 	}
 	c.setHeaders(httpReq)
 
-	// Use a timeout-free client for streaming — the global client timeout
-	// would kill long generations mid-stream. Context cancellation still works.
-	streamClient := &http.Client{}
-	resp, err := streamClient.Do(httpReq)
+	// Reuse the configured transport and request deadline. A fresh timeout-free
+	// client bypasses transport settings and can leave a stream hung forever.
+	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return Response{}, err
 	}
@@ -147,14 +148,7 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		providerErr := NewProviderError(c.providerName()+" stream", resp.StatusCode, compactBody(data), resp.Header.Get("Retry-After"))
-		// Fallback: retry retryable stream errors as non-stream request.
-		if isRetryableStatus(resp.StatusCode) {
-			fallback, fallbackErr := c.Chat(ctx, req)
-			if fallbackErr == nil {
-				return fallback, nil
-			}
-		}
+		providerErr := NewProviderError(c.providerName()+" stream", resp.StatusCode, compactBody(data))
 		return Response{}, providerErr
 	}
 
@@ -163,11 +157,23 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 	var finishReason string
 	var usage openAIUsage
 	toolCallsStarted := false
+	argumentStreams := map[int]*toolArgumentStream{}
 	// Track tool call completion state for OnToolCallComplete.
-	completedToolIndices := map[int]bool{}
+	completedToolIDs := map[string]bool{}
+	var streamErr error
 
 	err = readSSE(resp.Body, func(ev sseEvent) bool {
 		if ev.Data == "[DONE]" {
+			return false
+		}
+		var envelope struct {
+			Error *struct {
+				Message string `json:"message"`
+				Type    string `json:"type"`
+			} `json:"error"`
+		}
+		if json.Unmarshal([]byte(ev.Data), &envelope) == nil && envelope.Error != nil {
+			streamErr = fmt.Errorf("%s stream %s: %s", c.providerName(), envelope.Error.Type, envelope.Error.Message)
 			return false
 		}
 		var chunk struct {
@@ -205,7 +211,7 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 		if delta.Content != "" {
 			msg.Content += delta.Content
 			if h.OnText != nil {
-				h.OnText(delta.Content)
+				h.OnText(TextDelta{Text: delta.Content})
 			}
 		}
 		if delta.ReasoningContent != "" {
@@ -220,10 +226,14 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 			}
 			// A new tool call ID on an existing index means the previous call is complete.
 			if tc.ID != "" && tc.Index < len(msg.ToolCalls) && msg.ToolCalls[tc.Index].ID != "" && msg.ToolCalls[tc.Index].ID != tc.ID {
-				if h.OnToolCallComplete != nil && !completedToolIndices[tc.Index] {
-					completedToolIndices[tc.Index] = true
-					h.OnToolCallComplete(msg.ToolCalls[tc.Index])
+				previous := msg.ToolCalls[tc.Index]
+				if h.OnToolCallComplete != nil && !completedToolIDs[previous.ID] {
+					completedToolIDs[previous.ID] = true
+					finalizeToolCallArguments(&previous, argumentStreams[tc.Index])
+					h.OnToolCallComplete(previous)
 				}
+				msg.ToolCalls[tc.Index] = ToolCall{Type: "function"}
+				delete(argumentStreams, tc.Index)
 			}
 			for len(msg.ToolCalls) <= tc.Index {
 				msg.ToolCalls = append(msg.ToolCalls, ToolCall{Type: "function"})
@@ -239,10 +249,18 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 				call.Type = "function"
 			}
 			if tc.Function.Name != "" {
-				call.Function.Name += tc.Function.Name
+				// function.name identifies the call; unlike arguments it is not a
+				// token stream. Compatible providers may repeat it on subsequent
+				// chunks, so retain the latest complete identifier.
+				call.Function.Name = tc.Function.Name
 			}
 			if tc.Function.Arguments != "" {
-				call.Function.Arguments += tc.Function.Arguments
+				stream := argumentStreams[tc.Index]
+				if stream == nil {
+					stream = &toolArgumentStream{snapshotValid: true}
+					argumentStreams[tc.Index] = stream
+				}
+				call.Function.Arguments = stream.Append(tc.Function.Arguments)
 			}
 		}
 		if chunk.Choices[0].FinishReason != nil {
@@ -250,20 +268,22 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 		}
 		return true
 	})
+	if streamErr != nil {
+		return Response{}, streamErr
+	}
 	if err != nil {
-		// Stream broke mid-way with no content — fallback to non-stream.
-		if strings.TrimSpace(msg.Content) == "" && len(msg.ToolCalls) == 0 {
-			fallback, fallbackErr := c.Chat(ctx, req)
-			if fallbackErr == nil {
-				return fallback, nil
-			}
-		}
 		return Response{}, err
 	}
+	for i := range msg.ToolCalls {
+		finalizeToolCallArguments(&msg.ToolCalls[i], argumentStreams[i])
+	}
+	// A clean EOF is a successful HTTP stream completion. [DONE] is an
+	// OpenAI convention, but compatible providers are permitted to omit it.
+	finishReason = completedOpenAICompatibleFinishReason(finishReason, msg)
 	// Emit OnToolCallComplete for all completed tool calls at stream end.
 	if h.OnToolCallComplete != nil {
-		for i, tc := range msg.ToolCalls {
-			if !completedToolIndices[i] && strings.TrimSpace(tc.Function.Name) != "" {
+		for _, tc := range msg.ToolCalls {
+			if !completedToolIDs[tc.ID] && strings.TrimSpace(tc.Function.Name) != "" {
 				h.OnToolCallComplete(tc)
 			}
 		}
@@ -276,34 +296,78 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 	}, nil
 }
 
+type toolArgumentStream struct {
+	delta         string
+	snapshot      string
+	snapshotValid bool
+}
+
+func (s *toolArgumentStream) Append(update string) string {
+	s.delta += update
+	if s.snapshotValid {
+		if s.snapshot == "" || strings.HasPrefix(update, s.snapshot) {
+			s.snapshot = update
+		} else {
+			s.snapshotValid = false
+		}
+	}
+	return s.Current()
+}
+
+func (s *toolArgumentStream) Current() string {
+	if s == nil {
+		return ""
+	}
+	if s.snapshotValid {
+		return s.snapshot
+	}
+	return s.delta
+}
+
+func (s *toolArgumentStream) Final() string {
+	if s == nil {
+		return ""
+	}
+	if !s.snapshotValid {
+		return s.delta
+	}
+	deltaValid := json.Valid([]byte(s.delta))
+	snapshotValid := json.Valid([]byte(s.snapshot))
+	if snapshotValid && !deltaValid {
+		return s.snapshot
+	}
+	return s.delta
+}
+
+func finalizeToolCallArguments(call *ToolCall, stream *toolArgumentStream) {
+	if call == nil || stream == nil {
+		return
+	}
+	call.Function.Arguments = stream.Final()
+}
+
+// completedOpenAICompatibleFinishReason normalizes providers that terminate a
+// successfully read chat-completions stream without a final finish_reason.
+func completedOpenAICompatibleFinishReason(reason string, message Message) string {
+	if strings.TrimSpace(reason) != "" {
+		return reason
+	}
+	if len(message.ToolCalls) > 0 {
+		return "tool_calls"
+	}
+	return "stop"
+}
+
 func (c *OpenAICompatibleClient) setHeaders(httpReq *http.Request) {
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	if hasBearerPrefix(c.apiKey) {
 		httpReq.Header.Set("Authorization", c.apiKey)
 	}
-	if isMiMoEndpoint(c.baseURL, "") {
+	if c.providerName() == "mimo" {
 		httpReq.Header.Del("Authorization")
 		httpReq.Header.Set("api-key", bearerTokenValue(c.apiKey))
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-}
-
-func (c *OpenAICompatibleClient) doWithRetry(ctx context.Context, payload []byte) ([]byte, error) {
-	var lastErr error
-	for attempt := 0; attempt < MaxRetries; attempt++ {
-		data, err := c.doOnce(ctx, payload)
-		if err == nil {
-			return data, nil
-		}
-		lastErr = err
-		if !IsTemporaryOverload(err) || attempt == MaxRetries-1 {
-			return nil, err
-		}
-		if err := sleepBeforeRetry(ctx, attempt, lastErr); err != nil {
-			return nil, err
-		}
-	}
-	return nil, lastErr
 }
 
 func (c *OpenAICompatibleClient) doOnce(ctx context.Context, payload []byte) ([]byte, error) {
@@ -324,7 +388,7 @@ func (c *OpenAICompatibleClient) doOnce(ctx context.Context, payload []byte) ([]
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, NewProviderError(c.providerName()+" chat completion", resp.StatusCode, compactBody(data), resp.Header.Get("Retry-After"))
+		return nil, NewProviderError(c.providerName()+" chat completion", resp.StatusCode, compactBody(data))
 	}
 	return data, nil
 }
@@ -346,10 +410,4 @@ func bearerTokenValue(token string) string {
 		return strings.TrimSpace(token[7:])
 	}
 	return token
-}
-
-func isMiMoEndpoint(baseURL, model string) bool {
-	baseURL = strings.ToLower(strings.TrimSpace(baseURL))
-	model = strings.ToLower(strings.TrimSpace(model))
-	return strings.Contains(baseURL, "xiaomimimo.com") || strings.HasPrefix(model, "mimo-")
 }

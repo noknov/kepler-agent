@@ -9,23 +9,26 @@ import (
 	"time"
 
 	"github.com/noknov/slack-copilot-agent/packages/config"
+	"github.com/noknov/slack-copilot-agent/packages/connections"
 	"github.com/noknov/slack-copilot-agent/packages/infra/httpguard"
 	sharedlogging "github.com/noknov/slack-copilot-agent/packages/infra/logging"
+	"github.com/noknov/slack-copilot-agent/packages/infra/telemetry"
 	"github.com/noknov/slack-copilot-agent/packages/platform"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
-	"github.com/noknov/slack-copilot-agent/packages/slack"
-	"github.com/noknov/slack-copilot-agent/packages/slackevents"
-	"github.com/noknov/slack-copilot-agent/packages/slackgateway"
-	"github.com/noknov/slack-copilot-agent/packages/slackhandler"
-	"github.com/noknov/slack-copilot-agent/packages/slackhome"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/events"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/gateway"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/handler"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/home"
 )
 
 type Service struct {
-	cfg      config.Config
-	stores   *platform.EventIngressStores
-	gateway  slackgateway.Gateway
-	home     slackhome.Controller
-	draining atomic.Bool
+	cfg         config.Config
+	stores      *platform.EventIngressStores
+	gateway     slackgateway.Gateway
+	home        slackhome.Controller
+	connections connections.Service
+	draining    atomic.Bool
 }
 
 func Run(ctx context.Context) error {
@@ -34,6 +37,15 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	sharedlogging.Configure(cfg.Observing.LogLevel)
+	shutdownTelemetry, err := telemetry.Setup(ctx, "slack-copilot-gateway")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTelemetry(shutdownCtx)
+	}()
 	service, err := New(ctx, cfg)
 	if err != nil {
 		return err
@@ -52,13 +64,22 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	if cfg.Slack.BotToken != "" {
 		slackClient = slack.NewClient(cfg.Slack.BotToken, cfg.Slack.BotUserID)
 	}
+	connStore := connections.PGStore{Pool: stores.PGPool, SecretKey: cfg.Connections.EncryptionKey}
+	continuations := connections.NewRedisContinuationStore(stores.Redis)
+	connService := connections.NewServiceFromConfig(connStore, cfg)
+	connService.Continuations = continuations
 	s.home = slackhome.Controller{
-		Cfg:    cfg,
-		Access: safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
-		Slack:  slackClient,
-		Store:  stores.UserPrefs,
-		Redis:  stores.Redis,
+		Cfg:         cfg,
+		Access:      safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
+		Slack:       slackClient,
+		Store:       stores.UserPrefs,
+		Redis:       stores.Redis,
+		Connections: connService,
 	}
+	connService.OnOAuthCompleted = func(ctx context.Context, userID, provider string) error {
+		return s.home.RequestRefresh(ctx, userID)
+	}
+	s.connections = connService
 	handler := &slackhandler.Handler{
 		Cfg:       cfg,
 		Slack:     slackClient,
@@ -92,6 +113,9 @@ func (s *Service) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/drain", s.handleDrain)
 	mux.HandleFunc("/slack/events", s.gateway.HandleEvents)
 	mux.HandleFunc("/slack/interactions", s.gateway.HandleInteractions)
+	if s.connections.Config.OAuthEnabled() && s.connections.Config.PublicBaseURL != "" {
+		mux.Handle("/oauth/", connections.NewHTTPHandler(s.connections))
+	}
 
 	server := &http.Server{
 		Addr:              s.cfg.HTTP.Addr,

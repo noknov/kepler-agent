@@ -37,19 +37,3 @@ func TestStaticSystemPromptIsMemoizedUntilReload(t *testing.T) {
 		t.Fatalf("StaticSystemPrompt() should rebuild after LoadDirs")
 	}
 }
-
-func TestDynamicSystemPromptOmitsEmptyInventory(t *testing.T) {
-	if got := DynamicSystemPrompt(""); got != "" {
-		t.Fatalf("DynamicSystemPrompt(\"\") = %q, want empty", got)
-	}
-}
-
-func TestDynamicSystemPromptIncludesBoundaryMarker(t *testing.T) {
-	got := DynamicSystemPrompt("- repo-a/ (Go)")
-	if got == "" {
-		t.Fatal("DynamicSystemPrompt() should not be empty")
-	}
-	if got[:len(DynamicBoundaryMarker)] != DynamicBoundaryMarker {
-		t.Fatalf("DynamicSystemPrompt() should start with boundary marker: %q", got)
-	}
-}

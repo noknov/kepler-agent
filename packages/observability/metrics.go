@@ -1,7 +1,6 @@
 package observability
 
 import (
-	"context"
 	"encoding/json"
 	"log"
 	"math"
@@ -10,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/agentprotocol"
 	"github.com/noknov/slack-copilot-agent/packages/llm"
 )
 
@@ -167,22 +165,6 @@ func (r *Recorder) EventInboxJob(result string) {
 		r.snap.EventInbox.Jobs = map[string]int64{}
 	}
 	r.snap.EventInbox.Jobs[result]++
-}
-
-func (r *Recorder) Publish(_ context.Context, event agentprotocol.Event) {
-	metadata := map[string]any{
-		"thread_id": event.ThreadID,
-		"turn_id":   event.TurnID,
-		"status":    string(event.Status),
-	}
-	if event.Item != nil {
-		metadata["item_kind"] = event.Item.Kind
-		metadata["item_name"] = event.Item.Name
-		if event.Item.Error != "" {
-			metadata["error"] = event.Item.Error
-		}
-	}
-	r.Event(string(event.Type), metadata)
 }
 
 func (r *Recorder) Reaction(name string) {

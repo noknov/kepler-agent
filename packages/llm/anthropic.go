@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -53,7 +54,7 @@ func (c *AnthropicClient) Chat(ctx context.Context, req Request) (Response, erro
 		return Response{}, err
 	}
 
-	data, err := c.doWithRetry(ctx, payload)
+	data, err := c.doOnce(ctx, payload)
 	if err != nil {
 		return Response{}, err
 	}
@@ -123,9 +124,6 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 		return Response{}, err
 	}
 
-	// Use a separate HTTP client for streaming without the global timeout.
-	// Streaming connections stay open for the duration of generation.
-	streamClient := &http.Client{}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicMessagesURL(c.baseURL), bytes.NewReader(payload))
 	if err != nil {
 		return Response{}, err
@@ -134,7 +132,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 	setAnthropicAuthHeaders(httpReq.Header, c.apiKey, c.flavor)
 
-	resp, err := streamClient.Do(httpReq)
+	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return Response{}, err
 	}
@@ -142,7 +140,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		return Response{}, NewProviderError("anthropic stream", resp.StatusCode, compactBody(data), resp.Header.Get("Retry-After"))
+		return Response{}, NewProviderError("anthropic stream", resp.StatusCode, compactBody(data))
 	}
 
 	var msg Message
@@ -157,9 +155,23 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 	inTextBlock := false
 	toolBlocks := map[int]*ToolCall{}
 	currentBlockIndex := -1
+	var streamErr error
 
 	err = readSSE(resp.Body, func(ev sseEvent) bool {
 		switch ev.Event {
+		case "error":
+			var failure struct {
+				Error struct {
+					Type    string `json:"type"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if json.Unmarshal([]byte(ev.Data), &failure) == nil && failure.Error.Message != "" {
+				streamErr = fmt.Errorf("anthropic stream %s: %s", failure.Error.Type, failure.Error.Message)
+			} else {
+				streamErr = fmt.Errorf("anthropic stream error")
+			}
+			return false
 		case "content_block_start":
 			var block struct {
 				Index        int `json:"index"`
@@ -206,7 +218,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 			case inTextBlock && delta.Delta.Type == "text_delta" && delta.Delta.Text != "":
 				msg.Content += delta.Delta.Text
 				if h.OnText != nil {
-					h.OnText(delta.Delta.Text)
+					h.OnText(TextDelta{Text: delta.Delta.Text})
 				}
 			case delta.Delta.Type == "input_json_delta" && delta.Delta.PartialJSON != "":
 				call := toolBlocks[delta.Index]
@@ -282,6 +294,9 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 		}
 		return true
 	})
+	if streamErr != nil {
+		return Response{}, streamErr
+	}
 	if err != nil {
 		return Response{}, err
 	}
@@ -297,24 +312,6 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 		},
 		Streamed: true,
 	}, nil
-}
-
-func (c *AnthropicClient) doWithRetry(ctx context.Context, payload []byte) ([]byte, error) {
-	var lastErr error
-	for attempt := 0; attempt < MaxRetries; attempt++ {
-		data, err := c.doOnce(ctx, payload)
-		if err == nil {
-			return data, nil
-		}
-		lastErr = err
-		if !IsTemporaryOverload(err) || attempt == MaxRetries-1 {
-			return nil, err
-		}
-		if err := sleepBeforeRetry(ctx, attempt, lastErr); err != nil {
-			return nil, err
-		}
-	}
-	return nil, lastErr
 }
 
 func (c *AnthropicClient) doOnce(ctx context.Context, payload []byte) ([]byte, error) {
@@ -337,7 +334,7 @@ func (c *AnthropicClient) doOnce(ctx context.Context, payload []byte) ([]byte, e
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, NewProviderError("anthropic messages", resp.StatusCode, compactBody(data), resp.Header.Get("Retry-After"))
+		return nil, NewProviderError("anthropic messages", resp.StatusCode, compactBody(data))
 	}
 	return data, nil
 }
@@ -349,7 +346,7 @@ type anthropicRequest struct {
 	Tools       []anthropicTool    `json:"tools,omitempty"`
 	ToolChoice  any                `json:"tool_choice,omitempty"`
 	MaxTokens   int                `json:"max_tokens,omitempty"`
-	Temperature float64            `json:"temperature,omitempty"`
+	Temperature *float64           `json:"temperature,omitempty"`
 	Stream      bool               `json:"stream,omitempty"`
 	Thinking    *anthropicThinking `json:"thinking,omitempty"`
 }

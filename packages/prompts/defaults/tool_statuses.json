@@ -1,4 +1,9 @@
 {
-  "default": "Thinking..."
+  "default": "Thinking...",
+  "thinking": "Thinking...",
+  "thinking_zh": "思考中...",
+  "retrying": "Model unavailable; retrying...",
+  "retrying_zh": "模型暂时不可用，正在重试...",
+  "approval": "Waiting for approval...",
+  "approval_zh": "正在等待批准..."
 }
-

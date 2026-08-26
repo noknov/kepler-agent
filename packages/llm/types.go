@@ -7,6 +7,7 @@ import (
 
 type Message struct {
 	Role             string `json:"role"`
+	Phase            string `json:"phase,omitempty"`
 	Content          string `json:"-"`
 	ContentParts     []ContentPart
 	ReasoningContent string     `json:"reasoning_content,omitempty"`
@@ -14,6 +15,16 @@ type Message struct {
 	ToolCallID       string     `json:"tool_call_id,omitempty"`
 	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 	Usage            *Usage     `json:"-"` // API-reported token usage; set on assistant messages after each LLM call
+	Citations        []Citation `json:"-"`
+}
+
+// Citation preserves provider-supplied provenance independently from rendered
+// answer text. Product adapters can render it without parsing model prose.
+type Citation struct {
+	URL        string
+	Title      string
+	StartIndex int
+	EndIndex   int
 }
 
 type ContentPart struct {
@@ -129,7 +140,7 @@ type Request struct {
 	// tool schemas (so it knows parameter formats) while prohibiting tool calls.
 	ToolChoice  string
 	MaxTokens   int
-	Temperature float64
+	Temperature *float64
 	Thinking    string
 }
 
@@ -160,11 +171,17 @@ type Client interface {
 	Chat(ctx context.Context, req Request) (Response, error)
 }
 
-type StreamCallback func(delta string)
+type StreamCallback func(delta TextDelta)
+
+type TextDelta struct {
+	Text   string
+	ItemID string
+	Phase  string
+}
 
 // StreamHandler receives typed streaming events from ChatStream.
 type StreamHandler struct {
-	OnText             func(delta string)
+	OnText             func(delta TextDelta)
 	OnToolCallsStarted func()
 	OnToolCallComplete func(call ToolCall)
 	OnUsage            func(usage Usage)

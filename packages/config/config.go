@@ -14,13 +14,24 @@ type Config struct {
 	HTTP         HTTPConfig
 	Slack        SlackConfig
 	LLM          LLMConfig
+	Progress     ModelConfig
 	Security     SecurityConfig
 	Sessions     SessionConfig
-	Agent        AgentPolicyConfig
 	Tools        ToolConfig
 	Integrations IntegrationConfig
+	Connections  ConnectionsConfig
 	Observing    ObservingConfig
 	Storage      StorageConfig
+}
+
+// ModelConfig describes an optional, isolated model endpoint for a background
+// product capability. It never changes the primary agent routing.
+type ModelConfig struct {
+	Provider string
+	BaseURL  string
+	APIKey   string
+	Model    string
+	Protocol string
 }
 
 // StorageConfig owns all durable operational state for sessions, runs, inbox,
@@ -44,9 +55,12 @@ type HTTPConfig struct {
 }
 
 type SlackConfig struct {
-	BotToken      string
-	SigningSecret string
-	BotUserID     string
+	BotToken        string
+	SigningSecret   string
+	BotUserID       string
+	DefaultLocale   string
+	AttributionName string
+	ReplyFooter     string
 }
 
 type LLMConfig struct {
@@ -55,37 +69,31 @@ type LLMConfig struct {
 	APIKey           string
 	Model            string
 	MaxOutputTokens  int
-	AvailableModels  []string
 	MultimodalModel  string
 	MultimodalModels []string
-	TokenUsage       TokenUsageConfig
+	ResponsesModels  []string
 	Protocol         string
 	AnthropicFlavor  string
 	Thinking         string
-	Temperature      float64
+	Temperature      *float64
 	Timeout          time.Duration
+	Resilience       ResilienceConfig
 
-	// Secondary model is used for cheaper/faster background work such as
-	// read-only code exploration and compact summaries.
+	// Secondary model is the preferred Explorer model and the primary agent's
+	// fallback. Compact summaries use it when no explicit compact model exists.
 	SecondaryProvider string
 	SecondaryBaseURL  string
 	SecondaryAPIKey   string
 	SecondaryModel    string
 	SecondaryProtocol string
-
-	// DynamicStatus enables async secondary-model status summaries that
-	// replace the static tool hints with a short description of what the
-	// current tool call is actually doing.
-	DynamicStatus bool
 }
 
-type TokenUsageConfig struct {
-	OpenCodeGo OpenCodeGoTokenUsageConfig
-}
-
-type OpenCodeGoTokenUsageConfig struct {
-	WorkspaceID string
-	AuthCookie  string
+type ResilienceConfig struct {
+	MaxAttempts      int
+	RetryBaseDelay   time.Duration
+	MinAttemptBudget time.Duration
+	FailureThreshold int
+	CircuitCooldown  time.Duration
 }
 
 type SecurityConfig struct {
@@ -102,18 +110,12 @@ type SessionConfig struct {
 	MaxToolResultTokens int    // per-tool-result token cap (default 8000)
 }
 
-type AgentPolicyConfig struct {
-	DisableEvidenceValidation       bool
-	MaxOutputTokenRecoveries        int
-	MaxIdenticalFailedToolCalls     int
-	MaxIdenticalSuccessfulToolCalls int
-}
-
 type ToolConfig struct {
-	CommandTimeout         time.Duration
-	AgentMaxSteps          int
-	AgentMaxConcurrentRuns int
-	AllowedWriteTools      []string
+	CommandTimeout       time.Duration
+	AgentMaxSteps        int
+	AgentExploreMaxSteps int
+	AgentExploreTimeout  time.Duration
+	AllowedWriteTools    []string
 }
 
 type IntegrationConfig struct {
@@ -121,8 +123,8 @@ type IntegrationConfig struct {
 	GitHub     GitHubConfig
 	K8s        K8sConfig
 	Luckin     LuckinConfig
+	ClickStack ClickStackConfig
 	Notion     NotionConfig
-	Playwright PlaywrightConfig
 	TTS        TTSConfig
 	WebSearch  WebSearchConfig
 	YouTrack   YouTrackConfig
@@ -155,23 +157,37 @@ type LuckinConfig struct {
 	MCPToken string
 }
 
-type NotionConfig struct {
-	Token         string
-	DatabaseID    string
-	TitleProperty string
-	Version       string
+type ClickStackConfig struct {
+	MCPURL    string
+	ServiceID string
+	TeamID    string
 }
 
-type PlaywrightConfig struct {
-	MCPURL   string
-	MCPToken string
+func (c ClickStackConfig) Configured() bool {
+	return strings.TrimSpace(c.ServiceID) != "" || customClickStackDeployURL(c.MCPURL)
+}
+
+func customClickStackDeployURL(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	return raw != "" && raw != defaultClickStackMCPURL
+}
+
+func (c ClickStackConfig) Enabled() bool {
+	return c.Configured()
+}
+
+type NotionConfig struct {
+	MCPURL string
+}
+
+func (c NotionConfig) Enabled() bool {
+	return true
 }
 
 type TTSConfig struct {
 	APIKey       string
 	BaseURL      string
 	Model        string
-	Auto         bool
 	DefaultVoice string
 	DefaultStyle string
 }
@@ -192,6 +208,30 @@ type YouTrackConfig struct {
 	Token string
 }
 
+type ConnectionsConfig struct {
+	PublicBaseURL        string
+	EncryptionKey        string
+	SlackClientID        string
+	SlackClientSecret    string
+	GitHubClientID       string
+	GitHubClientSecret   string
+	GCPOAuthClientID     string
+	GCPOAuthClientSecret string
+	LocalOAuthPort       int
+}
+
+func (c ConnectionsConfig) GCPOAuthEnabled() bool {
+	return strings.TrimSpace(c.GCPOAuthClientID) != "" && strings.TrimSpace(c.GCPOAuthClientSecret) != ""
+}
+
+func (c ConnectionsConfig) SlackOAuthEnabled() bool {
+	return strings.TrimSpace(c.SlackClientID) != "" && strings.TrimSpace(c.SlackClientSecret) != ""
+}
+
+func (c ConnectionsConfig) GitHubOAuthEnabled() bool {
+	return strings.TrimSpace(c.GitHubClientID) != "" && strings.TrimSpace(c.GitHubClientSecret) != ""
+}
+
 type ObservingConfig struct {
 	LogLevel                 string
 	AdminToken               string
@@ -205,18 +245,17 @@ type ObservingConfig struct {
 type RuntimeProfile string
 
 const (
-	ProfileAllInOne      RuntimeProfile = "all-in-one"
 	ProfileGateway       RuntimeProfile = "gateway"
 	ProfileSlackWorker   RuntimeProfile = "slack-worker"
-	ProfileAppServer     RuntimeProfile = "app-server"
 	ProfileObservability RuntimeProfile = "observability"
-	ProfileLocalAgent    RuntimeProfile = "local-agent"
-	ProfileBenchmark     RuntimeProfile = "benchmark"
 	ProfileCLI           RuntimeProfile = "cli"
 )
 
+const defaultClickStackMCPURL = "https://mcp.clickhouse.cloud/clickstack"
+const defaultNotionMCPURL = "https://mcp.notion.com/mcp"
+
 func Load() (Config, error) {
-	return LoadFor(ProfileAllInOne)
+	return LoadFor(ProfileSlackWorker)
 }
 
 func LoadFor(profile RuntimeProfile) (Config, error) {
@@ -227,18 +266,6 @@ func LoadFor(profile RuntimeProfile) (Config, error) {
 	return validateForProfile(cfg, profile)
 }
 
-func LoadLocalAgent() (Config, error) {
-	return LoadFor(ProfileLocalAgent)
-}
-
-func LoadBenchmark() (Config, error) {
-	return LoadFor(ProfileBenchmark)
-}
-
-func LoadCLI() (Config, error) {
-	return LoadFor(ProfileCLI)
-}
-
 func loadRaw(profile RuntimeProfile) (Config, error) {
 	dotenvPath := dotenvPath(profile)
 	dotenvValues, err := readDotEnv(dotenvPath)
@@ -246,28 +273,27 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 		return Config{}, err
 	}
 	applyDotEnv(dotenvValues)
+	if err := validateTypedEnvironment(); err != nil {
+		return Config{}, err
+	}
 	wd, _ := os.Getwd()
-	llmProvider := inferLLMProvider()
+	llmProvider := strings.ToLower(env("LLM_PROVIDER", "mimo"))
 	llmProtocol := providerProtocol(llmProvider)
 	llmBaseURL := providerBaseURL(llmProvider)
-	llmBaseURL = normalizeLLMBaseURL(llmBaseURL, llmProtocol)
-	if llmProtocol == "" {
-		llmProtocol = inferLLMProtocol(llmBaseURL)
-	}
-	anthropicFlavor := normalizeAnthropicFlavor(firstEnv("LLM_ANTHROPIC_FLAVOR", "ANTHROPIC_FLAVOR"))
-	if anthropicFlavor == "" && llmProtocol == "anthropic" {
-		anthropicFlavor = inferAnthropicFlavor(llmBaseURL)
-	}
+	anthropicFlavor := providerAnthropicFlavor(llmProvider)
 	llmModel := providerModel(llmProvider)
-	llmAvailableModels := availableModels(llmProvider, llmModel)
-	llmMultimodalModel := providerMultimodalModel(llmProvider)
+	llmMultimodalModel := multimodalModel()
 	llmMultimodalModels := envCSVDefault("MULTIMODAL_MODELS", defaultMultimodalModels(llmMultimodalModel))
 	llmThinking := providerThinking(llmProvider)
-	if llmProvider == "mimo" && providerThinking(llmProvider) == "" {
+	if llmProvider == "mimo" && llmThinking == "" {
 		llmThinking = "disabled"
 	}
 
-	secondaryProvider := strings.TrimSpace(os.Getenv("SECONDARY_PROVIDER"))
+	secondaryProvider := strings.ToLower(strings.TrimSpace(os.Getenv("SECONDARY_PROVIDER")))
+	progressProvider := strings.ToLower(strings.TrimSpace(os.Getenv("PROGRESS_PROVIDER")))
+	if err := validateProviderTypedEnvironment(llmProvider, secondaryProvider, progressProvider); err != nil {
+		return Config{}, err
+	}
 	var secondaryBaseURL, secondaryAPIKey, secondaryModel, secondaryProtocol string
 	if secondaryProvider != "" {
 		secondaryBaseURL = providerBaseURL(secondaryProvider)
@@ -278,6 +304,7 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			secondaryModel = providerModel(secondaryProvider)
 		}
 	}
+	progress := optionalModelConfig("PROGRESS", progressProvider)
 
 	cfg := Config{
 		HTTP: HTTPConfig{
@@ -293,38 +320,36 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			ShutdownTimeout:     envDuration("HTTP_SHUTDOWN_TIMEOUT", 30*time.Second),
 		},
 		Slack: SlackConfig{
-			BotToken:      os.Getenv("SLACK_BOT_TOKEN"),
-			SigningSecret: os.Getenv("SLACK_SIGNING_SECRET"),
-			BotUserID:     os.Getenv("SLACK_BOT_USER_ID"),
+			BotToken:        os.Getenv("SLACK_BOT_TOKEN"),
+			SigningSecret:   os.Getenv("SLACK_SIGNING_SECRET"),
+			BotUserID:       os.Getenv("SLACK_BOT_USER_ID"),
+			DefaultLocale:   env("SLACK_DEFAULT_LOCALE", "en-US"),
+			AttributionName: env("SLACK_ATTRIBUTION_NAME", env("ATTRIBUTION_NAME", "斗包")),
+			ReplyFooter:     firstEnv("SLACK_REPLY_FOOTER", "REPLY_FOOTER"),
 		},
 		LLM: LLMConfig{
 			Provider:         llmProvider,
 			BaseURL:          trimRightSlash(llmBaseURL),
 			APIKey:           providerAPIKey(llmProvider),
 			Model:            llmModel,
-			MaxOutputTokens:  envInt("LLM_MAX_OUTPUT_TOKEN", 0),
-			AvailableModels:  llmAvailableModels,
+			MaxOutputTokens:  envInt("LLM_MAX_OUTPUT_TOKENS", 0),
 			MultimodalModel:  llmMultimodalModel,
 			MultimodalModels: llmMultimodalModels,
-			TokenUsage: TokenUsageConfig{
-				OpenCodeGo: OpenCodeGoTokenUsageConfig{
-					WorkspaceID: os.Getenv("OPENCODE_GO_WORKSPACE_ID"),
-					AuthCookie:  os.Getenv("OPENCODE_GO_AUTH_COOKIE"),
-				},
-			},
-			Protocol:        llmProtocol,
-			AnthropicFlavor: anthropicFlavor,
-			Thinking:        llmThinking,
-			Temperature:     providerTemperature(llmProvider),
-			Timeout:         providerTimeout(llmProvider),
+			ResponsesModels:  providerResponsesModels(llmProvider),
+			Protocol:         llmProtocol,
+			AnthropicFlavor:  anthropicFlavor,
+			Thinking:         llmThinking,
+			Temperature:      providerTemperature(llmProvider),
+			Timeout:          providerTimeout(llmProvider),
+			Resilience:       ResilienceConfig{MaxAttempts: envInt("LLM_RESILIENCE_MAX_ATTEMPTS", 3), RetryBaseDelay: envDuration("LLM_RESILIENCE_RETRY_BASE", 500*time.Millisecond), MinAttemptBudget: envDuration("LLM_RESILIENCE_MIN_ATTEMPT_BUDGET", 45*time.Second), FailureThreshold: envInt("LLM_CIRCUIT_FAILURE_THRESHOLD", 3), CircuitCooldown: envDuration("LLM_CIRCUIT_COOLDOWN", 30*time.Second)},
 
 			SecondaryProvider: secondaryProvider,
 			SecondaryBaseURL:  trimRightSlash(secondaryBaseURL),
 			SecondaryAPIKey:   secondaryAPIKey,
 			SecondaryModel:    secondaryModel,
 			SecondaryProtocol: secondaryProtocol,
-			DynamicStatus:     envBool("DYNAMIC_STATUS", true),
 		},
+		Progress: progress,
 		Security: SecurityConfig{
 			AllowedUsers:       envCSV("ALLOWED_SLACK_USERS"),
 			AllowedChannels:    envCSV("ALLOWED_SLACK_CHANNELS"),
@@ -337,21 +362,17 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			CompactModel:        env("SESSION_COMPACT_MODEL", ""),
 			MaxToolResultTokens: envInt("SESSION_MAX_TOOL_RESULT_TOKENS", 8000),
 		},
-		Agent: AgentPolicyConfig{
-			DisableEvidenceValidation:       envBool("AGENT_DISABLE_EVIDENCE_VALIDATION", false),
-			MaxOutputTokenRecoveries:        envInt("AGENT_MAX_OUTPUT_TOKEN_RECOVERIES", 0),
-			MaxIdenticalFailedToolCalls:     envInt("AGENT_MAX_IDENTICAL_FAILED_TOOL_CALLS", 0),
-			MaxIdenticalSuccessfulToolCalls: envInt("AGENT_MAX_IDENTICAL_SUCCESSFUL_TOOL_CALLS", 0),
-		},
 		Tools: ToolConfig{
-			CommandTimeout:         envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
-			AgentMaxSteps:          envInt("AGENT_MAX_STEPS", 256),
-			AgentMaxConcurrentRuns: envInt("AGENT_MAX_CONCURRENT_RUNS", 16),
+			CommandTimeout:       envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
+			AgentMaxSteps:        envInt("AGENT_MAX_STEPS", 256),
+			AgentExploreMaxSteps: envInt("AGENT_EXPLORE_MAX_STEPS", 8),
+			AgentExploreTimeout:  envDuration("AGENT_EXPLORE_TIMEOUT", 2*time.Minute),
 			AllowedWriteTools: envCSVDefault("AGENT_ALLOWED_WRITE_TOOLS", []string{
-				"reminder-create", "reminder-cancel", "slack-send_screenshot", "slack-create_canvas", "tts-speak",
+				"reminder-create", "reminder-cancel", "slack-create_canvas", "slack-user_post_message", "tts-speak",
 			}),
 		},
 		Integrations: loadIntegrations(),
+		Connections:  loadConnections(),
 		Observing: ObservingConfig{
 			LogLevel:                 env("LOG_LEVEL", "info"),
 			AdminToken:               os.Getenv("OBSERVABILITY_TOKEN"),
@@ -367,6 +388,21 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 		},
 	}
 	return cfg, nil
+}
+
+func optionalModelConfig(role, provider string) ModelConfig {
+	if provider == "" {
+		return ModelConfig{}
+	}
+	model := strings.TrimSpace(os.Getenv(role + "_MODEL"))
+	if model == "" {
+		model = providerModel(provider)
+	}
+	protocol := strings.ToLower(strings.TrimSpace(os.Getenv(role + "_PROTOCOL")))
+	if protocol == "" {
+		protocol = providerProtocol(provider)
+	}
+	return ModelConfig{Provider: provider, BaseURL: trimRightSlash(providerBaseURL(provider)), APIKey: providerAPIKey(provider), Model: model, Protocol: protocol}
 }
 
 func loadIntegrations() IntegrationConfig {
@@ -385,18 +421,14 @@ func loadIntegrations() IntegrationConfig {
 			DefaultNamespace: env("K8S_DEFAULT_NAMESPACE", ""),
 		},
 		TTS: TTSConfig{
-			APIKey:       firstEnv("TTS_API_KEY", "MIMO_API_KEY"),
+			APIKey:       os.Getenv("TTS_API_KEY"),
 			BaseURL:      trimRightSlash(env("TTS_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1")),
 			Model:        env("TTS_MODEL", "mimo-v2.5-tts"),
-			Auto:         envBool("TTS_AUTO", false),
 			DefaultVoice: env("TTS_DEFAULT_VOICE", "冰糖"),
 			DefaultStyle: os.Getenv("TTS_DEFAULT_STYLE"),
 		},
 		Notion: NotionConfig{
-			Token:         os.Getenv("NOTION_TOKEN"),
-			DatabaseID:    os.Getenv("NOTION_DATABASE_ID"),
-			TitleProperty: env("NOTION_TITLE_PROPERTY", "Name"),
-			Version:       env("NOTION_VERSION", "2022-06-28"),
+			MCPURL: trimRightSlash(env("NOTION_MCP_URL", defaultNotionMCPURL)),
 		},
 		YouTrack: YouTrackConfig{
 			URL:   trimRightSlash(os.Getenv("YOUTRACK_URL")),
@@ -412,9 +444,10 @@ func loadIntegrations() IntegrationConfig {
 			MCPURL:   trimRightSlash(env("LUCKIN_MCP_URL", "https://gwmcp.lkcoffee.com/order/user/mcp")),
 			MCPToken: os.Getenv("LUCKIN_MCP_TOKEN"),
 		},
-		Playwright: PlaywrightConfig{
-			MCPURL:   trimRightSlash(os.Getenv("PLAYWRIGHT_MCP_URL")),
-			MCPToken: os.Getenv("PLAYWRIGHT_MCP_TOKEN"),
+		ClickStack: ClickStackConfig{
+			MCPURL:    trimRightSlash(env("CLICKSTACK_MCP_URL", defaultClickStackMCPURL)),
+			ServiceID: os.Getenv("CLICKSTACK_SERVICE_ID"),
+			TeamID:    os.Getenv("CLICKSTACK_TEAM_ID"),
 		},
 		WebSearch: WebSearchConfig{
 			Provider:   env("WEB_SEARCH_PROVIDER", "duckduckgo"),
@@ -429,6 +462,29 @@ func loadIntegrations() IntegrationConfig {
 	}
 }
 
+func loadConnections() ConnectionsConfig {
+	port := envInt("CONNECTIONS_LOCAL_OAUTH_PORT", 8765)
+	clientID := strings.TrimSpace(os.Getenv("SLACK_OAUTH_CLIENT_ID"))
+	if clientID == "" {
+		clientID = strings.TrimSpace(os.Getenv("SLACK_CLIENT_ID"))
+	}
+	clientSecret := strings.TrimSpace(os.Getenv("SLACK_OAUTH_CLIENT_SECRET"))
+	if clientSecret == "" {
+		clientSecret = strings.TrimSpace(os.Getenv("SLACK_CLIENT_SECRET"))
+	}
+	return ConnectionsConfig{
+		PublicBaseURL:        trimRightSlash(os.Getenv("CONNECTIONS_PUBLIC_BASE_URL")),
+		EncryptionKey:        os.Getenv("CONNECTIONS_ENCRYPTION_KEY"),
+		SlackClientID:        clientID,
+		SlackClientSecret:    clientSecret,
+		GitHubClientID:       os.Getenv("GITHUB_OAUTH_CLIENT_ID"),
+		GitHubClientSecret:   os.Getenv("GITHUB_OAUTH_CLIENT_SECRET"),
+		GCPOAuthClientID:     os.Getenv("GCP_OAUTH_CLIENT_ID"),
+		GCPOAuthClientSecret: os.Getenv("GCP_OAUTH_CLIENT_SECRET"),
+		LocalOAuthPort:       port,
+	}
+}
+
 func dotenvPath(profile RuntimeProfile) string {
 	if path := strings.TrimSpace(os.Getenv("SLACK_COPILOT_ENV_FILE")); path != "" {
 		return path
@@ -440,30 +496,27 @@ func dotenvPath(profile RuntimeProfile) string {
 		return "worker/.env"
 	case ProfileObservability:
 		return "observability/.env"
-	case ProfileAppServer:
-		return "appserver/.env"
-	case ProfileLocalAgent:
-		return "local-agent/.env"
-	case ProfileBenchmark:
-		return "benchmark/.env"
 	case ProfileCLI:
-		return "cli/.env"
-	case ProfileAllInOne, "":
-		return "cmd/slack-copilot-agent/.env"
+		return "worker/.env"
+	case "":
+		return "worker/.env"
 	default:
-		return "cmd/slack-copilot-agent/.env"
+		return "worker/.env"
 	}
 }
 
 func validateForProfile(cfg Config, profile RuntimeProfile) (Config, error) {
+	if profile == ProfileCLI {
+		return cfg, nil
+	}
 	if cfg.HTTP.EventInboxLease <= 0 {
 		cfg.HTTP.EventInboxLease = cfg.HTTP.EventTimeout + time.Minute
 	}
 	if cfg.HTTP.EventInboxLease <= cfg.HTTP.EventTimeout {
 		return cfg, fmt.Errorf("SLACK_EVENT_INBOX_LEASE must be greater than SLACK_EVENT_TIMEOUT")
 	}
-	if cfg.HTTP.EventWorkers <= 0 || cfg.HTTP.EventQueueSize <= 0 || cfg.HTTP.EventEnqueueTimeout <= 0 || cfg.HTTP.EventTimeout <= 0 || cfg.HTTP.EventMaxAttempts <= 0 || cfg.HTTP.EventRetryBase <= 0 || cfg.HTTP.EventRetryMax < cfg.HTTP.EventRetryBase || cfg.HTTP.ShutdownTimeout <= 0 || cfg.Tools.AgentMaxConcurrentRuns <= 0 {
-		return cfg, fmt.Errorf("event worker, queue, timeout, retry, shutdown, and agent concurrency settings must be positive and internally consistent")
+	if cfg.HTTP.EventWorkers <= 0 || cfg.HTTP.EventQueueSize <= 0 || cfg.HTTP.EventEnqueueTimeout <= 0 || cfg.HTTP.EventTimeout <= 0 || cfg.HTTP.EventMaxAttempts <= 0 || cfg.HTTP.EventRetryBase <= 0 || cfg.HTTP.EventRetryMax < cfg.HTTP.EventRetryBase || cfg.HTTP.ShutdownTimeout <= 0 {
+		return cfg, fmt.Errorf("event worker, queue, timeout, retry, and shutdown settings must be positive and internally consistent")
 	}
 	seenWriteTools := make(map[string]bool, len(cfg.Tools.AllowedWriteTools))
 	for _, name := range cfg.Tools.AllowedWriteTools {
@@ -474,12 +527,6 @@ func validateForProfile(cfg Config, profile RuntimeProfile) (Config, error) {
 			return cfg, fmt.Errorf("AGENT_ALLOWED_WRITE_TOOLS contains duplicate tool name %q", name)
 		}
 		seenWriteTools[name] = true
-	}
-	switch profile {
-	case ProfileLocalAgent, ProfileBenchmark:
-		return validateLocalAgentRuntime(cfg)
-	case ProfileCLI:
-		return cfg, nil
 	}
 	if cfg.Storage.PostgresDSN == "" {
 		return cfg, fmt.Errorf("POSTGRES_DSN is required for durable session, event, run, and reminder storage")
@@ -496,9 +543,9 @@ func validateForProfile(cfg Config, profile RuntimeProfile) (Config, error) {
 		return cfg, nil
 	case ProfileObservability:
 		return cfg, nil
-	case ProfileAppServer:
-		return validateModelRuntime(cfg)
-	case ProfileAllInOne, ProfileSlackWorker, "":
+	case ProfileCLI:
+		return cfg, nil
+	case ProfileSlackWorker, "":
 		return validateAgentRuntime(cfg)
 	default:
 		return cfg, fmt.Errorf("unknown runtime profile %q", profile)
@@ -536,22 +583,18 @@ func validateAgentRuntime(cfg Config) (Config, error) {
 	return cfg, nil
 }
 
-func validateLocalAgentRuntime(cfg Config) (Config, error) {
-	return validateModelRuntime(cfg)
-}
-
 func validateModelRuntime(cfg Config) (Config, error) {
-	if strings.Contains(cfg.LLM.BaseURL, "api.kimi.com/coding") {
-		return cfg, fmt.Errorf("the Kimi coding endpoint is not supported directly; use LLM_PROVIDER=cliproxyapi and connect to a locally authenticated CLIProxyAPI instance, or configure KIMI_BASE_URL with Kimi's documented API endpoint")
-	}
 	if cfg.LLM.APIKey == "" {
 		return cfg, fmt.Errorf("%s API key is required", strings.ToUpper(cfg.LLM.Provider))
 	}
-	if cfg.LLM.Protocol != "openai" && cfg.LLM.Protocol != "anthropic" {
-		return cfg, fmt.Errorf("LLM_PROTOCOL must be openai or anthropic")
+	if cfg.LLM.Protocol != "openai" && cfg.LLM.Protocol != "anthropic" && cfg.LLM.Protocol != "responses" {
+		return cfg, fmt.Errorf("model protocol must be openai, anthropic, or responses")
 	}
 	if cfg.LLM.AnthropicFlavor != "" && cfg.LLM.AnthropicFlavor != "official" && cfg.LLM.AnthropicFlavor != "claude-code" {
 		return cfg, fmt.Errorf("LLM_ANTHROPIC_FLAVOR must be official or claude-code")
+	}
+	if cfg.LLM.Timeout <= 0 {
+		return cfg, fmt.Errorf("%s_TIMEOUT must be positive", providerEnvPrefix(cfg.LLM.Provider))
 	}
 	return cfg, nil
 }
@@ -572,99 +615,62 @@ func firstEnv(keys ...string) string {
 	return ""
 }
 
-func inferLLMProvider() string {
-	provider := inferLLMProviderFrom(func(key string) string { return os.Getenv(key) })
-	if provider == "" {
-		return "mimo"
-	}
-	return provider
-}
-
-func inferLLMProviderFrom(get func(string) string) string {
-	provider := strings.ToLower(strings.TrimSpace(get("LLM_PROVIDER")))
-	if provider != "" {
-		return provider
-	}
-	switch {
-	case firstNonEmpty(get("LONGCAT_API_KEY"), get("LONGCAT_BASE_URL"), get("LONGCAT_MODEL"), get("LONGCAT_PROTOCOL")) != "":
-		return "longcat"
-	case firstNonEmpty(get("MIMO_API_KEY"), get("MIMO_BASE_URL"), get("MIMO_MODEL"), get("MIMO_PROTOCOL")) != "":
-		return "mimo"
-	case firstNonEmpty(get("ANTHROPIC_API_KEY"), get("ANTHROPIC_AUTH_TOKEN"), get("ANTHROPIC_BASE_URL"), get("ANTHROPIC_MODEL"), get("ANTHROPIC_PROTOCOL")) != "":
-		return "anthropic"
-	case firstNonEmpty(get("CLIPROXYAPI_API_KEY"), get("CLIPROXYAPI_BASE_URL"), get("CLIPROXYAPI_MODEL")) != "":
-		return "cliproxyapi"
-	case firstNonEmpty(get("KIMI_API_KEY"), get("KIMI_BASE_URL"), get("KIMI_MODEL"), get("KIMI_PROTOCOL")) != "":
-		return "kimi"
-	case firstNonEmpty(get("MOONSHOT_API_KEY"), get("MOONSHOT_BASE_URL"), get("MOONSHOT_MODEL")) != "":
-		return "moonshot"
-	case firstNonEmpty(get("OPENCODE_ZEN_API_KEY"), get("OPENCODE_ZEN_BASE_URL"), get("OPENCODE_ZEN_MODEL"), get("OPENCODE_ZEN_PROTOCOL")) != "":
-		return "opencode-zen"
-	case firstNonEmpty(get("OPENCODE_GO_API_KEY"), get("OPENCODE_GO_BASE_URL"), get("OPENCODE_GO_MODEL"), get("OPENCODE_GO_PROTOCOL")) != "":
-		return "opencode-go"
-	case firstNonEmpty(get("DEEPSEEK_API_KEY"), get("DEEPSEEK_BASE_URL"), get("DEEPSEEK_MODEL"), get("DEEPSEEK_PROTOCOL")) != "":
-		return "deepseek"
-	case firstNonEmpty(get("OPENAI_API_KEY"), get("OPENAI_BASE_URL"), get("OPENAI_MODEL")) != "":
-		return "openai"
-	}
-	return ""
-}
-
 type providerDefaults struct {
-	defaultProtocol string
-	defaultBaseURL  string
-	defaultModel    string
+	protocol        string
+	baseURL         string
+	model           string
+	anthropicFlavor string
 	apiKeyEnvs      []string
 }
 
 var providerTable = map[string]providerDefaults{
-	"longcat":      {defaultProtocol: "anthropic", defaultBaseURL: "https://api.longcat.chat/anthropic", defaultModel: "LongCat-2.0", apiKeyEnvs: []string{"LONGCAT_API_KEY"}},
-	"mimo":         {defaultProtocol: "anthropic", defaultBaseURL: "https://token-plan-cn.xiaomimimo.com/anthropic", defaultModel: "mimo-v2.5", apiKeyEnvs: []string{"MIMO_API_KEY"}},
-	"anthropic":    {defaultProtocol: "", defaultBaseURL: "https://api.anthropic.com", defaultModel: "claude-sonnet-4-5-20250929", apiKeyEnvs: []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}},
-	"kimi":         {defaultProtocol: "", defaultBaseURL: "https://api.moonshot.ai/v1", defaultModel: "kimi-k2.6", apiKeyEnvs: []string{"KIMI_API_KEY"}},
-	"cliproxyapi":  {defaultProtocol: "openai", defaultBaseURL: "http://127.0.0.1:8317/v1", defaultModel: "kimi/kimi-k2.7-code", apiKeyEnvs: []string{"CLIPROXYAPI_API_KEY"}},
-	"moonshot":     {defaultProtocol: "", defaultBaseURL: "https://api.moonshot.ai/v1", defaultModel: "kimi-k2.6", apiKeyEnvs: []string{"MOONSHOT_API_KEY"}},
-	"opencode-go":  {defaultProtocol: "openai", defaultBaseURL: "https://opencode.ai/zen/go/v1", defaultModel: "glm-5.2", apiKeyEnvs: []string{"OPENCODE_GO_API_KEY"}},
-	"opencode-zen": {defaultProtocol: "openai", defaultBaseURL: "https://opencode.ai/zen/v1", defaultModel: "mimo-v2.5-free", apiKeyEnvs: []string{"OPENCODE_ZEN_API_KEY"}},
-	"deepseek":     {defaultProtocol: "openai", defaultBaseURL: "https://api.deepseek.com", defaultModel: "deepseek-v4-flash", apiKeyEnvs: []string{"DEEPSEEK_API_KEY"}},
+	"longcat":      {protocol: "anthropic", baseURL: "https://api.longcat.chat/anthropic", model: "LongCat-2.0", anthropicFlavor: "official", apiKeyEnvs: []string{"LONGCAT_API_KEY"}},
+	"mimo":         {protocol: "anthropic", baseURL: "https://token-plan-cn.xiaomimimo.com/anthropic", model: "mimo-v2.5", anthropicFlavor: "claude-code", apiKeyEnvs: []string{"MIMO_API_KEY"}},
+	"anthropic":    {protocol: "anthropic", baseURL: "https://api.anthropic.com", model: "claude-sonnet-4-5-20250929", anthropicFlavor: "official", apiKeyEnvs: []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}},
+	"openai":       {protocol: "openai", baseURL: "https://api.openai.com/v1", model: "gpt-4o-mini", apiKeyEnvs: []string{"OPENAI_API_KEY"}},
+	"kimi":         {protocol: "openai", baseURL: "https://api.moonshot.ai/v1", model: "kimi-k2.6", apiKeyEnvs: []string{"KIMI_API_KEY"}},
+	"cliproxyapi":  {protocol: "openai", baseURL: "http://127.0.0.1:8317/v1", model: "kimi/kimi-k2.7-code", apiKeyEnvs: []string{"CLIPROXYAPI_API_KEY"}},
+	"moonshot":     {protocol: "openai", baseURL: "https://api.moonshot.ai/v1", model: "kimi-k2.6", apiKeyEnvs: []string{"MOONSHOT_API_KEY"}},
+	"opencode-go":  {protocol: "openai", baseURL: "https://opencode.ai/zen/go/v1", model: "glm-5.2", apiKeyEnvs: []string{"OPENCODE_GO_API_KEY"}},
+	"opencode-zen": {protocol: "openai", baseURL: "https://opencode.ai/zen/v1", model: "mimo-v2.5-free", apiKeyEnvs: []string{"OPENCODE_ZEN_API_KEY"}},
+	"deepseek":     {protocol: "openai", baseURL: "https://api.deepseek.com", model: "deepseek-v4-flash", apiKeyEnvs: []string{"DEEPSEEK_API_KEY"}},
 }
 
 func providerProtocol(provider string) string {
 	prefix := providerEnvPrefix(provider)
-	protocol := normalizeLLMProtocol(firstEnv(prefix+"_PROTOCOL", "LLM_PROTOCOL"))
+	protocol := strings.ToLower(firstEnv(prefix+"_PROTOCOL", "LLM_PROTOCOL"))
 	if protocol != "" {
 		return protocol
 	}
-	if defaults, ok := providerTable[provider]; ok && defaults.defaultProtocol != "" {
-		return defaults.defaultProtocol
+	if defaults, ok := providerTable[provider]; ok {
+		return defaults.protocol
 	}
-	return normalizeLLMProtocol(firstEnv("LLM_PROTOCOL"))
+	return ""
 }
 
 func providerBaseURL(provider string) string {
 	prefix := providerEnvPrefix(provider)
 	if defaults, ok := providerTable[provider]; ok {
-		return env(prefix+"_BASE_URL", defaults.defaultBaseURL)
+		return env(prefix+"_BASE_URL", defaults.baseURL)
 	}
-	return env("OPENAI_BASE_URL", "https://api.openai.com/v1")
+	return strings.TrimSpace(os.Getenv(prefix + "_BASE_URL"))
 }
 
 func providerModel(provider string) string {
 	prefix := providerEnvPrefix(provider)
-	if provider == "kimi" && strings.Contains(providerBaseURL("kimi"), "api.kimi.com/coding") {
-		return env("KIMI_MODEL", "kimi-for-coding")
-	}
 	if defaults, ok := providerTable[provider]; ok {
-		return env(prefix+"_MODEL", defaults.defaultModel)
+		return env(prefix+"_MODEL", defaults.model)
 	}
-	return env("OPENAI_MODEL", "gpt-4o-mini")
+	return strings.TrimSpace(os.Getenv(prefix + "_MODEL"))
 }
 
-func providerMultimodalModel(provider string) string {
-	if model := firstEnv("MODEL_ROUTING_MULTIMODAL_MODEL", "MULTIMODAL_MODEL"); model != "" {
-		return model
-	}
-	return ""
+func providerResponsesModels(provider string) []string {
+	prefix := providerEnvPrefix(provider)
+	return envCSV(prefix + "_RESPONSES_MODELS")
+}
+
+func multimodalModel() string {
+	return strings.TrimSpace(os.Getenv("MODEL_ROUTING_MULTIMODAL_MODEL"))
 }
 
 func defaultMultimodalModels(model string) []string {
@@ -674,91 +680,18 @@ func defaultMultimodalModels(model string) []string {
 	return []string{model}
 }
 
-func availableModels(provider, defaultModel string) []string {
-	raw := strings.TrimSpace(os.Getenv(providerEnvPrefix(provider) + "_AVAILABLE_MODELS"))
-	if raw == "" {
-		if provider == "opencode-go" {
-			return ensureDefaultModel(defaultModel, opencodeGoModels())
-		}
-		if provider == "opencode-zen" {
-			return ensureDefaultModel(defaultModel, opencodeZenModels())
-		}
-		if provider == "deepseek" {
-			return ensureDefaultModel(defaultModel, deepSeekModels())
-		}
-		return []string{defaultModel}
-	}
-	seen := map[string]bool{}
-	var models []string
-	for _, m := range strings.Split(raw, ",") {
-		m = strings.TrimSpace(m)
-		if m != "" && !seen[m] {
-			seen[m] = true
-			models = append(models, m)
-		}
-	}
-	if len(models) == 0 {
-		return []string{defaultModel}
-	}
-	return ensureDefaultModel(defaultModel, models)
-}
-
-func ensureDefaultModel(defaultModel string, models []string) []string {
-	seen := map[string]bool{}
-	out := make([]string, 0, len(models)+1)
-	for _, model := range models {
-		if model == "" || seen[model] {
-			continue
-		}
-		seen[model] = true
-		out = append(out, model)
-	}
-	if defaultModel != "" && !seen[defaultModel] {
-		out = append([]string{defaultModel}, out...)
-	}
-	return out
-}
-
-func opencodeGoModels() []string {
-	return []string{
-		"glm-5.2",
-		"glm-5.1",
-		"kimi-k2.7-code",
-		"kimi-k2.6",
-		"mimo-v2.5",
-		"mimo-v2.5-pro",
-		"minimax-m3",
-		"minimax-m2.7",
-		"minimax-m2.5",
-		"qwen3.7-max",
-		"qwen3.7-plus",
-		"qwen3.6-plus",
-		"deepseek-v4-pro",
-		"deepseek-v4-flash",
-	}
-}
-
-func opencodeZenModels() []string {
-	return []string{
-		"mimo-v2.5-free",
-		"minimax-m3-free",
-		"nemotron-3-ultra-free",
-		"north-mini-code-free",
-	}
-}
-
-func deepSeekModels() []string {
-	return []string{
-		"deepseek-v4-flash",
-		"deepseek-v4-pro",
-	}
-}
-
 func providerAPIKey(provider string) string {
 	if defaults, ok := providerTable[provider]; ok {
 		return firstEnv(defaults.apiKeyEnvs...)
 	}
-	return firstEnv("OPENAI_API_KEY")
+	return strings.TrimSpace(os.Getenv(providerEnvPrefix(provider) + "_API_KEY"))
+}
+
+func providerAnthropicFlavor(provider string) string {
+	if flavor := strings.ToLower(strings.TrimSpace(os.Getenv("LLM_ANTHROPIC_FLAVOR"))); flavor != "" {
+		return flavor
+	}
+	return providerTable[provider].anthropicFlavor
 }
 
 func providerThinking(provider string) string {
@@ -776,24 +709,20 @@ func providerThinking(provider string) string {
 	}
 }
 
-func providerTemperature(provider string) float64 {
-	prefix := providerEnvPrefix(provider)
-	if provider == "kimi" || provider == "moonshot" {
-		return envFloatAliases(0, "KIMI_TEMPERATURE")
+func providerTemperature(provider string) *float64 {
+	raw := strings.TrimSpace(os.Getenv(providerEnvPrefix(provider) + "_TEMPERATURE"))
+	if raw == "" {
+		return nil
 	}
-	fallbackKeys := []string{prefix + "_TEMPERATURE"}
-	if provider == "openai" || provider == "" {
-		fallbackKeys = append(fallbackKeys, "ANTHROPIC_TEMPERATURE")
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return nil
 	}
-	return envFloatAliases(0, fallbackKeys...)
+	return &v
 }
 
 func providerTimeout(provider string) time.Duration {
-	prefix := providerEnvPrefix(provider)
-	if provider == "kimi" || provider == "moonshot" {
-		return envDurationAliases(120*time.Second, "KIMI_TIMEOUT", "API_TIMEOUT_MS")
-	}
-	return envDurationAliases(120*time.Second, prefix+"_TIMEOUT", "API_TIMEOUT_MS")
+	return envDuration(providerEnvPrefix(provider)+"_TIMEOUT", 120*time.Second)
 }
 
 func envCSV(key string) []string {
@@ -828,20 +757,6 @@ func envInt(key string, fallback int) int {
 	return v
 }
 
-func envIntAliases(fallback int, keys ...string) int {
-	for _, key := range keys {
-		raw := strings.TrimSpace(os.Getenv(key))
-		if raw == "" {
-			continue
-		}
-		v, err := strconv.Atoi(raw)
-		if err == nil {
-			return v
-		}
-	}
-	return fallback
-}
-
 func envFloat(key string, fallback float64) float64 {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
@@ -854,20 +769,6 @@ func envFloat(key string, fallback float64) float64 {
 	return v
 }
 
-func envFloatAliases(fallback float64, keys ...string) float64 {
-	for _, key := range keys {
-		raw := strings.TrimSpace(os.Getenv(key))
-		if raw == "" {
-			continue
-		}
-		v, err := strconv.ParseFloat(raw, 64)
-		if err == nil {
-			return v
-		}
-	}
-	return fallback
-}
-
 func envDuration(key string, fallback time.Duration) time.Duration {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
@@ -878,27 +779,6 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 	}
 	if seconds, err := strconv.Atoi(raw); err == nil {
 		return time.Duration(seconds) * time.Second
-	}
-	return fallback
-}
-
-func envDurationAliases(fallback time.Duration, keys ...string) time.Duration {
-	for _, key := range keys {
-		raw := strings.TrimSpace(os.Getenv(key))
-		if raw == "" {
-			continue
-		}
-		if strings.HasSuffix(key, "_MS") {
-			if ms, err := strconv.Atoi(raw); err == nil {
-				return time.Duration(ms) * time.Millisecond
-			}
-		}
-		if d, err := time.ParseDuration(raw); err == nil {
-			return d
-		}
-		if seconds, err := strconv.Atoi(raw); err == nil {
-			return time.Duration(seconds) * time.Second
-		}
 	}
 	return fallback
 }
@@ -920,6 +800,75 @@ func envBoolValue(raw string) bool {
 	}
 }
 
+func validateTypedEnvironment() error {
+	integers := []string{"AGENT_MAX_STEPS", "AGENT_EXPLORE_MAX_STEPS", "LLM_MAX_OUTPUT_TOKENS", "LLM_RESILIENCE_MAX_ATTEMPTS", "LLM_CIRCUIT_FAILURE_THRESHOLD", "SESSION_AUTOCOMPACT_BUFFER", "SESSION_MAX_CONTEXT_TOKENS", "SESSION_MAX_TOOL_RESULT_TOKENS", "SLACK_EVENT_MAX_ATTEMPTS", "SLACK_EVENT_QUEUE_SIZE", "SLACK_EVENT_WORKERS"}
+	for _, key := range integers {
+		if raw := strings.TrimSpace(os.Getenv(key)); raw != "" {
+			if _, err := strconv.Atoi(raw); err != nil {
+				return fmt.Errorf("%s must be an integer: %w", key, err)
+			}
+		}
+	}
+	durations := []string{"HTTP_SHUTDOWN_TIMEOUT", "SLACK_EVENT_ENQUEUE_TIMEOUT", "SLACK_EVENT_INBOX_LEASE", "SLACK_EVENT_RETRY_BASE", "SLACK_EVENT_RETRY_MAX", "SLACK_EVENT_TIMEOUT", "TOOL_COMMAND_TIMEOUT", "AGENT_EXPLORE_TIMEOUT", "LLM_RESILIENCE_RETRY_BASE", "LLM_RESILIENCE_MIN_ATTEMPT_BUDGET", "LLM_CIRCUIT_COOLDOWN"}
+	for _, key := range durations {
+		raw := strings.TrimSpace(os.Getenv(key))
+		if raw == "" {
+			continue
+		}
+		if _, err := time.ParseDuration(raw); err != nil {
+			if _, secondsErr := strconv.Atoi(raw); secondsErr != nil {
+				return fmt.Errorf("%s must be a duration or integer seconds", key)
+			}
+		}
+	}
+	floats := []string{"LLM_CACHE_CREATION_COST_PER_MTOK", "LLM_CACHE_READ_COST_PER_MTOK", "LLM_INPUT_COST_PER_MTOK", "LLM_OUTPUT_COST_PER_MTOK"}
+	for _, key := range floats {
+		if raw := strings.TrimSpace(os.Getenv(key)); raw != "" {
+			if _, err := strconv.ParseFloat(raw, 64); err != nil {
+				return fmt.Errorf("%s must be numeric: %w", key, err)
+			}
+		}
+	}
+	booleans := []string{"OBSERVABILITY_ALLOW_UNAUTHENTICATED", "WORKSPACE_AUTO_FETCH"}
+	for _, key := range booleans {
+		switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+		case "", "1", "true", "yes", "on", "0", "false", "no", "off":
+		default:
+			return fmt.Errorf("%s must be a boolean", key)
+		}
+	}
+	return nil
+}
+
+func validateProviderTypedEnvironment(providers ...string) error {
+	seen := make(map[string]bool, len(providers))
+	for _, provider := range providers {
+		provider = strings.TrimSpace(provider)
+		if provider == "" {
+			continue
+		}
+		prefix := providerEnvPrefix(provider)
+		if seen[prefix] {
+			continue
+		}
+		seen[prefix] = true
+		if key := prefix + "_TEMPERATURE"; strings.TrimSpace(os.Getenv(key)) != "" {
+			if _, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv(key)), 64); err != nil {
+				return fmt.Errorf("%s must be numeric: %w", key, err)
+			}
+		}
+		if key := prefix + "_TIMEOUT"; strings.TrimSpace(os.Getenv(key)) != "" {
+			raw := strings.TrimSpace(os.Getenv(key))
+			if _, err := time.ParseDuration(raw); err != nil {
+				if _, secondsErr := strconv.Atoi(raw); secondsErr != nil {
+					return fmt.Errorf("%s must be a duration or integer seconds", key)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func normalizeRoots(roots []string) []string {
 	out := make([]string, 0, len(roots))
 	for _, r := range roots {
@@ -939,49 +888,6 @@ func trimRightSlash(s string) string {
 	return strings.TrimRight(strings.TrimSpace(s), "/")
 }
 
-func normalizeLLMProtocol(raw string) string {
-	return strings.ToLower(strings.TrimSpace(raw))
-}
-
-func normalizeLLMBaseURL(raw, protocol string) string {
-	raw = trimRightSlash(raw)
-	if raw == "" {
-		return ""
-	}
-	if protocol != "anthropic" && strings.Contains(raw, "api.kimi.com/coding") && !strings.HasSuffix(raw, "/v1") {
-		return raw + "/v1"
-	}
-	return raw
-}
-
-func inferLLMProtocol(raw string) string {
-	raw = trimRightSlash(raw)
-	if strings.Contains(raw, "api.kimi.com/coding") && !strings.HasSuffix(raw, "/v1") {
-		return "anthropic"
-	}
-	return "openai"
-}
-
-func normalizeAnthropicFlavor(raw string) string {
-	raw = strings.ToLower(strings.TrimSpace(raw))
-	switch raw {
-	case "claudecode", "claude_code", "claude-code":
-		return "claude-code"
-	default:
-		return raw
-	}
-}
-
-func inferAnthropicFlavor(raw string) string {
-	if strings.Contains(trimRightSlash(raw), "api.kimi.com/coding") {
-		return "claude-code"
-	}
-	if strings.Contains(trimRightSlash(raw), "xiaomimimo.com/anthropic") {
-		return "claude-code"
-	}
-	return "official"
-}
-
 func providerEnvPrefix(provider string) string {
 	switch provider {
 	case "cliproxyapi":
@@ -993,12 +899,6 @@ func providerEnvPrefix(provider string) string {
 	default:
 		return strings.ToUpper(provider)
 	}
-}
-
-func isMiMoConfig(baseURL, model string) bool {
-	baseURL = strings.ToLower(trimRightSlash(baseURL))
-	model = strings.ToLower(strings.TrimSpace(model))
-	return strings.Contains(baseURL, "xiaomimimo.com") || strings.HasPrefix(model, "mimo-")
 }
 
 func readDotEnv(path string) (map[string]string, error) {
@@ -1038,13 +938,4 @@ func applyDotEnv(values map[string]string) {
 	for key, value := range values {
 		_ = os.Setenv(key, value)
 	}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }

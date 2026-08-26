@@ -1,0 +1,11 @@
+model_list:
+  - model_name: controlled-model
+    litellm_params:
+      model: os.environ/UPSTREAM_MODEL
+      api_base: os.environ/UPSTREAM_API_BASE
+      api_key: os.environ/UPSTREAM_API_KEY
+litellm_settings:
+  drop_params: false
+  set_verbose: false
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

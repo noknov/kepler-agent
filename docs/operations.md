@@ -38,12 +38,10 @@ The generic Dockerfile exposes independent targets:
 docker build --target gateway -t slack-copilot-gateway .
 docker build --target worker -t slack-copilot-worker .
 docker build --target observability -t slack-copilot-observability .
-docker build --target app-server -t slack-copilot-app-server .
-docker build --target all-in-one -t slack-copilot-agent .
 ```
 
-Gateway and observability use a minimal CA-only runtime. Worker and all-in-one
-add Git, ripgrep, curl, and SSH for repository access. Infrastructure CLIs such
+Gateway and observability use a minimal CA-only runtime. Worker adds Git,
+ripgrep, curl, and SSH for repository access. Infrastructure CLIs such
 as `kubectl` and `gcloud` are deliberately not bundled; derive a worker image or
 mount administrator-pinned binaries when those optional tools are enabled.
 
@@ -74,6 +72,10 @@ preferred administration tool before starting services, for example:
 ```bash
 psql "$POSTGRES_DSN" -f schema/postgres.sql
 ```
+
+Upgrading an existing database is an operator concern. This repository does not
+ship incremental migration SQL; apply your own upgrade process to move an older
+schema forward to match `schema/postgres.sql`.
 
 Startup fails with the names of missing tables. This keeps DDL privileges and
 database lifecycle policy outside the agent's business code.
@@ -125,49 +127,13 @@ WEB_SEARCH_SERPAPI_KEY=...
 WEB_SEARCH_SERPAPI_BASE_URL=https://serpapi.com/search.json
 ```
 
-## Playwright MCP
-
-Start the MCP server with Docker:
-
-```bash
-docker run -d \
-  --name playwright-mcp \
-  --restart unless-stopped \
-  -p 8931:8931 \
-  -v "$(pwd)/scripts/playwright-stealth.js:/stealth.js:ro" \
-  mcr.microsoft.com/playwright/mcp:latest \
-  --port 8931 --host 0.0.0.0 --headless \
-  --no-sandbox \
-  --browser chromium \
-  --viewport-size 1920x1080 \
-  --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36" \
-  --ignore-https-errors \
-  --init-script /stealth.js
-```
-
-Then set:
-
-```bash
-PLAYWRIGHT_MCP_URL=http://localhost:8931/mcp
-```
-
-Use `--browser chromium`, not `--browser chrome`; the official image ships
-Chromium. The mounted stealth script reduces common headless-browser detection
-signals before page JavaScript runs.
-
-Run the real browser smoke test after the MCP server is up:
-
-```bash
-PLAYWRIGHT_MCP_URL=http://127.0.0.1:8931/mcp go test ./packages/toolkit/tools/playwright -run TestIntegration_PlaywrightMCPRealBrowserSmoke -count=1 -v
-```
-
-
 ## Cost Tracking
 
 Runs include LLM/tool steps, token usage, estimated cost, errors, Slack message
 linkage, and quality feedback from emoji reactions.
 
-Override rates to match your provider:
+Set rates explicitly to match your provider. Unset rates are recorded as zero;
+the runtime does not infer pricing from provider or model names.
 
 ```bash
 LLM_INPUT_COST_PER_MTOK=0

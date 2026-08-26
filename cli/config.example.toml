@@ -1,0 +1,30 @@
+provider = "openai"
+protocol = "responses"
+model = "controlled-model"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+reasoning_effort = "high"
+input_routing = "steer"
+output = "text"
+max_steps = 32
+max_output_tokens = 16384
+temperature = 0
+unsafe_allow_no_sandbox = false
+
+# Readable by sandboxed commands in addition to the workspace. Keep this small.
+additional_read_roots = []
+
+# External, user-owned prompt overlays. Do not point this at secret files.
+prompt_files = []
+
+# Each root contains <skill-name>/SKILL.md.
+skill_roots = []
+
+# MCP tools are discovered at startup and deferred from model context until used.
+# Effects default to external_write when omitted, so calls require approval.
+# [[mcp_servers]]
+# name = "clickstack"
+# url = "https://mcp.clickhouse.cloud/clickstack"
+# effects = ["read"]
+# [mcp_servers.headers]
+# x-service-id = "your-service-id"

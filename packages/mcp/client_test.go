@@ -49,9 +49,9 @@ func TestHTTPClientInjection(t *testing.T) {
 
 func TestFormatToolResult_TextOnly(t *testing.T) {
 	raw := json.RawMessage(`{"content":[{"type":"text","text":"hello world"}]}`)
-	got := FormatToolResult(raw)
-	if got != "hello world" {
-		t.Fatalf("got %q", got)
+	got, err := FormatToolResult(raw)
+	if err != nil || got.Content != "hello world" {
+		t.Fatalf("got %#v, err=%v", got, err)
 	}
 }
 
@@ -59,27 +59,25 @@ func TestFormatToolResult_Image(t *testing.T) {
 	// "iVBOR..." is the start of a valid PNG base64 — use a short valid base64 string.
 	b64 := "aGVsbG8=" // base64("hello")
 	raw := json.RawMessage(`{"content":[{"type":"image","data":"` + b64 + `","mimeType":"image/png"}]}`)
-	got := FormatToolResult(raw)
+	got, err := FormatToolResult(raw)
 	want := "data:image/png;base64," + b64
-	if got != want {
-		t.Fatalf("got %q, want %q", got, want)
+	if err != nil || len(got.Images) != 1 || got.Images[0].DataURI() != want {
+		t.Fatalf("got %#v, want %q, err=%v", got, want, err)
 	}
 }
 
-func TestFormatToolResult_ImageDefaultsMimeType(t *testing.T) {
+func TestFormatToolResult_ImageRequiresMimeType(t *testing.T) {
 	b64 := "aGVsbG8="
 	raw := json.RawMessage(`{"content":[{"type":"image","data":"` + b64 + `"}]}`)
-	got := FormatToolResult(raw)
-	if !strings.HasPrefix(got, "data:image/png;base64,") {
-		t.Fatalf("expected image/png default mime type, got %q", got)
+	if _, err := FormatToolResult(raw); err == nil {
+		t.Fatal("missing image mime type was accepted")
 	}
 }
 
 func TestFormatToolResult_ImageInvalidBase64(t *testing.T) {
 	raw := json.RawMessage(`{"content":[{"type":"image","data":"!!!not-base64!!!"}]}`)
-	got := FormatToolResult(raw)
-	if !strings.Contains(got, "invalid base64") {
-		t.Fatalf("expected invalid base64 message, got %q", got)
+	if _, err := FormatToolResult(raw); err == nil {
+		t.Fatal("invalid base64 was accepted")
 	}
 }
 
@@ -89,29 +87,27 @@ func TestFormatToolResult_MixedTextAndImage(t *testing.T) {
 		{"type":"text","text":"caption"},
 		{"type":"image","data":"` + b64 + `","mimeType":"image/jpeg"}
 	]}`)
-	got := FormatToolResult(raw)
-	if !strings.Contains(got, "caption") {
-		t.Fatalf("missing text part: %q", got)
+	got, err := FormatToolResult(raw)
+	if err != nil || !strings.Contains(got.Content, "caption") {
+		t.Fatalf("missing text part: %#v err=%v", got, err)
 	}
-	if !strings.Contains(got, "data:image/jpeg;base64,"+b64) {
-		t.Fatalf("missing image data URI: %q", got)
+	if len(got.Images) != 1 || got.Images[0].DataURI() != "data:image/jpeg;base64,"+b64 {
+		t.Fatalf("missing image: %#v", got)
 	}
 }
 
 func TestFormatToolResult_IsError(t *testing.T) {
 	raw := json.RawMessage(`{"content":[{"type":"text","text":"boom"}],"isError":true}`)
-	got := FormatToolResult(raw)
-	if !strings.HasPrefix(got, "[tool error] ") {
-		t.Fatalf("expected [tool error] prefix, got %q", got)
+	got, err := FormatToolResult(raw)
+	if err != nil || !got.IsError || got.Content != "boom" {
+		t.Fatalf("got %#v err=%v", got, err)
 	}
 }
 
 func TestFormatToolResult_InvalidJSON(t *testing.T) {
 	raw := json.RawMessage(`not json`)
-	got := FormatToolResult(raw)
-	// Falls back to raw string.
-	if got != "not json" {
-		t.Fatalf("got %q", got)
+	if _, err := FormatToolResult(raw); err == nil {
+		t.Fatal("invalid JSON was accepted")
 	}
 }
 
@@ -130,7 +126,6 @@ func TestInitialize_PropagatesNotifyError(t *testing.T) {
 					map[string]string{"Content-Type": "application/json", "Mcp-Session-Id": "s1"},
 					`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`), nil
 			case "notifications/initialized":
-				// Server rejects the notification.
 				return httpResp(http.StatusInternalServerError, nil, "internal error"), nil
 			default:
 				t.Fatalf("unexpected method %q", payload.Method)
@@ -144,5 +139,49 @@ func TestInitialize_PropagatesNotifyError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "notifications/initialized") {
 		t.Fatalf("error should mention notifications/initialized: %v", err)
+	}
+}
+
+func TestClientAppliesCustomHeaders(t *testing.T) {
+	var gotAuth, gotServiceID string
+	c := &Client{
+		ServiceName: "test",
+		URL:         "http://example.test",
+		Token:       "token",
+		Headers:     map[string]string{"x-service-id": "svc-1"},
+		HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			gotAuth = r.Header.Get("Authorization")
+			gotServiceID = r.Header.Get("x-service-id")
+			return httpResp(http.StatusOK, map[string]string{"Content-Type": "application/json"}, `{"jsonrpc":"2.0","id":1,"result":{}}`), nil
+		})},
+	}
+	_, _, err := c.rpcWithID(context.Background(), "", 1, "initialize", map[string]any{})
+	if err != nil {
+		t.Fatalf("rpcWithID() error = %v", err)
+	}
+	if gotAuth != "Bearer token" || gotServiceID != "svc-1" {
+		t.Fatalf("headers auth=%q service=%q", gotAuth, gotServiceID)
+	}
+}
+
+func TestListToolsFollowsCursor(t *testing.T) {
+	calls := 0
+	c := &Client{ServiceName: "test", URL: "http://example.test", HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var payload struct {
+			Params map[string]any `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		calls++
+		if calls == 1 {
+			return httpResp(200, map[string]string{"Content-Type": "application/json"}, `{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"one","inputSchema":{"type":"object"}}],"nextCursor":"next"}}`), nil
+		}
+		if payload.Params["cursor"] != "next" {
+			t.Fatalf("params=%v", payload.Params)
+		}
+		return httpResp(200, map[string]string{"Content-Type": "application/json"}, `{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"two","inputSchema":{"type":"object"}}]}}`), nil
+	})}}
+	tools, err := c.ListTools(context.Background(), Session{ID: "s1", Initialized: true})
+	if err != nil || len(tools) != 2 || tools[1].Name != "two" {
+		t.Fatalf("tools=%+v err=%v", tools, err)
 	}
 }

@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/noknov/slack-copilot-agent/packages/frontmatter"
 	"sync"
 )
 
@@ -32,13 +34,10 @@ var staticPromptCache struct {
 
 type Catalog struct {
 	System          string                `json:"system,omitempty"`
-	Delegates       map[string]string     `json:"delegates,omitempty"`
 	AppMessages     map[string]string     `json:"app_messages,omitempty"`
 	Tools           map[string]ToolPrompt `json:"tools,omitempty"`
-	MemoryLabels    map[string]string     `json:"memory_labels,omitempty"`
 	ToolStatuses    map[string]string     `json:"tool_statuses,omitempty"`
 	GitHubWorkflows map[string]string     `json:"github_workflows,omitempty"`
-	Runner          map[string]string     `json:"runner,omitempty"`
 	Health          map[string]string     `json:"health,omitempty"`
 	Texts           map[string]string     `json:"texts,omitempty"`
 	Rules           []string              `json:"-"`
@@ -169,11 +168,8 @@ func looksLikeCatalogDir(dir string) bool {
 	}
 	markers := []string{
 		"system.md",
-		"delegates.json",
 		"app_messages.json",
 		"tools.json",
-		"memory.json",
-		"runner.json",
 		"health.json",
 		"texts.json",
 		"rules",
@@ -190,13 +186,10 @@ func looksLikeCatalogDir(dir string) bool {
 
 func newCatalog() Catalog {
 	return Catalog{
-		Delegates:       map[string]string{},
 		AppMessages:     map[string]string{},
 		Tools:           map[string]ToolPrompt{},
-		MemoryLabels:    map[string]string{},
 		ToolStatuses:    map[string]string{},
 		GitHubWorkflows: map[string]string{},
-		Runner:          map[string]string{},
 		Health:          map[string]string{},
 		Texts:           map[string]string{},
 	}
@@ -220,13 +213,10 @@ func loadCatalogFS(fsys fs.FS, root string, catalog *Catalog) {
 	readTextFS(fsys, fsPath(root, "system.md"), &systemPrompt)
 	readTextFS(fsys, fsPath(root, "agent.md"), &agentAddendum)
 	catalog.System = appendPrompt(systemPrompt, agentAddendum)
-	readJSONFS(fsys, fsPath(root, "delegates.json"), &catalog.Delegates)
 	readJSONFS(fsys, fsPath(root, "app_messages.json"), &catalog.AppMessages)
 	readJSONFS(fsys, fsPath(root, "tools.json"), &catalog.Tools)
-	readJSONFS(fsys, fsPath(root, "memory.json"), &catalog.MemoryLabels)
 	readJSONFS(fsys, fsPath(root, "tool_statuses.json"), &catalog.ToolStatuses)
 	readJSONFS(fsys, fsPath(root, "github_workflows.json"), &catalog.GitHubWorkflows)
-	readJSONFS(fsys, fsPath(root, "runner.json"), &catalog.Runner)
 	readJSONFS(fsys, fsPath(root, "health.json"), &catalog.Health)
 	readJSONFS(fsys, fsPath(root, "texts.json"), &catalog.Texts)
 	readRuntimeJSONFS(fsys, fsPath(root, "runtime.json"), catalog)
@@ -247,13 +237,10 @@ func pathJoin(parts ...string) string {
 
 func mergeCatalog(dst *Catalog, src Catalog) {
 	dst.System = appendPrompt(dst.System, src.System)
-	mergeStringMap(dst.Delegates, src.Delegates)
 	mergeStringMap(dst.AppMessages, src.AppMessages)
 	mergeToolMap(dst.Tools, src.Tools)
-	mergeStringMap(dst.MemoryLabels, src.MemoryLabels)
 	mergeStringMap(dst.ToolStatuses, src.ToolStatuses)
 	mergeStringMap(dst.GitHubWorkflows, src.GitHubWorkflows)
-	mergeStringMap(dst.Runner, src.Runner)
 	mergeStringMap(dst.Health, src.Health)
 	mergeStringMap(dst.Texts, src.Texts)
 	dst.RuleKeys, dst.Rules = mergeRules(dst.RuleKeys, dst.Rules, src.RuleKeys, src.Rules)
@@ -276,19 +263,15 @@ func appendPrompt(base, addendum string) string {
 func readRuntimeJSONFS(fsys fs.FS, path string, catalog *Catalog) {
 	var runtime struct {
 		AppMessages     map[string]string `json:"app_messages,omitempty"`
-		MemoryLabels    map[string]string `json:"memory_labels,omitempty"`
 		ToolStatuses    map[string]string `json:"tool_statuses,omitempty"`
 		GitHubWorkflows map[string]string `json:"github_workflows,omitempty"`
-		Runner          map[string]string `json:"runner,omitempty"`
 		Health          map[string]string `json:"health,omitempty"`
 		Texts           map[string]string `json:"texts,omitempty"`
 	}
 	readJSONFS(fsys, path, &runtime)
 	mergeStringMap(catalog.AppMessages, runtime.AppMessages)
-	mergeStringMap(catalog.MemoryLabels, runtime.MemoryLabels)
 	mergeStringMap(catalog.ToolStatuses, runtime.ToolStatuses)
 	mergeStringMap(catalog.GitHubWorkflows, runtime.GitHubWorkflows)
-	mergeStringMap(catalog.Runner, runtime.Runner)
 	mergeStringMap(catalog.Health, runtime.Health)
 	mergeStringMap(catalog.Texts, runtime.Texts)
 }
@@ -360,12 +343,6 @@ func System(fallback string) string {
 	return choose(current.catalog.System, fallback)
 }
 
-func Delegate(name, fallback string) string {
-	current.RLock()
-	defer current.RUnlock()
-	return choose(current.catalog.Delegates[name], fallback)
-}
-
 func AppMessage(name, fallback string) string {
 	current.RLock()
 	defer current.RUnlock()
@@ -384,12 +361,6 @@ func ParamDescription(tool, param, fallback string) string {
 	return choose(current.catalog.Tools[tool].Parameters[param], fallback)
 }
 
-func MemoryLabel(name, fallback string) string {
-	current.RLock()
-	defer current.RUnlock()
-	return choose(current.catalog.MemoryLabels[name], fallback)
-}
-
 func ToolStatus(name, fallback string) string {
 	current.RLock()
 	defer current.RUnlock()
@@ -400,12 +371,6 @@ func GitHubWorkflow(name, fallback string) string {
 	current.RLock()
 	defer current.RUnlock()
 	return choose(current.catalog.GitHubWorkflows[name], fallback)
-}
-
-func RunnerPrompt(name, fallback string) string {
-	current.RLock()
-	defer current.RUnlock()
-	return choose(current.catalog.Runner[name], fallback)
 }
 
 func HealthPrompt(name, fallback string) string {
@@ -471,16 +436,6 @@ func StaticSystemPrompt() string {
 	staticPromptCache.mu.Lock()
 	defer staticPromptCache.mu.Unlock()
 	return staticPromptCache.prompt
-}
-
-// DynamicSystemPrompt returns the runtime-varying portion of the system prompt.
-// When repoInventory is non-empty it is prefixed with DynamicBoundaryMarker.
-func DynamicSystemPrompt(repoInventory string) string {
-	repoInventory = strings.TrimSpace(repoInventory)
-	if repoInventory == "" {
-		return ""
-	}
-	return DynamicBoundaryMarker + PromptText("repository_inventory_header", "") + repoInventory
 }
 
 func LoadSkill(name string) (Skill, bool) {
@@ -570,60 +525,21 @@ func readSkillsDirFS(fsys fs.FS, dir string) []Skill {
 func parseSkill(fallbackName, content string) Skill {
 	name := fallbackName
 	description := ""
-	if strings.HasPrefix(content, "---\n") {
-		if end := strings.Index(content[len("---\n"):], "\n---"); end >= 0 {
-			frontmatter := content[len("---\n") : len("---\n")+end]
-			lines := strings.Split(frontmatter, "\n")
-			for i := 0; i < len(lines); i++ {
-				line := lines[i]
-				// Skip indented lines (YAML arrays, nested maps) and
-				// bare list items that belong to a preceding key.
-				if len(line) > 0 && (line[0] == ' ' || line[0] == '\t' || line[0] == '-') {
-					continue
-				}
-				key, value, ok := strings.Cut(line, ":")
-				if !ok {
-					continue
-				}
-				value = strings.Trim(strings.TrimSpace(value), `"'`)
-				switch strings.TrimSpace(key) {
-				case "name":
-					if value != "" {
-						name = value
-					}
-				case "description":
-					if value == "|" || value == ">" {
-						block, next := readFrontmatterBlock(lines, i+1)
-						i = next - 1
-						description = block
-					} else {
-						description = value
-					}
-				}
-			}
+	var header struct {
+		Name        string `yaml:"name"`
+		Description string `yaml:"description"`
+	}
+	if _, found, err := frontmatter.Decode(content, &header); err == nil && found {
+		if strings.TrimSpace(header.Name) != "" {
+			name = strings.TrimSpace(header.Name)
 		}
+		description = strings.TrimSpace(header.Description)
 	}
 	return Skill{
 		Name:        name,
 		Description: description,
 		Content:     content,
 	}
-}
-
-func readFrontmatterBlock(lines []string, start int) (string, int) {
-	var out []string
-	for i := start; i < len(lines); i++ {
-		line := lines[i]
-		if strings.TrimSpace(line) == "" {
-			out = append(out, "")
-			continue
-		}
-		if line[0] != ' ' && line[0] != '\t' {
-			return strings.TrimSpace(strings.Join(out, "\n")), i
-		}
-		out = append(out, strings.TrimSpace(line))
-	}
-	return strings.TrimSpace(strings.Join(out, "\n")), len(lines)
 }
 
 func readJSONFS[T any](fsys fs.FS, path string, out *T) {

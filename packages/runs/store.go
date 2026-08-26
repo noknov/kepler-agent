@@ -11,6 +11,8 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/llm"
 )
 
+func EmptyUsage() llm.Usage { return llm.Usage{} }
+
 type Run struct {
 	ID               string        `json:"id"`
 	TraceID          string        `json:"trace_id,omitempty"`
@@ -24,6 +26,7 @@ type Run struct {
 	Provider         string        `json:"provider,omitempty"`
 	Model            string        `json:"model,omitempty"`
 	Status           string        `json:"status"`
+	Termination      string        `json:"termination,omitempty"`
 	StartedAt        time.Time     `json:"started_at"`
 	EndedAt          time.Time     `json:"ended_at,omitempty"`
 	DurationMS       int64         `json:"duration_ms,omitempty"`
@@ -176,6 +179,10 @@ func scoreRun(run Run) *QualityScore {
 		score -= 0.45
 		signals["run_error"]++
 		notes = append(notes, "run_error")
+	case "incomplete":
+		score -= 0.2
+		signals["incomplete"]++
+		notes = append(notes, "incomplete:"+run.Termination)
 	}
 	toolSteps := 0
 	llmSteps := 0
@@ -250,6 +257,9 @@ func scoreRun(run Run) *QualityScore {
 	}
 	return quality
 }
+
+// Score derives the stable automatic quality projection for a completed run.
+func Score(run Run) *QualityScore { return scoreRun(run) }
 
 func reactionScore(value string) (float64, bool) {
 	switch strings.ToLower(strings.Trim(value, ": ")) {

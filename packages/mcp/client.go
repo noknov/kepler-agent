@@ -20,9 +20,10 @@ import (
 // Client is a reusable MCP Streamable HTTP client.
 // Each integration creates its own Client instance with a distinct ServiceName.
 type Client struct {
-	ServiceName string // e.g. "luckin", "playwright" — used in session cache key
+	ServiceName string // Stable integration name used in the session cache key.
 	URL         string // remote MCP endpoint
 	Token       string // Bearer token; empty means no Authorization header
+	Headers     map[string]string
 	// HTTP overrides the shared HTTP client. Set in tests to inject a mock transport.
 	// Leave nil to use the lazily-initialized shared client (keep-alives enabled, 60s timeout).
 	HTTP       *http.Client
@@ -35,6 +36,78 @@ type Client struct {
 type Session struct {
 	ID          string
 	Initialized bool
+}
+
+type ToolDefinition struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"inputSchema"`
+}
+
+type HTTPError struct {
+	Service    string
+	StatusCode int
+	Body       string
+}
+
+func (e HTTPError) Error() string {
+	return fmt.Sprintf("mcp %s: status %d: %s", e.Service, e.StatusCode, e.Body)
+}
+
+type RPCError struct {
+	Code    int
+	Message string
+	Data    json.RawMessage
+}
+
+func (e RPCError) Error() string {
+	if len(e.Data) > 0 {
+		return fmt.Sprintf("mcp error %d: %s: %s", e.Code, e.Message, string(e.Data))
+	}
+	return fmt.Sprintf("mcp error %d: %s", e.Code, e.Message)
+}
+
+type ToolResult struct {
+	Content string
+	Images  []Image
+	IsError bool
+}
+
+type Image struct {
+	MIMEType string
+	Data     string
+}
+
+func (i Image) DataURI() string { return "data:" + i.MIMEType + ";base64," + i.Data }
+
+func (c *Client) ListTools(ctx context.Context, session Session) ([]ToolDefinition, error) {
+	result, _, err := c.rpc(ctx, session.ID, "tools/list", map[string]any{})
+	if err != nil {
+		return nil, err
+	}
+	var page struct {
+		Tools      []ToolDefinition `json:"tools"`
+		NextCursor string           `json:"nextCursor"`
+	}
+	if err := json.Unmarshal(result, &page); err != nil {
+		return nil, err
+	}
+	tools := append([]ToolDefinition(nil), page.Tools...)
+	for page.NextCursor != "" {
+		result, _, err = c.rpc(ctx, session.ID, "tools/list", map[string]any{"cursor": page.NextCursor})
+		if err != nil {
+			return nil, err
+		}
+		page = struct {
+			Tools      []ToolDefinition `json:"tools"`
+			NextCursor string           `json:"nextCursor"`
+		}{}
+		if err := json.Unmarshal(result, &page); err != nil {
+			return nil, err
+		}
+		tools = append(tools, page.Tools...)
+	}
+	return tools, nil
 }
 
 // Endpoint returns the MCP server URL.
@@ -86,11 +159,11 @@ func (c *Client) NotifyInitialized(ctx context.Context, sessionID string) error 
 }
 
 // CallTool invokes a remote MCP tool and returns the formatted result text.
-func (c *Client) CallTool(ctx context.Context, s Session, name string, args json.RawMessage) (string, error) {
+func (c *Client) CallTool(ctx context.Context, s Session, name string, args json.RawMessage) (ToolResult, error) {
 	var arguments map[string]any
 	if len(args) > 0 {
 		if err := json.Unmarshal(args, &arguments); err != nil {
-			return "", err
+			return ToolResult{}, err
 		}
 	}
 	result, _, err := c.rpc(ctx, s.ID, "tools/call", map[string]any{
@@ -98,9 +171,9 @@ func (c *Client) CallTool(ctx context.Context, s Session, name string, args json
 		"arguments": arguments,
 	})
 	if err != nil {
-		return "", err
+		return ToolResult{}, err
 	}
-	return FormatToolResult(result), nil
+	return FormatToolResult(result)
 }
 
 func (c *Client) rpc(ctx context.Context, sessionID, method string, params any) (json.RawMessage, http.Header, error) {
@@ -126,6 +199,12 @@ func (c *Client) rpcWithID(ctx context.Context, sessionID string, id any, method
 	if err != nil {
 		return nil, nil, err
 	}
+	for key, value := range c.Headers {
+		if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+			continue
+		}
+		req.Header.Set(key, value)
+	}
 	if token := strings.TrimSpace(c.Token); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -144,7 +223,7 @@ func (c *Client) rpcWithID(ctx context.Context, sessionID string, id any, method
 		return nil, resp.Header, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, resp.Header, fmt.Errorf("mcp %s: status %d: %s", c.ServiceName, resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, resp.Header, HTTPError{Service: c.ServiceName, StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(body))}
 	}
 	if id == nil {
 		return nil, resp.Header, nil
@@ -197,10 +276,7 @@ func parseSSERPCResponse(body []byte) (json.RawMessage, error) {
 	if len(dataLines) > 0 {
 		return parseJSONRPCResponse([]byte(strings.Join(dataLines, "\n")))
 	}
-	// Server sent only keepalive comments (e.g. ": keep-alive") or an empty stream.
-	// Treat as a successful call that returned no content rather than a hard error.
-	empty := json.RawMessage(`{"content":[]}`)
-	return empty, nil
+	return nil, fmt.Errorf("mcp: SSE response contained no JSON-RPC event")
 }
 
 func parseJSONRPCResponse(body []byte) (json.RawMessage, error) {
@@ -212,10 +288,7 @@ func parseJSONRPCResponse(body []byte) (json.RawMessage, error) {
 		return nil, err
 	}
 	if resp.Error != nil {
-		if len(resp.Error.Data) > 0 {
-			return nil, fmt.Errorf("mcp error %d: %s: %s", resp.Error.Code, resp.Error.Message, string(resp.Error.Data))
-		}
-		return nil, fmt.Errorf("mcp error %d: %s", resp.Error.Code, resp.Error.Message)
+		return nil, RPCError{Code: resp.Error.Code, Message: resp.Error.Message, Data: resp.Error.Data}
 	}
 	if resp.Result == nil {
 		return nil, fmt.Errorf("mcp JSON-RPC response had no result")
@@ -225,7 +298,7 @@ func parseJSONRPCResponse(body []byte) (json.RawMessage, error) {
 
 // FormatToolResult parses an MCP tools/call result and returns the concatenated content.
 // Image items (type "image") are returned as data URIs so multimodal models can consume them.
-func FormatToolResult(raw json.RawMessage) string {
+func FormatToolResult(raw json.RawMessage) (ToolResult, error) {
 	var parsed struct {
 		Content []struct {
 			Type     string `json:"type"`
@@ -237,9 +310,10 @@ func FormatToolResult(raw json.RawMessage) string {
 		IsError           bool            `json:"isError,omitempty"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return string(raw)
+		return ToolResult{}, err
 	}
 	var parts []string
+	var images []Image
 	if len(parsed.StructuredContent) > 0 {
 		parts = append(parts, string(parsed.StructuredContent))
 	}
@@ -251,39 +325,21 @@ func FormatToolResult(raw json.RawMessage) string {
 			}
 		case "image":
 			if item.Data != "" {
-				mimeType := item.MimeType
-				if mimeType == "" {
-					mimeType = "image/png"
+				if item.MimeType == "" {
+					return ToolResult{}, fmt.Errorf("mcp image content is missing mimeType")
 				}
-				// Validate the base64 payload before constructing the data URI.
-				if _, err := base64.StdEncoding.DecodeString(item.Data); err == nil {
-					parts = append(parts, "data:"+mimeType+";base64,"+item.Data)
-				} else {
-					parts = append(parts, "[image: invalid base64]")
+				if _, err := base64.StdEncoding.DecodeString(item.Data); err != nil {
+					return ToolResult{}, fmt.Errorf("mcp image content has invalid base64: %w", err)
 				}
+				images = append(images, Image{MIMEType: item.MimeType, Data: item.Data})
 			}
 		default:
-			// Unknown content types: include raw text if present, otherwise skip.
-			if item.Text != "" {
-				parts = append(parts, item.Text)
-			}
+			return ToolResult{}, fmt.Errorf("unsupported MCP content type %q", item.Type)
 		}
 	}
-	if len(parts) == 0 {
-		parts = append(parts, string(raw))
-	}
-	out := strings.Join(parts, "\n")
-	if parsed.IsError {
-		return "[tool error] " + out
-	}
-	return out
+	return ToolResult{Content: strings.Join(parts, "\n"), Images: images, IsError: parsed.IsError}, nil
 }
 
 func firstHeader(headers http.Header, key string) string {
-	for _, candidate := range []string{key, strings.ToLower(key), strings.ToUpper(key)} {
-		if value := strings.TrimSpace(headers.Get(candidate)); value != "" {
-			return value
-		}
-	}
-	return ""
+	return strings.TrimSpace(headers.Get(key))
 }

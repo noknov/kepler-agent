@@ -1,18 +1,12 @@
 package safety
 
 import (
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
-	"time"
 
-	"github.com/noknov/slack-copilot-agent/packages/infra/redisclient"
 	"github.com/noknov/slack-copilot-agent/packages/prompts"
 )
 
@@ -23,133 +17,10 @@ var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----`),
 }
 
-type PromptPolicy struct {
-	WorkspaceRoots             []string
-	IncludeRepositoryInventory bool
-	Now                        func() time.Time
-	Redis                      *redisclient.Client
-}
+type PromptPolicy struct{}
 
-const repoInventoryTTL = 5 * time.Minute
-
-func (p PromptPolicy) SystemPrompt() string {
-	base := prompts.StaticSystemPrompt()
-	base += p.runtimeDatePrompt()
-	if p.IncludeRepositoryInventory {
-		base += prompts.DynamicSystemPrompt(p.cachedRepoInventory())
-	}
-	return base
-}
-
-func (p PromptPolicy) cachedRepoInventory() string {
-	key := p.repoInventoryCacheKey()
-	if p.Redis != nil {
-		if cached, err := p.Redis.Get(context.Background(), key); err == nil && cached != "" {
-			return cached
-		}
-	}
-	result := p.discoverRepos()
-	if p.Redis != nil && result != "" {
-		_ = p.Redis.Set(context.Background(), key, result, repoInventoryTTL)
-	}
-	return result
-}
-
-func (p PromptPolicy) repoInventoryCacheKey() string {
-	roots := make([]string, 0, len(p.WorkspaceRoots))
-	for _, root := range p.WorkspaceRoots {
-		root = strings.TrimSpace(root)
-		if root == "" {
-			continue
-		}
-		if abs, err := filepath.Abs(root); err == nil {
-			root = abs
-		}
-		roots = append(roots, filepath.Clean(root))
-	}
-	sort.Strings(roots)
-	if len(roots) == 0 {
-		return "prompt:repo_inventory:none"
-	}
-	h := sha256.Sum256([]byte(strings.Join(roots, "\x00")))
-	return "prompt:repo_inventory:" + hex.EncodeToString(h[:8])
-}
-
-func (p PromptPolicy) runtimeDatePrompt() string {
-	now := time.Now()
-	if p.Now != nil {
-		now = p.Now()
-	}
-	if now.IsZero() {
-		now = time.Now()
-	}
-	zone := strings.TrimSpace(now.Location().String())
-	if zone == "" {
-		zone = "Local"
-	}
-	return fmt.Sprintf("\n\nRuntime context:\n- Current date: %s\n- Current year: %d\n- Timezone: %s\n- Resolve relative date phrases such as today, yesterday, tomorrow, this year, current year, 今年, 本年, 今年高考, and latest against this runtime date. For current-year web searches, include %d in the search query unless the user explicitly asks for a different year.", now.Format("2006-01-02"), now.Year(), zone, now.Year())
-}
-
-func (p PromptPolicy) discoverRepos() string {
-	var lines []string
-	for _, root := range p.WorkspaceRoots {
-		entries, err := os.ReadDir(root)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if !e.IsDir() {
-				continue
-			}
-			dir := filepath.Join(root, e.Name())
-			if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
-				continue
-			}
-			stack := detectStack(dir)
-			lines = append(lines, "- "+e.Name()+"/ ("+stack+")")
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-func detectStack(dir string) string {
-	markers := []struct {
-		file  string
-		stack string
-	}{
-		{"go.mod", "Go"},
-		{"package.json", "Node.js/TypeScript"},
-		{"pom.xml", "Java/Maven"},
-		{"build.gradle", "Java/Gradle"},
-		{"requirements.txt", "Python"},
-		{"Cargo.toml", "Rust"},
-	}
-	for _, m := range markers {
-		if _, err := os.Stat(filepath.Join(dir, m.file)); err == nil {
-			return m.stack
-		}
-	}
-	// Check subdirectories for .sln or .csproj (C#/.NET)
-	entries, err := os.ReadDir(dir)
-	if err == nil {
-		for _, e := range entries {
-			name := e.Name()
-			if strings.HasSuffix(name, ".sln") || strings.HasSuffix(name, ".csproj") {
-				return "C#/.NET"
-			}
-			if e.IsDir() {
-				sub := filepath.Join(dir, name)
-				subEntries, _ := os.ReadDir(sub)
-				for _, se := range subEntries {
-					sn := se.Name()
-					if strings.HasSuffix(sn, ".sln") || strings.HasSuffix(sn, ".csproj") {
-						return "C#/.NET"
-					}
-				}
-			}
-		}
-	}
-	return "unknown stack"
+func (PromptPolicy) SystemPrompt() string {
+	return prompts.StaticSystemPrompt()
 }
 
 func (PromptPolicy) CleanUserText(botUserID, text string) string {
@@ -224,6 +95,9 @@ func (g WorkspacePolicy) ResolveReadableFile(path string) (string, error) {
 	realPath, err := filepath.EvalSymlinks(resolved)
 	if err != nil {
 		return "", err
+	}
+	if IsSensitivePath(realPath) {
+		return "", fmt.Errorf("refusing to read sensitive file %q", filepath.Base(realPath))
 	}
 	for _, root := range g.Roots {
 		realRoot, err := filepath.EvalSymlinks(filepath.Clean(root))

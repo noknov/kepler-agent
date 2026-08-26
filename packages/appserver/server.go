@@ -1,48 +1,41 @@
-// Package appserver exposes agentcore through a small JSON-RPC 2.0 protocol.
-// It has no Slack dependency and can be embedded behind stdio, a socket, or a
-// future network transport.
+// Package appserver exposes the shared agent runtime over JSON-RPC 2.0 on stdio.
 package appserver
 
 import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"sync"
 
-	"github.com/noknov/slack-copilot-agent/packages/agent"
-	"github.com/noknov/slack-copilot-agent/packages/agentcore"
-	"github.com/noknov/slack-copilot-agent/packages/agentprotocol"
-	"github.com/noknov/slack-copilot-agent/packages/llm"
-	"github.com/noknov/slack-copilot-agent/packages/observability"
-	"github.com/noknov/slack-copilot-agent/packages/runs"
-	"github.com/noknov/slack-copilot-agent/packages/toolkit/tools/registry"
+	"github.com/noknov/slack-copilot-agent/packages/agent/model"
+	"github.com/noknov/slack-copilot-agent/packages/agent/prompt"
+	agentruntime "github.com/noknov/slack-copilot-agent/packages/agent/runtime"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
 )
 
 const JSONRPCVersion = "2.0"
 
 type Server struct {
-	Core       *agentcore.Core
-	Runs       runs.Store
-	EventStore agentprotocol.EventStore
-	Rates      observability.CostRates
-	Provider   string
+	Runtime    *agentruntime.Runtime
+	Transcript transcript.Store
+	Prompt     []prompt.Fragment
 	Model      string
-	SpillStore registry.ToolSpillStore
+	Workspace  string
+	IDs        agentruntime.IDGenerator
 
-	writeMu  sync.Mutex
-	writer   io.Writer
-	sequence map[string]uint64
-	runsMu   sync.Mutex
+	reader  io.Reader
+	writer  io.Writer
+	writeMu sync.Mutex
+
+	activeMu sync.Mutex
 	active   map[string]*activeTurn
-	threads  map[string]bool
 }
 
 type activeTurn struct {
-	cancel context.CancelFunc
-	steer  chan llm.Message
+	cancel   context.CancelFunc
+	steering *agentruntime.InputBuffer
 }
 
 type Request struct {
@@ -65,111 +58,154 @@ type ResponseError struct {
 }
 
 type TurnStartParams struct {
-	ThreadID      string        `json:"threadId"`
-	TurnID        string        `json:"turnId,omitempty"`
-	UserID        string        `json:"userId,omitempty"`
-	Channel       string        `json:"channel,omitempty"`
-	Model         string        `json:"model,omitempty"`
-	Locale        string        `json:"locale,omitempty"`
-	Question      string        `json:"question,omitempty"`
-	Messages      []llm.Message `json:"messages"`
-	DisabledTools []string      `json:"disabledTools,omitempty"`
+	SessionID string `json:"sessionId"`
+	TurnID    string `json:"turnId,omitempty"`
+	UserID    string `json:"userId,omitempty"`
+	Model     string `json:"model,omitempty"`
+	Input     string `json:"input,omitempty"`
 }
 
-func New(core *agentcore.Core) *Server {
-	return &Server{Core: core, active: map[string]*activeTurn{}, threads: map[string]bool{}, sequence: map[string]uint64{}}
-}
-
-func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
-	if s == nil || s.Core == nil {
-		return errors.New("app server core is required")
+func New(runtime *agentruntime.Runtime, reader io.Reader, writer io.Writer) *Server {
+	return &Server{
+		Runtime: runtime,
+		reader:  reader,
+		writer:  writer,
+		active:  map[string]*activeTurn{},
+		IDs:     agentruntime.RandomIDs{},
 	}
-	s.writer = out
-	decoder := json.NewDecoder(bufio.NewReader(in))
-	for {
-		var request Request
-		if err := decoder.Decode(&request); err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(ctx.Err(), context.Canceled) {
-				return nil
-			}
-			return fmt.Errorf("decode JSON-RPC request: %w", err)
+}
+
+func (s *Server) Serve(ctx context.Context) error {
+	scanner := bufio.NewScanner(s.reader)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		if request.JSONRPC != "" && request.JSONRPC != JSONRPCVersion {
-			s.respond(request.ID, nil, &ResponseError{Code: -32600, Message: "invalid JSON-RPC version"})
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var request Request
+		if err := json.Unmarshal(line, &request); err != nil {
 			continue
 		}
 		s.handle(ctx, request)
 	}
+	return scanner.Err()
 }
 
 func (s *Server) handle(ctx context.Context, request Request) {
 	switch request.Method {
 	case "initialize":
-		eventReplay := s.EventStore != nil
 		s.respond(request.ID, map[string]any{
-			"protocolVersion": agentprotocol.Version,
-			"capabilities":    map[string]bool{"streaming": true, "cancel": true, "steering": true, "eventReplay": eventReplay},
+			"protocol":     "v2",
+			"capabilities": DefaultCapabilities(),
 		}, nil)
-	case "events/replay":
-		var params struct {
-			ThreadID string `json:"threadId"`
-			After    uint64 `json:"after,omitempty"`
-			Limit    int    `json:"limit,omitempty"`
-		}
-		if json.Unmarshal(request.Params, &params) != nil || params.ThreadID == "" {
-			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "threadId and valid params are required"})
+	case "thread/start":
+		var params ThreadStartParams
+		if err := json.Unmarshal(request.Params, &params); err != nil {
+			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "invalid params"})
 			return
 		}
-		if s.EventStore == nil {
-			s.respond(request.ID, nil, &ResponseError{Code: -32004, Message: "event replay is not configured"})
+		if params.SessionID == "" {
+			params.SessionID = NewSessionID(s.IDs)
+		}
+		s.respond(request.ID, map[string]any{"sessionId": params.SessionID, "userId": params.UserID}, nil)
+	case "thread/resume":
+		var params ThreadResumeParams
+		if err := json.Unmarshal(request.Params, &params); err != nil || params.SessionID == "" {
+			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "sessionId is required"})
 			return
 		}
-		events, err := s.EventStore.Replay(ctx, params.ThreadID, params.After, params.Limit)
+		if s.Transcript == nil {
+			s.respond(request.ID, nil, &ResponseError{Code: -32001, Message: "transcript store unavailable"})
+			return
+		}
+		events, err := s.Transcript.Load(ctx, params.SessionID, params.AfterSequence)
 		if err != nil {
-			s.respond(request.ID, nil, &ResponseError{Code: -32000, Message: err.Error()})
+			s.respond(request.ID, nil, &ResponseError{Code: -32002, Message: err.Error()})
 			return
 		}
-		s.respond(request.ID, map[string]any{"events": events}, nil)
+		result := map[string]any{"sessionId": params.SessionID, "eventCount": len(events)}
+		if params.IncludeEvents || params.StreamItems {
+			result["items"] = itemsFromEvents(events)
+		}
+		s.respond(request.ID, result, nil)
+		if params.StreamItems {
+			for _, event := range events {
+				s.NotifyEvent(event)
+			}
+		}
+	case "thread/fork":
+		var params ThreadForkParams
+		if err := json.Unmarshal(request.Params, &params); err != nil || params.SourceSessionID == "" {
+			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "sourceSessionId is required"})
+			return
+		}
+		if s.Transcript == nil {
+			s.respond(request.ID, nil, &ResponseError{Code: -32001, Message: "transcript store unavailable"})
+			return
+		}
+		childID := params.ChildSessionID
+		if childID == "" {
+			childID = NewSessionID(s.IDs)
+		}
+		events, err := s.Transcript.Load(ctx, params.SourceSessionID, 0)
+		if err != nil {
+			s.respond(request.ID, nil, &ResponseError{Code: -32002, Message: err.Error()})
+			return
+		}
+		copied := 0
+		for _, event := range events {
+			if params.BeforeSequence > 0 && event.Sequence >= params.BeforeSequence {
+				break
+			}
+			forked := event
+			forked.SessionID = childID
+			forked.ID = ""
+			if _, err := s.Transcript.Append(ctx, forked); err != nil {
+				s.respond(request.ID, nil, &ResponseError{Code: -32003, Message: err.Error()})
+				return
+			}
+			copied++
+		}
+		s.respond(request.ID, map[string]any{"sessionId": childID, "sourceSessionId": params.SourceSessionID, "eventCount": copied}, nil)
 	case "turn/start":
 		var params TurnStartParams
-		if err := json.Unmarshal(request.Params, &params); err != nil || params.ThreadID == "" {
-			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "threadId and valid params are required"})
+		if err := json.Unmarshal(request.Params, &params); err != nil || params.SessionID == "" || params.Input == "" {
+			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "sessionId and input are required"})
 			return
 		}
 		if params.TurnID == "" {
-			params.TurnID = agentprotocol.NewTurnID()
+			params.TurnID = NewTurnID(s.IDs)
 		}
 		turnCtx, cancel := context.WithCancel(ctx)
-		active := &activeTurn{cancel: cancel, steer: make(chan llm.Message, 64)}
-		if !s.register(params.TurnID, active) {
+		buffer := &agentruntime.InputBuffer{}
+		if !s.register(params.TurnID, &activeTurn{cancel: cancel, steering: buffer}) {
 			cancel()
-			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "turnId is already active"})
+			s.respond(request.ID, nil, &ResponseError{Code: -32004, Message: "turn already active"})
 			return
 		}
-		s.respond(request.ID, map[string]any{"turnId": params.TurnID, "status": agentprotocol.StatusQueued}, nil)
-		if s.registerThread(params.ThreadID) {
-			s.Publish(ctx, agentprotocol.Event{Type: agentprotocol.ThreadStarted, ThreadID: params.ThreadID, Status: agentprotocol.StatusRunning})
-		}
-		go s.execute(turnCtx, params, active)
+		s.respond(request.ID, map[string]string{"turnId": params.TurnID, "sessionId": params.SessionID, "status": "started"}, nil)
+		go s.execute(turnCtx, params, buffer)
 	case "turn/steer":
 		var params struct {
 			TurnID string `json:"turnId"`
 			Text   string `json:"text"`
 		}
-		if json.Unmarshal(request.Params, &params) != nil || params.TurnID == "" || params.Text == "" {
+		if err := json.Unmarshal(request.Params, &params); err != nil || params.TurnID == "" || params.Text == "" {
 			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "turnId and text are required"})
 			return
 		}
-		if !s.steer(params.TurnID, llm.Message{Role: "user", Content: params.Text}) {
-			s.respond(request.ID, nil, &ResponseError{Code: -32004, Message: "active turn not found or steering queue is full"})
+		if !s.steer(params.TurnID, params.Text) {
+			s.respond(request.ID, nil, &ResponseError{Code: -32004, Message: "active turn not found"})
 			return
 		}
 		s.respond(request.ID, map[string]bool{"queued": true}, nil)
-	case "turn/cancel":
-		var params struct {
-			TurnID string `json:"turnId"`
-		}
-		if json.Unmarshal(request.Params, &params) != nil || params.TurnID == "" {
+	case "turn/cancel", "turn/interrupt":
+		var params TurnInterruptParams
+		if err := json.Unmarshal(request.Params, &params); err != nil || params.TurnID == "" {
 			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "turnId is required"})
 			return
 		}
@@ -178,101 +214,63 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			return
 		}
 		s.respond(request.ID, map[string]bool{"canceled": true}, nil)
-	case "thread/close":
-		var params struct {
-			ThreadID string `json:"threadId"`
-		}
-		if json.Unmarshal(request.Params, &params) != nil || params.ThreadID == "" {
-			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "threadId is required"})
-			return
-		}
-		if !s.closeThread(params.ThreadID) {
-			s.respond(request.ID, nil, &ResponseError{Code: -32004, Message: "thread not found"})
-			return
-		}
-		s.respond(request.ID, map[string]bool{"closed": true}, nil)
-		s.Publish(ctx, agentprotocol.Event{Type: agentprotocol.ThreadClosed, ThreadID: params.ThreadID, Status: agentprotocol.StatusCompleted})
 	default:
 		s.respond(request.ID, nil, &ResponseError{Code: -32601, Message: "method not found"})
 	}
 }
 
-func (s *Server) execute(ctx context.Context, params TurnStartParams, active *activeTurn) {
+func (s *Server) execute(ctx context.Context, params TurnStartParams, steering *agentruntime.InputBuffer) {
 	defer s.unregister(params.TurnID)
-	model := params.Model
-	if model == "" {
-		model = s.Model
+	s.notify("turn/started", map[string]string{"turnId": params.TurnID, "sessionId": params.SessionID})
+	modelName := params.Model
+	if modelName == "" {
+		modelName = s.Model
 	}
-	var observer *runs.Observer
-	if s.Runs != nil {
-		observer = runs.NewObserver(s.Runs, runs.Run{
-			ID: params.TurnID, SessionID: params.ThreadID, UserID: params.UserID,
-			Channel: params.Channel, Provider: s.Provider, Model: model,
-		}, s.Rates)
+	result, err := s.Runtime.RunTurn(ctx, agentruntime.TurnRequest{
+		SessionID: params.SessionID,
+		TurnID:    params.TurnID,
+		Input:     model.TextMessage(model.RoleUser, params.Input),
+		Prompt:    s.Prompt,
+		Scope:     tool.Scope{SessionID: params.SessionID, TurnID: params.TurnID, UserID: params.UserID, Workspace: s.Workspace},
+		Steering:  steering,
+		Model:     modelName,
+	})
+	payload := map[string]any{
+		"turnId":      params.TurnID,
+		"sessionId":   params.SessionID,
+		"termination": result.Termination,
+		"message":     result.Message,
+		"usage":       result.Usage,
+		"steps":       result.Steps,
 	}
-	turnRequest := agentcore.TurnRequest{
-		ThreadID: params.ThreadID, TurnID: params.TurnID, Model: model,
-		Agent:  agentRequest(params, s.SpillStore, active.steer),
-		Events: agentprotocol.SinkFunc(s.Publish),
+	if err != nil {
+		payload["error"] = err.Error()
 	}
-	if observer != nil {
-		turnRequest.Observer = observer
-	}
-	result, err := s.Core.Execute(ctx, turnRequest)
-	if observer != nil {
-		if result.Agent.TerminationReason != "" {
-			observer.Event("termination", map[string]any{"reason": string(result.Agent.TerminationReason)})
-		}
-		status := "completed"
-		final := result.Agent.Final
-		if errors.Is(err, context.Canceled) {
-			status = "interrupted"
-		} else if err != nil {
-			status = "error"
-		} else if result.Agent.Pending {
-			status = "pending_user"
-			final = result.Agent.PendingQuestion
-		}
-		observer.Finish(status, "", err, final)
-	}
+	s.notify("turn/completed", payload)
 }
 
-func agentRequest(params TurnStartParams, spill registry.ToolSpillStore, steering <-chan llm.Message) agent.Request {
-	return agent.Request{
-		Messages: params.Messages, UserQuestion: params.Question, Locale: params.Locale,
-		RunID: params.TurnID, DisabledTools: params.DisabledTools,
-		Runtime: registry.Runtime{UserID: params.UserID, Channel: params.Channel, RunID: params.TurnID, ToolSpillStore: spill},
-		Steering: func() []llm.Message {
-			var messages []llm.Message
-			for {
-				select {
-				case message := <-steering:
-					messages = append(messages, message)
-				default:
-					return messages
-				}
-			}
-		},
-	}
-}
-
-func (s *Server) Publish(_ context.Context, event agentprotocol.Event) {
-	event = agentprotocol.Normalize(event)
+func (s *Server) notify(method string, params any) {
 	s.writeMu.Lock()
-	if s.EventStore != nil {
-		if persisted, err := s.EventStore.Append(context.Background(), event); err == nil {
-			event = persisted
-			s.sequence[event.ThreadID] = event.Sequence
+	defer s.writeMu.Unlock()
+	if s.writer == nil {
+		return
+	}
+	_ = json.NewEncoder(s.writer).Encode(map[string]any{"jsonrpc": JSONRPCVersion, "method": method, "params": params})
+}
+
+// NotifyEvent streams a canonical transcript event to connected clients.
+func (s *Server) NotifyEvent(event transcript.Event) {
+	streamed := event.Type == transcript.ModelStreamed && event.Model != nil && event.Model.Type == model.StreamTextDelta
+	method := NotificationMethod(string(event.Type), streamed)
+	payload := any(itemFromEvent(event))
+	if streamed {
+		payload = map[string]any{
+			"turnId":    event.TurnID,
+			"sessionId": event.SessionID,
+			"delta":     event.Model.Text,
 		}
 	}
-	if event.Sequence == 0 {
-		s.sequence[event.ThreadID]++
-		event.Sequence = s.sequence[event.ThreadID]
-	}
-	if s.writer != nil {
-		_ = json.NewEncoder(s.writer).Encode(map[string]any{"jsonrpc": JSONRPCVersion, "method": "event", "params": event})
-	}
-	s.writeMu.Unlock()
+	s.notify(method, payload)
 }
 
 func (s *Server) respond(id json.RawMessage, result any, responseErr *ResponseError) {
@@ -282,14 +280,15 @@ func (s *Server) respond(id json.RawMessage, result any, responseErr *ResponseEr
 func (s *Server) write(value any) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if s.writer != nil {
-		_ = json.NewEncoder(s.writer).Encode(value)
+	if s.writer == nil {
+		return
 	}
+	_ = json.NewEncoder(s.writer).Encode(value)
 }
 
 func (s *Server) register(turnID string, active *activeTurn) bool {
-	s.runsMu.Lock()
-	defer s.runsMu.Unlock()
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
 	if _, exists := s.active[turnID]; exists {
 		return false
 	}
@@ -298,52 +297,28 @@ func (s *Server) register(turnID string, active *activeTurn) bool {
 }
 
 func (s *Server) unregister(turnID string) {
-	s.runsMu.Lock()
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
 	delete(s.active, turnID)
-	s.runsMu.Unlock()
+}
+
+func (s *Server) steer(turnID, text string) bool {
+	s.activeMu.Lock()
+	active := s.active[turnID]
+	s.activeMu.Unlock()
+	if active == nil || active.steering == nil {
+		return false
+	}
+	return active.steering.Push(model.TextMessage(model.RoleUser, text))
 }
 
 func (s *Server) cancel(turnID string) bool {
-	s.runsMu.Lock()
-	active, ok := s.active[turnID]
-	s.runsMu.Unlock()
-	if ok {
-		active.cancel()
-	}
-	return ok
-}
-
-func (s *Server) steer(turnID string, message llm.Message) bool {
-	s.runsMu.Lock()
-	active, ok := s.active[turnID]
-	s.runsMu.Unlock()
-	if !ok {
+	s.activeMu.Lock()
+	active := s.active[turnID]
+	s.activeMu.Unlock()
+	if active == nil {
 		return false
 	}
-	select {
-	case active.steer <- message:
-		return true
-	default:
-		return false
-	}
-}
-
-func (s *Server) registerThread(threadID string) bool {
-	s.runsMu.Lock()
-	defer s.runsMu.Unlock()
-	if s.threads[threadID] {
-		return false
-	}
-	s.threads[threadID] = true
-	return true
-}
-
-func (s *Server) closeThread(threadID string) bool {
-	s.runsMu.Lock()
-	defer s.runsMu.Unlock()
-	if !s.threads[threadID] {
-		return false
-	}
-	delete(s.threads, threadID)
+	active.cancel()
 	return true
 }

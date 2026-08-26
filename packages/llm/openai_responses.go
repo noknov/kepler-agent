@@ -34,7 +34,7 @@ func (c *OpenAIResponsesClient) Chat(ctx context.Context, req Request) (Response
 	if err != nil {
 		return Response{}, err
 	}
-	data, err := c.doWithRetry(ctx, payload)
+	data, err := c.doOnce(ctx, payload)
 	if err != nil {
 		return Response{}, err
 	}
@@ -75,20 +75,14 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 	}
 	c.setHeaders(httpReq)
 
-	resp, err := (&http.Client{}).Do(httpReq)
+	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return Response{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		providerErr := NewProviderError(c.providerName()+" responses stream", resp.StatusCode, compactBody(data), resp.Header.Get("Retry-After"))
-		if isRetryableStatus(resp.StatusCode) {
-			fallback, fallbackErr := c.Chat(ctx, req)
-			if fallbackErr == nil {
-				return fallback, nil
-			}
-		}
+		providerErr := NewProviderError(c.providerName()+" responses stream", resp.StatusCode, compactBody(data))
 		return Response{}, providerErr
 	}
 
@@ -96,7 +90,44 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 	var finishReason string
 	var usage responsesUsage
 	toolCallsStarted := false
+	functionCalls := make(map[string]responsesOutput)
+	messagePhases := make(map[string]string)
+	emittedFunctionCalls := make(map[string]bool)
 	var streamErr error
+	emitFunctionCall := func(itemID string, call responsesOutput) {
+		if call.Type != "" && call.Type != "function_call" {
+			return
+		}
+		if call.CallID == "" || call.Name == "" {
+			return
+		}
+		key := itemID
+		if key == "" {
+			key = call.CallID
+		}
+		if emittedFunctionCalls[key] {
+			return
+		}
+		emittedFunctionCalls[key] = true
+		if !toolCallsStarted {
+			toolCallsStarted = true
+			if h.OnToolCallsStarted != nil {
+				h.OnToolCallsStarted()
+			}
+		}
+		tc := ToolCall{
+			ID:   call.CallID,
+			Type: "function",
+			Function: ToolFunction{
+				Name:      call.Name,
+				Arguments: call.Arguments,
+			},
+		}
+		msg.ToolCalls = append(msg.ToolCalls, tc)
+		if h.OnToolCallComplete != nil {
+			h.OnToolCallComplete(tc)
+		}
+	}
 	err = readSSE(resp.Body, func(ev sseEvent) bool {
 		if ev.Data == "[DONE]" {
 			return false
@@ -110,39 +141,52 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 		switch typ.Type {
 		case "response.output_text.delta":
 			var delta struct {
-				Delta string `json:"delta"`
+				Delta  string `json:"delta"`
+				ItemID string `json:"item_id"`
 			}
-			if json.Unmarshal([]byte(ev.Data), &delta) == nil && delta.Delta != "" {
+			if json.Unmarshal([]byte(ev.Data), &delta) == nil && delta.Delta != "" && isFinalAnswerPhase(messagePhases[delta.ItemID]) {
 				msg.Content += delta.Delta
 				if h.OnText != nil {
-					h.OnText(delta.Delta)
+					h.OnText(TextDelta{Text: delta.Delta, ItemID: delta.ItemID, Phase: messagePhases[delta.ItemID]})
+				}
+			}
+		case "response.output_item.added", "response.output_item.done":
+			var output struct {
+				Item responsesOutput `json:"item"`
+			}
+			if json.Unmarshal([]byte(ev.Data), &output) == nil {
+				if output.Item.Type == "message" {
+					messagePhases[output.Item.ID] = output.Item.Phase
+				}
+				if output.Item.Type == "function_call" {
+					functionCalls[output.Item.ID] = output.Item
+					if typ.Type == "response.output_item.done" {
+						emitFunctionCall(output.Item.ID, output.Item)
+					}
 				}
 			}
 		case "response.function_call_arguments.done":
 			var call struct {
+				ItemID    string `json:"item_id"`
 				CallID    string `json:"call_id"`
 				Name      string `json:"name"`
 				Arguments string `json:"arguments"`
 			}
 			if json.Unmarshal([]byte(ev.Data), &call) == nil {
-				if !toolCallsStarted {
-					toolCallsStarted = true
-					if h.OnToolCallsStarted != nil {
-						h.OnToolCallsStarted()
-					}
+				item := functionCalls[call.ItemID]
+				if item.ID == "" {
+					item.ID = call.ItemID
 				}
-				tc := ToolCall{
-					ID:   call.CallID,
-					Type: "function",
-					Function: ToolFunction{
-						Name:      call.Name,
-						Arguments: call.Arguments,
-					},
+				if call.CallID != "" {
+					item.CallID = call.CallID
 				}
-				msg.ToolCalls = append(msg.ToolCalls, tc)
-				if h.OnToolCallComplete != nil {
-					h.OnToolCallComplete(tc)
+				if call.Name != "" {
+					item.Name = call.Name
 				}
+				item.Type = "function_call"
+				item.Arguments = call.Arguments
+				functionCalls[call.ItemID] = item
+				emitFunctionCall(call.ItemID, item)
 			}
 		case "response.completed":
 			var done struct {
@@ -151,8 +195,15 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 			if json.Unmarshal([]byte(ev.Data), &done) == nil {
 				finishReason = done.Response.Status
 				usage = done.Response.Usage
-				if msg.Content == "" && len(msg.ToolCalls) == 0 {
-					msg = done.Response.message()
+				completedMessage := done.Response.message()
+				if msg.Content == "" {
+					msg.Content = completedMessage.Content
+				}
+				msg.Citations = completedMessage.Citations
+				for _, item := range done.Response.Output {
+					if item.Type == "function_call" {
+						emitFunctionCall(item.ID, item)
+					}
 				}
 				if h.OnUsage != nil {
 					h.OnUsage(usage.toUsage())
@@ -173,12 +224,6 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 		return Response{}, streamErr
 	}
 	if err != nil {
-		if strings.TrimSpace(msg.Content) == "" && len(msg.ToolCalls) == 0 {
-			fallback, fallbackErr := c.Chat(ctx, req)
-			if fallbackErr == nil {
-				return fallback, nil
-			}
-		}
 		return Response{}, err
 	}
 	return Response{
@@ -191,9 +236,11 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 
 func (c *OpenAIResponsesClient) responsesBody(req Request, stream bool) map[string]any {
 	body := map[string]any{
-		"model":       req.Model,
-		"input":       responsesInput(req.Messages),
-		"temperature": req.Temperature,
+		"model": req.Model,
+		"input": responsesInput(req.Messages),
+	}
+	if req.Temperature != nil {
+		body["temperature"] = *req.Temperature
 	}
 	if stream {
 		body["stream"] = true
@@ -215,6 +262,9 @@ func responsesInput(messages []Message) []any {
 	for _, msg := range messages {
 		switch msg.Role {
 		case "tool":
+			if strings.TrimSpace(msg.ToolCallID) == "" {
+				continue
+			}
 			input = append(input, map[string]any{
 				"type":    "function_call_output",
 				"call_id": msg.ToolCallID,
@@ -229,6 +279,9 @@ func responsesInput(messages []Message) []any {
 				})
 			}
 			for _, call := range msg.ToolCalls {
+				if strings.TrimSpace(call.ID) == "" {
+					continue
+				}
 				input = append(input, map[string]any{
 					"type":      "function_call",
 					"call_id":   call.ID,
@@ -296,24 +349,6 @@ func (c *OpenAIResponsesClient) setHeaders(httpReq *http.Request) {
 	httpReq.Header.Set("Content-Type", "application/json")
 }
 
-func (c *OpenAIResponsesClient) doWithRetry(ctx context.Context, payload []byte) ([]byte, error) {
-	var lastErr error
-	for attempt := 0; attempt < MaxRetries; attempt++ {
-		data, err := c.doOnce(ctx, payload)
-		if err == nil {
-			return data, nil
-		}
-		lastErr = err
-		if !IsTemporaryOverload(err) || attempt == MaxRetries-1 {
-			return nil, err
-		}
-		if err := sleepBeforeRetry(ctx, attempt, lastErr); err != nil {
-			return nil, err
-		}
-	}
-	return nil, lastErr
-}
-
 func (c *OpenAIResponsesClient) doOnce(ctx context.Context, payload []byte) ([]byte, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/responses", bytes.NewReader(payload))
 	if err != nil {
@@ -330,7 +365,7 @@ func (c *OpenAIResponsesClient) doOnce(ctx context.Context, payload []byte) ([]b
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, NewProviderError(c.providerName()+" responses", resp.StatusCode, compactBody(data), resp.Header.Get("Retry-After"))
+		return nil, NewProviderError(c.providerName()+" responses", resp.StatusCode, compactBody(data))
 	}
 	return data, nil
 }
@@ -352,6 +387,7 @@ type responsesOutput struct {
 	Type      string                   `json:"type"`
 	ID        string                   `json:"id"`
 	Role      string                   `json:"role"`
+	Phase     string                   `json:"phase"`
 	Content   []responsesOutputContent `json:"content"`
 	CallID    string                   `json:"call_id"`
 	Name      string                   `json:"name"`
@@ -359,8 +395,17 @@ type responsesOutput struct {
 }
 
 type responsesOutputContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type        string                `json:"type"`
+	Text        string                `json:"text"`
+	Annotations []responsesAnnotation `json:"annotations"`
+}
+
+type responsesAnnotation struct {
+	Type       string `json:"type"`
+	URL        string `json:"url"`
+	Title      string `json:"title"`
+	StartIndex int    `json:"start_index"`
+	EndIndex   int    `json:"end_index"`
 }
 
 type responsesUsage struct {
@@ -380,9 +425,18 @@ func (r responsesResponse) message() Message {
 	for _, item := range r.Output {
 		switch item.Type {
 		case "message":
+			if !isFinalAnswerPhase(item.Phase) {
+				continue
+			}
 			for _, content := range item.Content {
+				msg.Phase = item.Phase
 				if content.Type == "output_text" && content.Text != "" {
 					msg.Content += content.Text
+					for _, annotation := range content.Annotations {
+						if annotation.Type == "url_citation" && annotation.URL != "" {
+							msg.Citations = append(msg.Citations, Citation{URL: annotation.URL, Title: annotation.Title, StartIndex: annotation.StartIndex, EndIndex: annotation.EndIndex})
+						}
+					}
 				}
 			}
 		case "function_call":
@@ -397,6 +451,13 @@ func (r responsesResponse) message() Message {
 		}
 	}
 	return msg
+}
+
+// isFinalAnswerPhase keeps provider-declared commentary out of the durable
+// assistant reply. Older Responses-compatible providers omit phase; their
+// message output remains backward compatible and is treated as final.
+func isFinalAnswerPhase(phase string) bool {
+	return phase == "" || phase == "final_answer"
 }
 
 func (r responsesResponse) contentTypes() []string {
