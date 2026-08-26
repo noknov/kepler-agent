@@ -114,7 +114,10 @@ class SlackCopilot(BaseAgent):
         command = " ".join(
             [
                 shlex.quote(self._BINARY),
-                "--cwd /workspace",
+                # Harbor preserves each task image's declared WORKDIR when cwd
+                # is omitted. Passing that runtime directory keeps the CLI
+                # workspace aligned with task images that use /app, /root, etc.
+                '--cwd "$PWD"',
                 f"--provider {shlex.quote(self._provider)}",
                 f"--protocol {shlex.quote(self._protocol)}",
                 f"--model {shlex.quote(self.model_name)}",
@@ -133,7 +136,6 @@ class SlackCopilot(BaseAgent):
                 f"{command} 2>&1 </dev/null | tee {shlex.quote(self._LOG)}"
             ),
             env=env,
-            cwd="/workspace",
         )
         context.metadata = {
             "source_repo": self._source_repo,
