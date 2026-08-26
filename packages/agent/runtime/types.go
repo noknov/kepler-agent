@@ -207,6 +207,19 @@ type TurnRequest struct {
 	Scope    tool.Scope
 	Steering InputSource
 	Model    string
+	// Parent links an isolated child turn to the tool call that created it.
+	// It is durable audit metadata only: it never becomes model context.
+	Parent *ParentLink
+}
+
+// ParentLink identifies the parent turn and tool call that delegated work to
+// this turn. Child turns have their own transcript and lifecycle, so the link
+// must be explicit rather than inferred from a session-id convention.
+type ParentLink struct {
+	SessionID  string `json:"session_id"`
+	TurnID     string `json:"turn_id"`
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	Kind       string `json:"kind"`
 }
 
 type TurnResult struct {

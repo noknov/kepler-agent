@@ -81,8 +81,12 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	if modelName == "" {
 		modelName = r.config.Model
 	}
-	turnMetadata, _ := json.Marshal(map[string]any{"user_id": request.Scope.UserID, "workspace": request.Scope.Workspace, "scope": request.Scope.Values, "model": modelName})
-	if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.TurnStarted, Status: "running", Metadata: turnMetadata}); err != nil {
+	turnMetadata := map[string]any{"user_id": request.Scope.UserID, "workspace": request.Scope.Workspace, "scope": request.Scope.Values, "model": modelName}
+	if request.Parent != nil {
+		turnMetadata["parent"] = request.Parent
+	}
+	turnMetadataJSON, _ := json.Marshal(turnMetadata)
+	if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.TurnStarted, Status: "running", Metadata: turnMetadataJSON}); err != nil {
 		return result, err
 	}
 	durableInput := durableUserInput(request.Input)

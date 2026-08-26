@@ -211,6 +211,7 @@ func Run() error {
 		},
 		Deps: agentruntime.Dependencies{
 			Model: client, Policy: local.WorkspacePolicy{},
+			Transcript:  store,
 			Compactor:   agentruntime.ModelCompactor{Client: client, Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
 			Artifacts:   local.ArtifactStore{Root: filepath.Join(values.stateDir, "sessions")},
 			Environment: environment.Config{WorkspaceRoots: []string{workspace.Root}},
