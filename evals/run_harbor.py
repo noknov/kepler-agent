@@ -46,6 +46,12 @@ def main() -> int:
     parser.add_argument("--tasks", type=int, help="Optional sampled task count; omit for full suite")
     parser.add_argument("--include-task", action="append", default=[])
     parser.add_argument("--source-ref", help="Required full commit SHA for slack-copilot")
+    parser.add_argument(
+        "--agent-kwarg",
+        action="append",
+        default=[],
+        help="Additional Harbor agent kwarg in key=value form; repeatable",
+    )
     parser.add_argument("--harbor", default="harbor")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -60,6 +66,8 @@ def main() -> int:
         parser.error("--source-ref must be a full 40-character Git commit SHA")
     if args.candidate != "slack-copilot" and args.source_ref:
         parser.error("--source-ref only applies to slack-copilot")
+    if any("=" not in item or item.startswith("=") for item in args.agent_kwarg):
+        parser.error("--agent-kwarg must use key=value form")
 
     agent = SLACK_COPILOT if args.candidate == "slack-copilot" else args.candidate
     command = [
@@ -84,6 +92,8 @@ def main() -> int:
         command.extend(["--include-task-name", task_name])
     if args.candidate == "slack-copilot":
         command.extend(["--agent-kwarg", f"source_ref={args.source_ref}"])
+    for item in args.agent_kwarg:
+        command.extend(["--agent-kwarg", item])
 
     args.output.mkdir(parents=True, exist_ok=True)
     manifest = {

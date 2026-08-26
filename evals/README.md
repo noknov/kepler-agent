@@ -111,6 +111,13 @@ that was not actually achieved. The referenced commit must already be reachable
 from `source_repo` (the public origin by default); push it before starting a
 run.
 
+For a deployed provider profile, pass only configuration *names* as Harbor
+kwargs and inject the corresponding values through `--agent-env` or the process
+environment. For example, a LongCat deployment profile uses
+`provider=longcat`, `protocol=anthropic`, `api_key_env=LONGCAT_API_KEY`, and
+`base_url_env=LONGCAT_BASE_URL`. Do not put keys or endpoint secrets in the
+command line or the invocation manifest.
+
 ## Suite schema
 
 Suites must use `schema_version: 1`; older ad-hoc suite shapes are intentionally unsupported.
