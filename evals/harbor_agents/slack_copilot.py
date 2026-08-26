@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+from hashlib import sha256
 from pathlib import Path
 from typing import override
 
@@ -31,6 +32,7 @@ class SlackCopilot(BaseAgent):
         *args,
         source_ref: str,
         source_repo: str = _DEFAULT_SOURCE_REPO,
+        binary_path: str | None = None,
         provider: str = "openai",
         protocol: str = "responses",
         api_key_env: str = "OPENAI_API_KEY",
@@ -47,6 +49,14 @@ class SlackCopilot(BaseAgent):
 
         self._source_ref = source_ref
         self._source_repo = source_repo
+        self._binary_path = Path(binary_path).resolve() if binary_path else None
+        if self._binary_path and not self._binary_path.is_file():
+            raise ValueError(f"binary_path is not a file: {self._binary_path}")
+        self._binary_sha256 = (
+            sha256(self._binary_path.read_bytes()).hexdigest()
+            if self._binary_path
+            else None
+        )
         self._provider = provider
         self._protocol = protocol
         self._api_key_env = api_key_env
@@ -66,7 +76,20 @@ class SlackCopilot(BaseAgent):
 
     @override
     async def setup(self, environment: BaseEnvironment) -> None:
-        """Fetch and build the pinned CLI inside Harbor's isolated environment."""
+        """Install an immutable local binary or build a pinned public revision."""
+        if self._binary_path:
+            await environment.upload_file(self._binary_path, self._BINARY)
+            result = await environment.exec(
+                command=f"chmod 0755 {self._BINARY}; mkdir -p {Path(self._LOG).parent}",
+                user="root",
+                timeout_sec=30,
+            )
+            if result.return_code != 0:
+                raise RuntimeError(
+                    result.stderr or result.stdout or "slack-copilot binary install failed"
+                )
+            return
+
         source = "/opt/slack-copilot-agent"
         quoted_repo = shlex.quote(self._source_repo)
         quoted_ref = shlex.quote(self._source_ref)
@@ -140,6 +163,7 @@ class SlackCopilot(BaseAgent):
         context.metadata = {
             "source_repo": self._source_repo,
             "source_ref": self._source_ref,
+            "binary_sha256": self._binary_sha256,
             "provider": self._provider,
             "protocol": self._protocol,
         }
