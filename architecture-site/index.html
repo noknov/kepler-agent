@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="A bilingual architecture guide for Kepler Agent, from first request to distributed execution.">
+  <meta name="description" content="A bilingual architecture guide for the archived Kepler Agent v1 and the current v2 architecture.">
   <meta name="theme-color" content="#07100f">
   <title>架构指南 · Kepler Agent</title>
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="assets/architecture.css">
   <script src="assets/architecture.js" defer></script>
 </head>
-<body data-lang="zh">
+<body data-lang="zh" data-version="v2">
   <a class="skip-link" href="#main">Skip to content</a>
   <header class="site-header">
     <div class="header-inner">
@@ -20,6 +20,10 @@
       </a>
       <div class="header-actions">
         <a class="github-link" href="https://github.com/noknov/kepler-agent">GitHub ↗</a>
+        <div class="version-switch" role="group" aria-label="Architecture version">
+          <button type="button" data-set-version="v1" aria-pressed="false">v1 archive</button>
+          <button type="button" data-set-version="v2" aria-pressed="true">v2 current</button>
+        </div>
         <div class="language-switch" role="group" aria-label="Language">
           <button type="button" data-set-lang="zh" aria-pressed="true">中</button>
           <button type="button" data-set-lang="en" aria-pressed="false">EN</button>
@@ -29,9 +33,76 @@
   </header>
 
   <main id="main">
-    <article data-locale="zh">
+    <article data-locale="zh" data-version="v1">
+      <section class="hero" id="v1-top-zh">
+        <p class="eyebrow">Archived architecture · v1-final · 2026-08-11</p>
+        <h1>Kepler Agent<br><span>v1 架构归档</span></h1>
+        <p class="hero-copy">v1 是以 Slack 为主要入口的服务端 Agent。它的最终源码固定在 <code>v1-final</code>（<code>49380a51</code>）；该版本已经停止维护。这里记录实际架构，便于现有部署排查和迁移，不把 v1 描述成 v2 的兼容模式。</p>
+        <div class="hero-meta" aria-label="v1 技术摘要"><span class="pill">Go</span><span class="pill">Slack</span><span class="pill">PostgreSQL</span><span class="pill">Redis</span></div>
+      </section>
+      <div class="shell">
+        <nav class="toc" aria-label="v1 目录">
+          <p class="toc-title">v1 目录</p>
+          <a href="#v1-zh-overview">01 · 系统边界</a><a href="#v1-zh-flow">02 · 请求链路</a><a href="#v1-zh-runtime">03 · Core 与 Runner</a><a href="#v1-zh-data">04 · 状态与并发</a><a href="#v1-zh-tools">05 · 工具与安全</a><a href="#v1-zh-operations">06 · 运行与限制</a><a href="#v1-zh-reading">07 · 源码入口</a>
+        </nav>
+        <div class="content">
+          <section class="doc-section" id="v1-zh-overview">
+            <span class="section-number">01 / SYSTEM BOUNDARY</span><h2>Slack 驱动的服务端 Agent</h2>
+            <p class="lead">v1 将 Slack 消息转为一次 Agent turn。Slack gateway 负责接入，worker 持久化并执行，Core 和 Runner 负责模型—工具循环；PostgreSQL 保存耐久状态，Redis 用于协调。</p>
+            <div class="architecture-map" role="img" aria-label="v1 架构"><div class="arch-layer"><div class="arch-label">入口</div><div class="arch-nodes"><span class="node">Slack Events / Interactions</span><span class="node">Gateway</span></div></div><div class="arch-layer"><div class="arch-label">执行</div><div class="arch-nodes"><span class="node core">Conversation Service</span><span class="node core">Agent Core</span><span class="node core">Agent Runner</span><span class="node core">Tool Registry</span></div></div><div class="arch-layer"><div class="arch-label">依赖</div><div class="arch-nodes"><span class="node">PostgreSQL · 状态</span><span class="node">Redis · 协调</span><span class="node">LLM / Slack / 外部工具</span></div></div></div>
+            <div class="callout"><p><strong>版本边界：</strong>v1 的 app-server、benchmark 协议和运行时契约没有保留在 v2 工作树。运行或排查 v1 时，请以 <a href="https://github.com/noknov/kepler-agent/tree/v1-final">v1-final 源码</a> 和其配置、schema 为准。</p></div>
+          </section>
+          <section class="doc-section" id="v1-zh-flow">
+            <span class="section-number">02 / REQUEST LIFECYCLE</span><h2>Slack 请求如何执行</h2>
+            <div class="flow"><div class="flow-step"><b>1 · 验证</b><span>Gateway 校验 Slack 签名</span></div><div class="flow-step"><b>2 · 入箱</b><span>按 event_id 写入 PG</span></div><div class="flow-step"><b>3 · 领取</b><span>Worker 获得可续租 lease</span></div><div class="flow-step"><b>4 · 运行</b><span>同一 thread 串行执行</span></div><div class="flow-step"><b>5 · 回复</b><span>保存 run 并发送 Slack 消息</span></div></div>
+            <p>事件是至少一次处理。worker 持有 <code>claim_owner</code> 和 <code>claim_until</code>，故障后 lease 过期可被其他 worker 领取；完成、失败和续租会检查 owner。PostgreSQL advisory lock 在一个 Slack thread 的 turn 期间保持会话串行。</p>
+            <p>运行中的新消息通过 Redis owner 和 steering 队列转交给活动 turn；取消也依赖该活动 owner。这个队列机制是 v1 的运行时设计，不等同于 v2 的 <code>agent_session_inputs</code> 耐久 claim/ack 模型。</p>
+          </section>
+          <section class="doc-section" id="v1-zh-runtime">
+            <span class="section-number">03 / EXECUTION ENGINE</span><h2>Core 与 Runner 分工</h2>
+            <div class="card-grid"><div class="card"><span class="tag">Agent Core</span><h3>生命周期边界</h3><p>接收 turn 请求，克隆每次运行的 registry，绑定 observer/hooks，并发布标准生命周期事件。</p></div><div class="card"><span class="tag">Agent Runner</span><h3>模型—工具循环</h3><p>构建上下文，调用 provider，标准化工具调用，执行工具并加入结果，直到完成、等待输入或达到限制。</p></div></div>
+            <p>v1 的上下文由 memory pipeline 组合：系统提示、会话摘要、compact boundary、外部证据、已保存 turn 和当前用户消息。上下文接近预算时会清理或压缩旧工具结果；特别大的结果转存 PostgreSQL spill，仅将预览放入上下文。</p>
+            <div class="callout"><p><strong>与 v2 的区别：</strong>v1 持久化的是 run/step/protocol 记录并由 Core/Runner 驱动。v2 以 provider-neutral、append-only canonical transcript 作为会话事实来源，再生成 run projection。</p></div>
+          </section>
+          <section class="doc-section" id="v1-zh-data">
+            <span class="section-number">04 / DATA &amp; CONCURRENCY</span><h2>状态、事件和并发</h2>
+            <table class="data-table"><thead><tr><th>组件</th><th>v1 职责</th><th>说明</th></tr></thead><tbody><tr><td>PostgreSQL</td><td>session、run、step、protocol event、feedback、inbox、reminder、spill</td><td>耐久事实来源</td></tr><tr><td>Redis</td><td>唤醒、缓存、活动 owner、跨 Pod 控制、近似计数</td><td>不持久化对话状态</td></tr><tr><td>PG advisory lock</td><td>单 Slack thread 的 turn 串行化</td><td>turn 期间占用数据库连接</td></tr></tbody></table>
+            <p><code>agent_runs</code> 保存聚合摘要，增长的模型/工具步骤写入 <code>agent_run_steps</code>，生命周期记录写入 <code>agent_protocol_events</code>。运行时代码不执行 DDL；安装和升级需由 operator 管理。</p>
+          </section>
+          <section class="doc-section" id="v1-zh-tools">
+            <span class="section-number">05 / TOOLS &amp; SAFETY</span><h2>工具策略是服务端策略</h2>
+            <div class="card-grid three"><div class="card"><span class="tag">Read</span><h3>读取与诊断</h3><p>代码、Git、Web、runbook、基础设施查询等工具可按类别延迟发现。</p></div><div class="card"><span class="tag">Write</span><h3>主机修改</h3><p>默认关闭；只有精确工具名在 operator allowlist 中才会启用。</p></div><div class="card"><span class="tag">External write</span><h3>外部副作用</h3><p>发送或修改远端系统同样需要服务端明确授权。</p></div></div>
+            <p>v1 使用 argv 执行而不拼接 shell 字符串，并检查程序、参数、工作目录与危险模式。路径和符号链接必须位于配置 workspace 内，凭据文件默认拒绝。它的主要控制是应用层策略，不能当作容器或内核隔离。</p>
+          </section>
+          <section class="doc-section" id="v1-zh-operations">
+            <span class="section-number">06 / OPERATIONS &amp; LIMITS</span><h2>运行特征与已知边界</h2>
+            <p>v1 包括 gateway、worker、observability，以及一个兼容的一体化启动方式。服务有 <code>/livez</code>、<code>/readyz</code>、本机限定的 <code>/drain</code> 和指标/运行记录端点；inbox 使用退避、最大尝试和 dead letter。</p>
+            <div class="card-grid"><div class="card"><span class="tag">已具备</span><h3>可恢复的服务运行</h3><p>耐久 inbox、lease 恢复、run trace、服务端工具策略和分层 memory pipeline。</p></div><div class="card risk"><span class="tag">不再演进</span><h3>维护已结束</h3><p>v1 不再接收安全修复、兼容工作、schema migration 或发布。不要把 v2 runtime、schema 或部署配置与 v1 混用。</p></div></div>
+          </section>
+          <section class="doc-section" id="v1-zh-reading">
+            <span class="section-number">07 / CODE READING PATH</span><h2>v1 源码入口</h2>
+            <ol class="reading-path"><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/v1-final/gateway/service.go">gateway/service.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/v1-final/worker/service.go">worker/service.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/tree/v1-final/packages/agent">packages/agent</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/tree/v1-final/packages/conversation">packages/conversation</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/tree/v1-final/packages/agentprotocol">packages/agentprotocol</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/v1-final/schema/postgres.sql">schema/postgres.sql</a></li></ol>
+          </section>
+        </div>
+      </div>
+    </article>
+
+    <article data-locale="en" data-version="v1">
+      <section class="hero" id="v1-top-en"><p class="eyebrow">Archived architecture · v1-final · 2026-08-11</p><h1>Kepler Agent<br><span>v1 architecture archive</span></h1><p class="hero-copy">v1 was a server-side agent with Slack as its primary surface. Its final source is fixed at <code>v1-final</code> (<code>49380a51</code>) and is no longer maintained. This is a factual map for operating or retiring an existing v1 deployment, not a compatibility description for v2.</p><div class="hero-meta"><span class="pill">Go</span><span class="pill">Slack</span><span class="pill">PostgreSQL</span><span class="pill">Redis</span></div></section>
+      <div class="shell"><nav class="toc" aria-label="v1 contents"><p class="toc-title">v1 contents</p><a href="#v1-en-overview">01 · Boundary</a><a href="#v1-en-flow">02 · Request flow</a><a href="#v1-en-runtime">03 · Core &amp; Runner</a><a href="#v1-en-data">04 · Data</a><a href="#v1-en-tools">05 · Tools &amp; safety</a><a href="#v1-en-operations">06 · Operations</a><a href="#v1-en-reading">07 · Source</a></nav><div class="content">
+        <section class="doc-section" id="v1-en-overview"><span class="section-number">01 / SYSTEM BOUNDARY</span><h2>A Slack-driven server-side agent</h2><p class="lead">v1 turned Slack messages into agent turns. The gateway handled ingress, workers persisted and executed events, and Core plus Runner owned the model–tool loop. PostgreSQL held durable state; Redis coordinated work.</p><div class="architecture-map"><div class="arch-layer"><div class="arch-label">Ingress</div><div class="arch-nodes"><span class="node">Slack Events / Interactions</span><span class="node">Gateway</span></div></div><div class="arch-layer"><div class="arch-label">Execution</div><div class="arch-nodes"><span class="node core">Conversation Service</span><span class="node core">Agent Core</span><span class="node core">Agent Runner</span><span class="node core">Tool Registry</span></div></div><div class="arch-layer"><div class="arch-label">Dependencies</div><div class="arch-nodes"><span class="node">PostgreSQL · state</span><span class="node">Redis · coordination</span><span class="node">LLMs / Slack / tools</span></div></div></div><div class="callout"><p><strong>Version boundary:</strong> v1 app-server, benchmark protocols, and runtime contracts are not retained in the v2 tree. Use the <a href="https://github.com/noknov/kepler-agent/tree/v1-final">v1-final source</a>, configuration, and schema when operating v1.</p></div></section>
+        <section class="doc-section" id="v1-en-flow"><span class="section-number">02 / REQUEST LIFECYCLE</span><h2>How a Slack request ran</h2><div class="flow"><div class="flow-step"><b>1 · Verify</b><span>Gateway verifies Slack</span></div><div class="flow-step"><b>2 · Inbox</b><span>Store event_id in PG</span></div><div class="flow-step"><b>3 · Claim</b><span>Worker takes a renewable lease</span></div><div class="flow-step"><b>4 · Run</b><span>Serialize one thread</span></div><div class="flow-step"><b>5 · Reply</b><span>Persist run and post Slack reply</span></div></div><p>Events were processed at least once. Workers owned <code>claim_owner</code> and <code>claim_until</code>; an expired lease could be recovered after failure, and completion, failure, and renewal checked the owner. A PostgreSQL advisory lock serialized turns for one Slack thread.</p><p>New messages and cancellation were forwarded to the active turn through a Redis owner and steering queue. This is distinct from v2's durable <code>agent_session_inputs</code> claim/ack model.</p></section>
+        <section class="doc-section" id="v1-en-runtime"><span class="section-number">03 / EXECUTION ENGINE</span><h2>Core and Runner</h2><div class="card-grid"><div class="card"><span class="tag">Agent Core</span><h3>Lifecycle boundary</h3><p>Accepts a turn, clones a per-run registry, binds observers/hooks, and publishes lifecycle events.</p></div><div class="card"><span class="tag">Agent Runner</span><h3>Model–tool loop</h3><p>Builds context, calls a provider, normalizes and runs tools, appends results, and repeats until completion, input, or a limit.</p></div></div><p>The memory pipeline combined system prompt, session summary, compact boundary, external evidence, persisted turns, and current user input. Near the budget, it cleared or compressed old tool results; large results moved to a PostgreSQL spill with only a preview in context.</p><div class="callout"><p><strong>Difference from v2:</strong> v1 persisted run/step/protocol records around a Core/Runner loop. v2 uses a provider-neutral, append-only canonical transcript as session fact, then derives run projections.</p></div></section>
+        <section class="doc-section" id="v1-en-data"><span class="section-number">04 / DATA &amp; CONCURRENCY</span><h2>State, events, and concurrency</h2><table class="data-table"><thead><tr><th>Component</th><th>v1 responsibility</th><th>Note</th></tr></thead><tbody><tr><td>PostgreSQL</td><td>Sessions, runs, steps, protocol events, feedback, inbox, reminders, spills</td><td>Durable source of fact</td></tr><tr><td>Redis</td><td>Wakeups, caches, active owner, cross-pod control, approximate counters</td><td>No durable conversation state</td></tr><tr><td>PG advisory lock</td><td>Serialize one Slack thread's turn</td><td>Holds a DB connection for the turn</td></tr></tbody></table><p><code>agent_runs</code> stored aggregate summaries; growing model/tool records went to <code>agent_run_steps</code>, and lifecycle records to <code>agent_protocol_events</code>. Runtime code did not execute DDL; operators owned installation and upgrades.</p></section>
+        <section class="doc-section" id="v1-en-tools"><span class="section-number">05 / TOOLS &amp; SAFETY</span><h2>Tool policy was server policy</h2><div class="card-grid three"><div class="card"><span class="tag">Read</span><h3>Read and diagnose</h3><p>Code, Git, web, runbook, and infrastructure queries could be deferred by category.</p></div><div class="card"><span class="tag">Write</span><h3>Host mutation</h3><p>Disabled by default; only an exact tool name in the operator allowlist enabled it.</p></div><div class="card"><span class="tag">External write</span><h3>Remote side effects</h3><p>Sending or modifying external systems also required explicit server authorization.</p></div></div><p>v1 used argv execution rather than shell-string assembly and checked programs, arguments, working directories, and dangerous patterns. Paths and symlinks had to remain in a configured workspace; credentials were denied by default. These were application-level controls, not container or kernel isolation.</p></section>
+        <section class="doc-section" id="v1-en-operations"><span class="section-number">06 / OPERATIONS &amp; LIMITS</span><h2>Operational shape and end of maintenance</h2><p>v1 included gateway, worker, and observability services plus a compatible all-in-one start. It exposed <code>/livez</code>, <code>/readyz</code>, loopback-only <code>/drain</code>, and metrics/run endpoints. The inbox used backoff, bounded attempts, and a dead-letter state.</p><div class="card-grid"><div class="card"><span class="tag">In place</span><h3>Recoverable service operation</h3><p>Durable inboxes, lease recovery, run traces, server-side tool policy, and a layered memory pipeline.</p></div><div class="card risk"><span class="tag">No longer evolving</span><h3>Maintenance ended</h3><p>v1 receives no security fixes, compatibility work, schema migrations, or releases. Do not combine v2 runtime, schema, or deployment configuration with v1.</p></div></div></section>
+        <section class="doc-section" id="v1-en-reading"><span class="section-number">07 / CODE READING PATH</span><h2>v1 source entrypoints</h2><ol class="reading-path"><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/v1-final/gateway/service.go">gateway/service.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/v1-final/worker/service.go">worker/service.go</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/tree/v1-final/packages/agent">packages/agent</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/tree/v1-final/packages/conversation">packages/conversation</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/tree/v1-final/packages/agentprotocol">packages/agentprotocol</a></li><li><a class="code-link" href="https://github.com/noknov/kepler-agent/blob/v1-final/schema/postgres.sql">schema/postgres.sql</a></li></ol></section>
+      </div></div>
+    </article>
+
+    <article data-locale="zh" data-version="v2">
       <section class="hero" id="top">
-        <p class="eyebrow">Architecture overview · shared agent harness</p>
+        <p class="eyebrow">Current architecture · v2 · shared agent harness</p>
         <h1>Kepler Agent<br><span>系统架构</span></h1>
         <p class="hero-copy">Kepler Agent 包含以 Slack 为入口的 hosted Agent 和本地 CLI。两者共享 Agent harness，并通过不同 profile 保持权限、存储与运行环境差异。</p>
         <div class="hero-meta" aria-label="技术摘要">
@@ -65,7 +136,7 @@
             <span class="section-number">00 / ARCHITECTURE OVERVIEW</span>
             <h2>共享执行核心与产品 profile</h2>
             <p class="lead">本地 CLI 和 hosted Agent 共享模型、工具、上下文、事件与终止语义。Local profile 在用户机器上运行并管理本地写权限；hosted profile 在服务端工作区运行，Slack 负责交互与呈现。</p>
-            <div class="callout"><p><strong>架构演变：</strong>早期架构冻结在 <code>v1-final</code> tag（<code>49380a51</code>）。当前源码采用共享执行核心和 profile adapter；历史实现不保留在当前工作树中。这里描述的是当前源码，而非旧实现的兼容层。</p></div>
+            <div class="callout"><p><strong>版本边界：</strong>v2 是 <code>main</code> 上的当前架构。早期架构冻结在 <code>v1-final</code> tag（<code>49380a51</code>），不保留在当前工作树中。请使用页首切换查看 v1，而不要把它当成 v2 的兼容层。</p></div>
             <div class="architecture-map" role="img" aria-label="共享 Agent harness 与产品 profile">
               <div class="arch-layer"><div class="arch-label">产品入口</div><div class="arch-nodes"><span class="node">Local CLI · TTY / Headless</span><span class="node">Hosted · Slack</span></div></div>
               <div class="arch-layer"><div class="arch-label">共享 Agent harness</div><div class="arch-nodes"><span class="node core">Agent Loop</span><span class="node core">Canonical Transcript</span><span class="node core">Context Projection</span><span class="node core">Prompt Layers</span><span class="node core">Tool Contracts</span></div></div>
@@ -283,9 +354,9 @@
       </div>
     </article>
 
-    <article data-locale="en">
+    <article data-locale="en" data-version="v2">
       <section class="hero" id="top-en">
-		<p class="eyebrow">Architecture overview · shared agent harness</p>
+		<p class="eyebrow">Current architecture · v2 · shared agent harness</p>
         <h1>Kepler Agent<br><span>System Architecture</span></h1>
         <p class="hero-copy">Kepler Agent includes a hosted agent with Slack as an ingress and a local CLI. Both use one agent harness, while distinct profiles preserve their permission, storage, and runtime differences.</p>
         <div class="hero-meta" aria-label="Technology summary">
@@ -304,7 +375,7 @@
             <span class="section-number">00 / ARCHITECTURE OVERVIEW</span>
             <h2>One execution core, distinct product profiles</h2>
             <p class="lead">The local CLI and hosted Agent share model, tool, context, event, retry, and termination semantics. The local profile runs on the user's machine and manages local write permissions; the hosted profile runs against server workspaces, with Slack providing interaction and presentation.</p>
-            <div class="callout"><p><strong>Architecture evolution:</strong> The earlier architecture is frozen at tag <code>v1-final</code> (<code>49380a51</code>). The current source uses one execution core with profile adapters; historical implementation code is not retained in the current working tree. This guide describes the current source, not a compatibility layer for the earlier architecture.</p></div>
+            <div class="callout"><p><strong>Version boundary:</strong> v2 is the current architecture on <code>main</code>. The earlier architecture is frozen at <code>v1-final</code> (<code>49380a51</code>) and is not retained in this working tree. Use the switch above to view v1; it is not a v2 compatibility layer.</p></div>
             <div class="architecture-map" role="img" aria-label="shared agent harness profiles">
               <div class="arch-layer"><div class="arch-label">Product surfaces</div><div class="arch-nodes"><span class="node">Local CLI · TTY / Headless</span><span class="node">Hosted · Slack</span></div></div>
               <div class="arch-layer"><div class="arch-label">Shared agent harness</div><div class="arch-nodes"><span class="node core">Agent Loop</span><span class="node core">Canonical Transcript</span><span class="node core">Context Projection</span><span class="node core">Prompt Layers</span><span class="node core">Tool Contracts</span></div></div>

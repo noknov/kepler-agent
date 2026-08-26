@@ -134,14 +134,16 @@ a {
 }
 
 .header-actions,
-.language-switch {
+.language-switch,
+.version-switch {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
 .github-link,
-.language-switch button {
+.language-switch button,
+.version-switch button {
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--muted);
@@ -162,14 +164,23 @@ a {
   border-radius: 999px;
 }
 
-.language-switch button {
+.version-switch {
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.language-switch button,
+.version-switch button {
   padding: 4px 10px;
   border: 0;
   cursor: pointer;
 }
 
 body[data-lang="zh"] [data-set-lang="zh"],
-body[data-lang="en"] [data-set-lang="en"] {
+body[data-lang="en"] [data-set-lang="en"],
+body[data-version="v1"] [data-set-version="v1"],
+body[data-version="v2"] [data-set-version="v2"] {
   color: #07100f;
   background: var(--accent);
 }
@@ -178,8 +189,10 @@ body[data-lang="en"] [data-set-lang="en"] {
   display: none;
 }
 
-body[data-lang="zh"] [data-locale="zh"],
-body[data-lang="en"] [data-locale="en"] {
+body[data-lang="zh"][data-version="v1"] [data-locale="zh"][data-version="v1"],
+body[data-lang="zh"][data-version="v2"] [data-locale="zh"][data-version="v2"],
+body[data-lang="en"][data-version="v1"] [data-locale="en"][data-version="v1"],
+body[data-lang="en"][data-version="v2"] [data-locale="en"][data-version="v2"] {
   display: block;
 }
 

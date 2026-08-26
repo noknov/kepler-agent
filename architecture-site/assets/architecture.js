@@ -1,9 +1,13 @@
 (() => {
   const supported = new Set(["zh", "en"]);
+  const supportedVersions = new Set(["v1", "v2"]);
   const query = new URLSearchParams(window.location.search).get("lang");
+  const versionQuery = new URLSearchParams(window.location.search).get("version");
   let stored = "";
+  let storedVersion = "";
   try {
     stored = window.localStorage.getItem("architecture-language") || "";
+    storedVersion = window.localStorage.getItem("architecture-version") || "";
   } catch (_) {
     // The site also works when storage is unavailable.
   }
@@ -35,13 +39,44 @@
     }
   }
 
+  function setVersion(version, updateURL) {
+    const next = supportedVersions.has(version) ? version : "v2";
+    document.body.dataset.version = next;
+
+    document.querySelectorAll("[data-set-version]").forEach((button) => {
+      const active = button.dataset.setVersion === next;
+      button.setAttribute("aria-pressed", String(active));
+    });
+
+    try {
+      window.localStorage.setItem("architecture-version", next);
+    } catch (_) {
+      // Persistence is optional.
+    }
+
+    if (updateURL) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("version", next);
+      window.history.replaceState({}, "", url);
+    }
+  }
+
   document.querySelectorAll("[data-set-lang]").forEach((button) => {
     button.addEventListener("click", () => setLanguage(button.dataset.setLang, true));
   });
+  document.querySelectorAll("[data-set-version]").forEach((button) => {
+    button.addEventListener("click", () => {
+      setVersion(button.dataset.setVersion, true);
+      const language = document.body.dataset.lang;
+      const target = document.querySelector(`[data-locale="${language}"][data-version="${document.body.dataset.version}"] .hero`);
+      target?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
 
   setLanguage(supported.has(query) ? query : (supported.has(stored) ? stored : browserLanguage), false);
+  setVersion(supportedVersions.has(versionQuery) ? versionQuery : (supportedVersions.has(storedVersion) ? storedVersion : "v2"), false);
 
-  const sections = Array.from(document.querySelectorAll("[data-locale] .doc-section"));
+  const sections = Array.from(document.querySelectorAll("[data-locale][data-version] .doc-section"));
   const observer = new IntersectionObserver((entries) => {
     const visible = entries
       .filter((entry) => entry.isIntersecting)
