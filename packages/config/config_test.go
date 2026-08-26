@@ -768,7 +768,7 @@ func writeEnvFile(t *testing.T, dir string, values map[string]string) {
 func writeEnvFileNamed(t *testing.T, dir, name string, values map[string]string) {
 	t.Helper()
 	if _, ok := values["POSTGRES_DSN"]; !ok {
-		values["POSTGRES_DSN"] = "postgres://test:test@localhost:5432/slack_copilot?sslmode=disable"
+		values["POSTGRES_DSN"] = "postgres://test:test@localhost:5432/kepler_agent?sslmode=disable"
 	}
 	if _, ok := values["REDIS_URL"]; !ok {
 		values["REDIS_URL"] = "redis://localhost:6379/0"

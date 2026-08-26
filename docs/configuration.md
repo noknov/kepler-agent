@@ -42,7 +42,7 @@ SLACK_BOT_TOKEN=xoxb-...
 SLACK_SIGNING_SECRET=...
 SLACK_DEFAULT_LOCALE=en-US
 ALLOWED_SLACK_USERS=U11111111,U22222222
-POSTGRES_DSN=postgres://user:pass@localhost:5432/slack_copilot?sslmode=disable
+POSTGRES_DSN=postgres://user:pass@localhost:5432/kepler_agent?sslmode=disable
 ```
 
 `SLACK_DEFAULT_LOCALE` controls deterministic Slack status and attachment-note
@@ -265,7 +265,7 @@ event inbox states use PostgreSQL. The services do not contain a filesystem
 persistence fallback:
 
 ```bash
-POSTGRES_DSN=postgres://user:pass@localhost:5432/slack_copilot?sslmode=disable
+POSTGRES_DSN=postgres://user:pass@localhost:5432/kepler_agent?sslmode=disable
 SLACK_EVENT_WORKERS=8
 SLACK_EVENT_QUEUE_SIZE=512
 SLACK_EVENT_ENQUEUE_TIMEOUT=2s
