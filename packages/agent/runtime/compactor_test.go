@@ -17,10 +17,14 @@ func (c *compactorClient) Generate(_ context.Context, request model.Request, _ m
 func TestModelCompactorHonorsRequestedBudget(t *testing.T) {
 	client := &compactorClient{}
 	compactor := ModelCompactor{Client: client, Model: "summary-model", MaxOutputTokens: 4096}
-	if _, err := compactor.Compact(context.Background(), []model.Message{model.TextMessage(model.RoleUser, "history")}, 512); err != nil {
+	summary, err := compactor.Compact(context.Background(), []model.Message{model.TextMessage(model.RoleUser, "history")}, 512)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if client.request.MaxOutputTokens != 512 {
 		t.Fatalf("max output tokens = %d, want 512", client.request.MaxOutputTokens)
+	}
+	if summary.Role != model.RoleUser || summary.Text() != "<untrusted_transcript_summary>\nsummary\n</untrusted_transcript_summary>" {
+		t.Fatalf("summary = %#v", summary)
 	}
 }

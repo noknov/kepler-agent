@@ -39,6 +39,23 @@ type exploreJob struct {
 	Boundaries string `json:"boundaries"`
 }
 
+// ChildRun is durable audit metadata for one isolated exploration turn. Its
+// transcript contains the full model and tool lifecycle; this record lets the
+// parent tool result point to that evidence without putting it in model text.
+type ChildRun struct {
+	SessionID   string                         `json:"session_id"`
+	TurnID      string                         `json:"turn_id"`
+	Task        string                         `json:"task"`
+	Termination agentruntime.TerminationReason `json:"termination,omitempty"`
+	Usage       model.Usage                    `json:"usage"`
+	Error       string                         `json:"error,omitempty"`
+}
+
+type childReport struct {
+	Text  string
+	Audit ChildRun
+}
+
 // ExploreTool runs one or more read-only sub-agents in parallel.
 type ExploreTool struct {
 	Runner Runner
@@ -90,17 +107,26 @@ func (t ExploreTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 		return tool.Result{}, fmt.Errorf("task or tasks is required")
 	}
 	if len(jobs) == 1 {
-		out, err := t.Runner.runJob(ctx, call.Scope, jobs[0])
+		out, err := t.Runner.runJob(ctx, call, jobs[0])
+		result := tool.TextResult(out.Text)
+		result.Metadata = map[string]any{"child_runs": []ChildRun{out.Audit}}
 		if err != nil {
-			return tool.Result{}, err
+			// Preserve the child-session link even when the exploration failed so
+			// operators can inspect the durable transcript that caused the error.
+			result.IsError = true
+			result.ErrorCode = "explore_failed"
+			result.Content = []model.Content{{Type: model.ContentText, Text: "Exploration failed: " + err.Error()}}
+			return result, nil
 		}
-		return tool.TextResult(out), nil
+		return result, nil
 	}
-	reports, err := t.Runner.runMany(ctx, call.Scope, jobs)
+	reports, audits, err := t.Runner.runMany(ctx, call, jobs)
 	if err != nil {
 		return tool.Result{}, err
 	}
-	return tool.TextResult(reports), nil
+	result := tool.TextResult(reports)
+	result.Metadata = map[string]any{"child_runs": audits}
+	return result, nil
 }
 
 func normalizeJobs(task, boundaries string, tasks []exploreJob) []exploreJob {
@@ -119,10 +145,10 @@ func normalizeJobs(task, boundaries string, tasks []exploreJob) []exploreJob {
 	return jobs
 }
 
-func (r Runner) runMany(ctx context.Context, scope tool.Scope, jobs []exploreJob) (string, error) {
+func (r Runner) runMany(ctx context.Context, parentCall tool.Call, jobs []exploreJob) (string, []ChildRun, error) {
 	workers := r.maxWorkers()
 	sem := make(chan struct{}, workers)
-	reports := make([]string, len(jobs))
+	reports := make([]childReport, len(jobs))
 	errs := make([]error, len(jobs))
 	var wg sync.WaitGroup
 	for index, job := range jobs {
@@ -131,44 +157,51 @@ func (r Runner) runMany(ctx context.Context, scope tool.Scope, jobs []exploreJob
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			out, err := r.runJob(ctx, scope, job)
+			out, err := r.runJob(ctx, parentCall, job)
 			reports[i] = out
 			errs[i] = err
 		}(index, job)
 	}
 	wg.Wait()
 	var parts []string
+	audits := make([]ChildRun, 0, len(jobs))
 	for index, job := range jobs {
 		if errs[index] != nil {
 			parts = append(parts, fmt.Sprintf("## Task %d\n%s\n\nError: %v", index+1, job.Task, errs[index]))
+			audits = append(audits, reports[index].Audit)
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("## Task %d\n%s\n\n%s", index+1, job.Task, reports[index]))
+		parts = append(parts, fmt.Sprintf("## Task %d\n%s\n\n%s", index+1, job.Task, reports[index].Text))
+		audits = append(audits, reports[index].Audit)
 	}
-	return strings.Join(parts, "\n\n"), nil
+	return strings.Join(parts, "\n\n"), audits, nil
 }
 
-func (r Runner) runJob(ctx context.Context, parentScope tool.Scope, job exploreJob) (string, error) {
+func (r Runner) runJob(ctx context.Context, parentCall tool.Call, job exploreJob) (childReport, error) {
 	catalog, err := r.subsetCatalog()
 	if err != nil {
-		return "", err
+		return childReport{}, err
 	}
 	if catalog == nil {
-		return "", fmt.Errorf("no read-only exploration tools are available")
+		return childReport{}, fmt.Errorf("no read-only exploration tools are available")
 	}
-	store := transcript.NewMemoryStore()
 	deps := r.Deps
 	if deps.IDs == nil {
 		deps.IDs = agentruntime.RandomIDs{}
 	}
 	deps.Tools = catalog
-	deps.Transcript = store
+	if deps.Transcript == nil {
+		deps.Transcript = transcript.NewMemoryStore()
+	}
+	// Child events are durable in their own transcript. Do not publish them to
+	// a parent presentation sink, which could leak sub-agent stream deltas into
+	// the user's turn or incorrectly charge them to the parent run projection.
 	deps.Events = nil
 	subRuntime, err := agentruntime.New(r.exploreConfig(), deps)
 	if err != nil {
-		return "", err
+		return childReport{}, err
 	}
-	sessionID := parentScope.SessionID + ":explore:" + deps.IDs.New("sub")
+	sessionID := deps.IDs.New("explore")
 	turnID := deps.IDs.New("turn")
 	input := "Investigation task:\n" + job.Task
 	if job.Boundaries != "" {
@@ -177,9 +210,9 @@ func (r Runner) runJob(ctx context.Context, parentScope tool.Scope, job exploreJ
 	scope := tool.Scope{
 		SessionID: sessionID,
 		TurnID:    turnID,
-		UserID:    parentScope.UserID,
-		Workspace: parentScope.Workspace,
-		Values:    parentScope.Values,
+		UserID:    parentCall.Scope.UserID,
+		Workspace: parentCall.Scope.Workspace,
+		Values:    parentCall.Scope.Values,
 	}
 	result, err := subRuntime.RunTurn(ctx, agentruntime.TurnRequest{
 		SessionID: sessionID,
@@ -188,15 +221,20 @@ func (r Runner) runJob(ctx context.Context, parentScope tool.Scope, job exploreJ
 		Prompt:    []prompt.Fragment{{ID: "explore-subagent", Layer: prompt.LayerCore, Content: r.systemPrompt()}},
 		Scope:     scope,
 		Model:     r.Config.Model,
+		Parent:    &agentruntime.ParentLink{SessionID: parentCall.Scope.SessionID, TurnID: parentCall.Scope.TurnID, ToolCallID: parentCall.ID, Kind: "agent_explore"},
 	})
+	audit := ChildRun{SessionID: sessionID, TurnID: turnID, Task: job.Task, Termination: result.Termination, Usage: result.Usage}
 	if err != nil {
-		return "", err
+		audit.Error = err.Error()
+		return childReport{Audit: audit}, err
 	}
 	text := strings.TrimSpace(result.Message.Text())
 	if text == "" {
-		return "", fmt.Errorf("exploration sub-agent returned an empty report")
+		err := fmt.Errorf("exploration sub-agent returned an empty report")
+		audit.Error = err.Error()
+		return childReport{Audit: audit}, err
 	}
-	return text, nil
+	return childReport{Text: text, Audit: audit}, nil
 }
 
 func (r Runner) subsetCatalog() (*tool.Catalog, error) {

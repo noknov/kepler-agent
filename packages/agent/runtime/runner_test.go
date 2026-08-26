@@ -159,6 +159,42 @@ func TestRunTurnExecutesToolAndRecordsCanonicalHistory(t *testing.T) {
 	}
 }
 
+func TestRunTurnRecordsParentLinkAsAuditMetadata(t *testing.T) {
+	store := transcript.NewMemoryStore()
+	catalog, err := tool.NewCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := New(Config{Model: "test"}, Dependencies{
+		Model:      &scriptedModel{responses: []model.Response{{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop}}},
+		Tools:      catalog,
+		Transcript: store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runner.RunTurn(context.Background(), TurnRequest{
+		SessionID: "child", TurnID: "child-turn", Input: model.TextMessage(model.RoleUser, "investigate"),
+		Parent: &ParentLink{SessionID: "parent", TurnID: "parent-turn", ToolCallID: "call-1", Kind: "agent_explore"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.Load(context.Background(), "child", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metadata struct {
+		Parent ParentLink `json:"parent"`
+	}
+	if err := json.Unmarshal(events[1].Metadata, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Parent.SessionID != "parent" || metadata.Parent.TurnID != "parent-turn" || metadata.Parent.ToolCallID != "call-1" || metadata.Parent.Kind != "agent_explore" {
+		t.Fatalf("parent metadata = %#v", metadata.Parent)
+	}
+}
+
 func TestRunTurnNormalizesEmptyToolResult(t *testing.T) {
 	call := model.ToolCall{ID: "empty-1", Name: "empty", Arguments: json.RawMessage(`{}`)}
 	client := &scriptedModel{responses: []model.Response{

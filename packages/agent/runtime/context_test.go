@@ -30,7 +30,7 @@ func TestBoundedProjectorDropsOldMessagesAndPreservesRecentTurn(t *testing.T) {
 }
 
 func TestProjectionUsesLatestCompactionCoverage(t *testing.T) {
-	summary := model.TextMessage(model.RoleSystem, "summary")
+	summary := model.TextMessage(model.RoleUser, "<untrusted_transcript_summary>\nsummary\n</untrusted_transcript_summary>")
 	old := model.TextMessage(model.RoleUser, "old")
 	newer := model.TextMessage(model.RoleUser, "new")
 	events := []transcript.Event{
@@ -42,7 +42,7 @@ func TestProjectionUsesLatestCompactionCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(projection.Messages) != 2 || projection.Messages[0].Text() != "summary" || projection.Messages[1].Text() != "new" {
+	if len(projection.Messages) != 3 || projection.Messages[0].Role != model.RoleSystem || projection.Messages[0].Text() != untrustedTranscriptSummaryBoundary.Text() || projection.Messages[1].Text() != summary.Text() || projection.Messages[2].Text() != "new" {
 		t.Fatalf("messages=%+v", projection.Messages)
 	}
 }

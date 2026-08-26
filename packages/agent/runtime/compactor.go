@@ -49,7 +49,10 @@ func (c ModelCompactor) Compact(ctx context.Context, messages []model.Message, t
 	if err != nil {
 		return model.Message{}, err
 	}
-	return model.TextMessage(model.RoleSystem, "Compacted conversation context:\n"+response.Text()), nil
+	// A summary is derived from prior user and tool content, so it must not be
+	// promoted to system authority. The projector adds a fixed system boundary
+	// before this data on every future request.
+	return model.TextMessage(model.RoleUser, "<untrusted_transcript_summary>\n"+response.Text()+"\n</untrusted_transcript_summary>"), nil
 }
 
 func compactionSafeMessages(messages []model.Message) []model.Message {
