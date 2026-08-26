@@ -8,19 +8,39 @@ The local CLI and hosted Slack agent execute the same canonical harness:
 ## Build and run
 
 ```sh
-go build -o bin/slack-copilot ./cli/cmd/slack-copilot
+go build -o bin/copilot-agent ./cli/cmd/copilot-agent
 cp cli/config.example.toml ~/.config/slack-copilot-agent/config.toml
 export OPENAI_API_KEY=...
-bin/slack-copilot --cwd /path/to/project
+bin/copilot-agent --cwd /path/to/project
 ```
 
 Interactive mode starts when stdin is a terminal and no prompt argument is supplied. Otherwise the same binary runs headlessly:
 
 ```sh
-bin/slack-copilot --cwd . "diagnose the failing tests"
-printf "review this repository\n" | bin/slack-copilot --cwd . --output jsonl
-bin/slack-copilot --resume
+bin/copilot-agent --cwd . "diagnose the failing tests"
+printf "review this repository\n" | bin/copilot-agent --cwd . --output jsonl
+bin/copilot-agent --resume
 ```
+
+## Model profiles
+
+The CLI owns its provider configuration; it does not inherit the hosted Slack
+agent's model or credentials. Create a user-only configuration file, then
+select a named profile for a session:
+
+```sh
+copilot-agent config init
+export DEEPSEEK_API_KEY=...
+copilot-agent --profile deepseek --cwd /path/to/project
+```
+
+`provider`, `protocol`, `model`, `base_url`, and `api_key_env` can be set in
+the root configuration or any `[profiles.<name>]` block. API key values are
+never written to TOML: `api_key_env` only names the environment variable to
+read. CLI flags still override the selected profile for one-off calls.
+
+Interactive sessions include a compact terminal status header and live tool
+progress. Use `/help`, `/status`, `/clear`, and `/exit` at the prompt.
 
 Inputs typed during an active turn are either injected as steering at the next model boundary or queued as the next turn, controlled by `input_routing`. This setting belongs to the session surface; it is not hard-coded by Slack versus CLI.
 

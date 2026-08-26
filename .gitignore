@@ -9,6 +9,7 @@ cmd/slack-copilot-agent/.env
 .cache/
 .gocache/
 .tmp-gocache/
+__pycache__/
 *.test
 bin/
 dist/

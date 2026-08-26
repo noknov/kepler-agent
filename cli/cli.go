@@ -34,8 +34,8 @@ import (
 )
 
 type options struct {
-	configPath, cwd, stateDir, provider, protocol, model, baseURL, apiKeyEnv, routing, output, session, approval string
-	resume, unsafe                                                                                               bool
+	configPath, cwd, stateDir, provider, protocol, model, baseURL, apiKeyEnv, routing, output, session, approval, profile string
+	resume, unsafe                                                                                                        bool
 }
 
 type turnDone struct {
@@ -49,11 +49,19 @@ type approvalQuestion struct {
 }
 
 func Run() error {
+	if len(os.Args) == 2 && (os.Args[1] == "--version" || os.Args[1] == "-version") {
+		fmt.Fprintln(os.Stdout, "copilot-agent (local CLI harness)")
+		return nil
+	}
 	if len(os.Args) > 1 && os.Args[1] == "connect" {
 		return runConnect(os.Args[2:])
 	}
+	if len(os.Args) > 1 && os.Args[1] == "config" {
+		return runConfig(os.Args[2:])
+	}
 	var values options
 	flag.StringVar(&values.configPath, "config", "", "configuration TOML path")
+	flag.StringVar(&values.profile, "profile", "", "named model profile from config")
 	flag.StringVar(&values.cwd, "cwd", ".", "workspace root")
 	flag.StringVar(&values.stateDir, "state-dir", "", "session and approval state directory")
 	flag.StringVar(&values.provider, "provider", "", "openai or anthropic")
@@ -71,6 +79,9 @@ func Run() error {
 
 	config, err := local.LoadConfig(values.configPath)
 	if err != nil {
+		return err
+	}
+	if config, err = config.WithProfile(values.profile); err != nil {
 		return err
 	}
 	visited := make(map[string]bool)
@@ -173,7 +184,7 @@ func Run() error {
 	if err != nil {
 		return err
 	}
-	renderer := &eventRenderer{mode: config.Output, stdout: os.Stdout, stderr: os.Stderr}
+	renderer := &eventRenderer{mode: config.Output, stdout: os.Stdout, stderr: os.Stderr, color: config.Output == "text" && isTerminal(os.Stdout), started: make(map[string]time.Time)}
 
 	interactive := len(flag.Args()) == 0 && isTerminal(os.Stdin)
 	questions := make(chan approvalQuestion)
@@ -243,7 +254,7 @@ func Run() error {
 		_ = shutdownTelemetry(shutdownCtx)
 	}()
 	if interactive {
-		return interactiveLoop(ctx, runner, values.session, workspace.Root, fragments, config.InputRouting, questions)
+		return interactiveLoop(ctx, runner, values.session, workspace.Root, fragments, config.InputRouting, questions, config, renderer)
 	}
 	input, err := headlessInput(flag.Args(), os.Stdin)
 	if err != nil {
@@ -309,11 +320,11 @@ func turnRequest(session, workspace, input string, fragments []prompt.Fragment, 
 	return agentruntime.TurnRequest{SessionID: session, Input: model.TextMessage(model.RoleUser, input), Prompt: fragments, Scope: tool.Scope{SessionID: session, Workspace: workspace}, Steering: steering}
 }
 
-func interactiveLoop(ctx context.Context, runner *agentruntime.Runtime, session, workspace string, fragments []prompt.Fragment, routing string, questions <-chan approvalQuestion) error {
+func interactiveLoop(ctx context.Context, runner *agentruntime.Runtime, session, workspace string, fragments []prompt.Fragment, routing string, questions <-chan approvalQuestion, config local.Config, renderer *eventRenderer) error {
 	lines := make(chan string)
 	scanErrors := make(chan error, 1)
 	go scanLines(os.Stdin, lines, scanErrors)
-	fmt.Fprintf(os.Stderr, "slack-copilot · session %s · %s mode\n", session, routing)
+	renderer.welcome(session, workspace, config, routing)
 	var queued []string
 	inputClosed := false
 	for {
@@ -339,6 +350,9 @@ func interactiveLoop(ctx context.Context, runner *agentruntime.Runtime, session,
 		}
 		if input == "/exit" || input == "/quit" {
 			return nil
+		}
+		if handled := renderer.command(input, session, workspace, config); handled {
+			continue
 		}
 		steering := &agentruntime.InputBuffer{}
 		done := make(chan turnDone, 1)
@@ -447,6 +461,8 @@ type eventRenderer struct {
 	mode           string
 	stdout, stderr io.Writer
 	mu             sync.Mutex
+	color          bool
+	started        map[string]time.Time
 }
 
 func (r *eventRenderer) Publish(_ context.Context, event transcript.Event) {
@@ -461,7 +477,17 @@ func (r *eventRenderer) Publish(_ context.Context, event transcript.Event) {
 		fmt.Fprint(r.stdout, event.Model.Text)
 	}
 	if event.Type == transcript.ToolCallStarted && event.ToolCall != nil {
-		fmt.Fprintf(r.stderr, "\n[%s]\n", event.ToolCall.Name)
+		r.started[event.ToolCall.ID] = time.Now()
+		fmt.Fprintf(r.stderr, "\n%s %s\n", r.paint("●", "36"), r.paint(toolLabel(event.ToolCall.Name), "1;37"))
+	}
+	if (event.Type == transcript.ToolCallCompleted || event.Type == transcript.ToolCallFailed) && event.ToolCall != nil {
+		elapsed := time.Since(r.started[event.ToolCall.ID]).Round(10 * time.Millisecond)
+		marker, color := "✓", "32"
+		if event.Type == transcript.ToolCallFailed {
+			marker, color = "×", "31"
+		}
+		fmt.Fprintf(r.stderr, "%s %s %s\n", r.paint(marker, color), toolLabel(event.ToolCall.Name), r.paint(elapsed.String(), "2"))
+		delete(r.started, event.ToolCall.ID)
 	}
 }
 func (r *eventRenderer) finish(result agentruntime.TurnResult) {
@@ -469,3 +495,36 @@ func (r *eventRenderer) finish(result agentruntime.TurnResult) {
 		fmt.Fprintln(r.stdout)
 	}
 }
+
+func (r *eventRenderer) paint(value, code string) string {
+	if !r.color {
+		return value
+	}
+	return "\x1b[" + code + "m" + value + "\x1b[0m"
+}
+
+func (r *eventRenderer) welcome(session, workspace string, config local.Config, routing string) {
+	if !r.color {
+		fmt.Fprintf(r.stderr, "copilot-agent · %s · %s\n", config.Model, workspace)
+		return
+	}
+	fmt.Fprintf(r.stderr, "\n%s\n%s  %s  %s\n%s\n\n", r.paint("✦  copilot-agent", "1;36"), r.paint(config.Model, "1;37"), r.paint(config.Provider+"/"+config.Protocol, "2"), r.paint("session "+session[len(session)-8:], "2"), r.paint("workspace  "+workspace+"  ·  /help for commands  ·  /exit to quit", "2"))
+}
+
+func (r *eventRenderer) command(input, session, workspace string, config local.Config) bool {
+	switch strings.TrimSpace(input) {
+	case "/help":
+		fmt.Fprint(r.stderr, "\n  /help    commands     /status  current configuration     /exit  quit\n  while working: type another message to steer (or queue) the agent\n\n")
+	case "/status":
+		fmt.Fprintf(r.stderr, "\n  model     %s\n  provider  %s/%s\n  workspace %s\n  session   %s\n  key env   %s\n\n", config.Model, config.Provider, config.Protocol, workspace, session, config.APIKeyEnv)
+	case "/clear":
+		if r.color {
+			fmt.Fprint(r.stderr, "\x1b[2J\x1b[H")
+		}
+	default:
+		return false
+	}
+	return true
+}
+
+func toolLabel(name string) string { return strings.ReplaceAll(name, "_", " ") }

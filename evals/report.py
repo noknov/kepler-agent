@@ -37,6 +37,8 @@ def status_class(status: str) -> str:
         return "passed"
     if status == "dry_run":
         return "dry-run"
+    if status == "skipped":
+        return "skipped"
     return "failed"
 
 
@@ -51,17 +53,52 @@ def candidate_summary(summary: dict[str, Any]) -> str:
             "<tr>"
             f"<td>{esc(name)}</td>"
             f"<td>{esc(item.get('total', 0))}</td>"
+            f"<td>{esc(item.get('eligible', 0))}</td>"
             f"<td>{esc(item.get('passed', 0))}</td>"
             f"<td>{esc(item.get('failed', 0))}</td>"
             f"<td>{esc(item.get('timeout', 0))}</td>"
             f"<td>{esc(item.get('agent_error', 0))}</td>"
             f"<td>{esc(item.get('launch_error', 0))}</td>"
             f"<td>{esc(item.get('dry_run', 0))}</td>"
+            f"<td>{esc(item.get('skipped', 0))}</td>"
             f"<td>{esc(round(item.get('pass_rate', 0) * 100, 1))}%</td>"
+            f"<td>{esc(round(item.get('weighted_pass_rate', 0) * 100, 1))}%</td>"
+            f"<td>{esc(item.get('median_duration_seconds', 0))}</td>"
+            f"<td>{esc(item.get('p95_duration_seconds', 0))}</td>"
             f"<td><code>{esc(json.dumps(item.get('failure_classes', {}), sort_keys=True))}</code></td>"
             "</tr>"
         )
     return "\n".join(rows)
+
+
+def capability_rows(summary: dict[str, Any]) -> str:
+    rows = []
+    for name, capabilities in sorted(summary.get("candidate_capabilities", {}).items()):
+        rows.append(f"<tr><td>{esc(name)}</td><td><code>{esc(', '.join(capabilities))}</code></td></tr>")
+    return "\n".join(rows)
+
+
+def coverage_matrix(summary: dict[str, Any], field: str) -> str:
+    groups = summary.get(field, {})
+    candidates = sorted(summary.get("candidates", {}))
+    label = "Category" if field == "categories" else "Tag"
+    if field == "categories":
+        values = sorted({item.get("category", "") for item in groups.values()})
+    else:
+        values = sorted({item.get("tag", "") for item in groups.values()})
+    header = "".join(f"<th>{esc(candidate)}</th>" for candidate in candidates)
+    rows = []
+    for value in values:
+        cells = []
+        for candidate in candidates:
+            key = f"{candidate}:{value}"
+            item = groups.get(key)
+            if item is None:
+                cells.append("<td>—</td>")
+                continue
+            cells.append(f"<td>{esc(item.get('passed', 0))}/{esc(item.get('eligible', 0))} ({esc(round(item.get('pass_rate', 0) * 100, 1))}%)</td>")
+        rows.append(f"<tr><th>{esc(value)}</th>{''.join(cells)}</tr>")
+    return f"<table><thead><tr><th>{label}</th>{header}</tr></thead><tbody>{''.join(rows)}</tbody></table>" if rows else "<p>No coverage data.</p>"
 
 
 def version_rows(versions: dict[str, Any]) -> str:
@@ -101,6 +138,7 @@ def record_rows(result_dir: Path, records: list[dict[str, Any]]) -> str:
             f"<td>{esc(record.get('candidate'))}</td>"
             f"<td>{esc(record.get('category'))}</td>"
             f"<td>{esc(record.get('source'))}</td>"
+            f"<td>{esc(', '.join(record.get('required_capabilities', [])))}</td>"
             f"<td>{esc(record.get('repetition'))}</td>"
             f"<td>{esc(record.get('duration_seconds'))}</td>"
             f"<td>{agent_link} {test_link} {diff_link}</td>"
@@ -138,6 +176,7 @@ def render_report(result_dir: Path) -> str:
     .passed {{ background: #dafbe1; color: #116329; }}
     .failed {{ background: #ffebe9; color: #82071e; }}
     .dry-run {{ background: #ddf4ff; color: #0969da; }}
+    .skipped {{ background: #fff8c5; color: #7d4e00; }}
   </style>
 </head>
 <body>
@@ -161,9 +200,22 @@ def render_report(result_dir: Path) -> str:
 
   <h2>Candidate summary</h2>
   <table>
-    <thead><tr><th>Candidate</th><th>Total</th><th>Passed</th><th>Failed</th><th>Timeout</th><th>Agent error</th><th>Launch error</th><th>Dry-run</th><th>Pass rate</th><th>Failure classes</th></tr></thead>
+    <thead><tr><th>Candidate</th><th>Total</th><th>Eligible</th><th>Passed</th><th>Failed</th><th>Timeout</th><th>Agent error</th><th>Launch error</th><th>Dry-run</th><th>Skipped</th><th>Pass rate</th><th>Weighted pass</th><th>Median sec</th><th>p95 sec</th><th>Failure classes</th></tr></thead>
     <tbody>{candidate_summary(summary)}</tbody>
   </table>
+
+  <h2>Declared capability profiles</h2>
+  <p class="meta">Profiles are comparison configuration, not claims about every installed version. Tasks with unmet requirements are skipped rather than counted as failures.</p>
+  <table>
+    <thead><tr><th>Candidate</th><th>Capabilities</th></tr></thead>
+    <tbody>{capability_rows(summary)}</tbody>
+  </table>
+
+  <h2>Category coverage</h2>
+  {coverage_matrix(summary, "categories")}
+
+  <h2>Tag coverage</h2>
+  {coverage_matrix(summary, "tags")}
 
   <h2>Candidate versions</h2>
   <table>
@@ -173,7 +225,7 @@ def render_report(result_dir: Path) -> str:
 
   <h2>Case records</h2>
   <table>
-    <thead><tr><th>Status</th><th>Failure class</th><th>Task</th><th>Candidate</th><th>Category</th><th>Source</th><th>Rep</th><th>Seconds</th><th>Artifacts</th></tr></thead>
+    <thead><tr><th>Status</th><th>Failure class</th><th>Task</th><th>Candidate</th><th>Category</th><th>Source</th><th>Requirements</th><th>Rep</th><th>Seconds</th><th>Artifacts</th></tr></thead>
     <tbody>{record_rows(result_dir, records)}</tbody>
   </table>
 </body>

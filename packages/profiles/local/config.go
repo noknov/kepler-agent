@@ -12,26 +12,39 @@ import (
 )
 
 type Config struct {
-	Provider             string            `toml:"provider"`
-	Protocol             string            `toml:"protocol"`
-	AnthropicFlavor      string            `toml:"anthropic_flavor"`
-	Model                string            `toml:"model"`
-	BaseURL              string            `toml:"base_url"`
-	APIKeyEnv            string            `toml:"api_key_env"`
-	ReasoningEffort      string            `toml:"reasoning_effort"`
-	InputRouting         string            `toml:"input_routing"`
-	Output               string            `toml:"output"`
-	MaxSteps             int               `toml:"max_steps"`
-	MaxOutputTokens      int               `toml:"max_output_tokens"`
-	MaxContextTokens     int               `toml:"max_context_tokens"`
-	AutocompactBuffer    int               `toml:"autocompact_buffer"`
-	Temperature          *float64          `toml:"temperature"`
-	Timeout              time.Duration     `toml:"timeout"`
-	UnsafeAllowNoSandbox bool              `toml:"unsafe_allow_no_sandbox"`
-	AdditionalReadRoots  []string          `toml:"additional_read_roots"`
-	PromptFiles          []string          `toml:"prompt_files"`
-	SkillRoots           []string          `toml:"skill_roots"`
-	MCPServers           []MCPServerConfig `toml:"mcp_servers"`
+	Provider             string             `toml:"provider"`
+	Protocol             string             `toml:"protocol"`
+	AnthropicFlavor      string             `toml:"anthropic_flavor"`
+	Model                string             `toml:"model"`
+	BaseURL              string             `toml:"base_url"`
+	APIKeyEnv            string             `toml:"api_key_env"`
+	ReasoningEffort      string             `toml:"reasoning_effort"`
+	InputRouting         string             `toml:"input_routing"`
+	Output               string             `toml:"output"`
+	MaxSteps             int                `toml:"max_steps"`
+	MaxOutputTokens      int                `toml:"max_output_tokens"`
+	MaxContextTokens     int                `toml:"max_context_tokens"`
+	AutocompactBuffer    int                `toml:"autocompact_buffer"`
+	Temperature          *float64           `toml:"temperature"`
+	Timeout              time.Duration      `toml:"timeout"`
+	UnsafeAllowNoSandbox bool               `toml:"unsafe_allow_no_sandbox"`
+	AdditionalReadRoots  []string           `toml:"additional_read_roots"`
+	PromptFiles          []string           `toml:"prompt_files"`
+	SkillRoots           []string           `toml:"skill_roots"`
+	MCPServers           []MCPServerConfig  `toml:"mcp_servers"`
+	Profiles             map[string]Profile `toml:"profiles"`
+}
+
+// Profile is a named local model configuration. It is deliberately limited to
+// connection settings: credentials stay in the environment rather than in a
+// project file or session transcript.
+type Profile struct {
+	Provider        string `toml:"provider"`
+	Protocol        string `toml:"protocol"`
+	AnthropicFlavor string `toml:"anthropic_flavor"`
+	Model           string `toml:"model"`
+	BaseURL         string `toml:"base_url"`
+	APIKeyEnv       string `toml:"api_key_env"`
 }
 
 type MCPServerConfig struct {
@@ -94,6 +107,38 @@ func (config Config) Validate() error {
 		return fmt.Errorf("max_context_tokens must be positive and autocompact_buffer must be smaller")
 	}
 	return nil
+}
+
+// WithProfile overlays a named model profile onto config. CLI flags are
+// applied later, so one-off invocations remain possible without editing disk.
+func (config Config) WithProfile(name string) (Config, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return config, nil
+	}
+	profile, ok := config.Profiles[name]
+	if !ok {
+		return config, fmt.Errorf("unknown profile %q", name)
+	}
+	if profile.Provider != "" {
+		config.Provider = profile.Provider
+	}
+	if profile.Protocol != "" {
+		config.Protocol = profile.Protocol
+	}
+	if profile.AnthropicFlavor != "" {
+		config.AnthropicFlavor = profile.AnthropicFlavor
+	}
+	if profile.Model != "" {
+		config.Model = profile.Model
+	}
+	if profile.BaseURL != "" {
+		config.BaseURL = profile.BaseURL
+	}
+	if profile.APIKeyEnv != "" {
+		config.APIKeyEnv = profile.APIKeyEnv
+	}
+	return config, config.Validate()
 }
 
 func DefaultConfigPath() (string, error) {
