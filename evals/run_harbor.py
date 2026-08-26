@@ -43,6 +43,11 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True, help="Harbor jobs directory")
     parser.add_argument("--attempts", type=int, default=1)
     parser.add_argument("--concurrency", type=int, default=1)
+    parser.add_argument(
+        "--agent-setup-timeout-seconds",
+        type=float,
+        help="Override Harbor's per-trial agent setup timeout",
+    )
     parser.add_argument("--tasks", type=int, help="Optional sampled task count; omit for full suite")
     parser.add_argument("--include-task", action="append", default=[])
     parser.add_argument("--source-ref", help="Required full commit SHA for slack-copilot")
@@ -60,6 +65,8 @@ def main() -> int:
         parser.error("--attempts and --concurrency must be positive")
     if args.tasks is not None and args.tasks < 1:
         parser.error("--tasks must be positive")
+    if args.agent_setup_timeout_seconds is not None and args.agent_setup_timeout_seconds <= 0:
+        parser.error("--agent-setup-timeout-seconds must be positive")
     if args.candidate == "slack-copilot" and not args.source_ref:
         parser.error("--source-ref is required for slack-copilot")
     if args.source_ref and not FULL_GIT_SHA.fullmatch(args.source_ref):
@@ -88,6 +95,8 @@ def main() -> int:
     ]
     if args.tasks is not None:
         command.extend(["--n-tasks", str(args.tasks)])
+    if args.agent_setup_timeout_seconds is not None:
+        command.extend(["--agent-setup-timeout-sec", str(args.agent_setup_timeout_seconds)])
     for task_name in args.include_task:
         command.extend(["--include-task-name", task_name])
     if args.candidate == "slack-copilot":
