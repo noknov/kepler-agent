@@ -347,6 +347,7 @@ func TestLoadOpenCodeGoDefaults(t *testing.T) {
 		"ALLOWED_SLACK_USERS":  "U123",
 		"LLM_PROVIDER":         "opencode-go",
 		"OPENCODE_GO_API_KEY":  "oc-go-token",
+		"OPENCODE_GO_THINKING": "low",
 	})
 
 	wd, _ := os.Getwd()
@@ -373,6 +374,9 @@ func TestLoadOpenCodeGoDefaults(t *testing.T) {
 	}
 	if cfg.LLM.APIKey != "oc-go-token" {
 		t.Fatalf("LLM.APIKey = %q, want oc-go-token", cfg.LLM.APIKey)
+	}
+	if cfg.LLM.Thinking != "low" {
+		t.Fatalf("LLM.Thinking = %q, want low", cfg.LLM.Thinking)
 	}
 }
 
@@ -836,6 +840,7 @@ func resetConfigEnv(t *testing.T) {
 		"OPENCODE_GO_API_KEY",
 		"OPENCODE_GO_BASE_URL",
 		"OPENCODE_GO_MODEL",
+		"OPENCODE_GO_THINKING",
 		"OPENCODE_GO_RESPONSES_MODELS",
 		"OPENCODE_GO_TEMPERATURE",
 		"OPENCODE_GO_TIMEOUT",

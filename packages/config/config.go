@@ -702,6 +702,8 @@ func providerThinking(provider string) string {
 		return firstEnv("KIMI_THINKING")
 	case "cliproxyapi":
 		return firstEnv("CLIPROXYAPI_THINKING")
+	case "opencode-go":
+		return firstEnv("OPENCODE_GO_THINKING")
 	case "deepseek":
 		return firstEnv("DEEPSEEK_THINKING")
 	default:

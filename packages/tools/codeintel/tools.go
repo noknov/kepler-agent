@@ -18,8 +18,8 @@ func (t SymbolsTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
 		"code-symbols",
 		"Search workspace symbols with LSP. Use this to locate candidate functions, classes, methods, or variables before reading their files. Symbol hits are hints; follow up with code-read_file or code-definition before claiming behavior.",
-		tool.ObjectSchema([]string{"query"}, map[string]any{
-			"repo":  map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name."},
+		tool.ObjectSchema([]string{"repo", "query"}, map[string]any{
+			"repo":  map[string]any{"type": "string", "description": "Required repository path or workspace-relative repo name; symbols cannot be searched across all workspaces."},
 			"query": map[string]any{"type": "string", "description": "Symbol name or prefix to search for."},
 			"limit": map[string]any{"type": "integer", "description": "Maximum symbols, default 20 and max 100."},
 		}),
@@ -34,6 +34,12 @@ func (t SymbolsTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
+	}
+	if strings.TrimSpace(args.Repo) == "" {
+		return tool.Result{}, fmt.Errorf("repo is required")
+	}
+	if strings.TrimSpace(args.Query) == "" {
+		return tool.Result{}, fmt.Errorf("query is required")
 	}
 	symbols, err := t.Manager.Symbols(ctx, args.Repo, args.Query, args.Limit)
 	if err != nil {

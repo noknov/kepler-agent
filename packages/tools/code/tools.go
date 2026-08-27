@@ -146,7 +146,8 @@ func (t SearchTool) Descriptor() tool.Descriptor {
 		"code-search",
 		"Search source code from freshly fetched git refs. Omit source for normal repository investigation so each repo's origin-tracked upstream is resolved independently. Set source only when the user explicitly requests the checkout view or an exact git ref; never invent a branch or ref. Search hits are hints; read the matching file/range with code-read_file before claiming behavior.",
 		tool.ObjectSchema([]string{"query"}, map[string]any{
-			"query":         map[string]any{"type": "string", "description": "Regex or literal pattern to search for."},
+			"query":         map[string]any{"type": "string", "description": "Literal text to search for by default. Use query_mode=regex only when regular-expression matching is required."},
+			"query_mode":    map[string]any{"type": "string", "enum": []string{"literal", "regex"}, "description": "Search interpretation. Defaults to literal."},
 			"path":          map[string]any{"type": "string", "description": "Optional workspace-relative directory or file to search."},
 			"glob":          map[string]any{"type": "string", "description": "Optional file glob, for example **/*.go."},
 			"source":        map[string]any{"type": "string", "description": "Optional; omit for normal investigation. Set to working_tree only for an explicitly requested checkout view, or to an exact safe git ref explicitly named by the user."},
@@ -159,6 +160,7 @@ func (t SearchTool) Descriptor() tool.Descriptor {
 func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
 		Query        string `json:"query"`
+		QueryMode    string `json:"query_mode"`
 		Path         string `json:"path"`
 		Glob         string `json:"glob"`
 		Source       string `json:"source"`
@@ -170,6 +172,13 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 	}
 	if strings.TrimSpace(args.Query) == "" {
 		return tool.Result{}, fmt.Errorf("query is required")
+	}
+	queryMode := strings.TrimSpace(args.QueryMode)
+	if queryMode == "" {
+		queryMode = "literal"
+	}
+	if queryMode != "literal" && queryMode != "regex" {
+		return tool.Result{}, fmt.Errorf("query_mode must be literal or regex")
 	}
 	if args.Limit <= 0 {
 		args.Limit = 50
@@ -221,7 +230,7 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 			if remaining <= 0 {
 				break
 			}
-			got, grepErr := gitGrep(ctx, repoDir, ref, args.Query, relSearch, args.Glob, args.ContextLines, remaining)
+			got, grepErr := gitGrep(ctx, repoDir, ref, args.Query, queryMode, relSearch, args.Glob, args.ContextLines, remaining)
 			if grepErr != nil {
 				grepErrors = append(grepErrors, fmt.Sprintf("%s: %v", filepath.Base(repoDir), grepErr))
 				continue
@@ -257,6 +266,9 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 
 	// Working-tree search is explicit and uses rg locally.
 	cmdArgs := []string{"--line-number", "--no-heading", "--color=never"}
+	if queryMode == "literal" {
+		cmdArgs = append(cmdArgs, "--fixed-strings")
+	}
 	if args.ContextLines > 0 {
 		cmdArgs = append(cmdArgs, "-C", strconv.Itoa(args.ContextLines))
 	}
@@ -390,11 +402,15 @@ func applyLineRange(content string, startLine, maxLines int) string {
 	return b.String()
 }
 
-// gitGrep searches repoDir at ref for query using "git grep -E", returning
+// gitGrep searches repoDir at ref for query, returning
 // the raw output lines. relPath restricts the search to a sub-directory;
 // pass "." to search the whole repo. glob filters by file pattern.
-func gitGrep(ctx context.Context, repoDir, ref, query, relPath, glob string, contextLines, limit int) ([]string, error) {
-	cmdArgs := []string{"-C", repoDir, "grep", "--line-number", "-E"}
+func gitGrep(ctx context.Context, repoDir, ref, query, queryMode, relPath, glob string, contextLines, limit int) ([]string, error) {
+	patternFlag := "-F"
+	if queryMode == "regex" {
+		patternFlag = "-E"
+	}
+	cmdArgs := []string{"-C", repoDir, "grep", "--line-number", patternFlag}
 	if contextLines > 0 {
 		cmdArgs = append(cmdArgs, "-C", strconv.Itoa(contextLines))
 	}

@@ -238,15 +238,24 @@ func TestGitReadDefaultsToFreshCurrentBranchRemoteRef(t *testing.T) {
 	}
 }
 
-func TestGitSearchReturnsInvalidPatternError(t *testing.T) {
+func TestGitSearchTreatsRegexMetacharactersAsLiteralsByDefault(t *testing.T) {
 	root, _ := testGitRepo(t)
 	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	_, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"query":"[","source":"origin/main"}`), Scope: agenttool.Scope{SessionID: "test", TurnID: "turn"}})
-	if err == nil {
-		t.Fatal("Execute() succeeded, want invalid pattern error")
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"query":"[","source":"origin/main"}`), Scope: agenttool.Scope{SessionID: "test", TurnID: "turn"}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "code search failed") {
-		t.Fatalf("error = %v, want code search failed", err)
+	if !strings.Contains(result.Text(), "no matches") {
+		t.Fatalf("content = %q, want literal search result", result.Text())
+	}
+}
+
+func TestGitSearchSupportsExplicitRegex(t *testing.T) {
+	root, _ := testGitRepo(t)
+	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
+	_, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"query":"[","query_mode":"regex","source":"origin/main"}`), Scope: agenttool.Scope{SessionID: "test", TurnID: "turn"}})
+	if err == nil || !strings.Contains(err.Error(), "code search failed") {
+		t.Fatalf("error = %v, want invalid regex error", err)
 	}
 }
 

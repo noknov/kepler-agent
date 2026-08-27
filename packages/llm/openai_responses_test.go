@@ -227,3 +227,18 @@ func TestResponsesInputSkipsToolHistoryWithoutCallID(t *testing.T) {
 		t.Fatalf("message = %#v, want user message", message)
 	}
 }
+
+func TestResponsesBodyIncludesReasoningEffort(t *testing.T) {
+	body := (&OpenAIResponsesClient{}).responsesBody(Request{Model: "gpt-5.6-luna", Thinking: "low"}, false)
+	reasoning, ok := body["reasoning"].(map[string]string)
+	if !ok || reasoning["effort"] != "low" {
+		t.Fatalf("reasoning=%#v, want low effort", body["reasoning"])
+	}
+}
+
+func TestResponsesBodyOmitsDisabledReasoning(t *testing.T) {
+	body := (&OpenAIResponsesClient{}).responsesBody(Request{Model: "gpt-5.6-luna", Thinking: "disabled"}, false)
+	if _, ok := body["reasoning"]; ok {
+		t.Fatalf("reasoning=%#v, want omitted", body["reasoning"])
+	}
+}

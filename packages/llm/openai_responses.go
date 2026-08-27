@@ -248,6 +248,9 @@ func (c *OpenAIResponsesClient) responsesBody(req Request, stream bool) map[stri
 	if req.MaxTokens > 0 {
 		body["max_output_tokens"] = req.MaxTokens
 	}
+	if effort := strings.TrimSpace(req.Thinking); effort != "" && effort != "disabled" {
+		body["reasoning"] = map[string]string{"effort": effort}
+	}
 	if len(req.Tools) > 0 {
 		body["tools"] = responsesTools(req.Tools)
 		if req.ToolChoice != "" {
