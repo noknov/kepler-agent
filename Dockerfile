@@ -18,13 +18,13 @@ FROM build-base AS build-observability
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/slack-copilot-observability ./observability/cmd/observability
 
 FROM build-base AS build-cli-bin
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/slack-copilot ./cli/cmd/slack-copilot
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/copilot-agent ./cli/cmd/copilot-agent
 
 # Keep the benchmark-export target artifact-only. Docker's local exporter writes
 # the whole target filesystem, so exporting directly from build-base would also
 # attempt to materialize the source tree on the host.
 FROM scratch AS build-cli
-COPY --from=build-cli-bin /out/slack-copilot /slack-copilot
+COPY --from=build-cli-bin /out/copilot-agent /copilot-agent
 
 FROM debian:bookworm-slim AS runtime-minimal
 

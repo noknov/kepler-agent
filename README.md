@@ -54,18 +54,18 @@ current architecture.
 ## Try the local CLI
 
 ```bash
-go build -o bin/slack-copilot ./cli/cmd/slack-copilot
+go build -o bin/copilot-agent ./cli/cmd/copilot-agent
 cp cli/config.example.toml ~/.config/slack-copilot-agent/config.toml
 export OPENAI_API_KEY=...
-bin/slack-copilot --cwd /path/to/project
+bin/copilot-agent --cwd /path/to/project
 ```
 
 The same binary adapts to automation when given a prompt or piped input:
 
 ```bash
-bin/slack-copilot --cwd . "diagnose the failing tests"
-printf "review this repository\n" | bin/slack-copilot --cwd . --output jsonl
-bin/slack-copilot --resume
+bin/copilot-agent --cwd . "diagnose the failing tests"
+printf "review this repository\n" | bin/copilot-agent --cwd . --output jsonl
+bin/copilot-agent --resume
 ```
 
 The local `exec` tool runs argv without a shell, writes only inside the workspace, and denies network
