@@ -25,18 +25,11 @@ func (s *slackStream) AppendDelta(delta string) {
 	if delta == "" {
 		return
 	}
-	s.beginAnswerStreaming()
 	s.mu.Lock()
 	s.answer.WriteString(delta)
 	text := s.answer.String()
 	s.mu.Unlock()
 	s.scheduleStreamUpdate(text)
-}
-
-// beginAnswerStreaming retires tool-progress loading once assistant text starts
-// streaming so later reply delivery does not resurrect stale operation labels.
-func (s *slackStream) beginAnswerStreaming() {
-	s.startTypingStatus()
 }
 
 func (s *slackStream) scheduleStreamUpdate(text string) {

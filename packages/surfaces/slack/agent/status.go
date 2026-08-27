@@ -10,7 +10,6 @@ import (
 
 const (
 	initialThreadStatus = "is thinking"
-	typingThreadStatus  = "is typing"
 	statusRefreshPeriod = 90 * time.Second
 )
 
@@ -41,32 +40,6 @@ func (s *slackStream) startStatus() {
 	s.statusEpoch++
 	s.mu.Unlock()
 	s.sendThreadStatus(initialThreadStatus, nil, "start")
-	s.armStatusRefresh()
-}
-
-// startTypingStatus replaces progress once the final assistant response starts
-// streaming. A text delta is a canonical output event, so this never depends
-// on model reasoning or prose classification.
-func (s *slackStream) startTypingStatus() {
-	if s.status == nil {
-		return
-	}
-	s.statusMu.Lock()
-	defer s.statusMu.Unlock()
-	s.mu.Lock()
-	if s.lastStatus == "\x00" || s.streamClosed {
-		s.mu.Unlock()
-		return
-	}
-	status, loading := splitStatusKey(s.lastStatus)
-	if status == typingThreadStatus && loading == "" {
-		s.mu.Unlock()
-		return
-	}
-	s.lastStatus = statusKey(typingThreadStatus, "")
-	s.statusEpoch++
-	s.mu.Unlock()
-	s.sendThreadStatus(typingThreadStatus, nil, "typing")
 	s.armStatusRefresh()
 }
 
