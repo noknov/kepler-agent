@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/noknov/slack-copilot-agent/packages/agentprotocol"
 	"github.com/noknov/slack-copilot-agent/packages/config"
 	"github.com/noknov/slack-copilot-agent/packages/eventinbox"
 	"github.com/noknov/slack-copilot-agent/packages/infra/envutil"
@@ -14,6 +13,7 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/reminder"
 	"github.com/noknov/slack-copilot-agent/packages/runs"
 	"github.com/noknov/slack-copilot-agent/packages/session"
+	"github.com/noknov/slack-copilot-agent/packages/sessioninput"
 	"github.com/noknov/slack-copilot-agent/packages/userprefs"
 )
 
@@ -23,26 +23,16 @@ type Stores struct {
 	Redis     *redisclient.Client
 	Sessions  *session.PGStore
 	Runs      *runs.PGStore
-	Protocol  *agentprotocol.PGStore
 	Reminders *reminder.PGStore
 	Events    *eventinbox.PGStore
 	UserPrefs *userprefs.PGStore
+	Inputs    *sessioninput.PGStore
 }
 
 type EventIngressStores struct {
 	PGPool    *pgxpool.Pool
 	Redis     *redisclient.Client
 	Events    *eventinbox.PGStore
-	UserPrefs *userprefs.PGStore
-}
-
-// CoreStores contains only persistence needed by the transport-neutral app
-// server. It deliberately excludes Slack inbox, session, and reminder stores.
-type CoreStores struct {
-	PGPool    *pgxpool.Pool
-	Redis     *redisclient.Client
-	Runs      *runs.PGStore
-	Protocol  *agentprotocol.PGStore
 	UserPrefs *userprefs.PGStore
 }
 
@@ -67,10 +57,10 @@ func NewStores(ctx context.Context, cfg config.StorageConfig) (*Stores, error) {
 		Redis:     rdb,
 		Sessions:  session.NewPGStore(pgPool),
 		Runs:      runs.NewPGStore(pgPool),
-		Protocol:  agentprotocol.NewPGStore(pgPool),
 		Reminders: reminder.NewPGStore(pgPool),
 		Events:    eventinbox.NewPGStore(pgPool),
 		UserPrefs: userprefs.NewPGStore(pgPool),
+		Inputs:    sessioninput.NewPGStore(pgPool),
 	}, nil
 }
 
@@ -97,29 +87,6 @@ func NewEventIngressStores(ctx context.Context, cfg config.StorageConfig) (*Even
 	}, nil
 }
 
-func NewCoreStores(ctx context.Context, cfg config.StorageConfig) (*CoreStores, error) {
-	pgPool, err := newPGPool(ctx, cfg.PostgresDSN)
-	if err != nil {
-		return nil, err
-	}
-	if err := requireSchema(ctx, pgPool, coreTables); err != nil {
-		pgPool.Close()
-		return nil, err
-	}
-	rdb, err := redisclient.New(cfg.RedisURL)
-	if err != nil {
-		pgPool.Close()
-		return nil, fmt.Errorf("redis: %w", err)
-	}
-	return &CoreStores{
-		PGPool:    pgPool,
-		Redis:     rdb,
-		Runs:      runs.NewPGStore(pgPool),
-		Protocol:  agentprotocol.NewPGStore(pgPool),
-		UserPrefs: userprefs.NewPGStore(pgPool),
-	}, nil
-}
-
 func (s *Stores) Close() {
 	if s == nil {
 		return
@@ -133,18 +100,6 @@ func (s *Stores) Close() {
 }
 
 func (s *EventIngressStores) Close() {
-	if s == nil {
-		return
-	}
-	if s.Redis != nil {
-		_ = s.Redis.Close()
-	}
-	if s.PGPool != nil {
-		s.PGPool.Close()
-	}
-}
-
-func (s *CoreStores) Close() {
 	if s == nil {
 		return
 	}
@@ -175,17 +130,13 @@ func newPGPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 }
 
 var allTables = []string{
-	"agent_sessions", "agent_runs", "agent_tool_spills", "agent_run_steps",
-	"agent_run_feedback", "agent_protocol_events", "reminders",
+	"agent_runs", "agent_tool_spills", "agent_run_steps",
+	"agent_run_feedback", "agent_transcript_events", "reminders",
 	"slack_event_inbox", "user_settings", "user_prompt_assets",
+	"agent_session_inputs", "user_connections", "oauth_states",
 }
 
-var ingressTables = []string{"slack_event_inbox", "user_settings", "user_prompt_assets"}
-
-var coreTables = []string{
-	"agent_runs", "agent_tool_spills", "agent_run_steps", "agent_run_feedback",
-	"agent_protocol_events", "user_settings", "user_prompt_assets",
-}
+var ingressTables = []string{"slack_event_inbox", "user_settings", "user_prompt_assets", "user_connections", "oauth_states"}
 
 // requireSchema performs a read-only startup check. Application processes do
 // not create or alter database objects and can run without DDL privileges.

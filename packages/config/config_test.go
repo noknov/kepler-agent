@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -40,6 +41,22 @@ func TestLoadPrefersDotEnvOverShellEnv(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsMalformedTypedEnvironment(t *testing.T) {
+	resetConfigEnv(t)
+	t.Setenv("SLACK_EVENT_WORKERS", "many")
+	if _, err := LoadFor(ProfileGateway); err == nil || !strings.Contains(err.Error(), "SLACK_EVENT_WORKERS") {
+		t.Fatalf("expected keyed integer error, got %v", err)
+	}
+}
+
+func TestLoadRejectsMalformedProviderTypedEnvironment(t *testing.T) {
+	resetConfigEnv(t)
+	t.Setenv("MIMO_TIMEOUT", "eventually")
+	if _, err := LoadFor(ProfileGateway); err == nil || !strings.Contains(err.Error(), "MIMO_TIMEOUT") {
+		t.Fatalf("expected provider timeout error, got %v", err)
+	}
+}
+
 func TestValidToolName(t *testing.T) {
 	for _, name := range []string{"reminder-create", "slack_create", "Tool123"} {
 		if !validToolName(name) {
@@ -50,31 +67,6 @@ func TestValidToolName(t *testing.T) {
 		if validToolName(name) {
 			t.Fatalf("validToolName(%q) = true", name)
 		}
-	}
-}
-
-func TestLoadRejectsDirectKimiCodingEndpoint(t *testing.T) {
-	resetConfigEnv(t)
-	dir := t.TempDir()
-	writeEnvFile(t, dir, map[string]string{
-		"SLACK_BOT_TOKEN":      "xoxb-test",
-		"SLACK_SIGNING_SECRET": "secret",
-		"ALLOWED_SLACK_USERS":  "U123",
-		"LLM_PROTOCOL":         "anthropic",
-		"ANTHROPIC_BASE_URL":   "https://api.kimi.com/coding/",
-		"ANTHROPIC_AUTH_TOKEN": "token",
-		"ANTHROPIC_MODEL":      "kimi-for-coding",
-	})
-
-	wd, _ := os.Getwd()
-	defer func() { _ = os.Chdir(wd) }()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := Load()
-	if err == nil || !strings.Contains(err.Error(), "not supported directly") {
-		t.Fatalf("Load() error = %v, want direct coding endpoint rejection", err)
 	}
 }
 
@@ -120,7 +112,6 @@ func TestLoadIntegrationConfig(t *testing.T) {
 		"GITHUB_TOKEN":             "github-token",
 		"GITHUB_DEFAULT_OWNER":     "owner",
 		"GITHUB_DEFAULT_REPO":      "repo",
-		"NOTION_TOKEN":             "notion-token",
 		"WEB_SEARCH_PROVIDER":      "brave",
 		"WEB_SEARCH_BRAVE_API_KEY": "brave-token",
 	})
@@ -137,9 +128,6 @@ func TestLoadIntegrationConfig(t *testing.T) {
 	}
 	if cfg.Integrations.GitHub.Token != "github-token" || cfg.Integrations.GitHub.DefaultRepo != "repo" {
 		t.Fatalf("GitHub integration config = %#v", cfg.Integrations.GitHub)
-	}
-	if cfg.Integrations.Notion.Token != "notion-token" {
-		t.Fatalf("Notion token = %q, want notion-token", cfg.Integrations.Notion.Token)
 	}
 	if cfg.Integrations.WebSearch.Provider != "brave" || cfg.Integrations.WebSearch.BraveKey != "brave-token" {
 		t.Fatalf("WebSearch integration config = %#v", cfg.Integrations.WebSearch)
@@ -169,10 +157,10 @@ func TestLoadMaxOutputTokensIsOptional(t *testing.T) {
 		t.Fatalf("MaxOutputTokens = %d, want provider default sentinel 0", cfg.LLM.MaxOutputTokens)
 	}
 
-	t.Setenv("LLM_MAX_OUTPUT_TOKEN", "8192")
+	t.Setenv("LLM_MAX_OUTPUT_TOKENS", "8192")
 	cfg, err = Load()
 	if err != nil {
-		t.Fatalf("Load() with LLM_MAX_OUTPUT_TOKEN error = %v, want nil", err)
+		t.Fatalf("Load() with LLM_MAX_OUTPUT_TOKENS error = %v, want nil", err)
 	}
 	if cfg.LLM.MaxOutputTokens != 8192 {
 		t.Fatalf("MaxOutputTokens = %d, want 8192", cfg.LLM.MaxOutputTokens)
@@ -316,6 +304,7 @@ func TestLoadDeepSeekDefaults(t *testing.T) {
 		"SLACK_BOT_TOKEN":      "xoxb-test",
 		"SLACK_SIGNING_SECRET": "secret",
 		"ALLOWED_SLACK_USERS":  "U123",
+		"LLM_PROVIDER":         "deepseek",
 		"DEEPSEEK_API_KEY":     "ds-token",
 	})
 
@@ -347,11 +336,6 @@ func TestLoadDeepSeekDefaults(t *testing.T) {
 	if cfg.LLM.Thinking != "" {
 		t.Fatalf("LLM.Thinking = %q, want empty DeepSeek default", cfg.LLM.Thinking)
 	}
-	for _, want := range []string{"deepseek-v4-flash", "deepseek-v4-pro"} {
-		if !containsString(cfg.LLM.AvailableModels, want) {
-			t.Fatalf("AvailableModels = %#v, want %q", cfg.LLM.AvailableModels, want)
-		}
-	}
 }
 
 func TestLoadOpenCodeGoDefaults(t *testing.T) {
@@ -361,6 +345,7 @@ func TestLoadOpenCodeGoDefaults(t *testing.T) {
 		"SLACK_BOT_TOKEN":      "xoxb-test",
 		"SLACK_SIGNING_SECRET": "secret",
 		"ALLOWED_SLACK_USERS":  "U123",
+		"LLM_PROVIDER":         "opencode-go",
 		"OPENCODE_GO_API_KEY":  "oc-go-token",
 	})
 
@@ -389,10 +374,33 @@ func TestLoadOpenCodeGoDefaults(t *testing.T) {
 	if cfg.LLM.APIKey != "oc-go-token" {
 		t.Fatalf("LLM.APIKey = %q, want oc-go-token", cfg.LLM.APIKey)
 	}
-	for _, want := range []string{"glm-5.2", "kimi-k2.7-code", "minimax-m3", "qwen3.7-max", "deepseek-v4-flash"} {
-		if !containsString(cfg.LLM.AvailableModels, want) {
-			t.Fatalf("AvailableModels = %#v, want %q", cfg.LLM.AvailableModels, want)
-		}
+}
+
+func TestLoadOpenCodeGoResponsesModels(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":              "xoxb-test",
+		"SLACK_SIGNING_SECRET":         "secret",
+		"ALLOWED_SLACK_USERS":          "U123",
+		"LLM_PROVIDER":                 "opencode-go",
+		"OPENCODE_GO_API_KEY":          "oc-go-token",
+		"OPENCODE_GO_RESPONSES_MODELS": "gpt-5.6-luna, gpt-5.6-sol ",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	want := []string{"gpt-5.6-luna", "gpt-5.6-sol"}
+	if !reflect.DeepEqual(cfg.LLM.ResponsesModels, want) {
+		t.Fatalf("LLM.ResponsesModels = %#v, want %#v", cfg.LLM.ResponsesModels, want)
 	}
 }
 
@@ -403,6 +411,7 @@ func TestLoadOpenCodeZenDefaults(t *testing.T) {
 		"SLACK_BOT_TOKEN":      "xoxb-test",
 		"SLACK_SIGNING_SECRET": "secret",
 		"ALLOWED_SLACK_USERS":  "U123",
+		"LLM_PROVIDER":         "opencode-zen",
 		"OPENCODE_ZEN_API_KEY": "oc-zen-token",
 	})
 
@@ -431,132 +440,6 @@ func TestLoadOpenCodeZenDefaults(t *testing.T) {
 	if cfg.LLM.APIKey != "oc-zen-token" {
 		t.Fatalf("LLM.APIKey = %q, want oc-zen-token", cfg.LLM.APIKey)
 	}
-	for _, want := range []string{"mimo-v2.5-free", "minimax-m3-free", "nemotron-3-ultra-free", "north-mini-code-free"} {
-		if !containsString(cfg.LLM.AvailableModels, want) {
-			t.Fatalf("AvailableModels = %#v, want %q", cfg.LLM.AvailableModels, want)
-		}
-	}
-}
-
-func TestLoadOpenCodeUsesProviderSpecificAvailableModels(t *testing.T) {
-	resetConfigEnv(t)
-	dir := t.TempDir()
-	writeEnvFile(t, dir, map[string]string{
-		"SLACK_BOT_TOKEN":              "xoxb-test",
-		"SLACK_SIGNING_SECRET":         "secret",
-		"ALLOWED_SLACK_USERS":          "U123",
-		"LLM_PROVIDER":                 "opencode-go",
-		"OPENCODE_GO_API_KEY":          "oc-token",
-		"OPENCODE_GO_MODEL":            "glm-5.2",
-		"OPENCODE_GO_AVAILABLE_MODELS": "glm-5.2,kimi-k2.7-code,mimo-v2.5",
-		"MIMO_AVAILABLE_MODELS":        "mimo-v2.5-pro",
-	})
-
-	wd, _ := os.Getwd()
-	defer func() { _ = os.Chdir(wd) }()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v, want nil", err)
-	}
-	want := []string{"glm-5.2", "kimi-k2.7-code", "mimo-v2.5"}
-	if !equalStrings(cfg.LLM.AvailableModels, want) {
-		t.Fatalf("AvailableModels = %#v, want %#v", cfg.LLM.AvailableModels, want)
-	}
-}
-
-func TestLoadOpenCodeZenUsesProviderSpecificAvailableModels(t *testing.T) {
-	resetConfigEnv(t)
-	dir := t.TempDir()
-	writeEnvFile(t, dir, map[string]string{
-		"SLACK_BOT_TOKEN":               "xoxb-test",
-		"SLACK_SIGNING_SECRET":          "secret",
-		"ALLOWED_SLACK_USERS":           "U123",
-		"LLM_PROVIDER":                  "opencode-zen",
-		"OPENCODE_ZEN_API_KEY":          "oc-zen-token",
-		"OPENCODE_ZEN_MODEL":            "mimo-v2.5-free",
-		"OPENCODE_ZEN_AVAILABLE_MODELS": "mimo-v2.5-free,minimax-m3-free",
-		"OPENCODE_GO_AVAILABLE_MODELS":  "glm-5.2,kimi-k2.7-code",
-	})
-
-	wd, _ := os.Getwd()
-	defer func() { _ = os.Chdir(wd) }()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v, want nil", err)
-	}
-	want := []string{"mimo-v2.5-free", "minimax-m3-free"}
-	if !equalStrings(cfg.LLM.AvailableModels, want) {
-		t.Fatalf("AvailableModels = %#v, want %#v", cfg.LLM.AvailableModels, want)
-	}
-}
-
-func TestLoadMiMoUsesProviderSpecificAvailableModels(t *testing.T) {
-	resetConfigEnv(t)
-	dir := t.TempDir()
-	writeEnvFile(t, dir, map[string]string{
-		"SLACK_BOT_TOKEN":              "xoxb-test",
-		"SLACK_SIGNING_SECRET":         "secret",
-		"ALLOWED_SLACK_USERS":          "U123",
-		"LLM_PROVIDER":                 "mimo",
-		"MIMO_API_KEY":                 "mimo-token",
-		"MIMO_MODEL":                   "mimo-v2.5",
-		"MIMO_AVAILABLE_MODELS":        "mimo-v2.5,mimo-v2.5-pro",
-		"OPENCODE_GO_AVAILABLE_MODELS": "glm-5.2,kimi-k2.7-code",
-	})
-
-	wd, _ := os.Getwd()
-	defer func() { _ = os.Chdir(wd) }()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v, want nil", err)
-	}
-	want := []string{"mimo-v2.5", "mimo-v2.5-pro"}
-	if !equalStrings(cfg.LLM.AvailableModels, want) {
-		t.Fatalf("AvailableModels = %#v, want %#v", cfg.LLM.AvailableModels, want)
-	}
-}
-
-func TestLoadTokenUsageConfigUsesOpenCodeGoEnv(t *testing.T) {
-	resetConfigEnv(t)
-	dir := t.TempDir()
-	writeEnvFile(t, dir, map[string]string{
-		"SLACK_BOT_TOKEN":          "xoxb-test",
-		"SLACK_SIGNING_SECRET":     "secret",
-		"ALLOWED_SLACK_USERS":      "U123",
-		"LLM_PROVIDER":             "opencode-go",
-		"OPENCODE_GO_API_KEY":      "oc-go-token",
-		"OPENCODE_GO_WORKSPACE_ID": "wrk_opencode",
-		"OPENCODE_GO_AUTH_COOKIE":  "auth=opencode",
-	})
-
-	wd, _ := os.Getwd()
-	defer func() { _ = os.Chdir(wd) }()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v, want nil", err)
-	}
-	if cfg.LLM.TokenUsage.OpenCodeGo.WorkspaceID != "wrk_opencode" {
-		t.Fatalf("TokenUsage.OpenCodeGo.WorkspaceID = %q, want OpenCode Go env value", cfg.LLM.TokenUsage.OpenCodeGo.WorkspaceID)
-	}
-	if cfg.LLM.TokenUsage.OpenCodeGo.AuthCookie != "auth=opencode" {
-		t.Fatalf("TokenUsage.OpenCodeGo.AuthCookie = %q, want OpenCode Go env value", cfg.LLM.TokenUsage.OpenCodeGo.AuthCookie)
-	}
 }
 
 func TestLoadSecondaryModelConfig(t *testing.T) {
@@ -566,6 +449,7 @@ func TestLoadSecondaryModelConfig(t *testing.T) {
 		"SLACK_BOT_TOKEN":      "xoxb-test",
 		"SLACK_SIGNING_SECRET": "secret",
 		"ALLOWED_SLACK_USERS":  "U123",
+		"LLM_PROVIDER":         "deepseek",
 		"DEEPSEEK_API_KEY":     "ds-token",
 		"SECONDARY_PROVIDER":   "opencode-zen",
 		"OPENCODE_ZEN_API_KEY": "secondary-token",
@@ -622,31 +506,6 @@ func TestLoadOpenCodeGoAnthropicEndpoint(t *testing.T) {
 	}
 	if cfg.LLM.Model != "minimax-m3" {
 		t.Fatalf("LLM.Model = %q, want minimax-m3", cfg.LLM.Model)
-	}
-}
-
-func TestLoadRejectsDirectKimiCodingEndpointRegardlessOfProtocol(t *testing.T) {
-	resetConfigEnv(t)
-	dir := t.TempDir()
-	writeEnvFile(t, dir, map[string]string{
-		"SLACK_BOT_TOKEN":      "xoxb-test",
-		"SLACK_SIGNING_SECRET": "secret",
-		"ALLOWED_SLACK_USERS":  "U123",
-		"LLM_PROTOCOL":         "openai",
-		"ANTHROPIC_BASE_URL":   "https://api.kimi.com/coding/",
-		"ANTHROPIC_AUTH_TOKEN": "token",
-		"ANTHROPIC_MODEL":      "kimi-for-coding",
-	})
-
-	wd, _ := os.Getwd()
-	defer func() { _ = os.Chdir(wd) }()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := Load()
-	if err == nil || !strings.Contains(err.Error(), "not supported directly") {
-		t.Fatalf("Load() error = %v, want direct coding endpoint rejection", err)
 	}
 }
 
@@ -718,6 +577,40 @@ func TestLoadLuckinMCPConfig(t *testing.T) {
 	}
 	if cfg.Integrations.Luckin.MCPToken != "luckin-token" {
 		t.Fatalf("LuckinMCPToken = %q", cfg.Integrations.Luckin.MCPToken)
+	}
+}
+
+func TestLoadClickStackMCPConfig(t *testing.T) {
+	resetConfigEnv(t)
+	dir := t.TempDir()
+	writeEnvFile(t, dir, map[string]string{
+		"SLACK_BOT_TOKEN":       "xoxb-test",
+		"SLACK_SIGNING_SECRET":  "secret",
+		"ALLOWED_SLACK_USERS":   "U123",
+		"MIMO_API_KEY":          "mimo-token",
+		"CLICKSTACK_MCP_URL":    "https://clickstack.example/api/mcp/",
+		"CLICKSTACK_SERVICE_ID": "svc-1",
+		"CLICKSTACK_TEAM_ID":    "team-1",
+	})
+
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Integrations.ClickStack.MCPURL != "https://clickstack.example/api/mcp" {
+		t.Fatalf("ClickStackMCPURL = %q", cfg.Integrations.ClickStack.MCPURL)
+	}
+	if cfg.Integrations.ClickStack.ServiceID != "svc-1" || cfg.Integrations.ClickStack.TeamID != "team-1" {
+		t.Fatalf("ClickStack headers = %#v", cfg.Integrations.ClickStack)
+	}
+	if !cfg.Integrations.ClickStack.Enabled() {
+		t.Fatal("expected ClickStack to be enabled when service id is set")
 	}
 }
 
@@ -797,7 +690,7 @@ func TestLoadForUsesProfileEnvFile(t *testing.T) {
 	dir := t.TempDir()
 	writeEnvFile(t, dir, map[string]string{
 		"SLACK_BOT_TOKEN":      "xoxb-test",
-		"SLACK_SIGNING_SECRET": "all-in-one-secret",
+		"SLACK_SIGNING_SECRET": "worker-secret",
 		"ALLOWED_SLACK_USERS":  "U123",
 		"MIMO_API_KEY":         "mimo-token",
 	})
@@ -845,32 +738,6 @@ func TestLoadForSlackWorkerUsesWorkerEnvFile(t *testing.T) {
 	}
 }
 
-func TestLoadBenchmarkDoesNotRequireServerStorageOrSlack(t *testing.T) {
-	resetConfigEnv(t)
-	dir := t.TempDir()
-	envPath := filepath.Join(dir, "benchmark", ".env")
-	if err := os.MkdirAll(filepath.Dir(envPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(envPath, []byte("MIMO_API_KEY=mimo-token\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	wd, _ := os.Getwd()
-	defer func() { _ = os.Chdir(wd) }()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := LoadBenchmark()
-	if err != nil {
-		t.Fatalf("LoadBenchmark() error = %v", err)
-	}
-	if cfg.Storage.PostgresDSN != "" || cfg.Storage.RedisURL != "" {
-		t.Fatalf("benchmark storage = %#v, want empty", cfg.Storage)
-	}
-}
-
 func TestLoadForHonorsExplicitEnvFile(t *testing.T) {
 	resetConfigEnv(t)
 	dir := t.TempDir()
@@ -895,7 +762,7 @@ func TestLoadForHonorsExplicitEnvFile(t *testing.T) {
 }
 
 func writeEnvFile(t *testing.T, dir string, values map[string]string) {
-	writeEnvFileNamed(t, dir, filepath.Join("cmd", "slack-copilot-agent", ".env"), values)
+	writeEnvFileNamed(t, dir, filepath.Join("worker", ".env"), values)
 }
 
 func writeEnvFileNamed(t *testing.T, dir, name string, values map[string]string) {
@@ -940,7 +807,6 @@ func resetConfigEnv(t *testing.T) {
 		"MIMO_TEMPERATURE",
 		"MIMO_TIMEOUT",
 		"MODEL_ROUTING_MULTIMODAL_MODEL",
-		"MULTIMODAL_MODEL",
 		"MULTIMODAL_MODELS",
 		"KIMI_PROTOCOL",
 		"CLIPROXYAPI_PROTOCOL",
@@ -952,7 +818,6 @@ func resetConfigEnv(t *testing.T) {
 		"CLIPROXYAPI_TEMPERATURE",
 		"CLIPROXYAPI_TIMEOUT",
 		"ANTHROPIC_PROTOCOL",
-		"ANTHROPIC_FLAVOR",
 		"OPENAI_API_KEY",
 		"OPENAI_BASE_URL",
 		"OPENAI_MODEL",
@@ -960,41 +825,35 @@ func resetConfigEnv(t *testing.T) {
 		"DEEPSEEK_API_KEY",
 		"DEEPSEEK_BASE_URL",
 		"DEEPSEEK_MODEL",
-		"DEEPSEEK_AVAILABLE_MODELS",
 		"DEEPSEEK_THINKING",
 		"DEEPSEEK_TEMPERATURE",
 		"DEEPSEEK_TIMEOUT",
 		"KIMI_API_KEY",
 		"KIMI_BASE_URL",
 		"KIMI_MODEL",
-		"KIMI_AVAILABLE_MODELS",
 		"OPENCODE_GO_PROTOCOL",
 		"OPENCODE_GO_API_KEY",
 		"OPENCODE_GO_BASE_URL",
 		"OPENCODE_GO_MODEL",
-		"OPENCODE_GO_AVAILABLE_MODELS",
+		"OPENCODE_GO_RESPONSES_MODELS",
 		"OPENCODE_GO_TEMPERATURE",
 		"OPENCODE_GO_TIMEOUT",
-		"OPENCODE_GO_WORKSPACE_ID",
-		"OPENCODE_GO_AUTH_COOKIE",
 		"OPENCODE_ZEN_PROTOCOL",
 		"OPENCODE_ZEN_API_KEY",
 		"OPENCODE_ZEN_BASE_URL",
 		"OPENCODE_ZEN_MODEL",
-		"OPENCODE_ZEN_AVAILABLE_MODELS",
 		"OPENCODE_ZEN_TEMPERATURE",
 		"OPENCODE_ZEN_TIMEOUT",
 		"MOONSHOT_API_KEY",
 		"MOONSHOT_BASE_URL",
 		"MOONSHOT_MODEL",
-		"MOONSHOT_AVAILABLE_MODELS",
 		"ANTHROPIC_BASE_URL",
 		"ANTHROPIC_API_KEY",
 		"ANTHROPIC_AUTH_TOKEN",
 		"ANTHROPIC_MODEL",
 		"ANTHROPIC_AVAILABLE_MODELS",
 		"OPENAI_AVAILABLE_MODELS",
-		"LLM_MAX_OUTPUT_TOKEN",
+		"LLM_MAX_OUTPUT_TOKENS",
 		"POSTGRES_DSN",
 		"REDIS_URL",
 		"SLACK_EVENT_MAX_ATTEMPTS",
@@ -1014,23 +873,20 @@ func resetConfigEnv(t *testing.T) {
 		"TTS_API_KEY",
 		"TTS_BASE_URL",
 		"TTS_MODEL",
-		"TTS_AUTO",
 		"TTS_DEFAULT_VOICE",
 		"TTS_DEFAULT_STYLE",
 		"GITHUB_TOKEN",
 		"GITHUB_API_BASE_URL",
 		"GITHUB_DEFAULT_OWNER",
 		"GITHUB_DEFAULT_REPO",
-		"NOTION_TOKEN",
-		"NOTION_DATABASE_ID",
-		"NOTION_TITLE_PROPERTY",
-		"NOTION_VERSION",
+		"NOTION_MCP_URL",
 		"YOUTRACK_URL",
 		"YOUTRACK_TOKEN",
 		"LUCKIN_MCP_URL",
 		"LUCKIN_MCP_TOKEN",
-		"PLAYWRIGHT_MCP_URL",
-		"PLAYWRIGHT_MCP_TOKEN",
+		"CLICKSTACK_MCP_URL",
+		"CLICKSTACK_SERVICE_ID",
+		"CLICKSTACK_TEAM_ID",
 		"WEB_SEARCH_PROVIDER",
 		"WEB_SEARCH_GOOGLE_API_KEY",
 		"WEB_SEARCH_GOOGLE_CX",
@@ -1045,25 +901,4 @@ func resetConfigEnv(t *testing.T) {
 	for _, key := range keys {
 		t.Setenv(key, "")
 	}
-}
-
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
-}
-
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

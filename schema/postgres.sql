@@ -4,13 +4,6 @@
 -- this file with the database administration workflow of your choice before
 -- starting a service. The statements are idempotent for clean installations.
 
-CREATE TABLE IF NOT EXISTS agent_sessions (
-    id TEXT PRIMARY KEY,
-    payload JSONB NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 CREATE TABLE IF NOT EXISTS agent_runs (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
@@ -42,6 +35,23 @@ CREATE TABLE IF NOT EXISTS agent_tool_spills (
 CREATE INDEX IF NOT EXISTS idx_agent_tool_spills_updated
     ON agent_tool_spills(updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS agent_session_inputs (
+    sequence BIGSERIAL UNIQUE,
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('steering', 'queue')),
+    payload JSONB NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    claim_owner TEXT NOT NULL DEFAULT '',
+    claim_until TIMESTAMPTZ,
+    acknowledged_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_inputs_pending
+    ON agent_session_inputs(kind, session_id, sequence)
+    WHERE acknowledged_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS agent_run_steps (
     run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
     seq BIGSERIAL,
@@ -68,9 +78,9 @@ CREATE TABLE IF NOT EXISTS agent_run_feedback (
 CREATE INDEX IF NOT EXISTS idx_agent_run_feedback_run
     ON agent_run_feedback(run_id, created_at);
 
-CREATE TABLE IF NOT EXISTS agent_protocol_events (
+CREATE TABLE IF NOT EXISTS agent_transcript_events (
     event_id TEXT PRIMARY KEY,
-    thread_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
     turn_id TEXT NOT NULL DEFAULT '',
     sequence BIGINT NOT NULL CHECK (sequence > 0),
     type TEXT NOT NULL,
@@ -78,13 +88,13 @@ CREATE TABLE IF NOT EXISTS agent_protocol_events (
     at TIMESTAMPTZ NOT NULL,
     payload JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (thread_id, sequence)
+    UNIQUE (session_id, sequence)
 );
 
-CREATE INDEX IF NOT EXISTS idx_agent_protocol_events_thread_replay
-    ON agent_protocol_events(thread_id, sequence);
-CREATE INDEX IF NOT EXISTS idx_agent_protocol_events_turn
-    ON agent_protocol_events(turn_id, sequence)
+CREATE INDEX IF NOT EXISTS idx_agent_transcript_events_session_replay
+    ON agent_transcript_events(session_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_agent_transcript_events_turn
+    ON agent_transcript_events(turn_id, sequence)
     WHERE turn_id <> '';
 
 CREATE TABLE IF NOT EXISTS reminders (
@@ -146,3 +156,28 @@ CREATE TABLE IF NOT EXISTS user_prompt_assets (
 
 CREATE INDEX IF NOT EXISTS user_prompt_assets_user_kind_idx
     ON user_prompt_assets(user_id, kind, active, name);
+
+CREATE TABLE IF NOT EXISTS user_connections (
+    user_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'connected',
+    token_ciphertext TEXT NOT NULL DEFAULT '',
+    scopes TEXT[] NOT NULL DEFAULT '{}',
+    account TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, provider)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_connections_provider
+    ON user_connections(provider, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS oauth_states (
+    state TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    code_verifier TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_oauth_states_expires
+    ON oauth_states(expires_at);

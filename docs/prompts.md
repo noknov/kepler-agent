@@ -22,8 +22,8 @@ Prompt space is layered by stability:
 - `rules/*.md` contains reusable operating policy such as investigation style,
   evidence discipline, safety boundaries, and communication norms.
 - `tools.json` owns tool-specific routing and parameter guidance.
-- `delegates.json`, `runner.json`, `health.json`, and prompt-specific files own
-  specialized utility behavior instead of bloating the main agent prompt.
+- `health.json`, `tool_statuses.json`, and prompt-specific files own specialized
+  utility behavior instead of bloating the main agent prompt.
 - Private overlays should contain only deployment-specific context such as
   repository names, environment mappings, and workflow aliases.
 
@@ -37,24 +37,23 @@ does not belong in `system.md`.
 | File | Purpose |
 |---|---|
 | `system.md` | Main system prompt |
-| `delegates.json` | System prompts for delegate sub-agents |
 | `app_messages.json` | Responses to empty mentions, empty DMs, file-only DMs |
 | `tools.json` | Tool description and parameter overrides |
-| `memory.json` | Labels for summary and thread context blocks |
-| `runner.json` | Retry prompt templates for final-answer validation |
 | `health.json` | Health summary header and rules text |
 | `tool_statuses.json` | Slack status messages shown while tools run |
 | `texts.json` | Shared prompt snippets and context wrappers |
-| `rules/*.md` | Markdown rules injected into the main agent and delegates |
+| `rules/*.md` | Markdown rules injected into the main agent |
 | `skills/<name>/SKILL.md` | Skill definitions with frontmatter |
 | `runbooks/*.md` | Service runbooks searched by `knowledge-runbook_search` |
 
 Only skill metadata appears in the base prompt. Full skill instructions are
 loaded on demand through `skills-load`.
 
-Repository inventory from `WORKSPACE_ROOTS` is injected into the runtime prompt
-so the internal debugging agent can route questions to the right codebase before
-opening files.
+Runtime facts such as the current date, timezone, and configured workspace
+roots are injected as an ephemeral `<environment_context>` user fragment at
+request time. Repository inventories are no longer embedded in the system
+prompt; use the deferred `workspace-list_repos` tool when the model needs a
+repository catalog.
 
 ## Private Overlay
 

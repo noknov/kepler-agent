@@ -1,0 +1,34 @@
+name: Check
+
+on:
+  pull_request:
+  push:
+    branches: [main, feat/agent-v2]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install local tool dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep
+      - name: Format and architecture boundaries
+        run: make fmt-check boundaries
+      - name: Static analysis
+        run: make vet
+      - name: Unit tests
+        run: make test
+      - name: Build deployable binaries
+        run: make build
+      - name: Validate evaluation tooling
+        run: make eval-check
+      - name: Race-sensitive runtime tests
+        run: make test-race

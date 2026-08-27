@@ -16,8 +16,11 @@ func TestGoSymbolsWithGopls(t *testing.T) {
 	if _, err := exec.LookPath("gopls"); err != nil {
 		t.Skip("gopls not installed")
 	}
-	root, err := filepath.Abs("../..")
-	if err != nil {
+	root := t.TempDir()
+	if err := writeTestFile(filepath.Join(root, "go.mod"), "module example.test/codeintel\n\ngo 1.25.0\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestFile(filepath.Join(root, "server.go"), "package codeintel\n\nfunc NewServer() {}\n"); err != nil {
 		t.Fatal(err)
 	}
 	manager := Manager{Paths: safety.WorkspacePolicy{Roots: []string{root}}, Timeout: 20 * time.Second}

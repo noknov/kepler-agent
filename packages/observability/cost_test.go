@@ -1,10 +1,24 @@
 package observability
 
-import "testing"
+import (
+	"testing"
 
-func TestDefaultCostRatesOpenCodeGo(t *testing.T) {
-	rates := DefaultCostRates("opencode-go", "kimi-k2.7-code")
-	if rates.InputPerMTok != 0.95 || rates.OutputPerMTok != 4.00 || rates.CacheReadPerMTok != 0.19 {
-		t.Fatalf("rates = %#v, want Kimi K2.7 Code OpenCode Go rates", rates)
+	"github.com/noknov/slack-copilot-agent/packages/llm"
+)
+
+func TestCostRatesEstimateUSD(t *testing.T) {
+	rates := CostRates{InputPerMTok: 1, OutputPerMTok: 2}
+	got := rates.EstimateUSD(llm.Usage{PromptTokens: 1_000_000, CompletionTokens: 500_000})
+	if got != 2 {
+		t.Fatalf("EstimateUSD() = %v, want 2", got)
+	}
+}
+
+func TestCostRatesRespectProviderCacheAccounting(t *testing.T) {
+	rates := CostRates{InputPerMTok: 1, CacheReadPerMTok: 0.1}
+	openAI := rates.EstimateUSD(llm.Usage{PromptTokens: 1_000_000, CacheReadInputTokens: 500_000, CacheIncludedInPrompt: true})
+	anthropic := rates.EstimateUSD(llm.Usage{PromptTokens: 1_000_000, CacheReadInputTokens: 500_000, CacheIncludedInPrompt: false})
+	if openAI != 0.55 || anthropic != 1.05 {
+		t.Fatalf("cache costs: openai=%v anthropic=%v", openAI, anthropic)
 	}
 }

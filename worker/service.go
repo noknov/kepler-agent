@@ -6,38 +6,47 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/noknov/slack-copilot-agent/packages/agent/model"
+	"github.com/noknov/slack-copilot-agent/packages/agent/tool"
+	"github.com/noknov/slack-copilot-agent/packages/agent/transcript"
 	"github.com/noknov/slack-copilot-agent/packages/appsupport"
 	"github.com/noknov/slack-copilot-agent/packages/config"
-	"github.com/noknov/slack-copilot-agent/packages/conversation"
+	"github.com/noknov/slack-copilot-agent/packages/connections"
 	"github.com/noknov/slack-copilot-agent/packages/health"
 	"github.com/noknov/slack-copilot-agent/packages/infra/httpguard"
 	sharedlogging "github.com/noknov/slack-copilot-agent/packages/infra/logging"
+	"github.com/noknov/slack-copilot-agent/packages/infra/telemetry"
 	"github.com/noknov/slack-copilot-agent/packages/observability"
 	"github.com/noknov/slack-copilot-agent/packages/platform"
+	"github.com/noknov/slack-copilot-agent/packages/profiles/hosted"
 	"github.com/noknov/slack-copilot-agent/packages/prompts"
 	"github.com/noknov/slack-copilot-agent/packages/reminder"
-	appruntime "github.com/noknov/slack-copilot-agent/packages/runtime"
 	"github.com/noknov/slack-copilot-agent/packages/safety"
-	"github.com/noknov/slack-copilot-agent/packages/slack"
-	"github.com/noknov/slack-copilot-agent/packages/slackevents"
-	"github.com/noknov/slack-copilot-agent/packages/slackhandler"
-	"github.com/noknov/slack-copilot-agent/packages/slackhome"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/agent"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/client"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/conversation"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/events"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/handler"
+	"github.com/noknov/slack-copilot-agent/packages/surfaces/slack/home"
+	slackmessaging "github.com/noknov/slack-copilot-agent/packages/surfaces/slack/messaging"
+	slackTools "github.com/noknov/slack-copilot-agent/packages/surfaces/slack/tools"
 	"github.com/noknov/slack-copilot-agent/packages/toolkit/gitcache"
+	hostedTools "github.com/noknov/slack-copilot-agent/packages/tools/hosted"
 )
 
 type Service struct {
 	cfg         config.Config
 	stores      *platform.Stores
 	slack       *slack.Client
-	runtime     appruntime.AgentRuntime
 	metrics     *observability.Recorder
 	health      *health.Service
 	reminders   reminder.Scheduler
-	conv        *conversation.Service
+	conv        slackconversation.ControlledConversation
 	handler     *slackhandler.Handler
 	slackWorker *slackevents.Worker
 
@@ -58,6 +67,15 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	sharedlogging.Configure(cfg.Observing.LogLevel)
+	shutdownTelemetry, err := telemetry.Setup(ctx, "slack-copilot-worker")
+	if err != nil {
+		return fmt.Errorf("configure telemetry: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTelemetry(shutdownCtx)
+	}()
 	service, err := New(ctx, cfg)
 	if err != nil {
 		return err
@@ -86,52 +104,103 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	gitcache.SetRedis(stores.Redis)
 
 	slackClient := slack.NewClient(cfg.Slack.BotToken, cfg.Slack.BotUserID)
-	if cfg.Slack.BotUserID == "" {
-		if botUserID, err := slackClient.AuthTest(context.Background()); err == nil {
+	if botUserID, err := slackClient.AuthTest(context.Background()); err == nil {
+		if cfg.Slack.BotUserID == "" {
 			slackClient.SetBotUserID(botUserID)
 			cfg.Slack.BotUserID = botUserID
 			log.Printf("resolved Slack bot user id with auth.test")
-		} else {
-			log.Printf("warning: could not resolve Slack bot user id: %v", err)
 		}
+	} else {
+		log.Printf("warning: slack auth.test failed: %v", err)
 	}
 
 	recorder := observability.NewRecorder()
-	rt := appruntime.NewAgentRuntime(cfg, slackClient, stores.Reminders, recorder, stores.Redis, stores.UserPrefs)
-	if rt.Core != nil {
-		rt.Core.Events = stores.Protocol
+	podID := appsupport.GeneratePodID()
+	rates := hosted.CostRates(cfg)
+	recorder.SetCostRates(rates)
+	runSink := &hosted.RunSink{Store: stores.Runs, Provider: cfg.LLM.Provider, Model: cfg.LLM.Model, Rates: rates, Metrics: recorder}
+	if err := runSink.Recover(ctx, stores.PGPool); err != nil {
+		return nil, fmt.Errorf("recover agent run projections: %w", err)
 	}
-	recorder.SetCostRates(rt.CostRates)
-
-	healthService := health.NewService(rt.Tools, cfg.Security.WorkspaceRoots)
+	// Run records are rebuildable transcript projections. Keep them off the
+	// latency-sensitive Slack/model event path.
+	events := transcript.NewFanout(transcript.NewAsyncSink(serviceCtx, runSink, 2048))
+	workspacePolicy := safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}
+	connStore := connections.PGStore{Pool: stores.PGPool, SecretKey: cfg.Connections.EncryptionKey}
+	continuations := connections.NewRedisContinuationStore(stores.Redis)
+	connService := connections.NewServiceFromConfig(connStore, cfg)
+	connService.Continuations = continuations
+	surface := hostedTools.SurfaceOptions{Name: "slack", AvailableDeps: map[string]bool{
+		"slack":    slackClient != nil,
+		"reminder": stores.Reminders != nil,
+	}, Connections: &connService}
+	bundle, err := hostedTools.NewCatalog(cfg, workspacePolicy, safety.NewCommandPolicy(), stores.UserPrefs, surface)
+	if err != nil {
+		return nil, fmt.Errorf("build hosted tool catalog: %w", err)
+	}
+	catalog := bundle.Catalog
+	slackTools.AddToCatalog(catalog, hostedTools.PolicyForSurface(cfg, surface), cfg, slackClient, stores.Reminders, stores.Redis, &connService)
+	profile, profileErr := hosted.NewProfile(cfg, hosted.ProfileDependencies{
+		Tools: catalog, Postgres: stores.PGPool, Redis: stores.Redis, ToolSpills: stores.Runs, Events: events, Metrics: recorder,
+		ConnectionContinuations: connections.RuntimeContinuationStore{Store: continuations},
+	})
+	if profileErr != nil {
+		return nil, fmt.Errorf("build hosted profile: %w", profileErr)
+	}
+	healthService := health.NewService(profile.Tools, cfg.Security.WorkspaceRoots)
 	healthService.Redis = stores.Redis
-
-	conv := conversation.NewService(stores.Sessions, slackClient, rt.Runner, rt.Memory, rt.Prompt, rt.Redactor, recorder)
-	conv.Core = rt.Core
-	runSemaphore := make(chan struct{}, cfg.Tools.AgentMaxConcurrentRuns)
-	conv.RunSemaphore = runSemaphore
-	conv.MaxConcurrentRuns = cfg.Tools.AgentMaxConcurrentRuns
-	conv.Redis = stores.Redis
-	conv.PodID = appsupport.GeneratePodID()
-	conv.FollowUpContext = serviceCtx
-	conv.Format = slack.MarkdownToMrkdwn
-	conv.RunStore = stores.Runs
-	conv.ToolSpillStore = stores.Runs
-	conv.UserPrefs = stores.UserPrefs
-	conv.RunProvider = cfg.LLM.Provider
-	conv.RunModel = cfg.LLM.Model
+	conversation := slackagent.New(profile.Agent, slackClient, profile.Prompt, profile.Redactor, stores.UserPrefs)
+	conversation.ThreadLoader = slackmessaging.ThreadLoader{Bot: slackClient}
+	policy := hostedTools.PolicyForSurface(cfg, surface)
+	var beforeRuns []func(context.Context, string) error
+	if bundle.ClickStack != nil {
+		clickstackReg := bundle.ClickStack
+		beforeRuns = append(beforeRuns, func(ctx context.Context, userID string) error {
+			return clickstackReg.Ensure(ctx, catalog, policy, userID)
+		})
+	}
+	if bundle.Notion != nil {
+		notionReg := bundle.Notion
+		beforeRuns = append(beforeRuns, func(ctx context.Context, userID string) error {
+			return notionReg.Ensure(ctx, catalog, policy, userID)
+		})
+	}
+	if len(beforeRuns) > 0 {
+		conversation.BeforeRun = func(ctx context.Context, userID string) error {
+			for _, run := range beforeRuns {
+				if err := run(ctx, userID); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}
+	conversation.OnDelivered = runSink.LinkSlackMessage
+	conversation.AlreadyDelivered = runSink.SlackMessageDelivered
+	if profile.ProgressModel != nil {
+		conversation.Progress = &slackagent.ProgressSummarizer{Client: profile.ProgressModel, Model: profile.ProgressModelName, Sanitize: profile.Redactor.Sanitize, ToolDescriptions: toolDescriptions(profile.Tools)}
+	}
+	conversation.Redis, conversation.PodID, conversation.Lifecycle = stores.Redis, podID, serviceCtx
+	conversation.Continuations = continuations
+	conversation.Inputs = stores.Inputs
+	conversation.Locker = stores.Sessions
+	if len(cfg.Security.WorkspaceRoots) > 0 {
+		conversation.Workspace = cfg.Security.WorkspaceRoots[0]
+	}
 	multimodal := multimodalPredicate(cfg.LLM.MultimodalModels)
-	conv.ModelRouter = conversation.ModelRouter{
-		DefaultModel:            cfg.LLM.Model,
-		MultimodalFallbackModel: cfg.LLM.MultimodalModel,
-		SupportsMultimodal:      multimodal,
+	conversation.Multimodal = multimodal
+	conversation.MultimodalModel = func() string { return cfg.LLM.MultimodalModel }
+	conversation.ModelFor = func(req slackconversation.Request) string {
+		for _, content := range req.Content {
+			if content.Type == model.ContentImage && multimodal != nil && !multimodal(cfg.LLM.Model) && cfg.LLM.MultimodalModel != "" {
+				return cfg.LLM.MultimodalModel
+			}
+		}
+		return cfg.LLM.Model
 	}
-	conv.CostRates = rt.CostRates
-	conv.HealthSummary = healthService.SummaryPrompt
-	if cfg.Integrations.TTS.Auto && cfg.Integrations.TTS.APIKey != "" {
-		conv.AutoTTS = appsupport.NewAutoTTSFunc(cfg, slackClient)
-		conv.TTSSummarizer = appsupport.NewTTSSummarizer(cfg, rt)
-	}
+	events.Add(conversation.EventSink())
+	conv := slackconversation.ControlledConversation(conversation)
+	log.Printf("worker agent runtime: shared")
 
 	access := safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels)
 	handler := &slackhandler.Handler{
@@ -139,30 +208,31 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		Slack:     slackClient,
 		Access:    access,
 		Conv:      conv,
-		Prompt:    rt.Prompt,
+		Prompt:    profile.Prompt,
 		Metrics:   recorder,
 		Runs:      stores.Runs,
 		UserPrefs: stores.UserPrefs,
 		Home: slackhome.Controller{
-			Cfg:    cfg,
-			Access: access,
-			Slack:  slackClient,
-			Store:  stores.UserPrefs,
-			Redis:  stores.Redis,
+			Cfg:         cfg,
+			Access:      access,
+			Slack:       slackClient,
+			Store:       stores.UserPrefs,
+			Redis:       stores.Redis,
+			Connections: connService,
 		},
 	}
-	conv.WebSearchEnabled = handler.WebSearchPreference
-	conv.Multimodal = multimodal
-	conv.Events = recorder
+	conversation.WebSearchEnabled = handler.WebSearchPreference
+	conversation.ModeForUser = func(userID string) slackagent.ConversationMode {
+		return slackagent.ConversationMode(handler.Home.ConversationMode(userID))
+	}
 
 	s := &Service{
 		cfg:       cfg,
 		stores:    stores,
 		slack:     slackClient,
-		runtime:   rt,
 		metrics:   recorder,
 		health:    healthService,
-		reminders: reminder.Scheduler{Store: stores.Reminders, Messenger: slackClient, Redis: stores.Redis},
+		reminders: reminder.Scheduler{Store: stores.Reminders, Messenger: slackmessaging.BotUserMessenger{Client: slackClient}, Redis: stores.Redis},
 		conv:      conv,
 		handler:   handler,
 		ctx:       serviceCtx,
@@ -192,6 +262,20 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	return s, nil
 }
 
+func toolDescriptions(catalog interface{ Descriptors() []tool.Descriptor }) map[string]string {
+	if catalog == nil {
+		return nil
+	}
+	descriptions := make(map[string]string)
+	for _, descriptor := range catalog.Descriptors() {
+		name, description := strings.TrimSpace(descriptor.Name), strings.TrimSpace(descriptor.Description)
+		if name != "" && description != "" {
+			descriptions[name] = description
+		}
+	}
+	return descriptions
+}
+
 func (s *Service) StartBackground() {
 	if s == nil {
 		return
@@ -211,6 +295,9 @@ func (s *Service) StartBackground() {
 	})
 	s.Go(func(ctx context.Context) {
 		s.conv.StartControlSubscriber(ctx)
+	})
+	s.Go(func(ctx context.Context) {
+		s.conv.StartConnectionCompletedSubscriber(ctx)
 	})
 	if s.handler != nil {
 		s.Go(func(ctx context.Context) {
@@ -390,9 +477,6 @@ func (s *Service) endEvent() {
 }
 
 func multimodalPredicate(models []string) func(string) bool {
-	if len(models) == 0 {
-		return nil
-	}
 	mmSet := make(map[string]bool, len(models))
 	for _, m := range models {
 		mmSet[m] = true

@@ -17,9 +17,11 @@ import (
 	"github.com/noknov/slack-copilot-agent/packages/health"
 	"github.com/noknov/slack-copilot-agent/packages/infra/httpguard"
 	sharedlogging "github.com/noknov/slack-copilot-agent/packages/infra/logging"
+	"github.com/noknov/slack-copilot-agent/packages/infra/telemetry"
 	"github.com/noknov/slack-copilot-agent/packages/observability"
 	"github.com/noknov/slack-copilot-agent/packages/platform"
-	"github.com/noknov/slack-copilot-agent/packages/runtime"
+	"github.com/noknov/slack-copilot-agent/packages/safety"
+	hostedTools "github.com/noknov/slack-copilot-agent/packages/tools/hosted"
 )
 
 type Service struct {
@@ -37,6 +39,15 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	sharedlogging.Configure(cfg.Observing.LogLevel)
+	shutdownTelemetry, err := telemetry.Setup(ctx, "slack-copilot-observability")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTelemetry(shutdownCtx)
+	}()
 	service, err := New(ctx, cfg)
 	if err != nil {
 		return err
@@ -52,8 +63,12 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		return nil, err
 	}
 	recorder := observability.NewRecorder()
-	rt := runtime.NewAgentRuntime(cfg, nil, stores.Reminders, recorder, stores.Redis, nil)
-	healthService := health.NewService(rt.Tools, cfg.Security.WorkspaceRoots)
+	catalogBundle, err := hostedTools.NewCatalog(cfg, safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}, safety.NewCommandPolicy(), nil, hostedTools.SurfaceOptions{})
+	if err != nil {
+		stores.Close()
+		return nil, fmt.Errorf("build health tool catalog: %w", err)
+	}
+	healthService := health.NewService(catalogBundle.Catalog, cfg.Security.WorkspaceRoots)
 	healthService.Redis = stores.Redis
 	return &Service{
 		cfg:     cfg,
