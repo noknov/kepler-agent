@@ -80,9 +80,22 @@ class SlackCopilot(BaseAgent):
         if self._binary_path:
             await environment.upload_file(self._binary_path, self._BINARY)
             result = await environment.exec(
-                command=f"chmod 0755 {self._BINARY}; mkdir -p {Path(self._LOG).parent}",
+                command=(
+                    "set -eu; "
+                    # Terminal-Bench task images are intentionally minimal and
+                    # may omit the system root bundle.  The CLI performs HTTPS
+                    # requests itself, so install the distribution bundle before
+                    # invoking it rather than weakening TLS verification.
+                    "if command -v apt-get >/dev/null 2>&1; then "
+                    "apt-get update; "
+                    "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates; "
+                    "elif command -v apk >/dev/null 2>&1; then "
+                    "apk add --no-cache ca-certificates; "
+                    "fi; "
+                    f"chmod 0755 {self._BINARY}; mkdir -p {Path(self._LOG).parent}"
+                ),
                 user="root",
-                timeout_sec=30,
+                timeout_sec=120,
             )
             if result.return_code != 0:
                 raise RuntimeError(
