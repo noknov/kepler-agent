@@ -199,7 +199,7 @@ func TestStreamStartsStatusBeforeRuntimeEvents(t *testing.T) {
 	}
 }
 
-func TestStreamDeltaPreservesDynamicStatus(t *testing.T) {
+func TestStreamDeltaDoesNotResetDynamicStatus(t *testing.T) {
 	messenger := &fakeMessenger{}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T"})
 	stream.Start()

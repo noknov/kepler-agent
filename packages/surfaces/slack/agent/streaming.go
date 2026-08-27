@@ -143,7 +143,6 @@ func (s *slackStream) flushNativeStream(fullText string) {
 	s.lastStreamText = fullText
 	s.lastStreamUpdate = time.Now()
 	s.mu.Unlock()
-	s.restoreThreadStatus()
 }
 
 func (s *slackStream) sanitizeText(text string) string {

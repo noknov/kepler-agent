@@ -17,6 +17,8 @@ type nativeStreamingMessenger struct {
 	appends  []string
 	stopped  int
 	updates  []string
+	statuses []string
+	loading  [][]string
 	startErr error
 }
 
@@ -66,6 +68,13 @@ func (m *nativeStreamingMessenger) UpdateMarkdownMessage(_ context.Context, _, _
 	m.updates = append(m.updates, text)
 	return nil
 }
+func (m *nativeStreamingMessenger) SetThreadStatus(_ context.Context, _, _, status string, loading []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.statuses = append(m.statuses, status)
+	m.loading = append(m.loading, append([]string(nil), loading...))
+	return nil
+}
 
 func TestNativeSlackStreamAppendsIncrementally(t *testing.T) {
 	messenger := &nativeStreamingMessenger{}
@@ -87,6 +96,23 @@ func TestNativeSlackStreamAppendsIncrementally(t *testing.T) {
 	}
 	if ts != "1.0" || messenger.stopped != 1 {
 		t.Fatalf("ts=%q stopped=%d", ts, messenger.stopped)
+	}
+}
+
+func TestNativeStreamDoesNotRestoreDynamicStatus(t *testing.T) {
+	messenger := &nativeStreamingMessenger{}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1"})
+	stream.Start()
+	stream.setProgressStatus(stream.statusEpoch, "Reading records")
+	stream.AppendDelta("final answer")
+
+	messenger.mu.Lock()
+	defer messenger.mu.Unlock()
+	if got := messenger.statuses; len(got) != 2 || got[0] != initialThreadStatus || got[1] != initialThreadStatus {
+		t.Fatalf("statuses=%#v, want initial and dynamic status only", got)
+	}
+	if got := messenger.loading; len(got) != 2 || got[1][0] != "Reading records" {
+		t.Fatalf("loading=%#v, want dynamic status before stream", got)
 	}
 }
 
