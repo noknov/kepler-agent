@@ -5,5 +5,5 @@
   "identifier": "ai.kepler.agent",
   "build": { "beforeDevCommand": "pnpm dev", "beforeBuildCommand": "pnpm build", "devUrl": "http://localhost:1420", "frontendDist": "../dist" },
   "app": { "windows": [{ "title": "Kepler", "width": 1280, "height": 820, "minWidth": 940, "minHeight": 640, "resizable": true }], "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline';" } },
-  "bundle": { "active": true, "targets": "all", "externalBin": ["binaries/kepler-agent-app-server"] }
+  "bundle": { "active": false }
 }

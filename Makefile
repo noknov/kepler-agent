@@ -4,9 +4,8 @@ GOCACHE ?= $(CURDIR)/.cache/go-build
 GOFILES := $(shell rg --files -g '*.go')
 
 DESKTOP_DIR := apps/desktop
-DESKTOP_SIDECAR := $(DESKTOP_DIR)/src-tauri/binaries/kepler-agent-app-server-$(shell uname -m)-apple-darwin
 
-.PHONY: fmt fmt-check boundaries vet test test-race build appserver-bin desktop-deps desktop-dev desktop-build eval-check check
+.PHONY: fmt fmt-check boundaries vet test test-race build appserver-bin desktop-deps desktop-dev eval-check check
 
 fmt:
 	gofmt -w $(GOFILES)
@@ -42,18 +41,14 @@ appserver-bin:
 	mkdir -p bin
 	GOCACHE=$(GOCACHE) go build -trimpath -o bin/kepler-agent-app-server ./appserver/cmd/app-server
 
-# The GUI is a native Tauri application, not a browser surface. It uses the
-# same local app-server as the CLI over stdio and bundles that binary for release.
+# The GUI is a native Tauri application, not a browser surface. Local
+# development uses the app-server over stdio. Release packaging lives in the
+# deployment repository so this source repository contains no release staging.
 desktop-deps:
 	cd $(DESKTOP_DIR) && pnpm install
 
 desktop-dev: appserver-bin desktop-deps
 	cd $(DESKTOP_DIR) && KEPLER_APP_SERVER=$(CURDIR)/bin/kepler-agent-app-server pnpm tauri dev
-
-desktop-build: appserver-bin desktop-deps
-	mkdir -p $(dir $(DESKTOP_SIDECAR))
-	cp bin/kepler-agent-app-server $(DESKTOP_SIDECAR)
-	cd $(DESKTOP_DIR) && pnpm tauri build
 
 eval-check:
 	@tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \

@@ -94,8 +94,8 @@ make desktop-dev
 ```
 
 Choose a workspace in the left sidebar. Sessions and approval decisions remain
-in the local Kepler state directory. `make desktop-build` packages the native
-app and its app-server sidecar for distribution.
+in the local Kepler state directory. Release packaging, sidecar staging, and
+distribution artifacts live in the sibling `kepler-agent-deploy` repository.
 
 ## Run the hosted Slack agent
 
