@@ -24,6 +24,9 @@ type Server struct {
 	Model      string
 	Workspace  string
 	IDs        agentruntime.IDGenerator
+	Approvals  interface {
+		Resolve(turnID, toolCallID, scope string) error
+	}
 
 	reader  io.Reader
 	writer  io.Writer
@@ -90,12 +93,14 @@ func (s *Server) Serve(ctx context.Context) error {
 		if err := json.Unmarshal(line, &request); err != nil {
 			continue
 		}
-		s.handle(ctx, request)
+		s.Handle(ctx, request)
 	}
 	return scanner.Err()
 }
 
-func (s *Server) handle(ctx context.Context, request Request) {
+// Handle processes one JSON-RPC request. Transports that do not use stdio can
+// call it directly and receive the response through Server's writer.
+func (s *Server) Handle(ctx context.Context, request Request) {
 	switch request.Method {
 	case "initialize":
 		s.respond(request.ID, map[string]any{
@@ -214,6 +219,25 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			return
 		}
 		s.respond(request.ID, map[string]bool{"canceled": true}, nil)
+	case "approval/resolve":
+		var params struct {
+			TurnID     string `json:"turnId"`
+			ToolCallID string `json:"toolCallId"`
+			Scope      string `json:"scope"`
+		}
+		if err := json.Unmarshal(request.Params, &params); err != nil || params.TurnID == "" || params.ToolCallID == "" {
+			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "turnId and toolCallId are required"})
+			return
+		}
+		if s.Approvals == nil {
+			s.respond(request.ID, nil, &ResponseError{Code: -32005, Message: "approvals are unavailable"})
+			return
+		}
+		if err := s.Approvals.Resolve(params.TurnID, params.ToolCallID, params.Scope); err != nil {
+			s.respond(request.ID, nil, &ResponseError{Code: -32006, Message: err.Error()})
+			return
+		}
+		s.respond(request.ID, map[string]bool{"resolved": true}, nil)
 	default:
 		s.respond(request.ID, nil, &ResponseError{Code: -32601, Message: "method not found"})
 	}

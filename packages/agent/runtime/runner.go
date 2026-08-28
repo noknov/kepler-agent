@@ -99,7 +99,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 		return r.failTurn(ctx, result, err)
 	}
 	system := model.TextMessage(model.RoleSystem, composition.Content)
-	for step := 1; step <= r.config.MaxSteps; step++ {
+	for step := 1; r.config.MaxSteps <= 0 || step <= r.config.MaxSteps; step++ {
 		result.Steps = step
 		if err := ctx.Err(); err != nil {
 			return r.cancelTurn(ctx, result, err)

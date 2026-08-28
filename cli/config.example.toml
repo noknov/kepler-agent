@@ -6,7 +6,8 @@ api_key_env = "OPENAI_API_KEY"
 reasoning_effort = "high"
 input_routing = "steer"
 output = "text"
-max_steps = 32
+# Zero means unlimited. Use Ctrl-C / the UI stop control to cancel a turn.
+max_steps = 0
 max_output_tokens = 16384
 temperature = 0
 unsafe_allow_no_sandbox = false

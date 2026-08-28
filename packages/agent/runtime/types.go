@@ -46,9 +46,6 @@ type Config struct {
 }
 
 func (c Config) withDefaults() Config {
-	if c.MaxSteps <= 0 {
-		c.MaxSteps = 256
-	}
 	if c.MaxModelRetries < 0 {
 		c.MaxModelRetries = 0
 	}

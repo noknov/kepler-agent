@@ -1,3 +1,5 @@
+// Command kepler is the terminal entrypoint for Kepler's local product.
+// The native desktop entrypoint lives separately in apps/desktop.
 package main
 
 import (

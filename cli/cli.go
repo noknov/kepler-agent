@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +36,8 @@ import (
 
 type options struct {
 	configPath, cwd, stateDir, provider, protocol, model, baseURL, apiKeyEnv, routing, output, session, approval, profile string
+	reasoningEffort, temperature                                                                                         string
+	maxSteps, maxOutputTokens, maxContextTokens, autocompactBuffer                                                      int
 	resume, unsafe                                                                                                        bool
 }
 
@@ -71,6 +74,12 @@ func Run() error {
 	flag.StringVar(&values.apiKeyEnv, "api-key-env", "", "environment variable containing the API key")
 	flag.StringVar(&values.routing, "input-routing", "", "steer or queue")
 	flag.StringVar(&values.output, "output", "", "text or jsonl")
+	flag.StringVar(&values.reasoningEffort, "reasoning-effort", "", "model reasoning effort")
+	flag.StringVar(&values.temperature, "temperature", "", "sampling temperature")
+	flag.IntVar(&values.maxSteps, "max-steps", 0, "maximum agent steps")
+	flag.IntVar(&values.maxOutputTokens, "max-output-tokens", 0, "maximum model output tokens per step")
+	flag.IntVar(&values.maxContextTokens, "max-context-tokens", 0, "maximum context tokens")
+	flag.IntVar(&values.autocompactBuffer, "autocompact-buffer", 0, "tokens reserved before context compaction")
 	flag.StringVar(&values.session, "session", "", "session ID to create or resume")
 	flag.BoolVar(&values.resume, "resume", false, "resume the most recently modified session")
 	flag.StringVar(&values.approval, "approval", "deny", "headless approval: deny, once, session, or project")
@@ -106,6 +115,28 @@ func Run() error {
 	}
 	if visited["output"] {
 		config.Output = values.output
+	}
+	if visited["reasoning-effort"] {
+		config.ReasoningEffort = values.reasoningEffort
+	}
+	if visited["temperature"] {
+		temperature, parseErr := strconv.ParseFloat(values.temperature, 64)
+		if parseErr != nil {
+			return fmt.Errorf("parse --temperature: %w", parseErr)
+		}
+		config.Temperature = &temperature
+	}
+	if visited["max-steps"] {
+		config.MaxSteps = values.maxSteps
+	}
+	if visited["max-output-tokens"] {
+		config.MaxOutputTokens = values.maxOutputTokens
+	}
+	if visited["max-context-tokens"] {
+		config.MaxContextTokens = values.maxContextTokens
+	}
+	if visited["autocompact-buffer"] {
+		config.AutocompactBuffer = values.autocompactBuffer
 	}
 	if visited["unsafe-allow-no-sandbox"] {
 		config.UnsafeAllowNoSandbox = values.unsafe

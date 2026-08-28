@@ -6,6 +6,7 @@ Shared agent harness for two products:
 |---|---|---|
 | **Hosted Agent** | Server workspace, with Slack as ingress and presentation | Team diagnosis and operational work |
 | **Local CLI** | User machine, inside a selected workspace | Interactive or headless coding-agent work |
+| **Local Desktop** | User machine, inside a selected workspace | Native visual coding-agent work with approval cards |
 
 The project is intentionally not a single remote agent exposed through two UIs.
 Both products share one provider-neutral execution loop and transcript contract;
@@ -21,7 +22,7 @@ their policy, storage, tools, and presentation stay product-specific.
 ```text
 Slack ── gateway / worker ── hosted profile ─┐
                                                │
-Local CLI / app-server ────── local profile ──┼── shared harness
+Local CLI / Desktop / app-server ── local profile ──┼── shared harness
                                                │   model loop · context · tools
 Providers · skills · MCP ─────────────────────┘   canonical transcript · events
 ```
@@ -47,7 +48,7 @@ for a detailed v1/v2 comparison and code-reading paths.
 | Agent runtime | Provider-neutral messages and tools, bounded context projection, compaction, termination, canonical transcripts, and typed streaming events |
 | Model integration | OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages adapters; hosted primary/fallback resilience and circuit breaking |
 | Hosted Slack | Verified durable ingress, leased workers, native answer streaming, thread status, runs/costs, and health endpoints |
-| Local product | TTY and headless CLI, JSONL resume, steering/queue input routing, workspace tools, OS sandbox, approvals, skills, and configured MCP |
+| Local product | TTY/headless CLI and a native Tauri desktop app, JSONL resume, steering/queue input routing, workspace tools, OS sandbox, approvals, skills, and configured MCP |
 | Integrations | Per-user OAuth connections for configured Slack, GitHub, ClickStack, Google Cloud, and Notion integrations; connection-required turns can resume after OAuth |
 | Delegation | `agent-explore`: bounded, read-only child turns with separate transcripts and parent audit links |
 | Evaluation | Independent subprocess-based harnesses for this agent and other supported candidates through one model gateway |
@@ -74,10 +75,27 @@ printf "review this repository\n" | bin/kepler-agent --cwd . --output jsonl
 bin/kepler-agent --resume
 ```
 
+`max_steps = 0` is the local default: turns run until completion, cancellation,
+or a model/context limit. Public benchmarks set an explicit budget separately.
+
 The CLI's provider configuration and credentials are local; they are not shared
 with a hosted deployment. Use `--profile <name>` to select a named model
 profile. See [local CLI usage and security](docs/local-cli.md) and
 [the example configuration](cli/config.example.toml).
+
+## Run the local desktop app
+
+The desktop app is a native Tauri window, not a web UI. It starts the same
+local app-server used by other local clients over stdio; no Slack, Redis,
+PostgreSQL, ngrok, or hosted credentials are involved.
+
+```bash
+make desktop-dev
+```
+
+Choose a workspace in the left sidebar. Sessions and approval decisions remain
+in the local Kepler state directory. `make desktop-build` packages the native
+app and its app-server sidecar for distribution.
 
 ## Run the hosted Slack agent
 
@@ -175,7 +193,9 @@ packages/tools/          Capability-oriented tool implementations
 packages/providers/      Provider wire-format adapters
 packages/connections/    Per-user OAuth connection lifecycle
 packages/appserver/      Local profile JSON-RPC server over stdio
-cli/                     Local CLI and configuration example
+cmd/kepler/              Local CLI executable entrypoint
+cli/                     Local CLI implementation and configuration example
+apps/desktop/            Native Tauri desktop surface and its app-server bridge
 evals/                   Black-box evaluation harness
 gateway/ worker/         Hosted Slack ingress and durable worker commands
 observability/           Runs, costs, metrics, and tool health command

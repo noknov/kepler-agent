@@ -37,6 +37,11 @@ class KeplerAgent(BaseAgent):
         protocol: str = "responses",
         api_key_env: str = "OPENAI_API_KEY",
         base_url_env: str = "OPENAI_BASE_URL",
+        max_steps: int | str | None = None,
+        max_output_tokens: int | str | None = None,
+        max_context_tokens: int | str | None = None,
+        autocompact_buffer: int | str | None = None,
+        reasoning_effort: str | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -61,6 +66,13 @@ class KeplerAgent(BaseAgent):
         self._protocol = protocol
         self._api_key_env = api_key_env
         self._base_url_env = base_url_env
+        self._max_steps = positive_int("max_steps", max_steps)
+        self._max_output_tokens = positive_int("max_output_tokens", max_output_tokens)
+        self._max_context_tokens = positive_int("max_context_tokens", max_context_tokens)
+        self._autocompact_buffer = nonnegative_int("autocompact_buffer", autocompact_buffer)
+        if self._max_context_tokens and self._autocompact_buffer >= self._max_context_tokens:
+            raise ValueError("autocompact_buffer must be smaller than max_context_tokens")
+        self._reasoning_effort = reasoning_effort.strip() if reasoning_effort else None
 
     @staticmethod
     @override
@@ -166,6 +178,19 @@ class KeplerAgent(BaseAgent):
                 shlex.quote(instruction),
             ]
         )
+        runtime_flags = []
+        for name, value in (
+            ("max-steps", self._max_steps),
+            ("max-output-tokens", self._max_output_tokens),
+            ("max-context-tokens", self._max_context_tokens),
+            ("autocompact-buffer", self._autocompact_buffer),
+        ):
+            if value is not None:
+                runtime_flags.append(f"--{name} {value}")
+        if self._reasoning_effort:
+            runtime_flags.append(f"--reasoning-effort {shlex.quote(self._reasoning_effort)}")
+        if runtime_flags:
+            command = command.replace(" --approval project", " " + " ".join(runtime_flags) + " --approval project", 1)
         result = await environment.exec(
             command=(
                 "set -o pipefail; "
@@ -179,6 +204,32 @@ class KeplerAgent(BaseAgent):
             "binary_sha256": self._binary_sha256,
             "provider": self._provider,
             "protocol": self._protocol,
+            "max_steps": self._max_steps,
+            "max_output_tokens": self._max_output_tokens,
+            "max_context_tokens": self._max_context_tokens,
+            "autocompact_buffer": self._autocompact_buffer,
+            "reasoning_effort": self._reasoning_effort,
         }
         if result.return_code != 0:
             raise RuntimeError(result.stderr or result.stdout or "kepler-agent failed")
+
+
+def positive_int(name: str, value: int | str | None) -> int | None:
+    parsed = nonnegative_int(name, value)
+    if parsed is not None and parsed <= 0:
+        raise ValueError(f"{name} must be positive")
+    return parsed
+
+
+def nonnegative_int(name: str, value: int | str | None) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a positive integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{name} must be a positive integer") from error
+    if parsed < 0:
+        raise ValueError(f"{name} must not be negative")
+    return parsed

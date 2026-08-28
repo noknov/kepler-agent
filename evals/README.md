@@ -118,6 +118,10 @@ environment. For example, a LongCat deployment profile uses
 `base_url_env=LONGCAT_BASE_URL`. Do not put keys or endpoint secrets in the
 command line or the invocation manifest.
 
+For a deployed profile, also pass `max_steps`, `max_output_tokens`,
+`max_context_tokens`, and `autocompact_buffer`. Endpoint parity alone is not a
+meaningful harness comparison when the CLI would otherwise use smaller defaults.
+
 ## Suite schema
 
 Suites must use `schema_version: 1`; older ad-hoc suite shapes are intentionally unsupported.

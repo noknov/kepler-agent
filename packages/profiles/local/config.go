@@ -58,7 +58,7 @@ type MCPServerConfig struct {
 const configDirectory = "kepler-agent"
 
 func DefaultConfig() Config {
-	return Config{Provider: "openai", Protocol: "openai", InputRouting: "steer", Output: "text", MaxSteps: 32, MaxOutputTokens: 16384, MaxContextTokens: 96_000, AutocompactBuffer: 8_000, Timeout: 30 * time.Minute}
+	return Config{Provider: "openai", Protocol: "openai", InputRouting: "steer", Output: "text", MaxSteps: 0, MaxOutputTokens: 16384, MaxContextTokens: 96_000, AutocompactBuffer: 8_000, Timeout: 30 * time.Minute}
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -107,6 +107,12 @@ func (config Config) Validate() error {
 	}
 	if config.MaxContextTokens <= 0 || config.AutocompactBuffer < 0 || config.AutocompactBuffer >= config.MaxContextTokens {
 		return fmt.Errorf("max_context_tokens must be positive and autocompact_buffer must be smaller")
+	}
+	if config.MaxSteps < 0 {
+		return fmt.Errorf("max_steps must be zero (unlimited) or positive")
+	}
+	if config.MaxOutputTokens <= 0 {
+		return fmt.Errorf("max_output_tokens must be positive")
 	}
 	return nil
 }
