@@ -299,7 +299,9 @@ func modelDisplayName(model string) string {
 	if label, ok := modelDisplayNames[model]; ok {
 		return label
 	}
-	return formatModelDisplayName(model)
+	// Provider model IDs are opaque identifiers. Preserve an unknown ID exactly
+	// rather than inferring branding or removing capability suffixes.
+	return model
 }
 
 var modelDisplayNames = map[string]string{
@@ -323,73 +325,6 @@ var modelDisplayNames = map[string]string{
 	"north-mini-code-free":         "North Mini Code",
 	"claude-sonnet-4-5-20250929":   "Claude Sonnet 4.5",
 	"gpt-4o-mini":                  "GPT-4o Mini",
-}
-
-func formatModelDisplayName(model string) string {
-	parts := strings.Split(model, "/")
-	model = parts[len(parts)-1]
-	for _, suffix := range []string{"-free", "-pro", "-flash"} {
-		if strings.HasSuffix(model, suffix) && len(model) > len(suffix)+1 {
-			model = strings.TrimSuffix(model, suffix)
-			break
-		}
-	}
-	segments := strings.Split(model, "-")
-	for i, segment := range segments {
-		segments[i] = formatModelSegment(segment)
-	}
-	return strings.Join(segments, " ")
-}
-
-func formatModelSegment(segment string) string {
-	segment = strings.TrimSpace(segment)
-	if segment == "" {
-		return segment
-	}
-	if strings.HasPrefix(strings.ToLower(segment), "v") && len(segment) > 1 {
-		return "V" + segment[1:]
-	}
-	switch strings.ToLower(segment) {
-	case "mimo":
-		return "MiMo"
-	case "gpt":
-		return "GPT"
-	case "glm":
-		return "GLM"
-	case "kimi":
-		return "Kimi"
-	case "minimax":
-		return "MiniMax"
-	case "deepseek":
-		return "DeepSeek"
-	case "longcat":
-		return "LongCat"
-	case "nemotron":
-		return "Nemotron"
-	case "codex":
-		return "Codex"
-	case "ox":
-		return "Ox"
-	case "alpha":
-		return "Alpha"
-	case "luna":
-		return "Luna"
-	case "ultra":
-		return "Ultra"
-	case "mini":
-		return "Mini"
-	case "code":
-		return "Code"
-	case "north":
-		return "North"
-	}
-	if segment[0] >= '0' && segment[0] <= '9' {
-		return segment
-	}
-	if len(segment) == 1 {
-		return strings.ToUpper(segment)
-	}
-	return strings.ToUpper(segment[:1]) + strings.ToLower(segment[1:])
 }
 
 func mrkdwnField(text string) map[string]any {

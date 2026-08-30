@@ -26,11 +26,13 @@ func (s *stubPublisher) PublishHome(_ context.Context, userID string, view map[s
 
 func TestModelDisplayName(t *testing.T) {
 	cases := map[string]string{
-		"ox-alpha-free": "Ox Alpha",
-		"mimo-v2.5":     "MiMo V2.5",
-		"gpt-5.6-luna":  "GPT-5.6 Luna",
-		"glm-5.2":       "GLM 5.2",
-		"hy3":           "Hy3",
+		"ox-alpha-free":  "Ox Alpha",
+		"mimo-v2.5":      "MiMo V2.5",
+		"gpt-5.6-luna":   "GPT-5.6 Luna",
+		"glm-5.2":        "GLM 5.2",
+		"glm-5.3-flash":  "glm-5.3-flash",
+		"vendor/model-x": "vendor/model-x",
+		"hy3":            "Hy3",
 	}
 	for model, want := range cases {
 		if got := modelDisplayName(model); got != want {
