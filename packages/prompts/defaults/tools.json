@@ -34,14 +34,14 @@
   "git-fetch_ref": {
     "description": "Fetch origin and resolve an actual remote branch to an immutable commit ref without changing the working tree. Do not pass a pull-request number or refs/pull/...; use github-pr_diff for GitHub pull requests. Use this before git-search_ref or git-read_file_ref.",
     "parameters": {
-      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "repo": "Repository path under WORKSPACE_ROOTS, its local repo name, or a GitHub owner/repo identifier. Defaults to first root.",
       "branch": "Explicit remote branch to resolve."
     }
   },
   "git-search_ref": {
     "description": "Search code at a git ref without changing the working tree. Use this instead of code-search when analyzing a specific branch or commit. Required before claiming that a specific guard, conditional, or log string exists at a particular ref.",
     "parameters": {
-      "repo": "Repository path under WORKSPACE_ROOTS.",
+      "repo": "Repository path under WORKSPACE_ROOTS, its local repo name, or a GitHub owner/repo identifier.",
       "ref": "Immutable ref returned by git-fetch_ref, usually a commit SHA.",
       "query": "Regex pattern for git grep.",
       "path": "Optional pathspec inside repo.",
@@ -51,7 +51,7 @@
   "git-read_file_ref": {
     "description": "Read a file at a git ref without changing the working tree. Use before quoting code blocks or line numbers at a specific ref.",
     "parameters": {
-      "repo": "Repository path under WORKSPACE_ROOTS.",
+      "repo": "Repository path under WORKSPACE_ROOTS, its local repo name, or a GitHub owner/repo identifier.",
       "ref": "Immutable ref returned by git-fetch_ref, usually a commit SHA.",
       "path": "File path inside the repo.",
       "start_line": "1-based start line. Defaults to 1.",
@@ -61,7 +61,7 @@
   "git-log": {
     "description": "Read recent commit history from a refreshed remote branch snapshot, including commit hash, author name/email, author date, and subject. This is read-only and does not checkout branches.",
     "parameters": {
-      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "repo": "Repository path under WORKSPACE_ROOTS, its local repo name, or a GitHub owner/repo identifier. Defaults to first root.",
       "branch": "Explicit remote branch name.",
       "limit": "Maximum commits. Defaults to 10, max 50."
     }
@@ -262,7 +262,7 @@
   "repo-search": {
     "description": "Fetch a repository on demand, pin an actual remote branch to a commit snapshot, then search code at that snapshot. Do not pass a pull-request number or refs/pull/...; use github-pr_diff for GitHub pull requests.",
     "parameters": {
-      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "repo": "Repository path under WORKSPACE_ROOTS, its local repo name, or a GitHub owner/repo identifier. Defaults to first root.",
       "branch": "Explicit remote branch to analyze.",
       "query": "Regex pattern for git grep.",
       "path": "Optional pathspec inside repo.",
@@ -272,7 +272,7 @@
   "repo-read_file": {
     "description": "Fetch a repository on demand, pin an actual remote branch to a commit snapshot, then read a file at that snapshot. Do not pass a pull-request number or refs/pull/...; use github-pr_diff for GitHub pull requests.",
     "parameters": {
-      "repo": "Repository path under WORKSPACE_ROOTS. Defaults to first root.",
+      "repo": "Repository path under WORKSPACE_ROOTS, its local repo name, or a GitHub owner/repo identifier. Defaults to first root.",
       "branch": "Explicit remote branch to analyze.",
       "path": "File path inside repo.",
       "start_line": "1-based start line. Defaults to 1.",

@@ -40,7 +40,7 @@ func (t StatusTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 		Repo string `json:"repo"`
 	}
 	_ = json.Unmarshal(call.Arguments, &args)
-	repo, err := t.repo(args.Repo)
+	repo, err := t.repo(ctx, args.Repo)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -55,7 +55,7 @@ func (t FetchRefTool) Descriptor() tool.Descriptor {
 		"git-fetch_ref",
 		"Fetch origin refs and resolve an actual remote branch to an immutable commit SHA. Do not pass a pull-request number or refs/pull/...; use github-pr_diff for GitHub pull requests. Use this first when investigating a specific branch, then pass the returned repo/ref to git-search_ref or git-read_file_ref. This never checks out or updates the working tree, so multiple users can inspect different branches concurrently.",
 		tool.ObjectSchema(nil, map[string]any{
-			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
+			"repo":   map[string]any{"type": "string", "description": "Repository path, workspace-relative repo name, or GitHub owner/repo identifier. Required when workspace has multiple repos."},
 			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 		}),
 		tool.ReadNetworkParallel()...,
@@ -68,7 +68,7 @@ func (t FetchRefTool) Execute(ctx context.Context, call tool.Call) (tool.Result,
 		Branch string `json:"branch"`
 	}
 	_ = json.Unmarshal(call.Arguments, &args)
-	repo, err := t.repo(args.Repo)
+	repo, err := t.repo(ctx, args.Repo)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -125,7 +125,7 @@ func (t SearchRefTool) Execute(ctx context.Context, call tool.Call) (tool.Result
 	if args.Limit > 200 {
 		args.Limit = 200
 	}
-	repo, err := t.explicitRepo(args.Repo)
+	repo, err := t.explicitRepo(ctx, args.Repo)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -162,7 +162,7 @@ func (t RepoSearchTool) Descriptor() tool.Descriptor {
 		"repo-search",
 		"Search a refreshed remote branch snapshot without changing the checkout. Branch must be an actual remote branch name, not a pull-request number or refs/pull/...; use github-pr_diff for GitHub pull requests.",
 		tool.ObjectSchema([]string{"branch", "query"}, map[string]any{
-			"repo":   map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
+			"repo":   map[string]any{"type": "string", "description": "Repository path, workspace-relative repo name, or GitHub owner/repo identifier. Required when workspace has multiple repos."},
 			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"query":  map[string]any{"type": "string", "description": "Pattern to search."},
 			"path":   map[string]any{"type": "string", "description": "Optional path inside the repo."},
@@ -192,7 +192,7 @@ func (t RepoSearchTool) Execute(ctx context.Context, call tool.Call) (tool.Resul
 	if args.Limit > 200 {
 		args.Limit = 200
 	}
-	repo, err := t.repo(args.Repo)
+	repo, err := t.repo(ctx, args.Repo)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -253,7 +253,7 @@ func (t ReadFileRefTool) Execute(ctx context.Context, call tool.Call) (tool.Resu
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
 	}
-	repo, err := t.explicitRepo(args.Repo)
+	repo, err := t.explicitRepo(ctx, args.Repo)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -330,7 +330,7 @@ func (t RepoReadFileTool) Execute(ctx context.Context, call tool.Call) (tool.Res
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
 	}
-	repo, err := t.repo(args.Repo)
+	repo, err := t.repo(ctx, args.Repo)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -372,7 +372,7 @@ func (t LogTool) Execute(ctx context.Context, call tool.Call) (tool.Result, erro
 	if args.Limit > 50 {
 		args.Limit = 50
 	}
-	repo, err := t.repo(args.Repo)
+	repo, err := t.repo(ctx, args.Repo)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -416,7 +416,7 @@ func (t ShowTool) Execute(ctx context.Context, call tool.Call) (tool.Result, err
 	if args.MaxChars > 50000 {
 		args.MaxChars = 50000
 	}
-	repo, err := t.repo(args.Repo)
+	repo, err := t.repo(ctx, args.Repo)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -439,11 +439,11 @@ func (t ShowTool) Execute(ctx context.Context, call tool.Call) (tool.Result, err
 	return tool.TextResult(out), err
 }
 
-func (b Base) repo(path string) (string, error) {
+func (b Base) repo(ctx context.Context, path string) (string, error) {
 	if path == "" && len(b.Paths.Roots) > 0 {
 		path = b.Paths.Roots[0]
 	}
-	resolved, err := b.Paths.Resolve(path)
+	resolved, err := b.resolveRepoPath(ctx, path)
 	if err != nil {
 		return "", err
 	}
@@ -484,11 +484,61 @@ func isGitDir(dir string) bool {
 	return err == nil && info.IsDir()
 }
 
-func (b Base) explicitRepo(path string) (string, error) {
+func (b Base) explicitRepo(ctx context.Context, path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", fmt.Errorf("repo is required for ref-based git tools; use the same repo returned by git-fetch_ref")
 	}
-	return b.Paths.Resolve(path)
+	return b.resolveRepoPath(ctx, path)
+}
+
+// resolveRepoPath accepts the local repository names returned by
+// workspace-list_repos and the owner/repo form emitted by GitHub tools. The
+// latter is resolved only when a direct workspace child has an origin that
+// exactly matches that GitHub repository. This avoids guessing based on a
+// directory basename while preserving the workspace access boundary.
+func (b Base) resolveRepoPath(ctx context.Context, path string) (string, error) {
+	resolved, err := b.Paths.Resolve(path)
+	if err == nil {
+		return resolved, nil
+	}
+
+	parts := strings.Split(strings.Trim(filepath.ToSlash(path), "/"), "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || parts[0] == "." || parts[0] == ".." || parts[1] == "." || parts[1] == ".." {
+		return "", err
+	}
+	target := strings.ToLower(strings.Join(parts, "/"))
+	for _, root := range b.Paths.Roots {
+		entries, readErr := os.ReadDir(root)
+		if readErr != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+				continue
+			}
+			candidate := filepath.Join(root, entry.Name())
+			if !isGitDir(candidate) {
+				continue
+			}
+			origin, originErr := b.run(ctx, candidate, "config", "--get", "remote.origin.url")
+			if originErr == nil && githubRepository(origin) == target {
+				return candidate, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no workspace repository has origin %q", strings.Join(parts, "/"))
+}
+
+func githubRepository(origin string) string {
+	origin = strings.TrimSuffix(strings.TrimSpace(origin), ".git")
+	origin = strings.TrimPrefix(origin, "https://github.com/")
+	origin = strings.TrimPrefix(origin, "http://github.com/")
+	origin = strings.TrimPrefix(origin, "git@github.com:")
+	parts := strings.Split(origin, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return ""
+	}
+	return strings.ToLower(origin)
 }
 
 func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string, rt tool.Scope) (snapshot, error) {
