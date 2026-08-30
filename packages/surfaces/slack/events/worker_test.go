@@ -141,6 +141,27 @@ func TestWorkerFailureUsesBoundedRetryPath(t *testing.T) {
 	}
 }
 
+func TestWorkerDeadLettersPermanentDeliveryErrorsWithoutRetry(t *testing.T) {
+	inbox := &fakeInbox{}
+	w := &Worker{
+		Inbox:        inbox,
+		InboxLease:   time.Minute,
+		EventTimeout: time.Second,
+		Handler: func(context.Context, string, slack.Event) error {
+			return permanentTestError{}
+		},
+	}
+	w.handle(context.Background(), job{eventID: "permanent"})
+	if inbox.deadLetters != 1 || inbox.failed != 0 {
+		t.Fatalf("deadLetters=%d failed=%d, want 1 and 0", inbox.deadLetters, inbox.failed)
+	}
+}
+
+type permanentTestError struct{}
+
+func (permanentTestError) Error() string   { return "invalid Slack request" }
+func (permanentTestError) Permanent() bool { return true }
+
 func TestReplayDeadLettersMalformedPayload(t *testing.T) {
 	inbox := &fakeInbox{pending: []eventinbox.Record{{ID: "bad", Payload: []byte("{")}}}
 	w := &Worker{Inbox: inbox, queue: make(chan job, 1)}

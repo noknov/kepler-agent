@@ -213,6 +213,15 @@ func (w *Worker) handle(ctx context.Context, job job) {
 	if err != nil {
 		log.Printf("handle Slack inbox event %s: %v", job.eventID, err)
 		finalCtx, finalCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if isPermanentDeliveryError(err) {
+			deadErr := w.Inbox.DeadLetter(finalCtx, job.eventID, err)
+			finalCancel()
+			if deadErr != nil && !errors.Is(deadErr, eventinbox.ErrLeaseLost) {
+				log.Printf("dead-letter Slack inbox event %s: %v", job.eventID, deadErr)
+			}
+			w.observeJob("permanent_error")
+			return
+		}
 		dead, failErr := w.Inbox.Fail(finalCtx, job.eventID, err, w.retryDelay(job.eventID, job.attempt+1), w.maxAttempts())
 		finalCancel()
 		if failErr != nil && !errors.Is(failErr, eventinbox.ErrLeaseLost) {
@@ -300,6 +309,15 @@ func (w *Worker) renewLease(ctx context.Context, eventID string, cancel context.
 			}
 		}
 	}
+}
+
+type permanentDeliveryError interface {
+	Permanent() bool
+}
+
+func isPermanentDeliveryError(err error) bool {
+	var permanent permanentDeliveryError
+	return errors.As(err, &permanent) && permanent.Permanent()
 }
 
 func (w *Worker) maxAttempts() int {

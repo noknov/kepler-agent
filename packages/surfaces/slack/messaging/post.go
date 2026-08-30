@@ -10,13 +10,17 @@ import (
 var errSlackClientRequired = errors.New("slack client is not configured")
 
 // PostAsConnectedUser sends a message with the standard 斗包 attribution footer.
-func PostAsConnectedUser(ctx context.Context, client *slack.Client, channel, threadTS, text string, attr Attribution) (string, error) {
+// deliveryID must identify the originating tool call so multi-part delivery is
+// safe to retry after a partial Slack API failure.
+func PostAsConnectedUser(ctx context.Context, client *slack.Client, channel, threadTS, text, deliveryID string, attr Attribution) (string, error) {
 	if client == nil {
 		return "", errSlackClientRequired
 	}
-	blocks := BlocksWithAttribution(text, attr.Text())
-	if len(blocks) == 0 {
-		return client.PostMessage(ctx, channel, threadTS, text)
+	attribution := attr.Text()
+	if attribution == "" {
+		return client.PostChunkedMessage(ctx, channel, threadTS, text, deliveryID, slack.MaxMessageTextRunes, nil)
 	}
-	return client.PostMessageBlocks(ctx, channel, threadTS, text, blocks)
+	return client.PostChunkedMessage(ctx, channel, threadTS, text, deliveryID, slack.MaxSectionTextRunes, func(part string) []map[string]any {
+		return BlocksWithAttribution(part, attribution)
+	})
 }

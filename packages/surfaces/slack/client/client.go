@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
@@ -23,6 +25,20 @@ type Client struct {
 	teamID     string
 	httpClient *http.Client
 }
+
+const (
+	// MaxMessageTextRunes is Slack's documented safe size for chat.postMessage
+	// text. Keeping every request within it also keeps UTF-8 payloads below the
+	// platform's byte-oriented rate-limit guidance.
+	MaxMessageTextRunes = 4000
+	// MaxSectionTextRunes is the Block Kit section text limit. Callers that
+	// render message text into a section must use this smaller bound.
+	MaxSectionTextRunes = 3000
+)
+
+// MessageBlockBuilder renders Slack blocks for one independently delivered
+// text part. A nil builder sends plain text.
+type MessageBlockBuilder func(string) []map[string]any
 
 func NewClient(token, botUserID string) *Client {
 	return &Client{
@@ -56,7 +72,7 @@ func (c *Client) AuthTest(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if !out.OK {
-		return "", fmt.Errorf("slack auth.test failed: %s", out.Error)
+		return "", slackAPIError{Method: "auth.test", Code: out.Error}
 	}
 	if out.TeamID != "" {
 		c.teamID = out.TeamID
@@ -65,7 +81,7 @@ func (c *Client) AuthTest(ctx context.Context) (string, error) {
 }
 
 func (c *Client) PostMessage(ctx context.Context, channel, threadTS, text string) (string, error) {
-	return c.postMessage(ctx, channel, threadTS, text, nil, "")
+	return c.PostChunkedMessage(ctx, channel, threadTS, text, "", MaxMessageTextRunes, nil)
 }
 
 func (c *Client) PostMessageBlocks(ctx context.Context, channel, threadTS, text string, blocks []map[string]any) (string, error) {
@@ -73,24 +89,71 @@ func (c *Client) PostMessageBlocks(ctx context.Context, channel, threadTS, text 
 }
 
 func (c *Client) PostMarkdownMessage(ctx context.Context, channel, threadTS, markdown string) (string, error) {
-	blocks := []map[string]any{{"type": "markdown", "text": markdown}}
-	ts, err := c.postMessage(ctx, channel, threadTS, markdown, blocks, "")
-	if err == nil || !strings.Contains(err.Error(), "invalid_blocks") {
-		return ts, err
-	}
-	// The markdown block is only available to Slack apps with the platform AI
-	// feature enabled. Plain text is a valid fallback for other app installs.
-	return c.postMessage(ctx, channel, threadTS, markdown, nil, "")
+	return c.postMarkdown(ctx, channel, threadTS, markdown, "")
 }
 
 func (c *Client) PostMarkdownMessageWithID(ctx context.Context, channel, threadTS, markdown, deliveryID string) (string, error) {
-	blocks := []map[string]any{{"type": "markdown", "text": markdown}}
-	clientMessageID := slackClientMessageID(deliveryID)
-	ts, err := c.postMessage(ctx, channel, threadTS, markdown, blocks, clientMessageID)
-	if err == nil || !strings.Contains(err.Error(), "invalid_blocks") {
-		return ts, err
+	return c.postMarkdown(ctx, channel, threadTS, markdown, deliveryID)
+}
+
+func (c *Client) postMarkdown(ctx context.Context, channel, threadTS, markdown, deliveryID string) (string, error) {
+	return c.postTextParts(ctx, channel, threadTS, markdown, deliveryID, MaxMessageTextRunes, func(ctx context.Context, threadTS, part, clientMessageID string) (string, error) {
+		blocks := []map[string]any{{"type": "markdown", "text": part}}
+		ts, err := c.postMessage(ctx, channel, threadTS, part, blocks, clientMessageID)
+		if err == nil || !isSlackErrorCode(err, "invalid_blocks") {
+			return ts, err
+		}
+		// The markdown block is only available to Slack apps with the platform AI
+		// feature enabled. Plain text is a valid fallback for other app installs.
+		return c.postMessage(ctx, channel, threadTS, part, nil, clientMessageID)
+	})
+}
+
+// PostChunkedMessage posts text in Slack-safe parts. When a root message needs
+// multiple parts, the first remains the root and each continuation is a reply
+// to it; callers therefore retain a single conversational unit. deliveryID is
+// deterministically expanded per part so retrying a partially delivered event
+// cannot create duplicate continuations.
+func (c *Client) PostChunkedMessage(ctx context.Context, channel, threadTS, text, deliveryID string, maxRunes int, blocks MessageBlockBuilder) (string, error) {
+	return c.postTextParts(ctx, channel, threadTS, text, deliveryID, maxRunes, func(ctx context.Context, threadTS, part, clientMessageID string) (string, error) {
+		partBlocks := []map[string]any(nil)
+		if blocks != nil {
+			partBlocks = blocks(part)
+		}
+		return c.postMessage(ctx, channel, threadTS, part, partBlocks, clientMessageID)
+	})
+}
+
+type messagePartSender func(context.Context, string, string, string) (string, error)
+
+func (c *Client) postTextParts(ctx context.Context, channel, threadTS, text, deliveryID string, maxRunes int, send messagePartSender) (string, error) {
+	parts := splitSlackMarkdown(text, maxRunes)
+	continuationThreadTS := threadTS
+	firstTS := ""
+	for index, part := range parts {
+		clientMessageID := slackClientMessageID(partDeliveryID(deliveryID, index, len(parts)))
+		ts, err := send(ctx, continuationThreadTS, part, clientMessageID)
+		if err != nil {
+			return firstTS, err
+		}
+		if firstTS == "" {
+			firstTS = ts
+			if continuationThreadTS == "" {
+				continuationThreadTS = ts
+			}
+		}
 	}
-	return c.postMessage(ctx, channel, threadTS, markdown, nil, clientMessageID)
+	return firstTS, nil
+}
+
+func partDeliveryID(deliveryID string, index, total int) string {
+	if deliveryID == "" {
+		return ""
+	}
+	if total == 1 {
+		return deliveryID
+	}
+	return fmt.Sprintf("%s:%d", deliveryID, index)
 }
 
 func (c *Client) UpdateMarkdownMessage(ctx context.Context, channel, messageTS, markdown string) error {
@@ -114,7 +177,7 @@ func (c *Client) updateMessage(ctx context.Context, channel, messageTS, text str
 		return err
 	}
 	if !out.OK {
-		return fmt.Errorf("slack chat.update failed: %s", out.Error)
+		return slackAPIError{Method: "chat.update", Code: out.Error}
 	}
 	return nil
 }
@@ -143,9 +206,99 @@ func (c *Client) postMessage(ctx context.Context, channel, threadTS, text string
 		return "", err
 	}
 	if !out.OK {
-		return "", fmt.Errorf("slack chat.postMessage failed: %s", out.Error)
+		return "", slackAPIError{Method: "chat.postMessage", Code: out.Error}
 	}
 	return out.TS, nil
+}
+
+// slackAPIError preserves Slack's machine-readable error code so an ingress
+// worker can distinguish invalid requests from transient delivery failures.
+type slackAPIError struct {
+	Method string
+	Code   string
+}
+
+func (e slackAPIError) Error() string {
+	return fmt.Sprintf("slack %s failed: %s", e.Method, e.Code)
+}
+
+// Permanent reports errors that cannot succeed by retrying an unchanged API
+// request. This includes Slack's message and block size validation failures.
+func (e slackAPIError) Permanent() bool {
+	switch e.Code {
+	case "msg_too_long", "msg_blocks_too_long", "invalid_blocks", "invalid_blocks_format", "invalid_arguments", "no_text":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSlackErrorCode(err error, code string) bool {
+	var apiErr slackAPIError
+	return errors.As(err, &apiErr) && apiErr.Code == code
+}
+
+func splitSlackMarkdown(text string, maxRunes int) []string {
+	if maxRunes <= 0 || maxRunes > MaxMessageTextRunes {
+		maxRunes = MaxMessageTextRunes
+	}
+	// Reserve enough room to close and reopen a fenced code block if a split
+	// falls inside one. This makes every Slack message valid Markdown by itself.
+	contentLimit := maxRunes - 8
+	if contentLimit < 1 {
+		contentLimit = maxRunes
+	}
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return []string{""}
+	}
+
+	var parts []string
+	inFence := false
+	for start := 0; start < len(runes); {
+		end := start + contentLimit
+		if end >= len(runes) {
+			end = len(runes)
+		} else {
+			end = slackSplitBoundary(runes, start, end)
+		}
+		body := string(runes[start:end])
+		prefix := ""
+		if inFence {
+			prefix = "```\n"
+		}
+		inFence = togglesCodeFence(inFence, body)
+		suffix := ""
+		if inFence {
+			suffix = "\n```"
+		}
+		parts = append(parts, prefix+body+suffix)
+		start = end
+	}
+	return parts
+}
+
+func slackSplitBoundary(runes []rune, start, end int) int {
+	for index := end; index > start; index-- {
+		if runes[index-1] == '\n' {
+			return index
+		}
+	}
+	for index := end; index > start; index-- {
+		if unicode.IsSpace(runes[index-1]) {
+			return index
+		}
+	}
+	return end
+}
+
+func togglesCodeFence(inFence bool, text string) bool {
+	for _, line := range strings.SplitAfter(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			inFence = !inFence
+		}
+	}
+	return inFence
 }
 
 func slackClientMessageID(value string) string {
@@ -171,7 +324,7 @@ func (c *Client) PublishHome(ctx context.Context, userID string, view map[string
 		return err
 	}
 	if !out.OK {
-		return fmt.Errorf("slack views.publish failed: %s", out.Error)
+		return slackAPIError{Method: "views.publish", Code: out.Error}
 	}
 	return nil
 }
@@ -189,7 +342,7 @@ func (c *Client) OpenView(ctx context.Context, triggerID string, view map[string
 		return err
 	}
 	if !out.OK {
-		return fmt.Errorf("slack views.open failed: %s", out.Error)
+		return slackAPIError{Method: "views.open", Code: out.Error}
 	}
 	return nil
 }
@@ -207,7 +360,7 @@ func (c *Client) UpdateView(ctx context.Context, viewID string, view map[string]
 		return err
 	}
 	if !out.OK {
-		return fmt.Errorf("slack views.update failed: %s", out.Error)
+		return slackAPIError{Method: "views.update", Code: out.Error}
 	}
 	return nil
 }
@@ -241,7 +394,7 @@ func (c *Client) StartStream(ctx context.Context, request slackconversation.Stre
 		return "", err
 	}
 	if !out.OK {
-		return "", fmt.Errorf("slack chat.startStream failed: %s", out.Error)
+		return "", slackAPIError{Method: "chat.startStream", Code: out.Error}
 	}
 	return out.TS, nil
 }
@@ -265,7 +418,7 @@ func (c *Client) AppendStream(ctx context.Context, channel, messageTS string, ch
 		return err
 	}
 	if !out.OK {
-		return fmt.Errorf("slack chat.appendStream failed: %s", out.Error)
+		return slackAPIError{Method: "chat.appendStream", Code: out.Error}
 	}
 	return nil
 }
@@ -280,7 +433,7 @@ func (c *Client) StopStream(ctx context.Context, channel, messageTS string) erro
 		return err
 	}
 	if !out.OK {
-		return fmt.Errorf("slack chat.stopStream failed: %s", out.Error)
+		return slackAPIError{Method: "chat.stopStream", Code: out.Error}
 	}
 	return nil
 }
@@ -304,7 +457,7 @@ func (c *Client) SetAgentSessionStatus(ctx context.Context, channel, threadTS, i
 		return err
 	}
 	if !out.OK {
-		return fmt.Errorf("slack agents.sessions.setStatus failed: %s", out.Error)
+		return slackAPIError{Method: "agents.sessions.setStatus", Code: out.Error}
 	}
 	return nil
 }
@@ -325,7 +478,7 @@ func (c *Client) UserInfo(ctx context.Context, userID string) (User, error) {
 		return User{}, err
 	}
 	if !out.OK {
-		return User{}, fmt.Errorf("slack users.info failed: %s", out.Error)
+		return User{}, slackAPIError{Method: "users.info", Code: out.Error}
 	}
 	return out.User, nil
 }
@@ -411,7 +564,7 @@ func (c *Client) FileInfo(ctx context.Context, fileID string) (File, error) {
 		return File{}, err
 	}
 	if !out.OK {
-		return File{}, fmt.Errorf("slack files.info failed: %s", out.Error)
+		return File{}, slackAPIError{Method: "files.info", Code: out.Error}
 	}
 	return out.File, nil
 }
@@ -541,7 +694,7 @@ func (c *Client) History(ctx context.Context, channel, latest string, limit int)
 			return nil, err
 		}
 		if !out.OK {
-			return nil, fmt.Errorf("slack conversations.history failed: %s", out.Error)
+			return nil, slackAPIError{Method: "conversations.history", Code: out.Error}
 		}
 		messages = append(messages, out.Messages...)
 		if len(messages) >= limit {
@@ -583,7 +736,7 @@ func (c *Client) Replies(ctx context.Context, channel, threadTS string, limit in
 			return nil, err
 		}
 		if !out.OK {
-			return nil, fmt.Errorf("slack conversations.replies failed: %s", out.Error)
+			return nil, slackAPIError{Method: "conversations.replies", Code: out.Error}
 		}
 		replies = append(replies, out.Messages...)
 		if !all && len(replies) >= limit {

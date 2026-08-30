@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
@@ -67,6 +68,59 @@ func TestPostMarkdownMessageFallsBackWhenMarkdownBlockIsUnsupported(t *testing.T
 	ts, err := client.PostMarkdownMessage(context.Background(), "C1", "T1", "answer")
 	if err != nil || ts != "123.456" || attempts != 2 {
 		t.Fatalf("ts=%q err=%v attempts=%d", ts, err, attempts)
+	}
+}
+
+func TestPostMarkdownMessageSplitsLongTextIntoThreadedParts(t *testing.T) {
+	var payloads []map[string]any
+	client := &Client{token: "xoxb-test", httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		payloads = append(payloads, payload)
+		ts := "root"
+		if len(payloads) > 1 {
+			ts = "part-2"
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"ts":"` + ts + `"}`)), Request: r}, nil
+	})}}
+
+	message := strings.Repeat("a", MaxMessageTextRunes+100)
+	ts, err := client.PostMarkdownMessage(context.Background(), "C1", "", message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts != "root" || len(payloads) != 2 {
+		t.Fatalf("ts=%q payloads=%d", ts, len(payloads))
+	}
+	for index, payload := range payloads {
+		text, _ := payload["text"].(string)
+		if utf8.RuneCountInString(text) > MaxMessageTextRunes {
+			t.Fatalf("part %d has %d runes", index, utf8.RuneCountInString(text))
+		}
+		if index == 1 && payload["thread_ts"] != "root" {
+			t.Fatalf("continuation thread_ts=%#v, want root", payload["thread_ts"])
+		}
+		blocks, _ := payload["blocks"].([]any)
+		if len(blocks) != 1 {
+			t.Fatalf("part %d blocks=%#v", index, payload["blocks"])
+		}
+	}
+}
+
+func TestSplitSlackMarkdownKeepsFencedCodeValidAcrossParts(t *testing.T) {
+	parts := splitSlackMarkdown("```go\n"+strings.Repeat("x", MaxMessageTextRunes)+"\n```", MaxMessageTextRunes)
+	if len(parts) < 2 {
+		t.Fatalf("parts=%d, want multiple", len(parts))
+	}
+	for index, part := range parts {
+		if utf8.RuneCountInString(part) > MaxMessageTextRunes {
+			t.Fatalf("part %d has %d runes", index, utf8.RuneCountInString(part))
+		}
+		if strings.Count(part, "```")%2 != 0 {
+			t.Fatalf("part %d has unbalanced fenced code: %q", index, part)
+		}
 	}
 }
 

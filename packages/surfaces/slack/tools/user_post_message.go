@@ -71,7 +71,7 @@ func (t UserPostMessageTool) Execute(ctx context.Context, call tool.Call) (tool.
 		}
 		return tool.Result{}, err
 	}
-	ts, err := slackmessaging.PostAsConnectedUser(ctx, slackClient, args.Channel, args.ThreadTS, args.Text, t.Attribution)
+	ts, err := slackmessaging.PostAsConnectedUser(ctx, slackClient, args.Channel, args.ThreadTS, args.Text, call.ID, t.Attribution)
 	if err != nil {
 		return tool.Result{}, err
 	}
