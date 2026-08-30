@@ -9,7 +9,7 @@ import (
 	agenttool "github.com/noknov/kepler-agent/packages/agent/tool"
 )
 
-func TestPlanUpdateStoresAndFormatsPlan(t *testing.T) {
+func TestPlanUpdateReturnsStructuredPlan(t *testing.T) {
 	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
 	result, err := (PlanTool{}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{
 		"summary":"start complex work",
@@ -21,17 +21,16 @@ func TestPlanUpdateStoresAndFormatsPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !strings.Contains(result.Text(), "Plan update: start complex work") ||
-		!strings.Contains(result.Text(), "2 [in_progress] Implement changes - editing core loop") {
-		t.Fatalf("unexpected content: %q", result.Text())
+	if result.Text() != "Plan updated" || result.Plan == nil || result.Plan.Explanation != "start complex work" {
+		t.Fatalf("unexpected result: %#v", result)
 	}
 	cached, ok := agenttool.CacheFor(scope).Get(cacheKey)
 	if !ok {
 		t.Fatal("plan was not cached")
 	}
-	items := cached.([]Item)
-	if len(items) != 2 || items[1].Status != "in_progress" {
-		t.Fatalf("cached plan = %#v", items)
+	plan := cached.(agenttool.PlanUpdate)
+	if len(plan.Items) != 2 || plan.Items[1].Status != "in_progress" {
+		t.Fatalf("cached plan = %#v", plan)
 	}
 }
 

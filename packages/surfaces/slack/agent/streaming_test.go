@@ -99,23 +99,6 @@ func TestNativeSlackStreamAppendsIncrementally(t *testing.T) {
 	}
 }
 
-func TestNativeStreamDoesNotRestoreDynamicStatus(t *testing.T) {
-	messenger := &nativeStreamingMessenger{}
-	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1"})
-	stream.Start()
-	stream.setProgressStatus(stream.statusEpoch, "Reading records")
-	stream.AppendDelta("final answer")
-
-	messenger.mu.Lock()
-	defer messenger.mu.Unlock()
-	if got := messenger.statuses; len(got) != 2 || got[0] != initialThreadStatus || got[1] != initialThreadStatus {
-		t.Fatalf("statuses=%#v, want initial and dynamic status only", got)
-	}
-	if got := messenger.loading; len(got) != 2 || got[1][0] != "Reading records" {
-		t.Fatalf("loading=%#v, want dynamic status before stream", got)
-	}
-}
-
 func TestStreamStartsWithFirstAssistantDelta(t *testing.T) {
 	messenger := &nativeStreamingMessenger{}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1"})
@@ -171,7 +154,7 @@ func TestNativeCompleteAppendsSourcesSuffix(t *testing.T) {
 	}
 }
 
-func TestStreamDeliveryDoesNotWaitForProgressText(t *testing.T) {
+func TestStreamDeliveryIsImmediate(t *testing.T) {
 	messenger := &nativeStreamingMessenger{}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1", EventID: "Ev1"})
 	stream.Start()

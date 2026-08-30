@@ -24,6 +24,7 @@ const (
 	ModelCompleted    EventType = "model_completed"
 	ModelStreamed     EventType = "model_streamed"
 	AssistantMessage  EventType = "assistant_message"
+	PlanUpdated       EventType = "plan_updated"
 	ToolCallStarted   EventType = "tool_call_started"
 	ToolCallCompleted EventType = "tool_call_completed"
 	ToolCallFailed    EventType = "tool_call_failed"
@@ -46,6 +47,7 @@ type Event struct {
 	Model      *model.StreamEvent `json:"model_event,omitempty"`
 	ToolCall   *tool.Call         `json:"tool_call,omitempty"`
 	ToolResult *tool.Result       `json:"tool_result,omitempty"`
+	Plan       *tool.PlanUpdate   `json:"plan,omitempty"`
 	Status     string             `json:"status,omitempty"`
 	Error      string             `json:"error,omitempty"`
 	Metadata   json.RawMessage    `json:"metadata,omitempty"`

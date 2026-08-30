@@ -26,8 +26,8 @@ func (s *slackStream) Lifecycle(event transcript.Event) {
 }
 
 // startStatus starts Slack's native processing indicator as soon as the agent
-// accepts a turn. Loading messages remain unset so Slack owns the initial UI;
-// a later concrete tool operation may replace only that loading state.
+// accepts a turn. The structured plan is deliberately not rendered here; a
+// later surface adapter may choose its own presentation for plan_updated.
 func (s *slackStream) startStatus() {
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()
@@ -37,7 +37,6 @@ func (s *slackStream) startStatus() {
 		return
 	}
 	s.lastStatus = statusKey(initialThreadStatus, "")
-	s.statusEpoch++
 	s.mu.Unlock()
 	s.sendThreadStatus(initialThreadStatus, nil, "start")
 	s.armStatusRefresh()
@@ -53,25 +52,6 @@ func splitStatusKey(key string) (string, string) {
 		return key, ""
 	}
 	return status, loading
-}
-
-func (s *slackStream) setProgressStatus(epoch uint64, loading string) {
-	s.statusMu.Lock()
-	defer s.statusMu.Unlock()
-	s.mu.Lock()
-	status, _ := splitStatusKey(s.lastStatus)
-	if status == "" {
-		status = initialThreadStatus
-	}
-	key := statusKey(status, loading)
-	if s.statusEpoch != epoch || s.lastStatus == "\x00" || s.lastStatus == key {
-		s.mu.Unlock()
-		return
-	}
-	s.lastStatus = key
-	s.mu.Unlock()
-	s.sendThreadStatus(status, []string{loading}, "progress")
-	s.armStatusRefresh()
 }
 
 func (s *slackStream) sendThreadStatus(status string, loading []string, source string) {

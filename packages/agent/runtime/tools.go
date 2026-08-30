@@ -121,6 +121,14 @@ func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, pr
 		if entry.result.IsError {
 			eventType = transcript.ToolCallFailed
 		}
+		if entry.result.Plan != nil && !entry.result.IsError {
+			if _, err := r.record(ctx, transcript.Event{
+				SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.PlanUpdated,
+				Plan: entry.result.Plan,
+			}); err != nil {
+				return toolOutcome{}, err
+			}
+		}
 		if _, err := r.record(ctx, transcript.Event{
 			SessionID: request.SessionID, TurnID: request.TurnID, Type: eventType,
 			ToolCall: &entry.call, ToolResult: entry.result,

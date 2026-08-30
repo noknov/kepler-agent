@@ -199,22 +199,6 @@ func TestStreamStartsStatusBeforeRuntimeEvents(t *testing.T) {
 	}
 }
 
-func TestStreamDeltaDoesNotResetDynamicStatus(t *testing.T) {
-	messenger := &fakeMessenger{}
-	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T"})
-	stream.Start()
-	stream.setProgressStatus(stream.statusEpoch, "Reading records")
-	stream.AppendDelta("final answer")
-	messenger.mu.Lock()
-	defer messenger.mu.Unlock()
-	if got := messenger.statuses; len(got) != 2 || got[0] != initialThreadStatus || got[1] != initialThreadStatus {
-		t.Fatalf("statuses = %#v", got)
-	}
-	if got := messenger.loading; len(got) != 2 || len(got[1]) != 1 || got[1][0] != "Reading records" {
-		t.Fatalf("loading messages = %#v", got)
-	}
-}
-
 func TestEnrichInputWithThreadImages(t *testing.T) {
 	history := []model.Message{{Role: model.RoleUser, Content: []model.Content{
 		{Type: model.ContentText, Text: "pets"},
@@ -245,7 +229,6 @@ func TestUnsupportedImagesAreRemovedWithoutMutatingInput(t *testing.T) {
 func TestCompletePostsFinalWithoutStartingEmptyStream(t *testing.T) {
 	messenger := &fakeMessenger{}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T", UserID: "U"})
-	stream.CommitStep(model.TextMessage(model.RoleAssistant, "answer"))
 	stream.Complete("answer")
 	if len(messenger.posts) != 1 || messenger.posts[0] != "answer" {
 		t.Fatalf("posts=%#v", messenger.posts)

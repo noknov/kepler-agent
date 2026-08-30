@@ -31,8 +31,6 @@ type Profile struct {
 	Rates              observability.CostRates
 	SecondaryModel     model.Client
 	SecondaryModelName string
-	ProgressModel      model.Client
-	ProgressModelName  string
 }
 
 type ProfileDependencies struct {
@@ -51,10 +49,6 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		return Profile{}, err
 	}
 	secondary, secondaryModel, err := secondaryModelClient(cfg)
-	if err != nil {
-		return Profile{}, err
-	}
-	progress, progressModel, err := progressModelClient(cfg)
 	if err != nil {
 		return Profile{}, err
 	}
@@ -150,7 +144,6 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		Agent: Agent{Runtime: runner}, Prompt: promptPolicy,
 		Redactor: safety.Redactor{WorkspaceRoots: cfg.Security.WorkspaceRoots}, Tools: catalog,
 		Rates: CostRates(cfg), SecondaryModel: secondary, SecondaryModelName: secondaryModel,
-		ProgressModel: progress, ProgressModelName: progressModel,
 	}, nil
 }
 
@@ -200,17 +193,6 @@ func secondaryModelClient(cfg config.Config) (model.Client, string, error) {
 	}
 	client, err := buildModelClient(cfg.LLM.SecondaryProvider, cfg.LLM.SecondaryProtocol, cfg.LLM.SecondaryBaseURL, cfg.LLM.SecondaryAPIKey, cfg.LLM.Timeout, "", nil)
 	return client, cfg.LLM.SecondaryModel, err
-}
-
-func progressModelClient(cfg config.Config) (model.Client, string, error) {
-	if strings.TrimSpace(cfg.Progress.Provider) == "" {
-		return nil, "", nil
-	}
-	client, err := buildModelClient(cfg.Progress.Provider, cfg.Progress.Protocol, cfg.Progress.BaseURL, cfg.Progress.APIKey, cfg.LLM.Timeout, "", nil)
-	if err != nil {
-		return nil, "", err
-	}
-	return client, cfg.Progress.Model, nil
 }
 
 func maxToolResultBytes(tokens int) int {

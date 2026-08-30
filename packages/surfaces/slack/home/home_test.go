@@ -47,7 +47,6 @@ func TestViewShowsModelDisplayNamesWithoutCodeFormatting(t *testing.T) {
 				MultimodalModel: "gpt-5.6-luna",
 				SecondaryModel:  "mimo-v2.5",
 			},
-			Progress: config.ModelConfig{Model: "hy3"},
 		},
 		Access: safety.AccessPolicy{},
 	}
@@ -69,9 +68,6 @@ func TestViewShowsModelDisplayNamesWithoutCodeFormatting(t *testing.T) {
 	}
 	if !strings.Contains(body, "Explorer Model") {
 		t.Fatalf("expected explorer model label, got %s", body)
-	}
-	if !strings.Contains(body, "Progress Model") || !strings.Contains(body, "Hy3") {
-		t.Fatalf("expected Hy3 progress model label, got %s", body)
 	}
 	if strings.Contains(body, "Active-turn") || strings.Contains(body, "Image Model") || strings.Contains(body, "toggle_conversation_mode") {
 		t.Fatalf("expected no active-turn or image model fields, got %s", body)

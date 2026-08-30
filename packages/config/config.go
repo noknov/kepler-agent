@@ -14,7 +14,6 @@ type Config struct {
 	HTTP         HTTPConfig
 	Slack        SlackConfig
 	LLM          LLMConfig
-	Progress     ModelConfig
 	Security     SecurityConfig
 	Sessions     SessionConfig
 	Tools        ToolConfig
@@ -22,16 +21,6 @@ type Config struct {
 	Connections  ConnectionsConfig
 	Observing    ObservingConfig
 	Storage      StorageConfig
-}
-
-// ModelConfig describes an optional, isolated model endpoint for a background
-// product capability. It never changes the primary agent routing.
-type ModelConfig struct {
-	Provider string
-	BaseURL  string
-	APIKey   string
-	Model    string
-	Protocol string
 }
 
 // StorageConfig owns all durable operational state for sessions, runs, inbox,
@@ -290,8 +279,7 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 	}
 
 	secondaryProvider := strings.ToLower(strings.TrimSpace(os.Getenv("SECONDARY_PROVIDER")))
-	progressProvider := strings.ToLower(strings.TrimSpace(os.Getenv("PROGRESS_PROVIDER")))
-	if err := validateProviderTypedEnvironment(llmProvider, secondaryProvider, progressProvider); err != nil {
+	if err := validateProviderTypedEnvironment(llmProvider, secondaryProvider); err != nil {
 		return Config{}, err
 	}
 	var secondaryBaseURL, secondaryAPIKey, secondaryModel, secondaryProtocol string
@@ -304,7 +292,6 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			secondaryModel = providerModel(secondaryProvider)
 		}
 	}
-	progress := optionalModelConfig("PROGRESS", progressProvider)
 
 	cfg := Config{
 		HTTP: HTTPConfig{
@@ -349,7 +336,6 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			SecondaryModel:    secondaryModel,
 			SecondaryProtocol: secondaryProtocol,
 		},
-		Progress: progress,
 		Security: SecurityConfig{
 			AllowedUsers:       envCSV("ALLOWED_SLACK_USERS"),
 			AllowedChannels:    envCSV("ALLOWED_SLACK_CHANNELS"),
@@ -388,21 +374,6 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 		},
 	}
 	return cfg, nil
-}
-
-func optionalModelConfig(role, provider string) ModelConfig {
-	if provider == "" {
-		return ModelConfig{}
-	}
-	model := strings.TrimSpace(os.Getenv(role + "_MODEL"))
-	if model == "" {
-		model = providerModel(provider)
-	}
-	protocol := strings.ToLower(strings.TrimSpace(os.Getenv(role + "_PROTOCOL")))
-	if protocol == "" {
-		protocol = providerProtocol(provider)
-	}
-	return ModelConfig{Provider: provider, BaseURL: trimRightSlash(providerBaseURL(provider)), APIKey: providerAPIKey(provider), Model: model, Protocol: protocol}
 }
 
 func loadIntegrations() IntegrationConfig {

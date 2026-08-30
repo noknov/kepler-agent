@@ -99,6 +99,9 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 		return r.failTurn(ctx, result, err)
 	}
 	system := model.TextMessage(model.RoleSystem, composition.Content)
+	if r.deps.Tools.Has("update_plan") {
+		system = appendSystemInstruction(system, planningInstruction)
+	}
 	for step := 1; step <= r.config.MaxSteps; step++ {
 		result.Steps = step
 		if err := ctx.Err(); err != nil {

@@ -14,6 +14,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/prompt"
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
+	plannertools "github.com/noknov/kepler-agent/packages/tools/planner"
 )
 
 type scriptedModel struct {
@@ -157,6 +158,47 @@ func TestRunTurnExecutesToolAndRecordsCanonicalHistory(t *testing.T) {
 	if !sawCall || !sawResult {
 		t.Fatalf("missing tool lifecycle events: %#v", events)
 	}
+}
+
+func TestRunTurnPersistsStructuredPlanUpdate(t *testing.T) {
+	planCall := model.ToolCall{ID: "plan-1", Name: "update_plan", Arguments: json.RawMessage(`{
+		"summary":"starting implementation",
+		"items":[
+			{"id":"inspect","task":"Inspect the runtime","status":"completed"},
+			{"id":"implement","task":"Implement plan events","status":"in_progress"}
+		]
+	}`)}
+	client := &scriptedModel{responses: []model.Response{
+		{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &planCall}}}, FinishReason: model.FinishToolCalls},
+		{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop},
+	}}
+	catalog, err := tool.NewCatalog(plannertools.PlanTool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := transcript.NewMemoryStore()
+	runner, err := New(Config{Model: "test"}, Dependencies{Model: client, Tools: catalog, Transcript: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "plan-session", Input: model.TextMessage(model.RoleUser, "make this change")}); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.requests) == 0 || !strings.Contains(client.requests[0].Messages[0].Text(), "use update_plan before substantial work") {
+		t.Fatalf("planning instruction missing from system prompt: %#v", client.requests)
+	}
+	events, err := store.Load(context.Background(), "plan-session", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Type == transcript.PlanUpdated && event.Plan != nil {
+			if event.Plan.Explanation == "starting implementation" && len(event.Plan.Items) == 2 && event.Plan.Items[1].Status == "in_progress" {
+				return
+			}
+		}
+	}
+	t.Fatalf("structured plan update missing from events: %#v", events)
 }
 
 func TestRunTurnRecordsParentLinkAsAuditMetadata(t *testing.T) {

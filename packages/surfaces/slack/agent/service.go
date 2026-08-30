@@ -61,7 +61,6 @@ type Service struct {
 	MultimodalModel  func() string
 	ThreadLoader     ThreadLoader
 	WebSearchEnabled func(string) bool
-	Progress         *ProgressSummarizer
 	Locker           session.Locker
 	Inputs           sessioninput.Store
 	BeforeRun        func(context.Context, string) error
@@ -144,14 +143,7 @@ func (r *eventRouter) Publish(_ context.Context, event transcript.Event) {
 		switch event.Model.Type {
 		case model.StreamTextDelta:
 			stream.AppendDelta(event.Model.Text)
-		case model.StreamToolCallDone:
-			if event.Model.ToolCall != nil {
-				stream.ToolStep([]model.ToolCall{*event.Model.ToolCall})
-			}
 		}
-	}
-	if event.Type == transcript.AssistantMessage && event.Message != nil {
-		stream.CommitStep(*event.Message)
 	}
 }
 
@@ -301,7 +293,6 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	req.EventID = turnID
 	stream := newSlackStream(runCtx, s.Messenger, req)
 	stream.redactor = safety.NewStreamRedactor(s.Redactor)
-	stream.progress = s.Progress
 	s.router.set(turnID, stream)
 	defer s.router.set(turnID, nil)
 	stream.Start()
@@ -729,9 +720,6 @@ type slackStream struct {
 	statusMu             sync.Mutex
 	status               slackconversation.ThreadStatusMessenger
 	lastStatus           string
-	statusEpoch          uint64
-	progress             *ProgressSummarizer
-	progressSeen         map[string]bool
 	redactor             *safety.StreamRedactor
 	answer               strings.Builder
 	messageTS            string
@@ -751,11 +739,6 @@ func (s *slackStream) Start() {
 	if status, ok := s.messenger.(slackconversation.ThreadStatusMessenger); ok {
 		s.status = status
 		s.startStatus()
-	}
-}
-func (s *slackStream) CommitStep(message model.Message) {
-	if calls := message.ToolCalls(); len(calls) > 0 {
-		s.ToolStep(calls)
 	}
 }
 func (s *slackStream) Complete(final string) (string, error) {
@@ -865,7 +848,6 @@ func (s *slackStream) clearStatus() {
 		s.statusMu.Lock()
 		defer s.statusMu.Unlock()
 		s.mu.Lock()
-		s.statusEpoch++
 		if s.lastStatus == "" {
 			s.lastStatus = "\x00"
 			s.mu.Unlock()

@@ -188,14 +188,8 @@ control; unset values are not sent to the provider. Reasoning models such as
 
 ## Secondary Model
 
-The optional secondary model is used for compact summaries and
-presentation-only Slack progress wording. Progress wording is generated from
-the redacted user request and confirmed tool names, and never enters the
-transcript or execution context. Slack keeps the native assistant status on the
-localized thinking state; the secondary model only replaces the loading message
-with a specific action-and-target label. If the secondary model is not
-configured or cannot produce a valid structured label, the generic localized
-thinking loading message remains unchanged.
+The optional secondary model is used for compact summaries and as the preferred
+model for isolated exploration work. It never changes primary agent routing.
 
 ```bash
 SECONDARY_PROVIDER=opencode-zen

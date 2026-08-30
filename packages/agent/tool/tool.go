@@ -76,6 +76,22 @@ type Result struct {
 	Truncated      bool            `json:"truncated,omitempty"`
 	Spill          *model.Artifact `json:"spill,omitempty"`
 	NeedsUserInput bool            `json:"needs_user_input,omitempty"`
+	Plan           *PlanUpdate     `json:"plan,omitempty"`
+}
+
+// PlanUpdate is an agent-authored, structured execution plan. It is emitted
+// by the planner tool and persisted by the runtime as a canonical event so
+// presentation surfaces can render it without interpreting tool text.
+type PlanUpdate struct {
+	Explanation string     `json:"explanation,omitempty"`
+	Items       []PlanItem `json:"items"`
+}
+
+type PlanItem struct {
+	ID     string `json:"id,omitempty"`
+	Task   string `json:"task"`
+	Status string `json:"status"`
+	Note   string `json:"note,omitempty"`
 }
 
 func TextResult(value string) Result {

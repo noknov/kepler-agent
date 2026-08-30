@@ -214,7 +214,7 @@
       "limit": "Maximum runbook matches. Defaults to 5, max 20."
     }
   },
-  "plan-update": {
+  "update_plan": {
     "description": "Create or update the current execution plan for a complex multi-step task. Use proactively for substantial coding, debugging, architecture review, broad comparison, or any request with 3+ meaningful steps. Do not use for trivial one-step lookups.",
     "parameters": {
       "items": "Ordered task list. Keep each item concrete, outcome-oriented, and small enough to finish or verify.",

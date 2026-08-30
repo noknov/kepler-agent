@@ -13,16 +13,11 @@ const cacheKey = "agent-plan"
 
 type PlanTool struct{}
 
-type Item struct {
-	ID     string `json:"id,omitempty"`
-	Task   string `json:"task"`
-	Status string `json:"status"`
-	Note   string `json:"note,omitempty"`
-}
+type Item = tool.PlanItem
 
 func (PlanTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
-		"plan-update",
+		"update_plan",
 		"Create or replace the current execution plan for a complex multi-step agent task. Use this before substantial work, and update it as steps move through pending, in_progress, completed, or blocked. Skip for trivial one-step questions.",
 		tool.ObjectSchema([]string{"items"}, map[string]any{
 			"items": map[string]any{
@@ -68,10 +63,13 @@ func (PlanTool) Execute(_ context.Context, call tool.Call) (tool.Result, error) 
 	if err != nil {
 		return tool.Result{}, err
 	}
+	update := &tool.PlanUpdate{Explanation: strings.TrimSpace(args.Summary), Items: items}
 	if tool.CacheFor(call.Scope) != nil {
-		tool.CacheFor(call.Scope).Set(cacheKey, items)
+		tool.CacheFor(call.Scope).Set(cacheKey, *update)
 	}
-	return tool.TextResult(formatPlan(strings.TrimSpace(args.Summary), items)), nil
+	result := tool.TextResult("Plan updated")
+	result.Plan = update
+	return result, nil
 }
 
 func normalizeItems(items []Item) ([]Item, error) {
@@ -105,27 +103,4 @@ func normalizeItems(items []Item) ([]Item, error) {
 		return nil, fmt.Errorf("at most one item may be in_progress")
 	}
 	return out, nil
-}
-
-func formatPlan(summary string, items []Item) string {
-	var b strings.Builder
-	if summary != "" {
-		b.WriteString("Plan update: ")
-		b.WriteString(summary)
-		b.WriteString("\n")
-	}
-	b.WriteString("Current plan:")
-	for _, item := range items {
-		b.WriteString("\n- ")
-		b.WriteString(item.ID)
-		b.WriteString(" [")
-		b.WriteString(item.Status)
-		b.WriteString("] ")
-		b.WriteString(item.Task)
-		if item.Note != "" {
-			b.WriteString(" - ")
-			b.WriteString(item.Note)
-		}
-	}
-	return b.String()
 }
