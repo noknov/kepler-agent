@@ -3,17 +3,10 @@ package slackagent
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
-
-// Slack does not publish a lifetime for idle native streams. Keep an active
-// plan stream alive well below the observed server-side close window. This is
-// one update per active plan each minute, far below chat.appendStream's Tier 4
-// limit (100+ requests/minute).
-const streamPlanHeartbeatInterval = time.Minute
 
 // UpdatePlan renders model-authored execution plans using Slack's documented
 // task_update chunks in plan display mode. It deliberately does not infer plan
@@ -35,7 +28,6 @@ func (s *slackStream) UpdatePlan(plan *tool.PlanUpdate) {
 		return
 	}
 	if started {
-		s.setPlanHeartbeat(chunks)
 		return
 	}
 
@@ -58,51 +50,6 @@ func (s *slackStream) UpdatePlan(plan *tool.PlanUpdate) {
 		s.mu.Unlock()
 		return
 	}
-	s.setPlanHeartbeat(chunks)
-}
-
-func (s *slackStream) setPlanHeartbeat(chunks []map[string]any) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.planHeartbeatChunks = chunks
-	if s.streamClosed || s.streamDeliveryFailed || s.planHeartbeatTimer != nil {
-		return
-	}
-	s.planHeartbeatTimer = time.AfterFunc(streamPlanHeartbeatInterval, s.runPlanHeartbeat)
-}
-
-func (s *slackStream) runPlanHeartbeat() {
-	s.deliveryMu.Lock()
-	defer s.deliveryMu.Unlock()
-
-	s.mu.Lock()
-	s.planHeartbeatTimer = nil
-	if s.streamClosed || s.streamDeliveryFailed || !s.nativeStream || s.messageTS == "" || len(s.planHeartbeatChunks) == 0 {
-		s.mu.Unlock()
-		return
-	}
-	messageTS := s.messageTS
-	chunks := s.planHeartbeatChunks
-	s.mu.Unlock()
-
-	native, ok := s.messenger.(slackconversation.NativeStreamMessenger)
-	if !ok {
-		return
-	}
-	ctx, cancel := s.deliveryContext()
-	defer cancel()
-	if err := native.AppendStream(ctx, s.req.Channel, messageTS, chunks); err != nil {
-		s.mu.Lock()
-		s.streamDeliveryFailed = true
-		s.mu.Unlock()
-		return
-	}
-
-	s.mu.Lock()
-	if !s.streamClosed && !s.streamDeliveryFailed && s.nativeStream && s.messageTS == messageTS {
-		s.planHeartbeatTimer = time.AfterFunc(streamPlanHeartbeatInterval, s.runPlanHeartbeat)
-	}
-	s.mu.Unlock()
 }
 
 func planChunks(plan *tool.PlanUpdate) []map[string]any {

@@ -241,16 +241,6 @@ func (s *slackStream) stopStreamTimer() {
 	}
 }
 
-func (s *slackStream) stopPlanHeartbeat() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.planHeartbeatTimer != nil {
-		s.planHeartbeatTimer.Stop()
-		s.planHeartbeatTimer = nil
-	}
-	s.planHeartbeatChunks = nil
-}
-
 func (s *slackStream) streamedText() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

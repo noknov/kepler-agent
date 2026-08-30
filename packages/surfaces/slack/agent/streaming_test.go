@@ -70,16 +70,6 @@ func TestPlanUpdatesUseSlackPlanDisplay(t *testing.T) {
 	}
 }
 
-func TestPlanHeartbeatRefreshesExistingStream(t *testing.T) {
-	messenger := &nativeStreamingMessenger{}
-	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1"})
-	stream.UpdatePlan(&tool.PlanUpdate{Items: []tool.PlanItem{{ID: "inspect", Task: "Inspect logs", Status: "in_progress"}}})
-	stream.runPlanHeartbeat()
-	if len(messenger.chunks) != 1 || len(messenger.chunks[0]) != 2 || messenger.chunks[0][1]["id"] != "inspect" {
-		t.Fatalf("heartbeat chunks = %#v", messenger.chunks)
-	}
-	stream.stopPlanHeartbeat()
-}
 func (m *nativeStreamingMessenger) AppendStream(_ context.Context, _, _ string, chunks []map[string]any) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

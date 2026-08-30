@@ -754,8 +754,6 @@ type slackStream struct {
 	lastStreamText       string
 	lastStreamUpdate     time.Time
 	streamTimer          *time.Timer
-	planHeartbeatTimer   *time.Timer
-	planHeartbeatChunks  []map[string]any
 }
 
 func newSlackStream(ctx context.Context, messenger slackconversation.Messenger, req slackconversation.Request) *slackStream {
@@ -769,7 +767,6 @@ func (s *slackStream) Start() {
 }
 func (s *slackStream) Complete(final string) (string, error) {
 	s.stopStreamTimer()
-	s.stopPlanHeartbeat()
 	if s.redactor != nil {
 		s.appendSanitizedDelta(s.redactor.Flush())
 	}
@@ -823,7 +820,6 @@ func (s *slackStream) appendSanitizedDelta(delta string) {
 }
 func (s *slackStream) Fail(message string, canceled bool) (string, error) {
 	s.stopStreamTimer()
-	s.stopPlanHeartbeat()
 	s.flushDeferredStream(true)
 	s.mu.Lock()
 	s.streamClosed = true
