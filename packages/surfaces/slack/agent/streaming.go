@@ -165,8 +165,13 @@ func (s *slackStream) appendNativeChunks(delta string) error {
 	if !ok {
 		return fmt.Errorf("native stream messenger unavailable")
 	}
-	if _, err := s.ensureNativeStream(nil); err != nil {
+	chunks := []map[string]any{{"type": "markdown_text", "text": delta}}
+	started, err := s.ensureNativeStream(chunks)
+	if err != nil {
 		return err
+	}
+	if started {
+		return nil
 	}
 
 	s.mu.Lock()
@@ -179,7 +184,6 @@ func (s *slackStream) appendNativeChunks(delta string) error {
 	ctx, cancel := s.deliveryContext()
 	defer cancel()
 
-	chunks := []map[string]any{{"type": "markdown_text", "text": delta}}
 	if err := native.AppendStream(ctx, s.req.Channel, messageTS, chunks); err == nil {
 		return nil
 	} else if !strings.Contains(err.Error(), "not_in_streaming_state") {
@@ -235,6 +239,16 @@ func (s *slackStream) stopStreamTimer() {
 		s.streamTimer.Stop()
 		s.streamTimer = nil
 	}
+}
+
+func (s *slackStream) stopPlanHeartbeat() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.planHeartbeatTimer != nil {
+		s.planHeartbeatTimer.Stop()
+		s.planHeartbeatTimer = nil
+	}
+	s.planHeartbeatChunks = nil
 }
 
 func (s *slackStream) streamedText() string {

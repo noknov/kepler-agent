@@ -69,6 +69,17 @@ func TestPlanUpdatesUseSlackPlanDisplay(t *testing.T) {
 		t.Fatalf("appended plan chunks = %#v", got)
 	}
 }
+
+func TestPlanHeartbeatRefreshesExistingStream(t *testing.T) {
+	messenger := &nativeStreamingMessenger{}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1"})
+	stream.UpdatePlan(&tool.PlanUpdate{Items: []tool.PlanItem{{ID: "inspect", Task: "Inspect logs", Status: "in_progress"}}})
+	stream.runPlanHeartbeat()
+	if len(messenger.chunks) != 1 || len(messenger.chunks[0]) != 2 || messenger.chunks[0][1]["id"] != "inspect" {
+		t.Fatalf("heartbeat chunks = %#v", messenger.chunks)
+	}
+	stream.stopPlanHeartbeat()
+}
 func (m *nativeStreamingMessenger) AppendStream(_ context.Context, _, _ string, chunks []map[string]any) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -110,7 +121,7 @@ func TestNativeSlackStreamAppendsIncrementally(t *testing.T) {
 	if messenger.started != 1 {
 		t.Fatalf("started = %d, want 1", messenger.started)
 	}
-	if len(messenger.appends) != 2 || messenger.appends[0] != "hel" || messenger.appends[1] != "lo" {
+	if len(messenger.appends) != 1 || messenger.appends[0] != "lo" {
 		t.Fatalf("appends = %#v", messenger.appends)
 	}
 	ts, err := stream.Complete("hello")
@@ -183,7 +194,7 @@ func TestStreamDeliveryIsImmediate(t *testing.T) {
 	stream.Start()
 	stream.AppendDelta("hello")
 	stream.flushStreamUpdate("hello", false)
-	if messenger.started != 1 || len(messenger.appends) != 1 {
+	if messenger.started != 1 || len(messenger.appends) != 0 {
 		t.Fatalf("started=%d appends=%#v, want immediate delivery", messenger.started, messenger.appends)
 	}
 }
@@ -206,8 +217,8 @@ func TestNativeStreamSanitizesDeltasWithoutRewritingTheMessage(t *testing.T) {
 	if _, err := stream.Complete("the [redacted] is hidden"); err != nil {
 		t.Fatal(err)
 	}
-	if len(messenger.appends) != 1 || messenger.appends[0] != "the [redacted] is hidden" {
-		t.Fatalf("appends=%#v", messenger.appends)
+	if got := messenger.start[0].Chunks; len(got) != 1 || got[0]["text"] != "the [redacted] is hidden" {
+		t.Fatalf("start chunks=%#v", got)
 	}
 	if len(messenger.posts) != 0 {
 		t.Fatalf("unexpected final rewrite: %#v", messenger.posts)
@@ -233,10 +244,12 @@ func TestNativeStreamRestartsOnNotInStreamingState(t *testing.T) {
 	stream.Start()
 	stream.AppendDelta("hello")
 	stream.flushStreamUpdate("hello", false)
+	stream.AppendDelta(" world")
+	stream.flushStreamUpdate("hello world", false)
 	if messenger.started != 2 {
 		t.Fatalf("started = %d, want restart after not_in_streaming_state", messenger.started)
 	}
-	if len(messenger.appends) != 1 || messenger.appends[0] != "hello" {
+	if len(messenger.appends) != 1 || messenger.appends[0] != " world" {
 		t.Fatalf("appends = %#v", messenger.appends)
 	}
 }
