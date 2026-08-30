@@ -65,8 +65,10 @@ type NativeStreamMessenger interface {
 	StopStream(ctx context.Context, channel, messageTS string) error
 }
 
-type ThreadStatusMessenger interface {
-	SetThreadStatus(ctx context.Context, channel, threadTS, status string, loadingMessages []string) error
+// AgentSessionMessenger manages Slack's agent-session lifecycle independently
+// of message streaming.
+type AgentSessionMessenger interface {
+	SetAgentSessionStatus(ctx context.Context, channel, threadTS, initiatorUserID, status string) error
 }
 
 func IsChineseLocale(locale string) bool {

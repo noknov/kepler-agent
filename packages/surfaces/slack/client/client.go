@@ -277,27 +277,26 @@ func (c *Client) StopStream(ctx context.Context, channel, messageTS string) erro
 	return nil
 }
 
-// SetThreadStatus updates the native Slack AI assistant status indicator for a
-// thread. Slack automatically clears the status when the app sends a reply;
-// passing an empty status clears it explicitly.
-func (c *Client) SetThreadStatus(ctx context.Context, channel, threadTS, status string, loadingMessages []string) error {
+// SetAgentSessionStatus updates the lifecycle state for a thread-based Slack
+// agent session. initiatorUserID is used only when Slack creates the session.
+func (c *Client) SetAgentSessionStatus(ctx context.Context, channel, threadTS, initiatorUserID, status string) error {
 	payload := map[string]any{
 		"channel_id": channel,
 		"thread_ts":  threadTS,
 		"status":     status,
 	}
-	if len(loadingMessages) > 0 {
-		payload["loading_messages"] = loadingMessages
+	if initiatorUserID != "" {
+		payload["initiator_user_id"] = initiatorUserID
 	}
 	var out struct {
 		OK    bool   `json:"ok"`
 		Error string `json:"error,omitempty"`
 	}
-	if err := c.postJSON(ctx, "assistant.threads.setStatus", payload, &out); err != nil {
+	if err := c.postJSON(ctx, "agents.sessions.setStatus", payload, &out); err != nil {
 		return err
 	}
 	if !out.OK {
-		return fmt.Errorf("slack assistant.threads.setStatus failed: %s", out.Error)
+		return fmt.Errorf("slack agents.sessions.setStatus failed: %s", out.Error)
 	}
 	return nil
 }

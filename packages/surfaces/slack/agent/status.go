@@ -2,106 +2,53 @@ package slackagent
 
 import (
 	"log"
-	"strings"
-	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 )
 
 const (
-	initialThreadStatus = "is thinking"
-	statusRefreshPeriod = 90 * time.Second
+	sessionProcessing = "processing"
+	sessionActive     = "active"
+	sessionSuspended  = "suspended"
 )
 
-// Lifecycle projects canonical runtime events into Slack presentation state.
-// It is deterministic and never invokes a model or creates conversation state.
+// Lifecycle projects canonical turn completion into Slack's agent-session
+// lifecycle. It does not infer progress from tools or issue model requests.
 func (s *slackStream) Lifecycle(event transcript.Event) {
-	if s.status == nil {
+	if s.session == nil {
 		return
 	}
 	switch event.Type {
-	case transcript.TurnCompleted, transcript.TurnFailed, transcript.TurnCanceled:
-		s.clearStatus()
+	case transcript.TurnCompleted:
+		s.setSessionStatus(sessionStatusForTermination(event.Status))
+	case transcript.TurnFailed, transcript.TurnCanceled:
+		s.setSessionStatus(sessionActive)
 	}
 }
 
-// startStatus starts Slack's native processing indicator as soon as the agent
-// accepts a turn. The structured plan is deliberately not rendered here; a
-// later surface adapter may choose its own presentation for plan_updated.
-func (s *slackStream) startStatus() {
-	s.statusMu.Lock()
-	defer s.statusMu.Unlock()
-	s.mu.Lock()
-	if s.lastStatus != "" {
-		s.mu.Unlock()
+func sessionStatusForTermination(termination string) string {
+	switch termination {
+	case "pending_input", "pending_approval":
+		return sessionSuspended
+	default:
+		return sessionActive
+	}
+}
+
+func (s *slackStream) setSessionStatus(status string) {
+	if s.session == nil || status == "" {
 		return
 	}
-	s.lastStatus = statusKey(initialThreadStatus, "")
-	s.mu.Unlock()
-	s.sendThreadStatus(initialThreadStatus, nil, "start")
-	s.armStatusRefresh()
-}
-
-func statusKey(status, loading string) string {
-	return status + "\x00" + loading
-}
-
-func splitStatusKey(key string) (string, string) {
-	status, loading, ok := strings.Cut(key, "\x00")
-	if !ok {
-		return key, ""
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	if s.sessionStatus == status {
+		return
 	}
-	return status, loading
-}
-
-func (s *slackStream) sendThreadStatus(status string, loading []string, source string) {
 	ctx, cancel := s.deliveryContext()
 	defer cancel()
-	if err := s.status.SetThreadStatus(ctx, s.req.Channel, s.req.ThreadTS, status, loading); err != nil {
-		log.Printf("slack thread status unavailable turn=%s source=%s", s.req.EventID, source)
-	}
-}
-
-// Slack automatically removes a thread status after two minutes without a
-// message. Refresh the current canonical status before that deadline while the
-// turn remains active; this is independent of tool execution and model output.
-func (s *slackStream) armStatusRefresh() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.status == nil || s.streamClosed || s.lastStatus == "" || s.lastStatus == "\x00" {
+	if err := s.session.SetAgentSessionStatus(ctx, s.req.Channel, s.req.ThreadTS, s.req.UserID, status); err != nil {
+		log.Printf("slack agent session status unavailable turn=%s status=%s", s.req.EventID, status)
 		return
 	}
-	if s.statusTimer != nil {
-		s.statusTimer.Stop()
-	}
-	s.statusTimer = time.AfterFunc(statusRefreshPeriod, s.refreshStatus)
-}
-
-func (s *slackStream) stopStatusRefresh() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.statusTimer != nil {
-		s.statusTimer.Stop()
-		s.statusTimer = nil
-	}
-}
-
-func (s *slackStream) refreshStatus() {
-	s.statusMu.Lock()
-	defer s.statusMu.Unlock()
-	s.mu.Lock()
-	if s.status == nil || s.streamClosed || s.lastStatus == "" || s.lastStatus == "\x00" {
-		s.statusTimer = nil
-		s.mu.Unlock()
-		return
-	}
-	status, loading := splitStatusKey(s.lastStatus)
-	s.statusTimer = nil
-	s.mu.Unlock()
-	var loadingMessages []string
-	if loading != "" {
-		loadingMessages = []string{loading}
-	}
-	s.sendThreadStatus(status, loadingMessages, "refresh")
-	s.armStatusRefresh()
+	s.sessionStatus = status
 }

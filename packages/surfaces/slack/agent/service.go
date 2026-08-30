@@ -345,7 +345,7 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 				return deliveryStateErr
 			}
 			if delivered {
-				stream.clearStatus()
+				stream.setSessionStatus(sessionActive)
 				return s.ackClaim(finalizeCtx, req.ClaimID)
 			}
 		}
@@ -368,7 +368,7 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 			return deliveryStateErr
 		}
 		if delivered {
-			stream.clearStatus()
+			stream.setSessionStatus(sessionStatusForTermination(string(result.Termination)))
 			return s.ackClaim(finalizeCtx, req.ClaimID)
 		}
 	}
@@ -717,9 +717,9 @@ type slackStream struct {
 	req                  slackconversation.Request
 	mu                   sync.Mutex
 	deliveryMu           sync.Mutex
-	statusMu             sync.Mutex
-	status               slackconversation.ThreadStatusMessenger
-	lastStatus           string
+	sessionMu            sync.Mutex
+	session              slackconversation.AgentSessionMessenger
+	sessionStatus        string
 	redactor             *safety.StreamRedactor
 	answer               strings.Builder
 	messageTS            string
@@ -729,16 +729,15 @@ type slackStream struct {
 	lastStreamText       string
 	lastStreamUpdate     time.Time
 	streamTimer          *time.Timer
-	statusTimer          *time.Timer
 }
 
 func newSlackStream(ctx context.Context, messenger slackconversation.Messenger, req slackconversation.Request) *slackStream {
 	return &slackStream{ctx: ctx, messenger: messenger, req: req}
 }
 func (s *slackStream) Start() {
-	if status, ok := s.messenger.(slackconversation.ThreadStatusMessenger); ok {
-		s.status = status
-		s.startStatus()
+	if session, ok := s.messenger.(slackconversation.AgentSessionMessenger); ok {
+		s.session = session
+		s.setSessionStatus(sessionProcessing)
 	}
 }
 func (s *slackStream) Complete(final string) (string, error) {
@@ -754,7 +753,6 @@ func (s *slackStream) Complete(final string) (string, error) {
 	deliveryFailed := s.streamDeliveryFailed
 	streamed := strings.TrimSpace(s.answer.String())
 	s.mu.Unlock()
-	s.clearStatus()
 	ctx, cancel := s.deliveryContext()
 	defer cancel()
 	if final == "" {
@@ -809,7 +807,6 @@ func (s *slackStream) Fail(message string, canceled bool) (string, error) {
 			message = "已中止本次请求。"
 		}
 	}
-	s.clearStatus()
 	if message == "" {
 		ctx, cancel := s.deliveryContext()
 		defer cancel()
@@ -840,29 +837,6 @@ func (s *slackStream) postFinalMarkdown(ctx context.Context, final string) (stri
 		return messenger.PostMarkdownMessageWithID(ctx, s.req.Channel, s.req.ThreadTS, final, s.req.EventID)
 	}
 	return s.messenger.PostMarkdownMessage(ctx, s.req.Channel, s.req.ThreadTS, final)
-}
-
-func (s *slackStream) clearStatus() {
-	s.stopStatusRefresh()
-	if s.status != nil {
-		s.statusMu.Lock()
-		defer s.statusMu.Unlock()
-		s.mu.Lock()
-		if s.lastStatus == "" {
-			s.lastStatus = "\x00"
-			s.mu.Unlock()
-			return
-		}
-		if s.lastStatus == "\x00" {
-			s.mu.Unlock()
-			return
-		}
-		s.lastStatus = "\x00"
-		s.mu.Unlock()
-		ctx, cancel := s.deliveryContext()
-		defer cancel()
-		_ = s.status.SetThreadStatus(ctx, s.req.Channel, s.req.ThreadTS, "", nil)
-	}
 }
 
 func (s *slackStream) deliveryContext() (context.Context, context.CancelFunc) {

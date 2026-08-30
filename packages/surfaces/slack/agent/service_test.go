@@ -31,7 +31,6 @@ type fakeMessenger struct {
 	mu       sync.Mutex
 	posts    []string
 	statuses []string
-	loading  [][]string
 }
 
 type memoryInputs struct {
@@ -124,11 +123,10 @@ func (m *fakeMessenger) PostMarkdownMessage(_ context.Context, _, _, text string
 	m.posts = append(m.posts, text)
 	return "post", nil
 }
-func (m *fakeMessenger) SetThreadStatus(_ context.Context, _, _, status string, loading []string) error {
+func (m *fakeMessenger) SetAgentSessionStatus(_ context.Context, _, _, _ string, status string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.statuses = append(m.statuses, status)
-	m.loading = append(m.loading, append([]string(nil), loading...))
 	return nil
 }
 
@@ -157,8 +155,8 @@ func TestServiceRunsHostedHarnessAndPostsFormattedAnswer(t *testing.T) {
 	if client.request == nil || len(client.request.Messages) == 0 || strings.Contains(client.request.Messages[0].Text(), "transient Slack status") || !strings.Contains(client.request.Messages[0].Text(), slackOutputFormatPrompt) {
 		t.Fatalf("primary model received a Slack progress instruction: %+v", client.request)
 	}
-	if got := messenger.statuses; len(got) != 2 || got[0] != initialThreadStatus || got[1] != "" {
-		t.Fatalf("thread statuses = %#v", got)
+	if got := messenger.statuses; len(got) != 2 || got[0] != sessionProcessing || got[1] != sessionActive {
+		t.Fatalf("session statuses = %#v", got)
 	}
 }
 
@@ -184,17 +182,27 @@ func TestHandleReplyOnlyConsumesPendingInputFromItsOwner(t *testing.T) {
 	}
 }
 
-func TestStreamStartsStatusBeforeRuntimeEvents(t *testing.T) {
+func TestStreamProjectsRuntimeTerminalStateToSession(t *testing.T) {
 	messenger := &fakeMessenger{}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T", Text: "diagnose"})
 	stream.Start()
-	if got := messenger.statuses; len(got) != 1 || got[0] != initialThreadStatus || len(messenger.loading[0]) != 0 {
-		t.Fatalf("Start status = %#v loading=%#v", got, messenger.loading)
+	if got := messenger.statuses; len(got) != 1 || got[0] != sessionProcessing {
+		t.Fatalf("start session status = %#v", got)
 	}
 	stream.Lifecycle(transcript.Event{Type: transcript.TurnStarted})
 	stream.Lifecycle(transcript.Event{Type: transcript.ToolCallStarted, ToolCall: &tool.Call{Name: "repo-search"}})
 	stream.Lifecycle(transcript.Event{Type: transcript.TurnCompleted})
-	if got := messenger.statuses; len(got) != 2 || got[1] != "" {
+	if got := messenger.statuses; len(got) != 2 || got[1] != sessionActive {
+		t.Fatalf("statuses=%#v", got)
+	}
+}
+
+func TestStreamSuspendsSessionWhenRuntimeNeedsUserInput(t *testing.T) {
+	messenger := &fakeMessenger{}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T", UserID: "U"})
+	stream.Start()
+	stream.Lifecycle(transcript.Event{Type: transcript.TurnCompleted, Status: string(agentruntime.TerminationPendingInput)})
+	if got := messenger.statuses; len(got) != 2 || got[0] != sessionProcessing || got[1] != sessionSuspended {
 		t.Fatalf("statuses=%#v", got)
 	}
 }

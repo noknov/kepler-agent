@@ -18,7 +18,6 @@ type nativeStreamingMessenger struct {
 	stopped  int
 	updates  []string
 	statuses []string
-	loading  [][]string
 	startErr error
 }
 
@@ -68,11 +67,10 @@ func (m *nativeStreamingMessenger) UpdateMarkdownMessage(_ context.Context, _, _
 	m.updates = append(m.updates, text)
 	return nil
 }
-func (m *nativeStreamingMessenger) SetThreadStatus(_ context.Context, _, _, status string, loading []string) error {
+func (m *nativeStreamingMessenger) SetAgentSessionStatus(_ context.Context, _, _, _ string, status string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.statuses = append(m.statuses, status)
-	m.loading = append(m.loading, append([]string(nil), loading...))
 	return nil
 }
 
