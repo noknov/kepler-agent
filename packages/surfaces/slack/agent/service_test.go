@@ -207,6 +207,16 @@ func TestStreamSuspendsSessionWhenRuntimeNeedsUserInput(t *testing.T) {
 	}
 }
 
+func TestStreamSuspendsSessionWhenRuntimeNeedsApproval(t *testing.T) {
+	messenger := &fakeMessenger{}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T", UserID: "U"})
+	stream.Start()
+	stream.Lifecycle(transcript.Event{Type: transcript.TurnCompleted, Status: string(agentruntime.TerminationPendingApproval)})
+	if got := messenger.statuses; len(got) != 2 || got[0] != sessionProcessing || got[1] != sessionSuspended {
+		t.Fatalf("statuses=%#v", got)
+	}
+}
+
 func TestEnrichInputWithThreadImages(t *testing.T) {
 	history := []model.Message{{Role: model.RoleUser, Content: []model.Content{
 		{Type: model.ContentText, Text: "pets"},

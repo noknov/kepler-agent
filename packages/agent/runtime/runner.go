@@ -155,7 +155,9 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 		}
 		outcome, err := r.executeTools(ctx, request, calls)
 		if errors.Is(err, errPendingApproval) {
-			return r.finishTurn(ctx, result, response.Message, TerminationPendingApproval, err)
+			// Waiting for a user decision is a normal terminal state, not a
+			// failed turn. Adapters use it to suspend their session UI.
+			return r.finishTurn(ctx, result, response.Message, TerminationPendingApproval, nil)
 		}
 		if err != nil {
 			return r.failTurn(ctx, result, err)

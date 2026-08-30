@@ -354,7 +354,7 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			AgentExploreMaxSteps: envInt("AGENT_EXPLORE_MAX_STEPS", 8),
 			AgentExploreTimeout:  envDuration("AGENT_EXPLORE_TIMEOUT", 2*time.Minute),
 			AllowedWriteTools: envCSVDefault("AGENT_ALLOWED_WRITE_TOOLS", []string{
-				"reminder-create", "reminder-cancel", "slack-create_canvas", "slack-user_post_message", "tts-speak",
+				"luckin-cancel_order", "luckin-create_order", "reminder-create", "reminder-cancel", "slack-create_canvas", "slack-user_post_message", "tts-speak",
 			}),
 		},
 		Integrations: loadIntegrations(),

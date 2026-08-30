@@ -34,6 +34,7 @@ type EventIngressStores struct {
 	Redis     *redisclient.Client
 	Events    *eventinbox.PGStore
 	UserPrefs *userprefs.PGStore
+	Inputs    *sessioninput.PGStore
 }
 
 func NewStores(ctx context.Context, cfg config.StorageConfig) (*Stores, error) {
@@ -84,6 +85,7 @@ func NewEventIngressStores(ctx context.Context, cfg config.StorageConfig) (*Even
 		Redis:     rdb,
 		Events:    eventinbox.NewPGStore(pgPool),
 		UserPrefs: userprefs.NewPGStore(pgPool),
+		Inputs:    sessioninput.NewPGStore(pgPool),
 	}, nil
 }
 
@@ -136,7 +138,7 @@ var allTables = []string{
 	"agent_session_inputs", "user_connections", "oauth_states",
 }
 
-var ingressTables = []string{"slack_event_inbox", "user_settings", "user_prompt_assets", "user_connections", "oauth_states"}
+var ingressTables = []string{"slack_event_inbox", "agent_session_inputs", "user_settings", "user_prompt_assets", "user_connections", "oauth_states"}
 
 // requireSchema performs a read-only startup check. Application processes do
 // not create or alter database objects and can run without DDL privileges.

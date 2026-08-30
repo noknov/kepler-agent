@@ -85,6 +85,10 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		Slack:     slackClient,
 		Home:      s.home,
 		UserPrefs: stores.UserPrefs,
+		Inputs:    stores.Inputs,
+		NotifyApproval: func(ctx context.Context, sessionID string) {
+			_ = stores.Redis.Publish(ctx, "agent:approval", sessionID)
+		},
 	}
 	s.gateway = slackgateway.Gateway{
 		SigningSecret: cfg.Slack.SigningSecret,

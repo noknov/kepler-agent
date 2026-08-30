@@ -19,7 +19,8 @@ type Request struct {
 	Text      string
 	Locale    string
 	Content   []model.Content
-	ClaimID   string `json:"-"`
+	ClaimID   string           `json:"-"`
+	Approval  *ApprovalRequest `json:"approval,omitempty"`
 }
 
 func (r Request) Message() model.Message {
@@ -45,6 +46,17 @@ type ControlledConversation interface {
 type Messenger interface {
 	PostMessage(ctx context.Context, channel, threadTS, text string) (string, error)
 	PostMarkdownMessage(ctx context.Context, channel, threadTS, markdown string) (string, error)
+}
+
+// ApprovalMessenger presents a user-confirmation control for an irreversible
+// or externally visible tool call.
+type ApprovalMessenger interface {
+	PostMessageBlocks(ctx context.Context, channel, threadTS, text string, blocks []map[string]any) (string, error)
+}
+
+type ApprovalRequest struct {
+	TurnID, ToolCallID string
+	Approved           bool
 }
 
 type IdempotentMarkdownMessenger interface {

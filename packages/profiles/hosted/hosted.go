@@ -12,8 +12,8 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 )
 
-// Policy is authoritative and non-interactive. Hosted users never approve
-// host capabilities through a chat surface.
+// Policy keeps the operator allowlist authoritative and requires the
+// requesting user to confirm every allowed write.
 type Policy struct{ Allowed map[string]bool }
 
 func (p Policy) Decide(_ context.Context, request tool.PolicyRequest) (tool.Decision, error) {
@@ -23,6 +23,9 @@ func (p Policy) Decide(_ context.Context, request tool.PolicyRequest) (tool.Deci
 	for _, effect := range request.Descriptor.Effects {
 		if (effect == tool.EffectWorkspaceWrite || effect == tool.EffectExternalWrite || effect == tool.EffectPrivileged) && !p.Allowed[request.Call.Name] {
 			return tool.Decision{Type: tool.DecisionDeny, Reason: "write tool is not in the operator allowlist"}, nil
+		}
+		if effect == tool.EffectWorkspaceWrite || effect == tool.EffectExternalWrite || effect == tool.EffectPrivileged {
+			return tool.Decision{Type: tool.DecisionRequireApproval, Reason: "this action changes data or an external service", Rule: "user_confirmation"}, nil
 		}
 	}
 	return tool.Decision{Type: tool.DecisionAllow}, nil

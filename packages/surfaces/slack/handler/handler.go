@@ -2,6 +2,7 @@ package slackhandler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	"github.com/noknov/kepler-agent/packages/prompts"
 	"github.com/noknov/kepler-agent/packages/runs"
 	"github.com/noknov/kepler-agent/packages/safety"
+	"github.com/noknov/kepler-agent/packages/session"
+	"github.com/noknov/kepler-agent/packages/sessioninput"
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/gateway"
@@ -20,15 +23,17 @@ import (
 )
 
 type Handler struct {
-	Cfg       config.Config
-	Slack     *slack.Client
-	Access    safety.AccessPolicy
-	Conv      slackconversation.Conversation
-	Prompt    safety.PromptPolicy
-	Metrics   *observability.Recorder
-	Runs      runs.Store
-	Home      slackhome.Controller
-	UserPrefs userprefs.Store
+	Cfg            config.Config
+	Slack          *slack.Client
+	Access         safety.AccessPolicy
+	Conv           slackconversation.Conversation
+	Prompt         safety.PromptPolicy
+	Metrics        *observability.Recorder
+	Runs           runs.Store
+	Home           slackhome.Controller
+	UserPrefs      userprefs.Store
+	Inputs         sessioninput.Store
+	NotifyApproval func(context.Context, string)
 }
 
 func (h *Handler) Handle(ctx context.Context, eventID string, ev slack.Event) (err error) {
@@ -100,7 +105,46 @@ func (h *Handler) handleBlockActions(ctx context.Context, interaction slackgatew
 			h.openAssetModal(ctx, interaction.TriggerID, interaction.UserID, userprefs.KindSkill)
 		case "delete_asset":
 			h.deleteAsset(ctx, interaction, action.Value)
+		case "agent_approval_approve", "agent_approval_decline":
+			h.resolveApproval(ctx, interaction, action.ActionID, action.Value)
 		}
+	}
+}
+
+func (h *Handler) resolveApproval(ctx context.Context, interaction slackgateway.Interaction, actionID, value string) {
+	if h.Inputs == nil || interaction.Channel == "" || interaction.ThreadTS == "" {
+		return
+	}
+	var token struct {
+		TurnID     string `json:"turn_id"`
+		ToolCallID string `json:"tool_call_id"`
+	}
+	if err := json.Unmarshal([]byte(value), &token); err != nil || token.TurnID == "" || token.ToolCallID == "" {
+		log.Printf("invalid Slack approval control: %v", err)
+		return
+	}
+	approved := actionID == "agent_approval_approve"
+	verb := "decline"
+	if approved {
+		verb = "approve"
+	}
+	request := slackconversation.Request{
+		EventID: "approval-" + token.TurnID + "-" + token.ToolCallID + "-" + verb,
+		UserID:  interaction.UserID, Channel: interaction.Channel, ThreadTS: interaction.ThreadTS,
+		Text:     "The user " + verb + "d the pending action. Continue from the recorded tool result.",
+		Approval: &slackconversation.ApprovalRequest{TurnID: token.TurnID, ToolCallID: token.ToolCallID, Approved: approved},
+	}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return
+	}
+	sessionID := session.ID(interaction.Channel, interaction.ThreadTS)
+	if err := h.Inputs.Enqueue(ctx, sessioninput.Item{ID: request.EventID, SessionID: sessionID, Kind: sessioninput.KindQueue, Payload: payload}); err != nil {
+		log.Printf("resolve Slack approval failed turn=%s call=%s: %v", token.TurnID, token.ToolCallID, err)
+		return
+	}
+	if h.NotifyApproval != nil {
+		h.NotifyApproval(ctx, sessionID)
 	}
 }
 

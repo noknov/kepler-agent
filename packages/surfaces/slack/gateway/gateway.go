@@ -31,6 +31,8 @@ type Interaction struct {
 	Type      string
 	UserID    string
 	TriggerID string
+	Channel   string
+	ThreadTS  string
 	Actions   []InteractionAction
 	View      InteractionView
 }
@@ -158,6 +160,13 @@ func (g Gateway) HandleInteractions(w http.ResponseWriter, r *http.Request) {
 		User      struct {
 			ID string `json:"id"`
 		} `json:"user"`
+		Channel struct {
+			ID string `json:"id"`
+		} `json:"channel"`
+		Message struct {
+			TS       string `json:"ts"`
+			ThreadTS string `json:"thread_ts"`
+		} `json:"message"`
 		Actions []struct {
 			ActionID       string `json:"action_id"`
 			Value          string `json:"value,omitempty"`
@@ -193,11 +202,16 @@ func (g Gateway) HandleInteractions(w http.ResponseWriter, r *http.Request) {
 		Type:      payload.Type,
 		UserID:    payload.User.ID,
 		TriggerID: payload.TriggerID,
+		Channel:   payload.Channel.ID,
+		ThreadTS:  payload.Message.ThreadTS,
 		View: InteractionView{
 			ID:         payload.View.ID,
 			CallbackID: payload.View.CallbackID,
 			State:      map[string]map[string]InteractionValue{},
 		},
+	}
+	if interaction.ThreadTS == "" {
+		interaction.ThreadTS = payload.Message.TS
 	}
 	for _, action := range payload.Actions {
 		value := action.Value

@@ -195,6 +195,10 @@ func (s *Service) handle(ctx context.Context, req slackconversation.Request) (bo
 }
 
 func (s *Service) run(eventCtx context.Context, sessionID string, req slackconversation.Request) (runErr error) {
+	return s.runWithApproval(eventCtx, sessionID, req, req.Approval)
+}
+
+func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, req slackconversation.Request, approval *slackconversation.ApprovalRequest) (runErr error) {
 	base := eventCtx
 	if base == nil {
 		base = s.Lifecycle
@@ -296,6 +300,13 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	s.router.set(turnID, stream)
 	defer s.router.set(turnID, nil)
 	stream.Start()
+	if approval != nil {
+		if err := s.Agent.Runtime.ResolveApproval(runCtx, sessionID, agentruntime.ApprovalResolution{
+			TurnID: approval.TurnID, ToolCallID: approval.ToolCallID, Approved: approval.Approved, UserID: req.UserID,
+		}); err != nil {
+			return err
+		}
+	}
 
 	fragments := []prompt.Fragment{
 		{ID: "hosted-core", Version: "1", Layer: prompt.LayerCore, Content: s.Prompt.SystemPrompt()},
@@ -683,6 +694,14 @@ func (s *Service) StartControlSubscriber(ctx context.Context) {
 		closeSub = func() { _ = sub.Close() }
 		defer closeSub()
 	}
+	approvalMessages := (<-chan *redis.Message)(nil)
+	var closeApproval func()
+	if s.Redis != nil {
+		sub := s.Redis.Subscribe(ctx, "agent:approval")
+		approvalMessages = sub.Channel()
+		closeApproval = func() { _ = sub.Close() }
+		defer closeApproval()
+	}
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -692,6 +711,12 @@ func (s *Service) StartControlSubscriber(ctx context.Context) {
 		case message, ok := <-messages:
 			if !ok {
 				messages = nil
+				continue
+			}
+			s.startPending(ctx, message.Payload)
+		case message, ok := <-approvalMessages:
+			if !ok {
+				approvalMessages = nil
 				continue
 			}
 			s.startPending(ctx, message.Payload)
