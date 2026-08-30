@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
 
 func TestPostMarkdownMessageUsesNativeMarkdownBlock(t *testing.T) {
@@ -80,7 +82,7 @@ func TestStartStreamIncludesRecipientMetadata(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"ts":"123.456"}`)), Request: r}, nil
 	})}}
 
-	ts, err := client.StartStream(context.Background(), "C1", "100.000", "U1")
+	ts, err := client.StartStream(context.Background(), slackconversation.StreamStart{Channel: "C1", ThreadTS: "100.000", RecipientUserID: "U1"})
 	if err != nil || ts != "123.456" {
 		t.Fatalf("ts=%q err=%v", ts, err)
 	}
@@ -101,7 +103,7 @@ func TestStartStreamOmitsRecipientMetadataForDM(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"ts":"123.456"}`)), Request: r}, nil
 	})}}
 
-	if _, err := client.StartStream(context.Background(), "D1", "100.000", "U1"); err != nil {
+	if _, err := client.StartStream(context.Background(), slackconversation.StreamStart{Channel: "D1", ThreadTS: "100.000", RecipientUserID: "U1"}); err != nil {
 		t.Fatal(err)
 	}
 	if payload["channel"] != "D1" || payload["thread_ts"] != "100.000" {
@@ -112,6 +114,28 @@ func TestStartStreamOmitsRecipientMetadataForDM(t *testing.T) {
 	}
 	if _, ok := payload["recipient_team_id"]; ok {
 		t.Fatalf("DM stream must omit recipient metadata: %#v", payload)
+	}
+}
+
+func TestStartStreamIncludesPlanTaskChunks(t *testing.T) {
+	var payload map[string]any
+	client := &Client{token: "xoxb-test", httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"ts":"123.456"}`)), Request: r}, nil
+	})}}
+	if _, err := client.StartStream(context.Background(), slackconversation.StreamStart{
+		Channel: "D1", ThreadTS: "100.000", TaskDisplayMode: "plan",
+		Chunks: []map[string]any{{"type": "task_update", "id": "inspect", "title": "Inspect logs", "status": "in_progress"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if payload["task_display_mode"] != "plan" {
+		t.Fatalf("payload=%#v", payload)
+	}
+	if chunks, ok := payload["chunks"].([]any); !ok || len(chunks) != 1 {
+		t.Fatalf("payload=%#v", payload)
 	}
 }
 

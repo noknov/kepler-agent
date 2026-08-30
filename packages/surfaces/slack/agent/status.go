@@ -15,6 +15,10 @@ const (
 // Lifecycle projects canonical turn completion into Slack's agent-session
 // lifecycle. It does not infer progress from tools or issue model requests.
 func (s *slackStream) Lifecycle(event transcript.Event) {
+	if event.Type == transcript.PlanUpdated {
+		s.UpdatePlan(event.Plan)
+		return
+	}
 	if s.session == nil {
 		return
 	}

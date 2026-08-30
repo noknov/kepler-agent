@@ -81,34 +81,42 @@ func (s *slackStream) flushStreamUpdate(text string, force bool) {
 // ensureNativeStream opens the Slack native stream when the first assistant
 // delta is ready. Tool progress remains a single temporary status until then,
 // instead of creating a second, empty Slack message beside it.
-func (s *slackStream) ensureNativeStream() {
+func (s *slackStream) ensureNativeStream(chunks []map[string]any) (bool, error) {
 	native, ok := s.messenger.(slackconversation.NativeStreamMessenger)
 	if !ok {
-		return
+		return false, fmt.Errorf("native stream messenger unavailable")
 	}
 	s.mu.Lock()
 	if s.streamClosed || s.streamDeliveryFailed || s.messageTS != "" {
 		s.mu.Unlock()
-		return
+		return false, nil
 	}
 	s.mu.Unlock()
 
 	ctx, cancel := s.deliveryContext()
 	defer cancel()
 
-	ts, err := native.StartStream(ctx, s.req.Channel, s.req.ThreadTS, s.req.UserID)
+	start := slackconversation.StreamStart{
+		Channel: s.req.Channel, ThreadTS: s.req.ThreadTS, RecipientUserID: s.req.UserID,
+		Chunks: chunks,
+	}
+	if len(chunks) > 0 {
+		start.TaskDisplayMode = "plan"
+	}
+	ts, err := native.StartStream(ctx, start)
 	if err != nil {
 		log.Printf("slack native stream start failed channel=%s thread=%s user=%s: %v",
 			s.req.Channel, s.req.ThreadTS, s.req.UserID, err)
 		s.mu.Lock()
 		s.streamDeliveryFailed = true
 		s.mu.Unlock()
-		return
+		return false, err
 	}
 	s.mu.Lock()
 	s.messageTS = ts
 	s.nativeStream = true
 	s.mu.Unlock()
+	return true, nil
 }
 
 func (s *slackStream) flushNativeStream(fullText string) {
@@ -157,7 +165,9 @@ func (s *slackStream) appendNativeChunks(delta string) error {
 	if !ok {
 		return fmt.Errorf("native stream messenger unavailable")
 	}
-	s.ensureNativeStream()
+	if _, err := s.ensureNativeStream(nil); err != nil {
+		return err
+	}
 
 	s.mu.Lock()
 	messageTS := s.messageTS
@@ -177,7 +187,9 @@ func (s *slackStream) appendNativeChunks(delta string) error {
 		return err
 	}
 
-	ts, startErr := native.StartStream(ctx, s.req.Channel, s.req.ThreadTS, s.req.UserID)
+	ts, startErr := native.StartStream(ctx, slackconversation.StreamStart{
+		Channel: s.req.Channel, ThreadTS: s.req.ThreadTS, RecipientUserID: s.req.UserID,
+	})
 	if startErr != nil {
 		log.Printf("slack native stream restart failed channel=%s thread=%s: %v", s.req.Channel, s.req.ThreadTS, startErr)
 		return startErr

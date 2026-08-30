@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
 
 type Client struct {
@@ -210,16 +212,22 @@ func (c *Client) UpdateView(ctx context.Context, viewID string, view map[string]
 	return nil
 }
 
-func (c *Client) StartStream(ctx context.Context, channel, threadTS, recipientUserID string) (string, error) {
+func (c *Client) StartStream(ctx context.Context, request slackconversation.StreamStart) (string, error) {
 	payload := map[string]any{
-		"channel":   channel,
-		"thread_ts": threadTS,
+		"channel":   request.Channel,
+		"thread_ts": request.ThreadTS,
+	}
+	if request.TaskDisplayMode != "" {
+		payload["task_display_mode"] = request.TaskDisplayMode
+	}
+	if len(request.Chunks) > 0 {
+		payload["chunks"] = request.Chunks
 	}
 	// Slack requires recipient metadata for channel streams; a DM already
 	// identifies its recipient, so its request uses only the documented DM
 	// arguments.
-	if streamingChannelRequiresRecipient(channel) && recipientUserID != "" {
-		payload["recipient_user_id"] = recipientUserID
+	if streamingChannelRequiresRecipient(request.Channel) && request.RecipientUserID != "" {
+		payload["recipient_user_id"] = request.RecipientUserID
 		if c.teamID != "" {
 			payload["recipient_team_id"] = c.teamID
 		}

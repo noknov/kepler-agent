@@ -60,9 +60,19 @@ type MarkdownMessageUpdater interface {
 // NativeStreamMessenger delivers assistant answers through Slack's chat.startStream,
 // chat.appendStream, and chat.stopStream APIs.
 type NativeStreamMessenger interface {
-	StartStream(ctx context.Context, channel, threadTS, recipientUserID string) (string, error)
+	StartStream(ctx context.Context, request StreamStart) (string, error)
 	AppendStream(ctx context.Context, channel, messageTS string, chunks []map[string]any) error
 	StopStream(ctx context.Context, channel, messageTS string) error
+}
+
+// StreamStart describes a Slack streaming message. TaskDisplayMode and Chunks
+// are used to render structured progress before the assistant starts text.
+type StreamStart struct {
+	Channel         string
+	ThreadTS        string
+	RecipientUserID string
+	TaskDisplayMode string
+	Chunks          []map[string]any
 }
 
 // AgentSessionMessenger manages Slack's agent-session lifecycle independently

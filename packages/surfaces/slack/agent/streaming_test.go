@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/safety"
 	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
@@ -15,10 +17,12 @@ type nativeStreamingMessenger struct {
 	posts    []string
 	started  int
 	appends  []string
+	chunks   [][]map[string]any
 	stopped  int
 	updates  []string
 	statuses []string
 	startErr error
+	start    []slackconversation.StreamStart
 }
 
 func (m *nativeStreamingMessenger) PostMessage(context.Context, string, string, string) (string, error) {
@@ -36,18 +40,39 @@ func (m *nativeStreamingMessenger) PostMarkdownMessageWithID(_ context.Context, 
 	m.posts = append(m.posts, text)
 	return "1.0", nil
 }
-func (m *nativeStreamingMessenger) StartStream(context.Context, string, string, string) (string, error) {
+func (m *nativeStreamingMessenger) StartStream(_ context.Context, request slackconversation.StreamStart) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.started++
+	m.start = append(m.start, request)
 	if m.startErr != nil {
 		return "", m.startErr
 	}
 	return "1.0", nil
 }
+
+func TestPlanUpdatesUseSlackPlanDisplay(t *testing.T) {
+	messenger := &nativeStreamingMessenger{}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1"})
+	stream.Lifecycle(transcript.Event{Type: transcript.PlanUpdated, Plan: &tool.PlanUpdate{Explanation: "Investigating", Items: []tool.PlanItem{
+		{ID: "inspect", Task: "Inspect logs", Status: "in_progress"},
+		{ID: "verify", Task: "Verify the fix", Status: "pending"},
+	}}})
+	if messenger.started != 1 || messenger.start[0].TaskDisplayMode != "plan" {
+		t.Fatalf("start = %#v", messenger.start)
+	}
+	if got := messenger.start[0].Chunks; len(got) != 3 || got[1]["status"] != "in_progress" || got[2]["status"] != "pending" {
+		t.Fatalf("plan chunks = %#v", got)
+	}
+	stream.UpdatePlan(&tool.PlanUpdate{Items: []tool.PlanItem{{ID: "inspect", Task: "Inspect logs", Status: "completed"}}})
+	if got := messenger.chunks; len(got) != 1 || len(got[0]) != 2 || got[0][1]["status"] != "complete" {
+		t.Fatalf("appended plan chunks = %#v", got)
+	}
+}
 func (m *nativeStreamingMessenger) AppendStream(_ context.Context, _, _ string, chunks []map[string]any) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.chunks = append(m.chunks, chunks)
 	for _, chunk := range chunks {
 		if text, _ := chunk["text"].(string); text != "" {
 			m.appends = append(m.appends, text)
