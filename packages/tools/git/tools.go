@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -530,15 +531,19 @@ func (b Base) resolveRepoPath(ctx context.Context, path string) (string, error) 
 }
 
 func githubRepository(origin string) string {
-	origin = strings.TrimSuffix(strings.TrimSpace(origin), ".git")
-	origin = strings.TrimPrefix(origin, "https://github.com/")
-	origin = strings.TrimPrefix(origin, "http://github.com/")
-	origin = strings.TrimPrefix(origin, "git@github.com:")
-	parts := strings.Split(origin, "/")
+	origin = strings.TrimSpace(origin)
+	if strings.HasPrefix(origin, "git@github.com:") {
+		origin = "ssh://" + strings.TrimPrefix(origin, "git@github.com:")
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || !strings.EqualFold(parsed.Hostname(), "github.com") {
+		return ""
+	}
+	parts := strings.Split(strings.TrimSuffix(strings.Trim(parsed.Path, "/"), ".git"), "/")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return ""
 	}
-	return strings.ToLower(origin)
+	return strings.ToLower(strings.Join(parts, "/"))
 }
 
 func (b Base) fetchSnapshot(ctx context.Context, repo, rawBranch string, rt tool.Scope) (snapshot, error) {

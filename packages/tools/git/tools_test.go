@@ -88,6 +88,20 @@ func TestGitToolsAcceptGitHubRepositoryIdentifier(t *testing.T) {
 	}
 }
 
+func TestGitToolsAcceptGitHubRepositoryIdentifierWithOriginCredentials(t *testing.T) {
+	root, work := testRepo(t)
+	base := Base{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
+	runGit(t, work, "remote", "set-url", "origin", "https://token@github.com/ClareAI/work.git")
+
+	got, err := base.repo(context.Background(), "ClareAI/work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != work {
+		t.Fatalf("repo() = %q, want %q", got, work)
+	}
+}
+
 func TestFetchRefFailsWhenOriginBecomesUnavailable(t *testing.T) {
 	root, work := testRepo(t)
 	base := Base{
