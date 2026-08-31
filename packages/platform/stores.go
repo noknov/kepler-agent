@@ -140,6 +140,15 @@ var allTables = []string{
 
 var ingressTables = []string{"slack_event_inbox", "agent_session_inputs", "user_settings", "user_prompt_assets", "user_connections", "oauth_states"}
 
+var webTables = []string{"web_auth_states", "web_auth_sessions", "web_conversations"}
+
+// RequireWebSchema checks the optional browser-surface contract only when an
+// operator enables that surface. This preserves the existing Slack-only
+// deployment upgrade order.
+func RequireWebSchema(ctx context.Context, pool *pgxpool.Pool) error {
+	return requireSchema(ctx, pool, webTables)
+}
+
 // requireSchema performs a read-only startup check. Application processes do
 // not create or alter database objects and can run without DDL privileges.
 func requireSchema(ctx context.Context, pool *pgxpool.Pool, tables []string) error {

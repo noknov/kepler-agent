@@ -12,6 +12,7 @@ import (
 
 type Config struct {
 	HTTP         HTTPConfig
+	Web          WebConfig
 	Slack        SlackConfig
 	LLM          LLMConfig
 	Security     SecurityConfig
@@ -21,6 +22,19 @@ type Config struct {
 	Connections  ConnectionsConfig
 	Observing    ObservingConfig
 	Storage      StorageConfig
+}
+
+// WebConfig controls the browser surface hosted by the worker. Slack is the
+// first identity provider, but browser sessions and conversations remain
+// independent from Slack messages, preferences, and user connections.
+type WebConfig struct {
+	Enabled       bool
+	PublicBaseURL string
+	UpstreamURL   string
+	SessionSecret string
+	SessionTTL    time.Duration
+	SiteName      string
+	AvatarURL     string
 }
 
 // StorageConfig owns all durable operational state for sessions, runs, inbox,
@@ -306,6 +320,15 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			EventRetryMax:       envDuration("SLACK_EVENT_RETRY_MAX", time.Minute),
 			ShutdownTimeout:     envDuration("HTTP_SHUTDOWN_TIMEOUT", 30*time.Second),
 		},
+		Web: WebConfig{
+			Enabled:       envBool("WEB_ENABLED", false),
+			PublicBaseURL: trimRightSlash(env("WEB_PUBLIC_BASE_URL", os.Getenv("CONNECTIONS_PUBLIC_BASE_URL"))),
+			UpstreamURL:   trimRightSlash(os.Getenv("WEB_UPSTREAM_URL")),
+			SessionSecret: os.Getenv("WEB_SESSION_SECRET"),
+			SessionTTL:    envDuration("WEB_SESSION_TTL", 7*24*time.Hour),
+			SiteName:      env("WEB_SITE_NAME", "Kepler"),
+			AvatarURL:     env("WEB_SITE_AVATAR_URL", "/assets/avatar.png"),
+		},
 		Slack: SlackConfig{
 			BotToken:        os.Getenv("SLACK_BOT_TOKEN"),
 			SigningSecret:   os.Getenv("SLACK_SIGNING_SECRET"),
@@ -511,16 +534,45 @@ func validateForProfile(cfg Config, profile RuntimeProfile) (Config, error) {
 		if cfg.Slack.SigningSecret == "" {
 			return cfg, fmt.Errorf("SLACK_SIGNING_SECRET is required")
 		}
+		if cfg.Web.Enabled && cfg.Web.UpstreamURL == "" {
+			return cfg, fmt.Errorf("WEB_UPSTREAM_URL is required on the gateway when WEB_ENABLED=true")
+		}
 		return cfg, nil
 	case ProfileObservability:
 		return cfg, nil
 	case ProfileCLI:
 		return cfg, nil
 	case ProfileSlackWorker, "":
-		return validateAgentRuntime(cfg)
+		cfg, err := validateAgentRuntime(cfg)
+		if err != nil {
+			return cfg, err
+		}
+		if err := validateWeb(cfg); err != nil {
+			return cfg, err
+		}
+		return cfg, nil
 	default:
 		return cfg, fmt.Errorf("unknown runtime profile %q", profile)
 	}
+}
+
+func validateWeb(cfg Config) error {
+	if !cfg.Web.Enabled {
+		return nil
+	}
+	if cfg.Web.PublicBaseURL == "" {
+		return fmt.Errorf("WEB_PUBLIC_BASE_URL is required when WEB_ENABLED=true")
+	}
+	if len(cfg.Web.SessionSecret) < 32 {
+		return fmt.Errorf("WEB_SESSION_SECRET must contain at least 32 characters")
+	}
+	if cfg.Web.SessionTTL <= 0 {
+		return fmt.Errorf("WEB_SESSION_TTL must be positive")
+	}
+	if !cfg.Connections.SlackOAuthEnabled() {
+		return fmt.Errorf("SLACK_OAUTH_CLIENT_ID and SLACK_OAUTH_CLIENT_SECRET are required when WEB_ENABLED=true")
+	}
+	return nil
 }
 
 func validToolName(name string) bool {

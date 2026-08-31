@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f7f5ef" />
+    <title>Kepler</title>
+    <meta name="description" content="Secure hosted AI chat." />
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <script src="/assets/app.js" defer></script>
+  </head>
+  <body>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <main id="landing" class="landing hidden">
+      <nav class="landing-nav">
+        <a class="wordmark" href="/" aria-label="Home"><span class="mark">K</span><span data-brand-name>KEPLER</span></a>
+        <span class="secure-note"><i></i> Secure hosted chat</span>
+      </nav>
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="eyebrow"><span>✦</span> AI ASSISTANT</div>
+          <h1>Ask questions.<br /><em>Get work done.</em></h1>
+          <p>Use <span data-brand-name>Kepler</span> to analyze code, investigate incidents, and check system status.</p>
+          <a id="slack-login" class="slack-button" href="/auth/slack/start?return_to=%2F">
+            <span class="slack-symbol" aria-hidden="true"><b></b><b></b><b></b><b></b></span>
+            Continue with Slack
+            <span class="arrow">↗</span>
+          </a>
+          <p class="login-caption">Your Slack identity is used only to verify access. Slack conversations are never imported.</p>
+          <div id="auth-error" class="auth-error hidden" role="alert"></div>
+        </div>
+        <div class="hero-visual" aria-hidden="true">
+          <div class="portrait-halo halo-one"></div><div class="portrait-halo halo-two"></div>
+          <div class="portrait-frame"><img data-brand-avatar src="/assets/avatar.png" alt="" /></div>
+          <div class="signal-card signal-one"><span>CODE</span><b>Analyze repositories</b></div>
+          <div class="signal-card signal-two"><i></i><span>Ready</span><b>Hosted workspace</b></div>
+          <div class="grain"></div>
+        </div>
+      </section>
+      <footer class="landing-footer"><span>Secure access with Slack</span><span>Web chat history stays separate from Slack</span></footer>
+    </main>
+
+    <main id="app" class="app-shell hidden">
+      <aside id="sidebar" class="sidebar">
+        <div class="sidebar-top">
+          <a class="wordmark inverse" href="/"><span class="mark">K</span><span data-brand-name>KEPLER</span></a>
+          <button id="close-sidebar" class="icon-button mobile-only" aria-label="Close navigation">×</button>
+        </div>
+        <button id="new-chat" class="new-chat"><span>＋</span> New conversation <kbd>⌘ K</kbd></button>
+        <div class="history-heading"><span>CONVERSATIONS</span><button id="refresh-list" class="bare-button" aria-label="Refresh conversations">↻</button></div>
+        <div id="conversation-list" class="conversation-list" role="list"></div>
+        <div class="sidebar-bottom">
+          <button id="profile-button" class="profile-button" aria-expanded="false">
+            <span id="profile-avatar" class="avatar"></span>
+            <span class="profile-copy"><strong id="profile-name"></strong><small>Slack verified</small></span>
+            <span>•••</span>
+          </button>
+          <div id="profile-menu" class="profile-menu hidden">
+            <div><span class="status-dot"></span> Access verified</div>
+            <button id="logout">Sign out</button>
+          </div>
+        </div>
+      </aside>
+
+      <section class="chat-panel">
+        <header class="chat-header">
+          <button id="open-sidebar" class="icon-button mobile-only" aria-label="Open navigation">☰</button>
+          <div class="header-title"><strong id="conversation-title">New conversation</strong><span><i></i> Hosted agent</span></div>
+          <div class="header-actions"><button id="rename-chat" class="text-button">Rename</button><button id="archive-chat" class="icon-button" aria-label="Archive conversation">⌁</button></div>
+        </header>
+
+        <div id="empty-state" class="empty-state">
+          <div class="empty-mark"><img data-brand-avatar src="/assets/avatar.png" alt="" /></div>
+          <p class="empty-kicker"><span data-brand-name>KEPLER</span></p>
+          <h2>What can I help with?</h2>
+          <p>Ask about an incident, a repository, or a system you need to understand.</p>
+          <div class="prompts">
+            <button data-prompt="Summarize the current health of our services and highlight anything that needs attention."><span>⌁</span><div><strong>Check system health</strong><small>Find issues that need attention</small></div><b>↗</b></button>
+            <button data-prompt="Help me investigate a recent production issue. Start by building an evidence-based timeline."><span>◫</span><div><strong>Investigate an incident</strong><small>Build an evidence-based timeline</small></div><b>↗</b></button>
+            <button data-prompt="Give me an architectural overview of the available codebase and identify the best starting points."><span>⌘</span><div><strong>Understand a codebase</strong><small>Map the architecture and key paths</small></div><b>↗</b></button>
+          </div>
+        </div>
+
+        <div id="timeline" class="timeline hidden" aria-live="polite"></div>
+
+        <div class="composer-wrap">
+          <form id="composer" class="composer">
+            <textarea id="message-input" rows="1" maxlength="32000" placeholder="Ask Kepler anything…" aria-label="Message Kepler" data-brand-placeholder data-brand-aria></textarea>
+            <div class="composer-bottom">
+              <span class="workspace-pill"><i></i> Hosted workspace</span>
+              <div><span id="input-hint">Enter to send</span><button id="stop-turn" class="stop-button hidden" type="button" aria-label="Stop response">■</button><button id="send-message" class="send-button" type="submit" aria-label="Send message">↑</button></div>
+            </div>
+          </form>
+          <p class="composer-note" data-brand-note>Kepler can make mistakes. Check important decisions.</p>
+        </div>
+      </section>
+      <div id="sidebar-scrim" class="sidebar-scrim hidden"></div>
+    </main>
+
+    <dialog id="rename-dialog">
+      <form method="dialog" id="rename-form">
+        <div class="dialog-mark">✦</div><h3>Rename conversation</h3><p>Enter a new name.</p>
+        <input id="rename-input" maxlength="120" autocomplete="off" />
+        <div><button value="cancel" class="secondary-button">Cancel</button><button id="save-rename" value="default" class="primary-button">Save name</button></div>
+      </form>
+    </dialog>
+  </body>
+</html>

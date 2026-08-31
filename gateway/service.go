@@ -3,8 +3,11 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"sync/atomic"
 	"time"
 
@@ -28,6 +31,7 @@ type Service struct {
 	gateway     slackgateway.Gateway
 	home        slackhome.Controller
 	connections connections.Service
+	webProxy    http.Handler
 	draining    atomic.Bool
 }
 
@@ -80,6 +84,17 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		return s.home.RequestRefresh(ctx, userID)
 	}
 	s.connections = connService
+	if cfg.Web.Enabled {
+		upstream, err := url.Parse(cfg.Web.UpstreamURL)
+		if err != nil || upstream.Scheme == "" || upstream.Host == "" {
+			return nil, fmt.Errorf("invalid WEB_UPSTREAM_URL %q", cfg.Web.UpstreamURL)
+		}
+		proxy := httputil.NewSingleHostReverseProxy(upstream)
+		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+			s.writeHTTPError(w, r, http.StatusBadGateway, "web service unavailable", err)
+		}
+		s.webProxy = proxy
+	}
 	handler := &slackhandler.Handler{
 		Cfg:       cfg,
 		Slack:     slackClient,
@@ -119,6 +134,9 @@ func (s *Service) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/slack/interactions", s.gateway.HandleInteractions)
 	if s.connections.Config.OAuthEnabled() && s.connections.Config.PublicBaseURL != "" {
 		mux.Handle("/oauth/", connections.NewHTTPHandler(s.connections))
+	}
+	if s.webProxy != nil {
+		mux.Handle("/", s.webProxy)
 	}
 
 	server := &http.Server{

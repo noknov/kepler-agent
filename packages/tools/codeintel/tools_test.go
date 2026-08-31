@@ -15,4 +15,3 @@ func TestSymbolsRequiresRepositoryBeforeStartingLSP(t *testing.T) {
 		t.Fatalf("error = %v, want repo is required", err)
 	}
 }
-
