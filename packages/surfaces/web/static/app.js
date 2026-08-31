@@ -1,5 +1,15 @@
-const $ = (selector) => document.querySelector(selector);
-const state = { session: null, csrf: "", brand: { name: "Kepler", avatarUrl: "/assets/avatar.png" }, conversations: [], current: null, events: [], stream: null, running: false, maxSequence: 0 };
+import { $, state } from "./state.js";
+import { renderMarkdown } from "./markdown.js";
+import {
+  activityStats,
+  ensureActivityBlock,
+  normalizeEvents,
+  patchActivityBlock,
+  refreshActivityBlocks,
+  startActivityTimer,
+  stopActivityTimer,
+  updateActivityBlock,
+} from "./activity.js";
 
 async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
@@ -17,203 +27,703 @@ async function boot() {
   showAuthError();
   try {
     const payload = await api("/api/session");
-    state.session = payload.user; state.csrf = payload.csrfToken;
+    state.session = payload.user;
+    state.csrf = payload.csrfToken;
   } catch (error) {
     if (String(error.message).includes("temporarily")) toast(error.message);
     showLanding();
     return;
   }
   showApp();
-  try { await loadConversations(); }
-  catch (error) { showEmpty(); toast(error.message); }
+  try {
+    await loadConversations();
+  } catch (error) {
+    showEmpty();
+    toast(error.message);
+  }
 }
 
 async function loadBrand() {
   try {
     const payload = await api("/api/brand");
     const brand = payload.brand || {};
-    const name = brand.name || "Kepler";
-    const avatar = brand.avatarUrl || "/assets/avatar.png";
-    state.brand = { name, avatarUrl: avatar };
-    document.title = name;
-    document.querySelectorAll("[data-brand-name]").forEach((node) => { node.textContent = name; });
-    document.querySelectorAll("[data-brand-avatar]").forEach((node) => { node.src = avatar; });
-    document.querySelectorAll("[data-brand-placeholder]").forEach((node) => { node.placeholder = `Ask ${name} anything…`; });
-    document.querySelectorAll("[data-brand-aria]").forEach((node) => { node.setAttribute("aria-label", `Message ${name}`); });
-    document.querySelectorAll("[data-brand-note]").forEach((node) => { node.textContent = `${name} can make mistakes. Check important decisions.`; });
-    document.documentElement.style.setProperty("--brand-avatar", `url("${avatar.replace(/["\\]/g, "")}")`);
+    state.brand = { name: brand.name || "Kepler" };
+    applyBrand();
   } catch (_) {
-    // The static defaults remain usable when branding cannot be loaded.
+    applyBrand();
   }
 }
 
-function showLanding() { $("#landing").classList.remove("hidden"); $("#app").classList.add("hidden"); }
+function applyBrand() {
+  document.title = state.brand.name;
+  document.querySelectorAll("[data-brand-name]").forEach((node) => {
+    node.textContent = state.brand.name;
+  });
+}
+
+function showLanding() {
+  $("#landing").classList.remove("hidden");
+  $("#app").classList.add("hidden");
+}
+
 function showApp() {
-  $("#landing").classList.add("hidden"); $("#app").classList.remove("hidden");
+  $("#landing").classList.add("hidden");
+  $("#app").classList.remove("hidden");
   const user = state.session;
   $("#profile-name").textContent = user.displayName || user.email || "User";
   const avatar = $("#profile-avatar");
-  if (user.avatarUrl) avatar.style.backgroundImage = `url("${user.avatarUrl.replace(/["\\]/g, "")}")`;
-  else avatar.textContent = (user.displayName || "K").slice(0, 1).toUpperCase();
+  if (user.avatarUrl) {
+    avatar.style.backgroundImage = `url("${user.avatarUrl.replace(/["\\]/g, "")}")`;
+    avatar.textContent = "";
+  } else {
+    avatar.style.backgroundImage = "";
+    avatar.textContent = (user.displayName || "U").slice(0, 1).toUpperCase();
+  }
 }
 
 function showAuthError() {
   const code = new URLSearchParams(location.search).get("auth_error");
   if (!code) return;
-  const messages = { not_allowed: "Your Slack account does not have access.", access_denied: "Slack sign in was cancelled.", expired_state: "This sign-in link expired. Try again.", provider_error: "Slack could not verify your account. Try again." };
-  const node = $("#auth-error"); node.textContent = messages[code] || "Sign in could not be completed. Please try again."; node.classList.remove("hidden");
+  const messages = {
+    not_allowed: "Your Slack account does not have access.",
+    access_denied: "Slack sign in was cancelled.",
+    expired_state: "This sign-in link expired. Try again.",
+    provider_error: "Slack could not verify your account. Try again.",
+  };
+  const node = $("#auth-error");
+  node.textContent = messages[code] || "Sign in could not be completed. Please try again.";
+  node.classList.remove("hidden");
   history.replaceState({}, "", "/");
 }
 
 async function loadConversations(selectFirst = true) {
-  const payload = await api("/api/conversations"); state.conversations = payload.conversations || []; renderConversations();
-  if (selectFirst && !state.current && state.conversations.length) await selectConversation(state.conversations[0].id);
+  const payload = await api("/api/conversations");
+  state.conversations = payload.conversations || [];
+  renderConversations();
+  if (selectFirst && !state.current && state.conversations.length) {
+    await selectConversation(state.conversations[0].id);
+  }
   if (!state.conversations.length) showEmpty();
 }
 
 function renderConversations() {
-  const list = $("#conversation-list"); list.replaceChildren();
-  if (!state.conversations.length) { const empty = document.createElement("p"); empty.className = "history-empty"; empty.textContent = "Your conversations will appear here."; list.append(empty); return; }
+  const list = $("#conversation-list");
+  list.replaceChildren();
+  if (!state.conversations.length) {
+    const empty = document.createElement("p");
+    empty.className = "history-empty";
+    empty.textContent = "No conversations yet.";
+    list.append(empty);
+    return;
+  }
   for (const conversation of state.conversations) {
-    const button = document.createElement("button"); button.className = `conversation-item${state.current?.id === conversation.id ? " active" : ""}`; button.dataset.id = conversation.id; button.setAttribute("role", "listitem");
-    button.innerHTML = `<span class="chat-glyph">⌁</span><span class="item-copy"><strong></strong><small></small></span><span class="item-menu">•••</span>`;
-    button.querySelector("strong").textContent = conversation.title; button.querySelector("small").textContent = relativeTime(conversation.updatedAt);
-    button.addEventListener("click", () => selectConversation(conversation.id)); list.append(button);
+    const button = document.createElement("button");
+    button.className = `conversation-item${state.current?.id === conversation.id ? " active" : ""}`;
+    button.dataset.id = conversation.id;
+    button.setAttribute("role", "listitem");
+
+    const title = document.createElement("span");
+    title.className = "item-title";
+    title.textContent = conversation.title;
+    button.append(title);
+
+    const menu = document.createElement("button");
+    menu.className = "item-menu";
+    menu.type = "button";
+    menu.setAttribute("aria-label", "Conversation options");
+    menu.textContent = "•••";
+    menu.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openContextMenu(event.currentTarget, conversation);
+    });
+    button.append(menu);
+
+    button.addEventListener("click", () => selectConversation(conversation.id));
+    list.append(button);
   }
 }
 
 async function createConversation() {
+  if (state.current && !conversationHasMessages(state.events)) {
+    showEmpty();
+    closeSidebar();
+    $("#message-input").focus();
+    return state.current;
+  }
+
+  const existing = findUnusedConversation();
+  if (existing) {
+    if (state.current?.id !== existing.id) await selectConversation(existing.id);
+    showEmpty();
+    closeSidebar();
+    $("#message-input").focus();
+    return existing;
+  }
+
   const payload = await api("/api/conversations", { method: "POST", body: "{}" });
-  state.conversations.unshift(payload.conversation); renderConversations(); await selectConversation(payload.conversation.id); closeSidebar();
-  $("#message-input").focus(); return payload.conversation;
+  state.conversations.unshift(payload.conversation);
+  renderConversations();
+  await selectConversation(payload.conversation.id);
+  closeSidebar();
+  $("#message-input").focus();
+  return payload.conversation;
+}
+
+function conversationHasMessages(events) {
+  return (events || []).some((event) => event.kind === "message" || event.kind === "assistant_delta");
+}
+
+function findUnusedConversation() {
+  for (const conversation of state.conversations) {
+    if (conversation.title !== "New conversation") continue;
+    if (conversation.hasMessages) continue;
+    return conversation;
+  }
+  return null;
 }
 
 async function selectConversation(id) {
-  if (state.current?.id === id) { closeSidebar(); return; }
-  closeStream(); state.current = state.conversations.find((item) => item.id === id) || null; state.events = []; state.maxSequence = 0; state.running = false;
-  renderConversations(); $("#conversation-title").textContent = state.current?.title || "New conversation";
-  const payload = await api(`/api/conversations/${encodeURIComponent(id)}/messages`); state.events = payload.events || [];
-  for (const event of state.events) state.maxSequence = Math.max(state.maxSequence, event.sequence || 0);
-  renderTimeline(); openStream(); closeSidebar();
+  if (state.current?.id === id) {
+    closeSidebar();
+    return;
+  }
+  closeStream();
+  clearTimeline();
+  state.current = state.conversations.find((item) => item.id === id) || null;
+  state.events = [];
+  state.maxSequence = 0;
+  state.running = false;
+  renderConversations();
+  const payload = await api(`/api/conversations/${encodeURIComponent(id)}/messages`);
+  state.events = normalizeEvents(payload.events || []);
+  for (const event of state.events) {
+    state.maxSequence = Math.max(state.maxSequence, event.sequence || 0);
+  }
+  renderTimeline(true);
+  openStream();
+  closeSidebar();
+}
+
+function showEmpty() {
+  $("#empty-state").classList.remove("hidden");
+  $("#timeline").classList.add("hidden");
+  updateComposer();
+}
+
+function canReconnectStream() {
+  if (!state.current) return false;
+  if (document.visibilityState === "hidden") return false;
+  return state.running || Date.now() < state.streamGraceUntil;
+}
+
+function scheduleStreamReconnect() {
+  if (state.streamReconnectTimer || !canReconnectStream()) return;
+  state.streamReconnectTimer = window.setTimeout(() => {
+    state.streamReconnectTimer = null;
+    if (canReconnectStream()) openStream();
+  }, 2000);
 }
 
 function openStream() {
   if (!state.current) return;
-  const id = state.current.id; const stream = new EventSource(`/api/conversations/${encodeURIComponent(id)}/events?after=${state.maxSequence}`);
+  if (state.streamReconnectTimer) {
+    clearTimeout(state.streamReconnectTimer);
+    state.streamReconnectTimer = null;
+  }
+  const id = state.current.id;
+  const stream = new EventSource(`/api/conversations/${encodeURIComponent(id)}/events?after=${state.maxSequence}`);
   state.stream = stream;
-  stream.addEventListener("kepler", (message) => { if (state.current?.id !== id) return; const event = JSON.parse(message.data); receiveEvent(event); });
-  stream.onerror = () => { if (state.stream === stream && stream.readyState === EventSource.CLOSED) setTimeout(openStream, 1200); };
+  stream.addEventListener("kepler", (message) => {
+    if (state.current?.id !== id) return;
+    receiveEvent(JSON.parse(message.data));
+  });
+  stream.onerror = () => {
+    if (state.stream !== stream) return;
+    closeStream();
+    scheduleStreamReconnect();
+  };
 }
-function closeStream() { if (state.stream) state.stream.close(); state.stream = null; }
+
+function closeStream() {
+  if (state.streamReconnectTimer) {
+    clearTimeout(state.streamReconnectTimer);
+    state.streamReconnectTimer = null;
+  }
+  if (state.stream) state.stream.close();
+  state.stream = null;
+}
 
 function receiveEvent(event) {
   if (event.sequence && state.events.some((item) => item.id === event.id)) return;
   state.maxSequence = Math.max(state.maxSequence, event.sequence || 0);
+
   if (event.kind === "assistant_delta") {
     let live = state.events.find((item) => item.kind === "assistant_delta" && item.turnId === event.turnId);
-    if (live) live.text += event.text; else state.events.push({ ...event });
-  } else if (event.kind === "message" && event.role === "assistant") {
-    state.events = state.events.filter((item) => !(item.kind === "assistant_delta" && item.turnId === event.turnId)); state.events.push(event);
-  } else if (event.kind === "message" && event.role === "user") {
-    const optimistic = state.events.findIndex((item) => item.kind === "message" && item.role === "user" && item.optimistic && item.text === event.text);
-    if (optimistic >= 0) state.events.splice(optimistic, 1); state.events.push(event);
-  } else if (event.kind === "tool" || event.kind === "approval") {
+    if (live) live.text += event.text;
+    else state.events.push({ ...event });
+    updateStreamingMessage(event.turnId);
+    return;
+  }
+
+  if (event.kind === "tool") {
     const index = state.events.findIndex((item) => item.kind === event.kind && item.toolCallId === event.toolCallId);
-    if (index >= 0) state.events[index] = event; else state.events.push(event);
-  } else state.events.push(event);
+    if (index >= 0) state.events[index] = event;
+    else state.events.push(event);
+    if (!state.activityStart.has(event.turnId)) {
+      state.activityStart.set(event.turnId, event.at ? Date.parse(event.at) : Date.now());
+    }
+    patchActivityBlock(event.turnId, scheduleRender);
+    return;
+  }
+
+  if (event.kind === "plan") {
+    state.events.push(event);
+    if (!state.activityStart.has(event.turnId)) {
+      state.activityStart.set(event.turnId, event.at ? Date.parse(event.at) : Date.now());
+    }
+    patchActivityBlock(event.turnId, scheduleRender);
+    return;
+  }
+
+  if (event.kind === "message" && event.role === "assistant") {
+    state.events = state.events.filter((item) => !(item.kind === "assistant_delta" && item.turnId === event.turnId));
+    state.events.push(event);
+    state.timelineNodes.delete(`delta:${event.turnId}`);
+    state.streamRenderTimers.delete(event.turnId);
+    stopActivityTimer();
+    refreshActivityBlocks();
+  } else if (event.kind === "message" && event.role === "user") {
+    const optimistic = state.events.findIndex(
+      (item) => item.kind === "message" && item.role === "user" && item.optimistic && item.text === event.text,
+    );
+    if (optimistic >= 0) state.events.splice(optimistic, 1);
+    state.events.push(event);
+    const conversation = state.conversations.find((item) => item.id === state.current?.id);
+    if (conversation) conversation.hasMessages = true;
+  } else if (event.kind === "approval") {
+    const index = state.events.findIndex((item) => item.kind === event.kind && item.toolCallId === event.toolCallId);
+    if (index >= 0) state.events[index] = event;
+    else state.events.push(event);
+  } else {
+    state.events.push(event);
+  }
+
   if (event.kind === "turn") {
     state.running = event.status === "running";
-    if (["completed", "canceled", "failed", "pending_approval", "pending_input", "max_steps", "output_limit"].includes(event.status)) state.running = false;
+    if (["completed", "canceled", "failed", "pending_approval", "pending_input", "max_steps", "output_limit"].includes(event.status)) {
+      state.running = false;
+      state.streamGraceUntil = Date.now() + 5000;
+      stopActivityTimer();
+      refreshActivityBlocks();
+      if (!state.running) scheduleStreamReconnect();
+    }
     updateComposer();
   }
-  renderTimeline();
+  scheduleRender();
 }
 
-function renderTimeline() {
-  const visible = state.events.filter((event) => ["message", "assistant_delta", "tool", "approval", "turn"].includes(event.kind));
-  if (!visible.some((event) => event.kind === "message" || event.kind === "assistant_delta")) { showEmpty(); return; }
-  $("#empty-state").classList.add("hidden"); const timeline = $("#timeline"); timeline.classList.remove("hidden"); timeline.replaceChildren();
-  let activity = null;
+function eventKey(event) {
+  if (event.kind === "assistant_delta") return `delta:${event.turnId}`;
+  if (event.id) return event.id;
+  return `${event.kind}:${event.turnId || event.toolCallId || Math.random()}`;
+}
+
+function clearTimeline() {
+  state.timelineNodes.clear();
+  state.markdownCache.clear();
+  state.streamRenderTimers.clear();
+  state.activityStart.clear();
+  state.streamGraceUntil = 0;
+  stopActivityTimer();
+  const timeline = $("#timeline");
+  timeline.replaceChildren();
+}
+
+function scheduleRender() {
+  if (state.renderScheduled) return;
+  state.renderScheduled = true;
+  requestAnimationFrame(() => {
+    state.renderScheduled = false;
+    renderTimeline();
+  });
+}
+
+function renderTimeline(force = false) {
+  const visible = state.events.filter((event) =>
+    ["message", "assistant_delta", "tool", "plan", "approval", "turn"].includes(event.kind),
+  );
+  const hasMessages = visible.some((event) => event.kind === "message" || event.kind === "assistant_delta");
+
+  if (!hasMessages) {
+    showEmpty();
+    return;
+  }
+
+  $("#empty-state").classList.add("hidden");
+  const timeline = $("#timeline");
+  timeline.classList.remove("hidden");
+
+  const seenKeys = new Set();
+
   for (const event of visible) {
+    const key = eventKey(event);
+    seenKeys.add(key);
+
     if (event.kind === "message" || event.kind === "assistant_delta") {
-      activity = null; timeline.append(renderMessage(event));
-    } else if (event.kind === "tool") {
-      if (!activity) { activity = document.createElement("div"); activity.className = "activity-stack"; timeline.append(activity); }
-      activity.append(renderTool(event));
+      if (state.timelineNodes.has(key)) {
+        if (force || event.kind === "message") {
+          updateMessageContent(state.timelineNodes.get(key), event);
+        }
+        continue;
+      }
+      const node = renderMessage(event);
+      state.timelineNodes.set(key, node);
+      timeline.append(node);
+    } else if (event.kind === "tool" || event.kind === "plan") {
+      ensureActivityBlock(event.turnId, timeline, seenKeys);
+      updateActivityBlock(event.turnId);
+      if (activityStats(event.turnId)?.running) startActivityTimer();
     } else if (event.kind === "approval" && event.status === "pending") {
-      activity = null; timeline.append(renderApproval(event));
+      const apprKey = `approval:${event.toolCallId}`;
+      seenKeys.add(apprKey);
+      if (state.timelineNodes.has(apprKey)) continue;
+      const card = renderApproval(event);
+      state.timelineNodes.set(apprKey, card);
+      timeline.append(card);
     } else if (event.kind === "turn" && event.status === "failed") {
-      const error = document.createElement("p"); error.className = "turn-error"; error.textContent = event.text || `${state.brand.name} could not complete this turn.`; timeline.append(error);
+      const errKey = `error:${event.turnId}`;
+      seenKeys.add(errKey);
+      if (state.timelineNodes.has(errKey)) continue;
+      const error = document.createElement("p");
+      error.className = "turn-error";
+      error.textContent = event.text || "Could not complete this turn.";
+      state.timelineNodes.set(errKey, error);
+      timeline.append(error);
     }
   }
-  requestAnimationFrame(() => { timeline.scrollTop = timeline.scrollHeight; }); updateComposer();
+
+  for (const [key, node] of state.timelineNodes) {
+    if (!seenKeys.has(key)) {
+      node.remove();
+      state.timelineNodes.delete(key);
+      state.markdownCache.delete(key);
+    }
+  }
+
+  requestAnimationFrame(() => {
+    timeline.scrollTop = timeline.scrollHeight;
+  });
+  updateComposer();
+}
+
+function updateStreamingMessage(turnId) {
+  const key = `delta:${turnId}`;
+  const event = state.events.find((item) => item.kind === "assistant_delta" && item.turnId === turnId);
+  if (!event) return;
+
+  let node = state.timelineNodes.get(key);
+  if (!node) {
+    scheduleRender();
+    return;
+  }
+
+  if (state.streamRenderTimers.has(turnId)) return;
+  state.streamRenderTimers.set(
+    turnId,
+    setTimeout(() => {
+      state.streamRenderTimers.delete(turnId);
+      const latest = state.events.find((item) => item.kind === "assistant_delta" && item.turnId === turnId);
+      if (!latest) return;
+      updateMessageContent(node, latest, true);
+      const timeline = $("#timeline");
+      requestAnimationFrame(() => {
+        timeline.scrollTop = timeline.scrollHeight;
+      });
+    }, 80),
+  );
 }
 
 function renderMessage(event) {
-  const row = document.createElement("article"); row.className = `message-row ${event.role}`;
-  const avatar = document.createElement("div"); avatar.className = "message-avatar"; avatar.textContent = event.role === "assistant" ? "" : "YOU"; avatar.setAttribute("aria-label", event.role === "assistant" ? state.brand.name : "You");
-  const content = document.createElement("div"); content.className = `message-content${event.kind === "assistant_delta" ? " streaming-cursor" : ""}`;
-  const label = document.createElement("span"); label.className = "message-label"; label.textContent = event.role === "assistant" ? state.brand.name : "You"; content.append(label);
-  const body = document.createElement("div"); body.className = "markdown"; body.innerHTML = markdown(event.text || ""); content.append(body); row.append(avatar, content); return row;
+  const row = document.createElement("article");
+  row.className = `message-row ${event.role}`;
+  const content = document.createElement("div");
+  content.className = `message-content${event.kind === "assistant_delta" ? " streaming-cursor" : ""}`;
+  const body = document.createElement("div");
+  body.className = "markdown";
+  content.append(body);
+  row.append(content);
+  updateMessageContent(row, event);
+  return row;
 }
 
-function renderTool(event) {
-  const row = document.createElement("div"); row.className = `tool-row ${event.status}`; const dot = document.createElement("i"); const copy = document.createElement("span");
-  copy.textContent = `${event.status === "running" ? "Running" : event.status === "failed" ? "Could not complete" : "Completed"} · ${friendlyTool(event.tool)}`; row.append(dot, copy); return row;
+function updateMessageContent(row, event, streaming = false) {
+  const content = row.querySelector(".message-content");
+  const body = row.querySelector(".markdown");
+  if (!content || !body) return;
+
+  content.classList.toggle("streaming-cursor", event.kind === "assistant_delta");
+
+  const key = eventKey(event);
+  const text = event.text || "";
+
+  if (event.role === "user") {
+    body.textContent = text;
+    return;
+  }
+
+  if (streaming) {
+    const cached = state.markdownCache.get(key);
+    if (cached && cached.source === text) return;
+    const html = renderMarkdown(text);
+    state.markdownCache.set(key, { source: text, html });
+    body.innerHTML = html;
+    return;
+  }
+
+  const html = renderMarkdown(text);
+  state.markdownCache.set(key, { source: text, html });
+  body.innerHTML = html;
 }
 
 function renderApproval(event) {
-  const card = document.createElement("section"); card.className = "approval-card"; card.innerHTML = `<strong></strong><p>This action changes data or an external service and needs your confirmation.</p><div><button class="deny">Deny</button><button class="approve">Approve once</button></div>`;
+  const card = document.createElement("section");
+  card.className = "approval-card";
+  card.innerHTML = `<strong></strong><p>This action needs your confirmation before proceeding.</p><div><button class="deny" type="button">Deny</button><button class="approve" type="button">Approve</button></div>`;
   card.querySelector("strong").textContent = `${friendlyTool(event.tool)} needs approval`;
-  card.querySelector(".deny").addEventListener("click", () => resolveApproval(event, false)); card.querySelector(".approve").addEventListener("click", () => resolveApproval(event, true)); return card;
+  card.querySelector(".deny").addEventListener("click", () => resolveApproval(event, false));
+  card.querySelector(".approve").addEventListener("click", () => resolveApproval(event, true));
+  return card;
 }
 
 async function resolveApproval(event, approved) {
-  try { state.running = true; updateComposer(); await api(`/api/conversations/${encodeURIComponent(state.current.id)}/approvals`, { method: "POST", body: JSON.stringify({ requestId: requestID(), turnId: event.turnId, toolCallId: event.toolCallId, approved }) }); }
-  catch (error) { state.running = false; updateComposer(); toast(error.message); }
+  try {
+    state.running = true;
+    updateComposer();
+    await api(`/api/conversations/${encodeURIComponent(state.current.id)}/approvals`, {
+      method: "POST",
+      body: JSON.stringify({
+        requestId: requestID(),
+        turnId: event.turnId,
+        toolCallId: event.toolCallId,
+        approved,
+      }),
+    });
+  } catch (error) {
+    state.running = false;
+    updateComposer();
+    toast(error.message);
+  }
 }
-
-function showEmpty() { $("#empty-state").classList.remove("hidden"); $("#timeline").classList.add("hidden"); $("#conversation-title").textContent = state.current?.title || "New conversation"; updateComposer(); }
 
 async function sendMessage(text) {
-  text = text.trim(); if (!text || state.running) return;
+  text = text.trim();
+  if (!text || state.running) return;
+  const input = $("#message-input");
   try {
     if (!state.current) await createConversation();
-    state.events.push({ id: `optimistic-${Date.now()}`, kind: "message", role: "user", text, optimistic: true }); state.running = true; renderTimeline();
-    await api(`/api/conversations/${encodeURIComponent(state.current.id)}/turns`, { method: "POST", body: JSON.stringify({ requestId: requestID(), message: text }) });
-    $("#message-input").value = ""; resizeInput(); setTimeout(() => loadConversations(false), 500);
-  } catch (error) { state.events = state.events.filter((item) => !item.optimistic); state.running = false; renderTimeline(); toast(error.message); }
+    input.value = "";
+    resizeInput();
+    state.events.push({
+      id: `optimistic-${Date.now()}`,
+      kind: "message",
+      role: "user",
+      text,
+      optimistic: true,
+    });
+    state.running = true;
+    updateComposer();
+    scheduleRender();
+    await api(`/api/conversations/${encodeURIComponent(state.current.id)}/turns`, {
+      method: "POST",
+      body: JSON.stringify({ requestId: requestID(), message: text }),
+    });
+    const conversation = state.conversations.find((item) => item.id === state.current?.id);
+    if (conversation) conversation.hasMessages = true;
+    window.setTimeout(() => loadConversations(false), 500);
+  } catch (error) {
+    state.events = state.events.filter((item) => !item.optimistic);
+    state.running = false;
+    updateComposer();
+    scheduleRender();
+    toast(error.message);
+  }
 }
 
-function updateComposer() { $("#send-message").classList.toggle("hidden", state.running); $("#stop-turn").classList.toggle("hidden", !state.running); $("#message-input").disabled = state.running; $("#input-hint").textContent = state.running ? `${state.brand.name} is working` : "Enter to send"; }
-function requestID() { const bytes = crypto.getRandomValues(new Uint8Array(18)); return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(""); }
-function friendlyTool(name = "tool") { return name.replace(/[-_]/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()); }
-function relativeTime(raw) { const date = new Date(raw); const seconds = Math.max(0, (Date.now() - date.getTime()) / 1000); if (seconds < 60) return "Just now"; if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`; if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`; return date.toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
-
-function markdown(text) {
-  const escaped = escapeHTML(text); const blocks = escaped.split(/```/); let output = "";
-  blocks.forEach((block, index) => { if (index % 2) { const code = block.replace(/^[\w+-]+\n/, ""); output += `<pre><code>${code}</code></pre>`; } else { output += block.split(/\n{2,}/).filter(Boolean).map((paragraph) => `<p>${inlineMarkdown(paragraph).replace(/\n/g, "<br>")}</p>`).join(""); } }); return output || "<p></p>";
+function updateComposer() {
+  $("#send-message").classList.toggle("hidden", state.running);
+  $("#stop-turn").classList.toggle("hidden", !state.running);
+  $("#input-hint").textContent = state.running ? "Working…" : "Enter to send";
 }
-function inlineMarkdown(text) { return text.replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'); }
-function escapeHTML(text) { return String(text).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[char])); }
-function resizeInput() { const input = $("#message-input"); input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 150)}px`; }
-function toast(message) { const node = $("#toast"); node.textContent = message; node.classList.add("show"); clearTimeout(toast.timer); toast.timer = setTimeout(() => node.classList.remove("show"), 3200); }
-function openSidebar() { $("#sidebar").classList.add("open"); $("#sidebar-scrim").classList.remove("hidden"); }
-function closeSidebar() { $("#sidebar").classList.remove("open"); $("#sidebar-scrim").classList.add("hidden"); }
 
-$("#composer").addEventListener("submit", (event) => { event.preventDefault(); const input = $("#message-input"); sendMessage(input.value); });
+function requestID() {
+  const bytes = crypto.getRandomValues(new Uint8Array(18));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function friendlyTool(name = "tool") {
+  return name.replace(/[-_]/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function openContextMenu(anchor, conversation) {
+  state.contextTarget = conversation;
+  const menu = $("#context-menu");
+  const rect = anchor.getBoundingClientRect();
+  menu.classList.remove("hidden");
+  menu.style.top = `${rect.bottom + 4}px`;
+  menu.style.left = `${Math.min(rect.left, window.innerWidth - 180)}px`;
+  anchor.closest(".conversation-item")?.classList.add("menu-open");
+}
+
+function closeContextMenu() {
+  $("#context-menu").classList.add("hidden");
+  state.contextTarget = null;
+  document.querySelectorAll(".conversation-item.menu-open").forEach((item) => item.classList.remove("menu-open"));
+}
+
+function openRenameDialog(conversation) {
+  state.contextTarget = conversation || state.current;
+  if (!state.contextTarget) return;
+  $("#rename-input").value = state.contextTarget.title;
+  $("#rename-dialog").showModal();
+  setTimeout(() => $("#rename-input").select(), 30);
+}
+
+async function archiveConversation(conversation) {
+  const target = conversation || state.current;
+  if (!target || !confirm("Archive this conversation?")) return;
+  try {
+    await api(`/api/conversations/${encodeURIComponent(target.id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ archived: true }),
+    });
+    if (state.current?.id === target.id) {
+      closeStream();
+      clearTimeline();
+      state.current = null;
+      state.events = [];
+    }
+    await loadConversations();
+    closeContextMenu();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function resizeInput() {
+  if (state.resizeFrame) return;
+  state.resizeFrame = requestAnimationFrame(() => {
+    state.resizeFrame = null;
+    const input = $("#message-input");
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight, 200)}px`;
+  });
+}
+
+function toast(message) {
+  const node = $("#toast");
+  node.textContent = message;
+  node.classList.add("show");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => node.classList.remove("show"), 3200);
+}
+
+function openSidebar() {
+  $("#sidebar").classList.add("open");
+  $("#sidebar-scrim").classList.remove("hidden");
+}
+
+function closeSidebar() {
+  $("#sidebar").classList.remove("open");
+  $("#sidebar-scrim").classList.add("hidden");
+}
+
+$("#composer").addEventListener("submit", (event) => {
+  event.preventDefault();
+  sendMessage($("#message-input").value);
+});
+
 $("#message-input").addEventListener("input", resizeInput);
-$("#message-input").addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendMessage(event.currentTarget.value); } });
-$("#new-chat").addEventListener("click", createConversation); $("#refresh-list").addEventListener("click", () => loadConversations(false));
-$("#stop-turn").addEventListener("click", async () => { try { await api(`/api/conversations/${encodeURIComponent(state.current.id)}/turns/stop`, { method: "POST", body: "{}" }); } catch (error) { toast(error.message); } });
+$("#message-input").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    sendMessage(event.currentTarget.value);
+  }
+});
+
+$("#new-chat").addEventListener("click", createConversation);
+$("#stop-turn").addEventListener("click", async () => {
+  try {
+    await api(`/api/conversations/${encodeURIComponent(state.current.id)}/turns/stop`, { method: "POST", body: "{}" });
+  } catch (error) {
+    toast(error.message);
+  }
+});
+
 $("#profile-button").addEventListener("click", () => $("#profile-menu").classList.toggle("hidden"));
-$("#logout").addEventListener("click", async () => { await api("/api/logout", { method: "POST", body: "{}" }); location.assign("/"); });
-$("#open-sidebar").addEventListener("click", openSidebar); $("#close-sidebar").addEventListener("click", closeSidebar); $("#sidebar-scrim").addEventListener("click", closeSidebar);
-document.querySelectorAll("[data-prompt]").forEach((button) => button.addEventListener("click", () => sendMessage(button.dataset.prompt)));
-$("#rename-chat").addEventListener("click", () => { if (!state.current) return; $("#rename-input").value = state.current.title; $("#rename-dialog").showModal(); setTimeout(() => $("#rename-input").select(), 30); });
-$("#rename-form").addEventListener("submit", async (event) => { if (event.submitter?.value === "cancel") return; event.preventDefault(); try { const payload = await api(`/api/conversations/${encodeURIComponent(state.current.id)}`, { method: "PATCH", body: JSON.stringify({ title: $("#rename-input").value }) }); state.current = payload.conversation; const index = state.conversations.findIndex((item) => item.id === state.current.id); state.conversations[index] = state.current; renderConversations(); $("#conversation-title").textContent = state.current.title; $("#rename-dialog").close(); } catch (error) { toast(error.message); } });
-$("#archive-chat").addEventListener("click", async () => { if (!state.current || !confirm("Archive this conversation?")) return; try { await api(`/api/conversations/${encodeURIComponent(state.current.id)}`, { method: "PATCH", body: JSON.stringify({ archived: true }) }); closeStream(); state.current = null; state.events = []; await loadConversations(); } catch (error) { toast(error.message); } });
-document.addEventListener("keydown", (event) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); createConversation(); } });
+$("#logout").addEventListener("click", async () => {
+  await api("/api/logout", { method: "POST", body: "{}" });
+  location.assign("/");
+});
+
+$("#open-sidebar").addEventListener("click", openSidebar);
+$("#close-sidebar").addEventListener("click", closeSidebar);
+$("#sidebar-scrim").addEventListener("click", closeSidebar);
+
+$("#context-menu").addEventListener("click", (event) => {
+  const action = event.target.closest("[data-action]")?.dataset.action;
+  if (!action) return;
+  const target = state.contextTarget;
+  closeContextMenu();
+  if (action === "rename") openRenameDialog(target);
+  else if (action === "archive") archiveConversation(target);
+});
+
+document.addEventListener("click", (event) => {
+  if (!event.target.closest("#context-menu") && !event.target.closest(".item-menu")) {
+    closeContextMenu();
+  }
+  if (!event.target.closest("#profile-button") && !event.target.closest("#profile-menu")) {
+    $("#profile-menu").classList.add("hidden");
+  }
+});
+
+$("#rename-form").addEventListener("submit", async (event) => {
+  if (event.submitter?.value === "cancel") return;
+  event.preventDefault();
+  const target = state.contextTarget || state.current;
+  if (!target) return;
+  try {
+    const payload = await api(`/api/conversations/${encodeURIComponent(target.id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title: $("#rename-input").value }),
+    });
+    if (state.current?.id === target.id) state.current = payload.conversation;
+    const index = state.conversations.findIndex((item) => item.id === target.id);
+    if (index >= 0) state.conversations[index] = payload.conversation;
+    renderConversations();
+    $("#rename-dialog").close();
+    state.contextTarget = null;
+  } catch (error) {
+    toast(error.message);
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+    event.preventDefault();
+    createConversation();
+  }
+  if (event.key === "Escape") closeContextMenu();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    closeStream();
+    return;
+  }
+  if (state.current && canReconnectStream()) openStream();
+});
+
 window.addEventListener("beforeunload", closeStream);
 
 boot();

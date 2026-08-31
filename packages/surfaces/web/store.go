@@ -40,11 +40,12 @@ type BrowserSession struct {
 }
 
 type Conversation struct {
-	ID         string     `json:"id"`
-	Title      string     `json:"title"`
-	ArchivedAt *time.Time `json:"archivedAt,omitempty"`
-	CreatedAt  time.Time  `json:"createdAt"`
-	UpdatedAt  time.Time  `json:"updatedAt"`
+	ID          string     `json:"id"`
+	Title       string     `json:"title"`
+	HasMessages bool       `json:"hasMessages,omitempty"`
+	ArchivedAt  *time.Time `json:"archivedAt,omitempty"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
 }
 
 type Store interface {

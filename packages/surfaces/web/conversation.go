@@ -21,7 +21,14 @@ import (
 	"github.com/noknov/kepler-agent/packages/session"
 )
 
-const webOutputPrompt = `The response is displayed in a modern web chat. Use clear Markdown with short sections only when useful. Prefer direct answers, readable lists, fenced code, and descriptive links. Do not mention the transport or repeat the user's request.`
+const webOutputPrompt = "The response is displayed in a modern web chat that renders GitHub-Flavored Markdown.\n\n" +
+	"Formatting rules:\n" +
+	"- Use valid Markdown only. Code blocks must use triple backticks on their own lines.\n" +
+	"- Never use two-backtick fences, single-backtick fences, or unclosed code blocks.\n" +
+	"- Use headings, lists, tables, and links when they improve readability.\n" +
+	"- Keep ASCII diagrams inside fenced code blocks.\n" +
+	"- Prefer direct answers with short sections only when useful.\n" +
+	"- Do not mention the transport or repeat the user's request."
 
 var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{16,96}$`)
 
@@ -59,6 +66,49 @@ func (s *ConversationService) Create(ctx context.Context, owner Identity) (Conve
 	now := time.Now().UTC()
 	conversation := Conversation{ID: "web_" + random, Title: "New conversation", CreatedAt: now, UpdatedAt: now}
 	return conversation, s.Store.CreateConversation(ctx, owner, conversation)
+}
+
+type sessionMessageChecker interface {
+	SessionsWithMessages(ctx context.Context, sessionIDs []string) (map[string]bool, error)
+}
+
+func (s *ConversationService) List(ctx context.Context, owner Identity, archived bool, limit int) ([]Conversation, error) {
+	conversations, err := s.Store.ListConversations(ctx, owner, archived, limit)
+	if err != nil {
+		return nil, err
+	}
+	if len(conversations) == 0 {
+		return conversations, nil
+	}
+	ids := make([]string, len(conversations))
+	for i, conversation := range conversations {
+		ids[i] = conversation.ID
+	}
+	var hasMessages map[string]bool
+	if checker, ok := s.Transcript.(sessionMessageChecker); ok {
+		hasMessages, err = checker.SessionsWithMessages(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+	} else if s.Transcript != nil {
+		hasMessages = make(map[string]bool, len(ids))
+		for _, id := range ids {
+			events, loadErr := s.Transcript.Load(ctx, id, 0)
+			if loadErr != nil {
+				continue
+			}
+			for _, event := range events {
+				if event.Type == transcript.UserInput || event.Type == transcript.AssistantMessage {
+					hasMessages[id] = true
+					break
+				}
+			}
+		}
+	}
+	for i := range conversations {
+		conversations[i].HasMessages = hasMessages[conversations[i].ID]
+	}
+	return conversations, nil
 }
 
 func (s *ConversationService) StartTurn(ctx context.Context, owner Identity, conversationID, requestID, input string) (string, error) {
@@ -150,7 +200,7 @@ func (s *ConversationService) Events(ctx context.Context, owner Identity, conver
 			views = append(views, view)
 		}
 	}
-	return views, nil
+	return CollapseClientEvents(views), nil
 }
 
 func (s *ConversationService) run(ctx context.Context, owner Identity, conversationID, turnID string, input model.Message, history []model.Message) {

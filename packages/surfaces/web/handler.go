@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -23,14 +26,25 @@ type Handler struct {
 	Brand         Brand
 	assets        http.Handler
 	index         []byte
+	staticDir     string
 }
 
 type Brand struct {
-	Name      string `json:"name"`
-	AvatarURL string `json:"avatarUrl"`
+	Name string `json:"name"`
 }
 
-func NewHandler(auth *AuthService, conversations *ConversationService, store Store) (*Handler, error) {
+func NewHandler(auth *AuthService, conversations *ConversationService, store Store, staticDir string) (*Handler, error) {
+	h := &Handler{Auth: auth, Conversations: conversations, Store: store}
+	if dir := strings.TrimSpace(staticDir); dir != "" {
+		indexPath := filepath.Join(dir, "index.html")
+		if st, err := os.Stat(indexPath); err == nil && !st.IsDir() {
+			h.staticDir = dir
+			h.assets = http.StripPrefix("/assets/", http.FileServer(http.Dir(dir)))
+			slog.Info("web static assets loaded from disk", "dir", dir)
+			return h, nil
+		}
+		slog.Warn("web static dir is invalid, using embedded assets", "dir", dir)
+	}
 	assets, err := fs.Sub(staticFiles, "static")
 	if err != nil {
 		return nil, err
@@ -39,7 +53,9 @@ func NewHandler(auth *AuthService, conversations *ConversationService, store Sto
 	if err != nil {
 		return nil, err
 	}
-	return &Handler{Auth: auth, Conversations: conversations, Store: store, assets: http.StripPrefix("/assets/", http.FileServer(http.FS(assets))), index: index}, nil
+	h.assets = http.StripPrefix("/assets/", http.FileServer(http.FS(assets)))
+	h.index = index
+	return h, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -75,6 +91,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if path == "/" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
+		if h.staticDir != "" {
+			content, err := os.ReadFile(filepath.Join(h.staticDir, "index.html"))
+			if err != nil {
+				http.Error(w, "index not found", http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write(content)
+			return
+		}
 		_, _ = w.Write(h.index)
 		return
 	}
@@ -156,7 +181,7 @@ func (h *Handler) handleConversationCollection(w http.ResponseWriter, r *http.Re
 	switch r.Method {
 	case http.MethodGet:
 		archived := r.URL.Query().Get("archived") == "true"
-		conversations, err := h.Store.ListConversations(r.Context(), owner, archived, 100)
+		conversations, err := h.Conversations.List(r.Context(), owner, archived, 100)
 		if err != nil {
 			writeAPIError(w, http.StatusInternalServerError, "storage_error", "Conversations could not be loaded")
 			return
@@ -395,7 +420,7 @@ func (h *Handler) writeStoreError(w http.ResponseWriter, err error) {
 }
 
 func (h *Handler) securityHeaders(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' https://*.slack-edge.com https://secure.gravatar.com data:; style-src 'self'; script-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https://slack.com")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' https://*.slack-edge.com https://secure.gravatar.com data:; style-src 'self' https://fonts.googleapis.com; style-src-elem 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https://slack.com")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
 	w.Header().Set("X-Content-Type-Options", "nosniff")

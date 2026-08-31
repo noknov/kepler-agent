@@ -25,7 +25,11 @@ the Web origin differs from `CONNECTIONS_PUBLIC_BASE_URL`.
 | `WEB_SESSION_SECRET` | At least 32 random characters; store only in secrets |
 | `WEB_SESSION_TTL` | Browser session lifetime, up to 31 days |
 | `WEB_SITE_NAME` | Display name; defaults to `Kepler` |
-| `WEB_SITE_AVATAR_URL` | Display avatar; defaults to `/assets/avatar.png` |
+| `WEB_STATIC_DIR` | Optional directory for Web UI files; when set, assets are read from disk instead of the embedded bundle |
+
+When `WEB_STATIC_DIR` is set, edit files under `packages/surfaces/web/static/` and refresh the browser. No worker rebuild is required for UI-only changes.
+
+The browser UI is plain ES modules under `packages/surfaces/web/static/`. Assistant messages are rendered with vendored [marked](https://marked.js.org/) and [DOMPurify](https://github.com/cure53/DOMPurify) (`static/vendor/`). The hosted worker adds a Web-only product prompt that requires valid GitHub-Flavored Markdown (triple-backtick code fences, no two-backtick fences).
 
 The Slack OpenID Connect redirect URI is:
 

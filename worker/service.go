@@ -182,11 +182,11 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		if err != nil {
 			return nil, fmt.Errorf("configure web authentication: %w", err)
 		}
-		configuredHandler, err := websurface.NewHandler(webAuth, webConversations, webStore)
+		configuredHandler, err := websurface.NewHandler(webAuth, webConversations, webStore, cfg.Web.StaticDir)
 		if err != nil {
 			return nil, fmt.Errorf("build web handler: %w", err)
 		}
-		configuredHandler.Brand = websurface.Brand{Name: cfg.Web.SiteName, AvatarURL: cfg.Web.AvatarURL}
+		configuredHandler.Brand = websurface.Brand{Name: cfg.Web.SiteName}
 		webHandler = configuredHandler
 	}
 	healthService := health.NewService(profile.Tools, cfg.Security.WorkspaceRoots)

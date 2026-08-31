@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/safety"
 )
@@ -269,6 +270,40 @@ func TestProjectEventHidesApprovalContinuationAndRedactsSecrets(t *testing.T) {
 	}
 }
 
+func TestProjectEventProjectsPlanUpdate(t *testing.T) {
+	view, ok := ProjectEvent(transcript.Event{
+		ID: "plan-1", SessionID: "web_1", TurnID: "turn-1", Type: transcript.PlanUpdated,
+		Plan: &tool.PlanUpdate{
+			Explanation: "Investigating auth",
+			Items: []tool.PlanItem{
+				{ID: "inspect", Task: "Inspect instagram-service config", Status: "completed"},
+				{ID: "trace", Task: "Trace IDP token client", Status: "in_progress"},
+			},
+		},
+	}, safety.Redactor{})
+	if !ok || view.Kind != "plan" || view.Plan == nil || len(view.Plan.Items) != 2 {
+		t.Fatalf("projected plan event = %#v, ok=%v", view, ok)
+	}
+	if view.Plan.Items[1].Task != "Trace IDP token client" {
+		t.Fatalf("plan items = %#v", view.Plan.Items)
+	}
+}
+
+func TestCollapseClientEventsKeepsLatestToolStatus(t *testing.T) {
+	events := []ClientEvent{
+		{ID: "1", Sequence: 1, TurnID: "turn-1", Kind: "tool", Tool: "code-search", ToolCallID: "call-1", Status: "running"},
+		{ID: "2", Sequence: 2, TurnID: "turn-1", Kind: "tool", Tool: "code-search", ToolCallID: "call-1", Status: "completed"},
+		{ID: "3", Sequence: 3, TurnID: "turn-1", Kind: "message", Role: "assistant", Text: "done"},
+	}
+	collapsed := CollapseClientEvents(events)
+	if len(collapsed) != 2 {
+		t.Fatalf("collapsed len = %d, want 2: %#v", len(collapsed), collapsed)
+	}
+	if collapsed[0].Status != "completed" {
+		t.Fatalf("tool status = %q, want completed", collapsed[0].Status)
+	}
+}
+
 func TestSafeReturnToRejectsExternalRedirects(t *testing.T) {
 	for _, value := range []string{"https://evil.example", "//evil.example/path", "/ok\r\nLocation:https://evil.example"} {
 		if got := safeReturnTo(value); got != "/" {
@@ -286,15 +321,15 @@ func TestHandlerServesBrandedPageAndProtectsChatAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewHandler(auth, nil, store)
+	handler, err := NewHandler(auth, nil, store, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler.Brand = Brand{Name: "斗包", AvatarURL: "/assets/avatar.png"}
+	handler.Brand = Brand{Name: "斗包"}
 
 	page := httptest.NewRecorder()
 	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "https://kepler.example/", nil))
-	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Ask questions") {
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Continue with Slack") {
 		t.Fatalf("page status/body = %d %q", page.Code, page.Body.String())
 	}
 	if !strings.Contains(page.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") || page.Header().Get("Strict-Transport-Security") == "" {
@@ -302,7 +337,7 @@ func TestHandlerServesBrandedPageAndProtectsChatAPI(t *testing.T) {
 	}
 	asset := httptest.NewRecorder()
 	handler.ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "https://kepler.example/assets/app.js", nil))
-	if asset.Code != http.StatusOK || !strings.Contains(asset.Body.String(), "function boot") {
+	if asset.Code != http.StatusOK || !strings.Contains(asset.Body.String(), "import { $, state }") {
 		t.Fatalf("asset response = %d %q", asset.Code, asset.Body.String())
 	}
 

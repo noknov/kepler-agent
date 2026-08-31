@@ -6,22 +6,24 @@ import (
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/safety"
 )
 
 type ClientEvent struct {
-	ID         string    `json:"id"`
-	Sequence   uint64    `json:"sequence,omitempty"`
-	SessionID  string    `json:"conversationId"`
-	TurnID     string    `json:"turnId,omitempty"`
-	Kind       string    `json:"kind"`
-	Role       string    `json:"role,omitempty"`
-	Text       string    `json:"text,omitempty"`
-	Tool       string    `json:"tool,omitempty"`
-	Status     string    `json:"status,omitempty"`
-	ToolCallID string    `json:"toolCallId,omitempty"`
-	At         time.Time `json:"at,omitempty"`
+	ID         string           `json:"id"`
+	Sequence   uint64           `json:"sequence,omitempty"`
+	SessionID  string           `json:"conversationId"`
+	TurnID     string           `json:"turnId,omitempty"`
+	Kind       string           `json:"kind"`
+	Role       string           `json:"role,omitempty"`
+	Text       string           `json:"text,omitempty"`
+	Tool       string           `json:"tool,omitempty"`
+	Status     string           `json:"status,omitempty"`
+	ToolCallID string           `json:"toolCallId,omitempty"`
+	Plan       *tool.PlanUpdate `json:"plan,omitempty"`
+	At         time.Time        `json:"at,omitempty"`
 }
 
 type EventHub struct {
@@ -128,6 +130,12 @@ func ProjectEvent(event transcript.Event, redactor safety.Redactor) (ClientEvent
 			return ClientEvent{}, false
 		}
 		view.Kind, view.Tool, view.ToolCallID, view.Status = "approval", event.ToolCall.Name, event.ToolCall.ID, "resolved"
+	case transcript.PlanUpdated:
+		if event.Plan == nil || len(event.Plan.Items) == 0 {
+			return ClientEvent{}, false
+		}
+		view.Kind = "plan"
+		view.Plan = event.Plan
 	case transcript.TurnStarted:
 		view.Kind, view.Status = "turn", "running"
 	case transcript.TurnCompleted:
@@ -143,6 +151,50 @@ func ProjectEvent(event transcript.Event, redactor safety.Redactor) (ClientEvent
 		return ClientEvent{}, false
 	}
 	return view, true
+}
+
+func CollapseClientEvents(events []ClientEvent) []ClientEvent {
+	if len(events) == 0 {
+		return events
+	}
+	out := make([]ClientEvent, 0, len(events))
+	index := make(map[string]int)
+	for _, event := range events {
+		if event.Kind != "tool" || event.ToolCallID == "" {
+			out = append(out, event)
+			continue
+		}
+		key := event.TurnID + ":" + event.ToolCallID
+		if pos, ok := index[key]; ok {
+			if preferToolEvent(event, out[pos]) {
+				out[pos] = event
+			}
+			continue
+		}
+		index[key] = len(out)
+		out = append(out, event)
+	}
+	return out
+}
+
+func preferToolEvent(next, prev ClientEvent) bool {
+	if next.Sequence != prev.Sequence {
+		return next.Sequence > prev.Sequence
+	}
+	return toolStatusRank(next.Status) > toolStatusRank(prev.Status)
+}
+
+func toolStatusRank(status string) int {
+	switch status {
+	case "running":
+		return 1
+	case "completed":
+		return 2
+	case "failed":
+		return 3
+	default:
+		return 0
+	}
 }
 
 func (h *EventHub) broadcast(event ClientEvent) {

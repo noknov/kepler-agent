@@ -70,7 +70,7 @@ func TestLoadWebDefaultsToConnectionsOriginAndKeplerBrand(t *testing.T) {
 	if cfg.Web.PublicBaseURL != "https://agent.example" {
 		t.Fatalf("Web.PublicBaseURL = %q", cfg.Web.PublicBaseURL)
 	}
-	if cfg.Web.SiteName != "Kepler" || cfg.Web.AvatarURL != "/assets/avatar.png" {
+	if cfg.Web.SiteName != "Kepler" {
 		t.Fatalf("unexpected default brand: %#v", cfg.Web)
 	}
 }
@@ -939,7 +939,7 @@ func resetConfigEnv(t *testing.T) {
 		"WEB_SESSION_SECRET",
 		"WEB_SESSION_TTL",
 		"WEB_SITE_NAME",
-		"WEB_SITE_AVATAR_URL",
+		"WEB_STATIC_DIR",
 		"OBSERVABILITY_TOKEN",
 		"OBSERVABILITY_ALLOW_UNAUTHENTICATED",
 	}

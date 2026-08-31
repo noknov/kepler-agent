@@ -79,3 +79,28 @@ func (s PGTranscript) Load(ctx context.Context, sessionID string, after uint64) 
 	}
 	return events, rows.Err()
 }
+
+func (s PGTranscript) SessionsWithMessages(ctx context.Context, sessionIDs []string) (map[string]bool, error) {
+	result := make(map[string]bool, len(sessionIDs))
+	if s.Pool == nil || len(sessionIDs) == 0 {
+		return result, nil
+	}
+	rows, err := s.Pool.Query(ctx, `
+		SELECT DISTINCT session_id
+		FROM agent_transcript_events
+		WHERE session_id = ANY($1)
+		  AND type IN ($2, $3)
+	`, sessionIDs, string(transcript.UserInput), string(transcript.AssistantMessage))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sessionID string
+		if err := rows.Scan(&sessionID); err != nil {
+			return nil, err
+		}
+		result[sessionID] = true
+	}
+	return result, rows.Err()
+}

@@ -33,8 +33,8 @@ type WebConfig struct {
 	UpstreamURL   string
 	SessionSecret string
 	SessionTTL    time.Duration
-	SiteName      string
-	AvatarURL     string
+	SiteName  string
+	StaticDir string
 }
 
 // StorageConfig owns all durable operational state for sessions, runs, inbox,
@@ -326,8 +326,8 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			UpstreamURL:   trimRightSlash(os.Getenv("WEB_UPSTREAM_URL")),
 			SessionSecret: os.Getenv("WEB_SESSION_SECRET"),
 			SessionTTL:    envDuration("WEB_SESSION_TTL", 7*24*time.Hour),
-			SiteName:      env("WEB_SITE_NAME", "Kepler"),
-			AvatarURL:     env("WEB_SITE_AVATAR_URL", "/assets/avatar.png"),
+			SiteName:  env("WEB_SITE_NAME", "Kepler"),
+			StaticDir: env("WEB_STATIC_DIR", ""),
 		},
 		Slack: SlackConfig{
 			BotToken:        os.Getenv("SLACK_BOT_TOKEN"),
