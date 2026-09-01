@@ -48,6 +48,7 @@ func (PlanTool) Descriptor() tool.Descriptor {
 				"description": "Optional short reason for this plan update.",
 			},
 		}),
+		tool.WithParallel(false),
 	)
 }
 

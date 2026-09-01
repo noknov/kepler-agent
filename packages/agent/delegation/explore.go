@@ -20,7 +20,7 @@ const (
 	defaultExploreMaxWorkers = 3
 )
 
-const exploreSystemPrompt = `You are a read-only exploration sub-agent. Investigate the assigned task using only the provided tools. Do not mutate state, send messages, or request user input. Return a concise factual report with file paths, symbols, and evidence. Stop when you have enough to answer the task.`
+const exploreSystemPrompt = `You are a read-only exploration sub-agent. Investigate the assigned task using only the provided tools. Do not mutate state, send messages, or request user input. When independent reads or searches do not depend on each other, emit them in the same step (or pass multiple paths in one read) so they can run concurrently. Return a concise factual report with file paths, symbols, and evidence. Stop when you have enough to answer the task.`
 
 // Runner executes isolated sub-turns against a filtered tool catalog.
 type Runner struct {

@@ -102,8 +102,11 @@ func (c *OpenAICompatibleClient) chatBody(req Request) map[string]any {
 	}
 	if len(req.Tools) == 0 {
 		delete(body, "tools")
-	} else if req.ToolChoice != "" {
-		body["tool_choice"] = req.ToolChoice
+	} else {
+		body["parallel_tool_calls"] = true
+		if req.ToolChoice != "" {
+			body["tool_choice"] = req.ToolChoice
+		}
 	}
 	if c.providerName() == "mimo" {
 		delete(body, "max_tokens")

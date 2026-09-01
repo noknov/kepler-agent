@@ -28,7 +28,9 @@ the runtime, or placed in model context.
 The current loop has no model-output repair layer. Only the owner of a
 `pending_input` turn can continue it with an unmentioned thread reply;
 unsupported image parts are removed before provider dispatch; and parallel tool
-results share an aggregate inline budget. Empty model output fails the turn,
+results share an aggregate inline budget. A model step admits parallel-safe
+tools through a shared read lock and mutating tools through an exclusive write
+lock, so independent reads overlap instead of waiting on list order. Empty model output fails the turn,
 and the tool-step limit stops without an extra synthesis request. Empty model
 messages without tool calls are retried in place up to
 `MaxEmptyResponseRetries` before the turn terminates as `empty_response`. A
@@ -71,4 +73,6 @@ notifications including `item/agentMessage/delta`.
 `agent-explore` is a hosted read-only tool, not a second product runtime. It
 creates isolated child turns from a filtered catalog, records a parent link and
 its own transcript, and returns a factual report to the parent. Child stream
-events are not sent to the parent Slack presentation sink.
+events are not sent to the parent Slack presentation sink. Read-only and
+network tools default to `Parallel` so a step with multiple independent calls
+runs concurrently; mutating tools stay sequential unless marked otherwise.

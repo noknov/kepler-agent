@@ -18,7 +18,42 @@ func WithExposure(exposure Exposure) DescriptorOption {
 }
 
 func WithParallel(parallel bool) DescriptorOption {
-	return func(d *Descriptor) { d.Parallel = parallel }
+	return func(d *Descriptor) {
+		d.Parallel = parallel
+		d.parallelSpecified = true
+	}
+}
+
+// EffectsAllowParallel is Kepler's equivalent of Codex's
+// supports_parallel_tool_calls opt-in. Codex defaults that flag to false and
+// sets it on read/search/shell handlers. Here, read and network effects are
+// the same capability unless a tool explicitly calls WithParallel.
+func EffectsAllowParallel(effects []Effect) bool {
+	if len(effects) == 0 {
+		return false
+	}
+	for _, effect := range effects {
+		switch effect {
+		case EffectRead, EffectNetwork:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func applyConcurrencyDefaults(d *Descriptor) {
+	if d.parallelSpecified {
+		return
+	}
+	d.Parallel = !d.Exclusive && EffectsAllowParallel(d.Effects)
+}
+
+// WithConcurrencyDefaults fills Parallel for descriptors built outside
+// FunctionDescriptor, using the same read/network vs mutating rule.
+func (d Descriptor) WithConcurrencyDefaults() Descriptor {
+	applyConcurrencyDefaults(&d)
+	return d
 }
 
 func WithExclusive(exclusive bool) DescriptorOption {
@@ -91,6 +126,7 @@ func FunctionDescriptor(name, description string, parameters map[string]any, opt
 	for _, opt := range opts {
 		opt(&descriptor)
 	}
+	applyConcurrencyDefaults(&descriptor)
 	return descriptor
 }
 

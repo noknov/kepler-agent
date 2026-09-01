@@ -91,19 +91,29 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 		}
 	}
 
+	// Codex-style admission gate: parallel-safe tools share a read lock so a
+	// model step can dispatch independent reads together. Mutating tools take
+	// the write lock, which waits for in-flight parallel work and excludes
+	// other writers. Every call is spawned; the lock, not list order, serializes.
+	var gate sync.RWMutex
 	var wait sync.WaitGroup
 	for index := range prepared {
 		entry := &prepared[index]
 		if entry.result != nil {
 			continue
 		}
-		if entry.descriptor.Parallel {
-			wait.Add(1)
-			go func() { defer wait.Done(); r.runPreparedTool(ctx, request, entry) }()
-			continue
-		}
-		wait.Wait()
-		r.runPreparedTool(ctx, request, entry)
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			if entry.descriptor.Parallel {
+				gate.RLock()
+				defer gate.RUnlock()
+			} else {
+				gate.Lock()
+				defer gate.Unlock()
+			}
+			r.runPreparedTool(ctx, request, entry)
+		}()
 	}
 	wait.Wait()
 	limitToolResultBatch(ctx, prepared, r.config.ToolResults, r.deps.Artifacts)

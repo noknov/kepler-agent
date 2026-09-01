@@ -38,6 +38,9 @@ type Descriptor struct {
 	Effects     []Effect        `json:"effects,omitempty"`
 	Exposure    Exposure        `json:"exposure,omitempty"`
 	Parallel    bool            `json:"parallel,omitempty"`
+	// parallelSpecified is true when WithParallel ran, so concurrency defaults
+	// do not override an explicit sequential or parallel choice.
+	parallelSpecified bool
 	// Exclusive tools, such as a request for missing user input, must be the
 	// only call in a model-produced tool batch. This prevents a write from being
 	// executed before the run pauses for an answer.

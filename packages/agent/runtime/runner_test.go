@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -505,6 +506,47 @@ func TestRunTurnRunsParallelSafeToolsConcurrently(t *testing.T) {
 	close(release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+type serialProbeTool struct {
+	name     string
+	inflight *int32
+	overlap  *int32
+}
+
+func (t serialProbeTool) Descriptor() tool.Descriptor {
+	return tool.Descriptor{Name: t.name, InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []tool.Effect{tool.EffectWorkspaceWrite}}
+}
+func (t serialProbeTool) Execute(context.Context, tool.Call) (tool.Result, error) {
+	n := atomic.AddInt32(t.inflight, 1)
+	if n != 1 {
+		atomic.AddInt32(t.overlap, 1)
+	}
+	time.Sleep(20 * time.Millisecond)
+	atomic.AddInt32(t.inflight, -1)
+	return tool.TextResult("ok"), nil
+}
+
+func TestRunTurnSerializesMutatingTools(t *testing.T) {
+	var inflight, overlap int32
+	call := func(id, name string) model.Content {
+		return model.Content{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: id, Name: name, Arguments: json.RawMessage(`{}`)}}
+	}
+	client := &scriptedModel{responses: []model.Response{
+		{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{call("1", "w1"), call("2", "w2")}}, FinishReason: model.FinishToolCalls},
+		{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop},
+	}}
+	catalog, _ := tool.NewCatalog(
+		serialProbeTool{name: "w1", inflight: &inflight, overlap: &overlap},
+		serialProbeTool{name: "w2", inflight: &inflight, overlap: &overlap},
+	)
+	runner, _ := New(Config{Model: "test"}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
+	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "serial", Input: model.TextMessage(model.RoleUser, "run")}); err != nil {
+		t.Fatal(err)
+	}
+	if overlap != 0 {
+		t.Fatalf("mutating tools overlapped %d times", overlap)
 	}
 }
 

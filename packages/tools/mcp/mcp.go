@@ -72,7 +72,7 @@ func Discover(ctx context.Context, config Server) ([]tool.Tool, error) {
 			schema = json.RawMessage(`{"type":"object"}`)
 		}
 		effects := append([]tool.Effect{tool.EffectNetwork}, config.Effects...)
-		items = append(items, &remoteTool{server: state, remote: definition, descriptor: tool.Descriptor{Name: name, Description: definition.Description, InputSchema: schema, Effects: effects, Exposure: tool.ExposureDeferred}})
+		items = append(items, &remoteTool{server: state, remote: definition, descriptor: tool.Descriptor{Name: name, Description: definition.Description, InputSchema: schema, Effects: effects, Exposure: tool.ExposureDeferred}.WithConcurrencyDefaults()})
 	}
 	return items, nil
 }

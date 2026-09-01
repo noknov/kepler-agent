@@ -45,17 +45,6 @@ type CalleesTool struct{ Base }
 type CallgraphTool struct{ Base }
 type ImpactTool struct{ Base }
 
-func (OverviewTool) Parallel() bool   { return true }
-func (SymbolsTool) Parallel() bool    { return true }
-func (DefinitionTool) Parallel() bool { return true }
-func (ReferencesTool) Parallel() bool { return true }
-func (ImplementationsTool) Parallel() bool {
-	return true
-}
-func (CallersTool) Parallel() bool { return true }
-func (CalleesTool) Parallel() bool { return true }
-func (ImpactTool) Parallel() bool  { return true }
-
 func (t OverviewTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
 		"codegraph-overview",

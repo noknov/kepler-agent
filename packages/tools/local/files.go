@@ -19,49 +19,75 @@ import (
 type ReadFile struct{ Workspace local.Workspace }
 
 func (ReadFile) Descriptor() tool.Descriptor {
-	return tool.Descriptor{Name: "read_file", Description: "Read a UTF-8 file inside the workspace.", InputSchema: schema(`{"path":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}}`, "path"), Effects: []tool.Effect{tool.EffectRead}, Exposure: tool.ExposureEager, Parallel: true}
+	return tool.Descriptor{Name: "read_file", Description: "Read UTF-8 files inside the workspace. Use paths for independent files in one call.", InputSchema: schema(`{"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"}},"offset":{"type":"integer"},"limit":{"type":"integer"}}`), Effects: []tool.Effect{tool.EffectRead}, Exposure: tool.ExposureEager, Parallel: true}
 }
 
 func (t ReadFile) Execute(_ context.Context, call tool.Call) (tool.Result, error) {
 	var arguments struct {
-		Path   string `json:"path"`
-		Offset int    `json:"offset"`
-		Limit  int    `json:"limit"`
+		Path   string   `json:"path"`
+		Paths  []string `json:"paths"`
+		Offset int      `json:"offset"`
+		Limit  int      `json:"limit"`
 	}
 	if err := json.Unmarshal(call.Arguments, &arguments); err != nil {
 		return tool.Result{}, err
 	}
-	path, err := t.Workspace.Resolve(arguments.Path, false)
+	files := tool.NormalizePaths(arguments.Path, arguments.Paths)
+	if len(files) == 0 {
+		return tool.Result{}, fmt.Errorf("path or paths is required")
+	}
+	if len(files) == 1 {
+		body, truncated, err := t.readOne(files[0], arguments.Offset, arguments.Limit)
+		if err != nil {
+			return tool.Result{}, err
+		}
+		result := tool.TextResult(body)
+		result.Truncated = truncated
+		return result, nil
+	}
+	text, err := tool.MapOrdered(len(files), func(i int) (string, error) {
+		body, _, readErr := t.readOne(files[i], arguments.Offset, arguments.Limit)
+		if readErr != nil {
+			return "", readErr
+		}
+		return "## " + files[i] + "\n" + body, nil
+	})
 	if err != nil {
 		return tool.Result{}, err
+	}
+	return tool.TextResult(text), nil
+}
+
+func (t ReadFile) readOne(rawPath string, offset, limit int) (string, bool, error) {
+	path, err := t.Workspace.Resolve(rawPath, false)
+	if err != nil {
+		return "", false, err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return tool.Result{}, err
+		return "", false, err
 	}
 	if !utf8.Valid(data) {
-		return tool.Result{}, fmt.Errorf("file is not valid UTF-8")
+		return "", false, fmt.Errorf("file is not valid UTF-8")
 	}
-	if arguments.Offset < 0 || arguments.Offset > len(data) {
-		return tool.Result{}, fmt.Errorf("offset is outside file")
+	if offset < 0 || offset > len(data) {
+		return "", false, fmt.Errorf("offset is outside file")
 	}
-	data = data[arguments.Offset:]
+	data = data[offset:]
 	if !utf8.Valid(data) {
-		return tool.Result{}, fmt.Errorf("offset must be on a UTF-8 boundary")
+		return "", false, fmt.Errorf("offset must be on a UTF-8 boundary")
 	}
-	if arguments.Limit <= 0 {
-		arguments.Limit = 64 << 10
+	if limit <= 0 {
+		limit = 64 << 10
 	}
-	truncated := len(data) > arguments.Limit
+	truncated := len(data) > limit
 	if truncated {
-		data = data[:arguments.Limit]
+		data = data[:limit]
 		for len(data) > 0 && !utf8.Valid(data) {
 			data = data[:len(data)-1]
 		}
 	}
-	result := tool.TextResult(string(data))
-	result.Truncated = truncated
-	return result, nil
+	return string(data), truncated, nil
 }
 
 type ListFiles struct{ Workspace local.Workspace }

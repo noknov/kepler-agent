@@ -253,6 +253,7 @@ func (c *OpenAIResponsesClient) responsesBody(req Request, stream bool) map[stri
 	}
 	if len(req.Tools) > 0 {
 		body["tools"] = responsesTools(req.Tools)
+		body["parallel_tool_calls"] = true
 		if req.ToolChoice != "" {
 			body["tool_choice"] = req.ToolChoice
 		}

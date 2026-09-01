@@ -33,6 +33,18 @@ func TestMiMoChatBodyUsesOfficialOpenAIFields(t *testing.T) {
 	}
 }
 
+func TestChatBodyEnablesParallelToolCalls(t *testing.T) {
+	client := NewOpenAICompatibleClient("opencode-go", "https://opencode.ai/zen/go/v1", "token", 0)
+	body := client.chatBody(Request{
+		Model:    "glm-5.2",
+		Messages: []Message{{Role: "user", Content: "hello"}},
+		Tools:    []ToolSpec{{Type: "function", Function: ToolSpecFunction{Name: "read", Parameters: map[string]any{"type": "object"}}}},
+	})
+	if body["parallel_tool_calls"] != true {
+		t.Fatalf("parallel_tool_calls = %#v, want true", body["parallel_tool_calls"])
+	}
+}
+
 func TestChatBodyOmitsMaxTokensWhenUnset(t *testing.T) {
 	client := NewOpenAICompatibleClient("opencode-go", "https://opencode.ai/zen/go/v1", "token", 0)
 	body := client.chatBody(Request{

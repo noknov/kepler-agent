@@ -26,28 +26,30 @@ func (t ReadFileTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
 		"code-read_file",
 		"Read source code from a freshly fetched git ref. Omit source for normal repository investigation so the tool resolves each file repo's origin-tracked upstream. Set source only when the user explicitly requests the checkout view or an exact git ref; never invent a branch or ref. Results include line numbers and source metadata; cite these lines before making code behavior claims.",
-		tool.ObjectSchema([]string{"path"}, map[string]any{
+		tool.ObjectSchema(nil, map[string]any{
 			"path":       map[string]any{"type": "string", "description": "Workspace-relative, root-prefixed, or absolute file path."},
+			"paths":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Independent files to read in this call. Use this instead of serial single-file calls when the files do not depend on each other."},
 			"source":     map[string]any{"type": "string", "description": "Optional; omit for normal investigation. Set to working_tree only for an explicitly requested checkout view, or to an exact safe git ref explicitly named by the user."},
 			"start_line": map[string]any{"type": "integer", "description": "1-based starting line. Omit unless you already know the relevant range."},
-			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines to return, default 240 and max 1000."},
+			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines to return per file, default 240 and max 1000."},
 		}),
 	)
 }
 
 func (t ReadFileTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
-		Path      string `json:"path"`
-		Source    string `json:"source"`
-		StartLine int    `json:"start_line"`
-		MaxLines  int    `json:"max_lines"`
+		Path      string   `json:"path"`
+		Paths     []string `json:"paths"`
+		Source    string   `json:"source"`
+		StartLine int      `json:"start_line"`
+		MaxLines  int      `json:"max_lines"`
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
 	}
-	path, err := resolveReadableFile(t.Paths, args.Path)
-	if err != nil {
-		return tool.Result{}, err
+	files := tool.NormalizePaths(args.Path, args.Paths)
+	if len(files) == 0 {
+		return tool.Result{}, fmt.Errorf("path or paths is required")
 	}
 	if args.StartLine <= 0 {
 		args.StartLine = 1
@@ -58,19 +60,39 @@ func (t ReadFileTool) Execute(ctx context.Context, call tool.Call) (tool.Result,
 	if args.MaxLines > 1000 {
 		args.MaxLines = 1000
 	}
-
 	source := strings.TrimSpace(args.Source)
 	if source == "" {
 		source = "current_branch"
 	}
+	text, err := tool.MapOrdered(len(files), func(i int) (string, error) {
+		body, readErr := t.readOne(ctx, call, files[i], source, args.StartLine, args.MaxLines)
+		if readErr != nil {
+			return "", readErr
+		}
+		if len(files) == 1 {
+			return body, nil
+		}
+		return "## " + files[i] + "\n" + body, nil
+	})
+	if err != nil {
+		return tool.Result{}, err
+	}
+	return tool.TextResult(text), nil
+}
+
+func (t ReadFileTool) readOne(ctx context.Context, call tool.Call, rawPath, source string, startLine, maxLines int) (string, error) {
+	path, err := resolveReadableFile(t.Paths, rawPath)
+	if err != nil {
+		return "", err
+	}
 	repoDir := findRepoRoot(t.Paths.Roots, filepath.Dir(path))
 	if source != "working_tree" {
 		if repoDir == "" {
-			return tool.Result{}, fmt.Errorf("source %q requires a file inside a git repository", source)
+			return "", fmt.Errorf("source %q requires a file inside a git repository", source)
 		}
 		ref, fetchStatus, sourceErr := sourceRef(ctx, repoDir, source, call.Scope)
 		if sourceErr != nil {
-			return tool.Result{}, sourceErr
+			return "", sourceErr
 		}
 		if relPath, relErr := filepath.Rel(repoDir, path); relErr == nil && !strings.HasPrefix(relPath, "..") {
 			content, gitErr := gitShowFile(ctx, repoDir, ref, relPath)
@@ -83,20 +105,20 @@ func (t ReadFileTool) Execute(ctx context.Context, call tool.Call) (tool.Result,
 					Source:    "git",
 					Ref:       ref,
 					Commit:    commit,
-					StartLine: args.StartLine,
-					MaxLines:  args.MaxLines,
+					StartLine: startLine,
+					MaxLines:  maxLines,
 				})
-				return tool.TextResult(header + applyLineRange(content, args.StartLine, args.MaxLines)), nil
+				return header + applyLineRange(content, startLine, maxLines), nil
 			}
-			return tool.Result{}, fmt.Errorf("read %s at %s: %w", filepath.ToSlash(relPath), ref, gitErr)
+			return "", fmt.Errorf("read %s at %s: %w", filepath.ToSlash(relPath), ref, gitErr)
 		}
-		return tool.Result{}, fmt.Errorf("path %q is outside repository %q", path, repoDir)
+		return "", fmt.Errorf("path %q is outside repository %q", path, repoDir)
 	}
 
 	// Working-tree access is explicit, including for files outside git repos.
 	file, err := os.Open(path)
 	if err != nil {
-		return tool.Result{}, err
+		return "", err
 	}
 	defer file.Close()
 
@@ -108,14 +130,14 @@ func (t ReadFileTool) Execute(ctx context.Context, call tool.Call) (tool.Result,
 	for scanner.Scan() {
 		select {
 		case <-ctx.Done():
-			return tool.Result{}, ctx.Err()
+			return "", ctx.Err()
 		default:
 		}
 		lineNo++
-		if lineNo < args.StartLine {
+		if lineNo < startLine {
 			continue
 		}
-		if emitted >= args.MaxLines {
+		if emitted >= maxLines {
 			break
 		}
 		b.WriteString(fmt.Sprintf("%6d  %s\n", lineNo, scanner.Text()))
@@ -126,15 +148,15 @@ func (t ReadFileTool) Execute(ctx context.Context, call tool.Call) (tool.Result,
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return tool.Result{}, err
+		return "", err
 	}
 	header := "[source: working_tree"
 	if repoDir != "" {
 		header += " branch=" + gitRevParse(ctx, repoDir, "HEAD", "--abbrev-ref")
 	}
 	header += "]\n"
-	recordReadState(call.Scope, readState{Path: path, Source: "working_tree", StartLine: args.StartLine, MaxLines: args.MaxLines})
-	return tool.TextResult(header + b.String()), nil
+	recordReadState(call.Scope, readState{Path: path, Source: "working_tree", StartLine: startLine, MaxLines: maxLines})
+	return header + b.String(), nil
 }
 
 type SearchTool struct {

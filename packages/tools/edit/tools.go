@@ -24,6 +24,7 @@ func (t WriteFileTool) Descriptor() tool.Descriptor {
 			"path":    map[string]any{"type": "string", "description": "Workspace-relative, root-prefixed, or absolute file path."},
 			"content": map[string]any{"type": "string", "description": "The complete file content to write."},
 		}),
+		tool.WithParallel(false),
 	)
 }
 
@@ -66,6 +67,7 @@ func (t ReplaceTool) Descriptor() tool.Descriptor {
 			"old_text": map[string]any{"type": "string", "description": "Exact text to replace. It must occur exactly once."},
 			"new_text": map[string]any{"type": "string", "description": "Replacement text."},
 		}),
+		tool.WithParallel(false),
 	)
 }
 

@@ -13,6 +13,25 @@ import (
 	"github.com/noknov/kepler-agent/packages/safety"
 )
 
+func TestReadFileReadsIndependentPathsTogether(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "b.go"), []byte("package b\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := ReadFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"paths":["a.go","b.go"],"source":"working_tree"}`)})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	text := result.Text()
+	if !strings.Contains(text, "package a") || !strings.Contains(text, "package b") {
+		t.Fatalf("expected both files, got %#v", result)
+	}
+}
+
 func TestReadFileReturnsContentDirectly(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "app.go"), []byte("package app\n"), 0o600); err != nil {

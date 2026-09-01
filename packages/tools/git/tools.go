@@ -232,12 +232,13 @@ func (t ReadFileRefTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
 		"git-read_file_ref",
 		"Read a file at an immutable git ref returned by git-fetch_ref. Use this for branch-specific evidence without changing the checkout.",
-		tool.ObjectSchema([]string{"repo", "ref", "path"}, map[string]any{
+		tool.ObjectSchema([]string{"repo", "ref"}, map[string]any{
 			"repo":       map[string]any{"type": "string", "description": "Repository returned by git-fetch_ref."},
 			"ref":        map[string]any{"type": "string", "description": "Immutable commit SHA returned by git-fetch_ref, or an explicit safe ref."},
 			"path":       map[string]any{"type": "string", "description": "Path inside the repo."},
+			"paths":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Independent files to read in this call."},
 			"start_line": map[string]any{"type": "integer", "description": "1-based starting line."},
-			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines, default 240 and max 1000."},
+			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines per file, default 240 and max 1000."},
 		}),
 		tool.ReadNetworkParallel()...,
 	)
@@ -245,14 +246,19 @@ func (t ReadFileRefTool) Descriptor() tool.Descriptor {
 
 func (t ReadFileRefTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
-		Repo      string `json:"repo"`
-		Ref       string `json:"ref"`
-		Path      string `json:"path"`
-		StartLine int    `json:"start_line"`
-		MaxLines  int    `json:"max_lines"`
+		Repo      string   `json:"repo"`
+		Ref       string   `json:"ref"`
+		Path      string   `json:"path"`
+		Paths     []string `json:"paths"`
+		StartLine int      `json:"start_line"`
+		MaxLines  int      `json:"max_lines"`
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
+	}
+	files := tool.NormalizePaths(args.Path, args.Paths)
+	if len(files) == 0 {
+		return tool.Result{}, fmt.Errorf("path or paths is required")
 	}
 	repo, err := t.explicitRepo(ctx, args.Repo)
 	if err != nil {
@@ -261,13 +267,6 @@ func (t ReadFileRefTool) Execute(ctx context.Context, call tool.Call) (tool.Resu
 	ref, err := t.resolveRef(ctx, repo, args.Ref)
 	if err != nil {
 		return tool.Result{}, err
-	}
-	path, err := cleanGitPath(args.Path)
-	if err != nil {
-		return tool.Result{}, err
-	}
-	if path == "" {
-		return tool.Result{}, fmt.Errorf("path is required")
 	}
 	if args.StartLine <= 0 {
 		args.StartLine = 1
@@ -278,29 +277,20 @@ func (t ReadFileRefTool) Execute(ctx context.Context, call tool.Call) (tool.Resu
 	if args.MaxLines > 1000 {
 		args.MaxLines = 1000
 	}
-	out, err := t.run(ctx, repo, "show", ref+":"+path)
+	text, err := tool.MapOrdered(len(files), func(i int) (string, error) {
+		body, readErr := t.readAtRef(ctx, repo, ref, files[i], args.StartLine, args.MaxLines)
+		if readErr != nil {
+			return "", readErr
+		}
+		if len(files) == 1 {
+			return body, nil
+		}
+		return "## " + files[i] + "\n" + body, nil
+	})
 	if err != nil {
 		return tool.Result{}, err
 	}
-	lines := strings.Split(out, "\n")
-	var b strings.Builder
-	emitted := 0
-	for idx, line := range lines {
-		lineNo := idx + 1
-		if lineNo < args.StartLine {
-			continue
-		}
-		if emitted >= args.MaxLines {
-			break
-		}
-		b.WriteString(fmt.Sprintf("%6d  %s\n", lineNo, line))
-		emitted++
-		if b.Len() > 200_000 {
-			b.WriteString("...[truncated]\n")
-			break
-		}
-	}
-	return tool.TextResult(b.String()), nil
+	return tool.TextResult(text), nil
 }
 
 type RepoReadFileTool struct{ Base }
@@ -309,12 +299,13 @@ func (t RepoReadFileTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
 		"repo-read_file",
 		"Read a file from a refreshed remote branch snapshot without changing the working tree. Branch must be an actual remote branch name, not a pull-request number or refs/pull/...; use github-pr_diff for GitHub pull requests.",
-		tool.ObjectSchema([]string{"branch", "path"}, map[string]any{
+		tool.ObjectSchema([]string{"branch"}, map[string]any{
 			"repo":       map[string]any{"type": "string", "description": "Repository path or workspace-relative repo name. Required when workspace has multiple repos."},
 			"branch":     map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"path":       map[string]any{"type": "string", "description": "Path inside the repo."},
+			"paths":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Independent files to read in this call."},
 			"start_line": map[string]any{"type": "integer", "description": "1-based starting line."},
-			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines, default 240 and max 1000."},
+			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines per file, default 240 and max 1000."},
 		}),
 		tool.ReadNetworkParallel()...,
 	)
@@ -322,14 +313,19 @@ func (t RepoReadFileTool) Descriptor() tool.Descriptor {
 
 func (t RepoReadFileTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
-		Repo      string `json:"repo"`
-		Branch    string `json:"branch"`
-		Path      string `json:"path"`
-		StartLine int    `json:"start_line"`
-		MaxLines  int    `json:"max_lines"`
+		Repo      string   `json:"repo"`
+		Branch    string   `json:"branch"`
+		Path      string   `json:"path"`
+		Paths     []string `json:"paths"`
+		StartLine int      `json:"start_line"`
+		MaxLines  int      `json:"max_lines"`
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
+	}
+	files := tool.NormalizePaths(args.Path, args.Paths)
+	if len(files) == 0 {
+		return tool.Result{}, fmt.Errorf("path or paths is required")
 	}
 	repo, err := t.repo(ctx, args.Repo)
 	if err != nil {
@@ -339,11 +335,20 @@ func (t RepoReadFileTool) Execute(ctx context.Context, call tool.Call) (tool.Res
 	if err != nil {
 		return tool.Result{}, err
 	}
-	out, err := t.readAtRef(ctx, repo, snap.Ref, args.Path, args.StartLine, args.MaxLines)
+	text, err := tool.MapOrdered(len(files), func(i int) (string, error) {
+		body, readErr := t.readAtRef(ctx, repo, snap.Ref, files[i], args.StartLine, args.MaxLines)
+		if readErr != nil {
+			return "", readErr
+		}
+		if len(files) == 1 {
+			return body, nil
+		}
+		return "## " + files[i] + "\n" + body, nil
+	})
 	if err != nil {
 		return tool.Result{}, err
 	}
-	return tool.TextResult(snap.header() + "\n\n" + out), nil
+	return tool.TextResult(snap.header() + "\n\n" + text), nil
 }
 
 type LogTool struct{ Base }
