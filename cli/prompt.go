@@ -26,13 +26,10 @@ func newPromptEditor(in *os.File, out io.Writer, color bool) *promptEditor {
 }
 
 func (e *promptEditor) paint(value, code string) string {
-	if !e.color {
-		return value
-	}
-	return "\x1b[" + code + "m" + value + "\x1b[0m"
+	return paintANSI(e.color, value, code)
 }
 
-func (e *promptEditor) Read(ctx context.Context, footer string) (string, error) {
+func (e *promptEditor) Read(ctx context.Context, cwd, modelName string) (string, error) {
 	fd := int(e.in.Fd())
 	old, err := term.MakeRaw(fd)
 	if err != nil {
@@ -49,7 +46,7 @@ func (e *promptEditor) Read(ctx context.Context, footer string) (string, error) 
 	pending := make([]byte, 0, 4)
 	e.histIdx = len(e.history)
 	first := true
-	e.draw(cols, runes, cursor, footer, &first)
+	e.draw(cols, runes, cursor, cwd, modelName, &first)
 	for {
 		if ctx.Err() != nil {
 			e.clearBox()
@@ -85,12 +82,12 @@ func (e *promptEditor) Read(ctx context.Context, footer string) (string, error) 
 			if cursor > 0 {
 				runes = append(runes[:cursor-1], runes[cursor:]...)
 				cursor--
-				e.draw(cols, runes, cursor, footer, &first)
+				e.draw(cols, runes, cursor, cwd, modelName, &first)
 			}
 		case ch == 21:
 			runes = runes[:0]
 			cursor = 0
-			e.draw(cols, runes, cursor, footer, &first)
+			e.draw(cols, runes, cursor, cwd, modelName, &first)
 		case ch == 27:
 			seq := e.readEscape()
 			switch seq {
@@ -107,7 +104,7 @@ func (e *promptEditor) Read(ctx context.Context, footer string) (string, error) 
 					cursor--
 				}
 			}
-			e.draw(cols, runes, cursor, footer, &first)
+			e.draw(cols, runes, cursor, cwd, modelName, &first)
 		default:
 			if ch < 32 {
 				continue
@@ -122,7 +119,7 @@ func (e *promptEditor) Read(ctx context.Context, footer string) (string, error) 
 				runes = append(runes[:cursor], append([]rune{r}, runes[cursor:]...)...)
 				cursor++
 			}
-			e.draw(cols, runes, cursor, footer, &first)
+			e.draw(cols, runes, cursor, cwd, modelName, &first)
 		}
 	}
 }
@@ -162,48 +159,62 @@ func (e *promptEditor) hist(delta int, current []rune) ([]rune, int) {
 	return runes, len(runes)
 }
 
-func (e *promptEditor) draw(cols int, runes []rune, cursor int, footer string, first *bool) {
-	inner := cols - 2
+func (e *promptEditor) draw(cols int, runes []rune, cursor int, cwd, modelName string, first *bool) {
+	inner := cols
 	if inner < 24 {
 		inner = 24
 	}
-	body := e.paint(">", "2") + " "
+	prompt := e.paint("❯", colorClaude) + " "
+	body := "  " + prompt
 	if len(runes) == 0 {
-		body += e.paint("Type a message…", "2")
+		body += e.paint("Type a message…", colorDim)
 	} else {
 		body += string(runes)
 	}
-	body = padWidth(body, inner-1)
-	top := "╭" + strings.Repeat("─", inner) + "╮"
-	mid := "│" + body + "│"
-	bot := "╰" + strings.Repeat("─", inner) + "╯"
-	if e.color {
-		top, mid, bot = e.paint(top, "2"), e.paint(mid, "2"), e.paint(bot, "2")
-	}
-	foot := "  " + footer
-	if displayWidth(foot) > cols {
-		foot = trimToWidth(foot, cols)
-	}
+	body = padWidth(body, inner)
+	top := e.paint("╭"+strings.Repeat("─", inner-2)+"╮", colorPromptBorder)
+	bot := e.paint("╰"+strings.Repeat("─", inner-2)+"╯", colorPromptBorder)
+	foot := e.paint(formatPromptFooter(cols, cwd, modelName), colorDim)
 	if !*first {
-		// Caret sits on the input row (second of four). Move to the box top first.
 		fmt.Fprint(e.out, "\x1b[1A\r")
 	}
 	*first = false
 	fmt.Fprint(e.out, "\x1b[?25l")
-	fmt.Fprintf(e.out, "\r%s\n\r%s\n\r%s\n\r%s\n", top, mid, bot, e.paint(foot, "2"))
-	col := 1 + displayWidth("│") + displayWidth("> ") + displayWidth(string(runes[:min(cursor, len(runes))]))
+	fmt.Fprintf(e.out, "\r%s\n\r%s\n\r%s\n\r%s\n", top, body, bot, foot)
+	col := 2 + displayWidth("❯ ") + displayWidth(string(runes[:min(cursor, len(runes))]))
 	if col < 1 {
 		col = 1
 	}
 	fmt.Fprintf(e.out, "\x1b[3A\r\x1b[%dG\x1b[?25h", col)
 }
 
+func formatPromptFooter(cols int, cwd, modelName string) string {
+	left := "  " + cwd + " · " + modelName
+	right := "/help"
+	gap := cols - displayWidth(left) - displayWidth(right)
+	if gap < 2 {
+		keep := max(8, cols-displayWidth(right)-6)
+		left = "  " + clipWidth(cwd+" · "+modelName, keep)
+		gap = cols - displayWidth(left) - displayWidth(right)
+		if gap < 1 {
+			gap = 1
+		}
+	}
+	return left + strings.Repeat(" ", gap) + right
+}
+
 func (e *promptEditor) commit(line string) {
+	// draw() leaves the cursor on the body line (3 up from the footer).
+	// Only move 1 line up to the box top; 4A would jump into prior transcript.
 	fmt.Fprint(e.out, "\x1b[1A\r\x1b[0J")
 	if strings.TrimSpace(line) == "" {
 		return
 	}
-	fmt.Fprintf(e.out, "  %s %s\n\n", e.paint(">", "2"), line)
+	if e.color {
+		fmt.Fprintf(e.out, "  %s %s %s\n", "\x1b["+colorUserBg+"m", line, "\x1b[0m")
+	} else {
+		fmt.Fprintf(e.out, "  %s\n", line)
+	}
 }
 
 func (e *promptEditor) clearBox() {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
+	"github.com/noknov/kepler-agent/packages/infra/http1"
 )
 
 type keplerRemote struct {
@@ -24,9 +25,7 @@ func newKeplerRemote(baseURL, apiKey string, timeout time.Duration) keplerRemote
 	return keplerRemote{
 		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 		apiKey:  strings.TrimSpace(apiKey),
-		httpClient: &http.Client{
-			Timeout: timeout,
-		},
+		httpClient: http1.Client(timeout),
 	}
 }
 
@@ -41,6 +40,7 @@ func (c keplerRemote) Generate(ctx context.Context, request model.Request, sink 
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/x-ndjson")
+	httpReq.Header.Set("ngrok-skip-browser-warning", "true")
 	if c.apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}

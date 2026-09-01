@@ -17,6 +17,6 @@ const keplerMark = `
 
 func writeKeplerMark(w io.Writer, paint func(string, string) string) {
 	for _, line := range strings.Split(strings.Trim(keplerMark, "\n"), "\n") {
-		fmt.Fprintln(w, paint(line, "38;5;216"))
+		fmt.Fprintln(w, "  "+paint(line, colorClaude))
 	}
 }

@@ -183,9 +183,12 @@ func Run() error {
 	if err != nil {
 		return err
 	}
-	renderer := &eventRenderer{mode: config.Output, stdout: os.Stdout, stderr: os.Stderr, color: config.Output == "text" && isTerminal(os.Stdout), started: make(map[string]time.Time)}
-
 	interactive := len(flag.Args()) == 0 && isTerminal(os.Stdin)
+	out := os.Stdout
+	if interactive && (config.Output == "text" || config.Output == "") {
+		out = os.Stderr
+	}
+	renderer := &eventRenderer{mode: config.Output, stdout: out, stderr: os.Stderr, color: config.Output == "text" && isTerminal(os.Stderr), started: make(map[string]time.Time)}
 	questions := make(chan approvalQuestion)
 	approver := &local.ScopedApprover{Project: workspace.Root, Path: filepath.Join(values.stateDir, "approvals.json")}
 	if interactive {
@@ -217,7 +220,7 @@ func Run() error {
 		Config: agentruntime.Config{
 			Model: config.Model, ReasoningEffort: config.ReasoningEffort, MaxOutputTokens: config.MaxOutputTokens,
 			MaxSteps: 12,
-			Context: agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
+			Context:  agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
 		},
 		Deps: agentruntime.Dependencies{
 			Model: client, Policy: local.WorkspacePolicy{},
@@ -311,24 +314,20 @@ func turnRequest(session, workspace, input string, fragments []prompt.Fragment, 
 	return agentruntime.TurnRequest{SessionID: session, Input: model.TextMessage(model.RoleUser, input), Prompt: fragments, Scope: tool.Scope{SessionID: session, Workspace: workspace}, Steering: steering}
 }
 
-func promptFooter(workspace, model string) string {
-	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(workspace, home) {
-		workspace = "~" + strings.TrimPrefix(workspace, home)
-	}
-	return workspace + " · " + model + "    /help"
-}
-
 func interactiveLoop(ctx context.Context, runner *agentruntime.Runtime, session, workspace string, fragments []prompt.Fragment, _ string, questions <-chan approvalQuestion, config local.Config, renderer *eventRenderer, creds credentials) error {
 	editor := newPromptEditor(os.Stdin, os.Stderr, renderer.color)
 	renderer.welcome(session, workspace, config, creds)
-	footer := promptFooter(workspace, config.Model)
+	cwd := workspace
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(cwd, home) {
+		cwd = "~" + strings.TrimPrefix(cwd, home)
+	}
 	var queued []string
 	for {
 		var input string
 		if len(queued) > 0 {
 			input, queued = queued[0], queued[1:]
 		} else {
-			line, err := editor.Read(ctx, footer)
+			line, err := editor.Read(ctx, cwd, config.Model)
 			if err != nil {
 				if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
 					return nil
@@ -352,22 +351,26 @@ func interactiveLoop(ctx context.Context, runner *agentruntime.Runtime, session,
 			result, err := runner.RunTurn(ctx, turnRequest(session, workspace, value, fragments, steering))
 			done <- turnDone{result, err}
 		}(input)
+		renderer.startWait()
 		for {
 			select {
 			case <-ctx.Done():
+				renderer.stopWait()
 				return nil
 			case question := <-questions:
-				fmt.Fprintf(os.Stderr, "\n  %s %s\n  %s\n  %s ", renderer.paint("!", "33"), question.request.Call.Name, renderer.paint(question.decision.Reason, "2"), renderer.paint("[o]nce [s]ession [p]roject [n]o", "2"))
+				renderer.stopWait()
+				fmt.Fprintf(os.Stderr, "\n  %s %s\n  %s\n  %s ", renderer.paint("!", colorError), question.request.Call.Name, renderer.paint(question.decision.Reason, colorDim), renderer.paint("[o]nce [s]ession [p]roject [n]o", colorDim))
 				answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 				question.answer <- parseApproval(answer)
 			case outcome := <-done:
+				renderer.stopWait()
 				for _, pending := range steering.Drain() {
 					if text := strings.TrimSpace(pending.Text()); text != "" {
 						queued = append(queued, text)
 					}
 				}
 				if outcome.err != nil {
-					fmt.Fprintln(os.Stderr, renderer.paint("  "+outcome.err.Error(), "31"))
+					fmt.Fprintln(os.Stderr, renderer.paint("  "+outcome.err.Error(), colorError))
 				}
 				fmt.Fprintln(os.Stderr)
 				goto nextTurn
@@ -415,6 +418,7 @@ type eventRenderer struct {
 	color          bool
 	started        map[string]time.Time
 	streamed       bool
+	waiting        *waitSpinner
 }
 
 func (r *eventRenderer) Publish(_ context.Context, event transcript.Event) {
@@ -426,27 +430,51 @@ func (r *eventRenderer) Publish(_ context.Context, event transcript.Event) {
 		return
 	}
 	if event.Type == transcript.ModelStreamed && event.Model != nil && event.Model.Type == model.StreamTextDelta {
+		r.stopWaitLocked()
 		if !r.streamed {
-			fmt.Fprint(r.stdout, "\n")
+			fmt.Fprint(r.stdout, "\n  "+r.paint("⎿", colorDim)+" ")
 			r.streamed = true
 		}
-		fmt.Fprint(r.stdout, event.Model.Text)
+		fmt.Fprint(r.stdout, strings.ReplaceAll(event.Model.Text, "\n", "\n  "))
 	}
 	if event.Type == transcript.ToolCallStarted && event.ToolCall != nil {
+		r.stopWaitLocked()
+		if r.streamed {
+			fmt.Fprint(r.stderr, "\n")
+			r.streamed = false
+		}
 		r.started[event.ToolCall.ID] = time.Now()
-		snippet := toolArgsSnippet(event.ToolCall.Arguments)
-		fmt.Fprintf(r.stderr, "  %s %s %s\n", r.paint("⏺", "38;5;216"), r.paint(event.ToolCall.Name, "1"), r.paint(snippet, "2"))
+		summary := toolArgSummary(event.ToolCall.Arguments)
+		line := r.paint("⏺", colorClaude) + " " + r.paint(toolDisplayName(event.ToolCall.Name), colorBold)
+		if summary != "" {
+			line += r.paint("("+summary+")", colorDim)
+		}
+		fmt.Fprintf(r.stderr, "  %s\n", line)
 	}
 	if (event.Type == transcript.ToolCallCompleted || event.Type == transcript.ToolCallFailed) && event.ToolCall != nil {
 		elapsed := time.Since(r.started[event.ToolCall.ID]).Round(10 * time.Millisecond)
-		marker := "⎿"
+		detail := toolResultSummary(event.ToolResult)
 		if event.Type == transcript.ToolCallFailed {
-			marker = "✗"
+			detail = "failed · " + elapsed.String()
+			if event.ToolResult != nil {
+				if msg := clipWidth(firstLine(event.ToolResult.Text()), 60); msg != "" {
+					detail = msg + " · " + elapsed.String()
+				}
+			}
+			fmt.Fprintf(r.stderr, "    %s %s\n", r.paint("✗", colorError), r.paint(detail, colorError))
+		} else {
+			if detail == "" {
+				detail = elapsed.String()
+			} else {
+				detail = detail + " · " + elapsed.String()
+			}
+			fmt.Fprintf(r.stderr, "    %s %s\n", r.paint("⎿", colorDim), r.paint(detail, colorDim))
 		}
-		fmt.Fprintf(r.stderr, "    %s %s\n", r.paint(marker, "2"), r.paint(elapsed.String(), "2"))
 		delete(r.started, event.ToolCall.ID)
+		r.startWaitLocked()
 	}
-	if event.Type == transcript.TurnCompleted {
+	if event.Type == transcript.TurnCompleted || event.Type == transcript.TurnFailed || event.Type == transcript.TurnCanceled {
+		r.stopWaitLocked()
 		r.streamed = false
 	}
 }
@@ -457,10 +485,7 @@ func (r *eventRenderer) finish(result agentruntime.TurnResult) {
 }
 
 func (r *eventRenderer) paint(value, code string) string {
-	if !r.color {
-		return value
-	}
-	return "\x1b[" + code + "m" + value + "\x1b[0m"
+	return paintANSI(r.color, value, code)
 }
 
 func (r *eventRenderer) welcome(_ string, workspace string, config local.Config, creds credentials) {
@@ -473,7 +498,7 @@ func (r *eventRenderer) welcome(_ string, workspace string, config local.Config,
 	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(workspace, home) {
 		workspace = "~" + strings.TrimPrefix(workspace, home)
 	}
-	fmt.Fprintf(r.stderr, "\n  %s\n  %s\n\n", r.paint(workspace, "2"), r.paint(config.Model+" · "+user, "2"))
+	fmt.Fprintf(r.stderr, "\n  %s\n  %s\n\n", r.paint(workspace, colorDim), r.paint(config.Model+" · "+user, colorDim))
 }
 
 func (r *eventRenderer) command(input, session, workspace string, config local.Config, creds credentials) bool {
@@ -492,13 +517,94 @@ func (r *eventRenderer) command(input, session, workspace string, config local.C
 	return true
 }
 
-func toolArgsSnippet(raw json.RawMessage) string {
-	if len(raw) == 0 {
+func toolDisplayName(name string) string {
+	switch name {
+	case "agent-explore":
+		return "Explore"
+	case "read_file":
+		return "Read"
+	case "write_file":
+		return "Write"
+	case "edit_file":
+		return "Edit"
+	case "list_files":
+		return "List"
+	case "skill_load":
+		return "Skill"
+	case "bash", "exec":
+		return "Bash"
+	case "grep":
+		return "Grep"
+	case "glob":
+		return "Glob"
+	}
+	return name
+}
+
+func toolArgSummary(raw json.RawMessage) string {
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return clipWidth(strings.Join(strings.Fields(string(raw)), " "), 56)
+	}
+	if tasks, ok := obj["tasks"].([]any); ok && len(tasks) > 0 {
+		if first, ok := tasks[0].(map[string]any); ok {
+			if task, _ := first["task"].(string); strings.TrimSpace(task) != "" {
+				n := len(tasks)
+				if n > 1 {
+					return clipWidth(task, 44) + fmt.Sprintf(" · %d tasks", n)
+				}
+				return clipWidth(task, 56)
+			}
+		}
+	}
+	for _, key := range []string{"task", "command", "path", "file_path", "query", "glob", "pattern", "url", "name", "boundaries"} {
+		if value, _ := obj[key].(string); strings.TrimSpace(value) != "" {
+			return clipWidth(value, 56)
+		}
+	}
+	if paths, ok := obj["paths"].([]any); ok && len(paths) > 0 {
+		if path, _ := paths[0].(string); path != "" {
+			if len(paths) > 1 {
+				return clipWidth(path, 40) + fmt.Sprintf(" +%d", len(paths)-1)
+			}
+			return clipWidth(path, 56)
+		}
+	}
+	return ""
+}
+
+func toolResultSummary(result *tool.Result) string {
+	if result == nil {
 		return ""
 	}
-	text := strings.Join(strings.Fields(string(raw)), " ")
-	if len(text) > 80 {
-		return text[:77] + "..."
+	return clipWidth(firstLine(result.Text()), 56)
+}
+
+func firstLine(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
 	}
-	return text
+	if i := strings.IndexAny(value, "\n\r"); i >= 0 {
+		return strings.TrimSpace(value[:i])
+	}
+	return value
+}
+
+func clipWidth(s string, limit int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if displayWidth(s) <= limit {
+		return s
+	}
+	var b strings.Builder
+	w := 0
+	for _, r := range s {
+		rw := runeWidth(r)
+		if w+rw > limit-1 {
+			break
+		}
+		b.WriteRune(r)
+		w += rw
+	}
+	return b.String() + "…"
 }

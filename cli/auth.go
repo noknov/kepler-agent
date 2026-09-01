@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/cloud"
+	"github.com/noknov/kepler-agent/packages/infra/http1"
 	"github.com/noknov/kepler-agent/packages/profiles/local"
 )
 
@@ -136,7 +137,7 @@ func runLogin(args []string) error {
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(start)
+	resp, err := http1.Standard(30 * time.Second).Do(start)
 	if err != nil {
 		return err
 	}
@@ -192,7 +193,7 @@ func pollLogin(ctx context.Context, apiURL, device string) (credentials, bool, e
 	if err != nil {
 		return credentials{}, false, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http1.Standard(30 * time.Second).Do(req)
 	if err != nil {
 		return credentials{}, false, err
 	}
