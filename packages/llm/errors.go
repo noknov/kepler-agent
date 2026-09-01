@@ -110,6 +110,10 @@ func NewProviderError(provider string, statusCode int, body string) ProviderErro
 
 func compactBody(data []byte) string {
 	body := strings.TrimSpace(string(data))
+	lower := strings.ToLower(body)
+	if strings.Contains(lower, "<!doctype html") || strings.HasPrefix(lower, "<html") {
+		return "html error page (upstream is not the JSON API)"
+	}
 	if len(body) > 2000 {
 		return body[:2000] + "...[truncated]"
 	}

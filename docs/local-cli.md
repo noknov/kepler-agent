@@ -1,20 +1,30 @@
 # Local CLI
 
-The local CLI and hosted Slack agent execute the same canonical harness:
+The local CLI, GUI app server, and hosted Slack agent execute the same canonical harness:
 
-- **Local CLI:** executes the complete loop on the user machine, writes only inside the selected workspace, persists JSONL sessions locally, and asks for network/external approvals.
-- **Hosted Agent:** embeds the same loop on server workspaces with authoritative server policy. Slack is an ingress and presentation adapter, not a separate agent.
+- **Local CLI:** tools and sandbox run on the user machine; model calls go to Kepler through the gateway after Slack OAuth. Sessions persist as local JSONL.
+- **Hosted Agent:** the same loop on server workspaces. Slack is ingress and presentation, not a separate agent.
+
+Eval remains a later phase. The CLI is the surface that can later be driven like Claude Code; Slack cannot be evaled directly.
 
 ## Build and run
 
+Binaries and Docker images are built from `kepler-agent-deploy`, with this repo
+as `SOURCE_DIR` only:
+
 ```sh
-go build -o bin/kepler-agent ./cli/cmd/kepler-agent
-cp cli/config.example.toml ~/.config/kepler-agent/config.toml
-export OPENAI_API_KEY=...
-bin/kepler-agent --cwd /path/to/project
+cd ../kepler-agent-deploy
+SOURCE_DIR=../kepler-agent scripts/local-stack.sh start
+SOURCE_DIR=../kepler-agent scripts/build-cli.sh
+./bin/kepler-agent login
+./bin/kepler-agent --cwd /path/to/project
 ```
 
-Interactive mode starts when stdin is a terminal and no prompt argument is supplied. Otherwise the same binary runs headlessly:
+Login talks only to the public gateway compiled into the binary from
+`CONNECTIONS_PUBLIC_BASE_URL` (override with `--api-url` or `KEPLER_API_URL`).
+Slack OAuth callback is `{CONNECTIONS_PUBLIC_BASE_URL}/cli/oauth/callback`.
+
+Interactive mode starts when stdin is a terminal and no prompt argument is supplied:
 
 ```sh
 bin/kepler-agent --cwd . "diagnose the failing tests"
@@ -22,54 +32,22 @@ printf "review this repository\n" | bin/kepler-agent --cwd . --output jsonl
 bin/kepler-agent --resume
 ```
 
-## Model profiles
+Optional workspace TOML (`kepler-agent config init`) only covers routing, sandbox, MCP, and prompt overlays. It does not contain provider URLs or API keys. Models are whatever the Kepler worker is configured to use.
 
-The CLI owns its provider configuration; it does not inherit the hosted Slack
-agent's model or credentials. Create a user-only configuration file, then
-select a named profile for a session:
-
-```sh
-kepler-agent config init
-export DEEPSEEK_API_KEY=...
-kepler-agent --profile deepseek --cwd /path/to/project
-```
-
-`provider`, `protocol`, `model`, `base_url`, and `api_key_env` can be set in
-the root configuration or any `[profiles.<name>]` block. API key values are
-never written to TOML: `api_key_env` only names the environment variable to
-read. CLI flags still override the selected profile for one-off calls.
-
-Interactive sessions include a compact terminal status header and live tool
-progress. Use `/help`, `/status`, `/clear`, and `/exit` at the prompt.
-
-Inputs typed during an active turn are either injected as steering at the next model boundary or queued as the next turn, controlled by `input_routing`. This setting belongs to the session surface; it is not hard-coded by Slack versus CLI.
+Interactive sessions show a compact header, streamed text, and live tool lines. Use `/help`, `/status`, `/clear`, and `/exit`. Inputs during a turn are steered or queued via `input_routing`.
 
 ## Security model
 
-The local profile resolves file operations beneath the canonical workspace, blocks common credential paths, and uses Seatbelt on macOS or bubblewrap on Linux for argv execution. Subprocesses receive a minimal environment and do not inherit model API keys. Network is denied unless the structured tool call requests it and the user grants approval. Grants can apply once, to the current process session, or to the exact argv request for this project; persistent grants live in the agent state directory, not the repository.
+The local profile resolves file operations beneath the workspace, blocks common credential paths, and uses Seatbelt on macOS or bubblewrap on Linux for execution. Subprocesses receive a minimal environment and do not inherit the Kepler session token. Network is denied unless the tool call requests it and the user grants approval.
 
-If the OS sandbox is unavailable, command execution fails closed. `unsafe_allow_no_sandbox` / `--unsafe-allow-no-sandbox` is an explicit development escape hatch and should not be used for untrusted repositories or prompts.
+`exec` accepts a shell `command` string (`/bin/bash -lc`) or argv. `unsafe_allow_no_sandbox` remains an explicit escape hatch.
 
-The sandbox canonicalizes additional read roots and rejects broad `/` or home
-directory grants. Linux execution also isolates PID, IPC, UTS, cgroup, and
-network namespaces and drops capabilities. Subprocess environments cannot
-override `HOME`, `PATH`, `TMPDIR`, or inject loader variables. Common repository
-credential files—including `.git/config` when it contains an embedded remote
-credential—are denied to file tools and sandboxed commands.
-
-The hosted profile has no end-user host approvals. Its policy rejects mutation
-effects unless the exact tool is in the operator allowlist. Hosted exposes
-purpose-built Git, Kubernetes, GCP, code, and integration tools; it does not
-register a generic shell or command-execution tool.
+The hosted profile has no end-user host approvals. Its policy rejects mutation effects unless the tool is on the operator allowlist.
 
 ## Shared contracts
 
-`packages/agent` contains provider-neutral messages and events, structured tools/effects, deterministic prompt layers, an append-only transcript, bounded context projection and compaction, retry/termination logic, session-level deferred tools, and product profiles. OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages adapters convert wire events into the same canonical model. The local and hosted profiles construct those adapters through one factory, so CLI harness evaluation covers production provider behavior.
+`packages/agent` is the shared loop. Slack, CLI, and GUI construct it with different tools and policy. Model traffic from CLI/GUI is authenticated at the gateway and forwarded to the worker, which injects operator LLM credentials. Users never point the CLI at OpenAI/Anthropic directly.
 
-Prompt order is fixed: core, product, environment, project, user overlay, skill, turn. Repository `AGENTS.md` is loaded as project guidance. Private overlays are read only from explicit `prompt_files`; do not commit internal repository instructions to this public project.
-
-File skills are discovered from `.agents/skills`, `.codex/skills`, and configured `skill_roots`; only name and description enter the prompt, while `skill_load` reads the full `SKILL.md` on demand. Configured Streamable HTTP MCP servers are initialized at startup, their tools are namespaced and deferred, and calls flow through the same effect policy and approval system. A configured MCP endpoint is an explicit trust decision for tool discovery; individual network/external-write calls still require the declared policy decision.
-
-## Evaluation
-
-The independent [evaluation module](../evals/README.md) launches this CLI and other agents as subprocesses. It deliberately does not import runtime code. Use it to compare Codex, Claude Code, Pi, OpenCode, and this harness against one controlled model gateway.
+Register the Slack redirect URL `{CONNECTIONS_PUBLIC_BASE_URL}/cli/oauth/callback`
+(the ngrok public origin). CLI login polls that same origin; it never binds a
+local OAuth port.

@@ -26,17 +26,15 @@ exponential backoff, and malformed or exhausted events become dead letters.
 
 ## Packaging Contract
 
-This repository does not prescribe a production topology or include Compose,
-Kubernetes, database, or Redis manifests. Run the binaries directly or package
-them with the orchestrator of your choice. All modes use environment-based
-configuration and the health/shutdown endpoints above.
-
-The generic Dockerfile exposes independent targets:
+Dockerfiles, CLI binaries, and local stack orchestration live in
+`kepler-agent-deploy` (`docker/Dockerfile`, `scripts/build-cli.sh`,
+`scripts/deploy-local-image.sh`). This repository is the Go source context
+only; do not add packaging roots here.
 
 ```bash
-docker build --target gateway -t kepler-agent-gateway .
-docker build --target worker -t kepler-agent-worker .
-docker build --target observability -t kepler-agent-observability .
+cd ../kepler-agent-deploy
+SOURCE_DIR=../kepler-agent scripts/deploy-local-image.sh all
+SOURCE_DIR=../kepler-agent scripts/build-cli.sh
 ```
 
 Gateway and observability use a minimal CA-only runtime. Worker adds Git,

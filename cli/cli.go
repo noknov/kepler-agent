@@ -28,14 +28,14 @@ import (
 	"github.com/noknov/kepler-agent/packages/mcp"
 	"github.com/noknov/kepler-agent/packages/profiles/local"
 	"github.com/noknov/kepler-agent/packages/providers"
-	"github.com/noknov/kepler-agent/packages/tools/local"
-	"github.com/noknov/kepler-agent/packages/tools/mcp"
+	localtools "github.com/noknov/kepler-agent/packages/tools/local"
+	mcptools "github.com/noknov/kepler-agent/packages/tools/mcp"
 	"github.com/noknov/kepler-agent/packages/tools/skills"
 )
 
 type options struct {
-	configPath, cwd, stateDir, provider, protocol, model, baseURL, apiKeyEnv, routing, output, session, approval, profile string
-	resume, unsafe                                                                                                        bool
+	configPath, cwd, stateDir, routing, output, session, approval, apiURL string
+	resume, unsafe                                                        bool
 }
 
 type turnDone struct {
@@ -50,57 +50,46 @@ type approvalQuestion struct {
 
 func Run() error {
 	if len(os.Args) == 2 && (os.Args[1] == "--version" || os.Args[1] == "-version") {
-		fmt.Fprintln(os.Stdout, "kepler-agent (local CLI harness)")
+		if DefaultAPIURL != "" {
+			fmt.Fprintf(os.Stdout, "kepler-agent (local CLI harness)\n%s\n", DefaultAPIURL)
+		} else {
+			fmt.Fprintln(os.Stdout, "kepler-agent (local CLI harness)")
+		}
 		return nil
 	}
-	if len(os.Args) > 1 && os.Args[1] == "connect" {
-		return runConnect(os.Args[2:])
-	}
-	if len(os.Args) > 1 && os.Args[1] == "config" {
-		return runConfig(os.Args[2:])
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "connect":
+			return runConnect(os.Args[2:])
+		case "config":
+			return runConfig(os.Args[2:])
+		case "login":
+			return runLogin(os.Args[2:])
+		case "logout":
+			return runLogout()
+		case "whoami":
+			return runWhoami()
+		}
 	}
 	var values options
 	flag.StringVar(&values.configPath, "config", "", "configuration TOML path")
-	flag.StringVar(&values.profile, "profile", "", "named model profile from config")
 	flag.StringVar(&values.cwd, "cwd", ".", "workspace root")
 	flag.StringVar(&values.stateDir, "state-dir", "", "session and approval state directory")
-	flag.StringVar(&values.provider, "provider", "", "openai or anthropic")
-	flag.StringVar(&values.protocol, "protocol", "", "openai, responses, or anthropic")
-	flag.StringVar(&values.model, "model", "", "model name")
-	flag.StringVar(&values.baseURL, "base-url", "", "provider API base URL")
-	flag.StringVar(&values.apiKeyEnv, "api-key-env", "", "environment variable containing the API key")
 	flag.StringVar(&values.routing, "input-routing", "", "steer or queue")
 	flag.StringVar(&values.output, "output", "", "text or jsonl")
 	flag.StringVar(&values.session, "session", "", "session ID to create or resume")
 	flag.BoolVar(&values.resume, "resume", false, "resume the most recently modified session")
 	flag.StringVar(&values.approval, "approval", "deny", "headless approval: deny, once, session, or project")
 	flag.BoolVar(&values.unsafe, "unsafe-allow-no-sandbox", false, "run commands without an OS sandbox if unavailable")
+	flag.StringVar(&values.apiURL, "api-url", "", "Kepler gateway URL (overrides credentials)")
 	flag.Parse()
 
 	config, err := local.LoadConfig(values.configPath)
 	if err != nil {
 		return err
 	}
-	if config, err = config.WithProfile(values.profile); err != nil {
-		return err
-	}
 	visited := make(map[string]bool)
 	flag.Visit(func(item *flag.Flag) { visited[item.Name] = true })
-	if visited["provider"] {
-		config.Provider = values.provider
-	}
-	if visited["protocol"] {
-		config.Protocol = values.protocol
-	}
-	if visited["model"] {
-		config.Model = values.model
-	}
-	if visited["base-url"] {
-		config.BaseURL = values.baseURL
-	}
-	if visited["api-key-env"] {
-		config.APIKeyEnv = values.apiKeyEnv
-	}
 	if visited["input-routing"] {
 		config.InputRouting = values.routing
 	}
@@ -113,9 +102,16 @@ func Run() error {
 	if err := config.Validate(); err != nil {
 		return err
 	}
-	if config.Model == "" {
-		return errors.New("model is required (set model in config.toml or pass --model)")
+
+	creds, err := resolveCredentials(values.apiURL)
+	if err != nil {
+		return err
 	}
+	bootstrap, err := fetchBootstrap(context.Background(), creds)
+	if err != nil {
+		return err
+	}
+	config = applyBootstrap(config, bootstrap)
 
 	workspace, err := local.NewWorkspace(values.cwd)
 	if err != nil {
@@ -146,7 +142,10 @@ func Run() error {
 		values.session = newID("ses")
 	}
 
-	client, err := modelClient(config)
+	client, err := providers.New(providers.Config{
+		Provider: "kepler", Protocol: "kepler", BaseURL: creds.APIURL,
+		APIKey: creds.Token, Timeout: config.Timeout,
+	})
 	if err != nil {
 		return err
 	}
@@ -217,7 +216,7 @@ func Run() error {
 	exploreRunner := delegation.Runner{
 		Config: agentruntime.Config{
 			Model: config.Model, ReasoningEffort: config.ReasoningEffort, MaxOutputTokens: config.MaxOutputTokens,
-			Temperature: config.Temperature, MaxSteps: 12,
+			MaxSteps: 12,
 			Context: agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
 		},
 		Deps: agentruntime.Dependencies{
@@ -234,7 +233,7 @@ func Run() error {
 		return err
 	}
 
-	runner, err := agentruntime.New(agentruntime.Config{Model: config.Model, ReasoningEffort: config.ReasoningEffort, MaxOutputTokens: config.MaxOutputTokens, Temperature: config.Temperature, MaxSteps: config.MaxSteps, MaxModelRetries: 2, MaxEmptyResponseRetries: 3, Context: agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer}}, agentruntime.Dependencies{
+	runner, err := agentruntime.New(agentruntime.Config{Model: config.Model, ReasoningEffort: config.ReasoningEffort, MaxOutputTokens: config.MaxOutputTokens, MaxSteps: config.MaxSteps, MaxModelRetries: 2, MaxEmptyResponseRetries: 3, Context: agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer}}, agentruntime.Dependencies{
 		Model: client, Tools: catalog, Policy: local.WorkspacePolicy{}, Approver: approver, Transcript: store, Events: renderer,
 		Compactor: agentruntime.ModelCompactor{Client: client, Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer}, Artifacts: local.ArtifactStore{Root: filepath.Join(values.stateDir, "sessions")},
 		Environment: environment.Config{WorkspaceRoots: []string{workspace.Root}},
@@ -254,7 +253,7 @@ func Run() error {
 		_ = shutdownTelemetry(shutdownCtx)
 	}()
 	if interactive {
-		return interactiveLoop(ctx, runner, values.session, workspace.Root, fragments, config.InputRouting, questions, config, renderer)
+		return interactiveLoop(ctx, runner, values.session, workspace.Root, fragments, config.InputRouting, questions, config, renderer, creds)
 	}
 	input, err := headlessInput(flag.Args(), os.Stdin)
 	if err != nil {
@@ -268,18 +267,10 @@ func Run() error {
 	return err
 }
 
-func modelClient(config local.Config) (model.Client, error) {
-	key := os.Getenv(config.APIKeyEnv)
-	if strings.TrimSpace(key) == "" {
-		return nil, fmt.Errorf("model API key environment variable %s is empty", config.APIKeyEnv)
-	}
-	return providers.New(providers.Config{Provider: config.Provider, Protocol: config.Protocol, BaseURL: config.BaseURL, APIKey: key, AnthropicFlavor: config.AnthropicFlavor, Timeout: config.Timeout})
-}
-
 func prompts(config local.Config, root, skillPrompt string) ([]prompt.Fragment, error) {
 	fragments := []prompt.Fragment{
-		{ID: "cli-core", Version: "1", Layer: prompt.LayerCore, Content: "You are a coding agent. Inspect evidence before making claims. Use tools to complete the user request, verify material changes, preserve unrelated work, and report limitations precisely."},
-		{ID: "local-product", Version: "3", Layer: prompt.LayerProduct, Content: "You are running locally. Filesystem writes must stay within the workspace. Exec network access requires explicit approval. Never seek or expose credentials."},
+		{ID: "cli-core", Version: "2", Layer: prompt.LayerCore, Content: "You are a coding agent in a local workspace. Inspect evidence before making claims. Emit independent reads in one step. Prefer exec command strings for tests and builds. Verify material changes, preserve unrelated work, and report limitations precisely."},
+		{ID: "local-product", Version: "4", Layer: prompt.LayerProduct, Content: "You are running locally with Kepler-hosted models. Filesystem writes must stay within the workspace. Exec network access requires explicit approval. Never seek or expose credentials. Do not ask the user for provider API keys."},
 		{ID: "local-environment", Layer: prompt.LayerEnvironment, Content: "Workspace: " + root},
 	}
 	project, err := local.ProjectInstructions(root)
@@ -320,30 +311,31 @@ func turnRequest(session, workspace, input string, fragments []prompt.Fragment, 
 	return agentruntime.TurnRequest{SessionID: session, Input: model.TextMessage(model.RoleUser, input), Prompt: fragments, Scope: tool.Scope{SessionID: session, Workspace: workspace}, Steering: steering}
 }
 
-func interactiveLoop(ctx context.Context, runner *agentruntime.Runtime, session, workspace string, fragments []prompt.Fragment, routing string, questions <-chan approvalQuestion, config local.Config, renderer *eventRenderer) error {
-	lines := make(chan string)
-	scanErrors := make(chan error, 1)
-	go scanLines(os.Stdin, lines, scanErrors)
-	renderer.welcome(session, workspace, config, routing)
+func promptFooter(workspace, model string) string {
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(workspace, home) {
+		workspace = "~" + strings.TrimPrefix(workspace, home)
+	}
+	return workspace + " · " + model + "    /help"
+}
+
+func interactiveLoop(ctx context.Context, runner *agentruntime.Runtime, session, workspace string, fragments []prompt.Fragment, _ string, questions <-chan approvalQuestion, config local.Config, renderer *eventRenderer, creds credentials) error {
+	editor := newPromptEditor(os.Stdin, os.Stderr, renderer.color)
+	renderer.welcome(session, workspace, config, creds)
+	footer := promptFooter(workspace, config.Model)
 	var queued []string
-	inputClosed := false
 	for {
 		var input string
 		if len(queued) > 0 {
 			input, queued = queued[0], queued[1:]
 		} else {
-			fmt.Fprint(os.Stderr, "> ")
-			select {
-			case <-ctx.Done():
-				return nil
-			case err := <-scanErrors:
-				return err
-			case value, ok := <-lines:
-				if !ok {
+			line, err := editor.Read(ctx, footer)
+			if err != nil {
+				if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
 					return nil
 				}
-				input = value
+				return err
 			}
+			input = line
 		}
 		if strings.TrimSpace(input) == "" {
 			continue
@@ -351,7 +343,7 @@ func interactiveLoop(ctx context.Context, runner *agentruntime.Runtime, session,
 		if input == "/exit" || input == "/quit" {
 			return nil
 		}
-		if handled := renderer.command(input, session, workspace, config); handled {
+		if handled := renderer.command(input, session, workspace, config, creds); handled {
 			continue
 		}
 		steering := &agentruntime.InputBuffer{}
@@ -365,64 +357,23 @@ func interactiveLoop(ctx context.Context, runner *agentruntime.Runtime, session,
 			case <-ctx.Done():
 				return nil
 			case question := <-questions:
-				fmt.Fprintf(os.Stderr, "\nApproval required for %s: %s\nArguments: %s\n[o]nce, [s]ession, [p]roject, [n]o? ", question.request.Call.Name, question.decision.Reason, question.request.Call.Arguments)
-				if inputClosed {
-					question.answer <- local.ApprovalDeny
-					continue
-				}
-				select {
-				case answer, ok := <-lines:
-					if !ok {
-						question.answer <- local.ApprovalDeny
-					} else {
-						question.answer <- parseApproval(answer)
-					}
-				case <-ctx.Done():
-					question.answer <- local.ApprovalDeny
-					return nil
-				}
-			case value, ok := <-lines:
-				if !ok {
-					lines = nil
-					inputClosed = true
-					continue
-				}
-				if routing == "steer" {
-					if steering.Push(model.TextMessage(model.RoleUser, value)) {
-						fmt.Fprintln(os.Stderr, "\n[steering accepted]")
-					} else {
-						queued = append(queued, value)
-						fmt.Fprintln(os.Stderr, "\n[turn already finishing; input queued]")
-					}
-				} else {
-					queued = append(queued, value)
-					fmt.Fprintln(os.Stderr, "\n[input queued]")
-				}
+				fmt.Fprintf(os.Stderr, "\n  %s %s\n  %s\n  %s ", renderer.paint("!", "33"), question.request.Call.Name, renderer.paint(question.decision.Reason, "2"), renderer.paint("[o]nce [s]ession [p]roject [n]o", "2"))
+				answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+				question.answer <- parseApproval(answer)
 			case outcome := <-done:
 				for _, pending := range steering.Drain() {
 					if text := strings.TrimSpace(pending.Text()); text != "" {
 						queued = append(queued, text)
 					}
 				}
-				fmt.Fprintln(os.Stderr)
 				if outcome.err != nil {
-					fmt.Fprintln(os.Stderr, "turn:", outcome.err)
+					fmt.Fprintln(os.Stderr, renderer.paint("  "+outcome.err.Error(), "31"))
 				}
+				fmt.Fprintln(os.Stderr)
 				goto nextTurn
 			}
 		}
 	nextTurn:
-	}
-}
-
-func scanLines(reader io.Reader, lines chan<- string, failures chan<- error) {
-	defer close(lines)
-	scanner := bufio.NewScanner(reader)
-	for scanner.Scan() {
-		lines <- scanner.Text()
-	}
-	if err := scanner.Err(); err != nil {
-		failures <- err
 	}
 }
 
@@ -463,6 +414,7 @@ type eventRenderer struct {
 	mu             sync.Mutex
 	color          bool
 	started        map[string]time.Time
+	streamed       bool
 }
 
 func (r *eventRenderer) Publish(_ context.Context, event transcript.Event) {
@@ -474,20 +426,28 @@ func (r *eventRenderer) Publish(_ context.Context, event transcript.Event) {
 		return
 	}
 	if event.Type == transcript.ModelStreamed && event.Model != nil && event.Model.Type == model.StreamTextDelta {
+		if !r.streamed {
+			fmt.Fprint(r.stdout, "\n")
+			r.streamed = true
+		}
 		fmt.Fprint(r.stdout, event.Model.Text)
 	}
 	if event.Type == transcript.ToolCallStarted && event.ToolCall != nil {
 		r.started[event.ToolCall.ID] = time.Now()
-		fmt.Fprintf(r.stderr, "\n%s %s\n", r.paint("●", "36"), r.paint(toolLabel(event.ToolCall.Name), "1;37"))
+		snippet := toolArgsSnippet(event.ToolCall.Arguments)
+		fmt.Fprintf(r.stderr, "  %s %s %s\n", r.paint("⏺", "38;5;216"), r.paint(event.ToolCall.Name, "1"), r.paint(snippet, "2"))
 	}
 	if (event.Type == transcript.ToolCallCompleted || event.Type == transcript.ToolCallFailed) && event.ToolCall != nil {
 		elapsed := time.Since(r.started[event.ToolCall.ID]).Round(10 * time.Millisecond)
-		marker, color := "✓", "32"
+		marker := "⎿"
 		if event.Type == transcript.ToolCallFailed {
-			marker, color = "×", "31"
+			marker = "✗"
 		}
-		fmt.Fprintf(r.stderr, "%s %s %s\n", r.paint(marker, color), toolLabel(event.ToolCall.Name), r.paint(elapsed.String(), "2"))
+		fmt.Fprintf(r.stderr, "    %s %s\n", r.paint(marker, "2"), r.paint(elapsed.String(), "2"))
 		delete(r.started, event.ToolCall.ID)
+	}
+	if event.Type == transcript.TurnCompleted {
+		r.streamed = false
 	}
 }
 func (r *eventRenderer) finish(result agentruntime.TurnResult) {
@@ -503,20 +463,25 @@ func (r *eventRenderer) paint(value, code string) string {
 	return "\x1b[" + code + "m" + value + "\x1b[0m"
 }
 
-func (r *eventRenderer) welcome(session, workspace string, config local.Config, routing string) {
-	if !r.color {
-		fmt.Fprintf(r.stderr, "kepler-agent · %s · %s\n", config.Model, workspace)
-		return
+func (r *eventRenderer) welcome(_ string, workspace string, config local.Config, creds credentials) {
+	user := creds.UserID
+	if user == "" {
+		user = "session"
 	}
-	fmt.Fprintf(r.stderr, "\n%s\n%s  %s  %s\n%s\n\n", r.paint("✦  kepler-agent", "1;36"), r.paint(config.Model, "1;37"), r.paint(config.Provider+"/"+config.Protocol, "2"), r.paint("session "+session[len(session)-8:], "2"), r.paint("workspace  "+workspace+"  ·  /help for commands  ·  /exit to quit", "2"))
+	fmt.Fprintln(r.stderr)
+	writeKeplerMark(r.stderr, r.paint)
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(workspace, home) {
+		workspace = "~" + strings.TrimPrefix(workspace, home)
+	}
+	fmt.Fprintf(r.stderr, "\n  %s\n  %s\n\n", r.paint(workspace, "2"), r.paint(config.Model+" · "+user, "2"))
 }
 
-func (r *eventRenderer) command(input, session, workspace string, config local.Config) bool {
+func (r *eventRenderer) command(input, session, workspace string, config local.Config, creds credentials) bool {
 	switch strings.TrimSpace(input) {
 	case "/help":
-		fmt.Fprint(r.stderr, "\n  /help    commands     /status  current configuration     /exit  quit\n  while working: type another message to steer (or queue) the agent\n\n")
+		fmt.Fprint(r.stderr, "\n  /help   commands\n  /status session\n  /exit   quit\n\n")
 	case "/status":
-		fmt.Fprintf(r.stderr, "\n  model     %s\n  provider  %s/%s\n  workspace %s\n  session   %s\n  key env   %s\n\n", config.Model, config.Provider, config.Protocol, workspace, session, config.APIKeyEnv)
+		fmt.Fprintf(r.stderr, "\n  model     %s\n  protocol  %s/%s\n  gateway   %s\n  slack     %s\n  workspace %s\n  session   %s\n\n", config.Model, config.Provider, config.Protocol, creds.APIURL, creds.UserID, workspace, session)
 	case "/clear":
 		if r.color {
 			fmt.Fprint(r.stderr, "\x1b[2J\x1b[H")
@@ -527,4 +492,13 @@ func (r *eventRenderer) command(input, session, workspace string, config local.C
 	return true
 }
 
-func toolLabel(name string) string { return strings.ReplaceAll(name, "_", " ") }
+func toolArgsSnippet(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	text := strings.Join(strings.Fields(string(raw)), " ")
+	if len(text) > 80 {
+		return text[:77] + "..."
+	}
+	return text
+}

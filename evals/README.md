@@ -24,7 +24,7 @@ This does not claim benchmark results. The checked-in smoke suite validates eval
 ## Quick start
 
 ```sh
-go build -o bin/kepler-agent ./cli/cmd/kepler-agent
+# CLI binary: kepler-agent-deploy/scripts/build-cli.sh (not this repo)
 python3 evals/run.py \
   --suite evals/suites/smoke.json \
   --candidates evals/candidates.example.json \

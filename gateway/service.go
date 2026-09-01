@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/noknov/kepler-agent/packages/cloud"
 	"github.com/noknov/kepler-agent/packages/config"
 	"github.com/noknov/kepler-agent/packages/connections"
 	"github.com/noknov/kepler-agent/packages/infra/httpguard"
@@ -120,12 +121,17 @@ func (s *Service) ListenAndServe(ctx context.Context) error {
 	if s.connections.Config.OAuthEnabled() && s.connections.Config.PublicBaseURL != "" {
 		mux.Handle("/oauth/", connections.NewHTTPHandler(s.connections))
 	}
+	if cli, err := cloud.NewGateway(s.cfg, s.stores.Redis); err != nil {
+		return err
+	} else {
+		cli.Register(mux)
+	}
 
 	server := &http.Server{
 		Addr:              s.cfg.HTTP.Addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
+		ReadTimeout:       10 * time.Minute,
 		IdleTimeout:       120 * time.Second,
 	}
 	shutdownDone := make(chan struct{})

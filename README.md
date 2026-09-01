@@ -52,54 +52,36 @@ for a detailed v1/v2 comparison and code-reading paths.
 | Delegation | `agent-explore`: bounded, read-only child turns with separate transcripts and parent audit links |
 | Evaluation | Independent subprocess-based harnesses for this agent and other supported candidates through one model gateway |
 
-This is not a deployment distribution. PostgreSQL, Redis, secrets, worker
-images, and orchestration are operator-owned.
+This is not a deployment distribution. Images, CLI binaries, PostgreSQL, Redis,
+secrets, and orchestration live in the sibling `kepler-agent-deploy` repository.
 
-## Start with the local CLI
+## Run locally
 
-Requirements: Go 1.25 and credentials for one supported provider.
-
-```bash
-go build -o bin/kepler-agent ./cli/cmd/kepler-agent
-bin/kepler-agent config init
-export OPENAI_API_KEY=...
-bin/kepler-agent --cwd /path/to/project
-```
-
-The same binary supports non-interactive work:
+Use the deploy repo to start gateway/worker and to build the CLI. Do not treat
+this repository as a packaging root.
 
 ```bash
-bin/kepler-agent --cwd . "diagnose the failing tests"
-printf "review this repository\n" | bin/kepler-agent --cwd . --output jsonl
-bin/kepler-agent --resume
+cd ../kepler-agent-deploy
+scripts/local-dependencies.sh up -d
+scripts/postgres-migrations.sh up
+SOURCE_DIR=../kepler-agent scripts/local-stack.sh start
+SOURCE_DIR=../kepler-agent scripts/build-cli.sh
+./bin/kepler-agent login
+./bin/kepler-agent --cwd /path/to/project
 ```
 
-The CLI's provider configuration and credentials are local; they are not shared
-with a hosted deployment. Use `--profile <name>` to select a named model
-profile. See [local CLI usage and security](docs/local-cli.md) and
-[the example configuration](cli/config.example.toml).
+See [local CLI usage](docs/local-cli.md) and `kepler-agent-deploy/README.md`.
 
-## Run the hosted Slack agent
+## Hosted Slack agent
 
-Requirements: Go 1.25, PostgreSQL, Redis, a Slack app, and a supported model
-provider.
+Runtime images and config are owned by `kepler-agent-deploy`:
 
 ```bash
-cp gateway/.env.example gateway/.env
-cp worker/.env.example worker/.env
-cp observability/.env.example observability/.env
-# Configure Slack, provider, PostgreSQL, Redis, and ALLOWED_SLACK_USERS.
-psql "$POSTGRES_DSN" -f schema/postgres.sql
-
-go run ./gateway/cmd/gateway
-go run ./worker/cmd/worker
-go run ./observability/cmd/observability
+cd ../kepler-agent-deploy
+SOURCE_DIR=../kepler-agent scripts/local-stack.sh start
 ```
 
-The gateway verifies and stores Slack events. Workers claim them with renewable
-leases, execute the hosted profile, and deliver replies. Observability reads
-run projections; it is not the conversation state store. Application code never
-creates or alters database objects.
+`go run ./gateway` / `./worker` in this repo is only for source debugging, not packaging.
 
 ### Slack setup
 

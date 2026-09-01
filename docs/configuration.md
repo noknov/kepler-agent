@@ -11,10 +11,9 @@ Each service loads its service-specific env file automatically at startup:
 Set `KEPLER_AGENT_ENV_FILE=/path/to/file` only for one-off local debugging.
 Keep secrets out of git; the `*.example` files are templates only.
 
-The packaged `kepler-agent` CLI is local-first and does not require Redis,
-PostgreSQL, or Slack. It still requires the configured model credential; local
-filesystem and argv tools are governed by the workspace sandbox and approval
-policy.
+The packaged `kepler-agent` CLI runs tools locally and sends model calls
+through the Kepler gateway after Slack login. Workspace sandbox and approval
+policy still govern filesystem and exec tools.
 
 For local split deployment:
 
@@ -30,10 +29,10 @@ Required values now depend on the service:
 
 | Service | Required values |
 |---|---|
-| Gateway | `SLACK_SIGNING_SECRET`, `POSTGRES_DSN`, `REDIS_URL` |
+| Gateway | `SLACK_SIGNING_SECRET`, `POSTGRES_DSN`, `REDIS_URL`; for CLI login: `ALLOWED_SLACK_USERS`, `SLACK_OAUTH_CLIENT_ID`, `SLACK_OAUTH_CLIENT_SECRET`, `CONNECTIONS_PUBLIC_BASE_URL`, `WORKER_UPSTREAM_URL` |
 | Worker | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `ALLOWED_SLACK_USERS`, `POSTGRES_DSN`, `REDIS_URL`, provider API key |
 | Observability | `POSTGRES_DSN`, `REDIS_URL`; `OBSERVABILITY_TOKEN` for non-local access |
-| Local CLI / benchmark | provider configuration and API key |
+| Local CLI | Slack allowlist login (`kepler-agent login`); optional workspace TOML for MCP/skills |
 
 Worker example:
 

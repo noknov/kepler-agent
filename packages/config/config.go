@@ -41,6 +41,7 @@ type HTTPConfig struct {
 	EventRetryBase      time.Duration
 	EventRetryMax       time.Duration
 	ShutdownTimeout     time.Duration
+	WorkerUpstreamURL   string
 }
 
 type SlackConfig struct {
@@ -305,6 +306,7 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			EventRetryBase:      envDuration("SLACK_EVENT_RETRY_BASE", time.Second),
 			EventRetryMax:       envDuration("SLACK_EVENT_RETRY_MAX", time.Minute),
 			ShutdownTimeout:     envDuration("HTTP_SHUTDOWN_TIMEOUT", 30*time.Second),
+			WorkerUpstreamURL:   trimRightSlash(firstEnv("WORKER_UPSTREAM_URL", "WEB_UPSTREAM_URL")),
 		},
 		Slack: SlackConfig{
 			BotToken:        os.Getenv("SLACK_BOT_TOKEN"),
@@ -638,6 +640,22 @@ func providerModel(provider string) string {
 func providerResponsesModels(provider string) []string {
 	prefix := providerEnvPrefix(provider)
 	return envCSV(prefix + "_RESPONSES_MODELS")
+}
+
+// WireProtocol is the upstream OpenAI-family path worker uses for model.
+// CLI clients do not choose this; they call the hosted Kepler generate API.
+func (llm LLMConfig) WireProtocol(model string) string {
+	protocol := strings.ToLower(strings.TrimSpace(llm.Protocol))
+	if protocol != "openai" {
+		return protocol
+	}
+	model = strings.TrimSpace(model)
+	for _, name := range llm.ResponsesModels {
+		if strings.TrimSpace(name) == model {
+			return "responses"
+		}
+	}
+	return protocol
 }
 
 func multimodalModel() string {

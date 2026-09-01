@@ -27,7 +27,12 @@ type Config struct {
 }
 
 // Client is the sole wire-to-canonical model adapter used by every profile.
-type Client struct{ Wire llm.Client }
+type Client struct {
+	Wire llm.Client
+	Host model.Client
+}
+
+const KeplerGeneratePath = "/v1/kepler/generate"
 
 func New(config Config) (*Client, error) {
 	provider := strings.ToLower(strings.TrimSpace(config.Provider))
@@ -40,6 +45,9 @@ func New(config Config) (*Client, error) {
 	}
 	if strings.TrimSpace(config.BaseURL) == "" {
 		return nil, fmt.Errorf("model base URL is required")
+	}
+	if protocol == "kepler" {
+		return &Client{Host: newKeplerRemote(config.BaseURL, config.APIKey, config.Timeout)}, nil
 	}
 	var wire llm.Client
 	switch protocol {
@@ -62,6 +70,9 @@ func New(config Config) (*Client, error) {
 }
 
 func (c *Client) Generate(ctx context.Context, request model.Request, sink model.EventSink) (model.Response, error) {
+	if c != nil && c.Host != nil {
+		return c.Host.Generate(ctx, request, sink)
+	}
 	if c == nil || c.Wire == nil {
 		return model.Response{}, fmt.Errorf("model provider is not configured")
 	}

@@ -15,6 +15,7 @@ import (
 	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/appserver"
+	"github.com/noknov/kepler-agent/packages/cloud"
 	"github.com/noknov/kepler-agent/packages/profiles/local"
 	"github.com/noknov/kepler-agent/packages/providers"
 	localtools "github.com/noknov/kepler-agent/packages/tools/local"
@@ -34,6 +35,15 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	token := os.Getenv("KEPLER_TOKEN")
+	apiURL := os.Getenv("KEPLER_API_URL")
+	if token == "" || apiURL == "" {
+		return fmt.Errorf("set KEPLER_TOKEN and KEPLER_API_URL (run kepler-agent login)")
+	}
+	info, err := cloud.FetchBootstrap(ctx, apiURL, token)
+	if err != nil {
+		return err
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -48,11 +58,10 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	key := os.Getenv(config.APIKeyEnv)
-	if key == "" {
-		return fmt.Errorf("model API key environment variable %s is empty", config.APIKeyEnv)
-	}
-	client, err := providers.New(providers.Config{Provider: config.Provider, Protocol: config.Protocol, BaseURL: config.BaseURL, APIKey: key, AnthropicFlavor: config.AnthropicFlavor, Timeout: config.Timeout})
+	client, err := providers.New(providers.Config{
+		Provider: "kepler", Protocol: "kepler", BaseURL: apiURL,
+		APIKey: token, Timeout: config.Timeout,
+	})
 	if err != nil {
 		return err
 	}
@@ -62,13 +71,13 @@ func run(ctx context.Context) error {
 	}
 	exploreRunner := delegation.Runner{
 		Config: agentruntime.Config{
-			Model: config.Model, ReasoningEffort: config.ReasoningEffort, MaxOutputTokens: config.MaxOutputTokens,
-			Temperature: config.Temperature, MaxSteps: 12,
+			Model: info.Model, ReasoningEffort: info.Thinking, MaxOutputTokens: config.MaxOutputTokens,
+			MaxSteps: 12,
 			Context: agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
 		},
 		Deps: agentruntime.Dependencies{
 			Model: model.Client(client), Policy: local.WorkspacePolicy{},
-			Compactor:   agentruntime.ModelCompactor{Client: model.Client(client), Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
+			Compactor:   agentruntime.ModelCompactor{Client: model.Client(client), Model: info.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
 			Artifacts:   local.ArtifactStore{Root: filepath.Join(stateDir, "sessions")},
 			Environment: environment.Config{WorkspaceRoots: []string{workspace.Root}},
 		},
@@ -85,14 +94,14 @@ func run(ctx context.Context) error {
 	server := appserver.New(nil, os.Stdin, os.Stdout)
 	stream := &eventStream{server: server}
 	runner, err := agentruntime.New(agentruntime.Config{
-		Model: config.Model, ReasoningEffort: config.ReasoningEffort, MaxOutputTokens: config.MaxOutputTokens,
-		Temperature: config.Temperature, MaxSteps: config.MaxSteps, MaxModelRetries: 2, MaxEmptyResponseRetries: 3,
+		Model: info.Model, ReasoningEffort: info.Thinking, MaxOutputTokens: config.MaxOutputTokens,
+		MaxSteps: config.MaxSteps, MaxModelRetries: 2, MaxEmptyResponseRetries: 3,
 		Context:        agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
 		CircuitBreaker: agentruntime.CircuitBreakerConfig{Enabled: true},
 	}, agentruntime.Dependencies{
 		Model: model.Client(client), Tools: catalog, Policy: local.WorkspacePolicy{}, Transcript: store,
 		Events:      transcript.SinkFunc(stream.publish),
-		Compactor:   agentruntime.ModelCompactor{Client: model.Client(client), Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
+		Compactor:   agentruntime.ModelCompactor{Client: model.Client(client), Model: info.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
 		Artifacts:   local.ArtifactStore{Root: filepath.Join(stateDir, "sessions")},
 		Environment: environment.Config{WorkspaceRoots: []string{workspace.Root}},
 	})
@@ -101,7 +110,7 @@ func run(ctx context.Context) error {
 	}
 	server.Runtime = runner
 	server.Transcript = store
-	server.Model = config.Model
+	server.Model = info.Model
 	server.Workspace = workspace.Root
 	server.Prompt = []prompt.Fragment{{ID: "appserver-core", Layer: prompt.LayerCore, Content: "You are a coding agent exposed through the app server protocol."}}
 	return server.Serve(ctx)

@@ -406,6 +406,12 @@ func TestLoadOpenCodeGoResponsesModels(t *testing.T) {
 	if !reflect.DeepEqual(cfg.LLM.ResponsesModels, want) {
 		t.Fatalf("LLM.ResponsesModels = %#v, want %#v", cfg.LLM.ResponsesModels, want)
 	}
+	if got := cfg.LLM.WireProtocol("gpt-5.6-luna"); got != "responses" {
+		t.Fatalf("WireProtocol(gpt-5.6-luna) = %q, want responses", got)
+	}
+	if got := cfg.LLM.WireProtocol("glm-5.2"); got != "openai" {
+		t.Fatalf("WireProtocol(glm-5.2) = %q, want openai", got)
+	}
 }
 
 func TestLoadOpenCodeZenDefaults(t *testing.T) {

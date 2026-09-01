@@ -28,12 +28,11 @@ test-race:
 	GOCACHE=$(GOCACHE) go test -race ./packages/agent/runtime ./packages/surfaces/slack/agent ./packages/runs ./packages/safety ./packages/surfaces/slack/events ./packages/tools/hosted
 
 build:
-	mkdir -p bin
-	GOCACHE=$(GOCACHE) go build -trimpath -o bin/kepler-agent-gateway ./gateway/cmd/gateway
-	GOCACHE=$(GOCACHE) go build -trimpath -o bin/kepler-agent-worker ./worker/cmd/worker
-	GOCACHE=$(GOCACHE) go build -trimpath -o bin/kepler-agent-observability ./observability/cmd/observability
-	GOCACHE=$(GOCACHE) go build -trimpath -o bin/kepler-agent ./cli/cmd/kepler-agent
-	GOCACHE=$(GOCACHE) go build -trimpath -o bin/kepler-agent-app-server ./appserver/cmd/app-server
+	GOCACHE=$(GOCACHE) go build -trimpath -o /dev/null ./gateway/cmd/gateway
+	GOCACHE=$(GOCACHE) go build -trimpath -o /dev/null ./worker/cmd/worker
+	GOCACHE=$(GOCACHE) go build -trimpath -o /dev/null ./observability/cmd/observability
+	GOCACHE=$(GOCACHE) go build -trimpath -o /dev/null ./cli/cmd/kepler-agent
+	GOCACHE=$(GOCACHE) go build -trimpath -o /dev/null ./appserver/cmd/app-server
 
 eval-check:
 	@tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \

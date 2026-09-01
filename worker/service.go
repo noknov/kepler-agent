@@ -13,6 +13,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/appsupport"
+	"github.com/noknov/kepler-agent/packages/cloud"
 	"github.com/noknov/kepler-agent/packages/config"
 	"github.com/noknov/kepler-agent/packages/connections"
 	"github.com/noknov/kepler-agent/packages/health"
@@ -313,9 +314,19 @@ func (s *Service) serveHealth(ctx context.Context) {
 	mux.HandleFunc("/readyz", s.handleReady)
 	mux.Handle("/metrics", s.metrics)
 	mux.HandleFunc("/drain", s.handleDrain)
+	if err := cloud.RegisterWorker(mux, s.cfg); err != nil {
+		select {
+		case s.serveErr <- err:
+		default:
+		}
+		return
+	}
 	server := &http.Server{
-		Addr: s.cfg.HTTP.Addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second,
+		Addr:              s.cfg.HTTP.Addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       10 * time.Minute,
+		IdleTimeout:       120 * time.Second,
 	}
 	done := make(chan struct{})
 	go func() {

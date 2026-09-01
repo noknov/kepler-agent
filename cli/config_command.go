@@ -49,7 +49,7 @@ func runConfig(args []string) error {
 		if err := os.WriteFile(*path, defaultConfig, 0600); err != nil {
 			return err
 		}
-		fmt.Printf("Created %s\nSet the selected profile's API key environment variable, then run: kepler-agent --profile deepseek --cwd .\n", *path)
+		fmt.Printf("Created %s\nRun kepler-agent login, then: kepler-agent --cwd .\n", *path)
 		return nil
 	default:
 		return fmt.Errorf("unknown config command %q (use init or show)", args[0])
