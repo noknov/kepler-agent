@@ -351,6 +351,7 @@ func interactiveLoop(ctx context.Context, runner *agentruntime.Runtime, session,
 			result, err := runner.RunTurn(ctx, turnRequest(session, workspace, value, fragments, steering))
 			done <- turnDone{result, err}
 		}(input)
+		renderer.resetTurn()
 		renderer.startWait()
 		for {
 			select {
@@ -372,7 +373,7 @@ func interactiveLoop(ctx context.Context, runner *agentruntime.Runtime, session,
 				if outcome.err != nil {
 					fmt.Fprintln(os.Stderr, renderer.paint("  "+outcome.err.Error(), colorError))
 				}
-				fmt.Fprintln(os.Stderr)
+				fmt.Fprint(os.Stderr, "\n\n")
 				goto nextTurn
 			}
 		}
@@ -418,7 +419,15 @@ type eventRenderer struct {
 	color          bool
 	started        map[string]time.Time
 	streamed       bool
+	toolActivity   bool
 	waiting        *waitSpinner
+}
+
+func (r *eventRenderer) resetTurn() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.streamed = false
+	r.toolActivity = false
 }
 
 func (r *eventRenderer) Publish(_ context.Context, event transcript.Event) {
@@ -432,13 +441,18 @@ func (r *eventRenderer) Publish(_ context.Context, event transcript.Event) {
 	if event.Type == transcript.ModelStreamed && event.Model != nil && event.Model.Type == model.StreamTextDelta {
 		r.stopWaitLocked()
 		if !r.streamed {
-			fmt.Fprint(r.stdout, "\n  "+r.paint("⎿", colorDim)+" ")
+			gap := "\n"
+			if !r.toolActivity {
+				gap = "\n\n"
+			}
+			fmt.Fprint(r.stdout, gap+r.paint("⎿", colorDim)+" ")
 			r.streamed = true
 		}
-		fmt.Fprint(r.stdout, strings.ReplaceAll(event.Model.Text, "\n", "\n  "))
+		fmt.Fprint(r.stdout, strings.ReplaceAll(event.Model.Text, "\n", assistantWrapIndent))
 	}
 	if event.Type == transcript.ToolCallStarted && event.ToolCall != nil {
 		r.stopWaitLocked()
+		r.toolActivity = true
 		if r.streamed {
 			fmt.Fprint(r.stderr, "\n")
 			r.streamed = false
@@ -452,6 +466,7 @@ func (r *eventRenderer) Publish(_ context.Context, event transcript.Event) {
 		fmt.Fprintf(r.stderr, "  %s\n", line)
 	}
 	if (event.Type == transcript.ToolCallCompleted || event.Type == transcript.ToolCallFailed) && event.ToolCall != nil {
+		r.stopWaitLocked()
 		elapsed := time.Since(r.started[event.ToolCall.ID]).Round(10 * time.Millisecond)
 		detail := toolResultSummary(event.ToolResult)
 		if event.Type == transcript.ToolCallFailed {
@@ -476,6 +491,7 @@ func (r *eventRenderer) Publish(_ context.Context, event transcript.Event) {
 	if event.Type == transcript.TurnCompleted || event.Type == transcript.TurnFailed || event.Type == transcript.TurnCanceled {
 		r.stopWaitLocked()
 		r.streamed = false
+		r.toolActivity = false
 	}
 }
 func (r *eventRenderer) finish(result agentruntime.TurnResult) {

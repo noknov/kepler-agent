@@ -207,14 +207,11 @@ func (e *promptEditor) commit(line string) {
 	// draw() leaves the cursor on the body line (3 up from the footer).
 	// Only move 1 line up to the box top; 4A would jump into prior transcript.
 	fmt.Fprint(e.out, "\x1b[1A\r\x1b[0J")
-	if strings.TrimSpace(line) == "" {
-		return
+	cols := 80
+	if w, _, err := term.GetSize(int(e.in.Fd())); err == nil && w >= 40 {
+		cols = w
 	}
-	if e.color {
-		fmt.Fprintf(e.out, "  %s %s %s\n", "\x1b["+colorUserBg+"m", line, "\x1b[0m")
-	} else {
-		fmt.Fprintf(e.out, "  %s\n", line)
-	}
+	writeUserMessage(e.out, e.color, cols, line)
 }
 
 func (e *promptEditor) clearBox() {

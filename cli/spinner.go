@@ -115,7 +115,6 @@ func (r *eventRenderer) startWaitLocked() {
 	if r.mode == "jsonl" || r.waiting != nil {
 		return
 	}
-	fmt.Fprint(r.stderr, "\n")
 	r.waiting = startWaitSpinner(r.stderr, r.color)
 }
 
