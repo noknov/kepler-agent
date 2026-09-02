@@ -189,6 +189,13 @@ func Run() error {
 		out = os.Stderr
 	}
 	renderer := &eventRenderer{mode: config.Output, stdout: out, stderr: os.Stderr, color: config.Output == "text" && isTerminal(os.Stderr), started: make(map[string]time.Time)}
+	var eventSink transcript.Sink = renderer
+	var forward *forwardSink
+	useTUI := interactive && (config.Output == "text" || config.Output == "")
+	if useTUI {
+		forward = newForwardSink()
+		eventSink = forward
+	}
 	questions := make(chan approvalQuestion)
 	approver := &local.ScopedApprover{Project: workspace.Root, Path: filepath.Join(values.stateDir, "approvals.json")}
 	if interactive {
@@ -237,7 +244,7 @@ func Run() error {
 	}
 
 	runner, err := agentruntime.New(agentruntime.Config{Model: config.Model, ReasoningEffort: config.ReasoningEffort, MaxOutputTokens: config.MaxOutputTokens, MaxSteps: config.MaxSteps, MaxModelRetries: 2, MaxEmptyResponseRetries: 3, Context: agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer}}, agentruntime.Dependencies{
-		Model: client, Tools: catalog, Policy: local.WorkspacePolicy{}, Approver: approver, Transcript: store, Events: renderer,
+		Model: client, Tools: catalog, Policy: local.WorkspacePolicy{}, Approver: approver, Transcript: store, Events: eventSink,
 		Compactor: agentruntime.ModelCompactor{Client: client, Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer}, Artifacts: local.ArtifactStore{Root: filepath.Join(values.stateDir, "sessions")},
 		Environment: environment.Config{WorkspaceRoots: []string{workspace.Root}},
 	})
@@ -256,7 +263,14 @@ func Run() error {
 		_ = shutdownTelemetry(shutdownCtx)
 	}()
 	if interactive {
-		return interactiveLoop(ctx, runner, values.session, workspace.Root, fragments, config.InputRouting, questions, config, renderer, creds)
+		if useTUI {
+			cwd := workspace.Root
+			if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(cwd, home) {
+				cwd = "~" + strings.TrimPrefix(cwd, home)
+			}
+			return runSessionUI(ctx, runner, values.session, workspace.Root, cwd, fragments, config, creds, questions, forward)
+		}
+		return interactivePlainLoop(ctx, runner, values.session, workspace.Root, fragments, questions, config, renderer, creds)
 	}
 	input, err := headlessInput(flag.Args(), os.Stdin)
 	if err != nil {
@@ -314,27 +328,23 @@ func turnRequest(session, workspace, input string, fragments []prompt.Fragment, 
 	return agentruntime.TurnRequest{SessionID: session, Input: model.TextMessage(model.RoleUser, input), Prompt: fragments, Scope: tool.Scope{SessionID: session, Workspace: workspace}, Steering: steering}
 }
 
-func interactiveLoop(ctx context.Context, runner *agentruntime.Runtime, session, workspace string, fragments []prompt.Fragment, _ string, questions <-chan approvalQuestion, config local.Config, renderer *eventRenderer, creds credentials) error {
-	editor := newPromptEditor(os.Stdin, os.Stderr, renderer.color)
-	renderer.welcome(session, workspace, config, creds)
-	cwd := workspace
-	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(cwd, home) {
-		cwd = "~" + strings.TrimPrefix(cwd, home)
-	}
+func interactivePlainLoop(ctx context.Context, runner *agentruntime.Runtime, session, workspace string, fragments []prompt.Fragment, questions <-chan approvalQuestion, config local.Config, renderer *eventRenderer, creds credentials) error {
+	reader := bufio.NewReader(os.Stdin)
 	var queued []string
 	for {
 		var input string
 		if len(queued) > 0 {
 			input, queued = queued[0], queued[1:]
 		} else {
-			line, err := editor.Read(ctx, cwd, config.Model)
+			fmt.Fprint(os.Stderr, "> ")
+			line, err := reader.ReadString('\n')
 			if err != nil {
 				if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
 					return nil
 				}
 				return err
 			}
-			input = line
+			input = strings.TrimSpace(line)
 		}
 		if strings.TrimSpace(input) == "" {
 			continue
@@ -361,7 +371,7 @@ func interactiveLoop(ctx context.Context, runner *agentruntime.Runtime, session,
 			case question := <-questions:
 				renderer.stopWait()
 				fmt.Fprintf(os.Stderr, "\n  %s %s\n  %s\n  %s ", renderer.paint("!", colorError), question.request.Call.Name, renderer.paint(question.decision.Reason, colorDim), renderer.paint("[o]nce [s]ession [p]roject [n]o", colorDim))
-				answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+				answer, _ := reader.ReadString('\n')
 				question.answer <- parseApproval(answer)
 			case outcome := <-done:
 				renderer.stopWait()
