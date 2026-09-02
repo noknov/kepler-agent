@@ -36,6 +36,20 @@ Optional workspace TOML (`kepler-agent config init`) only covers routing, sandbo
 
 Interactive sessions show a compact header, streamed text, and live tool lines. Use `/help`, `/status`, `/clear`, and `/exit`. Inputs during a turn are steered or queued via `input_routing`.
 
+### Ink UI (experimental)
+
+The Node/Ink frontend talks to the Go `app-server` over stdio JSON-RPC. It does not replace the default Bubble Tea interactive mode.
+
+```sh
+go build -o bin/app-server ./appserver/cmd/app-server
+cd apps/cli && pnpm install && pnpm build
+bin/kepler-agent ui --cwd .
+bin/kepler-agent ui --resume
+bin/kepler-agent ui --input-routing queue
+```
+
+Set `KEPLER_UI_ENTRY` to override the UI bundle path, or `KEPLER_APP_SERVER` for the backend binary.
+
 ## Security model
 
 The local profile resolves file operations beneath the workspace, blocks common credential paths, and uses Seatbelt on macOS or bubblewrap on Linux for execution. Subprocesses receive a minimal environment and do not inherit the Kepler session token. Network is denied unless the tool call requests it and the user grants approval.

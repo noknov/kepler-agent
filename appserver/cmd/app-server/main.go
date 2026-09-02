@@ -93,13 +93,14 @@ func run(ctx context.Context) error {
 	}
 	server := appserver.New(nil, os.Stdin, os.Stdout)
 	stream := &eventStream{server: server}
+	approver := server.WireApprover(workspace.Root, filepath.Join(stateDir, "approvals.json"))
 	runner, err := agentruntime.New(agentruntime.Config{
 		Model: info.Model, ReasoningEffort: info.Thinking, MaxOutputTokens: config.MaxOutputTokens,
 		MaxSteps: config.MaxSteps, MaxModelRetries: 2, MaxEmptyResponseRetries: 3,
 		Context:        agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
 		CircuitBreaker: agentruntime.CircuitBreakerConfig{Enabled: true},
 	}, agentruntime.Dependencies{
-		Model: model.Client(client), Tools: catalog, Policy: local.WorkspacePolicy{}, Transcript: store,
+		Model: model.Client(client), Tools: catalog, Policy: local.WorkspacePolicy{}, Approver: approver, Transcript: store,
 		Events:      transcript.SinkFunc(stream.publish),
 		Compactor:   agentruntime.ModelCompactor{Client: model.Client(client), Model: info.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
 		Artifacts:   local.ArtifactStore{Root: filepath.Join(stateDir, "sessions")},

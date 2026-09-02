@@ -22,3 +22,5 @@ type approvalRequestMsg struct {
 type queuedInputMsg struct {
 	lines []string
 }
+
+type spinnerTickMsg struct{}

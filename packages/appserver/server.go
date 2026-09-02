@@ -31,6 +31,9 @@ type Server struct {
 
 	activeMu sync.Mutex
 	active   map[string]*activeTurn
+
+	pendingMu sync.Mutex
+	pending   map[string]*pendingApproval
 }
 
 type activeTurn struct {
@@ -214,6 +217,17 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			return
 		}
 		s.respond(request.ID, map[string]bool{"canceled": true}, nil)
+	case "approval/respond":
+		var params approvalRespondParams
+		if err := json.Unmarshal(request.Params, &params); err != nil || params.TurnID == "" || params.ToolCallID == "" {
+			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "turnId and toolCallId are required"})
+			return
+		}
+		if err := s.respondApproval(params); err != nil {
+			s.respond(request.ID, nil, &ResponseError{Code: -32005, Message: err.Error()})
+			return
+		}
+		s.respond(request.ID, map[string]string{"scope": params.Scope}, nil)
 	default:
 		s.respond(request.ID, nil, &ResponseError{Code: -32601, Message: "method not found"})
 	}

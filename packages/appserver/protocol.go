@@ -64,6 +64,7 @@ func DefaultCapabilities() []string {
 		"turn/start",
 		"turn/steer",
 		"turn/interrupt",
+		"approval/respond",
 		"event",
 		"item/started",
 		"item/updated",

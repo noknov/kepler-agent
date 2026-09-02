@@ -69,6 +69,8 @@ func Run() error {
 			return runLogout()
 		case "whoami":
 			return runWhoami()
+		case "ui":
+			return runUI(os.Args[2:])
 		}
 	}
 	var values options

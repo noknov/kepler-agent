@@ -14,6 +14,9 @@ __pycache__/
 bin/
 dist/
 runs/
+apps/cli/node_modules/
+apps/cli/dist/
+.pnpm-store/
 worker/.prompts/
 kepler-agent-avatar-*.png
 cmd/slack-broadcast/

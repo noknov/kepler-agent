@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
+	"github.com/noknov/kepler-agent/packages/profiles/local"
 )
 
 type oneShotModel struct{}
@@ -69,6 +71,42 @@ func TestNotifyEventMapsTextDelta(t *testing.T) {
 	})
 	if !strings.Contains(out.String(), "item/agentMessage/delta") {
 		t.Fatalf("expected delta notification, got %s", out.String())
+	}
+}
+
+func TestApprovalRespondUnblocks(t *testing.T) {
+	server := New(nil, strings.NewReader(""), &bytes.Buffer{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan local.ApprovalScope, 1)
+	go func() {
+		scope, err := server.waitApproval(ctx, "turn_1", "call_1")
+		if err != nil {
+			t.Errorf("waitApproval: %v", err)
+			return
+		}
+		done <- scope
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		server.pendingMu.Lock()
+		_, ready := server.pending[approvalKey("turn_1", "call_1")]
+		server.pendingMu.Unlock()
+		if ready || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := server.respondApproval(approvalRespondParams{TurnID: "turn_1", ToolCallID: "call_1", Scope: "once"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case scope := <-done:
+		if scope != local.ApprovalOnce {
+			t.Fatalf("scope = %q, want once", scope)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("approval was not unblocked")
 	}
 }
 

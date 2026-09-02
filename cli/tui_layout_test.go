@@ -28,19 +28,29 @@ func TestRenderZoneStickyBottom(t *testing.T) {
 	}
 }
 
-func TestJoinLinesInputZone(t *testing.T) {
-	got := joinLines([]string{"top", "mid", "bot"}, inputZoneLines)
-	if lineCount(got) != inputZoneLines {
-		t.Fatalf("input zone lines = %d", lineCount(got))
+func TestFrameLayoutRenderHeight(t *testing.T) {
+	layout := FrameLayout{TermHeight: 24, BottomLines: defaultBottomLines}
+	bottom := joinLines([]string{"a", "b", "c"}, defaultBottomLines)
+	frame := layout.Render("header\nline", bottom)
+	if lineCount(frame) != 24 {
+		t.Fatalf("frame lines = %d, want 24", lineCount(frame))
 	}
 }
 
-func TestViewFrameHeight(t *testing.T) {
-	m := &sessionUI{
+func TestJoinLinesBottomZone(t *testing.T) {
+	got := joinLines([]string{"top", "mid", "bot"}, defaultBottomLines)
+	if lineCount(got) != defaultBottomLines {
+		t.Fatalf("bottom zone lines = %d", lineCount(got))
+	}
+}
+
+func TestREPLViewFrameHeight(t *testing.T) {
+	m := &replModel{
 		width:  80,
 		height: 24,
 		styles: newTUIStyles(false),
 		input:  textinput.New(),
+		layout: FrameLayout{TermHeight: 24, BottomLines: defaultBottomLines},
 	}
 	frame := m.View()
 	if lineCount(frame) != 24 {
