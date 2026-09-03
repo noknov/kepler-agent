@@ -73,7 +73,7 @@ func run(ctx context.Context) error {
 		Config: agentruntime.Config{
 			Model: info.Model, ReasoningEffort: info.Thinking, MaxOutputTokens: config.MaxOutputTokens,
 			MaxSteps: 12,
-			Context: agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
+			Context:  agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
 		},
 		Deps: agentruntime.Dependencies{
 			Model: model.Client(client), Policy: local.WorkspacePolicy{},

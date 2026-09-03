@@ -23,8 +23,8 @@ type keplerRemote struct {
 
 func newKeplerRemote(baseURL, apiKey string, timeout time.Duration) keplerRemote {
 	return keplerRemote{
-		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"),
-		apiKey:  strings.TrimSpace(apiKey),
+		baseURL:    strings.TrimRight(strings.TrimSpace(baseURL), "/"),
+		apiKey:     strings.TrimSpace(apiKey),
 		httpClient: http1.Client(timeout),
 	}
 }

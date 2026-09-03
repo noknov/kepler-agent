@@ -38,4 +38,3 @@ func Client(timeout time.Duration) *http.Client {
 func Standard(timeout time.Duration) *http.Client {
 	return &http.Client{Timeout: timeout}
 }
-
