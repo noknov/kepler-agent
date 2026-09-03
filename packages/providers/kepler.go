@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,7 +13,6 @@ import (
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
-	"github.com/noknov/kepler-agent/packages/infra/http1"
 )
 
 type keplerRemote struct {
@@ -25,8 +25,32 @@ func newKeplerRemote(baseURL, apiKey string, timeout time.Duration) keplerRemote
 	return keplerRemote{
 		baseURL:    strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 		apiKey:     strings.TrimSpace(apiKey),
-		httpClient: http1.Client(timeout),
+		httpClient: keplerHTTPClient(timeout),
 	}
+}
+
+// keplerHTTPClient keeps the streamed Kepler protocol on HTTP/1.1. Ngrok free
+// tunnels can advertise HTTP/2 via ALPN, then fail while establishing the
+// long-lived response stream. This transport is private to the provider so the
+// provider package retains its intentionally narrow dependency boundary.
+func keplerHTTPClient(timeout time.Duration) *http.Client {
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return &http.Client{Timeout: timeout}
+	}
+	cloned := transport.Clone()
+	cloned.ForceAttemptHTTP2 = false
+	cloned.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	tlsConfig := cloned.TLSClientConfig
+	if tlsConfig == nil {
+		tlsConfig = &tls.Config{}
+	} else {
+		tlsConfig = tlsConfig.Clone()
+	}
+	tlsConfig.NextProtos = []string{"http/1.1"}
+	cloned.TLSClientConfig = tlsConfig
+	cloned.DisableCompression = true
+	return &http.Client{Timeout: timeout, Transport: cloned}
 }
 
 func (c keplerRemote) Generate(ctx context.Context, request model.Request, sink model.EventSink) (model.Response, error) {
