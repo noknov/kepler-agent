@@ -17,6 +17,7 @@ export const state = {
   streamReconnectTimer: null,
   streamGraceUntil: 0,
   running: false,
+  pendingThinking: false,
   maxSequence: 0,
   contextTarget: null,
   timelineNodes: new Map(),

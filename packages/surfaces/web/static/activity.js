@@ -1,31 +1,16 @@
 import { state } from "./state.js";
 
 export function createActivityBlock(turnId) {
-  const details = document.createElement("details");
-  details.className = "activity-card";
-  details.dataset.turnId = turnId;
-
-  const summary = document.createElement("summary");
+  const block = document.createElement("div");
+  block.className = "activity-card is-active";
+  block.dataset.turnId = turnId;
+  block.setAttribute("role", "status");
+  block.setAttribute("aria-live", "polite");
   const label = document.createElement("span");
   label.className = "activity-label";
-  const meta = document.createElement("span");
-  meta.className = "activity-meta";
-  const chevron = document.createElement("span");
-  chevron.className = "activity-chevron";
-  chevron.setAttribute("aria-hidden", "true");
-  chevron.textContent = "›";
-  summary.append(label, meta, chevron);
-
-  const planPanel = document.createElement("div");
-  planPanel.className = "plan-panel hidden";
-
-  const list = document.createElement("ul");
-  list.className = "activity-steps";
-  details.append(summary, planPanel, list);
-  details.addEventListener("toggle", () => {
-    details.dataset.userToggled = "1";
-  });
-  return details;
+  label.textContent = "Thinking";
+  block.append(label);
+  return block;
 }
 
 export function ensureActivityBlock(turnId, timeline, seenKeys) {
@@ -193,82 +178,7 @@ export function updateActivityBlock(turnId) {
   const block = state.timelineNodes.get(`activity:${turnId}`);
   const stats = activityStats(turnId);
   if (!block || !stats) return;
-
-  const label = block.querySelector(".activity-label");
-  const meta = block.querySelector(".activity-meta");
-  const planPanel = block.querySelector(".plan-panel");
-  const list = block.querySelector(".activity-steps");
-  const expanded = block.open;
-  const planInfo = stats.plan ? planSummary(stats.plan) : null;
-
-  if (planInfo?.total) {
-    if (stats.running) {
-      label.textContent = planInfo.active
-        ? `Thinking · ${planInfo.active.task}`
-        : planInfo.title || `Thinking · ${formatDuration(stats.duration)}`;
-    } else {
-      label.textContent = planInfo.title || `Done · ${planInfo.completed}/${planInfo.total} tasks`;
-    }
-    const metaParts = [formatDuration(stats.duration)];
-    if (stats.count) metaParts.push(`${stats.count} tool${stats.count === 1 ? "" : "s"}`);
-    if (planInfo.blocked) metaParts.push(`${planInfo.blocked} blocked`);
-    else if (stats.failed) metaParts.push(`${stats.failed} failed`);
-    meta.textContent = metaParts.join(" · ");
-  } else {
-    label.textContent = stats.running ? `Thinking · ${formatDuration(stats.duration)}` : `Thought for ${formatDuration(stats.duration)}`;
-    meta.textContent = `${stats.count} step${stats.count === 1 ? "" : "s"}${stats.failed ? ` · ${stats.failed} failed` : ""}`;
-  }
-
-  if (stats.plan?.items?.length) {
-    planPanel.classList.remove("hidden");
-    planPanel.replaceChildren();
-    if (planInfo?.title) {
-      const title = document.createElement("p");
-      title.className = "plan-title";
-      title.textContent = planInfo.title;
-      planPanel.append(title);
-    }
-    const tasks = document.createElement("ul");
-    tasks.className = "plan-tasks";
-    for (const item of stats.plan.items) {
-      const row = document.createElement("li");
-      row.className = planItemClass(item.status);
-      const copy = document.createElement("span");
-      copy.className = "plan-task";
-      copy.textContent = item.task;
-      row.append(copy);
-      if (item.note) {
-        const note = document.createElement("span");
-        note.className = "plan-note";
-        note.textContent = item.note;
-        row.append(note);
-      }
-      tasks.append(row);
-    }
-    planPanel.append(tasks);
-  } else {
-    planPanel.classList.add("hidden");
-    planPanel.replaceChildren();
-  }
-
-  list.replaceChildren();
-  if (stats.tools.length) {
-    list.classList.remove("hidden");
-    for (const tool of stats.tools) {
-      const item = document.createElement("li");
-      item.className = tool.status;
-      item.textContent = friendlyTool(tool.tool);
-      list.append(item);
-    }
-  } else {
-    list.classList.add("hidden");
-  }
-
-  if (!block.dataset.userToggled && stats.running && planInfo?.active) {
-    block.open = true;
-  } else {
-    block.open = expanded;
-  }
+  block.classList.toggle("is-active", stats.running);
 }
 
 export function refreshActivityBlocks() {

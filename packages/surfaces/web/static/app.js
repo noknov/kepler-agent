@@ -263,7 +263,7 @@ function openStream() {
   const stream = new EventSource(`/api/conversations/${encodeURIComponent(id)}/events?after=${state.maxSequence}`);
   state.stream = stream;
   stream.addEventListener("kepler", (message) => {
-    if (state.current?.id !== id) return;
+    if (state.stream !== stream || state.current?.id !== id) return;
     receiveEvent(JSON.parse(message.data));
   });
   stream.onerror = () => {
@@ -283,10 +283,32 @@ function closeStream() {
 }
 
 function receiveEvent(event) {
-  if (event.sequence && state.events.some((item) => item.id === event.id)) return;
+  if (event.id && state.events.some((item) => item.id === event.id)) return;
   state.maxSequence = Math.max(state.maxSequence, event.sequence || 0);
 
+  if (
+    state.pendingThinking &&
+    (event.kind === "assistant_delta" ||
+      event.kind === "tool" ||
+      event.kind === "plan" ||
+      (event.kind === "message" && event.role === "assistant"))
+  ) {
+    state.pendingThinking = false;
+    const pendingKey = "activity:pending";
+    state.timelineNodes.get(pendingKey)?.remove();
+    state.timelineNodes.delete(pendingKey);
+  }
+
   if (event.kind === "assistant_delta") {
+    // A completed message is authoritative. A delayed SSE delta must never
+    // recreate the streaming row (and its cursor) after that final message.
+    if (
+      state.events.some(
+        (item) => item.kind === "message" && item.role === "assistant" && item.turnId === event.turnId,
+      )
+    ) {
+      return;
+    }
     let live = state.events.find((item) => item.kind === "assistant_delta" && item.turnId === event.turnId);
     if (live) live.text = event.replace ? event.text : live.text + event.text;
     else state.events.push({ ...event });
@@ -317,7 +339,14 @@ function receiveEvent(event) {
   if (event.kind === "message" && event.role === "assistant") {
     state.events = state.events.filter((item) => !(item.kind === "assistant_delta" && item.turnId === event.turnId));
     state.events.push(event);
-    state.timelineNodes.delete(`delta:${event.turnId}`);
+    const deltaKey = `delta:${event.turnId}`;
+    // Remove the existing live node before forgetting it. Leaving it in the
+    // DOM was what caused the final response to be rendered a second time.
+    state.timelineNodes.get(deltaKey)?.remove();
+    state.timelineNodes.delete(deltaKey);
+    state.markdownCache.delete(deltaKey);
+    const pendingRender = state.streamRenderTimers.get(event.turnId);
+    if (pendingRender) clearTimeout(pendingRender);
     state.streamRenderTimers.delete(event.turnId);
     stopActivityTimer();
     refreshActivityBlocks();
@@ -363,6 +392,7 @@ function clearTimeline() {
   for (const timer of state.streamRenderTimers.values()) clearTimeout(timer);
   state.streamRenderTimers.clear();
   state.activityStart.clear();
+  state.pendingThinking = false;
   state.streamGraceUntil = 0;
   stopActivityTimer();
   const timeline = $("#timeline");
@@ -432,6 +462,10 @@ function renderTimeline(force = false) {
     }
   }
 
+  if (state.pendingThinking) {
+    ensureActivityBlock("pending", timeline, seenKeys);
+  }
+
   for (const [key, node] of state.timelineNodes) {
     if (!seenKeys.has(key)) {
       node.remove();
@@ -463,7 +497,6 @@ function updateStreamingMessage(turnId) {
       const latest = state.events.find((item) => item.kind === "assistant_delta" && item.turnId === turnId);
       if (!latest) return;
       updateMessageContent(node, latest, true);
-      const timeline = $("#timeline");
       scrollTimelineToEnd();
     }, 80),
   );
@@ -567,6 +600,9 @@ async function sendMessage(text) {
       optimistic: true,
     });
     state.running = true;
+    // Show feedback at the point of intent, instead of waiting for the worker
+    // to acknowledge the turn over SSE.
+    state.pendingThinking = true;
     updateComposer();
     scheduleRender();
     await api(`/api/conversations/${encodeURIComponent(state.current.id)}/turns`, {
@@ -579,6 +615,7 @@ async function sendMessage(text) {
   } catch (error) {
     state.events = state.events.filter((item) => !item.optimistic);
     state.running = false;
+    state.pendingThinking = false;
     updateComposer();
     scheduleRender();
     toast(error.message);
