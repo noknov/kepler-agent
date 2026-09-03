@@ -44,6 +44,8 @@ func (s Sandbox) Run(ctx context.Context, request CommandRequest) (CommandResult
 		return CommandResult{}, err
 	}
 	var command *exec.Cmd
+	var internalEnvironment []string
+	cleanupInternalEnvironment := func() {}
 	sensitive, err := s.Workspace.SensitivePaths()
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("scan sensitive workspace paths: %w", err)
@@ -58,21 +60,12 @@ func (s Sandbox) Run(ctx context.Context, request CommandRequest) (CommandResult
 		if _, statErr := os.Stat(path); statErr != nil {
 			return s.unsandboxed(ctx, request, workdir, statErr)
 		}
-		profile := "(version 1)\n(allow default)\n(deny file-write*)\n"
-		profile += "(allow file-write* (subpath " + strconv.Quote(s.Workspace.Root) + ") (subpath " + strconv.Quote(s.Workspace.Temp) + "))\n"
-		if home, homeErr := os.UserHomeDir(); homeErr == nil {
-			profile += "(deny file-read* (subpath " + strconv.Quote(home) + "))\n"
+		profile := darwinSandboxProfile(s.Workspace, readRoots, sensitive, request.Network)
+		internalEnvironment, cleanupInternalEnvironment, err = sanitizedGitEnvironment(s.Workspace)
+		if err != nil {
+			return CommandResult{}, err
 		}
-		profile += "(allow file-read* (subpath " + strconv.Quote(s.Workspace.Root) + "))\n"
-		for _, root := range readRoots {
-			profile += "(allow file-read* (subpath " + strconv.Quote(root) + "))\n"
-		}
-		for _, path := range sensitive {
-			profile += "(deny file-read* file-write* (literal " + strconv.Quote(path) + "))\n"
-		}
-		if !request.Network {
-			profile += "(deny network*)\n"
-		}
+		defer cleanupInternalEnvironment()
 		command = exec.CommandContext(ctx, path, append([]string{"-p", profile, request.Argv[0]}, request.Argv[1:]...)...)
 	case "linux":
 		path, lookupErr := exec.LookPath("bwrap")
@@ -109,27 +102,113 @@ func (s Sandbox) Run(ctx context.Context, request CommandRequest) (CommandResult
 	default:
 		return CommandResult{}, fmt.Errorf("sandbox is not supported on %s", runtime.GOOS)
 	}
-	result, runErr := runCommand(command, workdir, request.Environment, s.Workspace.Temp)
+	result, runErr := runCommand(command, workdir, request.Environment, internalEnvironment, s.Workspace.Temp)
 	if ctx.Err() != nil {
 		return result, ctx.Err()
 	}
 	return result, runErr
+}
+
+// sanitizedGitEnvironment gives Git a credential-free view of the workspace
+// repository. macOS Seatbelt cannot replace a denied file with /dev/null as
+// bubblewrap does on Linux, and Git treats an EACCES on .git/config as fatal.
+func sanitizedGitEnvironment(workspace Workspace) ([]string, func(), error) {
+	gitDir := filepath.Join(workspace.Root, ".git")
+	info, err := os.Stat(gitDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, func() {}, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("inspect workspace Git directory: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, func() {}, nil
+	}
+
+	isolationDir, err := os.MkdirTemp(workspace.Temp, "git-")
+	if err != nil {
+		return nil, nil, fmt.Errorf("create isolated Git metadata: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(isolationDir) }
+	entries, err := os.ReadDir(gitDir)
+	if err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("read workspace Git directory: %w", err)
+	}
+	for _, entry := range entries {
+		source := filepath.Join(gitDir, entry.Name())
+		target := filepath.Join(isolationDir, entry.Name())
+		if entry.Name() == "config" || entry.Name() == "credentials" {
+			if err := os.WriteFile(target, nil, 0o600); err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("create sanitized Git %s: %w", entry.Name(), err)
+			}
+			continue
+		}
+		if entry.Type().IsRegular() {
+			content, err := os.ReadFile(source)
+			if err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("read Git metadata %s: %w", entry.Name(), err)
+			}
+			info, err := entry.Info()
+			if err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("inspect Git metadata %s: %w", entry.Name(), err)
+			}
+			if err := os.WriteFile(target, content, info.Mode().Perm()); err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("copy Git metadata %s: %w", entry.Name(), err)
+			}
+			continue
+		}
+		if err := os.Symlink(source, target); err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("link Git metadata %s: %w", entry.Name(), err)
+		}
+	}
+	return []string{
+		"GIT_DIR=" + isolationDir,
+		"GIT_WORK_TREE=" + workspace.Root,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+	}, cleanup, nil
+}
+
+func darwinSandboxProfile(workspace Workspace, readRoots, sensitive []string, network bool) string {
+	profile := "(version 1)\n(allow default)\n(deny file-write*)\n"
+	profile += "(allow file-write* (literal \"/dev/null\"))\n"
+	profile += "(allow file-write* (subpath " + strconv.Quote(workspace.Root) + ") (subpath " + strconv.Quote(workspace.Temp) + "))\n"
+	if home, err := os.UserHomeDir(); err == nil {
+		profile += "(deny file-read* (subpath " + strconv.Quote(home) + "))\n"
+	}
+	profile += "(allow file-read* (subpath " + strconv.Quote(workspace.Root) + "))\n"
+	for _, root := range readRoots {
+		profile += "(allow file-read* (subpath " + strconv.Quote(root) + "))\n"
+	}
+	for _, path := range sensitive {
+		profile += "(deny file-read* file-write* (literal " + strconv.Quote(path) + "))\n"
+	}
+	if !network {
+		profile += "(deny network*)\n"
+	}
+	return profile
 }
 
 func (s Sandbox) unsandboxed(ctx context.Context, request CommandRequest, workdir string, cause error) (CommandResult, error) {
 	if !s.UnsafeAllowNoSandbox {
 		return CommandResult{}, fmt.Errorf("required sandbox is unavailable: %w", cause)
 	}
-	result, runErr := runCommand(exec.CommandContext(ctx, request.Argv[0], request.Argv[1:]...), workdir, request.Environment, s.Workspace.Temp)
+	result, runErr := runCommand(exec.CommandContext(ctx, request.Argv[0], request.Argv[1:]...), workdir, request.Environment, nil, s.Workspace.Temp)
 	if ctx.Err() != nil {
 		return result, ctx.Err()
 	}
 	return result, runErr
 }
 
-func runCommand(command *exec.Cmd, workdir string, extraEnvironment []string, isolatedHome string) (CommandResult, error) {
+func runCommand(command *exec.Cmd, workdir string, extraEnvironment, internalEnvironment []string, isolatedHome string) (CommandResult, error) {
 	command.Dir = workdir
-	command.Env = safeEnvironment(isolatedHome, extraEnvironment)
+	command.Env = append(safeEnvironment(isolatedHome, extraEnvironment), internalEnvironment...)
 	var output limitedBuffer
 	output.limit = 8 << 20
 	command.Stdout = &output

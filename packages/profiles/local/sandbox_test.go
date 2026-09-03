@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -30,6 +31,17 @@ func TestSafeEnvironmentRejectsDangerousOverrides(t *testing.T) {
 	}
 	if !strings.Contains(joined, "LANG=zh_CN.UTF-8") {
 		t.Fatalf("safe locale override missing: %s", joined)
+	}
+}
+
+func TestDarwinSandboxProfileAllowsDevNullWrites(t *testing.T) {
+	workspace := Workspace{Root: "/workspace", Temp: "/workspace/.kepler-tmp"}
+	profile := darwinSandboxProfile(workspace, nil, nil, false)
+	if !strings.Contains(profile, `(allow file-write* (literal "/dev/null"))`) {
+		t.Fatalf("/dev/null write access is required for standard command redirection: %s", profile)
+	}
+	if !strings.Contains(profile, "(deny file-write*)") {
+		t.Fatalf("sandbox must keep its default write denial: %s", profile)
 	}
 }
 
@@ -76,5 +88,60 @@ func TestIntegrationSandboxHidesWorkspaceCredentials(t *testing.T) {
 	}
 	if result.ExitCode == 0 || strings.Contains(result.Output, secret) {
 		t.Fatalf("credential read escaped sandbox: %+v", result)
+	}
+}
+
+func TestIntegrationSandboxAllowsDevNull(t *testing.T) {
+	if os.Getenv("SANDBOX_INTEGRATION") == "" || runtime.GOOS != "darwin" {
+		t.Skip("macOS sandbox integration test is disabled")
+	}
+	workspace, err := NewWorkspace(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = workspace.Close() })
+
+	result, err := (Sandbox{Workspace: workspace}).Run(context.Background(), CommandRequest{
+		Argv: []string{"/bin/sh", "-c", "printf ok >/dev/null"},
+	})
+	if err != nil || result.ExitCode != 0 {
+		t.Fatalf("/dev/null redirection failed: result=%+v err=%v", result, err)
+	}
+}
+
+func TestIntegrationSandboxRunsGitShow(t *testing.T) {
+	if os.Getenv("SANDBOX_INTEGRATION") == "" || runtime.GOOS != "darwin" {
+		t.Skip("macOS sandbox integration test is disabled")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	for _, args := range [][]string{
+		{"init", root},
+		{"-C", root, "-c", "user.name=Kepler Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "initial"},
+		{"-C", root, "remote", "add", "origin", "https://embedded-token@example.invalid/repo.git"},
+	} {
+		if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v: %s", args, err, output)
+		}
+	}
+	workspace, err := NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = workspace.Close() })
+
+	result, err := (Sandbox{Workspace: workspace}).Run(context.Background(), CommandRequest{
+		Argv: []string{"git", "show", "--oneline", "--no-patch", "HEAD"},
+	})
+	if err != nil || result.ExitCode != 0 {
+		t.Fatalf("git show failed: result=%+v err=%v", result, err)
+	}
+	configResult, err := (Sandbox{Workspace: workspace}).Run(context.Background(), CommandRequest{
+		Argv: []string{"git", "config", "--get", "remote.origin.url"},
+	})
+	if err != nil || configResult.ExitCode == 0 || strings.Contains(configResult.Output, "embedded-token") {
+		t.Fatalf("sandboxed Git exposed repository credentials: result=%+v err=%v", configResult, err)
 	}
 }
