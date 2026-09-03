@@ -30,7 +30,7 @@ func TestConversationListSetsHasMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	conversations, err := svc.List(ctx, owner, false, 10)
+	conversations, err := svc.List(ctx, owner, false, 10, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

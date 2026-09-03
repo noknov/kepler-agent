@@ -24,6 +24,7 @@ type ClientEvent struct {
 	ToolCallID string           `json:"toolCallId,omitempty"`
 	Plan       *tool.PlanUpdate `json:"plan,omitempty"`
 	At         time.Time        `json:"at,omitempty"`
+	Replace    bool             `json:"replace,omitempty"`
 }
 
 type EventHub struct {
@@ -32,21 +33,29 @@ type EventHub struct {
 	mu          sync.Mutex
 	subscribers map[string]map[chan ClientEvent]struct{}
 	streams     map[string]*safety.StreamRedactor
+	streamText  map[string]string
+	streamOwner map[string]string
 }
 
 func NewEventHub(redactor safety.Redactor) *EventHub {
-	return &EventHub{Redactor: redactor, subscribers: make(map[string]map[chan ClientEvent]struct{}), streams: make(map[string]*safety.StreamRedactor)}
+	return &EventHub{Redactor: redactor, subscribers: make(map[string]map[chan ClientEvent]struct{}), streams: make(map[string]*safety.StreamRedactor), streamText: make(map[string]string), streamOwner: make(map[string]string)}
 }
 
-func (h *EventHub) Subscribe(sessionID string) (<-chan ClientEvent, func()) {
+func (h *EventHub) Subscribe(sessionID string) ([]ClientEvent, <-chan ClientEvent, func()) {
 	channel := make(chan ClientEvent, 128)
 	h.mu.Lock()
 	if h.subscribers[sessionID] == nil {
 		h.subscribers[sessionID] = make(map[chan ClientEvent]struct{})
 	}
 	h.subscribers[sessionID][channel] = struct{}{}
+	snapshots := make([]ClientEvent, 0)
+	for turnID, owner := range h.streamOwner {
+		if owner == sessionID && h.streamText[turnID] != "" {
+			snapshots = append(snapshots, ClientEvent{SessionID: sessionID, TurnID: turnID, Kind: "assistant_delta", Role: "assistant", Text: h.streamText[turnID], Replace: true, At: time.Now().UTC()})
+		}
+	}
 	h.mu.Unlock()
-	return channel, func() {
+	return snapshots, channel, func() {
 		h.mu.Lock()
 		if _, exists := h.subscribers[sessionID][channel]; exists {
 			delete(h.subscribers[sessionID], channel)
@@ -71,6 +80,8 @@ func (h *EventHub) Publish(_ context.Context, event transcript.Event) {
 			h.streams[event.TurnID] = redactor
 		}
 		text := redactor.Append(event.Model.Text)
+		h.streamOwner[event.TurnID] = event.SessionID
+		h.streamText[event.TurnID] += text
 		h.mu.Unlock()
 		if text != "" {
 			h.broadcast(ClientEvent{ID: event.ID, SessionID: event.SessionID, TurnID: event.TurnID, Kind: "assistant_delta", Role: "assistant", Text: text, At: event.Timestamp})
@@ -84,6 +95,8 @@ func (h *EventHub) Publish(_ context.Context, event transcript.Event) {
 				h.broadcastLocked(ClientEvent{ID: event.ID + ":tail", SessionID: event.SessionID, TurnID: event.TurnID, Kind: "assistant_delta", Role: "assistant", Text: tail, At: event.Timestamp})
 			}
 			delete(h.streams, event.TurnID)
+			delete(h.streamText, event.TurnID)
+			delete(h.streamOwner, event.TurnID)
 		}
 		h.mu.Unlock()
 	}

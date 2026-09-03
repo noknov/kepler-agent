@@ -56,7 +56,7 @@ type Store interface {
 	DeleteSession(context.Context, []byte) error
 	CreateConversation(context.Context, Identity, Conversation) error
 	GetConversation(context.Context, Identity, string) (Conversation, error)
-	ListConversations(context.Context, Identity, bool, int) ([]Conversation, error)
+	ListConversations(context.Context, Identity, bool, int, int) ([]Conversation, error)
 	RenameConversation(context.Context, Identity, string, string) error
 	ArchiveConversation(context.Context, Identity, string, bool) error
 	TouchConversation(context.Context, Identity, string, string) error
@@ -140,14 +140,17 @@ func (s PGStore) GetConversation(ctx context.Context, owner Identity, id string)
 	return conversation, err
 }
 
-func (s PGStore) ListConversations(ctx context.Context, owner Identity, archived bool, limit int) ([]Conversation, error) {
+func (s PGStore) ListConversations(ctx context.Context, owner Identity, archived bool, limit, offset int) ([]Conversation, error) {
 	if s.Pool == nil {
 		return nil, fmt.Errorf("web store unavailable")
 	}
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	rows, err := s.Pool.Query(ctx, `SELECT id,title,archived_at,created_at,updated_at FROM web_conversations WHERE owner_provider=$1 AND owner_tenant_id=$2 AND owner_subject_id=$3 AND (($4 AND archived_at IS NOT NULL) OR (NOT $4 AND archived_at IS NULL)) ORDER BY updated_at DESC LIMIT $5`, owner.Provider, owner.TenantID, owner.SubjectID, archived, limit)
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := s.Pool.Query(ctx, `SELECT id,title,archived_at,created_at,updated_at FROM web_conversations WHERE owner_provider=$1 AND owner_tenant_id=$2 AND owner_subject_id=$3 AND (($4 AND archived_at IS NOT NULL) OR (NOT $4 AND archived_at IS NULL)) ORDER BY updated_at DESC LIMIT $5 OFFSET $6`, owner.Provider, owner.TenantID, owner.SubjectID, archived, limit, offset)
 	if err != nil {
 		return nil, err
 	}

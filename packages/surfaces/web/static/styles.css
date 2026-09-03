@@ -1,16 +1,16 @@
 :root {
   --ink: #2c3328;
   --muted: #6b7468;
-  --paper: #f7f6f2;
-  --card: #fdfcf9;
-  --sidebar: #eef0ea;
-  --line: #dfe3d8;
-  --accent: #6b8f71;
-  --accent-soft: #e4ebe5;
-  --accent-hover: #5a7a60;
-  --user-bubble: #e8efe9;
+  --paper: #fbfcf9;
+  --card: #ffffff;
+  --sidebar: #f4f7f1;
+  --line: #e3e9e0;
+  --accent: #47785a;
+  --accent-soft: #e8f1e9;
+  --accent-hover: #346347;
+  --user-bubble: #e7f2e8;
   --danger: #b83c35;
-  --shadow: 0 12px 40px rgba(44, 51, 40, 0.07);
+  --shadow: 0 8px 28px rgba(44, 51, 40, 0.08);
   --font-ui: "Instrument Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-display: "Fraunces", Georgia, "Times New Roman", serif;
   font-family: var(--font-ui);
@@ -54,6 +54,8 @@ button, a { -webkit-tap-highlight-color: transparent; }
 }
 
 .hero {
+	max-width: 1240px;
+	margin: 0 auto;
   min-height: calc(100vh - 68px);
   display: grid;
   grid-template-columns: minmax(320px, 1fr) minmax(280px, 0.85fr);
@@ -212,7 +214,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
   height: 100vh;
   display: grid;
   grid-template-columns: 268px minmax(0, 1fr);
-  background: var(--paper);
+  background: #fcfdfb;
   overflow: hidden;
 }
 
@@ -263,17 +265,30 @@ button, a { -webkit-tap-highlight-color: transparent; }
   width: 100%;
   min-height: 42px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 10px;
   background: transparent;
   color: var(--ink);
   text-align: left;
-  padding: 8px 34px 8px 10px;
-  cursor: pointer;
-  font-size: 15px;
+  padding: 2px;
+  margin: 1px 0;
 }
 
-.conversation-item:hover { background: rgba(0, 0, 0, 0.04); }
-.conversation-item.active { background: var(--card); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06); font-weight: 550; }
+.conversation-item:hover { background: rgba(71, 120, 90, 0.07); }
+.conversation-item.active { background: var(--accent-soft); font-weight: 600; }
+
+.conversation-open {
+  min-width: 0;
+  flex: 1;
+  min-height: 38px;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
 
 .conversation-item .item-title {
   overflow: hidden;
@@ -283,10 +298,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 }
 
 .conversation-item .item-menu {
-  position: absolute;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
+  position: static;
   width: 26px;
   height: 26px;
   border: 0;
@@ -303,6 +315,8 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .conversation-item.menu-open .item-menu { opacity: 1; }
 
 .history-empty { padding: 14px 10px; color: var(--muted); font-size: 14px; }
+.load-more { margin: 0 6px 10px; border: 0; background: transparent; color: var(--accent); font-size: 13px; font-weight: 600; cursor: pointer; }
+.load-more:hover { text-decoration: underline; }
 
 .sidebar-bottom {
   margin-top: auto;
@@ -422,7 +436,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
   scrollbar-width: thin;
 }
 
-.message-row { margin-bottom: 22px; animation: rise 0.2s ease-out; }
+.message-row { margin-bottom: 24px; animation: rise 0.16s ease-out; }
 .message-row.user { display: flex; justify-content: flex-end; }
 
 .message-row.user .message-content {
@@ -443,7 +457,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 }
 
 .message-row.assistant .message-content {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: 16px;
   line-height: 1.65;
   max-width: 800px;
@@ -712,7 +726,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
   border: 1px solid var(--line);
   border-radius: 14px;
   background: var(--card);
-  box-shadow: var(--shadow);
+  box-shadow: 0 10px 28px rgba(44, 51, 40, 0.10);
   padding: 12px 14px 8px;
 }
 

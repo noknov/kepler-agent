@@ -13,10 +13,11 @@ export function renderMarkdown(text) {
 
   const normalized = normalizeMarkdownSource(text);
   const raw = marked.parse(normalized, { breaks: true, gfm: true });
-  if (typeof DOMPurify !== "undefined") {
-    return DOMPurify.sanitize(raw, { USE_PROFILES: { html: true } });
+  if (typeof DOMPurify === "undefined") {
+    // Never turn a transient asset failure into an HTML injection path.
+    return escapeHTML(text).replace(/\n/g, "<br>");
   }
-  return raw;
+  return DOMPurify.sanitize(raw, { USE_PROFILES: { html: true } });
 }
 
 function escapeHTML(text) {

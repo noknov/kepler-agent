@@ -181,7 +181,12 @@ func (h *Handler) handleConversationCollection(w http.ResponseWriter, r *http.Re
 	switch r.Method {
 	case http.MethodGet:
 		archived := r.URL.Query().Get("archived") == "true"
-		conversations, err := h.Conversations.List(r.Context(), owner, archived, 100)
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		if limit <= 0 || limit > 100 {
+			limit = 50
+		}
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		conversations, err := h.Conversations.List(r.Context(), owner, archived, limit+1, offset)
 		if err != nil {
 			writeAPIError(w, http.StatusInternalServerError, "storage_error", "Conversations could not be loaded")
 			return
@@ -189,7 +194,11 @@ func (h *Handler) handleConversationCollection(w http.ResponseWriter, r *http.Re
 		if conversations == nil {
 			conversations = []Conversation{}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"conversations": conversations})
+		hasMore := len(conversations) > limit
+		if hasMore {
+			conversations = conversations[:limit]
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"conversations": conversations, "hasMore": hasMore})
 	case http.MethodPost:
 		conversation, err := h.Conversations.Create(r.Context(), owner)
 		if err != nil {
@@ -329,7 +338,7 @@ func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request, owner Ide
 		return
 	}
 	after, _ := strconv.ParseUint(r.URL.Query().Get("after"), 10, 64)
-	channel, cancel := h.Conversations.Hub.Subscribe(id)
+	snapshots, channel, cancel := h.Conversations.Hub.Subscribe(id)
 	defer cancel()
 	replay, err := h.Conversations.Events(r.Context(), owner, id, after)
 	if err != nil {
@@ -341,6 +350,11 @@ func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request, owner Ide
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	for _, event := range replay {
+		if err := writeSSE(w, event); err != nil {
+			return
+		}
+	}
+	for _, event := range snapshots {
 		if err := writeSSE(w, event); err != nil {
 			return
 		}

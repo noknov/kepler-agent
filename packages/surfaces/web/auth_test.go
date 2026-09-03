@@ -73,12 +73,19 @@ func (s *memoryWebStore) GetConversation(_ context.Context, _ Identity, id strin
 	}
 	return conversation, nil
 }
-func (s *memoryWebStore) ListConversations(context.Context, Identity, bool, int) ([]Conversation, error) {
+func (s *memoryWebStore) ListConversations(_ context.Context, _ Identity, _ bool, limit, offset int) ([]Conversation, error) {
 	result := make([]Conversation, 0, len(s.conversations))
 	for _, conversation := range s.conversations {
 		result = append(result, conversation)
 	}
-	return result, nil
+	if offset >= len(result) {
+		return nil, nil
+	}
+	end := offset + limit
+	if end > len(result) {
+		end = len(result)
+	}
+	return result[offset:end], nil
 }
 func (s *memoryWebStore) RenameConversation(_ context.Context, _ Identity, id, title string) error {
 	conversation, ok := s.conversations[id]
@@ -301,6 +308,19 @@ func TestCollapseClientEventsKeepsLatestToolStatus(t *testing.T) {
 	}
 	if collapsed[0].Status != "completed" {
 		t.Fatalf("tool status = %q, want completed", collapsed[0].Status)
+	}
+}
+
+func TestEventHubReplaysCurrentStreamSnapshotOnSubscribe(t *testing.T) {
+	hub := NewEventHub(safety.Redactor{})
+	hub.Publish(context.Background(), transcript.Event{
+		ID: "delta-1", SessionID: "web_1", TurnID: "turn-1", Type: transcript.ModelStreamed,
+		Model: &model.StreamEvent{Type: model.StreamTextDelta, Text: "partial response\n"}, Timestamp: time.Now().UTC(),
+	})
+	snapshots, _, cancel := hub.Subscribe("web_1")
+	defer cancel()
+	if len(snapshots) != 1 || !snapshots[0].Replace || snapshots[0].Text != "partial response\n" {
+		t.Fatalf("stream snapshot = %#v", snapshots)
 	}
 }
 

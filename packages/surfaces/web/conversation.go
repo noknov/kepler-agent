@@ -72,8 +72,8 @@ type sessionMessageChecker interface {
 	SessionsWithMessages(ctx context.Context, sessionIDs []string) (map[string]bool, error)
 }
 
-func (s *ConversationService) List(ctx context.Context, owner Identity, archived bool, limit int) ([]Conversation, error) {
-	conversations, err := s.Store.ListConversations(ctx, owner, archived, limit)
+func (s *ConversationService) List(ctx context.Context, owner Identity, archived bool, limit, offset int) ([]Conversation, error) {
+	conversations, err := s.Store.ListConversations(ctx, owner, archived, limit, offset)
 	if err != nil {
 		return nil, err
 	}

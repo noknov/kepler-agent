@@ -97,8 +97,10 @@ function showAuthError() {
 }
 
 async function loadConversations(selectFirst = true) {
-  const payload = await api("/api/conversations");
+  const payload = await api("/api/conversations?limit=50&offset=0");
   state.conversations = payload.conversations || [];
+  state.conversationOffset = state.conversations.length;
+  state.hasMoreConversations = Boolean(payload.hasMore);
   renderConversations();
   if (selectFirst && !state.current && state.conversations.length) {
     await selectConversation(state.conversations[0].id);
@@ -106,8 +108,30 @@ async function loadConversations(selectFirst = true) {
   if (!state.conversations.length) showEmpty();
 }
 
+async function loadMoreConversations() {
+  if (state.loadingMoreConversations || !state.hasMoreConversations) return;
+  state.loadingMoreConversations = true;
+  const button = $("#load-more-conversations");
+  button.textContent = "Loading…";
+  try {
+    const payload = await api(`/api/conversations?limit=50&offset=${state.conversationOffset}`);
+    const next = payload.conversations || [];
+    const existing = new Set(state.conversations.map((item) => item.id));
+    state.conversations.push(...next.filter((item) => !existing.has(item.id)));
+    state.conversationOffset = state.conversations.length;
+    state.hasMoreConversations = Boolean(payload.hasMore);
+    renderConversations();
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    state.loadingMoreConversations = false;
+    button.textContent = "Load older conversations";
+  }
+}
+
 function renderConversations() {
   const list = $("#conversation-list");
+	$("#load-more-conversations").classList.toggle("hidden", !state.hasMoreConversations);
   list.replaceChildren();
   if (!state.conversations.length) {
     const empty = document.createElement("p");
@@ -117,15 +141,19 @@ function renderConversations() {
     return;
   }
   for (const conversation of state.conversations) {
-    const button = document.createElement("button");
-    button.className = `conversation-item${state.current?.id === conversation.id ? " active" : ""}`;
-    button.dataset.id = conversation.id;
-    button.setAttribute("role", "listitem");
+    const item = document.createElement("div");
+    item.className = `conversation-item${state.current?.id === conversation.id ? " active" : ""}`;
+    item.setAttribute("role", "listitem");
+
+    const open = document.createElement("button");
+    open.className = "conversation-open";
+    open.type = "button";
+    open.setAttribute("aria-label", `Open ${conversation.title}`);
 
     const title = document.createElement("span");
     title.className = "item-title";
     title.textContent = conversation.title;
-    button.append(title);
+    open.append(title);
 
     const menu = document.createElement("button");
     menu.className = "item-menu";
@@ -133,13 +161,12 @@ function renderConversations() {
     menu.setAttribute("aria-label", "Conversation options");
     menu.textContent = "•••";
     menu.addEventListener("click", (event) => {
-      event.stopPropagation();
       openContextMenu(event.currentTarget, conversation);
     });
-    button.append(menu);
+    open.addEventListener("click", () => selectConversation(conversation.id));
+    item.append(open, menu);
 
-    button.addEventListener("click", () => selectConversation(conversation.id));
-    list.append(button);
+    list.append(item);
   }
 }
 
@@ -183,13 +210,14 @@ function findUnusedConversation() {
 }
 
 async function selectConversation(id) {
-  if (state.current?.id === id) {
+  if (state.current?.id === id && state.currentLoaded) {
     closeSidebar();
     return;
   }
   closeStream();
   clearTimeline();
   state.current = state.conversations.find((item) => item.id === id) || null;
+  state.currentLoaded = false;
   state.events = [];
   state.maxSequence = 0;
   state.running = false;
@@ -199,6 +227,7 @@ async function selectConversation(id) {
   for (const event of state.events) {
     state.maxSequence = Math.max(state.maxSequence, event.sequence || 0);
   }
+  state.currentLoaded = true;
   renderTimeline(true);
   openStream();
   closeSidebar();
@@ -259,7 +288,7 @@ function receiveEvent(event) {
 
   if (event.kind === "assistant_delta") {
     let live = state.events.find((item) => item.kind === "assistant_delta" && item.turnId === event.turnId);
-    if (live) live.text += event.text;
+    if (live) live.text = event.replace ? event.text : live.text + event.text;
     else state.events.push({ ...event });
     updateStreamingMessage(event.turnId);
     return;
@@ -331,6 +360,7 @@ function eventKey(event) {
 function clearTimeline() {
   state.timelineNodes.clear();
   state.markdownCache.clear();
+  for (const timer of state.streamRenderTimers.values()) clearTimeout(timer);
   state.streamRenderTimers.clear();
   state.activityStart.clear();
   state.streamGraceUntil = 0;
@@ -410,9 +440,7 @@ function renderTimeline(force = false) {
     }
   }
 
-  requestAnimationFrame(() => {
-    timeline.scrollTop = timeline.scrollHeight;
-  });
+  scrollTimelineToEnd();
   updateComposer();
 }
 
@@ -436,11 +464,19 @@ function updateStreamingMessage(turnId) {
       if (!latest) return;
       updateMessageContent(node, latest, true);
       const timeline = $("#timeline");
-      requestAnimationFrame(() => {
-        timeline.scrollTop = timeline.scrollHeight;
-      });
+      scrollTimelineToEnd();
     }, 80),
   );
+}
+
+function scrollTimelineToEnd() {
+  if (state.streamRenderFrame) return;
+  state.streamRenderFrame = requestAnimationFrame(() => {
+    state.streamRenderFrame = null;
+    const timeline = $("#timeline");
+    const nearBottom = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 96;
+    if (nearBottom || state.running) timeline.scrollTop = timeline.scrollHeight;
+  });
 }
 
 function renderMessage(event) {
@@ -651,6 +687,7 @@ $("#message-input").addEventListener("keydown", (event) => {
 });
 
 $("#new-chat").addEventListener("click", createConversation);
+$("#load-more-conversations").addEventListener("click", loadMoreConversations);
 $("#stop-turn").addEventListener("click", async () => {
   try {
     await api(`/api/conversations/${encodeURIComponent(state.current.id)}/turns/stop`, { method: "POST", body: "{}" });

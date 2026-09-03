@@ -7,7 +7,11 @@ export const state = {
     name: "Kepler",
   },
   conversations: [],
+  conversationOffset: 0,
+  hasMoreConversations: false,
+  loadingMoreConversations: false,
   current: null,
+  currentLoaded: false,
   events: [],
   stream: null,
   streamReconnectTimer: null,
@@ -21,5 +25,6 @@ export const state = {
   streamRenderTimers: new Map(),
   activityTimer: null,
   activityStart: new Map(),
+  streamRenderFrame: null,
   resizeFrame: null,
 };
