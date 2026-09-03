@@ -1,5 +1,5 @@
 import React from "react";
-import { Box, Text } from "ink";
+import { Box, Text } from "../cc/kepler-ink.js";
 import type { ApprovalRequest } from "../client/appServer.js";
 import { theme } from "../lib/theme.js";
 

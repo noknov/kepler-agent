@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
+import { summarizeToolArgs } from "../lib/toolDisplay.js";
 
 type JsonRpcRequest = {
   jsonrpc: "2.0";
@@ -71,8 +72,8 @@ export class AppServerClient {
     reader.on("line", (line: string) => this.handleLine(line));
   }
 
-  async initialize(): Promise<void> {
-    const result = (await this.request("initialize", {})) as { protocol?: string };
+  async initialize(timeoutMs = 10_000): Promise<void> {
+    const result = (await this.request("initialize", {}, timeoutMs)) as { protocol?: string };
     if (result.protocol !== "v2") {
       throw new Error(`unsupported app-server protocol: ${result.protocol ?? "unknown"}`);
     }
@@ -112,11 +113,27 @@ export class AppServerClient {
     await this.request("approval/respond", { turnId, sessionId, toolCallId, scope });
   }
 
-  private request(method: string, params?: unknown): Promise<unknown> {
+  private request(method: string, params?: unknown, timeoutMs = 30_000): Promise<unknown> {
     const id = this.nextId++;
     const payload: JsonRpcRequest = { jsonrpc: "2.0", id, method, params };
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        if (!this.pending.has(id)) {
+          return;
+        }
+        this.pending.delete(id);
+        reject(new Error(`${method} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.pending.set(id, {
+        resolve: (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
       this.stdin.write(`${JSON.stringify(payload)}\n`);
     });
   }
@@ -220,8 +237,10 @@ function parseApproval(params: Record<string, unknown>): ApprovalRequest | null 
   if (!event) {
     return null;
   }
-  const toolCall = event.toolCall as Record<string, unknown> | undefined;
-  if (!toolCall?.id || !event.turnId || !event.sessionId) {
+  const toolCall = readToolCall(event);
+  const turnId = readString(event, "turn_id", "turnId");
+  const sessionId = readString(event, "session_id", "sessionId");
+  if (!toolCall?.id || !turnId || !sessionId) {
     return null;
   }
   const metadata = event.metadata;
@@ -234,8 +253,8 @@ function parseApproval(params: Record<string, unknown>): ApprovalRequest | null 
   const name = String(toolCall.name ?? "tool");
   const args = toolCall.arguments ? JSON.stringify(toolCall.arguments) : "";
   return {
-    turnId: String(event.turnId),
-    sessionId: String(event.sessionId),
+    turnId,
+    sessionId,
     toolCallId: String(toolCall.id),
     toolName: name,
     summary: args.length > 120 ? `${args.slice(0, 117)}...` : args,
@@ -252,7 +271,7 @@ function parseToolEvent(params: Record<string, unknown>, method: string): ToolEv
   if (!eventType.startsWith("tool_call")) {
     return null;
   }
-  const toolCall = event.toolCall as Record<string, unknown> | undefined;
+  const toolCall = readToolCall(event);
   if (!toolCall?.id) {
     return null;
   }
@@ -267,7 +286,7 @@ function parseToolEvent(params: Record<string, unknown>, method: string): ToolEv
   }
   const detail = summarizeTool(toolCall);
   return {
-    turnId: String(event.turnId ?? ""),
+    turnId: readString(event, "turn_id", "turnId"),
     toolCallId: String(toolCall.id),
     toolName: String(toolCall.name ?? "tool"),
     status,
@@ -290,13 +309,26 @@ function extractEvent(params: Record<string, unknown>): Record<string, unknown> 
   return params;
 }
 
-function summarizeTool(toolCall: Record<string, unknown>): string {
-  const args = toolCall.arguments;
-  if (!args) {
-    return "";
+function readToolCall(event: Record<string, unknown>): Record<string, unknown> | undefined {
+  const toolCall = event.tool_call ?? event.toolCall;
+  if (!toolCall || typeof toolCall !== "object") {
+    return undefined;
   }
-  const text = typeof args === "string" ? args : JSON.stringify(args);
-  return text.length > 80 ? `${text.slice(0, 77)}...` : text;
+  return toolCall as Record<string, unknown>;
+}
+
+function readString(event: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = event[key];
+    if (value !== undefined && value !== null && value !== "") {
+      return String(value);
+    }
+  }
+  return "";
+}
+
+function summarizeTool(toolCall: Record<string, unknown>): string {
+  return summarizeToolArgs(toolCall.arguments);
 }
 
 export function itemsToMessages(items: ServerItem[]): Array<{ kind: string; text: string; toolName?: string }> {
@@ -312,28 +344,21 @@ export function itemsToMessages(items: ServerItem[]): Array<{ kind: string; text
     switch (type) {
       case "user_input":
       case "steering_input":
-        messages.push({ kind: "user", text: extractText(message) });
+        messages.push({ kind: "user", text: extractMessageText(message) });
         break;
       case "assistant_message":
       case "model_completed":
-        messages.push({ kind: "assistant", text: extractText(message) });
+        messages.push({ kind: "assistant", text: extractMessageText(message) });
         break;
-      case "tool_call_started": {
-        const toolCall = (event as Record<string, unknown>).toolCall as Record<string, unknown> | undefined;
+      case "tool_call_started":
+      case "tool_call_completed":
+        break;
+      case "tool_call_failed": {
+        const toolCall = readToolCall(event as Record<string, unknown>);
         messages.push({
-          kind: "tool",
+          kind: "tool-failed",
           toolName: String(toolCall?.name ?? "tool"),
           text: summarizeTool(toolCall ?? {}),
-        });
-        break;
-      }
-      case "tool_call_completed":
-      case "tool_call_failed": {
-        const toolCall = (event as Record<string, unknown>).toolCall as Record<string, unknown> | undefined;
-        messages.push({
-          kind: type === "tool_call_failed" ? "tool-failed" : "tool-done",
-          toolName: String(toolCall?.name ?? "tool"),
-          text: type === "tool_call_failed" ? "failed" : "completed",
         });
         break;
       }
@@ -344,7 +369,24 @@ export function itemsToMessages(items: ServerItem[]): Array<{ kind: string; text
   return messages;
 }
 
-function extractText(message?: Record<string, unknown>): string {
+export function parseAssistantCompleted(params: Record<string, unknown>): string | null {
+  const event = extractEvent(params);
+  if (!event) {
+    return null;
+  }
+  const eventType = String(event.type ?? params.eventType ?? "");
+  if (eventType !== "assistant_message" && eventType !== "model_completed") {
+    return null;
+  }
+  const message = event.message;
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const text = extractMessageText(message as Record<string, unknown>).trim();
+  return text.length > 0 ? text : null;
+}
+
+export function extractMessageText(message?: Record<string, unknown>): string {
   if (!message) {
     return "";
   }
@@ -352,10 +394,15 @@ function extractText(message?: Record<string, unknown>): string {
   if (Array.isArray(content)) {
     return content
       .map((part) => {
-        if (part && typeof part === "object" && "text" in part) {
-          return String((part as Record<string, unknown>).text ?? "");
+        if (!part || typeof part !== "object") {
+          return "";
         }
-        return "";
+        const block = part as Record<string, unknown>;
+        const blockType = String(block.type ?? "");
+        if (blockType && blockType !== "text" && !("text" in block)) {
+          return "";
+        }
+        return String(block.text ?? "");
       })
       .join("");
   }

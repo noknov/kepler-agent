@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -47,4 +48,20 @@ func FetchBootstrap(ctx context.Context, apiURL, token string) (Bootstrap, error
 		return Bootstrap{}, fmt.Errorf("bootstrap did not return model and protocol")
 	}
 	return info, nil
+}
+
+// ResolveBootstrap returns bootstrap from KEPLER_BOOTSTRAP when the CLI launcher
+// already fetched it, avoiding a duplicate gateway round-trip for app-server.
+func ResolveBootstrap(ctx context.Context, apiURL, token string) (Bootstrap, error) {
+	if raw := strings.TrimSpace(os.Getenv("KEPLER_BOOTSTRAP")); raw != "" {
+		var info Bootstrap
+		if err := json.Unmarshal([]byte(raw), &info); err != nil {
+			return Bootstrap{}, fmt.Errorf("KEPLER_BOOTSTRAP: %w", err)
+		}
+		if info.Model == "" || info.Protocol == "" {
+			return Bootstrap{}, fmt.Errorf("KEPLER_BOOTSTRAP missing model and protocol")
+		}
+		return info, nil
+	}
+	return FetchBootstrap(ctx, apiURL, token)
 }

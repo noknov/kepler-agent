@@ -157,7 +157,8 @@ packages/tools/          Capability-oriented tool implementations
 packages/providers/      Provider wire-format adapters
 packages/connections/    Per-user OAuth connection lifecycle
 packages/appserver/      Local profile JSON-RPC server over stdio
-cli/                     Local CLI and configuration example
+cli/                     Go launcher: auth, headless runtime, Ink bootstrap
+apps/cli/                Ink interactive frontend sources (Node)
 evals/                   Black-box evaluation harness
 gateway/ worker/         Hosted Slack ingress and durable worker commands
 observability/           Runs, costs, metrics, and tool health command

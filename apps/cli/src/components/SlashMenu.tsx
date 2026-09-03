@@ -1,5 +1,5 @@
 import React from "react";
-import { Box, Text } from "ink";
+import { Box, Text } from "../cc/kepler-ink.js";
 import type { SlashCommand } from "../lib/slashCommands.js";
 import { theme } from "../lib/theme.js";
 

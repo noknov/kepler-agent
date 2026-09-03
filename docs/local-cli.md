@@ -16,39 +16,37 @@ as `SOURCE_DIR` only:
 cd ../kepler-agent-deploy
 SOURCE_DIR=../kepler-agent scripts/local-stack.sh start
 SOURCE_DIR=../kepler-agent scripts/build-cli.sh
-./bin/kepler-agent login
-./bin/kepler-agent --cwd /path/to/project
+./bin/kepler-agent login          # once per machine
+cd /path/to/your/project
+./bin/kepler-agent                  # workspace defaults to current directory (--cwd .)
 ```
 
 Login talks only to the public gateway compiled into the binary from
 `CONNECTIONS_PUBLIC_BASE_URL` (override with `--api-url` or `KEPLER_API_URL`).
 Slack OAuth callback is `{CONNECTIONS_PUBLIC_BASE_URL}/cli/oauth/callback`.
 
-Interactive mode starts when stdin is a terminal and no prompt argument is supplied:
+## Architecture
+
+```text
+kepler-agent (Go)
+├── login / config / connect / whoami
+├── interactive TTY  →  apps/cli (Ink)  →  app-server (Go JSON-RPC)  →  agent runtime
+└── headless / jsonl →  in-process runtime + event renderer
+```
+
+Interactive mode starts when stdin is a terminal and no prompt argument is supplied. The Go binary is a thin launcher; the Ink UI spawns `app-server` and talks to it over stdio JSON-RPC.
+
+Packaging produces `bin/kepler-agent`, `bin/kepler-agent-app-server`, and `bin/ui/main.js` under **kepler-agent-deploy** (not this repo). **Node.js** must be on `PATH` for interactive mode.
+
+Headless / eval (Go binary only, no Ink):
 
 ```sh
-bin/kepler-agent --cwd . "diagnose the failing tests"
-printf "review this repository\n" | bin/kepler-agent --cwd . --output jsonl
-bin/kepler-agent --resume
+printf "review\n" | ../kepler-agent-deploy/bin/kepler-agent --cwd . --output jsonl
 ```
 
 Optional workspace TOML (`kepler-agent config init`) only covers routing, sandbox, MCP, and prompt overlays. It does not contain provider URLs or API keys. Models are whatever the Kepler worker is configured to use.
 
 Interactive sessions show a compact header, streamed text, and live tool lines. Use `/help`, `/status`, `/clear`, and `/exit`. Inputs during a turn are steered or queued via `input_routing`.
-
-### Ink UI (experimental)
-
-The Node/Ink frontend talks to the Go `app-server` over stdio JSON-RPC. It does not replace the default Bubble Tea interactive mode.
-
-```sh
-go build -o bin/app-server ./appserver/cmd/app-server
-cd apps/cli && pnpm install && pnpm build
-bin/kepler-agent ui --cwd .
-bin/kepler-agent ui --resume
-bin/kepler-agent ui --input-routing queue
-```
-
-Set `KEPLER_UI_ENTRY` to override the UI bundle path, or `KEPLER_APP_SERVER` for the backend binary.
 
 ## Security model
 

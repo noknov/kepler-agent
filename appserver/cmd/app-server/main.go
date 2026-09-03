@@ -40,7 +40,7 @@ func run(ctx context.Context) error {
 	if token == "" || apiURL == "" {
 		return fmt.Errorf("set KEPLER_TOKEN and KEPLER_API_URL (run kepler-agent login)")
 	}
-	info, err := cloud.FetchBootstrap(ctx, apiURL, token)
+	info, err := cloud.ResolveBootstrap(ctx, apiURL, token)
 	if err != nil {
 		return err
 	}

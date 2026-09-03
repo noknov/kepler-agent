@@ -1,14 +1,13 @@
 import React from "react";
-import { Box } from "ink";
+import { Box, useApp } from "./cc/kepler-ink.js";
+import { AlternateScreen } from "./cc/kepler-ink.js";
+import { AppStateProvider } from "./cc/state/AppState.js";
+import { ScrollKeybindingHandler } from "./cc/components/ScrollKeybindingHandler.js";
+import { KeybindingSetup } from "./cc/keybindings/KeybindingProviderSetup.js";
+import { isFullscreenEnvEnabled } from "./cc/utils/fullscreen.js";
 import { useRepl } from "./hooks/useRepl.js";
-import { FullscreenLayout } from "./components/FullscreenLayout.js";
-import { Header } from "./components/Header.js";
-import { VirtualTranscript } from "./components/VirtualTranscript.js";
-import { PromptInput } from "./components/PromptInput.js";
-import { SlashMenu } from "./components/SlashMenu.js";
-import { Spinner } from "./components/Spinner.js";
-import { ApprovalPanel } from "./components/ApprovalPanel.js";
-import { ScrollPill } from "./components/ScrollPill.js";
+import { KeplerPromptFooter } from "./components/KeplerPromptFooter.js";
+import { KeplerREPLView } from "./screens/KeplerREPLView.js";
 
 type Props = {
   cwd: string;
@@ -20,34 +19,54 @@ type Props = {
 };
 
 export function AppView(props: Props) {
+  const { exit } = useApp();
   const repl = useRepl(props);
-  const height = (repl.stdout.rows ?? 24) - 8;
-  const width = repl.stdout.columns ?? 80;
-  const showPill = repl.scrollOffset > 0 || repl.unseen > 0;
-
+  const connecting = repl.connectionState === "connecting";
   return (
-    <FullscreenLayout
-      scrollable={
-        <Box flexDirection="column">
-          <Header
-            cwd={props.cwd}
-            model={props.model}
-            user={props.user}
-            sessionId={repl.sessionId ?? "…"}
-          />
-          <VirtualTranscript
-            messages={repl.messages}
-            streamText={repl.streamText}
-            scrollOffset={repl.scrollOffset}
-            height={height}
-          />
-          {repl.busy ? <Spinner frame={repl.spinnerFrame} verb={repl.spinnerVerb} /> : null}
-          {repl.approval ? <ApprovalPanel request={repl.approval} /> : null}
-        </Box>
-      }
-      bottom={<PromptInput value={repl.input} busy={repl.busy} />}
-      modal={repl.showSlash ? <SlashMenu commands={repl.slashMatches} width={width} /> : undefined}
-      pill={showPill ? <ScrollPill unseen={repl.unseen} /> : undefined}
-    />
+    <>
+      <ScrollKeybindingHandler
+        scrollRef={repl.scrollRef}
+        isActive={isFullscreenEnvEnabled()}
+        onScroll={repl.composedOnScroll}
+      />
+      <Box flexDirection="column" flexGrow={1} minHeight={0} width="100%">
+        <KeplerREPLView
+          scrollRef={repl.scrollRef}
+          dividerYRef={repl.dividerYRef}
+          jumpToNew={repl.jumpToNew}
+          unseenDivider={repl.unseenDivider}
+          messages={repl.messages}
+          streamingText={repl.streamingText}
+          busy={repl.busy}
+          inProgressToolUseIDs={repl.inProgressToolUseIDs}
+          sessionId={repl.sessionId}
+          cwd={props.cwd}
+          model={props.model}
+          user={props.user}
+          bottom={
+            <KeplerPromptFooter
+              busy={repl.busy}
+              connecting={connecting}
+              approval={repl.approval}
+              onSubmitText={repl.submitText}
+              onPromptInput={repl.repinOnPromptInput}
+              onExit={exit}
+            />
+          }
+        />
+      </Box>
+    </>
+  );
+}
+
+export function App(props: Props) {
+  return (
+    <AppStateProvider>
+      <KeybindingSetup>
+        <AlternateScreen mouseTracking>
+          <AppView {...props} />
+        </AlternateScreen>
+      </KeybindingSetup>
+    </AppStateProvider>
   );
 }

@@ -14,6 +14,7 @@ __pycache__/
 bin/
 dist/
 runs/
+apps/desktop/
 apps/cli/node_modules/
 apps/cli/dist/
 .pnpm-store/
