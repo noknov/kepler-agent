@@ -20,6 +20,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/health"
 	"github.com/noknov/kepler-agent/packages/infra/httpguard"
 	sharedlogging "github.com/noknov/kepler-agent/packages/infra/logging"
+	"github.com/noknov/kepler-agent/packages/infra/redisclient"
 	"github.com/noknov/kepler-agent/packages/infra/telemetry"
 	"github.com/noknov/kepler-agent/packages/observability"
 	"github.com/noknov/kepler-agent/packages/platform"
@@ -37,7 +38,9 @@ import (
 	slackTools "github.com/noknov/kepler-agent/packages/surfaces/slack/tools"
 	websurface "github.com/noknov/kepler-agent/packages/surfaces/web"
 	"github.com/noknov/kepler-agent/packages/toolkit/gitcache"
+	clickstackTools "github.com/noknov/kepler-agent/packages/tools/clickstack"
 	hostedTools "github.com/noknov/kepler-agent/packages/tools/hosted"
+	notionTools "github.com/noknov/kepler-agent/packages/tools/notion"
 )
 
 type Service struct {
@@ -51,6 +54,7 @@ type Service struct {
 	handler     *slackhandler.Handler
 	slackWorker *slackevents.Worker
 	web         http.Handler
+	webTools    *webToolRefresh
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -61,6 +65,47 @@ type Service struct {
 	activeEvents int
 	draining     atomic.Bool
 	serveErr     chan error
+}
+
+type webToolRefresh struct {
+	Redis      *redisclient.Client
+	ClickStack *clickstackTools.Registrar
+	Notion     *notionTools.Registrar
+}
+
+func (c *webToolRefresh) Start(ctx context.Context) {
+	if c == nil || c.Redis == nil {
+		return
+	}
+	sub := c.Redis.Subscribe(ctx, connections.OAuthCompletedChannel)
+	defer sub.Close()
+	ch := sub.Channel()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-ch:
+			if !ok {
+				return
+			}
+			userID, provider, parsed := connections.ParseOAuthCompletedPayload(msg.Payload)
+			if !parsed {
+				continue
+			}
+			switch provider {
+			case connections.ProviderClickStack:
+				if c.ClickStack != nil {
+					c.ClickStack.Invalidate()
+					log.Printf("web tools: invalidated clickstack registrar after oauth user=%s", userID)
+				}
+			case connections.ProviderNotion:
+				if c.Notion != nil {
+					c.Notion.Invalidate()
+					log.Printf("web tools: invalidated notion registrar after oauth user=%s", userID)
+				}
+			}
+		}
+	}
 }
 
 func Run(ctx context.Context) error {
@@ -150,6 +195,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		return nil, fmt.Errorf("build hosted profile: %w", profileErr)
 	}
 	var webHandler http.Handler
+	var webToolCoordinator *webToolRefresh
 	if cfg.Web.Enabled {
 		if err := platform.RequireWebSchema(ctx, stores.PGPool); err != nil {
 			return nil, fmt.Errorf("verify web schema: %w", err)
@@ -206,6 +252,11 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		}
 		configuredHandler.Brand = websurface.Brand{Name: cfg.Web.SiteName}
 		webHandler = configuredHandler
+		webToolCoordinator = &webToolRefresh{
+			Redis:      stores.Redis,
+			ClickStack: webCatalogBundle.ClickStack,
+			Notion:     webCatalogBundle.Notion,
+		}
 	}
 	healthService := health.NewService(profile.Tools, cfg.Security.WorkspaceRoots)
 	healthService.Redis = stores.Redis
@@ -296,6 +347,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		cancel:    serviceCancel,
 		serveErr:  make(chan error, 1),
 		web:       webHandler,
+		webTools:  webToolCoordinator,
 	}
 	s.eventCond = sync.NewCond(&s.eventMu)
 	s.slackWorker = &slackevents.Worker{
@@ -347,6 +399,9 @@ func (s *Service) StartBackground() {
 		s.Go(func(ctx context.Context) {
 			s.handler.Home.StartRefreshSubscriber(ctx)
 		})
+	}
+	if s.webTools != nil {
+		s.Go(s.webTools.Start)
 	}
 	if s.slackWorker != nil {
 		s.slackWorker.Start(s.ctx)

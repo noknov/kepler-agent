@@ -242,7 +242,59 @@ function showEmpty() {
 function canReconnectStream() {
   if (!state.current) return false;
   if (document.visibilityState === "hidden") return false;
-  return state.running || Date.now() < state.streamGraceUntil;
+  return state.running || state.pendingThinking || Date.now() < state.streamGraceUntil;
+}
+
+function clearPendingThinking() {
+  if (!state.pendingThinking) return;
+  state.pendingThinking = false;
+  state.timelineNodes.get("activity:pending")?.remove();
+  state.timelineNodes.delete("activity:pending");
+}
+
+function deriveRunningFromEvents(events = state.events) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event.kind !== "turn") continue;
+    return event.status === "running";
+  }
+  return false;
+}
+
+async function syncConversationMessages() {
+  if (!state.current || !state.currentLoaded) return;
+  const id = state.current.id;
+  try {
+    const payload = await api(`/api/conversations/${encodeURIComponent(id)}/messages`);
+    const events = normalizeEvents(payload.events || []);
+    let maxSequence = 0;
+    for (const event of events) {
+      maxSequence = Math.max(maxSequence, event.sequence || 0);
+    }
+    state.events = events;
+    state.maxSequence = maxSequence;
+    state.running = deriveRunningFromEvents(events);
+    if (!state.running) clearPendingThinking();
+    renderTimeline(true);
+    updateComposer();
+  } catch (_) {
+    // Background recovery should not interrupt the active chat.
+  }
+}
+
+function ensureStream() {
+  if (!state.current) return;
+  if (!state.stream || state.stream.readyState === EventSource.CLOSED) {
+    openStream();
+  }
+}
+
+function scheduleStuckRecovery() {
+  window.setTimeout(() => {
+    if (!state.current || (!state.pendingThinking && !state.running)) return;
+    ensureStream();
+    syncConversationMessages();
+  }, 3500);
 }
 
 function scheduleStreamReconnect() {
@@ -270,6 +322,7 @@ function openStream() {
     if (state.stream !== stream) return;
     closeStream();
     scheduleStreamReconnect();
+    if (state.running || state.pendingThinking) scheduleStuckRecovery();
   };
 }
 
@@ -293,10 +346,7 @@ function receiveEvent(event) {
       event.kind === "plan" ||
       (event.kind === "message" && event.role === "assistant"))
   ) {
-    state.pendingThinking = false;
-    const pendingKey = "activity:pending";
-    state.timelineNodes.get(pendingKey)?.remove();
-    state.timelineNodes.delete(pendingKey);
+    clearPendingThinking();
   }
 
   if (event.kind === "assistant_delta") {
@@ -371,9 +421,11 @@ function receiveEvent(event) {
     if (["completed", "canceled", "failed", "pending_approval", "pending_input", "max_steps", "output_limit"].includes(event.status)) {
       state.running = false;
       state.streamGraceUntil = Date.now() + 5000;
+      clearPendingThinking();
       stopActivityTimer();
       refreshActivityBlocks();
-      if (!state.running) scheduleStreamReconnect();
+      scheduleStreamReconnect();
+      syncConversationMessages();
     }
     updateComposer();
   }
@@ -643,6 +695,8 @@ async function sendMessage(text) {
       method: "POST",
       body: JSON.stringify({ requestId: requestID(), message: text }),
     });
+    ensureStream();
+    scheduleStuckRecovery();
     const conversation = state.conversations.find((item) => item.id === state.current?.id);
     if (conversation) conversation.hasMessages = true;
     window.setTimeout(() => loadConversations(false), 500);
@@ -829,7 +883,9 @@ document.addEventListener("visibilitychange", () => {
     closeStream();
     return;
   }
-  if (state.current && canReconnectStream()) openStream();
+  if (!state.current) return;
+  openStream();
+  if (state.running || state.pendingThinking) syncConversationMessages();
 });
 
 window.addEventListener("beforeunload", closeStream);

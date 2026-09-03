@@ -69,6 +69,17 @@ func (r *Registrar) Ensure(ctx context.Context, catalog *tool.Catalog, policy to
 	return nil
 }
 
+// Invalidate clears lazy-registration state so the next Ensure re-discovers tools.
+// Call after a user connects or reconnects an integration.
+func (r *Registrar) Invalidate() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.done = false
+	r.mu.Unlock()
+}
+
 func (r *Registrar) bootstrapToken(ctx context.Context, userID string) (string, error) {
 	if r.conn == nil || strings.TrimSpace(userID) == "" {
 		return "", nil

@@ -2,8 +2,24 @@
 
 The Web entry runs on the hosted worker and uses the same model, prompt policy,
 workspace, PostgreSQL, Redis, run events, and server tool policy as Slack.
-Browser conversations are separate from Slack messages. Web users do not
-inherit Slack connection or preference records.
+Browser conversations are separate from Slack messages.
+
+Slack OIDC only authenticates the browser session. Integration credentials
+(ClickStack, GitHub, GCP, Notion, Slack-as-tool) live in `user_connections`
+and are keyed by Slack user ID, so a connection made from Slack App Home or
+`kepler-agent connect` is visible to Web turns for the same user. Rules and
+skills are not loaded on Web yet.
+
+## Short-term surface model
+
+```text
+shared: runtime, Postgres, user_connections, OAuth callbacks (gateway)
+split:  conversation storage, tool catalog instance, surface-only tools
+```
+
+Web currently uses a thinner tool catalog (no Slack/reminder tools) and lazy
+MCP registration via `BeforeRun`. Surface-specific gaps are acceptable until
+the catalog is unified behind one registry plus surface filters.
 
 ## Request path
 
