@@ -39,6 +39,7 @@ export function AppView(props: Props) {
           streamingText={repl.streamingText}
           busy={repl.busy}
           inProgressToolUseIDs={repl.inProgressToolUseIDs}
+          activeTools={repl.activeTools}
           sessionId={repl.sessionId}
           cwd={props.cwd}
           model={props.model}

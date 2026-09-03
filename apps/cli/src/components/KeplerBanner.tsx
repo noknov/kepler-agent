@@ -21,7 +21,6 @@ export function KeplerBanner({ cwd, model, user, sessionId }: Props) {
       {!compact
         ? keplerMark.map((line) => (
             <Text key={line} color={theme.claude}>
-              {"  "}
               {line}
             </Text>
           ))

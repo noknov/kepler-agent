@@ -28,6 +28,7 @@ type Server struct {
 	reader  io.Reader
 	writer  io.Writer
 	writeMu sync.Mutex
+	deltas  *deltaBatcher
 
 	activeMu sync.Mutex
 	active   map[string]*activeTurn
@@ -69,13 +70,15 @@ type TurnStartParams struct {
 }
 
 func New(runtime *agentruntime.Runtime, reader io.Reader, writer io.Writer) *Server {
-	return &Server{
+	server := &Server{
 		Runtime: runtime,
 		reader:  reader,
 		writer:  writer,
 		active:  map[string]*activeTurn{},
 		IDs:     agentruntime.RandomIDs{},
 	}
+	server.deltas = newDeltaBatcher(defaultDeltaFlushInterval, defaultDeltaFlushBytes, server.notifyStreamDelta)
+	return server
 }
 
 func (s *Server) Serve(ctx context.Context) error {
@@ -260,6 +263,7 @@ func (s *Server) execute(ctx context.Context, params TurnStartParams, steering *
 	if err != nil {
 		payload["error"] = err.Error()
 	}
+	s.deltas.flushTurn(params.TurnID)
 	s.notify("turn/completed", payload)
 }
 
@@ -275,16 +279,20 @@ func (s *Server) notify(method string, params any) {
 // NotifyEvent streams a canonical transcript event to connected clients.
 func (s *Server) NotifyEvent(event transcript.Event) {
 	streamed := event.Type == transcript.ModelStreamed && event.Model != nil && event.Model.Type == model.StreamTextDelta
-	method := NotificationMethod(string(event.Type), streamed)
-	payload := any(itemFromEvent(event))
 	if streamed {
-		payload = map[string]any{
-			"turnId":    event.TurnID,
-			"sessionId": event.SessionID,
-			"delta":     event.Model.Text,
-		}
+		s.deltas.push(event)
+		return
 	}
-	s.notify(method, payload)
+	method := NotificationMethod(string(event.Type), streamed)
+	s.notify(method, itemFromEvent(event))
+}
+
+func (s *Server) notifyStreamDelta(event transcript.Event) {
+	s.notify("item/agentMessage/delta", map[string]any{
+		"turnId":    event.TurnID,
+		"sessionId": event.SessionID,
+		"delta":     event.Model.Text,
+	})
 }
 
 func (s *Server) respond(id json.RawMessage, result any, responseErr *ResponseError) {

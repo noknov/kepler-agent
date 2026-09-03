@@ -96,8 +96,6 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 	var sinkMu sync.Mutex
 	var sinkErr error
 	var conversionErr error
-	var streamedText strings.Builder
-	var hasPhasedText bool
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
 	publish := func(event model.StreamEvent) {
@@ -123,14 +121,19 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 				if delta.Text == "" {
 					return
 				}
-				if delta.Phase != "" {
-					hasPhasedText = true
-					if delta.Phase == "final_answer" {
-						publish(model.StreamEvent{Type: model.StreamTextDelta, Text: delta.Text, ItemID: delta.ItemID, Phase: delta.Phase})
-					}
+				// Providers may expose reasoning and final-answer channels through
+				// the same streaming API. Reasoning remains internal, while an
+				// unphased delta is treated as user-visible text for compatibility
+				// with OpenAI-compatible providers.
+				if delta.Phase != "" && delta.Phase != "final_answer" {
 					return
 				}
-				streamedText.WriteString(delta.Text)
+				publish(model.StreamEvent{
+					Type:   model.StreamTextDelta,
+					Text:   delta.Text,
+					ItemID: delta.ItemID,
+					Phase:  delta.Phase,
+				})
 			},
 			OnToolCallComplete: func(call llm.ToolCall) {
 				canonical, convertErr := toToolCall(call)
@@ -174,9 +177,6 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 		}
 	}
 	canonical := model.Response{Message: message, FinishReason: reason, Usage: toUsage(response.Usage), RawMetadata: response.Raw}
-	if !hasPhasedText && len(canonical.Message.ToolCalls()) == 0 && streamedText.Len() > 0 {
-		publish(model.StreamEvent{Type: model.StreamTextDelta, Text: streamedText.String()})
-	}
 	publish(model.StreamEvent{Type: model.StreamCompleted, ResponseID: canonical.ID, Usage: &canonical.Usage})
 	return canonical, nil
 }

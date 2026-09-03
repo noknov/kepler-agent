@@ -21,6 +21,11 @@ type recordingWire struct {
 
 type streamingWire struct{ response llm.Response }
 
+type deltaStreamingWire struct {
+	deltas   []llm.TextDelta
+	response llm.Response
+}
+
 func (w streamingWire) Chat(context.Context, llm.Request) (llm.Response, error) {
 	return w.response, nil
 }
@@ -28,6 +33,19 @@ func (w streamingWire) Chat(context.Context, llm.Request) (llm.Response, error) 
 func (w streamingWire) ChatStream(_ context.Context, _ llm.Request, handler llm.StreamHandler) (llm.Response, error) {
 	if handler.OnText != nil {
 		handler.OnText(llm.TextDelta{Text: "Let me inspect this."})
+	}
+	return w.response, nil
+}
+
+func (w deltaStreamingWire) Chat(context.Context, llm.Request) (llm.Response, error) {
+	return w.response, nil
+}
+
+func (w deltaStreamingWire) ChatStream(_ context.Context, _ llm.Request, handler llm.StreamHandler) (llm.Response, error) {
+	for _, delta := range w.deltas {
+		if handler.OnText != nil {
+			handler.OnText(delta)
+		}
 	}
 	return w.response, nil
 }
@@ -66,6 +84,52 @@ func TestClientUsesStreamingWithEventSink(t *testing.T) {
 	}
 	if wire.chatCalls != 0 || wire.streamCalls != 1 {
 		t.Fatalf("chat=%d stream=%d", wire.chatCalls, wire.streamCalls)
+	}
+}
+
+func TestClientPublishesUnphasedTextDeltasInOrder(t *testing.T) {
+	client := &Client{Wire: deltaStreamingWire{
+		deltas:   []llm.TextDelta{{Text: "fast "}, {Text: "stream"}},
+		response: llm.Response{Message: llm.Message{Role: "assistant", Content: "fast stream"}, FinishReason: "stop"},
+	}}
+	var received []string
+	_, err := client.Generate(context.Background(), model.Request{Model: "test"}, func(event model.StreamEvent) error {
+		if event.Type == model.StreamTextDelta {
+			received = append(received, event.Text)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(received, ""); got != "fast stream" {
+		t.Fatalf("streamed text = %q, want fast stream", got)
+	}
+	if len(received) != 2 {
+		t.Fatalf("delta count = %d, want 2", len(received))
+	}
+}
+
+func TestClientDoesNotPublishReasoningDeltas(t *testing.T) {
+	client := &Client{Wire: deltaStreamingWire{
+		deltas: []llm.TextDelta{
+			{Text: "private", Phase: "reasoning"},
+			{Text: "visible", Phase: "final_answer"},
+		},
+		response: llm.Response{Message: llm.Message{Role: "assistant", Content: "visible"}, FinishReason: "stop"},
+	}}
+	var received []string
+	_, err := client.Generate(context.Background(), model.Request{Model: "test"}, func(event model.StreamEvent) error {
+		if event.Type == model.StreamTextDelta {
+			received = append(received, event.Text)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(received, ""); got != "visible" {
+		t.Fatalf("streamed text = %q, want visible", got)
 	}
 }
 
@@ -233,7 +297,7 @@ func TestClientPreservesTextInMultimodalWireMessage(t *testing.T) {
 	}
 }
 
-func TestClientDoesNotStreamTextFromToolCallStep(t *testing.T) {
+func TestClientStreamsVisibleTextBeforeToolCallStep(t *testing.T) {
 	client := &Client{Wire: streamingWire{response: llm.Response{Message: llm.Message{Role: "assistant", Content: "Let me inspect this.", ToolCalls: []llm.ToolCall{{ID: "call", Type: "function", Function: llm.ToolFunction{Name: "read", Arguments: `{}`}}}}, FinishReason: "tool_calls"}}}
 	var text string
 	response, err := client.Generate(context.Background(), model.Request{Model: "test"}, func(event model.StreamEvent) error {
@@ -245,7 +309,7 @@ func TestClientDoesNotStreamTextFromToolCallStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if text != "" {
+	if text != "Let me inspect this." {
 		t.Fatalf("streamed text = %q", text)
 	}
 	if got := response.Message.Text(); got != "" {

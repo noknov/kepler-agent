@@ -23,10 +23,10 @@ import {
   type ToolEvent,
 } from "../client/appServer.js";
 import { spawnBackend } from "../backend/spawn.js";
+import { toolDisplayName } from "../lib/toolDisplay.js";
 import type { RenderableMessage } from "../cc/types/message.js";
 import {
   createAssistantMessage,
-  createAssistantToolUse,
   createSystemMessage,
   createUserMessage,
 } from "../cc/utils/messages.js";
@@ -46,6 +46,12 @@ type ReplConfig = {
 
 type ConnectionState = "connecting" | "ready" | "failed";
 
+export type ActiveTool = {
+  id: string;
+  name: string;
+  detail: string;
+};
+
 export function useRepl(config: ReplConfig) {
   const { exit } = useApp();
   const [messages, setMessages] = useState<RenderableMessage[]>([]);
@@ -55,6 +61,7 @@ export function useRepl(config: ReplConfig) {
   const streamTextRef = useRef("");
   const finalAssistantRef = useRef("");
   const [inProgressToolUseIDs, setInProgressToolUseIDs] = useState<Set<string>>(() => new Set());
+  const [activeTools, setActiveTools] = useState<ActiveTool[]>([]);
   const [busy, setBusy] = useState(false);
   const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
   const [sessionId, setSessionId] = useState<string | null>(config.sessionId ?? null);
@@ -131,6 +138,7 @@ export function useRepl(config: ReplConfig) {
         streamTextRef.current = "";
         setStreamingText(null);
         setInProgressToolUseIDs(new Set());
+        setActiveTools([]);
       },
       onTurnCompleted: (_turnId, payload) => {
         const streamed = streamTextRef.current;
@@ -148,13 +156,14 @@ export function useRepl(config: ReplConfig) {
         setActiveTurnId(null);
         setBusy(false);
         setInProgressToolUseIDs(new Set());
+        setActiveTools([]);
         finalAssistantRef.current = "";
         if (payload.error) {
           pushSystem(String(payload.error));
         }
       },
       onApproval: (request) => setApproval(request),
-      onTool: (event) => handleToolEvent(event, setMessages, setInProgressToolUseIDs),
+      onTool: (event) => handleToolEvent(event, setMessages, setInProgressToolUseIDs, setActiveTools),
       onItem: (method, params) => {
         if (method !== "item/completed") {
           return;
@@ -374,6 +383,7 @@ export function useRepl(config: ReplConfig) {
     messages,
     streamingText,
     inProgressToolUseIDs,
+    activeTools,
     submitText,
     busy,
     approval,
@@ -393,16 +403,14 @@ function handleToolEvent(
   event: ToolEvent,
   setMessages: Dispatch<SetStateAction<RenderableMessage[]>>,
   setInProgress: Dispatch<SetStateAction<Set<string>>>,
+  setActiveTools: Dispatch<SetStateAction<ActiveTool[]>>,
 ): void {
   if (event.status === "running") {
     setInProgress((prev) => new Set(prev).add(event.toolCallId));
-    setMessages((prev) =>
-      appendToolUseMessage(prev, {
-        toolCallId: event.toolCallId,
-        toolName: event.toolName,
-        input: event.detail,
-      }),
-    );
+    setActiveTools((prev) => [
+      ...prev.filter((tool) => tool.id !== event.toolCallId),
+      { id: event.toolCallId, name: event.toolName, detail: event.detail },
+    ]);
     return;
   }
   setInProgress((prev) => {
@@ -410,42 +418,8 @@ function handleToolEvent(
     next.delete(event.toolCallId);
     return next;
   });
-  if (event.status === "failed") {
-    pushSystemMessage(setMessages, `tool ${event.toolName} failed: ${event.detail}`);
-  }
-}
-
-function appendToolUseMessage(
-  messages: RenderableMessage[],
-  tool: { toolCallId: string; toolName: string; input?: unknown },
-): RenderableMessage[] {
-  const block = {
-    type: "tool_use" as const,
-    id: tool.toolCallId,
-    name: tool.toolName,
-    input: tool.input ?? {},
-  };
-  const last = messages[messages.length - 1];
-  if (last?.type === "assistant" && last.message.content.every((part) => part.type === "tool_use")) {
-    return [
-      ...messages.slice(0, -1),
-      {
-        ...last,
-        message: {
-          ...last.message,
-          content: [...last.message.content, block],
-        },
-      },
-    ];
-  }
-  return [
-    ...messages,
-    createAssistantToolUse({
-      toolCallId: tool.toolCallId,
-      toolName: tool.toolName,
-      input: tool.input,
-    }),
-  ];
+  setActiveTools((prev) => prev.filter((tool) => tool.id !== event.toolCallId));
+  pushSystemMessage(setMessages, formatToolEvent(event, event.status));
 }
 
 function pushSystemMessage(
@@ -453,6 +427,19 @@ function pushSystemMessage(
   text: string,
 ): void {
   setMessages((prev) => [...prev, createSystemMessage(text)]);
+}
+
+function formatToolEvent(event: ToolEvent, status: ToolEvent["status"]): string {
+  const label = toolDisplayName(event.toolName);
+  const detail = event.detail ? " · " + event.detail : "";
+  switch (status) {
+    case "running":
+      return label + detail;
+    case "done":
+      return "✓ " + label + " completed" + detail;
+    case "failed":
+      return "✗ " + label + " failed" + detail;
+  }
 }
 
 function pickAssistantText(streamed: string, fromPayload: string, fromItem: string): string {

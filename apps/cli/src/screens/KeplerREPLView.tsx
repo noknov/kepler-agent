@@ -21,6 +21,8 @@ import { isFullscreenEnvEnabled } from "../cc/utils/fullscreen.js";
 import { hasCursorUpViewportYankBug } from "../cc/ink/terminal.js";
 import { KeplerBanner } from "../components/KeplerBanner.js";
 import { KeplerSpinner } from "../components/KeplerSpinner.js";
+import { KeplerToolActivity } from "../components/KeplerToolActivity.js";
+import type { ActiveTool } from "../hooks/useRepl.js";
 
 const EMPTY_TOOLS: Tools = [];
 const TOOL_JSX = null;
@@ -34,6 +36,7 @@ type ReplChrome = {
   streamingText: string | null;
   busy: boolean;
   inProgressToolUseIDs: Set<string>;
+  activeTools: ActiveTool[];
   sessionId: string | null;
 };
 
@@ -53,6 +56,7 @@ export function KeplerREPLView({
   streamingText,
   busy: isLoading,
   inProgressToolUseIDs,
+  activeTools,
   sessionId,
   cwd,
   model,
@@ -62,11 +66,13 @@ export function KeplerREPLView({
   // REPL.tsx L1315-1322 — deferred messages for input responsiveness during stream.
   const deferredMessages = useDeferredValue(messages);
 
-  // REPL.tsx L1461-1473 — streaming text display (line-by-line, not char-by-char).
+  // Render every provider delta immediately. The vendored REPL only renders
+  // completed lines as a compatibility workaround for a few terminals; that
+  // makes Kepler appear to stream one line at a time.
   const showStreamingText = !hasCursorUpViewportYankBug();
   const visibleStreamingText =
     streamingText && showStreamingText
-      ? streamingText.substring(0, streamingText.lastIndexOf("\n") + 1) || null
+      ? streamingText
       : null;
 
   // REPL.tsx L4506-4509 — sync messages when streaming text shows or turn ended.
@@ -121,6 +127,7 @@ export function KeplerREPLView({
             scrollRef={isFullscreenEnvEnabled() ? scrollRef : undefined}
             trackStickyPrompt={isFullscreenEnvEnabled() ? true : undefined}
           />
+          <KeplerToolActivity tools={activeTools} />
           <Box flexGrow={1} />
           {showSpinner ? <KeplerSpinner busy={isLoading} /> : null}
         </>
