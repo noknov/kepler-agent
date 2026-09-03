@@ -153,7 +153,8 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		if err := platform.RequireWebSchema(ctx, stores.PGPool); err != nil {
 			return nil, fmt.Errorf("verify web schema: %w", err)
 		}
-		webCatalogBundle, err := hostedTools.NewCatalog(cfg, workspacePolicy, safety.NewCommandPolicy(), nil, hostedTools.SurfaceOptions{Name: "web"})
+		webSurface := hostedTools.SurfaceOptions{Name: "web", Connections: &connService}
+		webCatalogBundle, err := hostedTools.NewCatalog(cfg, workspacePolicy, safety.NewCommandPolicy(), nil, webSurface)
 		if err != nil {
 			return nil, fmt.Errorf("build web tool catalog: %w", err)
 		}
@@ -173,6 +174,22 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		webConversations.Redactor = webProfile.Redactor
 		webConversations.Model = cfg.LLM.Model
 		webConversations.Lifecycle = serviceCtx
+		webPolicy := hostedTools.PolicyForSurface(cfg, webSurface)
+		if webCatalogBundle.ClickStack != nil || webCatalogBundle.Notion != nil {
+			webConversations.BeforeRun = func(ctx context.Context, userID string) error {
+				if webCatalogBundle.ClickStack != nil {
+					if err := webCatalogBundle.ClickStack.Ensure(ctx, webCatalogBundle.Catalog, webPolicy, userID); err != nil {
+						return err
+					}
+				}
+				if webCatalogBundle.Notion != nil {
+					if err := webCatalogBundle.Notion.Ensure(ctx, webCatalogBundle.Catalog, webPolicy, userID); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+		}
 		if len(cfg.Security.WorkspaceRoots) > 0 {
 			webConversations.Workspace = cfg.Security.WorkspaceRoots[0]
 		}

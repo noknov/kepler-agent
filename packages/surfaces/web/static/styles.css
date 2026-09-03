@@ -605,7 +605,7 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, input:focus-visib
   display: inline-block;
   color: #a5a5af;
   font-size: 19px;
-  font-weight: 500;
+  font-weight: 400;
   line-height: 1.35;
   letter-spacing: -0.025em;
 }

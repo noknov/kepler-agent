@@ -424,6 +424,20 @@ function renderTimeline(force = false) {
   timeline.classList.remove("hidden");
 
   const seenKeys = new Set();
+  const orderedNodes = [];
+  const placeNode = (key) => {
+    const node = state.timelineNodes.get(key);
+    if (node && !orderedNodes.includes(node)) orderedNodes.push(node);
+  };
+  const turnsWithAssistantOutput = new Set(
+    visible
+      .filter(
+        (event) =>
+          event.turnId &&
+          (event.kind === "assistant_delta" || (event.kind === "message" && event.role === "assistant")),
+      )
+      .map((event) => event.turnId),
+  );
 
   for (const event of visible) {
     const key = eventKey(event);
@@ -434,36 +448,51 @@ function renderTimeline(force = false) {
         if (force || event.kind === "message") {
           updateMessageContent(state.timelineNodes.get(key), event);
         }
+        placeNode(key);
         continue;
       }
       const node = renderMessage(event);
       state.timelineNodes.set(key, node);
       timeline.append(node);
+      placeNode(key);
     } else if (event.kind === "tool" || event.kind === "plan") {
+      // Thinking is pre-answer feedback only. Once response text is visible,
+      // completed or late-arriving tool events must not leave it behind.
+      if (turnsWithAssistantOutput.has(event.turnId)) continue;
       ensureActivityBlock(event.turnId, timeline, seenKeys);
       updateActivityBlock(event.turnId);
       if (activityStats(event.turnId)?.running) startActivityTimer();
+      placeNode(`activity:${event.turnId}`);
     } else if (event.kind === "approval" && event.status === "pending") {
       const apprKey = `approval:${event.toolCallId}`;
       seenKeys.add(apprKey);
-      if (state.timelineNodes.has(apprKey)) continue;
+      if (state.timelineNodes.has(apprKey)) {
+        placeNode(apprKey);
+        continue;
+      }
       const card = renderApproval(event);
       state.timelineNodes.set(apprKey, card);
       timeline.append(card);
+      placeNode(apprKey);
     } else if (event.kind === "turn" && event.status === "failed") {
       const errKey = `error:${event.turnId}`;
       seenKeys.add(errKey);
-      if (state.timelineNodes.has(errKey)) continue;
+      if (state.timelineNodes.has(errKey)) {
+        placeNode(errKey);
+        continue;
+      }
       const error = document.createElement("p");
       error.className = "turn-error";
       error.textContent = event.text || "Could not complete this turn.";
       state.timelineNodes.set(errKey, error);
       timeline.append(error);
+      placeNode(errKey);
     }
   }
 
   if (state.pendingThinking) {
     ensureActivityBlock("pending", timeline, seenKeys);
+    placeNode("activity:pending");
   }
 
   for (const [key, node] of state.timelineNodes) {
@@ -473,6 +502,11 @@ function renderTimeline(force = false) {
       state.markdownCache.delete(key);
     }
   }
+
+  // Nodes are updated in place for smooth streaming, but their position must
+  // still follow the canonical event order when an optimistic user message is
+  // replaced by the persisted one.
+  for (const node of orderedNodes) timeline.append(node);
 
   scrollTimelineToEnd();
   updateComposer();

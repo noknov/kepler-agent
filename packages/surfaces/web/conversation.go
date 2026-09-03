@@ -43,6 +43,7 @@ type ConversationService struct {
 	Workspace  string
 	Model      string
 	Lifecycle  context.Context
+	BeforeRun  func(context.Context, string) error
 
 	mu     sync.Mutex
 	active map[string]activeWebTurn
@@ -165,7 +166,7 @@ func (s *ConversationService) ResolveApproval(ctx context.Context, owner Identit
 	runCtx, cancel := context.WithCancel(s.baseContext())
 	s.active[conversationID] = activeWebTurn{identity: owner.Key(), turnID: continuationID, cancel: cancel}
 	s.mu.Unlock()
-	if err := s.Agent.Runtime.ResolveApproval(ctx, conversationID, agentruntime.ApprovalResolution{TurnID: turnID, ToolCallID: toolCallID, Approved: approved, UserID: owner.Key()}); err != nil {
+	if err := s.Agent.Runtime.ResolveApproval(ctx, conversationID, agentruntime.ApprovalResolution{TurnID: turnID, ToolCallID: toolCallID, Approved: approved, UserID: owner.SubjectID}); err != nil {
 		s.finish(conversationID, continuationID)
 		return "", err
 	}
@@ -215,12 +216,18 @@ func (s *ConversationService) run(ctx context.Context, owner Identity, conversat
 		}
 		defer unlock()
 	}
+	if s.BeforeRun != nil {
+		if err := s.BeforeRun(runCtx, owner.SubjectID); err != nil {
+			s.recordStartFailure(conversationID, turnID)
+			return
+		}
+	}
 	fragments := []prompt.Fragment{
 		{ID: "hosted-core", Version: "1", Layer: prompt.LayerCore, Content: s.Prompt.SystemPrompt()},
 		{ID: "web-output-format", Version: "1", Layer: prompt.LayerProduct, Content: webOutputPrompt},
 	}
 	_, _ = s.Agent.Run(runCtx, hosted.Request{
-		SessionID: conversationID, TurnID: turnID, UserID: owner.Key(), Workspace: s.Workspace,
+		SessionID: conversationID, TurnID: turnID, UserID: owner.SubjectID, Workspace: s.Workspace,
 		Input: input, History: history, Model: s.Model, Prompt: fragments,
 		ScopeValues: map[string]string{"surface": "web", "web_search": "enabled"},
 	})
