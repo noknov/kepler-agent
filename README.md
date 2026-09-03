@@ -1,10 +1,11 @@
 # Kepler Agent
 
-Shared agent harness for two products:
+Shared agent harness for hosted and local products:
 
 | Product | Where it runs | What it is for |
 |---|---|---|
 | **Hosted Agent** | Server workspace, with Slack as ingress and presentation | Team diagnosis and operational work |
+| **Hosted Web** | Server workspace, with Slack OpenID Connect for access | Independent browser conversations on the hosted agent |
 | **Local CLI** | User machine, inside a selected workspace | Interactive or headless coding-agent work |
 
 The project is intentionally not a single remote agent exposed through two UIs.
@@ -20,6 +21,7 @@ their policy, storage, tools, and presentation stay product-specific.
 
 ```text
 Slack ── gateway / worker ── hosted profile ─┐
+Web ──── gateway / worker ── hosted profile ─┤
                                                │
 Local CLI / app-server ────── local profile ──┼── shared harness
                                                │   model loop · context · tools
@@ -47,6 +49,7 @@ for a detailed v1/v2 comparison and code-reading paths.
 | Agent runtime | Provider-neutral messages and tools, bounded context projection, compaction, termination, canonical transcripts, and typed streaming events |
 | Model integration | OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages adapters; hosted primary/fallback resilience and circuit breaking |
 | Hosted Slack | Verified durable ingress, leased workers, native answer streaming, thread status, runs/costs, and health endpoints |
+| Hosted Web | Slack OIDC access, isolated browser sessions and conversations, SSE streaming, approval controls, and configurable branding |
 | Local product | TTY and headless CLI, JSONL resume, steering/queue input routing, workspace tools, OS sandbox, approvals, skills, and configured MCP |
 | Integrations | Per-user OAuth connections for configured Slack, GitHub, ClickStack, Google Cloud, and Notion integrations; connection-required turns can resume after OAuth |
 | Delegation | `agent-explore`: bounded, read-only child turns with separate transcripts and parent audit links |
@@ -106,6 +109,14 @@ Use `agent_view` for Slack's Agent experience. Restrict access with
 storage, OAuth, streaming, and tool settings are in
 [configuration](docs/configuration.md).
 
+### Web setup
+
+The Web entry uses Slack only to verify access. It applies the same
+`ALLOWED_SLACK_USERS` list, but its sessions, conversations, and tool settings
+are independent from Slack conversations and per-user connections. See
+[Hosted Web](docs/web.md) for configuration, Slack redirect setup, and the
+security model.
+
 ## Operations and safety
 
 | Endpoint | Purpose |
@@ -152,7 +163,7 @@ results. See the [evaluation protocol](evals/README.md).
 ```text
 packages/agent/          Shared model, prompt, tool, transcript, and runtime contracts
 packages/profiles/       Hosted and local composition roots
-packages/surfaces/       Ingress and presentation adapters, including Slack
+packages/surfaces/       Ingress and presentation adapters, including Slack and Web
 packages/tools/          Capability-oriented tool implementations
 packages/providers/      Provider wire-format adapters
 packages/connections/    Per-user OAuth connection lifecycle
@@ -172,6 +183,7 @@ architecture-site/       Bilingual v1/v2 architecture guide
 - [v2 overview](docs/v2/README.md) and [v1 archive](docs/v1/README.md)
 - [Shared runtime](docs/runtime.md)
 - [Local CLI](docs/local-cli.md)
+- [Hosted Web](docs/web.md)
 - [Configuration](docs/configuration.md)
 - [Tools](docs/tools.md)
 - [Prompts and private overlays](docs/prompts.md)

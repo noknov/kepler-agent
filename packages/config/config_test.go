@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadPrefersDotEnvOverShellEnv(t *testing.T) {
@@ -54,6 +55,37 @@ func TestLoadRejectsMalformedProviderTypedEnvironment(t *testing.T) {
 	t.Setenv("MIMO_TIMEOUT", "eventually")
 	if _, err := LoadFor(ProfileGateway); err == nil || !strings.Contains(err.Error(), "MIMO_TIMEOUT") {
 		t.Fatalf("expected provider timeout error, got %v", err)
+	}
+}
+
+func TestLoadWebDefaultsToConnectionsOriginAndKeplerBrand(t *testing.T) {
+	resetConfigEnv(t)
+	t.Setenv("WEB_ENABLED", "true")
+	t.Setenv("CONNECTIONS_PUBLIC_BASE_URL", "https://agent.example/")
+
+	cfg, err := LoadFor(ProfileCLI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Web.PublicBaseURL != "https://agent.example" {
+		t.Fatalf("Web.PublicBaseURL = %q", cfg.Web.PublicBaseURL)
+	}
+	if cfg.Web.SiteName != "Kepler" {
+		t.Fatalf("unexpected default brand: %#v", cfg.Web)
+	}
+}
+
+func TestValidateWebRequiresStrongSessionConfiguration(t *testing.T) {
+	base := Config{
+		Web:         WebConfig{Enabled: true, PublicBaseURL: "https://agent.example", SessionSecret: strings.Repeat("s", 32), SessionTTL: 7 * 24 * time.Hour},
+		Connections: ConnectionsConfig{SlackClientID: "client", SlackClientSecret: "secret"},
+	}
+	if err := validateWeb(base); err != nil {
+		t.Fatalf("valid Web configuration: %v", err)
+	}
+	base.Web.SessionSecret = "short"
+	if err := validateWeb(base); err == nil || !strings.Contains(err.Error(), "32") {
+		t.Fatalf("expected session secret error, got %v", err)
 	}
 }
 
@@ -907,6 +939,13 @@ func resetConfigEnv(t *testing.T) {
 		"WEB_SEARCH_SEARXNG_URL",
 		"WEB_SEARCH_BRAVE_API_KEY",
 		"WEB_SEARCH_BRAVE_BASE_URL",
+		"WEB_ENABLED",
+		"WEB_PUBLIC_BASE_URL",
+		"WEB_UPSTREAM_URL",
+		"WEB_SESSION_SECRET",
+		"WEB_SESSION_TTL",
+		"WEB_SITE_NAME",
+		"WEB_STATIC_DIR",
 		"OBSERVABILITY_TOKEN",
 		"OBSERVABILITY_ALLOW_UNAUTHENTICATED",
 	}

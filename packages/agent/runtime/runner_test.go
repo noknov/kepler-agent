@@ -15,7 +15,6 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/prompt"
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
-	plannertools "github.com/noknov/kepler-agent/packages/tools/planner"
 )
 
 type scriptedModel struct {
@@ -41,6 +40,25 @@ func (s *scriptedModel) Generate(_ context.Context, request model.Request, sink 
 }
 
 type echoTool struct{}
+
+type testPlanTool struct{}
+
+func (testPlanTool) Descriptor() tool.Descriptor {
+	return tool.Descriptor{Name: "update_plan", Description: "Update the execution plan.", InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []tool.Effect{tool.EffectRead}}
+}
+
+func (testPlanTool) Execute(_ context.Context, call tool.Call) (tool.Result, error) {
+	var input struct {
+		Summary string          `json:"summary"`
+		Items   []tool.PlanItem `json:"items"`
+	}
+	if err := json.Unmarshal(call.Arguments, &input); err != nil {
+		return tool.Result{}, err
+	}
+	result := tool.TextResult("Plan updated")
+	result.Plan = &tool.PlanUpdate{Explanation: input.Summary, Items: input.Items}
+	return result, nil
+}
 
 func (echoTool) Descriptor() tool.Descriptor {
 	return tool.Descriptor{Name: "echo", InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []tool.Effect{tool.EffectRead}, Parallel: true}
@@ -173,7 +191,7 @@ func TestRunTurnPersistsStructuredPlanUpdate(t *testing.T) {
 		{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &planCall}}}, FinishReason: model.FinishToolCalls},
 		{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop},
 	}}
-	catalog, err := tool.NewCatalog(plannertools.PlanTool{})
+	catalog, err := tool.NewCatalog(testPlanTool{})
 	if err != nil {
 		t.Fatal(err)
 	}

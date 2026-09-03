@@ -3,8 +3,12 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -29,7 +33,11 @@ type Service struct {
 	gateway     slackgateway.Gateway
 	home        slackhome.Controller
 	connections connections.Service
+	webProxy    http.Handler
 	draining    atomic.Bool
+	webMu       sync.Mutex
+	webCancels  map[uint64]context.CancelFunc
+	webSequence atomic.Uint64
 }
 
 func Run(ctx context.Context) error {
@@ -60,7 +68,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Service{cfg: cfg, stores: stores}
+	s := &Service{cfg: cfg, stores: stores, webCancels: make(map[uint64]context.CancelFunc)}
 	var slackClient *slack.Client
 	if cfg.Slack.BotToken != "" {
 		slackClient = slack.NewClient(cfg.Slack.BotToken, cfg.Slack.BotUserID)
@@ -81,6 +89,17 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		return s.home.RequestRefresh(ctx, userID)
 	}
 	s.connections = connService
+	if cfg.Web.Enabled {
+		upstream, err := url.Parse(cfg.Web.UpstreamURL)
+		if err != nil || upstream.Scheme == "" || upstream.Host == "" {
+			return nil, fmt.Errorf("invalid WEB_UPSTREAM_URL %q", cfg.Web.UpstreamURL)
+		}
+		proxy := httputil.NewSingleHostReverseProxy(upstream)
+		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+			s.writeHTTPError(w, r, http.StatusBadGateway, "web service unavailable", err)
+		}
+		s.webProxy = proxy
+	}
 	handler := &slackhandler.Handler{
 		Cfg:       cfg,
 		Slack:     slackClient,
@@ -126,6 +145,9 @@ func (s *Service) ListenAndServe(ctx context.Context) error {
 	} else {
 		cli.Register(mux)
 	}
+	if s.webProxy != nil {
+		mux.HandleFunc("/", s.serveWeb)
+	}
 
 	server := &http.Server{
 		Addr:              s.cfg.HTTP.Addr,
@@ -139,6 +161,10 @@ func (s *Service) ListenAndServe(ctx context.Context) error {
 		defer close(shutdownDone)
 		<-ctx.Done()
 		s.draining.Store(true)
+		// Browser event streams are intentionally long-lived. Disconnect only
+		// these proxied requests so a rollout cannot wait for an SSE client;
+		// Slack ingress requests retain the configured graceful shutdown budget.
+		s.cancelWebRequests()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.HTTP.ShutdownTimeout)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
@@ -151,6 +177,37 @@ func (s *Service) ListenAndServe(ctx context.Context) error {
 		<-shutdownDone
 	}
 	return nil
+}
+
+func (s *Service) serveWeb(w http.ResponseWriter, r *http.Request) {
+	if s.webProxy == nil {
+		http.NotFound(w, r)
+		return
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	id := s.webSequence.Add(1)
+	s.webMu.Lock()
+	s.webCancels[id] = cancel
+	s.webMu.Unlock()
+	defer func() {
+		s.webMu.Lock()
+		delete(s.webCancels, id)
+		s.webMu.Unlock()
+		cancel()
+	}()
+	s.webProxy.ServeHTTP(w, r.WithContext(ctx))
+}
+
+func (s *Service) cancelWebRequests() {
+	s.webMu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(s.webCancels))
+	for _, cancel := range s.webCancels {
+		cancels = append(cancels, cancel)
+	}
+	s.webMu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
 }
 
 func (s *Service) handleReady(w http.ResponseWriter, _ *http.Request) {

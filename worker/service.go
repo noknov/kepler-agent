@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,6 +35,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/home"
 	slackmessaging "github.com/noknov/kepler-agent/packages/surfaces/slack/messaging"
 	slackTools "github.com/noknov/kepler-agent/packages/surfaces/slack/tools"
+	websurface "github.com/noknov/kepler-agent/packages/surfaces/web"
 	"github.com/noknov/kepler-agent/packages/toolkit/gitcache"
 	hostedTools "github.com/noknov/kepler-agent/packages/tools/hosted"
 )
@@ -48,6 +50,7 @@ type Service struct {
 	conv        slackconversation.ControlledConversation
 	handler     *slackhandler.Handler
 	slackWorker *slackevents.Worker
+	web         http.Handler
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -146,6 +149,64 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	if profileErr != nil {
 		return nil, fmt.Errorf("build hosted profile: %w", profileErr)
 	}
+	var webHandler http.Handler
+	if cfg.Web.Enabled {
+		if err := platform.RequireWebSchema(ctx, stores.PGPool); err != nil {
+			return nil, fmt.Errorf("verify web schema: %w", err)
+		}
+		webSurface := hostedTools.SurfaceOptions{Name: "web", Connections: &connService}
+		webCatalogBundle, err := hostedTools.NewCatalog(cfg, workspacePolicy, safety.NewCommandPolicy(), nil, webSurface)
+		if err != nil {
+			return nil, fmt.Errorf("build web tool catalog: %w", err)
+		}
+		webProfile, err := hosted.NewProfile(cfg, hosted.ProfileDependencies{
+			Tools: webCatalogBundle.Catalog, Postgres: stores.PGPool, Redis: stores.Redis, ToolSpills: stores.Runs,
+			Events: events, Metrics: recorder,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("build web hosted profile: %w", err)
+		}
+		webStore := websurface.PGStore{Pool: stores.PGPool}
+		webHub := websurface.NewEventHub(webProfile.Redactor)
+		events.Add(webHub)
+		webConversations := websurface.NewConversationService(webProfile.Agent, webStore, hosted.PGTranscript{Pool: stores.PGPool}, webHub)
+		webConversations.Locker = stores.Sessions
+		webConversations.Prompt = webProfile.Prompt
+		webConversations.Redactor = webProfile.Redactor
+		webConversations.Model = cfg.LLM.Model
+		webConversations.Lifecycle = serviceCtx
+		webPolicy := hostedTools.PolicyForSurface(cfg, webSurface)
+		if webCatalogBundle.ClickStack != nil || webCatalogBundle.Notion != nil {
+			webConversations.BeforeRun = func(ctx context.Context, userID string) error {
+				if webCatalogBundle.ClickStack != nil {
+					if err := webCatalogBundle.ClickStack.Ensure(ctx, webCatalogBundle.Catalog, webPolicy, userID); err != nil {
+						return err
+					}
+				}
+				if webCatalogBundle.Notion != nil {
+					if err := webCatalogBundle.Notion.Ensure(ctx, webCatalogBundle.Catalog, webPolicy, userID); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+		}
+		if len(cfg.Security.WorkspaceRoots) > 0 {
+			webConversations.Workspace = cfg.Security.WorkspaceRoots[0]
+		}
+		redirectURL := strings.TrimRight(cfg.Web.PublicBaseURL, "/") + "/auth/slack/callback"
+		slackIdentity := websurface.NewSlackOIDC(cfg.Connections.SlackClientID, cfg.Connections.SlackClientSecret, redirectURL)
+		webAuth, err := websurface.NewAuthService(webStore, cfg.Web.PublicBaseURL, cfg.Web.SessionSecret, cfg.Web.SessionTTL, cfg.Security.AllowedUsers, slackIdentity)
+		if err != nil {
+			return nil, fmt.Errorf("configure web authentication: %w", err)
+		}
+		configuredHandler, err := websurface.NewHandler(webAuth, webConversations, webStore, cfg.Web.StaticDir)
+		if err != nil {
+			return nil, fmt.Errorf("build web handler: %w", err)
+		}
+		configuredHandler.Brand = websurface.Brand{Name: cfg.Web.SiteName}
+		webHandler = configuredHandler
+	}
 	healthService := health.NewService(profile.Tools, cfg.Security.WorkspaceRoots)
 	healthService.Redis = stores.Redis
 	conversation := slackagent.New(profile.Agent, slackClient, profile.Prompt, profile.Redactor, stores.UserPrefs)
@@ -234,6 +295,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		ctx:       serviceCtx,
 		cancel:    serviceCancel,
 		serveErr:  make(chan error, 1),
+		web:       webHandler,
 	}
 	s.eventCond = sync.NewCond(&s.eventMu)
 	s.slackWorker = &slackevents.Worker{
@@ -320,6 +382,9 @@ func (s *Service) serveHealth(ctx context.Context) {
 		default:
 		}
 		return
+	}
+	if s.web != nil {
+		mux.Handle("/", s.web)
 	}
 	server := &http.Server{
 		Addr:              s.cfg.HTTP.Addr,

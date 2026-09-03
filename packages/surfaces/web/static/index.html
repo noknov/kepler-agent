@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f7f6f2" />
+    <title>Kepler</title>
+    <meta name="description" content="Secure hosted AI chat." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <script src="/assets/vendor/marked.min.js"></script>
+    <script src="/assets/vendor/purify.min.js"></script>
+    <script type="module" src="/assets/app.js"></script>
+  </head>
+  <body>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <main id="landing" class="landing hidden">
+      <nav class="landing-nav">
+        <a class="wordmark" href="/" aria-label="Home"><span data-brand-name>Kepler</span></a>
+      </nav>
+      <section class="hero">
+        <div class="hero-copy">
+          <h1>Ask questions.<br /><em>Get work done.</em></h1>
+          <a id="slack-login" class="slack-button" href="/auth/slack/start?return_to=%2F">
+            <span class="slack-symbol" aria-hidden="true"><b></b><b></b><b></b><b></b></span>
+            Continue with Slack
+          </a>
+          <div id="auth-error" class="auth-error hidden" role="alert"></div>
+        </div>
+        <div class="hero-panel" aria-hidden="true">
+          <div class="panel-window">
+            <div class="panel-toolbar">
+              <span></span><span></span><span></span>
+            </div>
+            <div class="panel-body">
+              <div class="panel-msg user">Summarize today's incidents</div>
+              <div class="panel-msg agent">
+                <span class="panel-line"></span>
+                <span class="panel-line"></span>
+                <span class="panel-line short"></span>
+              </div>
+              <div class="panel-msg user short">What should we check next?</div>
+              <div class="panel-msg agent">
+                <span class="panel-line"></span>
+                <span class="panel-line medium"></span>
+              </div>
+            </div>
+            <div class="panel-input"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <main id="app" class="app-shell hidden">
+      <aside id="sidebar" class="sidebar">
+        <div class="sidebar-top">
+          <button id="new-chat" class="new-chat" aria-label="New conversation">＋ New chat</button>
+          <button id="close-sidebar" class="icon-button mobile-only" aria-label="Close sidebar">×</button>
+        </div>
+        <div id="conversation-list" class="conversation-list" role="list"></div>
+		<button id="load-more-conversations" class="load-more hidden" type="button">Load older conversations</button>
+        <div class="sidebar-bottom">
+          <button id="profile-button" class="profile-button" aria-expanded="false">
+            <span id="profile-avatar" class="avatar"></span>
+            <span id="profile-name" class="profile-name"></span>
+            <span class="profile-chevron">›</span>
+          </button>
+          <div id="profile-menu" class="profile-menu hidden">
+            <button id="logout">Sign out</button>
+          </div>
+        </div>
+      </aside>
+
+      <section class="chat-panel">
+        <button id="open-sidebar" class="icon-button mobile-only mobile-nav" aria-label="Open sidebar">☰</button>
+
+        <div id="empty-state" class="empty-state">
+          <h2>Ready when you are.</h2>
+        </div>
+
+        <div id="timeline" class="timeline hidden" aria-live="polite"></div>
+
+        <div class="composer-wrap">
+          <form id="composer" class="composer">
+            <textarea id="message-input" rows="1" maxlength="32000" placeholder="Ask anything…" aria-label="Message"></textarea>
+            <div class="composer-bottom">
+              <div>
+                <span id="input-hint">Enter to send</span>
+                <button id="stop-turn" class="stop-button hidden" type="button" aria-label="Stop response">■</button>
+                <button id="send-message" class="send-button" type="submit" aria-label="Send message">↑</button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </section>
+      <div id="sidebar-scrim" class="sidebar-scrim hidden"></div>
+    </main>
+
+    <div id="context-menu" class="context-menu hidden" role="menu">
+      <button data-action="rename" role="menuitem">Rename</button>
+      <button data-action="archive" role="menuitem" class="danger">Archive</button>
+    </div>
+
+    <dialog id="rename-dialog">
+      <form method="dialog" id="rename-form">
+        <h3>Rename conversation</h3>
+        <input id="rename-input" maxlength="120" autocomplete="off" placeholder="Conversation name" />
+        <div class="dialog-actions">
+          <button value="cancel" class="secondary-button">Cancel</button>
+          <button id="save-rename" value="default" class="primary-button">Save</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>

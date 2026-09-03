@@ -1,0 +1,31 @@
+export const $ = (selector) => document.querySelector(selector);
+
+export const state = {
+  session: null,
+  csrf: "",
+  brand: {
+    name: "Kepler",
+  },
+  conversations: [],
+  conversationOffset: 0,
+  hasMoreConversations: false,
+  loadingMoreConversations: false,
+  current: null,
+  currentLoaded: false,
+  events: [],
+  stream: null,
+  streamReconnectTimer: null,
+  streamGraceUntil: 0,
+  running: false,
+  pendingThinking: false,
+  maxSequence: 0,
+  contextTarget: null,
+  timelineNodes: new Map(),
+  renderScheduled: false,
+  markdownCache: new Map(),
+  streamRenderTimers: new Map(),
+  activityTimer: null,
+  activityStart: new Map(),
+  streamRenderFrame: null,
+  resizeFrame: null,
+};

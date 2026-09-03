@@ -171,6 +171,54 @@ CREATE TABLE IF NOT EXISTS user_connections (
 CREATE INDEX IF NOT EXISTS idx_user_connections_provider
     ON user_connections(provider, updated_at DESC);
 
+-- Browser identity is deliberately separate from integration connections.
+-- Slack OIDC authenticates a person; it does not grant tools a Slack token.
+CREATE TABLE IF NOT EXISTS web_auth_states (
+    state_hash BYTEA PRIMARY KEY,
+    provider TEXT NOT NULL,
+    nonce TEXT NOT NULL,
+    code_verifier TEXT NOT NULL,
+    return_to TEXT NOT NULL DEFAULT '/',
+    expires_at TIMESTAMPTZ NOT NULL,
+    consumed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_web_auth_states_expires
+    ON web_auth_states(expires_at);
+
+CREATE TABLE IF NOT EXISTS web_auth_sessions (
+    token_hash BYTEA PRIMARY KEY,
+    provider TEXT NOT NULL,
+    tenant_id TEXT NOT NULL DEFAULT '',
+    subject_id TEXT NOT NULL,
+    email TEXT NOT NULL DEFAULT '',
+    display_name TEXT NOT NULL DEFAULT '',
+    avatar_url TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_web_auth_sessions_identity
+    ON web_auth_sessions(provider, tenant_id, subject_id, expires_at DESC);
+CREATE INDEX IF NOT EXISTS idx_web_auth_sessions_expires
+    ON web_auth_sessions(expires_at);
+
+CREATE TABLE IF NOT EXISTS web_conversations (
+    id TEXT PRIMARY KEY,
+    owner_provider TEXT NOT NULL,
+    owner_tenant_id TEXT NOT NULL DEFAULT '',
+    owner_subject_id TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT 'New conversation',
+    archived_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_web_conversations_owner_updated
+    ON web_conversations(owner_provider, owner_tenant_id, owner_subject_id, updated_at DESC)
+    WHERE archived_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS oauth_states (
     state TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
