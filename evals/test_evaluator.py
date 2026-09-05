@@ -26,9 +26,15 @@ def load_module(name: str, path: Path):
 
 runner = load_module("eval_runner", EVALS / "run.py")
 report = load_module("eval_report", EVALS / "report.py")
+gate = load_module("eval_gate", EVALS / "gate.py")
 
 
 class EvaluatorTests(unittest.TestCase):
+    def test_release_gate_checks_quality_timeout_and_latency(self) -> None:
+        summary = {"eligible": 10, "weighted_pass_rate": 0.8, "timeout": 1, "p95_duration_seconds": 12}
+        self.assertEqual(gate.violation("kepler", summary, 0.8, 0.1, 12), [])
+        failures = gate.violation("kepler", summary, 0.9, 0.05, 10)
+        self.assertEqual(len(failures), 3)
     def test_summary_excludes_incompatible_cases_from_pass_rate(self) -> None:
         records = [
             {"candidate": "a", "status": "passed", "category": "bugfix", "tags": ["go"], "weight": 2, "duration_seconds": 2.0, "candidate_capabilities": ["shell"]},

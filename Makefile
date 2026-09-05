@@ -39,6 +39,6 @@ eval-check:
 	python3 evals/run.py --suite evals/suites/smoke.json --candidates evals/candidates.example.json --model dry-run --output "$$tmp/results" --dry-run >/dev/null; \
 	python3 evals/report.py "$$tmp/results" --output "$$tmp/report.html" >/dev/null; \
 	python3 -m unittest evals/test_evaluator.py; \
-	python3 -c 'compile(open("evals/run.py", "rb").read(), "evals/run.py", "exec"); compile(open("evals/import_harbor.py", "rb").read(), "evals/import_harbor.py", "exec"); compile(open("evals/run_harbor.py", "rb").read(), "evals/run_harbor.py", "exec"); compile(open("evals/harbor_agents/kepler_agent.py", "rb").read(), "evals/harbor_agents/kepler_agent.py", "exec"); compile(open("evals/report.py", "rb").read(), "evals/report.py", "exec")'
+	python3 -c 'compile(open("evals/run.py", "rb").read(), "evals/run.py", "exec"); compile(open("evals/import_harbor.py", "rb").read(), "evals/import_harbor.py", "exec"); compile(open("evals/run_harbor.py", "rb").read(), "evals/run_harbor.py", "exec"); compile(open("evals/harbor_agents/kepler_agent.py", "rb").read(), "evals/harbor_agents/kepler_agent.py", "exec"); compile(open("evals/report.py", "rb").read(), "evals/report.py", "exec"); compile(open("evals/gate.py", "rb").read(), "evals/gate.py", "exec")'
 
 check: fmt-check boundaries vet test build eval-check

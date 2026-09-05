@@ -27,7 +27,12 @@ type Server struct {
 	// TurnTimeout bounds the complete model/tool loop. Provider HTTP deadlines
 	// alone do not protect an app-server turn from a stalled tool or adapter.
 	TurnTimeout time.Duration
-	IDs         agentruntime.IDGenerator
+	// MaxActiveTurns is the local process bulkhead. A client can submit work for
+	// several threads, but it cannot create an unbounded number of model/tool
+	// goroutines when a provider or tool becomes slow. New work is rejected with
+	// a retryable JSON-RPC error while the process is saturated.
+	MaxActiveTurns int
+	IDs            agentruntime.IDGenerator
 
 	reader  io.Reader
 	writer  io.Writer
@@ -45,6 +50,14 @@ type activeTurn struct {
 	cancel   context.CancelFunc
 	steering *agentruntime.InputBuffer
 }
+
+type registerResult uint8
+
+const (
+	registerOK registerResult = iota
+	registerDuplicate
+	registerOverloaded
+)
 
 type Request struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -75,11 +88,12 @@ type TurnStartParams struct {
 
 func New(runtime *agentruntime.Runtime, reader io.Reader, writer io.Writer) *Server {
 	server := &Server{
-		Runtime: runtime,
-		reader:  reader,
-		writer:  writer,
-		active:  map[string]*activeTurn{},
-		IDs:     agentruntime.RandomIDs{},
+		Runtime:        runtime,
+		reader:         reader,
+		writer:         writer,
+		active:         map[string]*activeTurn{},
+		IDs:            agentruntime.RandomIDs{},
+		MaxActiveTurns: 8,
 	}
 	server.deltas = newDeltaBatcher(defaultDeltaFlushInterval, defaultDeltaFlushBytes, server.notifyStreamDelta)
 	return server
@@ -198,9 +212,14 @@ func (s *Server) handle(ctx context.Context, request Request) {
 		}
 		turnCtx, cancel := context.WithCancel(ctx)
 		buffer := &agentruntime.InputBuffer{}
-		if !s.register(params.TurnID, &activeTurn{cancel: cancel, steering: buffer}) {
+		switch s.register(params.TurnID, &activeTurn{cancel: cancel, steering: buffer}) {
+		case registerDuplicate:
 			cancel()
 			s.respond(request.ID, nil, &ResponseError{Code: -32004, Message: "turn already active"})
+			return
+		case registerOverloaded:
+			cancel()
+			s.respond(request.ID, nil, &ResponseError{Code: -32001, Message: "server overloaded; retry later"})
 			return
 		}
 		s.respond(request.ID, map[string]string{"turnId": params.TurnID, "sessionId": params.SessionID, "status": "started"}, nil)
@@ -323,14 +342,17 @@ func (s *Server) write(value any) {
 	_ = json.NewEncoder(s.writer).Encode(value)
 }
 
-func (s *Server) register(turnID string, active *activeTurn) bool {
+func (s *Server) register(turnID string, active *activeTurn) registerResult {
 	s.activeMu.Lock()
 	defer s.activeMu.Unlock()
 	if _, exists := s.active[turnID]; exists {
-		return false
+		return registerDuplicate
+	}
+	if s.MaxActiveTurns > 0 && len(s.active) >= s.MaxActiveTurns {
+		return registerOverloaded
 	}
 	s.active[turnID] = active
-	return true
+	return registerOK
 }
 
 func (s *Server) unregister(turnID string) {

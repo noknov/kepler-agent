@@ -70,6 +70,12 @@ runtime over stdio with `thread/start`, `thread/resume`, `thread/fork`,
 `turn/start`, `turn/steer`, `turn/interrupt`, and Codex-style item
 notifications including `item/agentMessage/delta`.
 
+The server admits at most eight active turns by default. When its local
+bulkhead is full, `turn/start` returns JSON-RPC error `-32001` (`server
+overloaded; retry later`); clients retry with exponential backoff and jitter.
+This protects the app-server process from stalled providers or tools without
+discarding an already accepted turn.
+
 `agent-explore` is a hosted read-only tool, not a second product runtime. It
 creates isolated child turns from a filtered catalog, records a parent link and
 its own transcript, and returns a factual report to the parent. Child stream

@@ -77,6 +77,10 @@ func DefaultCapabilities() []string {
 	}
 }
 
+// OverloadErrorCode is returned when the app-server bulkhead is full. Clients
+// should retry the request with exponential backoff and jitter.
+const OverloadErrorCode = -32001
+
 // NewTurnID allocates a unique turn identifier.
 func NewTurnID(ids agentruntime.IDGenerator) string {
 	if ids == nil {

@@ -30,6 +30,17 @@ func (m deadlineProbeModel) Generate(ctx context.Context, _ model.Request, _ mod
 	return model.Response{}, ctx.Err()
 }
 
+type blockingModel struct{ released chan struct{} }
+
+func (m blockingModel) Generate(ctx context.Context, _ model.Request, _ model.EventSink) (model.Response, error) {
+	select {
+	case <-m.released:
+		return model.Response{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop}, nil
+	case <-ctx.Done():
+		return model.Response{}, ctx.Err()
+	}
+}
+
 func TestThreadForkCopiesEvents(t *testing.T) {
 	store := transcript.NewMemoryStore()
 	server := New(nil, strings.NewReader(""), &bytes.Buffer{})
@@ -76,6 +87,37 @@ func TestTurnStartUsesUniqueTurnIDs(t *testing.T) {
 	if !strings.Contains(out.String(), `"turnId":"turn_`) {
 		t.Fatalf("expected generated turn ids, got %s", out.String())
 	}
+}
+
+func TestTurnStartRejectsWhenActiveTurnBulkheadIsFull(t *testing.T) {
+	catalog, _ := tool.NewCatalog()
+	released := make(chan struct{})
+	runner, err := agentruntime.New(agentruntime.Config{Model: "test"}, agentruntime.Dependencies{
+		Model: blockingModel{released: released}, Tools: catalog, Transcript: transcript.NewMemoryStore(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	server := New(runner, strings.NewReader(""), &out)
+	server.MaxActiveTurns = 1
+	server.handle(context.Background(), Request{ID: json.RawMessage(`1`), Method: "turn/start", Params: mustJSON(map[string]any{"sessionId": "ses_1", "turnId": "turn_1", "input": "one"})})
+	deadline := time.Now().Add(time.Second)
+	for {
+		server.activeMu.Lock()
+		active := len(server.active)
+		server.activeMu.Unlock()
+		if active == 1 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	server.handle(context.Background(), Request{ID: json.RawMessage(`2`), Method: "turn/start", Params: mustJSON(map[string]any{"sessionId": "ses_2", "turnId": "turn_2", "input": "two"})})
+	if !strings.Contains(out.String(), `"code":-32001`) || !strings.Contains(out.String(), "server overloaded; retry later") {
+		t.Fatalf("expected overload response, got %s", out.String())
+	}
+	close(released)
+	waitForNoActiveTurns(t, server)
 }
 
 func TestExecuteAppliesTurnTimeout(t *testing.T) {
