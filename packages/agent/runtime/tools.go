@@ -233,10 +233,12 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 		toolCtx, cancel = context.WithTimeout(ctx, entry.descriptor.Timeout)
 	}
 	defer cancel()
-	toolCtx, span := runtimeTracer.Start(toolCtx, "tool.execute", trace.WithAttributes(
+	toolAttributes := langfuseObservationAttributes(request.Scope, "tool")
+	toolAttributes = append(toolAttributes,
 		attribute.String("gen_ai.tool.name", call.Name),
 		attribute.String("gen_ai.tool.call.id", call.ID),
-	))
+	)
+	toolCtx, span := runtimeTracer.Start(toolCtx, "tool.execute", trace.WithAttributes(toolAttributes...))
 	defer span.End()
 	started := time.Now()
 	result, err := entry.item.Execute(toolCtx, call)

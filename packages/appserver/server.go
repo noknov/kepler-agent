@@ -282,7 +282,7 @@ func (s *Server) execute(ctx context.Context, params TurnStartParams, steering *
 		TurnID:    params.TurnID,
 		Input:     model.TextMessage(model.RoleUser, params.Input),
 		Prompt:    s.Prompt,
-		Scope:     tool.Scope{SessionID: params.SessionID, TurnID: params.TurnID, UserID: params.UserID, Workspace: s.Workspace},
+		Scope:     tool.Scope{SessionID: params.SessionID, TurnID: params.TurnID, UserID: params.UserID, Workspace: s.Workspace, Values: map[string]string{"surface": "appserver"}},
 		Steering:  steering,
 		Model:     modelName,
 	})

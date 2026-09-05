@@ -214,6 +214,27 @@ The shared runtime emits nested `agent.turn`, `model.generate`, and
 prompt text, tool arguments, model output, credentials, and Slack message text
 are never attached. With no OTLP endpoint configured, tracing is a no-op.
 
+### Langfuse
+
+Langfuse is an optional OTLP backend for all Kepler surfaces, not a Slack-only
+integration. When a standard `OTEL_EXPORTER_OTLP_ENDPOINT` is present it takes
+precedence, so an OpenTelemetry Collector can fan traces out to Langfuse and
+other backends. For direct Langfuse export, configure the same variables for
+each process that should report traces (normally the worker, local CLI, and
+interactive app server):
+
+```bash
+LANGFUSE_BASE_URL=https://cloud.langfuse.com # or https://<self-hosted-langfuse>
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+```
+
+The runtime labels the root turn as a Langfuse `agent`, model calls as
+`generation`, and tools as `tool`. Every span receives the session ID, user ID
+when known, and the ingress surface (`slack`, `web`, `cli`, or `appserver`) so
+Langfuse can filter and aggregate child observations. It deliberately does not
+send prompt or result content.
+
 ## Repository Freshness
 
 Code-reading tools use immutable snapshot semantics. Each git-backed call

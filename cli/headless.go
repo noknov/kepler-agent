@@ -279,7 +279,7 @@ func turnRequest(session, workspace, input string, fragments []prompt.Fragment, 
 		SessionID: session,
 		Input:     model.TextMessage(model.RoleUser, input),
 		Prompt:    fragments,
-		Scope:     tool.Scope{SessionID: session, Workspace: workspace},
+		Scope:     tool.Scope{SessionID: session, Workspace: workspace, Values: map[string]string{"surface": "cli"}},
 		Steering:  steering,
 	}
 }

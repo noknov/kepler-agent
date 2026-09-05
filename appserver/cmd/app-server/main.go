@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/delegation"
 	"github.com/noknov/kepler-agent/packages/agent/environment"
@@ -16,6 +17,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/appserver"
 	"github.com/noknov/kepler-agent/packages/cloud"
+	"github.com/noknov/kepler-agent/packages/infra/telemetry"
 	"github.com/noknov/kepler-agent/packages/profiles/local"
 	"github.com/noknov/kepler-agent/packages/providers"
 	localtools "github.com/noknov/kepler-agent/packages/tools/local"
@@ -31,6 +33,16 @@ func main() {
 }
 
 func run(ctx context.Context) error {
+	shutdownTelemetry, err := telemetry.Setup(ctx, "kepler-agent-appserver")
+	if err != nil {
+		return fmt.Errorf("configure telemetry: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTelemetry(shutdownCtx)
+	}()
+
 	config, err := local.LoadConfig("")
 	if err != nil {
 		return err

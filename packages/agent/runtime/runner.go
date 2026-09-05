@@ -27,10 +27,12 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	if request.TurnID == "" {
 		request.TurnID = r.deps.IDs.New("turn")
 	}
-	ctx, span := runtimeTracer.Start(ctx, "agent.turn", trace.WithAttributes(
+	turnAttributes := langfuseObservationAttributes(request.Scope, "agent")
+	turnAttributes = append(turnAttributes,
 		attribute.String("agent.session.id", request.SessionID),
 		attribute.String("agent.turn.id", request.TurnID),
-	))
+	)
+	ctx, span := runtimeTracer.Start(ctx, "agent.turn", trace.WithAttributes(turnAttributes...))
 	defer span.End()
 	if request.Input.Role == "" {
 		request.Input.Role = model.RoleUser
@@ -494,10 +496,12 @@ func (r *Runtime) nextModelRequestID(ctx context.Context, turn TurnRequest) (str
 }
 
 func (r *Runtime) generateAttempt(ctx context.Context, turn TurnRequest, request model.Request, attempt int) (response model.Response, err error) {
-	ctx, span := runtimeTracer.Start(ctx, "model.generate", trace.WithAttributes(
+	modelAttributes := langfuseObservationAttributes(turn.Scope, "generation")
+	modelAttributes = append(modelAttributes,
 		attribute.String("gen_ai.request.model", request.Model),
 		attribute.Int("agent.model.attempt", attempt),
-	))
+	)
+	ctx, span := runtimeTracer.Start(ctx, "model.generate", trace.WithAttributes(modelAttributes...))
 	defer func() {
 		span.SetAttributes(
 			attribute.Int64("gen_ai.usage.input_tokens", response.Usage.InputTokens),

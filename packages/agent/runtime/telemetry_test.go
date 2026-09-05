@@ -8,6 +8,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
+	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -35,7 +36,7 @@ func TestRuntimeEmitsAgentModelAndToolSpans(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "trace-session", TurnID: "trace-turn", Input: model.TextMessage(model.RoleUser, "run")}); err != nil {
+	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "trace-session", TurnID: "trace-turn", Input: model.TextMessage(model.RoleUser, "run"), Scope: tool.Scope{SessionID: "trace-session", TurnID: "trace-turn", UserID: "user-1", Values: map[string]string{"surface": "web"}}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -45,6 +46,21 @@ func TestRuntimeEmitsAgentModelAndToolSpans(t *testing.T) {
 	}
 	if counts["agent.turn"] != 1 || counts["model.generate"] != 2 || counts["tool.execute"] != 1 {
 		t.Fatalf("span counts=%v", counts)
+	}
+	for _, span := range recorder.Ended() {
+		attributes := map[attribute.Key]attribute.Value{}
+		for _, item := range span.Attributes() {
+			attributes[item.Key] = item.Value
+		}
+		if got := attributes["langfuse.session.id"].AsString(); got != "trace-session" {
+			t.Fatalf("%s session=%q", span.Name(), got)
+		}
+		if got := attributes["langfuse.user.id"].AsString(); got != "user-1" {
+			t.Fatalf("%s user=%q", span.Name(), got)
+		}
+		if got := attributes["langfuse.trace.metadata.surface"].AsString(); got != "web" {
+			t.Fatalf("%s surface=%q", span.Name(), got)
+		}
 	}
 }
 
