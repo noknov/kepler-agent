@@ -631,6 +631,42 @@ func TestRunTurnRunsParallelSafeToolsConcurrently(t *testing.T) {
 	}
 }
 
+func TestRunTurnBoundsParallelToolCalls(t *testing.T) {
+	started := make(chan string, 3)
+	release := make(chan struct{})
+	call := func(id, name string) model.Content {
+		return model.Content{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: id, Name: name, Arguments: json.RawMessage(`{}`)}}
+	}
+	client := &scriptedModel{responses: []model.Response{
+		{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{call("1", "a"), call("2", "b"), call("3", "c")}}, FinishReason: model.FinishToolCalls},
+		{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop},
+	}}
+	catalog, _ := tool.NewCatalog(
+		parallelProbeTool{name: "a", started: started, release: release},
+		parallelProbeTool{name: "b", started: started, release: release},
+		parallelProbeTool{name: "c", started: started, release: release},
+	)
+	runner, _ := New(Config{Model: "test", MaxParallelToolCalls: 2}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
+	done := make(chan error, 1)
+	go func() {
+		_, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "parallel-limit", Input: model.TextMessage(model.RoleUser, "run")})
+		done <- err
+	}()
+	first := map[string]bool{<-started: true, <-started: true}
+	if len(first) != 2 {
+		t.Fatalf("first batch = %v, want two different calls", first)
+	}
+	select {
+	case extra := <-started:
+		t.Fatalf("third parallel call %q started before a slot was released", extra)
+	default:
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 type serialProbeTool struct {
 	name     string
 	inflight *int32

@@ -39,3 +39,27 @@ func TestMapOrderedRunsConcurrently(t *testing.T) {
 	close(release)
 	<-done
 }
+
+func TestMapOrderedBoundsConcurrency(t *testing.T) {
+	started := make(chan struct{}, maxConcurrentMap+1)
+	release := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		_, _ = MapOrdered(maxConcurrentMap+1, func(int) (string, error) {
+			started <- struct{}{}
+			<-release
+			return "ok", nil
+		})
+		close(done)
+	}()
+	for range maxConcurrentMap {
+		<-started
+	}
+	select {
+	case <-started:
+		t.Fatal("MapOrdered exceeded its concurrency limit")
+	default:
+	}
+	close(release)
+	<-done
+}

@@ -26,6 +26,12 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, resolut
 	if sessionID == "" || resolution.TurnID == "" || resolution.ToolCallID == "" || resolution.UserID == "" {
 		return fmt.Errorf("approval session, turn, tool call, and user are required")
 	}
+	// Approval resolution is another turn mutation: it appends a decision and
+	// can execute an external write. Serialize it with RunTurn so two local
+	// clients cannot both observe an unresolved approval and dispatch the same
+	// call. Hosted surfaces additionally hold their distributed session lease.
+	unlock := r.lockSession(sessionID)
+	defer unlock()
 	events, err := r.deps.Transcript.Load(ctx, sessionID, 0)
 	if err != nil {
 		return err

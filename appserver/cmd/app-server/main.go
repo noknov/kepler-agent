@@ -97,7 +97,7 @@ func run(ctx context.Context) error {
 	approver := server.WireApprover(workspace.Root, filepath.Join(stateDir, "approvals.json"))
 	runner, err := agentruntime.New(agentruntime.Config{
 		Model: info.Model, ReasoningEffort: info.Thinking, MaxOutputTokens: config.MaxOutputTokens,
-		MaxSteps: config.MaxSteps, MaxModelRetries: 0, MaxEmptyResponseRetries: 3,
+		MaxSteps: config.MaxSteps, MaxParallelToolCalls: config.MaxParallelToolCalls, MaxModelRetries: 0, MaxEmptyResponseRetries: 3,
 		Context:        agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
 		CircuitBreaker: agentruntime.CircuitBreakerConfig{Enabled: true},
 	}, agentruntime.Dependencies{
@@ -114,6 +114,7 @@ func run(ctx context.Context) error {
 	server.Transcript = store
 	server.Model = info.Model
 	server.Workspace = workspace.Root
+	server.TurnTimeout = config.Timeout
 	server.Prompt = []prompt.Fragment{{ID: "appserver-core", Layer: prompt.LayerCore, Content: "You are a coding agent exposed through the app server protocol."}}
 	return server.Serve(ctx)
 }

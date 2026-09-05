@@ -166,6 +166,14 @@ func (s *ConversationService) ResolveApproval(ctx context.Context, owner Identit
 	runCtx, cancel := context.WithCancel(s.baseContext())
 	s.active[conversationID] = activeWebTurn{identity: owner.Key(), turnID: continuationID, cancel: cancel}
 	s.mu.Unlock()
+	if s.Locker != nil {
+		unlock, lockErr := s.Locker.Lock(ctx, "session:"+conversationID)
+		if lockErr != nil {
+			s.finish(conversationID, continuationID)
+			return "", lockErr
+		}
+		defer unlock()
+	}
 	if err := s.Agent.Runtime.ResolveApproval(ctx, conversationID, agentruntime.ApprovalResolution{TurnID: turnID, ToolCallID: toolCallID, Approved: approved, UserID: owner.SubjectID}); err != nil {
 		s.finish(conversationID, continuationID)
 		return "", err

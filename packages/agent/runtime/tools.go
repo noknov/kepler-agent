@@ -100,21 +100,31 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 		}
 	}
 
-	// Codex-style admission gate: parallel-safe tools share a read lock so a
-	// model step can dispatch independent reads together. Mutating tools take
-	// the write lock, which waits for in-flight parallel work and excludes
-	// other writers. Every call is spawned; the lock, not list order, serializes.
+	// Parallel-safe tools share a read lock so a model step can dispatch
+	// independent reads together. Mutating tools take the write lock, which
+	// waits for in-flight parallel work and excludes other writers. The
+	// semaphore is acquired before spawning so an untrusted tool-call batch
+	// cannot turn into an unbounded goroutine or downstream-request burst.
 	var gate sync.RWMutex
 	var wait sync.WaitGroup
+	parallelSlots := make(chan struct{}, r.config.MaxParallelToolCalls)
 	for index := range prepared {
 		entry := &prepared[index]
 		if entry.result != nil {
 			continue
 		}
+		if entry.descriptor.Parallel {
+			select {
+			case parallelSlots <- struct{}{}:
+			case <-ctx.Done():
+				return toolOutcome{}, ctx.Err()
+			}
+		}
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
 			if entry.descriptor.Parallel {
+				defer func() { <-parallelSlots }()
 				gate.RLock()
 				defer gate.RUnlock()
 			} else {

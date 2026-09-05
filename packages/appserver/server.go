@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/prompt"
@@ -23,7 +24,10 @@ type Server struct {
 	Prompt     []prompt.Fragment
 	Model      string
 	Workspace  string
-	IDs        agentruntime.IDGenerator
+	// TurnTimeout bounds the complete model/tool loop. Provider HTTP deadlines
+	// alone do not protect an app-server turn from a stalled tool or adapter.
+	TurnTimeout time.Duration
+	IDs         agentruntime.IDGenerator
 
 	reader  io.Reader
 	writer  io.Writer
@@ -169,7 +173,13 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			}
 			forked := event
 			forked.SessionID = childID
-			forked.ID = ""
+			// The canonical store treats event IDs as global idempotency keys.
+			// Forking preserves the historical payload but creates new facts in a
+			// different session, so retaining the source ID would cause a
+			// PostgreSQL conflict (and clearing it would collapse every copied
+			// event onto the same empty primary key).
+			forked.ID = s.IDs.New("evt")
+			forked.Sequence = 0
 			if _, err := s.Transcript.Append(ctx, forked); err != nil {
 				s.respond(request.ID, nil, &ResponseError{Code: -32003, Message: err.Error()})
 				return
@@ -238,6 +248,11 @@ func (s *Server) handle(ctx context.Context, request Request) {
 
 func (s *Server) execute(ctx context.Context, params TurnStartParams, steering *agentruntime.InputBuffer) {
 	defer s.unregister(params.TurnID)
+	if s.TurnTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.TurnTimeout)
+		defer cancel()
+	}
 	s.notify("turn/started", map[string]string{"turnId": params.TurnID, "sessionId": params.SessionID})
 	modelName := params.Model
 	if modelName == "" {

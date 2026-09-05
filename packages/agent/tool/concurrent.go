@@ -6,6 +6,12 @@ import (
 	"sync"
 )
 
+// maxConcurrentMap limits fan-out within a single multi-file tool call. The
+// runtime limits independent tool calls; this closes the second fan-out layer
+// so one tool call with a very large paths array cannot exhaust file handles,
+// subprocess slots, or goroutines.
+const maxConcurrentMap = 8
+
 // MapOrdered runs fn for each index concurrently and returns results in input
 // order. Individual failures are recorded as error text for that slot; the
 // combined error is non-nil only when every slot failed.
@@ -19,13 +25,28 @@ func MapOrdered(n int, fn func(i int) (string, error)) (string, error) {
 	}
 	parts := make([]string, n)
 	errs := make([]error, n)
+	workers := n
+	if workers > maxConcurrentMap {
+		workers = maxConcurrentMap
+	}
+	var next int
+	var nextMu sync.Mutex
 	var wait sync.WaitGroup
-	wait.Add(n)
-	for i := 0; i < n; i++ {
-		go func(i int) {
+	wait.Add(workers)
+	for range workers {
+		go func() {
 			defer wait.Done()
-			parts[i], errs[i] = fn(i)
-		}(i)
+			for {
+				nextMu.Lock()
+				i := next
+				next++
+				nextMu.Unlock()
+				if i >= n {
+					return
+				}
+				parts[i], errs[i] = fn(i)
+			}
+		}()
 	}
 	wait.Wait()
 	ok := 0

@@ -253,9 +253,10 @@ func retryable(err error) bool {
 func canFailover(err error) bool { return retryable(err) }
 
 // committedStream tracks events that cross the point at which retrying a
-// request can replay externally-observable work. Transport lifecycle and usage
-// events are intentionally excluded: they contain no assistant output and no
-// completed tool invocation.
+// request can replay user-visible output. Transport lifecycle, usage, and
+// completed tool-call events are intentionally excluded: the runtime does not
+// execute a tool until it has received the final response, and product
+// surfaces do not render those stream events as assistant text.
 type committedStream struct {
 	mu        sync.Mutex
 	sink      EventSink
@@ -285,6 +286,5 @@ func (s *committedStream) hasCommitted() bool {
 }
 
 func commitsOutput(event StreamEvent) bool {
-	return event.Type == StreamTextDelta && event.Text != "" ||
-		event.Type == StreamToolCallDone && event.ToolCall != nil
+	return event.Type == StreamTextDelta && event.Text != ""
 }

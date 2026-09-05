@@ -115,13 +115,14 @@ type SessionConfig struct {
 }
 
 type ToolConfig struct {
-	CommandTimeout       time.Duration
-	AgentTurnTimeout     time.Duration
-	AgentMaxSteps        int
-	AgentMaxToolRounds   int
-	AgentExploreMaxSteps int
-	AgentExploreTimeout  time.Duration
-	AllowedWriteTools    []string
+	CommandTimeout            time.Duration
+	AgentTurnTimeout          time.Duration
+	AgentMaxSteps             int
+	AgentMaxToolRounds        int
+	AgentMaxParallelToolCalls int
+	AgentExploreMaxSteps      int
+	AgentExploreTimeout       time.Duration
+	AllowedWriteTools         []string
 }
 
 type IntegrationConfig struct {
@@ -376,12 +377,13 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			MaxToolResultTokens: envInt("SESSION_MAX_TOOL_RESULT_TOKENS", 8000),
 		},
 		Tools: ToolConfig{
-			CommandTimeout:       envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
-			AgentTurnTimeout:     envDuration("AGENT_TURN_TIMEOUT", 30*time.Minute),
-			AgentMaxSteps:        envInt("AGENT_MAX_STEPS", 64),
-			AgentMaxToolRounds:   envInt("AGENT_MAX_TOOL_ROUNDS", 16),
-			AgentExploreMaxSteps: envInt("AGENT_EXPLORE_MAX_STEPS", 8),
-			AgentExploreTimeout:  envDuration("AGENT_EXPLORE_TIMEOUT", 2*time.Minute),
+			CommandTimeout:            envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
+			AgentTurnTimeout:          envDuration("AGENT_TURN_TIMEOUT", 30*time.Minute),
+			AgentMaxSteps:             envInt("AGENT_MAX_STEPS", 64),
+			AgentMaxToolRounds:        envInt("AGENT_MAX_TOOL_ROUNDS", 16),
+			AgentMaxParallelToolCalls: envInt("AGENT_MAX_PARALLEL_TOOL_CALLS", 8),
+			AgentExploreMaxSteps:      envInt("AGENT_EXPLORE_MAX_STEPS", 8),
+			AgentExploreTimeout:       envDuration("AGENT_EXPLORE_TIMEOUT", 2*time.Minute),
 			AllowedWriteTools: envCSVDefault("AGENT_ALLOWED_WRITE_TOOLS", []string{
 				"luckin-cancel_order", "luckin-create_order", "reminder-create", "reminder-cancel", "slack-create_canvas", "slack-user_post_message", "tts-speak",
 			}),

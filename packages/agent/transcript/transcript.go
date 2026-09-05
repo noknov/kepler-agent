@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
@@ -104,8 +105,9 @@ func (f *Fanout) Publish(ctx context.Context, event Event) {
 // overloaded projection can be rebuilt by replay rather than delaying model
 // streaming or tool execution.
 type AsyncSink struct {
-	sink  Sink
-	queue chan Event
+	sink    Sink
+	queue   chan Event
+	dropped atomic.Uint64
 }
 
 func NewAsyncSink(ctx context.Context, sink Sink, capacity int) *AsyncSink {
@@ -135,10 +137,20 @@ func (s *AsyncSink) Publish(_ context.Context, event Event) {
 	select {
 	case s.queue <- event:
 	default:
-		// Do not drop terminal/projection facts merely because a projection is
-		// slow. The detached path keeps the turn non-blocking; consumers must be
-		// idempotent by event ID, and canonical transcript replay remains the
-		// recovery mechanism after process loss.
-		go s.sink.Publish(context.Background(), event)
+		// This sink is only for rebuildable projections. Bounded loss is safer
+		// than an unbounded detached goroutine per event: an unavailable
+		// projection must not exhaust the worker that owns the canonical
+		// transcript. Consumers recover missing events from that transcript.
+		s.dropped.Add(1)
 	}
+}
+
+// Dropped reports projection events deliberately shed because the sink was
+// saturated. It is intended for health/metrics wiring; canonical events are
+// never dropped by this component.
+func (s *AsyncSink) Dropped() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.dropped.Load()
 }

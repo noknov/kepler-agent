@@ -33,12 +33,17 @@ const (
 )
 
 type Config struct {
-	Model                   string
-	ReasoningEffort         string
-	Temperature             *float64
-	MaxOutputTokens         int
-	MaxSteps                int
-	MaxToolRounds           int
+	Model           string
+	ReasoningEffort string
+	Temperature     *float64
+	MaxOutputTokens int
+	MaxSteps        int
+	MaxToolRounds   int
+	// MaxParallelToolCalls bounds the number of read-only, explicitly
+	// parallel-safe tool calls that may execute in one model step. It is a
+	// bulkhead: model output is untrusted and must not be able to create an
+	// unbounded number of goroutines or downstream requests.
+	MaxParallelToolCalls    int
 	MaxModelRetries         int
 	MaxEmptyResponseRetries int
 	RetryBaseDelay          time.Duration
@@ -53,6 +58,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.MaxToolRounds <= 0 {
 		c.MaxToolRounds = 16
+	}
+	if c.MaxParallelToolCalls <= 0 {
+		c.MaxParallelToolCalls = 8
 	}
 	if c.MaxModelRetries < 0 {
 		c.MaxModelRetries = 0

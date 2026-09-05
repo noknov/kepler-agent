@@ -130,15 +130,17 @@ func TestResilientClientDoesNotRetryAfterCommittedText(t *testing.T) {
 	}
 }
 
-func TestResilientClientDoesNotRetryAfterCompletedToolCall(t *testing.T) {
+func TestResilientClientRetriesAfterCompletedToolCallBeforeToolExecution(t *testing.T) {
 	primary := &streamingResilientScript{
-		resilientScript: resilientScript{errs: []error{transient()}},
+		resilientScript: resilientScript{errs: []error{transient(), nil}},
 		events:          []StreamEvent{{Type: StreamToolCallDone, ToolCall: &ToolCall{ID: "call_1", Name: "search"}}},
 	}
 	client := &ResilientClient{Primary: primary, MaxAttempts: 2, RetryDelay: time.Nanosecond}
 
-	_, err := client.Generate(context.Background(), Request{Model: "primary"}, func(StreamEvent) error { return nil })
-	if ErrorKindOf(err) != ErrorOutputCommitted || primary.calls != 1 {
-		t.Fatalf("kind = %s, calls = %d; want %s and 1", ErrorKindOf(err), primary.calls, ErrorOutputCommitted)
+	if _, err := client.Generate(context.Background(), Request{Model: "primary"}, func(StreamEvent) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if primary.calls != 2 {
+		t.Fatalf("calls = %d, want 2", primary.calls)
 	}
 }

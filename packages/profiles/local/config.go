@@ -15,6 +15,7 @@ type Config struct {
 	InputRouting         string            `toml:"input_routing"`
 	Output               string            `toml:"output"`
 	MaxSteps             int               `toml:"max_steps"`
+	MaxParallelToolCalls int               `toml:"max_parallel_tool_calls"`
 	MaxOutputTokens      int               `toml:"max_output_tokens"`
 	MaxContextTokens     int               `toml:"max_context_tokens"`
 	AutocompactBuffer    int               `toml:"autocompact_buffer"`
@@ -43,7 +44,7 @@ type MCPServerConfig struct {
 const configDirectory = "kepler-agent"
 
 func DefaultConfig() Config {
-	return Config{InputRouting: "steer", Output: "text", MaxSteps: 256, MaxOutputTokens: 16384, MaxContextTokens: 96_000, AutocompactBuffer: 8_000, Timeout: 30 * time.Minute}
+	return Config{InputRouting: "steer", Output: "text", MaxSteps: 256, MaxParallelToolCalls: 8, MaxOutputTokens: 16384, MaxContextTokens: 96_000, AutocompactBuffer: 8_000, Timeout: 30 * time.Minute}
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -67,6 +68,9 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if config.MaxSteps <= 0 {
 		config.MaxSteps = DefaultConfig().MaxSteps
+	}
+	if config.MaxParallelToolCalls <= 0 {
+		config.MaxParallelToolCalls = DefaultConfig().MaxParallelToolCalls
 	}
 	if err := config.Validate(); err != nil {
 		return config, err
