@@ -83,6 +83,20 @@ type NativeStreamMessenger interface {
 	StopStream(ctx context.Context, channel, messageTS string) error
 }
 
+// SlackError identifies a structured error returned by a Slack API method.
+// Surface code uses the code instead of matching human-readable error text.
+type SlackError interface {
+	error
+	SlackErrorCode() string
+}
+
+// DeliveryUncertain reports that Slack may have accepted a non-idempotent
+// write even though its response was not received.
+type DeliveryUncertain interface {
+	error
+	DeliveryUncertain() bool
+}
+
 // StreamStart describes a Slack streaming message. TaskDisplayMode and Chunks
 // are used to render structured progress before the assistant starts text.
 type StreamStart struct {

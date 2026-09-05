@@ -238,12 +238,36 @@ type restartStreamingMessenger struct {
 	appendCalls int
 }
 
+type testSlackError string
+
+func (e testSlackError) Error() string          { return string(e) }
+func (e testSlackError) SlackErrorCode() string { return string(e) }
+
 func (m *restartStreamingMessenger) AppendStream(_ context.Context, _, _ string, chunks []map[string]any) error {
 	m.appendCalls++
 	if m.appendCalls == 1 {
-		return fmt.Errorf("slack chat.appendStream failed: not_in_streaming_state")
+		return testSlackError("not_in_streaming_state")
 	}
 	return m.nativeStreamingMessenger.AppendStream(context.Background(), "", "", chunks)
+}
+
+type uncertainStartError struct{}
+
+func (uncertainStartError) Error() string           { return "response lost" }
+func (uncertainStartError) DeliveryUncertain() bool { return true }
+
+func TestUncertainStreamStartDoesNotPostFallbackDuplicate(t *testing.T) {
+	messenger := &nativeStreamingMessenger{startErr: uncertainStartError{}}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", EventID: "Ev1"})
+	stream.Start()
+	stream.AppendDelta("hello")
+	stream.flushStreamUpdate("hello", false)
+	if _, err := stream.Complete("hello"); err != nil {
+		t.Fatal(err)
+	}
+	if len(messenger.posts) != 0 {
+		t.Fatalf("posts = %#v, want no fallback after ambiguous start", messenger.posts)
+	}
 }
 
 func TestNativeStreamRestartsOnNotInStreamingState(t *testing.T) {
@@ -254,11 +278,17 @@ func TestNativeStreamRestartsOnNotInStreamingState(t *testing.T) {
 	stream.flushStreamUpdate("hello", false)
 	stream.AppendDelta(" world")
 	stream.flushStreamUpdate("hello world", false)
-	if messenger.started != 2 {
-		t.Fatalf("started = %d, want restart after not_in_streaming_state", messenger.started)
+	if messenger.started != 1 {
+		t.Fatalf("started = %d, want no replacement stream after not_in_streaming_state", messenger.started)
 	}
-	if len(messenger.appends) != 1 || messenger.appends[0] != " world" {
-		t.Fatalf("appends = %#v", messenger.appends)
+	if len(messenger.appends) != 0 {
+		t.Fatalf("appends = %#v, want failed append to be repaired at completion", messenger.appends)
+	}
+	if _, err := stream.Complete("hello world"); err != nil {
+		t.Fatal(err)
+	}
+	if len(messenger.updates) != 1 || messenger.updates[0] != "hello world" {
+		t.Fatalf("updates = %#v, want existing stream repaired", messenger.updates)
 	}
 }
 

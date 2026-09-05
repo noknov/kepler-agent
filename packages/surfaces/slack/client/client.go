@@ -242,6 +242,14 @@ func (e slackAPIError) Error() string {
 	return fmt.Sprintf("slack %s failed: %s", e.Method, e.Code)
 }
 
+func (e slackAPIError) SlackErrorCode() string { return e.Code }
+
+type uncertainDeliveryError struct{ err error }
+
+func (e uncertainDeliveryError) Error() string           { return e.err.Error() }
+func (e uncertainDeliveryError) Unwrap() error           { return e.err }
+func (e uncertainDeliveryError) DeliveryUncertain() bool { return true }
+
 // Permanent reports errors that cannot succeed by retrying an unchanged API
 // request. This includes Slack's message and block size validation failures.
 func (e slackAPIError) Permanent() bool {
@@ -410,7 +418,10 @@ func (c *Client) StartStream(ctx context.Context, request slackconversation.Stre
 		Error string `json:"error,omitempty"`
 		TS    string `json:"ts,omitempty"`
 	}
-	if err := c.postJSON(ctx, "chat.startStream", payload, &out); err != nil {
+	// Starting a stream is not safely repeatable: Slack may create the message
+	// even when the HTTP response is lost. Retrying that ambiguous request can
+	// create a second assistant reply.
+	if err := c.postJSONOnce(ctx, "chat.startStream", payload, &out); err != nil {
 		return "", err
 	}
 	if !out.OK {
@@ -434,7 +445,9 @@ func (c *Client) AppendStream(ctx context.Context, channel, messageTS string, ch
 		OK    bool   `json:"ok"`
 		Error string `json:"error,omitempty"`
 	}
-	if err := c.postJSON(ctx, "chat.appendStream", payload, &out); err != nil {
+	// Appends are also non-idempotent. Replaying an append after a lost response
+	// duplicates the same text inside the streaming message.
+	if err := c.postJSONOnce(ctx, "chat.appendStream", payload, &out); err != nil {
 		return err
 	}
 	if !out.OK {
@@ -820,6 +833,14 @@ func NormalizeMentions(text, botUserID string) string {
 }
 
 func (c *Client) postJSON(ctx context.Context, method string, payload any, out any) error {
+	return c.postJSONWithRetry(ctx, method, payload, out, true)
+}
+
+func (c *Client) postJSONOnce(ctx context.Context, method string, payload any, out any) error {
+	return c.postJSONWithRetry(ctx, method, payload, out, false)
+}
+
+func (c *Client) postJSONWithRetry(ctx context.Context, method string, payload any, out any, retry bool) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -830,7 +851,10 @@ func (c *Client) postJSON(ctx context.Context, method string, payload any, out a
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
-	return c.do(req, out)
+	if retry {
+		return c.do(req, out)
+	}
+	return c.doOnce(req, out)
 }
 
 func (c *Client) get(ctx context.Context, method string, values url.Values, out any) error {
@@ -878,6 +902,22 @@ func (c *Client) do(req *http.Request, out any) error {
 		return json.NewDecoder(bytes.NewReader(data)).Decode(out)
 	}
 	return lastErr
+}
+
+func (c *Client) doOnce(req *http.Request, out any) error {
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return uncertainDeliveryError{err: err}
+	}
+	data, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	_ = resp.Body.Close()
+	if readErr != nil {
+		return uncertainDeliveryError{err: readErr}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return slackHTTPError{StatusCode: resp.StatusCode, Body: string(data)}
+	}
+	return json.NewDecoder(bytes.NewReader(data)).Decode(out)
 }
 
 type slackHTTPError struct {

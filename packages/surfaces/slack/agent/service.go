@@ -285,6 +285,13 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 	s.router.set(turnID, stream)
 	defer s.router.set(turnID, nil)
 	stream.Start()
+	finalSessionStatus := sessionActive
+	defer func() {
+		// Lifecycle events normally update the Slack session first. Repeat the
+		// desired terminal state here so a transient failure cannot leave the
+		// thread stuck in the processing/Working state.
+		stream.setSessionStatus(finalSessionStatus)
+	}()
 	if approval != nil {
 		if err := s.Agent.Runtime.ResolveApproval(runCtx, sessionID, agentruntime.ApprovalResolution{
 			TurnID: approval.TurnID, ToolCallID: approval.ToolCallID, Approved: approval.Approved, UserID: req.UserID,
@@ -358,6 +365,7 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 		return s.ackClaim(finalizeCtx, req.ClaimID)
 	}
 	final := s.Redactor.Sanitize(renderAnswer(result.Message))
+	finalSessionStatus = sessionStatusForTermination(string(result.Termination))
 	if s.AlreadyDelivered != nil {
 		delivered, deliveryStateErr := s.AlreadyDelivered(finalizeCtx, turnID)
 		if deliveryStateErr != nil {
@@ -742,6 +750,7 @@ type slackStream struct {
 	messageTS            string
 	nativeStream         bool
 	streamDeliveryFailed bool
+	streamStartUncertain bool
 	streamClosed         bool
 	lastStreamText       string
 	lastStreamUpdate     time.Time
@@ -773,6 +782,7 @@ func (s *slackStream) Complete(final string) (string, error) {
 	messageTS := s.messageTS
 	nativeStream := s.nativeStream
 	deliveryFailed := s.streamDeliveryFailed
+	startUncertain := s.streamStartUncertain
 	streamed := strings.TrimSpace(s.answer.String())
 	s.mu.Unlock()
 	ctx, cancel := s.deliveryContext()
@@ -782,6 +792,11 @@ func (s *slackStream) Complete(final string) (string, error) {
 			s.stopNativeStream(ctx)
 		}
 		return messageTS, nil
+	}
+	if startUncertain && messageTS == "" {
+		// The initial non-idempotent write may already exist in Slack. Posting a
+		// fallback here would reintroduce the exact duplicate-message window.
+		return "", nil
 	}
 	if nativeStream && messageTS != "" {
 		trimmedFinal := strings.TrimSpace(final)
@@ -823,6 +838,7 @@ func (s *slackStream) Fail(message string, canceled bool) (string, error) {
 	s.streamClosed = true
 	messageTS := s.messageTS
 	nativeStream := s.nativeStream
+	startUncertain := s.streamStartUncertain
 	s.mu.Unlock()
 	if canceled {
 		message = "Cancelled this request."
@@ -837,6 +853,9 @@ func (s *slackStream) Fail(message string, canceled bool) (string, error) {
 			s.stopNativeStream(ctx)
 		}
 		return messageTS, nil
+	}
+	if startUncertain && messageTS == "" {
+		return "", nil
 	}
 	ctx, cancel := s.deliveryContext()
 	defer cancel()

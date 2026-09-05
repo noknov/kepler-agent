@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -395,6 +396,22 @@ func TestDoRetriesRetryableHTTPStatus(t *testing.T) {
 	}
 	if attempts != 2 {
 		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+}
+
+func TestStartStreamDoesNotRetryAmbiguousNetworkFailure(t *testing.T) {
+	attempts := 0
+	client := &Client{httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		return nil, io.ErrUnexpectedEOF
+	})}}
+
+	_, err := client.StartStream(context.Background(), slackconversation.StreamStart{Channel: "C1", ThreadTS: "T1"})
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("err = %v, want ambiguous network failure", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
 	}
 }
 

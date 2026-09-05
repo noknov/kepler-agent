@@ -2,6 +2,7 @@ package slackagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -109,6 +110,7 @@ func (s *slackStream) ensureNativeStream(chunks []map[string]any) (bool, error) 
 			s.req.Channel, s.req.ThreadTS, s.req.UserID, err)
 		s.mu.Lock()
 		s.streamDeliveryFailed = true
+		s.streamStartUncertain = isDeliveryUncertain(err)
 		s.mu.Unlock()
 		return false, err
 	}
@@ -186,27 +188,16 @@ func (s *slackStream) appendNativeChunks(delta string) error {
 
 	if err := native.AppendStream(ctx, s.req.Channel, messageTS, chunks); err == nil {
 		return nil
-	} else if !strings.Contains(err.Error(), "not_in_streaming_state") {
+	} else if !isSlackError(err, "not_in_streaming_state") {
 		log.Printf("slack native stream append failed channel=%s ts=%s: %v", s.req.Channel, messageTS, err)
 		return err
 	}
 
-	ts, startErr := native.StartStream(ctx, slackconversation.StreamStart{
-		Channel: s.req.Channel, ThreadTS: s.req.ThreadTS, RecipientUserID: s.req.UserID,
-	})
-	if startErr != nil {
-		log.Printf("slack native stream restart failed channel=%s thread=%s: %v", s.req.Channel, s.req.ThreadTS, startErr)
-		return startErr
-	}
-	s.mu.Lock()
-	s.messageTS = ts
-	s.nativeStream = true
-	s.mu.Unlock()
-	if err := native.AppendStream(ctx, s.req.Channel, ts, chunks); err != nil {
-		log.Printf("slack native stream append after restart failed channel=%s ts=%s: %v", s.req.Channel, ts, err)
-		return err
-	}
-	return nil
+	// The original stream may already have been finalized by Slack. Starting a
+	// replacement creates a second reply; let Complete repair the known message
+	// with chat.update instead.
+	log.Printf("slack native stream no longer active channel=%s ts=%s", s.req.Channel, messageTS)
+	return fmt.Errorf("slack native stream is no longer active")
 }
 
 func streamSuffix(streamed, full string) string {
@@ -219,6 +210,16 @@ func streamSuffix(streamed, full string) string {
 		return full
 	}
 	return full[len(streamed):]
+}
+
+func isSlackError(err error, code string) bool {
+	var slackErr slackconversation.SlackError
+	return errors.As(err, &slackErr) && slackErr.SlackErrorCode() == code
+}
+
+func isDeliveryUncertain(err error) bool {
+	var uncertain slackconversation.DeliveryUncertain
+	return errors.As(err, &uncertain) && uncertain.DeliveryUncertain()
 }
 
 func (s *slackStream) stopNativeStream(ctx context.Context) {
