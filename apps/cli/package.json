@@ -6,7 +6,8 @@
     "dev": "tsx src/main.tsx",
     "build": "esbuild src/main.tsx --bundle --platform=node --format=esm --target=node20 --outfile=dist/main.js --external:modifiers-napi --alias:src=./src/cc --alias:react-compiler-runtime=./src/cc/stubs/react-compiler-runtime.ts --alias:bun:bundle=./src/cc/stubs/bun-bundle.ts --alias:@anthropic-ai/sdk/resources/index.mjs=./src/cc/stubs/anthropic-sdk.ts --alias:@anthropic-ai/sdk/resources/beta/messages/messages.mjs=./src/cc/stubs/anthropic-sdk.ts --alias:@anthropic-ai/sdk/resources/messages/messages.mjs=./src/cc/stubs/anthropic-sdk.ts --alias:@anthropic-ai/sdk=./src/cc/stubs/anthropic-sdk.ts --alias:zod/v4=./src/cc/stubs/zod.ts --alias:zod=./src/cc/stubs/zod.ts --alias:jsonc-parser/lib/esm/main.js=./src/cc/stubs/jsonc-parser.ts --alias:proper-lockfile=./src/cc/stubs/proper-lockfile.ts --alias:lru-cache=./src/cc/stubs/lru-cache.ts --alias:lodash-es/isObject.js=./src/cc/stubs/lodash-isObject.ts --alias:lodash-es/last.js=./src/cc/stubs/lodash-last.ts --alias:shell-quote=./src/cc/stubs/shell-quote.ts --alias:react-devtools-core=./scripts/stubs/react-devtools-core.js --banner:js=\"import { createRequire } from 'module';const require=createRequire(import.meta.url);\"",
     "sync:claude-code": "bash scripts/sync-claude-code-ui.sh",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.protocol.json --noEmit",
+    "typecheck:vendor": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/main.js"
   },
   "dependencies": {

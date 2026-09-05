@@ -16,36 +16,37 @@ import (
 
 // AddToCatalog registers Slack-surface tools for the hosted worker only.
 // Messaging and connection tools stay here; they are not exposed through CLI.
-func AddToCatalog(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, rdb *redisclient.Client, conn *connections.Service) {
+func AddToCatalog(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.Config, slackClient *slack.Client, reminderStore reminder.Store, rdb *redisclient.Client, conn *connections.Service) error {
 	if catalog == nil || slackClient == nil {
-		return
+		return nil
 	}
+	registration := tool.NewRegistration(catalog, policy)
 	var fileSource FileSearcherSource = BotFileSearcher{Client: slackClient}
 	if conn != nil && conn.Config.SlackEnabled() {
 		fileSource = ConnectedFileSearcher{Service: *conn}
 	}
 	fileTool := FileSearchTool{Source: fileSource, Slack: slackClient}
 	jsonTool := JSONAnalyzeTool{Source: fileSource, Slack: slackClient}
-	_ = catalog.RegisterVisible(policy, AskUserTool{Slack: slackClient})
-	_ = catalog.RegisterVisible(policy, fileTool)
-	_ = catalog.RegisterVisible(policy, jsonTool)
+	registration.Visible(AskUserTool{Slack: slackClient})
+	registration.Visible(fileTool)
+	registration.Visible(jsonTool)
 	if conn != nil && conn.Config.SlackEnabled() {
 		attribution := slackmessaging.Attribution{
 			BotUserID: cfg.Slack.BotUserID,
 			Name:      cfg.Slack.AttributionName,
 			Footer:    cfg.Slack.ReplyFooter,
 		}
-		_ = catalog.RegisterVisible(policy, UserPostMessageTool{Source: ConnectedClientSource{Service: *conn}, Attribution: attribution})
-		_ = catalog.RegisterVisible(policy, UserReadThreadTool{Source: PreferConnectedThreadReader{
+		registration.Visible(UserPostMessageTool{Source: ConnectedClientSource{Service: *conn}, Attribution: attribution})
+		registration.Visible(UserReadThreadTool{Source: PreferConnectedThreadReader{
 			Connected: ConnectedThreadReader{Service: *conn},
 			Bot:       BotThreadReader{Slack: slackClient},
 		}})
 	} else {
-		_ = catalog.RegisterVisible(policy, UserReadThreadTool{Source: BotThreadReader{Slack: slackClient}})
+		registration.Visible(UserReadThreadTool{Source: BotThreadReader{Slack: slackClient}})
 	}
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, CreateCanvasTool{Slack: slackClient})
+	registration.Deferred(tool.CategoryIntegration, CreateCanvasTool{Slack: slackClient})
 	if reminderStore != nil {
-		_ = catalog.RegisterVisible(policy, bindSurface(reminderTools.CreateTool{
+		registration.Visible(bindSurface(reminderTools.CreateTool{
 			Store: reminderStore,
 			OnCreate: func(ctx context.Context) {
 				if rdb != nil {
@@ -53,13 +54,14 @@ func AddToCatalog(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.C
 				}
 			},
 		}, "reminder"))
-		_ = catalog.RegisterVisible(policy, bindSurface(reminderTools.ListTool{Store: reminderStore}, "reminder"))
-		_ = catalog.RegisterVisible(policy, bindSurface(reminderTools.CancelTool{Store: reminderStore}, "reminder"))
+		registration.Visible(bindSurface(reminderTools.ListTool{Store: reminderStore}, "reminder"))
+		registration.Visible(bindSurface(reminderTools.CancelTool{Store: reminderStore}, "reminder"))
 	}
-	registerTTS(catalog, policy, cfg, slackClient)
+	registerTTS(registration, cfg, slackClient)
+	return registration.Err()
 }
 
-func registerTTS(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.Config, slackClient *slack.Client) {
+func registerTTS(registration *tool.Registration, cfg config.Config, slackClient *slack.Client) {
 	tts := cfg.Integrations.TTS
 	item := bindSurface(ttsTools.SpeakTool{
 		Slack:   slackClient,
@@ -68,8 +70,8 @@ func registerTTS(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.Co
 		Model:   tts.Model,
 	}, "tts")
 	if tts.APIKey != "" {
-		_ = catalog.RegisterVisible(policy, item)
+		registration.Visible(item)
 		return
 	}
-	_ = catalog.RegisterDeferredVisible(policy, tool.CategoryIntegration, item)
+	registration.Deferred(tool.CategoryIntegration, item)
 }

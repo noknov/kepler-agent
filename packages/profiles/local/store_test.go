@@ -59,3 +59,25 @@ func TestJSONLStoresCoordinateSequenceAcrossInstances(t *testing.T) {
 		t.Fatalf("second append = %+v, %v", event, err)
 	}
 }
+
+func TestJSONLStoreAppendsForkBatchWithContiguousSequences(t *testing.T) {
+	store, err := NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := []transcript.Event{
+		{ID: "fork-1", SessionID: "child", Type: transcript.SessionStarted},
+		{ID: "fork-2", SessionID: "child", Type: transcript.UserInput},
+	}
+	appended, err := store.AppendBatch(context.Background(), batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(appended) != 2 || appended[0].Sequence != 1 || appended[1].Sequence != 2 {
+		t.Fatalf("appended=%+v", appended)
+	}
+	loaded, err := store.Load(context.Background(), "child", 0)
+	if err != nil || len(loaded) != 2 {
+		t.Fatalf("loaded=%+v err=%v", loaded, err)
+	}
+}

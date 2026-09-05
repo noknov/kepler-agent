@@ -636,6 +636,7 @@ type Graph struct {
 	FetchStatus   string
 	Module        string
 	Files         int
+	SkippedFiles  int
 	Funcs         int
 	Packages      map[string]*Package
 	InternalEdges []Edge
@@ -720,6 +721,7 @@ func buildGraph(ctx context.Context, repo, ref, commit, branch, fetchStatus stri
 		}
 		src, err := git(ctx, repo, timeout, "show", ref+":"+path)
 		if err != nil {
+			g.SkippedFiles++
 			continue
 		}
 		if strings.HasSuffix(path, ".cs") {
@@ -729,6 +731,7 @@ func buildGraph(ctx context.Context, repo, ref, commit, branch, fetchStatus stri
 		fset := token.NewFileSet()
 		file, err := parser.ParseFile(fset, path, src, 0)
 		if err != nil {
+			g.SkippedFiles++
 			continue
 		}
 		pkgPath := packagePath(module, filepath.Dir(path))
@@ -882,7 +885,7 @@ func buildGraph(ctx context.Context, repo, ref, commit, branch, fetchStatus stri
 }
 
 func (g *Graph) header() string {
-	return fmt.Sprintf("repo=%s\nbranch=%s\nref=%s\ncommit=%s\nfetch_status=%s\nmodule=%s\nworking_tree_changed=false\nanalysis=static_syntax\nlimitations=Go syntax is AST-derived but calls are name-matched without type resolution; C# symbols and calls are lexical approximations. Verify behavioral claims with source or LSP.\n", g.Repo, g.Branch, g.Ref, shortCommit(g.Commit), g.FetchStatus, g.Module)
+	return fmt.Sprintf("repo=%s\nbranch=%s\nref=%s\ncommit=%s\nfetch_status=%s\nmodule=%s\nparsed_files=%d\nskipped_files=%d\nworking_tree_changed=false\nanalysis=static_syntax_candidates\nlimitations=Go syntax is AST-derived but calls are name-matched without type resolution; C# symbols and calls are lexical candidates. Verify behavioral claims with source or LSP.\n", g.Repo, g.Branch, g.Ref, shortCommit(g.Commit), g.FetchStatus, g.Module, g.Files, g.SkippedFiles)
 }
 
 func (g *Graph) sortedPackages() []*Package {
@@ -1005,13 +1008,24 @@ var (
 
 func addCSharpFile(g *Graph, path, src string) {
 	lines := strings.Split(src, "\n")
+	cleanLines := cleanCSharpLines(lines)
 	namespace := ""
-	currentType := ""
 	pkgPath := filepath.ToSlash(filepath.Dir(path))
 	g.Files++
 	g.FilePackages[filepath.ToSlash(path)] = pkgPath
-	for i, line := range lines {
+	typeAtLine := make([]string, len(lines))
+	type scope struct {
+		name  string
+		depth int
+	}
+	var scopes []scope
+	pendingType := ""
+	depth := 0
+	for i, line := range cleanLines {
 		lineNo := i + 1
+		for len(scopes) > 0 && depth < scopes[len(scopes)-1].depth {
+			scopes = scopes[:len(scopes)-1]
+		}
 		if match := csNamespaceRe.FindStringSubmatch(line); match != nil {
 			namespace = match[1]
 			if namespace != "" {
@@ -1023,12 +1037,12 @@ func addCSharpFile(g *Graph, path, src string) {
 			}
 		}
 		if match := csTypeRe.FindStringSubmatch(line); match != nil {
-			currentType = match[2]
+			currentType := match[2]
 			bases := splitCSharpBases("")
 			if len(match) > 3 {
 				bases = splitCSharpBases(match[3])
 			}
-			pkg := ensurePackage(g, pkgPath, namespace, filepath.Dir(path))
+			ensurePackage(g, pkgPath, namespace, filepath.Dir(path))
 			sym := Symbol{
 				Name:     currentType,
 				FullName: qualify(namespace, currentType),
@@ -1042,19 +1056,29 @@ func addCSharpFile(g *Graph, path, src string) {
 			if match[1] == "interface" {
 				g.Interfaces[currentType] = &InterfaceInfo{Symbol: sym}
 			}
-			pkg.Funcs += 0
+			pendingType = currentType
 		}
+		opens, closes := strings.Count(line, "{"), strings.Count(line, "}")
+		if pendingType != "" && opens > 0 {
+			scopes = append(scopes, scope{name: pendingType, depth: depth + 1})
+			pendingType = ""
+		}
+		if len(scopes) > 0 {
+			typeAtLine[i] = scopes[len(scopes)-1].name
+		}
+		depth += opens - closes
 	}
 	pkg := ensurePackage(g, pkgPath, namespace, filepath.Dir(path))
 	if pkg.Files == 0 {
 		pkg.Files = 1
 	}
-	for i := 0; i < len(lines); i++ {
-		match := csMethodRe.FindStringSubmatch(lines[i])
+	for i := 0; i < len(cleanLines); i++ {
+		match := csMethodRe.FindStringSubmatch(cleanLines[i])
 		if match == nil || isControlKeyword(match[1]) {
 			continue
 		}
 		name := match[1]
+		currentType := typeAtLine[i]
 		fullName := name
 		if currentType != "" {
 			fullName = currentType + "." + name
@@ -1076,9 +1100,20 @@ func addCSharpFile(g *Graph, path, src string) {
 				g.Types[currentType] = info
 			}
 			info.Methods = appendUnique(info.Methods, name)
+			if iface := g.Interfaces[currentType]; iface != nil {
+				iface.Methods = appendUnique(iface.Methods, name)
+			}
 		}
-		for j := i; j < len(lines); j++ {
-			for _, call := range callRe.FindAllStringSubmatch(lines[j], -1) {
+		bodyDepth := 0
+		bodyStarted := false
+		for j := i; j < len(cleanLines); j++ {
+			line := cleanLines[j]
+			if j == i {
+				if index := strings.Index(line, match[0]); index >= 0 {
+					line = line[index+len(match[0]):]
+				}
+			}
+			for _, call := range callRe.FindAllStringSubmatch(line, -1) {
 				callee := call[1]
 				if callee == name || isControlKeyword(callee) {
 					continue
@@ -1086,11 +1121,73 @@ func addCSharpFile(g *Graph, path, src string) {
 				g.Calls = append(g.Calls, Call{Caller: fullName, Callee: callee, File: filepath.ToSlash(path), Line: j + 1})
 				g.References = append(g.References, Reference{Symbol: callee, File: filepath.ToSlash(path), Line: j + 1, Context: fullName})
 			}
-			if j > i && strings.Contains(lines[j], "}") {
+			opens, closes := strings.Count(line, "{"), strings.Count(line, "}")
+			if opens > 0 {
+				bodyStarted = true
+			}
+			bodyDepth += opens - closes
+			if bodyStarted && bodyDepth <= 0 {
+				break
+			}
+			if !bodyStarted && (strings.Contains(line, ";") || strings.Contains(line, "=>")) {
 				break
 			}
 		}
 	}
+}
+
+func cleanCSharpLines(lines []string) []string {
+	cleaned := make([]string, len(lines))
+	inBlockComment := false
+	for index, line := range lines {
+		var out strings.Builder
+		inString := rune(0)
+		escaped := false
+		for position := 0; position < len(line); position++ {
+			current := rune(line[position])
+			next := byte(0)
+			if position+1 < len(line) {
+				next = line[position+1]
+			}
+			if inBlockComment {
+				if current == '*' && next == '/' {
+					inBlockComment = false
+					position++
+				}
+				continue
+			}
+			if inString != 0 {
+				if escaped {
+					escaped = false
+					continue
+				}
+				if current == '\\' {
+					escaped = true
+					continue
+				}
+				if current == inString {
+					inString = 0
+				}
+				continue
+			}
+			if current == '/' && next == '/' {
+				break
+			}
+			if current == '/' && next == '*' {
+				inBlockComment = true
+				position++
+				continue
+			}
+			if current == '"' || current == '\'' {
+				inString = current
+				out.WriteByte(' ')
+				continue
+			}
+			out.WriteRune(current)
+		}
+		cleaned[index] = out.String()
+	}
+	return cleaned
 }
 
 func ensurePackage(g *Graph, path, name, dir string) *Package {

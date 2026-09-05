@@ -1,5 +1,7 @@
 package tool
 
+import "fmt"
+
 // SurfacePolicy filters tools at catalog construction time.
 type SurfacePolicy struct {
 	Surface       string
@@ -42,10 +44,54 @@ func (c *Catalog) RegisterDeferredVisible(policy SurfacePolicy, category string,
 		return nil
 	}
 	patch := Descriptor{Exposure: ExposureDeferred, Tags: []string{category}}
-	if category != "" {
-		if description, ok := categoryDescriptions[category]; ok && description != "" {
-			_ = description
-		}
-	}
 	return c.RegisterVisible(policy, Annotate(item, patch))
+}
+
+// Registration collects the first catalog construction error so callers can
+// declare a catalog without accidentally discarding descriptor validation or
+// duplicate-name failures.
+type Registration struct {
+	catalog *Catalog
+	policy  SurfacePolicy
+	err     error
+}
+
+func NewRegistration(catalog *Catalog, policy SurfacePolicy) *Registration {
+	return &Registration{catalog: catalog, policy: policy}
+}
+
+func (r *Registration) Visible(item Tool) {
+	if r == nil || r.err != nil {
+		return
+	}
+	if r.catalog == nil {
+		r.err = fmt.Errorf("tool catalog is nil")
+		return
+	}
+	r.err = r.catalog.RegisterVisible(r.policy, item)
+}
+
+func (r *Registration) Deferred(category string, item Tool) {
+	if r == nil || r.err != nil {
+		return
+	}
+	if r.catalog == nil {
+		r.err = fmt.Errorf("tool catalog is nil")
+		return
+	}
+	r.err = r.catalog.RegisterDeferredVisible(r.policy, category, item)
+}
+
+func (r *Registration) Err() error {
+	if r == nil {
+		return fmt.Errorf("tool registration is nil")
+	}
+	return r.err
+}
+
+func (r *Registration) Surface() string {
+	if r == nil {
+		return ""
+	}
+	return r.policy.Surface
 }

@@ -17,10 +17,11 @@ func TestWorkspacePolicyUsesStructuredExecNetworkFlag(t *testing.T) {
 	}{
 		{name: "network denied by sandbox", args: `{"argv":["rg","needle"],"network":false}`, want: tool.DecisionAllow},
 		{name: "network requested", args: `{"argv":["curl","example.com"],"network":true}`, want: tool.DecisionRequireApproval},
+		{name: "heuristic destructive risk requires approval", args: `{"argv":["rm","-rf","build"],"network":false}`, want: tool.DecisionRequireApproval},
 		{name: "invalid arguments fail closed", args: `{`, want: tool.DecisionDeny},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			decision, err := (WorkspacePolicy{}).Decide(context.Background(), tool.PolicyRequest{
+			decision, err := NewWorkspacePolicy().Decide(context.Background(), tool.PolicyRequest{
 				Descriptor: descriptor,
 				Call:       tool.Call{Name: "exec", Arguments: json.RawMessage(test.args)},
 			})

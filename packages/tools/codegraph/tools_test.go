@@ -97,6 +97,7 @@ public class CommentController : IPostLoader
 
     private void LoadPosts() {}
 }
+
 `,
 	})
 	base := Base{Paths: safety.WorkspacePolicy{Roots: []string{root}}, Timeout: 10 * time.Second}
@@ -124,6 +125,39 @@ public class CommentController : IPostLoader
 	}
 	if !strings.Contains(impls.Text(), "cs_class Messaging.Instagram.Controllers.CommentController") {
 		t.Fatalf("implementations content = %q", impls.Text())
+	}
+}
+
+func TestCodegraphKeepsCSharpMethodsInsideTheirDeclaringType(t *testing.T) {
+	root, work := testRepo(t, map[string]string{
+		"Services/Workers.cs": `namespace Demo;
+public class First {
+    public void Run() {
+        if (Ready()) { Nested(); }
+        Finish();
+        var ignored = "FakeCall(); }";
+    }
+}
+public class Second {
+    public void Stop() { Done(); }
+}
+`,
+	})
+	base := Base{Paths: safety.WorkspacePolicy{Roots: []string{root}}, Timeout: 10 * time.Second}
+	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
+	definition, err := (DefinitionTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main","symbol":"First.Run"}`), Scope: scope})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(definition.Text(), "First.Run") || strings.Contains(definition.Text(), "Second.Run") {
+		t.Fatalf("definition content = %q", definition.Text())
+	}
+	callers, err := (CallersTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main","symbol":"Finish"}`), Scope: scope})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(callers.Text(), "First.Run -> Finish") || strings.Contains(callers.Text(), "FakeCall") {
+		t.Fatalf("callers content = %q", callers.Text())
 	}
 }
 

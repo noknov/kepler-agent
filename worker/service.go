@@ -189,7 +189,9 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		return nil, fmt.Errorf("build hosted tool catalog: %w", err)
 	}
 	catalog := bundle.Catalog
-	slackTools.AddToCatalog(catalog, hostedTools.PolicyForSurface(cfg, surface), cfg, slackClient, stores.Reminders, stores.Redis, &connService)
+	if err := slackTools.AddToCatalog(catalog, hostedTools.PolicyForSurface(cfg, surface), cfg, slackClient, stores.Reminders, stores.Redis, &connService); err != nil {
+		return nil, fmt.Errorf("register Slack tools: %w", err)
+	}
 	profile, profileErr := hosted.NewProfile(cfg, hosted.ProfileDependencies{
 		Tools: catalog, Postgres: stores.PGPool, Redis: stores.Redis, ToolSpills: stores.Runs, Events: events, Metrics: recorder, Lease: stores.Sessions,
 		ConnectionContinuations: connections.RuntimeContinuationStore{Store: continuations},

@@ -141,7 +141,7 @@ func newLocalHarness(values options, config local.Config, creds credentials) (*l
 			Context:  agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
 		},
 		Deps: agentruntime.Dependencies{
-			Model: resilientClient, Policy: local.WorkspacePolicy{}, Transcript: store,
+			Model: resilientClient, Policy: local.NewWorkspacePolicy(), Transcript: store,
 			Compactor:   agentruntime.ModelCompactor{Client: resilientClient, Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
 			Artifacts:   local.ArtifactStore{Root: artifactRoot},
 			Environment: environment.Config{WorkspaceRoots: []string{workspace.Root}},
@@ -162,7 +162,7 @@ func newLocalHarness(values options, config local.Config, creds credentials) (*l
 			Context: agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
 		},
 		agentruntime.Dependencies{
-			Model: resilientClient, Tools: catalog, Policy: local.WorkspacePolicy{}, Approver: approver, Transcript: store, Events: renderer,
+			Model: resilientClient, Tools: catalog, Policy: local.NewWorkspacePolicy(), Approver: approver, Transcript: store, Events: renderer,
 			Compactor:   agentruntime.ModelCompactor{Client: resilientClient, Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
 			Artifacts:   local.ArtifactStore{Root: artifactRoot},
 			Environment: environment.Config{WorkspaceRoots: []string{workspace.Root}},

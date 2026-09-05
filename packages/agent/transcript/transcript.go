@@ -23,6 +23,9 @@ const (
 	SteeringInput    EventType = "steering_input"
 	ContextProjected EventType = "context_projected"
 	ModelRequested   EventType = "model_requested"
+	// ModelAttempted records provider-level resilience decisions. It is diagnostic
+	// telemetry, not the terminal fact for a logical model request.
+	ModelAttempted EventType = "model_attempted"
 	// ModelRequestStarted records the durable intent to make one logical model
 	// request. Unlike ModelRequested (a legacy attempt/projection event), it
 	// carries a stable request ID that recovery can reconcile.
@@ -74,6 +77,14 @@ type TraceContext struct {
 type Store interface {
 	Append(ctx context.Context, event Event) (Event, error)
 	Load(ctx context.Context, sessionID string, afterSequence uint64) ([]Event, error)
+}
+
+// BatchStore atomically appends a related set of canonical facts. Protocol
+// operations such as thread/fork require this contract so a failed write can
+// never expose a partially copied conversation.
+type BatchStore interface {
+	Store
+	AppendBatch(ctx context.Context, events []Event) ([]Event, error)
 }
 
 type Sink interface {

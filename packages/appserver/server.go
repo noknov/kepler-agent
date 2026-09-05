@@ -47,27 +47,44 @@ type Server struct {
 
 	pendingMu sync.Mutex
 	pending   map[string]*pendingApproval
+
+	stateMu sync.Mutex
+	state   connectionState
 }
 
 type activeTurn struct {
-	cancel   context.CancelFunc
-	steering *agentruntime.InputBuffer
+	sessionID string
+	cancel    context.CancelFunc
+	steering  *agentruntime.InputBuffer
+	phase     turnPhase
 }
+
+type connectionState uint8
+
+const (
+	connectionUninitialized connectionState = iota
+	connectionAwaitingInitialized
+	connectionReady
+)
+
+type turnPhase uint8
+
+const (
+	turnRunning turnPhase = iota
+	turnInterruptRequested
+	turnCompleting
+)
 
 type registerResult uint8
 
 const (
 	registerOK registerResult = iota
 	registerDuplicate
+	registerThreadBusy
 	registerOverloaded
 )
 
-type Request struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id,omitempty"`
-	Method  string          `json:"method"`
-	Params  json.RawMessage `json:"params,omitempty"`
-}
+type Request = ProtocolEnvelope
 
 type Response struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -79,14 +96,6 @@ type Response struct {
 type ResponseError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
-}
-
-type TurnStartParams struct {
-	SessionID string `json:"sessionId"`
-	TurnID    string `json:"turnId,omitempty"`
-	UserID    string `json:"userId,omitempty"`
-	Model     string `json:"model,omitempty"`
-	Input     string `json:"input,omitempty"`
 }
 
 func New(runtime *agentruntime.Runtime, reader io.Reader, writer io.Writer) *Server {
@@ -125,6 +134,11 @@ func (s *Server) Serve(ctx context.Context) error {
 		}
 		var request Request
 		if err := json.Unmarshal(line, &request); err != nil {
+			s.respond(json.RawMessage("null"), nil, &ResponseError{Code: -32700, Message: "parse error"})
+			continue
+		}
+		if request.JSONRPC != "" && request.JSONRPC != JSONRPCVersion {
+			s.respond(request.ID, nil, &ResponseError{Code: -32600, Message: "invalid JSON-RPC version"})
 			continue
 		}
 		s.handle(ctx, request)
@@ -133,15 +147,21 @@ func (s *Server) Serve(ctx context.Context) error {
 }
 
 func (s *Server) handle(ctx context.Context, request Request) {
+	if request.Method == "initialize" {
+		s.handleInitialize(request)
+		return
+	}
+	if request.Method == "initialized" {
+		if !s.acknowledgeInitialized() {
+			s.respond(request.ID, nil, &ResponseError{Code: -32600, Message: "initialize must succeed before initialized"})
+		}
+		return
+	}
+	if !s.initialized() {
+		s.respond(request.ID, nil, &ResponseError{Code: -32600, Message: "not initialized"})
+		return
+	}
 	switch request.Method {
-	case "initialize":
-		s.respond(request.ID, map[string]any{
-			"protocol":               "v2",
-			"protocolVersion":        2,
-			"minimumProtocolVersion": 2,
-			"maximumProtocolVersion": 2,
-			"capabilities":           DefaultCapabilities(),
-		}, nil)
 	case "thread/start":
 		var params ThreadStartParams
 		if err := json.Unmarshal(request.Params, &params); err != nil {
@@ -151,7 +171,7 @@ func (s *Server) handle(ctx context.Context, request Request) {
 		if params.SessionID == "" {
 			params.SessionID = NewSessionID(s.IDs)
 		}
-		s.respond(request.ID, map[string]any{"sessionId": params.SessionID, "userId": params.UserID}, nil)
+		s.respond(request.ID, ThreadStartResult{SessionID: params.SessionID, UserID: params.UserID}, nil)
 	case "thread/resume":
 		var params ThreadResumeParams
 		if err := json.Unmarshal(request.Params, &params); err != nil || params.SessionID == "" {
@@ -159,7 +179,7 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			return
 		}
 		if s.Transcript == nil {
-			s.respond(request.ID, nil, &ResponseError{Code: -32001, Message: "transcript store unavailable"})
+			s.respond(request.ID, nil, &ResponseError{Code: StoreUnavailableErrorCode, Message: "transcript store unavailable"})
 			return
 		}
 		events, err := s.Transcript.Load(ctx, params.SessionID, params.AfterSequence)
@@ -167,9 +187,9 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			s.respond(request.ID, nil, &ResponseError{Code: -32002, Message: err.Error()})
 			return
 		}
-		result := map[string]any{"sessionId": params.SessionID, "eventCount": len(events)}
+		result := ThreadResumeResult{SessionID: params.SessionID, EventCount: len(events)}
 		if params.IncludeEvents || params.StreamItems {
-			result["items"] = itemsFromEvents(events)
+			result.Items = itemsFromEvents(events)
 		}
 		s.respond(request.ID, result, nil)
 		if params.StreamItems {
@@ -184,7 +204,11 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			return
 		}
 		if s.Transcript == nil {
-			s.respond(request.ID, nil, &ResponseError{Code: -32001, Message: "transcript store unavailable"})
+			s.respond(request.ID, nil, &ResponseError{Code: StoreUnavailableErrorCode, Message: "transcript store unavailable"})
+			return
+		}
+		if s.sessionActive(params.SourceSessionID) {
+			s.respond(request.ID, nil, &ResponseError{Code: ThreadBusyErrorCode, Message: "cannot fork a thread with an active turn"})
 			return
 		}
 		childID := params.ChildSessionID
@@ -196,7 +220,7 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			s.respond(request.ID, nil, &ResponseError{Code: -32002, Message: err.Error()})
 			return
 		}
-		copied := 0
+		forkedEvents := make([]transcript.Event, 0, len(events))
 		for _, event := range events {
 			if params.BeforeSequence > 0 && event.Sequence >= params.BeforeSequence {
 				break
@@ -210,13 +234,18 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			// event onto the same empty primary key).
 			forked.ID = s.IDs.New("evt")
 			forked.Sequence = 0
-			if _, err := s.Transcript.Append(ctx, forked); err != nil {
-				s.respond(request.ID, nil, &ResponseError{Code: -32003, Message: err.Error()})
-				return
-			}
-			copied++
+			forkedEvents = append(forkedEvents, forked)
 		}
-		s.respond(request.ID, map[string]any{"sessionId": childID, "sourceSessionId": params.SourceSessionID, "eventCount": copied}, nil)
+		batchStore, ok := s.Transcript.(transcript.BatchStore)
+		if !ok {
+			s.respond(request.ID, nil, &ResponseError{Code: -32012, Message: "transcript store does not support atomic fork"})
+			return
+		}
+		if _, err := batchStore.AppendBatch(ctx, forkedEvents); err != nil {
+			s.respond(request.ID, nil, &ResponseError{Code: -32003, Message: err.Error()})
+			return
+		}
+		s.respond(request.ID, ThreadForkResult{SessionID: childID, SourceSessionID: params.SourceSessionID, EventCount: len(forkedEvents)}, nil)
 	case "thread/trajectory":
 		var params ThreadResumeParams
 		if err := json.Unmarshal(request.Params, &params); err != nil || params.SessionID == "" {
@@ -224,7 +253,7 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			return
 		}
 		if s.Transcript == nil {
-			s.respond(request.ID, nil, &ResponseError{Code: -32001, Message: "transcript store unavailable"})
+			s.respond(request.ID, nil, &ResponseError{Code: StoreUnavailableErrorCode, Message: "transcript store unavailable"})
 			return
 		}
 		events, err := s.Transcript.Load(ctx, params.SessionID, params.AfterSequence)
@@ -232,7 +261,7 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			s.respond(request.ID, nil, &ResponseError{Code: -32002, Message: err.Error()})
 			return
 		}
-		s.respond(request.ID, map[string]any{"sessionId": params.SessionID, "items": trajectory.Build(events)}, nil)
+		s.respond(request.ID, ThreadTrajectoryResult{SessionID: params.SessionID, Items: trajectory.Build(events)}, nil)
 	case "turn/start":
 		var params TurnStartParams
 		if err := json.Unmarshal(request.Params, &params); err != nil || params.SessionID == "" || params.Input == "" {
@@ -244,7 +273,7 @@ func (s *Server) handle(ctx context.Context, request Request) {
 		}
 		turnCtx, cancel := context.WithCancel(ctx)
 		buffer := &agentruntime.InputBuffer{}
-		switch s.register(params.TurnID, &activeTurn{cancel: cancel, steering: buffer}) {
+		switch s.register(params.TurnID, &activeTurn{sessionID: params.SessionID, cancel: cancel, steering: buffer, phase: turnRunning}) {
 		case registerDuplicate:
 			cancel()
 			s.respond(request.ID, nil, &ResponseError{Code: -32004, Message: "turn already active"})
@@ -253,14 +282,15 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			cancel()
 			s.respond(request.ID, nil, &ResponseError{Code: -32001, Message: "server overloaded; retry later"})
 			return
+		case registerThreadBusy:
+			cancel()
+			s.respond(request.ID, nil, &ResponseError{Code: ThreadBusyErrorCode, Message: "thread already has an active turn"})
+			return
 		}
-		s.respond(request.ID, map[string]string{"turnId": params.TurnID, "sessionId": params.SessionID, "status": "started"}, nil)
+		s.respond(request.ID, TurnStartResult{TurnID: params.TurnID, SessionID: params.SessionID, Status: "started"}, nil)
 		go s.execute(turnCtx, params, buffer)
 	case "turn/steer":
-		var params struct {
-			TurnID string `json:"turnId"`
-			Text   string `json:"text"`
-		}
+		var params TurnSteerParams
 		if err := json.Unmarshal(request.Params, &params); err != nil || params.TurnID == "" || params.Text == "" {
 			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "turnId and text are required"})
 			return
@@ -269,7 +299,7 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			s.respond(request.ID, nil, &ResponseError{Code: -32004, Message: "active turn not found"})
 			return
 		}
-		s.respond(request.ID, map[string]bool{"queued": true}, nil)
+		s.respond(request.ID, QueuedResult{Queued: true}, nil)
 	case "turn/cancel", "turn/interrupt":
 		var params TurnInterruptParams
 		if err := json.Unmarshal(request.Params, &params); err != nil || params.TurnID == "" {
@@ -280,9 +310,9 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			s.respond(request.ID, nil, &ResponseError{Code: -32004, Message: "active turn not found"})
 			return
 		}
-		s.respond(request.ID, map[string]bool{"canceled": true}, nil)
+		s.respond(request.ID, TurnInterruptResult{Canceled: true}, nil)
 	case "approval/respond":
-		var params approvalRespondParams
+		var params ApprovalRespondParams
 		if err := json.Unmarshal(request.Params, &params); err != nil || params.TurnID == "" || params.ToolCallID == "" {
 			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "turnId and toolCallId are required"})
 			return
@@ -291,10 +321,44 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			s.respond(request.ID, nil, &ResponseError{Code: -32005, Message: err.Error()})
 			return
 		}
-		s.respond(request.ID, map[string]string{"scope": params.Scope}, nil)
+		s.respond(request.ID, ApprovalRespondResult{Scope: params.Scope}, nil)
 	default:
 		s.respond(request.ID, nil, &ResponseError{Code: -32601, Message: "method not found"})
 	}
+}
+
+func (s *Server) handleInitialize(request Request) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.state != connectionUninitialized {
+		s.respond(request.ID, nil, &ResponseError{Code: -32600, Message: "already initialized"})
+		return
+	}
+	var params InitializeParams
+	if len(request.Params) > 0 && string(request.Params) != "null" {
+		if err := json.Unmarshal(request.Params, &params); err != nil {
+			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "invalid params"})
+			return
+		}
+	}
+	s.state = connectionAwaitingInitialized
+	s.respond(request.ID, InitializeResult{Protocol: "v2", ProtocolVersion: ProtocolVersion, MinimumProtocolVersion: ProtocolVersion, MaximumProtocolVersion: ProtocolVersion, Capabilities: DefaultCapabilities()}, nil)
+}
+
+func (s *Server) acknowledgeInitialized() bool {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.state != connectionAwaitingInitialized {
+		return false
+	}
+	s.state = connectionReady
+	return true
+}
+
+func (s *Server) initialized() bool {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.state == connectionReady
 }
 
 func (s *Server) execute(ctx context.Context, params TurnStartParams, steering *agentruntime.InputBuffer) {
@@ -304,7 +368,7 @@ func (s *Server) execute(ctx context.Context, params TurnStartParams, steering *
 		ctx, cancel = context.WithTimeout(ctx, s.TurnTimeout)
 		defer cancel()
 	}
-	s.notify("turn/started", map[string]string{"turnId": params.TurnID, "sessionId": params.SessionID})
+	s.notify("turn/started", TurnStartedNotification{TurnID: params.TurnID, SessionID: params.SessionID})
 	modelName := params.Model
 	if modelName == "" {
 		modelName = s.Model
@@ -318,27 +382,25 @@ func (s *Server) execute(ctx context.Context, params TurnStartParams, steering *
 		Steering:  steering,
 		Model:     modelName,
 	})
-	payload := map[string]any{
-		"turnId":      params.TurnID,
-		"sessionId":   params.SessionID,
-		"termination": result.Termination,
-		"message":     result.Message,
-		"usage":       result.Usage,
-		"steps":       result.Steps,
-	}
+	payload := TurnCompletedNotification{TurnID: params.TurnID, SessionID: params.SessionID, Termination: result.Termination, Message: result.Message, Usage: result.Usage, Steps: result.Steps}
 	if err != nil {
-		payload["error"] = err.Error()
+		payload.Error = err.Error()
 	}
 	s.deltas.flushTurn(params.TurnID)
+	s.transition(params.TurnID, turnCompleting)
 	// Runtime has durably finished. Do not let a stalled presentation writer
 	// occupy a local admission slot; clients recover transient notices through
 	// thread/resume and the canonical transcript.
 	s.unregister(params.TurnID)
-	s.notify("turn/completed", payload)
+	s.notifyRequired("turn/completed", payload)
 }
 
 func (s *Server) notify(method string, params any) {
 	s.enqueue(map[string]any{"jsonrpc": JSONRPCVersion, "method": method, "params": params}, false)
+}
+
+func (s *Server) notifyRequired(method string, params any) {
+	s.enqueue(map[string]any{"jsonrpc": JSONRPCVersion, "method": method, "params": params}, true)
 }
 
 // NotifyEvent streams a canonical transcript event to connected clients.
@@ -353,14 +415,13 @@ func (s *Server) NotifyEvent(event transcript.Event) {
 }
 
 func (s *Server) notifyStreamDelta(event transcript.Event) {
-	s.notify("item/agentMessage/delta", map[string]any{
-		"turnId":    event.TurnID,
-		"sessionId": event.SessionID,
-		"delta":     event.Model.Text,
-	})
+	s.notify("item/agentMessage/delta", AgentMessageDeltaNotification{TurnID: event.TurnID, SessionID: event.SessionID, Delta: event.Model.Text})
 }
 
 func (s *Server) respond(id json.RawMessage, result any, responseErr *ResponseError) {
+	if len(id) == 0 {
+		return
+	}
 	s.write(Response{JSONRPC: JSONRPCVersion, ID: id, Result: result, Error: responseErr})
 }
 
@@ -388,11 +449,38 @@ func (s *Server) register(turnID string, active *activeTurn) registerResult {
 	if _, exists := s.active[turnID]; exists {
 		return registerDuplicate
 	}
+	for _, current := range s.active {
+		if current.sessionID == active.sessionID {
+			return registerThreadBusy
+		}
+	}
 	if s.MaxActiveTurns > 0 && len(s.active) >= s.MaxActiveTurns {
 		return registerOverloaded
 	}
 	s.active[turnID] = active
 	return registerOK
+}
+
+func (s *Server) transition(turnID string, phase turnPhase) bool {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	active := s.active[turnID]
+	if active == nil || phase < active.phase {
+		return false
+	}
+	active.phase = phase
+	return true
+}
+
+func (s *Server) sessionActive(sessionID string) bool {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	for _, active := range s.active {
+		if active.sessionID == sessionID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) unregister(turnID string) {
@@ -418,6 +506,10 @@ func (s *Server) cancel(turnID string) bool {
 	if active == nil {
 		return false
 	}
+	if active.phase != turnRunning {
+		return false
+	}
+	active.phase = turnInterruptRequested
 	active.cancel()
 	return true
 }

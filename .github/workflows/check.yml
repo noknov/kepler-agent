@@ -18,6 +18,14 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: apps/cli/pnpm-lock.yaml
       - name: Install local tool dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep
       - name: Format and architecture boundaries
@@ -28,6 +36,9 @@ jobs:
         run: make test
       - name: Build deployable binaries
         run: make build
+      - name: Validate CLI protocol boundary and bundle
+        working-directory: apps/cli
+        run: pnpm install --frozen-lockfile && pnpm typecheck && pnpm build
       - name: Validate evaluation tooling
         run: make eval-check
       - name: Race-sensitive runtime tests

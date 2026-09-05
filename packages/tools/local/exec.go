@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/tool"
@@ -17,15 +16,14 @@ type Exec struct {
 
 func (Exec) Descriptor() tool.Descriptor {
 	return tool.Descriptor{
-		Name: "exec", Description: "Run a command in the workspace sandbox. Prefer a shell command string; argv is also accepted. Network is denied unless requested and approved.",
-		InputSchema: schema(`{"command":{"type":"string"},"argv":{"type":"array","items":{"type":"string"},"minItems":1},"workdir":{"type":"string"},"network":{"type":"boolean"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800}}`),
+		Name: "exec", Description: "Run one argv command directly in the workspace sandbox without a shell. Pipelines and shell operators are not interpreted. Network is denied unless requested and approved.",
+		InputSchema: schema(`{"argv":{"type":"array","items":{"type":"string"},"minItems":1},"workdir":{"type":"string"},"network":{"type":"boolean"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800}}`),
 		Effects:     []tool.Effect{tool.EffectWorkspaceWrite, tool.EffectNetwork}, Exposure: tool.ExposureEager, Timeout: 30 * time.Minute,
 	}
 }
 
 func (t Exec) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var arguments struct {
-		Command string   `json:"command"`
 		Argv    []string `json:"argv"`
 		Workdir string   `json:"workdir"`
 		Network bool     `json:"network"`
@@ -34,7 +32,7 @@ func (t Exec) Execute(ctx context.Context, call tool.Call) (tool.Result, error) 
 	if err := json.Unmarshal(call.Arguments, &arguments); err != nil {
 		return tool.Result{}, err
 	}
-	argv, err := execArgv(arguments.Command, arguments.Argv)
+	argv, err := execArgv(arguments.Argv)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -57,16 +55,9 @@ func (t Exec) Execute(ctx context.Context, call tool.Call) (tool.Result, error) 
 	return tool.Result{Content: tool.TextResult(value).Content, IsError: result.ExitCode != 0, ErrorCode: exitCode(result.ExitCode), Truncated: result.Truncated, Metadata: map[string]any{"exit_code": result.ExitCode}}, nil
 }
 
-func execArgv(command string, argv []string) ([]string, error) {
-	command = strings.TrimSpace(command)
-	if command != "" && len(argv) > 0 {
-		return nil, fmt.Errorf("provide command or argv, not both")
-	}
-	if command != "" {
-		return []string{"/bin/bash", "-lc", command}, nil
-	}
+func execArgv(argv []string) ([]string, error) {
 	if len(argv) == 0 || argv[0] == "" {
-		return nil, fmt.Errorf("command or argv is required")
+		return nil, fmt.Errorf("argv is required")
 	}
 	return append([]string(nil), argv...), nil
 }

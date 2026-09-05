@@ -71,9 +71,11 @@ tag matrices; never promote only an aggregate score.
 Completed: local app-server limits active turns and returns retryable JSON-RPC
 `-32001` when saturated. Delta batching remains non-durable presentation work.
 
-Completed: the handshake declares its exact supported protocol range and the
-TypeScript client rejects incompatible ranges. Next: publish generated JSON
-schema artifacts from Go types before supporting third-party clients. A client
+Completed: the handshake declares its exact supported protocol range, requires
+`initialize` followed by `initialized`, and the TypeScript client rejects
+incompatible ranges. JSON Schema and TypeScript protocol artifacts are generated
+from the Go method/type registry and checked for drift by `make protocol-check`.
+A client
 reconnect must use `thread/resume` from the last transcript sequence rather
 than recover state from its terminal view.
 
@@ -82,7 +84,9 @@ than recover state from its terminal view.
 Keep server-side capability policy authoritative. Every external-write tool
 must have metadata and an exact operator allowlist entry; app-server/UI labels
 are never authorization. Keep argv-only execution, workspace roots, sandboxing,
-and the existing uncertain-tool-call recovery rule.
+and the existing uncertain-tool-call recovery rule. Pattern-based command
+classification is only an approval risk signal; it is not a parser, sandbox, or
+authorization boundary.
 
 Next: add conformance tests that execute every registered tool descriptor
 against hosted and local profiles, asserting capability effect, approval mode,

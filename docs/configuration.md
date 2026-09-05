@@ -321,11 +321,12 @@ approval policy.
 
 Write and external-write tools are authorized entirely by server policy; users
 are never asked to approve access to the host running the agent. The default
-allowlist contains only reminder, Slack Canvas, and TTS operations.
+allowlist contains reminder operations, Slack Canvas creation, Slack
+user-attributed message posting, TTS, and Luckin order creation/canceling.
 Operators can replace it with an exact, comma-separated allowlist:
 
 ```bash
-AGENT_ALLOWED_WRITE_TOOLS=reminder-create,reminder-cancel,slack-create_canvas,tts-speak
+AGENT_ALLOWED_WRITE_TOOLS=luckin-cancel_order,luckin-create_order,reminder-create,reminder-cancel,slack-create_canvas,slack-user_post_message,tts-speak
 ```
 
 A tool's surface annotation limits where it may run; it never grants write

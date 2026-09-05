@@ -5,7 +5,8 @@ The local CLI, GUI app server, and hosted Slack agent execute the same canonical
 - **Local CLI:** tools and sandbox run on the user machine; model calls go to Kepler through the gateway after Slack OAuth. Sessions persist as local JSONL.
 - **Hosted Agent:** the same loop on server workspaces. Slack is ingress and presentation, not a separate agent.
 
-Eval remains a later phase. The CLI is the surface that can later be driven like Claude Code; Slack cannot be evaled directly.
+The black-box evaluation harness drives the CLI/headless surface. Slack remains
+an ingress and presentation adapter rather than a direct evaluation target.
 
 ## Build and run
 
@@ -52,7 +53,12 @@ Interactive sessions show a compact header, streamed text, and live tool lines. 
 
 The local profile resolves file operations beneath the workspace, blocks common credential paths, and uses Seatbelt on macOS or bubblewrap on Linux for execution. Subprocesses receive a minimal environment and do not inherit the Kepler session token. Network is denied unless the tool call requests it and the user grants approval.
 
-`exec` accepts a shell `command` string (`/bin/bash -lc`) or argv. `unsafe_allow_no_sandbox` remains an explicit escape hatch.
+`exec` accepts argv and launches it directly without a shell. Pipelines, redirects,
+and shell operators must be expressed as explicit programs rather than command
+strings. A conservative destructive-command matcher can request approval, but it
+is only a risk signal: argv boundaries, workspace resolution, approval, and the
+OS sandbox are the authoritative controls. `unsafe_allow_no_sandbox` remains an
+explicit escape hatch.
 
 The hosted profile has no end-user host approvals. Its policy rejects mutation effects unless the tool is on the operator allowlist.
 

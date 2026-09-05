@@ -89,7 +89,7 @@ func run(ctx context.Context) error {
 			Context:  agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
 		},
 		Deps: agentruntime.Dependencies{
-			Model: resilientClient, Policy: local.WorkspacePolicy{},
+			Model: resilientClient, Policy: local.NewWorkspacePolicy(),
 			Compactor:   agentruntime.ModelCompactor{Client: resilientClient, Model: info.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
 			Artifacts:   local.ArtifactStore{Root: filepath.Join(stateDir, "sessions")},
 			Environment: environment.Config{WorkspaceRoots: []string{workspace.Root}},
@@ -113,7 +113,7 @@ func run(ctx context.Context) error {
 		Context:        agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
 		CircuitBreaker: agentruntime.CircuitBreakerConfig{Enabled: true},
 	}, agentruntime.Dependencies{
-		Model: resilientClient, Tools: catalog, Policy: local.WorkspacePolicy{}, Approver: approver, Transcript: store,
+		Model: resilientClient, Tools: catalog, Policy: local.NewWorkspacePolicy(), Approver: approver, Transcript: store,
 		Events:      transcript.SinkFunc(stream.publish),
 		Compactor:   agentruntime.ModelCompactor{Client: resilientClient, Model: info.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
 		Artifacts:   local.ArtifactStore{Root: filepath.Join(stateDir, "sessions")},

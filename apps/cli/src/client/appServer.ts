@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
+import type { NotificationMethod, NotificationParams, ProtocolMethod, ProtocolParams, ProtocolResults } from "../generated/appServerProtocol.js";
 import { summarizeToolArgs } from "../lib/toolDisplay.js";
 
 type JsonRpcRequest = {
@@ -16,10 +17,10 @@ type JsonRpcResponse = {
   error?: { code: number; message: string };
 };
 
-type JsonRpcNotification = {
+type JsonRpcNotification<M extends NotificationMethod = NotificationMethod> = {
   jsonrpc: "2.0";
-  method: string;
-  params?: unknown;
+  method: M;
+  params?: NotificationParams[M];
 };
 
 export type ApprovalRequest = {
@@ -59,6 +60,16 @@ export type AppServerEvents = {
   onItem: (method: string, params: unknown) => void;
 };
 
+export class AppServerRPCError extends Error {
+  constructor(
+    readonly code: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "AppServerRPCError";
+  }
+}
+
 export class AppServerClient {
   private nextId = 1;
   private pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
@@ -73,38 +84,33 @@ export class AppServerClient {
   }
 
   async initialize(timeoutMs = 10_000): Promise<void> {
-    const result = (await this.request("initialize", {}, timeoutMs)) as { protocol?: string; minimumProtocolVersion?: number; maximumProtocolVersion?: number };
+    const result = await this.request("initialize", { clientName: "kepler-cli" }, timeoutMs);
     if (result.protocol !== "v2" || result.minimumProtocolVersion !== 2 || result.maximumProtocolVersion !== 2) {
       throw new Error(`unsupported app-server protocol: ${result.protocol ?? "unknown"}`);
     }
+    this.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "initialized" })}\n`);
   }
 
   async startThread(sessionId?: string): Promise<string> {
-    const result = (await this.request("thread/start", sessionId ? { sessionId } : {})) as {
-      sessionId: string;
-    };
+    const result = await this.request("thread/start", sessionId ? { sessionId } : {});
     return result.sessionId;
   }
 
   async resumeThread(sessionId: string): Promise<ServerItem[]> {
-    const result = (await this.request("thread/resume", {
+    const result = await this.request("thread/resume", {
       sessionId,
       includeEvents: true,
-    })) as { sessionId: string; items?: ServerItem[] };
-    return (result.items ?? []).map(normalizeItem);
+    });
+    return ((result.items ?? []) as ServerItem[]).map(normalizeItem);
   }
 
   async trajectory(sessionId: string, afterSequence = 0): Promise<ServerItem[]> {
-    const result = (await this.request("thread/trajectory", { sessionId, afterSequence })) as {
-      sessionId: string; items?: ServerItem[];
-    };
-    return (result.items ?? []).map(normalizeItem);
+    const result = await this.request("thread/trajectory", { sessionId, afterSequence });
+    return (result.items as ServerItem[]).map(normalizeItem);
   }
 
   async startTurn(sessionId: string, input: string): Promise<string> {
-    const result = (await this.request("turn/start", { sessionId, input })) as {
-      turnId: string;
-    };
+    const result = await this.requestWithOverloadRetry("turn/start", { sessionId, input });
     return result.turnId;
   }
 
@@ -120,10 +126,10 @@ export class AppServerClient {
     await this.request("approval/respond", { turnId, sessionId, toolCallId, scope });
   }
 
-  private request(method: string, params?: unknown, timeoutMs = 30_000): Promise<unknown> {
+  private request<M extends ProtocolMethod>(method: M, params: ProtocolParams[M], timeoutMs = 30_000): Promise<ProtocolResults[M]> {
     const id = this.nextId++;
     const payload: JsonRpcRequest = { jsonrpc: "2.0", id, method, params };
-    return new Promise((resolve, reject) => {
+    return new Promise<ProtocolResults[M]>((resolve, reject) => {
       const timer = setTimeout(() => {
         if (!this.pending.has(id)) {
           return;
@@ -134,7 +140,7 @@ export class AppServerClient {
       this.pending.set(id, {
         resolve: (value) => {
           clearTimeout(timer);
-          resolve(value);
+          resolve(value as ProtocolResults[M]);
         },
         reject: (error) => {
           clearTimeout(timer);
@@ -143,6 +149,24 @@ export class AppServerClient {
       });
       this.stdin.write(`${JSON.stringify(payload)}\n`);
     });
+  }
+
+  private async requestWithOverloadRetry<M extends ProtocolMethod>(
+    method: M,
+    params: ProtocolParams[M],
+    attempts = 3,
+  ): Promise<ProtocolResults[M]> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.request(method, params);
+      } catch (error) {
+        if (!(error instanceof AppServerRPCError) || error.code !== -32001 || attempt >= attempts) {
+          throw error;
+        }
+        const delayMs = 100 * 2 ** (attempt - 1) + Math.floor(Math.random() * 50);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
   }
 
   private handleLine(line: string): void {
@@ -162,7 +186,7 @@ export class AppServerClient {
       }
       this.pending.delete(Number(message.id));
       if (message.error) {
-        waiter.reject(new Error(message.error.message));
+        waiter.reject(new AppServerRPCError(message.error.code, message.error.message));
         return;
       }
       waiter.resolve(message.result);

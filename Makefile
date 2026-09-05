@@ -3,7 +3,7 @@ SHELL := /bin/sh
 GOCACHE ?= $(CURDIR)/.cache/go-build
 GOFILES := $(shell rg --files -g '*.go')
 
-.PHONY: fmt fmt-check boundaries vet test test-race build eval-check check
+.PHONY: fmt fmt-check boundaries vet test test-race build eval-check protocol-generate protocol-check check
 
 fmt:
 	gofmt -w $(GOFILES)
@@ -41,4 +41,13 @@ eval-check:
 	python3 -m unittest evals/test_evaluator.py; \
 	python3 -c 'compile(open("evals/run.py", "rb").read(), "evals/run.py", "exec"); compile(open("evals/import_harbor.py", "rb").read(), "evals/import_harbor.py", "exec"); compile(open("evals/run_harbor.py", "rb").read(), "evals/run_harbor.py", "exec"); compile(open("evals/harbor_agents/kepler_agent.py", "rb").read(), "evals/harbor_agents/kepler_agent.py", "exec"); compile(open("evals/report.py", "rb").read(), "evals/report.py", "exec"); compile(open("evals/gate.py", "rb").read(), "evals/gate.py", "exec")'
 
-check: fmt-check boundaries vet test build eval-check
+protocol-generate:
+	GOCACHE=$(GOCACHE) go run ./appserver/cmd/protocolgen
+
+protocol-check:
+	@tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \
+	GOCACHE=$(GOCACHE) go run ./appserver/cmd/protocolgen --schema "$$tmp/schema.json" --typescript "$$tmp/protocol.ts"; \
+	diff -u docs/app-server.schema.json "$$tmp/schema.json"; \
+	diff -u apps/cli/src/generated/appServerProtocol.ts "$$tmp/protocol.ts"
+
+check: fmt-check boundaries protocol-check vet test build eval-check

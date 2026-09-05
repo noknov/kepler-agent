@@ -31,6 +31,30 @@ func (s *MemoryStore) Append(_ context.Context, event Event) (Event, error) {
 	return event, nil
 }
 
+func (s *MemoryStore) AppendBatch(_ context.Context, events []Event) ([]Event, error) {
+	if len(events) == 0 {
+		return nil, nil
+	}
+	sessionID := events[0].SessionID
+	if sessionID == "" {
+		return nil, fmt.Errorf("session id is required")
+	}
+	for _, event := range events {
+		if event.SessionID != sessionID {
+			return nil, fmt.Errorf("batch events must share one session id")
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]Event, 0, len(events))
+	for _, event := range events {
+		event.Sequence = uint64(len(s.events[sessionID]) + 1)
+		s.events[sessionID] = append(s.events[sessionID], event)
+		result = append(result, event)
+	}
+	return result, nil
+}
+
 func (s *MemoryStore) Load(_ context.Context, sessionID string, afterSequence uint64) ([]Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -114,3 +114,36 @@ func TestRuntimePersistsTurnTraceIdentity(t *testing.T) {
 		t.Fatalf("model trace=%+v root span=%q", modelTrace, spanID)
 	}
 }
+
+func TestResilientAttemptsDoNotDuplicateLogicalModelCompletion(t *testing.T) {
+	store := transcript.NewMemoryStore()
+	catalog, err := tool.NewCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary := &scriptedModel{responses: []model.Response{{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop}}}
+	client := &model.ResilientClient{Primary: primary, PrimaryProvider: "test", MaxAttempts: 1}
+	runner, err := New(Config{Model: "trace-model"}, Dependencies{Model: client, Tools: catalog, Transcript: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "attempt-session", TurnID: "attempt-turn", Input: model.TextMessage(model.RoleUser, "run")}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.Load(context.Background(), "attempt-session", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed, attempts := 0, 0
+	for _, event := range events {
+		switch event.Type {
+		case transcript.ModelCompleted:
+			completed++
+		case transcript.ModelAttempted:
+			attempts++
+		}
+	}
+	if completed != 1 || attempts != 2 {
+		t.Fatalf("completed=%d attempts=%d, want one logical completion and requested/completed attempt facts", completed, attempts)
+	}
+}

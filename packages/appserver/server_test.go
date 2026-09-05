@@ -44,6 +44,7 @@ func (m blockingModel) Generate(ctx context.Context, _ model.Request, _ model.Ev
 func TestThreadForkCopiesEvents(t *testing.T) {
 	store := transcript.NewMemoryStore()
 	server := New(nil, strings.NewReader(""), &bytes.Buffer{})
+	initializeForTest(t, server)
 	server.Transcript = store
 	ctx := context.Background()
 	_, _ = store.Append(ctx, transcript.Event{SessionID: "ses_parent", Type: transcript.SessionStarted})
@@ -79,9 +80,38 @@ func TestInitializeDeclaresExactProtocolCompatibility(t *testing.T) {
 	}
 }
 
+func TestInitializeIsSingleUse(t *testing.T) {
+	var out bytes.Buffer
+	server := New(nil, strings.NewReader(""), &out)
+	server.handle(context.Background(), Request{ID: json.RawMessage(`1`), Method: "initialize"})
+	server.handle(context.Background(), Request{ID: json.RawMessage(`2`), Method: "initialize"})
+	waitForOutput(t, &out, "already initialized")
+}
+
+func TestRequestsRequireInitializeHandshake(t *testing.T) {
+	var out bytes.Buffer
+	server := New(nil, strings.NewReader(""), &out)
+	server.handle(context.Background(), Request{ID: json.RawMessage(`1`), Method: "thread/start"})
+	waitForOutput(t, &out, "not initialized")
+	server.handle(context.Background(), Request{ID: json.RawMessage(`2`), Method: "initialize"})
+	server.handle(context.Background(), Request{Method: "initialized"})
+	server.handle(context.Background(), Request{ID: json.RawMessage(`3`), Method: "thread/start", Params: mustJSON(map[string]any{})})
+	waitForOutput(t, &out, `"id":3`)
+}
+
+func TestServeReturnsJSONRPCParseError(t *testing.T) {
+	var out bytes.Buffer
+	server := New(nil, strings.NewReader("{not-json}\n"), &out)
+	if err := server.Serve(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitForOutput(t, &out, `"code":-32700`)
+}
+
 func TestTrajectoryReturnsRedactedOperationalItems(t *testing.T) {
 	store := transcript.NewMemoryStore()
 	server := New(nil, strings.NewReader(""), &bytes.Buffer{})
+	initializeForTest(t, server)
 	server.Transcript = store
 	metadata := json.RawMessage(`{"provider":"openai","secret":"no"}`)
 	_, _ = store.Append(context.Background(), transcript.Event{SessionID: "ses", TurnID: "turn", Type: transcript.ContextProjected, Metadata: metadata})
@@ -104,6 +134,7 @@ func TestTurnStartUsesUniqueTurnIDs(t *testing.T) {
 	}
 	var out bytes.Buffer
 	server := New(runner, strings.NewReader(""), &out)
+	initializeForTest(t, server)
 	server.Transcript = transcript.NewMemoryStore()
 	ctx := context.Background()
 	server.handle(ctx, Request{ID: json.RawMessage(`1`), Method: "turn/start", Params: mustJSON(map[string]any{"sessionId": "ses_1", "input": "hello"})})
@@ -125,6 +156,7 @@ func TestTurnStartRejectsWhenActiveTurnBulkheadIsFull(t *testing.T) {
 	}
 	var out bytes.Buffer
 	server := New(runner, strings.NewReader(""), &out)
+	initializeForTest(t, server)
 	server.MaxActiveTurns = 1
 	server.handle(context.Background(), Request{ID: json.RawMessage(`1`), Method: "turn/start", Params: mustJSON(map[string]any{"sessionId": "ses_1", "turnId": "turn_1", "input": "one"})})
 	deadline := time.Now().Add(time.Second)
@@ -146,6 +178,33 @@ func TestTurnStartRejectsWhenActiveTurnBulkheadIsFull(t *testing.T) {
 	waitForNoActiveTurns(t, server)
 }
 
+func TestThreadAllowsOnlyOneActiveTurnAndCannotForkMidTurn(t *testing.T) {
+	catalog, _ := tool.NewCatalog()
+	released := make(chan struct{})
+	store := transcript.NewMemoryStore()
+	runner, err := agentruntime.New(agentruntime.Config{Model: "test"}, agentruntime.Dependencies{
+		Model: blockingModel{released: released}, Tools: catalog, Transcript: store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	server := New(runner, strings.NewReader(""), &out)
+	server.Transcript = store
+	initializeForTest(t, server)
+	server.handle(context.Background(), Request{ID: json.RawMessage(`1`), Method: "turn/start", Params: mustJSON(map[string]any{"sessionId": "ses_1", "turnId": "turn_1", "input": "one"})})
+	waitForActiveTurns(t, server, 1)
+	server.handle(context.Background(), Request{ID: json.RawMessage(`2`), Method: "turn/start", Params: mustJSON(map[string]any{"sessionId": "ses_1", "turnId": "turn_2", "input": "two"})})
+	server.handle(context.Background(), Request{ID: json.RawMessage(`3`), Method: "thread/fork", Params: mustJSON(map[string]any{"sourceSessionId": "ses_1", "childSessionId": "ses_child"})})
+	waitForOutput(t, &out, "thread already has an active turn")
+	waitForOutput(t, &out, "cannot fork a thread with an active turn")
+	if !strings.Contains(out.String(), "cannot fork a thread with an active turn") {
+		t.Fatalf("expected explicit fork boundary, got %s", out.String())
+	}
+	close(released)
+	waitForNoActiveTurns(t, server)
+}
+
 func TestExecuteAppliesTurnTimeout(t *testing.T) {
 	catalog, _ := tool.NewCatalog()
 	done := make(chan error, 1)
@@ -156,6 +215,7 @@ func TestExecuteAppliesTurnTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := New(runner, strings.NewReader(""), &bytes.Buffer{})
+	initializeForTest(t, server)
 	server.TurnTimeout = 10 * time.Millisecond
 	server.execute(context.Background(), TurnStartParams{SessionID: "ses_timeout", TurnID: "turn_timeout", Input: "hello"}, &agentruntime.InputBuffer{})
 	select {
@@ -171,6 +231,7 @@ func TestExecuteAppliesTurnTimeout(t *testing.T) {
 func TestNotifyEventMapsTextDelta(t *testing.T) {
 	var out bytes.Buffer
 	server := New(nil, strings.NewReader(""), &out)
+	initializeForTest(t, server)
 	server.NotifyEvent(transcript.Event{
 		TurnID: "turn_1", SessionID: "ses_1", Type: transcript.ModelStreamed,
 		Model: &model.StreamEvent{Type: model.StreamTextDelta, Text: "hello"},
@@ -183,6 +244,7 @@ func TestNotifyEventMapsTextDelta(t *testing.T) {
 
 func TestApprovalRespondUnblocks(t *testing.T) {
 	server := New(nil, strings.NewReader(""), &bytes.Buffer{})
+	initializeForTest(t, server)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan local.ApprovalScope, 1)
@@ -204,7 +266,7 @@ func TestApprovalRespondUnblocks(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if err := server.respondApproval(approvalRespondParams{TurnID: "turn_1", ToolCallID: "call_1", Scope: "once"}); err != nil {
+	if err := server.respondApproval(ApprovalRespondParams{TurnID: "turn_1", ToolCallID: "call_1", Scope: "once"}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -224,6 +286,12 @@ func mustJSON(value any) json.RawMessage {
 
 func ptr[T any](value T) *T { return &value }
 
+func initializeForTest(t *testing.T, server *Server) {
+	t.Helper()
+	server.handle(context.Background(), Request{ID: json.RawMessage(`0`), Method: "initialize", Params: mustJSON(InitializeParams{ClientName: "test"})})
+	server.handle(context.Background(), Request{Method: "initialized"})
+}
+
 func waitForNoActiveTurns(t *testing.T, server *Server) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
@@ -236,6 +304,23 @@ func waitForNoActiveTurns(t *testing.T, server *Server) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %d active app-server turns", active)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func waitForActiveTurns(t *testing.T, server *Server, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		server.activeMu.Lock()
+		active := len(server.active)
+		server.activeMu.Unlock()
+		if active == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %d active app-server turns; got %d", want, active)
 		}
 		time.Sleep(time.Millisecond)
 	}

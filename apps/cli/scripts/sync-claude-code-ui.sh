@@ -2,8 +2,14 @@
 # Re-sync vendored Claude Code terminal UI from a local checkout.
 # Usage: CLAUDE_CODE_SRC=../claude-code/src ./scripts/sync-claude-code-ui.sh
 set -euo pipefail
-CC="${CLAUDE_CODE_SRC:-/Users/shelton/Documents/claude-code/src}"
+: "${CLAUDE_CODE_SRC:?set CLAUDE_CODE_SRC to a pinned Claude Code source checkout}"
+CC="$(cd "$CLAUDE_CODE_SRC" && pwd)"
 DEST="$(cd "$(dirname "$0")/.." && pwd)/src/cc"
+REVISION="$(git -C "$CC" rev-parse HEAD 2>/dev/null || true)"
+if [[ -z "$REVISION" ]]; then
+  echo "CLAUDE_CODE_SRC must be inside a Git checkout so provenance can be recorded" >&2
+  exit 1
+fi
 
 mkdir -p "$DEST"/{components/messages,components/Spinner,hooks,context,utils,constants,types,stubs}
 
@@ -91,14 +97,12 @@ cp "$CC/utils/hash.ts" "$DEST/utils/"
 cp "$CC/constants/figures.ts" "$DEST/constants/"
 cp "$CC/constants/messages.ts" "$DEST/constants/"
 
-# ── REPL reference (1:1 copy source — edit screens/KeplerREPLView.tsx from this) ──
-mkdir -p "$DEST/screens"
-cp "$CC/screens/REPL.tsx" "$DEST/screens/REPL.tsx.bak-full"
-
 for f in Cursor.ts intl.ts sliceAnsi.ts envUtils.ts modifiers.ts fullscreen.ts \
   theme.ts systemTheme.ts execFileNoThrow.ts execFileNoThrowPortable.ts \
   cwd.ts browser.ts stringUtils.ts; do
   cp "$CC/utils/$f" "$DEST/utils/" 2>/dev/null || true
 done
 
-echo "Synced Claude Code UI into $DEST"
+printf '%s\n' "$REVISION" > "$DEST/UPSTREAM_REVISION"
+
+echo "Synced Claude Code UI revision $REVISION into $DEST"

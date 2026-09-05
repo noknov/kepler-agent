@@ -56,6 +56,53 @@ func (s PGTranscript) Append(ctx context.Context, event transcript.Event) (trans
 	return event, nil
 }
 
+func (s PGTranscript) AppendBatch(ctx context.Context, events []transcript.Event) ([]transcript.Event, error) {
+	if s.Pool == nil {
+		return nil, fmt.Errorf("agent transcript store is unavailable")
+	}
+	if len(events) == 0 {
+		return nil, nil
+	}
+	sessionID := events[0].SessionID
+	if sessionID == "" {
+		return nil, fmt.Errorf("session id is required")
+	}
+	for _, event := range events {
+		if event.SessionID != sessionID {
+			return nil, fmt.Errorf("batch events must share one session id")
+		}
+	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, sessionID); err != nil {
+		return nil, err
+	}
+	var next uint64
+	if err = tx.QueryRow(ctx, `SELECT COALESCE(MAX(sequence), 0) + 1 FROM agent_transcript_events WHERE session_id=$1`, sessionID).Scan(&next); err != nil {
+		return nil, err
+	}
+	result := make([]transcript.Event, len(events))
+	for index, event := range events {
+		event.Sequence = next + uint64(index)
+		payload, marshalErr := json.Marshal(event)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		payload = bytes.ReplaceAll(payload, []byte(`\u0000`), nil)
+		if _, err = tx.Exec(ctx, `INSERT INTO agent_transcript_events(event_id,session_id,turn_id,sequence,type,status,at,payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, event.ID, sessionID, event.TurnID, event.Sequence, string(event.Type), event.Status, event.Timestamp, payload); err != nil {
+			return nil, err
+		}
+		result[index] = event
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (s PGTranscript) Load(ctx context.Context, sessionID string, after uint64) ([]transcript.Event, error) {
 	if s.Pool == nil {
 		return nil, fmt.Errorf("agent transcript store is unavailable")

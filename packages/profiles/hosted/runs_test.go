@@ -10,6 +10,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
+	"github.com/noknov/kepler-agent/packages/observability"
 	"github.com/noknov/kepler-agent/packages/runs"
 )
 
@@ -82,6 +83,18 @@ func TestRunSinkReplayIsIdempotentAndProjectsFailures(t *testing.T) {
 	}
 	if run.Steps[0].Error != "overloaded" || run.Usage.TotalTokens != 12 || run.FinalHash == "" {
 		t.Fatalf("projection lost failure, usage, or final: %+v", run)
+	}
+}
+
+func TestRunSinkDoesNotOwnProviderCallMetrics(t *testing.T) {
+	metrics := observability.NewRecorder()
+	sink := &RunSink{Store: newProjectionStore(), Provider: "test", Model: "model", Metrics: metrics}
+	start := time.Unix(100, 0).UTC()
+	sink.publish(context.Background(), transcript.Event{ID: "turn", SessionID: "s", TurnID: "t", Type: transcript.TurnStarted, Timestamp: start}, true)
+	sink.publish(context.Background(), transcript.Event{ID: "request", SessionID: "s", TurnID: "t", Type: transcript.ModelRequestStarted, Timestamp: start.Add(time.Second)}, true)
+	sink.publish(context.Background(), transcript.Event{ID: "completed", SessionID: "s", TurnID: "t", Type: transcript.ModelCompleted, Timestamp: start.Add(2 * time.Second)}, true)
+	if got := metrics.Snapshot().LLMCalls; got != 0 {
+		t.Fatalf("LLM calls=%d, projection must not duplicate provider-boundary metrics", got)
 	}
 }
 

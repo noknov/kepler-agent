@@ -8,13 +8,6 @@ import (
 	"github.com/noknov/kepler-agent/packages/profiles/local"
 )
 
-type approvalRespondParams struct {
-	SessionID  string `json:"sessionId"`
-	TurnID     string `json:"turnId"`
-	ToolCallID string `json:"toolCallId"`
-	Scope      string `json:"scope"`
-}
-
 type pendingApproval struct {
 	answer chan local.ApprovalScope
 }
@@ -53,7 +46,7 @@ func (s *Server) waitApproval(ctx context.Context, turnID, toolCallID string) (l
 	}
 }
 
-func (s *Server) respondApproval(params approvalRespondParams) error {
+func (s *Server) respondApproval(params ApprovalRespondParams) error {
 	scope, err := parseApprovalScope(params.Scope)
 	if err != nil {
 		return err

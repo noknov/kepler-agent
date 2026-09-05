@@ -115,6 +115,75 @@ func (s *JSONLStore) Append(_ context.Context, event transcript.Event) (transcri
 	return event, err
 }
 
+func (s *JSONLStore) AppendBatch(_ context.Context, batch []transcript.Event) ([]transcript.Event, error) {
+	if len(batch) == 0 {
+		return nil, nil
+	}
+	sessionID := batch[0].SessionID
+	if !safeID.MatchString(sessionID) {
+		return nil, fmt.Errorf("invalid session id")
+	}
+	for _, event := range batch {
+		if event.SessionID != sessionID {
+			return nil, fmt.Errorf("batch events must share one session id")
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	directory := filepath.Join(s.Root, sessionID)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return nil, err
+	}
+	unlock, err := lockSessionFile(directory)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	path := filepath.Join(directory, "events.jsonl")
+	existing, err := loadAndRepair(path, 0)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]transcript.Event, len(batch))
+	for index, event := range batch {
+		event.Sequence = uint64(len(existing) + index + 1)
+		result[index] = event
+	}
+	all := append(existing, result...)
+	temporary, err := os.CreateTemp(directory, ".events-*.jsonl")
+	if err != nil {
+		return nil, err
+	}
+	temporaryPath := temporary.Name()
+	committed := false
+	defer func() {
+		_ = temporary.Close()
+		if !committed {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		return nil, err
+	}
+	encoder := json.NewEncoder(temporary)
+	for _, event := range all {
+		if err := encoder.Encode(event); err != nil {
+			return nil, err
+		}
+	}
+	if err := temporary.Sync(); err != nil {
+		return nil, err
+	}
+	if err := temporary.Close(); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return nil, err
+	}
+	committed = true
+	return result, nil
+}
+
 func (s *JSONLStore) Load(_ context.Context, sessionID string, afterSequence uint64) ([]transcript.Event, error) {
 	if !safeID.MatchString(sessionID) {
 		return nil, fmt.Errorf("invalid session id")

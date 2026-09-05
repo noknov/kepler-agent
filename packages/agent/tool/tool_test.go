@@ -55,6 +55,23 @@ func TestCatalogRejectsUnsafeDescriptorContracts(t *testing.T) {
 	}
 }
 
+func TestRegistrationRetainsFirstCatalogError(t *testing.T) {
+	catalog, err := NewCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration := NewRegistration(catalog, SurfacePolicy{})
+	registration.Visible(fakeTool{descriptor: Descriptor{Name: "duplicate", InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []Effect{EffectRead}}})
+	registration.Visible(fakeTool{descriptor: Descriptor{Name: "duplicate", InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []Effect{EffectRead}}})
+	registration.Visible(fakeTool{descriptor: Descriptor{Name: "after-error", InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []Effect{EffectRead}}})
+	if registration.Err() == nil {
+		t.Fatal("expected duplicate registration to fail")
+	}
+	if _, exists := catalog.Get("after-error"); exists {
+		t.Fatal("registration continued after the first catalog error")
+	}
+}
+
 func TestBindSurfaceAddsPresentationMetadata(t *testing.T) {
 	bound := BindSurface(fakeTool{descriptor: Descriptor{
 		Name:    "reminder-create",

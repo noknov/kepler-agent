@@ -442,12 +442,9 @@ func (r *Runtime) generateWithTools(ctx context.Context, turn TurnRequest, messa
 	}
 	ctx = model.WithAttemptObserver(ctx, func(attempt model.Attempt) {
 		metadata, _ := json.Marshal(map[string]any{"request_id": requestID, "attempt": attempt.Number, "provider": attempt.Provider, "model": attempt.Model, "fallback": attempt.Fallback, "outcome": attempt.Outcome, "remaining_ms": attempt.Remaining.Milliseconds(), "kind": model.ErrorKindOf(attempt.Error)})
-		event := transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelRequested, Status: attempt.Outcome, Metadata: metadata}
+		event := transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelAttempted, Status: attempt.Outcome, Metadata: metadata}
 		if attempt.Error != nil {
-			event.Type, event.Error = transcript.ModelFailed, attempt.Error.Error()
-		}
-		if attempt.Outcome == "completed" {
-			event.Type = transcript.ModelCompleted
+			event.Error = attempt.Error.Error()
 		}
 		_, _ = r.record(context.WithoutCancel(ctx), event)
 	})

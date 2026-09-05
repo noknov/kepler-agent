@@ -1,0 +1,531 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "definitions": {
+    "AgentMessageDeltaNotification": {
+      "additionalProperties": false,
+      "properties": {
+        "delta": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "turnId",
+        "sessionId",
+        "delta"
+      ],
+      "type": "object"
+    },
+    "ApprovalRespondParams": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "toolCallId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "turnId",
+        "toolCallId",
+        "scope"
+      ],
+      "type": "object"
+    },
+    "ApprovalRespondResult": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope"
+      ],
+      "type": "object"
+    },
+    "InitializeParams": {
+      "additionalProperties": false,
+      "properties": {
+        "clientName": {
+          "type": "string"
+        },
+        "clientVersion": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "InitializeResult": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "maximumProtocolVersion": {
+          "type": "integer"
+        },
+        "minimumProtocolVersion": {
+          "type": "integer"
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "protocolVersion": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "protocol",
+        "protocolVersion",
+        "minimumProtocolVersion",
+        "maximumProtocolVersion",
+        "capabilities"
+      ],
+      "type": "object"
+    },
+    "Item": {
+      "additionalProperties": false,
+      "properties": {
+        "eventType": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "payload": {},
+        "sequence": {
+          "type": "integer"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "sessionId",
+        "sequence",
+        "eventType"
+      ],
+      "type": "object"
+    },
+    "QueuedResult": {
+      "additionalProperties": false,
+      "properties": {
+        "queued": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "queued"
+      ],
+      "type": "object"
+    },
+    "ThreadForkParams": {
+      "additionalProperties": false,
+      "properties": {
+        "beforeSequence": {
+          "type": "integer"
+        },
+        "childSessionId": {
+          "type": "string"
+        },
+        "sourceSessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sourceSessionId"
+      ],
+      "type": "object"
+    },
+    "ThreadForkResult": {
+      "additionalProperties": false,
+      "properties": {
+        "eventCount": {
+          "type": "integer"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "sourceSessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "sourceSessionId",
+        "eventCount"
+      ],
+      "type": "object"
+    },
+    "ThreadResumeParams": {
+      "additionalProperties": false,
+      "properties": {
+        "afterSequence": {
+          "type": "integer"
+        },
+        "includeEvents": {
+          "type": "boolean"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "streamItems": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "type": "object"
+    },
+    "ThreadResumeResult": {
+      "additionalProperties": false,
+      "properties": {
+        "eventCount": {
+          "type": "integer"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/definitions/Item"
+          },
+          "type": "array"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "eventCount"
+      ],
+      "type": "object"
+    },
+    "ThreadStartParams": {
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "userId": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ThreadStartResult": {
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "userId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "type": "object"
+    },
+    "ThreadTrajectoryResult": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {},
+          "type": "array"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "items"
+      ],
+      "type": "object"
+    },
+    "TurnCompletedNotification": {
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "message": {},
+        "sessionId": {
+          "type": "string"
+        },
+        "steps": {
+          "type": "integer"
+        },
+        "termination": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        },
+        "usage": {}
+      },
+      "required": [
+        "turnId",
+        "sessionId",
+        "termination",
+        "message",
+        "usage",
+        "steps"
+      ],
+      "type": "object"
+    },
+    "TurnInterruptParams": {
+      "additionalProperties": false,
+      "properties": {
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "turnId"
+      ],
+      "type": "object"
+    },
+    "TurnInterruptResult": {
+      "additionalProperties": false,
+      "properties": {
+        "canceled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "canceled"
+      ],
+      "type": "object"
+    },
+    "TurnStartParams": {
+      "additionalProperties": false,
+      "properties": {
+        "input": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        },
+        "userId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "input"
+      ],
+      "type": "object"
+    },
+    "TurnStartResult": {
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "turnId",
+        "sessionId",
+        "status"
+      ],
+      "type": "object"
+    },
+    "TurnStartedNotification": {
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "turnId",
+        "sessionId"
+      ],
+      "type": "object"
+    },
+    "TurnSteerParams": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "turnId",
+        "text"
+      ],
+      "type": "object"
+    }
+  },
+  "methods": {
+    "approval/respond": {
+      "params": {
+        "$ref": "#/definitions/ApprovalRespondParams"
+      },
+      "result": {
+        "$ref": "#/definitions/ApprovalRespondResult"
+      }
+    },
+    "initialize": {
+      "params": {
+        "$ref": "#/definitions/InitializeParams"
+      },
+      "result": {
+        "$ref": "#/definitions/InitializeResult"
+      }
+    },
+    "thread/fork": {
+      "params": {
+        "$ref": "#/definitions/ThreadForkParams"
+      },
+      "result": {
+        "$ref": "#/definitions/ThreadForkResult"
+      }
+    },
+    "thread/resume": {
+      "params": {
+        "$ref": "#/definitions/ThreadResumeParams"
+      },
+      "result": {
+        "$ref": "#/definitions/ThreadResumeResult"
+      }
+    },
+    "thread/start": {
+      "params": {
+        "$ref": "#/definitions/ThreadStartParams"
+      },
+      "result": {
+        "$ref": "#/definitions/ThreadStartResult"
+      }
+    },
+    "thread/trajectory": {
+      "params": {
+        "$ref": "#/definitions/ThreadResumeParams"
+      },
+      "result": {
+        "$ref": "#/definitions/ThreadTrajectoryResult"
+      }
+    },
+    "turn/interrupt": {
+      "params": {
+        "$ref": "#/definitions/TurnInterruptParams"
+      },
+      "result": {
+        "$ref": "#/definitions/TurnInterruptResult"
+      }
+    },
+    "turn/start": {
+      "params": {
+        "$ref": "#/definitions/TurnStartParams"
+      },
+      "result": {
+        "$ref": "#/definitions/TurnStartResult"
+      }
+    },
+    "turn/steer": {
+      "params": {
+        "$ref": "#/definitions/TurnSteerParams"
+      },
+      "result": {
+        "$ref": "#/definitions/QueuedResult"
+      }
+    }
+  },
+  "notifications": {
+    "event": {
+      "params": {
+        "$ref": "#/definitions/Item"
+      }
+    },
+    "item/agentMessage/delta": {
+      "params": {
+        "$ref": "#/definitions/AgentMessageDeltaNotification"
+      }
+    },
+    "item/approvalRequested": {
+      "params": {
+        "$ref": "#/definitions/Item"
+      }
+    },
+    "item/approvalResolved": {
+      "params": {
+        "$ref": "#/definitions/Item"
+      }
+    },
+    "item/completed": {
+      "params": {
+        "$ref": "#/definitions/Item"
+      }
+    },
+    "item/started": {
+      "params": {
+        "$ref": "#/definitions/Item"
+      }
+    },
+    "item/updated": {
+      "params": {
+        "$ref": "#/definitions/Item"
+      }
+    },
+    "turn/completed": {
+      "params": {
+        "$ref": "#/definitions/TurnCompletedNotification"
+      }
+    },
+    "turn/started": {
+      "params": {
+        "$ref": "#/definitions/TurnStartedNotification"
+      }
+    }
+  },
+  "title": "Kepler App Server Protocol",
+  "version": 2
+}

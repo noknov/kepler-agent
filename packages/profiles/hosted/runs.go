@@ -147,9 +147,6 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		if err := s.appendStep(ctx, event.TurnID, step); err != nil {
 			log.Printf("project model step %s: %v", event.ID, err)
 		}
-		if liveMetrics && s.Metrics != nil {
-			s.Metrics.LLMCall(usage, duration, nil)
-		}
 	case transcript.ModelFailed, transcript.ModelRequestUnknown:
 		if state == nil {
 			return
@@ -159,13 +156,6 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		s.applyTrace(ctx, event.TurnID, event.Trace, &step)
 		if err := s.appendStep(ctx, event.TurnID, step); err != nil {
 			log.Printf("project failed model step %s: %v", event.ID, err)
-		}
-		if liveMetrics && s.Metrics != nil {
-			var stepErr error
-			if event.Error != context.Canceled.Error() && event.Error != context.DeadlineExceeded.Error() {
-				stepErr = fmt.Errorf("%s", event.Error)
-			}
-			s.Metrics.LLMCall(observability.UsageFromModel(model.Usage{}), duration, stepErr)
 		}
 	case transcript.AssistantMessage:
 		if state != nil && event.Message != nil && len(event.Message.ToolCalls()) == 0 {
