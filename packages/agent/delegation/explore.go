@@ -307,14 +307,10 @@ func (r Runner) systemPrompt() string {
 // DefaultHostedAllowedTools lists read-only tools available to hosted explore jobs.
 func DefaultHostedAllowedTools() map[string]bool {
 	return map[string]bool{
-		"code-search": true, "code-read_file": true, "code-symbols": true,
-		"code-definition": true, "code-references": true, "code-diagnostics": true,
+		"code-search": true, "code-read_file": true,
 		"repo-search": true, "repo-read_file": true,
 		"git-search_ref": true, "git-read_file_ref": true,
-		"codegraph-overview": true, "codegraph-dependencies": true, "codegraph-symbols": true,
-		"codegraph-definition": true, "codegraph-references": true, "codegraph-implementations": true,
-		"codegraph-callers": true, "codegraph-callees": true, "codegraph-callgraph": true,
-		"codegraph-impact": true, "web-search": true, "web-read_page": true,
+		"web-search": true, "web-read_page": true,
 	}
 }
 

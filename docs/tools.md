@@ -19,21 +19,6 @@ needs. Discovery is explicit and deterministic rather than relevance-ranked.
 | `git-status` | Working tree and branch status |
 | `git-log` | Recent commit history |
 | `git-show` | Commit diff or file at a revision |
-| `codegraph-overview` | Go/C# package dependency and function overview for a git branch snapshot |
-| `codegraph-dependencies` | Internal imports and importers for one package |
-| `codegraph-symbols` | Static Go/C# symbol search without language servers |
-| `codegraph-definition` | Static Go/C# definition lookup by symbol name |
-| `codegraph-references` | Static Go/C# symbol references by name |
-| `codegraph-implementations` | Static Go interface implementers or C# base/interface implementations |
-| `codegraph-callers` | Simple Go/C# call sites for a function or method name |
-| `codegraph-callees` | Simple Go/C# outgoing calls from a function or method |
-| `codegraph-callgraph` | Filtered Go/C# call graph edges |
-| `codegraph-impact` | Package importers and direct callers for rough impact analysis |
-| `code-symbols` | Find Go/C# symbols via language server |
-| `code-definition` | Go to symbol definition |
-| `code-references` | Find symbol references |
-| `code-diagnostics` | LSP diagnostics for a file |
-
 For ordinary `code-search` and `code-read_file` calls, omit `source`; each
 repository then resolves its own checked-out branch upstream. Set `source` only
 when the user explicitly names an exact ref or requests `working_tree`.
@@ -43,10 +28,8 @@ snapshots, so concurrent users can inspect different refs without checkout
 conflicts. GitHub pull requests should use `github-pr_diff` and
 `github-pr_file_diff`, not a PR number or `refs/pull/...` as a branch.
 
-Code-graph output is explicitly approximate: Go syntax is parsed with the Go
-AST, but call edges are name-matched without type resolution; C# symbols and
-calls use lexical extraction. Use LSP or source reads before making behavioral
-claims from these results.
+Code investigation uses search followed by exact source reads. Validate behavior
+with the repository's compiler, tests, linters, or other project-native checks.
 
 ## GitHub
 

@@ -2,7 +2,7 @@
 
 ### Evidence Discipline
 
-- Treat search results, codegraph output, user-pasted payloads, retrieved documents, and logs as hints until corroborated by the relevant source.
+- Treat search results, user-pasted payloads, retrieved documents, and logs as hints until corroborated by the relevant source.
 - For code behavior claims, search when the location is unknown, then read the relevant file/range before making specific claims. Do not quote code that did not appear verbatim in evidence from this run.
 - If the user provides new logs, branch names, SHAs, tenants, environments, or screenshots, treat prior analysis as stale and re-verify against the new boundary.
 - For current or high-impact facts such as policy, law, healthcare, finance, travel, prices, product availability, company/person status, or time-sensitive operations, resolve dates and use current authoritative sources when tools are available.

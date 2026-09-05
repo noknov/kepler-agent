@@ -4,15 +4,12 @@ import (
 	"strings"
 
 	"github.com/noknov/kepler-agent/packages/agent/tool"
-	"github.com/noknov/kepler-agent/packages/codeintel"
 	"github.com/noknov/kepler-agent/packages/config"
 	"github.com/noknov/kepler-agent/packages/connections"
 	"github.com/noknov/kepler-agent/packages/mcp"
 	"github.com/noknov/kepler-agent/packages/safety"
 	clickstackTools "github.com/noknov/kepler-agent/packages/tools/clickstack"
 	codeTools "github.com/noknov/kepler-agent/packages/tools/code"
-	codegraphTools "github.com/noknov/kepler-agent/packages/tools/codegraph"
-	codeIntelTools "github.com/noknov/kepler-agent/packages/tools/codeintel"
 	diagnosticsTools "github.com/noknov/kepler-agent/packages/tools/diagnostics"
 	gcpTools "github.com/noknov/kepler-agent/packages/tools/gcp"
 	gitTools "github.com/noknov/kepler-agent/packages/tools/git"
@@ -115,14 +112,6 @@ func registerWorkspaceTools(registration *tool.Registration, workspacePolicy saf
 }
 
 func registerCodeTools(registration *tool.Registration, cfg config.Config, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) {
-	intel := codeintel.Manager{Paths: workspacePolicy, Timeout: cfg.Tools.CommandTimeout}
-	registration.Visible(codeIntelTools.SymbolsTool{Manager: intel})
-	registration.Visible(codeIntelTools.DefinitionTool{Manager: intel})
-	registration.Visible(codeIntelTools.ReferencesTool{Manager: intel})
-	registration.Visible(codeIntelTools.ImplementationTool{Manager: intel})
-	registration.Visible(codeIntelTools.IncomingCallsTool{Manager: intel})
-	registration.Visible(codeIntelTools.OutgoingCallsTool{Manager: intel})
-	registration.Visible(codeIntelTools.DiagnosticsTool{Manager: intel})
 	registration.Visible(codeTools.SearchTool{Paths: workspacePolicy})
 	registration.Visible(codeTools.ReadFileTool{Paths: workspacePolicy})
 
@@ -135,18 +124,6 @@ func registerCodeTools(registration *tool.Registration, cfg config.Config, works
 	registration.Visible(gitTools.StatusTool{Base: gitBase})
 	registration.Visible(gitTools.LogTool{Base: gitBase})
 	registration.Visible(gitTools.ShowTool{Base: gitBase})
-
-	codegraphBase := codegraphTools.Base{Paths: workspacePolicy, Timeout: cfg.Tools.CommandTimeout}
-	registration.Deferred(tool.CategoryCode, codegraphTools.OverviewTool{Base: codegraphBase})
-	registration.Deferred(tool.CategoryCode, codegraphTools.DependenciesTool{Base: codegraphBase})
-	registration.Deferred(tool.CategoryCode, codegraphTools.SymbolsTool{Base: codegraphBase})
-	registration.Deferred(tool.CategoryCode, codegraphTools.DefinitionTool{Base: codegraphBase})
-	registration.Deferred(tool.CategoryCode, codegraphTools.ReferencesTool{Base: codegraphBase})
-	registration.Deferred(tool.CategoryCode, codegraphTools.ImplementationsTool{Base: codegraphBase})
-	registration.Deferred(tool.CategoryCode, codegraphTools.CallersTool{Base: codegraphBase})
-	registration.Deferred(tool.CategoryCode, codegraphTools.CalleesTool{Base: codegraphBase})
-	registration.Deferred(tool.CategoryCode, codegraphTools.CallgraphTool{Base: codegraphBase})
-	registration.Deferred(tool.CategoryCode, codegraphTools.ImpactTool{Base: codegraphBase})
 }
 
 func registerIntegrationTools(registration *tool.Registration, cfg config.Config, commandPolicy safety.CommandPolicy, conn *connections.Service) {

@@ -101,12 +101,12 @@ func TestRunSinkDoesNotOwnProviderCallMetrics(t *testing.T) {
 func TestToolErrorIncludesToolFailureDetail(t *testing.T) {
 	event := transcript.Event{
 		ToolResult: &tool.Result{
-			Content:   []model.Content{{Type: model.ContentText, Text: "gopls is not installed"}},
+			Content:   []model.Content{{Type: model.ContentText, Text: "search backend is unavailable"}},
 			IsError:   true,
 			ErrorCode: "tool_error",
 		},
 	}
-	if got := toolError(event); got != "gopls is not installed" {
+	if got := toolError(event); got != "search backend is unavailable" {
 		t.Fatalf("toolError() = %q", got)
 	}
 }

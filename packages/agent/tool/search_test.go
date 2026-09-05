@@ -10,7 +10,7 @@ import (
 type deferredFixture struct{}
 
 func (deferredFixture) Descriptor() Descriptor {
-	return Descriptor{Name: "later-tool", Description: "deferred fixture", InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []Effect{EffectRead}, Exposure: ExposureDeferred, Tags: []string{CategoryCode}}
+	return Descriptor{Name: "later-tool", Description: "deferred fixture", InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []Effect{EffectRead}, Exposure: ExposureDeferred, Tags: []string{CategoryIntegration}}
 }
 func (deferredFixture) Execute(context.Context, Call) (Result, error) { return TextResult("ok"), nil }
 
@@ -30,7 +30,7 @@ func TestSearchToolListsAndActivates(t *testing.T) {
 	if err != nil || list.Text() == "" {
 		t.Fatalf("list=%+v err=%v", list, err)
 	}
-	found, err := search.Execute(context.Background(), Call{Name: "tool_search", Arguments: json.RawMessage(`{"action":"search","query":"code graph"}`), Scope: Scope{SessionID: "s1", TurnID: "t1"}})
+	found, err := search.Execute(context.Background(), Call{Name: "tool_search", Arguments: json.RawMessage(`{"action":"search","query":"integration"}`), Scope: Scope{SessionID: "s1", TurnID: "t1"}})
 	if err != nil || found.Text() == "" {
 		t.Fatalf("search=%+v err=%v", found, err)
 	}
