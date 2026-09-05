@@ -99,6 +99,13 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 			modelName = r.config.Model
 		}
 		turnMetadata := map[string]any{"user_id": request.Scope.UserID, "workspace": request.Scope.Workspace, "scope": request.Scope.Values, "model": modelName}
+		// Persist the W3C trace identity with the durable turn boundary. Event
+		// projections can then link a recovered run back to the distributed trace
+		// without depending on an in-memory span or a particular telemetry vendor.
+		if spanContext := trace.SpanContextFromContext(ctx); spanContext.IsValid() {
+			turnMetadata["trace_id"] = spanContext.TraceID().String()
+			turnMetadata["span_id"] = spanContext.SpanID().String()
+		}
 		if request.Parent != nil {
 			turnMetadata["parent"] = request.Parent
 		}

@@ -10,6 +10,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func TestRuntimeEmitsAgentModelAndToolSpans(t *testing.T) {
@@ -44,5 +45,49 @@ func TestRuntimeEmitsAgentModelAndToolSpans(t *testing.T) {
 	}
 	if counts["agent.turn"] != 1 || counts["model.generate"] != 2 || counts["tool.execute"] != 1 {
 		t.Fatalf("span counts=%v", counts)
+	}
+}
+
+func TestRuntimePersistsTurnTraceIdentity(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	previousTracer := runtimeTracer
+	runtimeTracer = provider.Tracer("runtime-test")
+	t.Cleanup(func() {
+		runtimeTracer = previousTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	store := transcript.NewMemoryStore()
+	catalog, err := tool.NewCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := New(Config{Model: "trace-model"}, Dependencies{Model: &scriptedModel{responses: []model.Response{{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop}}}, Tools: catalog, Transcript: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "trace-session", TurnID: "trace-turn", Input: model.TextMessage(model.RoleUser, "run")}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.Load(context.Background(), "trace-session", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metadata map[string]any
+	for _, event := range events {
+		if event.Type == transcript.TurnStarted {
+			if err := json.Unmarshal(event.Metadata, &metadata); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	traceID, _ := metadata["trace_id"].(string)
+	spanID, _ := metadata["span_id"].(string)
+	if _, err := trace.TraceIDFromHex(traceID); err != nil || traceID == "" {
+		t.Fatalf("trace_id=%q err=%v", traceID, err)
+	}
+	if _, err := trace.SpanIDFromHex(spanID); err != nil || spanID == "" {
+		t.Fatalf("span_id=%q err=%v", spanID, err)
 	}
 }

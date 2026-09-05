@@ -98,6 +98,17 @@ func TestToolErrorIncludesToolFailureDetail(t *testing.T) {
 	}
 }
 
+func TestRunSinkUsesDurableOTelTraceID(t *testing.T) {
+	store := newProjectionStore()
+	sink := &RunSink{Store: store, Provider: "test", Model: "model"}
+	metadata, _ := json.Marshal(map[string]any{"trace_id": "0123456789abcdef0123456789abcdef"})
+	sink.publish(context.Background(), transcript.Event{ID: "turn-start", SessionID: "s", TurnID: "t", Type: transcript.TurnStarted, Timestamp: time.Now().UTC(), Metadata: metadata}, false)
+	run, ok, err := store.Get(context.Background(), "t")
+	if err != nil || !ok || run.TraceID != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("run=%+v ok=%v err=%v", run, ok, err)
+	}
+}
+
 func TestToolErrorIgnoresSuccessfulArtifactSpill(t *testing.T) {
 	event := transcript.Event{
 		ToolResult: &tool.Result{

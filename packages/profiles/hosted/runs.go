@@ -93,9 +93,10 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 	switch event.Type {
 	case transcript.TurnStarted:
 		var metadata struct {
-			UserID string            `json:"user_id"`
-			Scope  map[string]string `json:"scope"`
-			Model  string            `json:"model"`
+			UserID  string            `json:"user_id"`
+			Scope   map[string]string `json:"scope"`
+			Model   string            `json:"model"`
+			TraceID string            `json:"trace_id"`
 		}
 		_ = json.Unmarshal(event.Metadata, &metadata)
 		modelName := metadata.Model
@@ -104,7 +105,11 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		}
 		existing, ok, _ := s.Store.Get(ctx, event.TurnID)
 		if !ok {
-			existing = runs.Run{ID: event.TurnID, TraceID: runs.NewTraceID(), SessionID: event.SessionID, EventID: event.TurnID, StartedAt: event.Timestamp}
+			traceID := metadata.TraceID
+			if traceID == "" {
+				traceID = runs.NewTraceID()
+			}
+			existing = runs.Run{ID: event.TurnID, TraceID: traceID, SessionID: event.SessionID, EventID: event.TurnID, StartedAt: event.Timestamp}
 		}
 		existing.UserID, existing.Channel, existing.ThreadTS = metadata.UserID, metadata.Scope["channel"], metadata.Scope["thread_ts"]
 		existing.Provider, existing.Model, existing.Status = s.Provider, modelName, "running"
