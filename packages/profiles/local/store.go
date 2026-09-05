@@ -85,6 +85,13 @@ func (s *JSONLStore) Append(_ context.Context, event transcript.Event) (transcri
 	if err != nil {
 		return transcript.Event{}, err
 	}
+	if event.ID != "" {
+		for _, existing := range events {
+			if existing.ID == event.ID {
+				return existing, nil
+			}
+		}
+	}
 	if len(events) > 0 {
 		event.Sequence = events[len(events)-1].Sequence + 1
 	} else {

@@ -15,26 +15,33 @@ import (
 type EventType string
 
 const (
-	SessionStarted    EventType = "session_started"
-	TurnStarted       EventType = "turn_started"
-	UserInput         EventType = "user_input"
-	SteeringInput     EventType = "steering_input"
-	ContextProjected  EventType = "context_projected"
-	ModelRequested    EventType = "model_requested"
-	ModelFailed       EventType = "model_failed"
-	ModelCompleted    EventType = "model_completed"
-	ModelStreamed     EventType = "model_streamed"
-	AssistantMessage  EventType = "assistant_message"
-	PlanUpdated       EventType = "plan_updated"
-	ToolCallStarted   EventType = "tool_call_started"
-	ToolCallCompleted EventType = "tool_call_completed"
-	ToolCallFailed    EventType = "tool_call_failed"
-	ApprovalRequested EventType = "approval_requested"
-	ApprovalResolved  EventType = "approval_resolved"
-	CompactionCreated EventType = "compaction_created"
-	TurnCompleted     EventType = "turn_completed"
-	TurnFailed        EventType = "turn_failed"
-	TurnCanceled      EventType = "turn_canceled"
+	SessionStarted   EventType = "session_started"
+	TurnStarted      EventType = "turn_started"
+	StepStarted      EventType = "step_started"
+	StepCompleted    EventType = "step_completed"
+	UserInput        EventType = "user_input"
+	SteeringInput    EventType = "steering_input"
+	ContextProjected EventType = "context_projected"
+	ModelRequested   EventType = "model_requested"
+	// ModelRequestStarted records the durable intent to make one logical model
+	// request. Unlike ModelRequested (a legacy attempt/projection event), it
+	// carries a stable request ID that recovery can reconcile.
+	ModelRequestStarted EventType = "model_request_started"
+	ModelRequestUnknown EventType = "model_request_unknown"
+	ModelFailed         EventType = "model_failed"
+	ModelCompleted      EventType = "model_completed"
+	ModelStreamed       EventType = "model_streamed"
+	AssistantMessage    EventType = "assistant_message"
+	PlanUpdated         EventType = "plan_updated"
+	ToolCallStarted     EventType = "tool_call_started"
+	ToolCallCompleted   EventType = "tool_call_completed"
+	ToolCallFailed      EventType = "tool_call_failed"
+	ApprovalRequested   EventType = "approval_requested"
+	ApprovalResolved    EventType = "approval_resolved"
+	CompactionCreated   EventType = "compaction_created"
+	TurnCompleted       EventType = "turn_completed"
+	TurnFailed          EventType = "turn_failed"
+	TurnCanceled        EventType = "turn_canceled"
 )
 
 type Event struct {
@@ -107,6 +114,7 @@ func (f *Fanout) Publish(ctx context.Context, event Event) {
 type AsyncSink struct {
 	sink    Sink
 	queue   chan Event
+	shed    chan struct{}
 	dropped atomic.Uint64
 }
 
@@ -114,7 +122,7 @@ func NewAsyncSink(ctx context.Context, sink Sink, capacity int) *AsyncSink {
 	if capacity <= 0 {
 		capacity = 1024
 	}
-	s := &AsyncSink{sink: sink, queue: make(chan Event, capacity)}
+	s := &AsyncSink{sink: sink, queue: make(chan Event, capacity), shed: make(chan struct{}, 1)}
 	go func() {
 		for {
 			select {
@@ -142,6 +150,10 @@ func (s *AsyncSink) Publish(_ context.Context, event Event) {
 		// projection must not exhaust the worker that owns the canonical
 		// transcript. Consumers recover missing events from that transcript.
 		s.dropped.Add(1)
+		select {
+		case s.shed <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -153,4 +165,14 @@ func (s *AsyncSink) Dropped() uint64 {
 		return 0
 	}
 	return s.dropped.Load()
+}
+
+// Shed is signaled (coalesced) when Publish drops a projection event because
+// the queue is saturated. Consumers should replay canonical state rather than
+// attempting to recover the individual event.
+func (s *AsyncSink) Shed() <-chan struct{} {
+	if s == nil {
+		return nil
+	}
+	return s.shed
 }

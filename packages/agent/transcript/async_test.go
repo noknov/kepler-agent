@@ -62,5 +62,25 @@ func TestAsyncSinkShedsOverflowWithoutDetachedPublishers(t *testing.T) {
 	if got := sink.Dropped(); got != 1 {
 		t.Fatalf("dropped = %d, want 1", got)
 	}
+	select {
+	case <-sink.Shed():
+	case <-time.After(time.Second):
+		t.Fatal("shed notification was not sent")
+	}
 	close(release)
+}
+
+func TestMemoryStoreAppendIsIdempotentByEventID(t *testing.T) {
+	store := NewMemoryStore()
+	first, err := store.Append(context.Background(), Event{ID: "event", SessionID: "session", Type: TurnStarted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Append(context.Background(), Event{ID: "event", SessionID: "session", Type: TurnStarted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Sequence != 1 || second.Sequence != 1 {
+		t.Fatalf("sequences = %d, %d; want 1, 1", first.Sequence, second.Sequence)
+	}
 }

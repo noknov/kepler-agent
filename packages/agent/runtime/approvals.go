@@ -29,8 +29,11 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, resolut
 	// Approval resolution is another turn mutation: it appends a decision and
 	// can execute an external write. Serialize it with RunTurn so two local
 	// clients cannot both observe an unresolved approval and dispatch the same
-	// call. Hosted surfaces additionally hold their distributed session lease.
-	unlock := r.lockSession(sessionID)
+	// call. Hosted runtimes provide a distributed lease through Dependencies.
+	unlock, err := r.acquireSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	events, err := r.deps.Transcript.Load(ctx, sessionID, 0)
 	if err != nil {

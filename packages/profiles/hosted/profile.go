@@ -41,6 +41,7 @@ type ProfileDependencies struct {
 	Events                  transcript.Sink
 	Metrics                 *observability.Recorder
 	ConnectionContinuations agentruntime.ConnectionContinuationStore
+	Lease                   agentruntime.SessionLease
 }
 
 func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
@@ -88,7 +89,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		ToolResults:    agentruntime.ToolResultConfig{MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)},
 		CircuitBreaker: agentruntime.CircuitBreakerConfig{Enabled: true},
 	}, agentruntime.Dependencies{
-		Model: client, Tools: catalog, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}, Transcript: PGTranscript{Pool: deps.Postgres}, Events: deps.Events,
+		Model: client, Tools: catalog, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}, Transcript: PGTranscript{Pool: deps.Postgres}, Events: deps.Events, Lease: deps.Lease,
 		Compactor: agentruntime.ModelCompactor{Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer}, Artifacts: artifacts,
 		Environment:             environment.Config{WorkspaceRoots: cfg.Security.WorkspaceRoots},
 		ConnectionContinuations: deps.ConnectionContinuations,
@@ -104,7 +105,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 			ToolResults: agentruntime.ToolResultConfig{MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)},
 		},
 		Deps: agentruntime.Dependencies{
-			Model: exploreClient, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)},
+			Model: exploreClient, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}, Lease: deps.Lease,
 			Transcript: PGTranscript{Pool: deps.Postgres},
 			Compactor:  agentruntime.ModelCompactor{Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer},
 			Artifacts:  artifacts, Environment: environment.Config{WorkspaceRoots: cfg.Security.WorkspaceRoots},

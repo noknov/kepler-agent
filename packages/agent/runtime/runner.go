@@ -43,7 +43,10 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	}
 	request.Scope.SessionID = request.SessionID
 	request.Scope.TurnID = request.TurnID
-	unlock := r.lockSession(request.SessionID)
+	unlock, err := r.acquireSession(ctx, request.SessionID)
+	if err != nil {
+		return TurnResult{SessionID: request.SessionID, TurnID: request.TurnID}, err
+	}
 	defer unlock()
 	// Circuit state is scoped to one live turn. Do not retain it for abandoned
 	// sessions if an adapter panics or returns before terminal bookkeeping.
@@ -60,6 +63,9 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 		return replayed, replayErr
 	}
 	if err := r.reconcileInterruptedToolCalls(ctx, request, events); err != nil {
+		return r.failTurn(ctx, result, err)
+	}
+	if err := r.reconcileInterruptedModelRequests(ctx, request, events); err != nil {
 		return r.failTurn(ctx, result, err)
 	}
 	if hasTurnStarted(events, request.TurnID) {
@@ -117,6 +123,9 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	toolRounds := 0
 	for step := 1; step <= r.config.MaxSteps; step++ {
 		result.Steps = step
+		if err := r.recordStepStarted(ctx, request, step); err != nil {
+			return r.failTurn(ctx, result, err)
+		}
 		if err := ctx.Err(); err != nil {
 			return r.cancelTurn(ctx, result, err)
 		}
@@ -155,12 +164,18 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 			if count, appendErr := r.appendSteeringCount(ctx, request); appendErr != nil {
 				return r.failTurn(ctx, result, appendErr)
 			} else if count > 0 {
+				if err := r.recordStepCompleted(ctx, request, step, "steered"); err != nil {
+					return r.failTurn(ctx, result, err)
+				}
 				continue
 			}
 			closeInputSource(request.Steering)
 			if count, appendErr := r.appendSteeringCount(ctx, request); appendErr != nil {
 				return r.failTurn(ctx, result, appendErr)
 			} else if count > 0 {
+				if err := r.recordStepCompleted(ctx, request, step, "steered"); err != nil {
+					return r.failTurn(ctx, result, err)
+				}
 				continue
 			}
 			result.Message = response.Message
@@ -181,6 +196,9 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 		}
 		if outcome.pending != nil {
 			return r.finishTurn(ctx, result, *outcome.pending, TerminationPendingInput, nil)
+		}
+		if err := r.recordStepCompleted(ctx, request, step, "tools_completed"); err != nil {
+			return r.failTurn(ctx, result, err)
 		}
 	}
 	return r.finishTurn(ctx, result, result.Message, TerminationMaxSteps, errors.New("tool step limit reached"))
@@ -272,6 +290,59 @@ func (r *Runtime) reconcileInterruptedToolCalls(ctx context.Context, request Tur
 	return nil
 }
 
+type modelRequestState struct {
+	RequestID string `json:"request_id"`
+}
+
+// reconcileInterruptedModelRequests makes the uncertainty caused by a process
+// loss explicit. Providers do not offer a portable read-after-write API for a
+// generation request, so the runtime deliberately does not guess whether the
+// request reached the provider or replay its partial output.
+func (r *Runtime) reconcileInterruptedModelRequests(ctx context.Context, request TurnRequest, events []transcript.Event) error {
+	started := make(map[string]bool)
+	settled := make(map[string]bool)
+	for _, event := range events {
+		if event.TurnID != request.TurnID {
+			continue
+		}
+		var state modelRequestState
+		if json.Unmarshal(event.Metadata, &state) != nil || state.RequestID == "" {
+			continue
+		}
+		switch event.Type {
+		case transcript.ModelRequestStarted:
+			started[state.RequestID] = true
+		case transcript.ModelCompleted, transcript.ModelFailed, transcript.ModelRequestUnknown:
+			settled[state.RequestID] = true
+		}
+	}
+	for requestID := range started {
+		if settled[requestID] {
+			continue
+		}
+		metadata, _ := json.Marshal(modelRequestState{RequestID: requestID})
+		if _, err := r.record(ctx, transcript.Event{
+			ID: "model-request-unknown:" + requestID, SessionID: request.SessionID, TurnID: request.TurnID,
+			Type: transcript.ModelRequestUnknown, Status: "unknown", Error: "model request was in flight when execution was interrupted", Metadata: metadata,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Runtime) recordStepStarted(ctx context.Context, request TurnRequest, step int) error {
+	metadata, _ := json.Marshal(map[string]int{"step": step})
+	_, err := r.record(ctx, transcript.Event{ID: fmt.Sprintf("step:%s:%d:started", request.TurnID, step), SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.StepStarted, Status: "running", Metadata: metadata})
+	return err
+}
+
+func (r *Runtime) recordStepCompleted(ctx context.Context, request TurnRequest, step int, status string) error {
+	metadata, _ := json.Marshal(map[string]int{"step": step})
+	_, err := r.record(ctx, transcript.Event{ID: fmt.Sprintf("step:%s:%d:completed", request.TurnID, step), SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.StepCompleted, Status: status, Metadata: metadata})
+	return err
+}
+
 func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, system model.Message) (Projection, error) {
 	events, err := r.deps.Transcript.Load(ctx, request.SessionID, 0)
 	if err != nil {
@@ -351,13 +422,17 @@ func (r *Runtime) generateWithTools(ctx context.Context, turn TurnRequest, messa
 	if modelName == "" {
 		modelName = r.config.Model
 	}
+	requestID, err := r.nextModelRequestID(ctx, turn)
+	if err != nil {
+		return model.Response{}, err
+	}
 	request := model.Request{
 		Model: modelName, Messages: messages, Tools: definitions,
 		ReasoningEffort: r.config.ReasoningEffort, Temperature: r.config.Temperature, MaxOutputTokens: r.config.MaxOutputTokens,
-		Metadata: map[string]string{"session_id": turn.SessionID, "turn_id": turn.TurnID},
+		Metadata: map[string]string{"session_id": turn.SessionID, "turn_id": turn.TurnID, "request_id": requestID},
 	}
 	ctx = model.WithAttemptObserver(ctx, func(attempt model.Attempt) {
-		metadata, _ := json.Marshal(map[string]any{"attempt": attempt.Number, "provider": attempt.Provider, "model": attempt.Model, "fallback": attempt.Fallback, "outcome": attempt.Outcome, "remaining_ms": attempt.Remaining.Milliseconds(), "kind": model.ErrorKindOf(attempt.Error)})
+		metadata, _ := json.Marshal(map[string]any{"request_id": requestID, "attempt": attempt.Number, "provider": attempt.Provider, "model": attempt.Model, "fallback": attempt.Fallback, "outcome": attempt.Outcome, "remaining_ms": attempt.Remaining.Milliseconds(), "kind": model.ErrorKindOf(attempt.Error)})
 		event := transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelRequested, Status: attempt.Outcome, Metadata: metadata}
 		if attempt.Error != nil {
 			event.Type, event.Error = transcript.ModelFailed, attempt.Error.Error()
@@ -369,13 +444,13 @@ func (r *Runtime) generateWithTools(ctx context.Context, turn TurnRequest, messa
 	})
 	var lastErr error
 	for attempt := 0; attempt <= r.config.MaxModelRetries; attempt++ {
-		metadata, _ := json.Marshal(map[string]any{"attempt": attempt + 1, "model": request.Model})
-		if _, err := r.record(ctx, transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelRequested, Metadata: metadata}); err != nil {
+		metadata, _ := json.Marshal(map[string]any{"request_id": requestID, "attempt": attempt + 1, "model": request.Model})
+		if _, err := r.record(ctx, transcript.Event{ID: "model-request:" + requestID, SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelRequestStarted, Status: "started", Metadata: metadata}); err != nil {
 			return model.Response{}, err
 		}
 		response, err := r.generateAttempt(ctx, turn, request, attempt+1)
 		if err == nil {
-			completed, _ := json.Marshal(map[string]any{"attempt": attempt + 1, "model": request.Model, "finish_reason": response.FinishReason, "usage": response.Usage})
+			completed, _ := json.Marshal(map[string]any{"request_id": requestID, "attempt": attempt + 1, "model": request.Model, "finish_reason": response.FinishReason, "usage": response.Usage})
 			if _, recordErr := r.record(ctx, transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelCompleted, Metadata: completed}); recordErr != nil {
 				return model.Response{}, recordErr
 			}
@@ -383,7 +458,7 @@ func (r *Runtime) generateWithTools(ctx context.Context, turn TurnRequest, messa
 		}
 		lastErr = err
 		var typed *model.Error
-		failed, _ := json.Marshal(map[string]any{"attempt": attempt + 1, "model": request.Model, "kind": model.ErrorKindOf(err), "retryable": errors.As(err, &typed) && typed.Retryable})
+		failed, _ := json.Marshal(map[string]any{"request_id": requestID, "attempt": attempt + 1, "model": request.Model, "kind": model.ErrorKindOf(err), "retryable": errors.As(err, &typed) && typed.Retryable})
 		if _, recordErr := r.record(context.WithoutCancel(ctx), transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelFailed, Error: err.Error(), Metadata: failed}); recordErr != nil {
 			return model.Response{}, recordErr
 		}
@@ -395,6 +470,20 @@ func (r *Runtime) generateWithTools(ctx context.Context, turn TurnRequest, messa
 		}
 	}
 	return model.Response{}, lastErr
+}
+
+func (r *Runtime) nextModelRequestID(ctx context.Context, turn TurnRequest) (string, error) {
+	events, err := r.deps.Transcript.Load(ctx, turn.SessionID, 0)
+	if err != nil {
+		return "", err
+	}
+	count := 0
+	for _, event := range events {
+		if event.TurnID == turn.TurnID && event.Type == transcript.ModelRequestStarted {
+			count++
+		}
+	}
+	return fmt.Sprintf("%s:model:%d", turn.TurnID, count+1), nil
 }
 
 func (r *Runtime) generateAttempt(ctx context.Context, turn TurnRequest, request model.Request, attempt int) (response model.Response, err error) {
@@ -498,6 +587,11 @@ func (r *Runtime) finishTurn(ctx context.Context, result TurnResult, message mod
 	}
 	result.Message = message
 	result.Termination = reason
+	if result.Steps > 0 {
+		if stepErr := r.recordStepCompleted(context.WithoutCancel(ctx), TurnRequest{SessionID: result.SessionID, TurnID: result.TurnID}, result.Steps, string(reason)); stepErr != nil && err == nil {
+			err = stepErr
+		}
+	}
 	eventType := transcript.TurnCompleted
 	status := string(reason)
 	if err != nil {

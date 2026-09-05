@@ -114,7 +114,7 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		if liveMetrics && s.Metrics != nil {
 			s.Metrics.Request()
 		}
-	case transcript.ModelRequested:
+	case transcript.ModelRequested, transcript.ModelRequestStarted:
 		if state != nil {
 			state.modelStart = event.Timestamp
 			state.firstToken = time.Time{}
@@ -140,7 +140,7 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		if liveMetrics && s.Metrics != nil {
 			s.Metrics.LLMCall(usage, duration, nil)
 		}
-	case transcript.ModelFailed:
+	case transcript.ModelFailed, transcript.ModelRequestUnknown:
 		if state == nil {
 			return
 		}

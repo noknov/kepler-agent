@@ -101,6 +101,14 @@ type Dependencies struct {
 	Clock                   func() time.Time
 	Sleep                   func(context.Context, time.Duration) error
 	ConnectionContinuations ConnectionContinuationStore
+	Lease                   SessionLease
+}
+
+// SessionLease serializes a complete session execution across process
+// boundaries. Local profiles leave it nil and use Runtime's in-process lock;
+// hosted profiles supply the PostgreSQL-backed lease.
+type SessionLease interface {
+	Lock(context.Context, string) (func(), error)
 }
 
 type Runtime struct {
@@ -263,6 +271,22 @@ func (r *Runtime) lockSession(sessionID string) func() {
 		}
 		r.lockMu.Unlock()
 	}
+}
+
+func (r *Runtime) acquireSession(ctx context.Context, sessionID string) (func(), error) {
+	localUnlock := r.lockSession(sessionID)
+	if r.deps.Lease == nil {
+		return localUnlock, nil
+	}
+	remoteUnlock, err := r.deps.Lease.Lock(ctx, "session:"+sessionID)
+	if err != nil {
+		localUnlock()
+		return nil, err
+	}
+	return func() {
+		remoteUnlock()
+		localUnlock()
+	}, nil
 }
 
 func sleepContext(ctx context.Context, duration time.Duration) error {

@@ -61,7 +61,6 @@ type Service struct {
 	MultimodalModel  func() string
 	ThreadLoader     ThreadLoader
 	WebSearchEnabled func(string) bool
-	Locker           session.Locker
 	Inputs           sessioninput.Store
 	BeforeRun        func(context.Context, string) error
 	RunTimeout       time.Duration
@@ -208,21 +207,6 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 		base = context.Background()
 	}
 	runCtx, cancel := context.WithTimeout(base, s.runTimeout())
-	var unlock func()
-	if s.Locker != nil {
-		var err error
-		unlock, err = s.Locker.Lock(runCtx, "session:"+sessionID)
-		if err != nil {
-			cancel()
-			log.Printf("slack conversation lock failed session=%s: %v", sessionID, err)
-			_, deliveryErr := s.Messenger.PostMessage(base, req.Channel, req.ThreadTS, failure.PublicMessage(err))
-			if deliveryErr != nil {
-				return errors.Join(err, deliveryErr)
-			}
-			return nil
-		}
-		defer unlock()
-	}
 	if req.ClaimID == "" {
 		queued, err := s.claimNextQueue(runCtx, sessionID)
 		if err != nil {

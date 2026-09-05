@@ -18,7 +18,6 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/profiles/hosted"
 	"github.com/noknov/kepler-agent/packages/safety"
-	"github.com/noknov/kepler-agent/packages/session"
 )
 
 const webOutputPrompt = "The response is displayed in a modern web chat that renders GitHub-Flavored Markdown.\n\n" +
@@ -37,7 +36,6 @@ type ConversationService struct {
 	Store      Store
 	Transcript transcript.Store
 	Hub        *EventHub
-	Locker     session.Locker
 	Prompt     safety.PromptPolicy
 	Redactor   safety.Redactor
 	Workspace  string
@@ -166,14 +164,6 @@ func (s *ConversationService) ResolveApproval(ctx context.Context, owner Identit
 	runCtx, cancel := context.WithCancel(s.baseContext())
 	s.active[conversationID] = activeWebTurn{identity: owner.Key(), turnID: continuationID, cancel: cancel}
 	s.mu.Unlock()
-	if s.Locker != nil {
-		unlock, lockErr := s.Locker.Lock(ctx, "session:"+conversationID)
-		if lockErr != nil {
-			s.finish(conversationID, continuationID)
-			return "", lockErr
-		}
-		defer unlock()
-	}
 	if err := s.Agent.Runtime.ResolveApproval(ctx, conversationID, agentruntime.ApprovalResolution{TurnID: turnID, ToolCallID: toolCallID, Approved: approved, UserID: owner.SubjectID}); err != nil {
 		s.finish(conversationID, continuationID)
 		return "", err
@@ -216,14 +206,6 @@ func (s *ConversationService) run(ctx context.Context, owner Identity, conversat
 	defer s.finish(conversationID, turnID)
 	runCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
-	if s.Locker != nil {
-		unlock, err := s.Locker.Lock(runCtx, "session:"+conversationID)
-		if err != nil {
-			s.recordStartFailure(conversationID, turnID)
-			return
-		}
-		defer unlock()
-	}
 	if s.BeforeRun != nil {
 		if err := s.BeforeRun(runCtx, owner.SubjectID); err != nil {
 			s.recordStartFailure(conversationID, turnID)

@@ -19,6 +19,13 @@ func (s *MemoryStore) Append(_ context.Context, event Event) (Event, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if event.ID != "" {
+		for _, existing := range s.events[event.SessionID] {
+			if existing.ID == event.ID {
+				return existing, nil
+			}
+		}
+	}
 	event.Sequence = uint64(len(s.events[event.SessionID]) + 1)
 	s.events[event.SessionID] = append(s.events[event.SessionID], event)
 	return event, nil

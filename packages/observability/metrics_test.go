@@ -30,6 +30,16 @@ func TestRecorderTracksAgentEvents(t *testing.T) {
 	}
 }
 
+func TestRecorderAddsKnownEventCount(t *testing.T) {
+	rec := NewRecorder()
+	rec.AddEvent("async_sink_dropped", 3, nil)
+	rec.AddEvent("async_sink_dropped", 2, nil)
+
+	if got := rec.Snapshot().AgentEvents["async_sink_dropped"]; got != 5 {
+		t.Fatalf("async_sink_dropped = %d, want 5", got)
+	}
+}
+
 func TestRecorderReportsPercentilesAndPreservesErrorOrder(t *testing.T) {
 	rec := NewRecorder()
 	for _, latency := range []time.Duration{time.Millisecond, 2 * time.Millisecond, 10 * time.Millisecond, 100 * time.Millisecond} {

@@ -55,6 +55,8 @@ type Service struct {
 	slackWorker *slackevents.Worker
 	web         http.Handler
 	webTools    *webToolRefresh
+	runSink     *hosted.RunSink
+	runEvents   *transcript.AsyncSink
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -171,7 +173,8 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 	// Run records are rebuildable transcript projections. Keep them off the
 	// latency-sensitive Slack/model event path.
-	events := transcript.NewFanout(transcript.NewAsyncSink(serviceCtx, runSink, 2048))
+	runEvents := transcript.NewAsyncSink(serviceCtx, runSink, 2048)
+	events := transcript.NewFanout(runEvents)
 	workspacePolicy := safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}
 	connStore := connections.PGStore{Pool: stores.PGPool, SecretKey: cfg.Connections.EncryptionKey}
 	continuations := connections.NewRedisContinuationStore(stores.Redis)
@@ -188,7 +191,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	catalog := bundle.Catalog
 	slackTools.AddToCatalog(catalog, hostedTools.PolicyForSurface(cfg, surface), cfg, slackClient, stores.Reminders, stores.Redis, &connService)
 	profile, profileErr := hosted.NewProfile(cfg, hosted.ProfileDependencies{
-		Tools: catalog, Postgres: stores.PGPool, Redis: stores.Redis, ToolSpills: stores.Runs, Events: events, Metrics: recorder,
+		Tools: catalog, Postgres: stores.PGPool, Redis: stores.Redis, ToolSpills: stores.Runs, Events: events, Metrics: recorder, Lease: stores.Sessions,
 		ConnectionContinuations: connections.RuntimeContinuationStore{Store: continuations},
 	})
 	if profileErr != nil {
@@ -207,7 +210,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		}
 		webProfile, err := hosted.NewProfile(cfg, hosted.ProfileDependencies{
 			Tools: webCatalogBundle.Catalog, Postgres: stores.PGPool, Redis: stores.Redis, ToolSpills: stores.Runs,
-			Events: events, Metrics: recorder,
+			Events: events, Metrics: recorder, Lease: stores.Sessions,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("build web hosted profile: %w", err)
@@ -216,7 +219,6 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		webHub := websurface.NewEventHub(webProfile.Redactor)
 		events.Add(webHub)
 		webConversations := websurface.NewConversationService(webProfile.Agent, webStore, hosted.PGTranscript{Pool: stores.PGPool}, webHub)
-		webConversations.Locker = stores.Sessions
 		webConversations.Prompt = webProfile.Prompt
 		webConversations.Redactor = webProfile.Redactor
 		webConversations.Model = cfg.LLM.Model
@@ -292,7 +294,6 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	conversation.RunTimeout = cfg.Tools.AgentTurnTimeout
 	conversation.Continuations = continuations
 	conversation.Inputs = stores.Inputs
-	conversation.Locker = stores.Sessions
 	if len(cfg.Security.WorkspaceRoots) > 0 {
 		conversation.Workspace = cfg.Security.WorkspaceRoots[0]
 	}
@@ -349,6 +350,8 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		serveErr:  make(chan error, 1),
 		web:       webHandler,
 		webTools:  webToolCoordinator,
+		runSink:   runSink,
+		runEvents: runEvents,
 	}
 	s.eventCond = sync.NewCond(&s.eventMu)
 	s.slackWorker = &slackevents.Worker{
@@ -387,6 +390,7 @@ func (s *Service) StartBackground() {
 			s.health.Start(ctx)
 		})
 	}
+	s.Go(s.recoverRunProjections)
 	s.Go(func(ctx context.Context) {
 		s.reminders.Start(ctx)
 	})
@@ -408,6 +412,49 @@ func (s *Service) StartBackground() {
 		s.slackWorker.Start(s.ctx)
 	}
 	s.Go(s.serveHealth)
+}
+
+const projectionRecoveryPeriod = 5 * time.Minute
+
+// recoverRunProjections closes the gap created when the non-authoritative run
+// projection is saturated. The canonical transcript stays complete; this
+// worker replays it periodically and after AsyncSink sheds an event, so
+// dashboard/cost state becomes eventually consistent without a restart.
+func (s *Service) recoverRunProjections(ctx context.Context) {
+	if s == nil || s.runSink == nil || s.stores == nil || s.stores.PGPool == nil {
+		return
+	}
+	ticker := time.NewTicker(projectionRecoveryPeriod)
+	defer ticker.Stop()
+	var shed <-chan struct{}
+	if s.runEvents != nil {
+		shed = s.runEvents.Shed()
+	}
+	var observedDrops uint64
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		case <-shed:
+		}
+		dropped := uint64(0)
+		if s.runEvents != nil {
+			dropped = s.runEvents.Dropped()
+		}
+		if dropped > observedDrops {
+			delta := dropped - observedDrops
+			log.Printf("run projection shed %d events; replaying canonical transcript", delta)
+			if s.metrics != nil {
+				s.metrics.AddEvent("async_sink_dropped", int64(delta), map[string]any{"projection": "agent_runs"})
+			}
+		}
+		if err := s.runSink.Recover(ctx, s.stores.PGPool); err != nil {
+			log.Printf("recover agent run projections: %v", err)
+			continue
+		}
+		observedDrops = dropped
+	}
 }
 
 func (s *Service) RunUntilDone(ctx context.Context) error {

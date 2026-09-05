@@ -24,6 +24,13 @@ type scriptedModel struct {
 	requests  []model.Request
 }
 
+type recordingLease struct{ calls int }
+
+func (l *recordingLease) Lock(context.Context, string) (func(), error) {
+	l.calls++
+	return func() {}, nil
+}
+
 func (s *scriptedModel) Generate(_ context.Context, request model.Request, sink model.EventSink) (model.Response, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -335,6 +342,81 @@ func TestRunTurnRecordsTerminalTrajectory(t *testing.T) {
 	if metadata.Steps != 1 || metadata.Usage.InputTokens != 11 || metadata.Usage.OutputTokens != 7 {
 		t.Fatalf("terminal metadata = %#v", metadata)
 	}
+}
+
+func TestRunTurnRecordsStepAndStableModelRequestLifecycle(t *testing.T) {
+	store := transcript.NewMemoryStore()
+	catalog, _ := tool.NewCatalog()
+	runner, err := New(Config{Model: "test"}, Dependencies{
+		Model: &scriptedModel{responses: []model.Response{{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop}}}, Tools: catalog, Transcript: store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "lifecycle", TurnID: "turn", Input: model.TextMessage(model.RoleUser, "hi")}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.Load(context.Background(), "lifecycle", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started, completed bool
+	requestID := ""
+	for _, event := range events {
+		switch event.Type {
+		case transcript.StepStarted:
+			started = true
+		case transcript.StepCompleted:
+			completed = true
+		case transcript.ModelRequestStarted:
+			var metadata modelRequestState
+			if err := json.Unmarshal(event.Metadata, &metadata); err != nil {
+				t.Fatal(err)
+			}
+			requestID = metadata.RequestID
+		}
+	}
+	if !started || !completed || requestID != "turn:model:1" {
+		t.Fatalf("step started=%v completed=%v requestID=%q", started, completed, requestID)
+	}
+}
+
+func TestRunTurnAcquiresConfiguredSessionLease(t *testing.T) {
+	lease := &recordingLease{}
+	catalog, _ := tool.NewCatalog()
+	runner, _ := New(Config{Model: "test"}, Dependencies{Model: &scriptedModel{responses: []model.Response{{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop}}}, Tools: catalog, Transcript: transcript.NewMemoryStore(), Lease: lease})
+	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "leased", Input: model.TextMessage(model.RoleUser, "hi")}); err != nil {
+		t.Fatal(err)
+	}
+	if lease.calls != 1 {
+		t.Fatalf("lease calls = %d, want 1", lease.calls)
+	}
+}
+
+func TestRunTurnMarksInterruptedModelRequestUnknown(t *testing.T) {
+	store := transcript.NewMemoryStore()
+	metadata, _ := json.Marshal(modelRequestState{RequestID: "turn:model:1"})
+	for _, event := range []transcript.Event{
+		{SessionID: "recovery-model", Type: transcript.SessionStarted},
+		{SessionID: "recovery-model", TurnID: "turn", Type: transcript.TurnStarted},
+		{ID: "model-request:turn:model:1", SessionID: "recovery-model", TurnID: "turn", Type: transcript.ModelRequestStarted, Status: "started", Metadata: metadata},
+	} {
+		if _, err := store.Append(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	catalog, _ := tool.NewCatalog()
+	runner, _ := New(Config{Model: "test"}, Dependencies{Model: &scriptedModel{responses: []model.Response{{Message: model.TextMessage(model.RoleAssistant, "recovered"), FinishReason: model.FinishStop}}}, Tools: catalog, Transcript: store})
+	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "recovery-model", TurnID: "turn", Input: model.TextMessage(model.RoleUser, "hi")}); err != nil {
+		t.Fatal(err)
+	}
+	events, _ := store.Load(context.Background(), "recovery-model", 0)
+	for _, event := range events {
+		if event.Type == transcript.ModelRequestUnknown {
+			return
+		}
+	}
+	t.Fatal("missing unknown outcome for interrupted model request")
 }
 
 func TestRunTurnDoesNotReplayInterruptedToolCall(t *testing.T) {

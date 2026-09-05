@@ -131,7 +131,14 @@ func (r *Recorder) ToolCall(name string, d time.Duration, err error) {
 }
 
 func (r *Recorder) Event(name string, metadata map[string]any) {
-	if name == "" {
+	r.AddEvent(name, 1, metadata)
+}
+
+// AddEvent records a named monotonic counter. It is used for events where a
+// single observation represents a known number of occurrences, such as a
+// bounded async sink shedding several queued projection events at once.
+func (r *Recorder) AddEvent(name string, count int64, metadata map[string]any) {
+	if name == "" || count <= 0 {
 		return
 	}
 	r.mu.Lock()
@@ -139,7 +146,7 @@ func (r *Recorder) Event(name string, metadata map[string]any) {
 	if r.snap.AgentEvents == nil {
 		r.snap.AgentEvents = map[string]int64{}
 	}
-	r.snap.AgentEvents[name]++
+	r.snap.AgentEvents[name] += count
 	if errText, ok := metadata["error"].(string); ok && errText != "" {
 		r.addErrorLocked(name + ": " + errText)
 	}
