@@ -27,6 +27,8 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	if request.TurnID == "" {
 		request.TurnID = r.deps.IDs.New("turn")
 	}
+	request.Scope.SessionID = request.SessionID
+	request.Scope.TurnID = request.TurnID
 	turnAttributes := langfuseObservationAttributes(request.Scope, "agent")
 	turnAttributes = append(turnAttributes,
 		attribute.String("agent.session.id", request.SessionID),
@@ -43,8 +45,6 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	if request.Input.ID == "" {
 		request.Input.ID = "input:" + request.TurnID
 	}
-	request.Scope.SessionID = request.SessionID
-	request.Scope.TurnID = request.TurnID
 	unlock, err := r.acquireSession(ctx, request.SessionID)
 	if err != nil {
 		return TurnResult{SessionID: request.SessionID, TurnID: request.TurnID}, err
@@ -460,7 +460,7 @@ func (r *Runtime) generateWithTools(ctx context.Context, turn TurnRequest, messa
 		response, err := r.generateAttempt(ctx, turn, request, attempt+1)
 		if err == nil {
 			completed, _ := json.Marshal(map[string]any{"request_id": requestID, "attempt": attempt + 1, "model": request.Model, "finish_reason": response.FinishReason, "usage": response.Usage})
-			if _, recordErr := r.record(ctx, transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelCompleted, Metadata: completed}); recordErr != nil {
+			if _, recordErr := r.record(ctx, transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelCompleted, Metadata: completed, Trace: responseTrace(response)}); recordErr != nil {
 				return model.Response{}, recordErr
 			}
 			return response, nil
@@ -468,7 +468,7 @@ func (r *Runtime) generateWithTools(ctx context.Context, turn TurnRequest, messa
 		lastErr = err
 		var typed *model.Error
 		failed, _ := json.Marshal(map[string]any{"request_id": requestID, "attempt": attempt + 1, "model": request.Model, "kind": model.ErrorKindOf(err), "retryable": errors.As(err, &typed) && typed.Retryable})
-		if _, recordErr := r.record(context.WithoutCancel(ctx), transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelFailed, Error: err.Error(), Metadata: failed}); recordErr != nil {
+		if _, recordErr := r.record(context.WithoutCancel(ctx), transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelFailed, Error: err.Error(), Metadata: failed, Trace: responseTrace(response)}); recordErr != nil {
 			return model.Response{}, recordErr
 		}
 		if !errors.As(err, &typed) || !typed.Retryable || attempt == r.config.MaxModelRetries {
@@ -496,6 +496,7 @@ func (r *Runtime) nextModelRequestID(ctx context.Context, turn TurnRequest) (str
 }
 
 func (r *Runtime) generateAttempt(ctx context.Context, turn TurnRequest, request model.Request, attempt int) (response model.Response, err error) {
+	parent := trace.SpanContextFromContext(ctx)
 	modelAttributes := langfuseObservationAttributes(turn.Scope, "generation")
 	modelAttributes = append(modelAttributes,
 		attribute.String("gen_ai.request.model", request.Model),
@@ -503,6 +504,11 @@ func (r *Runtime) generateAttempt(ctx context.Context, turn TurnRequest, request
 	)
 	ctx, span := runtimeTracer.Start(ctx, "model.generate", trace.WithAttributes(modelAttributes...))
 	defer func() {
+		spanContext := span.SpanContext()
+		response.TraceID, response.SpanID = spanContext.TraceID().String(), spanContext.SpanID().String()
+		if parent.IsValid() {
+			response.ParentSpanID = parent.SpanID().String()
+		}
 		span.SetAttributes(
 			attribute.Int64("gen_ai.usage.input_tokens", response.Usage.InputTokens),
 			attribute.Int64("gen_ai.usage.output_tokens", response.Usage.OutputTokens),
@@ -520,6 +526,13 @@ func (r *Runtime) generateAttempt(ctx context.Context, turn TurnRequest, request
 		r.emit(ctx, transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelStreamed, Model: &event})
 		return ctx.Err()
 	})
+}
+
+func responseTrace(response model.Response) *transcript.TraceContext {
+	if response.TraceID == "" || response.SpanID == "" {
+		return nil
+	}
+	return &transcript.TraceContext{TraceID: response.TraceID, SpanID: response.SpanID, ParentSpanID: response.ParentSpanID}
 }
 
 func (r *Runtime) appendSteering(ctx context.Context, request TurnRequest) error {
@@ -560,6 +573,11 @@ func addUsage(total *model.Usage, usage model.Usage) {
 }
 
 func (r *Runtime) record(ctx context.Context, event transcript.Event) (transcript.Event, error) {
+	if event.Trace == nil {
+		if spanContext := trace.SpanContextFromContext(ctx); spanContext.IsValid() {
+			event.Trace = &transcript.TraceContext{TraceID: spanContext.TraceID().String(), SpanID: spanContext.SpanID().String()}
+		}
+	}
 	if event.ID == "" {
 		event.ID = r.deps.IDs.New("evt")
 	}

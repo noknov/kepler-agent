@@ -35,6 +35,12 @@ class EvaluatorTests(unittest.TestCase):
         self.assertEqual(gate.violation("kepler", summary, 0.8, 0.1, 12), [])
         failures = gate.violation("kepler", summary, 0.9, 0.05, 10)
         self.assertEqual(len(failures), 3)
+
+    def test_release_gate_detects_baseline_regression(self) -> None:
+        current = {"eligible": 10, "weighted_pass_rate": 0.8, "timeout": 0, "p95_duration_seconds": 1}
+        baseline = {"weighted_pass_rate": 0.9}
+        failures = gate.violation("kepler", current, 0.7, 0.1, None, baseline, 0.05)
+        self.assertEqual(len(failures), 1)
     def test_summary_excludes_incompatible_cases_from_pass_rate(self) -> None:
         records = [
             {"candidate": "a", "status": "passed", "category": "bugfix", "tags": ["go"], "weight": 2, "duration_seconds": 2.0, "candidate_capabilities": ["shell"]},

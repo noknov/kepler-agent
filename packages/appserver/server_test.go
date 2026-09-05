@@ -69,6 +69,31 @@ func TestThreadForkCopiesEvents(t *testing.T) {
 	}
 }
 
+func TestInitializeDeclaresExactProtocolCompatibility(t *testing.T) {
+	var out bytes.Buffer
+	server := New(nil, strings.NewReader(""), &out)
+	server.handle(context.Background(), Request{ID: json.RawMessage(`1`), Method: "initialize"})
+	waitForOutput(t, &out, `"minimumProtocolVersion":2`)
+	if !strings.Contains(out.String(), `"maximumProtocolVersion":2`) {
+		t.Fatalf("initialize=%s", out.String())
+	}
+}
+
+func TestTrajectoryReturnsRedactedOperationalItems(t *testing.T) {
+	store := transcript.NewMemoryStore()
+	server := New(nil, strings.NewReader(""), &bytes.Buffer{})
+	server.Transcript = store
+	metadata := json.RawMessage(`{"provider":"openai","secret":"no"}`)
+	_, _ = store.Append(context.Background(), transcript.Event{SessionID: "ses", TurnID: "turn", Type: transcript.ContextProjected, Metadata: metadata})
+	var out bytes.Buffer
+	server.writer = &out
+	server.handle(context.Background(), Request{ID: json.RawMessage(`1`), Method: "thread/trajectory", Params: mustJSON(map[string]any{"sessionId": "ses"})})
+	waitForOutput(t, &out, `"provider":"openai"`)
+	if !strings.Contains(out.String(), `"provider":"openai"`) || strings.Contains(out.String(), "secret") {
+		t.Fatalf("trajectory response=%s", out.String())
+	}
+}
+
 func TestTurnStartUsesUniqueTurnIDs(t *testing.T) {
 	catalog, _ := tool.NewCatalog()
 	runner, err := agentruntime.New(agentruntime.Config{Model: "test"}, agentruntime.Dependencies{
@@ -113,6 +138,7 @@ func TestTurnStartRejectsWhenActiveTurnBulkheadIsFull(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	server.handle(context.Background(), Request{ID: json.RawMessage(`2`), Method: "turn/start", Params: mustJSON(map[string]any{"sessionId": "ses_2", "turnId": "turn_2", "input": "two"})})
+	waitForOutput(t, &out, `"code":-32001`)
 	if !strings.Contains(out.String(), `"code":-32001`) || !strings.Contains(out.String(), "server overloaded; retry later") {
 		t.Fatalf("expected overload response, got %s", out.String())
 	}
@@ -149,6 +175,7 @@ func TestNotifyEventMapsTextDelta(t *testing.T) {
 		TurnID: "turn_1", SessionID: "ses_1", Type: transcript.ModelStreamed,
 		Model: &model.StreamEvent{Type: model.StreamTextDelta, Text: "hello"},
 	})
+	waitForOutput(t, &out, "item/agentMessage/delta")
 	if !strings.Contains(out.String(), "item/agentMessage/delta") {
 		t.Fatalf("expected delta notification, got %s", out.String())
 	}
@@ -209,6 +236,17 @@ func waitForNoActiveTurns(t *testing.T, server *Server) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %d active app-server turns", active)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func waitForOutput(t *testing.T, out *bytes.Buffer, needle string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for !strings.Contains(out.String(), needle) {
+		if time.Now().After(deadline) {
+			t.Fatalf("output missing %q: %s", needle, out.String())
 		}
 		time.Sleep(time.Millisecond)
 	}

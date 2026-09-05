@@ -59,6 +59,16 @@ type Event struct {
 	Status     string             `json:"status,omitempty"`
 	Error      string             `json:"error,omitempty"`
 	Metadata   json.RawMessage    `json:"metadata,omitempty"`
+	// Trace is the vendor-neutral W3C identity captured at the durable event
+	// boundary. It lets projections and trajectory readers correlate a replayed
+	// event with OTEL/Langfuse without parsing ad-hoc metadata.
+	Trace *TraceContext `json:"trace,omitempty"`
+}
+
+type TraceContext struct {
+	TraceID      string `json:"trace_id"`
+	SpanID       string `json:"span_id"`
+	ParentSpanID string `json:"parent_span_id,omitempty"`
 }
 
 type Store interface {

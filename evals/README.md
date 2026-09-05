@@ -57,6 +57,17 @@ Generate a static report from any result directory:
 python3 evals/report.py evals/results/go-bugfix
 ```
 
+Gate a release against both an absolute floor and a compatible baseline. Keep
+the model, task selection, candidate version, repetitions, and gateway the
+same for the baseline comparison:
+
+```sh
+python3 evals/gate.py evals/results/current/summary.json \
+  --candidate kepler-agent --min-pass-rate 0.80 --max-timeout-rate 0.05 \
+  --max-p95-seconds 180 --baseline evals/baselines/kepler-agent.json \
+  --max-pass-rate-regression 0.02
+```
+
 The smoke runner is not a benchmark adapter. Use it only to validate changes to
 this evaluator; do not use its score in external harness comparisons.
 

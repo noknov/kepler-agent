@@ -16,6 +16,7 @@ func EmptyUsage() llm.Usage { return llm.Usage{} }
 type Run struct {
 	ID               string        `json:"id"`
 	TraceID          string        `json:"trace_id,omitempty"`
+	RootSpanID       string        `json:"root_span_id,omitempty"`
 	SessionID        string        `json:"session_id"`
 	EventID          string        `json:"event_id,omitempty"`
 	UserID           string        `json:"user_id,omitempty"`

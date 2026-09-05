@@ -263,6 +263,13 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 	if result.Metadata == nil {
 		result.Metadata = make(map[string]any)
 	}
+	if spanContext := span.SpanContext(); spanContext.IsValid() {
+		result.Metadata["trace_id"] = spanContext.TraceID().String()
+		result.Metadata["span_id"] = spanContext.SpanID().String()
+		if parent := trace.SpanContextFromContext(ctx); parent.IsValid() {
+			result.Metadata["parent_span_id"] = parent.SpanID().String()
+		}
+	}
 	result.Metadata["duration_ms"] = time.Since(started).Milliseconds()
 	span.SetAttributes(attribute.Int64("agent.tool.duration_ms", time.Since(started).Milliseconds()), attribute.Bool("agent.tool.error", result.IsError))
 	result = limitToolResult(ctx, result, call, r.config.ToolResults, r.deps.Artifacts)

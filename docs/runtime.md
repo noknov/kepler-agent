@@ -70,6 +70,11 @@ runtime over stdio with `thread/start`, `thread/resume`, `thread/fork`,
 `turn/start`, `turn/steer`, `turn/interrupt`, and Codex-style item
 notifications including `item/agentMessage/delta`.
 
+`thread/trajectory` is a read-only reconstruction API. It derives a redacted
+sequence of prompt/context, provider-attempt, tool, recovery, and termination
+facts from the canonical transcript; it never exposes message content, tool
+arguments, or arbitrary metadata by default.
+
 The server admits at most eight active turns by default. When its local
 bulkhead is full, `turn/start` returns JSON-RPC error `-32001` (`server
 overloaded; retry later`); clients retry with exponential backoff and jitter.

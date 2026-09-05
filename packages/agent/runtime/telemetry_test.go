@@ -91,11 +91,15 @@ func TestRuntimePersistsTurnTraceIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	var metadata map[string]any
+	var modelTrace *transcript.TraceContext
 	for _, event := range events {
 		if event.Type == transcript.TurnStarted {
 			if err := json.Unmarshal(event.Metadata, &metadata); err != nil {
 				t.Fatal(err)
 			}
+		}
+		if event.Type == transcript.ModelCompleted {
+			modelTrace = event.Trace
 		}
 	}
 	traceID, _ := metadata["trace_id"].(string)
@@ -105,5 +109,8 @@ func TestRuntimePersistsTurnTraceIdentity(t *testing.T) {
 	}
 	if _, err := trace.SpanIDFromHex(spanID); err != nil || spanID == "" {
 		t.Fatalf("span_id=%q err=%v", spanID, err)
+	}
+	if modelTrace == nil || modelTrace.SpanID == spanID || modelTrace.ParentSpanID != spanID {
+		t.Fatalf("model trace=%+v root span=%q", modelTrace, spanID)
 	}
 }

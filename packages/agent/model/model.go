@@ -220,6 +220,12 @@ type Response struct {
 	FinishReason FinishReason    `json:"finish_reason"`
 	Usage        Usage           `json:"usage,omitempty"`
 	RawMetadata  json.RawMessage `json:"raw_metadata,omitempty"`
+	// Trace fields are runtime instrumentation only. Providers never populate
+	// them; the execution loop attaches the active model span before persisting
+	// its lifecycle event.
+	TraceID      string `json:"-"`
+	SpanID       string `json:"-"`
+	ParentSpanID string `json:"-"`
 }
 
 type StreamEventType string

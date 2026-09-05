@@ -195,11 +195,8 @@ func (c *Catalog) Register(item Tool) error {
 		return fmt.Errorf("tool is nil")
 	}
 	descriptor := item.Descriptor()
-	if descriptor.Name == "" {
-		return fmt.Errorf("tool name is required")
-	}
-	if len(descriptor.Effects) == 0 {
-		return fmt.Errorf("tool %q must declare at least one effect", descriptor.Name)
+	if err := ValidateDescriptor(descriptor); err != nil {
+		return err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -209,6 +206,36 @@ func (c *Catalog) Register(item Tool) error {
 	c.tools[descriptor.Name] = item
 	if descriptor.Exposure == "" || descriptor.Exposure == ExposureEager {
 		c.eager[descriptor.Name] = true
+	}
+	return nil
+}
+
+// ValidateDescriptor is the registration-time safety contract shared by all
+// surfaces. A tool cannot hide a mutating effect behind a parallel descriptor
+// or an invalid schema and rely on a UI annotation for authorization.
+func ValidateDescriptor(descriptor Descriptor) error {
+	if descriptor.Name == "" {
+		return fmt.Errorf("tool name is required")
+	}
+	if len(descriptor.Effects) == 0 {
+		return fmt.Errorf("tool %q must declare at least one effect", descriptor.Name)
+	}
+	for _, effect := range descriptor.Effects {
+		switch effect {
+		case EffectRead, EffectWorkspaceWrite, EffectExternalWrite, EffectPrivileged, EffectNetwork:
+		default:
+			return fmt.Errorf("tool %q declares unknown effect %q", descriptor.Name, effect)
+		}
+	}
+	if descriptor.Parallel && !EffectsAllowParallel(descriptor.Effects) {
+		return fmt.Errorf("tool %q may not be parallel with mutating or privileged effects", descriptor.Name)
+	}
+	if len(descriptor.InputSchema) == 0 || !json.Valid(descriptor.InputSchema) {
+		return fmt.Errorf("tool %q must declare valid input schema", descriptor.Name)
+	}
+	var schema map[string]any
+	if json.Unmarshal(descriptor.InputSchema, &schema) != nil || schema["type"] != "object" {
+		return fmt.Errorf("tool %q input schema must be an object", descriptor.Name)
 	}
 	return nil
 }

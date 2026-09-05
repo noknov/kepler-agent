@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 )
 
@@ -12,8 +13,8 @@ func (fakeTool) Execute(context.Context, Call) (Result, error) { return TextResu
 
 func TestCatalogOnlyExposesEagerToolsInitially(t *testing.T) {
 	catalog, err := NewCatalog(
-		fakeTool{descriptor: Descriptor{Name: "eager", Effects: []Effect{EffectRead}, Exposure: ExposureEager}},
-		fakeTool{descriptor: Descriptor{Name: "later", Effects: []Effect{EffectRead}, Exposure: ExposureDeferred}},
+		fakeTool{descriptor: Descriptor{Name: "eager", InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []Effect{EffectRead}, Exposure: ExposureEager}},
+		fakeTool{descriptor: Descriptor{Name: "later", InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []Effect{EffectRead}, Exposure: ExposureDeferred}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -39,6 +40,18 @@ func TestCatalogOnlyExposesEagerToolsInitially(t *testing.T) {
 func TestCatalogRejectsToolWithoutEffects(t *testing.T) {
 	if _, err := NewCatalog(fakeTool{descriptor: Descriptor{Name: "implicit"}}); err == nil {
 		t.Fatal("expected missing effects to be rejected")
+	}
+}
+
+func TestCatalogRejectsUnsafeDescriptorContracts(t *testing.T) {
+	for _, descriptor := range []Descriptor{
+		{Name: "unknown", InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []Effect{"unknown"}},
+		{Name: "write-parallel", InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []Effect{EffectWorkspaceWrite}, Parallel: true},
+		{Name: "bad-schema", InputSchema: json.RawMessage(`[]`), Effects: []Effect{EffectRead}},
+	} {
+		if _, err := NewCatalog(fakeTool{descriptor: descriptor}); err == nil {
+			t.Fatalf("descriptor %+v was accepted", descriptor)
+		}
 	}
 }
 

@@ -106,10 +106,14 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		existing, ok, _ := s.Store.Get(ctx, event.TurnID)
 		if !ok {
 			traceID := metadata.TraceID
+			rootSpanID := ""
+			if event.Trace != nil {
+				traceID, rootSpanID = event.Trace.TraceID, event.Trace.SpanID
+			}
 			if traceID == "" {
 				traceID = runs.NewTraceID()
 			}
-			existing = runs.Run{ID: event.TurnID, TraceID: traceID, SessionID: event.SessionID, EventID: event.TurnID, StartedAt: event.Timestamp}
+			existing = runs.Run{ID: event.TurnID, TraceID: traceID, RootSpanID: rootSpanID, SessionID: event.SessionID, EventID: event.TurnID, StartedAt: event.Timestamp}
 		}
 		existing.UserID, existing.Channel, existing.ThreadTS = metadata.UserID, metadata.Scope["channel"], metadata.Scope["thread_ts"]
 		existing.Provider, existing.Model, existing.Status = s.Provider, modelName, "running"
@@ -136,6 +140,7 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		usage := observability.UsageFromModel(metadata.Usage)
 		duration := event.Timestamp.Sub(state.modelStart)
 		step := runs.Step{ID: event.ID, SpanID: event.ID, Type: "llm", Name: s.modelFor(ctx, event.TurnID), StartedAt: state.modelStart, DurationMS: duration.Milliseconds(), Usage: usage, FinishReason: string(metadata.FinishReason), EstimatedCostUSD: s.Rates.EstimateUSD(usage)}
+		s.applyTrace(ctx, event.TurnID, event.Trace, &step)
 		if !state.firstToken.IsZero() {
 			step.Metadata = map[string]any{"first_token_ms": state.firstToken.Sub(state.modelStart).Milliseconds()}
 		}
@@ -151,6 +156,7 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		}
 		duration := event.Timestamp.Sub(state.modelStart)
 		step := runs.Step{ID: event.ID, SpanID: event.ID, Type: "llm", Name: s.modelFor(ctx, event.TurnID), StartedAt: state.modelStart, DurationMS: duration.Milliseconds(), Error: event.Error, Metadata: rawMetadata(event.Metadata)}
+		s.applyTrace(ctx, event.TurnID, event.Trace, &step)
 		if err := s.appendStep(ctx, event.TurnID, step); err != nil {
 			log.Printf("project failed model step %s: %v", event.ID, err)
 		}
@@ -171,6 +177,7 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		}
 		duration := toolDuration(event)
 		step := runs.Step{ID: event.ID, SpanID: event.ID, Type: "tool", Name: event.ToolCall.Name, StartedAt: event.Timestamp.Add(-duration), DurationMS: duration.Milliseconds(), Metadata: toolStepMetadata(event)}
+		s.applyTrace(ctx, event.TurnID, event.Trace, &step)
 		if event.Type == transcript.ToolCallFailed {
 			step.Error = toolError(event)
 		}
@@ -222,6 +229,26 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		s.mu.Lock()
 		delete(s.active, event.TurnID)
 		s.mu.Unlock()
+	}
+}
+
+func (s *RunSink) applyTrace(ctx context.Context, runID string, eventTrace *transcript.TraceContext, step *runs.Step) {
+	if eventTrace == nil && step.Metadata != nil {
+		traceID, _ := step.Metadata["trace_id"].(string)
+		spanID, _ := step.Metadata["span_id"].(string)
+		parentID, _ := step.Metadata["parent_span_id"].(string)
+		if traceID != "" && spanID != "" {
+			eventTrace = &transcript.TraceContext{TraceID: traceID, SpanID: spanID, ParentSpanID: parentID}
+		}
+	}
+	if eventTrace != nil {
+		step.SpanID = eventTrace.SpanID
+		step.ParentSpanID = eventTrace.ParentSpanID
+	}
+	if step.ParentSpanID == "" {
+		if run, ok, _ := s.Store.Get(ctx, runID); ok {
+			step.ParentSpanID = run.RootSpanID
+		}
 	}
 }
 
@@ -351,6 +378,11 @@ func toolStepMetadata(event transcript.Event) map[string]any {
 	if event.ToolResult != nil {
 		metadata["error_code"] = event.ToolResult.ErrorCode
 		metadata["truncated"] = event.ToolResult.Truncated
+		for _, key := range []string{"trace_id", "span_id", "parent_span_id"} {
+			if value, ok := event.ToolResult.Metadata[key]; ok {
+				metadata[key] = value
+			}
+		}
 	}
 	return metadata
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
@@ -14,6 +15,7 @@ import (
 	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
+	"github.com/noknov/kepler-agent/packages/trajectory"
 )
 
 const JSONRPCVersion = "2.0"
@@ -34,10 +36,11 @@ type Server struct {
 	MaxActiveTurns int
 	IDs            agentruntime.IDGenerator
 
-	reader  io.Reader
-	writer  io.Writer
-	writeMu sync.Mutex
-	deltas  *deltaBatcher
+	reader          io.Reader
+	writer          io.Writer
+	outbound        chan any
+	droppedOutbound atomic.Uint64
+	deltas          *deltaBatcher
 
 	activeMu sync.Mutex
 	active   map[string]*activeTurn
@@ -94,9 +97,19 @@ func New(runtime *agentruntime.Runtime, reader io.Reader, writer io.Writer) *Ser
 		active:         map[string]*activeTurn{},
 		IDs:            agentruntime.RandomIDs{},
 		MaxActiveTurns: 8,
+		outbound:       make(chan any, 1024),
 	}
 	server.deltas = newDeltaBatcher(defaultDeltaFlushInterval, defaultDeltaFlushBytes, server.notifyStreamDelta)
+	go server.writeLoop()
 	return server
+}
+
+func (s *Server) writeLoop() {
+	for value := range s.outbound {
+		if s.writer != nil {
+			_ = json.NewEncoder(s.writer).Encode(value)
+		}
+	}
 }
 
 func (s *Server) Serve(ctx context.Context) error {
@@ -123,8 +136,11 @@ func (s *Server) handle(ctx context.Context, request Request) {
 	switch request.Method {
 	case "initialize":
 		s.respond(request.ID, map[string]any{
-			"protocol":     "v2",
-			"capabilities": DefaultCapabilities(),
+			"protocol":               "v2",
+			"protocolVersion":        2,
+			"minimumProtocolVersion": 2,
+			"maximumProtocolVersion": 2,
+			"capabilities":           DefaultCapabilities(),
 		}, nil)
 	case "thread/start":
 		var params ThreadStartParams
@@ -201,6 +217,22 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			copied++
 		}
 		s.respond(request.ID, map[string]any{"sessionId": childID, "sourceSessionId": params.SourceSessionID, "eventCount": copied}, nil)
+	case "thread/trajectory":
+		var params ThreadResumeParams
+		if err := json.Unmarshal(request.Params, &params); err != nil || params.SessionID == "" {
+			s.respond(request.ID, nil, &ResponseError{Code: -32602, Message: "sessionId is required"})
+			return
+		}
+		if s.Transcript == nil {
+			s.respond(request.ID, nil, &ResponseError{Code: -32001, Message: "transcript store unavailable"})
+			return
+		}
+		events, err := s.Transcript.Load(ctx, params.SessionID, params.AfterSequence)
+		if err != nil {
+			s.respond(request.ID, nil, &ResponseError{Code: -32002, Message: err.Error()})
+			return
+		}
+		s.respond(request.ID, map[string]any{"sessionId": params.SessionID, "items": trajectory.Build(events)}, nil)
 	case "turn/start":
 		var params TurnStartParams
 		if err := json.Unmarshal(request.Params, &params); err != nil || params.SessionID == "" || params.Input == "" {
@@ -298,16 +330,15 @@ func (s *Server) execute(ctx context.Context, params TurnStartParams, steering *
 		payload["error"] = err.Error()
 	}
 	s.deltas.flushTurn(params.TurnID)
+	// Runtime has durably finished. Do not let a stalled presentation writer
+	// occupy a local admission slot; clients recover transient notices through
+	// thread/resume and the canonical transcript.
+	s.unregister(params.TurnID)
 	s.notify("turn/completed", payload)
 }
 
 func (s *Server) notify(method string, params any) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	if s.writer == nil {
-		return
-	}
-	_ = json.NewEncoder(s.writer).Encode(map[string]any{"jsonrpc": JSONRPCVersion, "method": method, "params": params})
+	s.enqueue(map[string]any{"jsonrpc": JSONRPCVersion, "method": method, "params": params}, false)
 }
 
 // NotifyEvent streams a canonical transcript event to connected clients.
@@ -334,13 +365,22 @@ func (s *Server) respond(id json.RawMessage, result any, responseErr *ResponseEr
 }
 
 func (s *Server) write(value any) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	if s.writer == nil {
+	s.enqueue(value, true)
+}
+
+func (s *Server) enqueue(value any, required bool) {
+	if required {
+		s.outbound <- value
 		return
 	}
-	_ = json.NewEncoder(s.writer).Encode(value)
+	select {
+	case s.outbound <- value:
+	default:
+		s.droppedOutbound.Add(1)
+	}
 }
+
+func (s *Server) DroppedOutbound() uint64 { return s.droppedOutbound.Load() }
 
 func (s *Server) register(turnID string, active *activeTurn) registerResult {
 	s.activeMu.Lock()

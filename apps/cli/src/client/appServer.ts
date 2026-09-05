@@ -73,8 +73,8 @@ export class AppServerClient {
   }
 
   async initialize(timeoutMs = 10_000): Promise<void> {
-    const result = (await this.request("initialize", {}, timeoutMs)) as { protocol?: string };
-    if (result.protocol !== "v2") {
+    const result = (await this.request("initialize", {}, timeoutMs)) as { protocol?: string; minimumProtocolVersion?: number; maximumProtocolVersion?: number };
+    if (result.protocol !== "v2" || result.minimumProtocolVersion !== 2 || result.maximumProtocolVersion !== 2) {
       throw new Error(`unsupported app-server protocol: ${result.protocol ?? "unknown"}`);
     }
   }
@@ -91,6 +91,13 @@ export class AppServerClient {
       sessionId,
       includeEvents: true,
     })) as { sessionId: string; items?: ServerItem[] };
+    return (result.items ?? []).map(normalizeItem);
+  }
+
+  async trajectory(sessionId: string, afterSequence = 0): Promise<ServerItem[]> {
+    const result = (await this.request("thread/trajectory", { sessionId, afterSequence })) as {
+      sessionId: string; items?: ServerItem[];
+    };
     return (result.items ?? []).map(normalizeItem);
   }
 

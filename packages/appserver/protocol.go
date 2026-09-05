@@ -60,6 +60,7 @@ func DefaultCapabilities() []string {
 	return []string{
 		"thread/start",
 		"thread/resume",
+		"thread/trajectory",
 		"thread/fork",
 		"turn/start",
 		"turn/steer",

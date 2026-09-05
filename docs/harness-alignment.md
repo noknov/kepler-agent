@@ -44,21 +44,22 @@ permissions are unsuitable for a hosted agent.
 
 ### 1. Trace and trajectory
 
-Completed: the runtime persists `trace_id` and `span_id` in `turn_started`, and
-the hosted run projection reuses that W3C trace id. This survives projection
-replay and links `/runs` to OTEL.
+Completed: the runtime persists a typed W3C trace context on canonical events;
+the hosted run projection reuses the root trace and records actual model/tool
+span IDs on run steps. This survives projection replay and links `/runs` to
+OTEL and Langfuse.
 
-Next: add the actual OTel model/tool span IDs and parent IDs to their completed
-transcript events. Expose a read-only trajectory endpoint that returns events,
-their projection inputs (`prompt_hash`, tool-catalog version, token estimate),
-and sanitized provider-attempt metadata. Do not persist streamed token deltas
-or secrets as trajectory facts.
+Completed: `thread/trajectory` derives a read-only, redacted operational view
+from the same transcript. Do not persist streamed token deltas or secrets as
+trajectory facts. Next, add tool-catalog version and redaction-policy revision
+to every turn so historical trajectories remain precisely interpretable.
 
 ### 2. Evaluation and release gates
 
 Completed: `evals/gate.py` can gate selected candidates on weighted pass rate,
-timeout rate, and p95 duration. It is intentionally evaluated after a pinned,
-black-box run rather than importing runtime code.
+timeout rate, p95 duration, and allowed regression from a compatible baseline.
+It is intentionally evaluated after a pinned, black-box run rather than
+importing runtime code.
 
 Next: define a versioned production regression suite from incident transcripts.
 Run it alongside Harbor in CI with pinned candidate version, model gateway,
@@ -70,10 +71,11 @@ tag matrices; never promote only an aggregate score.
 Completed: local app-server limits active turns and returns retryable JSON-RPC
 `-32001` when saturated. Delta batching remains non-durable presentation work.
 
-Next: publish a versioned JSON schema from Go types, add a capability handshake
-with compatibility ranges, and make the TypeScript client reject unknown
-breaking protocol versions. A client reconnect must use `thread/resume` from
-the last transcript sequence rather than recover state from its terminal view.
+Completed: the handshake declares its exact supported protocol range and the
+TypeScript client rejects incompatible ranges. Next: publish generated JSON
+schema artifacts from Go types before supporting third-party clients. A client
+reconnect must use `thread/resume` from the last transcript sequence rather
+than recover state from its terminal view.
 
 ### 4. Safety and runtime contracts
 
