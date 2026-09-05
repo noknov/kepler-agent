@@ -18,9 +18,16 @@ type PGStore struct {
 // NewPGStore uses a shared pool and assumes schema/postgres.sql is installed.
 func NewPGStore(pool *pgxpool.Pool) *PGStore { return &PGStore{pool: pool} }
 func (s *PGStore) Create(ctx context.Context, r Reminder) (Reminder, error) {
-	err := s.pool.QueryRow(ctx, `INSERT INTO reminders (id,user_id,channel,thread_ts,message,run_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING created_at`, r.ID, r.UserID, r.Channel, r.ThreadTS, r.Message, r.RunAt).Scan(&r.CreatedAt)
+	var sentAt *time.Time
+	err := s.pool.QueryRow(ctx, `INSERT INTO reminders (id,user_id,channel,thread_ts,message,run_at)
+VALUES ($1,$2,$3,$4,$5,$6)
+ON CONFLICT (id) DO UPDATE SET id=EXCLUDED.id
+RETURNING id,user_id,channel,thread_ts,message,run_at,created_at,sent_at`, r.ID, r.UserID, r.Channel, r.ThreadTS, r.Message, r.RunAt).Scan(&r.ID, &r.UserID, &r.Channel, &r.ThreadTS, &r.Message, &r.RunAt, &r.CreatedAt, &sentAt)
 	if err != nil {
 		return Reminder{}, fmt.Errorf("create reminder: %w", err)
+	}
+	if sentAt != nil {
+		r.SentAt = *sentAt
 	}
 	return r, nil
 }

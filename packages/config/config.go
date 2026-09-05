@@ -116,7 +116,9 @@ type SessionConfig struct {
 
 type ToolConfig struct {
 	CommandTimeout       time.Duration
+	AgentTurnTimeout     time.Duration
 	AgentMaxSteps        int
+	AgentMaxToolRounds   int
 	AgentExploreMaxSteps int
 	AgentExploreTimeout  time.Duration
 	AllowedWriteTools    []string
@@ -375,7 +377,9 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 		},
 		Tools: ToolConfig{
 			CommandTimeout:       envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
-			AgentMaxSteps:        envInt("AGENT_MAX_STEPS", 256),
+			AgentTurnTimeout:     envDuration("AGENT_TURN_TIMEOUT", 30*time.Minute),
+			AgentMaxSteps:        envInt("AGENT_MAX_STEPS", 64),
+			AgentMaxToolRounds:   envInt("AGENT_MAX_TOOL_ROUNDS", 16),
 			AgentExploreMaxSteps: envInt("AGENT_EXPLORE_MAX_STEPS", 8),
 			AgentExploreTimeout:  envDuration("AGENT_EXPLORE_TIMEOUT", 2*time.Minute),
 			AllowedWriteTools: envCSVDefault("AGENT_ALLOWED_WRITE_TOOLS", []string{

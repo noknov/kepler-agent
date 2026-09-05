@@ -34,6 +34,7 @@ type RunSink struct {
 type runState struct {
 	mu         sync.Mutex
 	modelStart time.Time
+	firstToken time.Time
 	final      string
 }
 
@@ -69,9 +70,6 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 	if s == nil || s.Store == nil || event.TurnID == "" {
 		return
 	}
-	if event.Type == transcript.ModelStreamed {
-		return
-	}
 	s.mu.Lock()
 	if s.active == nil {
 		s.active = make(map[string]*runState)
@@ -85,6 +83,12 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 	if state != nil {
 		state.mu.Lock()
 		defer state.mu.Unlock()
+	}
+	if event.Type == transcript.ModelStreamed {
+		if state != nil && event.Model != nil && event.Model.Type == model.StreamTextDelta && event.Model.Text != "" && state.firstToken.IsZero() {
+			state.firstToken = event.Timestamp
+		}
+		return
 	}
 	switch event.Type {
 	case transcript.TurnStarted:
@@ -113,6 +117,7 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 	case transcript.ModelRequested:
 		if state != nil {
 			state.modelStart = event.Timestamp
+			state.firstToken = time.Time{}
 		}
 	case transcript.ModelCompleted:
 		if state == nil {
@@ -126,6 +131,9 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		usage := observability.UsageFromModel(metadata.Usage)
 		duration := event.Timestamp.Sub(state.modelStart)
 		step := runs.Step{ID: event.ID, SpanID: event.ID, Type: "llm", Name: s.modelFor(ctx, event.TurnID), StartedAt: state.modelStart, DurationMS: duration.Milliseconds(), Usage: usage, FinishReason: string(metadata.FinishReason), EstimatedCostUSD: s.Rates.EstimateUSD(usage)}
+		if !state.firstToken.IsZero() {
+			step.Metadata = map[string]any{"first_token_ms": state.firstToken.Sub(state.modelStart).Milliseconds()}
+		}
 		if err := s.appendStep(ctx, event.TurnID, step); err != nil {
 			log.Printf("project model step %s: %v", event.ID, err)
 		}

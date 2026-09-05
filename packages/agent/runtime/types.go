@@ -29,6 +29,7 @@ const (
 	TerminationBudgetExhausted   TerminationReason = "budget_exhausted"
 	TerminationProviderCircuit   TerminationReason = "provider_circuit_open"
 	TerminationFallbackExhausted TerminationReason = "fallback_exhausted"
+	TerminationToolRoundLimit    TerminationReason = "tool_round_limit"
 )
 
 type Config struct {
@@ -37,6 +38,7 @@ type Config struct {
 	Temperature             *float64
 	MaxOutputTokens         int
 	MaxSteps                int
+	MaxToolRounds           int
 	MaxModelRetries         int
 	MaxEmptyResponseRetries int
 	RetryBaseDelay          time.Duration
@@ -48,6 +50,9 @@ type Config struct {
 func (c Config) withDefaults() Config {
 	if c.MaxSteps <= 0 {
 		c.MaxSteps = 256
+	}
+	if c.MaxToolRounds <= 0 {
+		c.MaxToolRounds = 16
 	}
 	if c.MaxModelRetries < 0 {
 		c.MaxModelRetries = 0

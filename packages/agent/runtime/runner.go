@@ -9,6 +9,7 @@ import (
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/prompt"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -58,6 +59,15 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	if replayed, replayErr, ok := completedTurn(events, request.TurnID); ok {
 		return replayed, replayErr
 	}
+	if err := r.reconcileInterruptedToolCalls(ctx, request, events); err != nil {
+		return r.failTurn(ctx, result, err)
+	}
+	if hasTurnStarted(events, request.TurnID) {
+		events, err = r.deps.Transcript.Load(ctx, request.SessionID, 0)
+		if err != nil {
+			return result, err
+		}
+	}
 	if len(events) == 0 {
 		if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, Type: transcript.SessionStarted}); err != nil {
 			return result, err
@@ -77,21 +87,23 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 			}
 		}
 	}
-	modelName := request.Model
-	if modelName == "" {
-		modelName = r.config.Model
-	}
-	turnMetadata := map[string]any{"user_id": request.Scope.UserID, "workspace": request.Scope.Workspace, "scope": request.Scope.Values, "model": modelName}
-	if request.Parent != nil {
-		turnMetadata["parent"] = request.Parent
-	}
-	turnMetadataJSON, _ := json.Marshal(turnMetadata)
-	if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.TurnStarted, Status: "running", Metadata: turnMetadataJSON}); err != nil {
-		return result, err
-	}
-	durableInput := durableUserInput(request.Input)
-	if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.UserInput, Message: &durableInput}); err != nil {
-		return result, err
+	if !hasTurnStarted(events, request.TurnID) {
+		modelName := request.Model
+		if modelName == "" {
+			modelName = r.config.Model
+		}
+		turnMetadata := map[string]any{"user_id": request.Scope.UserID, "workspace": request.Scope.Workspace, "scope": request.Scope.Values, "model": modelName}
+		if request.Parent != nil {
+			turnMetadata["parent"] = request.Parent
+		}
+		turnMetadataJSON, _ := json.Marshal(turnMetadata)
+		if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.TurnStarted, Status: "running", Metadata: turnMetadataJSON}); err != nil {
+			return result, err
+		}
+		durableInput := durableUserInput(request.Input)
+		if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.UserInput, Message: &durableInput}); err != nil {
+			return result, err
+		}
 	}
 
 	composition, err := prompt.Compose(request.Prompt)
@@ -102,6 +114,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	if r.deps.Tools.Has("update_plan") {
 		system = appendSystemInstruction(system, planningInstruction)
 	}
+	toolRounds := 0
 	for step := 1; step <= r.config.MaxSteps; step++ {
 		result.Steps = step
 		if err := ctx.Err(); err != nil {
@@ -152,6 +165,10 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 			}
 			result.Message = response.Message
 			return r.finishTurn(ctx, result, response.Message, TerminationCompleted, nil)
+		}
+		toolRounds++
+		if toolRounds > r.config.MaxToolRounds {
+			return r.finishTurn(ctx, result, response.Message, TerminationToolRoundLimit, errors.New("consecutive tool round limit reached"))
 		}
 		outcome, err := r.executeTools(ctx, request, calls)
 		if errors.Is(err, errPendingApproval) {
@@ -213,6 +230,46 @@ func completedTurn(events []transcript.Event, turnID string) (TurnResult, error,
 		return result, errors.New(terminal.Error), true
 	}
 	return result, nil, true
+}
+
+func hasTurnStarted(events []transcript.Event, turnID string) bool {
+	for _, event := range events {
+		if event.TurnID == turnID && event.Type == transcript.TurnStarted {
+			return true
+		}
+	}
+	return false
+}
+
+// reconcileInterruptedToolCalls closes incomplete tool executions during a
+// replay. A started call may have already produced an external side effect, so
+// re-executing it is unsafe. Record a deterministic error result instead and
+// let the model decide how to proceed from the uncertain state.
+func (r *Runtime) reconcileInterruptedToolCalls(ctx context.Context, request TurnRequest, events []transcript.Event) error {
+	started := make(map[string]tool.Call)
+	for _, event := range events {
+		if event.TurnID != request.TurnID || event.ToolCall == nil {
+			continue
+		}
+		switch event.Type {
+		case transcript.ToolCallStarted:
+			started[event.ToolCall.ID] = *event.ToolCall
+		case transcript.ToolCallCompleted, transcript.ToolCallFailed:
+			delete(started, event.ToolCall.ID)
+		}
+	}
+	for _, call := range started {
+		result := tool.Result{
+			Content:   []model.Content{{Type: model.ContentText, Text: fmt.Sprintf("Tool %q was interrupted before its result was recorded and was not retried because it may have already completed.", call.Name)}},
+			IsError:   true,
+			ErrorCode: "execution_interrupted",
+			Metadata:  map[string]any{"recovered": true},
+		}
+		if _, err := r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.ToolCallFailed, ToolCall: &call, ToolResult: &result}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, system model.Message) (Projection, error) {
@@ -449,7 +506,11 @@ func (r *Runtime) finishTurn(ctx context.Context, result TurnResult, message mod
 	if reason == TerminationCanceled {
 		eventType = transcript.TurnCanceled
 	}
-	event := transcript.Event{SessionID: result.SessionID, TurnID: result.TurnID, Type: eventType, Status: status}
+	metadata, _ := json.Marshal(map[string]any{
+		"steps": result.Steps,
+		"usage": result.Usage,
+	})
+	event := transcript.Event{SessionID: result.SessionID, TurnID: result.TurnID, Type: eventType, Status: status, Metadata: metadata}
 	if err != nil {
 		event.Error = err.Error()
 	}

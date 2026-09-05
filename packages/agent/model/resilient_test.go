@@ -13,6 +13,25 @@ type resilientScript struct {
 	calls int
 }
 
+type streamingResilientScript struct {
+	resilientScript
+	events []StreamEvent
+}
+
+func (s *streamingResilientScript) Generate(ctx context.Context, request Request, sink EventSink) (Response, error) {
+	s.mu.Lock()
+	events := append([]StreamEvent(nil), s.events...)
+	s.mu.Unlock()
+	for _, event := range events {
+		if sink != nil {
+			if err := sink(event); err != nil {
+				return Response{}, err
+			}
+		}
+	}
+	return s.resilientScript.Generate(ctx, request, sink)
+}
+
 func (s *resilientScript) Generate(_ context.Context, _ Request, _ EventSink) (Response, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -84,5 +103,42 @@ func TestResilientClientDoesNotStartAttemptWithoutBudget(t *testing.T) {
 	_, err := client.Generate(ctx, Request{Model: "m"}, nil)
 	if ErrorKindOf(err) != ErrorBudgetExhausted || primary.calls != 0 {
 		t.Fatalf("kind=%s calls=%d", ErrorKindOf(err), primary.calls)
+	}
+}
+
+func TestResilientClientDoesNotRetryAfterCommittedText(t *testing.T) {
+	primary := &streamingResilientScript{
+		resilientScript: resilientScript{errs: []error{transient()}},
+		events:          []StreamEvent{{Type: StreamTextDelta, Text: "partial"}},
+	}
+	fallback := &resilientScript{}
+	client := &ResilientClient{Primary: primary, Fallback: fallback, FallbackModel: "secondary", MaxAttempts: 3, RetryDelay: time.Nanosecond}
+
+	var received []StreamEvent
+	_, err := client.Generate(context.Background(), Request{Model: "primary"}, func(event StreamEvent) error {
+		received = append(received, event)
+		return nil
+	})
+	if ErrorKindOf(err) != ErrorOutputCommitted {
+		t.Fatalf("kind = %s, want %s", ErrorKindOf(err), ErrorOutputCommitted)
+	}
+	if primary.calls != 1 || fallback.calls != 0 {
+		t.Fatalf("primary calls = %d, fallback calls = %d; want 1 and 0", primary.calls, fallback.calls)
+	}
+	if len(received) != 1 || received[0].Text != "partial" {
+		t.Fatalf("received = %#v, want one partial delta", received)
+	}
+}
+
+func TestResilientClientDoesNotRetryAfterCompletedToolCall(t *testing.T) {
+	primary := &streamingResilientScript{
+		resilientScript: resilientScript{errs: []error{transient()}},
+		events:          []StreamEvent{{Type: StreamToolCallDone, ToolCall: &ToolCall{ID: "call_1", Name: "search"}}},
+	}
+	client := &ResilientClient{Primary: primary, MaxAttempts: 2, RetryDelay: time.Nanosecond}
+
+	_, err := client.Generate(context.Background(), Request{Model: "primary"}, func(StreamEvent) error { return nil })
+	if ErrorKindOf(err) != ErrorOutputCommitted || primary.calls != 1 {
+		t.Fatalf("kind = %s, calls = %d; want %s and 1", ErrorKindOf(err), primary.calls, ErrorOutputCommitted)
 	}
 }

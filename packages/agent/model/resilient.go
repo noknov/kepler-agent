@@ -15,7 +15,7 @@ type Attempt struct {
 	Number          int
 	Fallback        bool
 	Remaining       time.Duration
-	Outcome         string // requested, failed, retrying, fallback, circuit_open, budget_exhausted, completed
+	Outcome         string // requested, failed, retrying, fallback, circuit_open, budget_exhausted, output_committed, completed
 	Error           error
 }
 
@@ -56,7 +56,8 @@ func (c *ResilientClient) Generate(ctx context.Context, request Request, sink Ev
 	if c == nil || c.Primary == nil {
 		return Response{}, &Error{Kind: ErrorUnavailable, Message: "primary model provider is not configured"}
 	}
-	response, err := c.generate(ctx, c.Primary, c.primaryProvider(), request, sink, false)
+	stream := newCommittedStream(sink)
+	response, err := c.generate(ctx, c.Primary, c.primaryProvider(), request, stream.publish, stream, false)
 	if err == nil {
 		return response, nil
 	}
@@ -66,7 +67,7 @@ func (c *ResilientClient) Generate(ctx context.Context, request Request, sink Ev
 	observeAttempt(ctx, c.attempt(ctx, c.fallbackProvider(), c.FallbackModel, 1, true, "fallback", err))
 	fallback := request
 	fallback.Model = c.FallbackModel
-	response, fallbackErr := c.generate(ctx, c.Fallback, c.fallbackProvider(), fallback, sink, true)
+	response, fallbackErr := c.generate(ctx, c.Fallback, c.fallbackProvider(), fallback, stream.publish, stream, true)
 	if fallbackErr == nil {
 		return response, nil
 	}
@@ -76,7 +77,7 @@ func (c *ResilientClient) Generate(ctx context.Context, request Request, sink Ev
 	return Response{}, fallbackErr
 }
 
-func (c *ResilientClient) generate(ctx context.Context, client Client, provider string, request Request, sink EventSink, fallback bool) (Response, error) {
+func (c *ResilientClient) generate(ctx context.Context, client Client, provider string, request Request, sink EventSink, stream *committedStream, fallback bool) (Response, error) {
 	key := provider + "/" + request.Model
 	if err := c.allow(key); err != nil {
 		observeAttempt(ctx, c.attempt(ctx, provider, request.Model, 0, fallback, "circuit_open", err))
@@ -96,11 +97,21 @@ func (c *ResilientClient) generate(ctx context.Context, client Client, provider 
 			return response, nil
 		}
 		last = err
-		observeAttempt(ctx, c.attempt(ctx, provider, request.Model, number, fallback, "failed", err))
 		if !retryable(err) {
+			observeAttempt(ctx, c.attempt(ctx, provider, request.Model, number, fallback, "failed", err))
 			return Response{}, err
 		}
 		c.fail(key)
+		if stream.hasCommitted() {
+			committed := &Error{
+				Kind:    ErrorOutputCommitted,
+				Message: "model stream failed after output was committed; retry is unsafe",
+				Cause:   err,
+			}
+			observeAttempt(ctx, c.attempt(ctx, provider, request.Model, number, fallback, "output_committed", committed))
+			return Response{}, committed
+		}
+		observeAttempt(ctx, c.attempt(ctx, provider, request.Model, number, fallback, "failed", err))
 		if number == c.maxAttempts() {
 			break
 		}
@@ -240,3 +251,40 @@ func retryable(err error) bool {
 	return errors.As(err, &typed) && typed.Retryable && (typed.Kind == ErrorTransient || typed.Kind == ErrorRateLimited || typed.Kind == ErrorUnavailable)
 }
 func canFailover(err error) bool { return retryable(err) }
+
+// committedStream tracks events that cross the point at which retrying a
+// request can replay externally-observable work. Transport lifecycle and usage
+// events are intentionally excluded: they contain no assistant output and no
+// completed tool invocation.
+type committedStream struct {
+	mu        sync.Mutex
+	sink      EventSink
+	committed bool
+}
+
+func newCommittedStream(sink EventSink) *committedStream { return &committedStream{sink: sink} }
+
+func (s *committedStream) publish(event StreamEvent) error {
+	if s.sink != nil {
+		if err := s.sink(event); err != nil {
+			return err
+		}
+	}
+	if commitsOutput(event) {
+		s.mu.Lock()
+		s.committed = true
+		s.mu.Unlock()
+	}
+	return nil
+}
+
+func (s *committedStream) hasCommitted() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.committed
+}
+
+func commitsOutput(event StreamEvent) bool {
+	return event.Type == StreamTextDelta && event.Text != "" ||
+		event.Type == StreamToolCallDone && event.ToolCall != nil
+}

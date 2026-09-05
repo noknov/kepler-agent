@@ -265,7 +265,12 @@ const (
 	ErrorBudgetExhausted   ErrorKind = "budget_exhausted"
 	ErrorCircuitOpen       ErrorKind = "circuit_open"
 	ErrorFallbackExhausted ErrorKind = "fallback_exhausted"
-	ErrorUnknown           ErrorKind = "unknown"
+	// ErrorOutputCommitted means a failed streamed request already emitted an
+	// event that may have been presented to the user or acted on by the runtime.
+	// Retrying it could replay output or tool calls, so it is deliberately
+	// non-retryable.
+	ErrorOutputCommitted ErrorKind = "output_committed"
+	ErrorUnknown         ErrorKind = "unknown"
 )
 
 type Error struct {

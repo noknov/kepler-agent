@@ -101,6 +101,7 @@ func newLocalHarness(values options, config local.Config, creds credentials) (*l
 		workspace.Close()
 		return nil, err
 	}
+	resilientClient := model.Client(&model.ResilientClient{Primary: client, PrimaryProvider: "kepler"})
 
 	sandbox := local.Sandbox{Workspace: workspace, AdditionalReadRoots: config.AdditionalReadRoots, UnsafeAllowNoSandbox: config.UnsafeAllowNoSandbox}
 	catalog, err := localtools.NewCatalog(workspace, sandbox)
@@ -140,8 +141,8 @@ func newLocalHarness(values options, config local.Config, creds credentials) (*l
 			Context:  agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
 		},
 		Deps: agentruntime.Dependencies{
-			Model: client, Policy: local.WorkspacePolicy{}, Transcript: store,
-			Compactor:   agentruntime.ModelCompactor{Client: client, Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
+			Model: resilientClient, Policy: local.WorkspacePolicy{}, Transcript: store,
+			Compactor:   agentruntime.ModelCompactor{Client: resilientClient, Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
 			Artifacts:   local.ArtifactStore{Root: artifactRoot},
 			Environment: environment.Config{WorkspaceRoots: []string{workspace.Root}},
 		},
@@ -157,12 +158,12 @@ func newLocalHarness(values options, config local.Config, creds credentials) (*l
 	runner, err := agentruntime.New(
 		agentruntime.Config{
 			Model: config.Model, ReasoningEffort: config.ReasoningEffort, MaxOutputTokens: config.MaxOutputTokens,
-			MaxSteps: config.MaxSteps, MaxModelRetries: 2, MaxEmptyResponseRetries: 3,
+			MaxSteps: config.MaxSteps, MaxModelRetries: 0, MaxEmptyResponseRetries: 3,
 			Context: agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
 		},
 		agentruntime.Dependencies{
-			Model: client, Tools: catalog, Policy: local.WorkspacePolicy{}, Approver: approver, Transcript: store, Events: renderer,
-			Compactor:   agentruntime.ModelCompactor{Client: client, Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
+			Model: resilientClient, Tools: catalog, Policy: local.WorkspacePolicy{}, Approver: approver, Transcript: store, Events: renderer,
+			Compactor:   agentruntime.ModelCompactor{Client: resilientClient, Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
 			Artifacts:   local.ArtifactStore{Root: artifactRoot},
 			Environment: environment.Config{WorkspaceRoots: []string{workspace.Root}},
 		},

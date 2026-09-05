@@ -212,6 +212,29 @@ func TestSetAgentSessionStatusUsesAgentSessionsAPI(t *testing.T) {
 	}
 }
 
+func TestUpdateMessageBlocksUsesChatUpdate(t *testing.T) {
+	var payload map[string]any
+	client := &Client{httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/api/chat.update" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true}`)), Request: r}, nil
+	})}}
+	blocks := []map[string]any{{"type": "plan", "title": "Investigating", "tasks": []map[string]any{}}}
+	if err := client.UpdateMessageBlocks(context.Background(), "C1", "123.456", "Investigating", blocks); err != nil {
+		t.Fatal(err)
+	}
+	if payload["channel"] != "C1" || payload["ts"] != "123.456" || payload["text"] != "Investigating" {
+		t.Fatalf("payload = %#v", payload)
+	}
+	if got, ok := payload["blocks"].([]any); !ok || len(got) != 1 {
+		t.Fatalf("blocks = %#v", payload["blocks"])
+	}
+}
+
 func TestAppendAndStopStream(t *testing.T) {
 	var appendPayload, stopPayload map[string]any
 	client := &Client{token: "xoxb-test", httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {

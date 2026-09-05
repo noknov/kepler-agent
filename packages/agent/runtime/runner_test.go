@@ -306,6 +306,110 @@ func TestRunTurnRetriesTransientModelError(t *testing.T) {
 	}
 }
 
+func TestRunTurnRecordsTerminalTrajectory(t *testing.T) {
+	client := &scriptedModel{responses: []model.Response{{
+		Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop,
+		Usage: model.Usage{InputTokens: 11, OutputTokens: 7},
+	}}}
+	store := transcript.NewMemoryStore()
+	catalog, _ := tool.NewCatalog()
+	runner, err := New(Config{Model: "test"}, Dependencies{Model: client, Tools: catalog, Transcript: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "trajectory", Input: model.TextMessage(model.RoleUser, "hi")}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.Load(context.Background(), "trajectory", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal := events[len(events)-1]
+	var metadata struct {
+		Steps int         `json:"steps"`
+		Usage model.Usage `json:"usage"`
+	}
+	if err := json.Unmarshal(terminal.Metadata, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Steps != 1 || metadata.Usage.InputTokens != 11 || metadata.Usage.OutputTokens != 7 {
+		t.Fatalf("terminal metadata = %#v", metadata)
+	}
+}
+
+func TestRunTurnDoesNotReplayInterruptedToolCall(t *testing.T) {
+	store := transcript.NewMemoryStore()
+	call := tool.Call{ID: "write-1", Name: "write", Arguments: json.RawMessage(`{}`), Scope: tool.Scope{SessionID: "recovery", TurnID: "turn-1"}}
+	assistant := model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: call.ID, Name: call.Name, Arguments: call.Arguments}}}}
+	input := model.TextMessage(model.RoleUser, "write")
+	for _, event := range []transcript.Event{
+		{SessionID: "recovery", Type: transcript.SessionStarted},
+		{SessionID: "recovery", TurnID: "turn-1", Type: transcript.TurnStarted},
+		{SessionID: "recovery", TurnID: "turn-1", Type: transcript.UserInput, Message: &input},
+		{SessionID: "recovery", TurnID: "turn-1", Type: transcript.AssistantMessage, Message: &assistant},
+		{SessionID: "recovery", TurnID: "turn-1", Type: transcript.ToolCallStarted, ToolCall: &call},
+	} {
+		if _, err := store.Append(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var calls int
+	catalog, _ := tool.NewCatalog(countingWriteTool{calls: &calls})
+	client := &scriptedModel{responses: []model.Response{{Message: model.TextMessage(model.RoleAssistant, "recovered"), FinishReason: model.FinishStop}}}
+	runner, err := New(Config{Model: "test"}, Dependencies{Model: client, Tools: catalog, Transcript: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "recovery", TurnID: "turn-1", Input: model.TextMessage(model.RoleUser, "write")}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("interrupted tool calls were replayed: %d", calls)
+	}
+	events, err := store.Load(context.Background(), "recovery", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Type == transcript.ToolCallFailed && event.ToolResult != nil && event.ToolResult.ErrorCode == "execution_interrupted" {
+			return
+		}
+	}
+	t.Fatal("missing recovered interrupted-tool result")
+}
+
+func TestRunTurnReusesDurableToolResult(t *testing.T) {
+	store := transcript.NewMemoryStore()
+	call := tool.Call{ID: "write-1", ExecutionID: "turn-1:write-1", Name: "write", Arguments: json.RawMessage(`{}`), Scope: tool.Scope{SessionID: "reuse", TurnID: "turn-1"}}
+	result := tool.TextResult("already wrote")
+	for _, event := range []transcript.Event{
+		{SessionID: "reuse", Type: transcript.SessionStarted},
+		{SessionID: "reuse", TurnID: "turn-1", Type: transcript.TurnStarted},
+		{SessionID: "reuse", TurnID: "turn-1", Type: transcript.ToolCallCompleted, ToolCall: &call, ToolResult: &result},
+	} {
+		if _, err := store.Append(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var calls int
+	catalog, _ := tool.NewCatalog(countingWriteTool{calls: &calls})
+	responseCall := model.ToolCall{ID: call.ID, Name: call.Name, Arguments: call.Arguments}
+	client := &scriptedModel{responses: []model.Response{
+		{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &responseCall}}}, FinishReason: model.FinishToolCalls},
+		{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop},
+	}}
+	runner, err := New(Config{Model: "test"}, Dependencies{Model: client, Tools: catalog, Transcript: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "reuse", TurnID: "turn-1", Input: model.TextMessage(model.RoleUser, "write")}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("durable result was not reused; calls=%d", calls)
+	}
+}
+
 func TestRunTurnZeroRetryBudgetDoesNotRetry(t *testing.T) {
 	client := &scriptedModel{errors: []error{&model.Error{Kind: model.ErrorTransient, Message: "retryable", Retryable: true}}}
 	catalog, _ := tool.NewCatalog()

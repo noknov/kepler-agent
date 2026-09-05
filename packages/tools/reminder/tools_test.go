@@ -64,6 +64,20 @@ func TestCreateRejectsPastTime(t *testing.T) {
 	}
 }
 
+func TestReminderIDIsStableForExecution(t *testing.T) {
+	first, err := reminderID("turn-1:call-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := reminderID("turn-1:call-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == "" || first != second {
+		t.Fatalf("ids = %q, %q; want equal non-empty IDs", first, second)
+	}
+}
+
 type reminderTestStore struct {
 	mu        sync.Mutex
 	reminders map[string]reminderStore.Reminder

@@ -3,6 +3,7 @@ package reminder
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -42,7 +43,7 @@ func (t CreateTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 	if call.Scope.UserID == "" || call.Scope.Values["channel"] == "" {
 		return tool.Result{}, fmt.Errorf("reminders require a Slack user and channel")
 	}
-	id, err := newID()
+	id, err := reminderID(call.ExecutionID)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -54,6 +55,14 @@ func (t CreateTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 		t.OnCreate(ctx)
 	}
 	return tool.TextResult(fmt.Sprintf("提醒已创建：ID %s，将在 %s 提醒“%s”。", r.ID, r.RunAt.Format(time.RFC3339), r.Message)), nil
+}
+
+func reminderID(executionID string) (string, error) {
+	if executionID != "" {
+		sum := sha256.Sum256([]byte(executionID))
+		return "r-" + hex.EncodeToString(sum[:6]), nil
+	}
+	return newID()
 }
 
 type ListTool struct{ Store reminderStore.Store }

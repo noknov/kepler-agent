@@ -54,6 +54,12 @@ type ApprovalMessenger interface {
 	PostMessageBlocks(ctx context.Context, channel, threadTS, text string, blocks []map[string]any) (string, error)
 }
 
+// MessageBlocksUpdater updates a regular Block Kit message. Unlike a native
+// stream, a regular message has no short streaming lifetime.
+type MessageBlocksUpdater interface {
+	UpdateMessageBlocks(ctx context.Context, channel, messageTS, text string, blocks []map[string]any) error
+}
+
 type ApprovalRequest struct {
 	TurnID, ToolCallID string
 	Approved           bool

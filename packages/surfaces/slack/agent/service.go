@@ -64,6 +64,7 @@ type Service struct {
 	Locker           session.Locker
 	Inputs           sessioninput.Store
 	BeforeRun        func(context.Context, string) error
+	RunTimeout       time.Duration
 
 	mu     sync.Mutex
 	active map[string]*activeRun
@@ -206,7 +207,7 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 	if base == nil {
 		base = context.Background()
 	}
-	runCtx, cancel := context.WithTimeout(base, 30*time.Minute)
+	runCtx, cancel := context.WithTimeout(base, s.runTimeout())
 	var unlock func()
 	if s.Locker != nil {
 		var err error
@@ -393,6 +394,13 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 		}
 	}
 	return s.ackClaim(finalizeCtx, req.ClaimID)
+}
+
+func (s *Service) runTimeout() time.Duration {
+	if s.RunTimeout > 0 {
+		return s.RunTimeout
+	}
+	return 30 * time.Minute
 }
 
 func renderAnswer(message model.Message) string {
@@ -754,6 +762,10 @@ type slackStream struct {
 	lastStreamText       string
 	lastStreamUpdate     time.Time
 	streamTimer          *time.Timer
+	planMessageTS        string
+	planRevision         int
+	planLastUpdate       time.Time
+	planTimer            *time.Timer
 }
 
 func newSlackStream(ctx context.Context, messenger slackconversation.Messenger, req slackconversation.Request) *slackStream {
@@ -767,6 +779,7 @@ func (s *slackStream) Start() {
 }
 func (s *slackStream) Complete(final string) (string, error) {
 	s.stopStreamTimer()
+	s.stopPlanTimer()
 	if s.redactor != nil {
 		s.appendSanitizedDelta(s.redactor.Flush())
 	}
@@ -820,6 +833,7 @@ func (s *slackStream) appendSanitizedDelta(delta string) {
 }
 func (s *slackStream) Fail(message string, canceled bool) (string, error) {
 	s.stopStreamTimer()
+	s.stopPlanTimer()
 	s.flushDeferredStream(true)
 	s.mu.Lock()
 	s.streamClosed = true

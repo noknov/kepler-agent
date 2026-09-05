@@ -88,6 +88,26 @@ func (c *Client) PostMessageBlocks(ctx context.Context, channel, threadTS, text 
 	return c.postMessage(ctx, channel, threadTS, text, blocks, "")
 }
 
+func (c *Client) UpdateMessageBlocks(ctx context.Context, channel, messageTS, text string, blocks []map[string]any) error {
+	payload := map[string]any{
+		"channel": channel,
+		"ts":      messageTS,
+		"text":    text,
+		"blocks":  blocks,
+	}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+	}
+	if err := c.postJSON(ctx, "chat.update", payload, &out); err != nil {
+		return err
+	}
+	if !out.OK {
+		return slackAPIError{Method: "chat.update", Code: out.Error}
+	}
+	return nil
+}
+
 func (c *Client) PostMarkdownMessage(ctx context.Context, channel, threadTS, markdown string) (string, error) {
 	return c.postMarkdown(ctx, channel, threadTS, markdown, "")
 }

@@ -63,39 +63,17 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		}
 	}
 	primaryObserved := model.Client(observedModel{Client: primary, Metrics: deps.Metrics})
-	primaryClient := model.Client(&model.ResilientClient{
-		Primary: primaryObserved, PrimaryProvider: cfg.LLM.Provider,
-		MaxAttempts: cfg.LLM.Resilience.MaxAttempts, RetryDelay: cfg.LLM.Resilience.RetryBaseDelay,
-		MinAttemptBudget: cfg.LLM.Resilience.MinAttemptBudget, FailureThreshold: cfg.LLM.Resilience.FailureThreshold,
-		Cooldown: cfg.LLM.Resilience.CircuitCooldown,
-	})
+	primaryClient := resilientModel(cfg, primaryObserved, cfg.LLM.Provider, nil, "", "")
 	client := primaryClient
 	exploreClient, exploreModel := client, cfg.LLM.Model
 	compactClient, compactModel := client, cfg.Sessions.CompactModel
+	var secondaryObserved model.Client
 	if secondary != nil {
-		secondary = observedModel{Client: secondary, Metrics: deps.Metrics}
-		secondary = &model.ResilientClient{
-			Primary: secondary, PrimaryProvider: cfg.LLM.SecondaryProvider,
-			MaxAttempts: cfg.LLM.Resilience.MaxAttempts, RetryDelay: cfg.LLM.Resilience.RetryBaseDelay,
-			MinAttemptBudget: cfg.LLM.Resilience.MinAttemptBudget, FailureThreshold: cfg.LLM.Resilience.FailureThreshold,
-			Cooldown: cfg.LLM.Resilience.CircuitCooldown,
-		}
-		client = &model.ResilientClient{
-			Primary: primaryObserved, PrimaryProvider: cfg.LLM.Provider,
-			Fallback: secondary, FallbackProvider: cfg.LLM.SecondaryProvider, FallbackModel: secondaryModel,
-			MaxAttempts: cfg.LLM.Resilience.MaxAttempts, RetryDelay: cfg.LLM.Resilience.RetryBaseDelay,
-			MinAttemptBudget: cfg.LLM.Resilience.MinAttemptBudget, FailureThreshold: cfg.LLM.Resilience.FailureThreshold,
-			Cooldown: cfg.LLM.Resilience.CircuitCooldown,
-		}
-		exploreClient = &model.ResilientClient{
-			Primary: secondary, PrimaryProvider: cfg.LLM.SecondaryProvider,
-			Fallback: primaryClient, FallbackProvider: cfg.LLM.Provider, FallbackModel: cfg.LLM.Model,
-			MaxAttempts: cfg.LLM.Resilience.MaxAttempts, RetryDelay: cfg.LLM.Resilience.RetryBaseDelay,
-			MinAttemptBudget: cfg.LLM.Resilience.MinAttemptBudget, FailureThreshold: cfg.LLM.Resilience.FailureThreshold,
-			Cooldown: cfg.LLM.Resilience.CircuitCooldown,
-		}
+		secondaryObserved = observedModel{Client: secondary, Metrics: deps.Metrics}
+		client = resilientModel(cfg, primaryObserved, cfg.LLM.Provider, secondaryObserved, cfg.LLM.SecondaryProvider, secondaryModel)
+		exploreClient = resilientModel(cfg, secondaryObserved, cfg.LLM.SecondaryProvider, primaryObserved, cfg.LLM.Provider, cfg.LLM.Model)
 		exploreModel = secondaryModel
-		compactClient = secondary
+		compactClient = resilientModel(cfg, secondaryObserved, cfg.LLM.SecondaryProvider, nil, "", "")
 		if compactModel == "" {
 			compactModel = secondaryModel
 		}
@@ -105,7 +83,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	}
 	runner, err := agentruntime.New(agentruntime.Config{
 		Model: cfg.LLM.Model, ReasoningEffort: cfg.LLM.Thinking, Temperature: cfg.LLM.Temperature,
-		MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxSteps: cfg.Tools.AgentMaxSteps, MaxModelRetries: 0, MaxEmptyResponseRetries: 3,
+		MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxSteps: cfg.Tools.AgentMaxSteps, MaxToolRounds: cfg.Tools.AgentMaxToolRounds, MaxModelRetries: 0, MaxEmptyResponseRetries: 3,
 		Context:        agentruntime.ContextConfig{MaxTokens: cfg.Sessions.MaxContextTokens, ReserveTokens: cfg.Sessions.AutocompactBuffer},
 		ToolResults:    agentruntime.ToolResultConfig{MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)},
 		CircuitBreaker: agentruntime.CircuitBreakerConfig{Enabled: true},
@@ -143,8 +121,21 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	return Profile{
 		Agent: Agent{Runtime: runner}, Prompt: promptPolicy,
 		Redactor: safety.Redactor{WorkspaceRoots: cfg.Security.WorkspaceRoots}, Tools: catalog,
-		Rates: CostRates(cfg), SecondaryModel: secondary, SecondaryModelName: secondaryModel,
+		Rates: CostRates(cfg), SecondaryModel: secondaryObserved, SecondaryModelName: secondaryModel,
 	}, nil
+}
+
+// resilientModel is the sole retry, circuit-breaker, and failover boundary for
+// a request path. Its inputs must be provider clients rather than other
+// ResilientClients; nesting policies multiplies attempts and obscures budgets.
+func resilientModel(cfg config.Config, primary model.Client, primaryProvider string, fallback model.Client, fallbackProvider, fallbackModel string) model.Client {
+	return &model.ResilientClient{
+		Primary: primary, PrimaryProvider: primaryProvider,
+		Fallback: fallback, FallbackProvider: fallbackProvider, FallbackModel: fallbackModel,
+		MaxAttempts: cfg.LLM.Resilience.MaxAttempts, RetryDelay: cfg.LLM.Resilience.RetryBaseDelay,
+		MinAttemptBudget: cfg.LLM.Resilience.MinAttemptBudget, FailureThreshold: cfg.LLM.Resilience.FailureThreshold,
+		Cooldown: cfg.LLM.Resilience.CircuitCooldown,
+	}
 }
 
 type observedModel struct {

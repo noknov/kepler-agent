@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
@@ -13,16 +14,18 @@ import (
 )
 
 type nativeStreamingMessenger struct {
-	mu       sync.Mutex
-	posts    []string
-	started  int
-	appends  []string
-	chunks   [][]map[string]any
-	stopped  int
-	updates  []string
-	statuses []string
-	startErr error
-	start    []slackconversation.StreamStart
+	mu          sync.Mutex
+	posts       []string
+	started     int
+	appends     []string
+	chunks      [][]map[string]any
+	stopped     int
+	updates     []string
+	planPosts   [][]map[string]any
+	planUpdates [][]map[string]any
+	statuses    []string
+	startErr    error
+	start       []slackconversation.StreamStart
 }
 
 func (m *nativeStreamingMessenger) PostMessage(context.Context, string, string, string) (string, error) {
@@ -39,6 +42,18 @@ func (m *nativeStreamingMessenger) PostMarkdownMessageWithID(_ context.Context, 
 	defer m.mu.Unlock()
 	m.posts = append(m.posts, text)
 	return "1.0", nil
+}
+func (m *nativeStreamingMessenger) PostMessageBlocks(_ context.Context, _, _, _ string, blocks []map[string]any) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.planPosts = append(m.planPosts, blocks)
+	return "plan.1", nil
+}
+func (m *nativeStreamingMessenger) UpdateMessageBlocks(_ context.Context, _, _, _ string, blocks []map[string]any) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.planUpdates = append(m.planUpdates, blocks)
+	return nil
 }
 func (m *nativeStreamingMessenger) StartStream(_ context.Context, request slackconversation.StreamStart) (string, error) {
 	m.mu.Lock()
@@ -58,15 +73,18 @@ func TestPlanUpdatesUseSlackPlanDisplay(t *testing.T) {
 		{ID: "inspect", Task: "Inspect logs", Status: "in_progress"},
 		{ID: "verify", Task: "Verify the fix", Status: "pending"},
 	}}})
-	if messenger.started != 1 || messenger.start[0].TaskDisplayMode != "plan" {
-		t.Fatalf("start = %#v", messenger.start)
+	if messenger.started != 0 || len(messenger.planPosts) != 1 {
+		t.Fatalf("streams=%#v plan posts=%#v", messenger.start, messenger.planPosts)
 	}
-	if got := messenger.start[0].Chunks; len(got) != 3 || got[1]["status"] != "in_progress" || got[2]["status"] != "pending" {
-		t.Fatalf("plan chunks = %#v", got)
+	if got := messenger.planPosts[0]; len(got) != 1 || got[0]["type"] != "plan" {
+		t.Fatalf("plan blocks = %#v", got)
 	}
+	stream.mu.Lock()
+	stream.planLastUpdate = time.Now().Add(-planUpdateInterval)
+	stream.mu.Unlock()
 	stream.UpdatePlan(&tool.PlanUpdate{Items: []tool.PlanItem{{ID: "inspect", Task: "Inspect logs", Status: "completed"}}})
-	if got := messenger.chunks; len(got) != 1 || len(got[0]) != 2 || got[0][1]["status"] != "complete" {
-		t.Fatalf("appended plan chunks = %#v", got)
+	if got := messenger.planUpdates; len(got) != 1 || got[0][0]["type"] != "plan" {
+		t.Fatalf("plan updates = %#v", got)
 	}
 }
 

@@ -289,6 +289,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	conversation.OnDelivered = runSink.LinkSlackMessage
 	conversation.AlreadyDelivered = runSink.SlackMessageDelivered
 	conversation.Redis, conversation.PodID, conversation.Lifecycle = stores.Redis, podID, serviceCtx
+	conversation.RunTimeout = cfg.Tools.AgentTurnTimeout
 	conversation.Continuations = continuations
 	conversation.Inputs = stores.Inputs
 	conversation.Locker = stores.Sessions

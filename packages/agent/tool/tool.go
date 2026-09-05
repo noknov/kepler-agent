@@ -64,10 +64,11 @@ type Scope struct {
 }
 
 type Call struct {
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
-	Scope     Scope           `json:"scope"`
+	ID          string          `json:"id"`
+	ExecutionID string          `json:"execution_id,omitempty"`
+	Name        string          `json:"name"`
+	Arguments   json.RawMessage `json:"arguments"`
+	Scope       Scope           `json:"scope"`
 }
 
 type Result struct {

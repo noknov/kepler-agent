@@ -29,11 +29,20 @@ type toolOutcome struct {
 }
 
 func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls []model.ToolCall) (toolOutcome, error) {
+	priorResults, err := r.completedToolResults(ctx, request)
+	if err != nil {
+		return toolOutcome{}, err
+	}
 	prepared := make([]preparedCall, len(calls))
 	exclusive := false
 	for index, modelCall := range calls {
-		call := tool.Call{ID: modelCall.ID, Name: modelCall.Name, Arguments: modelCall.Arguments, Scope: request.Scope}
+		call := tool.Call{ID: modelCall.ID, ExecutionID: request.TurnID + ":" + modelCall.ID, Name: modelCall.Name, Arguments: modelCall.Arguments, Scope: request.Scope}
 		prepared[index] = preparedCall{index: index, call: call}
+		if previous, ok := priorResults[call.ID]; ok {
+			result := previous
+			prepared[index].result = &result
+			continue
+		}
 		item, ok := r.deps.Tools.GetActive(request.SessionID, call.Name)
 		if !ok {
 			result := tool.Result{Content: []model.Content{{Type: model.ContentText, Text: fmt.Sprintf("Unknown tool %q.", call.Name)}}, IsError: true, ErrorCode: "unknown_tool"}
@@ -118,6 +127,27 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 	wait.Wait()
 	limitToolResultBatch(ctx, prepared, r.config.ToolResults, r.deps.Artifacts)
 	return r.recordToolResults(ctx, request, prepared)
+}
+
+// completedToolResults makes replay idempotent at the runtime boundary. Tool
+// implementations can use Call.ExecutionID when their downstream API supports
+// a stronger idempotency guarantee; the transcript prevents this runtime from
+// dispatching a call that already has a durable result.
+func (r *Runtime) completedToolResults(ctx context.Context, request TurnRequest) (map[string]tool.Result, error) {
+	events, err := r.deps.Transcript.Load(ctx, request.SessionID, 0)
+	if err != nil {
+		return nil, err
+	}
+	results := make(map[string]tool.Result)
+	for _, event := range events {
+		if event.TurnID != request.TurnID || event.ToolCall == nil || event.ToolResult == nil {
+			continue
+		}
+		if event.Type == transcript.ToolCallCompleted || event.Type == transcript.ToolCallFailed {
+			results[event.ToolCall.ID] = *event.ToolResult
+		}
+	}
+	return results, nil
 }
 
 func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, prepared []preparedCall) (toolOutcome, error) {

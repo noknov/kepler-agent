@@ -241,6 +241,15 @@ func (s *slackStream) stopStreamTimer() {
 	}
 }
 
+func (s *slackStream) stopPlanTimer() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.planTimer != nil {
+		s.planTimer.Stop()
+		s.planTimer = nil
+	}
+}
+
 func (s *slackStream) streamedText() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
