@@ -45,6 +45,9 @@ func TestOpenAIResponsesClientPostsResponsesBody(t *testing.T) {
 		if auth := r.Header.Get("Authorization"); auth != "Bearer token" {
 			t.Fatalf("Authorization = %q, want Bearer token", auth)
 		}
+		if sessionID := r.Header.Get("x-opencode-session"); sessionID != "slack-thread-1" {
+			t.Fatalf("x-opencode-session = %q, want slack-thread-1", sessionID)
+		}
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 			t.Fatalf("decode body: %v", err)
 		}
@@ -75,6 +78,7 @@ func TestOpenAIResponsesClientPostsResponsesBody(t *testing.T) {
 		ToolChoice:  "auto",
 		MaxTokens:   123,
 		Temperature: float64Ptr(0.2),
+		Metadata:    map[string]string{"session_id": "slack-thread-1"},
 	})
 	if err != nil {
 		t.Fatalf("Chat() error = %v", err)

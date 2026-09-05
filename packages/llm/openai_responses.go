@@ -34,7 +34,7 @@ func (c *OpenAIResponsesClient) Chat(ctx context.Context, req Request) (Response
 	if err != nil {
 		return Response{}, err
 	}
-	data, err := c.doOnce(ctx, payload)
+	data, err := c.doOnce(ctx, payload, req.Metadata)
 	if err != nil {
 		return Response{}, err
 	}
@@ -73,7 +73,7 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 	if err != nil {
 		return Response{}, err
 	}
-	c.setHeaders(httpReq)
+	c.setHeaders(httpReq, req.Metadata)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -345,20 +345,21 @@ func responsesTools(tools []ToolSpec) []map[string]any {
 	return out
 }
 
-func (c *OpenAIResponsesClient) setHeaders(httpReq *http.Request) {
+func (c *OpenAIResponsesClient) setHeaders(httpReq *http.Request, metadata map[string]string) {
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	if hasBearerPrefix(c.apiKey) {
 		httpReq.Header.Set("Authorization", c.apiKey)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	setOpenCodeSessionHeader(httpReq, c.providerName(), metadata)
 }
 
-func (c *OpenAIResponsesClient) doOnce(ctx context.Context, payload []byte) ([]byte, error) {
+func (c *OpenAIResponsesClient) doOnce(ctx context.Context, payload []byte, metadata map[string]string) ([]byte, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/responses", bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
-	c.setHeaders(httpReq)
+	c.setHeaders(httpReq, metadata)
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, err

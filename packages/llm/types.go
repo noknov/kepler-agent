@@ -135,6 +135,9 @@ type Request struct {
 	Model    string
 	Messages []Message
 	Tools    []ToolSpec
+	// Metadata carries transport-only request context. It is not serialized
+	// into the provider request body.
+	Metadata map[string]string
 	// ToolChoice controls how the model selects tools. The empty string means
 	// the provider default (typically "auto"). Use "none" to let the model see
 	// tool schemas (so it knows parameter formats) while prohibiting tool calls.

@@ -79,6 +79,7 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 	req := llm.Request{
 		Model: request.Model, MaxTokens: request.MaxOutputTokens,
 		Thinking: request.ReasoningEffort, Temperature: request.Temperature,
+		Metadata: request.Metadata,
 	}
 	for _, message := range request.Messages {
 		req.Messages = append(req.Messages, toWireMessage(message))
