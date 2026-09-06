@@ -106,9 +106,9 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		},
 		Deps: agentruntime.Dependencies{
 			Model: exploreClient, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}, Lease: deps.Lease,
-			Transcript: PGTranscript{Pool: deps.Postgres},
-			Compactor:  agentruntime.ModelCompactor{Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer},
-			Artifacts:  artifacts, Environment: environment.Config{WorkspaceRoots: cfg.Security.WorkspaceRoots},
+			Transcript: PGTranscript{Pool: deps.Postgres}, Events: deps.Events,
+			Compactor: agentruntime.ModelCompactor{Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer},
+			Artifacts: artifacts, Environment: environment.Config{WorkspaceRoots: cfg.Security.WorkspaceRoots},
 		},
 		ParentCatalog: catalog,
 		AllowedTools:  delegation.DefaultHostedAllowedTools(),

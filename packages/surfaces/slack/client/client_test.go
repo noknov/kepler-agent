@@ -46,6 +46,26 @@ func TestPostMarkdownMessageUsesNativeMarkdownBlock(t *testing.T) {
 	}
 }
 
+func TestPostMessageAsUsesAppPersona(t *testing.T) {
+	var payload map[string]any
+	client := &Client{token: "xoxb-test", httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/api/chat.postMessage" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"ts":"123.456"}`)), Request: r}, nil
+	})}}
+	ts, err := client.PostMessageAs(context.Background(), "C1", "100.000", "candidate", slackconversation.Persona{Name: "Kepler · Security", IconEmoji: ":shield:"})
+	if err != nil || ts != "123.456" {
+		t.Fatalf("ts=%q err=%v", ts, err)
+	}
+	if payload["username"] != "Kepler · Security" || payload["icon_emoji"] != ":shield:" || payload["thread_ts"] != "100.000" {
+		t.Fatalf("payload=%#v", payload)
+	}
+}
+
 func TestPostMarkdownMessageFallsBackWhenMarkdownBlockIsUnsupported(t *testing.T) {
 	attempts := 0
 	client := &Client{token: "xoxb-test", httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {

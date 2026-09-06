@@ -196,3 +196,36 @@ func TestRunTaskCarriesWorkerContractAndAuditIdentity(t *testing.T) {
 		}
 	}
 }
+
+func TestRunTaskPublishesCanonicalPersonaLifecycleForOptedInWorkflow(t *testing.T) {
+	parent, err := tool.NewCatalog(echoReadTool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := transcript.NewMemoryStore()
+	var published []transcript.Event
+	runner := Runner{
+		Config: agentruntime.Config{Model: "test"},
+		Deps: agentruntime.Dependencies{
+			Model: scriptedExploreModel{text: "candidate"}, Transcript: store,
+			Events: transcript.SinkFunc(func(_ context.Context, event transcript.Event) { published = append(published, event) }),
+		},
+		ParentCatalog: parent,
+		AllowedTools:  DefaultLocalAllowedTools(),
+	}
+	_, err = runner.RunTask(context.Background(), TaskRequest{
+		Spec:   TaskSpec{Name: "auth", Role: "Security reviewer", Task: "check auth"},
+		Scope:  tool.Scope{Values: map[string]string{"delegation_presentation": "persona"}},
+		Parent: &agentruntime.ParentLink{SessionID: "parent", TurnID: "review", Kind: "agent_explore"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(published) != 2 || published[0].Type != transcript.DelegatedTaskStarted || published[1].Type != transcript.DelegatedTaskCompleted {
+		t.Fatalf("published=%+v", published)
+	}
+	events, err := store.Load(context.Background(), "parent", 0)
+	if err != nil || len(events) != 2 || events[1].Message == nil || events[1].Message.Text() != "candidate" {
+		t.Fatalf("events=%+v err=%v", events, err)
+	}
+}

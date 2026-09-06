@@ -19,6 +19,10 @@ const (
 // Lifecycle projects canonical turn completion into Slack's agent-session
 // lifecycle. It does not infer progress from tools or issue model requests.
 func (s *slackStream) Lifecycle(event transcript.Event) {
+	if event.Type == transcript.DelegatedTaskCompleted {
+		s.presentDelegatedResult(event)
+		return
+	}
 	if event.Type == transcript.PlanUpdated {
 		s.UpdatePlan(event.Plan)
 		return
@@ -35,6 +39,67 @@ func (s *slackStream) Lifecycle(event transcript.Event) {
 		s.setSessionStatus(sessionStatusForTermination(event.Status))
 	case transcript.TurnFailed, transcript.TurnCanceled:
 		s.setSessionStatus(sessionActive)
+	}
+}
+
+func (s *slackStream) presentDelegatedResult(event transcript.Event) {
+	if event.Message == nil {
+		return
+	}
+	var metadata struct {
+		ChildRun struct {
+			Name string `json:"name"`
+			Role string `json:"role"`
+		} `json:"child_run"`
+	}
+	if json.Unmarshal(event.Metadata, &metadata) != nil {
+		return
+	}
+	role := strings.TrimSpace(metadata.ChildRun.Role)
+	name := strings.TrimSpace(metadata.ChildRun.Name)
+	if role == "" {
+		role = "Review worker"
+	}
+	if name == "" {
+		name = role
+	}
+	text := strings.TrimSpace(event.Message.Text())
+	if text == "" {
+		return
+	}
+	const maxRunes = 2400
+	if runes := []rune(text); len(runes) > maxRunes {
+		text = string(runes[:maxRunes]) + "…"
+	}
+	message := "*Candidate report — awaiting Lead verification*\n" + text
+	persona := slackconversation.Persona{Name: "Kepler · " + name, IconEmoji: personaEmoji(role + " " + name)}
+	ctx, cancel := s.deliveryContext()
+	defer cancel()
+	s.deliveryMu.Lock()
+	defer s.deliveryMu.Unlock()
+	if messenger, ok := s.messenger.(slackconversation.AttributedMessenger); ok {
+		if _, err := messenger.PostMessageAs(ctx, s.req.Channel, s.req.ThreadTS, message, persona); err == nil {
+			return
+		} else {
+			log.Printf("slack reviewer persona unavailable turn=%s role=%s: %v", event.TurnID, role, err)
+		}
+	}
+	_, _ = s.messenger.PostMessage(ctx, s.req.Channel, s.req.ThreadTS, "*["+name+"] Candidate report — awaiting Lead verification*\n"+text)
+}
+
+func personaEmoji(identity string) string {
+	identity = strings.ToLower(identity)
+	switch {
+	case strings.Contains(identity, "verif"), strings.Contains(identity, "验证"):
+		return ":mag:"
+	case strings.Contains(identity, "secur"), strings.Contains(identity, "安全"):
+		return ":shield:"
+	case strings.Contains(identity, "test"), strings.Contains(identity, "测试"):
+		return ":test_tube:"
+	case strings.Contains(identity, "data"), strings.Contains(identity, "数据库"):
+		return ":floppy_disk:"
+	default:
+		return ":robot_face:"
 	}
 }
 

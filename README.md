@@ -53,7 +53,7 @@ for a detailed v1/v2 comparison and code-reading paths.
 | Local product | TTY and headless CLI, JSONL resume, steering/queue input routing, workspace tools, OS sandbox, approvals, skills, and configured MCP |
 | Integrations | Per-user OAuth connections for configured Slack, GitHub, ClickStack, Google Cloud, and Notion integrations; connection-required turns can resume after OAuth |
 | Delegation | `agent-explore`: bounded, read-only worker teams with explicit roles, deliverables, success criteria, separate transcripts, and parent audit links |
-| Code review | Dedicated Slack `/cr <GitHub PR URL> [fast\|deep]` workflow with risk-based parallel reviewers, an independent verification wave, and one evidence-backed report |
+| Code review | Natural-language Slack PR-review entry with risk-based parallel reviewers, an independent verification wave, persona updates, and one evidence-backed report |
 | Evaluation | Independent subprocess-based harnesses for this agent and other supported candidates through one model gateway |
 
 This is not a deployment distribution. Images, CLI binaries, PostgreSQL, Redis,
@@ -98,6 +98,9 @@ chat:write        assistant:write
 files:read
 ```
 
+Add the optional `chat:write.customize` scope to render Code Review workers
+with role-specific display names and emoji under the same Slack App identity.
+
 Subscribe to:
 
 ```text
@@ -111,17 +114,22 @@ storage, OAuth, streaming, and tool settings are in
 [configuration](docs/configuration.md).
 
 Start a dedicated multi-agent pull-request review from a DM, mention, or
-existing agent thread:
+existing agent thread. This is ordinary message routing and needs no registered
+Slack slash command:
 
 ```text
-/cr https://github.com/owner/repository/pull/123
-/cr https://github.com/owner/repository/pull/123 deep
+review PR https://github.com/owner/repository/pull/123
+deep review these PRs https://github.com/owner/api/pull/123 https://github.com/owner/web/pull/456
 ```
 
 The lead agent pins the PR head, decomposes the change by risk, runs isolated
 read-only reviewers concurrently, sends candidate findings through a separate
 verification wave, and publishes one consolidated Slack response. App Home
 advertises this prompt entry; no Slack slash-command registration is required.
+With the optional `chat:write.customize` Slack scope, each worker candidate is
+shown using a role-specific display name and emoji. These are presentation-only
+personas under the same App identity; the lead's final verified report remains
+the authoritative result.
 
 ### Web setup
 

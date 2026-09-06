@@ -95,10 +95,16 @@ workflows without model tool-call JSON. A task batch is bounded and
 cancellation-aware; each result includes its child session/turn, identity,
 termination, usage, and error as durable audit metadata.
 
-Slack prompts beginning with `/cr` select the Code Review product workflow.
+Slack prompts containing explicit review intent and one or more GitHub PR URLs
+select the Code Review product workflow; no registered slash command is used.
 The ordinary hosted agent becomes the coordinator and uses the same runtime to
 triage an immutable GitHub PR head, launch a bounded risk-based reviewer batch,
 run a distinct verification batch that attempts to disprove candidates, and
 synthesize one report. Slack renders coordinator-authored plan tasks as the
 team view. Worker streams and raw reports remain internal so multiple agent
-voices cannot bypass verification or create duplicate user-visible findings.
+voices cannot bypass verification or create duplicate authoritative findings.
+When the Slack installation grants `chat:write.customize`, completed workers
+also publish clearly marked candidate reports with role-specific display names
+and emoji. They remain the same Slack App principal and are explicitly labeled
+as awaiting Lead verification; a regular App message is the fallback when the
+scope is absent.

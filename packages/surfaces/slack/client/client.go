@@ -84,6 +84,31 @@ func (c *Client) PostMessage(ctx context.Context, channel, threadTS, text string
 	return c.PostChunkedMessage(ctx, channel, threadTS, text, "", MaxMessageTextRunes, nil)
 }
 
+// PostMessageAs customizes the app's display name and icon for one message.
+// Slack requires the chat:write.customize scope; this does not create a new
+// bot identity or permission principal.
+func (c *Client) PostMessageAs(ctx context.Context, channel, threadTS, text string, persona slackconversation.Persona) (string, error) {
+	payload := map[string]any{
+		"channel": channel, "text": text, "unfurl_links": false,
+		"username": strings.TrimSpace(persona.Name), "icon_emoji": strings.TrimSpace(persona.IconEmoji),
+	}
+	if threadTS != "" {
+		payload["thread_ts"] = threadTS
+	}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+		TS    string `json:"ts,omitempty"`
+	}
+	if err := c.postJSON(ctx, "chat.postMessage", payload, &out); err != nil {
+		return "", err
+	}
+	if !out.OK {
+		return "", slackAPIError{Method: "chat.postMessage", Code: out.Error}
+	}
+	return out.TS, nil
+}
+
 func (c *Client) PostMessageBlocks(ctx context.Context, channel, threadTS, text string, blocks []map[string]any) (string, error) {
 	return c.postMessage(ctx, channel, threadTS, text, blocks, "")
 }

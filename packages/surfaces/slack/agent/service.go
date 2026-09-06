@@ -307,7 +307,8 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 		{ID: "user-rules", Layer: prompt.LayerUser, Content: userprefs.RulesPrompt(runCtx, s.UserPrefs, req.UserID)},
 		{ID: "user-skills", Layer: prompt.LayerSkill, Content: userprefs.SkillsMetadataPrompt(runCtx, s.UserPrefs, req.UserID)},
 	}
-	if command, ok := codereview.Parse(req.Text); ok {
+	command, reviewMode := codereview.Parse(req.Text)
+	if reviewMode {
 		fragments = append(fragments, codereview.Fragment(command))
 	}
 	var history []model.Message
@@ -342,7 +343,12 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 	if s.WebSearchEnabled != nil && !s.WebSearchEnabled(req.UserID) {
 		webSearch = "disabled"
 	}
-	result, err := s.Agent.Run(runCtx, hosted.Request{SessionID: sessionID, TurnID: turnID, UserID: req.UserID, Workspace: s.Workspace, Input: input, History: history, Model: modelName, Steering: active.steering, Prompt: fragments, ScopeValues: map[string]string{"surface": "slack", "channel": req.Channel, "thread_ts": req.ThreadTS, "message_ts": req.MessageTS, "web_search": webSearch}})
+	scopeValues := map[string]string{"surface": "slack", "channel": req.Channel, "thread_ts": req.ThreadTS, "message_ts": req.MessageTS, "web_search": webSearch}
+	if reviewMode {
+		scopeValues["workflow"] = "code_review"
+		scopeValues["delegation_presentation"] = "persona"
+	}
+	result, err := s.Agent.Run(runCtx, hosted.Request{SessionID: sessionID, TurnID: turnID, UserID: req.UserID, Workspace: s.Workspace, Input: input, History: history, Model: modelName, Steering: active.steering, Prompt: fragments, ScopeValues: scopeValues})
 	finalizeCtx, finalizeCancel := context.WithTimeout(context.WithoutCancel(runCtx), 20*time.Second)
 	defer finalizeCancel()
 	if err != nil {

@@ -33,6 +33,18 @@ type fakeMessenger struct {
 	statuses []string
 }
 
+type personaMessenger struct {
+	fakeMessenger
+	personas     []slackconversation.Persona
+	personaTexts []string
+}
+
+func (m *personaMessenger) PostMessageAs(_ context.Context, _, _, text string, persona slackconversation.Persona) (string, error) {
+	m.personas = append(m.personas, persona)
+	m.personaTexts = append(m.personaTexts, text)
+	return "persona-post", nil
+}
+
 type memoryInputs struct {
 	mu      sync.Mutex
 	items   []sessioninput.Item
@@ -175,7 +187,7 @@ func TestServiceRoutesExplicitCodeReviewPromptToDedicatedWorkflow(t *testing.T) 
 	service.Agent.Runtime = runner
 	_, err = service.HandleMention(context.Background(), slackconversation.Request{
 		EventID: "review-1", UserID: "U1", Channel: "C1", ThreadTS: "T1",
-		Text: "/cr https://github.com/acme/widgets/pull/42 deep",
+		Text: "please review PR https://github.com/acme/widgets/pull/42 deep",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -225,6 +237,20 @@ func TestStreamProjectsRuntimeTerminalStateToSession(t *testing.T) {
 	stream.Lifecycle(transcript.Event{Type: transcript.TurnCompleted})
 	if got := messenger.statuses; len(got) != 2 || got[1] != sessionActive {
 		t.Fatalf("statuses=%#v", got)
+	}
+}
+
+func TestStreamPresentsDelegatedReviewAsPersonaCandidate(t *testing.T) {
+	messenger := &personaMessenger{}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T", Text: "review PR"})
+	metadata := json.RawMessage(`{"child_run":{"name":"auth-boundary","role":"Security reviewer"}}`)
+	message := model.TextMessage(model.RoleAssistant, "possible authorization bypass")
+	stream.Lifecycle(transcript.Event{TurnID: "review", Type: transcript.DelegatedTaskCompleted, Message: &message, Metadata: metadata})
+	if len(messenger.personas) != 1 || messenger.personas[0].Name != "Kepler · auth-boundary" || messenger.personas[0].IconEmoji != ":shield:" {
+		t.Fatalf("personas=%+v", messenger.personas)
+	}
+	if len(messenger.personaTexts) != 1 || !strings.Contains(messenger.personaTexts[0], "awaiting Lead verification") {
+		t.Fatalf("texts=%+v", messenger.personaTexts)
 	}
 }
 

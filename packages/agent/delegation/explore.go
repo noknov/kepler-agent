@@ -297,6 +297,7 @@ func (r Runner) RunTask(ctx context.Context, request TaskRequest) (TaskResult, e
 	if deps.Transcript == nil {
 		deps.Transcript = transcript.NewMemoryStore()
 	}
+	parentEvents := deps.Events
 	// Child events are durable in their own transcript. Do not publish them to
 	// a parent presentation sink, which could leak sub-agent stream deltas into
 	// the user's turn or incorrectly charge them to the parent run projection.
@@ -307,6 +308,8 @@ func (r Runner) RunTask(ctx context.Context, request TaskRequest) (TaskResult, e
 	}
 	sessionID := deps.IDs.New("explore")
 	turnID := deps.IDs.New("turn")
+	audit := ChildRun{SessionID: sessionID, TurnID: turnID, Name: job.Name, Role: job.Role, Task: job.Task}
+	r.publishTaskEvent(ctx, parentEvents, request, transcript.DelegatedTaskStarted, audit, nil)
 	input := taskInput(job)
 	scope := tool.Scope{
 		SessionID: sessionID,
@@ -328,18 +331,43 @@ func (r Runner) RunTask(ctx context.Context, request TaskRequest) (TaskResult, e
 		Model:     r.Config.Model,
 		Parent:    request.Parent,
 	})
-	audit := ChildRun{SessionID: sessionID, TurnID: turnID, Name: job.Name, Role: job.Role, Task: job.Task, Termination: result.Termination, Usage: result.Usage}
+	audit.Termination = result.Termination
+	audit.Usage = result.Usage
 	if err != nil {
 		audit.Error = err.Error()
+		r.publishTaskEvent(ctx, parentEvents, request, transcript.DelegatedTaskFailed, audit, nil)
 		return TaskResult{Audit: audit}, err
 	}
 	text := strings.TrimSpace(result.Message.Text())
 	if text == "" {
 		err := fmt.Errorf("exploration sub-agent returned an empty report")
 		audit.Error = err.Error()
+		r.publishTaskEvent(ctx, parentEvents, request, transcript.DelegatedTaskFailed, audit, nil)
 		return TaskResult{Audit: audit}, err
 	}
+	r.publishTaskEvent(ctx, parentEvents, request, transcript.DelegatedTaskCompleted, audit, &result.Message)
 	return TaskResult{Message: result.Message, Audit: audit}, nil
+}
+
+func (r Runner) publishTaskEvent(ctx context.Context, sink transcript.Sink, request TaskRequest, eventType transcript.EventType, audit ChildRun, message *model.Message) {
+	if request.Parent == nil || request.Scope.Values["delegation_presentation"] != "persona" || r.Deps.Transcript == nil {
+		return
+	}
+	metadata, err := json.Marshal(map[string]any{"child_run": audit})
+	if err != nil {
+		return
+	}
+	ids := r.Deps.IDs
+	if ids == nil {
+		ids = agentruntime.RandomIDs{}
+	}
+	event, err := r.Deps.Transcript.Append(ctx, transcript.Event{
+		ID: ids.New("event"), SessionID: request.Parent.SessionID, TurnID: request.Parent.TurnID,
+		Type: eventType, Timestamp: time.Now().UTC(), Message: message, Metadata: metadata,
+	})
+	if err == nil && sink != nil {
+		sink.Publish(ctx, event)
+	}
 }
 
 func taskInput(job TaskSpec) string {

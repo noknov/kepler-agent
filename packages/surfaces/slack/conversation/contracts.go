@@ -48,6 +48,17 @@ type Messenger interface {
 	PostMarkdownMessage(ctx context.Context, channel, threadTS, markdown string) (string, error)
 }
 
+// Persona identifies a presentation-only worker identity. All personas still
+// use the same Slack App token and authorization boundary.
+type Persona struct {
+	Name      string
+	IconEmoji string
+}
+
+type AttributedMessenger interface {
+	PostMessageAs(ctx context.Context, channel, threadTS, text string, persona Persona) (string, error)
+}
+
 // ApprovalMessenger presents a user-confirmation control for an irreversible
 // or externally visible tool call.
 type ApprovalMessenger interface {
