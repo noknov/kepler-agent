@@ -21,10 +21,26 @@ func (echoReadTool) Execute(_ context.Context, _ tool.Call) (tool.Result, error)
 	return tool.TextResult("found evidence"), nil
 }
 
+type deferredReadTool struct{}
+
+func (deferredReadTool) Descriptor() tool.Descriptor {
+	return tool.Descriptor{Name: "deferred-read", InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []tool.Effect{tool.EffectRead}, Exposure: tool.ExposureDeferred}
+}
+func (deferredReadTool) Execute(_ context.Context, _ tool.Call) (tool.Result, error) {
+	return tool.TextResult("deferred evidence"), nil
+}
+
 type scriptedExploreModel struct{ text string }
 
 func (m scriptedExploreModel) Generate(_ context.Context, _ model.Request, _ model.EventSink) (model.Response, error) {
 	return model.Response{Message: model.TextMessage(model.RoleAssistant, m.text), FinishReason: model.FinishStop}, nil
+}
+
+type capturingExploreModel struct{ request *model.Request }
+
+func (m *capturingExploreModel) Generate(_ context.Context, request model.Request, _ model.EventSink) (model.Response, error) {
+	m.request = &request
+	return model.Response{Message: model.TextMessage(model.RoleAssistant, "structured report"), FinishReason: model.FinishStop}, nil
 }
 
 type failingExploreModel struct{}
@@ -107,5 +123,76 @@ func TestExploreToolPreservesChildAuditWhenJobFails(t *testing.T) {
 	events, err := store.Load(context.Background(), children[0].SessionID, 0)
 	if err != nil || len(events) == 0 {
 		t.Fatalf("events=%#v err=%v", events, err)
+	}
+}
+
+func TestSubsetCatalogPromotesAllowedDeferredTool(t *testing.T) {
+	parent, err := tool.NewCatalog(deferredReadTool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := Runner{ParentCatalog: parent, AllowedTools: map[string]bool{"deferred-read": true}}
+	catalog, err := runner.subsetCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := catalog.GetActive("child-session", "deferred-read"); !ok {
+		t.Fatal("allowed deferred tool is not active in child catalog")
+	}
+}
+
+func TestExploreToolRejectsTooManyJobs(t *testing.T) {
+	parent, err := tool.NewCatalog(echoReadTool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	explore := ExploreTool{Runner: Runner{
+		Config:        agentruntime.Config{Model: "test"},
+		Deps:          agentruntime.Dependencies{Model: scriptedExploreModel{text: "report"}},
+		ParentCatalog: parent,
+		AllowedTools:  DefaultLocalAllowedTools(),
+		MaxJobs:       1,
+	}}
+	_, err = explore.Execute(context.Background(), tool.Call{Arguments: json.RawMessage(`{"tasks":[{"task":"one"},{"task":"two"}]}`)})
+	if err == nil || !strings.Contains(err.Error(), "too many exploration jobs") {
+		t.Fatalf("expected job limit error, got %v", err)
+	}
+}
+
+func TestRunTaskCarriesWorkerContractAndAuditIdentity(t *testing.T) {
+	parent, err := tool.NewCatalog(echoReadTool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &capturingExploreModel{}
+	runner := Runner{
+		Config:        agentruntime.Config{Model: "test"},
+		Deps:          agentruntime.Dependencies{Model: client, Transcript: transcript.NewMemoryStore()},
+		ParentCatalog: parent,
+		AllowedTools:  DefaultLocalAllowedTools(),
+	}
+	result, err := runner.RunTask(context.Background(), TaskRequest{
+		Spec: TaskSpec{
+			Name: "auth-boundary", Role: "Security reviewer", Task: "Review authentication changes",
+			Boundaries: "Only changed request paths", Deliverable: "JSON findings",
+			SuccessCriteria: []string{"Cite path and line", "Return no finding without evidence"},
+		},
+		Scope:  tool.Scope{UserID: "U1", Workspace: "/repo"},
+		Parent: &agentruntime.ParentLink{SessionID: "parent", TurnID: "turn", Kind: "workflow"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Audit.Name != "auth-boundary" || result.Audit.Role != "Security reviewer" || result.Message.Text() != "structured report" {
+		t.Fatalf("result=%+v", result)
+	}
+	if client.request == nil || len(client.request.Messages) < 2 {
+		t.Fatalf("model request=%+v", client.request)
+	}
+	input := client.request.Messages[len(client.request.Messages)-1].Text()
+	for _, want := range []string{"Assigned role:\nSecurity reviewer", "Required deliverable:\nJSON findings", "- Cite path and line"} {
+		if !strings.Contains(input, want) {
+			t.Fatalf("worker input missing %q: %s", want, input)
+		}
 	}
 }

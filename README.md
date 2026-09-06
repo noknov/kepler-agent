@@ -52,7 +52,8 @@ for a detailed v1/v2 comparison and code-reading paths.
 | Hosted Web | Slack OIDC access, isolated browser sessions and conversations, SSE streaming, approval controls, and configurable branding |
 | Local product | TTY and headless CLI, JSONL resume, steering/queue input routing, workspace tools, OS sandbox, approvals, skills, and configured MCP |
 | Integrations | Per-user OAuth connections for configured Slack, GitHub, ClickStack, Google Cloud, and Notion integrations; connection-required turns can resume after OAuth |
-| Delegation | `agent-explore`: bounded, read-only child turns with separate transcripts and parent audit links |
+| Delegation | `agent-explore`: bounded, read-only worker teams with explicit roles, deliverables, success criteria, separate transcripts, and parent audit links |
+| Code review | Dedicated Slack `/cr <GitHub PR URL> [fast\|deep]` workflow with risk-based parallel reviewers, an independent verification wave, and one evidence-backed report |
 | Evaluation | Independent subprocess-based harnesses for this agent and other supported candidates through one model gateway |
 
 This is not a deployment distribution. Images, CLI binaries, PostgreSQL, Redis,
@@ -108,6 +109,19 @@ Use `agent_view` for Slack's Agent experience. Restrict access with
 `ALLOWED_SLACK_USERS` and, when needed, `ALLOWED_SLACK_CHANNELS`. Provider,
 storage, OAuth, streaming, and tool settings are in
 [configuration](docs/configuration.md).
+
+Start a dedicated multi-agent pull-request review from a DM, mention, or
+existing agent thread:
+
+```text
+/cr https://github.com/owner/repository/pull/123
+/cr https://github.com/owner/repository/pull/123 deep
+```
+
+The lead agent pins the PR head, decomposes the change by risk, runs isolated
+read-only reviewers concurrently, sends candidate findings through a separate
+verification wave, and publishes one consolidated Slack response. App Home
+advertises this prompt entry; no Slack slash-command registration is required.
 
 ### Web setup
 

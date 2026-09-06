@@ -18,6 +18,7 @@ import (
 const (
 	defaultExploreMaxSteps   = 12
 	defaultExploreMaxWorkers = 3
+	defaultExploreMaxJobs    = 8
 )
 
 const exploreSystemPrompt = `You are a read-only exploration sub-agent. Investigate the assigned task using only the provided tools. Do not mutate state, send messages, or request user input. When independent reads or searches do not depend on each other, emit them in the same step (or pass multiple paths in one read) so they can run concurrently. Return a concise factual report with file paths, symbols, and evidence. Stop when you have enough to answer the task.`
@@ -30,13 +31,37 @@ type Runner struct {
 	AllowedTools  map[string]bool
 	MaxSteps      int
 	MaxWorkers    int
+	MaxJobs       int
 	Timeout       time.Duration
 	SystemPrompt  string
 }
 
-type exploreJob struct {
-	Task       string `json:"task"`
-	Boundaries string `json:"boundaries"`
+// TaskSpec is the transport-neutral contract for one isolated agent worker.
+// It deliberately describes the work instead of a named model or surface so
+// workflows can reuse the same delegation infrastructure.
+type TaskSpec struct {
+	Name            string   `json:"name,omitempty"`
+	Role            string   `json:"role,omitempty"`
+	Task            string   `json:"task"`
+	Boundaries      string   `json:"boundaries,omitempty"`
+	Deliverable     string   `json:"deliverable,omitempty"`
+	SuccessCriteria []string `json:"success_criteria,omitempty"`
+}
+
+// TaskRequest executes a worker outside the tool adapter. Product workflows
+// can therefore compose the same child-agent primitive without depending on
+// model-authored tool-call JSON.
+type TaskRequest struct {
+	Spec         TaskSpec
+	Scope        tool.Scope
+	Parent       *agentruntime.ParentLink
+	SystemPrompt string
+}
+
+// TaskResult contains the compressed worker answer and its durable audit link.
+type TaskResult struct {
+	Message model.Message
+	Audit   ChildRun
 }
 
 // ChildRun is durable audit metadata for one isolated exploration turn. Its
@@ -45,6 +70,8 @@ type exploreJob struct {
 type ChildRun struct {
 	SessionID   string                         `json:"session_id"`
 	TurnID      string                         `json:"turn_id"`
+	Name        string                         `json:"name,omitempty"`
+	Role        string                         `json:"role,omitempty"`
 	Task        string                         `json:"task"`
 	Termination agentruntime.TerminationReason `json:"termination,omitempty"`
 	Usage       model.Usage                    `json:"usage"`
@@ -64,20 +91,36 @@ type ExploreTool struct {
 func (t ExploreTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
 		"agent-explore",
-		"Run one or more read-only exploration sub-agents. Use tasks for independent investigation directions that can run in parallel.",
+		"Run one or more isolated read-only worker agents. Use one tasks batch for independent directions that can run concurrently; give each worker a distinct role, scope, deliverable, and success criteria.",
 		tool.ObjectSchema(nil, map[string]any{
+			"name": map[string]any{"type": "string", "description": "Short stable worker name."},
+			"role": map[string]any{"type": "string", "description": "Worker responsibility, distinct from its objective."},
 			"task": map[string]any{"type": "string", "description": "Single exploration task."},
 			"boundaries": map[string]any{
 				"type":        "string",
 				"description": "Optional scope or constraints for a single task.",
 			},
+			"deliverable": map[string]any{"type": "string", "description": "Required structured or textual output."},
+			"success_criteria": map[string]any{
+				"type": "array", "items": map[string]any{"type": "string"},
+				"description": "Observable conditions the worker must satisfy before returning.",
+			},
 			"tasks": map[string]any{
-				"type": "array",
+				"type":     "array",
+				"maxItems": t.Runner.maxJobs(),
 				"items": tool.ObjectSchema([]string{"task"}, map[string]any{
+					"name":       map[string]any{"type": "string"},
+					"role":       map[string]any{"type": "string"},
 					"task":       map[string]any{"type": "string"},
 					"boundaries": map[string]any{"type": "string"},
+					"deliverable": map[string]any{
+						"type": "string",
+					},
+					"success_criteria": map[string]any{
+						"type": "array", "items": map[string]any{"type": "string"},
+					},
 				}),
-				"description": "Independent exploration jobs to run concurrently.",
+				"description": "Independent worker assignments to run concurrently.",
 			},
 		}),
 		tool.WithEffects(tool.EffectRead),
@@ -95,16 +138,23 @@ func (r Runner) timeout() time.Duration {
 
 func (t ExploreTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
-		Task       string       `json:"task"`
-		Boundaries string       `json:"boundaries"`
-		Tasks      []exploreJob `json:"tasks"`
+		Name            string     `json:"name"`
+		Role            string     `json:"role"`
+		Task            string     `json:"task"`
+		Boundaries      string     `json:"boundaries"`
+		Deliverable     string     `json:"deliverable"`
+		SuccessCriteria []string   `json:"success_criteria"`
+		Tasks           []TaskSpec `json:"tasks"`
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
 	}
-	jobs := normalizeJobs(args.Task, args.Boundaries, args.Tasks)
+	jobs := normalizeJobs(TaskSpec{Name: args.Name, Role: args.Role, Task: args.Task, Boundaries: args.Boundaries, Deliverable: args.Deliverable, SuccessCriteria: args.SuccessCriteria}, args.Tasks)
 	if len(jobs) == 0 {
 		return tool.Result{}, fmt.Errorf("task or tasks is required")
+	}
+	if len(jobs) > t.Runner.maxJobs() {
+		return tool.Result{}, fmt.Errorf("too many exploration jobs: got %d, maximum is %d", len(jobs), t.Runner.maxJobs())
 	}
 	if len(jobs) == 1 {
 		out, err := t.Runner.runJob(ctx, call, jobs[0])
@@ -129,14 +179,13 @@ func (t ExploreTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	return result, nil
 }
 
-func normalizeJobs(task, boundaries string, tasks []exploreJob) []exploreJob {
-	var jobs []exploreJob
-	if task = strings.TrimSpace(task); task != "" {
-		jobs = append(jobs, exploreJob{Task: task, Boundaries: strings.TrimSpace(boundaries)})
+func normalizeJobs(single TaskSpec, tasks []TaskSpec) []TaskSpec {
+	var jobs []TaskSpec
+	if single.Task = strings.TrimSpace(single.Task); single.Task != "" {
+		jobs = append(jobs, normalizeTask(single))
 	}
 	for _, job := range tasks {
-		job.Task = strings.TrimSpace(job.Task)
-		job.Boundaries = strings.TrimSpace(job.Boundaries)
+		job = normalizeTask(job)
 		if job.Task == "" {
 			continue
 		}
@@ -145,7 +194,23 @@ func normalizeJobs(task, boundaries string, tasks []exploreJob) []exploreJob {
 	return jobs
 }
 
-func (r Runner) runMany(ctx context.Context, parentCall tool.Call, jobs []exploreJob) (string, []ChildRun, error) {
+func normalizeTask(job TaskSpec) TaskSpec {
+	job.Name = strings.TrimSpace(job.Name)
+	job.Role = strings.TrimSpace(job.Role)
+	job.Task = strings.TrimSpace(job.Task)
+	job.Boundaries = strings.TrimSpace(job.Boundaries)
+	job.Deliverable = strings.TrimSpace(job.Deliverable)
+	criteria := make([]string, 0, len(job.SuccessCriteria))
+	for _, criterion := range job.SuccessCriteria {
+		if criterion = strings.TrimSpace(criterion); criterion != "" {
+			criteria = append(criteria, criterion)
+		}
+	}
+	job.SuccessCriteria = criteria
+	return job
+}
+
+func (r Runner) runMany(ctx context.Context, parentCall tool.Call, jobs []TaskSpec) (string, []ChildRun, error) {
 	workers := r.maxWorkers()
 	sem := make(chan struct{}, workers)
 	reports := make([]childReport, len(jobs))
@@ -153,9 +218,16 @@ func (r Runner) runMany(ctx context.Context, parentCall tool.Call, jobs []explor
 	var wg sync.WaitGroup
 	for index, job := range jobs {
 		wg.Add(1)
-		go func(i int, job exploreJob) {
+		go func(i int, job TaskSpec) {
 			defer wg.Done()
-			sem <- struct{}{}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				err := ctx.Err()
+				errs[i] = err
+				reports[i].Audit = ChildRun{Task: job.Task, Error: err.Error()}
+				return
+			}
 			defer func() { <-sem }()
 			out, err := r.runJob(ctx, parentCall, job)
 			reports[i] = out
@@ -167,23 +239,55 @@ func (r Runner) runMany(ctx context.Context, parentCall tool.Call, jobs []explor
 	audits := make([]ChildRun, 0, len(jobs))
 	for index, job := range jobs {
 		if errs[index] != nil {
-			parts = append(parts, fmt.Sprintf("## Task %d\n%s\n\nError: %v", index+1, job.Task, errs[index]))
+			parts = append(parts, fmt.Sprintf("## %s\n%s\n\nError: %v", taskLabel(index, job), job.Task, errs[index]))
 			audits = append(audits, reports[index].Audit)
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("## Task %d\n%s\n\n%s", index+1, job.Task, reports[index].Text))
+		parts = append(parts, fmt.Sprintf("## %s\n%s\n\n%s", taskLabel(index, job), job.Task, reports[index].Text))
 		audits = append(audits, reports[index].Audit)
 	}
 	return strings.Join(parts, "\n\n"), audits, nil
 }
 
-func (r Runner) runJob(ctx context.Context, parentCall tool.Call, job exploreJob) (childReport, error) {
+func taskLabel(index int, job TaskSpec) string {
+	if job.Name != "" && job.Role != "" {
+		return job.Name + " · " + job.Role
+	}
+	if job.Name != "" {
+		return job.Name
+	}
+	if job.Role != "" {
+		return job.Role
+	}
+	return fmt.Sprintf("Task %d", index+1)
+}
+
+func (r Runner) runJob(ctx context.Context, parentCall tool.Call, job TaskSpec) (childReport, error) {
+	result, err := r.RunTask(ctx, TaskRequest{
+		Spec:  job,
+		Scope: parentCall.Scope,
+		Parent: &agentruntime.ParentLink{
+			SessionID:  parentCall.Scope.SessionID,
+			TurnID:     parentCall.Scope.TurnID,
+			ToolCallID: parentCall.ID,
+			Kind:       "agent_explore",
+		},
+	})
+	return childReport{Text: strings.TrimSpace(result.Message.Text()), Audit: result.Audit}, err
+}
+
+// RunTask runs one isolated child agent through the shared Kepler runtime.
+func (r Runner) RunTask(ctx context.Context, request TaskRequest) (TaskResult, error) {
+	job := normalizeTask(request.Spec)
+	if job.Task == "" {
+		return TaskResult{}, fmt.Errorf("task is required")
+	}
 	catalog, err := r.subsetCatalog()
 	if err != nil {
-		return childReport{}, err
+		return TaskResult{}, err
 	}
 	if catalog == nil {
-		return childReport{}, fmt.Errorf("no read-only exploration tools are available")
+		return TaskResult{}, fmt.Errorf("no read-only exploration tools are available")
 	}
 	deps := r.Deps
 	if deps.IDs == nil {
@@ -199,42 +303,69 @@ func (r Runner) runJob(ctx context.Context, parentCall tool.Call, job exploreJob
 	deps.Events = nil
 	subRuntime, err := agentruntime.New(r.exploreConfig(), deps)
 	if err != nil {
-		return childReport{}, err
+		return TaskResult{}, err
 	}
 	sessionID := deps.IDs.New("explore")
 	turnID := deps.IDs.New("turn")
-	input := "Investigation task:\n" + job.Task
-	if job.Boundaries != "" {
-		input += "\n\nBoundaries:\n" + job.Boundaries
-	}
+	input := taskInput(job)
 	scope := tool.Scope{
 		SessionID: sessionID,
 		TurnID:    turnID,
-		UserID:    parentCall.Scope.UserID,
-		Workspace: parentCall.Scope.Workspace,
-		Values:    parentCall.Scope.Values,
+		UserID:    request.Scope.UserID,
+		Workspace: request.Scope.Workspace,
+		Values:    request.Scope.Values,
+	}
+	systemPrompt := r.systemPrompt()
+	if strings.TrimSpace(request.SystemPrompt) != "" {
+		systemPrompt = strings.TrimSpace(request.SystemPrompt)
 	}
 	result, err := subRuntime.RunTurn(ctx, agentruntime.TurnRequest{
 		SessionID: sessionID,
 		TurnID:    turnID,
 		Input:     model.TextMessage(model.RoleUser, input),
-		Prompt:    []prompt.Fragment{{ID: "explore-subagent", Layer: prompt.LayerCore, Content: r.systemPrompt()}},
+		Prompt:    []prompt.Fragment{{ID: "delegated-worker", Layer: prompt.LayerCore, Content: systemPrompt}},
 		Scope:     scope,
 		Model:     r.Config.Model,
-		Parent:    &agentruntime.ParentLink{SessionID: parentCall.Scope.SessionID, TurnID: parentCall.Scope.TurnID, ToolCallID: parentCall.ID, Kind: "agent_explore"},
+		Parent:    request.Parent,
 	})
-	audit := ChildRun{SessionID: sessionID, TurnID: turnID, Task: job.Task, Termination: result.Termination, Usage: result.Usage}
+	audit := ChildRun{SessionID: sessionID, TurnID: turnID, Name: job.Name, Role: job.Role, Task: job.Task, Termination: result.Termination, Usage: result.Usage}
 	if err != nil {
 		audit.Error = err.Error()
-		return childReport{Audit: audit}, err
+		return TaskResult{Audit: audit}, err
 	}
 	text := strings.TrimSpace(result.Message.Text())
 	if text == "" {
 		err := fmt.Errorf("exploration sub-agent returned an empty report")
 		audit.Error = err.Error()
-		return childReport{Audit: audit}, err
+		return TaskResult{Audit: audit}, err
 	}
-	return childReport{Text: text, Audit: audit}, nil
+	return TaskResult{Message: result.Message, Audit: audit}, nil
+}
+
+func taskInput(job TaskSpec) string {
+	var input strings.Builder
+	input.WriteString("Investigation task:\n")
+	input.WriteString(job.Task)
+	if job.Role != "" {
+		input.WriteString("\n\nAssigned role:\n")
+		input.WriteString(job.Role)
+	}
+	if job.Boundaries != "" {
+		input.WriteString("\n\nBoundaries:\n")
+		input.WriteString(job.Boundaries)
+	}
+	if job.Deliverable != "" {
+		input.WriteString("\n\nRequired deliverable:\n")
+		input.WriteString(job.Deliverable)
+	}
+	if len(job.SuccessCriteria) > 0 {
+		input.WriteString("\n\nSuccess criteria:")
+		for _, criterion := range job.SuccessCriteria {
+			input.WriteString("\n- ")
+			input.WriteString(criterion)
+		}
+	}
+	return input.String()
 }
 
 func (r Runner) subsetCatalog() (*tool.Catalog, error) {
@@ -260,6 +391,10 @@ func (r Runner) subsetCatalog() (*tool.Catalog, error) {
 		if !isReadOnly(item.Descriptor()) {
 			continue
 		}
+		// This catalog is already an explicit, read-only capability subset.
+		// Promote selected deferred tools because the isolated child runtime does
+		// not carry the parent's tool-search activation state.
+		item = tool.Annotate(item, tool.Descriptor{Exposure: tool.ExposureEager})
 		if err := catalog.Register(item); err != nil {
 			return nil, err
 		}
@@ -297,6 +432,13 @@ func (r Runner) maxWorkers() int {
 	return defaultExploreMaxWorkers
 }
 
+func (r Runner) maxJobs() int {
+	if r.MaxJobs > 0 {
+		return r.MaxJobs
+	}
+	return defaultExploreMaxJobs
+}
+
 func (r Runner) systemPrompt() string {
 	if strings.TrimSpace(r.SystemPrompt) != "" {
 		return r.SystemPrompt
@@ -311,6 +453,7 @@ func DefaultHostedAllowedTools() map[string]bool {
 		"repo-search": true, "repo-read_file": true,
 		"git-search_ref": true, "git-read_file_ref": true,
 		"web-search": true, "web-read_page": true,
+		"github-pr_diff": true, "github-pr_file_diff": true,
 	}
 }
 

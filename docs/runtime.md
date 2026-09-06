@@ -87,3 +87,18 @@ its own transcript, and returns a factual report to the parent. Child stream
 events are not sent to the parent Slack presentation sink. Read-only and
 network tools default to `Parallel` so a step with multiple independent calls
 runs concurrently; mutating tools stay sequential unless marked otherwise.
+
+Delegated work uses a transport-neutral task contract: a stable worker name,
+role, objective, boundaries, required deliverable, and observable success
+criteria. `delegation.Runner.RunTask` exposes the same primitive to product
+workflows without model tool-call JSON. A task batch is bounded and
+cancellation-aware; each result includes its child session/turn, identity,
+termination, usage, and error as durable audit metadata.
+
+Slack prompts beginning with `/cr` select the Code Review product workflow.
+The ordinary hosted agent becomes the coordinator and uses the same runtime to
+triage an immutable GitHub PR head, launch a bounded risk-based reviewer batch,
+run a distinct verification batch that attempts to disprove candidates, and
+synthesize one report. Slack renders coordinator-authored plan tasks as the
+team view. Worker streams and raw reports remain internal so multiple agent
+voices cannot bypass verification or create duplicate user-visible findings.

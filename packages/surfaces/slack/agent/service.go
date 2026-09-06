@@ -25,6 +25,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/sessioninput"
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 	"github.com/noknov/kepler-agent/packages/userprefs"
+	"github.com/noknov/kepler-agent/packages/workflows/codereview"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -305,6 +306,9 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 		{ID: "slack-output-format", Version: "1", Layer: prompt.LayerProduct, Content: slackOutputFormatPrompt},
 		{ID: "user-rules", Layer: prompt.LayerUser, Content: userprefs.RulesPrompt(runCtx, s.UserPrefs, req.UserID)},
 		{ID: "user-skills", Layer: prompt.LayerSkill, Content: userprefs.SkillsMetadataPrompt(runCtx, s.UserPrefs, req.UserID)},
+	}
+	if command, ok := codereview.Parse(req.Text); ok {
+		fragments = append(fragments, codereview.Fragment(command))
 	}
 	var history []model.Message
 	if s.ThreadLoader != nil {

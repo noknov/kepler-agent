@@ -160,6 +160,37 @@ func TestServiceRunsHostedHarnessAndPostsFormattedAnswer(t *testing.T) {
 	}
 }
 
+func TestServiceRoutesExplicitCodeReviewPromptToDedicatedWorkflow(t *testing.T) {
+	catalog, err := tool.NewCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	messenger := &fakeMessenger{}
+	service := New(hosted.Agent{}, messenger, safety.PromptPolicy{}, safety.Redactor{}, nil)
+	client := &replyModel{}
+	runner, err := agentruntime.New(agentruntime.Config{Model: "test"}, agentruntime.Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore(), Events: service.EventSink()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.Agent.Runtime = runner
+	_, err = service.HandleMention(context.Background(), slackconversation.Request{
+		EventID: "review-1", UserID: "U1", Channel: "C1", ThreadTS: "T1",
+		Text: "/cr https://github.com/acme/widgets/pull/42 deep",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.request == nil || len(client.request.Messages) == 0 {
+		t.Fatal("model did not receive request")
+	}
+	system := client.request.Messages[0].Text()
+	for _, want := range []string{"dedicated multi-agent pull-request review workflow", "verification wave", "Requested review mode: deep"} {
+		if !strings.Contains(system, want) {
+			t.Fatalf("review system prompt missing %q", want)
+		}
+	}
+}
+
 func TestHandleReplyOnlyConsumesPendingInputFromItsOwner(t *testing.T) {
 	catalog, _ := tool.NewCatalog()
 	store := transcript.NewMemoryStore()
