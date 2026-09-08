@@ -333,7 +333,7 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 	}
 	if workflowMode {
 		fragments = append(fragments, activation.Prompt)
-		stream.SetExposeWorkerResults(activation.ExposeWorkerResults)
+		stream.SetOutputPolicy(activation.OutputPolicy)
 	}
 	var history []model.Message
 	if s.ThreadLoader != nil {
@@ -386,16 +386,6 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 	result, err := s.Agent.Run(runCtx, hosted.Request{SessionID: sessionID, TurnID: turnID, UserID: req.UserID, Workspace: s.Workspace, Input: input, History: history, Model: modelName, Steering: active.steering, Prompt: fragments, ScopeValues: scopeValues})
 	finalizeCtx, finalizeCancel := context.WithTimeout(context.WithoutCancel(runCtx), 20*time.Second)
 	defer finalizeCancel()
-	if workflowMode && activation.ExposeWorkerResults {
-		// Worker messages are a rebuildable Slack projection. Replay canonical
-		// delegated results once before the terminal response so a missed live
-		// event or a transient delivery failure cannot silently hide them.
-		if events, replayErr := s.Agent.Runtime.SessionEvents(finalizeCtx, sessionID); replayErr != nil {
-			log.Printf("slack reviewer replay unavailable turn=%s error_code=%s error_type=%T", turnID, safeSlackErrorCode(replayErr), replayErr)
-		} else {
-			stream.ReplayDelegatedResults(turnID, events)
-		}
-	}
 	if err != nil {
 		if s.AlreadyDelivered != nil {
 			delivered, deliveryStateErr := s.AlreadyDelivered(finalizeCtx, turnID)
@@ -838,14 +828,11 @@ type slackStream struct {
 	req                  slackconversation.Request
 	mu                   sync.Mutex
 	deliveryMu           sync.Mutex
-	delegatedMu          sync.Mutex
-	delegatedDelivered   map[string]bool
-	delegatedInFlight    map[string]bool
-	exposeWorkerResults  bool
 	sessionMu            sync.Mutex
 	session              slackconversation.AgentSessionMessenger
 	sessionStatus        string
 	redactor             *safety.StreamRedactor
+	outputPolicy         workflows.OutputPolicy
 	answer               strings.Builder
 	messageTS            string
 	nativeStream         bool
@@ -862,10 +849,12 @@ type slackStream struct {
 }
 
 func newSlackStream(ctx context.Context, messenger slackconversation.Messenger, req slackconversation.Request) *slackStream {
-	return &slackStream{
-		ctx: ctx, messenger: messenger, req: req,
-		delegatedDelivered: make(map[string]bool), delegatedInFlight: make(map[string]bool),
-	}
+	return &slackStream{ctx: ctx, messenger: messenger, req: req}
+}
+func (s *slackStream) SetOutputPolicy(policy workflows.OutputPolicy) {
+	s.mu.Lock()
+	s.outputPolicy = policy
+	s.mu.Unlock()
 }
 func (s *slackStream) Start() {
 	if session, ok := s.messenger.(slackconversation.AgentSessionMessenger); ok {

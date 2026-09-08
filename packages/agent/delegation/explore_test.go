@@ -3,6 +3,7 @@ package delegation
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -39,6 +40,18 @@ func (m scriptedExploreModel) Generate(_ context.Context, _ model.Request, _ mod
 }
 
 type capturingExploreModel struct{ request *model.Request }
+
+func leafBatch(tasks ...string) json.RawMessage {
+	jobs := make([]TaskSpec, 0, len(tasks))
+	for index, task := range tasks {
+		jobs = append(jobs, TaskSpec{
+			Name: fmt.Sprintf("worker-%d", index+1), Role: "independent reviewer", Task: task,
+			Boundaries: task, Deliverable: "factual evidence", SuccessCriteria: []string{"return evidence to the lead"},
+		})
+	}
+	data, _ := json.Marshal(map[string]any{"tasks": jobs})
+	return data
+}
 
 func (m *capturingExploreModel) Generate(_ context.Context, request model.Request, _ model.EventSink) (model.Response, error) {
 	m.request = &request
@@ -92,14 +105,14 @@ func TestExploreToolRunsParallelJobs(t *testing.T) {
 	}
 	explore := ExploreTool{Runner: runner}
 	result, err := explore.Execute(context.Background(), tool.Call{
-		Arguments: json.RawMessage(`{"tasks":[{"task":"find auth"},{"task":"find billing"}]}`),
+		Arguments: leafBatch("find auth", "find billing"),
 		Scope:     tool.Scope{SessionID: "ses_test", TurnID: "turn_parent"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := result.Text()
-	if text == "" || !strings.Contains(text, "Task 1") || !strings.Contains(text, "Task 2") || !strings.Contains(text, "report") {
+	if text == "" || !strings.Contains(text, "worker-1") || !strings.Contains(text, "worker-2") || !strings.Contains(text, "report") {
 		t.Fatalf("unexpected explore output: %q", text)
 	}
 	children, ok := result.Metadata["child_runs"].([]ChildRun)
@@ -172,7 +185,7 @@ func TestQueuedWorkerReceivesFreshExecutionBudgetAfterAcquiringSlot(t *testing.T
 	done := make(chan error, 1)
 	go func() {
 		_, executeErr := (ExploreTool{Runner: runner}).Execute(context.Background(), tool.Call{
-			Arguments: json.RawMessage(`{"tasks":[{"task":"first"},{"task":"second"}]}`),
+			Arguments: leafBatch("first", "second"),
 			Scope:     tool.Scope{SessionID: "parent", TurnID: "turn"},
 		})
 		done <- executeErr
@@ -281,6 +294,41 @@ func TestExploreToolRejectsTooManyJobs(t *testing.T) {
 	}
 }
 
+func TestExploreToolRunsCompleteLeafTasksAsOneConcurrentTeam(t *testing.T) {
+	parent, err := tool.NewCatalog(echoReadTool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	explore := ExploreTool{Runner: Runner{
+		Config:        agentruntime.Config{Model: "test"},
+		Deps:          agentruntime.Dependencies{Model: scriptedExploreModel{text: "report"}, Transcript: transcript.NewMemoryStore()},
+		ParentCatalog: parent,
+		AllowedTools:  DefaultLocalAllowedTools(),
+	}}
+	complete := `{"tasks":[` +
+		`{"name":"auth","role":"security reviewer","task":"inspect auth","boundaries":"auth changes","deliverable":"evidence","success_criteria":["cite changed lines"]},` +
+		`{"name":"data","role":"data reviewer","task":"inspect writes","boundaries":"persistence changes","deliverable":"evidence","success_criteria":["cite changed lines"]}` +
+		`]}`
+	result, err := explore.Execute(context.Background(), tool.Call{Arguments: json.RawMessage(complete)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	children, ok := result.Metadata["child_runs"].([]ChildRun)
+	if !ok || len(children) != 2 || children[0].Name == children[1].Name {
+		t.Fatalf("children=%#v", result.Metadata["child_runs"])
+	}
+}
+
+func TestValidateLeafTasksRequiresCompleteUniqueContracts(t *testing.T) {
+	valid := TaskSpec{Name: "auth", Role: "reviewer", Task: "inspect auth", Boundaries: "auth", Deliverable: "evidence", SuccessCriteria: []string{"cite lines"}}
+	if err := validateLeafTasks([]TaskSpec{valid, {Name: "data", Role: "reviewer", Task: "inspect data"}}); err == nil || !strings.Contains(err.Error(), "requires name") {
+		t.Fatalf("incomplete task error = %v", err)
+	}
+	if err := validateLeafTasks([]TaskSpec{valid, valid}); err == nil || !strings.Contains(err.Error(), "must be unique") {
+		t.Fatalf("duplicate task error = %v", err)
+	}
+}
+
 func TestRunTaskCarriesWorkerContractAndAuditIdentity(t *testing.T) {
 	parent, err := tool.NewCatalog(echoReadTool{})
 	if err != nil {
@@ -320,7 +368,7 @@ func TestRunTaskCarriesWorkerContractAndAuditIdentity(t *testing.T) {
 	}
 }
 
-func TestRunTaskPublishesCanonicalPersonaLifecycleForOptedInWorkflow(t *testing.T) {
+func TestRunTaskPublishesCanonicalDelegationLifecycle(t *testing.T) {
 	parent, err := tool.NewCatalog(echoReadTool{})
 	if err != nil {
 		t.Fatal(err)

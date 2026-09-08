@@ -118,6 +118,48 @@ func TestPRDiffUsesPullURLInsteadOfDefaultRepository(t *testing.T) {
 	}
 }
 
+func TestPRFileDiffSelectsIndependentContextForMultiplePullRequests(t *testing.T) {
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/repos/acme/api/contents/api.go":
+			return response(http.StatusOK, `{"type":"file","encoding":"base64","content":"YXBpLW5ldwo="}`), nil
+		case "/repos/acme/web/contents/web.go":
+			return response(http.StatusOK, `{"type":"file","encoding":"base64","content":"d2ViLW5ldwo="}`), nil
+		default:
+			t.Fatalf("unexpected path = %q", r.URL.Path)
+			return nil, nil
+		}
+	})
+	scope := agenttool.Scope{SessionID: "multi", TurnID: "turn"}
+	setPRDiffContext(scope, prDiffContext{
+		Repository: "acme/api", Number: 11, HeadSHA: "api-sha", ChangedFiles: []string{"api.go"},
+		Diff: "diff --git a/api.go b/api.go\n@@ -1 +1 @@\n-api-old\n+api-new\n",
+	})
+	setPRDiffContext(scope, prDiffContext{
+		Repository: "acme/web", Number: 22, HeadSHA: "web-sha", ChangedFiles: []string{"web.go"},
+		Diff: "diff --git a/web.go b/web.go\n@@ -1 +1 @@\n-web-old\n+web-new\n",
+	})
+	client := testClient("default", "repo", transport)
+	fileTool := PRFileDiffTool{Client: client}
+	if _, err := fileTool.Execute(context.Background(), agenttool.Call{
+		Arguments: json.RawMessage(`{"path":"web.go"}`), Scope: scope,
+	}); err == nil || !strings.Contains(err.Error(), "url is required") {
+		t.Fatalf("implicit multi-PR selection error = %v", err)
+	}
+	api, err := fileTool.Execute(context.Background(), agenttool.Call{
+		Arguments: json.RawMessage(`{"url":"https://github.com/acme/api/pull/11","path":"api.go"}`), Scope: scope,
+	})
+	if err != nil || !strings.Contains(api.Text(), "api-new") || strings.Contains(api.Text(), "web-new") {
+		t.Fatalf("api result=%q err=%v", api.Text(), err)
+	}
+	web, err := fileTool.Execute(context.Background(), agenttool.Call{
+		Arguments: json.RawMessage(`{"url":"https://github.com/acme/web/pull/22","path":"web.go"}`), Scope: scope,
+	})
+	if err != nil || !strings.Contains(web.Text(), "web-new") || strings.Contains(web.Text(), "api-new") {
+		t.Fatalf("web result=%q err=%v", web.Text(), err)
+	}
+}
+
 func TestPRDiffNotFoundMentionsResolvedPullTarget(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return response(http.StatusNotFound, `{"message":"Not Found"}`), nil

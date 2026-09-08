@@ -3,7 +3,6 @@ package slackagent
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -61,39 +60,6 @@ type fakeMessenger struct {
 	mu       sync.Mutex
 	posts    []string
 	statuses []string
-}
-
-type personaMessenger struct {
-	fakeMessenger
-	personas     []slackconversation.Persona
-	personaTexts []string
-}
-
-type failingPersonaMessenger struct {
-	fakeMessenger
-	personaCalls int
-}
-
-func (m *failingPersonaMessenger) PostMessageAs(context.Context, string, string, string, slackconversation.Persona) (string, error) {
-	m.personaCalls++
-	return "", errors.New("missing_scope")
-}
-
-func (m *failingPersonaMessenger) PostMarkdownMessageAs(context.Context, string, string, string, slackconversation.Persona, string) (string, error) {
-	m.personaCalls++
-	return "", errors.New("missing_scope")
-}
-
-func (m *personaMessenger) PostMessageAs(_ context.Context, _, _, text string, persona slackconversation.Persona) (string, error) {
-	m.personas = append(m.personas, persona)
-	m.personaTexts = append(m.personaTexts, text)
-	return "persona-post", nil
-}
-
-func (m *personaMessenger) PostMarkdownMessageAs(_ context.Context, _, _, text string, persona slackconversation.Persona, _ string) (string, error) {
-	m.personas = append(m.personas, persona)
-	m.personaTexts = append(m.personaTexts, text)
-	return "persona-markdown", nil
 }
 
 type memoryInputs struct {
@@ -249,7 +215,7 @@ func TestServiceRoutesCodeReviewIntentToDedicatedWorkflow(t *testing.T) {
 		t.Fatal("model did not receive request")
 	}
 	system := client.request.Messages[0].Text()
-	for _, want := range []string{"dedicated multi-agent pull-request review workflow", "verification wave", "Requested review mode: deep"} {
+	for _, want := range []string{"dedicated multi-agent pull-request review workflow", "targeted verification", "Requested review mode: deep"} {
 		if !strings.Contains(system, want) {
 			t.Fatalf("review system prompt missing %q", want)
 		}
@@ -376,37 +342,15 @@ func TestStreamProjectsRuntimeTerminalStateToSession(t *testing.T) {
 	}
 }
 
-func TestStreamPresentsDelegatedReportThroughPersonaMarkdown(t *testing.T) {
-	messenger := &personaMessenger{}
-	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T", Text: "review PR"})
-	stream.SetExposeWorkerResults(true)
-	metadata := json.RawMessage(`{"child_run":{"name":"auth-boundary","role":"Security reviewer"}}`)
-	message := model.TextMessage(model.RoleAssistant, "possible authorization bypass with a long internal evidence report")
-	stream.Lifecycle(transcript.Event{TurnID: "review", Type: transcript.DelegatedTaskCompleted, Message: &message, Metadata: metadata})
-	if len(messenger.personas) != 1 || messenger.personas[0].Name != "auth-boundary" || messenger.personas[0].IconEmoji != personaEmoji("auth-boundary") {
-		t.Fatalf("personas=%+v", messenger.personas)
-	}
-	if len(messenger.personaTexts) != 1 || !strings.Contains(messenger.personaTexts[0], "Candidate evidence") || !strings.Contains(messenger.personaTexts[0], "authorization bypass") {
-		t.Fatalf("texts=%+v", messenger.personaTexts)
-	}
-}
-
-func TestStreamReplaysMissingDelegatedResultAndDoesNotDuplicateDeliveredResult(t *testing.T) {
-	messenger := &failingPersonaMessenger{}
-	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T", Text: "review PR"})
-	stream.SetExposeWorkerResults(true)
-	metadata := json.RawMessage(`{"child_run":{"name":"auth-boundary","role":"Security reviewer"}}`)
-	message := model.TextMessage(model.RoleAssistant, "possible authorization bypass")
-	event := transcript.Event{ID: "delegated-1", TurnID: "review", Type: transcript.DelegatedTaskCompleted, Message: &message, Metadata: metadata}
-	stream.ReplayDelegatedResults("review", []transcript.Event{event})
-	stream.ReplayDelegatedResults("review", []transcript.Event{event})
-	if messenger.personaCalls != 1 {
-		t.Fatalf("persona calls=%d", messenger.personaCalls)
-	}
+func TestStreamKeepsDelegatedReportsInternal(t *testing.T) {
+	messenger := &fakeMessenger{}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T"})
+	message := model.TextMessage(model.RoleAssistant, "unverified worker report")
+	stream.Lifecycle(transcript.Event{Type: transcript.DelegatedTaskCompleted, Message: &message})
 	messenger.mu.Lock()
 	defer messenger.mu.Unlock()
-	if len(messenger.posts) != 1 || !strings.Contains(messenger.posts[0], "auth-boundary") {
-		t.Fatalf("fallback posts=%+v", messenger.posts)
+	if len(messenger.posts) != 0 {
+		t.Fatalf("delegated report was exposed: %+v", messenger.posts)
 	}
 }
 

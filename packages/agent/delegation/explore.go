@@ -105,44 +105,38 @@ type ExploreTool struct {
 }
 
 func (t ExploreTool) Descriptor() tool.Descriptor {
+	properties := taskProperties()
+	properties["tasks"] = map[string]any{
+		"type":     "array",
+		"maxItems": t.Runner.maxJobs(),
+		"items":    tool.ObjectSchema([]string{"name", "role", "task", "boundaries", "deliverable", "success_criteria"}, taskProperties()),
+		"description": "Independent leaf-worker assignments to run concurrently. " +
+			"Use this batch form for multi-agent work.",
+	}
 	return tool.FunctionDescriptor(
 		"agent-explore",
-		"Run one or more isolated read-only worker agents. Use one tasks batch for independent directions that can run concurrently; give each worker a distinct role, scope, deliverable, and success criteria.",
-		tool.ObjectSchema(nil, map[string]any{
-			"name": map[string]any{"type": "string", "description": "Short stable worker name."},
-			"role": map[string]any{"type": "string", "description": "Worker responsibility, distinct from its objective."},
-			"task": map[string]any{"type": "string", "description": "Single exploration task."},
-			"boundaries": map[string]any{
-				"type":        "string",
-				"description": "Optional scope or constraints for a single task.",
-			},
-			"deliverable": map[string]any{"type": "string", "description": "Required structured or textual output."},
-			"success_criteria": map[string]any{
-				"type": "array", "items": map[string]any{"type": "string"},
-				"description": "Observable conditions the worker must satisfy before returning.",
-			},
-			"tasks": map[string]any{
-				"type":     "array",
-				"maxItems": t.Runner.maxJobs(),
-				"items": tool.ObjectSchema([]string{"task"}, map[string]any{
-					"name":       map[string]any{"type": "string"},
-					"role":       map[string]any{"type": "string"},
-					"task":       map[string]any{"type": "string"},
-					"boundaries": map[string]any{"type": "string"},
-					"deliverable": map[string]any{
-						"type": "string",
-					},
-					"success_criteria": map[string]any{
-						"type": "array", "items": map[string]any{"type": "string"},
-					},
-				}),
-				"description": "Independent worker assignments to run concurrently.",
-			},
-		}),
+		"Run isolated read-only leaf workers. The lead remains the sole coordinator: workers cannot delegate. For team exploration, send independent directions together in tasks so they execute concurrently.",
+		tool.ObjectSchema(nil, properties),
 		tool.WithEffects(tool.EffectRead),
 		tool.WithParallel(true),
 		tool.WithTimeout(t.Runner.batchTimeout()),
 	)
+}
+
+func taskProperties() map[string]any {
+	return map[string]any{
+		"name":       map[string]any{"type": "string", "description": "Short stable worker name."},
+		"role":       map[string]any{"type": "string", "description": "Worker responsibility, distinct from its objective."},
+		"task":       map[string]any{"type": "string", "description": "One leaf investigation objective; never coordination or further delegation."},
+		"boundaries": map[string]any{"type": "string", "description": "Explicit scope and exclusions."},
+		"deliverable": map[string]any{
+			"type": "string", "description": "Required evidence or report shape returned to the lead.",
+		},
+		"success_criteria": map[string]any{
+			"type": "array", "items": map[string]any{"type": "string"},
+			"description": "Observable conditions the worker must satisfy before returning.",
+		},
+	}
 }
 
 func (r Runner) batchTimeout() time.Duration {
@@ -166,7 +160,16 @@ func (t ExploreTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
 	}
-	jobs := normalizeJobs(TaskSpec{Name: args.Name, Role: args.Role, Task: args.Task, Boundaries: args.Boundaries, Deliverable: args.Deliverable, SuccessCriteria: args.SuccessCriteria}, args.Tasks)
+	if strings.TrimSpace(args.Task) != "" && len(args.Tasks) > 0 {
+		return tool.Result{}, fmt.Errorf("task and tasks are mutually exclusive")
+	}
+	if len(args.Tasks) > t.Runner.maxJobs() {
+		return tool.Result{}, fmt.Errorf("too many exploration jobs: got %d, maximum is %d", len(args.Tasks), t.Runner.maxJobs())
+	}
+	jobs, err := normalizeJobs(TaskSpec{Name: args.Name, Role: args.Role, Task: args.Task, Boundaries: args.Boundaries, Deliverable: args.Deliverable, SuccessCriteria: args.SuccessCriteria}, args.Tasks)
+	if err != nil {
+		return tool.Result{}, err
+	}
 	if len(jobs) == 0 {
 		return tool.Result{}, fmt.Errorf("task or tasks is required")
 	}
@@ -196,19 +199,21 @@ func (t ExploreTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	return result, nil
 }
 
-func normalizeJobs(single TaskSpec, tasks []TaskSpec) []TaskSpec {
-	var jobs []TaskSpec
+func normalizeJobs(single TaskSpec, tasks []TaskSpec) ([]TaskSpec, error) {
 	if single.Task = strings.TrimSpace(single.Task); single.Task != "" {
-		jobs = append(jobs, normalizeTask(single))
+		return []TaskSpec{normalizeTask(single)}, nil
 	}
+	jobs := make([]TaskSpec, 0, len(tasks))
 	for _, job := range tasks {
 		job = normalizeTask(job)
-		if job.Task == "" {
-			continue
-		}
 		jobs = append(jobs, job)
 	}
-	return jobs
+	if len(jobs) > 0 {
+		if err := validateLeafTasks(jobs); err != nil {
+			return nil, err
+		}
+	}
+	return jobs, nil
 }
 
 func normalizeTask(job TaskSpec) TaskSpec {
@@ -225,6 +230,20 @@ func normalizeTask(job TaskSpec) TaskSpec {
 	}
 	job.SuccessCriteria = criteria
 	return job
+}
+
+func validateLeafTasks(jobs []TaskSpec) error {
+	seenNames := make(map[string]bool, len(jobs))
+	for index, job := range jobs {
+		if job.Name == "" || job.Role == "" || job.Task == "" || job.Boundaries == "" || job.Deliverable == "" || len(job.SuccessCriteria) == 0 {
+			return fmt.Errorf("delegation task %d requires name, role, task, boundaries, deliverable, and success_criteria", index+1)
+		}
+		if seenNames[job.Name] {
+			return fmt.Errorf("delegation task names must be unique; duplicate %q", job.Name)
+		}
+		seenNames[job.Name] = true
+	}
+	return nil
 }
 
 func (r Runner) runMany(ctx context.Context, parentCall tool.Call, jobs []TaskSpec) (string, []ChildRun, error) {

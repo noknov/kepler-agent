@@ -11,6 +11,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/safety"
 	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
+	"github.com/noknov/kepler-agent/packages/workflows"
 )
 
 type nativeStreamingMessenger struct {
@@ -138,6 +139,24 @@ func TestNativeSlackStreamAppendsIncrementally(t *testing.T) {
 	}
 	if ts != "1.0" || messenger.stopped != 1 {
 		t.Fatalf("ts=%q stopped=%d", ts, messenger.stopped)
+	}
+}
+
+func TestFinalOnlyWorkflowDoesNotPublishIntermediateModelText(t *testing.T) {
+	messenger := &nativeStreamingMessenger{}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1"})
+	stream.SetOutputPolicy(workflows.OutputFinalOnly)
+	stream.Start()
+	stream.AppendDelta("I will delegate a review task.")
+	stream.flushDeferredStream(true)
+	if messenger.started != 0 || len(messenger.appends) != 0 {
+		t.Fatalf("intermediate output was delivered: started=%d appends=%#v", messenger.started, messenger.appends)
+	}
+	if _, err := stream.Complete("Final verified review."); err != nil {
+		t.Fatal(err)
+	}
+	if len(messenger.posts) != 1 || messenger.posts[0] != "Final verified review." {
+		t.Fatalf("posts = %#v", messenger.posts)
 	}
 }
 

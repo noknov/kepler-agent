@@ -33,6 +33,21 @@ func (c *TurnCache) Set(key string, value any) {
 	c.values[key] = value
 }
 
+// Update atomically replaces one value from its current snapshot. Callers
+// should return immutable values so readers never share mutable state outside
+// the cache lock.
+func (c *TurnCache) Update(key string, update func(any) any) {
+	if c == nil || update == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.values == nil {
+		c.values = map[string]any{}
+	}
+	c.values[key] = update(c.values[key])
+}
+
 var turnCaches sync.Map
 
 func turnCacheKey(scope Scope) string {

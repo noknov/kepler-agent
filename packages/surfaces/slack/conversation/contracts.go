@@ -48,24 +48,6 @@ type Messenger interface {
 	PostMarkdownMessage(ctx context.Context, channel, threadTS, markdown string) (string, error)
 }
 
-// Persona identifies a presentation-only worker identity. All personas still
-// use the same Slack App token and authorization boundary.
-type Persona struct {
-	Name      string
-	IconEmoji string
-}
-
-type AttributedMessenger interface {
-	PostMessageAs(ctx context.Context, channel, threadTS, text string, persona Persona) (string, error)
-}
-
-// AttributedMarkdownMessenger renders a worker's public report through the
-// same native Markdown and chunking path used by the lead response while
-// changing presentation identity only.
-type AttributedMarkdownMessenger interface {
-	PostMarkdownMessageAs(ctx context.Context, channel, threadTS, markdown string, persona Persona, deliveryID string) (string, error)
-}
-
 // ApprovalMessenger presents a user-confirmation control for an irreversible
 // or externally visible tool call.
 type ApprovalMessenger interface {

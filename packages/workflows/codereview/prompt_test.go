@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/noknov/kepler-agent/packages/agent/delegation"
+	"github.com/noknov/kepler-agent/packages/workflows"
 )
 
 func TestScopeValuesRoundTripContinuation(t *testing.T) {
@@ -32,6 +33,9 @@ func TestDefinitionStartsFromRoutedPrompt(t *testing.T) {
 	if err != nil || !restored || len(command.URLs) != 1 || command.URLs[0] != "https://github.com/acme/widgets/pull/42" || command.Mode != "deep" {
 		t.Fatalf("activation=%+v command=%+v restored=%t err=%v", activation, command, restored, err)
 	}
+	if activation.OutputPolicy != workflows.OutputFinalOnly {
+		t.Fatalf("output policy=%q", activation.OutputPolicy)
+	}
 }
 
 func TestDefinitionRejectsMissingPullRequest(t *testing.T) {
@@ -50,7 +54,7 @@ func TestDefinitionPreservesMultiplePullRequestURLs(t *testing.T) {
 
 func TestFragmentDefinesBoundedVerifiedTeam(t *testing.T) {
 	fragment := Fragment(Command{URLs: []string{"https://github.com/acme/widgets/pull/42"}, Mode: "standard"})
-	for _, want := range []string{"parallel review", "verification", "Never exceed 5", "assigned PR", "confirmed actionable findings"} {
+	for _, want := range []string{"parallel investigation", "verification", "Never exceed 5", "assigned PR", "confirmed actionable findings"} {
 		if !strings.Contains(fragment.Content, want) {
 			t.Fatalf("prompt missing %q", want)
 		}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
+	"github.com/noknov/kepler-agent/packages/workflows"
 )
 
 const (
@@ -18,6 +19,12 @@ const (
 
 // AppendDelta buffers streamed assistant text and periodically delivers it to Slack.
 func (s *slackStream) AppendDelta(delta string) {
+	s.mu.Lock()
+	finalOnly := s.outputPolicy == workflows.OutputFinalOnly
+	s.mu.Unlock()
+	if finalOnly {
+		return
+	}
 	if s.redactor != nil {
 		delta = s.redactor.Append(delta)
 	} else {

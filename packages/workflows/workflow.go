@@ -11,14 +11,23 @@ import (
 
 const ScopeWorkflow = "workflow"
 
+// OutputPolicy controls how a surface presents model output produced while a
+// workflow is running. It is independent of orchestration and transport.
+type OutputPolicy string
+
+const (
+	OutputStreaming OutputPolicy = "streaming"
+	OutputFinalOnly OutputPolicy = "final_only"
+)
+
 // Activation is the complete runtime contract produced by a workflow. Scope
 // is persisted on TurnStarted and is therefore the source of truth for resume.
 type Activation struct {
-	Prompt              prompt.Fragment
-	Scope               map[string]string
-	RequiredTools       []string
-	OwnsThread          bool
-	ExposeWorkerResults bool
+	Prompt        prompt.Fragment
+	Scope         map[string]string
+	RequiredTools []string
+	OwnsThread    bool
+	OutputPolicy  OutputPolicy
 }
 
 // Definition identifies a workflow and restores it solely from durable scope.

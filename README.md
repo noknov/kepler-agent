@@ -53,7 +53,7 @@ for a detailed v1/v2 comparison and code-reading paths.
 | Local product | TTY and headless CLI, JSONL resume, steering/queue input routing, workspace tools, OS sandbox, approvals, skills, and configured MCP |
 | Integrations | Per-user OAuth connections for configured Slack, GitHub, ClickStack, Google Cloud, and Notion integrations; connection-required turns can resume after OAuth |
 | Delegation | `agent-explore`: bounded, read-only worker teams with explicit roles, deliverables, success criteria, separate transcripts, and parent audit links |
-| Code review | Natural-language Slack PR-review entry with risk-based parallel reviewers, an independent verification wave, persona updates, and one evidence-backed report |
+| Code review | Natural-language Slack PR-review entry with adaptive risk-based reviewers, targeted verification, internal worker reports, and one evidence-backed Lead response |
 | Evaluation | Independent subprocess-based harnesses for this agent and other supported candidates through one model gateway |
 
 This is not a deployment distribution. Images, CLI binaries, PostgreSQL, Redis,
@@ -98,9 +98,6 @@ chat:write        assistant:write
 files:read
 ```
 
-Add the optional `chat:write.customize` scope to render Code Review workers
-with role-specific display names and emoji under the same Slack App identity.
-
 Subscribe to:
 
 ```text
@@ -121,16 +118,14 @@ persists its scope for follow-up replies. CLI and other surfaces remain generic
 and do not run this Slack product router.
 
 The lead agent pins the PR head, decomposes the change by risk, runs isolated
-read-only reviewers concurrently, sends candidate findings through a separate
-verification wave, and publishes one consolidated Slack response. No Slack
+read-only reviewers concurrently, verifies candidate findings directly or
+with targeted follow-up workers, and publishes one consolidated Slack response. No Slack
 slash-command registration is required.
-With the optional `chat:write.customize` Slack scope, each worker candidate is
-shown using a role-specific display name and emoji. These are presentation-only
-personas under the same App identity; the lead's final verified report remains
-the authoritative result. Reply directly in the same Slack thread to ask about
-a finding, request more evidence, or rerun part of the review. The workflow and
-original PR set are restored from durable turn metadata; a new root message
-starts a separate conversation.
+Worker conversations remain internal; Slack receives the lead's normal,
+verified response after fan-in. Reply directly in the same Slack thread to ask
+about a finding, request more evidence, or rerun part of the review. The
+workflow and original PR set are restored from durable turn metadata; a new
+root message starts a separate conversation.
 
 ### Web setup
 

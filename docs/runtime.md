@@ -95,6 +95,11 @@ workflows without model tool-call JSON. A task batch is bounded and
 cancellation-aware; each result includes its child session/turn, identity,
 termination, usage, and error as durable audit metadata.
 
+Batch delegation accepts only fully described, uniquely named leaf tasks. The
+lead remains the sole coordinator and chooses roles, risk hypotheses, team
+size, and follow-up work from the evidence it discovers; the runtime does not
+encode a fixed review graph or require every fan-out to have the same size.
+
 Delegation inherits the parent turn deadline by default. A deployment may add
 optional batch and worker deadlines when it needs tighter isolation. A
 configured worker deadline begins only after that worker acquires a concurrency
@@ -109,14 +114,13 @@ failures fall back to general conversation. CLI, app-server, and other surfaces
 do not install this Slack product router and remain generic.
 The ordinary hosted agent becomes the coordinator and uses the same runtime to
 triage an immutable GitHub PR head, launch a bounded risk-based reviewer batch,
-run a distinct verification batch that attempts to disprove candidates, and
+verify candidate findings itself or with targeted follow-up workers, and
 synthesize one report. Slack renders coordinator-authored plan tasks as the
-team view. Worker streams remain internal. Completed worker reports are durable
-delegation events and Slack projects each one as a clearly marked, non-authoritative
-candidate report. With `chat:write.customize`, those reports use role-specific
-display names and emoji under the same Slack App principal; otherwise Slack uses
-a regular App message. Before the lead response, the projection reconciles the
-turn against the canonical transcript so a missed live event can be recovered.
+team view and defers model text until the final response. Worker streams and
+reports remain internal, while their completion, usage, result, and parent link
+remain durable delegation events. The lead alone receives those reports,
+verifies candidate evidence, and publishes the normal Slack response after
+fan-in.
 
 Workflow selection produces a transport-neutral activation containing its
 prompt, durable scope, required tools, and thread-ownership policy. Code Review
@@ -126,4 +130,7 @@ the follow-up as a new review command; a new root message remains a new session.
 The activation also places the validated PR set in delegation shared context,
 which the execution layer injects into every worker independently of the
 lead-authored task description. Worker targets therefore cannot disappear
-during dynamic decomposition.
+during dynamic decomposition. GitHub PR manifests are indexed independently by
+repository and pull-request number inside each worker turn; file reads must
+select a PR URL when more than one manifest is active, so concurrent multi-PR
+inspection cannot overwrite or ambiguously reuse another PR's head context.

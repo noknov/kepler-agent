@@ -46,49 +46,6 @@ func TestPostMarkdownMessageUsesNativeMarkdownBlock(t *testing.T) {
 	}
 }
 
-func TestPostMessageAsUsesAppPersona(t *testing.T) {
-	var payload map[string]any
-	client := &Client{token: "xoxb-test", httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if r.URL.Path != "/api/chat.postMessage" {
-			t.Fatalf("path = %q", r.URL.Path)
-		}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatal(err)
-		}
-		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"ts":"123.456"}`)), Request: r}, nil
-	})}}
-	ts, err := client.PostMessageAs(context.Background(), "C1", "100.000", "candidate", slackconversation.Persona{Name: "Security", IconEmoji: ":shield:"})
-	if err != nil || ts != "123.456" {
-		t.Fatalf("ts=%q err=%v", ts, err)
-	}
-	if payload["username"] != "Security" || payload["icon_emoji"] != ":shield:" || payload["thread_ts"] != "100.000" {
-		t.Fatalf("payload=%#v", payload)
-	}
-}
-
-func TestPostMarkdownMessageAsUsesNativeMarkdownAndPersona(t *testing.T) {
-	var payload map[string]any
-	client := &Client{token: "xoxb-test", httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatal(err)
-		}
-		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"ts":"123.456"}`)), Request: r}, nil
-	})}}
-	markdown := "## Findings\n\n| Severity | Path |\n|---|---|\n| High | `a.go:7` |"
-	ts, err := client.PostMarkdownMessageAs(context.Background(), "C1", "100.000", markdown, slackconversation.Persona{Name: "Security reviewer", IconEmoji: ":shield:"}, "delegated-event-1")
-	if err != nil || ts != "123.456" {
-		t.Fatalf("ts=%q err=%v", ts, err)
-	}
-	blocks, ok := payload["blocks"].([]any)
-	if !ok || len(blocks) != 1 || payload["username"] != "Security reviewer" || payload["text"] != markdown || payload["client_msg_id"] == "" {
-		t.Fatalf("payload=%#v", payload)
-	}
-	block, _ := blocks[0].(map[string]any)
-	if block["type"] != "markdown" || block["text"] != markdown {
-		t.Fatalf("block=%#v", block)
-	}
-}
-
 func TestPostMarkdownMessageFallsBackWhenMarkdownBlockIsUnsupported(t *testing.T) {
 	attempts := 0
 	client := &Client{token: "xoxb-test", httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {

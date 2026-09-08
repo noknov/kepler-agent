@@ -848,27 +848,71 @@ type prDiffContext struct {
 }
 
 const prDiffContextCacheKey = "github-pr-diff-context"
+const prDiffContextIndexKey = prDiffContextCacheKey + ":index"
+
+func prDiffTargetCacheKey(repository string, number int) string {
+	return prDiffContextCacheKey + ":" + prDiffTarget(repository, number)
+}
 
 func setPRDiffContext(scope tool.Scope, ctx prDiffContext) {
-	if tool.CacheFor(scope) == nil {
+	cache := tool.CacheFor(scope)
+	if cache == nil {
 		return
 	}
 	ctx.Repository = strings.TrimSpace(ctx.Repository)
 	ctx.HeadRef = strings.TrimSpace(ctx.HeadRef)
 	ctx.HeadSHA = strings.TrimSpace(ctx.HeadSHA)
 	ctx.BaseRef = strings.TrimSpace(ctx.BaseRef)
-	tool.CacheFor(scope).Set(prDiffContextCacheKey, ctx)
+	key := prDiffTarget(ctx.Repository, ctx.Number)
+	cache.Set(prDiffTargetCacheKey(ctx.Repository, ctx.Number), ctx)
+	cache.Update(prDiffContextIndexKey, func(current any) any {
+		index, _ := current.([]string)
+		for _, existing := range index {
+			if existing == key {
+				return index
+			}
+		}
+		return append(append([]string(nil), index...), key)
+	})
 }
 
 func prDiffContextFromRuntime(scope tool.Scope) (prDiffContext, bool) {
 	if tool.CacheFor(scope) == nil {
 		return prDiffContext{}, false
 	}
-	v, ok := tool.CacheFor(scope).Get(prDiffContextCacheKey)
+	cache := tool.CacheFor(scope)
+	value, ok := cache.Get(prDiffContextIndexKey)
 	if !ok {
 		return prDiffContext{}, false
 	}
-	ctx, ok := v.(prDiffContext)
+	index, ok := value.([]string)
+	if !ok || len(index) != 1 {
+		return prDiffContext{}, false
+	}
+	value, ok = cache.Get(prDiffContextCacheKey + ":" + index[0])
+	if !ok {
+		return prDiffContext{}, false
+	}
+	ctx, ok := value.(prDiffContext)
+	return ctx, ok && ctx.Repository != "" && ctx.HeadSHA != ""
+}
+
+func prDiffTarget(repository string, number int) string {
+	return strings.ToLower(strings.TrimSpace(repository)) + "#" + strconv.Itoa(number)
+}
+
+func prDiffContextFor(scope tool.Scope, repository string, number int) (prDiffContext, bool) {
+	if strings.TrimSpace(repository) == "" && number == 0 {
+		return prDiffContextFromRuntime(scope)
+	}
+	if strings.TrimSpace(repository) == "" || number <= 0 || tool.CacheFor(scope) == nil {
+		return prDiffContext{}, false
+	}
+	value, ok := tool.CacheFor(scope).Get(prDiffTargetCacheKey(repository, number))
+	if !ok {
+		return prDiffContext{}, false
+	}
+	ctx, ok := value.(prDiffContext)
 	return ctx, ok && ctx.Repository != "" && ctx.HeadSHA != ""
 }
 
@@ -919,8 +963,11 @@ type PRFileDiffTool struct {
 }
 
 func (PRFileDiffTool) Descriptor() tool.Descriptor {
-	return tool.FunctionDescriptor("github-pr_file_diff", "Read the diff for one changed file in the PR established by github-pr_diff, including line-numbered source context from the PR head when available. Use these PR-head line numbers for review citations instead of reading the local default branch.", tool.ObjectSchema([]string{"path"}, map[string]any{
-		"path": map[string]any{"type": "string", "description": "Repository-relative path from the changed-file manifest."},
+	return tool.FunctionDescriptor("github-pr_file_diff", "Read one changed file from a PR context established by github-pr_diff. When reviewing multiple PRs, pass url to select the intended immutable PR context explicitly.", tool.ObjectSchema([]string{"path"}, map[string]any{
+		"path":       map[string]any{"type": "string", "description": "Repository-relative path from the changed-file manifest."},
+		"url":        map[string]any{"type": "string", "description": "GitHub pull request URL selecting one previously established PR context."},
+		"repository": map[string]any{"type": "string", "description": "Repository in owner/repo form. Use together with pr when url is omitted."},
+		"pr":         map[string]any{"type": "integer", "description": "Pull request number. Use together with repository when url is omitted."},
 	}), tool.NetworkIntegration("github")...)
 }
 
@@ -933,14 +980,38 @@ func (t PRFileDiffTool) Execute(ctx context.Context, call tool.Call) (tool.Resul
 		return tool.Result{}, err
 	}
 	var args struct {
-		Path string `json:"path"`
+		Path       string      `json:"path"`
+		URL        string      `json:"url"`
+		Repository string      `json:"repository"`
+		PR         json.Number `json:"pr"`
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
 	}
-	pr, ok := prDiffContextFromRuntime(call.Scope)
+	if strings.TrimSpace(args.URL) != "" {
+		if strings.TrimSpace(args.Repository) != "" || args.PR != "" {
+			return tool.Result{}, fmt.Errorf("url and repository/pr selectors are mutually exclusive")
+		}
+		parsed, err := parsePullURL(args.URL)
+		if err != nil {
+			return tool.Result{}, err
+		}
+		args.Repository = parsed.repository
+		args.PR = json.Number(strconv.FormatInt(parsed.number, 10))
+	}
+	prNumber, err := args.PR.Int64()
+	if args.PR != "" && err != nil {
+		return tool.Result{}, fmt.Errorf("invalid pull request number: %w", err)
+	}
+	if (strings.TrimSpace(args.Repository) == "") != (prNumber == 0) {
+		return tool.Result{}, fmt.Errorf("repository and pr selectors must be provided together")
+	}
+	if strings.TrimSpace(args.Repository) == "" && prNumber == 0 && multiplePRDiffContexts(call.Scope) {
+		return tool.Result{}, fmt.Errorf("multiple PR review contexts are active; url is required to select one")
+	}
+	pr, ok := prDiffContextFor(call.Scope, args.Repository, int(prNumber))
 	if !ok {
-		return tool.Result{}, fmt.Errorf("no PR review context; call github-pr_diff first")
+		return tool.Result{}, fmt.Errorf("no matching PR review context; call github-pr_diff for the selected PR first")
 	}
 	path := strings.Trim(strings.TrimSpace(args.Path), "/")
 	if !pr.containsPath(path) {
@@ -970,6 +1041,15 @@ func (t PRFileDiffTool) Execute(ctx context.Context, call tool.Call) (tool.Resul
 		}
 	}
 	return tool.TextResult(out.String()), nil
+}
+
+func multiplePRDiffContexts(scope tool.Scope) bool {
+	value, ok := tool.CacheFor(scope).Get(prDiffContextIndexKey)
+	if !ok {
+		return false
+	}
+	index, ok := value.([]string)
+	return ok && len(index) > 1
 }
 
 func (t PRFileDiffTool) prHeadFileSource(ctx context.Context, client Client, pr prDiffContext, path string) (string, error) {

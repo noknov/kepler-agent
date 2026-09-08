@@ -3,8 +3,28 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 )
+
+func TestTurnCacheUpdateIsAtomic(t *testing.T) {
+	cache := &TurnCache{}
+	var wait sync.WaitGroup
+	for range 100 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			cache.Update("count", func(current any) any {
+				count, _ := current.(int)
+				return count + 1
+			})
+		}()
+	}
+	wait.Wait()
+	if count, ok := cache.Get("count"); !ok || count != 100 {
+		t.Fatalf("count=%v ok=%v", count, ok)
+	}
+}
 
 type fakeTool struct{ descriptor Descriptor }
 
