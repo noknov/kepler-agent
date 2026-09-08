@@ -2,11 +2,30 @@
 // failures. Raw errors are diagnostic data and must not cross this boundary.
 package failure
 
-const ServiceUnavailableMessage = "The service is temporarily unavailable."
+import (
+	"context"
+	"errors"
 
-// PublicMessage intentionally does not inspect err. Provider and tool errors
-// can contain arbitrary upstream bodies, schemas, request data, or secrets;
-// only logs and traces may retain those details.
-func PublicMessage(error) string {
+	"github.com/noknov/kepler-agent/packages/agent/model"
+)
+
+const (
+	ServiceUnavailableMessage = "The service is temporarily unavailable."
+	RequestTimedOutMessage    = "The request timed out before it could finish. Try again with a smaller scope."
+	MalformedModelMessage     = "The model returned a malformed tool call and Kepler could not recover after retrying. Please try again."
+)
+
+// PublicMessage exposes only a small allowlist of safe failure categories.
+// Provider and tool errors can contain arbitrary upstream bodies, schemas,
+// request data, or secrets, so their detail never crosses this boundary.
+func PublicMessage(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return RequestTimedOutMessage
+	}
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		if typed, ok := current.(*model.Error); ok && typed.Kind == model.ErrorProtocol {
+			return MalformedModelMessage
+		}
+	}
 	return ServiceUnavailableMessage
 }

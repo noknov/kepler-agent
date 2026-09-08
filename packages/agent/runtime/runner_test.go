@@ -676,6 +676,39 @@ func TestRunTurnStopsAtStepLimitWithoutSyntheticModelCall(t *testing.T) {
 	}
 }
 
+func TestRunTurnAllowsLongToolDrivenWorkWithinStepBudget(t *testing.T) {
+	const toolRounds = 20
+	responses := make([]model.Response, 0, toolRounds+1)
+	for index := 0; index < toolRounds; index++ {
+		call := model.ToolCall{
+			ID:        fmt.Sprintf("call-%d", index),
+			Name:      "echo",
+			Arguments: json.RawMessage(`{"value":"evidence"}`),
+		}
+		responses = append(responses, model.Response{
+			Message:      model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &call}}},
+			FinishReason: model.FinishToolCalls,
+		})
+	}
+	responses = append(responses, model.Response{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop})
+	client := &scriptedModel{responses: responses}
+	catalog, err := tool.NewCatalog(echoTool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := New(Config{Model: "test", MaxSteps: toolRounds + 1}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "long-tool-run", Input: model.TextMessage(model.RoleUser, "investigate")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Termination != TerminationCompleted || result.Message.Text() != "done" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 func TestRunTurnReturnsLengthLimitedResponseWithoutContinuationPrompt(t *testing.T) {
 	client := &scriptedModel{responses: []model.Response{{Message: model.TextMessage(model.RoleAssistant, "partial"), FinishReason: model.FinishLength}}}
 	catalog, _ := tool.NewCatalog()

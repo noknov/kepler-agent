@@ -156,8 +156,8 @@ func (c Controller) View(userID string) map[string]any {
 		headerBlock(":signal_strength: Status"),
 		sectionBlockWithFields("", statusFields...),
 		dividerBlock(),
-		headerBlock(":mag: Multi-agent Code Review"),
-		sectionBlock("Send review PR followed by one or more GitHub PR URLs in Messages or a channel thread. Add fast or deep to control effort. Kepler coordinates isolated reviewer personas and an independent verifier, then returns one evidence-backed report."),
+		headerBlock(":sparkles: Capabilities"),
+		sectionBlock("*Code Review*\nAsk the agent to review one to four GitHub pull-request URLs. A secondary model routes explicit review requests into the multi-agent review workflow; ordinary questions remain general conversation."),
 		dividerBlock(),
 		headerBlock(":control_knobs: Controls"),
 		actionsBlock(

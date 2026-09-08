@@ -57,6 +57,18 @@ func TestResilientClientRetriesTransientFailure(t *testing.T) {
 	}
 }
 
+func TestResilientClientRetriesProviderProtocolFailure(t *testing.T) {
+	protocol := &Error{Kind: ErrorProtocol, Retryable: true, Message: "malformed tool arguments"}
+	primary := &resilientScript{errs: []error{protocol, nil}}
+	client := &ResilientClient{Primary: primary, MaxAttempts: 2, RetryDelay: time.Nanosecond}
+	if _, err := client.Generate(context.Background(), Request{Model: "primary"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if primary.calls != 2 {
+		t.Fatalf("calls = %d, want 2", primary.calls)
+	}
+}
+
 func TestResilientClientFallsBackOnlyForRetryableFailure(t *testing.T) {
 	primary := &resilientScript{errs: []error{transient(), transient()}}
 	fallback := &resilientScript{}

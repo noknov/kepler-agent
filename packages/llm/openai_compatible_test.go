@@ -39,9 +39,13 @@ func TestChatBodyEnablesParallelToolCalls(t *testing.T) {
 		Model:    "glm-5.2",
 		Messages: []Message{{Role: "user", Content: "hello"}},
 		Tools:    []ToolSpec{{Type: "function", Function: ToolSpecFunction{Name: "read", Parameters: map[string]any{"type": "object"}}}},
+		Thinking: "disabled",
 	})
 	if body["parallel_tool_calls"] != true {
 		t.Fatalf("parallel_tool_calls = %#v, want true", body["parallel_tool_calls"])
+	}
+	if thinking, ok := body["thinking"].(map[string]string); !ok || thinking["type"] != "disabled" {
+		t.Fatalf("thinking = %#v, want disabled", body["thinking"])
 	}
 }
 
@@ -231,31 +235,6 @@ func TestOpenAICompatibleChatStreamDefaultsFinishReasonAfterCleanEOF(t *testing.
 	}
 }
 
-func TestOpenAICompatibleChatStreamParsesCumulativeToolCallSnapshots(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"code-search\",\"arguments\":\"{\\\"query\\\":\\\"hel\"}}]}}]}\n\n"))
-		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"code-search\",\"arguments\":\"{\\\"query\\\":\\\"hello\\\",\\\"source\\\":\\\"working_tree\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n"))
-	}))
-	defer server.Close()
-
-	client := NewOpenAICompatibleClient("test", server.URL, "token", 0)
-	response, err := client.ChatStream(context.Background(), Request{Model: "test"}, StreamHandler{})
-	if err != nil {
-		t.Fatalf("ChatStream() error = %v", err)
-	}
-	if response.FinishReason != "tool_calls" {
-		t.Fatalf("FinishReason = %q, want tool_calls", response.FinishReason)
-	}
-	calls := response.Message.ToolCalls
-	if len(calls) != 1 {
-		t.Fatalf("ToolCalls = %#v, want one", calls)
-	}
-	if call := calls[0]; call.Function.Name != "code-search" || call.Function.Arguments != `{"query":"hello","source":"working_tree"}` {
-		t.Fatalf("tool call = %#v", call)
-	}
-}
-
 func TestOpenAICompatibleChatStreamParsesDeltaToolCallArguments(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -285,13 +264,11 @@ func TestToolArgumentStream(t *testing.T) {
 		want    string
 	}{
 		{name: "delta fragments", updates: []string{`{"query":"`, `hello"}`}, want: `{"query":"hello"}`},
-		{name: "cumulative snapshots", updates: []string{`{"query":"hel`, `{"query":"hello"}`}, want: `{"query":"hello"}`},
-		{name: "repeated cumulative snapshot", updates: []string{`{"query":"hel`, `{"query":"hel`, `{"query":"hello"}`}, want: `{"query":"hello"}`},
+		{name: "single delta", updates: []string{`{"query":"hello"}`}, want: `{"query":"hello"}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var stream toolArgumentStream
-			stream.snapshotValid = true
 			for _, update := range test.updates {
 				stream.Append(update)
 			}

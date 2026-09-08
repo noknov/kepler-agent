@@ -41,6 +41,8 @@ import (
 	clickstackTools "github.com/noknov/kepler-agent/packages/tools/clickstack"
 	hostedTools "github.com/noknov/kepler-agent/packages/tools/hosted"
 	notionTools "github.com/noknov/kepler-agent/packages/tools/notion"
+	"github.com/noknov/kepler-agent/packages/workflows"
+	"github.com/noknov/kepler-agent/packages/workflows/codereview"
 )
 
 type Service struct {
@@ -266,6 +268,11 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	healthService.Redis = stores.Redis
 	conversation := slackagent.New(profile.Agent, slackClient, profile.Prompt, profile.Redactor, stores.UserPrefs)
 	conversation.ThreadLoader = slackmessaging.ThreadLoader{Bot: slackClient}
+	conversation.Workflows = workflows.NewRegistry(codereview.Definition{})
+	conversation.IntentRouter = workflows.ModelRouter{
+		Client: profile.SecondaryModel, Model: profile.SecondaryModelName,
+		Options: codereview.RouteOptions(),
+	}
 	policy := hostedTools.PolicyForSurface(cfg, surface)
 	var beforeRuns []func(context.Context, string) error
 	if bundle.ClickStack != nil {
@@ -294,6 +301,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	conversation.AlreadyDelivered = runSink.SlackMessageDelivered
 	conversation.Redis, conversation.PodID, conversation.Lifecycle = stores.Redis, podID, serviceCtx
 	conversation.RunTimeout = cfg.Tools.AgentTurnTimeout
+	conversation.Tools = profile.Tools
 	conversation.Continuations = continuations
 	conversation.Inputs = stores.Inputs
 	if len(cfg.Security.WorkspaceRoots) > 0 {

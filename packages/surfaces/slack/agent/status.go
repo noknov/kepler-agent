@@ -2,7 +2,10 @@ package slackagent
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"log"
 	"strings"
 
@@ -20,7 +23,10 @@ const (
 // lifecycle. It does not infer progress from tools or issue model requests.
 func (s *slackStream) Lifecycle(event transcript.Event) {
 	if event.Type == transcript.DelegatedTaskCompleted {
-		s.presentDelegatedResult(event)
+		if !s.exposesWorkerResults() {
+			return
+		}
+		s.deliverDelegatedResult(event)
 		return
 	}
 	if event.Type == transcript.PlanUpdated {
@@ -42,9 +48,59 @@ func (s *slackStream) Lifecycle(event transcript.Event) {
 	}
 }
 
-func (s *slackStream) presentDelegatedResult(event transcript.Event) {
-	if event.Message == nil {
+func (s *slackStream) SetExposeWorkerResults(expose bool) {
+	s.delegatedMu.Lock()
+	s.exposeWorkerResults = expose
+	s.delegatedMu.Unlock()
+}
+
+func (s *slackStream) exposesWorkerResults() bool {
+	s.delegatedMu.Lock()
+	defer s.delegatedMu.Unlock()
+	return s.exposeWorkerResults
+}
+
+// ReplayDelegatedResults rebuilds the non-authoritative Slack worker-message
+// projection from the canonical parent transcript.
+func (s *slackStream) ReplayDelegatedResults(turnID string, events []transcript.Event) {
+	if !s.exposesWorkerResults() {
 		return
+	}
+	for _, event := range events {
+		if event.TurnID == turnID && event.Type == transcript.DelegatedTaskCompleted {
+			s.deliverDelegatedResult(event)
+		}
+	}
+}
+
+func (s *slackStream) deliverDelegatedResult(event transcript.Event) {
+	key := event.ID
+	if key == "" {
+		key = event.TurnID + ":" + string(event.Metadata)
+	}
+	s.delegatedMu.Lock()
+	if s.delegatedDelivered[key] || s.delegatedInFlight[key] {
+		s.delegatedMu.Unlock()
+		return
+	}
+	s.delegatedInFlight[key] = true
+	s.delegatedMu.Unlock()
+
+	err := s.presentDelegatedResult(event)
+	s.delegatedMu.Lock()
+	delete(s.delegatedInFlight, key)
+	if err == nil {
+		s.delegatedDelivered[key] = true
+	}
+	s.delegatedMu.Unlock()
+	if err != nil {
+		log.Printf("slack reviewer report delivery failed turn=%s event=%s error_code=%s error_type=%T", event.TurnID, event.ID, safeSlackErrorCode(err), err)
+	}
+}
+
+func (s *slackStream) presentDelegatedResult(event transcript.Event) error {
+	if event.Message == nil {
+		return nil
 	}
 	var metadata struct {
 		ChildRun struct {
@@ -53,7 +109,7 @@ func (s *slackStream) presentDelegatedResult(event transcript.Event) {
 		} `json:"child_run"`
 	}
 	if json.Unmarshal(event.Metadata, &metadata) != nil {
-		return
+		return nil
 	}
 	role := strings.TrimSpace(metadata.ChildRun.Role)
 	name := strings.TrimSpace(metadata.ChildRun.Name)
@@ -65,42 +121,39 @@ func (s *slackStream) presentDelegatedResult(event transcript.Event) {
 	}
 	text := strings.TrimSpace(event.Message.Text())
 	if text == "" {
-		return
+		return nil
 	}
-	const maxRunes = 2400
-	if runes := []rune(text); len(runes) > maxRunes {
-		text = string(runes[:maxRunes]) + "…"
-	}
-	message := "*Candidate report — awaiting Lead verification*\n" + text
-	persona := slackconversation.Persona{Name: "Kepler · " + name, IconEmoji: personaEmoji(role + " " + name)}
+	message := "### Agent report\n\n> Returned to the Lead for final verification and synthesis.\n\n" + text
+	persona := slackconversation.Persona{Name: name, IconEmoji: personaEmoji(name)}
 	ctx, cancel := s.deliveryContext()
 	defer cancel()
 	s.deliveryMu.Lock()
 	defer s.deliveryMu.Unlock()
-	if messenger, ok := s.messenger.(slackconversation.AttributedMessenger); ok {
-		if _, err := messenger.PostMessageAs(ctx, s.req.Channel, s.req.ThreadTS, message, persona); err == nil {
-			return
+	if messenger, ok := s.messenger.(slackconversation.AttributedMarkdownMessenger); ok {
+		if _, err := messenger.PostMarkdownMessageAs(ctx, s.req.Channel, s.req.ThreadTS, message, persona, event.ID); err == nil {
+			return nil
 		} else {
-			log.Printf("slack reviewer persona unavailable turn=%s role=%s: %v", event.TurnID, role, err)
+			log.Printf("slack reviewer persona markdown unavailable turn=%s role=%s error_code=%s error_type=%T", event.TurnID, role, safeSlackErrorCode(err), err)
+		}
+	} else if messenger, ok := s.messenger.(slackconversation.AttributedMessenger); ok {
+		if _, err := messenger.PostMessageAs(ctx, s.req.Channel, s.req.ThreadTS, message, persona); err == nil {
+			return nil
+		} else {
+			log.Printf("slack reviewer persona unavailable turn=%s role=%s error_code=%s error_type=%T", event.TurnID, role, safeSlackErrorCode(err), err)
 		}
 	}
-	_, _ = s.messenger.PostMessage(ctx, s.req.Channel, s.req.ThreadTS, "*["+name+"] Candidate report — awaiting Lead verification*\n"+text)
+	if messenger, ok := s.messenger.(slackconversation.IdempotentMarkdownMessenger); ok {
+		_, err := messenger.PostMarkdownMessageWithID(ctx, s.req.Channel, s.req.ThreadTS, "## "+name+"\n\n"+message, event.ID)
+		return err
+	}
+	_, err := s.messenger.PostMarkdownMessage(ctx, s.req.Channel, s.req.ThreadTS, "## "+name+"\n\n"+message)
+	return err
 }
 
 func personaEmoji(identity string) string {
-	identity = strings.ToLower(identity)
-	switch {
-	case strings.Contains(identity, "verif"), strings.Contains(identity, "验证"):
-		return ":mag:"
-	case strings.Contains(identity, "secur"), strings.Contains(identity, "安全"):
-		return ":shield:"
-	case strings.Contains(identity, "test"), strings.Contains(identity, "测试"):
-		return ":test_tube:"
-	case strings.Contains(identity, "data"), strings.Contains(identity, "数据库"):
-		return ":floppy_disk:"
-	default:
-		return ":robot_face:"
-	}
+	palette := [...]string{":robot_face:", ":mag:", ":shield:", ":test_tube:", ":floppy_disk:"}
+	digest := sha256.Sum256([]byte(strings.TrimSpace(identity)))
+	return palette[int(digest[0])%len(palette)]
 }
 
 func (s *slackStream) requestApproval(event transcript.Event) {
@@ -172,8 +225,22 @@ func (s *slackStream) setSessionStatus(status string) {
 	ctx, cancel := s.deliveryContext()
 	defer cancel()
 	if err := s.session.SetAgentSessionStatus(ctx, s.req.Channel, s.req.ThreadTS, s.req.UserID, status); err != nil {
-		log.Printf("slack agent session status unavailable turn=%s status=%s", s.req.EventID, status)
+		log.Printf("slack agent session status unavailable turn=%s status=%s error_code=%s error_type=%T", s.req.EventID, status, safeSlackErrorCode(err), err)
 		return
 	}
 	s.sessionStatus = status
+}
+
+func safeSlackErrorCode(err error) string {
+	var coded interface{ SlackErrorCode() string }
+	if errors.As(err, &coded) && strings.TrimSpace(coded.SlackErrorCode()) != "" {
+		return strings.TrimSpace(coded.SlackErrorCode())
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "deadline_exceeded"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
+	return "unknown"
 }

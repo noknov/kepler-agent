@@ -178,6 +178,20 @@ func TestClientMapsProviderFinishErrorToRetryableModelError(t *testing.T) {
 	}
 }
 
+func TestToToolCallClassifiesMalformedArgumentsAsRetryableProtocolError(t *testing.T) {
+	_, err := toToolCall(llm.ToolCall{ID: "call-1", Function: llm.ToolFunction{Name: "tool_search", Arguments: `{"action":"search"`}})
+	if err == nil {
+		t.Fatal("expected malformed arguments error")
+	}
+	var typed *model.Error
+	if !errors.As(err, &typed) || typed.Kind != model.ErrorProtocol || !typed.Retryable {
+		t.Fatalf("error = %#v, want retryable protocol error", err)
+	}
+	if strings.Contains(err.Error(), `{"action"`) || !strings.Contains(err.Error(), "bytes=") || !strings.Contains(err.Error(), "sha256_prefix=") {
+		t.Fatalf("error must contain safe diagnostics without raw arguments: %q", err)
+	}
+}
+
 func TestClientConvertsCanonicalRequestOnceForEveryProfile(t *testing.T) {
 	wire := &recordingWire{}
 	client := &Client{Wire: wire}

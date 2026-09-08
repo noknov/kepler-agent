@@ -88,12 +88,35 @@ func (c *Client) PostMessage(ctx context.Context, channel, threadTS, text string
 // Slack requires the chat:write.customize scope; this does not create a new
 // bot identity or permission principal.
 func (c *Client) PostMessageAs(ctx context.Context, channel, threadTS, text string, persona slackconversation.Persona) (string, error) {
+	return c.postMessageAs(ctx, channel, threadTS, text, nil, persona, "")
+}
+
+// PostMarkdownMessageAs gives worker reports the native Markdown rendering and
+// safe message splitting already used by the lead agent.
+func (c *Client) PostMarkdownMessageAs(ctx context.Context, channel, threadTS, markdown string, persona slackconversation.Persona, deliveryID string) (string, error) {
+	return c.postTextParts(ctx, channel, threadTS, markdown, deliveryID, MaxMessageTextRunes, func(ctx context.Context, threadTS, part, clientMessageID string) (string, error) {
+		blocks := []map[string]any{{"type": "markdown", "text": part}}
+		ts, err := c.postMessageAs(ctx, channel, threadTS, part, blocks, persona, clientMessageID)
+		if err == nil || !isSlackErrorCode(err, "invalid_blocks") {
+			return ts, err
+		}
+		return c.postMessageAs(ctx, channel, threadTS, part, nil, persona, clientMessageID)
+	})
+}
+
+func (c *Client) postMessageAs(ctx context.Context, channel, threadTS, text string, blocks []map[string]any, persona slackconversation.Persona, clientMessageID string) (string, error) {
 	payload := map[string]any{
 		"channel": channel, "text": text, "unfurl_links": false,
 		"username": strings.TrimSpace(persona.Name), "icon_emoji": strings.TrimSpace(persona.IconEmoji),
 	}
 	if threadTS != "" {
 		payload["thread_ts"] = threadTS
+	}
+	if len(blocks) > 0 {
+		payload["blocks"] = blocks
+	}
+	if clientMessageID != "" {
+		payload["client_msg_id"] = clientMessageID
 	}
 	var out struct {
 		OK    bool   `json:"ok"`

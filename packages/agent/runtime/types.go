@@ -29,7 +29,6 @@ const (
 	TerminationBudgetExhausted   TerminationReason = "budget_exhausted"
 	TerminationProviderCircuit   TerminationReason = "provider_circuit_open"
 	TerminationFallbackExhausted TerminationReason = "fallback_exhausted"
-	TerminationToolRoundLimit    TerminationReason = "tool_round_limit"
 )
 
 type Config struct {
@@ -38,7 +37,6 @@ type Config struct {
 	Temperature     *float64
 	MaxOutputTokens int
 	MaxSteps        int
-	MaxToolRounds   int
 	// MaxParallelToolCalls bounds the number of read-only, explicitly
 	// parallel-safe tool calls that may execute in one model step. It is a
 	// bulkhead: model output is untrusted and must not be able to create an
@@ -55,9 +53,6 @@ type Config struct {
 func (c Config) withDefaults() Config {
 	if c.MaxSteps <= 0 {
 		c.MaxSteps = 256
-	}
-	if c.MaxToolRounds <= 0 {
-		c.MaxToolRounds = 16
 	}
 	if c.MaxParallelToolCalls <= 0 {
 		c.MaxParallelToolCalls = 8

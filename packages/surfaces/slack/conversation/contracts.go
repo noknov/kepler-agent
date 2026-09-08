@@ -59,6 +59,13 @@ type AttributedMessenger interface {
 	PostMessageAs(ctx context.Context, channel, threadTS, text string, persona Persona) (string, error)
 }
 
+// AttributedMarkdownMessenger renders a worker's public report through the
+// same native Markdown and chunking path used by the lead response while
+// changing presentation identity only.
+type AttributedMarkdownMessenger interface {
+	PostMarkdownMessageAs(ctx context.Context, channel, threadTS, markdown string, persona Persona, deliveryID string) (string, error)
+}
+
 // ApprovalMessenger presents a user-confirmation control for an irreversible
 // or externally visible tool call.
 type ApprovalMessenger interface {

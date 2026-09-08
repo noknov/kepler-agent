@@ -113,23 +113,24 @@ Use `agent_view` for Slack's Agent experience. Restrict access with
 storage, OAuth, streaming, and tool settings are in
 [configuration](docs/configuration.md).
 
-Start a dedicated multi-agent pull-request review from a DM, mention, or
-existing agent thread. This is ordinary message routing and needs no registered
-Slack slash command:
-
-```text
-review PR https://github.com/owner/repository/pull/123
-deep review these PRs https://github.com/owner/api/pull/123 https://github.com/owner/web/pull/456
-```
+In Slack, ask the agent to review one to four full GitHub pull-request URLs.
+A small secondary-model router classifies the new conversation as `general` or
+`code_review`; it does not use keyword or regular-expression intent matching.
+The Code Review workflow validates PR URLs from the original message and
+persists its scope for follow-up replies. CLI and other surfaces remain generic
+and do not run this Slack product router.
 
 The lead agent pins the PR head, decomposes the change by risk, runs isolated
 read-only reviewers concurrently, sends candidate findings through a separate
-verification wave, and publishes one consolidated Slack response. App Home
-advertises this prompt entry; no Slack slash-command registration is required.
+verification wave, and publishes one consolidated Slack response. No Slack
+slash-command registration is required.
 With the optional `chat:write.customize` Slack scope, each worker candidate is
 shown using a role-specific display name and emoji. These are presentation-only
 personas under the same App identity; the lead's final verified report remains
-the authoritative result.
+the authoritative result. Reply directly in the same Slack thread to ask about
+a finding, request more evidence, or rerun part of the review. The workflow and
+original PR set are restored from durable turn metadata; a new root message
+starts a separate conversation.
 
 ### Web setup
 

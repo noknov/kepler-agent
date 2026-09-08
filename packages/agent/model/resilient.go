@@ -248,7 +248,7 @@ func retryable(err error) bool {
 		return false
 	}
 	var typed *Error
-	return errors.As(err, &typed) && typed.Retryable && (typed.Kind == ErrorTransient || typed.Kind == ErrorRateLimited || typed.Kind == ErrorUnavailable)
+	return errors.As(err, &typed) && typed.Retryable && (typed.Kind == ErrorTransient || typed.Kind == ErrorRateLimited || typed.Kind == ErrorUnavailable || typed.Kind == ErrorProtocol)
 }
 func canFailover(err error) bool { return retryable(err) }
 

@@ -3,6 +3,7 @@ package slackagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -17,9 +18,38 @@ import (
 	"github.com/noknov/kepler-agent/packages/session"
 	"github.com/noknov/kepler-agent/packages/sessioninput"
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
+	"github.com/noknov/kepler-agent/packages/workflows"
+	"github.com/noknov/kepler-agent/packages/workflows/codereview"
 )
 
 type replyModel struct{ request *model.Request }
+
+type fixedIntentRouter struct {
+	decision workflows.RouteDecision
+	request  workflows.RouteRequest
+}
+
+func (r *fixedIntentRouter) Route(_ context.Context, request workflows.RouteRequest) (workflows.RouteDecision, error) {
+	r.request = request
+	return r.decision, nil
+}
+
+type deferredReviewTool struct{ name string }
+
+func codeReviewWorkflows() workflows.Registry {
+	return workflows.NewRegistry(codereview.Definition{})
+}
+
+func (t deferredReviewTool) Descriptor() tool.Descriptor {
+	return tool.Descriptor{
+		Name: t.name, InputSchema: json.RawMessage(`{"type":"object"}`),
+		Effects: []tool.Effect{tool.EffectRead}, Exposure: tool.ExposureDeferred,
+	}
+}
+
+func (deferredReviewTool) Execute(context.Context, tool.Call) (tool.Result, error) {
+	return tool.TextResult("ok"), nil
+}
 
 func (m *replyModel) Generate(_ context.Context, request model.Request, sink model.EventSink) (model.Response, error) {
 	m.request = &request
@@ -39,10 +69,31 @@ type personaMessenger struct {
 	personaTexts []string
 }
 
+type failingPersonaMessenger struct {
+	fakeMessenger
+	personaCalls int
+}
+
+func (m *failingPersonaMessenger) PostMessageAs(context.Context, string, string, string, slackconversation.Persona) (string, error) {
+	m.personaCalls++
+	return "", errors.New("missing_scope")
+}
+
+func (m *failingPersonaMessenger) PostMarkdownMessageAs(context.Context, string, string, string, slackconversation.Persona, string) (string, error) {
+	m.personaCalls++
+	return "", errors.New("missing_scope")
+}
+
 func (m *personaMessenger) PostMessageAs(_ context.Context, _, _, text string, persona slackconversation.Persona) (string, error) {
 	m.personas = append(m.personas, persona)
 	m.personaTexts = append(m.personaTexts, text)
 	return "persona-post", nil
+}
+
+func (m *personaMessenger) PostMarkdownMessageAs(_ context.Context, _, _, text string, persona slackconversation.Persona, _ string) (string, error) {
+	m.personas = append(m.personas, persona)
+	m.personaTexts = append(m.personaTexts, text)
+	return "persona-markdown", nil
 }
 
 type memoryInputs struct {
@@ -172,13 +223,15 @@ func TestServiceRunsHostedHarnessAndPostsFormattedAnswer(t *testing.T) {
 	}
 }
 
-func TestServiceRoutesExplicitCodeReviewPromptToDedicatedWorkflow(t *testing.T) {
+func TestServiceRoutesCodeReviewIntentToDedicatedWorkflow(t *testing.T) {
 	catalog, err := tool.NewCatalog()
 	if err != nil {
 		t.Fatal(err)
 	}
 	messenger := &fakeMessenger{}
 	service := New(hosted.Agent{}, messenger, safety.PromptPolicy{}, safety.Redactor{}, nil)
+	service.Workflows = codeReviewWorkflows()
+	service.IntentRouter = &fixedIntentRouter{decision: workflows.RouteDecision{Intent: codereview.WorkflowName, Inputs: map[string]string{codereview.InputMode: "deep"}}}
 	client := &replyModel{}
 	runner, err := agentruntime.New(agentruntime.Config{Model: "test"}, agentruntime.Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore(), Events: service.EventSink()})
 	if err != nil {
@@ -187,7 +240,7 @@ func TestServiceRoutesExplicitCodeReviewPromptToDedicatedWorkflow(t *testing.T) 
 	service.Agent.Runtime = runner
 	_, err = service.HandleMention(context.Background(), slackconversation.Request{
 		EventID: "review-1", UserID: "U1", Channel: "C1", ThreadTS: "T1",
-		Text: "please review PR https://github.com/acme/widgets/pull/42 deep",
+		Text: "Deep review https://github.com/acme/widgets/pull/42",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -199,6 +252,89 @@ func TestServiceRoutesExplicitCodeReviewPromptToDedicatedWorkflow(t *testing.T) 
 	for _, want := range []string{"dedicated multi-agent pull-request review workflow", "verification wave", "Requested review mode: deep"} {
 		if !strings.Contains(system, want) {
 			t.Fatalf("review system prompt missing %q", want)
+		}
+	}
+}
+
+func TestSlackIntentRouterActivatesCodeReviewFromUserMessage(t *testing.T) {
+	catalog, err := tool.NewCatalog(
+		deferredReviewTool{name: "github-pr_diff"},
+		deferredReviewTool{name: "github-pr_file_diff"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messenger := &fakeMessenger{}
+	service := New(hosted.Agent{}, messenger, safety.PromptPolicy{}, safety.Redactor{}, nil)
+	service.Workflows = codeReviewWorkflows()
+	router := &fixedIntentRouter{decision: workflows.RouteDecision{Intent: codereview.WorkflowName, Inputs: map[string]string{codereview.InputMode: "deep"}}}
+	service.IntentRouter = router
+	client := &replyModel{}
+	runner, err := agentruntime.New(agentruntime.Config{Model: "primary"}, agentruntime.Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore(), Events: service.EventSink()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.Agent.Runtime = runner
+
+	accepted, err := service.HandleMention(context.Background(), slackconversation.Request{
+		EventID: "review-routed", UserID: "U1", Channel: "C1", ThreadTS: "T1",
+		Text: "请 deep review https://github.com/acme/widgets/pull/42",
+	})
+	if err != nil || !accepted {
+		t.Fatalf("accepted=%v err=%v", accepted, err)
+	}
+	if client.request == nil || !strings.Contains(client.request.Messages[0].Text(), "Requested review mode: deep") {
+		t.Fatalf("request=%+v", client.request)
+	}
+	if router.request.SessionID == "" {
+		t.Fatal("intent router did not receive the stable Slack session ID")
+	}
+}
+
+func TestCodeReviewThreadReplyContinuesDurableWorkflowWithoutMention(t *testing.T) {
+	catalog, _ := tool.NewCatalog()
+	messenger := &fakeMessenger{}
+	service := New(hosted.Agent{}, messenger, safety.PromptPolicy{}, safety.Redactor{}, nil)
+	service.Workflows = codeReviewWorkflows()
+	service.IntentRouter = &fixedIntentRouter{decision: workflows.RouteDecision{Intent: codereview.WorkflowName, Inputs: map[string]string{codereview.InputMode: "deep"}}}
+	client := &replyModel{}
+	runner, _ := agentruntime.New(agentruntime.Config{Model: "test"}, agentruntime.Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore(), Events: service.EventSink()})
+	service.Agent.Runtime = runner
+
+	request := slackconversation.Request{
+		EventID: "review", UserID: "U1", Channel: "C1", ThreadTS: "T1", Text: "Deep review https://github.com/acme/widgets/pull/42",
+	}
+	if accepted, err := service.HandleMention(context.Background(), request); err != nil || !accepted {
+		t.Fatalf("initial accepted=%v err=%v", accepted, err)
+	}
+	request.EventID = "follow-up"
+	request.Text = "第二个候选问题为什么被确认？"
+	if accepted, err := service.HandleReply(context.Background(), request); err != nil || !accepted {
+		t.Fatalf("follow-up accepted=%v err=%v", accepted, err)
+	}
+	if client.request == nil || !strings.Contains(client.request.Messages[0].Text(), "continuing an existing pull-request review") {
+		t.Fatalf("follow-up did not retain workflow: %+v", client.request)
+	}
+	if !strings.Contains(client.request.Messages[0].Text(), "https://github.com/acme/widgets/pull/42") {
+		t.Fatalf("follow-up lost PR identity: %q", client.request.Messages[0].Text())
+	}
+}
+
+func TestServiceActivatesKnownCodeReviewToolsWithoutToolSearch(t *testing.T) {
+	catalog, err := tool.NewCatalog(
+		deferredReviewTool{name: "github-pr_diff"},
+		deferredReviewTool{name: "github-pr_file_diff"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := Service{Tools: catalog}
+	if err := service.activateWorkflowTools("review-session", []string{"github-pr_diff", "github-pr_file_diff"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"github-pr_diff", "github-pr_file_diff"} {
+		if _, ok := catalog.GetActive("review-session", name); !ok {
+			t.Fatalf("%s was not activated", name)
 		}
 	}
 }
@@ -240,17 +376,37 @@ func TestStreamProjectsRuntimeTerminalStateToSession(t *testing.T) {
 	}
 }
 
-func TestStreamPresentsDelegatedReviewAsPersonaCandidate(t *testing.T) {
+func TestStreamPresentsDelegatedReportThroughPersonaMarkdown(t *testing.T) {
 	messenger := &personaMessenger{}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T", Text: "review PR"})
+	stream.SetExposeWorkerResults(true)
 	metadata := json.RawMessage(`{"child_run":{"name":"auth-boundary","role":"Security reviewer"}}`)
-	message := model.TextMessage(model.RoleAssistant, "possible authorization bypass")
+	message := model.TextMessage(model.RoleAssistant, "possible authorization bypass with a long internal evidence report")
 	stream.Lifecycle(transcript.Event{TurnID: "review", Type: transcript.DelegatedTaskCompleted, Message: &message, Metadata: metadata})
-	if len(messenger.personas) != 1 || messenger.personas[0].Name != "Kepler · auth-boundary" || messenger.personas[0].IconEmoji != ":shield:" {
+	if len(messenger.personas) != 1 || messenger.personas[0].Name != "auth-boundary" || messenger.personas[0].IconEmoji != personaEmoji("auth-boundary") {
 		t.Fatalf("personas=%+v", messenger.personas)
 	}
-	if len(messenger.personaTexts) != 1 || !strings.Contains(messenger.personaTexts[0], "awaiting Lead verification") {
+	if len(messenger.personaTexts) != 1 || !strings.Contains(messenger.personaTexts[0], "Agent report") || !strings.Contains(messenger.personaTexts[0], "authorization bypass") {
 		t.Fatalf("texts=%+v", messenger.personaTexts)
+	}
+}
+
+func TestStreamReplaysMissingDelegatedResultAndDoesNotDuplicateDeliveredResult(t *testing.T) {
+	messenger := &failingPersonaMessenger{}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T", Text: "review PR"})
+	stream.SetExposeWorkerResults(true)
+	metadata := json.RawMessage(`{"child_run":{"name":"auth-boundary","role":"Security reviewer"}}`)
+	message := model.TextMessage(model.RoleAssistant, "possible authorization bypass")
+	event := transcript.Event{ID: "delegated-1", TurnID: "review", Type: transcript.DelegatedTaskCompleted, Message: &message, Metadata: metadata}
+	stream.ReplayDelegatedResults("review", []transcript.Event{event})
+	stream.ReplayDelegatedResults("review", []transcript.Event{event})
+	if messenger.personaCalls != 1 {
+		t.Fatalf("persona calls=%d", messenger.personaCalls)
+	}
+	messenger.mu.Lock()
+	defer messenger.mu.Unlock()
+	if len(messenger.posts) != 1 || !strings.Contains(messenger.posts[0], "auth-boundary") {
+		t.Fatalf("fallback posts=%+v", messenger.posts)
 	}
 }
 

@@ -95,16 +95,31 @@ workflows without model tool-call JSON. A task batch is bounded and
 cancellation-aware; each result includes its child session/turn, identity,
 termination, usage, and error as durable audit metadata.
 
-Slack prompts containing explicit review intent and one or more GitHub PR URLs
-select the Code Review product workflow; no registered slash command is used.
+Delegation inherits the parent turn deadline by default. A deployment may add
+optional batch and worker deadlines when it needs tighter isolation. A
+configured worker deadline begins only after that worker acquires a concurrency
+slot, so queueing cannot consume its model retry budget before it starts.
+
+Slack uses the configured secondary model as a small semantic router for new
+conversations. The router returns a validated `general|code_review` decision;
+it has no tools and never uses keyword or regular-expression intent matching.
+Code Review then extracts and validates one to four GitHub PR URLs from the
+original message and accepts an optional `fast|standard|deep` mode. Routing
+failures fall back to general conversation. CLI, app-server, and other surfaces
+do not install this Slack product router and remain generic.
 The ordinary hosted agent becomes the coordinator and uses the same runtime to
 triage an immutable GitHub PR head, launch a bounded risk-based reviewer batch,
 run a distinct verification batch that attempts to disprove candidates, and
 synthesize one report. Slack renders coordinator-authored plan tasks as the
-team view. Worker streams and raw reports remain internal so multiple agent
-voices cannot bypass verification or create duplicate authoritative findings.
-When the Slack installation grants `chat:write.customize`, completed workers
-also publish clearly marked candidate reports with role-specific display names
-and emoji. They remain the same Slack App principal and are explicitly labeled
-as awaiting Lead verification; a regular App message is the fallback when the
-scope is absent.
+team view. Worker streams remain internal. Completed worker reports are durable
+delegation events and Slack projects each one as a clearly marked, non-authoritative
+candidate report. With `chat:write.customize`, those reports use role-specific
+display names and emoji under the same Slack App principal; otherwise Slack uses
+a regular App message. Before the lead response, the projection reconciles the
+turn against the canonical transcript so a missed live event can be recovered.
+
+Workflow selection produces a transport-neutral activation containing its
+prompt, durable scope, required tools, and thread-ownership policy. Code Review
+stores the normalized PR URLs and mode in turn scope. A later reply from the
+same user in the same Slack thread restores that activation without reparsing
+the follow-up as a new review command; a new root message remains a new session.

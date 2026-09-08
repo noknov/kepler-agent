@@ -3,6 +3,7 @@ package delegation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -16,8 +17,8 @@ import (
 )
 
 const (
-	defaultExploreMaxSteps   = 12
-	defaultExploreMaxWorkers = 3
+	defaultExploreMaxSteps   = 64
+	defaultExploreMaxWorkers = 5
 	defaultExploreMaxJobs    = 8
 )
 
@@ -32,8 +33,17 @@ type Runner struct {
 	MaxSteps      int
 	MaxWorkers    int
 	MaxJobs       int
-	Timeout       time.Duration
+	Budget        ExecutionBudget
 	SystemPrompt  string
+}
+
+// ExecutionBudget optionally places tighter bounds inside the parent turn.
+// Zero values inherit the caller's deadline. When configured, BatchTimeout
+// bounds the complete delegation call and WorkerTimeout starts only after a
+// worker acquires a slot.
+type ExecutionBudget struct {
+	BatchTimeout  time.Duration
+	WorkerTimeout time.Duration
 }
 
 // TaskSpec is the transport-neutral contract for one isolated agent worker.
@@ -125,15 +135,16 @@ func (t ExploreTool) Descriptor() tool.Descriptor {
 		}),
 		tool.WithEffects(tool.EffectRead),
 		tool.WithParallel(true),
-		tool.WithTimeout(t.Runner.timeout()),
+		tool.WithTimeout(t.Runner.batchTimeout()),
 	)
 }
 
-func (r Runner) timeout() time.Duration {
-	if r.Timeout > 0 {
-		return r.Timeout
-	}
-	return 2 * time.Minute
+func (r Runner) batchTimeout() time.Duration {
+	return r.Budget.BatchTimeout
+}
+
+func (r Runner) workerTimeout() time.Duration {
+	return r.Budget.WorkerTimeout
 }
 
 func (t ExploreTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
@@ -278,6 +289,11 @@ func (r Runner) runJob(ctx context.Context, parentCall tool.Call, job TaskSpec) 
 
 // RunTask runs one isolated child agent through the shared Kepler runtime.
 func (r Runner) RunTask(ctx context.Context, request TaskRequest) (TaskResult, error) {
+	if timeout := r.workerTimeout(); timeout > 0 {
+		workerCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		ctx = workerCtx
+	}
 	job := normalizeTask(request.Spec)
 	if job.Task == "" {
 		return TaskResult{}, fmt.Errorf("task is required")
@@ -309,7 +325,10 @@ func (r Runner) RunTask(ctx context.Context, request TaskRequest) (TaskResult, e
 	sessionID := deps.IDs.New("explore")
 	turnID := deps.IDs.New("turn")
 	audit := ChildRun{SessionID: sessionID, TurnID: turnID, Name: job.Name, Role: job.Role, Task: job.Task}
-	r.publishTaskEvent(ctx, parentEvents, request, transcript.DelegatedTaskStarted, audit, nil)
+	if err := r.publishTaskEvent(ctx, parentEvents, request, transcript.DelegatedTaskStarted, audit, nil); err != nil {
+		audit.Error = err.Error()
+		return TaskResult{Audit: audit}, fmt.Errorf("record delegated task start: %w", err)
+	}
 	input := taskInput(job)
 	scope := tool.Scope{
 		SessionID: sessionID,
@@ -335,27 +354,30 @@ func (r Runner) RunTask(ctx context.Context, request TaskRequest) (TaskResult, e
 	audit.Usage = result.Usage
 	if err != nil {
 		audit.Error = err.Error()
-		r.publishTaskEvent(ctx, parentEvents, request, transcript.DelegatedTaskFailed, audit, nil)
-		return TaskResult{Audit: audit}, err
+		publishErr := r.publishTaskEvent(ctx, parentEvents, request, transcript.DelegatedTaskFailed, audit, nil)
+		return TaskResult{Audit: audit}, errors.Join(err, publishErr)
 	}
 	text := strings.TrimSpace(result.Message.Text())
 	if text == "" {
 		err := fmt.Errorf("exploration sub-agent returned an empty report")
 		audit.Error = err.Error()
-		r.publishTaskEvent(ctx, parentEvents, request, transcript.DelegatedTaskFailed, audit, nil)
-		return TaskResult{Audit: audit}, err
+		publishErr := r.publishTaskEvent(ctx, parentEvents, request, transcript.DelegatedTaskFailed, audit, nil)
+		return TaskResult{Audit: audit}, errors.Join(err, publishErr)
 	}
-	r.publishTaskEvent(ctx, parentEvents, request, transcript.DelegatedTaskCompleted, audit, &result.Message)
+	if err := r.publishTaskEvent(ctx, parentEvents, request, transcript.DelegatedTaskCompleted, audit, &result.Message); err != nil {
+		audit.Error = err.Error()
+		return TaskResult{Message: result.Message, Audit: audit}, fmt.Errorf("record delegated task completion: %w", err)
+	}
 	return TaskResult{Message: result.Message, Audit: audit}, nil
 }
 
-func (r Runner) publishTaskEvent(ctx context.Context, sink transcript.Sink, request TaskRequest, eventType transcript.EventType, audit ChildRun, message *model.Message) {
-	if request.Parent == nil || request.Scope.Values["delegation_presentation"] != "persona" || r.Deps.Transcript == nil {
-		return
+func (r Runner) publishTaskEvent(ctx context.Context, sink transcript.Sink, request TaskRequest, eventType transcript.EventType, audit ChildRun, message *model.Message) error {
+	if request.Parent == nil || r.Deps.Transcript == nil {
+		return nil
 	}
 	metadata, err := json.Marshal(map[string]any{"child_run": audit})
 	if err != nil {
-		return
+		return err
 	}
 	ids := r.Deps.IDs
 	if ids == nil {
@@ -365,9 +387,13 @@ func (r Runner) publishTaskEvent(ctx context.Context, sink transcript.Sink, requ
 		ID: ids.New("event"), SessionID: request.Parent.SessionID, TurnID: request.Parent.TurnID,
 		Type: eventType, Timestamp: time.Now().UTC(), Message: message, Metadata: metadata,
 	})
-	if err == nil && sink != nil {
+	if err != nil {
+		return err
+	}
+	if sink != nil {
 		sink.Publish(ctx, event)
 	}
+	return nil
 }
 
 func taskInput(job TaskSpec) string {

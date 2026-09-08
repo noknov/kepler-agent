@@ -118,10 +118,11 @@ type ToolConfig struct {
 	CommandTimeout            time.Duration
 	AgentTurnTimeout          time.Duration
 	AgentMaxSteps             int
-	AgentMaxToolRounds        int
 	AgentMaxParallelToolCalls int
 	AgentExploreMaxSteps      int
-	AgentExploreTimeout       time.Duration
+	AgentExploreMaxWorkers    int
+	AgentExploreWorkerTimeout time.Duration
+	AgentExploreBatchTimeout  time.Duration
 	AllowedWriteTools         []string
 }
 
@@ -380,10 +381,11 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			CommandTimeout:            envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
 			AgentTurnTimeout:          envDuration("AGENT_TURN_TIMEOUT", 30*time.Minute),
 			AgentMaxSteps:             envInt("AGENT_MAX_STEPS", 64),
-			AgentMaxToolRounds:        envInt("AGENT_MAX_TOOL_ROUNDS", 16),
 			AgentMaxParallelToolCalls: envInt("AGENT_MAX_PARALLEL_TOOL_CALLS", 8),
-			AgentExploreMaxSteps:      envInt("AGENT_EXPLORE_MAX_STEPS", 8),
-			AgentExploreTimeout:       envDuration("AGENT_EXPLORE_TIMEOUT", 2*time.Minute),
+			AgentExploreMaxSteps:      envInt("AGENT_EXPLORE_MAX_STEPS", 64),
+			AgentExploreMaxWorkers:    envInt("AGENT_EXPLORE_MAX_WORKERS", 5),
+			AgentExploreWorkerTimeout: envDuration("AGENT_EXPLORE_WORKER_TIMEOUT", 0),
+			AgentExploreBatchTimeout:  envDuration("AGENT_EXPLORE_BATCH_TIMEOUT", 0),
 			AllowedWriteTools: envCSVDefault("AGENT_ALLOWED_WRITE_TOOLS", []string{
 				"luckin-cancel_order", "luckin-create_order", "reminder-create", "reminder-cancel", "slack-create_canvas", "slack-user_post_message", "tts-speak",
 			}),
@@ -519,6 +521,9 @@ func validateForProfile(cfg Config, profile RuntimeProfile) (Config, error) {
 	}
 	if cfg.HTTP.EventWorkers <= 0 || cfg.HTTP.EventQueueSize <= 0 || cfg.HTTP.EventEnqueueTimeout <= 0 || cfg.HTTP.EventTimeout <= 0 || cfg.HTTP.EventMaxAttempts <= 0 || cfg.HTTP.EventRetryBase <= 0 || cfg.HTTP.EventRetryMax < cfg.HTTP.EventRetryBase || cfg.HTTP.ShutdownTimeout <= 0 {
 		return cfg, fmt.Errorf("event worker, queue, timeout, retry, and shutdown settings must be positive and internally consistent")
+	}
+	if cfg.Tools.AgentExploreMaxSteps <= 0 || cfg.Tools.AgentExploreMaxWorkers <= 0 || cfg.Tools.AgentExploreWorkerTimeout < 0 || cfg.Tools.AgentExploreBatchTimeout < 0 || (cfg.Tools.AgentExploreWorkerTimeout > 0 && cfg.Tools.AgentExploreBatchTimeout > 0 && cfg.Tools.AgentExploreBatchTimeout < cfg.Tools.AgentExploreWorkerTimeout) {
+		return cfg, fmt.Errorf("agent explore limits must be positive; optional budgets must be non-negative and batch timeout cannot be shorter than worker timeout")
 	}
 	seenWriteTools := make(map[string]bool, len(cfg.Tools.AllowedWriteTools))
 	for _, name := range cfg.Tools.AllowedWriteTools {
@@ -850,7 +855,7 @@ func envBoolValue(raw string) bool {
 }
 
 func validateTypedEnvironment() error {
-	integers := []string{"AGENT_MAX_STEPS", "AGENT_EXPLORE_MAX_STEPS", "LLM_MAX_OUTPUT_TOKENS", "LLM_RESILIENCE_MAX_ATTEMPTS", "LLM_CIRCUIT_FAILURE_THRESHOLD", "SESSION_AUTOCOMPACT_BUFFER", "SESSION_MAX_CONTEXT_TOKENS", "SESSION_MAX_TOOL_RESULT_TOKENS", "SLACK_EVENT_MAX_ATTEMPTS", "SLACK_EVENT_QUEUE_SIZE", "SLACK_EVENT_WORKERS"}
+	integers := []string{"AGENT_MAX_STEPS", "AGENT_EXPLORE_MAX_STEPS", "AGENT_EXPLORE_MAX_WORKERS", "LLM_MAX_OUTPUT_TOKENS", "LLM_RESILIENCE_MAX_ATTEMPTS", "LLM_CIRCUIT_FAILURE_THRESHOLD", "SESSION_AUTOCOMPACT_BUFFER", "SESSION_MAX_CONTEXT_TOKENS", "SESSION_MAX_TOOL_RESULT_TOKENS", "SLACK_EVENT_MAX_ATTEMPTS", "SLACK_EVENT_QUEUE_SIZE", "SLACK_EVENT_WORKERS"}
 	for _, key := range integers {
 		if raw := strings.TrimSpace(os.Getenv(key)); raw != "" {
 			if _, err := strconv.Atoi(raw); err != nil {
@@ -858,7 +863,7 @@ func validateTypedEnvironment() error {
 			}
 		}
 	}
-	durations := []string{"HTTP_SHUTDOWN_TIMEOUT", "SLACK_EVENT_ENQUEUE_TIMEOUT", "SLACK_EVENT_INBOX_LEASE", "SLACK_EVENT_RETRY_BASE", "SLACK_EVENT_RETRY_MAX", "SLACK_EVENT_TIMEOUT", "TOOL_COMMAND_TIMEOUT", "AGENT_EXPLORE_TIMEOUT", "LLM_RESILIENCE_RETRY_BASE", "LLM_RESILIENCE_MIN_ATTEMPT_BUDGET", "LLM_CIRCUIT_COOLDOWN"}
+	durations := []string{"HTTP_SHUTDOWN_TIMEOUT", "SLACK_EVENT_ENQUEUE_TIMEOUT", "SLACK_EVENT_INBOX_LEASE", "SLACK_EVENT_RETRY_BASE", "SLACK_EVENT_RETRY_MAX", "SLACK_EVENT_TIMEOUT", "TOOL_COMMAND_TIMEOUT", "AGENT_EXPLORE_WORKER_TIMEOUT", "AGENT_EXPLORE_BATCH_TIMEOUT", "LLM_RESILIENCE_RETRY_BASE", "LLM_RESILIENCE_MIN_ATTEMPT_BUDGET", "LLM_CIRCUIT_COOLDOWN"}
 	for _, key := range durations {
 		raw := strings.TrimSpace(os.Getenv(key))
 		if raw == "" {

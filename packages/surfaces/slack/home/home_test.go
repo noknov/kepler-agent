@@ -71,6 +71,9 @@ func TestViewShowsModelDisplayNamesWithoutCodeFormatting(t *testing.T) {
 	if !strings.Contains(body, "Explorer Model") {
 		t.Fatalf("expected explorer model label, got %s", body)
 	}
+	if !strings.Contains(body, "Capabilities") || !strings.Contains(body, "Code Review") || !strings.Contains(body, "secondary model") {
+		t.Fatalf("expected conversational code review capability, got %s", body)
+	}
 	if strings.Contains(body, "Active-turn") || strings.Contains(body, "Image Model") || strings.Contains(body, "toggle_conversation_mode") {
 		t.Fatalf("expected no active-turn or image model fields, got %s", body)
 	}

@@ -262,12 +262,16 @@ type Client interface {
 type ErrorKind string
 
 const (
-	ErrorTransient         ErrorKind = "transient"
-	ErrorRateLimited       ErrorKind = "rate_limited"
-	ErrorContextLimit      ErrorKind = "context_limit"
-	ErrorInvalid           ErrorKind = "invalid_request"
-	ErrorAuth              ErrorKind = "authentication"
-	ErrorUnavailable       ErrorKind = "unavailable"
+	ErrorTransient    ErrorKind = "transient"
+	ErrorRateLimited  ErrorKind = "rate_limited"
+	ErrorContextLimit ErrorKind = "context_limit"
+	ErrorInvalid      ErrorKind = "invalid_request"
+	ErrorAuth         ErrorKind = "authentication"
+	ErrorUnavailable  ErrorKind = "unavailable"
+	// ErrorProtocol means the provider returned a response that could not be
+	// converted into the canonical model protocol. It is safe to retry before
+	// any user-visible output or executable tool call has been committed.
+	ErrorProtocol          ErrorKind = "provider_protocol"
 	ErrorBudgetExhausted   ErrorKind = "budget_exhausted"
 	ErrorCircuitOpen       ErrorKind = "circuit_open"
 	ErrorFallbackExhausted ErrorKind = "fallback_exhausted"

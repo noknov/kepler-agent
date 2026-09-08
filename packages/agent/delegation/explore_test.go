@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
@@ -47,6 +49,33 @@ type failingExploreModel struct{}
 
 func (failingExploreModel) Generate(_ context.Context, _ model.Request, _ model.EventSink) (model.Response, error) {
 	return model.Response{}, context.DeadlineExceeded
+}
+
+type deadlineRecordingModel struct {
+	mu           sync.Mutex
+	remaining    []time.Duration
+	firstStarted chan struct{}
+	releaseFirst chan struct{}
+}
+
+func (m *deadlineRecordingModel) Generate(ctx context.Context, _ model.Request, _ model.EventSink) (model.Response, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return model.Response{}, context.DeadlineExceeded
+	}
+	m.mu.Lock()
+	index := len(m.remaining)
+	m.remaining = append(m.remaining, time.Until(deadline))
+	m.mu.Unlock()
+	if index == 0 {
+		close(m.firstStarted)
+		select {
+		case <-m.releaseFirst:
+		case <-ctx.Done():
+			return model.Response{}, ctx.Err()
+		}
+	}
+	return model.Response{Message: model.TextMessage(model.RoleAssistant, "report"), FinishReason: model.FinishStop}, nil
 }
 
 func TestExploreToolRunsParallelJobs(t *testing.T) {
@@ -94,6 +123,70 @@ func TestExploreToolRunsParallelJobs(t *testing.T) {
 		if metadata.Parent.SessionID != "ses_test" || metadata.Parent.TurnID != "turn_parent" || metadata.Parent.Kind != "agent_explore" {
 			t.Fatalf("child parent metadata = %#v", metadata.Parent)
 		}
+	}
+}
+
+func TestQueuedWorkerReceivesFreshExecutionBudgetAfterAcquiringSlot(t *testing.T) {
+	parent, err := tool.NewCatalog(echoReadTool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &deadlineRecordingModel{firstStarted: make(chan struct{}), releaseFirst: make(chan struct{})}
+	runner := Runner{
+		Config:        agentruntime.Config{Model: "test"},
+		Deps:          agentruntime.Dependencies{Model: client, Transcript: transcript.NewMemoryStore()},
+		ParentCatalog: parent,
+		AllowedTools:  DefaultLocalAllowedTools(),
+		MaxWorkers:    1,
+		Budget:        ExecutionBudget{WorkerTimeout: 500 * time.Millisecond, BatchTimeout: time.Second},
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, executeErr := (ExploreTool{Runner: runner}).Execute(context.Background(), tool.Call{
+			Arguments: json.RawMessage(`{"tasks":[{"task":"first"},{"task":"second"}]}`),
+			Scope:     tool.Scope{SessionID: "parent", TurnID: "turn"},
+		})
+		done <- executeErr
+	}()
+	select {
+	case <-client.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first worker did not start")
+	}
+	time.Sleep(250 * time.Millisecond)
+	close(client.releaseFirst)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	client.mu.Lock()
+	remaining := append([]time.Duration(nil), client.remaining...)
+	client.mu.Unlock()
+	if len(remaining) != 2 {
+		t.Fatalf("worker model calls = %d, want 2", len(remaining))
+	}
+	if remaining[1] < 400*time.Millisecond {
+		t.Fatalf("queued worker inherited queue delay: remaining budget = %s", remaining[1])
+	}
+}
+
+func TestExploreToolDescriptorUsesBatchBudget(t *testing.T) {
+	if timeout := (ExploreTool{Runner: Runner{}}).Descriptor().Timeout; timeout != 0 {
+		t.Fatalf("default descriptor timeout = %s, want inherited parent deadline", timeout)
+	}
+	descriptor := (ExploreTool{Runner: Runner{Budget: ExecutionBudget{WorkerTimeout: time.Minute, BatchTimeout: 3 * time.Minute}}}).Descriptor()
+	if descriptor.Timeout != 3*time.Minute {
+		t.Fatalf("descriptor timeout = %s, want 3m", descriptor.Timeout)
+	}
+}
+
+func TestExploreConfigUsesConfiguredStepGuard(t *testing.T) {
+	defaults := (Runner{}).exploreConfig()
+	if defaults.MaxSteps != 64 {
+		t.Fatalf("default explore step limit = %d, want 64", defaults.MaxSteps)
+	}
+	explicit := (Runner{MaxSteps: 40}).exploreConfig()
+	if explicit.MaxSteps != 40 {
+		t.Fatalf("explicit explore step limit = %d, want 40", explicit.MaxSteps)
 	}
 }
 
@@ -215,7 +308,7 @@ func TestRunTaskPublishesCanonicalPersonaLifecycleForOptedInWorkflow(t *testing.
 	}
 	_, err = runner.RunTask(context.Background(), TaskRequest{
 		Spec:   TaskSpec{Name: "auth", Role: "Security reviewer", Task: "check auth"},
-		Scope:  tool.Scope{Values: map[string]string{"delegation_presentation": "persona"}},
+		Scope:  tool.Scope{},
 		Parent: &agentruntime.ParentLink{SessionID: "parent", TurnID: "review", Kind: "agent_explore"},
 	})
 	if err != nil {

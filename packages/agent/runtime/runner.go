@@ -129,7 +129,6 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	if r.deps.Tools.Has("update_plan") {
 		system = appendSystemInstruction(system, planningInstruction)
 	}
-	toolRounds := 0
 	for step := 1; step <= r.config.MaxSteps; step++ {
 		result.Steps = step
 		if err := r.recordStepStarted(ctx, request, step); err != nil {
@@ -190,10 +189,6 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 			result.Message = response.Message
 			return r.finishTurn(ctx, result, response.Message, TerminationCompleted, nil)
 		}
-		toolRounds++
-		if toolRounds > r.config.MaxToolRounds {
-			return r.finishTurn(ctx, result, response.Message, TerminationToolRoundLimit, errors.New("consecutive tool round limit reached"))
-		}
 		outcome, err := r.executeTools(ctx, request, calls)
 		if errors.Is(err, errPendingApproval) {
 			// Waiting for a user decision is a normal terminal state, not a
@@ -210,7 +205,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 			return r.failTurn(ctx, result, err)
 		}
 	}
-	return r.finishTurn(ctx, result, result.Message, TerminationMaxSteps, errors.New("tool step limit reached"))
+	return r.finishTurn(ctx, result, result.Message, TerminationMaxSteps, errors.New("agent execution step limit reached"))
 }
 
 func completedTurn(events []transcript.Event, turnID string) (TurnResult, error, bool) {

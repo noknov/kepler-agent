@@ -260,7 +260,7 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 			if tc.Function.Arguments != "" {
 				stream := argumentStreams[tc.Index]
 				if stream == nil {
-					stream = &toolArgumentStream{snapshotValid: true}
+					stream = &toolArgumentStream{}
 					argumentStreams[tc.Index] = stream
 				}
 				call.Function.Arguments = stream.Append(tc.Function.Arguments)
@@ -300,46 +300,29 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 }
 
 type toolArgumentStream struct {
-	delta         string
-	snapshot      string
-	snapshotValid bool
+	assembled string
 }
 
 func (s *toolArgumentStream) Append(update string) string {
-	s.delta += update
-	if s.snapshotValid {
-		if s.snapshot == "" || strings.HasPrefix(update, s.snapshot) {
-			s.snapshot = update
-		} else {
-			s.snapshotValid = false
-		}
-	}
-	return s.Current()
+	// The OpenAI streaming contract defines function arguments as deltas.
+	// Provider responses that violate this contract are rejected by the
+	// canonical conversion boundary and handled by the typed retry policy.
+	s.assembled += update
+	return s.assembled
 }
 
 func (s *toolArgumentStream) Current() string {
 	if s == nil {
 		return ""
 	}
-	if s.snapshotValid {
-		return s.snapshot
-	}
-	return s.delta
+	return s.assembled
 }
 
 func (s *toolArgumentStream) Final() string {
 	if s == nil {
 		return ""
 	}
-	if !s.snapshotValid {
-		return s.delta
-	}
-	deltaValid := json.Valid([]byte(s.delta))
-	snapshotValid := json.Valid([]byte(s.snapshot))
-	if snapshotValid && !deltaValid {
-		return s.snapshot
-	}
-	return s.delta
+	return s.assembled
 }
 
 func finalizeToolCallArguments(call *ToolCall, stream *toolArgumentStream) {

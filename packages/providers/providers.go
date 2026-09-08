@@ -5,6 +5,7 @@ package providers
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -350,11 +351,17 @@ func fromWireMessage(message llm.Message) (model.Message, error) {
 
 func toToolCall(call llm.ToolCall) (model.ToolCall, error) {
 	if strings.TrimSpace(call.ID) == "" || strings.TrimSpace(call.Function.Name) == "" {
-		return model.ToolCall{}, fmt.Errorf("provider returned an incomplete tool call")
+		return model.ToolCall{}, &model.Error{Kind: model.ErrorProtocol, Message: "provider returned an incomplete tool call", Retryable: true}
 	}
 	arguments := json.RawMessage(call.Function.Arguments)
-	if !json.Valid(arguments) {
-		return model.ToolCall{}, fmt.Errorf("provider returned invalid JSON arguments for tool %q", call.Function.Name)
+	var object map[string]json.RawMessage
+	if json.Unmarshal(arguments, &object) != nil || object == nil {
+		fingerprint := sha256.Sum256(arguments)
+		return model.ToolCall{}, &model.Error{
+			Kind:      model.ErrorProtocol,
+			Message:   fmt.Sprintf("provider returned invalid JSON arguments for tool %q (bytes=%d sha256_prefix=%x)", call.Function.Name, len(arguments), fingerprint[:8]),
+			Retryable: true,
+		}
 	}
 	return model.ToolCall{ID: call.ID, Name: call.Function.Name, Arguments: arguments}, nil
 }

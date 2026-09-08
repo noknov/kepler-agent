@@ -5,23 +5,38 @@ import (
 	"testing"
 )
 
-func TestParseExplicitCodeReviewCommand(t *testing.T) {
-	command, ok := Parse("please review PR https://github.com/acme/widgets/pull/42 deep")
-	if !ok || len(command.URLs) != 1 || command.URLs[0] != "https://github.com/acme/widgets/pull/42" || command.Mode != "deep" {
-		t.Fatalf("command=%+v ok=%t", command, ok)
+func TestScopeValuesRoundTripContinuation(t *testing.T) {
+	want := Command{URLs: []string{"https://github.com/acme/widgets/pull/42", "https://github.com/acme/api/pull/7"}, Mode: "deep"}
+	got, ok := FromScope(ScopeValues(want))
+	if !ok || !got.Continuation || got.Mode != want.Mode || strings.Join(got.URLs, ",") != strings.Join(want.URLs, ",") {
+		t.Fatalf("restored=%+v ok=%v", got, ok)
+	}
+	fragment := Fragment(got)
+	if !strings.Contains(fragment.Content, "continuing an existing") || strings.Contains(fragment.Content, "Workflow contract:") {
+		t.Fatalf("continuation prompt=%q", fragment.Content)
 	}
 }
 
-func TestParseDoesNotHijackOrdinaryReviewQuestion(t *testing.T) {
-	if _, ok := Parse("what is a good review process?"); ok {
-		t.Fatal("ordinary prompt was routed to code review")
+func TestDefinitionStartsFromRoutedPrompt(t *testing.T) {
+	definition := Definition{}
+	activation, err := definition.StartPrompt("Deep review https://github.com/acme/widgets/pull/42", map[string]string{InputMode: "deep"})
+	command, restored := FromScope(activation.Scope)
+	if err != nil || !restored || len(command.URLs) != 1 || command.URLs[0] != "https://github.com/acme/widgets/pull/42" || command.Mode != "deep" {
+		t.Fatalf("activation=%+v command=%+v restored=%t err=%v", activation, command, restored, err)
 	}
 }
 
-func TestParseSupportsChineseIntentAndMultiplePRs(t *testing.T) {
-	command, ok := Parse("帮我深度 review 这两个 PR\n<https://github.com/acme/api/pull/42>\n<https://github.com/acme/web/pull/7>")
-	if !ok || len(command.URLs) != 2 || command.Mode != "deep" {
-		t.Fatalf("command=%+v ok=%t", command, ok)
+func TestDefinitionRejectsMissingPullRequest(t *testing.T) {
+	if _, err := (Definition{}).StartPrompt("review this", map[string]string{InputMode: "standard"}); err == nil {
+		t.Fatal("missing pull request was accepted")
+	}
+}
+
+func TestDefinitionPreservesMultiplePullRequestURLs(t *testing.T) {
+	activation, err := (Definition{}).StartPrompt("<https://github.com/acme/api/pull/42>\n<https://github.com/acme/web/pull/7>", map[string]string{InputMode: "deep"})
+	command, restored := FromScope(activation.Scope)
+	if err != nil || !restored || len(command.URLs) != 2 || command.Mode != "deep" {
+		t.Fatalf("command=%+v restored=%t err=%v", command, restored, err)
 	}
 }
 

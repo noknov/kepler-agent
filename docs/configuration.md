@@ -303,6 +303,22 @@ periodic PostgreSQL scan recovers missed wakeups and promotes abandoned
 steering input to queued turns. There is no Redis or process-memory queue
 fallback.
 
+Delegated agents use separate orchestration and execution budgets:
+
+```bash
+AGENT_EXPLORE_MAX_STEPS=64
+AGENT_EXPLORE_MAX_WORKERS=5
+AGENT_EXPLORE_WORKER_TIMEOUT=
+AGENT_EXPLORE_BATCH_TIMEOUT=
+```
+
+By default, delegated work inherits the parent turn deadline instead of
+assuming a short review duration. Deployments may set tighter optional
+deadlines: the batch timeout bounds one complete `agent-explore` call, while a
+worker's timeout starts only after it acquires a concurrency slot. If both are
+set, the batch timeout cannot be shorter than the worker timeout. The step
+limit is a final liveness guard for the complete runtime loop.
+
 Services verify the required tables at startup but never execute DDL. Initialize
 a new PostgreSQL database with `schema/postgres.sql` using the administration
 workflow of your choice. The runtime database role only needs data access.

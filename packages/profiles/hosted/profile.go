@@ -84,7 +84,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	}
 	runner, err := agentruntime.New(agentruntime.Config{
 		Model: cfg.LLM.Model, ReasoningEffort: cfg.LLM.Thinking, Temperature: cfg.LLM.Temperature,
-		MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxSteps: cfg.Tools.AgentMaxSteps, MaxToolRounds: cfg.Tools.AgentMaxToolRounds, MaxParallelToolCalls: cfg.Tools.AgentMaxParallelToolCalls, MaxModelRetries: 0, MaxEmptyResponseRetries: 3,
+		MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxSteps: cfg.Tools.AgentMaxSteps, MaxParallelToolCalls: cfg.Tools.AgentMaxParallelToolCalls, MaxModelRetries: 0, MaxEmptyResponseRetries: 3,
 		Context:        agentruntime.ContextConfig{MaxTokens: cfg.Sessions.MaxContextTokens, ReserveTokens: cfg.Sessions.AutocompactBuffer},
 		ToolResults:    agentruntime.ToolResultConfig{MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)},
 		CircuitBreaker: agentruntime.CircuitBreakerConfig{Enabled: true},
@@ -113,7 +113,11 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		ParentCatalog: catalog,
 		AllowedTools:  delegation.DefaultHostedAllowedTools(),
 		MaxSteps:      cfg.Tools.AgentExploreMaxSteps,
-		Timeout:       cfg.Tools.AgentExploreTimeout,
+		MaxWorkers:    cfg.Tools.AgentExploreMaxWorkers,
+		Budget: delegation.ExecutionBudget{
+			WorkerTimeout: cfg.Tools.AgentExploreWorkerTimeout,
+			BatchTimeout:  cfg.Tools.AgentExploreBatchTimeout,
+		},
 	}
 	if err := catalog.Register(delegation.ExploreTool{Runner: exploreRunner}); err != nil {
 		return Profile{}, err
