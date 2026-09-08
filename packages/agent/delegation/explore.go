@@ -20,9 +20,14 @@ const (
 	defaultExploreMaxSteps   = 64
 	defaultExploreMaxWorkers = 5
 	defaultExploreMaxJobs    = 8
+	// ScopeSharedContext carries workflow-owned, immutable context into every
+	// delegated worker. It is supplied by orchestration rather than repeated in
+	// model-authored task arguments, so a worker cannot lose its target when the
+	// lead omits details while decomposing work.
+	ScopeSharedContext = "delegation.shared_context"
 )
 
-const exploreSystemPrompt = `You are a read-only exploration sub-agent. Investigate the assigned task using only the provided tools. Do not mutate state, send messages, or request user input. When independent reads or searches do not depend on each other, emit them in the same step (or pass multiple paths in one read) so they can run concurrently. Return a concise factual report with file paths, symbols, and evidence. Stop when you have enough to answer the task.`
+const exploreSystemPrompt = `You are a read-only exploration sub-agent. Investigate the assigned task using only the provided tools. Do not mutate state, send messages, or request user input. When independent reads or searches do not depend on each other, emit them in the same step (or pass multiple paths in one read) so they can run concurrently. Return a concise factual report with file paths, symbols, and evidence. Use plain Markdown paragraphs and lists; do not emit HTML, HTML entities, tables, or escaped line breaks. Stop when you have enough to answer the task.`
 
 // Runner executes isolated sub-turns against a filtered tool catalog.
 type Runner struct {
@@ -62,10 +67,11 @@ type TaskSpec struct {
 // can therefore compose the same child-agent primitive without depending on
 // model-authored tool-call JSON.
 type TaskRequest struct {
-	Spec         TaskSpec
-	Scope        tool.Scope
-	Parent       *agentruntime.ParentLink
-	SystemPrompt string
+	Spec          TaskSpec
+	Scope         tool.Scope
+	Parent        *agentruntime.ParentLink
+	SystemPrompt  string
+	SharedContext string
 }
 
 // TaskResult contains the compressed worker answer and its durable audit link.
@@ -275,8 +281,9 @@ func taskLabel(index int, job TaskSpec) string {
 
 func (r Runner) runJob(ctx context.Context, parentCall tool.Call, job TaskSpec) (childReport, error) {
 	result, err := r.RunTask(ctx, TaskRequest{
-		Spec:  job,
-		Scope: parentCall.Scope,
+		Spec:          job,
+		Scope:         parentCall.Scope,
+		SharedContext: strings.TrimSpace(parentCall.Scope.Values[ScopeSharedContext]),
 		Parent: &agentruntime.ParentLink{
 			SessionID:  parentCall.Scope.SessionID,
 			TurnID:     parentCall.Scope.TurnID,
@@ -329,7 +336,7 @@ func (r Runner) RunTask(ctx context.Context, request TaskRequest) (TaskResult, e
 		audit.Error = err.Error()
 		return TaskResult{Audit: audit}, fmt.Errorf("record delegated task start: %w", err)
 	}
-	input := taskInput(job)
+	input := taskInput(job, request.SharedContext)
 	scope := tool.Scope{
 		SessionID: sessionID,
 		TurnID:    turnID,
@@ -396,8 +403,13 @@ func (r Runner) publishTaskEvent(ctx context.Context, sink transcript.Sink, requ
 	return nil
 }
 
-func taskInput(job TaskSpec) string {
+func taskInput(job TaskSpec, sharedContext string) string {
 	var input strings.Builder
+	if sharedContext = strings.TrimSpace(sharedContext); sharedContext != "" {
+		input.WriteString("Authoritative context supplied by the parent workflow:\n")
+		input.WriteString(sharedContext)
+		input.WriteString("\n\n")
+	}
 	input.WriteString("Investigation task:\n")
 	input.WriteString(job.Task)
 	if job.Role != "" {

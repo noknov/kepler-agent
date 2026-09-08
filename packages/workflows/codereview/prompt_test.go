@@ -3,6 +3,8 @@ package codereview
 import (
 	"strings"
 	"testing"
+
+	"github.com/noknov/kepler-agent/packages/agent/delegation"
 )
 
 func TestScopeValuesRoundTripContinuation(t *testing.T) {
@@ -10,6 +12,12 @@ func TestScopeValuesRoundTripContinuation(t *testing.T) {
 	got, ok := FromScope(ScopeValues(want))
 	if !ok || !got.Continuation || got.Mode != want.Mode || strings.Join(got.URLs, ",") != strings.Join(want.URLs, ",") {
 		t.Fatalf("restored=%+v ok=%v", got, ok)
+	}
+	shared := ScopeValues(want)[delegation.ScopeSharedContext]
+	for _, url := range want.URLs {
+		if !strings.Contains(shared, url) {
+			t.Fatalf("delegation context missing %q: %s", url, shared)
+		}
 	}
 	fragment := Fragment(got)
 	if !strings.Contains(fragment.Content, "continuing an existing") || strings.Contains(fragment.Content, "Workflow contract:") {

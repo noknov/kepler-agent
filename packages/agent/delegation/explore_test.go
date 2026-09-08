@@ -126,6 +126,35 @@ func TestExploreToolRunsParallelJobs(t *testing.T) {
 	}
 }
 
+func TestExploreToolInjectsWorkflowSharedContextIntoWorker(t *testing.T) {
+	parent, err := tool.NewCatalog(echoReadTool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &capturingExploreModel{}
+	explore := ExploreTool{Runner: Runner{
+		Config:        agentruntime.Config{Model: "test"},
+		Deps:          agentruntime.Dependencies{Model: client, Transcript: transcript.NewMemoryStore()},
+		ParentCatalog: parent,
+		AllowedTools:  DefaultLocalAllowedTools(),
+	}}
+	_, err = explore.Execute(context.Background(), tool.Call{
+		Arguments: json.RawMessage(`{"task":"inspect changed behavior"}`),
+		Scope: tool.Scope{SessionID: "parent", TurnID: "turn", Values: map[string]string{
+			ScopeSharedContext: "PR URLs:\n- https://github.com/acme/widgets/pull/42",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := client.request.Messages[len(client.request.Messages)-1].Text()
+	for _, want := range []string{"Authoritative context supplied by the parent workflow", "https://github.com/acme/widgets/pull/42", "Investigation task:\ninspect changed behavior"} {
+		if !strings.Contains(input, want) {
+			t.Fatalf("worker input missing %q: %s", want, input)
+		}
+	}
+}
+
 func TestQueuedWorkerReceivesFreshExecutionBudgetAfterAcquiringSlot(t *testing.T) {
 	parent, err := tool.NewCatalog(echoReadTool{})
 	if err != nil {
@@ -270,8 +299,9 @@ func TestRunTaskCarriesWorkerContractAndAuditIdentity(t *testing.T) {
 			Boundaries: "Only changed request paths", Deliverable: "JSON findings",
 			SuccessCriteria: []string{"Cite path and line", "Return no finding without evidence"},
 		},
-		Scope:  tool.Scope{UserID: "U1", Workspace: "/repo"},
-		Parent: &agentruntime.ParentLink{SessionID: "parent", TurnID: "turn", Kind: "workflow"},
+		Scope:         tool.Scope{UserID: "U1", Workspace: "/repo"},
+		SharedContext: "Repository: acme/widgets",
+		Parent:        &agentruntime.ParentLink{SessionID: "parent", TurnID: "turn", Kind: "workflow"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -283,7 +313,7 @@ func TestRunTaskCarriesWorkerContractAndAuditIdentity(t *testing.T) {
 		t.Fatalf("model request=%+v", client.request)
 	}
 	input := client.request.Messages[len(client.request.Messages)-1].Text()
-	for _, want := range []string{"Assigned role:\nSecurity reviewer", "Required deliverable:\nJSON findings", "- Cite path and line"} {
+	for _, want := range []string{"Authoritative context supplied by the parent workflow:\nRepository: acme/widgets", "Assigned role:\nSecurity reviewer", "Required deliverable:\nJSON findings", "- Cite path and line"} {
 		if !strings.Contains(input, want) {
 			t.Fatalf("worker input missing %q: %s", want, input)
 		}

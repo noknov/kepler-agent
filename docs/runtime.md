@@ -123,3 +123,7 @@ prompt, durable scope, required tools, and thread-ownership policy. Code Review
 stores the normalized PR URLs and mode in turn scope. A later reply from the
 same user in the same Slack thread restores that activation without reparsing
 the follow-up as a new review command; a new root message remains a new session.
+The activation also places the validated PR set in delegation shared context,
+which the execution layer injects into every worker independently of the
+lead-authored task description. Worker targets therefore cannot disappear
+during dynamic decomposition.

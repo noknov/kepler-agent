@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/noknov/kepler-agent/packages/agent/delegation"
 	"github.com/noknov/kepler-agent/packages/agent/prompt"
 	"github.com/noknov/kepler-agent/packages/workflows"
 )
@@ -47,11 +48,16 @@ type Command struct {
 func ScopeValues(command Command) map[string]string {
 	urls, _ := json.Marshal(command.URLs)
 	return map[string]string{
-		workflows.ScopeWorkflow: WorkflowName,
-		ScopeURLs:               string(urls),
-		ScopeMode:               normalizeMode(command.Mode),
-		ScopeFocus:              strings.TrimSpace(command.Focus),
+		workflows.ScopeWorkflow:       WorkflowName,
+		ScopeURLs:                     string(urls),
+		ScopeMode:                     normalizeMode(command.Mode),
+		ScopeFocus:                    strings.TrimSpace(command.Focus),
+		delegation.ScopeSharedContext: delegationContext(command),
 	}
+}
+
+func delegationContext(command Command) string {
+	return "Workflow: Code Review\nReview mode: " + normalizeMode(command.Mode) + "\nPR URLs:\n- " + strings.Join(command.URLs, "\n- ")
 }
 
 // Definition integrates Code Review with the shared workflow lifecycle.

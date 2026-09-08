@@ -386,7 +386,7 @@ func TestStreamPresentsDelegatedReportThroughPersonaMarkdown(t *testing.T) {
 	if len(messenger.personas) != 1 || messenger.personas[0].Name != "auth-boundary" || messenger.personas[0].IconEmoji != personaEmoji("auth-boundary") {
 		t.Fatalf("personas=%+v", messenger.personas)
 	}
-	if len(messenger.personaTexts) != 1 || !strings.Contains(messenger.personaTexts[0], "Agent report") || !strings.Contains(messenger.personaTexts[0], "authorization bypass") {
+	if len(messenger.personaTexts) != 1 || !strings.Contains(messenger.personaTexts[0], "Candidate evidence") || !strings.Contains(messenger.personaTexts[0], "authorization bypass") {
 		t.Fatalf("texts=%+v", messenger.personaTexts)
 	}
 }

@@ -123,7 +123,7 @@ func (s *slackStream) presentDelegatedResult(event transcript.Event) error {
 	if text == "" {
 		return nil
 	}
-	message := "### Agent report\n\n> Returned to the Lead for final verification and synthesis.\n\n" + text
+	message := "> Candidate evidence; the Lead will verify and synthesize it.\n\n" + text
 	persona := slackconversation.Persona{Name: name, IconEmoji: personaEmoji(name)}
 	ctx, cancel := s.deliveryContext()
 	defer cancel()
