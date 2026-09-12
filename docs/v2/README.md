@@ -1,6 +1,6 @@
-# v2
+# Current architecture
 
-v2 is the active architecture on `main`. The local CLI and hosted Slack agent
+The architecture on `main` is the active implementation. The local CLI and hosted Slack agent
 share the canonical model/tool contracts, provider adapters, runtime loop,
 context projection, transcript events, compaction, and termination semantics.
 Profiles retain product-specific policy, storage, tools, and presentation.
@@ -12,7 +12,7 @@ second execution loop. Its read-only `agent-explore` tool runs isolated child
 turns from a filtered catalog. The local profile persists the same transcript
 event model as JSONL and is also exposed through the stdio JSON-RPC app-server.
 
-For the full bilingual comparison with the retired v1 source, see the
+For the detailed Chinese architecture and implementation guide, see the
 [architecture site](../../architecture-site/README.md).
 
 Start with the [runtime](../runtime.md), [local CLI](../local-cli.md),

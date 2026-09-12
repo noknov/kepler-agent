@@ -12,19 +12,14 @@ The project is intentionally not a single remote agent exposed through two UIs.
 Both products share one provider-neutral execution loop and transcript contract;
 their policy, storage, tools, and presentation stay product-specific.
 
-> **Version note:** `main` is the active v2 architecture. The final v1 source
-> is frozen at [`v1-final`](https://github.com/noknov/kepler-agent/tree/v1-final)
-> (`49380a51`) and receives no fixes or releases. Do not combine v1 runtime,
-> schema, or deployment configuration with v2.
-
 ## Architecture at a glance
 
 ```text
-Slack ── gateway / worker ── hosted profile ─┐
-Web ──── gateway / worker ── hosted profile ─┤
-                                               │
+Slack ── gateway / worker ── hosted profile ──┐
+Web ──── gateway / worker ── hosted profile ──┤
+                                              │
 Local CLI / app-server ────── local profile ──┼── shared harness
-                                               │   model loop · context · tools
+                                              │   model loop · context · tools
 Providers · skills · MCP ─────────────────────┘   canonical transcript · events
 ```
 
@@ -39,8 +34,9 @@ Providers · skills · MCP ─────────────────�
   run projections, and user connections. Redis provides wakeups and
   coordination, not a durable queue.
 
-Read the [bilingual architecture guide](https://noknov.github.io/kepler-agent/)
-for a detailed v1/v2 comparison and code-reading paths.
+Read the [architecture guide](https://noknov.github.io/kepler-agent/)
+for the current implementation, system boundaries, request paths, persistence,
+concurrency, safety model, limitations, and code-reading paths.
 
 ## What is in this repository
 
@@ -192,13 +188,13 @@ evals/                   Black-box evaluation harness
 gateway/ worker/         Hosted Slack ingress and durable worker commands
 observability/           Runs, costs, metrics, and tool health command
 schema/postgres.sql      Current PostgreSQL contract for fresh installs
-architecture-site/       Bilingual v1/v2 architecture guide
+architecture-site/       Bilingual current architecture guide
 ```
 
 ## Documentation
 
 - [Architecture guide](https://noknov.github.io/kepler-agent/)
-- [v2 overview](docs/v2/README.md) and [v1 archive](docs/v1/README.md)
+- [Current architecture overview](docs/v2/README.md)
 - [Shared runtime](docs/runtime.md)
 - [Local CLI](docs/local-cli.md)
 - [Hosted Web](docs/web.md)

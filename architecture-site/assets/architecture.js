@@ -1,91 +1,40 @@
 (() => {
-  const supported = new Set(["zh", "en"]);
-  const supportedVersions = new Set(["v1", "v2"]);
-  const query = new URLSearchParams(window.location.search).get("lang");
-  const versionQuery = new URLSearchParams(window.location.search).get("version");
-  let stored = "";
-  let storedVersion = "";
-  try {
-    stored = window.localStorage.getItem("architecture-language") || "";
-    storedVersion = window.localStorage.getItem("architecture-version") || "";
-  } catch (_) {
-    // The site also works when storage is unavailable.
-  }
-  const browserLanguage = navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
+  const article = document.querySelector('.doc');
+  const sections = [...document.querySelectorAll('.chapter2[id]')];
+  if (!article || sections.length === 0) return;
 
-  function setLanguage(language, updateURL) {
-    const next = supported.has(language) ? language : "zh";
-    document.body.dataset.lang = next;
-    document.documentElement.lang = next === "zh" ? "zh-CN" : "en";
-    document.title = next === "zh"
-      ? "架构指南 · Kepler Agent"
-      : "Architecture Guide · Kepler Agent";
-
-    document.querySelectorAll("[data-set-lang]").forEach((button) => {
-      const active = button.dataset.setLang === next;
-      button.setAttribute("aria-pressed", String(active));
-    });
-
-    try {
-      window.localStorage.setItem("architecture-language", next);
-    } catch (_) {
-      // Persistence is optional.
-    }
-
-    if (updateURL) {
-      const url = new URL(window.location.href);
-      url.searchParams.set("lang", next);
-      window.history.replaceState({}, "", url);
-    }
+  const side = document.querySelector('.side');
+  if (side) {
+    side.setAttribute('aria-label', '文档目录');
+    side.innerHTML = [
+      '<div class="nav-group"><p>开始了解</p><a href="index.html">系统概览</a><a href="execution.html">一条请求的执行过程</a></div>',
+      '<div class="nav-group"><p>核心机制</p><a href="models.html">提示内容、上下文与模型</a><a href="tools.html">工具、权限与执行</a><a href="reliability.html">记录、并发与恢复</a><a href="delegation.html">委派执行与代码审查</a></div>',
+      '<div class="nav-group"><p>产品入口</p><a href="surfaces.html">Slack 和 Web</a><a href="cli.html">本地命令行</a></div>',
+      '<div class="nav-group"><p>运行维护</p><a href="operations.html">队列、观测与关闭</a></div>',
+      '<div class="nav-group"><p>实现</p><a href="reference.html">源码参考</a></div>'
+    ].join('');
   }
 
-  function setVersion(version, updateURL) {
-    const next = supportedVersions.has(version) ? version : "v2";
-    document.body.dataset.version = next;
+  const pageNav = document.createElement('aside');
+  pageNav.className = 'page-nav';
+  pageNav.setAttribute('aria-label', '本页目录');
+  pageNav.innerHTML = '<p>本页内容</p>' + sections.map((section) => {
+    const heading = section.querySelector('h2');
+    return heading ? `<a href="#${section.id}">${heading.textContent}</a>` : '';
+  }).join('');
+  article.insertAdjacentElement('afterend', pageNav);
 
-    document.querySelectorAll("[data-set-version]").forEach((button) => {
-      const active = button.dataset.setVersion === next;
-      button.setAttribute("aria-pressed", String(active));
-    });
-
-    try {
-      window.localStorage.setItem("architecture-version", next);
-    } catch (_) {
-      // Persistence is optional.
-    }
-
-    if (updateURL) {
-      const url = new URL(window.location.href);
-      url.searchParams.set("version", next);
-      window.history.replaceState({}, "", url);
-    }
+  const pageLinks = [...pageNav.querySelectorAll('a')];
+  if ('IntersectionObserver' in window) {
+    const observer = new IntersectionObserver((entries) => {
+      const current = entries.filter((entry) => entry.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+      if (current) pageLinks.forEach((link) => link.classList.toggle('is-active', link.hash === `#${current.target.id}`));
+    }, { rootMargin: '-18% 0px -72%', threshold: 0 });
+    sections.forEach((section) => observer.observe(section));
   }
 
-  document.querySelectorAll("[data-set-lang]").forEach((button) => {
-    button.addEventListener("click", () => setLanguage(button.dataset.setLang, true));
+  const file = location.pathname.split('/').pop() || 'index.html';
+  document.querySelectorAll('.side a').forEach((link) => {
+    if (link.getAttribute('href') === file) link.setAttribute('aria-current', 'page');
   });
-  document.querySelectorAll("[data-set-version]").forEach((button) => {
-    button.addEventListener("click", () => {
-      setVersion(button.dataset.setVersion, true);
-      const language = document.body.dataset.lang;
-      const target = document.querySelector(`[data-locale="${language}"][data-version="${document.body.dataset.version}"] .hero`);
-      target?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  });
-
-  setLanguage(supported.has(query) ? query : (supported.has(stored) ? stored : browserLanguage), false);
-  setVersion(supportedVersions.has(versionQuery) ? versionQuery : (supportedVersions.has(storedVersion) ? storedVersion : "v2"), false);
-
-  const sections = Array.from(document.querySelectorAll("[data-locale][data-version] .doc-section"));
-  const observer = new IntersectionObserver((entries) => {
-    const visible = entries
-      .filter((entry) => entry.isIntersecting)
-      .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
-    if (!visible) return;
-    document.querySelectorAll(".toc a").forEach((link) => {
-      link.classList.toggle("is-active", link.hash === `#${visible.target.id}`);
-    });
-  }, { rootMargin: "-20% 0px -70%", threshold: 0 });
-
-  sections.forEach((section) => observer.observe(section));
 })();
