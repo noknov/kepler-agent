@@ -45,6 +45,55 @@ func TestDarwinSandboxProfileAllowsDevNullWrites(t *testing.T) {
 	}
 }
 
+func TestDarwinSandboxProfileDeniesSensitiveDirectoryDescendants(t *testing.T) {
+	root := t.TempDir()
+	sensitive := filepath.Join(root, "secrets")
+	if err := os.Mkdir(sensitive, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	profile := darwinSandboxProfile(Workspace{Root: root, Temp: filepath.Join(root, ".tmp")}, nil, []string{sensitive}, false)
+	if !strings.Contains(profile, `(subpath "`+sensitive+`")`) {
+		t.Fatalf("missing sensitive subpath denial: %s", profile)
+	}
+}
+
+func TestSanitizedGitEnvironmentPersistsIndex(t *testing.T) {
+	root := t.TempDir()
+	command := exec.Command("git", "init", root)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workspace.Close()
+	env, _, err := sanitizedGitEnvironment(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	add := exec.Command("git", "add", "a.txt")
+	add.Dir = root
+	add.Env = append(os.Environ(), env...)
+	if output, err := add.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v: %s", err, output)
+	}
+	env, _, err = sanitizedGitEnvironment(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff := exec.Command("git", "diff", "--cached", "--name-only")
+	diff.Dir = root
+	diff.Env = append(os.Environ(), env...)
+	output, err := diff.Output()
+	if err != nil || strings.TrimSpace(string(output)) != "a.txt" {
+		t.Fatalf("cached diff=%q err=%v", output, err)
+	}
+}
+
 func TestCanonicalReadRootsRejectsBroadAndResolvesSymlink(t *testing.T) {
 	if _, err := canonicalReadRoots([]string{"/"}); err == nil {
 		t.Fatal("root read grant was accepted")

@@ -52,7 +52,10 @@ func (g *Gateway) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/cli/login", g.handleLogin)
 	mux.HandleFunc("/cli/oauth/callback", g.handleCallback)
 	mux.HandleFunc("/cli/bootstrap", g.withSession(g.proxyWorker))
-	mux.Handle("/v1/", g.withSession(g.proxyWorker))
+	mux.Handle("POST "+providers.KeplerGeneratePath, g.withSession(g.proxyWorker))
+	mux.Handle("POST /v1/responses", g.withSession(g.proxyWorker))
+	mux.Handle("POST /v1/chat/completions", g.withSession(g.proxyWorker))
+	mux.Handle("POST /v1/messages", g.withSession(g.proxyWorker))
 }
 
 type deviceStart struct {
@@ -209,6 +212,11 @@ func (g *Gateway) withSession(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		if len(g.Allowlist) == 0 || !g.Access.AllowsUser(session.UserID) {
+			_ = g.Store.Revoke(r.Context(), token)
+			http.Error(w, "access revoked", http.StatusForbidden)
+			return
+		}
 		r.Header.Set("X-Kepler-User", session.UserID)
 		r.Header.Del("Authorization")
 		r.Header.Del("X-Api-Key")
@@ -259,12 +267,21 @@ func RegisterWorker(mux *http.ServeMux, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	mux.HandleFunc("POST "+providers.KeplerGeneratePath, HandleHostedGenerate(hosted, cfg.LLM.Temperature))
+	limit := cfg.HTTP.EventWorkers * 2
+	if limit < 1 {
+		limit = 1
+	}
+	mux.Handle("POST "+providers.KeplerGeneratePath, limitConcurrency(HandleHostedGenerate(hosted, HostedGeneratePolicy{
+		Model: cfg.LLM.Model, MaxOutputTokens: cfg.LLM.MaxOutputTokens, Temperature: cfg.LLM.Temperature,
+	}), limit))
 	proxy, err := NewLLMUpstreamProxy(cfg.LLM)
 	if err != nil {
 		return err
 	}
-	mux.Handle("/v1/", proxy)
+	restricted := limitConcurrency(RestrictLLMProxy(proxy, cfg.LLM), limit)
+	mux.Handle("POST /v1/responses", restricted)
+	mux.Handle("POST /v1/chat/completions", restricted)
+	mux.Handle("POST /v1/messages", restricted)
 	return nil
 }
 

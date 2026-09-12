@@ -144,7 +144,7 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 // a stronger idempotency guarantee; the transcript prevents this runtime from
 // dispatching a call that already has a durable result.
 func (r *Runtime) completedToolResults(ctx context.Context, request TurnRequest) (map[string]tool.Result, error) {
-	events, err := r.deps.Transcript.Load(ctx, request.SessionID, 0)
+	events, err := r.turnEvents(ctx, request.SessionID)
 	if err != nil {
 		return nil, err
 	}

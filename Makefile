@@ -25,7 +25,7 @@ test:
 	GOCACHE=$(GOCACHE) go test ./...
 
 test-race:
-	GOCACHE=$(GOCACHE) go test -race ./packages/agent/runtime ./packages/surfaces/slack/agent ./packages/runs ./packages/safety ./packages/surfaces/slack/events ./packages/tools/hosted
+	GOCACHE=$(GOCACHE) go test -race ./packages/agent/runtime ./packages/surfaces/slack/agent ./packages/runs ./packages/safety ./packages/surfaces/slack/events ./packages/tools/hosted ./packages/appserver ./packages/surfaces/web
 
 build:
 	GOCACHE=$(GOCACHE) go build -trimpath -o /dev/null ./gateway/cmd/gateway
@@ -35,7 +35,7 @@ build:
 	GOCACHE=$(GOCACHE) go build -trimpath -o /dev/null ./appserver/cmd/app-server
 
 eval-check:
-	@tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \
+	@set -eu; tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \
 	python3 evals/run.py --suite evals/suites/smoke.json --candidates evals/candidates.example.json --model dry-run --output "$$tmp/results" --dry-run >/dev/null; \
 	python3 evals/report.py "$$tmp/results" --output "$$tmp/report.html" >/dev/null; \
 	python3 -m unittest evals/test_evaluator.py; \
@@ -45,7 +45,7 @@ protocol-generate:
 	GOCACHE=$(GOCACHE) go run ./appserver/cmd/protocolgen
 
 protocol-check:
-	@tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \
+	@set -eu; tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \
 	GOCACHE=$(GOCACHE) go run ./appserver/cmd/protocolgen --schema "$$tmp/schema.json" --typescript "$$tmp/protocol.ts"; \
 	diff -u docs/app-server.schema.json "$$tmp/schema.json"; \
 	diff -u apps/cli/src/generated/appServerProtocol.ts "$$tmp/protocol.ts"

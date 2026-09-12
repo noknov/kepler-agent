@@ -106,11 +106,20 @@ type SessionLease interface {
 	Lock(context.Context, string) (func(), error)
 }
 
+// GuardedSessionLease additionally cancels the returned context when the
+// backing lease is lost. Hosted execution uses it to stop model and tool work
+// after an advisory-lock connection fails.
+type GuardedSessionLease interface {
+	LockContext(context.Context, string) (context.Context, func(), error)
+}
+
 type Runtime struct {
-	config Config
-	deps   Dependencies
-	lockMu sync.Mutex
-	locks  map[string]*sessionMutex
+	config     Config
+	deps       Dependencies
+	lockMu     sync.Mutex
+	locks      map[string]*sessionMutex
+	eventMu    sync.RWMutex
+	eventCache map[string][]transcript.Event
 }
 
 type sessionMutex struct {
@@ -144,7 +153,7 @@ func New(config Config, deps Dependencies) (*Runtime, error) {
 	if deps.Projector == nil {
 		deps.Projector = NewBoundedProjector(config.Context)
 	}
-	return &Runtime{config: config, deps: deps, locks: make(map[string]*sessionMutex)}, nil
+	return &Runtime{config: config, deps: deps, locks: make(map[string]*sessionMutex), eventCache: make(map[string][]transcript.Event)}, nil
 }
 
 type InputSource interface {
@@ -268,17 +277,28 @@ func (r *Runtime) lockSession(sessionID string) func() {
 	}
 }
 
-func (r *Runtime) acquireSession(ctx context.Context, sessionID string) (func(), error) {
+func (r *Runtime) acquireSession(ctx context.Context, sessionID string) (context.Context, func(), error) {
 	localUnlock := r.lockSession(sessionID)
 	if r.deps.Lease == nil {
-		return localUnlock, nil
+		return ctx, localUnlock, nil
+	}
+	if guarded, ok := r.deps.Lease.(GuardedSessionLease); ok {
+		guardedCtx, remoteUnlock, err := guarded.LockContext(ctx, "session:"+sessionID)
+		if err != nil {
+			localUnlock()
+			return ctx, nil, err
+		}
+		return guardedCtx, func() {
+			remoteUnlock()
+			localUnlock()
+		}, nil
 	}
 	remoteUnlock, err := r.deps.Lease.Lock(ctx, "session:"+sessionID)
 	if err != nil {
 		localUnlock()
-		return nil, err
+		return ctx, nil, err
 	}
-	return func() {
+	return ctx, func() {
 		remoteUnlock()
 		localUnlock()
 	}, nil

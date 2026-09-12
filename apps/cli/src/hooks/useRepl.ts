@@ -117,7 +117,7 @@ export function useRepl(config: ReplConfig) {
   );
 
   const pushSystem = useCallback((text: string) => {
-    setMessages((prev) => [...prev, createSystemMessage(text)]);
+    setMessages((prev) => [...prev, createSystemMessage(text, "info")]);
   }, []);
 
   const client = useMemo(() => {
@@ -254,8 +254,13 @@ export function useRepl(config: ReplConfig) {
             `model ${config.model} · workspace ${config.cwd} · session ${sessionId ?? "—"} · routing ${config.inputRouting}`,
           );
           return true;
-        case "/clear":
-          setMessages([]);
+		case "/clear":
+			if (busy) {
+				pushSystem("stop the active turn before starting a fresh session");
+				return true;
+			}
+			setSessionId(await client.startThread());
+			setMessages([]);
           setStreamingText(null);
           streamTextRef.current = "";
           repinScroll();
@@ -268,8 +273,8 @@ export function useRepl(config: ReplConfig) {
           pushSystem(`unknown command ${text}`);
           return true;
       }
-    },
-    [config.cwd, config.inputRouting, config.model, exit, pushSystem, repinScroll, sessionId],
+	},
+	[busy, client, config.cwd, config.inputRouting, config.model, exit, pushSystem, repinScroll, sessionId],
   );
 
   const submitText = useCallback(
@@ -426,7 +431,7 @@ function pushSystemMessage(
   setMessages: Dispatch<SetStateAction<RenderableMessage[]>>,
   text: string,
 ): void {
-  setMessages((prev) => [...prev, createSystemMessage(text)]);
+  setMessages((prev) => [...prev, createSystemMessage(text, "info")]);
 }
 
 function formatToolEvent(event: ToolEvent, status: ToolEvent["status"]): string {
@@ -464,7 +469,7 @@ function itemsToRenderable(items: ServerItem[]): RenderableMessage[] {
         break;
       default:
         if (item.text) {
-          out.push(createSystemMessage(item.text));
+          out.push(createSystemMessage(item.text, "info"));
         }
         break;
     }

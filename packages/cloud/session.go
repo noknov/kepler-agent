@@ -3,6 +3,7 @@ package cloud
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -52,7 +53,7 @@ func (s Store) Issue(ctx context.Context, userID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := s.Redis.Set(ctx, sessionKeyPrefix+token, string(payload), SessionTTL); err != nil {
+	if err := s.Redis.Set(ctx, sessionKey(token), string(payload), SessionTTL); err != nil {
 		return "", err
 	}
 	return token, nil
@@ -63,7 +64,7 @@ func (s Store) Lookup(ctx context.Context, token string) (Session, error) {
 	if token == "" {
 		return Session{}, errors.New("missing token")
 	}
-	raw, err := s.Redis.Get(ctx, sessionKeyPrefix+token)
+	raw, err := s.Redis.Get(ctx, sessionKey(token))
 	if errors.Is(err, redis.Nil) {
 		return Session{}, errors.New("session expired or unknown")
 	}
@@ -78,6 +79,19 @@ func (s Store) Lookup(ctx context.Context, token string) (Session, error) {
 		return Session{}, errors.New("session is missing a Slack user")
 	}
 	return session, nil
+}
+
+func (s Store) Revoke(ctx context.Context, token string) error {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil
+	}
+	return s.Redis.Del(ctx, sessionKey(token))
+}
+
+func sessionKey(token string) string {
+	digest := sha256.Sum256([]byte(token))
+	return sessionKeyPrefix + hex.EncodeToString(digest[:])
 }
 
 func (s Store) PutOAuth(ctx context.Context, state, deviceCode string) error {

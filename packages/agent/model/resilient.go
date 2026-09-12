@@ -35,13 +35,13 @@ func observeAttempt(ctx context.Context, attempt Attempt) {
 // and provider/model circuit breaking. Only typed transient, rate-limited, and
 // unavailable provider failures may be retried or sent to a fallback.
 type ResilientClient struct {
-	Primary, Fallback                      Client
-	PrimaryProvider, FallbackProvider      string
-	FallbackModel                          string
-	MaxAttempts, FailureThreshold          int
-	Cooldown, RetryDelay, MinAttemptBudget time.Duration
-	Now                                    func() time.Time
-	Sleep                                  func(context.Context, time.Duration) error
+	Primary, Fallback                                               Client
+	PrimaryProvider, FallbackProvider                               string
+	FallbackModel                                                   string
+	MaxAttempts, FailureThreshold                                   int
+	Cooldown, RetryDelay, MinAttemptBudget, MinInitialAttemptBudget time.Duration
+	Now                                                             func() time.Time
+	Sleep                                                           func(context.Context, time.Duration) error
 
 	mu       sync.Mutex
 	breakers map[string]breaker
@@ -85,7 +85,11 @@ func (c *ResilientClient) generate(ctx context.Context, client Client, provider 
 	}
 	var last error
 	for number := 1; number <= c.maxAttempts(); number++ {
-		if err := c.requireBudget(ctx, 0); err != nil {
+		minimum := c.minBudget()
+		if number == 1 {
+			minimum = c.minInitialBudget()
+		}
+		if err := c.requireBudget(ctx, 0, minimum); err != nil {
 			observeAttempt(ctx, c.attempt(ctx, provider, request.Model, number, fallback, "budget_exhausted", err))
 			return Response{}, err
 		}
@@ -116,7 +120,7 @@ func (c *ResilientClient) generate(ctx context.Context, client Client, provider 
 			break
 		}
 		delay := c.retryDelay()
-		if err := c.requireBudget(ctx, delay); err != nil {
+		if err := c.requireBudget(ctx, delay, c.minBudget()); err != nil {
 			observeAttempt(ctx, c.attempt(ctx, provider, request.Model, number, fallback, "budget_exhausted", err))
 			return Response{}, err
 		}
@@ -164,6 +168,15 @@ func (c *ResilientClient) minBudget() time.Duration {
 	}
 	return 45 * time.Second
 }
+func (c *ResilientClient) minInitialBudget() time.Duration {
+	if c.MinInitialAttemptBudget > 0 {
+		return c.MinInitialAttemptBudget
+	}
+	if c.MinAttemptBudget > 0 {
+		return c.MinAttemptBudget
+	}
+	return 10 * time.Second
+}
 func (c *ResilientClient) threshold() int {
 	if c.FailureThreshold > 0 {
 		return c.FailureThreshold
@@ -183,7 +196,7 @@ func (c *ResilientClient) attempt(ctx context.Context, provider, name string, nu
 	}
 	return Attempt{Provider: provider, Model: name, Number: number, Fallback: fallback, Outcome: outcome, Error: err, Remaining: remaining}
 }
-func (c *ResilientClient) requireBudget(ctx context.Context, delay time.Duration) error {
+func (c *ResilientClient) requireBudget(ctx context.Context, delay, minimum time.Duration) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -191,7 +204,7 @@ func (c *ResilientClient) requireBudget(ctx context.Context, delay time.Duration
 	if !ok {
 		return nil
 	}
-	if deadline.Sub(c.now()) >= c.minBudget()+delay {
+	if deadline.Sub(c.now()) >= minimum+delay {
 		return nil
 	}
 	return &Error{Kind: ErrorBudgetExhausted, Message: "turn execution budget is insufficient for another model request"}

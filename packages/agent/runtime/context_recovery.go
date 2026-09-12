@@ -16,7 +16,7 @@ func (r *Runtime) forceCompactAfterContextLimit(ctx context.Context, request Tur
 	if r.deps.Compactor == nil {
 		return errors.New("compactor unavailable")
 	}
-	events, err := r.deps.Transcript.Load(ctx, request.SessionID, 0)
+	events, err := r.turnEvents(ctx, request.SessionID)
 	if err != nil {
 		return err
 	}
@@ -31,19 +31,7 @@ func (r *Runtime) forceCompactAfterContextLimit(ctx context.Context, request Tur
 	toCompact := append([]model.Message(nil), projection.Dropped...)
 	coversThrough := projection.CoversThrough
 	if len(toCompact) == 0 {
-		full, projErr := NewBoundedProjector(r.config.Context).Project(ctx, events, model.Message{})
-		if projErr != nil {
-			return projErr
-		}
-		start := 0
-		if len(system.Content) > 0 && len(full.Messages) > 0 && full.Messages[0].Role == model.RoleSystem {
-			start = 1
-		}
-		if len(full.Messages)-start <= 2 {
-			return fmt.Errorf("context still too large and nothing removable")
-		}
-		toCompact = append([]model.Message(nil), full.Messages[start:len(full.Messages)-2]...)
-		coversThrough = sequenceBeforeTail(events, 2)
+		toCompact, coversThrough = messagesBeforeCurrentTurn(events, request.TurnID)
 	}
 	if len(toCompact) == 0 {
 		return fmt.Errorf("context still too large and nothing removable")
@@ -67,9 +55,32 @@ func (r *Runtime) forceCompactAfterContextLimit(ctx context.Context, request Tur
 	return err
 }
 
-func sequenceBeforeTail(events []transcript.Event, tail int) uint64 {
-	if len(events) <= tail {
-		return 0
+func messagesBeforeCurrentTurn(events []transcript.Event, turnID string) ([]model.Message, uint64) {
+	var protected uint64
+	for _, event := range events {
+		if turnID != "" && event.TurnID == turnID && event.Type == transcript.UserInput {
+			protected = event.Sequence
+			break
+		}
 	}
-	return events[len(events)-tail-1].Sequence
+	if protected == 0 {
+		for index := len(events) - 1; index >= 0; index-- {
+			if events[index].Type == transcript.UserInput || events[index].Type == transcript.SteeringInput {
+				protected = events[index].Sequence
+				break
+			}
+		}
+	}
+	var messages []model.Message
+	var coversThrough uint64
+	for _, event := range events {
+		if protected > 0 && event.Sequence >= protected {
+			break
+		}
+		if message, ok := eventMessage(event); ok {
+			messages = append(messages, message)
+			coversThrough = event.Sequence
+		}
+	}
+	return messages, coversThrough
 }

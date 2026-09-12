@@ -10,7 +10,13 @@ import (
 	"github.com/noknov/kepler-agent/packages/providers"
 )
 
-func HandleHostedGenerate(client model.Client, temperature *float64) http.HandlerFunc {
+type HostedGeneratePolicy struct {
+	Model           string
+	MaxOutputTokens int
+	Temperature     *float64
+}
+
+func HandleHostedGenerate(client model.Client, policy HostedGeneratePolicy) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if client == nil {
 			http.Error(w, "hosted model is not configured", http.StatusServiceUnavailable)
@@ -26,7 +32,17 @@ func HandleHostedGenerate(client model.Client, temperature *float64) http.Handle
 			http.Error(w, "invalid generate request", http.StatusBadRequest)
 			return
 		}
-		request.Temperature = temperature
+		if policy.Model != "" && request.Model != "" && request.Model != policy.Model {
+			http.Error(w, "model is not allowed", http.StatusForbidden)
+			return
+		}
+		if policy.Model != "" {
+			request.Model = policy.Model
+		}
+		if policy.MaxOutputTokens > 0 && (request.MaxOutputTokens <= 0 || request.MaxOutputTokens > policy.MaxOutputTokens) {
+			request.MaxOutputTokens = policy.MaxOutputTokens
+		}
+		request.Temperature = policy.Temperature
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("X-Accel-Buffering", "no")

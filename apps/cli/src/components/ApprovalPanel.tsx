@@ -11,7 +11,8 @@ export function ApprovalPanel({ request }: Props) {
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text color="yellow">! {request.toolName}</Text>
-      <Text dimColor> {request.summary}</Text>
+		<Text dimColor> {request.summary}</Text>
+		{request.details && request.details !== request.summary ? <Text dimColor>{request.details}</Text> : null}
       <Text dimColor> [o]nce [s]ession [p]roject [n]o</Text>
     </Box>
   );

@@ -113,7 +113,8 @@ func (s *reminderTestStore) List(_ context.Context, userID string) ([]reminderSt
 func (s *reminderTestStore) Due(context.Context, time.Time) ([]reminderStore.Reminder, error) {
 	return nil, nil
 }
-func (s *reminderTestStore) MarkSent(context.Context, string, time.Time) error { return nil }
+func (s *reminderTestStore) RenewClaim(context.Context, string, time.Duration) error { return nil }
+func (s *reminderTestStore) MarkSent(context.Context, string, time.Time) error       { return nil }
 func (s *reminderTestStore) Cancel(_ context.Context, id, userID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"regexp"
 	"sync"
+	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/tool"
@@ -35,8 +36,21 @@ type serverState struct {
 	config       clientConfig
 	resolveToken TokenResolver
 	mu           sync.Mutex
-	sessions     map[string]mcp.Session
+	sessions     map[string]sessionEntry
+	initializing map[string]*sessionInitialization
 }
+
+type sessionEntry struct {
+	session mcp.Session
+	usedAt  time.Time
+}
+type sessionInitialization struct {
+	done    chan struct{}
+	session mcp.Session
+	err     error
+}
+
+const maxCachedSessions = 256
 
 // clientConfig intentionally contains only immutable transport configuration.
 // A fresh mcp.Client owns its atomic request ID and sync.Once state per call.
@@ -62,7 +76,8 @@ func Discover(ctx context.Context, config Server) ([]tool.Tool, error) {
 	state := &serverState{
 		config:       clientConfig{serviceName: config.Client.ServiceName, url: config.Client.URL, headers: cloneHeaders(config.Client.Headers), http: config.Client.HTTP},
 		resolveToken: config.ResolveToken,
-		sessions:     make(map[string]mcp.Session),
+		sessions:     make(map[string]sessionEntry),
+		initializing: make(map[string]*sessionInitialization),
 	}
 	items := make([]tool.Tool, 0, len(definitions))
 	for _, definition := range definitions {
@@ -72,9 +87,16 @@ func Discover(ctx context.Context, config Server) ([]tool.Tool, error) {
 			schema = json.RawMessage(`{"type":"object"}`)
 		}
 		effects := append([]tool.Effect{tool.EffectNetwork}, config.Effects...)
+		if !explicitlyReadOnly(definition) {
+			effects = append(effects, tool.EffectExternalWrite)
+		}
 		items = append(items, &remoteTool{server: state, remote: definition, descriptor: tool.Descriptor{Name: name, Description: definition.Description, InputSchema: schema, Effects: effects, Exposure: tool.ExposureDeferred}.WithConcurrencyDefaults()})
 	}
 	return items, nil
+}
+
+func explicitlyReadOnly(definition mcp.ToolDefinition) bool {
+	return definition.Annotations != nil && definition.Annotations.ReadOnlyHint != nil && *definition.Annotations.ReadOnlyHint
 }
 
 func (t *remoteTool) Descriptor() tool.Descriptor { return t.descriptor }
@@ -94,6 +116,7 @@ func (t *remoteTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	client := t.server.clientForCall(ctx, call)
 	value, err := client.CallTool(ctx, session, t.remote.Name, call.Arguments)
 	if err != nil {
+		t.server.invalidateSession(call, session)
 		return tool.Result{}, err
 	}
 	content := make([]model.Content, 0, 1+len(value.Images))
@@ -124,17 +147,58 @@ func (s *serverState) sessionKey(call tool.Call) string {
 func (s *serverState) session(ctx context.Context, call tool.Call) (mcp.Session, error) {
 	key := s.sessionKey(call)
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if session, ok := s.sessions[key]; ok {
-		return session, nil
+	if entry, ok := s.sessions[key]; ok {
+		entry.usedAt = time.Now()
+		s.sessions[key] = entry
+		s.mu.Unlock()
+		return entry.session, nil
 	}
+	if pending := s.initializing[key]; pending != nil {
+		s.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return mcp.Session{}, ctx.Err()
+		case <-pending.done:
+			return pending.session, pending.err
+		}
+	}
+	pending := &sessionInitialization{done: make(chan struct{})}
+	s.initializing[key] = pending
+	s.mu.Unlock()
 	client := s.clientForCall(ctx, call)
 	session, err := client.Initialize(ctx)
-	if err != nil {
-		return mcp.Session{}, err
+	s.mu.Lock()
+	delete(s.initializing, key)
+	pending.session, pending.err = session, err
+	if err == nil {
+		s.sessions[key] = sessionEntry{session: session, usedAt: time.Now()}
+		s.evictOldestLocked()
 	}
-	s.sessions[key] = session
-	return session, nil
+	close(pending.done)
+	s.mu.Unlock()
+	return session, err
+}
+
+func (s *serverState) invalidateSession(call tool.Call, used mcp.Session) {
+	key := s.sessionKey(call)
+	s.mu.Lock()
+	if current, ok := s.sessions[key]; ok && current.session == used {
+		delete(s.sessions, key)
+	}
+	s.mu.Unlock()
+}
+
+func (s *serverState) evictOldestLocked() {
+	for len(s.sessions) > maxCachedSessions {
+		var oldestKey string
+		var oldest time.Time
+		for key, entry := range s.sessions {
+			if oldestKey == "" || entry.usedAt.Before(oldest) {
+				oldestKey, oldest = key, entry.usedAt
+			}
+		}
+		delete(s.sessions, oldestKey)
+	}
 }
 
 func (s *serverState) clientForCall(ctx context.Context, call tool.Call) *mcp.Client {

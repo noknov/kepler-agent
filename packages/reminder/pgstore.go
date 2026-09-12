@@ -3,6 +3,8 @@ package reminder
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -12,11 +14,12 @@ import (
 // PGStore is a PostgreSQL-backed reminder store. Due atomically leases rows,
 // making delivery safe when several kepler-agent instances are running.
 type PGStore struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	owner string
 }
 
 // NewPGStore uses a shared pool and assumes schema/postgres.sql is installed.
-func NewPGStore(pool *pgxpool.Pool) *PGStore { return &PGStore{pool: pool} }
+func NewPGStore(pool *pgxpool.Pool) *PGStore { return &PGStore{pool: pool, owner: reminderOwner()} }
 func (s *PGStore) Create(ctx context.Context, r Reminder) (Reminder, error) {
 	var sentAt *time.Time
 	err := s.pool.QueryRow(ctx, `INSERT INTO reminders (id,user_id,channel,thread_ts,message,run_at)
@@ -48,8 +51,8 @@ func (s *PGStore) Due(ctx context.Context, now time.Time) ([]Reminder, error) {
 	rows, err := tx.Query(ctx, `WITH candidates AS (
  SELECT id FROM reminders WHERE sent_at IS NULL AND run_at <= $1 AND (claim_until IS NULL OR claim_until < $1)
  ORDER BY run_at FOR UPDATE SKIP LOCKED LIMIT 100
-) UPDATE reminders r SET claim_until=$1 + INTERVAL '1 minute' FROM candidates c WHERE r.id=c.id
-RETURNING r.id,r.user_id,r.channel,r.thread_ts,r.message,r.run_at,r.created_at,r.sent_at`, now.UTC())
+) UPDATE reminders r SET claim_until=$1 + INTERVAL '5 minutes',claim_owner=$2 FROM candidates c WHERE r.id=c.id
+RETURNING r.id,r.user_id,r.channel,r.thread_ts,r.message,r.run_at,r.created_at,r.sent_at`, now.UTC(), s.owner)
 	if err != nil {
 		return nil, err
 	}
@@ -63,8 +66,22 @@ RETURNING r.id,r.user_id,r.channel,r.thread_ts,r.message,r.run_at,r.created_at,r
 	}
 	return out, nil
 }
+
+func (s *PGStore) RenewClaim(ctx context.Context, id string, lease time.Duration) error {
+	if lease <= 0 {
+		lease = 5 * time.Minute
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE reminders SET claim_until=NOW()+$3::interval WHERE id=$1 AND sent_at IS NULL AND claim_owner=$2`, id, s.owner, fmt.Sprintf("%f seconds", lease.Seconds()))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("reminder claim lost")
+	}
+	return nil
+}
 func (s *PGStore) MarkSent(ctx context.Context, id string, sentAt time.Time) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE reminders SET sent_at=$2,claim_until=NULL WHERE id=$1 AND sent_at IS NULL`, id, sentAt.UTC())
+	tag, err := s.pool.Exec(ctx, `UPDATE reminders SET sent_at=$2,claim_until=NULL,claim_owner='' WHERE id=$1 AND sent_at IS NULL AND claim_owner=$3`, id, sentAt.UTC(), s.owner)
 	if err != nil {
 		return err
 	}
@@ -74,7 +91,7 @@ func (s *PGStore) MarkSent(ctx context.Context, id string, sentAt time.Time) err
 	return nil
 }
 func (s *PGStore) Cancel(ctx context.Context, id, userID string) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE reminders SET sent_at=NOW(),claim_until=NULL WHERE id=$1 AND user_id=$2 AND sent_at IS NULL`, id, userID)
+	tag, err := s.pool.Exec(ctx, `UPDATE reminders SET sent_at=NOW(),claim_until=NULL,claim_owner='' WHERE id=$1 AND user_id=$2 AND sent_at IS NULL`, id, userID)
 	if err != nil {
 		return err
 	}
@@ -82,6 +99,11 @@ func (s *PGStore) Cancel(ctx context.Context, id, userID string) error {
 		return fmt.Errorf("reminder not found")
 	}
 	return nil
+}
+
+func reminderOwner() string {
+	host, _ := os.Hostname()
+	return host + ":" + strconv.Itoa(os.Getpid())
 }
 func scanReminders(rows pgx.Rows) ([]Reminder, error) {
 	var out []Reminder

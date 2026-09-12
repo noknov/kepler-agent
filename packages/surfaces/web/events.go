@@ -22,6 +22,7 @@ type ClientEvent struct {
 	Tool       string           `json:"tool,omitempty"`
 	Status     string           `json:"status,omitempty"`
 	ToolCallID string           `json:"toolCallId,omitempty"`
+	Arguments  string           `json:"arguments,omitempty"`
 	Plan       *tool.PlanUpdate `json:"plan,omitempty"`
 	At         time.Time        `json:"at,omitempty"`
 	Replace    bool             `json:"replace,omitempty"`
@@ -138,6 +139,7 @@ func ProjectEvent(event transcript.Event, redactor safety.Redactor) (ClientEvent
 			return ClientEvent{}, false
 		}
 		view.Kind, view.Tool, view.ToolCallID, view.Status = "approval", event.ToolCall.Name, event.ToolCall.ID, "pending"
+		view.Arguments = redactor.Sanitize(string(event.ToolCall.Arguments))
 	case transcript.ApprovalResolved:
 		if event.ToolCall == nil {
 			return ClientEvent{}, false

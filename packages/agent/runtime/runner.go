@@ -45,7 +45,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	if request.Input.ID == "" {
 		request.Input.ID = "input:" + request.TurnID
 	}
-	unlock, err := r.acquireSession(ctx, request.SessionID)
+	ctx, unlock, err := r.acquireSession(ctx, request.SessionID)
 	if err != nil {
 		return TurnResult{SessionID: request.SessionID, TurnID: request.TurnID}, err
 	}
@@ -61,6 +61,8 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	if err != nil {
 		return result, err
 	}
+	r.setEventCache(request.SessionID, events)
+	defer r.clearEventCache(request.SessionID)
 	if replayed, replayErr, ok := completedTurn(events, request.TurnID); ok {
 		return replayed, replayErr
 	}
@@ -69,12 +71,6 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	}
 	if err := r.reconcileInterruptedModelRequests(ctx, request, events); err != nil {
 		return r.failTurn(ctx, result, err)
-	}
-	if hasTurnStarted(events, request.TurnID) {
-		events, err = r.deps.Transcript.Load(ctx, request.SessionID, 0)
-		if err != nil {
-			return result, err
-		}
 	}
 	if len(events) == 0 {
 		if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, Type: transcript.SessionStarted}); err != nil {
@@ -199,6 +195,10 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 			return r.failTurn(ctx, result, err)
 		}
 		if outcome.pending != nil {
+			if _, err := r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.AssistantMessage, Message: outcome.pending}); err != nil {
+				return r.failTurn(ctx, result, err)
+			}
+			result.Message = *outcome.pending
 			return r.finishTurn(ctx, result, *outcome.pending, TerminationPendingInput, nil)
 		}
 		if err := r.recordStepCompleted(ctx, request, step, "tools_completed"); err != nil {
@@ -348,7 +348,7 @@ func (r *Runtime) recordStepCompleted(ctx context.Context, request TurnRequest, 
 }
 
 func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, system model.Message) (Projection, error) {
-	events, err := r.deps.Transcript.Load(ctx, request.SessionID, 0)
+	events, err := r.turnEvents(ctx, request.SessionID)
 	if err != nil {
 		return Projection{}, err
 	}
@@ -378,7 +378,7 @@ func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, syste
 	}); err != nil {
 		return Projection{}, err
 	}
-	events, err = r.deps.Transcript.Load(ctx, request.SessionID, 0)
+	events, err = r.turnEvents(ctx, request.SessionID)
 	if err != nil {
 		return Projection{}, err
 	}
@@ -474,7 +474,7 @@ func (r *Runtime) generateWithTools(ctx context.Context, turn TurnRequest, messa
 }
 
 func (r *Runtime) nextModelRequestID(ctx context.Context, turn TurnRequest) (string, error) {
-	events, err := r.deps.Transcript.Load(ctx, turn.SessionID, 0)
+	events, err := r.turnEvents(ctx, turn.SessionID)
 	if err != nil {
 		return "", err
 	}
@@ -577,10 +577,42 @@ func (r *Runtime) record(ctx context.Context, event transcript.Event) (transcrip
 		event.Timestamp = r.deps.Clock()
 	}
 	stored, err := r.deps.Transcript.Append(ctx, event)
+	if err == nil {
+		r.eventMu.Lock()
+		if cached, ok := r.eventCache[event.SessionID]; ok {
+			r.eventCache[event.SessionID] = append(cached, stored)
+		}
+		r.eventMu.Unlock()
+	}
 	if err == nil && r.deps.Events != nil {
 		r.emit(ctx, stored)
 	}
 	return stored, err
+}
+
+func (r *Runtime) setEventCache(sessionID string, events []transcript.Event) {
+	r.eventMu.Lock()
+	r.eventCache[sessionID] = append([]transcript.Event(nil), events...)
+	r.eventMu.Unlock()
+}
+
+func (r *Runtime) clearEventCache(sessionID string) {
+	r.eventMu.Lock()
+	delete(r.eventCache, sessionID)
+	r.eventMu.Unlock()
+}
+
+func (r *Runtime) turnEvents(ctx context.Context, sessionID string) ([]transcript.Event, error) {
+	r.eventMu.RLock()
+	events, ok := r.eventCache[sessionID]
+	if ok {
+		events = append([]transcript.Event(nil), events...)
+	}
+	r.eventMu.RUnlock()
+	if ok {
+		return events, nil
+	}
+	return r.deps.Transcript.Load(ctx, sessionID, 0)
 }
 
 func (r *Runtime) emit(ctx context.Context, event transcript.Event) {

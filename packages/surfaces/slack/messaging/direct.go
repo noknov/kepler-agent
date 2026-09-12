@@ -45,3 +45,10 @@ func (m BotUserMessenger) PostMessage(ctx context.Context, channel, threadTS, te
 	}
 	return m.Client.PostMessage(ctx, channel, threadTS, text)
 }
+
+func (m BotUserMessenger) PostMessageWithID(ctx context.Context, channel, threadTS, text, deliveryID string) (string, error) {
+	if m.Client == nil {
+		return "", fmt.Errorf("slack client is not configured")
+	}
+	return m.Client.PostChunkedMessage(ctx, channel, threadTS, text, deliveryID, slack.MaxMessageTextRunes, nil)
+}

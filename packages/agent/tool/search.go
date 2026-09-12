@@ -181,7 +181,7 @@ func (t searchTool) search(query string, limit int) (Result, error) {
 }
 
 func scoreDeferredTool(descriptor Descriptor, query string) (int, float64, string) {
-	tokens := tokenize(query)
+	tokens := queryTokens(query)
 	if len(tokens) == 0 {
 		return 0, 0, ""
 	}
@@ -218,6 +218,23 @@ func scoreDeferredTool(descriptor Descriptor, query string) (int, float64, strin
 	}
 	tags := strings.Join(descriptor.Tags, ", ")
 	return nameHits, score, fmt.Sprintf("%s [%s] — %s", descriptor.Name, tags, trimDescription(descriptor.Description, 120))
+}
+
+func queryTokens(query string) []string {
+	tokens := tokenize(query)
+	lower := strings.ToLower(query)
+	aliases := map[string][]string{
+		"搜索": {"search"}, "查找": {"search"}, "文档": {"document"}, "页面": {"page"},
+		"邮件": {"email"}, "日历": {"calendar"}, "提醒": {"reminder"}, "数据库": {"database"},
+		"日志": {"logs"}, "监控": {"metrics"}, "部署": {"deploy"}, "云": {"cloud"},
+		"创建": {"create"}, "更新": {"update"}, "删除": {"delete"},
+	}
+	for phrase, expanded := range aliases {
+		if strings.Contains(lower, phrase) {
+			tokens = append(tokens, expanded...)
+		}
+	}
+	return compactStrings(tokens)
 }
 
 func tokenize(value string) []string {

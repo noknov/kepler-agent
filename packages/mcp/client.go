@@ -39,9 +39,17 @@ type Session struct {
 }
 
 type ToolDefinition struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"inputSchema"`
+	Name        string           `json:"name"`
+	Description string           `json:"description,omitempty"`
+	InputSchema json.RawMessage  `json:"inputSchema"`
+	Annotations *ToolAnnotations `json:"annotations,omitempty"`
+}
+
+// ToolAnnotations is the MCP tool behavior hint. Hints are untrusted metadata:
+// callers may use an explicit readOnlyHint=true to narrow a tool to read-only,
+// but absence or false must fail closed as a potentially mutating operation.
+type ToolAnnotations struct {
+	ReadOnlyHint *bool `json:"readOnlyHint,omitempty"`
 }
 
 type HTTPError struct {

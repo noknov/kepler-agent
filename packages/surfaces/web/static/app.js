@@ -644,7 +644,14 @@ function renderApproval(event) {
   const card = document.createElement("section");
   card.className = "approval-card";
   card.innerHTML = `<strong></strong><p>This action needs your confirmation before proceeding.</p><div><button class="deny" type="button">Deny</button><button class="approve" type="button">Approve</button></div>`;
-  card.querySelector("strong").textContent = `${friendlyTool(event.tool)} needs approval`;
+	card.querySelector("strong").textContent = `${friendlyTool(event.tool)} needs approval`;
+	if (event.arguments) {
+		const details = document.createElement("pre");
+		details.className = "approval-arguments";
+		try { details.textContent = JSON.stringify(JSON.parse(event.arguments), null, 2); }
+		catch { details.textContent = event.arguments; }
+		card.querySelector("p").after(details);
+	}
   card.querySelector(".deny").addEventListener("click", () => resolveApproval(event, false));
   card.querySelector(".approve").addEventListener("click", () => resolveApproval(event, true));
   return card;
@@ -673,7 +680,9 @@ async function resolveApproval(event, approved) {
 async function sendMessage(text) {
   text = text.trim();
   if (!text || state.running) return;
-  const input = $("#message-input");
+	const input = $("#message-input");
+	const requestId = state.retryRequest?.text === text ? state.retryRequest.id : requestID();
+	state.retryRequest = { text, id: requestId };
   try {
     if (!state.current) await createConversation();
     input.value = "";
@@ -693,17 +702,20 @@ async function sendMessage(text) {
     scheduleRender();
     await api(`/api/conversations/${encodeURIComponent(state.current.id)}/turns`, {
       method: "POST",
-      body: JSON.stringify({ requestId: requestID(), message: text }),
-    });
+		body: JSON.stringify({ requestId, message: text }),
+	});
+	state.retryRequest = null;
     ensureStream();
     scheduleStuckRecovery();
     const conversation = state.conversations.find((item) => item.id === state.current?.id);
     if (conversation) conversation.hasMessages = true;
     window.setTimeout(() => loadConversations(false), 500);
-  } catch (error) {
+	} catch (error) {
     state.events = state.events.filter((item) => !item.optimistic);
     state.running = false;
-    state.pendingThinking = false;
+		state.pendingThinking = false;
+		input.value = text;
+		resizeInput();
     updateComposer();
     scheduleRender();
     toast(error.message);

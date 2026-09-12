@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -18,6 +19,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/profiles/hosted"
 	"github.com/noknov/kepler-agent/packages/safety"
+	"github.com/noknov/kepler-agent/packages/sessioninput"
 )
 
 const webOutputPrompt = "The response is displayed in a modern web chat that renders GitHub-Flavored Markdown.\n\n" +
@@ -42,15 +44,26 @@ type ConversationService struct {
 	Model      string
 	Lifecycle  context.Context
 	BeforeRun  func(context.Context, string) error
+	IsDraining func() bool
+	Inputs     sessioninput.Store
+	QueueOwner string
 
-	mu     sync.Mutex
-	active map[string]activeWebTurn
+	mu      sync.Mutex
+	queueMu sync.Mutex
+	wg      sync.WaitGroup
+	active  map[string]activeWebTurn
 }
 
 type activeWebTurn struct {
 	identity string
 	turnID   string
 	cancel   context.CancelFunc
+}
+
+type queuedWebTurn struct {
+	Owner    Identity                         `json:"owner"`
+	Input    model.Message                    `json:"input"`
+	Approval *agentruntime.ApprovalResolution `json:"approval,omitempty"`
 }
 
 func NewConversationService(agent hosted.Agent, store Store, transcriptStore transcript.Store, hub *EventHub) *ConversationService {
@@ -111,6 +124,9 @@ func (s *ConversationService) List(ctx context.Context, owner Identity, archived
 }
 
 func (s *ConversationService) StartTurn(ctx context.Context, owner Identity, conversationID, requestID, input string) (string, error) {
+	if s.IsDraining != nil && s.IsDraining() {
+		return "", fmt.Errorf("service is draining; retry shortly")
+	}
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return "", fmt.Errorf("message is required")
@@ -130,25 +146,39 @@ func (s *ConversationService) StartTurn(ctx context.Context, owner Identity, con
 	}
 	turnID := deterministicTurnID(conversationID, requestID)
 	s.mu.Lock()
-	if current, exists := s.active[conversationID]; exists {
-		s.mu.Unlock()
+	current, exists := s.active[conversationID]
+	s.mu.Unlock()
+	if exists {
 		if current.turnID == turnID && current.identity == owner.Key() {
 			return turnID, nil
 		}
 		return "", fmt.Errorf("conversation already has an active turn")
 	}
-	runCtx, cancel := context.WithCancel(s.baseContext())
-	s.active[conversationID] = activeWebTurn{identity: owner.Key(), turnID: turnID, cancel: cancel}
-	s.mu.Unlock()
 	if err := s.Store.TouchConversation(ctx, owner, conversationID, titleFromInput(input)); err != nil {
-		s.finish(conversationID, turnID)
 		return "", err
 	}
-	go s.run(runCtx, owner, conversationID, turnID, model.TextMessage(model.RoleUser, input), nil)
+	message := model.TextMessage(model.RoleUser, input)
+	if s.Inputs != nil {
+		payload, err := json.Marshal(queuedWebTurn{Owner: owner, Input: message})
+		if err != nil {
+			return "", err
+		}
+		if err := s.Inputs.Enqueue(ctx, sessioninput.Item{ID: turnID, SessionID: conversationID, Kind: sessioninput.KindWeb, Payload: payload}); err != nil {
+			return "", err
+		}
+		s.startPending(ctx, conversationID)
+		return turnID, nil
+	}
+	if !s.launch(owner, conversationID, turnID, message, nil, "") {
+		return "", fmt.Errorf("conversation already has an active turn")
+	}
 	return turnID, nil
 }
 
 func (s *ConversationService) ResolveApproval(ctx context.Context, owner Identity, conversationID, turnID, toolCallID, requestID string, approved bool) (string, error) {
+	if s.IsDraining != nil && s.IsDraining() {
+		return "", fmt.Errorf("service is draining; retry shortly")
+	}
 	if _, err := s.Store.GetConversation(ctx, owner, conversationID); err != nil {
 		return "", err
 	}
@@ -161,16 +191,27 @@ func (s *ConversationService) ResolveApproval(ctx context.Context, owner Identit
 		return "", fmt.Errorf("conversation already has an active turn")
 	}
 	continuationID := deterministicTurnID(conversationID, requestID)
-	runCtx, cancel := context.WithCancel(s.baseContext())
-	s.active[conversationID] = activeWebTurn{identity: owner.Key(), turnID: continuationID, cancel: cancel}
 	s.mu.Unlock()
-	if err := s.Agent.Runtime.ResolveApproval(ctx, conversationID, agentruntime.ApprovalResolution{TurnID: turnID, ToolCallID: toolCallID, Approved: approved, UserID: owner.SubjectID}); err != nil {
-		s.finish(conversationID, continuationID)
-		return "", err
-	}
 	message := model.TextMessage(model.RoleUser, "Continue after the recorded approval decision.")
 	message.ID = "approval-continuation:" + continuationID
-	go s.run(runCtx, owner, conversationID, continuationID, message, nil)
+	resolution := agentruntime.ApprovalResolution{TurnID: turnID, ToolCallID: toolCallID, Approved: approved, UserID: owner.SubjectID}
+	if s.Inputs != nil {
+		payload, err := json.Marshal(queuedWebTurn{Owner: owner, Input: message, Approval: &resolution})
+		if err != nil {
+			return "", err
+		}
+		if err := s.Inputs.Enqueue(ctx, sessioninput.Item{ID: continuationID, SessionID: conversationID, Kind: sessioninput.KindWeb, Payload: payload}); err != nil {
+			return "", err
+		}
+		s.startPending(ctx, conversationID)
+		return continuationID, nil
+	}
+	if err := s.Agent.Runtime.ResolveApproval(ctx, conversationID, resolution); err != nil {
+		return "", err
+	}
+	if !s.launch(owner, conversationID, continuationID, message, nil, "") {
+		return "", fmt.Errorf("conversation already has an active turn")
+	}
 	return continuationID, nil
 }
 
@@ -202,25 +243,164 @@ func (s *ConversationService) Events(ctx context.Context, owner Identity, conver
 	return CollapseClientEvents(views), nil
 }
 
-func (s *ConversationService) run(ctx context.Context, owner Identity, conversationID, turnID string, input model.Message, history []model.Message) {
+func (s *ConversationService) run(ctx context.Context, owner Identity, conversationID, turnID string, input model.Message, history []model.Message) error {
 	defer s.finish(conversationID, turnID)
 	runCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 	if s.BeforeRun != nil {
 		if err := s.BeforeRun(runCtx, owner.SubjectID); err != nil {
 			s.recordStartFailure(conversationID, turnID)
-			return
+			return err
 		}
 	}
 	fragments := []prompt.Fragment{
 		{ID: "hosted-core", Version: "1", Layer: prompt.LayerCore, Content: s.Prompt.SystemPrompt()},
 		{ID: "web-output-format", Version: "1", Layer: prompt.LayerProduct, Content: webOutputPrompt},
 	}
-	_, _ = s.Agent.Run(runCtx, hosted.Request{
+	_, err := s.Agent.Run(runCtx, hosted.Request{
 		SessionID: conversationID, TurnID: turnID, UserID: owner.SubjectID, Workspace: s.Workspace,
 		Input: input, History: history, Model: s.Model, Prompt: fragments,
 		ScopeValues: map[string]string{"surface": "web", "web_search": "enabled"},
 	})
+	return err
+}
+
+func (s *ConversationService) launch(owner Identity, conversationID, turnID string, input model.Message, history []model.Message, claimID string) bool {
+	runCtx, cancel := context.WithCancel(s.baseContext())
+	s.mu.Lock()
+	if _, exists := s.active[conversationID]; exists {
+		s.mu.Unlock()
+		cancel()
+		return false
+	}
+	s.active[conversationID] = activeWebTurn{identity: owner.Key(), turnID: turnID, cancel: cancel}
+	s.wg.Add(1)
+	s.mu.Unlock()
+	go func() {
+		defer s.wg.Done()
+		_ = s.run(runCtx, owner, conversationID, turnID, input, history)
+		if claimID != "" && s.Inputs != nil {
+			finalCtx, finalCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			terminal := s.turnTerminal(finalCtx, conversationID, turnID)
+			if terminal {
+				_ = s.Inputs.Ack(finalCtx, claimID, s.queueOwner())
+			} else {
+				_ = s.Inputs.Release(finalCtx, claimID, s.queueOwner())
+			}
+			finalCancel()
+			if terminal {
+				s.startPending(s.baseContext(), conversationID)
+			}
+		}
+	}()
+	return true
+}
+
+func (s *ConversationService) turnTerminal(ctx context.Context, conversationID, turnID string) bool {
+	if s.Transcript == nil {
+		return false
+	}
+	events, err := s.Transcript.Load(ctx, conversationID, 0)
+	if err != nil {
+		return false
+	}
+	for index := len(events) - 1; index >= 0; index-- {
+		if events[index].TurnID == turnID && (events[index].Type == transcript.TurnCompleted || events[index].Type == transcript.TurnFailed) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *ConversationService) startPending(ctx context.Context, conversationID string) {
+	if s.Inputs == nil {
+		return
+	}
+	if s.IsDraining != nil && s.IsDraining() {
+		return
+	}
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+	s.mu.Lock()
+	_, active := s.active[conversationID]
+	s.mu.Unlock()
+	if active {
+		return
+	}
+	items, err := s.Inputs.Claim(ctx, conversationID, sessioninput.KindWeb, s.queueOwner(), 35*time.Minute, 1)
+	if err != nil || len(items) == 0 {
+		return
+	}
+	if items[0].Attempts > 5 {
+		s.recordStartFailure(conversationID, items[0].ID)
+		_ = s.Inputs.Ack(ctx, items[0].ID, s.queueOwner())
+		return
+	}
+	var queued queuedWebTurn
+	if json.Unmarshal(items[0].Payload, &queued) != nil || queued.Owner.Key() == "::" || len(queued.Input.Content) == 0 {
+		_ = s.Inputs.Ack(ctx, items[0].ID, s.queueOwner())
+		return
+	}
+	if _, err := s.Store.GetConversation(ctx, queued.Owner, conversationID); err != nil {
+		_ = s.Inputs.Ack(ctx, items[0].ID, s.queueOwner())
+		return
+	}
+	if queued.Approval != nil {
+		if err := s.Agent.Runtime.ResolveApproval(ctx, conversationID, *queued.Approval); err != nil {
+			s.recordStartFailure(conversationID, items[0].ID)
+			_ = s.Inputs.Ack(ctx, items[0].ID, s.queueOwner())
+			return
+		}
+	}
+	if !s.launch(queued.Owner, conversationID, items[0].ID, queued.Input, nil, items[0].ID) {
+		_ = s.Inputs.Release(ctx, items[0].ID, s.queueOwner())
+	}
+}
+
+func (s *ConversationService) StartRecovery(ctx context.Context) {
+	if s.Inputs == nil {
+		return
+	}
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		sessions, _ := s.Inputs.PendingSessions(ctx, sessioninput.KindWeb, 100)
+		for _, sessionID := range sessions {
+			s.startPending(ctx, sessionID)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *ConversationService) Wait() { s.wg.Wait() }
+
+func (s *ConversationService) WaitContext(ctx context.Context) bool {
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		s.mu.Lock()
+		active := len(s.active)
+		s.mu.Unlock()
+		if active == 0 {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *ConversationService) queueOwner() string {
+	if strings.TrimSpace(s.QueueOwner) != "" {
+		return s.QueueOwner
+	}
+	return "web-worker"
 }
 
 func (s *ConversationService) recordStartFailure(conversationID, turnID string) {

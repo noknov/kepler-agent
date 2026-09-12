@@ -81,6 +81,9 @@ func (t ReadFileTool) Execute(ctx context.Context, call tool.Call) (tool.Result,
 }
 
 func (t ReadFileTool) readOne(ctx context.Context, call tool.Call, rawPath, source string, startLine, maxLines int) (string, error) {
+	if safety.IsSensitivePath(rawPath) {
+		return "", fmt.Errorf("refusing to read sensitive file %q", filepath.Base(rawPath))
+	}
 	path, err := resolveReadableFile(t.Paths, rawPath)
 	if err != nil {
 		return "", err
@@ -299,7 +302,9 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 	}
 	cmdArgs = append(cmdArgs, "--", args.Query, searchPath)
 	cmd := exec.CommandContext(ctx, "rg", cmdArgs...)
-	var stdout, stderr bytes.Buffer
+	var stdout cappedBuffer
+	stdout.limit = 4 << 20
+	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()
@@ -383,11 +388,15 @@ func safeGitRef(ref string) bool {
 // gitShowFile returns the full text content of relPath inside repoDir at ref.
 func gitShowFile(ctx context.Context, repoDir, ref, relPath string) (string, error) {
 	arg := ref + ":" + filepath.ToSlash(relPath)
-	out, err := exec.CommandContext(ctx, "git", "-C", repoDir, "show", arg).Output()
+	command := exec.CommandContext(ctx, "git", "-C", repoDir, "show", arg)
+	var out cappedBuffer
+	out.limit = 4 << 20
+	command.Stdout = &out
+	err := command.Run()
 	if err != nil {
 		return "", err
 	}
-	return string(out), nil
+	return out.String(), nil
 }
 
 func gitRevParse(ctx context.Context, repoDir, ref string, extra ...string) string {
@@ -448,8 +457,11 @@ func gitGrep(ctx context.Context, repoDir, ref, query, queryMode, relPath, glob 
 	if relPath != "." && relPath != "" {
 		cmdArgs = append(cmdArgs, relPath)
 	}
+	cmdArgs = append(cmdArgs, safety.SensitiveGitPathspecs()...)
 	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
-	var stdout, stderr bytes.Buffer
+	var stdout cappedBuffer
+	stdout.limit = 4 << 20
+	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -463,6 +475,24 @@ func gitGrep(ctx context.Context, repoDir, ref, query, queryMode, relPath, glob 
 		lines = lines[:limit]
 	}
 	return lines, nil
+}
+
+type cappedBuffer struct {
+	bytes.Buffer
+	limit int
+}
+
+func (b *cappedBuffer) Write(value []byte) (int, error) {
+	original := len(value)
+	remaining := b.limit - b.Len()
+	if remaining <= 0 {
+		return original, nil
+	}
+	if len(value) > remaining {
+		value = value[:remaining]
+	}
+	_, err := b.Buffer.Write(value)
+	return original, err
 }
 
 type readState struct {
@@ -561,12 +591,12 @@ func resolveReadableFile(paths safety.WorkspacePolicy, path string) (string, err
 }
 
 func resolveWorkspacePath(paths safety.WorkspacePolicy, path string) (string, error) {
-	resolved, err := paths.Resolve(path)
+	resolved, err := paths.ResolveReadablePath(path)
 	if err == nil {
 		return resolved, nil
 	}
 	if stripped, ok := stripWorkspaceRootBase(paths, path); ok {
-		if resolved, retryErr := paths.Resolve(stripped); retryErr == nil {
+		if resolved, retryErr := paths.ResolveReadablePath(stripped); retryErr == nil {
 			return resolved, nil
 		}
 	}

@@ -2,10 +2,12 @@
 package localtools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,22 +65,30 @@ func (t ReadFile) readOne(rawPath string, offset, limit int) (string, bool, erro
 	if err != nil {
 		return "", false, err
 	}
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
+	if err != nil {
+		return "", false, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return "", false, err
+	}
+	if offset < 0 || int64(offset) > info.Size() {
+		return "", false, fmt.Errorf("offset is outside file")
+	}
+	if limit <= 0 {
+		limit = 64 << 10
+	}
+	if _, err := file.Seek(int64(offset), io.SeekStart); err != nil {
+		return "", false, err
+	}
+	data, err := io.ReadAll(io.LimitReader(file, int64(limit)+1))
 	if err != nil {
 		return "", false, err
 	}
 	if !utf8.Valid(data) {
 		return "", false, fmt.Errorf("file is not valid UTF-8")
-	}
-	if offset < 0 || offset > len(data) {
-		return "", false, fmt.Errorf("offset is outside file")
-	}
-	data = data[offset:]
-	if !utf8.Valid(data) {
-		return "", false, fmt.Errorf("offset must be on a UTF-8 boundary")
-	}
-	if limit <= 0 {
-		limit = 64 << 10
 	}
 	truncated := len(data) > limit
 	if truncated {
@@ -114,7 +124,11 @@ func (t ListFiles) Execute(ctx context.Context, call tool.Call) (tool.Result, er
 	}
 	command := exec.CommandContext(ctx, "rg", append([]string{"--files", "--hidden"}, safeRGGlobs()...)...)
 	command.Dir = root
-	data, err := command.Output()
+	var output boundedBuffer
+	output.limit = 4 << 20
+	command.Stdout = &output
+	err := command.Run()
+	data := output.Bytes()
 	if err != nil {
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
@@ -150,18 +164,27 @@ func (t Search) Execute(ctx context.Context, call tool.Call) (tool.Result, error
 		return tool.Result{}, err
 	}
 	root := t.Workspace.Root
+	target := "."
 	if arguments.Path != "" {
 		var err error
 		root, err = t.Workspace.Resolve(arguments.Path, false)
 		if err != nil {
 			return tool.Result{}, err
 		}
+		if info, statErr := os.Stat(root); statErr == nil && !info.IsDir() {
+			target = filepath.Base(root)
+			root = filepath.Dir(root)
+		}
 	}
 	args := append([]string{"-n", "--hidden"}, safeRGGlobs()...)
-	args = append(args, "--", arguments.Query, ".")
+	args = append(args, "--", arguments.Query, target)
 	command := exec.CommandContext(ctx, "rg", args...)
 	command.Dir = root
-	data, err := command.Output()
+	var output boundedBuffer
+	output.limit = 4 << 20
+	command.Stdout = &output
+	err := command.Run()
+	data := output.Bytes()
 	if err != nil {
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
@@ -231,7 +254,7 @@ func (t EditFile) Execute(_ context.Context, call tool.Call) (tool.Result, error
 	if err != nil {
 		return tool.Result{}, err
 	}
-	data, err := os.ReadFile(path)
+	data, err := readEditableFile(path)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -257,6 +280,45 @@ func (t EditFile) Execute(_ context.Context, call tool.Call) (tool.Result, error
 	return tool.TextResult(fmt.Sprintf("Updated %s (%d replacement(s)).", relative(t.Workspace.Root, path), count)), nil
 }
 
+const maxEditableBytes = 16 << 20
+
+func readEditableFile(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxEditableBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxEditableBytes {
+		return nil, fmt.Errorf("file exceeds %d byte edit limit", maxEditableBytes)
+	}
+	return data, nil
+}
+
+type boundedBuffer struct {
+	bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (b *boundedBuffer) Write(value []byte) (int, error) {
+	original := len(value)
+	remaining := b.limit - b.Len()
+	if remaining <= 0 {
+		b.truncated = true
+		return original, nil
+	}
+	if len(value) > remaining {
+		value = value[:remaining]
+		b.truncated = true
+	}
+	_, err := b.Buffer.Write(value)
+	return original, err
+}
+
 func schema(properties string, required ...string) json.RawMessage {
 	value := `{"type":"object","additionalProperties":false,"properties":` + properties
 	if len(required) > 0 {
@@ -275,7 +337,7 @@ func relative(root, path string) string {
 }
 
 func safeRGGlobs() []string {
-	patterns := []string{"!.git/**", "!.env", "!.env.*", "!**/.env", "!**/.env.*", "!**/*.pem", "!**/*.key", "!**/*.p12", "!**/*.pfx", "!**/.aws/**", "!**/.gcloud/**", "!**/.kube/**", "!**/secrets/**", "!**/credentials/**"}
+	patterns := []string{"!.git/**", "!.env", "!.env.*", "!**/.env", "!**/.env.*", "!**/*.pem", "!**/*.key", "!**/*.p12", "!**/*.pfx", "!**/.netrc", "!**/.npmrc", "!**/.pypirc", "!**/.aws/**", "!**/.gcloud/**", "!**/.kube/**", "!**/secrets/**", "!**/credentials/**", "!**/.docker/config.json", "!**/.config/gh/hosts.yml"}
 	args := make([]string, 0, len(patterns)*2)
 	for _, pattern := range patterns {
 		args = append(args, "-g", pattern)

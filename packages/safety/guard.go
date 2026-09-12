@@ -78,7 +78,7 @@ func (g WorkspacePolicy) Resolve(path string) (string, error) {
 }
 
 func (g WorkspacePolicy) ResolveReadableFile(path string) (string, error) {
-	resolved, err := g.Resolve(path)
+	resolved, err := g.ResolveReadablePath(path)
 	if err != nil {
 		return "", err
 	}
@@ -89,15 +89,25 @@ func (g WorkspacePolicy) ResolveReadableFile(path string) (string, error) {
 	if info.IsDir() {
 		return "", fmt.Errorf("path is a directory")
 	}
+	return resolved, nil
+}
+
+// ResolveReadablePath resolves an existing file or directory through symlinks
+// and verifies that the final path remains inside an allowed root.
+func (g WorkspacePolicy) ResolveReadablePath(path string) (string, error) {
+	resolved, err := g.Resolve(path)
+	if err != nil {
+		return "", err
+	}
 	if IsSensitivePath(resolved) {
-		return "", fmt.Errorf("refusing to read sensitive file %q", filepath.Base(resolved))
+		return "", fmt.Errorf("refusing to read sensitive path %q", filepath.Base(resolved))
 	}
 	realPath, err := filepath.EvalSymlinks(resolved)
 	if err != nil {
 		return "", err
 	}
 	if IsSensitivePath(realPath) {
-		return "", fmt.Errorf("refusing to read sensitive file %q", filepath.Base(realPath))
+		return "", fmt.Errorf("refusing to read sensitive path %q", filepath.Base(realPath))
 	}
 	for _, root := range g.Roots {
 		realRoot, err := filepath.EvalSymlinks(filepath.Clean(root))
@@ -119,7 +129,8 @@ func IsSensitivePath(path string) bool {
 	if base == ".env" || strings.HasPrefix(base, ".env.") {
 		return true
 	}
-	if base == "id_rsa" || base == "id_ed25519" || base == "credentials" || base == "credentials.json" {
+	if base == "id_rsa" || base == "id_ed25519" || base == "credentials" || base == "credentials.json" ||
+		base == ".netrc" || base == ".npmrc" || base == ".pypirc" {
 		return true
 	}
 	sensitiveSuffixes := []string{".pem", ".key", ".p12", ".pfx", ".kubeconfig"}
@@ -129,13 +140,30 @@ func IsSensitivePath(path string) bool {
 		}
 	}
 	sensitiveParts := []string{"/.aws/", "/.gcloud/", "/.kube/", "/secrets/", "/credentials/"}
-	normalized := "/" + strings.ToLower(filepath.ToSlash(path))
+	normalized := "/" + strings.Trim(strings.ToLower(filepath.ToSlash(path)), "/") + "/"
+	for _, suffix := range []string{"/.git/config/", "/.git/credentials/", "/.docker/config.json/", "/.config/gh/hosts.yml/"} {
+		if strings.HasSuffix(normalized, suffix) {
+			return true
+		}
+	}
 	for _, part := range sensitiveParts {
 		if strings.Contains(normalized, part) {
 			return true
 		}
 	}
 	return false
+}
+
+// SensitiveGitPathspecs applies the readable-path policy to committed trees.
+func SensitiveGitPathspecs() []string {
+	return []string{
+		":(exclude,glob)**/.env", ":(exclude,glob)**/.env.*",
+		":(exclude,glob)**/*.pem", ":(exclude,glob)**/*.key", ":(exclude,glob)**/*.p12", ":(exclude,glob)**/*.pfx",
+		":(exclude,glob)**/.netrc", ":(exclude,glob)**/.npmrc", ":(exclude,glob)**/.pypirc",
+		":(exclude,glob)**/.aws/**", ":(exclude,glob)**/.gcloud/**", ":(exclude,glob)**/.kube/**",
+		":(exclude,glob)**/secrets/**", ":(exclude,glob)**/credentials/**",
+		":(exclude,glob)**/.docker/config.json", ":(exclude,glob)**/.config/gh/hosts.yml",
+	}
 }
 
 func isWithin(path, root string) bool {

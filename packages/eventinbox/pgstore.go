@@ -86,12 +86,12 @@ RETURNING status`, id, s.owner, maxAttempts, intervalLiteral(retryDelay), messag
 }
 
 func (s *PGStore) DeadLetter(ctx context.Context, id string, cause error) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE slack_event_inbox SET status='dead_letter',dead_lettered_at=NOW(),last_error=$2,claim_until=NULL,claim_owner='' WHERE event_id=$1 AND status IN ('queued','processing')`, id, sanitizeError(cause))
+	tag, err := s.pool.Exec(ctx, `UPDATE slack_event_inbox SET status='dead_letter',dead_lettered_at=NOW(),last_error=$2,claim_until=NULL,claim_owner='' WHERE event_id=$1 AND (status='queued' OR (status='processing' AND claim_owner=$3))`, id, sanitizeError(cause), s.owner)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("dead-letter event %s: event is not active", id)
+		return ErrLeaseLost
 	}
 	return nil
 }

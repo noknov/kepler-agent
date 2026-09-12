@@ -28,7 +28,8 @@ export type ApprovalRequest = {
   sessionId: string;
   toolCallId: string;
   toolName: string;
-  summary: string;
+	summary: string;
+	details: string;
   reason?: string;
 };
 
@@ -282,13 +283,14 @@ function parseApproval(params: Record<string, unknown>): ApprovalRequest | null 
     reason = String((metadata as Record<string, unknown>).reason ?? "");
   }
   const name = String(toolCall.name ?? "tool");
-  const args = toolCall.arguments ? JSON.stringify(toolCall.arguments) : "";
-  return {
+	const args = toolCall.arguments ? JSON.stringify(toolCall.arguments, null, 2) : "";
+	return {
     turnId,
     sessionId,
     toolCallId: String(toolCall.id),
     toolName: name,
-    summary: args.length > 120 ? `${args.slice(0, 117)}...` : args,
+		summary: summarizeToolArgs(toolCall.arguments),
+		details: args.length > 4096 ? `${args.slice(0, 4096)}\n…[arguments truncated]` : args,
     reason,
   };
 }

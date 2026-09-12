@@ -82,6 +82,14 @@ func TestEstimateTokensCountsCJKAndInlineImages(t *testing.T) {
 	}
 }
 
+func TestBoundedProjectorRejectsOversizedLatestTurn(t *testing.T) {
+	message := model.TextMessage(model.RoleUser, strings.Repeat("large ", 500))
+	_, err := NewBoundedProjector(ContextConfig{MaxTokens: 100}).Project(context.Background(), []transcript.Event{{Sequence: 1, TurnID: "current", Type: transcript.UserInput, Message: &message}}, model.Message{})
+	if err == nil {
+		t.Fatal("expected an oversized indivisible turn to fail")
+	}
+}
+
 func toolResultEvent(turnID string, sequence uint64, callID, text string) transcript.Event {
 	call := tool.Call{ID: callID, Name: "read"}
 	result := tool.Result{Content: []model.Content{{Type: model.ContentText, Text: text}}}

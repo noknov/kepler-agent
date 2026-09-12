@@ -12,6 +12,23 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: kepler
+          POSTGRES_PASSWORD: kepler
+          POSTGRES_DB: kepler_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U kepler -d kepler_test"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -27,18 +44,31 @@ jobs:
           cache: pnpm
           cache-dependency-path: apps/cli/pnpm-lock.yaml
       - name: Install local tool dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap postgresql-client redis-tools ripgrep
+
+      - name: Initialize integration database
+        env:
+          PGPASSWORD: kepler
+        run: psql -h 127.0.0.1 -U kepler -d kepler_test -v ON_ERROR_STOP=1 -f schema/postgres.sql
       - name: Format and architecture boundaries
         run: make fmt-check boundaries
       - name: Static analysis
         run: make vet
       - name: Unit tests
         run: make test
+      - name: PostgreSQL, Redis, and Linux sandbox integration tests
+        env:
+          POSTGRES_TEST_DSN: postgres://kepler:kepler@127.0.0.1:5432/kepler_test?sslmode=disable
+          REDIS_TEST_URL: redis://127.0.0.1:6379/15
+          SANDBOX_INTEGRATION: "1"
+        run: go test ./packages/profiles/hosted ./packages/profiles/local ./packages/surfaces/slack/agent
       - name: Build deployable binaries
         run: make build
       - name: Validate CLI protocol boundary and bundle
         working-directory: apps/cli
-        run: pnpm install --frozen-lockfile && pnpm typecheck && pnpm build
+        run: pnpm install --frozen-lockfile && pnpm typecheck
+      - name: Verify generated protocol artifacts
+        run: make protocol-check
       - name: Validate evaluation tooling
         run: make eval-check
       - name: Race-sensitive runtime tests

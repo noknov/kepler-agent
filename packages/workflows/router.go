@@ -89,9 +89,10 @@ func ErrorDiagnostics(err error) RouteDiagnostics {
 // Its wire contract is a single label from a closed registry; workflow input
 // extraction remains the responsibility of each workflow definition.
 type ModelRouter struct {
-	Client  model.Client
-	Model   string
-	Options []RouteOption
+	Client          model.Client
+	Model           string
+	Options         []RouteOption
+	MaxOutputTokens int
 }
 
 func (r ModelRouter) Route(ctx context.Context, request RouteRequest) (RouteDecision, error) {
@@ -110,6 +111,10 @@ Registered route labels:
 - general: ordinary conversation or any request that does not clearly match a workflow
 ` + catalog
 	temperature := 0.0
+	maxOutputTokens := r.MaxOutputTokens
+	if maxOutputTokens <= 0 {
+		maxOutputTokens = 512
+	}
 	response, err := r.Client.Generate(ctx, model.Request{
 		Model:           r.Model,
 		ReasoningEffort: "disabled",
@@ -117,12 +122,12 @@ Registered route labels:
 			model.TextMessage(model.RoleSystem, system),
 			model.TextMessage(model.RoleUser, request.Text),
 		},
-		// Do not impose a small completion cap here. Some providers account for
-		// internal reasoning against that cap even when thinking is disabled,
-		// which can terminate before the route label is emitted. The provider's
-		// configured/default completion budget remains the single authority.
-		Temperature: &temperature,
-		Metadata:    routeMetadata(request),
+		// Leave enough headroom for providers that account for internal tokens,
+		// while keeping a one-label classifier from inheriting an unbounded
+		// provider default.
+		MaxOutputTokens: maxOutputTokens,
+		Temperature:     &temperature,
+		Metadata:        routeMetadata(request),
 	}, nil)
 	if err != nil {
 		return RouteDecision{}, &RouteError{Kind: RouteErrorModel, Err: fmt.Errorf("classify workflow intent: %w", err)}

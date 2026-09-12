@@ -21,6 +21,7 @@ type Store interface {
 	Create(context.Context, Reminder) (Reminder, error)
 	List(context.Context, string) ([]Reminder, error)
 	Due(context.Context, time.Time) ([]Reminder, error)
+	RenewClaim(context.Context, string, time.Duration) error
 	MarkSent(context.Context, string, time.Time) error
 	Cancel(context.Context, string, string) error
 }

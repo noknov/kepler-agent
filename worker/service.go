@@ -46,19 +46,20 @@ import (
 )
 
 type Service struct {
-	cfg         config.Config
-	stores      *platform.Stores
-	slack       *slack.Client
-	metrics     *observability.Recorder
-	health      *health.Service
-	reminders   reminder.Scheduler
-	conv        slackconversation.ControlledConversation
-	handler     *slackhandler.Handler
-	slackWorker *slackevents.Worker
-	web         http.Handler
-	webTools    *webToolRefresh
-	runSink     *hosted.RunSink
-	runEvents   *transcript.AsyncSink
+	cfg              config.Config
+	stores           *platform.Stores
+	slack            *slack.Client
+	metrics          *observability.Recorder
+	health           *health.Service
+	reminders        reminder.Scheduler
+	conv             slackconversation.ControlledConversation
+	handler          *slackhandler.Handler
+	slackWorker      *slackevents.Worker
+	web              http.Handler
+	webTools         *webToolRefresh
+	webConversations *websurface.ConversationService
+	runSink          *hosted.RunSink
+	runEvents        *transcript.AsyncSink
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -203,6 +204,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 	var webHandler http.Handler
 	var webToolCoordinator *webToolRefresh
+	var webConversations *websurface.ConversationService
 	if cfg.Web.Enabled {
 		if err := platform.RequireWebSchema(ctx, stores.PGPool); err != nil {
 			return nil, fmt.Errorf("verify web schema: %w", err)
@@ -222,11 +224,13 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		webStore := websurface.PGStore{Pool: stores.PGPool}
 		webHub := websurface.NewEventHub(webProfile.Redactor)
 		events.Add(webHub)
-		webConversations := websurface.NewConversationService(webProfile.Agent, webStore, hosted.PGTranscript{Pool: stores.PGPool}, webHub)
+		webConversations = websurface.NewConversationService(webProfile.Agent, webStore, hosted.PGTranscript{Pool: stores.PGPool}, webHub)
 		webConversations.Prompt = webProfile.Prompt
 		webConversations.Redactor = webProfile.Redactor
 		webConversations.Model = cfg.LLM.Model
 		webConversations.Lifecycle = serviceCtx
+		webConversations.Inputs = stores.Inputs
+		webConversations.QueueOwner = podID + ":web"
 		webPolicy := hostedTools.PolicyForSurface(cfg, webSurface)
 		if webCatalogBundle.ClickStack != nil || webCatalogBundle.Notion != nil {
 			webConversations.BeforeRun = func(ctx context.Context, userID string) error {
@@ -347,23 +351,27 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 
 	s := &Service{
-		cfg:       cfg,
-		stores:    stores,
-		slack:     slackClient,
-		metrics:   recorder,
-		health:    healthService,
-		reminders: reminder.Scheduler{Store: stores.Reminders, Messenger: slackmessaging.BotUserMessenger{Client: slackClient}, Redis: stores.Redis},
-		conv:      conv,
-		handler:   handler,
-		ctx:       serviceCtx,
-		cancel:    serviceCancel,
-		serveErr:  make(chan error, 1),
-		web:       webHandler,
-		webTools:  webToolCoordinator,
-		runSink:   runSink,
-		runEvents: runEvents,
+		cfg:              cfg,
+		stores:           stores,
+		slack:            slackClient,
+		metrics:          recorder,
+		health:           healthService,
+		reminders:        reminder.Scheduler{Store: stores.Reminders, Messenger: slackmessaging.BotUserMessenger{Client: slackClient}, Redis: stores.Redis},
+		conv:             conv,
+		handler:          handler,
+		ctx:              serviceCtx,
+		cancel:           serviceCancel,
+		serveErr:         make(chan error, 1),
+		web:              webHandler,
+		webTools:         webToolCoordinator,
+		webConversations: webConversations,
+		runSink:          runSink,
+		runEvents:        runEvents,
 	}
 	s.eventCond = sync.NewCond(&s.eventMu)
+	if webConversations != nil {
+		webConversations.IsDraining = func() bool { return s.draining.Load() }
+	}
 	s.slackWorker = &slackevents.Worker{
 		Inbox:          stores.Events,
 		Redis:          stores.Redis,
@@ -401,6 +409,7 @@ func (s *Service) StartBackground() {
 		})
 	}
 	s.Go(s.recoverRunProjections)
+	s.Go(s.pruneEphemeralData)
 	s.Go(func(ctx context.Context) {
 		s.reminders.Start(ctx)
 	})
@@ -418,10 +427,54 @@ func (s *Service) StartBackground() {
 	if s.webTools != nil {
 		s.Go(s.webTools.Start)
 	}
+	if s.webConversations != nil {
+		s.Go(s.webConversations.StartRecovery)
+	}
 	if s.slackWorker != nil {
 		s.slackWorker.Start(s.ctx)
 	}
 	s.Go(s.serveHealth)
+}
+
+const ephemeralPrunePeriod = 6 * time.Hour
+
+// pruneEphemeralData bounds operational queues and expired authentication
+// records. Conversation transcripts and run evidence are retained until an
+// explicit product retention policy exists; deleting those implicitly would
+// make old conversations unreplayable.
+func (s *Service) pruneEphemeralData(ctx context.Context) {
+	if s == nil || s.stores == nil || s.stores.PGPool == nil {
+		return
+	}
+	prune := func() {
+		pruneCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		statements := []string{
+			`DELETE FROM slack_event_inbox WHERE status='completed' AND completed_at < NOW()-INTERVAL '30 days'`,
+			`DELETE FROM slack_event_inbox WHERE status='dead_letter' AND dead_lettered_at < NOW()-INTERVAL '90 days'`,
+			`DELETE FROM agent_session_inputs WHERE acknowledged_at < NOW()-INTERVAL '7 days'`,
+			`DELETE FROM web_auth_states WHERE expires_at < NOW()-INTERVAL '1 day'`,
+			`DELETE FROM web_auth_sessions WHERE expires_at < NOW()-INTERVAL '7 days'`,
+			`DELETE FROM oauth_states WHERE expires_at < NOW()-INTERVAL '1 day'`,
+		}
+		for _, statement := range statements {
+			if _, err := s.stores.PGPool.Exec(pruneCtx, statement); err != nil {
+				log.Printf("prune ephemeral data: %v", err)
+				return
+			}
+		}
+	}
+	prune()
+	ticker := time.NewTicker(ephemeralPrunePeriod)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			prune()
+		}
+	}
 }
 
 const projectionRecoveryPeriod = 5 * time.Minute
@@ -477,8 +530,18 @@ func (s *Service) RunUntilDone(ctx context.Context) error {
 	if !s.waitEvents(s.cfg.HTTP.ShutdownTimeout) {
 		log.Printf("shutdown: timed out waiting for in-flight Slack events")
 	}
+	if s.webConversations != nil {
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), s.cfg.HTTP.ShutdownTimeout)
+		if !s.webConversations.WaitContext(drainCtx) {
+			log.Printf("shutdown: timed out waiting for in-flight Web turns")
+		}
+		drainCancel()
+	}
 	if s.cancel != nil {
 		s.cancel()
+	}
+	if s.webConversations != nil {
+		s.webConversations.Wait()
 	}
 	return runErr
 }

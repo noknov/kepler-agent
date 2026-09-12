@@ -2,6 +2,7 @@ package safety
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -80,5 +81,67 @@ func (g CommandPolicy) CheckArgv(argv []string) error {
 			return fmt.Errorf("command blocked by safety policy: argv contains NUL byte")
 		}
 	}
-	return g.Check(strings.Join(argv, " "))
+	name := strings.ToLower(filepath.Base(argv[0]))
+	if (name == "sh" || name == "bash" || name == "zsh") && len(argv) >= 3 && argv[1] == "-c" {
+		return g.Check(argv[2])
+	}
+	command := argvCommand(name, argv[1:])
+	if command == "" {
+		return nil
+	}
+	return g.Check(command)
+}
+
+// argvCommand keeps matching on executable and subcommand tokens. A data
+// argument is never reparsed as shell, so its contents must not trigger policy.
+func argvCommand(name string, args []string) string {
+	switch name {
+	case "rm":
+		var recursive, force bool
+		for _, arg := range args {
+			if strings.HasPrefix(arg, "-") {
+				recursive = recursive || strings.Contains(arg, "r") || arg == "--recursive"
+				force = force || strings.Contains(arg, "f") || arg == "--force"
+			}
+		}
+		if recursive && force {
+			return "rm -rf"
+		}
+		return "rm"
+	case "terraform", "tofu":
+		if containsArg(args, "destroy") {
+			return name + " destroy"
+		}
+		return name
+	case "kubectl":
+		if containsArg(args, "delete") {
+			return "kubectl delete"
+		}
+		return name
+	case "docker":
+		for _, destructive := range []string{"rm", "rmi", "stop", "kill"} {
+			if containsArg(args, destructive) {
+				return "docker " + destructive
+			}
+		}
+		return name
+	case "chmod":
+		if containsArg(args, "777") {
+			return "chmod 777"
+		}
+		return name
+	case "shutdown", "reboot", "halt", "poweroff", "mkfs", "dd":
+		return name
+	default:
+		return name
+	}
+}
+
+func containsArg(args []string, wanted string) bool {
+	for _, arg := range args {
+		if strings.EqualFold(arg, wanted) {
+			return true
+		}
+	}
+	return false
 }

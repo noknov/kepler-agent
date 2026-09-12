@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import datetime
+import hashlib
 import json
+import math
 import os
 import random
 import shutil
@@ -42,6 +44,7 @@ class Task:
     metadata: dict[str, Any]
     required_capabilities: frozenset[str]
     weight: float
+    protected_paths: tuple[str, ...]
 
 def load_candidates(path: Path) -> list[Candidate]:
     data = json.loads(path.read_text())
@@ -155,7 +158,12 @@ def load_tasks(path: Path) -> list[Task]:
         weight = float(item.get("weight", 1))
         if weight <= 0:
             raise ValueError(f"task {task_id} weight must be positive")
-        tasks.append(Task(task_id, category, source, prompt, fixture, test, int(item["timeout_seconds"]), tags, metadata, required_capabilities, weight))
+        protected_paths = tuple(optional_string_list(item, "protected_paths"))
+        for protected in protected_paths:
+            candidate_path = Path(protected)
+            if candidate_path.is_absolute() or ".." in candidate_path.parts:
+                raise ValueError(f"task {task_id} protected_paths must be relative and contained")
+        tasks.append(Task(task_id, category, source, prompt, fixture, test, int(item["timeout_seconds"]), tags, metadata, required_capabilities, weight, protected_paths))
     return tasks
 
 def filter_tasks(tasks: list[Task], ids: list[str], categories: list[str], sources: list[str], tags: list[str]) -> list[Task]:
@@ -210,6 +218,19 @@ def capture_workspace_diff(original: Path, workspace: Path, case_root: Path) -> 
         diff_path.write_text(f"workspace diff unavailable: {error}\n")
     return str(diff_path)
 
+def prepare_grading_workspace(original: Path, workspace: Path, grading: Path, protected_paths: tuple[str, ...]) -> None:
+    shutil.copytree(workspace, grading, symlinks=True)
+    for relative in protected_paths:
+        source = original / relative
+        destination = grading / relative
+        if not source.exists() and not source.is_symlink():
+            raise ValueError(f"protected path does not exist in fixture: {relative}")
+        if destination.is_dir() and not destination.is_symlink(): shutil.rmtree(destination)
+        elif destination.exists() or destination.is_symlink(): destination.unlink()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir(): shutil.copytree(source, destination, symlinks=True)
+        else: shutil.copy2(source, destination, follow_symlinks=False)
+
 def set_status(record: dict[str, Any], status: str) -> None:
     record["status"] = status
     failure_classes = {
@@ -249,6 +270,11 @@ def run_case(candidate: Candidate, task: Task, model: str, run_root: Path, repet
         "candidate": candidate.name, "repetition": repetition, "command": command, "model": model,
         "candidate_version": versions.get(candidate.name, {}), "candidate_capabilities": sorted(candidate.capabilities),
     }
+    version = versions.get(candidate.name, {})
+    if not dry_run and candidate.version_command and version.get("status") != "ok":
+        set_status(record, "launch_error")
+        record["error"] = "candidate version probe failed"
+        return record
     missing_capabilities = sorted(task.required_capabilities - candidate.capabilities)
     if missing_capabilities:
         set_status(record, "skipped")
@@ -260,13 +286,23 @@ def run_case(candidate: Candidate, task: Task, model: str, run_root: Path, repet
         return record
     started = time.monotonic()
     try:
+        agent_started = time.monotonic()
         agent = subprocess.run(command, cwd=workspace, env=clean_environment(candidate, model, workspace, home, mapping), text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=task.timeout_seconds)
+        record["agent_duration_seconds"] = round(time.monotonic() - agent_started, 3)
         (case_root / "agent.log").write_text(agent.stdout)
         record["agent_exit_code"] = agent.returncode
         if agent.returncode != 0:
             set_status(record, "agent_error")
         else:
-            test = subprocess.run(task.test, cwd=workspace, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=task.timeout_seconds)
+            grading = case_root / "grading"
+            prepare_grading_workspace(original, workspace, grading, task.protected_paths)
+            grader_home = case_root / "grader-home"
+            grader_home.mkdir()
+            remaining = task.timeout_seconds - (time.monotonic() - started)
+            if remaining <= 0: raise subprocess.TimeoutExpired(task.test, task.timeout_seconds)
+            grader_started = time.monotonic()
+            test = subprocess.run(task.test, cwd=grading, env=probe_environment(grader_home), text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=remaining)
+            record["grader_duration_seconds"] = round(time.monotonic() - grader_started, 3)
             (case_root / "test.log").write_text(test.stdout)
             record["test_exit_code"] = test.returncode
             set_status(record, "passed" if test.returncode == 0 else "failed")
@@ -346,9 +382,19 @@ def percentile(values: list[float], fraction: float) -> float:
     lower, upper = int(position), min(int(position) + 1, len(ordered) - 1)
     return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
 
+def wilson_interval(passed: int, total: int, z: float = 1.959963984540054) -> list[float]:
+    if total <= 0:
+        return [0.0, 0.0]
+    rate = passed / total
+    denominator = 1 + z * z / total
+    center = (rate + z * z / (2 * total)) / denominator
+    margin = z * math.sqrt(rate * (1 - rate) / total + z * z / (4 * total * total)) / denominator
+    return [round(max(0.0, center - margin), 6), round(min(1.0, center + margin), 6)]
+
 def finalize_summary(summary: dict[str, Any]) -> None:
     eligible = summary["eligible"]
     summary["pass_rate"] = summary["passed"] / eligible if eligible else 0
+    summary["pass_rate_confidence_95"] = wilson_interval(summary["passed"], eligible)
     summary["weighted_pass_rate"] = summary["weighted_passed"] / summary["weighted_total"] if summary["weighted_total"] else 0
     durations = summary.pop("_durations")
     summary["duration_seconds"] = round(summary["duration_seconds"], 3)
@@ -413,6 +459,15 @@ def main() -> int:
             "cases": "<task>__<candidate>__<repetition>/",
         },
     }
+    evaluation_identity = {
+        "suite_sha256": hashlib.sha256(args.suite.read_bytes()).hexdigest(),
+        "candidates_sha256": hashlib.sha256(args.candidates.read_bytes()).hexdigest(),
+        "model": args.model,
+        "repetitions": args.repetitions,
+        "tasks": [task.id for task in tasks],
+        "candidates": [candidate.name for candidate in candidates],
+    }
+    run_manifest["evaluation_identity"] = evaluation_identity
     write_run_manifest(args.output / "run.json", run_manifest)
     versions = candidate_versions(candidates, {"repo": str(ROOT), "model": args.model})
     (args.output / "candidate_versions.json").write_text(json.dumps(versions, indent=2, sort_keys=True) + "\n")
@@ -432,9 +487,10 @@ def main() -> int:
             stream.flush()
             print(f'{record["status"]:>12}  {task.id}  {candidate.name}')
     summary = summarize(records, versions)
+    summary["evaluation_identity"] = evaluation_identity
     (args.output / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     ok = all(record["status"] in ("passed", "dry_run") for record in records)
-    run_manifest["status"] = "passed" if ok else "failed"
+    run_manifest["status"] = "completed"
     run_manifest["ended_at"] = utc_now()
     run_manifest["summary"] = {
         "records": summary["records"],

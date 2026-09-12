@@ -52,6 +52,33 @@ func TestFileToolsAndCatalog(t *testing.T) {
 	}
 }
 
+func TestSearchAcceptsFilePathAndExcludesCredentialFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("needle\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".npmrc"), []byte("needle token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := local.NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workspace.Close()
+	search := Search{Workspace: workspace}
+	result, err := search.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"query":"needle","path":"notes.txt"}`)})
+	if err != nil || !strings.Contains(result.Text(), "needle") {
+		t.Fatalf("result=%q err=%v", result.Text(), err)
+	}
+	result, err = search.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"query":"needle"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(result.Text(), ".npmrc") || strings.Contains(result.Text(), "token") {
+		t.Fatalf("credential search leaked: %q", result.Text())
+	}
+}
+
 func data(t *testing.T, path string) []byte {
 	t.Helper()
 	value, err := os.ReadFile(path)

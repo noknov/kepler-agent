@@ -136,6 +136,12 @@ func TestCommandPolicyChecksArgv(t *testing.T) {
 	if err := guard.CheckArgv([]string{"git", "status\x00"}); err == nil {
 		t.Fatal("expected argv with NUL byte blocked")
 	}
+	if err := guard.CheckArgv([]string{"git", "grep", "kubectl delete"}); err != nil {
+		t.Fatalf("data argument produced a false positive: %v", err)
+	}
+	if err := guard.CheckArgv([]string{"bash", "-c", "kubectl delete pod api"}); err == nil {
+		t.Fatal("expected destructive shell command blocked")
+	}
 }
 
 func TestWorkspacePolicyRejectsSymlinkEscape(t *testing.T) {
@@ -150,6 +156,25 @@ func TestWorkspacePolicyRejectsSymlinkEscape(t *testing.T) {
 	_, err := (WorkspacePolicy{Roots: []string{root}}).ResolveReadableFile("link.txt")
 	if err == nil {
 		t.Fatal("expected symlink escape to be rejected")
+	}
+}
+
+func TestWorkspacePolicyRejectsSymlinkDirectoryEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (WorkspacePolicy{Roots: []string{root}}).ResolveReadablePath("linked"); err == nil {
+		t.Fatal("expected symlink directory escape to be rejected")
+	}
+}
+
+func TestSensitivePathIncludesCredentialFilesAndDirectories(t *testing.T) {
+	for _, path := range []string{".npmrc", "project/.netrc", "secrets", "secrets/nested/file.txt", ".docker/config.json"} {
+		if !IsSensitivePath(path) {
+			t.Errorf("IsSensitivePath(%q) = false", path)
+		}
 	}
 }
 

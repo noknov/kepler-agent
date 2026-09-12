@@ -755,6 +755,7 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, input:focus-visib
 
 .approval-card strong { font-size: 16px; }
 .approval-card p { margin: 6px 0 12px; color: var(--muted); font-size: 14px; }
+.approval-arguments { max-height: 220px; overflow: auto; padding: 10px; border-radius: 6px; background: var(--surface-muted, #f6f6f6); white-space: pre-wrap; word-break: break-word; }
 .approval-card div { display: flex; gap: 8px; }
 .approval-card button { height: 34px; border-radius: 8px; padding: 0 14px; font-size: 14px; cursor: pointer; }
 .approval-card .deny { border: 1px solid var(--line); background: #fff; }

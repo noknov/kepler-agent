@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -98,8 +99,11 @@ func (p BoundedProjector) Project(_ context.Context, events []transcript.Event, 
 	}
 	tokens := EstimateTokens(messages)
 	groups := groupProjectedMessages(entries)
-	if tokens <= limit || len(groups) <= 1 {
+	if tokens <= limit {
 		return Projection{Messages: messages, EstimatedTokens: tokens}, nil
+	}
+	if len(groups) <= 1 {
+		return Projection{}, fmt.Errorf("context exceeds token budget and the latest turn cannot be dropped")
 	}
 	keepGroup := 0
 	keptTokens := EstimateTokens([]model.Message{system})
@@ -116,7 +120,7 @@ func (p BoundedProjector) Project(_ context.Context, events []transcript.Event, 
 		keptTokens += groupTokens
 	}
 	if keepGroup == 0 {
-		return Projection{Messages: messages, EstimatedTokens: tokens}, nil
+		return Projection{}, fmt.Errorf("context exceeds token budget and no complete older turn can be dropped")
 	}
 	keepFrom := 0
 	for index := 0; index < keepGroup; index++ {
@@ -136,10 +140,14 @@ func (p BoundedProjector) Project(_ context.Context, events []transcript.Event, 
 	for _, entry := range entries[keepFrom:] {
 		kept = append(kept, entry.message)
 	}
-	return Projection{
+	projection := Projection{
 		Messages: kept, EstimatedTokens: EstimateTokens(kept), Dropped: dropped,
 		CoversThrough: entries[keepFrom-1].sequence,
-	}, nil
+	}
+	if projection.EstimatedTokens > limit {
+		return Projection{}, fmt.Errorf("latest turn exceeds token budget")
+	}
+	return projection, nil
 }
 
 func groupProjectedMessages(entries []projectedMessage) []projectedGroup {

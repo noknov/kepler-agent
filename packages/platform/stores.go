@@ -20,6 +20,7 @@ import (
 // Stores owns the durable dependencies shared by app entrypoints.
 type Stores struct {
 	PGPool    *pgxpool.Pool
+	LockPool  *pgxpool.Pool
 	Redis     *redisclient.Client
 	Sessions  *session.PGStore
 	Runs      *runs.PGStore
@@ -46,17 +47,24 @@ func NewStores(ctx context.Context, cfg config.StorageConfig) (*Stores, error) {
 		pgPool.Close()
 		return nil, err
 	}
+	lockPool, err := newNamedPGPool(ctx, cfg.PostgresDSN, "POSTGRES_LOCK_MAX_CONNS", "POSTGRES_LOCK_MIN_CONNS", 8, 0)
+	if err != nil {
+		pgPool.Close()
+		return nil, err
+	}
 
 	rdb, err := redisclient.New(cfg.RedisURL)
 	if err != nil {
+		lockPool.Close()
 		pgPool.Close()
 		return nil, fmt.Errorf("redis: %w", err)
 	}
 
 	return &Stores{
 		PGPool:    pgPool,
+		LockPool:  lockPool,
 		Redis:     rdb,
-		Sessions:  session.NewPGStore(pgPool),
+		Sessions:  session.NewPGStore(lockPool),
 		Runs:      runs.NewPGStore(pgPool),
 		Reminders: reminder.NewPGStore(pgPool),
 		Events:    eventinbox.NewPGStore(pgPool),
@@ -99,6 +107,9 @@ func (s *Stores) Close() {
 	if s.PGPool != nil {
 		s.PGPool.Close()
 	}
+	if s.LockPool != nil {
+		s.LockPool.Close()
+	}
 }
 
 func (s *EventIngressStores) Close() {
@@ -114,12 +125,16 @@ func (s *EventIngressStores) Close() {
 }
 
 func newPGPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
+	return newNamedPGPool(ctx, dsn, "POSTGRES_MAX_CONNS", "POSTGRES_MIN_CONNS", 20, 2)
+}
+
+func newNamedPGPool(ctx context.Context, dsn, maxEnv, minEnv string, defaultMax, defaultMin int) (*pgxpool.Pool, error) {
 	pgCfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse postgres dsn: %w", err)
 	}
-	pgCfg.MaxConns = int32(envutil.Int("POSTGRES_MAX_CONNS", 20))
-	pgCfg.MinConns = int32(envutil.Int("POSTGRES_MIN_CONNS", 2))
+	pgCfg.MaxConns = int32(envutil.Int(maxEnv, defaultMax))
+	pgCfg.MinConns = int32(envutil.Int(minEnv, defaultMin))
 	pgPool, err := pgxpool.NewWithConfig(ctx, pgCfg)
 	if err != nil {
 		return nil, fmt.Errorf("connect postgres: %w", err)

@@ -1,10 +1,10 @@
 package hosted
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
@@ -32,11 +32,10 @@ func (s PGTranscript) Append(ctx context.Context, event transcript.Event) (trans
 	if err = tx.QueryRow(ctx, `SELECT COALESCE(MAX(sequence), 0) + 1 FROM agent_transcript_events WHERE session_id=$1`, key).Scan(&event.Sequence); err != nil {
 		return transcript.Event{}, err
 	}
-	payload, err := json.Marshal(event)
+	payload, err := marshalPostgresJSON(event)
 	if err != nil {
 		return transcript.Event{}, err
 	}
-	payload = bytes.ReplaceAll(payload, []byte(`\u0000`), nil)
 	tag, err := tx.Exec(ctx, `INSERT INTO agent_transcript_events(event_id,session_id,turn_id,sequence,type,status,at,payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(event_id) DO NOTHING`, event.ID, key, event.TurnID, event.Sequence, string(event.Type), event.Status, event.Timestamp, payload)
 	if err != nil {
 		return transcript.Event{}, err
@@ -87,11 +86,10 @@ func (s PGTranscript) AppendBatch(ctx context.Context, events []transcript.Event
 	result := make([]transcript.Event, len(events))
 	for index, event := range events {
 		event.Sequence = next + uint64(index)
-		payload, marshalErr := json.Marshal(event)
+		payload, marshalErr := marshalPostgresJSON(event)
 		if marshalErr != nil {
 			return nil, marshalErr
 		}
-		payload = bytes.ReplaceAll(payload, []byte(`\u0000`), nil)
 		if _, err = tx.Exec(ctx, `INSERT INTO agent_transcript_events(event_id,session_id,turn_id,sequence,type,status,at,payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, event.ID, sessionID, event.TurnID, event.Sequence, string(event.Type), event.Status, event.Timestamp, payload); err != nil {
 			return nil, err
 		}
@@ -101,6 +99,34 @@ func (s PGTranscript) AppendBatch(ctx context.Context, events []transcript.Event
 		return nil, err
 	}
 	return result, nil
+}
+
+func marshalPostgresJSON(value any) ([]byte, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	var tree any
+	if err := json.Unmarshal(encoded, &tree); err != nil {
+		return nil, err
+	}
+	return json.Marshal(replaceNULStrings(tree))
+}
+
+func replaceNULStrings(value any) any {
+	switch typed := value.(type) {
+	case string:
+		return strings.ReplaceAll(typed, "\x00", "\uFFFD")
+	case []any:
+		for index := range typed {
+			typed[index] = replaceNULStrings(typed[index])
+		}
+	case map[string]any:
+		for key, child := range typed {
+			typed[key] = replaceNULStrings(child)
+		}
+	}
+	return value
 }
 
 func (s PGTranscript) Load(ctx context.Context, sessionID string, after uint64) ([]transcript.Event, error) {

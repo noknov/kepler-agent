@@ -69,6 +69,8 @@ class KeplerAgent(BaseAgent):
 
     @override
     def version(self) -> str:
+        if self._binary_sha256:
+            return "binary-sha256:" + self._binary_sha256
         return self._source_ref
 
     def _env_value(self, key: str) -> str | None:

@@ -139,6 +139,8 @@ concurrency recommendation for every deployment:
 
 ```bash
 POSTGRES_MAX_CONNS=4
+POSTGRES_LOCK_MAX_CONNS=8
+POSTGRES_LOCK_MIN_CONNS=0
 ```
 
 ## Agent Runtime Policy

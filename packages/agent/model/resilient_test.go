@@ -118,6 +118,17 @@ func TestResilientClientDoesNotStartAttemptWithoutBudget(t *testing.T) {
 	}
 }
 
+func TestResilientClientDefaultAllowsOneFastInitialAttempt(t *testing.T) {
+	now := time.Now()
+	primary := &resilientScript{}
+	client := &ResilientClient{Primary: primary, Now: func() time.Time { return now }}
+	ctx, cancel := context.WithDeadline(context.Background(), now.Add(20*time.Second))
+	defer cancel()
+	if _, err := client.Generate(ctx, Request{Model: "m"}, nil); err != nil || primary.calls != 1 {
+		t.Fatalf("err=%v calls=%d", err, primary.calls)
+	}
+}
+
 func TestResilientClientDoesNotRetryAfterCommittedText(t *testing.T) {
 	primary := &streamingResilientScript{
 		resilientScript: resilientScript{errs: []error{transient()}},

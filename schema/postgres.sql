@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS agent_session_inputs (
     sequence BIGSERIAL UNIQUE,
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('steering', 'queue')),
+    kind TEXT NOT NULL CHECK (kind IN ('steering', 'queue', 'web')),
     payload JSONB NOT NULL,
     attempts INTEGER NOT NULL DEFAULT 0,
     claim_owner TEXT NOT NULL DEFAULT '',
@@ -47,6 +47,20 @@ CREATE TABLE IF NOT EXISTS agent_session_inputs (
     acknowledged_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'agent_session_inputs'::regclass
+          AND conname = 'agent_session_inputs_kind_check'
+          AND pg_get_constraintdef(oid) NOT LIKE '%web%'
+    ) THEN
+        ALTER TABLE agent_session_inputs DROP CONSTRAINT agent_session_inputs_kind_check;
+        ALTER TABLE agent_session_inputs ADD CONSTRAINT agent_session_inputs_kind_check
+            CHECK (kind IN ('steering', 'queue', 'web'));
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_inputs_pending
     ON agent_session_inputs(kind, session_id, sequence)
@@ -106,8 +120,11 @@ CREATE TABLE IF NOT EXISTS reminders (
     run_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     sent_at TIMESTAMPTZ,
-    claim_until TIMESTAMPTZ
+    claim_until TIMESTAMPTZ,
+    claim_owner TEXT NOT NULL DEFAULT ''
 );
+
+ALTER TABLE reminders ADD COLUMN IF NOT EXISTS claim_owner TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_reminders_due
     ON reminders(run_at) WHERE sent_at IS NULL;

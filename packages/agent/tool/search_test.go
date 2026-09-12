@@ -81,3 +81,12 @@ func TestSearchToolPrioritizesExactToolNameMatches(t *testing.T) {
 		t.Fatalf("generic description match outranked named integrations: %s", text)
 	}
 }
+
+func TestSearchToolExpandsCommonChineseCapabilityTerms(t *testing.T) {
+	tokens := strings.Join(queryTokens("搜索文档并创建提醒"), " ")
+	for _, want := range []string{"search", "document", "create", "reminder"} {
+		if !strings.Contains(tokens, want) {
+			t.Fatalf("tokens=%q missing %q", tokens, want)
+		}
+	}
+}

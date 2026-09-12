@@ -75,6 +75,12 @@ def main() -> int:
         parser.error("--source-ref only applies to kepler-agent")
     if any("=" not in item or item.startswith("=") for item in args.agent_kwarg):
         parser.error("--agent-kwarg must use key=value form")
+    reserved_kwargs = {"source_ref", "source_repo", "binary_path"}
+    provided_kwargs = [item.split("=", 1)[0] for item in args.agent_kwarg]
+    if len(provided_kwargs) != len(set(provided_kwargs)):
+        parser.error("--agent-kwarg keys must be unique")
+    if args.candidate == "kepler-agent" and reserved_kwargs.intersection(provided_kwargs):
+        parser.error("source identity kwargs are managed by the launcher")
 
     agent = KEPLER_AGENT if args.candidate == "kepler-agent" else args.candidate
     command = [

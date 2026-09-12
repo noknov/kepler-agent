@@ -945,3 +945,25 @@ func TestRunTurnRecoversFromContextLimit(t *testing.T) {
 		t.Fatalf("requests=%d", len(client.requests))
 	}
 }
+
+func TestForcedContextRecoveryPreservesCurrentUserInput(t *testing.T) {
+	store := transcript.NewMemoryStore()
+	old := model.TextMessage(model.RoleUser, strings.Repeat("old ", 80))
+	_, _ = store.Append(context.Background(), transcript.Event{ID: "old", SessionID: "preserve", TurnID: "old-turn", Type: transcript.UserInput, Message: &old})
+	client := &scriptedModel{errors: []error{&model.Error{Kind: model.ErrorContextLimit, Message: "large"}, nil}, responses: []model.Response{{}, {Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop}}}
+	catalog, _ := tool.NewCatalog()
+	runner, _ := New(Config{Model: "test", Context: ContextConfig{MaxTokens: 4000, ReserveTokens: 500}}, Dependencies{Model: client, Tools: catalog, Transcript: store, Compactor: &recordingCompactor{}})
+	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "preserve", TurnID: "current-turn", Input: model.TextMessage(model.RoleUser, "CURRENT_USER_REQUEST")}); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("requests = %d", len(client.requests))
+	}
+	var found bool
+	for _, message := range client.requests[1].Messages {
+		found = found || strings.Contains(message.Text(), "CURRENT_USER_REQUEST")
+	}
+	if !found {
+		t.Fatalf("retry messages lost current input: %+v", client.requests[1].Messages)
+	}
+}

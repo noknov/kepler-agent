@@ -17,6 +17,10 @@ type Messenger interface {
 	PostMessage(context.Context, string, string, string) (string, error)
 }
 
+type IdempotentMessenger interface {
+	PostMessageWithID(context.Context, string, string, string, string) (string, error)
+}
+
 type Scheduler struct {
 	Store     Store
 	Messenger Messenger
@@ -78,11 +82,21 @@ func (s Scheduler) deliver(ctx context.Context) {
 		return
 	}
 	for _, r := range due {
+		if err := s.Store.RenewClaim(ctx, r.ID, 5*time.Minute); err != nil {
+			log.Printf("reminder: claim lost %s: %v", r.ID, err)
+			continue
+		}
 		// A reminder can be created from a public channel. Always send it as a
 		// direct message so neither its content nor a mention leaks to members
 		// of that channel.
-		if _, err := s.Messenger.PostMessage(ctx, r.UserID, "", "⏰ 提醒："+r.Message); err != nil {
-			log.Printf("reminder: deliver %s: %v", r.ID, err)
+		var sendErr error
+		if messenger, ok := s.Messenger.(IdempotentMessenger); ok {
+			_, sendErr = messenger.PostMessageWithID(ctx, r.UserID, "", "⏰ 提醒："+r.Message, "reminder:"+r.ID)
+		} else {
+			_, sendErr = s.Messenger.PostMessage(ctx, r.UserID, "", "⏰ 提醒："+r.Message)
+		}
+		if sendErr != nil {
+			log.Printf("reminder: deliver %s: %v", r.ID, sendErr)
 			continue
 		}
 		if err := s.Store.MarkSent(ctx, r.ID, time.Now()); err != nil {

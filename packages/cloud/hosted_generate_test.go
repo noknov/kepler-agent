@@ -33,7 +33,7 @@ func (s *stubHostedModel) Generate(_ context.Context, request model.Request, sin
 func TestHostedGenerateRoundTrip(t *testing.T) {
 	stub := &stubHostedModel{}
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST "+providers.KeplerGeneratePath, HandleHostedGenerate(stub, nil))
+	mux.HandleFunc("POST "+providers.KeplerGeneratePath, HandleHostedGenerate(stub, HostedGeneratePolicy{}))
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 
@@ -65,7 +65,7 @@ func TestHostedGenerateRoundTrip(t *testing.T) {
 }
 
 func TestHostedGenerateWritesNDJSON(t *testing.T) {
-	handler := HandleHostedGenerate(&stubHostedModel{}, nil)
+	handler := HandleHostedGenerate(&stubHostedModel{}, HostedGeneratePolicy{})
 	req := httptest.NewRequest(http.MethodPost, providers.KeplerGeneratePath, bytes.NewReader([]byte(`{"model":"m","messages":[],"temperature":0}`)))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -88,7 +88,7 @@ func TestHostedGenerateWritesNDJSON(t *testing.T) {
 
 func TestHostedGenerateUsesOperatorTemperature(t *testing.T) {
 	stub := &stubHostedModel{}
-	handler := HandleHostedGenerate(stub, nil)
+	handler := HandleHostedGenerate(stub, HostedGeneratePolicy{})
 	req := httptest.NewRequest(http.MethodPost, providers.KeplerGeneratePath, bytes.NewReader([]byte(`{"model":"gpt-5.6-luna","messages":[],"temperature":0}`)))
 	handler.ServeHTTP(httptest.NewRecorder(), req)
 	if stub.temperature != nil {

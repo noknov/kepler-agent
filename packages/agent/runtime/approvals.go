@@ -30,7 +30,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, resolut
 	// can execute an external write. Serialize it with RunTurn so two local
 	// clients cannot both observe an unresolved approval and dispatch the same
 	// call. Hosted runtimes provide a distributed lease through Dependencies.
-	unlock, err := r.acquireSession(ctx, sessionID)
+	ctx, unlock, err := r.acquireSession(ctx, sessionID)
 	if err != nil {
 		return err
 	}
@@ -40,6 +40,8 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, resolut
 		return err
 	}
 	var call *tool.Call
+	var resolved, completed bool
+	var resolvedApproved bool
 	for index := range events {
 		event := events[index]
 		if event.TurnID != resolution.TurnID || event.ToolCall == nil || event.ToolCall.ID != resolution.ToolCallID {
@@ -50,8 +52,22 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, resolut
 			copyCall := *event.ToolCall
 			call = &copyCall
 		case transcript.ApprovalResolved:
-			return fmt.Errorf("approval has already been resolved")
+			var metadata struct {
+				Approved bool `json:"approved"`
+			}
+			if json.Unmarshal(event.Metadata, &metadata) == nil {
+				resolvedApproved = metadata.Approved
+			}
+			resolved = true
+		case transcript.ToolCallCompleted, transcript.ToolCallFailed:
+			completed = true
 		}
+	}
+	if resolved {
+		if completed && resolvedApproved == resolution.Approved {
+			return nil
+		}
+		return fmt.Errorf("approval was resolved but its tool result is incomplete or differs")
 	}
 	if call == nil {
 		return fmt.Errorf("pending approval was not found")

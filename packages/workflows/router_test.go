@@ -31,7 +31,7 @@ func TestModelRouterSelectsRegisteredClosedSetOption(t *testing.T) {
 	if decision.Intent != "code_review" || decision.Inputs["mode"] != "deep" {
 		t.Fatalf("decision=%+v", decision)
 	}
-	if client.request.Model != "secondary" || client.request.ReasoningEffort != "disabled" || client.request.MaxOutputTokens != 0 || len(client.request.Tools) != 0 {
+	if client.request.Model != "secondary" || client.request.ReasoningEffort != "disabled" || client.request.MaxOutputTokens != 512 || len(client.request.Tools) != 0 {
 		t.Fatalf("request=%+v", client.request)
 	}
 	if client.request.Temperature == nil || *client.request.Temperature != 0 {

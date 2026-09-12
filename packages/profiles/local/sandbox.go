@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 type CommandRequest struct {
@@ -125,8 +127,13 @@ func sanitizedGitEnvironment(workspace Workspace) ([]string, func(), error) {
 		return nil, func() {}, nil
 	}
 
-	isolationDir, err := os.MkdirTemp(workspace.Temp, "git-")
-	if err != nil {
+	gitIsolationMu.Lock()
+	defer gitIsolationMu.Unlock()
+	isolationDir := filepath.Join(workspace.Temp, "git")
+	if _, err := os.Stat(filepath.Join(isolationDir, ".kepler-ready")); err == nil {
+		return sanitizedGitEnvironmentValues(isolationDir, workspace.Root), func() {}, nil
+	}
+	if err := os.MkdirAll(isolationDir, 0o700); err != nil {
 		return nil, nil, fmt.Errorf("create isolated Git metadata: %w", err)
 	}
 	cleanup := func() { _ = os.RemoveAll(isolationDir) }
@@ -167,12 +174,22 @@ func sanitizedGitEnvironment(workspace Workspace) ([]string, func(), error) {
 			return nil, nil, fmt.Errorf("link Git metadata %s: %w", entry.Name(), err)
 		}
 	}
+	if err := os.WriteFile(filepath.Join(isolationDir, ".kepler-ready"), nil, 0o600); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("finish isolated Git metadata: %w", err)
+	}
+	return sanitizedGitEnvironmentValues(isolationDir, workspace.Root), func() {}, nil
+}
+
+var gitIsolationMu sync.Mutex
+
+func sanitizedGitEnvironmentValues(isolationDir, workspaceRoot string) []string {
 	return []string{
 		"GIT_DIR=" + isolationDir,
-		"GIT_WORK_TREE=" + workspace.Root,
+		"GIT_WORK_TREE=" + workspaceRoot,
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=/dev/null",
-	}, cleanup, nil
+	}
 }
 
 func darwinSandboxProfile(workspace Workspace, readRoots, sensitive []string, network bool) string {
@@ -187,7 +204,11 @@ func darwinSandboxProfile(workspace Workspace, readRoots, sensitive []string, ne
 		profile += "(allow file-read* (subpath " + strconv.Quote(root) + "))\n"
 	}
 	for _, path := range sensitive {
-		profile += "(deny file-read* file-write* (literal " + strconv.Quote(path) + "))\n"
+		profile += "(deny file-read* file-write* (literal " + strconv.Quote(path) + ")"
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			profile += " (subpath " + strconv.Quote(path) + ")"
+		}
+		profile += ")\n"
 	}
 	if !network {
 		profile += "(deny network*)\n"
@@ -213,6 +234,8 @@ func runCommand(command *exec.Cmd, workdir string, extraEnvironment, internalEnv
 	output.limit = 8 << 20
 	command.Stdout = &output
 	command.Stderr = &output
+	configureProcessTree(command)
+	command.WaitDelay = 2 * time.Second
 	err := command.Run()
 	result := CommandResult{Output: output.String(), Truncated: output.truncated}
 	if err == nil {

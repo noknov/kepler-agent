@@ -16,6 +16,7 @@ type Kind string
 const (
 	KindSteering Kind = "steering"
 	KindQueue    Kind = "queue"
+	KindWeb      Kind = "web"
 )
 
 var ErrClaimLost = errors.New("session input claim lost")
@@ -26,6 +27,7 @@ type Item struct {
 	Kind      Kind
 	Payload   json.RawMessage
 	Sequence  int64
+	Attempts  int
 }
 
 type Store interface {
@@ -46,7 +48,7 @@ func (s *PGStore) Enqueue(ctx context.Context, item Item) error {
 	if s == nil || s.pool == nil {
 		return fmt.Errorf("session input store is unavailable")
 	}
-	if item.ID == "" || item.SessionID == "" || (item.Kind != KindSteering && item.Kind != KindQueue) || len(item.Payload) == 0 {
+	if item.ID == "" || item.SessionID == "" || (item.Kind != KindSteering && item.Kind != KindQueue && item.Kind != KindWeb) || len(item.Payload) == 0 {
 		return fmt.Errorf("complete session input is required")
 	}
 	_, err := s.pool.Exec(ctx, `INSERT INTO agent_session_inputs(id,session_id,kind,payload,created_at)
@@ -74,9 +76,9 @@ func (s *PGStore) Claim(ctx context.Context, sessionID string, kind Kind, owner 
   UPDATE agent_session_inputs input
   SET claim_owner=$3, claim_until=NOW()+make_interval(secs => $5), attempts=attempts+1
   FROM picked WHERE input.id=picked.id
-  RETURNING input.id,input.session_id,input.kind,input.payload,input.sequence
+  RETURNING input.id,input.session_id,input.kind,input.payload,input.sequence,input.attempts
 )
-SELECT id,session_id,kind,payload,sequence FROM claimed ORDER BY sequence`, sessionID, kind, owner, limit, leaseSeconds)
+SELECT id,session_id,kind,payload,sequence,attempts FROM claimed ORDER BY sequence`, sessionID, kind, owner, limit, leaseSeconds)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +86,7 @@ SELECT id,session_id,kind,payload,sequence FROM claimed ORDER BY sequence`, sess
 	var items []Item
 	for rows.Next() {
 		var item Item
-		if err := rows.Scan(&item.ID, &item.SessionID, &item.Kind, &item.Payload, &item.Sequence); err != nil {
+		if err := rows.Scan(&item.ID, &item.SessionID, &item.Kind, &item.Payload, &item.Sequence, &item.Attempts); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

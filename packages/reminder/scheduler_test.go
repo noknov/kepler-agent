@@ -6,10 +6,15 @@ import (
 	"time"
 )
 
-type fakeMessenger struct{ channel, thread, text string }
+type fakeMessenger struct{ channel, thread, text, deliveryID string }
 
 func (m *fakeMessenger) PostMessage(_ context.Context, channel, thread, text string) (string, error) {
 	m.channel, m.thread, m.text = channel, thread, text
+	return "1", nil
+}
+
+func (m *fakeMessenger) PostMessageWithID(_ context.Context, channel, thread, text, deliveryID string) (string, error) {
+	m.channel, m.thread, m.text, m.deliveryID = channel, thread, text, deliveryID
 	return "1", nil
 }
 
@@ -22,6 +27,9 @@ func TestSchedulerDeliversReminderAsDirectMessage(t *testing.T) {
 	}
 	if messenger.text != "⏰ 提醒：private task" {
 		t.Fatalf("delivery text = %q", messenger.text)
+	}
+	if messenger.deliveryID != "reminder:r-dm" {
+		t.Fatalf("delivery id = %q", messenger.deliveryID)
 	}
 }
 
@@ -43,6 +51,7 @@ func (s *schedulerTestStore) Due(_ context.Context, now time.Time) ([]Reminder, 
 	}
 	return due, nil
 }
+func (s *schedulerTestStore) RenewClaim(context.Context, string, time.Duration) error { return nil }
 func (s *schedulerTestStore) MarkSent(_ context.Context, id string, at time.Time) error {
 	for i := range s.reminders {
 		if s.reminders[i].ID == id {

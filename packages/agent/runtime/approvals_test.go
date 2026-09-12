@@ -56,8 +56,11 @@ func TestResolveApprovalExecutesOnlyTheStoredCall(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("calls=%d, want 1", calls)
 	}
-	if err := runner.ResolveApproval(context.Background(), "session", ApprovalResolution{TurnID: "turn", ToolCallID: "write-1", Approved: true, UserID: "U1"}); err == nil {
-		t.Fatal("duplicate approval was accepted")
+	if err := runner.ResolveApproval(context.Background(), "session", ApprovalResolution{TurnID: "turn", ToolCallID: "write-1", Approved: true, UserID: "U1"}); err != nil {
+		t.Fatalf("idempotent duplicate resolution: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("duplicate resolution repeated side effect: calls=%d", calls)
 	}
 }
 
@@ -91,8 +94,8 @@ func TestResolveApprovalSerializesConcurrentResolutions(t *testing.T) {
 	if err := <-first; err != nil {
 		t.Fatalf("first resolution: %v", err)
 	}
-	if err := <-second; err == nil {
-		t.Fatal("second resolution was accepted")
+	if err := <-second; err != nil {
+		t.Fatalf("idempotent concurrent resolution: %v", err)
 	}
 	if calls := item.calls.Load(); calls != 1 {
 		t.Fatalf("tool calls = %d, want 1", calls)

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -31,16 +32,26 @@ gate = load_module("eval_gate", EVALS / "gate.py")
 
 class EvaluatorTests(unittest.TestCase):
     def test_release_gate_checks_quality_timeout_and_latency(self) -> None:
-        summary = {"eligible": 10, "weighted_pass_rate": 0.8, "timeout": 1, "p95_duration_seconds": 12}
+        summary = {"total": 10, "eligible": 10, "passed": 8, "weighted_pass_rate": 0.8, "timeout": 1, "p95_duration_seconds": 12}
         self.assertEqual(gate.violation("kepler", summary, 0.8, 0.1, 12), [])
         failures = gate.violation("kepler", summary, 0.9, 0.05, 10)
         self.assertEqual(len(failures), 3)
 
     def test_release_gate_detects_baseline_regression(self) -> None:
-        current = {"eligible": 10, "weighted_pass_rate": 0.8, "timeout": 0, "p95_duration_seconds": 1}
+        current = {"total": 10, "eligible": 10, "passed": 8, "weighted_pass_rate": 0.8, "timeout": 0, "p95_duration_seconds": 1}
         baseline = {"weighted_pass_rate": 0.9}
         failures = gate.violation("kepler", current, 0.7, 0.1, None, baseline, 0.05)
         self.assertEqual(len(failures), 1)
+
+    def test_release_gate_rejects_summary_that_disagrees_with_records(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            summary_path = root / "summary.json"
+            document = {"records": 1, "candidates": {"a": {"total": 1, "eligible": 1, "passed": 1, "timeout": 0, "weighted_pass_rate": 1.0}}}
+            summary_path.write_text(json.dumps(document))
+            (root / "run.json").write_text(json.dumps({"status": "completed", "ended_at": "now", "inputs": {"dry_run": False}}))
+            (root / "records.jsonl").write_text(json.dumps({"candidate": "a", "status": "failed", "weight": 1}) + "\n")
+            self.assertTrue(gate.validate_artifacts(summary_path, document))
     def test_summary_excludes_incompatible_cases_from_pass_rate(self) -> None:
         records = [
             {"candidate": "a", "status": "passed", "category": "bugfix", "tags": ["go"], "weight": 2, "duration_seconds": 2.0, "candidate_capabilities": ["shell"]},
@@ -76,7 +87,7 @@ class EvaluatorTests(unittest.TestCase):
             fixture.mkdir()
             (fixture / "input.txt").write_text("unchanged")
             candidate = runner.Candidate("read-only", ["definitely-not-a-command"], {}, {}, "model", [], frozenset({"workspace_read"}))
-            task = runner.Task("write-task", "bugfix", "test", "do work", fixture, ["false"], 1, ["write"], {}, frozenset({"workspace_write"}), 1)
+            task = runner.Task("write-task", "bugfix", "test", "do work", fixture, ["false"], 1, ["write"], {}, frozenset({"workspace_write"}), 1, ())
             record = runner.run_case(candidate, task, "model", root / "results", 1, False, {})
             self.assertEqual(record["status"], "skipped")
             self.assertEqual(record["missing_capabilities"], ["workspace_write"])
@@ -109,6 +120,34 @@ class EvaluatorTests(unittest.TestCase):
             self.assertEqual(invocation["dataset"], "terminal-bench/terminal-bench-2-1")
             self.assertEqual(invocation["source_ref"], "2f9f18001bfd9e0f51bb92b026e853f65974ed6a")
             self.assertIn("evals.harbor_agents.kepler_agent:KeplerAgent", result.stdout)
+
+    def test_protected_grader_file_cannot_be_rewritten_to_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = root / "fixture"; fixture.mkdir()
+            (fixture / "product.py").write_text("VALUE = 0\n")
+            (fixture / "test_product.py").write_text("from product import VALUE\nassert VALUE == 42\n")
+            candidate = runner.Candidate("tamper", [sys.executable, "-c", "from pathlib import Path; Path('test_product.py').write_text('')"], {}, {}, "model", [], frozenset())
+            task = runner.Task("tamper", "security", "test", "fix", fixture, [sys.executable, "test_product.py"], 5, [], {}, frozenset(), 1, ("test_product.py",))
+            record = runner.run_case(candidate, task, "model", root / "results", 1, False, {})
+            self.assertEqual(record["status"], "failed")
+
+    def test_grader_does_not_inherit_unrelated_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = root / "fixture"; fixture.mkdir()
+            candidate = runner.Candidate("noop", [sys.executable, "-c", "pass"], {}, {}, "model", [], frozenset())
+            task = runner.Task("env", "security", "test", "noop", fixture, [sys.executable, "-c", "import os,sys; sys.exit('KEPLER_SYNTHETIC_SECRET' in os.environ)"], 5, [], {}, frozenset(), 1, ())
+            os.environ["KEPLER_SYNTHETIC_SECRET"] = "synthetic"
+            try: record = runner.run_case(candidate, task, "model", root / "results", 1, False, {})
+            finally: os.environ.pop("KEPLER_SYNTHETIC_SECRET", None)
+            self.assertEqual(record["status"], "passed")
+
+    def test_gate_rejects_non_finite_metrics_and_low_coverage(self) -> None:
+        invalid = {"total": 1, "eligible": 1, "passed": 1, "timeout": 0, "weighted_pass_rate": float("nan"), "p95_duration_seconds": 1}
+        self.assertTrue(gate.violation("a", invalid, 0, 1, None))
+        low_coverage = {"total": 100, "eligible": 1, "passed": 1, "timeout": 0, "weighted_pass_rate": 1, "p95_duration_seconds": 1}
+        self.assertTrue(gate.violation("a", low_coverage, 1, 0, 1))
 
 
 if __name__ == "__main__":

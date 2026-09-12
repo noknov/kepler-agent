@@ -92,7 +92,8 @@ func sensitivePath(path string) bool {
 	if base == ".env" || strings.HasPrefix(base, ".env.") {
 		return true
 	}
-	if base == "id_rsa" || base == "id_ed25519" || base == "credentials.json" {
+	if base == "id_rsa" || base == "id_ed25519" || base == "credentials" || base == "credentials.json" ||
+		base == ".netrc" || base == ".npmrc" || base == ".pypirc" {
 		return true
 	}
 	for _, suffix := range []string{".pem", ".key", ".p12", ".pfx", ".kubeconfig"} {
@@ -100,9 +101,9 @@ func sensitivePath(path string) bool {
 			return true
 		}
 	}
-	normalized := "/" + strings.ToLower(filepath.ToSlash(path))
+	normalized := "/" + strings.Trim(strings.ToLower(filepath.ToSlash(path)), "/") + "/"
 	for _, suffix := range []string{"/.git/config", "/.git/credentials", "/.netrc", "/.npmrc", "/.pypirc", "/.docker/config.json", "/.config/gh/hosts.yml"} {
-		if strings.HasSuffix(normalized, suffix) {
+		if strings.HasSuffix(normalized, suffix+"/") {
 			return true
 		}
 	}

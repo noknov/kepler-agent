@@ -1,7 +1,10 @@
 package cloud
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -9,6 +12,11 @@ import (
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/config"
+)
+
+const (
+	maxProxyRequestBytes   = 8 << 20
+	defaultMaxOutputTokens = 65536
 )
 
 // JoinUpstreamURL maps a Kepler /v1 request onto an operator LLM base URL.
@@ -59,6 +67,74 @@ func NewLLMUpstreamProxy(llm config.LLMConfig) (*httputil.ReverseProxy, error) {
 		},
 	}
 	return proxy, nil
+}
+
+// RestrictLLMProxy limits the authenticated compatibility endpoints to the
+// operator-selected model and output budget before the API key is attached.
+func RestrictLLMProxy(next http.Handler, llm config.LLMConfig) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxProxyRequestBytes+1))
+		if err != nil || len(body) > maxProxyRequestBytes {
+			http.Error(w, "request body is too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			http.Error(w, "invalid model request", http.StatusBadRequest)
+			return
+		}
+		configuredModel := strings.TrimSpace(llm.Model)
+		requestedModel, _ := payload["model"].(string)
+		if configuredModel == "" || (requestedModel != "" && requestedModel != configuredModel) {
+			http.Error(w, "model is not allowed", http.StatusForbidden)
+			return
+		}
+		payload["model"] = configuredModel
+		limit := llm.MaxOutputTokens
+		if limit <= 0 {
+			limit = defaultMaxOutputTokens
+		}
+		field := "max_tokens"
+		if r.URL.Path == "/v1/responses" {
+			field = "max_output_tokens"
+		}
+		if current, ok := numericInt(payload[field]); !ok || current <= 0 || current > limit {
+			payload[field] = limit
+		}
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			http.Error(w, "invalid model request", http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(encoded))
+		r.ContentLength = int64(len(encoded))
+		next.ServeHTTP(w, r)
+	})
+}
+
+func numericInt(value any) (int, bool) {
+	number, ok := value.(float64)
+	if !ok || number != float64(int(number)) {
+		return 0, false
+	}
+	return int(number), true
+}
+
+func limitConcurrency(next http.Handler, maximum int) http.Handler {
+	if maximum < 1 {
+		maximum = 1
+	}
+	semaphore := make(chan struct{}, maximum)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case semaphore <- struct{}{}:
+			defer func() { <-semaphore }()
+			next.ServeHTTP(w, r)
+		default:
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "too many concurrent model requests", http.StatusTooManyRequests)
+		}
+	})
 }
 
 func applyUpstreamAuth(header http.Header, llm config.LLMConfig) {

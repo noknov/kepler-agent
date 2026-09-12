@@ -30,7 +30,7 @@ func TestDiscoverAndExecute(t *testing.T) {
 		case "notifications/initialized":
 			return response(202, ``), nil
 		case "tools/list":
-			result = `{"tools":[{"name":"lookup","description":"Look up data.","inputSchema":{"type":"object"}}]}`
+			result = `{"tools":[{"name":"lookup","description":"Look up data.","inputSchema":{"type":"object"},"annotations":{"readOnlyHint":true}}]}`
 		case "tools/call":
 			result = `{"content":[{"type":"text","text":"found"}]}`
 		default:
@@ -49,6 +49,38 @@ func TestDiscoverAndExecute(t *testing.T) {
 	result, err := items[0].Execute(context.Background(), agenttool.Call{Scope: agenttool.Scope{SessionID: "s1"}, Arguments: json.RawMessage(`{}`)})
 	if err != nil || result.Text() != "found" {
 		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestDiscoverTreatsUnannotatedToolAsExternalWrite(t *testing.T) {
+	client := &mcp.Client{ServiceName: "demo", URL: "https://mcp.test", HTTP: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var payload struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		result := `{}`
+		switch payload.Method {
+		case "initialize":
+			result = `{"protocolVersion":"2025-03-26","capabilities":{}}`
+		case "notifications/initialized":
+			return response(202, ``), nil
+		case "tools/list":
+			result = `{"tools":[{"name":"delete-page","inputSchema":{"type":"object"}}]}`
+		}
+		data, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": payload.ID, "result": json.RawMessage(result)})
+		return response(200, string(data)), nil
+	})}}
+	items, err := Discover(context.Background(), Server{Name: "demo", Client: client, Effects: []agenttool.Effect{agenttool.EffectRead}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var write bool
+	for _, effect := range items[0].Descriptor().Effects {
+		write = write || effect == agenttool.EffectExternalWrite
+	}
+	if !write {
+		t.Fatalf("effects = %v, want external write", items[0].Descriptor().Effects)
 	}
 }
 

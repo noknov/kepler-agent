@@ -623,6 +623,9 @@ func (b Base) readAtRef(ctx context.Context, repo, ref, rawPath string, startLin
 	if path == "" {
 		return "", fmt.Errorf("path is required")
 	}
+	if safety.IsSensitivePath(path) {
+		return "", fmt.Errorf("refusing to read sensitive file %q", filepath.Base(path))
+	}
 	if startLine <= 0 {
 		startLine = 1
 	}
@@ -700,11 +703,31 @@ func (b Base) run(ctx context.Context, repo string, args ...string) (string, err
 
 	cmdArgs := append([]string{"-C", repo, "--no-optional-locks"}, args...)
 	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
-	var stdout, stderr bytes.Buffer
+	var stdout limitedGitBuffer
+	stdout.limit = 8 << 20
+	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return stdout.String(), fmt.Errorf("git failed: %s", strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), nil
+}
+
+type limitedGitBuffer struct {
+	bytes.Buffer
+	limit int
+}
+
+func (b *limitedGitBuffer) Write(value []byte) (int, error) {
+	original := len(value)
+	remaining := b.limit - b.Len()
+	if remaining <= 0 {
+		return original, nil
+	}
+	if len(value) > remaining {
+		value = value[:remaining]
+	}
+	_, err := b.Buffer.Write(value)
+	return original, err
 }

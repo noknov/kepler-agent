@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -67,10 +68,18 @@ func (s *circuitState) record(config CircuitBreakerConfig, call tool.Call, faile
 	}
 	// A successful call is evidence that the operation is healthy. Blocking it
 	// can turn legitimate polling or repeated reads into a false failure.
+	delete(s.failures, fp)
 }
 
 func fingerprint(call tool.Call) callFingerprint {
-	sum := sha256.Sum256(call.Arguments)
+	arguments := call.Arguments
+	var value any
+	if json.Unmarshal(call.Arguments, &value) == nil {
+		if canonical, err := json.Marshal(value); err == nil {
+			arguments = canonical
+		}
+	}
+	sum := sha256.Sum256(arguments)
 	return callFingerprint{name: call.Name, args: hex.EncodeToString(sum[:8])}
 }
 

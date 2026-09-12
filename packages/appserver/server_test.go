@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,23 @@ import (
 )
 
 type oneShotModel struct{}
+
+type synchronizedBuffer struct {
+	mu  sync.RWMutex
+	buf bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.buf.String()
+}
 
 func (oneShotModel) Generate(_ context.Context, _ model.Request, sink model.EventSink) (model.Response, error) {
 	_ = sink(model.StreamEvent{Type: model.StreamTextDelta, Text: "hi"})
@@ -71,7 +89,7 @@ func TestThreadForkCopiesEvents(t *testing.T) {
 }
 
 func TestInitializeDeclaresExactProtocolCompatibility(t *testing.T) {
-	var out bytes.Buffer
+	var out synchronizedBuffer
 	server := New(nil, strings.NewReader(""), &out)
 	server.handle(context.Background(), Request{ID: json.RawMessage(`1`), Method: "initialize"})
 	waitForOutput(t, &out, `"minimumProtocolVersion":2`)
@@ -81,7 +99,7 @@ func TestInitializeDeclaresExactProtocolCompatibility(t *testing.T) {
 }
 
 func TestInitializeIsSingleUse(t *testing.T) {
-	var out bytes.Buffer
+	var out synchronizedBuffer
 	server := New(nil, strings.NewReader(""), &out)
 	server.handle(context.Background(), Request{ID: json.RawMessage(`1`), Method: "initialize"})
 	server.handle(context.Background(), Request{ID: json.RawMessage(`2`), Method: "initialize"})
@@ -89,7 +107,7 @@ func TestInitializeIsSingleUse(t *testing.T) {
 }
 
 func TestRequestsRequireInitializeHandshake(t *testing.T) {
-	var out bytes.Buffer
+	var out synchronizedBuffer
 	server := New(nil, strings.NewReader(""), &out)
 	server.handle(context.Background(), Request{ID: json.RawMessage(`1`), Method: "thread/start"})
 	waitForOutput(t, &out, "not initialized")
@@ -100,7 +118,7 @@ func TestRequestsRequireInitializeHandshake(t *testing.T) {
 }
 
 func TestServeReturnsJSONRPCParseError(t *testing.T) {
-	var out bytes.Buffer
+	var out synchronizedBuffer
 	server := New(nil, strings.NewReader("{not-json}\n"), &out)
 	if err := server.Serve(context.Background()); err != nil {
 		t.Fatal(err)
@@ -110,13 +128,12 @@ func TestServeReturnsJSONRPCParseError(t *testing.T) {
 
 func TestTrajectoryReturnsRedactedOperationalItems(t *testing.T) {
 	store := transcript.NewMemoryStore()
-	server := New(nil, strings.NewReader(""), &bytes.Buffer{})
+	var out synchronizedBuffer
+	server := New(nil, strings.NewReader(""), &out)
 	initializeForTest(t, server)
 	server.Transcript = store
 	metadata := json.RawMessage(`{"provider":"openai","secret":"no"}`)
 	_, _ = store.Append(context.Background(), transcript.Event{SessionID: "ses", TurnID: "turn", Type: transcript.ContextProjected, Metadata: metadata})
-	var out bytes.Buffer
-	server.writer = &out
 	server.handle(context.Background(), Request{ID: json.RawMessage(`1`), Method: "thread/trajectory", Params: mustJSON(map[string]any{"sessionId": "ses"})})
 	waitForOutput(t, &out, `"provider":"openai"`)
 	if !strings.Contains(out.String(), `"provider":"openai"`) || strings.Contains(out.String(), "secret") {
@@ -132,7 +149,7 @@ func TestTurnStartUsesUniqueTurnIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out bytes.Buffer
+	var out synchronizedBuffer
 	server := New(runner, strings.NewReader(""), &out)
 	initializeForTest(t, server)
 	server.Transcript = transcript.NewMemoryStore()
@@ -154,7 +171,7 @@ func TestTurnStartRejectsWhenActiveTurnBulkheadIsFull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out bytes.Buffer
+	var out synchronizedBuffer
 	server := New(runner, strings.NewReader(""), &out)
 	initializeForTest(t, server)
 	server.MaxActiveTurns = 1
@@ -188,7 +205,7 @@ func TestThreadAllowsOnlyOneActiveTurnAndCannotForkMidTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out bytes.Buffer
+	var out synchronizedBuffer
 	server := New(runner, strings.NewReader(""), &out)
 	server.Transcript = store
 	initializeForTest(t, server)
@@ -229,7 +246,7 @@ func TestExecuteAppliesTurnTimeout(t *testing.T) {
 }
 
 func TestNotifyEventMapsTextDelta(t *testing.T) {
-	var out bytes.Buffer
+	var out synchronizedBuffer
 	server := New(nil, strings.NewReader(""), &out)
 	initializeForTest(t, server)
 	server.NotifyEvent(transcript.Event{
@@ -326,7 +343,7 @@ func waitForActiveTurns(t *testing.T, server *Server, want int) {
 	}
 }
 
-func waitForOutput(t *testing.T, out *bytes.Buffer, needle string) {
+func waitForOutput(t *testing.T, out *synchronizedBuffer, needle string) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for !strings.Contains(out.String(), needle) {
