@@ -1,241 +1,50 @@
 # Configuration
 
-Each service loads its service-specific env file automatically at startup:
+Choose the configuration owner before editing a value. A variable's existence
+in source does not mean every surface reads it.
 
-| Entrypoint | Env file |
-|---|---|
-| `./gateway/cmd/gateway` | `gateway/.env` |
-| `./worker/cmd/worker` | `worker/.env` |
-| `./observability/cmd/observability` | `observability/.env` |
+| Owner | Where to edit | Used by |
+| --- | --- | --- |
+| Hosted deployment | Deploy repo `k8s/configmaps/<service>.yaml` and SOPS secrets | Docker gateway, worker, observability |
+| Source debugging | Service `.env` or `KEPLER_AGENT_ENV_FILE` | Directly launched Go service |
+| Local CLI | TOML created by `kepler-agent config init` | Local limits, routing, sandbox, MCP, prompts |
+| Provider credentials/model selection | Hosted deploy configuration | Worker and local-client bootstrap |
+| Private prompt context | `PROMPT_DIR` overlay | Profile-specific prompt composition |
 
-Set `KEPLER_AGENT_ENV_FILE=/path/to/file` only for one-off local debugging.
-Keep secrets out of git; the `*.example` files are templates only.
+The local Docker scripts read the YAML files directly; the `k8s/` directory
+name does not mean a Kubernetes deployment is required. See the deploy repo's
+`docs/configuration-workflow.md` for applying changes.
 
-The packaged `kepler-agent` CLI runs tools locally and sends model calls
-through the Kepler gateway after Slack login. Workspace sandbox and approval
-policy still govern filesystem and exec tools.
+## Service requirements
 
-For local split deployment:
+| Service | Main configuration |
+| --- | --- |
+| Gateway | Slack signing secret, PostgreSQL, Redis; OAuth/public origin/allowlist and worker upstream for CLI/Web |
+| Worker | Slack bot/signing credentials, allowlist, PostgreSQL, Redis, active provider credentials |
+| Observability | PostgreSQL, Redis, admin token for protected HTTP access |
+| Local CLI | Gateway URL and Slack login; optional local TOML |
 
-```bash
-cp gateway/.env.example gateway/.env
-cp worker/.env.example worker/.env
-cp observability/.env.example observability/.env
-```
+The source loader is [packages/config/config.go](../packages/config/config.go).
+It validates requirements by service. For direct source debugging, its default
+files are `gateway/.env`, `worker/.env`, and `observability/.env`. Use
+`KEPLER_AGENT_ENV_FILE=/path/to/file` to select another file. Do not copy an
+`.env.example` unless that file exists in your checkout; deployed configuration
+is maintained in the deploy repository.
 
-## Required Values
+## Related references
 
-Required values now depend on the service:
+- [Models](models.md): provider namespaces, protocols, primary/secondary settings.
+- [Observability](observability.md): OTLP, Langfuse, cost rates.
+- [Web](web.md): browser origin, cookies, OIDC, and static assets.
+- [Tools](tools.md): integration credentials and search providers.
+- [Prompts](prompts.md): public defaults and private overlays.
+- [Local CLI](local-cli.md): local TOML and supported flags.
 
-| Service | Required values |
-|---|---|
-| Gateway | `SLACK_SIGNING_SECRET`, `POSTGRES_DSN`, `REDIS_URL`; for CLI login: `ALLOWED_SLACK_USERS`, `SLACK_OAUTH_CLIENT_ID`, `SLACK_OAUTH_CLIENT_SECRET`, `CONNECTIONS_PUBLIC_BASE_URL`, `WORKER_UPSTREAM_URL` |
-| Worker | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `ALLOWED_SLACK_USERS`, `POSTGRES_DSN`, `REDIS_URL`, provider API key |
-| Observability | `POSTGRES_DSN`, `REDIS_URL`; `OBSERVABILITY_TOKEN` for non-local access |
-| Local CLI | Slack allowlist login (`kepler-agent login`); optional workspace TOML for MCP/skills |
+`SLACK_DEFAULT_LOCALE` selects deterministic status/attachment localization:
+`zh` and `zh-*` use Chinese; other values use English. It does not infer locale
+from message characters.
 
-Worker example:
-
-```bash
-SLACK_BOT_TOKEN=xoxb-...
-SLACK_SIGNING_SECRET=...
-SLACK_DEFAULT_LOCALE=en-US
-ALLOWED_SLACK_USERS=U11111111,U22222222
-POSTGRES_DSN=postgres://user:pass@localhost:5432/kepler_agent?sslmode=disable
-```
-
-`SLACK_DEFAULT_LOCALE` controls deterministic Slack status and attachment-note
-localization. `zh` and `zh-*` select Chinese; other values use English. The
-service does not guess locale from message characters.
-
-`LLM_PROVIDER` selects the active model provider. Each provider has its own env
-namespace so credentials do not accidentally leak between providers.
-
-Optional output limit:
-
-```bash
-LLM_MAX_OUTPUT_TOKENS=8192
-```
-
-When set to a positive value, the agent sends that value as `max_tokens` /
-`max_completion_tokens`. When unset or set to `0`, the field is omitted and
-output length is left to the provider default.
-
-## LLM Providers
-
-### LongCat
-
-```bash
-LLM_PROVIDER=longcat
-LONGCAT_API_KEY=Bearer lc-...
-LONGCAT_BASE_URL=https://api.longcat.chat/anthropic
-LONGCAT_MODEL=LongCat-2.0
-LONGCAT_PROTOCOL=anthropic
-```
-
-When using the Anthropic-compatible LongCat endpoint, the API key must include
-the `Bearer ` prefix. For the OpenAI-compatible endpoint, use
-`LONGCAT_BASE_URL=https://api.longcat.chat/openai`,
-`LONGCAT_PROTOCOL=openai`, and omit the prefix.
-
-### DeepSeek
-
-```bash
-LLM_PROVIDER=deepseek
-DEEPSEEK_PROTOCOL=openai
-DEEPSEEK_API_KEY=sk-...
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-v4-flash
-```
-
-### MiMo
-
-```bash
-LLM_PROVIDER=mimo
-MIMO_PROTOCOL=anthropic
-MIMO_API_KEY=...
-MIMO_BASE_URL=https://token-plan-cn.xiaomimimo.com/anthropic
-MIMO_MODEL=mimo-v2.5
-MIMO_THINKING=disabled
-```
-
-MiMo thinking is disabled by default because multi-turn tool calls must preserve
-provider-specific reasoning fields across turns.
-
-### CLIProxyAPI
-
-```bash
-LLM_PROVIDER=cliproxyapi
-CLIPROXYAPI_BASE_URL=http://127.0.0.1:8317/v1
-CLIPROXYAPI_API_KEY=your-local-gateway-key
-CLIPROXYAPI_MODEL=kimi/kimi-k2.7-code
-```
-
-Run and authenticate CLIProxyAPI locally first. It exposes OpenAI-compatible
-endpoints and owns provider authentication separately.
-
-### Kimi / Moonshot
-
-Both names use the Moonshot OpenAI-compatible endpoint; choose the namespace
-that matches the credential you operate.
-
-```bash
-LLM_PROVIDER=kimi
-KIMI_API_KEY=...
-KIMI_BASE_URL=https://api.moonshot.ai/v1
-KIMI_MODEL=kimi-k2.6
-```
-
-```bash
-LLM_PROVIDER=moonshot
-MOONSHOT_API_KEY=...
-MOONSHOT_BASE_URL=https://api.moonshot.ai/v1
-MOONSHOT_MODEL=kimi-k2.6
-```
-
-### Anthropic
-
-```bash
-LLM_PROVIDER=anthropic
-LLM_PROTOCOL=anthropic
-LLM_ANTHROPIC_FLAVOR=official
-ANTHROPIC_BASE_URL=https://api.anthropic.com
-ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_MODEL=claude-sonnet-4-5-20250929
-```
-
-### OpenAI-Compatible
-
-```bash
-LLM_PROVIDER=openai
-OPENAI_API_KEY=...
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-4o-mini
-```
-
-Set `LLM_PROTOCOL=responses` for an OpenAI Responses endpoint. `openai`,
-`responses`, and `anthropic` all adapt into the same canonical model contract;
-the local CLI exposes the same choice as `--protocol`.
-
-### OpenCode
-
-OpenCode Zen and OpenCode Go use separate namespaces so free and subscription
-credentials do not collide.
-
-```bash
-LLM_PROVIDER=opencode-zen
-OPENCODE_ZEN_API_KEY=...
-OPENCODE_ZEN_BASE_URL=https://opencode.ai/zen/v1
-OPENCODE_ZEN_MODEL=mimo-v2.5-free
-OPENCODE_ZEN_PROTOCOL=openai
-```
-
-```bash
-LLM_PROVIDER=opencode-go
-OPENCODE_GO_API_KEY=...
-OPENCODE_GO_BASE_URL=https://opencode.ai/zen/go/v1
-OPENCODE_GO_MODEL=glm-5.2
-OPENCODE_GO_PROTOCOL=responses
-```
-
-Use `responses` for OpenCode Go when Slack image attachments or other
-vision-capable models such as `gpt-5.6-luna` are in use. The `openai`
-chat/completions path returns HTTP 400 for those multimodal requests.
-Leave `OPENCODE_GO_TEMPERATURE` unset unless you explicitly need sampling
-control; unset values are not sent to the provider. Reasoning models such as
-`gpt-5.6-luna` reject `temperature` even when set to `0`.
-
-## Secondary Model
-
-The optional secondary model is used for compact summaries and as the preferred
-model for isolated exploration work. It never changes primary agent routing.
-
-```bash
-SECONDARY_PROVIDER=opencode-zen
-OPENCODE_ZEN_API_KEY=...
-SECONDARY_MODEL=mimo-v2.5-free
-```
-
-When `SESSION_COMPACT_MODEL` is unset, compact summaries use `SECONDARY_MODEL`
-when configured, otherwise the primary model.
-
-## OpenTelemetry
-
-The gateway, worker, observability service, and local CLI support standard
-OTLP/HTTP trace export through the OpenTelemetry environment contract:
-
-```bash
-OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
-OTEL_SERVICE_NAME=kepler-agent-worker
-```
-
-The shared runtime emits nested `agent.turn`, `model.generate`, and
-`tool.execute` spans. Session/turn IDs and tool/model names are attributes;
-prompt text, tool arguments, model output, credentials, and Slack message text
-are never attached. With no OTLP endpoint configured, tracing is a no-op.
-
-### Langfuse
-
-Langfuse is an optional OTLP backend for all Kepler surfaces, not a Slack-only
-integration. When a standard `OTEL_EXPORTER_OTLP_ENDPOINT` is present it takes
-precedence, so an OpenTelemetry Collector can fan traces out to Langfuse and
-other backends. For direct Langfuse export, configure the same variables for
-each process that should report traces (normally the worker, local CLI, and
-interactive app server):
-
-```bash
-LANGFUSE_BASE_URL=https://cloud.langfuse.com # or https://<self-hosted-langfuse>
-LANGFUSE_PUBLIC_KEY=pk-lf-...
-LANGFUSE_SECRET_KEY=sk-lf-...
-```
-
-The runtime labels the root turn as a Langfuse `agent`, model calls as
-`generation`, and tools as `tool`. Every span receives the session ID, user ID
-when known, and the ingress surface (`slack`, `web`, `cli`, or `appserver`) so
-Langfuse can filter and aggregate child observations. It deliberately does not
-send prompt or result content.
-
-## Repository Freshness
+## Workspace snapshots
 
 Code-reading tools use immutable snapshot semantics. Each git-backed call
 refreshes `origin` once per turn for each repository, then reads with `git show`
@@ -319,11 +128,14 @@ worker's timeout starts only after it acquires a concurrency slot. If both are
 set, the batch timeout cannot be shorter than the worker timeout. The step
 limit is a final liveness guard for the complete runtime loop.
 
-Services verify the required tables at startup but never execute DDL. Initialize
-a new PostgreSQL database with `schema/postgres.sql` using the administration
-workflow of your choice. The runtime database role only needs data access.
+Services verify the required tables at startup but never execute DDL. The source
+`schema/postgres.sql` is the fresh-install contract; apply deploy migrations
+through the [operations workflow](operations.md#schema-and-release-coordination).
+The runtime database role only needs data access.
 
-For multi-replica deployments, keep database connections bounded:
+Bound connection pools, but size them against session locks, active turns,
+child workers, and control-plane queries. This is an example, not a safe
+concurrency recommendation for every deployment:
 
 ```bash
 POSTGRES_MAX_CONNS=4
@@ -347,4 +159,6 @@ AGENT_ALLOWED_WRITE_TOOLS=luckin-cancel_order,luckin-create_order,reminder-creat
 
 A tool's surface annotation limits where it may run; it never grants write
 permission by itself. Repository edits, local commands, workflow dispatch, and
-third-party MCP mutations therefore remain disabled unless explicitly enabled.
+third-party MCP mutations must be accurately classified and authorized before
+execution. Do not infer safety from a dynamically discovered tool name or
+surface annotation; see [safety](safety.md).

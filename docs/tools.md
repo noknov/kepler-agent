@@ -3,7 +3,9 @@
 The agent exposes tools through structured function-calling. Many heavier tool
 families are deferred by default. `tool_search` lists their stable categories
 and exact names; the model then activates only the named tools or categories it
-needs. Discovery is explicit and deterministic rather than relevance-ranked.
+needs. Discovery supports category listing and lexical relevance-ranked search over
+names, descriptions, tags, and schemas. Activation selects exact names or
+categories; discovery does not grant permission.
 
 ## Code and Repository
 
@@ -19,6 +21,7 @@ needs. Discovery is explicit and deterministic rather than relevance-ranked.
 | `git-status` | Working tree and branch status |
 | `git-log` | Recent commit history |
 | `git-show` | Commit diff or file at a revision |
+
 For ordinary `code-search` and `code-read_file` calls, omit `source`; each
 repository then resolves its own checked-out branch upstream. Set `source` only
 when the user explicitly names an exact ref or requests `working_tree`.
@@ -132,3 +135,26 @@ Final Slack answers append a concise evidence section when the turn used
 Luckin order management uses the official MCP endpoint and requires
 `LUCKIN_MCP_TOKEN` from <https://open.lkcoffee.com/mcp>. Order creation and
 cancellation require explicit confirmation.
+
+## Registration and policy
+
+Tool availability depends on the profile, integration connection, and surface.
+This catalog is a guide, not an exhaustive list of live MCP tools. Check the
+registered descriptor and actual upstream operation when changing capability
+effects. See [safety](safety.md) and [development](development.md).
+
+## Search provider configuration
+
+`WEB_SEARCH_PROVIDER` selects `duckduckgo`, `searxng`, `brave`, `google_cse`, or
+`serpapi`. Configure the corresponding endpoint/credentials in the worker:
+
+| Provider | Configuration |
+| --- | --- |
+| DuckDuckGo | No paid-provider key required by this adapter |
+| SearXNG | `WEB_SEARCH_SEARXNG_URL` |
+| Brave | `WEB_SEARCH_BRAVE_API_KEY`, optional `WEB_SEARCH_BRAVE_BASE_URL` |
+| Google CSE | `WEB_SEARCH_GOOGLE_API_KEY`, `WEB_SEARCH_GOOGLE_CX` |
+| SerpAPI | `WEB_SEARCH_SERPAPI_KEY`, optional `WEB_SEARCH_SERPAPI_BASE_URL` |
+
+The configuration loader and provider response determine actual availability;
+verify a representative search after changing providers.

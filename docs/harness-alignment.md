@@ -1,124 +1,41 @@
-# Codex-aligned harness plan
+# Harness design status
 
-This document records the target architecture for Kepler Agent. It treats the
-OpenAI Codex harness as the primary reference because both products need one
-agent loop across several clients. DeepSeek Harness and Pi are secondary
-references: they provide useful extension and telemetry patterns, but neither
-matches Kepler's hosted, policy-authoritative operating model.
+This document tracks design direction. It is not a feature checklist or a
+claim that another product's implementation has been reproduced. Current
+behavior belongs in [architecture](architecture.md) and [runtime](runtime.md).
 
-## Architectural position
+## Decisions to retain
 
-Kepler already has the right durable boundary:
+- Keep one transport-neutral loop and canonical append-only transcript.
+- Compose product policy, storage, credentials, and delivery in profiles/surfaces.
+- Derive client views and observability from events rather than adding competing
+  execution-state stores.
+- Extend tool, skill, provider, and MCP interfaces without handing ownership of
+  persistence or authorization to arbitrary extensions.
+- Keep hosted authorization operator-controlled and local execution sandboxed.
+- Keep public benchmark grading in Harbor and product-specific tests separate.
 
-```text
-surfaces (Slack, Web, CLI) -> product profile -> shared runtime
-                                             -> canonical transcript
-                                             -> rebuildable projections
-```
+## Implementation and remaining validation
 
-The runtime owns turn lifecycle, context projection, tool scheduling,
-termination, and the canonical event record. Profiles own provider resilience,
-storage, policy, credentials, and surface-specific delivery. New features must
-not put Slack, browser, deployment, or provider wire assumptions into
-`packages/agent`.
+| Track | Implementation entry | Remaining work |
+| --- | --- | --- |
+| Trace and trajectory | Runtime events, run projection, `thread/trajectory` | Verify trace joins, redaction and replay; record enough versions to interpret historical facts |
+| App-server admission | Active-turn limit and retryable `-32001` | Verify client retries, reconnects and overload behavior; add transport bounds before network exposure |
+| Protocol compatibility | Initialize handshake, Go registry, generated JSON Schema/TypeScript | Verify compatibility and reconnect behavior, not just generated-file equality |
+| Evaluation | Local runner/report/gate and Harbor adapter | Validate gate inputs, freeze experiment identity, connect completed results to release decisions |
+| Tool safety | Descriptors, effects, profile policy and sandbox | Cross-tool conformance, dynamic MCP classification, failure-path tests |
+| Delegation | Bounded leaf tasks, child transcripts and parent links | Measure review accuracy, duplication, cost, cancellation, and aggregate resource use |
 
-## Comparison and decisions
+An implementation entry means code exists, not that the feature is complete
+or proven under every failure condition. In particular, a gate script is not
+a CI release gate until the release workflow requires a compatible completed
+result. See [evaluation](../evals/README.md).
 
-| Concern | Codex | Kepler current state | Decision |
-| --- | --- | --- | --- |
-| Multi-client runtime | One core thread per conversation, exposed through a stable app-server event protocol | One shared Go runtime; local app server and hosted surfaces are adapters | Keep the shared runtime; version the app-server contract and treat it as a public product boundary. |
-| Backpressure | Bounded protocol queues and retryable overload response | Delta batching and async projections exist; accepted local turns previously had no process-level bound | Bound active app-server turns and return `-32001`; clients retry with jitter. |
-| Trajectory | Thread lifecycle is durable and clients render stable items | Append-only transcript, plus run/step projection | Keep transcript as source of truth. Add a projection-independent trajectory inspector before adding another state store. |
-| Extensibility | Skills and MCP join a consistent policy model | Tool catalog, skills, MCP, profiles, capability policy | Extend those seams only. Do not make the loop, policy, durable queue, or UI into arbitrary plugins. |
-| Evaluation | Product surfaces share a harness but require product-specific verification | Black-box CLI evaluator and Harbor adapter | Add explicit release gates; keep public benchmarks in Harbor and hosted-Slack tests in a separate suite. |
-| Telemetry | Rich thread/item events drive both UI and operations | OTEL spans, canonical events, and durable runs existed but used disconnected trace IDs | Persist W3C trace context at turn start and project it into runs. Then link individual model/tool spans. |
+## How to adopt an external idea
 
-DeepSeek's append-only, replayable trajectory is aligned with Kepler and should
-be adopted as a query experience. Its all-plugin kernel is intentionally not a
-target: plugin ownership of sessions, persistence, loops, scheduling, and
-policy makes production invariants harder to audit. Pi's separated agent-core,
-provider API, and telemetry contracts are useful, but its default process
-permissions are unsuitable for a hosted agent.
-
-## Five delivery tracks
-
-### 1. Trace and trajectory
-
-Completed: the runtime persists a typed W3C trace context on canonical events;
-the hosted run projection reuses the root trace and records actual model/tool
-span IDs on run steps. This survives projection replay and links `/runs` to
-OTEL and Langfuse.
-
-Completed: `thread/trajectory` derives a read-only, redacted operational view
-from the same transcript. Do not persist streamed token deltas or secrets as
-trajectory facts. Next, add tool-catalog version and redaction-policy revision
-to every turn so historical trajectories remain precisely interpretable.
-
-### 2. Evaluation and release gates
-
-Completed: `evals/gate.py` can gate selected candidates on weighted pass rate,
-timeout rate, p95 duration, and allowed regression from a compatible baseline.
-It is intentionally evaluated after a pinned, black-box run rather than
-importing runtime code.
-
-Next: define a versioned production regression suite from incident transcripts.
-Run it alongside Harbor in CI with pinned candidate version, model gateway,
-task image, source revision, attempts, and concurrency. Report category and
-tag matrices; never promote only an aggregate score.
-
-### 3. App-server protocol resilience
-
-Completed: local app-server limits active turns and returns retryable JSON-RPC
-`-32001` when saturated. Delta batching remains non-durable presentation work.
-
-Completed: the handshake declares its exact supported protocol range, requires
-`initialize` followed by `initialized`, and the TypeScript client rejects
-incompatible ranges. JSON Schema and TypeScript protocol artifacts are generated
-from the Go method/type registry and checked for drift by `make protocol-check`.
-A client
-reconnect must use `thread/resume` from the last transcript sequence rather
-than recover state from its terminal view.
-
-### 4. Safety and runtime contracts
-
-Keep server-side capability policy authoritative. Every external-write tool
-must have metadata and an exact operator allowlist entry; app-server/UI labels
-are never authorization. Keep argv-only execution, workspace roots, sandboxing,
-and the existing uncertain-tool-call recovery rule. Pattern-based command
-classification is only an approval risk signal; it is not a parser, sandbox, or
-authorization boundary.
-
-Next: add conformance tests that execute every registered tool descriptor
-against hosted and local profiles, asserting capability effect, approval mode,
-timeout, and parallel-safety. Fail registration when metadata is incomplete.
-
-### 5. Codex alignment review
-
-Adopt Codex's stable event-oriented client contract and bounded transport,
-while retaining Kepler's stronger hosted durability. Do not copy Codex internal
-implementation details or protocol naming blindly. The interoperable unit is a
-thread/turn/item lifecycle and replay cursor, not a provider-specific tool
-payload.
-
-## Existing design issues to address
-
-1. **Run/trace joins were lossy.** Fixed for the root turn trace. Model and tool
-   projection step IDs are still event IDs, not their actual OTel span IDs.
-2. **App-server admission was unbounded.** Fixed for active turns. Inbound
-   parsing is sequential today; if a network transport is added, it needs a
-   bounded request queue before concurrent dispatch.
-3. **Trajectory reconstruction is implicit.** The facts exist in the
-   transcript, but operators need a deliberate read model and redaction rules
-   rather than manually decoding events.
-4. **Evaluation has measurement but no policy.** The new gate provides policy
-   enforcement; baselines and incident-derived suites remain operator work.
-5. **Protocol compatibility is declared but not machine-enforced.** `v2` is a
-   string today. Add generated schema and compatibility tests before external
-   clients are supported.
-
-## References
-
-- OpenAI, [Unlocking the Codex harness](https://openai.com/index/unlocking-the-codex-harness/)
-- OpenAI, [Codex App Server protocol](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)
-- DeepSeek, [DeepSeek Harness](https://www.deepseek.com/harness/en/)
-- Pi, [Pi Agent Harness](https://github.com/earendil-works/pi/blob/main/README.md)
+Record the problem, the concrete mechanism worth adopting, Kepler's boundary
+conditions, and a testable success criterion. Compare behavior and evidence;
+do not infer stronger durability or safety from architecture labels alone.
+The [Chinese architecture site](../architecture-site/README.md) explains the
+current mechanisms; dated comparisons and audits should retain their own
+source revisions rather than becoming timeless product claims.

@@ -1,140 +1,88 @@
 # Operations
 
-## Health and Shutdown
+This guide explains application signals and diagnosis. Images, environment
+rendering, migrations, and restart commands are owned by the deploy repository's
+`docs/runbook.md` and `docs/configuration-workflow.md`.
 
-| Endpoint | Description |
-|---|---|
-| `GET /livez` | Liveness check |
-| `GET /readyz` | Readiness check; fails during drain |
-| `POST /drain` | Local-only drain switch for an orchestrator shutdown hook |
-| `GET /health/dashboard` | Interactive health dashboard |
-| `GET /health/tools` | Tool health status JSON |
-| `GET /metrics` | Durable run and cost metrics from observability |
-| `GET /runs?limit=20` | Recent run list |
-| `GET /runs/<run_id>` | Run detail with LLM/tool steps and cost |
+## Health and run inspection
 
-`/metrics`, `/runs`, and the health dashboard require
-`Authorization: Bearer <token>` or
-`X-Kepler-Agent-Admin-Token: <token>` matching `OBSERVABILITY_TOKEN`.
-Set `OBSERVABILITY_ALLOW_UNAUTHENTICATED=true` only for direct loopback
-development access.
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /livez` | Process liveness |
+| `GET /readyz` | Dependency readiness; fails during drain |
+| `POST /drain` | Direct-loopback shutdown signal |
+| `GET /health/dashboard` | Tool/service dashboard |
+| `GET /health/tools` | Tool health JSON |
+| `GET /metrics` | Durable run and cost metrics |
+| `GET /runs?limit=20` | Recent runs |
+| `GET /runs/<run_id>` | Run detail |
 
-Slack events are first written to a durable PostgreSQL inbox. Workers claim
-events with `claim_owner` and `claim_until`; abandoned events become retryable
-after the lease expires. Active workers renew leases, failures use bounded
-exponential backoff, and malformed or exhausted events become dead letters.
+Health endpoints belong to the respective service. Run/metric/dashboard
+endpoints are served by observability; do not assume they are exposed through
+the public gateway. Protected observability endpoints accept
+`Authorization: Bearer <token>` or `X-Kepler-Agent-Admin-Token: <token>` matching
+`OBSERVABILITY_TOKEN`. `OBSERVABILITY_ALLOW_UNAUTHENTICATED=true` is for direct
+loopback development only.
 
-## Packaging Contract
+Use readiness to establish dependency connectivity, then verify a representative
+turn. Neither readiness nor a health dashboard proves that all user integrations
+are authorized or every tool can complete.
 
-Dockerfiles, CLI binaries, and local stack orchestration live in
-`kepler-agent-deploy` (`docker/Dockerfile`, `scripts/build-cli.sh`,
-`scripts/deploy-local-image.sh`). This repository is the Go source context
-only; do not add packaging roots here.
+## Diagnose by symptom
 
-```bash
-cd ../kepler-agent-deploy
-SOURCE_DIR=../kepler-agent scripts/deploy-local-image.sh all
-SOURCE_DIR=../kepler-agent scripts/build-cli.sh
-```
+| Symptom | Inspect first | Next decision |
+| --- | --- | --- |
+| Service never becomes ready | Startup error, PostgreSQL/Redis reachability, schema version, required configuration | Correct configuration or migration before restart |
+| Slack accepted an event but no answer | Inbox claim/retry/dead-letter state, run termination, delivery error | Determine whether execution or delivery failed before replay |
+| Turns wait without progress | Active sessions, connection-pool occupancy, locks, provider timeouts, child-agent fan-out | Resolve the constrained resource; do not blindly raise every concurrency limit |
+| Web page works but a turn stalls | Worker logs, conversation/run state, SSE connection, user integration state | Distinguish lost presentation from incomplete execution |
+| Model calls fail | Provider/protocol/model selection and typed error | Verify credentials and request compatibility; inspect bounded retries |
+| Cost appears zero | Configured rates and recorded usage | Compare provider billing; zero configured rates mean zero estimate |
+| Old code appears in a read | Requested snapshot/ref versus explicit working-tree view | Check [workspace snapshot rules](configuration.md#workspace-snapshots) |
 
-Gateway and observability use a minimal CA-only runtime. Worker adds Git,
-ripgrep, curl, and SSH for repository access. Infrastructure CLIs such
-as `kubectl` and `gcloud` are deliberately not bundled; derive a worker image or
-mount administrator-pinned binaries when those optional tools are enabled.
+Collect session/turn/run IDs, source/image revision, timestamps, termination
+reason, and relevant redacted logs. Do not export credentials or full private
+prompts into an incident report.
 
-An orchestrator should:
+## Retry and ownership
 
-- send ingress traffic only while `/readyz` succeeds;
-- call local `POST /drain` before termination;
-- allow at least `HTTP_SHUTDOWN_TIMEOUT` for graceful shutdown;
-- keep `/metrics` and observability endpoints private;
-- inject credentials through its own secret mechanism;
-- pin built images by immutable digest.
+Slack ingress is persisted to a PostgreSQL inbox before worker processing.
+Claims use owner and lease fields, renewal, bounded retries, and dead letters.
+Session inputs are also persisted; Redis wakeups are not the durable queue.
 
-Important runtime knobs:
+Treat processing as at least once across systems. Before manually retrying an
+uncertain external write, check the upstream outcome and transcript result.
+Do not clear owner/lease fields or delete inbox rows as routine recovery.
+Investigate malformed and exhausted events rather than replaying them forever.
+See [safety and limitations](safety.md).
 
-```bash
-SLACK_EVENT_TIMEOUT=15m
-SLACK_EVENT_INBOX_LEASE=16m
-SLACK_EVENT_MAX_ATTEMPTS=5
-HTTP_SHUTDOWN_TIMEOUT=90s
-POSTGRES_MAX_CONNS=4
-WORKSPACE_AUTO_FETCH=false
-```
+## Shutdown
 
-Application processes never create or alter database objects. For a new
-PostgreSQL database, apply the repository's current schema contract with your
-preferred administration tool before starting services, for example:
+A drain makes readiness fail; it does not mean all turns have already completed.
+Termination then follows the application's shutdown deadline and the container
+stop timeout. Long turns may outlive those deadlines. Verify the affected
+surface's behavior instead of assuming Slack, Web, and local clients drain in
+exactly the same way.
 
-```bash
-psql "$POSTGRES_DSN" -f schema/postgres.sql
-```
+The local deployment replaces containers by stopping the old instance before
+starting the new one. Expect an interruption window. It does not provide
+rolling availability or automatic rollback. Keep application shutdown and
+container stop settings aligned in deploy configuration.
 
-Upgrading an existing database is an operator concern. This repository does not
-ship incremental migration SQL; apply your own upgrade process to move an older
-schema forward to match `schema/postgres.sql`.
+## Schema and release coordination
 
-Startup fails with the names of missing tables. This keeps DDL privileges and
-database lifecycle policy outside the agent's business code.
+[Schema contract](../schema/postgres.sql) describes the current fresh-install
+schema. Application processes validate required storage but do not execute DDL.
+The deploy repository owns incremental migrations and their checksum tracking.
+Do not use the fresh-install schema as an undocumented incremental upgrade.
 
-## ngrok
+Before a schema-dependent release, inspect pending migrations and compatibility,
+verify a recoverable backup, apply the deploy migration, then restart the
+matching application revision. Database rollback is a separate operation from
+reverting an image; do not assume old code can read a newer schema.
 
-```bash
-ngrok http 8080
-```
+## Logs, traces, and costs
 
-Use the HTTPS forwarding URL as the Slack Request URL:
-
-```text
-https://<your-ngrok-domain>/slack/events
-```
-
-Set `HTTP_ADDR=:8080`, fill `SLACK_SIGNING_SECRET` from Slack App Basic
-Information, and keep Socket Mode disabled. A reserved ngrok domain avoids
-regenerating the URL on each restart.
-
-## Search Providers
-
-DuckDuckGo HTML search works without paid credentials:
-
-```bash
-WEB_SEARCH_PROVIDER=duckduckgo
-```
-
-For a separately managed SearXNG instance:
-
-```bash
-WEB_SEARCH_PROVIDER=searxng
-WEB_SEARCH_SEARXNG_URL=http://127.0.0.1:8097
-```
-
-Hosted JSON providers:
-
-```bash
-WEB_SEARCH_PROVIDER=brave
-WEB_SEARCH_BRAVE_API_KEY=...
-WEB_SEARCH_BRAVE_BASE_URL=https://api.search.brave.com/res/v1/web/search
-
-WEB_SEARCH_PROVIDER=google_cse
-WEB_SEARCH_GOOGLE_API_KEY=...
-WEB_SEARCH_GOOGLE_CX=...
-
-WEB_SEARCH_PROVIDER=serpapi
-WEB_SEARCH_SERPAPI_KEY=...
-WEB_SEARCH_SERPAPI_BASE_URL=https://serpapi.com/search.json
-```
-
-## Cost Tracking
-
-Runs include LLM/tool steps, token usage, estimated cost, errors, Slack message
-linkage, and quality feedback from emoji reactions.
-
-Set rates explicitly to match your provider. Unset rates are recorded as zero;
-the runtime does not infer pricing from provider or model names.
-
-```bash
-LLM_INPUT_COST_PER_MTOK=0
-LLM_OUTPUT_COST_PER_MTOK=0
-LLM_CACHE_READ_COST_PER_MTOK=0
-LLM_CACHE_CREATION_COST_PER_MTOK=0
-```
+See [observability configuration](observability.md) for OTLP, Langfuse, and
+cost rates. Trace export intentionally omits prompt/result content; raw service
+logs and evaluator artifacts need their own access and retention controls.

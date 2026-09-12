@@ -108,3 +108,10 @@ Deployment-specific CI/CD:
 
 Private files are merged on top of public defaults at startup. See
 `packages/prompts/catalog.go` for merge semantics.
+
+## Change and verify
+
+Check which profile loads a prompt layer before editing it; Web and Slack do
+not necessarily load identical rules/skills. Validate representative user
+requests, tool selection, and failure behavior. Prompt text cannot grant a
+capability that policy denies. See [development](development.md).

@@ -2,6 +2,9 @@
 
 这里是 Kepler Agent 当前主分支的中文架构说明。站点不依赖构建工具，直接打开 index.html 即可阅读。
 
+项目文档总入口见 [docs/README.md](../docs/README.md)。本网站负责解释架构；
+使用步骤、配置和排障分别由对应 Markdown 指南维护。
+
 ## 页面
 
 - index.html：系统组成、完整请求路径、贯穿实现的规则和阅读入口。

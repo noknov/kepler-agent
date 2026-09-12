@@ -10,7 +10,7 @@ and are keyed by Slack user ID, so a connection made from Slack App Home or
 `kepler-agent connect` is visible to Web turns for the same user. Rules and
 skills are not loaded on Web yet.
 
-## Short-term surface model
+## Surface boundaries
 
 ```text
 shared: runtime, Postgres, user_connections, OAuth callbacks (gateway)
@@ -18,8 +18,8 @@ split:  conversation storage, tool catalog instance, surface-only tools
 ```
 
 Web currently uses a thinner tool catalog (no Slack/reminder tools) and lazy
-MCP registration via `BeforeRun`. Surface-specific gaps are acceptable until
-the catalog is unified behind one registry plus surface filters.
+MCP registration via `BeforeRun`. Catalog unification is a design goal, not current feature parity. Check each
+surface explicitly when adding a tool or prompt layer.
 
 ## Request path
 
@@ -83,3 +83,20 @@ the matching tables in `schema/postgres.sql`:
 - `web_auth_states`
 - `web_auth_sessions`
 - `web_conversations`
+
+## Verify and troubleshoot
+
+After deployment, check gateway and worker readiness, sign in as an allowed
+user, create a conversation, and confirm a streamed answer. Then verify that
+another identity cannot read that conversation. Login, tool connections, and
+turn delivery are separate checks.
+
+| Symptom | Check |
+| --- | --- |
+| Redirect/login failure | Exact public origin, Slack redirect, client configuration, allowlist |
+| Page loads but requests fail | Gateway upstream, worker readiness, Origin/CSRF handling |
+| Integration asks for connection | Per-user integration token; signing in to Web is not connecting every tool |
+| Edited assets do not appear | `WEB_STATIC_DIR`, the host mount, and browser cache |
+| Stream stalls after restart | Durable turn/run state before retrying; see [operations](operations.md) |
+
+See [safety and limitations](safety.md) for recovery and permission boundaries.

@@ -1,214 +1,77 @@
 # Kepler Agent
 
-Shared agent harness for hosted and local products:
+Kepler is an agent harness shared by hosted team assistants and a local coding
+CLI. Tools run where the selected product runs; the clients do not all execute
+on the same remote workspace.
 
-| Product | Where it runs | What it is for |
-|---|---|---|
-| **Hosted Agent** | Server workspace, with Slack as ingress and presentation | Team diagnosis and operational work |
-| **Hosted Web** | Server workspace, with Slack OpenID Connect for access | Independent browser conversations on the hosted agent |
-| **Local CLI** | User machine, inside a selected workspace | Interactive or headless coding-agent work |
+| Product | Tools and workspace | Entry point |
+| --- | --- | --- |
+| Hosted Slack | Operator-managed server workspace | Slack mentions and conversations |
+| Hosted Web | Operator-managed server workspace | Browser, authenticated through Slack OIDC |
+| Local CLI | User-selected local workspace | Interactive terminal or headless command |
 
-The project is intentionally not a single remote agent exposed through two UIs.
-Both products share one provider-neutral execution loop and transcript contract;
-their policy, storage, tools, and presentation stay product-specific.
+Profiles compose a shared model/tool loop with product-specific policy,
+storage, credentials, and presentation. Hosted transcripts use PostgreSQL;
+local transcripts use JSONL. The local app-server exposes the local profile
+over stdio JSON-RPC for clients.
 
-## Architecture at a glance
+## Start here
 
-```text
-Slack ── gateway / worker ── hosted profile ──┐
-Web ──── gateway / worker ── hosted profile ──┤
-                                              │
-Local CLI / app-server ────── local profile ──┼── shared harness
-                                              │   model loop · context · tools
-Providers · skills · MCP ─────────────────────┘   canonical transcript · events
-```
+- **Use the CLI:** [build, login, and run](docs/local-cli.md).
+- **Operate the hosted service:** use the sibling
+  [deployment repository](https://github.com/noknov/kepler-agent-deploy), then
+  configure [Slack](docs/slack.md) or [Web](docs/web.md).
+- **Understand or change the code:** start with [architecture](docs/architecture.md)
+  and [development](docs/development.md).
+- **Evaluate behavior:** read the [evaluation guide](evals/README.md).
+- **Browse all documentation:** use the [documentation index](docs/README.md).
 
-- **One loop:** context projection, model calls, tool execution, compaction,
-  steering, and termination live in `packages/agent`.
-- **One event model:** hosted sessions persist canonical events in PostgreSQL;
-  local sessions persist the same model as JSONL.
-- **Two safety models:** local execution uses a workspace sandbox and scoped
-  approvals. Hosted policy is authoritative and non-interactive; mutations need
-  an exact operator allowlist entry.
-- **Durable hosted work:** PostgreSQL owns transcripts, session inputs, inboxes,
-  run projections, and user connections. Redis provides wakeups and
-  coordination, not a durable queue.
+## Build a local CLI
 
-Read the [architecture guide](https://noknov.github.io/kepler-agent/)
-for the current implementation, system boundaries, request paths, persistence,
-concurrency, safety model, limitations, and code-reading paths.
+The source and deploy repositories should be siblings. Run these commands
+from `kepler-agent-deploy`, with a configured, reachable gateway:
 
-## What is in this repository
-
-| Area | Included behavior |
-|---|---|
-| Agent runtime | Provider-neutral messages and tools, bounded context projection, compaction, termination, canonical transcripts, and typed streaming events |
-| Model integration | OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages adapters; hosted primary/fallback resilience and circuit breaking |
-| Hosted Slack | Verified durable ingress, leased workers, native answer streaming, thread status, runs/costs, and health endpoints |
-| Hosted Web | Slack OIDC access, isolated browser sessions and conversations, SSE streaming, approval controls, and configurable branding |
-| Local product | TTY and headless CLI, JSONL resume, steering/queue input routing, workspace tools, OS sandbox, approvals, skills, and configured MCP |
-| Integrations | Per-user OAuth connections for configured Slack, GitHub, ClickStack, Google Cloud, and Notion integrations; connection-required turns can resume after OAuth |
-| Delegation | `agent-explore`: bounded, read-only worker teams with explicit roles, deliverables, success criteria, separate transcripts, and parent audit links |
-| Code review | Natural-language Slack PR-review entry with adaptive risk-based reviewers, targeted verification, internal worker reports, and one evidence-backed Lead response |
-| Evaluation | Independent subprocess-based harnesses for this agent and other supported candidates through one model gateway |
-
-This is not a deployment distribution. Images, CLI binaries, PostgreSQL, Redis,
-secrets, and orchestration live in the sibling `kepler-agent-deploy` repository.
-
-## Run locally
-
-Use the deploy repo to start gateway/worker and to build the CLI. Do not treat
-this repository as a packaging root.
-
-```bash
-cd ../kepler-agent-deploy
-scripts/local-dependencies.sh up -d
-scripts/postgres-migrations.sh up
-SOURCE_DIR=../kepler-agent scripts/local-stack.sh start
+```sh
 SOURCE_DIR=../kepler-agent scripts/build-cli.sh
 ./bin/kepler-agent login
-./bin/kepler-agent --cwd /path/to/project
+./bin/kepler-agent --cwd ../kepler-agent
 ```
 
-See [local CLI usage](docs/local-cli.md) and `kepler-agent-deploy/README.md`.
+Packaging requires Go, Node.js and pnpm; interactive use requires Node.js on
+PATH. Headless execution uses the Go binary. The deployment repository owns
+images, bundles, secrets, migrations, and stack startup. `make build` here
+checks compilation and does **not** install a CLI into `bin/`.
 
-## Hosted Slack agent
+## Develop
 
-Runtime images and config are owned by `kepler-agent-deploy`:
+Use the Go version declared in [go.mod](go.mod). The CLI frontend uses the
+Node/pnpm versions in [CI](.github/workflows/check.yml).
 
-```bash
-cd ../kepler-agent-deploy
-SOURCE_DIR=../kepler-agent scripts/local-stack.sh start
-```
-
-`go run ./gateway` / `./worker` in this repo is only for source debugging, not packaging.
-
-### Slack setup
-
-Required scopes:
-
-```text
-app_mentions:read
-channels:history  groups:history  im:history
-chat:write        assistant:write
-files:read
-```
-
-Subscribe to:
-
-```text
-app_mention  message.channels  message.groups  message.im
-app_home_opened  app_context_changed  file_shared  reaction_added
-```
-
-Use `agent_view` for Slack's Agent experience. Restrict access with
-`ALLOWED_SLACK_USERS` and, when needed, `ALLOWED_SLACK_CHANNELS`. Provider,
-storage, OAuth, streaming, and tool settings are in
-[configuration](docs/configuration.md).
-
-In Slack, ask the agent to review one to four full GitHub pull-request URLs.
-A small secondary-model router classifies the new conversation as `general` or
-`code_review`; it does not use keyword or regular-expression intent matching.
-The Code Review workflow validates PR URLs from the original message and
-persists its scope for follow-up replies. CLI and other surfaces remain generic
-and do not run this Slack product router.
-
-The lead agent pins the PR head, decomposes the change by risk, runs isolated
-read-only reviewers concurrently, verifies candidate findings directly or
-with targeted follow-up workers, and publishes one consolidated Slack response. No Slack
-slash-command registration is required.
-Worker conversations remain internal; Slack receives the lead's normal,
-verified response after fan-in. Reply directly in the same Slack thread to ask
-about a finding, request more evidence, or rerun part of the review. The
-workflow and original PR set are restored from durable turn metadata; a new
-root message starts a separate conversation.
-
-### Web setup
-
-The Web entry uses Slack only to verify access. It applies the same
-`ALLOWED_SLACK_USERS` list, but its sessions, conversations, and tool settings
-are independent from Slack conversations and per-user connections. See
-[Hosted Web](docs/web.md) for configuration, Slack redirect setup, and the
-security model.
-
-## Operations and safety
-
-| Endpoint | Purpose |
-|---|---|
-| `GET /livez` | Process liveness |
-| `GET /readyz` | Dependency readiness; fails while draining |
-| `POST /drain` | Loopback-only graceful drain |
-| `GET /metrics` | Durable run and cost metrics |
-| `GET /runs?limit=20` | Recent run history |
-| `GET /health/dashboard` | Tool and service health |
-
-Hosted processing is at least once, not distributed exactly once: inbox leases,
-owner checks, turn replay, and deterministic Slack message IDs reduce duplicate
-delivery but do not make Slack and PostgreSQL one transaction. See
-[operations](docs/operations.md) for deployment and recovery details.
-
-For local work, commands use argv rather than shell construction, workspace
-paths are constrained, and macOS Seatbelt or Linux bubblewrap is required
-unless an explicit development escape hatch is enabled. For hosted work, no
-end-user action grants access to the server host.
-
-## Evaluate agent harnesses
-
-`evals/` deliberately does not import runtime packages. It copies each fixture
-into an isolated workspace and HOME, invokes candidates as subprocesses, runs
-the task grader, and retains logs, exit state, duration, workspace diffs, and a
-`run.json` manifest.
-
-```bash
-make build
-python3 evals/run.py \
-  --suite evals/suites/smoke.json \
-  --candidates evals/candidates.example.json \
-  --model controlled-model \
-  --output /tmp/kepler-agent-eval
-```
-
-The checked-in smoke task verifies evaluator wiring; it is not a quality claim.
-Pin candidate versions and use one controlled model gateway before comparing
-results. See the [evaluation protocol](evals/README.md).
-
-## Repository map
-
-```text
-packages/agent/          Shared model, prompt, tool, transcript, and runtime contracts
-packages/profiles/       Hosted and local composition roots
-packages/surfaces/       Ingress and presentation adapters, including Slack and Web
-packages/tools/          Capability-oriented tool implementations
-packages/providers/      Provider wire-format adapters
-packages/connections/    Per-user OAuth connection lifecycle
-packages/appserver/      Local profile JSON-RPC server over stdio
-cli/                     Go launcher: auth, headless runtime, Ink bootstrap
-apps/cli/                Ink interactive frontend sources (Node)
-evals/                   Black-box evaluation harness
-gateway/ worker/         Hosted Slack ingress and durable worker commands
-observability/           Runs, costs, metrics, and tool health command
-schema/postgres.sql      Current PostgreSQL contract for fresh installs
-architecture-site/       Bilingual current architecture guide
-```
-
-## Documentation
-
-- [Architecture guide](https://noknov.github.io/kepler-agent/)
-- [Current architecture overview](docs/v2/README.md)
-- [Shared runtime](docs/runtime.md)
-- [Local CLI](docs/local-cli.md)
-- [Hosted Web](docs/web.md)
-- [Configuration](docs/configuration.md)
-- [Tools](docs/tools.md)
-- [Prompts and private overlays](docs/prompts.md)
-- [Operations](docs/operations.md)
-
-## Development
-
-```bash
+```sh
 make check
 ```
 
-This runs formatting and boundary checks, vet, tests, builds, and the evaluation
-dry-run. Some HTTP tests bind loopback ports and need that permission in
-restricted environments.
+This checks formatting, package boundaries, generated protocol artifacts,
+Go vet/tests/builds, and evaluator wiring. It does not run a real model
+benchmark or the full frontend checks. See [verification scope](docs/development.md#verification)
+for frontend, race, and integration checks.
+
+## Repository boundaries
+
+| Path | Owns |
+| --- | --- |
+| `packages/agent/` | Model/tool contracts, transcript, context, runtime, delegation |
+| `packages/profiles/` | Hosted and local composition and policy |
+| `packages/surfaces/` | Slack/Web ingress and presentation |
+| `packages/providers/`, `packages/tools/` | Provider adapters and tool implementations |
+| `packages/connections/` | User integration credentials and OAuth lifecycle |
+| `packages/appserver/`, `appserver/` | Local JSON-RPC protocol and executable |
+| `cli/`, `apps/cli/` | Go launcher and Ink terminal frontend |
+| `gateway/`, `worker/`, `observability/` | Hosted service entry points |
+| `schema/`, `evals/`, `architecture-site/` | Schema contract, evaluation, Chinese architecture guide |
+
+Hosted write authorization belongs to the operator; user approval cannot grant
+access to the host. Local execution uses workspace policy, scoped approvals,
+and an OS sandbox. These are design boundaries, not a claim of complete
+isolation or exactly-once external effects. See [safety and limitations](docs/safety.md)
+and [private vulnerability reporting](SECURITY.md).

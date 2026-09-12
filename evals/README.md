@@ -1,17 +1,55 @@
-# Agent harness evaluation
+# Evaluation
 
-This module compares agent **harnesses**, not native models. Every candidate is configured to use the same model endpoint and model identifier. The evaluator is intentionally independent from `packages/agent` and all provider packages: it launches each product as a black-box subprocess, inspects the resulting workspace, and records machine-readable evidence.
+Use this directory to test evaluator mechanics and run attributable Agent
+experiments. It does not currently provide a verified end-to-end release gate.
+
+| Purpose | Entry | Evidence produced |
+| --- | --- | --- |
+| Check runner/report wiring without model calls | `make eval-check` | Dry-run artifacts and evaluator unit tests |
+| Run local synthetic cases | `run.py` | Command/test outcomes in copied workspaces |
+| Run public coding datasets | `run_harbor.py` with a compatible Agent adapter | Harbor-native environment and grader results |
+| Gate a completed compatible summary | `gate.py` | Threshold checks; input validity must also be established |
+| Test hosted delivery, recovery, and authorization | Dedicated product tests | Separate from CLI coding scores |
+
+## Current compatibility and trust limits
+
+The current CLI uses gateway login/bootstrap and does not accept the direct
+provider/model flags still present in `candidates.example.json` and the Harbor
+adapter. Match the adapter to its source revision or update and verify it
+before launching a paid run. The commands below describe evaluator interfaces;
+a dry-run does not validate candidate flags or authentication.
+
+The local runner copies a workspace and HOME but does not supply an OS isolation
+boundary for arbitrary Agent/grader code. Its grader executes inside the
+Agent-modifiable workspace and inherits the runner environment. Do not treat
+that pass result as independent verification, or run untrusted cases with
+privileged host credentials. Public datasets must remain in Harbor's native
+execution path; these local-runner limitations are not findings about Harbor's
+grader.
+
+The gate currently lacks complete validation for empty/malformed reports,
+non-finite metrics, missing baseline candidates, compatible task identity, and
+minimum coverage. Treat its thresholds as one check rather than a complete
+release authorization. Capability skips change the eligible denominator.
+Always inspect actual task coverage, failures, and experiment identity.
+
+## Reading order
+
+1. [Local wiring check](#quick-start) for changes to the evaluator.
+2. [Public benchmarks](#public-benchmarks-through-harbor) for actual dataset runs.
+3. [Result contract](#result-directory-contract) for stored evidence.
+4. [Comparison protocol](#fair-comparison-protocol) before comparing scores.
 
 ## What is implemented
 
-- A deterministic local task runner with isolated workspace copies, wall-clock limits, command/test grading, JSONL case records, and an aggregate JSON report.
+- A local task runner with separate workspace copies, wall-clock limits, command/test grading, JSONL case records, and an aggregate JSON report.
 - Command adapters for the local `kepler-agent` CLI, Codex CLI, Claude Code, Pi, and OpenCode. Commands are data, so version-specific flags can be changed without changing the evaluator.
 - Optional candidate version probes, recorded once per run and copied into every case record.
 - Capability-aware eligibility: tasks declare the minimum capabilities they exercise; a candidate that does not declare a requirement is recorded as `skipped`, never as a failed run.
 - Per-candidate, category, and tag coverage with weighted pass rate, median latency, p95 latency, and failure-class breakdowns in JSON and the static report.
 - A shared gateway contract (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, and one model ID) and a LiteLLM deployment example exposing both OpenAI-compatible and Anthropic-compatible routes.
 - A direct Harbor public-benchmark launcher for Terminal-Bench 2.1, SWE-bench Verified, and Harbor Index. Harbor owns task images, sandboxing, and grading; the local runner is never used to grade those datasets.
-- A custom Harbor adapter for kepler-agent. It builds a full, supplied Git commit inside each task environment, so the evaluated product revision is explicit and does not depend on the operator's local binary.
+- A custom Harbor adapter for kepler-agent. It builds a full, supplied Git commit inside each task environment, so source-built trials have an explicit revision. The optional binary upload path records a binary hash; source correspondence must also be verified.
 
 This does not claim benchmark results. The checked-in smoke suite validates evaluator mechanics only. Product comparisons must use Harbor's public datasets and their native grader.
 
@@ -24,31 +62,33 @@ This does not claim benchmark results. The checked-in smoke suite validates eval
 ## Quick start
 
 ```sh
-# CLI binary: kepler-agent-deploy/scripts/build-cli.sh (not this repo)
+# From kepler-agent: validates wiring without launching candidates.
 python3 evals/run.py \
   --suite evals/suites/smoke.json \
   --candidates evals/candidates.example.json \
-  --model your-controlled-model \
-  --output evals/results/smoke
+  --model dry-run \
+  --output evals/results/smoke \
+  --dry-run
 ```
 
-Set `EVAL_OPENAI_BASE_URL` and `EVAL_ANTHROPIC_BASE_URL` to the same gateway. The `kepler-agent` candidate invokes the local CLI with its own provider configuration and `--protocol responses`; it never routes through the Slack surface or a cloud-hosted Slack agent. Each candidate command receives `EVAL_MODEL`, `OPENAI_MODEL`, and `ANTHROPIC_MODEL`. Run `python3 evals/run.py --help` for filtering, repetitions, and dry-run options.
+Set `EVAL_OPENAI_BASE_URL` and `EVAL_ANTHROPIC_BASE_URL` to the same gateway. The example candidate configuration describes the older direct-provider CLI path. It must be updated or paired with a compatible revision before use with the current gateway-backed CLI. Each candidate command receives `EVAL_MODEL`, `OPENAI_MODEL`, and `ANTHROPIC_MODEL`. Run `python3 evals/run.py --help` for filtering, repetitions, and dry-run options.
 
 Task filters are composable:
 
 - multiple `--task`, `--category`, `--source`, or `--tag` values are OR within the same field
 - different filter fields are ANDed together
 
-Example:
+Filtering example (wiring only):
 
 ```sh
 python3 evals/run.py \
   --suite evals/suites/smoke.json \
   --candidates evals/candidates.example.json \
-  --model your-controlled-model \
+  --model dry-run \
   --category bugfix \
   --tag go \
-  --output evals/results/go-bugfix
+  --output evals/results/go-bugfix \
+  --dry-run
 ```
 
 Generate a static report from any result directory:
@@ -58,8 +98,9 @@ python3 evals/report.py evals/results/go-bugfix
 ```
 
 Gate a release against both an absolute floor and a compatible baseline. Keep
-the model, task selection, candidate version, repetitions, and gateway the
-same for the baseline comparison:
+the model, task selection, weights, repetitions, and gateway compatible. For
+a product-version regression, record the two candidate versions as the intended
+variable. Verify report validity and coverage before running the threshold check:
 
 ```sh
 python3 evals/gate.py evals/results/current/summary.json \
@@ -78,7 +119,7 @@ verifier, lifecycle, and result schema remain intact. The launcher writes an
 `invocation.json` next to Harbor's jobs before it starts, recording the exact
 dataset, candidate, model, command, and (for `kepler-agent`) source commit.
 
-First inspect the invocation. This is side-effect-free:
+First inspect the invocation. This writes an invocation manifest without starting Harbor:
 
 ```sh
 python3 evals/run_harbor.py \

@@ -4,6 +4,8 @@ The hosted Slack agent and local CLI use `packages/agent/runtime` as their
 only model/tool loop. Product profiles inject storage, policy, tools, model
 providers, and presentation; they do not implement another loop.
 
+## Transcript and presentation
+
 The canonical transcript is append-only. Hosted sessions persist events in
 `agent_transcript_events`; local sessions persist the same event model as
 JSONL. Context projection, compaction, steering, retries, tool execution, and
@@ -25,13 +27,14 @@ the progress model does not decide whether a status is shown or change execution
 Status is presentation-only: it is never written to the transcript, returned to
 the runtime, or placed in model context.
 
+## Execution and termination
+
 The current loop has no model-output repair layer. Only the owner of a
 `pending_input` turn can continue it with an unmentioned thread reply;
 unsupported image parts are removed before provider dispatch; and parallel tool
 results share an aggregate inline budget. A model step admits parallel-safe
 tools through a shared read lock and mutating tools through an exclusive write
-lock, so independent reads overlap instead of waiting on list order. Empty model output fails the turn,
-and the tool-step limit stops without an extra synthesis request. Empty model
+lock, so independent reads overlap instead of waiting on list order. The tool-step limit stops without an extra synthesis request. Empty model
 messages without tool calls are retried in place up to
 `MaxEmptyResponseRetries` before the turn terminates as `empty_response`. A
 zero retry count means zero retries; product profiles opt into their retry
@@ -45,6 +48,8 @@ deterministic `client_msg_id`. If the Slack app does not support that AI-only
 block, it retries as a plain message. It then persists the Slack message link
 on the run. It does not create a streaming placeholder or rewrite Markdown
 with regular expressions.
+
+## Tools and policy
 
 Git-backed code tools refresh `origin` once per turn before reading remote refs.
 When the caller omits a source, code read/search uses the repository's
@@ -63,7 +68,11 @@ Because the CLI runs the same harness, its context, tool, retry, and termination
 results exercise the shared runtime used by Slack.
 
 Hosted profiles enable the optional circuit breaker by default. It blocks
-identical repeated tool calls after configurable failure or success thresholds.
+identical repeated failed tool calls at the configured failure threshold. This
+is a liveness/cost guard, not authorization. The implementation and reset
+semantics live in [circuit.go](../packages/agent/runtime/circuit.go).
+
+## Local app-server
 
 The JSON-RPC app server (`appserver/cmd/app-server`) exposes the same local
 runtime over stdio with `thread/start`, `thread/resume`, `thread/fork`,
@@ -80,6 +89,8 @@ bulkhead is full, `turn/start` returns JSON-RPC error `-32001` (`server
 overloaded; retry later`); clients retry with exponential backoff and jitter.
 This protects the app-server process from stalled providers or tools without
 discarding an already accepted turn.
+
+## Delegation
 
 `agent-explore` is a hosted read-only tool, not a second product runtime. It
 creates isolated child turns from a filtered catalog, records a parent link and
@@ -104,6 +115,8 @@ Delegation inherits the parent turn deadline by default. A deployment may add
 optional batch and worker deadlines when it needs tighter isolation. A
 configured worker deadline begins only after that worker acquires a concurrency
 slot, so queueing cannot consume its model retry budget before it starts.
+
+## Slack workflow activation
 
 Slack uses the configured secondary model as a small semantic router for new
 conversations. The router returns a validated `general|code_review` decision;
@@ -134,3 +147,5 @@ during dynamic decomposition. GitHub PR manifests are indexed independently by
 repository and pull-request number inside each worker turn; file reads must
 select a PR URL when more than one manifest is active, so concurrent multi-PR
 inspection cannot overwrite or ambiguously reuse another PR's head context.
+
+Related: [architecture](architecture.md), [Slack usage](slack.md), [safety and limitations](safety.md).

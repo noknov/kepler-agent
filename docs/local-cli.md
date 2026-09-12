@@ -1,71 +1,82 @@
 # Local CLI
 
-The local CLI, GUI app server, and hosted Slack agent execute the same canonical harness:
+The CLI runs tools in a selected local workspace and uses the authenticated
+Kepler gateway for models. Sessions persist as local JSONL. The same local
+profile is available through the stdio app-server used by the terminal UI.
 
-- **Local CLI:** tools and sandbox run on the user machine; model calls go to Kepler through the gateway after Slack OAuth. Sessions persist as local JSONL.
-- **Hosted Agent:** the same loop on server workspaces. Slack is ingress and presentation, not a separate agent.
+## Build and log in
 
-The black-box evaluation harness drives the CLI/headless surface. Slack remains
-an ingress and presentation adapter rather than a direct evaluation target.
-
-## Build and run
-
-Binaries and Docker images are built from `kepler-agent-deploy`, with this repo
-as `SOURCE_DIR` only:
+Prerequisites: Go, Node.js, pnpm, a supported OS sandbox, and access to a
+configured Kepler gateway. Start in the sibling `kepler-agent-deploy` repository:
 
 ```sh
-cd ../kepler-agent-deploy
-SOURCE_DIR=../kepler-agent scripts/local-stack.sh start
 SOURCE_DIR=../kepler-agent scripts/build-cli.sh
-./bin/kepler-agent login          # once per machine
-cd /path/to/your/project
-./bin/kepler-agent                  # workspace defaults to current directory (--cwd .)
+./bin/kepler-agent login
+./bin/kepler-agent whoami
+./bin/kepler-agent --cwd ../kepler-agent
 ```
 
-Login talks only to the public gateway compiled into the binary from
-`CONNECTIONS_PUBLIC_BASE_URL` (override with `--api-url` or `KEPLER_API_URL`).
-Slack OAuth callback is `{CONNECTIONS_PUBLIC_BASE_URL}/cli/oauth/callback`.
+The bundle contains `bin/kepler-agent`, `bin/kepler-agent-app-server`, and
+`bin/ui/main.js`. Interactive mode needs Node.js on PATH. Keep the bundle
+layout intact when moving it. Use `--cwd /path/to/project` to select another
+workspace without changing the path to the executable.
 
-## Architecture
+The public gateway URL is compiled from deploy configuration; `--api-url` or
+`KEPLER_API_URL` can override it. Slack OAuth returns to
+`https://<public-origin>/cli/oauth/callback`. The CLI polls the public gateway;
+it does not open a local OAuth callback server.
 
-```text
-kepler-agent (Go)
-├── login / config / connect / whoami
-├── interactive TTY  →  apps/cli (Ink)  →  app-server (Go JSON-RPC)  →  agent runtime
-└── headless / jsonl →  in-process runtime + event renderer
-```
+## Interactive and headless modes
 
-Interactive mode starts when stdin is a terminal and no prompt argument is supplied. The Go binary is a thin launcher; the Ink UI spawns `app-server` and talks to it over stdio JSON-RPC.
-
-Packaging produces `bin/kepler-agent`, `bin/kepler-agent-app-server`, and `bin/ui/main.js` under **kepler-agent-deploy** (not this repo). **Node.js** must be on `PATH` for interactive mode.
-
-Headless / eval (Go binary only, no Ink):
+With terminal stdin and no prompt argument, the launcher starts Ink, which
+spawns the Go app-server and communicates over stdio JSON-RPC. A prompt
+argument or piped input selects headless execution:
 
 ```sh
-printf "review\n" | ../kepler-agent-deploy/bin/kepler-agent --cwd . --output jsonl
+# Run from kepler-agent-deploy; tools use the selected source workspace.
+./bin/kepler-agent --cwd ../kepler-agent "Explain the runtime entry points"
+printf 'Explain the runtime entry points
+' | ./bin/kepler-agent --cwd ../kepler-agent --output jsonl
 ```
 
-Optional workspace TOML (`kepler-agent config init`) only covers routing, sandbox, MCP, and prompt overlays. It does not contain provider URLs or API keys. Models are whatever the Kepler worker is configured to use.
+Headless approval defaults to `deny`. `--approval` accepts `deny`, `once`,
+`session`, or `project`; select the intended scope explicitly for automated
+work. Interactive commands include `/help`, `/status`, `/clear`, and `/exit`.
+Do not treat clearing the visible UI as proof that persisted context was deleted.
 
-Interactive sessions show a compact header, streamed text, and live tool lines. Use `/help`, `/status`, `/clear`, and `/exit`. Inputs during a turn are steered or queued via `input_routing`.
+## Configuration and sessions
 
-## Security model
+| Option | Purpose |
+| --- | --- |
+| `--cwd` | Workspace root; defaults to current directory |
+| `--config` | Explicit local TOML path |
+| `--state-dir` | Session and approval state location |
+| `--session` | Session ID to create or resume |
+| `--resume` | Resume the most recently modified session |
+| `--input-routing` | `steer` or `queue` for input arriving during execution |
+| `--output` | `text` or `jsonl`; interactive mode requires text |
 
-The local profile resolves file operations beneath the workspace, blocks common credential paths, and uses Seatbelt on macOS or bubblewrap on Linux for execution. Subprocesses receive a minimal environment and do not inherit the Kepler session token. Network is denied unless the tool call requests it and the user grants approval.
+Run `kepler-agent config init` to create the local configuration. See the
+[example](../cli/config.example.toml) and [loader](../packages/profiles/local/config.go).
+TOML configures runtime limits, input routing, sandbox read roots, prompt files,
+skills, and MCP. Provider/model selection is received through gateway bootstrap;
+the current CLI does not accept direct `--provider`, `--model`, `--protocol`,
+or `--api-key-env` flags. Older benchmark adapters must be matched to their
+source revision, not assumed compatible with this launcher.
 
-`exec` accepts argv and launches it directly without a shell. Pipelines, redirects,
-and shell operators must be expressed as explicit programs rather than command
-strings. A conservative destructive-command matcher can request approval, but it
-is only a risk signal: argv boundaries, workspace resolution, approval, and the
-OS sandbox are the authoritative controls. `unsafe_allow_no_sandbox` remains an
-explicit escape hatch.
+Use `kepler-agent connect <provider>` for supported integration connections.
+That is separate from the CLI login session.
 
-The hosted profile has no end-user host approvals. Its policy rejects mutation effects unless the tool is on the operator allowlist.
+## Troubleshooting
 
-## Shared contracts
+| Symptom | First check |
+| --- | --- |
+| Login fails or polls indefinitely | Public gateway URL, Slack redirect URI, allowlist, gateway readiness |
+| Headless works but interactive mode fails | Node.js on PATH and complete UI/app-server bundle |
+| An old example reports an unknown flag | Current [flag definitions](../cli/cli.go); do not add provider credentials to TOML |
+| Tool is denied | Workspace/read roots, approval scope, available OS sandbox |
+| Model bootstrap or generation fails | Gateway/worker configuration and logs; model keys belong to the operator |
 
-`packages/agent` is the shared loop. Slack, CLI, and GUI construct it with different tools and policy. Model traffic from CLI/GUI is authenticated at the gateway and forwarded to the worker, which injects operator LLM credentials. Users never point the CLI at OpenAI/Anthropic directly.
-
-Register the Slack redirect URL `{CONNECTIONS_PUBLIC_BASE_URL}/cli/oauth/callback`
-(the ngrok public origin). CLI login polls that same origin; it never binds a
-local OAuth port.
+See [safety](safety.md) for filesystem and execution boundaries,
+[runtime](runtime.md) for protocol/lifecycle behavior, and
+[operations](operations.md) for hosted dependencies.
