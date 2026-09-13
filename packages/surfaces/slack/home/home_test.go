@@ -29,6 +29,7 @@ func TestModelDisplayName(t *testing.T) {
 		"ox-alpha-free":  "Ox Alpha",
 		"mimo-v2.5":      "MiMo V2.5",
 		"gpt-5.6-luna":   "GPT-5.6 Luna",
+		"grok-4.6":       "Grok 4.6",
 		"glm-5.2":        "GLM 5.2",
 		"glm-5.3-flash":  "glm-5.3-flash",
 		"vendor/model-x": "vendor/model-x",

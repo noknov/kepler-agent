@@ -316,6 +316,7 @@ var modelDisplayNames = map[string]string{
 	"mimo-v2.5-free":               "MiMo V2.5",
 	"mimo-v2.5-pro":                "MiMo V2.5 Pro",
 	"gpt-5.6-luna":                 "GPT-5.6 Luna",
+	"grok-4.6":                     "Grok 4.6",
 	"glm-5.2":                      "GLM 5.2",
 	"kimi-k2.7-code":               "Kimi K2.7 Code",
 	"kimi-k2.6":                    "Kimi K2.6",
