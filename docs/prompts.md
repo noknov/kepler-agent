@@ -50,7 +50,7 @@ Only skill metadata appears in the base prompt. Full skill instructions are
 loaded on demand through `skills-load`.
 
 The committed catalog includes systematic debugging, test-driven development,
-implementation planning, and code-review reception. These workflows are
+implementation planning, and verification before completion. These workflows are
 adapted for this runtime from the Superpowers 6.3.0 plugin curated in OpenAI's
 `openai/plugins` repository. Superpowers is authored by Jesse Vincent and
 licensed under MIT; it is curated plugin content rather than an OpenAI-authored

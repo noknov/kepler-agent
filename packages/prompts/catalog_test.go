@@ -297,7 +297,7 @@ func TestPublicGeneralSkillsAreAvailable(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = LoadDirs(PublicDir) })
 
-	for _, name := range []string{"receiving-code-review", "systematic-debugging", "test-driven-development", "writing-plans"} {
+	for _, name := range []string{"systematic-debugging", "test-driven-development", "verification-before-completion", "writing-plans"} {
 		skill, ok := LoadSkill(name)
 		if !ok {
 			t.Fatalf("public skill %q is unavailable", name)
