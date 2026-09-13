@@ -103,8 +103,8 @@ func FromScope(values map[string]string) (Command, bool) {
 	return Command{URLs: urls, Continuation: true}, true
 }
 
-// RouteOptions defines the semantic choices exposed by Code Review while
-// keeping transport composition independent of product-specific modes.
+// RouteOptions defines the semantic routing choice exposed by Code Review
+// while keeping transport composition independent of product-specific UI.
 func RouteOptions() []workflows.RouteOption {
 	const request = "The user explicitly requests a code review and includes one or more full GitHub pull-request URLs"
 	return []workflows.RouteOption{
