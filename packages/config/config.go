@@ -68,20 +68,17 @@ type SlackConfig struct {
 }
 
 type LLMConfig struct {
-	Provider         string
-	BaseURL          string
-	APIKey           string
-	Model            string
-	MaxOutputTokens  int
-	MultimodalModel  string
-	MultimodalModels []string
-	ResponsesModels  []string
-	Protocol         string
-	AnthropicFlavor  string
-	Thinking         string
-	Temperature      *float64
-	Timeout          time.Duration
-	Resilience       ResilienceConfig
+	Provider        string
+	BaseURL         string
+	APIKey          string
+	Model           string
+	MaxOutputTokens int
+	Protocol        string
+	AnthropicFlavor string
+	Thinking        string
+	Temperature     *float64
+	Timeout         time.Duration
+	Resilience      ResilienceConfig
 
 	// Secondary model is the preferred Explorer model and the primary agent's
 	// fallback. Compact summaries use it when no explicit compact model exists.
@@ -290,8 +287,6 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 	llmBaseURL := providerBaseURL(llmProvider)
 	anthropicFlavor := providerAnthropicFlavor(llmProvider)
 	llmModel := providerModel(llmProvider)
-	llmMultimodalModel := multimodalModel()
-	llmMultimodalModels := envCSVDefault("MULTIMODAL_MODELS", defaultMultimodalModels(llmMultimodalModel))
 	llmThinking := providerThinking(llmProvider)
 	if llmProvider == "mimo" && llmThinking == "" {
 		llmThinking = "disabled"
@@ -344,20 +339,17 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			ReplyFooter:     firstEnv("SLACK_REPLY_FOOTER", "REPLY_FOOTER"),
 		},
 		LLM: LLMConfig{
-			Provider:         llmProvider,
-			BaseURL:          trimRightSlash(llmBaseURL),
-			APIKey:           providerAPIKey(llmProvider),
-			Model:            llmModel,
-			MaxOutputTokens:  envInt("LLM_MAX_OUTPUT_TOKENS", 0),
-			MultimodalModel:  llmMultimodalModel,
-			MultimodalModels: llmMultimodalModels,
-			ResponsesModels:  providerResponsesModels(llmProvider),
-			Protocol:         llmProtocol,
-			AnthropicFlavor:  anthropicFlavor,
-			Thinking:         llmThinking,
-			Temperature:      providerTemperature(llmProvider),
-			Timeout:          providerTimeout(llmProvider),
-			Resilience:       ResilienceConfig{MaxAttempts: envInt("LLM_RESILIENCE_MAX_ATTEMPTS", 3), RetryBaseDelay: envDuration("LLM_RESILIENCE_RETRY_BASE", 500*time.Millisecond), MinAttemptBudget: envDuration("LLM_RESILIENCE_MIN_ATTEMPT_BUDGET", 45*time.Second), FailureThreshold: envInt("LLM_CIRCUIT_FAILURE_THRESHOLD", 3), CircuitCooldown: envDuration("LLM_CIRCUIT_COOLDOWN", 30*time.Second)},
+			Provider:        llmProvider,
+			BaseURL:         trimRightSlash(llmBaseURL),
+			APIKey:          providerAPIKey(llmProvider),
+			Model:           llmModel,
+			MaxOutputTokens: envInt("LLM_MAX_OUTPUT_TOKENS", 0),
+			Protocol:        llmProtocol,
+			AnthropicFlavor: anthropicFlavor,
+			Thinking:        llmThinking,
+			Temperature:     providerTemperature(llmProvider),
+			Timeout:         providerTimeout(llmProvider),
+			Resilience:      ResilienceConfig{MaxAttempts: envInt("LLM_RESILIENCE_MAX_ATTEMPTS", 3), RetryBaseDelay: envDuration("LLM_RESILIENCE_RETRY_BASE", 500*time.Millisecond), MinAttemptBudget: envDuration("LLM_RESILIENCE_MIN_ATTEMPT_BUDGET", 45*time.Second), FailureThreshold: envInt("LLM_CIRCUIT_FAILURE_THRESHOLD", 3), CircuitCooldown: envDuration("LLM_CIRCUIT_COOLDOWN", 30*time.Second)},
 
 			SecondaryProvider: secondaryProvider,
 			SecondaryBaseURL:  trimRightSlash(secondaryBaseURL),
@@ -698,38 +690,6 @@ func providerModel(provider string) string {
 		return env(prefix+"_MODEL", defaults.model)
 	}
 	return strings.TrimSpace(os.Getenv(prefix + "_MODEL"))
-}
-
-func providerResponsesModels(provider string) []string {
-	prefix := providerEnvPrefix(provider)
-	return envCSV(prefix + "_RESPONSES_MODELS")
-}
-
-// WireProtocol is the upstream OpenAI-family path worker uses for model.
-// CLI clients do not choose this; they call the hosted Kepler generate API.
-func (llm LLMConfig) WireProtocol(model string) string {
-	protocol := strings.ToLower(strings.TrimSpace(llm.Protocol))
-	if protocol != "openai" {
-		return protocol
-	}
-	model = strings.TrimSpace(model)
-	for _, name := range llm.ResponsesModels {
-		if strings.TrimSpace(name) == model {
-			return "responses"
-		}
-	}
-	return protocol
-}
-
-func multimodalModel() string {
-	return strings.TrimSpace(os.Getenv("MODEL_ROUTING_MULTIMODAL_MODEL"))
-}
-
-func defaultMultimodalModels(model string) []string {
-	if model == "" {
-		return nil
-	}
-	return []string{model}
 }
 
 func providerAPIKey(provider string) string {

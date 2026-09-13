@@ -24,7 +24,6 @@ type Config struct {
 	APIKey          string
 	AnthropicFlavor string
 	Timeout         time.Duration
-	ResponsesModels []string
 }
 
 // Client is the sole wire-to-canonical model adapter used by every profile.
@@ -38,6 +37,7 @@ const KeplerGeneratePath = "/v1/kepler/generate"
 func New(config Config) (*Client, error) {
 	provider := strings.ToLower(strings.TrimSpace(config.Provider))
 	protocol := strings.ToLower(strings.TrimSpace(config.Protocol))
+	responsesModels := responsesModels(provider)
 	if protocol == "" {
 		return nil, fmt.Errorf("model protocol is required")
 	}
@@ -58,9 +58,9 @@ func New(config Config) (*Client, error) {
 		wire = llm.NewOpenAIResponsesClient(provider, config.BaseURL, config.APIKey, config.Timeout)
 	case "openai":
 		openAI := llm.NewOpenAICompatibleClient(provider, config.BaseURL, config.APIKey, config.Timeout)
-		if len(config.ResponsesModels) > 0 {
+		if len(responsesModels) > 0 {
 			responses := llm.NewOpenAIResponsesClient(provider, config.BaseURL, config.APIKey, config.Timeout)
-			wire = llm.NewProtocolRouter(openAI, responses, config.ResponsesModels)
+			wire = llm.NewProtocolRouter(openAI, responses, responsesModels)
 		} else {
 			wire = openAI
 		}

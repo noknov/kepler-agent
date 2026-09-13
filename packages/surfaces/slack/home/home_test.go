@@ -26,14 +26,15 @@ func (s *stubPublisher) PublishHome(_ context.Context, userID string, view map[s
 
 func TestModelDisplayName(t *testing.T) {
 	cases := map[string]string{
-		"ox-alpha-free":  "Ox Alpha",
-		"mimo-v2.5":      "MiMo V2.5",
-		"gpt-5.6-luna":   "GPT-5.6 Luna",
-		"grok-4.6":       "Grok 4.6",
-		"glm-5.2":        "GLM 5.2",
-		"glm-5.3-flash":  "glm-5.3-flash",
-		"vendor/model-x": "vendor/model-x",
-		"hy3":            "Hy3",
+		"ox-alpha-free":       "Ox Alpha",
+		"mimo-v2.5":           "MiMo V2.5",
+		"gpt-5.6-luna":        "GPT-5.6 Luna",
+		"grok-4.6":            "Grok 4.6",
+		"deepseek-v4.1-flash": "DeepSeek V4.1 Flash",
+		"glm-5.2":             "GLM 5.2",
+		"glm-5.3-flash":       "glm-5.3-flash",
+		"vendor/model-x":      "vendor/model-x",
+		"hy3":                 "Hy3",
 	}
 	for model, want := range cases {
 		if got := modelDisplayName(model); got != want {
@@ -46,9 +47,8 @@ func TestViewShowsModelDisplayNamesWithoutCodeFormatting(t *testing.T) {
 	controller := Controller{
 		Cfg: config.Config{
 			LLM: config.LLMConfig{
-				Model:           "deepseek-v4-flash-vision-exp",
-				MultimodalModel: "gpt-5.6-luna",
-				SecondaryModel:  "mimo-v2.5",
+				Model:          "deepseek-v4-flash-vision-exp",
+				SecondaryModel: "mimo-v2.5",
 			},
 		},
 		Access: safety.AccessPolicy{},

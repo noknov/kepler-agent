@@ -66,17 +66,12 @@ Set `WORKSPACE_AUTO_FETCH=true` only when background refreshes are acceptable.
 ## Multimodal Routing
 
 Slack App Home shows the configured primary plus Explorer/Summary models.
-`MULTIMODAL_MODELS` declares which models can receive image parts.
-`MODEL_ROUTING_MULTIMODAL_MODEL` is an optional fallback used only when an
-image arrives and the primary model is not listed in `MULTIMODAL_MODELS`.
-
-```bash
-MODEL_ROUTING_MULTIMODAL_MODEL=
-MULTIMODAL_MODELS=
-```
-
-If neither the selected model nor the fallback is listed as multimodal, the
-image is stripped and replaced with a text note asking for a description.
+Provider/model routes declare their input modalities in the provider catalog;
+add a verified route there when introducing a model.
+If the selected model does not have image input declared in the provider
+catalog, the image is stripped and replaced with a text note asking for a
+description. Model selection remains explicit; the worker does not silently
+switch providers for image requests.
 Provider temperature env vars are optional: when unset, the runtime omits
 `temperature` from provider requests instead of defaulting it to zero.
 

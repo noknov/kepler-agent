@@ -51,16 +51,15 @@ type Service struct {
 	Redactor         safety.Redactor
 	UserPrefs        userprefs.Store
 	Workspace        string
+	Model            string
 	Redis            *redisclient.Client
 	Continuations    connections.ContinuationStore
 	PodID            string
 	Lifecycle        context.Context
 	ModeForUser      func(string) ConversationMode
-	ModelFor         func(slackconversation.Request) string
 	OnDelivered      func(context.Context, string, string, string) error
 	AlreadyDelivered func(context.Context, string) (bool, error)
 	Multimodal       func(string) bool
-	MultimodalModel  func() string
 	ThreadLoader     ThreadLoader
 	WebSearchEnabled func(string) bool
 	Inputs           sessioninput.Store
@@ -343,23 +342,13 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 		}
 		history = loaded
 	}
-	modelName := ""
-	if s.ModelFor != nil {
-		modelName = s.ModelFor(req)
-	}
+	modelName := strings.TrimSpace(s.Model)
 	threadImages := model.CollectImages(history...)
 	input := req.Message().WithImages(threadImages)
 	if len(threadImages) > 0 {
 		log.Printf("slack thread context: %d history messages, %d images attached to turn input", len(history), len(threadImages))
 	}
 	if s.Multimodal != nil && !s.Multimodal(modelName) && model.ContainImages(append([]model.Message{input}, history...)...) {
-		if s.MultimodalModel != nil {
-			if fallback := strings.TrimSpace(s.MultimodalModel()); fallback != "" {
-				modelName = fallback
-			}
-		}
-	}
-	if s.Multimodal != nil && !s.Multimodal(modelName) {
 		input = withoutUnsupportedImages(input, slackconversation.IsChineseLocale(req.Locale))
 		history = stripUnsupportedImages(history, slackconversation.IsChineseLocale(req.Locale))
 	}

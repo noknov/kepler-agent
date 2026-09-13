@@ -11,7 +11,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/appsupport"
 	"github.com/noknov/kepler-agent/packages/cloud"
@@ -26,6 +25,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/platform"
 	"github.com/noknov/kepler-agent/packages/profiles/hosted"
 	"github.com/noknov/kepler-agent/packages/prompts"
+	"github.com/noknov/kepler-agent/packages/providers"
 	"github.com/noknov/kepler-agent/packages/safety"
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/agent"
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
@@ -308,17 +308,11 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	if len(cfg.Security.WorkspaceRoots) > 0 {
 		conversation.Workspace = cfg.Security.WorkspaceRoots[0]
 	}
-	multimodal := multimodalPredicate(cfg.LLM.MultimodalModels)
-	conversation.Multimodal = multimodal
-	conversation.MultimodalModel = func() string { return cfg.LLM.MultimodalModel }
-	conversation.ModelFor = func(req slackconversation.Request) string {
-		for _, content := range req.Content {
-			if content.Type == model.ContentImage && multimodal != nil && !multimodal(cfg.LLM.Model) && cfg.LLM.MultimodalModel != "" {
-				return cfg.LLM.MultimodalModel
-			}
-		}
-		return cfg.LLM.Model
+	conversation.Model = cfg.LLM.Model
+	multimodal := func(modelName string) bool {
+		return providers.SupportsInput(cfg.LLM.Provider, modelName, providers.ModalityImage)
 	}
+	conversation.Multimodal = multimodal
 	events.Add(conversation.EventSink())
 	conv := slackconversation.ControlledConversation(conversation)
 	log.Printf("worker agent runtime: shared")
@@ -700,14 +694,4 @@ func (s *Service) endEvent() {
 	}
 	s.eventCond.Broadcast()
 	s.eventMu.Unlock()
-}
-
-func multimodalPredicate(models []string) func(string) bool {
-	mmSet := make(map[string]bool, len(models))
-	for _, m := range models {
-		mmSet[m] = true
-	}
-	return func(model string) bool {
-		return mmSet[model]
-	}
 }

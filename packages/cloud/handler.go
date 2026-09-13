@@ -262,7 +262,6 @@ func RegisterWorker(mux *http.ServeMux, cfg config.Config) error {
 		APIKey:          cfg.LLM.APIKey,
 		Timeout:         cfg.LLM.Timeout,
 		AnthropicFlavor: cfg.LLM.AnthropicFlavor,
-		ResponsesModels: cfg.LLM.ResponsesModels,
 	})
 	if err != nil {
 		return err

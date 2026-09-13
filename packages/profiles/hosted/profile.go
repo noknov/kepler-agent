@@ -45,7 +45,7 @@ type ProfileDependencies struct {
 }
 
 func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
-	primary, err := buildModelClient(cfg.LLM.Provider, cfg.LLM.Protocol, cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout, cfg.LLM.AnthropicFlavor, cfg.LLM.ResponsesModels)
+	primary, err := buildModelClient(cfg.LLM.Provider, cfg.LLM.Protocol, cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout, cfg.LLM.AnthropicFlavor)
 	if err != nil {
 		return Profile{}, err
 	}
@@ -171,7 +171,7 @@ func operatorAllowlist(names []string) map[string]bool {
 	return allowed
 }
 
-func buildModelClient(provider, protocol, baseURL, apiKey string, timeout time.Duration, anthropicFlavor string, responsesModels []string) (model.Client, error) {
+func buildModelClient(provider, protocol, baseURL, apiKey string, timeout time.Duration, anthropicFlavor string) (model.Client, error) {
 	return providers.New(providers.Config{
 		Provider:        provider,
 		Protocol:        protocol,
@@ -179,7 +179,6 @@ func buildModelClient(provider, protocol, baseURL, apiKey string, timeout time.D
 		APIKey:          apiKey,
 		Timeout:         timeout,
 		AnthropicFlavor: anthropicFlavor,
-		ResponsesModels: responsesModels,
 	})
 }
 
@@ -187,14 +186,7 @@ func secondaryModelClient(cfg config.Config) (model.Client, string, error) {
 	if strings.TrimSpace(cfg.LLM.SecondaryProvider) == "" {
 		return nil, "", nil
 	}
-	// A secondary model may share the primary provider's OpenAI-compatible
-	// endpoint. Preserve the provider-level model routing in that case so a
-	// Responses-only model does not silently fall back to Chat Completions.
-	responsesModels := []string(nil)
-	if strings.EqualFold(strings.TrimSpace(cfg.LLM.SecondaryProvider), strings.TrimSpace(cfg.LLM.Provider)) {
-		responsesModels = cfg.LLM.ResponsesModels
-	}
-	client, err := buildModelClient(cfg.LLM.SecondaryProvider, cfg.LLM.SecondaryProtocol, cfg.LLM.SecondaryBaseURL, cfg.LLM.SecondaryAPIKey, cfg.LLM.Timeout, "", responsesModels)
+	client, err := buildModelClient(cfg.LLM.SecondaryProvider, cfg.LLM.SecondaryProtocol, cfg.LLM.SecondaryBaseURL, cfg.LLM.SecondaryAPIKey, cfg.LLM.Timeout, "")
 	return client, cfg.LLM.SecondaryModel, err
 }
 

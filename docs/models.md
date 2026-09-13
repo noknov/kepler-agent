@@ -125,14 +125,16 @@ OPENCODE_ZEN_PROTOCOL=openai
 LLM_PROVIDER=opencode-go
 OPENCODE_GO_API_KEY=...
 OPENCODE_GO_BASE_URL=https://opencode.ai/zen/go/v1
-OPENCODE_GO_MODEL=glm-5.2
-OPENCODE_GO_PROTOCOL=responses
+OPENCODE_GO_MODEL=gpt-5.6-luna
+OPENCODE_GO_PROTOCOL=openai
 ```
 
-Choose the protocol supported by the deployed endpoint and model, and verify
-image inputs separately from text/tool requests. Leave temperature unset unless
-the model accepts it and sampling control is intended; an explicit zero is
-still a sent parameter. Compatibility can differ by model and endpoint.
+Known OpenCode Go models are resolved through the provider catalog: Grok 4.6
+and GPT 5.6 Luna use Responses, while DeepSeek V4.1 Flash uses Chat
+Completions and accepts image input. Add a verified model route to the provider
+catalog before using a new model; its protocol and input modalities then apply
+consistently to every surface. Leave temperature unset unless the model accepts
+it and sampling control is intended; an explicit zero is still a sent parameter.
 
 ## Secondary Model
 
@@ -141,9 +143,9 @@ and Slack workflow classification. Hosted composition can also use it in the
 primary/fallback chain; see [profile composition](../packages/profiles/hosted/profile.go).
 
 ```bash
-SECONDARY_PROVIDER=opencode-zen
-OPENCODE_ZEN_API_KEY=...
-SECONDARY_MODEL=mimo-v2.5-free
+SECONDARY_PROVIDER=opencode-go
+OPENCODE_GO_API_KEY=...
+SECONDARY_MODEL=deepseek-v4.1-flash
 ```
 
 When `SESSION_COMPACT_MODEL` is unset, compact summaries use `SECONDARY_MODEL`

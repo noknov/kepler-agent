@@ -22,7 +22,6 @@ func TestSecondaryModelClientPreservesSharedProviderProtocolRouting(t *testing.T
 
 	client, modelName, err := secondaryModelClient(config.Config{LLM: config.LLMConfig{
 		Provider:          "opencode-go",
-		ResponsesModels:   []string{"gpt-5.6-luna"},
 		SecondaryProvider: "opencode-go",
 		SecondaryProtocol: "openai",
 		SecondaryBaseURL:  server.URL,
