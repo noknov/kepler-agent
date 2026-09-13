@@ -31,10 +31,22 @@ ON CONFLICT (user_id) DO UPDATE SET web_search_enabled=EXCLUDED.web_search_enabl
 }
 
 func (s *PGStore) ListAssets(ctx context.Context, userID string, kind AssetKind) ([]Asset, error) {
+	return s.listAssets(ctx, userID, kind, true)
+}
+
+func (s *PGStore) ListAllAssets(ctx context.Context, userID string, kind AssetKind) ([]Asset, error) {
+	return s.listAssets(ctx, userID, kind, false)
+}
+
+func (s *PGStore) listAssets(ctx context.Context, userID string, kind AssetKind, activeOnly bool) ([]Asset, error) {
+	activeFilter := ""
+	if activeOnly {
+		activeFilter = " AND active=TRUE"
+	}
 	rows, err := s.pool.Query(ctx, `
 SELECT id, user_id, kind, name, description, content, source_file_id, active, created_at, updated_at
 FROM user_prompt_assets
-WHERE user_id=$1 AND kind=$2 AND active=TRUE
+WHERE user_id=$1 AND kind=$2`+activeFilter+`
 ORDER BY lower(name)`, userID, string(kind))
 	if err != nil {
 		return nil, err
@@ -51,6 +63,13 @@ ORDER BY lower(name)`, userID, string(kind))
 		out = append(out, asset)
 	}
 	return out, rows.Err()
+}
+
+func (s *PGStore) SetAssetActive(ctx context.Context, userID string, kind AssetKind, id string, active bool) error {
+	_, err := s.pool.Exec(ctx, `
+UPDATE user_prompt_assets SET active=$4, updated_at=NOW()
+WHERE user_id=$1 AND kind=$2 AND id=$3`, userID, string(kind), id, active)
+	return err
 }
 
 func (s *PGStore) UpsertAsset(ctx context.Context, asset Asset) (Asset, error) {

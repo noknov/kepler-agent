@@ -19,6 +19,13 @@ func assetModal(kind userprefs.AssetKind, existing []userprefs.Asset) map[string
 	contentLabel := "Rule text"
 	hint := "Upload or paste Markdown, MDC, text, or JSON. Uploaded files with the same name replace older entries."
 	blocks := []map[string]any{
+		{
+			"type": "context",
+			"elements": []map[string]any{{
+				"type": "mrkdwn",
+				"text": "This manager controls your custom items; built-in rules and skills remain available. New uploads are enabled immediately. Disable an item to keep it saved without adding it to agent context.",
+			}},
+		},
 		inputBlock("asset_files", "asset_files", "Upload files", map[string]any{
 			"type":      "file_input",
 			"action_id": "asset_files",
@@ -71,22 +78,46 @@ func existingAssetBlocks(kind userprefs.AssetKind, assets []userprefs.Asset) []m
 		if asset.Description != "" {
 			text += "\n" + asset.Description
 		}
+		status := "Active"
+		actionID := "disable_asset"
+		buttonLabel := "Disable"
+		buttonStyle := ""
+		if !asset.Active {
+			status = "Disabled"
+			actionID = "enable_asset"
+			buttonLabel = "Enable"
+			buttonStyle = "primary"
+		}
+		text += "\n_" + status + "_"
+		value := fmt.Sprintf("%s:%s", kind, asset.ID)
 		blocks = append(blocks, map[string]any{
 			"type": "section",
 			"text": map[string]any{
 				"type": "mrkdwn",
 				"text": text,
 			},
-			"accessory": map[string]any{
-				"type":      "button",
-				"action_id": "delete_asset",
-				"text":      plainText("Delete"),
-				"value":     fmt.Sprintf("%s:%s", kind, asset.ID),
-				"style":     "danger",
+		}, map[string]any{
+			"type": "actions",
+			"elements": []map[string]any{
+				assetActionButton(actionID, buttonLabel, value, buttonStyle),
+				assetActionButton("delete_asset", "Delete", value, "danger"),
 			},
 		})
 	}
 	return blocks
+}
+
+func assetActionButton(actionID, label, value, style string) map[string]any {
+	button := map[string]any{
+		"type":      "button",
+		"action_id": actionID,
+		"text":      plainText(label),
+		"value":     value,
+	}
+	if style != "" {
+		button["style"] = style
+	}
+	return button
 }
 
 func inputBlock(blockID, actionID, label string, element map[string]any, optional bool, hint string) map[string]any {

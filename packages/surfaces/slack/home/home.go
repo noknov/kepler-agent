@@ -145,8 +145,8 @@ func (c Controller) View(userID string) map[string]any {
 	statusFields := []map[string]any{
 		mrkdwnField("*Access*\n" + accessStatus),
 		mrkdwnField("*Web Search*\n" + webSearchStatus),
-		mrkdwnField(fmt.Sprintf("*Rules*\n%d active", ruleCount)),
-		mrkdwnField(fmt.Sprintf("*Skills*\n%d active", skillCount)),
+		mrkdwnField(fmt.Sprintf("*Custom Rules*\n%d active", ruleCount)),
+		mrkdwnField(fmt.Sprintf("*Custom Skills*\n%d active", skillCount)),
 		mrkdwnField("*Primary Model*\n" + modelDisplayName(c.Cfg.LLM.Model)),
 		mrkdwnField("*Explorer Model*\n" + modelDisplayName(explorer)),
 	}
@@ -156,17 +156,19 @@ func (c Controller) View(userID string) map[string]any {
 		headerBlock(":signal_strength: Status"),
 		sectionBlockWithFields("", statusFields...),
 		dividerBlock(),
-		headerBlock(":sparkles: Capabilities"),
-		sectionBlock("*Code Review*\nAsk the agent to review one to four GitHub pull-request URLs. A secondary model routes explicit review requests into the multi-agent review workflow; ordinary questions remain general conversation."),
-		dividerBlock(),
 		headerBlock(":control_knobs: Controls"),
 		actionsBlock(
+			actionButton("toggle_web_search", "Web Search "+boolLabel(webSearchOn), "web_search", webSearchBtnStyle),
 			actionButton("manage_rules", "Manage Rules", "rule", ""),
 			actionButton("manage_skills", "Manage Skills", "skill", ""),
-			actionButton("toggle_web_search", "Web Search "+boolLabel(webSearchOn), "web_search", webSearchBtnStyle),
 		),
 	}
 	blocks = append(blocks, c.connectionBlocks(userID)...)
+	blocks = append(blocks,
+		dividerBlock(),
+		headerBlock(":sparkles: Capabilities"),
+		sectionBlock("*Code Review*\nReview one to four GitHub pull requests with a multi-agent workflow."),
+	)
 
 	return map[string]any{
 		"type":   "home",

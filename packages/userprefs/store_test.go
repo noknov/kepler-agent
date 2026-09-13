@@ -17,6 +17,9 @@ func TestBuildAssetAcceptsOnlySmallUTF8PromptFiles(t *testing.T) {
 	if asset.Name != "coding-style" || asset.Description != "Prefer focused changes." {
 		t.Fatalf("asset metadata = %#v", asset)
 	}
+	if !asset.Active {
+		t.Fatal("uploaded assets must be active by default")
+	}
 
 	if _, err := BuildAsset(KindRule, "U1", slack.File{Name: "secret.bin"}, []byte("hello")); err == nil {
 		t.Fatal("expected unsupported extension to fail")

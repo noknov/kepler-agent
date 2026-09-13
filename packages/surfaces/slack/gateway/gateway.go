@@ -194,8 +194,8 @@ func (g Gateway) HandleInteractions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
 	if g.OnInteraction == nil {
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 	interaction := Interaction{
@@ -237,7 +237,29 @@ func (g Gateway) HandleInteractions(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if requiresFreshTrigger(interaction) {
+		// views.open must consume Slack's short-lived trigger_id immediately.
+		// Dispatching this work after the response in a goroutine can allow the
+		// trigger to expire before the modal request reaches Slack.
+		g.OnInteraction(r.Context(), interaction)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 	go g.OnInteraction(context.Background(), interaction)
+}
+
+func requiresFreshTrigger(interaction Interaction) bool {
+	if interaction.Type != "block_actions" || interaction.TriggerID == "" {
+		return false
+	}
+	for _, action := range interaction.Actions {
+		switch action.ActionID {
+		case "manage_rules", "manage_skills":
+			return true
+		}
+	}
+	return false
 }
 
 func (g Gateway) draining() bool {

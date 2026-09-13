@@ -55,6 +55,13 @@ type Store interface {
 	DeleteAssets(ctx context.Context, userID string, kind AssetKind) error
 }
 
+// ManagementStore exposes inactive assets to management UIs without changing
+// the active-only contract used to compose prompts and skill metadata.
+type ManagementStore interface {
+	ListAllAssets(ctx context.Context, userID string, kind AssetKind) ([]Asset, error)
+	SetAssetActive(ctx context.Context, userID string, kind AssetKind, id string, active bool) error
+}
+
 func BuildAsset(kind AssetKind, userID string, file slack.File, data []byte) (Asset, error) {
 	if kind != KindRule && kind != KindSkill {
 		return Asset{}, fmt.Errorf("unsupported asset kind %q", kind)

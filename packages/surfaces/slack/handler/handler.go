@@ -103,6 +103,10 @@ func (h *Handler) handleBlockActions(ctx context.Context, interaction slackgatew
 			h.openAssetModal(ctx, interaction.TriggerID, interaction.UserID, userprefs.KindRule)
 		case "manage_skills":
 			h.openAssetModal(ctx, interaction.TriggerID, interaction.UserID, userprefs.KindSkill)
+		case "enable_asset":
+			h.setAssetActive(ctx, interaction, action.Value, true)
+		case "disable_asset":
+			h.setAssetActive(ctx, interaction, action.Value, false)
 		case "delete_asset":
 			h.deleteAsset(ctx, interaction, action.Value)
 		case "agent_approval_approve", "agent_approval_decline":
@@ -152,12 +156,37 @@ func (h *Handler) openAssetModal(ctx context.Context, triggerID, userID string, 
 	if h.Slack == nil || h.UserPrefs == nil || triggerID == "" {
 		return
 	}
-	assets := h.listAssets(ctx, userID, kind)
+	assets := h.listManagedAssets(ctx, userID, kind)
 	if err := h.Slack.OpenView(ctx, triggerID, assetModal(kind, assets)); err != nil {
 		log.Printf("open %s modal failed: %v", kind, err)
 		if userID != "" {
 			_, _ = h.Slack.PostMessage(ctx, userID, "", fmt.Sprintf("Couldn't open %s manager: %v", kind, err))
 		}
+	}
+}
+
+func (h *Handler) setAssetActive(ctx context.Context, interaction slackgateway.Interaction, value string, active bool) {
+	kind, id, ok := parseAssetActionValue(value)
+	if !ok || h.UserPrefs == nil {
+		return
+	}
+	manager, ok := h.UserPrefs.(userprefs.ManagementStore)
+	if !ok {
+		log.Printf("set %s active state unsupported user=%s id=%s", kind, interaction.UserID, id)
+		return
+	}
+	if err := manager.SetAssetActive(ctx, interaction.UserID, kind, id, active); err != nil {
+		log.Printf("set %s active=%t failed user=%s id=%s err=%v", kind, active, interaction.UserID, id, err)
+		return
+	}
+	assets := h.listManagedAssets(ctx, interaction.UserID, kind)
+	if h.Slack != nil && interaction.View.ID != "" {
+		if err := h.Slack.UpdateView(ctx, interaction.View.ID, assetModal(kind, assets)); err != nil {
+			log.Printf("refresh %s modal after active change failed user=%s err=%v", kind, interaction.UserID, err)
+		}
+	}
+	if err := h.Home.RequestRefresh(context.Background(), interaction.UserID); err != nil {
+		log.Printf("refresh home after %s active change failed: %v", kind, err)
 	}
 }
 
@@ -170,7 +199,7 @@ func (h *Handler) deleteAsset(ctx context.Context, interaction slackgateway.Inte
 		log.Printf("delete %s failed user=%s id=%s err=%v", kind, interaction.UserID, id, err)
 		return
 	}
-	assets := h.listAssets(ctx, interaction.UserID, kind)
+	assets := h.listManagedAssets(ctx, interaction.UserID, kind)
 	if h.Slack != nil && interaction.View.ID != "" {
 		if err := h.Slack.UpdateView(ctx, interaction.View.ID, assetModal(kind, assets)); err != nil {
 			log.Printf("refresh %s modal failed user=%s err=%v", kind, interaction.UserID, err)
@@ -249,6 +278,21 @@ func (h *Handler) listAssets(ctx context.Context, userID string, kind userprefs.
 		return nil
 	}
 	return assets
+}
+
+func (h *Handler) listManagedAssets(ctx context.Context, userID string, kind userprefs.AssetKind) []userprefs.Asset {
+	if h.UserPrefs == nil {
+		return nil
+	}
+	if manager, ok := h.UserPrefs.(userprefs.ManagementStore); ok {
+		assets, err := manager.ListAllAssets(ctx, userID, kind)
+		if err != nil {
+			log.Printf("list managed %s assets failed user=%s err=%v", kind, userID, err)
+			return nil
+		}
+		return assets
+	}
+	return h.listAssets(ctx, userID, kind)
 }
 
 func (h *Handler) handleAppHome(ctx context.Context, ev slack.Event) {
