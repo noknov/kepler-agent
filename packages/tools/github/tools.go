@@ -264,6 +264,10 @@ func (c Client) workflowEndpoint(repository, workflow, suffix string, values url
 }
 
 func (c Client) do(ctx context.Context, method, endpoint string, payload any) ([]byte, error) {
+	return c.doWithLimit(ctx, method, endpoint, payload, 4<<20)
+}
+
+func (c Client) doWithLimit(ctx context.Context, method, endpoint string, payload any, maxBytes int) ([]byte, error) {
 	var body io.Reader
 	if payload != nil {
 		data, err := json.Marshal(payload)
@@ -287,9 +291,12 @@ func (c Client) do(ctx context.Context, method, endpoint string, payload any) ([
 		return nil, err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxBytes)+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(data) > maxBytes {
+		return nil, fmt.Errorf("github response exceeded %d-byte limit", maxBytes)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("github status %d: %s", resp.StatusCode, string(data))
@@ -745,45 +752,24 @@ func (t PRDiffTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 		return tool.Result{}, fmt.Errorf("parse PR metadata: %w", err)
 	}
 
-	// Fetch diff
-	diffURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", client.baseURL(), owner, repo, prNumber)
-	diffReq, err := http.NewRequestWithContext(ctx, http.MethodGet, diffURL, nil)
+	files, err := client.pullRequestFiles(ctx, owner, repo, prNumber)
 	if err != nil {
-		return tool.Result{}, err
+		return tool.Result{}, fmt.Errorf("fetch changed files for %s#%d: %w", repository, prNumber, err)
 	}
-	diffReq.Header.Set("Authorization", "Bearer "+client.Token)
-	diffReq.Header.Set("Accept", "application/vnd.github.diff")
-	diffReq.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	diffResp, err := client.httpClient().Do(diffReq)
-	if err != nil {
-		return tool.Result{}, fmt.Errorf("fetch PR diff: %w", err)
+	changedFiles := make([]string, 0, len(files))
+	fileDiffs := make(map[string]pullRequestFile, len(files))
+	for _, file := range files {
+		changedFiles = append(changedFiles, file.Path)
+		fileDiffs[file.Path] = file
 	}
-	defer diffResp.Body.Close()
-	diffBody, err := io.ReadAll(io.LimitReader(diffResp.Body, 2<<20)) // 2MB max from API
-	if err != nil {
-		return tool.Result{}, fmt.Errorf("read PR diff: %w", err)
-	}
-	if diffResp.StatusCode >= 300 {
-		return tool.Result{}, fmt.Errorf("github diff status %d for %s#%d: %s", diffResp.StatusCode, repository, prNumber, string(diffBody))
-	}
-
-	diff := string(diffBody)
-
-	files := diffFileIndex(diff)
 	setPRDiffContext(call.Scope, prDiffContext{
-		Repository: repository,
-		Number:     int(prNumber),
-		HeadRef:    prMeta.Head.Ref,
-		HeadSHA:    prMeta.Head.SHA,
-		BaseRef:    prMeta.Base.Ref,
-		ChangedFiles: func() []string {
-			paths := make([]string, 0, len(files))
-			for _, file := range files {
-				paths = append(paths, file.Path)
-			}
-			return paths
-		}(),
-		Diff: diff,
+		Repository:   repository,
+		Number:       int(prNumber),
+		HeadRef:      prMeta.Head.Ref,
+		HeadSHA:      prMeta.Head.SHA,
+		BaseRef:      prMeta.Base.Ref,
+		ChangedFiles: changedFiles,
+		Files:        fileDiffs,
 	})
 
 	// Return a compact, stable review manifest. The full diff remains available
@@ -802,9 +788,13 @@ func (t PRDiffTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 	}
 	fmt.Fprintf(&out, "\nChanged files (%d):\n", len(files))
 	for _, file := range files {
-		fmt.Fprintf(&out, "- %s (hunks=%d +%d/-%d)\n", file.Path, file.Hunks, file.Additions, file.Deletions)
+		status := ""
+		if file.Status != "" && file.Status != "modified" {
+			status = " status=" + file.Status
+		}
+		fmt.Fprintf(&out, "- %s (hunks=%d +%d/-%d%s)\n", file.Path, file.Hunks, file.Additions, file.Deletions, status)
 	}
-	fmt.Fprint(&out, "\nUse github-pr_file_diff with one changed path for a focused patch and PR-head line-numbered source context. Do not cite local main/default-branch line numbers for PR-head code.\n")
+	fmt.Fprint(&out, "\nThe changed-file manifest is complete and paginated from GitHub. Use github-pr_file_diff with one changed path for a focused patch and PR-head line-numbered source context. A file can have no patch when GitHub omits it for a binary or oversized change; report that limitation instead of inferring the diff. Do not cite local main/default-branch line numbers for PR-head code.\n")
 
 	return tool.TextResult(out.String()), nil
 }
@@ -845,6 +835,7 @@ type prDiffContext struct {
 	BaseRef      string
 	ChangedFiles []string
 	Diff         string
+	Files        map[string]pullRequestFile
 }
 
 const prDiffContextCacheKey = "github-pr-diff-context"
@@ -926,9 +917,109 @@ func (p prDiffContext) containsPath(path string) bool {
 	return false
 }
 
+func (p prDiffContext) fileDiff(path string) (string, error) {
+	if p.Files != nil {
+		file, ok := p.Files[path]
+		if !ok {
+			return "", fmt.Errorf("diff for %q is unavailable", path)
+		}
+		if strings.TrimSpace(file.Patch) == "" {
+			return "", fmt.Errorf("GitHub did not provide a patch for %q; it may be binary or too large for the file API", path)
+		}
+		return "diff --git a/" + path + " b/" + path + "\n" + strings.TrimRight(file.Patch, "\n"), nil
+	}
+
+	// Keep contexts created by older callers/tests readable while all new PR
+	// contexts use the paginated file manifest above.
+	needle := "diff --git a/" + path + " b/" + path
+	start := strings.Index(p.Diff, needle)
+	if start < 0 {
+		return "", fmt.Errorf("diff for %q is unavailable", path)
+	}
+	rest := p.Diff[start+len(needle):]
+	if next := strings.Index(rest, "\ndiff --git a/"); next >= 0 {
+		rest = rest[:next]
+	}
+	return needle + rest, nil
+}
+
 type diffFile struct {
 	Path                        string
 	Hunks, Additions, Deletions int
+}
+
+type pullRequestFile struct {
+	Path                        string
+	PreviousPath                string
+	Status                      string
+	Hunks, Additions, Deletions int
+	Patch                       string
+}
+
+const (
+	pullRequestFilesPageSize  = 100
+	maxPullRequestFilesPages  = 100
+	pullRequestFilesBodyLimit = 16 << 20
+)
+
+// pullRequestFiles uses GitHub's paginated changed-file API instead of reading
+// one unbounded unified diff. The API returns a patch per file, which keeps the
+// manifest complete even when the aggregate PR diff is larger than a response
+// budget. If the known page guard is reached, fail explicitly rather than
+// presenting an incomplete review scope as complete.
+func (c Client) pullRequestFiles(ctx context.Context, owner, repo string, number int64) ([]pullRequestFile, error) {
+	var files []pullRequestFile
+	for page := 1; page <= maxPullRequestFilesPages; page++ {
+		values := url.Values{}
+		values.Set("per_page", strconv.Itoa(pullRequestFilesPageSize))
+		values.Set("page", strconv.Itoa(page))
+		endpoint := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/files?%s", c.baseURL(), url.PathEscape(owner), url.PathEscape(repo), number, values.Encode())
+		data, err := c.doWithLimit(ctx, http.MethodGet, endpoint, nil, pullRequestFilesBodyLimit)
+		if err != nil {
+			return nil, err
+		}
+		var pageFiles []struct {
+			Filename         string `json:"filename"`
+			PreviousFilename string `json:"previous_filename"`
+			Status           string `json:"status"`
+			Additions        int    `json:"additions"`
+			Deletions        int    `json:"deletions"`
+			Changes          int    `json:"changes"`
+			Patch            string `json:"patch"`
+		}
+		if err := json.Unmarshal(data, &pageFiles); err != nil {
+			return nil, fmt.Errorf("parse changed files page %d: %w", page, err)
+		}
+		for _, file := range pageFiles {
+			path := strings.TrimSpace(file.Filename)
+			if path == "" {
+				return nil, fmt.Errorf("changed files page %d contained an empty filename", page)
+			}
+			files = append(files, pullRequestFile{
+				Path:         path,
+				PreviousPath: strings.TrimSpace(file.PreviousFilename),
+				Status:       strings.TrimSpace(file.Status),
+				Hunks:        countDiffHunks(file.Patch),
+				Additions:    file.Additions,
+				Deletions:    file.Deletions,
+				Patch:        file.Patch,
+			})
+		}
+		if len(pageFiles) < pullRequestFilesPageSize {
+			return files, nil
+		}
+	}
+	return nil, fmt.Errorf("changed-file pagination exceeded %d pages", maxPullRequestFilesPages)
+}
+
+func countDiffHunks(patch string) int {
+	count := 0
+	for _, line := range strings.Split(patch, "\n") {
+		if strings.HasPrefix(line, "@@") {
+			count++
+		}
+	}
+	return count
 }
 
 func diffFileIndex(diff string) []diffFile {
@@ -962,12 +1053,19 @@ type PRFileDiffTool struct {
 	Client Client
 }
 
+const (
+	defaultPRFileDiffPageLines = 300
+	maxPRFileDiffPageLines     = 1000
+)
+
 func (PRFileDiffTool) Descriptor() tool.Descriptor {
-	return tool.FunctionDescriptor("github-pr_file_diff", "Read one changed file from a PR context established by github-pr_diff. When reviewing multiple PRs, pass url to select the intended immutable PR context explicitly.", tool.ObjectSchema([]string{"path"}, map[string]any{
+	return tool.FunctionDescriptor("github-pr_file_diff", "Read one changed file from a PR context established by github-pr_diff. Use start_line and max_lines to page through a large patch. When reviewing multiple PRs, pass url to select the intended immutable PR context explicitly.", tool.ObjectSchema([]string{"path"}, map[string]any{
 		"path":       map[string]any{"type": "string", "description": "Repository-relative path from the changed-file manifest."},
 		"url":        map[string]any{"type": "string", "description": "GitHub pull request URL selecting one previously established PR context."},
 		"repository": map[string]any{"type": "string", "description": "Repository in owner/repo form. Use together with pr when url is omitted."},
 		"pr":         map[string]any{"type": "integer", "description": "Pull request number. Use together with repository when url is omitted."},
+		"start_line": map[string]any{"type": "integer", "description": "One-based line in the returned unified patch; defaults to 1."},
+		"max_lines":  map[string]any{"type": "integer", "description": "Maximum patch lines to return; defaults to 300 and is capped at 1000."},
 	}), tool.NetworkIntegration("github")...)
 }
 
@@ -984,6 +1082,8 @@ func (t PRFileDiffTool) Execute(ctx context.Context, call tool.Call) (tool.Resul
 		URL        string      `json:"url"`
 		Repository string      `json:"repository"`
 		PR         json.Number `json:"pr"`
+		StartLine  int         `json:"start_line"`
+		MaxLines   int         `json:"max_lines"`
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
@@ -1022,25 +1122,57 @@ func (t PRFileDiffTool) Execute(ctx context.Context, call tool.Call) (tool.Resul
 		}
 		return tool.TextResult(strings.TrimSpace(out.String())), nil
 	}
-	needle := "diff --git a/" + path + " b/" + path
-	start := strings.Index(pr.Diff, needle)
-	if start < 0 {
-		return tool.Result{}, fmt.Errorf("diff for %q is unavailable", path)
-	}
-	rest := pr.Diff[start+len(needle):]
-	if next := strings.Index(rest, "\ndiff --git a/"); next >= 0 {
-		rest = rest[:next]
-	}
 	var out strings.Builder
-	fileDiff := needle + rest
+	fileDiff, err := pr.fileDiff(path)
+	if err != nil {
+		return tool.Result{}, err
+	}
+	startLine := args.StartLine
+	if startLine <= 0 {
+		startLine = 1
+	}
+	maxLines := args.MaxLines
+	if maxLines <= 0 {
+		maxLines = defaultPRFileDiffPageLines
+	}
+	if maxLines > maxPRFileDiffPageLines {
+		maxLines = maxPRFileDiffPageLines
+	}
+	page, pageStart, pageEnd, totalLines := paginatePRFileDiff(fileDiff, startLine, maxLines)
 	fmt.Fprintf(&out, "PR %s#%d head=%s file=%s\n", pr.Repository, pr.Number, pr.HeadSHA, path)
-	out.WriteString(fileDiff)
-	if source, err := t.prHeadFileSource(ctx, client, pr, path); err == nil && strings.TrimSpace(source) != "" {
-		if contextText := lineNumberedHunkContext(source, fileDiff, 3, 260); strings.TrimSpace(contextText) != "" {
+	fmt.Fprintf(&out, "[patch lines %d-%d of %d]", pageStart, pageEnd, totalLines)
+	if pageEnd < totalLines {
+		fmt.Fprintf(&out, " (use start_line=%d for the next page)", pageEnd+1)
+	}
+	out.WriteString("\n")
+	out.WriteString(page)
+	if source, err := t.prHeadFileSource(ctx, client, pr, path); err == nil && strings.TrimSpace(source) != "" && strings.Contains(page, "@@") {
+		if contextText := lineNumberedHunkContext(source, page, 3, 260); strings.TrimSpace(contextText) != "" {
 			fmt.Fprintf(&out, "\n\nPR-head source context for %s at %s. Cite these line numbers for PR-head code:\n%s", path, pr.HeadSHA, contextText)
 		}
 	}
 	return tool.TextResult(out.String()), nil
+}
+
+func paginatePRFileDiff(diff string, startLine, maxLines int) (string, int, int, int) {
+	lines := strings.Split(strings.ReplaceAll(diff, "\r\n", "\n"), "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if startLine < 1 {
+		startLine = 1
+	}
+	if startLine > len(lines) {
+		startLine = len(lines) + 1
+	}
+	endLine := startLine + maxLines - 1
+	if endLine > len(lines) {
+		endLine = len(lines)
+	}
+	if startLine > len(lines) {
+		return "", startLine, endLine, len(lines)
+	}
+	return strings.Join(lines[startLine-1:endLine], "\n"), startLine, endLine, len(lines)
 }
 
 func multiplePRDiffContexts(scope tool.Scope) bool {

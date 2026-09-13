@@ -19,16 +19,16 @@ func (m *routingModel) Generate(_ context.Context, request model.Request, _ mode
 }
 
 func TestModelRouterSelectsRegisteredClosedSetOption(t *testing.T) {
-	client := &routingModel{output: "code_review.deep\n"}
+	client := &routingModel{output: "code_review\n"}
 	router := ModelRouter{
 		Client: client, Model: "secondary",
-		Options: []RouteOption{{Label: "code_review.deep", Intent: "code_review", Description: "deep review", Inputs: map[string]string{"mode": "deep"}}},
+		Options: []RouteOption{{Label: "code_review", Intent: "code_review", Description: "pull-request review"}},
 	}
-	decision, err := router.Route(context.Background(), RouteRequest{Text: "请 deep review https://github.com/acme/api/pull/42", SessionID: "slack-thread-1"})
+	decision, err := router.Route(context.Background(), RouteRequest{Text: "请 review https://github.com/acme/api/pull/42", SessionID: "slack-thread-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Intent != "code_review" || decision.Inputs["mode"] != "deep" {
+	if decision.Intent != "code_review" || len(decision.Inputs) != 0 {
 		t.Fatalf("decision=%+v", decision)
 	}
 	if client.request.Model != "secondary" || client.request.ReasoningEffort != "disabled" || client.request.MaxOutputTokens != 512 || len(client.request.Tools) != 0 {

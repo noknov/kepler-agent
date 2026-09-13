@@ -80,6 +80,30 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 			if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.ApprovalRequested, ToolCall: &call, Metadata: metadata}); err != nil {
 				return toolOutcome{}, err
 			}
+			if len(calls) > 1 {
+				// A deferred approval suspends the whole model tool batch. Record
+				// explicit results for sibling calls so the later approval
+				// resolution cannot leave an assistant tool message malformed.
+				var blocked []preparedCall
+				for sibling := range prepared {
+					if sibling == index || prepared[sibling].result != nil {
+						continue
+					}
+					result := tool.Result{
+						Content:   []model.Content{{Type: model.ContentText, Text: "Not executed because another tool call in this batch is waiting for user approval."}},
+						IsError:   true,
+						ErrorCode: "approval_batch_blocked",
+					}
+					prepared[sibling].result = &result
+					blocked = append(blocked, prepared[sibling])
+				}
+				if r.deps.Approver == nil {
+					if _, err := r.recordToolResults(context.WithoutCancel(ctx), request, blocked); err != nil {
+						return toolOutcome{}, err
+					}
+					return toolOutcome{}, errPendingApproval
+				}
+			}
 			if r.deps.Approver == nil {
 				return toolOutcome{}, errPendingApproval
 			}
@@ -108,35 +132,67 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 	var gate sync.RWMutex
 	var wait sync.WaitGroup
 	parallelSlots := make(chan struct{}, r.config.MaxParallelToolCalls)
+	recordAfterCancellation := func() (toolOutcome, error) {
+		// A tool may have crossed an external side-effect boundary before the
+		// parent context was canceled. Join every started worker before writing
+		// the terminal turn state so the transcript cannot describe a still-live
+		// side effect as a canceled turn.
+		wait.Wait()
+		for index := range prepared {
+			if prepared[index].result != nil {
+				continue
+			}
+			result := tool.Result{
+				Content:   []model.Content{{Type: model.ContentText, Text: fmt.Sprintf("Tool %q was canceled before it started.", prepared[index].call.Name)}},
+				IsError:   true,
+				ErrorCode: "tool_canceled_before_start",
+			}
+			prepared[index].result = &result
+		}
+		recordCtx := context.WithoutCancel(ctx)
+		limitToolResultBatch(recordCtx, prepared, r.config.ToolResults, r.deps.Artifacts)
+		if _, err := r.recordToolResults(recordCtx, request, prepared); err != nil {
+			return toolOutcome{}, err
+		}
+		return toolOutcome{}, ctx.Err()
+	}
 	for index := range prepared {
 		entry := &prepared[index]
 		if entry.result != nil {
+			continue
+		}
+		if !entry.descriptor.Parallel {
+			// Mutating calls are executed synchronously in model order. The lock
+			// still fences them against parallel reads, but no scheduler race can
+			// reorder two writes that the model returned as an ordered batch.
+			gate.Lock()
+			r.runPreparedTool(ctx, request, entry)
+			gate.Unlock()
 			continue
 		}
 		if entry.descriptor.Parallel {
 			select {
 			case parallelSlots <- struct{}{}:
 			case <-ctx.Done():
-				return toolOutcome{}, ctx.Err()
+				return recordAfterCancellation()
 			}
 		}
 		wait.Add(1)
-		go func() {
+		go func(entry *preparedCall) {
 			defer wait.Done()
-			if entry.descriptor.Parallel {
-				defer func() { <-parallelSlots }()
-				gate.RLock()
-				defer gate.RUnlock()
-			} else {
-				gate.Lock()
-				defer gate.Unlock()
-			}
+			defer func() { <-parallelSlots }()
+			gate.RLock()
+			defer gate.RUnlock()
 			r.runPreparedTool(ctx, request, entry)
-		}()
+		}(entry)
 	}
 	wait.Wait()
-	limitToolResultBatch(ctx, prepared, r.config.ToolResults, r.deps.Artifacts)
-	return r.recordToolResults(ctx, request, prepared)
+	recordCtx := ctx
+	if ctx.Err() != nil {
+		recordCtx = context.WithoutCancel(ctx)
+	}
+	limitToolResultBatch(recordCtx, prepared, r.config.ToolResults, r.deps.Artifacts)
+	return r.recordToolResults(recordCtx, request, prepared)
 }
 
 // completedToolResults makes replay idempotent at the runtime boundary. Tool

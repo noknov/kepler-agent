@@ -296,6 +296,14 @@ func (r *Runtime) reconcileInterruptedToolCalls(ctx context.Context, request Tur
 
 type modelRequestState struct {
 	RequestID string `json:"request_id"`
+	Attempt   int    `json:"attempt,omitempty"`
+}
+
+func modelRequestKey(state modelRequestState) string {
+	if state.Attempt <= 0 {
+		return state.RequestID
+	}
+	return fmt.Sprintf("%s:attempt:%d", state.RequestID, state.Attempt)
 }
 
 // reconcileInterruptedModelRequests makes the uncertainty caused by a process
@@ -303,7 +311,7 @@ type modelRequestState struct {
 // generation request, so the runtime deliberately does not guess whether the
 // request reached the provider or replay its partial output.
 func (r *Runtime) reconcileInterruptedModelRequests(ctx context.Context, request TurnRequest, events []transcript.Event) error {
-	started := make(map[string]bool)
+	started := make(map[string]modelRequestState)
 	settled := make(map[string]bool)
 	for _, event := range events {
 		if event.TurnID != request.TurnID {
@@ -315,18 +323,22 @@ func (r *Runtime) reconcileInterruptedModelRequests(ctx context.Context, request
 		}
 		switch event.Type {
 		case transcript.ModelRequestStarted:
-			started[state.RequestID] = true
+			started[modelRequestKey(state)] = state
 		case transcript.ModelCompleted, transcript.ModelFailed, transcript.ModelRequestUnknown:
-			settled[state.RequestID] = true
+			settled[modelRequestKey(state)] = true
 		}
 	}
-	for requestID := range started {
-		if settled[requestID] {
+	for key, state := range started {
+		if settled[key] {
 			continue
 		}
-		metadata, _ := json.Marshal(modelRequestState{RequestID: requestID})
+		metadata, _ := json.Marshal(state)
+		unknownID := "model-request-unknown:" + state.RequestID
+		if state.Attempt > 0 {
+			unknownID += fmt.Sprintf(":attempt:%d", state.Attempt)
+		}
 		if _, err := r.record(ctx, transcript.Event{
-			ID: "model-request-unknown:" + requestID, SessionID: request.SessionID, TurnID: request.TurnID,
+			ID: unknownID, SessionID: request.SessionID, TurnID: request.TurnID,
 			Type: transcript.ModelRequestUnknown, Status: "unknown", Error: "model request was in flight when execution was interrupted", Metadata: metadata,
 		}); err != nil {
 			return err
@@ -446,7 +458,7 @@ func (r *Runtime) generateWithTools(ctx context.Context, turn TurnRequest, messa
 	var lastErr error
 	for attempt := 0; attempt <= r.config.MaxModelRetries; attempt++ {
 		metadata, _ := json.Marshal(map[string]any{"request_id": requestID, "attempt": attempt + 1, "model": request.Model})
-		if _, err := r.record(ctx, transcript.Event{ID: "model-request:" + requestID, SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelRequestStarted, Status: "started", Metadata: metadata}); err != nil {
+		if _, err := r.record(ctx, transcript.Event{ID: fmt.Sprintf("model-request:%s:attempt:%d", requestID, attempt+1), SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelRequestStarted, Status: "started", Metadata: metadata}); err != nil {
 			return model.Response{}, err
 		}
 		response, err := r.generateAttempt(ctx, turn, request, attempt+1)
@@ -478,13 +490,20 @@ func (r *Runtime) nextModelRequestID(ctx context.Context, turn TurnRequest) (str
 	if err != nil {
 		return "", err
 	}
-	count := 0
+	seen := make(map[string]bool)
 	for _, event := range events {
-		if event.TurnID == turn.TurnID && event.Type == transcript.ModelRequestStarted {
-			count++
+		if event.TurnID != turn.TurnID || event.Type != transcript.ModelRequestStarted {
+			continue
 		}
+		var state modelRequestState
+		if json.Unmarshal(event.Metadata, &state) == nil && state.RequestID != "" {
+			seen[state.RequestID] = true
+			continue
+		}
+		// Preserve forward progress for legacy events without request metadata.
+		seen[event.ID] = true
 	}
-	return fmt.Sprintf("%s:model:%d", turn.TurnID, count+1), nil
+	return fmt.Sprintf("%s:model:%d", turn.TurnID, len(seen)+1), nil
 }
 
 func (r *Runtime) generateAttempt(ctx context.Context, turn TurnRequest, request model.Request, attempt int) (response model.Response, err error) {

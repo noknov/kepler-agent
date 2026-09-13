@@ -46,10 +46,10 @@ See [tools and connections](tools.md).
 
 ## Review pull requests
 
-Ask for a review and include one to four full GitHub PR URLs. No slash command
-is required. A secondary-model router classifies new conversations; the code
-review workflow validates URLs from the original message. Routing failures
-fall back to general conversation.
+Ask for a review and include one or more GitHub pull request links. No slash
+command is required. A secondary-model router classifies new conversations;
+the code review workflow validates URLs from the original message. Routing
+failures fall back to general conversation.
 
 The workflow instructs the lead to inspect an immutable PR head, assign bounded
 read-only reviewer tasks by risk, verify candidate findings, and return a

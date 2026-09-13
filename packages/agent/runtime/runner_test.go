@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -419,6 +420,43 @@ func TestRunTurnMarksInterruptedModelRequestUnknown(t *testing.T) {
 	t.Fatal("missing unknown outcome for interrupted model request")
 }
 
+func TestRecoveryMarksOnlyInterruptedRetryAttemptUnknown(t *testing.T) {
+	store := transcript.NewMemoryStore()
+	startedOne, _ := json.Marshal(modelRequestState{RequestID: "turn:model:1", Attempt: 1})
+	failedOne, _ := json.Marshal(modelRequestState{RequestID: "turn:model:1", Attempt: 1})
+	startedTwo, _ := json.Marshal(modelRequestState{RequestID: "turn:model:1", Attempt: 2})
+	for _, event := range []transcript.Event{
+		{SessionID: "retry-recovery", TurnID: "turn", Type: transcript.TurnStarted},
+		{ID: "model-request:turn:model:1:attempt:1", SessionID: "retry-recovery", TurnID: "turn", Type: transcript.ModelRequestStarted, Metadata: startedOne},
+		{SessionID: "retry-recovery", TurnID: "turn", Type: transcript.ModelFailed, Metadata: failedOne},
+		{ID: "model-request:turn:model:1:attempt:2", SessionID: "retry-recovery", TurnID: "turn", Type: transcript.ModelRequestStarted, Metadata: startedTwo},
+	} {
+		if _, err := store.Append(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	catalog, _ := tool.NewCatalog()
+	runner, err := New(Config{}, Dependencies{Model: &scriptedModel{}, Tools: catalog, Transcript: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, _ := store.Load(context.Background(), "retry-recovery", 0)
+	if err := runner.reconcileInterruptedModelRequests(context.Background(), TurnRequest{SessionID: "retry-recovery", TurnID: "turn"}, events); err != nil {
+		t.Fatal(err)
+	}
+	events, _ = store.Load(context.Background(), "retry-recovery", 0)
+	for _, event := range events {
+		if event.Type != transcript.ModelRequestUnknown {
+			continue
+		}
+		var state modelRequestState
+		if json.Unmarshal(event.Metadata, &state) == nil && state.Attempt == 2 {
+			return
+		}
+	}
+	t.Fatal("missing unknown outcome for interrupted retry attempt")
+}
+
 func TestRunTurnDoesNotReplayInterruptedToolCall(t *testing.T) {
 	store := transcript.NewMemoryStore()
 	call := tool.Call{ID: "write-1", Name: "write", Arguments: json.RawMessage(`{}`), Scope: tool.Scope{SessionID: "recovery", TurnID: "turn-1"}}
@@ -782,16 +820,78 @@ func TestRunTurnBoundsParallelToolCalls(t *testing.T) {
 	}
 }
 
+func TestExecuteToolsJoinsStartedWorkersBeforeReturningCancellation(t *testing.T) {
+	started := make(chan string, 3)
+	release := make(chan struct{})
+	catalog, _ := tool.NewCatalog(
+		parallelProbeTool{name: "a", started: started, release: release},
+		parallelProbeTool{name: "b", started: started, release: release},
+		parallelProbeTool{name: "c", started: started, release: release},
+	)
+	store := transcript.NewMemoryStore()
+	runner, err := New(Config{MaxParallelToolCalls: 2}, Dependencies{
+		Model: &scriptedModel{}, Tools: catalog, Policy: tool.AllowAllPolicy{}, Transcript: store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	calls := []model.ToolCall{
+		{ID: "a", Name: "a", Arguments: json.RawMessage(`{}`)},
+		{ID: "b", Name: "b", Arguments: json.RawMessage(`{}`)},
+		{ID: "c", Name: "c", Arguments: json.RawMessage(`{}`)},
+	}
+	go func() {
+		_, err := runner.executeTools(ctx, TurnRequest{SessionID: "cancel-tools", TurnID: "turn"}, calls)
+		done <- err
+	}()
+	<-started
+	<-started
+	cancel()
+	select {
+	case <-done:
+		t.Fatal("executeTools returned before started workers were joined")
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error=%v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("executeTools did not finish after workers were released")
+	}
+	events, _ := store.Load(context.Background(), "cancel-tools", 0)
+	var results int
+	for _, event := range events {
+		if event.Type == transcript.ToolCallCompleted || event.Type == transcript.ToolCallFailed {
+			results++
+		}
+	}
+	if results != 3 {
+		t.Fatalf("tool results=%d, want 3; events=%+v", results, events)
+	}
+}
+
 type serialProbeTool struct {
 	name     string
 	inflight *int32
 	overlap  *int32
+	order    *[]string
+	orderMu  *sync.Mutex
 }
 
 func (t serialProbeTool) Descriptor() tool.Descriptor {
 	return tool.Descriptor{Name: t.name, InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []tool.Effect{tool.EffectWorkspaceWrite}}
 }
 func (t serialProbeTool) Execute(context.Context, tool.Call) (tool.Result, error) {
+	if t.order != nil && t.orderMu != nil {
+		t.orderMu.Lock()
+		*t.order = append(*t.order, t.name)
+		t.orderMu.Unlock()
+	}
 	n := atomic.AddInt32(t.inflight, 1)
 	if n != 1 {
 		atomic.AddInt32(t.overlap, 1)
@@ -820,6 +920,30 @@ func TestRunTurnSerializesMutatingTools(t *testing.T) {
 	}
 	if overlap != 0 {
 		t.Fatalf("mutating tools overlapped %d times", overlap)
+	}
+}
+
+func TestRunTurnPreservesMutatingToolOrder(t *testing.T) {
+	var order []string
+	var orderMu sync.Mutex
+	var inflight, overlap int32
+	call := func(id, name string) model.Content {
+		return model.Content{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: id, Name: name, Arguments: json.RawMessage(`{}`)}}
+	}
+	client := &scriptedModel{responses: []model.Response{
+		{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{call("1", "w1"), call("2", "w2")}}, FinishReason: model.FinishToolCalls},
+		{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop},
+	}}
+	catalog, _ := tool.NewCatalog(
+		serialProbeTool{name: "w1", inflight: &inflight, overlap: &overlap, order: &order, orderMu: &orderMu},
+		serialProbeTool{name: "w2", inflight: &inflight, overlap: &overlap, order: &order, orderMu: &orderMu},
+	)
+	runner, _ := New(Config{}, Dependencies{Model: client, Tools: catalog, Policy: tool.AllowAllPolicy{}, Transcript: transcript.NewMemoryStore()})
+	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "serial-order", Input: model.TextMessage(model.RoleUser, "run")}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(order, []string{"w1", "w2"}) {
+		t.Fatalf("execution order=%v, want [w1 w2]", order)
 	}
 }
 

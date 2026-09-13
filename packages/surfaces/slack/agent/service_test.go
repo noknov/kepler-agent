@@ -197,7 +197,7 @@ func TestServiceRoutesCodeReviewIntentToDedicatedWorkflow(t *testing.T) {
 	messenger := &fakeMessenger{}
 	service := New(hosted.Agent{}, messenger, safety.PromptPolicy{}, safety.Redactor{}, nil)
 	service.Workflows = codeReviewWorkflows()
-	service.IntentRouter = &fixedIntentRouter{decision: workflows.RouteDecision{Intent: codereview.WorkflowName, Inputs: map[string]string{codereview.InputMode: "deep"}}}
+	service.IntentRouter = &fixedIntentRouter{decision: workflows.RouteDecision{Intent: codereview.WorkflowName}}
 	client := &replyModel{}
 	runner, err := agentruntime.New(agentruntime.Config{Model: "test"}, agentruntime.Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore(), Events: service.EventSink()})
 	if err != nil {
@@ -206,7 +206,7 @@ func TestServiceRoutesCodeReviewIntentToDedicatedWorkflow(t *testing.T) {
 	service.Agent.Runtime = runner
 	_, err = service.HandleMention(context.Background(), slackconversation.Request{
 		EventID: "review-1", UserID: "U1", Channel: "C1", ThreadTS: "T1",
-		Text: "Deep review https://github.com/acme/widgets/pull/42",
+		Text: "Review https://github.com/acme/widgets/pull/42",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -215,7 +215,7 @@ func TestServiceRoutesCodeReviewIntentToDedicatedWorkflow(t *testing.T) {
 		t.Fatal("model did not receive request")
 	}
 	system := client.request.Messages[0].Text()
-	for _, want := range []string{"dedicated multi-agent pull-request review workflow", "targeted verification", "Requested review mode: deep"} {
+	for _, want := range []string{"dedicated multi-agent pull-request review workflow", "targeted verification", "Parsed PR URLs:"} {
 		if !strings.Contains(system, want) {
 			t.Fatalf("review system prompt missing %q", want)
 		}
@@ -233,7 +233,7 @@ func TestSlackIntentRouterActivatesCodeReviewFromUserMessage(t *testing.T) {
 	messenger := &fakeMessenger{}
 	service := New(hosted.Agent{}, messenger, safety.PromptPolicy{}, safety.Redactor{}, nil)
 	service.Workflows = codeReviewWorkflows()
-	router := &fixedIntentRouter{decision: workflows.RouteDecision{Intent: codereview.WorkflowName, Inputs: map[string]string{codereview.InputMode: "deep"}}}
+	router := &fixedIntentRouter{decision: workflows.RouteDecision{Intent: codereview.WorkflowName}}
 	service.IntentRouter = router
 	client := &replyModel{}
 	runner, err := agentruntime.New(agentruntime.Config{Model: "primary"}, agentruntime.Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore(), Events: service.EventSink()})
@@ -244,12 +244,12 @@ func TestSlackIntentRouterActivatesCodeReviewFromUserMessage(t *testing.T) {
 
 	accepted, err := service.HandleMention(context.Background(), slackconversation.Request{
 		EventID: "review-routed", UserID: "U1", Channel: "C1", ThreadTS: "T1",
-		Text: "请 deep review https://github.com/acme/widgets/pull/42",
+		Text: "请 review https://github.com/acme/widgets/pull/42",
 	})
 	if err != nil || !accepted {
 		t.Fatalf("accepted=%v err=%v", accepted, err)
 	}
-	if client.request == nil || !strings.Contains(client.request.Messages[0].Text(), "Requested review mode: deep") {
+	if client.request == nil || !strings.Contains(client.request.Messages[0].Text(), "Parsed PR URLs:") {
 		t.Fatalf("request=%+v", client.request)
 	}
 	if router.request.SessionID == "" {
@@ -262,13 +262,13 @@ func TestCodeReviewThreadReplyContinuesDurableWorkflowWithoutMention(t *testing.
 	messenger := &fakeMessenger{}
 	service := New(hosted.Agent{}, messenger, safety.PromptPolicy{}, safety.Redactor{}, nil)
 	service.Workflows = codeReviewWorkflows()
-	service.IntentRouter = &fixedIntentRouter{decision: workflows.RouteDecision{Intent: codereview.WorkflowName, Inputs: map[string]string{codereview.InputMode: "deep"}}}
+	service.IntentRouter = &fixedIntentRouter{decision: workflows.RouteDecision{Intent: codereview.WorkflowName}}
 	client := &replyModel{}
 	runner, _ := agentruntime.New(agentruntime.Config{Model: "test"}, agentruntime.Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore(), Events: service.EventSink()})
 	service.Agent.Runtime = runner
 
 	request := slackconversation.Request{
-		EventID: "review", UserID: "U1", Channel: "C1", ThreadTS: "T1", Text: "Deep review https://github.com/acme/widgets/pull/42",
+		EventID: "review", UserID: "U1", Channel: "C1", ThreadTS: "T1", Text: "Review https://github.com/acme/widgets/pull/42",
 	}
 	if accepted, err := service.HandleMention(context.Background(), request); err != nil || !accepted {
 		t.Fatalf("initial accepted=%v err=%v", accepted, err)

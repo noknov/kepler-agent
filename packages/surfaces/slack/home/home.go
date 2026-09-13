@@ -167,7 +167,7 @@ func (c Controller) View(userID string) map[string]any {
 	blocks = append(blocks,
 		dividerBlock(),
 		headerBlock(":sparkles: Capabilities"),
-		sectionBlock("*Code Review*\nReview one to four GitHub pull requests with a multi-agent workflow."),
+		sectionBlock("*Code Review*\nReview GitHub pull requests with a multi-agent workflow."),
 	)
 
 	return map[string]any{

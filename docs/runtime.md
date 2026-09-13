@@ -121,9 +121,10 @@ slot, so queueing cannot consume its model retry budget before it starts.
 Slack uses the configured secondary model as a small semantic router for new
 conversations. The router returns a validated `general|code_review` decision;
 it has no tools and never uses keyword or regular-expression intent matching.
-Code Review then extracts and validates one to four GitHub PR URLs from the
-original message and accepts an optional `fast|standard|deep` mode. Routing
-failures fall back to general conversation. CLI, app-server, and other surfaces
+Code Review then extracts and validates GitHub PR URLs from the original
+message. The coordinator uses a bounded multi-agent workflow and keeps every
+listed PR in the review scope; there is no user-facing review-depth selector.
+Routing failures fall back to general conversation. CLI, app-server, and other surfaces
 do not install this Slack product router and remain generic.
 The ordinary hosted agent becomes the coordinator and uses the same runtime to
 triage an immutable GitHub PR head, launch a bounded risk-based reviewer batch,

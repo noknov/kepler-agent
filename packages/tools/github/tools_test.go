@@ -57,12 +57,10 @@ func TestPRDiffStoresReviewContextAndIndexesFiles(t *testing.T) {
 			}
 			return response(http.StatusOK, `{"type":"file","encoding":"base64","content":"bmV3Cm5leHQK"}`), nil
 		}
-		switch r.Header.Get("Accept") {
-		case "application/vnd.github.diff":
-			return response(http.StatusOK, "diff --git a/src/a.ts b/src/a.ts\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/src/b.ts b/src/b.ts\n@@ -4,0 +5 @@\n+added\n"), nil
-		default:
-			return response(http.StatusOK, `{"title":"Review me","state":"open","commits":1,"head":{"ref":"feature/pr","sha":"0123456789abcdef"},"base":{"ref":"main"}}`), nil
+		if r.URL.Path == "/repos/example/repo/pulls/42/files" {
+			return response(http.StatusOK, `[{"filename":"src/a.ts","status":"modified","additions":1,"deletions":1,"changes":2,"patch":"@@ -1 +1 @@\n-old\n+new"},{"filename":"src/b.ts","status":"modified","additions":1,"deletions":0,"changes":1,"patch":"@@ -4,0 +5 @@\n+added"}]`), nil
 		}
+		return response(http.StatusOK, `{"title":"Review me","state":"open","commits":1,"head":{"ref":"feature/pr","sha":"0123456789abcdef"},"base":{"ref":"main"}}`), nil
 	})
 	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
 	tool := PRDiffTool{Client: testClient("example", "repo", transport)}
@@ -94,15 +92,13 @@ func TestPRDiffUsesPullURLInsteadOfDefaultRepository(t *testing.T) {
 	seenPaths := map[string]int{}
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		seenPaths[r.URL.Path]++
-		if !strings.HasPrefix(r.URL.Path, "/repos/ClareAI/wati-workflow-service/pulls/63") {
+		if r.URL.Path == "/repos/ClareAI/wati-workflow-service/pulls/63/files" {
+			return response(http.StatusOK, `[{"filename":"service.go","status":"modified","additions":1,"deletions":1,"changes":2,"patch":"@@ -1 +1 @@\n-old\n+new"}]`), nil
+		}
+		if r.URL.Path != "/repos/ClareAI/wati-workflow-service/pulls/63" {
 			t.Fatalf("unexpected path = %q", r.URL.Path)
 		}
-		switch r.Header.Get("Accept") {
-		case "application/vnd.github.diff":
-			return response(http.StatusOK, "diff --git a/service.go b/service.go\n@@ -1 +1 @@\n-old\n+new\n"), nil
-		default:
-			return response(http.StatusOK, `{"title":"Review me","state":"open","commits":1,"head":{"ref":"feature/pr","sha":"0123456789abcdef"},"base":{"ref":"main"}}`), nil
-		}
+		return response(http.StatusOK, `{"title":"Review me","state":"open","commits":1,"head":{"ref":"feature/pr","sha":"0123456789abcdef"},"base":{"ref":"main"}}`), nil
 	})
 	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
 	tool := PRDiffTool{Client: testClient("ClareAI", "devops-github-workflow", transport)}
@@ -113,8 +109,41 @@ func TestPRDiffUsesPullURLInsteadOfDefaultRepository(t *testing.T) {
 	if !strings.Contains(result.Text(), "repository=ClareAI/wati-workflow-service") || !strings.Contains(result.Text(), "pr=63") {
 		t.Fatalf("result = %q", result.Text())
 	}
-	if seenPaths["/repos/ClareAI/wati-workflow-service/pulls/63"] != 2 {
+	if seenPaths["/repos/ClareAI/wati-workflow-service/pulls/63"] != 1 || seenPaths["/repos/ClareAI/wati-workflow-service/pulls/63/files"] != 1 {
 		t.Fatalf("seen paths = %#v", seenPaths)
+	}
+}
+
+func TestPRDiffPaginatesCompleteChangedFileManifest(t *testing.T) {
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/repos/example/repo/pulls/9":
+			return response(http.StatusOK, `{"title":"Large review","state":"open","commits":1,"head":{"ref":"feature","sha":"sha-9"},"base":{"ref":"main"}}`), nil
+		case "/repos/example/repo/pulls/9/files":
+			if r.URL.Query().Get("per_page") != "100" {
+				t.Fatalf("per_page=%q", r.URL.Query().Get("per_page"))
+			}
+			if r.URL.Query().Get("page") == "1" {
+				files := make([]string, 0, 100)
+				for i := 0; i < 100; i++ {
+					files = append(files, fmt.Sprintf(`{"filename":"pkg/file-%d.go","status":"modified","additions":1,"deletions":0,"changes":1,"patch":"@@ -1 +1 @@\n-old\n+new"}`, i))
+				}
+				return response(http.StatusOK, "["+strings.Join(files, ",")+"]"), nil
+			}
+			return response(http.StatusOK, `[{"filename":"pkg/file-100.go","status":"modified","additions":1,"deletions":0,"changes":1,"patch":"@@ -1 +1 @@\n-old\n+new"}]`), nil
+		default:
+			t.Fatalf("unexpected path=%q", r.URL.Path)
+			return nil, nil
+		}
+	})
+	result, err := (PRDiffTool{Client: testClient("example", "repo", transport)}).Execute(context.Background(), agenttool.Call{
+		Arguments: json.RawMessage(`{"pr":9}`), Scope: agenttool.Scope{SessionID: "large", TurnID: "turn"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Text(), "Changed files (101)") || !strings.Contains(result.Text(), "pkg/file-100.go") {
+		t.Fatalf("manifest=%q", result.Text())
 	}
 }
 
@@ -446,6 +475,31 @@ func TestJobLogsTool_Pagination(t *testing.T) {
 	}
 	if !strings.Contains(result.Text(), "log line 1") {
 		t.Fatal("should contain first line")
+	}
+}
+
+func TestPRFileDiffPaginatesLargePatch(t *testing.T) {
+	scope := agenttool.Scope{SessionID: "paged", TurnID: "turn"}
+	setPRDiffContext(scope, prDiffContext{
+		Repository: "example/repo", Number: 12, HeadSHA: "sha-12", ChangedFiles: []string{"large.go"},
+		Files: map[string]pullRequestFile{
+			"large.go": {Path: "large.go", Status: "modified", Patch: "@@ -1 +1 @@\n-old\n+new"},
+		},
+	})
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/repos/example/repo/contents/large.go" {
+			t.Fatalf("unexpected path=%q", r.URL.Path)
+		}
+		return response(http.StatusOK, `{"type":"file","encoding":"base64","content":"bmV3Cg=="}`), nil
+	})
+	result, err := (PRFileDiffTool{Client: testClient("example", "repo", transport)}).Execute(context.Background(), agenttool.Call{
+		Arguments: json.RawMessage(`{"path":"large.go","start_line":3,"max_lines":2}`), Scope: scope,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Text(), "patch lines 3-4 of 4") || !strings.Contains(result.Text(), "-old\n+new") {
+		t.Fatalf("paged diff=%q", result.Text())
 	}
 }
 

@@ -71,7 +71,7 @@ func TestViewShowsModelDisplayNamesWithoutCodeFormatting(t *testing.T) {
 	if !strings.Contains(body, "Explorer Model") {
 		t.Fatalf("expected explorer model label, got %s", body)
 	}
-	if !strings.Contains(body, "Capabilities") || !strings.Contains(body, "Code Review") || !strings.Contains(body, "Review one to four GitHub pull requests with a multi-agent workflow.") {
+	if !strings.Contains(body, "Capabilities") || !strings.Contains(body, "Code Review") || !strings.Contains(body, "Review GitHub pull requests with a multi-agent workflow.") {
 		t.Fatalf("expected conversational code review capability, got %s", body)
 	}
 	if strings.Contains(body, "secondary model") || strings.Contains(body, "ordinary questions remain") {
