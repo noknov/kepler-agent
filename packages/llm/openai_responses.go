@@ -239,7 +239,10 @@ func (c *OpenAIResponsesClient) responsesBody(req Request, stream bool) map[stri
 		"model": req.Model,
 		"input": responsesInput(req.Messages),
 	}
-	if req.Temperature != nil {
+	// OpenCode Go's Responses-backed reasoning models reject sampling
+	// temperature. Keep that provider-specific constraint at the wire
+	// boundary instead of making every caller know the upstream quirk.
+	if req.Temperature != nil && !strings.EqualFold(strings.TrimSpace(c.provider), "opencode-go") {
 		body["temperature"] = *req.Temperature
 	}
 	if stream {

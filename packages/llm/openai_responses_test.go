@@ -37,6 +37,16 @@ func TestOpenAIResponsesClientOmitsUnsetTemperature(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponsesBodyKeepsTemperatureForGenericProvider(t *testing.T) {
+	body := (&OpenAIResponsesClient{provider: "openai"}).responsesBody(Request{
+		Model:       "gpt-4.1",
+		Temperature: float64Ptr(0.2),
+	}, false)
+	if got := body["temperature"]; got != 0.2 {
+		t.Fatalf("temperature = %v, want 0.2", got)
+	}
+}
+
 func TestOpenAIResponsesClientPostsResponsesBody(t *testing.T) {
 	var gotPath string
 	var gotBody map[string]any
@@ -101,8 +111,8 @@ func TestOpenAIResponsesClientPostsResponsesBody(t *testing.T) {
 	if gotBody["max_output_tokens"].(float64) != 123 {
 		t.Fatalf("max_output_tokens = %v", gotBody["max_output_tokens"])
 	}
-	if gotBody["temperature"].(float64) != 0.2 {
-		t.Fatalf("temperature = %v, want 0.2", gotBody["temperature"])
+	if _, ok := gotBody["temperature"]; ok {
+		t.Fatalf("temperature = %v, want omitted for opencode-go Responses", gotBody["temperature"])
 	}
 	input := gotBody["input"].([]any)
 	user := input[1].(map[string]any)
