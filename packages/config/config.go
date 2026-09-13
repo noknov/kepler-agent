@@ -38,7 +38,7 @@ type WebConfig struct {
 }
 
 // StorageConfig owns all durable operational state for sessions, runs, inbox,
-// and reminders.
+// and event delivery.
 type StorageConfig struct {
 	PostgresDSN string
 	RedisURL    string
@@ -387,7 +387,7 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			AgentExploreWorkerTimeout: envDuration("AGENT_EXPLORE_WORKER_TIMEOUT", 0),
 			AgentExploreBatchTimeout:  envDuration("AGENT_EXPLORE_BATCH_TIMEOUT", 0),
 			AllowedWriteTools: envCSVDefault("AGENT_ALLOWED_WRITE_TOOLS", []string{
-				"luckin-cancel_order", "luckin-create_order", "reminder-create", "reminder-cancel", "slack-create_canvas", "slack-user_post_message", "tts-speak",
+				"luckin-cancel_order", "luckin-create_order", "slack-create_canvas", "slack-user_post_message", "tts-speak",
 			}),
 		},
 		Integrations: loadIntegrations(),
@@ -536,7 +536,7 @@ func validateForProfile(cfg Config, profile RuntimeProfile) (Config, error) {
 		seenWriteTools[name] = true
 	}
 	if cfg.Storage.PostgresDSN == "" {
-		return cfg, fmt.Errorf("POSTGRES_DSN is required for durable session, event, run, and reminder storage")
+		return cfg, fmt.Errorf("POSTGRES_DSN is required for durable session, event, and run storage")
 	}
 	if cfg.Storage.RedisURL == "" {
 		return cfg, fmt.Errorf("REDIS_URL is required for cross-instance caching and event pub/sub")

@@ -26,7 +26,6 @@ import (
 	"github.com/noknov/kepler-agent/packages/platform"
 	"github.com/noknov/kepler-agent/packages/profiles/hosted"
 	"github.com/noknov/kepler-agent/packages/prompts"
-	"github.com/noknov/kepler-agent/packages/reminder"
 	"github.com/noknov/kepler-agent/packages/safety"
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/agent"
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
@@ -51,7 +50,6 @@ type Service struct {
 	slack            *slack.Client
 	metrics          *observability.Recorder
 	health           *health.Service
-	reminders        reminder.Scheduler
 	conv             slackconversation.ControlledConversation
 	handler          *slackhandler.Handler
 	slackWorker      *slackevents.Worker
@@ -184,15 +182,14 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	connService := connections.NewServiceFromConfig(connStore, cfg)
 	connService.Continuations = continuations
 	surface := hostedTools.SurfaceOptions{Name: "slack", AvailableDeps: map[string]bool{
-		"slack":    slackClient != nil,
-		"reminder": stores.Reminders != nil,
+		"slack": slackClient != nil,
 	}, Connections: &connService}
 	bundle, err := hostedTools.NewCatalog(cfg, workspacePolicy, safety.NewCommandPolicy(), stores.UserPrefs, surface)
 	if err != nil {
 		return nil, fmt.Errorf("build hosted tool catalog: %w", err)
 	}
 	catalog := bundle.Catalog
-	if err := slackTools.AddToCatalog(catalog, hostedTools.PolicyForSurface(cfg, surface), cfg, slackClient, stores.Reminders, stores.Redis, &connService); err != nil {
+	if err := slackTools.AddToCatalog(catalog, hostedTools.PolicyForSurface(cfg, surface), cfg, slackClient, &connService); err != nil {
 		return nil, fmt.Errorf("register Slack tools: %w", err)
 	}
 	profile, profileErr := hosted.NewProfile(cfg, hosted.ProfileDependencies{
@@ -356,7 +353,6 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		slack:            slackClient,
 		metrics:          recorder,
 		health:           healthService,
-		reminders:        reminder.Scheduler{Store: stores.Reminders, Messenger: slackmessaging.BotUserMessenger{Client: slackClient}, Redis: stores.Redis},
 		conv:             conv,
 		handler:          handler,
 		ctx:              serviceCtx,
@@ -410,9 +406,6 @@ func (s *Service) StartBackground() {
 	}
 	s.Go(s.recoverRunProjections)
 	s.Go(s.pruneEphemeralData)
-	s.Go(func(ctx context.Context) {
-		s.reminders.Start(ctx)
-	})
 	s.Go(func(ctx context.Context) {
 		s.conv.StartControlSubscriber(ctx)
 	})

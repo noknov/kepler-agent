@@ -13,25 +13,23 @@ experiments. It does not currently provide a verified end-to-end release gate.
 
 ## Current compatibility and trust limits
 
-The current CLI uses gateway login/bootstrap and does not accept the direct
-provider/model flags still present in `candidates.example.json` and the Harbor
-adapter. Match the adapter to its source revision or update and verify it
-before launching a paid run. The commands below describe evaluator interfaces;
-a dry-run does not validate candidate flags or authentication.
+The current CLI uses gateway login/bootstrap. Set `EVAL_KEPLER_API_URL` and
+`KEPLER_TOKEN` for its candidate; the selected model comes from the gateway's
+authenticated bootstrap response. Confirm that response matches the model used
+by other candidates before comparing results. A dry-run does not validate
+candidate flags, authentication, or model routing.
 
 The local runner copies a workspace and HOME but does not supply an OS isolation
-boundary for arbitrary Agent/grader code. Its grader executes inside the
-Agent-modifiable workspace and inherits the runner environment. Do not treat
-that pass result as independent verification, or run untrusted cases with
-privileged host credentials. Public datasets must remain in Harbor's native
-execution path; these local-runner limitations are not findings about Harbor's
-grader.
+boundary for arbitrary Agent/grader code. The grader gets a separate copy with
+declared protected files restored and a credential-free environment, but both
+processes still execute on the host. Do not run untrusted cases with privileged
+host access. Public datasets must remain in Harbor's native execution path.
 
-The gate currently lacks complete validation for empty/malformed reports,
-non-finite metrics, missing baseline candidates, compatible task identity, and
-minimum coverage. Treat its thresholds as one check rather than a complete
-release authorization. Capability skips change the eligible denominator.
-Always inspect actual task coverage, failures, and experiment identity.
+The gate verifies run completion, non-dry-run artifacts, finite metrics,
+compatible baseline identity, candidate presence, and minimum coverage. It
+still cannot prove dataset validity, model parity, or absence of contamination.
+Capability skips change the eligible denominator, so keep the default full
+coverage requirement unless a reviewed profile requires otherwise.
 
 ## Reading order
 
@@ -71,7 +69,11 @@ python3 evals/run.py \
   --dry-run
 ```
 
-Set `EVAL_OPENAI_BASE_URL` and `EVAL_ANTHROPIC_BASE_URL` to the same gateway. The example candidate configuration describes the older direct-provider CLI path. It must be updated or paired with a compatible revision before use with the current gateway-backed CLI. Each candidate command receives `EVAL_MODEL`, `OPENAI_MODEL`, and `ANTHROPIC_MODEL`. Run `python3 evals/run.py --help` for filtering, repetitions, and dry-run options.
+Set `EVAL_OPENAI_BASE_URL` and `EVAL_ANTHROPIC_BASE_URL` for direct-provider
+candidates. For kepler-agent, set `EVAL_KEPLER_API_URL` and `KEPLER_TOKEN`;
+the secret is passed only through the child environment and is not written to
+the manifest. Each candidate also receives `EVAL_MODEL`, `OPENAI_MODEL`, and
+`ANTHROPIC_MODEL`. Run `python3 evals/run.py --help` for filters and repetitions.
 
 Task filters are composable:
 

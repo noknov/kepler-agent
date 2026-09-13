@@ -83,8 +83,8 @@ func TestSearchToolPrioritizesExactToolNameMatches(t *testing.T) {
 }
 
 func TestSearchToolExpandsCommonChineseCapabilityTerms(t *testing.T) {
-	tokens := strings.Join(queryTokens("搜索文档并创建提醒"), " ")
-	for _, want := range []string{"search", "document", "create", "reminder"} {
+	tokens := strings.Join(queryTokens("搜索文档并创建邮件"), " ")
+	for _, want := range []string{"search", "document", "create", "email"} {
 		if !strings.Contains(tokens, want) {
 			t.Fatalf("tokens=%q missing %q", tokens, want)
 		}

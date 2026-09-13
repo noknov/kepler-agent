@@ -111,26 +111,6 @@ CREATE INDEX IF NOT EXISTS idx_agent_transcript_events_turn
     ON agent_transcript_events(turn_id, sequence)
     WHERE turn_id <> '';
 
-CREATE TABLE IF NOT EXISTS reminders (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    channel TEXT NOT NULL,
-    thread_ts TEXT NOT NULL DEFAULT '',
-    message TEXT NOT NULL,
-    run_at TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    sent_at TIMESTAMPTZ,
-    claim_until TIMESTAMPTZ,
-    claim_owner TEXT NOT NULL DEFAULT ''
-);
-
-ALTER TABLE reminders ADD COLUMN IF NOT EXISTS claim_owner TEXT NOT NULL DEFAULT '';
-
-CREATE INDEX IF NOT EXISTS idx_reminders_due
-    ON reminders(run_at) WHERE sent_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_reminders_user_pending
-    ON reminders(user_id, run_at) WHERE sent_at IS NULL;
-
 CREATE TABLE IF NOT EXISTS slack_event_inbox (
     event_id TEXT PRIMARY KEY,
     payload JSONB NOT NULL,

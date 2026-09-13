@@ -143,6 +143,24 @@ class EvaluatorTests(unittest.TestCase):
             finally: os.environ.pop("KEPLER_SYNTHETIC_SECRET", None)
             self.assertEqual(record["status"], "passed")
 
+    def test_candidate_environment_passes_explicit_kepler_credentials(self) -> None:
+        candidate = runner.Candidate("kepler", ["true"], {}, {}, "model", [], frozenset())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old_url = os.environ.get("EVAL_KEPLER_API_URL")
+            old_token = os.environ.get("KEPLER_TOKEN")
+            os.environ["EVAL_KEPLER_API_URL"] = "https://gateway.example"
+            os.environ["KEPLER_TOKEN"] = "test-token"
+            try:
+                env = runner.clean_environment(candidate, "model", root, root / "home", {})
+            finally:
+                if old_url is None: os.environ.pop("EVAL_KEPLER_API_URL", None)
+                else: os.environ["EVAL_KEPLER_API_URL"] = old_url
+                if old_token is None: os.environ.pop("KEPLER_TOKEN", None)
+                else: os.environ["KEPLER_TOKEN"] = old_token
+            self.assertEqual(env["KEPLER_API_URL"], "https://gateway.example")
+            self.assertEqual(env["KEPLER_TOKEN"], "test-token")
+
     def test_gate_rejects_non_finite_metrics_and_low_coverage(self) -> None:
         invalid = {"total": 1, "eligible": 1, "passed": 1, "timeout": 0, "weighted_pass_rate": float("nan"), "p95_duration_seconds": 1}
         self.assertTrue(gate.violation("a", invalid, 0, 1, None))

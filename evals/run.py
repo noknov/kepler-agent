@@ -195,13 +195,17 @@ def render(value: str, mapping: dict[str, str]) -> str:
 def clean_environment(candidate: Candidate, model: str, workspace: Path, home: Path, mapping: dict[str, str]) -> dict[str, str]:
     allowed = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TERM", "SSL_CERT_FILE", "SSL_CERT_DIR")
     env = {key: value for key, value in os.environ.items() if key in allowed and key != "HOME"}
-    passthrough = ("EVAL_OPENAI_BASE_URL", "EVAL_ANTHROPIC_BASE_URL", "OPENAI_API_KEY", "ANTHROPIC_API_KEY")
+    passthrough = (
+        "EVAL_OPENAI_BASE_URL", "EVAL_ANTHROPIC_BASE_URL", "EVAL_KEPLER_API_URL",
+        "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "KEPLER_TOKEN",
+    )
     for key in passthrough:
         if key in os.environ: env[key] = os.environ[key]
     env.update({
         "EVAL_MODEL": model, "OPENAI_MODEL": model, "ANTHROPIC_MODEL": model,
         "OPENAI_BASE_URL": os.environ.get("EVAL_OPENAI_BASE_URL", ""),
         "ANTHROPIC_BASE_URL": os.environ.get("EVAL_ANTHROPIC_BASE_URL", ""),
+        "KEPLER_API_URL": os.environ.get("EVAL_KEPLER_API_URL", ""),
         "EVAL_WORKSPACE": str(workspace),
         "HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"),
         "XDG_DATA_HOME": str(home / ".local" / "share"), "XDG_STATE_HOME": str(home / ".local" / "state"),

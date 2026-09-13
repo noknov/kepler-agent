@@ -61,8 +61,14 @@ func (p BoundedProjector) Project(_ context.Context, events []transcript.Event, 
 	var baseSequence uint64
 	for _, event := range events {
 		if event.Type == transcript.CompactionCreated && event.Message != nil {
+			coverage := compactionCoverage(event)
+			// A corrupt or legacy compaction without an explicit, backward-only
+			// coverage boundary must never hide transcript events.
+			if coverage == 0 || coverage >= event.Sequence {
+				continue
+			}
 			base = &projectedMessage{sequence: event.Sequence, message: *event.Message}
-			baseSequence = compactionCoverage(event)
+			baseSequence = coverage
 		}
 	}
 	entries := make([]projectedMessage, 0, len(events)+1)

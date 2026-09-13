@@ -225,7 +225,7 @@ func queryTokens(query string) []string {
 	lower := strings.ToLower(query)
 	aliases := map[string][]string{
 		"搜索": {"search"}, "查找": {"search"}, "文档": {"document"}, "页面": {"page"},
-		"邮件": {"email"}, "日历": {"calendar"}, "提醒": {"reminder"}, "数据库": {"database"},
+		"邮件": {"email"}, "日历": {"calendar"}, "数据库": {"database"},
 		"日志": {"logs"}, "监控": {"metrics"}, "部署": {"deploy"}, "云": {"cloud"},
 		"创建": {"create"}, "更新": {"update"}, "删除": {"delete"},
 	}

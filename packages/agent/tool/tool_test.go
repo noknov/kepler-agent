@@ -94,13 +94,13 @@ func TestRegistrationRetainsFirstCatalogError(t *testing.T) {
 
 func TestBindSurfaceAddsPresentationMetadata(t *testing.T) {
 	bound := BindSurface(fakeTool{descriptor: Descriptor{
-		Name:    "reminder-create",
+		Name:    "canvas-create",
 		Effects: []Effect{EffectExternalWrite, EffectNetwork},
-	}}, "slack", "reminder").Descriptor()
+	}}, "slack", "canvas").Descriptor()
 	if len(bound.Surfaces) != 1 || bound.Surfaces[0] != "slack" {
 		t.Fatalf("surfaces=%v", bound.Surfaces)
 	}
-	if len(bound.Dependencies) != 2 || bound.Dependencies[0] != "slack" || bound.Dependencies[1] != "reminder" {
+	if len(bound.Dependencies) != 2 || bound.Dependencies[0] != "slack" || bound.Dependencies[1] != "canvas" {
 		t.Fatalf("dependencies=%v", bound.Dependencies)
 	}
 }

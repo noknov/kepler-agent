@@ -15,10 +15,11 @@ func NewPGStore(pool *pgxpool.Pool) *PGStore { return &PGStore{pool: pool} }
 
 func (s *PGStore) GetSettings(ctx context.Context, userID string) (Settings, error) {
 	var out Settings
-	err := s.pool.QueryRow(ctx, `
-INSERT INTO user_settings (user_id) VALUES ($1)
-ON CONFLICT (user_id) DO UPDATE SET user_id=EXCLUDED.user_id
-RETURNING user_id, web_search_enabled, updated_at`, userID).Scan(&out.UserID, &out.WebSearchEnabled, &out.UpdatedAt)
+	if _, err := s.pool.Exec(ctx, `INSERT INTO user_settings (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, userID); err != nil {
+		return out, err
+	}
+	err := s.pool.QueryRow(ctx, `SELECT user_id, web_search_enabled, updated_at FROM user_settings WHERE user_id=$1`, userID).
+		Scan(&out.UserID, &out.WebSearchEnabled, &out.UpdatedAt)
 	return out, err
 }
 
@@ -69,6 +70,8 @@ ON CONFLICT (id) DO UPDATE SET
  source_file_id=EXCLUDED.source_file_id,
  active=TRUE,
  updated_at=EXCLUDED.updated_at
+WHERE user_prompt_assets.user_id=EXCLUDED.user_id
+  AND user_prompt_assets.kind=EXCLUDED.kind
 RETURNING id, user_id, kind, name, description, content, source_file_id, active, created_at, updated_at`,
 		asset.ID, asset.UserID, string(asset.Kind), asset.Name, asset.Description, asset.Content, asset.SourceFileID, now,
 	).Scan(&asset.ID, &asset.UserID, &kindText, &asset.Name, &asset.Description, &asset.Content, &asset.SourceFileID, &asset.Active, &asset.CreatedAt, &asset.UpdatedAt)

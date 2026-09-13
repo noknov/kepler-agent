@@ -25,6 +25,7 @@ Read [architecture](architecture.md) first, then follow the area you change:
 | Turn lifecycle, context, events, and delegation | [Runtime](runtime.md) |
 | Tools, discovery, integration setup | [Tools](tools.md) |
 | Prompts, rules, skills, private overlays | [Prompts](prompts.md) |
+| Cross-session user memory design and evaluation | [Long-term memory](long-term-memory.md) |
 | Source setup and verification | [Development](development.md) |
 | Current design decisions and unfinished work | [Harness design status](harness-alignment.md) |
 | Chinese walkthrough with diagrams and source links | [Architecture site](../architecture-site/README.md) |

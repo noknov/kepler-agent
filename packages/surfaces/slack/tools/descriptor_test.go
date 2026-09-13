@@ -21,11 +21,11 @@ func (stubTool) Execute(context.Context, tool.Call) (tool.Result, error) {
 }
 
 func TestBindSurfaceAddsSlackMetadata(t *testing.T) {
-	bound := bindSurface(stubTool{name: "reminder-create", opts: tool.ExternalWrite()}, "reminder").Descriptor()
+	bound := bindSurface(stubTool{name: "canvas-create", opts: tool.ExternalWrite()}, "canvas").Descriptor()
 	if len(bound.Surfaces) != 1 || bound.Surfaces[0] != "slack" {
 		t.Fatalf("surfaces=%v", bound.Surfaces)
 	}
-	if len(bound.Dependencies) != 2 || bound.Dependencies[0] != "slack" || bound.Dependencies[1] != "reminder" {
+	if len(bound.Dependencies) != 2 || bound.Dependencies[0] != "slack" || bound.Dependencies[1] != "canvas" {
 		t.Fatalf("dependencies=%v", bound.Dependencies)
 	}
 	if len(bound.Effects) != 2 {

@@ -4,7 +4,7 @@
       "name": "kepler-agent",
 
       "capabilities": ["workspace_read", "workspace_write", "shell", "mcp", "skills"],
-      "command": ["{repo}/bin/kepler-agent", "--cwd", "{workspace}", "--provider", "openai", "--protocol", "responses", "--model", "{candidate_model}", "--base-url", "{env_openai_base}", "--approval", "project", "{prompt}"],
+      "command": ["{repo}/bin/kepler-agent", "--cwd", "{workspace}", "--state-dir", "{home}/state", "--output", "jsonl", "--approval", "project", "{prompt}"],
       "model": "{model}",
       "version_command": ["{repo}/bin/kepler-agent", "--version"]
     },

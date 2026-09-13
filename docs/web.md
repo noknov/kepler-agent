@@ -17,7 +17,7 @@ shared: runtime, Postgres, user_connections, OAuth callbacks (gateway)
 split:  conversation storage, tool catalog instance, surface-only tools
 ```
 
-Web currently uses a thinner tool catalog (no Slack/reminder tools) and lazy
+Web currently uses a thinner tool catalog (no Slack tools) and lazy
 MCP registration via `BeforeRun`. Catalog unification is a design goal, not current feature parity. Check each
 surface explicitly when adding a tool or prompt layer.
 

@@ -90,7 +90,7 @@ func TestValidateWebRequiresStrongSessionConfiguration(t *testing.T) {
 }
 
 func TestValidToolName(t *testing.T) {
-	for _, name := range []string{"reminder-create", "slack_create", "Tool123"} {
+	for _, name := range []string{"canvas-create", "slack_create", "Tool123"} {
 		if !validToolName(name) {
 			t.Fatalf("validToolName(%q) = false", name)
 		}

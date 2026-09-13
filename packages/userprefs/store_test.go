@@ -46,6 +46,23 @@ func TestRulesPromptMarksUserRulesLowPriority(t *testing.T) {
 	}
 }
 
+func TestPromptAssetsAreBoundedAndUnicodeNamesArePreserved(t *testing.T) {
+	ctx := context.Background()
+	store := &promptTestStore{}
+	for _, name := range []string{"中文规则", "second"} {
+		if _, err := store.UpsertAsset(ctx, Asset{UserID: "U1", Kind: KindRule, Name: name, Content: strings.Repeat("好", MaxPromptChars)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prompt := RulesPrompt(ctx, store, "U1")
+	if len([]rune(prompt)) > MaxRulesPromptChars {
+		t.Fatalf("rules prompt has %d runes, limit %d", len([]rune(prompt)), MaxRulesPromptChars)
+	}
+	if store.assets[0].Name != "中文规则" {
+		t.Fatalf("unicode name = %q", store.assets[0].Name)
+	}
+}
+
 type promptTestStore struct{ assets []Asset }
 
 func (s *promptTestStore) GetSettings(_ context.Context, userID string) (Settings, error) {

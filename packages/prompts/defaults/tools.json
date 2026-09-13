@@ -1,10 +1,4 @@
 {
-  "reminder-create": {
-    "description": "Create one durable Slack reminder. Convert the user's requested time to a future RFC3339 timestamp including its UTC offset before calling. If a date, time, or timezone is ambiguous, ask the user instead of guessing. The reminder will be sent in this conversation and mention the requesting user.",
-    "parameters": {"run_at": "Future RFC3339 time with a timezone offset, e.g. 2026-07-15T18:30:00+08:00.", "message": "Short description of what to remind the user about."}
-  },
-  "reminder-list": {"description": "List the requesting user's pending reminders.", "parameters": {}},
-  "reminder-cancel": {"description": "Cancel one of the requesting user's pending reminders. Use reminder-list first if the reminder ID is unknown.", "parameters": {"id": "Reminder ID returned by reminder-create or reminder-list."}},
   "code-search": {
     "description": "Search source code from freshly fetched git refs. Omit source for normal repository investigation so each repo's origin-tracked upstream is resolved independently. Set source only when the user explicitly requests the checkout view or an exact git ref; never invent a branch or ref. Search hits are hints; read the matching file/range with code-read_file before claiming behavior.",
     "parameters": {

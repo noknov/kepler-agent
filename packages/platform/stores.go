@@ -10,7 +10,6 @@ import (
 	"github.com/noknov/kepler-agent/packages/eventinbox"
 	"github.com/noknov/kepler-agent/packages/infra/envutil"
 	"github.com/noknov/kepler-agent/packages/infra/redisclient"
-	"github.com/noknov/kepler-agent/packages/reminder"
 	"github.com/noknov/kepler-agent/packages/runs"
 	"github.com/noknov/kepler-agent/packages/session"
 	"github.com/noknov/kepler-agent/packages/sessioninput"
@@ -24,7 +23,6 @@ type Stores struct {
 	Redis     *redisclient.Client
 	Sessions  *session.PGStore
 	Runs      *runs.PGStore
-	Reminders *reminder.PGStore
 	Events    *eventinbox.PGStore
 	UserPrefs *userprefs.PGStore
 	Inputs    *sessioninput.PGStore
@@ -66,7 +64,6 @@ func NewStores(ctx context.Context, cfg config.StorageConfig) (*Stores, error) {
 		Redis:     rdb,
 		Sessions:  session.NewPGStore(lockPool),
 		Runs:      runs.NewPGStore(pgPool),
-		Reminders: reminder.NewPGStore(pgPool),
 		Events:    eventinbox.NewPGStore(pgPool),
 		UserPrefs: userprefs.NewPGStore(pgPool),
 		Inputs:    sessioninput.NewPGStore(pgPool),
@@ -148,7 +145,7 @@ func newNamedPGPool(ctx context.Context, dsn, maxEnv, minEnv string, defaultMax,
 
 var allTables = []string{
 	"agent_runs", "agent_tool_spills", "agent_run_steps",
-	"agent_run_feedback", "agent_transcript_events", "reminders",
+	"agent_run_feedback", "agent_transcript_events",
 	"slack_event_inbox", "user_settings", "user_prompt_assets",
 	"agent_session_inputs", "user_connections", "oauth_states",
 }
@@ -156,6 +153,11 @@ var allTables = []string{
 var ingressTables = []string{"slack_event_inbox", "agent_session_inputs", "user_settings", "user_prompt_assets", "user_connections", "oauth_states"}
 
 var webTables = []string{"web_auth_states", "web_auth_sessions", "web_conversations"}
+
+var allColumns = map[string][]string{
+	"slack_event_inbox":    {"claim_owner", "claim_until"},
+	"agent_session_inputs": {"claim_owner", "claim_until"},
+}
 
 // RequireWebSchema checks the optional browser-surface contract only when an
 // operator enables that surface. This preserves the existing Slack-only
@@ -186,5 +188,35 @@ func requireSchema(ctx context.Context, pool *pgxpool.Pool, tables []string) err
 	if len(missing) > 0 {
 		return fmt.Errorf("postgres schema is incomplete (missing %s); initialize it with schema/postgres.sql", strings.Join(missing, ", "))
 	}
+	var missingColumns []string
+	for table, columns := range allColumns {
+		if !containsTable(tables, table) {
+			continue
+		}
+		for _, column := range columns {
+			var exists bool
+			if err := pool.QueryRow(ctx, `SELECT EXISTS (
+SELECT 1 FROM information_schema.columns
+WHERE table_schema=current_schema() AND table_name=$1 AND column_name=$2
+)`, table, column).Scan(&exists); err != nil {
+				return fmt.Errorf("verify postgres schema column %s.%s: %w", table, column, err)
+			}
+			if !exists {
+				missingColumns = append(missingColumns, table+"."+column)
+			}
+		}
+	}
+	if len(missingColumns) > 0 {
+		return fmt.Errorf("postgres schema is incomplete (missing %s); apply pending deploy-repository migrations before starting the service", strings.Join(missingColumns, ", "))
+	}
 	return nil
+}
+
+func containsTable(tables []string, target string) bool {
+	for _, table := range tables {
+		if table == target {
+			return true
+		}
+	}
+	return false
 }

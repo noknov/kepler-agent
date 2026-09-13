@@ -47,6 +47,24 @@ func TestProjectionUsesLatestCompactionCoverage(t *testing.T) {
 	}
 }
 
+func TestProjectionIgnoresCompactionWithInvalidCoverage(t *testing.T) {
+	old := model.TextMessage(model.RoleUser, "old")
+	bad := model.TextMessage(model.RoleUser, "bad summary")
+	newer := model.TextMessage(model.RoleUser, "new")
+	events := []transcript.Event{
+		{Sequence: 1, Type: transcript.UserInput, Message: &old},
+		{Sequence: 2, Type: transcript.CompactionCreated, Message: &bad},
+		{Sequence: 3, Type: transcript.UserInput, Message: &newer},
+	}
+	projection, err := NewBoundedProjector(ContextConfig{MaxTokens: 1000}).Project(context.Background(), events, model.Message{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projection.Messages) != 2 || projection.Messages[0].Text() != "old" || projection.Messages[1].Text() != "new" {
+		t.Fatalf("invalid compaction changed history: %+v", projection.Messages)
+	}
+}
+
 func TestBoundedProjectorNeverSplitsToolCallAndResult(t *testing.T) {
 	call := model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "call-1", Name: "read", Arguments: []byte(`{}`)}}}}
 	result := toolResultEvent("turn-old", 3, "call-1", strings.Repeat("result ", 100))
