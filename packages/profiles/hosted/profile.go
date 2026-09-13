@@ -187,7 +187,14 @@ func secondaryModelClient(cfg config.Config) (model.Client, string, error) {
 	if strings.TrimSpace(cfg.LLM.SecondaryProvider) == "" {
 		return nil, "", nil
 	}
-	client, err := buildModelClient(cfg.LLM.SecondaryProvider, cfg.LLM.SecondaryProtocol, cfg.LLM.SecondaryBaseURL, cfg.LLM.SecondaryAPIKey, cfg.LLM.Timeout, "", nil)
+	// A secondary model may share the primary provider's OpenAI-compatible
+	// endpoint. Preserve the provider-level model routing in that case so a
+	// Responses-only model does not silently fall back to Chat Completions.
+	responsesModels := []string(nil)
+	if strings.EqualFold(strings.TrimSpace(cfg.LLM.SecondaryProvider), strings.TrimSpace(cfg.LLM.Provider)) {
+		responsesModels = cfg.LLM.ResponsesModels
+	}
+	client, err := buildModelClient(cfg.LLM.SecondaryProvider, cfg.LLM.SecondaryProtocol, cfg.LLM.SecondaryBaseURL, cfg.LLM.SecondaryAPIKey, cfg.LLM.Timeout, "", responsesModels)
 	return client, cfg.LLM.SecondaryModel, err
 }
 
