@@ -49,6 +49,18 @@ does not belong in `system.md`.
 Only skill metadata appears in the base prompt. Full skill instructions are
 loaded on demand through `skills-load`.
 
+The committed catalog includes systematic debugging, test-driven development,
+implementation planning, and code-review reception. These workflows are
+adapted for this runtime from the Superpowers 6.3.0 plugin curated in OpenAI's
+`openai/plugins` repository. Superpowers is authored by Jesse Vincent and
+licensed under MIT; it is curated plugin content rather than an OpenAI-authored
+system skill. The adaptation keeps the core methods while removing dependencies
+on Superpowers-specific skill names, worktree conventions, and orchestration.
+See `skills/SUPERPOWERS-LICENSE.txt` for the upstream license.
+
+Keep general skills transport-neutral and evidence-driven. Product-specific
+workflows belong in their owning adapter or workflow package.
+
 Runtime facts such as the current date, timezone, and configured workspace
 roots are injected as an ephemeral `<environment_context>` user fragment at
 request time. Repository inventories are no longer embedded in the system

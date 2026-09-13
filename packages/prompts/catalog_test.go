@@ -290,3 +290,20 @@ description: |
 		t.Fatalf("multiline description not parsed: %#v", skill)
 	}
 }
+
+func TestPublicGeneralSkillsAreAvailable(t *testing.T) {
+	if err := LoadDirs(PublicDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = LoadDirs(PublicDir) })
+
+	for _, name := range []string{"receiving-code-review", "systematic-debugging", "test-driven-development", "writing-plans"} {
+		skill, ok := LoadSkill(name)
+		if !ok {
+			t.Fatalf("public skill %q is unavailable", name)
+		}
+		if strings.TrimSpace(skill.Description) == "" || !strings.Contains(skill.Content, "# ") {
+			t.Fatalf("public skill %q is incomplete: %#v", name, skill)
+		}
+	}
+}
