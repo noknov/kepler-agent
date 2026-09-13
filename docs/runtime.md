@@ -54,7 +54,7 @@ with regular expressions.
 Git-backed code tools refresh `origin` once per turn before reading remote refs.
 When the caller omits a source, code read/search uses the repository's
 checked-out branch upstream, normally `origin/<branch>`, without checkout. Explicit
-repository-specific default refs still belong in the private deployment prompt,
+repository-specific default refs still belong in a private environment prompt,
 not in runtime discovery or broad branch-name guessing.
 
 Hosted capability policy is authoritative and non-interactive. Tool implementations

@@ -2,7 +2,8 @@
 
 Slack receives and presents hosted turns. Tools execute in the worker's
 operator-managed workspace, using hosted policy and configured credentials.
-Use the deployment repository to start gateway, worker, PostgreSQL, and Redis.
+The integration expects reachable gateway and worker services plus PostgreSQL
+and Redis.
 
 ## Connect the Slack app
 

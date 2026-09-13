@@ -7,19 +7,13 @@ profile is available through the stdio app-server used by the terminal UI.
 ## Build and log in
 
 Prerequisites: Go, Node.js, pnpm, a supported OS sandbox, and access to a
-configured Kepler gateway. Start in the sibling `kepler-agent-deploy` repository:
+configured gateway. Build the Go launcher and app-server from this source tree;
+build the terminal frontend from `apps/cli`.
 
-```sh
-SOURCE_DIR=../kepler-agent scripts/build-cli.sh
-./bin/kepler-agent login
-./bin/kepler-agent whoami
-./bin/kepler-agent --cwd ../kepler-agent
-```
-
-The bundle contains `bin/kepler-agent`, `bin/kepler-agent-app-server`, and
-`bin/ui/main.js`. Interactive mode needs Node.js on PATH. Keep the bundle
-layout intact when moving it. Use `--cwd /path/to/project` to select another
-workspace without changing the path to the executable.
+The packaged bundle contains the launcher, app-server and terminal frontend.
+Interactive mode needs Node.js on PATH. Keep the bundle layout intact when
+moving it. Use `--cwd /path/to/project` to select another workspace without
+changing the path to the executable.
 
 The public gateway URL is compiled from deploy configuration; `--api-url` or
 `KEPLER_API_URL` can override it. Slack OAuth returns to
@@ -33,10 +27,8 @@ spawns the Go app-server and communicates over stdio JSON-RPC. A prompt
 argument or piped input selects headless execution:
 
 ```sh
-# Run from kepler-agent-deploy; tools use the selected source workspace.
-./bin/kepler-agent --cwd ../kepler-agent "Explain the runtime entry points"
-printf 'Explain the runtime entry points
-' | ./bin/kepler-agent --cwd ../kepler-agent --output jsonl
+kepler-agent --cwd /path/to/project "Explain the runtime entry points"
+printf 'Explain the runtime entry points\n' | kepler-agent --cwd /path/to/project --output jsonl
 ```
 
 Headless approval defaults to `deny`. `--approval` accepts `deny`, `once`,

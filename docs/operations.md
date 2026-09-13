@@ -1,8 +1,8 @@
 # Operations
 
-This guide explains application signals and diagnosis. Images, environment
-rendering, migrations, and restart commands are owned by the deploy repository's
-`docs/runbook.md` and `docs/configuration-workflow.md`.
+This guide explains application signals and diagnosis. Image publishing,
+environment rendering, migrations, and restart commands depend on the target
+environment and are intentionally out of scope.
 
 ## Health and run inspection
 
@@ -73,11 +73,11 @@ container stop settings aligned in deploy configuration.
 
 [Schema contract](../schema/postgres.sql) describes the current fresh-install
 schema. Application processes validate required storage but do not execute DDL.
-The deploy repository owns incremental migrations and their checksum tracking.
+The release workflow owns incremental migrations and their checksum tracking.
 Do not use the fresh-install schema as an undocumented incremental upgrade.
 
 Before a schema-dependent release, inspect pending migrations and compatibility,
-verify a recoverable backup, apply the deploy migration, then restart the
+verify a recoverable backup, apply the incremental migration, then restart the
 matching application revision. Database rollback is a separate operation from
 reverting an image; do not assume old code can read a newer schema.
 

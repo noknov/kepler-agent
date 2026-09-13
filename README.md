@@ -17,30 +17,11 @@ over stdio JSON-RPC for clients.
 
 ## Start here
 
-- **Use the CLI:** [build, login, and run](docs/local-cli.md).
-- **Operate the hosted service:** use the sibling
-  [deployment repository](https://github.com/noknov/kepler-agent-deploy), then
-  configure [Slack](docs/slack.md) or [Web](docs/web.md).
+- **Connect Slack:** follow the [Slack integration guide](docs/slack.md).
 - **Understand or change the code:** start with [architecture](docs/architecture.md)
   and [development](docs/development.md).
 - **Evaluate behavior:** read the [evaluation guide](evals/README.md).
 - **Browse all documentation:** use the [documentation index](docs/README.md).
-
-## Build a local CLI
-
-The source and deploy repositories should be siblings. Run these commands
-from `kepler-agent-deploy`, with a configured, reachable gateway:
-
-```sh
-SOURCE_DIR=../kepler-agent scripts/build-cli.sh
-./bin/kepler-agent login
-./bin/kepler-agent --cwd ../kepler-agent
-```
-
-Packaging requires Go, Node.js and pnpm; interactive use requires Node.js on
-PATH. Headless execution uses the Go binary. The deployment repository owns
-images, bundles, secrets, migrations, and stack startup. `make build` here
-checks compilation and does **not** install a CLI into `bin/`.
 
 ## Develop
 

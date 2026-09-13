@@ -7,11 +7,10 @@
   if (side) {
     side.setAttribute('aria-label', '文档目录');
     side.innerHTML = [
-      '<div class="nav-group"><p>开始了解</p><a href="index.html">系统概览</a><a href="execution.html">一条请求的执行过程</a></div>',
-      '<div class="nav-group"><p>核心机制</p><a href="models.html">提示内容、上下文与模型</a><a href="tools.html">工具、权限与执行</a><a href="reliability.html">记录、并发与恢复</a><a href="delegation.html">委派执行与代码审查</a></div>',
-      '<div class="nav-group"><p>产品入口</p><a href="surfaces.html">Slack 和 Web</a><a href="cli.html">本地命令行</a></div>',
-      '<div class="nav-group"><p>运行维护</p><a href="operations.html">队列、观测与关闭</a></div>',
-      '<div class="nav-group"><p>实现</p><a href="reference.html">源码参考</a></div>'
+      '<div class="nav-group"><p>Core</p><a href="index.html">系统概览</a><a href="execution.html">执行过程</a><a href="models.html">上下文与模型</a><a href="tools.html">工具与策略</a></div>',
+      '<div class="nav-group"><p>State</p><a href="reliability.html">状态与恢复</a><a href="delegation.html">委派执行</a><a href="operations.html">队列与观测</a></div>',
+      '<div class="nav-group"><p>Adapter</p><a href="slack.html">Slack 接入</a></div>',
+      '<div class="nav-group"><p>Index</p><a href="reference.html">实现索引</a></div>'
     ].join('');
   }
 

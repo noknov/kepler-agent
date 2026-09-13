@@ -19,7 +19,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/profiles/local"
 )
 
-// DefaultAPIURL is the public gateway origin compiled in by kepler-agent-deploy.
+// DefaultAPIURL is the public gateway origin supplied by the packaging process.
 // It is empty in source builds.
 var DefaultAPIURL string
 
@@ -127,7 +127,7 @@ func runLogin(args []string) error {
 	}
 	*apiURL = strings.TrimRight(strings.TrimSpace(*apiURL), "/")
 	if *apiURL == "" {
-		return errors.New("no public gateway URL: rebuild the CLI with kepler-agent-deploy/scripts/build-cli.sh, or pass --api-url")
+		return errors.New("no public gateway URL: use a packaged build or pass --api-url")
 	}
 	if err := requirePublicAPIURL(*apiURL); err != nil {
 		return err

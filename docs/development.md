@@ -1,7 +1,7 @@
 # Development
 
-Start in the `kepler-agent` source repository. Packaging and deployment are
-separate tasks owned by `kepler-agent-deploy`.
+Start in the source repository. Packaging and environment rollout are separate
+operational concerns and are not documented here.
 
 ## Prerequisites
 
@@ -52,7 +52,7 @@ runnable bundles, follow [local CLI packaging](local-cli.md).
 - **App-server:** update the Go registry, run `make protocol-generate`, then
   `make protocol-check`; review JSON Schema and TypeScript changes together.
 - **Database:** update [schema/postgres.sql](../schema/postgres.sql), prepare the
-  corresponding deploy migration, and document upgrade ordering. Runtime code
+  corresponding incremental migration, and document upgrade ordering. Runtime code
   must not perform DDL.
 - **Prompt:** change the appropriate layer in [prompts](prompts.md), then test
   representative behavior rather than only checking that a string exists.

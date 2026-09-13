@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Kepler Agent 源码类型、事件、配置、数据库表和测试索引"><title>源码参考 · Kepler Agent 架构指南</title><link rel="icon" href="assets/favicon.svg"><link rel="stylesheet" href="assets/guide.css"><script src="assets/architecture.js" defer></script></head><body>
-<header class="topbar"><div class="topbar-inner"><a class="brand2" href="index.html">Kepler Agent 架构指南</a><nav class="topnav"><a href="index.html">总览</a><a href="execution.html">请求执行</a><a href="reliability.html">存储与恢复</a><a href="surfaces.html">Slack 和 Web</a><a href="cli.html">本地命令行</a><a href="reference.html" aria-current="page">源码参考</a></nav></div></header>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="核心类型、事件、配置、数据库表和测试索引"><title>实现索引 · Agent Core 架构</title><link rel="stylesheet" href="assets/guide.css"><script src="assets/architecture.js" defer></script></head><body>
+<header class="topbar"><div class="topbar-inner"><a class="brand2" href="index.html">AGENT CORE / ARCHITECTURE</a><nav class="topnav"><a href="index.html">概览</a><a href="execution.html">执行</a><a href="models.html">上下文</a><a href="tools.html">工具</a><a href="slack.html">Slack</a><a href="reference.html" aria-current="page">索引</a></nav></div></header>
 <main class="doc-shell"><aside class="side"><p>本页目录</p><a href="#objects">核心类型</a><a href="#events">事件记录</a><a href="#endings">结束原因</a><a href="#defaults">配置归属</a><a href="#tables">数据库表</a><a href="#packages">按功能找代码</a><a href="#tests">行为与测试</a></aside><article class="doc">
 <header class="hero2"><p class="kicker">实现</p><h1>源码参考</h1><p class="lead2">这里列出正文概念对应的类型、字段、状态值、数据库表和文件位置。阅读概念页时不必记住这些名称；定位实现或修改行为时可以从这里进入源码。</p></header>
 
@@ -51,7 +51,7 @@
 <tr><td>主要与备用模型都失败</td><td><code>fallback_exhausted</code></td><td>可用的模型路径均已尝试</td></tr>
 </tbody></table></section>
 
-<section class="chapter2" id="defaults"><span class="number">04</span><h2>配置由哪一层负责</h2><table class="detail-table"><thead><tr><th>配置范围</th><th>负责内容</th><th>源码位置</th></tr></thead><tbody><tr><td>共享执行器</td><td>执行轮数、工具并发、上下文预算、工具结果大小和重复调用保护</td><td><code>packages/agent/runtime/types.go</code></td></tr><tr><td>托管产品</td><td>模型服务、会话容量、Slack 事件处理、数据库、缓存和工具开放范围</td><td><code>packages/config/config.go</code></td></tr><tr><td>本地产品</td><td>模型、输入路线、输出方式、工作区、执行时间和批准存储</td><td><code>packages/profiles/local/config.go</code></td></tr><tr><td>入口</td><td>请求体、用户输入、订阅缓冲和协议并发等入口限制</td><td><code>packages/surfaces</code>、<code>packages/appserver</code></td></tr></tbody></table><p>运行时取值属于部署和用户配置，不在架构说明中重复。这里保留配置归属，便于判断某项行为应该在哪一层修改。</p></section>
+<section class="chapter2" id="defaults"><span class="number">04</span><h2>配置由哪一层负责</h2><table class="detail-table"><thead><tr><th>配置范围</th><th>负责内容</th><th>源码位置</th></tr></thead><tbody><tr><td>共享执行器</td><td>执行轮数、工具并发、上下文预算、工具结果大小和重复调用保护</td><td><code>packages/agent/runtime/types.go</code></td></tr><tr><td>托管产品</td><td>模型服务、会话容量、Slack 事件处理、数据库、缓存和工具开放范围</td><td><code>packages/config/config.go</code></td></tr><tr><td>接入适配器</td><td>请求体、用户输入、缓冲和协议并发等限制</td><td><code>packages/surfaces</code></td></tr></tbody></table><p>运行时取值属于环境配置，不在架构说明中重复。这里保留配置归属，便于判断某项行为应该在哪一层修改。</p></section>
 
 <section class="chapter2" id="tables"><span class="number">05</span><h2>数据库表按职责分类</h2><table class="detail-table"><thead><tr><th>职责</th><th>表</th><th>主要内容</th></tr></thead><tbody>
 <tr><td>权威执行历史</td><td><code>agent_transcript_events</code></td><td>会话序号、事件类型、完整 JSON 负载</td></tr>
@@ -59,8 +59,6 @@
 <tr><td>大结果</td><td><code>agent_tool_spills</code></td><td>超过内联上限的工具完整结果与引用</td></tr>
 <tr><td>执行中输入</td><td><code>agent_session_inputs</code></td><td>消息种类、序号、认领者、到期时间、确认时间和尝试次数</td></tr>
 <tr><td>Slack 可靠接收</td><td><code>slack_event_inbox</code></td><td>原始事件、状态、可执行时间、处理权、重试和错误</td></tr>
-<tr><td>网页身份</td><td><code>web_auth_states</code>、<code>web_auth_sessions</code></td><td>一次性登录事务、令牌哈希、身份和过期时间</td></tr>
-<tr><td>网页对话</td><td><code>web_conversations</code></td><td>所有者、标题、会话关联和更新时间</td></tr>
 <tr><td>外部连接</td><td><code>user_connections</code>、<code>oauth_states</code></td><td>加密凭据、提供方状态与 OAuth 事务</td></tr>
 <tr><td>用户配置</td><td><code>user_settings</code>、<code>user_prompt_assets</code></td><td>用户级设置与提示资源</td></tr>
 </tbody></table><p class="source-note">完整字段、约束与索引：<code>schema/postgres.sql</code>。</p></section>
@@ -73,9 +71,7 @@
 <tr><td>长工具结果怎样外置</td><td><code>runtime/tool_results.go</code></td><td><code>profiles/hosted/artifacts.go</code>、<code>local/artifacts.go</code></td></tr>
 <tr><td>事件怎样定义和分发</td><td><code>agent/transcript/transcript.go</code></td><td><code>memory.go</code>、<code>profiles/hosted/pgtranscript.go</code></td></tr>
 <tr><td>Slack 怎样接收与回复</td><td><code>surfaces/slack/events</code></td><td><code>surfaces/slack/agent/service.go</code>、<code>streaming.go</code></td></tr>
-<tr><td>网页怎样认证和隔离所有者</td><td><code>surfaces/web/auth.go</code></td><td><code>oidc.go</code>、<code>conversation.go</code>、<code>events.go</code></td></tr>
 <tr><td>本地怎样限制文件与命令</td><td><code>profiles/local/policy.go</code></td><td><code>workspace.go</code>、<code>sandbox.go</code>、<code>packages/safety</code></td></tr>
-<tr><td>应用协议怎样映射界面条目</td><td><code>appserver/server.go</code></td><td><code>protocol.go</code>、<code>items.go</code>、<code>delta_batcher.go</code></td></tr>
 <tr><td>托管服务怎样组装依赖</td><td><code>profiles/hosted/profile.go</code></td><td><code>hosted.go</code>、<code>platform/stores.go</code></td></tr>
 <tr><td>提示内容怎样装载和覆盖</td><td><code>packages/prompts</code></td><td><code>packages/prompts/defaults</code>、<code>packages/agent/prompt</code></td></tr>
 <tr><td>子任务怎样创建和汇合</td><td><code>packages/agent/delegation</code></td><td><code>runtime/types.go</code> 中的父任务关系</td></tr>
@@ -92,7 +88,5 @@
 <tr><td>每一种文字分片位置的脱敏一致性</td><td><code>safety/stream_redactor_test.go</code></td></tr>
 <tr><td>本地文件半行修复、坏行报错、批量分叉</td><td><code>profiles/local/store_test.go</code></td></tr>
 <tr><td>Slack 处理权续期、重试与重复回复</td><td><code>surfaces/slack/events/worker_test.go</code>、<code>slack/agent/streaming_test.go</code></td></tr>
-<tr><td>网页登录、所有权与事件过滤</td><td><code>surfaces/web/auth_test.go</code>、<code>conversation_test.go</code>、<code>events_test.go</code></td></tr>
-<tr><td>应用服务过载、会话忙、流式条目</td><td><code>appserver/server_test.go</code>、<code>delta_batcher_test.go</code></td></tr>
 </tbody></table><div class="callout"><strong>代码阅读建议</strong>先从某一行为测试进入，再回到实现；测试通常同时给出输入事件、期望顺序和故障边界，比只沿包目录向下读更快。</div></section>
-</article></main><footer class="footer2">Kepler Agent 架构文档</footer></body></html>
+</article></main><footer class="footer2">AGENT CORE / IMPLEMENTATION INDEX</footer></body></html>

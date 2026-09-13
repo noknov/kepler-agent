@@ -5,15 +5,14 @@ in source does not mean every surface reads it.
 
 | Owner | Where to edit | Used by |
 | --- | --- | --- |
-| Hosted deployment | Deploy repo `k8s/configmaps/<service>.yaml` and SOPS secrets | Docker gateway, worker, observability |
+| Hosted environment | Environment configuration and secret manager | Gateway, worker, observability |
 | Source debugging | Service `.env` or `KEPLER_AGENT_ENV_FILE` | Directly launched Go service |
 | Local CLI | TOML created by `kepler-agent config init` | Local limits, routing, sandbox, MCP, prompts |
-| Provider credentials/model selection | Hosted deploy configuration | Worker and local-client bootstrap |
+| Provider credentials/model selection | Hosted environment configuration | Worker and local-client bootstrap |
 | Private prompt context | `PROMPT_DIR` overlay | Profile-specific prompt composition |
 
-The local Docker scripts read the YAML files directly; the `k8s/` directory
-name does not mean a Kubernetes deployment is required. See the deploy repo's
-`docs/configuration-workflow.md` for applying changes.
+Apply hosted values through the environment's release workflow. Keep secrets
+outside the source tree and inject them at runtime.
 
 ## Service requirements
 
@@ -29,7 +28,7 @@ It validates requirements by service. For direct source debugging, its default
 files are `gateway/.env`, `worker/.env`, and `observability/.env`. Use
 `KEPLER_AGENT_ENV_FILE=/path/to/file` to select another file. Do not copy an
 `.env.example` unless that file exists in your checkout; deployed configuration
-is maintained in the deploy repository.
+is supplied by the target environment.
 
 ## Related references
 
@@ -129,7 +128,7 @@ set, the batch timeout cannot be shorter than the worker timeout. The step
 limit is a final liveness guard for the complete runtime loop.
 
 Services verify the required tables at startup but never execute DDL. The source
-`schema/postgres.sql` is the fresh-install contract; apply deploy migrations
+`schema/postgres.sql` is the fresh-install contract; apply incremental migrations
 through the [operations workflow](operations.md#schema-and-release-coordination).
 The runtime database role only needs data access.
 

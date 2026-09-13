@@ -1,20 +1,18 @@
 # Documentation
 
-Choose a task below. These guides describe the current source tree; deployment
-commands and private configuration belong to `kepler-agent-deploy`.
+Choose a task below. These guides describe the current source tree and its
+public operating contracts. Environment-specific secrets and release procedures
+are intentionally out of scope.
 
 ## Use and operate
 
 | I want to… | Read |
 | --- | --- |
-| Build, log in, or run a local coding session | [Local CLI](local-cli.md) |
 | Set up Slack or request a PR review | [Hosted Slack](slack.md) |
-| Enable browser conversations | [Hosted Web](web.md) |
 | Select configuration and model settings | [Configuration](configuration.md), [models](models.md) |
 | Diagnose readiness, stalled work, or shutdown | [Operations](operations.md) |
 | Configure tracing and cost attribution | [Observability](observability.md) |
 | Understand permissions and recovery limits | [Safety and limitations](safety.md) |
-| Build images, migrate data, or restart services | [Deploy repository](https://github.com/noknov/kepler-agent-deploy) |
 
 ## Understand and extend
 
