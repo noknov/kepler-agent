@@ -15,7 +15,11 @@ Ink   -> stdio app-server ------------------> local profile ---+     +--> provid
 
 Sharing the runtime does not make the surfaces feature-equivalent. Web has its
 own conversations and catalog; Slack installs product routing and delivery;
-local execution has a different filesystem and approval boundary.
+local execution has a different filesystem and approval boundary. The most
+important production distinction is that ingress acceptance, session ownership,
+model completion, tool side effects, transcript commit, projection, and user
+delivery are separate boundaries. A successful step at one boundary is not
+evidence that the next boundary succeeded.
 
 ## Ownership
 
@@ -49,7 +53,31 @@ must not be treated as interchangeable.
 
 A persisted transcript does not by itself prove durable acceptance or
 exactly-once tool effects. Ingress, ownership, external side effects, and
-presentation have separate failure windows. See [safety and limitations](safety.md).
+presentation have separate failure windows. Recovery records an interrupted
+model request or tool call as unknown instead of silently replaying it. A tool
+can narrow that window only when it passes a stable execution ID to an
+idempotent downstream API. See [safety and limitations](safety.md) and the
+[production failure walkthrough](../architecture-site/production.html).
+
+## Questions the architecture must answer
+
+When changing the system, be able to answer these before implementation:
+
+1. Which event is the source of truth if the process exits at this line?
+2. Which owner or lease prevents another worker from taking the same work, and
+   what does the old owner do after losing it?
+3. If the downstream call succeeded but the result append failed, how is the
+   next attempt prevented from duplicating the side effect?
+4. Does the retry happen before or after user-visible output, and where is the
+   retry budget counted?
+5. What is the backpressure behavior when the provider, database, projection,
+   or external API is slower than the incoming request rate?
+6. Which metric and durable identifier let an operator distinguish execution
+   failure from delivery failure?
+
+The Chinese site expands these questions into state transitions, failure
+windows, and source references rather than treating the top-level boxes as a
+complete design.
 
 ## Read a request through the code
 

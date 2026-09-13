@@ -1,19 +1,172 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="提示内容、上下文投影、模型适配、重试和流式输出"><title>上下文与模型 · Agent Core 架构</title><link rel="stylesheet" href="assets/guide.css"><script src="assets/architecture.js" defer></script></head><body>
-<header class="topbar"><div class="topbar-inner"><a class="brand2" href="index.html">AGENT CORE / ARCHITECTURE</a><nav class="topnav"><a href="index.html">概览</a><a href="execution.html">执行</a><a href="models.html" aria-current="page">上下文</a><a href="tools.html">工具</a><a href="slack.html">Slack</a><a href="reference.html">索引</a></nav></div></header>
-<main class="doc-shell"><aside class="side"></aside><article class="doc">
-<header class="hero2"><p class="kicker">核心机制</p><h1>提示内容、上下文与模型</h1><p class="lead2">每次请求模型前，系统从提示目录、运行环境和会话事件中重新组成输入。模型提供方的协议在接入层转换成统一消息；执行器只处理统一后的文字、图片、工具请求、用量和流式事件。</p></header>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="提示分层、上下文投影、压缩、模型适配、重试和流式提交边界">
+  <title>上下文与模型 · Agent Core 架构</title>
+  <link rel="stylesheet" href="assets/guide.css">
+  <script src="assets/architecture.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="topbar-inner">
+  <a class="brand2" href="index.html">AGENT CORE / ARCHITECTURE</a>
+  <nav class="topnav" aria-label="文档导航">
+    <a href="index.html">概览</a><a href="execution.html">执行</a><a href="models.html" aria-current="page">模型</a>
+    <a href="tools.html">工具</a><a href="reliability.html">可靠性</a><a href="operations.html">观测</a><a href="production.html">生产推演</a><a href="slack.html">Slack</a><a href="delegation.html">委派</a><a href="reference.html">索引</a>
+  </nav>
+</div></header>
 
-<section class="chapter2" id="request"><h2>模型一次能够看到什么</h2><p>模型请求由三部分组成：系统说明决定长期行为和本次运行环境；会话消息提供用户要求、已有答复和工具结果；工具定义说明本轮可以使用哪些能力。执行器在每次模型判断前重新生成这三部分，因此刚完成的工具结果、刚收到的追加输入和刚产生的摘要会立即生效。</p><figure class="diagram"><div class="flow"><div class="box"><b>系统说明</b><small>核心行为、规则、产品补充、环境事实</small></div><div class="arrow">+</div><div class="box"><b>会话上下文</b><small>用户消息、模型完整消息、工具结果、摘要</small></div><div class="arrow">+</div><div class="box"><b>工具定义</b><small>名称、用途、参数结构</small></div><div class="arrow">→</div><div class="box blue"><b>统一模型请求</b><small>接入层再转换成具体服务协议</small></div></div></figure><p>入口不自行拼接模型历史。协议数据先转换成内部消息，只有内部消息与执行事件参与上下文生成。这样同一段历史不会因为接入方式不同而得到不同解释。</p></section>
+<main class="doc-shell">
+  <aside class="side"><p>本页目录</p><a href="#request">模型看到什么</a><a href="#prompt-layers">提示分层</a><a href="#projection">事件投影</a><a href="#compaction">长对话压缩</a><a href="#protocol">协议适配</a><a href="#resilience">重试与切换</a><a href="#streaming">流式输出</a><a href="#scenarios">生产推演</a><a href="#source">实现索引</a></aside>
+  <article class="doc">
+    <header class="hero2">
+      <p class="kicker">CORE / CONTEXT &amp; MODEL</p>
+      <h1>提示内容、上下文与模型</h1>
+      <p class="lead2">模型质量与生产可靠性共享同一个入口：最终发给 provider 的那份请求。它不仅包含用户原话，还包含分层提示、运行环境、摘要、工具定义和工具结果。Kepler 把这些内容先转换成 provider-neutral 的 canonical messages，再把协议差异留给适配层。</p>
+      <div class="facts"><span><b>提示</b> 分层合并</span><span><b>历史</b> 事件投影</span><span><b>容量</b> 保守估算</span><span><b>失败</b> 先看提交边界</span></div>
+    </header>
 
-<section class="chapter2" id="prompts"><h2>系统说明怎样组装</h2><p>提示内容按稳定程度拆开保存。长期通用的行为进入仓库；具体工具的参数说明跟随工具目录；当前日期、时区和工作区等事实在运行时生成；服务环境特有的信息通过小型覆盖层加入。</p><table class="detail-table"><thead><tr><th>来源</th><th>包含的内容</th><th>装载时机</th></tr></thead><tbody><tr><td>核心系统说明</td><td>身份、保密、证据要求、自主执行、沟通和安全边界</td><td>产品启动时从已提交的默认目录读取</td></tr><tr><td>通用规则</td><td>调查方式、证据纪律、写操作约束和输出要求</td><td>按文件顺序合并到核心说明</td></tr><tr><td>工具说明</td><td>工具用途、参数提示和路由规则</td><td>建立工具目录时应用到具体描述</td></tr><tr><td>适配器补充</td><td>特定接入协议需要的少量说明</td><td>产品配置组装执行器时加入</td></tr><tr><td>运行环境</td><td>当前日期、时区、工作目录、允许的工作区根目录和本次作用域</td><td>每次请求开始时生成</td></tr><tr><td>私有覆盖</td><td>特定环境的仓库别名、工作流名称和私有运行手册入口</td><td>启动时覆盖同名默认项</td></tr></tbody></table><p>技能只把名称和用途放进基础上下文。模型确认需要某个技能后再读取完整说明。仓库清单也通过工具按需取得，避免每次请求都携带可能已经过期的大段清单。</p><div class="callout"><strong>修改提示内容时的归属</strong>跨产品都要遵守的行为进入核心说明或通用规则；某个工具的用法进入工具描述；当前机器或当前请求才知道的信息由运行时注入；只对某个服务环境成立的名称和映射留在覆盖层。</div></section>
+    <section class="chapter2" id="request">
+      <h2>模型一次能够看到什么</h2>
+      <p class="intro">一次请求不是把数据库里所有内容原样塞给模型。执行器每轮重新生成系统说明、会话消息和当前工具定义；只有会影响下一步判断的内容进入模型请求。</p>
+      <figure class="diagram"><div class="flow">
+        <div class="box"><b>System</b><small>稳定行为、规则<br>产品与环境事实</small></div><div class="arrow">+</div>
+        <div class="box"><b>Messages</b><small>用户、assistant、tool<br>摘要与 steering</small></div><div class="arrow">+</div>
+        <div class="box"><b>Tools</b><small>eager + activated<br>schema 与描述</small></div><div class="arrow">→</div>
+        <div class="box blue"><b>Canonical Request</b><small>model、budget、metadata<br>provider adapter</small></div>
+      </div><figcaption>入口不自行拼接模型历史；同一份 transcript 在 Slack、Web 和 CLI 上都经过同一个投影器。</figcaption></figure>
+      <table class="detail-table">
+        <thead><tr><th>组成</th><th>会影响什么</th><th>是否进入长期 transcript</th></tr></thead>
+        <tbody>
+          <tr><td>系统说明</td><td>身份、证据纪律、安全边界、操作规则</td><td>由提示目录和运行配置重建，不作为会话消息追加</td></tr>
+          <tr><td>运行环境</td><td>日期、时区、workspace roots、本次作用域</td><td>按请求生成；不依赖入口的旧环境缓存</td></tr>
+          <tr><td>会话消息</td><td>用户意图、已完成答复、工具结果</td><td>是；图片二进制会被替换为可解释的文本说明</td></tr>
+          <tr><td>工具定义</td><td>模型能否提出某个调用以及如何填写参数</td><td>目录是 profile 状态；激活状态按 turn 清理</td></tr>
+          <tr><td>流式 delta</td><td>入口实时展示</td><td>否；完整 assistant message 和 lifecycle 才是恢复依据</td></tr>
+        </tbody>
+      </table>
+    </section>
 
-<section class="chapter2" id="projection"><h2>会话事件怎样变成上下文</h2><p>事件记录包含执行所需的完整事实，也包含锁、步骤、恢复和观测信息。模型不需要看到全部事件。上下文投影器只选择会影响下一步判断的内容，并在容量范围内保持交互结构完整。</p><ol class="walkthrough"><li><b>计算本次可使用的输入空间。</b><span>总容量要为模型输出和工具定义留出空间。具体容量由产品配置提供。</span></li><li><b>读取最近的有效摘要。</b><span>摘要已经覆盖的早期事件不再逐条放入；摘要作为较早背景保留。</span></li><li><b>筛选能够形成模型消息的事件。</b><span>用户输入、执行中追加的输入、模型完整消息、工具结果和摘要进入候选集合。锁、步骤开始、界面状态和遥测事件不进入。</span></li><li><b>把候选消息按完整交互分组。</b><span>一个用户要求、随后产生的模型工具请求以及对应工具结果作为一个整体。裁剪不会留下工具请求却删除它的结果。</span></li><li><b>从最新一组向前保留。</b><span>最新交互优先保留，较早分组在剩余空间内加入。被移出的范围成为下次压缩的候选。</span></li><li><b>加入系统说明并生成统一请求。</b><span>投影结果连同当前公开的工具定义交给模型接入层。</span></li></ol><p>容量估算会分别考虑中文、英文、消息角色、工具结构和图片。它不尝试完全复现某家模型的分词器，而是提前留出保守余量。提供方仍返回容量错误时，执行器会进一步压缩并重新生成请求。</p></section>
+    <section class="chapter2" id="prompt-layers">
+      <h2>提示不是一段越来越长的字符串</h2>
+      <p>提示内容按稳定性和责任拆开。越靠近业务环境、变化越频繁的内容，越不应该写进核心系统说明；否则每次部署变化都会扩大上下文、破坏缓存并难以定位行为回归。</p>
+      <table class="detail-table">
+        <thead><tr><th>层</th><th>典型内容</th><th>装载/覆盖规则</th><th>变更风险</th></tr></thead>
+        <tbody>
+          <tr><td>Core kernel</td><td>身份、保密、证据、自主执行、沟通和安全</td><td><code>packages/prompts/defaults/system.md</code>，提交到仓库</td><td>影响所有 surface；需要跨产品回归</td></tr>
+          <tr><td>Rules</td><td>调查方式、写操作约束、验证要求、调试纪律</td><td><code>rules/*.md</code> 按目录读取并合并</td><td>可改变工具选择和结束前行为</td></tr>
+          <tr><td>Tool guidance</td><td>用途、参数、路由提示和安全说明</td><td>随工具 descriptor 及 <code>tools.json</code> 应用</td><td>只改善选择提示，不能扩大 policy 权限</td></tr>
+          <tr><td>Skills</td><td>完整工作流、专项检查和验证步骤</td><td>基础 prompt 只放名称/说明，按需 skills-load</td><td>按需加载仍要视为不可信历史/外部输入边界</td></tr>
+          <tr><td>Private overlay</td><td>仓库别名、环境映射、私有 runbook 入口</td><td><code>PROMPT_DIR</code> 叠加在 public defaults 上</td><td>不能把凭据或大段 incident 历史放入每次 prompt</td></tr>
+          <tr><td>Dynamic context</td><td>当前日期、workspace、session scope 和已选工具</td><td>每次请求生成，位于静态内容之后</td><td>应可观测其摘要，不能依赖进程启动时快照</td></tr>
+        </tbody>
+      </table>
+      <div class="decision"><b>提示修改的判断</b><p>如果一条文字包含某个公司的仓库、workflow、租户或私有服务，它通常属于 overlay 或 workflow，而不是系统 kernel。提示可以约束模型行为，但不能代替工具的 schema、服务端 allowlist、workspace 检查和上游权限。</p></div>
+    </section>
 
-<section class="chapter2" id="compaction"><h2>长对话怎样压缩</h2><p>压缩器处理较早的完整交互，不直接删掉最近请求需要的工具结果。它把选中的历史交给专门的模型请求，生成一条可继续使用的背景摘要，并记录摘要覆盖到会话中的哪个位置。</p><div class="timeline"><dt>选择范围</dt><dd>只处理已经结束的较早交互；最近内容留给下一次正常模型判断。</dd><dt>准备压缩输入</dt><dd>保留文字和必要的结构关系；图片转成文字说明，不把原始图片数据塞入摘要请求。</dd><dt>生成摘要</dt><dd>摘要保留已经完成的动作、有效结论、仍然成立的约束、关键编号和未解决事项。</dd><dt>写入事件</dt><dd>摘要文本和覆盖位置一起保存。以后投影从这条摘要继续，不修改早期原始事件。</dd><dt>容量错误恢复</dt><dd>模型服务仍判断输入过长时，执行器收紧目标容量，强制执行一次压缩，再重试当前判断。</dd></div></section>
+    <section class="chapter2" id="projection">
+      <h2>会话事件怎样变成模型上下文</h2>
+      <p class="intro">Transcript 同时包含恢复所需的生命周期事实和模型真正需要的对话内容。BoundedProjector 通过事件类型、摘要覆盖点和完整交互分组把两者分开。</p>
+      <ol class="walkthrough">
+        <li><b>计算输入预算。</b><span>总 MaxTokens 减去 ReserveTokens；预留给模型输出、工具定义和 provider 差异。配置差值不合理时才退回总上限。</span></li>
+        <li><b>选择最近有效压缩。</b><span>只接受带有向后覆盖边界的 <code>covers_through</code>。坏摘要不会悄悄遮住原始消息，避免数据损坏变成事实丢失。</span></li>
+        <li><b>筛选可投影事件。</b><span>UserInput、SteeringInput、AssistantMessage、ToolCallCompleted/Failed 形成 canonical messages；锁、step、projection 和 trace 事件留在运维层。</span></li>
+        <li><b>按 TurnID 聚成完整 group。</b><span>一个用户请求及其 assistant tool call/result 是一个不可拆分单元。这样裁剪不会留下模型提出过调用却没有相应结果的上下文。</span></li>
+        <li><b>从最新 group 向前加入。</b><span>最新 group 必须保留；更早 group 只有在预算内才进入。不能连最新请求一起丢掉来“解决”超限。</span></li>
+        <li><b>叠加当前环境和工具。</b><span>环境片段在 system messages 后插入；当前 tool catalog 的 active definitions 与投影一起交给模型。</span></li>
+      </ol>
+      <div class="callout warn"><strong>估算不是 provider tokenizer</strong>估算器按 ASCII、中文字符、结构、图片、artifact 和 tool result 做保守近似。它只能提前发现大多数超限；provider 仍可能因自己的 tokenizer、隐藏 reasoning 或工具协议拒绝请求。</div>
+    </section>
 
-<section class="chapter2" id="adapter"><h2>模型接入层负责协议差异</h2><p>执行器使用统一的消息、内容块、工具定义、工具请求、结束原因和用量结构。不同模型协议各自在提供方适配器中完成请求和响应转换。</p><table class="detail-table"><thead><tr><th>接入层处理</th><th>执行器得到</th></tr></thead><tbody><tr><td>角色、文字、图片和提供方特有内容块</td><td>统一的消息与内容块</td></tr><tr><td>函数调用、自由格式工具请求和调用编号</td><td>统一的工具请求列表</td></tr><tr><td>流式文字、工具参数片段、用量和结束事件</td><td>带类型的流式事件</td></tr><tr><td>搜索服务返回的引用信息</td><td>附着在内容块上的结构化来源</td></tr><tr><td>提供方错误、容量错误和重试提示</td><td>执行器能够分类处理的错误</td></tr></tbody></table><p>引用信息作为内容来源保留，不预先拼成某种入口格式。呈现适配器决定怎样显示链接；提示内容决定最终答复是否需要列出证据。</p></section>
+    <section class="chapter2" id="compaction">
+      <h2>长对话压缩怎样避免语义断裂</h2>
+      <p>压缩不是删除旧行，也不是覆盖 transcript。它产生一条新的、带覆盖序号的摘要事件；原始历史继续存在，摘要只是以后投影的入口。摘要还会被明确标为不可信 transcript data，避免模型把历史里的命令当成系统指令。</p>
+      <div class="timeline">
+        <dt>发现可丢弃范围</dt><dd>投影器按完整 group 计算 Dropped 和 CoversThrough；最近一轮不作为旧历史压掉。</dd>
+        <dt>准备安全输入</dt><dd>图片替换为说明文本；历史中的 prompt injection 不获得 system authority。</dd>
+        <dt>分块压缩</dt><dd>如果压缩输入本身过大，按用户边界分块，多轮归并；达到内部轮数上限则返回错误。</dd>
+        <dt>生成摘要</dt><dd>保留用户意图、决策、证据、路径、工具结果、约束和未解决事项；不发明事实。</dd>
+        <dt>提交摘要事件</dt><dd>写入 <code>compaction_created</code> 和 <code>covers_through</code>，不修改任何旧事件。</dd>
+        <dt>重新投影</dt><dd>从最新摘要继续加入未覆盖事件；若 provider 仍报 context limit，则强制收紧后再请求。</dd>
+      </div>
+      <h3>压缩会带来什么代价</h3>
+      <p>压缩本身也是一次模型调用，增加 token、延迟和 provider 依赖。摘要错误可能让模型失去细节，因此需要保留原始 transcript、可从 coverage 定位被压缩范围，并在关键工作流中让工具结果带有稳定引用而不是只依赖摘要文字。</p>
+    </section>
 
-<section class="chapter2" id="resilience"><h2>模型失败在哪一层处理</h2><p>一次模型判断和一次网络尝试分别记录。执行器负责“这次判断是否产生有效结果”；弹性模型客户端负责“当前提供方是否值得重试或切换”。</p><div class="case"><h3>请求还没有产生用户可见文字</h3><div class="case-body"><div class="case-row"><b>临时错误</b><span>弹性客户端可以在时间允许时有限重试。</span></div><div class="case-row"><b>主要服务不可用</b><span>配置了备用服务时可以切换，且会记录每一次尝试。</span></div><div class="case-row"><b>空回复</b><span>执行器在原位置进行有限次数的空回复重试；仍为空则以明确原因结束。</span></div></div></div><div class="case"><h3>文字已经交给入口</h3><div class="case-body"><div class="case-row"><b>提交边界</b><span>第一个成功发布的文字片段表示用户已经看到这次输出。</span></div><div class="case-row"><b>后续失败</b><span>系统保留已经显示的内容并结束当前请求，不切换到另一份可能完全不同的回答。</span></div><div class="case-row"><b>记录</b><span>完整消息只有在模型正常结束后写入权威记录；半段流式文字保留在界面，不参与恢复。</span></div></div></div></section>
+    <section class="chapter2" id="protocol">
+      <h2>模型接入层负责协议差异</h2>
+      <p>Runtime 依赖 <code>model.Client</code>，而不是某家 SDK。Provider adapter 将请求字段、消息块、tool calls、SSE 流和错误映射为统一模型契约；这样切换协议不需要重写会话、工具或恢复逻辑。</p>
+      <table class="detail-table">
+        <thead><tr><th>Provider 差异</th><th>Canonical 表达</th><th>必须保留的诊断信息</th></tr></thead>
+        <tbody>
+          <tr><td>chat/completions、responses、Anthropic message</td><td><code>model.Request</code> 与 <code>model.Response</code></td><td>provider、model、response ID、finish reason</td></tr>
+          <tr><td>不同 tool/function 格式</td><td><code>model.ToolDefinition</code>、<code>ToolCall</code></td><td>稳定 CallID 和原始参数字节/大小</td></tr>
+          <tr><td>SSE delta 类型不同</td><td>started、text_delta、tool args、usage、completed</td><td>事件类型、item ID、response ID，不默认存完整内容</td></tr>
+          <tr><td>缓存 token 口径不同</td><td><code>model.Usage</code> 的 cache fields</td><td>是否已计入 input，避免成本重复计算</td></tr>
+          <tr><td>HTTP 状态和错误体不同</td><td>typed <code>model.Error</code></td><td>kind、retryable、status、受控错误信息</td></tr>
+          <tr><td>结构化引用</td><td>挂在具体 Content block 的 citations</td><td>URL、标题、字符范围；呈现由 surface 决定</td></tr>
+        </tbody>
+      </table>
+      <p>Provider adapter 可以保留 raw metadata 供诊断，但不能把完整凭据、prompt、工具参数或用户文本无条件放进 span 属性。模型返回的内容仍是模型内容，不会提升为系统策略。</p>
+    </section>
 
-<section class="chapter2" id="source"><h2>对应实现</h2><table class="detail-table"><thead><tr><th>内容</th><th>主要实现</th><th>验证位置</th></tr></thead><tbody><tr><td>提示目录与覆盖合并</td><td><code>packages/prompts</code>、<code>packages/agent/prompt</code></td><td><code>catalog_test.go</code>、<code>prompt_test.go</code></td></tr><tr><td>运行环境片段</td><td><code>packages/agent/environment</code>、<code>runtime/environment.go</code></td><td><code>environment_test.go</code></td></tr><tr><td>上下文投影</td><td><code>packages/agent/runtime/context.go</code></td><td><code>context_test.go</code></td></tr><tr><td>压缩与容量错误恢复</td><td><code>runtime/compactor.go</code>、<code>context_recovery.go</code></td><td><code>compactor_test.go</code></td></tr><tr><td>统一模型协议</td><td><code>packages/agent/model</code></td><td><code>model</code> 包测试</td></tr><tr><td>提供方转换</td><td><code>packages/llm</code>、<code>packages/providers</code></td><td>各提供方适配测试</td></tr><tr><td>重试、备用服务与流提交边界</td><td><code>packages/agent/model/resilient.go</code>、<code>runtime/runner.go</code></td><td><code>resilient_test.go</code>、<code>runner_test.go</code></td></tr></tbody></table></section>
-</article></main><footer class="footer2">AGENT CORE / CONTEXT</footer></body></html>
+    <section class="chapter2" id="resilience">
+      <h2>重试、备用模型和熔断只在一个边界统一处理</h2>
+      <p>ResilientClient 是 provider attempt 的唯一弹性边界。不要把多个 ResilientClient 嵌套起来，否则一次请求的尝试次数和截止时间会乘法膨胀，观测也无法回答“到底请求了几次”。</p>
+      <table class="detail-table">
+        <thead><tr><th>决策</th><th>判定依据</th><th>记录方式</th></tr></thead>
+        <tbody>
+          <tr><td>重试</td><td>typed transient、rate limited、unavailable 或 protocol；未取消且剩余预算足够</td><td>同一 logical request 下增加 attempt，记录等待和结果</td></tr>
+          <tr><td>不重试</td><td>invalid、authentication、context limit（交给压缩）、cancel、deadline</td><td>结束该路径并归类错误</td></tr>
+          <tr><td>fallback</td><td>主 provider 可 failover、备用已配置、尚未提交用户可见文字</td><td>保留 primary/fallback provider 与 model 关系</td></tr>
+          <tr><td>熔断</td><td>同一 provider/model 连续失败达到阈值，进入 cooldown</td><td>新请求快速返回 circuit_open，不占用下游资源</td></tr>
+          <tr><td>空响应恢复</td><td>Response 没有 content 且没有工具调用，使用 runtime 的独立空响应预算</td><td>记录 model_failed；成功前不产生空 final</td></tr>
+        </tbody>
+      </table>
+      <div class="callout"><strong>逻辑请求和网络尝试不是一对一</strong>一次 step 可能先发 primary、等待退避、再发 primary retry，最后切 fallback。成本、延迟和 provider 事故分析必须同时统计 logical request 与 attempt，不能只看 turn 数。</div>
+    </section>
+
+    <section class="chapter2" id="streaming">
+      <h2>流式输出的提交边界</h2>
+      <p>流式事件主要服务于展示。Runtime 会把 delta 送给 sink，但只把完整 assistant message、model lifecycle 和最终状态作为 canonical facts。这样 transcript 不会按 token 数线性膨胀，projection 也可以在事件重放后重建。</p>
+      <div class="plain-grid">
+        <article><h3>首段文字前</h3><p>模型仍处于可安全重试的阶段；provider 临时故障可以 retry/fallback。</p></article>
+        <article><h3>首段文字后</h3><p>输出可能已被 Slack/Web/CLI 展示；停止 retry/fallback，防止两份答案拼接。</p></article>
+        <article><h3>工具调用 delta</h3><p>Runtime 等待完整响应后才执行工具；工具 delta 本身不等于外部副作用。</p></article>
+        <article><h3>Sink 故障</h3><p>呈现失败与模型完成是两件事；保留完整答案，交给 surface 的 delivery fallback。</p></article>
+      </div>
+      <p>如果产品把某些中间文本交给用户，就必须明确它是否改变输出提交语义。当前共享实现以非空文本 delta 为提交点，不能在不同 surface 私自采用“收到任意 stream event 就重试”的规则。</p>
+    </section>
+
+    <section class="chapter2" id="scenarios">
+      <h2>模型相关的生产推演</h2>
+      <div class="scenario-list">
+        <article class="scenario"><h3>提供方返回 429，但队列也在增长</h3><p><span class="label">诊断</span>把 provider attempt、429、retry delay、circuit 状态和 inbox backlog 放在同一时间线上。429 期间提高 worker 数只会制造更多受限请求。</p><p><span class="label">动作</span>先控制入口并发和 retry fan-out，确认 fallback 是否真的可用，再决定是否调整 provider 配额或路由。</p></article>
+        <article class="scenario"><h3>提示更新后，同样输入的工具选择变了</h3><p><span class="label">诊断</span>比较 prompt_hash、工具目录版本、激活列表、模型名和 workflow scope；不要只比较最终自然语言。</p><p><span class="label">动作</span>保留静态 prompt 与 dynamic context 的摘要，使用代表性请求做回归。工具选择改变不代表 policy 已改变，必须分别验证。</p></article>
+        <article class="scenario"><h3>压缩后模型“不记得”关键路径</h3><p><span class="label">诊断</span>定位 compaction_created 的 covers_through，检查被压缩的工具结果是否只有大段文本而没有 artifact 引用，检查摘要是否在未完成交互中切断。</p><p><span class="label">动作</span>调整工具结果外置和摘要字段，不直接放宽上下文上限来掩盖信息结构问题。</p></article>
+        <article class="scenario"><h3>UI 没有收到流，但运行记录显示完成</h3><p><span class="label">诊断</span>先查 canonical transcript 和 run terminal，再查 stream sink、SSE/Slack delivery。运行完成只说明 Core 终止，不说明用户看到了内容。</p><p><span class="label">动作</span>走入口的最终消息补偿或重连逻辑；不要重新执行模型和工具。</p></article>
+      </div>
+    </section>
+
+    <section class="chapter2" id="source">
+      <h2>对应实现</h2>
+      <table class="detail-table">
+        <thead><tr><th>内容</th><th>主要实现</th><th>验证位置</th></tr></thead>
+        <tbody>
+          <tr><td>提示目录与覆盖合并</td><td><code>packages/prompts</code>、<code>packages/agent/prompt</code></td><td><code>catalog_test.go</code>、<code>prompt_test.go</code></td></tr>
+          <tr><td>运行环境片段</td><td><code>packages/agent/environment</code>、<code>runtime/environment.go</code></td><td><code>environment_test.go</code></td></tr>
+          <tr><td>上下文投影与估算</td><td><code>packages/agent/runtime/context.go</code></td><td><code>context_test.go</code></td></tr>
+          <tr><td>压缩与超限恢复</td><td><code>runtime/compactor.go</code>、<code>context_recovery.go</code></td><td><code>compactor_test.go</code>、runner recovery tests</td></tr>
+          <tr><td>统一模型协议</td><td><code>packages/agent/model</code></td><td>model package tests</td></tr>
+          <tr><td>Provider 转换</td><td><code>packages/llm</code>、<code>packages/providers</code></td><td>各 provider adapter tests</td></tr>
+          <tr><td>重试、备用服务与流提交</td><td><code>agent/model/resilient.go</code>、<code>runtime/runner.go</code></td><td><code>resilient_test.go</code>、runner tests</td></tr>
+          <tr><td>结构化引用与呈现</td><td><code>model.Content.Citations</code>、各 surface adapter</td><td>provider/surface integration tests</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </article>
+</main>
+<footer class="footer2">AGENT CORE / CONTEXT &amp; MODEL</footer>
+</body>
+</html>

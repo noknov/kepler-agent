@@ -1,17 +1,130 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Slack 入口如何适配共享 Agent Core"><title>Slack 接入 · Agent Core 架构</title><link rel="stylesheet" href="assets/guide.css"><script src="assets/architecture.js" defer></script></head><body>
-<header class="topbar"><div class="topbar-inner"><a class="brand2" href="index.html">AGENT CORE / ARCHITECTURE</a><nav class="topnav"><a href="index.html">概览</a><a href="execution.html">执行</a><a href="tools.html">工具</a><a href="slack.html" aria-current="page">Slack</a><a href="reference.html">索引</a></nav></div></header>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Slack 入口验证、线程会话、交互审批、附件处理、流式回复与投递不确定性">
+<title>Slack 接入 · Agent Core 架构</title>
+<link rel="stylesheet" href="assets/guide.css">
+<script src="assets/architecture.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="topbar-inner"><a class="brand2" href="index.html">AGENT CORE / ARCHITECTURE</a><nav class="topnav">
+<a href="index.html">概览</a><a href="execution.html">执行</a><a href="models.html">模型</a><a href="tools.html">工具</a><a href="reliability.html">可靠性</a><a href="operations.html">观测</a><a href="production.html">生产推演</a><a href="slack.html" aria-current="page">Slack</a><a href="delegation.html">委派</a><a href="reference.html">索引</a>
+</nav></div></header>
 <main class="doc-shell"><aside class="side"></aside><article class="doc">
 <header class="hero2"><p class="kicker">ADAPTER / SLACK</p><h1>Slack 接入</h1><p class="lead2">Slack 是共享执行核心之外的一层适配器。它验证平台请求、把消息线程映射为会话、整理附件和追加输入，再将 Core 产生的事件投影为 Slack 回复。模型循环、工具调度和终态判断仍由 Core 完成。</p></header>
 
-<section class="chapter2" id="contract"><h2>适配契约</h2><table class="detail-table"><thead><tr><th>Slack 输入</th><th>Core 契约</th><th>边界</th></tr></thead><tbody><tr><td>team、channel、thread、user</td><td>身份与执行作用域</td><td>平台标识只作为作用域数据，不进入 Runtime 控制流</td></tr><tr><td>event_id</td><td>稳定请求来源</td><td>用于入口幂等，不替代会话事件序号</td></tr><tr><td>消息、历史、附件</td><td>统一内容块</td><td>外部文本始终是不可信用户内容</td></tr><tr><td>线程中新消息</td><td>追加输入源</td><td>先持久化，再在稳定执行边界加入</td></tr><tr><td>流式消息接口</td><td>事件接收器</td><td>呈现失败不改变 Core 中已经确认的执行事实</td></tr></tbody></table></section>
+<section class="chapter2" id="contract">
+<h2>适配器的输入输出契约</h2>
+<table class="detail-table"><thead><tr><th>Slack 输入</th><th>Core 契约</th><th>边界</th></tr></thead><tbody>
+<tr><td>team、channel、thread、user</td><td>身份与执行作用域</td><td>平台标识只作为作用域数据，不进入 Runtime 控制流</td></tr>
+<tr><td>event_id</td><td>稳定请求来源</td><td>用于入口幂等，不替代会话事件序号</td></tr>
+<tr><td>消息、历史、附件</td><td>统一内容块</td><td>外部文本始终是不可信用户内容</td></tr>
+<tr><td>线程中新消息</td><td>追加输入源</td><td>先持久化，再在稳定执行边界加入</td></tr>
+<tr><td>交互按钮</td><td>带用户身份的控制输入</td><td>动作值必须能指向具体 turn 和 tool call</td></tr>
+<tr><td>流式消息接口</td><td>事件接收器</td><td>呈现失败不改变 Core 中已经确认的执行事实</td></tr>
+</tbody></table>
+<div class="decision"><b>入口目标：</b>Slack HTTP 请求只负责认证、规范化和入队，不能把“平台已经回复 200”解释成“模型已经完成”。执行完成与消息投递是两个独立的状态。</div>
+</section>
 
-<section class="chapter2" id="ingress"><h2>接收路径</h2><ol class="walkthrough"><li><b>读取有限大小的原始请求体</b><span>签名针对原始字节计算，不对解析后的 JSON 重新编码。</span></li><li><b>检查时间与签名</b><span>拒绝超出时间窗口的请求，并使用常量时间比较验证 HMAC。</span></li><li><b>按事件编号持久化</b><span>相同事件收敛到同一条 inbox 记录；写入成功后 HTTP 生命周期即可结束。</span></li><li><b>工作进程认领并续期</b><span>模型执行与平台回调解耦，认领、重试和接管由持久状态控制。</span></li><li><b>组装 Core 请求</b><span>解析身份、线程历史、附件、工具作用域和输入来源，然后调用共享 Runtime。</span></li></ol></section>
+<section class="chapter2" id="ingress">
+<h2>HTTP 接收：原始字节是签名边界</h2>
+<ol class="walkthrough">
+<li><b>限制请求体。</b><span>先读取有限大小的原始请求体，防止异常 payload 让入口耗尽内存。</span></li>
+<li><b>检查时间窗口。</b><span>拒绝过旧或未来偏差过大的时间戳，避免重放旧签名请求。</span></li>
+<li><b>验证 HMAC。</b><span>签名针对原始字节计算，使用常量时间比较；不能先解析 JSON 再重新编码。</span></li>
+<li><b>解析事件类型。</b><span>只把支持的 mention、message、file_shared、reaction 等事件交给 Handler；忽略 bot 自己的消息，避免回环。</span></li>
+<li><b>按事件编号持久化。</b><span>相同 event_id 收敛为一条 inbox 记录；写入成功后 HTTP 生命周期即可结束，Worker 再负责长执行。</span></li>
+</ol>
+<table class="detail-table"><thead><tr><th>失败点</th><th>对 Slack 的响应</th><th>对系统的事实</th></tr></thead><tbody>
+<tr><td>签名或时间非法</td><td>拒绝请求</td><td>不创建会话、不入队</td></tr>
+<tr><td>JSON 不完整或事件不支持</td><td>按入口策略确认或拒绝</td><td>记录解析/永久错误，避免无限重试坏 payload</td></tr>
+<tr><td>数据库不可用</td><td>不能安全确认接收</td><td>让平台重试或由入口层报告入队失败</td></tr>
+<tr><td>已存在 event_id</td><td>视为已接收</td><td>不再创建第二个执行</td></tr>
+</tbody></table>
+</section>
 
-<section class="chapter2" id="session"><h2>线程与会话</h2><p>频道和消息线程共同确定连续会话。首次处理时，适配器读取有限历史并转换为内部消息；之后的事件从会话记录继续。Slack 事件编号标识本次入口请求，会话事件序号负责内部顺序，两者不能混用。</p><div class="callout"><strong>追加输入</strong>会话正在执行时，新消息先写入持久输入队列。路由策略决定它加入当前执行还是排到下一轮；Redis 只负责唤醒，不承担权威队列。</div></section>
+<section class="chapter2" id="routing">
+<h2>事件路由不是“所有消息都启动新请求”</h2>
+<table class="detail-table"><thead><tr><th>事件</th><th>路由</th><th>生产注意</th></tr></thead><tbody>
+<tr><td>频道 mention</td><td>清理 bot mention，按频道权限创建或续接线程会话</td><td>无权限只返回拒绝提示，不把原文送入 Core</td></tr>
+<tr><td>私信</td><td>新消息创建会话；线程回复优先作为已有会话输入</td><td>bot、自身消息和非用户 subtype 要过滤</td></tr>
+<tr><td>频道线程回复</td><td>只有受支持线程、权限和非空内容才进入会话</td><td>不要把无关频道聊天误接入 agent</td></tr>
+<tr><td>file_shared</td><td>私信场景下，按消息时间戳找到线程并转为内容块</td><td>没有消息时间戳时等待对应 message.file_share 事件</td></tr>
+<tr><td>reaction_added</td><td>记录与运行/消息的反馈关联</td><td>反馈不应改变已经完成的执行事实</td></tr>
+</tbody></table>
+<p>频道、消息线程、用户和团队共同构成外部作用域；内部使用稳定的 session ID。event_id 标识入口请求，turn ID 标识一次执行，transcript sequence 标识会话内顺序，不能用一个 ID 代替三种语义。</p>
+</section>
 
-<section class="chapter2" id="attachments"><h2>附件处理</h2><p>适配器检查文件类型、大小和当前安装权限，再将附件转换为图片内容、提取文字或受控文件引用。原始平台文件对象和访问令牌不会进入模型上下文。下载失败形成分类错误，不伪装成空附件。</p></section>
+<section class="chapter2" id="session">
+<h2>线程与会话的连续性</h2>
+<p>首次处理时，适配器读取有限历史并转换为内部消息；之后的事件从会话记录继续。若会话已有活动执行，后续消息不会并发启动另一个相同 session 的 Runtime，而是按模式进入 steering 或 queue。</p>
+<figure class="diagram"><div class="flow">
+<div class="box"><b>Slack 新消息</b><small>event_id + channel/thread</small></div><div class="arrow">→</div>
+<div class="box blue"><b>session input</b><small>持久队列<br>按会话排序</small></div><div class="arrow">→</div>
+<div class="box"><b>稳定边界</b><small>模型前 / turn 结束前</small></div><div class="arrow">→</div>
+<div class="box green"><b>新 turn</b><small>写入 user_input<br>再投影上下文</small></div></div></figure>
+<p>steering 只在模型判断前或最终答复确认前加入，不打断已经开始的一批工具调用；queue 则在当前 turn 结束后创建下一次执行。输入的认领者、确认者和过期恢复都由持久队列记录控制。</p>
+</section>
 
-<section class="chapter2" id="output"><h2>输出投影</h2><div class="timeline"><dt>文字片段</dt><dd>跨片段脱敏器确认安全边界后进入发送缓冲。</dd><dt>首次可见内容</dt><dd>此时才建立 Slack 原生流，避免纯工具阶段产生空白消息。</dd><dt>流式失败</dt><dd>保留 Core 的完整答案，结束时回退到普通消息；投递状态单独记录。</dd><dt>消息过长</dt><dd>按段发送并维护代码围栏状态，避免 Markdown 语义跨段损坏。</dd><dt>结果不确定</dt><dd>Slack API 与数据库没有共同事务；超时后先查询既有投递，不能直接重复外部写入。</dd></div></section>
+<section class="chapter2" id="attachments">
+<h2>附件不是一个可以直接塞进 prompt 的 URL</h2>
+<ol class="walkthrough">
+<li><b>确认来源和权限。</b><span>只处理当前用户可访问的文件；私有下载地址和访问令牌不得进入模型上下文。</span></li>
+<li><b>检查类型和大小。</b><span>受支持图片转为图片内容，文本/Markdown/JSON 等受控提取，其他类型形成明确的不可用信息。</span></li>
+<li><b>保存可追溯引用。</b><span>内部内容块保留文件名、类型和稳定引用，下载失败要保留分类错误而不是伪装成空附件。</span></li>
+<li><b>估算上下文代价。</b><span>图片、提取文本和文件描述都占用上下文预算，过大时交给投影/压缩策略处理。</span></li>
+</ol>
+<div class="decision"><b>安全边界：</b>模型可以知道“有一个用户上传的图片/文件以及它的受控描述”，不应获得可直接复用的 Slack 私有下载凭据。</div>
+</section>
 
-<section class="chapter2" id="source"><h2>实现索引</h2><table class="detail-table"><thead><tr><th>职责</th><th>实现</th><th>验证</th></tr></thead><tbody><tr><td>请求验证</td><td><code>packages/surfaces/slack/handler/handler.go</code></td><td><code>handler</code> 包测试</td></tr><tr><td>事件认领</td><td><code>packages/surfaces/slack/events/worker.go</code></td><td><code>worker_test.go</code></td></tr><tr><td>会话组装</td><td><code>packages/surfaces/slack/agent/service.go</code></td><td><code>service_test.go</code></td></tr><tr><td>流式回复</td><td><code>packages/surfaces/slack/agent/streaming.go</code></td><td><code>streaming_test.go</code></td></tr><tr><td>消息与附件</td><td><code>packages/surfaces/slack/client</code>、<code>files</code>、<code>messaging</code></td><td>对应包测试</td></tr></tbody></table></section>
-</article></main><footer class="footer2">AGENT CORE / SLACK ADAPTER</footer></body></html>
+<section class="chapter2" id="interactions">
+<h2>按钮和审批必须回到具体执行事实</h2>
+<p>运行请求工具批准时，Slack 状态消息携带 turn_id 和 tool_call_id。用户点击批准或拒绝后，Handler 验证动作值，使用当前用户身份构造新的输入记录，再进入会话输入队列；它不是直接从 HTTP handler 调用工具。</p>
+<table class="detail-table"><thead><tr><th>步骤</th><th>为什么这样做</th></tr></thead><tbody>
+<tr><td>Core 写入 approval_requested</td><td>先记录等待的是哪一个具体工具调用</td></tr>
+<tr><td>Slack 显示批准/拒绝控件</td><td>把不可变的 turn/call 标识放在动作值中</td></tr>
+<tr><td>用户点击后入队</td><td>审批和普通输入共享顺序、租约和恢复机制</td></tr>
+<tr><td>Runtime ResolveApproval</td><td>按 session、turn、call 和 user 校验，防止旧按钮批准另一次执行</td></tr>
+<tr><td>继续或终止</td><td>结果仍写入 transcript，Slack 只是状态投影</td></tr>
+</tbody></table>
+</section>
+
+<section class="chapter2" id="output">
+<h2>流式回复和最终回复是两条投递路径</h2>
+<div class="timeline"><dt>控制流事件</dt><dd>turn、工具、计划和审批状态更新 Slack session status；委派报告等内部事件不直接显示为用户文本。</dd><dt>首次可见文本</dt><dd>缓冲跨片段脱敏后的 assistant 文本，只有出现第一段非空可见内容时才建立 Slack 原生流。</dd><dt>节流追加</dt><dd>按时间或最小字符数合并更新，避免每个 token 都触发平台 API。</dd><dt>流式失败</dt><dd>标记投递失败但保留 Core 的完整答案；结束时回退到普通消息。</dd><dt>消息过长</dt><dd>分段发送并维护代码围栏状态，避免 Markdown 语义跨段损坏。</dd><dt>结果不确定</dt><dd>Slack API 与数据库没有共同事务；超时后先查询既有消息关联或稳定 client_msg_id，不能直接重复外部写入。</dd></div>
+<table class="detail-table"><thead><tr><th>状态</th><th>执行权威事实</th><th>用户看到的表现</th></tr></thead><tbody>
+<tr><td>工具阶段无文本</td><td>Runtime 仍在执行</td><td>可以只有 processing 状态，不创建空白流</td></tr>
+<tr><td>流成功更新</td><td>文本 delta 已被适配器接受</td><td>看到逐步增长的回复</td></tr>
+<tr><td>流启动未知</td><td>可能已在 Slack 创建消息</td><td>不得盲目创建第二条，完成阶段先查询或修复</td></tr>
+<tr><td>Core 已完成、投递失败</td><td>turn_completed 已落盘</td><td>管理侧显示 delivery error，重试投递而不是重跑模型</td></tr>
+</tbody></table>
+</section>
+
+<section class="chapter2" id="scenarios">
+<h2>入口和投递的真实故障场景</h2>
+<div class="scenario-list">
+<article class="scenario"><h3>平台重试同一事件</h3><p><span class="label">现象</span> Slack 因为入口超时又发来同一个 event_id。</p><p><span class="label">正确路径</span> inbox 唯一键使第二次只得到“已接收”的结果；不要再次创建 turn 或发送第二次初始回复。</p><p><span class="label">核对</span> event_id、inbox 状态、session ID 和 turn ID 是否一一对应。</p></article>
+<article class="scenario"><h3>流启动请求超时</h3><p><span class="label">现象</span> Slack API 没有返回明确结果，但请求可能已经在服务端生效。</p><p><span class="label">正确路径</span> 将启动视为未知结果，结束时查询消息关联；只有能证明未创建时才走普通消息补偿。</p><p><span class="label">核对</span> client_msg_id、channel/thread、run 的最终消息关联和投递日志。</p></article>
+<article class="scenario"><h3>用户点击旧的批准按钮</h3><p><span class="label">现象</span> 原 turn 已取消或已经进入另一个等待点，旧控件仍留在频道里。</p><p><span class="label">正确路径</span> 以 turn_id、tool_call_id、session 和用户身份校验；不匹配则忽略或提示控件过期。</p><p><span class="label">核对</span> 是否把按钮动作直接当成“当前工具批准”，绕过了 Runtime 校验。</p></article>
+<article class="scenario"><h3>消息有附件但文件事件先到</h3><p><span class="label">现象</span> file_shared 没有足够的消息线程信息，无法安全映射会话。</p><p><span class="label">正确路径</span> 不猜 session；等待包含消息时间戳的事件或通过补偿读取完整消息。</p><p><span class="label">核对</span> 附件是否重复入队、私有 URL 是否泄露到上下文和日志。</p></article>
+</div>
+</section>
+
+<section class="chapter2" id="source">
+<h2>实现索引</h2>
+<table class="detail-table"><thead><tr><th>职责</th><th>实现</th><th>验证</th></tr></thead><tbody>
+<tr><td>签名验证</td><td><code>packages/surfaces/slack/client/signature.go</code></td><td><code>client/*_test.go</code></td></tr>
+<tr><td>请求与事件处理</td><td><code>packages/surfaces/slack/handler/handler.go</code></td><td><code>handler</code> 包测试</td></tr>
+<tr><td>事件认领</td><td><code>packages/surfaces/slack/events/worker.go</code></td><td><code>worker_test.go</code></td></tr>
+<tr><td>会话组装与输入</td><td><code>packages/surfaces/slack/agent/service.go</code></td><td><code>service_test.go</code>、控制集成测试</td></tr>
+<tr><td>流式回复</td><td><code>packages/surfaces/slack/agent/streaming.go</code></td><td><code>streaming_test.go</code>、<code>client_test.go</code></td></tr>
+<tr><td>审批和状态</td><td><code>packages/surfaces/slack/agent/status.go</code>、<code>handler.go</code></td><td>批准、拒绝、pending 状态测试</td></tr>
+<tr><td>消息与附件</td><td><code>packages/surfaces/slack/client</code>、<code>files</code>、<code>messaging</code></td><td>对应包测试</td></tr>
+</tbody></table>
+</section>
+</article></main>
+<footer class="footer2">AGENT CORE / SLACK ADAPTER</footer>
+</body>
+</html>

@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Kepler Agent 在生产环境中的超时、租约、容量、发布与故障推演">
+  <title>生产运行与故障推演 · Agent Core 架构</title>
+  <link rel="stylesheet" href="assets/guide.css">
+  <script src="assets/architecture.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="topbar-inner">
+  <a class="brand2" href="index.html">AGENT CORE / ARCHITECTURE</a>
+  <nav class="topnav" aria-label="文档导航">
+    <a href="index.html">概览</a><a href="execution.html">执行</a><a href="models.html">模型</a>
+    <a href="tools.html">工具</a><a href="reliability.html">可靠性</a><a href="operations.html">观测</a><a href="production.html" aria-current="page">生产推演</a>
+    <a href="slack.html">Slack</a><a href="delegation.html">委派</a><a href="reference.html">索引</a>
+  </nav>
+</div></header>
+
+<main class="doc-shell">
+  <aside class="side"><p>本页目录</p><a href="#clocks">四个时钟</a><a href="#windows">故障窗口</a><a href="#capacity">容量与背压</a><a href="#incidents">故障推演</a><a href="#security">安全边界</a><a href="#release">发布与演进</a><a href="#verification">验证清单</a><a href="#source">对应实现</a></aside>
+  <article class="doc">
+    <header class="hero2">
+      <p class="kicker">PRODUCTION / FAILURE WALKTHROUGH</p>
+      <h1>生产运行与故障推演</h1>
+      <p class="lead2">Agent 系统最难的部分不是让模型返回一句话，而是让一条请求在排队、并发、超时、重试、外部副作用和用户呈现同时发生时仍然可解释。本页把跨模块的生产问题串起来：每个时钟由谁拥有、每次失败留下什么事实、什么可以重试、什么必须先查清楚。</p>
+      <div class="facts"><span><b>默认语义</b> 至少一次</span><span><b>权威状态</b> Transcript</span><span><b>恢复原则</b> 不猜未知副作用</span><span><b>调度原则</b> 有界背压</span></div>
+    </header>
+
+    <section class="chapter2" id="clocks">
+      <h2>先把一条请求拆成四个时钟</h2>
+      <p class="intro">生产事故经常来自“看起来只有一个 timeout”。实际上，HTTP 响应、入口事件租约、会话处理权和模型/工具截止时间分别由不同组件控制。任何一个时钟过短，都会让健康工作被误判为失败；任何一个过长，都会延迟接管并放大资源占用。</p>
+      <figure class="diagram">
+        <div class="flow">
+          <div class="box"><b>入口响应时钟</b><small>签名验证、去重、入队<br>不等待模型完成</small></div>
+          <div class="arrow">→</div>
+          <div class="box blue"><b>事件租约时钟</b><small>worker claim / renew<br>保护入口任务所有权</small></div>
+          <div class="arrow">→</div>
+          <div class="box"><b>会话处理权</b><small>SessionLease<br>保护同一会话串行执行</small></div>
+          <div class="arrow">→</div>
+          <div class="box green"><b>Turn deadline</b><small>模型、工具、子任务<br>必须在剩余预算内结束</small></div>
+        </div>
+        <figcaption>四个时钟不是同一个取消信号，但最终都通过 context 影响执行。租约丢失时，旧所有者必须主动停止。</figcaption>
+      </figure>
+      <table class="detail-table">
+        <thead><tr><th>时钟</th><th>负责组件</th><th>保护对象</th><th>过期后的正确动作</th></tr></thead>
+        <tbody>
+          <tr><td>入口响应</td><td>Gateway / surface handler</td><td>平台回调连接</td><td>已验证并持久化就返回；不因模型变慢而占住平台连接</td></tr>
+          <tr><td>Inbox lease</td><td>Slack event worker</td><td>某个 event_id 的处理权</td><td>续期失败则取消旧 handler；到期后由恢复扫描重新排队或死信</td></tr>
+          <tr><td>Session lease</td><td>Runtime + PostgreSQL</td><td>同一 session 的完整 turn</td><td>不再读取、追加或完成新的事实；让新所有者从 transcript 恢复</td></tr>
+          <tr><td>Turn deadline</td><td>surface / worker / runtime</td><td>模型、工具和子任务的资源预算</td><td>取消当前上下文，记录 canceled 或相应失败，不再开启下一次尝试</td></tr>
+          <tr><td>Shutdown deadline</td><td>进程生命周期</td><td>排空期间的存活时间</td><td>停止接收新任务，未完成工作靠租约到期后的恢复继续</td></tr>
+        </tbody>
+      </table>
+      <div class="decision"><b>配置关系</b><p>入口事件的租约必须覆盖一次完整 handler，但不应无限大；handler 的事件超时必须小于租约，才能给续期/接管留下余量。数据库连接池还要容纳正在等待会话锁的请求、锁监视连接、事件写入和观测查询，不能只按平均 QPS 估算。</p></div>
+    </section>
+
+    <section class="chapter2" id="windows">
+      <h2>把失败窗口写成可恢复的状态</h2>
+      <p>从“调用成功/失败”看 Agent 会过于粗糙。真正需要记录的是调用前后发生过哪些确定事实，以及下一位执行者是否有条件安全重做。下面的矩阵是设计新能力时应补齐的最小答案。</p>
+      <table class="detail-table">
+        <thead><tr><th>失败位置</th><th>已经确认的事实</th><th>能否自动重试</th><th>恢复动作</th></tr></thead>
+        <tbody>
+          <tr><td>HTTP 返回前</td><td>原始 event 已按 event_id 写入 inbox</td><td>可以。入口重试只会命中同一去重键</td><td>worker 从 queued 记录重新派发；坏 payload 直接 dead-letter</td></tr>
+          <tr><td>模型请求开始前</td><td>ModelRequestStarted 已记录，可能尚未到达提供方</td><td>仅在请求仍未产生可见输出且错误类型可重试时</td><td>按 provider policy 重试；进程恢复时未收敛请求标为 unknown</td></tr>
+          <tr><td>模型流输出后</td><td>至少一段文字已经交给 sink，可能已经展示给用户</td><td>不可以直接重试</td><td>停止 fallback，保留已展示片段并报告流式失败</td></tr>
+          <tr><td>ToolCallStarted 后</td><td>工具可能已经访问或修改外部系统</td><td>不能仅凭“没有结果”重做</td><td>补写 execution_interrupted；查询上游结果或人工确认</td></tr>
+          <tr><td>工具结果已写入、投影失败</td><td>Canonical transcript 已提交</td><td>可以重建投影，不重做工具</td><td>RunSink 从 transcript 按 event ID 幂等重放</td></tr>
+          <tr><td>Slack 发消息超时</td><td>外部消息是否创建未知</td><td>不应盲目再发一条</td><td>先按稳定 client_msg_id 或已保存链接查询，再决定补偿</td></tr>
+        </tbody>
+      </table>
+      <div class="callout warn"><strong>“重试”不是一个全局开关</strong>模型网络重试、空响应重试、上下文超限恢复、工具失败重试和 Slack 投递补偿属于不同层。把它们叠加会乘倍放大调用次数；每一层都要声明自己的次数、预算和提交边界。</div>
+    </section>
+
+    <section class="chapter2" id="capacity">
+      <h2>容量、背压与资源乘法</h2>
+      <p class="intro">Agent 的资源消耗不是“一个请求占一个 worker”。一条用户请求可能包含多个模型步骤、每步多个工具、一个工具内部的多文件 fan-out，以及一个委派调用产生的多个子 turn。容量设计必须按峰值 fan-out 计算，并让每个入口在资源耗尽时有明确的拒绝或延迟行为。</p>
+      <div class="metric-grid">
+        <div class="metric"><b>入口并发</b><strong>worker 数 × 活跃任务</strong><span>决定同时运行的 Slack handler 数量；队列满时应可观察地拒绝/等待。</span></div>
+        <div class="metric"><b>模型并发</b><strong>步骤 × retry / fallback</strong><span>同一 turn 的模型调用可能串行重试；provider 限流要按实际尝试计数。</span></div>
+        <div class="metric"><b>工具并发</b><strong>step × parallel calls</strong><span>runtime bulkhead 限制独立只读调用；工具内部还需要自己的 fan-out 上限。</span></div>
+        <div class="metric"><b>子任务并发</b><strong>parent × child workers</strong><span>agent-explore 另有 batch、worker 和 step 边界；子任务不是免费线程。</span></div>
+        <div class="metric"><b>数据库连接</b><strong>执行 + 锁 + 查询</strong><span>会话锁使用专用连接；事件写入、输入认领和 RunSink 仍会争用池。</span></div>
+        <div class="metric"><b>上下文成本</b><strong>history + results + retries</strong><span>压缩请求也消耗模型调用和 token；大工具结果必须外置或截断。</span></div>
+      </div>
+      <h3>背压要在哪一层发生</h3>
+      <ol class="walkthrough">
+        <li><b>入口队列先有界。</b><span>Slack worker 的内存 queue 有固定容量；Notify 不应因为平台重试而无限创建 goroutine。持久 inbox 才是可恢复的权威队列。</span></li>
+        <li><b>执行中的 fan-out 再有界。</b><span>模型输出是不可信输入，MaxParallelToolCalls 在创建 goroutine 前取得名额；MapOrdered 还限制单个工具内部的多文件并发。</span></li>
+        <li><b>提供方调用要有预算。</b><span>ResilientClient 在每次初始请求、等待重试和 fallback 前检查剩余 deadline；不能为了重试把已经没有意义的请求发出去。</span></li>
+        <li><b>投影与观测可以降级。</b><span>异步 sink 的事件允许丢失并发出 shed 信号，因为它们可以从 transcript 重建；canonical append 失败则不能继续假装工作已经保存。</span></li>
+        <li><b>资源耗尽要返回可识别状态。</b><span>超载、budget_exhausted、provider_circuit_open、pending_approval 和 pending_input 的含义不同，不能全部显示成“系统错误”。</span></li>
+      </ol>
+      <div class="decision"><b>容量调优顺序</b><p>先观察队列深度、租约过期数、活跃 session、数据库池等待、模型 p95、工具 p95、投影 shed 和 provider 429，再决定调哪个上限。只提高 worker 数通常会同时提高数据库连接、模型限流、下游 API 和重复副作用风险。</p></div>
+    </section>
+
+    <section class="chapter2" id="incidents">
+      <h2>按症状推演，而不是直接重启</h2>
+      <div class="scenario-list">
+        <article class="scenario">
+          <h3>场景 A：Slack 显示已收到，但一直没有回复</h3>
+          <p><span class="label">先查</span>event_id 是否在 inbox、状态是否 queued/processing/dead_letter；再看同一 turn 的终态和 Slack delivery link。</p>
+          <p><span class="label">分叉</span>没有 inbox 是入口持久化问题；有 inbox 但未开始是调度/队列问题；turn 已完成但无链接是执行后投递问题。</p>
+          <p><span class="label">不要做</span>不要直接重新发送事件或复制一条消息；同一个 event 可能仍被健康 worker 持有。</p>
+        </article>
+        <article class="scenario">
+          <h3>场景 B：数据库里出现 running 很久的 turn</h3>
+          <p><span class="label">先查</span>session lease、inbox lease、worker 心跳、provider span、tool duration 和进程池等待。</p>
+          <p><span class="label">分叉</span>如果租约仍有效，可能只是慢工具或慢模型；如果租约已过期，等待恢复接管；如果旧进程仍在跑但续期失败，确认它已被 context 取消。</p>
+          <p><span class="label">不要做</span>不要只把所有 timeout 和 worker 数调大；那可能让失联 owner 占住资源更久。</p>
+        </article>
+        <article class="scenario">
+          <h3>场景 C：回复重复，或外部动作疑似执行了两次</h3>
+          <p><span class="label">先查</span>event_id、turn_id、tool_call_id、execution_id、provider 请求 ID、Slack client_msg_id 和上游审计日志。</p>
+          <p><span class="label">分叉</span>同一 canonical result 被投影两次通常是幂等投影问题；没有结果但存在 ToolCallStarted 则属于未知副作用，必须查询上游。</p>
+          <p><span class="label">修复</span>为下游写入使用 execution ID 做幂等键；对不能查询结果的 API，选择人工确认而不是自动重试。</p>
+        </article>
+        <article class="scenario">
+          <h3>场景 D：模型成本突然上升</h3>
+          <p><span class="label">先查</span>每个 turn 的 step 数、model_attempted 数、fallback、compaction、child_runs、工具结果大小和 429/5xx。</p>
+          <p><span class="label">分叉</span>如果步骤变多，检查工具错误是否让模型循环；如果尝试变多，检查 provider 熔断与 retry 叠加；如果 input token 变大，检查摘要覆盖点和 spill 失败。</p>
+          <p><span class="label">修复</span>先让轨迹能按 turn 聚合成本，再调整 MaxSteps、retry、结果预算或提示，不用模型名称猜价格。</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="chapter2" id="security">
+      <h2>生产安全是多道边界，不是一个批准按钮</h2>
+      <table class="detail-table">
+        <thead><tr><th>边界</th><th>检查什么</th><th>常见误区</th></tr></thead>
+        <tbody>
+          <tr><td>身份</td><td>Slack/浏览器身份、用户连接、服务端凭据分别核对</td><td>把“用户已登录”当成“工具拥有上游 token”</td></tr>
+          <tr><td>工具目录</td><td>注册时验证 effects、schema、parallel/exclusive；deferred 只控制暴露</td><td>把工具描述、surface 标签或动态名称当成授权</td></tr>
+          <tr><td>托管策略</td><td>精确工具允许名单、实际目标资源和 operator policy</td><td>让终端用户批准服务器主机上的写入</td></tr>
+          <tr><td>本地执行</td><td>解析真实路径、符号链接、敏感文件、argv 和 Seatbelt/bubblewrap</td><td>把命令风险正则当成 shell 解析器或完整沙箱</td></tr>
+          <tr><td>网络访问</td><td>scheme、目标地址、DNS 解析后的 IP、重定向和代理行为</td><td>只检查 URL 文本，忽略 DNS rebinding 或内部地址</td></tr>
+          <tr><td>日志与轨迹</td><td>默认仅保留结构性摘要、hash、大小、工具名和 trace 关联</td><td>把完整 prompt、token、凭据和工具参数直接打入日志</td></tr>
+        </tbody>
+      </table>
+      <p>安全检查必须覆盖“读取、搜索、Git 引用、命令子进程、网络重定向和大结果”组合场景。单个 read-file 测试通过，不能证明另一个工具不会以不同路径访问同一敏感资源。</p>
+    </section>
+
+    <section class="chapter2" id="release">
+      <h2>发布、Schema 和配置怎样一起演进</h2>
+      <ol class="walkthrough">
+        <li><b>先确认行为归属。</b><span>运行时不承载 DDL；共享契约在 <code>packages/agent</code>，数据库对象在 <code>schema/postgres.sql</code>，入口和 profile 只做组装。</span></li>
+        <li><b>先扩展后切换。</b><span>新增字段或事件时，先让旧消费者忽略未知数据、新消费者兼容旧数据，再切换生产流量，最后清理旧路径。</span></li>
+        <li><b>区分源数据与投影。</b><span>RunSink、指标和 UI 状态可以重建；删除或修改 transcript、inbox 和输入队列则是数据操作，不应作为普通发布清理。</span></li>
+        <li><b>回滚应用不等于回滚数据库。</b><span>新代码可能依赖已发布的增量 schema。镜像回滚、数据库回滚、积压事件处理必须分别评估。</span></li>
+        <li><b>把 source revision 记入证据。</b><span>评估、轨迹和事故记录应能关联到代码 revision、模型、配置摘要与环境；否则无法判断问题是代码、提示、模型还是部署漂移。</span></li>
+      </ol>
+      <div class="callout"><strong>当前实现的边界</strong>Fresh-install schema 是契约，不是应用启动时自动迁移的脚本；运行时不会替运维执行 DDL。生产升级必须由发布流程应用增量迁移，并在兼容窗口内验证读写。</div>
+    </section>
+
+    <section class="chapter2" id="verification">
+      <h2>上线前应验证哪些故障路径</h2>
+      <table class="detail-table">
+        <thead><tr><th>验证组</th><th>故障注入</th><th>应观察到的结果</th></tr></thead>
+        <tbody>
+          <tr><td>入口</td><td>重复 webhook、Redis 断连、内存队列满、坏 JSON</td><td>同一 event_id 不重复入库；Redis 丢失由轮询补偿；坏事件死信</td></tr>
+          <tr><td>所有权</td><td>会话锁等待、数据库连接断开、inbox renew 返回零行</td><td>旧 owner 停止；新 owner 可按事实恢复；旧 owner 不覆盖状态</td></tr>
+          <tr><td>模型</td><td>429、5xx、协议坏响应、上下文超限、空响应、首 token 后断流</td><td>只有可重试类型进入预算内重试；首段输出后不 fallback 拼接</td></tr>
+          <tr><td>工具</td><td>panic、超时、重复调用、超大结果、外部写入后进程退出</td><td>错误结构化；结果受限；恢复写入 unknown，不重新执行已开始动作</td></tr>
+          <tr><td>投影</td><td>RunSink 慢、异步队列饱和、进程在 terminal append 后退出</td><td>transcript 仍权威；投影按 event ID 幂等重建；运行最终可查询</td></tr>
+          <tr><td>呈现</td><td>Slack stream 失败、普通消息超时、客户端重复提交</td><td>先查既有 delivery；不把呈现失败倒灌成执行失败</td></tr>
+          <tr><td>容量</td><td>大量并行只读、子任务 fan-out、连接池耗尽、shutdown drain</td><td>有界排队/拒绝；不创建无界 goroutine；未完成任务可在租约后接管</td></tr>
+        </tbody>
+      </table>
+      <p>测试通过只能证明对应故障路径，不代表模型质量、上游业务正确性或所有部署拓扑都已验证。生产观测应至少能按 session、turn、event、tool call、provider attempt 和 trace 关联一次完整调查。</p>
+    </section>
+
+    <section class="chapter2" id="source">
+      <h2>对应实现</h2>
+      <table class="detail-table">
+        <thead><tr><th>主题</th><th>主要实现</th><th>行为测试/运维文档</th></tr></thead>
+        <tbody>
+          <tr><td>会话处理权</td><td><code>packages/session/pgstore.go</code>、<code>packages/agent/runtime/types.go</code></td><td><code>runtime/runner_test.go</code>、<code>docs/operations.md</code></td></tr>
+          <tr><td>事件与恢复</td><td><code>packages/agent/transcript</code>、<code>packages/profiles/hosted/pgtranscript.go</code></td><td><code>docs/safety.md</code>、<code>reliability.html</code></td></tr>
+          <tr><td>入口租约</td><td><code>packages/eventinbox/pgstore.go</code>、<code>packages/surfaces/slack/events/worker.go</code></td><td><code>events/worker_test.go</code></td></tr>
+          <tr><td>模型预算与故障</td><td><code>packages/agent/model/resilient.go</code>、<code>runtime/context_recovery.go</code></td><td><code>model/resilient_test.go</code></td></tr>
+          <tr><td>工具 bulkhead 与结果</td><td><code>runtime/tools.go</code>、<code>runtime/tool_results.go</code>、<code>agent/tool/concurrent.go</code></td><td><code>runner_test.go</code>、<code>tool_results_test.go</code></td></tr>
+          <tr><td>运行投影与轨迹</td><td><code>packages/profiles/hosted/runs.go</code>、<code>packages/trajectory/trajectory.go</code></td><td><code>docs/observability.md</code></td></tr>
+          <tr><td>安全边界</td><td><code>packages/safety</code>、<code>profiles/local</code>、hosted policy</td><td><code>docs/safety.md</code></td></tr>
+          <tr><td>Schema 契约</td><td><code>schema/postgres.sql</code></td><td><code>docs/operations.md#schema-and-release-coordination</code></td></tr>
+        </tbody>
+      </table>
+    </section>
+  </article>
+</main>
+<footer class="footer2">AGENT CORE / PRODUCTION FAILURE WALKTHROUGH</footer>
+</body>
+</html>

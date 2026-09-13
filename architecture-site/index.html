@@ -1,80 +1,86 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="共享 Agent Core 的执行模型、状态边界和实现索引">
-  <title>系统概览 · Agent Core 架构</title>
-  <link rel="stylesheet" href="assets/guide.css">
-  <script src="assets/architecture.js" defer></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="共享 Agent Core 的执行模型、状态边界、生产语义和实现索引">
+<title>系统概览 · Agent Core 架构</title>
+<link rel="stylesheet" href="assets/guide.css">
+<script src="assets/architecture.js" defer></script>
 </head>
 <body>
 <a class="skip2" href="#content">跳到正文</a>
-<header class="topbar"><div class="topbar-inner">
-  <a class="brand2" href="index.html">AGENT CORE / ARCHITECTURE</a>
-  <nav class="topnav" aria-label="文档导航"><a href="index.html" aria-current="page">概览</a><a href="execution.html">执行</a><a href="models.html">上下文</a><a href="tools.html">工具</a><a href="reliability.html">可靠性</a><a href="reference.html">索引</a></nav>
-</div></header>
+<header class="topbar"><div class="topbar-inner"><a class="brand2" href="index.html">AGENT CORE / ARCHITECTURE</a><nav class="topnav" aria-label="文档导航">
+<a href="index.html" aria-current="page">概览</a><a href="execution.html">执行</a><a href="models.html">模型</a><a href="tools.html">工具</a><a href="reliability.html">可靠性</a><a href="operations.html">观测</a><a href="production.html">生产推演</a><a href="slack.html">Slack</a><a href="delegation.html">委派</a><a href="reference.html">索引</a>
+</nav></div></header>
+<main class="doc-shell" id="content"><aside class="side" aria-label="文档目录"></aside><article class="doc">
+<header class="hero2"><p class="kicker">ARCH / 00</p><h1>共享执行核心</h1><p class="lead2">一个与入口协议无关的 Agent Core：接收规范化请求，重建上下文，调用模型，执行经过策略检查的工具，并把全过程写成可恢复的事件。入口只负责协议、身份和呈现，不拥有另一套执行循环。</p><div class="facts"><span><b>模型循环</b> 单一实现</span><span><b>状态</b> 事件驱动</span><span><b>工具</b> 策略先行</span><span><b>恢复</b> 基于事实</span></div></header>
 
-<main class="doc-shell" id="content">
-  <aside class="side" aria-label="文档目录"></aside>
-  <article class="doc">
-    <header class="hero2">
-      <p class="kicker">ARCH / 00</p>
-      <h1>共享执行核心</h1>
-      <p class="lead2">一个与入口协议无关的 Agent Core：接收规范化请求，重建上下文，调用模型，执行经过策略检查的工具，并把全过程写成可恢复的事件。入口只负责协议、身份和呈现，不拥有另一套执行循环。</p>
-      <div class="facts"><span><b>模型循环</b> 单一实现</span><span><b>状态</b> 事件驱动</span><span><b>工具</b> 策略先行</span><span><b>恢复</b> 基于事实</span></div>
-    </header>
+<section class="chapter2" id="boundary">
+<h2>先看两条平面：控制面与执行面</h2>
+<p>生产系统里最容易混淆的是“用户已经发出请求”“系统已经接受请求”“模型已经完成判断”“外部动作已经生效”和“用户已经看到回复”。这些是不同事实，分别由入口、队列、Runtime、工具和消息投影负责。</p>
+<figure class="diagram" aria-label="控制面与执行面">
+<div class="flow"><div class="box"><b>控制面</b><small>认证 · 路由 · 入队<br>租约 · 投影 · 观测</small></div><div class="arrow">↕</div><div class="box blue"><b>执行面</b><small>session · turn<br>context · model · tools</small></div><div class="arrow">→</div><div class="box green"><b>外部世界</b><small>Slack · GitHub<br>文件 · 网络 · 数据库</small></div></div>
+<figcaption>控制面保证可认领、可恢复、可查询；执行面决定模型和工具如何推进；外部世界的未知副作用不能由内存状态猜回。</figcaption></figure>
+<table class="detail-table"><thead><tr><th>边界</th><th>输入</th><th>输出</th><th>实现位置</th></tr></thead><tbody>
+<tr><td>Ingress</td><td>平台请求、用户身份、原始事件</td><td>经过认证的 inbox/input 记录</td><td><code>packages/surfaces</code>、<code>packages/eventinbox</code></td></tr>
+<tr><td>Runtime</td><td>规范化请求、上下文依赖、预算</td><td>终态、用量、生命周期事件</td><td><code>packages/agent/runtime</code></td></tr>
+<tr><td>Model</td><td>统一消息、工具定义、提示片段</td><td>内容块、工具请求、结束原因</td><td><code>packages/agent/model</code>、<code>packages/providers</code></td></tr>
+<tr><td>Tool</td><td>名称、参数、执行作用域、策略</td><td>结构化结果或分类错误</td><td><code>packages/agent/tool</code>、<code>packages/tools</code></td></tr>
+<tr><td>Transcript</td><td>已确认发生的生命周期事实</td><td>有序历史、恢复依据、查询投影</td><td><code>packages/agent/transcript</code>、各 profile store</td></tr>
+</tbody></table>
+</section>
 
-    <section class="chapter2" id="boundary">
-      <h2>核心边界</h2>
-      <p>先用四个接口理解代码归属。任何新的模型能力、工具类型或接入方式，都应落在其中一个明确边界内。</p>
-      <figure class="diagram" aria-label="共享执行核心数据流">
-        <div class="flow core-flow">
-          <div class="box"><b>Request</b><small>session · turn<br>message · scope</small></div>
-          <div class="arrow">-&gt;</div>
-          <div class="box blue"><b>Agent Core</b><small>context · model<br>tools · control</small></div>
-          <div class="arrow">&lt;-&gt;</div>
-          <div class="box"><b>Capabilities</b><small>providers · tools<br>storage · policy</small></div>
-          <div class="arrow">-&gt;</div>
-          <div class="box green"><b>Events</b><small>message · tool<br>usage · terminal</small></div>
-        </div>
-        <figcaption>Core 只依赖规范化契约。协议对象、页面状态和平台 SDK 不进入执行循环。</figcaption>
-      </figure>
-      <table class="detail-table">
-        <thead><tr><th>边界</th><th>输入</th><th>输出</th><th>实现位置</th></tr></thead>
-        <tbody>
-          <tr><td>Runtime</td><td>请求、上下文依赖、预算</td><td>终态、用量、事件</td><td><code>packages/agent/runtime</code></td></tr>
-          <tr><td>Model</td><td>统一消息、工具定义</td><td>内容块、工具请求、结束原因</td><td><code>packages/agent/model</code>、<code>packages/providers</code></td></tr>
-          <tr><td>Tool</td><td>名称、参数、执行作用域</td><td>结构化结果或分类错误</td><td><code>packages/agent/tool</code>、<code>packages/tools</code></td></tr>
-          <tr><td>Transcript</td><td>已确认发生的生命周期事实</td><td>有序历史、恢复依据、查询投影</td><td><code>packages/agent/transcript</code></td></tr>
-        </tbody>
-      </table>
-    </section>
+<section class="chapter2" id="identities">
+<h2>一个请求至少有六种身份</h2>
+<table class="detail-table"><thead><tr><th>身份</th><th>范围</th><th>用途</th><th>不能替代什么</th></tr></thead><tbody>
+<tr><td>event_id</td><td>入口投递</td><td>Slack inbox 去重、平台重试收敛</td><td>不能当作会话内顺序</td></tr>
+<tr><td>session_id</td><td>连续对话和执行归属</td><td>会话锁、历史、输入队列</td><td>不能表示一个 turn 的完成</td></tr>
+<tr><td>turn_id</td><td>一次用户请求/恢复请求</td><td>模型循环、审批和消息关联</td><td>不能代表每次模型网络尝试</td></tr>
+<tr><td>step_id</td><td>一次可观测步骤</td><td>运行详情、耗时、错误和用量</td><td>不能作为事件序号</td></tr>
+<tr><td>attempt_id</td><td>一次提供方尝试</td><td>重试、fallback、熔断统计</td><td>不能代表模型已经产生可见文本</td></tr>
+<tr><td>call_id / execution_id</td><td>工具请求和实际执行</td><td>调用去重、未知结果调查、外部幂等</td><td>不能证明外部系统一定完成</td></tr>
+</tbody></table>
+<div class="decision"><b>排障口诀：</b>先问“我手里的 ID 属于哪一层”，再决定查 inbox、session transcript、run step、model attempt 还是外部请求。用 event_id 去查工具重复，通常会把真正的问题藏起来。</div>
+</section>
 
-    <section class="chapter2" id="loop">
-      <h2>执行循环</h2>
-      <ol class="walkthrough">
-        <li><b>取得会话处理权</b><span>同一会话在一个稳定点上继续，避免两个执行分支同时消费同一份历史。</span></li>
-        <li><b>恢复并投影上下文</b><span>读取有序事件，补全上次中断的未知状态，再按完整交互分组生成本轮上下文。</span></li>
-        <li><b>请求模型</b><span>提供方适配器把统一消息转换成具体协议，并把流式内容、工具请求、用量和错误映射回来。</span></li>
-        <li><b>调度工具</b><span>先做目录查找、参数校验、能力策略和作用域检查；只读调用可以受控并发，修改调用保持确定顺序。</span></li>
-        <li><b>提交事实</b><span>模型消息、工具开始与结果、压缩和终态先进入记录，再由投影层生成运行列表与界面状态。</span></li>
-        <li><b>判断是否继续</b><span>工具结果或追加输入触发下一轮；完成、等待输入、取消、预算耗尽和错误都形成明确终态。</span></li>
-      </ol>
-      <p><a href="execution.html">展开完整控制流 -&gt;</a></p>
-    </section>
+<section class="chapter2" id="loop">
+<h2>一轮执行怎样推进</h2>
+<ol class="walkthrough">
+<li><b>取得会话处理权</b><span>同一 session 只允许一个有效执行者推进，避免两个分支同时消费同一份历史。</span></li>
+<li><b>恢复未完成事实</b><span>读取有序事件；工具开始但没有结果的调用标记为中断/未知，不能在恢复时假装从未发生。</span></li>
+<li><b>建立 turn 与输入</b><span>保存 turn_started 和 user_input，再把前序事件投影成当前模型上下文。</span></li>
+<li><b>生成模型请求</b><span>模型适配器进行有限次数的提供方尝试，记录请求、attempt、流式完成或分类失败。</span></li>
+<li><b>调度工具</b><span>先做目录查找、参数校验、能力策略和作用域检查；只读调用可以受控并发，修改调用按安全边界串行。</span></li>
+<li><b>提交事实</b><span>模型消息、工具开始与结果、压缩和终态先进入记录，再由投影层生成运行列表与界面状态。</span></li>
+<li><b>判断是否继续</b><span>工具结果或追加输入触发下一轮；完成、等待输入、取消、预算耗尽和错误都形成明确终态。</span></li>
+</ol>
+<p><a href="execution.html">展开完整控制流 →</a>　<a href="production.html">查看生产故障推演 →</a></p>
+</section>
 
-    <section class="chapter2" id="invariants">
-      <h2>必须保持的不变量</h2>
-      <div class="case"><h3>Core 不依赖入口</h3><div class="case-body"><div class="case-row"><b>允许</b><span>入口把身份、消息、附件和输出接收器转换成核心契约。</span></div><div class="case-row"><b>禁止</b><span>在 Runtime 内读取平台请求、调用平台 SDK 或维护界面状态。</span></div></div></div>
-      <div class="case"><h3>事件只记录已确认事实</h3><div class="case-body"><div class="case-row"><b>权威</b><span>用户输入、完整模型消息、工具生命周期、批准、压缩和请求终态。</span></div><div class="case-row"><b>派生</b><span>运行摘要、步骤列表、费用、状态提示和健康汇总，可从权威记录重建。</span></div></div></div>
-      <div class="case"><h3>策略高于工具描述</h3><div class="case-body"><div class="case-row"><b>描述</b><span>告诉模型工具能做什么，不构成授权。</span></div><div class="case-row"><b>执行</b><span>工具元数据、服务端允许列表、工作区边界与沙箱共同决定动作能否发生。</span></div></div></div>
-      <div class="case"><h3>恢复不猜测外部副作用</h3><div class="case-body"><div class="case-row"><b>已知</b><span>有完成记录的动作可以安全重放其结果。</span></div><div class="case-row"><b>未知</b><span>开始后中断的外部写入保持未知，必须查询上游或人工确认，不能盲目重试。</span></div></div></div>
-    </section>
+<section class="chapter2" id="invariants">
+<h2>必须保持的不变量</h2>
+<div class="case"><h3>Core 不依赖入口</h3><div class="case-body"><div class="case-row"><b>允许</b><span>入口把身份、消息、附件和输出接收器转换成核心契约。</span></div><div class="case-row"><b>禁止</b><span>Runtime 内读取平台请求、调用平台 SDK 或维护界面状态。</span></div></div></div>
+<div class="case"><h3>事件只记录已确认事实</h3><div class="case-body"><div class="case-row"><b>权威</b><span>用户输入、完整模型消息、工具生命周期、批准、压缩和请求终态。</span></div><div class="case-row"><b>派生</b><span>运行摘要、步骤列表、费用、状态提示和健康汇总，可从权威记录重建。</span></div></div></div>
+<div class="case"><h3>策略高于工具描述</h3><div class="case-body"><div class="case-row"><b>描述</b><span>告诉模型工具能做什么，不构成授权。</span></div><div class="case-row"><b>执行</b><span>工具元数据、服务端允许列表、工作区边界与沙箱共同决定动作能否发生。</span></div></div></div>
+<div class="case"><h3>恢复不猜测外部副作用</h3><div class="case-body"><div class="case-row"><b>已知</b><span>有完成记录的动作可以复用其结果。</span></div><div class="case-row"><b>未知</b><span>开始后中断的外部写入保持未知，必须查询上游或人工确认，不能盲目重试。</span></div></div></div>
+<div class="case"><h3>呈现失败不回滚执行事实</h3><div class="case-body"><div class="case-row"><b>执行</b><span>turn_completed、tool_result 和费用等事实先写入权威记录。</span></div><div class="case-row"><b>呈现</b><span>Slack 流式更新、运行投影或指标写入失败时，单独补偿其投影，不重跑已经完成的模型动作。</span></div></div></div>
+</section>
 
-    <section class="chapter2" id="composition">
-      <h2>组装关系</h2>
-      <pre class="tree">profile
+<section class="chapter2" id="production-questions">
+<h2>设计落地时必须回答的问题</h2>
+<table class="detail-table"><thead><tr><th>问题</th><th>文档中的落点</th></tr></thead><tbody>
+<tr><td>进程崩溃后从哪里恢复？</td><td>会话事件、inbox/input 租约和可重建的运行投影；见 <a href="reliability.html">可靠性</a>。</td></tr>
+<tr><td>工具超时后能否安全重试？</td><td>看 ToolCallStarted、执行身份和外部幂等能力；见 <a href="tools.html">工具</a>。</td></tr>
+<tr><td>429、空响应和流式半截怎样区分？</td><td>按模型逻辑请求与 attempt 分层记录；见 <a href="models.html">模型与上下文</a>。</td></tr>
+<tr><td>为什么用户看到“已收到”却很久没回复？</td><td>分别检查入口、收件箱、租约、会话锁、模型、工具和 Slack 投递；见 <a href="production.html">生产推演</a>。</td></tr>
+<tr><td>子任务结果能否直接信任？</td><td>子任务是隔离执行和报告来源，主任务仍须按证据核验；见 <a href="delegation.html">委派</a>。</td></tr>
+</tbody></table>
+</section>
+
+<section class="chapter2" id="composition">
+<h2>组装关系</h2>
+<pre class="tree">profile
 ├── runtime config
 ├── model adapter
 ├── tool catalog
@@ -83,27 +89,27 @@
 │   └── capability policy
 ├── transcript store
 ├── input source
-└── event sink</pre>
-      <p>产品层只选择这些依赖并建立作用域。共享 Runtime 不知道模型密钥来自哪里、数据库如何部署，也不假设请求来自哪一种界面。</p>
-    </section>
+├── event sink
+└── surface adapter
+    ├── Slack ingress / delivery
+    └── observability / management</pre>
+<p>产品层只选择这些依赖并建立作用域。共享 Runtime 不知道模型密钥来自哪里、数据库如何部署，也不假设请求来自哪一种界面；入口适配器负责把平台语义转换成稳定的 Core 契约。</p>
+</section>
 
-    <section class="chapter2" id="reading">
-      <h2>阅读路径</h2>
-      <table class="detail-table">
-        <thead><tr><th>问题</th><th>章节</th></tr></thead>
-        <tbody>
-          <tr><td>一轮模型与工具调用怎样推进</td><td><a href="execution.html">执行过程</a></td></tr>
-          <tr><td>上下文、压缩与提供方适配怎样工作</td><td><a href="models.html">上下文与模型</a></td></tr>
-          <tr><td>工具如何注册、授权、并发与收敛结果</td><td><a href="tools.html">工具与策略</a></td></tr>
-          <tr><td>事件、处理权和中断恢复如何配合</td><td><a href="reliability.html">状态与恢复</a></td></tr>
-          <tr><td>子任务如何隔离上下文并汇合</td><td><a href="delegation.html">委派执行</a></td></tr>
-          <tr><td>Slack 如何转换为 Core 请求与事件</td><td><a href="slack.html">Slack 接入</a></td></tr>
-          <tr><td>内部类型、事件、表和测试在哪里</td><td><a href="reference.html">实现索引</a></td></tr>
-        </tbody>
-      </table>
-    </section>
-  </article>
-</main>
+<section class="chapter2" id="reading">
+<h2>阅读路径</h2>
+<table class="detail-table"><thead><tr><th>如果你想知道</th><th>阅读</th></tr></thead><tbody>
+<tr><td>一轮模型与工具调用怎样推进</td><td><a href="execution.html">执行过程</a></td></tr>
+<tr><td>上下文、压缩与提供方适配怎样工作</td><td><a href="models.html">上下文与模型</a></td></tr>
+<tr><td>工具如何注册、授权、并发与收敛结果</td><td><a href="tools.html">工具与策略</a></td></tr>
+<tr><td>事件、处理权和中断恢复如何配合</td><td><a href="reliability.html">状态与恢复</a></td></tr>
+<tr><td>队列、容量、关闭和生产症状如何定位</td><td><a href="operations.html">队列与观测</a>、<a href="production.html">生产推演</a></td></tr>
+<tr><td>子任务如何隔离上下文并汇合</td><td><a href="delegation.html">委派执行</a></td></tr>
+<tr><td>Slack 如何转换为 Core 请求与事件</td><td><a href="slack.html">Slack 接入</a></td></tr>
+<tr><td>内部类型、事件、表和测试在哪里</td><td><a href="reference.html">实现索引</a></td></tr>
+</tbody></table>
+</section>
+</article></main>
 <footer class="footer2">AGENT CORE / ARCHITECTURE NOTES</footer>
 </body>
 </html>

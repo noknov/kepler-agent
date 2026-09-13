@@ -124,6 +124,19 @@ code { font-family: var(--mono); }
 .pill { display: inline-block; padding: 1px 7px; border: 1px solid #aeb8bc; color: #505c62; font: 11px var(--mono); }
 .bad { color: var(--red); }
 .good { color: var(--signal); }
+.scenario-list { margin: 22px 0; border-top: 1px solid var(--line); }
+.scenario-list .scenario { padding: 17px 0; border-bottom: 1px solid var(--line); }
+.scenario-list h3 { margin: 0 0 7px; font-size: 16px; line-height: 1.45; }
+.scenario-list p { margin: 6px 0; color: #465258; }
+.scenario-list .label { display: inline-block; min-width: 74px; margin-right: 8px; color: var(--signal); font: 600 11px/1.6 var(--mono); }
+.metric-grid { display: grid; grid-template-columns: repeat(3, 1fr); margin: 22px 0; border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+.metric { min-height: 112px; padding: 15px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: rgba(255,255,255,.68); }
+.metric b { display: block; margin-bottom: 5px; color: var(--signal); font: 600 12px/1.5 var(--mono); }
+.metric strong { display: block; margin-bottom: 4px; font-size: 17px; line-height: 1.35; }
+.metric span { color: var(--muted); font-size: 12.5px; }
+.decision { margin: 22px 0; padding: 15px 17px; border: 1px solid var(--line); background: #f0f4f2; }
+.decision b { display: block; margin-bottom: 4px; color: #174f42; font: 600 12px/1.5 var(--mono); }
+.decision p { margin: 0; color: #465258; }
 @media (max-width: 1120px) {
   .doc-shell { grid-template-columns: 200px minmax(0, 780px); gap: 38px; }
   .page-nav { display: none; }
@@ -148,4 +161,5 @@ code { font-family: var(--mono); }
   .case-row, .timeline, .term { grid-template-columns: 1fr; }
   .timeline dt { border-bottom: 0; }
   .term .src { background: #edf1ef; }
+  .metric-grid { grid-template-columns: 1fr; }
 }

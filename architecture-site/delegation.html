@@ -1,17 +1,120 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="委派执行、子任务记录和汇合协议"><title>委派执行 · Agent Core 架构</title><link rel="stylesheet" href="assets/guide.css"><script src="assets/architecture.js" defer></script></head><body>
-<header class="topbar"><div class="topbar-inner"><a class="brand2" href="index.html">AGENT CORE / ARCHITECTURE</a><nav class="topnav"><a href="index.html">概览</a><a href="execution.html">执行</a><a href="models.html">上下文</a><a href="tools.html">工具</a><a href="slack.html">Slack</a><a href="reference.html">索引</a></nav></div></header>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="委派执行、子任务边界、并发预算、结果汇合与生产故障">
+<title>委派执行 · Agent Core 架构</title>
+<link rel="stylesheet" href="assets/guide.css">
+<script src="assets/architecture.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="topbar-inner"><a class="brand2" href="index.html">AGENT CORE / ARCHITECTURE</a><nav class="topnav">
+<a href="index.html">概览</a><a href="execution.html">执行</a><a href="models.html">模型</a><a href="tools.html">工具</a><a href="reliability.html">可靠性</a><a href="operations.html">观测</a><a href="production.html">生产推演</a><a href="slack.html">Slack</a><a href="delegation.html" aria-current="page">委派</a><a href="reference.html">索引</a>
+</nav></div></header>
 <main class="doc-shell"><aside class="side"></aside><article class="doc">
 <header class="hero2"><p class="kicker">CORE / DELEGATION</p><h1>委派执行</h1><p class="lead2">复杂工作可以拆成多个有边界的子任务。每个子任务使用同一套执行器，在独立会话中读取自己的上下文并留下完整记录；主任务负责选择分工、接收报告、核验证据并生成最终答复。</p></header>
 
-<section class="chapter2" id="primitive"><h2>子任务仍然运行在共享执行器中</h2><p>委派能力没有建立第二套模型循环。它为每个子任务创建独立的请求，使用经过过滤的只读工具目录和明确的任务说明，再调用共享执行器。上下文选择、模型重试、工具调度、记录和结束条件与普通请求一致。</p><figure class="diagram"><div class="flow"><div class="box blue"><b>主任务</b><small>拆分工作<br>确定边界和验收条件</small></div><div class="arrow">→</div><div class="box"><b>有界任务批次</b><small>并发名额<br>取消与截止时间</small></div><div class="arrow">→</div><div class="box green"><b>独立子任务</b><small>独立会话和请求<br>过滤后的工具</small></div><div class="arrow">→</div><div class="box"><b>事实报告</b><small>结果、用量、结束原因和记录位置</small></div><div class="arrow">→</div><div class="box blue"><b>主任务核验与汇总</b></div></div></figure><p>子任务的文字片段不会直接进入对外输出。主任务只接收完成后的报告以及用于审计的结果信息，避免多个模型同时发布结论。</p></section>
+<section class="chapter2" id="primitive">
+<h2>委派不是第二套 Agent Runtime</h2>
+<p>委派能力没有建立一套平行的模型循环。它为每个子任务创建独立请求，使用经过过滤的只读工具目录和明确的任务说明，再调用共享执行器。因此上下文投影、模型重试、工具调度、会话锁、记录和结束条件都沿用普通请求的契约。</p>
+<figure class="diagram"><div class="flow">
+<div class="box blue"><b>主任务</b><small>拆分工作<br>确定边界和验收条件</small></div><div class="arrow">→</div>
+<div class="box"><b>有界任务批次</b><small>并发名额<br>取消与截止时间</small></div><div class="arrow">→</div>
+<div class="box green"><b>独立子任务</b><small>独立会话和请求<br>过滤后的工具</small></div><div class="arrow">→</div>
+<div class="box"><b>事实报告</b><small>结果、用量、结束原因和记录位置</small></div><div class="arrow">→</div>
+<div class="box blue"><b>主任务核验与汇总</b></div></div></figure>
+<div class="decision"><b>边界：</b>子任务的文字片段不会直接成为最终输出。主任务接收报告和审计信息，仍然负责判断报告是否可信、是否覆盖范围以及是否需要再次检查。</div>
+</section>
 
-<section class="chapter2" id="contract"><h2>每个子任务需要完整的工作说明</h2><p>任务批次只接受能够独立执行的叶子任务。每项都要说明由谁完成、要得到什么、哪些内容不能越界、最后交付什么以及怎样判断完成。</p><table class="detail-table"><thead><tr><th>内容</th><th>作用</th></tr></thead><tbody><tr><td>稳定名称</td><td>区分同一批任务，关联结果和记录；批次内不能重复</td></tr><tr><td>角色</td><td>限定观察角度，例如数据一致性、并发安全或接口兼容性</td></tr><tr><td>目标</td><td>说明要解决的具体问题，避免只给“检查一下”这类无法验收的要求</td></tr><tr><td>边界</td><td>限定文件、风险类型、外部系统和禁止动作</td></tr><tr><td>交付物</td><td>规定报告需要包含的证据、位置、影响和结论</td></tr><tr><td>成功条件</td><td>让主任务能够判断报告是否覆盖所需范围</td></tr></tbody></table><p>运行时不固化一套审查角色，也不要求每次拆成相同数量。主任务根据本次变更和已经发现的证据决定人数、角色和后续核验。</p></section>
+<section class="chapter2" id="contract">
+<h2>每个子任务都必须能独立验收</h2>
+<p>任务批次只接受能够独立执行的叶子任务。只写“检查一下”会把拆分成本转移给子模型，也使失败后无法判断缺的是范围、证据还是结论。</p>
+<table class="detail-table"><thead><tr><th>字段</th><th>运行时要求</th><th>缺失时的风险</th></tr></thead><tbody>
+<tr><td>稳定名称</td><td>批次内唯一，用于关联结果和记录</td><td>报告覆盖错位，主任务无法可靠汇合</td></tr>
+<tr><td>角色</td><td>限定观察角度，例如数据一致性、并发安全或接口兼容性</td><td>多个子任务重复同一判断</td></tr>
+<tr><td>目标</td><td>说明要解决的具体问题，包含范围和目标文件</td><td>子任务自由扩展，成本和耗时失控</td></tr>
+<tr><td>边界</td><td>限定文件、风险类型、外部系统和禁止动作</td><td>读取越界或产生未授权副作用</td></tr>
+<tr><td>交付物</td><td>规定报告要包含证据、位置、影响和结论</td><td>只返回“通过/失败”，无法复核</td></tr>
+<tr><td>成功条件</td><td>让主任务能判断是否覆盖所需范围</td><td>正常结束被误解为问题已解决</td></tr>
+</tbody></table>
+<p>运行时不固化一套角色，也不要求每次拆成相同数量。主任务根据变更范围和已有证据决定人数、角色和后续核验；任务说明本身也应记录，便于解释为何产生这批成本。</p>
+</section>
 
-<section class="chapter2" id="scheduling"><h2>批次的并发、取消和时间范围</h2><p>任务批次有总并发上限，并继承主任务的取消信号。默认情况下，子任务也继承主任务剩余的截止时间；产品可以为整个批次和单个子任务设置更紧的限制。</p><div class="timeline"><dt>等待并发名额</dt><dd>任务还没有开始模型请求。单个子任务的运行时限不会在排队期间提前消耗。</dd><dt>取得名额</dt><dd>创建子会话和请求，写入与主任务的关联，然后开始执行。</dd><dt>运行期间</dt><dd>子任务只能使用过滤后的工具目录；取消主任务会传给正在运行和仍在排队的任务。</dd><dt>结束</dt><dd>结果包含子会话、子请求、身份、结束原因、用量、报告和错误。</dd><dt>汇合</dt><dd>主任务按名称接收结果，决定直接使用、自己核验或再启动有针对性的后续任务。</dd></div></section>
+<section class="chapter2" id="scheduling">
+<h2>先等待并发名额，再开始计时</h2>
+<p>委派的生产难点不只在并发数，还在“任务什么时候开始计时”。调度器对总任务数、同时运行数、主任务剩余 deadline 和单子任务 timeout 都设上限；单个子任务的运行时限从真正取得 Worker 名额后开始，而不是从排队那一刻开始。</p>
+<div class="timeline"><dt>校验</dt><dd>拒绝空目标、重复名称、越界范围和不允许的工具；不要创建无法收敛的子会话。</dd><dt>等待并发名额</dt><dd>任务尚未开始模型请求，只消耗批次队列容量；主任务取消时，排队任务也要被移除或标为取消。</dd><dt>取得名额</dt><dd>创建子会话和请求，写入父子关联，然后启动共享执行器。</dd><dt>运行期间</dt><dd>子任务只能使用过滤后的工具目录；取消、父级 deadline 和会话失权都传给子执行。</dd><dt>结束</dt><dd>结果包含子会话、子请求、身份、结束原因、用量、报告和错误，且不把“有输出”当作“成功”。</dd><dt>汇合</dt><dd>主任务按稳定名称接收结果，决定直接使用、自己核验，或再启动有针对性的后续任务。</dd></div>
+<table class="detail-table"><thead><tr><th>预算</th><th>应限制什么</th><th>为什么不能只限制模型 token</th></tr></thead><tbody>
+<tr><td>Fanout</td><td>一次批次最多创建多少子任务</td><td>任务说明、数据库记录、投影和报告都会随数量增长</td></tr>
+<tr><td>Workers</td><td>同时执行的子任务数</td><td>每个子任务还会占模型请求、工具槽位和连接</td></tr>
+<tr><td>Deadline</td><td>批次和子任务的剩余时间</td><td>排队、重试、工具等待都可能耗尽用户可接受延迟</td></tr>
+<tr><td>Output</td><td>单份报告和批次汇总的大小</td><td>大报告会污染父上下文，增加压缩和费用</td></tr>
+</tbody></table>
+</section>
 
-<section class="chapter2" id="records"><h2>主任务与子任务怎样关联</h2><p>每个子任务拥有自己的事件序列，并在创建时保存父任务关系。主任务的记录不会复制子任务的全部消息；它保存任务说明、完成状态、报告、用量和子记录位置。这样既能审计分工，也不会让多个长上下文互相污染。</p><table class="detail-table"><thead><tr><th>记录位置</th><th>保存内容</th></tr></thead><tbody><tr><td>主任务</td><td>任务批次、每项任务的身份与要求、子任务完成结果、汇合后的判断</td></tr><tr><td>子任务</td><td>自己的系统说明、上下文、模型尝试、工具调用、恢复事件和结束原因</td></tr><tr><td>运行查询视图</td><td>父子关系、耗时、模型用量和错误，便于查询执行成本与失败位置</td></tr><tr><td>执行轨迹</td><td>经过脱敏的提示、上下文、提供方尝试、工具和结束事实，不默认暴露消息正文与参数</td></tr></tbody></table></section>
+<section class="chapter2" id="context">
+<h2>上下文隔离与共享输入</h2>
+<p>每个子任务拥有自己的事件序列，主任务只向它注入任务说明、必要的共享上下文和明确的输出格式。共享上下文应是已经确定的事实或摘要，而不是把父任务全部历史复制过去；否则并发任务会重复计费，也可能把互相推测的内容放大。</p>
+<table class="detail-table"><thead><tr><th>可注入内容</th><th>用途</th><th>注意点</th></tr></thead><tbody>
+<tr><td>父任务目标和范围</td><td>让子任务理解为什么被创建</td><td>必须标明这是任务说明，不是用户可执行命令</td></tr>
+<tr><td>共享事实摘要</td><td>避免每个子任务重复读取同一大文件</td><td>摘要可能过时，报告仍要给出原始证据位置</td></tr>
+<tr><td>只读工作区</td><td>并行探索、代码审查、资料收集</td><td>过滤 catalog，禁用写入、网络和再委派</td></tr>
+<tr><td>父任务中间结论</td><td>缩小检查范围</td><td>标记为待验证，不应变成无来源事实</td></tr>
+</tbody></table>
+<p>当前探索实现使用隔离的子 turn、子 transcript、父子链接和受限的读工具目录；子任务不直接向最终用户发布结论，也不再启动新的委派层级。</p>
+</section>
 
-<section class="chapter2" id="limits"><h2>委派边界</h2><div class="plain-grid"><article><h3>主任务是唯一协调者</h3><p>子任务不再拆分新的团队，也不直接向最终用户发布结论。</p></article><article><h3>子任务使用只读目录</h3><p>当前探索和代码审查场景只需要读取与分析，不通过委派执行修改动作。</p></article><article><h3>报告需要再次判断</h3><p>完成状态只说明子任务结束，不表示其中每条结论都已经被主任务验证。</p></article><article><h3>并发保持有界</h3><p>任务数量、同时运行数量和截止时间都由运行配置限制，并接受主任务取消。</p></article></div></section>
+<section class="chapter2" id="records">
+<h2>关联记录必须能解释成本与失败</h2>
+<p>每个子任务拥有自己的事件序列，并在创建时保存父任务关系。主任务不复制子任务的全部消息，只保存任务说明、完成状态、报告、用量和子记录位置；这样既能审计分工，也不会让多个长上下文互相污染。</p>
+<table class="detail-table"><thead><tr><th>记录位置</th><th>保存内容</th><th>查询用途</th></tr></thead><tbody>
+<tr><td>主任务</td><td>任务批次、每项任务的身份与要求、子任务完成结果、汇合后的判断</td><td>解释总体决策和最终输出</td></tr>
+<tr><td>子任务</td><td>自己的系统说明、上下文、模型尝试、工具调用、恢复事件和结束原因</td><td>定位某个子任务为何慢或失败</td></tr>
+<tr><td>运行查询视图</td><td>父子关系、耗时、模型用量、错误、完成与取消</td><td>按批次统计成本和吞吐</td></tr>
+<tr><td>执行轨迹</td><td>经过脱敏的提示、上下文、提供方尝试、工具和结束事实</td><td>还原控制流而不扩大敏感数据暴露</td></tr>
+</tbody></table>
+<div class="decision"><b>不要把报告当作权威事件：</b>报告是子任务对事实的解释；会话事件记录的是它实际走过的控制流。主任务需要在冲突时回到证据和事件，而不是让后写入的文字覆盖先前事实。</div>
+</section>
 
-<section class="chapter2" id="source"><h2>对应实现</h2><table class="detail-table"><thead><tr><th>内容</th><th>主要实现</th><th>验证位置</th></tr></thead><tbody><tr><td>只读探索工具和子请求</td><td><code>packages/agent/delegation/explore.go</code></td><td><code>explore_test.go</code></td></tr><tr><td>通用委派任务接口</td><td><code>packages/agent/delegation</code></td><td>任务批次、取消、并发和结果测试</td></tr><tr><td>工作流激活与恢复</td><td><code>packages/workflows/workflow.go</code>、<code>router.go</code></td><td><code>workflow_test.go</code>、<code>router_test.go</code></td></tr><tr><td>脱敏执行轨迹</td><td><code>packages/trajectory/trajectory.go</code></td><td><code>trajectory_test.go</code></td></tr></tbody></table></section>
-</article></main><footer class="footer2">AGENT CORE / DELEGATION</footer></body></html>
+<section class="chapter2" id="aggregation">
+<h2>部分成功要有明确语义</h2>
+<table class="detail-table"><thead><tr><th>子任务状态</th><th>主任务应该怎么处理</th></tr></thead><tbody>
+<tr><td>completed</td><td>读取报告并检查是否满足成功条件；完成不代表结论正确。</td></tr>
+<tr><td>canceled / deadline</td><td>标记该角度未覆盖，不把空报告当成“没有问题”。</td></tr>
+<tr><td>model error / provider circuit</td><td>保留失败类型和尝试信息；若该角度关键，缩小范围后重试或由主任务接管。</td></tr>
+<tr><td>tool failure</td><td>报告工具失败位置和影响；不能只返回模型生成的补偿性猜测。</td></tr>
+<tr><td>报告为空或超出预算</td><td>视为不完整交付，限制其进入父上下文的字数并重新确认目标。</td></tr>
+</tbody></table>
+<p>汇合阶段应区分“所有任务都结束”“关键任务成功”“结果彼此一致”三个概念。最安全的默认是：对外输出前由主任务做一次范围检查，必要时读取原始位置或补跑最小验证，而不是盲目等待所有非关键任务。</p>
+</section>
+
+<section class="chapter2" id="scenarios">
+<h2>生产中最容易出现的几个问题</h2>
+<div class="scenario-list">
+<article class="scenario"><h3>一个子任务卡住，为什么不应该拖死整批？</h3><p><span class="label">现象</span> 四个任务已经返回，剩下一个工具连接一直等待。</p><p><span class="label">处理</span> 单任务 timeout、父级 deadline 和批次最大等待时间分别生效；主任务收到明确的 partial result，再决定是否在关键结果缺失时补跑。</p><p><span class="label">核对</span> 看任务是否真正取得 slot、工具是否写入 started、子会话是否仍持有锁，不要只看“创建时间”。</p></article>
+<article class="scenario"><h3>报告说“已检查”，怎样判断它是否可信？</h3><p><span class="label">现象</span> 子任务正常结束，但报告没有文件位置或只给一句结论。</p><p><span class="label">处理</span> 按交付物和成功条件判定为不完整；主任务回到证据位置或重新发一个更窄的只读任务。</p><p><span class="label">核对</span> 子任务的报告、工具调用和上下文裁剪记录是否一致，避免把摘要丢失误判为未发现。</p></article>
+<article class="scenario"><h3>并发扩大后，为什么成本和锁等待一起上升？</h3><p><span class="label">现象</span> Fanout 增大后模型调用更多，数据库连接池、投影队列和工具服务同时变慢。</p><p><span class="label">处理</span> 把 fanout、worker、模型并发和工具槽位作为一组预算调节，并限制报告进入父上下文的大小。</p><p><span class="label">核对</span> 比较每个子任务的排队时间、模型 token、工具耗时和数据库锁等待，而不是只看总 wall time。</p></article>
+<article class="scenario"><h3>父任务取消时，已经启动的子任务怎么办？</h3><p><span class="label">现象</span> 用户停止了主任务，部分子任务还在模型或工具调用中。</p><p><span class="label">处理</span> 传播取消并停止创建新子任务；对已经写入 started 的工具保留未知/中断事实，不能假设外部副作用已经撤销。</p><p><span class="label">核对</span> 父任务结束原因、子任务结束原因、工具结果和租约状态是否都已落盘。</p></article>
+</div>
+</section>
+
+<section class="chapter2" id="limits">
+<h2>委派边界</h2>
+<div class="plain-grid"><article><h3>主任务是唯一协调者</h3><p>子任务不再拆分新的团队，也不直接向最终用户发布结论。</p></article><article><h3>子任务默认只读</h3><p>当前探索和代码审查只需要读取与分析；写入、网络、权限提升和外部副作用不随意传入。</p></article><article><h3>报告需要再次判断</h3><p>完成状态只说明子任务结束，不表示其中每条结论都已经被主任务验证。</p></article><article><h3>并发保持有界</h3><p>任务数量、同时运行数量、报告大小和截止时间都由运行配置限制，并接受主任务取消。</p></article></div>
+</section>
+
+<section class="chapter2" id="source">
+<h2>对应实现</h2>
+<table class="detail-table"><thead><tr><th>内容</th><th>主要实现</th><th>验证位置</th></tr></thead><tbody>
+<tr><td>只读探索工具和子请求</td><td><code>packages/agent/delegation/explore.go</code></td><td><code>explore_test.go</code></td></tr>
+<tr><td>通用委派任务接口</td><td><code>packages/agent/delegation</code></td><td>任务批次、取消、并发和结果测试</td></tr>
+<tr><td>工作流激活与恢复</td><td><code>packages/workflows/workflow.go</code>、<code>router.go</code></td><td><code>workflow_test.go</code>、<code>router_test.go</code></td></tr>
+<tr><td>脱敏执行轨迹</td><td><code>packages/trajectory/trajectory.go</code></td><td><code>trajectory_test.go</code></td></tr>
+<tr><td>共享执行器</td><td><code>packages/agent/runtime/runner.go</code></td><td>turn、tool、恢复和取消测试</td></tr>
+</tbody></table>
+</section>
+</article></main>
+<footer class="footer2">AGENT CORE / DELEGATION</footer>
+</body>
+</html>

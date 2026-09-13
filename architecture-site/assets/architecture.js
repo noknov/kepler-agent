@@ -8,7 +8,7 @@
     side.setAttribute('aria-label', '文档目录');
     side.innerHTML = [
       '<div class="nav-group"><p>Core</p><a href="index.html">系统概览</a><a href="execution.html">执行过程</a><a href="models.html">上下文与模型</a><a href="tools.html">工具与策略</a></div>',
-      '<div class="nav-group"><p>State</p><a href="reliability.html">状态与恢复</a><a href="delegation.html">委派执行</a><a href="operations.html">队列与观测</a></div>',
+      '<div class="nav-group"><p>State</p><a href="reliability.html">状态与恢复</a><a href="delegation.html">委派执行</a><a href="operations.html">队列与观测</a><a href="production.html">生产推演</a></div>',
       '<div class="nav-group"><p>Adapter</p><a href="slack.html">Slack 接入</a></div>',
       '<div class="nav-group"><p>Index</p><a href="reference.html">实现索引</a></div>'
     ].join('');

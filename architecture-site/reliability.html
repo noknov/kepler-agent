@@ -1,19 +1,174 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="持久化、并发所有权、崩溃恢复与故障案例"><title>状态与恢复 · Agent Core 架构</title><link rel="stylesheet" href="assets/guide.css"><script src="assets/architecture.js" defer></script></head><body>
-<header class="topbar"><div class="topbar-inner"><a class="brand2" href="index.html">AGENT CORE / ARCHITECTURE</a><nav class="topnav"><a href="index.html">概览</a><a href="execution.html">执行</a><a href="reliability.html" aria-current="page">可靠性</a><a href="slack.html">Slack</a><a href="reference.html">索引</a></nav></div></header>
-<main class="doc-shell"><aside class="side"><p>本页目录</p><a href="#truth">权威记录与派生数据</a><a href="#ownership">四层处理权</a><a href="#postgres">数据库事件追加</a><a href="#local">本地文件存储</a><a href="#crashes">三个崩溃推演</a></aside><article class="doc">
-<header class="hero2"><p class="kicker">运行与数据</p><h1>记录、并发与恢复</h1><p class="lead2">会话事件按顺序保存用户输入、模型回复、工具动作和处理结果。数据库处理权防止多个工作进程重复执行；进程中断后，新的工作进程根据已经写入的事实确定可以继续的位置。</p></header>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Agent Core 的权威事件、所有权、落盘顺序和中断恢复">
+  <title>状态与恢复 · Agent Core 架构</title>
+  <link rel="stylesheet" href="assets/guide.css">
+  <script src="assets/architecture.js" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="topbar-inner">
+  <a class="brand2" href="index.html">AGENT CORE / ARCHITECTURE</a>
+  <nav class="topnav" aria-label="文档导航">
+    <a href="index.html">概览</a><a href="execution.html">执行</a><a href="models.html">模型</a>
+    <a href="tools.html">工具</a><a href="reliability.html" aria-current="page">可靠性</a><a href="operations.html">观测</a><a href="production.html">生产推演</a><a href="slack.html">Slack</a><a href="delegation.html">委派</a><a href="reference.html">索引</a>
+  </nav>
+</div></header>
 
-<section class="chapter2" id="truth"><span class="number">01</span><h2>权威记录和派生数据</h2><p>会话事件是执行恢复的权威依据。运行列表、步骤耗时、成本统计和输出状态都只是从这些事实派生出来的视图。执行器每次记录时先调用存储，再把同一个事件分发给投影与观测组件。</p><figure class="diagram"><div class="flow"><div class="box blue"><b>权威会话事件</b><small>只追加；带会话序号；用于恢复</small></div><div class="arrow">→</div><div class="box"><b>运行与步骤</b><small>查询、用量、费用</small></div><div class="arrow">+</div><div class="box"><b>输出投影</b><small>状态、内容、错误</small></div><div class="arrow">+</div><div class="box"><b>遥测</b><small>指标与追踪</small></div></div></figure><p>异步分发器使用有界缓冲。队列满时，它不会为每个事件新建无限 goroutine，也不会反压正在进行的模型流；它舍弃这一份可重建的派生通知，累计舍弃数量并合并发出“需要重建”信号。模型文字片段本来就不进入这个异步投影队列。</p><div class="callout"><strong>记录与派生视图的恢复顺序</strong>权威记录不能丢，派生视图可以短暂不完整；派生视图的恢复方法是重读权威记录，而不是猜测漏掉了哪一条通知。</div></section>
+<main class="doc-shell">
+  <aside class="side"><p>本页目录</p><a href="#authority">权威记录</a><a href="#ownership">所有权层次</a><a href="#postgres">Hosted 落盘</a><a href="#jsonl">Local 落盘</a><a href="#projection">派生投影</a><a href="#windows">崩溃窗口</a><a href="#recovery">恢复流程</a><a href="#scenarios">生产推演</a><a href="#source">实现索引</a></aside>
+  <article class="doc">
+    <header class="hero2">
+      <p class="kicker">STATE / DURABILITY &amp; RECOVERY</p>
+      <h1>记录、并发与恢复</h1>
+      <p class="lead2">Agent 的可靠性不来自一个更大的锁或一个全局 retry，而来自“事实先落盘、所有权可验证、未知状态不猜测、派生视图可重建”。本页解释 transcript、队列、session lease 和 delivery 之间的边界，以及进程在每个边界退出时下一位 worker 应该怎么判断。</p>
+      <div class="facts"><span><b>Canonical</b> append-only transcript</span><span><b>所有权</b> owner + lease</span><span><b>投影</b> 可重建</span><span><b>外部副作用</b> 仍可能未知</span></div>
+    </header>
 
-<section class="chapter2" id="ownership"><span class="number">02</span><h2>四层处理权分别保护不同对象</h2><div class="layers"><div class="layer"><b>入口事件</b><span>一条 Slack 事件在同一时刻只交给一个工作进程。处理权带截止时间，工作进程需要续期。</span></div><div class="layer"><b>完整会话</b><span>同一会话的请求串行执行。本地只需进程内锁；托管环境同时使用数据库咨询锁覆盖跨进程情况。</span></div><div class="layer"><b>追加输入</b><span>执行中的新消息逐条认领和确认。数据库条件会验证当前认领者，过期后才允许其他进程接手。</span></div><div class="layer"><b>工具批次</b><span>只读且明确安全的调用共享读取锁；修改型调用取得写锁；信号量限制并行总数。</span></div></div><table class="detail-table"><thead><tr><th>保护对象</th><th>如果没有这一层</th><th>所有权丢失时</th></tr></thead><tbody><tr><td>Slack 入口事件</td><td>平台重投递可能触发两次完整回复</td><td>取消当前处理，不再完成或失败这条事件</td></tr><tr><td>会话</td><td>两个请求基于同一旧上下文分叉</td><td>取得锁失败则不进入执行器</td></tr><tr><td>追加输入</td><td>同一条消息被多个工作进程加入会话</td><td>确认或释放影响零行，返回认领已丢失</td></tr><tr><td>工具批次</td><td>模型可制造无限下游请求，修改顺序不确定</td><td>随本次执行上下文取消</td></tr></tbody></table></section>
+    <section class="chapter2" id="authority">
+      <h2>权威记录和派生数据必须分开</h2>
+      <p class="intro">会话事件是执行恢复的 source of truth。运行列表、步骤、费用、健康汇总和界面状态都是 projection；它们可以延迟、丢失通知或重建，但不能反过来替代 transcript 判断下一步。</p>
+      <figure class="diagram"><div class="flow">
+        <div class="box blue"><b>Canonical transcript</b><small>用户、模型、工具<br>生命周期与终态</small></div><div class="arrow">→</div>
+        <div class="box"><b>Projection sinks</b><small>runs、steps、metrics<br>UI / trajectory</small></div><div class="arrow">→</div>
+        <div class="box green"><b>Operator view</b><small>查询、告警、成本<br>不反向改写事实</small></div>
+      </div><figcaption>Runtime 先 Append 成功，再 Publish；projection 失败要靠 replay 修复，不能为了 UI 成功而重做模型或工具。</figcaption></figure>
+      <table class="detail-table">
+        <thead><tr><th>数据</th><th>权威性</th><th>增长形态</th><th>故障后怎么处理</th></tr></thead>
+        <tbody>
+          <tr><td>agent_transcript_events / JSONL</td><td>会话事实</td><td>只追加，按 session sequence</td><td>不覆盖旧事件；从它重放上下文和终态</td></tr>
+          <tr><td>agent_runs</td><td>查询投影</td><td>一行运行摘要</td><td>从 transcript 重建；不要用它判断工具是否发生</td></tr>
+          <tr><td>agent_run_steps</td><td>查询投影</td><td>每个模型/工具步骤一行</td><td>用 event ID 做幂等 step ID，允许重放</td></tr>
+          <tr><td>stream delta / UI status</td><td>瞬时呈现</td><td>高频、可丢失</td><td>重连或最终消息补偿；不作为恢复依据</td></tr>
+          <tr><td>inbox / session inputs</td><td>待处理工作状态</td><td>带 owner、lease、attempts</td><td>按到期条件接管；确认必须命中当前 owner</td></tr>
+        </tbody>
+      </table>
+      <div class="callout"><strong>事件不是“日志字符串”</strong>每条事件有 ID、session sequence、turn、type、timestamp 和结构化 payload。恢复依赖事件类型与相互关系；仅凭一行 error message 推断状态是不安全的。</div>
+    </section>
 
-<section class="chapter2" id="postgres"><span class="number">03</span><h2>托管环境怎样给事件分配严格顺序</h2><p>每个会话的事件序号必须连续递增，但多个工作进程可能同时尝试写入。PostgreSQL 实现在一个事务内取得基于会话编号计算出的咨询锁，读取该会话当前最大序号，再为新事件分配下一个序号。事务结束自动释放写入锁。</p><ol class="walkthrough"><li><b>开启事务并取得会话级事务锁。</b><span>锁键由会话编号稳定计算，相同会话互斥，不同会话仍可并行。</span></li><li><b>读取当前最大序号。</b><span>空会话从 1 开始；批量追加一次分配连续区间。</span></li><li><b>写入事件编号、序号、时间和负载。</b><span>单条写入以事件编号处理冲突。相同编号已经存在时不覆盖原内容，而是返回数据库里的原事件。</span></li><li><b>提交事务后再向派生组件发布。</b><span>因此订阅者收到事件时，权威事实已经可从数据库重新读取。</span></li></ol><p>批量追加用于必须原子出现的一组事实，例如复制或分叉会话。实现要求整批属于同一个会话，并在同一事务中连续编号；任何一步失败都不会暴露半批数据。</p></section>
+    <section class="chapter2" id="ownership">
+      <h2>四层处理权保护四种不同对象</h2>
+      <p>所有权层次不能互相替代。Inbox 只能保证入口任务由一个 worker 处理；Session lease 才保证同一会话的上下文串行；工具 bulkhead 限制 fan-out；输入 claim 则保护追加消息不会被多个 worker 同时消费。</p>
+      <table class="detail-table">
+        <thead><tr><th>保护对象</th><th>实现</th><th>没有这一层的风险</th><th>所有权丢失时</th></tr></thead>
+        <tbody>
+          <tr><td>Slack event</td><td><code>slack_event_inbox</code> 的 event_id、status、claim_owner、claim_until</td><td>平台重投递产生多条回复</td><td>旧 handler 停止，不 Complete/Fail 覆盖新 owner</td></tr>
+          <tr><td>Session turn</td><td>本地 mutex；Hosted PostgreSQL advisory session lease</td><td>两个 turn 从同一旧历史分叉</td><td>不能再追加事实；新 owner 从 transcript 继续</td></tr>
+          <tr><td>Pending input</td><td><code>agent_session_inputs</code> 的 sequence、owner、claim_until、ack</td><td>追加消息重复进入或被确认两次</td><td>Ack/Release 零行返回 claim lost，调用者不能假设成功</td></tr>
+          <tr><td>Tool fan-out</td><td>MaxParallelToolCalls + 工具内部上限 + read/write lock</td><td>模型输出制造无界 goroutine 和下游请求</td><td>随 context 取消；已开始调用仍按未知副作用处理</td></tr>
+        </tbody>
+      </table>
+      <p>Session lease 的语义是“保护完整执行期间的会话”，不是只在写 transcript 时短暂上锁。Hosted 实现为 advisory lock 绑定到专用数据库连接；GuardedSessionLease 每两秒确认连接仍可用，失去确认就取消执行上下文。</p>
+    </section>
 
-<section class="chapter2" id="local"><span class="number">04</span><h2>本地环境怎样用 JSONL 文件保持可恢复</h2><p>本地模式没有 PostgreSQL，每个会话使用一个逐行 JSON 文件。它同时使用进程内互斥和操作系统文件锁，避免同一台机器上的多个进程交叉追加。目录权限为 0700，文件权限为 0600。</p><div class="timeline"><dt>普通追加</dt><dd>取得锁，编码一整行，追加写入，调用同步落盘，再释放锁。只有完整写入并同步后才返回成功。</dd><dt>读取遇到半行</dt><dd>若进程在最后一行写到一半时退出，读取器识别文件末尾的不完整 JSON，把文件截回最后一个完整偏移，再继续使用。</dd><dt>读取遇到坏行</dt><dd>若中间某个已经换行结束的记录无法解析，不自行跳过，因为这表示权威历史被破坏；读取直接报错。</dd><dt>批量分叉</dt><dd>在同一目录创建临时文件，写入并同步全部内容，关闭后原子改名。新会话不会出现只复制了一部分的状态。</dd></div><div class="callout warn"><strong>半行和坏行必须区别处理</strong>文件末尾半行是可识别的崩溃痕迹，可以安全回退；中间坏行无法确认缺失范围，静默略过会让后续上下文建立在错误历史上。</div></section>
+    <section class="chapter2" id="postgres">
+      <h2>Hosted 如何给事件分配严格顺序</h2>
+      <p>PostgreSQL transcript append 在事务内按 session 获取事务级 advisory lock，读取该 session 当前最大 sequence，再插入下一个序号。不同 session 仍可并行；同一 session 的 append 顺序由数据库提交事实决定。</p>
+      <ol class="walkthrough">
+        <li><b>开启事务并锁定 session。</b><span>锁键由 session ID 稳定 hash 得到；使用 64-bit hash 避免高流量 session 因 32-bit 碰撞而不必要串行。</span></li>
+        <li><b>读取 MAX(sequence) + 1。</b><span>空会话从 1 开始；AppendBatch 为同一 session 一次分配连续区间。</span></li>
+        <li><b>编码并写入 JSONB。</b><span>event_id 是全局去重边界，session_id + sequence 是回放顺序边界；字符串中的 NUL 会被替换以满足数据库约束。</span></li>
+        <li><b>提交后再发布。</b><span>sink 收到事件时，权威数据已经提交。sink 丢失只意味着需要 replay，而不是 transcript 丢失。</span></li>
+      </ol>
+      <div class="callout warn"><strong>Append 成功不等于下游动作成功</strong>它只证明这个 canonical event 已经提交。如果 event 描述的是 ToolCallStarted，含义仍然是“执行边界已进入”，不是“外部 API 已完成”。</div>
+    </section>
 
-<section class="chapter2" id="crashes"><span class="number">07</span><h2>三个最关键的崩溃窗口</h2><div class="case"><h3>工具已经修改外部系统，进程在保存结果前退出</h3><div class="case-body"><div class="case-row"><b>退出前已有</b><span>“工具开始执行”的权威事件；外部系统可能已经发生改变。</span></div><div class="case-row"><b>恢复时判断</b><span>不能从本地记录断言成功或失败，也不能简单重做。</span></div><div class="case-row"><b>恢复动作</b><span>追加“执行被中断”的工具结果并跳过再次派发。模型下一轮能够看到未知状态，可先读取外部系统确认。</span></div><div class="case-row"><b>剩余边界</b><span>这不是全局事务。最强保证仍需要具体工具把稳定执行编号传给支持幂等的下游接口。</span></div></div></div>
-<div class="case"><h3>工作进程仍在运行，但数据库处理权续期失败</h3><div class="case-body"><div class="case-row"><b>风险</b><span>新工作进程可能已经接手；旧进程若继续，会出现双重执行。</span></div><div class="case-row"><b>检测</b><span>续期更新必须命中“处理中且处理者等于自己”的记录。更新零行即视为处理权已丢失。</span></div><div class="case-row"><b>动作</b><span>取消当前处理上下文。旧进程不再标记完成或失败，让新所有者依据权威记录继续。</span></div></div></div>
-<div class="case"><h3>模型已经向用户输出文字，随后网络流失败</h3><div class="case-body"><div class="case-row"><b>风险</b><span>换备用模型会把两份答案接在一起，重试也可能重复前半段。</span></div><div class="case-row"><b>边界</b><span>第一个成功发布的文字片段即视为输出已提交。</span></div><div class="case-row"><b>动作</b><span>停止重试与备用模型切换，以专门错误结束；入口保留用户已经看到的片段。</span></div></div></div></section>
+    <section class="chapter2" id="jsonl">
+      <h2>Local 如何用 JSONL 保持可恢复</h2>
+      <p>Local profile 没有 PostgreSQL，每个 session 使用目录下的 <code>events.jsonl</code>。进程内 mutex 负责同一进程，<code>.events.lock</code> 的 OS file lock 负责同一台机器上的其他进程；目录为 0700，文件为 0600。</p>
+      <div class="timeline">
+        <dt>单条追加</dt><dd>取得文件锁，读取并修复尾部，追加完整 JSON 行，Write 后 Sync，再释放锁。</dd>
+        <dt>尾部半行</dt><dd>如果进程退出时最后一行未写完，loadAndRepair 截回最后一个完整偏移；这是可修复的 crash residue。</dd>
+        <dt>中间坏行</dt><dd>已经换行结束却无法解析时直接报错，不跳过；静默跳过会改变权威历史。</dd>
+        <dt>批量追加</dt><dd>临时文件写全并 Sync，关闭后原子 rename；分叉不会暴露半份会话。</dd>
+        <dt>会话 ID</dt><dd>使用受限字符集和长度，避免把路径分隔符或任意输入带入本地目录。</dd>
+      </div>
+    </section>
 
-<section class="chapter2" id="source"><h2>对应实现</h2><table class="detail-table"><thead><tr><th>正文内容</th><th>主要实现</th><th>验证行为的测试</th></tr></thead><tbody><tr><td>事件结构与只追加接口</td><td><code>packages/agent/transcript/transcript.go</code></td><td><code>transcript/async_test.go</code></td></tr><tr><td>托管事件存储</td><td><code>packages/profiles/hosted/pgtranscript.go</code></td><td><code>pgtranscript_integration_test.go</code></td></tr><tr><td>会话级数据库处理权</td><td><code>packages/session/pgstore.go</code></td><td><code>packages/session</code> 下的存储测试</td></tr><tr><td>执行中追加输入</td><td><code>packages/sessioninput/store.go</code></td><td>认领、确认、释放和过期接管测试</td></tr><tr><td>Slack 事件收件箱</td><td><code>packages/eventinbox/pgstore.go</code></td><td><code>packages/surfaces/slack/events/worker_test.go</code></td></tr><tr><td>运行查询视图</td><td><code>packages/profiles/hosted/runs.go</code></td><td><code>runs_test.go</code></td></tr><tr><td>流式内容脱敏</td><td><code>packages/safety</code></td><td><code>stream_redactor_test.go</code></td></tr></tbody></table></section>
-</article></main><footer class="footer2">AGENT CORE / RELIABILITY</footer></body></html>
+    <section class="chapter2" id="projection">
+      <h2>派生投影怎样在丢失通知后恢复</h2>
+      <p>AsyncSink 只承载可重建投影，队列有界。队列满时它丢弃通知并累计 dropped，发送合并的 shed 信号；它不会为每条事件创建脱离控制的 goroutine，也不会让 canonical append 等待慢投影。</p>
+      <table class="detail-table">
+        <thead><tr><th>投影事件</th><th>RunSink 如何使用</th><th>幂等依据</th></tr></thead>
+        <tbody>
+          <tr><td>TurnStarted</td><td>创建/更新 run，保存 user、surface、model、trace</td><td>run ID = TurnID</td></tr>
+          <tr><td>ModelCompleted / Failed</td><td>记录模型步骤、usage、finish reason、错误和首 token 延迟</td><td>step ID = event ID</td></tr>
+          <tr><td>ToolCallCompleted / Failed</td><td>记录工具名称、耗时、错误和截断信息</td><td>step ID = event ID</td></tr>
+          <tr><td>Turn terminal</td><td>更新 status、termination、error、duration、final hash</td><td>按事件重放并重新计算</td></tr>
+          <tr><td>ModelStreamed</td><td>可用于 first token 的临时观测，不作为 durable step</td><td>丢失不影响最终消息和恢复</td></tr>
+        </tbody>
+      </table>
+      <p>运行主记录不能塞入不断增长的 steps 数组作为唯一存储；当前 schema 将 run 与 run_steps 分开，避免每个新步骤都重写整个 aggregate，也避免并发投影互相覆盖。</p>
+    </section>
+
+    <section class="chapter2" id="windows">
+      <h2>三个最关键的崩溃窗口</h2>
+      <div class="scenario-list">
+        <article class="scenario">
+          <h3>工具已经修改外部系统，进程在保存结果前退出</h3>
+          <p><span class="label">已知</span>transcript 中有 ToolCallStarted，但没有 ToolCallCompleted/Failed；外部副作用可能已经发生。</p>
+          <p><span class="label">恢复</span>写入 execution_interrupted 的工具失败结果，让下一轮模型先查询上游；不自动再次派发。</p>
+          <p><span class="label">边界</span>只有工具把稳定 ExecutionID 传给支持幂等的下游，并且能查询结果，才可以建立更强保证。</p>
+        </article>
+        <article class="scenario">
+          <h3>工作进程还活着，但 SessionLease 续期失败</h3>
+          <p><span class="label">已知</span>新 worker 可能已经获得会话处理权；旧 worker 继续写入会制造两个 owner。</p>
+          <p><span class="label">恢复</span>Guarded lease 取消旧 context；旧 worker 不再追加或标记终态，新 owner 依据事件对账。</p>
+          <p><span class="label">边界</span>只在“写数据库成功”时检查 owner 不够；执行中的模型和工具也必须监听同一取消信号。</p>
+        </article>
+        <article class="scenario">
+          <h3>模型已经输出文字，随后流连接失败</h3>
+          <p><span class="label">已知</span>入口可能已经展示了首段内容，完整 response 或 terminal 可能尚未落盘。</p>
+          <p><span class="label">恢复</span>ResilientClient 看到 output committed 后禁止 retry/fallback 拼接；入口保留已展示片段并记录投递状态。</p>
+          <p><span class="label">边界</span>运行完成、stream sink 收到、Slack 最终消息创建是三个不同事实，不能合并成一个 status。</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="chapter2" id="recovery">
+      <h2>恢复流程：先对账，再继续</h2>
+      <ol class="walkthrough">
+        <li><b>确认谁拥有当前工作。</b><span>查看 session lease、inbox claim、input claim 的 owner 与 expiry；没有 owner 不等于没有副作用。</span></li>
+        <li><b>读取 canonical transcript。</b><span>按 session sequence 找 turn、step、model request、tool call 和终态，不以 runs 行的 status 作为唯一依据。</span></li>
+        <li><b>补齐未收敛的逻辑请求。</b><span>ModelRequestStarted 无 completed/failed 时记录 ModelRequestUnknown；ToolCallStarted 无结果时记录 execution_interrupted。</span></li>
+        <li><b>只重做有安全证明的动作。</b><span>模型临时错误可在未提交输出时重试；已完成 tool result 复用；外部 write 先查询或人工确认。</span></li>
+        <li><b>重建投影。</b><span>从 transcript replay RunSink、trajectory 和指标；不通过删行或手改 runs 来“修复”源数据。</span></li>
+        <li><b>最后处理积压。</b><span>恢复 inbox/input 后观察 attempts、dead-letter、lease expired 和队列深度，再逐步放量，避免恢复任务造成二次洪峰。</span></li>
+      </ol>
+      <div class="decision"><b>恢复的成功标准</b><p>不是“页面显示绿色”，而是：每个受影响 turn 都能定位到一个 owner 或终态；未知外部动作被显式标记；canonical sequence 无断裂；projection 可以从源事件重建；重复动作有上游审计或人工结论。</p></div>
+    </section>
+
+    <section class="chapter2" id="scenarios">
+      <h2>状态相关的生产推演</h2>
+      <div class="scenario-list">
+        <article class="scenario"><h3>投影队列满了，能不能让模型暂停等它？</h3><p><span class="label">结论</span>不应该。投影是可重建的派生层，反压 canonical execution 会把健康请求和慢观测耦合在一起。</p><p><span class="label">要做</span>监控 dropped/shed，随后从 transcript 重建；如果重建很慢，优化 projection store 或拆分队列，而不是取消事件事实。</p></article>
+        <article class="scenario"><h3>数据库里 sequence 看起来不按 wall clock 排序</h3><p><span class="label">结论</span>sequence 表示同一 session 的提交顺序，不是每个 goroutine 开始执行的时间。并行工具的 started 事件可能先后竞争，结果写回则按模型调用顺序。</p><p><span class="label">要做</span>用 event timestamp、trace span 和 tool duration 还原并发时间线，不要把 sequence 当成全局物理时钟。</p></article>
+        <article class="scenario"><h3>清理 stuck processing 行能不能快速恢复？</h3><p><span class="label">风险</span>如果健康 worker 只是慢，手动清 owner 会让两个 worker 同时处理；如果旧 worker 仍能访问外部系统，重复副作用会放大。</p><p><span class="label">要做</span>遵守 claim_until 和 owner-checking 的接管流程，先确认旧 owner 已取消或租约确实过期，再使用 recovery。</p></article>
+        <article class="scenario"><h3>为什么一个 pending_input 不能被任意线程回复？</h3><p><span class="label">原因</span>等待输入是带用户身份的会话状态。Runtime 的 WaitingForInput 会校验最新终态和原用户，防止另一个人把数据写入正在等待的工作流。</p><p><span class="label">要做</span>入口保留 session/thread/user scope；连接授权后的 continuation 也要重新建立正确作用域。</p></article>
+      </div>
+    </section>
+
+    <section class="chapter2" id="source">
+      <h2>对应实现</h2>
+      <table class="detail-table">
+        <thead><tr><th>正文内容</th><th>主要实现</th><th>验证行为的测试</th></tr></thead>
+        <tbody>
+          <tr><td>事件类型与只追加接口</td><td><code>packages/agent/transcript/transcript.go</code></td><td><code>transcript/async_test.go</code></td></tr>
+          <tr><td>内存 transcript</td><td><code>packages/agent/transcript/memory.go</code></td><td>runtime lifecycle tests</td></tr>
+          <tr><td>Hosted transcript</td><td><code>packages/profiles/hosted/pgtranscript.go</code></td><td><code>pgtranscript_integration_test.go</code></td></tr>
+          <tr><td>Session lease</td><td><code>packages/session/pgstore.go</code></td><td><code>packages/session</code> tests</td></tr>
+          <tr><td>Local JSONL</td><td><code>packages/profiles/local/store.go</code></td><td><code>store_test.go</code></td></tr>
+          <tr><td>输入 claim/ack</td><td><code>packages/sessioninput/store.go</code></td><td>claim、过期接管和 owner-check tests</td></tr>
+          <tr><td>Slack inbox</td><td><code>packages/eventinbox/pgstore.go</code>、<code>surfaces/slack/events/worker.go</code></td><td><code>worker_test.go</code></td></tr>
+          <tr><td>运行投影</td><td><code>packages/profiles/hosted/runs.go</code>、<code>packages/runs</code></td><td><code>runs_test.go</code></td></tr>
+          <tr><td>轨迹重建</td><td><code>packages/trajectory/trajectory.go</code></td><td><code>trajectory_test.go</code></td></tr>
+        </tbody>
+      </table>
+    </section>
+  </article>
+</main>
+<footer class="footer2">AGENT CORE / STATE &amp; RECOVERY</footer>
+</body>
+</html>
