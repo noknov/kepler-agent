@@ -74,14 +74,15 @@ func (c Config) OAuthEnabled() bool {
 	return c.SlackEnabled() || c.GitHubEnabled() || c.ClickStackEnabled() || c.GCPEnabled() || c.NotionEnabled()
 }
 
-// OAuthCompletedHandler runs after a successful OAuth callback.
-type OAuthCompletedHandler func(ctx context.Context, userID, provider string) error
+// ConnectionChangedHandler runs after integration credentials change in storage,
+// including a successful OAuth callback or clearing a token the remote rejected.
+type ConnectionChangedHandler func(ctx context.Context, userID, provider string) error
 
 type Service struct {
-	Store            Store
-	Config           Config
-	Continuations    ContinuationStore
-	OnOAuthCompleted OAuthCompletedHandler
+	Store               Store
+	Config              Config
+	Continuations       ContinuationStore
+	OnConnectionChanged ConnectionChangedHandler
 	state            *serviceState
 }
 

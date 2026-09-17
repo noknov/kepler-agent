@@ -2,7 +2,6 @@ package notion
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -45,15 +44,14 @@ func (r *Registrar) Ensure(ctx context.Context, catalog *tool.Catalog, policy to
 	if token == "" {
 		return nil
 	}
-	items, err := mcptools.Discover(ctx, mcptools.Server{
+	items, err := mcptools.DiscoverDeferredTools(ctx, "notion", userID, mcptools.Server{
 		Name:         "notion",
 		Client:       NewMCPClient(r.cfg, token),
 		ResolveToken: r.tokenResolver(),
 		Effects:      []tool.Effect{tool.EffectRead},
-	})
+	}, r.clearConnection)
 	if err != nil {
-		log.Printf("notion: discover failed for user %s: %v", userID, err)
-		return fmt.Errorf("discover Notion MCP tools: %w", err)
+		return err
 	}
 	for _, item := range items {
 		bound := tool.BindSurface(item, policy.Surface, "notion", "notion-connection")
@@ -91,6 +89,13 @@ func (r *Registrar) bootstrapToken(ctx context.Context, userID string) (string, 
 		return "", err
 	}
 	return token, nil
+}
+
+func (r *Registrar) clearConnection(ctx context.Context, userID string) error {
+	if r.conn == nil {
+		return nil
+	}
+	return r.conn.ClearProvider(ctx, userID, connections.ProviderNotion)
 }
 
 func (r *Registrar) tokenResolver() mcptools.TokenResolver {

@@ -340,6 +340,9 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	conversation.ModeForUser = func(userID string) slackagent.ConversationMode {
 		return slackagent.ConversationMode(handler.Home.ConversationMode(userID))
 	}
+	connService.OnConnectionChanged = func(ctx context.Context, userID, provider string) error {
+		return handler.Home.RequestRefresh(ctx, userID)
+	}
 
 	s := &Service{
 		cfg:              cfg,

@@ -169,8 +169,12 @@ func ParseOAuthCompletedPayload(payload string) (userID, provider string, ok boo
 }
 
 func (s Service) notifyOAuthCompleted(ctx context.Context, userID, provider string) {
-	if s.OnOAuthCompleted != nil {
-		_ = s.OnOAuthCompleted(ctx, userID, provider)
+	s.notifyConnectionChanged(ctx, userID, provider)
+}
+
+func (s Service) notifyConnectionChanged(ctx context.Context, userID, provider string) {
+	if s.OnConnectionChanged != nil {
+		_ = s.OnConnectionChanged(ctx, userID, provider)
 	}
 	if s.Continuations != nil {
 		_ = s.Continuations.PublishCompleted(ctx, userID, provider)

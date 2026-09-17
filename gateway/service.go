@@ -85,7 +85,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		Redis:       stores.Redis,
 		Connections: connService,
 	}
-	connService.OnOAuthCompleted = func(ctx context.Context, userID, provider string) error {
+	connService.OnConnectionChanged = func(ctx context.Context, userID, provider string) error {
 		return s.home.RequestRefresh(ctx, userID)
 	}
 	s.connections = connService
