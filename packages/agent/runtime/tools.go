@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -316,7 +317,7 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 			result.ErrorCode = "tool_error"
 		}
 		if len(result.Content) == 0 {
-			result.Content = []model.Content{{Type: model.ContentText, Text: err.Error()}}
+			result.Content = []model.Content{{Type: model.ContentText, Text: boundToolErrorText(err.Error())}}
 		}
 	}
 	if !hasWireVisibleToolContent(result.Content) {
@@ -338,9 +339,34 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 	}
 	result.Metadata["duration_ms"] = time.Since(started).Milliseconds()
 	span.SetAttributes(attribute.Int64("agent.tool.duration_ms", time.Since(started).Milliseconds()), attribute.Bool("agent.tool.error", result.IsError))
+	if result.IsError {
+		result.Content = boundToolErrorContent(result.Content)
+	}
 	result = limitToolResult(ctx, result, call, r.config.ToolResults, r.deps.Artifacts)
 	r.recordCircuit(call, result.IsError || err != nil)
 	entry.result = &result
+}
+
+// maxToolErrorTextBytes bounds an upstream error body that becomes a tool
+// result. A failed fetch can return a full HTML error page; storing it would
+// waste transcript tokens and re-send it on every later turn.
+const maxToolErrorTextBytes = 2000
+
+func boundToolErrorContent(content []model.Content) []model.Content {
+	for index := range content {
+		if content[index].Type == model.ContentText {
+			content[index].Text = boundToolErrorText(content[index].Text)
+		}
+	}
+	return content
+}
+
+func boundToolErrorText(text string) string {
+	text = strings.TrimSpace(text)
+	if len(text) <= maxToolErrorTextBytes {
+		return text
+	}
+	return strings.ToValidUTF8(text[:maxToolErrorTextBytes], "") + "… [truncated]"
 }
 
 func hasWireVisibleToolContent(content []model.Content) bool {

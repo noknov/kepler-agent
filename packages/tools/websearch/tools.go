@@ -149,6 +149,17 @@ type SearchRequest struct {
 	Limit    int
 }
 
+// errorSnippet condenses an upstream error body into one short line. Providers
+// can return full HTML error pages; those must not become durable tool results
+// and be re-sent on every later turn.
+func errorSnippet(data []byte) string {
+	text := strings.Join(strings.Fields(string(data)), " ")
+	if len(text) > 300 {
+		text = strings.ToValidUTF8(text[:300], "") + "…"
+	}
+	return text
+}
+
 type Page struct {
 	URL   string
 	Title string
@@ -215,7 +226,7 @@ func (c Client) ReadPage(ctx context.Context, pageURL string, maxChars int) (Pag
 		return Page{}, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Page{}, fmt.Errorf("web page status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return Page{}, fmt.Errorf("web page status %d: %s", resp.StatusCode, errorSnippet(data))
 	}
 	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
 	if contentType != "" && !strings.Contains(contentType, "text/html") && !strings.Contains(contentType, "text/plain") && !strings.Contains(contentType, "application/xhtml+xml") {
@@ -320,7 +331,7 @@ func (c Client) searchDuckDuckGo(ctx context.Context, req SearchRequest) ([]Resu
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("duckduckgo search status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return nil, fmt.Errorf("duckduckgo search status %d: %s", resp.StatusCode, errorSnippet(data))
 	}
 	return parseDuckDuckGoHTML(string(data), req.Limit), nil
 }
@@ -384,7 +395,7 @@ func (c Client) searchBrave(ctx context.Context, req SearchRequest) ([]ResultIte
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("brave search status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return nil, fmt.Errorf("brave search status %d: %s", resp.StatusCode, errorSnippet(data))
 	}
 	var parsed struct {
 		Web struct {
@@ -485,7 +496,7 @@ func (c Client) getJSON(ctx context.Context, endpoint string, out any) error {
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("web search status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return fmt.Errorf("web search status %d: %s", resp.StatusCode, errorSnippet(data))
 	}
 	if err := json.Unmarshal(data, out); err != nil {
 		return err

@@ -142,6 +142,17 @@ func (emptyResultTool) Execute(context.Context, tool.Call) (tool.Result, error) 
 	return tool.Result{Content: []model.Content{{Type: model.ContentText}}}, nil
 }
 
+func TestBoundToolErrorTextTruncatesUpstreamBody(t *testing.T) {
+	long := strings.Repeat("x", maxToolErrorTextBytes+500)
+	got := boundToolErrorText(long)
+	if len(got) > maxToolErrorTextBytes+32 || !strings.HasSuffix(got, "[truncated]") {
+		t.Fatalf("boundToolErrorText() = %d bytes, want a truncated result", len(got))
+	}
+	if short := boundToolErrorText("  boom  "); short != "boom" {
+		t.Fatalf("boundToolErrorText() = %q, want trimmed text", short)
+	}
+}
+
 func TestHistoryLoaderRunsOnlyForEmptySession(t *testing.T) {
 	client := &scriptedModel{responses: []model.Response{
 		{Message: model.TextMessage(model.RoleAssistant, "first"), FinishReason: model.FinishStop},

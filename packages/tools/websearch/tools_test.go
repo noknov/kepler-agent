@@ -11,6 +11,17 @@ import (
 	agenttool "github.com/noknov/kepler-agent/packages/agent/tool"
 )
 
+func TestErrorSnippetCondensesUpstreamBody(t *testing.T) {
+	body := []byte("<html>\n  <body>" + strings.Repeat("x", 1000) + "</body></html>")
+	got := errorSnippet(body)
+	if len(got) > 320 {
+		t.Fatalf("errorSnippet() = %d bytes, want a short snippet", len(got))
+	}
+	if strings.Contains(got, "\n") {
+		t.Fatalf("errorSnippet() = %q, want a single line", got)
+	}
+}
+
 func TestGoogleCSEResults(t *testing.T) {
 	client := Client{
 		Provider:     ProviderGoogleCSE,

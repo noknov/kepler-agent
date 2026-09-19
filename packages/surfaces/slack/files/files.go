@@ -12,12 +12,13 @@ import (
 )
 
 const (
-	MaxAttachedFiles = 20
-	// Images are bounded by bytes, not by count. A count cap was arbitrary and
-	// discarded legitimate attachments; total bytes bound memory and bandwidth.
+	// Attachments are bounded by bytes, not by count. A count cap was arbitrary
+	// and discarded legitimate attachments; total bytes bound memory and
+	// bandwidth without a magic number.
 	MaxImageBytes      = 8 << 20
 	MaxImageTotalBytes = 16 << 20
 	MaxPDFBytes        = 16 << 20
+	MaxPDFTotalBytes   = 32 << 20
 	MaxPDFTextChars    = slack.DefaultMaxPDFExtractChars
 )
 
@@ -38,15 +39,7 @@ func Append(text string, files []slack.File) string {
 }
 
 func Attach(ctx context.Context, client Downloader, text string, files []slack.File) (string, []llm.ContentPart) {
-	omitted := 0
-	if len(files) > MaxAttachedFiles {
-		omitted = len(files) - MaxAttachedFiles
-		files = files[:MaxAttachedFiles]
-	}
 	text = Append(text, files)
-	if omitted > 0 {
-		text = strings.TrimSpace(text) + fmt.Sprintf("\n\n[%d additional Slack files omitted; attachment limit is %d]", omitted, MaxAttachedFiles)
-	}
 	if excerpt := PDFExcerpts(ctx, client, files); excerpt != "" {
 		text = strings.TrimSpace(text)
 		if text == "" {
@@ -63,9 +56,14 @@ func PDFExcerpts(ctx context.Context, client Downloader, files []slack.File) str
 		return ""
 	}
 	blocks := make([]string, 0, len(files))
+	var total int64
 	for _, file := range files {
 		if !slack.IsPDFFile(file) {
 			continue
+		}
+		if total >= MaxPDFTotalBytes {
+			blocks = append(blocks, slack.FormatPDFExcerpt(slack.FileDisplayName(file), "[additional PDFs omitted; total PDF budget reached]"))
+			break
 		}
 		if file.Size > MaxPDFBytes {
 			log.Printf("skip slack pdf %s: size %d exceeds limit %d", file.ID, file.Size, MaxPDFBytes)
@@ -83,6 +81,7 @@ func PDFExcerpts(ctx context.Context, client Downloader, files []slack.File) str
 			blocks = append(blocks, slack.FormatPDFExcerpt(slack.FileDisplayName(file), "[Downloaded file is not a valid PDF]"))
 			continue
 		}
+		total += int64(len(data))
 		text, err := slack.ExtractPDFText(data, MaxPDFTextChars)
 		if err != nil {
 			log.Printf("skip slack pdf %s: extract failed: %v", file.ID, err)
@@ -136,6 +135,7 @@ func ImagePartsWithBudget(ctx context.Context, client Downloader, files []slack.
 		if actualMIME != mime {
 			log.Printf("slack image %s declared %s but detected %s", file.ID, mime, actualMIME)
 		}
+		data, actualMIME = shrinkImageForModel(data, actualMIME)
 		dataURL := "data:" + actualMIME + ";base64," + base64.StdEncoding.EncodeToString(data)
 		parts = append(parts, llm.ImageURLPart(dataURL))
 		budget.take(len(data))
