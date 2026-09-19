@@ -83,3 +83,44 @@ func TestServiceRequiredIncludesAuthURL(t *testing.T) {
 		t.Fatalf("Required() auth url = %q, want /connect URL", required.AuthURL)
 	}
 }
+
+func TestFileStoreKeepsMultipleProviderInstances(t *testing.T) {
+	store, err := NewFileStore(t.TempDir()+"/connections.json", "test-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := store.UpsertTokenInstance(ctx, "U1", ProviderClickStack, "i-prod", "Production", "prod-token", nil, "prod", map[string]string{"mcp_url": "https://prod.example/mcp"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertTokenInstance(ctx, "U1", ProviderClickStack, "i-eu", "EU", "eu-token", nil, "eu", map[string]string{"mcp_url": "https://eu.example/mcp"}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := store.ListInstances(ctx, "U1")
+	if err != nil || len(items) != 2 {
+		t.Fatalf("ListInstances() = (%+v, %v)", items, err)
+	}
+	if got, err := store.TokenInstance(ctx, "U1", ProviderClickStack, "i-eu"); err != nil || got != "eu-token" {
+		t.Fatalf("TokenInstance() = (%q, %v)", got, err)
+	}
+	if items[0].Metadata["mcp_url"] == "" || items[0].InstanceID == items[1].InstanceID {
+		t.Fatalf("instances lost identity or metadata: %+v", items)
+	}
+}
+
+func TestNewInstanceIDIsOpaqueAndUnique(t *testing.T) {
+	first, err := NewInstanceID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewInstanceID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == "" || second == "" || first == second {
+		t.Fatalf("NewInstanceID() = %q, %q", first, second)
+	}
+	if got := NormalizeInstanceID("EU Logs / Production"); got != "eu-logs-production" {
+		t.Fatalf("NormalizeInstanceID() = %q", got)
+	}
+}

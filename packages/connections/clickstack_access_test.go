@@ -161,3 +161,38 @@ func TestClickStackAccessTokenBackfillsAccount(t *testing.T) {
 		t.Fatalf("account = %q", conn.Account)
 	}
 }
+
+func TestClickStackAccessTokenInstancesKeepTokensAndEndpointsSeparate(t *testing.T) {
+	store, err := NewFileStore(t.TempDir()+"/connections.json", "test-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{Store: store, Config: Config{PublicBaseURL: "https://example.com", SecretKey: "test-secret"}}
+	ctx := context.Background()
+	for _, item := range []struct {
+		instance string
+		label    string
+		token    string
+		url      string
+	}{
+		{"i-prod", "Production", "prod-token", "https://prod.example/mcp"},
+		{"i-eu", "Europe", "eu-token", "https://eu.example/mcp"},
+	} {
+		if err := store.UpsertTokenInstance(ctx, LocalUserID, ProviderClickStack, item.instance, item.label, item.token, nil, item.label, map[string]string{"mcp_url": item.url}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, item := range []struct{ instance, token, url string }{
+		{"i-prod", "prod-token", "https://prod.example/mcp"},
+		{"i-eu", "eu-token", "https://eu.example/mcp"},
+	} {
+		got, err := service.ClickStackAccessTokenInstance(ctx, LocalUserID, item.instance)
+		if err != nil || got != item.token {
+			t.Fatalf("ClickStackAccessTokenInstance(%q) = (%q, %v)", item.instance, got, err)
+		}
+		connection, err := store.GetInstance(ctx, LocalUserID, ProviderClickStack, item.instance)
+		if err != nil || connection.Metadata["mcp_url"] != item.url {
+			t.Fatalf("connection %q = (%+v, %v)", item.instance, connection, err)
+		}
+	}
+}

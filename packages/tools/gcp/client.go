@@ -59,10 +59,14 @@ func (s ConnectedSource) Resolve(ctx context.Context, call tool.Call) (Client, e
 	if call.Scope.UserID == "" {
 		return Client{}, fmt.Errorf("user id is required for gcp")
 	}
-	token, err := s.Service.GCPAccessToken(ctx, call.Scope.UserID)
+	instanceID := ""
+	if call.Scope.Values != nil {
+		instanceID = call.Scope.Values["connection_instance_id"]
+	}
+	token, err := s.Service.GCPAccessTokenInstance(ctx, call.Scope.UserID, instanceID)
 	if err != nil {
 		if errorsIsNotConnected(err) {
-			return Client{}, s.Service.Required(call.Scope.UserID, connections.ProviderGCP)
+			return Client{}, s.Service.RequiredInstance(call.Scope.UserID, connections.ProviderGCP, instanceID)
 		}
 		return Client{}, err
 	}

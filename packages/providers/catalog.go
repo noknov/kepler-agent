@@ -58,6 +58,30 @@ var knownModels = []ModelCapabilities{
 		Protocol:        "openai",
 		InputModalities: []Modality{ModalityText},
 	},
+	{
+		Provider:        "deepseek",
+		ID:              "deepseek-flash",
+		Protocol:        "openai",
+		InputModalities: []Modality{ModalityText, ModalityImage},
+	},
+	{
+		Provider:        "deepseek",
+		ID:              "deepseek-v4-flash",
+		Protocol:        "openai",
+		InputModalities: []Modality{ModalityText, ModalityImage},
+	},
+	{
+		Provider:        "deepseek",
+		ID:              "deepseek-v4-flash-vision-exp",
+		Protocol:        "openai",
+		InputModalities: []Modality{ModalityText, ModalityImage},
+	},
+	{
+		Provider:        "deepseek",
+		ID:              "deepseek-v4-pro",
+		Protocol:        "openai",
+		InputModalities: []Modality{ModalityText},
+	},
 }
 
 // ResolveModel returns the exact provider/model declaration. Unknown models

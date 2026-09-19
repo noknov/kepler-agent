@@ -62,10 +62,15 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, req Request) (Respons
 }
 
 type openAIUsage struct {
-	PromptTokens        int `json:"prompt_tokens"`
-	CompletionTokens    int `json:"completion_tokens"`
-	TotalTokens         int `json:"total_tokens"`
-	PromptTokensDetails struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+	// DeepSeek reports cache reads as prompt_cache_hit_tokens and mirrors them
+	// in prompt_tokens_details.cached_tokens. Reading both keeps cache
+	// accounting correct if either field is ever dropped.
+	PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens"`
+	PromptCacheMissTokens int `json:"prompt_cache_miss_tokens"`
+	PromptTokensDetails   struct {
 		CachedTokens int `json:"cached_tokens"`
 	} `json:"prompt_tokens_details"`
 	CompletionTokensDetails struct {
@@ -78,11 +83,15 @@ func (u openAIUsage) toUsage() Usage {
 	// *subset* of prompt_tokens (not an independent field like Anthropic's
 	// cache_read_input_tokens). We set CacheIncludedInPrompt=true so that
 	// token counters know not to add CacheReadInputTokens a second time.
+	cached := u.PromptTokensDetails.CachedTokens
+	if cached == 0 {
+		cached = u.PromptCacheHitTokens
+	}
 	return Usage{
 		PromptTokens:          u.PromptTokens,
 		CompletionTokens:      u.CompletionTokens,
 		TotalTokens:           u.TotalTokens,
-		CacheReadInputTokens:  u.PromptTokensDetails.CachedTokens,
+		CacheReadInputTokens:  cached,
 		ReasoningTokens:       u.CompletionTokensDetails.ReasoningTokens,
 		CacheIncludedInPrompt: true,
 	}
@@ -118,10 +127,40 @@ func (c *OpenAICompatibleClient) chatBody(req Request) map[string]any {
 		}
 		return body
 	}
+	if c.providerName() == "deepseek" {
+		if thinking := deepseekThinkingParam(req.Thinking); thinking != nil {
+			body["thinking"] = thinking
+		}
+		return body
+	}
 	if req.Thinking == "enabled" || req.Thinking == "disabled" {
 		body["thinking"] = map[string]string{"type": req.Thinking}
 	}
 	return body
+}
+
+// deepseekThinkingParam converts the Request.Thinking hint into DeepSeek's
+// thinking object. Unlike the generic enabled/disabled switch, DeepSeek also
+// accepts reasoning_effort (none|low|high|max) to bound how much chain of
+// thought is generated before the final answer, which matters because
+// reasoning tokens share the max_tokens budget with the answer.
+func deepseekThinkingParam(thinking string) map[string]string {
+	switch strings.ToLower(strings.TrimSpace(thinking)) {
+	case "":
+		return nil
+	case "disabled", "none":
+		return map[string]string{"type": "disabled"}
+	case "enabled":
+		return map[string]string{"type": "enabled"}
+	case "low", "high", "max":
+		return map[string]string{"type": "enabled", "reasoning_effort": strings.ToLower(strings.TrimSpace(thinking))}
+	case "medium", "xhigh":
+		return map[string]string{"type": "enabled", "reasoning_effort": "high"}
+	case "minimal":
+		return map[string]string{"type": "enabled", "reasoning_effort": "low"}
+	default:
+		return nil
+	}
 }
 
 func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h StreamHandler) (Response, error) {

@@ -157,16 +157,39 @@ CREATE INDEX IF NOT EXISTS user_prompt_assets_user_kind_idx
 CREATE TABLE IF NOT EXISTS user_connections (
     user_id TEXT NOT NULL,
     provider TEXT NOT NULL,
+    instance_id TEXT NOT NULL DEFAULT 'default',
+    label TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'connected',
     token_ciphertext TEXT NOT NULL DEFAULT '',
     scopes TEXT[] NOT NULL DEFAULT '{}',
     account TEXT NOT NULL DEFAULT '',
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (user_id, provider)
+    PRIMARY KEY (user_id, provider, instance_id)
 );
+
+-- Migrate the original provider-singleton table in place. Existing rows are
+-- the default instance; new rows may safely coexist for the same provider.
+ALTER TABLE user_connections ADD COLUMN IF NOT EXISTS instance_id TEXT NOT NULL DEFAULT 'default';
+ALTER TABLE user_connections ADD COLUMN IF NOT EXISTS label TEXT NOT NULL DEFAULT '';
+ALTER TABLE user_connections ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'user_connections'::regclass
+          AND conname = 'user_connections_pkey'
+          AND pg_get_constraintdef(oid) = 'PRIMARY KEY (user_id, provider)'
+    ) THEN
+        ALTER TABLE user_connections DROP CONSTRAINT user_connections_pkey;
+        ALTER TABLE user_connections ADD PRIMARY KEY (user_id, provider, instance_id);
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_user_connections_provider
     ON user_connections(provider, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_connections_user_provider
+    ON user_connections(user_id, provider, updated_at DESC);
 
 -- Browser identity is deliberately separate from integration connections.
 -- Slack OIDC authenticates a person; it does not grant tools a Slack token.
@@ -220,9 +243,20 @@ CREATE TABLE IF NOT EXISTS oauth_states (
     state TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     provider TEXT NOT NULL,
+    instance_id TEXT NOT NULL DEFAULT 'default',
+    label TEXT NOT NULL DEFAULT '',
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    origin TEXT NOT NULL DEFAULT '',
+    return_context TEXT NOT NULL DEFAULT '',
     expires_at TIMESTAMPTZ NOT NULL,
     code_verifier TEXT NOT NULL DEFAULT ''
 );
+
+ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS instance_id TEXT NOT NULL DEFAULT 'default';
+ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS label TEXT NOT NULL DEFAULT '';
+ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT '';
+ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS return_context TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_oauth_states_expires
     ON oauth_states(expires_at);

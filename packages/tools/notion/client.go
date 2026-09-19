@@ -3,9 +3,11 @@ package notion
 
 import (
 	"strings"
+	"time"
 
 	"github.com/noknov/kepler-agent/packages/config"
 	"github.com/noknov/kepler-agent/packages/mcp"
+	"github.com/noknov/kepler-agent/packages/safety"
 )
 
 const defaultMCPURL = "https://mcp.notion.com/mcp"
@@ -20,5 +22,6 @@ func NewMCPClient(cfg config.NotionConfig, token string) *mcp.Client {
 		ServiceName: "notion",
 		URL:         url,
 		Token:       strings.TrimSpace(token),
+		HTTP:        safety.SafeHTTPClient(60 * time.Second),
 	}
 }

@@ -146,11 +146,16 @@ approval policy.
 Write and external-write tools are authorized entirely by server policy; users
 are never asked to approve access to the host running the agent. The default
 allowlist contains Slack Canvas creation, Slack user-attributed message posting,
-TTS, and Luckin order creation/canceling.
+TTS, and Luckin order creation/canceling. Notion's dynamic write wrapper is
+intentionally not included by default: an operator who wants to permit it must
+explicitly add the exact stable name `notion_write` to the allowlist. The
+wrapper still requires the normal user confirmation and validates the selected
+remote operation at execution time; adding it does not allow arbitrary MCP
+tool names to bypass policy.
 Operators can replace it with an exact, comma-separated allowlist:
 
 ```bash
-AGENT_ALLOWED_WRITE_TOOLS=luckin-cancel_order,luckin-create_order,slack-create_canvas,slack-user_post_message,tts-speak
+AGENT_ALLOWED_WRITE_TOOLS=luckin-cancel_order,luckin-create_order,slack-create_canvas,slack-user_post_message,tts-speak,notion_write
 ```
 
 A tool's surface annotation limits where it may run; it never grants write

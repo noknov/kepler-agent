@@ -17,13 +17,23 @@ type Inbox interface {
 
 type ErrorWriter func(http.ResponseWriter, *http.Request, int, string, error)
 
+// InteractionResponse is the optional synchronous Slack acknowledgement for a
+// view_submission. The handler supplies only declarative view data; the
+// gateway owns the HTTP response encoding and all other interactions retain
+// their asynchronous acknowledgement path.
+type InteractionResponse struct {
+	ResponseAction string            `json:"response_action"`
+	View           map[string]any    `json:"view,omitempty"`
+	Errors         map[string]string `json:"errors,omitempty"`
+}
+
 type Gateway struct {
 	SigningSecret string
 	Inbox         Inbox
 	IsDraining    func() bool
 	Enqueue       func(context.Context, string, slack.Event) bool
 	Publish       func(context.Context, string)
-	OnInteraction func(context.Context, Interaction)
+	OnInteraction func(context.Context, Interaction) *InteractionResponse
 	WriteError    ErrorWriter
 }
 
@@ -33,6 +43,7 @@ type Interaction struct {
 	TriggerID string
 	Channel   string
 	ThreadTS  string
+	MessageTS string
 	Actions   []InteractionAction
 	View      InteractionView
 }
@@ -43,9 +54,10 @@ type InteractionAction struct {
 }
 
 type InteractionView struct {
-	ID         string
-	CallbackID string
-	State      map[string]map[string]InteractionValue
+	ID              string
+	CallbackID      string
+	PrivateMetadata string
+	State           map[string]map[string]InteractionValue
 }
 
 type InteractionValue struct {
@@ -175,13 +187,17 @@ func (g Gateway) HandleInteractions(w http.ResponseWriter, r *http.Request) {
 			} `json:"selected_option"`
 		} `json:"actions"`
 		View struct {
-			ID         string `json:"id,omitempty"`
-			CallbackID string `json:"callback_id,omitempty"`
-			State      struct {
+			ID              string `json:"id,omitempty"`
+			CallbackID      string `json:"callback_id,omitempty"`
+			PrivateMetadata string `json:"private_metadata,omitempty"`
+			State           struct {
 				Values map[string]map[string]struct {
-					Type            string       `json:"type,omitempty"`
-					Value           string       `json:"value,omitempty"`
-					SelectedFiles   []slack.File `json:"files,omitempty"`
+					Type           string       `json:"type,omitempty"`
+					Value          string       `json:"value,omitempty"`
+					SelectedFiles  []slack.File `json:"files,omitempty"`
+					SelectedOption struct {
+						Value string `json:"value,omitempty"`
+					} `json:"selected_option,omitempty"`
 					SelectedOptions []struct {
 						Value string `json:"value"`
 					} `json:"selected_options,omitempty"`
@@ -204,10 +220,12 @@ func (g Gateway) HandleInteractions(w http.ResponseWriter, r *http.Request) {
 		TriggerID: payload.TriggerID,
 		Channel:   payload.Channel.ID,
 		ThreadTS:  payload.Message.ThreadTS,
+		MessageTS: payload.Message.TS,
 		View: InteractionView{
-			ID:         payload.View.ID,
-			CallbackID: payload.View.CallbackID,
-			State:      map[string]map[string]InteractionValue{},
+			ID:              payload.View.ID,
+			CallbackID:      payload.View.CallbackID,
+			PrivateMetadata: payload.View.PrivateMetadata,
+			State:           map[string]map[string]InteractionValue{},
 		},
 	}
 	if interaction.ThreadTS == "" {
@@ -224,6 +242,9 @@ func (g Gateway) HandleInteractions(w http.ResponseWriter, r *http.Request) {
 		interaction.View.State[blockID] = map[string]InteractionValue{}
 		for actionID, value := range actions {
 			var selected []string
+			if value.SelectedOption.Value != "" {
+				selected = append(selected, value.SelectedOption.Value)
+			}
 			for _, option := range value.SelectedOptions {
 				if option.Value != "" {
 					selected = append(selected, option.Value)
@@ -237,29 +258,47 @@ func (g Gateway) HandleInteractions(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if requiresFreshTrigger(interaction) {
-		// views.open must consume Slack's short-lived trigger_id immediately.
-		// Dispatching this work after the response in a goroutine can allow the
-		// trigger to expire before the modal request reaches Slack.
-		g.OnInteraction(r.Context(), interaction)
-		w.WriteHeader(http.StatusOK)
+	if requiresSynchronousResponse(interaction) {
+		// view_submission must receive its response_action in the HTTP ack. In
+		// particular, response_action=update replaces the chooser without
+		// depending on a second Web API request or an expiring trigger_id.
+		writeInteractionResponse(w, g.OnInteraction(r.Context(), interaction))
 		return
 	}
 	w.WriteHeader(http.StatusOK)
 	go g.OnInteraction(context.Background(), interaction)
 }
 
-func requiresFreshTrigger(interaction Interaction) bool {
-	if interaction.Type != "block_actions" || interaction.TriggerID == "" {
+func requiresSynchronousResponse(interaction Interaction) bool {
+	if interaction.Type == "view_submission" {
+		// Both connection modals return response_action in the HTTP ack. The
+		// chooser replaces itself with provider fields, and the details modal
+		// replaces itself with the authorization URL. Neither relies on a
+		// trigger_id or a second views.* Web API call.
+		return interaction.View.CallbackID == "connection_choose" || interaction.View.CallbackID == "connection_add"
+	}
+	if interaction.TriggerID == "" || interaction.Type != "block_actions" {
 		return false
 	}
 	for _, action := range interaction.Actions {
 		switch action.ActionID {
 		case "manage_rules", "manage_skills":
 			return true
+		case "add_connection":
+			return true
 		}
 	}
 	return false
+}
+
+func writeInteractionResponse(w http.ResponseWriter, response *InteractionResponse) {
+	if response == nil {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 func (g Gateway) draining() bool {

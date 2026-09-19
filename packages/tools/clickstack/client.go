@@ -3,9 +3,11 @@ package clickstack
 
 import (
 	"strings"
+	"time"
 
 	"github.com/noknov/kepler-agent/packages/config"
 	"github.com/noknov/kepler-agent/packages/mcp"
+	"github.com/noknov/kepler-agent/packages/safety"
 )
 
 const defaultMCPURL = "https://mcp.clickhouse.cloud/clickstack"
@@ -28,5 +30,6 @@ func NewMCPClient(cfg config.ClickStackConfig, token string) *mcp.Client {
 		URL:         url,
 		Token:       strings.TrimSpace(token),
 		Headers:     headers,
+		HTTP:        safety.SafeHTTPClient(60 * time.Second),
 	}
 }

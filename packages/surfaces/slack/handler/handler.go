@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/config"
+	"github.com/noknov/kepler-agent/packages/connections"
 	"github.com/noknov/kepler-agent/packages/observability"
 	"github.com/noknov/kepler-agent/packages/prompts"
 	"github.com/noknov/kepler-agent/packages/runs"
@@ -74,15 +75,56 @@ func (h *Handler) ToggleWebSearch(userID string) {
 	go h.Home.ToggleWebSearch(context.Background(), userID)
 }
 
-func (h *Handler) HandleInteraction(ctx context.Context, interaction slackgateway.Interaction) {
+func (h *Handler) HandleInteraction(ctx context.Context, interaction slackgateway.Interaction) *slackgateway.InteractionResponse {
 	if interaction.UserID == "" {
-		return
+		return nil
 	}
 	switch interaction.Type {
 	case "block_actions":
 		h.handleBlockActions(ctx, interaction)
 	case "view_submission":
-		h.handleViewSubmission(ctx, interaction)
+		if interaction.View.CallbackID == connectionChooseCallbackID {
+			return h.handleConnectionChoice(interaction)
+		} else if interaction.View.CallbackID == connectionCallbackID {
+			return h.handleConnectionSubmission(interaction)
+		} else {
+			h.handleViewSubmission(ctx, interaction)
+		}
+	}
+	return nil
+}
+
+func (h *Handler) handleConnectionChoice(interaction slackgateway.Interaction) *slackgateway.InteractionResponse {
+	modalContext := decodeConnectionModalContext(interaction.View.PrivateMetadata)
+	provider := modalContext.Provider
+	if provider == "" {
+		provider = stateValue(interaction.View.State, "connection_provider", "connection_provider")
+	}
+	if provider == "" {
+		if values := stateSelectedValues(interaction.View.State, "connection_provider", "connection_provider"); len(values) > 0 {
+			provider = values[0]
+		}
+	}
+	if provider == "" {
+		return &slackgateway.InteractionResponse{
+			ResponseAction: "errors",
+			Errors:         map[string]string{"connection_provider": "Choose an integration to continue."},
+		}
+	}
+	plugin, ok := connections.FindPlugin(provider)
+	if !ok || !h.Home.Connections.ProviderOAuthEnabled(provider) {
+		return &slackgateway.InteractionResponse{
+			ResponseAction: "errors",
+			Errors:         map[string]string{"connection_provider": "That integration is not available."},
+		}
+	}
+	return &slackgateway.InteractionResponse{
+		ResponseAction: "update",
+		View: connectionDetailsModalForContext(plugin, connectionModalContext{
+			Provider:      provider,
+			Origin:        modalContext.Origin,
+			ReturnContext: modalContext.ReturnContext,
+		}),
 	}
 }
 
@@ -103,6 +145,8 @@ func (h *Handler) handleBlockActions(ctx context.Context, interaction slackgatew
 			h.openAssetModal(ctx, interaction.TriggerID, interaction.UserID, userprefs.KindRule)
 		case "manage_skills":
 			h.openAssetModal(ctx, interaction.TriggerID, interaction.UserID, userprefs.KindSkill)
+		case "add_connection":
+			h.openConnectionModal(ctx, interaction)
 		case "enable_asset":
 			h.setAssetActive(ctx, interaction, action.Value, true)
 		case "disable_asset":
@@ -113,6 +157,111 @@ func (h *Handler) handleBlockActions(ctx context.Context, interaction slackgatew
 			h.resolveApproval(ctx, interaction, action.ActionID, action.Value)
 		}
 	}
+}
+
+func (h *Handler) openConnectionModal(ctx context.Context, interaction slackgateway.Interaction) {
+	if h.Slack == nil || interaction.TriggerID == "" {
+		return
+	}
+	var actionValue string
+	for _, action := range interaction.Actions {
+		if action.ActionID == "add_connection" {
+			actionValue = action.Value
+			break
+		}
+	}
+	actionContext := connectionModalContextFromAction(actionValue)
+	if actionContext.Origin == "" {
+		// Legacy cards did not carry a context. Keep their behavior safe and
+		// deterministic; all newly-rendered chat cards carry origin and
+		// return_context explicitly in the action value above.
+		actionContext.Origin = "app_home"
+	}
+	if actionContext.Provider != "" {
+		provider := actionContext.Provider
+		plugin, ok := connections.FindPlugin(provider)
+		if !ok || !h.Home.Connections.ProviderOAuthEnabled(provider) {
+			log.Printf("unsupported provider in direct connection action user=%s provider=%q", interaction.UserID, provider)
+			return
+		}
+		if err := h.Slack.OpenView(ctx, interaction.TriggerID, connectionDetailsModalForContext(plugin, actionContext)); err != nil {
+			log.Printf("open direct connection details failed user=%s provider=%s: %v", interaction.UserID, provider, err)
+		}
+		return
+	}
+	plugins := make([]connections.Plugin, 0)
+	for _, plugin := range connections.Plugins() {
+		if h.Home.Connections.ProviderOAuthEnabled(plugin.ID) {
+			plugins = append(plugins, plugin)
+		}
+	}
+	if len(plugins) == 0 {
+		log.Printf("no user connections configured for workspace user=%s", interaction.UserID)
+		return
+	}
+	if err := h.Slack.OpenView(ctx, interaction.TriggerID, connectionAddModalForContext(plugins, actionContext)); err != nil {
+		log.Printf("open connection modal failed user=%s: %v", interaction.UserID, err)
+	}
+}
+
+func slackConnectionReturnContext(channel, threadTS string) string {
+	if strings.TrimSpace(channel) == "" && strings.TrimSpace(threadTS) == "" {
+		return ""
+	}
+	raw, err := json.Marshal(map[string]string{"channel": channel, "thread_ts": threadTS})
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+func (h *Handler) handleConnectionSubmission(interaction slackgateway.Interaction) *slackgateway.InteractionResponse {
+	modalContext := decodeConnectionModalContext(interaction.View.PrivateMetadata)
+	provider := modalContext.Provider
+	if provider == "" {
+		provider = stateValue(interaction.View.State, "connection_provider", "connection_provider")
+	}
+	if provider == "" {
+		if values := stateSelectedValues(interaction.View.State, "connection_provider", "connection_provider"); len(values) > 0 {
+			provider = values[0]
+		}
+	}
+	plugin, ok := connections.FindPlugin(provider)
+	if !ok || !h.Home.Connections.ProviderOAuthEnabled(provider) {
+		return &slackgateway.InteractionResponse{ResponseAction: "errors", Errors: map[string]string{"connection_provider": "That integration is not available."}}
+	}
+	label := stateValue(interaction.View.State, "connection_label", "connection_label")
+	if message := validateConnectionLabel(label); message != "" {
+		return &slackgateway.InteractionResponse{ResponseAction: "errors", Errors: map[string]string{"connection_label": message}}
+	}
+	instanceID, err := connections.NewInstanceID()
+	if err != nil {
+		log.Printf("generate connection instance id failed user=%s provider=%s: %v", interaction.UserID, provider, err)
+		return &slackgateway.InteractionResponse{ResponseAction: "errors", Errors: map[string]string{"connection_provider": "Unable to start this connection. Please try again."}}
+	}
+	metadata := map[string]string{}
+	for _, field := range plugin.Fields {
+		value := stateValue(interaction.View.State, "connection_"+field.ID, field.ID)
+		if value == "" {
+			if field.Required {
+				return &slackgateway.InteractionResponse{ResponseAction: "errors", Errors: map[string]string{"connection_" + field.ID: field.Label + " is required."}}
+			}
+			continue
+		}
+		metadata[field.ID] = value
+	}
+	if len(metadata) == 0 {
+		metadata = nil
+	}
+	if modalContext.Origin == "" {
+		modalContext.Origin = "app_home"
+	}
+	authURL, err := h.Home.Connections.ConnectURLForInstanceWithContext(interaction.UserID, provider, instanceID, label, metadata, connections.ConnectionContext{Origin: modalContext.Origin, ReturnContext: modalContext.ReturnContext})
+	if err != nil {
+		log.Printf("create connection action failed user=%s provider=%s: %v", interaction.UserID, provider, err)
+		return &slackgateway.InteractionResponse{ResponseAction: "errors", Errors: map[string]string{"connection_provider": "Unable to start this connection. Please check the settings and try again."}}
+	}
+	return &slackgateway.InteractionResponse{ResponseAction: "update", View: connectionAuthModal(plugin, authURL)}
 }
 
 func (h *Handler) resolveApproval(ctx context.Context, interaction slackgateway.Interaction, actionID, value string) {
@@ -136,20 +285,56 @@ func (h *Handler) resolveApproval(ctx context.Context, interaction slackgateway.
 		EventID: "approval-" + token.TurnID + "-" + token.ToolCallID + "-" + verb,
 		UserID:  interaction.UserID, Channel: interaction.Channel, ThreadTS: interaction.ThreadTS,
 		Text:     "The user " + verb + "d the pending action. Continue from the recorded tool result.",
-		Approval: &slackconversation.ApprovalRequest{TurnID: token.TurnID, ToolCallID: token.ToolCallID, Approved: approved},
+		Approval: &slackconversation.ApprovalRequest{TurnID: token.TurnID, ToolCallID: token.ToolCallID, Approved: approved, MessageTS: interaction.MessageTS},
 	}
 	payload, err := json.Marshal(request)
 	if err != nil {
 		return
 	}
 	sessionID := session.ID(interaction.Channel, interaction.ThreadTS)
+	if h.Slack != nil && interaction.MessageTS != "" {
+		if err := h.Slack.UpdateMessageBlocks(ctx, interaction.Channel, interaction.MessageTS, "Approval pending", approvalStateBlocks("pending", approved)); err != nil {
+			log.Printf("mark Slack approval pending failed turn=%s call=%s: %v", token.TurnID, token.ToolCallID, err)
+		}
+	}
 	if err := h.Inputs.Enqueue(ctx, sessioninput.Item{ID: request.EventID, SessionID: sessionID, Kind: sessioninput.KindQueue, Payload: payload}); err != nil {
 		log.Printf("resolve Slack approval failed turn=%s call=%s: %v", token.TurnID, token.ToolCallID, err)
+		if h.Slack != nil && interaction.MessageTS != "" {
+			if updateErr := h.Slack.UpdateMessageBlocks(ctx, interaction.Channel, interaction.MessageTS, "Approval failed — retry available", approvalStateBlocks("failed", approved, value)); updateErr != nil {
+				log.Printf("mark Slack approval failed state failed turn=%s call=%s: %v", token.TurnID, token.ToolCallID, updateErr)
+			}
+		}
 		return
 	}
 	if h.NotifyApproval != nil {
 		h.NotifyApproval(ctx, sessionID)
 	}
+}
+
+func approvalStateBlocks(state string, approved bool, retryValue ...string) []map[string]any {
+	text := "⏳ Pending — processing this action."
+	if state == "resolved" {
+		if approved {
+			text = "✅ Confirmed — action completed or is continuing."
+		} else {
+			text = "◼ Canceled — this action was not run."
+		}
+	}
+	if state == "failed" {
+		text = "⚠ Could not submit this decision. Use the buttons below to retry safely."
+	}
+	blocks := []map[string]any{{"type": "context", "elements": []map[string]any{{"type": "mrkdwn", "text": text}}}}
+	if state == "failed" && len(retryValue) > 0 && strings.TrimSpace(retryValue[0]) != "" {
+		value := retryValue[0]
+		blocks = append(blocks, map[string]any{
+			"type": "actions",
+			"elements": []map[string]any{
+				{"type": "button", "action_id": "agent_approval_approve", "style": "primary", "text": plainText("Confirm"), "value": value},
+				{"type": "button", "action_id": "agent_approval_decline", "style": "danger", "text": plainText("Cancel"), "value": value},
+			},
+		})
+	}
+	return blocks
 }
 
 func (h *Handler) openAssetModal(ctx context.Context, triggerID, userID string, kind userprefs.AssetKind) {

@@ -54,6 +54,7 @@ type Service struct {
 	Model            string
 	Redis            *redisclient.Client
 	Continuations    connections.ContinuationStore
+	Connections      *connections.Service
 	PodID            string
 	Lifecycle        context.Context
 	ModeForUser      func(string) ConversationMode
@@ -301,6 +302,7 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 	// client_msg_id. Keep generated IDs on the request as well as the turn.
 	req.EventID = turnID
 	stream := newSlackStream(runCtx, s.Messenger, req)
+	stream.connections = s.Connections
 	stream.redactor = safety.NewStreamRedactor(s.Redactor)
 	s.router.set(turnID, stream)
 	defer s.router.set(turnID, nil)
@@ -317,6 +319,13 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 			TurnID: approval.TurnID, ToolCallID: approval.ToolCallID, Approved: approval.Approved, UserID: req.UserID,
 		}); err != nil {
 			return err
+		}
+		if approval.MessageTS != "" {
+			if updater, ok := s.Messenger.(slackconversation.MessageBlocksUpdater); ok {
+				if err := updater.UpdateMessageBlocks(runCtx, req.Channel, approval.MessageTS, "Approval resolved", approvalResolutionBlocks(approval.Approved)); err != nil {
+					log.Printf("slack approval resolved update failed turn=%s call=%s: %v", approval.TurnID, approval.ToolCallID, err)
+				}
+			}
 		}
 	}
 
@@ -679,11 +688,11 @@ func (s *Service) StartConnectionCompletedSubscriber(ctx context.Context) {
 			if !ok {
 				return
 			}
-			userID, provider, parsed := connections.ParseOAuthCompletedPayload(message.Payload)
+			userID, provider, instanceID, parsed := connections.ParseOAuthCompletedPayload(message.Payload)
 			if !parsed {
 				continue
 			}
-			continuations, err := s.Continuations.Claim(ctx, userID, provider)
+			continuations, err := s.Continuations.Claim(ctx, userID, provider, instanceID)
 			if err != nil {
 				log.Printf("connection continuation claim failed user=%s provider=%s: %v", userID, provider, err)
 				continue
@@ -835,6 +844,8 @@ type slackStream struct {
 	planRevision         int
 	planLastUpdate       time.Time
 	planTimer            *time.Timer
+	connectionActions    map[string]bool
+	connections          *connections.Service
 }
 
 func newSlackStream(ctx context.Context, messenger slackconversation.Messenger, req slackconversation.Request) *slackStream {

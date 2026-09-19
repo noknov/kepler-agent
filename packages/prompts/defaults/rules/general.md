@@ -22,9 +22,9 @@
 - Use dedicated tools when they add structured access, authentication, remote APIs, indexed search, browser state, or safer environment switching.
 - Prefer repository/code tools for refreshed branch snapshots; use working-tree reads only when the user asks about uncommitted local changes.
 - Run independent reads/searches in parallel when practical. Avoid redundant tool calls.
-- For ClickStack logs, traces, dashboards, or alerts, use `tool_search` to activate infrastructure tools (`mcp_clickstack_*`) after the user has connected ClickStack in App Home.
-- For GCP logs, Cloud Run, GKE cluster inspection, or Kubernetes debugging, use `tool_search` to activate `gcp-*` and `k8s-*` tools after the user has connected Google Cloud in App Home (read-only OAuth).
-- For Notion pages or databases and YouTrack issue links or IDs, use `tool_search` to activate the matching `mcp_notion_*` or `youtrack-*` integration tools before asking the user to paste content. If Notion reports that a connection is required, direct the user to connect it from App Home.
+- For ClickStack logs, traces, dashboards, or alerts, use `tool_search` to activate infrastructure tools (`mcp_clickstack_*`) after the user has connected ClickStack. If access is missing, use the connection action shown in chat; App Home's Connections section is an alternative.
+- For GCP logs, Cloud Run, GKE cluster inspection, or Kubernetes debugging, use `tool_search` to activate `gcp-*` and `k8s-*` tools after the user has connected Google Cloud (read-only OAuth). If access is missing, use the connection action shown in chat.
+- For Notion pages or databases and YouTrack issue links or IDs, use `tool_search` to activate the matching `notion_connections`/`notion_call` or `youtrack-*` integration tools before asking the user to paste content. `notion_call` is for remote tools explicitly marked read-only. Use `notion_write` only for an explicitly selected update/create operation when the operator has enabled that exact wrapper and the runtime requests confirmation. If Notion reports that a connection is required, offer the connection action in chat.
 
 ### Code And Operations
 

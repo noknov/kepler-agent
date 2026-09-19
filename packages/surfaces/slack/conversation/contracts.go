@@ -54,6 +54,13 @@ type ApprovalMessenger interface {
 	PostMessageBlocks(ctx context.Context, channel, threadTS, text string, blocks []map[string]any) (string, error)
 }
 
+// ConnectionActionMessenger renders a provider-neutral connection action
+// emitted by a tool. It is deliberately separate from ApprovalMessenger so a
+// surface can support OAuth cards without pretending they are confirmations.
+type ConnectionActionMessenger interface {
+	PostMessageBlocks(ctx context.Context, channel, threadTS, text string, blocks []map[string]any) (string, error)
+}
+
 // MessageBlocksUpdater updates a regular Block Kit message. Unlike a native
 // stream, a regular message has no short streaming lifetime.
 type MessageBlocksUpdater interface {
@@ -63,6 +70,7 @@ type MessageBlocksUpdater interface {
 type ApprovalRequest struct {
 	TurnID, ToolCallID string
 	Approved           bool
+	MessageTS          string
 }
 
 type IdempotentMarkdownMessenger interface {

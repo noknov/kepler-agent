@@ -21,20 +21,21 @@ const (
 
 // Continuation captures a Slack thread that paused for OAuth.
 type Continuation struct {
-	UserID    string `json:"user_id"`
-	Provider  string `json:"provider"`
-	SessionID string `json:"session_id"`
-	Channel   string `json:"channel"`
-	ThreadTS  string `json:"thread_ts"`
+	UserID     string `json:"user_id"`
+	Provider   string `json:"provider"`
+	InstanceID string `json:"instance_id,omitempty"`
+	SessionID  string `json:"session_id"`
+	Channel    string `json:"channel"`
+	ThreadTS   string `json:"thread_ts"`
 }
 
 // ContinuationStore persists pending OAuth continuations and notifies workers.
 type ContinuationStore interface {
 	Save(ctx context.Context, continuation Continuation) error
-	Claim(ctx context.Context, userID, provider string) ([]Continuation, error)
+	Claim(ctx context.Context, userID, provider, instanceID string) ([]Continuation, error)
 	Release(ctx context.Context, continuation Continuation) error
 	Clear(ctx context.Context, continuation Continuation) error
-	PublishCompleted(ctx context.Context, userID, provider string) error
+	PublishCompleted(ctx context.Context, userID, provider, instanceID string) error
 }
 
 type RedisContinuationStore struct {
@@ -50,7 +51,7 @@ func (s RuntimeContinuationStore) Save(ctx context.Context, continuation agentru
 		return nil
 	}
 	return s.Store.Save(ctx, Continuation{
-		UserID: continuation.UserID, Provider: continuation.Provider, SessionID: continuation.SessionID,
+		UserID: continuation.UserID, Provider: continuation.Provider, InstanceID: continuation.InstanceID, SessionID: continuation.SessionID,
 		Channel: continuation.Channel, ThreadTS: continuation.ThreadTS,
 	})
 }
@@ -62,12 +63,16 @@ func NewRedisContinuationStore(rdb *redisclient.Client) *RedisContinuationStore 
 	return &RedisContinuationStore{Redis: rdb}
 }
 
-func continuationIndexKey(userID, provider string) string {
-	return "connection:pending:" + userID + ":" + provider
+func continuationIndexKey(userID, provider, instanceID string) string {
+	key := "connection:pending:" + userID + ":" + provider
+	if strings.TrimSpace(instanceID) != "" {
+		key += ":" + connectionInstanceID(instanceID)
+	}
+	return key
 }
 
 func continuationKey(continuation Continuation) string {
-	return continuationIndexKey(continuation.UserID, continuation.Provider) + ":" + continuation.SessionID
+	return continuationIndexKey(continuation.UserID, continuation.Provider, continuation.InstanceID) + ":" + continuation.SessionID
 }
 
 func continuationClaimKey(continuation Continuation) string {
@@ -88,23 +93,23 @@ func (s *RedisContinuationStore) Save(ctx context.Context, continuation Continua
 	if err := s.Redis.Set(ctx, continuationKey(continuation), string(payload), continuationTTL); err != nil {
 		return err
 	}
-	if _, err := s.Redis.SAdd(ctx, continuationIndexKey(continuation.UserID, continuation.Provider), continuation.SessionID); err != nil {
+	if _, err := s.Redis.SAdd(ctx, continuationIndexKey(continuation.UserID, continuation.Provider, continuation.InstanceID), continuation.SessionID); err != nil {
 		return err
 	}
-	return s.Redis.Expire(ctx, continuationIndexKey(continuation.UserID, continuation.Provider), continuationTTL)
+	return s.Redis.Expire(ctx, continuationIndexKey(continuation.UserID, continuation.Provider, continuation.InstanceID), continuationTTL)
 }
 
-func (s *RedisContinuationStore) Claim(ctx context.Context, userID, provider string) ([]Continuation, error) {
+func (s *RedisContinuationStore) Claim(ctx context.Context, userID, provider, instanceID string) ([]Continuation, error) {
 	if s == nil || s.Redis == nil || userID == "" || provider == "" {
 		return nil, nil
 	}
-	sessions, err := s.Redis.SMembers(ctx, continuationIndexKey(userID, provider))
+	sessions, err := s.Redis.SMembers(ctx, continuationIndexKey(userID, provider, instanceID))
 	if err != nil {
 		return nil, err
 	}
 	continuations := make([]Continuation, 0, len(sessions))
 	for _, sessionID := range sessions {
-		candidate := Continuation{UserID: userID, Provider: provider, SessionID: sessionID}
+		candidate := Continuation{UserID: userID, Provider: provider, InstanceID: instanceID, SessionID: sessionID}
 		claimed, err := s.Redis.SetNX(ctx, continuationClaimKey(candidate), "1", continuationClaimTTL)
 		if err != nil || !claimed {
 			continue
@@ -112,7 +117,7 @@ func (s *RedisContinuationStore) Claim(ctx context.Context, userID, provider str
 		raw, err := s.Redis.Get(ctx, continuationKey(candidate))
 		if errors.Is(err, redis.Nil) || strings.TrimSpace(raw) == "" {
 			_ = s.Redis.Del(ctx, continuationClaimKey(candidate))
-			_, _ = s.Redis.SRem(ctx, continuationIndexKey(userID, provider), sessionID)
+			_, _ = s.Redis.SRem(ctx, continuationIndexKey(userID, provider, instanceID), sessionID)
 			continue
 		}
 		if err != nil {
@@ -136,7 +141,7 @@ func (s *RedisContinuationStore) Clear(ctx context.Context, continuation Continu
 	if err := s.Redis.Del(ctx, continuationKey(continuation), continuationClaimKey(continuation)); err != nil {
 		return err
 	}
-	_, err := s.Redis.SRem(ctx, continuationIndexKey(continuation.UserID, continuation.Provider), continuation.SessionID)
+	_, err := s.Redis.SRem(ctx, continuationIndexKey(continuation.UserID, continuation.Provider, continuation.InstanceID), continuation.SessionID)
 	return err
 }
 
@@ -149,34 +154,41 @@ func (s *RedisContinuationStore) Release(ctx context.Context, continuation Conti
 	return s.Redis.Del(ctx, continuationClaimKey(continuation))
 }
 
-func (s *RedisContinuationStore) PublishCompleted(ctx context.Context, userID, provider string) error {
+func (s *RedisContinuationStore) PublishCompleted(ctx context.Context, userID, provider, instanceID string) error {
 	if s == nil || s.Redis == nil || userID == "" || provider == "" {
 		return nil
 	}
-	return s.Redis.Publish(ctx, OAuthCompletedChannel, oauthCompletedPayload(userID, provider))
+	return s.Redis.Publish(ctx, OAuthCompletedChannel, oauthCompletedPayload(userID, provider, instanceID))
 }
 
-func oauthCompletedPayload(userID, provider string) string {
-	return userID + "|" + provider
+func oauthCompletedPayload(userID, provider, instanceID string) string {
+	return userID + "|" + provider + "|" + connectionInstanceID(instanceID)
 }
 
-func ParseOAuthCompletedPayload(payload string) (userID, provider string, ok bool) {
-	parts := strings.SplitN(strings.TrimSpace(payload), "|", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", false
+func ParseOAuthCompletedPayload(payload string) (userID, provider, instanceID string, ok bool) {
+	parts := strings.Split(strings.TrimSpace(payload), "|")
+	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" || parts[1] == "" {
+		return "", "", "", false
 	}
-	return parts[0], parts[1], true
+	if len(parts) == 3 {
+		instanceID = connectionInstanceID(parts[2])
+	}
+	return parts[0], parts[1], instanceID, true
 }
 
-func (s Service) notifyOAuthCompleted(ctx context.Context, userID, provider string) {
-	s.notifyConnectionChanged(ctx, userID, provider)
+func (s Service) notifyOAuthCompleted(ctx context.Context, userID, provider string, instanceID ...string) {
+	s.notifyConnectionChanged(ctx, userID, provider, instanceID...)
 }
 
-func (s Service) notifyConnectionChanged(ctx context.Context, userID, provider string) {
+func (s Service) notifyConnectionChanged(ctx context.Context, userID, provider string, instanceID ...string) {
 	if s.OnConnectionChanged != nil {
 		_ = s.OnConnectionChanged(ctx, userID, provider)
 	}
 	if s.Continuations != nil {
-		_ = s.Continuations.PublishCompleted(ctx, userID, provider)
+		selected := ""
+		if len(instanceID) > 0 {
+			selected = instanceID[0]
+		}
+		_ = s.Continuations.PublishCompleted(ctx, userID, provider, selected)
 	}
 }

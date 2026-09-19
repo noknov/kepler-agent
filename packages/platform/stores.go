@@ -157,6 +157,11 @@ var webTables = []string{"web_auth_states", "web_auth_sessions", "web_conversati
 var allColumns = map[string][]string{
 	"slack_event_inbox":    {"claim_owner", "claim_until"},
 	"agent_session_inputs": {"claim_owner", "claim_until"},
+	// Connection-instance migrations are applied by the deploy repository.
+	// Check them before constructing stores so an old schema fails at startup
+	// with an actionable migration error instead of during an OAuth request.
+	"user_connections": {"instance_id", "label", "metadata"},
+	"oauth_states":     {"instance_id", "label", "metadata", "origin", "return_context", "code_verifier"},
 }
 
 // RequireWebSchema checks the optional browser-surface contract only when an

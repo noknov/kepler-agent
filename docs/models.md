@@ -36,8 +36,25 @@ LLM_PROVIDER=deepseek
 DEEPSEEK_PROTOCOL=openai
 DEEPSEEK_API_KEY=sk-...
 DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_MODEL=deepseek-flash
+DEEPSEEK_THINKING=low
+DEEPSEEK_TIMEOUT=10m
 ```
+
+Current DeepSeek model IDs are `deepseek-flash` (DeepSeek-V4.1-Flash) and
+`deepseek-v4-pro`. `deepseek-flash` accepts image input, tool calls, and
+thinking mode; `deepseek-v4-pro` has stronger long-context reasoning but no
+image input. The legacy IDs `deepseek-v4-flash` and
+`deepseek-v4-flash-vision-exp` still resolve to V4.1-Flash.
+
+`DEEPSEEK_THINKING` maps to DeepSeek's `thinking` object and accepts
+`disabled`, `enabled`, or a reasoning effort (`low`, `high`, `max`; `medium`
+and `xhigh` collapse to `high`, `minimal` to `low`). Reasoning tokens share the
+`LLM_MAX_OUTPUT_TOKENS` budget with the final answer, so a low effort keeps the
+cap meaningful. DeepSeek caches prefixes on disk automatically; cache reads are
+read from `prompt_cache_hit_tokens` (or `prompt_tokens_details.cached_tokens`)
+and bill at the cache-hit rate. Peak hours are Beijing time Mon-Fri
+09:00-12:00 and 14:00-18:00; off-peak requests bill at half price.
 
 ### MiMo
 

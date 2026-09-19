@@ -7,27 +7,36 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
 type fileRecord struct {
-	UserID    string    `json:"user_id"`
-	Provider  string    `json:"provider"`
-	Status    Status    `json:"status"`
-	Token     string    `json:"token_ciphertext"`
-	Scopes    []string  `json:"scopes,omitempty"`
-	Account   string    `json:"account,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	UserID     string            `json:"user_id"`
+	Provider   string            `json:"provider"`
+	InstanceID string            `json:"instance_id,omitempty"`
+	Label      string            `json:"label,omitempty"`
+	Status     Status            `json:"status"`
+	Token      string            `json:"token_ciphertext"`
+	Scopes     []string          `json:"scopes,omitempty"`
+	Account    string            `json:"account,omitempty"`
+	Metadata   map[string]string `json:"metadata,omitempty"`
+	UpdatedAt  time.Time         `json:"updated_at"`
 }
 
 type oauthStateRecord struct {
-	State        string    `json:"state"`
-	UserID       string    `json:"user_id"`
-	Provider     string    `json:"provider"`
-	ExpiresAt    time.Time `json:"expires_at"`
-	CodeVerifier string    `json:"code_verifier,omitempty"`
+	State         string            `json:"state"`
+	UserID        string            `json:"user_id"`
+	Provider      string            `json:"provider"`
+	InstanceID    string            `json:"instance_id,omitempty"`
+	Label         string            `json:"label,omitempty"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+	ExpiresAt     time.Time         `json:"expires_at"`
+	CodeVerifier  string            `json:"code_verifier,omitempty"`
+	Origin        string            `json:"origin,omitempty"`
+	ReturnContext string            `json:"return_context,omitempty"`
 }
 
 type FileStore struct {
@@ -62,7 +71,8 @@ func (s *FileStore) load() (map[string]fileRecord, []oauthStateRecord, error) {
 	}
 	out := make(map[string]fileRecord, len(payload.Connections))
 	for _, item := range payload.Connections {
-		out[item.UserID+"\x00"+item.Provider] = item
+		item.InstanceID = connectionInstanceID(item.InstanceID)
+		out[fileConnectionKey(item.UserID, item.Provider, item.InstanceID)] = item
 	}
 	return out, payload.States, nil
 }
@@ -86,15 +96,7 @@ func (s *FileStore) save(connections map[string]fileRecord, states []oauthStateR
 }
 
 func (s *FileStore) Get(ctx context.Context, userID, provider string) (Connection, error) {
-	connections, _, err := s.load()
-	if err != nil {
-		return Connection{}, err
-	}
-	item, ok := connections[userID+"\x00"+provider]
-	if !ok {
-		return Connection{}, ErrNotConnected
-	}
-	return Connection{UserID: item.UserID, Provider: item.Provider, Status: item.Status, Scopes: item.Scopes, Account: item.Account, UpdatedAt: item.UpdatedAt}, nil
+	return s.GetInstance(ctx, userID, provider, DefaultInstanceID)
 }
 
 func (s *FileStore) List(ctx context.Context, userID string) ([]Connection, error) {
@@ -107,12 +109,43 @@ func (s *FileStore) List(ctx context.Context, userID string) ([]Connection, erro
 		if item.UserID != userID {
 			continue
 		}
-		out = append(out, Connection{UserID: item.UserID, Provider: item.Provider, Status: item.Status, Scopes: item.Scopes, Account: item.Account, UpdatedAt: item.UpdatedAt})
+		out = append(out, fileConnection(item))
 	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Provider != out[j].Provider {
+			return out[i].Provider < out[j].Provider
+		}
+		left, right := strings.ToLower(InstanceDisplayName(out[i])), strings.ToLower(InstanceDisplayName(out[j]))
+		if left != right {
+			return left < right
+		}
+		return out[i].InstanceID < out[j].InstanceID
+	})
 	return out, nil
 }
 
 func (s *FileStore) UpsertToken(ctx context.Context, userID, provider, token string, scopes []string, account string) error {
+	return s.UpsertTokenInstance(ctx, userID, provider, DefaultInstanceID, "", token, scopes, account, nil)
+}
+
+func (s *FileStore) GetInstance(ctx context.Context, userID, provider, instanceID string) (Connection, error) {
+	instanceID = connectionInstanceID(instanceID)
+	connections, _, err := s.load()
+	if err != nil {
+		return Connection{}, err
+	}
+	item, ok := connections[fileConnectionKey(userID, provider, instanceID)]
+	if !ok {
+		return Connection{}, ErrNotConnected
+	}
+	return fileConnection(item), nil
+}
+
+func (s *FileStore) ListInstances(ctx context.Context, userID string) ([]Connection, error) {
+	return s.List(ctx, userID)
+}
+
+func (s *FileStore) UpsertTokenInstance(ctx context.Context, userID, provider, instanceID, label, token string, scopes []string, account string, metadata map[string]string) error {
 	connections, states, err := s.load()
 	if err != nil {
 		return err
@@ -121,19 +154,25 @@ func (s *FileStore) UpsertToken(ctx context.Context, userID, provider, token str
 	if err != nil {
 		return err
 	}
-	connections[userID+"\x00"+provider] = fileRecord{
-		UserID: userID, Provider: provider, Status: StatusConnected,
-		Token: encrypted, Scopes: scopes, Account: account, UpdatedAt: time.Now().UTC(),
+	instanceID = connectionInstanceID(instanceID)
+	connections[fileConnectionKey(userID, provider, instanceID)] = fileRecord{
+		UserID: userID, Provider: provider, InstanceID: instanceID, Label: label, Status: StatusConnected,
+		Token: encrypted, Scopes: scopes, Account: account, Metadata: cloneMetadata(metadata), UpdatedAt: time.Now().UTC(),
 	}
 	return s.save(connections, states)
 }
 
 func (s *FileStore) Delete(ctx context.Context, userID, provider string) error {
+	return s.DeleteInstance(ctx, userID, provider, DefaultInstanceID)
+}
+
+func (s *FileStore) DeleteInstance(ctx context.Context, userID, provider, instanceID string) error {
+	instanceID = connectionInstanceID(instanceID)
 	connections, states, err := s.load()
 	if err != nil {
 		return err
 	}
-	delete(connections, userID+"\x00"+provider)
+	delete(connections, fileConnectionKey(userID, provider, instanceID))
 	return s.save(connections, states)
 }
 
@@ -146,11 +185,24 @@ func (s *FileStore) Token(ctx context.Context, userID, provider string) (string,
 }
 
 func (s *FileStore) RawToken(ctx context.Context, userID, provider string) (string, error) {
+	return s.RawTokenInstance(ctx, userID, provider, DefaultInstanceID)
+}
+
+func (s *FileStore) TokenInstance(ctx context.Context, userID, provider, instanceID string) (string, error) {
+	raw, err := s.RawTokenInstance(ctx, userID, provider, instanceID)
+	if err != nil {
+		return "", err
+	}
+	return decodeStoredToken(raw), nil
+}
+
+func (s *FileStore) RawTokenInstance(ctx context.Context, userID, provider, instanceID string) (string, error) {
+	instanceID = connectionInstanceID(instanceID)
 	connections, _, err := s.load()
 	if err != nil {
 		return "", err
 	}
-	item, ok := connections[userID+"\x00"+provider]
+	item, ok := connections[fileConnectionKey(userID, provider, instanceID)]
 	if !ok || item.Status != StatusConnected {
 		return "", ErrNotConnected
 	}
@@ -202,7 +254,7 @@ func (s *FileStore) CreateOAuthState(ctx context.Context, userID, provider, stat
 	if err != nil {
 		return err
 	}
-	states = append(states, oauthStateRecord{State: state, UserID: userID, Provider: provider, ExpiresAt: expiresAt, CodeVerifier: meta.CodeVerifier})
+	states = append(states, oauthStateRecord{State: state, UserID: userID, Provider: provider, InstanceID: connectionInstanceID(meta.InstanceID), Label: meta.Label, Metadata: cloneMetadata(meta.Metadata), ExpiresAt: expiresAt, CodeVerifier: meta.CodeVerifier, Origin: meta.Origin, ReturnContext: meta.ReturnContext})
 	return s.save(connections, states)
 }
 
@@ -214,7 +266,7 @@ func (s *FileStore) PeekOAuthState(ctx context.Context, state string) (string, s
 	now := time.Now().UTC()
 	for _, item := range states {
 		if item.State == state && item.ExpiresAt.After(now) {
-			return item.UserID, item.Provider, OAuthStateMeta{CodeVerifier: item.CodeVerifier}, nil
+			return item.UserID, item.Provider, OAuthStateMeta{InstanceID: connectionInstanceID(item.InstanceID), Label: item.Label, Metadata: cloneMetadata(item.Metadata), CodeVerifier: item.CodeVerifier, Origin: item.Origin, ReturnContext: item.ReturnContext}, nil
 		}
 	}
 	return "", "", OAuthStateMeta{}, fmt.Errorf("oauth state is invalid or expired")
@@ -233,7 +285,7 @@ func (s *FileStore) ConsumeOAuthState(ctx context.Context, state string) (string
 		if item.State == state {
 			if item.ExpiresAt.After(now) {
 				userID, provider = item.UserID, item.Provider
-				meta = OAuthStateMeta{CodeVerifier: item.CodeVerifier}
+				meta = OAuthStateMeta{InstanceID: connectionInstanceID(item.InstanceID), Label: item.Label, Metadata: cloneMetadata(item.Metadata), CodeVerifier: item.CodeVerifier, Origin: item.Origin, ReturnContext: item.ReturnContext}
 				continue
 			}
 			return "", "", OAuthStateMeta{}, fmt.Errorf("oauth state is invalid or expired")
@@ -247,4 +299,23 @@ func (s *FileStore) ConsumeOAuthState(ctx context.Context, state string) (string
 		return "", "", OAuthStateMeta{}, err
 	}
 	return userID, provider, meta, nil
+}
+
+func fileConnectionKey(userID, provider, instanceID string) string {
+	return userID + "\x00" + provider + "\x00" + connectionInstanceID(instanceID)
+}
+
+func fileConnection(item fileRecord) Connection {
+	return Connection{UserID: item.UserID, Provider: item.Provider, InstanceID: connectionInstanceID(item.InstanceID), Label: item.Label, Status: item.Status, Scopes: append([]string(nil), item.Scopes...), Account: item.Account, Metadata: cloneMetadata(item.Metadata), UpdatedAt: item.UpdatedAt}
+}
+
+func cloneMetadata(value map[string]string) map[string]string {
+	if len(value) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(value))
+	for key, item := range value {
+		out[key] = item
+	}
+	return out
 }

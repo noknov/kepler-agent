@@ -45,3 +45,28 @@ func TestSupportsInputRequiresCatalogCapability(t *testing.T) {
 		t.Fatal("unknown model accepted image input")
 	}
 }
+
+func TestResolveDeepSeekModelCapabilities(t *testing.T) {
+	cases := []struct {
+		model    string
+		protocol string
+		image    bool
+	}{
+		{model: "deepseek-flash", protocol: "openai", image: true},
+		{model: "deepseek-v4-flash", protocol: "openai", image: true},
+		{model: "deepseek-v4-flash-vision-exp", protocol: "openai", image: true},
+		{model: "deepseek-v4-pro", protocol: "openai", image: false},
+	}
+	for _, test := range cases {
+		capabilities, ok := ResolveModel("deepseek", test.model)
+		if !ok {
+			t.Fatalf("ResolveModel(%q) returned unknown", test.model)
+		}
+		if capabilities.Protocol != test.protocol || capabilities.SupportsInput(ModalityImage) != test.image {
+			t.Fatalf("capabilities(%q) = %+v, want protocol=%q image=%t", test.model, capabilities, test.protocol, test.image)
+		}
+	}
+	if got := responsesModels("deepseek"); len(got) != 0 {
+		t.Fatalf("responsesModels(deepseek) = %#v, want none", got)
+	}
+}

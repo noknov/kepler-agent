@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,11 +23,134 @@ var safeName = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
 type TokenResolver func(ctx context.Context, call tool.Call) (string, error)
 
 type Server struct {
-	Name         string
-	Client       *mcp.Client
-	ResolveToken TokenResolver
-	Effects      []tool.Effect
+	Name              string
+	DescriptionPrefix string
+	Client            *mcp.Client
+	ResolveToken      TokenResolver
+	Effects           []tool.Effect
 }
+
+// ListDefinitions performs one MCP handshake and returns the remote tool
+// definitions without registering them in a catalog. It is used by
+// connection-scoped routers so a process-wide catalog never acquires
+// user-specific tool names.
+func ListDefinitions(ctx context.Context, client *mcp.Client) ([]mcp.ToolDefinition, error) {
+	if client == nil {
+		return nil, fmt.Errorf("mcp client is required")
+	}
+	session, err := client.Initialize(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return client.ListTools(ctx, session)
+}
+
+// Invoke calls one explicitly selected, read-only remote MCP tool without
+// registering a per-user descriptor in the shared agent catalog. The remote
+// definition is fetched in the same session immediately before the call and
+// must opt into readOnlyHint=true. This keeps a generic connection router from
+// turning an arbitrary remote MCP operation into a read-only catalog tool.
+func Invoke(ctx context.Context, client *mcp.Client, name string, args json.RawMessage) (tool.Result, error) {
+	return InvokeReadOnly(ctx, client, name, args)
+}
+
+// InvokeReadOnly validates the exact remote definition before invoking it.
+// MCP annotations are untrusted hints, so absence or false is fail-closed.
+// Dynamic write dispatch is intentionally not exposed by this router; writes
+// must be represented by a separately declared, policy-reviewable tool.
+func InvokeReadOnly(ctx context.Context, client *mcp.Client, name string, args json.RawMessage) (tool.Result, error) {
+	if client == nil {
+		return tool.Result{}, fmt.Errorf("mcp client is required")
+	}
+	session, err := client.Initialize(ctx)
+	if err != nil {
+		return tool.Result{}, err
+	}
+	definitions, err := client.ListTools(ctx, session)
+	if err != nil {
+		return tool.Result{}, err
+	}
+	var selected mcp.ToolDefinition
+	found := false
+	for _, definition := range definitions {
+		if definition.Name == name {
+			selected = definition
+			found = true
+			break
+		}
+	}
+	if !found {
+		return remoteToolError("remote_tool_not_found", fmt.Sprintf("remote MCP tool %q was not advertised by this connection", name)), nil
+	}
+	if !explicitlyReadOnly(selected) {
+		return remoteToolError("remote_tool_not_read_only", fmt.Sprintf("remote MCP tool %q is not explicitly read-only; dynamic writes are not available through this router", name)), nil
+	}
+	value, err := client.CallTool(ctx, session, name, args)
+	if err != nil {
+		return tool.Result{}, err
+	}
+	return formatToolResult(value), nil
+}
+
+// InvokeExternal validates and invokes one explicitly selected remote MCP
+// tool through an external-write wrapper. The wrapper's descriptor must carry
+// EffectExternalWrite so the composing server policy can require its exact
+// stable wrapper name in the operator allowlist and route it through approval.
+// A remote readOnlyHint=true definition is rejected here; reads belong on the
+// read-only router and must not be used to smuggle a write through it.
+func InvokeExternal(ctx context.Context, client *mcp.Client, name string, args json.RawMessage) (tool.Result, error) {
+	if client == nil {
+		return tool.Result{}, fmt.Errorf("mcp client is required")
+	}
+	session, err := client.Initialize(ctx)
+	if err != nil {
+		return tool.Result{}, err
+	}
+	definitions, err := client.ListTools(ctx, session)
+	if err != nil {
+		return tool.Result{}, err
+	}
+	var selected mcp.ToolDefinition
+	found := false
+	for _, definition := range definitions {
+		if definition.Name == name {
+			selected = definition
+			found = true
+			break
+		}
+	}
+	if !found {
+		return remoteToolError("remote_tool_not_found", fmt.Sprintf("remote MCP tool %q was not advertised by this connection", name)), nil
+	}
+	if explicitlyReadOnly(selected) {
+		return remoteToolError("remote_tool_read_only", fmt.Sprintf("remote MCP tool %q is read-only; use the read router", name)), nil
+	}
+	value, err := client.CallTool(ctx, session, name, args)
+	if err != nil {
+		return tool.Result{}, err
+	}
+	return formatToolResult(value), nil
+}
+
+func formatToolResult(value mcp.ToolResult) tool.Result {
+	content := make([]model.Content, 0, 1+len(value.Images))
+	if value.Content != "" {
+		content = append(content, model.Content{Type: model.ContentText, Text: value.Content})
+	}
+	for _, image := range value.Images {
+		content = append(content, model.Content{Type: model.ContentImage, ImageURL: image.DataURI()})
+	}
+	return tool.Result{Content: content, IsError: value.IsError, ErrorCode: mapErrorCode(value.IsError)}
+}
+
+func remoteToolError(code, message string) tool.Result {
+	return tool.Result{
+		Content:   []model.Content{{Type: model.ContentText, Text: message}},
+		IsError:   true,
+		ErrorCode: code,
+	}
+}
+
 type remoteTool struct {
 	server     *serverState
 	remote     mcp.ToolDefinition
@@ -90,7 +214,15 @@ func Discover(ctx context.Context, config Server) ([]tool.Tool, error) {
 		if !explicitlyReadOnly(definition) {
 			effects = append(effects, tool.EffectExternalWrite)
 		}
-		items = append(items, &remoteTool{server: state, remote: definition, descriptor: tool.Descriptor{Name: name, Description: definition.Description, InputSchema: schema, Effects: effects, Exposure: tool.ExposureDeferred}.WithConcurrencyDefaults()})
+		description := definition.Description
+		if prefix := strings.TrimSpace(config.DescriptionPrefix); prefix != "" {
+			if description == "" {
+				description = prefix
+			} else {
+				description = prefix + " " + description
+			}
+		}
+		items = append(items, &remoteTool{server: state, remote: definition, descriptor: tool.Descriptor{Name: name, Description: description, InputSchema: schema, Effects: effects, Exposure: tool.ExposureDeferred}.WithConcurrencyDefaults()})
 	}
 	return items, nil
 }

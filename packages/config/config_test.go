@@ -352,8 +352,8 @@ func TestLoadDeepSeekDefaults(t *testing.T) {
 	if cfg.LLM.BaseURL != "https://api.deepseek.com" {
 		t.Fatalf("LLM.BaseURL = %q, want DeepSeek base URL", cfg.LLM.BaseURL)
 	}
-	if cfg.LLM.Model != "deepseek-v4-flash" {
-		t.Fatalf("LLM.Model = %q, want deepseek-v4-flash", cfg.LLM.Model)
+	if cfg.LLM.Model != "deepseek-flash" {
+		t.Fatalf("LLM.Model = %q, want deepseek-flash", cfg.LLM.Model)
 	}
 	if cfg.LLM.APIKey != "ds-token" {
 		t.Fatalf("LLM.APIKey = %q, want ds-token", cfg.LLM.APIKey)

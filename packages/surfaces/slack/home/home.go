@@ -129,10 +129,6 @@ func (c Controller) View(userID string) map[string]any {
 		accessStatus = "Not allowlisted"
 	}
 
-	explorer := strings.TrimSpace(c.Cfg.LLM.SecondaryModel)
-	if explorer == "" {
-		explorer = c.Cfg.LLM.Model
-	}
 	webSearchOn := c.WebSearchEnabled(userID)
 	webSearchStatus := "On"
 	webSearchBtnStyle := "primary"
@@ -148,7 +144,6 @@ func (c Controller) View(userID string) map[string]any {
 		mrkdwnField(fmt.Sprintf("*Custom Rules*\n%d active", ruleCount)),
 		mrkdwnField(fmt.Sprintf("*Custom Skills*\n%d active", skillCount)),
 		mrkdwnField("*Primary Model*\n" + modelDisplayName(c.Cfg.LLM.Model)),
-		mrkdwnField("*Explorer Model*\n" + modelDisplayName(explorer)),
 	}
 	blocks := []map[string]any{
 		contextBlock("Mention the agent in a channel or use the Messages tab to start a private thread."),
@@ -180,35 +175,34 @@ func (c Controller) connectionBlocks(userID string) []map[string]any {
 	if c.Connections.Store == nil || !c.connectionsSectionEnabled() {
 		return nil
 	}
-	statusByProvider := map[string]connections.Connection{}
-	if listed, err := c.Connections.Store.List(context.Background(), userID); err == nil {
-		statusByProvider = connections.StatusMap(listed)
-	}
+	listed, _ := c.Connections.ListConnections(context.Background(), userID)
 	serverCreds := c.serverCredentialConnections()
 	blocks := []map[string]any{
 		dividerBlock(),
 		headerBlock(":electric_plug: Connections"),
+		actionsBlock(actionButton("add_connection", "＋ Add integration", `{"origin":"app_home"}`, "primary")),
 	}
-	for _, plugin := range connections.Plugins() {
-		if !c.Connections.ProviderOAuthEnabled(plugin.ID) {
+	for _, item := range listed {
+		plugin, known := connections.FindPlugin(item.Provider)
+		if !known || !c.Connections.ProviderOAuthEnabled(item.Provider) {
 			continue
 		}
-		if plugin.ID == connections.ProviderGitHub && c.serverGitHubCredentialsActive() {
+		if item.Provider == connections.ProviderGitHub && c.serverGitHubCredentialsActive() {
 			continue
 		}
 		status := "Not connected"
-		account := ""
-		if item, ok := statusByProvider[plugin.ID]; ok && item.Status == connections.StatusConnected {
-			switch plugin.ID {
+		account := item.Account
+		if item.Status == connections.StatusConnected {
+			switch item.Provider {
 			case connections.ProviderNotion:
-				if !c.Connections.NotionMCPConnected(context.Background(), userID) {
+				if !c.Connections.NotionMCPConnectedInstance(context.Background(), userID, item.InstanceID) {
 					status = "Invalid"
 				} else {
 					status = "Connected"
 					account = item.Account
 				}
 			case connections.ProviderClickStack:
-				if !c.Connections.ClickStackConnected(context.Background(), userID) {
+				if !c.Connections.ClickStackConnectedInstance(context.Background(), userID, item.InstanceID) {
 					status = "Invalid"
 				} else {
 					status = "Connected"
@@ -219,11 +213,17 @@ func (c Controller) connectionBlocks(userID string) []map[string]any {
 				account = item.Account
 			}
 		}
-		text := fmt.Sprintf("*%s*\n%s", plugin.Title, status)
+		title := plugin.Title
+		if item.Label != "" && item.Label != plugin.Title {
+			title += " · " + item.Label
+		} else if item.InstanceID != "" && item.InstanceID != connections.DefaultInstanceID {
+			title += " · " + connections.InstanceDisplayName(item)
+		}
+		text := fmt.Sprintf("*%s*\n%s", title, status)
 		if account != "" {
 			text += fmt.Sprintf(" (`%s`)", account)
 		}
-		authURL, err := c.Connections.StartURL(userID, plugin.ID)
+		authURL, err := c.Connections.ConnectURLForInstanceWithContext(userID, item.Provider, item.InstanceID, item.Label, item.Metadata, connections.ConnectionContext{Origin: "app_home"})
 		if err != nil || authURL == "" {
 			blocks = append(blocks, sectionBlock(text))
 			continue
@@ -235,6 +235,9 @@ func (c Controller) connectionBlocks(userID string) []map[string]any {
 			buttonStyle = ""
 		}
 		blocks = append(blocks, sectionBlockWithAccessory(text, actionButtonURL(buttonLabel, authURL, buttonStyle)))
+	}
+	if len(listed) == 0 && len(serverCreds) == 0 {
+		blocks = append(blocks, contextBlock("No integrations connected yet. Add one when you need it; the agent can also offer a connection from chat."))
 	}
 	for _, title := range serverCreds {
 		text := fmt.Sprintf("*%s*\nConnected (`server credentials`)", title)
@@ -283,55 +286,15 @@ func (c Controller) localGCPCredentialsActive() bool {
 	return strings.TrimSpace(c.Cfg.Integrations.GCP.DefaultProject) != ""
 }
 
-func explorerSummaryDisplayName(secondaryModel, imageModel string) string {
-	secondary := modelDisplayName(secondaryModel)
-	imageModel = strings.TrimSpace(imageModel)
-	if imageModel == "" {
-		return secondary
-	}
-	image := modelDisplayName(imageModel)
-	if image == secondary {
-		return secondary
-	}
-	return image + " + " + secondary
-}
-
+// modelDisplayName renders the configured provider model ID verbatim. The
+// surface shows the exact identifier operators configure and debug against,
+// so a new model needs no display-name entry here.
 func modelDisplayName(model string) string {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return "Unknown"
 	}
-	if label, ok := modelDisplayNames[model]; ok {
-		return label
-	}
-	// Provider model IDs are opaque identifiers. Preserve an unknown ID exactly
-	// rather than inferring branding or removing capability suffixes.
 	return model
-}
-
-var modelDisplayNames = map[string]string{
-	"ox-alpha-free":                "Ox Alpha",
-	"ox-alpha":                     "Ox Alpha",
-	"mimo-v2.5":                    "MiMo V2.5",
-	"mimo-v2.5-free":               "MiMo V2.5",
-	"mimo-v2.5-pro":                "MiMo V2.5 Pro",
-	"gpt-5.6-luna":                 "GPT-5.6 Luna",
-	"grok-4.6":                     "Grok 4.6",
-	"deepseek-v4.1-flash":          "DeepSeek V4.1 Flash",
-	"glm-5.2":                      "GLM 5.2",
-	"kimi-k2.7-code":               "Kimi K2.7 Code",
-	"kimi-k2.6":                    "Kimi K2.6",
-	"kimi/kimi-k2.7-code":          "Kimi K2.7 Code",
-	"minimax-m3":                   "MiniMax M3",
-	"minimax-m3-free":              "MiniMax M3",
-	"LongCat-2.0":                  "LongCat 2.0",
-	"deepseek-v4-flash":            "DeepSeek V4 Flash",
-	"hy3":                          "Hy3",
-	"deepseek-v4-flash-vision-exp": "DeepSeek V4 Flash Vision Exp",
-	"nemotron-3-ultra-free":        "Nemotron 3 Ultra",
-	"north-mini-code-free":         "North Mini Code",
-	"claude-sonnet-4-5-20250929":   "Claude Sonnet 4.5",
-	"gpt-4o-mini":                  "GPT-4o Mini",
 }
 
 func mrkdwnField(text string) map[string]any {
@@ -405,7 +368,9 @@ func actionButton(actionID, label, value, style string) map[string]any {
 			"text":  label,
 			"emoji": true,
 		},
-		"value": value,
+	}
+	if value != "" {
+		btn["value"] = value
 	}
 	if style != "" {
 		btn["style"] = style

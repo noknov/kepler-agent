@@ -24,17 +24,15 @@ func (s *stubPublisher) PublishHome(_ context.Context, userID string, view map[s
 	return nil
 }
 
-func TestModelDisplayName(t *testing.T) {
+func TestModelDisplayNameShowsRawModelID(t *testing.T) {
 	cases := map[string]string{
-		"ox-alpha-free":       "Ox Alpha",
-		"mimo-v2.5":           "MiMo V2.5",
-		"gpt-5.6-luna":        "GPT-5.6 Luna",
-		"grok-4.6":            "Grok 4.6",
-		"deepseek-v4.1-flash": "DeepSeek V4.1 Flash",
-		"glm-5.2":             "GLM 5.2",
-		"glm-5.3-flash":       "glm-5.3-flash",
-		"vendor/model-x":      "vendor/model-x",
-		"hy3":                 "Hy3",
+		"ox-alpha-free":  "ox-alpha-free",
+		"gpt-5.6-luna":   "gpt-5.6-luna",
+		"deepseek-flash": "deepseek-flash",
+		"glm-5.3-flash":  "glm-5.3-flash",
+		"vendor/model-x": "vendor/model-x",
+		"  glm-5.2  ":    "glm-5.2",
+		"":               "Unknown",
 	}
 	for model, want := range cases {
 		if got := modelDisplayName(model); got != want {
@@ -43,11 +41,11 @@ func TestModelDisplayName(t *testing.T) {
 	}
 }
 
-func TestViewShowsModelDisplayNamesWithoutCodeFormatting(t *testing.T) {
+func TestViewShowsRawModelIDAndHidesSecondary(t *testing.T) {
 	controller := Controller{
 		Cfg: config.Config{
 			LLM: config.LLMConfig{
-				Model:          "deepseek-v4-flash-vision-exp",
+				Model:          "deepseek-flash",
 				SecondaryModel: "mimo-v2.5",
 			},
 		},
@@ -63,14 +61,11 @@ func TestViewShowsModelDisplayNamesWithoutCodeFormatting(t *testing.T) {
 		t.Fatalf("Marshal() error = %v", err)
 	}
 	body := string(raw)
-	if !strings.Contains(body, "DeepSeek V4 Flash Vision Exp") {
-		t.Fatalf("expected DeepSeek V4 Flash Vision Exp in view, got %s", body)
+	if !strings.Contains(body, "deepseek-flash") {
+		t.Fatalf("expected raw primary model ID in view, got %s", body)
 	}
-	if !strings.Contains(body, "MiMo V2.5") {
-		t.Fatalf("expected MiMo V2.5 in view, got %s", body)
-	}
-	if !strings.Contains(body, "Explorer Model") {
-		t.Fatalf("expected explorer model label, got %s", body)
+	if strings.Contains(body, "mimo-v2.5") || strings.Contains(body, "MiMo V2.5") || strings.Contains(body, "Explorer Model") {
+		t.Fatalf("expected secondary model hidden from view, got %s", body)
 	}
 	if !strings.Contains(body, "Capabilities") || !strings.Contains(body, "Code Review") || !strings.Contains(body, "Review GitHub pull requests with a multi-agent workflow.") {
 		t.Fatalf("expected conversational code review capability, got %s", body)
@@ -88,8 +83,8 @@ func TestViewShowsModelDisplayNamesWithoutCodeFormatting(t *testing.T) {
 	if strings.Contains(body, "Active-turn") || strings.Contains(body, "Image Model") || strings.Contains(body, "toggle_conversation_mode") {
 		t.Fatalf("expected no active-turn or image model fields, got %s", body)
 	}
-	if strings.Contains(body, "deepseek-v4-flash-vision-exp") || strings.Contains(body, "gpt-5.6-luna") || strings.Contains(body, "mimo-v2.5") || strings.Contains(body, "`") {
-		t.Fatalf("expected no code model names or backticks, got %s", body)
+	if strings.Contains(body, "`") {
+		t.Fatalf("expected no code formatting in view, got %s", body)
 	}
 }
 
@@ -275,4 +270,46 @@ func TestConnectionBlocksShowsYouTrackServerCredentials(t *testing.T) {
 	if !strings.Contains(body, "YouTrack") || !strings.Contains(body, "server credentials") {
 		t.Fatalf("expected YouTrack server credentials block, got %s", body)
 	}
+}
+
+func TestConnectionBlocksAddIntegrationCarriesExplicitOrigin(t *testing.T) {
+	legacy := actionButton("legacy_action", "Legacy", "legacy-value", "")
+	if got := legacy["value"]; got != "legacy-value" {
+		t.Fatalf("non-empty button value = %#v, want legacy-value", got)
+	}
+
+	store, err := connections.NewFileStore(t.TempDir()+"/connections.json", "test-secret")
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	controller := Controller{
+		Connections: connections.Service{
+			Store: store,
+			Config: connections.Config{
+				PublicBaseURL: "https://example.com",
+				SecretKey:     "test-secret",
+			},
+		},
+	}
+
+	blocks := controller.connectionBlocks("U123")
+	for _, block := range blocks {
+		if block["type"] != "actions" {
+			continue
+		}
+		elements, ok := block["elements"].([]map[string]any)
+		if !ok {
+			continue
+		}
+		for _, element := range elements {
+			if element["action_id"] != "add_connection" {
+				continue
+			}
+			if got := element["value"]; got != `{"origin":"app_home"}` {
+				t.Fatalf("add integration button context value = %#v, want app_home context", got)
+			}
+			return
+		}
+	}
+	t.Fatal("expected add integration button")
 }

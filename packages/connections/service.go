@@ -46,7 +46,11 @@ func (c Config) GitHubEnabled() bool {
 }
 
 func (c Config) ClickStackEnabled() bool {
-	return strings.TrimSpace(c.PublicBaseURL) != "" && c.ClickStack.Configured()
+	// The shared callback and signing key are the deployment prerequisites.
+	// The endpoint itself may be supplied by a connection's declared field, so
+	// a user can add a custom ClickStack server without an operator pre-filling
+	// one global URL.
+	return strings.TrimSpace(c.PublicBaseURL) != "" && strings.TrimSpace(c.SecretKey) != ""
 }
 
 func (c ClickStackOAuthConfig) Configured() bool {
@@ -83,7 +87,54 @@ type Service struct {
 	Config              Config
 	Continuations       ContinuationStore
 	OnConnectionChanged ConnectionChangedHandler
-	state            *serviceState
+	state               *serviceState
+}
+
+// ListConnections returns every user-owned connection instance. It is the
+// preferred surface API; Store.List remains as a compatibility alias.
+func (s Service) ListConnections(ctx context.Context, userID string) ([]Connection, error) {
+	if s.Store == nil {
+		return nil, ErrNotConnected
+	}
+	if store, ok := instanceStore(s.Store); ok {
+		return store.ListInstances(ctx, userID)
+	}
+	return s.Store.List(ctx, userID)
+}
+
+func (s Service) GetConnection(ctx context.Context, userID, provider, instanceID string) (Connection, error) {
+	if s.Store == nil {
+		return Connection{}, ErrNotConnected
+	}
+	if store, ok := instanceStore(s.Store); ok {
+		return store.GetInstance(ctx, userID, provider, connectionInstanceID(instanceID))
+	}
+	if connectionInstanceID(instanceID) != DefaultInstanceID {
+		return Connection{}, ErrNotConnected
+	}
+	return s.Store.Get(ctx, userID, provider)
+}
+
+func (s Service) upsertToken(ctx context.Context, userID, provider, instanceID, label, token string, scopes []string, account string, metadata map[string]string) error {
+	instanceID = connectionInstanceID(instanceID)
+	if store, ok := instanceStore(s.Store); ok {
+		return store.UpsertTokenInstance(ctx, userID, provider, instanceID, label, token, scopes, account, metadata)
+	}
+	if connectionInstanceID(instanceID) != DefaultInstanceID {
+		return fmt.Errorf("connection store does not support multiple instances")
+	}
+	return s.Store.UpsertToken(ctx, userID, provider, token, scopes, account)
+}
+
+func (s Service) deleteConnection(ctx context.Context, userID, provider, instanceID string) error {
+	instanceID = connectionInstanceID(instanceID)
+	if store, ok := instanceStore(s.Store); ok {
+		return store.DeleteInstance(ctx, userID, provider, instanceID)
+	}
+	if connectionInstanceID(instanceID) != DefaultInstanceID {
+		return ErrNotConnected
+	}
+	return s.Store.Delete(ctx, userID, provider)
 }
 
 // serviceState holds mutable OAuth state behind a pointer so Service remains a
@@ -193,7 +244,7 @@ func (s Service) HandleCallback(w http.ResponseWriter, r *http.Request, provider
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		if err := s.Store.UpsertToken(r.Context(), userID, provider, token, scopes, account); err != nil {
+		if err := s.upsertToken(r.Context(), userID, provider, meta.InstanceID, meta.Label, token, scopes, account, meta.Metadata); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -203,23 +254,24 @@ func (s Service) HandleCallback(w http.ResponseWriter, r *http.Request, provider
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		if err := s.Store.UpsertToken(r.Context(), userID, provider, token, scopes, account); err != nil {
+		if err := s.upsertToken(r.Context(), userID, provider, meta.InstanceID, meta.Label, token, scopes, account, meta.Metadata); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	case ProviderClickStack:
 		redirectURI := s.callbackURL(provider)
-		clientID, err := s.clickstack().ensureClient(r.Context(), redirectURI)
+		oauth := s.clickstackForMeta(meta)
+		clientID, err := oauth.ensureClient(r.Context(), redirectURI)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		response, err := s.clickstack().exchange(r.Context(), code, meta.CodeVerifier, redirectURI, clientID)
+		response, err := oauth.exchange(r.Context(), code, meta.CodeVerifier, redirectURI, clientID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		if err := s.storeClickStackBundle(r.Context(), userID, clientID, redirectURI, response, "", response.Scopes); err != nil {
+		if err := s.storeClickStackBundleInstance(r.Context(), userID, meta.InstanceID, meta.Label, meta.Metadata, clientID, redirectURI, response, "", response.Scopes); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -233,7 +285,7 @@ func (s Service) HandleCallback(w http.ResponseWriter, r *http.Request, provider
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		if err := s.storeGCPBundle(r.Context(), userID, response, "", nil); err != nil {
+		if err := s.storeGCPBundleInstance(r.Context(), userID, meta.InstanceID, meta.Label, meta.Metadata, response, "", nil); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -253,7 +305,7 @@ func (s Service) HandleCallback(w http.ResponseWriter, r *http.Request, provider
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		if err := s.storeNotionBundle(r.Context(), userID, clientID, redirectURI, response, "", response.Scopes); err != nil {
+		if err := s.storeNotionBundleInstance(r.Context(), userID, meta.InstanceID, meta.Label, meta.Metadata, clientID, redirectURI, response, "", response.Scopes); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -261,13 +313,39 @@ func (s Service) HandleCallback(w http.ResponseWriter, r *http.Request, provider
 		http.Error(w, "unsupported provider", http.StatusNotFound)
 		return
 	}
-	s.notifyOAuthCompleted(r.Context(), userID, provider)
+	s.notifyOAuthCompleted(r.Context(), userID, provider, meta.InstanceID)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = io.WriteString(w, "<!doctype html><html><body><h1>Connected</h1><p>You can return to Slack and continue.</p></body></html>")
+	_, _ = io.WriteString(w, connectionCallbackPage(meta.Origin))
+}
+
+func connectionCallbackPage(origin string) string {
+	message := "You can return to Slack and continue."
+	switch strings.TrimSpace(origin) {
+	case "app_home":
+		message = "Return to the Slack App Home to see this connection and continue."
+	case "chat":
+		message = "Return to the Slack conversation; the waiting request will continue automatically."
+	}
+	return "<!doctype html><html><body><h1>Connected</h1><p>" + message + "</p></body></html>"
 }
 
 func (s Service) callbackURL(provider string) string {
 	return strings.TrimRight(s.Config.PublicBaseURL, "/") + "/oauth/" + url.PathEscape(provider) + "/callback"
+}
+
+func (s Service) clickstackForMeta(meta OAuthStateMeta) *clickstackOAuth {
+	metadata := meta.Metadata
+	if len(metadata) == 0 {
+		return s.clickstack()
+	}
+	cfg := s.Config.ClickStack
+	if value := strings.TrimSpace(metadata["mcp_url"]); value != "" {
+		cfg.MCPURL = value
+	}
+	if value := strings.TrimSpace(metadata["service_id"]); value != "" {
+		cfg.ServiceID = value
+	}
+	return newClickStackOAuth(cfg)
 }
 
 func (s Service) exchangeSlack(ctx context.Context, code string) (token, account string, scopes []string, err error) {
@@ -379,24 +457,64 @@ func (s Service) githubLogin(ctx context.Context, token string) (string, error) 
 }
 
 func (s Service) Required(userID, provider string) error {
-	if _, err := s.Store.Token(context.Background(), userID, provider); err == nil {
+	return s.RequiredInstance(userID, provider, DefaultInstanceID)
+}
+
+// RequiredInstance is the shared connection gate used by tools. It keeps the
+// selected instance in the error contract so chat surfaces can offer the
+// exact connection action that was requested.
+func (s Service) RequiredInstance(userID, provider, instanceID string) error {
+	if _, err := s.tokenForInstance(context.Background(), userID, provider, instanceID); err == nil {
 		return nil
 	}
-	authURL, err := s.StartURL(userID, provider)
-	if err != nil {
-		return &RequiredError{Provider: provider, Title: pluginTitle(provider)}
+	label, metadata := s.connectionActionDetails(context.Background(), userID, provider, instanceID)
+	authURL, err := s.ConnectURLForInstance(userID, provider, instanceID, label, metadata)
+	title := pluginTitle(provider)
+	if strings.TrimSpace(label) != "" {
+		title += " · " + strings.TrimSpace(label)
 	}
-	return &RequiredError{Provider: provider, Title: pluginTitle(provider), AuthURL: authURL}
+	if err != nil {
+		return &RequiredError{Provider: provider, InstanceID: connectionInstanceID(instanceID), Title: title, Metadata: metadata}
+	}
+	return &RequiredError{Provider: provider, InstanceID: connectionInstanceID(instanceID), Title: title, AuthURL: authURL, Metadata: metadata}
+}
+
+func (s Service) connectionActionDetails(ctx context.Context, userID, provider, instanceID string) (string, map[string]string) {
+	connection, err := s.GetConnection(ctx, userID, provider, instanceID)
+	if err != nil {
+		return "", nil
+	}
+	return connection.Label, cloneMetadata(connection.Metadata)
+}
+
+func (s Service) tokenForInstance(ctx context.Context, userID, provider, instanceID string) (string, error) {
+	instanceID = connectionInstanceID(instanceID)
+	if store, ok := instanceStore(s.Store); ok {
+		return store.TokenInstance(ctx, userID, provider, instanceID)
+	}
+	if connectionInstanceID(instanceID) != DefaultInstanceID {
+		return "", ErrNotConnected
+	}
+	return s.Store.Token(ctx, userID, provider)
 }
 
 // Reauthorize returns a connection-required error with a fresh OAuth URL even when
 // a token already exists.
 func (s Service) Reauthorize(userID, provider string) error {
-	authURL, err := s.StartURL(userID, provider)
-	if err != nil {
-		return &RequiredError{Provider: provider, Title: pluginTitle(provider), Reauthorize: true}
+	return s.ReauthorizeInstance(userID, provider, DefaultInstanceID)
+}
+
+func (s Service) ReauthorizeInstance(userID, provider, instanceID string) error {
+	label, metadata := s.connectionActionDetails(context.Background(), userID, provider, instanceID)
+	authURL, err := s.ConnectURLForInstance(userID, provider, instanceID, label, metadata)
+	title := pluginTitle(provider)
+	if strings.TrimSpace(label) != "" {
+		title += " · " + strings.TrimSpace(label)
 	}
-	return &RequiredError{Provider: provider, Title: pluginTitle(provider), AuthURL: authURL, Reauthorize: true}
+	if err != nil {
+		return &RequiredError{Provider: provider, InstanceID: connectionInstanceID(instanceID), Title: title, Reauthorize: true, Metadata: metadata}
+	}
+	return &RequiredError{Provider: provider, InstanceID: connectionInstanceID(instanceID), Title: title, AuthURL: authURL, Reauthorize: true, Metadata: metadata}
 }
 
 func ToolResult(err error) (tool.Result, error) {
@@ -413,7 +531,11 @@ func ToolResult(err error) (tool.Result, error) {
 		IsError:        true,
 		ErrorCode:      "connection_required",
 		NeedsUserInput: true,
-		Metadata:       map[string]any{"provider": required.Provider, "auth_url": required.AuthURL, "reauthorize": required.Reauthorize},
+		Metadata: map[string]any{
+			"provider": required.Provider, "instance_id": required.InstanceID,
+			"auth_url": required.AuthURL, "reauthorize": required.Reauthorize,
+			"connection_action": ConnectionActionFor(required),
+		},
 	}, nil
 }
 

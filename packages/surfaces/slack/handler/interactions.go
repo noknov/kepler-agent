@@ -1,18 +1,137 @@
 package slackhandler
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
+	"github.com/noknov/kepler-agent/packages/connections"
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/gateway"
 	"github.com/noknov/kepler-agent/packages/userprefs"
 )
 
 const (
-	rulesCallbackID  = "user_rules_manage"
-	skillsCallbackID = "user_skills_manage"
+	rulesCallbackID            = "user_rules_manage"
+	skillsCallbackID           = "user_skills_manage"
+	connectionChooseCallbackID = "connection_choose"
+	connectionCallbackID       = "connection_add"
 )
+
+type connectionModalContext struct {
+	Provider      string `json:"provider,omitempty"`
+	Origin        string `json:"origin,omitempty"`
+	ReturnContext string `json:"return_context,omitempty"`
+}
+
+func encodeConnectionModalContext(value connectionModalContext) string {
+	if value.Provider == "" && value.Origin == "" && value.ReturnContext == "" {
+		return ""
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+func decodeConnectionModalContext(raw string) connectionModalContext {
+	var value connectionModalContext
+	if strings.TrimSpace(raw) == "" || json.Unmarshal([]byte(raw), &value) != nil {
+		return value
+	}
+	return value
+}
+
+func connectionModalContextFromAction(raw string) connectionModalContext {
+	value := decodeConnectionModalContext(raw)
+	if value.Provider == "" && !strings.Contains(raw, "{") {
+		// Compatibility with older connection cards whose value was the
+		// provider id. New cards always use the structured value above.
+		value.Provider = strings.TrimSpace(raw)
+	}
+	return value
+}
+
+func connectionAddModal(plugins []connections.Plugin) map[string]any {
+	return connectionAddModalForContext(plugins, connectionModalContext{})
+}
+
+func connectionAddModalForContext(plugins []connections.Plugin, modalContext connectionModalContext) map[string]any {
+	options := make([]map[string]any, 0, len(plugins))
+	for _, plugin := range plugins {
+		options = append(options, map[string]any{
+			"text": plainText(plugin.Title), "value": plugin.ID,
+		})
+	}
+	blocks := []map[string]any{
+		{"type": "context", "elements": []map[string]any{{"type": "mrkdwn", "text": "Choose what you want to connect. You can add another connection of the same provider later."}}},
+		inputBlock("connection_provider", "connection_provider", "Integration", map[string]any{
+			"type": "static_select", "action_id": "connection_provider", "placeholder": plainText("Choose an integration"), "options": options,
+		}, false, ""),
+	}
+	view := map[string]any{
+		"type": "modal", "callback_id": connectionChooseCallbackID,
+		"title": plainText("Add integration"), "submit": plainText("Continue"), "close": plainText("Cancel"), "blocks": blocks,
+	}
+	if metadata := encodeConnectionModalContext(modalContext); metadata != "" {
+		view["private_metadata"] = metadata
+	}
+	return view
+}
+
+func connectionDetailsModal(plugin connections.Plugin) map[string]any {
+	return connectionDetailsModalForContext(plugin, connectionModalContext{Provider: plugin.ID})
+}
+
+func connectionDetailsModalForContext(plugin connections.Plugin, modalContext connectionModalContext) map[string]any {
+	blocks := []map[string]any{{"type": "context", "elements": []map[string]any{{"type": "mrkdwn", "text": "Connect " + plugin.Title + ". Optional settings are shown only when this integration supports them."}}}}
+	blocks = append(blocks, inputBlock("connection_label", "connection_label", "Name", plainTextInput("connection_label", false), true, "Optional name for this connection, useful when you add more than one."))
+	for _, field := range plugin.Fields {
+		element := plainTextInput(field.ID, false)
+		if field.Secret {
+			element["is_password"] = true
+		}
+		if field.Placeholder != "" {
+			element["placeholder"] = plainText(field.Placeholder)
+		}
+		blocks = append(blocks, inputBlock("connection_"+field.ID, field.ID, field.Label, element, !field.Required, field.Description))
+	}
+	view := map[string]any{
+		"type": "modal", "callback_id": connectionCallbackID,
+		"title": plainText("Connect " + plugin.Title), "submit": plainText("Continue"), "close": plainText("Cancel"), "blocks": blocks,
+	}
+	if metadata := encodeConnectionModalContext(modalContext); metadata != "" {
+		view["private_metadata"] = metadata
+	}
+	return view
+}
+
+func validateConnectionLabel(label string) string {
+	label = strings.TrimSpace(label)
+	if utf8.RuneCountInString(label) > 80 {
+		return "Name must be 80 characters or fewer."
+	}
+	if strings.IndexFunc(label, unicode.IsControl) >= 0 {
+		return "Name contains unsupported control characters."
+	}
+	return ""
+}
+
+func connectionAuthModal(plugin connections.Plugin, authURL string) map[string]any {
+	return map[string]any{
+		"type":        "modal",
+		"callback_id": connectionCallbackID,
+		"title":       plainText("Connect " + plugin.Title),
+		"close":       plainText("Close"),
+		"blocks": []map[string]any{
+			{"type": "context", "elements": []map[string]any{{"type": "mrkdwn", "text": "Your connection is ready. Open the secure authorization page in your browser."}}},
+			{"type": "actions", "elements": []map[string]any{{"type": "button", "action_id": "connection_open", "text": plainText("Open authorization page"), "url": authURL, "style": "primary"}}},
+		},
+	}
+}
 
 func assetModal(kind userprefs.AssetKind, existing []userprefs.Asset) map[string]any {
 	title := "Manage rules"
@@ -195,6 +314,15 @@ func stateValue(state map[string]map[string]slackgateway.InteractionValue, block
 		}
 	}
 	return ""
+}
+
+func stateSelectedValues(state map[string]map[string]slackgateway.InteractionValue, blockID, actionID string) []string {
+	if actions, ok := state[blockID]; ok {
+		if value, ok := actions[actionID]; ok {
+			return append([]string(nil), value.SelectedValues...)
+		}
+	}
+	return nil
 }
 
 func mergeSlackFile(primary, fallback slack.File) slack.File {

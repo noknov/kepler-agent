@@ -19,6 +19,15 @@ func TestPolicyAllowsReadsAndOperatorControlledWrites(t *testing.T) {
 	}
 }
 
+func TestNotionWriteWrapperRequiresExactAllowlist(t *testing.T) {
+	descriptor := tool.Descriptor{Name: "notion_write", Effects: []tool.Effect{tool.EffectExternalWrite, tool.EffectNetwork}}
+	denied, _ := (Policy{}).Decide(context.Background(), tool.PolicyRequest{Descriptor: descriptor, Call: tool.Call{Name: "notion_write"}})
+	allowed, _ := (Policy{Allowed: map[string]bool{"notion_write": true}}).Decide(context.Background(), tool.PolicyRequest{Descriptor: descriptor, Call: tool.Call{Name: "notion_write"}})
+	if denied.Type != tool.DecisionDeny || allowed.Type != tool.DecisionRequireApproval {
+		t.Fatalf("notion_write without/with allowlist = %v/%v, want deny/require_approval", denied.Type, allowed.Type)
+	}
+}
+
 type canceledModel struct{}
 
 func (canceledModel) Generate(context.Context, model.Request, model.EventSink) (model.Response, error) {

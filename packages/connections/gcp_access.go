@@ -10,14 +10,20 @@ import (
 
 // GCPAccessToken returns a valid GCP API access token for the user, refreshing when needed.
 func (s *Service) GCPAccessToken(ctx context.Context, userID string) (string, error) {
+	return s.GCPAccessTokenInstance(ctx, userID, DefaultInstanceID)
+}
+
+// GCPAccessTokenInstance resolves one explicitly selected Google account. The
+// provider-only method remains the legacy default-instance alias.
+func (s *Service) GCPAccessTokenInstance(ctx context.Context, userID, instanceID string) (string, error) {
 	if strings.TrimSpace(userID) == "" {
 		return "", ErrNotConnected
 	}
-	bundle, conn, err := s.loadGCPBundle(ctx, userID)
+	bundle, conn, err := s.loadGCPBundleInstance(ctx, userID, instanceID)
 	if err != nil {
 		return "", err
 	}
-	refreshed, err := s.ensureFreshGCPBundle(ctx, userID, bundle, conn)
+	refreshed, err := s.ensureFreshGCPBundleInstance(ctx, userID, bundle, conn)
 	if err != nil {
 		return "", err
 	}
@@ -25,11 +31,15 @@ func (s *Service) GCPAccessToken(ctx context.Context, userID string) (string, er
 }
 
 func (s *Service) loadGCPBundle(ctx context.Context, userID string) (clickStackTokenBundle, Connection, error) {
-	conn, err := s.Store.Get(ctx, userID, ProviderGCP)
+	return s.loadGCPBundleInstance(ctx, userID, DefaultInstanceID)
+}
+
+func (s *Service) loadGCPBundleInstance(ctx context.Context, userID, instanceID string) (clickStackTokenBundle, Connection, error) {
+	conn, err := s.GetConnection(ctx, userID, ProviderGCP, instanceID)
 	if err != nil {
 		return clickStackTokenBundle{}, Connection{}, err
 	}
-	raw, err := s.Store.RawToken(ctx, userID, ProviderGCP)
+	raw, err := s.gcpRawTokenInstance(ctx, userID, conn.InstanceID)
 	if err != nil {
 		return clickStackTokenBundle{}, Connection{}, err
 	}
@@ -41,15 +51,19 @@ func (s *Service) loadGCPBundle(ctx context.Context, userID string) (clickStackT
 }
 
 func (s *Service) ensureFreshGCPBundle(ctx context.Context, userID string, bundle clickStackTokenBundle, conn Connection) (clickStackTokenBundle, error) {
+	return s.ensureFreshGCPBundleInstance(ctx, userID, bundle, conn)
+}
+
+func (s *Service) ensureFreshGCPBundleInstance(ctx context.Context, userID string, bundle clickStackTokenBundle, conn Connection) (clickStackTokenBundle, error) {
 	now := time.Now().UTC()
 	if !bundle.needsRefresh(now) {
 		return bundle, nil
 	}
-	mu := s.gcpRefreshMutex(userID)
+	mu := s.gcpRefreshMutex(userID + "\x00" + connectionInstanceID(conn.InstanceID))
 	mu.Lock()
 	defer mu.Unlock()
 
-	if latest, latestConn, err := s.loadGCPBundle(ctx, userID); err == nil {
+	if latest, latestConn, err := s.loadGCPBundleInstance(ctx, userID, conn.InstanceID); err == nil {
 		bundle = latest
 		conn = latestConn
 		if !bundle.needsRefresh(time.Now().UTC()) {
@@ -58,7 +72,7 @@ func (s *Service) ensureFreshGCPBundle(ctx context.Context, userID string, bundl
 	}
 
 	if strings.TrimSpace(bundle.Refresh) == "" {
-		return clickStackTokenBundle{}, s.Required(userID, ProviderGCP)
+		return clickStackTokenBundle{}, s.RequiredInstance(userID, ProviderGCP, conn.InstanceID)
 	}
 	if !s.Config.GCP.Enabled() {
 		return clickStackTokenBundle{}, fmt.Errorf("gcp oauth is not configured")
@@ -90,10 +104,20 @@ func (s *Service) ensureFreshGCPBundle(ctx context.Context, userID string, bundl
 	if parsed := gcpScopes(response); len(parsed) > 0 {
 		scopes = parsed
 	}
-	if err := s.Store.UpsertToken(ctx, userID, ProviderGCP, stored, scopes, account); err != nil {
+	if err := s.upsertToken(ctx, userID, ProviderGCP, conn.InstanceID, conn.Label, stored, scopes, account, conn.Metadata); err != nil {
 		return clickStackTokenBundle{}, err
 	}
 	return updated, nil
+}
+
+func (s *Service) gcpRawTokenInstance(ctx context.Context, userID, instanceID string) (string, error) {
+	if store, ok := instanceStore(s.Store); ok {
+		return store.RawTokenInstance(ctx, userID, ProviderGCP, instanceID)
+	}
+	if connectionInstanceID(instanceID) != DefaultInstanceID {
+		return "", ErrNotConnected
+	}
+	return s.Store.RawToken(ctx, userID, ProviderGCP)
 }
 
 func (s *Service) gcpRefreshMutex(userID string) *sync.Mutex {
@@ -102,6 +126,10 @@ func (s *Service) gcpRefreshMutex(userID string) *sync.Mutex {
 }
 
 func (s *Service) storeGCPBundle(ctx context.Context, userID string, response gcpTokenResponse, account string, scopes []string) error {
+	return s.storeGCPBundleInstance(ctx, userID, DefaultInstanceID, "", nil, response, account, scopes)
+}
+
+func (s *Service) storeGCPBundleInstance(ctx context.Context, userID, instanceID, label string, metadata map[string]string, response gcpTokenResponse, account string, scopes []string) error {
 	bundle := clickStackTokenBundle{
 		Access:    response.AccessToken,
 		Refresh:   response.RefreshToken,
@@ -117,5 +145,5 @@ func (s *Service) storeGCPBundle(ctx context.Context, userID string, response gc
 	if len(scopes) == 0 {
 		scopes = gcpScopes(response)
 	}
-	return s.Store.UpsertToken(ctx, userID, ProviderGCP, stored, scopes, account)
+	return s.upsertToken(ctx, userID, ProviderGCP, instanceID, label, stored, scopes, account, metadata)
 }

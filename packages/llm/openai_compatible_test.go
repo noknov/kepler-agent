@@ -137,6 +137,50 @@ func TestDeepSeekChatBodyUsesOpenAICompatibleToolCalls(t *testing.T) {
 	}
 }
 
+func TestDeepSeekChatBodyMapsReasoningEffort(t *testing.T) {
+	client := NewOpenAICompatibleClient("deepseek", "https://api.deepseek.com", "token", 0)
+	cases := []struct {
+		thinking string
+		want     map[string]string
+	}{
+		{thinking: "low", want: map[string]string{"type": "enabled", "reasoning_effort": "low"}},
+		{thinking: "high", want: map[string]string{"type": "enabled", "reasoning_effort": "high"}},
+		{thinking: "max", want: map[string]string{"type": "enabled", "reasoning_effort": "max"}},
+		{thinking: "disabled", want: map[string]string{"type": "disabled"}},
+		{thinking: "enabled", want: map[string]string{"type": "enabled"}},
+	}
+	for _, test := range cases {
+		body := client.chatBody(Request{Model: "deepseek-flash", Thinking: test.thinking})
+		got, ok := body["thinking"].(map[string]string)
+		if !ok {
+			t.Fatalf("thinking %q: body[thinking] = %#v, want map", test.thinking, body["thinking"])
+		}
+		if len(got) != len(test.want) {
+			t.Fatalf("thinking %q: got %#v, want %#v", test.thinking, got, test.want)
+		}
+		for key, value := range test.want {
+			if got[key] != value {
+				t.Fatalf("thinking %q: got %#v, want %#v", test.thinking, got, test.want)
+			}
+		}
+	}
+	if body := client.chatBody(Request{Model: "deepseek-flash"}); body["thinking"] != nil {
+		t.Fatalf("thinking should be omitted when unset: %#v", body["thinking"])
+	}
+}
+
+func TestOpenAIUsageReadsDeepSeekCacheHitTokens(t *testing.T) {
+	usage := openAIUsage{PromptTokens: 1000, PromptCacheHitTokens: 800, PromptCacheMissTokens: 200}
+	if got := usage.toUsage().CacheReadInputTokens; got != 800 {
+		t.Fatalf("CacheReadInputTokens = %d, want 800 from prompt_cache_hit_tokens", got)
+	}
+	detailed := openAIUsage{PromptTokens: 1000, PromptCacheHitTokens: 800}
+	detailed.PromptTokensDetails.CachedTokens = 750
+	if got := detailed.toUsage().CacheReadInputTokens; got != 750 {
+		t.Fatalf("CacheReadInputTokens = %d, want detailed cached_tokens to win", got)
+	}
+}
+
 func TestBearerTokenValue(t *testing.T) {
 	if got := bearerTokenValue("Bearer sk-test"); got != "sk-test" {
 		t.Fatalf("bearerTokenValue() = %q, want sk-test", got)

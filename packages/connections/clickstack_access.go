@@ -11,15 +11,21 @@ import (
 // ClickStackAccessToken returns a valid ClickStack MCP access token for the user,
 // refreshing it with the stored OAuth refresh token when needed.
 func (s *Service) ClickStackAccessToken(ctx context.Context, userID string) (string, error) {
+	return s.ClickStackAccessTokenInstance(ctx, userID, DefaultInstanceID)
+}
+
+// ClickStackAccessTokenInstance resolves and refreshes one selected server
+// instance. The provider-only method above remains the default-instance alias.
+func (s *Service) ClickStackAccessTokenInstance(ctx context.Context, userID, instanceID string) (string, error) {
 	if strings.TrimSpace(userID) == "" {
 		return "", ErrNotConnected
 	}
-	bundle, conn, err := s.loadClickStackBundle(ctx, userID)
+	bundle, conn, err := s.loadClickStackBundleInstance(ctx, userID, instanceID)
 	if err != nil {
 		return "", err
 	}
 	s.maybeBackfillClickStackAccount(ctx, userID, bundle, conn)
-	refreshed, err := s.ensureFreshClickStackBundle(ctx, userID, bundle, conn)
+	refreshed, err := s.ensureFreshClickStackBundleInstance(ctx, userID, bundle, conn)
 	if err != nil {
 		return "", err
 	}
@@ -28,10 +34,14 @@ func (s *Service) ClickStackAccessToken(ctx context.Context, userID string) (str
 
 // ClickStackConnected reports whether the user has a usable ClickStack token stored.
 func (s *Service) ClickStackConnected(ctx context.Context, userID string) bool {
+	return s.ClickStackConnectedInstance(ctx, userID, DefaultInstanceID)
+}
+
+func (s *Service) ClickStackConnectedInstance(ctx context.Context, userID, instanceID string) bool {
 	if s.Store == nil || strings.TrimSpace(userID) == "" {
 		return false
 	}
-	raw, err := s.Store.RawToken(ctx, userID, ProviderClickStack)
+	raw, err := s.rawTokenInstance(ctx, userID, ProviderClickStack, instanceID)
 	if err != nil {
 		return false
 	}
@@ -50,11 +60,15 @@ func clickStackStoredTokenUsable(raw string, oauthMode bool) bool {
 }
 
 func (s *Service) loadClickStackBundle(ctx context.Context, userID string) (clickStackTokenBundle, Connection, error) {
-	conn, err := s.Store.Get(ctx, userID, ProviderClickStack)
+	return s.loadClickStackBundleInstance(ctx, userID, DefaultInstanceID)
+}
+
+func (s *Service) loadClickStackBundleInstance(ctx context.Context, userID, instanceID string) (clickStackTokenBundle, Connection, error) {
+	conn, err := s.GetConnection(ctx, userID, ProviderClickStack, instanceID)
 	if err != nil {
 		return clickStackTokenBundle{}, Connection{}, err
 	}
-	raw, err := s.Store.RawToken(ctx, userID, ProviderClickStack)
+	raw, err := s.rawTokenInstance(ctx, userID, ProviderClickStack, instanceID)
 	if err != nil {
 		return clickStackTokenBundle{}, Connection{}, err
 	}
@@ -66,15 +80,19 @@ func (s *Service) loadClickStackBundle(ctx context.Context, userID string) (clic
 }
 
 func (s *Service) ensureFreshClickStackBundle(ctx context.Context, userID string, bundle clickStackTokenBundle, conn Connection) (clickStackTokenBundle, error) {
+	return s.ensureFreshClickStackBundleInstance(ctx, userID, bundle, conn)
+}
+
+func (s *Service) ensureFreshClickStackBundleInstance(ctx context.Context, userID string, bundle clickStackTokenBundle, conn Connection) (clickStackTokenBundle, error) {
 	now := time.Now().UTC()
 	if !bundle.needsRefresh(now) {
 		return bundle, nil
 	}
-	mu := s.clickstackRefreshMutex(userID)
+	mu := s.clickstackRefreshMutex(userID + "\x00" + connectionInstanceID(conn.InstanceID))
 	mu.Lock()
 	defer mu.Unlock()
 
-	if latest, latestConn, err := s.loadClickStackBundle(ctx, userID); err == nil {
+	if latest, latestConn, err := s.loadClickStackBundleInstance(ctx, userID, conn.InstanceID); err == nil {
 		bundle = latest
 		conn = latestConn
 		if !bundle.needsRefresh(time.Now().UTC()) {
@@ -83,9 +101,9 @@ func (s *Service) ensureFreshClickStackBundle(ctx context.Context, userID string
 	}
 
 	if strings.TrimSpace(bundle.Refresh) == "" {
-		return clickStackTokenBundle{}, s.Required(userID, ProviderClickStack)
+		return clickStackTokenBundle{}, s.RequiredInstance(userID, ProviderClickStack, conn.InstanceID)
 	}
-	if !s.Config.ClickStackEnabled() {
+	if !s.Config.ClickStackEnabled() && strings.TrimSpace(conn.Metadata["mcp_url"]) == "" {
 		return clickStackTokenBundle{}, fmt.Errorf("clickstack oauth is not configured")
 	}
 
@@ -96,13 +114,13 @@ func (s *Service) ensureFreshClickStackBundle(ctx context.Context, userID string
 	clientID := bundle.ClientID
 	if clientID == "" {
 		var err error
-		clientID, err = s.clickstack().ensureClient(ctx, redirectURI)
+		clientID, err = s.clickstackForConnection(conn).ensureClient(ctx, redirectURI)
 		if err != nil {
 			return clickStackTokenBundle{}, err
 		}
 	}
 
-	response, err := s.clickstack().refresh(ctx, bundle.Refresh, redirectURI, clientID)
+	response, err := s.clickstackForConnection(conn).refresh(ctx, bundle.Refresh, redirectURI, clientID)
 	if err != nil {
 		return clickStackTokenBundle{}, fmt.Errorf("refresh clickstack token: %w", err)
 	}
@@ -123,14 +141,14 @@ func (s *Service) ensureFreshClickStackBundle(ctx context.Context, userID string
 		return clickStackTokenBundle{}, err
 	}
 	account := conn.Account
-	if label := s.clickstack().accountLabel(response.AccessToken, response.IDToken); label != "" {
+	if label := s.clickstackForConnection(conn).accountLabel(response.AccessToken, response.IDToken); label != "" {
 		account = label
 	}
 	scopes := conn.Scopes
 	if len(response.Scopes) > 0 {
 		scopes = response.Scopes
 	}
-	if err := s.Store.UpsertToken(ctx, userID, ProviderClickStack, stored, scopes, account); err != nil {
+	if err := s.upsertToken(ctx, userID, ProviderClickStack, conn.InstanceID, conn.Label, stored, scopes, account, conn.Metadata); err != nil {
 		return clickStackTokenBundle{}, err
 	}
 	return updated, nil
@@ -140,7 +158,7 @@ func (s *Service) maybeBackfillClickStackAccount(ctx context.Context, userID str
 	if strings.TrimSpace(conn.Account) != "" {
 		return
 	}
-	label := s.clickstack().accountLabel(bundle.Access, "")
+	label := s.clickstackForConnection(conn).accountLabel(bundle.Access, "")
 	if label == "" {
 		return
 	}
@@ -148,7 +166,7 @@ func (s *Service) maybeBackfillClickStackAccount(ctx context.Context, userID str
 	if err != nil {
 		return
 	}
-	_ = s.Store.UpsertToken(ctx, userID, ProviderClickStack, stored, conn.Scopes, label)
+	_ = s.upsertToken(ctx, userID, ProviderClickStack, conn.InstanceID, conn.Label, stored, conn.Scopes, label, conn.Metadata)
 }
 
 func (s *Service) clickstackRefreshMutex(userID string) *sync.Mutex {
@@ -156,7 +174,26 @@ func (s *Service) clickstackRefreshMutex(userID string) *sync.Mutex {
 	return value.(*sync.Mutex)
 }
 
+func (s *Service) clickstackForConnection(conn Connection) *clickstackOAuth {
+	meta := OAuthStateMeta{Metadata: conn.Metadata}
+	return s.clickstackForMeta(meta)
+}
+
+func (s *Service) rawTokenInstance(ctx context.Context, userID, provider, instanceID string) (string, error) {
+	if store, ok := instanceStore(s.Store); ok {
+		return store.RawTokenInstance(ctx, userID, provider, instanceID)
+	}
+	if connectionInstanceID(instanceID) != DefaultInstanceID {
+		return "", ErrNotConnected
+	}
+	return s.Store.RawToken(ctx, userID, provider)
+}
+
 func (s *Service) storeClickStackBundle(ctx context.Context, userID, clientID, redirectURI string, response clickstackTokenResponse, account string, scopes []string) error {
+	return s.storeClickStackBundleInstance(ctx, userID, DefaultInstanceID, "", nil, clientID, redirectURI, response, account, scopes)
+}
+
+func (s *Service) storeClickStackBundleInstance(ctx context.Context, userID, instanceID, label string, metadata map[string]string, clientID, redirectURI string, response clickstackTokenResponse, account string, scopes []string) error {
 	bundle := clickStackTokenBundle{
 		Access:      response.AccessToken,
 		Refresh:     response.RefreshToken,
@@ -171,5 +208,5 @@ func (s *Service) storeClickStackBundle(ctx context.Context, userID, clientID, r
 	if label := s.clickstack().accountLabel(response.AccessToken, response.IDToken); label != "" {
 		account = label
 	}
-	return s.Store.UpsertToken(ctx, userID, ProviderClickStack, stored, scopes, account)
+	return s.upsertToken(ctx, userID, ProviderClickStack, instanceID, label, stored, scopes, account, metadata)
 }

@@ -243,15 +243,17 @@ func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, pr
 		}
 		if entry.result.ErrorCode == "connection_required" && r.deps.ConnectionContinuations != nil {
 			provider, _ := entry.result.Metadata["provider"].(string)
+			instanceID, _ := entry.result.Metadata["instance_id"].(string)
 			channel := entry.call.Scope.Values["channel"]
 			threadTS := entry.call.Scope.Values["thread_ts"]
 			if provider != "" && entry.call.Scope.UserID != "" && channel != "" {
 				_ = r.deps.ConnectionContinuations.Save(ctx, ConnectionContinuation{
-					UserID:    entry.call.Scope.UserID,
-					Provider:  provider,
-					SessionID: entry.call.Scope.SessionID,
-					Channel:   channel,
-					ThreadTS:  threadTS,
+					UserID:     entry.call.Scope.UserID,
+					Provider:   provider,
+					InstanceID: instanceID,
+					SessionID:  entry.call.Scope.SessionID,
+					Channel:    channel,
+					ThreadTS:   threadTS,
 				})
 			}
 		}

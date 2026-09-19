@@ -91,7 +91,7 @@ func (c *webToolRefresh) Start(ctx context.Context) {
 			if !ok {
 				return
 			}
-			userID, provider, parsed := connections.ParseOAuthCompletedPayload(msg.Payload)
+			userID, provider, _, parsed := connections.ParseOAuthCompletedPayload(msg.Payload)
 			if !parsed {
 				continue
 			}
@@ -304,6 +304,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	conversation.RunTimeout = cfg.Tools.AgentTurnTimeout
 	conversation.Tools = profile.Tools
 	conversation.Continuations = continuations
+	conversation.Connections = &connService
 	conversation.Inputs = stores.Inputs
 	if len(cfg.Security.WorkspaceRoots) > 0 {
 		conversation.Workspace = cfg.Security.WorkspaceRoots[0]

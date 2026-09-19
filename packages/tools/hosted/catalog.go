@@ -84,6 +84,7 @@ func policyForSurface(cfg config.Config, surface SurfaceOptions) tool.SurfacePol
 		availableDeps["slack-connection"] = true
 	}
 	if surface.Connections != nil && surface.Connections.Config.ClickStackEnabled() {
+		availableDeps["clickstack"] = true
 		availableDeps["clickstack-connection"] = true
 	}
 	if surface.Connections != nil && surface.Connections.Config.GCPEnabled() {

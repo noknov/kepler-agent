@@ -94,8 +94,14 @@ Deploy routing headers:
 
 ### Notion MCP
 
-Notion tools are discovered from the hosted Notion MCP endpoint once a usable token exists.
-Users connect Notion from App Home or `kepler-agent connect notion` (OAuth via `https://mcp.notion.com`).
+Notion tools are selected through stable, user-scoped routers once a usable token exists.
+`notion_call` only invokes remote tools explicitly marked `readOnlyHint=true`.
+`notion_write` is a separate external-write wrapper for update/create operations;
+it is denied unless the exact wrapper name is added to
+`AGENT_ALLOWED_WRITE_TOOLS`, and still requires user confirmation. Operators
+should not add dynamically discovered remote names to the allowlist.
+Users connect Notion from App Home or directly from a Slack chat connection action
+(OAuth via `https://mcp.notion.com`).
 
 | Env | Purpose |
 |---|---|
@@ -108,7 +114,9 @@ Users connect Notion from App Home or `kepler-agent connect notion` (OAuth via `
 |---|---|
 | `web-search` | Public web search through DuckDuckGo, Brave, SearXNG, Google CSE, or SerpAPI |
 | `web-read_page` | Fetch and read a public web page |
-| `mcp_notion_*` | Notion MCP tools (search, fetch, create, update pages and databases) |
+| `notion_connections` | List the current user's Notion instances and advertised remote tools |
+| `notion_call` | Invoke an explicitly selected, explicitly read-only Notion MCP tool |
+| `notion_write` | Invoke an explicitly selected Notion write tool after operator allowlisting and user confirmation |
 | `youtrack-get_issue` | Fetch a YouTrack issue |
 | `youtrack-search` | Search YouTrack issues |
 | `knowledge-runbook_search` | Search local runbooks under `PROMPT_DIR/runbooks/` |

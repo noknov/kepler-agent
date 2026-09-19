@@ -50,10 +50,14 @@ func (s ConnectedSource) Resolve(ctx context.Context, call tool.Call) (*Client, 
 	if call.Scope.UserID == "" {
 		return nil, fmt.Errorf("user id is required for kubernetes")
 	}
-	token, err := s.Service.GCPAccessToken(ctx, call.Scope.UserID)
+	instanceID := ""
+	if call.Scope.Values != nil {
+		instanceID = call.Scope.Values["connection_instance_id"]
+	}
+	token, err := s.Service.GCPAccessTokenInstance(ctx, call.Scope.UserID, instanceID)
 	if err != nil {
 		if errorsIsNotConnected(err) {
-			return nil, s.Service.Required(call.Scope.UserID, connections.ProviderGCP)
+			return nil, s.Service.RequiredInstance(call.Scope.UserID, connections.ProviderGCP, instanceID)
 		}
 		return nil, err
 	}

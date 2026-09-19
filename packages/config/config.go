@@ -661,7 +661,7 @@ var providerTable = map[string]providerDefaults{
 	"moonshot":     {protocol: "openai", baseURL: "https://api.moonshot.ai/v1", model: "kimi-k2.6", apiKeyEnvs: []string{"MOONSHOT_API_KEY"}},
 	"opencode-go":  {protocol: "openai", baseURL: "https://opencode.ai/zen/go/v1", model: "glm-5.2", apiKeyEnvs: []string{"OPENCODE_GO_API_KEY"}},
 	"opencode-zen": {protocol: "openai", baseURL: "https://opencode.ai/zen/v1", model: "mimo-v2.5-free", apiKeyEnvs: []string{"OPENCODE_ZEN_API_KEY"}},
-	"deepseek":     {protocol: "openai", baseURL: "https://api.deepseek.com", model: "deepseek-v4-flash", apiKeyEnvs: []string{"DEEPSEEK_API_KEY"}},
+	"deepseek":     {protocol: "openai", baseURL: "https://api.deepseek.com", model: "deepseek-flash", apiKeyEnvs: []string{"DEEPSEEK_API_KEY"}},
 }
 
 func providerProtocol(provider string) string {
