@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	MaxAttachedFiles   = 20
-	MaxImageCount      = 4
+	MaxAttachedFiles = 20
+	// Images are bounded by bytes, not by count. A count cap was arbitrary and
+	// discarded legitimate attachments; total bytes bound memory and bandwidth.
 	MaxImageBytes      = 8 << 20
 	MaxImageTotalBytes = 16 << 20
 	MaxPDFBytes        = 16 << 20
@@ -106,8 +107,8 @@ func ImagePartsWithBudget(ctx context.Context, client Downloader, files []slack.
 	}
 	parts := make([]llm.ContentPart, 0, len(files))
 	for _, file := range files {
-		maxCount, maxBytes := budget.allow()
-		if maxCount <= 0 || maxBytes <= 0 {
+		maxBytes := budget.allow()
+		if maxBytes <= 0 {
 			break
 		}
 		mime := NormalizedImageMIME(file)
@@ -118,11 +119,11 @@ func ImagePartsWithBudget(ctx context.Context, client Downloader, files []slack.
 			log.Printf("skip slack image %s: size %d exceeds limit %d", file.ID, file.Size, MaxImageBytes)
 			continue
 		}
-		downloadLimit := MaxImageBytes
-		if maxBytes < downloadLimit {
-			downloadLimit = maxBytes
+		downloadLimit := int64(MaxImageBytes)
+		if int64(maxBytes) < downloadLimit {
+			downloadLimit = int64(maxBytes)
 		}
-		data, err := client.DownloadFile(ctx, file, int64(downloadLimit))
+		data, err := client.DownloadFile(ctx, file, downloadLimit)
 		if err != nil {
 			log.Printf("skip slack image %s: %v", file.ID, err)
 			continue
@@ -137,7 +138,7 @@ func ImagePartsWithBudget(ctx context.Context, client Downloader, files []slack.
 		}
 		dataURL := "data:" + actualMIME + ";base64," + base64.StdEncoding.EncodeToString(data)
 		parts = append(parts, llm.ImageURLPart(dataURL))
-		budget.take(1, len(data))
+		budget.take(len(data))
 	}
 	return parts
 }

@@ -18,6 +18,41 @@ type codedSlackStatusError string
 func (e codedSlackStatusError) Error() string          { return "sensitive upstream detail" }
 func (e codedSlackStatusError) SlackErrorCode() string { return string(e) }
 
+func TestApprovalDescriptionRendersPolicyAndEffects(t *testing.T) {
+	metadata := []byte(`{"type":"require_approval","reason":"this action changes data or an external service","rule":"user_confirmation","effects":["external_write","network"]}`)
+	got := approvalDescription("slack-user_post_message", []byte(`{"channel":"C1","text":"hi"}`), metadata)
+	for _, want := range []string{
+		"*Action:* slack-user_post_message",
+		"*Effect:* external write, network",
+		"*Why:* this action changes data or an external service",
+		"*Policy:* user_confirmation",
+		`"channel": "C1"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("approvalDescription() missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestApprovalDescriptionHandlesMissingMetadata(t *testing.T) {
+	got := approvalDescription("", []byte(`{}`), nil)
+	if !strings.Contains(got, "*Action:* this action") {
+		t.Fatalf("approvalDescription() = %q, want a default action label", got)
+	}
+	if strings.Contains(got, "*Effect:*") || strings.Contains(got, "*Why:*") {
+		t.Fatalf("approvalDescription() = %q, want no invented effect or reason", got)
+	}
+}
+
+func TestApprovalEffectLabelsOnlyMapsDeclaredEffects(t *testing.T) {
+	if got := approvalEffectLabels([]string{"workspace_write", "workspace_write", "unknown"}); got != "workspace write" {
+		t.Fatalf("approvalEffectLabels() = %q, want %q", got, "workspace write")
+	}
+	if got := approvalEffectLabels(nil); got != "" {
+		t.Fatalf("approvalEffectLabels(nil) = %q, want empty", got)
+	}
+}
+
 func TestSafeSlackErrorCode(t *testing.T) {
 	tests := []struct {
 		name string

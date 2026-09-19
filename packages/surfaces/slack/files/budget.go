@@ -1,41 +1,39 @@
 package slackfiles
 
-// ImageBudget limits image downloads across one or more Slack messages.
+// ImageBudget bounds the bytes downloaded for images in one request. It
+// deliberately has no image-count limit: the model-facing token cost of an
+// image is a small constant independent of the encoded file size, so the byte
+// budget is the only bound that protects memory and bandwidth.
 type ImageBudget struct {
-	remainingCount int
 	remainingBytes int
 }
 
 func MessageImageBudget() *ImageBudget {
-	return &ImageBudget{remainingCount: MaxImageCount, remainingBytes: MaxImageTotalBytes}
+	return &ImageBudget{remainingBytes: MaxImageTotalBytes}
 }
 
 func ThreadImageBudget() *ImageBudget {
-	return &ImageBudget{remainingCount: MaxThreadHistoryImages, remainingBytes: MaxImageTotalBytes}
+	return &ImageBudget{remainingBytes: MaxImageTotalBytes}
 }
 
-func (b *ImageBudget) take(count, bytes int) {
+func (b *ImageBudget) take(bytes int) {
 	if b == nil {
 		return
 	}
-	b.remainingCount -= count
 	b.remainingBytes -= bytes
 }
 
-func (b *ImageBudget) allow() (maxCount, maxBytes int) {
+// allow returns the byte budget available for the next download, capped at the
+// per-image limit.
+func (b *ImageBudget) allow() int {
 	if b == nil {
-		return MaxImageCount, MaxImageTotalBytes
+		return MaxImageBytes
 	}
-	maxCount = b.remainingCount
-	if maxCount > MaxImageCount {
-		maxCount = MaxImageCount
+	if b.remainingBytes <= 0 {
+		return 0
 	}
-	maxBytes = b.remainingBytes
-	if maxBytes > MaxImageBytes {
-		maxBytes = MaxImageBytes
+	if b.remainingBytes > MaxImageBytes {
+		return MaxImageBytes
 	}
-	if maxCount <= 0 || maxBytes <= 0 {
-		return 0, 0
-	}
-	return maxCount, maxBytes
+	return b.remainingBytes
 }

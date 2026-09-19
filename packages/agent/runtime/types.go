@@ -227,11 +227,15 @@ type TurnRequest struct {
 	// History is an optional, bounded transport import used only when the
 	// canonical session has no prior events. It is recorded as ordinary
 	// untrusted conversation messages before the current turn.
-	History  []model.Message
-	Prompt   []prompt.Fragment
-	Scope    tool.Scope
-	Steering InputSource
-	Model    string
+	History []model.Message
+	// HistoryLoader lazily supplies History. The runtime calls it only when the
+	// canonical session has no events, so a surface never fetches transport
+	// history for turns that would ignore it.
+	HistoryLoader func(context.Context) ([]model.Message, error)
+	Prompt        []prompt.Fragment
+	Scope         tool.Scope
+	Steering      InputSource
+	Model         string
 	// Parent links an isolated child turn to the tool call that created it.
 	// It is durable audit metadata only: it never becomes model context.
 	Parent *ParentLink

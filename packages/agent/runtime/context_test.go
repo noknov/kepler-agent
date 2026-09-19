@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -17,7 +18,7 @@ func TestBoundedProjectorDropsOldMessagesAndPreservesRecentTurn(t *testing.T) {
 		{Sequence: 3, Type: transcript.UserInput, Message: messagePtr(model.TextMessage(model.RoleUser, "recent question"))},
 		{Sequence: 4, Type: transcript.AssistantMessage, Message: messagePtr(model.TextMessage(model.RoleAssistant, "recent answer"))},
 	}
-	projection, err := NewBoundedProjector(ContextConfig{MaxTokens: 80, ReserveTokens: 10}).Project(context.Background(), events, model.TextMessage(model.RoleSystem, "system"))
+	projection, err := NewBoundedProjector(ContextConfig{MaxTokens: 80, ReserveTokens: 10}).Project(context.Background(), ProjectRequest{Events: events, System: model.TextMessage(model.RoleSystem, "system")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +39,7 @@ func TestProjectionUsesLatestCompactionCoverage(t *testing.T) {
 		{Sequence: 2, Type: transcript.CompactionCreated, Message: &summary, Metadata: []byte(`{"covers_through":1}`)},
 		{Sequence: 3, Type: transcript.UserInput, Message: &newer},
 	}
-	projection, err := NewBoundedProjector(ContextConfig{MaxTokens: 1000}).Project(context.Background(), events, model.Message{})
+	projection, err := NewBoundedProjector(ContextConfig{MaxTokens: 1000}).Project(context.Background(), ProjectRequest{Events: events, System: model.Message{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +57,7 @@ func TestProjectionIgnoresCompactionWithInvalidCoverage(t *testing.T) {
 		{Sequence: 2, Type: transcript.CompactionCreated, Message: &bad},
 		{Sequence: 3, Type: transcript.UserInput, Message: &newer},
 	}
-	projection, err := NewBoundedProjector(ContextConfig{MaxTokens: 1000}).Project(context.Background(), events, model.Message{})
+	projection, err := NewBoundedProjector(ContextConfig{MaxTokens: 1000}).Project(context.Background(), ProjectRequest{Events: events, System: model.Message{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +77,7 @@ func TestBoundedProjectorNeverSplitsToolCallAndResult(t *testing.T) {
 		{Sequence: 5, TurnID: "turn-new", Type: transcript.AssistantMessage, Message: messagePtr(model.TextMessage(model.RoleAssistant, "new answer"))},
 		{Sequence: 6, TurnID: "turn-last", Type: transcript.UserInput, Message: messagePtr(model.TextMessage(model.RoleUser, "last question"))},
 	}
-	projection, err := NewBoundedProjector(ContextConfig{MaxTokens: 80}).Project(context.Background(), events, model.Message{})
+	projection, err := NewBoundedProjector(ContextConfig{MaxTokens: 80}).Project(context.Background(), ProjectRequest{Events: events, System: model.Message{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,17 +93,53 @@ func TestBoundedProjectorNeverSplitsToolCallAndResult(t *testing.T) {
 	}
 }
 
-func TestEstimateTokensCountsCJKAndInlineImages(t *testing.T) {
+func TestEstimateTokensCountsCJKAndBoundsImagesByConstant(t *testing.T) {
 	text := EstimateTokens([]model.Message{model.TextMessage(model.RoleUser, strings.Repeat("中", 100))})
-	image := EstimateTokens([]model.Message{{Role: model.RoleUser, Content: []model.Content{{Type: model.ContentImage, ImageURL: "data:image/png;base64," + strings.Repeat("A", 4000)}}}})
-	if text < 100 || image < 2000 {
-		t.Fatalf("unexpected estimates: text=%d image=%d", text, image)
+	if text < 100 {
+		t.Fatalf("unexpected CJK estimate: %d", text)
+	}
+	small := EstimateTokens([]model.Message{{Role: model.RoleUser, Content: []model.Content{{Type: model.ContentImage, ImageURL: "data:image/png;base64," + strings.Repeat("A", 400)}}}})
+	large := EstimateTokens([]model.Message{{Role: model.RoleUser, Content: []model.Content{{Type: model.ContentImage, ImageURL: "data:image/png;base64," + strings.Repeat("A", 400000)}}}})
+	// Image cost must be a per-image constant, independent of payload length;
+	// otherwise one screenshot would consume the whole context budget.
+	if small != large {
+		t.Fatalf("image estimate depends on payload length: small=%d large=%d", small, large)
+	}
+	if small < 1024 || small > 1200 {
+		t.Fatalf("image estimate = %d, want a bounded per-image constant", small)
+	}
+}
+
+func TestBuildBudgetAccountsForToolsAndOutput(t *testing.T) {
+	// Roughly 800 estimated tokens, an indivisible latest turn.
+	events := []transcript.Event{
+		{Sequence: 1, Type: transcript.UserInput, Message: messagePtr(model.TextMessage(model.RoleUser, strings.Repeat("x ", 1600)))},
+	}
+	tools := []model.ToolDefinition{{
+		Name:        "read_file",
+		Description: strings.Repeat("d ", 800),
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+	}}
+	// With only the autocompact reserve the turn fits.
+	if _, err := NewBoundedProjector(ContextConfig{MaxTokens: 2000, ReserveTokens: 100}).Project(context.Background(), ProjectRequest{Events: events}); err != nil {
+		t.Fatalf("projection without tool or output reserve should fit: %v", err)
+	}
+	// Reserving the response cap and the tool schemas must shrink the budget
+	// below the same turn, so it can no longer silently pass.
+	if _, err := NewBoundedProjector(ContextConfig{MaxTokens: 2000, ReserveTokens: 100, OutputTokens: 1000}).Project(context.Background(), ProjectRequest{Events: events, Tools: tools}); err == nil {
+		t.Fatal("expected tool and output reserves to reduce the budget and reject the turn")
+	}
+	if got := EstimateToolTokens(tools); got <= 0 {
+		t.Fatalf("EstimateToolTokens() = %d, want positive", got)
+	}
+	if got := EstimateToolTokens(nil); got != 0 {
+		t.Fatalf("EstimateToolTokens(nil) = %d, want 0", got)
 	}
 }
 
 func TestBoundedProjectorRejectsOversizedLatestTurn(t *testing.T) {
 	message := model.TextMessage(model.RoleUser, strings.Repeat("large ", 500))
-	_, err := NewBoundedProjector(ContextConfig{MaxTokens: 100}).Project(context.Background(), []transcript.Event{{Sequence: 1, TurnID: "current", Type: transcript.UserInput, Message: &message}}, model.Message{})
+	_, err := NewBoundedProjector(ContextConfig{MaxTokens: 100}).Project(context.Background(), ProjectRequest{Events: []transcript.Event{{Sequence: 1, TurnID: "current", Type: transcript.UserInput, Message: &message}}, System: model.Message{}})
 	if err == nil {
 		t.Fatal("expected an oversized indivisible turn to fail")
 	}

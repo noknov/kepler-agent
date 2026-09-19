@@ -164,9 +164,9 @@ func (s *slackStream) requestApproval(event transcript.Event) {
 	if name == "" {
 		name = "this action"
 	}
-	description := approvalDescription(name, call.Arguments)
+	description := approvalDescription(name, call.Arguments, event.Metadata)
 	blocks := []map[string]any{
-		{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": "*Confirmation required*\nApprove this action?\n" + description}},
+		{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": "*Confirmation required*\n" + description}},
 		{"type": "actions", "elements": []map[string]any{
 			{"type": "button", "action_id": "agent_approval_approve", "style": "primary", "text": map[string]any{"type": "plain_text", "text": "Confirm"}, "value": string(value)},
 			{"type": "button", "action_id": "agent_approval_decline", "style": "danger", "text": map[string]any{"type": "plain_text", "text": "Cancel"}, "value": string(value)},
@@ -187,20 +187,71 @@ func approvalResolutionBlocks(approved bool) []map[string]any {
 	return []map[string]any{{"type": "context", "elements": []map[string]any{{"type": "mrkdwn", "text": text}}}}
 }
 
-func approvalDescription(name string, arguments json.RawMessage) string {
+func approvalDescription(name string, arguments, metadata json.RawMessage) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = "this action"
 	}
-	var formatted bytes.Buffer
-	if len(arguments) > 0 && json.Indent(&formatted, arguments, "", "  ") == nil {
-		text := string(formatted.Bytes())
-		if len([]rune(text)) > 1_500 {
-			text = string([]rune(text)[:1_500]) + "…"
-		}
-		return name + "\n```" + text + "```"
+	var details struct {
+		Reason  string   `json:"reason"`
+		Rule    string   `json:"rule"`
+		Effects []string `json:"effects"`
 	}
-	return name
+	_ = json.Unmarshal(metadata, &details)
+
+	lines := []string{"*Action:* " + name}
+	if effects := approvalEffectLabels(details.Effects); effects != "" {
+		lines = append(lines, "*Effect:* "+effects)
+	}
+	if reason := strings.TrimSpace(details.Reason); reason != "" {
+		lines = append(lines, "*Why:* "+reason)
+	}
+	if rule := strings.TrimSpace(details.Rule); rule != "" {
+		lines = append(lines, "*Policy:* "+rule)
+	}
+	if len(arguments) > 0 {
+		var formatted bytes.Buffer
+		if json.Indent(&formatted, arguments, "", "  ") == nil {
+			text := string(formatted.Bytes())
+			if len([]rune(text)) > 1_500 {
+				text = string([]rune(text)[:1_500]) + "…"
+			}
+			lines = append(lines, "```"+text+"```")
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// approvalEffectLabels renders the descriptor's declared effects as user-facing
+// capability labels. It only maps declared effect values; it never infers risk
+// from a tool name or its arguments.
+func approvalEffectLabels(effects []string) string {
+	seen := make(map[string]bool, len(effects))
+	labels := make([]string, 0, len(effects))
+	for _, effect := range effects {
+		label := approvalEffectLabel(effect)
+		if label == "" || seen[label] {
+			continue
+		}
+		seen[label] = true
+		labels = append(labels, label)
+	}
+	return strings.Join(labels, ", ")
+}
+
+func approvalEffectLabel(effect string) string {
+	switch strings.ToLower(strings.TrimSpace(effect)) {
+	case "workspace_write":
+		return "workspace write"
+	case "external_write":
+		return "external write"
+	case "privileged":
+		return "privileged"
+	case "network":
+		return "network"
+	default:
+		return ""
+	}
 }
 
 func sessionStatusForTermination(termination string) string {

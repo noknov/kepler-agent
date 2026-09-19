@@ -85,7 +85,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	runner, err := agentruntime.New(agentruntime.Config{
 		Model: cfg.LLM.Model, ReasoningEffort: cfg.LLM.Thinking, Temperature: cfg.LLM.Temperature,
 		MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxSteps: cfg.Tools.AgentMaxSteps, MaxParallelToolCalls: cfg.Tools.AgentMaxParallelToolCalls, MaxModelRetries: 0, MaxEmptyResponseRetries: 3,
-		Context:        agentruntime.ContextConfig{MaxTokens: cfg.Sessions.MaxContextTokens, ReserveTokens: cfg.Sessions.AutocompactBuffer},
+		Context:        agentruntime.ContextConfig{MaxTokens: cfg.Sessions.MaxContextTokens, ReserveTokens: cfg.Sessions.AutocompactBuffer, OutputTokens: cfg.LLM.MaxOutputTokens},
 		ToolResults:    agentruntime.ToolResultConfig{MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)},
 		CircuitBreaker: agentruntime.CircuitBreakerConfig{Enabled: true},
 	}, agentruntime.Dependencies{
@@ -101,7 +101,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		Config: agentruntime.Config{
 			Model: exploreModel, ReasoningEffort: cfg.LLM.Thinking, Temperature: cfg.LLM.Temperature,
 			MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxSteps: cfg.Tools.AgentExploreMaxSteps,
-			Context:     agentruntime.ContextConfig{MaxTokens: cfg.Sessions.MaxContextTokens, ReserveTokens: cfg.Sessions.AutocompactBuffer},
+			Context:     agentruntime.ContextConfig{MaxTokens: cfg.Sessions.MaxContextTokens, ReserveTokens: cfg.Sessions.AutocompactBuffer, OutputTokens: cfg.LLM.MaxOutputTokens},
 			ToolResults: agentruntime.ToolResultConfig{MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)},
 		},
 		Deps: agentruntime.Dependencies{

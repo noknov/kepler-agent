@@ -343,23 +343,24 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 		fragments = append(fragments, activation.Prompt)
 		stream.SetOutputPolicy(activation.OutputPolicy)
 	}
-	var history []model.Message
+	// Slack thread history is a first-turn bootstrap only: the runtime lazily
+	// loads it when the canonical session is empty and otherwise relies on the
+	// append-only transcript. That keeps the model prefix stable for provider
+	// prompt caching and avoids re-fetching the thread, re-downloading
+	// attachments, and re-attaching historical images on every turn.
+	var historyLoader func(context.Context) ([]model.Message, error)
 	if s.ThreadLoader != nil {
-		loaded, loadErr := s.ThreadLoader.Load(runCtx, req)
-		if loadErr != nil {
-			return fmt.Errorf("load Slack thread history: %w", loadErr)
+		historyLoader = func(loadCtx context.Context) ([]model.Message, error) {
+			return s.ThreadLoader.Load(loadCtx, req)
 		}
-		history = loaded
 	}
 	modelName := strings.TrimSpace(s.Model)
-	threadImages := model.CollectImages(history...)
-	input := req.Message().WithImages(threadImages)
-	if len(threadImages) > 0 {
-		log.Printf("slack thread context: %d history messages, %d images attached to turn input", len(history), len(threadImages))
-	}
-	if s.Multimodal != nil && !s.Multimodal(modelName) && model.ContainImages(append([]model.Message{input}, history...)...) {
+	// Only the current message's own attachments enter the turn input. Historical
+	// images are read on demand, never re-attached, so a later question does not
+	// resend every earlier screenshot.
+	input := req.Message()
+	if s.Multimodal != nil && !s.Multimodal(modelName) && model.ContainImages(input) {
 		input = withoutUnsupportedImages(input, slackconversation.IsChineseLocale(req.Locale))
-		history = stripUnsupportedImages(history, slackconversation.IsChineseLocale(req.Locale))
 	}
 	webSearch := "enabled"
 	if s.WebSearchEnabled != nil && !s.WebSearchEnabled(req.UserID) {
@@ -381,7 +382,7 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 			defer s.Tools.Deactivate(sessionID)
 		}
 	}
-	result, err := s.Agent.Run(runCtx, hosted.Request{SessionID: sessionID, TurnID: turnID, UserID: req.UserID, Workspace: s.Workspace, Input: input, History: history, Model: modelName, Steering: active.steering, Prompt: fragments, ScopeValues: scopeValues})
+	result, err := s.Agent.Run(runCtx, hosted.Request{SessionID: sessionID, TurnID: turnID, UserID: req.UserID, Workspace: s.Workspace, Input: input, HistoryLoader: historyLoader, Model: modelName, Steering: active.steering, Prompt: fragments, ScopeValues: scopeValues})
 	finalizeCtx, finalizeCancel := context.WithTimeout(context.WithoutCancel(runCtx), 20*time.Second)
 	defer finalizeCancel()
 	if err != nil {
@@ -521,17 +522,6 @@ func withoutUnsupportedImages(message model.Message, cjk bool) model.Message {
 	content = append(content, model.Content{Type: model.ContentText, Text: note})
 	message.Content = content
 	return message
-}
-
-func stripUnsupportedImages(messages []model.Message, cjk bool) []model.Message {
-	if len(messages) == 0 {
-		return messages
-	}
-	out := make([]model.Message, len(messages))
-	for i, message := range messages {
-		out[i] = withoutUnsupportedImages(message, cjk)
-	}
-	return out
 }
 
 func (s *Service) mode(userID string) ConversationMode {

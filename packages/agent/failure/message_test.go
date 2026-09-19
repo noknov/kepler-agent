@@ -24,6 +24,7 @@ func TestPublicMessageIdentifiesSafeRecoveryCategories(t *testing.T) {
 	}{
 		{name: "timeout", err: context.DeadlineExceeded, want: RequestTimedOutMessage},
 		{name: "wrapped protocol", err: fmt.Errorf("fallback: %w", protocol), want: MalformedModelMessage},
+		{name: "content policy", err: fmt.Errorf("deepseek stream failed: %w", &model.Error{Kind: model.ErrorContentPolicy, Message: "Content Exists Risk"}), want: ContentPolicyMessage},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

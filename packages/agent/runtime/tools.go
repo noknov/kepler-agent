@@ -16,6 +16,14 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// approvalRequestMetadata records the policy rationale together with the
+// descriptor's declared effects, so a presentation surface can explain what an
+// action changes without re-deriving policy or inspecting tool input.
+type approvalRequestMetadata struct {
+	tool.Decision
+	Effects []tool.Effect `json:"effects,omitempty"`
+}
+
 type preparedCall struct {
 	index      int
 	call       tool.Call
@@ -76,7 +84,7 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 			result := tool.Result{Content: []model.Content{{Type: model.ContentText, Text: "Tool call denied by policy: " + decision.Reason}}, IsError: true, ErrorCode: "policy_denied"}
 			prepared[index].result = &result
 		case tool.DecisionRequireApproval:
-			metadata, _ := json.Marshal(decision)
+			metadata, _ := json.Marshal(approvalRequestMetadata{Decision: decision, Effects: prepared[index].descriptor.Effects})
 			if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.ApprovalRequested, ToolCall: &call, Metadata: metadata}); err != nil {
 				return toolOutcome{}, err
 			}

@@ -142,6 +142,55 @@ func (emptyResultTool) Execute(context.Context, tool.Call) (tool.Result, error) 
 	return tool.Result{Content: []model.Content{{Type: model.ContentText}}}, nil
 }
 
+func TestHistoryLoaderRunsOnlyForEmptySession(t *testing.T) {
+	client := &scriptedModel{responses: []model.Response{
+		{Message: model.TextMessage(model.RoleAssistant, "first"), FinishReason: model.FinishStop},
+		{Message: model.TextMessage(model.RoleAssistant, "second"), FinishReason: model.FinishStop},
+	}}
+	catalog, err := tool.NewCatalog(echoTool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := transcript.NewMemoryStore()
+	runner, err := New(Config{Model: "test"}, Dependencies{Model: client, Tools: catalog, Transcript: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loads := 0
+	loader := func(context.Context) ([]model.Message, error) {
+		loads++
+		return []model.Message{
+			model.TextMessage(model.RoleUser, "earlier question"),
+			model.TextMessage(model.RoleAssistant, "earlier answer"),
+		}, nil
+	}
+	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "s1", TurnID: "t1", Input: model.TextMessage(model.RoleUser, "one"), HistoryLoader: loader}); err != nil {
+		t.Fatal(err)
+	}
+	if loads != 1 {
+		t.Fatalf("history loader calls after first turn = %d, want 1", loads)
+	}
+	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "s1", TurnID: "t2", Input: model.TextMessage(model.RoleUser, "two"), HistoryLoader: loader}); err != nil {
+		t.Fatal(err)
+	}
+	if loads != 1 {
+		t.Fatalf("history loader calls after second turn = %d, want 1 (the transcript is authoritative)", loads)
+	}
+	events, err := store.Load(context.Background(), "s1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imported := 0
+	for _, event := range events {
+		if strings.Contains(string(event.Metadata), "imported_history") {
+			imported++
+		}
+	}
+	if imported != 2 {
+		t.Fatalf("imported history events = %d, want 2 with no duplication", imported)
+	}
+}
+
 func TestRunTurnExecutesToolAndRecordsCanonicalHistory(t *testing.T) {
 	client := &scriptedModel{responses: []model.Response{
 		{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "call-1", Name: "echo", Arguments: json.RawMessage(`{"value":"hi"}`)}}}}, FinishReason: model.FinishToolCalls},

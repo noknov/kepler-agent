@@ -267,7 +267,11 @@ const (
 	ErrorContextLimit ErrorKind = "context_limit"
 	ErrorInvalid      ErrorKind = "invalid_request"
 	ErrorAuth         ErrorKind = "authentication"
-	ErrorUnavailable  ErrorKind = "unavailable"
+	// ErrorContentPolicy means the provider rejected the request under its
+	// content safety policy. Retrying the identical request cannot succeed, so
+	// it is non-retryable and must not be reported as a service outage.
+	ErrorContentPolicy ErrorKind = "content_policy"
+	ErrorUnavailable   ErrorKind = "unavailable"
 	// ErrorProtocol means the provider returned a response that could not be
 	// converted into the canonical model protocol. It is safe to retry before
 	// any user-visible output or executable tool call has been committed.

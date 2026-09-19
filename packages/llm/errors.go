@@ -85,6 +85,14 @@ func isRetryableStatus(status int) bool {
 	}
 }
 
+// ContentPolicyBody reports whether an upstream error body is a content safety
+// rejection rather than a malformed request. Providers expose no structured
+// field for this, so the body is the only signal. DeepSeek returns
+// "Content Exists Risk" with HTTP 400.
+func ContentPolicyBody(body string) bool {
+	return strings.Contains(strings.ToLower(body), "content exists risk")
+}
+
 // aggregatorGateways proxy requests to arbitrary upstream models rather than
 // serving a single model themselves. ProviderError.Provider is prefixed with
 // one of these names (e.g. "opencode-go stream") for every error the gateway

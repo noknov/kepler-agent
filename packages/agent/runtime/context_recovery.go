@@ -24,7 +24,7 @@ func (r *Runtime) forceCompactAfterContextLimit(ctx context.Context, request Tur
 	if tight.MaxTokens > 8192 {
 		tight.MaxTokens = tight.MaxTokens / 2
 	}
-	projection, err := NewBoundedProjector(tight).Project(ctx, events, system)
+	projection, err := NewBoundedProjector(tight).Project(ctx, ProjectRequest{Events: events, System: system, Tools: r.deps.Tools.ActiveDefinitions(request.SessionID)})
 	if err != nil {
 		return err
 	}

@@ -76,8 +76,16 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 		if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, Type: transcript.SessionStarted}); err != nil {
 			return result, err
 		}
-		for index := range request.History {
-			message := request.History[index].WithoutImages()
+		history := request.History
+		if len(history) == 0 && request.HistoryLoader != nil {
+			loaded, loadErr := request.HistoryLoader(ctx)
+			if loadErr != nil {
+				return r.failTurn(ctx, result, fmt.Errorf("load session history: %w", loadErr))
+			}
+			history = loaded
+		}
+		for index := range history {
+			message := history[index].WithoutImages()
 			if message.Role != model.RoleUser && message.Role != model.RoleAssistant {
 				message.Role = model.RoleUser
 			}
@@ -364,7 +372,7 @@ func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, syste
 	if err != nil {
 		return Projection{}, err
 	}
-	projection, err := r.deps.Projector.Project(ctx, events, system)
+	projection, err := r.deps.Projector.Project(ctx, ProjectRequest{Events: events, System: system, Tools: r.deps.Tools.ActiveDefinitions(request.SessionID)})
 	if err != nil {
 		return Projection{}, err
 	}
@@ -394,7 +402,7 @@ func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, syste
 	if err != nil {
 		return Projection{}, err
 	}
-	projection, err = r.deps.Projector.Project(ctx, events, system)
+	projection, err = r.deps.Projector.Project(ctx, ProjectRequest{Events: events, System: system, Tools: r.deps.Tools.ActiveDefinitions(request.SessionID)})
 	if err != nil {
 		return Projection{}, err
 	}

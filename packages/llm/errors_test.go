@@ -27,6 +27,18 @@ func TestTemporaryOverloadErrors(t *testing.T) {
 	}
 }
 
+func TestContentPolicyBody(t *testing.T) {
+	if !ContentPolicyBody(`{"error":{"message":"Content Exists Risk","type":"invalid_request_error"}}`) {
+		t.Fatal("expected DeepSeek content risk body to match")
+	}
+	if ContentPolicyBody(`{"error":{"message":"Invalid schema for function"}}`) {
+		t.Fatal("did not expect an unrelated 400 body to match")
+	}
+	if ContentPolicyBody("") {
+		t.Fatal("did not expect an empty body to match")
+	}
+}
+
 func TestIsRateLimited(t *testing.T) {
 	if !IsRateLimited(ProviderError{Provider: "anthropic", StatusCode: 429, Body: "rate limited"}) {
 		t.Fatal("expected 429 to be rate limited")

@@ -15,15 +15,23 @@ func (d *imageDownloader) DownloadFile(context.Context, slack.File, int64) ([]by
 	return []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}, nil
 }
 
-func TestImagePartsCapsAggregateImageCount(t *testing.T) {
+func TestImagePartsIsBoundedByBytesNotCount(t *testing.T) {
 	downloader := &imageDownloader{}
-	files := make([]slack.File, MaxImageCount+3)
+	files := make([]slack.File, 10)
 	for index := range files {
 		files[index] = slack.File{ID: string(rune('A' + index)), Mimetype: "image/png"}
 	}
 	parts := ImageParts(context.Background(), downloader, files)
-	if len(parts) != MaxImageCount || downloader.calls != MaxImageCount {
-		t.Fatalf("parts=%d downloads=%d, want %d", len(parts), downloader.calls, MaxImageCount)
+	if len(parts) != len(files) || downloader.calls != len(files) {
+		t.Fatalf("parts=%d downloads=%d, want all %d images under the byte budget", len(parts), downloader.calls, len(files))
+	}
+}
+
+func TestImagePartsStopsWhenByteBudgetExhausted(t *testing.T) {
+	downloader := &imageDownloader{}
+	parts := ImagePartsWithBudget(context.Background(), downloader, []slack.File{{ID: "A", Mimetype: "image/png"}}, &ImageBudget{remainingBytes: 0})
+	if len(parts) != 0 || downloader.calls != 0 {
+		t.Fatalf("parts=%d downloads=%d, want no download under an exhausted budget", len(parts), downloader.calls)
 	}
 }
 

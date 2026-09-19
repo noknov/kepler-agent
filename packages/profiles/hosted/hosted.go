@@ -39,6 +39,7 @@ type Request struct {
 	SessionID, TurnID, UserID, Workspace string
 	Input                                model.Message
 	History                              []model.Message
+	HistoryLoader                        func(context.Context) ([]model.Message, error)
 	Model                                string
 	Steering                             agentruntime.InputSource
 	Prompt                               []prompt.Fragment
@@ -55,5 +56,5 @@ func (a Agent) Run(ctx context.Context, request Request) (agentruntime.TurnResul
 	request.Input.Role = model.RoleUser
 	fragments := append([]prompt.Fragment(nil), a.Prompt...)
 	fragments = append(fragments, request.Prompt...)
-	return a.Runtime.RunTurn(ctx, agentruntime.TurnRequest{SessionID: request.SessionID, TurnID: request.TurnID, Input: request.Input, History: request.History, Prompt: fragments, Scope: tool.Scope{SessionID: request.SessionID, TurnID: request.TurnID, UserID: request.UserID, Workspace: request.Workspace, Values: request.ScopeValues}, Steering: request.Steering, Model: request.Model})
+	return a.Runtime.RunTurn(ctx, agentruntime.TurnRequest{SessionID: request.SessionID, TurnID: request.TurnID, Input: request.Input, History: request.History, HistoryLoader: request.HistoryLoader, Prompt: fragments, Scope: tool.Scope{SessionID: request.SessionID, TurnID: request.TurnID, UserID: request.UserID, Workspace: request.Workspace, Values: request.ScopeValues}, Steering: request.Steering, Model: request.Model})
 }

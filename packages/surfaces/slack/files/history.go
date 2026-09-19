@@ -12,7 +12,6 @@ import (
 const (
 	MaxThreadHistoryMessages  = 50
 	MaxThreadHistoryTextBytes = 64 << 10
-	MaxThreadHistoryImages    = 8
 )
 
 // ThreadHistory loads prior Slack messages with file metadata and supported images.

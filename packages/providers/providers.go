@@ -404,6 +404,8 @@ func toModelError(err error) error {
 		kind := model.ErrorInvalid
 		retryable := providerErr.Retryable()
 		switch {
+		case llm.ContentPolicyBody(providerErr.Body):
+			kind, retryable = model.ErrorContentPolicy, false
 		case providerErr.StatusCode == 401 || providerErr.StatusCode == 403:
 			kind = model.ErrorAuth
 		case providerErr.StatusCode == 429:
