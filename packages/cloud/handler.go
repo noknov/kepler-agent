@@ -256,12 +256,13 @@ func RegisterWorker(mux *http.ServeMux, cfg config.Config) error {
 		})
 	})
 	hosted, err := providers.New(providers.Config{
-		Provider:        cfg.LLM.Provider,
-		Protocol:        cfg.LLM.Protocol,
-		BaseURL:         cfg.LLM.BaseURL,
-		APIKey:          cfg.LLM.APIKey,
-		Timeout:         cfg.LLM.Timeout,
-		AnthropicFlavor: cfg.LLM.AnthropicFlavor,
+		Provider:               cfg.LLM.Provider,
+		Protocol:               cfg.LLM.Protocol,
+		BaseURL:                cfg.LLM.BaseURL,
+		APIKey:                 cfg.LLM.APIKey,
+		ChatGPTCredentialsFile: cfg.LLM.ChatGPTCredentialsFile,
+		Timeout:                cfg.LLM.Timeout,
+		AnthropicFlavor:        cfg.LLM.AnthropicFlavor,
 	})
 	if err != nil {
 		return err

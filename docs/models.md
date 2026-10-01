@@ -70,6 +70,55 @@ MIMO_THINKING=disabled
 MiMo thinking is disabled by default because multi-turn tool calls must preserve
 provider-specific reasoning fields across turns.
 
+### ChatGPT subscription (operator session)
+
+The operator signs in once on the local host. Hosted agent and gateway inference
+use that protected session for all requests; downstream Kepler users do not
+receive OAuth tokens or need to sign in to ChatGPT. This implements the official
+[Sign in with ChatGPT OSS flow](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
+and public Responses endpoint, not ChatGPT backend endpoints or CLIProxyAPI.
+Account eligibility, plan usage limits, and permission to serve other users are
+controlled by OpenAI; local deployment alone does not establish that permission.
+
+```bash
+go run ./cli/cmd/kepler-agent chatgpt login --credentials-file /private/operator-chatgpt/session.json
+go run ./cli/cmd/kepler-agent chatgpt models --credentials-file /private/operator-chatgpt/session.json
+```
+
+Open the printed URL in your browser and approve ChatGPT plan usage. Choose an
+actual model slug printed by `models`, then configure the inference service:
+
+```bash
+LLM_PROVIDER=chatgpt
+CHATGPT_CREDENTIALS_FILE=/private/operator-chatgpt/session.json
+CHATGPT_MODEL=<model-slug-from-your-account>
+# Optional: share this session with the Explorer/fallback model.
+SECONDARY_PROVIDER=chatgpt
+SECONDARY_MODEL=<model-slug-from-your-account>
+```
+
+No API key is needed. The `chatgpt` provider requires protocol `responses` and
+`https://api.openai.com/v1`. Keep the credential directory outside agent workspace
+and additional read roots. Session files use owner-only permissions and atomic
+replacement. Mount the **directory** read/write in Docker (not just a file),
+because refresh rotates tokens and replaces the file. Refreshes are serialized
+with a file lock across processes sharing the same directory. Use one credential
+store; independently copied stores must not concurrently refresh the same session.
+The host running login and the inference service need file write access.
+
+`chatgpt status` reports identity and access-token expiry without printing tokens.
+Reauthorization reuses the registered client and verifies the original identity;
+use a separate directory to register another account. Disconnect the app in
+ChatGPT Settings to revoke access. Never commit the session or host credential files.
+
+Plan requests always stream with `store=false`, omit unsupported sampling/output
+parameters, use developer messages and namespaced function tools, and send full
+conversation context. The runtime executes tools locally. Streams that fail,
+exhaust plan usage, or end without completed inference return errors; the client
+never silently switches to API billing. Runtime fallback, if configured, still
+follows the configured secondary provider. These restrictions are specific to
+ChatGPT plan usage; normal OpenAI API clients keep their existing encoding.
+
 ### CLIProxyAPI
 
 ```bash

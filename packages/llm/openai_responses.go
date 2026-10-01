@@ -29,7 +29,14 @@ func NewOpenAIResponsesClient(provider, baseURL, apiKey string, timeout time.Dur
 	}
 }
 
+func (c *OpenAIResponsesClient) SetTransport(transport http.RoundTripper) {
+	c.httpClient.Transport = transport
+}
+
 func (c *OpenAIResponsesClient) Chat(ctx context.Context, req Request) (Response, error) {
+	if c.provider == "chatgpt" {
+		return c.ChatStream(ctx, req, StreamHandler{})
+	}
 	payload, err := json.Marshal(c.responsesBody(req, false))
 	if err != nil {
 		return Response{}, err
@@ -94,6 +101,7 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 	messagePhases := make(map[string]string)
 	emittedFunctionCalls := make(map[string]bool)
 	var streamErr error
+	completed := false
 	emitFunctionCall := func(itemID string, call responsesOutput) {
 		if call.Type != "" && call.Type != "function_call" {
 			return
@@ -193,6 +201,7 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 				Response responsesResponse `json:"response"`
 			}
 			if json.Unmarshal([]byte(ev.Data), &done) == nil {
+				completed = true
 				finishReason = done.Response.Status
 				usage = done.Response.Usage
 				completedMessage := done.Response.message()
@@ -209,12 +218,28 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 					h.OnUsage(usage.toUsage())
 				}
 			}
+		case "response.failed", "response.incomplete":
+			var failed struct {
+				Response struct {
+					Error struct {
+						Code    string `json:"code"`
+						Message string `json:"message"`
+					} `json:"error"`
+				} `json:"response"`
+			}
+			_ = json.Unmarshal([]byte(ev.Data), &failed)
+			streamErr = fmt.Errorf("Responses %s: %s %s", typ.Type, failed.Response.Error.Code, failed.Response.Error.Message)
+			return false
 		case "error":
 			var apiErr struct {
 				Message string `json:"message"`
 			}
 			if json.Unmarshal([]byte(ev.Data), &apiErr) == nil && apiErr.Message != "" {
 				streamErr = fmt.Errorf("openai responses stream error: %s", apiErr.Message)
+				return false
+			}
+			if c.provider == "chatgpt" {
+				streamErr = fmt.Errorf("ChatGPT response stream returned an error")
 				return false
 			}
 		}
@@ -225,6 +250,9 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 	}
 	if err != nil {
 		return Response{}, err
+	}
+	if c.provider == "chatgpt" && (!completed || finishReason != "completed") {
+		return Response{}, fmt.Errorf("ChatGPT response stream ended without completed inference")
 	}
 	return Response{
 		Message:      msg,
@@ -259,6 +287,27 @@ func (c *OpenAIResponsesClient) responsesBody(req Request, stream bool) map[stri
 		body["parallel_tool_calls"] = true
 		if req.ToolChoice != "" {
 			body["tool_choice"] = req.ToolChoice
+		}
+	}
+	if c.provider == "chatgpt" {
+		body["store"] = false
+		body["stream"] = true
+		delete(body, "temperature")
+		delete(body, "max_output_tokens")
+		input := body["input"].([]any)
+		for _, item := range input {
+			m := item.(map[string]any)
+			if m["role"] == "system" {
+				m["role"] = "developer"
+			}
+			if m["type"] == "function_call" || m["type"] == "function_call_output" {
+				m["namespace"] = "kepler"
+			}
+		}
+		if len(req.Tools) > 0 {
+			body["tools"] = []any{map[string]any{"type": "namespace", "name": "kepler", "description": "Kepler agent tools executed by the local runtime", "tools": responsesTools(req.Tools)}}
+			// Tool selection remains automatic on the plan route.
+			delete(body, "tool_choice")
 		}
 	}
 	return body

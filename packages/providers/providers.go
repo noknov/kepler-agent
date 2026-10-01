@@ -15,15 +15,17 @@ import (
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/llm"
+	"github.com/noknov/kepler-agent/packages/llm/chatgpt"
 )
 
 type Config struct {
-	Provider        string
-	Protocol        string
-	BaseURL         string
-	APIKey          string
-	AnthropicFlavor string
-	Timeout         time.Duration
+	ChatGPTCredentialsFile string
+	Provider               string
+	Protocol               string
+	BaseURL                string
+	APIKey                 string
+	AnthropicFlavor        string
+	Timeout                time.Duration
 }
 
 // Client is the sole wire-to-canonical model adapter used by every profile.
@@ -49,6 +51,17 @@ func New(config Config) (*Client, error) {
 	}
 	if protocol == "kepler" {
 		return &Client{Host: newKeplerRemote(config.BaseURL, config.APIKey, config.Timeout)}, nil
+	}
+	if provider == "chatgpt" {
+		if protocol != "responses" || strings.TrimRight(config.BaseURL, "/") != chatgpt.Resource {
+			return nil, fmt.Errorf("chatgpt requires the official Responses endpoint")
+		}
+		if _, err := chatgpt.Load(config.ChatGPTCredentialsFile); err != nil {
+			return nil, err
+		}
+		responses := llm.NewOpenAIResponsesClient(provider, config.BaseURL, "", config.Timeout)
+		responses.SetTransport(&chatgpt.Transport{Path: config.ChatGPTCredentialsFile})
+		return &Client{Wire: responses}, nil
 	}
 	var wire llm.Client
 	switch protocol {

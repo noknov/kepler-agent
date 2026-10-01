@@ -909,3 +909,24 @@ func resetConfigEnv(t *testing.T) {
 		t.Setenv(key, "")
 	}
 }
+
+func TestChatGPTConfigRequiresSessionAndModelWithoutAPIKey(t *testing.T) {
+	cfg := Config{LLM: LLMConfig{Provider: "chatgpt", Protocol: "responses", BaseURL: "https://api.openai.com/v1", Timeout: time.Minute, Model: "account-model", ChatGPTCredentialsFile: "/operator/session.json"}}
+	if _, err := validateModelRuntime(cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.LLM.ChatGPTCredentialsFile = ""
+	if _, err := validateModelRuntime(cfg); err == nil {
+		t.Fatal("accepted missing session")
+	}
+	cfg.LLM.ChatGPTCredentialsFile = "/operator/session.json"
+	cfg.LLM.BaseURL = "http://proxy"
+	if _, err := validateModelRuntime(cfg); err == nil {
+		t.Fatal("accepted proxy")
+	}
+	cfg.LLM.BaseURL = "https://api.openai.com/v1"
+	cfg.LLM.Model = ""
+	if _, err := validateModelRuntime(cfg); err == nil {
+		t.Fatal("accepted missing account model")
+	}
+}

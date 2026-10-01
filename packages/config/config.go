@@ -68,17 +68,18 @@ type SlackConfig struct {
 }
 
 type LLMConfig struct {
-	Provider        string
-	BaseURL         string
-	APIKey          string
-	Model           string
-	MaxOutputTokens int
-	Protocol        string
-	AnthropicFlavor string
-	Thinking        string
-	Temperature     *float64
-	Timeout         time.Duration
-	Resilience      ResilienceConfig
+	ChatGPTCredentialsFile string
+	Provider               string
+	BaseURL                string
+	APIKey                 string
+	Model                  string
+	MaxOutputTokens        int
+	Protocol               string
+	AnthropicFlavor        string
+	Thinking               string
+	Temperature            *float64
+	Timeout                time.Duration
+	Resilience             ResilienceConfig
 
 	// Secondary model is the preferred Explorer model and the primary agent's
 	// fallback. Compact summaries use it when no explicit compact model exists.
@@ -339,17 +340,18 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			ReplyFooter:     firstEnv("SLACK_REPLY_FOOTER", "REPLY_FOOTER"),
 		},
 		LLM: LLMConfig{
-			Provider:        llmProvider,
-			BaseURL:         trimRightSlash(llmBaseURL),
-			APIKey:          providerAPIKey(llmProvider),
-			Model:           llmModel,
-			MaxOutputTokens: envInt("LLM_MAX_OUTPUT_TOKENS", 0),
-			Protocol:        llmProtocol,
-			AnthropicFlavor: anthropicFlavor,
-			Thinking:        llmThinking,
-			Temperature:     providerTemperature(llmProvider),
-			Timeout:         providerTimeout(llmProvider),
-			Resilience:      ResilienceConfig{MaxAttempts: envInt("LLM_RESILIENCE_MAX_ATTEMPTS", 3), RetryBaseDelay: envDuration("LLM_RESILIENCE_RETRY_BASE", 500*time.Millisecond), MinAttemptBudget: envDuration("LLM_RESILIENCE_MIN_ATTEMPT_BUDGET", 45*time.Second), FailureThreshold: envInt("LLM_CIRCUIT_FAILURE_THRESHOLD", 3), CircuitCooldown: envDuration("LLM_CIRCUIT_COOLDOWN", 30*time.Second)},
+			ChatGPTCredentialsFile: strings.TrimSpace(os.Getenv("CHATGPT_CREDENTIALS_FILE")),
+			Provider:               llmProvider,
+			BaseURL:                trimRightSlash(llmBaseURL),
+			APIKey:                 providerAPIKey(llmProvider),
+			Model:                  llmModel,
+			MaxOutputTokens:        envInt("LLM_MAX_OUTPUT_TOKENS", 0),
+			Protocol:               llmProtocol,
+			AnthropicFlavor:        anthropicFlavor,
+			Thinking:               llmThinking,
+			Temperature:            providerTemperature(llmProvider),
+			Timeout:                providerTimeout(llmProvider),
+			Resilience:             ResilienceConfig{MaxAttempts: envInt("LLM_RESILIENCE_MAX_ATTEMPTS", 3), RetryBaseDelay: envDuration("LLM_RESILIENCE_RETRY_BASE", 500*time.Millisecond), MinAttemptBudget: envDuration("LLM_RESILIENCE_MIN_ATTEMPT_BUDGET", 45*time.Second), FailureThreshold: envInt("LLM_CIRCUIT_FAILURE_THRESHOLD", 3), CircuitCooldown: envDuration("LLM_CIRCUIT_COOLDOWN", 30*time.Second)},
 
 			SecondaryProvider: secondaryProvider,
 			SecondaryBaseURL:  trimRightSlash(secondaryBaseURL),
@@ -612,7 +614,21 @@ func validateAgentRuntime(cfg Config) (Config, error) {
 }
 
 func validateModelRuntime(cfg Config) (Config, error) {
-	if cfg.LLM.APIKey == "" {
+	if cfg.LLM.Provider == "chatgpt" && cfg.LLM.Model == "" {
+		return cfg, fmt.Errorf("CHATGPT_MODEL is required; choose a model from kepler-agent chatgpt models")
+	}
+	if cfg.LLM.SecondaryProvider == "chatgpt" && cfg.LLM.SecondaryModel == "" {
+		return cfg, fmt.Errorf("CHATGPT_MODEL or SECONDARY_MODEL is required")
+	}
+	if cfg.LLM.Provider == "chatgpt" || cfg.LLM.SecondaryProvider == "chatgpt" {
+		if cfg.LLM.ChatGPTCredentialsFile == "" {
+			return cfg, fmt.Errorf("CHATGPT_CREDENTIALS_FILE is required")
+		}
+	}
+	if cfg.LLM.Provider == "chatgpt" && (cfg.LLM.Protocol != "responses" || cfg.LLM.BaseURL != "https://api.openai.com/v1") {
+		return cfg, fmt.Errorf("chatgpt requires the official Responses endpoint")
+	}
+	if cfg.LLM.APIKey == "" && cfg.LLM.Provider != "chatgpt" {
 		return cfg, fmt.Errorf("%s API key is required", strings.ToUpper(cfg.LLM.Provider))
 	}
 	if cfg.LLM.Protocol != "openai" && cfg.LLM.Protocol != "anthropic" && cfg.LLM.Protocol != "responses" {
@@ -652,6 +668,7 @@ type providerDefaults struct {
 }
 
 var providerTable = map[string]providerDefaults{
+	"chatgpt":      {protocol: "responses", baseURL: "https://api.openai.com/v1", model: ""},
 	"longcat":      {protocol: "anthropic", baseURL: "https://api.longcat.chat/anthropic", model: "LongCat-2.0", anthropicFlavor: "official", apiKeyEnvs: []string{"LONGCAT_API_KEY"}},
 	"mimo":         {protocol: "anthropic", baseURL: "https://token-plan-cn.xiaomimimo.com/anthropic", model: "mimo-v2.5", anthropicFlavor: "claude-code", apiKeyEnvs: []string{"MIMO_API_KEY"}},
 	"anthropic":    {protocol: "anthropic", baseURL: "https://api.anthropic.com", model: "claude-sonnet-4-5-20250929", anthropicFlavor: "official", apiKeyEnvs: []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}},
@@ -708,6 +725,8 @@ func providerAnthropicFlavor(provider string) string {
 
 func providerThinking(provider string) string {
 	switch provider {
+	case "chatgpt":
+		return firstEnv("CHATGPT_THINKING")
 	case "mimo":
 		return firstEnv("MIMO_THINKING")
 	case "kimi", "moonshot":

@@ -256,3 +256,67 @@ func TestResponsesBodyOmitsDisabledReasoning(t *testing.T) {
 		t.Fatalf("reasoning=%#v, want omitted", body["reasoning"])
 	}
 }
+
+func TestChatGPTPlanRequestAndToolHistory(t *testing.T) {
+	client := NewOpenAIResponsesClient("chatgpt", "", "", 0)
+	body := client.responsesBody(Request{Model: "account-model", MaxTokens: 100, Temperature: float64Ptr(.3), Messages: []Message{
+		{Role: "system", Content: "instructions"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "call-1", Function: ToolFunction{Name: "read_file", Arguments: `{"path":"a"}`}}}},
+		{Role: "tool", ToolCallID: "call-1", Content: "file content"},
+	}, Tools: []ToolSpec{{Type: "function", Function: ToolSpecFunction{Name: "read_file", Parameters: map[string]any{"type": "object"}}}}}, false)
+	if body["store"] != false || body["stream"] != true {
+		t.Fatal("missing plan flags")
+	}
+	for _, field := range []string{"temperature", "max_output_tokens"} {
+		if _, ok := body[field]; ok {
+			t.Fatalf("unsupported %s", field)
+		}
+	}
+	input := body["input"].([]any)
+	if input[0].(map[string]any)["role"] != "developer" {
+		t.Fatal("system role was not adapted")
+	}
+	for _, item := range input[1:] {
+		if item.(map[string]any)["namespace"] != "kepler" {
+			t.Fatal("tool history lost namespace")
+		}
+	}
+	namespace := body["tools"].([]any)[0].(map[string]any)
+	if namespace["type"] != "namespace" || namespace["name"] != "kepler" {
+		t.Fatal("tools are not namespaced")
+	}
+}
+
+func TestChatGPTPlanAlwaysStreamsAndRequiresCompletion(t *testing.T) {
+	for _, tc := range []struct {
+		name, events string
+		success      bool
+	}{
+		{"completed", `data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}}` + "\n\n", true},
+		{"EOF after text", `data: {"type":"response.output_text.delta","delta":"partial"}` + "\n\n", false},
+		{"usage exhausted", `data: {"type":"response.failed","response":{"error":{"code":"subscription_sharing_usage_limit_exceeded","message":"limit"}}}` + "\n\n", false},
+		{"incomplete", `data: {"type":"response.incomplete","response":{"status":"incomplete"}}` + "\n\n", false},
+		{"malformed error", `data: {"type":"error"}` + "\n\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				if body["stream"] != true || body["store"] != false {
+					t.Error("non-streaming plan request")
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, tc.events)
+			}))
+			defer server.Close()
+			client := NewOpenAIResponsesClient("chatgpt", server.URL, "", 0)
+			resp, err := client.Chat(context.Background(), Request{Model: "account-model", Messages: []Message{{Role: "user", Content: "hello"}}})
+			if (err == nil) != tc.success {
+				t.Fatalf("Chat: %v", err)
+			}
+			if tc.success && resp.Message.Content != "ok" {
+				t.Fatalf("response = %#v", resp)
+			}
+		})
+	}
+}

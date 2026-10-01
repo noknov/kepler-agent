@@ -25,6 +25,8 @@ func Run() error {
 	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "chatgpt":
+			return runChatGPT(os.Args[2:])
 		case "connect":
 			return runConnect(os.Args[2:])
 		case "config":
