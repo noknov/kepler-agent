@@ -18,7 +18,7 @@ type Item = tool.PlanItem
 func (PlanTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
 		"update_plan",
-		"Create or replace the current execution plan for a complex multi-step agent task. Use this before substantial work, and update it as steps move through pending, in_progress, completed, or blocked. Skip for trivial one-step questions.",
+		"Create or update an execution plan when tracking dependencies or progress helps complete the task. Keep it proportional to the work.",
 		tool.ObjectSchema([]string{"items"}, map[string]any{
 			"items": map[string]any{
 				"type":        "array",

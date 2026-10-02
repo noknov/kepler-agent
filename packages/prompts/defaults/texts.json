@@ -1,7 +1,7 @@
 {
   "rules_header": "\n\nAdditional rules:\n",
   "skills_header": "\n\nAvailable skills:\n",
-  "skills_loading_policy": "Skills are loaded on demand. If the user explicitly names a skill, or the task clearly matches a skill name or description, call skills-load with that skill name before following its workflow. For domain-specific advice, prefer the matching skill over a generic answer. Do not assume the full skill instructions until skills-load returns them.\n",
+  "skills_loading_policy": "Load a skill when the user names it or its described workflow is needed. Follow its instructions only after skills-load returns them.\n",
   "repository_inventory_header": "\n\nAvailable code repositories. Use the repo name as the path prefix for repository tools:\n",
   "gcp_defaults_hint_prefix": "Current defaults/hints: "
 }

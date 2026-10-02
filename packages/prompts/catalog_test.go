@@ -71,7 +71,7 @@ func TestSystemPromptIncludesCapabilityBoundary(t *testing.T) {
 	got := System("")
 	for _, want := range []string{
 		"active tool catalog and tool results as the authoritative record",
-		"immutable remote-ref inspection",
+		"Establish relevant sources and refs",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("public prompt missing %q:\n%s", want, got)

@@ -120,7 +120,7 @@
     }
   },
   "update_plan": {
-    "description": "Create or update the current execution plan for a complex multi-step task. Use proactively for substantial coding, debugging, architecture review, broad comparison, or any request with 3+ meaningful steps. Do not use for trivial one-step lookups.",
+    "description": "Create or update an execution plan when tracking dependencies or progress helps complete the task. Keep it proportional to the work.",
     "parameters": {
       "items": "Ordered task list. Keep each item concrete, outcome-oriented, and small enough to finish or verify.",
       "items.items": "One task in the ordered plan.",
@@ -281,16 +281,6 @@
   },
   "luckin-preview_order": {
     "description": "Preview a pickup order, including estimated price, applicable coupons, and items. Always call this before creating an order.",
-    "parameters": {
-      "deptId": "Store ID.",
-      "productList": "Order item list.",
-      "productList.items.amount": "Quantity.",
-      "productList.items.productId": "Product ID.",
-      "productList.items.skuCode": "Product SKU code."
-    }
-  },
-  "luckin-query_coupons": {
-    "description": "Query applicable coupons and discounts for the selected store and products. Coupon codes from the response can be passed to create_order.",
     "parameters": {
       "deptId": "Store ID.",
       "productList": "Order item list.",

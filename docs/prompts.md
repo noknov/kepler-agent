@@ -49,6 +49,12 @@ does not belong in `system.md`.
 Only skill metadata appears in the base prompt. Full skill instructions are
 loaded on demand through `skills-load`.
 
+Skill instructions describe task-specific decisions and invariants. Keep wire
+examples, copied schemas, credentials, and generic syntax tutorials out of them.
+Registered tools own parameters and authentication; a skill must not introduce
+an alternative shell/HTTP path around the active tool policy. Skill descriptions
+should describe user intent rather than lists of trigger words.
+
 The committed catalog includes systematic debugging, test-driven development,
 implementation planning, and verification before completion. These workflows are
 adapted for this runtime from the Superpowers 6.3.0 plugin curated in OpenAI's
@@ -66,6 +72,14 @@ roots are injected as an ephemeral `<environment_context>` user fragment at
 request time. Repository inventories are no longer embedded in the system
 prompt; use the deferred `workspace-list_repos` tool when the model needs a
 repository catalog.
+
+Assistant replies use standard Markdown across Slack, Web, and CLI. Bold is
+`**text**`, and links are `[label](url)`. Slack's native `markdown` blocks and
+`markdown_text` stream chunks consume this same format. Legacy Slack `mrkdwn`
+(`*text*` for bold and `<url|label>` links) is reserved for adapter-owned UI blocks;
+asking the model to use it makes intended bold text render as italics. If native
+Markdown blocks are unavailable, the Slack client falls back to literal text
+with legacy markup parsing disabled.
 
 ## Private Overlay
 

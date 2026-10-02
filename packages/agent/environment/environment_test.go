@@ -16,11 +16,8 @@ func TestMessageRendersEnvironmentContext(t *testing.T) {
 	for _, want := range []string{
 		"<environment_context>",
 		"<current_date>2026-06-30</current_date>",
-		"<current_year>2026</current_year>",
 		"<timezone>Asia/Shanghai</timezone>",
 		"<root>/data/workspace</root>",
-		"今年",
-		"include 2026 in the search query",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("environment message missing %q:\n%s", want, text)

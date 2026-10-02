@@ -41,9 +41,6 @@ func TestEnvironmentMessageIncludesRuntimeDateContext(t *testing.T) {
 	for _, want := range []string{
 		"<environment_context>",
 		"<current_date>2026-06-30</current_date>",
-		"<current_year>2026</current_year>",
-		"今年",
-		"include 2026 in the search query",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("environment message missing %q:\n%s", want, text)

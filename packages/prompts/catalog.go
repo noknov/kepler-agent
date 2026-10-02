@@ -7,9 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/noknov/kepler-agent/packages/frontmatter"
-	"sync"
 )
 
 const DefaultDir = "worker/.prompts"
@@ -25,12 +25,6 @@ var embeddedPrivate embed.FS
 // DynamicBoundaryMarker separates cacheable static prompt content from runtime
 // context so LLM providers can set prompt-cache breakpoints after the static portion.
 const DynamicBoundaryMarker = "\n\n---DYNAMIC_CONTEXT_BELOW---\n\n"
-
-var staticPromptCache struct {
-	mu     sync.Mutex
-	once   sync.Once
-	prompt string
-}
 
 type Catalog struct {
 	System          string                `json:"system,omitempty"`
@@ -59,9 +53,10 @@ type Skill struct {
 
 var current = struct {
 	sync.RWMutex
-	dir     string
-	dirs    []string
-	catalog Catalog
+	dir          string
+	dirs         []string
+	catalog      Catalog
+	staticPrompt string
 }{
 	dir: DefaultDir,
 }
@@ -117,12 +112,13 @@ func LoadDirs(dirs ...string) error {
 		activeDir = loaded[len(loaded)-1]
 	}
 
+	staticPrompt := choose(catalog.System, "") + rulesPrompt(catalog) + skillsPrompt(catalog)
 	current.Lock()
 	current.dir = activeDir
 	current.dirs = loaded
 	current.catalog = catalog
+	current.staticPrompt = staticPrompt
 	current.Unlock()
-	resetStaticPromptCache()
 	return nil
 }
 
@@ -388,10 +384,14 @@ func PromptText(name, fallback string) string {
 func RulesPrompt() string {
 	current.RLock()
 	defer current.RUnlock()
+	return rulesPrompt(current.catalog)
+}
+
+func rulesPrompt(catalog Catalog) string {
 	var b strings.Builder
-	if len(current.catalog.Rules) > 0 {
-		b.WriteString(choose(current.catalog.Texts["rules_header"], ""))
-		b.WriteString(strings.Join(current.catalog.Rules, "\n\n---\n\n"))
+	if len(catalog.Rules) > 0 {
+		b.WriteString(choose(catalog.Texts["rules_header"], ""))
+		b.WriteString(strings.Join(catalog.Rules, "\n\n---\n\n"))
 	}
 	return b.String()
 }
@@ -399,13 +399,17 @@ func RulesPrompt() string {
 func SkillsPrompt() string {
 	current.RLock()
 	defer current.RUnlock()
-	if len(current.catalog.Skills) == 0 {
+	return skillsPrompt(current.catalog)
+}
+
+func skillsPrompt(catalog Catalog) string {
+	if len(catalog.Skills) == 0 {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString(choose(current.catalog.Texts["skills_header"], ""))
-	b.WriteString(choose(current.catalog.Texts["skills_loading_policy"], ""))
-	for _, skill := range current.catalog.Skills {
+	b.WriteString(choose(catalog.Texts["skills_header"], ""))
+	b.WriteString(choose(catalog.Texts["skills_loading_policy"], ""))
+	for _, skill := range catalog.Skills {
 		b.WriteString("\n- ")
 		b.WriteString(skill.Name)
 		if skill.Description != "" {
@@ -417,25 +421,17 @@ func SkillsPrompt() string {
 }
 
 func RulesAndSkillsPrompt() string {
-	return RulesPrompt() + SkillsPrompt()
-}
-
-func resetStaticPromptCache() {
-	staticPromptCache.mu.Lock()
-	staticPromptCache.once = sync.Once{}
-	staticPromptCache.prompt = ""
-	staticPromptCache.mu.Unlock()
+	current.RLock()
+	defer current.RUnlock()
+	return rulesPrompt(current.catalog) + skillsPrompt(current.catalog)
 }
 
 // StaticSystemPrompt returns the memoized static system prompt (system.md, agent.md,
 // rules, and skill metadata). It is computed once per catalog load.
 func StaticSystemPrompt() string {
-	staticPromptCache.once.Do(func() {
-		staticPromptCache.prompt = System("") + RulesAndSkillsPrompt()
-	})
-	staticPromptCache.mu.Lock()
-	defer staticPromptCache.mu.Unlock()
-	return staticPromptCache.prompt
+	current.RLock()
+	defer current.RUnlock()
+	return current.staticPrompt
 }
 
 func LoadSkill(name string) (Skill, bool) {

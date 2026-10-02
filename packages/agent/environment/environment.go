@@ -2,7 +2,6 @@
 package environment
 
 import (
-	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -62,7 +61,6 @@ func render(roots []string, now time.Time) string {
 	var body strings.Builder
 	body.WriteString("<environment_context>\n")
 	writeTag(&body, "current_date", now.Format("2006-01-02"))
-	writeTag(&body, "current_year", fmt.Sprintf("%d", now.Year()))
 	writeTag(&body, "timezone", zone)
 	if len(roots) > 0 {
 		body.WriteString("  <workspace_roots>\n")
@@ -73,10 +71,6 @@ func render(roots []string, now time.Time) string {
 		}
 		body.WriteString("  </workspace_roots>\n")
 	}
-	writeTag(&body, "date_resolution", fmt.Sprintf(
-		"Resolve relative date phrases such as today, yesterday, tomorrow, this year, current year, 今年, 本年, and latest against current_date. For current-year web searches, include %d in the search query unless the user explicitly asks for a different year.",
-		now.Year(),
-	))
 	body.WriteString("</environment_context>")
 	return body.String()
 }
