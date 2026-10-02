@@ -156,12 +156,13 @@ type Response struct {
 }
 
 type Usage struct {
-	PromptTokens             int `json:"prompt_tokens"`
-	CompletionTokens         int `json:"completion_tokens"`
-	TotalTokens              int `json:"total_tokens"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
-	ReasoningTokens          int `json:"reasoning_tokens,omitempty"`
+	Reported                 bool `json:"reported,omitempty"`
+	PromptTokens             int  `json:"prompt_tokens"`
+	CompletionTokens         int  `json:"completion_tokens"`
+	TotalTokens              int  `json:"total_tokens"`
+	CacheReadInputTokens     int  `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens int  `json:"cache_creation_input_tokens,omitempty"`
+	ReasoningTokens          int  `json:"reasoning_tokens,omitempty"`
 	// CacheIncludedInPrompt is true for OpenAI-compatible APIs where
 	// CacheReadInputTokens is a subset of PromptTokens (not an independent
 	// field). When true, token counters must NOT add CacheReadInputTokens

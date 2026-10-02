@@ -466,9 +466,10 @@ type responsesAnnotation struct {
 }
 
 type responsesUsage struct {
-	InputTokens        int `json:"input_tokens"`
-	OutputTokens       int `json:"output_tokens"`
-	TotalTokens        int `json:"total_tokens"`
+	Reported           bool `json:"-"`
+	InputTokens        int  `json:"input_tokens"`
+	OutputTokens       int  `json:"output_tokens"`
+	TotalTokens        int  `json:"total_tokens"`
 	InputTokensDetails struct {
 		CachedTokens int `json:"cached_tokens"`
 	} `json:"input_tokens_details"`
@@ -527,8 +528,24 @@ func (r responsesResponse) contentTypes() []string {
 	return types
 }
 
+func (u *responsesUsage) UnmarshalJSON(data []byte) error {
+	type plain responsesUsage
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*u = responsesUsage(decoded)
+	u.Reported = (len(fields["input_tokens"]) > 0 && string(fields["input_tokens"]) != "null") || (len(fields["output_tokens"]) > 0 && string(fields["output_tokens"]) != "null")
+	return nil
+}
+
 func (u responsesUsage) toUsage() Usage {
 	return Usage{
+		Reported:              u.Reported,
 		PromptTokens:          u.InputTokens,
 		CompletionTokens:      u.OutputTokens,
 		TotalTokens:           u.TotalTokens,

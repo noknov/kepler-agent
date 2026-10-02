@@ -144,6 +144,7 @@ func (s *slackStream) appendNativeChunks(delta string) error {
 		return err
 	}
 	if started {
+		s.telemetry.answerDelivered()
 		return nil
 	}
 
@@ -158,6 +159,7 @@ func (s *slackStream) appendNativeChunks(delta string) error {
 	defer cancel()
 
 	if err := native.AppendStream(ctx, s.req.Channel, messageTS, chunks); err == nil {
+		s.telemetry.answerDelivered()
 		return nil
 	} else if !isSlackError(err, "not_in_streaming_state") {
 		log.Printf("slack native stream append failed channel=%s ts=%s: %v", s.req.Channel, messageTS, err)
@@ -201,7 +203,10 @@ func (s *slackStream) stopNativeStream(ctx context.Context) {
 	if !ok {
 		return
 	}
-	_ = native.StopStream(ctx, s.req.Channel, s.messageTS)
+	err := native.StopStream(ctx, s.req.Channel, s.messageTS)
+	s.mu.Lock()
+	s.streamStopError = err
+	s.mu.Unlock()
 }
 
 func (s *slackStream) stopStreamTimer() {

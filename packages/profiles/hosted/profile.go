@@ -16,6 +16,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/config"
 	"github.com/noknov/kepler-agent/packages/infra/redisclient"
+	"github.com/noknov/kepler-agent/packages/infra/telemetry"
 	"github.com/noknov/kepler-agent/packages/observability"
 	"github.com/noknov/kepler-agent/packages/providers"
 	"github.com/noknov/kepler-agent/packages/safety"
@@ -89,7 +90,8 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		ToolResults:    agentruntime.ToolResultConfig{MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)},
 		CircuitBreaker: agentruntime.CircuitBreakerConfig{Enabled: true},
 	}, agentruntime.Dependencies{
-		Model: client, Tools: catalog, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}, Transcript: PGTranscript{Pool: deps.Postgres}, Events: deps.Events, Lease: deps.Lease,
+		TraceContent: telemetry.ContentRecorder(),
+		Model:        client, Tools: catalog, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}, Transcript: PGTranscript{Pool: deps.Postgres}, Events: deps.Events, Lease: deps.Lease,
 		Compactor: agentruntime.ModelCompactor{Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer}, Artifacts: artifacts,
 		Environment:             environment.Config{WorkspaceRoots: cfg.Security.WorkspaceRoots},
 		ConnectionContinuations: deps.ConnectionContinuations,
@@ -105,7 +107,8 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 			ToolResults: agentruntime.ToolResultConfig{MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)},
 		},
 		Deps: agentruntime.Dependencies{
-			Model: exploreClient, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}, Lease: deps.Lease,
+			TraceContent: telemetry.ContentRecorder(),
+			Model:        exploreClient, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}, Lease: deps.Lease,
 			Transcript: PGTranscript{Pool: deps.Postgres}, Events: deps.Events,
 			Compactor: agentruntime.ModelCompactor{Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer},
 			Artifacts: artifacts, Environment: environment.Config{WorkspaceRoots: cfg.Security.WorkspaceRoots},
@@ -134,6 +137,12 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 // a request path. Its inputs must be provider clients rather than other
 // ResilientClients; nesting policies multiplies attempts and obscures budgets.
 func resilientModel(cfg config.Config, primary model.Client, primaryProvider string, fallback model.Client, fallbackProvider, fallbackModel string) model.Client {
+	// A fallback to the same configured route only repeats the primary attempt.
+	// Keep explicit retries under MaxAttempts instead of adding a second budget.
+	if primaryProvider == fallbackProvider && fallbackModel == cfg.LLM.Model && sameModelRoute(cfg.LLM) {
+		fallback = nil
+		fallbackProvider, fallbackModel = "", ""
+	}
 	return &model.ResilientClient{
 		Primary: primary, PrimaryProvider: primaryProvider,
 		Fallback: fallback, FallbackProvider: fallbackProvider, FallbackModel: fallbackModel,
@@ -141,6 +150,15 @@ func resilientModel(cfg config.Config, primary model.Client, primaryProvider str
 		MinAttemptBudget: cfg.LLM.Resilience.MinAttemptBudget, FailureThreshold: cfg.LLM.Resilience.FailureThreshold,
 		Cooldown: cfg.LLM.Resilience.CircuitCooldown,
 	}
+}
+
+func sameModelRoute(cfg config.LLMConfig) bool {
+	// These are the fields passed to the two provider constructors. Credentials
+	// file and timeout are shared; the secondary has no Anthropic flavor override.
+	return cfg.Provider != "" && cfg.Provider == cfg.SecondaryProvider &&
+		cfg.Model == cfg.SecondaryModel && cfg.Protocol == cfg.SecondaryProtocol &&
+		cfg.BaseURL == cfg.SecondaryBaseURL && cfg.APIKey == cfg.SecondaryAPIKey &&
+		(!strings.EqualFold(cfg.Protocol, "anthropic") || cfg.AnthropicFlavor == "")
 }
 
 type observedModel struct {

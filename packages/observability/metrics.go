@@ -2,33 +2,35 @@ package observability
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"math"
 	"net/http"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/noknov/kepler-agent/packages/infra/telemetry"
 	"github.com/noknov/kepler-agent/packages/llm"
 )
 
 type Snapshot struct {
-	StartedAt        time.Time        `json:"started_at"`
-	Requests         int64            `json:"requests"`
-	DeniedRequests   int64            `json:"denied_requests"`
-	LLMCalls         int64            `json:"llm_calls"`
-	LLMErrors        int64            `json:"llm_errors"`
-	LLMUsage         TokenUsage       `json:"llm_usage"`
-	EstimatedCostUSD float64          `json:"estimated_cost_usd,omitempty"`
-	ToolCalls        map[string]int64 `json:"tool_calls"`
-	ToolErrors       map[string]int64 `json:"tool_errors"`
-	AgentEvents      map[string]int64 `json:"agent_events,omitempty"`
-	EventInbox       EventInboxStats  `json:"event_inbox,omitempty"`
-	ReactionFeedback map[string]int64 `json:"reaction_feedback"`
-	LatencyMS        LatencySummary   `json:"latency_ms"`
-	LLMLatencyMS     LatencySummary   `json:"llm_latency_ms"`
-	ToolLatencyMS    LatencySummary   `json:"tool_latency_ms"`
-	LastErrors       []string         `json:"last_errors,omitempty"`
+	StartedAt        time.Time         `json:"started_at"`
+	Requests         int64             `json:"requests"`
+	DeniedRequests   int64             `json:"denied_requests"`
+	LLMCalls         int64             `json:"llm_calls"`
+	LLMErrors        int64             `json:"llm_errors"`
+	LLMUsage         TokenUsage        `json:"llm_usage"`
+	EstimatedCostUSD float64           `json:"estimated_cost_usd,omitempty"`
+	ToolCalls        map[string]int64  `json:"tool_calls"`
+	ToolErrors       map[string]int64  `json:"tool_errors"`
+	AgentEvents      map[string]int64  `json:"agent_events,omitempty"`
+	EventInbox       EventInboxStats   `json:"event_inbox,omitempty"`
+	ReactionFeedback map[string]int64  `json:"reaction_feedback"`
+	LatencyMS        LatencySummary    `json:"latency_ms"`
+	LLMLatencyMS     LatencySummary    `json:"llm_latency_ms"`
+	ToolLatencyMS    LatencySummary    `json:"tool_latency_ms"`
+	LastErrors       []string          `json:"last_errors,omitempty"`
+	Tracing          *telemetry.Status `json:"tracing,omitempty"`
 }
 
 type LatencySummary struct {
@@ -231,11 +233,14 @@ func (r *Recorder) Snapshot() Snapshot {
 
 func (r *Recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(r.Snapshot())
+	snapshot := r.Snapshot()
+	tracing := telemetry.CurrentStatus()
+	snapshot.Tracing = &tracing
+	_ = json.NewEncoder(w).Encode(snapshot)
 }
 
 func (r *Recorder) addErrorLocked(msg string) {
-	log.Printf("observability error: %s", msg)
+	slog.Error("observability error", "error", msg)
 	r.snap.LastErrors = append(r.snap.LastErrors, msg)
 	if len(r.snap.LastErrors) > 20 {
 		r.snap.LastErrors = r.snap.LastErrors[len(r.snap.LastErrors)-20:]

@@ -62,9 +62,10 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, req Request) (Respons
 }
 
 type openAIUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	Reported         bool `json:"-"`
+	PromptTokens     int  `json:"prompt_tokens"`
+	CompletionTokens int  `json:"completion_tokens"`
+	TotalTokens      int  `json:"total_tokens"`
 	// DeepSeek reports cache reads as prompt_cache_hit_tokens and mirrors them
 	// in prompt_tokens_details.cached_tokens. Reading both keeps cache
 	// accounting correct if either field is ever dropped.
@@ -78,6 +79,21 @@ type openAIUsage struct {
 	} `json:"completion_tokens_details"`
 }
 
+func (u *openAIUsage) UnmarshalJSON(data []byte) error {
+	type plain openAIUsage
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*u = openAIUsage(decoded)
+	u.Reported = (len(fields["prompt_tokens"]) > 0 && string(fields["prompt_tokens"]) != "null") || (len(fields["completion_tokens"]) > 0 && string(fields["completion_tokens"]) != "null")
+	return nil
+}
+
 func (u openAIUsage) toUsage() Usage {
 	// For OpenAI-compatible APIs, prompt_tokens_details.cached_tokens is a
 	// *subset* of prompt_tokens (not an independent field like Anthropic's
@@ -88,6 +104,7 @@ func (u openAIUsage) toUsage() Usage {
 		cached = u.PromptCacheHitTokens
 	}
 	return Usage{
+		Reported:              u.Reported,
 		PromptTokens:          u.PromptTokens,
 		CompletionTokens:      u.CompletionTokens,
 		TotalTokens:           u.TotalTokens,
@@ -240,7 +257,7 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 		if json.Unmarshal([]byte(ev.Data), &chunk) != nil {
 			return true
 		}
-		if chunk.Usage.TotalTokens > 0 {
+		if chunk.Usage.Reported {
 			usage = chunk.Usage
 			if h.OnUsage != nil {
 				h.OnUsage(usage.toUsage())

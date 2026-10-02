@@ -1,0 +1,18 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/noknov/kepler-agent/packages/agent/tool
+cpu: Apple M3 Pro
+BenchmarkDeferredSearch-12    	     200	    580537 ns/op	  475806 B/op	    6620 allocs/op
+BenchmarkDeferredSearch-12    	     200	    640967 ns/op	  475832 B/op	    6621 allocs/op
+BenchmarkDeferredSearch-12    	     200	    531463 ns/op	  475787 B/op	    6620 allocs/op
+PASS
+ok  	github.com/noknov/kepler-agent/packages/agent/tool	1.076s
+goos: darwin
+goarch: arm64
+pkg: github.com/noknov/kepler-agent/packages/tools/websearch
+cpu: Apple M3 Pro
+BenchmarkCleanWhitespace-12    	     200	    219988 ns/op	  238433 B/op	    3127 allocs/op
+BenchmarkCleanWhitespace-12    	     200	    205687 ns/op	  239318 B/op	    3127 allocs/op
+BenchmarkCleanWhitespace-12    	     200	    203181 ns/op	  238576 B/op	    3127 allocs/op
+PASS
+ok  	github.com/noknov/kepler-agent/packages/tools/websearch	0.693s

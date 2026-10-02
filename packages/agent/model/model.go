@@ -207,11 +207,18 @@ const (
 )
 
 type Usage struct {
+	// Reported distinguishes an explicit zero usage response from missing data.
+	Reported                   bool  `json:"reported,omitempty"`
 	InputTokens                int64 `json:"input_tokens,omitempty"`
 	OutputTokens               int64 `json:"output_tokens,omitempty"`
 	CacheReadTokens            int64 `json:"cache_read_tokens,omitempty"`
 	CacheCreatedTokens         int64 `json:"cache_created_tokens,omitempty"`
 	CacheTokensIncludedInInput bool  `json:"cache_tokens_included_in_input,omitempty"`
+	ReasoningTokens            int64 `json:"reasoning_tokens,omitempty"`
+}
+
+func (u Usage) Known() bool {
+	return u.Reported || u.InputTokens != 0 || u.OutputTokens != 0 || u.CacheReadTokens != 0 || u.CacheCreatedTokens != 0 || u.ReasoningTokens != 0
 }
 
 type Response struct {

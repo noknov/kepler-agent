@@ -38,10 +38,9 @@ replay does not duplicate token fragments. Web citations remain structured prove
 Prompts decide when and how to cite; presentation adapters decide how to render
 the provider-supplied citation records. Dynamic status remains a projection of
 canonical runtime events rather than a second execution-state model. Slack sets
-its native initial status when execution starts. Once a tool call is ready to
-execute, an optional progress model generates one English loading message from
-sanitized tool intent. Slack displays that message through `loading_messages`;
-the progress model does not decide whether a status is shown or change execution.
+its native initial status when execution starts and derives session lifecycle
+and plan updates from canonical events. There is no progress-model request or
+separate progress-model configuration.
 Status is presentation-only: it is never written to the transcript, returned to
 the runtime, or placed in model context.
 

@@ -146,12 +146,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 	var msg Message
 	msg.Role = "assistant"
 	var stopReason string
-	var usage struct {
-		InputTokens              int
-		OutputTokens             int
-		CacheReadInputTokens     int
-		CacheCreationInputTokens int
-	}
+	var usage anthropicUsageDetails
 	inTextBlock := false
 	toolBlocks := map[int]*ToolCall{}
 	currentBlockIndex := -1
@@ -256,6 +251,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 					usage.OutputTokens = md.Usage.OutputTokens
 					if h.OnUsage != nil {
 						h.OnUsage(Usage{
+							Reported:                 usage.Reported,
 							PromptTokens:             usage.InputTokens,
 							CompletionTokens:         usage.OutputTokens,
 							TotalTokens:              usage.InputTokens + usage.OutputTokens,
@@ -268,19 +264,17 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 		case "message_start":
 			var ms struct {
 				Message struct {
-					Usage struct {
-						InputTokens              int `json:"input_tokens"`
-						CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-						CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-					} `json:"usage"`
+					Usage anthropicUsageDetails `json:"usage"`
 				} `json:"message"`
 			}
 			if json.Unmarshal([]byte(ev.Data), &ms) == nil {
+				usage.Reported = ms.Message.Usage.Reported
 				usage.InputTokens = ms.Message.Usage.InputTokens
 				usage.CacheReadInputTokens = ms.Message.Usage.CacheReadInputTokens
 				usage.CacheCreationInputTokens = ms.Message.Usage.CacheCreationInputTokens
-				if h.OnUsage != nil {
+				if h.OnUsage != nil && usage.Reported {
 					h.OnUsage(Usage{
+						Reported:                 usage.Reported,
 						PromptTokens:             usage.InputTokens,
 						CompletionTokens:         usage.OutputTokens,
 						TotalTokens:              usage.InputTokens + usage.OutputTokens,
@@ -304,6 +298,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 		Message:      msg,
 		FinishReason: stopReason,
 		Usage: Usage{
+			Reported:                 usage.Reported,
 			PromptTokens:             usage.InputTokens,
 			CompletionTokens:         usage.OutputTokens,
 			TotalTokens:              usage.InputTokens + usage.OutputTokens,
@@ -383,14 +378,9 @@ type anthropicTool struct {
 }
 
 type anthropicResponse struct {
-	Content []anthropicBlock `json:"content"`
-	Usage   struct {
-		InputTokens              int `json:"input_tokens"`
-		OutputTokens             int `json:"output_tokens"`
-		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-	} `json:"usage"`
-	StopReason string `json:"stop_reason"`
+	Content    []anthropicBlock      `json:"content"`
+	Usage      anthropicUsageDetails `json:"usage"`
+	StopReason string                `json:"stop_reason"`
 }
 
 func (r anthropicResponse) text() string {
@@ -415,6 +405,7 @@ func (r anthropicResponse) contentTypes() []string {
 
 func anthropicUsage(r anthropicResponse) Usage {
 	return Usage{
+		Reported:                 r.Usage.Reported,
 		PromptTokens:             r.Usage.InputTokens,
 		CompletionTokens:         r.Usage.OutputTokens,
 		TotalTokens:              r.Usage.InputTokens + r.Usage.OutputTokens,
@@ -659,4 +650,27 @@ func setAnthropicAuthHeaders(header http.Header, token, flavor string) {
 		header.Set("x-app", "cli")
 		header.Set("User-Agent", "claude-cli/1.0 kepler-agent")
 	}
+}
+
+type anthropicUsageDetails struct {
+	Reported                 bool `json:"-"`
+	InputTokens              int  `json:"input_tokens"`
+	OutputTokens             int  `json:"output_tokens"`
+	CacheReadInputTokens     int  `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int  `json:"cache_creation_input_tokens"`
+}
+
+func (u *anthropicUsageDetails) UnmarshalJSON(data []byte) error {
+	type plain anthropicUsageDetails
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*u = anthropicUsageDetails(decoded)
+	u.Reported = (len(fields["input_tokens"]) > 0 && string(fields["input_tokens"]) != "null") || (len(fields["output_tokens"]) > 0 && string(fields["output_tokens"]) != "null")
+	return nil
 }

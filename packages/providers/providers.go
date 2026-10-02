@@ -380,7 +380,7 @@ func toToolCall(call llm.ToolCall) (model.ToolCall, error) {
 }
 
 func toUsage(usage llm.Usage) model.Usage {
-	return model.Usage{InputTokens: int64(usage.PromptTokens), OutputTokens: int64(usage.CompletionTokens), CacheReadTokens: int64(usage.CacheReadInputTokens), CacheCreatedTokens: int64(usage.CacheCreationInputTokens), CacheTokensIncludedInInput: usage.CacheIncludedInPrompt}
+	return model.Usage{Reported: usage.Reported, InputTokens: int64(usage.PromptTokens), OutputTokens: int64(usage.CompletionTokens), CacheReadTokens: int64(usage.CacheReadInputTokens), CacheCreatedTokens: int64(usage.CacheCreationInputTokens), CacheTokensIncludedInInput: usage.CacheIncludedInPrompt, ReasoningTokens: int64(usage.ReasoningTokens)}
 }
 
 func finishReason(reason string) model.FinishReason {

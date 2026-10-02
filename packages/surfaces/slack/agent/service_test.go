@@ -447,10 +447,11 @@ func TestRenderAnswerUsesStructuredCitations(t *testing.T) {
 	}
 }
 
-func TestRenderAnswerNormalizesNonBreakingSpaces(t *testing.T) {
-	message := model.TextMessage(model.RoleAssistant, "one\u00a0two\r\nthree")
-	if got := renderAnswer(message); got != "one two\r\nthree" {
-		t.Fatalf("renderAnswer() = %q, want normalized spaces", got)
+func TestRenderAnswerPreservesLiteralContent(t *testing.T) {
+	text := "```text\none\u00a0two\r\nthree\n```"
+	message := model.TextMessage(model.RoleAssistant, text)
+	if got := renderAnswer(message); got != text {
+		t.Fatalf("renderAnswer() = %q, want literal code content preserved", got)
 	}
 }
 

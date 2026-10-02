@@ -271,9 +271,7 @@ func TestRunTurnPersistsStructuredPlanUpdate(t *testing.T) {
 	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "plan-session", Input: model.TextMessage(model.RoleUser, "make this change")}); err != nil {
 		t.Fatal(err)
 	}
-	if len(client.requests) == 0 || !strings.Contains(client.requests[0].Messages[0].Text(), "use update_plan before substantial work") {
-		t.Fatalf("planning instruction missing from system prompt: %#v", client.requests)
-	}
+
 	events, err := store.Load(context.Background(), "plan-session", 0)
 	if err != nil {
 		t.Fatal(err)

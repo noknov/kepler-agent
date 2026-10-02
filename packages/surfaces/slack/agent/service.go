@@ -20,6 +20,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/connections"
 	"github.com/noknov/kepler-agent/packages/infra/redisclient"
+	"github.com/noknov/kepler-agent/packages/infra/telemetry"
 	"github.com/noknov/kepler-agent/packages/profiles/hosted"
 	"github.com/noknov/kepler-agent/packages/safety"
 	"github.com/noknov/kepler-agent/packages/session"
@@ -28,6 +29,8 @@ import (
 	"github.com/noknov/kepler-agent/packages/userprefs"
 	"github.com/noknov/kepler-agent/packages/workflows"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type ConversationMode string
@@ -42,9 +45,10 @@ const (
 	ModeQueue ConversationMode = "queue"
 )
 
-const slackOutputFormatPrompt = `This response is delivered through Slack's Markdown block. Format it as concise, conservative Slack Markdown: use readable paragraphs, simple lists, links, inline code, and code fences when needed. Normalize retrieved evidence instead of copying source-only wrappers, code-fence language labels, or unusual whitespace.`
+const slackOutputFormatPrompt = "Replies are rendered using standard Markdown in Slack."
 
 type Service struct {
+	traceContent     func(trace.Span, string, any)
 	Agent            hosted.Agent
 	Messenger        slackconversation.Messenger
 	Prompt           safety.PromptPolicy
@@ -132,7 +136,7 @@ type eventRouter struct {
 func New(agent hosted.Agent, messenger slackconversation.Messenger, policy safety.PromptPolicy, redactor safety.Redactor, prefs userprefs.Store) *Service {
 	router := &eventRouter{streams: make(map[string]*slackStream)}
 	return &Service{
-		Agent: agent, Messenger: messenger, Prompt: policy, Redactor: redactor, UserPrefs: prefs,
+		Agent: agent, Messenger: messenger, Prompt: policy, Redactor: redactor, UserPrefs: prefs, traceContent: telemetry.ContentRecorder(),
 		Workflows: workflows.NewRegistry(), active: make(map[string]*activeRun), router: router,
 	}
 }
@@ -145,6 +149,14 @@ func (r *eventRouter) Publish(_ context.Context, event transcript.Event) {
 	r.mu.RUnlock()
 	if stream == nil {
 		return
+	}
+	if event.Type == transcript.ContextProjected && stream.telemetry != nil {
+		var projection struct {
+			PromptHash string `json:"prompt_hash"`
+		}
+		if json.Unmarshal(event.Metadata, &projection) == nil && projection.PromptHash != "" {
+			stream.telemetry.span.SetAttributes(attribute.String("langfuse.version", projection.PromptHash), attribute.String("langfuse.observation.metadata.prompt_hash", projection.PromptHash))
+		}
 	}
 	stream.Lifecycle(event)
 	if event.Type == transcript.ModelStreamed && event.Model != nil {
@@ -301,7 +313,10 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 	// The same stable identifier drives transcript replay and Slack's
 	// client_msg_id. Keep generated IDs on the request as well as the turn.
 	req.EventID = turnID
+	runCtx, reply := beginReplyTrace(runCtx, sessionID, req, s.traceContent)
+	defer func() { reply.end(runErr) }()
 	stream := newSlackStream(runCtx, s.Messenger, req)
+	stream.telemetry = reply
 	stream.connections = s.Connections
 	stream.redactor = safety.NewStreamRedactor(s.Redactor)
 	s.router.set(turnID, stream)
@@ -331,7 +346,7 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 
 	fragments := []prompt.Fragment{
 		{ID: "hosted-core", Version: "1", Layer: prompt.LayerCore, Content: s.Prompt.SystemPrompt()},
-		{ID: "slack-output-format", Version: "1", Layer: prompt.LayerProduct, Content: slackOutputFormatPrompt},
+		{ID: "slack-output-format", Version: "2", Layer: prompt.LayerProduct, Content: slackOutputFormatPrompt},
 		{ID: "user-rules", Layer: prompt.LayerUser, Content: userprefs.RulesPrompt(runCtx, s.UserPrefs, req.UserID)},
 		{ID: "user-skills", Layer: prompt.LayerSkill, Content: userprefs.SkillsMetadataPrompt(runCtx, s.UserPrefs, req.UserID)},
 	}
@@ -392,12 +407,14 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 				return deliveryStateErr
 			}
 			if delivered {
+				reply.delivery("already_delivered", nil)
 				stream.setSessionStatus(sessionActive)
 				return s.ackClaim(finalizeCtx, req.ClaimID)
 			}
 		}
 		log.Printf("slack agent run failed session=%s turn=%s: %v", sessionID, turnID, err)
 		messageTS, deliveryErr := stream.Fail(failure.PublicMessage(err), errors.Is(err, context.Canceled))
+		stream.recordFinalDelivery(messageTS, deliveryErr)
 		if deliveryErr != nil {
 			return deliveryErr
 		}
@@ -416,11 +433,13 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 			return deliveryStateErr
 		}
 		if delivered {
+			reply.delivery("already_delivered", nil)
 			stream.setSessionStatus(sessionStatusForTermination(string(result.Termination)))
 			return s.ackClaim(finalizeCtx, req.ClaimID)
 		}
 	}
 	messageTS, err := stream.Complete(final)
+	stream.recordFinalDelivery(messageTS, err)
 	if err != nil {
 		return err
 	}
@@ -481,7 +500,7 @@ func (s *Service) runTimeout() time.Duration {
 }
 
 func renderAnswer(message model.Message) string {
-	answer := strings.TrimSpace(strings.ReplaceAll(message.Text(), "\u00a0", " "))
+	answer := strings.TrimSpace(message.Text())
 	seen := make(map[string]bool)
 	var sources []string
 	for _, citation := range message.Citations() {
@@ -811,6 +830,8 @@ func (s *Service) StartControlSubscriber(ctx context.Context) {
 }
 
 type slackStream struct {
+	telemetry            *replyTrace
+	streamStopError      error
 	ctx                  context.Context
 	messenger            slackconversation.Messenger
 	req                  slackconversation.Request
@@ -854,6 +875,7 @@ func (s *slackStream) Start() {
 	}
 }
 func (s *slackStream) Complete(final string) (string, error) {
+	s.telemetry.output(final)
 	s.stopStreamTimer()
 	s.stopPlanTimer()
 	if s.redactor != nil {
@@ -898,6 +920,9 @@ func (s *slackStream) Complete(final string) (string, error) {
 				if err := updater.UpdateMarkdownMessage(ctx, s.req.Channel, messageTS, final); err != nil {
 					return messageTS, err
 				}
+				s.mu.Lock()
+				s.streamStopError = nil
+				s.mu.Unlock()
 				return messageTS, nil
 			}
 			// A third-party Messenger without update support cannot safely amend
@@ -933,6 +958,7 @@ func (s *slackStream) Fail(message string, canceled bool) (string, error) {
 			message = "已中止本次请求。"
 		}
 	}
+	s.telemetry.output(message)
 	if message == "" {
 		ctx, cancel := s.deliveryContext()
 		defer cancel()

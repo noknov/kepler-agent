@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
@@ -20,7 +21,7 @@ import (
 var errPendingApproval = errors.New("tool call is waiting for approval")
 var runtimeTracer = otel.Tracer("github.com/noknov/kepler-agent/agent/runtime")
 
-func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult, error) {
+func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult TurnResult, turnErr error) {
 	if request.SessionID == "" {
 		request.SessionID = r.deps.IDs.New("ses")
 	}
@@ -36,6 +37,19 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	)
 	ctx, span := runtimeTracer.Start(ctx, "agent.turn", trace.WithAttributes(turnAttributes...))
 	defer span.End()
+	stats := &turnTrace{}
+	ctx = context.WithValue(ctx, turnTraceKey{}, stats)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			span.SetStatus(codes.Error, "agent panicked")
+			span.SetAttributes(attribute.String("langfuse.observation.metadata.run_status", "failed"), attribute.String("langfuse.observation.metadata.error_kind", "panic"))
+			panic(recovered)
+		}
+		r.finishTrace(span, stats, turnResult, turnErr)
+	}()
+	if r.deps.TraceContent != nil && span.IsRecording() {
+		r.traceContent(span, "input", traceMessages([]model.Message{request.Input}))
+	}
 	if request.Input.Role == "" {
 		request.Input.Role = model.RoleUser
 	}
@@ -134,10 +148,14 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 	if err != nil {
 		return r.failTurn(ctx, result, err)
 	}
-	system := model.TextMessage(model.RoleSystem, composition.Content)
-	if r.deps.Tools.Has("update_plan") {
-		system = appendSystemInstruction(system, planningInstruction)
+	span.SetAttributes(attribute.String("langfuse.version", composition.Hash), attribute.String("langfuse.observation.metadata.prompt_hash", composition.Hash))
+	values := make(map[string]string, len(request.Scope.Values)+1)
+	for key, value := range request.Scope.Values {
+		values[key] = value
 	}
+	values["prompt_hash"] = composition.Hash
+	request.Scope.Values = values
+	system := model.TextMessage(model.RoleSystem, composition.Content)
 	for step := 1; step <= r.config.MaxSteps; step++ {
 		result.Steps = step
 		if err := r.recordStepStarted(ctx, request, step); err != nil {
@@ -460,16 +478,7 @@ func (r *Runtime) generateWithTools(ctx context.Context, turn TurnRequest, messa
 		ReasoningEffort: r.config.ReasoningEffort, Temperature: r.config.Temperature, MaxOutputTokens: r.config.MaxOutputTokens,
 		Metadata: map[string]string{"session_id": turn.SessionID, "turn_id": turn.TurnID, "request_id": requestID},
 	}
-	ctx = model.WithAttemptObserver(ctx, func(attempt model.Attempt) {
-		metadata, _ := json.Marshal(map[string]any{"request_id": requestID, "attempt": attempt.Number, "provider": attempt.Provider, "model": attempt.Model, "fallback": attempt.Fallback, "outcome": attempt.Outcome, "remaining_ms": attempt.Remaining.Milliseconds(), "kind": model.ErrorKindOf(attempt.Error)})
-		event := transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelAttempted, Status: attempt.Outcome, Metadata: metadata}
-		if attempt.Error != nil {
-			event.Error = attempt.Error.Error()
-		}
-		attemptCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.config.CleanupTimeout)
-		defer cancel()
-		_, _ = r.record(attemptCtx, event)
-	})
+
 	var lastErr error
 	for attempt := 0; attempt <= r.config.MaxModelRetries; attempt++ {
 		metadata, _ := json.Marshal(map[string]any{"request_id": requestID, "attempt": attempt + 1, "model": request.Model})
@@ -487,7 +496,10 @@ func (r *Runtime) generateWithTools(ctx context.Context, turn TurnRequest, messa
 		lastErr = err
 		var typed *model.Error
 		failed, _ := json.Marshal(map[string]any{"request_id": requestID, "attempt": attempt + 1, "model": request.Model, "kind": model.ErrorKindOf(err), "retryable": errors.As(err, &typed) && typed.Retryable})
-		if _, recordErr := r.record(context.WithoutCancel(ctx), transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelFailed, Error: err.Error(), Metadata: failed, Trace: responseTrace(response)}); recordErr != nil {
+		failedCtx, failedCancel := r.cleanupContext(ctx)
+		_, recordErr := r.record(failedCtx, transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelFailed, Error: err.Error(), Metadata: failed, Trace: responseTrace(response)})
+		failedCancel()
+		if recordErr != nil {
 			return model.Response{}, recordErr
 		}
 		if !errors.As(err, &typed) || !typed.Retryable || attempt == r.config.MaxModelRetries {
@@ -526,26 +538,102 @@ func (r *Runtime) generateAttempt(ctx context.Context, turn TurnRequest, request
 	modelAttributes := langfuseObservationAttributes(turn.Scope, "generation")
 	modelAttributes = append(modelAttributes,
 		attribute.String("gen_ai.request.model", request.Model),
+		attribute.Int("gen_ai.request.max_tokens", request.MaxOutputTokens),
+		attribute.String("agent.model.request_id", request.Metadata["request_id"]),
 		attribute.Int("agent.model.attempt", attempt),
 	)
 	ctx, span := runtimeTracer.Start(ctx, "model.generate", trace.WithAttributes(modelAttributes...))
+	stats, _ := ctx.Value(turnTraceKey{}).(*turnTrace)
+	attempts, retries, fallbacks := 0, 0, 0
+	observed := false
+	actualModel, actualProvider := request.Model, ""
+	if r.deps.TraceContent != nil && span.IsRecording() {
+		input := request
+		input.Messages = traceMessages(request.Messages)
+		r.traceContent(span, "input", input)
+	}
+	ctx = model.WithAttemptObserver(ctx, func(attempt model.Attempt) {
+		observed = true
+		switch attempt.Outcome {
+		case "requested":
+			attempts++
+			actualModel, actualProvider = attempt.Model, attempt.Provider
+		case "retrying":
+			retries++
+		case "fallback":
+			fallbacks++
+		case "completed":
+			actualModel, actualProvider = attempt.Model, attempt.Provider
+		}
+
+		span.AddEvent("model.attempt", trace.WithAttributes(
+			attribute.String("gen_ai.provider.name", attempt.Provider), attribute.String("gen_ai.request.model", attempt.Model),
+			attribute.String("agent.model.outcome", attempt.Outcome), attribute.Int("agent.model.attempt", attempt.Number),
+			attribute.Bool("agent.model.fallback", attempt.Fallback), attribute.String("error.type", string(model.ErrorKindOf(attempt.Error))),
+		))
+		metadata, _ := json.Marshal(map[string]any{"request_id": request.Metadata["request_id"], "attempt": attempt.Number, "provider": attempt.Provider, "model": attempt.Model, "fallback": attempt.Fallback, "outcome": attempt.Outcome, "remaining_ms": attempt.Remaining.Milliseconds(), "kind": model.ErrorKindOf(attempt.Error)})
+		event := transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelAttempted, Status: attempt.Outcome, Metadata: metadata}
+		if attempt.Error != nil {
+			event.Error = attempt.Error.Error()
+		}
+		attemptCtx, cancel := r.cleanupContext(ctx)
+		defer cancel()
+		_, _ = r.record(attemptCtx, event)
+	})
 	defer func() {
 		spanContext := span.SpanContext()
 		response.TraceID, response.SpanID = spanContext.TraceID().String(), spanContext.SpanID().String()
 		if parent.IsValid() {
 			response.ParentSpanID = parent.SpanID().String()
 		}
+		if attempts == 0 && !observed {
+			attempts = 1
+		} // Clients without a resilience observer make one call.
+		recordUsage(span, response.Usage)
+		span.SetAttributes(attribute.String("langfuse.observation.model.name", actualModel),
+			attribute.String("langfuse.observation.metadata.requested_model", request.Model),
+			attribute.String("langfuse.observation.metadata.actual_provider", actualProvider),
+			attribute.Int("langfuse.observation.metadata.attempt_count", attempts),
+			attribute.Int("langfuse.observation.metadata.retry_count", retries),
+			attribute.Int("langfuse.observation.metadata.fallback_count", fallbacks),
+			attribute.Bool("langfuse.observation.metadata.recovered", err == nil && (retries > 0 || fallbacks > 0)),
+		)
+		if stats != nil {
+			stats.mu.Lock()
+			stats.requests++
+			stats.attempts += attempts
+			stats.retries += retries
+			if attempt > 1 {
+				stats.retries++
+			}
+			stats.fallbacks += fallbacks
+			if !response.Usage.Known() {
+				stats.missingUsage++
+			}
+			stats.lastModel, stats.lastProvider = actualModel, actualProvider
+			stats.mu.Unlock()
+		}
+		if r.deps.TraceContent != nil && span.IsRecording() {
+			r.traceContent(span, "output", traceMessages([]model.Message{response.Message}))
+		}
 		span.SetAttributes(
-			attribute.Int64("gen_ai.usage.input_tokens", response.Usage.InputTokens),
-			attribute.Int64("gen_ai.usage.output_tokens", response.Usage.OutputTokens),
+			attribute.StringSlice("gen_ai.response.finish_reasons", []string{string(response.FinishReason)}),
+			attribute.Int64("agent.model.cache_read_tokens", response.Usage.CacheReadTokens),
+			attribute.Int64("agent.model.cache_created_tokens", response.Usage.CacheCreatedTokens),
 		)
 		if err != nil {
-			span.RecordError(err)
+			recordSpanError(span, err)
 			span.SetStatus(codes.Error, "model request failed")
 		}
 		span.End()
 	}()
+	started := time.Now()
+	var firstToken atomic.Bool
 	return r.deps.Model.Generate(ctx, request, func(event model.StreamEvent) error {
+		if event.Type == model.StreamTextDelta && event.Text != "" && firstToken.CompareAndSwap(false, true) {
+			now := time.Now()
+			span.SetAttributes(attribute.Int64("agent.model.first_token_ms", now.Sub(started).Milliseconds()), attribute.String("langfuse.observation.completion_start_time", now.UTC().Format(time.RFC3339Nano)))
+		}
 		// Stream deltas are presentation events, not canonical durable facts.
 		// Persisting each delta makes PostgreSQL/JSONL cost proportional to token
 		// count. The final assistant message and model lifecycle remain durable.
@@ -665,14 +753,18 @@ func (r *Runtime) emit(ctx context.Context, event transcript.Event) {
 	r.deps.Events.Publish(ctx, event)
 }
 
+func (r *Runtime) cleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), r.config.CleanupTimeout)
+}
+
 func (r *Runtime) finishTurn(ctx context.Context, result TurnResult, message model.Message, reason TerminationReason, err error) (TurnResult, error) {
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(attribute.String("agent.termination", string(reason)), attribute.Int("agent.steps", result.Steps))
 	if err != nil {
-		span.RecordError(err)
+		recordSpanError(span, err)
 		span.SetStatus(codes.Error, string(reason))
 	}
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.config.CleanupTimeout)
+	cleanupCtx, cancel := r.cleanupContext(ctx)
 	defer cancel()
 	result.Message = message
 	result.Termination = reason

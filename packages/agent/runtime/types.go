@@ -13,6 +13,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/prompt"
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type TerminationReason string
@@ -37,7 +38,7 @@ type Config struct {
 	Temperature     *float64
 	MaxOutputTokens int
 	MaxSteps        int
-	// CleanupTimeout bounds terminal persistence after cancellation.
+	// CleanupTimeout bounds detached model/tool and terminal persistence.
 	CleanupTimeout time.Duration
 	// MaxParallelToolCalls bounds the number of read-only, explicitly
 	// parallel-safe tool calls that may execute in one model step. It is a
@@ -90,6 +91,9 @@ func (c Config) withDefaults() Config {
 }
 
 type Dependencies struct {
+	// TraceContent is an optional, bounded and sanitized content recorder.
+	// Profiles own disclosure policy; the runtime never reads operator secrets.
+	TraceContent            func(trace.Span, string, any)
 	Model                   model.Client
 	Tools                   *tool.Catalog
 	Policy                  tool.Policy

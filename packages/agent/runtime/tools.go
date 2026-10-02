@@ -107,7 +107,9 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 					blocked = append(blocked, prepared[sibling])
 				}
 				if r.deps.Approver == nil {
-					if _, err := r.recordToolResults(context.WithoutCancel(ctx), request, blocked); err != nil {
+					cleanupCtx, cancel := r.cleanupContext(ctx)
+					defer cancel()
+					if _, err := r.recordToolResults(cleanupCtx, request, blocked); err != nil {
 						return toolOutcome{}, err
 					}
 					return toolOutcome{}, errPendingApproval
@@ -158,7 +160,8 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 			}
 			prepared[index].result = &result
 		}
-		recordCtx := context.WithoutCancel(ctx)
+		recordCtx, cancel := r.cleanupContext(ctx)
+		defer cancel()
 		limitToolResultBatch(recordCtx, prepared, r.config.ToolResults, r.deps.Artifacts)
 		if _, err := r.recordToolResults(recordCtx, request, prepared); err != nil {
 			return toolOutcome{}, err
@@ -186,11 +189,13 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 				return recordAfterCancellation()
 			}
 		}
+		// Acquire before dispatch so a following write cannot overtake a read
+		// whose goroutine has not yet been scheduled.
+		gate.RLock()
 		wait.Add(1)
 		go func(entry *preparedCall) {
 			defer wait.Done()
 			defer func() { <-parallelSlots }()
-			gate.RLock()
 			defer gate.RUnlock()
 			r.runPreparedTool(ctx, request, entry)
 		}(entry)
@@ -198,7 +203,9 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 	wait.Wait()
 	recordCtx := ctx
 	if ctx.Err() != nil {
-		recordCtx = context.WithoutCancel(ctx)
+		var cancel context.CancelFunc
+		recordCtx, cancel = r.cleanupContext(ctx)
+		defer cancel()
 	}
 	limitToolResultBatch(recordCtx, prepared, r.config.ToolResults, r.deps.Artifacts)
 	return r.recordToolResults(recordCtx, request, prepared)
@@ -303,14 +310,32 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 	toolAttributes := langfuseObservationAttributes(request.Scope, "tool")
 	toolAttributes = append(toolAttributes,
 		attribute.String("gen_ai.tool.name", call.Name),
+		attribute.String("langfuse.observation.metadata.tool_name", call.Name),
 		attribute.String("gen_ai.tool.call.id", call.ID),
 	)
 	toolCtx, span := runtimeTracer.Start(toolCtx, "tool.execute", trace.WithAttributes(toolAttributes...))
-	defer span.End()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			span.SetStatus(codes.Error, "tool panicked")
+			span.SetAttributes(attribute.String("agent.tool.error_code", "tool_panic"))
+			span.SetAttributes(attribute.String("langfuse.observation.metadata.error_code", "tool_panic"))
+			if stats, ok := ctx.Value(turnTraceKey{}).(*turnTrace); ok {
+				stats.mu.Lock()
+				stats.toolFailures++
+				stats.mu.Unlock()
+			}
+			span.End()
+			panic(recovered) // The outer recovery persists the canonical error result.
+		}
+		span.End()
+	}()
+	if r.deps.TraceContent != nil && span.IsRecording() {
+		r.traceContent(span, "input", call.Arguments)
+	}
 	started := time.Now()
 	result, err := entry.item.Execute(toolCtx, call)
 	if err != nil {
-		span.RecordError(err)
+		recordSpanError(span, err)
 		span.SetStatus(codes.Error, "tool execution failed")
 		result.IsError = true
 		if result.ErrorCode == "" {
@@ -340,9 +365,22 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 	result.Metadata["duration_ms"] = time.Since(started).Milliseconds()
 	span.SetAttributes(attribute.Int64("agent.tool.duration_ms", time.Since(started).Milliseconds()), attribute.Bool("agent.tool.error", result.IsError))
 	if result.IsError {
+		span.SetStatus(codes.Error, "tool returned an error result")
+		span.SetAttributes(attribute.String("agent.tool.error_code", result.ErrorCode))
 		result.Content = boundToolErrorContent(result.Content)
 	}
+	if result.IsError {
+		if stats, ok := ctx.Value(turnTraceKey{}).(*turnTrace); ok {
+			stats.mu.Lock()
+			stats.toolFailures++
+			stats.mu.Unlock()
+		}
+	}
 	result = limitToolResult(ctx, result, call, r.config.ToolResults, r.deps.Artifacts)
+	if r.deps.TraceContent != nil && span.IsRecording() {
+		r.traceContent(span, "output", map[string]any{"content": traceMessages([]model.Message{{Role: model.RoleTool, Content: result.Content}}), "is_error": result.IsError, "error_code": result.ErrorCode})
+	}
+	span.SetAttributes(attribute.String("langfuse.observation.metadata.tool_name", call.Name), attribute.String("langfuse.observation.metadata.error_code", result.ErrorCode))
 	r.recordCircuit(call, result.IsError || err != nil)
 	entry.result = &result
 }

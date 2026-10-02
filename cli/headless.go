@@ -141,7 +141,8 @@ func newLocalHarness(values options, config local.Config, creds credentials) (*l
 			Context:  agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
 		},
 		Deps: agentruntime.Dependencies{
-			Model: resilientClient, Policy: local.NewWorkspacePolicy(), Transcript: store,
+			TraceContent: telemetry.ContentRecorder(),
+			Model:        resilientClient, Policy: local.NewWorkspacePolicy(), Transcript: store,
 			Compactor:   agentruntime.ModelCompactor{Client: resilientClient, Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
 			Artifacts:   local.ArtifactStore{Root: artifactRoot},
 			Environment: environment.Config{WorkspaceRoots: []string{workspace.Root}},
@@ -162,7 +163,8 @@ func newLocalHarness(values options, config local.Config, creds credentials) (*l
 			Context: agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
 		},
 		agentruntime.Dependencies{
-			Model: resilientClient, Tools: catalog, Policy: local.NewWorkspacePolicy(), Approver: approver, Transcript: store, Events: renderer,
+			TraceContent: telemetry.ContentRecorder(),
+			Model:        resilientClient, Tools: catalog, Policy: local.NewWorkspacePolicy(), Approver: approver, Transcript: store, Events: renderer,
 			Compactor:   agentruntime.ModelCompactor{Client: resilientClient, Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
 			Artifacts:   local.ArtifactStore{Root: artifactRoot},
 			Environment: environment.Config{WorkspaceRoots: []string{workspace.Root}},
@@ -236,8 +238,8 @@ func registerSkillsAndMCP(ctx context.Context, catalog *tool.Catalog, workspace 
 
 func prompts(config local.Config, root, skillPrompt string) ([]prompt.Fragment, error) {
 	fragments := []prompt.Fragment{
-		{ID: "cli-core", Version: "2", Layer: prompt.LayerCore, Content: "You are a coding agent in a local workspace. Inspect evidence before making claims. Emit independent reads in one step. Prefer exec command strings for tests and builds. Verify material changes, preserve unrelated work, and report limitations precisely."},
-		{ID: "local-product", Version: "4", Layer: prompt.LayerProduct, Content: "You are running locally with Kepler-hosted models. Filesystem writes must stay within the workspace. Exec network access requires explicit approval. Never seek or expose credentials. Do not ask the user for provider API keys."},
+		{ID: "cli-core", Version: "3", Layer: prompt.LayerCore, Content: "You are a coding agent in a local workspace. Use the available tools to inspect evidence and verify material changes. Preserve unrelated work and report outcomes and limitations precisely."},
+		{ID: "local-product", Version: "5", Layer: prompt.LayerProduct, Content: "You are running locally. Filesystem writes must stay within the workspace. Exec network access requires explicit approval. Never seek or expose credentials. Do not ask the user for provider API keys."},
 		{ID: "local-environment", Layer: prompt.LayerEnvironment, Content: "Workspace: " + root},
 	}
 	project, err := local.ProjectInstructions(root)
