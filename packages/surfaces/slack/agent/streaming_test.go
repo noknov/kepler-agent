@@ -124,9 +124,9 @@ func TestNativeSlackStreamAppendsIncrementally(t *testing.T) {
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1", EventID: "Ev1"})
 	stream.Start()
 	stream.AppendDelta("hel")
-	stream.flushStreamUpdate("hel", false)
+	stream.flushDeferredStream()
 	stream.AppendDelta("lo")
-	stream.flushStreamUpdate("hello", false)
+	stream.flushDeferredStream()
 	if messenger.started != 1 {
 		t.Fatalf("started = %d, want 1", messenger.started)
 	}
@@ -148,7 +148,7 @@ func TestFinalOnlyWorkflowDoesNotPublishIntermediateModelText(t *testing.T) {
 	stream.SetOutputPolicy(workflows.OutputFinalOnly)
 	stream.Start()
 	stream.AppendDelta("I will delegate a review task.")
-	stream.flushDeferredStream(true)
+	stream.flushDeferredStream()
 	if messenger.started != 0 || len(messenger.appends) != 0 {
 		t.Fatalf("intermediate output was delivered: started=%d appends=%#v", messenger.started, messenger.appends)
 	}
@@ -168,7 +168,7 @@ func TestStreamStartsWithFirstAssistantDelta(t *testing.T) {
 		t.Fatalf("started = %d, want no empty stream before assistant text", messenger.started)
 	}
 	stream.AppendDelta("hello")
-	stream.flushStreamUpdate("hello", false)
+	stream.flushDeferredStream()
 	if messenger.started != 1 {
 		t.Fatalf("started = %d, want stream start with assistant text", messenger.started)
 	}
@@ -182,7 +182,7 @@ func TestStartStreamFailurePostsFinalAnswer(t *testing.T) {
 		t.Fatalf("started = %d, want no start before assistant text", messenger.started)
 	}
 	stream.AppendDelta("hello")
-	stream.flushStreamUpdate("hello", false)
+	stream.flushDeferredStream()
 	if messenger.started != 1 {
 		t.Fatalf("started = %d, want one attempted stream start", messenger.started)
 	}
@@ -202,7 +202,7 @@ func TestNativeCompleteAppendsSourcesSuffix(t *testing.T) {
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1"})
 	stream.Start()
 	stream.AppendDelta("answer")
-	stream.flushStreamUpdate("answer", false)
+	stream.flushDeferredStream()
 	final := "answer\n\nSources: [doc](https://example.test)"
 	if _, err := stream.Complete(final); err != nil {
 		t.Fatal(err)
@@ -215,14 +215,14 @@ func TestNativeCompleteAppendsSourcesSuffix(t *testing.T) {
 	}
 }
 
-func TestStreamDeliveryIsImmediate(t *testing.T) {
+func TestStreamDeliveryCanBeFlushed(t *testing.T) {
 	messenger := &nativeStreamingMessenger{}
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1", EventID: "Ev1"})
 	stream.Start()
 	stream.AppendDelta("hello")
-	stream.flushStreamUpdate("hello", false)
+	stream.flushDeferredStream()
 	if messenger.started != 1 || len(messenger.appends) != 0 {
-		t.Fatalf("started=%d appends=%#v, want immediate delivery", messenger.started, messenger.appends)
+		t.Fatalf("started=%d appends=%#v, want flushed delivery", messenger.started, messenger.appends)
 	}
 }
 
@@ -280,7 +280,7 @@ func TestUncertainStreamStartDoesNotPostFallbackDuplicate(t *testing.T) {
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", EventID: "Ev1"})
 	stream.Start()
 	stream.AppendDelta("hello")
-	stream.flushStreamUpdate("hello", false)
+	stream.flushDeferredStream()
 	if _, err := stream.Complete("hello"); err != nil {
 		t.Fatal(err)
 	}
@@ -294,9 +294,9 @@ func TestNativeStreamRestartsOnNotInStreamingState(t *testing.T) {
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1"})
 	stream.Start()
 	stream.AppendDelta("hello")
-	stream.flushStreamUpdate("hello", false)
+	stream.flushDeferredStream()
 	stream.AppendDelta(" world")
-	stream.flushStreamUpdate("hello world", false)
+	stream.flushDeferredStream()
 	if messenger.started != 1 {
 		t.Fatalf("started = %d, want no replacement stream after not_in_streaming_state", messenger.started)
 	}
@@ -329,14 +329,27 @@ func TestNativeStreamFailureEditsExistingReply(t *testing.T) {
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1", UserID: "U1"})
 	stream.Start()
 	stream.AppendDelta("partial")
-	stream.flushStreamUpdate("partial", false)
+	stream.flushDeferredStream()
 	stream.AppendDelta(" answer")
-	stream.flushStreamUpdate("partial answer", false)
-	ts, err := stream.Complete("final answer")
+	stream.flushDeferredStream()
+	ts, err := stream.Complete("partial answer completed")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ts != "1.0" || len(messenger.posts) != 0 || len(messenger.updates) != 1 || messenger.updates[0] != "final answer" {
+	if ts != "1.0" || len(messenger.posts) != 0 || len(messenger.updates) != 1 || messenger.updates[0] != "partial answer completed" {
 		t.Fatalf("ts=%q posts=%#v updates=%#v", ts, messenger.posts, messenger.updates)
+	}
+}
+
+func TestNativeStreamFinalAnswerSupersedesCommentary(t *testing.T) {
+	messenger := &nativeStreamingMessenger{}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T"})
+	stream.AppendDelta("An intermediate explanation that is longer than the final answer.")
+	stream.flushDeferredStream()
+	if _, err := stream.Complete("Final answer."); err != nil {
+		t.Fatal(err)
+	}
+	if len(messenger.appends) != 0 || len(messenger.posts) != 0 || len(messenger.updates) != 1 || messenger.updates[0] != "Final answer." {
+		t.Fatalf("appends=%v posts=%v updates=%v", messenger.appends, messenger.posts, messenger.updates)
 	}
 }

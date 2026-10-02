@@ -61,7 +61,7 @@ func (c *ResilientClient) Generate(ctx context.Context, request Request, sink Ev
 	if err == nil {
 		return response, nil
 	}
-	if !canFailover(err) || c.Fallback == nil || c.FallbackModel == "" {
+	if stream.hasCommitted() || !canFailover(err) || c.Fallback == nil || c.FallbackModel == "" {
 		return Response{}, err
 	}
 	observeAttempt(ctx, c.attempt(ctx, c.fallbackProvider(), c.FallbackModel, 1, true, "fallback", err))
@@ -263,7 +263,12 @@ func retryable(err error) bool {
 	var typed *Error
 	return errors.As(err, &typed) && typed.Retryable && (typed.Kind == ErrorTransient || typed.Kind == ErrorRateLimited || typed.Kind == ErrorUnavailable || typed.Kind == ErrorProtocol)
 }
-func canFailover(err error) bool { return retryable(err) }
+
+// An open primary circuit skips that provider, not the healthy fallback.
+// This deliberately differs from retryable: retrying an open circuit is futile.
+func canFailover(err error) bool {
+	return retryable(err) || ErrorKindOf(err) == ErrorCircuitOpen
+}
 
 // committedStream tracks events that cross the point at which retrying a
 // request can replay user-visible output. Transport lifecycle, usage, and

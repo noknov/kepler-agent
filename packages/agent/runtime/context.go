@@ -69,7 +69,7 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 	system := request.System
 	limit := p.config.MaxTokens - p.config.ReserveTokens - p.config.OutputTokens - EstimateToolTokens(request.Tools)
 	if limit <= 0 {
-		limit = p.config.MaxTokens
+		return Projection{}, &model.Error{Kind: model.ErrorBudgetExhausted, Message: "context budget exhausted by reserved, output, and tool tokens"}
 	}
 	var base *projectedMessage
 	var baseSequence uint64

@@ -3,7 +3,7 @@ SHELL := /bin/sh
 GOCACHE ?= $(CURDIR)/.cache/go-build
 GOFILES := $(shell rg --files -g '*.go')
 
-.PHONY: fmt fmt-check boundaries vet test test-race build eval-check protocol-generate protocol-check check
+.PHONY: fmt fmt-check boundaries vet test test-race build eval-check protocol-generate protocol-check test-ui check
 
 fmt:
 	gofmt -w $(GOFILES)
@@ -25,7 +25,11 @@ test:
 	GOCACHE=$(GOCACHE) go test ./...
 
 test-race:
-	GOCACHE=$(GOCACHE) go test -race ./packages/agent/runtime ./packages/surfaces/slack/agent ./packages/runs ./packages/safety ./packages/surfaces/slack/events ./packages/tools/hosted ./packages/appserver ./packages/surfaces/web
+	GOCACHE=$(GOCACHE) go test -race ./packages/profiles/local ./packages/agent/delegation ./packages/agent/runtime ./packages/surfaces/slack/agent ./packages/runs ./packages/safety ./packages/surfaces/slack/events ./packages/tools/hosted ./packages/appserver ./packages/surfaces/web
+
+test-ui:
+	cd apps/cli && pnpm test
+	node --test packages/surfaces/web/tests/*.test.mjs
 
 build:
 	GOCACHE=$(GOCACHE) go build -trimpath -o /dev/null ./gateway/cmd/gateway

@@ -50,6 +50,12 @@ const (
 	TurnCanceled           EventType = "turn_canceled"
 )
 
+// IsTurnTerminal identifies every durable outcome that closes a turn.
+// Recovery and presentation must agree that cancellation is terminal too.
+func (t EventType) IsTurnTerminal() bool {
+	return t == TurnCompleted || t == TurnFailed || t == TurnCanceled
+}
+
 type Event struct {
 	ID         string             `json:"id"`
 	Sequence   uint64             `json:"sequence"`

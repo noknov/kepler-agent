@@ -63,6 +63,11 @@ export function useRepl(config: ReplConfig) {
   const [inProgressToolUseIDs, setInProgressToolUseIDs] = useState<Set<string>>(() => new Set());
   const [activeTools, setActiveTools] = useState<ActiveTool[]>([]);
   const [busy, setBusy] = useState(false);
+  // Reserve synchronously; React state and server notifications arrive later.
+  const busyRef = useRef(false);
+  const activeTurnRef = useRef<string | null>(null);
+  const startGeneration = useRef(0);
+  const [queuePaused, setQueuePaused] = useState(false);
   const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
   const [sessionId, setSessionId] = useState<string | null>(config.sessionId ?? null);
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
@@ -122,16 +127,27 @@ export function useRepl(config: ReplConfig) {
 
   const client = useMemo(() => {
     const backend = spawnBackend();
-    backend.onExit((code, signal) => {
-      setConnectionState("failed");
-      pushSystem(`app-server stopped (${code ?? signal ?? "error"})`);
-    });
-    return new AppServerClient(backend.stdin, backend.stdout, {
-      onDelta: (_turnId, text) => {
+    const connection = new AppServerClient(backend.stdin, backend.stdout, {
+      onDisconnect: (error) => {
+        busyRef.current = false;
+        activeTurnRef.current = null;
+        setConnectionState("failed");
+        setBusy(false);
+        setActiveTurnId(null);
+        setApproval(null);
+        setActiveTools([]);
+        setInProgressToolUseIDs(new Set());
+        setQueuePaused(true);
+        pushSystem(error.message);
+      },
+      onDelta: (turnId, text) => {
+        if (activeTurnRef.current !== turnId) return;
         streamTextRef.current += text;
         onStreamingText((current) => (current ?? "") + text);
       },
       onTurnStarted: (turnId) => {
+        activeTurnRef.current = turnId;
+        busyRef.current = true;
         setActiveTurnId(turnId);
         setBusy(true);
         finalAssistantRef.current = "";
@@ -140,7 +156,11 @@ export function useRepl(config: ReplConfig) {
         setInProgressToolUseIDs(new Set());
         setActiveTools([]);
       },
-      onTurnCompleted: (_turnId, payload) => {
+      onTurnCompleted: (turnId, payload) => {
+        if (activeTurnRef.current !== turnId) return;
+        activeTurnRef.current = null;
+        busyRef.current = false;
+        setApproval(null);
         const streamed = streamTextRef.current;
         const payloadMessage = payload.message;
         const fromPayload =
@@ -162,44 +182,66 @@ export function useRepl(config: ReplConfig) {
           pushSystem(String(payload.error));
         }
       },
-      onApproval: (request) => setApproval(request),
-      onTool: (event) => handleToolEvent(event, setMessages, setInProgressToolUseIDs, setActiveTools),
+      onApproval: (request) => {
+        if (activeTurnRef.current === request.turnId) setApproval(request);
+      },
+      onTool: (event) => {
+        if (activeTurnRef.current === event.turnId) handleToolEvent(event, setMessages, setInProgressToolUseIDs, setActiveTools);
+      },
       onItem: (method, params) => {
         if (method !== "item/completed") {
           return;
         }
-        const text = parseAssistantCompleted((params ?? {}) as Record<string, unknown>);
+        const record = (params ?? {}) as Record<string, unknown>;
+        if (record.turnId !== activeTurnRef.current) return;
+        const text = parseAssistantCompleted(record);
         if (text) {
           finalAssistantRef.current = text;
         }
       },
     });
+    backend.onExit((code, signal) => connection.close(new Error(`app-server stopped (${code ?? signal ?? "error"})`)));
+    return connection;
   }, [onStreamingText, pushSystem]);
 
   const startTurn = useCallback(
-    async (text: string) => {
-      if (!sessionId) {
-        return;
-      }
+    async (text: string): Promise<boolean> => {
+      if (!sessionId || busyRef.current || connectionState !== "ready") return false;
+      busyRef.current = true;
+      const generation = ++startGeneration.current;
+      setBusy(true);
+      const message = createUserMessage({ content: text });
+      setMessages((prev) => [...prev, message]);
       try {
         await client.startTurn(sessionId, text);
+        return true;
       } catch (error) {
+        setMessages((prev) => prev.filter((item) => item !== message));
         pushSystem(`turn failed: ${(error as Error).message}`);
-        setBusy(false);
+        setQueuePaused(true);
+        if (generation === startGeneration.current) {
+          busyRef.current = false;
+          setBusy(false);
+        }
+        return false;
       }
     },
-    [client, pushSystem, sessionId],
+    [client, connectionState, pushSystem, sessionId],
   );
 
   useEffect(() => {
-    if (busy || queued.length === 0) {
-      return;
-    }
+    if (busyRef.current || busy || queuePaused || connectionState !== "ready" || queued.length === 0) return;
     const [next, ...rest] = queued;
+    const started = startTurn(next);
     setQueued(rest);
-    setMessages((prev) => [...prev, createUserMessage({ content: next })]);
-    void startTurn(next);
-  }, [busy, queued, startTurn]);
+    void started.then((accepted) => {
+      if (!accepted) {
+        setQueued((pending) => [next, ...pending]);
+        setQueuePaused(true);
+        pushSystem("queued message retained; submit a message to resume the queue");
+      }
+    });
+  }, [busy, queued, queuePaused, connectionState, startTurn, pushSystem]);
 
   useEffect(() => {
     let canceled = false;
@@ -278,58 +320,43 @@ export function useRepl(config: ReplConfig) {
   );
 
   const submitText = useCallback(
-    async (text: string) => {
+    async (text: string): Promise<boolean> => {
       const trimmed = text.trim();
-      if (!trimmed) {
-        return;
-      }
-      if (connectionState === "connecting") {
-        pushSystem("still connecting to app-server…");
-        return;
-      }
-      if (!sessionId) {
-        pushSystem("no active session");
-        return;
+      if (!trimmed) return false;
+      if (connectionState !== "ready" || !sessionId) {
+        pushSystem(connectionState === "connecting" ? "still connecting to app-server…" : "app-server is disconnected; restart the CLI to reconnect");
+        return false;
       }
       if (trimmed.startsWith("/")) {
-        await runSlash(trimmed);
-        return;
+        try { return await runSlash(trimmed); }
+        catch (error) { pushSystem((error as Error).message); return false; }
       }
-      if (busy) {
-        if (config.inputRouting === "steer" && activeTurnId) {
-          repinScroll();
-          setMessages((prev) => [...prev, createUserMessage({ content: trimmed })]);
+      if (busyRef.current) {
+        const turnId = activeTurnRef.current;
+        if (config.inputRouting === "steer" && turnId) {
           try {
-            await client.steerTurn(activeTurnId, trimmed);
+            await client.steerTurn(turnId, trimmed);
+            repinScroll();
+            setMessages((prev) => [...prev, createUserMessage({ content: trimmed })]);
+            return true;
           } catch (error) {
             pushSystem(`steer failed: ${(error as Error).message}`);
+            return false;
           }
-          return;
         }
-        if (config.inputRouting === "queue") {
-          setQueued((pending) => [...pending, trimmed]);
-          pushSystem(`queued (${queued.length + 1} waiting)`);
-          return;
-        }
-        return;
+        setQueued((pending) => [...pending, trimmed]);
+        pushSystem("follow-up queued");
+        return true;
+      }
+      if (queued.length > 0) {
+        setQueued((pending) => [...pending, trimmed]);
+        setQueuePaused(false);
+        return true;
       }
       repinScroll();
-      setMessages((prev) => [...prev, createUserMessage({ content: trimmed })]);
-      await startTurn(trimmed);
+      return startTurn(trimmed);
     },
-    [
-      activeTurnId,
-      busy,
-      client,
-      config.inputRouting,
-      connectionState,
-      pushSystem,
-      queued.length,
-      repinScroll,
-      sessionId,
-      startTurn,
-      runSlash,
-    ],
+    [client, config.inputRouting, connectionState, pushSystem, queued.length, repinScroll, sessionId, startTurn, runSlash],
   );
 
   const respondApproval = useCallback(
@@ -340,10 +367,9 @@ export function useRepl(config: ReplConfig) {
       try {
         await client.respondApproval(approval.turnId, sessionId, approval.toolCallId, scope);
         pushSystem(`approval ${scope} for ${approval.toolName}`);
+        setApproval(null);
       } catch (error) {
         pushSystem(`approval failed: ${(error as Error).message}`);
-      } finally {
-        setApproval(null);
       }
     },
     [approval, client, pushSystem, sessionId],
@@ -377,8 +403,10 @@ export function useRepl(config: ReplConfig) {
       return;
     }
     if (key.ctrl && inputKey === "c" && busy && activeTurnId) {
-      void client.cancelTurn(activeTurnId);
-      pushSystem("turn canceled");
+      void client.cancelTurn(activeTurnId).then(
+        () => pushSystem("cancellation requested"),
+        (error) => pushSystem(`cancel failed: ${(error as Error).message}`),
+      );
       event.stopImmediatePropagation();
       return;
     }
@@ -448,13 +476,8 @@ function formatToolEvent(event: ToolEvent, status: ToolEvent["status"]): string 
 }
 
 function pickAssistantText(streamed: string, fromPayload: string, fromItem: string): string {
-  const candidates = [streamed.trimEnd(), fromPayload.trimEnd(), fromItem.trimEnd()].filter(
-    (value) => value.length > 0,
-  );
-  if (candidates.length === 0) {
-    return "";
-  }
-  return candidates.reduce((longest, current) => (current.length > longest.length ? current : longest));
+  // Durable final content is authoritative, even when shorter than the stream.
+  return fromPayload.trimEnd() || fromItem.trimEnd() || streamed.trimEnd();
 }
 
 function itemsToRenderable(items: ServerItem[]): RenderableMessage[] {

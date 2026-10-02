@@ -27,7 +27,7 @@ func (r *Runtime) LatestSessionState(ctx context.Context, sessionID string) (Ses
 	state := SessionState{}
 	for index := len(events) - 1; index >= 0; index-- {
 		event := events[index]
-		if event.Type != transcript.TurnCompleted && event.Type != transcript.TurnFailed && event.Type != transcript.TurnCanceled {
+		if !event.Type.IsTurnTerminal() {
 			continue
 		}
 		state.TurnID = event.TurnID

@@ -12,15 +12,12 @@ import (
 	"github.com/noknov/kepler-agent/packages/workflows"
 )
 
-const (
-	streamAppendInterval = 35 * time.Millisecond
-	streamAppendMinChars = 32
-)
+const streamAppendInterval = 35 * time.Millisecond
 
 // AppendDelta buffers streamed assistant text and periodically delivers it to Slack.
 func (s *slackStream) AppendDelta(delta string) {
 	s.mu.Lock()
-	finalOnly := s.outputPolicy == workflows.OutputFinalOnly
+	finalOnly := s.outputPolicy == workflows.OutputFinalOnly || s.streamClosing || s.streamClosed
 	s.mu.Unlock()
 	if finalOnly {
 		return
@@ -35,55 +32,25 @@ func (s *slackStream) AppendDelta(delta string) {
 	}
 	s.mu.Lock()
 	s.answer.WriteString(delta)
-	text := s.answer.String()
+	s.scheduleStreamUpdateLocked()
 	s.mu.Unlock()
-	s.scheduleStreamUpdate(text)
 }
 
-func (s *slackStream) scheduleStreamUpdate(text string) {
-	s.mu.Lock()
-	if s.streamClosed {
+// At most one scheduled or in-flight delivery exists per stream. Deltas
+// coalesce in answer while Slack is slow; the model callback never does I/O.
+// Caller holds mu.
+func (s *slackStream) scheduleStreamUpdateLocked() {
+	if s.streamClosing || s.streamClosed || s.streamDeliveryFailed || s.streamTimer != nil || strings.TrimSpace(s.answer.String()) == s.lastStreamText {
+		return
+	}
+	delay := max(time.Duration(0), streamAppendInterval-time.Since(s.lastStreamUpdate))
+	s.streamTimer = time.AfterFunc(delay, func() {
+		s.flushDeferredStream()
+		s.mu.Lock()
+		s.streamTimer = nil
+		s.scheduleStreamUpdateLocked()
 		s.mu.Unlock()
-		return
-	}
-	now := time.Now()
-	pending := len(text) - len(s.lastStreamText)
-	if s.messageTS != "" && !s.streamThrottleReady(now, pending) {
-		if s.streamTimer == nil {
-			s.streamTimer = time.AfterFunc(streamAppendInterval, func() {
-				s.mu.Lock()
-				pending := s.answer.String()
-				s.mu.Unlock()
-				s.flushStreamUpdate(pending, false)
-			})
-		}
-		s.mu.Unlock()
-		return
-	}
-	s.mu.Unlock()
-	s.flushStreamUpdate(text, false)
-}
-
-func (s *slackStream) streamThrottleReady(now time.Time, pendingLen int) bool {
-	if s.messageTS == "" {
-		return true
-	}
-	return now.Sub(s.lastStreamUpdate) >= streamAppendInterval || pendingLen >= streamAppendMinChars
-}
-
-func (s *slackStream) flushDeferredStream(force bool) {
-	s.mu.Lock()
-	pending := s.answer.String()
-	s.mu.Unlock()
-	s.flushStreamUpdate(pending, force)
-}
-
-func (s *slackStream) flushStreamUpdate(text string, force bool) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return
-	}
-	s.flushNativeStream(text)
+	})
 }
 
 // ensureNativeStream opens the Slack native stream when the first assistant
@@ -128,25 +95,22 @@ func (s *slackStream) ensureNativeStream(chunks []map[string]any) (bool, error) 
 	return true, nil
 }
 
-func (s *slackStream) flushNativeStream(fullText string) {
+func (s *slackStream) flushDeferredStream() {
 	s.deliveryMu.Lock()
 	defer s.deliveryMu.Unlock()
 
 	s.mu.Lock()
+	if s.streamClosed || s.streamDeliveryFailed {
+		s.mu.Unlock()
+		return
+	}
+	// Snapshot after acquiring the delivery lock; a queued callback must not
+	// replay an older prefix after a later synchronous final flush.
+	fullText := strings.TrimSpace(s.answer.String())
 	streamed := s.lastStreamText
 	s.mu.Unlock()
 	delta := streamSuffix(streamed, fullText)
 	if delta == "" {
-		return
-	}
-	s.mu.Lock()
-	if s.streamTimer != nil {
-		s.streamTimer.Stop()
-		s.streamTimer = nil
-	}
-	deliveryFailed := s.streamDeliveryFailed
-	s.mu.Unlock()
-	if deliveryFailed {
 		return
 	}
 
@@ -243,6 +207,7 @@ func (s *slackStream) stopNativeStream(ctx context.Context) {
 func (s *slackStream) stopStreamTimer() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.streamClosing = true
 	if s.streamTimer != nil {
 		s.streamTimer.Stop()
 		s.streamTimer = nil

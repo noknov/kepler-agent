@@ -1,7 +1,6 @@
 package runs
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/noknov/kepler-agent/packages/infra/postgresjson"
 )
 
 // PGStore replaces the directory-of-JSON implementation in production.
@@ -25,12 +25,10 @@ func (s *PGStore) Save(ctx context.Context, run Run) error {
 	aggregate := run
 	aggregate.Steps = nil
 	aggregate.Feedback = nil
-	b, err := json.Marshal(aggregate)
+	b, err := postgresjson.Marshal(aggregate)
 	if err != nil {
 		return err
 	}
-	// PostgreSQL JSONB rejects NUL; preserve all other historical run content.
-	b = bytes.ReplaceAll(b, []byte(`\u0000`), nil)
 	_, err = s.pool.Exec(ctx, `INSERT INTO agent_runs(id,session_id,started_at,slack_channel,slack_message_ts,payload) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET slack_channel=EXCLUDED.slack_channel,slack_message_ts=EXCLUDED.slack_message_ts,payload=EXCLUDED.payload`, run.ID, run.SessionID, run.StartedAt, run.SlackChannel, run.SlackMessageTS, b)
 	return err
 }
@@ -143,11 +141,10 @@ func (s *PGStore) AddFeedbackForMessage(ctx context.Context, ch, ts string, fb F
 }
 
 func (s *PGStore) AppendStep(ctx context.Context, runID string, step Step) error {
-	b, err := json.Marshal(step)
+	b, err := postgresjson.Marshal(step)
 	if err != nil {
 		return err
 	}
-	b = bytes.ReplaceAll(b, []byte(`\u0000`), nil)
 	_, err = s.pool.Exec(ctx, `INSERT INTO agent_run_steps(run_id,step_id,started_at,payload) VALUES($1,$2,$3,$4) ON CONFLICT(run_id,step_id) DO NOTHING`, runID, step.ID, step.StartedAt, b)
 	return err
 }

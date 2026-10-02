@@ -99,7 +99,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 			}
 		}
 	}
-	if !hasTurnStarted(events, request.TurnID) {
+	if !hasTurnEvent(events, request.TurnID, transcript.TurnStarted) {
 		modelName := request.Model
 		if modelName == "" {
 			modelName = r.config.Model
@@ -116,11 +116,16 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (TurnResult,
 			turnMetadata["parent"] = request.Parent
 		}
 		turnMetadataJSON, _ := json.Marshal(turnMetadata)
-		if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.TurnStarted, Status: "running", Metadata: turnMetadataJSON}); err != nil {
+		if _, err = r.record(ctx, transcript.Event{ID: "start:" + request.TurnID, SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.TurnStarted, Status: "running", Metadata: turnMetadataJSON}); err != nil {
 			return result, err
 		}
+	}
+	// A start marker can survive a failed input write. Recover each fact
+	// independently before allowing the model to run; stable IDs make an
+	// ambiguous commit safe to retry as well.
+	if !hasTurnEvent(events, request.TurnID, transcript.UserInput) {
 		durableInput := durableUserInput(request.Input)
-		if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.UserInput, Message: &durableInput}); err != nil {
+		if _, err = r.record(ctx, transcript.Event{ID: "input:" + request.TurnID, SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.UserInput, Message: &durableInput}); err != nil {
 			return result, err
 		}
 	}
@@ -262,9 +267,9 @@ func completedTurn(events []transcript.Event, turnID string) (TurnResult, error,
 	return result, nil, true
 }
 
-func hasTurnStarted(events []transcript.Event, turnID string) bool {
+func hasTurnEvent(events []transcript.Event, turnID string, kind transcript.EventType) bool {
 	for _, event := range events {
-		if event.TurnID == turnID && event.Type == transcript.TurnStarted {
+		if event.TurnID == turnID && event.Type == kind {
 			return true
 		}
 	}
@@ -461,7 +466,9 @@ func (r *Runtime) generateWithTools(ctx context.Context, turn TurnRequest, messa
 		if attempt.Error != nil {
 			event.Error = attempt.Error.Error()
 		}
-		_, _ = r.record(context.WithoutCancel(ctx), event)
+		attemptCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.config.CleanupTimeout)
+		defer cancel()
+		_, _ = r.record(attemptCtx, event)
 	})
 	var lastErr error
 	for attempt := 0; attempt <= r.config.MaxModelRetries; attempt++ {
@@ -665,10 +672,12 @@ func (r *Runtime) finishTurn(ctx context.Context, result TurnResult, message mod
 		span.RecordError(err)
 		span.SetStatus(codes.Error, string(reason))
 	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.config.CleanupTimeout)
+	defer cancel()
 	result.Message = message
 	result.Termination = reason
 	if result.Steps > 0 {
-		if stepErr := r.recordStepCompleted(context.WithoutCancel(ctx), TurnRequest{SessionID: result.SessionID, TurnID: result.TurnID}, result.Steps, string(reason)); stepErr != nil && err == nil {
+		if stepErr := r.recordStepCompleted(cleanupCtx, TurnRequest{SessionID: result.SessionID, TurnID: result.TurnID}, result.Steps, string(reason)); stepErr != nil && err == nil {
 			err = stepErr
 		}
 	}
@@ -688,7 +697,7 @@ func (r *Runtime) finishTurn(ctx context.Context, result TurnResult, message mod
 	if err != nil {
 		event.Error = err.Error()
 	}
-	_, recordErr := r.record(context.WithoutCancel(ctx), event)
+	_, recordErr := r.record(cleanupCtx, event)
 	if recordErr != nil && err == nil {
 		err = recordErr
 	}

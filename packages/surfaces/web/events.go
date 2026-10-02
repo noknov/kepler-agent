@@ -89,7 +89,7 @@ func (h *EventHub) Publish(_ context.Context, event transcript.Event) {
 		}
 		return
 	}
-	if event.Type == transcript.AssistantMessage || event.Type == transcript.TurnCompleted || event.Type == transcript.TurnFailed || event.Type == transcript.TurnCanceled {
+	if event.Type == transcript.AssistantMessage || event.Type.IsTurnTerminal() {
 		h.mu.Lock()
 		if redactor := h.streams[event.TurnID]; redactor != nil {
 			if tail := redactor.Flush(); tail != "" {

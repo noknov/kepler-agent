@@ -37,6 +37,8 @@ type Config struct {
 	Temperature     *float64
 	MaxOutputTokens int
 	MaxSteps        int
+	// CleanupTimeout bounds terminal persistence after cancellation.
+	CleanupTimeout time.Duration
 	// MaxParallelToolCalls bounds the number of read-only, explicitly
 	// parallel-safe tool calls that may execute in one model step. It is a
 	// bulkhead: model output is untrusted and must not be able to create an
@@ -51,6 +53,12 @@ type Config struct {
 }
 
 func (c Config) withDefaults() Config {
+	if c.CleanupTimeout <= 0 {
+		c.CleanupTimeout = 10 * time.Second
+	}
+	if c.Context.OutputTokens < c.MaxOutputTokens {
+		c.Context.OutputTokens = c.MaxOutputTokens
+	}
 	if c.MaxSteps <= 0 {
 		c.MaxSteps = 256
 	}

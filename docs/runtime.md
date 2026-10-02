@@ -9,7 +9,25 @@ providers, and presentation; they do not implement another loop.
 The canonical transcript is append-only. Hosted sessions persist events in
 `agent_transcript_events`; local sessions persist the same event model as
 JSONL. Context projection, compaction, steering, retries, tool execution, and
-termination all derive from that transcript. `agent_runs` and
+termination all derive from that transcript. Initial user input is recovered
+independently of the turn-start marker, so a failed input write cannot let a
+retried model request run without the user message. Stable event IDs make
+ambiguous commits idempotent. Completed, failed, and canceled turns are terminal
+for durable queue acknowledgement. Terminal persistence runs under a bounded
+cleanup context (10 seconds by default), including after cancellation.
+
+Local JSONL storage maintains up to 64 session indexes of IDs and byte offsets.
+Warm appends parse only external additions. File replacement or truncation
+invalidates the index; a malformed incomplete tail is truncated and a valid
+unterminated JSON line gains a newline. Different sessions do not share an I/O
+mutex. Per-session file locks coordinate writers across processes and honor
+cancellation while waiting; appends retain file sync and atomic batch replacement.
+
+Context projection reserves the configured response cap as well as tool-schema
+and safety overhead. An impossible input budget fails before dispatch instead
+of falling back to the full context window.
+
+`agent_runs` and
 `agent_run_steps` are query-oriented observability projections, not a second
 conversation state store.
 
@@ -40,11 +58,18 @@ messages without tool calls are retried in place up to
 zero retry count means zero retries; product profiles opt into their retry
 budget explicitly. Provider retries, primary/fallback selection, and circuit
 breaking are handled by the profile's resilient model client rather than an
-extra runtime loop.
+extra runtime loop. An open primary circuit skips that provider while still
+allowing a configured healthy fallback; a stream that has committed visible
+output remains non-retryable.
+
 Slack buffers streamed answer text and delivers it through Slack's native
-`chat.startStream` / `chat.appendStream` / `chat.stopStream` APIs. When stream
-delivery fails, the final answer is posted as a normal markdown message with a
-deterministic `client_msg_id`. If the Slack app does not support that AI-only
+`chat.startStream` / `chat.appendStream` / `chat.stopStream` APIs. One scheduled
+or in-flight delivery coalesces new deltas without blocking the model callback;
+completion drains pending text before final delivery. A final answer that revises
+rather than extends the streamed text replaces the existing message. If delivery fails after a
+message ID is known, the final answer repairs that message. An uncertain start
+without a message ID does not post a duplicate. Other failures fall back to a
+normal markdown message with a deterministic `client_msg_id`. If the Slack app does not support that AI-only
 block, it retries as a plain message. It then persists the Slack message link
 on the run. It does not create a streaming placeholder or rewrite Markdown
 with regular expressions.
@@ -94,7 +119,10 @@ discarding an already accepted turn.
 
 `agent-explore` is a hosted read-only tool, not a second product runtime. It
 creates isolated child turns from a filtered catalog, records a parent link and
-its own transcript, and returns a factual report to the parent. Child stream
+its own transcript, and returns a factual report to the parent. Each fresh child
+has one invocation owner and inherits the parent's cancellation context. It does
+not acquire another distributed session lease, avoiding starvation when all
+lease connections belong to parents awaiting children. Child stream
 events are not sent to the parent Slack presentation sink. Read-only and
 network tools default to `Parallel` so a step with multiple independent calls
 runs concurrently; mutating tools stay sequential unless marked otherwise.

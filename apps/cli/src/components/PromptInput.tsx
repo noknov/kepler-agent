@@ -36,7 +36,7 @@ export function PromptInput({
 }: Props) {
   const innerWidth = Math.max(columns - 2, 20);
   const border = "─".repeat(innerWidth);
-  const disabled = connecting || (busy && !value);
+  const disabled = connecting;
 
   return (
     <Box flexDirection="column" width="100%" height={PROMPT_LINES} flexShrink={0}>
@@ -57,7 +57,7 @@ export function PromptInput({
               columns={Math.max(columns - stringWidth(PROMPT_PREFIX) - 2, 16)}
               cursorOffset={cursorOffset}
               onChangeCursorOffset={onChangeCursorOffset}
-              placeholder={placeholder}
+              placeholder={busy ? "Add a follow-up…" : placeholder}
               disableCursorMovementForUpDownKeys
             />
           )}

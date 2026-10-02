@@ -332,6 +332,11 @@ func (r Runner) RunTask(ctx context.Context, request TaskRequest) (TaskResult, e
 		return TaskResult{}, fmt.Errorf("no read-only exploration tools are available")
 	}
 	deps := r.Deps
+	// This invocation is the sole owner of a fresh, unresumable child
+	// session. Its lifetime is already bounded by the parent's leased
+	// context. Taking another distributed lease can deadlock a saturated
+	// parent pool while every parent waits for its child.
+	deps.Lease = nil
 	if deps.IDs == nil {
 		deps.IDs = agentruntime.RandomIDs{}
 	}

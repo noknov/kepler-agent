@@ -25,6 +25,7 @@ pnpm --dir apps/cli install --frozen-lockfile
 | Go implementation | `make fmt-check boundaries vet` and relevant `go test` packages | Formatting, layering, static analysis, tested behavior |
 | Broad source change | `make check` | Root Makefile checks, including generated protocol drift and evaluator dry-run |
 | CLI protocol/client | `pnpm --dir apps/cli typecheck` | Protocol-focused TypeScript scope only |
+| CLI/Web interaction | `make test-ui` | Submission, disconnect, draft retention, queue ordering, and conversation request races; deterministic UI boundary mocks |
 | CLI bundle | `pnpm --dir apps/cli build` | Bundling succeeds; not a complete interaction test |
 | Full CLI/vendor types | `pnpm --dir apps/cli typecheck:vendor` | Broader TypeScript diagnostics; inspect separately from the narrower gate |
 | Concurrency | `make test-race`, plus affected packages outside its list | Races exercised by those tests |

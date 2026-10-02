@@ -1,4 +1,4 @@
-import { createInterface } from "node:readline";
+import { createInterface, type Interface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import type { NotificationMethod, NotificationParams, ProtocolMethod, ProtocolParams, ProtocolResults } from "../generated/appServerProtocol.js";
 import { summarizeToolArgs } from "../lib/toolDisplay.js";
@@ -53,6 +53,7 @@ export type ServerItem = {
 };
 
 export type AppServerEvents = {
+  onDisconnect?: (error: Error) => void;
   onDelta: (turnId: string, text: string) => void;
   onTurnStarted: (turnId: string, sessionId: string) => void;
   onTurnCompleted: (turnId: string, payload: Record<string, unknown>) => void;
@@ -73,6 +74,8 @@ export class AppServerRPCError extends Error {
 
 export class AppServerClient {
   private nextId = 1;
+  private closed: Error | null = null;
+  private readonly reader: Interface;
   private pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
 
   constructor(
@@ -80,8 +83,28 @@ export class AppServerClient {
     stdout: Readable,
     private readonly events: AppServerEvents,
   ) {
-    const reader = createInterface({ input: stdout });
-    reader.on("line", (line: string) => this.handleLine(line));
+    this.reader = createInterface({ input: stdout });
+    this.reader.on("line", (line: string) => this.handleLine(line));
+    this.reader.on("close", () => this.close(new Error("app-server disconnected")));
+    stdout.on("error", (error) => this.close(error));
+    stdin.on("error", (error) => this.close(error));
+    stdin.on("close", () => this.close(new Error("app-server input closed")));
+  }
+
+  close(error = new Error("app-server client closed")): void {
+    if (this.closed) return;
+    this.closed = error;
+    for (const waiter of this.pending.values()) waiter.reject(error);
+    this.pending.clear();
+    this.reader.close();
+    this.events.onDisconnect?.(error);
+  }
+
+  private write(payload: unknown): void {
+    if (this.closed) throw this.closed;
+    this.stdin.write(`${JSON.stringify(payload)}\n`, (error) => {
+      if (error) this.close(error);
+    });
   }
 
   async initialize(timeoutMs = 10_000): Promise<void> {
@@ -89,7 +112,7 @@ export class AppServerClient {
     if (result.protocol !== "v2" || result.minimumProtocolVersion !== 2 || result.maximumProtocolVersion !== 2) {
       throw new Error(`unsupported app-server protocol: ${result.protocol ?? "unknown"}`);
     }
-    this.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "initialized" })}\n`);
+    this.write({ jsonrpc: "2.0", method: "initialized" });
   }
 
   async startThread(sessionId?: string): Promise<string> {
@@ -128,6 +151,7 @@ export class AppServerClient {
   }
 
   private request<M extends ProtocolMethod>(method: M, params: ProtocolParams[M], timeoutMs = 30_000): Promise<ProtocolResults[M]> {
+    if (this.closed) return Promise.reject(this.closed);
     const id = this.nextId++;
     const payload: JsonRpcRequest = { jsonrpc: "2.0", id, method, params };
     return new Promise<ProtocolResults[M]>((resolve, reject) => {
@@ -148,7 +172,7 @@ export class AppServerClient {
           reject(error);
         },
       });
-      this.stdin.write(`${JSON.stringify(payload)}\n`);
+      try { this.write(payload); } catch (error) { this.close(error as Error); }
     });
   }
 

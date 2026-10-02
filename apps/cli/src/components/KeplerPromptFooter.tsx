@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { Box } from "../cc/kepler-ink.js";
 import { useTerminalSize } from "../cc/hooks/useTerminalSize.js";
 import type { ApprovalRequest } from "../client/appServer.js";
@@ -11,7 +11,7 @@ type Props = {
   busy: boolean;
   connecting: boolean;
   approval: ApprovalRequest | null;
-  onSubmitText: (text: string) => void | Promise<void>;
+  onSubmitText: (text: string) => Promise<boolean>;
   /** CC REPL: empty→non-empty input re-pins scroll when user isn't reading history. */
   onPromptInput?: (wasEmpty: boolean, next: string) => void;
   onExit: () => void;
@@ -31,6 +31,8 @@ export function KeplerPromptFooter({
 }: Props) {
   const { columns } = useTerminalSize();
   const [input, setInput] = useState("");
+  const inputRef = useRef("");
+  const submitting = useRef(false);
   const [cursorOffset, setCursorOffset] = useState(0);
 
   const slashMatches = useMemo(() => filterSlashCommands(input), [input]);
@@ -48,17 +50,22 @@ export function KeplerPromptFooter({
         value={input}
         onChange={(value) => {
           const wasEmpty = input.trim() === "";
+          inputRef.current = value;
           setInput(value);
           onPromptInput?.(wasEmpty, value);
         }}
         onSubmit={() => {
           const text = input.trim();
-          if (!text) {
-            return;
-          }
-          void onSubmitText(text);
-          setInput("");
-          setCursorOffset(0);
+          if (!text || submitting.current) return;
+          const submitted = inputRef.current;
+          submitting.current = true;
+          void onSubmitText(text).then((accepted) => {
+            if (accepted && inputRef.current === submitted) {
+              inputRef.current = "";
+              setInput("");
+              setCursorOffset(0);
+            }
+          }).finally(() => { submitting.current = false; });
         }}
         onExit={onExit}
         cursorOffset={cursorOffset}

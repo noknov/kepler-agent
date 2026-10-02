@@ -7,11 +7,12 @@ import (
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
+	"github.com/noknov/kepler-agent/packages/infra/postgresjson"
 )
 
 func TestMarshalPostgresJSONPreservesLiteralEscapeAndReplacesNUL(t *testing.T) {
 	message := model.TextMessage(model.RoleUser, "actual\x00nul and literal \\u0000")
-	payload, err := marshalPostgresJSON(transcript.Event{ID: "e", Message: &message})
+	payload, err := postgresjson.Marshal(transcript.Event{ID: "e", Message: &message})
 	if err != nil {
 		t.Fatal(err)
 	}

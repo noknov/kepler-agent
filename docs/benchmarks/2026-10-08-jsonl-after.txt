@@ -1,0 +1,15 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/noknov/kepler-agent/packages/profiles/local
+cpu: Apple M3 Pro
+BenchmarkJSONLAppend/100-12         	      20	   4443783 ns/op	    3391 B/op	      19 allocs/op
+BenchmarkJSONLAppend/100-12         	      20	   4841254 ns/op	    3391 B/op	      19 allocs/op
+BenchmarkJSONLAppend/100-12         	      20	   5159671 ns/op	    3391 B/op	      19 allocs/op
+BenchmarkJSONLAppend/1000-12        	      20	   4256988 ns/op	    3592 B/op	      19 allocs/op
+BenchmarkJSONLAppend/1000-12        	      20	   4334619 ns/op	    3592 B/op	      19 allocs/op
+BenchmarkJSONLAppend/1000-12        	      20	   4068877 ns/op	    3761 B/op	      20 allocs/op
+BenchmarkJSONLAppend/10000-12       	      20	   4373933 ns/op	    3592 B/op	      19 allocs/op
+BenchmarkJSONLAppend/10000-12       	      20	   4278077 ns/op	    3592 B/op	      19 allocs/op
+BenchmarkJSONLAppend/10000-12       	      20	   4473046 ns/op	    3592 B/op	      19 allocs/op
+PASS
+ok  	github.com/noknov/kepler-agent/packages/profiles/local	2.525s

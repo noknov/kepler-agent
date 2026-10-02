@@ -305,7 +305,7 @@ func (s *ConversationService) turnTerminal(ctx context.Context, conversationID, 
 		return false
 	}
 	for index := len(events) - 1; index >= 0; index-- {
-		if events[index].TurnID == turnID && (events[index].Type == transcript.TurnCompleted || events[index].Type == transcript.TurnFailed) {
+		if events[index].TurnID == turnID && events[index].Type.IsTurnTerminal() {
 			return true
 		}
 	}

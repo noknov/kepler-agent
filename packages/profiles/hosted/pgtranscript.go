@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
+	"github.com/noknov/kepler-agent/packages/infra/postgresjson"
 )
 
 // PGTranscript stores canonical events as the durable conversation source of
@@ -32,7 +32,7 @@ func (s PGTranscript) Append(ctx context.Context, event transcript.Event) (trans
 	if err = tx.QueryRow(ctx, `SELECT COALESCE(MAX(sequence), 0) + 1 FROM agent_transcript_events WHERE session_id=$1`, key).Scan(&event.Sequence); err != nil {
 		return transcript.Event{}, err
 	}
-	payload, err := marshalPostgresJSON(event)
+	payload, err := postgresjson.Marshal(event)
 	if err != nil {
 		return transcript.Event{}, err
 	}
@@ -86,7 +86,7 @@ func (s PGTranscript) AppendBatch(ctx context.Context, events []transcript.Event
 	result := make([]transcript.Event, len(events))
 	for index, event := range events {
 		event.Sequence = next + uint64(index)
-		payload, marshalErr := marshalPostgresJSON(event)
+		payload, marshalErr := postgresjson.Marshal(event)
 		if marshalErr != nil {
 			return nil, marshalErr
 		}
@@ -99,34 +99,6 @@ func (s PGTranscript) AppendBatch(ctx context.Context, events []transcript.Event
 		return nil, err
 	}
 	return result, nil
-}
-
-func marshalPostgresJSON(value any) ([]byte, error) {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
-	var tree any
-	if err := json.Unmarshal(encoded, &tree); err != nil {
-		return nil, err
-	}
-	return json.Marshal(replaceNULStrings(tree))
-}
-
-func replaceNULStrings(value any) any {
-	switch typed := value.(type) {
-	case string:
-		return strings.ReplaceAll(typed, "\x00", "\uFFFD")
-	case []any:
-		for index := range typed {
-			typed[index] = replaceNULStrings(typed[index])
-		}
-	case map[string]any:
-		for key, child := range typed {
-			typed[key] = replaceNULStrings(child)
-		}
-	}
-	return value
 }
 
 func (s PGTranscript) Load(ctx context.Context, sessionID string, after uint64) ([]transcript.Event, error) {

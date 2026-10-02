@@ -209,11 +209,35 @@ function findUnusedConversation() {
   return null;
 }
 
+// A snapshot belongs to one selection and one request. Aborting saves work;
+// the identity checks also protect against transports that finish after abort.
+let messagesRequest = null;
+let selectionRevision = 0;
+let liveRevision = 0;
+
+async function loadMessageSnapshot(id) {
+  messagesRequest?.abort();
+  const request = new AbortController();
+  messagesRequest = request;
+  const selection = selectionRevision;
+  const live = liveRevision;
+  try {
+    const payload = await api(`/api/conversations/${encodeURIComponent(id)}/messages`, { signal: request.signal });
+    if (request !== messagesRequest || selection !== selectionRevision || live !== liveRevision || state.current?.id !== id) return null;
+    return normalizeEvents(payload.events || []);
+  } catch (error) {
+    if (request.signal.aborted || selection !== selectionRevision) return null;
+    throw error;
+  }
+}
+
 async function selectConversation(id) {
   if (state.current?.id === id && state.currentLoaded) {
     closeSidebar();
     return;
   }
+  selectionRevision++;
+  messagesRequest?.abort();
   closeStream();
   clearTimeline();
   state.current = state.conversations.find((item) => item.id === id) || null;
@@ -221,16 +245,25 @@ async function selectConversation(id) {
   state.events = [];
   state.maxSequence = 0;
   state.running = false;
+  state.pendingThinking = false;
+  state.retryRequest = null;
+  state.streamGraceUntil = 0;
   renderConversations();
-  const payload = await api(`/api/conversations/${encodeURIComponent(id)}/messages`);
-  state.events = normalizeEvents(payload.events || []);
-  for (const event of state.events) {
-    state.maxSequence = Math.max(state.maxSequence, event.sequence || 0);
+  updateComposer();
+  try {
+    const events = await loadMessageSnapshot(id);
+    if (!events) return;
+    state.events = events;
+    for (const event of events) state.maxSequence = Math.max(state.maxSequence, event.sequence || 0);
+    state.running = deriveRunningFromEvents(events);
+    state.currentLoaded = true;
+    renderTimeline(true);
+    updateComposer();
+    openStream();
+    closeSidebar();
+  } catch (error) {
+    toast(error.message);
   }
-  state.currentLoaded = true;
-  renderTimeline(true);
-  openStream();
-  closeSidebar();
 }
 
 function showEmpty() {
@@ -265,8 +298,8 @@ async function syncConversationMessages() {
   if (!state.current || !state.currentLoaded) return;
   const id = state.current.id;
   try {
-    const payload = await api(`/api/conversations/${encodeURIComponent(id)}/messages`);
-    const events = normalizeEvents(payload.events || []);
+    const events = await loadMessageSnapshot(id);
+    if (!events) return;
     let maxSequence = 0;
     for (const event of events) {
       maxSequence = Math.max(maxSequence, event.sequence || 0);
@@ -336,6 +369,7 @@ function closeStream() {
 }
 
 function receiveEvent(event) {
+  liveRevision++;
   if (event.id && state.events.some((item) => item.id === event.id)) return;
   state.maxSequence = Math.max(state.maxSequence, event.sequence || 0);
 
@@ -658,6 +692,7 @@ function renderApproval(event) {
 }
 
 async function resolveApproval(event, approved) {
+  const selection = selectionRevision;
   try {
     state.running = true;
     updateComposer();
@@ -671,6 +706,7 @@ async function resolveApproval(event, approved) {
       }),
     });
   } catch (error) {
+    if (selection !== selectionRevision) return;
     state.running = false;
     updateComposer();
     toast(error.message);
@@ -683,8 +719,10 @@ async function sendMessage(text) {
 	const input = $("#message-input");
 	const requestId = state.retryRequest?.text === text ? state.retryRequest.id : requestID();
 	state.retryRequest = { text, id: requestId };
+  let selection = selectionRevision;
   try {
     if (!state.current) await createConversation();
+    selection = selectionRevision;
     input.value = "";
     resizeInput();
     state.events.push({
@@ -704,6 +742,7 @@ async function sendMessage(text) {
       method: "POST",
 		body: JSON.stringify({ requestId, message: text }),
 	});
+	if (selection !== selectionRevision) return;
 	state.retryRequest = null;
     ensureStream();
     scheduleStuckRecovery();
@@ -711,6 +750,7 @@ async function sendMessage(text) {
     if (conversation) conversation.hasMessages = true;
     window.setTimeout(() => loadConversations(false), 500);
 	} catch (error) {
+    if (selection !== selectionRevision) return;
     state.events = state.events.filter((item) => !item.optimistic);
     state.running = false;
 		state.pendingThinking = false;
@@ -770,6 +810,8 @@ async function archiveConversation(conversation) {
       body: JSON.stringify({ archived: true }),
     });
     if (state.current?.id === target.id) {
+      selectionRevision++;
+      messagesRequest?.abort();
       closeStream();
       clearTimeline();
       state.current = null;

@@ -66,7 +66,9 @@ jobs:
         run: make build
       - name: Validate CLI protocol boundary and bundle
         working-directory: apps/cli
-        run: pnpm install --frozen-lockfile && pnpm typecheck
+        run: pnpm install --frozen-lockfile && pnpm typecheck && pnpm test
+      - name: Web interaction regressions
+        run: node --test packages/surfaces/web/tests/*.test.mjs
       - name: Verify generated protocol artifacts
         run: make protocol-check
       - name: Validate evaluation tooling

@@ -2,8 +2,6 @@
 package local
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,14 +15,15 @@ import (
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
-	"golang.org/x/sys/unix"
 )
 
 var safeID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
 type JSONLStore struct {
-	Root string
-	mu   sync.Mutex
+	Root    string
+	mu      sync.Mutex // protects only the bounded index cache, never file I/O
+	indexes map[string]cachedIndex
+	access  uint64
 }
 
 type SessionInfo struct {
@@ -66,107 +65,82 @@ func NewJSONLStore(root string) (*JSONLStore, error) {
 	return &JSONLStore{Root: abs}, nil
 }
 
-func (s *JSONLStore) Append(_ context.Context, event transcript.Event) (transcript.Event, error) {
-	if !safeID.MatchString(event.SessionID) {
-		return transcript.Event{}, fmt.Errorf("invalid session id")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	directory := filepath.Join(s.Root, event.SessionID)
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return transcript.Event{}, err
-	}
-	unlock, err := lockSessionFile(directory)
+func (s *JSONLStore) Append(ctx context.Context, event transcript.Event) (transcript.Event, error) {
+	file, index, closeSession, err := s.openSession(ctx, event.SessionID)
 	if err != nil {
 		return transcript.Event{}, err
 	}
-	defer unlock()
-	events, err := loadAndRepair(filepath.Join(directory, "events.jsonl"), 0)
-	if err != nil {
-		return transcript.Event{}, err
-	}
-	if event.ID != "" {
-		for _, existing := range events {
-			if existing.ID == event.ID {
-				return existing, nil
-			}
+	defer closeSession()
+	if location, ok := index.byID[event.ID]; event.ID != "" && ok {
+		stored, err := readEvent(file, index.entries[location])
+		if err == nil {
+			err = file.Sync()
 		}
+		return stored, err
 	}
-	if len(events) > 0 {
-		event.Sequence = events[len(events)-1].Sequence + 1
-	} else {
-		event.Sequence = 1
-	}
+	event.Sequence = index.sequence + 1
 	data, err := json.Marshal(event)
 	if err != nil {
 		return transcript.Event{}, err
 	}
-	file, err := os.OpenFile(filepath.Join(directory, "events.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	data = append(data, '\n')
+	if err := ctx.Err(); err != nil {
+		return transcript.Event{}, err
+	}
+	if _, err = file.WriteAt(data, index.offset); err != nil {
+		return transcript.Event{}, err
+	}
+	if err = file.Sync(); err != nil {
+		return transcript.Event{}, err
+	}
+	info, err := file.Stat()
 	if err != nil {
 		return transcript.Event{}, err
 	}
-	if _, err = file.Write(append(data, '\n')); err == nil {
-		err = file.Sync()
-	}
-	closeErr := file.Close()
-	if err == nil {
-		err = closeErr
-	}
-	return event, err
+	index.add(event.ID, event.Sequence, index.offset, len(data))
+	index.info = info
+	return event, nil
 }
 
-func (s *JSONLStore) AppendBatch(_ context.Context, batch []transcript.Event) ([]transcript.Event, error) {
+func (s *JSONLStore) AppendBatch(ctx context.Context, batch []transcript.Event) ([]transcript.Event, error) {
 	if len(batch) == 0 {
 		return nil, nil
 	}
 	sessionID := batch[0].SessionID
-	if !safeID.MatchString(sessionID) {
-		return nil, fmt.Errorf("invalid session id")
-	}
 	for _, event := range batch {
 		if event.SessionID != sessionID {
 			return nil, fmt.Errorf("batch events must share one session id")
 		}
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	directory := filepath.Join(s.Root, sessionID)
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return nil, err
-	}
-	unlock, err := lockSessionFile(directory)
+	file, index, closeSession, err := s.openSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
-	path := filepath.Join(directory, "events.jsonl")
-	existing, err := loadAndRepair(path, 0)
-	if err != nil {
-		return nil, err
-	}
+	defer closeSession()
 	result := make([]transcript.Event, len(batch))
-	for index, event := range batch {
-		event.Sequence = uint64(len(existing) + index + 1)
-		result[index] = event
+	for i, event := range batch {
+		event.Sequence = index.sequence + uint64(i) + 1
+		result[i] = event
 	}
-	all := append(existing, result...)
+	// Fork/initialization batches remain atomic. Copy the validated bytes;
+	// decoding and re-encoding all prior messages only amplifies the write.
+	directory := filepath.Dir(file.Name())
 	temporary, err := os.CreateTemp(directory, ".events-*.jsonl")
 	if err != nil {
 		return nil, err
 	}
-	temporaryPath := temporary.Name()
-	committed := false
-	defer func() {
-		_ = temporary.Close()
-		if !committed {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if err := temporary.Chmod(0o600); err != nil {
+	defer func() { _ = temporary.Close(); _ = os.Remove(temporary.Name()) }()
+	if _, err = file.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	if _, err = io.CopyN(temporary, file, index.offset); err != nil {
 		return nil, err
 	}
 	encoder := json.NewEncoder(temporary)
-	for _, event := range all {
+	for _, event := range result {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if err := encoder.Encode(event); err != nil {
 			return nil, err
 		}
@@ -177,87 +151,73 @@ func (s *JSONLStore) AppendBatch(_ context.Context, batch []transcript.Event) ([
 	if err := temporary.Close(); err != nil {
 		return nil, err
 	}
-	if err := os.Rename(temporaryPath, path); err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	committed = true
+	if err := os.Rename(temporary.Name(), file.Name()); err != nil {
+		return nil, err
+	}
+	// Make the rename durable, not just the new file's contents.
+	dir, err := os.Open(directory)
+	if err != nil {
+		return nil, err
+	}
+	defer dir.Close()
+	if err := dir.Sync(); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
-func (s *JSONLStore) Load(_ context.Context, sessionID string, afterSequence uint64) ([]transcript.Event, error) {
-	if !safeID.MatchString(sessionID) {
-		return nil, fmt.Errorf("invalid session id")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	directory := filepath.Join(s.Root, sessionID)
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return nil, err
-	}
-	unlock, err := lockSessionFile(directory)
+func (s *JSONLStore) Load(ctx context.Context, sessionID string, afterSequence uint64) ([]transcript.Event, error) {
+	file, index, closeSession, err := s.openSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
-	return loadAndRepair(filepath.Join(directory, "events.jsonl"), afterSequence)
-}
-
-func loadAndRepair(path string, afterSequence uint64) ([]transcript.Event, error) {
-	file, err := os.OpenFile(path, os.O_RDWR, 0o600)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	reader := bufio.NewReaderSize(file, 64<<10)
+	defer closeSession()
+	start := sort.Search(len(index.entries), func(i int) bool { return index.entries[i].sequence > afterSequence })
 	var events []transcript.Event
-	var offset, validEnd int64
-	for {
-		line, readErr := reader.ReadBytes('\n')
-		offset += int64(len(line))
-		complete := len(line) > 0 && line[len(line)-1] == '\n'
-		trimmed := bytes.TrimSpace(line)
-		if len(trimmed) > 0 {
-			var event transcript.Event
-			if unmarshalErr := json.Unmarshal(trimmed, &event); unmarshalErr != nil {
-				if errors.Is(readErr, io.EOF) && !complete {
-					if truncateErr := file.Truncate(validEnd); truncateErr != nil {
-						return nil, truncateErr
-					}
-					break
-				}
-				return nil, fmt.Errorf("decode transcript: %w", unmarshalErr)
-			}
-			validEnd = offset
-			if event.Sequence > afterSequence {
-				events = append(events, event)
-			}
-		} else if complete {
-			validEnd = offset
+	for _, location := range index.entries[start:] {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		if errors.Is(readErr, io.EOF) {
-			break
+		event, err := readEvent(file, location)
+		if err != nil {
+			return nil, err
 		}
-		if readErr != nil {
-			return nil, readErr
-		}
+		events = append(events, event)
 	}
 	return events, nil
 }
 
-func lockSessionFile(directory string) (func(), error) {
-	file, err := os.OpenFile(filepath.Join(directory, ".events.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+// openSession holds the cross-process lock until the caller has committed or
+// read its snapshot. Independent sessions never share an I/O mutex.
+func (s *JSONLStore) openSession(ctx context.Context, sessionID string) (*os.File, *sessionIndex, func(), error) {
+	if !safeID.MatchString(sessionID) {
+		return nil, nil, nil, fmt.Errorf("invalid session id")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, nil, err
+	}
+	directory := filepath.Join(s.Root, sessionID)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return nil, nil, nil, err
+	}
+	unlock, err := lockSessionFile(ctx, directory)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
-	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX); err != nil {
-		_ = file.Close()
-		return nil, err
+	file, err := os.OpenFile(filepath.Join(directory, "events.jsonl"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		unlock()
+		return nil, nil, nil, err
 	}
-	return func() {
-		_ = unix.Flock(int(file.Fd()), unix.LOCK_UN)
-		_ = file.Close()
-	}, nil
+	index := s.sessionIndex(sessionID)
+	index.mu.Lock()
+	closeSession := func() { index.mu.Unlock(); _ = file.Close(); unlock() }
+	if err := index.refresh(ctx, file); err != nil {
+		closeSession()
+		return nil, nil, nil, err
+	}
+	return file, index, closeSession, nil
 }

@@ -502,14 +502,12 @@ func (s *Server) steer(turnID, text string) bool {
 func (s *Server) cancel(turnID string) bool {
 	s.activeMu.Lock()
 	active := s.active[turnID]
-	s.activeMu.Unlock()
-	if active == nil {
-		return false
-	}
-	if active.phase != turnRunning {
+	if active == nil || active.phase != turnRunning {
+		s.activeMu.Unlock()
 		return false
 	}
 	active.phase = turnInterruptRequested
+	s.activeMu.Unlock()
 	active.cancel()
 	return true
 }

@@ -827,6 +827,7 @@ type slackStream struct {
 	streamDeliveryFailed bool
 	streamStartUncertain bool
 	streamClosed         bool
+	streamClosing        bool
 	lastStreamText       string
 	lastStreamUpdate     time.Time
 	streamTimer          *time.Timer
@@ -858,7 +859,7 @@ func (s *slackStream) Complete(final string) (string, error) {
 	if s.redactor != nil {
 		s.appendSanitizedDelta(s.redactor.Flush())
 	}
-	s.flushDeferredStream(true)
+	s.flushDeferredStream()
 	s.mu.Lock()
 	s.streamClosed = true
 	messageTS := s.messageTS
@@ -882,7 +883,11 @@ func (s *slackStream) Complete(final string) (string, error) {
 	}
 	if nativeStream && messageTS != "" {
 		trimmedFinal := strings.TrimSpace(final)
-		if suffix := streamSuffix(streamed, trimmedFinal); suffix != "" && trimmedFinal != s.streamedText() {
+		if !strings.HasPrefix(trimmedFinal, streamed) {
+			// The durable final answer supersedes intermediate commentary or
+			// a revised response. Appending it would duplicate that content.
+			deliveryFailed = true
+		} else if suffix := streamSuffix(streamed, trimmedFinal); suffix != "" && trimmedFinal != s.streamedText() {
 			if err := s.appendNativeChunks(suffix); err != nil {
 				deliveryFailed = true
 			}
@@ -915,7 +920,7 @@ func (s *slackStream) appendSanitizedDelta(delta string) {
 func (s *slackStream) Fail(message string, canceled bool) (string, error) {
 	s.stopStreamTimer()
 	s.stopPlanTimer()
-	s.flushDeferredStream(true)
+	s.flushDeferredStream()
 	s.mu.Lock()
 	s.streamClosed = true
 	messageTS := s.messageTS
