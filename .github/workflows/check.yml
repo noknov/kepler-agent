@@ -61,14 +61,14 @@ jobs:
           POSTGRES_TEST_DSN: postgres://kepler:kepler@127.0.0.1:5432/kepler_test?sslmode=disable
           REDIS_TEST_URL: redis://127.0.0.1:6379/15
           SANDBOX_INTEGRATION: "1"
-        run: go test ./packages/profiles/hosted ./packages/profiles/local ./packages/surfaces/slack/agent
+        run: go test ./packages/profiles/hosted ./packages/profiles/local ./packages/surfaces/slack/agent ./observability
       - name: Build deployable binaries
         run: make build
       - name: Validate CLI protocol boundary and bundle
         working-directory: apps/cli
         run: pnpm install --frozen-lockfile && pnpm typecheck && pnpm test
       - name: Web interaction regressions
-        run: node --test packages/surfaces/web/tests/*.test.mjs
+        run: node --test packages/surfaces/web/tests/*.test.mjs observability/tests/*.test.mjs
       - name: Verify generated protocol artifacts
         run: make protocol-check
       - name: Validate evaluation tooling

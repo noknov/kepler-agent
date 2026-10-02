@@ -180,6 +180,12 @@ func (s *Service) ListenAndServe(ctx context.Context) error {
 }
 
 func (s *Service) serveWeb(w http.ResponseWriter, r *http.Request) {
+	// Process diagnostics are read directly by local monitoring, never through
+	// the public Web proxy. The snapshot may contain recent upstream errors.
+	if r.URL.Path == "/metrics" {
+		http.NotFound(w, r)
+		return
+	}
 	if s.webProxy == nil {
 		http.NotFound(w, r)
 		return
@@ -210,13 +216,23 @@ func (s *Service) cancelWebRequests() {
 	}
 }
 
-func (s *Service) handleReady(w http.ResponseWriter, _ *http.Request) {
+func (s *Service) handleReady(w http.ResponseWriter, r *http.Request) {
 	if s.draining.Load() {
 		http.Error(w, "draining", http.StatusServiceUnavailable)
 		return
 	}
-	if s.stores == nil || s.stores.Events == nil || s.stores.Redis == nil {
+	if s.stores == nil || s.stores.PGPool == nil || s.stores.Redis == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := s.stores.PGPool.Ping(ctx); err != nil {
+		http.Error(w, "postgres unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.stores.Redis.Ping(ctx); err != nil {
+		http.Error(w, "redis unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	w.WriteHeader(http.StatusOK)

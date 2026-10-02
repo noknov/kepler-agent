@@ -30,6 +30,7 @@ test-race:
 test-ui:
 	cd apps/cli && pnpm test
 	node --test packages/surfaces/web/tests/*.test.mjs
+	node --test observability/tests/*.test.mjs
 
 build:
 	GOCACHE=$(GOCACHE) go build -trimpath -o /dev/null ./gateway/cmd/gateway

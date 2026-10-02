@@ -20,17 +20,17 @@ import (
 	"github.com/noknov/kepler-agent/packages/infra/telemetry"
 	"github.com/noknov/kepler-agent/packages/observability"
 	"github.com/noknov/kepler-agent/packages/platform"
-	"github.com/noknov/kepler-agent/packages/safety"
-	hostedTools "github.com/noknov/kepler-agent/packages/tools/hosted"
 )
 
 type Service struct {
-	cfg      config.Config
-	stores   *platform.Stores
-	metrics  *observability.Recorder
-	health   *health.Service
-	draining bool
-	mu       sync.RWMutex
+	cfg        config.Config
+	stores     *platform.Stores
+	metrics    *observability.Recorder
+	health     *health.Service
+	draining   bool
+	mu         sync.RWMutex
+	overview   func(context.Context, time.Time, time.Time) (Overview, error)
+	httpClient *http.Client
 }
 
 func Run(ctx context.Context) error {
@@ -53,7 +53,6 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	defer service.Close()
-	service.Start(ctx)
 	return service.ListenAndServe(ctx)
 }
 
@@ -63,25 +62,18 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		return nil, err
 	}
 	recorder := observability.NewRecorder()
-	catalogBundle, err := hostedTools.NewCatalog(cfg, safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}, safety.NewCommandPolicy(), nil, hostedTools.SurfaceOptions{})
-	if err != nil {
-		stores.Close()
-		return nil, fmt.Errorf("build health tool catalog: %w", err)
-	}
-	healthService := health.NewService(catalogBundle.Catalog, cfg.Security.WorkspaceRoots)
+	healthService := health.NewService(nil, nil)
 	healthService.Redis = stores.Redis
 	return &Service{
 		cfg:     cfg,
 		stores:  stores,
 		metrics: recorder,
 		health:  healthService,
+		overview: func(ctx context.Context, start, end time.Time) (Overview, error) {
+			return readOverview(ctx, stores.PGPool, start, end)
+		},
+		httpClient: &http.Client{Timeout: 3 * time.Second},
 	}, nil
-}
-
-func (s *Service) Start(ctx context.Context) {
-	if s.health != nil {
-		go s.health.Start(ctx)
-	}
 }
 
 func (s *Service) Close() {
@@ -97,6 +89,17 @@ func (s *Service) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/readyz", s.handleReady)
 	mux.HandleFunc("/drain", s.handleDrain)
 	mux.HandleFunc("/metrics", s.handleMetrics)
+	mux.HandleFunc("/overview", s.handleOverview)
+	mux.HandleFunc("/dashboard.mjs", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		_, _ = w.Write([]byte(dashboardJS))
+	})
+	mux.HandleFunc("/", s.handleDashboard)
 	mux.HandleFunc("/health/dashboard", s.handleHealthDashboard)
 	mux.HandleFunc("/health/tools", s.handleToolHealth)
 	mux.HandleFunc("/runs", s.handleRuns)
@@ -128,13 +131,23 @@ func (s *Service) ListenAndServe(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) handleReady(w http.ResponseWriter, _ *http.Request) {
+func (s *Service) handleReady(w http.ResponseWriter, r *http.Request) {
 	if s.isDraining() {
 		http.Error(w, "draining", http.StatusServiceUnavailable)
 		return
 	}
-	if s.stores == nil || s.stores.Runs == nil || s.stores.Redis == nil {
+	if s.stores == nil || s.stores.PGPool == nil || s.stores.Redis == nil {
 		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := s.stores.PGPool.Ping(ctx); err != nil {
+		http.Error(w, "postgres unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.stores.Redis.Ping(ctx); err != nil {
+		http.Error(w, "redis unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -285,9 +298,10 @@ func (s *Service) handleToolHealth(w http.ResponseWriter, r *http.Request) {
 		s.writeHTTPError(w, r, http.StatusServiceUnavailable, "tool health monitor unavailable", nil)
 		return
 	}
-	snapshot := s.health.Snapshot()
-	if strings.EqualFold(r.URL.Query().Get("refresh"), "true") {
-		snapshot = s.health.Probe(r.Context())
+	snapshot, found, err := s.health.CachedSnapshot(r.Context())
+	if err != nil || !found {
+		s.writeHTTPError(w, r, http.StatusServiceUnavailable, "worker health snapshot unavailable", err)
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(snapshot)
@@ -298,11 +312,11 @@ func (s *Service) handleHealthDashboard(w http.ResponseWriter, r *http.Request) 
 		s.writeHTTPError(w, r, http.StatusMethodNotAllowed, "method not allowed", nil)
 		return
 	}
-	if !s.authorize(r) {
-		s.writeHTTPError(w, r, http.StatusForbidden, "forbidden", nil)
-		return
-	}
+	// The shell contains no data. APIs remain authenticated so a browser can
+	// display the sign-in form without needing a custom navigation header.
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write([]byte(healthDashboardHTML))
 }
 

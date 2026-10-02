@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kepler · 系统观测</title>
+<style>
+:root{color-scheme:light dark;--bg:#f5f6f8;--panel:#fff;--fg:#18212b;--muted:#687588;--line:#e0e5ec;--accent:#305bd5;--red:#bd3448;--green:#188060}
+@media(prefers-color-scheme:dark){:root{--bg:#111722;--panel:#192130;--fg:#e7edf6;--muted:#9eacc2;--line:#303d52;--accent:#91b0ff;--red:#ff91a1;--green:#7bd8b4}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 system-ui,-apple-system,sans-serif}main,header{max-width:1360px;margin:auto;padding:22px}header{display:flex;align-items:center;justify-content:space-between;gap:16px}h1{font-size:24px;letter-spacing:-.5px;margin:0}h2{font-size:16px;margin:0 0 12px}p{margin:8px 0}.muted,.note{color:var(--muted)}.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}button,select,input{font:inherit;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--fg);padding:8px 12px}button{cursor:pointer}button:disabled{opacity:.5}button:hover{border-color:var(--accent)}section,.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:18px}.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.card strong{display:block;font-size:28px;line-height:1.4}.card small{color:var(--muted)}.columns{display:grid;grid-template-columns:minmax(0,2fr) minmax(300px,1fr);gap:18px}.scroll{overflow:auto}table{width:100%;border-collapse:collapse;text-align:left}th{color:var(--muted);font-size:12px;font-weight:500;white-space:nowrap}th,td{padding:10px 9px;border-bottom:1px solid var(--line);vertical-align:top}td{max-width:390px;overflow-wrap:anywhere}tr:last-child td{border-bottom:0}code{font-size:12px;overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere}.error{color:var(--red)}.good{color:var(--green)}.tag{display:inline-block;border:1px solid var(--line);padding:2px 8px;border-radius:20px;font-size:12px;margin:3px 4px 3px 0}.link{border:0;padding:0;color:var(--accent);background:none;text-align:left}.small{font-size:12px}.auth{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.auth input{min-width:250px}.hide,[hidden]{display:none!important}#detail{border-color:var(--accent)}#updated{font-size:12px;color:var(--muted)}.empty{color:var(--muted);padding:18px 0}@media(max-width:1000px){.cards{grid-template-columns:repeat(2,1fr)}.columns{grid-template-columns:1fr}}@media(max-width:600px){header{align-items:flex-start;flex-direction:column}.cards{grid-template-columns:repeat(2,1fr)}main,header{padding:14px}.auth input{width:100%;min-width:0}}
+</style>
+</head>
+<body>
+<header><div><h1>Kepler <span class="muted">/ 系统观测</span></h1><div id="updated">连接运行数据</div></div><div class="toolbar"><label for="window">统计窗口</label><select id="window"><option value="1h">最近 1 小时</option><option value="24h" selected>最近 24 小时</option><option value="168h">最近 7 天</option></select><button id="refresh">刷新</button></div></header>
+<main>
+<section id="auth" hidden><form class="auth" id="auth-form"><label for="token">管理员令牌</label><input id="token" type="password" autocomplete="off" placeholder="OBSERVABILITY_TOKEN"><button>连接</button><span class="note">令牌仅保留在当前页面内存中。</span></form></section>
+<p id="problem" class="error" role="alert" hidden></p>
+<div class="cards"><div class="card"><span class="muted">运行次数</span><strong id="runs">—</strong><small>按启动时间统计</small></div><div class="card"><span class="muted">失败率</span><strong id="rate">—</strong><small>error / (completed + error)</small></div><div class="card"><span class="muted">运行 P95</span><strong id="p95">—</strong><small>窗口内已结束的运行</small></div><div class="card"><span class="muted">死信存量</span><strong id="dead">—</strong><small>全部历史，未自动重放</small></div></div>
+<div class="columns"><div>
+<section><h2>窗口内异常运行</h2><div id="outcomes"></div><div id="issues" class="scroll"></div><p class="note small">取消、等待用户与未完成单独计数。点击运行查看步骤与 trace；错误摘要最多 500 字符。</p></section>
+<section id="detail" hidden><div class="toolbar"><h2>运行详情</h2><button id="close-detail">关闭</button></div><div id="detail-body"></div></section>
+<section><h2>数据库中仍标为运行中</h2><div id="running" class="scroll"></div><p class="note small">显示最早的 20 条。记录状态不能证明任务仍存活；核对进程、终止事件和投影恢复。</p></section>
+</div><aside>
+<section><h2>数据接入</h2><div id="sources"></div><p class="note small">导出配置、OTLP 接收成功和 Langfuse 页面入库是不同状态。模型与工具调用链在 Langfuse 项目中查看；此处仅诊断导出状态。</p></section>
+<section><h2>当前队列</h2><div id="queues"></div><p class="note small">此处是存量，与左侧统计窗口无关。过期 claim 依据实际租期判断。</p></section>
+<section><h2>worker 工具健康</h2><div id="health" class="small muted">尚未读取</div><p class="note small">读取 worker 发布的快照；已注册不代表上游授权或业务调用一定成功。</p></section>
+<section><h2>近期死信</h2><div id="deadletters"></div></section>
+
+</aside></div>
+</main><script type="module" src="/dashboard.mjs"></script>
+</body></html>

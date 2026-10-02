@@ -139,6 +139,23 @@ func (s *Service) Snapshot() Snapshot {
 	return s.snapshot
 }
 
+// CachedSnapshot reads the worker's health projection without acquiring the
+// probe lock or testing tools on an unrelated observability host.
+func (s *Service) CachedSnapshot(ctx context.Context) (Snapshot, bool, error) {
+	if s.Redis == nil {
+		return Snapshot{}, false, nil
+	}
+	data, err := s.Redis.Get(ctx, healthSnapshotKey)
+	if err != nil || data == "" {
+		return Snapshot{}, false, err
+	}
+	var snapshot Snapshot
+	if err := json.Unmarshal([]byte(data), &snapshot); err != nil {
+		return Snapshot{}, false, err
+	}
+	return snapshot, true, nil
+}
+
 func (s *Service) SummaryPrompt() string {
 	snap := s.Snapshot()
 	if snap.Overall == StatusHealthy || snap.Overall == "" {

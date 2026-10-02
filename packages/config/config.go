@@ -242,6 +242,7 @@ type ObservingConfig struct {
 	LogLevel                 string
 	AdminToken               string
 	AllowUnauthenticated     bool
+	WorkerURL                string
 	InputCostPerMTok         float64
 	OutputCostPerMTok        float64
 	CacheReadCostPerMTok     float64
@@ -390,6 +391,7 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			LogLevel:                 env("LOG_LEVEL", "info"),
 			AdminToken:               os.Getenv("OBSERVABILITY_TOKEN"),
 			AllowUnauthenticated:     envBool("OBSERVABILITY_ALLOW_UNAUTHENTICATED", false),
+			WorkerURL:                trimRightSlash(os.Getenv("OBSERVABILITY_WORKER_URL")),
 			InputCostPerMTok:         envFloat("LLM_INPUT_COST_PER_MTOK", -1),
 			OutputCostPerMTok:        envFloat("LLM_OUTPUT_COST_PER_MTOK", -1),
 			CacheReadCostPerMTok:     envFloat("LLM_CACHE_READ_COST_PER_MTOK", -1),
