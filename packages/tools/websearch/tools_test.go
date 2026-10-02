@@ -11,6 +11,14 @@ import (
 	agenttool "github.com/noknov/kepler-agent/packages/agent/tool"
 )
 
+func BenchmarkCleanWhitespace(b *testing.B) {
+	text := strings.Repeat("A search result , with some   whitespace .\n", 100)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = cleanWhitespace(text)
+	}
+}
+
 func TestErrorSnippetCondensesUpstreamBody(t *testing.T) {
 	body := []byte("<html>\n  <body>" + strings.Repeat("x", 1000) + "</body></html>")
 	got := errorSnippet(body)

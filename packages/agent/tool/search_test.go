@@ -3,9 +3,42 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
+
+func BenchmarkDeferredSearch(b *testing.B) {
+	catalog, err := NewCatalog()
+	if err != nil {
+		b.Fatal(err)
+	}
+	for i := 0; i < 200; i++ {
+		if err := catalog.Register(namedDeferredFixture{name: fmt.Sprintf("integration-search-%03d", i), description: "Search connected documents, logs and deployment metrics."}); err != nil {
+			b.Fatal(err)
+		}
+	}
+	search := searchTool{catalog: catalog}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := search.search("搜索文档和部署日志 search document deployment logs", 8); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestSearchHelpersPreserveUnicodeAndDeduplicate(t *testing.T) {
+	got := compactStrings([]string{"b", "a", "b", " a ", ""})
+	if strings.Join(got, ",") != "a,b" {
+		t.Fatalf("names = %v", got)
+	}
+	gotText := trimDescription(strings.Repeat("文", 121), 120)
+	if !utf8.ValidString(gotText) || gotText != strings.Repeat("文", 120)+"..." {
+		t.Fatalf("description = %q", gotText)
+	}
+}
 
 type deferredFixture struct{}
 

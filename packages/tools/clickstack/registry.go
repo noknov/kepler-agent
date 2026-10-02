@@ -3,6 +3,7 @@ package clickstack
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"strings"
 	"sync"
@@ -52,7 +53,7 @@ func (r *Registrar) Ensure(ctx context.Context, catalog *tool.Catalog, policy to
 	for _, item := range items {
 		bound := tool.BindSurface(item, policy.Surface, "clickstack", "clickstack-connection")
 		if err := catalog.RegisterDeferredVisible(policy, tool.CategoryInfrastructure, bound); err != nil {
-			if strings.Contains(err.Error(), "already registered") {
+			if errors.Is(err, tool.ErrAlreadyRegistered) {
 				continue
 			}
 			return err
@@ -95,7 +96,7 @@ func (r *Registrar) tokenResolverForInstance(instanceID string) mcptools.TokenRe
 		}
 		token, err := r.conn.ClickStackAccessTokenInstance(ctx, call.Scope.UserID, instanceID)
 		if err != nil {
-			if err == connections.ErrNotConnected {
+			if errors.Is(err, connections.ErrNotConnected) {
 				return "", r.conn.RequiredInstance(call.Scope.UserID, connections.ProviderClickStack, instanceID)
 			}
 			return "", err
@@ -134,7 +135,7 @@ func (t connectionListTool) Execute(ctx context.Context, call tool.Call) (tool.R
 		return tool.TextResult("ClickStack connections are not configured."), nil
 	}
 	items, err := t.conn.ListConnections(ctx, call.Scope.UserID)
-	if err != nil && err != connections.ErrNotConnected {
+	if err != nil && !errors.Is(err, connections.ErrNotConnected) {
 		return tool.Result{}, err
 	}
 	result := make([]map[string]any, 0)

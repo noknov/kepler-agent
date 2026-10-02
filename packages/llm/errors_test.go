@@ -19,11 +19,10 @@ func TestTemporaryOverloadErrors(t *testing.T) {
 	if IsTemporaryOverload(ProviderError{Provider: "anthropic messages", StatusCode: 400, Body: "bad request"}) {
 		t.Fatal("did not expect 400 provider error to be temporary overload")
 	}
-	if !IsTemporaryOverload(ProviderError{Provider: "opencode-go stream", StatusCode: 400, Body: "{}"}) {
-		t.Fatal("expected 400 from an aggregator gateway to be temporary overload")
-	}
-	if !IsTemporaryOverload(ProviderError{Provider: "opencode-zen chat completion", StatusCode: 400, Body: "{}"}) {
-		t.Fatal("expected 400 from an aggregator gateway to be temporary overload")
+	for _, provider := range []string{"opencode-go stream", "opencode-zen chat completion"} {
+		if IsTemporaryOverload(ProviderError{Provider: provider, StatusCode: 400, Body: `{"error":{"message":"Invalid schema for function"}}`}) {
+			t.Fatalf("invalid schema from %s must not be retried based on provider name", provider)
+		}
 	}
 }
 

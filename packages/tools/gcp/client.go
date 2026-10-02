@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -65,16 +66,12 @@ func (s ConnectedSource) Resolve(ctx context.Context, call tool.Call) (Client, e
 	}
 	token, err := s.Service.GCPAccessTokenInstance(ctx, call.Scope.UserID, instanceID)
 	if err != nil {
-		if errorsIsNotConnected(err) {
+		if errors.Is(err, connections.ErrNotConnected) {
 			return Client{}, s.Service.RequiredInstance(call.Scope.UserID, connections.ProviderGCP, instanceID)
 		}
 		return Client{}, err
 	}
 	return Client{AccessToken: token, Defaults: s.Defaults}, nil
-}
-
-func errorsIsNotConnected(err error) bool {
-	return err == connections.ErrNotConnected || strings.Contains(err.Error(), "not connected")
 }
 
 func begin(ctx context.Context, source TokenSource, call tool.Call) (Client, *tool.Result, error) {

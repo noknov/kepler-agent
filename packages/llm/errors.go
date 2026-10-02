@@ -34,14 +34,7 @@ func (e ProviderError) Error() string {
 }
 
 func (e ProviderError) Retryable() bool {
-	if isRetryableStatus(e.StatusCode) {
-		return true
-	}
-	// Aggregator gateways proxy requests to arbitrary upstream models and are
-	// known to surface upstream failures as 400 instead of 429/5xx. A 400
-	// from one of these is treated as transient rather than a genuine client
-	// error; a 400 from a direct provider (e.g. Anthropic, OpenAI) is not.
-	return e.StatusCode == 400 && isAggregatorGateway(e.Provider)
+	return isRetryableStatus(e.StatusCode)
 }
 
 func IsTemporaryOverload(err error) bool {
@@ -91,21 +84,6 @@ func isRetryableStatus(status int) bool {
 // "Content Exists Risk" with HTTP 400.
 func ContentPolicyBody(body string) bool {
 	return strings.Contains(strings.ToLower(body), "content exists risk")
-}
-
-// aggregatorGateways proxy requests to arbitrary upstream models rather than
-// serving a single model themselves. ProviderError.Provider is prefixed with
-// one of these names (e.g. "opencode-go stream") for every error the gateway
-// produces.
-var aggregatorGateways = []string{"opencode-go", "opencode-zen"}
-
-func isAggregatorGateway(provider string) bool {
-	for _, name := range aggregatorGateways {
-		if strings.HasPrefix(provider, name) {
-			return true
-		}
-	}
-	return false
 }
 
 func NewProviderError(provider string, statusCode int, body string) ProviderError {

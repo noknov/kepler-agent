@@ -4,6 +4,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -14,6 +15,8 @@ import (
 )
 
 type Effect string
+
+var ErrAlreadyRegistered = errors.New("tool is already registered")
 
 const (
 	EffectRead           Effect = "read"
@@ -201,7 +204,7 @@ func (c *Catalog) Register(item Tool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, exists := c.tools[descriptor.Name]; exists {
-		return fmt.Errorf("tool %q is already registered", descriptor.Name)
+		return fmt.Errorf("%w: %q", ErrAlreadyRegistered, descriptor.Name)
 	}
 	c.tools[descriptor.Name] = item
 	if descriptor.Exposure == "" || descriptor.Exposure == ExposureEager {

@@ -618,12 +618,14 @@ func nodeText(node *xhtml.Node, readable bool) string {
 	return stdhtml.UnescapeString(output.String())
 }
 
+var spaceBeforePunctuation = regexp.MustCompile(`\s+([.,;:!?，。；：！？])`)
+
 func cleanWhitespace(text string) string {
 	lines := strings.Split(text, "\n")
 	cleaned := make([]string, 0, len(lines))
 	for _, line := range lines {
 		line = strings.Join(strings.Fields(strings.TrimSpace(line)), " ")
-		line = regexp.MustCompile(`\s+([.,;:!?，。；：！？])`).ReplaceAllString(line, "$1")
+		line = spaceBeforePunctuation.ReplaceAllString(line, "$1")
 		if line != "" {
 			cleaned = append(cleaned, line)
 		}

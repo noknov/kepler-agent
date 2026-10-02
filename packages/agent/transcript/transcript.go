@@ -160,7 +160,7 @@ func NewAsyncSink(ctx context.Context, sink Sink, capacity int) *AsyncSink {
 				return
 			case event := <-s.queue:
 				if s.sink != nil {
-					s.sink.Publish(context.WithoutCancel(ctx), event)
+					s.sink.Publish(ctx, event)
 				}
 			}
 		}

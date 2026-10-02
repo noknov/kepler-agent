@@ -84,3 +84,23 @@ func TestMemoryStoreAppendIsIdempotentByEventID(t *testing.T) {
 		t.Fatalf("sequences = %d, %d; want 1, 1", first.Sequence, second.Sequence)
 	}
 }
+
+func TestAsyncProjectionStopsWithService(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started, stopped := make(chan struct{}), make(chan struct{})
+	sink := NewAsyncSink(ctx, SinkFunc(func(ctx context.Context, _ Event) {
+		close(started)
+		select {
+		case <-ctx.Done():
+			close(stopped)
+		case <-time.After(time.Second):
+			t.Error("projection detached from service cancellation")
+			close(stopped)
+		}
+	}), 1)
+	sink.Publish(context.Background(), Event{Type: TurnStarted})
+	<-started
+	cancel()
+	<-stopped
+}

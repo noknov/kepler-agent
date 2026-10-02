@@ -148,11 +148,12 @@ func (t searchTool) search(query string, limit int) (Result, error) {
 		line     string
 	}
 	results := make([]scored, 0)
+	tokens := queryTokens(query)
 	for _, descriptor := range t.catalog.Descriptors() {
 		if descriptor.Exposure != ExposureDeferred {
 			continue
 		}
-		nameHits, score, line := scoreDeferredTool(descriptor, query)
+		nameHits, score, line := scoreDeferredTool(descriptor, tokens)
 		if score <= 0 {
 			continue
 		}
@@ -180,8 +181,7 @@ func (t searchTool) search(query string, limit int) (Result, error) {
 	return TextResult("Deferred tools matching \"" + query + "\":\n- " + strings.Join(lines, "\n- ")), nil
 }
 
-func scoreDeferredTool(descriptor Descriptor, query string) (int, float64, string) {
-	tokens := queryTokens(query)
+func scoreDeferredTool(descriptor Descriptor, tokens []string) (int, float64, string) {
 	if len(tokens) == 0 {
 		return 0, 0, ""
 	}
@@ -255,7 +255,11 @@ func trimDescription(value string, max int) string {
 	if len(value) <= max {
 		return value
 	}
-	return value[:max] + "..."
+	runes := []rune(value)
+	if len(runes) <= max {
+		return value
+	}
+	return string(runes[:max]) + "..."
 }
 
 func splitList(value string) []string {
@@ -267,9 +271,11 @@ func splitList(value string) []string {
 
 func compactStrings(values []string) []string {
 	out := values[:0]
+	seen := make(map[string]bool, len(values))
 	for _, value := range values {
 		value = strings.TrimSpace(value)
-		if value != "" && (len(out) == 0 || out[len(out)-1] != value) {
+		if value != "" && !seen[value] {
+			seen[value] = true
 			out = append(out, value)
 		}
 	}
