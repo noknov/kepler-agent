@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -395,16 +396,23 @@ func writeSSE(w io.Writer, event ClientEvent) error {
 }
 
 func decodeJSON(r *http.Request, target any, limit int64) error {
-	if !strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
 		return errors.New("Content-Type must be application/json")
 	}
-	decoder := json.NewDecoder(io.LimitReader(r.Body, limit))
+	// Read one extra byte so a valid JSON prefix cannot hide an oversized body
+	// or a second object beyond the byte limit.
+	reader := &io.LimitedReader{R: r.Body, N: limit + 1}
+	decoder := json.NewDecoder(reader)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		return errors.New("Request body is invalid")
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return errors.New("Request body must contain one JSON object")
+	}
+	if reader.N == 0 {
+		return errors.New("Request body is too large")
 	}
 	return nil
 }
@@ -416,10 +424,12 @@ func (h *Handler) writeConversationError(w http.ResponseWriter, err error) {
 	}
 	message := err.Error()
 	switch {
-	case strings.Contains(message, "active turn"), strings.Contains(message, "archived"):
+	case errors.Is(err, errConversationBusy):
 		writeAPIError(w, http.StatusConflict, "conversation_busy", message)
-	case strings.Contains(message, "required"), strings.Contains(message, "invalid"), strings.Contains(message, "too long"):
+	case errors.Is(err, errInvalidRequest):
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", message)
+	case errors.Is(err, errServiceUnavailable):
+		writeAPIError(w, http.StatusServiceUnavailable, "service_unavailable", message)
 	default:
 		writeAPIError(w, http.StatusInternalServerError, "turn_failed", "The turn could not be started")
 	}

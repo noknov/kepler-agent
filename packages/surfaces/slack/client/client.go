@@ -85,7 +85,7 @@ func (c *Client) PostMessage(ctx context.Context, channel, threadTS, text string
 }
 
 func (c *Client) PostMessageBlocks(ctx context.Context, channel, threadTS, text string, blocks []map[string]any) (string, error) {
-	return c.postMessage(ctx, channel, threadTS, text, blocks, "")
+	return c.postMessage(ctx, channel, threadTS, text, blocks, "", true)
 }
 
 func (c *Client) UpdateMessageBlocks(ctx context.Context, channel, messageTS, text string, blocks []map[string]any) error {
@@ -119,13 +119,14 @@ func (c *Client) PostMarkdownMessageWithID(ctx context.Context, channel, threadT
 func (c *Client) postMarkdown(ctx context.Context, channel, threadTS, markdown, deliveryID string) (string, error) {
 	return c.postTextParts(ctx, channel, threadTS, markdown, deliveryID, MaxMessageTextRunes, func(ctx context.Context, threadTS, part, clientMessageID string) (string, error) {
 		blocks := []map[string]any{{"type": "markdown", "text": part}}
-		ts, err := c.postMessage(ctx, channel, threadTS, part, blocks, clientMessageID)
+		ts, err := c.postMessage(ctx, channel, threadTS, part, blocks, clientMessageID, false)
 		if err == nil || !isSlackErrorCode(err, "invalid_blocks") {
 			return ts, err
 		}
 		// The markdown block is only available to Slack apps with the platform AI
-		// feature enabled. Plain text is a valid fallback for other app installs.
-		return c.postMessage(ctx, channel, threadTS, part, nil, clientMessageID)
+		// feature enabled. Preserve literal Markdown in other installs instead of
+		// reinterpreting it as the incompatible legacy mrkdwn format.
+		return c.postMessage(ctx, channel, threadTS, part, nil, clientMessageID, false)
 	})
 }
 
@@ -140,7 +141,7 @@ func (c *Client) PostChunkedMessage(ctx context.Context, channel, threadTS, text
 		if blocks != nil {
 			partBlocks = blocks(part)
 		}
-		return c.postMessage(ctx, channel, threadTS, part, partBlocks, clientMessageID)
+		return c.postMessage(ctx, channel, threadTS, part, partBlocks, clientMessageID, true)
 	})
 }
 
@@ -178,7 +179,7 @@ func partDeliveryID(deliveryID string, index, total int) string {
 
 func (c *Client) UpdateMarkdownMessage(ctx context.Context, channel, messageTS, markdown string) error {
 	blocks := []map[string]any{{"type": "markdown", "text": markdown}}
-	if err := c.updateMessage(ctx, channel, messageTS, markdown, blocks); err == nil || !strings.Contains(err.Error(), "invalid_blocks") {
+	if err := c.updateMessage(ctx, channel, messageTS, markdown, blocks); err == nil || !isSlackErrorCode(err, "invalid_blocks") {
 		return err
 	}
 	return c.updateMessage(ctx, channel, messageTS, markdown, nil)
@@ -188,6 +189,9 @@ func (c *Client) updateMessage(ctx context.Context, channel, messageTS, text str
 	payload := map[string]any{"channel": channel, "ts": messageTS, "text": text, "unfurl_links": false}
 	if len(blocks) > 0 {
 		payload["blocks"] = blocks
+	} else {
+		// chat.update uses parse rather than chat.postMessage's mrkdwn flag.
+		payload["parse"] = "full"
 	}
 	var out struct {
 		OK    bool   `json:"ok"`
@@ -202,11 +206,12 @@ func (c *Client) updateMessage(ctx context.Context, channel, messageTS, text str
 	return nil
 }
 
-func (c *Client) postMessage(ctx context.Context, channel, threadTS, text string, blocks []map[string]any, clientMessageID string) (string, error) {
+func (c *Client) postMessage(ctx context.Context, channel, threadTS, text string, blocks []map[string]any, clientMessageID string, mrkdwn bool) (string, error) {
 	payload := map[string]any{
 		"channel":      channel,
 		"text":         text,
 		"unfurl_links": false,
+		"mrkdwn":       mrkdwn,
 	}
 	if threadTS != "" {
 		payload["thread_ts"] = threadTS

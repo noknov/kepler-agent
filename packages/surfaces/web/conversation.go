@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"regexp"
 	"strings"
 	"sync"
@@ -22,14 +21,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/sessioninput"
 )
 
-const webOutputPrompt = "The response is displayed in a modern web chat that renders GitHub-Flavored Markdown.\n\n" +
-	"Formatting rules:\n" +
-	"- Use valid Markdown only. Code blocks must use triple backticks on their own lines.\n" +
-	"- Never use two-backtick fences, single-backtick fences, or unclosed code blocks.\n" +
-	"- Use headings, lists, tables, and links when they improve readability.\n" +
-	"- Keep ASCII diagrams inside fenced code blocks.\n" +
-	"- Prefer direct answers with short sections only when useful.\n" +
-	"- Do not mention the transport or repeat the user's request."
+const webOutputPrompt = "Replies are rendered as GitHub-Flavored Markdown."
 
 var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{16,96}$`)
 
@@ -125,24 +117,24 @@ func (s *ConversationService) List(ctx context.Context, owner Identity, archived
 
 func (s *ConversationService) StartTurn(ctx context.Context, owner Identity, conversationID, requestID, input string) (string, error) {
 	if s.IsDraining != nil && s.IsDraining() {
-		return "", fmt.Errorf("service is draining; retry shortly")
+		return "", conversationError{kind: errServiceUnavailable, message: "service is draining; retry shortly"}
 	}
 	input = strings.TrimSpace(input)
 	if input == "" {
-		return "", fmt.Errorf("message is required")
+		return "", conversationError{kind: errInvalidRequest, message: "message is required"}
 	}
 	if utf8.RuneCountInString(input) > 32000 {
-		return "", fmt.Errorf("message is too long")
+		return "", conversationError{kind: errInvalidRequest, message: "message is too long"}
 	}
 	if !requestIDPattern.MatchString(requestID) {
-		return "", fmt.Errorf("requestId is invalid")
+		return "", conversationError{kind: errInvalidRequest, message: "requestId is invalid"}
 	}
 	conversation, err := s.Store.GetConversation(ctx, owner, conversationID)
 	if err != nil {
 		return "", err
 	}
 	if conversation.ArchivedAt != nil {
-		return "", fmt.Errorf("conversation is archived")
+		return "", conversationError{kind: errConversationBusy, message: "conversation is archived"}
 	}
 	turnID := deterministicTurnID(conversationID, requestID)
 	s.mu.Lock()
@@ -152,7 +144,7 @@ func (s *ConversationService) StartTurn(ctx context.Context, owner Identity, con
 		if current.turnID == turnID && current.identity == owner.Key() {
 			return turnID, nil
 		}
-		return "", fmt.Errorf("conversation already has an active turn")
+		return "", conversationError{kind: errConversationBusy, message: "conversation already has an active turn"}
 	}
 	if err := s.Store.TouchConversation(ctx, owner, conversationID, titleFromInput(input)); err != nil {
 		return "", err
@@ -170,25 +162,25 @@ func (s *ConversationService) StartTurn(ctx context.Context, owner Identity, con
 		return turnID, nil
 	}
 	if !s.launch(owner, conversationID, turnID, message, nil, "") {
-		return "", fmt.Errorf("conversation already has an active turn")
+		return "", conversationError{kind: errConversationBusy, message: "conversation already has an active turn"}
 	}
 	return turnID, nil
 }
 
 func (s *ConversationService) ResolveApproval(ctx context.Context, owner Identity, conversationID, turnID, toolCallID, requestID string, approved bool) (string, error) {
 	if s.IsDraining != nil && s.IsDraining() {
-		return "", fmt.Errorf("service is draining; retry shortly")
+		return "", conversationError{kind: errServiceUnavailable, message: "service is draining; retry shortly"}
 	}
 	if _, err := s.Store.GetConversation(ctx, owner, conversationID); err != nil {
 		return "", err
 	}
 	if !requestIDPattern.MatchString(requestID) || turnID == "" || toolCallID == "" {
-		return "", fmt.Errorf("approval request is invalid")
+		return "", conversationError{kind: errInvalidRequest, message: "approval request is invalid"}
 	}
 	s.mu.Lock()
 	if _, exists := s.active[conversationID]; exists {
 		s.mu.Unlock()
-		return "", fmt.Errorf("conversation already has an active turn")
+		return "", conversationError{kind: errConversationBusy, message: "conversation already has an active turn"}
 	}
 	continuationID := deterministicTurnID(conversationID, requestID)
 	s.mu.Unlock()
@@ -210,7 +202,7 @@ func (s *ConversationService) ResolveApproval(ctx context.Context, owner Identit
 		return "", err
 	}
 	if !s.launch(owner, conversationID, continuationID, message, nil, "") {
-		return "", fmt.Errorf("conversation already has an active turn")
+		return "", conversationError{kind: errConversationBusy, message: "conversation already has an active turn"}
 	}
 	return continuationID, nil
 }
@@ -255,7 +247,7 @@ func (s *ConversationService) run(ctx context.Context, owner Identity, conversat
 	}
 	fragments := []prompt.Fragment{
 		{ID: "hosted-core", Version: "1", Layer: prompt.LayerCore, Content: s.Prompt.SystemPrompt()},
-		{ID: "web-output-format", Version: "1", Layer: prompt.LayerProduct, Content: webOutputPrompt},
+		{ID: "web-output-format", Version: "2", Layer: prompt.LayerProduct, Content: webOutputPrompt},
 	}
 	_, err := s.Agent.Run(runCtx, hosted.Request{
 		SessionID: conversationID, TurnID: turnID, UserID: owner.SubjectID, Workspace: s.Workspace,

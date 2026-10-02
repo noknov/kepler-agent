@@ -48,6 +48,7 @@ func TestPostMarkdownMessageUsesNativeMarkdownBlock(t *testing.T) {
 
 func TestPostMarkdownMessageFallsBackWhenMarkdownBlockIsUnsupported(t *testing.T) {
 	attempts := 0
+	markdown := "**结论**\n\n*intentional italic* and `a_b` [link](https://example.test)"
 	client := &Client{token: "xoxb-test", httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		attempts++
 		var payload map[string]any
@@ -63,12 +64,59 @@ func TestPostMarkdownMessageFallsBackWhenMarkdownBlockIsUnsupported(t *testing.T
 		if _, ok := payload["blocks"]; ok {
 			t.Fatal("fallback request should omit blocks")
 		}
+		if payload["text"] != markdown || payload["mrkdwn"] != false {
+			t.Fatalf("fallback must preserve Markdown without legacy parsing: %#v", payload)
+		}
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"ts":"123.456"}`)), Request: r}, nil
 	})}}
 
-	ts, err := client.PostMarkdownMessage(context.Background(), "C1", "T1", "answer")
+	ts, err := client.PostMarkdownMessage(context.Background(), "C1", "T1", markdown)
 	if err != nil || ts != "123.456" || attempts != 2 {
 		t.Fatalf("ts=%q err=%v attempts=%d", ts, err, attempts)
+	}
+}
+
+func TestUpdateMarkdownMessageFormatting(t *testing.T) {
+	markdown := "**结论**\n\n*intentional italic* and `a_b` [link](https://example.test)"
+	for _, code := range []string{"", "invalid_blocks", "ratelimited"} {
+		t.Run(code, func(t *testing.T) {
+			attempts := 0
+			client := &Client{token: "xoxb-test", httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				attempts++
+				if r.URL.Path != "/api/chat.update" {
+					t.Fatalf("path = %q", r.URL.Path)
+				}
+				var payload map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Fatal(err)
+				}
+				if payload["text"] != markdown || payload["channel"] != "C1" || payload["ts"] != "123.456" {
+					t.Fatalf("update payload = %#v", payload)
+				}
+				if attempts == 1 {
+					blocks, _ := payload["blocks"].([]any)
+					if len(blocks) != 1 || blocks[0].(map[string]any)["type"] != "markdown" || blocks[0].(map[string]any)["text"] != markdown {
+						t.Fatalf("native Markdown changed: %#v", payload)
+					}
+					if code != "" {
+						return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":false,"error":"` + code + `"}`)), Request: r}, nil
+					}
+				} else if _, exists := payload["blocks"]; exists || payload["parse"] != "full" {
+					t.Fatalf("fallback must disable legacy parsing: %#v", payload)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true}`)), Request: r}, nil
+			})}}
+			if err := client.UpdateMarkdownMessage(context.Background(), "C1", "123.456", markdown); (err != nil) != (code == "ratelimited") {
+				t.Fatalf("error = %v", err)
+			}
+			wantAttempts := 1
+			if code == "invalid_blocks" {
+				wantAttempts = 2
+			}
+			if attempts != wantAttempts {
+				t.Fatalf("attempts = %d, want %d", attempts, wantAttempts)
+			}
+		})
 	}
 }
 
