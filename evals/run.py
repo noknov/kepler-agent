@@ -11,6 +11,7 @@ import json
 import math
 import os
 import random
+import signal
 import shutil
 import statistics
 import subprocess
@@ -110,6 +111,9 @@ def candidate_versions(candidates: list[Candidate], mapping: dict[str, str]) -> 
                 record["status"] = "ok" if result.returncode == 0 else "error"
                 record["exit_code"] = result.returncode
                 record["output"] = result.stdout.strip()
+                executable = Path(record["command"][0])
+                if executable.is_file():
+                    record["binary_sha256"] = hashlib.sha256(executable.read_bytes()).hexdigest()
             except (OSError, subprocess.TimeoutExpired) as error:
                 record["status"] = "error"
                 record["error"] = str(error)
@@ -246,6 +250,81 @@ def set_status(record: dict[str, Any], status: str) -> None:
     if status in failure_classes:
         record["failure_class"] = failure_classes[status]
 
+def kepler_metrics(log: str) -> dict[str, Any]:
+    """Read structured lifecycle metadata, never classify prose or reasoning."""
+    metrics: dict[str, Any] = {"model_requests": 0, "tool_calls": 0, "tool_failures": 0}
+    latencies = []
+    started = None
+    first_token = False
+    models = set()
+    for line in log.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        kind = event.get("type")
+        if kind == "model_request_started":
+            metrics["model_requests"] += 1
+            started = event.get("timestamp")
+            first_token = False
+            name = event.get("metadata", {}).get("model")
+            if name:
+                models.add(name)
+        elif kind == "tool_call_started":
+            metrics["tool_calls"] += 1
+        elif kind == "tool_call_failed":
+            metrics["tool_failures"] += 1
+        elif kind == "turn_completed":
+            metrics["usage"] = event.get("metadata", {}).get("usage", {})
+        elif kind == "model_streamed" and event.get("model_event", {}).get("type") == "first_token" and started and not first_token:
+            try:
+                delta = datetime.datetime.fromisoformat(event["timestamp"]) - datetime.datetime.fromisoformat(started)
+                if delta.total_seconds() >= 0:
+                    latencies.append(round(delta.total_seconds()*1000, 1))
+            except (ValueError, KeyError, TypeError):
+                pass
+            first_token = True
+    metrics["observed_models"] = sorted(models)
+    if latencies:
+        metrics["first_token_ms"] = latencies[0]
+        metrics["median_first_token_ms"] = round(statistics.median(latencies), 1)
+    return metrics
+
+
+def run_process(command: list[str], *, cwd: Path, env: dict[str, str], timeout: float) -> subprocess.CompletedProcess:
+    process = subprocess.Popen(command, cwd=cwd, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=os.name == "posix")
+    try:
+        output, _ = process.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(command, process.returncode, output)
+    except BaseException as error:
+        # Interrupt allows Kepler to cancel separately grouped tool children.
+        # The bounded kill also covers other candidates and their descendants.
+        if process.poll() is None:
+            if os.name == "posix":
+                try:
+                    os.killpg(process.pid, signal.SIGINT)
+                except ProcessLookupError:
+                    pass
+            else:
+                process.terminate()
+        try:
+            output, _ = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            if os.name == "posix":
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            else:
+                process.kill()
+            output, _ = process.communicate()
+        if isinstance(error, subprocess.TimeoutExpired):
+            raise subprocess.TimeoutExpired(command, timeout, output=output) from None
+        raise
+
+
 def run_case(candidate: Candidate, task: Task, model: str, run_root: Path, repetition: int, dry_run: bool, versions: dict[str, dict[str, Any]]) -> dict[str, Any]:
     case_root = run_root / f"{task.id}__{candidate.name}__{repetition}"
     original = case_root / "original"
@@ -291,9 +370,11 @@ def run_case(candidate: Candidate, task: Task, model: str, run_root: Path, repet
     started = time.monotonic()
     try:
         agent_started = time.monotonic()
-        agent = subprocess.run(command, cwd=workspace, env=clean_environment(candidate, model, workspace, home, mapping), text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=task.timeout_seconds)
+        agent = run_process(command, cwd=workspace, env=clean_environment(candidate, model, workspace, home, mapping), timeout=task.timeout_seconds)
         record["agent_duration_seconds"] = round(time.monotonic() - agent_started, 3)
         (case_root / "agent.log").write_text(agent.stdout)
+        if candidate.name == "kepler-agent":
+            record["metrics"] = kepler_metrics(agent.stdout)
         record["agent_exit_code"] = agent.returncode
         if agent.returncode != 0:
             set_status(record, "agent_error")
@@ -305,7 +386,7 @@ def run_case(candidate: Candidate, task: Task, model: str, run_root: Path, repet
             remaining = task.timeout_seconds - (time.monotonic() - started)
             if remaining <= 0: raise subprocess.TimeoutExpired(task.test, task.timeout_seconds)
             grader_started = time.monotonic()
-            test = subprocess.run(task.test, cwd=grading, env=probe_environment(grader_home), text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=remaining)
+            test = run_process(task.test, cwd=grading, env=probe_environment(grader_home), timeout=remaining)
             record["grader_duration_seconds"] = round(time.monotonic() - grader_started, 3)
             (case_root / "test.log").write_text(test.stdout)
             record["test_exit_code"] = test.returncode
@@ -411,7 +492,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--suite", type=Path, required=True)
     parser.add_argument("--candidates", type=Path, required=True)
-    parser.add_argument("--model", required=True)
+    parser.add_argument("--model", help="Required for other candidates; Kepler uses its authenticated gateway model")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--seed", type=int, default=1)
@@ -427,7 +508,21 @@ def main() -> int:
     candidates = [item for item in load_candidates(args.candidates) if not args.candidate or item.name in args.candidate]
     tasks = filter_tasks(load_tasks(args.suite), args.task, args.category, args.source, args.tag)
     if not candidates or not tasks: parser.error("candidate/task selection is empty")
+    preflight = None
+    if not args.dry_run and any(candidate.name == "kepler-agent" for candidate in candidates):
+        from kepler_gateway import prepare
+        try:
+            preflight = prepare(args.model)
+        except (ValueError, OSError) as error:
+            parser.error(str(error))
+        args.model = preflight["model"]
+        print(f"Kepler gateway ready: model={args.model}, protocol={preflight['protocol']}", flush=True)
+    if not args.model:
+        parser.error("--model is required without a live Kepler gateway")
+    args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
+    if preflight:
+        (args.output / "preflight.json").write_text(json.dumps(preflight, indent=2) + "\n")
     run_manifest = {
         "schema_version": 1,
         "status": "running",
@@ -489,7 +584,7 @@ def main() -> int:
             records.append(record)
             stream.write(json.dumps(record, sort_keys=True) + "\n")
             stream.flush()
-            print(f'{record["status"]:>12}  {task.id}  {candidate.name}')
+            print(f'{record["status"]:>12}  {task.id}  {candidate.name}', flush=True)
     summary = summarize(records, versions)
     summary["evaluation_identity"] = evaluation_identity
     (args.output / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")

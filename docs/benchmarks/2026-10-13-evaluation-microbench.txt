@@ -1,0 +1,34 @@
+GOCACHE=/Users/shelton/Documents/wati/kepler-agent/.cache/go-build go test ./packages/profiles/local ./packages/agent/tool ./packages/tools/websearch -run '^$' -bench 'Benchmark(JSONLAppend|DeferredSearch|CleanWhitespace)$' -benchmem -benchtime=20x -count=3
+goos: darwin
+goarch: arm64
+pkg: github.com/noknov/kepler-agent/packages/profiles/local
+cpu: Apple M3 Pro
+BenchmarkJSONLAppend/100-12         	      20	   4854027 ns/op	    3391 B/op	      19 allocs/op
+BenchmarkJSONLAppend/100-12         	      20	   5559775 ns/op	    3391 B/op	      19 allocs/op
+BenchmarkJSONLAppend/100-12         	      20	   5742308 ns/op	    3391 B/op	      19 allocs/op
+BenchmarkJSONLAppend/1000-12        	      20	   4238933 ns/op	    3592 B/op	      19 allocs/op
+BenchmarkJSONLAppend/1000-12        	      20	   4227688 ns/op	    3592 B/op	      19 allocs/op
+BenchmarkJSONLAppend/1000-12        	      20	   5361600 ns/op	    3761 B/op	      20 allocs/op
+BenchmarkJSONLAppend/10000-12       	      20	   4522204 ns/op	    3592 B/op	      19 allocs/op
+BenchmarkJSONLAppend/10000-12       	      20	   5020638 ns/op	    3592 B/op	      19 allocs/op
+BenchmarkJSONLAppend/10000-12       	      20	   4277044 ns/op	    3592 B/op	      19 allocs/op
+PASS
+ok  	github.com/noknov/kepler-agent/packages/profiles/local	3.093s
+goos: darwin
+goarch: arm64
+pkg: github.com/noknov/kepler-agent/packages/agent/tool
+cpu: Apple M3 Pro
+BenchmarkDeferredSearch-12    	      20	    394131 ns/op	  219988 B/op	    2643 allocs/op
+BenchmarkDeferredSearch-12    	      20	    226394 ns/op	  219725 B/op	    2643 allocs/op
+BenchmarkDeferredSearch-12    	      20	    220133 ns/op	  219733 B/op	    2643 allocs/op
+PASS
+ok  	github.com/noknov/kepler-agent/packages/agent/tool	0.552s
+goos: darwin
+goarch: arm64
+pkg: github.com/noknov/kepler-agent/packages/tools/websearch
+cpu: Apple M3 Pro
+BenchmarkCleanWhitespace-12    	      20	    137690 ns/op	   44829 B/op	     804 allocs/op
+BenchmarkCleanWhitespace-12    	      20	    104898 ns/op	   46685 B/op	     804 allocs/op
+BenchmarkCleanWhitespace-12    	      20	    116967 ns/op	   44830 B/op	     804 allocs/op
+PASS
+ok  	github.com/noknov/kepler-agent/packages/tools/websearch	0.700s

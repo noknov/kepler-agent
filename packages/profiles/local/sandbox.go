@@ -199,7 +199,7 @@ func darwinSandboxProfile(workspace Workspace, readRoots, sensitive []string, ne
 	if home, err := os.UserHomeDir(); err == nil {
 		profile += "(deny file-read* (subpath " + strconv.Quote(home) + "))\n"
 	}
-	profile += "(allow file-read* (subpath " + strconv.Quote(workspace.Root) + "))\n"
+	profile += "(allow file-read* (subpath " + strconv.Quote(workspace.Root) + ") (subpath " + strconv.Quote(workspace.Temp) + "))\n"
 	for _, root := range readRoots {
 		profile += "(allow file-read* (subpath " + strconv.Quote(root) + "))\n"
 	}
@@ -275,11 +275,11 @@ func safeEnvironment(isolatedHome string, extra []string) []string {
 	values := make([]string, 0, len(allowed)+len(extra)+1)
 	for _, entry := range os.Environ() {
 		key, _, ok := strings.Cut(entry, "=")
-		if ok && allowed[key] {
+		if ok && allowed[key] && key != "TMPDIR" {
 			values = append(values, entry)
 		}
 	}
-	values = append(values, "HOME="+isolatedHome)
+	values = append(values, "HOME="+isolatedHome, "TMPDIR="+isolatedHome)
 	for _, entry := range extra {
 		key, _, ok := strings.Cut(entry, "=")
 		if !ok || !allowed[key] || key == "PATH" || key == "TMPDIR" || key == "SHELL" {

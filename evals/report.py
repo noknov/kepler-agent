@@ -141,6 +141,7 @@ def record_rows(result_dir: Path, records: list[dict[str, Any]]) -> str:
             f"<td>{esc(', '.join(record.get('required_capabilities', [])))}</td>"
             f"<td>{esc(record.get('repetition'))}</td>"
             f"<td>{esc(record.get('duration_seconds'))}</td>"
+            f"<td><code>{esc(json.dumps(record.get('metrics', {}), sort_keys=True))}</code></td>"
             f"<td>{agent_link} {test_link} {diff_link}</td>"
             "</tr>"
         )
@@ -225,7 +226,7 @@ def render_report(result_dir: Path) -> str:
 
   <h2>Case records</h2>
   <table>
-    <thead><tr><th>Status</th><th>Failure class</th><th>Task</th><th>Candidate</th><th>Category</th><th>Source</th><th>Requirements</th><th>Rep</th><th>Seconds</th><th>Artifacts</th></tr></thead>
+    <thead><tr><th>Status</th><th>Failure class</th><th>Task</th><th>Candidate</th><th>Category</th><th>Source</th><th>Requirements</th><th>Rep</th><th>Seconds</th><th>Structured agent metrics</th><th>Artifacts</th></tr></thead>
     <tbody>{record_rows(result_dir, records)}</tbody>
   </table>
 </body>

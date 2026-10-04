@@ -30,3 +30,25 @@ func TestWorkspaceRejectsEscapeSensitiveAndSymlink(t *testing.T) {
 		t.Fatalf("paths=%v err=%v", paths, err)
 	}
 }
+
+func TestWorkspaceResolvesSymlinkedTemporaryRoot(t *testing.T) {
+	parent := t.TempDir()
+	target := filepath.Join(parent, "real")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(parent, "alias")
+	if err := os.Symlink(target, alias); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", alias)
+	workspace, err := NewWorkspace(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workspace.Close()
+	resolved, err := filepath.EvalSymlinks(workspace.Temp)
+	if err != nil || resolved != workspace.Temp {
+		t.Fatalf("temp=%q resolved=%q error=%v", workspace.Temp, resolved, err)
+	}
+}

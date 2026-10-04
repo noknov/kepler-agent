@@ -194,3 +194,33 @@ func TestIntegrationSandboxRunsGitShow(t *testing.T) {
 		t.Fatalf("sandboxed Git exposed repository credentials: result=%+v err=%v", configResult, err)
 	}
 }
+
+func TestCommandTemporaryDirectoryCannotEscapeSandbox(t *testing.T) {
+	t.Setenv("TMPDIR", "/host/private/tmp")
+	environment := safeEnvironment("/isolated", []string{"TMPDIR=/attacker"})
+	var temporary []string
+	for _, entry := range environment {
+		if strings.HasPrefix(entry, "TMPDIR=") {
+			temporary = append(temporary, entry)
+		}
+	}
+	if len(temporary) != 1 || temporary[0] != "TMPDIR=/isolated" {
+		t.Fatalf("temporary environment=%v", temporary)
+	}
+}
+
+func TestDarwinSandboxCanReadAndWriteItsScratchDirectory(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Seatbelt integration")
+	}
+	workspace, err := NewWorkspace(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workspace.Close()
+	sandbox := Sandbox{Workspace: workspace}
+	result, err := sandbox.Run(context.Background(), CommandRequest{Argv: []string{"/bin/sh", "-c", `mkdir -p "$HOME/cache" && printf scratch > "$TMPDIR/file" && cat "$TMPDIR/file"`}})
+	if err != nil || result.ExitCode != 0 || result.Output != "scratch" {
+		t.Fatalf("result=%+v error=%v", result, err)
+	}
+}

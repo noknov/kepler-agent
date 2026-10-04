@@ -35,7 +35,12 @@ func NewWorkspace(root string) (Workspace, error) {
 	if err != nil {
 		return Workspace{}, err
 	}
-	return Workspace{Root: filepath.Clean(real), Temp: temp}, nil
+	realTemp, err := filepath.EvalSymlinks(temp)
+	if err != nil {
+		_ = os.RemoveAll(temp)
+		return Workspace{}, err
+	}
+	return Workspace{Root: filepath.Clean(real), Temp: filepath.Clean(realTemp)}, nil
 }
 
 func (w Workspace) Close() error {

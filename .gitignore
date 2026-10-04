@@ -22,3 +22,6 @@ worker/.prompts/
 kepler-agent-avatar-*.png
 cmd/slack-broadcast/
 slack-broadcast
+
+# Local evaluation artifacts may contain task transcripts.
+evals/results/

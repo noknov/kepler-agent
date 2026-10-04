@@ -56,3 +56,30 @@ protocol-check:
 	diff -u apps/cli/src/generated/appServerProtocol.ts "$$tmp/protocol.ts"
 
 check: fmt-check boundaries protocol-check vet test build eval-check
+
+# A real, small model evaluation. The model comes from authenticated bootstrap.
+EVAL_OUTPUT ?= evals/results/local-$(shell date +%Y%m%d-%H%M%S)
+.PHONY: eval eval-build
+eval-build:
+	GOCACHE=$(GOCACHE) go build -trimpath -o bin/kepler-agent ./cli/cmd/kepler-agent
+
+eval: eval-build
+	python3 evals/run.py --suite evals/suites/smoke.json --candidates evals/candidates.example.json --candidate kepler-agent --output "$(EVAL_OUTPUT)"
+	python3 evals/report.py "$(EVAL_OUTPUT)"
+
+EVAL_GOARCH ?= $(shell go env GOARCH)
+EVAL_HARBOR_BENCHMARK ?= terminal-bench-2.1
+EVAL_HARBOR_OUTPUT ?= evals/results/harbor-$(shell date +%Y%m%d-%H%M%S)
+EVAL_HARBOR_ARGS ?= --include-task terminal-bench/openssl-selfsigned-cert
+.PHONY: eval-harbor
+eval-harbor:
+	GOCACHE=$(GOCACHE) CGO_ENABLED=0 GOOS=linux GOARCH=$(EVAL_GOARCH) go build -trimpath -o bin/kepler-agent-linux-$(EVAL_GOARCH) ./cli/cmd/kepler-agent
+	python3 evals/run_harbor.py --benchmark "$(EVAL_HARBOR_BENCHMARK)" --candidate kepler-agent --source-ref "$$(git rev-parse HEAD)" --binary-path "bin/kepler-agent-linux-$(EVAL_GOARCH)" --output "$(EVAL_HARBOR_OUTPUT)" $(EVAL_HARBOR_ARGS)
+
+.PHONY: bench
+bench:
+	GOCACHE=$(GOCACHE) go test ./packages/profiles/local ./packages/agent/tool ./packages/tools/websearch -run '^$$' -bench 'Benchmark(JSONLAppend|DeferredSearch|CleanWhitespace)$$' -benchmem -benchtime=20x -count=3
+
+.PHONY: eval-harbor-oracle
+eval-harbor-oracle:
+	python3 evals/run_harbor.py --benchmark "$(EVAL_HARBOR_BENCHMARK)" --candidate oracle --output "$(EVAL_HARBOR_OUTPUT)-oracle" $(EVAL_HARBOR_ARGS)

@@ -11,13 +11,26 @@ experiments. It does not currently provide a verified end-to-end release gate.
 | Gate a completed compatible summary | `gate.py` | Threshold checks; input validity must also be established |
 | Test hosted delivery, recovery, and authorization | Dedicated product tests | Separate from CLI coding scores |
 
-## Current compatibility and trust limits
+## Authentication and preflight
 
-The current CLI uses gateway login/bootstrap. Set `EVAL_KEPLER_API_URL` and
-`KEPLER_TOKEN` for its candidate; the selected model comes from the gateway's
-authenticated bootstrap response. Confirm that response matches the model used
-by other candidates before comparing results. A dry-run does not validate
-candidate flags, authentication, or model routing.
+Kepler uses gateway login/bootstrap rather than direct-provider CLI flags.
+Run `bin/kepler-agent login --api-url <your-public-gateway>` once. The runner
+reads that existing private login, validates `/cli/bootstrap`, and selects its
+actual model automatically. An explicit `--model` must match bootstrap. Expired
+login and model mismatches fail before cases start. Tokens stay in child process
+environments and are never included in result manifests.
+
+`EVAL_KEPLER_API_URL` and `KEPLER_TOKEN` can override the saved login. For a local
+Docker gateway, set the host and container addresses explicitly:
+
+```sh
+export EVAL_KEPLER_API_URL=http://127.0.0.1:8080
+export EVAL_KEPLER_CONTAINER_API_URL=http://host.docker.internal:8080
+```
+
+The container override is used only by the Harbor adapter; it does not change
+which gateway/model the host preflight checks. Both addresses must reach the
+same deployment. Direct-provider candidates still need their own credentials.
 
 The local runner copies a workspace and HOME but does not supply an OS isolation
 boundary for arbitrary Agent/grader code. The grader gets a separate copy with
@@ -59,15 +72,23 @@ This does not claim benchmark results. The checked-in smoke suite validates eval
 
 ## Quick start
 
+Run three real local coding cases, using the authenticated gateway model:
+
 ```sh
-# From kepler-agent: validates wiring without launching candidates.
-python3 evals/run.py \
-  --suite evals/suites/smoke.json \
-  --candidates evals/candidates.example.json \
-  --model dry-run \
-  --output evals/results/smoke \
-  --dry-run
+make eval
+# Optional stable output directory (must not already exist):
+make eval EVAL_OUTPUT=evals/results/my-run
 ```
+
+Use `make bench` separately for Go storage/tool microbenchmarks; it makes no
+model calls.
+
+This builds the current CLI, runs the candidates, restores protected tests in a
+separate grader workspace, and generates `report.html`. Case scores describe
+these small synthetic tasks, not an external benchmark ranking.
+
+`make eval-check` is the separate no-model wiring/unit-test check. It must not
+be mistaken for a real evaluation.
 
 Set `EVAL_OPENAI_BASE_URL` and `EVAL_ANTHROPIC_BASE_URL` for direct-provider
 candidates. For kepler-agent, set `EVAL_KEPLER_API_URL` and `KEPLER_TOKEN`;
@@ -121,22 +142,45 @@ verifier, lifecycle, and result schema remain intact. The launcher writes an
 `invocation.json` next to Harbor's jobs before it starts, recording the exact
 dataset, candidate, model, command, and (for `kepler-agent`) source commit.
 
-First inspect the invocation. This writes an invocation manifest without starting Harbor:
+Start with a single official CPU task and its native oracle control:
 
 ```sh
-python3 evals/run_harbor.py \
-  --benchmark terminal-bench-2.1 \
-  --candidate kepler-agent \
-  --source-ref "$(git rev-parse HEAD)" \
-  --model controlled-model \
-  --output evals/results/terminal-bench-2.1/kepler-agent \
-  --dry-run
+make eval-harbor-oracle
+make eval-harbor
 ```
 
-Then run the same command without `--dry-run`. Harbor needs Docker (or another
-configured Harbor environment), model credentials, and network access to fetch
-the public task images. Run Harbor's oracle for a newly selected dataset or
-adapter before comparing agents.
+The target builds a Linux CLI and uploads it, avoiding an unpublished-source
+clone or task-by-task Go installation. The invocation records the source commit
+and binary SHA256. `EVAL_GOARCH=amd64` selects another Docker architecture.
+The binary adapter uses the host's trusted CA bundle when available and installs
+missing ripgrep, a CLI tool dependency. It probes both executables before model
+execution. Minimal task images must not be assumed to include either dependency.
+
+The default task is Terminal-Bench 2.1 `openssl-selfsigned-cert`. To select another task:
+
+```sh
+make eval-harbor EVAL_HARBOR_BENCHMARK=terminal-bench-2.1 \
+  EVAL_HARBOR_ARGS='--include-task terminal-bench/cancel-async-tasks'
+```
+
+Use fully qualified Harbor task names. Omit task filters only when ready for the
+full dataset's time/resource requirements. Review the invocation first with
+`run_harbor.py --dry-run --model <model>`. Source-building remains available
+without `--binary-path`, but requires a reachable published commit and a suitable
+Go toolchain inside the task image.
+
+The adapter also puts reported token usage and structural execution metrics
+into Harbor's native `AgentContext`; missing usage is left unknown, never priced
+as a fabricated USD cost. Observed model changes fail rather than silently
+mislabelling the experiment.
+
+Inspect native results with `harbor view <output-directory>`. A zero Harbor CLI
+exit can still contain errored trials; the wrapper now verifies completion and
+native error counts before reporting success. A completed execution can have
+reward zero: model failure is a valid benchmark result, not an infrastructure
+success claim. Cold verifier dependency installation may require an explicit
+`--verifier-timeout-multiplier`; it is retained in the invocation. Do not compare
+runs with different timeout settings as equivalent.
 
 For every candidate, use a separate jobs directory and keep the model, model
 gateway, task selection, attempts, and concurrency constant:
@@ -161,16 +205,15 @@ The built-in Harbor candidates are `codex`, `claude-code`, `opencode`, and
 40-character `--source-ref`; this is intentionally mandatory. Candidate tools
 can differ in provider authentication and model controls, so record those
 agent-specific settings with the Harbor job rather than asserting model parity
-that was not actually achieved. The referenced commit must already be reachable
-from `source_repo` (the public origin by default); push it before starting a
-run.
+that was not actually achieved. For the source-build path, the referenced commit must be reachable from
+`source_repo` (the public origin by default). Local binary upload records its
+hash and does not require pushing the commit.
 
-For a deployed provider profile, pass only configuration *names* as Harbor
-kwargs and inject the corresponding values through `--agent-env` or the process
-environment. For example, a LongCat deployment profile uses
-`provider=longcat`, `protocol=anthropic`, `api_key_env=LONGCAT_API_KEY`, and
-`base_url_env=LONGCAT_BASE_URL`. Do not put keys or endpoint secrets in the
-command line or the invocation manifest.
+For Kepler, provider credentials remain on the gateway/worker (including SOPS
+managed Qoder credentials). The task container receives a CLI session token,
+not the operator PAT. Retired `provider`, `protocol`, `api_key_env`, and
+`base_url_env` adapter kwargs are rejected because the current CLI has no such
+flags.
 
 ## Suite schema
 
@@ -214,6 +257,7 @@ Every run writes a stable artifact layout:
 
 - `run.json`, the run manifest: suite/candidate inputs, filters, model, seed, repetitions, selected tasks/candidates, shuffled plan, start/end timestamps, repo commit, dirty status, and summary pointers
 - `summary.json`, aggregate pass/fail/error/timeout counts and candidate versions
+- Kepler case records include model request counts, tool failures, observed model, first-token latency, and reported usage parsed from structured CLI events
 - `records.jsonl`, one machine-readable record per case
 - `candidate_versions.json`, version probe output for every selected candidate
 - `report.html`, optional static dashboard generated by `evals/report.py`
@@ -244,3 +288,24 @@ Case records use a small stable status enum: `passed`, `failed`, `timeout`, `age
 8. Compare each category and tag matrix before using an aggregate score. A global pass rate can hide a harness that is strong on trivial edits but weak on repository navigation, recovery, or operations.
 
 `gateway/compose.yaml` is an operator example, not a production security boundary. Do not expose it publicly.
+
+## Verified runs (2026-10-13)
+
+- Real local Qoder `Qwen3.8-Flash` smoke: **3/3 passed**, zero tool failures in
+  the final run. Times were 18.0s, 16.7s and 19.9s; these are single samples,
+  not a controlled model/harness ranking.
+- Terminal-Bench 2.1 `openssl-selfsigned-cert`: native oracle **reward 1**;
+  Kepler completed without infrastructure errors but passed **5/6 tests**, so
+  its official binary **reward was 0**. The Python verification script's
+  `cryptography` dependency was missing. This result must not be called a pass.
+- `cancel-async-tasks` is not a usable quality baseline on this setup: its
+  oracle failed the short SIGINT timing assertions, and the Kepler trial hit
+  the agent timeout. Its post-timeout reward is not used as quality evidence.
+- Hello World controls exposed verifier dependency-download timeouts. They
+  were retained as failed runs; increasing a timeout is not a model-quality fix.
+
+Raw local artifacts are under `evals/results/2026-10-13-*` (Git ignored). Use
+`report.html` for local cases and `harbor view <run-directory>` for native
+Harbor scores/logs. The final adapter also interrupts a timed-out container CLI
+before grading; local candidate/grader processes get bounded process-group
+cleanup. Neither path should keep mutating the workspace after its deadline.
