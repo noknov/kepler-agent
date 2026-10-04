@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOpenAIResponsesClientOmitsUnsetTemperature(t *testing.T) {
@@ -318,5 +319,21 @@ func TestChatGPTPlanAlwaysStreamsAndRequiresCompletion(t *testing.T) {
 				t.Fatalf("response = %#v", resp)
 			}
 		})
+	}
+}
+
+func TestResponsesPublishesCommentarySeparatelyAndOnce(t *testing.T) {
+	item := `{"id":"status","type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Inspecting the service"}]}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: {\"type\":\"response.output_item.done\",\"item\":%s}\n\n", item)
+		fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[%s,{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"Final result\"}]}]}}\n\n", item)
+	}))
+	defer server.Close()
+	client := NewOpenAIResponsesClient("openai", server.URL, "synthetic", time.Second)
+	var commentary []string
+	result, err := client.ChatStream(context.Background(), Request{Model: "test"}, StreamHandler{OnCommentary: func(text string) { commentary = append(commentary, text) }})
+	if err != nil || result.Message.Content != "Final result" || len(commentary) != 1 || commentary[0] != "Inspecting the service" {
+		t.Fatalf("phase classification: response=%+v commentary=%v err=%v", result, commentary, err)
 	}
 }

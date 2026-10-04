@@ -85,7 +85,8 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		defer state.mu.Unlock()
 	}
 	if event.Type == transcript.ModelStreamed {
-		if state != nil && event.Model != nil && event.Model.Type == model.StreamTextDelta && event.Model.Text != "" && state.firstToken.IsZero() {
+		if state != nil && event.Model != nil &&
+			(event.Model.Type == model.StreamFirstToken || (event.Model.Type == model.StreamTextDelta && event.Model.Text != "")) && state.firstToken.IsZero() {
 			state.firstToken = event.Timestamp
 		}
 		return

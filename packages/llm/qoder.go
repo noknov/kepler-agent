@@ -82,6 +82,11 @@ func NewQoderClient(baseURL, pat string, timeout time.Duration) (*QoderClient, e
 		httpClient: &http.Client{Timeout: timeout, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
+// SetTransport configures the HTTP transport before the client is used.
+func (c *QoderClient) SetTransport(transport http.RoundTripper) {
+	c.httpClient.Transport = transport
+}
+
 func (c *QoderClient) authenticate(ctx context.Context) (qoderAuth, error) {
 	// Both credential and catalog initialization are serialized. The network
 	// timeout and caller context bound initialization; no credentials hit disk.
@@ -401,7 +406,7 @@ func readQoderStream(r io.Reader, h StreamHandler) (Response, error) {
 	result := Response{Message: Message{Role: "assistant"}, Streamed: true}
 	calls := map[int]*ToolCall{}
 	var streamErr error
-	done, terminal, started := false, false, false
+	done, terminal, firstTokenSeen := false, false, false
 	err := readSSE(r, func(ev sseEvent) bool {
 		if ev.Data == "[DONE]" {
 			done = true
@@ -492,6 +497,12 @@ func readQoderStream(r io.Reader, h StreamHandler) (Response, error) {
 			return true
 		}
 		choice := chunk.Choices[0]
+		if !firstTokenSeen && (choice.Delta.Content != "" || choice.Delta.Reasoning != "" || len(choice.Delta.Calls) > 0) {
+			firstTokenSeen = true
+			if h.OnFirstToken != nil {
+				h.OnFirstToken()
+			}
+		}
 		if choice.Delta.Content != "" {
 			result.Message.Content += choice.Delta.Content
 			if h.OnText != nil {
@@ -504,11 +515,8 @@ func readQoderStream(r io.Reader, h StreamHandler) (Response, error) {
 				streamErr = fmt.Errorf("qoder returned an invalid tool index")
 				return false
 			}
-			if !started {
-				started = true
-				if h.OnToolCallsStarted != nil {
-					h.OnToolCallsStarted()
-				}
+			if len(calls) == 0 && h.OnToolCallsStarted != nil {
+				h.OnToolCallsStarted()
 			}
 			call := calls[delta.Index]
 			if call == nil {

@@ -163,6 +163,16 @@ from displayed text. Tool-only assistant turns retain blank content because the
 native gateway otherwise drops them and loses the relation to tool results.
 
 Streams require both a terminal finish reason and the native `[DONE]` marker.
+Qoder's native text has no answer/commentary phase. The shared model adapter
+waits for a validated complete response when an unphased request has tools:
+tool-call steps emit accompanying prose as `commentary`, while the final answer
+is emitted as `final_answer`. Classification uses tool-call structure, never
+wording. Plain chat without tools and explicitly phased final answers retain
+live streaming. First-token arrival is reported independently, so deferred
+presentation does not inflate latency metrics. Slack renders commentary as
+temporary free-text assistant-thread status and answers as message text.
+Unsupported session channels retain native processing status. Actual execution
+plans remain separate from model commentary.
 Malformed events, upstream errors inside HTTP 200, incomplete tool calls and
 truncated streams fail explicitly. Token usage is reported only when token
 fields are present; native Credits are retained in response metadata as `usage`

@@ -185,6 +185,10 @@ type TextDelta struct {
 
 // StreamHandler receives typed streaming events from ChatStream.
 type StreamHandler struct {
+	// OnFirstToken records latency independently of text presentation. Adapters
+	// which must classify a complete response can signal arrival immediately.
+	OnFirstToken       func()
+	OnCommentary       func(text string)
 	OnText             func(delta TextDelta)
 	OnToolCallsStarted func()
 	OnToolCallComplete func(call ToolCall)

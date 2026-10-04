@@ -99,6 +99,22 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 	toolCallsStarted := false
 	functionCalls := make(map[string]responsesOutput)
 	messagePhases := make(map[string]string)
+	commentarySent := make(map[string]bool)
+	emitCommentary := func(item responsesOutput) {
+		if item.Type != "message" || item.Phase != "commentary" || commentarySent[item.ID] || h.OnCommentary == nil {
+			return
+		}
+		var text strings.Builder
+		for _, content := range item.Content {
+			if content.Type == "output_text" {
+				text.WriteString(content.Text)
+			}
+		}
+		if text.Len() > 0 {
+			commentarySent[item.ID] = true
+			h.OnCommentary(text.String())
+		}
+	}
 	emittedFunctionCalls := make(map[string]bool)
 	var streamErr error
 	completed := false
@@ -163,6 +179,9 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 				Item responsesOutput `json:"item"`
 			}
 			if json.Unmarshal([]byte(ev.Data), &output) == nil {
+				if typ.Type == "response.output_item.done" {
+					emitCommentary(output.Item)
+				}
 				if output.Item.Type == "message" {
 					messagePhases[output.Item.ID] = output.Item.Phase
 				}
@@ -210,6 +229,7 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 				}
 				msg.Citations = completedMessage.Citations
 				for _, item := range done.Response.Output {
+					emitCommentary(item)
 					if item.Type == "function_call" {
 						emitFunctionCall(item.ID, item)
 					}

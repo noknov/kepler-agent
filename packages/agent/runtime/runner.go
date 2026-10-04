@@ -630,7 +630,7 @@ func (r *Runtime) generateAttempt(ctx context.Context, turn TurnRequest, request
 	started := time.Now()
 	var firstToken atomic.Bool
 	return r.deps.Model.Generate(ctx, request, func(event model.StreamEvent) error {
-		if event.Type == model.StreamTextDelta && event.Text != "" && firstToken.CompareAndSwap(false, true) {
+		if (event.Type == model.StreamFirstToken || (event.Type == model.StreamTextDelta && event.Text != "")) && firstToken.CompareAndSwap(false, true) {
 			now := time.Now()
 			span.SetAttributes(attribute.Int64("agent.model.first_token_ms", now.Sub(started).Milliseconds()), attribute.String("langfuse.observation.completion_start_time", now.UTC().Format(time.RFC3339Nano)))
 		}

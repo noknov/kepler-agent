@@ -125,3 +125,8 @@ func IsChineseLocale(locale string) bool {
 	locale = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(locale), "_", "-"))
 	return locale == "zh" || strings.HasPrefix(locale, "zh-")
 }
+
+// AssistantStatusMessenger updates the temporary free-text indicator in assistant threads.
+type AssistantStatusMessenger interface {
+	SetAssistantStatus(ctx context.Context, channel, threadTS, status string) error
+}

@@ -274,6 +274,23 @@ func (s *slackStream) setSessionStatus(status string) {
 	}
 	ctx, cancel := s.deliveryContext()
 	defer cancel()
+	if assistant, ok := s.messenger.(slackconversation.AssistantStatusMessenger); ok && !s.assistantStatusUnsupported {
+		text := ""
+		if status == sessionProcessing {
+			text = "is working on your request…"
+		}
+		err := assistant.SetAssistantStatus(ctx, s.req.Channel, s.req.ThreadTS, text)
+		if err == nil {
+			s.sessionStatus = status
+			return
+		}
+		if isSlackError(err, "method_not_supported_for_channel_type") || isSlackError(err, "method_deprecated") || isSlackError(err, "deprecated_endpoint") {
+			s.assistantStatusUnsupported = true
+		} else {
+			log.Printf("slack assistant status unavailable turn=%s error_code=%s", s.req.EventID, safeSlackErrorCode(err))
+			return
+		}
+	}
 	if err := s.session.SetAgentSessionStatus(ctx, s.req.Channel, s.req.ThreadTS, s.req.UserID, status); err != nil {
 		log.Printf("slack agent session status unavailable turn=%s status=%s error_code=%s error_type=%T", s.req.EventID, status, safeSlackErrorCode(err), err)
 		return
@@ -293,4 +310,56 @@ func safeSlackErrorCode(err error) string {
 		return "canceled"
 	}
 	return "unknown"
+}
+
+// UpdateActivity coalesces complete public commentary snapshots. Status delivery
+// never blocks model generation and never creates an answer or a plan item.
+func (s *slackStream) UpdateActivity(text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	if _, ok := s.messenger.(slackconversation.AssistantStatusMessenger); !ok {
+		return
+	}
+	s.mu.Lock()
+	if s.streamClosing || s.streamClosed || s.messageTS != "" {
+		s.mu.Unlock()
+		return
+	}
+	s.activityPending = s.activityRedactor.Sanitize(text)
+	if s.activityRunning {
+		s.mu.Unlock()
+		return
+	}
+	s.activityRunning = true
+	s.mu.Unlock()
+	go s.deliverActivity()
+}
+
+func (s *slackStream) deliverActivity() {
+	for {
+		s.sessionMu.Lock()
+		s.mu.Lock()
+		text := s.activityPending
+		s.activityPending = ""
+		done := text == "" || s.streamClosing || s.streamClosed || s.messageTS != "" || s.sessionStatus != sessionProcessing || s.assistantStatusUnsupported
+		if done {
+			s.activityRunning = false
+		}
+		s.mu.Unlock()
+		if done {
+			s.sessionMu.Unlock()
+			return
+		}
+		ctx, cancel := s.deliveryContext()
+		err := s.messenger.(slackconversation.AssistantStatusMessenger).SetAssistantStatus(ctx, s.req.Channel, s.req.ThreadTS, text)
+		cancel()
+		if err != nil {
+			if isSlackError(err, "method_not_supported_for_channel_type") || isSlackError(err, "method_deprecated") || isSlackError(err, "deprecated_endpoint") {
+				s.assistantStatusUnsupported = true
+			}
+			log.Printf("slack activity status unavailable turn=%s error_code=%s", s.req.EventID, safeSlackErrorCode(err))
+		}
+		s.sessionMu.Unlock()
+	}
 }

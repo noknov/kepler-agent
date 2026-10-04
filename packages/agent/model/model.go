@@ -238,7 +238,12 @@ type Response struct {
 type StreamEventType string
 
 const (
-	StreamStarted        StreamEventType = "started"
+	StreamStarted StreamEventType = "started"
+	// FirstToken reports model latency without presenting unclassified text.
+	StreamFirstToken StreamEventType = "first_token"
+	// Commentary is a complete public progress snapshot, not answer text or
+	// private reasoning. Surfaces may render it in their activity UI.
+	StreamCommentary     StreamEventType = "commentary"
 	StreamTextDelta      StreamEventType = "text_delta"
 	StreamReasoningDelta StreamEventType = "reasoning_delta"
 	StreamToolCallStart  StreamEventType = "tool_call_start"

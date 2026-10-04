@@ -121,6 +121,7 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 	var sinkMu sync.Mutex
 	var sinkErr error
 	var conversionErr error
+	var firstToken, presentedText, presentedCommentary bool
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
 	publish := func(event model.StreamEvent) {
@@ -141,18 +142,36 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 	// ordinary completion endpoint instead.
 	if stream, ok := c.Wire.(llm.StreamClient); ok && sink != nil {
 		publish(model.StreamEvent{Type: model.StreamStarted})
+		markFirstToken := func() {
+			if !firstToken {
+				firstToken = true
+				publish(model.StreamEvent{Type: model.StreamFirstToken})
+			}
+		}
 		response, err = stream.ChatStream(streamCtx, req, llm.StreamHandler{
+			OnFirstToken: markFirstToken,
+			OnCommentary: func(text string) {
+				if text != "" {
+					presentedCommentary = true
+					publish(model.StreamEvent{Type: model.StreamCommentary, Text: text, Phase: "commentary"})
+				}
+			},
 			OnText: func(delta llm.TextDelta) {
 				if delta.Text == "" {
 					return
 				}
-				// Providers may expose reasoning and final-answer channels through
-				// the same streaming API. Reasoning remains internal, while an
-				// unphased delta is treated as user-visible text for compatibility
-				// with OpenAI-compatible providers.
+				markFirstToken()
+				// Without phases, text preceding a tool call is ambiguous. Plain
+				// chat has no tool definitions and keeps its live streaming; tool-
+				// enabled responses are classified after completion. Explicitly
+				// phased final answers continue streaming immediately.
 				if delta.Phase != "" && delta.Phase != "final_answer" {
 					return
 				}
+				if delta.Phase == "" && len(req.Tools) > 0 {
+					return
+				}
+				presentedText = true
 				publish(model.StreamEvent{
 					Type:   model.StreamTextDelta,
 					Text:   delta.Text,
@@ -160,7 +179,9 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 					Phase:  delta.Phase,
 				})
 			},
+			OnToolCallsStarted: markFirstToken,
 			OnToolCallComplete: func(call llm.ToolCall) {
+				markFirstToken()
 				canonical, convertErr := toToolCall(call)
 				if convertErr != nil {
 					conversionErr = convertErr
@@ -202,6 +223,17 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 		}
 	}
 	canonical := model.Response{Message: message, FinishReason: reason, Usage: toUsage(response.Usage), RawMetadata: response.Raw}
+	if !presentedCommentary && len(message.ToolCalls()) > 0 && response.Message.Content != "" {
+		publish(model.StreamEvent{Type: model.StreamCommentary, Text: response.Message.Content, Phase: "commentary"})
+	}
+	if !presentedText && len(message.ToolCalls()) == 0 &&
+		(message.Phase == "" || message.Phase == "final_answer") &&
+		(reason == model.FinishStop || reason == model.FinishLength || reason == model.FinishContent) && message.Text() != "" {
+		publish(model.StreamEvent{Type: model.StreamTextDelta, Text: message.Text(), Phase: "final_answer"})
+	}
+	if sinkErr != nil {
+		return model.Response{}, sinkErr
+	}
 	publish(model.StreamEvent{Type: model.StreamCompleted, ResponseID: canonical.ID, Usage: &canonical.Usage})
 	return canonical, nil
 }

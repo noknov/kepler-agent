@@ -134,3 +134,31 @@ func TestToolErrorIgnoresSuccessfulArtifactSpill(t *testing.T) {
 }
 
 func ptrMessage(message model.Message) *model.Message { return &message }
+
+func TestRunSinkFirstTokenDoesNotWaitForVisibleAnswer(t *testing.T) {
+	store := newProjectionStore()
+	sink := &RunSink{Store: store, Provider: "qoder", Model: "model"}
+	start := time.Unix(100, 0).UTC()
+	for _, event := range []transcript.Event{
+		{ID: "start", SessionID: "s", TurnID: "t", Type: transcript.TurnStarted, Timestamp: start},
+		{ID: "request", SessionID: "s", TurnID: "t", Type: transcript.ModelRequested, Timestamp: start},
+		{ID: "arrival", SessionID: "s", TurnID: "t", Type: transcript.ModelStreamed, Timestamp: start.Add(20 * time.Millisecond), Model: &model.StreamEvent{Type: model.StreamFirstToken}},
+		{ID: "answer", SessionID: "s", TurnID: "t", Type: transcript.ModelStreamed, Timestamp: start.Add(time.Second), Model: &model.StreamEvent{Type: model.StreamTextDelta, Text: "final"}},
+		{ID: "complete", SessionID: "s", TurnID: "t", Type: transcript.ModelCompleted, Timestamp: start.Add(time.Second)},
+	} {
+		sink.Publish(context.Background(), event)
+	}
+	run, _, err := store.Get(context.Background(), "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range run.Steps {
+		if step.Metadata != nil && step.Metadata["first_token_ms"] != nil {
+			if step.Metadata["first_token_ms"] != int64(20) {
+				t.Fatalf("buffering distorted latency: %v", step.Metadata)
+			}
+			return
+		}
+	}
+	t.Fatal("missing first-token latency")
+}
