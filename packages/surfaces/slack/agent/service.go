@@ -163,8 +163,6 @@ func (r *eventRouter) Publish(_ context.Context, event transcript.Event) {
 		switch event.Model.Type {
 		case model.StreamTextDelta:
 			stream.AppendDelta(event.Model.Text)
-		case model.StreamCommentary:
-			stream.UpdateActivity(event.Model.Text)
 		}
 	}
 }
@@ -321,7 +319,6 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 	stream.telemetry = reply
 	stream.connections = s.Connections
 	stream.redactor = safety.NewStreamRedactor(s.Redactor)
-	stream.activityRedactor = s.Redactor
 	s.router.set(turnID, stream)
 	defer s.router.set(turnID, nil)
 	stream.Start()
@@ -833,40 +830,34 @@ func (s *Service) StartControlSubscriber(ctx context.Context) {
 }
 
 type slackStream struct {
-	telemetry                  *replyTrace
-	streamStopError            error
-	ctx                        context.Context
-	messenger                  slackconversation.Messenger
-	req                        slackconversation.Request
-	mu                         sync.Mutex
-	deliveryMu                 sync.Mutex
-	sessionMu                  sync.Mutex
-	session                    slackconversation.AgentSessionMessenger
-	sessionStatus              string
-	assistantStatusUnsupported bool
-	activityPending            string
-	activityRedactor           safety.Redactor
-	activityRunning            bool
-	assistantStatusTimer       *time.Timer
-	assistantStatusText        string
-	redactor                   *safety.StreamRedactor
-	outputPolicy               workflows.OutputPolicy
-	answer                     strings.Builder
-	messageTS                  string
-	nativeStream               bool
-	streamDeliveryFailed       bool
-	streamStartUncertain       bool
-	streamClosed               bool
-	streamClosing              bool
-	lastStreamText             string
-	lastStreamUpdate           time.Time
-	streamTimer                *time.Timer
-	planMessageTS              string
-	planRevision               int
-	planLastUpdate             time.Time
-	planTimer                  *time.Timer
-	connectionActions          map[string]bool
-	connections                *connections.Service
+	telemetry            *replyTrace
+	streamStopError      error
+	ctx                  context.Context
+	messenger            slackconversation.Messenger
+	req                  slackconversation.Request
+	mu                   sync.Mutex
+	deliveryMu           sync.Mutex
+	sessionMu            sync.Mutex
+	session              slackconversation.AgentSessionMessenger
+	sessionStatus        string
+	redactor             *safety.StreamRedactor
+	outputPolicy         workflows.OutputPolicy
+	answer               strings.Builder
+	messageTS            string
+	nativeStream         bool
+	streamDeliveryFailed bool
+	streamStartUncertain bool
+	streamClosed         bool
+	streamClosing        bool
+	lastStreamText       string
+	lastStreamUpdate     time.Time
+	streamTimer          *time.Timer
+	planMessageTS        string
+	planRevision         int
+	planLastUpdate       time.Time
+	planTimer            *time.Timer
+	connectionActions    map[string]bool
+	connections          *connections.Service
 }
 
 func newSlackStream(ctx context.Context, messenger slackconversation.Messenger, req slackconversation.Request) *slackStream {

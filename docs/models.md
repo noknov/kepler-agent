@@ -169,11 +169,9 @@ tool-call steps emit accompanying prose as `commentary`, while the final answer
 is emitted as `final_answer`. Classification uses tool-call structure, never
 wording. Plain chat without tools and explicitly phased final answers retain
 live streaming. First-token arrival is reported independently, so deferred
-presentation does not inflate latency metrics. Slack renders commentary as
-temporary free-text assistant-thread status and answers as message text.
-The last status is renewed while running to avoid Slack's two-minute expiry.
-Unsupported session channels retain native processing status. Actual execution
-plans remain separate from model commentary.
+presentation does not inflate latency metrics. Slack displays only answer text
+and the native agent-session processing status. Public commentary is not shown
+in messages, loading text, or task cards; actual execution plans stay separate.
 Malformed events, upstream errors inside HTTP 200, incomplete tool calls and
 truncated streams fail explicitly. Token usage is reported only when token
 fields are present; native Credits are retained in response metadata as `usage`

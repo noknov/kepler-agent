@@ -990,20 +990,3 @@ func retryAfter(resp *http.Response) time.Duration {
 	}
 	return 0
 }
-
-// SetAssistantStatus sets or clears the legacy assistant-thread loading text.
-func (c *Client) SetAssistantStatus(ctx context.Context, channel, threadTS, status string) error {
-	var out struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error,omitempty"`
-	}
-	if err := c.postJSON(ctx, "assistant.threads.setStatus", map[string]any{
-		"channel_id": channel, "thread_ts": threadTS, "status": status,
-	}, &out); err != nil {
-		return err
-	}
-	if !out.OK {
-		return slackAPIError{Method: "assistant.threads.setStatus", Code: out.Error}
-	}
-	return nil
-}

@@ -57,9 +57,6 @@ func (s *slackStream) scheduleStreamUpdateLocked() {
 // delta is ready. Tool progress remains a single temporary status until then,
 // instead of creating a second, empty Slack message beside it.
 func (s *slackStream) ensureNativeStream(chunks []map[string]any) (bool, error) {
-	// A loading update must finish before starting the answer, which clears it.
-	s.sessionMu.Lock()
-	defer s.sessionMu.Unlock()
 	native, ok := s.messenger.(slackconversation.NativeStreamMessenger)
 	if !ok {
 		return false, fmt.Errorf("native stream messenger unavailable")
@@ -95,7 +92,6 @@ func (s *slackStream) ensureNativeStream(chunks []map[string]any) (bool, error) 
 	s.messageTS = ts
 	s.nativeStream = true
 	s.mu.Unlock()
-	s.keepAssistantStatusLocked("")
 	return true, nil
 }
 

@@ -471,3 +471,28 @@ func TestQueuedInputSurvivesServiceReplacement(t *testing.T) {
 		t.Fatalf("queued=%+v err=%v", queued, err)
 	}
 }
+
+func TestEventRouterKeepsCommentaryOutOfSlackMessagesAndStatus(t *testing.T) {
+	messenger := &nativeStreamingMessenger{}
+	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C1", ThreadTS: "T1"})
+	stream.Start()
+	router := &eventRouter{streams: map[string]*slackStream{"turn": stream}}
+	router.Publish(context.Background(), transcript.Event{TurnID: "turn", Type: transcript.ModelStreamed, Model: &model.StreamEvent{Type: model.StreamCommentary, Text: "Let me inspect the service."}})
+	stream.mu.Lock()
+	answer := stream.answer.String()
+	stream.mu.Unlock()
+	messenger.mu.Lock()
+	if answer != "" || messenger.started != 0 || len(messenger.posts) != 0 || len(messenger.planPosts) != 0 || len(messenger.statuses) != 1 || messenger.statuses[0] != sessionProcessing {
+		t.Fatalf("commentary changed Slack presentation: answer=%q statuses=%v", answer, messenger.statuses)
+	}
+	messenger.mu.Unlock()
+	router.Publish(context.Background(), transcript.Event{TurnID: "turn", Type: transcript.ModelStreamed, Model: &model.StreamEvent{Type: model.StreamTextDelta, Text: "Final answer."}})
+	stream.flushDeferredStream()
+	stream.stopStreamTimer()
+	stream.setSessionStatus(sessionActive)
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if stream.answer.String() != "Final answer." {
+		t.Fatalf("answer=%q", stream.answer.String())
+	}
+}

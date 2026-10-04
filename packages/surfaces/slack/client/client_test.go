@@ -503,24 +503,3 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
-
-func TestSetAssistantStatusSetsAndClearsFreeText(t *testing.T) {
-	var payload map[string]any
-	client := &Client{httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if r.URL.Path != "/api/assistant.threads.setStatus" {
-			t.Fatalf("path=%q", r.URL.Path)
-		}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatal(err)
-		}
-		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true}`)), Request: r}, nil
-	})}}
-	for _, text := range []string{"Inspecting service…", ""} {
-		if err := client.SetAssistantStatus(context.Background(), "C1", "100.000", text); err != nil {
-			t.Fatal(err)
-		}
-		if payload["channel_id"] != "C1" || payload["thread_ts"] != "100.000" || payload["status"] != text {
-			t.Fatalf("payload=%v", payload)
-		}
-	}
-}
