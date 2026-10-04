@@ -847,6 +847,8 @@ type slackStream struct {
 	activityPending            string
 	activityRedactor           safety.Redactor
 	activityRunning            bool
+	assistantStatusTimer       *time.Timer
+	assistantStatusText        string
 	redactor                   *safety.StreamRedactor
 	outputPolicy               workflows.OutputPolicy
 	answer                     strings.Builder

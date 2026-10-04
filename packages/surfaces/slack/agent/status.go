@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/connections"
@@ -269,6 +270,9 @@ func (s *slackStream) setSessionStatus(status string) {
 	}
 	s.sessionMu.Lock()
 	defer s.sessionMu.Unlock()
+	if status != sessionProcessing {
+		s.keepAssistantStatusLocked("")
+	}
 	if s.sessionStatus == status {
 		return
 	}
@@ -282,9 +286,10 @@ func (s *slackStream) setSessionStatus(status string) {
 		err := assistant.SetAssistantStatus(ctx, s.req.Channel, s.req.ThreadTS, text)
 		if err == nil {
 			s.sessionStatus = status
+			s.keepAssistantStatusLocked(text)
 			return
 		}
-		if isSlackError(err, "method_not_supported_for_channel_type") || isSlackError(err, "method_deprecated") || isSlackError(err, "deprecated_endpoint") {
+		if assistantStatusUnsupported(err) {
 			s.assistantStatusUnsupported = true
 		} else {
 			log.Printf("slack assistant status unavailable turn=%s error_code=%s", s.req.EventID, safeSlackErrorCode(err))
@@ -354,12 +359,61 @@ func (s *slackStream) deliverActivity() {
 		ctx, cancel := s.deliveryContext()
 		err := s.messenger.(slackconversation.AssistantStatusMessenger).SetAssistantStatus(ctx, s.req.Channel, s.req.ThreadTS, text)
 		cancel()
+		if err == nil {
+			s.keepAssistantStatusLocked(text)
+		}
 		if err != nil {
-			if isSlackError(err, "method_not_supported_for_channel_type") || isSlackError(err, "method_deprecated") || isSlackError(err, "deprecated_endpoint") {
+			if assistantStatusUnsupported(err) {
 				s.assistantStatusUnsupported = true
 			}
 			log.Printf("slack activity status unavailable turn=%s error_code=%s", s.req.EventID, safeSlackErrorCode(err))
 		}
 		s.sessionMu.Unlock()
 	}
+}
+
+// Slack expires legacy loading text after two minutes. Renew the last public
+// status while the turn is running; model prose is not required for liveness.
+// Caller holds sessionMu.
+func (s *slackStream) keepAssistantStatusLocked(text string) {
+	if s.assistantStatusTimer != nil {
+		s.assistantStatusTimer.Stop()
+		s.assistantStatusTimer = nil
+	}
+	s.assistantStatusText = text
+	if text != "" {
+		s.assistantStatusTimer = time.AfterFunc(60*time.Second, s.refreshAssistantStatus)
+	}
+}
+
+func (s *slackStream) refreshAssistantStatus() {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	s.mu.Lock()
+	finished := s.streamClosing || s.streamClosed || s.messageTS != ""
+	s.mu.Unlock()
+	if finished || s.sessionStatus != sessionProcessing || s.assistantStatusUnsupported || s.assistantStatusText == "" {
+		s.keepAssistantStatusLocked("")
+		return
+	}
+	ctx, cancel := s.deliveryContext()
+	defer cancel()
+	text := s.assistantStatusText
+	err := s.messenger.(slackconversation.AssistantStatusMessenger).SetAssistantStatus(ctx, s.req.Channel, s.req.ThreadTS, text)
+	if err != nil {
+		log.Printf("slack assistant status renewal unavailable turn=%s error_code=%s", s.req.EventID, safeSlackErrorCode(err))
+		if assistantStatusUnsupported(err) {
+			s.assistantStatusUnsupported = true
+			s.keepAssistantStatusLocked("")
+			if fallbackErr := s.session.SetAgentSessionStatus(ctx, s.req.Channel, s.req.ThreadTS, s.req.UserID, sessionProcessing); fallbackErr != nil {
+				log.Printf("slack status fallback unavailable turn=%s error_code=%s", s.req.EventID, safeSlackErrorCode(fallbackErr))
+			}
+			return
+		}
+	}
+	s.keepAssistantStatusLocked(text)
+}
+
+func assistantStatusUnsupported(err error) bool {
+	return isSlackError(err, "method_not_supported_for_channel_type") || isSlackError(err, "method_deprecated") || isSlackError(err, "deprecated_endpoint")
 }

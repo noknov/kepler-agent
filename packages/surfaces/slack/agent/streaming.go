@@ -95,6 +95,7 @@ func (s *slackStream) ensureNativeStream(chunks []map[string]any) (bool, error) 
 	s.messageTS = ts
 	s.nativeStream = true
 	s.mu.Unlock()
+	s.keepAssistantStatusLocked("")
 	return true, nil
 }
 

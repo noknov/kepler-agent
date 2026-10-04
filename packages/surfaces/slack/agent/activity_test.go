@@ -62,3 +62,36 @@ func TestAssistantStatusUnsupportedChannelUsesSessionLifecycle(t *testing.T) {
 		t.Fatalf("statuses=%v", m.statuses)
 	}
 }
+
+func TestAssistantStatusRenewsWithoutModelCommentaryAndStopsAtEnd(t *testing.T) {
+	m := &assistantStatusMessenger{activity: make(chan string, 10)}
+	s := newSlackStream(context.Background(), m, slackconversation.Request{Channel: "C1", ThreadTS: "T1"})
+	s.Start()
+	initial := <-m.activity
+	s.refreshAssistantStatus()
+	if renewed := <-m.activity; renewed != initial {
+		t.Fatalf("renewed=%q initial=%q", renewed, initial)
+	}
+	s.setSessionStatus(sessionActive)
+	if cleared := <-m.activity; cleared != "" {
+		t.Fatalf("clear=%q", cleared)
+	}
+	s.refreshAssistantStatus()
+	if len(m.activity) != 0 || s.assistantStatusTimer != nil {
+		t.Fatal("status renewed after completion")
+	}
+}
+
+func TestAssistantStatusDoesNotRenewOverAnswerStream(t *testing.T) {
+	m := &assistantStatusMessenger{activity: make(chan string, 10)}
+	s := newSlackStream(context.Background(), m, slackconversation.Request{Channel: "C1", ThreadTS: "T1"})
+	s.Start()
+	<-m.activity
+	s.AppendDelta("final answer")
+	s.flushDeferredStream()
+	s.refreshAssistantStatus()
+	if len(m.activity) != 0 {
+		t.Fatal("status renewed after answer started")
+	}
+	s.setSessionStatus(sessionActive)
+}

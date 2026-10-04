@@ -171,6 +171,7 @@ wording. Plain chat without tools and explicitly phased final answers retain
 live streaming. First-token arrival is reported independently, so deferred
 presentation does not inflate latency metrics. Slack renders commentary as
 temporary free-text assistant-thread status and answers as message text.
+The last status is renewed while running to avoid Slack's two-minute expiry.
 Unsupported session channels retain native processing status. Actual execution
 plans remain separate from model commentary.
 Malformed events, upstream errors inside HTTP 200, incomplete tool calls and
