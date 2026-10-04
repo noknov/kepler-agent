@@ -52,6 +52,16 @@ func New(config Config) (*Client, error) {
 	if protocol == "kepler" {
 		return &Client{Host: newKeplerRemote(config.BaseURL, config.APIKey, config.Timeout)}, nil
 	}
+	if provider == "qoder" || protocol == "qoder" {
+		if provider != "qoder" || protocol != "qoder" {
+			return nil, fmt.Errorf("qoder requires the native qoder protocol")
+		}
+		wire, err := llm.NewQoderClient(config.BaseURL, config.APIKey, config.Timeout)
+		if err != nil {
+			return nil, err
+		}
+		return &Client{Wire: wire}, nil
+	}
 	if provider == "chatgpt" {
 		if protocol != "responses" || strings.TrimRight(config.BaseURL, "/") != chatgpt.Resource {
 			return nil, fmt.Errorf("chatgpt requires the official Responses endpoint")

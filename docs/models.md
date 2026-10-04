@@ -119,6 +119,55 @@ never silently switches to API billing. Runtime fallback, if configured, still
 follows the configured secondary provider. These restrictions are specific to
 ChatGPT plan usage; normal OpenAI API clients keep their existing encoding.
 
+### Qoder subscription (operator PAT)
+
+```bash
+LLM_PROVIDER=qoder
+QODER_MODEL=efficient
+QODER_THINKING=disabled
+# QODER_PERSONAL_ACCESS_TOKEN comes from worker SOPS secrets, not this file.
+```
+
+The native `qoder` protocol uses `https://api2.qoder.sh` by default. The optional
+`QODER_BASE_URL` can select the official global `https://api3.qoder.sh` endpoint.
+It is not an OpenAI-compatible endpoint. The adapter makes one model request;
+Kepler continues to own tools, capability policy, transcripts, retries and
+compaction. No Qoder CLI, SDK runtime or proxy process is required.
+
+The operator command `kepler-agent qoder models` reads the PAT from the process
+environment and prints enabled model keys and names from the account catalog.
+Run it in an operator environment populated by the deploy secret renderer.
+Choose a returned key for `QODER_MODEL` or `SECONDARY_MODEL`; there is no fallback
+model list or inferred mapping from tiers to vendors. Catalogs are cached for
+five minutes; a catalog refresh failure returns an error rather than using a
+stale list. The factory supports Qoder as either primary or secondary provider.
+
+The PAT is exchanged for a short-lived job token. That token and account identity
+stay in process memory and are re-acquired before expiry. Redirects are rejected
+and authentication/error response bodies are not logged. Replacing the PAT in
+SOPS requires recreating the worker; no local credential file is maintained.
+
+Inference uses Qoder's native COSY signature and encoded SSE protocol, based on
+the vendor CLI protocol and the MIT-licensed
+[Pi Qoder provider](https://github.com/simonsmh/pi-provider-qoder). This is an
+account-tested protocol adapter, **not a documented standalone model API
+guarantee**. Qoder protocol changes may require an adapter update. The official
+[Agent SDK](https://docs.qoder.com/cli/sdk/how-it-works) owns its own agent loop
+and is therefore not embedded in the Kepler model provider.
+
+Text and structured tool-call round trips were verified using the `efficient`
+model in the real Kepler runtime. Other models and image input need representative
+validation before operational use. Native `reasoning_content` stays separate
+from displayed text. Tool-only assistant turns retain blank content because the
+native gateway otherwise drops them and loses the relation to tool results.
+
+Streams require both a terminal finish reason and the native `[DONE]` marker.
+Malformed events, upstream errors inside HTTP 200, incomplete tool calls and
+truncated streams fail explicitly. Token usage is reported only when token
+fields are present; native Credits are retained in response metadata as `usage`
+and are never substituted for tokens or USD. Existing ChatGPT configuration
+remains the default until the operator changes `LLM_PROVIDER`.
+
 ### CLIProxyAPI
 
 ```bash

@@ -616,6 +616,12 @@ func validateAgentRuntime(cfg Config) (Config, error) {
 }
 
 func validateModelRuntime(cfg Config) (Config, error) {
+	if cfg.LLM.Provider == "qoder" && cfg.LLM.Model == "" {
+		return cfg, fmt.Errorf("QODER_MODEL is required; choose an enabled model from kepler-agent qoder models")
+	}
+	if cfg.LLM.SecondaryProvider == "qoder" && cfg.LLM.SecondaryModel == "" {
+		return cfg, fmt.Errorf("QODER_MODEL or SECONDARY_MODEL is required")
+	}
 	if cfg.LLM.Provider == "chatgpt" && cfg.LLM.Model == "" {
 		return cfg, fmt.Errorf("CHATGPT_MODEL is required; choose a model from kepler-agent chatgpt models")
 	}
@@ -633,8 +639,11 @@ func validateModelRuntime(cfg Config) (Config, error) {
 	if cfg.LLM.APIKey == "" && cfg.LLM.Provider != "chatgpt" {
 		return cfg, fmt.Errorf("%s API key is required", strings.ToUpper(cfg.LLM.Provider))
 	}
-	if cfg.LLM.Protocol != "openai" && cfg.LLM.Protocol != "anthropic" && cfg.LLM.Protocol != "responses" {
-		return cfg, fmt.Errorf("model protocol must be openai, anthropic, or responses")
+	if (cfg.LLM.Provider == "qoder") != (cfg.LLM.Protocol == "qoder") {
+		return cfg, fmt.Errorf("qoder requires the native qoder protocol")
+	}
+	if cfg.LLM.Protocol != "openai" && cfg.LLM.Protocol != "anthropic" && cfg.LLM.Protocol != "responses" && cfg.LLM.Protocol != "qoder" {
+		return cfg, fmt.Errorf("model protocol must be openai, anthropic, responses, or qoder")
 	}
 	if cfg.LLM.AnthropicFlavor != "" && cfg.LLM.AnthropicFlavor != "official" && cfg.LLM.AnthropicFlavor != "claude-code" {
 		return cfg, fmt.Errorf("LLM_ANTHROPIC_FLAVOR must be official or claude-code")
@@ -670,6 +679,7 @@ type providerDefaults struct {
 }
 
 var providerTable = map[string]providerDefaults{
+	"qoder":        {protocol: "qoder", baseURL: "https://api2.qoder.sh", model: "", apiKeyEnvs: []string{"QODER_PERSONAL_ACCESS_TOKEN"}},
 	"chatgpt":      {protocol: "responses", baseURL: "https://api.openai.com/v1", model: ""},
 	"longcat":      {protocol: "anthropic", baseURL: "https://api.longcat.chat/anthropic", model: "LongCat-2.0", anthropicFlavor: "official", apiKeyEnvs: []string{"LONGCAT_API_KEY"}},
 	"mimo":         {protocol: "anthropic", baseURL: "https://token-plan-cn.xiaomimimo.com/anthropic", model: "mimo-v2.5", anthropicFlavor: "claude-code", apiKeyEnvs: []string{"MIMO_API_KEY"}},
@@ -727,6 +737,8 @@ func providerAnthropicFlavor(provider string) string {
 
 func providerThinking(provider string) string {
 	switch provider {
+	case "qoder":
+		return firstEnv("QODER_THINKING")
 	case "chatgpt":
 		return firstEnv("CHATGPT_THINKING")
 	case "mimo":

@@ -357,3 +357,16 @@ func TestFactoryResponsesPreservesCallID(t *testing.T) {
 		t.Fatalf("tool calls = %+v, want preserved public call ID", calls)
 	}
 }
+
+func TestQoderFactoryPreservesCanonicalAdapter(t *testing.T) {
+	c, err := New(Config{Provider: "qoder", Protocol: "qoder", BaseURL: llm.QoderBaseURL, APIKey: "synthetic-pat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Wire.(*llm.QoderClient); !ok || c.Host != nil {
+		t.Fatal("Qoder bypassed the canonical provider adapter")
+	}
+	if _, err := New(Config{Provider: "qoder", Protocol: "openai", BaseURL: llm.QoderBaseURL, APIKey: "synthetic-pat"}); err == nil {
+		t.Fatal("accepted wrong Qoder protocol")
+	}
+}

@@ -930,3 +930,26 @@ func TestChatGPTConfigRequiresSessionAndModelWithoutAPIKey(t *testing.T) {
 		t.Fatal("accepted missing account model")
 	}
 }
+
+func TestQoderUsesPATAndNativeProtocol(t *testing.T) {
+	t.Setenv("QODER_PERSONAL_ACCESS_TOKEN", "synthetic-pat")
+	t.Setenv("QODER_MODEL", "account-model")
+	t.Setenv("LLM_PROTOCOL", "")
+	t.Setenv("QODER_PROTOCOL", "")
+	if providerProtocol("qoder") != "qoder" || providerAPIKey("qoder") != "synthetic-pat" || providerModel("qoder") != "account-model" {
+		t.Fatal("Qoder provider defaults not wired")
+	}
+	cfg := Config{LLM: LLMConfig{Provider: "qoder", Protocol: "qoder", BaseURL: providerBaseURL("qoder"), Model: providerModel("qoder"), APIKey: providerAPIKey("qoder"), Timeout: time.Minute}}
+	if _, err := validateModelRuntime(cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.LLM.Protocol = "openai"
+	if _, err := validateModelRuntime(cfg); err == nil {
+		t.Fatal("accepted Qoder as OpenAI compatible")
+	}
+	cfg.LLM.Protocol = "qoder"
+	cfg.LLM.Model = ""
+	if _, err := validateModelRuntime(cfg); err == nil {
+		t.Fatal("guessed a Qoder model")
+	}
+}
