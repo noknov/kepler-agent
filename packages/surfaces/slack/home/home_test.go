@@ -62,8 +62,8 @@ func TestViewShowsRawModelIDAndHidesSecondary(t *testing.T) {
 		t.Fatalf("Marshal() error = %v", err)
 	}
 	body := string(raw)
-	if !strings.Contains(body, "*Provider*\\ndeepseek") {
-		t.Fatalf("expected configured provider in view, got %s", body)
+	if strings.Contains(body, "*Provider*") {
+		t.Fatalf("expected provider hidden from view, got %s", body)
 	}
 	if !strings.Contains(body, "deepseek-flash") {
 		t.Fatalf("expected raw primary model ID in view, got %s", body)
