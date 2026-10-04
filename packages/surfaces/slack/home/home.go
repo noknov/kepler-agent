@@ -153,6 +153,9 @@ func (c Controller) View(userID string) map[string]any {
 		mrkdwnField(fmt.Sprintf("*Custom Skills*\n%d active", skillCount)),
 		mrkdwnField("*Primary Model*\n" + modelDisplayName(c.Cfg.LLM.Model)),
 	}
+	if provider := strings.TrimSpace(c.Cfg.LLM.Provider); provider != "" {
+		statusFields = append(statusFields, mrkdwnField("*Provider*\n"+provider))
+	}
 	blocks := []map[string]any{
 		contextBlock("Mention the agent in a channel or use the Messages tab to start a private thread."),
 		dividerBlock(),

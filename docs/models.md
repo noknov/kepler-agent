@@ -137,7 +137,8 @@ compaction. No Qoder CLI, SDK runtime or proxy process is required.
 The operator command `kepler-agent qoder models` reads the PAT from the process
 environment and prints enabled model keys and names from the account catalog.
 Run it in an operator environment populated by the deploy secret renderer.
-Choose a returned key for `QODER_MODEL` or `SECONDARY_MODEL`; there is no fallback
+Choose a returned key or exact display name for `QODER_MODEL` or
+`SECONDARY_MODEL`; there is no fallback
 model list or inferred mapping from tiers to vendors. Catalogs are cached for
 five minutes; a catalog refresh failure returns an error rather than using a
 stale list. The factory supports Qoder as either primary or secondary provider.

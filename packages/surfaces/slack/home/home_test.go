@@ -45,6 +45,7 @@ func TestViewShowsRawModelIDAndHidesSecondary(t *testing.T) {
 	controller := Controller{
 		Cfg: config.Config{
 			LLM: config.LLMConfig{
+				Provider:       "deepseek",
 				Model:          "deepseek-flash",
 				SecondaryModel: "mimo-v2.5",
 			},
@@ -61,6 +62,9 @@ func TestViewShowsRawModelIDAndHidesSecondary(t *testing.T) {
 		t.Fatalf("Marshal() error = %v", err)
 	}
 	body := string(raw)
+	if !strings.Contains(body, "*Provider*\\ndeepseek") {
+		t.Fatalf("expected configured provider in view, got %s", body)
+	}
 	if !strings.Contains(body, "deepseek-flash") {
 		t.Fatalf("expected raw primary model ID in view, got %s", body)
 	}
