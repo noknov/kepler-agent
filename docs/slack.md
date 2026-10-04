@@ -44,6 +44,14 @@ in the Slack thread under its ownership policy. User integration connections
 are separate from Slack sign-in and may be requested before a tool can run.
 See [tools and connections](tools.md).
 
+App Home → Connections shows each saved integration instance. **Remove** asks
+for confirmation, deletes only that user's selected instance and credentials,
+and refreshes the list. It also works for unnamed or invalid connections; other
+instances and users remain unchanged. This removes Kepler's local authorization,
+not access granted in the provider's own account settings. Entries marked
+`server credentials` are deployment configuration and have no personal Remove
+action.
+
 ## Review pull requests
 
 Ask for a review and include one or more GitHub pull request links. No slash

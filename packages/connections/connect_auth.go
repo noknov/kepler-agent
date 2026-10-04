@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/noknov/kepler-agent/packages/safety"
 )
@@ -130,6 +131,13 @@ func validateConnectionMetadata(provider string, metadata map[string]string) err
 	if raw := strings.TrimSpace(metadata["mcp_url"]); raw != "" {
 		if err := safety.ValidatePublicHTTPURL(raw); err != nil {
 			return fmt.Errorf("clickstack mcp_url: %w", err)
+		}
+	}
+	if provider == ProviderClickStack {
+		for _, key := range []string{"service_id", "team_id"} {
+			if value := metadata[key]; len(value) > 256 || strings.IndexFunc(value, unicode.IsControl) >= 0 {
+				return fmt.Errorf("%s must be a short identifier without control characters", key)
+			}
 		}
 	}
 	return nil

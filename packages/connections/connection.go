@@ -167,7 +167,11 @@ func Plugins() []Plugin {
 			Description:      "Query logs, traces, dashboards, and alerts in your team's ClickStack workspace with your own ClickHouse Cloud account.",
 			Scopes:           []string{"clickstack:access", "openid", "profile", "email"},
 			SupportsMultiple: true,
-			Fields:           []PluginField{{ID: "mcp_url", Label: "Server URL", Description: "The ClickStack MCP server to connect.", Placeholder: "https://mcp.clickhouse.cloud/clickstack", Required: false}},
+			Fields: []PluginField{
+				{ID: "service_id", Label: "Service ID (ClickHouse Cloud)", Description: "Required for Cloud. Copy x-service-id from this service's Team Settings → API & Agents MCP configuration."},
+				{ID: "mcp_url", Label: "Server URL", Description: "Leave empty for ClickHouse Cloud; set your MCP endpoint for OSS/BYOC.", Placeholder: "https://mcp.clickhouse.cloud/clickstack"},
+				{ID: "team_id", Label: "Team ID (OSS/BYOC)", Description: "Optional x-hdx-team value when selecting a team in an OSS/BYOC deployment."},
+			},
 		},
 		{
 			ID:               ProviderGCP,

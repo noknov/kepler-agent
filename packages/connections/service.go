@@ -137,6 +137,18 @@ func (s Service) deleteConnection(ctx context.Context, userID, provider, instanc
 	return s.Store.Delete(ctx, userID, provider)
 }
 
+// DeleteConnection removes one user's saved instance. It does not announce an
+// OAuth completion or resume requests waiting for authorization.
+func (s Service) DeleteConnection(ctx context.Context, userID, provider, instanceID string) error {
+	if s.Store == nil {
+		return ErrNotConnected
+	}
+	if strings.TrimSpace(userID) == "" || strings.TrimSpace(provider) == "" || strings.TrimSpace(instanceID) == "" {
+		return fmt.Errorf("connection user, provider and instance are required")
+	}
+	return s.deleteConnection(ctx, userID, provider, instanceID)
+}
+
 // serviceState holds mutable OAuth state behind a pointer so Service remains a
 // safe, lightweight dependency value. Surface adapters may carry Service by
 // value, but must never copy synchronization primitives themselves.
@@ -338,14 +350,7 @@ func (s Service) clickstackForMeta(meta OAuthStateMeta) *clickstackOAuth {
 	if len(metadata) == 0 {
 		return s.clickstack()
 	}
-	cfg := s.Config.ClickStack
-	if value := strings.TrimSpace(metadata["mcp_url"]); value != "" {
-		cfg.MCPURL = value
-	}
-	if value := strings.TrimSpace(metadata["service_id"]); value != "" {
-		cfg.ServiceID = value
-	}
-	return newClickStackOAuth(cfg)
+	return newClickStackOAuth(s.Config.ClickStack.WithMetadata(metadata))
 }
 
 func (s Service) exchangeSlack(ctx context.Context, code string) (token, account string, scopes []string, err error) {

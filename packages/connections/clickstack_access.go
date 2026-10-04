@@ -45,7 +45,11 @@ func (s *Service) ClickStackConnectedInstance(ctx context.Context, userID, insta
 	if err != nil {
 		return false
 	}
-	return clickStackStoredTokenUsable(raw, s.Config.ClickStack.OAuthMode())
+	conn, err := s.GetConnection(ctx, userID, ProviderClickStack, instanceID)
+	if err != nil {
+		return false
+	}
+	return clickStackStoredTokenUsable(raw, s.Config.ClickStack.WithMetadata(conn.Metadata).OAuthMode())
 }
 
 func clickStackStoredTokenUsable(raw string, oauthMode bool) bool {

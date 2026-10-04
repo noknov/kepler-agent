@@ -2,6 +2,7 @@ package slackhome
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -18,6 +19,13 @@ const conversationModePrefix = "user:conversation_mode:"
 
 type Publisher interface {
 	PublishHome(context.Context, string, map[string]any) error
+}
+
+// ConnectionReference identifies an instance; ownership always comes from
+// the signed Slack interaction, never from this button's value.
+type ConnectionReference struct {
+	Provider   string `json:"provider"`
+	InstanceID string `json:"instance_id"`
 }
 
 type Controller struct {
@@ -172,23 +180,25 @@ func (c Controller) View(userID string) map[string]any {
 }
 
 func (c Controller) connectionBlocks(userID string) []map[string]any {
-	if c.Connections.Store == nil || !c.connectionsSectionEnabled() {
+	if c.Connections.Store == nil {
 		return nil
 	}
 	listed, _ := c.Connections.ListConnections(context.Background(), userID)
 	serverCreds := c.serverCredentialConnections()
+	if len(listed) == 0 && !c.connectionsSectionEnabled() {
+		return nil
+	}
 	blocks := []map[string]any{
 		dividerBlock(),
 		headerBlock(":electric_plug: Connections"),
-		actionsBlock(actionButton("add_connection", "＋ Add integration", `{"origin":"app_home"}`, "primary")),
+	}
+	if c.Connections.Config.OAuthEnabled() {
+		blocks = append(blocks, actionsBlock(actionButton("add_connection", "＋ Add integration", `{"origin":"app_home"}`, "primary")))
 	}
 	for _, item := range listed {
 		plugin, known := connections.FindPlugin(item.Provider)
-		if !known || !c.Connections.ProviderOAuthEnabled(item.Provider) {
-			continue
-		}
-		if item.Provider == connections.ProviderGitHub && c.serverGitHubCredentialsActive() {
-			continue
+		if !known {
+			plugin.Title = item.Provider
 		}
 		status := "Not connected"
 		account := item.Account
@@ -223,18 +233,31 @@ func (c Controller) connectionBlocks(userID string) []map[string]any {
 		if account != "" {
 			text += fmt.Sprintf(" (`%s`)", account)
 		}
-		authURL, err := c.Connections.ConnectURLForInstanceWithContext(userID, item.Provider, item.InstanceID, item.Label, item.Metadata, connections.ConnectionContext{Origin: "app_home"})
-		if err != nil || authURL == "" {
-			blocks = append(blocks, sectionBlock(text))
-			continue
+		if item.Provider == connections.ProviderClickStack {
+			target := c.Connections.Config.ClickStack.WithMetadata(item.Metadata)
+			if target.ServiceID != "" {
+				text += fmt.Sprintf("\nService ID: `%s`", target.ServiceID)
+				if len(item.Metadata) == 0 {
+					text += " (deployment configuration)"
+				}
+			}
+			if target.TeamID != "" {
+				text += fmt.Sprintf("\nTeam ID: `%s`", target.TeamID)
+			}
 		}
-		buttonLabel := "Connect"
-		buttonStyle := "primary"
-		if status == "Connected" {
-			buttonLabel = "Reconnect"
-			buttonStyle = ""
+		buttons := []map[string]any{}
+		if c.Connections.ProviderOAuthEnabled(item.Provider) {
+			authURL, err := c.Connections.ConnectURLForInstanceWithContext(userID, item.Provider, item.InstanceID, item.Label, item.Metadata, connections.ConnectionContext{Origin: "app_home"})
+			if err == nil && authURL != "" {
+				buttonLabel, buttonStyle := "Connect", "primary"
+				if status == "Connected" {
+					buttonLabel, buttonStyle = "Reconnect", ""
+				}
+				buttons = append(buttons, actionButtonURL(buttonLabel, authURL, buttonStyle))
+			}
 		}
-		blocks = append(blocks, sectionBlockWithAccessory(text, actionButtonURL(buttonLabel, authURL, buttonStyle)))
+		buttons = append(buttons, removeConnectionButton(item))
+		blocks = append(blocks, sectionBlock(text), actionsBlock(buttons...))
 	}
 	if len(listed) == 0 && len(serverCreds) == 0 {
 		blocks = append(blocks, contextBlock("No integrations connected yet. Add one when you need it; the agent can also offer a connection from chat."))
@@ -247,6 +270,18 @@ func (c Controller) connectionBlocks(userID string) []map[string]any {
 		return nil
 	}
 	return blocks
+}
+
+func removeConnectionButton(item connections.Connection) map[string]any {
+	value, _ := json.Marshal(ConnectionReference{Provider: item.Provider, InstanceID: connections.NormalizeInstanceID(item.InstanceID)})
+	button := actionButton("remove_connection", "Remove", string(value), "danger")
+	plain := func(text string) map[string]any { return map[string]any{"type": "plain_text", "text": text} }
+	button["confirm"] = map[string]any{
+		"title":   plain("Remove connection?"),
+		"text":    plain("Remove this connection and its saved credentials from Kepler? You can add it again later. This does not revoke access at the provider."),
+		"confirm": plain("Remove"), "deny": plain("Cancel"), "style": "danger",
+	}
+	return button
 }
 
 func (c Controller) connectionsSectionEnabled() bool {

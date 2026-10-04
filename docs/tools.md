@@ -58,17 +58,35 @@ selection. Workflow aliases can live in `PROMPT_DIR/runtime.json`.
 | `diagnostics-incident_brief` | Structured incident summary |
 | `diagnostics-timeline` | Incident event timeline |
 | `diagnostics-evidence_board` | Structured evidence board |
-| `mcp_clickstack_*` | ClickStack observability MCP tools (logs, traces, dashboards, alerts) |
+| `clickstack_connections` | Complete, compact inventory of the user's saved ClickStack instances and resolved targets |
+| `clickstack_tools` | Paginated tool names or the full schema of one selected remote tool |
+| `clickstack_call` | Execute an explicitly selected read-only tool on one connection instance |
 
 ### ClickStack MCP
 
-ClickStack tools are discovered from the configured MCP endpoint once a usable token exists.
-For ClickHouse Cloud, set `CLICKSTACK_SERVICE_ID` and have each user connect ClickStack from App Home (OAuth).
+Connection inventory does not contact remote servers, refresh tokens, or include
+remote schemas. It returns every saved instance, including connections without
+a custom name, with a total count and opaque `instance_id`. The stored status
+is not a live access check. Names are presentation only and never select a
+connection. This keeps a large tool schema from hiding later instances in an
+overflow artifact or wasting model context.
+
+Use `clickstack_tools` with the selected `instance_id` to list compact tool
+names, then supply an exact `tool_name` to retrieve only that tool's full
+description and schema. `clickstack_call` validates the current remote
+definition's `readOnlyHint` before execution. Both resolve credentials and
+targets using the call's authenticated user and selected instance.
+
+For ClickHouse Cloud, each new App Home connection requires its own Service ID
+and OAuth authorization. Copy `x-service-id` from the corresponding service's
+Team Settings → API & Agents MCP configuration. OAuth identifies the account;
+the service header selects the query target. A custom name does not select a
+Cloud service. See the [ClickStack MCP documentation](https://clickhouse.com/docs/clickstack/mcp#managed-service-override).
 For OSS/BYOC, set `CLICKSTACK_MCP_URL` and connect a Personal API Access Key per user via `kepler-agent connect clickstack` or App Home.
 
 | Deployment | URL | Auth |
 |---|---|---|
-| ClickHouse Cloud managed ClickStack | `https://mcp.clickhouse.cloud/clickstack` (default) | Per-user OAuth via Connections (`x-service-id` from deploy config) |
+| ClickHouse Cloud managed ClickStack | `https://mcp.clickhouse.cloud/clickstack` (default) | Per-user OAuth and per-instance `service_id` (`x-service-id`) |
 | Open Source / BYOC ClickStack | `https://<your-clickstack>/api/mcp` | Per-user Bearer token (Personal API Access Key) |
 
 ### Google Cloud (read-only OAuth)
@@ -89,8 +107,15 @@ When OAuth is configured, GCP and Kubernetes tools require the same per-user Goo
 
 Deploy routing headers:
 
-- `CLICKSTACK_SERVICE_ID` — required for Cloud; shared `x-service-id` for the whole team
-- `CLICKSTACK_TEAM_ID` — `x-hdx-team` for OSS/BYOC multi-team setups
+- `CLICKSTACK_SERVICE_ID` — legacy deployment target for connections without saved target metadata
+- `CLICKSTACK_TEAM_ID` — legacy `x-hdx-team` for OSS/BYOC multi-team setups
+
+Per-instance `mcp_url`, `service_id`, and `team_id` select an independent target.
+Selecting a new target clears inherited routing headers for another target.
+The inventory reports `target_origin=connection` or `deployment_config`, so an
+agent can see when two differently named connections still share the same
+deployment target. Existing connections are not silently renamed or migrated;
+remove and add a connection with the intended Service ID to change its target.
 
 ### Notion MCP
 

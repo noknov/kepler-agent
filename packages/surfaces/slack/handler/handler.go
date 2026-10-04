@@ -147,6 +147,8 @@ func (h *Handler) handleBlockActions(ctx context.Context, interaction slackgatew
 			h.openAssetModal(ctx, interaction.TriggerID, interaction.UserID, userprefs.KindSkill)
 		case "add_connection":
 			h.openConnectionModal(ctx, interaction)
+		case "remove_connection":
+			h.removeConnection(ctx, interaction, action.Value)
 		case "enable_asset":
 			h.setAssetActive(ctx, interaction, action.Value, true)
 		case "disable_asset":
@@ -156,6 +158,26 @@ func (h *Handler) handleBlockActions(ctx context.Context, interaction slackgatew
 		case "agent_approval_approve", "agent_approval_decline":
 			h.resolveApproval(ctx, interaction, action.ActionID, action.Value)
 		}
+	}
+}
+
+func (h *Handler) removeConnection(ctx context.Context, interaction slackgateway.Interaction, value string) {
+	var reference slackhome.ConnectionReference
+	if json.Unmarshal([]byte(value), &reference) != nil || reference.Provider == "" || reference.InstanceID == "" || connections.NormalizeInstanceID(reference.InstanceID) != reference.InstanceID {
+		return
+	}
+	if err := h.Home.Connections.DeleteConnection(ctx, interaction.UserID, reference.Provider, reference.InstanceID); err != nil {
+		log.Printf("remove connection failed user=%s provider=%s instance=%s: %v", interaction.UserID, reference.Provider, reference.InstanceID, err)
+		if h.Slack != nil && interaction.TriggerID != "" {
+			_ = h.Slack.OpenView(ctx, interaction.TriggerID, map[string]any{
+				"type": "modal", "title": plainText("Couldn't remove"), "close": plainText("Close"),
+				"blocks": []map[string]any{{"type": "section", "text": plainText("The connection could not be removed. Please try again.")}},
+			})
+		}
+		return
+	}
+	if err := h.Home.RequestRefresh(ctx, interaction.UserID); err != nil {
+		log.Printf("refresh home after connection removal failed user=%s: %v", interaction.UserID, err)
 	}
 }
 
@@ -252,6 +274,12 @@ func (h *Handler) handleConnectionSubmission(interaction slackgateway.Interactio
 	}
 	if len(metadata) == 0 {
 		metadata = nil
+	}
+	if provider == connections.ProviderClickStack {
+		target := h.Home.Connections.Config.ClickStack.WithMetadata(metadata)
+		if target.UsesCloudEndpoint() && strings.TrimSpace(metadata["service_id"]) == "" {
+			return &slackgateway.InteractionResponse{ResponseAction: "errors", Errors: map[string]string{"connection_service_id": "Enter this service's x-service-id from its MCP configuration."}}
+		}
 	}
 	if modalContext.Origin == "" {
 		modalContext.Origin = "app_home"

@@ -21,6 +21,7 @@ func NewServiceFromConfig(store Store, cfg config.Config) Service {
 			ClickStack: ClickStackOAuthConfig{
 				MCPURL:    cfg.Integrations.ClickStack.MCPURL,
 				ServiceID: cfg.Integrations.ClickStack.ServiceID,
+				TeamID:    cfg.Integrations.ClickStack.TeamID,
 			},
 			GCP: GCPOAuthConfig{
 				ClientID:     cfg.Connections.GCPOAuthClientID,

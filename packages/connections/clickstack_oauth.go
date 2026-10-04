@@ -25,6 +25,28 @@ const (
 type ClickStackOAuthConfig struct {
 	MCPURL    string
 	ServiceID string
+	TeamID    string
+}
+
+// WithMetadata resolves a saved target. An explicitly selected endpoint,
+// service or team must not inherit routing headers for a different target.
+// Connections without target metadata retain the legacy deployment default.
+func (c ClickStackOAuthConfig) WithMetadata(metadata map[string]string) ClickStackOAuthConfig {
+	endpoint := strings.TrimSpace(metadata["mcp_url"])
+	service := strings.TrimSpace(metadata["service_id"])
+	team := strings.TrimSpace(metadata["team_id"])
+	if endpoint != "" || service != "" || team != "" {
+		c.ServiceID, c.TeamID = service, team
+	}
+	if endpoint != "" {
+		c.MCPURL = endpoint
+	}
+	return c
+}
+
+func (c ClickStackOAuthConfig) UsesCloudEndpoint() bool {
+	endpoint := strings.TrimRight(strings.TrimSpace(c.MCPURL), "/")
+	return endpoint == "" || endpoint == clickstackDefaultMCPURL
 }
 
 type clickstackOAuthClient struct {
