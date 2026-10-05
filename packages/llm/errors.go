@@ -13,6 +13,15 @@ type ProviderError struct {
 	Body       string
 }
 
+// ProtocolError describes a failed provider response without including content,
+// tool arguments, or credentials. It is retryable only before output is committed.
+type ProtocolError struct {
+	Provider string
+	Detail   string
+}
+
+func (e ProtocolError) Error() string { return e.Provider + " protocol error: " + e.Detail }
+
 type EmptyResponseError struct {
 	Provider     string
 	StopReason   string

@@ -117,6 +117,13 @@ class HarborAdapterTests(unittest.TestCase):
             asyncio.run(agent.run("Fix the task.", CancelledEnvironment(), context))
         self.assertIn("kill -INT", calls[-1]["command"])
         self.assertEqual(calls[-1]["timeout_sec"],10)
+        class FailedEnvironment:
+            async def exec(self, **kwargs):
+                event = {"type":"turn_failed", "error":"protocol failure"}
+                return types.SimpleNamespace(return_code=1, stdout="private-transcript-sentinel\n"+json.dumps(event), stderr="")
+        with self.assertRaisesRegex(RuntimeError, "protocol failure") as caught:
+            asyncio.run(agent.run("Fix the task.", FailedEnvironment(), context))
+        self.assertNotIn("private-transcript-sentinel", str(caught.exception))
         class DriftedEnvironment:
             async def exec(self, **kwargs):
                 event = {"type":"model_request_started","metadata":{"model":"other-model"}}
@@ -124,6 +131,35 @@ class HarborAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,"changed after preflight"):
             asyncio.run(agent.run("Fix the task.", DriftedEnvironment(), context))
 
+
+
+class HarborPreparationTests(unittest.TestCase):
+    def test_image_preflight_matches_task_metadata_and_records_digests(self):
+        preparation = load_module("harbor_preparation_test", EVALS / "prepare_harbor.py")
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            task = root / "bin/harbor-datasets/terminal-bench-test/task"
+            task.mkdir(parents=True)
+            (task/"task.toml").write_text('[task]\nname="terminal-bench/example"\n[environment]\ndocker_image="upstream/example:version"\n')
+            calls = []
+            def run(command, **kwargs):
+                calls.append(command)
+                return types.SimpleNamespace(returncode=0)
+            with mock.patch.object(preparation,"ROOT",root), mock.patch.object(preparation.subprocess,"run",side_effect=run), mock.patch.object(preparation.subprocess,"check_output",return_value='["upstream/example@sha256:verified"]'):
+                images = preparation.prepare_images("terminal-bench/test",["terminal-bench/example"])
+                self.assertEqual(images[0]["digests"],["upstream/example@sha256:verified"])
+                self.assertFalse(any(c[:2]==["docker","pull"] for c in calls))
+                with self.assertRaisesRegex(ValueError,"No task images"):
+                    preparation.prepare_images("terminal-bench/test",["terminal-bench/other"])
+
+    def test_unverified_dependency_archive_is_rejected(self):
+        preparation = load_module("harbor_preparation_hash_test", EVALS / "prepare_harbor.py")
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); (root/"bin").mkdir()
+            (root/"bin"/(preparation.ARCHIVE+".tar.gz")).write_bytes(b"invalid")
+            with mock.patch.object(preparation,"ROOT",root):
+                with self.assertRaisesRegex(ValueError,"checksum mismatch"):
+                    preparation.prepare()
 
 
 class EvaluatorTests(unittest.TestCase):

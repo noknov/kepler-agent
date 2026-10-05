@@ -454,6 +454,14 @@ func toModelError(err error) error {
 	if err == nil {
 		return nil
 	}
+	var emptyErr llm.EmptyResponseError
+	if errors.As(err, &emptyErr) && emptyErr.Provider == "qoder" {
+		return &model.Error{Kind: model.ErrorProtocol, Message: err.Error(), Retryable: true, Cause: err}
+	}
+	var protocolErr llm.ProtocolError
+	if errors.As(err, &protocolErr) {
+		return &model.Error{Kind: model.ErrorProtocol, Message: err.Error(), Retryable: true, Cause: err}
+	}
 	var providerErr llm.ProviderError
 	if errors.As(err, &providerErr) {
 		kind := model.ErrorInvalid

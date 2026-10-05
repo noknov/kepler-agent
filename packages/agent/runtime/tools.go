@@ -89,7 +89,7 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 			if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.ApprovalRequested, ToolCall: &call, Metadata: metadata}); err != nil {
 				return toolOutcome{}, err
 			}
-			if len(calls) > 1 {
+			if len(calls) > 1 && r.deps.Approver == nil {
 				// A deferred approval suspends the whole model tool batch. Record
 				// explicit results for sibling calls so the later approval
 				// resolution cannot leave an assistant tool message malformed.
@@ -346,10 +346,8 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 		}
 	}
 	if !hasWireVisibleToolContent(result.Content) {
-		result.IsError = true
-		if result.ErrorCode == "" {
-			result.ErrorCode = "empty_tool_result"
-		}
+		// Empty successful output is valid (for example an empty directory).
+		// Supply a wire-visible acknowledgement without turning success into failure.
 		result.Content = []model.Content{{Type: model.ContentText, Text: fmt.Sprintf("Tool %q returned no output.", call.Name)}}
 	}
 	if result.Metadata == nil {

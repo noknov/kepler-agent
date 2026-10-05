@@ -197,8 +197,8 @@ func TestToolErrorResultsAndPanicsAreFailedSpans(t *testing.T) {
 			for _, span := range recorder.Ended() {
 				if span.Name() == "tool.execute" {
 					found = true
-					if span.Status().Code != codes.Error {
-						t.Fatal("error result reported healthy")
+					if (span.Status().Code == codes.Error) != (item.Descriptor().Name != "empty") {
+						t.Fatal("tool result status incorrect")
 					}
 				}
 			}

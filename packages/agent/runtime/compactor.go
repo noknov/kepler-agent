@@ -103,14 +103,22 @@ func chunkMessages(messages []model.Message, limit int) [][]model.Message {
 	chunks := make([][]model.Message, 0, 2)
 	current := make([]model.Message, 0)
 	currentTokens := 0
-	for _, message := range messages {
-		messageTokens := EstimateTokens([]model.Message{message})
-		if len(current) > 0 && currentTokens+messageTokens > limit && message.Role == model.RoleUser {
+	entries := make([]projectedMessage, len(messages))
+	for i, message := range messages {
+		entries[i].message = message
+	}
+	for _, group := range exchangeGroups(entries) {
+		var batch []model.Message
+		for _, entry := range group.entries {
+			batch = append(batch, entry.message)
+		}
+		messageTokens := EstimateTokens(batch)
+		if len(current) > 0 && currentTokens+messageTokens > limit {
 			chunks = append(chunks, current)
 			current = nil
 			currentTokens = 0
 		}
-		current = append(current, message)
+		current = append(current, batch...)
 		currentTokens += messageTokens
 	}
 	if len(current) > 0 {

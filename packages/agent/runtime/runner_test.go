@@ -342,12 +342,12 @@ func TestRunTurnNormalizesEmptyToolResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, event := range events {
-		if event.Type != transcript.ToolCallFailed || event.ToolResult == nil || len(event.ToolResult.Content) == 0 || event.ToolResult.Content[0].Text == "" {
+		if event.Type != transcript.ToolCallCompleted || event.ToolResult == nil || event.ToolResult.IsError || len(event.ToolResult.Content) == 0 || event.ToolResult.Content[0].Text == "" {
 			continue
 		}
 		return
 	}
-	t.Fatal("empty tool result was not normalized to a non-empty tool failure")
+	t.Fatal("empty successful tool result was not normalized to a visible success")
 }
 
 func TestRunTurnRetriesTransientModelError(t *testing.T) {

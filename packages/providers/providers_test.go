@@ -580,3 +580,17 @@ func TestNativeQoderDropsUnclassifiedTextOnFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestQoderProtocolAndEmptyErrorsAreRetryable(t *testing.T) {
+	for _, err := range []error{llm.ProtocolError{Provider: "qoder", Detail: "incomplete tool call"}, llm.EmptyResponseError{Provider: "qoder", StopReason: "stop"}} {
+		var typed *model.Error
+		if !errors.As(toModelError(err), &typed) || typed.Kind != model.ErrorProtocol || !typed.Retryable {
+			t.Fatalf("error not classified: %v", err)
+		}
+	}
+	other := llm.EmptyResponseError{Provider: "anthropic"}
+	var typed *model.Error
+	if errors.As(toModelError(other), &typed) {
+		t.Fatal("changed another provider's empty-response behavior")
+	}
+}

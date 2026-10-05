@@ -34,6 +34,7 @@ class KeplerAgent(BaseAgent):
         source_ref: str,
         source_repo: str = _DEFAULT_SOURCE_REPO,
         binary_path: str | None = None,
+        ripgrep_path: str | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -50,6 +51,9 @@ class KeplerAgent(BaseAgent):
         self._binary_path = Path(binary_path).resolve() if binary_path else None
         if self._binary_path and not self._binary_path.is_file():
             raise ValueError(f"binary_path is not a file: {self._binary_path}")
+        self._ripgrep_path = Path(ripgrep_path).resolve() if ripgrep_path else None
+        if self._ripgrep_path and not self._ripgrep_path.is_file():
+            raise ValueError("ripgrep_path must point to a prepared Linux binary")
         default_ca = ssl.get_default_verify_paths().cafile
         self._ca_bundle = Path(default_ca) if default_ca and Path(default_ca).is_file() else None
         self._binary_sha256 = (
@@ -76,6 +80,15 @@ class KeplerAgent(BaseAgent):
             await environment.upload_file(self._binary_path, self._BINARY)
             if self._ca_bundle:
                 await environment.upload_file(self._ca_bundle, "/tmp/kepler-eval-ca.pem")
+            if self._ripgrep_path:
+                await environment.upload_file(self._ripgrep_path, "/usr/local/bin/rg")
+                result = await environment.exec(
+                    command=f"chmod 0755 {self._BINARY} /usr/local/bin/rg; {self._BINARY} --version && rg --version && mkdir -p {Path(self._LOG).parent}",
+                    user="root", timeout_sec=30,
+                )
+                if result.return_code != 0:
+                    raise RuntimeError("Prepared Kepler dependencies failed their version probes")
+                return
             result = await environment.exec(
                 command=(
                     "set -eu; "
@@ -196,4 +209,15 @@ class KeplerAgent(BaseAgent):
         if observed and observed != [self.model_name]:
             raise RuntimeError("Kepler gateway model changed after preflight: " + ", ".join(observed))
         if result.return_code != 0:
-            raise RuntimeError(result.stderr or result.stdout or "kepler-agent failed")
+            import json
+            failure = None
+            for line in (result.stdout or "").splitlines():
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(event, dict) and event.get("type") == "turn_failed":
+                    failure = event.get("error")
+            # Full transcripts remain in the agent log; never copy them into
+            # Harbor exception fields (which are displayed and aggregated).
+            raise RuntimeError(f"kepler-agent exit={result.return_code}: {str(failure or 'execution failed')[:1000]}; see agent/kepler-agent.txt")

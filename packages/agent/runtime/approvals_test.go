@@ -149,3 +149,26 @@ func TestPendingApprovalCompletesTheSiblingToolResults(t *testing.T) {
 		t.Fatalf("approval batch results missing: completed=%v blocked=%v events=%+v", firstCompleted, secondBlocked, events)
 	}
 }
+
+type immediateApprover struct{}
+
+func (immediateApprover) Approve(context.Context, tool.PolicyRequest, tool.Decision) (bool, error) {
+	return true, nil
+}
+func TestImmediateApprovalDoesNotBlockSiblingCalls(t *testing.T) {
+	calls := 0
+	catalog, _ := tool.NewCatalog(countingWriteTool{calls: &calls})
+	store := transcript.NewMemoryStore()
+	client := &scriptedModel{responses: []model.Response{{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{
+		{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "a", Name: "write", Arguments: json.RawMessage(`{}`)}},
+		{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "b", Name: "write", Arguments: json.RawMessage(`{}`)}},
+	}}, FinishReason: model.FinishToolCalls}, {Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop}}}
+	runner, err := New(Config{}, Dependencies{Model: client, Tools: catalog, Policy: approvalPolicy{}, Approver: immediateApprover{}, Transcript: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runner.RunTurn(context.Background(), TurnRequest{SessionID: "batch", Input: model.TextMessage(model.RoleUser, "write")})
+	if err != nil || calls != 2 {
+		t.Fatalf("calls=%d err=%v", calls, err)
+	}
+}

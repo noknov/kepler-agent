@@ -309,3 +309,28 @@ Raw local artifacts are under `evals/results/2026-10-13-*` (Git ignored). Use
 Harbor scores/logs. The final adapter also interrupts a timed-out container CLI
 before grading; local candidate/grader processes get bounded process-group
 cleanup. Neither path should keep mutating the workspace after its deadline.
+
+## Preparing and diagnosing long runs
+
+`make eval-harbor` now prepares a SHA-256-verified upstream static ripgrep
+binary and uploads it alongside the CLI and CA bundle. Task setup performs
+version probes without apt/apk downloads. The static binary is x86_64-musl;
+on Apple Silicon it uses Docker's existing amd64 emulation. Task-specific
+languages and libraries are still the agent's responsibility.
+
+The default target also resolves task specs and warms selected Docker images
+before timed trials (`--prepare-images`). Pulls have bounded retries and fail
+before any model trials when the registry is unavailable. Image digests are
+recorded in `invocation.json`. This cannot prevent a later Docker daemon failure
+or a verifier's own dependency download outage. It does not change official
+agent/verifier timeouts, rewards, or tests.
+
+Adapter exceptions contain the terminal failure and an agent-log reference,
+not an entire transcript. Failed/cancelled turns retain their reported usage.
+Qoder malformed tool responses carry content-free protocol diagnostics and use
+bounded retry before output is committed. Qoder streaming HTTP timeouts bound
+inactivity; caller cancellation continues to bound total execution time.
+
+Long single turns can compact completed tool exchanges. Original current user
+input and complete tool-call/result batches remain together; a single oversized
+indivisible message still fails explicitly rather than being silently truncated.

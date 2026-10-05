@@ -253,3 +253,12 @@ func TestQoderAuthFailureDoesNotExposeCredentials(t *testing.T) {
 		t.Fatalf("unsafe authentication error: %v", err)
 	}
 }
+
+func TestQoderIncompleteToolDiagnosticExcludesArguments(t *testing.T) {
+	fixture := qoderFixture(`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"exec","arguments":"{\"secret\":\"private-sentinel"}}]},"finish_reason":"length"}],"usage":{"completion_tokens":4096}}`, "[DONE]")
+	_, err := readQoderStream(strings.NewReader(fixture), StreamHandler{})
+	var protocol ProtocolError
+	if !errors.As(err, &protocol) || !strings.Contains(err.Error(), "argument_bytes=") || strings.Contains(err.Error(), "private-sentinel") {
+		t.Fatalf("unsafe or untyped diagnostic: %v", err)
+	}
+}

@@ -276,7 +276,7 @@ def kepler_metrics(log: str) -> dict[str, Any]:
             metrics["tool_calls"] += 1
         elif kind == "tool_call_failed":
             metrics["tool_failures"] += 1
-        elif kind == "turn_completed":
+        elif kind in ("turn_completed", "turn_failed", "turn_cancelled"):
             metrics["usage"] = event.get("metadata", {}).get("usage", {})
         elif kind == "model_streamed" and event.get("model_event", {}).get("type") == "first_token" and started and not first_token:
             try:

@@ -85,6 +85,12 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 			baseSequence = coverage
 		}
 	}
+	var currentInput uint64
+	for _, event := range events {
+		if event.Type == transcript.UserInput || event.Type == transcript.SteeringInput {
+			currentInput = event.Sequence
+		}
+	}
 	entries := make([]projectedMessage, 0, len(events)+1)
 	if base != nil {
 		base.group = "compaction"
@@ -92,7 +98,7 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 	}
 	fallbackTurn := 0
 	for _, event := range events {
-		if event.Sequence <= baseSequence {
+		if event.Sequence <= baseSequence && event.Sequence != currentInput {
 			continue
 		}
 		message, ok := eventMessage(event)
@@ -119,6 +125,19 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 	}
 	tokens := EstimateTokens(messages)
 	groups := groupProjectedMessages(entries)
+	// Long autonomous runs contain many completed model/tool exchanges within
+	// one user turn. They can be summarized at exchange boundaries, while the
+	// original current input and unfinished tool batches remain intact.
+	if len(groups) > 0 {
+		last := groups[len(groups)-1]
+		var lastMessages []model.Message
+		for _, entry := range last.entries {
+			lastMessages = append(lastMessages, entry.message)
+		}
+		if EstimateTokens(lastMessages)+EstimateTokens([]model.Message{system}) > limit {
+			groups = append(groups[:len(groups)-1], exchangeGroups(last.entries)...)
+		}
+	}
 	if tokens <= limit {
 		return Projection{Messages: messages, EstimatedTokens: tokens}, nil
 	}
@@ -127,10 +146,18 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 	}
 	keepGroup := 0
 	keptTokens := EstimateTokens([]model.Message{system})
+	for _, entry := range entries {
+		if entry.sequence == currentInput {
+			keptTokens += EstimateTokens([]model.Message{entry.message})
+		}
+	}
 	for index := len(groups) - 1; index >= 0; index-- {
 		groupMessages := make([]model.Message, 0, len(groups[index].entries))
 		for _, entry := range groups[index].entries {
-			groupMessages = append(groupMessages, entry.message)
+			// The protected current input is already reserved above.
+			if entry.sequence != currentInput {
+				groupMessages = append(groupMessages, entry.message)
+			}
 		}
 		groupTokens := EstimateTokens(groupMessages)
 		if keptTokens+groupTokens > limit && index < len(groups)-1 {
@@ -147,7 +174,12 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 		keepFrom += len(groups[index].entries)
 	}
 	dropped := make([]model.Message, 0, keepFrom)
-	for _, entry := range entries[:keepFrom] {
+	var protected *projectedMessage
+	for index := range entries[:keepFrom] {
+		entry := entries[index]
+		if entry.sequence == currentInput {
+			protected = &entries[index]
+		}
 		dropped = append(dropped, entry.message)
 	}
 	kept := make([]model.Message, 0, len(entries)-keepFrom+2)
@@ -156,6 +188,9 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 	}
 	if base != nil && keepFrom == 0 {
 		kept = append(kept, untrustedTranscriptSummaryBoundary)
+	}
+	if protected != nil {
+		kept = append(kept, protected.message)
 	}
 	for _, entry := range entries[keepFrom:] {
 		kept = append(kept, entry.message)
@@ -168,6 +203,28 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 		return Projection{}, fmt.Errorf("latest turn exceeds token budget")
 	}
 	return projection, nil
+}
+
+// exchangeGroups never separates an assistant tool batch from any of its
+// results, including parallel and failed calls. In-flight batches stay atomic.
+func exchangeGroups(entries []projectedMessage) []projectedGroup {
+	var groups []projectedGroup
+	pending := make(map[string]bool)
+	for _, entry := range entries {
+		if len(groups) == 0 || (len(pending) == 0 && entry.message.Role != model.RoleTool) {
+			groups = append(groups, projectedGroup{})
+		}
+		groups[len(groups)-1].entries = append(groups[len(groups)-1].entries, entry)
+		for _, call := range entry.message.ToolCalls() {
+			pending[call.ID] = true
+		}
+		for _, block := range entry.message.Content {
+			if block.ToolResult != nil {
+				delete(pending, block.ToolResult.CallID)
+			}
+		}
+	}
+	return groups
 }
 
 func groupProjectedMessages(entries []projectedMessage) []projectedGroup {

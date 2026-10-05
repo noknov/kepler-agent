@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -152,3 +153,51 @@ func toolResultEvent(turnID string, sequence uint64, callID, text string) transc
 }
 
 func messagePtr(message model.Message) *model.Message { return &message }
+
+func TestLongCurrentTurnCompactsCompletedExchanges(t *testing.T) {
+	input := model.TextMessage(model.RoleUser, "original task")
+	events := []transcript.Event{{Sequence: 1, TurnID: "current", Type: transcript.UserInput, Message: &input}}
+	for i := 0; i < 6; i++ {
+		id := fmt.Sprintf("call-%d", i)
+		call := model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: id, Name: "read", Arguments: []byte(`{}`)}}}}
+		events = append(events, transcript.Event{Sequence: uint64(2 + i*2), TurnID: "current", Type: transcript.AssistantMessage, Message: &call}, toolResultEvent("current", uint64(3+i*2), id, strings.Repeat("data ", 60)))
+	}
+	p := NewBoundedProjector(ContextConfig{MaxTokens: 230})
+	projection, err := p.Project(context.Background(), ProjectRequest{Events: events})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projection.Dropped) == 0 || projection.CoversThrough == 0 {
+		t.Fatal("no completed exchanges compacted")
+	}
+	check := func(messages []model.Message) {
+		t.Helper()
+		pending := map[string]bool{}
+		found := false
+		for _, m := range messages {
+			found = found || m.Text() == "original task"
+			for _, c := range m.ToolCalls() {
+				pending[c.ID] = true
+			}
+			for _, b := range m.Content {
+				if b.ToolResult != nil {
+					if !pending[b.ToolResult.CallID] {
+						t.Fatal("orphan tool result")
+					}
+					delete(pending, b.ToolResult.CallID)
+				}
+			}
+		}
+		if !found || len(pending) != 0 {
+			t.Fatalf("input or tool pairing lost: %v", pending)
+		}
+	}
+	check(projection.Messages)
+	summary := model.TextMessage(model.RoleUser, "summary")
+	events = append(events, transcript.Event{Sequence: 14, Type: transcript.CompactionCreated, Message: &summary, Metadata: []byte(fmt.Sprintf(`{"covers_through":%d}`, projection.CoversThrough))})
+	projection, err = p.Project(context.Background(), ProjectRequest{Events: events})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(projection.Messages)
+}

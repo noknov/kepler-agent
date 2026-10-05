@@ -244,15 +244,7 @@ func (c *QoderClient) ChatStream(ctx context.Context, req Request, h StreamHandl
 		return Response{}, err
 	}
 	httpReq.Header = headers
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return Response{}, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return Response{}, NewProviderError("qoder", resp.StatusCode, "model request failed")
-	}
-	return readQoderStream(resp.Body, h)
+	return qoderStreamRequest(c.httpClient, httpReq, h)
 }
 
 func (c *QoderClient) requestBody(req Request, selected QoderModel) ([]byte, error) {
@@ -548,7 +540,7 @@ func readQoderStream(r io.Reader, h StreamHandler) (Response, error) {
 		return Response{}, err
 	}
 	if !done || !terminal {
-		return Response{}, fmt.Errorf("qoder stream ended before completed inference")
+		return Response{}, ProtocolError{Provider: "qoder", Detail: fmt.Sprintf("stream ended before completed inference (done=%t terminal=%t finish=%q calls=%d)", done, terminal, result.FinishReason, len(calls))}
 	}
 	indices := make([]int, 0, len(calls))
 	for i := range calls {
@@ -558,8 +550,9 @@ func readQoderStream(r io.Reader, h StreamHandler) (Response, error) {
 	for _, i := range indices {
 		call := *calls[i]
 		var args map[string]json.RawMessage
-		if call.ID == "" || call.Function.Name == "" || json.Unmarshal([]byte(call.Function.Arguments), &args) != nil || args == nil {
-			return Response{}, fmt.Errorf("qoder returned an incomplete tool call")
+		validArguments := json.Unmarshal([]byte(call.Function.Arguments), &args) == nil && args != nil
+		if call.ID == "" || call.Function.Name == "" || !validArguments {
+			return Response{}, ProtocolError{Provider: "qoder", Detail: fmt.Sprintf("incomplete tool call (index=%d id_present=%t name_present=%t argument_bytes=%d arguments_object=%t finish=%q done=%t output_tokens=%d reasoning_tokens=%d)", i, call.ID != "", call.Function.Name != "", len(call.Function.Arguments), validArguments, result.FinishReason, done, result.Usage.CompletionTokens, result.Usage.ReasoningTokens)}
 		}
 		result.Message.ToolCalls = append(result.Message.ToolCalls, call)
 	}

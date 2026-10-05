@@ -73,8 +73,9 @@ EVAL_HARBOR_OUTPUT ?= evals/results/harbor-$(shell date +%Y%m%d-%H%M%S)
 EVAL_HARBOR_ARGS ?= --include-task terminal-bench/openssl-selfsigned-cert
 .PHONY: eval-harbor
 eval-harbor:
+	python3 evals/prepare_harbor.py
 	GOCACHE=$(GOCACHE) CGO_ENABLED=0 GOOS=linux GOARCH=$(EVAL_GOARCH) go build -trimpath -o bin/kepler-agent-linux-$(EVAL_GOARCH) ./cli/cmd/kepler-agent
-	python3 evals/run_harbor.py --benchmark "$(EVAL_HARBOR_BENCHMARK)" --candidate kepler-agent --source-ref "$$(git rev-parse HEAD)" --binary-path "bin/kepler-agent-linux-$(EVAL_GOARCH)" --output "$(EVAL_HARBOR_OUTPUT)" $(EVAL_HARBOR_ARGS)
+	python3 evals/run_harbor.py --benchmark "$(EVAL_HARBOR_BENCHMARK)" --candidate kepler-agent --source-ref "$$(git rev-parse HEAD)" --binary-path "bin/kepler-agent-linux-$(EVAL_GOARCH)" --prepare-images --ripgrep-path bin/rg-linux-musl --output "$(EVAL_HARBOR_OUTPUT)" $(EVAL_HARBOR_ARGS)
 
 .PHONY: bench
 bench:
