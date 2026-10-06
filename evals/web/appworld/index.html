@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AppWorld 评测进度</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>AppWorld 评测进度</h1>
+      <div id="identity" class="muted">正在连接…</div>
+    </div>
+    <div id="fresh" class="muted"></div>
+  </header>
+  <div class="cards">
+    <div class="card">已完成 / 全部<div class="number" id="done">—</div></div>
+    <div class="card">官方判题通过<div class="number ok" id="passed">—</div></div>
+    <div class="card">运行错误<div class="number bad" id="errors">—</div></div>
+    <div class="card">已完成题目通过率<div class="number" id="rate">—</div></div>
+  </div>
+  <progress id="bar" max="1" value="0"></progress>
+  <p id="split" class="muted"></p>
+  <p id="error" class="error"></p>
+  <section>
+    <h2>当前任务</h2>
+    <div id="active" class="muted">等待启动</div>
+  </section>
+  <section>
+    <header>
+      <h2>逐题结果</h2>
+      <select id="filter" aria-label="结果筛选">
+        <option value="started">已开始</option>
+        <option value="all">全部</option>
+        <option value="errors">运行错误</option>
+        <option value="failed">判题未通过</option>
+      </select>
+    </header>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Split</th><th>任务</th><th>执行状态</th><th>官方判题</th><th>耗时</th><th>模型调用</th><th>工具调用</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+  <p class="muted">每 5 秒自动刷新 · 当前任务活动只展示事件类型与工具名 · 不展示测试题正文或判题细节 · 与 Harbor 8083 独立</p>
+</body>
+</html>

@@ -156,6 +156,24 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 	values["prompt_hash"] = composition.Hash
 	request.Scope.Values = values
 	system := model.TextMessage(model.RoleSystem, composition.Content)
+	ctx = tool.WithActivationAdmission(ctx, func(admissionCtx context.Context, proposed tool.ActivationRequest) error {
+		events, err := r.turnEvents(admissionCtx, request.SessionID)
+		if err != nil {
+			return err
+		}
+		// Include the acknowledgement, not just the schemas: it becomes part of
+		// the latest protected exchange on the very next model request.
+		var sequence uint64 = 1
+		if len(events) > 0 {
+			sequence = events[len(events)-1].Sequence + 1
+		}
+		candidate := append(append([]transcript.Event(nil), events...), transcript.Event{
+			Sequence: sequence, SessionID: request.SessionID, TurnID: request.TurnID,
+			Type: transcript.ToolCallCompleted, ToolCall: &proposed.Call, ToolResult: &proposed.Result,
+		})
+		_, err = r.deps.Projector.Project(admissionCtx, ProjectRequest{Events: candidate, System: system, Tools: proposed.Definitions})
+		return err
+	})
 	for step := 1; step <= r.config.MaxSteps; step++ {
 		result.Steps = step
 		if err := r.recordStepStarted(ctx, request, step); err != nil {

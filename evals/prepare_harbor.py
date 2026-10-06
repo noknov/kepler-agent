@@ -37,7 +37,9 @@ def prepare() -> Path:
     return binary
 
 def prepare_images(dataset: str, includes: list[str], harbor: str = "harbor") -> list[dict]:
-    root = ROOT / "bin" / "harbor-datasets" / dataset.replace("/", "-")
+    # Go ignores dot-directories when expanding ./...; downloaded benchmark
+    # workspaces and grader files must not become application packages.
+    root = ROOT / ".cache" / "harbor-datasets" / dataset.replace("/", "-")
     # Registry resolution happens before timed trials, so cold image pulls and
     # registry outages do not consume task execution budgets.
     subprocess.run([harbor, "datasets", "download", dataset, "--output-dir", str(root)], check=True, timeout=600)

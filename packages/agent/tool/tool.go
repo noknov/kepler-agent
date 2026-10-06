@@ -268,14 +268,20 @@ func (c *Catalog) GetActive(sessionID, name string) (Tool, bool) {
 	return nil, false
 }
 
+// Activate atomically validates and publishes a tool set for operator-owned setup.
 func (c *Catalog) Activate(sessionID string, names ...string) error {
+	return c.activate(sessionID, names, nil)
+}
+
+func (c *Catalog) activate(sessionID string, names []string, admit func([]model.ToolDefinition) error) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if sessionID == "" {
 		return fmt.Errorf("session id is required to activate tools")
 	}
-	if c.active[sessionID] == nil {
-		c.active[sessionID] = make(map[string]bool)
+	candidate := make(map[string]bool, len(c.active[sessionID])+len(names))
+	for name := range c.active[sessionID] {
+		candidate[name] = true
 	}
 	for _, name := range names {
 		item, ok := c.tools[name]
@@ -285,20 +291,33 @@ func (c *Catalog) Activate(sessionID string, names ...string) error {
 		if item.Descriptor().Exposure == ExposureDisabled {
 			return fmt.Errorf("tool %q is disabled", name)
 		}
-		c.active[sessionID][name] = true
+		candidate[name] = true
 	}
+	if admit != nil {
+		definitions := c.definitions(candidate)
+		if err := admit(definitions); err != nil {
+			return err
+		}
+	}
+	c.active[sessionID] = candidate
 	return nil
 }
 
 func (c *Catalog) ActiveDefinitions(sessionID string) []model.ToolDefinition {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	definitions := make([]model.ToolDefinition, 0, len(c.eager)+len(c.active[sessionID]))
+	return c.definitions(c.active[sessionID])
+}
+
+// definitions requires the catalog lock. Admission must not call catalog methods.
+func (c *Catalog) definitions(active map[string]bool) []model.ToolDefinition {
+	definitions := make([]model.ToolDefinition, 0, len(c.eager)+len(active))
 	for name, item := range c.tools {
-		if c.eager[name] || c.active[sessionID][name] {
+		if c.eager[name] || active[name] {
 			definitions = append(definitions, item.Descriptor().Definition())
 		}
 	}
+
 	sort.Slice(definitions, func(i, j int) bool { return definitions[i].Name < definitions[j].Name })
 	return definitions
 }

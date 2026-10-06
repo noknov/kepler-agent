@@ -16,3 +16,9 @@ bin
 node_modules
 coverage.out
 *.log
+
+# Evaluation transcripts and per-task state never belong in runtime images.
+evals/results
+**/__pycache__
+**/node_modules
+apps/cli/dist

@@ -257,6 +257,7 @@ def kepler_metrics(log: str) -> dict[str, Any]:
     started = None
     first_token = False
     models = set()
+    completed_usage: dict[str, int] = {}
     for line in log.splitlines():
         try:
             event = json.loads(line)
@@ -276,7 +277,11 @@ def kepler_metrics(log: str) -> dict[str, Any]:
             metrics["tool_calls"] += 1
         elif kind == "tool_call_failed":
             metrics["tool_failures"] += 1
-        elif kind in ("turn_completed", "turn_failed", "turn_cancelled"):
+        elif kind == "model_completed":
+            for key, value in event.get("metadata", {}).get("usage", {}).items():
+                if isinstance(value, int) and not isinstance(value, bool):
+                    completed_usage[key] = completed_usage.get(key, 0) + value
+        elif kind in ("turn_completed", "turn_failed", "turn_canceled", "turn_cancelled"):
             metrics["usage"] = event.get("metadata", {}).get("usage", {})
         elif kind == "model_streamed" and event.get("model_event", {}).get("type") == "first_token" and started and not first_token:
             try:
@@ -287,6 +292,9 @@ def kepler_metrics(log: str) -> dict[str, Any]:
                 pass
             first_token = True
     metrics["observed_models"] = sorted(models)
+    if "usage" not in metrics and completed_usage:
+        metrics["usage"] = completed_usage
+        metrics["usage_partial"] = True
     if latencies:
         metrics["first_token_ms"] = latencies[0]
         metrics["median_first_token_ms"] = round(statistics.median(latencies), 1)

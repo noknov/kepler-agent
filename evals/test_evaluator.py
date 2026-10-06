@@ -100,6 +100,9 @@ class HarborAdapterTests(unittest.TestCase):
         with mock.patch.dict(sys.modules, modules):
             adapter = load_module("kepler_harbor_adapter_test", EVALS / "harbor_agents/kepler_agent.py")
         agent = adapter.KeplerAgent(source_ref="a"*40, model_name="actual-model", extra_env={"KEPLER_TOKEN":"private-sentinel", "EVAL_KEPLER_API_URL":"https://gateway.test"})
+        for mirror in ("http://mirror.test/ubuntu", "https://user:secret@mirror.test/ubuntu", "https://mirror.test/ubuntu\ncommand"):
+            with self.assertRaises(ValueError):
+                adapter.KeplerAgent(source_ref="a"*40, ubuntu_mirror=mirror)
         calls = []
         class Environment:
             async def exec(self, **kwargs):
@@ -122,11 +125,16 @@ class HarborAdapterTests(unittest.TestCase):
                 if "env" in kwargs:
                     raise asyncio.CancelledError()
                 calls.append(kwargs)
+                if kwargs["command"].startswith("cat "):
+                    event = {"type": "turn_canceled", "metadata": {"usage": {"input_tokens": 42, "output_tokens": 7}}}
+                    return types.SimpleNamespace(return_code=0, stdout=json.dumps(event), stderr="")
                 return types.SimpleNamespace(return_code=0, stdout="", stderr="")
         with self.assertRaises(asyncio.CancelledError):
             asyncio.run(agent.run("Fix the task.", CancelledEnvironment(), context))
-        self.assertIn("kill -INT", calls[-1]["command"])
+        self.assertIn("kill -INT", calls[-2]["command"])
         self.assertEqual(calls[-1]["timeout_sec"],10)
+        self.assertEqual(context.n_input_tokens, 42)
+        self.assertEqual(context.n_output_tokens, 7)
         class FailedEnvironment:
             async def exec(self, **kwargs):
                 event = {"type":"turn_failed", "error":"protocol failure"}
@@ -144,11 +152,57 @@ class HarborAdapterTests(unittest.TestCase):
 
 
 class HarborPreparationTests(unittest.TestCase):
+    def test_running_job_stops_when_gateway_model_changes(self):
+        process = mock.Mock()
+        process.wait.side_effect = subprocess.TimeoutExpired(["harbor"], 5)
+        with mock.patch.object(harbor_launcher.subprocess, "Popen", return_value=process), mock.patch.object(gateway, "prepare", side_effect=ValueError("model changed")), mock.patch.object(harbor_launcher, "stop_harbor") as stop:
+            self.assertEqual(harbor_launcher.run_harbor(["harbor"], {}, expected_model="original-model"), 78)
+            stop.assert_called_once_with(process)
+
+    def test_package_mirror_preserves_repository_contract(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            apt = root / "apt"
+            (apt / "sources.list.d").mkdir(parents=True)
+            (apt / "apt.conf.d").mkdir()
+            (root / "bin").mkdir()
+            apt_get = root / "bin/apt-get"
+            apt_get.write_text("#!/bin/sh\nexit 0\n")
+            apt_get.chmod(0o755)
+            legacy = apt / "sources.list"
+            legacy.write_text("deb [signed-by=/keys/ubuntu.gpg] http://archive.ubuntu.com/ubuntu noble main universe\n"
+                              "deb https://example.org/ubuntu noble main\n")
+            deb822 = apt / "sources.list.d/ubuntu.sources"
+            deb822.write_text("Types: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: noble-security\n"
+                              "Components: main restricted\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n")
+            script = (EVALS / "harbor_agents/package_sources.sh").read_text()
+            script = script.replace("/etc/apt/", str(apt) + "/").replace("/logs/agent", str(root / "logs"))
+            script = script.replace("/tmp/kepler-eval-ca.pem", str(root / "ca.pem"))
+            (root / "ca.pem").write_text("trusted-test-roots")
+            env = {**os.environ, "PATH": str(root / "bin") + os.pathsep + os.environ["PATH"]}
+            subprocess.run(["sh", "-s", "--", "https://mirror.test/ubuntu"], input=script, text=True, check=True,
+                           env=env)
+            self.assertIn("[signed-by=/keys/ubuntu.gpg] https://mirror.test/ubuntu/ noble main universe", legacy.read_text())
+            self.assertIn("deb https://example.org/ubuntu noble main", legacy.read_text())
+            self.assertIn("URIs: https://mirror.test/ubuntu/ ", deb822.read_text())
+            self.assertIn("Suites: noble-security", deb822.read_text())
+            self.assertIn("Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg", deb822.read_text())
+            self.assertFalse(list(apt.rglob("*.kepler-tmp")))
+            self.assertIn("Acquire::https::mirror.test::CaInfo", (apt / "apt.conf.d/99-kepler-eval-ca").read_text())
+            original = "deb http://archive.ubuntu.com/ubuntu noble main\n"
+            legacy.write_text(original)
+            subprocess.run(["sh", "-s", "--", ""], input=script, text=True, check=True, env=env)
+            self.assertEqual(legacy.read_text(), original)
+            subprocess.run(["sh", "-s", "--", "", "disabled"], input=script, text=True, check=True, env=env)
+            self.assertIn('APT::Install-Recommends "false";', (apt / "apt.conf.d/99-kepler-eval-recommends").read_text())
+            subprocess.run(["sh", "-s", "--", "", "enabled"], input=script, text=True, check=True, env=env)
+            self.assertFalse((apt / "apt.conf.d/99-kepler-eval-recommends").exists())
+
     def test_image_preflight_matches_task_metadata_and_records_digests(self):
         preparation = load_module("harbor_preparation_test", EVALS / "prepare_harbor.py")
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            task = root / "bin/harbor-datasets/terminal-bench-test/task"
+            task = root / ".cache/harbor-datasets/terminal-bench-test/task"
             task.mkdir(parents=True)
             (task/"task.toml").write_text('[task]\nname="terminal-bench/example"\n[environment]\ndocker_image="upstream/example:version"\n')
             calls = []
@@ -194,6 +248,17 @@ class DockerDiskBudgetTests(unittest.TestCase):
 
 
 class EvaluatorTests(unittest.TestCase):
+    def test_interrupted_log_retains_completed_usage_without_double_counting(self):
+        completed = {"type": "model_completed", "metadata": {"usage": {"input_tokens": 10, "output_tokens": 4, "reported": True}}}
+        log = json.dumps(completed) + "\n" + json.dumps(completed) + "\n{partial"
+        metrics = runner.kepler_metrics(log)
+        self.assertEqual(metrics["usage"], {"input_tokens": 20, "output_tokens": 8})
+        self.assertTrue(metrics["usage_partial"])
+        terminal = {"type": "turn_canceled", "metadata": {"usage": {"input_tokens": 21, "output_tokens": 9}}}
+        metrics = runner.kepler_metrics(log + "\n" + json.dumps(terminal))
+        self.assertEqual(metrics["usage"]["input_tokens"], 21)
+        self.assertNotIn("usage_partial", metrics)
+
     @unittest.skipUnless(os.name == "posix", "process-group lifecycle")
     def test_timeout_stops_candidate_descendants(self):
         with tempfile.TemporaryDirectory() as folder:

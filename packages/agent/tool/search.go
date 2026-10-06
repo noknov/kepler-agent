@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/noknov/kepler-agent/packages/agent/model"
 )
 
 // NewSearchTool returns the deferred-tool discovery tool for a catalog.
@@ -21,12 +23,12 @@ type searchTool struct {
 func (searchTool) Descriptor() Descriptor {
 	return FunctionDescriptor(
 		"tool_search",
-		"Capability router for tools that are intentionally not loaded by default to save context. Use action=search with query for discovery; use query=\"select:tool-a,tool-b\" or action=activate with tool_names/categories to load tools for subsequent steps.",
+		"Capability router for tools that are intentionally not loaded by default to save context. Use action=search with query for discovery; use query=\"select:tool-a,tool-b\" or action=activate with exact tool_names to load tools for subsequent steps.",
 		ObjectSchema([]string{"action"}, map[string]any{
 			"action": map[string]any{
 				"type":        "string",
 				"enum":        []string{"search", "list", "activate"},
-				"description": "search: find tools by task or capability description; list: show deferred categories; activate: load requested tools or categories.",
+				"description": "search: find tools by task or capability description; list: show deferred categories; activate: load exact tool names.",
 			},
 			"query": map[string]any{
 				"type":        "string",
@@ -39,7 +41,7 @@ func (searchTool) Descriptor() Descriptor {
 			"categories": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
-				"description": "Category filters for activate.",
+				"description": "Category filters for search; never activates a whole category.",
 			},
 			"tool_names": map[string]any{
 				"type":        "array",
@@ -51,7 +53,7 @@ func (searchTool) Descriptor() Descriptor {
 	)
 }
 
-func (t searchTool) Execute(_ context.Context, call Call) (Result, error) {
+func (t searchTool) Execute(ctx context.Context, call Call) (Result, error) {
 	var args struct {
 		Action     string   `json:"action"`
 		Query      string   `json:"query"`
@@ -66,14 +68,17 @@ func (t searchTool) Execute(_ context.Context, call Call) (Result, error) {
 	case "list":
 		return t.listDeferred()
 	case "activate":
-		return t.activate(call.Scope.SessionID, args.Categories, args.ToolNames)
+		if len(args.Categories) > 0 {
+			return Result{}, fmt.Errorf("categories filter search results; activate requires exact tool_names")
+		}
+		return t.activate(ctx, call, args.ToolNames)
 	case "search":
 		query := strings.TrimSpace(args.Query)
 		if strings.HasPrefix(strings.ToLower(query), "select:") {
 			names := splitList(query[len("select:"):])
-			return t.activate(call.Scope.SessionID, nil, names)
+			return t.activate(ctx, call, names)
 		}
-		return t.search(query, args.Limit)
+		return t.search(query, args.Limit, args.Categories...)
 	default:
 		return Result{}, fmt.Errorf("action must be search, list, or activate")
 	}
@@ -105,32 +110,19 @@ func (t searchTool) listDeferred() (Result, error) {
 	return TextResult("Deferred categories:\n- " + strings.Join(lines, "\n- ")), nil
 }
 
-func (t searchTool) activate(sessionID string, categories, names []string) (Result, error) {
-	wanted := map[string]bool{}
-	for _, category := range categories {
-		wanted[category] = true
-	}
-	for _, descriptor := range t.catalog.Descriptors() {
-		if descriptor.Exposure != ExposureDeferred {
-			continue
-		}
-		for _, tag := range descriptor.Tags {
-			if wanted[tag] {
-				names = append(names, descriptor.Name)
-			}
-		}
-	}
+func (t searchTool) activate(ctx context.Context, call Call, names []string) (Result, error) {
 	names = compactStrings(names)
 	if len(names) == 0 {
-		return TextResult("No tools requested."), nil
+		return Result{}, fmt.Errorf("tool_names is required to activate tools")
 	}
-	if err := t.catalog.Activate(sessionID, names...); err != nil {
-		return Result{}, err
+	result := TextResult("Activated tools:\n- " + strings.Join(names, "\n- "))
+	if err := t.catalog.activateForCall(ctx, call, names, result); err != nil {
+		return Result{Content: []model.Content{{Type: model.ContentText, Text: "Tool activation rejected; the active tools are unchanged. Request fewer exact tool names. " + err.Error()}}, IsError: true, ErrorCode: "tool_activation_rejected"}, nil
 	}
-	return TextResult("Activated tools:\n- " + strings.Join(names, "\n- ")), nil
+	return result, nil
 }
 
-func (t searchTool) search(query string, limit int) (Result, error) {
+func (t searchTool) search(query string, limit int, categories ...string) (Result, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return Result{}, fmt.Errorf("query is required for search")
@@ -153,6 +145,9 @@ func (t searchTool) search(query string, limit int) (Result, error) {
 		if descriptor.Exposure != ExposureDeferred {
 			continue
 		}
+		if len(categories) > 0 && !matchesCategory(descriptor.Tags, categories) {
+			continue
+		}
 		nameHits, score, line := scoreDeferredTool(descriptor, tokens)
 		if score <= 0 {
 			continue
@@ -172,7 +167,7 @@ func (t searchTool) search(query string, limit int) (Result, error) {
 		results = results[:limit]
 	}
 	if len(results) == 0 {
-		return TextResult("No deferred tools matched. Try action=list to see categories, then activate by category or exact tool name."), nil
+		return TextResult("No deferred tools matched. Try action=list to see categories, then search within a category and activate exact tool names."), nil
 	}
 	lines := make([]string, 0, len(results))
 	for _, result := range results {
@@ -281,4 +276,15 @@ func compactStrings(values []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func matchesCategory(tags, categories []string) bool {
+	for _, tag := range tags {
+		for _, category := range categories {
+			if tag == category {
+				return true
+			}
+		}
+	}
+	return false
 }

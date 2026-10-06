@@ -19,6 +19,7 @@ BENCHMARKS = {
     "terminal-bench-2.1": "terminal-bench/terminal-bench-2-1",
     "swe-bench-verified": "swe-bench/swe-bench-verified",
     "harbor-index-1.0": "harbor-index/harbor-index-1.0",
+    "aider-polyglot": "aider/aider-polyglot",
 }
 BUILTIN_AGENTS = {"codex", "claude-code", "opencode", "pi", "oracle"}
 KEPLER_AGENT = "evals.harbor_agents.kepler_agent:KeplerAgent"
@@ -72,7 +73,7 @@ def check_disk_budget(container: str | None, minimum: int) -> None:
         raise RuntimeError("Docker disk reserve reached; stopping benchmark to protect other services")
 
 
-def run_harbor(command: list[str], env: dict, probe_container: str | None = None, minimum_bytes: int = 0) -> int:
+def run_harbor(command: list[str], env: dict, probe_container: str | None = None, minimum_bytes: int = 0, expected_model: str | None = None) -> int:
     check_disk_budget(probe_container, minimum_bytes)
     process = subprocess.Popen(command, env=env, start_new_session=True)
     try:
@@ -80,6 +81,14 @@ def run_harbor(command: list[str], env: dict, probe_container: str | None = None
             try:
                 return process.wait(timeout=5)
             except subprocess.TimeoutExpired:
+                if expected_model:
+                    from kepler_gateway import prepare
+                    try:
+                        prepare(expected_model)
+                    except (ValueError, OSError) as error:
+                        print(f"Gateway configuration check failed: {error}", flush=True)
+                        stop_harbor(process)
+                        return 78
                 if probe_container:
                     try:
                         check_disk_budget(probe_container, minimum_bytes)
@@ -214,9 +223,9 @@ def main() -> int:
     env = dict(os.environ)
     project_root = str(Path(__file__).resolve().parents[1])
     env["PYTHONPATH"] = project_root + os.pathsep + env.get("PYTHONPATH", "")
-    return_code = run_harbor(command, env, args.disk_probe_container, minimum_bytes)
+    return_code = run_harbor(command, env, args.disk_probe_container, minimum_bytes, args.model if args.candidate == "kepler-agent" else None)
     exit_code, jobs = execution_outcome(jobs_dir, return_code, job_name)
-    status = "resource_exhausted" if return_code == 75 else ("cancelled" if return_code == 130 else ("completed" if exit_code == 0 else "failed"))
+    status = {75: "resource_exhausted", 78: "gateway_changed", 130: "cancelled"}.get(return_code, "completed" if exit_code == 0 else "failed")
     manifest.update(status=status, exit_code=exit_code, harbor_exit_code=return_code, native_jobs=jobs, ended_at=datetime.now(UTC).isoformat())
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Harbor execution {manifest['status']}: {len(jobs)} job(s); inspect native result.json for rewards", flush=True)

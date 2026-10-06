@@ -35,6 +35,8 @@ class KeplerAgent(BaseAgent):
         source_repo: str = _DEFAULT_SOURCE_REPO,
         binary_path: str | None = None,
         ripgrep_path: str | None = None,
+        ubuntu_mirror: str | None = None,
+        apt_recommends: str = "enabled",
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -47,6 +49,12 @@ class KeplerAgent(BaseAgent):
             raise ValueError("Current Kepler CLI uses gateway login; remove direct-provider kwargs: " + ", ".join(sorted(retired)))
 
         self._source_ref = source_ref
+        if ubuntu_mirror and not re.fullmatch(r"https://[A-Za-z0-9.-]+(?::[0-9]+)?/[A-Za-z0-9/_-]+", ubuntu_mirror):
+            raise ValueError("ubuntu_mirror must be an HTTPS archive URL without credentials, query or fragment")
+        self._ubuntu_mirror = ubuntu_mirror.rstrip("/") if ubuntu_mirror else None
+        if apt_recommends not in {"enabled", "disabled"}:
+            raise ValueError("apt_recommends must be enabled or disabled")
+        self._apt_recommends = apt_recommends
         self._source_repo = source_repo
         self._binary_path = Path(binary_path).resolve() if binary_path else None
         if self._binary_path and not self._binary_path.is_file():
@@ -76,10 +84,17 @@ class KeplerAgent(BaseAgent):
 
     async def setup(self, environment: BaseEnvironment) -> None:
         """Install an immutable local binary or build a pinned public revision."""
+        if self._ca_bundle:
+            await environment.upload_file(self._ca_bundle, "/tmp/kepler-eval-ca.pem")
+        await environment.upload_file(Path(__file__).with_name("package_sources.sh"), "/tmp/kepler-eval-package-sources.sh")
+        result = await environment.exec(
+            command="sh /tmp/kepler-eval-package-sources.sh " + shlex.quote(self._ubuntu_mirror or "") + " " + self._apt_recommends,
+            user="root", timeout_sec=30,
+        )
+        if result.return_code != 0:
+            raise RuntimeError("Package source configuration failed: " + (result.stderr or result.stdout or "unknown error"))
         if self._binary_path:
             await environment.upload_file(self._binary_path, self._BINARY)
-            if self._ca_bundle:
-                await environment.upload_file(self._ca_bundle, "/tmp/kepler-eval-ca.pem")
             if self._ripgrep_path:
                 await environment.upload_file(self._ripgrep_path, "/usr/local/bin/rg")
                 result = await environment.exec(
@@ -152,8 +167,10 @@ class KeplerAgent(BaseAgent):
         if not token or not api_url:
             raise ValueError("Kepler requires KEPLER_TOKEN and EVAL_KEPLER_API_URL; use evals/run_harbor.py for login preflight")
         env = {"KEPLER_TOKEN": token, "KEPLER_API_URL": api_url}
-        if self._binary_path and self._ca_bundle:
+        env["PIP_LOG"] = "/logs/agent/pip.log"
+        if self._ca_bundle:
             env["SSL_CERT_FILE"] = "/tmp/kepler-eval-ca.pem"
+            env["PIP_CERT"] = "/tmp/kepler-eval-ca.pem"
         command = " ".join(
             [
                 shlex.quote(self._BINARY),
@@ -175,6 +192,8 @@ class KeplerAgent(BaseAgent):
             "binary_sha256": self._binary_sha256,
             "model": self.model_name,
             "transport": "kepler-gateway",
+            "ubuntu_mirror": self._ubuntu_mirror,
+            "apt_recommends": self._apt_recommends,
         }
         # Harbor cancels run() at the task deadline. Cancelling Docker's host
         # exec await does not terminate the process inside the task container.
@@ -197,14 +216,13 @@ class KeplerAgent(BaseAgent):
                 await asyncio.shield(environment.exec(command=cleanup, timeout_sec=10))
             except Exception:
                 context.metadata["cleanup_failed"] = True
+            try:
+                log = await asyncio.shield(environment.exec(command=f"cat {self._LOG}", timeout_sec=10))
+                self._record_metrics(context, log.stdout or "")
+            except Exception:
+                context.metadata["metrics_collection_failed"] = True
             raise
-        from evals.run import kepler_metrics
-        metrics = kepler_metrics(result.stdout or "")
-        context.metadata["metrics"] = metrics
-        usage = metrics.get("usage", {})
-        for field, key in (("n_input_tokens", "input_tokens"), ("n_cache_tokens", "cache_read_tokens"), ("n_output_tokens", "output_tokens")):
-            if key in usage:
-                setattr(context, field, usage[key])
+        metrics = self._record_metrics(context, result.stdout or "")
         observed = metrics.get("observed_models", [])
         if observed and observed != [self.model_name]:
             raise RuntimeError("Kepler gateway model changed after preflight: " + ", ".join(observed))
@@ -221,3 +239,14 @@ class KeplerAgent(BaseAgent):
             # Full transcripts remain in the agent log; never copy them into
             # Harbor exception fields (which are displayed and aggregated).
             raise RuntimeError(f"kepler-agent exit={result.return_code}: {str(failure or 'execution failed')[:1000]}; see agent/kepler-agent.txt")
+
+    @staticmethod
+    def _record_metrics(context: AgentContext, log: str) -> dict:
+        from evals.run import kepler_metrics
+        metrics = kepler_metrics(log)
+        context.metadata["metrics"] = metrics
+        usage = metrics.get("usage", {})
+        for field, key in (("n_input_tokens", "input_tokens"), ("n_cache_tokens", "cache_read_tokens"), ("n_output_tokens", "output_tokens")):
+            if key in usage:
+                setattr(context, field, usage[key])
+        return metrics

@@ -233,6 +233,16 @@ func registerSkillsAndMCP(ctx context.Context, catalog *tool.Catalog, workspace 
 			}
 		}
 	}
+	// MCP tools are deferred. Register their discovery entry only when there
+	// are deferred capabilities, otherwise the model cannot activate them.
+	for _, descriptor := range catalog.Descriptors() {
+		if descriptor.Exposure == tool.ExposureDeferred {
+			if err := catalog.Register(tool.NewSearchTool(catalog)); err != nil {
+				return "", err
+			}
+			break
+		}
+	}
 	return skillCatalog.Prompt(), nil
 }
 

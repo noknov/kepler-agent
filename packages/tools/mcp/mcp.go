@@ -204,6 +204,10 @@ func Discover(ctx context.Context, config Server) ([]tool.Tool, error) {
 		initializing: make(map[string]*sessionInitialization),
 	}
 	items := make([]tool.Tool, 0, len(definitions))
+	var tags []string
+	if config.Name != "" {
+		tags = []string{config.Name}
+	}
 	for _, definition := range definitions {
 		name := "mcp_" + safeName.ReplaceAllString(config.Name, "_") + "_" + safeName.ReplaceAllString(definition.Name, "_")
 		schema := definition.InputSchema
@@ -222,7 +226,11 @@ func Discover(ctx context.Context, config Server) ([]tool.Tool, error) {
 				description = prefix + " " + description
 			}
 		}
-		items = append(items, &remoteTool{server: state, remote: definition, descriptor: tool.Descriptor{Name: name, Description: description, InputSchema: schema, Effects: effects, Exposure: tool.ExposureDeferred}.WithConcurrencyDefaults()})
+		descriptor := tool.Descriptor{
+			Name: name, Description: description, InputSchema: schema,
+			Effects: effects, Exposure: tool.ExposureDeferred, Tags: tags,
+		}.WithConcurrencyDefaults()
+		items = append(items, &remoteTool{server: state, remote: definition, descriptor: descriptor})
 	}
 	return items, nil
 }

@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 )
@@ -102,5 +103,32 @@ func TestBindSurfaceAddsPresentationMetadata(t *testing.T) {
 	}
 	if len(bound.Dependencies) != 2 || bound.Dependencies[0] != "slack" || bound.Dependencies[1] != "canvas" {
 		t.Fatalf("dependencies=%v", bound.Dependencies)
+	}
+}
+
+func TestActivationIsAtomicForInvalidNamesAndAdmission(t *testing.T) {
+	catalog, _ := NewCatalog(deferredFixture{})
+	if err := catalog.Activate("s", "later-tool", "missing"); err == nil {
+		t.Fatal("unknown tool accepted")
+	}
+	if _, ok := catalog.GetActive("s", "later-tool"); ok {
+		t.Fatal("partially activated invalid batch")
+	}
+	search := NewSearchTool(catalog)
+	ctx := WithActivationAdmission(context.Background(), func(_ context.Context, request ActivationRequest) error {
+		if len(request.Definitions) != 1 || request.Result.Text() == "" {
+			t.Fatalf("incomplete proposal: %+v", request)
+		}
+		return fmt.Errorf("budget exhausted")
+	})
+	result, err := search.Execute(ctx, Call{Arguments: json.RawMessage(`{"action":"activate","tool_names":["later-tool"]}`), Scope: Scope{SessionID: "s"}})
+	if err != nil || !result.IsError {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if _, ok := catalog.GetActive("s", "later-tool"); ok {
+		t.Fatal("rejected activation changed catalog")
+	}
+	if _, err = search.Execute(context.Background(), Call{Arguments: json.RawMessage(`{"action":"activate","tool_names":["later-tool"]}`), Scope: Scope{SessionID: "s"}}); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -123,3 +123,32 @@ func TestSearchToolExpandsCommonChineseCapabilityTerms(t *testing.T) {
 		}
 	}
 }
+
+func TestCategoryFiltersDiscoveryWithoutBulkActivation(t *testing.T) {
+	catalog, _ := NewCatalog(deferredFixture{})
+	search := NewSearchTool(catalog)
+	for _, args := range []string{
+		`{"action":"search","query":"fixture","categories":["integration"]}`,
+		`{"action":"search","query":"fixture","categories":["absent"]}`,
+		`{"action":"activate","categories":["integration"]}`,
+	} {
+		result, err := search.Execute(context.Background(), Call{Arguments: json.RawMessage(args), Scope: Scope{SessionID: "s"}})
+		switch {
+		case strings.Contains(args, `"absent"`):
+			if strings.Contains(result.Text(), "later-tool") {
+				t.Fatal("category filter ignored")
+			}
+		case strings.Contains(args, `"activate"`):
+			if err == nil {
+				t.Fatal("category activation accepted")
+			}
+		default:
+			if !strings.Contains(result.Text(), "later-tool") {
+				t.Fatal("filtered tool not discoverable")
+			}
+		}
+		if _, ok := catalog.GetActive("s", "later-tool"); ok {
+			t.Fatal("discovery loaded tools")
+		}
+	}
+}

@@ -8,8 +8,64 @@ experiments. It does not currently provide a verified end-to-end release gate.
 | Check runner/report wiring without model calls | `make eval-check` | Dry-run artifacts and evaluator unit tests |
 | Run local synthetic cases | `run.py` | Command/test outcomes in copied workspaces |
 | Run public coding datasets | `run_harbor.py` with a compatible Agent adapter | Harbor-native environment and grader results |
+| Run stateful app/API workflows | `run_appworld.py` | Official AppWorld MCP, saved database state, and official grader |
 | Gate a completed compatible summary | `gate.py` | Threshold checks; input validity must also be established |
 | Test hosted delivery, recovery, and authorization | Dedicated product tests | Separate from CLI coding scores |
+
+## AppWorld evaluation
+
+AppWorld uses the actual Kepler CLI loop and its existing MCP discovery, gateway
+authentication, policy and context management. It does not substitute AppWorld's
+reference agent. Prepare an isolated AppWorld SDK environment with official MCP
+support and downloaded task data, independently from Kepler's runtime dependencies.
+The environment must provide `appworld`, its MCP dependencies, and the official
+grader. Then supply its interpreter, data root and a built Kepler CLI explicitly:
+
+```sh
+/path/to/appworld-venv/bin/python evals/run_appworld.py \
+  --root /path/to/appworld-data \
+  --binary-path /path/to/kepler-agent \
+  --split dev --tasks 3 \
+  --output evals/results/appworld-dev-first-run
+```
+
+To evaluate a whole official split, use `--all` instead of `--tasks` or
+`--task-id`. Run `--split test_normal --all` and `--split test_challenge --all`
+in separate output directories for complete test coverage. Keep the model and
+budgets fixed across both runs; use only aggregate test results for reporting.
+
+No provider tokens are needed beyond an existing Kepler login. Set
+`EVAL_KEPLER_API_URL` to override the gateway URL saved by that login.
+The manifest records SDK/data versions, source identity when available, model,
+binary SHA-256 and execution budgets. Keep the SDK and dependencies pinned
+externally when comparing runs; the adapter does not install or patch the SDK.
+
+Each run creates `invocation.json` with live per-task status, model and binary
+identity, token/tool metrics, plus `TASK_ID/agent.jsonl` and `evaluation.json`.
+Official AppWorld database states and reports stay under the data root's
+`experiments/outputs/RUN_NAME`. These are not Harbor jobs and will not appear in
+Harbor's viewer at port 8083.
+
+Open a read-only live view of any runner output containing `invocation.json`:
+Grouped launcher outputs containing `progress.json` are also supported.
+
+```sh
+python3 evals/view_appworld.py --run-dir evals/results/RUN_NAME --port 8084
+```
+
+Visit `http://127.0.0.1:8084/`. The page refreshes every five seconds and separates
+official grading failures from execution errors. It serves aggregate results and
+recent activity names only, without exposing task prompts, tool bodies or grader
+details. The server binds only to loopback and does not control the evaluator.
+
+Tasks run serially because one API server holds one task state. Every task uses
+an empty temporary workspace with sandboxing enabled; benchmark data, evaluator
+files and Kepler session state are outside it. MCP mutations are saved before
+calling the official grader. CLI timeout/cancellation stops its process group;
+model changes invalidate the run. Execution failures and graded task failures
+are separate outcomes. A first-N subset is a diagnostic smoke test, not a full
+benchmark or scenario-group completion score. Use train/dev for diagnosis;
+do not inspect test-set task details or tune against test-set failures.
 
 ## Authentication and preflight
 
@@ -156,6 +212,28 @@ The binary adapter uses the host's trusted CA bundle when available and installs
 missing ripgrep, a CLI tool dependency. It probes both executables before model
 execution. Minimal task images must not be assumed to include either dependency.
 
+By default, task images retain their original package sources. Operators may
+explicitly set `EVAL_HARBOR_UBUNTU_MIRROR=https://<mirror>/ubuntu`, or pass
+`--agent-kwarg ubuntu_mirror=https://<mirror>/ubuntu` to the launcher.
+Only the standard Ubuntu archive/security URIs are replaced; suites, components,
+signing keys and third-party repositories are preserved. No task packages are
+preinstalled, and official task deadlines are unchanged. The selected URL is
+recorded in the invocation command, native job config and agent metadata.
+Keep this environment setting identical across candidates when comparing scores.
+
+APT retains its default recommendation policy. Operators may explicitly set
+`EVAL_HARBOR_APT_RECOMMENDS=disabled` or pass
+`--agent-kwarg apt_recommends=disabled` to omit optional recommended packages.
+This changes the evaluation environment and is recorded with the mirror;
+use the same policy across candidates and disclose it when reporting scores.
+
+The adapter records apt's standard install/history logs and pip's detailed log
+in `agent/apt-term.log`, `agent/apt-history.log`, and `agent/pip.log` when those
+package managers run. These help diagnose failed installation after task cleanup;
+apt download output still depends on what the agent command captures. PyPI and
+explicit package indexes such as PyTorch's CPU repository retain their original
+addresses. No TLS or apt signature verification is disabled.
+
 The default task is Terminal-Bench 2.1 `openssl-selfsigned-cert`. To select another task:
 
 ```sh
@@ -171,8 +249,13 @@ Go toolchain inside the task image.
 
 The adapter also puts reported token usage and structural execution metrics
 into Harbor's native `AgentContext`; missing usage is left unknown, never priced
-as a fabricated USD cost. Observed model changes fail rather than silently
-mislabelling the experiment.
+as a fabricated USD cost. On timeout, the adapter stops the CLI and reads its
+structured log before propagating Harbor's timeout. If a terminal usage event is
+missing, completed model-call usage is reported as partial rather than discarded.
+The launcher rechecks gateway authentication/model after each five-second wait;
+a failed check stops the job with exit 78. It also checks observed models after
+each trial. This detects changes but does not pin the shared gateway: do not
+change its model during a run; use a separate gateway for concurrent experiments.
 
 Inspect native results with `harbor view <output-directory>`. A zero Harbor CLI
 exit can still contain errored trials; the wrapper now verifies completion and
@@ -196,9 +279,23 @@ python3 evals/run_harbor.py \
 
 Available public suites:
 
+- `aider-polyglot`: 225 coding exercises across six languages. Start with a small
+  language subset to validate the harness; subset scores are not full benchmark
+  results and are not directly comparable to Aider's published leaderboard.
 - `terminal-bench-2.1`: terminal-use and environment interaction; primary CLI harness comparison.
 - `swe-bench-verified`: 500 validated repository issues; run after Terminal-Bench because it is substantially more expensive.
 - `harbor-index-1.0`: broader agent-index tasks; report separately rather than averaging it with code repair.
+
+For a small native-friendly Go check (still using upstream images and graders):
+
+```sh
+make eval-harbor EVAL_HARBOR_BENCHMARK=aider-polyglot \
+  EVAL_HARBOR_ARGS='--include-task aider/polyglot_go_alphametics --include-task aider/polyglot_go_beer-song --include-task aider/polyglot_go_book-store'
+```
+
+This is a three-task subset, not a published Polyglot score. Image construction
+still needs network access; inspect setup/build failures separately from agent
+errors. No task dependency, official deadline or grader is changed.
 
 The built-in Harbor candidates are `codex`, `claude-code`, `opencode`, and
 `pi`. `kepler-agent` uses this repository's custom adapter and requires a full
@@ -289,26 +386,6 @@ Case records use a small stable status enum: `passed`, `failed`, `timeout`, `age
 
 `gateway/compose.yaml` is an operator example, not a production security boundary. Do not expose it publicly.
 
-## Verified runs (2026-10-13)
-
-- Real local Qoder `Qwen3.8-Flash` smoke: **3/3 passed**, zero tool failures in
-  the final run. Times were 18.0s, 16.7s and 19.9s; these are single samples,
-  not a controlled model/harness ranking.
-- Terminal-Bench 2.1 `openssl-selfsigned-cert`: native oracle **reward 1**;
-  Kepler completed without infrastructure errors but passed **5/6 tests**, so
-  its official binary **reward was 0**. The Python verification script's
-  `cryptography` dependency was missing. This result must not be called a pass.
-- `cancel-async-tasks` is not a usable quality baseline on this setup: its
-  oracle failed the short SIGINT timing assertions, and the Kepler trial hit
-  the agent timeout. Its post-timeout reward is not used as quality evidence.
-- Hello World controls exposed verifier dependency-download timeouts. They
-  were retained as failed runs; increasing a timeout is not a model-quality fix.
-
-Raw local artifacts are under `evals/results/2026-10-13-*` (Git ignored). Use
-`report.html` for local cases and `harbor view <run-directory>` for native
-Harbor scores/logs. The final adapter also interrupts a timed-out container CLI
-before grading; local candidate/grader processes get bounded process-group
-cleanup. Neither path should keep mutating the workspace after its deadline.
 
 ## Preparing and diagnosing long runs
 
@@ -349,9 +426,8 @@ preparation. Large image downloads must not be repeatedly cut off after 300s.
 ## Shared Docker capacity
 
 The default target no longer pre-pulls every task image. Native Harbor prepares
-one task at a time, so a job appears immediately in the shared viewer. Yesterday's
-preflight failures have launcher logs but no native job; they are not completed
-model trials.
+one task at a time. Preflight failures have launcher logs but no native job and
+do not count as completed model trials.
 
 When Docker is shared with application services, explicitly reserve disk space:
 
