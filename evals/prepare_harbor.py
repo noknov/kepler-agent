@@ -60,9 +60,12 @@ def prepare_images(dataset: str, includes: list[str], harbor: str = "harbor") ->
         if cached.returncode:
             for attempt in range(3):
                 try:
-                    subprocess.run(["docker", "pull", image], check=True, timeout=300)
+                    # Image warming is outside official task budgets. Docker owns
+                    # registry/network timeouts; a fixed wall-clock cap here
+                    # repeatedly aborts legitimate large-layer downloads.
+                    subprocess.run(["docker", "pull", image], check=True)
                     break
-                except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                except subprocess.CalledProcessError:
                     if attempt == 2:
                         raise RuntimeError(f"Image preflight failed: {image}; no model trials started") from None
                     time.sleep(2 ** attempt)

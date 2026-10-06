@@ -318,9 +318,10 @@ version probes without apt/apk downloads. The static binary is x86_64-musl;
 on Apple Silicon it uses Docker's existing amd64 emulation. Task-specific
 languages and libraries are still the agent's responsibility.
 
-The default target also resolves task specs and warms selected Docker images
-before timed trials (`--prepare-images`). Pulls have bounded retries and fail
-before any model trials when the registry is unavailable. Image digests are
+The optional `--prepare-images` resolves task specs and warms selected Docker
+images before timed trials. It is disabled by default so a complete dataset
+cannot fill a Docker disk shared with application services. Pulls have bounded
+retries and fail before any model trials when the registry is unavailable. Image digests are
 recorded in `invocation.json`. This cannot prevent a later Docker daemon failure
 or a verifier's own dependency download outage. It does not change official
 agent/verifier timeouts, rewards, or tests.
@@ -334,3 +335,33 @@ inactivity; caller cancellation continues to bound total execution time.
 Long single turns can compact completed tool exchanges. Original current user
 input and complete tool-call/result batches remain together; a single oversized
 indivisible message still fails explicitly rather than being silently truncated.
+
+All `make eval-harbor` and oracle jobs now use the shared native directory
+`evals/results/harbor-jobs`. Run `harbor view evals/results/harbor-jobs --jobs`
+to browse multiple runs. Invocation/log artifacts remain in each named output
+folder; only the current native job contributes to that invocation's outcome.
+A preflight failure creates no native job because model trials have not begun.
+
+Image warming has no artificial task wall-clock limit: Docker owns registry
+network timeouts, failed pulls have bounded retries, and the operator can cancel
+preparation. Large image downloads must not be repeatedly cut off after 300s.
+
+## Shared Docker capacity
+
+The default target no longer pre-pulls every task image. Native Harbor prepares
+one task at a time, so a job appears immediately in the shared viewer. Yesterday's
+preflight failures have launcher logs but no native job; they are not completed
+model trials.
+
+When Docker is shared with application services, explicitly reserve disk space:
+
+```sh
+make eval-harbor EVAL_HARBOR_ARGS= \
+  EVAL_HARBOR_RESOURCE_ARGS="--disk-probe-container slack-copilot-postgres --min-free-disk-gib 20"
+```
+
+The probe runs read-only POSIX `df` inside an existing container on the target
+Docker daemon. It checks before launch and every five seconds during the job.
+Insufficient capacity or a failed probe stops the whole Harbor process group and
+records `resource_exhausted`, without changing task tests or rewards. The 20GiB
+value above is an explicit operational reserve, not a task-quality heuristic.

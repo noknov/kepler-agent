@@ -70,6 +70,16 @@ class HarborCompletionTests(unittest.TestCase):
             (job/"result.json").write_text(json.dumps(result))
             self.assertEqual(harbor_launcher.execution_outcome(root,0)[0],0)
 
+    def test_shared_viewer_directory_only_counts_current_job(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            for name,errors in [("old",1),("new",0)]:
+                job=root/name;job.mkdir()
+                (job/"result.json").write_text(json.dumps({"finished_at":"now","n_total_trials":1,"stats":{"n_completed_trials":1,"n_errored_trials":errors}}))
+            code,jobs=harbor_launcher.execution_outcome(root,0,"new")
+            self.assertEqual(code,0)
+            self.assertEqual(len(jobs),1)
+
     def test_missing_native_results_fail_closed(self):
         with tempfile.TemporaryDirectory() as folder:
             self.assertEqual(harbor_launcher.execution_outcome(Path(folder),0)[0],1)
@@ -160,6 +170,27 @@ class HarborPreparationTests(unittest.TestCase):
             with mock.patch.object(preparation,"ROOT",root):
                 with self.assertRaisesRegex(ValueError,"checksum mismatch"):
                     preparation.prepare()
+
+
+class DockerDiskBudgetTests(unittest.TestCase):
+    def test_probe_uses_target_daemon_space(self):
+        output="Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/vda1 100000 60000 40000 60% /\n"
+        with mock.patch.object(harbor_launcher.subprocess,"run",return_value=types.SimpleNamespace(stdout=output)) as run:
+            self.assertEqual(harbor_launcher.docker_available_bytes("probe"),40000*1024)
+            self.assertEqual(run.call_args.args[0],["docker","exec","probe","df","-Pk","/"])
+
+    def test_low_capacity_prevents_model_job_start(self):
+        with mock.patch.object(harbor_launcher,"docker_available_bytes",return_value=9), mock.patch.object(harbor_launcher.subprocess,"Popen") as launch:
+            with self.assertRaisesRegex(RuntimeError,"reserve reached"):
+                harbor_launcher.run_harbor(["harbor"],{},"probe",10)
+            launch.assert_not_called()
+
+    def test_running_job_stops_on_reserve_breach(self):
+        process=mock.Mock()
+        process.wait.side_effect=subprocess.TimeoutExpired(["harbor"],5)
+        with mock.patch.object(harbor_launcher,"check_disk_budget",side_effect=[None,RuntimeError("reserve reached")]), mock.patch.object(harbor_launcher.subprocess,"Popen",return_value=process), mock.patch.object(harbor_launcher,"stop_harbor") as stop:
+            self.assertEqual(harbor_launcher.run_harbor(["harbor"],{},"probe",10),75)
+            stop.assert_called_once_with(process)
 
 
 class EvaluatorTests(unittest.TestCase):
