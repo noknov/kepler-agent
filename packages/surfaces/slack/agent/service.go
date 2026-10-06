@@ -180,38 +180,6 @@ func (r *eventRouter) set(turnID string, stream *slackStream) {
 func (s *Service) HandleMention(ctx context.Context, req slackconversation.Request) (bool, error) {
 	return s.handle(ctx, req)
 }
-func (s *Service) HandleReply(ctx context.Context, req slackconversation.Request) (bool, error) {
-	if s.Messenger == nil || s.Agent.Runtime == nil {
-		return false, nil
-	}
-	sessionID := session.ID(req.Channel, req.ThreadTS)
-	controlled, controlErr := s.controlActive(sessionID, req)
-	if controlErr != nil {
-		return false, controlErr
-	}
-	if controlled {
-		return true, nil
-	}
-	state, ok, err := s.Agent.Runtime.LatestSessionState(ctx, sessionID)
-	if err != nil {
-		return false, err
-	}
-	if !ok || state.UserID != req.UserID {
-		return false, nil
-	}
-	if state.Termination == agentruntime.TerminationPendingInput {
-		return true, s.run(ctx, sessionID, req)
-	}
-	// An explicitly selected workflow owns its Slack thread after the initial
-	// turn completes. Ordinary threads still require an @mention, so this does
-	// not turn every channel reply into bot input.
-	activation, workflow := s.Workflows.Resume(state.Scope)
-	if !workflow || !activation.OwnsThread {
-		return false, nil
-	}
-	return true, s.run(ctx, sessionID, req)
-}
-
 func (s *Service) handle(ctx context.Context, req slackconversation.Request) (bool, error) {
 	if s.Messenger == nil || s.Agent.Runtime == nil {
 		return false, nil
@@ -753,7 +721,7 @@ func (s *Service) resumeAfterConnection(parentCtx context.Context, continuation 
 			log.Printf("connection continuation status post failed session=%s: %v", sessionID, err)
 		}
 	}
-	accepted, err := s.HandleReply(ctx, req)
+	accepted, err := s.handle(ctx, req)
 	if err != nil {
 		log.Printf("connection continuation resume failed session=%s: %v", sessionID, err)
 		s.releaseContinuation(ctx, continuation)

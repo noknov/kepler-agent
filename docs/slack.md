@@ -65,7 +65,7 @@ consolidated answer. Workers have separate transcripts; their output is
 internal to the lead. These are workflow instructions and execution structure,
 not a guarantee that every model finding is correct.
 
-Reply in the same thread to follow up on the original PR scope. A new root
+Explicitly @mention the bot in the same thread to follow up on the original PR scope. A new root
 message starts another conversation. CLI and Web do not install this Slack
 router. See [runtime and delegation](runtime.md) for scope propagation.
 
@@ -80,3 +80,9 @@ result before repeating an external action.
 For readiness, dead letters, shutdown, and run inspection, use
 [operations](operations.md). For model and locale settings, use
 [configuration](configuration.md).
+
+DMs start or update an agent task directly, without an @mention. In channels and
+channel threads, explicitly @mention the bot, including workflow follow-ups,
+pending-input answers and messages arriving while a task is running. Unmentioned
+channel messages and standalone file-sharing notifications do not trigger
+execution. Files can accompany a DM or an explicit channel mention.

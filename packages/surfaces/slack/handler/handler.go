@@ -50,12 +50,8 @@ func (h *Handler) Handle(ctx context.Context, eventID string, ev slack.Event) (e
 	case "app_context_changed":
 		h.handleAppContextChanged(ctx, ev)
 		return nil
-	case "app_mention":
-		return h.handleMention(ctx, eventID, ev)
-	case "message":
-		return h.handleMessage(ctx, eventID, ev)
-	case "file_shared":
-		return h.handleFileShared(ctx, eventID, ev)
+	case "app_mention", "message":
+		return h.handlePrompt(ctx, eventID, ev)
 	case "reaction_added":
 		if ev.Item.Type == "message" {
 			if h.Metrics != nil {
@@ -553,22 +549,34 @@ func (h *Handler) recordReactionFeedback(ctx context.Context, ev slack.Event) {
 	}
 }
 
-func (h *Handler) handleMention(ctx context.Context, eventID string, ev slack.Event) error {
-	if !IsChannelMention(ev) {
+// DMs are addressed to the bot directly. Channel prompts require an explicit
+// mention, including workflow follow-ups, pending input and active turns.
+func (h *Handler) handlePrompt(ctx context.Context, eventID string, ev slack.Event) error {
+	if !IsUserMessageSubtype(ev.Subtype) || ev.User == "" || ev.User == h.Cfg.Slack.BotUserID || ev.BotID != "" {
 		return nil
 	}
-	if ev.User == "" || ev.User == h.Cfg.Slack.BotUserID || ev.BotID != "" {
+	botID := strings.TrimSpace(h.Cfg.Slack.BotUserID)
+	isDM := IsAppDM(ev)
+	if !isDM && (botID == "" || !strings.Contains(ev.Text, "<@"+botID+">")) {
 		return nil
 	}
-	threadTS := ev.ConversationThreadTS()
-	if !h.Access.IsAllowed(ev.User, ev.Channel) {
+	// Slack delivers a channel mention twice: message and app_mention. DMs
+	// arrive as message events, so only channels use the app_mention delivery.
+	if (ev.Type == "message" && !isDM) || (ev.Type == "app_mention" && isDM) {
+		return nil
+	}
+	allowed := h.Access.IsAllowed(ev.User, ev.Channel)
+	if isDM {
+		allowed = h.Access.AllowsUser(ev.User)
+	}
+	if !allowed {
 		if h.Metrics != nil {
 			h.Metrics.Denied()
 		}
-		_, _ = h.Slack.PostMessage(ctx, ev.Channel, threadTS, "<@"+ev.User+"> Sorry, you don't have permission to use this bot here.")
+		_, _ = h.Slack.PostMessage(ctx, ev.Channel, ev.ConversationThreadTS(), "<@"+ev.User+"> Sorry, you don't have permission to use this bot here.")
 		return nil
 	}
-	text := h.Prompt.CleanUserText(h.Cfg.Slack.BotUserID, ev.Text)
+	text := h.Prompt.CleanUserText(botID, ev.Text)
 	text, parts := h.attachSlackFiles(ctx, text, ev.Files)
 	if text == "" {
 		text = prompts.AppMessage("empty_mention", "")
@@ -577,63 +585,6 @@ func (h *Handler) handleMention(ctx context.Context, eventID string, ev slack.Ev
 		EventID:   eventID,
 		UserID:    ev.User,
 		Channel:   ev.Channel,
-		ThreadTS:  threadTS,
-		MessageTS: ev.TS,
-		Text:      text,
-		Locale:    h.Cfg.Slack.DefaultLocale,
-		Content:   canonicalContent(parts),
-	})
-	if err != nil {
-		return err
-	}
-	if !accepted {
-		return fmt.Errorf("conversation did not accept app_mention event")
-	}
-	return nil
-}
-
-func (h *Handler) handleMessage(ctx context.Context, eventID string, ev slack.Event) error {
-	if IsAppDM(ev) {
-		return h.handleDirectMessage(ctx, eventID, ev)
-	}
-	return h.handleChannelReply(ctx, eventID, ev)
-}
-
-func (h *Handler) handleFileShared(ctx context.Context, eventID string, ev slack.Event) error {
-	userID := FirstNonEmpty(ev.User, ev.UserID)
-	channelID := FirstNonEmpty(ev.Channel, ev.ChannelID)
-	if userID == "" || userID == h.Cfg.Slack.BotUserID || channelID == "" {
-		return nil
-	}
-	if !IsDMChannel(channelID) {
-		return nil
-	}
-	file := ev.File
-	if file.ID == "" {
-		file.ID = ev.FileID
-	}
-	if file.ID == "" {
-		return nil
-	}
-	if ev.ConversationThreadTS() == "" {
-		log.Printf("skip slack file_shared %s: no message timestamp; waiting for message.file_share event", file.ID)
-		return nil
-	}
-	if !h.Access.AllowsUser(userID) {
-		if h.Metrics != nil {
-			h.Metrics.Denied()
-		}
-		_, _ = h.Slack.PostMessage(ctx, channelID, ev.ConversationThreadTS(), "<@"+userID+"> Sorry, you don't have permission to use this bot.")
-		return nil
-	}
-	text, parts := h.attachSlackFiles(ctx, "", []slack.File{file})
-	if text == "" {
-		text = prompts.AppMessage("empty_dm_with_file", "")
-	}
-	accepted, err := h.Conv.HandleMention(ctx, slackconversation.Request{
-		EventID:   eventID,
-		UserID:    userID,
-		Channel:   channelID,
 		ThreadTS:  ev.ConversationThreadTS(),
 		MessageTS: ev.TS,
 		Text:      text,
@@ -644,103 +595,13 @@ func (h *Handler) handleFileShared(ctx context.Context, eventID string, ev slack
 		return err
 	}
 	if !accepted {
-		return fmt.Errorf("conversation did not accept file_shared event")
+		return fmt.Errorf("conversation did not accept prompt event")
 	}
 	return nil
-}
-
-func (h *Handler) handleDirectMessage(ctx context.Context, eventID string, ev slack.Event) error {
-	if !IsUserMessageSubtype(ev.Subtype) || ev.BotID != "" || ev.User == "" || ev.User == h.Cfg.Slack.BotUserID {
-		return nil
-	}
-	if !h.Access.AllowsUser(ev.User) {
-		if h.Metrics != nil {
-			h.Metrics.Denied()
-		}
-		_, _ = h.Slack.PostMessage(ctx, ev.Channel, ev.ConversationThreadTS(), "<@"+ev.User+"> Sorry, you don't have permission to use this bot.")
-		return nil
-	}
-	if IsThreadReply(ev) {
-		text, parts := h.attachSlackFiles(ctx, strings.TrimSpace(ev.Text), ev.Files)
-		if text != "" {
-			accepted, err := h.Conv.HandleReply(ctx, slackconversation.Request{
-				EventID:   eventID,
-				UserID:    ev.User,
-				Channel:   ev.Channel,
-				ThreadTS:  ev.ThreadTS,
-				MessageTS: ev.TS,
-				Text:      text,
-				Locale:    h.Cfg.Slack.DefaultLocale,
-				Content:   canonicalContent(parts),
-			})
-			if err != nil {
-				return err
-			}
-			if accepted {
-				return nil
-			}
-		}
-	}
-	text := strings.TrimSpace(ev.Text)
-	text, parts := h.attachSlackFiles(ctx, text, ev.Files)
-	if text == "" {
-		text = prompts.AppMessage("empty_dm", "")
-	}
-	accepted, err := h.Conv.HandleMention(ctx, slackconversation.Request{
-		EventID:   eventID,
-		UserID:    ev.User,
-		Channel:   ev.Channel,
-		ThreadTS:  ev.ConversationThreadTS(),
-		MessageTS: ev.TS,
-		Text:      text,
-		Locale:    h.Cfg.Slack.DefaultLocale,
-		Content:   canonicalContent(parts),
-	})
-	if err != nil {
-		return err
-	}
-	if !accepted {
-		return fmt.Errorf("conversation did not accept direct message event")
-	}
-	return nil
-}
-
-func (h *Handler) handleChannelReply(ctx context.Context, eventID string, ev slack.Event) error {
-	if !IsThreadReply(ev) || !IsUserMessageSubtype(ev.Subtype) || ev.BotID != "" || ev.User == "" || ev.User == h.Cfg.Slack.BotUserID {
-		return nil
-	}
-	if h.Cfg.Slack.BotUserID != "" && strings.Contains(ev.Text, "<@"+h.Cfg.Slack.BotUserID+">") {
-		return nil
-	}
-	if !h.Access.IsAllowed(ev.User, ev.Channel) {
-		if h.Metrics != nil {
-			h.Metrics.Denied()
-		}
-		return nil
-	}
-	text, parts := h.attachSlackFiles(ctx, strings.TrimSpace(ev.Text), ev.Files)
-	if text == "" {
-		return nil
-	}
-	_, err := h.Conv.HandleReply(ctx, slackconversation.Request{
-		EventID:   eventID,
-		UserID:    ev.User,
-		Channel:   ev.Channel,
-		ThreadTS:  ev.ThreadTS,
-		MessageTS: ev.TS,
-		Text:      text,
-		Locale:    h.Cfg.Slack.DefaultLocale,
-		Content:   canonicalContent(parts),
-	})
-	return err
 }
 
 func IsAppDM(ev slack.Event) bool {
 	return ev.ChannelType == "im" || IsDMChannel(ev.Channel)
-}
-
-func IsChannelMention(ev slack.Event) bool {
-	return ev.Type == "app_mention" && !IsAppDM(ev)
 }
 
 func IsDMChannel(channel string) bool {
@@ -749,10 +610,6 @@ func IsDMChannel(channel string) bool {
 
 func IsUserMessageSubtype(subtype string) bool {
 	return subtype == "" || subtype == "file_share"
-}
-
-func IsThreadReply(ev slack.Event) bool {
-	return ev.ThreadTS != "" && ev.ThreadTS != ev.TS
 }
 
 func FirstNonEmpty(values ...string) string {

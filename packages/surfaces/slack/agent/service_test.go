@@ -275,7 +275,7 @@ func TestCodeReviewThreadReplyContinuesDurableWorkflowWithoutMention(t *testing.
 	}
 	request.EventID = "follow-up"
 	request.Text = "第二个候选问题为什么被确认？"
-	if accepted, err := service.HandleReply(context.Background(), request); err != nil || !accepted {
+	if accepted, err := service.HandleMention(context.Background(), request); err != nil || !accepted {
 		t.Fatalf("follow-up accepted=%v err=%v", accepted, err)
 	}
 	if client.request == nil || !strings.Contains(client.request.Messages[0].Text(), "continuing an existing pull-request review") {
@@ -305,7 +305,7 @@ func TestServiceActivatesKnownCodeReviewToolsWithoutToolSearch(t *testing.T) {
 	}
 }
 
-func TestHandleReplyOnlyConsumesPendingInputFromItsOwner(t *testing.T) {
+func TestExplicitMentionResumesPendingInput(t *testing.T) {
 	catalog, _ := tool.NewCatalog()
 	store := transcript.NewMemoryStore()
 	messenger := &fakeMessenger{}
@@ -317,13 +317,9 @@ func TestHandleReplyOnlyConsumesPendingInputFromItsOwner(t *testing.T) {
 	metadata := json.RawMessage(`{"user_id":"U1"}`)
 	_, _ = store.Append(context.Background(), transcript.Event{ID: "start", SessionID: sessionID, TurnID: "first", Type: transcript.TurnStarted, Metadata: metadata})
 	_, _ = store.Append(context.Background(), transcript.Event{ID: "done", SessionID: sessionID, TurnID: "first", Type: transcript.TurnCompleted, Status: string(agentruntime.TerminationPendingInput)})
-	accepted, err := service.HandleReply(context.Background(), slackconversation.Request{EventID: "wrong", UserID: "U2", Channel: "C", ThreadTS: "T", Text: "production"})
-	if err != nil || accepted {
-		t.Fatal("reply from a different user was consumed")
-	}
-	accepted, err = service.HandleReply(context.Background(), slackconversation.Request{EventID: "right", UserID: "U1", Channel: "C", ThreadTS: "T", Text: "production"})
+	accepted, err := service.HandleMention(context.Background(), slackconversation.Request{EventID: "explicit", UserID: "U1", Channel: "C", ThreadTS: "T", Text: "production"})
 	if err != nil || !accepted {
-		t.Fatal("pending reply from the owner was ignored")
+		t.Fatal("explicit mention did not resume pending input")
 	}
 }
 

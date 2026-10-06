@@ -34,7 +34,6 @@ func (r Request) Message() model.Message {
 
 type Conversation interface {
 	HandleMention(context.Context, Request) (bool, error)
-	HandleReply(context.Context, Request) (bool, error)
 }
 
 type ControlledConversation interface {

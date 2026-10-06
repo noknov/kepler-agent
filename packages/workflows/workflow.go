@@ -26,7 +26,6 @@ type Activation struct {
 	Prompt        prompt.Fragment
 	Scope         map[string]string
 	RequiredTools []string
-	OwnsThread    bool
 	OutputPolicy  OutputPolicy
 }
 

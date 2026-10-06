@@ -81,7 +81,6 @@ func activation(command Command) workflows.Activation {
 		Prompt:        Fragment(command),
 		Scope:         ScopeValues(command),
 		RequiredTools: RequiredTools(),
-		OwnsThread:    true,
 		OutputPolicy:  workflows.OutputFinalOnly,
 	}
 }
