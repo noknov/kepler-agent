@@ -25,6 +25,7 @@ import (
 // Profile owns the complete hosted-agent composition. Product entrypoints
 // depend on this profile instead of constructing a second agent runtime first.
 type Profile struct {
+	Capabilities       func(context.Context, string) (providers.ModelCapabilities, error)
 	Agent              Agent
 	Prompt             safety.PromptPolicy
 	Redactor           safety.Redactor
@@ -127,6 +128,9 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	}
 	promptPolicy := safety.PromptPolicy{}
 	return Profile{
+		Capabilities: func(ctx context.Context, name string) (providers.ModelCapabilities, error) {
+			return primary.Capabilities(ctx, cfg.LLM.Provider, name)
+		},
 		Agent: Agent{Runtime: runner}, Prompt: promptPolicy,
 		Redactor: safety.Redactor{WorkspaceRoots: cfg.Security.WorkspaceRoots}, Tools: catalog,
 		Rates: CostRates(cfg), SecondaryModel: secondaryObserved, SecondaryModelName: secondaryModel,
@@ -189,7 +193,7 @@ func operatorAllowlist(names []string) map[string]bool {
 	return allowed
 }
 
-func buildModelClient(provider, protocol, baseURL, apiKey string, timeout time.Duration, anthropicFlavor string, credentialFile string) (model.Client, error) {
+func buildModelClient(provider, protocol, baseURL, apiKey string, timeout time.Duration, anthropicFlavor string, credentialFile string) (*providers.Client, error) {
 	return providers.New(providers.Config{
 		ChatGPTCredentialsFile: credentialFile,
 		Provider:               provider,

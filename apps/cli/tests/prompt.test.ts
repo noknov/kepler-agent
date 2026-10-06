@@ -33,3 +33,14 @@ test("draft is retained on rejection and newer typing survives an older acknowle
  find(ui.current,"Prompt").props.onSubmit();resolve(true);await flush();
  assert.equal(find(ui.current,"Prompt").props.value,"");
 });
+
+test("backend failure stays visible next to the editable draft",async()=>{
+ const ui=mount(new URL("../src/components/KeplerPromptFooter.tsx",import.meta.url),"KeplerPromptFooter",{busy:false,connecting:false,connectionFailed:true,approval:null,onSubmitText:async()=>false},{
+  "../cc/kepler-ink.js":{Box:"Box",Text:"Text"},"../cc/hooks/useTerminalSize.js":{useTerminalSize:()=>({columns:80})},
+  "../lib/slashCommands.js":{filterSlashCommands:()=>[]},"./ApprovalPanel.js":{ApprovalPanel:"Approval"},"./PromptInput.js":{PromptInput:"Prompt"},"./SlashMenu.js":{SlashMenu:"Slash"},
+ });
+ assert.match(find(ui.current,"Text").children.join(""),/App-server disconnected/);
+ find(ui.current,"Prompt").props.onChange("retain draft");await flush();
+ assert.equal(find(ui.current,"Prompt").props.value,"retain draft");
+ assert.equal(find(ui.current,"Prompt").props.focus,true);
+});

@@ -26,16 +26,6 @@ func TestClientPinsHTTP1ALPN(t *testing.T) {
 	}
 }
 
-func TestStandardUsesDefaultBehavior(t *testing.T) {
-	c := Standard(0)
-	if c.Timeout != 0 {
-		t.Fatalf("timeout = %v", c.Timeout)
-	}
-	if c.Transport != nil {
-		t.Fatalf("expected nil transport, got %T", c.Transport)
-	}
-}
-
 func TestClientClonePreservesCustomTLSConfig(t *testing.T) {
 	base, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {

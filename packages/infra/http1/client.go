@@ -32,9 +32,3 @@ func Client(timeout time.Duration) *http.Client {
 	cloned.DisableCompression = true
 	return &http.Client{Timeout: timeout, Transport: cloned}
 }
-
-// Standard is the default client for short requests (bootstrap, login). Ngrok
-// works reliably with HTTP/2 on these; forcing HTTP/1.1 can break ALPN.
-func Standard(timeout time.Duration) *http.Client {
-	return &http.Client{Timeout: timeout}
-}

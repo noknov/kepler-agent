@@ -43,7 +43,8 @@ type Worker struct {
 	StartGoroutine func(func(context.Context))
 	Observer       Observer
 
-	queue chan job
+	queue    chan job
+	controls chan job
 }
 
 type job struct {
@@ -62,6 +63,9 @@ func (w *Worker) Start(ctx context.Context) {
 			size = 512
 		}
 		w.queue = make(chan job, size)
+	}
+	if w.controls == nil {
+		w.controls = make(chan job, cap(w.queue))
 	}
 	if err := w.Inbox.RecoverExpired(ctx, w.maxAttempts()); err != nil {
 		log.Printf("recover expired Slack inbox events: %v", err)
@@ -83,6 +87,17 @@ func (w *Worker) Start(ctx context.Context) {
 			}
 		})
 	}
+	// Stop events must remain serviceable while every prompt worker is busy.
+	w.goRun(ctx, func(ctx context.Context) {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case job := <-w.controls:
+				w.handle(ctx, job)
+			}
+		}
+	})
 	w.goRun(ctx, w.subscribeRedisEvents)
 	w.goRun(ctx, func(ctx context.Context) {
 		ticker := time.NewTicker(FallbackPollPeriod)
@@ -115,13 +130,16 @@ func (w *Worker) Notify(ctx context.Context, eventID string, event slack.Event, 
 		}
 		w.queue = make(chan job, size)
 	}
+	if w.controls == nil {
+		w.controls = make(chan job, cap(w.queue))
+	}
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 	select {
-	case w.queue <- job{eventID: eventID, event: event}:
+	case w.eventQueue(event) <- job{eventID: eventID, event: event}:
 		w.observeQueue()
 		if w.Redis != nil {
 			_ = w.Redis.Publish(ctx, RedisEventChannel, eventID)
@@ -263,7 +281,7 @@ func (w *Worker) replay(ctx context.Context) {
 			continue
 		}
 		select {
-		case w.queue <- job{eventID: item.ID, event: event, attempt: item.Attempts}:
+		case w.eventQueue(event) <- job{eventID: item.ID, event: event, attempt: item.Attempts}:
 			w.observeQueue()
 		default:
 			w.observeQueue()
@@ -271,6 +289,13 @@ func (w *Worker) replay(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func (w *Worker) eventQueue(event slack.Event) chan job {
+	if event.Type == "agent_session_stopped" {
+		return w.controls
+	}
+	return w.queue
 }
 
 func (w *Worker) renewLease(ctx context.Context, eventID string, cancel context.CancelFunc, done chan<- error) {
@@ -379,7 +404,7 @@ func (w *Worker) observeQueue() {
 	if w == nil || w.Observer == nil || w.queue == nil {
 		return
 	}
-	w.Observer.EventInboxQueue(len(w.queue), cap(w.queue))
+	w.Observer.EventInboxQueue(len(w.queue)+len(w.controls), cap(w.queue)+cap(w.controls))
 }
 
 func (w *Worker) observeJob(result string) {

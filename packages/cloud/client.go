@@ -28,7 +28,7 @@ func FetchBootstrap(ctx context.Context, apiURL, token string) (Bootstrap, error
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("ngrok-skip-browser-warning", "true")
-	resp, err := http1.Standard(30 * time.Second).Do(req)
+	resp, err := http1.Client(30 * time.Second).Do(req)
 	if err != nil {
 		return Bootstrap{}, err
 	}

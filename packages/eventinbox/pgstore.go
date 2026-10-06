@@ -125,7 +125,11 @@ func (s *PGStore) Pending(ctx context.Context, limit int) ([]Record, error) {
 	if limit <= 0 {
 		limit = 512
 	}
-	rows, err := s.pool.Query(ctx, `SELECT event_id,payload,attempt_count FROM slack_event_inbox WHERE status='queued' AND available_at <= NOW() ORDER BY available_at,received_at LIMIT $1`, limit)
+	// Control events must enter the reserved worker even when the prompt
+	// backlog exceeds this page. Priority is a Slack event type, not text.
+	rows, err := s.pool.Query(ctx, `SELECT event_id,payload,attempt_count FROM slack_event_inbox
+WHERE status='queued' AND available_at <= NOW()
+ORDER BY CASE WHEN payload->>'type'='agent_session_stopped' THEN 0 ELSE 1 END,available_at,received_at LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}

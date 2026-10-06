@@ -17,6 +17,7 @@ const (
 	KindSteering Kind = "steering"
 	KindQueue    Kind = "queue"
 	KindWeb      Kind = "web"
+	KindStop     Kind = "stop"
 )
 
 var ErrClaimLost = errors.New("session input claim lost")
@@ -48,7 +49,7 @@ func (s *PGStore) Enqueue(ctx context.Context, item Item) error {
 	if s == nil || s.pool == nil {
 		return fmt.Errorf("session input store is unavailable")
 	}
-	if item.ID == "" || item.SessionID == "" || (item.Kind != KindSteering && item.Kind != KindQueue && item.Kind != KindWeb) || len(item.Payload) == 0 {
+	if item.ID == "" || item.SessionID == "" || (item.Kind != KindSteering && item.Kind != KindQueue && item.Kind != KindWeb && item.Kind != KindStop) || len(item.Payload) == 0 {
 		return fmt.Errorf("complete session input is required")
 	}
 	_, err := s.pool.Exec(ctx, `INSERT INTO agent_session_inputs(id,session_id,kind,payload,created_at)

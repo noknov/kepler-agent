@@ -31,6 +31,7 @@ And these event subscriptions:
 ```text
 app_mention  message.channels  message.groups  message.im
 app_home_opened  app_context_changed  file_shared  reaction_added
+agent_session_stopped
 ```
 
 Use Slack's Agent experience (`agent_view`) for the corresponding presentation.
@@ -86,3 +87,26 @@ channel threads, explicitly @mention the bot, including workflow follow-ups,
 pending-input answers and messages arriving while a task is running. Unmentioned
 channel messages and standalone file-sharing notifications do not trigger
 execution. Files can accompany a DM or an explicit channel mention.
+
+## Native Stop and session status
+
+Subscribe to `agent_session_stopped` in Slack App Settings → Event Subscriptions
+→ Subscribe to bot events. Without this subscription Slack disables its native
+Stop control; backend deployment alone cannot enable the button. The event uses
+the existing signed `/slack/events` endpoint and access policy.
+
+Stop commands persist in `agent_session_inputs` and target a specific turn, so
+retries cannot cancel a later turn. Redis broadcasts a wake-up; each worker
+checks the target against its running turn. Active workers also poll their
+commands, recovering missed notifications without relying on a cached owner.
+Inbox dispatch prioritizes Stop before paging the prompt backlog, and a reserved
+worker handles it even when all prompt workers are occupied. Cancellation follows the normal runtime path,
+which stops model/tool work, confirms cancellation and clears the session status.
+Before deploying this change, apply `schema/postgres.sql` to allow the `stop`
+session-input kind and add the dispatch index. Runtime code does not run DDL.
+
+The terminal `active`/`suspended` status is sent after message delivery finishes:
+Slack's stream APIs also change session status, so runtime completion alone is
+too early. Posting an answer does not itself clear a non-streaming session.
+`agents.sessions.setStatus` supports lifecycle values, not custom loading text.
+Model commentary remains hidden; internal reasoning is not sent to Slack.

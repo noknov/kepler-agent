@@ -22,6 +22,38 @@ type fakeInbox struct {
 	renewErr    error
 }
 
+func TestStopIsHandledWhileAllPromptWorkersAreBusy(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started, stopped := make(chan struct{}), make(chan struct{})
+	w := &Worker{Inbox: &fakeInbox{}, Workers: 1, EventTimeout: time.Minute, Handler: func(ctx context.Context, _ string, event slack.Event) error {
+		if event.Type == "message" {
+			close(started)
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		close(stopped)
+		return nil
+	}}
+	w.Start(ctx)
+	if !w.Notify(ctx, "prompt", slack.Event{Type: "message"}, 0) {
+		t.Fatal("prompt not queued")
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("prompt did not start")
+	}
+	if !w.Notify(ctx, "stop", slack.Event{Type: "agent_session_stopped"}, 0) {
+		t.Fatal("stop not queued")
+	}
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("stop blocked behind the running prompt")
+	}
+}
+
 func (f *fakeInbox) Start(context.Context, string, time.Duration) (bool, error) { return true, nil }
 func (f *fakeInbox) Renew(context.Context, string, time.Duration) error {
 	f.mu.Lock()

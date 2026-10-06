@@ -11,6 +11,7 @@ import (
 
 	"github.com/noknov/kepler-agent/packages/cloud"
 	"github.com/noknov/kepler-agent/packages/profiles/local"
+	"golang.org/x/term"
 )
 
 type inkLaunchConfig struct {
@@ -103,7 +104,29 @@ func launchInk(cfg inkLaunchConfig) error {
 	if cfg.creds.UserID != "" {
 		cmd.Env = append(cmd.Env, "KEPLER_USER_ID="+cfg.creds.UserID)
 	}
+	// Node cannot run its cleanup handlers after a native abort or OOM. The
+	// parent outlives the frontend and owns restoring the caller's terminal.
+	restore := preserveInteractiveTerminal(os.Stdin, os.Stdout)
+	defer restore()
 	return cmd.Run()
+}
+
+func preserveInteractiveTerminal(input, output *os.File) func() {
+	if !term.IsTerminal(int(output.Fd())) {
+		return func() {}
+	}
+	fd := int(input.Fd())
+	state, err := term.GetState(fd)
+	return func() {
+		if err == nil {
+			_ = term.Restore(fd, state)
+		}
+		// Undo modes enabled by the fullscreen frontend, including motion
+		// reporting which otherwise leaks mouse escape sequences into the shell.
+		_, _ = output.WriteString("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l" +
+			"\x1b[?2004l\x1b[?1004l\x1b[?2026l\x1b[<u\x1b[>4m" +
+			"\x1b[?1049l\x1b[0m\x1b[?25h")
+	}
 }
 
 func resolveAppServerBinary() string {

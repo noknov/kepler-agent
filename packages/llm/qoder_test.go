@@ -262,3 +262,16 @@ func TestQoderIncompleteToolDiagnosticExcludesArguments(t *testing.T) {
 		t.Fatalf("unsafe or untyped diagnostic: %v", err)
 	}
 }
+
+func TestQoderRequestPreservesImageAndQuestion(t *testing.T) {
+	client, _ := NewQoderClient(QoderBaseURL, "synthetic", time.Second)
+	body, err := client.requestBody(Request{Messages: []Message{{Role: "user", ContentParts: []ContentPart{TextPart("identify this"), ImageURLPart("data:image/png;base64,AAAA")}}}}, QoderModel{Config: json.RawMessage(`{"key":"vision","is_vl":true}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"type":"image_url"`, `data:image/png;base64,AAAA`, `identify this`} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("missing %q", want)
+		}
+	}
+}

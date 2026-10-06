@@ -1,6 +1,16 @@
 package providers
 
-import "testing"
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/noknov/kepler-agent/packages/llm"
+)
 
 func TestResolveKnownModelCapabilities(t *testing.T) {
 	cases := []struct {
@@ -68,5 +78,42 @@ func TestResolveDeepSeekModelCapabilities(t *testing.T) {
 	}
 	if got := responsesModels("deepseek"); len(got) != 0 {
 		t.Fatalf("responsesModels(deepseek) = %#v, want none", got)
+	}
+}
+
+func TestQoderCapabilitiesUseAccountCatalogByKeyAndDisplayName(t *testing.T) {
+	client, err := New(Config{Provider: "qoder", Protocol: "qoder", BaseURL: llm.QoderBaseURL, APIKey: "synthetic"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogs := 0
+	client.Wire.(*llm.QoderClient).SetTransport(nativeQoderTransport(func(r *http.Request) (*http.Response, error) {
+		body := ""
+		switch r.URL.Path {
+		case "/api/v1/jobToken/exchange":
+			body = fmt.Sprintf(`{"token":"job","expires_at":%q}`, time.Now().Add(time.Hour).Format(time.RFC3339))
+		case "/api/v1/userinfo":
+			body = `{"id":"user"}`
+		case "/algo/api/v2/model/list":
+			catalogs++
+			body = `{"assistant":[{"key":"opaque-vision-id","display_name":"Account Vision","enable":true,"is_vl":true},{"key":"text","enable":true,"is_vl":false},{"key":"disabled","enable":false,"is_vl":true}]}`
+		default:
+			t.Fatalf("unexpected request %s", r.URL)
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+	}))
+	for _, test := range []struct {
+		name           string
+		image, invalid bool
+	}{
+		{"opaque-vision-id", true, false}, {"Account Vision", true, false}, {"text", false, false}, {"disabled", false, true}, {"unknown", false, true},
+	} {
+		caps, err := client.Capabilities(context.Background(), "qoder", test.name)
+		if (err != nil) != test.invalid || caps.SupportsInput(ModalityImage) != test.image {
+			t.Fatalf("%s: %+v err=%v", test.name, caps, err)
+		}
+	}
+	if catalogs != 1 {
+		t.Fatalf("catalog requests=%d; expected inference cache reuse", catalogs)
 	}
 }

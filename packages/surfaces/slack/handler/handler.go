@@ -52,6 +52,19 @@ func (h *Handler) Handle(ctx context.Context, eventID string, ev slack.Event) (e
 		return nil
 	case "app_mention", "message":
 		return h.handlePrompt(ctx, eventID, ev)
+	case "agent_session_stopped":
+		allowed := h.Access.IsAllowed(ev.User, ev.Channel)
+		if IsAppDM(ev) {
+			allowed = h.Access.AllowsUser(ev.User)
+		}
+		if ev.User == "" || ev.Channel == "" || ev.ThreadTS == "" || !allowed {
+			return nil
+		}
+		stopper, ok := h.Conv.(slackconversation.SessionStopper)
+		if !ok {
+			return fmt.Errorf("conversation does not support stopping sessions")
+		}
+		return stopper.StopSession(ctx, slackconversation.StopRequest{EventID: eventID, UserID: ev.User, Channel: ev.Channel, ThreadTS: ev.ThreadTS, EventTS: ev.EventTS})
 	case "reaction_added":
 		if ev.Item.Type == "message" {
 			if h.Metrics != nil {

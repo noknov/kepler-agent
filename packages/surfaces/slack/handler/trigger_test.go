@@ -10,7 +10,32 @@ import (
 	conversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
 
-type triggerConversation struct{ requests []conversation.Request }
+type triggerConversation struct {
+	requests []conversation.Request
+	stops    []conversation.StopRequest
+}
+
+func (c *triggerConversation) StopSession(_ context.Context, req conversation.StopRequest) error {
+	c.stops = append(c.stops, req)
+	return nil
+}
+
+func TestNativeStopRequiresAccessButNotMention(t *testing.T) {
+	for _, channel := range []string{"C1", "D1", "C2"} {
+		for _, user := range []string{"U1", "U2"} {
+			conv := &triggerConversation{}
+			h := Handler{Conv: conv, Access: safety.NewAccessPolicy([]string{"U1"}, []string{"C1"})}
+			err := h.Handle(context.Background(), "stop-event", slack.Event{Type: "agent_session_stopped", Channel: channel, ThreadTS: "1.0", User: user, EventTS: "2.0"})
+			want := user == "U1" && channel != "C2"
+			if err != nil || (len(conv.stops) == 1) != want || len(conv.requests) != 0 {
+				t.Fatalf("channel=%s user=%s stops=%d err=%v", channel, user, len(conv.stops), err)
+			}
+			if want && conv.stops[0].EventTS != "2.0" {
+				t.Fatal("stop lost the Slack event timestamp")
+			}
+		}
+	}
+}
 
 func (c *triggerConversation) HandleMention(_ context.Context, req conversation.Request) (bool, error) {
 	c.requests = append(c.requests, req)

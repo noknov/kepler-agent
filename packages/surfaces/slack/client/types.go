@@ -23,6 +23,7 @@ type Event struct {
 	ChannelType string     `json:"channel_type,omitempty"`
 	TS          string     `json:"ts,omitempty"`
 	ThreadTS    string     `json:"thread_ts,omitempty"`
+	EventTS     string     `json:"event_ts,omitempty"`
 	BotID       string     `json:"bot_id,omitempty"`
 	Reaction    string     `json:"reaction,omitempty"`
 	Tab         string     `json:"tab,omitempty"`

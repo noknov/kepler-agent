@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS agent_session_inputs (
     sequence BIGSERIAL UNIQUE,
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('steering', 'queue', 'web')),
+    kind TEXT NOT NULL CHECK (kind IN ('steering', 'queue', 'web', 'stop')),
     payload JSONB NOT NULL,
     attempts INTEGER NOT NULL DEFAULT 0,
     claim_owner TEXT NOT NULL DEFAULT '',
@@ -56,11 +56,11 @@ BEGIN
         SELECT 1 FROM pg_constraint
         WHERE conrelid = 'agent_session_inputs'::regclass
           AND conname = 'agent_session_inputs_kind_check'
-          AND pg_get_constraintdef(oid) NOT LIKE '%web%'
+          AND pg_get_constraintdef(oid) NOT LIKE '%stop%'
     ) THEN
         ALTER TABLE agent_session_inputs DROP CONSTRAINT agent_session_inputs_kind_check;
         ALTER TABLE agent_session_inputs ADD CONSTRAINT agent_session_inputs_kind_check
-            CHECK (kind IN ('steering', 'queue', 'web'));
+            CHECK (kind IN ('steering', 'queue', 'web', 'stop'));
     END IF;
 END $$;
 
@@ -133,6 +133,9 @@ CREATE INDEX IF NOT EXISTS idx_slack_event_inbox_expired
     ON slack_event_inbox(claim_until) WHERE status = 'processing';
 CREATE INDEX IF NOT EXISTS idx_slack_event_inbox_pending
     ON slack_event_inbox(available_at, received_at) WHERE status = 'queued';
+CREATE INDEX IF NOT EXISTS idx_slack_event_inbox_dispatch
+    ON slack_event_inbox((CASE WHEN payload->>'type'='agent_session_stopped' THEN 0 ELSE 1 END), available_at, received_at)
+    WHERE status = 'queued';
 
 CREATE TABLE IF NOT EXISTS user_settings (
     user_id TEXT PRIMARY KEY,

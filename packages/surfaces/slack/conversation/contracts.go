@@ -36,6 +36,14 @@ type Conversation interface {
 	HandleMention(context.Context, Request) (bool, error)
 }
 
+type SessionStopper interface {
+	StopSession(context.Context, StopRequest) error
+}
+
+type StopRequest struct {
+	EventID, UserID, Channel, ThreadTS, EventTS string
+}
+
 type ControlledConversation interface {
 	Conversation
 	StartControlSubscriber(context.Context)

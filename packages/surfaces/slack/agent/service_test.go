@@ -3,6 +3,7 @@ package slackagent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -333,6 +334,10 @@ func TestStreamProjectsRuntimeTerminalStateToSession(t *testing.T) {
 	stream.Lifecycle(transcript.Event{Type: transcript.TurnStarted})
 	stream.Lifecycle(transcript.Event{Type: transcript.ToolCallStarted, ToolCall: &tool.Call{Name: "repo-search"}})
 	stream.Lifecycle(transcript.Event{Type: transcript.TurnCompleted})
+	if got := messenger.statuses; len(got) != 1 {
+		t.Fatalf("status cleared before final delivery: %#v", got)
+	}
+	stream.Complete("")
 	if got := messenger.statuses; len(got) != 2 || got[1] != sessionActive {
 		t.Fatalf("statuses=%#v", got)
 	}
@@ -355,6 +360,7 @@ func TestStreamSuspendsSessionWhenRuntimeNeedsUserInput(t *testing.T) {
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T", UserID: "U"})
 	stream.Start()
 	stream.Lifecycle(transcript.Event{Type: transcript.TurnCompleted, Status: string(agentruntime.TerminationPendingInput)})
+	stream.Complete("")
 	if got := messenger.statuses; len(got) != 2 || got[0] != sessionProcessing || got[1] != sessionSuspended {
 		t.Fatalf("statuses=%#v", got)
 	}
@@ -365,6 +371,7 @@ func TestStreamSuspendsSessionWhenRuntimeNeedsApproval(t *testing.T) {
 	stream := newSlackStream(context.Background(), messenger, slackconversation.Request{Channel: "C", ThreadTS: "T", UserID: "U"})
 	stream.Start()
 	stream.Lifecycle(transcript.Event{Type: transcript.TurnCompleted, Status: string(agentruntime.TerminationPendingApproval)})
+	stream.Complete("")
 	if got := messenger.statuses; len(got) != 2 || got[0] != sessionProcessing || got[1] != sessionSuspended {
 		t.Fatalf("statuses=%#v", got)
 	}
@@ -490,5 +497,47 @@ func TestEventRouterKeepsCommentaryOutOfSlackMessagesAndStatus(t *testing.T) {
 	defer stream.mu.Unlock()
 	if stream.answer.String() != "Final answer." {
 		t.Fatalf("answer=%q", stream.answer.String())
+	}
+}
+
+func TestImageCapabilityControlsSlackInputWithoutDroppingOnLookupFailure(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		supported bool
+		lookupErr error
+	}{
+		{name: "vision", supported: true}, {name: "text-only"}, {name: "catalog failure", lookupErr: fmt.Errorf("catalog unavailable")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			catalog, _ := tool.NewCatalog()
+			service := New(hosted.Agent{}, &fakeMessenger{}, safety.PromptPolicy{}, safety.Redactor{}, nil)
+			client := &replyModel{}
+			runner, err := agentruntime.New(agentruntime.Config{Model: "test"}, agentruntime.Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore(), Events: service.EventSink()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			service.Agent.Runtime = runner
+			service.Multimodal = func(context.Context, string) (bool, error) { return test.supported, test.lookupErr }
+			_, err = service.HandleMention(context.Background(), slackconversation.Request{EventID: "image", UserID: "U", Channel: "D", ThreadTS: "1", Text: "what is this?", Content: []model.Content{{Type: model.ContentImage, ImageURL: "data:image/png;base64,AAAA"}}})
+			if test.lookupErr != nil {
+				if err == nil || client.request != nil {
+					t.Fatalf("catalog failure reached inference: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if client.request == nil {
+				t.Fatal("no model request")
+			}
+			images := false
+			for _, message := range client.request.Messages {
+				images = images || model.ContainImages(message)
+			}
+			if images != test.supported {
+				t.Fatalf("image preserved=%t supported=%t", images, test.supported)
+			}
+		})
 	}
 }

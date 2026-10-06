@@ -310,8 +310,9 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		conversation.Workspace = cfg.Security.WorkspaceRoots[0]
 	}
 	conversation.Model = cfg.LLM.Model
-	multimodal := func(modelName string) bool {
-		return providers.SupportsInput(cfg.LLM.Provider, modelName, providers.ModalityImage)
+	multimodal := func(ctx context.Context, modelName string) (bool, error) {
+		capabilities, err := profile.Capabilities(ctx, modelName)
+		return capabilities.SupportsInput(providers.ModalityImage), err
 	}
 	conversation.Multimodal = multimodal
 	events.Add(conversation.EventSink())

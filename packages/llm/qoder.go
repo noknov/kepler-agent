@@ -63,6 +63,7 @@ type QoderModel struct {
 	Key     string          `json:"key"`
 	Name    string          `json:"display_name"`
 	Enabled bool            `json:"enable"`
+	Vision  bool            `json:"is_vl"`
 	Config  json.RawMessage `json:"-"`
 }
 

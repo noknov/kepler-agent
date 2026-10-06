@@ -117,10 +117,10 @@ func (c keplerRemote) Generate(ctx context.Context, request model.Request, sink 
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return model.Response{}, err
+		return model.Response{}, fmt.Errorf("kepler generate: read response stream: %w", err)
 	}
 	if result == nil {
-		return model.Response{}, fmt.Errorf("kepler generate: stream ended without a result")
+		return model.Response{}, &model.Error{Kind: model.ErrorProtocol, Message: "kepler generate: stream ended without a result", Retryable: true}
 	}
 	return *result, nil
 }

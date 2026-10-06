@@ -1,6 +1,12 @@
 package providers
 
-import "strings"
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/noknov/kepler-agent/packages/llm"
+)
 
 // Modality is an input capability declared by an exact provider/model route.
 // It is deliberately provider-neutral so surfaces do not infer capabilities
@@ -119,4 +125,28 @@ func SupportsInput(provider, model string, modality Modality) bool {
 		return known.SupportsInput(modality)
 	}
 	return false
+}
+
+// Capabilities resolves account-owned models from the same cached catalog used
+// by inference. Static declarations remain authoritative for other providers.
+func (c *Client) Capabilities(ctx context.Context, provider, name string) (ModelCapabilities, error) {
+	if qoder, ok := c.Wire.(*llm.QoderClient); ok {
+		models, err := qoder.Models(ctx)
+		if err != nil {
+			return ModelCapabilities{}, err
+		}
+		for _, item := range models {
+			if item.Key != name && item.Name != name {
+				continue
+			}
+			modalities := []Modality{ModalityText}
+			if item.Vision {
+				modalities = append(modalities, ModalityImage)
+			}
+			return ModelCapabilities{Provider: "qoder", ID: item.Key, Protocol: "qoder", InputModalities: modalities}, nil
+		}
+		return ModelCapabilities{}, fmt.Errorf("qoder model %q is not in the enabled account catalog", name)
+	}
+	capabilities, _ := ResolveModel(provider, name)
+	return capabilities, nil
 }

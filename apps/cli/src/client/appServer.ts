@@ -97,6 +97,7 @@ export class AppServerClient {
     for (const waiter of this.pending.values()) waiter.reject(error);
     this.pending.clear();
     this.reader.close();
+    this.stdin.end();
     this.events.onDisconnect?.(error);
   }
 

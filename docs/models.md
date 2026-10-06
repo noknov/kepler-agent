@@ -275,3 +275,13 @@ SECONDARY_MODEL=deepseek-v4.1-flash
 
 When `SESSION_COMPACT_MODEL` is unset, compact summaries use `SECONDARY_MODEL`
 when configured, otherwise the primary model.
+
+### Image capabilities
+
+For Qoder, image support comes from the enabled account model catalog's
+`is_vl` field, resolved by exact key or display name. Slack uses the inference
+client's cached catalog; changing a model does not require a second static
+model-name list. Catalog failures propagate as errors rather than silently
+stripping attachments. Other providers keep their existing declared capability
+contracts. Current-message images travel as multimodal content parts; historical
+images are not automatically re-attached on every turn.

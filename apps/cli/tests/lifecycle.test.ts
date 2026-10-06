@@ -20,6 +20,7 @@ test("disconnect rejects pending RPCs immediately and rejects new requests", asy
   await Promise.all([first,second]);
   await assert.rejects(client.startThread(), /disconnected/);
   client.close();
+  assert.equal(p.stdin.writableEnded,true);
   assert.equal(disconnected,1);
 });
 

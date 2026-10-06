@@ -274,6 +274,7 @@ export function useRepl(config: ReplConfig) {
     })();
     return () => {
       canceled = true;
+      client.close();
     };
   }, [client, config.resume, config.sessionId, pushSystem, repinScroll]);
 

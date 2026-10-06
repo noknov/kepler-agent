@@ -37,6 +37,19 @@ Go vet/tests/builds, and evaluator wiring. It does not run a real model
 benchmark or the full frontend checks. See [verification scope](docs/development.md#verification)
 for frontend, race, and integration checks.
 
+Build and package the interactive CLI through the sibling deployment repository:
+
+```sh
+cd ../kepler-agent-deploy
+SOURCE_DIR=../kepler-agent scripts/build-cli.sh
+bin/kepler-agent
+```
+
+That script builds the launcher, app-server and frontend together and writes the
+CLI bundle under `kepler-agent-deploy/bin`. The application repository owns
+source and tests; deployment owns runnable bundles and release archives.
+`make eval-build` only builds a temporary headless CLI for local evaluations.
+
 ## Repository boundaries
 
 | Path | Owns |

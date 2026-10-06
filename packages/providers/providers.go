@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -95,7 +96,8 @@ func New(config Config) (*Client, error) {
 
 func (c *Client) Generate(ctx context.Context, request model.Request, sink model.EventSink) (model.Response, error) {
 	if c != nil && c.Host != nil {
-		return c.Host.Generate(ctx, request, sink)
+		response, err := c.Host.Generate(ctx, request, sink)
+		return response, toModelError(err)
 	}
 	if c == nil || c.Wire == nil {
 		return model.Response{}, fmt.Errorf("model provider is not configured")
@@ -453,6 +455,13 @@ func finishReason(reason string) model.FinishReason {
 func toModelError(err error) error {
 	if err == nil {
 		return nil
+	}
+	var typed *model.Error
+	if errors.As(err, &typed) {
+		return err
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return &model.Error{Kind: model.ErrorTransient, Message: err.Error(), Retryable: true, Cause: err}
 	}
 	var emptyErr llm.EmptyResponseError
 	if errors.As(err, &emptyErr) && emptyErr.Provider == "qoder" {

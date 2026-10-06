@@ -48,6 +48,7 @@ export function AppView(props: Props) {
             <KeplerPromptFooter
               busy={repl.busy}
               connecting={connecting}
+              connectionFailed={repl.connectionState === "failed"}
               approval={repl.approval}
               onSubmitText={repl.submitText}
               onPromptInput={repl.repinOnPromptInput}

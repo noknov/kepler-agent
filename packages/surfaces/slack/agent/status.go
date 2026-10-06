@@ -34,15 +34,28 @@ func (s *slackStream) Lifecycle(event transcript.Event) {
 	if event.Type == transcript.ToolCallFailed && event.ToolResult != nil && event.ToolResult.ErrorCode == "connection_required" {
 		s.requestConnection(event)
 	}
-	if s.session == nil {
-		return
-	}
+	// Runtime completion precedes final delivery. A native stream changes
+	// Slack's status too; sync the terminal status only after it has closed.
 	switch event.Type {
 	case transcript.TurnCompleted:
-		s.setSessionStatus(sessionStatusForTermination(event.Status))
+		s.sessionMu.Lock()
+		s.terminalSessionStatus = sessionStatusForTermination(event.Status)
+		s.sessionMu.Unlock()
 	case transcript.TurnFailed, transcript.TurnCanceled:
-		s.setSessionStatus(sessionActive)
+		s.sessionMu.Lock()
+		s.terminalSessionStatus = sessionActive
+		s.sessionMu.Unlock()
 	}
+}
+
+func (s *slackStream) finishSession() {
+	s.sessionMu.Lock()
+	status := s.terminalSessionStatus
+	s.sessionMu.Unlock()
+	if status == "" {
+		status = sessionActive
+	}
+	s.setSessionStatus(status)
 }
 
 func (s *slackStream) requestConnection(event transcript.Event) {

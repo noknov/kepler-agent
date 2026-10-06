@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from "react";
-import { Box } from "../cc/kepler-ink.js";
+import { Box, Text } from "../cc/kepler-ink.js";
 import { useTerminalSize } from "../cc/hooks/useTerminalSize.js";
 import type { ApprovalRequest } from "../client/appServer.js";
 import { filterSlashCommands } from "../lib/slashCommands.js";
@@ -10,6 +10,7 @@ import { SlashMenu } from "./SlashMenu.js";
 type Props = {
   busy: boolean;
   connecting: boolean;
+  connectionFailed?: boolean;
   approval: ApprovalRequest | null;
   onSubmitText: (text: string) => Promise<boolean>;
   /** CC REPL: empty→non-empty input re-pins scroll when user isn't reading history. */
@@ -24,6 +25,7 @@ type Props = {
 export function KeplerPromptFooter({
   busy,
   connecting,
+  connectionFailed = false,
   approval,
   onSubmitText,
   onPromptInput,
@@ -40,6 +42,7 @@ export function KeplerPromptFooter({
 
   return (
     <>
+      {connectionFailed ? <Text color="red">App-server disconnected. Restart the CLI to reconnect.</Text> : null}
       {showSlash ? (
         <Box marginBottom={1}>
           <SlashMenu commands={slashMatches} width={columns} />
