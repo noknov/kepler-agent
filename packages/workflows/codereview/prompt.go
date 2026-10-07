@@ -56,6 +56,10 @@ type Definition struct{}
 
 func (Definition) ID() string { return WorkflowName }
 
+func (Definition) CanStartPrompt(text string) bool {
+	return len(pullRequestURLs(text)) > 0
+}
+
 func (definition Definition) StartPrompt(text string, _ map[string]string) (workflows.Activation, error) {
 	return definition.start(map[string]string{InputPullRequests: text})
 }

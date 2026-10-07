@@ -2,6 +2,7 @@ package slackagent
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -11,18 +12,12 @@ import (
 
 const planUpdateInterval = 3 * time.Second
 
-// UpdatePlan renders model-authored execution plans using Slack's documented
-// task_update chunks in plan display mode. It deliberately does not infer plan
-// state from individual tool calls.
+// UpdatePlan renders model-authored execution plans using Slack's native plan block.
+// It deliberately does not infer plan state from individual tool calls.
 func (s *slackStream) UpdatePlan(plan *tool.PlanUpdate) {
 	if plan == nil || len(plan.Items) == 0 {
 		return
 	}
-	chunks := planChunks(plan)
-	if len(chunks) == 0 {
-		return
-	}
-
 	s.schedulePlanUpdate(plan)
 }
 
@@ -81,6 +76,7 @@ func (s *slackStream) deliverPlan(messenger slackconversation.ApprovalMessenger,
 	if messageTS == "" {
 		ts, err := messenger.PostMessageBlocks(ctx, s.req.Channel, s.req.ThreadTS, text, blocks)
 		if err != nil {
+			log.Printf("slack plan post failed channel=%s thread=%s: %v", s.req.Channel, s.req.ThreadTS, err)
 			return
 		}
 		s.mu.Lock()
@@ -90,6 +86,7 @@ func (s *slackStream) deliverPlan(messenger slackconversation.ApprovalMessenger,
 		return
 	}
 	if err := updater.UpdateMessageBlocks(ctx, s.req.Channel, messageTS, text, blocks); err != nil {
+		log.Printf("slack plan update failed channel=%s ts=%s: %v", s.req.Channel, messageTS, err)
 		return
 	}
 	s.mu.Lock()
@@ -101,32 +98,6 @@ func clonePlan(plan *tool.PlanUpdate) *tool.PlanUpdate {
 	copyPlan := *plan
 	copyPlan.Items = append([]tool.PlanItem(nil), plan.Items...)
 	return &copyPlan
-}
-
-func planChunks(plan *tool.PlanUpdate) []map[string]any {
-	chunks := make([]map[string]any, 0, len(plan.Items)+1)
-	title := strings.TrimSpace(plan.Explanation)
-	if title == "" {
-		title = "Execution plan"
-	}
-	chunks = append(chunks, map[string]any{"type": "plan_update", "title": truncatePlanField(title)})
-	for index, item := range plan.Items {
-		id := strings.TrimSpace(item.ID)
-		if id == "" {
-			id = fmt.Sprintf("task_%d", index+1)
-		}
-		chunk := map[string]any{
-			"type":   "task_update",
-			"id":     id,
-			"title":  truncatePlanField(item.Task),
-			"status": slackPlanStatus(item.Status),
-		}
-		if note := strings.TrimSpace(item.Note); note != "" {
-			chunk["details"] = truncatePlanField(note)
-		}
-		chunks = append(chunks, chunk)
-	}
-	return chunks
 }
 
 func planBlocks(plan *tool.PlanUpdate, revision int) []map[string]any {

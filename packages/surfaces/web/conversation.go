@@ -23,22 +23,25 @@ import (
 
 const webOutputPrompt = "Replies are rendered as GitHub-Flavored Markdown."
 
+const defaultMaxActiveWebTurns = 32
+
 var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{16,96}$`)
 
 type ConversationService struct {
-	Agent      hosted.Agent
-	Store      Store
-	Transcript transcript.Store
-	Hub        *EventHub
-	Prompt     safety.PromptPolicy
-	Redactor   safety.Redactor
-	Workspace  string
-	Model      string
-	Lifecycle  context.Context
-	BeforeRun  func(context.Context, string) error
-	IsDraining func() bool
-	Inputs     sessioninput.Store
-	QueueOwner string
+	Agent          hosted.Agent
+	Store          Store
+	Transcript     transcript.Store
+	Hub            *EventHub
+	Prompt         safety.PromptPolicy
+	Redactor       safety.Redactor
+	Workspace      string
+	Model          string
+	Lifecycle      context.Context
+	BeforeRun      func(context.Context, string) error
+	IsDraining     func() bool
+	Inputs         sessioninput.Store
+	QueueOwner     string
+	MaxActiveTurns int
 
 	mu      sync.Mutex
 	queueMu sync.Mutex
@@ -257,10 +260,22 @@ func (s *ConversationService) run(ctx context.Context, owner Identity, conversat
 	return err
 }
 
+func (s *ConversationService) maxActiveTurns() int {
+	if s.MaxActiveTurns > 0 {
+		return s.MaxActiveTurns
+	}
+	return defaultMaxActiveWebTurns
+}
+
 func (s *ConversationService) launch(owner Identity, conversationID, turnID string, input model.Message, history []model.Message, claimID string) bool {
 	runCtx, cancel := context.WithCancel(s.baseContext())
 	s.mu.Lock()
 	if _, exists := s.active[conversationID]; exists {
+		s.mu.Unlock()
+		cancel()
+		return false
+	}
+	if len(s.active) >= s.maxActiveTurns() {
 		s.mu.Unlock()
 		cancel()
 		return false

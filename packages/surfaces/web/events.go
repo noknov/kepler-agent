@@ -2,9 +2,12 @@ package web
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/noknov/kepler-agent/packages/agent/failure"
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
@@ -159,7 +162,11 @@ func ProjectEvent(event transcript.Event, redactor safety.Redactor) (ClientEvent
 			view.Status = "completed"
 		}
 	case transcript.TurnFailed:
-		view.Kind, view.Status, view.Text = "turn", "failed", "The assistant could not complete this turn."
+		text := "The assistant could not complete this turn."
+		if strings.TrimSpace(event.Error) != "" {
+			text = failure.PublicMessage(errors.New(event.Error))
+		}
+		view.Kind, view.Status, view.Text = "turn", "failed", text
 	case transcript.TurnCanceled:
 		view.Kind, view.Status = "turn", "canceled"
 	default:
@@ -175,6 +182,18 @@ func CollapseClientEvents(events []ClientEvent) []ClientEvent {
 	out := make([]ClientEvent, 0, len(events))
 	index := make(map[string]int)
 	for _, event := range events {
+		if event.Kind == "plan" && event.TurnID != "" {
+			key := event.TurnID + ":plan"
+			if pos, ok := index[key]; ok {
+				if event.Sequence >= out[pos].Sequence {
+					out[pos] = event
+				}
+				continue
+			}
+			index[key] = len(out)
+			out = append(out, event)
+			continue
+		}
 		if event.Kind != "tool" || event.ToolCallID == "" {
 			out = append(out, event)
 			continue
@@ -230,7 +249,8 @@ func (h *EventHub) broadcastLocked(event ClientEvent) {
 }
 
 func isHiddenInput(message model.Message) bool {
-	return len(message.ID) > len("approval-continuation:") && message.ID[:len("approval-continuation:")] == "approval-continuation:"
+	return strings.HasPrefix(message.ID, "approval-continuation:") ||
+		strings.HasPrefix(message.ID, "connection-continuation:")
 }
 
 func isWebSession(sessionID string) bool {

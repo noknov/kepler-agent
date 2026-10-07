@@ -19,6 +19,7 @@ type Request struct {
 	Text      string
 	Locale    string
 	Content   []model.Content
+	MessageID string           `json:"message_id,omitempty"`
 	ClaimID   string           `json:"-"`
 	Approval  *ApprovalRequest `json:"approval,omitempty"`
 }
@@ -29,7 +30,7 @@ func (r Request) Message() model.Message {
 		content = append(content, model.Content{Type: model.ContentText, Text: r.Text})
 	}
 	content = append(content, r.Content...)
-	return model.Message{Role: model.RoleUser, Content: content}
+	return model.Message{ID: r.MessageID, Role: model.RoleUser, Content: content}
 }
 
 type Conversation interface {

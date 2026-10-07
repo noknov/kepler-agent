@@ -445,7 +445,7 @@ func (s *Service) resolveWorkflow(ctx context.Context, sessionID, turnID string,
 			return activation, true, nil
 		}
 	}
-	if s.IntentRouter == nil {
+	if s.IntentRouter == nil || !s.Workflows.HasPromptCandidate(req.Text) {
 		return workflows.Activation{}, false, nil
 	}
 	decision, err := s.IntentRouter.Route(ctx, workflows.RouteRequest{Text: req.Text, SessionID: sessionID})
@@ -720,11 +720,12 @@ func (s *Service) resumeAfterConnection(parentCtx context.Context, continuation 
 		return
 	}
 	req := slackconversation.Request{
-		EventID:  fmt.Sprintf("connection-continue-%s-%d", continuation.Provider, time.Now().UnixNano()),
-		UserID:   continuation.UserID,
-		Channel:  continuation.Channel,
-		ThreadTS: continuation.ThreadTS,
-		Text:     "I've connected. Please continue.",
+		EventID:   fmt.Sprintf("connection-continue-%s-%d", continuation.Provider, time.Now().UnixNano()),
+		MessageID: fmt.Sprintf("connection-continuation:%s:%d", continuation.Provider, time.Now().UnixNano()),
+		UserID:    continuation.UserID,
+		Channel:   continuation.Channel,
+		ThreadTS:  continuation.ThreadTS,
+		Text:      "I've connected. Please continue.",
 	}
 	if s.Messenger != nil {
 		if _, err := s.Messenger.PostMessage(ctx, continuation.Channel, continuation.ThreadTS, "Connected — continuing…"); err != nil {

@@ -258,6 +258,35 @@ func TestSlackIntentRouterActivatesCodeReviewFromUserMessage(t *testing.T) {
 	}
 }
 
+func TestSlackIntentRouterSkipsOrdinaryMessagesWithoutCandidateTokens(t *testing.T) {
+	catalog, err := tool.NewCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	messenger := &fakeMessenger{}
+	service := New(hosted.Agent{}, messenger, safety.PromptPolicy{}, safety.Redactor{}, nil)
+	service.Workflows = codeReviewWorkflows()
+	router := &fixedIntentRouter{decision: workflows.RouteDecision{Intent: codereview.WorkflowName}}
+	service.IntentRouter = router
+	client := &replyModel{}
+	runner, err := agentruntime.New(agentruntime.Config{Model: "primary"}, agentruntime.Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore(), Events: service.EventSink()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.Agent.Runtime = runner
+
+	accepted, err := service.HandleMention(context.Background(), slackconversation.Request{
+		EventID: "ordinary-chat", UserID: "U1", Channel: "C1", ThreadTS: "T1",
+		Text: "帮我查一下最近线上网关的错误率",
+	})
+	if err != nil || !accepted {
+		t.Fatalf("accepted=%v err=%v", accepted, err)
+	}
+	if router.request.SessionID != "" || router.request.Text != "" {
+		t.Fatalf("intent router should be bypassed when no workflow candidate matches, got %+v", router.request)
+	}
+}
+
 func TestCodeReviewThreadReplyContinuesDurableWorkflowWithoutMention(t *testing.T) {
 	catalog, _ := tool.NewCatalog()
 	messenger := &fakeMessenger{}

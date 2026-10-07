@@ -319,8 +319,9 @@ func (h *Handler) resolveApproval(ctx context.Context, interaction slackgateway.
 		verb = "approve"
 	}
 	request := slackconversation.Request{
-		EventID: "approval-" + token.TurnID + "-" + token.ToolCallID + "-" + verb,
-		UserID:  interaction.UserID, Channel: interaction.Channel, ThreadTS: interaction.ThreadTS,
+		EventID:   "approval-" + token.TurnID + "-" + token.ToolCallID + "-" + verb,
+		MessageID: "approval-continuation:" + token.TurnID + ":" + token.ToolCallID,
+		UserID:    interaction.UserID, Channel: interaction.Channel, ThreadTS: interaction.ThreadTS,
 		Text:     "The user " + verb + "d the pending action. Continue from the recorded tool result.",
 		Approval: &slackconversation.ApprovalRequest{TurnID: token.TurnID, ToolCallID: token.ToolCallID, Approved: approved, MessageTS: interaction.MessageTS},
 	}

@@ -106,7 +106,20 @@ export function shouldPreferToolEvent(next, previous) {
 export function normalizeEvents(events) {
   const merged = [];
   const toolIndex = new Map();
+  const planIndex = new Map();
   for (const event of events) {
+    if (event.kind === "plan" && event.turnId) {
+      const key = `${event.turnId}:plan`;
+      if (planIndex.has(key)) {
+        const index = planIndex.get(key);
+        const existing = merged[index];
+        if ((event.sequence || 0) >= (existing.sequence || 0)) merged[index] = event;
+      } else {
+        planIndex.set(key, merged.length);
+        merged.push(event);
+      }
+      continue;
+    }
     if (event.kind === "tool" && event.toolCallId) {
       const key = `${event.turnId}:${event.toolCallId}`;
       if (toolIndex.has(key)) {
@@ -179,6 +192,64 @@ export function updateActivityBlock(turnId) {
   const stats = activityStats(turnId);
   if (!block || !stats) return;
   block.classList.toggle("is-active", stats.running);
+
+  let label = block.querySelector(".activity-label");
+  if (!label) {
+    label = document.createElement("span");
+    label.className = "activity-label";
+    block.prepend(label);
+  }
+
+  const runningTool = [...stats.tools].reverse().find((tool) => tool.status === "running");
+  const summary = stats.plan ? planSummary(stats.plan) : null;
+  if (runningTool) {
+    label.textContent = `Running ${friendlyTool(runningTool.tool)}`;
+  } else if (summary?.active?.task) {
+    label.textContent = `${summary.active.task} (${summary.completed}/${summary.total})`;
+  } else if (stats.count > 0) {
+    const noun = stats.count === 1 ? "tool" : "tools";
+    label.textContent = stats.running
+      ? `Thinking · ${stats.count} ${noun}`
+      : `Used ${stats.count} ${noun} · ${formatDuration(stats.duration)}`;
+  } else {
+    label.textContent = "Thinking";
+  }
+
+  let planPanel = block.querySelector(".plan-panel");
+  if (stats.plan?.items?.length) {
+    if (!planPanel) {
+      planPanel = document.createElement("div");
+      planPanel.className = "plan-panel";
+      block.append(planPanel);
+    }
+    planPanel.replaceChildren();
+    if (summary?.title) {
+      const title = document.createElement("p");
+      title.className = "plan-title";
+      title.textContent = summary.title;
+      planPanel.append(title);
+    }
+    const list = document.createElement("ul");
+    list.className = "plan-tasks";
+    for (const item of stats.plan.items) {
+      const li = document.createElement("li");
+      li.className = planItemClass(item.status);
+      const task = document.createElement("span");
+      task.className = "plan-task";
+      task.textContent = item.task || "";
+      li.append(task);
+      if (item.note) {
+        const note = document.createElement("span");
+        note.className = "plan-note";
+        note.textContent = item.note;
+        li.append(note);
+      }
+      list.append(li);
+    }
+    planPanel.append(list);
+  } else if (planPanel) {
+    planPanel.remove();
+  }
 }
 
 export function refreshActivityBlocks() {

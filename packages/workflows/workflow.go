@@ -43,6 +43,14 @@ type PromptDefinition interface {
 	StartPrompt(text string, inputs map[string]string) (Activation, error)
 }
 
+// CandidateDefinition optionally gates semantic routing so ordinary messages
+// that lack prerequisite structural tokens (such as a GitHub PR URL) skip the
+// intent router LLM round-trip entirely.
+type CandidateDefinition interface {
+	Definition
+	CanStartPrompt(text string) bool
+}
+
 type Registry struct {
 	definitions map[string]Definition
 }
@@ -55,6 +63,29 @@ func NewRegistry(definitions ...Definition) Registry {
 		}
 	}
 	return registry
+}
+
+// HasPromptCandidate reports whether at least one registered conversational
+// workflow could plausibly activate for text. If no workflow is registered, it
+// returns false so callers can bypass intent classification.
+func (r Registry) HasPromptCandidate(text string) bool {
+	if len(r.definitions) == 0 {
+		return false
+	}
+	for _, definition := range r.definitions {
+		promptDef, ok := definition.(PromptDefinition)
+		if !ok {
+			continue
+		}
+		if candidate, ok := promptDef.(CandidateDefinition); ok {
+			if candidate.CanStartPrompt(text) {
+				return true
+			}
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func (r Registry) StartPrompt(id, text string, inputs map[string]string) (Activation, error) {
