@@ -249,16 +249,18 @@ export function useRepl(config: ReplConfig) {
       try {
         await client.initialize();
         let id = config.sessionId ?? "";
-        if (config.resume && id) {
+        if (id) {
           const items = await client.resumeThread(id);
-          if (!canceled) {
-            setSessionId(id);
-            setConnectionState("ready");
-            setMessages(itemsToRenderable(items));
-            pushSystem(`resumed session ${id}`);
-            queueMicrotask(repinScroll);
+          if (config.resume || items.length > 0) {
+            if (!canceled) {
+              setSessionId(id);
+              setConnectionState("ready");
+              setMessages(itemsToRenderable(items));
+              pushSystem(`resumed session ${id}`);
+              queueMicrotask(repinScroll);
+            }
+            return;
           }
-          return;
         }
         id = await client.startThread(id || undefined);
         if (!canceled) {
