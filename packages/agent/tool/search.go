@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"unicode"
@@ -32,7 +33,7 @@ func (searchTool) Descriptor() Descriptor {
 			},
 			"query": map[string]any{
 				"type":        "string",
-				"description": "Task, capability, service, or other search text. With action=search, prefix select: to activate exact tool names immediately.",
+				"description": "English capability keywords, service names, or tool identifiers. With action=search, prefix select: to activate exact tool names immediately.",
 			},
 			"limit": map[string]any{
 				"type":        "integer",
@@ -139,8 +140,17 @@ func (t searchTool) search(query string, limit int, categories ...string) (Resul
 		score    float64
 		line     string
 	}
-	results := make([]scored, 0)
-	tokens := queryTokens(query)
+	type candidateDoc struct {
+		descriptor Descriptor
+		nameTerms  map[string]int
+		tagTerms   map[string]int
+		descTerms  map[string]int
+		allTerms   map[string]int
+		docLen     int
+	}
+	candidates := make([]candidateDoc, 0)
+	docFreq := make(map[string]int)
+	totalDocLen := 0
 	for _, descriptor := range t.catalog.Descriptors() {
 		if descriptor.Exposure != ExposureDeferred {
 			continue
@@ -148,11 +158,48 @@ func (t searchTool) search(query string, limit int, categories ...string) (Resul
 		if len(categories) > 0 && !matchesCategory(descriptor.Tags, categories) {
 			continue
 		}
-		nameHits, score, line := scoreDeferredTool(descriptor, tokens)
+		nameTerms := termFrequencies(descriptor.Name)
+		tagTerms := termFrequencies(strings.Join(descriptor.Tags, " "))
+		descTerms := termFrequencies(descriptor.Description + " " + string(descriptor.InputSchema))
+		allTerms := make(map[string]int, len(nameTerms)+len(tagTerms)+len(descTerms))
+		docLen := 0
+		for term, count := range nameTerms {
+			allTerms[term] += count * 3
+			docLen += count
+		}
+		for term, count := range tagTerms {
+			allTerms[term] += count * 2
+			docLen += count
+		}
+		for term, count := range descTerms {
+			allTerms[term] += count
+			docLen += count
+		}
+		for term := range allTerms {
+			docFreq[term]++
+		}
+		totalDocLen += docLen
+		candidates = append(candidates, candidateDoc{
+			descriptor: descriptor,
+			nameTerms:  nameTerms,
+			tagTerms:   tagTerms,
+			descTerms:  descTerms,
+			allTerms:   allTerms,
+			docLen:     docLen,
+		})
+	}
+	avgDocLen := 1.0
+	if len(candidates) > 0 && totalDocLen > 0 {
+		avgDocLen = float64(totalDocLen) / float64(len(candidates))
+	}
+	tokens := queryTokens(query)
+	results := make([]scored, 0, len(candidates))
+	for _, cand := range candidates {
+		nameHits, score, line := scoreBM25Candidate(cand.descriptor, cand.nameTerms, cand.tagTerms, cand.allTerms, cand.docLen, avgDocLen, len(candidates), docFreq, tokens)
 		if score <= 0 {
 			continue
 		}
-		results = append(results, scored{name: descriptor.Name, nameHits: nameHits, score: score, line: line})
+		results = append(results, scored{name: cand.descriptor.Name, nameHits: nameHits, score: score, line: line})
 	}
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].nameHits != results[j].nameHits {
@@ -176,36 +223,49 @@ func (t searchTool) search(query string, limit int, categories ...string) (Resul
 	return TextResult("Deferred tools matching \"" + query + "\":\n- " + strings.Join(lines, "\n- ")), nil
 }
 
-func scoreDeferredTool(descriptor Descriptor, tokens []string) (int, float64, string) {
+func scoreBM25Candidate(
+	descriptor Descriptor,
+	nameTerms, tagTerms, allTerms map[string]int,
+	docLen int,
+	avgDocLen float64,
+	totalDocs int,
+	docFreq map[string]int,
+	tokens []string,
+) (int, float64, string) {
 	if len(tokens) == 0 {
 		return 0, 0, ""
 	}
-	nameTokens := make(map[string]struct{})
-	for _, token := range tokenize(descriptor.Name) {
-		nameTokens[token] = struct{}{}
-	}
-	corpus := strings.ToLower(strings.Join([]string{
-		descriptor.Name,
-		descriptor.Description,
-		strings.Join(descriptor.Tags, " "),
-		string(descriptor.InputSchema),
-	}, " "))
+	const (
+		k1 = 1.2
+		b  = 0.75
+	)
 	var score float64
 	var nameHits int
+	lowerName := strings.ToLower(descriptor.Name)
 	for _, token := range tokens {
-		if strings.Contains(corpus, token) {
-			score += 1
-		}
-		if strings.Contains(descriptor.Name, token) {
-			score += 2
-		}
-		if _, ok := nameTokens[token]; ok {
-			nameHits++
-		}
-		for _, tag := range descriptor.Tags {
-			if strings.Contains(tag, token) {
-				score += 1.5
+		tf := float64(allTerms[token])
+		if tf == 0 {
+			if strings.Contains(lowerName, token) {
+				tf = 2.0
+			} else {
+				continue
 			}
+		}
+		df := float64(docFreq[token])
+		idf := math.Log(1.0 + (float64(totalDocs)-df+0.5)/(df+0.5))
+		if idf < 0.1 {
+			idf = 0.1
+		}
+		norm := tf * (k1 + 1.0) / (tf + k1*(1.0-b+b*(float64(docLen)/avgDocLen)))
+		score += idf * norm
+		if _, ok := nameTerms[token]; ok {
+			nameHits++
+			score += 2.0
+		} else if strings.Contains(lowerName, token) {
+			score += 1.5
+		}
+		if _, ok := tagTerms[token]; ok {
+			score += 1.0
 		}
 	}
 	if score == 0 {
@@ -215,34 +275,93 @@ func scoreDeferredTool(descriptor Descriptor, tokens []string) (int, float64, st
 	return nameHits, score, fmt.Sprintf("%s [%s] — %s", descriptor.Name, tags, trimDescription(descriptor.Description, 120))
 }
 
+func termFrequencies(value string) map[string]int {
+	tokens := tokenize(value)
+	freqs := make(map[string]int, len(tokens))
+	for _, token := range tokens {
+		freqs[token]++
+	}
+	return freqs
+}
+
 func queryTokens(query string) []string {
-	tokens := tokenize(query)
-	lower := strings.ToLower(query)
-	aliases := map[string][]string{
-		"搜索": {"search"}, "查找": {"search"}, "文档": {"document"}, "页面": {"page"},
-		"邮件": {"email"}, "日历": {"calendar"}, "数据库": {"database"},
-		"日志": {"logs"}, "监控": {"metrics"}, "部署": {"deploy"}, "云": {"cloud"},
-		"创建": {"create"}, "更新": {"update"}, "删除": {"delete"},
-	}
-	for phrase, expanded := range aliases {
-		if strings.Contains(lower, phrase) {
-			tokens = append(tokens, expanded...)
-		}
-	}
-	return compactStrings(tokens)
+	return compactStrings(tokenize(query))
+}
+
+func isCJKRune(r rune) bool {
+	return unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul)
 }
 
 func tokenize(value string) []string {
-	fields := strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	})
-	out := make([]string, 0, len(fields))
-	for _, field := range fields {
-		if len(field) >= 2 {
-			out = append(out, field)
+	var out []string
+	var asciiBuf []rune
+	var cjkBuf []rune
+
+	flushASCII := func() {
+		if len(asciiBuf) >= 2 {
+			full := strings.ToLower(string(asciiBuf))
+			out = append(out, full)
+			for _, part := range splitCamelCase(asciiBuf) {
+				if len(part) >= 2 && part != full {
+					out = append(out, part)
+				}
+			}
+		}
+		asciiBuf = asciiBuf[:0]
+	}
+	flushCJK := func() {
+		n := len(cjkBuf)
+		if n == 1 {
+			out = append(out, string(cjkBuf))
+		} else if n >= 2 {
+			for i := 0; i < n-1; i++ {
+				out = append(out, string(cjkBuf[i:i+2]))
+			}
+			for i := 0; i < n-2; i++ {
+				out = append(out, string(cjkBuf[i:i+3]))
+			}
+		}
+		cjkBuf = cjkBuf[:0]
+	}
+
+	for _, r := range value {
+		switch {
+		case isCJKRune(r):
+			flushASCII()
+			cjkBuf = append(cjkBuf, r)
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			flushCJK()
+			asciiBuf = append(asciiBuf, r)
+		default:
+			flushASCII()
+			flushCJK()
 		}
 	}
+	flushASCII()
+	flushCJK()
 	return out
+}
+
+func splitCamelCase(runes []rune) []string {
+	if len(runes) == 0 {
+		return nil
+	}
+	var parts []string
+	start := 0
+	for i := 1; i < len(runes); i++ {
+		prev := runes[i-1]
+		curr := runes[i]
+		nextLower := i+1 < len(runes) && unicode.IsLower(runes[i+1])
+		if (unicode.IsLower(prev) && unicode.IsUpper(curr)) ||
+			(unicode.IsLetter(prev) && unicode.IsDigit(curr)) ||
+			(unicode.IsDigit(prev) && unicode.IsLetter(curr)) ||
+			(unicode.IsUpper(prev) && unicode.IsUpper(curr) && nextLower) {
+			parts = append(parts, strings.ToLower(string(runes[start:i])))
+			start = i
+		}
+	}
+	parts = append(parts, strings.ToLower(string(runes[start:])))
+	return parts
 }
 
 func trimDescription(value string, max int) string {

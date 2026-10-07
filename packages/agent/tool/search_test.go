@@ -115,9 +115,9 @@ func TestSearchToolPrioritizesExactToolNameMatches(t *testing.T) {
 	}
 }
 
-func TestSearchToolExpandsCommonChineseCapabilityTerms(t *testing.T) {
-	tokens := strings.Join(queryTokens("搜索文档并创建邮件"), " ")
-	for _, want := range []string{"search", "document", "create", "email"} {
+func TestSearchToolTokenizesIdentifierSubwords(t *testing.T) {
+	tokens := strings.Join(queryTokens("queryShopList clickstack_trace_waterfall"), " ")
+	for _, want := range []string{"query", "shop", "list", "clickstack", "trace", "waterfall"} {
 		if !strings.Contains(tokens, want) {
 			t.Fatalf("tokens=%q missing %q", tokens, want)
 		}

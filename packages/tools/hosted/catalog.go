@@ -10,7 +10,6 @@ import (
 	"github.com/noknov/kepler-agent/packages/safety"
 	clickstackTools "github.com/noknov/kepler-agent/packages/tools/clickstack"
 	codeTools "github.com/noknov/kepler-agent/packages/tools/code"
-	diagnosticsTools "github.com/noknov/kepler-agent/packages/tools/diagnostics"
 	gcpTools "github.com/noknov/kepler-agent/packages/tools/gcp"
 	gitTools "github.com/noknov/kepler-agent/packages/tools/git"
 	githubTools "github.com/noknov/kepler-agent/packages/tools/github"
@@ -45,7 +44,6 @@ func NewCatalog(cfg config.Config, workspacePolicy safety.WorkspacePolicy, comma
 		return CatalogBundle{}, err
 	}
 	registration := tool.NewRegistration(catalog, policy)
-	registerDeferredDiagnosticsTools(registration)
 	registerWorkspaceTools(registration, workspacePolicy)
 	registerCodeTools(registration, cfg, workspacePolicy, commandPolicy)
 	registerIntegrationTools(registration, cfg, commandPolicy, surface.Connections)
@@ -97,12 +95,6 @@ func policyForSurface(cfg config.Config, surface SurfaceOptions) tool.SurfacePol
 		Surface:       surface.Name,
 		AvailableDeps: availableDeps,
 	}
-}
-
-func registerDeferredDiagnosticsTools(registration *tool.Registration) {
-	registration.Deferred(tool.CategoryDiagnostics, diagnosticsTools.IncidentBriefTool{})
-	registration.Deferred(tool.CategoryDiagnostics, diagnosticsTools.TimelineTool{})
-	registration.Deferred(tool.CategoryDiagnostics, diagnosticsTools.EvidenceBoardTool{})
 }
 
 func registerWorkspaceTools(registration *tool.Registration, workspacePolicy safety.WorkspacePolicy) {
