@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	xhtml "golang.org/x/net/html"
 
@@ -134,7 +135,9 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 		Limit:    limit,
 	})
 	if err != nil {
-		return tool.TextResult(searchFailureGuidance(query, err)), nil
+		res := tool.TextResult(searchFailureGuidance(query, err))
+		res.ErrorCode = "search_unavailable"
+		return res, nil
 	}
 	if len(items) == 0 {
 		return tool.TextResult("no web results"), nil
@@ -196,8 +199,6 @@ func searchFailureGuidance(query string, err error) string {
 	b.WriteString(err.Error())
 	b.WriteString("\n\n")
 	b.WriteString("Search failure does not mean direct web reading is unavailable. If the answer can be obtained from a known stable source URL, call web-read_page directly instead of telling the user that live information is unavailable.")
-	b.WriteString("\n\n")
-	b.WriteString("For weather/current-condition questions, direct text pages such as https://wttr.in/{city}?format=3 are readable without search; replace {city} with the requested city name, then answer from the page content.")
 	if strings.TrimSpace(query) != "" {
 		b.WriteString("\n\nOriginal query: ")
 		b.WriteString(query)
@@ -598,7 +599,7 @@ func nodeText(node *xhtml.Node, readable bool) string {
 			switch current.Data {
 			case "script", "style", "noscript", "template", "svg", "canvas":
 				return
-			case "head":
+			case "head", "nav", "footer", "aside", "header":
 				if readable {
 					return
 				}
@@ -639,12 +640,33 @@ func truncateTextHeadTail(text string, max int) string {
 	}
 	marker := "\n...[middle truncated to fit page read budget]...\n"
 	if max <= len(marker)+200 {
-		return strings.TrimSpace(text[:max]) + "\n...[truncated]"
+		return strings.TrimSpace(sliceValidUTF8Prefix(text, max)) + "\n...[truncated]"
 	}
 	keep := max - len(marker)
 	head := keep / 2
 	tail := keep - head
-	return strings.TrimSpace(text[:head]) + marker + strings.TrimSpace(text[len(text)-tail:])
+	return strings.TrimSpace(sliceValidUTF8Prefix(text, head)) + marker + strings.TrimSpace(sliceValidUTF8Suffix(text, tail))
+}
+
+func sliceValidUTF8Prefix(text string, maxBytes int) string {
+	if maxBytes >= len(text) {
+		return text
+	}
+	for maxBytes > 0 && !utf8.RuneStart(text[maxBytes]) {
+		maxBytes--
+	}
+	return text[:maxBytes]
+}
+
+func sliceValidUTF8Suffix(text string, maxBytes int) string {
+	if maxBytes >= len(text) {
+		return text
+	}
+	start := len(text) - maxBytes
+	for start < len(text) && !utf8.RuneStart(text[start]) {
+		start++
+	}
+	return text[start:]
 }
 
 func (c Client) httpClient() *http.Client {

@@ -29,9 +29,9 @@ type StatusTool struct{ Base }
 func (t StatusTool) Descriptor() tool.Descriptor {
 	return tool.FunctionDescriptor(
 		"git-status",
-		"",
-		tool.ObjectSchema([]string{"branch"}, map[string]any{
-			"repo": map[string]any{"type": "string", "description": ""},
+		"Read git branch and working tree status. This is read-only.",
+		tool.ObjectSchema(nil, map[string]any{
+			"repo": map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS, its local repo name, or a GitHub owner/repo identifier. Defaults to first root."},
 		}),
 	)
 }
@@ -96,11 +96,12 @@ func (t SearchRefTool) Descriptor() tool.Descriptor {
 		"git-search_ref",
 		"Search an immutable git ref returned by git-fetch_ref. Use for branch-specific code investigation without changing the checkout. Search hits are hints; read matching ranges before claiming behavior.",
 		tool.ObjectSchema([]string{"repo", "query", "ref"}, map[string]any{
-			"repo":  map[string]any{"type": "string", "description": "Repository returned by git-fetch_ref."},
-			"ref":   map[string]any{"type": "string", "description": "Immutable commit SHA returned by git-fetch_ref, or an explicit safe ref."},
-			"query": map[string]any{"type": "string", "description": "Pattern to search."},
-			"path":  map[string]any{"type": "string", "description": "Optional path inside the repo."},
-			"limit": map[string]any{"type": "integer", "description": "Maximum matches, default 50 and max 200."},
+			"repo":       map[string]any{"type": "string", "description": "Repository returned by git-fetch_ref."},
+			"ref":        map[string]any{"type": "string", "description": "Immutable commit SHA returned by git-fetch_ref, or an explicit safe ref."},
+			"query":      map[string]any{"type": "string", "description": "Literal text to search for by default. Use query_mode=regex when regular-expression matching is needed."},
+			"query_mode": map[string]any{"type": "string", "enum": []string{"literal", "regex"}, "description": "Search interpretation. Defaults to literal."},
+			"path":       map[string]any{"type": "string", "description": "Optional path inside the repo."},
+			"limit":      map[string]any{"type": "integer", "description": "Maximum matches, default 50 and max 200."},
 		}),
 		tool.ReadNetworkParallel()...,
 	)
@@ -108,17 +109,22 @@ func (t SearchRefTool) Descriptor() tool.Descriptor {
 
 func (t SearchRefTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
-		Repo  string `json:"repo"`
-		Ref   string `json:"ref"`
-		Query string `json:"query"`
-		Path  string `json:"path"`
-		Limit int    `json:"limit"`
+		Repo      string `json:"repo"`
+		Ref       string `json:"ref"`
+		Query     string `json:"query"`
+		QueryMode string `json:"query_mode"`
+		Path      string `json:"path"`
+		Limit     int    `json:"limit"`
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
 	}
 	if strings.TrimSpace(args.Query) == "" {
 		return tool.Result{}, fmt.Errorf("query is required")
+	}
+	patternFlag, err := gitGrepPatternFlag(args.QueryMode)
+	if err != nil {
+		return tool.Result{}, err
 	}
 	if args.Limit <= 0 {
 		args.Limit = 50
@@ -138,10 +144,11 @@ func (t SearchRefTool) Execute(ctx context.Context, call tool.Call) (tool.Result
 	if err != nil {
 		return tool.Result{}, err
 	}
-	cmdArgs := []string{"grep", "-n", "--no-color", "-I", "-e", args.Query, ref, "--"}
+	cmdArgs := []string{"grep", "-n", "--no-color", "-I", patternFlag, "-e", args.Query, ref, "--"}
 	if path != "" {
 		cmdArgs = append(cmdArgs, path)
 	}
+	cmdArgs = append(cmdArgs, safety.SensitiveGitPathspecs()...)
 	out, err := t.run(ctx, repo, cmdArgs...)
 	if err != nil {
 		if strings.TrimSpace(out) == "" {
@@ -163,11 +170,12 @@ func (t RepoSearchTool) Descriptor() tool.Descriptor {
 		"repo-search",
 		"Search a refreshed remote branch snapshot without changing the checkout. Branch must be an actual remote branch name, not a pull-request number or refs/pull/...; use github-pr_diff for GitHub pull requests.",
 		tool.ObjectSchema([]string{"branch", "query"}, map[string]any{
-			"repo":   map[string]any{"type": "string", "description": "Repository path, workspace-relative repo name, or GitHub owner/repo identifier. Required when workspace has multiple repos."},
-			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
-			"query":  map[string]any{"type": "string", "description": "Pattern to search."},
-			"path":   map[string]any{"type": "string", "description": "Optional path inside the repo."},
-			"limit":  map[string]any{"type": "integer", "description": "Maximum matches, default 50 and max 200."},
+			"repo":       map[string]any{"type": "string", "description": "Repository path, workspace-relative repo name, or GitHub owner/repo identifier. Required when workspace has multiple repos."},
+			"branch":     map[string]any{"type": "string", "description": "Explicit remote branch name."},
+			"query":      map[string]any{"type": "string", "description": "Literal text to search for by default. Use query_mode=regex when regular-expression matching is needed."},
+			"query_mode": map[string]any{"type": "string", "enum": []string{"literal", "regex"}, "description": "Search interpretation. Defaults to literal."},
+			"path":       map[string]any{"type": "string", "description": "Optional path inside the repo."},
+			"limit":      map[string]any{"type": "integer", "description": "Maximum matches, default 50 and max 200."},
 		}),
 		tool.ReadNetworkParallel()...,
 	)
@@ -175,17 +183,22 @@ func (t RepoSearchTool) Descriptor() tool.Descriptor {
 
 func (t RepoSearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var args struct {
-		Repo   string `json:"repo"`
-		Branch string `json:"branch"`
-		Query  string `json:"query"`
-		Path   string `json:"path"`
-		Limit  int    `json:"limit"`
+		Repo      string `json:"repo"`
+		Branch    string `json:"branch"`
+		Query     string `json:"query"`
+		QueryMode string `json:"query_mode"`
+		Path      string `json:"path"`
+		Limit     int    `json:"limit"`
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
 	}
 	if strings.TrimSpace(args.Query) == "" {
 		return tool.Result{}, fmt.Errorf("query is required")
+	}
+	patternFlag, err := gitGrepPatternFlag(args.QueryMode)
+	if err != nil {
+		return tool.Result{}, err
 	}
 	if args.Limit <= 0 {
 		args.Limit = 50
@@ -205,10 +218,11 @@ func (t RepoSearchTool) Execute(ctx context.Context, call tool.Call) (tool.Resul
 	if err != nil {
 		return tool.Result{}, err
 	}
-	cmdArgs := []string{"grep", "-n", "--no-color", "-I", "-e", args.Query, snap.Ref, "--"}
+	cmdArgs := []string{"grep", "-n", "--no-color", "-I", patternFlag, "-e", args.Query, snap.Ref, "--"}
 	if path != "" {
 		cmdArgs = append(cmdArgs, path)
 	}
+	cmdArgs = append(cmdArgs, safety.SensitiveGitPathspecs()...)
 	out, err := t.run(ctx, repo, cmdArgs...)
 	if err != nil {
 		if strings.TrimSpace(out) == "" {
@@ -684,6 +698,18 @@ func cleanGitPath(path string) (string, error) {
 		return "", fmt.Errorf("invalid path %q", path)
 	}
 	return path, nil
+}
+
+func gitGrepPatternFlag(queryMode string) (string, error) {
+	mode := strings.TrimSpace(queryMode)
+	switch mode {
+	case "", "literal":
+		return "-F", nil
+	case "regex":
+		return "-E", nil
+	default:
+		return "", fmt.Errorf("query_mode must be literal or regex")
+	}
 }
 
 func repoLabel(repo string) string {

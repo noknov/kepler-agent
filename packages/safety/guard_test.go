@@ -80,9 +80,9 @@ Full triage workflow body.
 }
 
 func TestRedactorRedactsSecrets(t *testing.T) {
-	got := (Redactor{}).Sanitize("Authorization: Bearer sk-abc and SLACK_TOKEN=xoxb-secret")
-	if got == "Authorization: Bearer sk-abc and SLACK_TOKEN=xoxb-secret" {
-		t.Fatal("expected redaction")
+	got := (Redactor{}).Sanitize("Authorization: Bearer sk-abc and SLACK_TOKEN=xoxb-secret and gh=ghp_1234567890abcdefghijklmnop and db=postgres://admin:supersecret@db.internal:5432/app")
+	if strings.Contains(got, "sk-abc") || strings.Contains(got, "xoxb-secret") || strings.Contains(got, "ghp_1234567890") || strings.Contains(got, "supersecret") {
+		t.Fatalf("expected redaction, got %q", got)
 	}
 }
 
@@ -138,6 +138,12 @@ func TestCommandPolicyChecksArgv(t *testing.T) {
 	}
 	if err := guard.CheckArgv([]string{"bash", "-c", "kubectl delete pod api"}); err == nil {
 		t.Fatal("expected destructive shell command blocked")
+	}
+	if err := guard.CheckArgv([]string{"bash", "-eo", "pipefail", "-c", "rm -rf /var/lib"}); err == nil {
+		t.Fatal("expected destructive shell command with extra flags blocked")
+	}
+	if err := guard.CheckArgv([]string{"git", "reset", "--hard", "HEAD~1"}); err == nil {
+		t.Fatal("expected git reset --hard blocked")
 	}
 }
 

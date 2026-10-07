@@ -12,6 +12,8 @@ import (
 
 const defaultMCPURL = "https://mcp.clickhouse.cloud/clickstack"
 
+var sharedHTTPClient = safety.SafeHTTPClient(60 * time.Second)
+
 // NewMCPClient builds an MCP client from deployment config and an access token.
 func NewMCPClient(cfg config.ClickStackConfig, token string) *mcp.Client {
 	url := strings.TrimSpace(cfg.MCPURL)
@@ -30,6 +32,6 @@ func NewMCPClient(cfg config.ClickStackConfig, token string) *mcp.Client {
 		URL:         url,
 		Token:       strings.TrimSpace(token),
 		Headers:     headers,
-		HTTP:        safety.SafeHTTPClient(60 * time.Second),
+		HTTP:        sharedHTTPClient,
 	}
 }

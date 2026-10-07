@@ -30,6 +30,89 @@ type Server struct {
 	Effects           []tool.Effect
 }
 
+const (
+	maxCachedSessions = 256
+	routerCacheTTL    = 5 * time.Minute
+)
+
+type routerCacheEntry struct {
+	session     mcp.Session
+	definitions []mcp.ToolDefinition
+	expiresAt   time.Time
+}
+
+var (
+	routerCacheMu sync.Mutex
+	routerCache   = make(map[string]routerCacheEntry)
+)
+
+func routerCacheKey(client *mcp.Client) string {
+	var b strings.Builder
+	b.WriteString(client.ServiceName)
+	b.WriteByte('\x00')
+	b.WriteString(client.URL)
+	b.WriteByte('\x00')
+	b.WriteString(client.Token)
+	b.WriteByte('\x00')
+	fmt.Fprintf(&b, "%p", client.HTTP)
+	for k, v := range client.Headers {
+		b.WriteByte('\x00')
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.WriteString(v)
+	}
+	return b.String()
+}
+
+func resolveRouterSession(ctx context.Context, client *mcp.Client, forceRefresh bool) (mcp.Session, []mcp.ToolDefinition, error) {
+	key := routerCacheKey(client)
+	now := time.Now()
+	if !forceRefresh {
+		routerCacheMu.Lock()
+		entry, ok := routerCache[key]
+		if ok && now.Before(entry.expiresAt) {
+			routerCacheMu.Unlock()
+			return entry.session, entry.definitions, nil
+		}
+		routerCacheMu.Unlock()
+	}
+	session, err := client.Initialize(ctx)
+	if err != nil {
+		return mcp.Session{}, nil, err
+	}
+	definitions, err := client.ListTools(ctx, session)
+	if err != nil {
+		return mcp.Session{}, nil, err
+	}
+	routerCacheMu.Lock()
+	if len(routerCache) >= maxCachedSessions {
+		for k, v := range routerCache {
+			if now.After(v.expiresAt) {
+				delete(routerCache, k)
+			}
+		}
+		if len(routerCache) >= maxCachedSessions {
+			for k := range routerCache {
+				delete(routerCache, k)
+				break
+			}
+		}
+	}
+	routerCache[key] = routerCacheEntry{
+		session:     session,
+		definitions: definitions,
+		expiresAt:   now.Add(routerCacheTTL),
+	}
+	routerCacheMu.Unlock()
+	return session, definitions, nil
+}
+
+func invalidateRouterSession(client *mcp.Client) {
+	routerCacheMu.Lock()
+	delete(routerCache, routerCacheKey(client))
+	routerCacheMu.Unlock()
+}
+
 // ListDefinitions performs one MCP handshake and returns the remote tool
 // definitions without registering them in a catalog. It is used by
 // connection-scoped routers so a process-wide catalog never acquires
@@ -38,18 +121,15 @@ func ListDefinitions(ctx context.Context, client *mcp.Client) ([]mcp.ToolDefinit
 	if client == nil {
 		return nil, fmt.Errorf("mcp client is required")
 	}
-	session, err := client.Initialize(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return client.ListTools(ctx, session)
+	_, definitions, err := resolveRouterSession(ctx, client, false)
+	return definitions, err
 }
 
 // Invoke calls one explicitly selected, read-only remote MCP tool without
 // registering a per-user descriptor in the shared agent catalog. The remote
-// definition is fetched in the same session immediately before the call and
-// must opt into readOnlyHint=true. This keeps a generic connection router from
-// turning an arbitrary remote MCP operation into a read-only catalog tool.
+// definition is validated before the call and must opt into readOnlyHint=true.
+// This keeps a generic connection router from turning an arbitrary remote MCP
+// operation into a read-only catalog tool.
 func Invoke(ctx context.Context, client *mcp.Client, name string, args json.RawMessage) (tool.Result, error) {
 	return InvokeReadOnly(ctx, client, name, args)
 }
@@ -62,11 +142,7 @@ func InvokeReadOnly(ctx context.Context, client *mcp.Client, name string, args j
 	if client == nil {
 		return tool.Result{}, fmt.Errorf("mcp client is required")
 	}
-	session, err := client.Initialize(ctx)
-	if err != nil {
-		return tool.Result{}, err
-	}
-	definitions, err := client.ListTools(ctx, session)
+	session, definitions, err := resolveRouterSession(ctx, client, false)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -87,6 +163,7 @@ func InvokeReadOnly(ctx context.Context, client *mcp.Client, name string, args j
 	}
 	value, err := client.CallTool(ctx, session, name, args)
 	if err != nil {
+		invalidateRouterSession(client)
 		return tool.Result{}, err
 	}
 	return formatToolResult(value), nil
@@ -102,11 +179,7 @@ func InvokeExternal(ctx context.Context, client *mcp.Client, name string, args j
 	if client == nil {
 		return tool.Result{}, fmt.Errorf("mcp client is required")
 	}
-	session, err := client.Initialize(ctx)
-	if err != nil {
-		return tool.Result{}, err
-	}
-	definitions, err := client.ListTools(ctx, session)
+	session, definitions, err := resolveRouterSession(ctx, client, false)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -127,6 +200,7 @@ func InvokeExternal(ctx context.Context, client *mcp.Client, name string, args j
 	}
 	value, err := client.CallTool(ctx, session, name, args)
 	if err != nil {
+		invalidateRouterSession(client)
 		return tool.Result{}, err
 	}
 	return formatToolResult(value), nil
@@ -173,8 +247,6 @@ type sessionInitialization struct {
 	session mcp.Session
 	err     error
 }
-
-const maxCachedSessions = 256
 
 // clientConfig intentionally contains only immutable transport configuration.
 // A fresh mcp.Client owns its atomic request ID and sync.Once state per call.

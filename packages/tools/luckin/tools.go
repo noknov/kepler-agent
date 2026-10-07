@@ -2,12 +2,15 @@ package luckin
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/mcp"
 )
+
+const previewedOrderCacheKey = "luckin:previewed_order_fingerprint"
 
 // Client wraps a shared MCP client with Luckin-specific behavior.
 type Client struct {
@@ -39,7 +42,18 @@ func (t MCPTool) Execute(ctx context.Context, call tool.Call) (tool.Result, erro
 	if t.Client == nil || !t.Client.enabled() {
 		return tool.Result{}, fmt.Errorf("Luckin MCP is not configured: LUCKIN_MCP_TOKEN is required")
 	}
-	session, err := getOrCreateSession(ctx, t.Client.MCP, tool.CacheFor(call.Scope))
+	cache := tool.CacheFor(call.Scope)
+	if t.LocalName == "luckin-create_order" && cache != nil {
+		fp := orderFingerprint(call.Arguments)
+		previewed, _ := cache.Get(previewedOrderCacheKey)
+		if fp == "" || previewed != fp {
+			res := tool.TextResult("Refusing to create order before previewing the exact store and SKU list in this turn. Call luckin-preview_order first with the same deptId and productList.")
+			res.IsError = true
+			res.ErrorCode = "order_preview_required"
+			return res, nil
+		}
+	}
+	session, err := getOrCreateSession(ctx, t.Client.MCP, cache)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -47,7 +61,32 @@ func (t MCPTool) Execute(ctx context.Context, call tool.Call) (tool.Result, erro
 	if err != nil {
 		return tool.Result{}, err
 	}
+	if t.LocalName == "luckin-preview_order" && cache != nil {
+		if fp := orderFingerprint(call.Arguments); fp != "" {
+			cache.Set(previewedOrderCacheKey, fp)
+		}
+	}
 	return tool.TextResult(out.Content), nil
+}
+
+func orderFingerprint(raw json.RawMessage) string {
+	var payload struct {
+		DeptID      int `json:"deptId"`
+		ProductList []struct {
+			ProductID int    `json:"productId"`
+			SKUCode   string `json:"skuCode"`
+			Amount    int    `json:"amount"`
+		} `json:"productList"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil || payload.DeptID == 0 || len(payload.ProductList) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "dept:%d", payload.DeptID)
+	for _, item := range payload.ProductList {
+		fmt.Fprintf(&b, "|%d:%s:%d", item.ProductID, strings.TrimSpace(item.SKUCode), item.Amount)
+	}
+	return b.String()
 }
 
 // Tools returns the Luckin MCP tool inventory for catalog registration.
@@ -148,27 +187,27 @@ func tools(client *Client) []MCPTool {
 
 func orderProperties(includeLocation bool) map[string]any {
 	props := map[string]any{
-		"deptId": map[string]any{"type": "integer", "description": ""},
+		"deptId": map[string]any{"type": "integer", "description": "Store ID (deptId)."},
 		"productList": map[string]any{
 			"type":        "array",
-			"description": "",
+			"description": "Ordered items with productId, skuCode, and amount.",
 			"items": map[string]any{
 				"type":     "object",
 				"required": []string{"amount", "productId", "skuCode"},
 				"properties": map[string]any{
-					"amount":    map[string]any{"type": "integer", "description": ""},
-					"productId": map[string]any{"type": "integer", "description": ""},
-					"skuCode":   map[string]any{"type": "string", "description": ""},
+					"amount":    map[string]any{"type": "integer", "description": "Quantity of this SKU."},
+					"productId": map[string]any{"type": "integer", "description": "Product ID."},
+					"skuCode":   map[string]any{"type": "string", "description": "Resolved SKU code."},
 				},
 			},
 		},
 	}
 	if includeLocation {
-		props["longitude"] = map[string]any{"type": "number", "description": ""}
-		props["latitude"] = map[string]any{"type": "number", "description": ""}
+		props["longitude"] = map[string]any{"type": "number", "description": "Order longitude coordinate."}
+		props["latitude"] = map[string]any{"type": "number", "description": "Order latitude coordinate."}
 		props["couponCodeList"] = map[string]any{
 			"type":        "array",
-			"description": "",
+			"description": "Optional coupon codes to apply.",
 			"items":       map[string]any{"type": "string"},
 		}
 	}

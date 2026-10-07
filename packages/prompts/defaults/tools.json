@@ -37,7 +37,8 @@
     "parameters": {
       "repo": "Repository path under WORKSPACE_ROOTS, its local repo name, or a GitHub owner/repo identifier.",
       "ref": "Immutable ref returned by git-fetch_ref, usually a commit SHA.",
-      "query": "Regex pattern for git grep.",
+      "query": "Literal text to search for by default. Use query_mode=regex when regular-expression matching is needed.",
+      "query_mode": "Search interpretation: literal (default) or regex.",
       "path": "Optional pathspec inside repo.",
       "limit": "Maximum matching lines. Defaults to 50, max 200."
     }
@@ -136,7 +137,8 @@
     "parameters": {
       "repo": "Repository path under WORKSPACE_ROOTS, its local repo name, or a GitHub owner/repo identifier. Defaults to first root.",
       "branch": "Explicit remote branch to analyze.",
-      "query": "Regex pattern for git grep.",
+      "query": "Literal text to search for by default. Use query_mode=regex when regular-expression matching is needed.",
+      "query_mode": "Search interpretation: literal (default) or regex.",
       "path": "Optional pathspec inside repo.",
       "limit": "Maximum matching lines. Defaults to 50, max 200."
     }
@@ -162,31 +164,6 @@
       "limit": "Maximum log entries. Defaults to 30, max 200.",
       "project": "GCP project. Defaults to configured GCP_PROJECT only when omitted.",
       "format": "Output format: json or value. Defaults to json."
-    }
-  },
-  "diagnostics-incident_brief": {
-    "description": "Create a structured incident diagnostic brief from service, environment, symptom, and time window. Use this to plan an investigation before reading logs or code.",
-    "parameters": {
-      "service": "Service, deployment, job, or repository name.",
-      "environment": "Environment or namespace.",
-      "symptom": "Observed problem, alert, error, or regression.",
-      "window": "Approximate time window, for example 30m, since deploy, or today."
-    }
-  },
-  "diagnostics-timeline": {
-    "description": "Build an incident timeline from observed events. Use after collecting context from Slack, logs, deploys, or workflow runs.",
-    "parameters": {
-      "title": "Short incident or investigation title.",
-      "events": "Timeline entries. Each item can include time, source, event, impact, and evidence."
-    }
-  },
-  "diagnostics-evidence_board": {
-    "description": "Create a structured evidence board that separates facts, hypotheses, risks, and next checks. Use before giving a final incident answer to organize your findings.",
-    "parameters": {
-      "facts": "Verified facts with source or tool references.",
-      "hypotheses": "Hypotheses with confidence level or disconfirming evidence.",
-      "risks": "User-facing or operational risks.",
-      "next_checks": "Concrete next checks or actions."
     }
   },
   "youtrack-get_issue": {

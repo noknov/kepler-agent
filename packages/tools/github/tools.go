@@ -115,7 +115,7 @@ func (t DispatchWorkflowTool) Execute(ctx context.Context, call tool.Call) (tool
 	}
 	workflow := resolveWorkflow(args.Workflow)
 	if workflow == "" {
-		return tool.Result{}, fmt.Errorf("workflow is required; use inbox or all-services when appropriate")
+		return tool.Result{}, fmt.Errorf("workflow is required")
 	}
 	ref := strings.TrimSpace(args.Ref)
 	if ref == "" {
@@ -172,7 +172,7 @@ func (t WorkflowRunsTool) Execute(ctx context.Context, call tool.Call) (tool.Res
 	}
 	workflow := resolveWorkflow(args.Workflow)
 	if workflow == "" {
-		return tool.Result{}, fmt.Errorf("workflow is required; use inbox or all-services when appropriate")
+		return tool.Result{}, fmt.Errorf("workflow is required")
 	}
 	if args.Limit <= 0 {
 		args.Limit = 5

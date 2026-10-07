@@ -12,7 +12,12 @@ import (
 
 var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)xox[baprs]-[a-z0-9-]+`),
-	regexp.MustCompile(`(?i)(moonshot|openai|slack|notion|youtrack|github)[_\- ]?(api)?[_\- ]?(key|token|secret)\s*[:=]\s*['"]?[^'"\s]+`),
+	regexp.MustCompile(`(?i)\bsk-(?:ant-|proj-)?[a-z0-9_-]{16,}\b`),
+	regexp.MustCompile(`(?i)\b(?:gh[pousr]_[a-z0-9_]{20,}|github_pat_[a-z0-9_]{20,})\b`),
+	regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`),
+	regexp.MustCompile(`(?i)https://hooks\.slack\.com/services/[a-z0-9/_-]+`),
+	regexp.MustCompile(`(?i)\b(?:postgres(?:ql)?|mysql|redis|mongodb(?:\+srv)?):\/\/[^:\s\/]+:[^@\s]+@`),
+	regexp.MustCompile(`(?i)\b[a-z0-9_-]*(?:api[_\- ]?)?(?:key|token|secret|password)\s*[:=]\s*['"]?[^'"\s,]+`),
 	regexp.MustCompile(`(?i)authorization:\s*bearer\s+[a-z0-9._\-]+`),
 	regexp.MustCompile(`(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----`),
 }

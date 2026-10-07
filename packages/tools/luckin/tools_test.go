@@ -87,6 +87,25 @@ func TestMCPToolCallsStreamableHTTP(t *testing.T) {
 	}
 }
 
+func TestCreateOrderRequiresMatchingPreviewInTurnCache(t *testing.T) {
+	client := &Client{MCP: &mcp.Client{URL: "https://luckin.test/mcp", Token: "token"}}
+	createTool := MCPTool{
+		Client:     client,
+		LocalName:  "luckin-create_order",
+		RemoteName: "createOrder",
+		SideEffect: true,
+	}
+	scope := agenttool.Scope{SessionID: "s1", TurnID: "t1"}
+	orderJSON := json.RawMessage(`{"deptId":101,"productList":[{"productId":202,"skuCode":"SKU1","amount":1}],"longitude":114.0,"latitude":22.5}`)
+	res, err := createTool.Execute(context.Background(), agenttool.Call{Arguments: orderJSON, Scope: scope})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError || res.ErrorCode != "order_preview_required" {
+		t.Fatalf("expected order_preview_required error, got %+v", res)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {

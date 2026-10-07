@@ -29,6 +29,9 @@ func NewCommandPolicy() CommandPolicy {
 		`(?i)\bdd\s+`,                             // raw disk write
 		`(?i)>\s*/dev/sd`,                         // overwrite disk device
 		`(?i)\bchmod\s+777\b`,                     // open world-writable
+		`(?i)\bgit\s+reset\s+--hard\b`,            // destructive git reset
+		`(?i)\bgit\s+clean\s+-[a-z]*f`,            // destructive git clean
+		`(?i)\bfind\b.*\s-delete\b`,               // destructive find -delete
 		`(?i)\bcurl\b.*\|\s*(ba)?sh`,              // pipe curl to shell
 		`(?i)\bwget\b.*\|\s*(ba)?sh`,              // pipe wget to shell
 		`(?i)\|.*sh\s+-c|&&\s*rm\b`,               // shell injection attempts
@@ -82,14 +85,36 @@ func (g CommandPolicy) CheckArgv(argv []string) error {
 		}
 	}
 	name := strings.ToLower(filepath.Base(argv[0]))
-	if (name == "sh" || name == "bash" || name == "zsh") && len(argv) >= 3 && argv[1] == "-c" {
-		return g.Check(argv[2])
+	if isShellName(name) {
+		if script, ok := extractShellScriptArg(argv[1:]); ok {
+			return g.Check(script)
+		}
 	}
 	command := argvCommand(name, argv[1:])
 	if command == "" {
 		return nil
 	}
 	return g.Check(command)
+}
+
+func isShellName(name string) bool {
+	return name == "sh" || name == "bash" || name == "zsh" || name == "dash" || name == "ksh"
+}
+
+func extractShellScriptArg(args []string) (string, bool) {
+	for i := 0; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
+		if arg == "--" {
+			break
+		}
+		if !strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "--") {
+			continue
+		}
+		if strings.ContainsRune(arg[1:], 'c') && i+1 < len(args) {
+			return args[i+1], true
+		}
+	}
+	return "", false
 }
 
 // argvCommand keeps matching on executable and subcommand tokens. A data
@@ -128,6 +153,23 @@ func argvCommand(name string, args []string) string {
 	case "chmod":
 		if containsArg(args, "777") {
 			return "chmod 777"
+		}
+		return name
+	case "git":
+		if containsArg(args, "reset") && containsArg(args, "--hard") {
+			return "git reset --hard"
+		}
+		if containsArg(args, "clean") {
+			for _, arg := range args {
+				if strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") && strings.ContainsRune(arg[1:], 'f') {
+					return "git clean -f"
+				}
+			}
+		}
+		return name
+	case "find":
+		if containsArg(args, "-delete") {
+			return "find . -delete"
 		}
 		return name
 	case "shutdown", "reboot", "halt", "poweroff", "mkfs", "dd":

@@ -12,6 +12,8 @@ import (
 
 const defaultMCPURL = "https://mcp.notion.com/mcp"
 
+var sharedHTTPClient = safety.SafeHTTPClient(60 * time.Second)
+
 // NewMCPClient builds an MCP client from deployment config and an access token.
 func NewMCPClient(cfg config.NotionConfig, token string) *mcp.Client {
 	url := strings.TrimSpace(cfg.MCPURL)
@@ -22,6 +24,6 @@ func NewMCPClient(cfg config.NotionConfig, token string) *mcp.Client {
 		ServiceName: "notion",
 		URL:         url,
 		Token:       strings.TrimSpace(token),
-		HTTP:        safety.SafeHTTPClient(60 * time.Second),
+		HTTP:        sharedHTTPClient,
 	}
 }

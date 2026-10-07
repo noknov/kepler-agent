@@ -167,10 +167,13 @@ func TestSearchToolFailureGuidesDirectPageRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Web search provider failed", "web-read_page", "https://wttr.in/{city}?format=3", "深圳天气"} {
+	for _, want := range []string{"Web search provider failed", "web-read_page", "深圳天气"} {
 		if !strings.Contains(result.Text(), want) {
 			t.Fatalf("result content missing %q: %s", want, result.Text())
 		}
+	}
+	if result.ErrorCode != "search_unavailable" {
+		t.Fatalf("result.ErrorCode = %q, want search_unavailable", result.ErrorCode)
 	}
 }
 
