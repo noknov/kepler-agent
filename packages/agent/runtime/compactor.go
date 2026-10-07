@@ -27,12 +27,11 @@ func (c ModelCompactor) Compact(ctx context.Context, messages []model.Message, t
 	if targetTokens > 0 && targetTokens < maxTokens {
 		maxTokens = targetTokens
 	}
-	inputLimit := c.MaxInputTokens
-	if inputLimit <= 0 {
-		inputLimit = 64_000
+	rawInputLimit := c.MaxInputTokens
+	if rawInputLimit <= 0 {
+		rawInputLimit = 64_000
 	}
-	c.MaxInputTokens = inputLimit
-	inputLimit -= EstimateTokens([]model.Message{compactionInstruction})
+	inputLimit := rawInputLimit - EstimateTokens([]model.Message{compactionInstruction})
 	if inputLimit <= 0 {
 		return model.Message{}, &model.Error{Kind: model.ErrorBudgetExhausted, Message: "compaction instructions exceed the input budget"}
 	}
@@ -44,7 +43,7 @@ func (c ModelCompactor) Compact(ctx context.Context, messages []model.Message, t
 		chunks := chunkMessages(current, inputLimit)
 		reduced := make([]model.Message, 0, len(chunks))
 		for _, chunk := range chunks {
-			summary, err := c.compactOnce(ctx, chunk, maxTokens)
+			summary, err := c.compactOnce(ctx, chunk, maxTokens, rawInputLimit)
 			if err != nil {
 				return model.Message{}, err
 			}
@@ -55,7 +54,7 @@ func (c ModelCompactor) Compact(ctx context.Context, messages []model.Message, t
 		}
 		current = reduced
 	}
-	response, err := c.compactOnce(ctx, current, maxTokens)
+	response, err := c.compactOnce(ctx, current, maxTokens, rawInputLimit)
 	if err != nil {
 		return model.Message{}, err
 	}
@@ -79,11 +78,11 @@ func compactionSafeMessages(messages []model.Message) []model.Message {
 	return out
 }
 
-func (c ModelCompactor) compactOnce(ctx context.Context, messages []model.Message, maxTokens int) (model.Message, error) {
+func (c ModelCompactor) compactOnce(ctx context.Context, messages []model.Message, maxTokens int, rawInputLimit int) (model.Message, error) {
 	requestMessages := make([]model.Message, 0, len(messages)+1)
 	requestMessages = append(requestMessages, compactionInstruction)
 	requestMessages = append(requestMessages, messages...)
-	if EstimateTokens(requestMessages) > c.MaxInputTokens {
+	if EstimateTokens(requestMessages) > rawInputLimit {
 		return model.Message{}, &model.Error{Kind: model.ErrorBudgetExhausted, Message: "a conversation group exceeds the compaction input budget"}
 	}
 	response, err := c.Client.Generate(ctx, model.Request{Model: c.Model, Messages: requestMessages, MaxOutputTokens: maxTokens}, nil)

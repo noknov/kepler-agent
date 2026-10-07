@@ -201,3 +201,38 @@ func TestLongCurrentTurnCompactsCompletedExchanges(t *testing.T) {
 	}
 	check(projection.Messages)
 }
+
+func TestBoundedProjectorObservationMaskingAvoidsDroppingTurns(t *testing.T) {
+	input1 := model.TextMessage(model.RoleUser, "first question")
+	call1 := model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "call-1", Name: "read_file", Arguments: []byte(`{"path":"large.go"}`)}}}}
+	largeOutput := strings.Repeat("package main // line of code\n", 200) // ~5800 bytes
+	events := []transcript.Event{
+		{Sequence: 1, TurnID: "turn-1", Type: transcript.UserInput, Message: &input1},
+		{Sequence: 2, TurnID: "turn-1", Type: transcript.AssistantMessage, Message: &call1},
+		toolResultEvent("turn-1", 3, "call-1", largeOutput),
+		{Sequence: 4, TurnID: "turn-1", Type: transcript.AssistantMessage, Message: messagePtr(model.TextMessage(model.RoleAssistant, "done 1"))},
+		{Sequence: 5, TurnID: "turn-2", Type: transcript.UserInput, Message: messagePtr(model.TextMessage(model.RoleUser, "second question"))},
+		{Sequence: 6, TurnID: "turn-2", Type: transcript.AssistantMessage, Message: messagePtr(model.TextMessage(model.RoleAssistant, "done 2"))},
+		{Sequence: 7, TurnID: "turn-3", Type: transcript.UserInput, Message: messagePtr(model.TextMessage(model.RoleUser, "third question"))},
+	}
+	// Budget fits all 3 turns once the 5800-byte historical tool output in turn-1 is masked,
+	// without needing to drop turn-1 or trigger LLM compaction.
+	projection, err := NewBoundedProjector(ContextConfig{MaxTokens: 600}).Project(context.Background(), ProjectRequest{Events: events})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projection.Dropped) != 0 {
+		t.Fatalf("expected observation masking to satisfy budget without dropping turns, dropped=%d", len(projection.Dropped))
+	}
+	foundMasked := false
+	for _, msg := range projection.Messages {
+		for _, block := range msg.Content {
+			if block.ToolResult != nil && len(block.ToolResult.Content) > 0 && strings.Contains(block.ToolResult.Content[0].Text, "masked:") {
+				foundMasked = true
+			}
+		}
+	}
+	if !foundMasked {
+		t.Fatal("expected historical tool output to be masked")
+	}
+}

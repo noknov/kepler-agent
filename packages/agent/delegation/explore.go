@@ -179,7 +179,7 @@ func (t ExploreTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	if len(jobs) == 1 {
 		out, err := t.Runner.runJob(ctx, call, jobs[0])
 		result := tool.TextResult(out.Text)
-		result.Metadata = map[string]any{"child_runs": []ChildRun{out.Audit}}
+		result.Metadata = map[string]any{"child_runs": []ChildRun{out.Audit}, "usage": out.Audit.Usage}
 		if err != nil {
 			// Preserve the child-session link even when the exploration failed so
 			// operators can inspect the durable transcript that caused the error.
@@ -194,8 +194,16 @@ func (t ExploreTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	if err != nil {
 		return tool.Result{}, err
 	}
+	var totalUsage model.Usage
+	for _, audit := range audits {
+		totalUsage.InputTokens += audit.Usage.InputTokens
+		totalUsage.OutputTokens += audit.Usage.OutputTokens
+		totalUsage.CacheReadTokens += audit.Usage.CacheReadTokens
+		totalUsage.CacheCreatedTokens += audit.Usage.CacheCreatedTokens
+		totalUsage.CacheTokensIncludedInInput = totalUsage.CacheTokensIncludedInInput || audit.Usage.CacheTokensIncludedInInput
+	}
 	result := tool.TextResult(reports)
-	result.Metadata = map[string]any{"child_runs": audits}
+	result.Metadata = map[string]any{"child_runs": audits, "usage": totalUsage}
 	return result, nil
 }
 
@@ -511,7 +519,10 @@ func (r Runner) exploreConfig() agentruntime.Config {
 	} else {
 		config.MaxSteps = defaultExploreMaxSteps
 	}
-	config.CircuitBreaker.Enabled = false
+	config.CircuitBreaker.Enabled = true
+	if config.CircuitBreaker.MaxIdenticalFailedAttempts <= 0 {
+		config.CircuitBreaker.MaxIdenticalFailedAttempts = 3
+	}
 	return config
 }
 

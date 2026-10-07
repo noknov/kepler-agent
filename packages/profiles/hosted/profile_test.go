@@ -45,7 +45,7 @@ func TestFallbackDoesNotRepeatIdenticalRoute(t *testing.T) {
 				cfg.LLM.AnthropicFlavor = "other-flavor"
 			}
 			primary, fallback := &failingRoute{}, &failingRoute{}
-			client := resilientModel(cfg, primary, cfg.LLM.Provider, fallback, cfg.LLM.SecondaryProvider, cfg.LLM.SecondaryModel)
+			client := resilientModel(cfg, model.NewCircuitBreakers(), primary, cfg.LLM.Provider, fallback, cfg.LLM.SecondaryProvider, cfg.LLM.SecondaryModel)
 			_, err := client.Generate(context.Background(), model.Request{Model: cfg.LLM.Model}, nil)
 			var typed *model.Error
 			if !errors.As(err, &typed) || primary.calls != 1 {

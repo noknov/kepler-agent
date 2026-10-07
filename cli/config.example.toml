@@ -1,5 +1,6 @@
 input_routing = "steer"
 output = "text"
+# Model rounds: positive limit, 0 for default, -1 for unlimited.
 max_steps = 256
 max_output_tokens = 16384
 unsafe_allow_no_sandbox = false

@@ -32,12 +32,18 @@ const (
 	TerminationFallbackExhausted TerminationReason = "fallback_exhausted"
 )
 
+// UnlimitedSteps disables only the model-step limit. Context cancellation,
+// deadlines, output and context budgets remain effective.
+const UnlimitedSteps = -1
+
 type Config struct {
 	Model           string
 	ReasoningEffort string
 	Temperature     *float64
 	MaxOutputTokens int
-	MaxSteps        int
+	// MaxSteps is a positive model-round limit, zero for the default (256),
+	// or UnlimitedSteps. Tool calls within a round do not consume extra steps.
+	MaxSteps int
 	// CleanupTimeout bounds detached model/tool and terminal persistence.
 	CleanupTimeout time.Duration
 	// MaxParallelToolCalls bounds the number of read-only, explicitly
@@ -60,7 +66,7 @@ func (c Config) withDefaults() Config {
 	if c.Context.OutputTokens < c.MaxOutputTokens {
 		c.Context.OutputTokens = c.MaxOutputTokens
 	}
-	if c.MaxSteps <= 0 {
+	if c.MaxSteps == 0 {
 		c.MaxSteps = 256
 	}
 	if c.MaxParallelToolCalls <= 0 {
@@ -132,6 +138,8 @@ type Runtime struct {
 	locks      map[string]*sessionMutex
 	eventMu    sync.RWMutex
 	eventCache map[string][]transcript.Event
+	circuitMu  sync.Mutex
+	circuits   map[string]*circuitState
 }
 
 type sessionMutex struct {
@@ -140,6 +148,9 @@ type sessionMutex struct {
 }
 
 func New(config Config, deps Dependencies) (*Runtime, error) {
+	if config.MaxSteps < UnlimitedSteps {
+		return nil, errors.New("max steps must be positive, zero for default, or -1 for unlimited")
+	}
 	if deps.Model == nil {
 		return nil, errors.New("model client is required")
 	}
@@ -165,7 +176,13 @@ func New(config Config, deps Dependencies) (*Runtime, error) {
 	if deps.Projector == nil {
 		deps.Projector = NewBoundedProjector(config.Context)
 	}
-	return &Runtime{config: config, deps: deps, locks: make(map[string]*sessionMutex), eventCache: make(map[string][]transcript.Event)}, nil
+	return &Runtime{
+		config:     config,
+		deps:       deps,
+		locks:      make(map[string]*sessionMutex),
+		eventCache: make(map[string][]transcript.Event),
+		circuits:   make(map[string]*circuitState),
+	}, nil
 }
 
 type InputSource interface {

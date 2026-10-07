@@ -12,7 +12,7 @@ func TestComposeUsesStableLayerOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := composition.Content, "core\n\nproject-a\n\nproject-b\n\nuser"; got != want {
+	if got, want := composition.Content, "core\n\n---DYNAMIC_CONTEXT_BELOW---\n\nproject-a\n\nproject-b\n\nuser"; got != want {
 		t.Fatalf("content = %q, want %q", got, want)
 	}
 	if composition.Hash == "" {

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
+
+	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
 )
 
 type Config struct {
@@ -66,7 +68,7 @@ func LoadConfig(path string) (Config, error) {
 	if err := toml.Unmarshal(data, &config); err != nil {
 		return config, fmt.Errorf("decode %s: %w", path, err)
 	}
-	if config.MaxSteps <= 0 {
+	if config.MaxSteps == 0 {
 		config.MaxSteps = DefaultConfig().MaxSteps
 	}
 	if config.MaxParallelToolCalls <= 0 {
@@ -79,6 +81,9 @@ func LoadConfig(path string) (Config, error) {
 }
 
 func (config Config) Validate() error {
+	if config.MaxSteps < agentruntime.UnlimitedSteps {
+		return fmt.Errorf("max_steps must be positive, zero for default, or -1 for unlimited")
+	}
 	if config.InputRouting != "steer" && config.InputRouting != "queue" {
 		return fmt.Errorf("input_routing must be steer or queue")
 	}

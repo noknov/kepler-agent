@@ -31,6 +31,17 @@ func observeAttempt(ctx context.Context, attempt Attempt) {
 	}
 }
 
+// CircuitBreakers coordinates provider/model circuit state across multiple
+// ResilientClient instances (such as primary, explore, and compactor clients).
+type CircuitBreakers struct {
+	mu       sync.Mutex
+	breakers map[string]breaker
+}
+
+func NewCircuitBreakers() *CircuitBreakers {
+	return &CircuitBreakers{breakers: make(map[string]breaker)}
+}
+
 // ResilientClient is the shared policy boundary for model retries, failover,
 // and provider/model circuit breaking. Only typed transient, rate-limited, and
 // unavailable provider failures may be retried or sent to a fallback.
@@ -42,6 +53,7 @@ type ResilientClient struct {
 	Cooldown, RetryDelay, MinAttemptBudget, MinInitialAttemptBudget time.Duration
 	Now                                                             func() time.Time
 	Sleep                                                           func(context.Context, time.Duration) error
+	Breakers                                                        *CircuitBreakers
 
 	mu       sync.Mutex
 	breakers map[string]breaker
@@ -209,39 +221,47 @@ func (c *ResilientClient) requireBudget(ctx context.Context, delay, minimum time
 	}
 	return &Error{Kind: ErrorBudgetExhausted, Message: "turn execution budget is insufficient for another model request"}
 }
-func (c *ResilientClient) allow(key string) error {
+func (c *ResilientClient) lockBreakers() (*sync.Mutex, map[string]breaker) {
+	if c.Breakers != nil {
+		c.Breakers.mu.Lock()
+		if c.Breakers.breakers == nil {
+			c.Breakers.breakers = make(map[string]breaker)
+		}
+		return &c.Breakers.mu, c.Breakers.breakers
+	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.breakers != nil {
-		state := c.breakers[key]
-		if state.openUntil.After(c.now()) {
-			return &Error{Kind: ErrorCircuitOpen, Message: "model provider circuit is open"}
-		}
-		if !state.openUntil.IsZero() {
-			delete(c.breakers, key)
-		}
+	if c.breakers == nil {
+		c.breakers = make(map[string]breaker)
+	}
+	return &c.mu, c.breakers
+}
+
+func (c *ResilientClient) allow(key string) error {
+	mu, breakers := c.lockBreakers()
+	defer mu.Unlock()
+	state := breakers[key]
+	if state.openUntil.After(c.now()) {
+		return &Error{Kind: ErrorCircuitOpen, Message: "model provider circuit is open"}
+	}
+	if !state.openUntil.IsZero() {
+		delete(breakers, key)
 	}
 	return nil
 }
 func (c *ResilientClient) succeed(key string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.breakers != nil {
-		delete(c.breakers, key)
-	}
+	mu, breakers := c.lockBreakers()
+	defer mu.Unlock()
+	delete(breakers, key)
 }
 func (c *ResilientClient) fail(key string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.breakers == nil {
-		c.breakers = make(map[string]breaker)
-	}
-	state := c.breakers[key]
+	mu, breakers := c.lockBreakers()
+	defer mu.Unlock()
+	state := breakers[key]
 	state.failures++
 	if state.failures >= c.threshold() {
 		state.openUntil = c.now().Add(c.cooldown())
 	}
-	c.breakers[key] = state
+	breakers[key] = state
 }
 func (c *ResilientClient) sleep(ctx context.Context, delay time.Duration) error {
 	if c.Sleep != nil {

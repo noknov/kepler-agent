@@ -35,6 +35,7 @@ type preparedCall struct {
 
 type toolOutcome struct {
 	pending *model.Message
+	usage   model.Usage
 }
 
 func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls []model.ToolCall) (toolOutcome, error) {
@@ -234,10 +235,16 @@ func (r *Runtime) completedToolResults(ctx context.Context, request TurnRequest)
 
 func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, prepared []preparedCall) (toolOutcome, error) {
 	var pending *model.Message
+	var usage model.Usage
 	for index := range prepared {
 		entry := &prepared[index]
 		if entry.result == nil {
 			return toolOutcome{}, errors.New("tool execution produced no result")
+		}
+		if entry.result.Metadata != nil {
+			if childUsage, ok := entry.result.Metadata["usage"].(model.Usage); ok {
+				addUsage(&usage, childUsage)
+			}
 		}
 		eventType := transcript.ToolCallCompleted
 		if entry.result.IsError {
@@ -278,7 +285,7 @@ func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, pr
 			pending = &message
 		}
 	}
-	return toolOutcome{pending: pending}, nil
+	return toolOutcome{pending: pending, usage: usage}, nil
 }
 
 func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entry *preparedCall) {
@@ -379,7 +386,11 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 		r.traceContent(span, "output", map[string]any{"content": traceMessages([]model.Message{{Role: model.RoleTool, Content: result.Content}}), "is_error": result.IsError, "error_code": result.ErrorCode})
 	}
 	span.SetAttributes(attribute.String("langfuse.observation.metadata.tool_name", call.Name), attribute.String("langfuse.observation.metadata.error_code", result.ErrorCode))
-	r.recordCircuit(call, result.IsError || err != nil)
+	failed := result.IsError || err != nil
+	r.recordCircuit(call, failed)
+	if warning := r.CircuitWarning(call, failed); warning != "" {
+		result.Content = append(result.Content, model.Content{Type: model.ContentText, Text: "\n\n" + warning})
+	}
 	entry.result = &result
 }
 

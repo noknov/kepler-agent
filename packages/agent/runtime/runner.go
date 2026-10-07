@@ -174,7 +174,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 		_, err = r.deps.Projector.Project(admissionCtx, ProjectRequest{Events: candidate, System: system, Tools: proposed.Definitions})
 		return err
 	})
-	for step := 1; step <= r.config.MaxSteps; step++ {
+	for step := 1; r.config.MaxSteps == UnlimitedSteps || step <= r.config.MaxSteps; step++ {
 		result.Steps = step
 		if err := r.recordStepStarted(ctx, request, step); err != nil {
 			return r.failTurn(ctx, result, err)
@@ -235,6 +235,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 			return r.finishTurn(ctx, result, response.Message, TerminationCompleted, nil)
 		}
 		outcome, err := r.executeTools(ctx, request, calls)
+		addUsage(&result.Usage, outcome.usage)
 		if errors.Is(err, errPendingApproval) {
 			// Waiting for a user decision is a normal terminal state, not a
 			// failed turn. Adapters use it to suspend their session UI.

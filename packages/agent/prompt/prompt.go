@@ -54,13 +54,32 @@ func Compose(fragments []Fragment) (Composition, error) {
 		}
 		return ordered[i].ID < ordered[j].ID
 	})
-	parts := make([]string, 0, len(ordered))
+	// Only the static core, product, and environment layers belong above the
+	// cache breakpoint. Project, user, skill, and turn-specific instructions
+	// sit below the boundary so multi-turn and multi-user requests maximize
+	// prefix cache reuse on providers such as Anthropic.
+	staticParts := make([]string, 0, len(ordered))
+	dynamicParts := make([]string, 0, len(ordered))
 	for _, fragment := range ordered {
-		if content := strings.TrimSpace(fragment.Content); content != "" {
-			parts = append(parts, content)
+		content := strings.TrimSpace(fragment.Content)
+		if content == "" {
+			continue
+		}
+		if fragment.Layer <= LayerEnvironment {
+			staticParts = append(staticParts, content)
+		} else {
+			dynamicParts = append(dynamicParts, content)
 		}
 	}
-	content := strings.Join(parts, "\n\n")
+	var content string
+	switch {
+	case len(staticParts) > 0 && len(dynamicParts) > 0:
+		content = strings.Join(staticParts, "\n\n") + "\n\n---DYNAMIC_CONTEXT_BELOW---\n\n" + strings.Join(dynamicParts, "\n\n")
+	case len(staticParts) > 0:
+		content = strings.Join(staticParts, "\n\n")
+	default:
+		content = strings.Join(dynamicParts, "\n\n")
+	}
 	sum := sha256.Sum256([]byte(content))
 	return Composition{Content: content, Fragments: ordered, Hash: hex.EncodeToString(sum[:])}, nil
 }

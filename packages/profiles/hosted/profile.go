@@ -65,18 +65,19 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 			return Profile{}, err
 		}
 	}
+	breakers := model.NewCircuitBreakers()
 	primaryObserved := model.Client(observedModel{Client: primary, Metrics: deps.Metrics})
-	primaryClient := resilientModel(cfg, primaryObserved, cfg.LLM.Provider, nil, "", "")
+	primaryClient := resilientModel(cfg, breakers, primaryObserved, cfg.LLM.Provider, nil, "", "")
 	client := primaryClient
 	exploreClient, exploreModel := client, cfg.LLM.Model
 	compactClient, compactModel := client, cfg.Sessions.CompactModel
 	var secondaryObserved model.Client
 	if secondary != nil {
 		secondaryObserved = observedModel{Client: secondary, Metrics: deps.Metrics}
-		client = resilientModel(cfg, primaryObserved, cfg.LLM.Provider, secondaryObserved, cfg.LLM.SecondaryProvider, secondaryModel)
-		exploreClient = resilientModel(cfg, secondaryObserved, cfg.LLM.SecondaryProvider, primaryObserved, cfg.LLM.Provider, cfg.LLM.Model)
+		client = resilientModel(cfg, breakers, primaryObserved, cfg.LLM.Provider, secondaryObserved, cfg.LLM.SecondaryProvider, secondaryModel)
+		exploreClient = resilientModel(cfg, breakers, secondaryObserved, cfg.LLM.SecondaryProvider, primaryObserved, cfg.LLM.Provider, cfg.LLM.Model)
 		exploreModel = secondaryModel
-		compactClient = resilientModel(cfg, secondaryObserved, cfg.LLM.SecondaryProvider, nil, "", "")
+		compactClient = resilientModel(cfg, breakers, secondaryObserved, cfg.LLM.SecondaryProvider, nil, "", "")
 		if compactModel == "" {
 			compactModel = secondaryModel
 		}
@@ -140,7 +141,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 // resilientModel is the sole retry, circuit-breaker, and failover boundary for
 // a request path. Its inputs must be provider clients rather than other
 // ResilientClients; nesting policies multiplies attempts and obscures budgets.
-func resilientModel(cfg config.Config, primary model.Client, primaryProvider string, fallback model.Client, fallbackProvider, fallbackModel string) model.Client {
+func resilientModel(cfg config.Config, breakers *model.CircuitBreakers, primary model.Client, primaryProvider string, fallback model.Client, fallbackProvider, fallbackModel string) model.Client {
 	// A fallback to the same configured route only repeats the primary attempt.
 	// Keep explicit retries under MaxAttempts instead of adding a second budget.
 	if primaryProvider == fallbackProvider && fallbackModel == cfg.LLM.Model && sameModelRoute(cfg.LLM) {
@@ -153,6 +154,7 @@ func resilientModel(cfg config.Config, primary model.Client, primaryProvider str
 		MaxAttempts: cfg.LLM.Resilience.MaxAttempts, RetryDelay: cfg.LLM.Resilience.RetryBaseDelay,
 		MinAttemptBudget: cfg.LLM.Resilience.MinAttemptBudget, FailureThreshold: cfg.LLM.Resilience.FailureThreshold,
 		Cooldown: cfg.LLM.Resilience.CircuitCooldown,
+		Breakers: breakers,
 	}
 }
 

@@ -83,19 +83,18 @@ func fingerprint(call tool.Call) callFingerprint {
 	return callFingerprint{name: call.Name, args: hex.EncodeToString(sum[:8])}
 }
 
-var circuitBreakers sync.Map
-
-func circuitFor(sessionID string) *circuitState {
-	if existing, ok := circuitBreakers.Load(sessionID); ok {
-		return existing.(*circuitState)
+func (r *Runtime) circuitFor(sessionID string) *circuitState {
+	r.circuitMu.Lock()
+	defer r.circuitMu.Unlock()
+	if r.circuits == nil {
+		r.circuits = make(map[string]*circuitState)
+	}
+	if existing, ok := r.circuits[sessionID]; ok {
+		return existing
 	}
 	state := newCircuitState()
-	actual, _ := circuitBreakers.LoadOrStore(sessionID, state)
-	return actual.(*circuitState)
-}
-
-func clearCircuit(sessionID string) {
-	circuitBreakers.Delete(sessionID)
+	r.circuits[sessionID] = state
+	return state
 }
 
 func (r *Runtime) checkCircuit(ctx context.Context, call tool.Call) error {
@@ -103,22 +102,24 @@ func (r *Runtime) checkCircuit(ctx context.Context, call tool.Call) error {
 	if !config.Enabled {
 		return nil
 	}
-	return circuitFor(call.Scope.SessionID).check(config, call)
+	return r.circuitFor(call.Scope.SessionID).check(config, call)
 }
 
 func (r *Runtime) recordCircuit(call tool.Call, failed bool) {
 	config := r.config.CircuitBreaker.withDefaults()
-	circuitFor(call.Scope.SessionID).record(config, call, failed)
+	r.circuitFor(call.Scope.SessionID).record(config, call, failed)
 }
 
 func (r *Runtime) clearCircuit(sessionID string) {
-	clearCircuit(sessionID)
+	r.circuitMu.Lock()
+	defer r.circuitMu.Unlock()
+	delete(r.circuits, sessionID)
 }
 
 // CircuitWarning returns a warning message when a call is approaching limits.
-func CircuitWarning(config CircuitBreakerConfig, call tool.Call, failed bool) string {
-	config = config.withDefaults()
-	state := circuitFor(call.Scope.SessionID)
+func (r *Runtime) CircuitWarning(call tool.Call, failed bool) string {
+	config := r.config.CircuitBreaker.withDefaults()
+	state := r.circuitFor(call.Scope.SessionID)
 	fp := fingerprint(call)
 	state.mu.Lock()
 	defer state.mu.Unlock()

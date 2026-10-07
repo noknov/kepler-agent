@@ -36,6 +36,8 @@ type runState struct {
 	modelStart time.Time
 	firstToken time.Time
 	final      string
+	model      string
+	rootSpanID string
 }
 
 func (s *RunSink) LinkSlackMessage(ctx context.Context, turnID, channel, messageTS string) error {
@@ -118,6 +120,10 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		}
 		existing.UserID, existing.Channel, existing.ThreadTS = metadata.UserID, metadata.Scope["channel"], metadata.Scope["thread_ts"]
 		existing.Provider, existing.Model, existing.Status = s.Provider, modelName, "running"
+		if state != nil {
+			state.model = existing.Model
+			state.rootSpanID = existing.RootSpanID
+		}
 		if err := s.saveRun(ctx, existing); err != nil {
 			log.Printf("project agent run start %s: %v", event.TurnID, err)
 		}
@@ -140,8 +146,8 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		_ = json.Unmarshal(event.Metadata, &metadata)
 		usage := observability.UsageFromModel(metadata.Usage)
 		duration := event.Timestamp.Sub(state.modelStart)
-		step := runs.Step{ID: event.ID, SpanID: event.ID, Type: "llm", Name: s.modelFor(ctx, event.TurnID), StartedAt: state.modelStart, DurationMS: duration.Milliseconds(), Usage: usage, FinishReason: string(metadata.FinishReason), EstimatedCostUSD: s.Rates.EstimateUSD(usage)}
-		s.applyTrace(ctx, event.TurnID, event.Trace, &step)
+		step := runs.Step{ID: event.ID, SpanID: event.ID, Type: "llm", Name: s.modelFor(ctx, event.TurnID, state), StartedAt: state.modelStart, DurationMS: duration.Milliseconds(), Usage: usage, FinishReason: string(metadata.FinishReason), EstimatedCostUSD: s.Rates.EstimateUSD(usage)}
+		s.applyTrace(ctx, event.TurnID, state, event.Trace, &step)
 		if !state.firstToken.IsZero() {
 			step.Metadata = map[string]any{"first_token_ms": state.firstToken.Sub(state.modelStart).Milliseconds()}
 		}
@@ -153,8 +159,8 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 			return
 		}
 		duration := event.Timestamp.Sub(state.modelStart)
-		step := runs.Step{ID: event.ID, SpanID: event.ID, Type: "llm", Name: s.modelFor(ctx, event.TurnID), StartedAt: state.modelStart, DurationMS: duration.Milliseconds(), Error: event.Error, Metadata: rawMetadata(event.Metadata)}
-		s.applyTrace(ctx, event.TurnID, event.Trace, &step)
+		step := runs.Step{ID: event.ID, SpanID: event.ID, Type: "llm", Name: s.modelFor(ctx, event.TurnID, state), StartedAt: state.modelStart, DurationMS: duration.Milliseconds(), Error: event.Error, Metadata: rawMetadata(event.Metadata)}
+		s.applyTrace(ctx, event.TurnID, state, event.Trace, &step)
 		if err := s.appendStep(ctx, event.TurnID, step); err != nil {
 			log.Printf("project failed model step %s: %v", event.ID, err)
 		}
@@ -168,7 +174,7 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 		}
 		duration := toolDuration(event)
 		step := runs.Step{ID: event.ID, SpanID: event.ID, Type: "tool", Name: event.ToolCall.Name, StartedAt: event.Timestamp.Add(-duration), DurationMS: duration.Milliseconds(), Metadata: toolStepMetadata(event)}
-		s.applyTrace(ctx, event.TurnID, event.Trace, &step)
+		s.applyTrace(ctx, event.TurnID, state, event.Trace, &step)
 		if event.Type == transcript.ToolCallFailed {
 			step.Error = toolError(event)
 		}
@@ -223,7 +229,7 @@ func (s *RunSink) publish(ctx context.Context, event transcript.Event, liveMetri
 	}
 }
 
-func (s *RunSink) applyTrace(ctx context.Context, runID string, eventTrace *transcript.TraceContext, step *runs.Step) {
+func (s *RunSink) applyTrace(ctx context.Context, runID string, state *runState, eventTrace *transcript.TraceContext, step *runs.Step) {
 	if eventTrace == nil && step.Metadata != nil {
 		traceID, _ := step.Metadata["trace_id"].(string)
 		spanID, _ := step.Metadata["span_id"].(string)
@@ -237,6 +243,10 @@ func (s *RunSink) applyTrace(ctx context.Context, runID string, eventTrace *tran
 		step.ParentSpanID = eventTrace.ParentSpanID
 	}
 	if step.ParentSpanID == "" {
+		if state != nil && state.rootSpanID != "" {
+			step.ParentSpanID = state.rootSpanID
+			return
+		}
 		if run, ok, _ := s.Store.Get(ctx, runID); ok {
 			step.ParentSpanID = run.RootSpanID
 		}
@@ -245,14 +255,24 @@ func (s *RunSink) applyTrace(ctx context.Context, runID string, eventTrace *tran
 
 func (s *RunSink) saveRun(ctx context.Context, run runs.Run) error {
 	var err error
-	for attempt := 0; attempt < 3; attempt++ {
+	const maxAttempts = 3
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if err = s.Store.Save(ctx, run); err == nil {
 			return nil
 		}
 		if ctx.Err() != nil {
 			return errors.Join(err, ctx.Err())
 		}
-		time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
+		if attempt == maxAttempts-1 {
+			break
+		}
+		timer := time.NewTimer(time.Duration(attempt+1) * 10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return errors.Join(err, ctx.Err())
+		case <-timer.C:
+		}
 	}
 	return err
 }
@@ -294,7 +314,18 @@ func (s *RunSink) appendStep(ctx context.Context, runID string, step runs.Step) 
 		if err := store.AppendStep(ctx, runID, step); err != nil {
 			return err
 		}
-	} else if run, exists, err := s.Store.Get(ctx, runID); err != nil {
+		if step.Type != "llm" {
+			return nil
+		}
+		if run, exists, err := s.Store.Get(ctx, runID); err != nil {
+			return err
+		} else if exists {
+			recomputeRun(&run)
+			return s.saveRun(ctx, run)
+		}
+		return nil
+	}
+	if run, exists, err := s.Store.Get(ctx, runID); err != nil {
 		return err
 	} else if exists {
 		seen := false
@@ -303,21 +334,17 @@ func (s *RunSink) appendStep(ctx context.Context, runID string, step runs.Step) 
 		}
 		if !seen {
 			run.Steps = append(run.Steps, step)
-			if err := s.saveRun(ctx, run); err != nil {
-				return err
-			}
 		}
-	}
-	if run, exists, err := s.Store.Get(ctx, runID); err != nil {
-		return err
-	} else if exists {
 		recomputeRun(&run)
 		return s.saveRun(ctx, run)
 	}
 	return nil
 }
 
-func (s *RunSink) modelFor(ctx context.Context, runID string) string {
+func (s *RunSink) modelFor(ctx context.Context, runID string, state *runState) string {
+	if state != nil && state.model != "" {
+		return state.model
+	}
 	if run, ok, _ := s.Store.Get(ctx, runID); ok && run.Model != "" {
 		return run.Model
 	}
