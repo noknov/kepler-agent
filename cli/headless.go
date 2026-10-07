@@ -21,12 +21,9 @@ import (
 	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/infra/telemetry"
-	"github.com/noknov/kepler-agent/packages/mcp"
 	"github.com/noknov/kepler-agent/packages/profiles/local"
 	"github.com/noknov/kepler-agent/packages/providers"
 	localtools "github.com/noknov/kepler-agent/packages/tools/local"
-	mcptools "github.com/noknov/kepler-agent/packages/tools/mcp"
-	"github.com/noknov/kepler-agent/packages/tools/skills"
 )
 
 type localHarness struct {
@@ -95,7 +92,7 @@ func newLocalHarness(values options, config local.Config, creds credentials) (*l
 
 	client, err := providers.New(providers.Config{
 		Provider: "kepler", Protocol: "kepler", BaseURL: creds.APIURL,
-		APIKey: creds.Token, Timeout: config.Timeout,
+		APIKey: creds.Token, Timeout: config.Timeout, OutputTokens: config.MaxOutputTokens,
 	})
 	if err != nil {
 		workspace.Close()
@@ -160,7 +157,8 @@ func newLocalHarness(values options, config local.Config, creds credentials) (*l
 		agentruntime.Config{
 			Model: config.Model, ReasoningEffort: config.ReasoningEffort, MaxOutputTokens: config.MaxOutputTokens,
 			MaxSteps: config.MaxSteps, MaxParallelToolCalls: config.MaxParallelToolCalls, MaxModelRetries: 0, MaxEmptyResponseRetries: 3,
-			Context: agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
+			Context:        agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
+			CircuitBreaker: agentruntime.CircuitBreakerConfig{Enabled: true},
 		},
 		agentruntime.Dependencies{
 			TraceContent: telemetry.ContentRecorder(),
@@ -196,94 +194,17 @@ func resolveSessionID(values options, store *local.JSONLStore) (string, error) {
 }
 
 func registerSkillsAndMCP(ctx context.Context, catalog *tool.Catalog, workspace local.Workspace, config local.Config) (string, error) {
-	roots := []string{
-		filepath.Join(workspace.Root, ".agents", "skills"),
-		filepath.Join(workspace.Root, ".codex", "skills"),
-	}
-	roots = append(roots, config.SkillRoots...)
-	skillCatalog, err := skills.Discover(roots)
-	if err != nil {
-		return "", err
-	}
-	if skillCatalog.Prompt() != "" {
-		if err := catalog.Register(skillCatalog.Tool()); err != nil {
-			return "", err
-		}
-	}
-	for _, server := range config.MCPServers {
-		if server.Name == "" || server.URL == "" {
-			return "", errors.New("every mcp_servers entry requires name and url")
-		}
-		items, discoverErr := mcptools.Discover(ctx, mcptools.Server{
-			Name: server.Name,
-			Client: &mcp.Client{
-				ServiceName: server.Name,
-				URL:         server.URL,
-				Token:       os.Getenv(server.TokenEnv),
-				Headers:     server.Headers,
-			},
-			Effects: effects(server.Effects),
-		})
-		if discoverErr != nil {
-			return "", fmt.Errorf("discover MCP server %s: %w", server.Name, discoverErr)
-		}
-		for _, item := range items {
-			if registerErr := catalog.Register(item); registerErr != nil {
-				return "", registerErr
-			}
-		}
-	}
-	// MCP tools are deferred. Register their discovery entry only when there
-	// are deferred capabilities, otherwise the model cannot activate them.
-	for _, descriptor := range catalog.Descriptors() {
-		if descriptor.Exposure == tool.ExposureDeferred {
-			if err := catalog.Register(tool.NewSearchTool(catalog)); err != nil {
-				return "", err
-			}
-			break
-		}
-	}
-	return skillCatalog.Prompt(), nil
+	return localtools.RegisterSkillsAndMCP(ctx, catalog, workspace, config)
 }
 
 func prompts(config local.Config, root, skillPrompt string) ([]prompt.Fragment, error) {
-	fragments := []prompt.Fragment{
-		{ID: "cli-core", Version: "3", Layer: prompt.LayerCore, Content: "You are a coding agent in a local workspace. Use the available tools to inspect evidence and verify material changes. Preserve unrelated work and report outcomes and limitations precisely."},
-		{ID: "local-product", Version: "5", Layer: prompt.LayerProduct, Content: "You are running locally. Filesystem writes must stay within the workspace. Exec network access requires explicit approval. Never seek or expose credentials. Do not ask the user for provider API keys."},
-		{ID: "local-environment", Layer: prompt.LayerEnvironment, Content: "Workspace: " + root},
-	}
-	project, err := local.ProjectInstructions(root)
-	if err != nil {
-		return nil, err
-	}
-	for index, value := range project {
-		fragments = append(fragments, prompt.Fragment{ID: fmt.Sprintf("project-%d", index), Layer: prompt.LayerProject, Content: value, Order: index})
-	}
-	overlays, err := local.LoadPromptFiles(config.PromptFiles)
-	if err != nil {
-		return nil, err
-	}
-	for index, value := range overlays {
-		fragments = append(fragments, prompt.Fragment{ID: fmt.Sprintf("user-overlay-%d", index), Layer: prompt.LayerUser, Content: value, Order: index})
-	}
-	if skillPrompt != "" {
-		fragments = append(fragments, prompt.Fragment{ID: "file-skills", Layer: prompt.LayerSkill, Content: skillPrompt})
-	}
-	return fragments, nil
-}
-
-func effects(values []string) []tool.Effect {
-	items := make([]tool.Effect, 0, len(values))
-	for _, value := range values {
-		switch tool.Effect(value) {
-		case tool.EffectRead, tool.EffectWorkspaceWrite, tool.EffectExternalWrite, tool.EffectPrivileged, tool.EffectNetwork:
-			items = append(items, tool.Effect(value))
-		}
-	}
-	if len(items) == 0 {
-		items = append(items, tool.EffectExternalWrite)
-	}
-	return items
+	return localtools.BuildPrompts(
+		"cli-core",
+		"You are a coding agent in a local workspace. Use the available tools to inspect evidence and verify material changes. Preserve unrelated work and report outcomes and limitations precisely.",
+		config,
+		root,
+		skillPrompt,
+	)
 }
 
 func turnRequest(session, workspace, input string, fragments []prompt.Fragment, steering agentruntime.InputSource) agentruntime.TurnRequest {

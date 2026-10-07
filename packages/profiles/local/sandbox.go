@@ -131,6 +131,9 @@ func sanitizedGitEnvironment(workspace Workspace) ([]string, func(), error) {
 	defer gitIsolationMu.Unlock()
 	isolationDir := filepath.Join(workspace.Temp, "git")
 	if _, err := os.Stat(filepath.Join(isolationDir, ".kepler-ready")); err == nil {
+		if err := refreshMutableGitMetadata(gitDir, isolationDir); err != nil {
+			return nil, nil, err
+		}
 		return sanitizedGitEnvironmentValues(isolationDir, workspace.Root), func() {}, nil
 	}
 	if err := os.MkdirAll(isolationDir, 0o700); err != nil {
@@ -179,6 +182,37 @@ func sanitizedGitEnvironment(workspace Workspace) ([]string, func(), error) {
 		return nil, nil, fmt.Errorf("finish isolated Git metadata: %w", err)
 	}
 	return sanitizedGitEnvironmentValues(isolationDir, workspace.Root), func() {}, nil
+}
+
+func refreshMutableGitMetadata(gitDir, isolationDir string) error {
+	entries, err := os.ReadDir(gitDir)
+	if err != nil {
+		return fmt.Errorf("read workspace Git directory: %w", err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == "config" || name == "credentials" || !entry.Type().IsRegular() {
+			continue
+		}
+		source := filepath.Join(gitDir, name)
+		target := filepath.Join(isolationDir, name)
+		content, err := os.ReadFile(source)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				_ = os.Remove(target)
+				continue
+			}
+			return fmt.Errorf("read Git metadata %s: %w", name, err)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if err := os.WriteFile(target, content, info.Mode().Perm()); err != nil {
+			return fmt.Errorf("refresh Git metadata %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 var gitIsolationMu sync.Mutex

@@ -12,7 +12,6 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/delegation"
 	"github.com/noknov/kepler-agent/packages/agent/environment"
 	"github.com/noknov/kepler-agent/packages/agent/model"
-	"github.com/noknov/kepler-agent/packages/agent/prompt"
 	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/appserver"
@@ -70,15 +69,33 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	skillText, err := localtools.RegisterSkillsAndMCP(ctx, catalog, workspace, config)
+	if err != nil {
+		return err
+	}
+	fragments, err := localtools.BuildPrompts(
+		"appserver-core",
+		"You are a coding agent in a local workspace exposed through the app server protocol. Use the available tools to inspect evidence and verify material changes. Preserve unrelated work and report outcomes and limitations precisely.",
+		config,
+		workspace.Root,
+		skillText,
+	)
+	if err != nil {
+		return err
+	}
 	client, err := providers.New(providers.Config{
 		Provider: "kepler", Protocol: "kepler", BaseURL: apiURL,
-		APIKey: token, Timeout: config.Timeout,
+		APIKey: token, Timeout: config.Timeout, OutputTokens: config.MaxOutputTokens,
 	})
 	if err != nil {
 		return err
 	}
 	resilientClient := model.Client(&model.ResilientClient{Primary: client, PrimaryProvider: "kepler"})
 	stateDir, err := local.DefaultStateDir()
+	if err != nil {
+		return err
+	}
+	store, err := local.NewJSONLStore(filepath.Join(stateDir, "sessions"))
 	if err != nil {
 		return err
 	}
@@ -89,7 +106,8 @@ func run(ctx context.Context) error {
 			Context:  agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
 		},
 		Deps: agentruntime.Dependencies{
-			Model: resilientClient, Policy: local.NewWorkspacePolicy(),
+			TraceContent: telemetry.ContentRecorder(),
+			Model:        resilientClient, Policy: local.NewWorkspacePolicy(), Transcript: store,
 			Compactor:   agentruntime.ModelCompactor{Client: resilientClient, Model: info.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
 			Artifacts:   local.ArtifactStore{Root: filepath.Join(stateDir, "sessions")},
 			Environment: environment.Config{WorkspaceRoots: []string{workspace.Root}},
@@ -98,10 +116,6 @@ func run(ctx context.Context) error {
 		AllowedTools:  delegation.DefaultLocalAllowedTools(),
 	}
 	if err := catalog.Register(delegation.ExploreTool{Runner: exploreRunner}); err != nil {
-		return err
-	}
-	store, err := local.NewJSONLStore(filepath.Join(stateDir, "sessions"))
-	if err != nil {
 		return err
 	}
 	server := appserver.New(nil, os.Stdin, os.Stdout)
@@ -113,7 +127,8 @@ func run(ctx context.Context) error {
 		Context:        agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
 		CircuitBreaker: agentruntime.CircuitBreakerConfig{Enabled: true},
 	}, agentruntime.Dependencies{
-		Model: resilientClient, Tools: catalog, Policy: local.NewWorkspacePolicy(), Approver: approver, Transcript: store,
+		TraceContent: telemetry.ContentRecorder(),
+		Model:        resilientClient, Tools: catalog, Policy: local.NewWorkspacePolicy(), Approver: approver, Transcript: store,
 		Events:      transcript.SinkFunc(stream.publish),
 		Compactor:   agentruntime.ModelCompactor{Client: resilientClient, Model: info.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
 		Artifacts:   local.ArtifactStore{Root: filepath.Join(stateDir, "sessions")},
@@ -127,7 +142,7 @@ func run(ctx context.Context) error {
 	server.Model = info.Model
 	server.Workspace = workspace.Root
 	server.TurnTimeout = config.Timeout
-	server.Prompt = []prompt.Fragment{{ID: "appserver-core", Layer: prompt.LayerCore, Content: "You are a coding agent exposed through the app server protocol."}}
+	server.Prompt = fragments
 	return server.Serve(ctx)
 }
 

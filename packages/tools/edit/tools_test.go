@@ -106,3 +106,26 @@ func TestReplaceUpdatesSingleMatch(t *testing.T) {
 		t.Fatalf("file content = %q", got)
 	}
 }
+
+func TestReplaceSupportsWhitespaceTolerantFuzzyMatch(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "app.go")
+	if err := os.WriteFile(path, []byte("func main() {\n\tprintln(\"hello\")\n}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := ReplaceTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
+
+	_, err := tool.Execute(context.Background(), agenttool.Call{
+		Arguments: json.RawMessage(`{"path":"app.go","old_text":"func main() {\n    println(\"hello\")\n}","new_text":"func main() {\n\tprintln(\"world\")\n}"}`),
+	})
+	if err != nil {
+		t.Fatalf("Execute() fuzzy error = %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), `"world"`) {
+		t.Fatalf("file content = %q", got)
+	}
+}

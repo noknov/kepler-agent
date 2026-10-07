@@ -87,3 +87,40 @@ func data(t *testing.T, path string) []byte {
 	}
 	return value
 }
+
+func TestEditFileFuzzyAndMemoryTool(t *testing.T) {
+	root := t.TempDir()
+	workspace, err := local.NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workspace.Close()
+	target := filepath.Join(root, "main.go")
+	if err := os.WriteFile(target, []byte("package main\n\tconst x = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	edit := EditFile{Workspace: workspace}
+	if _, err := edit.Execute(context.Background(), agenttool.Call{
+		Arguments: json.RawMessage(`{"path":"main.go","old_text":"package main\n  const x = 1","new_text":"package main\n\tconst x = 2"}`),
+	}); err != nil {
+		t.Fatalf("EditFile fuzzy failed: %v", err)
+	}
+	if !strings.Contains(string(data(t, target)), "const x = 2") {
+		t.Fatalf("unexpected file content: %s", string(data(t, target)))
+	}
+
+	memStore := filepath.Join(root, "memories.json")
+	mem := MemoryTool{Workspace: workspace, StorePath: memStore}
+	if _, err := mem.Execute(context.Background(), agenttool.Call{
+		Arguments: json.RawMessage(`{"action":"upsert","semantic_key":"code.style","kind":"preference","content":"Prefer table-driven Go tests"}`),
+		Scope:     agenttool.Scope{SessionID: "s1", TurnID: "t1"},
+	}); err != nil {
+		t.Fatalf("memory upsert: %v", err)
+	}
+	listed, err := mem.Execute(context.Background(), agenttool.Call{
+		Arguments: json.RawMessage(`{"action":"search","query":"table-driven"}`),
+	})
+	if err != nil || !strings.Contains(listed.Text(), "code.style") {
+		t.Fatalf("memory search=%q err=%v", listed.Text(), err)
+	}
+}

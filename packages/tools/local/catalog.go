@@ -9,5 +9,6 @@ func NewCatalog(workspace local.Workspace, sandbox local.Sandbox) (*tool.Catalog
 	return tool.NewCatalog(
 		ReadFile{Workspace: workspace}, ListFiles{Workspace: workspace}, Search{Workspace: workspace},
 		WriteFile{Workspace: workspace}, EditFile{Workspace: workspace}, Exec{Sandbox: sandbox},
+		MemoryTool{Workspace: workspace},
 	)
 }
