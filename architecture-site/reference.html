@@ -41,7 +41,7 @@
 <tr><td>正常完成</td><td><code>completed</code></td><td>模型返回最终消息，结束前两次检查都没有新输入</td></tr>
 <tr><td>被取消</td><td><code>canceled</code></td><td>上层取消执行上下文，例如用户中断或处理权丢失</td></tr>
 <tr><td>模型错误</td><td><code>model_error</code></td><td>无法归入更具体类别的模型调用失败</td></tr>
-<tr><td>达到执行轮数上限</td><td><code>max_steps</code></td><td>模型持续请求工具，超过允许轮数</td></tr>
+<tr><td>达到执行轮数上限</td><td><code>max_steps</code></td><td>模型持续请求工具，超过允许轮数（当配置 <code>MaxSteps = -1</code> / <code>UnlimitedSteps</code> 时解除步数上限，仅受上下文窗口与 Turn 超时约束）</td></tr>
 <tr><td>模型输出达到上限</td><td><code>output_limit</code></td><td>模型回答因长度限制停止且没有工具请求</td></tr>
 <tr><td>等待用户批准</td><td><code>pending_approval</code></td><td>权限层要求批准，当前调用没有同步批准器</td></tr>
 <tr><td>等待用户补充</td><td><code>pending_input</code></td><td>工具结果明确要求用户继续提供信息</td></tr>
@@ -71,7 +71,7 @@
 <tr><td>长工具结果怎样外置</td><td><code>runtime/tool_results.go</code></td><td><code>profiles/hosted/artifacts.go</code>、<code>local/artifacts.go</code></td></tr>
 <tr><td>事件怎样定义和分发</td><td><code>agent/transcript/transcript.go</code></td><td><code>memory.go</code>、<code>profiles/hosted/pgtranscript.go</code></td></tr>
 <tr><td>Slack 怎样接收与回复</td><td><code>surfaces/slack/events</code></td><td><code>surfaces/slack/agent/service.go</code>、<code>streaming.go</code></td></tr>
-<tr><td>本地怎样限制文件与命令</td><td><code>profiles/local/policy.go</code></td><td><code>workspace.go</code>、<code>sandbox.go</code>、<code>packages/safety</code></td></tr>
+<tr><td>本地怎样限制文件与命令</td><td><code>profiles/local/policy.go</code></td><td><code>workspace.go</code>、<code>sandbox.go</code>、<code>tools/local/bootstrap.go</code>、<code>packages/safety</code></td></tr>
 <tr><td>托管服务怎样组装依赖</td><td><code>profiles/hosted/profile.go</code></td><td><code>hosted.go</code>、<code>platform/stores.go</code></td></tr>
 <tr><td>提示内容怎样装载和覆盖</td><td><code>packages/prompts</code></td><td><code>packages/prompts/defaults</code>、<code>packages/agent/prompt</code></td></tr>
 <tr><td>子任务怎样创建和汇合</td><td><code>packages/agent/delegation</code></td><td><code>runtime/types.go</code> 中的父任务关系</td></tr>

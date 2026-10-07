@@ -69,12 +69,12 @@
       <h2>会话事件怎样变成模型上下文</h2>
       <p class="intro">Transcript 同时包含恢复所需的生命周期事实和模型真正需要的对话内容。BoundedProjector 通过事件类型、摘要覆盖点和完整交互分组把两者分开。</p>
       <ol class="walkthrough">
-        <li><b>计算输入预算。</b><span>总 MaxTokens 减去 ReserveTokens；预留给模型输出、工具定义和 provider 差异。配置差值不合理时才退回总上限。</span></li>
+        <li><b>计算输入预算。</b><span>总 MaxTokens 减去 ReserveTokens；预留给模型输出、工具定义和 provider 差异。配置差值不合理时直接拒绝派发，而不是退回总上限。</span></li>
         <li><b>选择最近有效压缩。</b><span>只接受带有向后覆盖边界的 <code>covers_through</code>。坏摘要不会悄悄遮住原始消息，避免数据损坏变成事实丢失。</span></li>
-        <li><b>筛选可投影事件。</b><span>UserInput、SteeringInput、AssistantMessage、ToolCallCompleted/Failed 形成 canonical messages；锁、step、projection 和 trace 事件留在运维层。</span></li>
-        <li><b>按 TurnID 聚成完整 group。</b><span>一个用户请求及其 assistant tool call/result 是一个不可拆分单元。这样裁剪不会留下模型提出过调用却没有相应结果的上下文。</span></li>
-        <li><b>从最新 group 向前加入。</b><span>最新 group 必须保留；更早 group 只有在预算内才进入。不能连最新请求一起丢掉来“解决”超限。</span></li>
-        <li><b>叠加当前环境和工具。</b><span>环境片段在 system messages 后插入；当前 tool catalog 的 active definitions 与投影一起交给模型。</span></li>
+        <li><b>筛选可投影事件并保留伴随推理。</b><span>UserInput、SteeringInput、AssistantMessage、ToolCallCompleted/Failed 形成 canonical messages；工具调用步伴随的思考说明以 <code>ContentReasoning</code> 形式跨步保留，既避免多步失忆，又不污染最终可见回答。</span></li>
+        <li><b>两阶段瘦身：先做 Observation Masking。</b><span>当历史体积超出预算时，优先对非最近 2 轮的历史大体积 <code>ToolResult</code>（文本与 JSON 块 &gt; 2400 字节）执行 UTF-8 安全的摘要折叠（保留前 400 字节预览与省略字节提示），避免过早触发整轮对话裁剪或高延迟 LLM 压缩。</span></li>
+        <li><b>按 TurnID 聚成完整 group 向前加入。</b><span>一个用户请求及其 assistant tool call/result 是不可拆分单元。最新 group 必须保留；更早 group 只有在预算内才进入。</span></li>
+        <li><b>插入缓存断点并叠加动态上下文。</b><span>在静态层（<code>LayerCore / LayerProduct / LayerEnvironment</code>）与动态层（<code>LayerProject / LayerUser / LayerSkill / LayerTurn</code>）之间自动注入 <code>---DYNAMIC_CONTEXT_BELOW---</code> 缓存分界，并为最近一轮消息附加增量缓存锚点。</span></li>
       </ol>
       <div class="callout warn"><strong>估算不是 provider tokenizer</strong>估算器按 ASCII、中文字符、结构、图片、artifact 和 tool result 做保守近似。它只能提前发现大多数超限；provider 仍可能因自己的 tokenizer、隐藏 reasoning 或工具协议拒绝请求。</div>
     </section>

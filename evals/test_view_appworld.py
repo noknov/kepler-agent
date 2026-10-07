@@ -13,11 +13,13 @@ class ProgressTests(unittest.TestCase):
             root = Path(directory)
             (root / 'invocation.json').write_text(json.dumps({
                 'split': 'dev', 'status': 'completed', 'gateway': {'model': 'model'},
+                'max_steps': -1, 'timeout_seconds': 900,
                 'task_ids': ['a'], 'results': [{'task_id': 'a', 'status': 'completed', 'success': True}],
             }))
             result = snapshot(root)
             self.assertEqual((result['total'], result['finished'], result['passed']), (1, 1, 1))
             self.assertEqual(result['model'], 'model')
+            self.assertEqual((result['max_steps'], result['timeout_seconds']), (-1, 900))
 
     def test_aggregate_results_without_exposing_task_or_tool_contents(self):
         with tempfile.TemporaryDirectory() as directory:

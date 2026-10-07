@@ -43,7 +43,7 @@ Do not treat clearing the visible UI as proof that persisted context was deleted
 | `--cwd` | Workspace root; defaults to current directory |
 | `--config` | Explicit local TOML path |
 | `--state-dir` | Session and approval state location |
-| `--session` | Session ID to create or resume |
+| `--session` | Session ID to resume if existing, or create if new |
 | `--resume` | Resume the most recently modified session |
 | `--input-routing` | `steer` or `queue` for input arriving during execution |
 | `--output` | `text` or `jsonl`; interactive mode requires text |
@@ -58,6 +58,15 @@ source revision, not assumed compatible with this launcher.
 
 Use `kepler-agent connect <provider>` for supported integration connections.
 That is separate from the CLI login session.
+
+The local CLI and stdio `app-server` share the same harness assembly
+(`packages/tools/local/bootstrap.go`), including project instructions
+(`AGENTS.md` / `CLAUDE.md`), skills, MCP servers, `tool_search`, durable project
+`memory`, `agent-explore` transcript persistence, and the tool circuit breaker.
+The local CLI configuration accepts `max_steps = -1` to disable the model-round
+limit explicitly. Omission or zero keeps the default 256 rounds; a positive value
+sets a limit. Cancellation, the configured timeout and context budgets still
+apply when the step limit is disabled.
 
 ## Troubleshooting
 

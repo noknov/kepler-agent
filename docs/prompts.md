@@ -55,14 +55,15 @@ Registered tools own parameters and authentication; a skill must not introduce
 an alternative shell/HTTP path around the active tool policy. Skill descriptions
 should describe user intent rather than lists of trigger words.
 
-The committed catalog includes systematic debugging, test-driven development,
-implementation planning, and verification before completion. These workflows are
-adapted for this runtime from the Superpowers 6.3.0 plugin curated in OpenAI's
-`openai/plugins` repository. Superpowers is authored by Jesse Vincent and
-licensed under MIT; it is curated plugin content rather than an OpenAI-authored
-system skill. The adaptation keeps the core methods while removing dependencies
-on Superpowers-specific skill names, worktree conventions, and orchestration.
-See `skills/SUPERPOWERS-LICENSE.txt` for the upstream license.
+The committed catalog includes systematic debugging, incident diagnostics,
+test-driven development, implementation planning, and verification before
+completion. Four of these workflows are adapted for this runtime from the
+Superpowers 6.3.0 plugin curated in OpenAI's `openai/plugins` repository.
+Superpowers is authored by Jesse Vincent and licensed under MIT; it is curated
+plugin content rather than an OpenAI-authored system skill. The adaptation keeps
+the core methods while removing dependencies on Superpowers-specific skill
+names, worktree conventions, and orchestration. See
+`skills/SUPERPOWERS-LICENSE.txt` for the upstream license.
 
 Keep general skills transport-neutral and evidence-driven. Product-specific
 workflows belong in their owning adapter or workflow package.

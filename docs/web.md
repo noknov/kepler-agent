@@ -67,9 +67,12 @@ Add that exact HTTPS URI to the Slack app. The Web entry reuses
 - Browser cookies are opaque, Secure, HttpOnly, SameSite=Lax, and stored only
   as SHA-256 hashes in PostgreSQL.
 - Mutating APIs require an exact same-origin `Origin` and an HMAC CSRF token.
+- Process-wide active turn admission is bounded by `MaxActiveTurns` (default 32).
 - Every conversation query includes provider, tenant, and subject ownership.
-- Streaming events expose presentation-safe fields and redact secrets. Raw
-  tool arguments and results are not sent to the browser.
+- Streaming events expose presentation-safe fields, collapse duplicate `plan`
+  updates per turn, render live tool and plan progress in the activity card,
+  map `TurnFailed` errors through `failure.PublicMessage`, and redact secrets.
+  Raw tool arguments and results are not sent to the browser.
 
 The identity provider is an interface and registry. Slack is the only provider
 implemented now; additional OIDC or registration providers can be added

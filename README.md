@@ -46,8 +46,9 @@ bin/kepler-agent
 ```
 
 That script builds the launcher, app-server and frontend together and writes the
-CLI bundle under `kepler-agent-deploy/bin`. The application repository owns
-source and tests; deployment owns runnable bundles and release archives.
+CLI bundle under `kepler-agent-deploy/bin`. This application repository owns
+source code, protocol contracts, and tests; concrete evaluation execution,
+packaging, deployment, and result records live in `kepler-agent-deploy`.
 `make eval-build` only builds a temporary headless CLI for local evaluations.
 
 ## Repository boundaries

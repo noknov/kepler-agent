@@ -1,4 +1,5 @@
 """AppWorld adapter boundaries; these tests require no benchmark installation."""
+import argparse
 import os
 from pathlib import Path
 import sys
@@ -10,6 +11,14 @@ import run_appworld as runner
 
 
 class AppWorldTests(unittest.TestCase):
+    def test_explicit_unlimited_steps_reaches_cli_configuration(self):
+        limit = runner.parse_step_limit("-1")
+        self.assertIn("max_steps = -1\n", runner.agent_config("http://mcp.test", limit))
+        self.assertEqual(runner.parse_step_limit("100"), 100)
+        for invalid in ("0", "-2"):
+            with self.assertRaises(argparse.ArgumentTypeError):
+                runner.parse_step_limit(invalid)
+
     def test_failure_reason_comes_from_structured_lifecycle_event(self):
         transcript = 'latest turn exceeds token budget\n{"type":"tool_call_failed","error":"tool error"}\n'
         self.assertEqual(runner.terminal_event(transcript), {})

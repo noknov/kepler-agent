@@ -48,7 +48,7 @@
 <section class="chapter2" id="routing">
 <h2>事件路由不是“所有消息都启动新请求”</h2>
 <table class="detail-table"><thead><tr><th>事件</th><th>路由</th><th>生产注意</th></tr></thead><tbody>
-<tr><td>频道 mention</td><td>清理 bot mention，按频道权限创建或续接线程会话</td><td>无权限只返回拒绝提示，不把原文送入 Core</td></tr>
+<tr><td>频道 mention</td><td>清理 bot mention，先经 <code>Registry.HasPromptCandidate</code> 做零延迟候选预筛（无 PR 链接等工作流特征时直接跳过 LLM IntentRouter），再按频道权限创建或续接线程会话</td><td>无权限只返回拒绝提示，不把原文送入 Core</td></tr>
 <tr><td>私信</td><td>新消息创建会话；线程回复优先作为已有会话输入</td><td>bot、自身消息和非用户 subtype 要过滤</td></tr>
 <tr><td>频道线程回复</td><td>只有受支持线程、权限和非空内容才进入会话</td><td>不要把无关频道聊天误接入 agent</td></tr>
 <tr><td>file_shared</td><td>私信场景下，按消息时间戳找到线程并转为内容块</td><td>没有消息时间戳时等待对应 message.file_share 事件</td></tr>

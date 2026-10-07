@@ -31,10 +31,11 @@ Read [architecture](architecture.md) first, then follow the area you change:
 
 ## Measure quality
 
-[Evaluation](../evals/README.md) separates evaluator smoke tests, Harbor public
-benchmarks, and product-specific regression tests. A dry-run is not a model
-quality result; a CLI benchmark does not validate Slack/Web delivery or hosted
-permissions.
+[Evaluation](../evals/README.md) documents the evaluator code, Harbor and
+AppWorld adapters, and wiring checks (`make eval-check`). Concrete benchmark
+runs, packaging, deployment, and result records belong in the sibling
+`kepler-agent-deploy` repository. A dry-run is not a model quality result; a
+CLI benchmark does not validate Slack/Web delivery or hosted permissions.
 
 ## Maintain these documents
 

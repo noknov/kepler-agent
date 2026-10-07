@@ -25,7 +25,14 @@ cancellation while waiting; appends retain file sync and atomic batch replacemen
 
 Context projection reserves the configured response cap as well as tool-schema
 and safety overhead. An impossible input budget fails before dispatch instead
-of falling back to the full context window.
+of falling back to the full context window. Before dropping older turn groups
+or invoking model-driven compaction, `BoundedProjector` applies **two-stage
+observation masking**: historical `ToolResult` text and JSON blocks older than
+the most recent two turn groups and larger than 2,400 bytes are folded into
+UTF-8-safe 400-byte previews with omitted-byte annotations. Static prompt layers
+(`LayerCore`, `LayerProduct`, `LayerEnvironment`) are automatically separated
+from dynamic layers (`LayerProject`, `LayerUser`, `LayerSkill`, `LayerTurn`) via
+`---DYNAMIC_CONTEXT_BELOW---`, enabling prefix and incremental prompt caching.
 
 `agent_runs` and
 `agent_run_steps` are query-oriented observability projections, not a second
@@ -91,10 +98,12 @@ The `evals` package treats the CLI and other products as black-box processes.
 Because the CLI runs the same harness, its context, tool, retry, and termination
 results exercise the shared runtime used by Slack.
 
-Hosted profiles enable the optional circuit breaker by default. It blocks
-identical repeated failed tool calls at the configured failure threshold. This
-is a liveness/cost guard, not authorization. The implementation and reset
-semantics live in [circuit.go](../packages/agent/runtime/circuit.go).
+Hosted and local profiles enable the optional circuit breaker by default. It blocks
+identical repeated failed tool calls at the configured failure threshold and
+appends a pre-trip self-correction warning (`CircuitWarning`) to repeated tool
+error results on the penultimate failure. This is a liveness/cost guard, not
+authorization. The implementation and reset semantics live in
+[circuit.go](../packages/agent/runtime/circuit.go).
 
 ## Local app-server
 
@@ -116,9 +125,12 @@ discarding an already accepted turn.
 
 ## Delegation
 
-`agent-explore` is a hosted read-only tool, not a second product runtime. It
-creates isolated child turns from a filtered catalog, records a parent link and
-its own transcript, and returns a factual report to the parent. Each fresh child
+`agent-explore` is a read-only delegation tool, not a second product runtime. It
+creates isolated child turns from a filtered catalog with its own circuit breaker
+(`MaxIdenticalFailedAttempts: 3`), records a parent link and its own transcript,
+and returns a factual report to the parent. Child `model.Usage` across single or
+batch subtasks is rolled up into the tool result metadata and added to the
+parent turn's `TurnResult.Usage`. Each fresh child
 has one invocation owner and inherits the parent's cancellation context. It does
 not acquire another distributed session lease, avoiding starvation when all
 lease connections belong to parents awaiting children. Child stream
@@ -146,7 +158,10 @@ slot, so queueing cannot consume its model retry budget before it starts.
 ## Slack workflow activation
 
 Slack uses the configured secondary model as a small semantic router for new
-conversations. The router returns a validated `general|code_review` decision;
+conversations when `workflows.Registry.HasPromptCandidate(text)` detects a
+plausible workflow trigger (for example, a GitHub pull request URL). Ordinary
+messages without workflow candidates bypass the router LLM call with zero
+latency overhead. The router returns a validated `general|code_review` decision;
 it has no tools and never uses keyword or regular-expression intent matching.
 Code Review then extracts and validates GitHub PR URLs from the original
 message. The coordinator uses a bounded multi-agent workflow and keeps every

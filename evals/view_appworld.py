@@ -47,6 +47,8 @@ def snapshot(root: Path) -> dict:
         progress = {'label': root.name, 'status': manifest['status'],
                     'model': manifest.get('gateway', {}).get('model'),
                     'total_tasks': len(manifest.get('task_ids', [])),
+                    'max_steps': manifest.get('max_steps'),
+                    'timeout_seconds': manifest.get('timeout_seconds'),
                     'error': manifest.get('error')}
         sources = [(manifest.get('split', ''), root, manifest)]
     else:
@@ -72,6 +74,7 @@ def snapshot(root: Path) -> dict:
     settled = [item for item in rows if item['status'] not in {'running', 'pending'}]
     return {'name': progress.get('label', root.name), 'status': progress.get('status', 'starting'),
             'model': progress.get('model'), 'total': progress.get('total_tasks', 0),
+            'max_steps': progress.get('max_steps'), 'timeout_seconds': progress.get('timeout_seconds'),
             'finished': len(settled), 'passed': sum(item['success'] is True for item in settled),
             'execution_errors': sum(item['status'] != 'completed' for item in settled),
             'splits': splits, 'tasks': rows, 'error': progress.get('error')}

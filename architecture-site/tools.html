@@ -47,7 +47,7 @@
 
     <section class="chapter2" id="catalog">
       <h2>工具从目录进入模型上下文</h2>
-      <p>产品启动时组装 Catalog。轻量常用工具可以 eager；较重、依赖连接或只在专项任务使用的工具以 deferred 形式保留。模型先通过 <code>tool_search</code> 列出稳定分类或做词法搜索，再用准确名称/分类激活。</p>
+      <p>产品启动时组装 Catalog。轻量常用工具可以 eager；较重、依赖连接或只在专项任务使用的工具以 deferred 形式保留。模型先通过 <code>tool_search</code>（基于带字段权重的 BM25 评分与标识符子词分词）检索候选，再用准确名称激活。</p>
       <figure class="diagram"><div class="flow">
         <div class="box"><b>Tool implementation</b><small>descriptor<br>Execute / result</small></div><div class="arrow">→</div>
         <div class="box"><b>Catalog</b><small>register-time validation<br>surface/dependency filter</small></div><div class="arrow">→</div>
@@ -144,7 +144,7 @@
         <div class="layer"><b>调用级复用</b><span>同一 turn 里已有 ToolCallCompleted/Failed 时，Runtime 不再次派发相同 CallID。它依赖 transcript 已经保存结果。</span></div>
         <div class="layer"><b>执行编号</b><span>Call.ExecutionID 由 turn 和 call 组成。工具可以把它传给下游的 idempotency key，前提是下游真正支持该语义。</span></div>
         <div class="layer"><b>恢复中的 unknown</b><span>只有 ToolCallStarted 没有结果时，恢复写入 execution_interrupted，不自动重做；下一轮可以先查询上游。</span></div>
-        <div class="layer"><b>重复失败熔断</b><span>同一 session 内相同工具和规范化参数连续失败达到阈值时，阻止模型无效循环。它是 liveness/cost guard，不是权限策略。</span></div>
+        <div class="layer"><b>重复失败熔断与纠偏预警</b><span>同一 session 内相同工具和规范化参数连续失败时，先在倒数第二步追加 <code>CircuitWarning</code> 自纠偏提示，达到阈值后触发熔断阻止无效循环；MCP 路由器缓存已握手的会话与工具定义（5 分钟 TTL，异常自动失效）。</span></div>
       </div>
       <div class="callout"><strong>没有跨系统事务</strong>外部 API 成功和 transcript append 不能放进同一个 PostgreSQL 事务。要实现更强的业务语义，工具需要幂等写入、结果查询、outbox/inbox 或人工补偿中的至少一种。</div>
     </section>

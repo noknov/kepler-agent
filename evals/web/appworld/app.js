@@ -13,7 +13,9 @@ function duration(seconds) {
 }
 
 function renderSummary(data) {
-  element('identity').textContent = `${data.name} · ${data.model} · ${labels[data.status] || data.status}`;
+  const steps = data.max_steps === -1 ? '不限步数' : data.max_steps ? `最多 ${data.max_steps} 轮` : '';
+  const timeout = data.timeout_seconds ? `每题 ${duration(data.timeout_seconds)}` : '';
+  element('identity').textContent = [data.name, data.model, labels[data.status] || data.status, steps, timeout].filter(Boolean).join(' · ');
   element('done').textContent = `${data.finished} / ${data.total}`;
   element('passed').textContent = data.passed;
   element('errors').textContent = data.execution_errors;

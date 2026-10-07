@@ -111,6 +111,13 @@ def execute_agent(command: list[str], workspace: Path, env: dict, log: Path,
             "metrics": kepler_metrics(transcript), **terminal_event(transcript)}
 
 
+def parse_step_limit(value: str) -> int:
+    limit = int(value)
+    if limit != -1 and limit < 1:
+        raise argparse.ArgumentTypeError("max-steps must be positive, or -1 for unlimited")
+    return limit
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True, help="Prepared AppWorld data root outside agent workspaces")
@@ -123,10 +130,11 @@ def main() -> int:
     selection.add_argument("--all", action="store_true", help="Run every task in the selected official split")
     parser.add_argument("--model")
     parser.add_argument("--timeout-seconds", type=float, default=900)
-    parser.add_argument("--max-steps", type=int, default=100)
+    parser.add_argument("--max-steps", type=parse_step_limit, default=100,
+                        help="Maximum model rounds; -1 disables this limit while keeping the task timeout")
     args = parser.parse_args()
-    if args.tasks < 1 or args.timeout_seconds <= 0 or args.max_steps < 1:
-        parser.error("tasks, timeout-seconds and max-steps must be positive")
+    if args.tasks < 1 or args.timeout_seconds <= 0:
+        parser.error("tasks and timeout-seconds must be positive")
     args.root, args.binary_path, args.output = (p.resolve() for p in (args.root, args.binary_path, args.output))
     if not args.binary_path.is_file() or not os.access(args.binary_path, os.X_OK):
         parser.error("binary-path must be an executable native CLI")

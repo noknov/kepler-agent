@@ -1,7 +1,10 @@
 # Evaluation
 
-Use this directory to test evaluator mechanics and run attributable Agent
-experiments. It does not currently provide a verified end-to-end release gate.
+Use this directory for evaluator code, adapters, and wiring checks (`make eval-check`).
+This source repository provides only application and evaluator source code;
+concrete benchmark execution, CLI/service packaging, deployment, and result
+records belong in the sibling `kepler-agent-deploy` repository. It does not
+currently provide a verified end-to-end release gate.
 
 | Purpose | Entry | Evidence produced |
 | --- | --- | --- |
@@ -33,6 +36,11 @@ To evaluate a whole official split, use `--all` instead of `--tasks` or
 `--task-id`. Run `--split test_normal --all` and `--split test_challenge --all`
 in separate output directories for complete test coverage. Keep the model and
 budgets fixed across both runs; use only aggregate test results for reporting.
+
+The default step budget is 100 model rounds per task. `--max-steps -1` explicitly
+disables the step limit while retaining `--timeout-seconds` (default 900 seconds)
+and all other runtime budgets. Zero is not an unlimited value. Record changed
+budgets in a new output directory; do not mix them into an existing run.
 
 No provider tokens are needed beyond an existing Kepler login. Set
 `EVAL_KEPLER_API_URL` to override the gateway URL saved by that login.

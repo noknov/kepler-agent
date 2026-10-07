@@ -14,12 +14,12 @@ unchanged and return a recoverable tool error; discovery does not grant permissi
 |---|---|
 | `code-search` | Search source code at a freshly fetched current-branch remote ref by default, or use `source=working_tree` for an explicit checkout view |
 | `code-read_file` | Read a source file at a freshly fetched current-branch remote ref by default, or use `source=working_tree` for an explicit checkout view |
-| `repo-search` | Fetch a remote repo, pin a commit snapshot, search it |
+| `repo-search` | Fetch a remote repo, pin a commit snapshot, and search it (`query_mode=literal` by default, or `regex`) |
 | `repo-read_file` | Read a file from a pinned remote repo snapshot |
 | `git-fetch_ref` | Fetch a branch and return an immutable ref |
-| `git-search_ref` | Search code at a specific git ref |
+| `git-search_ref` | Search code at a specific git ref (`query_mode=literal` by default, or `regex`) |
 | `git-read_file_ref` | Read a file at a specific git ref |
-| `git-status` | Working tree and branch status |
+| `git-status` | Working tree and optional branch comparison status |
 | `git-log` | Recent commit history |
 | `git-show` | Commit diff or file at a revision |
 
@@ -56,9 +56,6 @@ selection. Workflow aliases can live in `PROMPT_DIR/runtime.json`.
 | `gcp-run_revisions` | List Cloud Run revisions |
 | `gcp-clusters` | List or describe GKE clusters |
 | `k8s-*` | Kubernetes API (pods, logs, events, rollout, metrics) — requires Google Cloud OAuth connection |
-| `diagnostics-incident_brief` | Structured incident summary |
-| `diagnostics-timeline` | Incident event timeline |
-| `diagnostics-evidence_board` | Structured evidence board |
 | `clickstack_connections` | Complete, compact inventory of the user's saved ClickStack instances and resolved targets |
 | `clickstack_tools` | Paginated tool names or the full schema of one selected remote tool |
 | `clickstack_call` | Execute an explicitly selected read-only tool on one connection instance |
@@ -76,7 +73,10 @@ Use `clickstack_tools` with the selected `instance_id` to list compact tool
 names, then supply an exact `tool_name` to retrieve only that tool's full
 description and schema. `clickstack_call` validates the current remote
 definition's `readOnlyHint` before execution. Both resolve credentials and
-targets using the call's authenticated user and selected instance.
+targets using the call's authenticated user and selected instance, and reuse a
+cached MCP router session (5-minute TTL, automatically invalidated on transport
+error) to avoid repeating `initialize` and `tools/list` handshakes on every
+tool call.
 
 For ClickHouse Cloud, each new App Home connection requires its own Service ID
 and OAuth authorization. Copy `x-service-id` from the corresponding service's
@@ -167,8 +167,27 @@ Final Slack answers append a concise evidence section when the turn used
 ## Luckin Coffee
 
 Luckin order management uses the official MCP endpoint and requires
-`LUCKIN_MCP_TOKEN` from <https://open.lkcoffee.com/mcp>. Order creation and
-cancellation require explicit confirmation.
+`LUCKIN_MCP_TOKEN` from <https://open.lkcoffee.com/mcp>. Order creation
+(`luckin-create_order`) enforces a turn-scoped preview fingerprint check: the
+model must call `luckin-preview_order` with matching store, delivery mode, and
+item SKUs/quantities in the same turn before creating an order. Order creation
+and cancellation also require explicit user confirmation.
+
+## Local Workspace Tools
+
+The local CLI and stdio `app-server` share one catalog (`packages/tools/local`):
+
+| Tool | Description |
+|---|---|
+| `read_file` | Read a file from the workspace or allowed read roots with line numbering |
+| `write_file` | Create or overwrite a file within the workspace |
+| `edit` | Replace exact or whitespace-normalized fuzzy line blocks in a workspace file |
+| `glob` | Match files by pattern within the workspace |
+| `grep` | Search file contents with `rg` |
+| `bash` | Execute an argv command inside the OS sandbox |
+| `memory` | Read, write, append, or clear durable cross-session project notes (`MEMORY.md`) |
+| `agent-explore` | Delegate bounded read-only exploration subtasks |
+| `update_plan` | Publish structured multi-step execution progress |
 
 ## Registration and policy
 
