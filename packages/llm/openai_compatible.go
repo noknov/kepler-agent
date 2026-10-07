@@ -114,7 +114,40 @@ func (u openAIUsage) toUsage() Usage {
 	}
 }
 
+type openAIDialect struct {
+	useMaxCompletionTokens bool
+	apiKeyHeader           string
+	thinkingFormatter      func(string) map[string]string
+}
+
+func resolveOpenAIDialect(provider string) openAIDialect {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "mimo":
+		return openAIDialect{
+			useMaxCompletionTokens: true,
+			apiKeyHeader:           "api-key",
+			thinkingFormatter:      genericThinkingParam,
+		}
+	case "deepseek":
+		return openAIDialect{
+			thinkingFormatter: deepseekThinkingParam,
+		}
+	default:
+		return openAIDialect{
+			thinkingFormatter: genericThinkingParam,
+		}
+	}
+}
+
+func genericThinkingParam(thinking string) map[string]string {
+	if thinking == "enabled" || thinking == "disabled" {
+		return map[string]string{"type": thinking}
+	}
+	return nil
+}
+
 func (c *OpenAICompatibleClient) chatBody(req Request) map[string]any {
+	dialect := resolveOpenAIDialect(c.providerName())
 	body := map[string]any{
 		"model":    req.Model,
 		"messages": req.Messages,
@@ -124,7 +157,11 @@ func (c *OpenAICompatibleClient) chatBody(req Request) map[string]any {
 		body["temperature"] = *req.Temperature
 	}
 	if req.MaxTokens > 0 {
-		body["max_tokens"] = req.MaxTokens
+		if dialect.useMaxCompletionTokens {
+			body["max_completion_tokens"] = req.MaxTokens
+		} else {
+			body["max_tokens"] = req.MaxTokens
+		}
 	}
 	if len(req.Tools) == 0 {
 		delete(body, "tools")
@@ -134,24 +171,10 @@ func (c *OpenAICompatibleClient) chatBody(req Request) map[string]any {
 			body["tool_choice"] = req.ToolChoice
 		}
 	}
-	if c.providerName() == "mimo" {
-		delete(body, "max_tokens")
-		if req.MaxTokens > 0 {
-			body["max_completion_tokens"] = req.MaxTokens
-		}
-		if req.Thinking == "enabled" || req.Thinking == "disabled" {
-			body["thinking"] = map[string]string{"type": req.Thinking}
-		}
-		return body
-	}
-	if c.providerName() == "deepseek" {
-		if thinking := deepseekThinkingParam(req.Thinking); thinking != nil {
+	if dialect.thinkingFormatter != nil {
+		if thinking := dialect.thinkingFormatter(req.Thinking); thinking != nil {
 			body["thinking"] = thinking
 		}
-		return body
-	}
-	if req.Thinking == "enabled" || req.Thinking == "disabled" {
-		body["thinking"] = map[string]string{"type": req.Thinking}
 	}
 	return body
 }
@@ -401,13 +424,13 @@ func completedOpenAICompatibleFinishReason(reason string, message Message) strin
 }
 
 func (c *OpenAICompatibleClient) setHeaders(httpReq *http.Request, metadata map[string]string) {
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	if hasBearerPrefix(c.apiKey) {
+	dialect := resolveOpenAIDialect(c.providerName())
+	if dialect.apiKeyHeader != "" {
+		httpReq.Header.Set(dialect.apiKeyHeader, bearerTokenValue(c.apiKey))
+	} else if hasBearerPrefix(c.apiKey) {
 		httpReq.Header.Set("Authorization", c.apiKey)
-	}
-	if c.providerName() == "mimo" {
-		httpReq.Header.Del("Authorization")
-		httpReq.Header.Set("api-key", bearerTokenValue(c.apiKey))
+	} else {
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	setOpenCodeSessionHeader(httpReq, c.providerName(), metadata)

@@ -27,6 +27,7 @@ type Config struct {
 	APIKey                 string
 	AnthropicFlavor        string
 	Timeout                time.Duration
+	OutputTokens           int
 }
 
 // Client is the sole wire-to-canonical model adapter used by every profile.
@@ -213,7 +214,7 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 		return model.Response{}, err
 	}
 	if len(message.ToolCalls()) > 0 {
-		message = toolCallOnlyMessage(message)
+		message = toolCallStepMessage(message)
 	}
 	message.Phase = response.Message.Phase
 	reason := finishReason(response.FinishReason)
@@ -318,13 +319,22 @@ func normalizeSchemaMap(items map[string]any) {
 	}
 }
 
-// toolCallOnlyMessage prevents process narration attached to a tool request
-// from becoming user-visible output or future conversation context. This is a
-// structural distinction in the provider response, not a text classification.
-func toolCallOnlyMessage(message model.Message) model.Message {
+// toolCallStepMessage converts process narration attached to a tool request
+// into ContentReasoning so final-answer extractors (Message.Text()) ignore
+// intermediate commentary while subsequent model turns still retain the
+// reasoning context via ReasoningContent.
+func toolCallStepMessage(message model.Message) model.Message {
 	content := make([]model.Content, 0, len(message.Content))
 	for _, block := range message.Content {
-		if block.Type == model.ContentToolCall {
+		switch block.Type {
+		case model.ContentText:
+			if strings.TrimSpace(block.Text) != "" {
+				content = append(content, model.Content{
+					Type: model.ContentReasoning,
+					Text: block.Text,
+				})
+			}
+		case model.ContentReasoning, model.ContentToolCall:
 			content = append(content, block)
 		}
 	}
@@ -464,7 +474,7 @@ func toModelError(err error) error {
 		return &model.Error{Kind: model.ErrorTransient, Message: err.Error(), Retryable: true, Cause: err}
 	}
 	var emptyErr llm.EmptyResponseError
-	if errors.As(err, &emptyErr) && emptyErr.Provider == "qoder" {
+	if errors.As(err, &emptyErr) && (emptyErr.Retryable || emptyErr.Provider == "qoder") {
 		return &model.Error{Kind: model.ErrorProtocol, Message: err.Error(), Retryable: true, Cause: err}
 	}
 	var protocolErr llm.ProtocolError
@@ -476,6 +486,8 @@ func toModelError(err error) error {
 		kind := model.ErrorInvalid
 		retryable := providerErr.Retryable()
 		switch {
+		case llm.ContextLimitBody(providerErr.Body):
+			kind, retryable = model.ErrorContextLimit, false
 		case llm.ContentPolicyBody(providerErr.Body):
 			kind, retryable = model.ErrorContentPolicy, false
 		case providerErr.StatusCode == 401 || providerErr.StatusCode == 403:

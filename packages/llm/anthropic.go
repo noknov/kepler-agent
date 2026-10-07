@@ -356,14 +356,15 @@ type anthropicMessage struct {
 }
 
 type anthropicBlock struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text,omitempty"`
-	Source    any             `json:"source,omitempty"`
-	ID        string          `json:"id,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	Input     json.RawMessage `json:"input,omitempty"`
-	ToolUseID string          `json:"tool_use_id,omitempty"`
-	Content   string          `json:"content,omitempty"`
+	Type         string          `json:"type"`
+	Text         string          `json:"text,omitempty"`
+	Source       any             `json:"source,omitempty"`
+	ID           string          `json:"id,omitempty"`
+	Name         string          `json:"name,omitempty"`
+	Input        json.RawMessage `json:"input,omitempty"`
+	ToolUseID    string          `json:"tool_use_id,omitempty"`
+	Content      string          `json:"content,omitempty"`
+	CacheControl *cacheControl   `json:"cache_control,omitempty"`
 }
 
 type cacheControl struct {
@@ -529,7 +530,22 @@ func anthropicMessages(messages []Message) []anthropicMessage {
 			}
 		}
 	}
+	markAnthropicConversationCacheBreakpoint(out)
 	return out
+}
+
+// markAnthropicConversationCacheBreakpoint places an ephemeral cache breakpoint
+// on the last block of the most recent user/tool turn so multi-step agent loops
+// reuse the encoded prefix across consecutive tool iterations.
+func markAnthropicConversationCacheBreakpoint(messages []anthropicMessage) {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != "user" || len(messages[i].Content) == 0 {
+			continue
+		}
+		last := len(messages[i].Content) - 1
+		messages[i].Content[last].CacheControl = &cacheControl{Type: "ephemeral"}
+		return
+	}
 }
 
 func anthropicContentBlocks(msg Message) []anthropicBlock {

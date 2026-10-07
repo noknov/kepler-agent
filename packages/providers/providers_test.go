@@ -335,6 +335,10 @@ func TestClientRoutesToolStepTextToCommentary(t *testing.T) {
 	if got := response.Message.Text(); got != "" {
 		t.Fatalf("durable text = %q", got)
 	}
+	wire := toWireMessage(response.Message)
+	if wire.ReasoningContent != "Let me inspect this." {
+		t.Fatalf("ReasoningContent = %q, want preserved tool-step narration", wire.ReasoningContent)
+	}
 }
 
 func TestFactoryRejectsUnknownProtocol(t *testing.T) {

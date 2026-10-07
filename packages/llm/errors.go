@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -28,6 +29,7 @@ type EmptyResponseError struct {
 	ContentTypes []string
 	PromptTokens int
 	OutputTokens int
+	Retryable    bool
 }
 
 func (e EmptyResponseError) Error() string {
@@ -88,11 +90,79 @@ func isRetryableStatus(status int) bool {
 }
 
 // ContentPolicyBody reports whether an upstream error body is a content safety
-// rejection rather than a malformed request. Providers expose no structured
-// field for this, so the body is the only signal. DeepSeek returns
-// "Content Exists Risk" with HTTP 400.
+// rejection rather than a malformed request. It inspects structured JSON error
+// codes/types first and falls back to known provider safety phrases.
 func ContentPolicyBody(body string) bool {
-	return strings.Contains(strings.ToLower(body), "content exists risk")
+	trimmed := strings.TrimSpace(body)
+	if trimmed == "" {
+		return false
+	}
+	var envelope struct {
+		Error struct {
+			Code    string `json:"code"`
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(trimmed), &envelope) == nil {
+		code := strings.ToLower(strings.TrimSpace(envelope.Error.Code))
+		errType := strings.ToLower(strings.TrimSpace(envelope.Error.Type))
+		if code == "content_filter" || code == "content_policy_violation" || code == "data_inspection_failed" ||
+			errType == "content_policy_violation" || errType == "content_filter" {
+			return true
+		}
+	}
+	lower := strings.ToLower(trimmed)
+	for _, phrase := range []string{
+		"content exists risk",
+		"content_policy_violation",
+		"content management policy",
+		"safety system",
+		"inappropriate content",
+	} {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+// ContextLimitBody reports whether an upstream error indicates that the prompt
+// or context window exceeded the model's maximum token capacity.
+func ContextLimitBody(body string) bool {
+	trimmed := strings.TrimSpace(body)
+	if trimmed == "" {
+		return false
+	}
+	var envelope struct {
+		Error struct {
+			Code    string `json:"code"`
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(trimmed), &envelope) == nil {
+		code := strings.ToLower(strings.TrimSpace(envelope.Error.Code))
+		errType := strings.ToLower(strings.TrimSpace(envelope.Error.Type))
+		if code == "context_length_exceeded" || code == "string_above_max_length" ||
+			errType == "context_length_exceeded" {
+			return true
+		}
+	}
+	lower := strings.ToLower(trimmed)
+	for _, phrase := range []string{
+		"context_length_exceeded",
+		"maximum context length",
+		"prompt is too long",
+		"input is too long",
+		"exceeds the model's maximum context",
+		"request_too_large",
+	} {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func NewProviderError(provider string, statusCode int, body string) ProviderError {

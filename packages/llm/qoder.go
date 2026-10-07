@@ -558,7 +558,7 @@ func readQoderStream(r io.Reader, h StreamHandler) (Response, error) {
 		result.Message.ToolCalls = append(result.Message.ToolCalls, call)
 	}
 	if len(result.Message.ToolCalls) == 0 && strings.TrimSpace(result.Message.Content) == "" {
-		return Response{}, EmptyResponseError{Provider: "qoder", StopReason: result.FinishReason}
+		return Response{}, EmptyResponseError{Provider: "qoder", StopReason: result.FinishReason, Retryable: true}
 	}
 	if result.FinishReason == "tool_calls" && len(result.Message.ToolCalls) == 0 {
 		return Response{}, fmt.Errorf("qoder completed tool inference without structured tool calls")
