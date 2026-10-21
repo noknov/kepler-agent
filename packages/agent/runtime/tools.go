@@ -254,18 +254,8 @@ func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, pr
 		if entry.result == nil {
 			return toolOutcome{}, errors.New("tool execution produced no result")
 		}
-		if entry.result.Usage != nil {
-			addUsage(&usage, *entry.result.Usage)
-		} else if entry.result.Metadata != nil {
-			if value, ok := entry.result.Metadata["usage"]; ok {
-				// Accept legacy results after a JSON round trip as well as live Go values.
-				if raw, err := json.Marshal(value); err == nil {
-					var childUsage model.Usage
-					if json.Unmarshal(raw, &childUsage) == nil {
-						addUsage(&usage, childUsage)
-					}
-				}
-			}
+		if childUsage := toolResultUsage(*entry.result); childUsage != nil {
+			addUsage(&usage, *childUsage)
 		}
 		eventType := transcript.ToolCallCompleted
 		if entry.result.IsError {

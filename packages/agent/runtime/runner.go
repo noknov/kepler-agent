@@ -22,7 +22,6 @@ var errPendingApproval = errors.New("tool call is waiting for approval")
 var runtimeTracer = otel.Tracer("github.com/noknov/kepler-agent/agent/runtime")
 
 func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult TurnResult, turnErr error) {
-	ctx = model.WithBudget(ctx, r.config.MaxTotalTokens)
 	if request.SessionID == "" {
 		request.SessionID = r.deps.IDs.New("ses")
 	}
@@ -81,6 +80,21 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 	if replayed, replayErr, ok := completedTurn(events, request.TurnID); ok {
 		return replayed, replayErr
 	}
+	progress, err := recoverTurnProgress(events, request.TurnID, r.config)
+	if err != nil {
+		return result, err
+	}
+	result.Steps, result.Usage = progress.Steps, progress.Usage
+	ctx = model.WithBudgetState(ctx, r.config.MaxTotalTokens, progress.Budget, func(recordCtx context.Context, state model.BudgetState) error {
+		cleanupCtx, cancel := r.cleanupContext(recordCtx)
+		defer cancel()
+		metadata, err := json.Marshal(state)
+		if err != nil {
+			return err
+		}
+		_, err = r.record(cleanupCtx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.TokenBudgetUpdated, Metadata: metadata})
+		return err
+	})
 	// A replay retains its original authorization and reset-generation scope;
 	// refreshing transient profile state must not authorize an old pending write.
 	for _, event := range events {
@@ -206,7 +220,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 		_, err = r.deps.Projector.Project(admissionCtx, ProjectRequest{Events: candidate, System: system, Tools: proposed.Definitions})
 		return err
 	})
-	for step := 1; r.config.MaxSteps == UnlimitedSteps || step <= r.config.MaxSteps; step++ {
+	for step := result.Steps + 1; r.config.MaxSteps == UnlimitedSteps || step <= r.config.MaxSteps; step++ {
 		result.Steps = step
 		if err := r.recordStepStarted(ctx, request, step); err != nil {
 			return r.failTurn(ctx, result, err)

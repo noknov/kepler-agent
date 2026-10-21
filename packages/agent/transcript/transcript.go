@@ -38,6 +38,7 @@ const (
 	ModelRequestUnknown    EventType = "model_request_unknown"
 	ModelFailed            EventType = "model_failed"
 	ModelCompleted         EventType = "model_completed"
+	TokenBudgetUpdated     EventType = "token_budget_updated"
 	ModelStreamed          EventType = "model_streamed"
 	AssistantMessage       EventType = "assistant_message"
 	PlanUpdated            EventType = "plan_updated"

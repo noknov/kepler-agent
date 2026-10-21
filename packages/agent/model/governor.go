@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"sync"
 )
 
@@ -48,11 +49,13 @@ func (c *governedClient) Generate(ctx context.Context, request Request, sink Eve
 	}
 	budget, _ := ctx.Value(budgetKey{}).(*Budget)
 	reservation := int64(request.InputTokenEstimate + request.MaxOutputTokens)
-	if err := budget.reserve(reservation); err != nil {
+	if err := budget.reserve(ctx, reservation); err != nil {
 		return Response{}, err
 	}
 	response, err := c.Client.Generate(ctx, request, sink)
-	budget.settle(reservation, response.Usage, err)
+	if settleErr := budget.settle(ctx, reservation, response.Usage, err); settleErr != nil {
+		return response, settleErr
+	}
 	return response, err
 }
 
@@ -60,44 +63,80 @@ type budgetKey struct{}
 
 // Budget is inherited through context by every child. Reservations prevent
 // simultaneous workers from spending the same remaining token allowance.
+// BudgetState is persisted at reservation and settlement boundaries. On recovery,
+// unsettled reservations are conservatively charged because provider usage is unknown.
+type BudgetState struct {
+	Spent    int64 `json:"spent"`
+	Reserved int64 `json:"reserved"`
+}
+
 type Budget struct {
-	mu                     sync.Mutex
-	limit, spent, reserved int64
+	mu     sync.Mutex
+	limit  int64
+	state  BudgetState
+	record func(context.Context, BudgetState) error
 }
 
 func WithBudget(ctx context.Context, limit int64) context.Context {
+	return WithBudgetState(ctx, limit, BudgetState{}, nil)
+}
+
+// WithBudgetState installs one ledger for the parent turn. Children inherit it;
+// they cannot replace its limit or reset its recovered consumption.
+func WithBudgetState(ctx context.Context, limit int64, state BudgetState, record func(context.Context, BudgetState) error) context.Context {
 	if limit <= 0 || ctx.Value(budgetKey{}) != nil {
 		return ctx
 	}
-	return context.WithValue(ctx, budgetKey{}, &Budget{limit: limit})
+	state.Spent += state.Reserved
+	state.Reserved = 0
+	return context.WithValue(ctx, budgetKey{}, &Budget{limit: limit, state: state, record: record})
 }
 
-func (b *Budget) reserve(tokens int64) error {
+func (b *Budget) reserve(ctx context.Context, tokens int64) error {
 	if b == nil {
 		return nil
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if tokens <= 0 || b.spent+b.reserved+tokens > b.limit {
+	if tokens <= 0 || b.state.Spent+b.state.Reserved+tokens > b.limit {
 		return &Error{Kind: ErrorBudgetExhausted, Message: "shared parent/worker token budget exhausted"}
 	}
-	b.reserved += tokens
-	return nil
+	next := b.state
+	next.Reserved += tokens
+	return b.commit(ctx, next)
 }
 
-func (b *Budget) settle(reservation int64, usage Usage, err error) {
+func (b *Budget) settle(ctx context.Context, reservation int64, usage Usage, err error) error {
 	if b == nil {
-		return
+		return nil
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.reserved -= reservation
-	used := reservation // Unknown/failed requests may have consumed provider tokens.
+	used := reservation
 	if err == nil && usage.Known() {
-		used = usage.InputTokens + usage.OutputTokens
-		if !usage.CacheTokensIncludedInInput {
-			used += usage.CacheReadTokens + usage.CacheCreatedTokens
+		used = UsageTokens(usage)
+	}
+	next := b.state
+	next.Reserved -= reservation
+	next.Spent += used
+	return b.commit(ctx, next)
+}
+
+func (b *Budget) commit(ctx context.Context, next BudgetState) error {
+	if b.record != nil {
+		if err := b.record(ctx, next); err != nil {
+			return fmt.Errorf("persist model token budget: %w", err)
 		}
 	}
-	b.spent += used
+	b.state = next
+	return nil
+}
+
+// UsageTokens normalizes provider cache accounting before charging an allowance.
+func UsageTokens(usage Usage) int64 {
+	used := usage.InputTokens + usage.OutputTokens
+	if !usage.CacheTokensIncludedInInput {
+		used += usage.CacheReadTokens + usage.CacheCreatedTokens
+	}
+	return used
 }

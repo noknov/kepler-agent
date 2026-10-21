@@ -6,6 +6,9 @@ It reserves estimated input plus maximum output across a parent turn and its
 workers; reported usage releases unused reservations. Local TOML uses
 `max_total_tokens`. Failed requests with unknown usage retain their reservation.
 This is a conservative runtime allowance, not an exact billing limit.
+Reservations and settlements are persisted in the parent turn's transcript,
+including delegated and compactor requests. Recovery restores cumulative steps
+and usage; reservations without a durable settlement remain fully charged.
 
 Hosted explicit memory requires the additive tables in `schema/postgres.sql`.
 Add the exact `memory` tool name to `AGENT_ALLOWED_WRITE_TOOLS` to permit memory
