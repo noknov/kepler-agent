@@ -111,8 +111,19 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 		entries = append(entries, *base)
 	}
 	fallbackTurn := 0
+	// An unresolved approval is a known non-execution state, not a missing
+	// tool result. Project it explicitly without settling the durable approval.
+	resolvedCalls := make(map[string]bool)
+	for _, event := range events {
+		if (event.Type == transcript.ToolCallCompleted || event.Type == transcript.ToolCallFailed) && event.ToolCall != nil && event.ToolResult != nil {
+			resolvedCalls[event.TurnID+"\x00"+event.ToolCall.ID] = true
+		}
+	}
 	for _, event := range events {
 		if event.Sequence <= baseSequence && event.Sequence != currentInput {
+			continue
+		}
+		if event.Type == transcript.ApprovalRequested && event.ToolCall != nil && resolvedCalls[event.TurnID+"\x00"+event.ToolCall.ID] {
 			continue
 		}
 		message, ok := eventMessage(event)
@@ -294,6 +305,11 @@ func eventMessage(event transcript.Event) (model.Message, bool) {
 	case transcript.UserInput, transcript.SteeringInput, transcript.AssistantMessage:
 		if event.Message != nil {
 			return *event.Message, true
+		}
+	case transcript.ApprovalRequested:
+		if event.ToolCall != nil {
+			result := &model.ToolResult{CallID: event.ToolCall.ID, Name: event.ToolCall.Name, IsError: true, Content: []model.Content{{Type: model.ContentText, Text: "Execution is awaiting user approval. This tool call has not run; do not assume success or repeat the action while approval is pending."}}}
+			return model.Message{Role: model.RoleTool, Content: []model.Content{{Type: model.ContentToolResult, ToolResult: result}}}, true
 		}
 	case transcript.ToolCallCompleted, transcript.ToolCallFailed:
 		if event.ToolCall != nil && event.ToolResult != nil {

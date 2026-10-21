@@ -570,3 +570,32 @@ func TestImageCapabilityControlsSlackInputWithoutDroppingOnLookupFailure(t *test
 		})
 	}
 }
+
+func TestQueuedApprovalUsesTheDequeuedActorAndDecision(t *testing.T) {
+	ctx := context.Background()
+	store := transcript.NewMemoryStore()
+	call := tool.Call{ID: "pending", Name: "write", Scope: tool.Scope{UserID: "U1"}, Arguments: json.RawMessage(`{}`)}
+	_, err := store.Append(ctx, transcript.Event{SessionID: "s", TurnID: "original", Type: transcript.ApprovalRequested, ToolCall: &call})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, _ := tool.NewCatalog()
+	client := &replyModel{}
+	runner, err := agentruntime.New(agentruntime.Config{}, agentruntime.Dependencies{Model: client, Tools: catalog, Transcript: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := New(hosted.Agent{Runtime: runner}, &fakeMessenger{}, safety.PromptPolicy{}, safety.Redactor{}, nil)
+	service.Inputs = &memoryInputs{}
+	queued := slackconversation.Request{EventID: "decision", UserID: "U2", Channel: "C1", ThreadTS: "T1", Approval: &slackconversation.ApprovalRequest{TurnID: "original", ToolCallID: "pending", Approved: false}}
+	if err := service.persistInput(ctx, "s", sessioninput.KindQueue, queued); err != nil {
+		t.Fatal(err)
+	}
+	err = service.run(ctx, "s", slackconversation.Request{EventID: "incoming", UserID: "U1", Channel: "C1", ThreadTS: "T1", Text: "continue"})
+	if err == nil || !strings.Contains(err.Error(), "only the requesting user") {
+		t.Fatalf("queued approval was lost: %v", err)
+	}
+	if client.request != nil {
+		t.Fatal("model ran before resolving the queued approval")
+	}
+}

@@ -198,10 +198,6 @@ func (s *Service) handle(ctx context.Context, req slackconversation.Request) (bo
 }
 
 func (s *Service) run(eventCtx context.Context, sessionID string, req slackconversation.Request) (runErr error) {
-	return s.runWithApproval(eventCtx, sessionID, req, req.Approval)
-}
-
-func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, req slackconversation.Request, approval *slackconversation.ApprovalRequest) (runErr error) {
 	base := eventCtx
 	if base == nil {
 		base = s.Lifecycle
@@ -297,7 +293,7 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 		// Cover early failures and retry a failed terminal-state update here.
 		stream.setSessionStatus(finalSessionStatus)
 	}()
-	if approval != nil {
+	if approval := req.Approval; approval != nil {
 		if err := s.Agent.Runtime.ResolveApproval(runCtx, sessionID, agentruntime.ApprovalResolution{
 			TurnID: approval.TurnID, ToolCallID: approval.ToolCallID, Approved: approval.Approved, UserID: req.UserID,
 		}); err != nil {
