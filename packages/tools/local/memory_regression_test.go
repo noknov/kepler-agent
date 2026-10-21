@@ -70,12 +70,16 @@ func TestMemoryFileLockCoordinatesProcesses(t *testing.T) {
 }
 
 func TestReadFileUTF8BoundaryDoesNotRejectValidChinese(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "utf8.txt")
+	workspace, err := local.NewWorkspace(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = workspace.Close() })
+	path := filepath.Join(workspace.Root, "utf8.txt")
 	if err := os.WriteFile(path, []byte("abc你好xyz"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	reader := ReadFile{Workspace: local.Workspace{Root: root}}
+	reader := ReadFile{Workspace: workspace}
 	text, truncated, err := reader.readOne("utf8.txt", 0, 7)
 	if err != nil || !truncated || text != "abc你" {
 		t.Fatalf("read=%q truncated=%v err=%v", text, truncated, err)
