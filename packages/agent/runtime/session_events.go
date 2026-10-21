@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 )
 
@@ -15,9 +16,10 @@ type sessionEvents struct {
 }
 
 func (s *sessionEvents) append(event transcript.Event) {
+	// Idempotent Store.Append may return an existing event.
 	if len(s.events) > 0 && event.Sequence <= s.events[len(s.events)-1].Sequence {
 		return
-	} // Idempotent Store.Append may return an existing event.
+	}
 	s.events = append(s.events, event)
 	switch event.Type {
 	case transcript.UserInput, transcript.SteeringInput, transcript.AssistantMessage, transcript.ToolCallCompleted, transcript.ToolCallFailed, transcript.ApprovalRequested:
@@ -54,6 +56,7 @@ func (r *Runtime) setEventCache(sessionID string, events []transcript.Event) {
 	r.eventCache[sessionID] = state
 	r.eventMu.Unlock()
 }
+
 func (r *Runtime) clearEventCache(sessionID string) {
 	r.eventMu.Lock()
 	delete(r.eventCache, sessionID)
@@ -70,6 +73,7 @@ func (r *Runtime) turnEvents(ctx context.Context, sessionID string) ([]transcrip
 	r.eventMu.RUnlock()
 	return r.deps.Transcript.Load(ctx, sessionID, 0)
 }
+
 func (r *Runtime) contextEvents(ctx context.Context, sessionID string) ([]transcript.Event, error) {
 	r.eventMu.RLock()
 	if state := r.eventCache[sessionID]; state != nil {

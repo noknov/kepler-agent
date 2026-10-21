@@ -61,8 +61,6 @@ func (c *governedClient) Generate(ctx context.Context, request Request, sink Eve
 
 type budgetKey struct{}
 
-// Budget is inherited through context by every child. Reservations prevent
-// simultaneous workers from spending the same remaining token allowance.
 // BudgetState is persisted at reservation and settlement boundaries. On recovery,
 // unsettled reservations are conservatively charged because provider usage is unknown.
 type BudgetState struct {
@@ -70,6 +68,8 @@ type BudgetState struct {
 	Reserved int64 `json:"reserved"`
 }
 
+// Budget is inherited through context by every child. Reservations prevent
+// simultaneous workers from spending the same remaining token allowance.
 type Budget struct {
 	mu     sync.Mutex
 	limit  int64
