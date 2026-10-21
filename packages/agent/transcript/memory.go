@@ -74,3 +74,9 @@ func (s *MemoryStore) Load(_ context.Context, sessionID string, afterSequence ui
 	}
 	return append([]Event(nil), events[afterSequence:]...), nil
 }
+
+func (s *MemoryStore) LoadTurn(_ context.Context, sessionID, turnID string) ([]Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return TurnWindow(s.events[sessionID], turnID), nil
+}

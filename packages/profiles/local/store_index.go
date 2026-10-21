@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"golang.org/x/sys/unix"
 )
@@ -20,6 +21,7 @@ import (
 const maxCachedSessionIndexes = 64
 
 type eventLocation struct {
+	turnID   string
 	offset   int64
 	length   int
 	sequence uint64
@@ -33,11 +35,13 @@ type sessionIndex struct {
 }
 
 type indexData struct {
-	info     os.FileInfo
-	offset   int64
-	sequence uint64
-	entries  []eventLocation
-	byID     map[string]int
+	coverage     uint64
+	currentInput uint64
+	info         os.FileInfo
+	offset       int64
+	sequence     uint64
+	entries      []eventLocation
+	byID         map[string]int
 }
 
 type cachedIndex struct {
@@ -71,7 +75,14 @@ func (s *JSONLStore) sessionIndex(id string) *sessionIndex {
 	return entry.index
 }
 
-func (index *sessionIndex) add(id string, sequence uint64, offset int64, length int) {
+func (index *sessionIndex) add(event transcript.Event, offset int64, length int) {
+	id, sequence := event.ID, event.Sequence
+	if coverage := transcript.CheckpointCoverage(event); coverage > 0 {
+		index.coverage = coverage
+	}
+	if event.Type == transcript.UserInput || event.Type == transcript.SteeringInput {
+		index.currentInput = sequence
+	}
 	if index.byID == nil {
 		index.byID = make(map[string]int)
 	}
@@ -80,7 +91,7 @@ func (index *sessionIndex) add(id string, sequence uint64, offset int64, length 
 			index.byID[id] = len(index.entries)
 		}
 	}
-	index.entries = append(index.entries, eventLocation{offset, length, sequence})
+	index.entries = append(index.entries, eventLocation{turnID: event.TurnID, offset: offset, length: length, sequence: sequence})
 	index.offset, index.sequence = offset+int64(length), sequence
 }
 
@@ -114,8 +125,12 @@ func (index *sessionIndex) refresh(ctx context.Context, file *os.File) error {
 		complete := line[len(line)-1] == '\n'
 		trimmed := bytes.TrimSpace(line)
 		var header struct {
-			ID       string `json:"id"`
-			Sequence uint64 `json:"sequence"`
+			ID       string               `json:"id"`
+			TurnID   string               `json:"turn_id"`
+			Type     transcript.EventType `json:"type"`
+			Metadata json.RawMessage      `json:"metadata"`
+			Message  *json.RawMessage     `json:"message"`
+			Sequence uint64               `json:"sequence"`
 		}
 		if len(trimmed) > 0 {
 			if err := json.Unmarshal(trimmed, &header); err != nil {
@@ -146,7 +161,11 @@ func (index *sessionIndex) refresh(ctx context.Context, file *os.File) error {
 			line = append(line, '\n')
 		}
 		if len(trimmed) > 0 {
-			index.add(header.ID, header.Sequence, index.offset, len(line))
+			event := transcript.Event{ID: header.ID, Sequence: header.Sequence, TurnID: header.TurnID, Type: header.Type, Metadata: header.Metadata}
+			if header.Message != nil {
+				event.Message = &model.Message{}
+			}
+			index.add(event, index.offset, len(line))
 		} else {
 			index.offset += int64(len(line))
 		}

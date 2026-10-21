@@ -2,6 +2,8 @@ package local
 
 import (
 	"context"
+	"encoding/json"
+	"github.com/noknov/kepler-agent/packages/agent/model"
 	"os"
 	"path/filepath"
 	"testing"
@@ -79,5 +81,44 @@ func TestJSONLStoreAppendsForkBatchWithContiguousSequences(t *testing.T) {
 	loaded, err := store.Load(context.Background(), "child", 0)
 	if err != nil || len(loaded) != 2 {
 		t.Fatalf("loaded=%+v err=%v", loaded, err)
+	}
+}
+
+func TestJSONLTurnWindowPreservesAuditAndRebuildsIndex(t *testing.T) {
+	store, err := NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	input := model.TextMessage(model.RoleUser, "original task")
+	summary := model.TextMessage(model.RoleUser, "checkpoint")
+	for _, event := range []transcript.Event{
+		{Type: transcript.UserInput, Message: &input, TurnID: "old"},
+		{Type: transcript.ModelCompleted, TurnID: "old"},
+		{Type: transcript.CompactionCreated, Message: &summary, Metadata: json.RawMessage(`{"covers_through":2}`), TurnID: "old"},
+	} {
+		event.SessionID = "s"
+		if _, err := store.Append(ctx, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A fresh store must rebuild the same continuation metadata from disk.
+	reopened, err := NewJSONLStore(store.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reader := range []*JSONLStore{store, reopened} {
+		events, err := reader.LoadTurn(ctx, "s", "new")
+		if err != nil || len(events) != 2 || events[0].Sequence != 1 || events[1].Sequence != 3 {
+			t.Fatalf("window=%v err=%v", events, err)
+		}
+		full, err := reader.Load(ctx, "s", 0)
+		if err != nil || len(full) != 3 {
+			t.Fatalf("audit was changed: len=%d err=%v", len(full), err)
+		}
+		replay, err := reader.LoadTurn(ctx, "s", "old")
+		if err != nil || len(replay) != 3 {
+			t.Fatalf("replay accounting missing: len=%d err=%v", len(replay), err)
+		}
 	}
 }

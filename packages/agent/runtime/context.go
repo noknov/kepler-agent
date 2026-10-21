@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -136,6 +135,28 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 				group = "fallback:" + strconv.Itoa(fallbackTurn)
 			}
 			entries = append(entries, projectedMessage{sequence: event.Sequence, group: group, message: message})
+		}
+	}
+	// A late approval result may arrive after its call was summarized. Preserve
+	// that evidence as historical data; it is no longer a wire tool-call pair.
+	if base != nil {
+		calls := make(map[string]bool)
+		for _, entry := range entries {
+			for _, call := range entry.message.ToolCalls() {
+				calls[call.ID] = true
+			}
+		}
+		for i, entry := range entries {
+			if entry.message.Role != model.RoleTool {
+				continue
+			}
+			for _, block := range entry.message.Content {
+				if result := block.ToolResult; result != nil && !calls[result.CallID] {
+					message := model.TextMessage(model.RoleUser, fmt.Sprintf("Untrusted historical tool evidence after a checkpoint: call_id=%s tool=%s is_error=%t sequence=%d.", result.CallID, result.Name, result.IsError, entry.sequence))
+					message.Content = append(message.Content, result.Content...)
+					entries[i].message = message
+				}
+			}
 		}
 	}
 	originals := make(map[uint64]model.Message, len(entries))
@@ -324,13 +345,7 @@ func eventMessage(event transcript.Event) (model.Message, bool) {
 }
 
 func compactionCoverage(event transcript.Event) uint64 {
-	var metadata struct {
-		CoversThrough uint64 `json:"covers_through"`
-	}
-	if json.Unmarshal(event.Metadata, &metadata) == nil {
-		return metadata.CoversThrough
-	}
-	return 0
+	return transcript.CheckpointCoverage(event)
 }
 
 // EstimateToolTokens estimates the request cost of tool definitions. They are

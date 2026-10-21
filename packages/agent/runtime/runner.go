@@ -71,7 +71,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 	defer r.deps.Tools.EndTurn(request.SessionID, request.TurnID)
 
 	result := TurnResult{SessionID: request.SessionID, TurnID: request.TurnID}
-	events, err := r.deps.Transcript.Load(ctx, request.SessionID, 0)
+	events, err := r.loadTurn(ctx, request.SessionID, request.TurnID)
 	if err != nil {
 		return result, err
 	}
@@ -203,7 +203,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 	request.Scope.Values = values
 	system := model.TextMessage(model.RoleSystem, composition.Content)
 	ctx = tool.WithActivationAdmission(ctx, func(admissionCtx context.Context, proposed tool.ActivationRequest) error {
-		events, err := r.turnEvents(admissionCtx, request.SessionID)
+		events, err := r.contextEvents(admissionCtx, request.SessionID)
 		if err != nil {
 			return err
 		}
@@ -500,7 +500,7 @@ func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, syste
 }
 
 func (r *Runtime) projectContextOnce(ctx context.Context, request TurnRequest, system model.Message) (Projection, error) {
-	events, err := r.turnEvents(ctx, request.SessionID)
+	events, err := r.contextEvents(ctx, request.SessionID)
 	if err != nil {
 		return Projection{}, err
 	}
@@ -568,7 +568,7 @@ func (r *Runtime) projectContextOnce(ctx context.Context, request TurnRequest, s
 	}); err != nil {
 		return Projection{}, err
 	}
-	events, err = r.turnEvents(ctx, request.SessionID)
+	events, err = r.contextEvents(ctx, request.SessionID)
 	if err != nil {
 		return Projection{}, err
 	}
@@ -682,6 +682,13 @@ func (r *Runtime) generateWithTools(ctx context.Context, turn TurnRequest, messa
 }
 
 func (r *Runtime) nextModelRequestID(ctx context.Context, turn TurnRequest) (string, error) {
+	r.eventMu.RLock()
+	if cached := r.eventCache[turn.SessionID]; cached != nil {
+		next := len(cached.requests[turn.TurnID]) + 1
+		r.eventMu.RUnlock()
+		return fmt.Sprintf("%s:model:%d", turn.TurnID, next), nil
+	}
+	r.eventMu.RUnlock()
 	events, err := r.turnEvents(ctx, turn.SessionID)
 	if err != nil {
 		return "", err
@@ -873,7 +880,7 @@ func (r *Runtime) record(ctx context.Context, event transcript.Event) (transcrip
 	if err == nil {
 		r.eventMu.Lock()
 		if cached, ok := r.eventCache[event.SessionID]; ok {
-			r.eventCache[event.SessionID] = append(cached, stored)
+			cached.append(stored)
 		}
 		r.eventMu.Unlock()
 	}
@@ -881,31 +888,6 @@ func (r *Runtime) record(ctx context.Context, event transcript.Event) (transcrip
 		r.emit(ctx, stored)
 	}
 	return stored, err
-}
-
-func (r *Runtime) setEventCache(sessionID string, events []transcript.Event) {
-	r.eventMu.Lock()
-	r.eventCache[sessionID] = append([]transcript.Event(nil), events...)
-	r.eventMu.Unlock()
-}
-
-func (r *Runtime) clearEventCache(sessionID string) {
-	r.eventMu.Lock()
-	delete(r.eventCache, sessionID)
-	r.eventMu.Unlock()
-}
-
-func (r *Runtime) turnEvents(ctx context.Context, sessionID string) ([]transcript.Event, error) {
-	r.eventMu.RLock()
-	events, ok := r.eventCache[sessionID]
-	if ok {
-		events = append([]transcript.Event(nil), events...)
-	}
-	r.eventMu.RUnlock()
-	if ok {
-		return events, nil
-	}
-	return r.deps.Transcript.Load(ctx, sessionID, 0)
 }
 
 func (r *Runtime) emit(ctx context.Context, event transcript.Event) {

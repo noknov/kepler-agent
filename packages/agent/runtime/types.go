@@ -139,7 +139,7 @@ type Runtime struct {
 	lockMu     sync.Mutex
 	locks      map[string]*sessionMutex
 	eventMu    sync.RWMutex
-	eventCache map[string][]transcript.Event
+	eventCache map[string]*sessionEvents
 	circuitMu  sync.Mutex
 	circuits   map[string]*circuitState
 }
@@ -191,7 +191,7 @@ func New(config Config, deps Dependencies) (*Runtime, error) {
 		config:     config,
 		deps:       deps,
 		locks:      make(map[string]*sessionMutex),
-		eventCache: make(map[string][]transcript.Event),
+		eventCache: make(map[string]*sessionEvents),
 		circuits:   make(map[string]*circuitState),
 	}, nil
 }

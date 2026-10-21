@@ -97,7 +97,7 @@ func (s *JSONLStore) Append(ctx context.Context, event transcript.Event) (transc
 	if err != nil {
 		return transcript.Event{}, err
 	}
-	index.add(event.ID, event.Sequence, index.offset, len(data))
+	index.add(event, index.offset, len(data))
 	index.info = info
 	return event, nil
 }
@@ -233,4 +233,28 @@ func (s *JSONLStore) openSession(ctx context.Context, sessionID string) (*os.Fil
 		return nil, nil, nil, err
 	}
 	return file, index, closeSession, nil
+}
+
+// LoadTurn decodes only indexed entries needed by a continuation or turn replay.
+func (s *JSONLStore) LoadTurn(ctx context.Context, sessionID, turnID string) ([]transcript.Event, error) {
+	file, index, closeSession, err := s.openSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer closeSession()
+	var events []transcript.Event
+	for _, location := range index.entries {
+		if location.sequence <= index.coverage && location.sequence != index.currentInput && location.turnID != turnID {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		event, err := readEvent(file, location)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, nil
 }

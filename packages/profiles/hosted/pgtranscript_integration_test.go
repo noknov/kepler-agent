@@ -3,6 +3,7 @@ package hosted
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -99,5 +100,48 @@ func TestIntegrationRunSinkRecoversInterruptedProjection(t *testing.T) {
 	}
 	if run.Status != "completed" || len(run.Steps) != 1 || run.Usage.TotalTokens != 11 || run.FinalHash == "" {
 		t.Fatalf("recovered run=%+v", run)
+	}
+}
+
+func TestIntegrationPGTranscriptCheckpointWindow(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	sessionID := "checkpoint-" + time.Now().UTC().Format("20060102150405.000000000")
+	defer func() { _, _ = pool.Exec(ctx, `DELETE FROM agent_transcript_events WHERE session_id=$1`, sessionID) }()
+	store := PGTranscript{Pool: pool}
+	input := model.TextMessage(model.RoleUser, "original task")
+	summary := model.TextMessage(model.RoleUser, "checkpoint")
+	for i, event := range []transcript.Event{
+		{TurnID: "old", Type: transcript.UserInput, Message: &input},
+		{TurnID: "old", Type: transcript.ModelCompleted},
+		{TurnID: "old", Type: transcript.CompactionCreated, Message: &summary, Metadata: json.RawMessage(`{"covers_through":2}`)},
+		{TurnID: "other", Type: transcript.CompactionCreated, Message: &summary, Metadata: json.RawMessage(`{"covers_through":999999999999999999999999}`)},
+	} {
+		event.SessionID = sessionID
+		event.ID = fmt.Sprintf("%s-%d", sessionID, i)
+		event.Timestamp = time.Now()
+		if _, err := store.Append(ctx, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err := store.LoadTurn(ctx, sessionID, "new")
+	if err != nil || len(events) != 3 || events[0].Sequence != 1 || events[1].Sequence != 3 {
+		t.Fatalf("window=%v err=%v", events, err)
+	}
+	replay, err := store.LoadTurn(ctx, sessionID, "old")
+	if err != nil || len(replay) != 4 {
+		t.Fatalf("replay len=%d err=%v", len(replay), err)
+	}
+	full, err := store.Load(ctx, sessionID, 0)
+	if err != nil || len(full) != 4 {
+		t.Fatalf("audit len=%d err=%v", len(full), err)
 	}
 }

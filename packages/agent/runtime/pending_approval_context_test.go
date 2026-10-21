@@ -6,6 +6,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
+	"strings"
 	"testing"
 )
 
@@ -46,5 +47,34 @@ func TestPendingApprovalProjectsOneNonExecutionResult(t *testing.T) {
 		if count != 1 {
 			t.Fatalf("resolved=%v results=%d", resolved, count)
 		}
+	}
+}
+
+func TestResolvedApprovalAfterCheckpointRemainsHistoricalEvidence(t *testing.T) {
+	summary := model.TextMessage(model.RoleUser, "Action is pending approval")
+	input := model.TextMessage(model.RoleUser, "continue")
+	call := tool.Call{ID: "summarized", Name: "write", Arguments: json.RawMessage(`{}`)}
+	result := tool.TextResult("User declined the pending action")
+	result.IsError = true
+	events := []transcript.Event{
+		{Sequence: 3, Type: transcript.CompactionCreated, Message: &summary, Metadata: json.RawMessage(`{"covers_through":2}`)},
+		{Sequence: 4, Type: transcript.UserInput, Message: &input},
+		{Sequence: 5, Type: transcript.ToolCallFailed, ToolCall: &call, ToolResult: &result},
+	}
+	projection, err := NewBoundedProjector(ContextConfig{MaxTokens: 4000}).Project(context.Background(), ProjectRequest{Events: events})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, message := range projection.Messages {
+		if message.Role == model.RoleTool {
+			t.Fatal("checkpoint produced an orphan wire tool result")
+		}
+		if message.Role == model.RoleUser && strings.Contains(message.Text(), "User declined") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("recorded resolution disappeared after compaction")
 	}
 }
