@@ -168,11 +168,16 @@ func (c *Client) NotifyInitialized(ctx context.Context, sessionID string) error 
 
 // CallTool invokes a remote MCP tool and returns the formatted result text.
 func (c *Client) CallTool(ctx context.Context, s Session, name string, args json.RawMessage) (ToolResult, error) {
-	var arguments map[string]any
+	arguments := json.RawMessage(`{}`)
 	if len(args) > 0 {
-		if err := json.Unmarshal(args, &arguments); err != nil {
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(args, &object); err != nil {
 			return ToolResult{}, err
 		}
+		if object == nil {
+			return ToolResult{}, fmt.Errorf("MCP tool arguments must be an object")
+		}
+		arguments = args
 	}
 	result, _, err := c.rpc(ctx, s.ID, "tools/call", map[string]any{
 		"name":      name,

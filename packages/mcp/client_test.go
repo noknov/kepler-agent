@@ -185,3 +185,39 @@ func TestListToolsFollowsCursor(t *testing.T) {
 		t.Fatalf("tools=%+v err=%v", tools, err)
 	}
 }
+
+func TestCallToolPreservesJSONNumbers(t *testing.T) {
+	arguments := json.RawMessage(`{"id":9007199254740993,"nested":{"id":18446744073709551615,"decimal":1.234567890123456789},"items":[9007199254740995]}`)
+	called := false
+	client := &Client{URL: "https://example.test", HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		called = true
+		var body struct {
+			ID     json.RawMessage `json:"id"`
+			Params struct {
+				Arguments json.RawMessage `json:"arguments"`
+			} `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		var want, got bytes.Buffer
+		_ = json.Compact(&want, arguments)
+		_ = json.Compact(&got, body.Params.Arguments)
+		if got.String() != want.String() {
+			t.Fatalf("arguments changed: %s", got.String())
+		}
+		return httpResp(200, nil, `{"jsonrpc":"2.0","id":`+string(body.ID)+`,"result":{"content":[{"type":"text","text":"ok"}]}}`), nil
+	})}}
+	if _, err := client.CallTool(context.Background(), Session{}, "lookup", arguments); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("request was not sent")
+	}
+	for _, invalid := range []string{`null`, `[]`, `42`, `{"id":`} {
+		called = false
+		if _, err := client.CallTool(context.Background(), Session{}, "lookup", json.RawMessage(invalid)); err == nil || called {
+			t.Fatalf("invalid arguments sent: %s", invalid)
+		}
+	}
+}
