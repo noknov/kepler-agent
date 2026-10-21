@@ -18,7 +18,7 @@ inside an untrusted memory boundary. Preferences remain eligible across queries;
 project facts require a lexical match. Retrieval failures are logged and do not
 fail the conversation. This is explicit memory, not semantic/vector retrieval.
 
-App Home offers **Clear my memories** with a confirmation dialog. It deletes
+App Home offers **Clear Memories** with a confirmation dialog. It deletes
 only that actor's saved memories in the signed Slack workspace. Rules, skills,
 connections and conversation history are retained. A transactional generation
 increment rejects writes from turns that began before the reset; replay keeps

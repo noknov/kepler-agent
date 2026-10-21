@@ -189,7 +189,7 @@ func (h *Handler) resetUserMemory(ctx context.Context, interaction slackgateway.
 	} else {
 		err = h.Home.Memory.Reset(ctx, identity)
 	}
-	text := "Your saved memories have been cleared. Rules, skills and chat history are unchanged."
+	text := "Memories cleared."
 	if err != nil {
 		log.Printf("reset user memory failed: %v", err)
 		text = "Your memories could not be cleared. Please try again."

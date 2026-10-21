@@ -171,10 +171,10 @@ func (c Controller) View(userID string) map[string]any {
 		),
 	}
 	if c.Memory != nil {
-		button := actionButton("reset_user_memory", "Clear my memories", "", "danger")
+		button := actionButton("reset_user_memory", "Clear Memories", "", "danger")
 		plain := func(text string) map[string]any { return map[string]any{"type": "plain_text", "text": text} }
-		button["confirm"] = map[string]any{"title": plain("Clear saved memories?"), "text": plain("Clear your saved cross-conversation memories in this workspace? Rules, skills, connections and chat history are kept. New memories can be saved afterward."), "confirm": plain("Clear memories"), "deny": plain("Cancel"), "style": "danger"}
-		blocks = append(blocks, sectionBlock("*Saved memories*\nManage your cross-conversation preferences and facts. Clearing memories does not erase information already present in a chat."), actionsBlock(button))
+		button["confirm"] = map[string]any{"title": plain("Clear Memories?"), "text": plain("Clear saved memories in this workspace?"), "confirm": plain("Clear Memories"), "deny": plain("Cancel"), "style": "danger"}
+		blocks = append(blocks, actionsBlock(button))
 	}
 	blocks = append(blocks, c.connectionBlocks(userID)...)
 	blocks = append(blocks,

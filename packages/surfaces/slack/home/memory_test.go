@@ -15,7 +15,7 @@ func TestHomeMemoryResetIsConfirmedAndHasNoOwnerPayload(t *testing.T) {
 	view := Controller{Memory: resetMemoryStub{}}.View("U1")
 	data, _ := json.Marshal(view)
 	body := string(data)
-	if !strings.Contains(body, "reset_user_memory") || !strings.Contains(body, "Clear my memories") || !strings.Contains(body, "Clear saved memories?") || strings.Contains(body, `"value":"U1"`) {
+	if !strings.Contains(body, "reset_user_memory") || !strings.Contains(body, "Clear Memories") || !strings.Contains(body, "Clear Memories?") || strings.Contains(body, `"value":"U1"`) {
 		t.Fatalf("invalid memory control: %s", body)
 	}
 }

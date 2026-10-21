@@ -10,7 +10,7 @@ This is a conservative runtime allowance, not an exact billing limit.
 Hosted explicit memory requires the additive tables in `schema/postgres.sql`.
 Add the exact `memory` tool name to `AGENT_ALLOWED_WRITE_TOOLS` to permit memory
 mutations through the existing approval policy. Memory reads and the signed
-App Home **Clear my memories** control do not grant any server capability.
+App Home **Clear Memories** control do not grant any server capability.
 See [memory](long-term-memory.md) for identity, reset and rollout semantics.
 
 Choose the configuration owner before editing a value. A variable's existence
