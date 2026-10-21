@@ -12,6 +12,11 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 )
 
+// EventReader retrieves one historical event without loading the session tail.
+type EventReader interface {
+	ReadEvent(context.Context, string, uint64) (Event, error)
+}
+
 type EventType string
 
 const (

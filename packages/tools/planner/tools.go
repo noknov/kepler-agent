@@ -49,6 +49,7 @@ func (PlanTool) Descriptor() tool.Descriptor {
 			},
 		}),
 		tool.WithParallel(false),
+		tool.WithEffects(tool.EffectRead),
 	)
 }
 

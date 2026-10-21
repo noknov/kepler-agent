@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -22,6 +23,7 @@ var errPendingApproval = errors.New("tool call is waiting for approval")
 var runtimeTracer = otel.Tracer("github.com/noknov/kepler-agent/agent/runtime")
 
 func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult TurnResult, turnErr error) {
+	ctx = model.WithBudget(ctx, r.config.MaxTotalTokens)
 	if request.SessionID == "" {
 		request.SessionID = r.deps.IDs.New("ses")
 	}
@@ -79,6 +81,37 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 	defer r.clearEventCache(request.SessionID)
 	if replayed, replayErr, ok := completedTurn(events, request.TurnID); ok {
 		return replayed, replayErr
+	}
+	// A replay retains its original authorization and reset-generation scope;
+	// refreshing transient profile state must not authorize an old pending write.
+	for _, event := range events {
+		if event.TurnID != request.TurnID || event.Type != transcript.TurnStarted {
+			continue
+		}
+		if len(event.Metadata) == 0 {
+			continue
+		} // Legacy start events had no scope.
+		var original struct {
+			UserID    string            `json:"user_id"`
+			Workspace string            `json:"workspace"`
+			Scope     map[string]string `json:"scope"`
+		}
+		if err := json.Unmarshal(event.Metadata, &original); err != nil {
+			return result, err
+		}
+		if original.UserID != "" && request.Scope.UserID != "" && original.UserID != request.Scope.UserID {
+			return result, fmt.Errorf("turn belongs to a different user")
+		}
+		if original.Scope != nil {
+			request.Scope.Values = original.Scope
+		}
+		if original.UserID != "" {
+			request.Scope.UserID = original.UserID
+		}
+		if original.Workspace != "" {
+			request.Scope.Workspace = original.Workspace
+		}
+		break
 	}
 	if err := r.reconcileInterruptedToolCalls(ctx, request, events); err != nil {
 		return r.failTurn(ctx, result, err)
@@ -294,6 +327,16 @@ func completedTurn(events []transcript.Event, turnID string) (TurnResult, error,
 	if terminal == nil {
 		return TurnResult{}, nil, false
 	}
+	var final struct {
+		Steps int          `json:"steps"`
+		Usage *model.Usage `json:"usage"`
+	}
+	if json.Unmarshal(terminal.Metadata, &final) == nil {
+		result.Steps = final.Steps
+		if final.Usage != nil {
+			result.Usage = *final.Usage
+		}
+	}
 	result.Termination = TerminationReason(terminal.Status)
 	if result.Termination == "" {
 		result.Termination = TerminationCompleted
@@ -319,8 +362,17 @@ func hasTurnEvent(events []transcript.Event, turnID string, kind transcript.Even
 // let the model decide how to proceed from the uncertain state.
 func (r *Runtime) reconcileInterruptedToolCalls(ctx context.Context, request TurnRequest, events []transcript.Event) error {
 	started := make(map[string]tool.Call)
+	pending := make(map[string]tool.Call)
 	for _, event := range events {
-		if event.TurnID != request.TurnID || event.ToolCall == nil {
+		if event.TurnID != request.TurnID {
+			continue
+		}
+		if event.Type == transcript.AssistantMessage && event.Message != nil {
+			for _, call := range event.Message.ToolCalls() {
+				pending[call.ID] = tool.Call{ID: call.ID, Name: call.Name, Arguments: call.Arguments, Scope: request.Scope}
+			}
+		}
+		if event.ToolCall == nil {
 			continue
 		}
 		switch event.Type {
@@ -328,6 +380,18 @@ func (r *Runtime) reconcileInterruptedToolCalls(ctx context.Context, request Tur
 			started[event.ToolCall.ID] = *event.ToolCall
 		case transcript.ToolCallCompleted, transcript.ToolCallFailed:
 			delete(started, event.ToolCall.ID)
+			delete(pending, event.ToolCall.ID)
+		case transcript.ApprovalRequested:
+			delete(pending, event.ToolCall.ID)
+		}
+	}
+	for id, call := range pending {
+		if _, ok := started[id]; ok {
+			continue
+		}
+		result := tool.Result{Content: []model.Content{{Type: model.ContentText, Text: "Tool call was not started before execution was interrupted. It is safe to request it again."}}, IsError: true, ErrorCode: "execution_not_started"}
+		if _, err := r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.ToolCallFailed, ToolCall: &call, ToolResult: &result}); err != nil {
+			return err
 		}
 	}
 	for _, call := range started {
@@ -410,13 +474,63 @@ func (r *Runtime) recordStepCompleted(ctx context.Context, request TurnRequest, 
 }
 
 func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, system model.Message) (Projection, error) {
+	for round := 0; round < 3; round++ {
+		projection, err := r.projectContextOnce(ctx, request, system)
+		if err != nil {
+			return Projection{}, err
+		}
+		if len(projection.Dropped) == 0 || r.deps.Compactor == nil {
+			return projection, nil
+		}
+	}
+	return Projection{}, &model.Error{Kind: model.ErrorBudgetExhausted, Message: "compaction could not fit a complete continuation checkpoint"}
+}
+
+func (r *Runtime) projectContextOnce(ctx context.Context, request TurnRequest, system model.Message) (Projection, error) {
 	events, err := r.turnEvents(ctx, request.SessionID)
 	if err != nil {
 		return Projection{}, err
 	}
-	projection, err := r.deps.Projector.Project(ctx, ProjectRequest{Events: events, System: system, Tools: r.deps.Tools.ActiveDefinitions(request.SessionID)})
+	projectRequest := ProjectRequest{Events: events, System: system, Tools: r.deps.Tools.ActiveDefinitions(request.SessionID)}
+	if r.deps.Compactor != nil {
+		available := r.config.Context.MaxTokens - r.config.Context.ReserveTokens - r.config.Context.OutputTokens - EstimateToolTokens(projectRequest.Tools)
+		projectRequest.TargetTokens = available * 85 / 100
+	}
+	projection, err := r.deps.Projector.Project(ctx, projectRequest)
+	if err != nil && projectRequest.TargetTokens > 0 {
+		projectRequest.TargetTokens = 0
+		projection, err = r.deps.Projector.Project(ctx, projectRequest)
+	}
 	if err != nil {
 		return Projection{}, err
+	}
+	needsReader := false
+	for _, message := range projection.Dropped {
+		for _, block := range message.Content {
+			needsReader = needsReader || block.ToolResult != nil
+		}
+	}
+	for _, message := range projection.Messages {
+		for _, block := range message.Content {
+			if block.ToolResult != nil {
+				for _, content := range block.ToolResult.Content {
+					needsReader = needsReader || strings.Contains(content.Text, "context_read(sequence=")
+				}
+			}
+		}
+	}
+	if needsReader {
+		if _, active := r.deps.Tools.GetActive(request.SessionID, "context_read"); !active {
+			if err := r.deps.Tools.Activate(request.SessionID, "context_read"); err != nil {
+				return Projection{}, err
+			}
+			projectRequest.Tools = r.deps.Tools.ActiveDefinitions(request.SessionID)
+			projectRequest.TargetTokens = 0
+			projection, err = r.deps.Projector.Project(ctx, projectRequest)
+			if err != nil {
+				return Projection{}, err
+			}
+		}
 	}
 	if len(projection.Dropped) == 0 || r.deps.Compactor == nil {
 		projection.Messages = overlayEnvironment(overlayCurrentInput(projection, request.Input).Messages, r.deps.Environment)
@@ -429,8 +543,18 @@ func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, syste
 	if targetTokens < 512 {
 		targetTokens = 512
 	}
-	summary, err := r.deps.Compactor.Compact(ctx, projection.Dropped, targetTokens)
+	evidence := compactionEvidence(projection)
+	summary, err := r.deps.Compactor.Compact(ctx, evidence, targetTokens)
 	if err != nil {
+		// A proactive compaction outage must not terminate work that still fits
+		// safely in the hard input budget. Never silently discard history here.
+		if ctx.Err() == nil {
+			hard, projectErr := r.deps.Projector.Project(ctx, ProjectRequest{Events: events, System: system, Tools: r.deps.Tools.ActiveDefinitions(request.SessionID)})
+			if projectErr == nil && len(hard.Dropped) == 0 {
+				hard.Messages = overlayEnvironment(overlayCurrentInput(hard, request.Input).Messages, r.deps.Environment)
+				return hard, nil
+			}
+		}
 		return Projection{}, err
 	}
 	metadata, _ := json.Marshal(map[string]uint64{"covers_through": projection.CoversThrough})
@@ -450,6 +574,27 @@ func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, syste
 	}
 	projection.Messages = overlayEnvironment(overlayCurrentInput(projection, request.Input).Messages, r.deps.Environment)
 	return projection, err
+}
+
+func compactionEvidence(projection Projection) []model.Message {
+	messages := append([]model.Message(nil), projection.Dropped...)
+	for i, message := range messages {
+		if i >= len(projection.DroppedSequences) {
+			continue
+		}
+		message.Content = append([]model.Content(nil), message.Content...)
+		for j, block := range message.Content {
+			if block.ToolResult == nil {
+				continue
+			}
+			result := *block.ToolResult
+			result.Content = append([]model.Content(nil), result.Content...)
+			result.Content = append(result.Content, model.Content{Type: model.ContentText, Text: fmt.Sprintf("Original evidence reference: context_read(sequence=%d, block=0, offset=0). Blocks are numbered 0 through %d. Retain relevant references in the checkpoint.", projection.DroppedSequences[i], len(result.Content)-1)})
+			message.Content[j].ToolResult = &result
+		}
+		messages[i] = message
+	}
+	return messages
 }
 
 func durableUserInput(message model.Message) model.Message {
@@ -493,7 +638,8 @@ func (r *Runtime) generateWithTools(ctx context.Context, turn TurnRequest, messa
 		return model.Response{}, err
 	}
 	request := model.Request{
-		Model: modelName, Messages: messages, Tools: definitions,
+		InputTokenEstimate: EstimateTokens(messages) + EstimateToolTokens(definitions),
+		Model:              modelName, Messages: messages, Tools: definitions,
 		ReasoningEffort: r.config.ReasoningEffort, Temperature: r.config.Temperature, MaxOutputTokens: r.config.MaxOutputTokens,
 		Metadata: map[string]string{"session_id": turn.SessionID, "turn_id": turn.TurnID, "request_id": requestID},
 	}
@@ -698,6 +844,8 @@ func (r *Runtime) appendSteeringCount(ctx context.Context, request TurnRequest) 
 }
 
 func addUsage(total *model.Usage, usage model.Usage) {
+	total.Reported = total.Reported || usage.Reported
+	total.ReasoningTokens += usage.ReasoningTokens
 	total.InputTokens += usage.InputTokens
 	total.OutputTokens += usage.OutputTokens
 	total.CacheReadTokens += usage.CacheReadTokens

@@ -213,10 +213,10 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 	if err != nil {
 		return model.Response{}, err
 	}
+	message.Phase = response.Message.Phase
 	if len(message.ToolCalls()) > 0 {
 		message = toolCallStepMessage(message)
 	}
-	message.Phase = response.Message.Phase
 	reason := finishReason(response.FinishReason)
 	if reason == model.FinishError {
 		return model.Response{}, &model.Error{
@@ -319,31 +319,30 @@ func normalizeSchemaMap(items map[string]any) {
 	}
 }
 
-// toolCallStepMessage converts process narration attached to a tool request
-// into ContentReasoning so final-answer extractors (Message.Text()) ignore
-// intermediate commentary while subsequent model turns still retain the
-// reasoning context via ReasoningContent.
+// toolCallStepMessage marks public narration without reclassifying it as native
+// reasoning. It remains ordinary assistant text in subsequent provider input.
 func toolCallStepMessage(message model.Message) model.Message {
 	content := make([]model.Content, 0, len(message.Content))
 	for _, block := range message.Content {
 		switch block.Type {
 		case model.ContentText:
 			if strings.TrimSpace(block.Text) != "" {
-				content = append(content, model.Content{
-					Type: model.ContentReasoning,
-					Text: block.Text,
-				})
+				block.Phase = "commentary"
+				content = append(content, block)
 			}
 		case model.ContentReasoning, model.ContentToolCall:
 			content = append(content, block)
 		}
 	}
 	message.Content = content
+	if message.Phase == "" {
+		message.Phase = "commentary"
+	}
 	return message
 }
 
 func toWireMessage(message model.Message) llm.Message {
-	out := llm.Message{Role: string(message.Role)}
+	out := llm.Message{Role: string(message.Role), Phase: message.Phase}
 	var parts []llm.ContentPart
 	hasImage := false
 	for _, block := range message.Content {
@@ -377,8 +376,13 @@ func toWireMessage(message model.Message) llm.Message {
 				for _, content := range block.ToolResult.Content {
 					if content.Type == model.ContentText {
 						out.Content += content.Text
+						parts = append(parts, llm.TextPart(content.Text))
 					} else if content.Type == model.ContentJSON {
 						out.Content += string(content.JSON)
+						parts = append(parts, llm.TextPart(string(content.JSON)))
+					} else if content.Type == model.ContentImage && content.ImageURL != "" {
+						hasImage = true
+						parts = append(parts, llm.ImageURLPart(content.ImageURL))
 					}
 				}
 			}
@@ -387,7 +391,9 @@ func toWireMessage(message model.Message) llm.Message {
 	// Multimodal wire formats represent the complete message as content parts.
 	// Keeping text only in Content would make MarshalJSON drop it as soon as an
 	// image part is present.
-	if hasImage && out.Role != "tool" {
+	if hasImage && out.Role == "tool" {
+		out.ContentParts = parts
+	} else if hasImage {
 		out.ContentParts = parts
 		out.Content = ""
 	}

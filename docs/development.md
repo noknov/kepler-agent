@@ -1,5 +1,13 @@
 # Development
 
+Tool constructors declare effects explicitly. `FunctionDescriptor` does not
+default missing effects to read access and does not load product prompts.
+Hosted/local composition applies descriptor wording through
+`packages/toolkit/toolprompts`; the canonical core cannot import product prompts.
+Argument-dependent tools implement `tool.CallDescriptor` so policy and scheduling
+resolve effects before execution. Descriptor wrappers forward that contract and
+turn cleanup. Wording overlays cannot alter effects or concurrency.
+
 Start in the source repository. Packaging and environment rollout are separate
 operational concerns and are not documented here.
 

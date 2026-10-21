@@ -150,7 +150,7 @@ func (c *OpenAICompatibleClient) chatBody(req Request) map[string]any {
 	dialect := resolveOpenAIDialect(c.providerName())
 	body := map[string]any{
 		"model":    req.Model,
-		"messages": req.Messages,
+		"messages": chatMessagesWithToolImages(req.Messages),
 		"tools":    req.Tools,
 	}
 	if req.Temperature != nil {

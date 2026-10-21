@@ -4,6 +4,37 @@
 -- this file with the database administration workflow of your choice before
 -- starting a service. The statements are idempotent for clean installations.
 
+-- Explicit user memory is separate from instruction assets and transcripts.
+CREATE TABLE IF NOT EXISTS user_memory_generations (
+    team_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    generation BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY(team_id,user_id)
+);
+CREATE TABLE IF NOT EXISTS user_memories (
+    team_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    generation BIGINT NOT NULL DEFAULT 0,
+    semantic_key TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('preference','project','procedure','fact')),
+    content TEXT NOT NULL,
+    source_session_id TEXT NOT NULL DEFAULT '',
+    source_turn_id TEXT NOT NULL DEFAULT '',
+    version BIGINT NOT NULL DEFAULT 1,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY(team_id,user_id,semantic_key),
+    FOREIGN KEY(team_id,user_id) REFERENCES user_memory_generations(team_id,user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_memories_identity_updated ON user_memories(team_id,user_id,updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS user_memory_reset_requests (
+    team_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY(team_id,user_id,request_id)
+);
+
 CREATE TABLE IF NOT EXISTS agent_runs (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,

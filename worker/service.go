@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/appsupport"
 	"github.com/noknov/kepler-agent/packages/cloud"
@@ -21,6 +22,7 @@ import (
 	sharedlogging "github.com/noknov/kepler-agent/packages/infra/logging"
 	"github.com/noknov/kepler-agent/packages/infra/redisclient"
 	"github.com/noknov/kepler-agent/packages/infra/telemetry"
+	"github.com/noknov/kepler-agent/packages/memory"
 	"github.com/noknov/kepler-agent/packages/observability"
 	"github.com/noknov/kepler-agent/packages/platform"
 	"github.com/noknov/kepler-agent/packages/profiles/hosted"
@@ -165,6 +167,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 
 	recorder := observability.NewRecorder()
+	modelGovernor := model.NewGovernor(cfg.Tools.AgentMaxConcurrentModelCalls)
 	podID := appsupport.GeneratePodID()
 	rates := hosted.CostRates(cfg)
 	recorder.SetCostRates(rates)
@@ -193,7 +196,8 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		return nil, fmt.Errorf("register Slack tools: %w", err)
 	}
 	profile, profileErr := hosted.NewProfile(cfg, hosted.ProfileDependencies{
-		Tools: catalog, Postgres: stores.PGPool, Redis: stores.Redis, ToolSpills: stores.Runs, Events: events, Metrics: recorder, Lease: stores.Sessions,
+		ModelGovernor: modelGovernor,
+		Tools:         catalog, Postgres: stores.PGPool, Redis: stores.Redis, ToolSpills: stores.Runs, Events: events, Metrics: recorder, Lease: stores.Sessions,
 		ConnectionContinuations: connections.RuntimeContinuationStore{Store: continuations},
 	})
 	if profileErr != nil {
@@ -212,7 +216,8 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 			return nil, fmt.Errorf("build web tool catalog: %w", err)
 		}
 		webProfile, err := hosted.NewProfile(cfg, hosted.ProfileDependencies{
-			Tools: webCatalogBundle.Catalog, Postgres: stores.PGPool, Redis: stores.Redis, ToolSpills: stores.Runs,
+			ModelGovernor: modelGovernor,
+			Tools:         webCatalogBundle.Catalog, Postgres: stores.PGPool, Redis: stores.Redis, ToolSpills: stores.Runs,
 			Events: events, Metrics: recorder, Lease: stores.Sessions,
 		})
 		if err != nil {
@@ -330,6 +335,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		Runs:      stores.Runs,
 		UserPrefs: stores.UserPrefs,
 		Home: slackhome.Controller{
+			Memory:      memory.PGStore{Pool: stores.PGPool},
 			Cfg:         cfg,
 			Access:      access,
 			Slack:       slackClient,

@@ -1,5 +1,18 @@
 # Configuration
 
+Runtime hardening adds `AGENT_MAX_CONCURRENT_MODEL_CALLS` (default `16`) to bound
+parent, worker and compactor model requests together. It also adds optional `AGENT_MAX_TOTAL_TOKENS` (default `0`, disabled).
+It reserves estimated input plus maximum output across a parent turn and its
+workers; reported usage releases unused reservations. Local TOML uses
+`max_total_tokens`. Failed requests with unknown usage retain their reservation.
+This is a conservative runtime allowance, not an exact billing limit.
+
+Hosted explicit memory requires the additive tables in `schema/postgres.sql`.
+Add the exact `memory` tool name to `AGENT_ALLOWED_WRITE_TOOLS` to permit memory
+mutations through the existing approval policy. Memory reads and the signed
+App Home **Clear my memories** control do not grant any server capability.
+See [memory](long-term-memory.md) for identity, reset and rollout semantics.
+
 Choose the configuration owner before editing a value. A variable's existence
 in source does not mean every surface reads it.
 

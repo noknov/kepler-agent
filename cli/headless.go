@@ -156,7 +156,7 @@ func newLocalHarness(values options, config local.Config, creds credentials) (*l
 	runner, err := agentruntime.New(
 		agentruntime.Config{
 			Model: config.Model, ReasoningEffort: config.ReasoningEffort, MaxOutputTokens: config.MaxOutputTokens,
-			MaxSteps: config.MaxSteps, MaxParallelToolCalls: config.MaxParallelToolCalls, MaxModelRetries: 0, MaxEmptyResponseRetries: 3,
+			MaxTotalTokens: config.MaxTotalTokens, MaxSteps: config.MaxSteps, MaxParallelToolCalls: config.MaxParallelToolCalls, MaxModelRetries: 0, MaxEmptyResponseRetries: 3,
 			Context:        agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
 			CircuitBreaker: agentruntime.CircuitBreakerConfig{Enabled: true},
 		},

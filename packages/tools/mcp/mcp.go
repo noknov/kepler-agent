@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -42,8 +43,9 @@ type routerCacheEntry struct {
 }
 
 var (
-	routerCacheMu sync.Mutex
-	routerCache   = make(map[string]routerCacheEntry)
+	routerCacheMu      sync.Mutex
+	routerCache        = make(map[string]routerCacheEntry)
+	routerInitializing = make(map[string]*sessionInitialization)
 )
 
 func routerCacheKey(client *mcp.Client) string {
@@ -55,7 +57,13 @@ func routerCacheKey(client *mcp.Client) string {
 	b.WriteString(client.Token)
 	b.WriteByte('\x00')
 	fmt.Fprintf(&b, "%p", client.HTTP)
-	for k, v := range client.Headers {
+	keys := make([]string, 0, len(client.Headers))
+	for k := range client.Headers {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		v := client.Headers[k]
 		b.WriteByte('\x00')
 		b.WriteString(k)
 		b.WriteByte('=')
@@ -64,27 +72,43 @@ func routerCacheKey(client *mcp.Client) string {
 	return b.String()
 }
 
-func resolveRouterSession(ctx context.Context, client *mcp.Client, forceRefresh bool) (mcp.Session, []mcp.ToolDefinition, error) {
+func resolveRouterSession(ctx context.Context, client *mcp.Client) (mcp.Session, []mcp.ToolDefinition, error) {
 	key := routerCacheKey(client)
 	now := time.Now()
-	if !forceRefresh {
+	{
 		routerCacheMu.Lock()
 		entry, ok := routerCache[key]
 		if ok && now.Before(entry.expiresAt) {
 			routerCacheMu.Unlock()
 			return entry.session, entry.definitions, nil
 		}
+		if pending := routerInitializing[key]; pending != nil {
+			routerCacheMu.Unlock()
+			select {
+			case <-ctx.Done():
+				return mcp.Session{}, nil, ctx.Err()
+			case <-pending.done:
+				return pending.session, pending.definitions, pending.err
+			}
+		}
+		routerInitializing[key] = &sessionInitialization{done: make(chan struct{})}
 		routerCacheMu.Unlock()
 	}
+	var definitions []mcp.ToolDefinition
 	session, err := client.Initialize(ctx)
-	if err != nil {
-		return mcp.Session{}, nil, err
-	}
-	definitions, err := client.ListTools(ctx, session)
-	if err != nil {
-		return mcp.Session{}, nil, err
+	if err == nil {
+		definitions, err = client.ListTools(ctx, session)
 	}
 	routerCacheMu.Lock()
+	if pending := routerInitializing[key]; pending != nil {
+		pending.session, pending.definitions, pending.err = session, definitions, err
+		delete(routerInitializing, key)
+		close(pending.done)
+	}
+	if err != nil {
+		routerCacheMu.Unlock()
+		return mcp.Session{}, nil, err
+	}
 	if len(routerCache) >= maxCachedSessions {
 		for k, v := range routerCache {
 			if now.After(v.expiresAt) {
@@ -121,7 +145,7 @@ func ListDefinitions(ctx context.Context, client *mcp.Client) ([]mcp.ToolDefinit
 	if client == nil {
 		return nil, fmt.Errorf("mcp client is required")
 	}
-	_, definitions, err := resolveRouterSession(ctx, client, false)
+	_, definitions, err := resolveRouterSession(ctx, client)
 	return definitions, err
 }
 
@@ -142,7 +166,7 @@ func InvokeReadOnly(ctx context.Context, client *mcp.Client, name string, args j
 	if client == nil {
 		return tool.Result{}, fmt.Errorf("mcp client is required")
 	}
-	session, definitions, err := resolveRouterSession(ctx, client, false)
+	session, definitions, err := resolveRouterSession(ctx, client)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -179,7 +203,7 @@ func InvokeExternal(ctx context.Context, client *mcp.Client, name string, args j
 	if client == nil {
 		return tool.Result{}, fmt.Errorf("mcp client is required")
 	}
-	session, definitions, err := resolveRouterSession(ctx, client, false)
+	session, definitions, err := resolveRouterSession(ctx, client)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -243,9 +267,10 @@ type sessionEntry struct {
 	usedAt  time.Time
 }
 type sessionInitialization struct {
-	done    chan struct{}
-	session mcp.Session
-	err     error
+	done        chan struct{}
+	session     mcp.Session
+	err         error
+	definitions []mcp.ToolDefinition
 }
 
 // clientConfig intentionally contains only immutable transport configuration.
@@ -253,6 +278,7 @@ type sessionInitialization struct {
 type clientConfig struct {
 	serviceName string
 	url         string
+	token       string
 	headers     map[string]string
 	http        *http.Client
 }
@@ -270,7 +296,7 @@ func Discover(ctx context.Context, config Server) ([]tool.Tool, error) {
 		return nil, err
 	}
 	state := &serverState{
-		config:       clientConfig{serviceName: config.Client.ServiceName, url: config.Client.URL, headers: cloneHeaders(config.Client.Headers), http: config.Client.HTTP},
+		config:       clientConfig{serviceName: config.Client.ServiceName, url: config.Client.URL, token: config.Client.Token, headers: cloneHeaders(config.Client.Headers), http: config.Client.HTTP},
 		resolveToken: config.ResolveToken,
 		sessions:     make(map[string]sessionEntry),
 		initializing: make(map[string]*sessionInitialization),
@@ -313,19 +339,17 @@ func explicitlyReadOnly(definition mcp.ToolDefinition) bool {
 
 func (t *remoteTool) Descriptor() tool.Descriptor { return t.descriptor }
 func (t *remoteTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
-	if t.server.resolveToken != nil {
-		if _, err := t.server.resolveToken(ctx, call); err != nil {
-			if result, convErr := connections.ToolResult(err); convErr == nil {
-				return result, nil
-			}
-			return tool.Result{}, err
+	client, err := t.server.clientForCall(ctx, call)
+	if err != nil {
+		if result, convErr := connections.ToolResult(err); convErr == nil {
+			return result, nil
 		}
+		return tool.Result{}, err
 	}
-	session, err := t.server.session(ctx, call)
+	session, err := t.server.session(ctx, call, client)
 	if err != nil {
 		return tool.Result{}, err
 	}
-	client := t.server.clientForCall(ctx, call)
 	value, err := client.CallTool(ctx, session, t.remote.Name, call.Arguments)
 	if err != nil {
 		t.server.invalidateSession(call, session)
@@ -356,7 +380,7 @@ func (s *serverState) sessionKey(call tool.Call) string {
 	return call.Scope.SessionID + "\x00" + userID
 }
 
-func (s *serverState) session(ctx context.Context, call tool.Call) (mcp.Session, error) {
+func (s *serverState) session(ctx context.Context, call tool.Call, client *mcp.Client) (mcp.Session, error) {
 	key := s.sessionKey(call)
 	s.mu.Lock()
 	if entry, ok := s.sessions[key]; ok {
@@ -377,7 +401,6 @@ func (s *serverState) session(ctx context.Context, call tool.Call) (mcp.Session,
 	pending := &sessionInitialization{done: make(chan struct{})}
 	s.initializing[key] = pending
 	s.mu.Unlock()
-	client := s.clientForCall(ctx, call)
 	session, err := client.Initialize(ctx)
 	s.mu.Lock()
 	delete(s.initializing, key)
@@ -413,16 +436,20 @@ func (s *serverState) evictOldestLocked() {
 	}
 }
 
-func (s *serverState) clientForCall(ctx context.Context, call tool.Call) *mcp.Client {
-	client := &mcp.Client{ServiceName: s.config.serviceName, URL: s.config.url, Headers: cloneHeaders(s.config.headers), HTTP: s.config.http}
+func (s *serverState) clientForCall(ctx context.Context, call tool.Call) (*mcp.Client, error) {
+	client := &mcp.Client{ServiceName: s.config.serviceName, URL: s.config.url, Token: s.config.token, Headers: cloneHeaders(s.config.headers), HTTP: s.config.http}
 	if s.resolveToken == nil {
-		return client
+		return client, nil
 	}
 	token, err := s.resolveToken(ctx, call)
-	if err == nil && token != "" {
-		client.Token = token
+	if err != nil {
+		return nil, err
 	}
-	return client
+	if token == "" {
+		return nil, fmt.Errorf("MCP credential resolver returned an empty token")
+	}
+	client.Token = token
+	return client, nil
 }
 
 func cloneHeaders(headers map[string]string) map[string]string {

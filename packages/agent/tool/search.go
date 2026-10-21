@@ -140,54 +140,8 @@ func (t searchTool) search(query string, limit int, categories ...string) (Resul
 		score    float64
 		line     string
 	}
-	type candidateDoc struct {
-		descriptor Descriptor
-		nameTerms  map[string]int
-		tagTerms   map[string]int
-		descTerms  map[string]int
-		allTerms   map[string]int
-		docLen     int
-	}
-	candidates := make([]candidateDoc, 0)
-	docFreq := make(map[string]int)
-	totalDocLen := 0
-	for _, descriptor := range t.catalog.Descriptors() {
-		if descriptor.Exposure != ExposureDeferred {
-			continue
-		}
-		if len(categories) > 0 && !matchesCategory(descriptor.Tags, categories) {
-			continue
-		}
-		nameTerms := termFrequencies(descriptor.Name)
-		tagTerms := termFrequencies(strings.Join(descriptor.Tags, " "))
-		descTerms := termFrequencies(descriptor.Description + " " + string(descriptor.InputSchema))
-		allTerms := make(map[string]int, len(nameTerms)+len(tagTerms)+len(descTerms))
-		docLen := 0
-		for term, count := range nameTerms {
-			allTerms[term] += count * 3
-			docLen += count
-		}
-		for term, count := range tagTerms {
-			allTerms[term] += count * 2
-			docLen += count
-		}
-		for term, count := range descTerms {
-			allTerms[term] += count
-			docLen += count
-		}
-		for term := range allTerms {
-			docFreq[term]++
-		}
-		totalDocLen += docLen
-		candidates = append(candidates, candidateDoc{
-			descriptor: descriptor,
-			nameTerms:  nameTerms,
-			tagTerms:   tagTerms,
-			descTerms:  descTerms,
-			allTerms:   allTerms,
-			docLen:     docLen,
-		})
-	}
+	index := t.catalog.searchIndexFor(categories)
+	candidates, docFreq, totalDocLen := index.candidates, index.docFreq, index.totalDocLen
 	avgDocLen := 1.0
 	if len(candidates) > 0 && totalDocLen > 0 {
 		avgDocLen = float64(totalDocLen) / float64(len(candidates))
@@ -202,9 +156,11 @@ func (t searchTool) search(query string, limit int, categories ...string) (Resul
 		results = append(results, scored{name: cand.descriptor.Name, nameHits: nameHits, score: score, line: line})
 	}
 	sort.Slice(results, func(i, j int) bool {
-		if results[i].nameHits != results[j].nameHits {
-			return results[i].nameHits > results[j].nameHits
+		exactI, exactJ := strings.EqualFold(results[i].name, query), strings.EqualFold(results[j].name, query)
+		if exactI != exactJ {
+			return exactI
 		}
+
 		if results[i].score == results[j].score {
 			return results[i].name < results[j].name
 		}
@@ -260,7 +216,7 @@ func scoreBM25Candidate(
 		score += idf * norm
 		if _, ok := nameTerms[token]; ok {
 			nameHits++
-			score += 2.0
+			score += 6.0
 		} else if strings.Contains(lowerName, token) {
 			score += 1.5
 		}
@@ -406,4 +362,83 @@ func matchesCategory(tags, categories []string) bool {
 		}
 	}
 	return false
+}
+
+type candidateDoc struct {
+	descriptor Descriptor
+	nameTerms  map[string]int
+	tagTerms   map[string]int
+	descTerms  map[string]int
+	allTerms   map[string]int
+	docLen     int
+}
+
+type searchIndex struct {
+	candidates  []candidateDoc
+	docFreq     map[string]int
+	totalDocLen int
+}
+
+func (c *Catalog) searchIndexFor(categories []string) *searchIndex {
+	categories = compactStrings(append([]string(nil), categories...))
+	key := strings.Join(categories, "\x00")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if index := c.searchIndexes[key]; index != nil {
+		return index
+	}
+	descriptors := make([]Descriptor, 0, len(c.tools))
+	for _, item := range c.tools {
+		descriptors = append(descriptors, item.Descriptor())
+	}
+	candidates := make([]candidateDoc, 0)
+	docFreq := make(map[string]int)
+	totalDocLen := 0
+	for _, descriptor := range descriptors {
+		if descriptor.Exposure != ExposureDeferred {
+			continue
+		}
+		if len(categories) > 0 && !matchesCategory(descriptor.Tags, categories) {
+			continue
+		}
+		nameTerms := termFrequencies(descriptor.Name)
+		tagTerms := termFrequencies(strings.Join(descriptor.Tags, " "))
+		descTerms := termFrequencies(descriptor.Description + " " + string(descriptor.InputSchema))
+		allTerms := make(map[string]int, len(nameTerms)+len(tagTerms)+len(descTerms))
+		docLen := 0
+		for term, count := range nameTerms {
+			allTerms[term] += count * 3
+			docLen += count
+		}
+		for term, count := range tagTerms {
+			allTerms[term] += count * 2
+			docLen += count
+		}
+		for term, count := range descTerms {
+			allTerms[term] += count
+			docLen += count
+		}
+		for term := range allTerms {
+			docFreq[term]++
+		}
+		totalDocLen += docLen
+		candidates = append(candidates, candidateDoc{
+			descriptor: descriptor,
+			nameTerms:  nameTerms,
+			tagTerms:   tagTerms,
+			descTerms:  descTerms,
+			allTerms:   allTerms,
+			docLen:     docLen,
+		})
+	}
+
+	index := &searchIndex{candidates: candidates, docFreq: docFreq, totalDocLen: totalDocLen}
+	if c.searchIndexes == nil {
+		c.searchIndexes = make(map[string]*searchIndex)
+	}
+	if len(c.searchIndexes) >= 32 {
+		c.searchIndexes = make(map[string]*searchIndex)
+	}
+	c.searchIndexes[key] = index
+	return index
 }

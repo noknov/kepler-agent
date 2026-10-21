@@ -33,6 +33,7 @@ func (t StatusTool) Descriptor() tool.Descriptor {
 		tool.ObjectSchema(nil, map[string]any{
 			"repo": map[string]any{"type": "string", "description": "Repository path under WORKSPACE_ROOTS, its local repo name, or a GitHub owner/repo identifier. Defaults to first root."},
 		}),
+		tool.WithEffects(tool.EffectRead),
 	)
 }
 
@@ -376,6 +377,7 @@ func (t LogTool) Descriptor() tool.Descriptor {
 			"branch": map[string]any{"type": "string", "description": "Explicit remote branch name."},
 			"limit":  map[string]any{"type": "integer", "description": "Maximum commits, default 10 and max 50."},
 		}),
+		tool.WithEffects(tool.EffectRead),
 	)
 }
 
@@ -417,6 +419,7 @@ func (t ShowTool) Descriptor() tool.Descriptor {
 			"path":      map[string]any{"type": "string", "description": ""},
 			"max_chars": map[string]any{"type": "integer", "description": ""},
 		}),
+		tool.WithEffects(tool.EffectRead),
 	)
 }
 

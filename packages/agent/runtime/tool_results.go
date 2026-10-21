@@ -20,7 +20,27 @@ type ArtifactStore interface {
 }
 
 func limitToolResult(ctx context.Context, result tool.Result, call tool.Call, config ToolResultConfig, store ArtifactStore) tool.Result {
-	data, err := json.Marshal(result.Content)
+	// Encoded images are bounded by the transport and a separate image budget;
+	// counting base64 as prose would spill almost every useful screenshot.
+	var images, text []model.Content
+	imageBytes := 0
+	for _, block := range result.Content {
+		if block.Type == model.ContentImage {
+			imageBytes += len(block.ImageURL)
+			if imageBytes <= 8<<20 {
+				images = append(images, block)
+			} else {
+				result.Truncated = true
+				text = append(text, model.Content{Type: model.ContentText, Text: "[image omitted: tool image budget exceeded]"})
+			}
+		} else {
+			text = append(text, block)
+		}
+	}
+	if result.Truncated {
+		result.Content = append(append([]model.Content(nil), text...), images...)
+	}
+	data, err := json.Marshal(text)
 	if err != nil || len(data) <= config.MaxInlineBytes {
 		return result
 	}
@@ -33,6 +53,7 @@ func limitToolResult(ctx context.Context, result tool.Result, call tool.Call, co
 				Type: model.ContentText,
 				Text: fmt.Sprintf("Tool output was stored as artifact %s (%d bytes).", artifact.URI, artifact.SizeBytes),
 			}, {Type: model.ContentArtifact, Artifact: &artifact}}
+			result.Content = append(result.Content, images...)
 			return result
 		}
 	}
@@ -40,12 +61,32 @@ func limitToolResult(ctx context.Context, result tool.Result, call tool.Call, co
 	if budget <= 0 {
 		budget = 64 << 10
 	}
-	result.Content = truncateContent(result.Content, budget)
+	result.Content = append(truncateContent(text, budget), images...)
 	result.Content = append(result.Content, model.Content{Type: model.ContentText, Text: "[tool output truncated]"})
 	return result
 }
 
 func limitToolResultBatch(ctx context.Context, prepared []preparedCall, config ToolResultConfig, store ArtifactStore) {
+	remainingImages := 8 << 20
+	for index := range prepared {
+		entry := &prepared[index]
+		if entry.result == nil {
+			continue
+		}
+		var content []model.Content
+		for _, block := range entry.result.Content {
+			if block.Type == model.ContentImage {
+				if len(block.ImageURL) > remainingImages {
+					entry.result.Truncated = true
+					content = append(content, model.Content{Type: model.ContentText, Text: "[image omitted: aggregate tool image budget exceeded]"})
+					continue
+				}
+				remainingImages -= len(block.ImageURL)
+			}
+			content = append(content, block)
+		}
+		entry.result.Content = content
+	}
 	if config.MaxBatchBytes <= 0 || len(prepared) < 2 {
 		return
 	}
@@ -54,7 +95,13 @@ func limitToolResultBatch(ctx context.Context, prepared []preparedCall, config T
 		if prepared[index].result == nil {
 			continue
 		}
-		data, err := json.Marshal(prepared[index].result.Content)
+		var text []model.Content
+		for _, block := range prepared[index].result.Content {
+			if block.Type != model.ContentImage {
+				text = append(text, block)
+			}
+		}
+		data, err := json.Marshal(text)
 		if err == nil {
 			total += len(data)
 		}

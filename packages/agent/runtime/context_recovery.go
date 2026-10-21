@@ -28,7 +28,7 @@ func (r *Runtime) forceCompactAfterContextLimit(ctx context.Context, request Tur
 	if err != nil {
 		return err
 	}
-	toCompact := append([]model.Message(nil), projection.Dropped...)
+	toCompact := compactionEvidence(projection)
 	coversThrough := projection.CoversThrough
 	if len(toCompact) == 0 {
 		toCompact, coversThrough = messagesBeforeCurrentTurn(events, request.TurnID)

@@ -75,6 +75,7 @@ type Call struct {
 }
 
 type Result struct {
+	Usage          *model.Usage    `json:"usage,omitempty"`
 	Content        []model.Content `json:"content,omitempty"`
 	IsError        bool            `json:"is_error,omitempty"`
 	ErrorCode      string          `json:"error_code,omitempty"`
@@ -119,6 +120,27 @@ func (r Result) Text() string {
 type Tool interface {
 	Descriptor() Descriptor
 	Execute(ctx context.Context, call Call) (Result, error)
+}
+
+// CallDescriptor resolves argument-dependent effects before policy and scheduling.
+// Implementations are trusted adapters, never model-supplied annotations.
+type CallDescriptor interface {
+	DescriptorForCall(Call) (Descriptor, error)
+}
+
+func DescribeCall(item Tool, call Call) (Descriptor, error) {
+	d := item.Descriptor()
+	var err error
+	if resolver, ok := item.(CallDescriptor); ok {
+		d, err = resolver.DescriptorForCall(call)
+	}
+	if err != nil {
+		return Descriptor{}, err
+	}
+	if d.Name != item.Descriptor().Name {
+		return Descriptor{}, fmt.Errorf("call descriptor cannot change tool identity")
+	}
+	return d, ValidateDescriptor(d)
 }
 
 // TurnLifecycle lets an adapter release turn-scoped state after every exit
@@ -177,10 +199,12 @@ func (ReadOnlyPolicy) Decide(_ context.Context, request PolicyRequest) (Decision
 }
 
 type Catalog struct {
-	mu     sync.RWMutex
-	tools  map[string]Tool
-	eager  map[string]bool
-	active map[string]map[string]bool
+	promptOverlay func(Descriptor) Descriptor
+	searchIndexes map[string]*searchIndex
+	mu            sync.RWMutex
+	tools         map[string]Tool
+	eager         map[string]bool
+	active        map[string]map[string]bool
 }
 
 func NewCatalog(items ...Tool) (*Catalog, error) {
@@ -197,16 +221,18 @@ func (c *Catalog) Register(item Tool) error {
 	if item == nil {
 		return fmt.Errorf("tool is nil")
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	item = withPromptOverlay(item, c.promptOverlay)
 	descriptor := item.Descriptor()
 	if err := ValidateDescriptor(descriptor); err != nil {
 		return err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if _, exists := c.tools[descriptor.Name]; exists {
 		return fmt.Errorf("%w: %q", ErrAlreadyRegistered, descriptor.Name)
 	}
 	c.tools[descriptor.Name] = item
+	c.searchIndexes = nil
 	if descriptor.Exposure == "" || descriptor.Exposure == ExposureEager {
 		c.eager[descriptor.Name] = true
 	}
