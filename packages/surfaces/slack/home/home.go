@@ -157,6 +157,17 @@ func (c Controller) View(userID string) map[string]any {
 		mrkdwnField(fmt.Sprintf("*Custom Skills*\n%d active", skillCount)),
 		mrkdwnField("*Primary Model*\n" + modelDisplayName(c.Cfg.LLM.Model)),
 	}
+	controls := []map[string]any{
+		actionButton("toggle_web_search", "Web Search "+boolLabel(webSearchOn), "web_search", webSearchBtnStyle),
+		actionButton("manage_rules", "Manage Rules", "rule", ""),
+		actionButton("manage_skills", "Manage Skills", "skill", ""),
+	}
+	if c.Memory != nil {
+		button := actionButton("reset_user_memory", "Clear Memories", "", "danger")
+		plain := func(text string) map[string]any { return map[string]any{"type": "plain_text", "text": text} }
+		button["confirm"] = map[string]any{"title": plain("Clear Memories?"), "text": plain("Clear saved memories in this workspace?"), "confirm": plain("Clear Memories"), "deny": plain("Cancel"), "style": "danger"}
+		controls = append(controls, button)
+	}
 	blocks := []map[string]any{
 		contextBlock("Mention the agent in a channel or use the Messages tab to start a private thread."),
 		dividerBlock(),
@@ -164,17 +175,7 @@ func (c Controller) View(userID string) map[string]any {
 		sectionBlockWithFields("", statusFields...),
 		dividerBlock(),
 		headerBlock(":control_knobs: Controls"),
-		actionsBlock(
-			actionButton("toggle_web_search", "Web Search "+boolLabel(webSearchOn), "web_search", webSearchBtnStyle),
-			actionButton("manage_rules", "Manage Rules", "rule", ""),
-			actionButton("manage_skills", "Manage Skills", "skill", ""),
-		),
-	}
-	if c.Memory != nil {
-		button := actionButton("reset_user_memory", "Clear Memories", "", "danger")
-		plain := func(text string) map[string]any { return map[string]any{"type": "plain_text", "text": text} }
-		button["confirm"] = map[string]any{"title": plain("Clear Memories?"), "text": plain("Clear saved memories in this workspace?"), "confirm": plain("Clear Memories"), "deny": plain("Cancel"), "style": "danger"}
-		blocks = append(blocks, actionsBlock(button))
+		actionsBlock(controls...),
 	}
 	blocks = append(blocks, c.connectionBlocks(userID)...)
 	blocks = append(blocks,

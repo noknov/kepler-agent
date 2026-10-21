@@ -599,7 +599,7 @@ func (h *Handler) recordReactionFeedback(ctx context.Context, ev slack.Event) {
 // DMs are addressed to the bot directly. Channel prompts require an explicit
 // mention, including workflow follow-ups, pending input and active turns.
 func (h *Handler) handlePrompt(ctx context.Context, eventID string, ev slack.Event) error {
-	if !IsUserMessageSubtype(ev.Subtype) || ev.User == "" || ev.User == h.Cfg.Slack.BotUserID || ev.BotID != "" {
+	if !isPromptMessageSubtype(ev.Subtype) || ev.User == "" || ev.User == h.Cfg.Slack.BotUserID {
 		return nil
 	}
 	botID := strings.TrimSpace(h.Cfg.Slack.BotUserID)
@@ -656,8 +656,8 @@ func IsDMChannel(channel string) bool {
 	return strings.HasPrefix(channel, "D")
 }
 
-func IsUserMessageSubtype(subtype string) bool {
-	return subtype == "" || subtype == "file_share"
+func isPromptMessageSubtype(subtype string) bool {
+	return subtype == "" || subtype == "file_share" || subtype == "bot_message"
 }
 
 func FirstNonEmpty(values ...string) string {

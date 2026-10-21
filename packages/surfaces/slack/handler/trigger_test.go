@@ -44,8 +44,8 @@ func (c *triggerConversation) HandleMention(_ context.Context, req conversation.
 
 func TestDMsAndChannelMentionsTrigger(t *testing.T) {
 	for _, tt := range []struct {
-		name, kind, channel, text, subtype, bot string
-		want                                    int
+		name, kind, channel, text, subtype, bot, user string
+		want                                          int
 	}{
 		{name: "channel mention", kind: "app_mention", channel: "C1", text: "<@BOT> review", want: 1},
 		{name: "thread reply", kind: "message", channel: "C1", text: "continue"},
@@ -61,16 +61,24 @@ func TestDMsAndChannelMentionsTrigger(t *testing.T) {
 		{name: "attached file mentioned", kind: "app_mention", channel: "C1", text: "<@BOT> review", subtype: "file_share", want: 1},
 		{name: "DM attached file unmentioned", kind: "message", channel: "D1", text: "review", subtype: "file_share", want: 1},
 		{name: "channel attached file unmentioned", kind: "message", channel: "C1", text: "review", subtype: "file_share"},
-		{name: "DM bot message", kind: "message", channel: "D1", text: "review", bot: "BOTHER"},
+		{name: "DM bot message", kind: "message", channel: "D1", text: "review", bot: "BOTHER", want: 1},
 		{name: "edited message", kind: "message", channel: "D1", text: "<@BOT> review", subtype: "message_changed"},
-		{name: "bot message", kind: "app_mention", channel: "C1", text: "<@BOT> review", bot: "BOTHER"},
+		{name: "own bot mention", kind: "app_mention", channel: "C1", text: "<@BOT> review", bot: "BSELF", user: "BOT"},
+		{name: "bot without mention", kind: "app_mention", channel: "C1", text: "review", bot: "BOTHER"},
+		{name: "bot duplicate delivery", kind: "message", channel: "C1", text: "<@BOT> review", bot: "BOTHER"},
+		{name: "bot subtype", kind: "app_mention", channel: "C1", text: "<@BOT> review", subtype: "bot_message", bot: "BOTHER", want: 1},
+		{name: "bot message", kind: "app_mention", channel: "C1", text: "<@BOT> review", bot: "BOTHER", want: 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			conv := &triggerConversation{}
 			cfg := config.Config{}
 			cfg.Slack.BotUserID = "BOT"
 			h := Handler{Cfg: cfg, Conv: conv, Access: safety.NewAccessPolicy(nil, []string{"C1"})}
-			err := h.Handle(context.Background(), "event", slack.Event{Type: tt.kind, Channel: tt.channel, User: "U1", BotID: tt.bot, Text: tt.text, Subtype: tt.subtype, TS: "2.0", ThreadTS: "1.0"})
+			user := tt.user
+			if user == "" {
+				user = "U1"
+			}
+			err := h.Handle(context.Background(), "event", slack.Event{Type: tt.kind, Channel: tt.channel, User: user, BotID: tt.bot, Text: tt.text, Subtype: tt.subtype, TS: "2.0", ThreadTS: "1.0"})
 			if err != nil || len(conv.requests) != tt.want {
 				t.Fatalf("requests=%d err=%v", len(conv.requests), err)
 			}
