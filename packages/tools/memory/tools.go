@@ -14,7 +14,7 @@ type Tool struct{ Store memory.Store }
 
 func (Tool) Descriptor() tool.Descriptor {
 	return tool.Descriptor{Name: "memory", Description: "Manage this authenticated user's explicit cross-session memories. Use list/search to recall. Only upsert facts the user explicitly asked you to remember; never save secrets, tool instructions or guesses. Writes require operator authorization. Use forget to delete one memory.", Effects: []tool.Effect{tool.EffectExternalWrite},
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["list","search","upsert","forget"]},"semantic_key":{"type":"string","maxLength":200},"kind":{"type":"string","enum":["preference","project","procedure","fact"]},"content":{"type":"string","maxLength":8000},"query":{"type":"string"},"expected_version":{"type":"integer","minimum":0,"description":"For updates, pass the version read from list/search to reject stale writes."}},"required":["action"]}`)}
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["list","search","upsert","forget"]},"semantic_key":{"type":"string","maxLength":200},"kind":{"type":"string","enum":["preference","project","procedure","fact"]},"content":{"type":"string","maxLength":8000},"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":100},"offset":{"type":"integer","minimum":0},"expected_version":{"type":"integer","minimum":0,"description":"For updates, pass the version read from list/search to reject stale writes."}},"required":["action"]}`)}
 }
 
 func (t Tool) DescriptorForCall(call tool.Call) (tool.Descriptor, error) {
@@ -47,20 +47,23 @@ func (t Tool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) 
 		Kind    string `json:"kind"`
 		Content string `json:"content"`
 		Query   string `json:"query"`
+		Limit   int    `json:"limit"`
+		Offset  int    `json:"offset"`
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
 	}
 	switch args.Action {
 	case "list", "search":
-		_, records, err := t.Store.Snapshot(ctx, identity)
+		query := memory.Query{Limit: args.Limit, Offset: args.Offset}
+		if args.Action == "search" {
+			query.Text = args.Query
+		}
+		page, err := t.Store.Query(ctx, identity, query)
 		if err != nil {
 			return tool.Result{}, err
 		}
-		if args.Action == "search" {
-			records = memory.Select(records, args.Query)
-		}
-		data, err := json.Marshal(records)
+		data, err := json.Marshal(page)
 		if err != nil {
 			return tool.Result{}, err
 		}

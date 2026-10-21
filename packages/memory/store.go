@@ -5,7 +5,6 @@ package memory
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -33,46 +32,13 @@ type Record struct {
 }
 
 type Store interface {
-	Snapshot(context.Context, Identity) (int64, []Record, error)
+	Query(context.Context, Identity, Query) (Page, error)
 	Put(context.Context, Identity, int64, Record) error
 	Forget(context.Context, Identity, int64, string) error
 	Reset(context.Context, Identity) error
 }
 
 type PGStore struct{ Pool *pgxpool.Pool }
-
-func (s PGStore) Snapshot(ctx context.Context, identity Identity) (int64, []Record, error) {
-	if err := identity.Validate(); err != nil {
-		return 0, nil, err
-	}
-	if s.Pool == nil {
-		return 0, nil, fmt.Errorf("memory store unavailable")
-	}
-	// One statement observes a consistent generation and its active records.
-	rows, err := s.Pool.Query(ctx, `SELECT COALESCE(g.generation,0),m.semantic_key,m.kind,m.content,m.source_session_id,m.source_turn_id,m.version,m.updated_at
-FROM (SELECT $1::text AS team_id,$2::text AS user_id) i
-LEFT JOIN user_memory_generations g USING(team_id,user_id)
-LEFT JOIN user_memories m ON m.team_id=i.team_id AND m.user_id=i.user_id AND m.generation=COALESCE(g.generation,0)
-ORDER BY m.updated_at DESC,m.semantic_key LIMIT 200`, identity.TeamID, identity.UserID)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer rows.Close()
-	var generation int64
-	var records []Record
-	for rows.Next() {
-		var key, kind, content, session, turn *string
-		var version *int64
-		var updated *time.Time
-		if err := rows.Scan(&generation, &key, &kind, &content, &session, &turn, &version, &updated); err != nil {
-			return 0, nil, err
-		}
-		if key != nil {
-			records = append(records, Record{Key: *key, Kind: *kind, Content: *content, SessionID: *session, TurnID: *turn, Version: *version, UpdatedAt: *updated})
-		}
-	}
-	return generation, records, rows.Err()
-}
 
 func (s PGStore) Put(ctx context.Context, identity Identity, generation int64, record Record) error {
 	if record.Version < 0 {
@@ -175,42 +141,17 @@ ON CONFLICT(team_id,user_id) DO UPDATE SET generation=user_memory_generations.ge
 	return tx.Commit(ctx)
 }
 
-// Select is bounded lexical retrieval. Persistent user preferences are eligible
-// without a keyword match; project facts need relevance to the current input.
-func Select(records []Record, query string) []Record {
-	terms := strings.Fields(strings.ToLower(query))
-	type candidate struct {
-		record Record
-		score  int
-	}
-	var candidates []candidate
-	for _, record := range records {
-		score := 0
-		if record.Kind == "preference" {
-			score = 1
-		}
-		corpus := strings.ToLower(record.Key + " " + record.Content)
-		for _, term := range terms {
-			if len(term) > 1 && strings.Contains(corpus, term) {
-				score++
-			}
-		}
-		if score > 0 {
-			candidates = append(candidates, candidate{record, score})
-		}
-	}
-	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
+// Bound limits prompt injection by bytes while preserving the database ranking.
+// Search and pagination are separate from the prompt's disclosure budget.
+func Bound(records []Record, maxBytes int) []Record {
 	var selected []Record
 	size := 0
-	for _, candidate := range candidates {
-		if len(selected) >= 8 {
-			break
-		}
-		cost := len(candidate.record.Content) + len(candidate.record.Key)
-		if size+cost > 6000 {
+	for _, record := range records {
+		cost := len(record.Key) + len(record.Content)
+		if size+cost > maxBytes {
 			continue
 		}
-		selected = append(selected, candidate.record)
+		selected = append(selected, record)
 		size += cost
 	}
 	return selected

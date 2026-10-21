@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-func TestMemorySelectionIsRelevantAndBounded(t *testing.T) {
+func TestMemoryPromptBudgetAndIdentityValidation(t *testing.T) {
 	records := []Record{{Key: "language", Kind: "preference", Content: "Prefer Go"}, {Key: "unrelated", Kind: "fact", Content: "unrelated project"}, {Key: "deployment", Kind: "project", Content: "deployment uses region eu"}, {Key: "oversized", Kind: "preference", Content: strings.Repeat("x", 7000)}}
-	selected := Select(records, "deployment")
+	selected := Bound([]Record{records[0], records[2], records[3]}, 6000)
 	if len(selected) != 2 || selected[0].Key == "unrelated" || selected[1].Key == "unrelated" {
 		t.Fatalf("selection=%v", selected)
 	}

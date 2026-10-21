@@ -296,3 +296,8 @@ ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS return_context TEXT NOT NULL D
 
 CREATE INDEX IF NOT EXISTS idx_oauth_states_expires
     ON oauth_states(expires_at);
+
+-- Character-based memory retrieval uses the standard PostgreSQL extension.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS idx_user_memories_text_search
+    ON user_memories USING gist ((lower(semantic_key || ' ' || content)) gist_trgm_ops);

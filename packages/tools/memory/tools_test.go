@@ -16,10 +16,10 @@ type recordingStore struct {
 	calls      int
 }
 
-func (s *recordingStore) Snapshot(_ context.Context, id memory.Identity) (int64, []memory.Record, error) {
+func (s *recordingStore) Query(_ context.Context, id memory.Identity, _ memory.Query) (memory.Page, error) {
 	s.owner = id
 	s.calls++
-	return 7, nil, nil
+	return memory.Page{Generation: 7}, nil
 }
 func (s *recordingStore) Put(_ context.Context, id memory.Identity, generation int64, record memory.Record) error {
 	s.owner = id
