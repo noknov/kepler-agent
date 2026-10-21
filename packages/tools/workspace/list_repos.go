@@ -17,6 +17,7 @@ func (t ListReposTool) Descriptor() tool.Descriptor {
 		"workspace-list_repos",
 		"List git repositories discovered under configured workspace roots with a coarse technology stack guess.",
 		tool.ObjectSchema(nil, nil),
+		tool.WithEffects(tool.EffectRead),
 	)
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/config"
 	"github.com/noknov/kepler-agent/packages/connections"
 	"github.com/noknov/kepler-agent/packages/infra/redisclient"
+	"github.com/noknov/kepler-agent/packages/memory"
 	"github.com/noknov/kepler-agent/packages/safety"
 	"github.com/noknov/kepler-agent/packages/userprefs"
 )
@@ -29,6 +30,9 @@ type ConnectionReference struct {
 }
 
 type Controller struct {
+	Memory interface {
+		Reset(context.Context, memory.Identity) error
+	}
 	Cfg         config.Config
 	Access      safety.AccessPolicy
 	Slack       Publisher
@@ -165,6 +169,12 @@ func (c Controller) View(userID string) map[string]any {
 			actionButton("manage_rules", "Manage Rules", "rule", ""),
 			actionButton("manage_skills", "Manage Skills", "skill", ""),
 		),
+	}
+	if c.Memory != nil {
+		button := actionButton("reset_user_memory", "Clear my memories", "", "danger")
+		plain := func(text string) map[string]any { return map[string]any{"type": "plain_text", "text": text} }
+		button["confirm"] = map[string]any{"title": plain("Clear saved memories?"), "text": plain("Clear your saved cross-conversation memories in this workspace? Rules, skills, connections and chat history are kept. New memories can be saved afterward."), "confirm": plain("Clear memories"), "deny": plain("Cancel"), "style": "danger"}
+		blocks = append(blocks, sectionBlock("*Saved memories*\nManage your cross-conversation preferences and facts. Clearing memories does not erase information already present in a chat."), actionsBlock(button))
 	}
 	blocks = append(blocks, c.connectionBlocks(userID)...)
 	blocks = append(blocks,

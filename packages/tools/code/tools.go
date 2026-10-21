@@ -33,6 +33,7 @@ func (t ReadFileTool) Descriptor() tool.Descriptor {
 			"start_line": map[string]any{"type": "integer", "description": "1-based starting line. Omit unless you already know the relevant range."},
 			"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines to return per file, default 240 and max 1000."},
 		}),
+		tool.WithEffects(tool.EffectRead),
 	)
 }
 
@@ -179,6 +180,7 @@ func (t SearchTool) Descriptor() tool.Descriptor {
 			"context_lines": map[string]any{"type": "integer", "description": "Optional lines of context around matches, max 5."},
 			"limit":         map[string]any{"type": "integer", "description": "Maximum matching lines, default 50 and max 200."},
 		}),
+		tool.WithEffects(tool.EffectRead),
 	)
 }
 

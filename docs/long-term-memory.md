@@ -2,11 +2,42 @@
 
 ## Current state
 
-Kepler has durable session transcripts and model-generated compaction summaries.
-They preserve one conversation after a restart, but they are keyed by session and
-are not retrieved for a different session. `user_prompt_assets` stores explicit
-rules and skills by Slack user ID. Those assets are durable preferences, not an
-agent-maintained memory system.
+Kepler has explicit cross-session memories in addition to durable transcripts,
+compaction summaries, and user-authored rules/skills. Hosted memory uses
+`user_memory_generations`, `user_memories` and reset idempotency receipts, keyed by the authenticated Slack
+workspace **and** user. Slack and Web propagate that identity into the hosted
+profile; model arguments cannot select another owner. Missing identity fails
+closed. No automatic extraction or background consolidation is enabled.
+
+The hosted `memory` tool supports list, search, upsert and forget. Read calls
+declare read effects; mutations declare external-write effects and require
+the exact `memory` name in `AGENT_ALLOWED_WRITE_TOOLS` plus the existing write
+approval policy. Only explicitly requested facts should be saved. A bounded
+lexical selection (at most eight records and 6,000 content/key bytes) is injected
+inside an untrusted memory boundary. Preferences remain eligible across queries;
+project facts require a lexical match. Retrieval failures are logged and do not
+fail the conversation. This is explicit memory, not semantic/vector retrieval.
+
+App Home offers **Clear my memories** with a confirmation dialog. It deletes
+only that actor's saved memories in the signed Slack workspace. Rules, skills,
+connections and conversation history are retained. A transactional generation
+increment rejects writes from turns that began before the reset; replay keeps
+the turn's original generation. Reset does not erase facts already present in a
+chat transcript or a model request already in flight.
+
+Local CLI memory uses a JSON file with an OS file lock around the complete
+read/modify/write transaction. Project memories are namespaced by the canonical
+workspace root; `namespace=user` explicitly selects preferences shared across
+projects. Legacy records without a namespace remain available in the user
+namespace. Writes require the local policy's approval for state outside the
+workspace. The file is atomically replaced after syncing.
+
+**Operator rollout:** apply `schema/postgres.sql` before starting the updated
+hosted services. Reset request hashes are retained as idempotency receipts (no memory content)
+so a delayed Slack retry cannot erase newly saved facts. The new tables are additive and existing transcripts/assets
+are unchanged. Add `memory` to the write allowlist if agent-authored memory
+updates should be available; the App Home reset is a separate authenticated
+user control and cannot grant host-write permission.
 
 The two mechanisms must stay separate. Rules are user-authored instructions with
 an explicit management UI. Memories are derived, fallible data with provenance,
@@ -14,7 +45,7 @@ confidence, temporal validity, and deletion semantics. Promoting generated
 memories to the rule layer would let a mistaken extraction become a persistent
 instruction.
 
-## Proposed lifecycle
+## Future automatic-memory lifecycle
 
 Use three bounded tiers:
 

@@ -28,8 +28,16 @@ and safety overhead. An impossible input budget fails before dispatch instead
 of falling back to the full context window. Before dropping older turn groups
 or invoking model-driven compaction, `BoundedProjector` applies **two-stage
 observation masking**: historical `ToolResult` text and JSON blocks older than
-the most recent two turn groups and larger than 2,400 bytes are folded into
-UTF-8-safe 400-byte previews with omitted-byte annotations. Static prompt layers
+the most recent two complete exchanges and larger than 2,400 bytes are folded into
+UTF-8-safe head/tail previews with omitted-byte annotations and session-scoped
+`context_read` references. The reader is activated only when historical tool
+evidence is masked or compacted; it cannot select another session. The compactor
+receives original recorded evidence, not masked previews, and writes a structured
+continuation checkpoint covering task constraints, decisions, verified work,
+failures, next actions and evidence references. With a compactor configured, the
+runtime first targets 85% of the available input budget. A proactive summary
+failure falls back to the hard budget only when no history must be discarded.
+Static prompt layers
 (`LayerCore`, `LayerProduct`, `LayerEnvironment`) are automatically separated
 from dynamic layers (`LayerProject`, `LayerUser`, `LayerSkill`, `LayerTurn`) via
 `---DYNAMIC_CONTEXT_BELOW---`, enabling prefix and incremental prompt caching.
@@ -137,6 +145,24 @@ lease connections belong to parents awaiting children. Child stream
 events are not sent to the parent Slack presentation sink. Read-only and
 network tools default to `Parallel` so a step with multiple independent calls
 runs concurrently; mutating tools stay sequential unless marked otherwise.
+
+Model dispatch shares a process-wide governor (16 requests by default) across parent turns,
+workers and compaction. Embeddings can supply a shared `model.Governor` through
+runtime dependencies; hosted operators can set `AGENT_MAX_CONCURRENT_MODEL_CALLS`. Optional `AGENT_MAX_TOTAL_TOKENS` (hosted) or
+`max_total_tokens` (local) adds a parent/worker token allowance; zero keeps it
+disabled. Concurrent workers reserve estimated input plus output before dispatch
+and settle against reported usage. Unknown failed requests retain their estimate.
+These are local estimates, not a provider billing guarantee. Usage has a typed
+tool-result field, and terminal results restore the same usage and step counts
+on replay.
+
+Recovery closes generated-but-unstarted tool calls with an explicit
+`execution_not_started` result. Started calls with uncertain effects remain
+`execution_interrupted` and are never automatically repeated. A model must make
+a fresh tool decision after either result. Public commentary remains assistant
+text with a commentary phase, separately from provider-native reasoning. Tool
+images survive canonical/provider conversion and use a separate 8 MiB aggregate
+image budget rather than being counted as inline prose.
 
 Delegated work uses a transport-neutral task contract: a stable worker name,
 role, objective, boundaries, required deliverable, and observable success

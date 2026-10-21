@@ -13,6 +13,16 @@ type MemoryStore struct {
 
 func NewMemoryStore() *MemoryStore { return &MemoryStore{events: make(map[string][]Event)} }
 
+func (s *MemoryStore) ReadEvent(_ context.Context, sessionID string, sequence uint64) (Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	events := s.events[sessionID]
+	if sequence == 0 || sequence > uint64(len(events)) {
+		return Event{}, fmt.Errorf("transcript event not found")
+	}
+	return events[sequence-1], nil
+}
+
 func (s *MemoryStore) Append(_ context.Context, event Event) (Event, error) {
 	if event.SessionID == "" {
 		return Event{}, fmt.Errorf("session id is required")

@@ -255,7 +255,7 @@ func (s *ConversationService) run(ctx context.Context, owner Identity, conversat
 	_, err := s.Agent.Run(runCtx, hosted.Request{
 		SessionID: conversationID, TurnID: turnID, UserID: owner.SubjectID, Workspace: s.Workspace,
 		Input: input, History: history, Model: s.Model, Prompt: fragments,
-		ScopeValues: map[string]string{"surface": "web", "web_search": "enabled"},
+		ScopeValues: map[string]string{"surface": "web", "team_id": owner.TenantID, "web_search": "enabled"},
 	})
 	return err
 }

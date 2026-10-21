@@ -1,6 +1,7 @@
 package slack
 
 type EventEnvelope struct {
+	TeamID         string          `json:"team_id,omitempty"`
 	Type           string          `json:"type"`
 	Challenge      string          `json:"challenge,omitempty"`
 	EventID        string          `json:"event_id,omitempty"`
@@ -14,6 +15,7 @@ type Authorization struct {
 }
 
 type Event struct {
+	TeamID      string     `json:"team_id,omitempty"`
 	Type        string     `json:"type"`
 	Subtype     string     `json:"subtype,omitempty"`
 	User        string     `json:"user,omitempty"`

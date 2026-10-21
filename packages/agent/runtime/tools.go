@@ -60,7 +60,13 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 			continue
 		}
 		prepared[index].item = item
-		prepared[index].descriptor = item.Descriptor()
+		descriptor, describeErr := tool.DescribeCall(item, call)
+		if describeErr != nil {
+			result := tool.Result{Content: []model.Content{{Type: model.ContentText, Text: describeErr.Error()}}, IsError: true, ErrorCode: "invalid_tool_arguments"}
+			prepared[index].result = &result
+			continue
+		}
+		prepared[index].descriptor = descriptor
 		exclusive = exclusive || prepared[index].descriptor.Exclusive
 	}
 	if exclusive && len(calls) != 1 {
@@ -96,7 +102,14 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 				// resolution cannot leave an assistant tool message malformed.
 				var blocked []preparedCall
 				for sibling := range prepared {
-					if sibling == index || prepared[sibling].result != nil {
+					if sibling == index {
+						continue
+					}
+					if _, done := priorResults[prepared[sibling].call.ID]; done {
+						continue
+					}
+					if prepared[sibling].result != nil {
+						blocked = append(blocked, prepared[sibling])
 						continue
 					}
 					result := tool.Result{
@@ -241,9 +254,17 @@ func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, pr
 		if entry.result == nil {
 			return toolOutcome{}, errors.New("tool execution produced no result")
 		}
-		if entry.result.Metadata != nil {
-			if childUsage, ok := entry.result.Metadata["usage"].(model.Usage); ok {
-				addUsage(&usage, childUsage)
+		if entry.result.Usage != nil {
+			addUsage(&usage, *entry.result.Usage)
+		} else if entry.result.Metadata != nil {
+			if value, ok := entry.result.Metadata["usage"]; ok {
+				// Accept legacy results after a JSON round trip as well as live Go values.
+				if raw, err := json.Marshal(value); err == nil {
+					var childUsage model.Usage
+					if json.Unmarshal(raw, &childUsage) == nil {
+						addUsage(&usage, childUsage)
+					}
+				}
 			}
 		}
 		eventType := transcript.ToolCallCompleted
@@ -425,6 +446,10 @@ func hasWireVisibleToolContent(content []model.Content) bool {
 			}
 		case model.ContentJSON:
 			if len(block.JSON) > 0 {
+				return true
+			}
+		case model.ContentImage:
+			if block.ImageURL != "" {
 				return true
 			}
 		}

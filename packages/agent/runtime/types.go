@@ -37,6 +37,7 @@ const (
 const UnlimitedSteps = -1
 
 type Config struct {
+	MaxTotalTokens  int64
 	Model           string
 	ReasoningEffort string
 	Temperature     *float64
@@ -97,6 +98,7 @@ func (c Config) withDefaults() Config {
 }
 
 type Dependencies struct {
+	ModelGovernor *model.Governor
 	// TraceContent is an optional, bounded and sanitized content recorder.
 	// Profiles own disclosure policy; the runtime never reads operator secrets.
 	TraceContent            func(trace.Span, string, any)
@@ -148,6 +150,9 @@ type sessionMutex struct {
 }
 
 func New(config Config, deps Dependencies) (*Runtime, error) {
+	if config.MaxTotalTokens < 0 {
+		return nil, errors.New("max total tokens cannot be negative")
+	}
 	if config.MaxSteps < UnlimitedSteps {
 		return nil, errors.New("max steps must be positive, zero for default, or -1 for unlimited")
 	}
@@ -159,6 +164,11 @@ func New(config Config, deps Dependencies) (*Runtime, error) {
 	}
 	if deps.Transcript == nil {
 		return nil, errors.New("transcript store is required")
+	}
+	if !deps.Tools.Has("context_read") {
+		if err := deps.Tools.Register(contextRead{store: deps.Transcript}); err != nil && !errors.Is(err, tool.ErrAlreadyRegistered) {
+			return nil, err
+		}
 	}
 	if deps.Policy == nil {
 		deps.Policy = tool.ReadOnlyPolicy{}
@@ -173,6 +183,7 @@ func New(config Config, deps Dependencies) (*Runtime, error) {
 		deps.Sleep = sleepContext
 	}
 	config = config.withDefaults()
+	deps.Model = model.Govern(deps.Model, deps.ModelGovernor)
 	if deps.Projector == nil {
 		deps.Projector = NewBoundedProjector(config.Context)
 	}

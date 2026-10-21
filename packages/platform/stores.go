@@ -146,11 +146,11 @@ func newNamedPGPool(ctx context.Context, dsn, maxEnv, minEnv string, defaultMax,
 var allTables = []string{
 	"agent_runs", "agent_tool_spills", "agent_run_steps",
 	"agent_run_feedback", "agent_transcript_events",
-	"slack_event_inbox", "user_settings", "user_prompt_assets",
+	"slack_event_inbox", "user_settings", "user_prompt_assets", "user_memories", "user_memory_generations", "user_memory_reset_requests",
 	"agent_session_inputs", "user_connections", "oauth_states",
 }
 
-var ingressTables = []string{"slack_event_inbox", "agent_session_inputs", "user_settings", "user_prompt_assets", "user_connections", "oauth_states"}
+var ingressTables = []string{"slack_event_inbox", "agent_session_inputs", "user_settings", "user_prompt_assets", "user_memories", "user_memory_generations", "user_memory_reset_requests", "user_connections", "oauth_states"}
 
 var webTables = []string{"web_auth_states", "web_auth_sessions", "web_conversations"}
 

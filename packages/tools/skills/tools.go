@@ -21,6 +21,7 @@ func (LoadTool) Descriptor() tool.Descriptor {
 		tool.ObjectSchema([]string{"name"}, map[string]any{
 			"name": map[string]any{"type": "string", "description": "Skill name exactly as shown in the available skills list."},
 		}),
+		tool.WithEffects(tool.EffectRead),
 	)
 }
 

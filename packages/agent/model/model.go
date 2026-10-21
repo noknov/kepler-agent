@@ -32,6 +32,7 @@ const (
 // are populated. The canonical transcript therefore stays provider-neutral.
 type Content struct {
 	Type       ContentType     `json:"type"`
+	Phase      string          `json:"phase,omitempty"`
 	Text       string          `json:"text,omitempty"`
 	JSON       json.RawMessage `json:"json,omitempty"`
 	ToolCall   *ToolCall       `json:"tool_call,omitempty"`
@@ -86,7 +87,7 @@ func TextMessage(role Role, value string) Message {
 func (m Message) Text() string {
 	var value string
 	for _, block := range m.Content {
-		if block.Type == ContentText {
+		if block.Type == ContentText && block.Phase != "commentary" {
 			value += block.Text
 		}
 	}
@@ -117,6 +118,11 @@ func (m Message) WithoutImages() Message {
 	for _, block := range m.Content {
 		if block.Type == ContentImage {
 			continue
+		}
+		if block.ToolResult != nil {
+			result := *block.ToolResult
+			result.Content = (Message{Content: result.Content}).WithoutImages().Content
+			block.ToolResult = &result
 		}
 		content = append(content, block)
 	}
@@ -174,6 +180,9 @@ func ContainImages(messages ...Message) bool {
 			if block.Type == ContentImage {
 				return true
 			}
+			if block.ToolResult != nil && ContainImages(Message{Content: block.ToolResult.Content}) {
+				return true
+			}
 		}
 	}
 	return false
@@ -186,13 +195,14 @@ type ToolDefinition struct {
 }
 
 type Request struct {
-	Model           string            `json:"model"`
-	Messages        []Message         `json:"messages"`
-	Tools           []ToolDefinition  `json:"tools,omitempty"`
-	ReasoningEffort string            `json:"reasoning_effort,omitempty"`
-	Temperature     *float64          `json:"temperature,omitempty"`
-	MaxOutputTokens int               `json:"max_output_tokens,omitempty"`
-	Metadata        map[string]string `json:"metadata,omitempty"`
+	InputTokenEstimate int               `json:"-"`
+	Model              string            `json:"model"`
+	Messages           []Message         `json:"messages"`
+	Tools              []ToolDefinition  `json:"tools,omitempty"`
+	ReasoningEffort    string            `json:"reasoning_effort,omitempty"`
+	Temperature        *float64          `json:"temperature,omitempty"`
+	MaxOutputTokens    int               `json:"max_output_tokens,omitempty"`
+	Metadata           map[string]string `json:"metadata,omitempty"`
 }
 
 type FinishReason string

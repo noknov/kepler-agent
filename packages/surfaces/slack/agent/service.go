@@ -355,7 +355,7 @@ func (s *Service) runWithApproval(eventCtx context.Context, sessionID string, re
 	if s.WebSearchEnabled != nil && !s.WebSearchEnabled(req.UserID) {
 		webSearch = "disabled"
 	}
-	scopeValues := map[string]string{"surface": "slack", "channel": req.Channel, "thread_ts": req.ThreadTS, "message_ts": req.MessageTS, "web_search": webSearch}
+	scopeValues := map[string]string{"surface": "slack", "team_id": req.TeamID, "channel": req.Channel, "thread_ts": req.ThreadTS, "message_ts": req.MessageTS, "web_search": webSearch}
 	if workflowMode {
 		for key, value := range activation.Scope {
 			scopeValues[key] = value

@@ -179,6 +179,7 @@ func (t ExploreTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	if len(jobs) == 1 {
 		out, err := t.Runner.runJob(ctx, call, jobs[0])
 		result := tool.TextResult(out.Text)
+		result.Usage = &out.Audit.Usage
 		result.Metadata = map[string]any{"child_runs": []ChildRun{out.Audit}, "usage": out.Audit.Usage}
 		if err != nil {
 			// Preserve the child-session link even when the exploration failed so
@@ -196,6 +197,8 @@ func (t ExploreTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	}
 	var totalUsage model.Usage
 	for _, audit := range audits {
+		totalUsage.Reported = totalUsage.Reported || audit.Usage.Reported
+		totalUsage.ReasoningTokens += audit.Usage.ReasoningTokens
 		totalUsage.InputTokens += audit.Usage.InputTokens
 		totalUsage.OutputTokens += audit.Usage.OutputTokens
 		totalUsage.CacheReadTokens += audit.Usage.CacheReadTokens
@@ -203,6 +206,7 @@ func (t ExploreTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 		totalUsage.CacheTokensIncludedInInput = totalUsage.CacheTokensIncludedInInput || audit.Usage.CacheTokensIncludedInInput
 	}
 	result := tool.TextResult(reports)
+	result.Usage = &totalUsage
 	result.Metadata = map[string]any{"child_runs": audits, "usage": totalUsage}
 	return result, nil
 }

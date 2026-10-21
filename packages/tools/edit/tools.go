@@ -25,6 +25,7 @@ func (t WriteFileTool) Descriptor() tool.Descriptor {
 			"content": map[string]any{"type": "string", "description": "The complete file content to write."},
 		}),
 		tool.WithParallel(false),
+		tool.WithEffects(tool.EffectWorkspaceWrite),
 	)
 }
 
@@ -68,6 +69,7 @@ func (t ReplaceTool) Descriptor() tool.Descriptor {
 			"new_text": map[string]any{"type": "string", "description": "Replacement text."},
 		}),
 		tool.WithParallel(false),
+		tool.WithEffects(tool.EffectWorkspaceWrite),
 	)
 }
 

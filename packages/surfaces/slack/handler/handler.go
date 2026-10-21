@@ -2,6 +2,7 @@ package slackhandler
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/noknov/kepler-agent/packages/config"
 	"github.com/noknov/kepler-agent/packages/connections"
+	"github.com/noknov/kepler-agent/packages/memory"
 	"github.com/noknov/kepler-agent/packages/observability"
 	"github.com/noknov/kepler-agent/packages/prompts"
 	"github.com/noknov/kepler-agent/packages/runs"
@@ -140,6 +142,8 @@ func (h *Handler) handleConnectionChoice(interaction slackgateway.Interaction) *
 func (h *Handler) handleBlockActions(ctx context.Context, interaction slackgateway.Interaction) {
 	for _, action := range interaction.Actions {
 		switch action.ActionID {
+		case "reset_user_memory":
+			h.resetUserMemory(ctx, interaction)
 		case "toggle_web_search":
 			h.Home.ToggleWebSearch(ctx, interaction.UserID)
 		case "toggle_conversation_mode":
@@ -167,6 +171,34 @@ func (h *Handler) handleBlockActions(ctx context.Context, interaction slackgatew
 		case "agent_approval_approve", "agent_approval_decline":
 			h.resolveApproval(ctx, interaction, action.ActionID, action.Value)
 		}
+	}
+}
+
+func (h *Handler) resetUserMemory(ctx context.Context, interaction slackgateway.Interaction) {
+	// Only the signed payload selects the owner; action values are ignored.
+	identity := memory.Identity{TeamID: interaction.TeamID, UserID: interaction.UserID}
+	if h.Home.Memory == nil || identity.Validate() != nil || interaction.TriggerID == "" {
+		return
+	}
+	var err error
+	if resetter, ok := h.Home.Memory.(interface {
+		ResetOnce(context.Context, memory.Identity, string) error
+	}); ok {
+		requestID := fmt.Sprintf("%x", sha256.Sum256([]byte(interaction.TriggerID)))
+		err = resetter.ResetOnce(ctx, identity, requestID)
+	} else {
+		err = h.Home.Memory.Reset(ctx, identity)
+	}
+	text := "Your saved memories have been cleared. Rules, skills and chat history are unchanged."
+	if err != nil {
+		log.Printf("reset user memory failed: %v", err)
+		text = "Your memories could not be cleared. Please try again."
+	}
+	if h.Slack != nil && interaction.TriggerID != "" {
+		_ = h.Slack.OpenView(ctx, interaction.TriggerID, map[string]any{"type": "modal", "title": plainText("Saved memories"), "close": plainText("Close"), "blocks": []map[string]any{{"type": "section", "text": plainText(text)}}})
+	}
+	if err == nil {
+		_ = h.Home.RequestRefresh(ctx, interaction.UserID)
 	}
 }
 
@@ -319,6 +351,7 @@ func (h *Handler) resolveApproval(ctx context.Context, interaction slackgateway.
 		verb = "approve"
 	}
 	request := slackconversation.Request{
+		TeamID:    interaction.TeamID,
 		EventID:   "approval-" + token.TurnID + "-" + token.ToolCallID + "-" + verb,
 		MessageID: "approval-continuation:" + token.TurnID + ":" + token.ToolCallID,
 		UserID:    interaction.UserID, Channel: interaction.Channel, ThreadTS: interaction.ThreadTS,
@@ -596,6 +629,7 @@ func (h *Handler) handlePrompt(ctx context.Context, eventID string, ev slack.Eve
 		text = prompts.AppMessage("empty_mention", "")
 	}
 	accepted, err := h.Conv.HandleMention(ctx, slackconversation.Request{
+		TeamID:    ev.TeamID,
 		EventID:   eventID,
 		UserID:    ev.User,
 		Channel:   ev.Channel,

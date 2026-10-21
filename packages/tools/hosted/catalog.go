@@ -8,6 +8,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/connections"
 	"github.com/noknov/kepler-agent/packages/mcp"
 	"github.com/noknov/kepler-agent/packages/safety"
+	"github.com/noknov/kepler-agent/packages/toolkit/toolprompts"
 	clickstackTools "github.com/noknov/kepler-agent/packages/tools/clickstack"
 	codeTools "github.com/noknov/kepler-agent/packages/tools/code"
 	gcpTools "github.com/noknov/kepler-agent/packages/tools/gcp"
@@ -41,6 +42,9 @@ func NewCatalog(cfg config.Config, workspacePolicy safety.WorkspacePolicy, comma
 	policy := policyForSurface(cfg, surface)
 	catalog, err := tool.NewCatalog()
 	if err != nil {
+		return CatalogBundle{}, err
+	}
+	if err := catalog.SetPromptOverlay(toolprompts.Apply); err != nil {
 		return CatalogBundle{}, err
 	}
 	registration := tool.NewRegistration(catalog, policy)

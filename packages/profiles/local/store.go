@@ -190,6 +190,19 @@ func (s *JSONLStore) Load(ctx context.Context, sessionID string, afterSequence u
 	return events, nil
 }
 
+func (s *JSONLStore) ReadEvent(ctx context.Context, sessionID string, sequence uint64) (transcript.Event, error) {
+	file, index, closeSession, err := s.openSession(ctx, sessionID)
+	if err != nil {
+		return transcript.Event{}, err
+	}
+	defer closeSession()
+	position := sort.Search(len(index.entries), func(i int) bool { return index.entries[i].sequence >= sequence })
+	if position >= len(index.entries) || index.entries[position].sequence != sequence {
+		return transcript.Event{}, fmt.Errorf("transcript event not found")
+	}
+	return readEvent(file, index.entries[position])
+}
+
 // openSession holds the cross-process lock until the caller has committed or
 // read its snapshot. Independent sessions never share an I/O mutex.
 func (s *JSONLStore) openSession(ctx context.Context, sessionID string) (*os.File, *sessionIndex, func(), error) {

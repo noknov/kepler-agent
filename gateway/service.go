@@ -18,6 +18,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/infra/httpguard"
 	sharedlogging "github.com/noknov/kepler-agent/packages/infra/logging"
 	"github.com/noknov/kepler-agent/packages/infra/telemetry"
+	"github.com/noknov/kepler-agent/packages/memory"
 	"github.com/noknov/kepler-agent/packages/platform"
 	"github.com/noknov/kepler-agent/packages/safety"
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
@@ -78,6 +79,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	connService := connections.NewServiceFromConfig(connStore, cfg)
 	connService.Continuations = continuations
 	s.home = slackhome.Controller{
+		Memory:      memory.PGStore{Pool: stores.PGPool},
 		Cfg:         cfg,
 		Access:      safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
 		Slack:       slackClient,

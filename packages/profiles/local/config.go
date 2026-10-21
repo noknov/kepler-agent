@@ -14,6 +14,7 @@ import (
 )
 
 type Config struct {
+	MaxTotalTokens       int64             `toml:"max_total_tokens"`
 	InputRouting         string            `toml:"input_routing"`
 	Output               string            `toml:"output"`
 	MaxSteps             int               `toml:"max_steps"`
@@ -81,6 +82,9 @@ func LoadConfig(path string) (Config, error) {
 }
 
 func (config Config) Validate() error {
+	if config.MaxTotalTokens < 0 {
+		return fmt.Errorf("max_total_tokens cannot be negative")
+	}
 	if config.MaxSteps < agentruntime.UnlimitedSteps {
 		return fmt.Errorf("max_steps must be positive, zero for default, or -1 for unlimited")
 	}

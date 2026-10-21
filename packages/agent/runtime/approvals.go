@@ -79,7 +79,10 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, resolut
 	if !ok {
 		return fmt.Errorf("approved tool %q is unavailable", call.Name)
 	}
-	descriptor := item.Descriptor()
+	descriptor, err := tool.DescribeCall(item, *call)
+	if err != nil {
+		return err
+	}
 	decision, err := r.deps.Policy.Decide(ctx, tool.PolicyRequest{Descriptor: descriptor, Call: *call})
 	if err != nil {
 		return err

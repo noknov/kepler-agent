@@ -363,7 +363,7 @@ type anthropicBlock struct {
 	Name         string          `json:"name,omitempty"`
 	Input        json.RawMessage `json:"input,omitempty"`
 	ToolUseID    string          `json:"tool_use_id,omitempty"`
-	Content      string          `json:"content,omitempty"`
+	Content      any             `json:"content,omitempty"`
 	CacheControl *cacheControl   `json:"cache_control,omitempty"`
 }
 
@@ -513,6 +513,9 @@ func anthropicMessages(messages []Message) []anthropicMessage {
 				Type:      "tool_result",
 				ToolUseID: msg.ToolCallID,
 				Content:   msg.Content,
+			}
+			if len(msg.ContentParts) > 0 {
+				block.Content = anthropicContentBlocks(msg)
 			}
 			last := len(out) - 1
 			if last >= 0 && out[last].Role == "user" && onlyToolResults(out[last].Content) {

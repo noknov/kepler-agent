@@ -282,7 +282,7 @@ func (c *QoderClient) requestBody(req Request, selected QoderModel) ([]byte, err
 			parameters["reasoning_effort"] = req.Thinking
 		}
 	}
-	messages := append([]Message(nil), req.Messages...)
+	messages := chatMessagesWithToolImages(req.Messages)
 	for i := range messages {
 		// The native gateway drops empty assistant content, orphaning its tool
 		// results. A blank content value retains a structured tool-only turn.

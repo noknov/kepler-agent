@@ -336,8 +336,8 @@ func TestClientRoutesToolStepTextToCommentary(t *testing.T) {
 		t.Fatalf("durable text = %q", got)
 	}
 	wire := toWireMessage(response.Message)
-	if wire.ReasoningContent != "Let me inspect this." {
-		t.Fatalf("ReasoningContent = %q, want preserved tool-step narration", wire.ReasoningContent)
+	if wire.Content != "Let me inspect this." || wire.ReasoningContent != "" {
+		t.Fatalf("wire commentary = %+v", wire)
 	}
 }
 

@@ -27,13 +27,18 @@ type ProjectRequest struct {
 	Events []transcript.Event
 	System model.Message
 	Tools  []model.ToolDefinition
+	// TargetTokens is an optional soft input ceiling for proactive compaction.
+	TargetTokens int
 }
 
 type Projection struct {
-	Messages        []model.Message
-	EstimatedTokens int
-	Dropped         []model.Message
-	CoversThrough   uint64
+	Messages         []model.Message
+	EstimatedTokens  int
+	Dropped          []model.Message
+	DroppedSequences []uint64
+	CoversThrough    uint64
+	// MaskedEvidence reports projector-owned masking, never tool-authored text.
+	MaskedEvidence bool
 }
 
 type Projector interface {
@@ -77,6 +82,9 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 	if limit <= 0 {
 		return Projection{}, &model.Error{Kind: model.ErrorBudgetExhausted, Message: "context budget exhausted by reserved, output, and tool tokens"}
 	}
+	if request.TargetTokens > 0 && request.TargetTokens < limit {
+		limit = request.TargetTokens
+	}
 	var base *projectedMessage
 	var baseSequence uint64
 	for _, event := range events {
@@ -119,6 +127,10 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 			entries = append(entries, projectedMessage{sequence: event.Sequence, group: group, message: message})
 		}
 	}
+	originals := make(map[uint64]model.Message, len(entries))
+	for _, entry := range entries {
+		originals[entry.sequence] = entry.message
+	}
 	buildMessages := func(currentEntries []projectedMessage) []model.Message {
 		out := make([]model.Message, 0, len(currentEntries)+2)
 		if len(system.Content) > 0 {
@@ -151,9 +163,12 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 	// Stage 1: Observation Masking. Before dropping entire conversation turns
 	// and invoking an LLM compaction call, fold oversized historical tool
 	// outputs outside the most recent exchanges into compact previews.
-	if tokens > limit && len(groups) > observationMaskRecentGroups {
-		maskedEntries, changed := maskHistoricalToolOutputs(groups, len(groups)-observationMaskRecentGroups)
+	exchanges := exchangeGroups(entries)
+	maskedEvidence := false
+	if tokens > limit && len(exchanges) > observationMaskRecentGroups {
+		maskedEntries, changed := maskHistoricalToolOutputs(exchanges, len(exchanges)-observationMaskRecentGroups)
 		if changed {
+			maskedEvidence = true
 			entries = maskedEntries
 			groups = groupProjectedMessages(entries)
 			if len(groups) > 0 {
@@ -171,7 +186,7 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 		}
 	}
 	if tokens <= limit {
-		return Projection{Messages: messages, EstimatedTokens: tokens}, nil
+		return Projection{Messages: messages, EstimatedTokens: tokens, MaskedEvidence: maskedEvidence}, nil
 	}
 	if len(groups) <= 1 {
 		return Projection{}, fmt.Errorf("context exceeds token budget and the latest turn cannot be dropped")
@@ -206,13 +221,16 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 		keepFrom += len(groups[index].entries)
 	}
 	dropped := make([]model.Message, 0, keepFrom)
+	var droppedSequences []uint64
 	var protected *projectedMessage
 	for index := range entries[:keepFrom] {
 		entry := entries[index]
 		if entry.sequence == currentInput {
 			protected = &entries[index]
 		}
-		dropped = append(dropped, entry.message)
+		// Summaries must see original evidence, never the lossy display preview.
+		dropped = append(dropped, originals[entry.sequence])
+		droppedSequences = append(droppedSequences, entry.sequence)
 	}
 	kept := make([]model.Message, 0, len(entries)-keepFrom+2)
 	if len(system.Content) > 0 {
@@ -228,8 +246,8 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 		kept = append(kept, entry.message)
 	}
 	projection := Projection{
-		Messages: kept, EstimatedTokens: EstimateTokens(kept), Dropped: dropped,
-		CoversThrough: entries[keepFrom-1].sequence,
+		Messages: kept, EstimatedTokens: EstimateTokens(kept), Dropped: dropped, DroppedSequences: droppedSequences,
+		CoversThrough: entries[keepFrom-1].sequence, MaskedEvidence: maskedEvidence,
 	}
 	if projection.EstimatedTokens > limit {
 		return Projection{}, fmt.Errorf("latest turn exceeds token budget")
@@ -351,7 +369,7 @@ func maskHistoricalToolOutputs(groups []projectedGroup, maskBeforeGroup int) ([]
 	for gIdx, group := range groups {
 		for _, entry := range group.entries {
 			if gIdx < maskBeforeGroup && entry.message.Role == model.RoleTool {
-				if masked, ok := maskToolResultMessage(entry.message); ok {
+				if masked, ok := maskToolResultMessage(entry.message, entry.sequence); ok {
 					entry.message = masked
 					changed = true
 				}
@@ -362,7 +380,7 @@ func maskHistoricalToolOutputs(groups []projectedGroup, maskBeforeGroup int) ([]
 	return out, changed
 }
 
-func maskToolResultMessage(message model.Message) (model.Message, bool) {
+func maskToolResultMessage(message model.Message, sequence uint64) (model.Message, bool) {
 	changed := false
 	cloned := message
 	cloned.Content = make([]model.Content, len(message.Content))
@@ -374,21 +392,31 @@ func maskToolResultMessage(message model.Message) (model.Message, bool) {
 		res := *block.ToolResult
 		resContent := make([]model.Content, 0, len(res.Content))
 		resChanged := false
-		for _, nested := range res.Content {
+		for blockIndex, nested := range res.Content {
+			blockChanged := false
 			if nested.Type == model.ContentText && len(nested.Text) > observationMaskMinTextBytes {
-				preview := utf8Prefix(nested.Text, observationMaskPreviewBytes)
+				preview := observationPreview(nested.Text)
 				omitted := len(nested.Text) - len(preview)
 				nested.Text = fmt.Sprintf("%s\n...[historical tool output (%s) masked: %d bytes omitted to preserve context window]", preview, res.Name, omitted)
 				resChanged = true
+				blockChanged = true
 			} else if nested.Type == model.ContentJSON && len(nested.JSON) > observationMaskMinTextBytes {
 				raw := string(nested.JSON)
-				preview := utf8Prefix(raw, observationMaskPreviewBytes)
+				preview := observationPreview(raw)
 				omitted := len(raw) - len(preview)
 				nested = model.Content{
 					Type: model.ContentText,
 					Text: fmt.Sprintf("%s\n...[historical JSON tool output (%s) masked: %d bytes omitted to preserve context window]", preview, res.Name, omitted),
 				}
 				resChanged = true
+				blockChanged = true
+			} else if nested.Type == model.ContentImage && nested.ImageURL != "" {
+				nested = model.Content{Type: model.ContentText, Text: "[historical tool image masked to preserve the context window]"}
+				resChanged = true
+				blockChanged = true
+			}
+			if blockChanged && (len(nested.Text) > 0) {
+				nested.Text += fmt.Sprintf("\nRead the original with context_read(sequence=%d, block=%d, offset=0).", sequence, blockIndex)
 			}
 			resContent = append(resContent, nested)
 		}
@@ -399,6 +427,15 @@ func maskToolResultMessage(message model.Message) (model.Message, bool) {
 		}
 	}
 	return cloned, changed
+}
+
+func observationPreview(value string) string {
+	head := utf8Prefix(value, observationMaskPreviewBytes/2)
+	start := len(value) - observationMaskPreviewBytes/2
+	for start < len(value) && !utf8.RuneStart(value[start]) {
+		start++
+	}
+	return head + "\n…\n" + value[start:]
 }
 
 func utf8Prefix(s string, maxBytes int) string {
