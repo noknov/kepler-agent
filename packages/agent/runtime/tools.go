@@ -261,6 +261,18 @@ func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, pr
 		if entry.result.IsError {
 			eventType = transcript.ToolCallFailed
 		}
+		if entry.result.TaskState != nil && !entry.result.IsError {
+			if entry.call.Name != "task_state" {
+				return toolOutcome{}, fmt.Errorf("only task_state may publish task state")
+			}
+			metadata, err := json.Marshal(entry.result.TaskState)
+			if err != nil {
+				return toolOutcome{}, err
+			}
+			if _, err := r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.TaskStateUpdated, Metadata: metadata}); err != nil {
+				return toolOutcome{}, err
+			}
+		}
 		if entry.result.Plan != nil && !entry.result.IsError {
 			if _, err := r.record(ctx, transcript.Event{
 				SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.PlanUpdated,

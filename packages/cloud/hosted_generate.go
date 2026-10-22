@@ -13,9 +13,10 @@ import (
 )
 
 type HostedGeneratePolicy struct {
-	Model           string
-	MaxOutputTokens int
-	Temperature     *float64
+	AllowNativeCompaction bool
+	Model                 string
+	MaxOutputTokens       int
+	Temperature           *float64
 }
 
 func HandleHostedGenerate(client model.Client, policy HostedGeneratePolicy) http.HandlerFunc {
@@ -32,6 +33,10 @@ func HandleHostedGenerate(client model.Client, policy HostedGeneratePolicy) http
 		var request model.Request
 		if err := json.Unmarshal(body, &request); err != nil {
 			http.Error(w, "invalid generate request", http.StatusBadRequest)
+			return
+		}
+		if request.Operation != "" && (request.Operation != model.OperationCompact || !policy.AllowNativeCompaction) {
+			http.Error(w, "model operation is not enabled", http.StatusBadRequest)
 			return
 		}
 		if policy.Model != "" && request.Model != "" && request.Model != policy.Model {

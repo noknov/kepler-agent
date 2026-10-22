@@ -140,7 +140,7 @@ func newLocalHarness(values options, config local.Config, creds credentials) (*l
 		Deps: agentruntime.Dependencies{
 			TraceContent: telemetry.ContentRecorder(),
 			Model:        resilientClient, Policy: local.NewWorkspacePolicy(), Transcript: store,
-			Compactor:   agentruntime.ModelCompactor{Client: resilientClient, Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
+			Compactor:   agentruntime.ModelCompactor{NativeClient: optionalNativeClient(resilientClient, config.NativeCompaction), Client: resilientClient, Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
 			Artifacts:   local.ArtifactStore{Root: artifactRoot},
 			Environment: environment.Config{WorkspaceRoots: []string{workspace.Root}},
 		},
@@ -163,7 +163,7 @@ func newLocalHarness(values options, config local.Config, creds credentials) (*l
 		agentruntime.Dependencies{
 			TraceContent: telemetry.ContentRecorder(),
 			Model:        resilientClient, Tools: catalog, Policy: local.NewWorkspacePolicy(), Approver: approver, Transcript: store, Events: renderer,
-			Compactor:   agentruntime.ModelCompactor{Client: resilientClient, Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
+			Compactor:   agentruntime.ModelCompactor{NativeClient: optionalNativeClient(resilientClient, config.NativeCompaction), Client: resilientClient, Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
 			Artifacts:   local.ArtifactStore{Root: artifactRoot},
 			Environment: environment.Config{WorkspaceRoots: []string{workspace.Root}},
 		},
@@ -229,4 +229,11 @@ func newID(prefix string) string {
 	data := make([]byte, 12)
 	_, _ = rand.Read(data)
 	return prefix + "_" + hex.EncodeToString(data)
+}
+
+func optionalNativeClient(client model.Client, enabled bool) model.Client {
+	if enabled {
+		return client
+	}
+	return nil
 }

@@ -37,6 +37,7 @@ type sessionIndex struct {
 type indexData struct {
 	coverage     uint64
 	currentInput uint64
+	taskState    uint64
 	info         os.FileInfo
 	offset       int64
 	sequence     uint64
@@ -77,6 +78,9 @@ func (s *JSONLStore) sessionIndex(id string) *sessionIndex {
 
 func (index *sessionIndex) add(event transcript.Event, offset int64, length int) {
 	id, sequence := event.ID, event.Sequence
+	if event.Type == transcript.TaskStateUpdated {
+		index.taskState = sequence
+	}
 	if coverage := transcript.CheckpointCoverage(event); coverage > 0 {
 		index.coverage = coverage
 	}

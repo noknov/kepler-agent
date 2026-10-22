@@ -1,34 +1,12 @@
 package runtime
 
 import (
-	"strings"
-
-	"github.com/noknov/kepler-agent/packages/agent/environment"
 	"github.com/noknov/kepler-agent/packages/agent/model"
+	"github.com/noknov/kepler-agent/packages/agent/transcript"
 )
 
-func insertEnvironmentFragment(messages []model.Message, fragment model.Message) []model.Message {
-	if strings.TrimSpace(fragment.Text()) == "" {
-		return messages
-	}
-	insertAt := 0
-	for index, message := range messages {
-		if message.Role == model.RoleSystem {
-			insertAt = index + 1
-			continue
-		}
-		break
-	}
-	out := make([]model.Message, 0, len(messages)+1)
-	out = append(out, messages[:insertAt]...)
-	out = append(out, fragment)
-	out = append(out, messages[insertAt:]...)
-	return out
-}
-
-func overlayEnvironment(messages []model.Message, config environment.Config) []model.Message {
-	if strings.TrimSpace(config.Message().Text()) == "" {
-		return messages
-	}
-	return insertEnvironmentFragment(messages, config.Message())
+// Construct the complete projection input before admission. Ephemeral images
+// remain absent from durable history but are still charged to this request.
+func (r *Runtime) projectionRequest(events []transcript.Event, turn TurnRequest, system model.Message, tools []model.ToolDefinition) ProjectRequest {
+	return ProjectRequest{Events: events, System: system, Tools: tools, Environment: r.deps.Environment.Message(), CurrentInput: turn.Input}
 }

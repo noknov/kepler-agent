@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
+	"github.com/noknov/kepler-agent/packages/agent/taskstate"
 )
 
 type Effect string
@@ -75,16 +76,17 @@ type Call struct {
 }
 
 type Result struct {
-	Usage          *model.Usage    `json:"usage,omitempty"`
-	Content        []model.Content `json:"content,omitempty"`
-	IsError        bool            `json:"is_error,omitempty"`
-	ErrorCode      string          `json:"error_code,omitempty"`
-	Retryable      bool            `json:"retryable,omitempty"`
-	Metadata       map[string]any  `json:"metadata,omitempty"`
-	Truncated      bool            `json:"truncated,omitempty"`
-	Spill          *model.Artifact `json:"spill,omitempty"`
-	NeedsUserInput bool            `json:"needs_user_input,omitempty"`
-	Plan           *PlanUpdate     `json:"plan,omitempty"`
+	TaskState      *taskstate.State `json:"task_state,omitempty"`
+	Usage          *model.Usage     `json:"usage,omitempty"`
+	Content        []model.Content  `json:"content,omitempty"`
+	IsError        bool             `json:"is_error,omitempty"`
+	ErrorCode      string           `json:"error_code,omitempty"`
+	Retryable      bool             `json:"retryable,omitempty"`
+	Metadata       map[string]any   `json:"metadata,omitempty"`
+	Truncated      bool             `json:"truncated,omitempty"`
+	Spill          *model.Artifact  `json:"spill,omitempty"`
+	NeedsUserInput bool             `json:"needs_user_input,omitempty"`
+	Plan           *PlanUpdate      `json:"plan,omitempty"`
 }
 
 // PlanUpdate is an agent-authored, structured execution plan. It is emitted

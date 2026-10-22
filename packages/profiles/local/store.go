@@ -244,7 +244,7 @@ func (s *JSONLStore) LoadTurn(ctx context.Context, sessionID, turnID string) ([]
 	defer closeSession()
 	var events []transcript.Event
 	for _, location := range index.entries {
-		if location.sequence <= index.coverage && location.sequence != index.currentInput && location.turnID != turnID {
+		if location.sequence <= index.coverage && location.sequence != index.currentInput && location.sequence != index.taskState && location.turnID != turnID {
 			continue
 		}
 		if err := ctx.Err(); err != nil {

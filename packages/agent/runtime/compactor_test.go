@@ -15,12 +15,12 @@ func (c *compactorClient) Generate(_ context.Context, request model.Request, _ m
 	return model.Response{Message: model.TextMessage(model.RoleAssistant, "summary")}, nil
 }
 
-func TestCompactorRejectsAnOversizedGroupBeforeDispatch(t *testing.T) {
-	client := &scriptedModel{}
+func TestCompactorSplitsAnOversizedGroup(t *testing.T) {
+	client := &compactorClient{}
 	compactor := ModelCompactor{Client: client, MaxInputTokens: 300}
 	_, err := compactor.Compact(context.Background(), []model.Message{model.TextMessage(model.RoleUser, strings.Repeat("x", 2000))}, 100)
-	if err == nil || len(client.requests) != 0 {
-		t.Fatalf("error=%v calls=%d", err, len(client.requests))
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

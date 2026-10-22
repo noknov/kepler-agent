@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"fmt"
 	"strings"
 )
 
@@ -49,3 +50,16 @@ func (r *ProtocolRouter) ChatStream(ctx context.Context, req Request, h StreamHa
 	}
 	return stream.ChatStream(ctx, req, h)
 }
+
+func (r *ProtocolRouter) Compact(ctx context.Context, req Request) (Response, error) {
+	if r.usesResponses(req.Model) {
+		if compact, ok := r.responses.(CompactClient); ok {
+			return compact.Compact(ctx, req)
+		}
+	}
+	return Response{}, fmt.Errorf("native compaction is unavailable for the selected protocol")
+}
+
+// AcceptsNativeContinuation must follow the current model/protocol decision.
+// An unchanged provider endpoint does not imply an unchanged wire protocol.
+func (r *ProtocolRouter) AcceptsNativeContinuation(name string) bool { return r.usesResponses(name) }

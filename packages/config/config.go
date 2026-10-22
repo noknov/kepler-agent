@@ -68,6 +68,7 @@ type SlackConfig struct {
 }
 
 type LLMConfig struct {
+	NativeCompaction       bool
 	ChatGPTCredentialsFile string
 	Provider               string
 	BaseURL                string
@@ -349,6 +350,7 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			APIKey:                 providerAPIKey(llmProvider),
 			Model:                  llmModel,
 			MaxOutputTokens:        envInt("LLM_MAX_OUTPUT_TOKENS", 0),
+			NativeCompaction:       envBool("LLM_NATIVE_COMPACTION", false),
 			Protocol:               llmProtocol,
 			AnthropicFlavor:        anthropicFlavor,
 			Thinking:               llmThinking,

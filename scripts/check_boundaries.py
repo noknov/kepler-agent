@@ -57,9 +57,10 @@ def violation(path: Path, import_path: str) -> str | None:
             "packages/agent/tool",
             "packages/agent/transcript",
             "packages/agent/environment",
+            "packages/agent/taskstate",
         )
         if not target.startswith(allowed):
-            return "packages/agent contains only model/prompt/runtime/tool/transcript"
+            return "packages/agent must depend on an explicitly allowed canonical core package"
 
     if source.startswith("packages/providers/"):
         allowed = ("packages/agent/model", "packages/llm")

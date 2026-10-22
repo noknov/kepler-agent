@@ -228,6 +228,7 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 					msg.Content = completedMessage.Content
 				}
 				msg.Citations = completedMessage.Citations
+				msg.NativeItems = completedMessage.NativeItems
 				for _, item := range done.Response.Output {
 					emitCommentary(item)
 					if item.Type == "function_call" {
@@ -336,6 +337,17 @@ func (c *OpenAIResponsesClient) responsesBody(req Request, stream bool) map[stri
 func responsesInput(messages []Message) []any {
 	input := make([]any, 0, len(messages))
 	for _, msg := range messages {
+		if len(msg.NativeItems) > 0 {
+			for _, raw := range msg.NativeItems {
+				var item map[string]any
+				decoder := json.NewDecoder(bytes.NewReader(raw))
+				decoder.UseNumber()
+				if decoder.Decode(&item) == nil {
+					input = append(input, item)
+				}
+			}
+			continue
+		}
 		switch msg.Role {
 		case "tool":
 			if strings.TrimSpace(msg.ToolCallID) == "" {
@@ -463,9 +475,10 @@ func (c *OpenAIResponsesClient) providerName() string {
 }
 
 type responsesResponse struct {
-	Status string            `json:"status"`
-	Output []responsesOutput `json:"output"`
-	Usage  responsesUsage    `json:"usage"`
+	RawOutput []json.RawMessage `json:"-"`
+	Status    string            `json:"status"`
+	Output    []responsesOutput `json:"output"`
+	Usage     responsesUsage    `json:"usage"`
 }
 
 type responsesOutput struct {
@@ -507,7 +520,7 @@ type responsesUsage struct {
 }
 
 func (r responsesResponse) message() Message {
-	msg := Message{Role: "assistant"}
+	msg := Message{Role: "assistant", NativeItems: r.RawOutput}
 	for _, item := range r.Output {
 		switch item.Type {
 		case "message":
@@ -585,3 +598,20 @@ func (u responsesUsage) toUsage() Usage {
 
 var _ Client = (*OpenAIResponsesClient)(nil)
 var _ StreamClient = (*OpenAIResponsesClient)(nil)
+
+func (r *responsesResponse) UnmarshalJSON(data []byte) error {
+	type plain responsesResponse
+	var parsed plain
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return err
+	}
+	var raw struct {
+		Output []json.RawMessage `json:"output"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*r = responsesResponse(parsed)
+	r.RawOutput = raw.Output
+	return nil
+}

@@ -32,8 +32,9 @@ type Config struct {
 
 // Client is the sole wire-to-canonical model adapter used by every profile.
 type Client struct {
-	Wire llm.Client
-	Host model.Client
+	provider, route string
+	Wire            llm.Client
+	Host            model.Client
 }
 
 const KeplerGeneratePath = "/v1/kepler/generate"
@@ -62,7 +63,7 @@ func New(config Config) (*Client, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &Client{Wire: wire}, nil
+		return bindClient(wire, config), nil
 	}
 	if provider == "chatgpt" {
 		if protocol != "responses" || strings.TrimRight(config.BaseURL, "/") != chatgpt.Resource {
@@ -73,7 +74,7 @@ func New(config Config) (*Client, error) {
 		}
 		responses := llm.NewOpenAIResponsesClient(provider, config.BaseURL, "", config.Timeout)
 		responses.SetTransport(&chatgpt.Transport{Path: config.ChatGPTCredentialsFile})
-		return &Client{Wire: responses}, nil
+		return bindClient(responses, config), nil
 	}
 	var wire llm.Client
 	switch protocol {
@@ -92,7 +93,7 @@ func New(config Config) (*Client, error) {
 	default:
 		return nil, fmt.Errorf("unsupported model protocol %q", config.Protocol)
 	}
-	return &Client{Wire: wire}, nil
+	return bindClient(wire, config), nil
 }
 
 func (c *Client) Generate(ctx context.Context, request model.Request, sink model.EventSink) (model.Response, error) {
@@ -103,13 +104,23 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 	if c == nil || c.Wire == nil {
 		return model.Response{}, fmt.Errorf("model provider is not configured")
 	}
+	if request.Operation == model.OperationCompact {
+		return c.compact(ctx, request)
+	}
+	if request.Operation != "" {
+		return model.Response{}, &model.Error{Kind: model.ErrorInvalid, Message: "unsupported model operation"}
+	}
 	req := llm.Request{
 		Model: request.Model, MaxTokens: request.MaxOutputTokens,
 		Thinking: request.ReasoningEffort, Temperature: request.Temperature,
 		Metadata: request.Metadata,
 	}
 	for _, message := range request.Messages {
-		req.Messages = append(req.Messages, toWireMessage(message))
+		converted, err := c.inputMessage(message, request.Model)
+		if err != nil {
+			return model.Response{}, err
+		}
+		req.Messages = append(req.Messages, converted)
 	}
 	for _, definition := range request.Tools {
 		var parameters map[string]any
@@ -214,6 +225,9 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 		return model.Response{}, err
 	}
 	message.Phase = response.Message.Phase
+	if state := c.continuation(response.Message, request.Model, "response", response.Usage); state != nil {
+		message.Content = append(message.Content, model.Content{Type: model.ContentContinuation, Continuation: state})
+	}
 	if len(message.ToolCalls()) > 0 {
 		message = toolCallStepMessage(message)
 	}
@@ -330,7 +344,7 @@ func toolCallStepMessage(message model.Message) model.Message {
 				block.Phase = "commentary"
 				content = append(content, block)
 			}
-		case model.ContentReasoning, model.ContentToolCall:
+		case model.ContentReasoning, model.ContentToolCall, model.ContentContinuation:
 			content = append(content, block)
 		}
 	}
@@ -512,3 +526,10 @@ func toModelError(err error) error {
 }
 
 var _ model.Client = (*Client)(nil)
+
+func bindClient(wire llm.Client, config Config) *Client {
+	// The endpoint and credential identity are part of the continuation contract.
+	identity, _ := json.Marshal([]string{config.Provider, config.Protocol, config.BaseURL, config.APIKey, config.ChatGPTCredentialsFile})
+	fingerprint := sha256.Sum256(identity)
+	return &Client{Wire: wire, provider: config.Provider, route: fmt.Sprintf("%x", fingerprint)}
+}

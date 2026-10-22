@@ -24,6 +24,14 @@ func (s *sessionEvents) append(event transcript.Event) {
 	switch event.Type {
 	case transcript.UserInput, transcript.SteeringInput, transcript.AssistantMessage, transcript.ToolCallCompleted, transcript.ToolCallFailed, transcript.ApprovalRequested:
 		s.context = append(s.context, event)
+	case transcript.TaskStateUpdated:
+		for i := len(s.context) - 1; i >= 0; i-- {
+			if s.context[i].Type == transcript.TaskStateUpdated {
+				s.context = append(s.context[:i:i], s.context[i+1:]...)
+				break
+			}
+		}
+		s.context = append(s.context, event)
 	case transcript.CompactionCreated:
 		s.context = append(s.context, event)
 		s.context = transcript.TurnWindow(s.context, "")

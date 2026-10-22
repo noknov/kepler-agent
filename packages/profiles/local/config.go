@@ -14,6 +14,7 @@ import (
 )
 
 type Config struct {
+	NativeCompaction     bool              `toml:"native_compaction"`
 	MaxTotalTokens       int64             `toml:"max_total_tokens"`
 	InputRouting         string            `toml:"input_routing"`
 	Output               string            `toml:"output"`

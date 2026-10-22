@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync/atomic"
-	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/prompt"
@@ -79,6 +77,11 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 	defer r.clearEventCache(request.SessionID)
 	if replayed, replayErr, ok := completedTurn(events, request.TurnID); ok {
 		return replayed, replayErr
+	}
+	for _, event := range events {
+		if err := r.captureUnknownEffect(ctx, event); err != nil {
+			return TurnResult{SessionID: request.SessionID, TurnID: request.TurnID}, err
+		}
 	}
 	progress, err := recoverTurnProgress(events, request.TurnID, r.config)
 	if err != nil {
@@ -217,7 +220,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 			Sequence: sequence, SessionID: request.SessionID, TurnID: request.TurnID,
 			Type: transcript.ToolCallCompleted, ToolCall: &proposed.Call, ToolResult: &proposed.Result,
 		})
-		_, err = r.deps.Projector.Project(admissionCtx, ProjectRequest{Events: candidate, System: system, Tools: proposed.Definitions})
+		_, err = r.deps.Projector.Project(admissionCtx, r.projectionRequest(candidate, request, system, proposed.Definitions))
 		return err
 	})
 	for step := result.Steps + 1; r.config.MaxSteps == UnlimitedSteps || step <= r.config.MaxSteps; step++ {
@@ -236,6 +239,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 			return r.failTurn(ctx, result, err)
 		}
 		metadata, _ := json.Marshal(map[string]any{
+			"context_policy":   r.config.Context.Policy.WithDefaults(),
 			"estimated_tokens": projection.EstimatedTokens, "message_count": len(projection.Messages),
 			"prompt_hash": composition.Hash, "tool_count": len(r.deps.Tools.ActiveDefinitions(request.SessionID)),
 		})
@@ -414,7 +418,11 @@ func (r *Runtime) reconcileInterruptedToolCalls(ctx context.Context, request Tur
 			ErrorCode: "execution_interrupted",
 			Metadata:  map[string]any{"recovered": true},
 		}
-		if _, err := r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.ToolCallFailed, ToolCall: &call, ToolResult: &result}); err != nil {
+		stored, err := r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.ToolCallFailed, ToolCall: &call, ToolResult: &result})
+		if err != nil {
+			return err
+		}
+		if err := r.captureUnknownEffect(ctx, stored); err != nil {
 			return err
 		}
 	}
@@ -486,121 +494,6 @@ func (r *Runtime) recordStepCompleted(ctx context.Context, request TurnRequest, 
 	return err
 }
 
-func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, system model.Message) (Projection, error) {
-	for round := 0; round < 3; round++ {
-		projection, err := r.projectContextOnce(ctx, request, system)
-		if err != nil {
-			return Projection{}, err
-		}
-		if len(projection.Dropped) == 0 || r.deps.Compactor == nil {
-			return projection, nil
-		}
-	}
-	return Projection{}, &model.Error{Kind: model.ErrorBudgetExhausted, Message: "compaction could not fit a complete continuation checkpoint"}
-}
-
-func (r *Runtime) projectContextOnce(ctx context.Context, request TurnRequest, system model.Message) (Projection, error) {
-	events, err := r.contextEvents(ctx, request.SessionID)
-	if err != nil {
-		return Projection{}, err
-	}
-	projectRequest := ProjectRequest{Events: events, System: system, Tools: r.deps.Tools.ActiveDefinitions(request.SessionID)}
-	if r.deps.Compactor != nil {
-		available := r.config.Context.MaxTokens - r.config.Context.ReserveTokens - r.config.Context.OutputTokens - EstimateToolTokens(projectRequest.Tools)
-		projectRequest.TargetTokens = available * 85 / 100
-	}
-	projection, err := r.deps.Projector.Project(ctx, projectRequest)
-	if err != nil && projectRequest.TargetTokens > 0 {
-		projectRequest.TargetTokens = 0
-		projection, err = r.deps.Projector.Project(ctx, projectRequest)
-	}
-	if err != nil {
-		return Projection{}, err
-	}
-	needsReader := projection.MaskedEvidence
-	for _, message := range projection.Dropped {
-		for _, block := range message.Content {
-			needsReader = needsReader || block.ToolResult != nil
-		}
-	}
-	if needsReader {
-		if _, active := r.deps.Tools.GetActive(request.SessionID, "context_read"); !active {
-			if err := r.deps.Tools.Activate(request.SessionID, "context_read"); err != nil {
-				return Projection{}, err
-			}
-			projectRequest.Tools = r.deps.Tools.ActiveDefinitions(request.SessionID)
-			projectRequest.TargetTokens = 0
-			projection, err = r.deps.Projector.Project(ctx, projectRequest)
-			if err != nil {
-				return Projection{}, err
-			}
-		}
-	}
-	if len(projection.Dropped) == 0 || r.deps.Compactor == nil {
-		projection.Messages = overlayEnvironment(overlayCurrentInput(projection, request.Input).Messages, r.deps.Environment)
-		return projection, nil
-	}
-	targetTokens := 4_096
-	if smallContextTarget := r.config.Context.MaxTokens / 8; smallContextTarget > 0 && smallContextTarget < targetTokens {
-		targetTokens = smallContextTarget
-	}
-	if targetTokens < 512 {
-		targetTokens = 512
-	}
-	evidence := compactionEvidence(projection)
-	summary, err := r.deps.Compactor.Compact(ctx, evidence, targetTokens)
-	if err != nil {
-		// A proactive compaction outage must not terminate work that still fits
-		// safely in the hard input budget. Never silently discard history here.
-		if ctx.Err() == nil {
-			hard, projectErr := r.deps.Projector.Project(ctx, ProjectRequest{Events: events, System: system, Tools: r.deps.Tools.ActiveDefinitions(request.SessionID)})
-			if projectErr == nil && len(hard.Dropped) == 0 {
-				hard.Messages = overlayEnvironment(overlayCurrentInput(hard, request.Input).Messages, r.deps.Environment)
-				return hard, nil
-			}
-		}
-		return Projection{}, err
-	}
-	metadata, _ := json.Marshal(map[string]uint64{"covers_through": projection.CoversThrough})
-	if _, err = r.record(ctx, transcript.Event{
-		SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.CompactionCreated,
-		Message: &summary, Metadata: metadata,
-	}); err != nil {
-		return Projection{}, err
-	}
-	events, err = r.contextEvents(ctx, request.SessionID)
-	if err != nil {
-		return Projection{}, err
-	}
-	projection, err = r.deps.Projector.Project(ctx, ProjectRequest{Events: events, System: system, Tools: r.deps.Tools.ActiveDefinitions(request.SessionID)})
-	if err != nil {
-		return Projection{}, err
-	}
-	projection.Messages = overlayEnvironment(overlayCurrentInput(projection, request.Input).Messages, r.deps.Environment)
-	return projection, err
-}
-
-func compactionEvidence(projection Projection) []model.Message {
-	messages := append([]model.Message(nil), projection.Dropped...)
-	for i, message := range messages {
-		if i >= len(projection.DroppedSequences) {
-			continue
-		}
-		message.Content = append([]model.Content(nil), message.Content...)
-		for j, block := range message.Content {
-			if block.ToolResult == nil {
-				continue
-			}
-			result := *block.ToolResult
-			result.Content = append([]model.Content(nil), result.Content...)
-			result.Content = append(result.Content, model.Content{Type: model.ContentText, Text: fmt.Sprintf("Original evidence reference: context_read(sequence=%d, block=0, offset=0). Blocks are numbered 0 through %d. Retain relevant references in the checkpoint.", projection.DroppedSequences[i], len(result.Content)-1)})
-			message.Content[j].ToolResult = &result
-		}
-		messages[i] = message
-	}
-	return messages
-}
-
 func durableUserInput(message model.Message) model.Message {
 	copyMessage := message
 	copyMessage.Content = make([]model.Content, 0, len(message.Content))
@@ -612,217 +505,6 @@ func durableUserInput(message model.Message) model.Message {
 		copyMessage.Content = append(copyMessage.Content, block)
 	}
 	return copyMessage
-}
-
-func overlayCurrentInput(projection Projection, current model.Message) Projection {
-	if current.ID == "" {
-		return projection
-	}
-	for index := len(projection.Messages) - 1; index >= 0; index-- {
-		if projection.Messages[index].ID == current.ID {
-			projection.Messages[index] = current
-			projection.EstimatedTokens = EstimateTokens(projection.Messages)
-			break
-		}
-	}
-	return projection
-}
-
-func (r *Runtime) generate(ctx context.Context, turn TurnRequest, messages []model.Message) (model.Response, error) {
-	return r.generateWithTools(ctx, turn, messages, r.deps.Tools.ActiveDefinitions(turn.SessionID))
-}
-
-func (r *Runtime) generateWithTools(ctx context.Context, turn TurnRequest, messages []model.Message, definitions []model.ToolDefinition) (model.Response, error) {
-	modelName := turn.Model
-	if modelName == "" {
-		modelName = r.config.Model
-	}
-	requestID, err := r.nextModelRequestID(ctx, turn)
-	if err != nil {
-		return model.Response{}, err
-	}
-	request := model.Request{
-		InputTokenEstimate: EstimateTokens(messages) + EstimateToolTokens(definitions),
-		Model:              modelName, Messages: messages, Tools: definitions,
-		ReasoningEffort: r.config.ReasoningEffort, Temperature: r.config.Temperature, MaxOutputTokens: r.config.MaxOutputTokens,
-		Metadata: map[string]string{"session_id": turn.SessionID, "turn_id": turn.TurnID, "request_id": requestID},
-	}
-
-	var lastErr error
-	for attempt := 0; attempt <= r.config.MaxModelRetries; attempt++ {
-		metadata, _ := json.Marshal(map[string]any{"request_id": requestID, "attempt": attempt + 1, "model": request.Model})
-		if _, err := r.record(ctx, transcript.Event{ID: fmt.Sprintf("model-request:%s:attempt:%d", requestID, attempt+1), SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelRequestStarted, Status: "started", Metadata: metadata}); err != nil {
-			return model.Response{}, err
-		}
-		response, err := r.generateAttempt(ctx, turn, request, attempt+1)
-		if err == nil {
-			completed, _ := json.Marshal(map[string]any{"request_id": requestID, "attempt": attempt + 1, "model": request.Model, "finish_reason": response.FinishReason, "usage": response.Usage})
-			if _, recordErr := r.record(ctx, transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelCompleted, Metadata: completed, Trace: responseTrace(response)}); recordErr != nil {
-				return model.Response{}, recordErr
-			}
-			return response, nil
-		}
-		lastErr = err
-		var typed *model.Error
-		failed, _ := json.Marshal(map[string]any{"request_id": requestID, "attempt": attempt + 1, "model": request.Model, "kind": model.ErrorKindOf(err), "retryable": errors.As(err, &typed) && typed.Retryable})
-		failedCtx, failedCancel := r.cleanupContext(ctx)
-		_, recordErr := r.record(failedCtx, transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelFailed, Error: err.Error(), Metadata: failed, Trace: responseTrace(response)})
-		failedCancel()
-		if recordErr != nil {
-			return model.Response{}, recordErr
-		}
-		if !errors.As(err, &typed) || !typed.Retryable || attempt == r.config.MaxModelRetries {
-			break
-		}
-		if err := r.deps.Sleep(ctx, r.config.RetryBaseDelay*time.Duration(1<<attempt)); err != nil {
-			return model.Response{}, err
-		}
-	}
-	return model.Response{}, lastErr
-}
-
-func (r *Runtime) nextModelRequestID(ctx context.Context, turn TurnRequest) (string, error) {
-	r.eventMu.RLock()
-	if cached := r.eventCache[turn.SessionID]; cached != nil {
-		next := len(cached.requests[turn.TurnID]) + 1
-		r.eventMu.RUnlock()
-		return fmt.Sprintf("%s:model:%d", turn.TurnID, next), nil
-	}
-	r.eventMu.RUnlock()
-	events, err := r.turnEvents(ctx, turn.SessionID)
-	if err != nil {
-		return "", err
-	}
-	seen := make(map[string]bool)
-	for _, event := range events {
-		if event.TurnID != turn.TurnID || event.Type != transcript.ModelRequestStarted {
-			continue
-		}
-		var state modelRequestState
-		if json.Unmarshal(event.Metadata, &state) == nil && state.RequestID != "" {
-			seen[state.RequestID] = true
-			continue
-		}
-		// Preserve forward progress for legacy events without request metadata.
-		seen[event.ID] = true
-	}
-	return fmt.Sprintf("%s:model:%d", turn.TurnID, len(seen)+1), nil
-}
-
-func (r *Runtime) generateAttempt(ctx context.Context, turn TurnRequest, request model.Request, attempt int) (response model.Response, err error) {
-	parent := trace.SpanContextFromContext(ctx)
-	modelAttributes := langfuseObservationAttributes(turn.Scope, "generation")
-	modelAttributes = append(modelAttributes,
-		attribute.String("gen_ai.request.model", request.Model),
-		attribute.Int("gen_ai.request.max_tokens", request.MaxOutputTokens),
-		attribute.String("agent.model.request_id", request.Metadata["request_id"]),
-		attribute.Int("agent.model.attempt", attempt),
-	)
-	ctx, span := runtimeTracer.Start(ctx, "model.generate", trace.WithAttributes(modelAttributes...))
-	stats, _ := ctx.Value(turnTraceKey{}).(*turnTrace)
-	attempts, retries, fallbacks := 0, 0, 0
-	observed := false
-	actualModel, actualProvider := request.Model, ""
-	if r.deps.TraceContent != nil && span.IsRecording() {
-		input := request
-		input.Messages = traceMessages(request.Messages)
-		r.traceContent(span, "input", input)
-	}
-	ctx = model.WithAttemptObserver(ctx, func(attempt model.Attempt) {
-		observed = true
-		switch attempt.Outcome {
-		case "requested":
-			attempts++
-			actualModel, actualProvider = attempt.Model, attempt.Provider
-		case "retrying":
-			retries++
-		case "fallback":
-			fallbacks++
-		case "completed":
-			actualModel, actualProvider = attempt.Model, attempt.Provider
-		}
-
-		span.AddEvent("model.attempt", trace.WithAttributes(
-			attribute.String("gen_ai.provider.name", attempt.Provider), attribute.String("gen_ai.request.model", attempt.Model),
-			attribute.String("agent.model.outcome", attempt.Outcome), attribute.Int("agent.model.attempt", attempt.Number),
-			attribute.Bool("agent.model.fallback", attempt.Fallback), attribute.String("error.type", string(model.ErrorKindOf(attempt.Error))),
-		))
-		metadata, _ := json.Marshal(map[string]any{"request_id": request.Metadata["request_id"], "attempt": attempt.Number, "provider": attempt.Provider, "model": attempt.Model, "fallback": attempt.Fallback, "outcome": attempt.Outcome, "remaining_ms": attempt.Remaining.Milliseconds(), "kind": model.ErrorKindOf(attempt.Error)})
-		event := transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelAttempted, Status: attempt.Outcome, Metadata: metadata}
-		if attempt.Error != nil {
-			event.Error = attempt.Error.Error()
-		}
-		attemptCtx, cancel := r.cleanupContext(ctx)
-		defer cancel()
-		_, _ = r.record(attemptCtx, event)
-	})
-	defer func() {
-		spanContext := span.SpanContext()
-		response.TraceID, response.SpanID = spanContext.TraceID().String(), spanContext.SpanID().String()
-		if parent.IsValid() {
-			response.ParentSpanID = parent.SpanID().String()
-		}
-		if attempts == 0 && !observed {
-			attempts = 1
-		} // Clients without a resilience observer make one call.
-		recordUsage(span, response.Usage)
-		span.SetAttributes(attribute.String("langfuse.observation.model.name", actualModel),
-			attribute.String("langfuse.observation.metadata.requested_model", request.Model),
-			attribute.String("langfuse.observation.metadata.actual_provider", actualProvider),
-			attribute.Int("langfuse.observation.metadata.attempt_count", attempts),
-			attribute.Int("langfuse.observation.metadata.retry_count", retries),
-			attribute.Int("langfuse.observation.metadata.fallback_count", fallbacks),
-			attribute.Bool("langfuse.observation.metadata.recovered", err == nil && (retries > 0 || fallbacks > 0)),
-		)
-		if stats != nil {
-			stats.mu.Lock()
-			stats.requests++
-			stats.attempts += attempts
-			stats.retries += retries
-			if attempt > 1 {
-				stats.retries++
-			}
-			stats.fallbacks += fallbacks
-			if !response.Usage.Known() {
-				stats.missingUsage++
-			}
-			stats.lastModel, stats.lastProvider = actualModel, actualProvider
-			stats.mu.Unlock()
-		}
-		if r.deps.TraceContent != nil && span.IsRecording() {
-			r.traceContent(span, "output", traceMessages([]model.Message{response.Message}))
-		}
-		span.SetAttributes(
-			attribute.StringSlice("gen_ai.response.finish_reasons", []string{string(response.FinishReason)}),
-			attribute.Int64("agent.model.cache_read_tokens", response.Usage.CacheReadTokens),
-			attribute.Int64("agent.model.cache_created_tokens", response.Usage.CacheCreatedTokens),
-		)
-		if err != nil {
-			recordSpanError(span, err)
-			span.SetStatus(codes.Error, "model request failed")
-		}
-		span.End()
-	}()
-	started := time.Now()
-	var firstToken atomic.Bool
-	return r.deps.Model.Generate(ctx, request, func(event model.StreamEvent) error {
-		if (event.Type == model.StreamFirstToken || (event.Type == model.StreamTextDelta && event.Text != "")) && firstToken.CompareAndSwap(false, true) {
-			now := time.Now()
-			span.SetAttributes(attribute.Int64("agent.model.first_token_ms", now.Sub(started).Milliseconds()), attribute.String("langfuse.observation.completion_start_time", now.UTC().Format(time.RFC3339Nano)))
-		}
-		// Stream deltas are presentation events, not canonical durable facts.
-		// Persisting each delta makes PostgreSQL/JSONL cost proportional to token
-		// count. The final assistant message and model lifecycle remain durable.
-		r.emit(ctx, transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelStreamed, Model: &event})
-		return ctx.Err()
-	})
-}
-
-func responseTrace(response model.Response) *transcript.TraceContext {
-	if response.TraceID == "" || response.SpanID == "" {
-		return nil
-	}
-	return &transcript.TraceContext{TraceID: response.TraceID, SpanID: response.SpanID, ParentSpanID: response.ParentSpanID}
 }
 
 func (r *Runtime) appendSteering(ctx context.Context, request TurnRequest) error {

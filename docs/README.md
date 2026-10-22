@@ -21,6 +21,7 @@ Read [architecture](architecture.md) first, then follow the area you change:
 | Area | Guide |
 | --- | --- |
 | Turn lifecycle, context, events, and delegation | [Runtime](runtime.md) |
+| 任务状态、上下文策略与原生续接 | [持续执行契约](agent-continuity.md) |
 | Tools, discovery, integration setup | [Tools](tools.md) |
 | Prompts, rules, skills, private overlays | [Prompts](prompts.md) |
 | Cross-session user memory design and evaluation | [Long-term memory](long-term-memory.md) |
