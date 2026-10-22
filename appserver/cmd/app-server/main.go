@@ -123,7 +123,7 @@ func run(ctx context.Context) error {
 	approver := server.WireApprover(workspace.Root, filepath.Join(stateDir, "approvals.json"))
 	runner, err := agentruntime.New(agentruntime.Config{
 		Model: info.Model, ReasoningEffort: info.Thinking, MaxOutputTokens: config.MaxOutputTokens,
-		MaxSteps: config.MaxSteps, MaxParallelToolCalls: config.MaxParallelToolCalls, MaxModelRetries: 0, MaxEmptyResponseRetries: 3,
+		MaxTotalTokens: config.MaxTotalTokens, MaxSteps: config.MaxSteps, MaxParallelToolCalls: config.MaxParallelToolCalls, MaxModelRetries: 0, MaxEmptyResponseRetries: 3,
 		Context:        agentruntime.ContextConfig{MaxTokens: config.MaxContextTokens, ReserveTokens: config.AutocompactBuffer},
 		CircuitBreaker: agentruntime.CircuitBreakerConfig{Enabled: true},
 	}, agentruntime.Dependencies{

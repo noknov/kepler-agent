@@ -22,11 +22,11 @@ func TestObjectSchemaSerializesEmptyPropertiesAsObject(t *testing.T) {
 }
 
 func TestFunctionDescriptorDefaultsReadToolsToParallel(t *testing.T) {
-	read := FunctionDescriptor("code-read_file", "read", ObjectSchema(nil, map[string]any{"path": map[string]any{"type": "string"}}))
+	read := FunctionDescriptor("code-read_file", "read", ObjectSchema(nil, map[string]any{"path": map[string]any{"type": "string"}}), WithEffects(EffectRead))
 	if !read.Parallel {
 		t.Fatal("read tools must default to parallel")
 	}
-	write := FunctionDescriptor("code-write_file", "write", ObjectSchema(nil, nil), WithParallel(false))
+	write := FunctionDescriptor("code-write_file", "write", ObjectSchema(nil, nil), WithParallel(false), WithEffects(EffectWorkspaceWrite))
 	if write.Parallel {
 		t.Fatal("explicit sequential tools must stay sequential")
 	}

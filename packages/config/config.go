@@ -113,15 +113,17 @@ type SessionConfig struct {
 }
 
 type ToolConfig struct {
-	CommandTimeout            time.Duration
-	AgentTurnTimeout          time.Duration
-	AgentMaxSteps             int
-	AgentMaxParallelToolCalls int
-	AgentExploreMaxSteps      int
-	AgentExploreMaxWorkers    int
-	AgentExploreWorkerTimeout time.Duration
-	AgentExploreBatchTimeout  time.Duration
-	AllowedWriteTools         []string
+	AgentMaxConcurrentModelCalls int
+	AgentMaxTotalTokens          int64
+	CommandTimeout               time.Duration
+	AgentTurnTimeout             time.Duration
+	AgentMaxSteps                int
+	AgentMaxParallelToolCalls    int
+	AgentExploreMaxSteps         int
+	AgentExploreMaxWorkers       int
+	AgentExploreWorkerTimeout    time.Duration
+	AgentExploreBatchTimeout     time.Duration
+	AllowedWriteTools            []string
 }
 
 type IntegrationConfig struct {
@@ -373,14 +375,16 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			MaxToolResultTokens: envInt("SESSION_MAX_TOOL_RESULT_TOKENS", 8000),
 		},
 		Tools: ToolConfig{
-			CommandTimeout:            envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
-			AgentTurnTimeout:          envDuration("AGENT_TURN_TIMEOUT", 30*time.Minute),
-			AgentMaxSteps:             envInt("AGENT_MAX_STEPS", 64),
-			AgentMaxParallelToolCalls: envInt("AGENT_MAX_PARALLEL_TOOL_CALLS", 8),
-			AgentExploreMaxSteps:      envInt("AGENT_EXPLORE_MAX_STEPS", 64),
-			AgentExploreMaxWorkers:    envInt("AGENT_EXPLORE_MAX_WORKERS", 5),
-			AgentExploreWorkerTimeout: envDuration("AGENT_EXPLORE_WORKER_TIMEOUT", 0),
-			AgentExploreBatchTimeout:  envDuration("AGENT_EXPLORE_BATCH_TIMEOUT", 0),
+			CommandTimeout:               envDuration("TOOL_COMMAND_TIMEOUT", 30*time.Second),
+			AgentTurnTimeout:             envDuration("AGENT_TURN_TIMEOUT", 30*time.Minute),
+			AgentMaxSteps:                envInt("AGENT_MAX_STEPS", 64),
+			AgentMaxConcurrentModelCalls: envInt("AGENT_MAX_CONCURRENT_MODEL_CALLS", 16),
+			AgentMaxTotalTokens:          int64(envInt("AGENT_MAX_TOTAL_TOKENS", 0)),
+			AgentMaxParallelToolCalls:    envInt("AGENT_MAX_PARALLEL_TOOL_CALLS", 8),
+			AgentExploreMaxSteps:         envInt("AGENT_EXPLORE_MAX_STEPS", 64),
+			AgentExploreMaxWorkers:       envInt("AGENT_EXPLORE_MAX_WORKERS", 5),
+			AgentExploreWorkerTimeout:    envDuration("AGENT_EXPLORE_WORKER_TIMEOUT", 0),
+			AgentExploreBatchTimeout:     envDuration("AGENT_EXPLORE_BATCH_TIMEOUT", 0),
 			AllowedWriteTools: envCSVDefault("AGENT_ALLOWED_WRITE_TOOLS", []string{
 				"luckin-cancel_order", "luckin-create_order", "slack-create_canvas", "slack-user_post_message", "tts-speak",
 			}),
@@ -506,6 +510,9 @@ func dotenvPath(profile RuntimeProfile) string {
 }
 
 func validateForProfile(cfg Config, profile RuntimeProfile) (Config, error) {
+	if cfg.Tools.AgentMaxTotalTokens < 0 {
+		return cfg, fmt.Errorf("AGENT_MAX_TOTAL_TOKENS cannot be negative")
+	}
 	if profile == ProfileCLI {
 		return cfg, nil
 	}

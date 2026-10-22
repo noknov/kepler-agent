@@ -37,7 +37,8 @@ type auditTool struct {
 }
 
 func (t auditTool) Descriptor() tool.Descriptor {
-	return tool.FunctionDescriptor(t.name, "fixture", tool.ObjectSchema(nil, nil), tool.WithEffects(tool.EffectRead), tool.WithParallel(t.parallel))
+	return tool.FunctionDescriptor(t.name, "fixture", tool.ObjectSchema(nil, nil),
+		tool.WithEffects(tool.EffectRead), tool.WithParallel(t.parallel))
 }
 func (t auditTool) Execute(ctx context.Context, _ tool.Call) (tool.Result, error) {
 	return t.execute(ctx)

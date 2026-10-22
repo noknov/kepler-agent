@@ -38,6 +38,7 @@ type Gateway struct {
 }
 
 type Interaction struct {
+	TeamID    string
 	Type      string
 	UserID    string
 	TriggerID string
@@ -113,6 +114,7 @@ func (g Gateway) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		g.error(w, r, http.StatusServiceUnavailable, "event inbox unavailable", nil)
 		return
 	}
+	envelope.Event.TeamID = envelope.TeamID
 	claimed, err := g.Inbox.Claim(r.Context(), envelope.EventID, envelope.Event)
 	if err != nil {
 		g.error(w, r, http.StatusServiceUnavailable, "failed to persist event", err)
@@ -169,7 +171,10 @@ func (g Gateway) HandleInteractions(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
 		Type      string `json:"type"`
 		TriggerID string `json:"trigger_id,omitempty"`
-		User      struct {
+		Team      struct {
+			ID string `json:"id"`
+		} `json:"team"`
+		User struct {
 			ID string `json:"id"`
 		} `json:"user"`
 		Channel struct {
@@ -215,6 +220,7 @@ func (g Gateway) HandleInteractions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	interaction := Interaction{
+		TeamID:    payload.Team.ID,
 		Type:      payload.Type,
 		UserID:    payload.User.ID,
 		TriggerID: payload.TriggerID,
@@ -282,7 +288,7 @@ func requiresSynchronousResponse(interaction Interaction) bool {
 	}
 	for _, action := range interaction.Actions {
 		switch action.ActionID {
-		case "manage_rules", "manage_skills":
+		case "manage_rules", "manage_skills", "reset_user_memory":
 			return true
 		case "add_connection":
 			return true

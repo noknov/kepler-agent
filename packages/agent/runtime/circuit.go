@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -74,7 +75,9 @@ func (s *circuitState) record(config CircuitBreakerConfig, call tool.Call, faile
 func fingerprint(call tool.Call) callFingerprint {
 	arguments := call.Arguments
 	var value any
-	if json.Unmarshal(call.Arguments, &value) == nil {
+	decoder := json.NewDecoder(bytes.NewReader(call.Arguments))
+	decoder.UseNumber()
+	if json.Valid(call.Arguments) && decoder.Decode(&value) == nil {
 		if canonical, err := json.Marshal(value); err == nil {
 			arguments = canonical
 		}
@@ -119,6 +122,9 @@ func (r *Runtime) clearCircuit(sessionID string) {
 // CircuitWarning returns a warning message when a call is approaching limits.
 func (r *Runtime) CircuitWarning(call tool.Call, failed bool) string {
 	config := r.config.CircuitBreaker.withDefaults()
+	if !config.Enabled {
+		return ""
+	}
 	state := r.circuitFor(call.Scope.SessionID)
 	fp := fingerprint(call)
 	state.mu.Lock()

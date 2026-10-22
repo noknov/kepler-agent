@@ -14,6 +14,19 @@ import (
 // truth. Run records and UI state are projections of this event stream.
 type PGTranscript struct{ Pool *pgxpool.Pool }
 
+func (s PGTranscript) ReadEvent(ctx context.Context, sessionID string, sequence uint64) (transcript.Event, error) {
+	if s.Pool == nil {
+		return transcript.Event{}, fmt.Errorf("agent transcript store is unavailable")
+	}
+	var payload []byte
+	if err := s.Pool.QueryRow(ctx, `SELECT payload FROM agent_transcript_events WHERE session_id=$1 AND sequence=$2`, sessionID, sequence).Scan(&payload); err != nil {
+		return transcript.Event{}, err
+	}
+	var event transcript.Event
+	err := json.Unmarshal(payload, &event)
+	return event, err
+}
+
 func (s PGTranscript) Append(ctx context.Context, event transcript.Event) (transcript.Event, error) {
 	if s.Pool == nil {
 		return transcript.Event{}, fmt.Errorf("agent transcript store is unavailable")

@@ -47,10 +47,6 @@ def violation(path: Path, import_path: str) -> str | None:
     if target is None:
         return None
 
-    if source.startswith("packages/agent/tool/"):
-        if target.startswith("packages/prompts"):
-            return None
-
     if source.startswith("packages/agent/"):
         if not target.startswith("packages/agent/"):
             return "packages/agent may only depend on canonical agent core packages"

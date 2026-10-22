@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"unicode/utf8"
 
@@ -44,5 +45,13 @@ func TestLimitToolResultFallbackKeepsUTF8AndValidContent(t *testing.T) {
 	result := limitToolResult(context.Background(), tool.TextResult("你好世界"), tool.Call{ID: "1", Name: "read"}, ToolResultConfig{MaxInlineBytes: 5}, nil)
 	if !result.Truncated || len(result.Content) < 1 || !utf8.ValidString(result.Content[0].Text) {
 		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestToolImageDoesNotConsumeProseSpillBudget(t *testing.T) {
+	image := "data:image/png;base64," + strings.Repeat("A", 100000)
+	result := limitToolResult(context.Background(), tool.Result{Content: []model.Content{{Type: model.ContentImage, ImageURL: image}}}, tool.Call{}, ToolResultConfig{MaxInlineBytes: 1000}, nil)
+	if result.Truncated || len(result.Content) != 1 || result.Content[0].ImageURL != image {
+		t.Fatal("screenshot was treated as oversized prose")
 	}
 }

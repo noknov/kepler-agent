@@ -87,15 +87,21 @@ func (t ReadFile) readOne(rawPath string, offset, limit int) (string, bool, erro
 	if err != nil {
 		return "", false, err
 	}
-	if !utf8.Valid(data) {
-		return "", false, fmt.Errorf("file is not valid UTF-8")
-	}
+	// Lookahead may end inside a UTF-8 rune. Trim only an incomplete rune at
+	// the requested boundary; malformed bytes elsewhere must still fail.
 	truncated := len(data) > limit
 	if truncated {
 		data = data[:limit]
-		for len(data) > 0 && !utf8.Valid(data) {
-			data = data[:len(data)-1]
+		start := len(data) - 1
+		for start >= 0 && !utf8.RuneStart(data[start]) {
+			start--
 		}
+		if start >= 0 && !utf8.FullRune(data[start:]) {
+			data = data[:start]
+		}
+	}
+	if !utf8.Valid(data) {
+		return "", false, fmt.Errorf("file is not valid UTF-8")
 	}
 	return string(data), truncated, nil
 }

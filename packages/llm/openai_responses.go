@@ -341,18 +341,26 @@ func responsesInput(messages []Message) []any {
 			if strings.TrimSpace(msg.ToolCallID) == "" {
 				continue
 			}
+			var output any = msg.Content
+			if len(msg.ContentParts) > 0 {
+				output = responsesInputContent(msg)
+			}
 			input = append(input, map[string]any{
 				"type":    "function_call_output",
 				"call_id": msg.ToolCallID,
-				"output":  msg.Content,
+				"output":  output,
 			})
 		case "assistant":
 			if strings.TrimSpace(msg.Content) != "" {
-				input = append(input, map[string]any{
+				item := map[string]any{
 					"type":    "message",
 					"role":    "assistant",
 					"content": []map[string]string{{"type": "output_text", "text": msg.Content}},
-				})
+				}
+				if msg.Phase != "" {
+					item["phase"] = msg.Phase
+				}
+				input = append(input, item)
 			}
 			for _, call := range msg.ToolCalls {
 				if strings.TrimSpace(call.ID) == "" {

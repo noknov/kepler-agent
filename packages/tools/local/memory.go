@@ -2,24 +2,25 @@ package localtools
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/profiles/local"
 )
 
-var memoryFileMu sync.Mutex
-
 // MemoryRecord stores an atomic cross-session fact or user preference keyed by
 // semantic_key, aligned with docs/long-term-memory.md.
 type MemoryRecord struct {
+	Namespace       string    `json:"namespace,omitempty"`
 	SemanticKey     string    `json:"semantic_key"`
 	Kind            string    `json:"kind"`
 	Content         string    `json:"content"`
@@ -39,17 +40,33 @@ func (MemoryTool) Descriptor() tool.Descriptor {
 		Name:        "memory",
 		Description: "Manage durable cross-session user preferences, project facts, and reusable procedures. Keep facts atomic and never store credentials or secrets.",
 		InputSchema: schema(
-			`{"action":{"type":"string","enum":["list","search","upsert","forget"]},"semantic_key":{"type":"string"},"kind":{"type":"string","enum":["preference","project","procedure","fact"]},"content":{"type":"string"},"query":{"type":"string"}}`,
+			`{"action":{"type":"string","enum":["list","search","upsert","forget"]},"namespace":{"type":"string","enum":["project","user"],"description":"Defaults to this project. Use user only for preferences shared across projects."},"semantic_key":{"type":"string"},"kind":{"type":"string","enum":["preference","project","procedure","fact"]},"content":{"type":"string"},"query":{"type":"string"}}`,
 			"action",
 		),
-		Effects:  []tool.Effect{tool.EffectRead},
+		Effects:  []tool.Effect{tool.EffectExternalWrite},
 		Tags:     []string{tool.CategoryWorkspace, "memory"},
-		Parallel: true,
+		Parallel: false,
 	}
 }
 
-func (t MemoryTool) Execute(_ context.Context, call tool.Call) (tool.Result, error) {
+func (t MemoryTool) DescriptorForCall(call tool.Call) (tool.Descriptor, error) {
 	var args struct {
+		Action string `json:"action"`
+	}
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Descriptor{}, err
+	}
+	d := t.Descriptor()
+	if args.Action == "list" || args.Action == "search" {
+		d.Effects = []tool.Effect{tool.EffectRead}
+		d.Parallel = true
+	}
+	return d, nil
+}
+
+func (t MemoryTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
+	var args struct {
+		Namespace   string `json:"namespace"`
 		Action      string `json:"action"`
 		SemanticKey string `json:"semantic_key"`
 		Kind        string `json:"kind"`
@@ -63,13 +80,36 @@ func (t MemoryTool) Execute(_ context.Context, call tool.Call) (tool.Result, err
 	if err != nil {
 		return tool.Result{}, err
 	}
-	memoryFileMu.Lock()
-	defer memoryFileMu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return tool.Result{}, err
+	}
+	unlock, err := lockMemoryFile(ctx, path+".lock")
+	if err != nil {
+		return tool.Result{}, err
+	}
+	defer unlock()
+	namespace := "user"
+	if args.Namespace != "user" {
+		if args.Namespace != "" && args.Namespace != "project" {
+			return tool.Result{}, fmt.Errorf("invalid memory namespace")
+		}
+		namespace = fmt.Sprintf("project:%x", sha256.Sum256([]byte(filepath.Clean(t.Workspace.Root))))
+	}
 
 	records, err := loadMemoryRecords(path)
 	if err != nil {
 		return tool.Result{}, err
 	}
+	var others []MemoryRecord
+	var selected []MemoryRecord
+	for _, record := range records {
+		if record.Namespace == namespace || (record.Namespace == "" && namespace == "user") {
+			selected = append(selected, record)
+		} else {
+			others = append(others, record)
+		}
+	}
+	records = selected
 	switch strings.ToLower(strings.TrimSpace(args.Action)) {
 	case "list":
 		return tool.TextResult(formatMemoryRecords(records)), nil
@@ -96,6 +136,12 @@ func (t MemoryTool) Execute(_ context.Context, call tool.Call) (tool.Result, err
 		if kind == "" {
 			kind = "fact"
 		}
+		if kind != "fact" && kind != "preference" && kind != "project" && kind != "procedure" {
+			return tool.Result{}, fmt.Errorf("invalid memory kind")
+		}
+		if len(content) > 8000 || len(key) > 200 {
+			return tool.Result{}, fmt.Errorf("memory exceeds size limit")
+		}
 		now := time.Now().UTC()
 		updated := false
 		for i := range records {
@@ -112,6 +158,7 @@ func (t MemoryTool) Execute(_ context.Context, call tool.Call) (tool.Result, err
 		}
 		if !updated {
 			records = append(records, MemoryRecord{
+				Namespace:       namespace,
 				SemanticKey:     key,
 				Kind:            kind,
 				Content:         content,
@@ -121,7 +168,7 @@ func (t MemoryTool) Execute(_ context.Context, call tool.Call) (tool.Result, err
 				Version:         1,
 			})
 		}
-		if err := saveMemoryRecords(path, records); err != nil {
+		if err := saveMemoryRecords(path, append(others, records...)); err != nil {
 			return tool.Result{}, err
 		}
 		return tool.TextResult(fmt.Sprintf("Saved memory %q (%s).", key, kind)), nil
@@ -142,12 +189,41 @@ func (t MemoryTool) Execute(_ context.Context, call tool.Call) (tool.Result, err
 		if !removed {
 			return tool.TextResult(fmt.Sprintf("No memory found for key %q.", key)), nil
 		}
-		if err := saveMemoryRecords(path, filtered); err != nil {
+		if err := saveMemoryRecords(path, append(others, filtered...)); err != nil {
 			return tool.Result{}, err
 		}
 		return tool.TextResult(fmt.Sprintf("Forgot memory %q.", key)), nil
 	default:
 		return tool.Result{}, fmt.Errorf("unsupported memory action %q", args.Action)
+	}
+}
+
+func lockMemoryFile(ctx context.Context, path string) (func(), error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+		err = unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			return func() { _ = unix.Flock(int(file.Fd()), unix.LOCK_UN); _ = file.Close() }, nil
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EINTR) {
+			_ = file.Close()
+			return nil, err
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			_ = file.Close()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
 	}
 }
 

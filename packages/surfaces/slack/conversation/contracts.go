@@ -11,6 +11,7 @@ import (
 )
 
 type Request struct {
+	TeamID    string
 	EventID   string
 	UserID    string
 	Channel   string

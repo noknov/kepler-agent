@@ -28,6 +28,7 @@ func TestCompactorStopsWhenSummariesDoNotShrink(t *testing.T) {
 	client := &scriptedModel{responses: []model.Response{
 		{Message: model.TextMessage(model.RoleAssistant, strings.Repeat("x", 1000))},
 		{Message: model.TextMessage(model.RoleAssistant, strings.Repeat("x", 1000))},
+		{Message: model.TextMessage(model.RoleAssistant, strings.Repeat("x", 1000))},
 	}}
 	compactor := ModelCompactor{Client: client, MaxInputTokens: 300}
 	var input []model.Message
@@ -35,7 +36,7 @@ func TestCompactorStopsWhenSummariesDoNotShrink(t *testing.T) {
 		input = append(input, model.TextMessage(model.RoleUser, strings.Repeat("x", 400)))
 	}
 	_, err := compactor.Compact(context.Background(), input, 100)
-	if err == nil || !strings.Contains(err.Error(), "did not reduce") || len(client.requests) != 2 {
+	if err == nil || !strings.Contains(err.Error(), "did not reduce") || len(client.requests) != 3 {
 		t.Fatalf("error=%v calls=%d", err, len(client.requests))
 	}
 }
@@ -63,5 +64,14 @@ func TestModelCompactorHonorsRequestedBudget(t *testing.T) {
 	}
 	if summary.Role != model.RoleUser || summary.Text() != "<untrusted_transcript_summary>\nsummary\n</untrusted_transcript_summary>" {
 		t.Fatalf("summary = %#v", summary)
+	}
+}
+
+func TestCompactionOmitsNestedToolImagesWithoutChangingTranscript(t *testing.T) {
+	image := model.Content{Type: model.ContentImage, ImageURL: "data:image/png;base64,eA=="}
+	message := model.Message{Role: model.RoleTool, Content: []model.Content{{Type: model.ContentToolResult, ToolResult: &model.ToolResult{CallID: "c", Content: []model.Content{image}}}}}
+	safe := compactionSafeMessages([]model.Message{message})
+	if model.ContainImages(safe...) || !model.ContainImages(message) {
+		t.Fatal("nested image was retained or canonical evidence was mutated")
 	}
 }

@@ -14,7 +14,19 @@ type annotatedTool struct {
 }
 
 func (t annotatedTool) Descriptor() Descriptor {
-	base := t.inner.Descriptor()
+	return mergeDescriptor(t.inner.Descriptor(), t.patch)
+}
+
+func (t annotatedTool) DescriptorForCall(call Call) (Descriptor, error) {
+	d, err := DescribeCall(t.inner, call)
+	if err != nil {
+		return Descriptor{}, err
+	}
+	return mergeDescriptor(d, t.patch), nil
+}
+
+func mergeDescriptor(base Descriptor, patch Descriptor) Descriptor {
+	t := annotatedTool{patch: patch}
 	if len(t.patch.Effects) > 0 {
 		base.Effects = append([]Effect(nil), t.patch.Effects...)
 	}
@@ -44,4 +56,10 @@ func (t annotatedTool) Descriptor() Descriptor {
 
 func (t annotatedTool) Execute(ctx context.Context, call Call) (Result, error) {
 	return t.inner.Execute(ctx, call)
+}
+
+func (t annotatedTool) EndTurn(sessionID, turnID string) {
+	if lifecycle, ok := t.inner.(TurnLifecycle); ok {
+		lifecycle.EndTurn(sessionID, turnID)
+	}
 }

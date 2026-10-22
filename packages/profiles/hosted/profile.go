@@ -17,9 +17,11 @@ import (
 	"github.com/noknov/kepler-agent/packages/config"
 	"github.com/noknov/kepler-agent/packages/infra/redisclient"
 	"github.com/noknov/kepler-agent/packages/infra/telemetry"
+	"github.com/noknov/kepler-agent/packages/memory"
 	"github.com/noknov/kepler-agent/packages/observability"
 	"github.com/noknov/kepler-agent/packages/providers"
 	"github.com/noknov/kepler-agent/packages/safety"
+	memorytools "github.com/noknov/kepler-agent/packages/tools/memory"
 )
 
 // Profile owns the complete hosted-agent composition. Product entrypoints
@@ -36,6 +38,7 @@ type Profile struct {
 }
 
 type ProfileDependencies struct {
+	ModelGovernor           *model.Governor
 	Tools                   *tool.Catalog
 	Postgres                *pgxpool.Pool
 	Redis                   *redisclient.Client
@@ -59,11 +62,22 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	if catalog == nil {
 		return Profile{}, fmt.Errorf("hosted tool catalog is required")
 	}
+	var memoryStore memory.Store
+	if deps.Postgres != nil {
+		memoryStore = memory.PGStore{Pool: deps.Postgres}
+		if err := catalog.Register(memorytools.Tool{Store: memoryStore}); err != nil {
+			return Profile{}, err
+		}
+	}
 	artifacts := PGArtifactStore{Store: deps.ToolSpills}
 	if deps.ToolSpills != nil {
 		if err := catalog.Register(ArtifactReadTool{Store: deps.ToolSpills, MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)}); err != nil {
 			return Profile{}, err
 		}
+	}
+	governor := deps.ModelGovernor
+	if governor == nil {
+		governor = model.NewGovernor(cfg.Tools.AgentMaxConcurrentModelCalls)
 	}
 	breakers := model.NewCircuitBreakers()
 	primaryObserved := model.Client(observedModel{Client: primary, Metrics: deps.Metrics})
@@ -86,15 +100,17 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		compactModel = cfg.LLM.Model
 	}
 	runner, err := agentruntime.New(agentruntime.Config{
-		Model: cfg.LLM.Model, ReasoningEffort: cfg.LLM.Thinking, Temperature: cfg.LLM.Temperature,
+		MaxTotalTokens: cfg.Tools.AgentMaxTotalTokens,
+		Model:          cfg.LLM.Model, ReasoningEffort: cfg.LLM.Thinking, Temperature: cfg.LLM.Temperature,
 		MaxOutputTokens: cfg.LLM.MaxOutputTokens, MaxSteps: cfg.Tools.AgentMaxSteps, MaxParallelToolCalls: cfg.Tools.AgentMaxParallelToolCalls, MaxModelRetries: 0, MaxEmptyResponseRetries: 3,
 		Context:        agentruntime.ContextConfig{MaxTokens: cfg.Sessions.MaxContextTokens, ReserveTokens: cfg.Sessions.AutocompactBuffer, OutputTokens: cfg.LLM.MaxOutputTokens},
 		ToolResults:    agentruntime.ToolResultConfig{MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)},
 		CircuitBreaker: agentruntime.CircuitBreakerConfig{Enabled: true},
 	}, agentruntime.Dependencies{
-		TraceContent: telemetry.ContentRecorder(),
-		Model:        client, Tools: catalog, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}, Transcript: PGTranscript{Pool: deps.Postgres}, Events: deps.Events, Lease: deps.Lease,
-		Compactor: agentruntime.ModelCompactor{Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer}, Artifacts: artifacts,
+		ModelGovernor: governor,
+		TraceContent:  telemetry.ContentRecorder(),
+		Model:         client, Tools: catalog, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}, Transcript: PGTranscript{Pool: deps.Postgres}, Events: deps.Events, Lease: deps.Lease,
+		Compactor: agentruntime.ModelCompactor{Governor: governor, Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer}, Artifacts: artifacts,
 		Environment:             environment.Config{WorkspaceRoots: cfg.Security.WorkspaceRoots},
 		ConnectionContinuations: deps.ConnectionContinuations,
 	})
@@ -109,10 +125,11 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 			ToolResults: agentruntime.ToolResultConfig{MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)},
 		},
 		Deps: agentruntime.Dependencies{
-			TraceContent: telemetry.ContentRecorder(),
-			Model:        exploreClient, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}, Lease: deps.Lease,
+			ModelGovernor: governor,
+			TraceContent:  telemetry.ContentRecorder(),
+			Model:         exploreClient, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}, Lease: deps.Lease,
 			Transcript: PGTranscript{Pool: deps.Postgres}, Events: deps.Events,
-			Compactor: agentruntime.ModelCompactor{Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer},
+			Compactor: agentruntime.ModelCompactor{Governor: governor, Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer},
 			Artifacts: artifacts, Environment: environment.Config{WorkspaceRoots: cfg.Security.WorkspaceRoots},
 		},
 		ParentCatalog: catalog,
@@ -132,9 +149,9 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		Capabilities: func(ctx context.Context, name string) (providers.ModelCapabilities, error) {
 			return primary.Capabilities(ctx, cfg.LLM.Provider, name)
 		},
-		Agent: Agent{Runtime: runner}, Prompt: promptPolicy,
+		Agent: Agent{Runtime: runner, Memory: memoryStore}, Prompt: promptPolicy,
 		Redactor: safety.Redactor{WorkspaceRoots: cfg.Security.WorkspaceRoots}, Tools: catalog,
-		Rates: CostRates(cfg), SecondaryModel: secondaryObserved, SecondaryModelName: secondaryModel,
+		Rates: CostRates(cfg), SecondaryModel: model.Govern(secondaryObserved, governor), SecondaryModelName: secondaryModel,
 	}, nil
 }
 
