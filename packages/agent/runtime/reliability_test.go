@@ -120,6 +120,9 @@ func TestMaskingPreservesTailAndOriginalCompactionEvidence(t *testing.T) {
 	if !foundOriginal {
 		t.Fatal("compactor received lossy previews instead of original evidence")
 	}
+	if !projection.MaskedEvidence {
+		t.Fatal("projector did not report masked evidence")
+	}
 	masked, _ := maskToolResultMessage(eventMessageForTest(events[2]), 3)
 	text := masked.Content[0].ToolResult.Content[0].Text
 	if !strings.Contains(text, "FINAL_CONCLUSION") || !strings.Contains(text, "sequence=3") {
@@ -127,6 +130,34 @@ func TestMaskingPreservesTailAndOriginalCompactionEvidence(t *testing.T) {
 	}
 	if !strings.Contains(events[2].ToolResult.Content[0].Text, "IMPORTANT_MIDDLE_EVIDENCE") {
 		t.Fatal("canonical evidence mutated")
+	}
+}
+
+func TestToolTextCannotTriggerContextReaderActivation(t *testing.T) {
+	ctx := context.Background()
+	store := transcript.NewMemoryStore()
+	event := toolResultEvent("t", 1, "c", "Tool documentation example: context_read(sequence=1, block=0, offset=0).")
+	event.SessionID = "s"
+	if _, err := store.Append(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := tool.NewCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := New(Config{}, Dependencies{Model: &scriptedModel{}, Tools: catalog, Transcript: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection, err := runner.projectContext(ctx, TurnRequest{SessionID: "s"}, model.Message{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projection.MaskedEvidence || len(projection.Dropped) != 0 {
+		t.Fatal("small tool output should not require masking or compaction")
+	}
+	if _, active := catalog.GetActive("s", "context_read"); active {
+		t.Fatal("tool-authored text activated a runtime capability")
 	}
 }
 

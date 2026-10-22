@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -504,19 +503,10 @@ func (r *Runtime) projectContextOnce(ctx context.Context, request TurnRequest, s
 	if err != nil {
 		return Projection{}, err
 	}
-	needsReader := false
+	needsReader := projection.MaskedEvidence
 	for _, message := range projection.Dropped {
 		for _, block := range message.Content {
 			needsReader = needsReader || block.ToolResult != nil
-		}
-	}
-	for _, message := range projection.Messages {
-		for _, block := range message.Content {
-			if block.ToolResult != nil {
-				for _, content := range block.ToolResult.Content {
-					needsReader = needsReader || strings.Contains(content.Text, "context_read(sequence=")
-				}
-			}
 		}
 	}
 	if needsReader {

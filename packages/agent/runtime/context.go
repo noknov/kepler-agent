@@ -37,6 +37,8 @@ type Projection struct {
 	Dropped          []model.Message
 	DroppedSequences []uint64
 	CoversThrough    uint64
+	// MaskedEvidence reports projector-owned masking, never tool-authored text.
+	MaskedEvidence bool
 }
 
 type Projector interface {
@@ -162,9 +164,11 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 	// and invoking an LLM compaction call, fold oversized historical tool
 	// outputs outside the most recent exchanges into compact previews.
 	exchanges := exchangeGroups(entries)
+	maskedEvidence := false
 	if tokens > limit && len(exchanges) > observationMaskRecentGroups {
 		maskedEntries, changed := maskHistoricalToolOutputs(exchanges, len(exchanges)-observationMaskRecentGroups)
 		if changed {
+			maskedEvidence = true
 			entries = maskedEntries
 			groups = groupProjectedMessages(entries)
 			if len(groups) > 0 {
@@ -182,7 +186,7 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 		}
 	}
 	if tokens <= limit {
-		return Projection{Messages: messages, EstimatedTokens: tokens}, nil
+		return Projection{Messages: messages, EstimatedTokens: tokens, MaskedEvidence: maskedEvidence}, nil
 	}
 	if len(groups) <= 1 {
 		return Projection{}, fmt.Errorf("context exceeds token budget and the latest turn cannot be dropped")
@@ -243,7 +247,7 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 	}
 	projection := Projection{
 		Messages: kept, EstimatedTokens: EstimateTokens(kept), Dropped: dropped, DroppedSequences: droppedSequences,
-		CoversThrough: entries[keepFrom-1].sequence,
+		CoversThrough: entries[keepFrom-1].sequence, MaskedEvidence: maskedEvidence,
 	}
 	if projection.EstimatedTokens > limit {
 		return Projection{}, fmt.Errorf("latest turn exceeds token budget")
