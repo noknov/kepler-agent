@@ -207,7 +207,7 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 		return model.Response{}, sinkErr
 	}
 	if err != nil {
-		return model.Response{}, toModelError(err)
+		return model.Response{Usage: toUsage(response.Usage)}, toModelError(err)
 	}
 	message, err := fromWireMessage(response.Message)
 	if err != nil {

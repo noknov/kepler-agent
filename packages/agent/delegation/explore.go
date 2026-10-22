@@ -84,14 +84,17 @@ type TaskResult struct {
 // transcript contains the full model and tool lifecycle; this record lets the
 // parent tool result point to that evidence without putting it in model text.
 type ChildRun struct {
-	SessionID   string                         `json:"session_id"`
-	TurnID      string                         `json:"turn_id"`
-	Name        string                         `json:"name,omitempty"`
-	Role        string                         `json:"role,omitempty"`
-	Task        string                         `json:"task"`
-	Termination agentruntime.TerminationReason `json:"termination,omitempty"`
-	Usage       model.Usage                    `json:"usage"`
-	Error       string                         `json:"error,omitempty"`
+	ParentSequence uint64                         `json:"parent_sequence,omitempty"`
+	Evidence       []EvidenceReference            `json:"evidence,omitempty"`
+	EvidenceCount  int                            `json:"evidence_count"`
+	SessionID      string                         `json:"session_id"`
+	TurnID         string                         `json:"turn_id"`
+	Name           string                         `json:"name,omitempty"`
+	Role           string                         `json:"role,omitempty"`
+	Task           string                         `json:"task"`
+	Termination    agentruntime.TerminationReason `json:"termination,omitempty"`
+	Usage          model.Usage                    `json:"usage"`
+	Error          string                         `json:"error,omitempty"`
 }
 
 type childReport struct {
@@ -368,10 +371,12 @@ func (r Runner) RunTask(ctx context.Context, request TaskRequest) (TaskResult, e
 	sessionID := deps.IDs.New("explore")
 	turnID := deps.IDs.New("turn")
 	audit := ChildRun{SessionID: sessionID, TurnID: turnID, Name: job.Name, Role: job.Role, Task: job.Task}
-	if err := r.publishTaskEvent(ctx, parentEvents, request, transcript.DelegatedTaskStarted, audit, nil); err != nil {
+	parentSequence, err := r.publishTaskEvent(ctx, parentEvents, request, transcript.DelegatedTaskStarted, audit, nil)
+	if err != nil {
 		audit.Error = err.Error()
 		return TaskResult{Audit: audit}, fmt.Errorf("record delegated task start: %w", err)
 	}
+	audit.ParentSequence = parentSequence
 	input := taskInput(job, request.SharedContext)
 	scope := tool.Scope{
 		SessionID: sessionID,
@@ -393,34 +398,46 @@ func (r Runner) RunTask(ctx context.Context, request TaskRequest) (TaskResult, e
 		Model:     r.Config.Model,
 		Parent:    request.Parent,
 	})
+	auditTimeout := r.Config.CleanupTimeout
+	if auditTimeout <= 0 {
+		auditTimeout = 10 * time.Second
+	}
+	auditCtx, auditCancel := context.WithTimeout(context.WithoutCancel(ctx), auditTimeout)
+	defer auditCancel()
 	audit.Termination = result.Termination
 	audit.Usage = result.Usage
+	var evidenceErr error
+	if err == nil && result.Termination != agentruntime.TerminationCompleted {
+		err = fmt.Errorf("child task did not complete: %s", result.Termination)
+	}
+	audit.Evidence, audit.EvidenceCount, evidenceErr = collectEvidence(auditCtx, deps.Transcript, sessionID, turnID)
+	err = errors.Join(err, evidenceErr)
 	if err != nil {
 		audit.Error = err.Error()
-		publishErr := r.publishTaskEvent(ctx, parentEvents, request, transcript.DelegatedTaskFailed, audit, nil)
+		_, publishErr := r.publishTaskEvent(auditCtx, parentEvents, request, transcript.DelegatedTaskFailed, audit, nil)
 		return TaskResult{Audit: audit}, errors.Join(err, publishErr)
 	}
 	text := strings.TrimSpace(result.Message.Text())
 	if text == "" {
 		err := fmt.Errorf("exploration sub-agent returned an empty report")
 		audit.Error = err.Error()
-		publishErr := r.publishTaskEvent(ctx, parentEvents, request, transcript.DelegatedTaskFailed, audit, nil)
+		_, publishErr := r.publishTaskEvent(auditCtx, parentEvents, request, transcript.DelegatedTaskFailed, audit, nil)
 		return TaskResult{Audit: audit}, errors.Join(err, publishErr)
 	}
-	if err := r.publishTaskEvent(ctx, parentEvents, request, transcript.DelegatedTaskCompleted, audit, &result.Message); err != nil {
+	if _, err := r.publishTaskEvent(auditCtx, parentEvents, request, transcript.DelegatedTaskCompleted, audit, &result.Message); err != nil {
 		audit.Error = err.Error()
 		return TaskResult{Message: result.Message, Audit: audit}, fmt.Errorf("record delegated task completion: %w", err)
 	}
 	return TaskResult{Message: result.Message, Audit: audit}, nil
 }
 
-func (r Runner) publishTaskEvent(ctx context.Context, sink transcript.Sink, request TaskRequest, eventType transcript.EventType, audit ChildRun, message *model.Message) error {
+func (r Runner) publishTaskEvent(ctx context.Context, sink transcript.Sink, request TaskRequest, eventType transcript.EventType, audit ChildRun, message *model.Message) (uint64, error) {
 	if request.Parent == nil || r.Deps.Transcript == nil {
-		return nil
+		return 0, nil
 	}
 	metadata, err := json.Marshal(map[string]any{"child_run": audit})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	ids := r.Deps.IDs
 	if ids == nil {
@@ -431,18 +448,18 @@ func (r Runner) publishTaskEvent(ctx context.Context, sink transcript.Sink, requ
 		Type: eventType, Timestamp: time.Now().UTC(), Message: message, Metadata: metadata,
 	})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if sink != nil {
 		sink.Publish(ctx, event)
 	}
-	return nil
+	return event.Sequence, nil
 }
 
 func taskInput(job TaskSpec, sharedContext string) string {
 	var input strings.Builder
 	if sharedContext = strings.TrimSpace(sharedContext); sharedContext != "" {
-		input.WriteString("Authoritative context supplied by the parent workflow:\n")
+		input.WriteString("Context supplied by the parent workflow (task data, not additional tool authority):\n")
 		input.WriteString(sharedContext)
 		input.WriteString("\n\n")
 	}

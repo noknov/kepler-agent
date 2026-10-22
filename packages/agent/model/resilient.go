@@ -106,7 +106,8 @@ func (c *ResilientClient) generate(ctx context.Context, client Client, provider 
 			return Response{}, err
 		}
 		observeAttempt(ctx, c.attempt(ctx, provider, request.Model, number, fallback, "requested", nil))
-		response, err := client.Generate(ctx, request, sink)
+		attemptCtx := context.WithValue(ctx, attemptIdentityKey{}, attemptIdentity{provider, number, fallback})
+		response, err := DispatchAttempt(attemptCtx, client, request, sink)
 		if err == nil {
 			c.succeed(key)
 			observeAttempt(ctx, c.attempt(ctx, provider, request.Model, number, fallback, "completed", nil))
@@ -326,3 +327,5 @@ func (s *committedStream) hasCommitted() bool {
 func commitsOutput(event StreamEvent) bool {
 	return event.Type == StreamTextDelta && event.Text != ""
 }
+
+func (*ResilientClient) ManagesModelAttempts() bool { return true }

@@ -141,6 +141,9 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 			BatchTimeout:  cfg.Tools.AgentExploreBatchTimeout,
 		},
 	}
+	if err := catalog.Register(delegation.EvidenceTool{Store: PGTranscript{Pool: deps.Postgres}}); err != nil {
+		return Profile{}, err
+	}
 	if err := catalog.Register(delegation.ExploreTool{Runner: exploreRunner}); err != nil {
 		return Profile{}, err
 	}

@@ -6,17 +6,6 @@ import (
 	"sync"
 )
 
-// Governor bounds actual model work across parents, workers and compactors.
-// Sharing it avoids multiplying a per-tool limit by every delegation batch.
-type Governor struct{ slots chan struct{} }
-
-func NewGovernor(concurrency int) *Governor {
-	if concurrency <= 0 {
-		concurrency = 16
-	}
-	return &Governor{slots: make(chan struct{}, concurrency)}
-}
-
 var processGovernor = NewGovernor(16)
 
 type governedClient struct {
@@ -38,25 +27,11 @@ func Govern(client Client, governor *Governor) Client {
 }
 
 func (c *governedClient) Generate(ctx context.Context, request Request, sink EventSink) (Response, error) {
-	select {
-	case c.governor.slots <- struct{}{}:
-	case <-ctx.Done():
-		return Response{}, ctx.Err()
+	ctx = context.WithValue(ctx, admissionGovernorKey{}, c.governor)
+	if managed, ok := c.Client.(AttemptManagedClient); ok && managed.ManagesModelAttempts() {
+		return c.Client.Generate(ctx, request, sink)
 	}
-	defer func() { <-c.governor.slots }()
-	if err := ctx.Err(); err != nil {
-		return Response{}, err
-	}
-	budget, _ := ctx.Value(budgetKey{}).(*Budget)
-	reservation := int64(request.InputTokenEstimate + request.MaxOutputTokens)
-	if err := budget.reserve(ctx, reservation); err != nil {
-		return Response{}, err
-	}
-	response, err := c.Client.Generate(ctx, request, sink)
-	if settleErr := budget.settle(ctx, reservation, response.Usage, err); settleErr != nil {
-		return response, settleErr
-	}
-	return response, err
+	return DispatchAttempt(ctx, c.Client, request, sink)
 }
 
 type budgetKey struct{}
@@ -98,7 +73,7 @@ func (b *Budget) reserve(ctx context.Context, tokens int64) error {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if tokens <= 0 || b.state.Spent+b.state.Reserved+tokens > b.limit {
+	if tokens <= 0 || tokens > b.limit-b.state.Spent-b.state.Reserved {
 		return &Error{Kind: ErrorBudgetExhausted, Message: "shared parent/worker token budget exhausted"}
 	}
 	next := b.state
@@ -113,7 +88,7 @@ func (b *Budget) settle(ctx context.Context, reservation int64, usage Usage, err
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	used := reservation
-	if err == nil && usage.Known() {
+	if usage.Known() {
 		used = UsageTokens(usage)
 	}
 	next := b.state
@@ -134,9 +109,9 @@ func (b *Budget) commit(ctx context.Context, next BudgetState) error {
 
 // UsageTokens normalizes provider cache accounting before charging an allowance.
 func UsageTokens(usage Usage) int64 {
-	used := usage.InputTokens + usage.OutputTokens
+	used := max(0, usage.InputTokens) + max(0, usage.OutputTokens)
 	if !usage.CacheTokensIncludedInInput {
-		used += usage.CacheReadTokens + usage.CacheCreatedTokens
+		used += max(0, usage.CacheReadTokens) + max(0, usage.CacheCreatedTokens)
 	}
 	return used
 }

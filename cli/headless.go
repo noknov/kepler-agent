@@ -147,6 +147,10 @@ func newLocalHarness(values options, config local.Config, creds credentials) (*l
 		ParentCatalog: catalog,
 		AllowedTools:  delegation.DefaultLocalAllowedTools(),
 	}
+	if err := catalog.Register(delegation.EvidenceTool{Store: store}); err != nil {
+		workspace.Close()
+		return nil, err
+	}
 	if err := catalog.Register(delegation.ExploreTool{Runner: exploreRunner}); err != nil {
 		workspace.Close()
 		return nil, err

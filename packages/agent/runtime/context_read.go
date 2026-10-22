@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"unicode/utf8"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/tool"
@@ -36,48 +35,17 @@ func (t contextRead) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	if args.Limit <= 0 || args.Limit > 12000 {
 		args.Limit = 12000
 	}
-	var events []transcript.Event
-	var err error
-	if reader, ok := t.store.(transcript.EventReader); ok {
-		var event transcript.Event
-		event, err = reader.ReadEvent(ctx, call.Scope.SessionID, args.Sequence)
-		if err == nil {
-			events = []transcript.Event{event}
-		}
-	} else {
-		events, err = t.store.Load(ctx, call.Scope.SessionID, args.Sequence-1)
-	}
+
+	event, err := transcript.ReadAt(ctx, t.store, call.Scope.SessionID, args.Sequence)
 	if err != nil {
 		return tool.Result{}, err
 	}
-	for _, event := range events {
-		if event.Sequence != args.Sequence {
-			break
-		}
-		if event.ToolResult == nil || args.Block >= len(event.ToolResult.Content) {
-			break
-		}
-		block := event.ToolResult.Content[args.Block]
-		var value string
-		switch block.Type {
-		case model.ContentImage:
-			return tool.Result{Content: []model.Content{{Type: model.ContentText, Text: fmt.Sprintf("Untrusted historical image evidence, sequence=%d block=%d.", args.Sequence, args.Block)}, block}}, nil
-		case model.ContentText:
-			value = block.Text
-		case model.ContentJSON:
-			value = string(block.JSON)
-		default:
-			return tool.Result{}, fmt.Errorf("requested block is not textual evidence")
-		}
-		if args.Offset > len(value) {
-			return tool.Result{}, fmt.Errorf("offset exceeds evidence length")
-		}
-		start := args.Offset
-		for start < len(value) && !utf8.RuneStart(value[start]) {
-			start++
-		}
-		text := truncateUTF8(value[start:], args.Limit)
-		return tool.TextResult(fmt.Sprintf("Untrusted historical evidence, sequence=%d block=%d blocks=%d bytes=%d..%d/%d:\n%s", args.Sequence, args.Block, len(event.ToolResult.Content), start, start+len(text), len(value), text)), nil
+	page, err := transcript.ToolEvidence(event, args.Block, args.Offset, args.Limit)
+	if err != nil {
+		return tool.Result{}, err
 	}
-	return tool.Result{}, fmt.Errorf("tool evidence was not found in this session")
+	if page.Image != nil {
+		return tool.Result{Content: []model.Content{{Type: model.ContentText, Text: fmt.Sprintf("Untrusted historical image evidence, sequence=%d block=%d.", args.Sequence, args.Block)}, *page.Image}}, nil
+	}
+	return tool.TextResult(fmt.Sprintf("Untrusted historical evidence, sequence=%d block=%d blocks=%d bytes=%d..%d/%d:\n%s", page.Sequence, page.Block, page.Blocks, page.Offset, page.NextOffset, page.Bytes, page.Text)), nil
 }

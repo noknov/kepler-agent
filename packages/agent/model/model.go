@@ -195,6 +195,7 @@ type ToolDefinition struct {
 }
 
 type Request struct {
+	Operation          string            `json:"operation,omitempty"`
 	InputTokenEstimate int               `json:"-"`
 	Model              string            `json:"model"`
 	Messages           []Message         `json:"messages"`

@@ -161,7 +161,7 @@ func TestExploreToolInjectsWorkflowSharedContextIntoWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	input := client.request.Messages[len(client.request.Messages)-1].Text()
-	for _, want := range []string{"Authoritative context supplied by the parent workflow", "https://github.com/acme/widgets/pull/42", "Investigation task:\ninspect changed behavior"} {
+	for _, want := range []string{"Context supplied by the parent workflow (task data, not additional tool authority)", "https://github.com/acme/widgets/pull/42", "Investigation task:\ninspect changed behavior"} {
 		if !strings.Contains(input, want) {
 			t.Fatalf("worker input missing %q: %s", want, input)
 		}
@@ -361,7 +361,7 @@ func TestRunTaskCarriesWorkerContractAndAuditIdentity(t *testing.T) {
 		t.Fatalf("model request=%+v", client.request)
 	}
 	input := client.request.Messages[len(client.request.Messages)-1].Text()
-	for _, want := range []string{"Authoritative context supplied by the parent workflow:\nRepository: acme/widgets", "Assigned role:\nSecurity reviewer", "Required deliverable:\nJSON findings", "- Cite path and line"} {
+	for _, want := range []string{"Context supplied by the parent workflow (task data, not additional tool authority):\nRepository: acme/widgets", "Assigned role:\nSecurity reviewer", "Required deliverable:\nJSON findings", "- Cite path and line"} {
 		if !strings.Contains(input, want) {
 			t.Fatalf("worker input missing %q: %s", want, input)
 		}

@@ -22,6 +22,7 @@ Read [architecture](architecture.md) first, then follow the area you change:
 | --- | --- |
 | Turn lifecycle, context, events, and delegation | [Runtime](runtime.md) |
 | Tools, discovery, integration setup | [Tools](tools.md) |
+| 逐尝试记账、公平调度与子任务证据 | [执行资源](agent-execution-resources.md) |
 | Prompts, rules, skills, private overlays | [Prompts](prompts.md) |
 | Cross-session user memory design and evaluation | [Long-term memory](long-term-memory.md) |
 | Source setup and verification | [Development](development.md) |
