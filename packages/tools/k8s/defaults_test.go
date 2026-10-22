@@ -6,12 +6,12 @@ import (
 )
 
 func TestParseClusterContext(t *testing.T) {
-	def := Defaults{Project: "wati-gke", Region: "asia-southeast1", Cluster: "mt-pubsub"}
+	def := Defaults{Project: "example-project", Region: "asia-southeast1", Cluster: "example-cluster"}
 	p, l, c := parseClusterContext("", def)
-	if p != "wati-gke" || l != "asia-southeast1" || c != "mt-pubsub" {
+	if p != "example-project" || l != "asia-southeast1" || c != "example-cluster" {
 		t.Fatalf("defaults = %q %q %q", p, l, c)
 	}
-	p, l, c = parseClusterContext("gke_wati-gke_asia-southeast1_other", def)
+	p, l, c = parseClusterContext("gke_example-project_asia-southeast1_other", def)
 	if c != "other" {
 		t.Fatalf("gke context cluster = %q", c)
 	}

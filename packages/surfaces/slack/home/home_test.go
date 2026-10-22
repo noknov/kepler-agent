@@ -258,7 +258,7 @@ func TestConnectionBlocksShowsYouTrackServerCredentials(t *testing.T) {
 		Cfg: config.Config{
 			Integrations: config.IntegrationConfig{
 				YouTrack: config.YouTrackConfig{
-					URL:   "https://clareai.youtrack.cloud",
+					URL:   "https://example.youtrack.cloud",
 					Token: "perm-test",
 				},
 			},

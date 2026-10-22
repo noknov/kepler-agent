@@ -51,7 +51,7 @@ func TestReadFileReturnsContentDirectly(t *testing.T) {
 
 func TestReadFileAcceptsWorkspaceRootBasenamePrefix(t *testing.T) {
 	parent := t.TempDir()
-	root := filepath.Join(parent, "wati-frontend-app")
+	root := filepath.Join(parent, "example-frontend")
 	filePath := filepath.Join(root, "domains", "connectors", "src", "Integration", "_constants", "IntegrationCards.tsx")
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o700); err != nil {
 		t.Fatal(err)
@@ -60,7 +60,7 @@ func TestReadFileAcceptsWorkspaceRootBasenamePrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := ReadFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	raw := json.RawMessage(`{"path":"wati-frontend-app/domains/connectors/src/Integration/_constants/IntegrationCards.tsx","source":"working_tree"}`)
+	raw := json.RawMessage(`{"path":"example-frontend/domains/connectors/src/Integration/_constants/IntegrationCards.tsx","source":"working_tree"}`)
 
 	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: raw, Scope: agenttool.Scope{}})
 	if err != nil {
@@ -100,7 +100,7 @@ func TestSearchReturnsResultsDirectly(t *testing.T) {
 
 func TestSearchAcceptsWorkspaceRootBasenamePrefix(t *testing.T) {
 	parent := t.TempDir()
-	root := filepath.Join(parent, "wati-frontend-app")
+	root := filepath.Join(parent, "example-frontend")
 	dir := filepath.Join(root, "domains", "connectors")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -109,7 +109,7 @@ func TestSearchAcceptsWorkspaceRootBasenamePrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"query":"catalog","path":"wati-frontend-app/domains","source":"working_tree"}`), Scope: agenttool.Scope{}})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"query":"catalog","path":"example-frontend/domains","source":"working_tree"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}

@@ -99,6 +99,9 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := catalog.Register(local.ArtifactReadTool{Root: filepath.Join(stateDir, "sessions")}); err != nil {
+		return err
+	}
 	exploreRunner := delegation.Runner{
 		Config: agentruntime.Config{
 			Model: info.Model, ReasoningEffort: info.Thinking, MaxOutputTokens: config.MaxOutputTokens,
@@ -128,7 +131,7 @@ func run(ctx context.Context) error {
 		CircuitBreaker: agentruntime.CircuitBreakerConfig{Enabled: true},
 	}, agentruntime.Dependencies{
 		TraceContent: telemetry.ContentRecorder(),
-		Model:        resilientClient, Tools: catalog, Policy: local.NewWorkspacePolicy(), Approver: approver, Transcript: store,
+		Model:        resilientClient, Tools: catalog, Policy: local.NewWorkspacePolicy(), Approver: approver, Transcript: store, Lease: store,
 		Events:      transcript.SinkFunc(stream.publish),
 		Compactor:   agentruntime.ModelCompactor{Client: resilientClient, Model: info.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},
 		Artifacts:   local.ArtifactStore{Root: filepath.Join(stateDir, "sessions")},

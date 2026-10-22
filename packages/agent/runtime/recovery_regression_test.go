@@ -128,3 +128,41 @@ func TestTerminalPersistenceHasBoundedCleanup(t *testing.T) {
 		t.Fatalf("cleanup error = %v", err)
 	}
 }
+
+func TestWaitingForSessionOwnershipHonorsCancellation(t *testing.T) {
+	runner := &Runtime{locks: make(map[string]*sessionMutex)}
+	release, err := runner.lockSession(context.Background(), "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { release() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		unlock, err := runner.lockSession(ctx, "s")
+		if unlock != nil {
+			unlock()
+		}
+		done <- err
+	}()
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled turn remains blocked behind session owner")
+	}
+	release()
+	// The canceled waiter must release its map reference without removing an
+	// entry still owned by another turn.
+	runner.lockMu.Lock()
+	remaining := len(runner.locks)
+	runner.lockMu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("leaked %d lock entries", remaining)
+	}
+	// Avoid the deferred release after the explicit cleanup above.
+	release = func() {}
+}

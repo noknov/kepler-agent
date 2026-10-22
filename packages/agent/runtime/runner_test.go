@@ -78,7 +78,7 @@ func (askTool) Descriptor() tool.Descriptor {
 	return tool.Descriptor{Name: "ask", InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []tool.Effect{tool.EffectRead}, Exclusive: true}
 }
 
-type blockingModel struct{}
+type blockingModel struct{ started chan<- struct{} }
 
 type panicTool struct{}
 
@@ -97,7 +97,10 @@ func (t countingWriteTool) Execute(context.Context, tool.Call) (tool.Result, err
 	return tool.TextResult("wrote"), nil
 }
 
-func (blockingModel) Generate(ctx context.Context, _ model.Request, _ model.EventSink) (model.Response, error) {
+func (m blockingModel) Generate(ctx context.Context, _ model.Request, _ model.EventSink) (model.Response, error) {
+	if m.started != nil {
+		close(m.started)
+	}
 	<-ctx.Done()
 	return model.Response{}, ctx.Err()
 }
@@ -1008,9 +1011,17 @@ func TestRunTurnPreservesMutatingToolOrder(t *testing.T) {
 func TestRunTurnRecordsCancellationAndReleasesSessionLock(t *testing.T) {
 	catalog, _ := tool.NewCatalog()
 	store := transcript.NewMemoryStore()
-	runner, _ := New(Config{Model: "test"}, Dependencies{Model: blockingModel{}, Tools: catalog, Transcript: store})
+	started := make(chan struct{})
+	runner, _ := New(Config{Model: "test"}, Dependencies{Model: blockingModel{started: started}, Tools: catalog, Transcript: store})
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	defer cancel()
+	go func() {
+		select {
+		case <-started:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	result, err := runner.RunTurn(ctx, TurnRequest{SessionID: "cancel", Input: model.TextMessage(model.RoleUser, "wait")})
 	if err == nil || result.Termination != TerminationCanceled {
 		t.Fatalf("result=%+v err=%v", result, err)
@@ -1022,8 +1033,8 @@ func TestRunTurnRecordsCancellationAndReleasesSessionLock(t *testing.T) {
 		t.Fatalf("session locks retained=%d", locks)
 	}
 	events, _ := store.Load(context.Background(), "cancel", 0)
-	if events[len(events)-1].Type != transcript.TurnCanceled {
-		t.Fatalf("last event=%+v", events[len(events)-1])
+	if len(events) == 0 || events[len(events)-1].Type != transcript.TurnCanceled {
+		t.Fatalf("events=%+v", events)
 	}
 }
 
@@ -1147,5 +1158,21 @@ func TestForcedContextRecoveryPreservesCurrentUserInput(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("retry messages lost current input: %+v", client.requests[1].Messages)
+	}
+}
+
+func TestRunTurnCanceledBeforeAdmissionDoesNotWriteTranscript(t *testing.T) {
+	catalog, _ := tool.NewCatalog()
+	store := transcript.NewMemoryStore()
+	runner, _ := New(Config{Model: "test"}, Dependencies{Model: blockingModel{}, Tools: catalog, Transcript: store})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := runner.RunTurn(ctx, TurnRequest{SessionID: "not-admitted", Input: model.TextMessage(model.RoleUser, "wait")})
+	if !errors.Is(err, context.Canceled) || result.Termination != TerminationCanceled {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	events, err := store.Load(context.Background(), "not-admitted", 0)
+	if err != nil || len(events) != 0 {
+		t.Fatalf("unadmitted turn wrote events: %+v err=%v", events, err)
 	}
 }

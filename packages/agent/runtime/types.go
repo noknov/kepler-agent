@@ -120,8 +120,8 @@ type Dependencies struct {
 }
 
 // SessionLease serializes a complete session execution across process
-// boundaries. Local profiles leave it nil and use Runtime's in-process lock;
-// hosted profiles supply the PostgreSQL-backed lease.
+// boundaries. Local profiles supply an OS file lock; hosted profiles supply
+// the PostgreSQL-backed lease. Embeddings may omit it for in-process ownership.
 type SessionLease interface {
 	Lock(context.Context, string) (func(), error)
 }
@@ -145,7 +145,7 @@ type Runtime struct {
 }
 
 type sessionMutex struct {
-	mu   sync.Mutex
+	slot chan struct{}
 	refs int
 }
 
@@ -300,18 +300,16 @@ type TurnResult struct {
 	Termination TerminationReason
 }
 
-func (r *Runtime) lockSession(sessionID string) func() {
+func (r *Runtime) lockSession(ctx context.Context, sessionID string) (func(), error) {
 	r.lockMu.Lock()
 	entry := r.locks[sessionID]
 	if entry == nil {
-		entry = &sessionMutex{}
+		entry = &sessionMutex{slot: make(chan struct{}, 1)}
 		r.locks[sessionID] = entry
 	}
 	entry.refs++
 	r.lockMu.Unlock()
-	entry.mu.Lock()
-	return func() {
-		entry.mu.Unlock()
+	releaseRef := func() {
 		r.lockMu.Lock()
 		entry.refs--
 		if entry.refs == 0 {
@@ -319,10 +317,25 @@ func (r *Runtime) lockSession(sessionID string) func() {
 		}
 		r.lockMu.Unlock()
 	}
+	select {
+	case entry.slot <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-entry.slot
+			releaseRef()
+			return nil, err
+		}
+		return func() { <-entry.slot; releaseRef() }, nil
+	case <-ctx.Done():
+		releaseRef()
+		return nil, ctx.Err()
+	}
 }
 
 func (r *Runtime) acquireSession(ctx context.Context, sessionID string) (context.Context, func(), error) {
-	localUnlock := r.lockSession(sessionID)
+	localUnlock, err := r.lockSession(ctx, sessionID)
+	if err != nil {
+		return ctx, nil, err
+	}
 	if r.deps.Lease == nil {
 		return ctx, localUnlock, nil
 	}

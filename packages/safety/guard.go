@@ -126,49 +126,60 @@ func (g WorkspacePolicy) ResolveReadablePath(path string) (string, error) {
 	return "", fmt.Errorf("path resolves outside allowed workspace roots")
 }
 
-// IsSensitivePath prevents the agent from reading files that contain secrets.
-// The agent runs on a shared server — any content it reads could be surfaced
-// to users via Slack. Credentials, keys, and env files must stay protected.
+// One policy vocabulary drives both filesystem reads and committed-tree
+// pathspecs. Git exclusions are case-insensitive just like IsSensitivePath.
+var sensitiveFileNames = []string{"id_rsa", "id_ed25519", "credentials", "credentials.json", ".netrc", ".npmrc", ".pypirc"}
+var sensitiveFileSuffixes = []string{".pem", ".key", ".p12", ".pfx", ".kubeconfig"}
+var sensitiveDirectories = []string{".aws", ".gcloud", ".kube", "secrets", "credentials"}
+var sensitiveRelativeFiles = []string{".git/config", ".git/credentials", ".docker/config.json", ".config/gh/hosts.yml"}
+
+// IsSensitivePath protects known credential locations. It is defense in depth,
+// not a guarantee that arbitrary files cannot contain confidential data.
 func IsSensitivePath(path string) bool {
 	base := strings.ToLower(filepath.Base(path))
 	if base == ".env" || strings.HasPrefix(base, ".env.") {
 		return true
 	}
-	if base == "id_rsa" || base == "id_ed25519" || base == "credentials" || base == "credentials.json" ||
-		base == ".netrc" || base == ".npmrc" || base == ".pypirc" {
-		return true
+	for _, name := range sensitiveFileNames {
+		if base == name {
+			return true
+		}
 	}
-	sensitiveSuffixes := []string{".pem", ".key", ".p12", ".pfx", ".kubeconfig"}
-	for _, suffix := range sensitiveSuffixes {
+	for _, suffix := range sensitiveFileSuffixes {
 		if strings.HasSuffix(base, suffix) {
 			return true
 		}
 	}
-	sensitiveParts := []string{"/.aws/", "/.gcloud/", "/.kube/", "/secrets/", "/credentials/"}
 	normalized := "/" + strings.Trim(strings.ToLower(filepath.ToSlash(path)), "/") + "/"
-	for _, suffix := range []string{"/.git/config/", "/.git/credentials/", "/.docker/config.json/", "/.config/gh/hosts.yml/"} {
-		if strings.HasSuffix(normalized, suffix) {
+	for _, relative := range sensitiveRelativeFiles {
+		if strings.HasSuffix(normalized, "/"+relative+"/") {
 			return true
 		}
 	}
-	for _, part := range sensitiveParts {
-		if strings.Contains(normalized, part) {
+	for _, directory := range sensitiveDirectories {
+		if strings.Contains(normalized, "/"+directory+"/") {
 			return true
 		}
 	}
 	return false
 }
 
-// SensitiveGitPathspecs applies the readable-path policy to committed trees.
+// SensitiveGitPathspecs applies the same readable-path policy to committed trees.
 func SensitiveGitPathspecs() []string {
-	return []string{
-		":(exclude,glob)**/.env", ":(exclude,glob)**/.env.*",
-		":(exclude,glob)**/*.pem", ":(exclude,glob)**/*.key", ":(exclude,glob)**/*.p12", ":(exclude,glob)**/*.pfx",
-		":(exclude,glob)**/.netrc", ":(exclude,glob)**/.npmrc", ":(exclude,glob)**/.pypirc",
-		":(exclude,glob)**/.aws/**", ":(exclude,glob)**/.gcloud/**", ":(exclude,glob)**/.kube/**",
-		":(exclude,glob)**/secrets/**", ":(exclude,glob)**/credentials/**",
-		":(exclude,glob)**/.docker/config.json", ":(exclude,glob)**/.config/gh/hosts.yml",
+	patterns := []string{".env", ".env.*"}
+	patterns = append(patterns, sensitiveFileNames...)
+	for _, suffix := range sensitiveFileSuffixes {
+		patterns = append(patterns, "*"+suffix)
 	}
+	for _, directory := range sensitiveDirectories {
+		patterns = append(patterns, directory+"/**")
+	}
+	patterns = append(patterns, sensitiveRelativeFiles...)
+	out := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		out = append(out, ":(exclude,glob,icase)**/"+pattern)
+	}
+	return out
 }
 
 func isWithin(path, root string) bool {

@@ -156,3 +156,14 @@ LLM_CACHE_CREATION_COST_PER_MTOK=0
 
 Compare estimates with provider billing, including retries and child agents.
 For HTTP authentication and endpoint ownership, see [operations](operations.md).
+
+### Content disclosure boundaries
+
+Content capture remains opt-in. Nested tool results are copied before reasoning,
+image payloads, and artifact locations are omitted; canonical evidence is not
+modified. The content recorder redacts structured secret fields and common text
+credential forms, including quoted JSON fields, and preserves exact JSON numbers.
+These controls do not identify every personal or business-sensitive fact. User
+and session correlation IDs can still be present in trace attributes even when
+message capture is disabled. Set exporter access and retention accordingly;
+clearing user memory does not erase previously exported traces.

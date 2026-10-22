@@ -20,6 +20,8 @@ Read [architecture](architecture.md) first, then follow the area you change:
 
 | Area | Guide |
 | --- | --- |
+| Detailed execution contracts, identity, failure windows, privacy, and capacity (中文) | [Architecture deep dive](architecture-deep-dive.md) |
+| 2026 agent comparison, audit findings, and measurable next steps (中文) | [October audit](agent-audit-2026-10.md) |
 | Turn lifecycle, context, events, and delegation | [Runtime](runtime.md) |
 | Tools, discovery, integration setup | [Tools](tools.md) |
 | Prompts, rules, skills, private overlays | [Prompts](prompts.md) |

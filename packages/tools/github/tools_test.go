@@ -92,24 +92,24 @@ func TestPRDiffUsesPullURLInsteadOfDefaultRepository(t *testing.T) {
 	seenPaths := map[string]int{}
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		seenPaths[r.URL.Path]++
-		if r.URL.Path == "/repos/ClareAI/wati-workflow-service/pulls/63/files" {
+		if r.URL.Path == "/repos/example-org/example-service/pulls/63/files" {
 			return response(http.StatusOK, `[{"filename":"service.go","status":"modified","additions":1,"deletions":1,"changes":2,"patch":"@@ -1 +1 @@\n-old\n+new"}]`), nil
 		}
-		if r.URL.Path != "/repos/ClareAI/wati-workflow-service/pulls/63" {
+		if r.URL.Path != "/repos/example-org/example-service/pulls/63" {
 			t.Fatalf("unexpected path = %q", r.URL.Path)
 		}
 		return response(http.StatusOK, `{"title":"Review me","state":"open","commits":1,"head":{"ref":"feature/pr","sha":"0123456789abcdef"},"base":{"ref":"main"}}`), nil
 	})
 	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
-	tool := PRDiffTool{Client: testClient("ClareAI", "devops-github-workflow", transport)}
-	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"url":"https://github.com/ClareAI/wati-workflow-service/pull/63"}`), Scope: scope})
+	tool := PRDiffTool{Client: testClient("example-org", "example-workflow", transport)}
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"url":"https://github.com/example-org/example-service/pull/63"}`), Scope: scope})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Text(), "repository=ClareAI/wati-workflow-service") || !strings.Contains(result.Text(), "pr=63") {
+	if !strings.Contains(result.Text(), "repository=example-org/example-service") || !strings.Contains(result.Text(), "pr=63") {
 		t.Fatalf("result = %q", result.Text())
 	}
-	if seenPaths["/repos/ClareAI/wati-workflow-service/pulls/63"] != 1 || seenPaths["/repos/ClareAI/wati-workflow-service/pulls/63/files"] != 1 {
+	if seenPaths["/repos/example-org/example-service/pulls/63"] != 1 || seenPaths["/repos/example-org/example-service/pulls/63/files"] != 1 {
 		t.Fatalf("seen paths = %#v", seenPaths)
 	}
 }
@@ -193,12 +193,12 @@ func TestPRDiffNotFoundMentionsResolvedPullTarget(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return response(http.StatusNotFound, `{"message":"Not Found"}`), nil
 	})
-	tool := PRDiffTool{Client: testClient("ClareAI", "devops-github-workflow", transport)}
-	_, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"url":"https://github.com/ClareAl/wati-workflow-service/pull/63"}`), Scope: agenttool.Scope{}})
+	tool := PRDiffTool{Client: testClient("example-org", "example-workflow", transport)}
+	_, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"url":"https://github.com/ClareAl/example-service/pull/63"}`), Scope: agenttool.Scope{}})
 	if err == nil {
 		t.Fatal("Execute() succeeded, want 404 error")
 	}
-	for _, want := range []string{"ClareAl/wati-workflow-service#63", "github status 404"} {
+	for _, want := range []string{"ClareAl/example-service#63", "github status 404"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error = %q, want %q", err.Error(), want)
 		}
@@ -305,14 +305,14 @@ func TestJobLogsTool_DirectJobID(t *testing.T) {
 
 func TestJobLogsTool_ExtractsDirectJobFromURL(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if r.URL.Path != "/repos/ClareAI/whatsapp_inbox/actions/jobs/84468047388/logs" {
+		if r.URL.Path != "/repos/example-org/example-inbox/actions/jobs/3456/logs" {
 			t.Fatalf("expected direct job log fetch from URL, got: %s", r.URL.Path)
 		}
 		return response(http.StatusOK, "Expected outcome.IsSuccess to be true, but found False.\n"), nil
 	})
 
 	tool := JobLogsTool{Client: testClient("", "", transport)}
-	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"url":"https://github.com/ClareAI/whatsapp_inbox/actions/runs/28497898370/job/84468047388?pr=15027"}`), Scope: agenttool.Scope{}})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"url":"https://github.com/example-org/example-inbox/actions/runs/1234/job/3456?pr=12"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -337,7 +337,7 @@ func TestJobLogsTool_StringRunID(t *testing.T) {
 
 	tool := JobLogsTool{Client: testClient("example", "myrepo", transport)}
 
-	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"run_id":"28497898370"}`), Scope: agenttool.Scope{}})
+	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"run_id":"1234"}`), Scope: agenttool.Scope{}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}

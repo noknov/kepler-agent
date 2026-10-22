@@ -8,3 +8,8 @@ redistributing an updated bundle.
 
 Kepler-specific behavior belongs outside `src/cc` or in an explicit, reviewable
 adapter/stub. Do not copy unrelated source directories or retain backup copies.
+
+The sync step removes private upstream Slack discussion URLs from copied source.
+Keep public technical references and required copyright/license notices intact.
+Kepler adapters must not activate upstream telemetry, account stores, or network
+clients; UI reuse is not a claim of runtime or model behavior parity.

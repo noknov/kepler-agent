@@ -131,6 +131,10 @@ func newLocalHarness(values options, config local.Config, creds credentials) (*l
 	}
 
 	artifactRoot := filepath.Join(stateDir, "sessions")
+	if err := catalog.Register(local.ArtifactReadTool{Root: artifactRoot}); err != nil {
+		workspace.Close()
+		return nil, err
+	}
 	exploreRunner := delegation.Runner{
 		Config: agentruntime.Config{
 			Model: config.Model, ReasoningEffort: config.ReasoningEffort, MaxOutputTokens: config.MaxOutputTokens,
@@ -161,6 +165,7 @@ func newLocalHarness(values options, config local.Config, creds credentials) (*l
 			CircuitBreaker: agentruntime.CircuitBreakerConfig{Enabled: true},
 		},
 		agentruntime.Dependencies{
+			Lease:        store,
 			TraceContent: telemetry.ContentRecorder(),
 			Model:        resilientClient, Tools: catalog, Policy: local.NewWorkspacePolicy(), Approver: approver, Transcript: store, Events: renderer,
 			Compactor:   agentruntime.ModelCompactor{Client: resilientClient, Model: config.Model, MaxInputTokens: config.MaxContextTokens - config.AutocompactBuffer},

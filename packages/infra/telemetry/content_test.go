@@ -24,9 +24,11 @@ func TestContentCaptureIsOptInAndSanitizesStructuredAndTextSecrets(t *testing.T)
 	defer provider.Shutdown(context.Background())
 	_, span := provider.Tracer("test").Start(context.Background(), "content")
 	ContentRecorder()(span, "input", map[string]any{
-		"question": "为什么斜体？ opaque-operator-credential sk-lf-private-test xoxb-private-test Authorization: Bearer private-token",
-		"args":     json.RawMessage(`{"nested":{"password":"hidden-password","access_token":"hidden-token"},"query":"SELECT 1"}`),
-		"binary":   []byte("private-image-data"),
+		"question":     "为什么斜体？ opaque-operator-credential sk-lf-private-test xoxb-private-test Authorization: Bearer private-token",
+		"args":         json.RawMessage(`{"nested":{"password":"hidden-password","access_token":"hidden-token"},"query":"SELECT 1"}`),
+		"binary":       []byte("private-image-data"),
+		"tool_text":    `{"api_key":"quoted-json-secret","refresh_token":"quoted-refresh-secret"} github_pat_example_token_value redis://user:redis-secret@example.invalid`,
+		"large_number": json.RawMessage(`{"id":9007199254740993}`),
 	})
 	span.End()
 	var encoded string
@@ -38,7 +40,10 @@ func TestContentCaptureIsOptInAndSanitizesStructuredAndTextSecrets(t *testing.T)
 	if !json.Valid([]byte(encoded)) || !strings.Contains(encoded, "为什么斜体") || !strings.Contains(encoded, "SELECT 1") {
 		t.Fatalf("content=%s", encoded)
 	}
-	for _, secret := range []string{"opaque-operator-credential", "private-test", "private-token", "hidden-password", "hidden-token", "private-image-data"} {
+	if !strings.Contains(encoded, "9007199254740993") {
+		t.Fatal("trace corrupted an exact identifier")
+	}
+	for _, secret := range []string{"opaque-operator-credential", "private-test", "private-token", "hidden-password", "hidden-token", "private-image-data", "quoted-json-secret", "quoted-refresh-secret", "example_token_value", "redis-secret"} {
 		if strings.Contains(encoded, secret) {
 			t.Fatalf("secret leaked: %s", secret)
 		}

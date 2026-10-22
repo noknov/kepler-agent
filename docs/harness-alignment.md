@@ -114,3 +114,12 @@ surfaces:
 | MCP router session caching and tool contracts | `tools/mcp` caches initialized MCP router sessions and tool definitions (5-minute TTL, invalidated on transport error), reducing per-call round trips from three to one; `luckin-create_order` enforces turn-scoped preview fingerprint verification; `git-search_ref` and `repo-search` default to literal `-F` matching | `tools/luckin/tools_test.go`, `tools/git` and `tools/mcp` tests |
 | Local harness unification and fuzzy edit | `tools/local/bootstrap.go` unifies skill, MCP, and prompt assembly across `app-server` and headless CLI, registers the durable `memory` tool, persists `agent-explore` events to the session store, and adds whitespace-tolerant fuzzy matching to `edit` | `tools/local/tools_test.go`, `tools/edit/tools_test.go` |
 | Web and Slack lifecycle alignment | Web enforces process-wide `MaxActiveTurns` (32), maps `TurnFailed` through `failure.PublicMessage`, collapses duplicate `plan` events, and renders live tool/plan progress in activity cards; Slack bypasses the secondary LLM router when `workflows.Registry.HasPromptCandidate` finds no workflow trigger | `surfaces/web` and `surfaces/slack/agent/service_test.go` |
+
+## 2026-10-22: evidence-backed architecture review
+
+The [October audit](agent-audit-2026-10.md) records the reviewed source revision,
+reproducible context/ownership/credential/privacy fixes, official comparison
+sources, and remaining design gaps. The [architecture deep dive](architecture-deep-dive.md)
+explains the current ownership, recovery, context, artifact, memory, and disclosure
+contracts. Native provider compaction, typed task state, semantic recall, and
+tenant-fair scheduling remain proposals rather than completed capabilities.

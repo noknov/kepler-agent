@@ -565,6 +565,6 @@ func DefaultHostedAllowedTools() map[string]bool {
 // DefaultLocalAllowedTools lists read-only tools for local explore jobs.
 func DefaultLocalAllowedTools() map[string]bool {
 	return map[string]bool{
-		"read_file": true, "list_files": true, "search": true,
+		"read_file": true, "list_files": true, "search": true, "artifact_read": true,
 	}
 }

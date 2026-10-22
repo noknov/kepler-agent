@@ -16,6 +16,22 @@
 <main class="doc-shell" id="content"><aside class="side" aria-label="文档目录"></aside><article class="doc">
 <header class="hero2"><p class="kicker">ARCH / 00</p><h1>共享执行核心</h1><p class="lead2">一个与入口协议无关的 Agent Core：接收规范化请求，重建上下文，调用模型，执行经过策略检查的工具，并把全过程写成可恢复的事件。入口只负责协议、身份和呈现，不拥有另一套执行循环。</p><div class="facts"><span><b>模型循环</b> 单一实现</span><span><b>状态</b> 事件驱动</span><span><b>工具</b> 策略先行</span><span><b>恢复</b> 基于事实</span></div></header>
 
+<section class="chapter2" id="deep-contracts">
+<h2>执行契约与本轮审查</h2>
+<p>本节覆盖独立面向主线的 #12–#15；未合并的扩展契约仅在对应 PR 分支可用。</p>
+<p>新增的<a href="https://github.com/noknov/kepler-agent/blob/main/docs/architecture-deep-dive.md">架构详解</a>按身份、执行权、故障恢复、上下文、证据、记忆和隐私展开，并给出状态表与源码入口。<a href="https://github.com/noknov/kepler-agent/blob/main/docs/agent-audit-2026-10.md">2026 年审查</a>区分本轮修复、主流实现的公开机制和仍需实验的设计方向。</p>
+<table class="detail-table"><thead><tr><th>边界</th><th>当前契约</th><th>需要避免的误解</th></tr></thead><tbody>
+<tr><td>上下文预算</td><td>environment、当前图片、历史、工具 schema、输出预留在发送前共同检查。</td><td>文本 history 能放下，不代表实际请求能放下。</td></tr>
+<tr><td>本地执行权</td><td>整个 turn 持有独立文件锁；事件追加使用另一把短锁；等待可取消。</td><td>JSONL append 原子，不代表两个进程不会重复执行工具。</td></tr>
+<tr><td>原始证据</td><td>context_read 读取本 session 历史；本地 artifact_read 用受限目录和分页读取 opaque 引用。</td><td>结果已落盘，不代表普通工作区工具有权限读取。</td></tr>
+<tr><td>MCP 会话</td><td>缓存绑定实际凭据与租户，凭据更新和 TTL 到期重新握手。</td><td>同一个 user ID，不代表使用的还是同一个连接。</td></tr>
+<tr><td>记忆清理</td><td>重置显式 memory generation，阻止旧执行写回。</td><td>不等于删除 transcript、规则、凭据或外部 trace。</td></tr>
+<tr><td>任务连续性</td><td>带 revision/source 的 task_state 独立于摘要保留；未知结果需要证据核对。</td><td>模型声明与 hash 不能证明任务已经正确完成。</td></tr>
+<tr><td>实际资源</td><td>每次 retry/fallback 单独 reserve/settle；退避释放槽；owner/class 有界轮转。</td><td>本进程公平不等于集群租户配额或准确金额账单。</td></tr>
+</tbody></table>
+<p>继续阅读：<a href="https://github.com/noknov/kepler-agent/pull/13">任务状态与原生续接</a> · <a href="https://github.com/noknov/kepler-agent/pull/14">调度与子任务证据</a> · <a href="https://github.com/noknov/kepler-agent/pull/15">记忆检索与生命周期</a>。</p>
+</section>
+
 <section class="chapter2" id="boundary">
 <h2>先看两条平面：控制面与执行面</h2>
 <p>生产系统里最容易混淆的是“用户已经发出请求”“系统已经接受请求”“模型已经完成判断”“外部动作已经生效”和“用户已经看到回复”。这些是不同事实，分别由入口、队列、Runtime、工具和消息投影负责。</p>

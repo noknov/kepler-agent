@@ -80,6 +80,11 @@ func traceMessages(messages []model.Message) []model.Message {
 					block.Artifact = &artifact
 				}
 			}
+			if block.ToolResult != nil {
+				result := *block.ToolResult
+				result.Content = traceMessages([]model.Message{{Content: result.Content}})[0].Content
+				block.ToolResult = &result
+			}
 			copy.Content = append(copy.Content, block)
 		}
 		result = append(result, copy)
