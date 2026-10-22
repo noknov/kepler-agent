@@ -261,9 +261,10 @@ func (b *InputBuffer) Close() {
 }
 
 type TurnRequest struct {
-	SessionID string
-	TurnID    string
-	Input     model.Message
+	PrepareContext func(context.Context, tool.Scope) (PreparedContext, error) `json:"-"`
+	SessionID      string
+	TurnID         string
+	Input          model.Message
 	// History is an optional, bounded transport import used only when the
 	// canonical session has no prior events. It is recorded as ordinary
 	// untrusted conversation messages before the current turn.

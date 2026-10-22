@@ -20,14 +20,15 @@ type EventReader interface {
 type EventType string
 
 const (
-	SessionStarted   EventType = "session_started"
-	TurnStarted      EventType = "turn_started"
-	StepStarted      EventType = "step_started"
-	StepCompleted    EventType = "step_completed"
-	UserInput        EventType = "user_input"
-	SteeringInput    EventType = "steering_input"
-	ContextProjected EventType = "context_projected"
-	ModelRequested   EventType = "model_requested"
+	SessionStarted      EventType = "session_started"
+	TurnStarted         EventType = "turn_started"
+	StepStarted         EventType = "step_started"
+	StepCompleted       EventType = "step_completed"
+	UserInput           EventType = "user_input"
+	SteeringInput       EventType = "steering_input"
+	ContextProjected    EventType = "context_projected"
+	TurnContextPrepared EventType = "turn_context_prepared"
+	ModelRequested      EventType = "model_requested"
 	// ModelAttempted records provider-level resilience decisions. It is diagnostic
 	// telemetry, not the terminal fact for a logical model request.
 	ModelAttempted EventType = "model_attempted"

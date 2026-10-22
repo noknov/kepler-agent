@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "records": [
+    {"semantic_key":"deploy-region","kind":"project","content":"Production deployment region is europe-west1."},
+    {"semantic_key":"db-pool","kind":"procedure","content":"PostgreSQL connection pool capacity is 24; inspect active connections before changing limits."},
+    {"semantic_key":"release-safety","kind":"procedure","content":"生产部署必须先运行测试再发布，保留回滚版本。"},
+    {"semantic_key":"latency","kind":"procedure","content":"服务延迟排查先检查数据库连接池和慢查询。"},
+    {"semantic_key":"cooking","kind":"fact","content":"A banana bread recipe uses flour and bananas."},
+    {"semantic_key":"locale","kind":"preference","content":"使用简体中文回答。"},
+    {"semantic_key":"style","kind":"preference","content":"Prefer concise explanations with concrete evidence."}
+  ],
+  "cases": [
+    {"query":"production deployment region","expected":"deploy-region"},
+    {"query":"PostgreSQL connection pool","expected":"db-pool"},
+    {"query":"生产部署测试","expected":"release-safety"},
+    {"query":"数据库连接池排查","expected":"latency"},
+    {"query":"ΩΩΩΩΩΩΩΩ","expected":""}
+  ],
+  "limitations": ["Small deterministic lexical fixture; not a production relevance benchmark.","Zero-overlap semantic paraphrases require broader semantic candidate retrieval; reranking cannot recover absent candidates."]
+}

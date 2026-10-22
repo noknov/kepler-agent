@@ -4,6 +4,7 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -22,13 +23,15 @@ func (i Identity) Validate() error {
 }
 
 type Record struct {
-	Key       string    `json:"semantic_key"`
-	Kind      string    `json:"kind"`
-	Content   string    `json:"content"`
-	SessionID string    `json:"source_session_id"`
-	TurnID    string    `json:"source_turn_id"`
-	Version   int64     `json:"version"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	ClearExpiry bool       `json:"clear_expiry,omitempty"`
+	Key         string     `json:"semantic_key"`
+	Kind        string     `json:"kind"`
+	Content     string     `json:"content"`
+	SessionID   string     `json:"source_session_id"`
+	TurnID      string     `json:"source_turn_id"`
+	Version     int64      `json:"version"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 type Store interface {
@@ -38,7 +41,16 @@ type Store interface {
 	Reset(context.Context, Identity) error
 }
 
-type PGStore struct{ Pool *pgxpool.Pool }
+type PGStore struct {
+	Pool       *pgxpool.Pool
+	MaxRecords int
+}
+
+const DefaultMaxRecords = 1000
+
+func validKind(kind string) bool {
+	return kind == "preference" || kind == "project" || kind == "procedure" || kind == "fact"
+}
 
 func (s PGStore) Put(ctx context.Context, identity Identity, generation int64, record Record) error {
 	if record.Version < 0 {
@@ -47,15 +59,37 @@ func (s PGStore) Put(ctx context.Context, identity Identity, generation int64, r
 	if strings.TrimSpace(record.Key) == "" || strings.TrimSpace(record.Content) == "" || len(record.Key) > 200 || len(record.Content) > 8000 {
 		return fmt.Errorf("memory key/content is missing or exceeds its limit")
 	}
-	if record.Kind != "preference" && record.Kind != "project" && record.Kind != "procedure" && record.Kind != "fact" {
+	if !validKind(record.Kind) {
 		return fmt.Errorf("unsupported memory kind")
 	}
+	if record.ExpiresAt != nil && record.ClearExpiry {
+		return fmt.Errorf("expiry and clear_expiry are mutually exclusive")
+	}
+	if record.ExpiresAt != nil && !record.ExpiresAt.After(time.Now()) {
+		return fmt.Errorf("memory expiry must be in the future")
+	}
 	return s.mutate(ctx, identity, generation, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `INSERT INTO user_memories(team_id,user_id,generation,semantic_key,kind,content,source_session_id,source_turn_id)
-SELECT $1,$2,$3,$4,$5,$6,$7,$8
+		// Explicit expiry authorizes removal; no default lifetime is imposed.
+		if _, err := tx.Exec(ctx, `DELETE FROM user_memories WHERE team_id=$1 AND user_id=$2 AND expires_at<=NOW()`, identity.TeamID, identity.UserID); err != nil {
+			return err
+		}
+		limit := s.MaxRecords
+		if limit <= 0 {
+			limit = DefaultMaxRecords
+		}
+		var exists bool
+		var count int
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM user_memories WHERE team_id=$1 AND user_id=$2 AND semantic_key=$3),COUNT(*) FROM user_memories WHERE team_id=$1 AND user_id=$2`, identity.TeamID, identity.UserID, record.Key).Scan(&exists, &count); err != nil {
+			return err
+		}
+		if !exists && count >= limit {
+			return fmt.Errorf("memory namespace quota reached; forget obsolete memories before adding more")
+		}
+		tag, err := tx.Exec(ctx, `INSERT INTO user_memories(team_id,user_id,generation,semantic_key,kind,content,source_session_id,source_turn_id,expires_at)
+SELECT $1,$2,$3,$4,$5,$6,$7,$8,$10
 WHERE $9::bigint=0 OR EXISTS(SELECT 1 FROM user_memories WHERE team_id=$1 AND user_id=$2 AND semantic_key=$4 AND version=$9)
-ON CONFLICT(team_id,user_id,semantic_key) DO UPDATE SET generation=EXCLUDED.generation,kind=EXCLUDED.kind,content=EXCLUDED.content,source_session_id=EXCLUDED.source_session_id,source_turn_id=EXCLUDED.source_turn_id,version=user_memories.version+1,updated_at=NOW()
-WHERE $9::bigint=0 OR user_memories.version=$9`, identity.TeamID, identity.UserID, generation, record.Key, record.Kind, record.Content, record.SessionID, record.TurnID, record.Version)
+ON CONFLICT(team_id,user_id,semantic_key) DO UPDATE SET generation=EXCLUDED.generation,kind=EXCLUDED.kind,content=EXCLUDED.content,source_session_id=EXCLUDED.source_session_id,source_turn_id=EXCLUDED.source_turn_id,version=user_memories.version+1,updated_at=NOW(),expires_at=CASE WHEN $11::boolean THEN NULL ELSE COALESCE(EXCLUDED.expires_at,user_memories.expires_at) END
+WHERE $9::bigint>0 AND user_memories.version=$9`, identity.TeamID, identity.UserID, generation, record.Key, record.Kind, record.Content, record.SessionID, record.TurnID, record.Version, record.ExpiresAt, record.ClearExpiry)
 		if err != nil {
 			return err
 		}
@@ -145,9 +179,10 @@ ON CONFLICT(team_id,user_id) DO UPDATE SET generation=user_memory_generations.ge
 // Search and pagination are separate from the prompt's disclosure budget.
 func Bound(records []Record, maxBytes int) []Record {
 	var selected []Record
-	size := 0
+	size := 2
 	for _, record := range records {
-		cost := len(record.Key) + len(record.Content)
+		encoded, _ := json.Marshal(record)
+		cost := len(encoded) + 1
 		if size+cost > maxBytes {
 			continue
 		}
