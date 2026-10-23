@@ -118,6 +118,9 @@ func run(ctx context.Context) error {
 		ParentCatalog: catalog,
 		AllowedTools:  delegation.DefaultLocalAllowedTools(),
 	}
+	if err := catalog.Register(delegation.EvidenceTool{Store: store}); err != nil {
+		return err
+	}
 	if err := catalog.Register(delegation.ExploreTool{Runner: exploreRunner}); err != nil {
 		return err
 	}

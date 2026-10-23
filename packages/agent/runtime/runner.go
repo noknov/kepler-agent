@@ -28,6 +28,15 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 	}
 	request.Scope.SessionID = request.SessionID
 	request.Scope.TurnID = request.TurnID
+	class := model.WorkInteractive
+	if request.Parent != nil {
+		class = model.WorkBackground
+	}
+	owner := request.Scope.Values["team_id"] + "/" + request.Scope.UserID
+	if request.Scope.UserID == "" {
+		owner = "session:" + request.SessionID
+	}
+	ctx = model.WithWorkload(ctx, model.Workload{Owner: owner, Class: class})
 	turnAttributes := langfuseObservationAttributes(request.Scope, "agent")
 	turnAttributes = append(turnAttributes,
 		attribute.String("agent.session.id", request.SessionID),
@@ -101,6 +110,16 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 			return err
 		}
 		_, err = r.record(cleanupCtx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.TokenBudgetUpdated, Metadata: metadata})
+		return err
+	})
+	ctx = model.WithUsageRecorder(ctx, func(recordCtx context.Context, usage model.AttemptUsage) error {
+		cleanup, cancel := r.cleanupContext(recordCtx)
+		defer cancel()
+		metadata, err := json.Marshal(usage)
+		if err != nil {
+			return err
+		}
+		_, err = r.record(cleanup, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.ModelUsageSettled, Metadata: metadata})
 		return err
 	})
 	// A replay retains its original authorization and reset-generation scope;
