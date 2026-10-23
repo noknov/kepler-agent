@@ -54,7 +54,6 @@ func TestIntegrationCrossWorkerSteerAndQueue(t *testing.T) {
 	owner.Redis, owner.PodID, owner.Inputs = client, "owner", inputs
 	owner.register(sessionID, active)
 	defer owner.unregister(sessionID, active)
-	go owner.StartControlSubscriber(ctx)
 
 	peer := New(hosted.Agent{}, &fakeMessenger{}, safety.PromptPolicy{}, safety.Redactor{}, nil)
 	peer.Redis, peer.PodID, peer.Inputs = client, "peer", inputs
@@ -90,7 +89,6 @@ func TestIntegrationCrossWorkerSteerAndQueue(t *testing.T) {
 	waiter := &activeRun{turnID: "waiting-turn", cancel: waitingCancel}
 	peer.register(sessionID, waiter)
 	defer peer.unregister(sessionID, waiter)
-	go peer.StartControlSubscriber(ctx)
 
 	command, _ := json.Marshal(stopCommand{TurnID: "active-turn"})
 	if err := inputs.Enqueue(ctx, sessioninput.Item{ID: sessionID + "-stop", SessionID: sessionID, Kind: sessioninput.KindStop, Payload: command}); err != nil {
@@ -103,14 +101,34 @@ func TestIntegrationCrossWorkerSteerAndQueue(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_session_inputs WHERE id=$1 AND acknowledged_at IS NULL`, sessionID+"-stop").Scan(&pending); err != nil || pending != 1 {
 		t.Fatalf("waiter consumed another worker's stop: pending=%d err=%v", pending, err)
 	}
-	if _, err := peer.Redis.PublishCount(ctx, sessionStopChannel, sessionID); err != nil {
-		t.Fatal(err)
+	// First establish that the waiter alone cannot claim the owner's stop.
+	// Only then start delivery: an earlier control wake-up could otherwise let
+	// the real owner acknowledge the command before the pending-row assertion.
+	var subscribers sync.WaitGroup
+	defer func() { stop(); subscribers.Wait() }()
+	for _, service := range []*Service{owner, peer} {
+		subscribers.Add(1)
+		go func(service *Service) {
+			defer subscribers.Done()
+			service.StartControlSubscriber(ctx)
+		}(service)
 	}
+	eventually(t, func() bool {
+		listeners, err := peer.Redis.PublishCount(ctx, sessionStopChannel, sessionID)
+		return err == nil && listeners >= 2
+	})
 	select {
 	case <-canceled:
 	case <-time.After(2 * time.Second):
 		t.Fatal("owning worker did not consume the durable stop command")
 	}
+	// Cancellation precedes the durable acknowledgement. Wait for both before
+	// closing the pool/context so cleanup cannot race a successful delivery.
+	eventually(t, func() bool {
+		var acknowledged bool
+		err := pool.QueryRow(ctx, `SELECT acknowledged_at IS NOT NULL FROM agent_session_inputs WHERE id=$1`, sessionID+"-stop").Scan(&acknowledged)
+		return err == nil && acknowledged
+	})
 	if waitingCtx.Err() != nil {
 		t.Fatal("Stop canceled the later waiting request")
 	}
