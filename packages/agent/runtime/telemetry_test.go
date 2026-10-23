@@ -292,3 +292,24 @@ func TestResilientAttemptsDoNotDuplicateLogicalModelCompletion(t *testing.T) {
 		t.Fatalf("completed=%d attempts=%d, want one logical completion and requested/completed attempt facts", completed, attempts)
 	}
 }
+
+func TestTraceMessagesOmitNestedPrivateEvidenceWithoutMutation(t *testing.T) {
+	original := []model.Message{{Role: model.RoleTool, Content: []model.Content{{Type: model.ContentToolResult, ToolResult: &model.ToolResult{CallID: "call", Content: []model.Content{
+		{Type: model.ContentReasoning, Text: "private reasoning"},
+		{Type: model.ContentImage, ImageURL: "https://private.invalid/image"},
+		{Type: model.ContentArtifact, Artifact: &model.Artifact{URI: "private-artifact-location", Name: "evidence"}},
+		{Type: model.ContentText, Text: "public observation"},
+	}}}}}}
+	encoded, _ := json.Marshal(traceMessages(original))
+	for _, secret := range []string{"private reasoning", "private.invalid", "private-artifact-location"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("trace leaked %s", secret)
+		}
+	}
+	if !strings.Contains(string(encoded), "public observation") {
+		t.Fatal("public evidence lost")
+	}
+	if original[0].Content[0].ToolResult.Content[2].Artifact.URI != "private-artifact-location" {
+		t.Fatal("canonical evidence mutated")
+	}
+}

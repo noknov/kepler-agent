@@ -188,7 +188,11 @@ func readEvent(file *os.File, location eventLocation) (transcript.Event, error) 
 }
 
 func lockSessionFile(ctx context.Context, directory string) (func(), error) {
-	file, err := os.OpenFile(filepath.Join(directory, ".events.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	return lockLocalFile(ctx, filepath.Join(directory, ".events.lock"))
+}
+
+func lockLocalFile(ctx context.Context, path string) (func(), error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}

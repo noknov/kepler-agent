@@ -3,6 +3,7 @@ package mcptools
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -48,28 +49,20 @@ var (
 	routerInitializing = make(map[string]*sessionInitialization)
 )
 
+// Fingerprints separate sessions by transport and credentials without retaining
+// bearer tokens or header values as map keys. JSON preserves field boundaries.
 func routerCacheKey(client *mcp.Client) string {
-	var b strings.Builder
-	b.WriteString(client.ServiceName)
-	b.WriteByte('\x00')
-	b.WriteString(client.URL)
-	b.WriteByte('\x00')
-	b.WriteString(client.Token)
-	b.WriteByte('\x00')
-	fmt.Fprintf(&b, "%p", client.HTTP)
+	fields := []string{client.ServiceName, client.URL, client.Token, fmt.Sprintf("%p", client.HTTP)}
 	keys := make([]string, 0, len(client.Headers))
-	for k := range client.Headers {
-		keys = append(keys, k)
+	for key := range client.Headers {
+		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	for _, k := range keys {
-		v := client.Headers[k]
-		b.WriteByte('\x00')
-		b.WriteString(k)
-		b.WriteByte('=')
-		b.WriteString(v)
+	for _, key := range keys {
+		fields = append(fields, key, client.Headers[key])
 	}
-	return b.String()
+	encoded, _ := json.Marshal(fields)
+	return fmt.Sprintf("%x", sha256.Sum256(encoded))
 }
 
 func resolveRouterSession(ctx context.Context, client *mcp.Client) (mcp.Session, []mcp.ToolDefinition, error) {
@@ -263,8 +256,9 @@ type serverState struct {
 }
 
 type sessionEntry struct {
-	session mcp.Session
-	usedAt  time.Time
+	session   mcp.Session
+	usedAt    time.Time
+	expiresAt time.Time
 }
 type sessionInitialization struct {
 	done        chan struct{}
@@ -352,7 +346,7 @@ func (t *remoteTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	}
 	value, err := client.CallTool(ctx, session, t.remote.Name, call.Arguments)
 	if err != nil {
-		t.server.invalidateSession(call, session)
+		t.server.invalidateSession(call, client, session)
 		return tool.Result{}, err
 	}
 	content := make([]model.Content, 0, 1+len(value.Images))
@@ -372,18 +366,15 @@ func mapErrorCode(isError bool) string {
 	return ""
 }
 
-func (s *serverState) sessionKey(call tool.Call) string {
-	userID := call.Scope.UserID
-	if userID == "" {
-		userID = "_"
-	}
-	return call.Scope.SessionID + "\x00" + userID
+func (s *serverState) sessionKey(call tool.Call, client *mcp.Client) string {
+	encoded, _ := json.Marshal([]string{call.Scope.SessionID, call.Scope.UserID, call.Scope.Values["team_id"], routerCacheKey(client)})
+	return fmt.Sprintf("%x", sha256.Sum256(encoded))
 }
 
 func (s *serverState) session(ctx context.Context, call tool.Call, client *mcp.Client) (mcp.Session, error) {
-	key := s.sessionKey(call)
+	key := s.sessionKey(call, client)
 	s.mu.Lock()
-	if entry, ok := s.sessions[key]; ok {
+	if entry, ok := s.sessions[key]; ok && time.Now().Before(entry.expiresAt) {
 		entry.usedAt = time.Now()
 		s.sessions[key] = entry
 		s.mu.Unlock()
@@ -406,7 +397,7 @@ func (s *serverState) session(ctx context.Context, call tool.Call, client *mcp.C
 	delete(s.initializing, key)
 	pending.session, pending.err = session, err
 	if err == nil {
-		s.sessions[key] = sessionEntry{session: session, usedAt: time.Now()}
+		s.sessions[key] = sessionEntry{session: session, usedAt: time.Now(), expiresAt: time.Now().Add(routerCacheTTL)}
 		s.evictOldestLocked()
 	}
 	close(pending.done)
@@ -414,8 +405,8 @@ func (s *serverState) session(ctx context.Context, call tool.Call, client *mcp.C
 	return session, err
 }
 
-func (s *serverState) invalidateSession(call tool.Call, used mcp.Session) {
-	key := s.sessionKey(call)
+func (s *serverState) invalidateSession(call tool.Call, client *mcp.Client, used mcp.Session) {
+	key := s.sessionKey(call, client)
 	s.mu.Lock()
 	if current, ok := s.sessions[key]; ok && current.session == used {
 		delete(s.sessions, key)

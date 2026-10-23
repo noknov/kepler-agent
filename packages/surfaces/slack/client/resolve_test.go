@@ -13,8 +13,8 @@ func TestParseConversationLink(t *testing.T) {
 	if err != nil || channel != "C999" || thread != "111.222" {
 		t.Fatalf("channel=%q thread=%q err=%v", channel, thread, err)
 	}
-	channel, thread, err = ParseConversationLink("https://example.slack.com/archives/D0AJSE6PRLH/p1701234567890123")
-	if err != nil || channel != "D0AJSE6PRLH" || thread != "1701234567.890123" {
+	channel, thread, err = ParseConversationLink("https://example.slack.com/archives/D123/p1701234567890123")
+	if err != nil || channel != "D123" || thread != "1701234567.890123" {
 		t.Fatalf("channel=%q thread=%q err=%v", channel, thread, err)
 	}
 }
@@ -64,12 +64,12 @@ func TestResolveReadTargetExplicitChannelDoesNotInheritScope(t *testing.T) {
 		return nil, nil
 	})
 	target, err := client.ResolveReadTarget(context.Background(), ReadTargetInput{
-		Channel:        "D0AJSE6PRLH",
+		Channel:        "D123",
 		ScopeChannel:   "D_BOT",
 		ScopeThreadTS:  "9.9",
 		ScopeMessageTS: "9.9",
 	})
-	if err != nil || target.Channel != "D0AJSE6PRLH" || target.ThreadTS != "" || target.LatestTS != "" {
+	if err != nil || target.Channel != "D123" || target.ThreadTS != "" || target.LatestTS != "" {
 		t.Fatalf("target=%#v err=%v", target, err)
 	}
 }

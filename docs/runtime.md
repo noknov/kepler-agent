@@ -22,9 +22,13 @@ invalidates the index; a malformed incomplete tail is truncated and a valid
 unterminated JSON line gains a newline. Different sessions do not share an I/O
 mutex. Per-session file locks coordinate writers across processes and honor
 cancellation while waiting; appends retain file sync and atomic batch replacement.
+Local CLI and app-server also hold a separate OS turn lease for the complete
+session execution, so multiple processes cannot concurrently resume the same
+session. Runtime admission waiting honors cancellation.
 
-Context projection reserves the configured response cap as well as tool-schema
-and safety overhead. An impossible input budget fails before dispatch instead
+Context projection includes ephemeral environment context and current-turn images,
+and reserves the configured response cap as well as tool-schema and safety
+overhead. Complete assembled requests are checked again before dispatch. An impossible input budget fails before dispatch instead
 of falling back to the full context window. Before dropping older turn groups
 or invoking model-driven compaction, `BoundedProjector` applies **two-stage
 observation masking**: historical `ToolResult` text and JSON blocks older than
@@ -216,5 +220,12 @@ during dynamic decomposition. GitHub PR manifests are indexed independently by
 repository and pull-request number inside each worker turn; file reads must
 select a PR URL when more than one manifest is active, so concurrent multi-PR
 inspection cannot overwrite or ambiguously reuse another PR's head context.
+
+Local spilled tool evidence uses opaque `artifact://` references and an eager,
+session-scoped `artifact_read` tool in both the CLI and app-server (including
+read-only exploration workers). Its bounded UTF-8 pages do not require extending
+workspace read permissions. Artifact IDs bind turn and payload to prevent reused
+call IDs from overwriting earlier evidence. Legacy bare-path artifacts are not
+accepted by this reader.
 
 Related: [architecture](architecture.md), [Slack usage](slack.md), [safety and limitations](safety.md).

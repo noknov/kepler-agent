@@ -103,6 +103,26 @@ for f in Cursor.ts intl.ts sliceAnsi.ts envUtils.ts modifiers.ts fullscreen.ts \
   cp "$CC/utils/$f" "$DEST/utils/" 2>/dev/null || true
 done
 
+# Keep private upstream discussion URLs out of redistributed sources. Preserve
+# code, public technical references, copyright notices and license files.
+python3 - "$DEST" <<'PY_SANITIZE'
+from pathlib import Path
+import re
+import sys
+for path in Path(sys.argv[1]).rglob("*"):
+    if path.suffix not in {".ts", ".tsx"}:
+        continue
+    text = path.read_text()
+    # Only comment lines: never rewrite URL literals used by runtime code.
+    clean = "".join(
+        re.sub(r"https://[a-zA-Z0-9-]+\.slack\.com/archives/[^\s)]+", "[upstream private discussion omitted]", line)
+        if line.lstrip().startswith(("//", "*")) else line
+        for line in text.splitlines(keepends=True)
+    )
+    if clean != text:
+        path.write_text(clean)
+PY_SANITIZE
+
 printf '%s\n' "$REVISION" > "$DEST/UPSTREAM_REVISION"
 
 echo "Synced Claude Code UI revision $REVISION into $DEST"

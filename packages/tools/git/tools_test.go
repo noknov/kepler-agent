@@ -69,9 +69,9 @@ func TestFetchRefUsesExplicitBranch(t *testing.T) {
 func TestGitToolsAcceptGitHubRepositoryIdentifier(t *testing.T) {
 	root, work := testRepo(t)
 	base := Base{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	runGit(t, work, "remote", "set-url", "origin", "https://github.com/ClareAI/work.git")
+	runGit(t, work, "remote", "set-url", "origin", "https://github.com/example-org/work.git")
 
-	got, err := base.repo(context.Background(), "ClareAI/work")
+	got, err := base.repo(context.Background(), "example-org/work")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestGitToolsAcceptGitHubRepositoryIdentifier(t *testing.T) {
 		t.Fatalf("repo() = %q, want %q", got, work)
 	}
 
-	got, err = base.explicitRepo(context.Background(), "ClareAI/work")
+	got, err = base.explicitRepo(context.Background(), "example-org/work")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,9 +91,9 @@ func TestGitToolsAcceptGitHubRepositoryIdentifier(t *testing.T) {
 func TestGitToolsAcceptGitHubRepositoryIdentifierWithOriginCredentials(t *testing.T) {
 	root, work := testRepo(t)
 	base := Base{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
-	runGit(t, work, "remote", "set-url", "origin", "https://token@github.com/ClareAI/work.git")
+	runGit(t, work, "remote", "set-url", "origin", "https://token@github.com/example-org/work.git")
 
-	got, err := base.repo(context.Background(), "ClareAI/work")
+	got, err := base.repo(context.Background(), "example-org/work")
 	if err != nil {
 		t.Fatal(err)
 	}

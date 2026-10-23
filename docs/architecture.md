@@ -4,13 +4,15 @@ Kepler shares one agent loop across products. A **surface** receives input and
 renders output; a **profile** selects storage, tools, credentials, and policy;
 the **runtime** executes turns using canonical model and transcript contracts.
 
-```text
-Slack -> gateway -> durable inbox -> worker -> hosted profile --+
-Web   -> gateway -> worker Web handler -----> hosted profile --+--> runtime
-CLI   -> Go headless runner ----------------> local profile ---+     |
-Ink   -> stdio app-server ------------------> local profile ---+     +--> providers
-                                                                   +--> tools
-                                                                   +--> transcript
+```mermaid
+flowchart TD
+    H["Slack / Web ingress"] --> Q["Durable inbox / input"]
+    Q --> P["Hosted profile"]
+    L["CLI / stdio app-server"] --> LP["Local profile"]
+    P --> R["Shared runtime"]
+    LP --> R
+    R --> E["Providers / tools"]
+    R --> T["Canonical transcript"]
 ```
 
 Sharing the runtime does not make the surfaces feature-equivalent. Web has its
@@ -90,6 +92,11 @@ complete design.
    [tools](../packages/tools) for the external operation.
 5. Return to the surface for delivery and to [runs](../packages/runs) for
    observability projection.
+
+For execution contracts, failure windows, identity, context accounting, privacy,
+and capacity boundaries, read the [detailed architecture walkthrough](architecture-deep-dive.md)
+(中文). The [2026 audit](agent-audit-2026-10.md) separates verified fixes from
+remaining design work and measurable comparison goals.
 
 For details, read [runtime](runtime.md), [tools](tools.md), and
 [the Chinese architecture walkthrough](../architecture-site/README.md).

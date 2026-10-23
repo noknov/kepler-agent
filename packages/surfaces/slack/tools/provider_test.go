@@ -56,7 +56,7 @@ func TestPreferConnectedThreadReaderUsesUserForExternalReads(t *testing.T) {
 		Bot:       BotThreadReader{Slack: bot},
 	}
 	got, err := source.Client(ctx, tool.Call{
-		Arguments: []byte(`{"link":"https://wati-io.slack.com/archives/COTHER/p123"}`),
+		Arguments: []byte(`{"link":"https://example.slack.com/archives/COTHER/p123"}`),
 		Scope:     tool.Scope{UserID: "U1", Values: map[string]string{"channel": "C1", "thread_ts": "1.0"}},
 	})
 	if err != nil {

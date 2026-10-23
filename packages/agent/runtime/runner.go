@@ -61,7 +61,12 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 	}
 	ctx, unlock, err := r.acquireSession(ctx, request.SessionID)
 	if err != nil {
-		return TurnResult{SessionID: request.SessionID, TurnID: request.TurnID}, err
+		result := TurnResult{SessionID: request.SessionID, TurnID: request.TurnID}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			result.Termination = TerminationCanceled
+		}
+		// No transcript writes before ownership: another turn may still be active.
+		return result, err
 	}
 	defer unlock()
 	// Circuit state is scoped to one live turn. Do not retain it for abandoned

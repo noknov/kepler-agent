@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"reflect"
@@ -16,11 +17,12 @@ import (
 const defaultContentBytes = 32 << 10
 
 var contentSecrets = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\b(?:sk-(?:lf-)?|pk-lf-|xox[baprs]-|gh[pousr]_)[a-z0-9_-]+`),
+	regexp.MustCompile(`(?i)\b(?:sk-(?:lf-)?|pk-lf-|xox[baprs]-|gh[pousr]_|github_pat_)[a-z0-9_-]+`),
 	regexp.MustCompile(`(?i)\b(?:bearer|basic)\s+[a-z0-9+/=._-]+`),
-	regexp.MustCompile(`(?i)(?:[a-z0-9_]*(?:password|passwd|secret|api_key|apikey|access_token|refresh_token|authorization|cookie))\s*[=:]\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}]+)`),
+	regexp.MustCompile(`(?i)(?:[a-z0-9_]*(?:password|passwd|secret|api_key|apikey|access_token|refresh_token|authorization|cookie))["']?\s*[=:]\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}]+)`),
 	regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)`),
-	regexp.MustCompile(`https?://[^/\s:@]+:[^/\s@]+@`),
+	regexp.MustCompile(`(?:https?|postgres(?:ql)?|mysql|redis|mongodb(?:\+srv)?)://[^/\s:@]+:[^/\s@]+@`),
+	regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`),
 	regexp.MustCompile(`\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+`),
 	regexp.MustCompile(`(?i)data:[^\s"']+`),
 }
@@ -124,10 +126,15 @@ func (b *contentBudget) clean(value reflect.Value, depth int) any {
 			return "[JSON exceeds capture limit]"
 		}
 		var parsed any
-		if json.Unmarshal(raw, &parsed) != nil {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		if decoder.Decode(&parsed) != nil {
 			return "[invalid JSON]"
 		}
 		return b.clean(reflect.ValueOf(parsed), depth+1)
+	}
+	if number, ok := value.Interface().(json.Number); ok {
+		return number
 	}
 	switch value.Kind() {
 	case reflect.String:
