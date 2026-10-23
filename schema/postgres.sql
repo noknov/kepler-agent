@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS user_memory_generations (
     PRIMARY KEY(team_id,user_id)
 );
 CREATE TABLE IF NOT EXISTS user_memories (
+    expires_at TIMESTAMPTZ,
     team_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
     generation BIGINT NOT NULL DEFAULT 0,
@@ -25,6 +26,8 @@ CREATE TABLE IF NOT EXISTS user_memories (
     PRIMARY KEY(team_id,user_id,semantic_key),
     FOREIGN KEY(team_id,user_id) REFERENCES user_memory_generations(team_id,user_id)
 );
+ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_user_memories_expiry ON user_memories(team_id,user_id,expires_at) WHERE expires_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_user_memories_identity_updated ON user_memories(team_id,user_id,updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS user_memory_reset_requests (

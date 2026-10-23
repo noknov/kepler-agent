@@ -11,6 +11,7 @@ import (
 )
 
 type Config struct {
+	Memory       MemoryConfig
 	HTTP         HTTPConfig
 	Web          WebConfig
 	Slack        SlackConfig
@@ -39,6 +40,12 @@ type WebConfig struct {
 
 // StorageConfig owns all durable operational state for sessions, runs, inbox,
 // and event delivery.
+type MemoryConfig struct {
+	MaxRecords int
+	Rerank     bool
+	Timeout    time.Duration
+}
+
 type StorageConfig struct {
 	PostgresDSN string
 	RedisURL    string
@@ -313,6 +320,7 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 	}
 
 	cfg := Config{
+		Memory: MemoryConfig{MaxRecords: envInt("MEMORY_MAX_RECORDS", 1000), Rerank: envBool("MEMORY_RERANK", false), Timeout: envDuration("MEMORY_RECALL_TIMEOUT", 30*time.Second)},
 		HTTP: HTTPConfig{
 			Addr:                env("HTTP_ADDR", ":8080"),
 			EventWorkers:        envInt("SLACK_EVENT_WORKERS", 8),
@@ -512,6 +520,9 @@ func dotenvPath(profile RuntimeProfile) string {
 }
 
 func validateForProfile(cfg Config, profile RuntimeProfile) (Config, error) {
+	if cfg.Memory.MaxRecords < 1 || cfg.Memory.Timeout <= 0 {
+		return Config{}, fmt.Errorf("memory max records and recall timeout must be positive")
+	}
 	if cfg.Tools.AgentMaxTotalTokens < 0 {
 		return cfg, fmt.Errorf("AGENT_MAX_TOTAL_TOKENS cannot be negative")
 	}

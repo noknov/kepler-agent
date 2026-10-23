@@ -64,7 +64,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	}
 	var memoryStore memory.Store
 	if deps.Postgres != nil {
-		memoryStore = memory.PGStore{Pool: deps.Postgres}
+		memoryStore = memory.PGStore{Pool: deps.Postgres, MaxRecords: cfg.Memory.MaxRecords}
 		if err := catalog.Register(memorytools.Tool{Store: memoryStore}); err != nil {
 			return Profile{}, err
 		}
@@ -151,12 +151,16 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	if err := catalog.Register(delegation.ExploreTool{Runner: exploreRunner}); err != nil {
 		return Profile{}, err
 	}
+	var memoryRanker memory.Ranker
+	if cfg.Memory.Rerank {
+		memoryRanker = memory.ModelRanker{Client: client, Model: cfg.LLM.Model, Governor: governor, CountTokens: agentruntime.EstimateTokens}
+	}
 	promptPolicy := safety.PromptPolicy{}
 	return Profile{
 		Capabilities: func(ctx context.Context, name string) (providers.ModelCapabilities, error) {
 			return primary.Capabilities(ctx, cfg.LLM.Provider, name)
 		},
-		Agent: Agent{Runtime: runner, Memory: memoryStore}, Prompt: promptPolicy,
+		Agent: Agent{Runtime: runner, Memory: memoryStore, MemoryRanker: memoryRanker, MemoryTimeout: cfg.Memory.Timeout}, Prompt: promptPolicy,
 		Redactor: safety.Redactor{WorkspaceRoots: cfg.Security.WorkspaceRoots}, Tools: catalog,
 		Rates: CostRates(cfg), SecondaryModel: model.Govern(secondaryObserved, governor), SecondaryModelName: secondaryModel,
 	}, nil

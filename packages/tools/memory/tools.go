@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/memory"
@@ -14,7 +15,7 @@ type Tool struct{ Store memory.Store }
 
 func (Tool) Descriptor() tool.Descriptor {
 	return tool.Descriptor{Name: "memory", Description: "Manage this authenticated user's explicit cross-session memories. Use list/search to recall. Only upsert facts the user explicitly asked you to remember; never save secrets, tool instructions or guesses. Writes require operator authorization. Use forget to delete one memory.", Effects: []tool.Effect{tool.EffectExternalWrite},
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["list","search","upsert","forget"]},"semantic_key":{"type":"string","maxLength":200},"kind":{"type":"string","enum":["preference","project","procedure","fact"]},"content":{"type":"string","maxLength":8000},"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":100},"offset":{"type":"integer","minimum":0},"expected_version":{"type":"integer","minimum":0,"description":"For updates, pass the version read from list/search to reject stale writes."}},"required":["action"]}`)}
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["list","search","upsert","forget"]},"semantic_key":{"type":"string","maxLength":200},"kind":{"type":"string","enum":["preference","project","procedure","fact"]},"content":{"type":"string","maxLength":8000},"clear_expiry":{"type":"boolean","description":"Remove an existing expiry only when the user explicitly requests permanent retention."},"expires_at":{"type":"string","format":"date-time","description":"Optional explicit expiry; use only when the user requested a limited lifetime."},"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":100},"offset":{"type":"integer","minimum":0},"expected_version":{"type":"integer","minimum":0,"description":"For updates, pass the version read from list/search to reject stale writes."}},"required":["action"]}`)}
 }
 
 func (t Tool) DescriptorForCall(call tool.Call) (tool.Descriptor, error) {
@@ -41,14 +42,16 @@ func (t Tool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) 
 		return tool.Result{}, fmt.Errorf("memory store unavailable")
 	}
 	var args struct {
-		Version int64  `json:"expected_version"`
-		Action  string `json:"action"`
-		Key     string `json:"semantic_key"`
-		Kind    string `json:"kind"`
-		Content string `json:"content"`
-		Query   string `json:"query"`
-		Limit   int    `json:"limit"`
-		Offset  int    `json:"offset"`
+		ExpiresAt   *time.Time `json:"expires_at"`
+		ClearExpiry bool       `json:"clear_expiry"`
+		Version     int64      `json:"expected_version"`
+		Action      string     `json:"action"`
+		Key         string     `json:"semantic_key"`
+		Kind        string     `json:"kind"`
+		Content     string     `json:"content"`
+		Query       string     `json:"query"`
+		Limit       int        `json:"limit"`
+		Offset      int        `json:"offset"`
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
@@ -79,7 +82,7 @@ func (t Tool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) 
 			if args.Kind == "" {
 				args.Kind = "fact"
 			}
-			err = t.Store.Put(ctx, identity, generation, memory.Record{Version: args.Version, Key: args.Key, Kind: args.Kind, Content: args.Content, SessionID: call.Scope.SessionID, TurnID: call.Scope.TurnID})
+			err = t.Store.Put(ctx, identity, generation, memory.Record{ExpiresAt: args.ExpiresAt, ClearExpiry: args.ClearExpiry, Version: args.Version, Key: args.Key, Kind: args.Kind, Content: args.Content, SessionID: call.Scope.SessionID, TurnID: call.Scope.TurnID})
 		}
 		if err != nil {
 			return tool.Result{}, err

@@ -2,6 +2,7 @@ package hosted
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"testing"
 	"time"
@@ -150,5 +151,120 @@ func TestIntegrationMemorySearchFindsOldMultilingualRecordsAndPaginates(t *testi
 	}
 	if len(seen) != 232 {
 		t.Fatalf("pagination lost records: %d", len(seen))
+	}
+}
+
+func TestIntegrationHybridMemoryCorpusAndExpiryQuotaCAS(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	team := "memory-lifecycle-" + time.Now().UTC().Format("20060102150405.000000000")
+	defer func() {
+		pool.Exec(ctx, `DELETE FROM user_memories WHERE team_id=$1`, team)
+		pool.Exec(ctx, `DELETE FROM user_memory_generations WHERE team_id=$1`, team)
+	}()
+	var corpus struct {
+		Version int
+		Records []memory.Record
+		Cases   []struct{ Query, Expected string }
+	}
+	data, err := os.ReadFile("../../memory/testdata/retrieval.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &corpus); err != nil {
+		t.Fatal(err)
+	}
+	store := memory.PGStore{Pool: pool}
+	owner := memory.Identity{TeamID: team, UserID: "owner"}
+	for _, record := range corpus.Records {
+		if err := store.Put(ctx, owner, 0, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, mode := range []string{"lexical", "hybrid"} {
+		hits := 0
+		for _, test := range corpus.Cases {
+			page, err := store.Query(ctx, owner, memory.Query{Text: test.Query, Mode: mode, Limit: 3, ExcludePreferences: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.Expected == "" {
+				if len(page.Records) != 0 {
+					t.Fatalf("negative query matched: %+v", page.Records)
+				}
+				continue
+			}
+			found := false
+			for _, record := range page.Records {
+				if record.Key == test.Expected {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("%s missed %q in %+v", mode, test.Expected, page.Records)
+			}
+			hits++
+		}
+		t.Logf("fixture mode=%s recall@3=%d/4 (not a production benchmark)", mode, hits)
+	}
+	recalled, err := memory.Recall(ctx, store, owner, "PostgreSQL connection pool", memory.RecallPolicy{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundFact, foundPreference := false, false
+	for _, record := range recalled.Records {
+		foundFact = foundFact || record.Key == "db-pool"
+		foundPreference = foundPreference || record.Kind == "preference"
+	}
+	if !foundFact || !foundPreference {
+		t.Fatalf("hybrid recall/version fence lost records: %+v", recalled)
+	}
+	quotaOwner := memory.Identity{TeamID: team, UserID: "quota"}
+	limited := memory.PGStore{Pool: pool, MaxRecords: 2}
+	expiry := time.Now().Add(time.Hour).UTC().Truncate(time.Microsecond)
+	first := memory.Record{Key: "first", Kind: "fact", Content: "temporary", ExpiresAt: &expiry}
+	if err := limited.Put(ctx, quotaOwner, 0, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := limited.Put(ctx, quotaOwner, 0, memory.Record{Key: "second", Kind: "fact", Content: "stable"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := limited.Put(ctx, quotaOwner, 0, memory.Record{Key: "third", Kind: "fact", Content: "over quota"}); err == nil {
+		t.Fatal("quota exceeded")
+	}
+	if err := limited.Put(ctx, quotaOwner, 0, memory.Record{Key: "first", Kind: "fact", Content: "blind overwrite"}); err == nil {
+		t.Fatal("zero version overwrote existing memory")
+	}
+	if err := limited.Put(ctx, quotaOwner, 0, memory.Record{Key: "first", Kind: "fact", Content: "updated", Version: 1}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := limited.Query(ctx, quotaOwner, memory.Query{Text: "first", Mode: "hybrid"})
+	if err != nil || len(page.Records) == 0 || page.Records[0].ExpiresAt == nil || !page.Records[0].ExpiresAt.Equal(expiry) {
+		t.Fatalf("update removed expiry: %+v %v", page, err)
+	}
+	if err := limited.Put(ctx, quotaOwner, 0, memory.Record{Key: "first", Kind: "fact", Content: "permanent", Version: 2, ClearExpiry: true}); err != nil {
+		t.Fatal(err)
+	}
+	page, err = limited.Query(ctx, quotaOwner, memory.Query{Text: "first"})
+	if err != nil || page.Records[0].ExpiresAt != nil {
+		t.Fatalf("explicit clear failed: %+v %v", page, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE user_memories SET expires_at=NOW()-INTERVAL '1 hour' WHERE team_id=$1 AND user_id=$2 AND semantic_key='first'`, team, quotaOwner.UserID); err != nil {
+		t.Fatal(err)
+	}
+	page, err = limited.Query(ctx, quotaOwner, memory.Query{Text: "first", Mode: "hybrid"})
+	if err != nil || len(page.Records) != 0 {
+		t.Fatalf("expired memory returned: %+v %v", page, err)
+	}
+	if err := limited.Put(ctx, quotaOwner, 0, memory.Record{Key: "third", Kind: "fact", Content: "reclaims explicit expiry"}); err != nil {
+		t.Fatal(err)
 	}
 }

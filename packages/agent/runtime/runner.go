@@ -217,6 +217,20 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 		}
 	}
 
+	if request.PrepareContext != nil {
+		request, err = restorePreparedContext(request, events)
+		if err != nil {
+			return r.failTurn(ctx, result, err)
+		}
+		request, err = r.prepareContext(ctx, request)
+		if err != nil {
+			return r.failTurn(ctx, result, err)
+		}
+		metadata, _ := json.Marshal(map[string]any{"values": request.Scope.Values})
+		if _, err := r.record(ctx, transcript.Event{ID: "context:" + request.TurnID, SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.TurnContextPrepared, Metadata: metadata}); err != nil {
+			return r.failTurn(ctx, result, err)
+		}
+	}
 	composition, err := prompt.Compose(request.Prompt)
 	if err != nil {
 		return r.failTurn(ctx, result, err)

@@ -179,3 +179,7 @@ permission by itself. Repository edits, local commands, workflow dispatch, and
 third-party MCP mutations must be accurately classified and authorized before
 execution. Do not infer safety from a dynamically discovered tool name or
 surface annotation; see [safety](safety.md).
+
+### Memory retrieval and lifecycle
+
+`MEMORY_MAX_RECORDS` (default 1000), `MEMORY_RERANK` (default false), and `MEMORY_RECALL_TIMEOUT` (default 30s) control hosted explicit memory. Apply the nullable `user_memories.expires_at` migration in `schema/postgres.sql` before deploying. Existing memories retain their lifetime. See [retrieval and lifecycle](memory-retrieval.md) for version, reset and disclosure contracts.
