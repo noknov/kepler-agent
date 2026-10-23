@@ -2,8 +2,10 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
 )
@@ -73,5 +75,57 @@ func TestCompactionOmitsNestedToolImagesWithoutChangingTranscript(t *testing.T) 
 	safe := compactionSafeMessages([]model.Message{message})
 	if model.ContainImages(safe...) || !model.ContainImages(message) {
 		t.Fatal("nested image was retained or canonical evidence was mutated")
+	}
+}
+
+func TestOversizedFragmentsPreserveUnicodeAndEverySourceByte(t *testing.T) {
+	messages := []model.Message{model.TextMessage(model.RoleUser, strings.Repeat("数据库🙂; abc{}\\\"\n", 500))}
+	raw, err := json.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunks := chunkMessages(messages, 160)
+	var recovered strings.Builder
+	for _, chunk := range chunks {
+		if EstimateTokens(chunk) > 160 || len(chunk) != 1 || !utf8.ValidString(chunk[0].Text()) {
+			t.Fatalf("invalid fragment: %+v", chunk)
+		}
+		_, fragment, ok := strings.Cut(chunk[0].Text(), "\n")
+		if !ok {
+			t.Fatal("missing fragment envelope")
+		}
+		recovered.WriteString(fragment)
+	}
+	if recovered.String() != string(raw) {
+		t.Fatal("fragmentation changed source bytes")
+	}
+}
+
+func TestFittingFragmentUsesLargestCompleteRuneWithinBudget(t *testing.T) {
+	for _, text := range []string{"abc甲乙🙂?", strings.Repeat("数据🙂", 60)} {
+		for limit := 1; limit < 100; limit++ {
+			part := fittingFragment(text, "evidence: ", limit)
+			if !utf8.ValidString(part) || !strings.HasPrefix(text, part) {
+				t.Fatal("invalid prefix")
+			}
+			if part != "" && EstimateTokens([]model.Message{model.TextMessage(model.RoleUser, "evidence: "+part)}) > limit {
+				t.Fatal("budget exceeded")
+			}
+			if len(part) < len(text) {
+				_, width := utf8.DecodeRuneInString(text[len(part):])
+				next := text[:len(part)+width]
+				if EstimateTokens([]model.Message{model.TextMessage(model.RoleUser, "evidence: "+next)}) <= limit {
+					t.Fatal("fragment is not maximal")
+				}
+			}
+		}
+	}
+}
+
+func BenchmarkOversizedUnicodeCompactionChunks(b *testing.B) {
+	messages := []model.Message{model.TextMessage(model.RoleUser, strings.Repeat("数据库🙂", 6000))}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		chunkMessages(messages, 4000)
 	}
 }

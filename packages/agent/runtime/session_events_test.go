@@ -54,3 +54,40 @@ func TestSessionEventViewsAreAppendSafeAndRequestIDsIncremental(t *testing.T) {
 		t.Fatalf("id=%q err=%v", id, err)
 	}
 }
+
+func TestSessionEventsRetainOutOfOrderDurableAppends(t *testing.T) {
+	state := &sessionEvents{requests: make(map[string]map[string]bool)}
+	input := model.TextMessage(model.RoleUser, "task")
+	state.append(transcript.Event{Sequence: 1, Type: transcript.UserInput, Message: &input})
+	summary := model.TextMessage(model.RoleUser, "checkpoint")
+	state.append(transcript.Event{Sequence: 5, Type: transcript.CompactionCreated, Message: &summary, Metadata: json.RawMessage(`{"covers_through":3}`)})
+	oldEvents := state.events[:len(state.events):len(state.events)]
+	oldContext := state.context[:len(state.context):len(state.context)]
+	// The store committed these before sequence 5, but their callers resumed later.
+	request := transcript.Event{Sequence: 2, TurnID: "t", Type: transcript.ModelRequestStarted, Metadata: json.RawMessage(`{"request_id":"r1"}`)}
+	state.append(request)
+	state.append(transcript.Event{Sequence: 3, Type: transcript.TaskStateUpdated, Metadata: json.RawMessage(`{"schema_version":1,"revision":1,"items":[]}`)})
+	answer := model.TextMessage(model.RoleAssistant, "after covered history")
+	state.append(transcript.Event{Sequence: 4, Type: transcript.AssistantMessage, Message: &answer})
+	state.append(request) // Store idempotency must still avoid duplicate accounting.
+	if len(state.events) != 5 || len(state.requests["t"]) != 1 {
+		t.Fatalf("lost/duplicated durable facts: events=%+v requests=%v", state.events, state.requests)
+	}
+	for i, event := range state.events {
+		if event.Sequence != uint64(i+1) {
+			t.Fatalf("noncanonical order: %+v", state.events)
+		}
+	}
+	want := []uint64{1, 3, 4, 5}
+	if len(state.context) != len(want) {
+		t.Fatalf("derived context=%+v", state.context)
+	}
+	for i, sequence := range want {
+		if state.context[i].Sequence != sequence {
+			t.Fatalf("checkpoint lost retained input/state or post-checkpoint evidence: %+v", state.context)
+		}
+	}
+	if len(oldEvents) != 2 || oldEvents[1].Sequence != 5 || len(oldContext) != 2 || oldContext[1].Sequence != 5 {
+		t.Fatal("reordering mutated an already published view")
+	}
+}

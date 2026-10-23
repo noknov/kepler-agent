@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"sort"
 
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 )
@@ -16,8 +17,22 @@ type sessionEvents struct {
 }
 
 func (s *sessionEvents) append(event transcript.Event) {
-	// Idempotent Store.Append may return an existing event.
 	if len(s.events) > 0 && event.Sequence <= s.events[len(s.events)-1].Sequence {
+		index := sort.Search(len(s.events), func(i int) bool { return s.events[i].Sequence >= event.Sequence })
+		if s.events[index].Sequence == event.Sequence {
+			return // Idempotent Store.Append returned an existing event.
+		}
+		// Concurrent durable appends may return out of sequence. Rebuild the
+		// derived views in canonical order without mutating any published view.
+		events := make([]transcript.Event, 0, len(s.events)+1)
+		events = append(events, s.events[:index]...)
+		events = append(events, event)
+		events = append(events, s.events[index:]...)
+		rebuilt := sessionEvents{requests: make(map[string]map[string]bool)}
+		for _, stored := range events {
+			rebuilt.append(stored)
+		}
+		*s = rebuilt
 		return
 	}
 	s.events = append(s.events, event)
