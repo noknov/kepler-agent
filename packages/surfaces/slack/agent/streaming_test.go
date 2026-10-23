@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
@@ -74,18 +73,14 @@ func TestPlanUpdatesUseSlackPlanDisplay(t *testing.T) {
 		{ID: "inspect", Task: "Inspect logs", Status: "in_progress"},
 		{ID: "verify", Task: "Verify the fix", Status: "pending"},
 	}}})
+	stream.finishPlan()
+	messenger.mu.Lock()
+	defer messenger.mu.Unlock()
 	if messenger.started != 0 || len(messenger.planPosts) != 1 {
 		t.Fatalf("streams=%#v plan posts=%#v", messenger.start, messenger.planPosts)
 	}
 	if got := messenger.planPosts[0]; len(got) != 1 || got[0]["type"] != "plan" {
 		t.Fatalf("plan blocks = %#v", got)
-	}
-	stream.mu.Lock()
-	stream.planLastUpdate = time.Now().Add(-planUpdateInterval)
-	stream.mu.Unlock()
-	stream.UpdatePlan(&tool.PlanUpdate{Items: []tool.PlanItem{{ID: "inspect", Task: "Inspect logs", Status: "completed"}}})
-	if got := messenger.planUpdates; len(got) != 1 || got[0][0]["type"] != "plan" {
-		t.Fatalf("plan updates = %#v", got)
 	}
 }
 

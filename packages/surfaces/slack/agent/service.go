@@ -833,6 +833,10 @@ type slackStream struct {
 	lastStreamText        string
 	lastStreamUpdate      time.Time
 	streamTimer           *time.Timer
+	planDeliveryMu        sync.Mutex
+	planClosing           bool
+	planPostUncertain     bool
+	pendingPlan           *tool.PlanUpdate
 	planMessageTS         string
 	planRevision          int
 	planLastUpdate        time.Time
@@ -859,7 +863,7 @@ func (s *slackStream) Complete(final string) (string, error) {
 	defer s.finishSession()
 	s.telemetry.output(final)
 	s.stopStreamTimer()
-	s.stopPlanTimer()
+	s.finishPlan()
 	if s.redactor != nil {
 		s.appendSanitizedDelta(s.redactor.Flush())
 	}
@@ -927,7 +931,7 @@ func (s *slackStream) appendSanitizedDelta(delta string) {
 func (s *slackStream) Fail(message string, canceled bool) (string, error) {
 	defer s.setSessionStatus(sessionActive)
 	s.stopStreamTimer()
-	s.stopPlanTimer()
+	s.finishPlan()
 	s.flushDeferredStream()
 	s.mu.Lock()
 	s.streamClosed = true
