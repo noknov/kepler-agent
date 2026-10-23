@@ -149,3 +149,39 @@ func TestIdentityVerification(t *testing.T) {
 		})
 	}
 }
+
+func TestBoundIdentityAllowsRefreshButRejectsAccountSwitchBeforeDispatch(t *testing.T) {
+	p := session(t, time.Now().Add(time.Hour))
+	ctx, identity, err := BindIdentity(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials, _ := Load(p)
+	credentials.AccessToken, credentials.RefreshToken = "rotated-access", "rotated-refresh"
+	if err := save(p, credentials); err != nil {
+		t.Fatal(err)
+	}
+	_, refreshed, err := BindIdentity(context.Background(), p)
+	if err != nil || identity != refreshed {
+		t.Fatal("refresh invalidated account identity")
+	}
+	var calls int
+	transport := &Transport{Path: p, Base: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("{}"))}, nil
+	})}
+	req, _ := http.NewRequestWithContext(ctx, "POST", Resource+"/responses/compact", nil)
+	if _, err := transport.RoundTrip(req); err != nil {
+		t.Fatal(err)
+	}
+	credentials.Subject = "another-account"
+	if err := save(p, credentials); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transport.RoundTrip(req); err == nil {
+		t.Fatal("dispatched old-account context with new-account credentials")
+	}
+	if calls != 1 {
+		t.Fatalf("transport calls=%d", calls)
+	}
+}

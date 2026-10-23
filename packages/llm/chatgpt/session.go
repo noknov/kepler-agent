@@ -326,6 +326,9 @@ func (t *Transport) token(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if expected, ok := ctx.Value(identityKey{}).(string); ok && expected != sessionIdentity(s) {
+		return "", errors.New("ChatGPT account changed while preparing the request; retry with the current account")
+	}
 	if time.Until(s.ExpiresAt) > time.Minute {
 		return s.AccessToken, nil
 	}
@@ -361,7 +364,7 @@ func (t *Transport) token(ctx context.Context) (string, error) {
 	return s.AccessToken, nil
 }
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.URL.Scheme != "https" || req.URL.Host != "api.openai.com" || (req.URL.Path != "/v1/responses" && req.URL.Path != "/v1/models") {
+	if req.URL.Scheme != "https" || req.URL.Host != "api.openai.com" || (req.URL.Path != "/v1/responses" && req.URL.Path != "/v1/responses/compact" && req.URL.Path != "/v1/models") {
 		return nil, errors.New("ChatGPT credentials may only be used with official models and Responses endpoints")
 	}
 	token, err := t.token(req.Context())

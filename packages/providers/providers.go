@@ -33,6 +33,7 @@ type Config struct {
 // Client is the sole wire-to-canonical model adapter used by every profile.
 type Client struct {
 	provider, route string
+	chatgptPath     string
 	Wire            llm.Client
 	Host            model.Client
 }
@@ -97,6 +98,13 @@ func New(config Config) (*Client, error) {
 }
 
 func (c *Client) Generate(ctx context.Context, request model.Request, sink model.EventSink) (model.Response, error) {
+	if c != nil && c.chatgptPath != "" {
+		bound, boundCtx, err := c.bindSession(ctx)
+		if err != nil {
+			return model.Response{}, err
+		}
+		c, ctx = bound, boundCtx
+	}
 	if c != nil && c.Host != nil {
 		response, err := c.Host.Generate(ctx, request, sink)
 		return response, toModelError(err)
@@ -531,5 +539,9 @@ func bindClient(wire llm.Client, config Config) *Client {
 	// The endpoint and credential identity are part of the continuation contract.
 	identity, _ := json.Marshal([]string{config.Provider, config.Protocol, config.BaseURL, config.APIKey, config.ChatGPTCredentialsFile})
 	fingerprint := sha256.Sum256(identity)
-	return &Client{Wire: wire, provider: config.Provider, route: fmt.Sprintf("%x", fingerprint)}
+	client := &Client{Wire: wire, provider: config.Provider, route: fmt.Sprintf("%x", fingerprint)}
+	if config.Provider == "chatgpt" {
+		client.chatgptPath = config.ChatGPTCredentialsFile
+	}
+	return client
 }

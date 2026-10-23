@@ -2,11 +2,13 @@ package providers
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/llm"
+	"github.com/noknov/kepler-agent/packages/llm/chatgpt"
 )
 
 func (c *Client) continuation(message llm.Message, name, kind string, usage llm.Usage) *model.Continuation {
@@ -66,4 +68,16 @@ func (c *Client) compact(ctx context.Context, request model.Request) (model.Resp
 		return model.Response{}, fmt.Errorf("native compaction did not return a continuation")
 	}
 	return model.Response{Message: model.Message{Role: model.RoleUser, Content: []model.Content{{Type: model.ContentContinuation, Continuation: state}}}, FinishReason: model.FinishStop, Usage: toUsage(response.Usage)}, nil
+}
+
+// A credential path is a storage location, not an account identity. Bind a
+// request-local client copy so concurrent requests never mutate shared routing.
+func (c *Client) bindSession(ctx context.Context) (*Client, context.Context, error) {
+	boundCtx, identity, err := chatgpt.BindIdentity(ctx, c.chatgptPath)
+	if err != nil {
+		return nil, ctx, err
+	}
+	bound := *c
+	bound.route = fmt.Sprintf("%x", sha256.Sum256([]byte(c.route+":"+identity)))
+	return &bound, boundCtx, nil
 }

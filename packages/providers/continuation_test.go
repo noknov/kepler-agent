@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/llm"
+	"github.com/noknov/kepler-agent/packages/llm/chatgpt"
 )
 
 func TestNativeCompactionWindowRoundTripsAndFallsBackAcrossRoutes(t *testing.T) {
@@ -103,5 +107,45 @@ func TestContinuationFallsBackWhenProtocolRouteChanges(t *testing.T) {
 	converted, err := client.inputMessage(message, "model")
 	if err != nil || len(converted.NativeItems) != 0 || converted.Content != "portable checkpoint" {
 		t.Fatalf("Chat route silently lost the portable window: %+v %v", converted, err)
+	}
+}
+
+func TestChatGPTContinuationUsesAccountIdentityNotCredentialPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.json")
+	credentials := chatgpt.Session{ClientID: "client", HostID: "host", Subject: "alice", AccessToken: "access", RefreshToken: "refresh", Scope: "chatgpt.tokens.use.direct resource.invoke", ExpiresAt: time.Now().Add(time.Hour)}
+	write := func() {
+		t.Helper()
+		raw, _ := json.Marshal(credentials)
+		if err := os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write()
+	client := bindClient(&recordingWire{}, Config{Provider: "chatgpt", Protocol: "responses", ChatGPTCredentialsFile: path})
+	alice, _, err := client.bindSession(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := model.TextMessage(model.RoleAssistant, "portable answer")
+	message.Content = append(message.Content, model.Content{Type: model.ContentContinuation, Continuation: alice.continuation(llm.Message{NativeItems: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"opaque"}`)}}, "m", "response", llm.Usage{})})
+	credentials.AccessToken = "rotated"
+	write()
+	refreshed, _, _ := client.bindSession(context.Background())
+	converted, err := refreshed.inputMessage(message, "m")
+	if err != nil || len(converted.NativeItems) != 1 {
+		t.Fatal("normal refresh lost continuation")
+	}
+	credentials.Subject = "bob"
+	write()
+	bob, _, err := client.bindSession(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	converted, err = bob.inputMessage(message, "m")
+	if err != nil || len(converted.NativeItems) != 0 || converted.Content != "portable answer" {
+		t.Fatal("relogin reused another account's opaque continuation")
+	}
+	if alice.route == bob.route || client.route == alice.route {
+		t.Fatal("shared client routing was mutated")
 	}
 }

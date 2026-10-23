@@ -59,7 +59,7 @@ preview_bytes=400、recent_exchanges=2、image_tokens=1024。零值选择默认�
 Canonical `ContentContinuation` 保存 version、provider、model、route 指纹、kind、完整 opaque items 和 token estimate。
 Responses adapter 同时保留普通输出中的 reasoning/unknown items，下一轮按原窗口顺序重放。
 精确 JSON 数值保留，不把 opaque 数据转换为普通文字或送到别的 provider。
-Route 指纹包含 provider/protocol/endpoint/credential identity；模型、路由或凭据变化时使用原有可移植消息。
+Route 指纹包含 provider/protocol/endpoint/credential identity；ChatGPT 额外绑定登录账号、client 和 host identity，token 正常刷新不失效，同一路径换账号降级为文本，并在传输前再次验证身份。模型、路由或凭据变化时使用原有可移植消息。
 不匹配的窗口不改变源 transcript。未知 schema version 在匹配路由上明确拒绝，避免默默损坏协议。
 
 Native compact 显式启用：hosted `LLM_NATIVE_COMPACTION=true`；local TOML `native_compaction=true`，
