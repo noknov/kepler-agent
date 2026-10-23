@@ -6,9 +6,10 @@ import (
 )
 
 type Message struct {
-	Role             string `json:"role"`
-	Phase            string `json:"phase,omitempty"`
-	Content          string `json:"-"`
+	NativeItems      []json.RawMessage `json:"-"`
+	Role             string            `json:"role"`
+	Phase            string            `json:"phase,omitempty"`
+	Content          string            `json:"-"`
 	ContentParts     []ContentPart
 	ReasoningContent string     `json:"reasoning_content,omitempty"`
 	Name             string     `json:"name,omitempty"`

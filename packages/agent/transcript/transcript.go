@@ -42,6 +42,7 @@ const (
 	ModelStreamed          EventType = "model_streamed"
 	AssistantMessage       EventType = "assistant_message"
 	PlanUpdated            EventType = "plan_updated"
+	TaskStateUpdated       EventType = "task_state_updated"
 	DelegatedTaskStarted   EventType = "delegated_task_started"
 	DelegatedTaskCompleted EventType = "delegated_task_completed"
 	DelegatedTaskFailed    EventType = "delegated_task_failed"

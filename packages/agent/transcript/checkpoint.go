@@ -28,10 +28,13 @@ func CheckpointCoverage(event Event) uint64 {
 // TurnWindow keeps the latest continuation, the original current input, and all
 // facts required to recover or replay the requested turn. No canonical data is deleted.
 func TurnWindow(events []Event, turnID string) []Event {
-	var coverage, input uint64
+	var coverage, input, task uint64
 	for _, event := range events {
 		if value := CheckpointCoverage(event); value > 0 {
 			coverage = value
+		}
+		if event.Type == TaskStateUpdated {
+			task = event.Sequence
 		}
 		if event.Type == UserInput || event.Type == SteeringInput {
 			input = event.Sequence
@@ -39,7 +42,7 @@ func TurnWindow(events []Event, turnID string) []Event {
 	}
 	var out []Event
 	for _, event := range events {
-		if event.Sequence > coverage || (turnID != "" && event.TurnID == turnID) || event.Sequence == input {
+		if event.Sequence > coverage || (turnID != "" && event.TurnID == turnID) || event.Sequence == input || event.Sequence == task {
 			out = append(out, event)
 		}
 	}

@@ -1093,7 +1093,7 @@ func TestRunTurnCompactsDroppedContext(t *testing.T) {
 	client := &scriptedModel{responses: []model.Response{{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop}}}
 	catalog, _ := tool.NewCatalog()
 	compactor := &recordingCompactor{}
-	runner, _ := New(Config{Model: "test", Context: ContextConfig{MaxTokens: 120, ReserveTokens: 20}}, Dependencies{Model: client, Tools: catalog, Transcript: store, Compactor: compactor})
+	runner, _ := New(Config{Model: "test", Context: ContextConfig{MaxTokens: 300, ReserveTokens: 20}}, Dependencies{Model: client, Tools: catalog, Transcript: store, Compactor: compactor})
 	if _, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "compact", Input: model.TextMessage(model.RoleUser, "new")}); err != nil {
 		t.Fatal(err)
 	}

@@ -99,6 +99,10 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	if compactModel == "" {
 		compactModel = cfg.LLM.Model
 	}
+	var nativeCompact model.Client
+	if cfg.LLM.NativeCompaction {
+		nativeCompact = primaryClient
+	}
 	runner, err := agentruntime.New(agentruntime.Config{
 		MaxTotalTokens: cfg.Tools.AgentMaxTotalTokens,
 		Model:          cfg.LLM.Model, ReasoningEffort: cfg.LLM.Thinking, Temperature: cfg.LLM.Temperature,
@@ -110,7 +114,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		ModelGovernor: governor,
 		TraceContent:  telemetry.ContentRecorder(),
 		Model:         client, Tools: catalog, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}, Transcript: PGTranscript{Pool: deps.Postgres}, Events: deps.Events, Lease: deps.Lease,
-		Compactor: agentruntime.ModelCompactor{Governor: governor, Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer}, Artifacts: artifacts,
+		Compactor: agentruntime.ModelCompactor{NativeClient: nativeCompact, NativeModel: cfg.LLM.Model, Governor: governor, Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer}, Artifacts: artifacts,
 		Environment:             environment.Config{WorkspaceRoots: cfg.Security.WorkspaceRoots},
 		ConnectionContinuations: deps.ConnectionContinuations,
 	})
@@ -129,7 +133,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 			TraceContent:  telemetry.ContentRecorder(),
 			Model:         exploreClient, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}, Lease: deps.Lease,
 			Transcript: PGTranscript{Pool: deps.Postgres}, Events: deps.Events,
-			Compactor: agentruntime.ModelCompactor{Governor: governor, Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer},
+			Compactor: agentruntime.ModelCompactor{NativeClient: nativeCompact, NativeModel: cfg.LLM.Model, Governor: governor, Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer},
 			Artifacts: artifacts, Environment: environment.Config{WorkspaceRoots: cfg.Security.WorkspaceRoots},
 		},
 		ParentCatalog: catalog,

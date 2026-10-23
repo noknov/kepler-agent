@@ -122,3 +122,34 @@ func TestJSONLTurnWindowPreservesAuditAndRebuildsIndex(t *testing.T) {
 		}
 	}
 }
+
+func TestJSONLLatestTaskStateSurvivesReopenAndCoveredWindow(t *testing.T) {
+	store, err := NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	summary := model.TextMessage(model.RoleUser, "summary")
+	for _, event := range []transcript.Event{
+		{Type: transcript.TaskStateUpdated, Metadata: json.RawMessage(`{"schema_version":1,"revision":1}`)},
+		{Type: transcript.TaskStateUpdated, Metadata: json.RawMessage(`{"schema_version":1,"revision":2}`)},
+		{Type: transcript.ModelCompleted},
+		{Type: transcript.CompactionCreated, Message: &summary, Metadata: json.RawMessage(`{"covers_through":3}`)},
+	} {
+		event.SessionID = "task"
+		event.TurnID = "old"
+		if _, err := store.Append(ctx, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reopened, err := NewJSONLStore(store.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reader := range []*JSONLStore{store, reopened} {
+		events, err := reader.LoadTurn(ctx, "task", "new")
+		if err != nil || len(events) != 2 || events[0].Sequence != 2 || events[1].Sequence != 4 {
+			t.Fatalf("lost latest task state: %+v %v", events, err)
+		}
+	}
+}

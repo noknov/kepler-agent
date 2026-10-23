@@ -23,6 +23,7 @@ Read [architecture](architecture.md) first, then follow the area you change:
 | Detailed execution contracts, identity, failure windows, privacy, and capacity (中文) | [Architecture deep dive](architecture-deep-dive.md) |
 | 2026 agent comparison, audit findings, and measurable next steps (中文) | [October audit](agent-audit-2026-10.md) |
 | Turn lifecycle, context, events, and delegation | [Runtime](runtime.md) |
+| 任务状态、上下文策略与原生续接 | [持续执行契约](agent-continuity.md) |
 | Tools, discovery, integration setup | [Tools](tools.md) |
 | Prompts, rules, skills, private overlays | [Prompts](prompts.md) |
 | Cross-session user memory design and evaluation | [Long-term memory](long-term-memory.md) |

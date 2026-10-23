@@ -19,27 +19,29 @@ const (
 type ContentType string
 
 const (
-	ContentText       ContentType = "text"
-	ContentImage      ContentType = "image"
-	ContentReasoning  ContentType = "reasoning"
-	ContentJSON       ContentType = "json"
-	ContentToolCall   ContentType = "tool_call"
-	ContentToolResult ContentType = "tool_result"
-	ContentArtifact   ContentType = "artifact"
+	ContentText         ContentType = "text"
+	ContentImage        ContentType = "image"
+	ContentReasoning    ContentType = "reasoning"
+	ContentJSON         ContentType = "json"
+	ContentToolCall     ContentType = "tool_call"
+	ContentToolResult   ContentType = "tool_result"
+	ContentArtifact     ContentType = "artifact"
+	ContentContinuation ContentType = "continuation"
 )
 
 // Content is a discriminated message payload. Only fields belonging to Type
 // are populated. The canonical transcript therefore stays provider-neutral.
 type Content struct {
-	Type       ContentType     `json:"type"`
-	Phase      string          `json:"phase,omitempty"`
-	Text       string          `json:"text,omitempty"`
-	JSON       json.RawMessage `json:"json,omitempty"`
-	ToolCall   *ToolCall       `json:"tool_call,omitempty"`
-	ToolResult *ToolResult     `json:"tool_result,omitempty"`
-	Artifact   *Artifact       `json:"artifact,omitempty"`
-	ImageURL   string          `json:"image_url,omitempty"`
-	Citations  []Citation      `json:"citations,omitempty"`
+	Continuation *Continuation   `json:"continuation,omitempty"`
+	Type         ContentType     `json:"type"`
+	Phase        string          `json:"phase,omitempty"`
+	Text         string          `json:"text,omitempty"`
+	JSON         json.RawMessage `json:"json,omitempty"`
+	ToolCall     *ToolCall       `json:"tool_call,omitempty"`
+	ToolResult   *ToolResult     `json:"tool_result,omitempty"`
+	Artifact     *Artifact       `json:"artifact,omitempty"`
+	ImageURL     string          `json:"image_url,omitempty"`
+	Citations    []Citation      `json:"citations,omitempty"`
 }
 
 // Citation is structured evidence attached to the exact content block that
@@ -195,6 +197,7 @@ type ToolDefinition struct {
 }
 
 type Request struct {
+	Operation          string            `json:"operation,omitempty"`
 	InputTokenEstimate int               `json:"-"`
 	Model              string            `json:"model"`
 	Messages           []Message         `json:"messages"`
@@ -284,6 +287,7 @@ type Client interface {
 type ErrorKind string
 
 const (
+	ErrorUnsupported  ErrorKind = "unsupported"
 	ErrorTransient    ErrorKind = "transient"
 	ErrorRateLimited  ErrorKind = "rate_limited"
 	ErrorContextLimit ErrorKind = "context_limit"

@@ -170,6 +170,11 @@ func New(config Config, deps Dependencies) (*Runtime, error) {
 			return nil, err
 		}
 	}
+	if !deps.Tools.Has("task_state") {
+		if err := deps.Tools.Register(taskStateTool{store: deps.Transcript}); err != nil && !errors.Is(err, tool.ErrAlreadyRegistered) {
+			return nil, err
+		}
+	}
 	if deps.Policy == nil {
 		deps.Policy = tool.ReadOnlyPolicy{}
 	}
@@ -181,6 +186,9 @@ func New(config Config, deps Dependencies) (*Runtime, error) {
 	}
 	if deps.Sleep == nil {
 		deps.Sleep = sleepContext
+	}
+	if err := config.Context.Policy.Validate(); err != nil {
+		return nil, err
 	}
 	config = config.withDefaults()
 	deps.Model = model.Govern(deps.Model, deps.ModelGovernor)

@@ -271,7 +271,7 @@ func RegisterWorker(mux *http.ServeMux, cfg config.Config) error {
 	if limit < 1 {
 		limit = 1
 	}
-	mux.Handle("POST "+providers.KeplerGeneratePath, limitConcurrency(HandleHostedGenerate(hosted, HostedGeneratePolicy{
+	mux.Handle("POST "+providers.KeplerGeneratePath, limitConcurrency(HandleHostedGenerate(hosted, HostedGeneratePolicy{AllowNativeCompaction: cfg.LLM.NativeCompaction,
 		Model: cfg.LLM.Model, MaxOutputTokens: cfg.LLM.MaxOutputTokens, Temperature: cfg.LLM.Temperature,
 	}), limit))
 	proxy, err := NewLLMUpstreamProxy(cfg.LLM)

@@ -69,7 +69,7 @@ func traceMessages(messages []model.Message) []model.Message {
 		copy.Content = make([]model.Content, 0, len(message.Content))
 		for _, block := range message.Content {
 			switch block.Type {
-			case model.ContentReasoning:
+			case model.ContentReasoning, model.ContentContinuation:
 				continue
 			case model.ContentImage:
 				block = model.Content{Type: model.ContentText, Text: "[image omitted]"}
