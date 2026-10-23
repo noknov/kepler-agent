@@ -24,7 +24,7 @@ func (c *Client) CreateCanvas(ctx context.Context, title string, content *Canvas
 		Error    string `json:"error,omitempty"`
 		CanvasID string `json:"canvas_id,omitempty"`
 	}
-	if err := c.postJSON(ctx, "canvases.create", payload, &out); err != nil {
+	if err := c.postJSONWithRetry(ctx, "canvases.create", payload, &out, false); err != nil {
 		return "", fmt.Errorf("slack canvases.create: %w", err)
 	}
 	if !out.OK {
@@ -49,11 +49,11 @@ func (c *Client) CreateChannelCanvas(ctx context.Context, channelID, title strin
 		Error    string `json:"error,omitempty"`
 		CanvasID string `json:"canvas_id,omitempty"`
 	}
-	if err := c.postJSON(ctx, "canvases.create", payload, &out); err != nil {
-		return "", fmt.Errorf("slack canvases.create: %w", err)
+	if err := c.postJSONWithRetry(ctx, "conversations.canvases.create", payload, &out, false); err != nil {
+		return "", fmt.Errorf("slack conversations.canvases.create: %w", err)
 	}
 	if !out.OK {
-		return "", fmt.Errorf("slack canvases.create failed: %s", out.Error)
+		return "", fmt.Errorf("slack conversations.canvases.create failed: %s", out.Error)
 	}
 	return out.CanvasID, nil
 }
@@ -64,7 +64,8 @@ type CanvasEditChange struct {
 	DocumentContent *CanvasContent `json:"document_content,omitempty"`
 }
 
-// EditCanvas applies a change to an existing canvas.
+// EditCanvas applies a change once. Inserts are not idempotent: a lost
+// response must not cause the same content to be appended again.
 func (c *Client) EditCanvas(ctx context.Context, canvasID string, change CanvasEditChange) error {
 	payload := map[string]any{
 		"canvas_id": canvasID,
@@ -74,7 +75,7 @@ func (c *Client) EditCanvas(ctx context.Context, canvasID string, change CanvasE
 		OK    bool   `json:"ok"`
 		Error string `json:"error,omitempty"`
 	}
-	if err := c.postJSON(ctx, "canvases.edit", payload, &out); err != nil {
+	if err := c.postJSONWithRetry(ctx, "canvases.edit", payload, &out, false); err != nil {
 		return fmt.Errorf("slack canvases.edit: %w", err)
 	}
 	if !out.OK {
