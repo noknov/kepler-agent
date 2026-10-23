@@ -88,7 +88,7 @@ func (s PGStore) Put(ctx context.Context, identity Identity, generation int64, r
 		tag, err := tx.Exec(ctx, `INSERT INTO user_memories(team_id,user_id,generation,semantic_key,kind,content,source_session_id,source_turn_id,expires_at)
 SELECT $1,$2,$3,$4,$5,$6,$7,$8,$10
 WHERE $9::bigint=0 OR EXISTS(SELECT 1 FROM user_memories WHERE team_id=$1 AND user_id=$2 AND semantic_key=$4 AND version=$9)
-ON CONFLICT(team_id,user_id,semantic_key) DO UPDATE SET generation=EXCLUDED.generation,kind=EXCLUDED.kind,content=EXCLUDED.content,source_session_id=EXCLUDED.source_session_id,source_turn_id=EXCLUDED.source_turn_id,version=user_memories.version+1,updated_at=NOW(),expires_at=CASE WHEN $11::boolean THEN NULL ELSE COALESCE(EXCLUDED.expires_at,user_memories.expires_at) END
+ON CONFLICT(team_id,user_id,semantic_key) DO UPDATE SET generation=EXCLUDED.generation,kind=EXCLUDED.kind,content=EXCLUDED.content,source_session_id=EXCLUDED.source_session_id,source_turn_id=EXCLUDED.source_turn_id,version=EXCLUDED.version,updated_at=NOW(),expires_at=CASE WHEN $11::boolean THEN NULL ELSE COALESCE(EXCLUDED.expires_at,user_memories.expires_at) END
 WHERE $9::bigint>0 AND user_memories.version=$9`, identity.TeamID, identity.UserID, generation, record.Key, record.Kind, record.Content, record.SessionID, record.TurnID, record.Version, record.ExpiresAt, record.ClearExpiry)
 		if err != nil {
 			return err

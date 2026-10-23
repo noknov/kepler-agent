@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS user_memory_generations (
     generation BIGINT NOT NULL DEFAULT 0,
     PRIMARY KEY(team_id,user_id)
 );
+CREATE SEQUENCE IF NOT EXISTS user_memory_versions AS BIGINT;
 CREATE TABLE IF NOT EXISTS user_memories (
     expires_at TIMESTAMPTZ,
     team_id TEXT NOT NULL,
@@ -21,11 +22,18 @@ CREATE TABLE IF NOT EXISTS user_memories (
     content TEXT NOT NULL,
     source_session_id TEXT NOT NULL DEFAULT '',
     source_turn_id TEXT NOT NULL DEFAULT '',
-    version BIGINT NOT NULL DEFAULT 1,
+    version BIGINT NOT NULL DEFAULT nextval('user_memory_versions'),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY(team_id,user_id,semantic_key),
     FOREIGN KEY(team_id,user_id) REFERENCES user_memory_generations(team_id,user_id)
 );
+-- Revisions are identities, not row-local update counts; deletion must not
+-- make a stale writer or recall fence valid again.
+ALTER TABLE user_memories ALTER COLUMN version SET DEFAULT nextval('user_memory_versions');
+SELECT setval('user_memory_versions', GREATEST(
+    (SELECT last_value FROM user_memory_versions),
+    COALESCE((SELECT MAX(version) FROM user_memories), 1)
+));
 ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_user_memories_expiry ON user_memories(team_id,user_id,expires_at) WHERE expires_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_user_memories_identity_updated ON user_memories(team_id,user_id,updated_at DESC);

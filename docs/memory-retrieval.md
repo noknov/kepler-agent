@@ -47,6 +47,7 @@ Hybrid 在数据库完整 namespace 内计算两条排名：Unicode trigram word
 ## 更新、冲突与过期
 
 - Version=0 仅用于创建；已有 key 更新必须使用 list/search 返回的 expected_version。未知/旧版本不能覆盖。
+- 修订号由数据库序列分配，创建和更新都会获得新值；删除、过期或重建不复用旧值。它是 opaque CAS token，不是单条记录的修改次数。
 - 同一 semantic key 是明确的冲突域；不同 key 之间的语义冲突不会被代码自动合并或删除。
 - `expires_at` 是用户显式选择的时间，没有自动套用一个通用 TTL。过期条目不参与任何查询。
 - 更新未提供 expiry 时保留原期限；`clear_expiry=true` 需要用户明确要求移除期限。
@@ -66,7 +67,7 @@ Transcript、spills、备份和 traces 的保留策略仍独立；本变更没�
 | MEMORY_RERANK | false | 启用额外模型重排；与主 turn 共用额度 |
 | MEMORY_RECALL_TIMEOUT | 30s | DB + 可选重排的整体时间预算，失败时可继续无 memory 的任务 |
 
-部署此 PR 前应用 `schema/postgres.sql`，为已有 user_memories 增加 nullable expires_at 及 scope/expiry 索引。
+部署此 PR 前应用 `schema/postgres.sql`，为已有 user_memories 增加 nullable expires_at、scope/expiry 索引以及 user_memory_versions 修订序列。
 表结构变更只在 schema 文件中，runtime 不执行 DDL。现有记录 expiry 为 NULL，不会被自动过期。
 这是新增字段迁移，按现有流程先升级数据库再升级服务；只发布二进制会使旧 schema 上的 memory 查询失败。
 

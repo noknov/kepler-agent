@@ -243,14 +243,18 @@ func TestIntegrationHybridMemoryCorpusAndExpiryQuotaCAS(t *testing.T) {
 	if err := limited.Put(ctx, quotaOwner, 0, memory.Record{Key: "first", Kind: "fact", Content: "blind overwrite"}); err == nil {
 		t.Fatal("zero version overwrote existing memory")
 	}
-	if err := limited.Put(ctx, quotaOwner, 0, memory.Record{Key: "first", Kind: "fact", Content: "updated", Version: 1}); err != nil {
+	beforeUpdate, err := limited.Query(ctx, quotaOwner, memory.Query{Keys: []string{"first"}})
+	if err != nil || len(beforeUpdate.Records) != 1 {
+		t.Fatalf("memory before update=%+v err=%v", beforeUpdate, err)
+	}
+	if err := limited.Put(ctx, quotaOwner, 0, memory.Record{Key: "first", Kind: "fact", Content: "updated", Version: beforeUpdate.Records[0].Version}); err != nil {
 		t.Fatal(err)
 	}
 	page, err := limited.Query(ctx, quotaOwner, memory.Query{Text: "first", Mode: "hybrid"})
 	if err != nil || len(page.Records) == 0 || page.Records[0].ExpiresAt == nil || !page.Records[0].ExpiresAt.Equal(expiry) {
 		t.Fatalf("update removed expiry: %+v %v", page, err)
 	}
-	if err := limited.Put(ctx, quotaOwner, 0, memory.Record{Key: "first", Kind: "fact", Content: "permanent", Version: 2, ClearExpiry: true}); err != nil {
+	if err := limited.Put(ctx, quotaOwner, 0, memory.Record{Key: "first", Kind: "fact", Content: "permanent", Version: page.Records[0].Version, ClearExpiry: true}); err != nil {
 		t.Fatal(err)
 	}
 	page, err = limited.Query(ctx, quotaOwner, memory.Query{Text: "first"})
@@ -266,5 +270,47 @@ func TestIntegrationHybridMemoryCorpusAndExpiryQuotaCAS(t *testing.T) {
 	}
 	if err := limited.Put(ctx, quotaOwner, 0, memory.Record{Key: "third", Kind: "fact", Content: "reclaims explicit expiry"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestIntegrationMemoryRecreationRejectsOldVersion(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	identity := memory.Identity{TeamID: "memory-recreation-" + time.Now().UTC().Format("20060102150405.000000000"), UserID: "owner"}
+	defer func() {
+		pool.Exec(ctx, `DELETE FROM user_memories WHERE team_id=$1`, identity.TeamID)
+		pool.Exec(ctx, `DELETE FROM user_memory_generations WHERE team_id=$1`, identity.TeamID)
+	}()
+	store := memory.PGStore{Pool: pool}
+	put := func(content string, version int64) error {
+		return store.Put(ctx, identity, 0, memory.Record{Key: "same", Kind: "fact", Content: content, Version: version})
+	}
+	if err := put("old fact", 0); err != nil {
+		t.Fatal(err)
+	}
+	old, err := store.Query(ctx, identity, memory.Query{Keys: []string{"same"}})
+	if err != nil || len(old.Records) != 1 {
+		t.Fatalf("old=%+v err=%v", old, err)
+	}
+	if err := store.Forget(ctx, identity, 0, "same"); err != nil {
+		t.Fatal(err)
+	}
+	if err := put("replacement fact", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := put("stale overwrite", old.Records[0].Version); err == nil {
+		t.Fatal("old version overwrote a deleted and recreated memory")
+	}
+	current, err := store.Query(ctx, identity, memory.Query{Keys: []string{"same"}})
+	if err != nil || len(current.Records) != 1 || current.Records[0].Content != "replacement fact" || current.Records[0].Version == old.Records[0].Version {
+		t.Fatalf("current=%+v err=%v", current, err)
 	}
 }
