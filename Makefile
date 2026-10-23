@@ -27,6 +27,15 @@ test:
 test-race:
 	GOCACHE=$(GOCACHE) go test -race ./packages/profiles/local ./packages/agent/delegation ./packages/agent/runtime ./packages/surfaces/slack/agent ./packages/runs ./packages/safety ./packages/surfaces/slack/events ./packages/tools/hosted ./packages/appserver ./packages/surfaces/web
 
+# Deterministic Slack product contracts, including durable cross-worker control.
+# Require isolated integration stores instead of silently skipping those cases.
+SLACK_EVAL_FLAGS ?=
+.PHONY: eval-slack
+eval-slack:
+	@test -n "$$POSTGRES_TEST_DSN" || { echo "POSTGRES_TEST_DSN must name an isolated test database" >&2; exit 1; }
+	@test -n "$$REDIS_TEST_URL" || { echo "REDIS_TEST_URL must name an isolated test Redis database" >&2; exit 1; }
+	@GOCACHE=$(GOCACHE) go test -race -count=1 $(SLACK_EVAL_FLAGS) ./packages/surfaces/slack/... ./packages/eventinbox ./packages/sessioninput
+
 test-ui:
 	cd apps/cli && pnpm test
 	node --test packages/surfaces/web/tests/*.test.mjs

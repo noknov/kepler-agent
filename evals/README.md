@@ -13,7 +13,7 @@ currently provide a verified end-to-end release gate.
 | Run public coding datasets | `run_harbor.py` with a compatible Agent adapter | Harbor-native environment and grader results |
 | Run stateful app/API workflows | `run_appworld.py` | Official AppWorld MCP, saved database state, and official grader |
 | Gate a completed compatible summary | `gate.py` | Threshold checks; input validity must also be established |
-| Test hosted delivery, recovery, and authorization | Dedicated product tests | Separate from CLI coding scores |
+| Test Slack delivery, control, and authorization | `make eval-slack` | Deterministic product regressions with real PostgreSQL/Redis; separate from CLI coding scores |
 
 ## AppWorld evaluation
 
@@ -449,3 +449,48 @@ Docker daemon. It checks before launch and every five seconds during the job.
 Insufficient capacity or a failed probe stops the whole Harbor process group and
 records `resource_exhausted`, without changing task tests or rewards. The 20GiB
 value above is an explicit operational reserve, not a task-quality heuristic.
+
+## Slack product regression gate
+
+For the primary Slack surface, run `make eval-slack` before comparing coding
+benchmark scores. It executes the existing Slack packages, durable event inbox,
+and session input contracts with Go's race detector and without cached results.
+No LLM credentials or live Slack workspace are used: model/HTTP test doubles
+exercise the actual service/runtime paths, while cross-worker control uses real
+PostgreSQL and Redis.
+
+Set `POSTGRES_TEST_DSN` and `REDIS_TEST_URL` to **isolated test stores**, initialized
+with `schema/postgres.sql`. The target fails immediately if either is missing;
+it must not report success after silently skipping durable-control coverage.
+Never point it at the deployment's application databases.
+
+```sh
+make eval-slack
+# Machine-readable evidence; keep artifacts in the deployment/result directory.
+make eval-slack SLACK_EVAL_FLAGS=-json > /path/to/results/slack-regressions.jsonl
+```
+
+CI provisions the stores and uploads `slack-regressions` even when a test fails.
+The artifact is standard `go test -json` output: `Package`, `Test`, `Action`, and
+`Elapsed` identify each pass, failure, or skip. Durations measure local test
+execution, **not** real-model or Slack production latency. Missing optional
+fixtures remain explicit skips in the report.
+
+| Contract | Coverage |
+| --- | --- |
+| Trigger and access | DMs without mentions; explicit channel mentions; authorized bot actors; duplicate events |
+| Answer delivery | First delta, coalescing under slow Slack, final answer repair, redaction, no commentary messages |
+| Progress | Native plan rendering; suspended/active session states; terminal cleanup |
+| Retry safety | HTTP error handling; ambiguous delivery and duplicate-message regressions |
+| Control | Native Stop during model/tool work; stale Stop isolation; Stop before prompt backlog; cross-worker steering/queue and Redis failure |
+| Continuation | Queued approval uses its actual actor and decision; suspended/terminal session state |
+
+This is a deterministic harness/product regression gate, not a model-quality
+benchmark or proof of live Slack delivery. Keep Terminal Bench and AppWorld runs
+separate, with a fixed model/budget and their official graders. For production
+experience, compare the existing `slack.reply` trace's `queue_wait_ms`,
+`user_first_reply_ms`, `user_total_ms`, and `delivery_status` against real traffic.
+
+Use the [Slack quality criteria](../docs/harness-alignment.md#slack-quality-criteria)
+to distinguish product reliability from live-model task quality and production
+latency. Each needs its own evidence before making a release decision.

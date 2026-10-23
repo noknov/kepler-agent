@@ -123,3 +123,52 @@ sources, and remaining design gaps. The [architecture deep dive](architecture-de
 explains the current ownership, recovery, context, artifact, memory, and disclosure
 contracts. Native provider compaction, typed task state, semantic recall, and
 tenant-fair scheduling remain proposals rather than completed capabilities.
+
+## Slack quality criteria
+
+Reviewed against the main runtime on 2026-10-23. Slack is the primary product
+surface; a coding benchmark alone cannot measure its quality. These criteria
+compare observable behavior, not feature counts or inferred implementation
+quality. This review does not establish parity with, or superiority over, another
+agent.
+
+| Dimension | Existing mechanism | Required evidence / remaining gap |
+| --- | --- | --- |
+| Interaction | Explicit channel mentions, direct messages, typed plan events, native session lifecycle and Stop | Slow/erroring Slack must not stall the model; final state must not be lost; measure Stop-to-idle latency under load |
+| Execution reliability | Durable inbox/session inputs, turn IDs, owner-checked claims, uncertain-effect handling | Fault-inject worker restarts, lost replies and concurrent controls; never turn an unknown side effect into an automatic repeat |
+| Context and tools | Canonical transcript, checkpoint coverage, task-state revisions, deferred tool activation and evidence reads | Test long Slack threads with corrections, attachments and large tool results; measure constraint retention and evidence recall as well as tokens |
+| Performance | Shared model governor, attempt receipts, prompt/context versioning | Compare queue wait, time to first delivered answer and total latency at fixed concurrency/model; a faster single CLI task is insufficient |
+| Observability | `slack.reply` spans link user timestamps, delivery results and runtime work | Report p50/p95 by model/surface and separate provider failure, tool failure, delivery uncertainty and failed grading; do not count unknown delivery as success |
+| Quality evaluation | Runtime/product regressions plus official Terminal Bench and AppWorld graders | Require the Slack regression gate; separately run versioned, representative live-model tasks with fixed budgets and independent expected outcomes |
+
+`make eval-slack` provides the deterministic product-contract layer, including
+real PostgreSQL/Redis control paths. It does not contact Slack or prove task
+quality. Before claiming an experience improvement, run a fixed Slack scenario
+set against the deployed version: multi-turn investigation with a correction,
+image/file interpretation, a permission failure followed by reconnection,
+concurrent users, cancellation during tool work, and resumption after a worker
+restart. Record scenario/model/prompt-policy versions, outcome evidence,
+attempts/tokens and delivery latency. Expected outcomes must be independent of
+the agent answer; do not accept an LLM's own declaration of success as a grade.
+
+Start with these failure paths before adding new orchestration or prompt rules.
+Keep operational facts and user content separate: the UI projects lifecycle and
+plan events, while canonical user/tool evidence drives the model. Keep a
+one-to-one relationship between a confirmed side effect and its execution
+receipt. These invariants are testable without guessing intent from text.
+
+Primary references consulted for this review:
+
+- [Slack agent sessions](https://docs.slack.dev/ai/agent-sessions/): lifecycle
+  states and native stopping are platform contracts; loading text is not a
+  substitute for a task plan.
+- [Slack rate limits](https://docs.slack.dev/apis/web-api/rate-limits/): the
+  Retry-After window applies per method/workspace, rather than per conversation.
+- [pi agent core](https://github.com/earendil-works/pi/blob/main/packages/agent/README.md):
+  typed streaming events, separate steering/follow-up queues, and explicit
+  turn-finalization hooks are useful boundaries. They do not establish durable
+  cross-worker delivery by themselves.
+
+For Codex's thread/turn/item contract, retain the App Server reference above;
+Kepler's Slack adapter should preserve the same explicit lifecycle boundaries
+without importing CLI-specific interaction into Slack.

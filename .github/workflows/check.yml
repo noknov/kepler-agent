@@ -61,7 +61,19 @@ jobs:
           POSTGRES_TEST_DSN: postgres://kepler:kepler@127.0.0.1:5432/kepler_test?sslmode=disable
           REDIS_TEST_URL: redis://127.0.0.1:6379/15
           SANDBOX_INTEGRATION: "1"
-        run: go test ./packages/profiles/hosted ./packages/profiles/local ./packages/surfaces/slack/agent ./observability
+        run: go test ./packages/profiles/hosted ./packages/profiles/local ./observability
+      - name: Slack product regressions with durable control stores
+        env:
+          POSTGRES_TEST_DSN: postgres://kepler:kepler@127.0.0.1:5432/kepler_test?sslmode=disable
+          REDIS_TEST_URL: redis://127.0.0.1:6379/15
+        run: make eval-slack SLACK_EVAL_FLAGS=-json > slack-regressions.jsonl
+      - name: Upload Slack regression results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slack-regressions
+          path: slack-regressions.jsonl
+          if-no-files-found: ignore
       - name: Build deployable binaries
         run: make build
       - name: Validate CLI protocol boundary and bundle
