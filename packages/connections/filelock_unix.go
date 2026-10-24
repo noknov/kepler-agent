@@ -5,9 +5,10 @@ package connections
 import (
 	"context"
 	"errors"
-	"golang.org/x/sys/unix"
 	"os"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func lockConnectionFile(ctx context.Context, path string) (func(), error) {

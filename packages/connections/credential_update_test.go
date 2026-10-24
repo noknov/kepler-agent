@@ -39,7 +39,7 @@ func TestCredentialUpdatesAreConditional(t *testing.T) {
 	}
 	for name, factory := range factories {
 		t.Run(name, func(t *testing.T) {
-			for _, change := range []string{"delete", "reauthorize", "metadata", "recreate", "refresh"} {
+			for _, change := range []string{"delete", "reauthorize", "metadata", "recreate", "refresh", "concurrent_refresh"} {
 				t.Run(change, func(t *testing.T) {
 					store, versioned := factory(t)
 					ctx := t.Context()
@@ -61,6 +61,30 @@ func TestCredentialUpdatesAreConditional(t *testing.T) {
 						}
 					case "metadata":
 						err = store.(InstanceStore).UpsertTokenInstance(ctx, user, ProviderGCP, DefaultInstanceID, "new label", "new", nil, "new-account", map[string]string{"target": "new"})
+					case "concurrent_refresh":
+						results := make(chan error, 2)
+						for range 2 {
+							go func() {
+								newer := snapshot
+								newer.Account = "new-account"
+								results <- versioned.UpdateCredential(ctx, newer, "new")
+							}()
+						}
+						successes, conflicts := 0, 0
+						for range 2 {
+							result := <-results
+							switch {
+							case result == nil:
+								successes++
+							case errors.Is(result, ErrConnectionChanged):
+								conflicts++
+							default:
+								t.Fatal(result)
+							}
+						}
+						if successes != 1 || conflicts != 1 {
+							t.Fatalf("CAS winners=%d conflicts=%d", successes, conflicts)
+						}
 					case "refresh":
 						newer := snapshot
 						newer.Account = "new-account"
@@ -205,5 +229,40 @@ func TestFileStoreTransactionsSerializeAcrossInstances(t *testing.T) {
 		if _, err := store.Get(t.Context(), fmt.Sprint(i), ProviderGCP); err != nil {
 			t.Fatalf("lost concurrent connection %d: %v", i, err)
 		}
+	}
+}
+
+func TestAccountEnrichmentRejectsStaleSnapshot(t *testing.T) {
+	for _, provider := range []string{ProviderClickStack, ProviderNotion} {
+		t.Run(provider, func(t *testing.T) {
+			store, _ := NewFileStore(t.TempDir()+"/connections.json", "test")
+			ctx := t.Context()
+			access := testJWT(t, map[string]any{"email": "old@example.com"})
+			bundle := clickStackTokenBundle{Access: access, ExpiresAt: time.Now().Add(time.Hour)}
+			raw, _ := encodeClickStackTokenBundle(bundle)
+			if err := store.UpsertToken(ctx, "user", provider, raw, nil, ""); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, _, err := store.LoadCredential(ctx, "user", provider, DefaultInstanceID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.UpsertToken(ctx, "user", provider, "new-token", nil, "new@example.com"); err != nil {
+				t.Fatal(err)
+			}
+			service := &Service{Store: store}
+			if provider == ProviderNotion {
+				err = service.maybeBackfillNotionAccount(ctx, "user", bundle, snapshot)
+			} else {
+				err = service.maybeBackfillClickStackAccount(ctx, "user", bundle, snapshot)
+			}
+			if !errors.Is(err, ErrConnectionChanged) {
+				t.Fatalf("enrichment conflict=%v", err)
+			}
+			current, err := store.Get(ctx, "user", provider)
+			if err != nil || current.Account != "new@example.com" {
+				t.Fatalf("account=%+v err=%v", current, err)
+			}
+		})
 	}
 }

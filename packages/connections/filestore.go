@@ -2,6 +2,7 @@ package connections
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -181,10 +182,7 @@ func (s *FileStore) UpsertTokenInstance(ctx context.Context, userID, provider, i
 		return err
 	}
 	instanceID = connectionInstanceID(instanceID)
-	revision, err := NewInstanceID()
-	if err != nil {
-		return err
-	}
+	revision := rand.Text()
 	connections[fileConnectionKey(userID, provider, instanceID)] = fileRecord{
 		Revision: revision,
 		UserID:   userID, Provider: provider, InstanceID: instanceID, Label: label, Status: StatusConnected,
@@ -417,10 +415,7 @@ func (s *FileStore) UpdateCredential(ctx context.Context, conn Connection, token
 	if err != nil {
 		return err
 	}
-	revision, err := NewInstanceID()
-	if err != nil {
-		return err
-	}
+	revision := rand.Text()
 	item.Token, item.Account, item.Scopes = encrypted, conn.Account, append([]string(nil), conn.Scopes...)
 	item.Revision, item.UpdatedAt = revision, time.Now().UTC()
 	records[key] = item

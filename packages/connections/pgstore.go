@@ -101,7 +101,7 @@ func (s PGStore) UpsertTokenInstance(ctx context.Context, userID, provider, inst
 			scopes = EXCLUDED.scopes,
 			account = EXCLUDED.account,
 			metadata = EXCLUDED.metadata,
- revision = gen_random_uuid()::text,
+			revision = gen_random_uuid()::text,
 			updated_at = NOW()`,
 		userID, provider, instanceID, label, StatusConnected, encrypted, scopes, account, metadata)
 	return err
@@ -266,8 +266,11 @@ func IsConnected(status map[string]Connection, provider string) bool {
 func (s PGStore) LoadCredential(ctx context.Context, userID, provider, instanceID string) (Connection, string, error) {
 	var conn Connection
 	var encrypted string
-	err := s.Pool.QueryRow(ctx, `SELECT user_id,provider,instance_id,label,status,scopes,account,metadata,revision,updated_at,token_ciphertext
- FROM user_connections WHERE user_id=$1 AND provider=$2 AND instance_id=$3`, userID, provider, connectionInstanceID(instanceID)).Scan(
+	err := s.Pool.QueryRow(ctx, `
+        SELECT user_id, provider, instance_id, label, status, scopes, account,
+               metadata, revision, updated_at, token_ciphertext
+        FROM user_connections
+        WHERE user_id=$1 AND provider=$2 AND instance_id=$3`, userID, provider, connectionInstanceID(instanceID)).Scan(
 		&conn.UserID, &conn.Provider, &conn.InstanceID, &conn.Label, &conn.Status, &conn.Scopes, &conn.Account, &conn.Metadata, &conn.Revision, &conn.UpdatedAt, &encrypted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Connection{}, "", ErrNotConnected
@@ -287,8 +290,12 @@ func (s PGStore) UpdateCredential(ctx context.Context, conn Connection, token st
 	if err != nil {
 		return err
 	}
-	tag, err := s.Pool.Exec(ctx, `UPDATE user_connections SET token_ciphertext=$1,scopes=$2,account=$3,revision=gen_random_uuid()::text,updated_at=NOW()
- WHERE user_id=$4 AND provider=$5 AND instance_id=$6 AND revision=$7 AND status=$8`, encrypted, scopesForStorage(conn.Scopes), conn.Account, conn.UserID, conn.Provider, connectionInstanceID(conn.InstanceID), conn.Revision, StatusConnected)
+	tag, err := s.Pool.Exec(ctx, `
+        UPDATE user_connections
+        SET token_ciphertext=$1, scopes=$2, account=$3,
+            revision=gen_random_uuid()::text, updated_at=NOW()
+        WHERE user_id=$4 AND provider=$5 AND instance_id=$6
+          AND revision=$7 AND status=$8`, encrypted, scopesForStorage(conn.Scopes), conn.Account, conn.UserID, conn.Provider, connectionInstanceID(conn.InstanceID), conn.Revision, StatusConnected)
 	if err != nil {
 		return err
 	}
