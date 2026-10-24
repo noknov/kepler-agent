@@ -61,7 +61,7 @@ jobs:
           POSTGRES_TEST_DSN: postgres://kepler:kepler@127.0.0.1:5432/kepler_test?sslmode=disable
           REDIS_TEST_URL: redis://127.0.0.1:6379/15
           SANDBOX_INTEGRATION: "1"
-        run: go test ./packages/profiles/hosted ./packages/profiles/local ./observability
+        run: go test ./packages/profiles/hosted ./packages/profiles/local ./packages/connections ./observability
       - name: Slack product regressions with durable control stores
         env:
           POSTGRES_TEST_DSN: postgres://kepler:kepler@127.0.0.1:5432/kepler_test?sslmode=disable

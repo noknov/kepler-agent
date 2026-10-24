@@ -49,7 +49,11 @@ func TestFetchRefReturnsImmutableCommitRef(t *testing.T) {
 func TestFetchRefUsesExplicitBranch(t *testing.T) {
 	root, work := testRepo(t)
 	runGit(t, work, "branch", "-m", "main", "mt-main")
-	runGit(t, work, "push", "origin", ":main", "mt-main")
+	runGit(t, work, "push", "origin", "mt-main")
+	// Update the bare fixture's default branch before deleting it. Developer
+	// init.defaultBranch settings must not affect this test.
+	runGit(t, root, "--git-dir="+filepath.Join(root, "origin.git"), "symbolic-ref", "HEAD", "refs/heads/mt-main")
+	runGit(t, work, "push", "origin", ":main")
 	runGit(t, work, "fetch", "origin")
 
 	tool := FetchRefTool{Base: Base{

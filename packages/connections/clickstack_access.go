@@ -24,9 +24,19 @@ func (s *Service) ClickStackAccessTokenInstance(ctx context.Context, userID, ins
 	if err != nil {
 		return "", err
 	}
-	s.maybeBackfillClickStackAccount(ctx, userID, bundle, conn)
 	refreshed, err := s.ensureFreshClickStackBundleInstance(ctx, userID, bundle, conn)
 	if err != nil {
+		return "", err
+	}
+	// Enrichment uses a fresh atomic snapshot and cannot overwrite a refresh or reauthorization.
+	latestBundle, latestConn, loadErr := s.loadClickStackBundleInstance(ctx, userID, instanceID)
+	if loadErr != nil {
+		return "", loadErr
+	}
+	if latestBundle.Access != refreshed.Access {
+		return "", ErrConnectionChanged
+	}
+	if err := s.maybeBackfillClickStackAccount(ctx, userID, latestBundle, latestConn); err != nil {
 		return "", err
 	}
 	return refreshed.Access, nil
@@ -68,11 +78,7 @@ func (s *Service) loadClickStackBundle(ctx context.Context, userID string) (clic
 }
 
 func (s *Service) loadClickStackBundleInstance(ctx context.Context, userID, instanceID string) (clickStackTokenBundle, Connection, error) {
-	conn, err := s.GetConnection(ctx, userID, ProviderClickStack, instanceID)
-	if err != nil {
-		return clickStackTokenBundle{}, Connection{}, err
-	}
-	raw, err := s.rawTokenInstance(ctx, userID, ProviderClickStack, instanceID)
+	conn, raw, err := s.loadCredential(ctx, userID, ProviderClickStack, instanceID)
 	if err != nil {
 		return clickStackTokenBundle{}, Connection{}, err
 	}
@@ -96,12 +102,13 @@ func (s *Service) ensureFreshClickStackBundleInstance(ctx context.Context, userI
 	mu.Lock()
 	defer mu.Unlock()
 
-	if latest, latestConn, err := s.loadClickStackBundleInstance(ctx, userID, conn.InstanceID); err == nil {
-		bundle = latest
-		conn = latestConn
-		if !bundle.needsRefresh(time.Now().UTC()) {
-			return bundle, nil
-		}
+	latest, latestConn, err := s.loadClickStackBundleInstance(ctx, userID, conn.InstanceID)
+	if err != nil {
+		return clickStackTokenBundle{}, err
+	}
+	bundle, conn = latest, latestConn
+	if !bundle.needsRefresh(time.Now().UTC()) {
+		return bundle, nil
 	}
 
 	if strings.TrimSpace(bundle.Refresh) == "" {
@@ -152,25 +159,27 @@ func (s *Service) ensureFreshClickStackBundleInstance(ctx context.Context, userI
 	if len(response.Scopes) > 0 {
 		scopes = response.Scopes
 	}
-	if err := s.upsertToken(ctx, userID, ProviderClickStack, conn.InstanceID, conn.Label, stored, scopes, account, conn.Metadata); err != nil {
+	conn.Account, conn.Scopes = account, scopes
+	if err := s.updateCredential(ctx, conn, stored); err != nil {
 		return clickStackTokenBundle{}, err
 	}
 	return updated, nil
 }
 
-func (s *Service) maybeBackfillClickStackAccount(ctx context.Context, userID string, bundle clickStackTokenBundle, conn Connection) {
+func (s *Service) maybeBackfillClickStackAccount(ctx context.Context, userID string, bundle clickStackTokenBundle, conn Connection) error {
 	if strings.TrimSpace(conn.Account) != "" {
-		return
+		return nil
 	}
 	label := s.clickstackForConnection(conn).accountLabel(bundle.Access, "")
 	if label == "" {
-		return
+		return nil
 	}
 	stored, err := encodeClickStackTokenBundle(bundle)
 	if err != nil {
-		return
+		return nil
 	}
-	_ = s.upsertToken(ctx, userID, ProviderClickStack, conn.InstanceID, conn.Label, stored, conn.Scopes, label, conn.Metadata)
+	conn.Account = label
+	return s.updateCredential(ctx, conn, stored)
 }
 
 func (s *Service) clickstackRefreshMutex(userID string) *sync.Mutex {

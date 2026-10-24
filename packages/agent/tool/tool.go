@@ -36,6 +36,9 @@ const (
 )
 
 type Descriptor struct {
+	// Version identifies semantic or target-binding changes not expressed by the schema.
+	// Bump it when an existing name would execute a different operation.
+	Version     string          `json:"version,omitempty"`
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"input_schema"`

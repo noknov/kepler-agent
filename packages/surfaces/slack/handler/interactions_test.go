@@ -354,3 +354,5 @@ func TestConnectionDetailsSubmissionRejectsInvalidName(t *testing.T) {
 		t.Fatalf("invalid name response = %#v, want connection_label error", response)
 	}
 }
+
+func (*dedupeInputStore) Requeue(context.Context, string, string) error { return nil }

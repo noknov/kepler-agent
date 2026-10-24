@@ -95,3 +95,5 @@ func TestStartTurnPersistsToWebSpecificQueueBeforeExecution(t *testing.T) {
 		t.Fatalf("queued items=%+v", inputs.items)
 	}
 }
+
+func (*capturingInputStore) Requeue(context.Context, string, string) error { return nil }

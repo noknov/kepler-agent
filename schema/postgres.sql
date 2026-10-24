@@ -217,6 +217,7 @@ CREATE TABLE IF NOT EXISTS user_connections (
 
 -- Migrate the original provider-singleton table in place. Existing rows are
 -- the default instance; new rows may safely coexist for the same provider.
+ALTER TABLE user_connections ADD COLUMN IF NOT EXISTS revision TEXT NOT NULL DEFAULT gen_random_uuid()::text;
 ALTER TABLE user_connections ADD COLUMN IF NOT EXISTS instance_id TEXT NOT NULL DEFAULT 'default';
 ALTER TABLE user_connections ADD COLUMN IF NOT EXISTS label TEXT NOT NULL DEFAULT '';
 ALTER TABLE user_connections ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;

@@ -2,6 +2,7 @@ package connections
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,11 +10,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 )
 
 type fileRecord struct {
+	Revision   string            `json:"revision,omitempty"`
 	UserID     string            `json:"user_id"`
 	Provider   string            `json:"provider"`
 	InstanceID string            `json:"instance_id,omitempty"`
@@ -42,7 +43,6 @@ type oauthStateRecord struct {
 type FileStore struct {
 	Path      string
 	SecretKey string
-	mu        sync.Mutex
 }
 
 func NewFileStore(path, secretKey string) (*FileStore, error) {
@@ -53,8 +53,6 @@ func NewFileStore(path, secretKey string) (*FileStore, error) {
 }
 
 func (s *FileStore) load() (map[string]fileRecord, []oauthStateRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	data, err := os.ReadFile(s.Path)
 	if errors.Is(err, os.ErrNotExist) {
 		return map[string]fileRecord{}, nil, nil
@@ -78,8 +76,6 @@ func (s *FileStore) load() (map[string]fileRecord, []oauthStateRecord, error) {
 }
 
 func (s *FileStore) save(connections map[string]fileRecord, states []oauthStateRecord) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	items := make([]fileRecord, 0, len(connections))
 	for _, item := range connections {
 		items = append(items, item)
@@ -92,7 +88,23 @@ func (s *FileStore) save(connections map[string]fileRecord, states []oauthStateR
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.Path, data, 0o600)
+	f, err := os.CreateTemp(filepath.Dir(s.Path), ".connections-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), s.Path)
 }
 
 func (s *FileStore) Get(ctx context.Context, userID, provider string) (Connection, error) {
@@ -100,6 +112,11 @@ func (s *FileStore) Get(ctx context.Context, userID, provider string) (Connectio
 }
 
 func (s *FileStore) List(ctx context.Context, userID string) ([]Connection, error) {
+	unlock, err := lockConnectionFile(ctx, s.Path+".lock")
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	connections, _, err := s.load()
 	if err != nil {
 		return nil, err
@@ -129,6 +146,11 @@ func (s *FileStore) UpsertToken(ctx context.Context, userID, provider, token str
 }
 
 func (s *FileStore) GetInstance(ctx context.Context, userID, provider, instanceID string) (Connection, error) {
+	unlock, err := lockConnectionFile(ctx, s.Path+".lock")
+	if err != nil {
+		return Connection{}, err
+	}
+	defer unlock()
 	instanceID = connectionInstanceID(instanceID)
 	connections, _, err := s.load()
 	if err != nil {
@@ -146,6 +168,11 @@ func (s *FileStore) ListInstances(ctx context.Context, userID string) ([]Connect
 }
 
 func (s *FileStore) UpsertTokenInstance(ctx context.Context, userID, provider, instanceID, label, token string, scopes []string, account string, metadata map[string]string) error {
+	unlock, err := lockConnectionFile(ctx, s.Path+".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	connections, states, err := s.load()
 	if err != nil {
 		return err
@@ -155,8 +182,10 @@ func (s *FileStore) UpsertTokenInstance(ctx context.Context, userID, provider, i
 		return err
 	}
 	instanceID = connectionInstanceID(instanceID)
+	revision := rand.Text()
 	connections[fileConnectionKey(userID, provider, instanceID)] = fileRecord{
-		UserID: userID, Provider: provider, InstanceID: instanceID, Label: label, Status: StatusConnected,
+		Revision: revision,
+		UserID:   userID, Provider: provider, InstanceID: instanceID, Label: label, Status: StatusConnected,
 		Token: encrypted, Scopes: scopes, Account: account, Metadata: cloneMetadata(metadata), UpdatedAt: time.Now().UTC(),
 	}
 	return s.save(connections, states)
@@ -167,6 +196,11 @@ func (s *FileStore) Delete(ctx context.Context, userID, provider string) error {
 }
 
 func (s *FileStore) DeleteInstance(ctx context.Context, userID, provider, instanceID string) error {
+	unlock, err := lockConnectionFile(ctx, s.Path+".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	instanceID = connectionInstanceID(instanceID)
 	connections, states, err := s.load()
 	if err != nil {
@@ -197,6 +231,11 @@ func (s *FileStore) TokenInstance(ctx context.Context, userID, provider, instanc
 }
 
 func (s *FileStore) RawTokenInstance(ctx context.Context, userID, provider, instanceID string) (string, error) {
+	unlock, err := lockConnectionFile(ctx, s.Path+".lock")
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	instanceID = connectionInstanceID(instanceID)
 	connections, _, err := s.load()
 	if err != nil {
@@ -221,6 +260,11 @@ func (s *FileStore) AnyToken(ctx context.Context, provider string) (string, erro
 }
 
 func (s *FileStore) AnyTokenUser(ctx context.Context, provider string) (string, string, error) {
+	unlock, err := lockConnectionFile(ctx, s.Path+".lock")
+	if err != nil {
+		return "", "", err
+	}
+	defer unlock()
 	connections, _, err := s.load()
 	if err != nil {
 		return "", "", err
@@ -250,6 +294,11 @@ func (s *FileStore) AnyTokenUser(ctx context.Context, provider string) (string, 
 }
 
 func (s *FileStore) CreateOAuthState(ctx context.Context, userID, provider, state string, expiresAt time.Time, meta OAuthStateMeta) error {
+	unlock, err := lockConnectionFile(ctx, s.Path+".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	connections, states, err := s.load()
 	if err != nil {
 		return err
@@ -259,6 +308,11 @@ func (s *FileStore) CreateOAuthState(ctx context.Context, userID, provider, stat
 }
 
 func (s *FileStore) PeekOAuthState(ctx context.Context, state string) (string, string, OAuthStateMeta, error) {
+	unlock, err := lockConnectionFile(ctx, s.Path+".lock")
+	if err != nil {
+		return "", "", OAuthStateMeta{}, err
+	}
+	defer unlock()
 	_, states, err := s.load()
 	if err != nil {
 		return "", "", OAuthStateMeta{}, err
@@ -273,6 +327,11 @@ func (s *FileStore) PeekOAuthState(ctx context.Context, state string) (string, s
 }
 
 func (s *FileStore) ConsumeOAuthState(ctx context.Context, state string) (string, string, OAuthStateMeta, error) {
+	unlock, err := lockConnectionFile(ctx, s.Path+".lock")
+	if err != nil {
+		return "", "", OAuthStateMeta{}, err
+	}
+	defer unlock()
 	connections, states, err := s.load()
 	if err != nil {
 		return "", "", OAuthStateMeta{}, err
@@ -306,7 +365,7 @@ func fileConnectionKey(userID, provider, instanceID string) string {
 }
 
 func fileConnection(item fileRecord) Connection {
-	return Connection{UserID: item.UserID, Provider: item.Provider, InstanceID: connectionInstanceID(item.InstanceID), Label: item.Label, Status: item.Status, Scopes: append([]string(nil), item.Scopes...), Account: item.Account, Metadata: cloneMetadata(item.Metadata), UpdatedAt: item.UpdatedAt}
+	return Connection{Revision: item.Revision, UserID: item.UserID, Provider: item.Provider, InstanceID: connectionInstanceID(item.InstanceID), Label: item.Label, Status: item.Status, Scopes: append([]string(nil), item.Scopes...), Account: item.Account, Metadata: cloneMetadata(item.Metadata), UpdatedAt: item.UpdatedAt}
 }
 
 func cloneMetadata(value map[string]string) map[string]string {
@@ -318,4 +377,47 @@ func cloneMetadata(value map[string]string) map[string]string {
 		out[key] = item
 	}
 	return out
+}
+
+func (s *FileStore) LoadCredential(ctx context.Context, userID, provider, instanceID string) (Connection, string, error) {
+	unlock, err := lockConnectionFile(ctx, s.Path+".lock")
+	if err != nil {
+		return Connection{}, "", err
+	}
+	defer unlock()
+	records, _, err := s.load()
+	if err != nil {
+		return Connection{}, "", err
+	}
+	item, ok := records[fileConnectionKey(userID, provider, instanceID)]
+	if !ok || item.Status != StatusConnected {
+		return Connection{}, "", ErrNotConnected
+	}
+	raw, err := decrypt(s.SecretKey, item.Token)
+	return fileConnection(item), raw, err
+}
+func (s *FileStore) UpdateCredential(ctx context.Context, conn Connection, token string) error {
+	unlock, err := lockConnectionFile(ctx, s.Path+".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	records, states, err := s.load()
+	if err != nil {
+		return err
+	}
+	key := fileConnectionKey(conn.UserID, conn.Provider, conn.InstanceID)
+	item, ok := records[key]
+	if !ok || item.Status != StatusConnected || item.Revision != conn.Revision || !item.UpdatedAt.Equal(conn.UpdatedAt) {
+		return ErrConnectionChanged
+	}
+	encrypted, err := encrypt(s.SecretKey, token)
+	if err != nil {
+		return err
+	}
+	revision := rand.Text()
+	item.Token, item.Account, item.Scopes = encrypted, conn.Account, append([]string(nil), conn.Scopes...)
+	item.Revision, item.UpdatedAt = revision, time.Now().UTC()
+	records[key] = item
+	return s.save(records, states)
 }

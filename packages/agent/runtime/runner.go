@@ -159,33 +159,10 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 	if err := r.reconcileInterruptedModelRequests(ctx, request, events); err != nil {
 		return r.failTurn(ctx, result, err)
 	}
-	if len(events) == 0 {
-		if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, Type: transcript.SessionStarted}); err != nil {
-			return result, err
-		}
-		history := request.History
-		if len(history) == 0 && request.HistoryLoader != nil {
-			loaded, loadErr := request.HistoryLoader(ctx)
-			if loadErr != nil {
-				return r.failTurn(ctx, result, fmt.Errorf("load session history: %w", loadErr))
-			}
-			history = loaded
-		}
-		for index := range history {
-			message := history[index].WithoutImages()
-			if message.Role != model.RoleUser && message.Role != model.RoleAssistant {
-				message.Role = model.RoleUser
-			}
-			eventType := transcript.UserInput
-			if message.Role == model.RoleAssistant {
-				eventType = transcript.AssistantMessage
-			}
-			metadata, _ := json.Marshal(map[string]string{"source": "imported_history"})
-			if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, Type: eventType, Message: &message, Metadata: metadata}); err != nil {
-				return result, err
-			}
-		}
+	if err := r.initializeSession(ctx, request, events); err != nil {
+		return result, err
 	}
+
 	if !hasTurnEvent(events, request.TurnID, transcript.TurnStarted) {
 		modelName := request.Model
 		if modelName == "" {

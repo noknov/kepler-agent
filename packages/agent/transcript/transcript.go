@@ -21,6 +21,7 @@ type EventType string
 
 const (
 	SessionStarted      EventType = "session_started"
+	SessionInitialized  EventType = "session_initialized"
 	TurnStarted         EventType = "turn_started"
 	StepStarted         EventType = "step_started"
 	StepCompleted       EventType = "step_completed"

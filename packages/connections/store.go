@@ -57,3 +57,10 @@ func instanceStore(store Store) (InstanceStore, bool) {
 	item, ok := store.(InstanceStore)
 	return item, ok && item != nil
 }
+
+// CredentialStore keeps credentials and their revision in one storage snapshot.
+// Refresh and metadata enrichment are conditional updates, never insertions.
+type CredentialStore interface {
+	LoadCredential(context.Context, string, string, string) (Connection, string, error)
+	UpdateCredential(context.Context, Connection, string) error
+}

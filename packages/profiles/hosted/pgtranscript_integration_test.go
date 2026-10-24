@@ -10,6 +10,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/noknov/kepler-agent/packages/agent/model"
+	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/runs"
 )
@@ -144,4 +146,63 @@ func TestIntegrationPGTranscriptCheckpointWindow(t *testing.T) {
 	if err != nil || len(full) != 4 {
 		t.Fatalf("audit len=%d err=%v", len(full), err)
 	}
+}
+
+func TestIntegrationDeferredApprovalAfterJSONBRoundTrip(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
+	ctx := t.Context()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	sessionID := fmt.Sprintf("jsonb-approval-%d", time.Now().UnixNano())
+	defer func() {
+		pool.Exec(context.Background(), `DELETE FROM agent_transcript_events WHERE session_id=$1`, sessionID)
+	}()
+	calls := 0
+	item := jsonbApprovalTool{calls: &calls}
+	catalog, _ := tool.NewCatalog(item)
+	if err := catalog.Activate(sessionID, "write"); err != nil {
+		t.Fatal(err)
+	}
+	store := PGTranscript{Pool: pool}
+	runner, err := agentruntime.New(agentruntime.Config{}, agentruntime.Dependencies{Model: jsonbApprovalModel{}, Tools: catalog, Transcript: store, Policy: Policy{Allowed: map[string]bool{"write": true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.RunTurn(ctx, agentruntime.TurnRequest{SessionID: sessionID, TurnID: sessionID + "-turn", Input: model.TextMessage(model.RoleUser, "write"), Scope: tool.Scope{UserID: "user"}})
+	if err != nil || result.Termination != agentruntime.TerminationPendingApproval {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	catalog, _ = tool.NewCatalog(item)
+	runner, err = agentruntime.New(agentruntime.Config{}, agentruntime.Dependencies{Model: jsonbApprovalModel{}, Tools: catalog, Transcript: store, Policy: Policy{Allowed: map[string]bool{"write": true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.ResolveApproval(ctx, sessionID, agentruntime.ApprovalResolution{TurnID: sessionID + "-turn", ToolCallID: "call", UserID: "user", Approved: true}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("executions=%d", calls)
+	}
+}
+
+type jsonbApprovalModel struct{}
+
+func (jsonbApprovalModel) Generate(context.Context, model.Request, model.EventSink) (model.Response, error) {
+	return model.Response{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "call", Name: "write", Arguments: json.RawMessage(`{"amount":1000}`)}}}}, FinishReason: model.FinishToolCalls}, nil
+}
+
+type jsonbApprovalTool struct{ calls *int }
+
+func (jsonbApprovalTool) Descriptor() tool.Descriptor {
+	return tool.Descriptor{Name: "write", Exposure: tool.ExposureDeferred, Effects: []tool.Effect{tool.EffectExternalWrite}, InputSchema: json.RawMessage(`{"type":"object","properties":{"amount":{"type":"number","minimum":1e3}},"required":["amount"]}`)}
+}
+func (t jsonbApprovalTool) Execute(context.Context, tool.Call) (tool.Result, error) {
+	*t.calls++
+	return tool.TextResult("done"), nil
 }

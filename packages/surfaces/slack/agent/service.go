@@ -88,6 +88,7 @@ type activeRun struct {
 }
 
 type steeringInput struct {
+	userID    string
 	store     sessioninput.Store
 	sessionID string
 	owner     string
@@ -117,6 +118,12 @@ func (s *steeringInput) Claim(ctx context.Context, limit int) ([]agentruntime.Pe
 		var request slackconversation.Request
 		if err := json.Unmarshal(item.Payload, &request); err != nil {
 			return nil, err
+		}
+		if s.userID == "" || request.UserID != s.userID {
+			if err := s.store.Requeue(ctx, item.ID, s.owner); err != nil {
+				return nil, err
+			}
+			continue
 		}
 		inputs = append(inputs, agentruntime.PendingInput{ID: item.ID, Message: request.Message()})
 	}
@@ -229,11 +236,11 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	if req.EventID == "" {
 		req.EventID = fmt.Sprintf("slack-%d", time.Now().UnixNano())
 	}
-	active := &activeRun{userID: req.UserID, turnID: req.EventID, startedAt: time.Now(), cancel: cancel, steering: &steeringInput{store: s.Inputs, sessionID: sessionID, owner: owner}}
+	active := &activeRun{userID: req.UserID, turnID: req.EventID, startedAt: time.Now(), cancel: cancel, steering: &steeringInput{store: s.Inputs, sessionID: sessionID, owner: owner, userID: req.UserID}}
 	if existing := s.register(sessionID, active); existing != nil {
 		cancel()
 		if existing.userID != req.UserID {
-			return fmt.Errorf("conversation session is already owned by another user")
+			return s.persistInput(base, sessionID, sessioninput.KindQueue, req)
 		}
 		if s.mode(req.UserID) == ModeQueue {
 			if err := s.persistInput(base, sessionID, sessioninput.KindQueue, req); err != nil {
@@ -529,7 +536,11 @@ func (s *Service) controlActive(sessionID string, req slackconversation.Request)
 	s.mu.Lock()
 	active := s.active[sessionID]
 	s.mu.Unlock()
-	if active != nil && active.userID == req.UserID {
+	if active != nil && active.userID != req.UserID {
+		err := s.persistInput(context.Background(), sessionID, sessioninput.KindQueue, req)
+		return err == nil, err
+	}
+	if active != nil {
 		if s.mode(req.UserID) == ModeQueue {
 			if err := s.persistInput(context.Background(), sessionID, sessioninput.KindQueue, req); err != nil {
 				return false, err
