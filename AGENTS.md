@@ -1,32 +1,44 @@
-# Repository Working Agreement
+# Repository map and working agreement
 
-## Scope
+Kepler is maintained by coding agents. Keep decisions and verification in the
+repository so a new session can continue without private chat history.
 
-`packages/agent` contains transport-neutral agent behavior and lifecycle
-contracts. Slack, CLI, provider, and PostgreSQL packages are adapters. Do not
-introduce Slack, deployment, or wire transport assumptions into the shared
-runtime packages.
+## Start here
 
-## Safety
+- Product boundaries and request flow: [architecture](docs/architecture.md).
+- Change method, simplicity, review, and completion: [maintenance](docs/maintaining.md).
+- Commands and verification scope: [development](docs/development.md).
+- Multi-session work: [plans](docs/plans/README.md); inspect active plans and Git
+  status/log before starting overlapping work.
+- Known gaps and their acceptance criteria: [maintenance backlog](docs/maintenance-backlog.md).
+- Find a subsystem guide through the [documentation index](docs/README.md).
 
-- Server-side capability policy is authoritative. Do not add end-user approval
-  prompts for access to the server host.
-- New write or external-write tools must declare `ToolMetadata` and remain
-  disabled until their exact name is added to the operator allowlist.
-- Never treat a surface annotation as write authorization.
-- Commands must use argv execution without a shell and stay within configured
-  workspace roots.
+Start with `make doctor` and `make repo-check`. For a small change, state the
+behavior and acceptance test in the task/PR. For a cross-boundary, persistent,
+or multi-session change, maintain a versioned execution plan. Reuse the owning
+module; justify a new package, interface, dependency, or durable state first.
 
-## Persistence
+## Non-negotiable contracts
 
-- Keep runtime code free of DDL. Update `schema/postgres.sql` when the current
-  PostgreSQL contract changes and document any operator action explicitly.
-- Durable queue ownership changes must check the current claim owner.
-- Run items and feedback are append-only. Do not put growing step arrays back
-  into the `agent_runs` aggregate payload.
+- `packages/agent` owns transport-neutral behavior. Profiles compose adapters;
+  surfaces own ingress/delivery. Read scoped AGENTS.md files in changed areas.
+- Server capability policy is authoritative. No end-user approval grants host
+  access. Write tools declare `tool.Descriptor` effects and require the exact
+  operator allowlist entry; surface wording never grants authorization.
+- Commands use argv execution within configured workspace roots.
+- Runtime code performs no DDL. Update `schema/postgres.sql` and the incremental
+  migration in `kepler-agent-deploy`, with an explicit rollout order.
+- Durable ownership transitions check the current owner. Run items/feedback are
+  append-only; growing step arrays do not belong in `agent_runs` payloads.
+- Fix failed checks at their cause. Do not weaken checks, refresh a baseline,
+  add exemptions, or delete acceptance tests to make a change pass. A deliberate
+  contract change must update the rationale and negative regression together.
 
-## Verification
+## Finish with evidence
 
-Run `make fmt-check`, `make vet`, and the smallest relevant `go test` package
-set while iterating. Run `make check` before handing off broad changes. Tests
-that bind loopback ports may require a normal local or CI environment.
+Run `make fmt-check vet` and relevant tests while iterating. Broad changes need
+`make check`; concurrency changes need relevant race tests. Run the affected
+integration/UI checks described in the owning guide and report skipped scopes.
+Stage new files, then run `make change-report BASE=<verified-base-ref>` to expose
+new packages, dependencies, and growth for review. Read the diff and failures;
+passing checks alone do not establish product quality or authorize deployment.

@@ -8,11 +8,16 @@ Argument-dependent tools implement `tool.CallDescriptor` so policy and schedulin
 resolve effects before execution. Descriptor wrappers forward that contract and
 turn cleanup. Wording overlays cannot alter effects or concurrency.
 
+Use the [maintenance workflow](maintaining.md) for design, review, and cross-session
+plans. `make repo-check` is the fast credential-free repository feedback loop.
+
 Start in the source repository. Packaging and environment rollout are separate
 operational concerns and are not documented here.
 
 ## Prerequisites
 
+- Python: 3.11+ for repository/evaluator checks; set `PYTHON=/path/to/python3.11`
+  for Make if the system default is older.
 - Go: use the version in [go.mod](../go.mod).
 - Frontend: Node.js 20 and pnpm 10, matching [CI](../.github/workflows/check.yml).
 - Tool tests: install ripgrep and Git. Some tests require loopback networking.
@@ -30,6 +35,10 @@ pnpm --dir apps/cli install --frozen-lockfile
 
 | Change | Check | What it establishes |
 | --- | --- | --- |
+| Repository instructions, architecture, docs, or maintenance tooling | `make repo-check` | Parsed Go dependency direction, literal DDL checks, live local documentation destinations, and guardrail regression tests |
+| Environment diagnostics | `make doctor`; add `--ui` / `--integration` to `scripts/repository.py doctor` as needed | Required tools and explicit fixture configuration; no installation, service startup, or connectivity claim |
+| Structural review | `make change-report BASE=<base-ref>` | Tracked working-tree diff, new Go packages and dependency manifests; stage new files before reporting |
+| Durable hosted changes | `make integration-check` with isolated stores | Connection/hosted race tests and the Slack product regression gate, without live Slack/model calls |
 | Go implementation | `make fmt-check boundaries vet` and relevant `go test` packages | Formatting, layering, static analysis, tested behavior |
 | Broad source change | `make check` | Root Makefile checks, including generated protocol drift and evaluator dry-run |
 | CLI protocol/client | `pnpm --dir apps/cli typecheck` | Protocol-focused TypeScript scope only |

@@ -31,10 +31,15 @@ jobs:
           --health-interval 5s --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -50,8 +55,28 @@ jobs:
         env:
           PGPASSWORD: kepler
         run: psql -h 127.0.0.1 -U kepler -d kepler_test -v ON_ERROR_STOP=1 -f schema/postgres.sql
-      - name: Format and architecture boundaries
-        run: make fmt-check boundaries
+      - name: Format and repository contracts
+        run: make fmt-check repo-check
+      - name: Agent environment diagnostics
+        run: python3 scripts/repository.py doctor --ui
+      - name: Structural change evidence
+        env:
+          REPORT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          REPORT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ -z "$REPORT_BASE" ] || [ "$REPORT_BASE" = "0000000000000000000000000000000000000000" ]; then
+            mkdir -p .cache
+            printf '%s\n' '{"available":false,"reason":"event has no comparison commit"}' > .cache/change-report.json
+            exit 0
+          fi
+          python3 scripts/repository.py report --base "$REPORT_BASE" --head "$REPORT_HEAD" --output .cache/change-report.json
+      - name: Upload structural change evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: change-report
+          path: .cache/change-report.json
+          if-no-files-found: warn
       - name: Static analysis
         run: make vet
       - name: Unit tests

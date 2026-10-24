@@ -23,6 +23,13 @@ over stdio JSON-RPC for clients.
 - **Evaluate behavior:** read the [evaluation guide](evals/README.md).
 - **Browse all documentation:** use the [documentation index](docs/README.md).
 
+## Agent maintenance
+
+Start with [AGENTS.md](AGENTS.md), then the [maintenance workflow](docs/maintaining.md).
+Run `make doctor` to inspect prerequisites and `make repo-check` for repository
+contracts. Codex and Claude share the same guidance; complex changes keep a
+versioned execution plan and CI publishes structural change evidence.
+
 ## Develop
 
 Use the Go version declared in [go.mod](go.mod). The CLI frontend uses the
