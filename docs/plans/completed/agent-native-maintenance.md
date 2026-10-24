@@ -61,7 +61,12 @@ and fails if expected evidence is absent.
 
 ## Completion and handoff
 
-All acceptance checks passed. CI run
+Source discovery was subsequently constrained to Git-tracked and unignored new
+Go files. A fixture checks that Windows-only sources remain covered while
+ignored caches/evaluator output cannot affect the gate. This replaces the
+checker's directory-exemption list with the repository's actual source inventory.
+
+All acceptance checks passed on the implementation candidate. CI run
 [104](https://github.com/noknov/kepler-agent/actions/runs/40091251359) passed on
 candidate `308a507894a0ef9148fd934556d4ed3be3d0bc70`, including the new repository
 contracts/report artifact, existing PostgreSQL/Redis/Linux sandbox tests,

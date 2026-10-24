@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -89,7 +90,13 @@ func apply(db DB,ctx Context) {
 
 func TestEveryPlatformIsCheckedAndCachesAreExcluded(t *testing.T) {
 	root := t.TempDir()
-	for _, path := range []string{"packages/agent/runtime/a_windows.go", ".cache/broken.go"} {
+	if output, err := exec.Command("git", "init", "-b", "main", root).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, output)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".cache/\nevals/results/\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"packages/agent/runtime/a_windows.go", ".cache/broken.go", "evals/results/generated.go"} {
 		full := filepath.Join(root, path)
 		if err := os.MkdirAll(filepath.Dir(full), 0700); err != nil {
 			t.Fatal(err)

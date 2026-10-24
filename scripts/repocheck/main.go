@@ -8,8 +8,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -101,33 +101,33 @@ func importViolation(source, target string) string {
 }
 
 func checkRepository(root string) ([]string, error) {
+	// Source ownership follows Git, including staged/new work, rather than an
+	// expanding list of cache/vendor/evaluator-output directory exemptions.
+	command := exec.Command("git", "-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "*.go")
+	output, err := command.Output()
+	if err != nil {
+		return nil, fmt.Errorf("enumerate repository Go sources: %w", err)
+	}
 	var failures []string
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	seen := map[string]bool{}
+	for _, relative := range strings.Split(string(output), "\x00") {
+		if relative == "" || seen[relative] {
+			continue
 		}
-		if entry.IsDir() {
-			switch entry.Name() {
-			case ".git", ".cache", ".data", ".gocache", "node_modules", "vendor", "bin", "dist":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") {
-			return nil
-		}
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
+		seen[relative] = true
+		path := filepath.Join(root, relative)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			return nil, err
 		}
 		found, err := checkFile(filepath.ToSlash(relative), path)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		failures = append(failures, found...)
-		return nil
-	})
-	return failures, err
+	}
+	return failures, nil
 }
 
 func checkFile(relative, path string) ([]string, error) {
