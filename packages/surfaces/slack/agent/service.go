@@ -388,12 +388,7 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 		if deliveryErr != nil {
 			return deliveryErr
 		}
-		if s.OnDelivered != nil && messageTS != "" {
-			if linkErr := s.OnDelivered(finalizeCtx, turnID, req.Channel, messageTS); linkErr != nil {
-				return linkErr
-			}
-		}
-		return s.ackClaim(finalizeCtx, req.ClaimID)
+		return s.persistDelivery(runCtx, turnID, req, messageTS)
 	}
 	final := s.Redactor.Sanitize(renderAnswer(result.Message))
 	finalSessionStatus = sessionStatusForTermination(string(result.Termination))
@@ -413,12 +408,20 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	if err != nil {
 		return err
 	}
+	return s.persistDelivery(runCtx, turnID, req, messageTS)
+}
+
+// Persistence follows delivery, which may drain multiple bounded network calls.
+// Give the durable receipt and queue acknowledgement their own bounded lifetime.
+func (s *Service) persistDelivery(ctx context.Context, turnID string, req slackconversation.Request, messageTS string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+	defer cancel()
 	if s.OnDelivered != nil && messageTS != "" {
-		if err := s.OnDelivered(finalizeCtx, turnID, req.Channel, messageTS); err != nil {
+		if err := s.OnDelivered(ctx, turnID, req.Channel, messageTS); err != nil {
 			return err
 		}
 	}
-	return s.ackClaim(finalizeCtx, req.ClaimID)
+	return s.ackClaim(ctx, req.ClaimID)
 }
 
 func (s *Service) activateWorkflowTools(sessionID string, names []string) error {
@@ -833,6 +836,10 @@ type slackStream struct {
 	lastStreamText        string
 	lastStreamUpdate      time.Time
 	streamTimer           *time.Timer
+	planDeliveryMu        sync.Mutex
+	planClosing           bool
+	planPostUncertain     bool
+	pendingPlan           *tool.PlanUpdate
 	planMessageTS         string
 	planRevision          int
 	planLastUpdate        time.Time
@@ -859,7 +866,7 @@ func (s *slackStream) Complete(final string) (string, error) {
 	defer s.finishSession()
 	s.telemetry.output(final)
 	s.stopStreamTimer()
-	s.stopPlanTimer()
+	s.finishPlan()
 	if s.redactor != nil {
 		s.appendSanitizedDelta(s.redactor.Flush())
 	}
@@ -927,7 +934,7 @@ func (s *slackStream) appendSanitizedDelta(delta string) {
 func (s *slackStream) Fail(message string, canceled bool) (string, error) {
 	defer s.setSessionStatus(sessionActive)
 	s.stopStreamTimer()
-	s.stopPlanTimer()
+	s.finishPlan()
 	s.flushDeferredStream()
 	s.mu.Lock()
 	s.streamClosed = true

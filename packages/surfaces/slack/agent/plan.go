@@ -21,43 +21,74 @@ func (s *slackStream) UpdatePlan(plan *tool.PlanUpdate) {
 	s.schedulePlanUpdate(plan)
 }
 
+// Plans are a latest-value projection of durable PlanUpdated events. Keep one
+// pending snapshot and one delivery, so Slack backpressure never blocks the
+// runtime or builds an unbounded queue of obsolete progress updates.
 func (s *slackStream) schedulePlanUpdate(plan *tool.PlanUpdate) {
-	blocksMessenger, canPost := s.messenger.(slackconversation.ApprovalMessenger)
-	blocksUpdater, canUpdate := s.messenger.(slackconversation.MessageBlocksUpdater)
-	if !canPost || !canUpdate {
+	if _, ok := s.messenger.(slackconversation.ApprovalMessenger); !ok {
 		return
 	}
-
-	s.deliveryMu.Lock()
-	defer s.deliveryMu.Unlock()
+	if _, ok := s.messenger.(slackconversation.MessageBlocksUpdater); !ok {
+		return
+	}
 	s.mu.Lock()
-	if s.streamClosed {
+	defer s.mu.Unlock()
+	if s.planClosing {
+		return
+	}
+	s.pendingPlan = clonePlan(plan)
+	s.schedulePlanUpdateLocked()
+}
+
+// Caller holds mu. The timer remains registered while its delivery is in flight.
+func (s *slackStream) schedulePlanUpdateLocked() {
+	if s.planClosing || s.planTimer != nil || s.pendingPlan == nil {
+		return
+	}
+	delay := max(time.Duration(0), planUpdateInterval-time.Since(s.planLastUpdate))
+	s.planTimer = time.AfterFunc(delay, func() {
+		s.flushDeferredPlan(false)
+		s.mu.Lock()
+		s.planTimer = nil
+		s.schedulePlanUpdateLocked()
+		s.mu.Unlock()
+	})
+}
+
+func (s *slackStream) flushDeferredPlan(final bool) {
+	// Plans use their own delivery lock: a slow plan must not hold up answer
+	// streaming, and older snapshots must never overwrite newer ones.
+	s.planDeliveryMu.Lock()
+	defer s.planDeliveryMu.Unlock()
+	s.mu.Lock()
+	if s.planClosing && !final {
 		s.mu.Unlock()
 		return
 	}
-	if s.planMessageTS != "" && time.Since(s.planLastUpdate) < planUpdateInterval {
-		pending := clonePlan(plan)
-		remaining := planUpdateInterval - time.Since(s.planLastUpdate)
-		if s.planTimer != nil {
-			s.planTimer.Stop()
-		}
-		s.planTimer = time.AfterFunc(remaining, func() {
-			s.deliveryMu.Lock()
-			defer s.deliveryMu.Unlock()
-			s.mu.Lock()
-			if s.streamClosed {
-				s.mu.Unlock()
-				return
-			}
-			s.planTimer = nil
-			s.mu.Unlock()
-			s.deliverPlan(blocksMessenger, blocksUpdater, pending)
-		})
-		s.mu.Unlock()
+	plan := s.pendingPlan
+	s.pendingPlan = nil
+	s.mu.Unlock()
+	if plan == nil {
 		return
+	}
+	s.deliverPlan(s.messenger.(slackconversation.ApprovalMessenger), s.messenger.(slackconversation.MessageBlocksUpdater), plan)
+	s.mu.Lock()
+	// Also throttle after a failed attempt; only a new snapshot triggers another
+	// delivery. Non-idempotent posts are not retried by this scheduler.
+	s.planLastUpdate = time.Now()
+	s.mu.Unlock()
+}
+
+// finishPlan is the final delivery barrier, including when the turn failed or
+// was canceled. Deliver the last authored state without inventing completion.
+func (s *slackStream) finishPlan() {
+	s.mu.Lock()
+	s.planClosing = true
+	if s.planTimer != nil {
+		s.planTimer.Stop()
 	}
 	s.mu.Unlock()
-	s.deliverPlan(blocksMessenger, blocksUpdater, plan)
+	s.flushDeferredPlan(true)
 }
 
 func (s *slackStream) deliverPlan(messenger slackconversation.ApprovalMessenger, updater slackconversation.MessageBlocksUpdater, plan *tool.PlanUpdate) {
@@ -65,7 +96,11 @@ func (s *slackStream) deliverPlan(messenger slackconversation.ApprovalMessenger,
 	s.planRevision++
 	revision := s.planRevision
 	messageTS := s.planMessageTS
+	uncertain := s.planPostUncertain
 	s.mu.Unlock()
+	if uncertain {
+		return
+	}
 	blocks := planBlocks(plan, revision)
 	if len(blocks) == 0 {
 		return
@@ -76,12 +111,14 @@ func (s *slackStream) deliverPlan(messenger slackconversation.ApprovalMessenger,
 	if messageTS == "" {
 		ts, err := messenger.PostMessageBlocks(ctx, s.req.Channel, s.req.ThreadTS, text, blocks)
 		if err != nil {
+			s.mu.Lock()
+			s.planPostUncertain = isDeliveryUncertain(err)
+			s.mu.Unlock()
 			log.Printf("slack plan post failed channel=%s thread=%s: %v", s.req.Channel, s.req.ThreadTS, err)
 			return
 		}
 		s.mu.Lock()
 		s.planMessageTS = ts
-		s.planLastUpdate = time.Now()
 		s.mu.Unlock()
 		return
 	}
@@ -89,9 +126,6 @@ func (s *slackStream) deliverPlan(messenger slackconversation.ApprovalMessenger,
 		log.Printf("slack plan update failed channel=%s ts=%s: %v", s.req.Channel, messageTS, err)
 		return
 	}
-	s.mu.Lock()
-	s.planLastUpdate = time.Now()
-	s.mu.Unlock()
 }
 
 func clonePlan(plan *tool.PlanUpdate) *tool.PlanUpdate {
