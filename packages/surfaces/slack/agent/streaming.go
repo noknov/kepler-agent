@@ -12,7 +12,10 @@ import (
 	"github.com/noknov/kepler-agent/packages/workflows"
 )
 
-const streamAppendInterval = 35 * time.Millisecond
+// Slack recommends designing for one request per second rather than relying
+// on burst limits. Send the first delta immediately, then coalesce updates;
+// shared workspace throttling is still handled by the client's Retry-After.
+const streamAppendInterval = time.Second
 
 // AppendDelta buffers streamed assistant text and periodically delivers it to Slack.
 func (s *slackStream) AppendDelta(delta string) {
