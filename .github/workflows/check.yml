@@ -72,7 +72,8 @@ jobs:
         with:
           name: change-report
           path: .cache/change-report.json
-          if-no-files-found: warn
+          include-hidden-files: true
+          if-no-files-found: error
       - name: Format and repository contracts
         run: make fmt-check repo-check
       - name: Agent environment diagnostics

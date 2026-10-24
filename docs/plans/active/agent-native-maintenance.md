@@ -55,6 +55,8 @@ it passed locally because the deployment checkout existed. The link now uses
 its canonical repository URL. The checker rejects repository-escaping local
 links even when their target exists; a negative fixture preserves this behavior.
 Structural evidence now runs before contract checks so failures keep the report.
+The artifact upload explicitly includes only its hidden `.cache` report path
+and fails if expected evidence is absent.
 
 ## Handoff
 
