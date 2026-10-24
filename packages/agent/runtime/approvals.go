@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -40,6 +41,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, resolut
 		return err
 	}
 	var call *tool.Call
+	var requested approvalRequestMetadata
 	var resolved, completed bool
 	var resolvedApproved bool
 	for index := range events {
@@ -51,6 +53,11 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, resolut
 		case transcript.ApprovalRequested:
 			copyCall := *event.ToolCall
 			call = &copyCall
+			if len(event.Metadata) > 0 {
+				if err := json.Unmarshal(event.Metadata, &requested); err != nil {
+					return err
+				}
+			}
 		case transcript.ApprovalResolved:
 			var metadata struct {
 				Approved bool `json:"approved"`
@@ -63,29 +70,56 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, resolut
 			completed = true
 		}
 	}
-	if resolved {
-		if completed && resolvedApproved == resolution.Approved {
-			return nil
-		}
-		return fmt.Errorf("approval was resolved but its tool result is incomplete or differs")
-	}
+
 	if call == nil {
 		return fmt.Errorf("pending approval was not found")
 	}
 	if call.Scope.UserID != resolution.UserID {
 		return fmt.Errorf("only the requesting user may resolve this approval")
 	}
-	item, ok := r.deps.Tools.GetActive(sessionID, call.Name)
-	if !ok {
-		return fmt.Errorf("approved tool %q is unavailable", call.Name)
+	if (call.Scope.SessionID != "" && call.Scope.SessionID != sessionID) || (call.Scope.TurnID != "" && call.Scope.TurnID != resolution.TurnID) {
+		return fmt.Errorf("approval scope does not match its durable turn")
 	}
-	descriptor, err := tool.DescribeCall(item, *call)
-	if err != nil {
-		return err
+	if resolved {
+		if completed && resolvedApproved == resolution.Approved {
+			return nil
+		}
+		return fmt.Errorf("approval was resolved but its tool result is incomplete or differs")
 	}
-	decision, err := r.deps.Policy.Decide(ctx, tool.PolicyRequest{Descriptor: descriptor, Call: *call})
-	if err != nil {
-		return err
+	var item tool.Tool
+	var descriptor tool.Descriptor
+	var decision tool.Decision
+	if resolution.Approved {
+		var ok bool
+		item, ok = r.deps.Tools.Get(call.Name)
+		if !ok || item.Descriptor().Exposure == tool.ExposureDisabled {
+			return fmt.Errorf("approved tool %q is unavailable", call.Name)
+		}
+		descriptor, err = tool.DescribeCall(item, *call)
+		if err != nil {
+			return err
+		}
+		// Deferred exposure is temporary discovery state, not authorization. A
+		// persisted descriptor binds the approval to the registered call contract.
+		if requested.Descriptor != nil {
+			original, _ := json.Marshal(requested.Descriptor)
+			current, _ := json.Marshal(descriptor)
+			if !bytes.Equal(original, current) {
+				return fmt.Errorf("approved tool %q contract changed; request a new approval", call.Name)
+			}
+		} else if _, active := r.deps.Tools.GetActive(sessionID, call.Name); !active {
+			return fmt.Errorf("legacy approval has no durable binding for deferred tool %q", call.Name)
+		}
+		if len(call.Arguments) > 0 && !json.Valid(call.Arguments) {
+			return fmt.Errorf("approved tool arguments are invalid")
+		}
+		decision, err = r.deps.Policy.Decide(ctx, tool.PolicyRequest{Descriptor: descriptor, Call: *call})
+		if err != nil {
+			return err
+		}
+		if decision.Type != tool.DecisionAllow && decision.Type != tool.DecisionRequireApproval && decision.Type != tool.DecisionDeny {
+			return fmt.Errorf("unsupported approval policy decision %q", decision.Type)
+		}
 	}
 	metadata, _ := json.Marshal(map[string]any{"approved": resolution.Approved, "resolved_by": resolution.UserID})
 	if _, err := r.record(ctx, transcript.Event{SessionID: sessionID, TurnID: resolution.TurnID, Type: transcript.ApprovalResolved, ToolCall: call, Metadata: metadata}); err != nil {

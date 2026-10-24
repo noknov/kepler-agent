@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync/atomic"
 	"testing"
 
@@ -171,4 +172,84 @@ func TestImmediateApprovalDoesNotBlockSiblingCalls(t *testing.T) {
 	if err != nil || calls != 2 {
 		t.Fatalf("calls=%d err=%v", calls, err)
 	}
+}
+
+func TestDeferredApprovalSurvivesCleanupAndRestart(t *testing.T) {
+	for _, change := range []string{"unchanged", "removed", "disabled", "contract", "policy"} {
+		t.Run(change, func(t *testing.T) {
+			for _, approve := range []bool{false, true} {
+				t.Run(fmt.Sprint(approve), func(t *testing.T) {
+					calls := 0
+					descriptor := tool.Descriptor{Name: "write", Version: "1", Exposure: tool.ExposureDeferred, InputSchema: json.RawMessage(`{"type":"object"}`), Effects: []tool.Effect{tool.EffectExternalWrite}}
+					catalog, _ := tool.NewCatalog(approvalContractTool{descriptor: descriptor, calls: &calls})
+					if err := catalog.Activate("s", "write"); err != nil {
+						t.Fatal(err)
+					}
+					store := transcript.NewMemoryStore()
+					client := &scriptedModel{responses: []model.Response{{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "call", Name: "write", Arguments: json.RawMessage(`{}`)}}}}, FinishReason: model.FinishToolCalls}}}
+					runner, _ := New(Config{}, Dependencies{Model: client, Tools: catalog, Policy: approvalPolicy{}, Transcript: store})
+					result, err := runner.RunTurn(t.Context(), TurnRequest{SessionID: "s", TurnID: "t", Input: model.TextMessage(model.RoleUser, "write"), Scope: tool.Scope{UserID: "user"}})
+					if err != nil || result.Termination != TerminationPendingApproval {
+						t.Fatalf("result=%+v err=%v", result, err)
+					}
+					if _, ok := catalog.GetActive("s", "write"); ok {
+						t.Fatal("deferred activation survived cleanup")
+					}
+					// Reconstruct the runtime/catalog as a different process would.
+					if change == "disabled" {
+						descriptor.Exposure = tool.ExposureDisabled
+					}
+					if change == "contract" {
+						descriptor.Version = "2"
+					}
+					catalog, _ = tool.NewCatalog()
+					if change != "removed" {
+						if err := catalog.Register(approvalContractTool{descriptor: descriptor, calls: &calls}); err != nil {
+							t.Fatal(err)
+						}
+					}
+					var policy tool.Policy = approvalPolicy{}
+					if change == "policy" {
+						policy = tool.ReadOnlyPolicy{}
+					}
+					runner, _ = New(Config{}, Dependencies{Model: &scriptedModel{}, Tools: catalog, Policy: policy, Transcript: store})
+					decision := ApprovalResolution{TurnID: "t", ToolCallID: "call", UserID: "user", Approved: approve}
+					err = runner.ResolveApproval(t.Context(), "s", decision)
+					invalid := approve && (change == "removed" || change == "disabled" || change == "contract")
+					if (err != nil) != invalid {
+						t.Fatalf("resolution err=%v invalid=%v", err, invalid)
+					}
+					want := 0
+					if approve && change == "unchanged" {
+						want = 1
+					}
+					if calls != want {
+						t.Fatalf("calls=%d want=%d", calls, want)
+					}
+					if !invalid {
+						if err := runner.ResolveApproval(t.Context(), "s", decision); err != nil {
+							t.Fatal(err)
+						}
+						if calls != want {
+							t.Fatal("duplicate approval repeated execution")
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+type approvalContractTool struct {
+	descriptor tool.Descriptor
+	calls      *int
+}
+
+func (t approvalContractTool) Descriptor() tool.Descriptor { return t.descriptor }
+func (t approvalContractTool) Execute(_ context.Context, call tool.Call) (tool.Result, error) {
+	if call.Scope.UserID != "user" || string(call.Arguments) != `{}` {
+		return tool.Result{}, fmt.Errorf("stored call changed: %+v", call)
+	}
+	*t.calls++
+	return tool.TextResult("done"), nil
 }

@@ -36,6 +36,7 @@ type Store interface {
 	Claim(context.Context, string, Kind, string, time.Duration, int) ([]Item, error)
 	Ack(context.Context, string, string) error
 	Release(context.Context, string, string) error
+	Requeue(context.Context, string, string) error
 	PendingSessions(context.Context, Kind, int) ([]string, error)
 	PromoteSteering(context.Context, string) (int64, error)
 	PromoteExpiredSteering(context.Context, time.Duration) (int64, error)
@@ -180,3 +181,20 @@ WHERE session_id=$1 AND kind='steering' AND acknowledged_at IS NULL
 }
 
 var _ Store = (*PGStore)(nil)
+
+// Requeue moves a claimed steering input to its actor's next turn atomically.
+// The consumer owns the security decision; a routing hint cannot authorize it.
+func (s *PGStore) Requeue(ctx context.Context, id, owner string) error {
+	if s == nil || s.pool == nil || id == "" || owner == "" {
+		return fmt.Errorf("session input store, id, and owner are required")
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE agent_session_inputs SET kind='queue',claim_owner='',claim_until=NULL
+ WHERE id=$1 AND claim_owner=$2 AND kind='steering' AND acknowledged_at IS NULL`, id, owner)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrClaimLost
+	}
+	return nil
+}

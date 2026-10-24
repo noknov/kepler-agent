@@ -91,7 +91,7 @@ func TestTaskStateToolPersistsThroughRuntime(t *testing.T) {
 	catalog, _ := tool.NewCatalog()
 	store := transcript.NewMemoryStore()
 	client := &scriptedModel{responses: []model.Response{
-		{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "state", Name: "task_state", Arguments: json.RawMessage(`{"expected_revision":0,"upsert":[{"id":"goal","kind":"goal","text":"keep compatibility","status":"active","sources":[{"sequence":3,"quote":"compatible"}]}]}`)}}}}, FinishReason: model.FinishToolCalls},
+		{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "state", Name: "task_state", Arguments: json.RawMessage(`{"expected_revision":0,"upsert":[{"id":"goal","kind":"goal","text":"keep compatibility","status":"active","sources":[{"sequence":4,"quote":"compatible"}]}]}`)}}}}, FinishReason: model.FinishToolCalls},
 		{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop},
 	}}
 	runner, err := New(Config{}, Dependencies{Model: client, Tools: catalog, Transcript: store})
@@ -99,7 +99,7 @@ func TestTaskStateToolPersistsThroughRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog.Activate("s", "task_state")
-	// SessionStarted and TurnStarted precede the input in a fresh runtime.
+	// SessionStarted, SessionInitialized, and TurnStarted precede fresh input.
 	_, err = runner.RunTurn(context.Background(), TurnRequest{SessionID: "s", TurnID: "t", Input: model.TextMessage(model.RoleUser, "keep it compatible")})
 	if err != nil {
 		t.Fatal(err)

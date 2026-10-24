@@ -74,3 +74,32 @@ Use deterministic tests for permissions, lifecycle transitions, replay, and
 protocol boundaries. Use fixed model-driven tasks for behavior and quality.
 Public coding benchmarks run through Harbor's native grader. Hosted workflow
 and presentation checks need separate coverage. See [evaluation](../evals/README.md).
+
+### Connection revision upgrade
+
+Before deploying versioned credential refresh, apply
+`schema/migrations/20261024_connection_revision.sql` to the existing PostgreSQL
+store (new stores use `schema/postgres.sql`). Stop old workers before enabling
+new workers: old unconditional refresh writers cannot participate in revision
+checks. Each authorization, refresh, or account enrichment receives a fresh
+revision. A conditional update conflict fails the current credential request;
+it does not replay the OAuth refresh or return the stale response. A subsequent
+request loads the current authorization. File stores use the same contract,
+with an OS lock around the entire transaction and atomic file replacement.
+
+Deferred tool discovery expires at turn cleanup. Pending approvals instead bind
+the immutable call (arguments and scope) to its persisted descriptor. Resumption
+requires a registered, enabled tool with that same descriptor and a fresh policy
+decision. Change `Descriptor.Version` when a target binding or implementation
+changes the operation without changing its schema. Contract changes require a
+new approval; a removed or disabled tool can always be declined. Legacy approvals
+without a descriptor retain active-tool lookup and cannot restore deferred tools.
+
+Session bootstrap records `SessionStarted` as intent and atomically commits
+imported history with `SessionInitialized` through `transcript.BatchStore`.
+Embeddings that supply nonempty external history must implement that atomic
+contract. A loader error or failed transaction leaves initialization retryable;
+a committed marker prevents refetching after a lost commit response. Existing
+sessions with canonical input, a started turn, or a compaction checkpoint remain
+authoritative. An old partial import without a turn boundary can resume only
+when its durable prefix exactly matches the loaded history.

@@ -599,3 +599,19 @@ func TestQueuedApprovalUsesTheDequeuedActorAndDecision(t *testing.T) {
 		t.Fatal("model ran before resolving the queued approval")
 	}
 }
+
+func (s *memoryInputs) Requeue(_ context.Context, id, owner string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.claimed[id] != owner {
+		return sessioninput.ErrClaimLost
+	}
+	for i := range s.items {
+		if s.items[i].ID == id && s.items[i].Kind == sessioninput.KindSteering && !s.acked[id] {
+			s.items[i].Kind = sessioninput.KindQueue
+			delete(s.claimed, id)
+			return nil
+		}
+	}
+	return sessioninput.ErrClaimLost
+}

@@ -18,12 +18,12 @@ type PGStore struct {
 
 func (s PGStore) Get(ctx context.Context, userID, provider string) (Connection, error) {
 	row := s.Pool.QueryRow(ctx, `
-		SELECT user_id, provider, instance_id, label, status, scopes, account, metadata, updated_at
+		SELECT user_id, provider, instance_id, label, status, scopes, account, metadata, revision, updated_at
 		FROM user_connections
 		WHERE user_id = $1 AND provider = $2 AND instance_id = $3`, userID, provider, DefaultInstanceID)
 	var conn Connection
 	var scopes []string
-	if err := row.Scan(&conn.UserID, &conn.Provider, &conn.InstanceID, &conn.Label, &conn.Status, &scopes, &conn.Account, &conn.Metadata, &conn.UpdatedAt); err != nil {
+	if err := row.Scan(&conn.UserID, &conn.Provider, &conn.InstanceID, &conn.Label, &conn.Status, &scopes, &conn.Account, &conn.Metadata, &conn.Revision, &conn.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Connection{}, ErrNotConnected
 		}
@@ -35,7 +35,7 @@ func (s PGStore) Get(ctx context.Context, userID, provider string) (Connection, 
 
 func (s PGStore) List(ctx context.Context, userID string) ([]Connection, error) {
 	rows, err := s.Pool.Query(ctx, `
-		SELECT user_id, provider, instance_id, label, status, scopes, account, metadata, updated_at
+		SELECT user_id, provider, instance_id, label, status, scopes, account, metadata, revision, updated_at
 		FROM user_connections
 		WHERE user_id = $1
 		ORDER BY provider`, userID)
@@ -47,7 +47,7 @@ func (s PGStore) List(ctx context.Context, userID string) ([]Connection, error) 
 	for rows.Next() {
 		var conn Connection
 		var scopes []string
-		if err := rows.Scan(&conn.UserID, &conn.Provider, &conn.InstanceID, &conn.Label, &conn.Status, &scopes, &conn.Account, &conn.Metadata, &conn.UpdatedAt); err != nil {
+		if err := rows.Scan(&conn.UserID, &conn.Provider, &conn.InstanceID, &conn.Label, &conn.Status, &scopes, &conn.Account, &conn.Metadata, &conn.Revision, &conn.UpdatedAt); err != nil {
 			return nil, err
 		}
 		conn.Scopes = scopes
@@ -62,12 +62,12 @@ func (s PGStore) UpsertToken(ctx context.Context, userID, provider, token string
 
 func (s PGStore) GetInstance(ctx context.Context, userID, provider, instanceID string) (Connection, error) {
 	row := s.Pool.QueryRow(ctx, `
-		SELECT user_id, provider, instance_id, label, status, scopes, account, metadata, updated_at
+		SELECT user_id, provider, instance_id, label, status, scopes, account, metadata, revision, updated_at
 		FROM user_connections
 		WHERE user_id = $1 AND provider = $2 AND instance_id = $3`, userID, provider, connectionInstanceID(instanceID))
 	var conn Connection
 	var scopes []string
-	if err := row.Scan(&conn.UserID, &conn.Provider, &conn.InstanceID, &conn.Label, &conn.Status, &scopes, &conn.Account, &conn.Metadata, &conn.UpdatedAt); err != nil {
+	if err := row.Scan(&conn.UserID, &conn.Provider, &conn.InstanceID, &conn.Label, &conn.Status, &scopes, &conn.Account, &conn.Metadata, &conn.Revision, &conn.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Connection{}, ErrNotConnected
 		}
@@ -101,6 +101,7 @@ func (s PGStore) UpsertTokenInstance(ctx context.Context, userID, provider, inst
 			scopes = EXCLUDED.scopes,
 			account = EXCLUDED.account,
 			metadata = EXCLUDED.metadata,
+ revision = gen_random_uuid()::text,
 			updated_at = NOW()`,
 		userID, provider, instanceID, label, StatusConnected, encrypted, scopes, account, metadata)
 	return err
@@ -260,4 +261,39 @@ func StatusMap(connections []Connection) map[string]Connection {
 func IsConnected(status map[string]Connection, provider string) bool {
 	item, ok := status[provider]
 	return ok && item.Status == StatusConnected && strings.TrimSpace(item.UserID) != ""
+}
+
+func (s PGStore) LoadCredential(ctx context.Context, userID, provider, instanceID string) (Connection, string, error) {
+	var conn Connection
+	var encrypted string
+	err := s.Pool.QueryRow(ctx, `SELECT user_id,provider,instance_id,label,status,scopes,account,metadata,revision,updated_at,token_ciphertext
+ FROM user_connections WHERE user_id=$1 AND provider=$2 AND instance_id=$3`, userID, provider, connectionInstanceID(instanceID)).Scan(
+		&conn.UserID, &conn.Provider, &conn.InstanceID, &conn.Label, &conn.Status, &conn.Scopes, &conn.Account, &conn.Metadata, &conn.Revision, &conn.UpdatedAt, &encrypted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Connection{}, "", ErrNotConnected
+	}
+	if err != nil {
+		return Connection{}, "", err
+	}
+	if conn.Status != StatusConnected {
+		return Connection{}, "", ErrNotConnected
+	}
+	raw, err := decrypt(s.SecretKey, encrypted)
+	return conn, raw, err
+}
+
+func (s PGStore) UpdateCredential(ctx context.Context, conn Connection, token string) error {
+	encrypted, err := encrypt(s.SecretKey, token)
+	if err != nil {
+		return err
+	}
+	tag, err := s.Pool.Exec(ctx, `UPDATE user_connections SET token_ciphertext=$1,scopes=$2,account=$3,revision=gen_random_uuid()::text,updated_at=NOW()
+ WHERE user_id=$4 AND provider=$5 AND instance_id=$6 AND revision=$7 AND status=$8`, encrypted, scopesForStorage(conn.Scopes), conn.Account, conn.UserID, conn.Provider, connectionInstanceID(conn.InstanceID), conn.Revision, StatusConnected)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrConnectionChanged
+	}
+	return nil
 }

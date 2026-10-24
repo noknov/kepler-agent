@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+var ErrConnectionChanged = errors.New("connection changed while credentials were being updated")
+
 const ProviderSlack = "slack"
 const ProviderGitHub = "github"
 const ProviderClickStack = "clickstack"
@@ -36,6 +38,7 @@ const (
 
 // Connection is durable user-owned credentials for one provider.
 type Connection struct {
+	Revision   string            `json:"revision,omitempty"`
 	UserID     string            `json:"user_id"`
 	Provider   string            `json:"provider"`
 	InstanceID string            `json:"instance_id,omitempty"`

@@ -22,9 +22,19 @@ func (s *Service) NotionAccessTokenInstance(ctx context.Context, userID, instanc
 	if err != nil {
 		return "", err
 	}
-	s.maybeBackfillNotionAccount(ctx, userID, bundle, conn)
 	refreshed, err := s.ensureFreshNotionBundleInstance(ctx, userID, bundle, conn)
 	if err != nil {
+		return "", err
+	}
+	// Enrichment uses a fresh atomic snapshot and cannot overwrite a refresh or reauthorization.
+	latestBundle, latestConn, loadErr := s.loadNotionBundleInstance(ctx, userID, instanceID)
+	if loadErr != nil {
+		return "", loadErr
+	}
+	if latestBundle.Access != refreshed.Access {
+		return "", ErrConnectionChanged
+	}
+	if err := s.maybeBackfillNotionAccount(ctx, userID, latestBundle, latestConn); err != nil {
 		return "", err
 	}
 	return refreshed.Access, nil
@@ -66,11 +76,7 @@ func (s *Service) loadNotionBundle(ctx context.Context, userID string) (notionTo
 }
 
 func (s *Service) loadNotionBundleInstance(ctx context.Context, userID, instanceID string) (notionTokenBundle, Connection, error) {
-	conn, err := s.GetConnection(ctx, userID, ProviderNotion, instanceID)
-	if err != nil {
-		return notionTokenBundle{}, Connection{}, err
-	}
-	raw, err := s.notionRawTokenInstance(ctx, userID, ProviderNotion, conn.InstanceID)
+	conn, raw, err := s.loadCredential(ctx, userID, ProviderNotion, instanceID)
 	if err != nil {
 		return notionTokenBundle{}, Connection{}, err
 	}
@@ -94,12 +100,13 @@ func (s *Service) ensureFreshNotionBundleInstance(ctx context.Context, userID st
 	mu.Lock()
 	defer mu.Unlock()
 
-	if latest, latestConn, err := s.loadNotionBundleInstance(ctx, userID, conn.InstanceID); err == nil {
-		bundle = latest
-		conn = latestConn
-		if !bundle.needsRefresh(time.Now().UTC()) {
-			return bundle, nil
-		}
+	latest, latestConn, err := s.loadNotionBundleInstance(ctx, userID, conn.InstanceID)
+	if err != nil {
+		return notionTokenBundle{}, err
+	}
+	bundle, conn = latest, latestConn
+	if !bundle.needsRefresh(time.Now().UTC()) {
+		return bundle, nil
 	}
 
 	if strings.TrimSpace(bundle.Refresh) == "" {
@@ -150,25 +157,27 @@ func (s *Service) ensureFreshNotionBundleInstance(ctx context.Context, userID st
 	if len(response.Scopes) > 0 {
 		scopes = response.Scopes
 	}
-	if err := s.upsertToken(ctx, userID, ProviderNotion, conn.InstanceID, conn.Label, stored, scopes, account, conn.Metadata); err != nil {
+	conn.Account, conn.Scopes = account, scopes
+	if err := s.updateCredential(ctx, conn, stored); err != nil {
 		return notionTokenBundle{}, err
 	}
 	return updated, nil
 }
 
-func (s *Service) maybeBackfillNotionAccount(ctx context.Context, userID string, bundle notionTokenBundle, conn Connection) {
+func (s *Service) maybeBackfillNotionAccount(ctx context.Context, userID string, bundle notionTokenBundle, conn Connection) error {
 	if strings.TrimSpace(conn.Account) != "" {
-		return
+		return nil
 	}
 	label := accountFromJWT(bundle.Access)
 	if label == "" {
-		return
+		return nil
 	}
 	stored, err := encodeNotionTokenBundle(bundle)
 	if err != nil {
-		return
+		return nil
 	}
-	_ = s.upsertToken(ctx, userID, ProviderNotion, conn.InstanceID, conn.Label, stored, conn.Scopes, label, conn.Metadata)
+	conn.Account = label
+	return s.updateCredential(ctx, conn, stored)
 }
 
 func (s *Service) notionRefreshMutex(userID string) *sync.Mutex {

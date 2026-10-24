@@ -49,7 +49,7 @@ func TestIntegrationCrossWorkerSteerAndQueue(t *testing.T) {
 	defer stop()
 	canceled := make(chan struct{})
 	var once sync.Once
-	active := &activeRun{userID: "U1", turnID: "active-turn", cancel: func() { once.Do(func() { close(canceled) }) }, steering: &steeringInput{store: inputs, sessionID: sessionID, owner: "owner"}}
+	active := &activeRun{userID: "U1", turnID: "active-turn", cancel: func() { once.Do(func() { close(canceled) }) }, steering: &steeringInput{store: inputs, sessionID: sessionID, owner: "owner", userID: "U1"}}
 	owner := New(hosted.Agent{}, &fakeMessenger{}, safety.PromptPolicy{}, safety.Redactor{}, nil)
 	owner.Redis, owner.PodID, owner.Inputs = client, "owner", inputs
 	owner.register(sessionID, active)
@@ -61,6 +61,24 @@ func TestIntegrationCrossWorkerSteerAndQueue(t *testing.T) {
 	steer := slackconversation.Request{EventID: "steer", UserID: "U1", ThreadTS: "T", Text: "look at redis"}
 	eventuallyControl(t, func() bool { ok, err := peer.controlActive(sessionID, steer); return err == nil && ok })
 	eventually(t, func() bool { inputs, _ := active.steering.Claim(context.Background(), 10); return len(inputs) == 1 })
+
+	if err := active.steering.Ack(ctx, "steer"); err != nil {
+		t.Fatal(err)
+	}
+	other := slackconversation.Request{EventID: sessionID + "-other", UserID: "U2", ThreadTS: "T", Text: "use my account"}
+	if ok, err := peer.controlActive(sessionID, other); err != nil || !ok {
+		t.Fatalf("other actor accepted=%v err=%v", ok, err)
+	}
+	if got, err := active.steering.Claim(ctx, 10); err != nil || len(got) != 0 {
+		t.Fatalf("cross-user input injected: %+v err=%v", got, err)
+	}
+	queuedOther, err := owner.claimNextQueue(ctx, sessionID)
+	if err != nil || queuedOther == nil || queuedOther.UserID != "U2" || queuedOther.Text != other.Text {
+		t.Fatalf("other actor lost: %+v err=%v", queuedOther, err)
+	}
+	if err := owner.ackClaim(ctx, queuedOther.ClaimID); err != nil {
+		t.Fatal(err)
+	}
 
 	peer.ModeForUser = func(string) ConversationMode { return ModeQueue }
 	queued := slackconversation.Request{EventID: "queue", UserID: "U1", ThreadTS: "T", Text: "then inspect postgres"}

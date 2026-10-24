@@ -317,8 +317,19 @@ func TestRunTurnRecordsParentLinkAsAuditMetadata(t *testing.T) {
 	var metadata struct {
 		Parent ParentLink `json:"parent"`
 	}
-	if err := json.Unmarshal(events[1].Metadata, &metadata); err != nil {
-		t.Fatal(err)
+	found := false
+	for _, event := range events {
+		if event.Type != transcript.TurnStarted {
+			continue
+		}
+		if err := json.Unmarshal(event.Metadata, &metadata); err != nil {
+			t.Fatal(err)
+		}
+		found = true
+		break
+	}
+	if !found {
+		t.Fatal("turn start missing")
 	}
 	if metadata.Parent.SessionID != "parent" || metadata.Parent.TurnID != "parent-turn" || metadata.Parent.ToolCallID != "call-1" || metadata.Parent.Kind != "agent_explore" {
 		t.Fatalf("parent metadata = %#v", metadata.Parent)

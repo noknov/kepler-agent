@@ -22,7 +22,8 @@ import (
 // action changes without re-deriving policy or inspecting tool input.
 type approvalRequestMetadata struct {
 	tool.Decision
-	Effects []tool.Effect `json:"effects,omitempty"`
+	Effects    []tool.Effect    `json:"effects,omitempty"`
+	Descriptor *tool.Descriptor `json:"descriptor,omitempty"`
 }
 
 type preparedCall struct {
@@ -92,7 +93,7 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 			result := tool.Result{Content: []model.Content{{Type: model.ContentText, Text: "Tool call denied by policy: " + decision.Reason}}, IsError: true, ErrorCode: "policy_denied"}
 			prepared[index].result = &result
 		case tool.DecisionRequireApproval:
-			metadata, _ := json.Marshal(approvalRequestMetadata{Decision: decision, Effects: prepared[index].descriptor.Effects})
+			metadata, _ := json.Marshal(approvalRequestMetadata{Decision: decision, Effects: prepared[index].descriptor.Effects, Descriptor: &prepared[index].descriptor})
 			if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.ApprovalRequested, ToolCall: &call, Metadata: metadata}); err != nil {
 				return toolOutcome{}, err
 			}

@@ -27,6 +27,14 @@ func (s *Service) GCPAccessTokenInstance(ctx context.Context, userID, instanceID
 	if err != nil {
 		return "", err
 	}
+	// A concurrent reauthorization must not return the previous credential.
+	latestBundle, _, loadErr := s.loadGCPBundleInstance(ctx, userID, instanceID)
+	if loadErr != nil {
+		return "", loadErr
+	}
+	if latestBundle.Access != refreshed.Access {
+		return "", ErrConnectionChanged
+	}
 	return refreshed.Access, nil
 }
 
@@ -35,11 +43,7 @@ func (s *Service) loadGCPBundle(ctx context.Context, userID string) (clickStackT
 }
 
 func (s *Service) loadGCPBundleInstance(ctx context.Context, userID, instanceID string) (clickStackTokenBundle, Connection, error) {
-	conn, err := s.GetConnection(ctx, userID, ProviderGCP, instanceID)
-	if err != nil {
-		return clickStackTokenBundle{}, Connection{}, err
-	}
-	raw, err := s.gcpRawTokenInstance(ctx, userID, conn.InstanceID)
+	conn, raw, err := s.loadCredential(ctx, userID, ProviderGCP, instanceID)
 	if err != nil {
 		return clickStackTokenBundle{}, Connection{}, err
 	}
@@ -63,12 +67,13 @@ func (s *Service) ensureFreshGCPBundleInstance(ctx context.Context, userID strin
 	mu.Lock()
 	defer mu.Unlock()
 
-	if latest, latestConn, err := s.loadGCPBundleInstance(ctx, userID, conn.InstanceID); err == nil {
-		bundle = latest
-		conn = latestConn
-		if !bundle.needsRefresh(time.Now().UTC()) {
-			return bundle, nil
-		}
+	latest, latestConn, err := s.loadGCPBundleInstance(ctx, userID, conn.InstanceID)
+	if err != nil {
+		return clickStackTokenBundle{}, err
+	}
+	bundle, conn = latest, latestConn
+	if !bundle.needsRefresh(time.Now().UTC()) {
+		return bundle, nil
 	}
 
 	if strings.TrimSpace(bundle.Refresh) == "" {
@@ -104,7 +109,8 @@ func (s *Service) ensureFreshGCPBundleInstance(ctx context.Context, userID strin
 	if parsed := gcpScopes(response); len(parsed) > 0 {
 		scopes = parsed
 	}
-	if err := s.upsertToken(ctx, userID, ProviderGCP, conn.InstanceID, conn.Label, stored, scopes, account, conn.Metadata); err != nil {
+	conn.Account, conn.Scopes = account, scopes
+	if err := s.updateCredential(ctx, conn, stored); err != nil {
 		return clickStackTokenBundle{}, err
 	}
 	return updated, nil

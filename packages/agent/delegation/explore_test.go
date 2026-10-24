@@ -130,8 +130,19 @@ func TestExploreToolRunsParallelJobs(t *testing.T) {
 		var metadata struct {
 			Parent agentruntime.ParentLink `json:"parent"`
 		}
-		if err := json.Unmarshal(events[1].Metadata, &metadata); err != nil {
-			t.Fatal(err)
+		found := false
+		for _, event := range events {
+			if event.Type != transcript.TurnStarted {
+				continue
+			}
+			if err := json.Unmarshal(event.Metadata, &metadata); err != nil {
+				t.Fatal(err)
+			}
+			found = true
+			break
+		}
+		if !found {
+			t.Fatal("child turn start missing")
 		}
 		if metadata.Parent.SessionID != "ses_test" || metadata.Parent.TurnID != "turn_parent" || metadata.Parent.Kind != "agent_explore" {
 			t.Fatalf("child parent metadata = %#v", metadata.Parent)
