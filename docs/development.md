@@ -78,8 +78,8 @@ and presentation checks need separate coverage. See [evaluation](../evals/README
 ### Connection revision upgrade
 
 Before deploying versioned credential refresh, apply
-`schema/migrations/20261024_connection_revision.sql` to the existing PostgreSQL
-store (new stores use `schema/postgres.sql`). Stop old workers before enabling
+`migrations/postgres/017_connection_revisions.sql` from `kepler-agent-deploy`
+to the existing PostgreSQL store (new stores use `schema/postgres.sql`). Stop old workers before enabling
 new workers: old unconditional refresh writers cannot participate in revision
 checks. Each authorization, refresh, or account enrichment receives a fresh
 revision. A conditional update conflict fails the current credential request;
