@@ -33,6 +33,17 @@ class DocumentationTests(unittest.TestCase):
             self.assertEqual(len(errors), 1)
             self.assertIn("gone.go", errors[0])
 
+    def test_existing_sibling_checkout_cannot_hide_nonportable_link(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            root = parent / "source"
+            root.mkdir()
+            (parent / "sibling.md").write_text("exists only on this machine")
+            (root / "README.md").write_text("[sibling](../sibling.md)")
+            errors = repository.documentation_errors(root, ["README.md"])
+            self.assertEqual(len(errors), 1)
+            self.assertIn("escapes the repository", errors[0])
+
     def test_historical_plans_are_not_current_architecture_claims(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

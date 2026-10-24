@@ -28,6 +28,7 @@ func TestDependencyDirections(t *testing.T) {
 		{"packages/profiles/local/a.go", module + "packages/providers", false},
 		{"packages/tools/foo/a.go", module + "packages/surfaces/slack/client", true},
 		{"packages/connections/a.go", module + "worker", true},
+		{"packages/connections/a.go", strings.TrimSuffix(module, "/"), true},
 		{"packages/connections/a_test.go", module + "worker", true},
 		{"evals/a.go", module + "packages/agent/runtime", true},
 	} {

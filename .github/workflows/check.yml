@@ -55,10 +55,6 @@ jobs:
         env:
           PGPASSWORD: kepler
         run: psql -h 127.0.0.1 -U kepler -d kepler_test -v ON_ERROR_STOP=1 -f schema/postgres.sql
-      - name: Format and repository contracts
-        run: make fmt-check repo-check
-      - name: Agent environment diagnostics
-        run: python3 scripts/repository.py doctor --ui
       - name: Structural change evidence
         env:
           REPORT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -77,6 +73,10 @@ jobs:
           name: change-report
           path: .cache/change-report.json
           if-no-files-found: warn
+      - name: Format and repository contracts
+        run: make fmt-check repo-check
+      - name: Agent environment diagnostics
+        run: python3 scripts/repository.py doctor --ui
       - name: Static analysis
         run: make vet
       - name: Unit tests

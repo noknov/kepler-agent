@@ -50,8 +50,16 @@ static DDL, broken documentation destinations, invalid Git baselines, and
 staged/untracked change accounting. Integration stores are absent locally;
 repository checks do not claim live Slack/LLM or database verification.
 
+CI's first run caught a nonportable sibling-checkout link in observability docs:
+it passed locally because the deployment checkout existed. The link now uses
+its canonical repository URL. The checker rejects repository-escaping local
+links even when their target exists; a negative fixture preserves this behavior.
+Structural evidence now runs before contract checks so failures keep the report.
+
 ## Handoff
 
-Next: review the staged change report and run CI on the submitted candidate.
-All local core checks pass. No runtime schema or production behavior changes.
+Next: inspect CI and review results for PR #22, then record completion evidence.
+The staged report was reviewed: product/generated code and dependency manifests
+are unchanged; the new package is the Go architecture checker. `make test-race`
+and checker race tests passed. No runtime schema or product behavior changes.
 The working branch is `feat/agent-native-maintenance`.

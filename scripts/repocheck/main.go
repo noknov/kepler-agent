@@ -49,6 +49,10 @@ var coreDependencies = map[string][]string{
 func importViolation(source, target string) string {
 	local := strings.TrimPrefix(target, module)
 	internal := local != target
+	if target == strings.TrimSuffix(module, "/") {
+		local = ""
+		internal = true
+	}
 	sourceDir := filepath.ToSlash(filepath.Dir(source))
 	if within(sourceDir, "packages/agent") {
 		domain := strings.Split(strings.TrimPrefix(sourceDir, "packages/agent/"), "/")[0]
@@ -90,7 +94,7 @@ func importViolation(source, target string) string {
 	if within(local, "packages/tools/registry") {
 		return "retired registry: use packages/agent/tool"
 	}
-	if within(sourceDir, "evals") && within(local, "packages") {
+	if within(sourceDir, "evals") {
 		return "evaluators must exercise the public executable/API boundary"
 	}
 	return ""

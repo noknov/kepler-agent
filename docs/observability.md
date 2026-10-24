@@ -139,7 +139,7 @@ Its user latency metrics start at the original Slack message timestamp when
 available and count only acknowledged answer writes, not tool-progress updates.
 Delivery outcomes preserve uncertainty, suppression and idempotent skips rather
 than treating nil errors as confirmed success. Slack acknowledgment is not proof
-that the user read the message. See the [deployment metric guide](../../kepler-agent-deploy/docs/observability.md)
+that the user read the message. See the [deployment metric guide](https://github.com/noknov/kepler-agent-deploy/blob/main/docs/observability.md)
 for fields and dashboard denominators.
 
 ## Cost tracking

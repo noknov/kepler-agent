@@ -79,6 +79,7 @@ def markdown_links(text: str):
 
 def documentation_errors(root: Path, paths: list[str]) -> list[str]:
     errors = []
+    root = root.resolve()
     for name in paths:
         path = root / name
         if path.suffix != ".md" or not path.exists():
@@ -92,7 +93,9 @@ def documentation_errors(root: Path, paths: list[str]) -> list[str]:
                 continue
             target = unquote(parsed.path)
             resolved = (root / target.lstrip("/")) if target.startswith("/") else (path.parent / target)
-            if not resolved.exists():
+            if not resolved.resolve().is_relative_to(root):
+                errors.append(f"{name}: local destination {destination!r} escapes the repository; use its canonical repository URL")
+            elif not resolved.exists():
                 errors.append(f"{name}: broken local destination {destination!r}; update the owning link with the source change")
     return errors
 
