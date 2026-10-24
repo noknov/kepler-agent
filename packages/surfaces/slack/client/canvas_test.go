@@ -73,3 +73,31 @@ func TestCanvasMutationsDoNotReplayAfterServerFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestCanvasMutationsRetryRateLimitRejections(t *testing.T) {
+	for _, operation := range []string{"create", "channel_create", "insert"} {
+		t.Run(operation, func(t *testing.T) {
+			calls := 0
+			client := NewTestClient(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				calls++
+				status, body := 200, `{"ok":true,"canvas_id":"F123"}`
+				if calls == 1 {
+					status, body = 429, `{"ok":false,"error":"ratelimited"}`
+				}
+				return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+			}))
+			var err error
+			switch operation {
+			case "create":
+				_, err = client.CreateCanvas(context.Background(), "Title", nil)
+			case "channel_create":
+				_, err = client.CreateChannelCanvas(context.Background(), "C", "Title", nil)
+			case "insert":
+				err = client.EditCanvas(context.Background(), "F", CanvasEditChange{Operation: "insert_at_end"})
+			}
+			if err != nil || calls != 2 {
+				t.Fatalf("calls=%d err=%v", calls, err)
+			}
+		})
+	}
+}
