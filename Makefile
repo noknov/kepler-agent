@@ -101,7 +101,7 @@ bench:
 eval-harbor-oracle:
 	$(PYTHON) evals/run_harbor.py --benchmark "$(EVAL_HARBOR_BENCHMARK)" --candidate oracle --jobs-dir "$(EVAL_HARBOR_JOBS_DIR)" --output "$(EVAL_HARBOR_OUTPUT)-oracle" $(EVAL_HARBOR_ARGS)
 
-# Agent-maintenance feedback; these targets never install tools or start services.
+# Maintenance feedback uses normal toolchains/caches, without custom setup or service management.
 .PHONY: doctor doctor-integration repo-check change-report integration-check
 doctor:
 	$(PYTHON) scripts/repository.py doctor

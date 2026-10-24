@@ -1,6 +1,6 @@
 # Agent-native repository maintenance
 
-Status: active. Scope: source repository maintenance, not a runtime rewrite.
+Status: completed. Scope: source repository maintenance, not a runtime rewrite.
 
 ## Outcome and acceptance
 
@@ -24,7 +24,7 @@ must remain visible rather than be reported as tested behavior.
 - [x] Introduce concise shared/scoped agent guidance, plans, design decisions,
   and a concrete maintenance backlog with acceptance criteria.
 - [x] Wire the checks and reports into Make and CI; verify rejection paths.
-- [ ] Review the final diff, run broad checks, record outcomes and limitations.
+- [x] Review the final diff, run broad checks, record outcomes and limitations.
 
 ## Decisions
 
@@ -48,7 +48,8 @@ with Python 3.11.16 and Go 1.25.0. Negative fixtures exercise wrong dependency
 direction, prefix collisions, aliased/commented imports, Windows-only sources,
 static DDL, broken documentation destinations, invalid Git baselines, and
 staged/untracked change accounting. Integration stores are absent locally;
-repository checks do not claim live Slack/LLM or database verification.
+local repository checks do not claim live Slack/LLM or database verification.
+The hosted integration scopes were subsequently verified in CI as recorded below.
 
 CI's first run caught a nonportable sibling-checkout link in observability docs:
 it passed locally because the deployment checkout existed. The link now uses
@@ -58,10 +59,17 @@ Structural evidence now runs before contract checks so failures keep the report.
 The artifact upload explicitly includes only its hidden `.cache` report path
 and fails if expected evidence is absent.
 
-## Handoff
+## Completion and handoff
 
-Next: inspect CI and review results for PR #22, then record completion evidence.
-The staged report was reviewed: product/generated code and dependency manifests
-are unchanged; the new package is the Go architecture checker. `make test-race`
-and checker race tests passed. No runtime schema or product behavior changes.
-The working branch is `feat/agent-native-maintenance`.
+All acceptance checks passed. CI run
+[104](https://github.com/noknov/kepler-agent/actions/runs/40091251359) passed on
+candidate `308a507894a0ef9148fd934556d4ed3be3d0bc70`, including the new repository
+contracts/report artifact, existing PostgreSQL/Redis/Linux sandbox tests,
+Slack regressions, CLI protocol/bundle, Web interactions, evaluator checks, and
+race suites. No review findings remained at completion.
+
+The source/runtime and dependency manifests are unchanged. The repository now
+has one tested Go architecture checker and one stdlib Python maintenance entry
+point. Follow-up opportunities are bounded in the maintenance backlog; no
+service provisioning, recurring agent, automatic merge bot, or deployment was
+introduced. The final documentation commit records this verified result.

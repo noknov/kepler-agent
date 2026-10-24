@@ -36,7 +36,7 @@ pnpm --dir apps/cli install --frozen-lockfile
 | Change | Check | What it establishes |
 | --- | --- | --- |
 | Repository instructions, architecture, docs, or maintenance tooling | `make repo-check` | Parsed Go dependency direction, literal DDL checks, live local documentation destinations, and guardrail regression tests |
-| Environment diagnostics | `make doctor`; add `--ui` / `--integration` to `scripts/repository.py doctor` as needed | Required tools and explicit fixture configuration; no installation, service startup, or connectivity claim |
+| Environment diagnostics | `make doctor`; add `--ui` / `--integration` to `scripts/repository.py doctor` as needed | Required tools and explicit fixture configuration; no custom setup, service startup, or connectivity claim |
 | Structural review | `make change-report BASE=<base-ref>` | Tracked working-tree diff, new Go packages and dependency manifests; stage new files before reporting |
 | Durable hosted changes | `make integration-check` with isolated stores | Connection/hosted race tests and the Slack product regression gate, without live Slack/model calls |
 | Go implementation | `make fmt-check boundaries vet` and relevant `go test` packages | Formatting, layering, static analysis, tested behavior |

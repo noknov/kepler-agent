@@ -34,7 +34,9 @@ instead of copying its facts into several new documents.
 `make repo-check` validates Go boundaries, literal runtime DDL, documentation
 file destinations, and the checker regression tests. It needs no credentials
 or running services. Use `PYTHON=/path/to/python3.11` if the host's `python3` is
-older than the evaluator's minimum.
+older than the evaluator's minimum. Normal Go commands may resolve the declared
+toolchain and populate caches; these targets provide no custom installers or
+service provisioning.
 
 ## Control expansion at the design boundary
 
