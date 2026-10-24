@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -102,9 +101,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, resolut
 		// Deferred exposure is temporary discovery state, not authorization. A
 		// persisted descriptor binds the approval to the registered call contract.
 		if requested.Descriptor != nil {
-			original, _ := json.Marshal(requested.Descriptor)
-			current, _ := json.Marshal(descriptor)
-			if !bytes.Equal(original, current) {
+			if !sameApprovalContract(*requested.Descriptor, descriptor) {
 				return fmt.Errorf("approved tool %q contract changed; request a new approval", call.Name)
 			}
 		} else if _, active := r.deps.Tools.GetActive(sessionID, call.Name); !active {
