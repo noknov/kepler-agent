@@ -2,6 +2,13 @@ package slackagent
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"github.com/noknov/kepler-agent/packages/agent/model"
+	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
+	"github.com/noknov/kepler-agent/packages/agent/transcript"
+	"github.com/noknov/kepler-agent/packages/profiles/hosted"
+	"github.com/noknov/kepler-agent/packages/safety"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -134,4 +141,86 @@ func TestPlanDoesNotRepostAfterUnknownDelivery(t *testing.T) {
 	if messenger.attempts != 1 {
 		t.Fatalf("unknown plan delivery was repeated %d times", messenger.attempts)
 	}
+}
+
+// A slow plan can consume more than the old shared finalization deadline.
+// Exercise both successful and failed turns, including the durable queue ack.
+func TestPlanDrainPreservesDeliveryPersistenceBudget(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprint(failed), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				messenger := &slowPlanMessenger{}
+				service := New(hosted.Agent{}, messenger, safety.PromptPolicy{}, safety.Redactor{}, nil)
+				catalog, _ := tool.NewCatalog()
+				runner, err := agentruntime.New(agentruntime.Config{Model: "test"}, agentruntime.Dependencies{
+					Model: &planReplyModel{failed: failed, plan: func() {
+						stream := service.router.streams["turn"]
+						stream.mu.Lock()
+						stream.planLastUpdate = time.Now()
+						stream.mu.Unlock()
+						service.router.Publish(context.Background(), transcript.Event{TurnID: "turn", Type: transcript.PlanUpdated, Plan: &tool.PlanUpdate{Items: []tool.PlanItem{{ID: "p", Task: "work", Status: "completed"}}}})
+					}}, Tools: catalog, Transcript: transcript.NewMemoryStore(), Events: service.EventSink(),
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				service.Agent.Runtime = runner
+				inputs := &contextCheckingInputs{}
+				service.Inputs = inputs
+				service.PodID = "worker"
+				linked := false
+				service.OnDelivered = func(ctx context.Context, _, _, _ string) error {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					deadline, ok := ctx.Deadline()
+					if !ok || time.Until(deadline) != 20*time.Second {
+						t.Errorf("persistence budget = %v", time.Until(deadline))
+					}
+					linked = true
+					return nil
+				}
+				req := slackconversation.Request{EventID: "turn", UserID: "U", Channel: "C", ThreadTS: "T", Text: "question", ClaimID: "input"}
+				if err := service.run(context.Background(), "session", req); err != nil {
+					t.Fatal(err)
+				}
+				if !linked || !inputs.acknowledged {
+					t.Fatalf("linked=%v ack=%v", linked, inputs.acknowledged)
+				}
+			})
+		})
+	}
+}
+
+type planReplyModel struct {
+	failed bool
+	plan   func()
+}
+
+func (m *planReplyModel) Generate(context.Context, model.Request, model.EventSink) (model.Response, error) {
+	m.plan()
+	if m.failed {
+		return model.Response{}, errors.New("model failed")
+	}
+	return model.Response{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop}, nil
+}
+
+type slowPlanMessenger struct{ nativeStreamingMessenger }
+
+func (m *slowPlanMessenger) PostMessageBlocks(ctx context.Context, _, _, _ string, _ []map[string]any) (string, error) {
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+type contextCheckingInputs struct {
+	memoryInputs
+	acknowledged bool
+}
+
+func (s *contextCheckingInputs) Ack(ctx context.Context, _, _ string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.acknowledged = true
+	return nil
 }
