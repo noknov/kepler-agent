@@ -641,7 +641,14 @@ func (s *Service) Close() {
 	if s.cancel != nil {
 		s.cancel()
 	}
-	s.Wait(5 * time.Second)
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// Web owns a separate execution/finalization lifetime from service goroutines.
+	// Keep its stores alive during the same bounded post-cancellation cleanup.
+	if s.webConversations != nil {
+		s.webConversations.WaitContext(cleanupCtx)
+	}
+	s.waitContext(cleanupCtx)
 	if s.stores != nil {
 		s.stores.Close()
 	}
@@ -659,21 +666,21 @@ func (s *Service) Go(fn func(context.Context)) {
 }
 
 func (s *Service) Wait(timeout time.Duration) bool {
-	done := make(chan struct{})
-	go func() {
-		s.wg.Wait()
-		close(done)
-	}()
-	if timeout <= 0 {
-		<-done
-		return true
+	ctx := context.Background()
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
+	return s.waitContext(ctx)
+}
+func (s *Service) waitContext(ctx context.Context) bool {
+	done := make(chan struct{})
+	go func() { s.wg.Wait(); close(done) }()
 	select {
 	case <-done:
 		return true
-	case <-timer.C:
+	case <-ctx.Done():
 		return false
 	}
 }

@@ -87,3 +87,39 @@ func TestEventDrainHonorsContextDeadline(t *testing.T) {
 		t.Fatal("reported active Slack event drained")
 	}
 }
+
+func TestCloseKeepsWebFinalizationInsideCleanupLifetime(t *testing.T) {
+	lifecycle, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	web := websurface.NewConversationService(hosted.Agent{}, shutdownWebStore{}, transcript.NewMemoryStore(), nil)
+	web.Lifecycle = lifecycle
+	entered, cleaning, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	web.BeforeRun = func(ctx context.Context, _ string) error {
+		close(entered)
+		<-ctx.Done()
+		close(cleaning)
+		<-release
+		return ctx.Err()
+	}
+	if _, err := web.StartTurn(context.Background(), websurface.Identity{Provider: "slack", TenantID: "T", SubjectID: "U"}, "conversation", "request_1234567890", "request"); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	service := &Service{cancel: cancel, webConversations: web}
+	done := make(chan struct{})
+	go func() { service.Close(); close(done) }()
+	<-cleaning
+	select {
+	case <-done:
+		close(release)
+		web.Wait()
+		t.Fatal("closed service before cooperative Web finalization")
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("completed Web cleanup did not release Close")
+	}
+}

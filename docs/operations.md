@@ -72,8 +72,10 @@ Slack event drain and Web drain share one `HTTP_SHUTDOWN_TIMEOUT` grace deadline
 Web admission is fenced under its lifecycle lock, and its idle signal includes
 durable queue acknowledgement/release after model execution ends. Waiting is
 notification-driven. When grace expires, the worker cancels service work and
-returns instead of entering an unbounded Web wait. Existing bounded runtime,
-claim, store, HTTP and telemetry cleanup still follows; container stop timeout
+returns instead of entering an unbounded Web wait. `Service.Close` then gives
+Web finalization and background services the existing shared five-second cleanup
+budget before closing stores. Runtime/claim/HTTP and telemetry cleanup also have
+their own bounds; container stop timeout
 must allow that cleanup as well as the grace period. The grace deadline is not
 a promise that an arbitrary adapter or PostgreSQL pool close can be forcibly
 interrupted in process. Long turns may outlive those deadlines. Verify the affected
