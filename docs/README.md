@@ -32,7 +32,7 @@ Read [architecture](architecture.md) first, then follow the area you change:
 | Memory 检索、时效与配额 | [记忆生命周期](memory-retrieval.md) |
 | Agent maintenance, design cost, and review | [Maintenance workflow](maintaining.md), [execution plans](plans/README.md), [backlog](maintenance-backlog.md) |
 | Source setup and verification | [Development](development.md) |
-| Current design decisions and unfinished work | [Harness design status](harness-alignment.md) |
+| Current design decisions and unfinished work | [Harness design status and October 26 capability assessment](harness-alignment.md#2026-10-26本轮能力复核与验证边界) |
 | Chinese walkthrough with diagrams and source links | [Architecture site](../architecture-site/README.md) |
 | Generated app-server wire contract | [JSON Schema](app-server.schema.json) |
 
