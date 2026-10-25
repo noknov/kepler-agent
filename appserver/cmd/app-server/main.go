@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	agentremote "github.com/noknov/kepler-agent/packages/a2a"
 	"github.com/noknov/kepler-agent/packages/agent/delegation"
 	"github.com/noknov/kepler-agent/packages/agent/environment"
 	"github.com/noknov/kepler-agent/packages/agent/model"
@@ -100,6 +101,9 @@ func run(ctx context.Context) error {
 		return err
 	}
 	if err := catalog.Register(local.ArtifactReadTool{Root: filepath.Join(stateDir, "sessions")}); err != nil {
+		return err
+	}
+	if err := agentremote.Register(catalog, store, config.RemoteAgents); err != nil {
 		return err
 	}
 	exploreRunner := delegation.Runner{

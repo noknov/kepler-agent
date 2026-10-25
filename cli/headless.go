@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	agentremote "github.com/noknov/kepler-agent/packages/a2a"
 	"github.com/noknov/kepler-agent/packages/agent/delegation"
 	"github.com/noknov/kepler-agent/packages/agent/environment"
 	"github.com/noknov/kepler-agent/packages/agent/model"
@@ -103,6 +104,10 @@ func newLocalHarness(values options, config local.Config, creds credentials) (*l
 	sandbox := local.Sandbox{Workspace: workspace, AdditionalReadRoots: config.AdditionalReadRoots, UnsafeAllowNoSandbox: config.UnsafeAllowNoSandbox}
 	catalog, err := localtools.NewCatalog(workspace, sandbox)
 	if err != nil {
+		workspace.Close()
+		return nil, err
+	}
+	if err := agentremote.Register(catalog, store, config.RemoteAgents); err != nil {
 		workspace.Close()
 		return nil, err
 	}

@@ -24,7 +24,7 @@ measured runs; deterministic tests cannot substitute for them.
   and incremental SSE reading; preserve uncertain-write behavior and credentials.
 - [ ] Evaluation: reject incompatible/incomplete evidence, validate baselines and
   raw records, preserve failures, and record attributable task-level outcomes.
-- [ ] Delegation/A2A: retain generic local task ownership; design a remote adapter
+- [x] Delegation/A2A: retain generic local task ownership; design a remote adapter
   around an actual protocol binding, authentication, cancellation, bounded results,
   and evidence. Code review remains one composing workflow, not the protocol owner.
 - [ ] Retrieval/memory: improve semantic candidate coverage only with an explicit
@@ -68,8 +68,27 @@ negotiated version validation/headers and bounded non-cyclic discovery added.
 Tests use a real HTTP server that keeps SSE open after its result, plus protocol
 errors, version mismatches and exhausted discovery. Structured output is PR #23.
 
+Quota instruction: inspect the account's 300-minute window at milestones. At
+remaining <=5%, save/publish the current work and keep this agent loop waiting;
+check approximately every 30 minutes and resume automatically only when the
+window reports 100% remaining. No manual confirmation and no silent-state notices.
+Do not spend reset credits. This instruction is from the user, 2026-10-26.
+
+A2A milestone: official SDK 0.3 binding, configured peer send/get/cancel and
+continuation, canonical same-session/actor reference ownership, target confinement,
+unknown-outcome/usage disclosure, and inbound authenticated-scope executor added.
+Local/hosted/app-server registration remains opt-in. Real SDK HTTP tests and
+race suites passed. Native A2A 1.0/federation/HA hosting are not claimed.
+No Docker CLI, existing Kepler login, operator ChatGPT session, or system psql
+is available on this machine; real-model/public benchmark runs need those inputs.
+MCP review reproduced and fixed empty SSE priming and null/non-object results;
+the regression failed before the fix and passed after it.
+
 ## Handoff
 
-Working branch: feat/structured-model-output. First implement structured output
-at the provider boundary, then publish a focused PR before the next track. Keep
+Working branch: feat/a2a-delegation (stacked on #24). #23 is merged after CI;
+#24 passed CI and is retargeted to main. A2A peer tools are integrated in CLI,
+app-server and hosted profiles; the inbound SDK executor is opt-in composition,
+not an automatically exposed listener. Actual SDK and adapter race suites passed.
+Next finish A2A full checks, review and publish, then evaluation hardening. Keep
 results and remaining work here instead of relying on private chat history.
