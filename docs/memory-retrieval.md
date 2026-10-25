@@ -11,6 +11,7 @@
 4. 独立读取最多 2 条 preference。Query 也支持 exact key filter 与 kind filter，不开放模型填写 identity。
 5. 可选 ModelRanker 在当前 turn 的 Governor/Budget 内排序或拒绝候选；它没有工具，也不能更新 memory。
 6. 按 8 条 / 6,000 JSON bytes 限制 disclosure；其中 preference 最多 1,500 bytes，避免抢占全部证据预算。
+   先按剩余字节预算选择能完整放入的事实，再计算条数；过大的记录不占用本可交给后续证据的名额，不截断原始记录。
 7. 再核对 generation 与选中条目的 version，发现 reset/更新后有界重试；持续变更时返回空 memory。
 8. 生成低信任 prompt fragment，并持久化 TurnContextPrepared 的 scope values。重放保留原 generation，
    不会因为重新检索而让旧审批取得 reset 后的新写权限。

@@ -103,6 +103,13 @@ This is a recorder microbenchmark, not end-to-end model latency. Official client
 v1.24.0 preserves the existing Go 1.25 toolchain. Local race suites and actual
 PostgreSQL observer/hosted/connection/memory integration suites passed.
 
+Memory/context milestone: reproduced a disclosure-allocation defect: a high-ranked
+record larger than the disclosure byte budget consumed a slot before being
+excluded, losing lower-ranked fitting evidence. Apply bytes before slots, retain
+rank order and complete evidence, then run the existing version/generation fence.
+The regression failed before the fix. No extra model calls, thresholds, mutable
+ranking cache, automatic deletion, or synthetic embedding capability added.
+
 ## Handoff
 
 Working branch: feat/operational-metrics, stacked on #26. PRs #23–#26 are

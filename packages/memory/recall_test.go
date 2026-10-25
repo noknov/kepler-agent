@@ -147,3 +147,45 @@ func TestRecallRejectsRecordUpdatedDuringRerank(t *testing.T) {
 		t.Fatalf("stale version injected: %+v calls=%d err=%v", page, rankCalls, err)
 	}
 }
+
+func TestRecallFillsSlotsAfterApplyingByteBudget(t *testing.T) {
+	records := []Record{
+		{Key: "oversized", Kind: "fact", Content: strings.Repeat("x", 4000), Version: 1},
+		{Key: "first-fit", Kind: "fact", Content: "first useful fact", Version: 2},
+		{Key: "second-fit", Kind: "fact", Content: "second useful fact", Version: 3},
+		{Key: "third-fit", Kind: "fact", Content: "lower ranked fact", Version: 4},
+	}
+	pref := Record{Key: "locale", Kind: "preference", Content: "Chinese", Version: 5}
+	store := &queryStore{query: func(query Query) Page {
+		if query.Keys != nil {
+			var selected []Record
+			for _, key := range query.Keys {
+				for _, record := range append(append([]Record(nil), records...), pref) {
+					if record.Key == key {
+						selected = append(selected, record)
+					}
+				}
+			}
+			return Page{Generation: 1, Records: selected}
+		}
+		if query.Kind == "preference" {
+			return Page{Generation: 1, Records: []Record{pref}}
+		}
+		return Page{Generation: 1, Records: records}
+	}}
+	page, err := Recall(context.Background(), store, Identity{"team", "user"}, "query", RecallPolicy{Candidates: 6, MaxRecords: 3, Preferences: 1, MaxBytes: 1600, PreferenceBytes: 300}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for _, record := range page.Records {
+		keys = append(keys, record.Key)
+	}
+	if strings.Join(keys, ",") != "first-fit,second-fit,locale" {
+		t.Fatalf("fitting evidence lost before slot allocation: %v", keys)
+	}
+	encoded, _ := json.Marshal(page.Records)
+	if len(encoded) > 1600 || records[0].Content != strings.Repeat("x", 4000) {
+		t.Fatal("budget exceeded or canonical evidence truncated")
+	}
+}
