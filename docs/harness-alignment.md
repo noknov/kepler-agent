@@ -172,3 +172,45 @@ Primary references consulted for this review:
 For Codex's thread/turn/item contract, retain the App Server reference above;
 Kepler's Slack adapter should preserve the same explicit lifecycle boundaries
 without importing CLI-specific interaction into Slack.
+
+## 2026-10-26：本轮能力复核与验证边界
+
+以本轮 PR #23–#33 的独立工程变更为复核范围。结论是核心 harness 的分层、
+执行和恢复机制已覆盖所讨论的大部分能力；现有证据不能证明任务效果、成本或
+生产可靠性已追平或超过 Codex / Claude Code。协议实现、可选配置和实测效果须分开判断。
+
+| 方面 | 当前实现与本轮交付 | 验证边界 / 有意义的后续条件 |
+| --- | --- | --- |
+| ReAct / Function Calling | [统一 runtime](runtime.md) 运行模型→工具→观察循环，保留类型化调用、工具效果/策略与错误恢复 | 各工具仍负责业务参数和权限校验；工具 schema 不授予能力 |
+| Plan-and-Execute | [plan 与 task_state](agent-continuity.md) 分开呈现和持久任务事实，来源/修订/证据检查，压缩保留约束 | 自适应执行循环，不伪装为独立的通用工作流 DAG 引擎 |
+| Structured Outputs | 原生 OpenAI Chat/Responses、Anthropic 映射；完整本地 schema 校验，显式 native/validated 模式；远程 native receipt（#23/#30） | 提供方支持范围不同；native 不支持时明确失败，无隐式降级；真实生成质量未测 |
+| MCP | [工具边界](tools.md) 的版本协商、精确 RPC ID、保持连接的 SSE、发现容量/循环限制（#24） | 已实现 2025 年三版工具传输子集；不宣称覆盖当前所有 MCP 扩展/新版本 |
+| A2A | [通用远程适配器](a2a.md) 及官方 SDK executor，共用 TaskSpec/Runner；send/get/cancel/continuation、调用归属、认证/有界结果（#25） | SDK 0.3 binding；不是完整 A2A1.0 联邦平台，未自动开放公网 inbound 服务 |
+| Multi-Agent | 通用本地 delegation、子任务证据回读与父预算；[code review](../packages/workflows/codereview/prompt.go) 是其上的业务编排 | 原有多 reviewer 是内部委托，不等于 A2A。配置了 remote peer 才有跨系统 A2A；code review 仍使用只读本地 leaf，未自动外发私有 PR |
+| RAG / Hybrid / Reranker | [显式 memory 检索](memory-retrieval.md) 融合全文/trigram/可选精确 pgvector 候选；可选模型 reranker（#28/#29） | 针对有配额的用户 facts，不是任意文档摄取平台。受控向量证明零词法重叠链路，真实模型相关性尚未测；默认关闭 embedding/rerank |
+| Context Engineering | [continuity](agent-continuity.md) 包含版本策略、完整请求预算、按需证据、独立任务状态与可选 native continuation | 精确 tokenizer 可注入；默认估算、摘要/native 组合的实际质量与费用仍需同任务实验 |
+| Memory | 来源版本、reset generation、显式过期/配额、模型 space/claim CAS 与删除生命周期；配置/启用时 schema 检查（#29/#32） | 不自动抽取/合并/删除用户事实；模型升级要显式运维切换，真实隐私/保留政策覆盖更多外部系统 |
+| Checkpoint / Resume | append-only transcript、独立输入提交、完整 turn 会计恢复、任务事实在 compaction 后保留 | 本地/hosted 恢复有回归；任意外部副作用不具备端到端 exactly-once |
+| Human-in-the-Loop | [审批](safety.md) 绑定 actor、原调用/descriptor 和 server policy；暂停后恢复 | 人工批准不能扩大 host 能力；远端或已发生的副作用仍要核对事实 |
+| 幂等 / 故障恢复 | durable queue owner/lease、稳定提交 ID、未知效果不盲重放；Web 临时存储失败保留输入、满载不消耗重试（#31），有界 drain/finalization（#33） | 真实 PG/Redis + 故障回归不是整个集群故障演练；跨系统未知结果需要 reconciliation |
+| 资源 / 性能 | [逐次 usage receipts](agent-execution-resources.md)、父预算、公平 admission、embedding 独立记账；指标 ring O(1)、精确向量查询（#27/#29） | Governor 是进程内，非集群配额；本地微基准不能推出生产 P95 或任务成功率 |
+| PostgreSQL / Redis / OpenTelemetry | durable 数据与唤醒职责分开；[标准 metrics](observability.md)、真实队列 gauges、OTLP；deploy018 schema parity | 没有托管 failover、集群压测或现成 SLO 告警后端；没有生产 HA 认证 |
+| Docker / K8s / 框架 | Docker 构建与本地运维；保留 canonical Go runtime 的状态/恢复接口 | 当前部署是本地替换，有中断窗口；K8s legacy 不是经验证生产平台。不为清单再引入 SpringAI/LangGraph/Temporal 形成第二执行状态源 |
+| Evaluation | 完整非 dry-run artifacts / identity / raw records gate（#26），deploy4 修正 Harbor gateway 启动契约 | wiring、单元回归和真实模型分数分开。缺当前登录、Docker/数据集时，没有可发布的同模型竞品对照成绩 |
+
+本轮本地证据包括 `make check`、相关 race suites、真实 PostgreSQL/Redis 的
+`make integration-check`、受控向量/缓存生命周期回归、增量迁移的新装/升级/重放/schema parity，
+以及部署脚本 16 个回归。没有执行生产部署。源码/部署 PR 是独立的可审查交付，不代表已应用 migration018。
+本地 SQL 与 recorder 微基准的范围见对应 owning guides；原始 SQL 观察值保存在
+[部署仓库](https://github.com/noknov/kepler-agent-deploy/blob/ce83b963c3524a98b4d3a77bf2f2c0224201895b/docs/measurements/memory-exact-2026-10-26.json)，
+其中未冻结的数组原型明确仅作探索证据。
+
+对公开设计的取舍：
+
+- [Codex App Server](https://openai.com/index/unlocking-the-codex-harness/)：借鉴同一 harness 支撑多个 surface 和明确 thread/turn/item 生命周期；保留 Kepler 的 canonical events。
+- [Claude Code subagents](https://code.claude.com/docs/en/sub-agents)：借鉴独立上下文、受限能力和任务结果返回；不把多 agent 数量当质量指标。
+- [DeepSeek Harness architecture](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/architecture.md)：借鉴 profile composition 与事件/生命周期归属；保留 Go 的显式依赖边界，不复制整个插件框架。
+
+下一轮应先在固定模型、配置、任务镜像和 grader 下测任务成功率/费用/延迟，再决定
+写入子代理的独立 workspace/冲突协议、更大文档 corpus 或分布式 admission 是否有净收益。
+生产 HA 需明确目标集群、外部数据服务 failover、恢复目标和故障演练证据；新增一组 YAML 不能替代这些条件。

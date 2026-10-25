@@ -27,11 +27,12 @@ measured runs; deterministic tests cannot substitute for them.
 - [x] Delegation/A2A: retain generic local task ownership; design a remote adapter
   around an actual protocol binding, authentication, cancellation, bounded results,
   and evidence. Code review remains one composing workflow, not the protocol owner.
-- [ ] Retrieval/memory: improve semantic candidate coverage only with an explicit
-  embedding/index lifecycle, namespace/deletion fences, and relevance comparisons.
-- [ ] Context/planning/recovery: audit task-state retention, model/tool attempt
+- [x] Retrieval/memory: improve semantic candidate coverage only with an explicit
+  embedding/index lifecycle, namespace/deletion fences, and controlled-vector relevance comparisons; real
+  model effectiveness remains a separate outstanding evaluation.
+- [x] Context/planning/recovery: audit task-state retention, model/tool attempt
   accounting, checkpoint recovery, and cancellation together; fix demonstrated gaps.
-- [ ] Operations: establish deploy diagnostics, service metrics/SLO inputs, bounded
+- [x] Operations: establish deploy diagnostics, service metrics/SLO inputs, bounded
   resource behavior, reproducible failure/recovery checks, and migration parity.
 - [ ] Run attributable real-model evaluation when credentials/services are available;
   publish every completed PR and keep this handoff usable from another device.
@@ -112,50 +113,38 @@ ranking cache, automatic deletion, or synthetic embedding capability added.
 
 ## Handoff
 
-PRs #23–#31 and deploy #3 are merged after CI/review. Native remote structured output
-now requires a matching native capability receipt; old optional-field-ignoring
-servers fail closed while retaining usage. PR #29 began as a published embedding
-resource prerequisite and now includes the real opt-in memory consumer, cache
-ownership, separate terminal embedding accounting, and paired deploy migration018.
-CI and review passed at2c8ed98; migration parity passed at398aa9c.
+Engineering PRs #23–#33 and deploy #3/#4 are merged after CI/review. PR33 adds
+notification-based Web drain/finalization and a shared worker grace deadline.
+Automatic review found skipped Web cancellation cleanup before stores closed;
+its regression failed first, then Close gained the existing shared five-second
+post-cancellation cleanup wait for Web and background services. Local make check
+and affected races passed at remote ac552b7; exact-head CI and review passed,
+and PR33 merged at44afb45.
 
-Semantic milestone: real PostgreSQL controlled-vector tests cover zero lexical
-overlap, scope, source mutation/deletion/reset/expiry/model-space races, concurrent
-claims, no held SQL connection during model calls, fallback and claim cleanup.
-The native-array dot-product prototype measured 374.5–390.9 ms/query for 1000x1536;
-pgvector exact retrieval measured 18.9–20.0 ms in the same local benchmark. This
-justifies the extension, not an approximate index or another search service.
-Schema parity fresh/upgrade/replay passed using official pgvector v0.8.7 built
-against the isolated PG17.6 server. No actual model relevance claim; feature off.
+Deploy PR4 removes retired direct-provider flags and duplicate secret/config
+rendering from Harbor startup. The wrapper now delegates to the supported source
+launcher, preserving gateway model preflight, source identity and binary hashes.
+All16 deployment tests including actual migration parity passed, and a real
+wrapper-to-source dry-run succeeded. It is not a model execution or quality result.
+Raw local SQL observations are versioned there with exploratory limits.
 
-Web recovery milestone merged (#31): reproduced premature acknowledgement on
-transient conversation/approval storage errors and missing terminal persistence.
-Added a single claim cleanup/transfer owner, terminal-before-ack rejections, replay
-acknowledgement and no-claim capacity admission. Real PostgreSQL regression
-confirms input survives the transient error and permanent rejection has a durable
-terminal. Full worker capacity previously consumed queue attempts without work;
-its regression failed before the admission fix. CI and affected race checks passed.
+Final capability assessment is in docs/harness-alignment.md (2026-10-26). The
+engineering work list is checked; the live-model quality comparison remains
+open. This machine has no Docker CLI or SOPS executable, and no current Kepler CLI login
+was found. Do not invent benchmark scores or silently
+use another product's login. A later device can continue with explicit model,
+containers and task data. Keep the plan active until that evidence exists.
 
-Opt-in validation PR32 rejects malformed memory settings and checks semantic
-schema during worker startup. Local affected race tests and make check passed;
-await exact-head CI/review before merge.
-
-Drain milestone: the old Web idle check returned before queue finalization and
-worker shutdown entered an unlimited Wait after its grace deadline. Replace the
-WaitGroup/poll split with one in-flight lifetime and idle notification; Drain
-fences admission under the same lock. Slack/Web share a grace context; expiration
-cancels work without an unlimited Web wait. Actual store/HTTP/telemetry cleanup
-and container hard-stop remain separate bounds. Finish checks/publication/review.
-
-Remaining: finish PR32 and drain PR, then publish the requested capability
-assessment against the verified source.
-Live-model comparison is unavailable without a configured login/provider and
-public task containers. Do not fabricate parity/quality/HA measurements.
+All engineering changes have remote PRs and matching file trees. This assessment
+PR carries the final report; verify its latest GitHub CI state when continuing.
+Our isolated PostgreSQL and Redis servers have been stopped.
+Temporary PostgreSQL is on loopback55437 under /tmp/kepler-review-postgres;
+Redis on56379 under /tmp/kepler-capability-redis; official pgvector build under
+/tmp/kepler-capability-pgvector. No deployed application database was touched.
+Final full PG/Redis integration passed at the drain milestone; the final memory,
+Web, worker, hosted and observer race suites also passed against actual PostgreSQL
+after the cleanup fix, alongside make check.
 
 User requests a live loop waiting at <=5% remaining with ~30-minute checks and
-automatic continuation after reset, without confirmation. Reset has been observed
-and work resumed; do not spend reset credits. Save all useful source/deploy changes
-to GitHub before waits. Temporary stores are ours only: PostgreSQL on loopback
-55437 under /tmp/kepler-review-postgres and Redis on56379 under
-/tmp/kepler-capability-redis. Stop them before final handoff. pgvector build lives
-in /tmp/kepler-capability-pgvector. Do not touch deployed application databases.
+automatic continuation after reset, without confirmation. A reset was observed
+and work resumed. Do not spend reset credits; publish milestones before waits.
