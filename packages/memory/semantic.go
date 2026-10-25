@@ -36,6 +36,22 @@ func (s SemanticStore) Validate() error {
 	}
 	return nil
 }
+
+// CheckSemanticSchema verifies the opt-in storage contract without reading facts
+// or performing DDL. Startup callers provide their bounded lifecycle context.
+func (s PGStore) CheckSemanticSchema(ctx context.Context) error {
+	if s.Pool == nil {
+		return fmt.Errorf("semantic memory requires PostgreSQL")
+	}
+	_, err := s.Pool.Exec(ctx, `SELECT g.embedding_space,m.embedding_space,m.embedding_version,
+ vector_dims(m.embedding_vector),m.embedding_claim_owner,m.embedding_claim_until
+ FROM user_memory_generations g CROSS JOIN user_memories m LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf("semantic memory requires pgvector and deploy migration018: %w", err)
+	}
+	return nil
+}
+
 func (s SemanticStore) Query(ctx context.Context, id Identity, query Query) (Page, error) {
 	if query.Text == "" || query.Mode != "hybrid" {
 		return s.PGStore.Query(ctx, id, query)

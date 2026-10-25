@@ -54,6 +54,10 @@ type ProfileDependencies struct {
 }
 
 func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
+	if cfg.Memory.Embedding.Enabled && deps.Postgres == nil {
+		return Profile{}, fmt.Errorf("enabled semantic memory requires PostgreSQL")
+	}
+
 	primary, err := buildModelClient(cfg.LLM.Provider, cfg.LLM.Protocol, cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Timeout, cfg.LLM.AnthropicFlavor, cfg.LLM.ChatGPTCredentialsFile)
 	if err != nil {
 		return Profile{}, err

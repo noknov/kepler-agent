@@ -153,6 +153,15 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		}
 	}()
 
+	if cfg.Memory.Embedding.Enabled {
+		checkCtx, cancel := context.WithTimeout(ctx, cfg.Memory.Embedding.Timeout)
+		err := (memory.PGStore{Pool: stores.PGPool}).CheckSemanticSchema(checkCtx)
+		cancel()
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	gitcache.SetRedis(stores.Redis)
 
 	slackClient := slack.NewClient(cfg.Slack.BotToken, cfg.Slack.BotUserID)

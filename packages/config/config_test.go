@@ -791,6 +791,7 @@ func writeEnvFileNamed(t *testing.T, dir, name string, values map[string]string)
 func resetConfigEnv(t *testing.T) {
 	t.Helper()
 	keys := []string{
+		"MEMORY_MAX_RECORDS", "MEMORY_RECALL_TIMEOUT", "MEMORY_RERANK", "MEMORY_EMBEDDING_ENABLED", "MEMORY_EMBEDDING_BASE_URL", "MEMORY_EMBEDDING_API_KEY", "MEMORY_EMBEDDING_MODEL", "MEMORY_EMBEDDING_REVISION", "MEMORY_EMBEDDING_DIMENSIONS", "MEMORY_EMBEDDING_BATCH_SIZE", "MEMORY_EMBEDDING_TIMEOUT",
 		"SLACK_BOT_TOKEN",
 		"KEPLER_AGENT_ENV_FILE",
 		"SLACK_SIGNING_SECRET",
@@ -974,5 +975,17 @@ func TestEmbeddingConfigurationIsExplicit(t *testing.T) {
 	t.Setenv("MEMORY_EMBEDDING_TIMEOUT", "1h")
 	if _, err = LoadFor(ProfileCLI); err == nil {
 		t.Fatal("accepted timeout exceeding recall budget")
+	}
+}
+
+func TestRejectMalformedMemoryEnvironment(t *testing.T) {
+	for _, key := range []string{"MEMORY_MAX_RECORDS", "MEMORY_RECALL_TIMEOUT", "MEMORY_RERANK", "MEMORY_EMBEDDING_ENABLED", "MEMORY_EMBEDDING_DIMENSIONS", "MEMORY_EMBEDDING_BATCH_SIZE", "MEMORY_EMBEDDING_TIMEOUT"} {
+		t.Run(key, func(t *testing.T) {
+			resetConfigEnv(t)
+			t.Setenv(key, "invalid")
+			if _, err := LoadFor(ProfileCLI); err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("%s silently fell back: %v", key, err)
+			}
+		})
 	}
 }

@@ -60,6 +60,9 @@ func putSemanticFact(t *testing.T, ctx context.Context, s SemanticStore, id Iden
 
 func TestIntegrationSemanticRetrievalAndScope(t *testing.T) {
 	ctx, s, id := semanticFixture(t)
+	if err := s.CheckSemanticSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
 	putSemanticFact(t, ctx, s, id)
 	other := Identity{TeamID: id.TeamID, UserID: "other"}
 	putSemanticFact(t, ctx, s, other)
@@ -203,6 +206,9 @@ func TestIntegrationHybridWorksWithoutEmbeddingColumns(t *testing.T) {
 	_, err = s.Pool.Exec(ctx, `INSERT INTO user_memories VALUES($1,$2,0,'commute','fact','rides a bicycle','','',1,NOW(),NULL)`, id.TeamID, id.UserID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if err := s.CheckSemanticSchema(ctx); err == nil {
+		t.Fatal("semantic startup accepted missing columns")
 	}
 	page, err := s.PGStore.Query(ctx, id, Query{Text: "bicycle", Mode: "hybrid"})
 	if err != nil || len(page.Records) != 1 {
