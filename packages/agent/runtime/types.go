@@ -301,12 +301,13 @@ type ParentLink struct {
 }
 
 type TurnResult struct {
-	SessionID   string
-	TurnID      string
-	Message     model.Message
-	Usage       model.Usage
-	Steps       int
-	Termination TerminationReason
+	SessionID      string
+	TurnID         string
+	Message        model.Message
+	Usage          model.Usage
+	EmbeddingUsage model.Usage // Separate operation; generation price rates do not apply.
+	Steps          int
+	Termination    TerminationReason
 }
 
 func (r *Runtime) lockSession(ctx context.Context, sessionID string) (func(), error) {

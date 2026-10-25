@@ -2,8 +2,11 @@ package hosted
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -66,13 +69,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	if err := agentremote.Register(catalog, PGTranscript{Pool: deps.Postgres}, cfg.RemoteAgents); err != nil {
 		return Profile{}, err
 	}
-	var memoryStore memory.Store
-	if deps.Postgres != nil {
-		memoryStore = memory.PGStore{Pool: deps.Postgres, MaxRecords: cfg.Memory.MaxRecords}
-		if err := catalog.Register(memorytools.Tool{Store: memoryStore}); err != nil {
-			return Profile{}, err
-		}
-	}
+
 	artifacts := PGArtifactStore{Store: deps.ToolSpills}
 	if deps.ToolSpills != nil {
 		if err := catalog.Register(ArtifactReadTool{Store: deps.ToolSpills, MaxInlineBytes: maxToolResultBytes(cfg.Sessions.MaxToolResultTokens)}); err != nil {
@@ -82,6 +79,33 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	governor := deps.ModelGovernor
 	if governor == nil {
 		governor = model.NewGovernor(cfg.Tools.AgentMaxConcurrentModelCalls)
+	}
+	var memoryStore memory.Store
+	if deps.Postgres != nil {
+		baseMemory := memory.PGStore{Pool: deps.Postgres, MaxRecords: cfg.Memory.MaxRecords}
+		memoryStore = baseMemory
+		if e := cfg.Memory.Embedding; e.Enabled {
+			embeddingClient, err := providers.NewEmbeddingClient(e.BaseURL, e.APIKey, e.Timeout)
+			if err != nil {
+				return Profile{}, err
+			}
+			raw, _ := json.Marshal([]any{e.BaseURL, e.Model, e.Dimensions, e.Revision})
+			space := fmt.Sprintf("%x", sha256.Sum256(raw))
+			semantic := memory.SemanticStore{PGStore: baseMemory, Client: model.GovernEmbedder(embeddingClient, governor), Model: e.Model, Space: space, Dimensions: e.Dimensions, BatchSize: e.BatchSize, Timeout: e.Timeout}
+			semantic.Degraded = func(cause error) {
+				slog.Warn("semantic memory degraded to lexical retrieval", "error_type", fmt.Sprintf("%T", cause))
+				if deps.Metrics != nil {
+					deps.Metrics.Event("memory_semantic_fallback", nil)
+				}
+			}
+			if err := semantic.Validate(); err != nil {
+				return Profile{}, err
+			}
+			memoryStore = semantic
+		}
+		if err := catalog.Register(memorytools.Tool{Store: memoryStore}); err != nil {
+			return Profile{}, err
+		}
 	}
 	breakers := model.NewCircuitBreakers()
 	primaryObserved := model.Client(observedModel{Client: primary, Metrics: deps.Metrics})

@@ -112,37 +112,31 @@ ranking cache, automatic deletion, or synthetic embedding capability added.
 
 ## Handoff
 
-Working branch: feat/semantic-memory-retrieval. PRs #23–#28 are merged after
-CI and review; no deployment was performed. The next commit is the embedding
-transport/resource prerequisite, not an enabled semantic index. It adds a typed
-Embedder, strict bounded OpenAI-compatible HTTP adapter, and one shared attempt
-lifetime for generation/embedding admission, reservation, settlement and receipts.
-`make check` plus model/provider/runtime/hosted/delegation race suites passed.
+PRs #23–#28 and #30 are merged after CI/review. Native remote structured output
+now requires a matching native capability receipt; old optional-field-ignoring
+servers fail closed while retaining usage. PR #29 began as a published embedding
+resource prerequisite and now includes the real opt-in memory consumer, cache
+ownership, separate terminal embedding accounting, and paired deploy migration018.
+Do not merge it until final CI/review and migration parity are verified.
 
-Next implement opt-in, versioned semantic recall in the existing memory owner:
-- Reuse the bounded per-user PostgreSQL namespace rather than introduce another
-  search service. Measure exact vector retrieval before selecting a new index.
-- Bind cached vectors and claims to record version, reset generation, model
-  space/dimensions and authenticated identity. Update-only result CAS must never
-  resurrect deleted/reset records; expiry excludes vectors with their source.
-- Keep network I/O outside SQL transactions; short owner/lease claims prevent
-  duplicate concurrent indexing. Empty/unavailable caches retain lexical recall.
-- A model-space change must be explicit and fence old writers; no guessed aliases,
-  keyword semantic rules, automatic fact deletion or unmeasured default enablement.
-- Add the matching deploy migration and schema-parity tests before enabling it.
-- Validate zero lexical-overlap candidate retrieval with controlled vectors and
-  real PostgreSQL, distinguishing this from real-model relevance evaluation.
+Semantic milestone: real PostgreSQL controlled-vector tests cover zero lexical
+overlap, scope, source mutation/deletion/reset/expiry/model-space races, concurrent
+claims, no held SQL connection during model calls, fallback and claim cleanup.
+The native-array dot-product prototype measured 374.5–390.9 ms/query for 1000x1536;
+pgvector exact retrieval measured 18.9–20.0 ms in the same local benchmark. This
+justifies the extension, not an approximate index or another search service.
+Schema parity fresh/upgrade/replay passed using official pgvector v0.8.7 built
+against the isolated PG17.6 server. No actual model relevance claim; feature off.
 
-Follow up native structured remote requests with an explicit capability receipt
-so an older server ignoring the optional field cannot masquerade as native mode.
-Real-model comparison remains unavailable without a configured login/provider and
-public task containers. Keep every useful source milestone on GitHub before any
-quota wait. User requests a live loop waiting at <=5% remaining, ~30-minute checks,
-and automatic continuation only at 100%; do not spend reset credits or ask them
-to confirm continuation.
+Remaining: finish PR29/deploy publication/checks; inspect context/planning/durable
+recovery for demonstrated defects, then publish a final capability assessment.
+Live-model comparison is unavailable without a configured login/provider and
+public task containers. Do not fabricate parity/quality/HA measurements.
 
-Temporary integration stores are ours only: PostgreSQL on loopback 55437 under
-/tmp/kepler-review-postgres and Redis 7.4.7 on loopback 56379 under
-/tmp/kepler-capability-redis. Stop them before final handoff; never use deployment
-application databases for tests. Logs are /tmp/kepler-capability-integration.log
-and /tmp/kepler-capability-pg-tests.log. Full integration gate passed.
+User requests a live loop waiting at <=5% remaining with ~30-minute checks and
+automatic continuation after reset, without confirmation. Reset has been observed
+and work resumed; do not spend reset credits. Save all useful source/deploy changes
+to GitHub before waits. Temporary stores are ours only: PostgreSQL on loopback
+55437 under /tmp/kepler-review-postgres and Redis on56379 under
+/tmp/kepler-capability-redis. Stop them before final handoff. pgvector build lives
+in /tmp/kepler-capability-pgvector. Do not touch deployed application databases.

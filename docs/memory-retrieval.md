@@ -30,7 +30,7 @@ Hybrid 在数据库完整 namespace 内计算两条排名：Unicode trigram word
 用 reciprocal rank fusion 合并，默认 K=60，可在 Query 中调整；exact semantic_key 命中优先。
 同分按更新时间和稳定 key 排序。没有先截取最近 N 条，也没有英文关键词表决定相关性。
 
-这些是标准词法机制，不是 embedding semantic retrieval。
+默认配置使用标准词法机制；启用下述可选 embedding 适配器后，hybrid 会再融合一条精确向量排名。
 全文解析、trigram 与 rank fusion 的取舍需要使用实际任务样本验证，不能把任意非零 overlap 当成相关性证明。
 `packages/memory/testdata/retrieval.json` 和 PostgreSQL integration test 提供中英文正例、负例、lexical/hybrid 对照；
 它是小型确定性回归集，不是生产质量基准。新增业务样本时应记录期望 key、无关/冲突项与可接受时效。
@@ -39,7 +39,7 @@ Hybrid 在数据库完整 namespace 内计算两条排名：Unicode trigram word
 可以返回空数组。不存在的 key、重复 key、额外字段、未完成输出都拒绝；失败回退数据库排序。
 默认不开启，以免未经评测增加延迟和费用。默认输入最多 32 KiB、输出 512 tokens、最多 8 个 key，
 候选超预算时从尾部收缩；因此它也可能漏掉排名靠后的事实。**重排无法召回未进入候选池的零词法重叠记忆。**
-大规模语义召回需要独立的 embedding/index 生命周期、删除与权限协议，应在真实样本证明收益后实现。
+可选 embedding 召回能扩展零词法重叠的候选池；真实模型效果仍须按业务样本评测。
 
 参考：[PostgreSQL trigram](https://www.postgresql.org/docs/current/pgtrgm.html)、
 [全文搜索控制](https://www.postgresql.org/docs/current/textsearch-controls.html)、
@@ -77,3 +77,57 @@ Transcript、spills、备份和 traces 的保留策略仍独立；本变更没�
 回归检查 generation/version fence、无关 key 注入、偏好预算、序列化大小、ranker abstention、共享 turn 预算、
 scope map 不可覆盖、版本 CAS、expiry 保留/清除、quota 与 PostgreSQL 混合查询。
 真实模型的相关性、延迟和成本未在这些确定性测试中证明；保持语义重排默认关闭，按业务样本评估后再启用。
+
+
+## 可选语义候选召回
+
+仅 hosted 自动 hybrid recall 使用 SemanticStore；普通列表、模型 memory 工具和最终 exact-key fence
+沿用 PGStore，不增加模型调用。所有资料仍在原 `(team_id,user_id,generation)` 下；preference 不向量化。
+向量是来源记录的派生缓存，绑定不可复用的 version 和 embedding space；更新即失效，删除/过期/reset
+直接移除或排除来源，不另建可能遗漏删除的搜索副本。
+
+显式启用配置：
+
+| 配置 | 默认 | 作用 |
+| --- | --- | --- |
+| MEMORY_EMBEDDING_ENABLED | false | 启用语义候选召回 |
+| MEMORY_EMBEDDING_BASE_URL | 空 | 独立 OpenAI-compatible embeddings API base URL |
+| MEMORY_EMBEDDING_API_KEY | 空 | 独立凭据；不借用聊天模型或订阅登录 |
+| MEMORY_EMBEDDING_MODEL | 空 | 必须明确指定的 embedding model |
+| MEMORY_EMBEDDING_DIMENSIONS | 0 | 启用时必须指定 1..16000，提供方也必须支持 |
+| MEMORY_EMBEDDING_REVISION | 空 | 必填的模型版本标识；同名模型升级必须改变此值 |
+| MEMORY_EMBEDDING_BATCH_SIZE | 16 | 每次 recall 最多补齐 1..100 条失效缓存 |
+| MEMORY_EMBEDDING_TIMEOUT | 10s | 每次 embedding 调用上限，不能超过 recall 总预算 |
+
+模型 space 是 endpoint/model/dimensions/revision 的 SHA-256，不包含凭据。首次使用为 namespace
+绑定 space，后续配置不一致时回退词法并报告 `memory_semantic_fallback`，不会轮流清空缓存。
+切换需运维明确调用 `SemanticStore.SwitchSpace(ctx, identity, expectedSpace)`，其 expectedSpace CAS
+在同一 generation 锁内更换 anchor、清除派生值与旧 claim；事实和版本不变。这是嵌入 profile 的 Go
+运维接口，尚无用户界面或公开 HTTP 管理接口；不能通过模型工具切换。
+
+冷缓存每次最多一批后台类别的 embedding 调用，随后一次交互类别的 query embedding；暖缓存仅后者。
+这些调用与父 turn 共用 Governor、token allowance、逐次 durable usage receipts，不自动重试未知费用的调用。
+同一 turn 的 `EmbeddingUsage` 单独汇总并持久化，重放不再调用模型；不套用 generation 模型的美元单价。
+未报告的用量仍未知，预算保守扣 reservation，不能将其解释为免费。输入按序列化 UTF-8 字节估算，
+不是提供方 tokenizer 的精确计量。索引可以按读取逐批收敛，没有额外队列或自治后台服务；冷启动延迟要单独测量。
+
+短 SQL claim 使用 owner/lease 和 SKIP LOCKED，释放连接后才调用模型。批次向量整体校验后，
+每条只允许 UPDATE 原来源版本，检查 owner、lease、generation、space 和 expiry；旧结果不能 INSERT 重建事实。
+网络失败、预算不足或索引失败回退词法并记录有界事件/错误类型，不记录私有文本或远端错误 body。
+整体 recall timeout/取消仍由已有 PrepareContext 处理。
+
+数据库须先安装 pgvector，再应用 deploy `018_memory_embeddings.sql`，最后升级服务并按样本启用。
+CI 和本地依赖镜像固定 pgvector 0.8.7 / PostgreSQL 17 的多架构 digest；外部 PostgreSQL 运维需自行安装扩展。
+普通 lexical/hybrid 代码不引用新增 embedding 列，因此禁用语义能力的旧 schema 仍可运行；canonical schema
+和语义功能均要求新迁移。没有启动时 DDL，也不自动修改生产数据库。
+
+使用 pgvector exact inner product，向量写入前归一化，与 cosine 排名等价；没有近似索引的过滤/召回损失。
+选择依据是实际原型对照：M1 Pro、PostgreSQL 17.6、pgvector 0.8.7、1,000 条 × 1,536 维、每次 32 候选，
+同一基准三组各 3 次，SQL 数组展开求积 374.5–390.9 ms/query，pgvector 18.9–20.0 ms/query。
+仅测本地热 SQL 路径，不包含模型/网络/多租户负载，不代表生产 P95 或任务质量；更大 namespace 需要再评测。
+复现：`POSTGRES_TEST_DSN=... go test ./packages/memory -run '^$' -bench BenchmarkSemanticNamespace -benchtime=3x -count=3`。
+
+真实 PostgreSQL + 受控向量测试覆盖零词法重叠、跨用户隔离、并发抢占、连接释放、来源更新、删除重建、
+reset、expiry、space 切换、失败清理及词法回退。真实 embedding 模型的相关性提升尚未测得，因此默认关闭。
+参考 [pgvector 官方说明](https://github.com/pgvector/pgvector) 与
+[OpenAI embeddings](https://developers.openai.com/api/docs/guides/embeddings)。

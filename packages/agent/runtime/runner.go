@@ -360,11 +360,13 @@ func completedTurn(events []transcript.Event, turnID string) (TurnResult, error,
 		return TurnResult{}, nil, false
 	}
 	var final struct {
-		Steps int          `json:"steps"`
-		Usage *model.Usage `json:"usage"`
+		Steps          int          `json:"steps"`
+		Usage          *model.Usage `json:"usage"`
+		EmbeddingUsage model.Usage  `json:"embedding_usage"`
 	}
 	if json.Unmarshal(terminal.Metadata, &final) == nil {
 		result.Steps = final.Steps
+		result.EmbeddingUsage = final.EmbeddingUsage
 		if final.Usage != nil {
 			result.Usage = *final.Usage
 		}
@@ -616,6 +618,28 @@ func (r *Runtime) finishTurn(ctx context.Context, result TurnResult, message mod
 	}
 	cleanupCtx, cancel := r.cleanupContext(ctx)
 	defer cancel()
+	// Derive auxiliary usage from canonical receipts, including calls before a
+	// recovered turn. Never apply generation model price rates to embeddings.
+	result.EmbeddingUsage = model.Usage{}
+	events, loadErr := r.turnEvents(cleanupCtx, result.SessionID)
+	if loadErr != nil && err == nil {
+		err = loadErr
+	}
+	for _, event := range events {
+		if event.TurnID != result.TurnID || event.Type != transcript.ModelUsageSettled {
+			continue
+		}
+		var receipt model.AttemptUsage
+		if decodeErr := json.Unmarshal(event.Metadata, &receipt); decodeErr != nil {
+			if err == nil {
+				err = decodeErr
+			}
+			continue
+		}
+		if receipt.Operation == "embedding" {
+			addUsage(&result.EmbeddingUsage, receipt.Usage)
+		}
+	}
 	result.Message = message
 	result.Termination = reason
 	if result.Steps > 0 {
@@ -632,8 +656,9 @@ func (r *Runtime) finishTurn(ctx context.Context, result TurnResult, message mod
 		eventType = transcript.TurnCanceled
 	}
 	metadata, _ := json.Marshal(map[string]any{
-		"steps": result.Steps,
-		"usage": result.Usage,
+		"steps":           result.Steps,
+		"usage":           result.Usage,
+		"embedding_usage": result.EmbeddingUsage,
 	})
 	event := transcript.Event{SessionID: result.SessionID, TurnID: result.TurnID, Type: eventType, Status: status, Metadata: metadata}
 	if err != nil {

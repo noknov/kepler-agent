@@ -67,6 +67,7 @@ inconsistent/non-finite/zero vectors. Missing usage remains unknown. Errors do
 not include input text or upstream bodies. This contract does not infer embedding
 support from a chat model or borrow subscription credentials.
 
-This is the transport/resource prerequisite for the active semantic-memory plan;
-it does not by itself create an index or enable semantic recall. Reference:
+The hosted opt-in [semantic memory adapter](memory-retrieval.md#可选语义候选召回)
+uses this boundary. Runtime persists separate embedding usage in terminal results
+and replay, without charging generation dollar rates for a different model. Reference:
 [embedding API](https://developers.openai.com/api/docs/guides/embeddings).

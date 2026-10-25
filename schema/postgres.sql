@@ -313,3 +313,13 @@ CREATE INDEX IF NOT EXISTS idx_oauth_states_expires
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX IF NOT EXISTS idx_user_memories_text_search
     ON user_memories USING gist ((lower(semantic_key || ' ' || content)) gist_trgm_ops);
+
+-- Optional semantic-memory cache. Source rows and their reset generation own
+-- lifetime; these columns never create another authoritative fact store.
+CREATE EXTENSION IF NOT EXISTS vector;
+ALTER TABLE user_memory_generations ADD COLUMN IF NOT EXISTS embedding_space TEXT NOT NULL DEFAULT '';
+ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS embedding_space TEXT NOT NULL DEFAULT '';
+ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS embedding_version BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS embedding_vector vector;
+ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS embedding_claim_owner TEXT NOT NULL DEFAULT '';
+ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS embedding_claim_until TIMESTAMPTZ;
