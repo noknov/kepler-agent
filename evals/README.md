@@ -494,3 +494,27 @@ experience, compare the existing `slack.reply` trace's `queue_wait_ms`,
 Use the [Slack quality criteria](../docs/harness-alignment.md#slack-quality-criteria)
 to distinguish product reliability from live-model task quality and production
 latency. Each needs its own evidence before making a release decision.
+
+## Validating release evidence
+
+The local gate validates both current and baseline artifact sets before applying
+thresholds. Each set must include a completed non-dry run, matching evaluation
+identity, a unique complete case plan, raw records covering every planned
+candidate/task/repetition exactly once, successful agent/grader exits for passed
+cases, positive finite weights, and finite measured durations. It recomputes
+outcome/weight/latency summaries from raw records through the same pure scoring
+module as the runner. Missing candidates, duplicate cases, fabricated P95,
+invalid baselines and dry-run records cannot qualify as evidence. Latency
+thresholds require measured samples; version preflight failures do not acquire
+invented timing values. `duration_samples` records the latency denominator.
+
+Evaluation identity v2 includes fixture content, executable modes and internal
+symlink targets, rather than only the suite document referring to them. Fixture
+links escaping their tree are rejected. Regenerate actual runs after changing
+fixtures; do not refresh an old baseline summary to make it compatible.
+
+These checks establish internal consistency of locally supplied artifacts, not
+an authenticity signature or proof that a selected grader measures the product
+adequately. Raw records and manifests can still be edited by their owner. Public
+Harbor/AppWorld datasets retain their native graders and separate result formats.
+A passing wiring control is not a Kepler/Codex quality comparison.

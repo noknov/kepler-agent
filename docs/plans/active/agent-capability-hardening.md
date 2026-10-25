@@ -22,7 +22,7 @@ measured runs; deterministic tests cannot substitute for them.
   no unvalidated output publication, and an existing production consumer.
 - [x] MCP: verify negotiated versions and RPC response identity, bounded discovery
   and incremental SSE reading; preserve uncertain-write behavior and credentials.
-- [ ] Evaluation: reject incompatible/incomplete evidence, validate baselines and
+- [x] Evaluation: reject incompatible/incomplete evidence, validate baselines and
   raw records, preserve failures, and record attributable task-level outcomes.
 - [x] Delegation/A2A: retain generic local task ownership; design a remote adapter
   around an actual protocol binding, authentication, cancellation, bounded results,
@@ -83,6 +83,16 @@ No Docker CLI, existing Kepler login, operator ChatGPT session, or system psql
 is available on this machine; real-model/public benchmark runs need those inputs.
 MCP review reproduced and fixed empty SSE priming and null/non-object results;
 the regression failed before the fix and passed after it.
+
+Evaluation milestone: share pure aggregation; verify complete planned coverage,
+finite raw weights/timings, grader exits, full recomputed outcomes/latency and
+both baseline/current artifacts. Fixture content/modes/internal links now bind
+comparison identity. New adversarial evidence tests plus the evaluator suite
+passed (39 tests at this milestone). A real no-op grader control executed all
+three synthetic fixtures: all failed, complete evidence validated, and the 100%
+quality gate correctly rejected it. Artifacts remain in deploy/.cache/evidence-
+wiring-control-20261026 and are explicitly not model-quality results.
+`make check` passed. No live-agent quality claim.
 
 ## Handoff
 
