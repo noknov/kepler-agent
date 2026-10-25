@@ -105,6 +105,24 @@ func TestRemoteTaskOwnershipAndExplicitLifecycle(t *testing.T) {
 			t.Fatal("read/write scheduling contract changed")
 		}
 	}
+	// Local CLI sessions intentionally have no synthetic end-user ID. Their
+	// canonical session and exact (empty) actor remain the ownership boundary.
+	local := call
+	local.ID = "local-call"
+	local.Scope.UserID = ""
+	local.Scope.SessionID = "local-session"
+	localResult, err := item.Execute(context.Background(), local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(context.Background(), transcript.Event{ID: "local-result", SessionID: local.Scope.SessionID, Type: transcript.ToolCallCompleted, ToolCall: &local, ToolResult: &localResult}); err != nil {
+		t.Fatal(err)
+	}
+	local.Arguments = json.RawMessage(`{"operation":"get","task_id":"remote-1"}`)
+	if _, err := item.Execute(context.Background(), local); err != nil {
+		t.Fatal(err)
+	}
+
 }
 
 func TestPeerTransportRejectsRedirectsAndOversizedResponses(t *testing.T) {

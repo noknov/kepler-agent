@@ -125,8 +125,8 @@ func (t *Tool) Execute(ctx context.Context, call tool.Call) (tool.Result, error)
 	if decoder.Decode(&args) != nil || decoder.Decode(new(any)) != io.EOF {
 		return tool.Result{}, fmt.Errorf("invalid A2A arguments")
 	}
-	if call.Scope.SessionID == "" || call.Scope.UserID == "" || call.ID == "" {
-		return tool.Result{}, fmt.Errorf("A2A requires an owned session, actor and call ID")
+	if call.Scope.SessionID == "" || call.ID == "" {
+		return tool.Result{}, fmt.Errorf("A2A requires an owned session and call ID")
 	}
 	ref := reference{Target: t.version}
 	if args.TaskID != "" {
