@@ -44,9 +44,18 @@ type WebConfig struct {
 // StorageConfig owns all durable operational state for sessions, runs, inbox,
 // and event delivery.
 type MemoryConfig struct {
+	Embedding  EmbeddingConfig
 	MaxRecords int
 	Rerank     bool
 	Timeout    time.Duration
+}
+
+// EmbeddingConfig is opt-in and independent of generation credentials.
+type EmbeddingConfig struct {
+	Enabled                          bool
+	BaseURL, APIKey, Model, Revision string
+	Dimensions, BatchSize            int
+	Timeout                          time.Duration
 }
 
 type StorageConfig struct {
@@ -323,7 +332,11 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 	}
 
 	cfg := Config{
-		Memory: MemoryConfig{MaxRecords: envInt("MEMORY_MAX_RECORDS", 1000), Rerank: envBool("MEMORY_RERANK", false), Timeout: envDuration("MEMORY_RECALL_TIMEOUT", 30*time.Second)},
+		Memory: MemoryConfig{Embedding: EmbeddingConfig{
+			Enabled: envBool("MEMORY_EMBEDDING_ENABLED", false), BaseURL: trimRightSlash(os.Getenv("MEMORY_EMBEDDING_BASE_URL")),
+			APIKey: os.Getenv("MEMORY_EMBEDDING_API_KEY"), Model: os.Getenv("MEMORY_EMBEDDING_MODEL"), Revision: os.Getenv("MEMORY_EMBEDDING_REVISION"),
+			Dimensions: envInt("MEMORY_EMBEDDING_DIMENSIONS", 0), BatchSize: envInt("MEMORY_EMBEDDING_BATCH_SIZE", 16), Timeout: envDuration("MEMORY_EMBEDDING_TIMEOUT", 10*time.Second),
+		}, MaxRecords: envInt("MEMORY_MAX_RECORDS", 1000), Rerank: envBool("MEMORY_RERANK", false), Timeout: envDuration("MEMORY_RECALL_TIMEOUT", 30*time.Second)},
 		HTTP: HTTPConfig{
 			Addr:                env("HTTP_ADDR", ":8080"),
 			EventWorkers:        envInt("SLACK_EVENT_WORKERS", 8),
@@ -536,6 +549,9 @@ func dotenvPath(profile RuntimeProfile) string {
 func validateForProfile(cfg Config, profile RuntimeProfile) (Config, error) {
 	if cfg.Memory.MaxRecords < 1 || cfg.Memory.Timeout <= 0 {
 		return Config{}, fmt.Errorf("memory max records and recall timeout must be positive")
+	}
+	if e := cfg.Memory.Embedding; e.Enabled && (strings.TrimSpace(e.BaseURL) == "" || strings.TrimSpace(e.Model) == "" || strings.TrimSpace(e.Revision) == "" || e.Dimensions < 1 || e.Dimensions > 16000 || e.BatchSize < 1 || e.BatchSize > 100 || e.Timeout <= 0 || e.Timeout > cfg.Memory.Timeout) {
+		return cfg, fmt.Errorf("enabled memory embeddings require an endpoint, model, revision, dimensions 1..16000, batch 1..100 and positive timeout within recall timeout")
 	}
 	if cfg.Tools.AgentMaxTotalTokens < 0 {
 		return cfg, fmt.Errorf("AGENT_MAX_TOTAL_TOKENS cannot be negative")

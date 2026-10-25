@@ -112,11 +112,31 @@ ranking cache, automatic deletion, or synthetic embedding capability added.
 
 ## Handoff
 
-Working branch: feat/operational-metrics, stacked on #26. PRs #23–#26 are
-merged after CI and review. Metrics full checks, race suites and real PG/Redis
-`make integration-check` passed (isolated loopback PG17 and Redis7 fixtures).
-Next publish metrics, then resolve the remaining retrieval/context audit with
-actual regression evidence and an explicit decision on unmeasured features.
-Real-model comparison is unavailable without a configured login/provider and
-public task containers; do not invent a quality result or deploy services.
-Keep all completed source changes on GitHub for device handoff.
+PRs #23–#28 and #30 are merged after CI/review. Native remote structured output
+now requires a matching native capability receipt; old optional-field-ignoring
+servers fail closed while retaining usage. PR #29 began as a published embedding
+resource prerequisite and now includes the real opt-in memory consumer, cache
+ownership, separate terminal embedding accounting, and paired deploy migration018.
+Do not merge it until final CI/review and migration parity are verified.
+
+Semantic milestone: real PostgreSQL controlled-vector tests cover zero lexical
+overlap, scope, source mutation/deletion/reset/expiry/model-space races, concurrent
+claims, no held SQL connection during model calls, fallback and claim cleanup.
+The native-array dot-product prototype measured 374.5–390.9 ms/query for 1000x1536;
+pgvector exact retrieval measured 18.9–20.0 ms in the same local benchmark. This
+justifies the extension, not an approximate index or another search service.
+Schema parity fresh/upgrade/replay passed using official pgvector v0.8.7 built
+against the isolated PG17.6 server. No actual model relevance claim; feature off.
+
+Remaining: finish PR29/deploy publication/checks; inspect context/planning/durable
+recovery for demonstrated defects, then publish a final capability assessment.
+Live-model comparison is unavailable without a configured login/provider and
+public task containers. Do not fabricate parity/quality/HA measurements.
+
+User requests a live loop waiting at <=5% remaining with ~30-minute checks and
+automatic continuation after reset, without confirmation. Reset has been observed
+and work resumed; do not spend reset credits. Save all useful source/deploy changes
+to GitHub before waits. Temporary stores are ours only: PostgreSQL on loopback
+55437 under /tmp/kepler-review-postgres and Redis on56379 under
+/tmp/kepler-capability-redis. Stop them before final handoff. pgvector build lives
+in /tmp/kepler-capability-pgvector. Do not touch deployed application databases.

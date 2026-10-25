@@ -49,3 +49,25 @@ Context reader 与 child reader 共用 transcript.ToolEvidence，统一字节限
 覆盖多 owner/class 排队、满队列、取消回收、退避释放槽、失败已知/未知 usage、重试预算耗尽、
 父 owner 继承、durable receipt、child ancestry、跨会话拒绝和有限终态。
 这些测试不等同生产负载或多 agent 效果评测。
+
+## Embedding attempt boundary
+
+`model.Embedder` has a separate typed vector contract. `GovernEmbedder` uses the
+same admission, parent/worker token ledger and durable attempt recorder as
+`Generate`; one raw embedding invocation creates one `operation=embedding`
+receipt. Known input usage settles its reservation; unknown failures retain it.
+Queued cancellation cannot bypass generation concurrency or spend another
+worker's allowance. Token estimates remain estimates, not provider billing.
+
+The OpenAI-compatible provider adapter requires an explicit HTTPS endpoint
+(loopback HTTP is allowed), model and positive request timeout. It performs one
+request, refuses redirects, bounds response bytes and dimensions, preserves
+provider index order and reported usage, and rejects incomplete/duplicate indices,
+inconsistent/non-finite/zero vectors. Missing usage remains unknown. Errors do
+not include input text or upstream bodies. This contract does not infer embedding
+support from a chat model or borrow subscription credentials.
+
+The hosted opt-in [semantic memory adapter](memory-retrieval.md#可选语义候选召回)
+uses this boundary. Runtime persists separate embedding usage in terminal results
+and replay, without charging generation dollar rates for a different model. Reference:
+[embedding API](https://developers.openai.com/api/docs/guides/embeddings).

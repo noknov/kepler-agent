@@ -37,3 +37,34 @@ func TestRuntimePersistsEachActualAttemptUsage(t *testing.T) {
 		t.Fatalf("usage receipts=%d", count)
 	}
 }
+
+type fixtureEmbedder struct{}
+
+func (fixtureEmbedder) Embed(context.Context, model.EmbeddingRequest) (model.EmbeddingResponse, error) {
+	return model.EmbeddingResponse{Vectors: [][]float64{{1, 0}}, Usage: model.Usage{Reported: true, InputTokens: 7}}, nil
+}
+func TestEmbeddingUsageIsSeparateAndSurvivesReplay(t *testing.T) {
+	store := transcript.NewMemoryStore()
+	catalog, _ := tool.NewCatalog()
+	raw := &scriptedModel{responses: []model.Response{{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop, Usage: model.Usage{Reported: true, InputTokens: 3}}}}
+	runner, err := New(Config{MaxTotalTokens: 10000}, Dependencies{Model: raw, Tools: catalog, Transcript: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := TurnRequest{SessionID: "embedding-ledger", TurnID: "turn", Input: model.TextMessage(model.RoleUser, "hi"), PrepareContext: func(ctx context.Context, _ tool.Scope) (PreparedContext, error) {
+		_, err := model.GovernEmbedder(fixtureEmbedder{}, nil).Embed(ctx, model.EmbeddingRequest{Model: "embedding-model", Input: []string{"hi"}, InputTokenEstimate: 10})
+		return PreparedContext{}, err
+	}}
+	result, err := runner.RunTurn(context.Background(), request)
+	if err != nil || result.Usage.InputTokens != 3 || result.EmbeddingUsage.InputTokens != 7 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	request.PrepareContext = func(context.Context, tool.Scope) (PreparedContext, error) {
+		t.Fatal("replay called embeddings")
+		return PreparedContext{}, nil
+	}
+	replay, err := runner.RunTurn(context.Background(), request)
+	if err != nil || replay.Usage != result.Usage || replay.EmbeddingUsage != result.EmbeddingUsage {
+		t.Fatalf("replay=%+v err=%v", replay, err)
+	}
+}

@@ -953,3 +953,26 @@ func TestQoderUsesPATAndNativeProtocol(t *testing.T) {
 		t.Fatal("guessed a Qoder model")
 	}
 }
+
+func TestEmbeddingConfigurationIsExplicit(t *testing.T) {
+	resetConfigEnv(t)
+	t.Setenv("MEMORY_EMBEDDING_ENABLED", "true")
+	if _, err := LoadFor(ProfileCLI); err == nil {
+		t.Fatal("accepted enabled embedding without configuration")
+	}
+	t.Setenv("MEMORY_EMBEDDING_BASE_URL", "https://embedding.example/v1")
+	t.Setenv("MEMORY_EMBEDDING_MODEL", "explicit-model")
+	t.Setenv("MEMORY_EMBEDDING_REVISION", "2026-10")
+	t.Setenv("MEMORY_EMBEDDING_DIMENSIONS", "1536")
+	cfg, err := LoadFor(ProfileCLI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Memory.Embedding.APIKey != "" || cfg.Memory.Embedding.BatchSize != 16 {
+		t.Fatal("implicit credentials or invalid defaults")
+	}
+	t.Setenv("MEMORY_EMBEDDING_TIMEOUT", "1h")
+	if _, err = LoadFor(ProfileCLI); err == nil {
+		t.Fatal("accepted timeout exceeding recall budget")
+	}
+}
