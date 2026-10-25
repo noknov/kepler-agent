@@ -119,7 +119,8 @@ scope map 不可覆盖、版本 CAS、expiry 保留/清除、quota 与 PostgreSQ
 数据库须先安装 pgvector，再应用 deploy `018_memory_embeddings.sql`，最后升级服务并按样本启用。
 CI 和本地依赖镜像固定 pgvector 0.8.7 / PostgreSQL 17 的多架构 digest；外部 PostgreSQL 运维需自行安装扩展。
 普通 lexical/hybrid 代码不引用新增 embedding 列，因此禁用语义能力的旧 schema 仍可运行；canonical schema
-和语义功能均要求新迁移。没有启动时 DDL，也不自动修改生产数据库。
+和语义功能均要求新迁移。启用时 worker 启动以有界只读查询核对扩展/列类型；缺迁移时直接报错，不能每次请求都静默降级。
+非法布尔值、整数或时长在配置装载时拒绝，不会悄悄使用默认值。没有启动时 DDL，也不自动修改生产数据库。
 
 使用 pgvector exact inner product，向量写入前归一化，与 cosine 排名等价；没有近似索引的过滤/召回损失。
 选择依据是实际原型对照：M1 Pro、PostgreSQL 17.6、pgvector 0.8.7、1,000 条 × 1,536 维、每次 32 候选，
