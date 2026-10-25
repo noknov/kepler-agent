@@ -8,6 +8,7 @@ require (
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/redis/go-redis/v9 v9.21.0
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	go.opentelemetry.io/otel v1.45.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.45.0
 	go.opentelemetry.io/otel/sdk v1.45.0

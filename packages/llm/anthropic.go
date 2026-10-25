@@ -43,6 +43,9 @@ func (c *AnthropicClient) Chat(ctx context.Context, req Request) (Response, erro
 		Temperature: req.Temperature,
 		Thinking:    anthropicThinkingParam(req.Thinking),
 	}
+	if req.OutputFormat != nil {
+		body.OutputConfig = map[string]any{"format": map[string]any{"type": "json_schema", "schema": req.OutputFormat.Schema}}
+	}
 	if len(body.Tools) == 0 {
 		body.Tools = nil
 	} else if req.ToolChoice != "" {
@@ -112,6 +115,9 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 		Temperature: req.Temperature,
 		Stream:      true,
 		Thinking:    anthropicThinkingParam(req.Thinking),
+	}
+	if req.OutputFormat != nil {
+		body.OutputConfig = map[string]any{"format": map[string]any{"type": "json_schema", "schema": req.OutputFormat.Schema}}
 	}
 	if len(body.Tools) == 0 {
 		body.Tools = nil
@@ -335,15 +341,16 @@ func (c *AnthropicClient) doOnce(ctx context.Context, payload []byte) ([]byte, e
 }
 
 type anthropicRequest struct {
-	Model       string             `json:"model"`
-	System      any                `json:"system,omitempty"`
-	Messages    []anthropicMessage `json:"messages"`
-	Tools       []anthropicTool    `json:"tools,omitempty"`
-	ToolChoice  any                `json:"tool_choice,omitempty"`
-	MaxTokens   int                `json:"max_tokens,omitempty"`
-	Temperature *float64           `json:"temperature,omitempty"`
-	Stream      bool               `json:"stream,omitempty"`
-	Thinking    *anthropicThinking `json:"thinking,omitempty"`
+	OutputConfig any                `json:"output_config,omitempty"`
+	Model        string             `json:"model"`
+	System       any                `json:"system,omitempty"`
+	Messages     []anthropicMessage `json:"messages"`
+	Tools        []anthropicTool    `json:"tools,omitempty"`
+	ToolChoice   any                `json:"tool_choice,omitempty"`
+	MaxTokens    int                `json:"max_tokens,omitempty"`
+	Temperature  *float64           `json:"temperature,omitempty"`
+	Stream       bool               `json:"stream,omitempty"`
+	Thinking     *anthropicThinking `json:"thinking,omitempty"`
 }
 
 type anthropicThinking struct {

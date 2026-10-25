@@ -55,7 +55,10 @@ func (r ModelRanker) Rank(ctx context.Context, query string, records []Record) (
 	if r.CountTokens != nil {
 		estimate = r.CountTokens(messages)
 	}
-	response, err := model.Govern(r.Client, r.Governor).Generate(ctx, model.Request{Model: r.Model, Messages: messages, MaxOutputTokens: 512, InputTokenEstimate: estimate}, nil)
+	response, err := model.Govern(r.Client, r.Governor).Generate(ctx, model.Request{Model: r.Model, OutputFormat: &model.OutputFormat{
+		Name: "memory_selection", Mode: model.OutputValidated,
+		Schema: json.RawMessage(`{"type":"object","properties":{"keys":{"type":"array","items":{"type":"string"}}},"required":["keys"],"additionalProperties":false}`),
+	}, Messages: messages, MaxOutputTokens: 512, InputTokenEstimate: estimate}, nil)
 	if err != nil {
 		return nil, err
 	}

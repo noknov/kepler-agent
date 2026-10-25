@@ -288,6 +288,9 @@ func (c *OpenAIResponsesClient) responsesBody(req Request, stream bool) map[stri
 		"model": req.Model,
 		"input": responsesInput(req.Messages),
 	}
+	if req.OutputFormat != nil {
+		body["text"] = map[string]any{"format": map[string]any{"type": "json_schema", "name": req.OutputFormat.Name, "schema": req.OutputFormat.Schema, "strict": true}}
+	}
 	// OpenCode Go's Responses-backed reasoning models reject sampling
 	// temperature. Keep that provider-specific constraint at the wire
 	// boundary instead of making every caller know the upstream quirk.

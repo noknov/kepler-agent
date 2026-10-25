@@ -196,7 +196,26 @@ type ToolDefinition struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 }
 
+// OutputMode chooses an explicit contract; validation never silently upgrades
+// into provider-native support or downgrades a rejected native request.
+type OutputMode string
+
+const (
+	OutputNative    OutputMode = "native"
+	OutputValidated OutputMode = "validated"
+)
+
+// OutputFormat constrains a completed, tool-free model response. Native (the
+// default) requests provider-side constraints; validated checks the result only.
+// Schemas must be self-contained. Their vocabulary is not rewritten.
+type OutputFormat struct {
+	Name   string          `json:"name"`
+	Schema json.RawMessage `json:"schema"`
+	Mode   OutputMode      `json:"mode,omitempty"`
+}
+
 type Request struct {
+	OutputFormat       *OutputFormat     `json:"output_format,omitempty"`
 	Operation          string            `json:"operation,omitempty"`
 	InputTokenEstimate int               `json:"-"`
 	Model              string            `json:"model"`

@@ -132,10 +132,17 @@ type ToolSpecFunction struct {
 	Parameters  map[string]any `json:"parameters"`
 }
 
+// OutputFormat is the wire-neutral native output constraint, not a tool schema.
+type OutputFormat struct {
+	Name   string
+	Schema json.RawMessage
+}
+
 type Request struct {
-	Model    string
-	Messages []Message
-	Tools    []ToolSpec
+	OutputFormat *OutputFormat
+	Model        string
+	Messages     []Message
+	Tools        []ToolSpec
 	// Metadata carries transport-only request context. It is not serialized
 	// into the provider request body.
 	Metadata map[string]string

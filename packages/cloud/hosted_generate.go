@@ -71,16 +71,19 @@ func HandleHostedGenerate(client model.Client, policy HostedGeneratePolicy) http
 			return nil
 		})
 		if err != nil {
+			// Failure can still incur provider usage. Keep it across the remote model
+			// boundary without returning incomplete/private completion content.
+			accounting := &model.Response{ID: response.ID, FinishReason: response.FinishReason, Usage: response.Usage}
 			slog.Warn("hosted model request failed", "request_id", request.Metadata["request_id"],
 				"model", request.Model, "error_kind", model.ErrorKindOf(err),
 				"error_type", fmt.Sprintf("%T", err),
 				"transport_eof", errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF))
 			var modelErr *model.Error
 			if errors.As(err, &modelErr) {
-				_ = writeLine(providers.HostedStreamLine{Kind: "error", Error: modelErr})
+				_ = writeLine(providers.HostedStreamLine{Kind: "error", Response: accounting, Error: modelErr})
 				return
 			}
-			_ = writeLine(providers.HostedStreamLine{Kind: "error", Error: &model.Error{
+			_ = writeLine(providers.HostedStreamLine{Kind: "error", Response: accounting, Error: &model.Error{
 				Kind:    model.ErrorUnknown,
 				Message: err.Error(),
 			}})
