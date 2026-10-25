@@ -112,7 +112,7 @@ ranking cache, automatic deletion, or synthetic embedding capability added.
 
 ## Handoff
 
-PRs #23–#30 and deploy #3 are merged after CI/review. Native remote structured output
+PRs #23–#31 and deploy #3 are merged after CI/review. Native remote structured output
 now requires a matching native capability receipt; old optional-field-ignoring
 servers fail closed while retaining usage. PR #29 began as a published embedding
 resource prerequisite and now includes the real opt-in memory consumer, cache
@@ -128,16 +128,27 @@ justifies the extension, not an approximate index or another search service.
 Schema parity fresh/upgrade/replay passed using official pgvector v0.8.7 built
 against the isolated PG17.6 server. No actual model relevance claim; feature off.
 
-Web recovery milestone in progress: reproduced premature acknowledgement on
+Web recovery milestone merged (#31): reproduced premature acknowledgement on
 transient conversation/approval storage errors and missing terminal persistence.
 Added a single claim cleanup/transfer owner, terminal-before-ack rejections, replay
 acknowledgement and no-claim capacity admission. Real PostgreSQL regression
 confirms input survives the transient error and permanent rejection has a durable
 terminal. Full worker capacity previously consumed queue attempts without work;
-its regression failed before the admission fix. Finish checks/publication/review.
+its regression failed before the admission fix. CI and affected race checks passed.
 
-Remaining: finish Web recovery PR, audit opt-in configuration/startup diagnostics,
-then publish the requested capability assessment against the verified source.
+Opt-in validation PR32 rejects malformed memory settings and checks semantic
+schema during worker startup. Local affected race tests and make check passed;
+await exact-head CI/review before merge.
+
+Drain milestone: the old Web idle check returned before queue finalization and
+worker shutdown entered an unlimited Wait after its grace deadline. Replace the
+WaitGroup/poll split with one in-flight lifetime and idle notification; Drain
+fences admission under the same lock. Slack/Web share a grace context; expiration
+cancels work without an unlimited Web wait. Actual store/HTTP/telemetry cleanup
+and container hard-stop remain separate bounds. Finish checks/publication/review.
+
+Remaining: finish PR32 and drain PR, then publish the requested capability
+assessment against the verified source.
 Live-model comparison is unavailable without a configured login/provider and
 public task containers. Do not fabricate parity/quality/HA measurements.
 

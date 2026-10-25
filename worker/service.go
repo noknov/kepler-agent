@@ -534,22 +534,23 @@ func (s *Service) RunUntilDone(ctx context.Context) error {
 	case runErr = <-s.serveErr:
 	}
 	s.draining.Store(true)
-	if !s.waitEvents(s.cfg.HTTP.ShutdownTimeout) {
+	if s.webConversations != nil {
+		s.webConversations.Drain()
+	}
+	// All ingress surfaces share one grace deadline. Exhaustion cancels service
+	// work; queue owners retain their existing bounded terminal/claim cleanup.
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), s.cfg.HTTP.ShutdownTimeout)
+	defer drainCancel()
+	if !s.waitEvents(drainCtx) {
 		log.Printf("shutdown: timed out waiting for in-flight Slack events")
 	}
-	if s.webConversations != nil {
-		drainCtx, drainCancel := context.WithTimeout(context.Background(), s.cfg.HTTP.ShutdownTimeout)
-		if !s.webConversations.WaitContext(drainCtx) {
-			log.Printf("shutdown: timed out waiting for in-flight Web turns")
-		}
-		drainCancel()
+	if s.webConversations != nil && !s.webConversations.WaitContext(drainCtx) {
+		log.Printf("shutdown: timed out waiting for in-flight Web turns")
 	}
 	if s.cancel != nil {
 		s.cancel()
 	}
-	if s.webConversations != nil {
-		s.webConversations.Wait()
-	}
+
 	return runErr
 }
 
@@ -627,6 +628,9 @@ func (s *Service) handleDrain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.draining.Store(true)
+	if s.webConversations != nil {
+		s.webConversations.Drain()
+	}
 	_, _ = w.Write([]byte("draining"))
 }
 
@@ -637,7 +641,14 @@ func (s *Service) Close() {
 	if s.cancel != nil {
 		s.cancel()
 	}
-	s.Wait(5 * time.Second)
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// Web owns a separate execution/finalization lifetime from service goroutines.
+	// Keep its stores alive during the same bounded post-cancellation cleanup.
+	if s.webConversations != nil {
+		s.webConversations.WaitContext(cleanupCtx)
+	}
+	s.waitContext(cleanupCtx)
 	if s.stores != nil {
 		s.stores.Close()
 	}
@@ -655,45 +666,38 @@ func (s *Service) Go(fn func(context.Context)) {
 }
 
 func (s *Service) Wait(timeout time.Duration) bool {
-	done := make(chan struct{})
-	go func() {
-		s.wg.Wait()
-		close(done)
-	}()
-	if timeout <= 0 {
-		<-done
-		return true
+	ctx := context.Background()
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
+	return s.waitContext(ctx)
+}
+func (s *Service) waitContext(ctx context.Context) bool {
+	done := make(chan struct{})
+	go func() { s.wg.Wait(); close(done) }()
 	select {
 	case <-done:
 		return true
-	case <-timer.C:
+	case <-ctx.Done():
 		return false
 	}
 }
 
-func (s *Service) waitEvents(timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
+func (s *Service) waitEvents(ctx context.Context) bool {
 	s.eventMu.Lock()
 	defer s.eventMu.Unlock()
+	if s.activeEvents == 0 {
+		return true
+	}
+	stop := context.AfterFunc(ctx, func() { s.eventMu.Lock(); s.eventCond.Broadcast(); s.eventMu.Unlock() })
+	defer stop()
 	for s.activeEvents > 0 {
-		if timeout <= 0 {
-			s.eventCond.Wait()
-			continue
-		}
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
+		if ctx.Err() != nil {
 			return false
 		}
-		timer := time.AfterFunc(remaining, func() {
-			s.eventMu.Lock()
-			s.eventCond.Broadcast()
-			s.eventMu.Unlock()
-		})
 		s.eventCond.Wait()
-		timer.Stop()
 	}
 	return true
 }
