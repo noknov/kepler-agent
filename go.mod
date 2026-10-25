@@ -3,6 +3,7 @@ module github.com/noknov/kepler-agent
 go 1.25.0
 
 require (
+	github.com/a2aproject/a2a-go v0.3.15
 	github.com/coreos/go-oidc/v3 v3.14.1
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728

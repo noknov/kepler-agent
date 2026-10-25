@@ -24,6 +24,7 @@ Read [architecture](architecture.md) first, then follow the area you change:
 | 2026 agent comparison, audit findings, and measurable next steps (中文) | [October audit](agent-audit-2026-10.md) |
 | Turn lifecycle, context, events, and delegation | [Runtime](runtime.md) |
 | 任务状态、上下文策略与原生续接 | [持续执行契约](agent-continuity.md) |
+| Cross-system agent delegation, authority and recovery | [A2A](a2a.md) |
 | Tools, discovery, integration setup | [Tools](tools.md) |
 | 逐尝试记账、公平调度与子任务证据 | [执行资源](agent-execution-resources.md) |
 | Prompts, rules, skills, private overlays | [Prompts](prompts.md) |

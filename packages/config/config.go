@@ -2,7 +2,9 @@ package config
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,6 +13,7 @@ import (
 )
 
 type Config struct {
+	RemoteAgents []RemoteAgentConfig
 	Memory       MemoryConfig
 	HTTP         HTTPConfig
 	Web          WebConfig
@@ -416,6 +419,17 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			RedisURL:    os.Getenv("REDIS_URL"),
 		},
 	}
+	if raw := strings.TrimSpace(os.Getenv("A2A_AGENTS")); raw != "" {
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&cfg.RemoteAgents); err != nil || decoder.Decode(new(any)) != io.EOF {
+			return Config{}, fmt.Errorf("invalid A2A_AGENTS configuration")
+		}
+		if err := ValidateRemoteAgents(cfg.RemoteAgents); err != nil {
+			return Config{}, err
+		}
+	}
+
 	return cfg, nil
 }
 

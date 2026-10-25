@@ -8,27 +8,29 @@ import (
 	"strings"
 	"time"
 
+	appconfig "github.com/noknov/kepler-agent/packages/config"
 	"github.com/pelletier/go-toml/v2"
 
 	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
 )
 
 type Config struct {
-	NativeCompaction     bool              `toml:"native_compaction"`
-	MaxTotalTokens       int64             `toml:"max_total_tokens"`
-	InputRouting         string            `toml:"input_routing"`
-	Output               string            `toml:"output"`
-	MaxSteps             int               `toml:"max_steps"`
-	MaxParallelToolCalls int               `toml:"max_parallel_tool_calls"`
-	MaxOutputTokens      int               `toml:"max_output_tokens"`
-	MaxContextTokens     int               `toml:"max_context_tokens"`
-	AutocompactBuffer    int               `toml:"autocompact_buffer"`
-	Timeout              time.Duration     `toml:"timeout"`
-	UnsafeAllowNoSandbox bool              `toml:"unsafe_allow_no_sandbox"`
-	AdditionalReadRoots  []string          `toml:"additional_read_roots"`
-	PromptFiles          []string          `toml:"prompt_files"`
-	SkillRoots           []string          `toml:"skill_roots"`
-	MCPServers           []MCPServerConfig `toml:"mcp_servers"`
+	RemoteAgents         []appconfig.RemoteAgentConfig `toml:"remote_agents"`
+	NativeCompaction     bool                          `toml:"native_compaction"`
+	MaxTotalTokens       int64                         `toml:"max_total_tokens"`
+	InputRouting         string                        `toml:"input_routing"`
+	Output               string                        `toml:"output"`
+	MaxSteps             int                           `toml:"max_steps"`
+	MaxParallelToolCalls int                           `toml:"max_parallel_tool_calls"`
+	MaxOutputTokens      int                           `toml:"max_output_tokens"`
+	MaxContextTokens     int                           `toml:"max_context_tokens"`
+	AutocompactBuffer    int                           `toml:"autocompact_buffer"`
+	Timeout              time.Duration                 `toml:"timeout"`
+	UnsafeAllowNoSandbox bool                          `toml:"unsafe_allow_no_sandbox"`
+	AdditionalReadRoots  []string                      `toml:"additional_read_roots"`
+	PromptFiles          []string                      `toml:"prompt_files"`
+	SkillRoots           []string                      `toml:"skill_roots"`
+	MCPServers           []MCPServerConfig             `toml:"mcp_servers"`
 
 	Provider        string `toml:"-"`
 	Protocol        string `toml:"-"`
@@ -83,6 +85,9 @@ func LoadConfig(path string) (Config, error) {
 }
 
 func (config Config) Validate() error {
+	if err := appconfig.ValidateRemoteAgents(config.RemoteAgents); err != nil {
+		return err
+	}
 	if config.MaxTotalTokens < 0 {
 		return fmt.Errorf("max_total_tokens cannot be negative")
 	}

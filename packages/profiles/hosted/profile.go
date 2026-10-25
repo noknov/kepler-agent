@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	agentremote "github.com/noknov/kepler-agent/packages/a2a"
 	"github.com/noknov/kepler-agent/packages/agent/delegation"
 	"github.com/noknov/kepler-agent/packages/agent/environment"
 	"github.com/noknov/kepler-agent/packages/agent/model"
@@ -61,6 +62,9 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	catalog := deps.Tools
 	if catalog == nil {
 		return Profile{}, fmt.Errorf("hosted tool catalog is required")
+	}
+	if err := agentremote.Register(catalog, PGTranscript{Pool: deps.Postgres}, cfg.RemoteAgents); err != nil {
+		return Profile{}, err
 	}
 	var memoryStore memory.Store
 	if deps.Postgres != nil {
