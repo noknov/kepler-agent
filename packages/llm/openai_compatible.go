@@ -153,6 +153,9 @@ func (c *OpenAICompatibleClient) chatBody(req Request) map[string]any {
 		"messages": chatMessagesWithToolImages(req.Messages),
 		"tools":    req.Tools,
 	}
+	if req.OutputFormat != nil {
+		body["response_format"] = map[string]any{"type": "json_schema", "json_schema": map[string]any{"name": req.OutputFormat.Name, "schema": req.OutputFormat.Schema, "strict": true}}
+	}
 	if req.Temperature != nil {
 		body["temperature"] = *req.Temperature
 	}

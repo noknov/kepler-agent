@@ -97,7 +97,7 @@ func New(config Config) (*Client, error) {
 	return bindClient(wire, config), nil
 }
 
-func (c *Client) Generate(ctx context.Context, request model.Request, sink model.EventSink) (model.Response, error) {
+func (c *Client) generate(ctx context.Context, request model.Request, sink model.EventSink) (model.Response, error) {
 	if c != nil && c.chatgptPath != "" {
 		bound, boundCtx, err := c.bindSession(ctx)
 		if err != nil {
@@ -122,6 +122,12 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 		Model: request.Model, MaxTokens: request.MaxOutputTokens,
 		Thinking: request.ReasoningEffort, Temperature: request.Temperature,
 		Metadata: request.Metadata,
+	}
+	if request.OutputFormat != nil && request.OutputFormat.Mode != model.OutputValidated {
+		if _, unsupported := c.Wire.(*llm.QoderClient); unsupported {
+			return model.Response{}, &model.Error{Kind: model.ErrorUnsupported, Message: "qoder does not support native structured outputs; choose validated mode explicitly"}
+		}
+		req.OutputFormat = &llm.OutputFormat{Name: request.OutputFormat.Name, Schema: request.OutputFormat.Schema}
 	}
 	for _, message := range request.Messages {
 		converted, err := c.inputMessage(message, request.Model)

@@ -95,3 +95,23 @@ func TestHostedGenerateUsesOperatorTemperature(t *testing.T) {
 		t.Fatalf("temperature = %v, want hosted/Slack value (unset)", *stub.temperature)
 	}
 }
+
+type failedUsageModel struct{}
+
+func (failedUsageModel) Generate(context.Context, model.Request, model.EventSink) (model.Response, error) {
+	return model.Response{Message: model.TextMessage(model.RoleAssistant, "private incomplete content"), RawMetadata: json.RawMessage(`{"private":true}`), Usage: model.Usage{Reported: true, InputTokens: 17, OutputTokens: 3}}, &model.Error{Kind: model.ErrorProtocol, Message: "output contract failed"}
+}
+func TestHostedFailurePreservesUsageWithoutContent(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST "+providers.KeplerGeneratePath, HandleHostedGenerate(failedUsageModel{}, HostedGeneratePolicy{}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	client, err := providers.New(providers.Config{Provider: "kepler", Protocol: "kepler", BaseURL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Generate(context.Background(), model.Request{Model: "m"}, nil)
+	if model.ErrorKindOf(err) != model.ErrorProtocol || response.Usage.InputTokens != 17 || response.Usage.OutputTokens != 3 || response.Message.Text() != "" || len(response.RawMetadata) != 0 {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+}

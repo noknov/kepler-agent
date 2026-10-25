@@ -109,6 +109,9 @@ func (c keplerRemote) Generate(ctx context.Context, request model.Request, sink 
 			result = &copied
 		case "error":
 			if frame.Error != nil {
+				if frame.Response != nil {
+					return model.Response{ID: frame.Response.ID, FinishReason: frame.Response.FinishReason, Usage: frame.Response.Usage}, frame.Error
+				}
 				return model.Response{}, frame.Error
 			}
 			return model.Response{}, fmt.Errorf("kepler generate failed")

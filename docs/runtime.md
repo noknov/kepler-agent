@@ -229,3 +229,28 @@ call IDs from overwriting earlier evidence. Legacy bare-path artifacts are not
 accepted by this reader.
 
 Related: [architecture](architecture.md), [Slack usage](slack.md), [safety and limitations](safety.md).
+
+## Structured model completions
+
+The shared model request accepts an optional `OutputFormat` containing a name,
+self-contained JSON Schema, and explicit mode. `native` (also the default)
+sends provider constraints through OpenAI Chat `response_format`, Responses
+`text.format`, or Anthropic `output_config.format`; provider/model support and
+schema-subset restrictions still apply. Unsupported native requests fail rather
+than retrying as prose. The native Qoder protocol rejects this mode explicitly.
+`validated` preserves unconstrained provider generation and validates the final
+JSON locally, including exact JSON numbers. It is useful for existing providers
+without native constraints; it does not promise grammar-constrained generation.
+
+Structured completions are tool-free and separate from ordinary agent turns.
+The provider adapter checks the schema before dispatch, disallows external
+schema loading, and checks completion and schema compliance before publishing
+any content. A rejected completion retains usage but exposes neither raw output
+nor value-bearing validator diagnostics. Internal schema references are allowed;
+provider-specific schema vocabulary is not silently rewritten. Free-text agent
+turns retain incremental streaming. Memory reranking uses explicit validated
+mode and still applies its own candidate/selection/version checks; schema
+validation cannot establish factual relevance or authorization.
+
+References: [OpenAI structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs),
+[Anthropic structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs).
