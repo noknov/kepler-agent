@@ -11,6 +11,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/sessioninput"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -189,5 +190,61 @@ func TestPendingWebApprovalStorageFailureRetainsInput(t *testing.T) {
 	events, _ := audit.Load(ctx, "conversation", 0)
 	if inputs.acked != 0 || inputs.released != 1 || len(events) != 0 {
 		t.Fatalf("approval incorrectly terminal: ack=%d release=%d events=%d", inputs.acked, inputs.released, len(events))
+	}
+}
+
+type heldWebAck struct {
+	claimedWebInput
+	entered, release chan struct{}
+}
+
+func (s *heldWebAck) Ack(ctx context.Context, _ string, _ string) error {
+	close(s.entered)
+	select {
+	case <-s.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func TestWebDrainWaitsForDurableFinalization(t *testing.T) {
+	ctx := context.Background()
+	owner := Identity{Provider: "slack", TenantID: "T", SubjectID: "U"}
+	store := newMemoryWebStore()
+	if err := store.CreateConversation(ctx, owner, Conversation{ID: "conversation"}); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(queuedWebTurn{Owner: owner, Input: model.TextMessage(model.RoleUser, "request")})
+	inputs := &heldWebAck{claimedWebInput: claimedWebInput{item: sessioninput.Item{ID: "turn", Payload: payload, Attempts: 1}}, entered: make(chan struct{}), release: make(chan struct{})}
+	svc := NewConversationService(hosted.Agent{}, store, transcript.NewMemoryStore(), nil)
+	svc.Inputs = inputs
+	svc.BeforeRun = func(context.Context, string) error { return errors.New("startup failure") }
+	var draining atomic.Bool
+	svc.IsDraining = draining.Load
+	svc.startPending(ctx, "conversation")
+	<-inputs.entered
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	waiting := svc.WaitContext(canceled)
+	// Stop recovery chaining once Ack completes; callbacks run only after this.
+	draining.Store(true)
+	close(inputs.release)
+	svc.Wait()
+	if waiting {
+		t.Fatal("drain reported idle while durable acknowledgement was still running")
+	}
+}
+
+func TestWebDrainFencesAdmission(t *testing.T) {
+	svc := NewConversationService(hosted.Agent{}, nil, transcript.NewMemoryStore(), nil)
+	svc.Drain()
+	if svc.launch(Identity{}, "conversation", "turn", model.TextMessage(model.RoleUser, "hi"), nil, "") {
+		t.Fatal("draining service launched work")
+	}
+	if _, err := svc.StartTurn(context.Background(), Identity{}, "conversation", "request_1234567890", "hi"); !errors.Is(err, errServiceUnavailable) {
+		t.Fatal(err)
+	}
+	if !svc.WaitContext(context.Background()) {
+		t.Fatal("idle drain failed")
 	}
 }

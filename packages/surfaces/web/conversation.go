@@ -43,10 +43,12 @@ type ConversationService struct {
 	QueueOwner     string
 	MaxActiveTurns int
 
-	mu      sync.Mutex
-	queueMu sync.Mutex
-	wg      sync.WaitGroup
-	active  map[string]activeWebTurn
+	mu       sync.Mutex
+	queueMu  sync.Mutex
+	inFlight int
+	idle     chan struct{}
+	draining bool
+	active   map[string]activeWebTurn
 }
 
 type activeWebTurn struct {
@@ -119,7 +121,7 @@ func (s *ConversationService) List(ctx context.Context, owner Identity, archived
 }
 
 func (s *ConversationService) StartTurn(ctx context.Context, owner Identity, conversationID, requestID, input string) (string, error) {
-	if s.IsDraining != nil && s.IsDraining() {
+	if s.isDraining() {
 		return "", conversationError{kind: errServiceUnavailable, message: "service is draining; retry shortly"}
 	}
 	input = strings.TrimSpace(input)
@@ -171,7 +173,7 @@ func (s *ConversationService) StartTurn(ctx context.Context, owner Identity, con
 }
 
 func (s *ConversationService) ResolveApproval(ctx context.Context, owner Identity, conversationID, turnID, toolCallID, requestID string, approved bool) (string, error) {
-	if s.IsDraining != nil && s.IsDraining() {
+	if s.isDraining() {
 		return "", conversationError{kind: errServiceUnavailable, message: "service is draining; retry shortly"}
 	}
 	if _, err := s.Store.GetConversation(ctx, owner, conversationID); err != nil {
@@ -274,16 +276,19 @@ func (s *ConversationService) launch(owner Identity, conversationID, turnID stri
 		cancel()
 		return false
 	}
-	if len(s.active) >= s.maxActiveTurns() || runCtx.Err() != nil || (s.IsDraining != nil && s.IsDraining()) {
+	if s.draining || len(s.active) >= s.maxActiveTurns() || runCtx.Err() != nil || (s.IsDraining != nil && s.IsDraining()) {
 		s.mu.Unlock()
 		cancel()
 		return false
 	}
 	s.active[conversationID] = activeWebTurn{identity: owner.Key(), turnID: turnID, cancel: cancel}
-	s.wg.Add(1)
+	if s.inFlight == 0 {
+		s.idle = make(chan struct{})
+	}
+	s.inFlight++
 	s.mu.Unlock()
 	go func() {
-		defer s.wg.Done()
+		defer s.finishWork()
 		_ = s.run(runCtx, owner, conversationID, turnID, input, history)
 		if claimID != "" && s.Inputs != nil {
 			finalCtx, finalCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -322,7 +327,7 @@ func (s *ConversationService) startPending(ctx context.Context, conversationID s
 	if s.Inputs == nil {
 		return
 	}
-	if s.IsDraining != nil && s.IsDraining() {
+	if s.isDraining() {
 		return
 	}
 	s.queueMu.Lock()
@@ -403,23 +408,44 @@ func (s *ConversationService) StartRecovery(ctx context.Context) {
 	}
 }
 
-func (s *ConversationService) Wait() { s.wg.Wait() }
+// Drain fences final admission under the same lock that registers work.
+// Call before waiting when shutdown must prevent any later launch.
+func (s *ConversationService) Drain() {
+	s.mu.Lock()
+	s.draining = true
+	s.mu.Unlock()
+}
+func (s *ConversationService) isDraining() bool {
+	s.mu.Lock()
+	draining := s.draining
+	s.mu.Unlock()
+	return draining || (s.IsDraining != nil && s.IsDraining())
+}
+func (s *ConversationService) finishWork() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inFlight--
+	if s.inFlight == 0 {
+		close(s.idle)
+	}
+}
+func (s *ConversationService) Wait() { s.WaitContext(context.Background()) }
 
+// WaitContext includes durable acknowledgement/release after active execution
+// ends. The idle signal replaces polling without creating a waiter goroutine.
 func (s *ConversationService) WaitContext(ctx context.Context) bool {
-	ticker := time.NewTicker(25 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		s.mu.Lock()
-		active := len(s.active)
+	s.mu.Lock()
+	if s.inFlight == 0 {
 		s.mu.Unlock()
-		if active == 0 {
-			return true
-		}
-		select {
-		case <-ctx.Done():
-			return false
-		case <-ticker.C:
-		}
+		return true
+	}
+	idle := s.idle
+	s.mu.Unlock()
+	select {
+	case <-idle:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
