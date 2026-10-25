@@ -91,19 +91,11 @@ func queryOverview(ctx context.Context, tx pgx.Tx, start, end time.Time) (Overvi
 	if err != nil {
 		return result, err
 	}
-	result.Inbox.Statuses = map[string]int64{}
-	if err = readCounts(ctx, tx, `SELECT status,count(*) FROM slack_event_inbox GROUP BY status`, result.Inbox.Statuses); err != nil {
+	queues, err := queryQueues(ctx, tx, end)
+	if err != nil {
 		return result, err
 	}
-	if err = tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE status='processing' AND claim_until <= $1),
- COALESCE(EXTRACT(EPOCH FROM ($1::timestamptz-min(received_at) FILTER (WHERE status='queued')))*1000,0)
- FROM slack_event_inbox`, end).Scan(&result.Inbox.ExpiredClaims, &result.Inbox.OldestQueuedMS); err != nil {
-		return result, err
-	}
-	if err = readCounts(ctx, tx, `SELECT kind||':'||CASE WHEN claim_until IS NULL THEN 'queued' WHEN claim_until <= $1 THEN 'expired' ELSE 'claimed' END,count(*)
- FROM agent_session_inputs WHERE acknowledged_at IS NULL GROUP BY 1`, result.Inputs, end); err != nil {
-		return result, err
-	}
+	result.Inbox, result.Inputs = queues.Inbox, queues.Inputs
 	rows, err := tx.Query(ctx, `SELECT event_id,COALESCE(dead_lettered_at,received_at),attempt_count,left(last_error,500)
  FROM slack_event_inbox WHERE status='dead_letter' ORDER BY COALESCE(dead_lettered_at,received_at) DESC LIMIT 10`)
 	if err != nil {
@@ -158,4 +150,42 @@ func readRunMetadata(ctx context.Context, tx pgx.Tx, query string, args ...any) 
 		out = append(out, run)
 	}
 	return out, rows.Err()
+}
+
+// QueueSnapshot contains only current durable queue gauges, independent of any
+// run cohort or in-process worker queue. It contains no payload/error/actor IDs.
+type QueueSnapshot struct {
+	Inbox  QueueStats
+	Inputs map[string]int64
+}
+
+func readQueues(ctx context.Context, pool *pgxpool.Pool, now time.Time) (QueueSnapshot, error) {
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return QueueSnapshot{}, err
+	}
+	defer tx.Rollback(ctx)
+	result, err := queryQueues(ctx, tx, now)
+	if err != nil {
+		return result, err
+	}
+	return result, tx.Commit(ctx)
+}
+func queryQueues(ctx context.Context, tx pgx.Tx, end time.Time) (QueueSnapshot, error) {
+	result := QueueSnapshot{Inputs: map[string]int64{}}
+	var err error
+	result.Inbox.Statuses = map[string]int64{}
+	if err = readCounts(ctx, tx, `SELECT status,count(*) FROM slack_event_inbox GROUP BY status`, result.Inbox.Statuses); err != nil {
+		return result, err
+	}
+	if err = tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE status='processing' AND claim_until <= $1),
+ COALESCE(EXTRACT(EPOCH FROM ($1::timestamptz-min(received_at) FILTER (WHERE status='queued')))*1000,0)
+ FROM slack_event_inbox`, end).Scan(&result.Inbox.ExpiredClaims, &result.Inbox.OldestQueuedMS); err != nil {
+		return result, err
+	}
+	if err = readCounts(ctx, tx, `SELECT kind||':'||CASE WHEN claim_until IS NULL THEN 'queued' WHEN claim_until <= $1 THEN 'expired' ELSE 'claimed' END,count(*)
+ FROM agent_session_inputs WHERE acknowledged_at IS NULL GROUP BY 1`, result.Inputs, end); err != nil {
+		return result, err
+	}
+	return result, nil
 }

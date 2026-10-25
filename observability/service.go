@@ -23,6 +23,7 @@ import (
 )
 
 type Service struct {
+	queues     func(context.Context, time.Time) (QueueSnapshot, error)
 	cfg        config.Config
 	stores     *platform.Stores
 	metrics    *observability.Recorder
@@ -72,6 +73,9 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		overview: func(ctx context.Context, start, end time.Time) (Overview, error) {
 			return readOverview(ctx, stores.PGPool, start, end)
 		},
+		queues: func(ctx context.Context, at time.Time) (QueueSnapshot, error) {
+			return readQueues(ctx, stores.PGPool, at)
+		},
 		httpClient: &http.Client{Timeout: 3 * time.Second},
 	}, nil
 }
@@ -89,6 +93,7 @@ func (s *Service) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/readyz", s.handleReady)
 	mux.HandleFunc("/drain", s.handleDrain)
 	mux.HandleFunc("/metrics", s.handleMetrics)
+	mux.HandleFunc("/metrics/prometheus", s.handlePrometheus)
 	mux.HandleFunc("/overview", s.handleOverview)
 	mux.HandleFunc("/dashboard.mjs", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

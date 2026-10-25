@@ -55,3 +55,15 @@ func TestRecorderReportsPercentilesAndPreservesErrorOrder(t *testing.T) {
 		t.Fatalf("LastErrors lost chronology: %#v", snap.LastErrors)
 	}
 }
+
+func BenchmarkRecorderFullLatencyWindow(b *testing.B) {
+	rec := NewRecorder()
+	for i := 0; i < latencySampleLimit; i++ {
+		rec.Latency(time.Millisecond)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rec.Latency(time.Millisecond)
+	}
+}
