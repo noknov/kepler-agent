@@ -254,6 +254,8 @@ func (u Usage) Known() bool {
 }
 
 type Response struct {
+	// OutputMode acknowledges an applied structured output contract across remote adapters.
+	OutputMode   OutputMode      `json:"output_mode,omitempty"`
 	ID           string          `json:"id,omitempty"`
 	Message      Message         `json:"message"`
 	FinishReason FinishReason    `json:"finish_reason"`

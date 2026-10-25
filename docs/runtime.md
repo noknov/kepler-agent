@@ -254,3 +254,9 @@ validation cannot establish factual relevance or authorization.
 
 References: [OpenAI structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs),
 [Anthropic structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs).
+
+Across a remote Kepler model connection, native output also requires the returned
+`output_mode=native` receipt. A legacy server ignoring the optional request field
+cannot silently turn native mode into local validation. Missing/wrong receipts
+fail without publishing content or retrying the paid request; reported usage is
+retained. Explicit validated mode remains usable with legacy remote models.

@@ -90,3 +90,29 @@ func TestNativeOutputUnsupportedDoesNotDowngrade(t *testing.T) {
 		t.Fatalf("unsupported native protocol: %v", err)
 	}
 }
+
+type structuredHost struct{ mode model.OutputMode }
+
+func (h structuredHost) Generate(context.Context, model.Request, model.EventSink) (model.Response, error) {
+	return model.Response{OutputMode: h.mode, Message: model.TextMessage(model.RoleAssistant, `{"ok":true}`), FinishReason: model.FinishStop, Usage: model.Usage{Reported: true, InputTokens: 3}}, nil
+}
+func TestRemoteNativeOutputRequiresAnAppliedContractReceipt(t *testing.T) {
+	for _, remoteMode := range []model.OutputMode{"", model.OutputValidated, model.OutputNative} {
+		client := &Client{Host: structuredHost{remoteMode}}
+		request := model.Request{OutputFormat: &model.OutputFormat{Name: "result", Schema: json.RawMessage(`{"type":"object"}`)}}
+		events := 0
+		response, err := client.Generate(context.Background(), request, func(model.StreamEvent) error { events++; return nil })
+		if remoteMode == model.OutputNative {
+			if err != nil || response.OutputMode != model.OutputNative || events != 2 {
+				t.Fatalf("response=%#v err=%v", response, err)
+			}
+		} else if model.ErrorKindOf(err) != model.ErrorUnsupported || events != 0 || response.Message.Text() != "" || response.Usage.InputTokens != 3 {
+			t.Fatalf("silent downgrade: response=%#v events=%d err=%v", response, events, err)
+		}
+		request.OutputFormat.Mode = model.OutputValidated
+		response, err = client.Generate(context.Background(), request, nil)
+		if err != nil || response.OutputMode != model.OutputValidated {
+			t.Fatalf("explicit local validation lost: response=%#v err=%v", response, err)
+		}
+	}
+}

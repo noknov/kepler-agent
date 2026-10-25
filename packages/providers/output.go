@@ -21,6 +21,9 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 		return model.Response{}, err
 	}
 	response, err := c.generate(ctx, request, nil)
+	if err == nil && request.OutputFormat.Mode != model.OutputValidated && c != nil && c.Host != nil && response.OutputMode != model.OutputNative {
+		err = &model.Error{Kind: model.ErrorUnsupported, Message: "remote model did not acknowledge native structured output support"}
+	}
 	if err == nil {
 		if response.FinishReason != model.FinishStop || len(response.Message.ToolCalls()) != 0 {
 			kind := model.ErrorProtocol
@@ -38,6 +41,10 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 	}
 	if err != nil {
 		return model.Response{ID: response.ID, FinishReason: response.FinishReason, Usage: response.Usage}, err
+	}
+	response.OutputMode = request.OutputFormat.Mode
+	if response.OutputMode == "" {
+		response.OutputMode = model.OutputNative
 	}
 	if sink != nil {
 		for _, event := range []model.StreamEvent{
