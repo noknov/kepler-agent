@@ -20,6 +20,8 @@ from pathlib import Path
 
 
 EVALS = Path(__file__).resolve().parent
+# Match direct evaluator script imports when loading entrypoints by path.
+sys.path.insert(0, str(EVALS))
 
 
 def load_module(name: str, path: Path):
