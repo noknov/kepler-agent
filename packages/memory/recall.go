@@ -80,15 +80,15 @@ func Recall(ctx context.Context, store Store, identity Identity, text string, po
 		}
 		prefs := Bound(preferences.Records[:min(policy.Preferences, len(preferences.Records))], min(policy.PreferenceBytes, policy.MaxBytes))
 		slots := policy.MaxRecords - len(prefs)
-		if len(records) > slots {
-			records = records[:slots]
-		}
 		prefBytes := 0
 		for _, record := range prefs {
 			raw, _ := json.Marshal(record)
 			prefBytes += len(raw) + 1
 		}
-		records = append(Bound(records, policy.MaxBytes-prefBytes), prefs...)
+		// Oversized evidence does not consume a disclosure slot. Bound first,
+		// then preserve the highest-ranked fitting records up to the slot limit.
+		records = Bound(records, policy.MaxBytes-prefBytes)
+		records = append(records[:min(slots, len(records))], prefs...)
 
 		// A reset during a slow semantic rank must not disclose pre-reset memory.
 		keys := make([]string, 0, len(records))
