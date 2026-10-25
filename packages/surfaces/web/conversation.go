@@ -244,8 +244,7 @@ func (s *ConversationService) run(ctx context.Context, owner Identity, conversat
 	defer cancel()
 	if s.BeforeRun != nil {
 		if err := s.BeforeRun(runCtx, owner.SubjectID); err != nil {
-			s.recordStartFailure(conversationID, turnID)
-			return err
+			return errors.Join(err, s.recordStartFailure(conversationID, turnID))
 		}
 	}
 	fragments := []prompt.Fragment{
@@ -275,7 +274,7 @@ func (s *ConversationService) launch(owner Identity, conversationID, turnID stri
 		cancel()
 		return false
 	}
-	if len(s.active) >= s.maxActiveTurns() {
+	if len(s.active) >= s.maxActiveTurns() || runCtx.Err() != nil || (s.IsDraining != nil && s.IsDraining()) {
 		s.mu.Unlock()
 		cancel()
 		return false
@@ -330,38 +329,59 @@ func (s *ConversationService) startPending(ctx context.Context, conversationID s
 	defer s.queueMu.Unlock()
 	s.mu.Lock()
 	_, active := s.active[conversationID]
+	full := len(s.active) >= s.maxActiveTurns()
 	s.mu.Unlock()
-	if active {
+	if active || full || s.baseContext().Err() != nil {
 		return
 	}
 	items, err := s.Inputs.Claim(ctx, conversationID, sessioninput.KindWeb, s.queueOwner(), 35*time.Minute, 1)
 	if err != nil || len(items) == 0 {
 		return
 	}
-	if items[0].Attempts > 5 {
-		s.recordStartFailure(conversationID, items[0].ID)
-		_ = s.Inputs.Ack(ctx, items[0].ID, s.queueOwner())
+	item := items[0]
+	// A claim is transferred only to a launched turn or successfully acknowledged
+	// terminal. Every other path releases it under an independent cleanup budget.
+	transferred := false
+	defer func() {
+		if !transferred {
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			_ = s.Inputs.Release(cleanup, item.ID, s.queueOwner())
+		}
+	}()
+	acknowledge := func() { transferred = s.Inputs.Ack(ctx, item.ID, s.queueOwner()) == nil }
+	reject := func() {
+		if s.recordStartFailure(conversationID, item.ID) == nil {
+			acknowledge()
+		}
+	}
+	if s.turnTerminal(ctx, conversationID, item.ID) {
+		acknowledge()
+		return
+	}
+	if item.Attempts > 5 {
+		reject()
 		return
 	}
 	var queued queuedWebTurn
-	if json.Unmarshal(items[0].Payload, &queued) != nil || queued.Owner.Key() == "::" || len(queued.Input.Content) == 0 {
-		_ = s.Inputs.Ack(ctx, items[0].ID, s.queueOwner())
+	if json.Unmarshal(item.Payload, &queued) != nil || queued.Owner.Key() == "::" || len(queued.Input.Content) == 0 {
+		reject()
 		return
 	}
 	if _, err := s.Store.GetConversation(ctx, queued.Owner, conversationID); err != nil {
-		_ = s.Inputs.Ack(ctx, items[0].ID, s.queueOwner())
+		if errors.Is(err, ErrNotFound) {
+			reject()
+		}
 		return
 	}
 	if queued.Approval != nil {
 		if err := s.Agent.Runtime.ResolveApproval(ctx, conversationID, *queued.Approval); err != nil {
-			s.recordStartFailure(conversationID, items[0].ID)
-			_ = s.Inputs.Ack(ctx, items[0].ID, s.queueOwner())
+			// This can be a transient store/lease error. The approval runtime owns
+			// idempotent decisions and uncertain effects; do not infer a terminal here.
 			return
 		}
 	}
-	if !s.launch(queued.Owner, conversationID, items[0].ID, queued.Input, nil, items[0].ID) {
-		_ = s.Inputs.Release(ctx, items[0].ID, s.queueOwner())
-	}
+	transferred = s.launch(queued.Owner, conversationID, item.ID, queued.Input, nil, item.ID)
 }
 
 func (s *ConversationService) StartRecovery(ctx context.Context) {
@@ -410,9 +430,9 @@ func (s *ConversationService) queueOwner() string {
 	return "web-worker"
 }
 
-func (s *ConversationService) recordStartFailure(conversationID, turnID string) {
+func (s *ConversationService) recordStartFailure(conversationID, turnID string) error {
 	if s.Transcript == nil {
-		return
+		return errors.New("transcript store unavailable")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -423,6 +443,7 @@ func (s *ConversationService) recordStartFailure(conversationID, turnID string) 
 	if err == nil && s.Hub != nil {
 		s.Hub.Publish(ctx, event)
 	}
+	return err
 }
 
 func (s *ConversationService) finish(conversationID, turnID string) {
