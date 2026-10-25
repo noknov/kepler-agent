@@ -20,7 +20,7 @@ measured runs; deterministic tests cannot substitute for them.
 - [x] Model boundary: explicit native/validated JSON output contracts, actual
   provider wire mappings, schema validation, incomplete/refused-output handling,
   no unvalidated output publication, and an existing production consumer.
-- [ ] MCP: verify negotiated versions and RPC response identity, bounded discovery
+- [x] MCP: verify negotiated versions and RPC response identity, bounded discovery
   and incremental SSE reading; preserve uncertain-write behavior and credentials.
 - [ ] Evaluation: reject incompatible/incomplete evidence, validate baselines and
   raw records, preserve failures, and record attributable task-level outcomes.
@@ -62,6 +62,11 @@ integration implemented. Failed hosted completions now preserve usage across the
 remote model protocol without exposing rejected content. `make check` and
 `go test -race ./packages/cloud ./packages/providers ./packages/llm ./packages/memory`
 passed. This is contract/recovery evidence, not model-quality measurement.
+
+MCP milestone: incremental SSE result/error handling, exact RPC identity,
+negotiated version validation/headers and bounded non-cyclic discovery added.
+Tests use a real HTTP server that keeps SSE open after its result, plus protocol
+errors, version mismatches and exhausted discovery. Structured output is PR #23.
 
 ## Handoff
 

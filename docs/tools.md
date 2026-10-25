@@ -211,3 +211,26 @@ effects. See [safety](safety.md) and [development](development.md).
 
 The configuration loader and provider response determine actual availability;
 verify a representative search after changing providers.
+
+### MCP transport contract
+
+The HTTP client requests protocol `2025-11-25` and accepts negotiated
+`2025-03-26`, `2025-06-18`, or `2025-11-25` for the implemented tools subset.
+Other or missing versions fail before the initialized notification. Subsequent
+requests carry the negotiated `MCP-Protocol-Version`, including when the server
+has no session ID. This is not a claim of full protocol-feature conformance or
+support for the newer stateless `2026-07-28` specification.
+
+RPC results must identify the numeric request ID and JSON-RPC 2.0 envelope.
+SSE consumption stops at the matching result/error and closes its body, rather
+than waiting for a persistent connection to end. Notifications and responses
+for other IDs do not substitute for our result. No tool call is automatically
+repeated by this transport after an uncertain response.
+
+A response is bounded to 8 MiB. Discovery additionally bounds the complete list
+to 8 MiB and 128 pages and rejects repeated cursors and duplicate/empty names.
+These are resource/identity contracts, not relevance filters; oversized servers
+need narrower catalogs rather than silent result truncation. Caller context and
+HTTP timeout still govern network waiting. References:
+[MCP lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle),
+[Streamable HTTP](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).

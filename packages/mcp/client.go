@@ -17,6 +17,11 @@ import (
 	"time"
 )
 
+const (
+	maxResponseBytes  = 8 << 20
+	maxDiscoveryPages = 128
+)
+
 // Client is a reusable MCP Streamable HTTP client.
 // Each integration creates its own Client instance with a distinct ServiceName.
 type Client struct {
@@ -33,9 +38,11 @@ type Client struct {
 }
 
 // Session holds the MCP session state after initialization.
+// Session carries the negotiated version even for stateless servers with no ID.
 type Session struct {
-	ID          string
-	Initialized bool
+	ProtocolVersion string
+	ID              string
+	Initialized     bool
 }
 
 type ToolDefinition struct {
@@ -89,7 +96,7 @@ type Image struct {
 func (i Image) DataURI() string { return "data:" + i.MIMEType + ";base64," + i.Data }
 
 func (c *Client) ListTools(ctx context.Context, session Session) ([]ToolDefinition, error) {
-	result, _, err := c.rpc(ctx, session.ID, "tools/list", map[string]any{})
+	result, _, err := c.rpc(ctx, session, "tools/list", map[string]any{})
 	if err != nil {
 		return nil, err
 	}
@@ -101,10 +108,32 @@ func (c *Client) ListTools(ctx context.Context, session Session) ([]ToolDefiniti
 		return nil, err
 	}
 	tools := append([]ToolDefinition(nil), page.Tools...)
+	bytesRead := len(result)
+	pages := 1
+	seen := make(map[string]bool)
+	names := make(map[string]bool)
+	for _, item := range tools {
+		if item.Name == "" || names[item.Name] {
+			return nil, fmt.Errorf("mcp: invalid or duplicate tool name")
+		}
+		names[item.Name] = true
+	}
 	for page.NextCursor != "" {
-		result, _, err = c.rpc(ctx, session.ID, "tools/list", map[string]any{"cursor": page.NextCursor})
+		if seen[page.NextCursor] {
+			return nil, fmt.Errorf("mcp: discovery cursor repeated")
+		}
+		if pages >= maxDiscoveryPages {
+			return nil, fmt.Errorf("mcp: discovery exceeds page limit")
+		}
+		pages++
+		seen[page.NextCursor] = true
+		result, _, err = c.rpc(ctx, session, "tools/list", map[string]any{"cursor": page.NextCursor})
 		if err != nil {
 			return nil, err
+		}
+		bytesRead += len(result)
+		if bytesRead > maxResponseBytes {
+			return nil, fmt.Errorf("mcp: discovery exceeds byte limit")
 		}
 		page = struct {
 			Tools      []ToolDefinition `json:"tools"`
@@ -112,6 +141,12 @@ func (c *Client) ListTools(ctx context.Context, session Session) ([]ToolDefiniti
 		}{}
 		if err := json.Unmarshal(result, &page); err != nil {
 			return nil, err
+		}
+		for _, item := range page.Tools {
+			if item.Name == "" || names[item.Name] {
+				return nil, fmt.Errorf("mcp: invalid or duplicate tool name")
+			}
+			names[item.Name] = true
 		}
 		tools = append(tools, page.Tools...)
 	}
@@ -139,8 +174,8 @@ func (c *Client) httpClient() *http.Client {
 
 // Initialize performs the MCP initialize handshake and returns a session.
 func (c *Client) Initialize(ctx context.Context) (Session, error) {
-	result, headers, err := c.rpc(ctx, "", "initialize", map[string]any{
-		"protocolVersion": "2025-03-26",
+	result, headers, err := c.rpc(ctx, Session{}, "initialize", map[string]any{
+		"protocolVersion": "2025-11-25",
 		"capabilities":    map[string]any{},
 		"clientInfo": map[string]string{
 			"name":    "kepler-agent",
@@ -153,16 +188,27 @@ func (c *Client) Initialize(ctx context.Context) (Session, error) {
 	if len(result) == 0 {
 		return Session{}, fmt.Errorf("mcp %s: initialize returned empty result", c.ServiceName)
 	}
-	s := Session{ID: firstHeader(headers, "Mcp-Session-Id"), Initialized: true}
-	if err := c.NotifyInitialized(ctx, s.ID); err != nil {
+	var negotiated struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	if json.Unmarshal(result, &negotiated) != nil {
+		return Session{}, fmt.Errorf("mcp: invalid initialization result")
+	}
+	switch negotiated.ProtocolVersion {
+	case "2025-03-26", "2025-06-18", "2025-11-25":
+	default:
+		return Session{}, fmt.Errorf("mcp: unsupported negotiated protocol version")
+	}
+	s := Session{ID: firstHeader(headers, "Mcp-Session-Id"), Initialized: true, ProtocolVersion: negotiated.ProtocolVersion}
+	if err := c.NotifyInitialized(ctx, s); err != nil {
 		return Session{}, fmt.Errorf("mcp %s: notifications/initialized: %w", c.ServiceName, err)
 	}
 	return s, nil
 }
 
-// NotifyInitialized sends the notifications/initialized message.
-func (c *Client) NotifyInitialized(ctx context.Context, sessionID string) error {
-	_, _, err := c.rpcWithID(ctx, sessionID, nil, "notifications/initialized", nil)
+// NotifyInitialized completes initialization with the negotiated session.
+func (c *Client) NotifyInitialized(ctx context.Context, session Session) error {
+	_, _, err := c.rpcWithID(ctx, session, nil, "notifications/initialized", nil)
 	return err
 }
 
@@ -179,7 +225,7 @@ func (c *Client) CallTool(ctx context.Context, s Session, name string, args json
 		}
 		arguments = args
 	}
-	result, _, err := c.rpc(ctx, s.ID, "tools/call", map[string]any{
+	result, _, err := c.rpc(ctx, s, "tools/call", map[string]any{
 		"name":      name,
 		"arguments": arguments,
 	})
@@ -189,11 +235,11 @@ func (c *Client) CallTool(ctx context.Context, s Session, name string, args json
 	return FormatToolResult(result)
 }
 
-func (c *Client) rpc(ctx context.Context, sessionID, method string, params any) (json.RawMessage, http.Header, error) {
-	return c.rpcWithID(ctx, sessionID, c.nextID.Add(1), method, params)
+func (c *Client) rpc(ctx context.Context, session Session, method string, params any) (json.RawMessage, http.Header, error) {
+	return c.rpcWithID(ctx, session, c.nextID.Add(1), method, params)
 }
 
-func (c *Client) rpcWithID(ctx context.Context, sessionID string, id any, method string, params any) (json.RawMessage, http.Header, error) {
+func (c *Client) rpcWithID(ctx context.Context, session Session, id any, method string, params any) (json.RawMessage, http.Header, error) {
 	payload := map[string]any{
 		"jsonrpc": "2.0",
 		"method":  method,
@@ -223,90 +269,105 @@ func (c *Client) rpcWithID(ctx context.Context, sessionID string, id any, method
 	}
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	req.Header.Set("Content-Type", "application/json")
-	if sessionID != "" {
-		req.Header.Set("Mcp-Session-Id", sessionID)
+	if session.ID != "" {
+		req.Header.Set("Mcp-Session-Id", session.ID)
+	}
+	if session.ProtocolVersion != "" {
+		req.Header.Set("MCP-Protocol-Version", session.ProtocolVersion)
 	}
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return nil, resp.Header, err
-	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		if readErr != nil {
+			return nil, resp.Header, readErr
+		}
 		return nil, resp.Header, HTTPError{Service: c.ServiceName, StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(body))}
 	}
 	if id == nil {
 		return nil, resp.Header, nil
 	}
-	result, err := parseRPCResponse(body, resp.Header.Get("Content-Type"))
-	if err != nil {
-		return nil, resp.Header, err
+	expected, _ := json.Marshal(id)
+	result, err := readRPCResponse(resp.Body, resp.Header.Get("Content-Type"), expected)
+	return result, resp.Header, err
+}
+
+// An SSE response may remain open after our result. Stop at the matching
+// response, propagate its RPC error, and close the body instead of awaiting EOF.
+func readRPCResponse(reader io.Reader, contentType string, expected json.RawMessage) (json.RawMessage, error) {
+	bounded := io.LimitReader(reader, maxResponseBytes+1)
+	if !strings.Contains(strings.ToLower(contentType), "text/event-stream") {
+		body, err := io.ReadAll(bounded)
+		if err != nil {
+			return nil, err
+		}
+		if len(body) > maxResponseBytes {
+			return nil, fmt.Errorf("mcp: response exceeds byte limit")
+		}
+		result, matched, err := decodeRPCResponse(body, expected)
+		if !matched && err == nil {
+			err = fmt.Errorf("mcp: response ID does not match request")
+		}
+		return result, err
 	}
-	return result, resp.Header, nil
-}
-
-type rpcResponse struct {
-	Result *json.RawMessage `json:"result"`
-	Error  *struct {
-		Code    int             `json:"code"`
-		Message string          `json:"message"`
-		Data    json.RawMessage `json:"data,omitempty"`
-	} `json:"error,omitempty"`
-}
-
-func parseRPCResponse(body []byte, contentType string) (json.RawMessage, error) {
-	if strings.Contains(strings.ToLower(contentType), "text/event-stream") {
-		return parseSSERPCResponse(body)
+	scanner := bufio.NewScanner(bounded)
+	scanner.Buffer(make([]byte, 0, 64<<10), maxResponseBytes)
+	var data []string
+	flush := func() (json.RawMessage, bool, error) {
+		if len(data) == 0 {
+			return nil, false, nil
+		}
+		raw := []byte(strings.Join(data, "\n"))
+		data = nil
+		return decodeRPCResponse(raw, expected)
 	}
-	return parseJSONRPCResponse(bytes.TrimSpace(body))
-}
-
-func parseSSERPCResponse(body []byte) (json.RawMessage, error) {
-	scanner := bufio.NewScanner(bytes.NewReader(body))
-	scanner.Buffer(make([]byte, 0, 64*1024), 8<<20)
-	var dataLines []string
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
-			if len(dataLines) > 0 {
-				if result, err := parseJSONRPCResponse([]byte(strings.Join(dataLines, "\n"))); err == nil {
-					return result, nil
-				}
-				dataLines = nil
+			result, matched, err := flush()
+			if err != nil || matched {
+				return result, err
 			}
-			continue
-		}
-		if data, ok := strings.CutPrefix(line, "data:"); ok {
-			dataLines = append(dataLines, strings.TrimSpace(data))
+		} else if text, ok := strings.CutPrefix(line, "data:"); ok {
+			data = append(data, strings.TrimPrefix(text, " "))
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
-	if len(dataLines) > 0 {
-		return parseJSONRPCResponse([]byte(strings.Join(dataLines, "\n")))
+	if result, matched, err := flush(); err != nil || matched {
+		return result, err
 	}
-	return nil, fmt.Errorf("mcp: SSE response contained no JSON-RPC event")
+	return nil, fmt.Errorf("mcp: stream ended or exceeded byte limit without a matching response")
 }
 
-func parseJSONRPCResponse(body []byte) (json.RawMessage, error) {
-	if len(body) == 0 {
-		return nil, fmt.Errorf("mcp: empty JSON-RPC response")
+func decodeRPCResponse(body, expected json.RawMessage) (json.RawMessage, bool, error) {
+	var response struct {
+		Version string          `json:"jsonrpc"`
+		ID      json.RawMessage `json:"id"`
+		Result  json.RawMessage `json:"result"`
+		Error   *struct {
+			Code    int             `json:"code"`
+			Message string          `json:"message"`
+			Data    json.RawMessage `json:"data,omitempty"`
+		} `json:"error"`
 	}
-	var resp rpcResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, err
+	if json.Unmarshal(body, &response) != nil || response.Version != "2.0" {
+		return nil, false, fmt.Errorf("mcp: invalid JSON-RPC response")
 	}
-	if resp.Error != nil {
-		return nil, RPCError{Code: resp.Error.Code, Message: resp.Error.Message, Data: resp.Error.Data}
+	if !bytes.Equal(bytes.TrimSpace(response.ID), expected) {
+		return nil, false, nil
 	}
-	if resp.Result == nil {
-		return nil, fmt.Errorf("mcp JSON-RPC response had no result")
+	if (response.Result != nil) == (response.Error != nil) {
+		return nil, true, fmt.Errorf("mcp: response must contain exactly one result or error")
 	}
-	return *resp.Result, nil
+	if response.Error != nil {
+		return nil, true, RPCError{Code: response.Error.Code, Message: response.Error.Message, Data: response.Error.Data}
+	}
+	return response.Result, true, nil
 }
 
 // FormatToolResult parses an MCP tools/call result and returns the concatenated content.

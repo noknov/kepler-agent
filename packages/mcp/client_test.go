@@ -155,7 +155,7 @@ func TestClientAppliesCustomHeaders(t *testing.T) {
 			return httpResp(http.StatusOK, map[string]string{"Content-Type": "application/json"}, `{"jsonrpc":"2.0","id":1,"result":{}}`), nil
 		})},
 	}
-	_, _, err := c.rpcWithID(context.Background(), "", 1, "initialize", map[string]any{})
+	_, _, err := c.rpcWithID(context.Background(), Session{}, 1, "initialize", map[string]any{})
 	if err != nil {
 		t.Fatalf("rpcWithID() error = %v", err)
 	}
