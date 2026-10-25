@@ -112,11 +112,37 @@ ranking cache, automatic deletion, or synthetic embedding capability added.
 
 ## Handoff
 
-Working branch: feat/operational-metrics, stacked on #26. PRs #23–#26 are
-merged after CI and review. Metrics full checks, race suites and real PG/Redis
-`make integration-check` passed (isolated loopback PG17 and Redis7 fixtures).
-Next publish metrics, then resolve the remaining retrieval/context audit with
-actual regression evidence and an explicit decision on unmeasured features.
-Real-model comparison is unavailable without a configured login/provider and
-public task containers; do not invent a quality result or deploy services.
-Keep all completed source changes on GitHub for device handoff.
+Working branch: feat/semantic-memory-retrieval. PRs #23–#28 are merged after
+CI and review; no deployment was performed. The next commit is the embedding
+transport/resource prerequisite, not an enabled semantic index. It adds a typed
+Embedder, strict bounded OpenAI-compatible HTTP adapter, and one shared attempt
+lifetime for generation/embedding admission, reservation, settlement and receipts.
+`make check` plus model/provider/runtime/hosted/delegation race suites passed.
+
+Next implement opt-in, versioned semantic recall in the existing memory owner:
+- Reuse the bounded per-user PostgreSQL namespace rather than introduce another
+  search service. Measure exact vector retrieval before selecting a new index.
+- Bind cached vectors and claims to record version, reset generation, model
+  space/dimensions and authenticated identity. Update-only result CAS must never
+  resurrect deleted/reset records; expiry excludes vectors with their source.
+- Keep network I/O outside SQL transactions; short owner/lease claims prevent
+  duplicate concurrent indexing. Empty/unavailable caches retain lexical recall.
+- A model-space change must be explicit and fence old writers; no guessed aliases,
+  keyword semantic rules, automatic fact deletion or unmeasured default enablement.
+- Add the matching deploy migration and schema-parity tests before enabling it.
+- Validate zero lexical-overlap candidate retrieval with controlled vectors and
+  real PostgreSQL, distinguishing this from real-model relevance evaluation.
+
+Follow up native structured remote requests with an explicit capability receipt
+so an older server ignoring the optional field cannot masquerade as native mode.
+Real-model comparison remains unavailable without a configured login/provider and
+public task containers. Keep every useful source milestone on GitHub before any
+quota wait. User requests a live loop waiting at <=5% remaining, ~30-minute checks,
+and automatic continuation only at 100%; do not spend reset credits or ask them
+to confirm continuation.
+
+Temporary integration stores are ours only: PostgreSQL on loopback 55437 under
+/tmp/kepler-review-postgres and Redis 7.4.7 on loopback 56379 under
+/tmp/kepler-capability-redis. Stop them before final handoff; never use deployment
+application databases for tests. Logs are /tmp/kepler-capability-integration.log
+and /tmp/kepler-capability-pg-tests.log. Full integration gate passed.

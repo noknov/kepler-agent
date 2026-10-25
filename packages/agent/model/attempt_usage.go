@@ -44,44 +44,58 @@ type AttemptManagedClient interface {
 }
 
 func DispatchAttempt(ctx context.Context, client Client, request Request, sink EventSink) (response Response, err error) {
+	err = dispatchUsage(ctx, request, func() (Usage, error) {
+		var callErr error
+		response, callErr = client.Generate(ctx, request, sink)
+		return response.Usage, callErr
+	})
+	return response, err
+}
+
+// dispatchUsage owns one resource lifetime for both generation and embeddings:
+// admission, reservation, actual call, settlement and durable attempt evidence.
+func dispatchUsage(ctx context.Context, request Request, invoke func() (Usage, error)) error {
+	if request.InputTokenEstimate < 0 || request.MaxOutputTokens < 0 {
+		return &Error{Kind: ErrorInvalid, Message: "model token estimates and limits cannot be negative"}
+	}
 	governor, _ := ctx.Value(admissionGovernorKey{}).(*Governor)
 	if governor == nil {
 		governor = processGovernor
 	}
 	release, queued, err := governor.acquire(ctx)
 	if err != nil {
-		return Response{}, err
+		return err
 	}
 	defer release()
 	budget, _ := ctx.Value(budgetKey{}).(*Budget)
 	reservation := int64(request.InputTokenEstimate) + int64(request.MaxOutputTokens)
 	if err := budget.reserve(ctx, reservation); err != nil {
-		return Response{}, err
+		return err
 	}
 	receipt := AttemptUsage{RequestID: request.Metadata["request_id"], Model: request.Model, Operation: request.Operation, Class: workloadFrom(ctx).Class, Reservation: reservation, QueueMS: queued.Milliseconds()}
 	identity, _ := ctx.Value(attemptIdentityKey{}).(attemptIdentity)
 	receipt.Provider, receipt.Number, receipt.Fallback = identity.provider, identity.number, identity.fallback
 	started := time.Now()
-	response, err = client.Generate(ctx, request, sink)
+	usage, err := invoke()
 	receipt.DurationMS = time.Since(started).Milliseconds()
-	receipt.Usage = response.Usage
-	receipt.Known = response.Usage.Known()
+	receipt.Usage = usage
+	receipt.Known = usage.Known()
 	receipt.Charged = reservation
 	if receipt.Known {
-		receipt.Charged = UsageTokens(response.Usage)
+		receipt.Charged = UsageTokens(usage)
 	}
 	if err != nil {
 		receipt.ErrorKind = ErrorKindOf(err)
 	}
-	if settleErr := budget.settle(ctx, reservation, response.Usage, err); settleErr != nil {
-		return response, settleErr
+	if settleErr := budget.settle(ctx, reservation, usage, err); settleErr != nil {
+		return settleErr
 	}
 	if record, ok := ctx.Value(usageRecorderKey{}).(func(context.Context, AttemptUsage) error); ok && record != nil {
 		if recordErr := record(ctx, receipt); recordErr != nil {
-			return response, recordErr
+			return recordErr
 		}
 	}
-	return response, err
+	return err
 }
 
 type attemptIdentityKey struct{}
