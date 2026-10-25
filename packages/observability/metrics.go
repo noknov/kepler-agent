@@ -2,6 +2,7 @@ package observability
 
 import (
 	"encoding/json"
+	"github.com/prometheus/client_golang/prometheus"
 	"log/slog"
 	"math"
 	"net/http"
@@ -58,21 +59,23 @@ type EventInboxStats struct {
 }
 
 type Recorder struct {
+	registry           *prometheus.Registry
+	durationObservers  [3]prometheus.Observer
 	mu                 sync.Mutex
 	startedAt          time.Time
 	snap               Snapshot
 	latSum             int64
 	llmLatSum          int64
 	toolLatSum         int64
-	latencySamples     []int64
-	llmLatencySamples  []int64
-	toolLatencySamples []int64
+	latencySamples     latencyWindow
+	llmLatencySamples  latencyWindow
+	toolLatencySamples latencyWindow
 	rates              CostRates
 }
 
 func NewRecorder() *Recorder {
 	now := time.Now().UTC()
-	return &Recorder{
+	recorder := &Recorder{
 		startedAt: now,
 		snap: Snapshot{
 			StartedAt:        now,
@@ -83,6 +86,8 @@ func NewRecorder() *Recorder {
 			ReactionFeedback: map[string]int64{},
 		},
 	}
+	initPrometheus(recorder)
+	return recorder
 }
 
 func (r *Recorder) SetCostRates(rates CostRates) {
@@ -198,11 +203,14 @@ func (r *Recorder) addLatencyLocked(summary *LatencySummary, sum *int64, d time.
 	}
 	switch summary {
 	case &r.snap.LatencyMS:
-		r.latencySamples = appendBounded(r.latencySamples, ms)
+		r.latencySamples.add(ms)
+		r.durationObservers[0].Observe(d.Seconds())
 	case &r.snap.LLMLatencyMS:
-		r.llmLatencySamples = appendBounded(r.llmLatencySamples, ms)
+		r.llmLatencySamples.add(ms)
+		r.durationObservers[1].Observe(d.Seconds())
 	case &r.snap.ToolLatencyMS:
-		r.toolLatencySamples = appendBounded(r.toolLatencySamples, ms)
+		r.toolLatencySamples.add(ms)
+		r.durationObservers[2].Observe(d.Seconds())
 	}
 }
 
@@ -217,7 +225,6 @@ func (r *Recorder) Error(err error) {
 
 func (r *Recorder) Snapshot() Snapshot {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	cp := r.snap
 	cp.ToolCalls = copyMap(r.snap.ToolCalls)
 	cp.ToolErrors = copyMap(r.snap.ToolErrors)
@@ -225,9 +232,15 @@ func (r *Recorder) Snapshot() Snapshot {
 	cp.EventInbox.Jobs = copyMap(r.snap.EventInbox.Jobs)
 	cp.ReactionFeedback = copyMap(r.snap.ReactionFeedback)
 	cp.LastErrors = append([]string(nil), r.snap.LastErrors...)
-	setPercentiles(&cp.LatencyMS, r.latencySamples)
-	setPercentiles(&cp.LLMLatencyMS, r.llmLatencySamples)
-	setPercentiles(&cp.ToolLatencyMS, r.toolLatencySamples)
+	samples := [3][]int64{
+		append([]int64(nil), r.latencySamples.values...),
+		append([]int64(nil), r.llmLatencySamples.values...),
+		append([]int64(nil), r.toolLatencySamples.values...),
+	}
+	r.mu.Unlock()
+	setPercentiles(&cp.LatencyMS, samples[0])
+	setPercentiles(&cp.LLMLatencyMS, samples[1])
+	setPercentiles(&cp.ToolLatencyMS, samples[2])
 	return cp
 }
 
@@ -257,20 +270,25 @@ func copyMap(in map[string]int64) map[string]int64 {
 
 const latencySampleLimit = 4096
 
-func appendBounded(samples []int64, value int64) []int64 {
-	if len(samples) < latencySampleLimit {
-		return append(samples, value)
+type latencyWindow struct {
+	values []int64
+	next   int
+}
+
+func (w *latencyWindow) add(value int64) {
+	if len(w.values) < latencySampleLimit {
+		w.values = append(w.values, value)
+		return
 	}
-	copy(samples, samples[1:])
-	samples[len(samples)-1] = value
-	return samples
+	w.values[w.next] = value
+	w.next = (w.next + 1) % latencySampleLimit
 }
 
 func setPercentiles(summary *LatencySummary, samples []int64) {
 	if len(samples) == 0 {
 		return
 	}
-	values := append([]int64(nil), samples...)
+	values := samples
 	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
 	summary.P50 = percentile(values, 0.50)
 	summary.P95 = percentile(values, 0.95)

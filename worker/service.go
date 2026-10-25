@@ -549,6 +549,7 @@ func (s *Service) serveHealth(ctx context.Context) {
 	mux.HandleFunc("/livez", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("/readyz", s.handleReady)
 	mux.Handle("/metrics", s.metrics)
+	mux.Handle("/metrics/prometheus", s.metrics.PrometheusHandler())
 	mux.HandleFunc("/drain", s.handleDrain)
 	if err := cloud.RegisterWorker(mux, s.cfg); err != nil {
 		select {

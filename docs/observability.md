@@ -43,8 +43,8 @@ transaction.
 
 ## Coverage and remaining gaps
 
-Worker `/metrics` and observer `/metrics` are **JSON**, not Prometheus scrape
-responses. The observer's legacy `/metrics` summarizes at most the latest 200
+Worker `/metrics` and observer `/metrics` remain **JSON** diagnostics. Standard
+Prometheus/OpenMetrics exports are available separately at `/metrics/prometheus`. The observer's legacy `/metrics` summarizes at most the latest 200
 runs and must not be used as a time-window metric; use `/overview` instead.
 The worker endpoint reports requests/denials, model and tool calls/errors,
 agent events, usage/cache/reasoning fields, latency quantiles, inbox/job and
@@ -60,7 +60,7 @@ Services emit JSON logs and deployment limits new containers to three 10 MB
 log files. Recorder errors carry ERROR severity. Legacy standard-library log
 calls still carry INFO severity, so full log alerting requires migrating those
 call sites to structured levels. There is no centralized log retention,
-Prometheus time-series storage, SLO alert routing, host resource history, or
+managed Prometheus time-series storage, SLO alert routing, host resource history, or
 end-to-end external authorization probe in this deployment. Langfuse supplies
 model/agent trace analysis; it does not replace queue and service diagnostics.
 
@@ -167,3 +167,65 @@ These controls do not identify every personal or business-sensitive fact. User
 and session correlation IDs can still be present in trace attributes even when
 message capture is disabled. Set exporter access and retention accordingly;
 clearing user memory does not erase previously exported traces.
+
+## Standard operational metrics
+
+Worker `/metrics/prometheus` uses a private official Prometheus client registry.
+Existing recorder counters remain authoritative: request/denial, model/tool
+calls and errors, reported token fields, canonical events, in-process inbox jobs,
+queue depth/capacity, Go/process resource metrics and recorder start time.
+Labels contain configured tool/event names and fixed operation/kind/outcome
+values, never session/user IDs, tool arguments, prompts or error strings.
+Cache/reasoning token fields can overlap input/output; do not sum every `kind`
+into billing usage. Counters reset on process restart.
+
+`kepler_agent_operation_duration_seconds` records request/model/tool duration in
+seconds with classic and native histograms. Classic buckets support existing
+scrapers and include long agent operations through 1,800 seconds. Native histograms use a
+160-bucket memory budget per operation. Histograms can be aggregated
+across workers; the JSON P95 over the latest 4,096 samples cannot. JSON summaries
+retain their existing recent-sample/lifetime-count meaning. Sampling now uses
+constant-time ring writes and computes percentiles outside the recorder lock.
+
+Observer `/metrics/prometheus` requires the same admin authorization as
+`/overview`. It reads queue-only state in a bounded, read-only repeatable-read
+transaction; it does not fetch conversation metadata, recent errors, traces or
+run windows. Exports are gauges:
+
+| Metric | Meaning |
+| --- | --- |
+| `kepler_agent_durable_inbox_events{state}` | Current inbox rows by state |
+| `kepler_agent_durable_inbox_expired_claims` | Processing claims whose deadline expired |
+| `kepler_agent_durable_inbox_oldest_queued_seconds` | Age of the oldest currently queued event |
+| `kepler_agent_durable_pending_inputs{queue}` | Unacknowledged inputs by kind and claim state |
+
+Known queue states emit zero when empty. A failed/unconfigured database read
+returns HTTP 503; it never turns into a zero-valued healthy scrape. Replicated
+observers describe the **same** database: select one or take a maximum for the
+same store; never sum duplicated backlog gauges. Select your deployment/store
+labels before aggregation. Worker in-process queue depth is a different signal.
+
+Configure a Prometheus-compatible scraper explicitly; this repository does not
+start one or choose a retention/alert/SLO policy. Use `metrics_path:
+/metrics/prometheus`. Worker health traffic retains its existing network boundary;
+observer scraping uses a bearer `credentials_file` or the existing admin header.
+Keep credentials out of scrape URLs and versioned configuration.
+
+Useful queries after selecting the relevant deployment labels:
+
+```promql
+sum(rate(kepler_agent_model_errors_total[5m]))
+  / sum(rate(kepler_agent_model_calls_total[5m]))
+
+histogram_quantile(0.95,
+  sum by (le, operation) (rate(kepler_agent_operation_duration_seconds_bucket[5m])))
+
+max by (state) (kepler_agent_durable_inbox_events)
+```
+
+No model traffic leaves the error ratio undefined, not evidence of a perfect
+success rate. These are instrumented-operation signals, not task-quality or
+end-user-delivery SLOs. Real Slack latency and delivery outcomes still come from
+`slack.reply` traces; benchmark pass rates still require their native graders.
+References: [histograms](https://prometheus.io/docs/practices/histograms/),
+[official Go client](https://github.com/prometheus/client_golang).

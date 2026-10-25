@@ -94,11 +94,22 @@ quality gate correctly rejected it. Artifacts remain in deploy/.cache/evidence-
 wiring-control-20261026 and are explicitly not model-quality results.
 `make check` passed. No live-agent quality claim.
 
+Operational metrics milestone: standard worker process counters and aggregatable
+histograms, authenticated queue-only durable gauges with failed-scrape semantics,
+and constant-time latency rings with percentile sorting outside the lock.
+M1 Pro/Go 1.25.0, three runs: full-window record path 436.0–448.4 ns/op before;
+32.51–32.60 ns/op after including new histogram recording, zero allocations.
+This is a recorder microbenchmark, not end-to-end model latency. Official client
+v1.24.0 preserves the existing Go 1.25 toolchain. Local race suites and actual
+PostgreSQL observer/hosted/connection/memory integration suites passed.
+
 ## Handoff
 
-Working branch: feat/a2a-delegation (stacked on #24). #23 is merged after CI;
-#24 passed CI and is retargeted to main. A2A peer tools are integrated in CLI,
-app-server and hosted profiles; the inbound SDK executor is opt-in composition,
-not an automatically exposed listener. Actual SDK and adapter race suites passed.
-Next finish A2A full checks, review and publish, then evaluation hardening. Keep
-results and remaining work here instead of relying on private chat history.
+Working branch: feat/operational-metrics, stacked on #26. PRs #23–#26 are
+merged after CI and review. Metrics full checks, race suites and real PG/Redis
+`make integration-check` passed (isolated loopback PG17 and Redis7 fixtures).
+Next publish metrics, then resolve the remaining retrieval/context audit with
+actual regression evidence and an explicit decision on unmeasured features.
+Real-model comparison is unavailable without a configured login/provider and
+public task containers; do not invent a quality result or deploy services.
+Keep all completed source changes on GitHub for device handoff.
