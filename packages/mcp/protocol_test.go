@@ -117,3 +117,20 @@ func TestDiscoveryRejectsCyclesDuplicateNamesAndPageExhaustion(t *testing.T) {
 		})
 	}
 }
+
+func TestSSEPrimingEventPrecedesMatchingResponse(t *testing.T) {
+	stream := "id: prime\ndata:\n\n" + `data: {"jsonrpc":"2.0","id":1,"result":{"ok":true}}` + "\n\n"
+	result, err := readRPCResponse(strings.NewReader(stream), "text/event-stream", json.RawMessage(`1`))
+	if err != nil || string(result) != `{"ok":true}` {
+		t.Fatalf("priming event aborted response: result=%s err=%v", result, err)
+	}
+}
+
+func TestMCPResultsMustBeObjects(t *testing.T) {
+	for _, result := range []string{"null", "[]", "true", "42", `"text"`} {
+		body := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"result":%s}`, result)
+		if _, err := readRPCResponse(strings.NewReader(body), "application/json", json.RawMessage(`1`)); err == nil {
+			t.Fatalf("non-object result accepted: %s", result)
+		}
+	}
+}

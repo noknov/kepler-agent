@@ -322,6 +322,10 @@ func readRPCResponse(reader io.Reader, contentType string, expected json.RawMess
 		}
 		raw := []byte(strings.Join(data, "\n"))
 		data = nil
+		// Empty data events can prime resumable SSE without carrying an RPC.
+		if len(bytes.TrimSpace(raw)) == 0 {
+			return nil, false, nil
+		}
 		return decodeRPCResponse(raw, expected)
 	}
 	for scanner.Scan() {
@@ -367,7 +371,11 @@ func decodeRPCResponse(body, expected json.RawMessage) (json.RawMessage, bool, e
 	if response.Error != nil {
 		return nil, true, RPCError{Code: response.Error.Code, Message: response.Error.Message, Data: response.Error.Data}
 	}
-	return response.Result, true, nil
+	result := bytes.TrimSpace(response.Result)
+	if len(result) == 0 || result[0] != '{' {
+		return nil, true, fmt.Errorf("mcp: result must be an object")
+	}
+	return result, true, nil
 }
 
 // FormatToolResult parses an MCP tools/call result and returns the concatenated content.
