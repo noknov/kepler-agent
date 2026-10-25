@@ -112,12 +112,12 @@ ranking cache, automatic deletion, or synthetic embedding capability added.
 
 ## Handoff
 
-PRs #23–#28 and #30 are merged after CI/review. Native remote structured output
+PRs #23–#30 and deploy #3 are merged after CI/review. Native remote structured output
 now requires a matching native capability receipt; old optional-field-ignoring
 servers fail closed while retaining usage. PR #29 began as a published embedding
 resource prerequisite and now includes the real opt-in memory consumer, cache
 ownership, separate terminal embedding accounting, and paired deploy migration018.
-Do not merge it until final CI/review and migration parity are verified.
+CI and review passed at2c8ed98; migration parity passed at398aa9c.
 
 Semantic milestone: real PostgreSQL controlled-vector tests cover zero lexical
 overlap, scope, source mutation/deletion/reset/expiry/model-space races, concurrent
@@ -128,8 +128,16 @@ justifies the extension, not an approximate index or another search service.
 Schema parity fresh/upgrade/replay passed using official pgvector v0.8.7 built
 against the isolated PG17.6 server. No actual model relevance claim; feature off.
 
-Remaining: finish PR29/deploy publication/checks; inspect context/planning/durable
-recovery for demonstrated defects, then publish a final capability assessment.
+Web recovery milestone in progress: reproduced premature acknowledgement on
+transient conversation/approval storage errors and missing terminal persistence.
+Added a single claim cleanup/transfer owner, terminal-before-ack rejections, replay
+acknowledgement and no-claim capacity admission. Real PostgreSQL regression
+confirms input survives the transient error and permanent rejection has a durable
+terminal. Full worker capacity previously consumed queue attempts without work;
+its regression failed before the admission fix. Finish checks/publication/review.
+
+Remaining: finish Web recovery PR, audit opt-in configuration/startup diagnostics,
+then publish the requested capability assessment against the verified source.
 Live-model comparison is unavailable without a configured login/provider and
 public task containers. Do not fabricate parity/quality/HA measurements.
 

@@ -56,6 +56,15 @@ Do not clear owner/lease fields or delete inbox rows as routine recovery.
 Investigate malformed and exhausted events rather than replaying them forever.
 See [safety and limitations](safety.md).
 
+Web queue recovery distinguishes an authoritative missing conversation from a
+storage/lease failure. Temporary lookup or approval errors release the claim;
+only a persisted terminal rejection permits acknowledgement. Retry exhaustion
+and malformed payloads also require a canonical terminal before acknowledgement.
+An already terminal turn is acknowledged without repeating approval/execution.
+A full worker does not claim waiting conversations and consume their retry
+attempts. Final admission rechecks drain/cancellation before starting work.
+
+
 ## Shutdown
 
 A drain makes readiness fail; it does not mean all turns have already completed.
