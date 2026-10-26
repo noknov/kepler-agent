@@ -12,7 +12,11 @@ import (
 // JSONB may reorder schema keys and normalize number spelling. Compare the
 // contract's JSON values, preserving numeric precision and array order.
 func sameApprovalContract(a, b tool.Descriptor) bool {
-	decode := func(d tool.Descriptor) (any, error) {
+	return sameJSONDocument(a, b)
+}
+
+func sameJSONDocument(a, b any) bool {
+	decode := func(d any) (any, error) {
 		data, err := json.Marshal(d)
 		if err != nil {
 			return nil, err

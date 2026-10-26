@@ -32,6 +32,7 @@ type preparedCall struct {
 	item       tool.Tool
 	descriptor tool.Descriptor
 	result     *tool.Result
+	reused     bool
 }
 
 type toolOutcome struct {
@@ -39,11 +40,7 @@ type toolOutcome struct {
 	usage   model.Usage
 }
 
-func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls []model.ToolCall) (toolOutcome, error) {
-	priorResults, err := r.completedToolResults(ctx, request)
-	if err != nil {
-		return toolOutcome{}, err
-	}
+func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls []model.ToolCall, priorResults map[string]tool.Result) (toolOutcome, error) {
 	prepared := make([]preparedCall, len(calls))
 	exclusive := false
 	for index, modelCall := range calls {
@@ -52,6 +49,7 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 		if previous, ok := priorResults[call.ID]; ok {
 			result := previous
 			prepared[index].result = &result
+			prepared[index].reused = true
 			continue
 		}
 		item, ok := r.deps.Tools.GetActive(request.SessionID, call.Name)
@@ -226,27 +224,6 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 	return r.recordToolResults(recordCtx, request, prepared)
 }
 
-// completedToolResults makes replay idempotent at the runtime boundary. Tool
-// implementations can use Call.ExecutionID when their downstream API supports
-// a stronger idempotency guarantee; the transcript prevents this runtime from
-// dispatching a call that already has a durable result.
-func (r *Runtime) completedToolResults(ctx context.Context, request TurnRequest) (map[string]tool.Result, error) {
-	events, err := r.turnEvents(ctx, request.SessionID)
-	if err != nil {
-		return nil, err
-	}
-	results := make(map[string]tool.Result)
-	for _, event := range events {
-		if event.TurnID != request.TurnID || event.ToolCall == nil || event.ToolResult == nil {
-			continue
-		}
-		if event.Type == transcript.ToolCallCompleted || event.Type == transcript.ToolCallFailed {
-			results[event.ToolCall.ID] = *event.ToolResult
-		}
-	}
-	return results, nil
-}
-
 func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, prepared []preparedCall) (toolOutcome, error) {
 	var pending *model.Message
 	var usage model.Usage
@@ -255,14 +232,14 @@ func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, pr
 		if entry.result == nil {
 			return toolOutcome{}, errors.New("tool execution produced no result")
 		}
-		if childUsage := toolResultUsage(*entry.result); childUsage != nil {
+		if childUsage := toolResultUsage(*entry.result); childUsage != nil && !entry.reused {
 			addUsage(&usage, *childUsage)
 		}
 		eventType := transcript.ToolCallCompleted
 		if entry.result.IsError {
 			eventType = transcript.ToolCallFailed
 		}
-		if entry.result.TaskState != nil && !entry.result.IsError {
+		if entry.result.TaskState != nil && !entry.result.IsError && !entry.reused {
 			if entry.call.Name != "task_state" {
 				return toolOutcome{}, fmt.Errorf("only task_state may publish task state")
 			}
@@ -274,7 +251,7 @@ func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, pr
 				return toolOutcome{}, err
 			}
 		}
-		if entry.result.Plan != nil && !entry.result.IsError {
+		if entry.result.Plan != nil && !entry.result.IsError && !entry.reused {
 			if _, err := r.record(ctx, transcript.Event{
 				SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.PlanUpdated,
 				Plan: entry.result.Plan,
@@ -288,7 +265,7 @@ func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, pr
 		}); err != nil {
 			return toolOutcome{}, err
 		}
-		if entry.result.ErrorCode == "connection_required" && r.deps.ConnectionContinuations != nil {
+		if entry.result.ErrorCode == "connection_required" && r.deps.ConnectionContinuations != nil && !entry.reused {
 			provider, _ := entry.result.Metadata["provider"].(string)
 			instanceID, _ := entry.result.Metadata["instance_id"].(string)
 			channel := entry.call.Scope.Values["channel"]
