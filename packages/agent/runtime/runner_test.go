@@ -915,7 +915,7 @@ func TestExecuteToolsJoinsStartedWorkersBeforeReturningCancellation(t *testing.T
 		{ID: "c", Name: "c", Arguments: json.RawMessage(`{}`)},
 	}
 	go func() {
-		_, err := runner.executeTools(ctx, TurnRequest{SessionID: "cancel-tools", TurnID: "turn"}, calls)
+		_, err := runner.executeTools(ctx, TurnRequest{SessionID: "cancel-tools", TurnID: "turn"}, calls, nil)
 		done <- err
 	}()
 	<-started

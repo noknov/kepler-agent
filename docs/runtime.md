@@ -260,3 +260,13 @@ Across a remote Kepler model connection, native output also requires the returne
 cannot silently turn native mode into local validation. Missing/wrong receipts
 fail without publishing content or retrying the paid request; reported usage is
 retained. Explicit validated mode remains usable with legacy remote models.
+
+Tool-call IDs are nonempty and unique within each model batch. Before persisting
+an executable assistant message or consulting policy, the runtime rejects an
+ambiguous batch as a non-retryable provider-protocol failure. Within a turn, a
+completed ID is bound to its original tool name and JSON arguments. Equivalent
+JSONB key ordering and exact numeric values survive replay; retargeting an ID
+fails before any sibling executes. Reusing an identical durable result adds the
+required tool reply without recharging child usage or reapplying plan/task-state
+transitions. A fresh action requires a fresh ID. This complements, rather than
+replaces, downstream idempotency and interrupted-effect reconciliation.

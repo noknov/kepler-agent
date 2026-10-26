@@ -270,11 +270,15 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 		if len(response.Message.Content) == 0 {
 			return r.finishTurn(ctx, result, model.Message{}, TerminationEmptyResponse, errEmptyModelResponse)
 		}
+		calls := response.Message.ToolCalls()
+		priorResults, err := r.completedToolResults(ctx, request, calls)
+		if err != nil {
+			return r.failTurn(ctx, result, err)
+		}
 		if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.AssistantMessage, Message: &response.Message}); err != nil {
 			return r.failTurn(ctx, result, err)
 		}
 		result.Message = response.Message
-		calls := response.Message.ToolCalls()
 		if len(calls) == 0 {
 			if response.FinishReason == model.FinishLength {
 				return r.finishTurn(ctx, result, response.Message, TerminationOutputLimit, nil)
@@ -299,7 +303,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 			result.Message = response.Message
 			return r.finishTurn(ctx, result, response.Message, TerminationCompleted, nil)
 		}
-		outcome, err := r.executeTools(ctx, request, calls)
+		outcome, err := r.executeTools(ctx, request, calls, priorResults)
 		addUsage(&result.Usage, outcome.usage)
 		if errors.Is(err, errPendingApproval) {
 			// Waiting for a user decision is a normal terminal state, not a
