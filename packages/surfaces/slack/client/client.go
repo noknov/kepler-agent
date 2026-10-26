@@ -34,7 +34,8 @@ const (
 	MaxMessageTextRunes = 4000
 	// MaxSectionTextRunes is the Block Kit section text limit. Callers that
 	// render message text into a section must use this smaller bound.
-	MaxSectionTextRunes = 3000
+	MaxSectionTextRunes   = 3000
+	maxSlackResponseBytes = 4 << 20
 )
 
 // MessageBlockBuilder renders Slack blocks for one independently delivered
@@ -916,11 +917,11 @@ func (c *Client) doWithRetry(req *http.Request, out any, replayUncertain bool) e
 			}
 			continue
 		}
-		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		data, readErr := io.ReadAll(io.LimitReader(resp.Body, maxSlackResponseBytes+1))
 		_ = resp.Body.Close()
 		// The rejection status is sufficient even if its error body is incomplete.
 		if resp.StatusCode == http.StatusTooManyRequests {
-			lastErr = slackHTTPError{StatusCode: resp.StatusCode, Body: string(data)}
+			lastErr = slackHTTPError{Method: strings.TrimPrefix(req.URL.Path, "/api/"), StatusCode: resp.StatusCode}
 			delay := retryAfter(resp)
 			if delay <= 0 {
 				delay = time.Duration(attempt+1) * 250 * time.Millisecond
@@ -932,6 +933,9 @@ func (c *Client) doWithRetry(req *http.Request, out any, replayUncertain bool) e
 			continue
 		}
 
+		if len(data) > maxSlackResponseBytes && readErr == nil {
+			readErr = fmt.Errorf("Slack response exceeds configured byte budget")
+		}
 		if readErr != nil {
 			if !replayUncertain {
 				return uncertainDeliveryError{err: readErr}
@@ -939,7 +943,7 @@ func (c *Client) doWithRetry(req *http.Request, out any, replayUncertain bool) e
 			return readErr
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			lastErr = slackHTTPError{StatusCode: resp.StatusCode, Body: string(data)}
+			lastErr = slackHTTPError{Method: strings.TrimPrefix(req.URL.Path, "/api/"), StatusCode: resp.StatusCode}
 			if !replayUncertain {
 				if resp.StatusCode >= 500 {
 					return uncertainDeliveryError{err: lastErr}
@@ -954,7 +958,7 @@ func (c *Client) doWithRetry(req *http.Request, out any, replayUncertain bool) e
 			}
 			continue
 		}
-		err = json.NewDecoder(bytes.NewReader(data)).Decode(out)
+		err = json.Unmarshal(data, out)
 		if err != nil && !replayUncertain {
 			return uncertainDeliveryError{err: err}
 		}
@@ -964,12 +968,12 @@ func (c *Client) doWithRetry(req *http.Request, out any, replayUncertain bool) e
 }
 
 type slackHTTPError struct {
+	Method     string
 	StatusCode int
-	Body       string
 }
 
 func (e slackHTTPError) Error() string {
-	return fmt.Sprintf("slack http status %d: %s", e.StatusCode, e.Body)
+	return fmt.Sprintf("slack %s http status %d", e.Method, e.StatusCode)
 }
 
 func cloneRequestForAttempt(req *http.Request) (*http.Request, error) {

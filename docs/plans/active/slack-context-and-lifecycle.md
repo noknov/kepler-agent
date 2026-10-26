@@ -17,7 +17,7 @@ No manual continuation confirmation or reset-credit spending.
   queue, steering and canonical user input without new tracking/cache state.
 - [x] Add native suggested prompts that reflect supported interactions and retain
   access checks, optional API failure behavior and agent_view wire semantics.
-- [ ] Audit ownership/cancellation/admission with special attention to work after
+- [x] Audit ownership/cancellation/admission with special attention to work after
   model execution; reproduce concrete reliability/resource defects before fixes.
 - [ ] Review the complete diff, relevant race/integration tests, make check and
   exact-head CI; publish reviewable PRs and update owning guides.
@@ -61,3 +61,19 @@ publication. Next investigate admission during durable finalization, where an
 execution-only active map may release capacity too early.
 
 Source and deploy changes must be published before allowance waits.
+
+
+2026-10-27 follow-through: PR35 (message snapshots), PR36 (native suggestions),
+PR37 (admission through finalization) and PR38 (A2A credential identity) merged
+with CI/review. Web's held-ack regression failed before the fix; actual PG-backed
+Web/worker races passed. A2A's old adapter silently changed principals and a
+rebuilt peer inherited old task references; real HTTP regression now prevents
+both before dispatch. Legacy credential-unbound refs need reconciliation.
+PR39 centralizes Slack pagination and rejects cursor cycles, preserving empty-page
+semantics. Local affected races/make check passed; wait for CI/review.
+Current branch tightens the existing Slack response byte limit/full JSON receipt
+and removes raw upstream HTTP bodies from error text. Success-prefix, oversized
+body and private-error-body regressions failed first; no blind write replay is
+introduced. Finish publication and exact-head CI, then run combined integration.
+Temporary isolated PG55437 and Redis56379 are running for this phase; stop before
+final handoff. No live Slack messages or production changes were made.
