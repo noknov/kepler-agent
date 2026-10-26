@@ -35,8 +35,14 @@ Remote task creation, continuation and cancellation declare external-write
 and network effects. Hosted operators must allow the exact tool name through
 `AGENT_ALLOWED_WRITE_TOOLS`; local users use the existing scoped approval flow.
 Only status `get` is a parallel read. Agent Card descriptions cannot downgrade
-these effects. Target/credential-environment binding is part of the descriptor
-version, so an old pending approval cannot silently target a different peer.
+these effects. Endpoint, credential environment and actual credential identity bind the
+descriptor version and durable task reference. Changing a credential in a running
+process fails before network dispatch; rebuild the peer adapter to adopt it.
+The rebuilt identity cannot inherit the old principal's task references or
+pending approvals, even when the endpoint and environment-variable name match.
+No credential is stored in task receipts; only an opaque binding digest is used.
+Rotation does not prove that the replacement credential belongs to the same
+remote account, so outstanding old tasks require explicit reconciliation.
 
 ## Lifecycle, recovery and evidence
 
