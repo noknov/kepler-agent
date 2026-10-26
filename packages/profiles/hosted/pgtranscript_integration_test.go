@@ -206,3 +206,78 @@ func (t jsonbApprovalTool) Execute(context.Context, tool.Call) (tool.Result, err
 	*t.calls++
 	return tool.TextResult("done"), nil
 }
+
+func TestIntegrationCompletedToolBindingAfterJSONBRoundTrip(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
+	ctx := t.Context()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	for _, test := range []struct {
+		name, args string
+		wantError  bool
+	}{
+		{"equivalent", `{"n":9007199254740993.0,"amount":1000}`, false},
+		{"different integer", `{"n":9007199254740992,"amount":1000}`, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sessionID := fmt.Sprintf("jsonb-tool-binding-%d", time.Now().UnixNano())
+			turnID := sessionID + "-turn"
+			defer func() {
+				pool.Exec(context.Background(), `DELETE FROM agent_transcript_events WHERE session_id=$1`, sessionID)
+			}()
+			store := PGTranscript{Pool: pool}
+			original := tool.Call{ID: "call", Name: "write", Arguments: json.RawMessage(`{"amount":1e3,"n":9007199254740993}`), Scope: tool.Scope{SessionID: sessionID, TurnID: turnID}}
+			receipt := tool.TextResult("already executed")
+			receipt.Usage = &model.Usage{InputTokens: 17, Reported: true}
+			for i, event := range []transcript.Event{{Type: transcript.SessionStarted}, {Type: transcript.TurnStarted}, {Type: transcript.ToolCallCompleted, ToolCall: &original, ToolResult: &receipt}} {
+				event.ID = fmt.Sprintf("%s-%d", sessionID, i)
+				event.SessionID = sessionID
+				event.TurnID = turnID
+				event.Timestamp = time.Now()
+				if _, err := store.Append(ctx, event); err != nil {
+					t.Fatal(err)
+				}
+			}
+			writes := 0
+			catalog, _ := tool.NewCatalog(jsonbApprovalTool{calls: &writes})
+			client := &jsonbReplayModel{call: model.ToolCall{ID: "call", Name: "write", Arguments: json.RawMessage(test.args)}}
+			runner, err := agentruntime.New(agentruntime.Config{Model: "integration"}, agentruntime.Dependencies{Model: client, Tools: catalog, Transcript: store, Policy: tool.AllowAllPolicy{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := runner.RunTurn(ctx, agentruntime.TurnRequest{SessionID: sessionID, TurnID: turnID, Input: model.TextMessage(model.RoleUser, "continue")})
+			if test.wantError && model.ErrorKindOf(err) != model.ErrorProtocol {
+				t.Fatalf("accepted retargeted JSONB call: %v", err)
+			}
+			if !test.wantError && err != nil {
+				t.Fatalf("equivalent JSONB call rejected: %v", err)
+			}
+			if writes != 0 || result.Usage.InputTokens != 17 {
+				t.Fatalf("replayed side effect/accounting: writes=%d usage=%+v", writes, result.Usage)
+			}
+			replay, replayErr := runner.RunTurn(ctx, agentruntime.TurnRequest{SessionID: sessionID, TurnID: turnID})
+			if replay.Usage.InputTokens != 17 || (replayErr != nil) != test.wantError {
+				t.Fatalf("terminal replay differs: %+v err=%v", replay, replayErr)
+			}
+		})
+	}
+}
+
+type jsonbReplayModel struct {
+	call      model.ToolCall
+	responded bool
+}
+
+func (m *jsonbReplayModel) Generate(context.Context, model.Request, model.EventSink) (model.Response, error) {
+	if m.responded {
+		return model.Response{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop}, nil
+	}
+	m.responded = true
+	return model.Response{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &m.call}}}, FinishReason: model.FinishToolCalls}, nil
+}

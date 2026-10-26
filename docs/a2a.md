@@ -44,6 +44,11 @@ No credential is stored in task receipts; only an opaque binding digest is used.
 Rotation does not prove that the replacement credential belongs to the same
 remote account, so outstanding old tasks require explicit reconciliation.
 
+Upgrade note: task references emitted before credential-identity binding cannot
+be safely attributed to the current principal. Finish or explicitly reconcile
+those tasks before upgrading; do not rewrite old receipts to adopt a new binding.
+No SQL migration can establish the missing remote identity.
+
 ## Lifecycle, recovery and evidence
 
 `send` requests a nonblocking A2A response. An immediate agent message is a

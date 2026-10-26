@@ -214,3 +214,45 @@ without importing CLI-specific interaction into Slack.
 下一轮应先在固定模型、配置、任务镜像和 grader 下测任务成功率/费用/延迟，再决定
 写入子代理的独立 workspace/冲突协议、更大文档 corpus 或分布式 admission 是否有净收益。
 生产 HA 需明确目标集群、外部数据服务 failover、恢复目标和故障演练证据；新增一组 YAML 不能替代这些条件。
+
+## 2026-10-27：本轮深化与 Slack 功能方向
+
+延续上一节的完整能力矩阵，本轮聚焦能复现的边界错误和可组合的新能力。
+PR35–43 已通过各自最新提交的 CI 后合并；Slack RTS 搜索已完成本地验证。没有增加执行框架、数据库表或生产依赖。
+
+| 方面 | 本轮增强 / 保留的边界 | 仍需证明的结果 |
+| --- | --- | --- |
+| ReAct、Function Calling、Plan-and-Execute | #41 在 assistant 消息进入可执行 transcript 前校验整批调用 ID；同一 ID 绑定原工具/精确 JSON 参数；复用结果不重复用量和计划/任务状态 | 真实模型是否更少陷入无效调用，需要固定任务集验证；不修补或猜测缺失 ID |
+| Structured Outputs、MCP | 保留上一轮原生输出/完整校验、RPC identity 和有界 SSE；本轮没有复制第二套协议实现 | 提供方/协议版本兼容范围和真实效果仍以各 owning guide 为准 |
+| A2A、Multi-Agent | #38 把实际凭据身份纳入 peer/task/审批绑定，运行中轮换在出网前失败；保留通用 delegation，code review 是其上编排 | 旧凭据未绑定的任务先核对；远程 peer 不是默认 code-review 数据出口，暂无跨产品质量对照 |
+| Context Engineering、RAG/Hybrid/Reranker、Memory | #35 传递消息时的 Slack viewing 引用；#43 通过用户 RTS 检索相关讨论及来源；沿用已有任务状态、混合 memory、可选 reranker | Slack 语义检索由工作区能力决定；未用真实模型证明相关性、召回率、费用或长期约束保持率 |
+| Checkpoint/Resume、HITL、幂等恢复 | #37 容量包含持久收尾；#40 完整有界 JSON 回执；#41 拒绝改绑旧调用；真实 JSONB 恢复测试覆盖数字归一化、精度和不重复写/计费 | 跨系统未知副作用仍需 reconciliation；不能宣称 exactly-once 或任意任务自动恢复 |
+| 性能、PostgreSQL/Redis、OpenTelemetry | #39/#42 统一 cursor 进展检查，减少超量分页并拒绝循环；保留 governor、队列指标和独立 embedding 记账 | 进程内限流不是集群配额；真实 PG/Redis race 测试不能替代生产 P95、HA/SLO 或故障演练 |
+| Slack 产品体验 | #36 原生建议入口，复用同一 runtime；RTS 搜索只按需取一页，保留 source/context，不复制整个 workspace | 需安装 scopes、重新连接和真实工作区验收；没有发送真实 Slack 消息 |
+| Spring AI/LangGraph、Temporal、Docker/K8s | 保留 canonical Go runtime 与现有部署；本轮无框架/集群模板堆叠 | 仍未提供经验证的生产 HA；引入外部 workflow engine 必须先解决明确的独立调度/持久化需求 |
+
+合并后的 `make check`、runtime/delegation/A2A/Web/worker/memory race suites、
+隔离 PostgreSQL/Redis 的 `make integration-check` 和 JSONB 调用恢复回归提供工程证据。
+没有真实 Slack/模型质量实验或生产部署。本轮无需补数据库迁移；上一轮 deploy018
+的应用顺序和兼容条件仍须遵守。
+
+### 值得组合的 Slack 能力
+
+以下是基于官方 API 和现有边界的产品设计判断，不是已验证的用户效果：
+
+| 场景 | 可复用的能力 | 验收与维护条件 |
+| --- | --- | --- |
+| “总结我正在看的频道的决策、分歧和原话来源” | 消息时 viewing 引用 + 已授权 conversation read + 原生建议入口 | 切换频道不串上下文；引用逐条可追溯；没有用户连接时不扩大 bot 读取范围 |
+| “当时为什么这么改？找讨论并对照这次 PR” | RTS + 选定 thread read + GitHub 只读工具/现有通用 delegation | 同时保留 Slack permalink 与不可变 PR head；区分事实、推断和未决事项；比较调用数、来源准确率及耗时 |
+| “把调查结论整理成 Canvas” | 搜索证据 + 已有 `slack-create_canvas`，需用户明确要求和 operator write allowlist | 明确可见范围；带来源；未知创建结果不盲重试。不伪装成已经实现的持续同步文档 |
+| 将确认后的行动项写入 Slack Lists | 官方 Lists API；当前尚未实现 | 先定义字段映射、目标/actor、重复提交与更新冲突，再接已有写策略和回执；不从模糊发言自动分配任务 |
+| 在自有任务链接旁展示进度与证据 | Work Objects / link unfurl；当前尚未实现 | 仅 app 拥有的对象和授权读者；从 canonical events 投影；不再建任务状态库，不因贴链接自动触发昂贵调查 |
+
+优先用前两种只读组合验证真实收益，再决定是否增加 Lists 或 Work Objects 写入面。
+这避免为每一种需求单独硬编码一个 workflow，也避免把更多 agent 数量当作质量提升。
+
+参考：[Codex as a platform](https://developers.openai.com/blog/codex-as-a-platform)、
+[Slack context management](https://docs.slack.dev/ai/agent-context-management/)、
+[RTS usage](https://docs.slack.dev/apis/web-api/real-time-search-api/)、
+[Canvas](https://docs.slack.dev/surfaces/canvases/)、[Lists](https://docs.slack.dev/surfaces/lists/)、
+[Work Objects / unfurl](https://docs.slack.dev/messaging/unfurling-links-in-messages/)。
