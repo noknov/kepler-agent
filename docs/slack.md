@@ -174,3 +174,7 @@ requires; they are not treated as proof that the conversation ended. User tools
 and bootstrap history retain their existing positive message bounds. The raw
 client's explicit Replies limit<=0 all-pages API still requires a caller-owned
 cancellation/deadline when used outside those bounded surfaces.
+
+User-directory lookup shares the same cursor progression guard as conversation
+history. A cyclic users.list response fails before duplicate pages can become
+ambiguous-person evidence; an empty page with a new cursor continues normally.

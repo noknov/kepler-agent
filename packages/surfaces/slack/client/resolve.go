@@ -104,6 +104,7 @@ func (c *Client) FindUsersByQuery(ctx context.Context, query string, limit int) 
 		limit = 5
 	}
 	cursor := ""
+	seen := make(map[string]bool)
 	var matches []User
 	for len(matches) < limit {
 		values := url.Values{}
@@ -125,6 +126,10 @@ func (c *Client) FindUsersByQuery(ctx context.Context, query string, limit int) 
 		if !out.OK {
 			return nil, fmt.Errorf("slack users.list failed: %s", out.Error)
 		}
+		next, err := checkedPaginationCursor("users.list", out.ResponseMetadata.NextCursor, seen)
+		if err != nil {
+			return nil, err
+		}
 		for _, member := range out.Members {
 			if member.ID == "" || member.Deleted() {
 				continue
@@ -136,7 +141,7 @@ func (c *Client) FindUsersByQuery(ctx context.Context, query string, limit int) 
 				}
 			}
 		}
-		cursor = strings.TrimSpace(out.ResponseMetadata.NextCursor)
+		cursor = next
 		if cursor == "" {
 			return matches, nil
 		}

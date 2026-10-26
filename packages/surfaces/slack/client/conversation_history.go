@@ -2,7 +2,6 @@ package slack
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -30,7 +29,7 @@ func (c *Client) Replies(ctx context.Context, channel, threadTS string, limit in
 // conversationMessages owns cursor progression and the requested message budget
 // for both conversation APIs, so their failure/termination rules cannot drift.
 func (c *Client) conversationMessages(ctx context.Context, method string, values url.Values, limit int) ([]Message, error) {
-	seen := map[string]bool{"": true}
+	seen := make(map[string]bool)
 	var messages []Message
 	for {
 		pageLimit := 200
@@ -52,9 +51,9 @@ func (c *Client) conversationMessages(ctx context.Context, method string, values
 		if !page.OK {
 			return nil, slackAPIError{Method: method, Code: page.Error}
 		}
-		next := strings.TrimSpace(page.Metadata.NextCursor)
-		if next != "" && seen[next] {
-			return nil, fmt.Errorf("Slack %s returned a repeated pagination cursor", method)
+		next, err := checkedPaginationCursor(method, page.Metadata.NextCursor, seen)
+		if err != nil {
+			return nil, err
 		}
 		messages = append(messages, page.Messages...)
 		if limit > 0 && len(messages) >= limit {
@@ -63,7 +62,6 @@ func (c *Client) conversationMessages(ctx context.Context, method string, values
 		if next == "" {
 			return messages, nil
 		}
-		seen[next] = true
 		values.Set("cursor", next)
 	}
 }
