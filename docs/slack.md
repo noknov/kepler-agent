@@ -38,6 +38,15 @@ Use Slack's Agent experience (`agent_view`) for the corresponding presentation.
 Enable only the features appropriate to your Slack app installation; event
 access also depends on its permissions and conversation membership.
 
+
+Slack JSON responses must contain one complete value within the existing4MiB
+client budget. A valid prefix followed by another value, trailing data, or an
+oversized body is not success. Ambiguous non-idempotent write responses retain
+uncertain-delivery classification and are never automatically replayed; explicit
+429 rejection still follows Retry-After. HTTP error diagnostics retain method
+and status but omit raw upstream bodies, which may echo private content.
+
+
 ## Start a conversation
 
 Mention the agent or use its supported direct-message entry. Replies continue
