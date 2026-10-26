@@ -132,3 +132,27 @@ Only the documented channel entity is supported here; canvas/thread/list entity
 formats are not guessed. An absent snapshot never falls back to an older viewed
 channel. Configure the required Slack app features before expecting references.
 See [Slack viewing context](https://docs.slack.dev/ai/developing-agents/#tracking-what-the-user-is-viewing).
+
+
+## Native suggested prompts
+
+Opening the agent Messages tab offers supported starting points. When the Home
+open event supplies a same-workspace viewed channel, two prompts explicitly name
+that channel: a decision brief and extraction of stated next steps. They retain
+source authors/timestamps and request owners/deadlines only when stated. Generic
+PR review and attachment analysis remain available; without channel context the
+page offers capability guidance instead of guessing a target.
+
+These are presentation updates, not autonomous work. No task starts until the
+user clicks/sends a suggestion. Suggested prompts do not grant Slack data access
+or create/assign tasks. Text lives in the existing prompt catalog, with English
+and Chinese defaults selected by SLACK_DEFAULT_LOCALE.
+
+This uses `assistant.threads.setSuggestedPrompts` for agent_view without
+`thread_ts`; Slack documents silent failure when that argument is supplied to an
+agent app. Enable assistant:write and agent_view, and remove app-level static
+suggested prompts before using dynamic suggestions. API/scope/configuration
+failures are optional UI failures: they emit a bounded metric and content-free
+error type, while ordinary messages remain usable. Access-denied users and
+non-DM destinations receive no suggestions. No live Slack installation has been
+modified or validated by the deterministic tests.
