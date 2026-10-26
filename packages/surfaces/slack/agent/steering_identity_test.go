@@ -51,3 +51,16 @@ func TestLocalSteeringQueuesOtherActor(t *testing.T) {
 		t.Fatalf("queue=%+v err=%v", items, err)
 	}
 }
+
+func TestSteeringRetainsItsOwnViewingSnapshot(t *testing.T) {
+	store := &memoryInputs{}
+	input := &steeringInput{store: store, sessionID: "session", owner: "worker", userID: "U1"}
+	req := slackconversation.Request{TeamID: "T1", EventID: "context-update", UserID: "U1", Channel: "D1", Text: "use this channel instead", ViewingContext: &slackconversation.ViewingContext{TeamID: "T1", ChannelID: "C456"}}
+	if err := input.Push(req); err != nil {
+		t.Fatal(err)
+	}
+	items, err := input.Claim(context.Background(), 1)
+	if err != nil || len(items) != 1 || len(items[0].Message.Content) != 2 || items[0].Message.Text() != req.Text {
+		t.Fatalf("lost steering context: %+v %v", items, err)
+	}
+}

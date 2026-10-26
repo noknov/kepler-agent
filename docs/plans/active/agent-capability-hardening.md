@@ -70,10 +70,10 @@ Tests use a real HTTP server that keeps SSE open after its result, plus protocol
 errors, version mismatches and exhausted discovery. Structured output is PR #23.
 
 Quota instruction: inspect the account's 300-minute window at milestones. At
-remaining <=5%, save/publish the current work and keep this agent loop waiting;
+remaining <10%, save/publish the current work and keep this agent loop waiting;
 check approximately every 30 minutes and resume automatically only when the
 window reports 100% remaining. No manual confirmation and no silent-state notices.
-Do not spend reset credits. This instruction is from the user, 2026-10-26.
+Do not spend reset credits. Threshold updated by the user, 2026-10-27; resume after allowance recovers.
 
 A2A milestone: official SDK 0.3 binding, configured peer send/get/cancel and
 continuation, canonical same-session/actor reference ownership, target confinement,
@@ -145,6 +145,6 @@ Final full PG/Redis integration passed at the drain milestone; the final memory,
 Web, worker, hosted and observer race suites also passed against actual PostgreSQL
 after the cleanup fix, alongside make check.
 
-User requests a live loop waiting at <=5% remaining with ~30-minute checks and
+User requests a live loop waiting at <10% remaining with ~30-minute checks and
 automatic continuation after reset, without confirmation. A reset was observed
 and work resumed. Do not spend reset credits; publish milestones before waits.

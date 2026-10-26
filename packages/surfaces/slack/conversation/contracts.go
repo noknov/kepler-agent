@@ -5,24 +5,40 @@ package slackconversation
 
 import (
 	"context"
+	"encoding/json"
+	"regexp"
 	"strings"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
 )
 
+// ViewingContext is a message-time UI reference, never conversation content
+// or an authorization scope. Keep it separate from the bot reply destination.
+type ViewingContext struct {
+	TeamID    string `json:"team_id"`
+	ChannelID string `json:"channel_id"`
+}
+
+var channelID = regexp.MustCompile(`^[CDG][A-Z0-9]+$`)
+
+func (v ViewingContext) ValidFor(team string) bool {
+	return team != "" && v.TeamID == team && channelID.MatchString(v.ChannelID)
+}
+
 type Request struct {
-	TeamID    string
-	EventID   string
-	UserID    string
-	Channel   string
-	ThreadTS  string
-	MessageTS string
-	Text      string
-	Locale    string
-	Content   []model.Content
-	MessageID string           `json:"message_id,omitempty"`
-	ClaimID   string           `json:"-"`
-	Approval  *ApprovalRequest `json:"approval,omitempty"`
+	ViewingContext *ViewingContext `json:"viewing_context,omitempty"`
+	TeamID         string
+	EventID        string
+	UserID         string
+	Channel        string
+	ThreadTS       string
+	MessageTS      string
+	Text           string
+	Locale         string
+	Content        []model.Content
+	MessageID      string           `json:"message_id,omitempty"`
+	ClaimID        string           `json:"-"`
+	Approval       *ApprovalRequest `json:"approval,omitempty"`
 }
 
 func (r Request) Message() model.Message {
@@ -31,6 +47,10 @@ func (r Request) Message() model.Message {
 		content = append(content, model.Content{Type: model.ContentText, Text: r.Text})
 	}
 	content = append(content, r.Content...)
+	if r.ViewingContext != nil && r.ViewingContext.ValidFor(r.TeamID) {
+		raw, _ := json.Marshal(map[string]any{"slack_view_context": r.ViewingContext})
+		content = append(content, model.Content{Type: model.ContentJSON, JSON: raw})
+	}
 	return model.Message{ID: r.MessageID, Role: model.RoleUser, Content: content}
 }
 
