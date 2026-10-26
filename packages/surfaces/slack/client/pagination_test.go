@@ -85,3 +85,41 @@ func TestConversationPaginationFollowsCursorThroughEmptyPage(t *testing.T) {
 		})
 	}
 }
+
+func TestUserDirectoryPaginationRejectsCursorCycles(t *testing.T) {
+	for _, member := range []string{`[]`, `[{"id":"U1","name":"target"}]`} {
+		t.Run(member, func(t *testing.T) {
+			calls := 0
+			client := NewTestClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+				calls++
+				cursor := "repeat"
+				if calls >= 3 {
+					cursor = ""
+				}
+				return jsonResp(fmt.Sprintf(`{"ok":true,"members":%s,"response_metadata":{"next_cursor":%q}}`, member, cursor)), nil
+			}))
+			matches, err := client.FindUsersByQuery(context.Background(), "target", 6)
+			if err == nil || !strings.Contains(err.Error(), "cursor") || calls != 2 || len(matches) != 0 {
+				t.Fatalf("cycle accepted as directory evidence: matches=%d calls=%d err=%v", len(matches), calls, err)
+			}
+		})
+	}
+}
+
+func TestUserDirectoryPaginationFollowsEmptyPages(t *testing.T) {
+	calls := 0
+	client := NewTestClient(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return jsonResp(`{"ok":true,"members":[],"response_metadata":{"next_cursor":"next"}}`), nil
+		}
+		if r.URL.Query().Get("cursor") != "next" {
+			t.Error("lost cursor")
+		}
+		return jsonResp(`{"ok":true,"members":[{"id":"U1","name":"target"}]}`), nil
+	}))
+	matches, err := client.FindUsersByQuery(context.Background(), "target", 6)
+	if err != nil || len(matches) != 1 || calls != 2 {
+		t.Fatalf("matches=%d calls=%d err=%v", len(matches), calls, err)
+	}
+}

@@ -226,7 +226,7 @@ func TestDeferredApprovalRecordsAlreadyRejectedSiblings(t *testing.T) {
 	store := transcript.NewMemoryStore()
 	catalog, _ := tool.NewCatalog(echoTool{})
 	runner, _ := New(Config{}, Dependencies{Model: &scriptedModel{}, Tools: catalog, Transcript: store, Policy: approvalPolicy{}})
-	_, err := runner.executeTools(context.Background(), TurnRequest{SessionID: "s", TurnID: "t"}, []model.ToolCall{{ID: "unknown", Name: "missing", Arguments: json.RawMessage(`{}`)}, {ID: "approval", Name: "echo", Arguments: json.RawMessage(`{}`)}})
+	_, err := runner.executeTools(context.Background(), TurnRequest{SessionID: "s", TurnID: "t"}, []model.ToolCall{{ID: "unknown", Name: "missing", Arguments: json.RawMessage(`{}`)}, {ID: "approval", Name: "echo", Arguments: json.RawMessage(`{}`)}}, nil)
 	if !errors.Is(err, errPendingApproval) {
 		t.Fatal(err)
 	}
