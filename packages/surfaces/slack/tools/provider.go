@@ -33,19 +33,8 @@ func connectedSlackClient(ctx context.Context, service connections.Service, user
 	return slack.NewClient(token, ""), nil
 }
 
-func (s ConnectedClientSource) SlackClient(ctx context.Context, call tool.Call) (*slack.Client, error) {
+func (s ConnectedClientSource) Client(ctx context.Context, call tool.Call) (*slack.Client, error) {
 	return connectedSlackClient(ctx, s.Service, call.Scope.UserID)
-}
-
-func beginConnectedClient(ctx context.Context, source ConnectedClientSource, call tool.Call) (*slack.Client, *tool.Result, error) {
-	client, err := source.SlackClient(ctx, call)
-	if err != nil {
-		if result, convErr := connections.ToolResult(err); convErr == nil {
-			return nil, &result, nil
-		}
-		return nil, nil, err
-	}
-	return client, nil, nil
 }
 
 // FileSearcher resolves Slack file APIs for a tool call.
@@ -124,18 +113,9 @@ func beginUserPoster(ctx context.Context, source PosterSource, call tool.Call) (
 	return poster, nil, nil
 }
 
-// ThreadReaderSource resolves the Slack client used for conversation reads.
-type ThreadReaderSource interface {
+// ClientSource resolves the Slack API identity for one canonical tool call.
+type ClientSource interface {
 	Client(ctx context.Context, call tool.Call) (*slack.Client, error)
-}
-
-// ConnectedThreadReader uses the caller's linked Slack user token.
-type ConnectedThreadReader struct {
-	Service connections.Service
-}
-
-func (s ConnectedThreadReader) Client(ctx context.Context, call tool.Call) (*slack.Client, error) {
-	return connectedSlackClient(ctx, s.Service, call.Scope.UserID)
 }
 
 // BotThreadReader uses the workspace bot token.
@@ -151,7 +131,7 @@ func (s BotThreadReader) Client(_ context.Context, _ tool.Call) (*slack.Client, 
 // PreferConnectedThreadReader uses the bot token for the current conversation and
 // the caller's linked token when the read target is outside that scope.
 type PreferConnectedThreadReader struct {
-	Connected ConnectedThreadReader
+	Connected ConnectedClientSource
 	Bot       BotThreadReader
 }
 
@@ -162,9 +142,9 @@ func (s PreferConnectedThreadReader) Client(ctx context.Context, call tool.Call)
 	return s.Connected.Client(ctx, call)
 }
 
-func beginThreadRead(ctx context.Context, source ThreadReaderSource, call tool.Call) (*slack.Client, *tool.Result, error) {
+func beginClientAccess(ctx context.Context, source ClientSource, call tool.Call) (*slack.Client, *tool.Result, error) {
 	if source == nil {
-		return nil, nil, errors.New("slack thread reads are not configured")
+		return nil, nil, errors.New("slack client source is not configured")
 	}
 	client, err := source.Client(ctx, call)
 	if err != nil {

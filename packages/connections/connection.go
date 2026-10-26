@@ -146,13 +146,14 @@ func Plugins() []Plugin {
 		{
 			ID:          ProviderSlack,
 			Title:       "Slack",
-			Description: "Connect your Slack identity to search files and analyze shared content with your own permissions.",
+			Description: "Connect your Slack identity to find discussions, read conversations and analyze shared files with your own permissions.",
 			Scopes: []string{
 				"channels:history", "channels:read",
 				"groups:history", "groups:read",
 				"im:history", "im:read",
 				"mpim:history", "mpim:read",
 				"files:read", "search:read", "users:read",
+				"search:read.public", "search:read.private", "search:read.im", "search:read.mpim",
 				"chat:write", "im:write",
 			},
 			SupportsMultiple: true,

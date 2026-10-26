@@ -31,9 +31,10 @@ func AddToCatalog(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.C
 			Name:      cfg.Slack.AttributionName,
 			Footer:    cfg.Slack.ReplyFooter,
 		}
+		registration.Visible(UserSearchTool{Source: ConnectedClientSource{Service: *conn}})
 		registration.Visible(UserPostMessageTool{Source: ConnectedClientSource{Service: *conn}, Attribution: attribution})
 		registration.Visible(UserReadThreadTool{Source: PreferConnectedThreadReader{
-			Connected: ConnectedThreadReader{Service: *conn},
+			Connected: ConnectedClientSource{Service: *conn},
 			Bot:       BotThreadReader{Slack: slackClient},
 		}})
 	} else {

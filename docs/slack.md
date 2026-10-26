@@ -38,14 +38,12 @@ Use Slack's Agent experience (`agent_view`) for the corresponding presentation.
 Enable only the features appropriate to your Slack app installation; event
 access also depends on its permissions and conversation membership.
 
-
-Slack JSON responses must contain one complete value within the existing4MiB
+Slack JSON responses must contain one complete value within the existing 4 MiB
 client budget. A valid prefix followed by another value, trailing data, or an
 oversized body is not success. Ambiguous non-idempotent write responses retain
 uncertain-delivery classification and are never automatically replayed; explicit
 429 rejection still follows Retry-After. HTTP error diagnostics retain method
 and status but omit raw upstream bodies, which may echo private content.
-
 
 ## Start a conversation
 
@@ -120,7 +118,6 @@ too early. Posting an answer does not itself clear a non-streaming session.
 `agents.sessions.setStatus` supports lifecycle values, not custom loading text.
 Model commentary remains hidden; internal reasoning is not sent to Slack.
 
-
 ## Message-time viewing references
 
 With `agent_view` and the `app_context_changed` subscription, Slack includes an
@@ -141,7 +138,6 @@ Only the documented channel entity is supported here; canvas/thread/list entity
 formats are not guessed. An absent snapshot never falls back to an older viewed
 channel. Configure the required Slack app features before expecting references.
 See [Slack viewing context](https://docs.slack.dev/ai/developing-agents/#tracking-what-the-user-is-viewing).
-
 
 ## Native suggested prompts
 
@@ -166,7 +162,6 @@ error type, while ordinary messages remain usable. Access-denied users and
 non-DM destinations receive no suggestions. No live Slack installation has been
 modified or validated by the deterministic tests.
 
-
 Conversation history and reply reads share cursor progression and remaining
 message-budget enforcement. A repeated cursor is a protocol error, not another
 page of successful evidence. Empty/short pages still follow next_cursor, as Slack
@@ -174,3 +169,44 @@ requires; they are not treated as proof that the conversation ended. User tools
 and bootstrap history retain their existing positive message bounds. The raw
 client's explicit Replies limit<=0 all-pages API still requires a caller-owned
 cancellation/deadline when used outside those bounded surfaces.
+
+
+## Search workspace discussions
+
+With Slack OAuth configured, `slack-user_search` uses the connected user's
+`assistant.search.context` API to find message evidence across conversations.
+For example: “What did we decide about the deployment rollback?” Results retain
+source permalinks, channel/message/thread identity and surrounding messages.
+Read a specific thread only when its returned context is insufficient. Search
+results are source data, not instructions or proof that a decision is current.
+
+Each explicit call returns at most 20 matches and a continuation cursor; it
+does not automatically traverse every page or refetch histories. The default
+channel type is public channels. Private-channel, IM and MPIM searches must be
+requested explicitly and remain limited by the connected user's permissions
+and Slack consent. This tool never substitutes the bot identity and is absent
+when Slack OAuth is not configured. Existing runtime output budgets and artifact
+spill apply to search evidence.
+
+Rollout requires an internal or Marketplace-published AI app eligible for RTS.
+Add these **user OAuth scopes**, reinstall the app as needed, and reconnect
+existing Slack user connections before relying on workspace search:
+
+```text
+search:read.public  search:read.private  search:read.im  search:read.mpim
+```
+
+Existing conversation/file scopes remain in place. Old credentials are not
+silently upgraded; `missing_scope` remains an explicit API failure. The app
+must satisfy Slack's RTS requirements even when OAuth itself succeeds. No bot
+`action_token` is captured, serialized in a run or passed into model arguments.
+
+Relevance sort preserves Slack's ability to choose semantic retrieval. Whether
+semantic search is available depends on the workspace plan/capabilities and
+query; this implementation does not promise semantic results or replace them
+with a local keyword heuristic. RTS imposes interactive per-user/workspace
+quotas, including paginated calls. Ask focused questions and selectively expand
+evidence rather than continuously crawling the workspace.
+
+References: [RTS usage and eligibility](https://docs.slack.dev/apis/web-api/real-time-search-api/),
+[API contract and limits](https://docs.slack.dev/reference/methods/assistant.search.context/).
