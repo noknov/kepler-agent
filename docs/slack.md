@@ -156,3 +156,12 @@ failures are optional UI failures: they emit a bounded metric and content-free
 error type, while ordinary messages remain usable. Access-denied users and
 non-DM destinations receive no suggestions. No live Slack installation has been
 modified or validated by the deterministic tests.
+
+
+Conversation history and reply reads share cursor progression and remaining
+message-budget enforcement. A repeated cursor is a protocol error, not another
+page of successful evidence. Empty/short pages still follow next_cursor, as Slack
+requires; they are not treated as proof that the conversation ended. User tools
+and bootstrap history retain their existing positive message bounds. The raw
+client's explicit Replies limit<=0 all-pages API still requires a caller-owned
+cancellation/deadline when used outside those bounded surfaces.
