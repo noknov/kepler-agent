@@ -62,7 +62,12 @@ only a persisted terminal rejection permits acknowledgement. Retry exhaustion
 and malformed payloads also require a canonical terminal before acknowledgement.
 An already terminal turn is acknowledged without repeating approval/execution.
 A full worker does not claim waiting conversations and consume their retry
-attempts. Final admission rechecks drain/cancellation before starting work.
+attempts. Web admission counts the existing in-flight lifetime through durable
+acknowledgement/release, rather than only entries still executing model work.
+The completed owner releases capacity before attempting its next queued turn;
+this avoids an extra recovery-poll delay at concurrency1. Waiting observes the
+currently admitted work; Drain must fence admission before treating idle as
+shutdown quiescence. Final admission rechecks drain/cancellation before starting work.
 
 
 ## Shutdown

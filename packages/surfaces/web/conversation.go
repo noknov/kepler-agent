@@ -41,7 +41,7 @@ type ConversationService struct {
 	IsDraining     func() bool
 	Inputs         sessioninput.Store
 	QueueOwner     string
-	MaxActiveTurns int
+	MaxActiveTurns int // Bounds execution plus durable queue finalization.
 
 	mu       sync.Mutex
 	queueMu  sync.Mutex
@@ -276,7 +276,7 @@ func (s *ConversationService) launch(owner Identity, conversationID, turnID stri
 		cancel()
 		return false
 	}
-	if s.draining || len(s.active) >= s.maxActiveTurns() || runCtx.Err() != nil || (s.IsDraining != nil && s.IsDraining()) {
+	if s.draining || s.inFlight >= s.maxActiveTurns() || runCtx.Err() != nil || (s.IsDraining != nil && s.IsDraining()) {
 		s.mu.Unlock()
 		cancel()
 		return false
@@ -288,7 +288,15 @@ func (s *ConversationService) launch(owner Identity, conversationID, turnID stri
 	s.inFlight++
 	s.mu.Unlock()
 	go func() {
-		defer s.finishWork()
+		resume := false
+		defer func() {
+			s.finishWork()
+			// Release the completed work's capacity before admitting the next queued
+			// turn. Drain/cancellation is rechecked by startPending and final launch.
+			if resume {
+				s.startPending(s.baseContext(), conversationID)
+			}
+		}()
 		_ = s.run(runCtx, owner, conversationID, turnID, input, history)
 		if claimID != "" && s.Inputs != nil {
 			finalCtx, finalCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -299,9 +307,7 @@ func (s *ConversationService) launch(owner Identity, conversationID, turnID stri
 				_ = s.Inputs.Release(finalCtx, claimID, s.queueOwner())
 			}
 			finalCancel()
-			if terminal {
-				s.startPending(s.baseContext(), conversationID)
-			}
+			resume = terminal
 		}
 	}()
 	return true
@@ -334,7 +340,7 @@ func (s *ConversationService) startPending(ctx context.Context, conversationID s
 	defer s.queueMu.Unlock()
 	s.mu.Lock()
 	_, active := s.active[conversationID]
-	full := len(s.active) >= s.maxActiveTurns()
+	full := s.inFlight >= s.maxActiveTurns()
 	s.mu.Unlock()
 	if active || full || s.baseContext().Err() != nil {
 		return

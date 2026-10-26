@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
@@ -101,6 +102,7 @@ func TestPendingWebCapacityDoesNotConsumeRetryAttempts(t *testing.T) {
 	svc.Inputs = inputs
 	svc.MaxActiveTurns = 1
 	svc.active["busy"] = activeWebTurn{}
+	svc.inFlight = 1 // A registered turn owns one execution/finalization slot.
 	for range 10 {
 		svc.startPending(context.Background(), "waiting")
 	}
@@ -247,4 +249,74 @@ func TestWebDrainFencesAdmission(t *testing.T) {
 	if !svc.WaitContext(context.Background()) {
 		t.Fatal("idle drain failed")
 	}
+}
+
+func TestWebFinalizationRetainsAdmissionCapacity(t *testing.T) {
+	ctx := context.Background()
+	owner := Identity{Provider: "slack", TenantID: "T", SubjectID: "U"}
+	store := newMemoryWebStore()
+	if err := store.CreateConversation(ctx, owner, Conversation{ID: "conversation"}); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(queuedWebTurn{Owner: owner, Input: model.TextMessage(model.RoleUser, "request")})
+	inputs := &heldWebAck{claimedWebInput: claimedWebInput{item: sessioninput.Item{ID: "turn", Payload: payload, Attempts: 1}}, entered: make(chan struct{}), release: make(chan struct{})}
+	svc := NewConversationService(hosted.Agent{}, store, transcript.NewMemoryStore(), nil)
+	svc.Inputs = inputs
+	svc.MaxActiveTurns = 1
+	svc.BeforeRun = func(context.Context, string) error { return errors.New("startup failure") }
+	svc.startPending(ctx, "conversation")
+	<-inputs.entered
+	accepted := svc.launch(owner, "another-conversation", "another-turn", model.TextMessage(model.RoleUser, "another request"), nil, "")
+	svc.Drain()
+	close(inputs.release)
+	svc.Wait()
+	if accepted {
+		t.Fatal("admission slot was released before durable finalization")
+	}
+}
+
+type sequentialWebInput struct {
+	capturingInputStore
+	payload   json.RawMessage
+	completed atomic.Int32
+	done      chan struct{}
+}
+
+func (s *sequentialWebInput) Claim(context.Context, string, sessioninput.Kind, string, time.Duration, int) ([]sessioninput.Item, error) {
+	index := s.completed.Load()
+	if index >= 2 {
+		return nil, nil
+	}
+	return []sessioninput.Item{{ID: fmt.Sprintf("turn-%d", index), Payload: s.payload, Attempts: 1}}, nil
+}
+func (s *sequentialWebInput) Ack(context.Context, string, string) error {
+	if s.completed.Add(1) == 2 {
+		close(s.done)
+	}
+	return nil
+}
+func TestWebCapacityIsReleasedBeforeQueuedContinuation(t *testing.T) {
+	ctx := context.Background()
+	owner := Identity{Provider: "slack", TenantID: "T", SubjectID: "U"}
+	store := newMemoryWebStore()
+	if err := store.CreateConversation(ctx, owner, Conversation{ID: "conversation"}); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(queuedWebTurn{Owner: owner, Input: model.TextMessage(model.RoleUser, "request")})
+	inputs := &sequentialWebInput{payload: payload, done: make(chan struct{})}
+	svc := NewConversationService(hosted.Agent{}, store, transcript.NewMemoryStore(), nil)
+	svc.Inputs = inputs
+	svc.MaxActiveTurns = 1
+	svc.BeforeRun = func(context.Context, string) error { return errors.New("startup failure") }
+	svc.startPending(ctx, "conversation")
+	// No recovery ticker is running: the completed owner must hand off directly.
+	select {
+	case <-inputs.done:
+	case <-time.After(2 * time.Second):
+		svc.Drain()
+		svc.Wait()
+		t.Fatal("continuation stalled behind its own completed capacity")
+	}
+	svc.Drain()
+	svc.Wait()
 }
