@@ -246,6 +246,9 @@ func TestIntegrationCompletedToolBindingAfterJSONBRoundTrip(t *testing.T) {
 			}
 			writes := 0
 			catalog, _ := tool.NewCatalog(jsonbApprovalTool{calls: &writes})
+			if err := catalog.Activate(sessionID, "write"); err != nil {
+				t.Fatal(err)
+			}
 			client := &jsonbReplayModel{call: model.ToolCall{ID: "call", Name: "write", Arguments: json.RawMessage(test.args)}}
 			runner, err := agentruntime.New(agentruntime.Config{Model: "integration"}, agentruntime.Dependencies{Model: client, Tools: catalog, Transcript: store, Policy: tool.AllowAllPolicy{}})
 			if err != nil {
