@@ -150,3 +150,58 @@ func TestPeerTransportRejectsRedirectsAndOversizedResponses(t *testing.T) {
 		})
 	}
 }
+
+func TestCredentialRotationCannotReuseOldTaskAuthority(t *testing.T) {
+	t.Setenv("A2A_ROTATION_TOKEN", "credential-A")
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		var request struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%q,"result":{"kind":"task","id":"same-id","contextId":"remote-context","status":{"state":"working"}}}`, request.ID)
+	}))
+	defer server.Close()
+	store := transcript.NewMemoryStore()
+	cfg := config.RemoteAgentConfig{Name: "peer", URL: server.URL, TokenEnv: "A2A_ROTATION_TOKEN"}
+	original, err := NewTool(cfg, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := tool.Call{ID: "send-A", Name: original.Descriptor().Name, Scope: tool.Scope{UserID: "user", SessionID: "session", TurnID: "turn"}, Arguments: json.RawMessage(`{"operation":"send","task":{"name":"analysis","role":"investigator","task":"inspect","boundaries":"read only","deliverable":"report","success_criteria":["cite evidence"]}}`)}
+	result, err := original.Execute(context.Background(), call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Append(context.Background(), transcript.Event{SessionID: "session", TurnID: "turn", Type: transcript.ToolCallCompleted, ToolCall: &call, ToolResult: &result}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("A2A_ROTATION_TOKEN", "credential-B")
+	read := call
+	read.ID = "get-after-rotation"
+	read.Arguments = json.RawMessage(`{"operation":"get","task_id":"same-id"}`)
+	if _, err = original.Execute(context.Background(), read); err == nil {
+		t.Error("existing adapter silently switched authentication identity")
+	}
+	rotated, err := NewTool(cfg, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = rotated.Execute(context.Background(), read); err == nil {
+		t.Error("new principal inherited the previous principal's task reference")
+	}
+	if calls.Load() != 1 {
+		t.Errorf("old authority reached peer after credential rotation: calls=%d", calls.Load())
+	}
+	if original.Descriptor().Version == rotated.Descriptor().Version {
+		t.Error("pending approvals do not bind credential identity")
+	}
+	raw, _ := json.Marshal(result)
+	if strings.Contains(string(raw), "credential-A") || strings.Contains(string(raw), "credential-B") {
+		t.Fatal("credential escaped into task evidence")
+	}
+}

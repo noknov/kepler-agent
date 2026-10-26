@@ -61,7 +61,9 @@ func NewTool(agent config.RemoteAgentConfig, store transcript.Store) (*Tool, err
 	if store == nil {
 		return nil, fmt.Errorf("A2A delegation requires a canonical transcript store")
 	}
-	if agent.TokenEnv != "" && strings.TrimSpace(os.Getenv(agent.TokenEnv)) == "" {
+	token := strings.TrimSpace(os.Getenv(agent.TokenEnv))
+	credential := sha256.Sum256([]byte(token))
+	if agent.TokenEnv != "" && token == "" {
 		return nil, fmt.Errorf("A2A credential environment is missing")
 	}
 	if agent.TimeoutSeconds == 0 {
@@ -72,15 +74,21 @@ func NewTool(agent config.RemoteAgentConfig, store transcript.Store) (*Tool, err
 	}
 	endpoint, _ := url.Parse(agent.URL)
 	httpClient := &http.Client{Timeout: time.Duration(agent.TimeoutSeconds) * time.Second,
-		Transport:     peerTransport{base: http.DefaultTransport, endpoint: endpoint, tokenEnv: agent.TokenEnv, maxBytes: int64(agent.MaxResponseBytes)},
+		Transport:     peerTransport{base: http.DefaultTransport, endpoint: endpoint, tokenEnv: agent.TokenEnv, credential: credential, maxBytes: int64(agent.MaxResponseBytes)},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return fmt.Errorf("A2A redirects are disabled") },
 	}
 	client, err := a2aclient.NewFromEndpoints(context.Background(), []a2a.AgentInterface{{URL: agent.URL, Transport: a2a.TransportProtocolJSONRPC}}, a2aclient.WithDefaultsDisabled(), a2aclient.WithJSONRPCTransport(httpClient))
 	if err != nil {
 		return nil, fmt.Errorf("configure A2A peer: %w", err)
 	}
-	digest := sha256.Sum256([]byte(agent.URL + "\x00" + agent.TokenEnv))
-	return &Tool{config: agent, client: client, store: store, version: fmt.Sprintf("%x", digest)}, nil
+	return &Tool{config: agent, client: client, store: store, version: peerIdentity(agent, token)}, nil
+}
+
+// peerIdentity binds configuration to the actual authentication principal;
+// an environment variable name alone is not an identity across rotations.
+func peerIdentity(agent config.RemoteAgentConfig, token string) string {
+	digest := sha256.Sum256([]byte(agent.URL + "\x00" + agent.TokenEnv + "\x00" + token))
+	return fmt.Sprintf("%x", digest)
 }
 
 func (t *Tool) Descriptor() tool.Descriptor {
@@ -127,6 +135,9 @@ func (t *Tool) Execute(ctx context.Context, call tool.Call) (tool.Result, error)
 	}
 	if call.Scope.SessionID == "" || call.ID == "" {
 		return tool.Result{}, fmt.Errorf("A2A requires an owned session and call ID")
+	}
+	if peerIdentity(t.config, strings.TrimSpace(os.Getenv(t.config.TokenEnv))) != t.version {
+		return tool.Result{}, fmt.Errorf("A2A credential changed; rebuild the peer adapter before use")
 	}
 	ref := reference{Target: t.version}
 	if args.TaskID != "" {
@@ -274,10 +285,11 @@ func (t *Tool) result(response a2a.SendMessageResult, ref reference, expected a2
 }
 
 type peerTransport struct {
-	base     http.RoundTripper
-	endpoint *url.URL
-	tokenEnv string
-	maxBytes int64
+	base       http.RoundTripper
+	endpoint   *url.URL
+	tokenEnv   string
+	credential [sha256.Size]byte
+	maxBytes   int64
 }
 
 func (t peerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -289,6 +301,9 @@ func (t peerTransport) RoundTrip(request *http.Request) (*http.Response, error) 
 		token := strings.TrimSpace(os.Getenv(t.tokenEnv))
 		if token == "" {
 			return nil, fmt.Errorf("A2A credential is missing")
+		}
+		if sha256.Sum256([]byte(token)) != t.credential {
+			return nil, fmt.Errorf("A2A credential changed; rebuild the peer adapter before use")
 		}
 		request.Header.Set("Authorization", "Bearer "+token)
 	}
