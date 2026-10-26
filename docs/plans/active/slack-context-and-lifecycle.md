@@ -15,7 +15,7 @@ No manual continuation confirmation or reset-credit spending.
 
 - [x] Preserve message-time Slack viewing references through DM ingress, durable
   queue, steering and canonical user input without new tracking/cache state.
-- [ ] Add native suggested prompts that reflect supported interactions and retain
+- [x] Add native suggested prompts that reflect supported interactions and retain
   access checks, optional API failure behavior and agent_view wire semantics.
 - [ ] Audit ownership/cancellation/admission with special attention to work after
   model execution; reproduce concrete reliability/resource defects before fixes.
@@ -49,7 +49,15 @@ Message-time context implemented. The ingress regression failed on the previous
 source: valid message.im app_context disappeared. Tests now cover original text
 and reply identity, foreign/unsupported references, no stale ambient fallback,
 serialized queue recovery and steering. Slack client/conversation/handler/agent
-race suites passed. Finish broad checks and publish this PR before next work.
+race suites passed. PR35 published; local make check passed. Await CI/review before merge.
  Temporary integration
 stores from the prior run are stopped; restart only isolated stores if needed.
+Native suggestion milestone: prior Messages-tab handler made no API call;
+black-box regression failed before implementation. New tests verify agent_view
+wire shape without thread_ts, explicit channel placeholders, authorization,
+Chinese/default catalog content, clearing stale context, and optional API failure
+metrics without launching work. Affected races passed; finish make check and
+publication. Next investigate admission during durable finalization, where an
+execution-only active map may release capacity too early.
+
 Source and deploy changes must be published before allowance waits.

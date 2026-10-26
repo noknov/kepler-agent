@@ -561,9 +561,7 @@ func (h *Handler) handleAppHome(ctx context.Context, ev slack.Event) {
 			log.Printf("publish home failed: %v", err)
 		}
 	case "messages":
-		// Agent messaging experience: user opened the DM Messages tab.
-		// Suggested prompts are pinned to the top of the tab (not per-thread).
-		// Hook for future assistant.threads.setSuggestedPrompts integration.
+		h.publishSuggestedPrompts(ctx, ev)
 	}
 }
 
@@ -620,6 +618,10 @@ func (h *Handler) handlePrompt(ctx context.Context, eventID string, ev slack.Eve
 	if text == "" {
 		text = prompts.AppMessage("empty_mention", "")
 	}
+	var viewing *slackconversation.ViewingContext
+	if isDM {
+		viewing = selectViewingContext(ev.TeamID, ev.AppContext)
+	}
 	accepted, err := h.Conv.HandleMention(ctx, slackconversation.Request{
 		TeamID:         ev.TeamID,
 		EventID:        eventID,
@@ -630,7 +632,7 @@ func (h *Handler) handlePrompt(ctx context.Context, eventID string, ev slack.Eve
 		Text:           text,
 		Locale:         h.Cfg.Slack.DefaultLocale,
 		Content:        canonicalContent(parts),
-		ViewingContext: messageViewingContext(ev),
+		ViewingContext: viewing,
 	})
 	if err != nil {
 		return err
@@ -666,16 +668,13 @@ func FirstNonEmpty(values ...string) string {
 // Slack orders entities by relevance. Preserve the first supported reference
 // from this DM's own snapshot; absent/foreign/unknown context does not reuse an
 // older page or rewrite the delivery channel and authenticated scope.
-func messageViewingContext(ev slack.Event) *slackconversation.ViewingContext {
-	if !IsAppDM(ev) {
-		return nil
-	}
-	for _, entity := range ev.AppContext.Entities {
+func selectViewingContext(team string, snapshot slack.AppContext) *slackconversation.ViewingContext {
+	for _, entity := range snapshot.Entities {
 		if entity.Type != "slack#/types/channel_id" {
 			continue
 		}
 		view := slackconversation.ViewingContext{TeamID: entity.TeamID, ChannelID: entity.Value}
-		if view.ValidFor(ev.TeamID) {
+		if view.ValidFor(team) {
 			return &view
 		}
 	}
