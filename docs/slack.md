@@ -110,3 +110,25 @@ Slack's stream APIs also change session status, so runtime completion alone is
 too early. Posting an answer does not itself clear a non-streaming session.
 `agents.sessions.setStatus` supports lifecycle values, not custom loading text.
 Model commentary remains hidden; internal reasoning is not sent to Slack.
+
+
+## Message-time viewing references
+
+With `agent_view` and the `app_context_changed` subscription, Slack includes an
+`app_context` snapshot in a DM message. Kepler preserves the first supported
+same-workspace channel reference beside that message as canonical JSON data.
+This enables requests such as “summarize the channel I am viewing” without
+copying the full channel into every model request or tracking browsing activity.
+
+The bot's reply channel, authenticated identity and tool scope stay bound to the
+actual DM. The reference does not grant access: the agent must explicitly read
+needed messages through the existing user-connected Slack tools. Unknown entity
+types, malformed channel IDs and cross-workspace references are ignored. Empty
+context means no reference; a later ambient context event cannot mutate an older
+queued or steering message. User text remains unchanged for routing and recall.
+No new cache, background fetch or database migration is involved.
+
+Only the documented channel entity is supported here; canvas/thread/list entity
+formats are not guessed. An absent snapshot never falls back to an older viewed
+channel. Configure the required Slack app features before expecting references.
+See [Slack viewing context](https://docs.slack.dev/ai/developing-agents/#tracking-what-the-user-is-viewing).

@@ -30,6 +30,7 @@ type Event struct {
 	Reaction    string     `json:"reaction,omitempty"`
 	Tab         string     `json:"tab,omitempty"`
 	Context     AppContext `json:"context,omitempty"`
+	AppContext  AppContext `json:"app_context,omitempty"`
 	Item        Item       `json:"item,omitempty"`
 	Files       []File     `json:"files,omitempty"`
 	File        File       `json:"file,omitempty"`

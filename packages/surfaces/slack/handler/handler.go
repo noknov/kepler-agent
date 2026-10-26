@@ -50,7 +50,7 @@ func (h *Handler) Handle(ctx context.Context, eventID string, ev slack.Event) (e
 		h.handleAppHome(ctx, ev)
 		return nil
 	case "app_context_changed":
-		h.handleAppContextChanged(ctx, ev)
+		// message.im carries its own snapshot; never retain mutable viewing state.
 		return nil
 	case "app_mention", "message":
 		return h.handlePrompt(ctx, eventID, ev)
@@ -567,14 +567,6 @@ func (h *Handler) handleAppHome(ctx context.Context, ev slack.Event) {
 	}
 }
 
-func (h *Handler) handleAppContextChanged(ctx context.Context, ev slack.Event) {
-	if ev.User == "" || len(ev.Context.Entities) == 0 {
-		return
-	}
-	// Reserved for tailoring responses to the user's active Slack context.
-	_ = ctx
-}
-
 func (h *Handler) recordReactionFeedback(ctx context.Context, ev slack.Event) {
 	if h.Runs == nil || ev.Item.Channel == "" || ev.Item.TS == "" || ev.Reaction == "" {
 		return
@@ -629,15 +621,16 @@ func (h *Handler) handlePrompt(ctx context.Context, eventID string, ev slack.Eve
 		text = prompts.AppMessage("empty_mention", "")
 	}
 	accepted, err := h.Conv.HandleMention(ctx, slackconversation.Request{
-		TeamID:    ev.TeamID,
-		EventID:   eventID,
-		UserID:    ev.User,
-		Channel:   ev.Channel,
-		ThreadTS:  ev.ConversationThreadTS(),
-		MessageTS: ev.TS,
-		Text:      text,
-		Locale:    h.Cfg.Slack.DefaultLocale,
-		Content:   canonicalContent(parts),
+		TeamID:         ev.TeamID,
+		EventID:        eventID,
+		UserID:         ev.User,
+		Channel:        ev.Channel,
+		ThreadTS:       ev.ConversationThreadTS(),
+		MessageTS:      ev.TS,
+		Text:           text,
+		Locale:         h.Cfg.Slack.DefaultLocale,
+		Content:        canonicalContent(parts),
+		ViewingContext: messageViewingContext(ev),
 	})
 	if err != nil {
 		return err
@@ -668,4 +661,23 @@ func FirstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// Slack orders entities by relevance. Preserve the first supported reference
+// from this DM's own snapshot; absent/foreign/unknown context does not reuse an
+// older page or rewrite the delivery channel and authenticated scope.
+func messageViewingContext(ev slack.Event) *slackconversation.ViewingContext {
+	if !IsAppDM(ev) {
+		return nil
+	}
+	for _, entity := range ev.AppContext.Entities {
+		if entity.Type != "slack#/types/channel_id" {
+			continue
+		}
+		view := slackconversation.ViewingContext{TeamID: entity.TeamID, ChannelID: entity.Value}
+		if view.ValidFor(ev.TeamID) {
+			return &view
+		}
+	}
+	return nil
 }
