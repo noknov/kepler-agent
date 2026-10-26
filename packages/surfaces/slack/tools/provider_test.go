@@ -12,7 +12,7 @@ import (
 func TestPreferConnectedThreadReaderUsesBotForCurrentConversation(t *testing.T) {
 	bot := slack.NewClient("xoxb-bot", "B1")
 	source := PreferConnectedThreadReader{
-		Connected: ConnectedThreadReader{},
+		Connected: ConnectedClientSource{},
 		Bot:       BotThreadReader{Slack: bot},
 	}
 	got, err := source.Client(context.Background(), tool.Call{
@@ -29,7 +29,7 @@ func TestPreferConnectedThreadReaderUsesBotForCurrentConversation(t *testing.T) 
 func TestPreferConnectedThreadReaderRequiresConnectionForExternalReads(t *testing.T) {
 	bot := slack.NewClient("xoxb-bot", "B1")
 	source := PreferConnectedThreadReader{
-		Connected: ConnectedThreadReader{},
+		Connected: ConnectedClientSource{},
 		Bot:       BotThreadReader{Slack: bot},
 	}
 	_, err := source.Client(context.Background(), tool.Call{
@@ -52,7 +52,7 @@ func TestPreferConnectedThreadReaderUsesUserForExternalReads(t *testing.T) {
 	}
 	bot := slack.NewClient("xoxb-bot", "B1")
 	source := PreferConnectedThreadReader{
-		Connected: ConnectedThreadReader{Service: connections.Service{Store: store}},
+		Connected: ConnectedClientSource{Service: connections.Service{Store: store}},
 		Bot:       BotThreadReader{Slack: bot},
 	}
 	got, err := source.Client(ctx, tool.Call{

@@ -13,7 +13,7 @@ import (
 )
 
 func TestUserReadThreadFormatsMessages(t *testing.T) {
-	source := stubThreadReaderSource{client: slack.NewTestClient(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	source := stubClientSource{client: slack.NewTestClient(roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if !strings.HasSuffix(r.URL.Path, "/api/conversations.replies") {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
@@ -33,7 +33,7 @@ func TestUserReadThreadFormatsMessages(t *testing.T) {
 
 func TestUserReadThreadDefaultsToScope(t *testing.T) {
 	var latest string
-	source := stubThreadReaderSource{client: slack.NewTestClient(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	source := stubClientSource{client: slack.NewTestClient(roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if !strings.HasSuffix(r.URL.Path, "/api/conversations.history") {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
@@ -57,7 +57,7 @@ func TestUserReadThreadDefaultsToScope(t *testing.T) {
 
 func TestUserReadThreadExplicitChannelIgnoresScope(t *testing.T) {
 	var latest string
-	source := stubThreadReaderSource{client: slack.NewTestClient(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	source := stubClientSource{client: slack.NewTestClient(roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		latest = r.URL.Query().Get("latest")
 		return jsonResp(`{"ok":true,"messages":[{"user":"U1","text":"dm","ts":"1.0"}]}`), nil
 	}))}
@@ -76,11 +76,11 @@ func TestUserReadThreadExplicitChannelIgnoresScope(t *testing.T) {
 	}
 }
 
-type stubThreadReaderSource struct {
+type stubClientSource struct {
 	client *slack.Client
 }
 
-func (s stubThreadReaderSource) Client(context.Context, tool.Call) (*slack.Client, error) {
+func (s stubClientSource) Client(context.Context, tool.Call) (*slack.Client, error) {
 	return s.client, nil
 }
 

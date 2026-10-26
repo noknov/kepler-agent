@@ -20,7 +20,7 @@ const (
 // UserReadThreadTool reads Slack messages using the requesting user's connected identity.
 // Registered only from slacktool.AddToCatalog in the Slack worker; never from CLI.
 type UserReadThreadTool struct {
-	Source ThreadReaderSource
+	Source ClientSource
 }
 
 func (t UserReadThreadTool) Descriptor() tool.Descriptor {
@@ -54,7 +54,7 @@ func (t UserReadThreadTool) Descriptor() tool.Descriptor {
 }
 
 func (t UserReadThreadTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
-	slackClient, early, err := beginThreadRead(ctx, t.Source, call)
+	slackClient, early, err := beginClientAccess(ctx, t.Source, call)
 	if early != nil || err != nil {
 		if early != nil {
 			return *early, err

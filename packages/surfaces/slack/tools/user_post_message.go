@@ -64,7 +64,7 @@ func (t UserPostMessageTool) Execute(ctx context.Context, call tool.Call) (tool.
 	if args.Text == "" {
 		return tool.Result{}, fmt.Errorf("text is required")
 	}
-	slackClient, early, err := beginConnectedClient(ctx, t.Source, call)
+	slackClient, early, err := beginClientAccess(ctx, t.Source, call)
 	if early != nil || err != nil {
 		if early != nil {
 			return *early, err
