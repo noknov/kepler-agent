@@ -351,6 +351,15 @@ func eventMessage(event transcript.Event) (model.Message, bool) {
 				CallID: event.ToolCall.ID, Name: event.ToolCall.Name,
 				Content: event.ToolResult.Content, IsError: event.ToolResult.IsError,
 			}
+			if event.ToolResult.Truncated {
+				// Completeness is runtime evidence, not a wording convention that
+				// every adapter must remember. Keep this derived notice out of the
+				// durable source payload and include it in normal context budgeting.
+				result.Content = append(append([]model.Content(nil), result.Content...), model.Content{
+					Type: model.ContentText,
+					Text: "[Tool output incomplete; read referenced artifacts or fetch remaining source ranges.]",
+				})
+			}
 			return model.Message{Role: model.RoleTool, Content: []model.Content{{Type: model.ContentToolResult, ToolResult: &result}}}, true
 		}
 	}
