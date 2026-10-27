@@ -242,9 +242,6 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 	var finishReason string
 	var usage openAIUsage
 	toolCallsStarted := false
-	argumentStreams := map[int]*toolArgumentStream{}
-	// Track tool call completion state for OnToolCallComplete.
-	completedToolIDs := map[string]bool{}
 	var streamErr error
 
 	err = readSSE(resp.Body, func(ev sseEvent) bool {
@@ -267,7 +264,7 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 					Content          string `json:"content"`
 					ReasoningContent string `json:"reasoning_content"`
 					ToolCalls        []struct {
-						Index    int    `json:"index"`
+						Index    *int   `json:"index"`
 						ID       string `json:"id"`
 						Type     string `json:"type"`
 						Function struct {
@@ -281,7 +278,8 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 			Usage openAIUsage `json:"usage"`
 		}
 		if json.Unmarshal([]byte(ev.Data), &chunk) != nil {
-			return true
+			streamErr = ProtocolError{Provider: c.providerName(), Detail: "invalid stream event JSON"}
+			return false
 		}
 		if chunk.Usage.Reported {
 			usage = chunk.Usage
@@ -293,6 +291,10 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 			return true
 		}
 		delta := chunk.Choices[0].Delta
+		if finishReason != "" && (delta.Content != "" || delta.ReasoningContent != "" || len(delta.ToolCalls) > 0 || chunk.Choices[0].FinishReason != nil) {
+			streamErr = ProtocolError{Provider: c.providerName(), Detail: "response content changed after finish reason"}
+			return false
+		}
 		if delta.Content != "" {
 			msg.Content += delta.Content
 			if h.OnText != nil {
@@ -303,50 +305,36 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 			msg.ReasoningContent += delta.ReasoningContent
 		}
 		for _, tc := range delta.ToolCalls {
+			if tc.Index == nil || *tc.Index < 0 || *tc.Index >= maxStreamToolCalls {
+				streamErr = ProtocolError{Provider: c.providerName(), Detail: "missing or out-of-budget tool call index"}
+				return false
+			}
+			index := *tc.Index
+			for len(msg.ToolCalls) <= index {
+				msg.ToolCalls = append(msg.ToolCalls, ToolCall{Type: "function"})
+			}
+			call := &msg.ToolCalls[index]
+			if (tc.ID != "" && call.ID != "" && tc.ID != call.ID) ||
+				(tc.Function.Name != "" && call.Function.Name != "" && tc.Function.Name != call.Function.Name) {
+				streamErr = ProtocolError{Provider: c.providerName(), Detail: "tool call identity changed within one index"}
+				return false
+			}
 			if !toolCallsStarted && (tc.ID != "" || tc.Function.Name != "" || tc.Function.Arguments != "") {
 				toolCallsStarted = true
 				if h.OnToolCallsStarted != nil {
 					h.OnToolCallsStarted()
 				}
 			}
-			// A new tool call ID on an existing index means the previous call is complete.
-			if tc.ID != "" && tc.Index < len(msg.ToolCalls) && msg.ToolCalls[tc.Index].ID != "" && msg.ToolCalls[tc.Index].ID != tc.ID {
-				previous := msg.ToolCalls[tc.Index]
-				if h.OnToolCallComplete != nil && !completedToolIDs[previous.ID] {
-					completedToolIDs[previous.ID] = true
-					finalizeToolCallArguments(&previous, argumentStreams[tc.Index])
-					h.OnToolCallComplete(previous)
-				}
-				msg.ToolCalls[tc.Index] = ToolCall{Type: "function"}
-				delete(argumentStreams, tc.Index)
-			}
-			for len(msg.ToolCalls) <= tc.Index {
-				msg.ToolCalls = append(msg.ToolCalls, ToolCall{Type: "function"})
-			}
-			call := &msg.ToolCalls[tc.Index]
 			if tc.ID != "" {
 				call.ID = tc.ID
 			}
 			if tc.Type != "" {
 				call.Type = tc.Type
 			}
-			if call.Type == "" {
-				call.Type = "function"
-			}
 			if tc.Function.Name != "" {
-				// function.name identifies the call; unlike arguments it is not a
-				// token stream. Compatible providers may repeat it on subsequent
-				// chunks, so retain the latest complete identifier.
 				call.Function.Name = tc.Function.Name
 			}
-			if tc.Function.Arguments != "" {
-				stream := argumentStreams[tc.Index]
-				if stream == nil {
-					stream = &toolArgumentStream{}
-					argumentStreams[tc.Index] = stream
-				}
-				call.Function.Arguments = stream.Append(tc.Function.Arguments)
-			}
+			call.Function.Arguments += tc.Function.Arguments
 		}
 		if chunk.Choices[0].FinishReason != nil {
 			finishReason = *chunk.Choices[0].FinishReason
@@ -359,71 +347,25 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 	if err != nil {
 		return Response{}, err
 	}
-	for i := range msg.ToolCalls {
-		finalizeToolCallArguments(&msg.ToolCalls[i], argumentStreams[i])
+	// A provider finish reason is completion evidence. EOF or [DONE] alone
+	// cannot distinguish a completed response from a truncated one.
+	if strings.TrimSpace(finishReason) == "" {
+		return Response{}, ProtocolError{Provider: c.providerName(), Detail: "stream ended without a finish reason"}
 	}
-	// A clean EOF is a successful HTTP stream completion. [DONE] is an
-	// OpenAI convention, but compatible providers are permitted to omit it.
-	finishReason = completedOpenAICompatibleFinishReason(finishReason, msg)
-	// Emit OnToolCallComplete for all completed tool calls at stream end.
 	if h.OnToolCallComplete != nil {
 		for _, tc := range msg.ToolCalls {
-			if !completedToolIDs[tc.ID] && strings.TrimSpace(tc.Function.Name) != "" {
+			if strings.TrimSpace(tc.Function.Name) != "" {
 				h.OnToolCallComplete(tc)
 			}
 		}
 	}
+
 	return Response{
 		Message:      msg,
 		FinishReason: finishReason,
 		Usage:        usage.toUsage(),
 		Streamed:     true,
 	}, nil
-}
-
-type toolArgumentStream struct {
-	assembled string
-}
-
-func (s *toolArgumentStream) Append(update string) string {
-	// The OpenAI streaming contract defines function arguments as deltas.
-	// Provider responses that violate this contract are rejected by the
-	// canonical conversion boundary and handled by the typed retry policy.
-	s.assembled += update
-	return s.assembled
-}
-
-func (s *toolArgumentStream) Current() string {
-	if s == nil {
-		return ""
-	}
-	return s.assembled
-}
-
-func (s *toolArgumentStream) Final() string {
-	if s == nil {
-		return ""
-	}
-	return s.assembled
-}
-
-func finalizeToolCallArguments(call *ToolCall, stream *toolArgumentStream) {
-	if call == nil || stream == nil {
-		return
-	}
-	call.Function.Arguments = stream.Final()
-}
-
-// completedOpenAICompatibleFinishReason normalizes providers that terminate a
-// successfully read chat-completions stream without a final finish_reason.
-func completedOpenAICompatibleFinishReason(reason string, message Message) string {
-	if strings.TrimSpace(reason) != "" {
-		return reason
-	}
-	if len(message.ToolCalls) > 0 {
-		return "tool_calls"
-	}
-	return "stop"
 }
 
 func (c *OpenAICompatibleClient) setHeaders(httpReq *http.Request, metadata map[string]string) {

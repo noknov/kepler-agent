@@ -12,6 +12,16 @@ receives its model configuration from the gateway.
 unset leaves it to the provider. Budget context, tool definitions, output,
 compaction, and retries together.
 
+## Streaming contracts
+
+OpenAI-compatible chat streams require an explicit provider `finish_reason`.
+EOF and `[DONE]` alone do not establish completion; EOF after an explicit finish
+reason remains supported. Tool indexes must be present and within the shared
+1024-call allocation budget. A tool's ID and function name cannot change within
+one index. Invalid JSON or ambiguous identity produces a typed protocol error,
+without promoting partial tool output to a completed call. Argument fragments
+are concatenated as protocol deltas; no cumulative-output repair is attempted.
+
 ## LLM Providers
 
 ### LongCat
