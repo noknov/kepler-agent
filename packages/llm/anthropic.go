@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -153,9 +154,13 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 	msg.Role = "assistant"
 	var stopReason string
 	var usage anthropicUsageDetails
-	inTextBlock := false
-	toolBlocks := map[int]*ToolCall{}
-	currentBlockIndex := -1
+	type contentState struct {
+		kind, text string
+		call       *ToolCall
+		closed     bool
+	}
+	blocks := map[int]*contentState{}
+	messageStopped := false
 	var streamErr error
 
 	err = readSSE(resp.Body, func(ev sseEvent) bool {
@@ -175,73 +180,96 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 			return false
 		case "content_block_start":
 			var block struct {
-				Index        int `json:"index"`
+				Index        *int `json:"index"`
 				ContentBlock struct {
 					Type  string          `json:"type"`
+					Text  string          `json:"text"`
 					ID    string          `json:"id"`
 					Name  string          `json:"name"`
 					Input json.RawMessage `json:"input"`
 				} `json:"content_block"`
 			}
-			_ = json.Unmarshal([]byte(ev.Data), &block)
-			currentBlockIndex = block.Index
-			inTextBlock = block.ContentBlock.Type == "text"
-			if block.ContentBlock.Type == "tool_use" {
-				if h.OnToolCallsStarted != nil {
-					h.OnToolCallsStarted()
+			if json.Unmarshal([]byte(ev.Data), &block) != nil || block.Index == nil || *block.Index < 0 || block.ContentBlock.Type == "" {
+				streamErr = ProtocolError{Provider: "anthropic", Detail: "invalid content block start"}
+				return false
+			}
+			if _, exists := blocks[*block.Index]; exists {
+				streamErr = ProtocolError{Provider: "anthropic", Detail: "duplicate content block index"}
+				return false
+			}
+			state := &contentState{kind: block.ContentBlock.Type, text: block.ContentBlock.Text}
+			if state.kind == "tool_use" {
+				if strings.TrimSpace(block.ContentBlock.ID) == "" || strings.TrimSpace(block.ContentBlock.Name) == "" {
+					streamErr = ProtocolError{Provider: "anthropic", Detail: "missing tool identity"}
+					return false
 				}
 				args := ""
 				if input := strings.TrimSpace(string(block.ContentBlock.Input)); input != "" && input != "{}" {
 					args = string(block.ContentBlock.Input)
 				}
-				toolBlocks[block.Index] = &ToolCall{
-					ID:   block.ContentBlock.ID,
-					Type: "function",
-					Function: ToolFunction{
-						Name:      block.ContentBlock.Name,
-						Arguments: args,
-					},
+				state.call = &ToolCall{ID: block.ContentBlock.ID, Type: "function", Function: ToolFunction{Name: block.ContentBlock.Name, Arguments: args}}
+				if h.OnToolCallsStarted != nil {
+					h.OnToolCallsStarted()
 				}
+			} else if state.kind == "text" && state.text != "" && h.OnText != nil {
+				h.OnText(TextDelta{Text: state.text})
 			}
+			blocks[*block.Index] = state
 		case "content_block_delta":
 			var delta struct {
-				Index int `json:"index"`
+				Index *int `json:"index"`
 				Delta struct {
 					Type        string `json:"type"`
 					Text        string `json:"text"`
 					PartialJSON string `json:"partial_json"`
 				} `json:"delta"`
 			}
-			if json.Unmarshal([]byte(ev.Data), &delta) != nil {
-				return true
+			if json.Unmarshal([]byte(ev.Data), &delta) != nil || delta.Index == nil {
+				streamErr = ProtocolError{Provider: "anthropic", Detail: "invalid content block delta"}
+				return false
 			}
-			switch {
-			case inTextBlock && delta.Delta.Type == "text_delta" && delta.Delta.Text != "":
-				msg.Content += delta.Delta.Text
-				if h.OnText != nil {
+			state := blocks[*delta.Index]
+			if state == nil || state.closed {
+				streamErr = ProtocolError{Provider: "anthropic", Detail: "delta references no open content block"}
+				return false
+			}
+			switch delta.Delta.Type {
+			case "text_delta":
+				if state.kind != "text" {
+					streamErr = ProtocolError{Provider: "anthropic", Detail: "text delta references a non-text block"}
+					return false
+				}
+				state.text += delta.Delta.Text
+				if delta.Delta.Text != "" && h.OnText != nil {
 					h.OnText(TextDelta{Text: delta.Delta.Text})
 				}
-			case delta.Delta.Type == "input_json_delta" && delta.Delta.PartialJSON != "":
-				call := toolBlocks[delta.Index]
-				if call == nil && currentBlockIndex >= 0 {
-					call = toolBlocks[currentBlockIndex]
-				}
-				if call != nil {
-					call.Function.Arguments += delta.Delta.PartialJSON
+			case "input_json_delta":
+				if state.call != nil {
+					state.call.Function.Arguments += delta.Delta.PartialJSON
+				} else if state.kind == "text" {
+					streamErr = ProtocolError{Provider: "anthropic", Detail: "input delta references a text block"}
+					return false
 				}
 			}
 		case "content_block_stop":
-			if call := toolBlocks[currentBlockIndex]; call != nil {
-				if call.Function.Arguments == "" {
-					call.Function.Arguments = "{}"
-				}
-				msg.ToolCalls = append(msg.ToolCalls, *call)
-				if h.OnToolCallComplete != nil {
-					h.OnToolCallComplete(*call)
+			var stop struct {
+				Index *int `json:"index"`
+			}
+			if json.Unmarshal([]byte(ev.Data), &stop) != nil || stop.Index == nil {
+				streamErr = ProtocolError{Provider: "anthropic", Detail: "invalid content block stop"}
+				return false
+			}
+			state := blocks[*stop.Index]
+			if state == nil || state.closed {
+				streamErr = ProtocolError{Provider: "anthropic", Detail: "stop references no open content block"}
+				return false
+			}
+			state.closed = true
+			if state.call != nil {
+				if state.call.Function.Arguments == "" {
+					state.call.Function.Arguments = "{}"
 				}
 			}
-			inTextBlock = false
-			currentBlockIndex = -1
 		case "message_delta":
 			var md struct {
 				Delta struct {
@@ -252,7 +280,9 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 				} `json:"usage"`
 			}
 			if json.Unmarshal([]byte(ev.Data), &md) == nil {
-				stopReason = md.Delta.StopReason
+				if md.Delta.StopReason != "" {
+					stopReason = md.Delta.StopReason
+				}
 				if md.Usage.OutputTokens > 0 {
 					usage.OutputTokens = md.Usage.OutputTokens
 					if h.OnUsage != nil {
@@ -266,7 +296,11 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 						})
 					}
 				}
+			} else {
+				streamErr = ProtocolError{Provider: "anthropic", Detail: "invalid message delta"}
+				return false
 			}
+
 		case "message_start":
 			var ms struct {
 				Message struct {
@@ -288,8 +322,23 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 						CacheCreationInputTokens: usage.CacheCreationInputTokens,
 					})
 				}
+			} else {
+				streamErr = ProtocolError{Provider: "anthropic", Detail: "invalid message start"}
+				return false
 			}
+
 		case "message_stop":
+			if !json.Valid([]byte(ev.Data)) || strings.TrimSpace(stopReason) == "" {
+				streamErr = ProtocolError{Provider: "anthropic", Detail: "missing message completion evidence"}
+				return false
+			}
+			for _, state := range blocks {
+				if !state.closed {
+					streamErr = ProtocolError{Provider: "anthropic", Detail: "message stopped with an open content block"}
+					return false
+				}
+			}
+			messageStopped = true
 			return false
 		}
 		return true
@@ -300,6 +349,43 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 	if err != nil {
 		return Response{}, err
 	}
+	if !messageStopped {
+		return Response{}, ProtocolError{Provider: "anthropic", Detail: "stream ended without message_stop"}
+	}
+	indexes := make([]int, 0, len(blocks))
+	for index := range blocks {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+	seenToolIDs := make(map[string]bool)
+	for _, index := range indexes {
+		state := blocks[index]
+		if state.kind == "text" {
+			msg.Content += state.text
+		}
+		if state.call != nil {
+			switch stopReason {
+			case "max_tokens", "model_context_window_exceeded", "refusal":
+				continue
+			}
+			var input map[string]json.RawMessage
+			if json.Unmarshal([]byte(state.call.Function.Arguments), &input) != nil || input == nil {
+				return Response{}, ProtocolError{Provider: "anthropic", Detail: "completed tool input is not a JSON object"}
+			}
+			if seenToolIDs[state.call.ID] {
+				return Response{}, ProtocolError{Provider: "anthropic", Detail: "duplicate tool call identity"}
+			}
+			seenToolIDs[state.call.ID] = true
+			msg.ToolCalls = append(msg.ToolCalls, *state.call)
+		}
+	}
+
+	if h.OnToolCallComplete != nil {
+		for _, call := range msg.ToolCalls {
+			h.OnToolCallComplete(call)
+		}
+	}
+
 	return Response{
 		Message:      msg,
 		FinishReason: stopReason,

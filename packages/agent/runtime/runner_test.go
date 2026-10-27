@@ -1187,3 +1187,27 @@ func TestRunTurnCanceledBeforeAdmissionDoesNotWriteTranscript(t *testing.T) {
 		t.Fatalf("unadmitted turn wrote events: %+v err=%v", events, err)
 	}
 }
+
+func TestRunTurnPreservesOutputLimitWithoutTextOrExecutableTools(t *testing.T) {
+	for _, duringRetry := range []bool{false, true} {
+		t.Run(fmt.Sprint(duringRetry), func(t *testing.T) {
+			responses := []model.Response{}
+			if duringRetry {
+				responses = append(responses, model.Response{Message: model.Message{Role: model.RoleAssistant}, FinishReason: model.FinishStop})
+			}
+			responses = append(responses, model.Response{Message: model.Message{Role: model.RoleAssistant}, FinishReason: model.FinishLength, Usage: model.Usage{Reported: true, OutputTokens: 9}})
+			responses = append(responses, model.Response{Message: model.TextMessage(model.RoleAssistant, "unexpected retry"), FinishReason: model.FinishStop})
+			client := &scriptedModel{responses: responses}
+			catalog, _ := tool.NewCatalog()
+			runner, _ := New(Config{Model: "test", MaxEmptyResponseRetries: 3, RetryBaseDelay: time.Nanosecond}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
+			result, err := runner.RunTurn(t.Context(), TurnRequest{SessionID: "empty-output-limit", Input: model.TextMessage(model.RoleUser, "write")})
+			expected := 1
+			if duringRetry {
+				expected = 2
+			}
+			if err != nil || result.Termination != TerminationOutputLimit || result.Usage.OutputTokens != 9 || len(client.requests) != expected {
+				t.Fatalf("output limit became an empty response: %+v requests=%d err=%v", result, len(client.requests), err)
+			}
+		})
+	}
+}

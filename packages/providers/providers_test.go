@@ -598,3 +598,11 @@ func TestQoderProtocolAndEmptyErrorsAreRetryable(t *testing.T) {
 		t.Fatal("changed another provider's empty-response behavior")
 	}
 }
+
+func TestClientPreservesContextWindowLimitAndUsage(t *testing.T) {
+	wire := &recordingWire{response: llm.Response{Message: llm.Message{Role: "assistant"}, FinishReason: "model_context_window_exceeded", Usage: llm.Usage{Reported: true, CompletionTokens: 9}}}
+	response, err := (&Client{Wire: wire}).Generate(t.Context(), model.Request{Model: "test"}, nil)
+	if err != nil || response.FinishReason != model.FinishLength || response.Usage.OutputTokens != 9 {
+		t.Fatalf("context limit lost: %+v %v", response, err)
+	}
+}

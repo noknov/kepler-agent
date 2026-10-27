@@ -268,6 +268,9 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 		}
 		addUsage(&result.Usage, response.Usage)
 		if len(response.Message.Content) == 0 {
+			if response.FinishReason == model.FinishLength {
+				return r.finishTurn(ctx, result, response.Message, TerminationOutputLimit, nil)
+			}
 			return r.finishTurn(ctx, result, model.Message{}, TerminationEmptyResponse, errEmptyModelResponse)
 		}
 		calls := response.Message.ToolCalls()
