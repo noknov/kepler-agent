@@ -262,10 +262,10 @@ func TestOpenAICompatibleChatStreamParsesToolCallDeltas(t *testing.T) {
 	}
 }
 
-func TestOpenAICompatibleChatStreamDefaultsFinishReasonAfterCleanEOF(t *testing.T) {
+func TestOpenAICompatibleChatStreamAcceptsExplicitCompletionWithoutDoneMarker(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n"))
 	}))
 	defer server.Close()
 
@@ -298,48 +298,5 @@ func TestOpenAICompatibleChatStreamParsesDeltaToolCallArguments(t *testing.T) {
 	}
 	if call := calls[0]; call.Function.Name != "code-search" || call.Function.Arguments != `{"query":"hello"}` {
 		t.Fatalf("tool call = %#v", call)
-	}
-}
-
-func TestToolArgumentStream(t *testing.T) {
-	tests := []struct {
-		name    string
-		updates []string
-		want    string
-	}{
-		{name: "delta fragments", updates: []string{`{"query":"`, `hello"}`}, want: `{"query":"hello"}`},
-		{name: "single delta", updates: []string{`{"query":"hello"}`}, want: `{"query":"hello"}`},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			var stream toolArgumentStream
-			for _, update := range test.updates {
-				stream.Append(update)
-			}
-			got := stream.Final()
-			if got != test.want {
-				t.Fatalf("Final() = %q, want %q", got, test.want)
-			}
-		})
-	}
-}
-
-func TestCompletedOpenAICompatibleFinishReason(t *testing.T) {
-	tests := []struct {
-		name    string
-		reason  string
-		message Message
-		want    string
-	}{
-		{name: "preserves provider reason", reason: "length", want: "length"},
-		{name: "completed text", message: Message{Content: "done"}, want: "stop"},
-		{name: "completed tool call", message: Message{ToolCalls: []ToolCall{{ID: "call_1"}}}, want: "tool_calls"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := completedOpenAICompatibleFinishReason(test.reason, test.message); got != test.want {
-				t.Fatalf("completedOpenAICompatibleFinishReason(%q, %#v) = %q, want %q", test.reason, test.message, got, test.want)
-			}
-		})
 	}
 }

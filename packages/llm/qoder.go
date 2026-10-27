@@ -504,7 +504,7 @@ func readQoderStream(r io.Reader, h StreamHandler) (Response, error) {
 		}
 		result.Message.ReasoningContent += choice.Delta.Reasoning
 		for _, delta := range choice.Delta.Calls {
-			if delta.Index < 0 || delta.Index > 1023 {
+			if delta.Index < 0 || delta.Index >= maxStreamToolCalls {
 				streamErr = fmt.Errorf("qoder returned an invalid tool index")
 				return false
 			}

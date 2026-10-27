@@ -191,6 +191,9 @@ type TextDelta struct {
 	Phase  string
 }
 
+// maxStreamToolCalls bounds provider-controlled tool indexes before allocation.
+const maxStreamToolCalls = 1024
+
 // StreamHandler receives typed streaming events from ChatStream.
 type StreamHandler struct {
 	// OnFirstToken records latency independently of text presentation. Adapters
