@@ -491,9 +491,8 @@ separate, with a fixed model/budget and their official graders. For production
 experience, compare the existing `slack.reply` trace's `queue_wait_ms`,
 `user_first_reply_ms`, `user_total_ms`, and `delivery_status` against real traffic.
 
-Use the [Slack quality criteria](../docs/harness-alignment.md#slack-quality-criteria)
-to distinguish product reliability from live-model task quality and production
-latency. Each needs its own evidence before making a release decision.
+Evaluate product reliability, live-model task quality, and production latency
+separately. Each needs its own evidence before making a release decision.
 
 ## Validating release evidence
 

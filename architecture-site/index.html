@@ -19,7 +19,7 @@
 <section class="chapter2" id="deep-contracts">
 <h2>执行契约与本轮审查</h2>
 <p>本节覆盖独立面向主线的 #12–#15；未合并的扩展契约仅在对应 PR 分支可用。</p>
-<p>新增的<a href="https://github.com/noknov/kepler-agent/blob/main/docs/architecture-deep-dive.md">架构详解</a>按身份、执行权、故障恢复、上下文、证据、记忆和隐私展开，并给出状态表与源码入口。<a href="https://github.com/noknov/kepler-agent/blob/main/docs/agent-audit-2026-10.md">2026 年审查</a>区分本轮修复、主流实现的公开机制和仍需实验的设计方向。</p>
+<p><a href="https://github.com/noknov/kepler-agent/blob/main/docs/architecture-deep-dive.md">架构详解</a>按身份、执行权、故障恢复、上下文、证据、记忆和隐私展开，并给出状态表与源码入口。</p>
 <table class="detail-table"><thead><tr><th>边界</th><th>当前契约</th><th>需要避免的误解</th></tr></thead><tbody>
 <tr><td>上下文预算</td><td>environment、当前图片、历史、工具 schema、输出预留在发送前共同检查。</td><td>文本 history 能放下，不代表实际请求能放下。</td></tr>
 <tr><td>本地执行权</td><td>整个 turn 持有独立文件锁；事件追加使用另一把短锁；等待可取消。</td><td>JSONL append 原子，不代表两个进程不会重复执行工具。</td></tr>

@@ -21,7 +21,6 @@ Read [architecture](architecture.md) first, then follow the area you change:
 | Area | Guide |
 | --- | --- |
 | Detailed execution contracts, identity, failure windows, privacy, and capacity (中文) | [Architecture deep dive](architecture-deep-dive.md) |
-| 2026 agent comparison, audit findings, and measurable next steps (中文) | [October audit](agent-audit-2026-10.md) |
 | Turn lifecycle, context, events, and delegation | [Runtime](runtime.md) |
 | 任务状态、上下文策略与原生续接 | [持续执行契约](agent-continuity.md) |
 | Cross-system agent delegation, authority and recovery | [A2A](a2a.md) |
@@ -32,7 +31,6 @@ Read [architecture](architecture.md) first, then follow the area you change:
 | Memory 检索、时效与配额 | [记忆生命周期](memory-retrieval.md) |
 | Agent maintenance, design cost, and review | [Maintenance workflow](maintaining.md), [execution plans](plans/README.md), [backlog](maintenance-backlog.md) |
 | Source setup and verification | [Development](development.md) |
-| Current design decisions and unfinished work | [Harness design status and October 26 capability assessment](harness-alignment.md#2026-10-26本轮能力复核与验证边界) |
 | Chinese walkthrough with diagrams and source links | [Architecture site](../architecture-site/README.md) |
 | Generated app-server wire contract | [JSON Schema](app-server.schema.json) |
 

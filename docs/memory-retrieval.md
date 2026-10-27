@@ -1,6 +1,5 @@
 # Memory 检索、时效与生命周期
 
-此实现针对 [2026 审查](agent-audit-2026-10.md) 中的相关性、冲突、重排和保留问题。
 用户规则、skills、transcript 和 local 文件记忆不属于 hosted 显式 memory 的同一份数据。
 
 ## 运行链路

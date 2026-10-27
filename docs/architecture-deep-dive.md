@@ -1,7 +1,8 @@
 # Kepler 执行架构详解
 
-本文描述本轮实现的执行契约和故障边界。审查修复见 [#12](https://github.com/noknov/kepler-agent/pull/12)，上下文与任务连续性见 [#13](https://github.com/noknov/kepler-agent/pull/13)，执行资源与子任务证据见 [#14](https://github.com/noknov/kepler-agent/pull/14)，记忆生命周期见 [#15](https://github.com/noknov/kepler-agent/pull/15)。四个 PR 独立面向主线；尚未合并的扩展契约仅在对应分支可用。设计方向与尚未完成的能力见
-[2026 年审查](agent-audit-2026-10.md)；运维配置见[配置指南](configuration.md)。
+This guide describes the current execution contracts and failure boundaries.
+For operating configuration, see [configuration](configuration.md).
+
 这里的“持久化”“恢复”“压缩”“隔离”分别指具体机制，不代表全链路 exactly-once、无损记忆或完全消除提示注入。
 
 ## 1. 四层结构与替换边界

@@ -95,9 +95,8 @@ complete design.
 
 For execution contracts, failure windows, identity, context accounting, privacy,
 and capacity boundaries, read the [detailed architecture walkthrough](architecture-deep-dive.md)
-(中文). The [2026 audit](agent-audit-2026-10.md) separates verified fixes from
-remaining design work and measurable comparison goals.
+(中文).
 
 For details, read [runtime](runtime.md), [tools](tools.md), and
 [the Chinese architecture walkthrough](../architecture-site/README.md).
-For proposals and remaining work, read [design status](harness-alignment.md).
+For tracked maintenance work, read the [maintenance backlog](maintenance-backlog.md).

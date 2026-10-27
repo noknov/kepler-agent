@@ -65,12 +65,16 @@ or owning design guide, then update the executable rule and its rejection tests.
 
 ## Make progress recoverable
 
-Small changes need an acceptance statement in their task/PR. A change crossing
-architectural or persistence boundaries, or spanning sessions, needs a checked-in
-[execution plan](plans/README.md). The plan records scope, decisions, completed
-checks, failures, and the next concrete step. Update it at real milestones; do
-not append tool transcripts. Move it to completed only when its acceptance
-criteria have evidence. Plans document work, not autonomous scheduling authority.
+Small changes need an acceptance statement and validation in their PR. A change
+crossing architectural or persistence boundaries may need a checked-in
+[execution plan](plans/README.md) for durable design decisions, contracts,
+alternatives, rollout order, and acceptance criteria. Keep the plan concise and
+move it to completed when those criteria have evidence.
+
+Keep task progress reports, retrospectives, and capability comparisons in issue
+or PR discussions. Committed guides describe current supported behavior, stable
+design decisions, and operating contracts.
+Use English for commit messages and maintenance/development documentation.
 
 A discovered problem outside scope becomes a concrete backlog item with an
 owning area and acceptance check. Avoid an unbounded "cleanup" project or a
