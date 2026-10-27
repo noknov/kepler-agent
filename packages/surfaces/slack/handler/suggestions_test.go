@@ -50,7 +50,7 @@ func TestMessagesTabOffersContextualPromptsWithoutExecutingTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(payloads[1])
-	if strings.Contains(string(raw), "C123") || len(payloads[1]["prompts"].([]any)) != 3 {
+	if strings.Contains(string(raw), "C123") || len(payloads[1]["prompts"].([]any)) != 4 {
 		t.Fatal("retained old context", string(raw))
 	}
 	for _, blocked := range []slack.Event{{Type: "app_home_opened", Tab: "messages", User: "U2", Channel: "D1"}, {Type: "app_home_opened", Tab: "messages", User: "U1", Channel: "C1"}, {Type: "app_home_opened", Tab: "messages", Channel: "D1"}} {

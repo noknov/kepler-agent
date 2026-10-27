@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -99,5 +100,18 @@ func TestCanvasMutationsRetryRateLimitRejections(t *testing.T) {
 				t.Fatalf("calls=%d err=%v", calls, err)
 			}
 		})
+	}
+}
+
+func TestCanvasSuccessRequiresCreationIdentity(t *testing.T) {
+	calls := 0
+	client := NewTestClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true}`))}, nil
+	}))
+	_, err := client.CreateCanvas(t.Context(), "Evidence", &CanvasContent{Type: "markdown", Markdown: "draft"})
+	var uncertain interface{ DeliveryUncertain() bool }
+	if !errors.As(err, &uncertain) || !uncertain.DeliveryUncertain() || calls != 1 {
+		t.Fatalf("unconfirmed Canvas reported success: %v calls=%d", err, calls)
 	}
 }

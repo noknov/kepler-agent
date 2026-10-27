@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -84,4 +85,27 @@ func reverseMessages(messages []Message) {
 
 func trim(value string) string {
 	return strings.TrimSpace(value)
+}
+
+// MessagePermalink resolves only a selected evidence message; callers should not
+// enumerate links for every fetched message.
+func (c *Client) MessagePermalink(ctx context.Context, channel, messageTS string) (string, error) {
+	if strings.TrimSpace(channel) == "" || strings.TrimSpace(messageTS) == "" {
+		return "", fmt.Errorf("channel and message_ts are required")
+	}
+	var out struct {
+		OK        bool   `json:"ok"`
+		Error     string `json:"error"`
+		Permalink string `json:"permalink"`
+	}
+	if err := c.get(ctx, "chat.getPermalink", url.Values{"channel": {channel}, "message_ts": {messageTS}}, &out); err != nil {
+		return "", err
+	}
+	if !out.OK {
+		return "", slackAPIError{Method: "chat.getPermalink", Code: out.Error}
+	}
+	if out.Permalink == "" {
+		return "", fmt.Errorf("Slack returned no message permalink")
+	}
+	return out.Permalink, nil
 }

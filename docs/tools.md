@@ -162,6 +162,21 @@ Final Slack answers append a concise evidence section when the turn used
 | `slack-ask_user` | Ask for missing information and pause the run |
 | `slack-file_search` | Search a large uploaded Slack file |
 | `slack-json_analyze` | Structurally analyze uploaded JSON |
+| `slack-user_search` | Search bounded workspace evidence as the connected user |
+| `slack-user_read_thread` | Read a bounded conversation or thread |
+| `slack-user_message_permalink` | Resolve a selected message citation |
+| `slack-user_post_message` | Publish a message as the connected user |
+| `slack-create_canvas` | Create an explicitly targeted channel or standalone Canvas |
+| `slack-user_list_items` | Read one List page and its native column schema |
+| `slack-user_create_list_item` | Create one item with explicit native column values |
+| `slack-user_unfurl_task` | Publish a source-owned GitHub task snapshot beside its link |
+
+Connected tools require the caller's account. New List and task-preview writes
+remain outside the default operator allowlist. See [Slack rollout and composition](slack.md#compose-evidence-into-shared-work).
+When GitHub OAuth is configured, hosted GitHub tools resolve the requesting
+user's connection and its configured API origin; missing credentials never
+substitute the operator token. Static credentials apply only when OAuth is not
+configured.
 
 ## Agent Skills
 

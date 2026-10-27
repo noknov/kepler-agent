@@ -77,7 +77,7 @@ func (t UserPostMessageTool) Execute(ctx context.Context, call tool.Call) (tool.
 	}
 	ts, err := slackmessaging.PostAsConnectedUser(ctx, slackClient, args.Channel, args.ThreadTS, args.Text, idempotencyKey, t.Attribution)
 	if err != nil {
-		return tool.Result{}, err
+		return slackMutationFailure(err)
 	}
 	return tool.TextResult(fmt.Sprintf("Posted message as connected Slack user.\nchannel: %s\nts: %s", args.Channel, ts)), nil
 }

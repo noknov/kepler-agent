@@ -19,10 +19,10 @@ func (h *Handler) publishSuggestedPrompts(ctx context.Context, event slack.Event
 		language = "zh"
 	}
 	text := func(key string) string { return prompts.AppMessage("slack_suggestions_"+language+"_"+key, "") }
-	keys := []string{"capabilities", "review", "attachment"}
+	keys := []string{"capabilities", "investigation", "canvas", "attachment"}
 	view := selectViewingContext(event.TeamID, event.Context)
 	if view != nil {
-		keys = []string{"summary", "actions", "review", "attachment"}
+		keys = []string{"summary", "investigation", "canvas", "actions"}
 	}
 	entries := make([]slack.SuggestedPrompt, 0, len(keys))
 	for _, key := range keys {

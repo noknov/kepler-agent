@@ -82,6 +82,10 @@ func policyForSurface(cfg config.Config, surface SurfaceOptions) tool.SurfacePol
 	for name, available := range surface.AvailableDeps {
 		availableDeps[name] = available
 	}
+	if surface.Connections != nil && surface.Connections.Config.GitHubEnabled() {
+		availableDeps["github"] = true
+		availableDeps["github-connection"] = true
+	}
 	if surface.Connections != nil && surface.Connections.Config.SlackEnabled() {
 		availableDeps["slack-connection"] = true
 	}
@@ -199,11 +203,17 @@ func registerIntegrationTools(registration *tool.Registration, cfg config.Config
 		Owner:      integrations.GitHub.DefaultOwner,
 		Repo:       integrations.GitHub.DefaultRepo,
 	}
-	registration.Deferred(tool.CategoryIntegration, githubTools.DispatchWorkflowTool{Client: githubClient})
-	registration.Deferred(tool.CategoryIntegration, githubTools.WorkflowRunsTool{Client: githubClient})
-	registration.Deferred(tool.CategoryIntegration, githubTools.PRDiffTool{Client: githubClient})
-	registration.Deferred(tool.CategoryIntegration, githubTools.PRFileDiffTool{Client: githubClient})
-	registration.Deferred(tool.CategoryIntegration, githubTools.JobLogsTool{Client: githubClient})
+	var githubSource githubTools.ClientSource
+	if conn != nil && conn.Config.GitHubEnabled() {
+		oauthDefaults := githubClient
+		oauthDefaults.APIBaseURL = conn.Config.GitHub.APIBaseURL
+		githubSource = githubTools.ConnectedSource{Service: *conn, Defaults: oauthDefaults}
+	}
+	registration.Deferred(tool.CategoryIntegration, githubTools.DispatchWorkflowTool{Client: githubClient, Source: githubSource})
+	registration.Deferred(tool.CategoryIntegration, githubTools.WorkflowRunsTool{Client: githubClient, Source: githubSource})
+	registration.Deferred(tool.CategoryIntegration, githubTools.PRDiffTool{Client: githubClient, Source: githubSource})
+	registration.Deferred(tool.CategoryIntegration, githubTools.PRFileDiffTool{Client: githubClient, Source: githubSource})
+	registration.Deferred(tool.CategoryIntegration, githubTools.JobLogsTool{Client: githubClient, Source: githubSource})
 
 	luckinClient := &luckinTools.Client{
 		MCP: &mcp.Client{
