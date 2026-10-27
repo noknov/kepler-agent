@@ -95,72 +95,14 @@ func (t ReplaceTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	}
 	content := string(contentBytes)
 	count := strings.Count(content, args.OldText)
-	var updated string
-	if count == 0 {
-		fuzzyUpdated, fuzzyCount := replaceWhitespaceTolerant(content, args.OldText, args.NewText)
-		if fuzzyCount != 1 {
-			return tool.Result{}, fmt.Errorf("old_text matched %d times; expected exactly 1", fuzzyCount)
-		}
-		updated = fuzzyUpdated
-	} else {
-		if count != 1 {
-			return tool.Result{}, fmt.Errorf("old_text matched %d times; expected exactly 1", count)
-		}
-		updated = strings.Replace(content, args.OldText, args.NewText, 1)
+	if count != 1 {
+		return tool.Result{}, fmt.Errorf("old_text matched %d times; expected exactly 1", count)
 	}
+	updated := strings.Replace(content, args.OldText, args.NewText, 1)
 	if err := file.write(ctx, []byte(updated)); err != nil {
 		return tool.Result{}, err
 	}
 	return tool.TextResult(fmt.Sprintf("replaced text in %s", displayPath(t.Paths, path))), nil
-}
-
-func replaceWhitespaceTolerant(content, oldText, newText string) (string, int) {
-	normContent := strings.ReplaceAll(content, "\r\n", "\n")
-	normOld := strings.ReplaceAll(oldText, "\r\n", "\n")
-	if normContent != content || normOld != oldText {
-		if count := strings.Count(normContent, normOld); count > 0 {
-			if count != 1 {
-				return content, count
-			}
-			res := strings.Replace(normContent, normOld, strings.ReplaceAll(newText, "\r\n", "\n"), 1)
-			if strings.Contains(content, "\r\n") {
-				res = strings.ReplaceAll(res, "\n", "\r\n")
-			}
-			return res, 1
-		}
-	}
-	contentLines := strings.Split(normContent, "\n")
-	oldLines := strings.Split(normOld, "\n")
-	if len(oldLines) == 0 {
-		return content, 0
-	}
-	var matchIndices []int
-	for i := 0; i <= len(contentLines)-len(oldLines); i++ {
-		matched := true
-		for j := 0; j < len(oldLines); j++ {
-			if strings.TrimSpace(contentLines[i+j]) != strings.TrimSpace(oldLines[j]) {
-				matched = false
-				break
-			}
-		}
-		if matched {
-			matchIndices = append(matchIndices, i)
-		}
-	}
-	if len(matchIndices) != 1 {
-		return content, len(matchIndices)
-	}
-	idx := matchIndices[0]
-	newLines := strings.Split(strings.ReplaceAll(newText, "\r\n", "\n"), "\n")
-	outLines := make([]string, 0, len(contentLines)-len(oldLines)+len(newLines))
-	outLines = append(outLines, contentLines[:idx]...)
-	outLines = append(outLines, newLines...)
-	outLines = append(outLines, contentLines[idx+len(oldLines):]...)
-	res := strings.Join(outLines, "\n")
-	if strings.Contains(content, "\r\n") {
-		res = strings.ReplaceAll(res, "\n", "\r\n")
-	}
-	return res, 1
 }
 
 func displayPath(policy safety.WorkspacePolicy, path string) string {

@@ -179,15 +179,20 @@ The local CLI and stdio `app-server` share one catalog (`packages/tools/local`):
 
 | Tool | Description |
 |---|---|
-| `read_file` | Read a file from the workspace or allowed read roots with line numbering |
+| `read_file` | Read UTF-8 byte ranges from one or more workspace files |
 | `write_file` | Create or overwrite a file within the workspace |
-| `edit` | Replace exact or whitespace-normalized fuzzy line blocks in a workspace file |
-| `glob` | Match files by pattern within the workspace |
-| `grep` | Search file contents with `rg` |
-| `bash` | Execute an argv command inside the OS sandbox |
-| `memory` | Read, write, append, or clear durable cross-session project notes (`MEMORY.md`) |
+| `edit_file` | Replace exact text; require a unique match unless `replace_all` is explicit |
+| `list_files` | List workspace files with `rg` |
+| `search` | Search workspace file contents with `rg` |
+| `exec` | Execute an argv command inside the OS sandbox, without shell parsing |
+| `memory` | Manage durable project-scoped notes across sessions |
 | `agent-explore` | Delegate bounded read-only exploration subtasks |
 | `update_plan` | Publish structured multi-step execution progress |
+
+Both local `edit_file` and hosted `code-replace` require byte-exact `old_text`.
+Indentation, trailing whitespace and line endings are not normalized. A mismatch
+returns an error without changing the file; reread the source and provide the
+intended exact span. Other file bytes remain unchanged by a successful edit.
 
 Hosted `code-write_file` and `code-replace` resolve existing ancestors against the
 workspace policy, then perform file I/O through an opened `os.Root`. Symlinks

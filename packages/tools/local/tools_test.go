@@ -88,7 +88,7 @@ func data(t *testing.T, path string) []byte {
 	return value
 }
 
-func TestEditFileFuzzyAndMemoryTool(t *testing.T) {
+func TestExactEditFileAndMemoryTool(t *testing.T) {
 	root := t.TempDir()
 	workspace, err := local.NewWorkspace(root)
 	if err != nil {
@@ -101,9 +101,9 @@ func TestEditFileFuzzyAndMemoryTool(t *testing.T) {
 	}
 	edit := EditFile{Workspace: workspace}
 	if _, err := edit.Execute(context.Background(), agenttool.Call{
-		Arguments: json.RawMessage(`{"path":"main.go","old_text":"package main\n  const x = 1","new_text":"package main\n\tconst x = 2"}`),
+		Arguments: json.RawMessage(`{"path":"main.go","old_text":"package main\n\tconst x = 1","new_text":"package main\n\tconst x = 2"}`),
 	}); err != nil {
-		t.Fatalf("EditFile fuzzy failed: %v", err)
+		t.Fatalf("EditFile failed: %v", err)
 	}
 	if !strings.Contains(string(data(t, target)), "const x = 2") {
 		t.Fatalf("unexpected file content: %s", string(data(t, target)))
@@ -122,5 +122,72 @@ func TestEditFileFuzzyAndMemoryTool(t *testing.T) {
 	})
 	if err != nil || !strings.Contains(listed.Text(), "code.style") {
 		t.Fatalf("memory search=%q err=%v", listed.Text(), err)
+	}
+}
+
+func TestLocalEditRejectsNonExactWhitespaceWithoutChangingFile(t *testing.T) {
+	for _, test := range []struct {
+		name, content, old string
+		all                bool
+	}{
+		{"indentation", "if enabled:\n    run()\n", "if enabled:\nrun()", false},
+		{"line endings", "header\nalpha\r\nbeta\r\nfooter\n", "alpha\nbeta", false},
+		{"trailing whitespace", "alpha  \nbeta\n", "alpha\nbeta", false},
+		{"overlapping fuzzy spans", " a\n a\n a\n", "a\na", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			workspace, err := local.NewWorkspace(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer workspace.Close()
+			path := filepath.Join(workspace.Root, "example.txt")
+			if err := os.WriteFile(path, []byte(test.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			args, _ := json.Marshal(map[string]any{"path": "example.txt", "old_text": test.old, "new_text": "changed", "replace_all": test.all})
+			_, err = (EditFile{Workspace: workspace}).Execute(t.Context(), agenttool.Call{Arguments: args})
+			if err == nil {
+				t.Error("accepted non-exact old_text")
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != test.content {
+				t.Fatalf("non-exact edit changed bytes: %q err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestLocalExactEditPreservesUnrelatedBytesAndExplicitReplaceAll(t *testing.T) {
+	for _, test := range []struct {
+		name, content, old, replacement, want string
+		all                                   bool
+	}{
+		{"mixed endings", "header\nalpha\r\nbeta\r\nfooter\n", "alpha\r\nbeta", "changed", "header\nchanged\r\nfooter\n", false},
+		{"replace all", "one\none\n", "one", "two", "two\ntwo\n", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			workspace, err := local.NewWorkspace(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer workspace.Close()
+			path := filepath.Join(workspace.Root, "example.txt")
+			if err := os.WriteFile(path, []byte(test.content), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			args, _ := json.Marshal(map[string]any{"path": "example.txt", "old_text": test.old, "new_text": test.replacement, "replace_all": test.all})
+			if _, err := (EditFile{Workspace: workspace}).Execute(t.Context(), agenttool.Call{Arguments: args}); err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != test.want {
+				t.Fatalf("wrong exact replacement: %q err=%v", got, err)
+			}
+			info, err := os.Stat(path)
+			if err != nil || info.Mode().Perm() != 0o755 {
+				t.Fatalf("mode changed: %v %v", info, err)
+			}
+		})
 	}
 }
