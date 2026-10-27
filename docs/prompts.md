@@ -1,11 +1,20 @@
 # Prompts
 
-Prompt text is loaded in two layers:
+Prompt text loads embedded public defaults and the embedded private catalog,
+then an optional deployment overlay selected by `PROMPT_DIR`. Unset `PROMPT_DIR`
+adds no filesystem overlay. An explicit relative path is relative to the process
+working directory; absolute paths select the actual directory. Loading never
+searches parent directories or infers embedded catalogs from path suffixes.
 
-1. `packages/prompts/defaults/` contains committed, generic defaults that are
-   safe to maintain in git.
-2. `PROMPT_DIR`, default `worker/.prompts/`, adds small deployment-specific
-   overlays that should stay gitignored.
+A configured directory must exist. Individual sections may be absent, but
+present files must be readable and valid. Invalid JSON or skill metadata rejects
+the complete load without replacing the active catalog; worker bootstrap reports
+the error before opening stores or starting background work.
+
+Catalog skills, local skill discovery, and uploaded user skills share metadata
+parsing through `prompts.ParseSkill`. Plain Markdown may use the directory
+or upload filename as its name. Malformed YAML is rejected, not repaired or
+silently interpreted as missing metadata.
 
 Keep the main assistant behavior in git so remote branches and local deployments
 stay aligned. Use the private overlay only for narrow sensitive details such as

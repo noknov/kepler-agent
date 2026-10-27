@@ -3,6 +3,8 @@ package prompts
 import (
 	"embed"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -62,16 +64,17 @@ var current = struct {
 }
 
 func init() {
-	_ = LoadDirs(PublicDir, PrivateDir)
+	if err := LoadDirs(PublicDir, PrivateDir); err != nil {
+		panic(err)
+	}
 }
 
-func LoadFromEnv() {
+func LoadFromEnv() error {
 	dir := strings.TrimSpace(os.Getenv("PROMPT_DIR"))
 	if dir == "" {
-		_ = LoadDirs(PublicDir, PrivateDir)
-		return
+		return LoadDirs(PublicDir, PrivateDir)
 	}
-	_ = LoadDirs(PublicDir, PrivateDir, dir)
+	return LoadDirs(PublicDir, PrivateDir, dir)
 }
 
 func Dir() string {
@@ -98,12 +101,11 @@ func LoadDirs(dirs ...string) error {
 		if dir == "" {
 			continue
 		}
-		resolved := PublicDir
-		if !isPublicDirRef(dir) {
-			resolved = resolveDir(dir)
-		}
+		resolved := filepath.Clean(dir)
 		next := newCatalog()
-		loadCatalogDir(resolved, &next)
+		if err := loadCatalogDir(resolved, &next); err != nil {
+			return fmt.Errorf("load prompt catalog %q: %w", dir, err)
+		}
 		mergeCatalog(&catalog, next)
 		loaded = append(loaded, resolved)
 	}
@@ -122,63 +124,9 @@ func LoadDirs(dirs ...string) error {
 	return nil
 }
 
-func resolveDir(dir string) string {
-	if filepath.IsAbs(dir) {
-		return dir
-	}
-	if looksLikeCatalogDir(dir) {
-		return dir
-	}
-	wd, err := os.Getwd()
-	if err != nil {
-		return dir
-	}
-	for {
-		candidate := filepath.Join(wd, dir)
-		if looksLikeCatalogDir(candidate) {
-			return candidate
-		}
-		parent := filepath.Dir(wd)
-		if parent == wd {
-			break
-		}
-		wd = parent
-	}
-	return dir
-}
+func isPublicDirRef(dir string) bool { return filepath.ToSlash(filepath.Clean(dir)) == PublicDir }
 
-func isPublicDirRef(dir string) bool {
-	dir = filepath.ToSlash(filepath.Clean(strings.TrimSpace(dir)))
-	return dir == PublicDir || strings.HasSuffix(dir, "/"+PublicDir)
-}
-
-func isPrivateDirRef(dir string) bool {
-	dir = filepath.ToSlash(filepath.Clean(strings.TrimSpace(dir)))
-	return dir == PrivateDir || strings.HasSuffix(dir, "/"+PrivateDir)
-}
-
-func looksLikeCatalogDir(dir string) bool {
-	info, err := os.Stat(dir)
-	if err != nil || !info.IsDir() {
-		return false
-	}
-	markers := []string{
-		"system.md",
-		"app_messages.json",
-		"tools.json",
-		"health.json",
-		"texts.json",
-		"rules",
-		"skills",
-		"runbooks",
-	}
-	for _, marker := range markers {
-		if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
-			return true
-		}
-	}
-	return false
-}
+func isPrivateDirRef(dir string) bool { return filepath.ToSlash(filepath.Clean(dir)) == PrivateDir }
 
 func newCatalog() Catalog {
 	return Catalog{
@@ -191,33 +139,53 @@ func newCatalog() Catalog {
 	}
 }
 
-func loadCatalogDir(dir string, catalog *Catalog) {
+func loadCatalogDir(dir string, catalog *Catalog) error {
 	if isPublicDirRef(dir) {
-		loadCatalogFS(embeddedDefaults, "defaults", catalog)
-		return
+		return loadCatalogFS(embeddedDefaults, "defaults", catalog)
 	}
 	if isPrivateDirRef(dir) {
-		loadCatalogFS(embeddedPrivate, "private", catalog)
-		return
+		return loadCatalogFS(embeddedPrivate, "private", catalog)
 	}
-	loadCatalogFS(os.DirFS(dir), ".", catalog)
+	return loadCatalogFS(os.DirFS(dir), ".", catalog)
 }
 
-func loadCatalogFS(fsys fs.FS, root string, catalog *Catalog) {
-	var systemPrompt string
-	var agentAddendum string
-	readTextFS(fsys, fsPath(root, "system.md"), &systemPrompt)
-	readTextFS(fsys, fsPath(root, "agent.md"), &agentAddendum)
+func loadCatalogFS(fsys fs.FS, root string, catalog *Catalog) error {
+	info, err := fs.Stat(fsys, root)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("catalog root is not a directory")
+	}
+	var systemPrompt, agentAddendum string
+	if err := readTextFS(fsys, fsPath(root, "system.md"), &systemPrompt); err != nil {
+		return err
+	}
+	if err := readTextFS(fsys, fsPath(root, "agent.md"), &agentAddendum); err != nil {
+		return err
+	}
 	catalog.System = appendPrompt(systemPrompt, agentAddendum)
-	readJSONFS(fsys, fsPath(root, "app_messages.json"), &catalog.AppMessages)
-	readJSONFS(fsys, fsPath(root, "tools.json"), &catalog.Tools)
-	readJSONFS(fsys, fsPath(root, "tool_statuses.json"), &catalog.ToolStatuses)
-	readJSONFS(fsys, fsPath(root, "github_workflows.json"), &catalog.GitHubWorkflows)
-	readJSONFS(fsys, fsPath(root, "health.json"), &catalog.Health)
-	readJSONFS(fsys, fsPath(root, "texts.json"), &catalog.Texts)
-	readRuntimeJSONFS(fsys, fsPath(root, "runtime.json"), catalog)
-	catalog.RuleKeys, catalog.Rules = readMarkdownDirFS(fsys, fsPath(root, "rules"))
-	catalog.Skills = readSkillsDirFS(fsys, fsPath(root, "skills"))
+	for _, section := range []struct {
+		name   string
+		target any
+	}{
+		{"app_messages.json", &catalog.AppMessages}, {"tools.json", &catalog.Tools},
+		{"tool_statuses.json", &catalog.ToolStatuses}, {"github_workflows.json", &catalog.GitHubWorkflows},
+		{"health.json", &catalog.Health}, {"texts.json", &catalog.Texts},
+	} {
+		if err := readJSONFS(fsys, fsPath(root, section.name), section.target); err != nil {
+			return err
+		}
+	}
+	if err := readRuntimeJSONFS(fsys, fsPath(root, "runtime.json"), catalog); err != nil {
+		return err
+	}
+	catalog.RuleKeys, catalog.Rules, err = readMarkdownDirFS(fsys, fsPath(root, "rules"))
+	if err != nil {
+		return err
+	}
+	catalog.Skills, err = readSkillsDirFS(fsys, fsPath(root, "skills"))
+	return err
 }
 
 func fsPath(root string, parts ...string) string {
@@ -256,7 +224,7 @@ func appendPrompt(base, addendum string) string {
 	}
 }
 
-func readRuntimeJSONFS(fsys fs.FS, path string, catalog *Catalog) {
+func readRuntimeJSONFS(fsys fs.FS, path string, catalog *Catalog) error {
 	var runtime struct {
 		AppMessages     map[string]string `json:"app_messages,omitempty"`
 		ToolStatuses    map[string]string `json:"tool_statuses,omitempty"`
@@ -264,12 +232,15 @@ func readRuntimeJSONFS(fsys fs.FS, path string, catalog *Catalog) {
 		Health          map[string]string `json:"health,omitempty"`
 		Texts           map[string]string `json:"texts,omitempty"`
 	}
-	readJSONFS(fsys, path, &runtime)
+	if err := readJSONFS(fsys, path, &runtime); err != nil {
+		return err
+	}
 	mergeStringMap(catalog.AppMessages, runtime.AppMessages)
 	mergeStringMap(catalog.ToolStatuses, runtime.ToolStatuses)
 	mergeStringMap(catalog.GitHubWorkflows, runtime.GitHubWorkflows)
 	mergeStringMap(catalog.Health, runtime.Health)
 	mergeStringMap(catalog.Texts, runtime.Texts)
+	return nil
 }
 
 func mergeStringMap(dst, src map[string]string) {
@@ -463,43 +434,64 @@ func choose(value, fallback string) string {
 	return value
 }
 
-func readTextFS(fsys fs.FS, path string, out *string) {
+// Missing sections are optional; errors reading present sections are not.
+func readOptionalFileFS(fsys fs.FS, path string) ([]byte, bool, error) {
 	data, err := fs.ReadFile(fsys, path)
-	if err == nil {
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("read %q: %w", path, err)
+	}
+	return data, true, nil
+}
+
+func readTextFS(fsys fs.FS, path string, out *string) error {
+	data, found, err := readOptionalFileFS(fsys, path)
+	if err != nil {
+		return err
+	}
+	if found {
 		*out = strings.TrimSpace(string(data))
 	}
+	return nil
 }
 
-func readMarkdownDirFS(fsys fs.FS, dir string) ([]string, []string) {
+func readMarkdownDirFS(fsys fs.FS, dir string) ([]string, []string, error) {
 	entries, err := fs.ReadDir(fsys, dir)
-	if err != nil {
-		return nil, nil
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil, nil
 	}
-	var keys []string
-	var out []string
+	if err != nil {
+		return nil, nil, fmt.Errorf("read %q: %w", dir, err)
+	}
+	var keys, out []string
 	for _, entry := range entries {
-		switch {
-		case entry.IsDir():
-			path := fsPath(dir, entry.Name(), "SKILL.md")
-			if data, err := fs.ReadFile(fsys, path); err == nil {
-				keys = append(keys, entry.Name()+"/SKILL.md")
-				out = append(out, "# "+entry.Name()+"/SKILL.md\n"+strings.TrimSpace(string(data)))
-			}
-		case filepath.Ext(entry.Name()) == ".md":
-			path := fsPath(dir, entry.Name())
-			if data, err := fs.ReadFile(fsys, path); err == nil {
-				keys = append(keys, entry.Name())
-				out = append(out, "# "+entry.Name()+"\n"+strings.TrimSpace(string(data)))
-			}
+		key := entry.Name()
+		if entry.IsDir() {
+			key += "/SKILL.md"
+		} else if filepath.Ext(key) != ".md" {
+			continue
+		}
+		data, found, err := readOptionalFileFS(fsys, fsPath(dir, key))
+		if err != nil {
+			return nil, nil, err
+		}
+		if found {
+			keys = append(keys, key)
+			out = append(out, "# "+key+"\n"+strings.TrimSpace(string(data)))
 		}
 	}
-	return keys, out
+	return keys, out, nil
 }
 
-func readSkillsDirFS(fsys fs.FS, dir string) []Skill {
+func readSkillsDirFS(fsys fs.FS, dir string) ([]Skill, error) {
 	entries, err := fs.ReadDir(fsys, dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("read %q: %w", dir, err)
 	}
 	var out []Skill
 	for _, entry := range entries {
@@ -507,40 +499,47 @@ func readSkillsDirFS(fsys fs.FS, dir string) []Skill {
 			continue
 		}
 		path := fsPath(dir, entry.Name(), "SKILL.md")
-		data, err := fs.ReadFile(fsys, path)
+		data, found, err := readOptionalFileFS(fsys, path)
 		if err != nil {
+			return nil, err
+		}
+		if !found {
 			continue
 		}
-		skill := parseSkill(entry.Name(), strings.TrimSpace(string(data)))
+		skill, err := ParseSkill(entry.Name(), strings.TrimSpace(string(data)))
+		if err != nil {
+			return nil, fmt.Errorf("parse %q: %w", path, err)
+		}
 		skill.Source = entry.Name() + "/SKILL.md"
 		out = append(out, skill)
 	}
-	return out
+	return out, nil
 }
 
-func parseSkill(fallbackName, content string) Skill {
-	name := fallbackName
-	description := ""
+// ParseSkill reads optional YAML metadata. Plain Markdown uses fallbackName;
+// malformed metadata is an error rather than an unnamed or partially read skill.
+func ParseSkill(fallbackName, content string) (Skill, error) {
 	var header struct {
 		Name        string `yaml:"name"`
 		Description string `yaml:"description"`
 	}
-	if _, found, err := frontmatter.Decode(content, &header); err == nil && found {
-		if strings.TrimSpace(header.Name) != "" {
-			name = strings.TrimSpace(header.Name)
-		}
-		description = strings.TrimSpace(header.Description)
+	if _, _, err := frontmatter.Decode(content, &header); err != nil {
+		return Skill{}, err
 	}
-	return Skill{
-		Name:        name,
-		Description: description,
-		Content:     content,
+	name := strings.TrimSpace(header.Name)
+	if name == "" {
+		name = fallbackName
 	}
+	return Skill{Name: name, Description: strings.TrimSpace(header.Description), Content: content}, nil
 }
 
-func readJSONFS[T any](fsys fs.FS, path string, out *T) {
-	data, err := fs.ReadFile(fsys, path)
-	if err == nil {
-		_ = json.Unmarshal(data, out)
+func readJSONFS(fsys fs.FS, path string, out any) error {
+	data, found, err := readOptionalFileFS(fsys, path)
+	if err != nil || !found {
+		return err
 	}
+	if err := json.Unmarshal(data, out); err != nil {
+		return fmt.Errorf("decode %q: %w", path, err)
+	}
+	return nil
 }

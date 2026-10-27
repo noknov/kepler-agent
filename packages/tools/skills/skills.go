@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	"github.com/noknov/kepler-agent/packages/agent/tool"
-	"github.com/noknov/kepler-agent/packages/frontmatter"
+	"github.com/noknov/kepler-agent/packages/prompts"
 )
 
 type Skill struct{ Name, Description, Path string }
@@ -41,7 +41,11 @@ func Discover(roots []string) (*Catalog, error) {
 			if err != nil {
 				return nil, err
 			}
-			name, description := metadata(entry.Name(), string(data))
+			skill, err := prompts.ParseSkill(entry.Name(), string(data))
+			if err != nil {
+				return nil, fmt.Errorf("parse skill %q: %w", path, err)
+			}
+			name, description := skill.Name, skill.Description
 			key := strings.ToLower(name)
 			if _, exists := catalog.items[key]; exists {
 				return nil, fmt.Errorf("duplicate skill %q", name)
@@ -92,19 +96,4 @@ func (t loadTool) Execute(_ context.Context, call tool.Call) (tool.Result, error
 		return tool.Result{}, err
 	}
 	return tool.TextResult(string(data)), nil
-}
-
-func metadata(fallback, body string) (string, string) {
-	name := fallback
-	header := struct {
-		Name        string `yaml:"name"`
-		Description string `yaml:"description"`
-	}{}
-	if _, found, err := frontmatter.Decode(body, &header); err == nil && found {
-		if strings.TrimSpace(header.Name) != "" {
-			name = strings.TrimSpace(header.Name)
-		}
-		return name, strings.TrimSpace(header.Description)
-	}
-	return name, ""
 }

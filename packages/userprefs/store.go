@@ -11,7 +11,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/noknov/kepler-agent/packages/frontmatter"
+	"github.com/noknov/kepler-agent/packages/prompts"
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
 )
 
@@ -91,7 +91,11 @@ func BuildAsset(kind AssetKind, userID string, file slack.File, data []byte) (As
 	}
 	description := ""
 	if kind == KindSkill {
-		name, description = parseSkillHeader(name, content)
+		skill, err := prompts.ParseSkill(name, content)
+		if err != nil {
+			return Asset{}, fmt.Errorf("parse skill metadata: %w", err)
+		}
+		name, description = skill.Name, skill.Description
 	}
 	asset := Asset{
 		ID:           assetID(userID, kind, name),
@@ -265,21 +269,6 @@ func sanitizeName(name string) string {
 	}, name)
 	name = strings.Join(strings.Fields(name), "-")
 	return strings.Trim(name, "-_ ")
-}
-
-func parseSkillHeader(fallbackName, content string) (string, string) {
-	name := fallbackName
-	header := struct {
-		Name        string `yaml:"name"`
-		Description string `yaml:"description"`
-	}{}
-	if _, found, err := frontmatter.Decode(content, &header); err == nil && found {
-		if strings.TrimSpace(header.Name) != "" {
-			name = strings.TrimSpace(header.Name)
-		}
-		return name, strings.TrimSpace(header.Description)
-	}
-	return name, ""
 }
 
 func sortAssets(assets []Asset) {

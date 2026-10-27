@@ -89,3 +89,16 @@ func (s *promptTestStore) UpsertAsset(_ context.Context, asset Asset) (Asset, er
 }
 func (s *promptTestStore) DeleteAsset(context.Context, string, AssetKind, string) error { return nil }
 func (s *promptTestStore) DeleteAssets(context.Context, string, AssetKind) error        { return nil }
+
+func TestBuildSkillAssetRejectsMalformedMetadata(t *testing.T) {
+	file := slack.File{Name: "skill.md", Mimetype: "text/markdown"}
+	for _, body := range []string{"---\nname: [broken\n---\nbody", "---\nname: unterminated\n"} {
+		if _, err := BuildAsset(KindSkill, "U1", file, []byte(body)); err == nil {
+			t.Fatal("malformed metadata silently became a filename-based skill")
+		}
+	}
+	asset, err := BuildAsset(KindSkill, "U1", file, []byte("Plain Markdown remains supported."))
+	if err != nil || asset.Name != "skill" {
+		t.Fatalf("plain skill rejected: %+v %v", asset, err)
+	}
+}

@@ -16,11 +16,21 @@ func Decode(content string, target any) (body string, found bool, err error) {
 		return content, false, nil
 	}
 	rest := normalized[4:]
-	end := strings.Index(rest, "\n---\n")
-	terminatorSize := len("\n---\n")
-	if end < 0 && strings.HasSuffix(rest, "\n---") {
-		end = len(rest) - len("\n---")
-		terminatorSize = len("\n---")
+	end, bodyStart := -1, 0
+	for offset := 0; offset <= len(rest); {
+		line, _, newline := strings.Cut(rest[offset:], "\n")
+		if line == "---" {
+			end = offset
+			bodyStart = offset + len(line)
+			if newline {
+				bodyStart++
+			}
+			break
+		}
+		if !newline {
+			break
+		}
+		offset += len(line) + 1
 	}
 	if end < 0 {
 		return content, false, fmt.Errorf("unterminated YAML front matter")
@@ -31,5 +41,5 @@ func Decode(content string, target any) (body string, found bool, err error) {
 			return content, true, fmt.Errorf("decode YAML front matter: %w", err)
 		}
 	}
-	return rest[end+terminatorSize:], true, nil
+	return rest[bodyStart:], true, nil
 }

@@ -33,3 +33,20 @@ func TestDiscoverPromptAndLoad(t *testing.T) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
+
+func TestDiscoverRejectsMalformedSkillMetadata(t *testing.T) {
+	for _, body := range []string{"---\nname: [broken\n---\nbody", "---\nname: unterminated\n"} {
+		root := t.TempDir()
+		directory := filepath.Join(root, "demo")
+		if err := os.Mkdir(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(directory, "SKILL.md")
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Discover([]string{root}); err == nil || !strings.Contains(err.Error(), path) {
+			t.Fatalf("invalid skill accepted or not identified: %v", err)
+		}
+	}
+}
