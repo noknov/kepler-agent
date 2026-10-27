@@ -126,8 +126,8 @@ func (g WorkspacePolicy) ResolveReadablePath(path string) (string, error) {
 	return "", fmt.Errorf("path resolves outside allowed workspace roots")
 }
 
-// One policy vocabulary drives both filesystem reads and committed-tree
-// pathspecs. Git exclusions are case-insensitive just like IsSensitivePath.
+// One policy vocabulary drives filesystem reads, search, and committed-tree
+// exclusions. Git exclusions are case-insensitive just like IsSensitivePath.
 var sensitiveFileNames = []string{"id_rsa", "id_ed25519", "credentials", "credentials.json", ".netrc", ".npmrc", ".pypirc"}
 var sensitiveFileSuffixes = []string{".pem", ".key", ".p12", ".pfx", ".kubeconfig"}
 var sensitiveDirectories = []string{".aws", ".gcloud", ".kube", "secrets", "credentials"}
@@ -166,20 +166,35 @@ func IsSensitivePath(path string) bool {
 
 // SensitiveGitPathspecs applies the same readable-path policy to committed trees.
 func SensitiveGitPathspecs() []string {
+	patterns := sensitivePathPatterns()
+	out := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		out = append(out, ":(exclude,glob,icase)**/"+pattern)
+	}
+	return out
+}
+
+// SensitiveRGGlobs excludes known credential paths. Use these with --iglob to
+// match the case-insensitive readable-path policy without changing query casing.
+func SensitiveRGGlobs() []string {
+	patterns := sensitivePathPatterns()
+	out := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		out = append(out, "!**/"+pattern)
+	}
+	return out
+}
+
+func sensitivePathPatterns() []string {
 	patterns := []string{".env", ".env.*"}
 	patterns = append(patterns, sensitiveFileNames...)
 	for _, suffix := range sensitiveFileSuffixes {
 		patterns = append(patterns, "*"+suffix)
 	}
 	for _, directory := range sensitiveDirectories {
-		patterns = append(patterns, directory+"/**")
+		patterns = append(patterns, directory, directory+"/**")
 	}
-	patterns = append(patterns, sensitiveRelativeFiles...)
-	out := make([]string, 0, len(patterns))
-	for _, pattern := range patterns {
-		out = append(out, ":(exclude,glob,icase)**/"+pattern)
-	}
-	return out
+	return append(patterns, sensitiveRelativeFiles...)
 }
 
 func isWithin(path, root string) bool {

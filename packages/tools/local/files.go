@@ -11,20 +11,23 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/profiles/local"
+	"github.com/noknov/kepler-agent/packages/safety"
 )
 
 type ReadFile struct{ Workspace local.Workspace }
 
 func (ReadFile) Descriptor() tool.Descriptor {
-	return tool.Descriptor{Name: "read_file", Description: "Read UTF-8 files inside the workspace. Use paths for independent files in one call.", InputSchema: schema(`{"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"}},"offset":{"type":"integer"},"limit":{"type":"integer"}}`), Effects: []tool.Effect{tool.EffectRead}, Exposure: tool.ExposureEager, Parallel: true}
+	return tool.Descriptor{Name: "read_file", Description: "Read UTF-8 byte ranges from regular workspace files. Use paths for independent files; offset and limit apply per file. Default limit is 64 KiB, with a 16 MiB aggregate requested-byte budget per call.", InputSchema: schema(fmt.Sprintf(`{"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"}},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":%d}}`, maxFileReadBytes)), Effects: []tool.Effect{tool.EffectRead}, Exposure: tool.ExposureEager, Parallel: true}
 }
 
-func (t ReadFile) Execute(_ context.Context, call tool.Call) (tool.Result, error) {
+func (t ReadFile) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var arguments struct {
 		Path   string   `json:"path"`
 		Paths  []string `json:"paths"`
@@ -38,17 +41,38 @@ func (t ReadFile) Execute(_ context.Context, call tool.Call) (tool.Result, error
 	if len(files) == 0 {
 		return tool.Result{}, fmt.Errorf("path or paths is required")
 	}
+	limit, err := fileReadLimit(arguments.Limit)
+	if err != nil {
+		return tool.Result{}, err
+	}
+	if arguments.Offset < 0 {
+		return tool.Result{}, fmt.Errorf("offset must not be negative")
+	}
+	if limit > maxFileReadBytes/len(files) {
+		return tool.Result{}, fmt.Errorf("read batch exceeds %d byte requested budget; reduce paths or limit", maxFileReadBytes)
+	}
+	if err := ctx.Err(); err != nil {
+		return tool.Result{}, err
+	}
 	if len(files) == 1 {
-		body, truncated, err := t.readOne(files[0], arguments.Offset, arguments.Limit)
+		body, truncated, err := t.readOne(files[0], arguments.Offset, limit)
 		if err != nil {
+			return tool.Result{}, err
+		}
+		if err := ctx.Err(); err != nil {
 			return tool.Result{}, err
 		}
 		result := tool.TextResult(body)
 		result.Truncated = truncated
 		return result, nil
 	}
+	truncated := make([]bool, len(files))
 	text, err := tool.MapOrdered(len(files), func(i int) (string, error) {
-		body, _, readErr := t.readOne(files[i], arguments.Offset, arguments.Limit)
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		body, cut, readErr := t.readOne(files[i], arguments.Offset, limit)
+		truncated[i] = cut
 		if readErr != nil {
 			return "", readErr
 		}
@@ -57,15 +81,20 @@ func (t ReadFile) Execute(_ context.Context, call tool.Call) (tool.Result, error
 	if err != nil {
 		return tool.Result{}, err
 	}
-	return tool.TextResult(text), nil
+	if err := ctx.Err(); err != nil {
+		return tool.Result{}, err
+	}
+	result := tool.TextResult(text)
+	result.Truncated = slices.Contains(truncated, true)
+	return result, nil
 }
 
 func (t ReadFile) readOne(rawPath string, offset, limit int) (string, bool, error) {
-	path, err := t.Workspace.Resolve(rawPath, false)
+	limit, err := fileReadLimit(limit)
 	if err != nil {
 		return "", false, err
 	}
-	file, err := os.Open(path)
+	file, err := t.Workspace.OpenReadFile(rawPath)
 	if err != nil {
 		return "", false, err
 	}
@@ -76,9 +105,6 @@ func (t ReadFile) readOne(rawPath string, offset, limit int) (string, bool, erro
 	}
 	if offset < 0 || int64(offset) > info.Size() {
 		return "", false, fmt.Errorf("offset is outside file")
-	}
-	if limit <= 0 {
-		limit = 64 << 10
 	}
 	if _, err := file.Seek(int64(offset), io.SeekStart); err != nil {
 		return "", false, err
@@ -128,30 +154,22 @@ func (t ListFiles) Execute(ctx context.Context, call tool.Call) (tool.Result, er
 			return tool.Result{}, err
 		}
 	}
-	command := exec.CommandContext(ctx, "rg", append([]string{"--files", "--hidden"}, safeRGGlobs()...)...)
+	command := exec.CommandContext(ctx, "rg", append([]string{"--no-config", "--files", "--hidden"}, safeRGGlobs()...)...)
 	command.Dir = root
 	var output boundedBuffer
 	output.limit = 4 << 20
 	command.Stdout = &output
 	err := command.Run()
-	data := output.Bytes()
 	if err != nil {
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
 			return tool.Result{}, err
 		}
 	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if arguments.Limit <= 0 {
 		arguments.Limit = 500
 	}
-	if len(lines) > arguments.Limit {
-		lines = lines[:arguments.Limit]
-		lines = append(lines, "[file list truncated]")
-	}
-	result := tool.TextResult(strings.Join(lines, "\n"))
-	result.Truncated = len(lines) > 0 && lines[len(lines)-1] == "[file list truncated]"
-	return result, nil
+	return rgResult(&output, arguments.Limit), nil
 }
 
 type Search struct{ Workspace local.Workspace }
@@ -182,7 +200,14 @@ func (t Search) Execute(ctx context.Context, call tool.Call) (tool.Result, error
 			root = filepath.Dir(root)
 		}
 	}
-	args := append([]string{"-n", "--hidden", "--max-count=50", "--max-columns=400", "--max-columns-preview"}, safeRGGlobs()...)
+	if arguments.Limit <= 0 {
+		arguments.Limit = 200
+	}
+	// One extra match proves that a per-file cap cannot silently hide results
+	// within the caller's requested line budget. Convert before adding to avoid
+	// overflowing int for the largest accepted JSON integer.
+	maxCount := strconv.FormatUint(uint64(arguments.Limit)+1, 10)
+	args := append([]string{"--no-config", "-n", "--hidden", "--max-count=" + maxCount}, safeRGGlobs()...)
 	args = append(args, "--", arguments.Query, target)
 	command := exec.CommandContext(ctx, "rg", args...)
 	command.Dir = root
@@ -190,24 +215,13 @@ func (t Search) Execute(ctx context.Context, call tool.Call) (tool.Result, error
 	output.limit = 4 << 20
 	command.Stdout = &output
 	err := command.Run()
-	data := output.Bytes()
 	if err != nil {
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
 			return tool.Result{}, err
 		}
 	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if arguments.Limit <= 0 {
-		arguments.Limit = 200
-	}
-	if len(lines) > arguments.Limit {
-		lines = lines[:arguments.Limit]
-		lines = append(lines, "[search results truncated]")
-	}
-	result := tool.TextResult(strings.Join(lines, "\n"))
-	result.Truncated = len(lines) > 0 && lines[len(lines)-1] == "[search results truncated]"
-	return result, nil
+	return rgResult(&output, arguments.Limit), nil
 }
 
 type WriteFile struct{ Workspace local.Workspace }
@@ -260,7 +274,7 @@ func (t EditFile) Execute(_ context.Context, call tool.Call) (tool.Result, error
 	if err != nil {
 		return tool.Result{}, err
 	}
-	data, err := readEditableFile(path)
+	data, err := readEditableFile(t.Workspace, path)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -287,33 +301,43 @@ func (t EditFile) Execute(_ context.Context, call tool.Call) (tool.Result, error
 	return tool.TextResult(fmt.Sprintf("Updated %s (%d replacement(s)).", relative(t.Workspace.Root, path), count)), nil
 }
 
-const maxEditableBytes = 16 << 20
+const maxFileReadBytes = 16 << 20
 
-func readEditableFile(path string) ([]byte, error) {
-	file, err := os.Open(path)
+func fileReadLimit(limit int) (int, error) {
+	if limit < 0 || limit > maxFileReadBytes {
+		return 0, fmt.Errorf("limit must be between 1 and %d bytes, or omitted", maxFileReadBytes)
+	}
+	if limit == 0 {
+		return 64 << 10, nil
+	}
+	return limit, nil
+}
+
+func readEditableFile(workspace local.Workspace, path string) ([]byte, error) {
+	file, err := workspace.OpenReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, maxEditableBytes+1))
+	data, err := io.ReadAll(io.LimitReader(file, maxFileReadBytes+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > maxEditableBytes {
-		return nil, fmt.Errorf("file exceeds %d byte edit limit", maxEditableBytes)
+	if len(data) > maxFileReadBytes {
+		return nil, fmt.Errorf("file exceeds %d byte edit limit", maxFileReadBytes)
 	}
 	return data, nil
 }
 
 type boundedBuffer struct {
-	bytes.Buffer
+	buffer    bytes.Buffer
 	limit     int
 	truncated bool
 }
 
 func (b *boundedBuffer) Write(value []byte) (int, error) {
 	original := len(value)
-	remaining := b.limit - b.Len()
+	remaining := b.limit - b.buffer.Len()
 	if remaining <= 0 {
 		b.truncated = true
 		return original, nil
@@ -322,7 +346,7 @@ func (b *boundedBuffer) Write(value []byte) (int, error) {
 		value = value[:remaining]
 		b.truncated = true
 	}
-	_, err := b.Buffer.Write(value)
+	_, err := b.buffer.Write(value)
 	return original, err
 }
 
@@ -344,12 +368,26 @@ func relative(root, path string) string {
 }
 
 func safeRGGlobs() []string {
-	patterns := []string{"!.git/**", "!.env", "!.env.*", "!**/.env", "!**/.env.*", "!**/*.pem", "!**/*.key", "!**/*.p12", "!**/*.pfx", "!**/.netrc", "!**/.npmrc", "!**/.pypirc", "!**/.aws/**", "!**/.gcloud/**", "!**/.kube/**", "!**/secrets/**", "!**/credentials/**", "!**/.docker/config.json", "!**/.config/gh/hosts.yml"}
+	patterns := append([]string{"!**/.git", "!**/.git/**"}, safety.SensitiveRGGlobs()...)
 	args := make([]string, 0, len(patterns)*2)
 	for _, pattern := range patterns {
-		args = append(args, "-g", pattern)
+		args = append(args, "--iglob", pattern)
 	}
 	return args
+}
+
+func rgResult(output *boundedBuffer, limit int) tool.Result {
+	lines := strings.Split(strings.TrimSpace(output.buffer.String()), "\n")
+	truncated := output.truncated || len(lines) > limit
+	if len(lines) > limit {
+		lines = lines[:limit]
+	}
+	result := tool.TextResult(strings.Join(lines, "\n"))
+	result.Truncated = truncated
+	if truncated {
+		result.Content = append(result.Content, tool.TextResult("[results truncated]").Content...)
+	}
+	return result
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {
