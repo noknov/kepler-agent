@@ -32,7 +32,12 @@ func openWorkspaceFile(policy safety.WorkspacePolicy, raw string) (*workspaceFil
 		root = filepath.Clean(root)
 		realRoot, err := filepath.EvalSymlinks(root)
 		if err != nil {
-			return nil, err
+			// An explicit root prefix cannot be reinterpreted as a nested
+			// path in another workspace when its selected root is unavailable.
+			if !filepath.IsAbs(clean) && (clean == filepath.Base(root) || strings.HasPrefix(clean, filepath.Base(root)+string(filepath.Separator))) {
+				return nil, err
+			}
+			continue
 		}
 		candidate := clean
 		if !filepath.IsAbs(clean) {
@@ -88,7 +93,7 @@ func openWorkspaceFile(policy safety.WorkspacePolicy, raw string) (*workspaceFil
 		for _, allowed := range policy.Roots {
 			realAllowed, err := filepath.EvalSymlinks(allowed)
 			if err != nil {
-				return nil, err
+				continue
 			}
 			name, err := filepath.Rel(realAllowed, target)
 			if err != nil || !filepath.IsLocal(name) {
