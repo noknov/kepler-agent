@@ -144,9 +144,10 @@ See [Slack viewing context](https://docs.slack.dev/ai/developing-agents/#trackin
 Opening the agent Messages tab offers supported starting points. When the Home
 open event supplies a same-workspace viewed channel, two prompts explicitly name
 that channel: a decision brief and extraction of stated next steps. They retain
-source authors/timestamps and request owners/deadlines only when stated. Generic
-PR review and attachment analysis remain available; without channel context the
-page offers capability guidance instead of guessing a target.
+source authors/timestamps and request owners/deadlines only when stated. Investigation and Canvas-draft prompts remain available. Without channel context,
+the page offers capability guidance and attachment analysis instead of guessing
+a channel. Canvas prompts prepare a draft in the thread; publication requires an
+explicit request and destination.
 
 These are presentation updates, not autonomous work. No task starts until the
 user clicks/sends a suggestion. Suggested prompts do not grant Slack data access
@@ -214,3 +215,61 @@ evidence rather than continuously crawling the workspace.
 
 References: [RTS usage and eligibility](https://docs.slack.dev/apis/web-api/real-time-search-api/),
 [API contract and limits](https://docs.slack.dev/reference/methods/assistant.search.context/).
+
+## Compose evidence into shared work
+
+The bundled `slack-evidence-workflows` skill composes existing tools in the shared
+runtime. It supports channel decision briefs, discussion-to-PR investigations,
+source-linked Canvas drafts, confirmed List actions and GitHub task previews.
+There is no separate workflow engine or task store. Search and thread reads
+retain their existing bounds; resolve permalinks only for selected citations.
+PR investigations retain the exact head SHA and distinguish source facts from
+inference. Suggested prompts start work only when the user sends them.
+
+Canvas creation uses the caller's linked Slack account when Slack OAuth is
+configured; an absent connection cannot fall back to the bot. Without OAuth,
+the explicitly configured bot remains available under operator policy. Omitting
+`channel_id` creates a standalone Canvas. Publishing into a channel requires
+its explicit ID; the current thread never supplies a default audience.
+
+List reads return one page (default 20, maximum 100), native schema and a cursor.
+Creation accepts actual column IDs and native Slack field values, not inferred
+column names or converted text. Missing owners/dates remain missing. Read the
+chosen List schema and confirm the action and mapping before creation. Each
+created item returns its source identity; creation is neither an upsert nor an
+atomic batch. Uncertain writes require reconciliation and are not replayed.
+
+Task previews use Work Objects for an explicitly selected GitHub issue/PR link
+already posted in a known message. Both Slack and GitHub use the requesting
+user's connections. GitHub owns title, status, update time, stable identity and
+PR head; model arguments cannot supply progress. A new explicit refresh reads
+GitHub again. This is an on-demand snapshot, not continuous synchronization or
+a Kepler run monitor. No editable fields, link-triggered investigation or new
+public task endpoint is installed.
+
+Rollout requires these additional **user OAuth scopes** and reconnection of
+existing Slack connections:
+
+```text
+lists:read  lists:write  canvases:write  links:write
+```
+
+Lists require a Slack plan supporting Lists. Work Objects require the source
+domain (`github.com`) registered for link unfurling, Work Object Previews enabled
+for the task entity type in app settings, and the app's `link_shared`
+event subscription. Kepler does not initiate work from that event; the user
+requests publication/refresh explicitly. API permissions and app eligibility
+remain authoritative. Work Objects also require GitHub OAuth configured and
+the caller connected. Do not enable scopes or change production configuration
+merely to inspect this feature branch.
+
+Operators intentionally enabling the new writes must append the exact tools
+`slack-user_create_list_item` and `slack-user_unfurl_task` to
+`AGENT_ALLOWED_WRITE_TOOLS`, alongside any existing allowed writes. They are not
+added to defaults. Existing approval and external-write policy also apply to
+Canvas creation and message posting. No database migration is needed.
+
+API contracts: [List reads](https://docs.slack.dev/reference/methods/slackLists.items.list/),
+[List creation](https://docs.slack.dev/reference/methods/slackLists.items.create/),
+[Work Objects](https://docs.slack.dev/messaging/work-objects-implementation/),
+[unfurling](https://docs.slack.dev/reference/methods/chat.unfurl/).

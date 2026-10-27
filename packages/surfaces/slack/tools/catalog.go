@@ -6,6 +6,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/connections"
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
 	slackmessaging "github.com/noknov/kepler-agent/packages/surfaces/slack/messaging"
+	githubTools "github.com/noknov/kepler-agent/packages/tools/github"
 	ttsTools "github.com/noknov/kepler-agent/packages/tools/tts"
 )
 
@@ -31,7 +32,16 @@ func AddToCatalog(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.C
 			Name:      cfg.Slack.AttributionName,
 			Footer:    cfg.Slack.ReplyFooter,
 		}
-		registration.Visible(UserSearchTool{Source: ConnectedClientSource{Service: *conn}})
+		source := ConnectedClientSource{Service: *conn}
+		registration.Visible(UserSearchTool{Source: source})
+		registration.Deferred(tool.CategoryIntegration, UserMessagePermalinkTool{Source: source})
+		registration.Deferred(tool.CategoryIntegration, UserListItemsTool{Source: source})
+		registration.Deferred(tool.CategoryIntegration, UserCreateListItemTool{Source: source})
+		if conn.Config.GitHubEnabled() {
+			defaults := githubTools.Client{APIBaseURL: conn.Config.GitHub.APIBaseURL}
+			registration.Deferred(tool.CategoryIntegration, UserUnfurlTaskTool{Slack: source, Tasks: GitHubWorkObjectSource{Source: githubTools.ConnectedSource{Service: *conn, Defaults: defaults}}})
+		}
+
 		registration.Visible(UserPostMessageTool{Source: ConnectedClientSource{Service: *conn}, Attribution: attribution})
 		registration.Visible(UserReadThreadTool{Source: PreferConnectedThreadReader{
 			Connected: ConnectedClientSource{Service: *conn},
@@ -40,7 +50,11 @@ func AddToCatalog(catalog *tool.Catalog, policy tool.SurfacePolicy, cfg config.C
 	} else {
 		registration.Visible(UserReadThreadTool{Source: BotThreadReader{Slack: slackClient}})
 	}
-	registration.Deferred(tool.CategoryIntegration, CreateCanvasTool{Slack: slackClient})
+	canvas := CreateCanvasTool{Slack: slackClient}
+	if conn != nil && conn.Config.SlackEnabled() {
+		canvas.Source = ConnectedClientSource{Service: *conn}
+	}
+	registration.Deferred(tool.CategoryIntegration, canvas)
 	registerTTS(registration, cfg, slackClient)
 	return registration.Err()
 }

@@ -154,7 +154,7 @@ func Plugins() []Plugin {
 				"mpim:history", "mpim:read",
 				"files:read", "search:read", "users:read",
 				"search:read.public", "search:read.private", "search:read.im", "search:read.mpim",
-				"chat:write", "im:write",
+				"chat:write", "im:write", "lists:read", "lists:write", "canvases:write", "links:write",
 			},
 			SupportsMultiple: true,
 		},

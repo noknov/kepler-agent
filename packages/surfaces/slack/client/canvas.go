@@ -28,7 +28,10 @@ func (c *Client) CreateCanvas(ctx context.Context, title string, content *Canvas
 		return "", fmt.Errorf("slack canvases.create: %w", err)
 	}
 	if !out.OK {
-		return "", fmt.Errorf("slack canvases.create failed: %s", out.Error)
+		return "", slackWriteError("canvases.create", out.Error)
+	}
+	if out.CanvasID == "" {
+		return "", uncertainDeliveryError{err: fmt.Errorf("Slack did not return the created Canvas identity")}
 	}
 	return out.CanvasID, nil
 }
@@ -53,7 +56,10 @@ func (c *Client) CreateChannelCanvas(ctx context.Context, channelID, title strin
 		return "", fmt.Errorf("slack conversations.canvases.create: %w", err)
 	}
 	if !out.OK {
-		return "", fmt.Errorf("slack conversations.canvases.create failed: %s", out.Error)
+		return "", slackWriteError("conversations.canvases.create", out.Error)
+	}
+	if out.CanvasID == "" {
+		return "", uncertainDeliveryError{err: fmt.Errorf("Slack did not return the created Canvas identity")}
 	}
 	return out.CanvasID, nil
 }

@@ -24,5 +24,13 @@
   "slack_suggestions_zh_summary_title": "频道 {{channel}} 简报",
   "slack_suggestions_zh_summary_message": "用我连接的 Slack 身份读取频道 <#{{channel}}> 的近期消息，总结重要决策、未解决的问题，并注明支持结论的作者和时间戳。如果缺少连接或权限，请说明。",
   "slack_suggestions_zh_actions_title": "整理 {{channel}} 的下一步",
-  "slack_suggestions_zh_actions_message": "用我连接的 Slack 身份读取频道 <#{{channel}}> 的近期消息，提取明确的下一步及其来源作者、时间戳。负责人和截止日期只在原文明示时列出，缺失信息请标注。不要创建或分配任务。"
+  "slack_suggestions_zh_actions_message": "用我连接的 Slack 身份读取频道 <#{{channel}}> 的近期消息，提取明确的下一步及其来源作者、时间戳。负责人和截止日期只在原文明示时列出，缺失信息请标注。不要创建或分配任务。",
+  "slack_suggestions_en_investigation_title": "Trace a PR decision",
+  "slack_suggestions_en_investigation_message": "Find the Slack discussion behind a GitHub pull request and compare it with the exact PR head. Ask for its URL if missing. Search a focused question, read selected source threads, and separate verified facts, inferences and unresolved questions with Slack permalinks and the PR SHA.",
+  "slack_suggestions_en_canvas_title": "Draft an evidence memo",
+  "slack_suggestions_en_canvas_message": "Draft an investigation memo with source links from the evidence in this conversation. Keep the draft here; publish a Canvas only if I explicitly ask you to, after its standalone or channel destination is clear.",
+  "slack_suggestions_zh_investigation_title": "追溯 PR 背后的讨论",
+  "slack_suggestions_zh_investigation_message": "查找 GitHub PR 背后的 Slack 讨论，与准确的 PR head 对照。缺少 PR 链接时先问我。按具体问题搜索，只读取选中的来源 thread，区分已验证事实、推断和未决问题，并保留 Slack 原文链接和 PR SHA。",
+  "slack_suggestions_zh_canvas_title": "起草带来源的调查备忘录",
+  "slack_suggestions_zh_canvas_message": "根据本次会话的证据，起草带来源链接的调查备忘录。先把草稿留在这里；只有我明确要求发布，并确认独立 Canvas 或目标频道后，才创建 Canvas。"
 }
