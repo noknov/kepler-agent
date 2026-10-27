@@ -206,12 +206,16 @@ Indentation, trailing whitespace and line endings are not normalized. A mismatch
 returns an error without changing the file; reread the source and provide the
 intended exact span. Other file bytes remain unchanged by a successful edit.
 
-Hosted `code-write_file` and `code-replace` resolve existing ancestors against the
-workspace policy, then perform file I/O through an opened `os.Root`. Symlinks
+Local `write_file`/`edit_file` and hosted `code-write_file`/`code-replace` share
+workspace file ownership in `packages/safety`. They resolve existing ancestors
+against workspace policy, then perform file I/O through an opened `os.Root`. Symlinks
 must resolve inside an explicitly allowed root and sensitive targets are rejected.
 Writes use a temporary sibling and atomic rename, preserving existing permission
 bits without mutating other hard links. Replacement reads accept regular files
-up to 16 MiB. Runtime authorization and the operator write allowlist still apply.
+up to 16 MiB. Writes check cancellation before directory creation and before
+commit. New directories use mode 0700; new files retain profile defaults (local
+0644, hosted 0600). Runtime authorization and the hosted operator write allowlist
+still apply.
 
 ## Registration and policy
 

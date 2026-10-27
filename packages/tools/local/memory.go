@@ -281,3 +281,33 @@ func formatMemoryRecords(records []MemoryRecord) string {
 	}
 	return strings.TrimSpace(b.String())
 }
+
+func atomicWrite(path string, data []byte, mode os.FileMode) error {
+	file, err := os.CreateTemp(filepath.Dir(path), ".agent-write-*")
+	if err != nil {
+		return err
+	}
+	temporary := file.Name()
+	cleanup := func() { _ = file.Close(); _ = os.Remove(temporary) }
+	if err := file.Chmod(mode); err != nil {
+		cleanup()
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		cleanup()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(temporary)
+		return err
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		_ = os.Remove(temporary)
+		return err
+	}
+	return nil
+}

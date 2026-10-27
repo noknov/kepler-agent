@@ -1,6 +1,6 @@
 //go:build !unix
 
-package local
+package safety
 
 import "os"
 
