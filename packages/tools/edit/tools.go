@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -37,22 +36,15 @@ func (t WriteFileTool) Execute(ctx context.Context, call tool.Call) (tool.Result
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
 	}
-	path, err := resolveWritablePath(t.Paths, args.Path)
+	file, err := openWorkspaceFile(t.Paths, args.Path)
 	if err != nil {
 		return tool.Result{}, err
 	}
-	select {
-	case <-ctx.Done():
-		return tool.Result{}, ctx.Err()
-	default:
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	defer file.root.Close()
+	if err := file.write(ctx, []byte(args.Content)); err != nil {
 		return tool.Result{}, err
 	}
-	if err := os.WriteFile(path, []byte(args.Content), 0o600); err != nil {
-		return tool.Result{}, err
-	}
-	return tool.TextResult(fmt.Sprintf("wrote %s (%d bytes)", displayPath(t.Paths, path), len(args.Content))), nil
+	return tool.TextResult(fmt.Sprintf("wrote %s (%d bytes)", displayPath(t.Paths, file.path), len(args.Content))), nil
 }
 
 type ReplaceTool struct {
@@ -89,15 +81,15 @@ func (t ReplaceTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	if err != nil {
 		return tool.Result{}, err
 	}
-	if safety.IsSensitivePath(path) {
-		return tool.Result{}, fmt.Errorf("refusing to edit sensitive file %q", filepath.Base(path))
+	file, err := openWorkspaceFile(t.Paths, path)
+	if err != nil {
+		return tool.Result{}, err
 	}
-	select {
-	case <-ctx.Done():
-		return tool.Result{}, ctx.Err()
-	default:
+	defer file.root.Close()
+	if err := ctx.Err(); err != nil {
+		return tool.Result{}, err
 	}
-	contentBytes, err := os.ReadFile(path)
+	contentBytes, err := file.read()
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -116,7 +108,7 @@ func (t ReplaceTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 		}
 		updated = strings.Replace(content, args.OldText, args.NewText, 1)
 	}
-	if err := os.WriteFile(path, []byte(updated), 0o600); err != nil {
+	if err := file.write(ctx, []byte(updated)); err != nil {
 		return tool.Result{}, err
 	}
 	return tool.TextResult(fmt.Sprintf("replaced text in %s", displayPath(t.Paths, path))), nil
@@ -169,54 +161,6 @@ func replaceWhitespaceTolerant(content, oldText, newText string) (string, int) {
 		res = strings.ReplaceAll(res, "\n", "\r\n")
 	}
 	return res, 1
-}
-
-func resolveWritablePath(policy safety.WorkspacePolicy, raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", fmt.Errorf("path is required")
-	}
-	clean := filepath.Clean(raw)
-	var candidates []string
-	if filepath.IsAbs(clean) {
-		candidates = append(candidates, clean)
-	} else {
-		for _, root := range policy.Roots {
-			root = filepath.Clean(root)
-			base := filepath.Base(root)
-			rel := clean
-			if rel == base {
-				rel = "."
-			} else if strings.HasPrefix(rel, base+string(filepath.Separator)) {
-				rel = strings.TrimPrefix(rel, base+string(filepath.Separator))
-			}
-			candidates = append(candidates, filepath.Join(root, rel))
-		}
-	}
-	for _, candidate := range candidates {
-		candidate = filepath.Clean(candidate)
-		if safety.IsSensitivePath(candidate) {
-			return "", fmt.Errorf("refusing to edit sensitive file %q", filepath.Base(candidate))
-		}
-		if withinAnyRoot(policy.Roots, candidate) {
-			return candidate, nil
-		}
-	}
-	return "", fmt.Errorf("path is outside allowed workspace roots")
-}
-
-func withinAnyRoot(roots []string, path string) bool {
-	for _, root := range roots {
-		root = filepath.Clean(root)
-		if path == root {
-			return true
-		}
-		rel, err := filepath.Rel(root, path)
-		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return true
-		}
-	}
-	return false
 }
 
 func displayPath(policy safety.WorkspacePolicy, path string) string {
