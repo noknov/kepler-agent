@@ -47,6 +47,11 @@ with the repository's compiler, tests, linters, or other project-native checks.
 Set `GITHUB_DEFAULT_OWNER` and `GITHUB_DEFAULT_REPO` for default repository
 selection. Workflow aliases can live in `PROMPT_DIR/runtime.json`.
 
+GitHub workflow dispatch is an external write. `github-dispatch_workflow` must
+be explicitly present in `AGENT_ALLOWED_WRITE_TOOLS`; an allowed dispatch still
+requires the hosted runtime's user confirmation. Read-only workflow/run queries
+do not grant dispatch permission.
+
 ## Operations
 
 | Tool | Description |

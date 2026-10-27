@@ -85,7 +85,7 @@ func (t DispatchWorkflowTool) Descriptor() tool.Descriptor {
 				"description":          "",
 			},
 		}),
-		tool.NetworkIntegration("github")...,
+		tool.ExternalWrite("github")...,
 	)
 }
 
