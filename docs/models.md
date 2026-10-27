@@ -27,7 +27,10 @@ content-block index. Completed tool input must be a JSON object; blocks must
 close before the final `message_stop`, with a provider stop reason. Unknown
 events and content types remain forward-compatible. Missing or conflicting
 block ownership and incomplete messages produce typed protocol errors instead
-of binding data to the most recent tool or treating EOF as completion.
+of binding data to the most recent tool or treating EOF as completion. Tool
+validation and completion callbacks wait for the final receipt. Token/context
+limits and refusals preserve usage and their stop reason while omitting tool
+calls; incomplete arguments are never repaired or executed.
 
 ## LLM Providers
 

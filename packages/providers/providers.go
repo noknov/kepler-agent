@@ -476,7 +476,7 @@ func finishReason(reason string) model.FinishReason {
 	switch strings.ToLower(reason) {
 	case "tool_calls", "tool_use":
 		return model.FinishToolCalls
-	case "length", "max_tokens", "incomplete":
+	case "length", "max_tokens", "model_context_window_exceeded", "incomplete":
 		return model.FinishLength
 	case "content_filter", "refusal":
 		return model.FinishContent

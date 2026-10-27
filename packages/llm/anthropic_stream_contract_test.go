@@ -15,6 +15,7 @@ func TestAnthropicStreamRejectsUnboundBlocksAndIncompleteMessages(t *testing.T) 
 	for _, tc := range []struct{ name, frames string }{
 		{"unbound delta", start + "event: content_block_delta\ndata: " + `{"index":99,"delta":{"type":"input_json_delta","partial_json":"{}"}}` + "\n\n" + stop + done},
 		{"invalid tool input", start + "event: content_block_delta\ndata: " + `{"index":0,"delta":{"type":"input_json_delta","partial_json":"{broken"}}` + "\n\n" + stop + done},
+		{"duplicate tool identity", start + "event: content_block_start\ndata: " + `{"index":1,"content_block":{"type":"tool_use","id":"call","name":"read","input":{}}}` + "\n\nevent: content_block_stop\ndata: " + `{"index":1}` + "\n\n" + stop + done},
 		{"wrong stop index", start + "event: content_block_stop\ndata: " + `{"index":99}` + "\n\n" + done},
 		{"missing delta index", start + "event: content_block_delta\ndata: " + `{"delta":{"type":"input_json_delta","partial_json":"{}"}}` + "\n\n" + stop + done},
 		{"duplicate start", start + start + stop + done},
@@ -31,9 +32,10 @@ func TestAnthropicStreamRejectsUnboundBlocksAndIncompleteMessages(t *testing.T) 
 			defer server.Close()
 			client := NewAnthropicClient(server.URL, "token", 0, "official")
 			client.httpClient = server.Client()
-			response, err := client.ChatStream(t.Context(), Request{Model: "test"}, StreamHandler{})
+			completed := 0
+			response, err := client.ChatStream(t.Context(), Request{Model: "test"}, StreamHandler{OnToolCallComplete: func(ToolCall) { completed++ }})
 			var protocol ProtocolError
-			if !errors.As(err, &protocol) {
+			if !errors.As(err, &protocol) || completed != 0 {
 				t.Fatalf("ambiguous/incomplete stream accepted: %+v %v", response, err)
 			}
 			if strings.Contains(err.Error(), "partial_json") {
@@ -106,5 +108,25 @@ data: {}
 	calls := response.Message.ToolCalls
 	if calls[0].ID != "first" || calls[0].Function.Arguments != `{"path":"source.txt"}` || calls[1].ID != "second" || calls[1].Function.Arguments != "{}" {
 		t.Fatalf("tool blocks rebound or reordered: %+v", calls)
+	}
+}
+
+func TestAnthropicOutputLimitDoesNotCompletePartialTools(t *testing.T) {
+	for _, reason := range []string{"max_tokens", "model_context_window_exceeded"} {
+		t.Run(reason, func(t *testing.T) {
+			frames := "event: message_start\ndata: " + `{"message":{"usage":{"input_tokens":7}}}` + "\n\nevent: content_block_start\ndata: " + `{"index":0,"content_block":{"type":"tool_use","id":"call","name":"write","input":{}}}` + "\n\nevent: content_block_delta\ndata: " + `{"index":0,"delta":{"type":"input_json_delta","partial_json":"{\"content\":"}}` + "\n\nevent: content_block_stop\ndata: " + `{"index":0}` + "\n\nevent: message_delta\ndata: " + `{"delta":{"stop_reason":"` + reason + `"},"usage":{"output_tokens":9}}` + "\n\nevent: message_stop\ndata: {}\n\n"
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = w.Write([]byte(frames))
+			}))
+			defer server.Close()
+			client := NewAnthropicClient(server.URL, "token", 0, "official")
+			client.httpClient = server.Client()
+			completed := 0
+			response, err := client.ChatStream(t.Context(), Request{Model: "test"}, StreamHandler{OnToolCallComplete: func(ToolCall) { completed++ }})
+			if err != nil || response.FinishReason != reason || len(response.Message.ToolCalls) != 0 || completed != 0 || response.Usage.TotalTokens != 16 {
+				t.Fatalf("output limit lost or partial tool promoted: %+v completed=%d err=%v", response, completed, err)
+			}
+		})
 	}
 }

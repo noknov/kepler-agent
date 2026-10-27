@@ -1187,3 +1187,13 @@ func TestRunTurnCanceledBeforeAdmissionDoesNotWriteTranscript(t *testing.T) {
 		t.Fatalf("unadmitted turn wrote events: %+v err=%v", events, err)
 	}
 }
+
+func TestRunTurnPreservesOutputLimitWithoutTextOrExecutableTools(t *testing.T) {
+	client := &scriptedModel{responses: []model.Response{{Message: model.Message{Role: model.RoleAssistant}, FinishReason: model.FinishLength, Usage: model.Usage{Reported: true, OutputTokens: 9}}}}
+	catalog, _ := tool.NewCatalog()
+	runner, _ := New(Config{Model: "test"}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
+	result, err := runner.RunTurn(t.Context(), TurnRequest{SessionID: "empty-output-limit", Input: model.TextMessage(model.RoleUser, "write")})
+	if err != nil || result.Termination != TerminationOutputLimit || result.Usage.OutputTokens != 9 || len(client.requests) != 1 {
+		t.Fatalf("output limit became an empty response: %+v requests=%d err=%v", result, len(client.requests), err)
+	}
+}

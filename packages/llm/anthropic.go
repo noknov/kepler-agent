@@ -269,14 +269,6 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 				if state.call.Function.Arguments == "" {
 					state.call.Function.Arguments = "{}"
 				}
-				var input map[string]json.RawMessage
-				if json.Unmarshal([]byte(state.call.Function.Arguments), &input) != nil || input == nil {
-					streamErr = ProtocolError{Provider: "anthropic", Detail: "completed tool input is not a JSON object"}
-					return false
-				}
-				if h.OnToolCallComplete != nil {
-					h.OnToolCallComplete(*state.call)
-				}
 			}
 		case "message_delta":
 			var md struct {
@@ -365,13 +357,32 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 		indexes = append(indexes, index)
 	}
 	sort.Ints(indexes)
+	seenToolIDs := make(map[string]bool)
 	for _, index := range indexes {
 		state := blocks[index]
 		if state.kind == "text" {
 			msg.Content += state.text
 		}
 		if state.call != nil {
+			switch stopReason {
+			case "max_tokens", "model_context_window_exceeded", "refusal":
+				continue
+			}
+			var input map[string]json.RawMessage
+			if json.Unmarshal([]byte(state.call.Function.Arguments), &input) != nil || input == nil {
+				return Response{}, ProtocolError{Provider: "anthropic", Detail: "completed tool input is not a JSON object"}
+			}
+			if seenToolIDs[state.call.ID] {
+				return Response{}, ProtocolError{Provider: "anthropic", Detail: "duplicate tool call identity"}
+			}
+			seenToolIDs[state.call.ID] = true
 			msg.ToolCalls = append(msg.ToolCalls, *state.call)
+		}
+	}
+
+	if h.OnToolCallComplete != nil {
+		for _, call := range msg.ToolCalls {
+			h.OnToolCallComplete(call)
 		}
 	}
 
