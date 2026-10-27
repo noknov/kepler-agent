@@ -3,6 +3,7 @@ package edit
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,5 +128,136 @@ func TestReplaceSupportsWhitespaceTolerantFuzzyMatch(t *testing.T) {
 	}
 	if !strings.Contains(string(got), `"world"`) {
 		t.Fatalf("file content = %q", got)
+	}
+}
+
+func TestWriteFileCannotFollowWorkspaceSymlinksOutsideRoots(t *testing.T) {
+	for _, kind := range []string{"file", "directory"} {
+		t.Run(kind, func(t *testing.T) {
+			root, outside := t.TempDir(), t.TempDir()
+			target := filepath.Join(outside, "target.txt")
+			if err := os.WriteFile(target, []byte("outside original"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			link := filepath.Join(root, "alias")
+			path := "alias"
+			source := target
+			if kind == "directory" {
+				source = outside
+				path = "alias/target.txt"
+			}
+			if err := os.Symlink(source, link); err != nil {
+				t.Skip(err)
+			}
+			args, _ := json.Marshal(map[string]string{"path": path, "content": "overwritten"})
+			_, err := (WriteFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}).Execute(t.Context(), agenttool.Call{Arguments: args})
+			if err == nil {
+				t.Error("accepted write outside configured roots")
+			}
+			got, readErr := os.ReadFile(target)
+			if readErr != nil || string(got) != "outside original" {
+				t.Fatalf("outside file changed: %q err=%v", got, readErr)
+			}
+		})
+	}
+}
+
+func TestWorkspaceFileUpdatesDoNotMutateExternalHardLinks(t *testing.T) {
+	for _, replace := range []bool{false, true} {
+		t.Run(fmt.Sprintf("replace=%t", replace), func(t *testing.T) {
+			root, outside := t.TempDir(), t.TempDir()
+			target := filepath.Join(outside, "original.txt")
+			if err := os.WriteFile(target, []byte("original"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Link(target, filepath.Join(root, "local.txt")); err != nil {
+				t.Skip(err)
+			}
+			policy := safety.WorkspacePolicy{Roots: []string{root}}
+			var item agenttool.Tool = WriteFileTool{Paths: policy}
+			args := json.RawMessage(`{"path":"local.txt","content":"updated"}`)
+			if replace {
+				item = ReplaceTool{Paths: policy}
+				args = json.RawMessage(`{"path":"local.txt","old_text":"original","new_text":"updated"}`)
+			}
+			if _, err := item.Execute(t.Context(), agenttool.Call{Arguments: args}); err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(target)
+			if err != nil || string(got) != "original" {
+				t.Fatalf("external hard link mutated: %q err=%v", got, err)
+			}
+			got, err = os.ReadFile(filepath.Join(root, "local.txt"))
+			if err != nil || string(got) != "updated" {
+				t.Fatalf("local update missing: %q err=%v", got, err)
+			}
+			info, err := os.Stat(filepath.Join(root, "local.txt"))
+			if err != nil || info.Mode().Perm() != 0o755 {
+				t.Fatalf("mode was not preserved: %v err=%v", info, err)
+			}
+		})
+	}
+}
+
+func TestWriteFileRejectsSensitiveSymlinkTarget(t *testing.T) {
+	root := t.TempDir()
+	secret := filepath.Join(root, ".env")
+	if err := os.WriteFile(secret, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(root, "alias.txt")); err != nil {
+		t.Skip(err)
+	}
+	_, err := (WriteFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}).Execute(t.Context(), agenttool.Call{Arguments: json.RawMessage(`{"path":"alias.txt","content":"updated"}`)})
+	if err == nil {
+		t.Fatal("accepted sensitive target through alias")
+	}
+	got, err := os.ReadFile(secret)
+	if err != nil || string(got) != "original" {
+		t.Fatalf("sensitive target changed: %q %v", got, err)
+	}
+}
+
+func TestWorkspaceWriteRejectsParentSwapAfterValidation(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "parent"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(outside, "file.txt")
+	if err := os.WriteFile(target, []byte("outside original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := openWorkspaceFile(safety.WorkspacePolicy{Roots: []string{root}}, "parent/file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.root.Close()
+	if err := os.Rename(filepath.Join(root, "parent"), filepath.Join(root, "original-parent")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "parent")); err != nil {
+		t.Skip(err)
+	}
+	if err := file.write(t.Context(), []byte("updated")); err == nil {
+		t.Fatal("write escaped after validation")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil || string(got) != "outside original" {
+		t.Fatalf("outside target changed: %q %v", got, err)
+	}
+}
+
+func TestWriteFileAllowsSymlinkIntoAnotherExplicitRoot(t *testing.T) {
+	first, second := t.TempDir(), t.TempDir()
+	if err := os.Symlink(second, filepath.Join(first, "shared")); err != nil {
+		t.Skip(err)
+	}
+	_, err := (WriteFileTool{Paths: safety.WorkspacePolicy{Roots: []string{first, second}}}).Execute(t.Context(), agenttool.Call{Arguments: json.RawMessage(`{"path":"shared/new.txt","content":"allowed"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(second, "new.txt"))
+	if err != nil || string(got) != "allowed" {
+		t.Fatalf("explicit root not writable: %q %v", got, err)
 	}
 }
