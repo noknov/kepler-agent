@@ -138,7 +138,9 @@ func Run(ctx context.Context) error {
 }
 
 func New(ctx context.Context, cfg config.Config) (*Service, error) {
-	prompts.LoadFromEnv()
+	if err := prompts.LoadFromEnv(); err != nil {
+		return nil, fmt.Errorf("load prompts: %w", err)
+	}
 	serviceCtx, serviceCancel := context.WithCancel(context.Background())
 	stores, err := platform.NewStores(ctx, cfg.Storage)
 	if err != nil {

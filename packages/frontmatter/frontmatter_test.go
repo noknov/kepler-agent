@@ -42,3 +42,15 @@ func TestDecodeRejectsUnterminatedFrontMatter(t *testing.T) {
 		t.Fatalf("Decode() found=%v err=%v, want not found with error", found, err)
 	}
 }
+
+func TestDecodeAcceptsEmptyFrontMatter(t *testing.T) {
+	for _, input := range []string{"---\n---\nbody", "---\n---"} {
+		body, found, err := Decode(input, nil)
+		if err != nil || !found {
+			t.Fatalf("empty front matter rejected: %q %v %v", input, found, err)
+		}
+		if input == "---\n---\nbody" && body != "body" {
+			t.Fatalf("body=%q", body)
+		}
+	}
+}

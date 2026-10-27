@@ -80,9 +80,9 @@ func TestSystemPromptIncludesCapabilityBoundary(t *testing.T) {
 }
 
 func TestPublicPromptFilesAreRuntimeContent(t *testing.T) {
-	publicDir := resolveDir(PublicDir)
+	publicDir := "defaults"
 	var readmes []string
-	err := filepath.WalkDir(publicDir, func(path string, entry fs.DirEntry, err error) error {
+	err := fs.WalkDir(embeddedDefaults, publicDir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -101,12 +101,12 @@ func TestPublicPromptFilesAreRuntimeContent(t *testing.T) {
 		t.Fatalf("document prompt conventions in the root README, not under %s: %v", publicDir, readmes)
 	}
 
-	jsonFiles, err := filepath.Glob(filepath.Join(publicDir, "*.json"))
+	jsonFiles, err := fs.Glob(embeddedDefaults, publicDir+"/*.json")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range jsonFiles {
-		data, err := os.ReadFile(path)
+		data, err := fs.ReadFile(embeddedDefaults, path)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -119,7 +119,7 @@ func TestPublicPromptFilesAreRuntimeContent(t *testing.T) {
 		}
 	}
 
-	runbookDocs, err := filepath.Glob(filepath.Join(publicDir, "runbooks", "*.md"))
+	runbookDocs, err := fs.Glob(embeddedDefaults, publicDir+"/runbooks/*.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestPublicPromptFilesAreRuntimeContent(t *testing.T) {
 		if strings.EqualFold(filepath.Base(path), "README.md") {
 			t.Fatalf("%s can be returned by runbook search; document runbook conventions in README instead", path)
 		}
-		data, err := os.ReadFile(path)
+		data, err := fs.ReadFile(embeddedDefaults, path)
 		if err != nil {
 			t.Fatal(err)
 		}
