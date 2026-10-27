@@ -6,6 +6,11 @@ providers, and presentation; they do not implement another loop.
 
 ## Transcript and presentation
 
+Tool-result completeness is projected from its canonical `Truncated` flag into
+a model-visible notice. This applies to source-limited results and runtime
+omission/spill alike; referenced artifacts remain accessible. The derived notice
+is included in context budgeting and does not modify stored source evidence.
+
 The canonical transcript is append-only. Hosted sessions persist events in
 `agent_transcript_events`; local sessions persist the same event model as
 JSONL. Context projection, compaction, steering, retries, tool execution, and

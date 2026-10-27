@@ -62,7 +62,6 @@ func limitToolResult(ctx context.Context, result tool.Result, call tool.Call, co
 		budget = 64 << 10
 	}
 	result.Content = append(truncateContent(text, budget), images...)
-	result.Content = append(result.Content, model.Content{Type: model.ContentText, Text: "[tool output truncated]"})
 	return result
 }
 
