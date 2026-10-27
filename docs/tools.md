@@ -189,6 +189,12 @@ The local CLI and stdio `app-server` share one catalog (`packages/tools/local`):
 | `agent-explore` | Delegate bounded read-only exploration subtasks |
 | `update_plan` | Publish structured multi-step execution progress |
 
+Local file reads accept regular files only. Unix opens are nonblocking so a FIFO
+cannot hold a turn waiting for a writer. `read_file` defaults to 64 KiB per file
+and admits at most 16 MiB of requested bytes across a batch; reduce `paths` or
+`limit` when the request exceeds that budget. Any shortened member marks the
+whole result as truncated. Offsets and limits are byte counts, not line counts.
+
 Both local `edit_file` and hosted `code-replace` require byte-exact `old_text`.
 Indentation, trailing whitespace and line endings are not normalized. A mismatch
 returns an error without changing the file; reread the source and provide the

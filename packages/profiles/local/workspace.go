@@ -154,3 +154,35 @@ func (w Workspace) SensitivePaths() ([]string, error) {
 	})
 	return paths, err
 }
+
+// OpenReadFile opens a regular workspace file without waiting for a pipe writer.
+// The caller owns the returned file; the temporary root capability closes here.
+func (w Workspace) OpenReadFile(path string) (*os.File, error) {
+	resolved, err := w.Resolve(path, false)
+	if err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(w.Root)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	name, err := filepath.Rel(w.Root, resolved)
+	if err != nil {
+		return nil, err
+	}
+	file, err := root.OpenFile(name, workspaceReadFlags, 0)
+	if err != nil {
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		file.Close()
+		return nil, fmt.Errorf("read target is not a regular file")
+	}
+	return file, nil
+}
