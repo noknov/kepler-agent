@@ -384,6 +384,9 @@ func rgResult(output *boundedBuffer, limit int) tool.Result {
 	}
 	result := tool.TextResult(strings.Join(lines, "\n"))
 	result.Truncated = truncated
+	if truncated {
+		result.Content = append(result.Content, tool.TextResult("[results truncated]").Content...)
+	}
 	return result
 }
 
