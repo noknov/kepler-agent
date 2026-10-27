@@ -145,18 +145,15 @@ func (w Workspace) OpenReadFile(path string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	file, err := root.OpenFile(name, workspaceReadFlags, 0)
+	return safety.OpenRegularFile(root, name)
+}
+
+// OpenWritableFile keeps local path interpretation at the profile boundary and
+// delegates the confined mutation lifetime to the shared workspace policy.
+func (w Workspace) OpenWritableFile(path string) (*safety.WorkspaceFile, error) {
+	resolved, err := w.Resolve(path, true)
 	if err != nil {
 		return nil, err
 	}
-	info, err := file.Stat()
-	if err != nil {
-		file.Close()
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		file.Close()
-		return nil, fmt.Errorf("read target is not a regular file")
-	}
-	return file, nil
+	return (safety.WorkspacePolicy{Roots: []string{w.Root}}).OpenWritableFile(resolved)
 }

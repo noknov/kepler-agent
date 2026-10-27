@@ -230,7 +230,7 @@ func (WriteFile) Descriptor() tool.Descriptor {
 	return tool.Descriptor{Name: "write_file", Description: "Write a complete file inside the workspace.", InputSchema: schema(`{"path":{"type":"string"},"content":{"type":"string"}}`, "path", "content"), Effects: []tool.Effect{tool.EffectWorkspaceWrite}, Exposure: tool.ExposureEager}
 }
 
-func (t WriteFile) Execute(_ context.Context, call tool.Call) (tool.Result, error) {
+func (t WriteFile) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var arguments struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
@@ -238,17 +238,15 @@ func (t WriteFile) Execute(_ context.Context, call tool.Call) (tool.Result, erro
 	if err := json.Unmarshal(call.Arguments, &arguments); err != nil {
 		return tool.Result{}, err
 	}
-	path, err := t.Workspace.Resolve(arguments.Path, true)
+	file, err := t.Workspace.OpenWritableFile(arguments.Path)
 	if err != nil {
 		return tool.Result{}, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	defer file.Close()
+	if err := file.Write(ctx, []byte(arguments.Content), 0o644); err != nil {
 		return tool.Result{}, err
 	}
-	if err := atomicWrite(path, []byte(arguments.Content), 0o644); err != nil {
-		return tool.Result{}, err
-	}
-	return tool.TextResult(fmt.Sprintf("Wrote %d bytes to %s.", len(arguments.Content), relative(t.Workspace.Root, path))), nil
+	return tool.TextResult(fmt.Sprintf("Wrote %d bytes to %s.", len(arguments.Content), relative(t.Workspace.Root, file.Path()))), nil
 }
 
 type EditFile struct{ Workspace local.Workspace }
@@ -257,7 +255,7 @@ func (EditFile) Descriptor() tool.Descriptor {
 	return tool.Descriptor{Name: "edit_file", Description: "Replace exact text in one workspace file.", InputSchema: schema(`{"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"},"replace_all":{"type":"boolean"}}`, "path", "old_text", "new_text"), Effects: []tool.Effect{tool.EffectWorkspaceWrite}, Exposure: tool.ExposureEager}
 }
 
-func (t EditFile) Execute(_ context.Context, call tool.Call) (tool.Result, error) {
+func (t EditFile) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var arguments struct {
 		Path string `json:"path"`
 		Old  string `json:"old_text"`
@@ -270,11 +268,15 @@ func (t EditFile) Execute(_ context.Context, call tool.Call) (tool.Result, error
 	if arguments.Old == "" {
 		return tool.Result{}, fmt.Errorf("old_text must not be empty")
 	}
-	path, err := t.Workspace.Resolve(arguments.Path, true)
+	file, err := t.Workspace.OpenWritableFile(arguments.Path)
 	if err != nil {
 		return tool.Result{}, err
 	}
-	data, err := readEditableFile(t.Workspace, path)
+	defer file.Close()
+	if err := ctx.Err(); err != nil {
+		return tool.Result{}, err
+	}
+	data, err := file.Read()
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -291,14 +293,11 @@ func (t EditFile) Execute(_ context.Context, call tool.Call) (tool.Result, error
 		limit = -1
 	}
 	updated := strings.Replace(content, arguments.Old, arguments.New, limit)
-	mode := os.FileMode(0o644)
-	if info, statErr := os.Stat(path); statErr == nil {
-		mode = info.Mode().Perm()
-	}
-	if err := atomicWrite(path, []byte(updated), mode); err != nil {
+
+	if err := file.Write(ctx, []byte(updated), 0o644); err != nil {
 		return tool.Result{}, err
 	}
-	return tool.TextResult(fmt.Sprintf("Updated %s (%d replacement(s)).", relative(t.Workspace.Root, path), count)), nil
+	return tool.TextResult(fmt.Sprintf("Updated %s (%d replacement(s)).", relative(t.Workspace.Root, file.Path()), count)), nil
 }
 
 const maxFileReadBytes = 16 << 20
@@ -311,22 +310,6 @@ func fileReadLimit(limit int) (int, error) {
 		return 64 << 10, nil
 	}
 	return limit, nil
-}
-
-func readEditableFile(workspace local.Workspace, path string) ([]byte, error) {
-	file, err := workspace.OpenReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, maxFileReadBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > maxFileReadBytes {
-		return nil, fmt.Errorf("file exceeds %d byte edit limit", maxFileReadBytes)
-	}
-	return data, nil
 }
 
 type boundedBuffer struct {
@@ -385,34 +368,4 @@ func rgResult(output *boundedBuffer, limit int) tool.Result {
 	result := tool.TextResult(strings.Join(lines, "\n"))
 	result.Truncated = truncated
 	return result
-}
-
-func atomicWrite(path string, data []byte, mode os.FileMode) error {
-	file, err := os.CreateTemp(filepath.Dir(path), ".agent-write-*")
-	if err != nil {
-		return err
-	}
-	temporary := file.Name()
-	cleanup := func() { _ = file.Close(); _ = os.Remove(temporary) }
-	if err := file.Chmod(mode); err != nil {
-		cleanup()
-		return err
-	}
-	if _, err := file.Write(data); err != nil {
-		cleanup()
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		cleanup()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		_ = os.Remove(temporary)
-		return err
-	}
-	if err := os.Rename(temporary, path); err != nil {
-		_ = os.Remove(temporary)
-		return err
-	}
-	return nil
 }

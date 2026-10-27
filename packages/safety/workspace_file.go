@@ -1,4 +1,4 @@
-package edit
+package safety
 
 import (
 	"context"
@@ -9,21 +9,27 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/noknov/kepler-agent/packages/safety"
 )
 
-// workspaceFile keeps file operations relative to an opened directory capability.
+// WorkspaceFile keeps file operations relative to an opened directory capability.
 // Path checks enforce sensitive-file policy; os.Root confines the actual I/O even
 // if a symlink changes after validation. Atomic replacement avoids mutating other
 // hard links and leaves the previous file intact until the write commits.
-type workspaceFile struct {
+type WorkspaceFile struct {
 	root *os.Root
 	name string
 	path string
 }
 
-func openWorkspaceFile(policy safety.WorkspacePolicy, raw string) (*workspaceFile, error) {
+// Close releases the directory capability; callers must close each opened file.
+func (f *WorkspaceFile) Close() error { return f.root.Close() }
+
+// Path reports the selected path under its configured workspace root.
+func (f *WorkspaceFile) Path() string { return f.path }
+
+// OpenWritableFile resolves the nearest existing ancestor against workspace and
+// sensitive-path policy and returns an owner for confined reads and mutations.
+func (policy WorkspacePolicy) OpenWritableFile(raw string) (*WorkspaceFile, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, fmt.Errorf("path is required")
 	}
@@ -57,7 +63,7 @@ func openWorkspaceFile(policy safety.WorkspacePolicy, raw string) (*workspaceFil
 			}
 			candidate = filepath.Join(root, rel)
 		}
-		if safety.IsSensitivePath(candidate) {
+		if IsSensitivePath(candidate) {
 			return nil, fmt.Errorf("refusing to edit sensitive file %q", filepath.Base(candidate))
 		}
 		// Resolve the nearest existing ancestor through the same policy as reads.
@@ -87,7 +93,7 @@ func openWorkspaceFile(policy safety.WorkspacePolicy, raw string) (*workspaceFil
 			return nil, err
 		}
 		target := filepath.Join(resolved, suffix)
-		if safety.IsSensitivePath(target) {
+		if IsSensitivePath(target) {
 			return nil, fmt.Errorf("refusing to edit sensitive file %q", filepath.Base(target))
 		}
 		for _, allowed := range policy.Roots {
@@ -103,7 +109,7 @@ func openWorkspaceFile(policy safety.WorkspacePolicy, raw string) (*workspaceFil
 			if err != nil {
 				return nil, err
 			}
-			return &workspaceFile{root: opened, name: name, path: filepath.Join(allowed, name)}, nil
+			return &WorkspaceFile{root: opened, name: name, path: filepath.Join(allowed, name)}, nil
 		}
 		return nil, fmt.Errorf("path resolves outside allowed workspace roots")
 	}
@@ -112,15 +118,9 @@ func openWorkspaceFile(policy safety.WorkspacePolicy, raw string) (*workspaceFil
 
 const maxEditableBytes = 16 << 20
 
-func (f *workspaceFile) read() ([]byte, error) {
-	info, err := f.root.Stat(f.name)
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("edit target is not a regular file")
-	}
-	file, err := f.root.Open(f.name)
+// Read returns a regular file, bounded to the 16 MiB exact-edit budget.
+func (f *WorkspaceFile) Read() ([]byte, error) {
+	file, err := OpenRegularFile(f.root, f.name)
 	if err != nil {
 		return nil, err
 	}
@@ -135,11 +135,13 @@ func (f *workspaceFile) read() ([]byte, error) {
 	return data, nil
 }
 
-func (f *workspaceFile) write(ctx context.Context, data []byte) error {
+// Write replaces a file atomically, retaining existing permissions. New files
+// use createMode and new directories are private to the workspace owner.
+func (f *WorkspaceFile) Write(ctx context.Context, data []byte, createMode os.FileMode) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	mode := os.FileMode(0o600)
+	mode := createMode.Perm()
 	if info, err := f.root.Stat(f.name); err == nil {
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("write target is not a regular file")
@@ -181,4 +183,23 @@ func (f *workspaceFile) write(ctx context.Context, data []byte) error {
 		return err
 	}
 	return parent.Rename(temporary, filepath.Base(f.name))
+}
+
+// OpenRegularFile acquires a regular file relative to root without waiting for a
+// FIFO writer on Unix. The caller owns the returned file, independently of root.
+func OpenRegularFile(root *os.Root, name string) (*os.File, error) {
+	file, err := root.OpenFile(name, workspaceReadFlags, 0)
+	if err != nil {
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		file.Close()
+		return nil, fmt.Errorf("read target is not a regular file")
+	}
+	return file, nil
 }

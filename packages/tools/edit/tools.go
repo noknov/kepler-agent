@@ -36,15 +36,15 @@ func (t WriteFileTool) Execute(ctx context.Context, call tool.Call) (tool.Result
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return tool.Result{}, err
 	}
-	file, err := openWorkspaceFile(t.Paths, args.Path)
+	file, err := t.Paths.OpenWritableFile(args.Path)
 	if err != nil {
 		return tool.Result{}, err
 	}
-	defer file.root.Close()
-	if err := file.write(ctx, []byte(args.Content)); err != nil {
+	defer file.Close()
+	if err := file.Write(ctx, []byte(args.Content), 0o600); err != nil {
 		return tool.Result{}, err
 	}
-	return tool.TextResult(fmt.Sprintf("wrote %s (%d bytes)", displayPath(t.Paths, file.path), len(args.Content))), nil
+	return tool.TextResult(fmt.Sprintf("wrote %s (%d bytes)", displayPath(t.Paths, file.Path()), len(args.Content))), nil
 }
 
 type ReplaceTool struct {
@@ -81,15 +81,15 @@ func (t ReplaceTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	if err != nil {
 		return tool.Result{}, err
 	}
-	file, err := openWorkspaceFile(t.Paths, path)
+	file, err := t.Paths.OpenWritableFile(path)
 	if err != nil {
 		return tool.Result{}, err
 	}
-	defer file.root.Close()
+	defer file.Close()
 	if err := ctx.Err(); err != nil {
 		return tool.Result{}, err
 	}
-	contentBytes, err := file.read()
+	contentBytes, err := file.Read()
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -99,7 +99,7 @@ func (t ReplaceTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 		return tool.Result{}, fmt.Errorf("old_text matched %d times; expected exactly 1", count)
 	}
 	updated := strings.Replace(content, args.OldText, args.NewText, 1)
-	if err := file.write(ctx, []byte(updated)); err != nil {
+	if err := file.Write(ctx, []byte(updated), 0o600); err != nil {
 		return tool.Result{}, err
 	}
 	return tool.TextResult(fmt.Sprintf("replaced text in %s", displayPath(t.Paths, path))), nil

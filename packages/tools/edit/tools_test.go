@@ -227,18 +227,18 @@ func TestWorkspaceWriteRejectsParentSwapAfterValidation(t *testing.T) {
 	if err := os.WriteFile(target, []byte("outside original"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	file, err := openWorkspaceFile(safety.WorkspacePolicy{Roots: []string{root}}, "parent/file.txt")
+	file, err := (safety.WorkspacePolicy{Roots: []string{root}}).OpenWritableFile("parent/file.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.root.Close()
+	defer file.Close()
 	if err := os.Rename(filepath.Join(root, "parent"), filepath.Join(root, "original-parent")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, filepath.Join(root, "parent")); err != nil {
 		t.Skip(err)
 	}
-	if err := file.write(t.Context(), []byte("updated")); err == nil {
+	if err := file.Write(t.Context(), []byte("updated"), 0o600); err == nil {
 		t.Fatal("write escaped after validation")
 	}
 	got, err := os.ReadFile(target)
