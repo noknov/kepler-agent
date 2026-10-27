@@ -155,10 +155,32 @@ func TestTurnStartUsesUniqueTurnIDs(t *testing.T) {
 	server.Transcript = transcript.NewMemoryStore()
 	ctx := context.Background()
 	server.handle(ctx, Request{ID: json.RawMessage(`1`), Method: "turn/start", Params: mustJSON(map[string]any{"sessionId": "ses_1", "input": "hello"})})
-	server.handle(ctx, Request{ID: json.RawMessage(`2`), Method: "turn/start", Params: mustJSON(map[string]any{"sessionId": "ses_1", "input": "again"})})
+	server.handle(ctx, Request{ID: json.RawMessage(`2`), Method: "turn/start", Params: mustJSON(map[string]any{"sessionId": "ses_2", "input": "again"})})
+	// Runtime completion and asynchronous response delivery are separate boundaries.
+	waitForOutput(t, &out, `"id":1,`)
+	waitForOutput(t, &out, `"id":2,`)
 	waitForNoActiveTurns(t, server)
-	if !strings.Contains(out.String(), `"turnId":"turn_`) {
-		t.Fatalf("expected generated turn ids, got %s", out.String())
+	ids := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		var response struct {
+			ID     json.RawMessage `json:"id"`
+			Result TurnStartResult `json:"result"`
+			Error  *ResponseError  `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(line), &response); err != nil {
+			t.Fatal(err)
+		}
+		if string(response.ID) != "1" && string(response.ID) != "2" {
+			continue
+		}
+		id := response.Result.TurnID
+		if response.Error != nil || !strings.HasPrefix(id, "turn_") || ids[id] {
+			t.Fatalf("expected successful distinct generated turn ids: %s", line)
+		}
+		ids[id] = true
+	}
+	if len(ids) != 2 {
+		t.Fatalf("expected two distinct turn ids, got %v", ids)
 	}
 }
 
