@@ -108,7 +108,7 @@ func TestReplaceUpdatesSingleMatch(t *testing.T) {
 	}
 }
 
-func TestReplaceSupportsWhitespaceTolerantFuzzyMatch(t *testing.T) {
+func TestReplaceRejectsIndentationMismatch(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "app.go")
 	if err := os.WriteFile(path, []byte("func main() {\n\tprintln(\"hello\")\n}\n"), 0o600); err != nil {
@@ -119,14 +119,14 @@ func TestReplaceSupportsWhitespaceTolerantFuzzyMatch(t *testing.T) {
 	_, err := tool.Execute(context.Background(), agenttool.Call{
 		Arguments: json.RawMessage(`{"path":"app.go","old_text":"func main() {\n    println(\"hello\")\n}","new_text":"func main() {\n\tprintln(\"world\")\n}"}`),
 	})
-	if err != nil {
-		t.Fatalf("Execute() fuzzy error = %v", err)
+	if err == nil {
+		t.Fatal("accepted indentation mismatch")
 	}
 	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(got), `"world"`) {
+	if string(got) != "func main() {\n\tprintln(\"hello\")\n}\n" {
 		t.Fatalf("file content = %q", got)
 	}
 }
@@ -259,5 +259,30 @@ func TestWriteFileAllowsSymlinkIntoAnotherExplicitRoot(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(second, "new.txt"))
 	if err != nil || string(got) != "allowed" {
 		t.Fatalf("explicit root not writable: %q %v", got, err)
+	}
+}
+
+func TestReplaceRejectsNonExactWhitespaceWithoutChangingFile(t *testing.T) {
+	for _, test := range []struct{ name, content, old string }{
+		{"indentation", "if enabled:\n    run()\n", "if enabled:\nrun()"},
+		{"line endings", "header\nalpha\r\nbeta\r\nfooter\n", "alpha\nbeta"},
+		{"trailing whitespace", "alpha  \nbeta\n", "alpha\nbeta"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "example.txt")
+			if err := os.WriteFile(path, []byte(test.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			args, _ := json.Marshal(map[string]string{"path": "example.txt", "old_text": test.old, "new_text": "changed"})
+			_, err := (ReplaceTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}).Execute(t.Context(), agenttool.Call{Arguments: args})
+			if err == nil {
+				t.Error("accepted non-exact old_text")
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != test.content {
+				t.Fatalf("non-exact edit changed bytes: %q err=%v", got, err)
+			}
+		})
 	}
 }

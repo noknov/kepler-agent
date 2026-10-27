@@ -266,27 +266,17 @@ func (t EditFile) Execute(_ context.Context, call tool.Call) (tool.Result, error
 	}
 	content := string(data)
 	count := strings.Count(content, arguments.Old)
-	var updated string
 	if count == 0 {
-		fuzzyUpdated, fuzzyCount := replaceWhitespaceTolerant(content, arguments.Old, arguments.New, arguments.All)
-		if fuzzyCount == 0 {
-			return tool.Result{}, fmt.Errorf("old_text was not found")
-		}
-		if !arguments.All && fuzzyCount != 1 {
-			return tool.Result{}, fmt.Errorf("old_text matched %d times; provide more context or set replace_all", fuzzyCount)
-		}
-		updated = fuzzyUpdated
-		count = fuzzyCount
-	} else {
-		if !arguments.All && count != 1 {
-			return tool.Result{}, fmt.Errorf("old_text matched %d times; provide more context or set replace_all", count)
-		}
-		limit := 1
-		if arguments.All {
-			limit = -1
-		}
-		updated = strings.Replace(content, arguments.Old, arguments.New, limit)
+		return tool.Result{}, fmt.Errorf("old_text was not found; reread the file and provide exact text")
 	}
+	if !arguments.All && count != 1 {
+		return tool.Result{}, fmt.Errorf("old_text matched %d times; provide more context or set replace_all", count)
+	}
+	limit := 1
+	if arguments.All {
+		limit = -1
+	}
+	updated := strings.Replace(content, arguments.Old, arguments.New, limit)
 	mode := os.FileMode(0o644)
 	if info, statErr := os.Stat(path); statErr == nil {
 		mode = info.Mode().Perm()
@@ -390,66 +380,4 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	return nil
-}
-
-// replaceWhitespaceTolerant matches multi-line spans when CRLF/LF or trailing
-// horizontal whitespace differs slightly from the model's old_text.
-func replaceWhitespaceTolerant(content, oldText, newText string, replaceAll bool) (string, int) {
-	normContent := strings.ReplaceAll(content, "\r\n", "\n")
-	normOld := strings.ReplaceAll(oldText, "\r\n", "\n")
-	if normContent != content || normOld != oldText {
-		if count := strings.Count(normContent, normOld); count > 0 {
-			if !replaceAll && count != 1 {
-				return content, count
-			}
-			limit := 1
-			if replaceAll {
-				limit = -1
-			}
-			normNew := strings.ReplaceAll(newText, "\r\n", "\n")
-			res := strings.Replace(normContent, normOld, normNew, limit)
-			if strings.Contains(content, "\r\n") {
-				res = strings.ReplaceAll(res, "\n", "\r\n")
-			}
-			return res, count
-		}
-	}
-	contentLines := strings.Split(normContent, "\n")
-	oldLines := strings.Split(normOld, "\n")
-	if len(oldLines) == 0 {
-		return content, 0
-	}
-	var matchIndices []int
-	for i := 0; i <= len(contentLines)-len(oldLines); i++ {
-		matched := true
-		for j := 0; j < len(oldLines); j++ {
-			if strings.TrimSpace(contentLines[i+j]) != strings.TrimSpace(oldLines[j]) {
-				matched = false
-				break
-			}
-		}
-		if matched {
-			matchIndices = append(matchIndices, i)
-		}
-	}
-	if len(matchIndices) == 0 || (!replaceAll && len(matchIndices) != 1) {
-		return content, len(matchIndices)
-	}
-	newLines := strings.Split(strings.ReplaceAll(newText, "\r\n", "\n"), "\n")
-	var outLines []string
-	cursor := 0
-	for _, idx := range matchIndices {
-		outLines = append(outLines, contentLines[cursor:idx]...)
-		outLines = append(outLines, newLines...)
-		cursor = idx + len(oldLines)
-		if !replaceAll {
-			break
-		}
-	}
-	outLines = append(outLines, contentLines[cursor:]...)
-	res := strings.Join(outLines, "\n")
-	if strings.Contains(content, "\r\n") {
-		res = strings.ReplaceAll(res, "\n", "\r\n")
-	}
-	return res, len(matchIndices)
 }
