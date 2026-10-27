@@ -58,7 +58,7 @@ func TestSearchReportsByteBudgetTruncation(t *testing.T) {
 		}
 	}
 	result, err := (Search{Workspace: workspace}).Execute(t.Context(), tool.Call{Arguments: json.RawMessage(`{"query":"needle","limit":30000}`)})
-	if err != nil || !result.Truncated || result.Text() == "" || len(result.Text()) > 4<<20 {
+	if err != nil || !result.Truncated || result.Text() == "" || len(result.Content[0].Text) > 4<<20 {
 		t.Fatalf("byte-limited search looked complete: bytes=%d truncated=%v err=%v", len(result.Text()), result.Truncated, err)
 	}
 }
