@@ -20,7 +20,7 @@ func TestCommittedTreeUsesFilesystemSensitivePathPolicy(t *testing.T) {
 		return string(out)
 	}
 	git("init", "-q")
-	paths := []string{".env", "sub/.ENV.production", "id_rsa", "sub/id_ed25519", "credentials.json", "sub/CREDENTIALS.json", "sub/client.KUBECONFIG", "sub/key.PEM", "sub/.AWS/config", "secrets/nested/data.txt", "sub/credentials/anything", "sub/.docker/config.json", "sub/.config/gh/hosts.yml"}
+	paths := []string{".aws", "sub/.kube", ".env", "sub/.ENV.production", "id_rsa", "sub/id_ed25519", "credentials.json", "sub/CREDENTIALS.json", "sub/client.KUBECONFIG", "sub/key.PEM", "sub/.AWS/config", "secrets/nested/data.txt", "sub/credentials/anything", "sub/.docker/config.json", "sub/.config/gh/hosts.yml"}
 	for _, path := range append(paths, "public.txt") {
 		full := filepath.Join(root, path)
 		if err := os.MkdirAll(filepath.Dir(full), 0700); err != nil {

@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/noknov/kepler-agent/packages/safety"
 )
 
 type Workspace struct {
@@ -81,7 +83,7 @@ func (w Workspace) Resolve(path string, forWrite bool) (string, error) {
 	if !within(path, w.Root) {
 		return "", fmt.Errorf("path is outside the workspace")
 	}
-	if sensitivePath(path) {
+	if safety.IsSensitivePath(path) {
 		return "", fmt.Errorf("refusing to access sensitive path %q", filepath.Base(path))
 	}
 	return path, nil
@@ -90,34 +92,6 @@ func (w Workspace) Resolve(path string, forWrite bool) (string, error) {
 func within(path, root string) bool {
 	relative, err := filepath.Rel(root, path)
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
-}
-
-func sensitivePath(path string) bool {
-	base := strings.ToLower(filepath.Base(path))
-	if base == ".env" || strings.HasPrefix(base, ".env.") {
-		return true
-	}
-	if base == "id_rsa" || base == "id_ed25519" || base == "credentials" || base == "credentials.json" ||
-		base == ".netrc" || base == ".npmrc" || base == ".pypirc" {
-		return true
-	}
-	for _, suffix := range []string{".pem", ".key", ".p12", ".pfx", ".kubeconfig"} {
-		if strings.HasSuffix(base, suffix) {
-			return true
-		}
-	}
-	normalized := "/" + strings.Trim(strings.ToLower(filepath.ToSlash(path)), "/") + "/"
-	for _, suffix := range []string{"/.git/config", "/.git/credentials", "/.netrc", "/.npmrc", "/.pypirc", "/.docker/config.json", "/.config/gh/hosts.yml"} {
-		if strings.HasSuffix(normalized, suffix+"/") {
-			return true
-		}
-	}
-	for _, part := range []string{"/.aws/", "/.gcloud/", "/.kube/", "/secrets/", "/credentials/"} {
-		if strings.Contains(normalized, part) {
-			return true
-		}
-	}
-	return false
 }
 
 func (w Workspace) SensitivePaths() ([]string, error) {
@@ -143,7 +117,7 @@ func (w Workspace) SensitivePaths() ([]string, error) {
 		if entry.IsDir() && (entry.Name() == ".git" || entry.Name() == "node_modules") {
 			return filepath.SkipDir
 		}
-		if sensitivePath(path) && !seen[path] {
+		if safety.IsSensitivePath(path) && !seen[path] {
 			paths = append(paths, path)
 			seen[path] = true
 			if entry.IsDir() {

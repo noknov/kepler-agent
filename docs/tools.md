@@ -195,6 +195,12 @@ and admits at most 16 MiB of requested bytes across a batch; reduce `paths` or
 `limit` when the request exceeds that budget. Any shortened member marks the
 whole result as truncated. Offsets and limits are byte counts, not line counts.
 
+Local `search` and `list_files` ignore ambient ripgrep configuration and use the
+same case-insensitive credential-path exclusions as direct reads. Search limits
+count matching output lines across files; there is no lower implicit per-file
+cap. Both tools bound captured output to 4 MiB and mark results as truncated
+when either the line or byte budget is exceeded.
+
 Both local `edit_file` and hosted `code-replace` require byte-exact `old_text`.
 Indentation, trailing whitespace and line endings are not normalized. A mismatch
 returns an error without changing the file; reread the source and provide the

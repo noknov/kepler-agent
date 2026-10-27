@@ -12,11 +12,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/profiles/local"
+	"github.com/noknov/kepler-agent/packages/safety"
 )
 
 type ReadFile struct{ Workspace local.Workspace }
@@ -152,30 +154,22 @@ func (t ListFiles) Execute(ctx context.Context, call tool.Call) (tool.Result, er
 			return tool.Result{}, err
 		}
 	}
-	command := exec.CommandContext(ctx, "rg", append([]string{"--files", "--hidden"}, safeRGGlobs()...)...)
+	command := exec.CommandContext(ctx, "rg", append([]string{"--no-config", "--files", "--hidden"}, safeRGGlobs()...)...)
 	command.Dir = root
 	var output boundedBuffer
 	output.limit = 4 << 20
 	command.Stdout = &output
 	err := command.Run()
-	data := output.Bytes()
 	if err != nil {
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
 			return tool.Result{}, err
 		}
 	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if arguments.Limit <= 0 {
 		arguments.Limit = 500
 	}
-	if len(lines) > arguments.Limit {
-		lines = lines[:arguments.Limit]
-		lines = append(lines, "[file list truncated]")
-	}
-	result := tool.TextResult(strings.Join(lines, "\n"))
-	result.Truncated = len(lines) > 0 && lines[len(lines)-1] == "[file list truncated]"
-	return result, nil
+	return rgResult(&output, arguments.Limit), nil
 }
 
 type Search struct{ Workspace local.Workspace }
@@ -206,7 +200,14 @@ func (t Search) Execute(ctx context.Context, call tool.Call) (tool.Result, error
 			root = filepath.Dir(root)
 		}
 	}
-	args := append([]string{"-n", "--hidden", "--max-count=50", "--max-columns=400", "--max-columns-preview"}, safeRGGlobs()...)
+	if arguments.Limit <= 0 {
+		arguments.Limit = 200
+	}
+	// One extra match proves that a per-file cap cannot silently hide results
+	// within the caller's requested line budget. Convert before adding to avoid
+	// overflowing int for the largest accepted JSON integer.
+	maxCount := strconv.FormatUint(uint64(arguments.Limit)+1, 10)
+	args := append([]string{"--no-config", "-n", "--hidden", "--max-count=" + maxCount}, safeRGGlobs()...)
 	args = append(args, "--", arguments.Query, target)
 	command := exec.CommandContext(ctx, "rg", args...)
 	command.Dir = root
@@ -214,24 +215,13 @@ func (t Search) Execute(ctx context.Context, call tool.Call) (tool.Result, error
 	output.limit = 4 << 20
 	command.Stdout = &output
 	err := command.Run()
-	data := output.Bytes()
 	if err != nil {
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
 			return tool.Result{}, err
 		}
 	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if arguments.Limit <= 0 {
-		arguments.Limit = 200
-	}
-	if len(lines) > arguments.Limit {
-		lines = lines[:arguments.Limit]
-		lines = append(lines, "[search results truncated]")
-	}
-	result := tool.TextResult(strings.Join(lines, "\n"))
-	result.Truncated = len(lines) > 0 && lines[len(lines)-1] == "[search results truncated]"
-	return result, nil
+	return rgResult(&output, arguments.Limit), nil
 }
 
 type WriteFile struct{ Workspace local.Workspace }
@@ -340,14 +330,14 @@ func readEditableFile(workspace local.Workspace, path string) ([]byte, error) {
 }
 
 type boundedBuffer struct {
-	bytes.Buffer
+	buffer    bytes.Buffer
 	limit     int
 	truncated bool
 }
 
 func (b *boundedBuffer) Write(value []byte) (int, error) {
 	original := len(value)
-	remaining := b.limit - b.Len()
+	remaining := b.limit - b.buffer.Len()
 	if remaining <= 0 {
 		b.truncated = true
 		return original, nil
@@ -356,7 +346,7 @@ func (b *boundedBuffer) Write(value []byte) (int, error) {
 		value = value[:remaining]
 		b.truncated = true
 	}
-	_, err := b.Buffer.Write(value)
+	_, err := b.buffer.Write(value)
 	return original, err
 }
 
@@ -378,12 +368,23 @@ func relative(root, path string) string {
 }
 
 func safeRGGlobs() []string {
-	patterns := []string{"!.git/**", "!.env", "!.env.*", "!**/.env", "!**/.env.*", "!**/*.pem", "!**/*.key", "!**/*.p12", "!**/*.pfx", "!**/.netrc", "!**/.npmrc", "!**/.pypirc", "!**/.aws/**", "!**/.gcloud/**", "!**/.kube/**", "!**/secrets/**", "!**/credentials/**", "!**/.docker/config.json", "!**/.config/gh/hosts.yml"}
+	patterns := append([]string{"!**/.git", "!**/.git/**"}, safety.SensitiveRGGlobs()...)
 	args := make([]string, 0, len(patterns)*2)
 	for _, pattern := range patterns {
-		args = append(args, "-g", pattern)
+		args = append(args, "--iglob", pattern)
 	}
 	return args
+}
+
+func rgResult(output *boundedBuffer, limit int) tool.Result {
+	lines := strings.Split(strings.TrimSpace(output.buffer.String()), "\n")
+	truncated := output.truncated || len(lines) > limit
+	if len(lines) > limit {
+		lines = lines[:limit]
+	}
+	result := tool.TextResult(strings.Join(lines, "\n"))
+	result.Truncated = truncated
+	return result
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {
