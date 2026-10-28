@@ -48,31 +48,32 @@ const (
 const slackOutputFormatPrompt = "Replies are rendered using standard Markdown in Slack. A slack_view_context JSON block identifies what the user was viewing when that message was sent. It is a reference, not conversation content or permission. Read needed content through the user-authorized Slack tools; do not infer unseen messages."
 
 type Service struct {
-	traceContent     func(trace.Span, string, any)
-	Agent            hosted.Agent
-	Messenger        slackconversation.Messenger
-	Prompt           safety.PromptPolicy
-	Redactor         safety.Redactor
-	UserPrefs        userprefs.Store
-	Workspace        string
-	Model            string
-	Redis            *redisclient.Client
-	Continuations    connections.ContinuationStore
-	Connections      *connections.Service
-	PodID            string
-	Lifecycle        context.Context
-	ModeForUser      func(string) ConversationMode
-	OnDelivered      func(context.Context, string, string, string) error
-	AlreadyDelivered func(context.Context, string) (bool, error)
-	Multimodal       func(context.Context, string) (bool, error)
-	ThreadLoader     ThreadLoader
-	WebSearchEnabled func(string) bool
-	Inputs           sessioninput.Store
-	BeforeRun        func(context.Context, string) error
-	RunTimeout       time.Duration
-	Tools            *tool.Catalog
-	Workflows        workflows.Registry
-	IntentRouter     workflows.Router
+	traceContent         func(trace.Span, string, any)
+	Agent                hosted.Agent
+	Messenger            slackconversation.Messenger
+	Prompt               safety.PromptPolicy
+	Redactor             safety.Redactor
+	UserPrefs            userprefs.Store
+	Workspace            string
+	Model                string
+	Redis                *redisclient.Client
+	Continuations        connections.ContinuationStore
+	Connections          *connections.Service
+	PodID                string
+	Lifecycle            context.Context
+	ModeForUser          func(string) ConversationMode
+	OnDelivered          func(context.Context, string, string, string) error
+	AlreadyDelivered     func(context.Context, string) (bool, error)
+	Multimodal           func(context.Context, string) (bool, error)
+	ThreadLoader         ThreadLoader
+	WebSearchEnabled     func(string) bool
+	ApprovalNotifyUserID string
+	Inputs               sessioninput.Store
+	BeforeRun            func(context.Context, string) error
+	RunTimeout           time.Duration
+	Tools                *tool.Catalog
+	Workflows            workflows.Registry
+	IntentRouter         workflows.Router
 
 	mu     sync.Mutex
 	active map[string]*activeRun
@@ -294,6 +295,7 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	runCtx, reply := beginReplyTrace(runCtx, sessionID, req, s.traceContent)
 	defer func() { reply.end(runErr) }()
 	stream := newSlackStream(runCtx, s.Messenger, req)
+	stream.approvalNotifyUserID = s.ApprovalNotifyUserID
 	stream.telemetry = reply
 	stream.connections = s.Connections
 	stream.redactor = safety.NewStreamRedactor(s.Redactor)
@@ -307,12 +309,8 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 		stream.setSessionStatus(finalSessionStatus)
 	}()
 	if approval := req.Approval; approval != nil {
-		actor := approval.ResolvedBy
-		if actor == "" {
-			actor = req.UserID
-		} // Already queued legacy controls.
 		if err := s.Agent.Runtime.ResolveApproval(runCtx, sessionID, agentruntime.ApprovalResolution{
-			TurnID: approval.TurnID, ToolCallID: approval.ToolCallID, Approved: approval.Approved, UserID: actor,
+			TurnID: approval.TurnID, ToolCallID: approval.ToolCallID, Approved: approval.Approved, UserID: req.UserID,
 		}); err != nil {
 			return err
 		}
@@ -838,6 +836,7 @@ func (s *Service) StartControlSubscriber(ctx context.Context) {
 }
 
 type slackStream struct {
+	approvalNotifyUserID  string
 	telemetry             *replyTrace
 	streamStopError       error
 	ctx                   context.Context

@@ -256,9 +256,7 @@ func operatorAllowlist(names []string) map[string]bool {
 }
 
 func hostedPolicy(cfg config.Config) Policy {
-	return Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools), Approvers: map[string]string{
-		"github-approve_pr": cfg.Integrations.GitHub.ApproverUserID,
-	}}
+	return Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}
 }
 
 func buildModelClient(provider, protocol, baseURL, apiKey string, timeout time.Duration, anthropicFlavor string, credentialFile string) (*providers.Client, error) {

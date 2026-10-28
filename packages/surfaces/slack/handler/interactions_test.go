@@ -28,7 +28,7 @@ func (f approvalAuthorityFunc) ApprovalScope(ctx context.Context, id string, r a
 	return f(ctx, id, r)
 }
 func sameUserApprovalAuthority(context.Context, string, agentruntime.ApprovalResolution) (tool.Scope, error) {
-	return tool.Scope{UserID: "U1"}, nil
+	return tool.Scope{UserID: "U1", Values: map[string]string{"channel": "D1", "thread_ts": "123.456"}}, nil
 }
 
 func (s *dedupeInputStore) Enqueue(_ context.Context, item sessioninput.Item) error {

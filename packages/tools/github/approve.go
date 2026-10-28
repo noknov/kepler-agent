@@ -16,14 +16,14 @@ import (
 )
 
 // ApprovePRTool submits only APPROVE for an explicitly selected immutable head.
-// Hosted policy, rather than model arguments, selects the approving principal.
+// Hosted policy and the shared runtime require requester confirmation.
 type ApprovePRTool struct{ Client Client }
 
 var approvalHeadSHA = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 var approvalRepository = regexp.MustCompile(`^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$`)
 
 func (t ApprovePRTool) Descriptor() tool.Descriptor {
-	d := tool.FunctionDescriptor("github-approve_pr", "Request approval of a GitHub PR at one exact head SHA. Read github-pr_diff first and supply its full head_sha. Execution requires confirmation by the configured operator; this does not merge, comment, or request changes.", tool.ObjectSchema([]string{"url", "head_sha"}, map[string]any{
+	d := tool.FunctionDescriptor("github-approve_pr", "Request approval of a GitHub PR at one exact head SHA. Read github-pr_diff first and supply its full head_sha. Request this only after inspecting the full diff at that head and finding no obvious issues; report problems or uncertainty instead of approving. The requesting user must confirm in the shared Slack thread, and the credential owner is notified. Unavailable in DMs. This does not merge, comment, or request changes.", tool.ObjectSchema([]string{"url", "head_sha"}, map[string]any{
 		"url":      map[string]any{"type": "string", "description": "GitHub pull request URL."},
 		"head_sha": map[string]any{"type": "string", "pattern": "^[0-9a-fA-F]{40}$", "description": "Exact PR head commit being approved."},
 	}), append(tool.ExternalWrite("github"), tool.WithParallel(false))...)

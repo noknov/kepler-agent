@@ -179,28 +179,20 @@ func (s *slackStream) requestApproval(event transcript.Event) {
 		name = "this action"
 	}
 	description := approvalDescription(name, call.Arguments, event.Metadata)
-	var authority struct {
-		ApproverUserID string `json:"approver_user_id"`
-	}
-	if err := json.Unmarshal(event.Metadata, &authority); err != nil && len(event.Metadata) > 0 {
-		return
-	}
 	channel, thread := s.req.Channel, s.req.ThreadTS
 	text := "Confirmation required for " + name
 	ctx, cancel := s.deliveryContext()
 	defer cancel()
-	if authority.ApproverUserID != "" {
-		text = "<@" + authority.ApproverUserID + "> " + text
-		description = "<@" + authority.ApproverUserID + "> please confirm this request from <@" + call.Scope.UserID + ">.\n" + description
+	if name == "github-approve_pr" && s.approvalNotifyUserID != "" {
+		mention := "<@" + s.approvalNotifyUserID + ">"
+		text += " — cc " + mention
+		description += "\ncc " + mention + " (GitHub credential owner)."
 	}
 	buttons := []map[string]any{
 		{"type": "button", "action_id": "agent_approval_approve", "style": "primary", "text": map[string]any{"type": "plain_text", "text": "Confirm"}, "value": string(value)},
 		{"type": "button", "action_id": "agent_approval_decline", "style": "danger", "text": map[string]any{"type": "plain_text", "text": "Cancel"}, "value": string(value)},
 	}
-	approver := authority.ApproverUserID
-	if approver == "" {
-		approver = call.Scope.UserID
-	}
+	approver := call.Scope.UserID
 	if approver != "" {
 		for _, button := range buttons {
 			button["visible_to_user_ids"] = []string{approver}

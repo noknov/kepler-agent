@@ -22,18 +22,23 @@ func (m *approvalCardMessenger) PostMessageBlocks(_ context.Context, channel, th
 	return "card", nil
 }
 
-func TestDesignatedApprovalCardNotifiesOperatorAndBindsOriginalSession(t *testing.T) {
-	for _, channel := range []string{"D-requester", "C-shared"} {
-		t.Run(channel, func(t *testing.T) {
+func TestApprovalCardNotifiesOwnerAndOnlyRequesterCanConfirm(t *testing.T) {
+	for _, name := range []string{"github-approve_pr", "other-write"} {
+		t.Run(name, func(t *testing.T) {
+			channel := "C-shared"
 			messenger := &approvalCardMessenger{}
 			stream := newSlackStream(context.Background(), messenger, conversation.Request{Channel: channel, ThreadTS: "original"})
-			call := tool.Call{ID: "call", Name: "github-approve_pr", Scope: tool.Scope{UserID: "requester"}, Arguments: json.RawMessage(`{"url":"https://github.com/example/repo/pull/1","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`)}
-			stream.requestApproval(transcript.Event{Type: transcript.ApprovalRequested, TurnID: "turn", ToolCall: &call, Metadata: json.RawMessage(`{"approver_user_id":"owner","effects":["external_write"]}`)})
-			if messenger.destination != channel || messenger.thread != "original" || !strings.Contains(messenger.text, "<@owner>") {
+			call := tool.Call{ID: "call", Name: name, Scope: tool.Scope{UserID: "requester"}, Arguments: json.RawMessage(`{"url":"https://github.com/example/repo/pull/1","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`)}
+			stream.approvalNotifyUserID = "owner"
+			stream.requestApproval(transcript.Event{Type: transcript.ApprovalRequested, TurnID: "turn", ToolCall: &call, Metadata: json.RawMessage(`{"effects":["external_write"]}`)})
+			if messenger.destination != channel || messenger.thread != "original" {
 				t.Fatalf("notification=%+v", messenger)
 			}
 			raw, _ := json.Marshal(messenger.blocks)
-			if strings.Count(string(raw), `"visible_to_user_ids":["owner"]`) != 2 {
+			if strings.Contains(messenger.blocks[0]["text"].(map[string]any)["text"].(string), "<@owner>") != (name == "github-approve_pr") {
+				t.Fatalf("unexpected cc: %s", raw)
+			}
+			if strings.Count(string(raw), `"visible_to_user_ids":["requester"]`) != 2 {
 				t.Fatalf("approval buttons are not restricted: %s", raw)
 			}
 			if !strings.Contains(string(raw), session.ID(channel, "original")) || !strings.Contains(string(raw), "head_sha") {

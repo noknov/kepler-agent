@@ -52,14 +52,7 @@ func (h *Handler) resolveApproval(ctx context.Context, interaction slackgateway.
 		return
 	}
 	channel, thread := scope.Values["channel"], scope.Values["thread_ts"]
-	if channel == "" || thread == "" {
-		// Legacy same-user controls predate persisted Slack scope values.
-		if token.SessionID != "" || scope.UserID != interaction.UserID {
-			return
-		}
-		channel, thread = interaction.Channel, interaction.ThreadTS
-	}
-	if thread == "" || session.ID(channel, thread) != sessionID || !h.Access.AllowsUser(scope.UserID) || (!IsDMChannel(channel) && !h.Access.AllowsChannel(channel)) {
+	if channel == "" || thread == "" || session.ID(channel, thread) != sessionID || !h.Access.AllowsUser(scope.UserID) || (!IsDMChannel(channel) && !h.Access.AllowsChannel(channel)) {
 		return
 	}
 	if interaction.Channel != channel || interaction.ThreadTS != thread {
@@ -70,8 +63,8 @@ func (h *Handler) resolveApproval(ctx context.Context, interaction slackgateway.
 		EventID:   "approval-" + token.TurnID + "-" + token.ToolCallID + "-" + verb,
 		MessageID: "approval-continuation:" + token.TurnID + ":" + token.ToolCallID,
 		UserID:    scope.UserID, Channel: channel, ThreadTS: thread,
-		Text:     "The authorized approver " + verb + "d the pending action. Continue from the recorded tool result.",
-		Approval: &slackconversation.ApprovalRequest{TurnID: token.TurnID, ToolCallID: token.ToolCallID, Approved: approved, MessageTS: interaction.MessageTS, ResolvedBy: interaction.UserID},
+		Text:     "The requesting user " + verb + "d the pending action. Continue from the recorded tool result.",
+		Approval: &slackconversation.ApprovalRequest{TurnID: token.TurnID, ToolCallID: token.ToolCallID, Approved: approved, MessageTS: interaction.MessageTS},
 	}
 	payload, err := json.Marshal(request)
 	if err != nil {

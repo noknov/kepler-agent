@@ -35,7 +35,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, resolut
 		return err
 	}
 	defer unlock()
-	state, err := r.loadApprovalState(ctx, sessionID, resolution)
+	state, err := (ApprovalAuthority{Transcript: r.deps.Transcript}).loadApprovalState(ctx, sessionID, resolution)
 	if err != nil {
 		return err
 	}
@@ -77,9 +77,6 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, resolut
 		}
 		if decision.Type != tool.DecisionAllow && decision.Type != tool.DecisionRequireApproval && decision.Type != tool.DecisionDeny {
 			return fmt.Errorf("unsupported approval policy decision %q", decision.Type)
-		}
-		if decision.Type != tool.DecisionDeny && approvalPrincipal(decision, call.Scope.UserID) != resolution.UserID {
-			return fmt.Errorf("approval authority changed; request a new approval")
 		}
 	}
 	metadata, _ := json.Marshal(map[string]any{"approved": resolution.Approved, "resolved_by": resolution.UserID})

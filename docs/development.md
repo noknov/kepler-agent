@@ -104,12 +104,9 @@ changes the operation without changing its schema. Contract changes require a
 new approval; a removed or disabled tool can always be declined. Legacy approvals
 without a descriptor retain active-tool lookup and cannot restore deferred tools.
 
-Policy decisions may specify an opaque `approver_user_id`; otherwise approval
-belongs to the requester. Runtime persists that authority with the call and
-revalidates it under the session lease when approving. Surfaces may query
-`ApprovalScope` before admitting a control, and must continue as the returned
-requesting user rather than the authenticated clicker. Authority changes require
-a fresh approval; the original approver can still decline an obsolete request.
+Surfaces may query `ApprovalScope` before admitting a control. It authenticates
+against the persisted requesting user and immutable call. The runtime repeats
+that validation under the session lease before executing the write.
 
 Session bootstrap records `SessionStarted` as intent and atomically commits
 imported history with `SessionInitialized` through `transcript.BatchStore`.

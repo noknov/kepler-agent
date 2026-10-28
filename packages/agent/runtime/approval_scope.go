@@ -16,18 +16,14 @@ type approvalState struct {
 	resolved, completed, resolvedApproved bool
 }
 
-func approvalPrincipal(decision tool.Decision, requester string) string {
-	if decision.ApproverUserID != "" {
-		return decision.ApproverUserID
-	}
-	return requester
-}
+// ApprovalAuthority validates durable approval ownership without a model runtime.
+type ApprovalAuthority struct{ Transcript transcript.Store }
 
 // ApprovalScope authenticates a control against its durable request before an
 // adapter admits it to a queue. ResolveApproval repeats this check under lease.
-// The returned scope belongs to the requester, never to the approving principal.
-func (r *Runtime) ApprovalScope(ctx context.Context, sessionID string, resolution ApprovalResolution) (tool.Scope, error) {
-	state, err := r.loadApprovalState(ctx, sessionID, resolution)
+// The returned scope belongs to the requester, and is also the only authorized confirming user.
+func (a ApprovalAuthority) ApprovalScope(ctx context.Context, sessionID string, resolution ApprovalResolution) (tool.Scope, error) {
+	state, err := a.loadApprovalState(ctx, sessionID, resolution)
 	if err != nil {
 		return tool.Scope{}, err
 	}
@@ -36,12 +32,12 @@ func (r *Runtime) ApprovalScope(ctx context.Context, sessionID string, resolutio
 	return scope, nil
 }
 
-func (r *Runtime) loadApprovalState(ctx context.Context, sessionID string, resolution ApprovalResolution) (approvalState, error) {
+func (a ApprovalAuthority) loadApprovalState(ctx context.Context, sessionID string, resolution ApprovalResolution) (approvalState, error) {
 	var state approvalState
 	if sessionID == "" || resolution.TurnID == "" || resolution.ToolCallID == "" || resolution.UserID == "" {
 		return state, fmt.Errorf("approval session, turn, tool call, and user are required")
 	}
-	events, err := r.deps.Transcript.Load(ctx, sessionID, 0)
+	events, err := a.Transcript.Load(ctx, sessionID, 0)
 	if err != nil {
 		return state, err
 	}
@@ -74,8 +70,8 @@ func (r *Runtime) loadApprovalState(ctx context.Context, sessionID string, resol
 		return state, fmt.Errorf("pending approval was not found")
 	}
 	call := state.call
-	if approvalPrincipal(state.requested.Decision, call.Scope.UserID) != resolution.UserID {
-		return state, fmt.Errorf("only the designated approving user may resolve this approval")
+	if call.Scope.UserID != resolution.UserID {
+		return state, fmt.Errorf("only the requesting user may resolve this approval")
 	}
 	if (call.Scope.SessionID != "" && call.Scope.SessionID != sessionID) || (call.Scope.TurnID != "" && call.Scope.TurnID != resolution.TurnID) {
 		return state, fmt.Errorf("approval scope does not match its durable turn")

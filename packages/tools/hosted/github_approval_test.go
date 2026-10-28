@@ -12,7 +12,7 @@ func TestApprovalToolExposureRequiresConfiguredSlackOperator(t *testing.T) {
 			cfg := config.Config{}
 			cfg.Integrations.GitHub.Token = "token"
 			if configured {
-				cfg.Integrations.GitHub.ApproverUserID = "owner"
+				cfg.Integrations.GitHub.ApprovalNotifyUserID = "owner"
 			}
 			bundle, err := NewCatalog(cfg, safety.WorkspacePolicy{}, safety.CommandPolicy{}, nil, SurfaceOptions{Name: surface})
 			if err != nil {

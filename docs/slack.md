@@ -79,31 +79,23 @@ router. See [runtime and delegation](runtime.md) for scope propagation.
 
 ### Approve a pull request
 
-`github-approve_pr` is an optional Slack-only external write. Configure
-`GITHUB_APPROVER_USER_ID` and the existing SOPS-managed `GITHUB_TOKEN`, then add
-the exact tool name to `AGENT_ALLOWED_WRITE_TOOLS`. Other authorized users may
-request approval; only the designated user may confirm or decline it. Other
-write tools retain their requester-confirmation policy.
+`github-approve_pr` is an optional Slack-only external write. Configure the
+credential owner's Slack ID as `GITHUB_APPROVAL_NOTIFY_USER_ID` and explicitly
+allowlist `github-approve_pr` in `AGENT_ALLOWED_WRITE_TOOLS`. The worker uses its
+existing `GITHUB_TOKEN`; no extra Slack-user or PR-author allowlist is installed.
+Existing ingress access policy controls who can request work.
 
-The agent reads the PR manifest and requests one specific URL and full head SHA.
-The bot mentions the approver and posts confirmation controls in the original
-thread. It never forwards the request into a separate DM. The approver must
-already be able to access that conversation; another user's bot DM is not shared.
-Other users' private bot conversations are denied by server policy before a
-confirmation is created. The designated operator may still use their own DM.
-Both buttons use Slack's `visible_to_user_ids` for the approving principal;
-visibility is presentation, not the server's authorization boundary.
-This uses existing bot `chat:write`. Controls resolve their original
-session and approving authority from the transcript before queue admission.
-The original requesting identity resumes; confirming never transfers the
-approver's personal integration scope into that conversation.
+An allowed user must @mention the agent in a shared channel thread. After
+inspecting the exact PR head and finding no obvious issues, the agent requests
+confirmation in that same thread and cc's the credential owner. Only the
+requesting user may confirm or cancel; cc is notification, not approval authority.
+All private DMs are denied, including the credential owner's DM.
 
-Execution rechecks current policy, credential binding, PR state and head, then
-sends only `APPROVE` with that exact `commit_id`. Changed heads or credentials
-require a new confirmation. GitHub does not allow self-approval. Ambiguous write
-receipts are reported as unknown and are not automatically retried. This does
-not enable merging, review comments or request-changes actions. Do not use a
-real approval as a deployment smoke test.
+The write can only submit APPROVE. It cannot merge, comment or request changes.
+The tool verifies the PR is open and its head still matches the reviewed SHA.
+GitHub's own reviewer restrictions remain in force. Credential changes invalidate
+pending approval contracts. Unverifiable write receipts remain unknown and are
+not automatically replayed. No database migration is required.
 
 ## Delivery and recovery
 

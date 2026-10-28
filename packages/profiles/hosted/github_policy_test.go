@@ -22,37 +22,24 @@ func TestWorkflowDispatchUsesOperatorWriteAuthorization(t *testing.T) {
 	}
 }
 
-func TestGitHubApprovalRequiresAllowlistAndDesignatedPrincipal(t *testing.T) {
-	for _, test := range []struct {
-		allowed bool
-		owner   string
-		want    tool.DecisionType
-	}{{false, "owner", tool.DecisionDeny}, {true, "", tool.DecisionDeny}, {true, "owner", tool.DecisionRequireApproval}} {
-		cfg := config.Config{}
-		cfg.Integrations.GitHub.ApproverUserID = test.owner
-		if test.allowed {
-			cfg.Tools.AllowedWriteTools = []string{"github-approve_pr"}
-		}
-		request := tool.PolicyRequest{Descriptor: (github.ApprovePRTool{}).Descriptor(), Call: tool.Call{Name: "github-approve_pr", Scope: tool.Scope{UserID: "requester", Values: map[string]string{"conversation_type": "channel"}}}}
-		decision, err := hostedPolicy(cfg).Decide(t.Context(), request)
-		if err != nil || decision.Type != test.want {
-			t.Fatalf("decision=%+v err=%v", decision, err)
-		}
-		if test.want == tool.DecisionRequireApproval && decision.ApproverUserID != "owner" {
-			t.Fatal("requester selected approval authority")
-		}
-	}
-}
-
-func TestDesignatedApprovalRejectsOtherUsersPrivateConversations(t *testing.T) {
-	policy := Policy{Allowed: map[string]bool{"github-approve_pr": true}, Approvers: map[string]string{"github-approve_pr": "owner"}}
-	for _, test := range []struct {
-		actor, kind string
-		want        tool.DecisionType
-	}{{"other", "im", tool.DecisionDeny}, {"other", "", tool.DecisionDeny}, {"other", "channel", tool.DecisionRequireApproval}, {"owner", "im", tool.DecisionRequireApproval}} {
-		decision, err := policy.Decide(t.Context(), tool.PolicyRequest{Descriptor: (github.ApprovePRTool{}).Descriptor(), Call: tool.Call{Name: "github-approve_pr", Scope: tool.Scope{UserID: test.actor, Values: map[string]string{"conversation_type": test.kind}}}})
-		if err != nil || decision.Type != test.want {
-			t.Fatalf("actor=%s conversation=%s decision=%+v err=%v", test.actor, test.kind, decision, err)
+func TestGitHubApprovalRequiresOperatorAllowlistAndSharedChannel(t *testing.T) {
+	for _, actor := range []string{"requester", "owner", "other-allowed-user"} {
+		for _, kind := range []string{"channel", "im", ""} {
+			for _, allowed := range []bool{false, true} {
+				cfg := config.Config{}
+				if allowed {
+					cfg.Tools.AllowedWriteTools = []string{"github-approve_pr"}
+				}
+				request := tool.PolicyRequest{Descriptor: (github.ApprovePRTool{}).Descriptor(), Call: tool.Call{Name: "github-approve_pr", Scope: tool.Scope{UserID: actor, Values: map[string]string{"conversation_type": kind}}}}
+				decision, err := hostedPolicy(cfg).Decide(t.Context(), request)
+				want := tool.DecisionDeny
+				if allowed && kind == "channel" {
+					want = tool.DecisionRequireApproval
+				}
+				if err != nil || decision.Type != want {
+					t.Fatalf("actor=%s kind=%s allowed=%v decision=%+v err=%v", actor, kind, allowed, decision, err)
+				}
+			}
 		}
 	}
 }

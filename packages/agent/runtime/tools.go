@@ -91,12 +91,11 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 			result := tool.Result{Content: []model.Content{{Type: model.ContentText, Text: "Tool call denied by policy: " + decision.Reason}}, IsError: true, ErrorCode: "policy_denied"}
 			prepared[index].result = &result
 		case tool.DecisionRequireApproval:
-			deferredApproval := r.deps.Approver == nil || approvalPrincipal(decision, call.Scope.UserID) != call.Scope.UserID
 			metadata, _ := json.Marshal(approvalRequestMetadata{Decision: decision, Effects: prepared[index].descriptor.Effects, Descriptor: &prepared[index].descriptor})
 			if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.ApprovalRequested, ToolCall: &call, Metadata: metadata}); err != nil {
 				return toolOutcome{}, err
 			}
-			if len(calls) > 1 && deferredApproval {
+			if len(calls) > 1 && r.deps.Approver == nil {
 				// A deferred approval suspends the whole model tool batch. Record
 				// explicit results for sibling calls so the later approval
 				// resolution cannot leave an assistant tool message malformed.
@@ -120,7 +119,7 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 					prepared[sibling].result = &result
 					blocked = append(blocked, prepared[sibling])
 				}
-				if deferredApproval {
+				if r.deps.Approver == nil {
 					cleanupCtx, cancel := r.cleanupContext(ctx)
 					defer cancel()
 					if _, err := r.recordToolResults(cleanupCtx, request, blocked); err != nil {
@@ -129,7 +128,7 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 					return toolOutcome{}, errPendingApproval
 				}
 			}
-			if deferredApproval {
+			if r.deps.Approver == nil {
 				return toolOutcome{}, errPendingApproval
 			}
 			approved, approveErr := r.deps.Approver.Approve(ctx, policyRequest, decision)

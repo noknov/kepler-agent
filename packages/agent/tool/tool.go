@@ -164,12 +164,10 @@ const (
 )
 
 type Decision struct {
-	Type DecisionType `json:"type"`
-	// ApproverUserID is an operator-selected principal. Empty means the requester.
-	ApproverUserID string         `json:"approver_user_id,omitempty"`
-	Reason         string         `json:"reason,omitempty"`
-	Rule           string         `json:"rule,omitempty"`
-	Constraints    map[string]any `json:"constraints,omitempty"`
+	Type        DecisionType   `json:"type"`
+	Reason      string         `json:"reason,omitempty"`
+	Rule        string         `json:"rule,omitempty"`
+	Constraints map[string]any `json:"constraints,omitempty"`
 }
 
 type PolicyRequest struct {
