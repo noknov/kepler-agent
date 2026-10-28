@@ -727,24 +727,26 @@ func (s *Service) resumeAfterConnection(parentCtx context.Context, continuation 
 	ctx := context.WithoutCancel(base)
 
 	sessionID := session.ID(continuation.Channel, continuation.ThreadTS)
-	waiting, err := s.Agent.Runtime.WaitingForInput(ctx, sessionID, continuation.UserID)
+	state, found, err := s.Agent.Runtime.LatestSessionState(ctx, sessionID)
 	if err != nil {
 		log.Printf("connection continuation waiting check failed session=%s: %v", sessionID, err)
 		s.releaseContinuation(ctx, continuation)
 		return
 	}
-	if !waiting {
+	if !found || state.Termination != agentruntime.TerminationPendingInput || state.UserID != continuation.UserID {
 		// The turn was completed or superseded while OAuth was in progress.
 		_ = s.Continuations.Clear(ctx, continuation)
 		return
 	}
 	req := slackconversation.Request{
-		EventID:   fmt.Sprintf("connection-continue-%s-%d", continuation.Provider, time.Now().UnixNano()),
-		MessageID: fmt.Sprintf("connection-continuation:%s:%d", continuation.Provider, time.Now().UnixNano()),
-		UserID:    continuation.UserID,
-		Channel:   continuation.Channel,
-		ThreadTS:  continuation.ThreadTS,
-		Text:      "I've connected. Please continue.",
+		TeamID:           state.Scope["team_id"],
+		ConversationType: state.Scope["conversation_type"],
+		EventID:          fmt.Sprintf("connection-continue-%s-%d", continuation.Provider, time.Now().UnixNano()),
+		MessageID:        fmt.Sprintf("connection-continuation:%s:%d", continuation.Provider, time.Now().UnixNano()),
+		UserID:           continuation.UserID,
+		Channel:          continuation.Channel,
+		ThreadTS:         continuation.ThreadTS,
+		Text:             "I've connected. Please continue.",
 	}
 	if s.Messenger != nil {
 		if _, err := s.Messenger.PostMessage(ctx, continuation.Channel, continuation.ThreadTS, "Connected — continuing…"); err != nil {
