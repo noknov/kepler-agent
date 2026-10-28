@@ -105,5 +105,9 @@ func (c *Client) SearchContext(ctx context.Context, in ContextSearchInput) (Cont
 			return ContextSearchResult{}, fmt.Errorf("Slack search response lacks message source identity")
 		}
 	}
-	return ContextSearchResult{Messages: out.Results.Messages, NextCursor: out.Metadata.NextCursor}, nil
+	next, err := checkedPaginationCursor("assistant.search.context", out.Metadata.NextCursor, map[string]bool{strings.TrimSpace(in.Cursor): true})
+	if err != nil {
+		return ContextSearchResult{}, err
+	}
+	return ContextSearchResult{Messages: out.Results.Messages, NextCursor: next}, nil
 }
