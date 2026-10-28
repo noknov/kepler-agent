@@ -305,3 +305,11 @@ model-name list. Catalog failures propagate as errors rather than silently
 stripping attachments. Other providers keep their existing declared capability
 contracts. Current-message images travel as multimodal content parts; historical
 images are not automatically re-attached on every turn.
+
+Tool completion is projected after the full provider response has been converted
+successfully. Length-limited, filtered/refused and canceled terminal receipts discard their native continuation window and do
+not expose residual tool calls for execution, even if an argument prefix happens
+to be valid JSON. Text, terminal reason and usage remain available. This rule is
+shared by streaming and ordinary responses at the provider conversion boundary;
+individual wire callbacks do not authorize tool execution. Conversion failures and rejected final stream events return an error while
+retaining the provider's usage receipt, so retry accounting includes failed attempts.
