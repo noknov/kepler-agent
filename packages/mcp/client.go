@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -13,7 +14,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -32,7 +32,6 @@ type Client struct {
 	// HTTP overrides the shared HTTP client. Set in tests to inject a mock transport.
 	// Leave nil to use the lazily-initialized shared client (keep-alives enabled, 60s timeout).
 	HTTP       *http.Client
-	nextID     atomic.Int64
 	sharedOnce sync.Once
 	sharedHTTP *http.Client
 }
@@ -236,16 +235,17 @@ func (c *Client) CallTool(ctx context.Context, s Session, name string, args json
 }
 
 func (c *Client) rpc(ctx context.Context, session Session, method string, params any) (json.RawMessage, http.Header, error) {
-	return c.rpcWithID(ctx, session, c.nextID.Add(1), method, params)
+	id := rand.Text()
+	return c.rpcWithID(ctx, session, &id, method, params)
 }
 
-func (c *Client) rpcWithID(ctx context.Context, session Session, id any, method string, params any) (json.RawMessage, http.Header, error) {
+func (c *Client) rpcWithID(ctx context.Context, session Session, id *string, method string, params any) (json.RawMessage, http.Header, error) {
 	payload := map[string]any{
 		"jsonrpc": "2.0",
 		"method":  method,
 	}
 	if id != nil {
-		payload["id"] = id
+		payload["id"] = *id
 	}
 	if params != nil {
 		payload["params"] = params
@@ -290,14 +290,13 @@ func (c *Client) rpcWithID(ctx context.Context, session Session, id any, method 
 	if id == nil {
 		return nil, resp.Header, nil
 	}
-	expected, _ := json.Marshal(id)
-	result, err := readRPCResponse(resp.Body, resp.Header.Get("Content-Type"), expected)
+	result, err := readRPCResponse(resp.Body, resp.Header.Get("Content-Type"), *id)
 	return result, resp.Header, err
 }
 
 // An SSE response may remain open after our result. Stop at the matching
 // response, propagate its RPC error, and close the body instead of awaiting EOF.
-func readRPCResponse(reader io.Reader, contentType string, expected json.RawMessage) (json.RawMessage, error) {
+func readRPCResponse(reader io.Reader, contentType string, expected string) (json.RawMessage, error) {
 	bounded := io.LimitReader(reader, maxResponseBytes+1)
 	if !strings.Contains(strings.ToLower(contentType), "text/event-stream") {
 		body, err := io.ReadAll(bounded)
@@ -348,7 +347,7 @@ func readRPCResponse(reader io.Reader, contentType string, expected json.RawMess
 	return nil, fmt.Errorf("mcp: stream ended or exceeded byte limit without a matching response")
 }
 
-func decodeRPCResponse(body, expected json.RawMessage) (json.RawMessage, bool, error) {
+func decodeRPCResponse(body json.RawMessage, expected string) (json.RawMessage, bool, error) {
 	var response struct {
 		Version string          `json:"jsonrpc"`
 		ID      json.RawMessage `json:"id"`
@@ -362,7 +361,8 @@ func decodeRPCResponse(body, expected json.RawMessage) (json.RawMessage, bool, e
 	if json.Unmarshal(body, &response) != nil || response.Version != "2.0" {
 		return nil, false, fmt.Errorf("mcp: invalid JSON-RPC response")
 	}
-	if !bytes.Equal(bytes.TrimSpace(response.ID), expected) {
+	var responseID string
+	if json.Unmarshal(response.ID, &responseID) != nil || responseID != expected {
 		return nil, false, nil
 	}
 	if (response.Result != nil) == (response.Error != nil) {

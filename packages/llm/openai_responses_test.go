@@ -328,7 +328,7 @@ func TestResponsesStreamErrorDetails(t *testing.T) {
 		for _, event := range []string{
 			`{"type":"error","code":"server_error","message":"upstream unavailable","param":"model"}`,
 			`{"type":"error","error":{"type":"server_error","code":"server_error","message":"upstream unavailable","param":"model"}}`,
-			`{"type":"response.failed","response":{"error":{"code":"server_error","message":"upstream unavailable","param":"model"},"usage":{"input_tokens":7,"output_tokens":2}}}`,
+			`{"type":"response.failed","response":{"status":"failed","error":{"code":"server_error","message":"upstream unavailable","param":"model"},"usage":{"input_tokens":7,"output_tokens":2}}}`,
 		} {
 			t.Run(provider+"/"+event, func(t *testing.T) {
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -359,7 +359,6 @@ func TestResponsesStreamFailureDoesNotPublishTools(t *testing.T) {
 	for _, event := range []string{
 		`{"type":"error"}`,
 		`{"type":"error","error":{"code":"future_code","request_id":"req-event"},"unrelated":"private payload"}`,
-		`{"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":0,"output_tokens":0}}}`,
 	} {
 		t.Run(event, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -380,9 +379,6 @@ func TestResponsesStreamFailureDoesNotPublishTools(t *testing.T) {
 			}
 			if strings.Contains(event, "req-event") && detail.RequestID != "req-event" {
 				t.Fatal("lost event request ID")
-			}
-			if strings.Contains(event, "incomplete_details") && (detail.IncompleteReason != "max_output_tokens" || !resp.Usage.Reported) {
-				t.Fatalf("lost incomplete reason or reported zero usage: %+v %+v", detail, resp.Usage)
 			}
 		})
 	}

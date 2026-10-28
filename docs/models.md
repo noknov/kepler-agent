@@ -41,6 +41,29 @@ validation and completion callbacks wait for the final receipt. Token/context
 limits and refusals preserve usage and their stop reason while omitting tool
 calls; incomplete arguments are never repaired or executed.
 
+Responses uses the same final-response projection for JSON and SSE. A terminal
+response snapshot establishes completed tool calls; item/argument events are
+progress, and EOF or `[DONE]` cannot replace the receipt. Output-token/message
+limits and content filtering follow `incomplete_details.reason`; refusal blocks
+remain policy outcomes even without text. These receipts retain usage and never
+execute residual calls. Unknown incomplete reasons fail without inferring a
+token limit. Streams stop reading once their terminal receipt arrives.
+
+## HTTP error classification
+
+Provider adapters normalize structured error fields before bounding diagnostic
+text. Authentication, rate limits, and server failures follow HTTP status;
+context recovery and content-policy handling require a recognized 400/413
+rejection. Arbitrary response fields, HTML, and quoted diagnostic phrases do not
+trigger compaction or change retry policy. A field-length validation error alone
+does not establish context-window exhaustion.
+
+The Anthropic `invalid_request_error` context message and DeepSeek's structured
+`Content Exists Risk` message are recognized as narrow wire formats where no
+distinct error code is supplied. Unrecognized error messages remain ordinary
+request failures. Diagnostic truncation cannot remove a classification already
+extracted from the full bounded response.
+
 ## LLM Providers
 
 ### LongCat

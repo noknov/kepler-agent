@@ -477,7 +477,7 @@ func finishReason(reason string) model.FinishReason {
 	switch strings.ToLower(reason) {
 	case "tool_calls", "tool_use":
 		return model.FinishToolCalls
-	case "length", "max_tokens", "model_context_window_exceeded", "incomplete":
+	case "length", "max_tokens", "model_context_window_exceeded":
 		return model.FinishLength
 	case "content_filter", "refusal":
 		return model.FinishContent
@@ -545,16 +545,16 @@ func toModelError(err error) error {
 		kind := model.ErrorInvalid
 		retryable := providerErr.Retryable()
 		switch {
-		case llm.ContextLimitBody(providerErr.Body):
-			kind, retryable = model.ErrorContextLimit, false
-		case llm.ContentPolicyBody(providerErr.Body):
-			kind, retryable = model.ErrorContentPolicy, false
 		case providerErr.StatusCode == 401 || providerErr.StatusCode == 403:
 			kind = model.ErrorAuth
 		case providerErr.StatusCode == 429:
 			kind = model.ErrorRateLimited
 		case providerErr.StatusCode >= 500:
 			kind = model.ErrorUnavailable
+		case providerErr.ContextLimit():
+			kind, retryable = model.ErrorContextLimit, false
+		case providerErr.ContentPolicy():
+			kind, retryable = model.ErrorContentPolicy, false
 		}
 		return &model.Error{Kind: kind, Message: err.Error(), Retryable: retryable, StatusCode: providerErr.StatusCode, Cause: err}
 	}

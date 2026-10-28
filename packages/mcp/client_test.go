@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -117,14 +118,17 @@ func TestInitialize_PropagatesNotifyError(t *testing.T) {
 		ServiceName: "test",
 		URL:         "http://example.test",
 		HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-			var payload struct{ Method string }
+			var payload struct {
+				Method string
+				ID     json.RawMessage `json:"id"`
+			}
 			_ = json.NewDecoder(r.Body).Decode(&payload)
 			callCount++
 			switch payload.Method {
 			case "initialize":
 				return httpResp(http.StatusOK,
 					map[string]string{"Content-Type": "application/json", "Mcp-Session-Id": "s1"},
-					`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`), nil
+					fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`, payload.ID)), nil
 			case "notifications/initialized":
 				return httpResp(http.StatusInternalServerError, nil, "internal error"), nil
 			default:
@@ -150,12 +154,16 @@ func TestClientAppliesCustomHeaders(t *testing.T) {
 		Token:       "token",
 		Headers:     map[string]string{"x-service-id": "svc-1"},
 		HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			var payload struct {
+				ID json.RawMessage `json:"id"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&payload)
 			gotAuth = r.Header.Get("Authorization")
 			gotServiceID = r.Header.Get("x-service-id")
-			return httpResp(http.StatusOK, map[string]string{"Content-Type": "application/json"}, `{"jsonrpc":"2.0","id":1,"result":{}}`), nil
+			return httpResp(http.StatusOK, map[string]string{"Content-Type": "application/json"}, fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{}}`, payload.ID)), nil
 		})},
 	}
-	_, _, err := c.rpcWithID(context.Background(), Session{}, 1, "initialize", map[string]any{})
+	_, _, err := c.rpc(context.Background(), Session{}, "initialize", map[string]any{})
 	if err != nil {
 		t.Fatalf("rpcWithID() error = %v", err)
 	}
@@ -168,17 +176,18 @@ func TestListToolsFollowsCursor(t *testing.T) {
 	calls := 0
 	c := &Client{ServiceName: "test", URL: "http://example.test", HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		var payload struct {
-			Params map[string]any `json:"params"`
+			Params map[string]any  `json:"params"`
+			ID     json.RawMessage `json:"id"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&payload)
 		calls++
 		if calls == 1 {
-			return httpResp(200, map[string]string{"Content-Type": "application/json"}, `{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"one","inputSchema":{"type":"object"}}],"nextCursor":"next"}}`), nil
+			return httpResp(200, map[string]string{"Content-Type": "application/json"}, fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"one","inputSchema":{"type":"object"}}],"nextCursor":"next"}}`, payload.ID)), nil
 		}
 		if payload.Params["cursor"] != "next" {
 			t.Fatalf("params=%v", payload.Params)
 		}
-		return httpResp(200, map[string]string{"Content-Type": "application/json"}, `{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"two","inputSchema":{"type":"object"}}]}}`), nil
+		return httpResp(200, map[string]string{"Content-Type": "application/json"}, fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"two","inputSchema":{"type":"object"}}]}}`, payload.ID)), nil
 	})}}
 	tools, err := c.ListTools(context.Background(), Session{ID: "s1", Initialized: true})
 	if err != nil || len(tools) != 2 || tools[1].Name != "two" {
