@@ -35,52 +35,13 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, resolut
 		return err
 	}
 	defer unlock()
-	events, err := r.deps.Transcript.Load(ctx, sessionID, 0)
+	state, err := (ApprovalAuthority{Transcript: r.deps.Transcript}).loadApprovalState(ctx, sessionID, resolution)
 	if err != nil {
 		return err
 	}
-	var call *tool.Call
-	var requested approvalRequestMetadata
-	var resolved, completed bool
-	var resolvedApproved bool
-	for index := range events {
-		event := events[index]
-		if event.TurnID != resolution.TurnID || event.ToolCall == nil || event.ToolCall.ID != resolution.ToolCallID {
-			continue
-		}
-		switch event.Type {
-		case transcript.ApprovalRequested:
-			copyCall := *event.ToolCall
-			call = &copyCall
-			if len(event.Metadata) > 0 {
-				if err := json.Unmarshal(event.Metadata, &requested); err != nil {
-					return err
-				}
-			}
-		case transcript.ApprovalResolved:
-			var metadata struct {
-				Approved bool `json:"approved"`
-			}
-			if json.Unmarshal(event.Metadata, &metadata) == nil {
-				resolvedApproved = metadata.Approved
-			}
-			resolved = true
-		case transcript.ToolCallCompleted, transcript.ToolCallFailed:
-			completed = true
-		}
-	}
-
-	if call == nil {
-		return fmt.Errorf("pending approval was not found")
-	}
-	if call.Scope.UserID != resolution.UserID {
-		return fmt.Errorf("only the requesting user may resolve this approval")
-	}
-	if (call.Scope.SessionID != "" && call.Scope.SessionID != sessionID) || (call.Scope.TurnID != "" && call.Scope.TurnID != resolution.TurnID) {
-		return fmt.Errorf("approval scope does not match its durable turn")
-	}
-	if resolved {
-		if completed && resolvedApproved == resolution.Approved {
+	call, requested := state.call, state.requested
+	if state.resolved {
+		if state.completed && state.resolvedApproved == resolution.Approved {
 			return nil
 		}
 		return fmt.Errorf("approval was resolved but its tool result is incomplete or differs")

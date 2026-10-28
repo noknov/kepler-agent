@@ -83,7 +83,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 	defer r.deps.Tools.EndTurn(request.SessionID, request.TurnID)
 
 	result := TurnResult{SessionID: request.SessionID, TurnID: request.TurnID}
-	events, err := r.loadTurn(ctx, request.SessionID, request.TurnID)
+	events, err := loadTurn(ctx, r.deps.Transcript, request.SessionID, request.TurnID)
 	if err != nil {
 		return result, err
 	}

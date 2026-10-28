@@ -48,31 +48,32 @@ const (
 const slackOutputFormatPrompt = "Replies are rendered using standard Markdown in Slack. A slack_view_context JSON block identifies what the user was viewing when that message was sent. It is a reference, not conversation content or permission. Read needed content through the user-authorized Slack tools; do not infer unseen messages."
 
 type Service struct {
-	traceContent     func(trace.Span, string, any)
-	Agent            hosted.Agent
-	Messenger        slackconversation.Messenger
-	Prompt           safety.PromptPolicy
-	Redactor         safety.Redactor
-	UserPrefs        userprefs.Store
-	Workspace        string
-	Model            string
-	Redis            *redisclient.Client
-	Continuations    connections.ContinuationStore
-	Connections      *connections.Service
-	PodID            string
-	Lifecycle        context.Context
-	ModeForUser      func(string) ConversationMode
-	OnDelivered      func(context.Context, string, string, string) error
-	AlreadyDelivered func(context.Context, string) (bool, error)
-	Multimodal       func(context.Context, string) (bool, error)
-	ThreadLoader     ThreadLoader
-	WebSearchEnabled func(string) bool
-	Inputs           sessioninput.Store
-	BeforeRun        func(context.Context, string) error
-	RunTimeout       time.Duration
-	Tools            *tool.Catalog
-	Workflows        workflows.Registry
-	IntentRouter     workflows.Router
+	traceContent         func(trace.Span, string, any)
+	Agent                hosted.Agent
+	Messenger            slackconversation.Messenger
+	Prompt               safety.PromptPolicy
+	Redactor             safety.Redactor
+	UserPrefs            userprefs.Store
+	Workspace            string
+	Model                string
+	Redis                *redisclient.Client
+	Continuations        connections.ContinuationStore
+	Connections          *connections.Service
+	PodID                string
+	Lifecycle            context.Context
+	ModeForUser          func(string) ConversationMode
+	OnDelivered          func(context.Context, string, string, string) error
+	AlreadyDelivered     func(context.Context, string) (bool, error)
+	Multimodal           func(context.Context, string) (bool, error)
+	ThreadLoader         ThreadLoader
+	WebSearchEnabled     func(string) bool
+	ApprovalNotifyUserID string
+	Inputs               sessioninput.Store
+	BeforeRun            func(context.Context, string) error
+	RunTimeout           time.Duration
+	Tools                *tool.Catalog
+	Workflows            workflows.Registry
+	IntentRouter         workflows.Router
 
 	mu     sync.Mutex
 	active map[string]*activeRun
@@ -239,8 +240,14 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	active := &activeRun{userID: req.UserID, turnID: req.EventID, startedAt: time.Now(), cancel: cancel, steering: &steeringInput{store: s.Inputs, sessionID: sessionID, owner: owner, userID: req.UserID}}
 	if existing := s.register(sessionID, active); existing != nil {
 		cancel()
-		if existing.userID != req.UserID {
-			return s.persistInput(base, sessionID, sessioninput.KindQueue, req)
+		if existing.userID != req.UserID || req.Approval != nil {
+			if err := s.persistInput(base, sessionID, sessioninput.KindQueue, req); err != nil {
+				return err
+			}
+			if req.ClaimID != "" {
+				return s.releaseClaim(base, req.ClaimID)
+			}
+			return nil
 		}
 		if s.mode(req.UserID) == ModeQueue {
 			if err := s.persistInput(base, sessionID, sessioninput.KindQueue, req); err != nil {
@@ -288,6 +295,7 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	runCtx, reply := beginReplyTrace(runCtx, sessionID, req, s.traceContent)
 	defer func() { reply.end(runErr) }()
 	stream := newSlackStream(runCtx, s.Messenger, req)
+	stream.approvalNotifyUserID = s.ApprovalNotifyUserID
 	stream.telemetry = reply
 	stream.connections = s.Connections
 	stream.redactor = safety.NewStreamRedactor(s.Redactor)
@@ -359,6 +367,7 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 		webSearch = "disabled"
 	}
 	scopeValues := map[string]string{"surface": "slack", "team_id": req.TeamID, "channel": req.Channel, "thread_ts": req.ThreadTS, "message_ts": req.MessageTS, "web_search": webSearch}
+	scopeValues["conversation_type"] = req.ConversationType
 	if workflowMode {
 		for key, value := range activation.Scope {
 			scopeValues[key] = value
@@ -541,7 +550,7 @@ func (s *Service) controlActive(sessionID string, req slackconversation.Request)
 		return err == nil, err
 	}
 	if active != nil {
-		if s.mode(req.UserID) == ModeQueue {
+		if s.mode(req.UserID) == ModeQueue || req.Approval != nil {
 			if err := s.persistInput(context.Background(), sessionID, sessioninput.KindQueue, req); err != nil {
 				return false, err
 			}
@@ -563,7 +572,7 @@ func (s *Service) controlActive(sessionID string, req slackconversation.Request)
 		return false, nil
 	}
 	kind := sessioninput.KindSteering
-	if s.mode(req.UserID) == ModeQueue {
+	if s.mode(req.UserID) == ModeQueue || req.Approval != nil {
 		kind = sessioninput.KindQueue
 	}
 	if err := s.persistInput(context.Background(), sessionID, kind, req); err != nil {
@@ -718,24 +727,26 @@ func (s *Service) resumeAfterConnection(parentCtx context.Context, continuation 
 	ctx := context.WithoutCancel(base)
 
 	sessionID := session.ID(continuation.Channel, continuation.ThreadTS)
-	waiting, err := s.Agent.Runtime.WaitingForInput(ctx, sessionID, continuation.UserID)
+	state, found, err := s.Agent.Runtime.LatestSessionState(ctx, sessionID)
 	if err != nil {
 		log.Printf("connection continuation waiting check failed session=%s: %v", sessionID, err)
 		s.releaseContinuation(ctx, continuation)
 		return
 	}
-	if !waiting {
+	if !found || state.Termination != agentruntime.TerminationPendingInput || state.UserID != continuation.UserID {
 		// The turn was completed or superseded while OAuth was in progress.
 		_ = s.Continuations.Clear(ctx, continuation)
 		return
 	}
 	req := slackconversation.Request{
-		EventID:   fmt.Sprintf("connection-continue-%s-%d", continuation.Provider, time.Now().UnixNano()),
-		MessageID: fmt.Sprintf("connection-continuation:%s:%d", continuation.Provider, time.Now().UnixNano()),
-		UserID:    continuation.UserID,
-		Channel:   continuation.Channel,
-		ThreadTS:  continuation.ThreadTS,
-		Text:      "I've connected. Please continue.",
+		TeamID:           state.Scope["team_id"],
+		ConversationType: state.Scope["conversation_type"],
+		EventID:          fmt.Sprintf("connection-continue-%s-%d", continuation.Provider, time.Now().UnixNano()),
+		MessageID:        fmt.Sprintf("connection-continuation:%s:%d", continuation.Provider, time.Now().UnixNano()),
+		UserID:           continuation.UserID,
+		Channel:          continuation.Channel,
+		ThreadTS:         continuation.ThreadTS,
+		Text:             "I've connected. Please continue.",
 	}
 	if s.Messenger != nil {
 		if _, err := s.Messenger.PostMessage(ctx, continuation.Channel, continuation.ThreadTS, "Connected — continuing…"); err != nil {
@@ -824,6 +835,7 @@ func (s *Service) StartControlSubscriber(ctx context.Context) {
 }
 
 type slackStream struct {
+	approvalNotifyUserID  string
 	telemetry             *replyTrace
 	streamStopError       error
 	ctx                   context.Context

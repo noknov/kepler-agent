@@ -88,3 +88,24 @@ func TestDMsAndChannelMentionsTrigger(t *testing.T) {
 		})
 	}
 }
+
+func TestRequestPreservesSlackConversationType(t *testing.T) {
+	for _, tc := range []struct{ eventType, channel, kind, want string }{
+		{"app_mention", "C1", "", "channel"},
+		{"app_mention", "G1", "group", "group"},
+		{"app_mention", "G1", "mpim", "mpim"},
+		{"message", "D1", "im", "im"},
+		{"message", "D1", "", ""},
+	} {
+		conv := &triggerConversation{}
+		cfg := config.Config{}
+		cfg.Slack.BotUserID = "BOT"
+		h := Handler{Cfg: cfg, Conv: conv}
+		if err := h.Handle(t.Context(), "event", slack.Event{Type: tc.eventType, Channel: tc.channel, ChannelType: tc.kind, User: "requester", Text: "<@BOT> approve", TS: "2.0", ThreadTS: "1.0"}); err != nil {
+			t.Fatal(err)
+		}
+		if len(conv.requests) != 1 || conv.requests[0].ConversationType != tc.want {
+			t.Fatalf("%+v produced %+v", tc, conv.requests)
+		}
+	}
+}

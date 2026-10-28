@@ -167,10 +167,11 @@ type GCPConfig struct {
 }
 
 type GitHubConfig struct {
-	Token        string
-	APIBaseURL   string
-	DefaultOwner string
-	DefaultRepo  string
+	Token                string
+	ApprovalNotifyUserID string
+	APIBaseURL           string
+	DefaultOwner         string
+	DefaultRepo          string
 }
 
 type K8sConfig struct {
@@ -476,10 +477,11 @@ func loadIntegrations() IntegrationConfig {
 			Token: os.Getenv("YOUTRACK_TOKEN"),
 		},
 		GitHub: GitHubConfig{
-			Token:        os.Getenv("GITHUB_TOKEN"),
-			APIBaseURL:   trimRightSlash(env("GITHUB_API_BASE_URL", "https://api.github.com")),
-			DefaultOwner: os.Getenv("GITHUB_DEFAULT_OWNER"),
-			DefaultRepo:  os.Getenv("GITHUB_DEFAULT_REPO"),
+			Token:                os.Getenv("GITHUB_TOKEN"),
+			ApprovalNotifyUserID: strings.TrimSpace(os.Getenv("GITHUB_APPROVAL_NOTIFY_USER_ID")),
+			APIBaseURL:           trimRightSlash(env("GITHUB_API_BASE_URL", "https://api.github.com")),
+			DefaultOwner:         os.Getenv("GITHUB_DEFAULT_OWNER"),
+			DefaultRepo:          os.Getenv("GITHUB_DEFAULT_REPO"),
 		},
 		Luckin: LuckinConfig{
 			MCPURL:   trimRightSlash(env("LUCKIN_MCP_URL", "https://gwmcp.lkcoffee.com/order/user/mcp")),
@@ -572,6 +574,9 @@ func validateForProfile(cfg Config, profile RuntimeProfile) (Config, error) {
 		return cfg, fmt.Errorf("agent explore limits must be positive; optional budgets must be non-negative and batch timeout cannot be shorter than worker timeout")
 	}
 	seenWriteTools := make(map[string]bool, len(cfg.Tools.AllowedWriteTools))
+	if cfg.Integrations.GitHub.ApprovalNotifyUserID != "" && cfg.Integrations.GitHub.Token == "" {
+		return cfg, fmt.Errorf("GITHUB_APPROVAL_NOTIFY_USER_ID requires GITHUB_TOKEN")
+	}
 	for _, name := range cfg.Tools.AllowedWriteTools {
 		if !validToolName(name) {
 			return cfg, fmt.Errorf("AGENT_ALLOWED_WRITE_TOOLS contains invalid tool name %q", name)

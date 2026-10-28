@@ -145,7 +145,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 	}, agentruntime.Dependencies{
 		ModelGovernor: governor,
 		TraceContent:  telemetry.ContentRecorder(),
-		Model:         client, Tools: catalog, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}, Transcript: PGTranscript{Pool: deps.Postgres}, Events: deps.Events, Lease: deps.Lease,
+		Model:         client, Tools: catalog, Policy: hostedPolicy(cfg), Transcript: PGTranscript{Pool: deps.Postgres}, Events: deps.Events, Lease: deps.Lease,
 		Compactor: agentruntime.ModelCompactor{NativeClient: nativeCompact, NativeModel: cfg.LLM.Model, Governor: governor, Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer}, Artifacts: artifacts,
 		Environment:             environment.Config{WorkspaceRoots: cfg.Security.WorkspaceRoots},
 		ConnectionContinuations: deps.ConnectionContinuations,
@@ -163,7 +163,7 @@ func NewProfile(cfg config.Config, deps ProfileDependencies) (Profile, error) {
 		Deps: agentruntime.Dependencies{
 			ModelGovernor: governor,
 			TraceContent:  telemetry.ContentRecorder(),
-			Model:         exploreClient, Policy: Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}, Lease: deps.Lease,
+			Model:         exploreClient, Policy: hostedPolicy(cfg), Lease: deps.Lease,
 			Transcript: PGTranscript{Pool: deps.Postgres}, Events: deps.Events,
 			Compactor: agentruntime.ModelCompactor{NativeClient: nativeCompact, NativeModel: cfg.LLM.Model, Governor: governor, Client: compactClient, Model: compactModel, MaxInputTokens: cfg.Sessions.MaxContextTokens - cfg.Sessions.AutocompactBuffer},
 			Artifacts: artifacts, Environment: environment.Config{WorkspaceRoots: cfg.Security.WorkspaceRoots},
@@ -253,6 +253,10 @@ func operatorAllowlist(names []string) map[string]bool {
 		}
 	}
 	return allowed
+}
+
+func hostedPolicy(cfg config.Config) Policy {
+	return Policy{Allowed: operatorAllowlist(cfg.Tools.AllowedWriteTools)}
 }
 
 func buildModelClient(provider, protocol, baseURL, apiKey string, timeout time.Duration, anthropicFlavor string, credentialFile string) (*providers.Client, error) {

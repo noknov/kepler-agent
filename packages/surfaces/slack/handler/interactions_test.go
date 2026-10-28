@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/session"
 	"io"
 	"net/http"
 	"strings"
@@ -19,6 +23,15 @@ import (
 )
 
 type dedupeInputStore struct{ items []sessioninput.Item }
+
+type approvalAuthorityFunc func(context.Context, string, agentruntime.ApprovalResolution) (tool.Scope, error)
+
+func (f approvalAuthorityFunc) ApprovalScope(ctx context.Context, id string, r agentruntime.ApprovalResolution) (tool.Scope, error) {
+	return f(ctx, id, r)
+}
+func sameUserApprovalAuthority(context.Context, string, agentruntime.ApprovalResolution) (tool.Scope, error) {
+	return tool.Scope{UserID: "U1", Values: map[string]string{"channel": "D1", "thread_ts": "123.456"}}, nil
+}
 
 func (s *dedupeInputStore) Enqueue(_ context.Context, item sessioninput.Item) error {
 	for _, existing := range s.items {
@@ -111,11 +124,11 @@ func TestAssetModalShowsImmediateActivationAndActiveControls(t *testing.T) {
 
 func TestDuplicateSlackApprovalUsesOneStableQueueItem(t *testing.T) {
 	inputs := &dedupeInputStore{}
-	h := &Handler{Inputs: inputs}
+	h := &Handler{Inputs: inputs, Approvals: approvalAuthorityFunc(sameUserApprovalAuthority)}
 	interaction := slackgateway.Interaction{
 		UserID: "U1", Channel: "D1", ThreadTS: "123.456",
 	}
-	payload := `{"turn_id":"turn-1","tool_call_id":"call-1"}`
+	payload := fmt.Sprintf(`{"session_id":%q,"turn_id":"turn-1","tool_call_id":"call-1"}`, session.ID("D1", "123.456"))
 	h.resolveApproval(context.Background(), interaction, "agent_approval_approve", payload)
 	h.resolveApproval(context.Background(), interaction, "agent_approval_approve", payload)
 	if len(inputs.items) != 1 {
@@ -145,11 +158,12 @@ func TestApprovalEnqueueFailureRestoresRetryableButtons(t *testing.T) {
 		}, nil
 	}))
 	h := &Handler{
-		Inputs: &failingInputStore{dedupeInputStore: &dedupeInputStore{}},
-		Slack:  slack,
+		Inputs:    &failingInputStore{dedupeInputStore: &dedupeInputStore{}},
+		Approvals: approvalAuthorityFunc(sameUserApprovalAuthority),
+		Slack:     slack,
 	}
 	interaction := slackgateway.Interaction{UserID: "U1", Channel: "D1", ThreadTS: "123.456", MessageTS: "123.457"}
-	payload := `{"turn_id":"turn-2","tool_call_id":"call-2"}`
+	payload := fmt.Sprintf(`{"session_id":%q,"turn_id":"turn-2","tool_call_id":"call-2"}`, session.ID("D1", "123.456"))
 	h.resolveApproval(context.Background(), interaction, "agent_approval_approve", payload)
 	if len(updates) != 2 {
 		t.Fatalf("chat.update calls = %d, want pending and retryable failure", len(updates))
@@ -167,6 +181,10 @@ func TestApprovalEnqueueFailureRestoresRetryableButtons(t *testing.T) {
 	}
 	for _, raw := range actions {
 		button := raw.(map[string]any)
+		visible, ok := button["visible_to_user_ids"].([]any)
+		if !ok || len(visible) != 1 || visible[0] != "U1" {
+			t.Fatalf("retry button lost approving principal: %v", button)
+		}
 		if button["value"] != payload {
 			t.Fatalf("retry button value = %q, want stable approval payload", button["value"])
 		}

@@ -77,6 +77,26 @@ Explicitly @mention the bot in the same thread to follow up on the original PR s
 message starts another conversation. CLI and Web do not install this Slack
 router. See [runtime and delegation](runtime.md) for scope propagation.
 
+### Approve a pull request
+
+`github-approve_pr` is an optional Slack-only external write. Configure the
+credential owner's Slack ID as `GITHUB_APPROVAL_NOTIFY_USER_ID` and explicitly
+allowlist `github-approve_pr` in `AGENT_ALLOWED_WRITE_TOOLS`. The worker uses its
+existing `GITHUB_TOKEN`; no extra Slack-user or PR-author allowlist is installed.
+Existing ingress access policy controls who can request work.
+
+An allowed user must @mention the agent in a shared channel thread. After
+inspecting the exact PR head and finding no obvious issues, the agent requests
+confirmation in that same thread and cc's the credential owner. Only the
+requesting user may confirm or cancel; cc is notification, not approval authority.
+All private DMs are denied, including the credential owner's DM.
+
+The write can only submit APPROVE. It cannot merge, comment or request changes.
+The tool verifies the PR is open and its head still matches the reviewed SHA.
+GitHub's own reviewer restrictions remain in force. Credential changes invalidate
+pending approval contracts. Unverifiable write receipts remain unknown and are
+not automatically replayed. No database migration is required.
+
 ## Delivery and recovery
 
 PostgreSQL inbox claims, leases, retries, and deterministic message identities

@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
 	"github.com/noknov/kepler-agent/packages/cloud"
 	"github.com/noknov/kepler-agent/packages/config"
 	"github.com/noknov/kepler-agent/packages/connections"
@@ -20,6 +21,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/infra/telemetry"
 	"github.com/noknov/kepler-agent/packages/memory"
 	"github.com/noknov/kepler-agent/packages/platform"
+	"github.com/noknov/kepler-agent/packages/profiles/hosted"
 	"github.com/noknov/kepler-agent/packages/safety"
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/events"
@@ -103,6 +105,8 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		s.webProxy = proxy
 	}
 	handler := &slackhandler.Handler{
+		Approvals: agentruntime.ApprovalAuthority{Transcript: hosted.PGTranscript{Pool: stores.PGPool}},
+		Access:    safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
 		Cfg:       cfg,
 		Slack:     slackClient,
 		Home:      s.home,

@@ -17,8 +17,8 @@ import (
 	"github.com/noknov/kepler-agent/packages/memory"
 )
 
-// Policy keeps the operator allowlist authoritative and requires the
-// requesting user to confirm every allowed write.
+// Policy keeps the operator allowlist authoritative and requires the requester
+// to confirm each write.
 type Policy struct{ Allowed map[string]bool }
 
 func (p Policy) Decide(_ context.Context, request tool.PolicyRequest) (tool.Decision, error) {
@@ -30,6 +30,9 @@ func (p Policy) Decide(_ context.Context, request tool.PolicyRequest) (tool.Deci
 			return tool.Decision{Type: tool.DecisionDeny, Reason: "write tool is not in the operator allowlist"}, nil
 		}
 		if effect == tool.EffectWorkspaceWrite || effect == tool.EffectExternalWrite || effect == tool.EffectPrivileged {
+			if request.Call.Name == "github-approve_pr" && request.Call.Scope.Values["conversation_type"] != "channel" && request.Call.Scope.Values["conversation_type"] != "group" {
+				return tool.Decision{Type: tool.DecisionDeny, Reason: "GitHub PR approval requires a shared channel thread"}, nil
+			}
 			return tool.Decision{Type: tool.DecisionRequireApproval, Reason: "this action changes data or an external service", Rule: "user_confirmation"}, nil
 		}
 	}

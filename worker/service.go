@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
+	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/appsupport"
 	"github.com/noknov/kepler-agent/packages/cloud"
@@ -284,6 +285,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	healthService := health.NewService(profile.Tools, cfg.Security.WorkspaceRoots)
 	healthService.Redis = stores.Redis
 	conversation := slackagent.New(profile.Agent, slackClient, profile.Prompt, profile.Redactor, stores.UserPrefs)
+	conversation.ApprovalNotifyUserID = cfg.Integrations.GitHub.ApprovalNotifyUserID
 	conversation.ThreadLoader = slackmessaging.ThreadLoader{Bot: slackClient}
 	conversation.Workflows = workflows.NewRegistry(codereview.Definition{})
 	conversation.IntentRouter = workflows.ModelRouter{
@@ -337,6 +339,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 
 	access := safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels)
 	handler := &slackhandler.Handler{
+		Approvals: agentruntime.ApprovalAuthority{Transcript: hosted.PGTranscript{Pool: stores.PGPool}},
 		Cfg:       cfg,
 		Slack:     slackClient,
 		Access:    access,

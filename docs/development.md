@@ -104,6 +104,10 @@ changes the operation without changing its schema. Contract changes require a
 new approval; a removed or disabled tool can always be declined. Legacy approvals
 without a descriptor retain active-tool lookup and cannot restore deferred tools.
 
+Surfaces may query `ApprovalScope` before admitting a control. It authenticates
+against the persisted requesting user and immutable call. The runtime repeats
+that validation under the session lease before executing the write.
+
 Session bootstrap records `SessionStarted` as intent and atomically commits
 imported history with `SessionInitialized` through `transcript.BatchStore`.
 Embeddings that supply nonempty external history must implement that atomic
