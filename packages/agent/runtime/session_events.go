@@ -63,11 +63,11 @@ func (s *sessionEvents) append(event transcript.Event) {
 	}
 }
 
-func (r *Runtime) loadTurn(ctx context.Context, sessionID, turnID string) ([]transcript.Event, error) {
-	if loader, ok := r.deps.Transcript.(transcript.TurnLoader); ok {
+func loadTurn(ctx context.Context, store transcript.Store, sessionID, turnID string) ([]transcript.Event, error) {
+	if loader, ok := store.(transcript.TurnLoader); ok {
 		return loader.LoadTurn(ctx, sessionID, turnID)
 	}
-	return r.deps.Transcript.Load(ctx, sessionID, 0)
+	return store.Load(ctx, sessionID, 0)
 }
 
 func (r *Runtime) setEventCache(sessionID string, events []transcript.Event) {

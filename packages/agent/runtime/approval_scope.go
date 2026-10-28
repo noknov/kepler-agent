@@ -40,7 +40,7 @@ func (a ApprovalAuthority) loadApprovalState(ctx context.Context, sessionID stri
 	if sessionID == "" || resolution.TurnID == "" || resolution.ToolCallID == "" || resolution.UserID == "" {
 		return state, fmt.Errorf("approval session, turn, tool call, and user are required")
 	}
-	events, err := a.Transcript.Load(ctx, sessionID, 0)
+	events, err := loadTurn(ctx, a.Transcript, sessionID, resolution.TurnID)
 	if err != nil {
 		return state, err
 	}
