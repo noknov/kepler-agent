@@ -134,7 +134,9 @@ func (c Client) approvalJSON(ctx context.Context, method, path string, input, ou
 		req.Header.Set("Content-Type", "application/json")
 	}
 	write := method == http.MethodPost
-	resp, err := c.httpClient().Do(req)
+	client := *c.httpClient()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Do(req)
 	if err != nil {
 		return write, fmt.Errorf("GitHub approval request failed")
 	}

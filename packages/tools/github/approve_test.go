@@ -92,3 +92,21 @@ func TestApprovalContractBindsCredential(t *testing.T) {
 		t.Fatal("credential rotation did not invalidate approval")
 	}
 }
+
+func TestApprovalWriteDoesNotFollowRedirects(t *testing.T) {
+	requests := 0
+	client := testClient("example", "repo", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		if requests == 1 {
+			out := response(http.StatusTemporaryRedirect, `{}`)
+			out.Header.Set("Location", "/redirected-review")
+			return out, nil
+		}
+		return response(200, `{}`), nil
+	}))
+	var output map[string]any
+	_, err := client.approvalJSON(context.Background(), http.MethodPost, "/repos/example/repo/pulls/1/reviews", map[string]string{"event": "APPROVE"}, &output)
+	if err == nil || requests != 1 {
+		t.Fatalf("approval write followed a redirect: requests=%d err=%v", requests, err)
+	}
+}
