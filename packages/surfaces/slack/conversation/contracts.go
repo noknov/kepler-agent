@@ -26,19 +26,20 @@ func (v ViewingContext) ValidFor(team string) bool {
 }
 
 type Request struct {
-	ViewingContext *ViewingContext `json:"viewing_context,omitempty"`
-	TeamID         string
-	EventID        string
-	UserID         string
-	Channel        string
-	ThreadTS       string
-	MessageTS      string
-	Text           string
-	Locale         string
-	Content        []model.Content
-	MessageID      string           `json:"message_id,omitempty"`
-	ClaimID        string           `json:"-"`
-	Approval       *ApprovalRequest `json:"approval,omitempty"`
+	ViewingContext   *ViewingContext `json:"viewing_context,omitempty"`
+	TeamID           string
+	EventID          string
+	UserID           string
+	Channel          string
+	ConversationType string
+	ThreadTS         string
+	MessageTS        string
+	Text             string
+	Locale           string
+	Content          []model.Content
+	MessageID        string           `json:"message_id,omitempty"`
+	ClaimID          string           `json:"-"`
+	Approval         *ApprovalRequest `json:"approval,omitempty"`
 }
 
 func (r Request) Message() model.Message {

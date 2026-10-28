@@ -29,7 +29,7 @@ func (h *Handler) resolveApproval(ctx context.Context, interaction slackgateway.
 		TurnID     string `json:"turn_id"`
 		ToolCallID string `json:"tool_call_id"`
 	}
-	if err := json.Unmarshal([]byte(value), &token); err != nil || token.TurnID == "" || token.ToolCallID == "" {
+	if err := json.Unmarshal([]byte(value), &token); err != nil || token.SessionID == "" || token.TurnID == "" || token.ToolCallID == "" {
 		log.Printf("invalid Slack approval control: %v", err)
 		return
 	}
@@ -39,30 +39,28 @@ func (h *Handler) resolveApproval(ctx context.Context, interaction slackgateway.
 		verb = "approve"
 	}
 	sessionID := token.SessionID
-	if sessionID == "" {
-		sessionID = session.ID(interaction.Channel, interaction.ThreadTS)
-	}
 	scope, err := h.Approvals.ApprovalScope(ctx, sessionID, agentruntime.ApprovalResolution{
 		TurnID: token.TurnID, ToolCallID: token.ToolCallID, Approved: approved, UserID: interaction.UserID,
 	})
 	if err != nil || scope.UserID == "" {
 		return
 	}
-	if team := scope.Values["team_id"]; team != "" && team != interaction.TeamID {
+	if scope.Values["team_id"] != interaction.TeamID {
 		return
 	}
 	channel, thread := scope.Values["channel"], scope.Values["thread_ts"]
-	if channel == "" || thread == "" || session.ID(channel, thread) != sessionID || !h.Access.AllowsUser(scope.UserID) || (!IsDMChannel(channel) && !h.Access.AllowsChannel(channel)) {
+	if channel == "" || thread == "" || session.ID(channel, thread) != sessionID || (!IsDMChannel(channel) && !h.Access.AllowsChannel(channel)) {
 		return
 	}
 	if interaction.Channel != channel || interaction.ThreadTS != thread {
 		return
 	}
 	request := slackconversation.Request{
-		TeamID:    interaction.TeamID,
-		EventID:   "approval-" + token.TurnID + "-" + token.ToolCallID + "-" + verb,
-		MessageID: "approval-continuation:" + token.TurnID + ":" + token.ToolCallID,
-		UserID:    scope.UserID, Channel: channel, ThreadTS: thread,
+		TeamID:           interaction.TeamID,
+		ConversationType: scope.Values["conversation_type"],
+		EventID:          "approval-" + token.TurnID + "-" + token.ToolCallID + "-" + verb,
+		MessageID:        "approval-continuation:" + token.TurnID + ":" + token.ToolCallID,
+		UserID:           scope.UserID, Channel: channel, ThreadTS: thread,
 		Text:     "The requesting user " + verb + "d the pending action. Continue from the recorded tool result.",
 		Approval: &slackconversation.ApprovalRequest{TurnID: token.TurnID, ToolCallID: token.ToolCallID, Approved: approved, MessageTS: interaction.MessageTS},
 	}

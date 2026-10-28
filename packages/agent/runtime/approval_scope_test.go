@@ -57,6 +57,9 @@ func TestApprovalScopeRequiresRequesterAndPreservesExecutionScope(t *testing.T) 
 			if approved {
 				expected = 1
 			}
+			if _, err := (ApprovalAuthority{Transcript: store}).ApprovalScope(ctx, "session", resolution); err == nil {
+				t.Fatal("completed approval admitted another control")
+			}
 			if calls != expected {
 				t.Fatalf("writes=%d want %d", calls, expected)
 			}

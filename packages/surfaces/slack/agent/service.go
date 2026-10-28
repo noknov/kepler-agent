@@ -367,10 +367,7 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 		webSearch = "disabled"
 	}
 	scopeValues := map[string]string{"surface": "slack", "team_id": req.TeamID, "channel": req.Channel, "thread_ts": req.ThreadTS, "message_ts": req.MessageTS, "web_search": webSearch}
-	scopeValues["conversation_type"] = "channel"
-	if strings.HasPrefix(req.Channel, "D") {
-		scopeValues["conversation_type"] = "im"
-	}
+	scopeValues["conversation_type"] = req.ConversationType
 	if workflowMode {
 		for key, value := range activation.Scope {
 			scopeValues[key] = value

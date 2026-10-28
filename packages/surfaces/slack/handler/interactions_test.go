@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
 	"github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/session"
 	"io"
 	"net/http"
 	"strings"
@@ -126,7 +128,7 @@ func TestDuplicateSlackApprovalUsesOneStableQueueItem(t *testing.T) {
 	interaction := slackgateway.Interaction{
 		UserID: "U1", Channel: "D1", ThreadTS: "123.456",
 	}
-	payload := `{"turn_id":"turn-1","tool_call_id":"call-1"}`
+	payload := fmt.Sprintf(`{"session_id":%q,"turn_id":"turn-1","tool_call_id":"call-1"}`, session.ID("D1", "123.456"))
 	h.resolveApproval(context.Background(), interaction, "agent_approval_approve", payload)
 	h.resolveApproval(context.Background(), interaction, "agent_approval_approve", payload)
 	if len(inputs.items) != 1 {
@@ -161,7 +163,7 @@ func TestApprovalEnqueueFailureRestoresRetryableButtons(t *testing.T) {
 		Slack:     slack,
 	}
 	interaction := slackgateway.Interaction{UserID: "U1", Channel: "D1", ThreadTS: "123.456", MessageTS: "123.457"}
-	payload := `{"turn_id":"turn-2","tool_call_id":"call-2"}`
+	payload := fmt.Sprintf(`{"session_id":%q,"turn_id":"turn-2","tool_call_id":"call-2"}`, session.ID("D1", "123.456"))
 	h.resolveApproval(context.Background(), interaction, "agent_approval_approve", payload)
 	if len(updates) != 2 {
 		t.Fatalf("chat.update calls = %d, want pending and retryable failure", len(updates))

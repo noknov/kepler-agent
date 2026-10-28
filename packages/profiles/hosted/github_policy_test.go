@@ -24,7 +24,7 @@ func TestWorkflowDispatchUsesOperatorWriteAuthorization(t *testing.T) {
 
 func TestGitHubApprovalRequiresOperatorAllowlistAndSharedChannel(t *testing.T) {
 	for _, actor := range []string{"requester", "owner", "other-allowed-user"} {
-		for _, kind := range []string{"channel", "im", ""} {
+		for _, kind := range []string{"channel", "group", "im", "mpim", ""} {
 			for _, allowed := range []bool{false, true} {
 				cfg := config.Config{}
 				if allowed {
@@ -33,7 +33,7 @@ func TestGitHubApprovalRequiresOperatorAllowlistAndSharedChannel(t *testing.T) {
 				request := tool.PolicyRequest{Descriptor: (github.ApprovePRTool{}).Descriptor(), Call: tool.Call{Name: "github-approve_pr", Scope: tool.Scope{UserID: actor, Values: map[string]string{"conversation_type": kind}}}}
 				decision, err := hostedPolicy(cfg).Decide(t.Context(), request)
 				want := tool.DecisionDeny
-				if allowed && kind == "channel" {
+				if allowed && (kind == "channel" || kind == "group") {
 					want = tool.DecisionRequireApproval
 				}
 				if err != nil || decision.Type != want {

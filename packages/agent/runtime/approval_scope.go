@@ -21,11 +21,14 @@ type ApprovalAuthority struct{ Transcript transcript.Store }
 
 // ApprovalScope authenticates a control against its durable request before an
 // adapter admits it to a queue. ResolveApproval repeats this check under lease.
-// The returned scope belongs to the requester, and is also the only authorized confirming user.
+// The returned scope belongs to the requester, the only authorized confirming user.
 func (a ApprovalAuthority) ApprovalScope(ctx context.Context, sessionID string, resolution ApprovalResolution) (tool.Scope, error) {
 	state, err := a.loadApprovalState(ctx, sessionID, resolution)
 	if err != nil {
 		return tool.Scope{}, err
+	}
+	if state.resolved {
+		return tool.Scope{}, fmt.Errorf("approval has already been resolved")
 	}
 	scope := state.call.Scope
 	scope.Values = maps.Clone(scope.Values)

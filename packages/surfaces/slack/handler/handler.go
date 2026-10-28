@@ -547,17 +547,23 @@ func (h *Handler) handlePrompt(ctx context.Context, eventID string, ev slack.Eve
 	if isDM {
 		viewing = selectViewingContext(ev.TeamID, ev.AppContext)
 	}
+	conversationType := ev.ChannelType
+	if conversationType == "" && ev.Type == "app_mention" {
+		// Slack emits app_mention for channel messages, not direct messages.
+		conversationType = "channel"
+	}
 	accepted, err := h.Conv.HandleMention(ctx, slackconversation.Request{
-		TeamID:         ev.TeamID,
-		EventID:        eventID,
-		UserID:         ev.User,
-		Channel:        ev.Channel,
-		ThreadTS:       ev.ConversationThreadTS(),
-		MessageTS:      ev.TS,
-		Text:           text,
-		Locale:         h.Cfg.Slack.DefaultLocale,
-		Content:        canonicalContent(parts),
-		ViewingContext: viewing,
+		TeamID:           ev.TeamID,
+		ConversationType: conversationType,
+		EventID:          eventID,
+		UserID:           ev.User,
+		Channel:          ev.Channel,
+		ThreadTS:         ev.ConversationThreadTS(),
+		MessageTS:        ev.TS,
+		Text:             text,
+		Locale:           h.Cfg.Slack.DefaultLocale,
+		Content:          canonicalContent(parts),
+		ViewingContext:   viewing,
 	})
 	if err != nil {
 		return err

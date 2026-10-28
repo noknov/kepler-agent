@@ -39,7 +39,7 @@ func TestIntegrationGatewayAdmitsOnlyRequesterApprovalInOriginalThread(t *testin
 	}()
 	store := hosted.PGTranscript{Pool: service.stores.PGPool}
 	for _, actor := range []string{"requester", "revoked"} {
-		call := tool.Call{ID: actor, Name: "github-approve_pr", Scope: tool.Scope{UserID: actor, SessionID: sessionID, TurnID: "turn", Values: map[string]string{"team_id": "team", "channel": "C-shared", "thread_ts": thread}}}
+		call := tool.Call{ID: actor, Name: "github-approve_pr", Scope: tool.Scope{UserID: actor, SessionID: sessionID, TurnID: "turn", Values: map[string]string{"conversation_type": "channel", "team_id": "team", "channel": "C-shared", "thread_ts": thread}}}
 		if _, err := store.Append(ctx, transcript.Event{SessionID: sessionID, TurnID: "turn", Type: transcript.ApprovalRequested, ToolCall: &call}); err != nil {
 			t.Fatal(err)
 		}
@@ -66,7 +66,7 @@ func TestIntegrationGatewayAdmitsOnlyRequesterApprovalInOriginalThread(t *testin
 	if err := json.Unmarshal(pending[0].Payload, &req); err != nil {
 		t.Fatal(err)
 	}
-	if req.UserID != "requester" || req.Channel != "C-shared" || req.ThreadTS != thread || req.Approval == nil || !req.Approval.Approved {
+	if req.ConversationType != "channel" || req.UserID != "requester" || req.Channel != "C-shared" || req.ThreadTS != thread || req.Approval == nil || !req.Approval.Approved {
 		t.Fatalf("lost requester or origin: %+v", req)
 	}
 }
