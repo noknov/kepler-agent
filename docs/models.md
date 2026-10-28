@@ -311,5 +311,5 @@ successfully. Length-limited, filtered/refused and canceled terminal receipts do
 not expose residual tool calls for execution, even if an argument prefix happens
 to be valid JSON. Text, terminal reason and usage remain available. This rule is
 shared by streaming and ordinary responses at the provider conversion boundary;
-individual wire callbacks do not authorize tool execution. A rejected final
-stream event is returned as an error with the completed usage receipt.
+individual wire callbacks do not authorize tool execution. Conversion failures and rejected final stream events return an error while
+retaining the provider's usage receipt, so retry accounting includes failed attempts.

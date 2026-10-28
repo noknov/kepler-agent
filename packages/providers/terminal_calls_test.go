@@ -74,18 +74,18 @@ func TestCompletedEventFailureIsReturnedWithUsage(t *testing.T) {
 func TestInvalidFinalToolBatchPublishesNoCompletedCalls(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"first","function":{"name":"write","arguments":"{}"}},{"index":1,"id":"second","function":{"name":"write","arguments":"{"}}]},"finish_reason":"tool_calls"}]}`+"\n\ndata: [DONE]\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"first","function":{"name":"write","arguments":"{}"}},{"index":1,"id":"second","function":{"name":"write","arguments":"{"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":4,"completion_tokens":9}}`+"\n\ndata: [DONE]\n\n")
 	}))
 	defer server.Close()
 	client := &Client{Wire: llm.NewOpenAICompatibleClient("test", server.URL, "test-token", 0)}
 	completed := 0
-	_, err := client.Generate(t.Context(), model.Request{Model: "test"}, func(event model.StreamEvent) error {
+	response, err := client.Generate(t.Context(), model.Request{Model: "test"}, func(event model.StreamEvent) error {
 		if event.Type == model.StreamToolCallDone {
 			completed++
 		}
 		return nil
 	})
-	if err == nil || completed != 0 {
-		t.Fatalf("invalid batch completed %d calls: %v", completed, err)
+	if err == nil || completed != 0 || response.Usage.OutputTokens != 9 {
+		t.Fatalf("invalid batch completed %d calls, usage=%+v: %v", completed, response.Usage, err)
 	}
 }

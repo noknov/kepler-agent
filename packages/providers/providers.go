@@ -238,7 +238,7 @@ func (c *Client) generate(ctx context.Context, request model.Request, sink model
 
 	message, err := fromWireMessage(response.Message)
 	if err != nil {
-		return model.Response{}, err
+		return model.Response{Usage: toUsage(response.Usage)}, err
 	}
 	message.Phase = response.Message.Phase
 	if state := c.continuation(response.Message, request.Model, "response", response.Usage); state != nil {
