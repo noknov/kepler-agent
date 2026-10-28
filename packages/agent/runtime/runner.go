@@ -267,6 +267,12 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 			return r.failTurn(ctx, result, err)
 		}
 		addUsage(&result.Usage, response.Usage)
+		if response.FinishReason == model.FinishCanceled {
+			return r.finishTurn(ctx, result, response.Message, TerminationCanceled, context.Canceled)
+		}
+		if response.FinishReason == model.FinishContent && response.Message.Text() == "" {
+			return r.failTurn(ctx, result, &model.Error{Kind: model.ErrorContentPolicy, Message: "model output was filtered or refused"})
+		}
 		if len(response.Message.Content) == 0 {
 			if response.FinishReason == model.FinishLength {
 				return r.finishTurn(ctx, result, response.Message, TerminationOutputLimit, nil)

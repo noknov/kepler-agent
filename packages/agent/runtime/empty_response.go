@@ -46,7 +46,7 @@ func (r *Runtime) recoverGenerateAfterContextLimit(ctx context.Context, request 
 }
 
 func (r *Runtime) retryEmptyResponse(ctx context.Context, request TurnRequest, system model.Message, response model.Response) (model.Response, error) {
-	for attempt := 0; len(response.Message.Content) == 0 && response.FinishReason != model.FinishLength && attempt < r.config.MaxEmptyResponseRetries; attempt++ {
+	for attempt := 0; len(response.Message.Content) == 0 && response.FinishReason == model.FinishStop && attempt < r.config.MaxEmptyResponseRetries; attempt++ {
 		metadata, _ := json.Marshal(map[string]any{"attempt": attempt + 1, "reason": "empty_response"})
 		if _, err := r.record(ctx, transcript.Event{
 			SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.ModelFailed,
