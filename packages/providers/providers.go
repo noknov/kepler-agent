@@ -148,7 +148,6 @@ func (c *Client) generate(ctx context.Context, request model.Request, sink model
 	var err error
 	var sinkMu sync.Mutex
 	var sinkErr error
-	var conversionErr error
 	var firstToken, presentedText, presentedCommentary bool
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
@@ -208,15 +207,7 @@ func (c *Client) generate(ctx context.Context, request model.Request, sink model
 				})
 			},
 			OnToolCallsStarted: markFirstToken,
-			OnToolCallComplete: func(call llm.ToolCall) {
-				markFirstToken()
-				canonical, convertErr := toToolCall(call)
-				if convertErr != nil {
-					conversionErr = convertErr
-					return
-				}
-				publish(model.StreamEvent{Type: model.StreamToolCallDone, ToolCall: &canonical})
-			},
+			OnToolCallComplete: func(llm.ToolCall) { markFirstToken() },
 			OnUsage: func(usage llm.Usage) {
 				canonical := toUsage(usage)
 				publish(model.StreamEvent{Type: model.StreamUsage, Usage: &canonical})
@@ -225,18 +216,30 @@ func (c *Client) generate(ctx context.Context, request model.Request, sink model
 	} else {
 		response, err = c.Wire.Chat(ctx, req)
 	}
-	if conversionErr != nil {
-		return model.Response{}, conversionErr
-	}
 	if sinkErr != nil {
 		return model.Response{}, sinkErr
 	}
 	if err != nil {
 		return model.Response{Usage: toUsage(response.Usage)}, toModelError(err)
 	}
+	reason := finishReason(response.FinishReason)
+	if reason == model.FinishError {
+		return model.Response{Usage: toUsage(response.Usage)}, &model.Error{
+			Kind:      model.ErrorTransient,
+			Message:   fmt.Sprintf("provider finished with error reason %q", response.FinishReason),
+			Retryable: true,
+		}
+	}
+	// Truncated, filtered or canceled output is not an instruction to execute
+	// residual calls, even when their argument prefix happens to be valid JSON.
+	if reason == model.FinishLength || reason == model.FinishContent || reason == model.FinishCanceled {
+		response.Message.ToolCalls = nil
+		response.Message.NativeItems = nil
+	}
+
 	message, err := fromWireMessage(response.Message)
 	if err != nil {
-		return model.Response{}, err
+		return model.Response{Usage: toUsage(response.Usage)}, err
 	}
 	message.Phase = response.Message.Phase
 	if state := c.continuation(response.Message, request.Model, "response", response.Usage); state != nil {
@@ -245,14 +248,12 @@ func (c *Client) generate(ctx context.Context, request model.Request, sink model
 	if len(message.ToolCalls()) > 0 {
 		message = toolCallStepMessage(message)
 	}
-	reason := finishReason(response.FinishReason)
-	if reason == model.FinishError {
-		return model.Response{}, &model.Error{
-			Kind:      model.ErrorTransient,
-			Message:   fmt.Sprintf("provider finished with error reason %q", response.FinishReason),
-			Retryable: true,
-		}
+	// Publish completion only after the whole message validates and its terminal
+	// receipt permits calls. Wire callbacks alone cannot establish this contract.
+	for _, call := range message.ToolCalls() {
+		publish(model.StreamEvent{Type: model.StreamToolCallDone, ToolCall: &call})
 	}
+
 	canonical := model.Response{Message: message, FinishReason: reason, Usage: toUsage(response.Usage), RawMetadata: response.Raw}
 	if !presentedCommentary && len(message.ToolCalls()) > 0 && response.Message.Content != "" {
 		publish(model.StreamEvent{Type: model.StreamCommentary, Text: response.Message.Content, Phase: "commentary"})
@@ -266,7 +267,7 @@ func (c *Client) generate(ctx context.Context, request model.Request, sink model
 		return model.Response{}, sinkErr
 	}
 	publish(model.StreamEvent{Type: model.StreamCompleted, ResponseID: canonical.ID, Usage: &canonical.Usage})
-	return canonical, nil
+	return canonical, sinkErr
 }
 
 // normalizeJSONSchema enforces the JSON Schema wire contract at the one
