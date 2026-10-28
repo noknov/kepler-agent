@@ -149,3 +149,34 @@ func TestChatGPTContinuationUsesAccountIdentityNotCredentialPath(t *testing.T) {
 		t.Fatal("shared client routing was mutated")
 	}
 }
+
+func TestIncompleteResponseDoesNotReplaySuppressedNativeCalls(t *testing.T) {
+	wire := llm.NewOpenAIResponsesClient("openai", "https://provider.example/v1", "key", 0)
+	calls := 0
+	wire.SetTransport(nativeQoderTransport(func(r *http.Request) (*http.Response, error) {
+		calls++
+		var request struct {
+			Input json.RawMessage `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		body := `{"status":"incomplete","output":[{"type":"reasoning","id":"reasoning","encrypted_content":"opaque"},{"type":"function_call","id":"fc","call_id":"call","name":"write","arguments":"{"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"partial answer"}]}],"usage":{"input_tokens":4,"output_tokens":9}}`
+		if calls == 2 {
+			if strings.Contains(string(request.Input), `"function_call"`) || strings.Contains(string(request.Input), `"opaque"`) || !strings.Contains(string(request.Input), "partial answer") {
+				t.Fatalf("suppressed call leaked into next request: %s", request.Input)
+			}
+			body = `{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}`
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+	}))
+	client := bindClient(wire, Config{Provider: "openai", Protocol: "responses", BaseURL: "https://provider.example/v1", APIKey: "key"})
+	response, err := client.Generate(t.Context(), model.Request{Model: "model"}, nil)
+	if err != nil || response.FinishReason != model.FinishLength || len(response.Message.ToolCalls()) != 0 {
+		t.Fatalf("response=%+v err=%v", response, err)
+	}
+	_, err = client.Generate(t.Context(), model.Request{Model: "model", Messages: []model.Message{response.Message, model.TextMessage(model.RoleUser, "continue")}}, nil)
+	if err != nil || calls != 2 {
+		t.Fatalf("follow-up calls=%d err=%v", calls, err)
+	}
+}

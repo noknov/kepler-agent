@@ -234,6 +234,7 @@ func (c *Client) generate(ctx context.Context, request model.Request, sink model
 	// residual calls, even when their argument prefix happens to be valid JSON.
 	if reason == model.FinishLength || reason == model.FinishContent || reason == model.FinishCanceled {
 		response.Message.ToolCalls = nil
+		response.Message.NativeItems = nil
 	}
 
 	message, err := fromWireMessage(response.Message)

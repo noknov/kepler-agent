@@ -307,7 +307,7 @@ contracts. Current-message images travel as multimodal content parts; historical
 images are not automatically re-attached on every turn.
 
 Tool completion is projected after the full provider response has been converted
-successfully. Length-limited, filtered/refused and canceled terminal receipts do
+successfully. Length-limited, filtered/refused and canceled terminal receipts discard their native continuation window and do
 not expose residual tool calls for execution, even if an argument prefix happens
 to be valid JSON. Text, terminal reason and usage remain available. This rule is
 shared by streaming and ordinary responses at the provider conversion boundary;
