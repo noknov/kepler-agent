@@ -275,3 +275,10 @@ fails before any sibling executes. Reusing an identical durable result adds the
 required tool reply without recharging child usage or reapplying plan/task-state
 transitions. A fresh action requires a fresh ID. This complements, rather than
 replaces, downstream idempotency and interrupted-effect reconciliation.
+
+Empty-response recovery applies only to an explicit normal `stop` receipt and
+uses the configured retry budget. Length limits, refusal/filtering, cancellation,
+missing canonical finish reasons and malformed tool-call completions do not enter that
+recovery path. An empty refused/filtered response uses the existing non-retryable
+content-policy error; a canceled provider receipt uses the existing canceled
+turn state. Reported usage is retained for these terminal attempts.

@@ -616,7 +616,12 @@ func TestRunTurnZeroRetryBudgetDoesNotRetry(t *testing.T) {
 }
 
 func TestRunTurnRejectsEmptyModelResponse(t *testing.T) {
-	client := &scriptedModel{responses: []model.Response{{}, {}, {}, {}}}
+	client := &scriptedModel{responses: []model.Response{
+		{FinishReason: model.FinishStop},
+		{FinishReason: model.FinishStop},
+		{FinishReason: model.FinishStop},
+		{FinishReason: model.FinishStop},
+	}}
 	catalog, _ := tool.NewCatalog()
 	runner, _ := New(Config{Model: "test", MaxEmptyResponseRetries: 3, RetryBaseDelay: time.Nanosecond}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
 	result, err := runner.RunTurn(context.Background(), TurnRequest{SessionID: "empty-retry", Input: model.TextMessage(model.RoleUser, "hi")})
@@ -627,9 +632,9 @@ func TestRunTurnRejectsEmptyModelResponse(t *testing.T) {
 
 func TestRunTurnRecoversAfterEmptyModelResponse(t *testing.T) {
 	client := &scriptedModel{responses: []model.Response{
-		{},
-		{},
-		{},
+		{FinishReason: model.FinishStop},
+		{FinishReason: model.FinishStop},
+		{FinishReason: model.FinishStop},
 		{Message: model.TextMessage(model.RoleAssistant, "recovered"), FinishReason: model.FinishStop},
 	}}
 	catalog, _ := tool.NewCatalog()
