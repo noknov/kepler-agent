@@ -1,6 +1,6 @@
 # GitHub approval by a designated operator
 
-Status: active.
+Status: complete.
 
 ## Outcome and acceptance
 
@@ -19,7 +19,7 @@ make check, and deployed readiness/metrics. No live approval is sent during test
 - [x] Validate authority before queue admission; retain requester execution scope.
 - [x] Mention the approver in the original thread; restrict button visibility.
 - [x] Add one exact external-write tool, pinned to PR head and credential.
-- [ ] Configure the verified operator identity, validate, publish, and deploy.
+- [x] Configure the verified operator identity, validate, publish, and deploy.
 
 ## Decisions
 
@@ -48,9 +48,21 @@ race suites passed for runtime, GitHub, hosted catalog and configuration. Tests
 cover approval/decline, wrong principals, authority and credential rotation,
 changed heads, unknown write receipts, scope preservation and control origin.
 
+Published source PR #56 and deploy PR #5. A final controlled HTTP 307 regression
+reproduced two POST attempts; disabling redirects reduced it to one rejected
+attempt. The GitHub race suite passed after that fix.
+
+Deployment on 2026-10-28: gateway/observer use source 74af99a8 and the final worker
+uses 394e99f8, with configuration c5f460b. All three readiness endpoints, public
+ngrok readiness, worker metrics and authenticated durable metrics returned 200.
+All three containers had zero restarts and no structured startup errors. The
+runtime credential identity and exact approver/allowlist configuration were
+verified without exposing credentials. Backups were checksummed and temporary
+integration containers were removed. No real GitHub approval was sent.
+
 ## Handoff
 
-Implementation and deterministic verification are complete. Publish the source
-and deployment configuration, then verify readiness and metrics. Do not exercise
-a real APPROVE API call as a smoke test. Deployment uses the existing 000–018
-schema; the existing operator token stays in SOPS.
+No engineering or deployment steps remain for this rollout. A live approval
+requires the configured operator to click the control for an actual requested
+PR. Deployment uses the existing 000–018 schema; the existing operator token
+stays in SOPS. GitHub's self-approval and repository permission rules still apply.
