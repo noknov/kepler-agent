@@ -97,7 +97,6 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 	var finishReason string
 	var usage responsesUsage
 	toolCallsStarted := false
-	functionCalls := make(map[string]responsesOutput)
 	messagePhases := make(map[string]string)
 	commentarySent := make(map[string]bool)
 	emitCommentary := func(item responsesOutput) {
@@ -185,35 +184,6 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 				if output.Item.Type == "message" {
 					messagePhases[output.Item.ID] = output.Item.Phase
 				}
-				if output.Item.Type == "function_call" {
-					functionCalls[output.Item.ID] = output.Item
-					if typ.Type == "response.output_item.done" {
-						emitFunctionCall(output.Item.ID, output.Item)
-					}
-				}
-			}
-		case "response.function_call_arguments.done":
-			var call struct {
-				ItemID    string `json:"item_id"`
-				CallID    string `json:"call_id"`
-				Name      string `json:"name"`
-				Arguments string `json:"arguments"`
-			}
-			if json.Unmarshal([]byte(ev.Data), &call) == nil {
-				item := functionCalls[call.ItemID]
-				if item.ID == "" {
-					item.ID = call.ItemID
-				}
-				if call.CallID != "" {
-					item.CallID = call.CallID
-				}
-				if call.Name != "" {
-					item.Name = call.Name
-				}
-				item.Type = "function_call"
-				item.Arguments = call.Arguments
-				functionCalls[call.ItemID] = item
-				emitFunctionCall(call.ItemID, item)
 			}
 		case "response.completed":
 			var done struct {
@@ -229,6 +199,8 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 				}
 				msg.Citations = completedMessage.Citations
 				msg.NativeItems = completedMessage.NativeItems
+				// Individual items can finish before inference fails. Publish
+				// executable calls only from the successful terminal response.
 				for _, item := range done.Response.Output {
 					emitCommentary(item)
 					if item.Type == "function_call" {
@@ -239,35 +211,43 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 					h.OnUsage(usage.toUsage())
 				}
 			}
-		case "response.failed", "response.incomplete":
+		case "response.failed", "response.incomplete", "error":
 			var failed struct {
+				ResponsesStreamError
+				Error    *ResponsesStreamError `json:"error"`
 				Response struct {
-					Error struct {
-						Code    string `json:"code"`
-						Message string `json:"message"`
-					} `json:"error"`
+					Error             *ResponsesStreamError `json:"error"`
+					Usage             responsesUsage        `json:"usage"`
+					IncompleteDetails struct {
+						Reason string `json:"reason"`
+					} `json:"incomplete_details"`
 				} `json:"response"`
 			}
-			_ = json.Unmarshal([]byte(ev.Data), &failed)
-			streamErr = fmt.Errorf("Responses %s: %s %s", typ.Type, failed.Response.Error.Code, failed.Response.Error.Message)
+			if decodeErr := json.Unmarshal([]byte(ev.Data), &failed); decodeErr != nil {
+				streamErr = ProtocolError{Provider: c.providerName(), Detail: "invalid Responses error event"}
+				return false
+			}
+			detail := failed.ResponsesStreamError
+			// Top-level type names the event, not the upstream error category.
+			detail.Type = ""
+			if failed.Error != nil {
+				detail = *failed.Error
+			} else if failed.Response.Error != nil {
+				detail = *failed.Response.Error
+			}
+			detail.Provider, detail.Event = c.providerName(), typ.Type
+			if requestID := resp.Header.Get("X-Request-ID"); requestID != "" {
+				detail.RequestID = requestID
+			}
+			detail.IncompleteReason = failed.Response.IncompleteDetails.Reason
+			usage = failed.Response.Usage
+			streamErr = detail
 			return false
-		case "error":
-			var apiErr struct {
-				Message string `json:"message"`
-			}
-			if json.Unmarshal([]byte(ev.Data), &apiErr) == nil && apiErr.Message != "" {
-				streamErr = fmt.Errorf("openai responses stream error: %s", apiErr.Message)
-				return false
-			}
-			if c.provider == "chatgpt" {
-				streamErr = fmt.Errorf("ChatGPT response stream returned an error")
-				return false
-			}
 		}
 		return true
 	})
 	if streamErr != nil {
-		return Response{}, streamErr
+		return Response{Usage: usage.toUsage(), Streamed: true}, streamErr
 	}
 	if err != nil {
 		return Response{}, err

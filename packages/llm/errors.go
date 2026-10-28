@@ -14,6 +14,25 @@ type ProviderError struct {
 	Body       string
 }
 
+// ResponsesStreamError preserves structured failure details after a successful
+// HTTP handshake. The HTTP 200 is not an error status; callers classify Code
+// rather than guessing a status or parsing diagnostic Message text.
+type ResponsesStreamError struct {
+	Provider         string `json:"-"`
+	Event            string `json:"event"`
+	Code             string `json:"code,omitempty"`
+	Type             string `json:"type,omitempty"`
+	Message          string `json:"message,omitempty"`
+	Param            string `json:"param,omitempty"`
+	RequestID        string `json:"request_id,omitempty"`
+	IncompleteReason string `json:"incomplete_reason,omitempty"`
+}
+
+func (e ResponsesStreamError) Error() string {
+	details, _ := json.Marshal(e)
+	return e.Provider + " responses stream failed: " + string(details)
+}
+
 // ProtocolError describes a failed provider response without including content,
 // tool arguments, or credentials. It is retryable only before output is committed.
 type ProtocolError struct {
