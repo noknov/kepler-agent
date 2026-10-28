@@ -68,3 +68,27 @@ func TestContextSearchRejectsInvalidEvidenceAndPreservesAPICode(t *testing.T) {
 		}
 	}
 }
+
+func TestContextSearchRequiresCursorProgressWithoutInferringCompletion(t *testing.T) {
+	for _, next := range []string{"same", "next", ""} {
+		t.Run(next, func(t *testing.T) {
+			calls := 0
+			client := NewTestClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+				calls++
+				data, _ := json.Marshal(map[string]any{"ok": true, "results": map[string]any{"messages": []any{}}, "response_metadata": map[string]string{"next_cursor": next}})
+				return jsonResp(string(data)), nil
+			}))
+			result, err := client.SearchContext(t.Context(), ContextSearchInput{Query: "decision", Cursor: "same"})
+			if next == "same" {
+				if err == nil {
+					t.Fatal("non-progressing search page accepted")
+				}
+			} else if err != nil || result.NextCursor != next {
+				t.Fatalf("empty page changed cursor semantics: %+v %v", result, err)
+			}
+			if calls != 1 {
+				t.Fatalf("single-page read made %d requests", calls)
+			}
+		})
+	}
+}
