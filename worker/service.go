@@ -337,6 +337,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 
 	access := safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels)
 	handler := &slackhandler.Handler{
+		Approvals: profile.Agent.Runtime,
 		Cfg:       cfg,
 		Slack:     slackClient,
 		Access:    access,

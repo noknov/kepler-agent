@@ -239,8 +239,14 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	active := &activeRun{userID: req.UserID, turnID: req.EventID, startedAt: time.Now(), cancel: cancel, steering: &steeringInput{store: s.Inputs, sessionID: sessionID, owner: owner, userID: req.UserID}}
 	if existing := s.register(sessionID, active); existing != nil {
 		cancel()
-		if existing.userID != req.UserID {
-			return s.persistInput(base, sessionID, sessioninput.KindQueue, req)
+		if existing.userID != req.UserID || req.Approval != nil {
+			if err := s.persistInput(base, sessionID, sessioninput.KindQueue, req); err != nil {
+				return err
+			}
+			if req.ClaimID != "" {
+				return s.releaseClaim(base, req.ClaimID)
+			}
+			return nil
 		}
 		if s.mode(req.UserID) == ModeQueue {
 			if err := s.persistInput(base, sessionID, sessioninput.KindQueue, req); err != nil {
@@ -301,8 +307,12 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 		stream.setSessionStatus(finalSessionStatus)
 	}()
 	if approval := req.Approval; approval != nil {
+		actor := approval.ResolvedBy
+		if actor == "" {
+			actor = req.UserID
+		} // Already queued legacy controls.
 		if err := s.Agent.Runtime.ResolveApproval(runCtx, sessionID, agentruntime.ApprovalResolution{
-			TurnID: approval.TurnID, ToolCallID: approval.ToolCallID, Approved: approval.Approved, UserID: req.UserID,
+			TurnID: approval.TurnID, ToolCallID: approval.ToolCallID, Approved: approval.Approved, UserID: actor,
 		}); err != nil {
 			return err
 		}
@@ -359,6 +369,10 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 		webSearch = "disabled"
 	}
 	scopeValues := map[string]string{"surface": "slack", "team_id": req.TeamID, "channel": req.Channel, "thread_ts": req.ThreadTS, "message_ts": req.MessageTS, "web_search": webSearch}
+	scopeValues["conversation_type"] = "channel"
+	if strings.HasPrefix(req.Channel, "D") {
+		scopeValues["conversation_type"] = "im"
+	}
 	if workflowMode {
 		for key, value := range activation.Scope {
 			scopeValues[key] = value
@@ -541,7 +555,7 @@ func (s *Service) controlActive(sessionID string, req slackconversation.Request)
 		return err == nil, err
 	}
 	if active != nil {
-		if s.mode(req.UserID) == ModeQueue {
+		if s.mode(req.UserID) == ModeQueue || req.Approval != nil {
 			if err := s.persistInput(context.Background(), sessionID, sessioninput.KindQueue, req); err != nil {
 				return false, err
 			}
@@ -563,7 +577,7 @@ func (s *Service) controlActive(sessionID string, req slackconversation.Request)
 		return false, nil
 	}
 	kind := sessioninput.KindSteering
-	if s.mode(req.UserID) == ModeQueue {
+	if s.mode(req.UserID) == ModeQueue || req.Approval != nil {
 		kind = sessioninput.KindQueue
 	}
 	if err := s.persistInput(context.Background(), sessionID, kind, req); err != nil {

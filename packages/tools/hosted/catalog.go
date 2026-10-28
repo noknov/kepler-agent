@@ -204,6 +204,9 @@ func registerIntegrationTools(registration *tool.Registration, cfg config.Config
 	registration.Deferred(tool.CategoryIntegration, githubTools.PRDiffTool{Client: githubClient})
 	registration.Deferred(tool.CategoryIntegration, githubTools.PRFileDiffTool{Client: githubClient})
 	registration.Deferred(tool.CategoryIntegration, githubTools.JobLogsTool{Client: githubClient})
+	if integrations.GitHub.ApproverUserID != "" && integrations.GitHub.Token != "" && registration.Surface() == "slack" {
+		registration.Deferred(tool.CategoryIntegration, githubTools.ApprovePRTool{Client: githubClient})
+	}
 
 	luckinClient := &luckinTools.Client{
 		MCP: &mcp.Client{

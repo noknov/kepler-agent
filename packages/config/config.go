@@ -167,10 +167,11 @@ type GCPConfig struct {
 }
 
 type GitHubConfig struct {
-	Token        string
-	APIBaseURL   string
-	DefaultOwner string
-	DefaultRepo  string
+	Token          string
+	ApproverUserID string
+	APIBaseURL     string
+	DefaultOwner   string
+	DefaultRepo    string
 }
 
 type K8sConfig struct {
@@ -476,10 +477,11 @@ func loadIntegrations() IntegrationConfig {
 			Token: os.Getenv("YOUTRACK_TOKEN"),
 		},
 		GitHub: GitHubConfig{
-			Token:        os.Getenv("GITHUB_TOKEN"),
-			APIBaseURL:   trimRightSlash(env("GITHUB_API_BASE_URL", "https://api.github.com")),
-			DefaultOwner: os.Getenv("GITHUB_DEFAULT_OWNER"),
-			DefaultRepo:  os.Getenv("GITHUB_DEFAULT_REPO"),
+			Token:          os.Getenv("GITHUB_TOKEN"),
+			ApproverUserID: strings.TrimSpace(os.Getenv("GITHUB_APPROVER_USER_ID")),
+			APIBaseURL:     trimRightSlash(env("GITHUB_API_BASE_URL", "https://api.github.com")),
+			DefaultOwner:   os.Getenv("GITHUB_DEFAULT_OWNER"),
+			DefaultRepo:    os.Getenv("GITHUB_DEFAULT_REPO"),
 		},
 		Luckin: LuckinConfig{
 			MCPURL:   trimRightSlash(env("LUCKIN_MCP_URL", "https://gwmcp.lkcoffee.com/order/user/mcp")),
@@ -572,6 +574,18 @@ func validateForProfile(cfg Config, profile RuntimeProfile) (Config, error) {
 		return cfg, fmt.Errorf("agent explore limits must be positive; optional budgets must be non-negative and batch timeout cannot be shorter than worker timeout")
 	}
 	seenWriteTools := make(map[string]bool, len(cfg.Tools.AllowedWriteTools))
+	if approver := cfg.Integrations.GitHub.ApproverUserID; approver != "" {
+		if cfg.Integrations.GitHub.Token == "" {
+			return cfg, fmt.Errorf("GITHUB_APPROVER_USER_ID requires GITHUB_TOKEN")
+		}
+		allowed := len(cfg.Security.AllowedUsers) == 0
+		for _, id := range cfg.Security.AllowedUsers {
+			allowed = allowed || id == approver
+		}
+		if !allowed {
+			return cfg, fmt.Errorf("GITHUB_APPROVER_USER_ID must be in ALLOWED_SLACK_USERS")
+		}
+	}
 	for _, name := range cfg.Tools.AllowedWriteTools {
 		if !validToolName(name) {
 			return cfg, fmt.Errorf("AGENT_ALLOWED_WRITE_TOOLS contains invalid tool name %q", name)

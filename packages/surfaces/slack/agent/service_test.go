@@ -592,7 +592,7 @@ func TestQueuedApprovalUsesTheDequeuedActorAndDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = service.run(ctx, "s", slackconversation.Request{EventID: "incoming", UserID: "U1", Channel: "C1", ThreadTS: "T1", Text: "continue"})
-	if err == nil || !strings.Contains(err.Error(), "only the requesting user") {
+	if err == nil || !strings.Contains(err.Error(), "only the designated approving user") {
 		t.Fatalf("queued approval was lost: %v", err)
 	}
 	if client.request != nil {

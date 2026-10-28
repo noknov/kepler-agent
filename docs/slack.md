@@ -77,6 +77,34 @@ Explicitly @mention the bot in the same thread to follow up on the original PR s
 message starts another conversation. CLI and Web do not install this Slack
 router. See [runtime and delegation](runtime.md) for scope propagation.
 
+### Approve a pull request
+
+`github-approve_pr` is an optional Slack-only external write. Configure
+`GITHUB_APPROVER_USER_ID` and the existing SOPS-managed `GITHUB_TOKEN`, then add
+the exact tool name to `AGENT_ALLOWED_WRITE_TOOLS`. Other authorized users may
+request approval; only the designated user may confirm or decline it. Other
+write tools retain their requester-confirmation policy.
+
+The agent reads the PR manifest and requests one specific URL and full head SHA.
+The bot mentions the approver and posts confirmation controls in the original
+thread. It never forwards the request into a separate DM. The approver must
+already be able to access that conversation; another user's bot DM is not shared.
+Other users' private bot conversations are denied by server policy before a
+confirmation is created. The designated operator may still use their own DM.
+Both buttons use Slack's `visible_to_user_ids` for the approving principal;
+visibility is presentation, not the server's authorization boundary.
+This uses existing bot `chat:write`. Controls resolve their original
+session and approving authority from the transcript before queue admission.
+The original requesting identity resumes; confirming never transfers the
+approver's personal integration scope into that conversation.
+
+Execution rechecks current policy, credential binding, PR state and head, then
+sends only `APPROVE` with that exact `commit_id`. Changed heads or credentials
+require a new confirmation. GitHub does not allow self-approval. Ambiguous write
+receipts are reported as unknown and are not automatically retried. This does
+not enable merging, review comments or request-changes actions. Do not use a
+real approval as a deployment smoke test.
+
 ## Delivery and recovery
 
 PostgreSQL inbox claims, leases, retries, and deterministic message identities

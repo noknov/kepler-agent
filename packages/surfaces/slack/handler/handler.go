@@ -16,7 +16,6 @@ import (
 	"github.com/noknov/kepler-agent/packages/prompts"
 	"github.com/noknov/kepler-agent/packages/runs"
 	"github.com/noknov/kepler-agent/packages/safety"
-	"github.com/noknov/kepler-agent/packages/session"
 	"github.com/noknov/kepler-agent/packages/sessioninput"
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
@@ -26,6 +25,7 @@ import (
 )
 
 type Handler struct {
+	Approvals      ApprovalAuthority
 	Cfg            config.Config
 	Slack          *slack.Client
 	Access         safety.AccessPolicy
@@ -331,81 +331,6 @@ func (h *Handler) handleConnectionSubmission(interaction slackgateway.Interactio
 		return &slackgateway.InteractionResponse{ResponseAction: "errors", Errors: map[string]string{"connection_provider": "Unable to start this connection. Please check the settings and try again."}}
 	}
 	return &slackgateway.InteractionResponse{ResponseAction: "update", View: connectionAuthModal(plugin, authURL)}
-}
-
-func (h *Handler) resolveApproval(ctx context.Context, interaction slackgateway.Interaction, actionID, value string) {
-	if h.Inputs == nil || interaction.Channel == "" || interaction.ThreadTS == "" {
-		return
-	}
-	var token struct {
-		TurnID     string `json:"turn_id"`
-		ToolCallID string `json:"tool_call_id"`
-	}
-	if err := json.Unmarshal([]byte(value), &token); err != nil || token.TurnID == "" || token.ToolCallID == "" {
-		log.Printf("invalid Slack approval control: %v", err)
-		return
-	}
-	approved := actionID == "agent_approval_approve"
-	verb := "decline"
-	if approved {
-		verb = "approve"
-	}
-	request := slackconversation.Request{
-		TeamID:    interaction.TeamID,
-		EventID:   "approval-" + token.TurnID + "-" + token.ToolCallID + "-" + verb,
-		MessageID: "approval-continuation:" + token.TurnID + ":" + token.ToolCallID,
-		UserID:    interaction.UserID, Channel: interaction.Channel, ThreadTS: interaction.ThreadTS,
-		Text:     "The user " + verb + "d the pending action. Continue from the recorded tool result.",
-		Approval: &slackconversation.ApprovalRequest{TurnID: token.TurnID, ToolCallID: token.ToolCallID, Approved: approved, MessageTS: interaction.MessageTS},
-	}
-	payload, err := json.Marshal(request)
-	if err != nil {
-		return
-	}
-	sessionID := session.ID(interaction.Channel, interaction.ThreadTS)
-	if h.Slack != nil && interaction.MessageTS != "" {
-		if err := h.Slack.UpdateMessageBlocks(ctx, interaction.Channel, interaction.MessageTS, "Approval pending", approvalStateBlocks("pending", approved)); err != nil {
-			log.Printf("mark Slack approval pending failed turn=%s call=%s: %v", token.TurnID, token.ToolCallID, err)
-		}
-	}
-	if err := h.Inputs.Enqueue(ctx, sessioninput.Item{ID: request.EventID, SessionID: sessionID, Kind: sessioninput.KindQueue, Payload: payload}); err != nil {
-		log.Printf("resolve Slack approval failed turn=%s call=%s: %v", token.TurnID, token.ToolCallID, err)
-		if h.Slack != nil && interaction.MessageTS != "" {
-			if updateErr := h.Slack.UpdateMessageBlocks(ctx, interaction.Channel, interaction.MessageTS, "Approval failed — retry available", approvalStateBlocks("failed", approved, value)); updateErr != nil {
-				log.Printf("mark Slack approval failed state failed turn=%s call=%s: %v", token.TurnID, token.ToolCallID, updateErr)
-			}
-		}
-		return
-	}
-	if h.NotifyApproval != nil {
-		h.NotifyApproval(ctx, sessionID)
-	}
-}
-
-func approvalStateBlocks(state string, approved bool, retryValue ...string) []map[string]any {
-	text := "⏳ Pending — processing this action."
-	if state == "resolved" {
-		if approved {
-			text = "✅ Confirmed — action completed or is continuing."
-		} else {
-			text = "◼ Canceled — this action was not run."
-		}
-	}
-	if state == "failed" {
-		text = "⚠ Could not submit this decision. Use the buttons below to retry safely."
-	}
-	blocks := []map[string]any{{"type": "context", "elements": []map[string]any{{"type": "mrkdwn", "text": text}}}}
-	if state == "failed" && len(retryValue) > 0 && strings.TrimSpace(retryValue[0]) != "" {
-		value := retryValue[0]
-		blocks = append(blocks, map[string]any{
-			"type": "actions",
-			"elements": []map[string]any{
-				{"type": "button", "action_id": "agent_approval_approve", "style": "primary", "text": plainText("Confirm"), "value": value},
-				{"type": "button", "action_id": "agent_approval_decline", "style": "danger", "text": plainText("Cancel"), "value": value},
-			},
-		})
-	}
-	return blocks
 }
 
 func (h *Handler) openAssetModal(ctx context.Context, triggerID, userID string, kind userprefs.AssetKind) {

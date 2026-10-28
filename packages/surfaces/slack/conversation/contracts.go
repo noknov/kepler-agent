@@ -100,6 +100,7 @@ type ApprovalRequest struct {
 	TurnID, ToolCallID string
 	Approved           bool
 	MessageTS          string
+	ResolvedBy         string `json:"resolved_by,omitempty"`
 }
 
 type IdempotentMarkdownMessenger interface {

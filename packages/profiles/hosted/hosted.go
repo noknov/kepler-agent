@@ -18,8 +18,11 @@ import (
 )
 
 // Policy keeps the operator allowlist authoritative and requires the
-// requesting user to confirm every allowed write.
-type Policy struct{ Allowed map[string]bool }
+// requesting user or the explicitly designated principal to confirm each write.
+type Policy struct {
+	Allowed   map[string]bool
+	Approvers map[string]string
+}
 
 func (p Policy) Decide(_ context.Context, request tool.PolicyRequest) (tool.Decision, error) {
 	if request.Call.Name == "web-search" && request.Call.Scope.Values["web_search"] == "disabled" {
@@ -30,7 +33,13 @@ func (p Policy) Decide(_ context.Context, request tool.PolicyRequest) (tool.Deci
 			return tool.Decision{Type: tool.DecisionDeny, Reason: "write tool is not in the operator allowlist"}, nil
 		}
 		if effect == tool.EffectWorkspaceWrite || effect == tool.EffectExternalWrite || effect == tool.EffectPrivileged {
-			return tool.Decision{Type: tool.DecisionRequireApproval, Reason: "this action changes data or an external service", Rule: "user_confirmation"}, nil
+			if approver, configured := p.Approvers[request.Call.Name]; configured && approver == "" {
+				return tool.Decision{Type: tool.DecisionDeny, Reason: "designated approver is not configured"}, nil
+			}
+			if approver := p.Approvers[request.Call.Name]; approver != "" && approver != request.Call.Scope.UserID && request.Call.Scope.Values["conversation_type"] != "channel" {
+				return tool.Decision{Type: tool.DecisionDeny, Reason: "approval by another user must be requested in a shared channel thread"}, nil
+			}
+			return tool.Decision{Type: tool.DecisionRequireApproval, ApproverUserID: p.Approvers[request.Call.Name], Reason: "this action changes data or an external service", Rule: "user_confirmation"}, nil
 		}
 	}
 	return tool.Decision{Type: tool.DecisionAllow}, nil

@@ -11,6 +11,7 @@ import (
 
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/connections"
+	"github.com/noknov/kepler-agent/packages/session"
 	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
 
@@ -169,7 +170,7 @@ func (s *slackStream) requestApproval(event transcript.Event) {
 		return
 	}
 	call := event.ToolCall
-	value, err := json.Marshal(map[string]string{"turn_id": event.TurnID, "tool_call_id": call.ID})
+	value, err := json.Marshal(map[string]string{"session_id": session.ID(s.req.Channel, s.req.ThreadTS), "turn_id": event.TurnID, "tool_call_id": call.ID})
 	if err != nil {
 		return
 	}
@@ -178,24 +179,47 @@ func (s *slackStream) requestApproval(event transcript.Event) {
 		name = "this action"
 	}
 	description := approvalDescription(name, call.Arguments, event.Metadata)
-	blocks := []map[string]any{
-		{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": "*Confirmation required*\n" + description}},
-		{"type": "actions", "elements": []map[string]any{
-			{"type": "button", "action_id": "agent_approval_approve", "style": "primary", "text": map[string]any{"type": "plain_text", "text": "Confirm"}, "value": string(value)},
-			{"type": "button", "action_id": "agent_approval_decline", "style": "danger", "text": map[string]any{"type": "plain_text", "text": "Cancel"}, "value": string(value)},
-		}},
+	var authority struct {
+		ApproverUserID string `json:"approver_user_id"`
 	}
+	if err := json.Unmarshal(event.Metadata, &authority); err != nil && len(event.Metadata) > 0 {
+		return
+	}
+	channel, thread := s.req.Channel, s.req.ThreadTS
+	text := "Confirmation required for " + name
 	ctx, cancel := s.deliveryContext()
 	defer cancel()
-	if _, err := messenger.PostMessageBlocks(ctx, s.req.Channel, s.req.ThreadTS, "Confirmation required for "+name, blocks); err != nil {
+	if authority.ApproverUserID != "" {
+		text = "<@" + authority.ApproverUserID + "> " + text
+		description = "<@" + authority.ApproverUserID + "> please confirm this request from <@" + call.Scope.UserID + ">.\n" + description
+	}
+	buttons := []map[string]any{
+		{"type": "button", "action_id": "agent_approval_approve", "style": "primary", "text": map[string]any{"type": "plain_text", "text": "Confirm"}, "value": string(value)},
+		{"type": "button", "action_id": "agent_approval_decline", "style": "danger", "text": map[string]any{"type": "plain_text", "text": "Cancel"}, "value": string(value)},
+	}
+	approver := authority.ApproverUserID
+	if approver == "" {
+		approver = call.Scope.UserID
+	}
+	if approver != "" {
+		for _, button := range buttons {
+			button["visible_to_user_ids"] = []string{approver}
+		}
+	}
+	blocks := []map[string]any{
+		{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": "*Confirmation required*\n" + description}},
+		{"type": "actions", "elements": buttons},
+	}
+	if _, err := messenger.PostMessageBlocks(ctx, channel, thread, text, blocks); err != nil {
 		log.Printf("slack approval prompt failed turn=%s call=%s: %v", event.TurnID, call.ID, err)
+		return
 	}
 }
 
 func approvalResolutionBlocks(approved bool) []map[string]any {
 	text := "◼ Canceled — this action was not run."
 	if approved {
-		text = "✅ Confirmed — action completed or is continuing."
+		text = "✅ Confirmation recorded — see the action result in the original conversation."
 	}
 	return []map[string]any{{"type": "context", "elements": []map[string]any{{"type": "mrkdwn", "text": text}}}}
 }
