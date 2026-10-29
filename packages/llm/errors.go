@@ -12,6 +12,7 @@ type ProviderError struct {
 	Provider   string
 	StatusCode int
 	Body       string
+	reason     providerErrorReason
 }
 
 // ProtocolError describes a failed provider response without including content,
@@ -89,50 +90,22 @@ func isRetryableStatus(status int) bool {
 	}
 }
 
-// ContentPolicyBody reports whether an upstream error body is a content safety
-// rejection rather than a malformed request. It inspects structured JSON error
-// codes/types first and falls back to known provider safety phrases.
-func ContentPolicyBody(body string) bool {
-	trimmed := strings.TrimSpace(body)
-	if trimmed == "" {
-		return false
-	}
-	var envelope struct {
-		Error struct {
-			Code    string `json:"code"`
-			Type    string `json:"type"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if json.Unmarshal([]byte(trimmed), &envelope) == nil {
-		code := strings.ToLower(strings.TrimSpace(envelope.Error.Code))
-		errType := strings.ToLower(strings.TrimSpace(envelope.Error.Type))
-		if code == "content_filter" || code == "content_policy_violation" || code == "data_inspection_failed" ||
-			errType == "content_policy_violation" || errType == "content_filter" {
-			return true
-		}
-	}
-	lower := strings.ToLower(trimmed)
-	for _, phrase := range []string{
-		"content exists risk",
-		"content_policy_violation",
-		"content management policy",
-		"safety system",
-		"inappropriate content",
-	} {
-		if strings.Contains(lower, phrase) {
-			return true
-		}
-	}
-	return false
-}
+type providerErrorReason uint8
 
-// ContextLimitBody reports whether an upstream error indicates that the prompt
-// or context window exceeded the model's maximum token capacity.
-func ContextLimitBody(body string) bool {
-	trimmed := strings.TrimSpace(body)
-	if trimmed == "" {
-		return false
+const (
+	providerErrorOther providerErrorReason = iota
+	providerErrorContentPolicy
+	providerErrorContextLimit
+)
+
+// ContentPolicy and ContextLimit expose normalized wire facts, never diagnostic
+// substring guesses. HTTP status and retry policy remain owned by the adapter.
+func (e ProviderError) ContentPolicy() bool { return e.reason == providerErrorContentPolicy }
+func (e ProviderError) ContextLimit() bool  { return e.reason == providerErrorContextLimit }
+
+func classifyProviderError(status int, body string) providerErrorReason {
+	if status != 400 && status != 413 {
+		return providerErrorOther
 	}
 	var envelope struct {
 		Error struct {
@@ -141,35 +114,38 @@ func ContextLimitBody(body string) bool {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if json.Unmarshal([]byte(trimmed), &envelope) == nil {
-		code := strings.ToLower(strings.TrimSpace(envelope.Error.Code))
-		errType := strings.ToLower(strings.TrimSpace(envelope.Error.Type))
-		if code == "context_length_exceeded" || code == "string_above_max_length" ||
-			errType == "context_length_exceeded" {
-			return true
+	if json.Unmarshal([]byte(body), &envelope) != nil {
+		return providerErrorOther
+	}
+	detail := envelope.Error
+	for _, code := range []string{detail.Code, detail.Type} {
+		switch code {
+		case "context_length_exceeded":
+			return providerErrorContextLimit
+		case "content_filter", "content_policy_violation", "data_inspection_failed":
+			return providerErrorContentPolicy
 		}
 	}
-	lower := strings.ToLower(trimmed)
-	for _, phrase := range []string{
-		"context_length_exceeded",
-		"maximum context length",
-		"prompt is too long",
-		"input is too long",
-		"exceeds the model's maximum context",
-		"request_too_large",
-	} {
-		if strings.Contains(lower, phrase) {
-			return true
-		}
+	if detail.Type != "invalid_request_error" || (detail.Code != "" && detail.Code != "invalid_request_error") {
+		return providerErrorOther
 	}
-	return false
+	// Anthropic uses this documented invalid_request_error message instead of a
+	// distinct context code. DeepSeek similarly exposes its safety rejection in
+	// error.message, optionally followed by a request ID. Match these wire forms
+	// only; schema values, unrelated fields, HTML and prose are not classifiers.
+	if detail.Message == "prompt is too long" || strings.HasPrefix(detail.Message, "prompt is too long: ") {
+		return providerErrorContextLimit
+	}
+	if detail.Message == "Content Exists Risk" || (strings.HasPrefix(detail.Message, "Content Exists Risk (request_id: ") && strings.HasSuffix(detail.Message, ")")) {
+		return providerErrorContentPolicy
+	}
+	return providerErrorOther
 }
 
 func NewProviderError(provider string, statusCode int, body string) ProviderError {
 	return ProviderError{
-		Provider:   provider,
-		StatusCode: statusCode,
-		Body:       body,
+		Provider: provider, StatusCode: statusCode,
+		Body: compactBody([]byte(body)), reason: classifyProviderError(statusCode, body),
 	}
 }
 

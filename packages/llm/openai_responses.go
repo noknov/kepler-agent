@@ -89,7 +89,7 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		providerErr := NewProviderError(c.providerName()+" responses stream", resp.StatusCode, compactBody(data))
+		providerErr := NewProviderError(c.providerName()+" responses stream", resp.StatusCode, string(data))
 		return Response{}, providerErr
 	}
 
@@ -465,7 +465,7 @@ func (c *OpenAIResponsesClient) doOnce(ctx context.Context, payload []byte, meta
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, NewProviderError(c.providerName()+" responses", resp.StatusCode, compactBody(data))
+		return nil, NewProviderError(c.providerName()+" responses", resp.StatusCode, string(data))
 	}
 	return data, nil
 }

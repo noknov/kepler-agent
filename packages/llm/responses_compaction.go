@@ -38,7 +38,7 @@ func (c *OpenAIResponsesClient) Compact(ctx context.Context, req Request) (Respo
 		return Response{}, fmt.Errorf("native compaction response exceeds limit")
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return Response{}, NewProviderError(c.providerName()+" compact", response.StatusCode, compactBody(data))
+		return Response{}, NewProviderError(c.providerName()+" compact", response.StatusCode, string(data))
 	}
 	var parsed struct {
 		Output []json.RawMessage `json:"output"`
