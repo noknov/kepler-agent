@@ -49,26 +49,9 @@ func (c *OpenAIResponsesClient) Chat(ctx context.Context, req Request) (Response
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return Response{}, err
 	}
-	msg := parsed.message()
-	if msg.Content == "" && len(msg.ToolCalls) == 0 {
-		resp := Response{
-			Usage: parsed.Usage.toUsage(),
-			Raw:   data,
-		}
-		return resp, EmptyResponseError{
-			Provider:     c.providerName() + " responses",
-			StopReason:   parsed.Status,
-			ContentTypes: parsed.contentTypes(),
-			PromptTokens: parsed.Usage.InputTokens,
-			OutputTokens: parsed.Usage.OutputTokens,
-		}
-	}
-	return Response{
-		Message:      msg,
-		FinishReason: parsed.Status,
-		Usage:        parsed.Usage.toUsage(),
-		Raw:          data,
-	}, nil
+	result, err := parsed.completion()
+	result.Raw = data
+	return result, err
 }
 
 func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h StreamHandler) (Response, error) {
@@ -93,11 +76,7 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 		return Response{}, providerErr
 	}
 
-	msg := Message{Role: "assistant"}
-	var finishReason string
-	var usage responsesUsage
 	toolCallsStarted := false
-	functionCalls := make(map[string]responsesOutput)
 	messagePhases := make(map[string]string)
 	commentarySent := make(map[string]bool)
 	emitCommentary := func(item responsesOutput) {
@@ -115,43 +94,8 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 			h.OnCommentary(text.String())
 		}
 	}
-	emittedFunctionCalls := make(map[string]bool)
+	var terminal *responsesResponse
 	var streamErr error
-	completed := false
-	emitFunctionCall := func(itemID string, call responsesOutput) {
-		if call.Type != "" && call.Type != "function_call" {
-			return
-		}
-		if call.CallID == "" || call.Name == "" {
-			return
-		}
-		key := itemID
-		if key == "" {
-			key = call.CallID
-		}
-		if emittedFunctionCalls[key] {
-			return
-		}
-		emittedFunctionCalls[key] = true
-		if !toolCallsStarted {
-			toolCallsStarted = true
-			if h.OnToolCallsStarted != nil {
-				h.OnToolCallsStarted()
-			}
-		}
-		tc := ToolCall{
-			ID:   call.CallID,
-			Type: "function",
-			Function: ToolFunction{
-				Name:      call.Name,
-				Arguments: call.Arguments,
-			},
-		}
-		msg.ToolCalls = append(msg.ToolCalls, tc)
-		if h.OnToolCallComplete != nil {
-			h.OnToolCallComplete(tc)
-		}
-	}
 	err = readSSE(resp.Body, func(ev sseEvent) bool {
 		if ev.Data == "[DONE]" {
 			return false
@@ -168,88 +112,36 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 				Delta  string `json:"delta"`
 				ItemID string `json:"item_id"`
 			}
-			if json.Unmarshal([]byte(ev.Data), &delta) == nil && delta.Delta != "" && isFinalAnswerPhase(messagePhases[delta.ItemID]) {
-				msg.Content += delta.Delta
-				if h.OnText != nil {
-					h.OnText(TextDelta{Text: delta.Delta, ItemID: delta.ItemID, Phase: messagePhases[delta.ItemID]})
-				}
+			if json.Unmarshal([]byte(ev.Data), &delta) == nil && delta.Delta != "" && isFinalAnswerPhase(messagePhases[delta.ItemID]) && h.OnText != nil {
+				h.OnText(TextDelta{Text: delta.Delta, ItemID: delta.ItemID, Phase: messagePhases[delta.ItemID]})
 			}
 		case "response.output_item.added", "response.output_item.done":
 			var output struct {
 				Item responsesOutput `json:"item"`
 			}
 			if json.Unmarshal([]byte(ev.Data), &output) == nil {
-				if typ.Type == "response.output_item.done" {
-					emitCommentary(output.Item)
-				}
 				if output.Item.Type == "message" {
 					messagePhases[output.Item.ID] = output.Item.Phase
-				}
-				if output.Item.Type == "function_call" {
-					functionCalls[output.Item.ID] = output.Item
 					if typ.Type == "response.output_item.done" {
-						emitFunctionCall(output.Item.ID, output.Item)
+						emitCommentary(output.Item)
+					}
+				}
+				if output.Item.Type == "function_call" && !toolCallsStarted {
+					toolCallsStarted = true
+					if h.OnToolCallsStarted != nil {
+						h.OnToolCallsStarted()
 					}
 				}
 			}
-		case "response.function_call_arguments.done":
-			var call struct {
-				ItemID    string `json:"item_id"`
-				CallID    string `json:"call_id"`
-				Name      string `json:"name"`
-				Arguments string `json:"arguments"`
-			}
-			if json.Unmarshal([]byte(ev.Data), &call) == nil {
-				item := functionCalls[call.ItemID]
-				if item.ID == "" {
-					item.ID = call.ItemID
-				}
-				if call.CallID != "" {
-					item.CallID = call.CallID
-				}
-				if call.Name != "" {
-					item.Name = call.Name
-				}
-				item.Type = "function_call"
-				item.Arguments = call.Arguments
-				functionCalls[call.ItemID] = item
-				emitFunctionCall(call.ItemID, item)
-			}
-		case "response.completed":
+		case "response.completed", "response.incomplete", "response.failed":
 			var done struct {
-				Response responsesResponse `json:"response"`
+				Response *responsesResponse `json:"response"`
 			}
-			if json.Unmarshal([]byte(ev.Data), &done) == nil {
-				completed = true
-				finishReason = done.Response.Status
-				usage = done.Response.Usage
-				completedMessage := done.Response.message()
-				if msg.Content == "" {
-					msg.Content = completedMessage.Content
-				}
-				msg.Citations = completedMessage.Citations
-				msg.NativeItems = completedMessage.NativeItems
-				for _, item := range done.Response.Output {
-					emitCommentary(item)
-					if item.Type == "function_call" {
-						emitFunctionCall(item.ID, item)
-					}
-				}
-				if h.OnUsage != nil {
-					h.OnUsage(usage.toUsage())
-				}
+			if json.Unmarshal([]byte(ev.Data), &done) != nil || done.Response == nil {
+				streamErr = ProtocolError{Provider: c.providerName(), Detail: "invalid terminal response"}
+			} else {
+				terminal = done.Response
 			}
-		case "response.failed", "response.incomplete":
-			var failed struct {
-				Response struct {
-					Error struct {
-						Code    string `json:"code"`
-						Message string `json:"message"`
-					} `json:"error"`
-				} `json:"response"`
-			}
-			_ = json.Unmarshal([]byte(ev.Data), &failed)
-			streamErr = fmt.Errorf("Responses %s: %s %s", typ.Type, failed.Response.Error.Code, failed.Response.Error.Message)
 			return false
 		case "error":
 			var apiErr struct {
@@ -257,12 +149,10 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 			}
 			if json.Unmarshal([]byte(ev.Data), &apiErr) == nil && apiErr.Message != "" {
 				streamErr = fmt.Errorf("openai responses stream error: %s", apiErr.Message)
-				return false
+			} else {
+				streamErr = fmt.Errorf("openai responses stream returned an error")
 			}
-			if c.provider == "chatgpt" {
-				streamErr = fmt.Errorf("ChatGPT response stream returned an error")
-				return false
-			}
+			return false
 		}
 		return true
 	})
@@ -272,15 +162,29 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 	if err != nil {
 		return Response{}, err
 	}
-	if c.provider == "chatgpt" && (!completed || finishReason != "completed") {
-		return Response{}, fmt.Errorf("ChatGPT response stream ended without completed inference")
+	if terminal == nil {
+		return Response{}, ProtocolError{Provider: c.providerName(), Detail: "stream ended without a terminal response"}
 	}
-	return Response{
-		Message:      msg,
-		FinishReason: finishReason,
-		Usage:        usage.toUsage(),
-		Streamed:     true,
-	}, nil
+	result, err := terminal.completion()
+	result.Streamed = true
+	if h.OnUsage != nil {
+		h.OnUsage(result.Usage)
+	}
+	if err != nil {
+		return result, err
+	}
+	for _, item := range terminal.Output {
+		emitCommentary(item)
+	}
+	if len(result.Message.ToolCalls) > 0 && !toolCallsStarted && h.OnToolCallsStarted != nil {
+		h.OnToolCallsStarted()
+	}
+	if h.OnToolCallComplete != nil {
+		for _, call := range result.Message.ToolCalls {
+			h.OnToolCallComplete(call)
+		}
+	}
+	return result, nil
 }
 
 func (c *OpenAIResponsesClient) responsesBody(req Request, stream bool) map[string]any {
@@ -478,10 +382,17 @@ func (c *OpenAIResponsesClient) providerName() string {
 }
 
 type responsesResponse struct {
-	RawOutput []json.RawMessage `json:"-"`
-	Status    string            `json:"status"`
-	Output    []responsesOutput `json:"output"`
-	Usage     responsesUsage    `json:"usage"`
+	RawOutput         []json.RawMessage `json:"-"`
+	Status            string            `json:"status"`
+	Output            []responsesOutput `json:"output"`
+	Usage             responsesUsage    `json:"usage"`
+	IncompleteDetails struct {
+		Reason string `json:"reason"`
+	} `json:"incomplete_details"`
+	Error struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
 }
 
 type responsesOutput struct {
@@ -522,6 +433,47 @@ type responsesUsage struct {
 	} `json:"output_tokens_details"`
 }
 
+// completion is the sole owner of Responses terminal semantics. Incremental
+// item events are presentation progress; the final snapshot establishes calls.
+func (r responsesResponse) completion() (Response, error) {
+	result := Response{Usage: r.Usage.toUsage()}
+	switch r.Status {
+	case "completed":
+		result.FinishReason = "completed"
+		for _, item := range r.Output {
+			if item.Type != "message" {
+				continue
+			}
+			for _, content := range item.Content {
+				if content.Type == "refusal" {
+					result.FinishReason = "content_filter"
+				}
+			}
+		}
+	case "incomplete":
+		switch r.IncompleteDetails.Reason {
+		case "max_output_tokens", "max_messages":
+			result.FinishReason = "length"
+		case "content_filter":
+			result.FinishReason = "content_filter"
+		default:
+			return result, fmt.Errorf("Responses returned unsupported incomplete reason %q", r.IncompleteDetails.Reason)
+		}
+	case "cancelled":
+		result.FinishReason = "cancelled"
+	case "failed":
+		return result, fmt.Errorf("Responses failed: %s %s", r.Error.Code, r.Error.Message)
+	default:
+		return result, ProtocolError{Provider: "responses", Detail: "response has no terminal status"}
+	}
+	result.Message = r.message()
+	if result.FinishReason != "completed" {
+		result.Message.ToolCalls = nil
+		result.Message.NativeItems = nil
+	}
+	return result, nil
+}
+
 func (r responsesResponse) message() Message {
 	msg := Message{Role: "assistant", NativeItems: r.RawOutput}
 	for _, item := range r.Output {
@@ -560,16 +512,6 @@ func (r responsesResponse) message() Message {
 // message output remains backward compatible and is treated as final.
 func isFinalAnswerPhase(phase string) bool {
 	return phase == "" || phase == "final_answer"
-}
-
-func (r responsesResponse) contentTypes() []string {
-	types := make([]string, 0, len(r.Output))
-	for _, item := range r.Output {
-		if item.Type != "" {
-			types = append(types, item.Type)
-		}
-	}
-	return types
 }
 
 func (u *responsesUsage) UnmarshalJSON(data []byte) error {
