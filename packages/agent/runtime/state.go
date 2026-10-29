@@ -20,7 +20,13 @@ type SessionState struct {
 // LatestSessionState returns the latest terminal turn together with the scope
 // recorded when that turn started.
 func (r *Runtime) LatestSessionState(ctx context.Context, sessionID string) (SessionState, bool, error) {
-	events, err := r.deps.Transcript.Load(ctx, sessionID, 0)
+	var events []transcript.Event
+	var err error
+	if loader, ok := r.deps.Transcript.(transcript.TerminalTurnLoader); ok {
+		events, err = loader.LoadLatestTerminalTurn(ctx, sessionID)
+	} else {
+		events, err = r.deps.Transcript.Load(ctx, sessionID, 0)
+	}
 	if err != nil {
 		return SessionState{}, false, err
 	}

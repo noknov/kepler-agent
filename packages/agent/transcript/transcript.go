@@ -17,6 +17,14 @@ type EventReader interface {
 	ReadEvent(context.Context, string, uint64) (Event, error)
 }
 
+// TerminalTurnLoader reads only the latest terminal event and its turn's latest
+// TurnStarted event, in sequence order. If the start is missing, it returns the
+// terminal alone; it must not fall back to an older turn or an active newer turn.
+// Stores can implement this indexed projection without changing full replay.
+type TerminalTurnLoader interface {
+	LoadLatestTerminalTurn(context.Context, string) ([]Event, error)
+}
+
 type EventType string
 
 const (

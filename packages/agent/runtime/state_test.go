@@ -3,12 +3,40 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 )
+
+type indexedStateStore struct {
+	transcript.Store
+	events []transcript.Event
+	err    error
+}
+
+func (s indexedStateStore) LoadLatestTerminalTurn(context.Context, string) ([]transcript.Event, error) {
+	return s.events, s.err
+}
+
+func TestLatestSessionStateUsesIndexedProjectionAndPropagatesFailure(t *testing.T) {
+	store := indexedStateStore{events: []transcript.Event{
+		{Type: transcript.TurnStarted, TurnID: "turn", Metadata: json.RawMessage(`{"user_id":"owner"}`)},
+		{Type: transcript.TurnCompleted, TurnID: "turn", Status: string(TerminationPendingInput)},
+	}}
+	runner := &Runtime{deps: Dependencies{Transcript: store}}
+	state, ok, err := runner.LatestSessionState(t.Context(), "session")
+	if err != nil || !ok || state.UserID != "owner" || state.TurnID != "turn" {
+		t.Fatalf("state=%+v ok=%v err=%v", state, ok, err)
+	}
+	store.err = errors.New("indexed read unavailable")
+	runner.deps.Transcript = store
+	if _, _, err := runner.LatestSessionState(t.Context(), "session"); err != store.err {
+		t.Fatalf("indexed read failure was hidden: %v", err)
+	}
+}
 
 func TestWaitingForInputUsesLatestTerminalTurnAndOwner(t *testing.T) {
 	store := transcript.NewMemoryStore()
