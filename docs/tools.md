@@ -266,6 +266,8 @@ has no session ID. This is not a claim of full protocol-feature conformance or
 support for the newer stateless `2026-07-28` specification.
 
 RPC results must identify the opaque string request ID and JSON-RPC 2.0 envelope.
+Tool `structuredContent` remains a JSON object in canonical tool results, separate
+from text and images. Existing tool-result bounds and artifact handling still apply.
 The parsed Content-Type selects SSE only for `text/event-stream`; parameter
 values cannot change the decoder. Malformed headers fail explicitly. An absent
 header retains JSON decoding, with the same envelope and identity validation.

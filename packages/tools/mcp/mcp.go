@@ -225,7 +225,10 @@ func InvokeExternal(ctx context.Context, client *mcp.Client, name string, args j
 
 // Result adapts a remote MCP outcome without losing its error or image content.
 func Result(value mcp.ToolResult) tool.Result {
-	content := make([]model.Content, 0, 1+len(value.Images))
+	content := make([]model.Content, 0, 2+len(value.Images))
+	if len(value.StructuredContent) > 0 {
+		content = append(content, model.Content{Type: model.ContentJSON, JSON: value.StructuredContent})
+	}
 	if value.Content != "" {
 		content = append(content, model.Content{Type: model.ContentText, Text: value.Content})
 	}
