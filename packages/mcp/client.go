@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"strings"
 	"sync"
@@ -297,8 +298,16 @@ func (c *Client) rpcWithID(ctx context.Context, session Session, id *string, met
 // An SSE response may remain open after our result. Stop at the matching
 // response, propagate its RPC error, and close the body instead of awaiting EOF.
 func readRPCResponse(reader io.Reader, contentType string, expected string) (json.RawMessage, error) {
+	mediaType := ""
+	if contentType != "" {
+		var err error
+		mediaType, _, err = mime.ParseMediaType(contentType)
+		if err != nil {
+			return nil, fmt.Errorf("mcp: invalid response Content-Type: %w", err)
+		}
+	}
 	bounded := io.LimitReader(reader, maxResponseBytes+1)
-	if !strings.Contains(strings.ToLower(contentType), "text/event-stream") {
+	if mediaType != "text/event-stream" {
 		body, err := io.ReadAll(bounded)
 		if err != nil {
 			return nil, err
