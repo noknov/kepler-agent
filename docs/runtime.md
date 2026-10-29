@@ -167,6 +167,10 @@ on replay. Live and recovered turn results derive generation usage from committe
 model completions and deduplicated tool results, including completed empty-response
 recovery requests. Embedding usage stays separate. Per-attempt receipts and budget
 settlement also cover failed attempts; turn-result usage is not a billing ledger.
+Terminal events retain structured model and context error categories; replay
+restores cancellation, deadlines, and safe failure classification without
+interpreting diagnostic text. Original Go error types and arbitrary causes are
+not serialized.
 
 Recovery closes generated-but-unstarted tool calls with an explicit
 `execution_not_started` result. Started calls with uncertain effects remain
