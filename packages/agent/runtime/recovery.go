@@ -10,14 +10,15 @@ import (
 )
 
 type turnProgress struct {
-	Steps  int
-	Usage  model.Usage
-	Budget model.BudgetState
+	Steps          int
+	Usage          model.Usage
+	EmbeddingUsage model.Usage
+	Budget         model.BudgetState
 }
 
-// recoverTurnProgress restores accounting without replaying external effects.
+// projectTurnProgress derives live and recovered accounting from committed facts.
 // Budget snapshots include delegated and compactor work via their shared context.
-func recoverTurnProgress(events []transcript.Event, turnID string, config Config) (turnProgress, error) {
+func projectTurnProgress(events []transcript.Event, turnID string, config Config) (turnProgress, error) {
 	var progress turnProgress
 	hasBudget := false
 	var legacySpent int64
@@ -64,6 +65,14 @@ func recoverTurnProgress(events []transcript.Event, turnID string, config Config
 			if usage := toolResultUsage(*event.ToolResult); usage != nil {
 				addUsage(&progress.Usage, *usage)
 				legacySpent += model.UsageTokens(*usage)
+			}
+		case transcript.ModelUsageSettled:
+			var receipt model.AttemptUsage
+			if err := json.Unmarshal(event.Metadata, &receipt); err != nil {
+				return progress, err
+			}
+			if receipt.Operation == "embedding" {
+				addUsage(&progress.EmbeddingUsage, receipt.Usage)
 			}
 		case transcript.TokenBudgetUpdated:
 			if err := json.Unmarshal(event.Metadata, &progress.Budget); err != nil {

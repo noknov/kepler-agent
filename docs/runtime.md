@@ -163,7 +163,10 @@ disabled. Concurrent workers reserve estimated input plus output before dispatch
 and settle against reported usage. Unknown failed requests retain their estimate.
 These are local estimates, not a provider billing guarantee. Usage has a typed
 tool-result field, and terminal results restore the same usage and step counts
-on replay.
+on replay. Live and recovered turn results derive generation usage from committed
+model completions and deduplicated tool results, including completed empty-response
+recovery requests. Embedding usage stays separate. Per-attempt receipts and budget
+settlement also cover failed attempts; turn-result usage is not a billing ledger.
 
 Recovery closes generated-but-unstarted tool calls with an explicit
 `execution_not_started` result. Started calls with uncertain effects remain
