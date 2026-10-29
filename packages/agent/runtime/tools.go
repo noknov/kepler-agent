@@ -35,12 +35,7 @@ type preparedCall struct {
 	reused     bool
 }
 
-type toolOutcome struct {
-	pending *model.Message
-	usage   model.Usage
-}
-
-func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls []model.ToolCall, priorResults map[string]tool.Result) (toolOutcome, error) {
+func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls []model.ToolCall, priorResults map[string]tool.Result) (*model.Message, error) {
 	prepared := make([]preparedCall, len(calls))
 	exclusive := false
 	for index, modelCall := range calls {
@@ -83,7 +78,7 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 		policyRequest := tool.PolicyRequest{Descriptor: prepared[index].descriptor, Call: call}
 		decision, err := r.deps.Policy.Decide(ctx, policyRequest)
 		if err != nil {
-			return toolOutcome{}, err
+			return nil, err
 		}
 		switch decision.Type {
 		case tool.DecisionAllow:
@@ -93,7 +88,7 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 		case tool.DecisionRequireApproval:
 			metadata, _ := json.Marshal(approvalRequestMetadata{Decision: decision, Effects: prepared[index].descriptor.Effects, Descriptor: &prepared[index].descriptor})
 			if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.ApprovalRequested, ToolCall: &call, Metadata: metadata}); err != nil {
-				return toolOutcome{}, err
+				return nil, err
 			}
 			if len(calls) > 1 && r.deps.Approver == nil {
 				// A deferred approval suspends the whole model tool batch. Record
@@ -123,28 +118,28 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 					cleanupCtx, cancel := r.cleanupContext(ctx)
 					defer cancel()
 					if _, err := r.recordToolResults(cleanupCtx, request, blocked); err != nil {
-						return toolOutcome{}, err
+						return nil, err
 					}
-					return toolOutcome{}, errPendingApproval
+					return nil, errPendingApproval
 				}
 			}
 			if r.deps.Approver == nil {
-				return toolOutcome{}, errPendingApproval
+				return nil, errPendingApproval
 			}
 			approved, approveErr := r.deps.Approver.Approve(ctx, policyRequest, decision)
 			if approveErr != nil {
-				return toolOutcome{}, approveErr
+				return nil, approveErr
 			}
 			approvalMetadata, _ := json.Marshal(map[string]bool{"approved": approved})
 			if _, err = r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.ApprovalResolved, ToolCall: &call, Metadata: approvalMetadata}); err != nil {
-				return toolOutcome{}, err
+				return nil, err
 			}
 			if !approved {
 				result := tool.Result{Content: []model.Content{{Type: model.ContentText, Text: "User declined this tool call."}}, IsError: true, ErrorCode: "approval_declined"}
 				prepared[index].result = &result
 			}
 		default:
-			return toolOutcome{}, fmt.Errorf("unsupported policy decision %q", decision.Type)
+			return nil, fmt.Errorf("unsupported policy decision %q", decision.Type)
 		}
 	}
 
@@ -156,7 +151,7 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 	var gate sync.RWMutex
 	var wait sync.WaitGroup
 	parallelSlots := make(chan struct{}, r.config.MaxParallelToolCalls)
-	recordAfterCancellation := func() (toolOutcome, error) {
+	recordAfterCancellation := func() (*model.Message, error) {
 		// A tool may have crossed an external side-effect boundary before the
 		// parent context was canceled. Join every started worker before writing
 		// the terminal turn state so the transcript cannot describe a still-live
@@ -177,9 +172,9 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 		defer cancel()
 		limitToolResultBatch(recordCtx, prepared, r.config.ToolResults, r.deps.Artifacts)
 		if _, err := r.recordToolResults(recordCtx, request, prepared); err != nil {
-			return toolOutcome{}, err
+			return nil, err
 		}
-		return toolOutcome{}, ctx.Err()
+		return nil, ctx.Err()
 	}
 	for index := range prepared {
 		entry := &prepared[index]
@@ -224,16 +219,12 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 	return r.recordToolResults(recordCtx, request, prepared)
 }
 
-func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, prepared []preparedCall) (toolOutcome, error) {
+func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, prepared []preparedCall) (*model.Message, error) {
 	var pending *model.Message
-	var usage model.Usage
 	for index := range prepared {
 		entry := &prepared[index]
 		if entry.result == nil {
-			return toolOutcome{}, errors.New("tool execution produced no result")
-		}
-		if childUsage := toolResultUsage(*entry.result); childUsage != nil && !entry.reused {
-			addUsage(&usage, *childUsage)
+			return nil, errors.New("tool execution produced no result")
 		}
 		eventType := transcript.ToolCallCompleted
 		if entry.result.IsError {
@@ -241,14 +232,14 @@ func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, pr
 		}
 		if entry.result.TaskState != nil && !entry.result.IsError && !entry.reused {
 			if entry.call.Name != "task_state" {
-				return toolOutcome{}, fmt.Errorf("only task_state may publish task state")
+				return nil, fmt.Errorf("only task_state may publish task state")
 			}
 			metadata, err := json.Marshal(entry.result.TaskState)
 			if err != nil {
-				return toolOutcome{}, err
+				return nil, err
 			}
 			if _, err := r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.TaskStateUpdated, Metadata: metadata}); err != nil {
-				return toolOutcome{}, err
+				return nil, err
 			}
 		}
 		if entry.result.Plan != nil && !entry.result.IsError && !entry.reused {
@@ -256,14 +247,14 @@ func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, pr
 				SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.PlanUpdated,
 				Plan: entry.result.Plan,
 			}); err != nil {
-				return toolOutcome{}, err
+				return nil, err
 			}
 		}
 		if _, err := r.record(ctx, transcript.Event{
 			SessionID: request.SessionID, TurnID: request.TurnID, Type: eventType,
 			ToolCall: &entry.call, ToolResult: entry.result,
 		}); err != nil {
-			return toolOutcome{}, err
+			return nil, err
 		}
 		if entry.result.ErrorCode == "connection_required" && r.deps.ConnectionContinuations != nil && !entry.reused {
 			provider, _ := entry.result.Metadata["provider"].(string)
@@ -286,7 +277,7 @@ func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, pr
 			pending = &message
 		}
 	}
-	return toolOutcome{pending: pending, usage: usage}, nil
+	return pending, nil
 }
 
 func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entry *preparedCall) {

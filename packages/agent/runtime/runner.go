@@ -97,11 +97,11 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 			return TurnResult{SessionID: request.SessionID, TurnID: request.TurnID}, err
 		}
 	}
-	progress, err := recoverTurnProgress(events, request.TurnID, r.config)
+	progress, err := projectTurnProgress(events, request.TurnID, r.config)
 	if err != nil {
 		return result, err
 	}
-	result.Steps, result.Usage = progress.Steps, progress.Usage
+	result.Steps, result.Usage, result.EmbeddingUsage = progress.Steps, progress.Usage, progress.EmbeddingUsage
 	ctx = model.WithBudgetState(ctx, r.config.MaxTotalTokens, progress.Budget, func(recordCtx context.Context, state model.BudgetState) error {
 		cleanupCtx, cancel := r.cleanupContext(recordCtx)
 		defer cancel()
@@ -266,7 +266,6 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 		if err != nil {
 			return r.failTurn(ctx, result, err)
 		}
-		addUsage(&result.Usage, response.Usage)
 		if response.FinishReason == model.FinishCanceled {
 			return r.finishTurn(ctx, result, response.Message, TerminationCanceled, context.Canceled)
 		}
@@ -312,8 +311,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 			result.Message = response.Message
 			return r.finishTurn(ctx, result, response.Message, TerminationCompleted, nil)
 		}
-		outcome, err := r.executeTools(ctx, request, calls, priorResults)
-		addUsage(&result.Usage, outcome.usage)
+		pending, err := r.executeTools(ctx, request, calls, priorResults)
 		if errors.Is(err, errPendingApproval) {
 			// Waiting for a user decision is a normal terminal state, not a
 			// failed turn. Adapters use it to suspend their session UI.
@@ -322,12 +320,12 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 		if err != nil {
 			return r.failTurn(ctx, result, err)
 		}
-		if outcome.pending != nil {
-			if _, err := r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.AssistantMessage, Message: outcome.pending}); err != nil {
+		if pending != nil {
+			if _, err := r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.AssistantMessage, Message: pending}); err != nil {
 				return r.failTurn(ctx, result, err)
 			}
-			result.Message = *outcome.pending
-			return r.finishTurn(ctx, result, *outcome.pending, TerminationPendingInput, nil)
+			result.Message = *pending
+			return r.finishTurn(ctx, result, *pending, TerminationPendingInput, nil)
 		}
 		if err := r.recordStepCompleted(ctx, request, step, "tools_completed"); err != nil {
 			return r.failTurn(ctx, result, err)
@@ -631,27 +629,18 @@ func (r *Runtime) finishTurn(ctx context.Context, result TurnResult, message mod
 	}
 	cleanupCtx, cancel := r.cleanupContext(ctx)
 	defer cancel()
-	// Derive auxiliary usage from canonical receipts, including calls before a
-	// recovered turn. Never apply generation model price rates to embeddings.
-	result.EmbeddingUsage = model.Usage{}
-	events, loadErr := r.turnEvents(cleanupCtx, result.SessionID)
-	if loadErr != nil && err == nil {
-		err = loadErr
+	// Live completion and interrupted recovery share the same accounting owner.
+	// Response replacement during retries cannot discard committed usage.
+	events, usageErr := r.turnEvents(cleanupCtx, result.SessionID)
+	if usageErr == nil {
+		var progress turnProgress
+		progress, usageErr = projectTurnProgress(events, result.TurnID, r.config)
+		if usageErr == nil {
+			result.Usage, result.EmbeddingUsage = progress.Usage, progress.EmbeddingUsage
+		}
 	}
-	for _, event := range events {
-		if event.TurnID != result.TurnID || event.Type != transcript.ModelUsageSettled {
-			continue
-		}
-		var receipt model.AttemptUsage
-		if decodeErr := json.Unmarshal(event.Metadata, &receipt); decodeErr != nil {
-			if err == nil {
-				err = decodeErr
-			}
-			continue
-		}
-		if receipt.Operation == "embedding" {
-			addUsage(&result.EmbeddingUsage, receipt.Usage)
-		}
+	if usageErr != nil && err == nil {
+		err = usageErr
 	}
 	result.Message = message
 	result.Termination = reason
