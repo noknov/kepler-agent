@@ -24,7 +24,7 @@ type searchTool struct {
 func (searchTool) Descriptor() Descriptor {
 	return FunctionDescriptor(
 		"tool_search",
-		"Capability router for tools that are intentionally not loaded by default to save context. Use action=search with query for discovery; use query=\"select:tool-a,tool-b\" or action=activate with exact tool_names to load tools for subsequent steps.",
+		"Discover tools that are not loaded by default to save context. Use action=search with query for discovery; use action=activate with exact tool_names to load tools for subsequent steps. Search never activates tools.",
 		ObjectSchema([]string{"action"}, map[string]any{
 			"action": map[string]any{
 				"type":        "string",
@@ -33,7 +33,7 @@ func (searchTool) Descriptor() Descriptor {
 			},
 			"query": map[string]any{
 				"type":        "string",
-				"description": "English capability keywords, service names, or tool identifiers. With action=search, prefix select: to activate exact tool names immediately.",
+				"description": "Capability keywords, service names, or an exact registered tool identifier to search for.",
 			},
 			"limit": map[string]any{
 				"type":        "integer",
@@ -74,12 +74,7 @@ func (t searchTool) Execute(ctx context.Context, call Call) (Result, error) {
 		}
 		return t.activate(ctx, call, args.ToolNames)
 	case "search":
-		query := strings.TrimSpace(args.Query)
-		if strings.HasPrefix(strings.ToLower(query), "select:") {
-			names := splitList(query[len("select:"):])
-			return t.activate(ctx, call, names)
-		}
-		return t.search(query, args.Limit, args.Categories...)
+		return t.search(args.Query, args.Limit, args.Categories...)
 	default:
 		return Result{}, fmt.Errorf("action must be search, list, or activate")
 	}
@@ -135,10 +130,9 @@ func (t searchTool) search(query string, limit int, categories ...string) (Resul
 		limit = 20
 	}
 	type scored struct {
-		name     string
-		nameHits int
-		score    float64
-		line     string
+		candidate *candidateDoc
+		exact     bool
+		score     float64
 	}
 	index := t.catalog.searchIndexFor(categories)
 	candidates, docFreq, totalDocLen := index.candidates, index.docFreq, index.totalDocLen
@@ -148,21 +142,22 @@ func (t searchTool) search(query string, limit int, categories ...string) (Resul
 	}
 	tokens := queryTokens(query)
 	results := make([]scored, 0, len(candidates))
-	for _, cand := range candidates {
-		nameHits, score, line := scoreBM25Candidate(cand.descriptor, cand.nameTerms, cand.tagTerms, cand.allTerms, cand.docLen, avgDocLen, len(candidates), docFreq, tokens)
-		if score <= 0 {
+	for i := range candidates {
+		candidate := &candidates[i]
+		exact := candidate.descriptor.Name == query
+		score := scoreBM25Candidate(*candidate, avgDocLen, len(candidates), docFreq, tokens)
+		if !exact && score <= 0 {
 			continue
 		}
-		results = append(results, scored{name: cand.descriptor.Name, nameHits: nameHits, score: score, line: line})
+		results = append(results, scored{candidate: candidate, exact: exact, score: score})
 	}
 	sort.Slice(results, func(i, j int) bool {
-		exactI, exactJ := strings.EqualFold(results[i].name, query), strings.EqualFold(results[j].name, query)
-		if exactI != exactJ {
-			return exactI
+		if results[i].exact != results[j].exact {
+			return results[i].exact
 		}
 
 		if results[i].score == results[j].score {
-			return results[i].name < results[j].name
+			return results[i].candidate.descriptor.Name < results[j].candidate.descriptor.Name
 		}
 		return results[i].score > results[j].score
 	})
@@ -174,61 +169,35 @@ func (t searchTool) search(query string, limit int, categories ...string) (Resul
 	}
 	lines := make([]string, 0, len(results))
 	for _, result := range results {
-		lines = append(lines, result.line)
+		descriptor := result.candidate.descriptor
+		lines = append(lines, fmt.Sprintf("%s [%s] — %s", descriptor.Name, strings.Join(descriptor.Tags, ", "), trimDescription(descriptor.Description, 120)))
 	}
 	return TextResult("Deferred tools matching \"" + query + "\":\n- " + strings.Join(lines, "\n- ")), nil
 }
 
 func scoreBM25Candidate(
-	descriptor Descriptor,
-	nameTerms, tagTerms, allTerms map[string]int,
-	docLen int,
+	candidate candidateDoc,
 	avgDocLen float64,
 	totalDocs int,
 	docFreq map[string]int,
 	tokens []string,
-) (int, float64, string) {
-	if len(tokens) == 0 {
-		return 0, 0, ""
-	}
+) float64 {
 	const (
 		k1 = 1.2
 		b  = 0.75
 	)
 	var score float64
-	var nameHits int
-	lowerName := strings.ToLower(descriptor.Name)
 	for _, token := range tokens {
-		tf := float64(allTerms[token])
+		tf := float64(candidate.terms[token])
 		if tf == 0 {
-			if strings.Contains(lowerName, token) {
-				tf = 2.0
-			} else {
-				continue
-			}
+			continue
 		}
 		df := float64(docFreq[token])
 		idf := math.Log(1.0 + (float64(totalDocs)-df+0.5)/(df+0.5))
-		if idf < 0.1 {
-			idf = 0.1
-		}
-		norm := tf * (k1 + 1.0) / (tf + k1*(1.0-b+b*(float64(docLen)/avgDocLen)))
+		norm := tf * (k1 + 1.0) / (tf + k1*(1.0-b+b*(float64(candidate.docLen)/avgDocLen)))
 		score += idf * norm
-		if _, ok := nameTerms[token]; ok {
-			nameHits++
-			score += 6.0
-		} else if strings.Contains(lowerName, token) {
-			score += 1.5
-		}
-		if _, ok := tagTerms[token]; ok {
-			score += 1.0
-		}
 	}
-	if score == 0 {
-		return 0, 0, ""
-	}
-	tags := strings.Join(descriptor.Tags, ", ")
-	return nameHits, score, fmt.Sprintf("%s [%s] — %s", descriptor.Name, tags, trimDescription(descriptor.Description, 120))
+	return score
 }
 
 func termFrequencies(value string) map[string]int {
@@ -332,13 +301,6 @@ func trimDescription(value string, max int) string {
 	return string(runes[:max]) + "..."
 }
 
-func splitList(value string) []string {
-	parts := strings.FieldsFunc(value, func(r rune) bool {
-		return r == ',' || r == ' ' || r == '\n' || r == '\t'
-	})
-	return compactStrings(parts)
-}
-
 func compactStrings(values []string) []string {
 	out := values[:0]
 	seen := make(map[string]bool, len(values))
@@ -366,10 +328,7 @@ func matchesCategory(tags, categories []string) bool {
 
 type candidateDoc struct {
 	descriptor Descriptor
-	nameTerms  map[string]int
-	tagTerms   map[string]int
-	descTerms  map[string]int
-	allTerms   map[string]int
+	terms      map[string]int
 	docLen     int
 }
 
@@ -401,33 +360,16 @@ func (c *Catalog) searchIndexFor(categories []string) *searchIndex {
 		if len(categories) > 0 && !matchesCategory(descriptor.Tags, categories) {
 			continue
 		}
-		nameTerms := termFrequencies(descriptor.Name)
-		tagTerms := termFrequencies(strings.Join(descriptor.Tags, " "))
-		descTerms := termFrequencies(descriptor.Description + " " + string(descriptor.InputSchema))
-		allTerms := make(map[string]int, len(nameTerms)+len(tagTerms)+len(descTerms))
+		terms := termFrequencies(descriptor.Name + " " + strings.Join(descriptor.Tags, " ") + " " + descriptor.Description + " " + string(descriptor.InputSchema))
 		docLen := 0
-		for term, count := range nameTerms {
-			allTerms[term] += count * 3
+		for term, count := range terms {
 			docLen += count
-		}
-		for term, count := range tagTerms {
-			allTerms[term] += count * 2
-			docLen += count
-		}
-		for term, count := range descTerms {
-			allTerms[term] += count
-			docLen += count
-		}
-		for term := range allTerms {
 			docFreq[term]++
 		}
 		totalDocLen += docLen
 		candidates = append(candidates, candidateDoc{
 			descriptor: descriptor,
-			nameTerms:  nameTerms,
-			tagTerms:   tagTerms,
-			descTerms:  descTerms,
-			allTerms:   allTerms,
+			terms:      terms,
 			docLen:     docLen,
 		})
 	}
