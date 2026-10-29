@@ -12,9 +12,23 @@ import (
 
 type compactorClient struct{ request model.Request }
 
+func TestCompactorRejectsIncompleteSummaries(t *testing.T) {
+	for _, reason := range []model.FinishReason{model.FinishLength, model.FinishContent, model.FinishCanceled, model.FinishError, model.FinishToolCalls, ""} {
+		t.Run(string(reason), func(t *testing.T) {
+			client := &scriptedModel{responses: []model.Response{{
+				Message: model.TextMessage(model.RoleAssistant, "partial summary"), FinishReason: reason,
+			}}}
+			checkpoint, err := (ModelCompactor{Client: client}).Compact(t.Context(), []model.Message{model.TextMessage(model.RoleUser, "original evidence")}, 100)
+			if err == nil || checkpoint.Text() != "" {
+				t.Fatalf("incomplete summary became a checkpoint: checkpoint=%+v err=%v", checkpoint, err)
+			}
+		})
+	}
+}
+
 func (c *compactorClient) Generate(_ context.Context, request model.Request, _ model.EventSink) (model.Response, error) {
 	c.request = request
-	return model.Response{Message: model.TextMessage(model.RoleAssistant, "summary")}, nil
+	return model.Response{Message: model.TextMessage(model.RoleAssistant, "summary"), FinishReason: model.FinishStop}, nil
 }
 
 func TestCompactorSplitsAnOversizedGroup(t *testing.T) {
@@ -28,9 +42,9 @@ func TestCompactorSplitsAnOversizedGroup(t *testing.T) {
 
 func TestCompactorStopsWhenSummariesDoNotShrink(t *testing.T) {
 	client := &scriptedModel{responses: []model.Response{
-		{Message: model.TextMessage(model.RoleAssistant, strings.Repeat("x", 1000))},
-		{Message: model.TextMessage(model.RoleAssistant, strings.Repeat("x", 1000))},
-		{Message: model.TextMessage(model.RoleAssistant, strings.Repeat("x", 1000))},
+		{Message: model.TextMessage(model.RoleAssistant, strings.Repeat("x", 1000)), FinishReason: model.FinishStop},
+		{Message: model.TextMessage(model.RoleAssistant, strings.Repeat("x", 1000)), FinishReason: model.FinishStop},
+		{Message: model.TextMessage(model.RoleAssistant, strings.Repeat("x", 1000)), FinishReason: model.FinishStop},
 	}}
 	compactor := ModelCompactor{Client: client, MaxInputTokens: 300}
 	var input []model.Message

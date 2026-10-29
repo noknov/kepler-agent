@@ -124,6 +124,9 @@ func (c ModelCompactor) compactOnce(ctx context.Context, messages []model.Messag
 	if err != nil {
 		return model.Message{}, err
 	}
+	if response.FinishReason != model.FinishStop {
+		return model.Message{}, fmt.Errorf("compactor did not complete a summary")
+	}
 	if response.Message.Text() == "" {
 		return model.Message{}, fmt.Errorf("compactor returned an empty summary")
 	}

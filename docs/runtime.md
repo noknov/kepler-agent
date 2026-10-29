@@ -46,6 +46,7 @@ continuation checkpoint covering task constraints, decisions, verified work,
 failures, next actions and evidence references. With a compactor configured, the
 runtime first targets 85% of the available input budget. A proactive summary
 failure falls back to the hard budget only when no history must be discarded.
+Incomplete model responses cannot become portable compaction checkpoints.
 Static prompt layers
 (`LayerCore`, `LayerProduct`, `LayerEnvironment`) are automatically separated
 from dynamic layers (`LayerProject`, `LayerUser`, `LayerSkill`, `LayerTurn`) via
@@ -210,6 +211,8 @@ message. The coordinator uses a bounded multi-agent workflow and keeps every
 listed PR in the review scope; there is no user-facing review-depth selector.
 Routing failures fall back to general conversation. CLI, app-server, and other surfaces
 do not install this Slack product router and remain generic.
+Only a normally completed, label-only model response can select a workflow;
+truncated, refused, canceled, or tool-requesting responses are routing failures.
 The ordinary hosted agent becomes the coordinator and uses the same runtime to
 triage an immutable GitHub PR head, launch a bounded risk-based reviewer batch,
 verify candidate findings itself or with targeted follow-up workers, and

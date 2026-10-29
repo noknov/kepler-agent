@@ -13,6 +13,38 @@ type routingModel struct {
 	request model.Request
 }
 
+type routeResponseModel struct{ response model.Response }
+
+func (m routeResponseModel) Generate(context.Context, model.Request, model.EventSink) (model.Response, error) {
+	return m.response, nil
+}
+
+func TestModelRouterRequiresCompletedClassification(t *testing.T) {
+	for _, label := range []string{GeneralIntent, "code_review"} {
+		for _, reason := range []model.FinishReason{model.FinishLength, model.FinishContent, model.FinishCanceled, model.FinishError, model.FinishToolCalls, ""} {
+			t.Run(label+"/"+string(reason), func(t *testing.T) {
+				router := ModelRouter{Client: routeResponseModel{response: model.Response{Message: model.TextMessage(model.RoleAssistant, label), FinishReason: reason}}, Model: "secondary", Options: []RouteOption{{Label: "code_review", Intent: "code_review"}}}
+				decision, err := router.Route(t.Context(), RouteRequest{Text: "inspect"})
+				if err == nil || ErrorKind(err) != RouteErrorContract || decision.Intent != "" {
+					t.Fatalf("non-completed label routed: decision=%+v err=%v", decision, err)
+				}
+				if diagnostics := ErrorDiagnostics(err); diagnostics.FinishReason != reason || diagnostics.FinalTextBytes != len(label) {
+					t.Fatalf("classification receipt lost: %+v", diagnostics)
+				}
+			})
+		}
+	}
+}
+
+func TestModelRouterRejectsToolRequestsAlongsideLabel(t *testing.T) {
+	message := model.TextMessage(model.RoleAssistant, "code_review")
+	message.Content = append(message.Content, model.Content{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "call", Name: "review", Arguments: []byte(`{}`)}})
+	router := ModelRouter{Client: routeResponseModel{response: model.Response{Message: message, FinishReason: model.FinishStop}}, Model: "secondary", Options: []RouteOption{{Label: "code_review", Intent: "code_review"}}}
+	if decision, err := router.Route(t.Context(), RouteRequest{Text: "inspect"}); err == nil || ErrorKind(err) != RouteErrorContract || decision.Intent != "" {
+		t.Fatalf("classification admitted unexpected tool request: decision=%+v err=%v", decision, err)
+	}
+}
+
 func (m *routingModel) Generate(_ context.Context, request model.Request, _ model.EventSink) (model.Response, error) {
 	m.request = request
 	return model.Response{Message: model.TextMessage(model.RoleAssistant, m.output), FinishReason: model.FinishStop}, nil
