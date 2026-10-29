@@ -2,7 +2,6 @@ package luckin
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -10,8 +9,6 @@ import (
 	"github.com/noknov/kepler-agent/packages/mcp"
 	mcptools "github.com/noknov/kepler-agent/packages/tools/mcp"
 )
-
-const previewedOrderCacheKey = "luckin:previewed_order_fingerprint"
 
 // Client wraps a shared MCP client with Luckin-specific behavior.
 type Client struct {
@@ -36,7 +33,11 @@ func (t MCPTool) Descriptor() tool.Descriptor {
 	if t.SideEffect {
 		effects = []tool.Effect{tool.EffectExternalWrite, tool.EffectNetwork}
 	}
-	return tool.FunctionDescriptor(t.LocalName, t.Description, t.Parameters, tool.WithEffects(effects...), tool.WithDependencies("luckin"))
+	d := tool.FunctionDescriptor(t.LocalName, t.Description, t.Parameters, tool.WithEffects(effects...), tool.WithDependencies("luckin"))
+	if t.SideEffect {
+		d.Version = t.Client.orderBindingVersion()
+	}
+	return d
 }
 
 func (t MCPTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
@@ -44,16 +45,6 @@ func (t MCPTool) Execute(ctx context.Context, call tool.Call) (tool.Result, erro
 		return tool.Result{}, fmt.Errorf("Luckin MCP is not configured: LUCKIN_MCP_TOKEN is required")
 	}
 	cache := tool.CacheFor(call.Scope)
-	if t.LocalName == "luckin-create_order" {
-		fp := orderFingerprint(call.Arguments)
-		previewed, _ := cache.Get(previewedOrderCacheKey)
-		if fp == "" || previewed != fp {
-			res := tool.TextResult("Refusing to create order before previewing the exact store and SKU list in this turn. Call luckin-preview_order first with the same deptId and productList.")
-			res.IsError = true
-			res.ErrorCode = "order_preview_required"
-			return res, nil
-		}
-	}
 	session, err := getOrCreateSession(ctx, t.Client.MCP, cache)
 	if err != nil {
 		return tool.Result{}, err
@@ -62,38 +53,13 @@ func (t MCPTool) Execute(ctx context.Context, call tool.Call) (tool.Result, erro
 	if err != nil {
 		return tool.Result{}, err
 	}
-	if t.LocalName == "luckin-preview_order" && !out.IsError {
-		if fp := orderFingerprint(call.Arguments); fp != "" {
-			cache.Set(previewedOrderCacheKey, fp)
-		}
-	}
 	return mcptools.Result(out), nil
 }
 
-func orderFingerprint(raw json.RawMessage) string {
-	var payload struct {
-		DeptID      int `json:"deptId"`
-		ProductList []struct {
-			ProductID int    `json:"productId"`
-			SKUCode   string `json:"skuCode"`
-			Amount    int    `json:"amount"`
-		} `json:"productList"`
-	}
-	if err := json.Unmarshal(raw, &payload); err != nil || payload.DeptID == 0 || len(payload.ProductList) == 0 {
-		return ""
-	}
-	encoded, _ := json.Marshal(payload)
-	return string(encoded)
-}
-
 // Tools returns the Luckin MCP tool inventory for catalog registration.
-func Tools(client *Client) []MCPTool {
-	return tools(client)
-}
-
-func tools(client *Client) []MCPTool {
-	return []MCPTool{
-		{
+func Tools(client *Client) []tool.Tool {
+	return []tool.Tool{
+		MCPTool{
 			Client:     client,
 			LocalName:  "luckin-query_shop_list",
 			RemoteName: "queryShopList",
@@ -103,7 +69,7 @@ func tools(client *Client) []MCPTool {
 				"latitude":  map[string]any{"type": "number", "description": ""},
 			}),
 		},
-		{
+		MCPTool{
 			Client:     client,
 			LocalName:  "luckin-search_product",
 			RemoteName: "searchProductForMcp",
@@ -112,7 +78,7 @@ func tools(client *Client) []MCPTool {
 				"query":  map[string]any{"type": "string", "description": ""},
 			}),
 		},
-		{
+		MCPTool{
 			Client:     client,
 			LocalName:  "luckin-switch_product",
 			RemoteName: "switchProduct",
@@ -140,7 +106,7 @@ func tools(client *Client) []MCPTool {
 				},
 			}),
 		},
-		{
+		MCPTool{
 			Client:     client,
 			LocalName:  "luckin-query_product_detail",
 			RemoteName: "queryProductDetailInfo",
@@ -149,20 +115,20 @@ func tools(client *Client) []MCPTool {
 				"productId": map[string]any{"type": "integer", "description": ""},
 			}),
 		},
-		{
+		previewOrderTool{MCPTool{
 			Client:     client,
 			LocalName:  "luckin-preview_order",
 			RemoteName: "previewOrder",
 			Parameters: tool.ObjectSchema([]string{"deptId", "productList"}, orderProperties(false)),
-		},
-		{
+		}},
+		createOrderTool{MCPTool{
 			Client:     client,
 			LocalName:  "luckin-create_order",
 			RemoteName: "createOrder",
 			Parameters: tool.ObjectSchema([]string{"deptId", "productList", "longitude", "latitude"}, orderProperties(true)),
 			SideEffect: true,
-		},
-		{
+		}},
+		MCPTool{
 			Client:     client,
 			LocalName:  "luckin-query_order_detail",
 			RemoteName: "queryOrderDetailInfo",
@@ -170,7 +136,7 @@ func tools(client *Client) []MCPTool {
 				"orderId": map[string]any{"type": "string", "description": ""},
 			}),
 		},
-		{
+		MCPTool{
 			Client:     client,
 			LocalName:  "luckin-cancel_order",
 			RemoteName: "cancelOrder",

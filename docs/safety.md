@@ -30,6 +30,16 @@ that another tool cannot access the same path.
 
 ## Persistence and external effects
 
+Tools with transient prerequisites can implement `tool.CallPreparer` to capture
+minimal, immutable JSON evidence before policy and execution. Preparation only
+reads local server-owned state; it cannot perform external work. The runtime
+discards supplied `Call.State`, validates and copies the adapter snapshot, and
+persists it with the exact call when requesting approval. Model arguments and
+approval controls cannot supply this state. Descriptor wrappers preserve
+preparation; approval resolution uses the persisted call and rechecks the current
+policy and descriptor contract. Adapters must validate the captured binding at
+execution and keep credentials out of the snapshot.
+
 Canonical transcripts and owner-checked durable work improve replay, but do
 not make an external API call and a database append atomic. A crash after a
 side effect and before its result is recorded can leave an uncertain outcome.

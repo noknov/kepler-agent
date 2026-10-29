@@ -27,7 +27,7 @@ func TestMCPToolPreservesRemoteOutcome(t *testing.T) {
 			scope := tool.Scope{SessionID: t.Name(), TurnID: "turn"}
 			t.Cleanup(func() { tool.ClearTurnCache(scope.SessionID, scope.TurnID) })
 			args := json.RawMessage(`{"deptId":101,"productList":[{"productId":202,"skuCode":"sku","amount":1}]}`)
-			preview := MCPTool{Client: client, LocalName: "luckin-preview_order", RemoteName: "previewOrder"}
+			preview := previewOrderTool{MCPTool{Client: client, LocalName: "luckin-preview_order", RemoteName: "previewOrder"}}
 			result, err := preview.Execute(t.Context(), tool.Call{Scope: scope, Arguments: args})
 			if err != nil || result.IsError != test.error || (result.ErrorCode == "mcp_tool_error") != test.error {
 				t.Errorf("remote outcome lost: result=%+v err=%v", result, err)
@@ -35,14 +35,20 @@ func TestMCPToolPreservesRemoteOutcome(t *testing.T) {
 			if test.image && (len(result.Content) != 1 || result.Content[0].Type != model.ContentImage || result.Content[0].ImageURL != "data:image/png;base64,aGVsbG8=") {
 				t.Errorf("remote image lost: %+v", result)
 			}
-			create := MCPTool{Client: client, LocalName: "luckin-create_order", RemoteName: "createOrder", SideEffect: true}
-			result, err = create.Execute(t.Context(), tool.Call{Scope: scope, Arguments: args})
+			create := createOrderTool{MCPTool{Client: client, LocalName: "luckin-create_order", RemoteName: "createOrder", SideEffect: true}}
+			call, prepareErr := tool.PrepareCall(create, tool.Call{Scope: scope, Arguments: args})
 			if test.error {
-				if err != nil || result.ErrorCode != "order_preview_required" || len(remoteCalls) != 1 {
-					t.Fatalf("failed preview permitted createOrder: result=%+v calls=%v err=%v", result, remoteCalls, err)
+				if prepareErr == nil || len(remoteCalls) != 1 {
+					t.Fatalf("failed preview permitted order preparation: calls=%v err=%v", remoteCalls, prepareErr)
 				}
-			} else if err != nil || len(remoteCalls) != 2 || remoteCalls[1] != "createOrder" {
-				t.Fatalf("successful preview lost: calls=%v result=%+v err=%v", remoteCalls, result, err)
+			} else {
+				if prepareErr != nil {
+					t.Fatal(prepareErr)
+				}
+				result, err = create.Execute(t.Context(), call)
+				if err != nil || result.IsError || len(remoteCalls) != 2 || remoteCalls[1] != "createOrder" {
+					t.Fatalf("successful preview lost: calls=%v result=%+v err=%v", remoteCalls, result, err)
+				}
 			}
 		})
 	}
@@ -84,14 +90,14 @@ func TestCreateOrderRequiresExactOpaqueSKU(t *testing.T) {
 			client := resultClient(t, `{"content":[{"type":"text","text":"ok"}]}`, &remoteCalls)
 			scope := tool.Scope{SessionID: t.Name(), TurnID: "turn"}
 			t.Cleanup(func() { tool.ClearTurnCache(scope.SessionID, scope.TurnID) })
-			preview := MCPTool{Client: client, LocalName: "luckin-preview_order", RemoteName: "previewOrder"}
+			preview := previewOrderTool{MCPTool{Client: client, LocalName: "luckin-preview_order", RemoteName: "previewOrder"}}
 			if result, err := preview.Execute(t.Context(), tool.Call{Scope: scope, Arguments: json.RawMessage(test.preview)}); err != nil || result.IsError {
 				t.Fatalf("preview failed: %+v %v", result, err)
 			}
-			create := MCPTool{Client: client, LocalName: "luckin-create_order", RemoteName: "createOrder", SideEffect: true}
-			result, err := create.Execute(t.Context(), tool.Call{Scope: scope, Arguments: json.RawMessage(test.create)})
-			if err != nil || result.ErrorCode != "order_preview_required" || len(remoteCalls) != 1 {
-				t.Fatalf("changed SKU passed preview binding: result=%+v calls=%v err=%v", result, remoteCalls, err)
+			create := createOrderTool{MCPTool{Client: client, LocalName: "luckin-create_order", RemoteName: "createOrder", SideEffect: true}}
+			_, err := tool.PrepareCall(create, tool.Call{Scope: scope, Arguments: json.RawMessage(test.create)})
+			if err == nil || len(remoteCalls) != 1 {
+				t.Fatalf("changed SKU passed preview binding: calls=%v err=%v", remoteCalls, err)
 			}
 		})
 	}

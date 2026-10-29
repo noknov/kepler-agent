@@ -35,15 +35,15 @@ type preparedCall struct {
 	reused     bool
 }
 
-func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls []model.ToolCall, priorResults map[string]tool.Result) (*model.Message, error) {
+func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls []model.ToolCall, priorResults map[string]completedToolReceipt) (*model.Message, error) {
 	prepared := make([]preparedCall, len(calls))
 	exclusive := false
 	for index, modelCall := range calls {
 		call := tool.Call{ID: modelCall.ID, ExecutionID: request.TurnID + ":" + modelCall.ID, Name: modelCall.Name, Arguments: modelCall.Arguments, Scope: request.Scope}
 		prepared[index] = preparedCall{index: index, call: call}
 		if previous, ok := priorResults[call.ID]; ok {
-			result := previous
-			prepared[index].result = &result
+			prepared[index].call = previous.call
+			prepared[index].result = &previous.result
 			prepared[index].reused = true
 			continue
 		}
@@ -62,6 +62,13 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 		}
 		prepared[index].descriptor = descriptor
 		exclusive = exclusive || prepared[index].descriptor.Exclusive
+		call, prepareErr := tool.PrepareCall(item, call)
+		if prepareErr != nil {
+			result := tool.Result{Content: []model.Content{{Type: model.ContentText, Text: prepareErr.Error()}}, IsError: true, ErrorCode: "tool_precondition_failed"}
+			prepared[index].result = &result
+			continue
+		}
+		prepared[index].call = call
 	}
 	if exclusive && len(calls) != 1 {
 		for index := range prepared {
