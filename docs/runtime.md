@@ -272,6 +272,11 @@ provider-specific schema vocabulary is not silently rewritten. Free-text agent
 turns retain incremental streaming. Memory reranking uses explicit validated
 mode and still applies its own candidate/selection/version checks; schema
 validation cannot establish factual relevance or authorization.
+Memory recall traces distinguish disabled ranking, no candidates, completed
+selection, ranker failure and rejected selections. Ranking failures retain the
+original candidates and stay observable without marking a successful fallback
+as a failed recall. Trace data includes counts and bounded error kinds, never
+query text, memory contents/keys, identities or raw error messages.
 
 References: [OpenAI structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs),
 [Anthropic structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs).

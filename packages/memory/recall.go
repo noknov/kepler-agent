@@ -3,7 +3,14 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+
+	"github.com/noknov/kepler-agent/packages/agent/model"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type RecallPolicy struct {
@@ -49,9 +56,26 @@ type Ranker interface {
 	Rank(context.Context, string, []Record) ([]string, error)
 }
 
+// ErrInvalidSelection means a ranker response violates the selection contract.
+var ErrInvalidSelection = errors.New("invalid memory ranking selection")
+
 // Recall separates persistent preferences from query-matched facts. It never
 // mixes generations across reset, and re-rankers may select only supplied keys.
-func Recall(ctx context.Context, store Store, identity Identity, text string, policy RecallPolicy, ranker Ranker) (Page, error) {
+func Recall(ctx context.Context, store Store, identity Identity, text string, policy RecallPolicy, ranker Ranker) (page Page, err error) {
+	ctx, span := otel.Tracer("github.com/noknov/kepler-agent/memory").Start(ctx, "memory.recall")
+	defer func() {
+		span.SetAttributes(attribute.Int("agent.memory.records", len(page.Records)))
+		if err != nil {
+			span.SetStatus(codes.Error, "memory recall failed")
+			span.SetAttributes(attribute.String("error.type", string(model.ErrorKindOf(err))))
+		}
+		span.End()
+	}()
+	outcome := "disabled"
+	if ranker != nil {
+		outcome = "not_attempted"
+	}
+	span.SetAttributes(attribute.String("agent.memory.rerank.outcome", outcome))
 	policy = policy.WithDefaults()
 	if err := policy.Validate(); err != nil {
 		return Page{}, err
@@ -69,14 +93,34 @@ func Recall(ctx context.Context, store Store, identity Identity, text string, po
 			continue
 		}
 		records := relevant.Records
+		if ranker != nil {
+			span.SetAttributes(attribute.String("agent.memory.rerank.outcome", "no_candidates"))
+		}
 		if ranker != nil && len(records) > 0 {
 			keys, rankErr := ranker.Rank(ctx, text, records)
+			var ordered []Record
 			if rankErr == nil {
-				ordered, validErr := selectKeys(records, keys)
-				if validErr == nil {
-					records = ordered
-				}
+				ordered, rankErr = selectKeys(records, keys)
 			}
+			outcome = "completed"
+			if rankErr != nil {
+				outcome = "ranker_error"
+				if errors.Is(rankErr, ErrInvalidSelection) {
+					outcome = "invalid_selection"
+				}
+			} else {
+				records = ordered
+			}
+			attributes := []attribute.KeyValue{
+				attribute.String("agent.memory.rerank.outcome", outcome),
+				attribute.Int("agent.memory.rerank.candidates", len(relevant.Records)),
+				attribute.Int("agent.memory.rerank.selected", len(ordered)),
+			}
+			if rankErr != nil {
+				attributes = append(attributes, attribute.String("error.type", string(model.ErrorKindOf(rankErr))))
+			}
+			span.SetAttributes(attribute.String("agent.memory.rerank.outcome", outcome))
+			span.AddEvent("memory.rerank", trace.WithAttributes(attributes...))
 		}
 		prefs := Bound(preferences.Records[:min(policy.Preferences, len(preferences.Records))], min(policy.PreferenceBytes, policy.MaxBytes))
 		slots := policy.MaxRecords - len(prefs)
@@ -120,7 +164,7 @@ func selectKeys(records []Record, keys []string) ([]Record, error) {
 	for _, key := range keys {
 		record, ok := byKey[key]
 		if !ok || seen[key] {
-			return nil, fmt.Errorf("ranker returned an unknown or duplicate memory key")
+			return nil, fmt.Errorf("%w: unknown or duplicate key", ErrInvalidSelection)
 		}
 		seen[key] = true
 		out = append(out, record)

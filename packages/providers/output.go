@@ -35,7 +35,7 @@ func (c *Client) Generate(ctx context.Context, request model.Request, sink model
 			value, decodeErr := jsonschema.UnmarshalJSON(bytes.NewBufferString(response.Message.Text()))
 			if decodeErr != nil || schema.Validate(value) != nil {
 				// Validator diagnostics can contain user content and schema enum values.
-				err = &model.Error{Kind: model.ErrorProtocol, Message: "structured output does not match its JSON schema"}
+				err = &model.Error{Kind: model.ErrorProtocol, Message: "structured output does not match its JSON schema", Cause: model.ErrOutputValidation}
 			}
 		}
 	}

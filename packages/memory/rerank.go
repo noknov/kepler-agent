@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 
@@ -80,10 +81,13 @@ func (r ModelRanker) Rank(ctx context.Context, query string, records []Record) (
 		Schema: json.RawMessage(`{"type":"object","properties":{"keys":{"type":"array","items":{"type":"string"}}},"required":["keys"],"additionalProperties":false}`),
 	}, Messages: messages, MaxOutputTokens: 512, InputTokenEstimate: estimate}, nil)
 	if err != nil {
+		if errors.Is(err, model.ErrOutputValidation) {
+			return nil, fmt.Errorf("%w: %w", ErrInvalidSelection, err)
+		}
 		return nil, err
 	}
 	if response.FinishReason != model.FinishStop {
-		return nil, fmt.Errorf("memory ranker did not complete")
+		return nil, fmt.Errorf("%w: ranker did not complete", ErrInvalidSelection)
 	}
 	var output struct {
 		Keys []string `json:"keys"`
@@ -91,16 +95,16 @@ func (r ModelRanker) Rank(ctx context.Context, query string, records []Record) (
 	decoder := json.NewDecoder(bytes.NewReader([]byte(response.Message.Text())))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&output); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrInvalidSelection, err)
 	}
 	if decoder.Decode(new(any)) != io.EOF {
-		return nil, fmt.Errorf("memory ranker returned trailing content")
+		return nil, fmt.Errorf("%w: trailing content", ErrInvalidSelection)
 	}
 	if len(output.Keys) > maxResults {
-		return nil, fmt.Errorf("memory ranker exceeded selection limit")
+		return nil, fmt.Errorf("%w: selection limit exceeded", ErrInvalidSelection)
 	}
 	if output.Keys == nil {
-		return nil, fmt.Errorf("memory ranker omitted keys")
+		return nil, fmt.Errorf("%w: missing keys", ErrInvalidSelection)
 	}
 	if _, err := selectKeys(selected, output.Keys); err != nil {
 		return nil, err
