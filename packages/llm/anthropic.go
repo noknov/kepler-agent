@@ -147,7 +147,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req Request, h StreamH
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		return Response{}, NewProviderError("anthropic stream", resp.StatusCode, compactBody(data))
+		return Response{}, NewProviderError("anthropic stream", resp.StatusCode, string(data))
 	}
 
 	var msg Message
@@ -421,7 +421,7 @@ func (c *AnthropicClient) doOnce(ctx context.Context, payload []byte) ([]byte, e
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, NewProviderError("anthropic messages", resp.StatusCode, compactBody(data))
+		return nil, NewProviderError("anthropic messages", resp.StatusCode, string(data))
 	}
 	return data, nil
 }

@@ -26,15 +26,42 @@ func TestTemporaryOverloadErrors(t *testing.T) {
 	}
 }
 
-func TestContentPolicyBody(t *testing.T) {
-	if !ContentPolicyBody(`{"error":{"message":"Content Exists Risk","type":"invalid_request_error"}}`) {
+func TestProviderContentPolicy(t *testing.T) {
+	if !NewProviderError("test", 400, `{"error":{"message":"Content Exists Risk","type":"invalid_request_error"}}`).ContentPolicy() {
 		t.Fatal("expected DeepSeek content risk body to match")
 	}
-	if ContentPolicyBody(`{"error":{"message":"Invalid schema for function"}}`) {
+	if NewProviderError("test", 400, `{"error":{"message":"Invalid schema for function"}}`).ContentPolicy() {
 		t.Fatal("did not expect an unrelated 400 body to match")
 	}
-	if ContentPolicyBody("") {
+	if NewProviderError("test", 400, "").ContentPolicy() {
 		t.Fatal("did not expect an empty body to match")
+	}
+}
+
+func TestProviderErrorClassificationUsesStructuredRejections(t *testing.T) {
+	for _, test := range []struct {
+		name, body string
+		context    bool
+		policy     bool
+	}{
+		{"context code", `{"error":{"code":"context_length_exceeded"}}`, true, false},
+		{"context type", `{"error":{"type":"context_length_exceeded"}}`, true, false},
+		{"anthropic context", `{"error":{"type":"invalid_request_error","message":"prompt is too long: 210000 tokens > 200000 maximum"}}`, true, false},
+		{"policy code", `{"error":{"code":"content_filter"}}`, false, true},
+		{"policy type", `{"error":{"type":"content_policy_violation"}}`, false, true},
+		{"inspection code", `{"error":{"code":"data_inspection_failed"}}`, false, true},
+		{"deepseek request ID", `{"error":{"type":"invalid_request_error","code":"invalid_request_error","message":"Content Exists Risk (request_id: req-123)"}}`, false, true},
+		{"conflicting validation code", `{"error":{"type":"invalid_request_error","code":"invalid_schema","message":"Content Exists Risk"}}`, false, false},
+		{"unstructured text", `Content Exists Risk: maximum context length`, false, false},
+		{"malformed JSON", `{"error":{"code":"content_filter"}`, false, false},
+		{"HTML", `<html>maximum context length: safety system</html>`, false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := NewProviderError("test", 400, test.body)
+			if err.ContextLimit() != test.context || err.ContentPolicy() != test.policy {
+				t.Fatalf("context=%v policy=%v, want context=%v policy=%v", err.ContextLimit(), err.ContentPolicy(), test.context, test.policy)
+			}
+		})
 	}
 }
 

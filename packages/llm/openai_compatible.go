@@ -233,7 +233,7 @@ func (c *OpenAICompatibleClient) ChatStream(ctx context.Context, req Request, h 
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		providerErr := NewProviderError(c.providerName()+" stream", resp.StatusCode, compactBody(data))
+		providerErr := NewProviderError(c.providerName()+" stream", resp.StatusCode, string(data))
 		return Response{}, providerErr
 	}
 
@@ -399,7 +399,7 @@ func (c *OpenAICompatibleClient) doOnce(ctx context.Context, payload []byte, met
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, NewProviderError(c.providerName()+" chat completion", resp.StatusCode, compactBody(data))
+		return nil, NewProviderError(c.providerName()+" chat completion", resp.StatusCode, string(data))
 	}
 	return data, nil
 }
