@@ -6,6 +6,7 @@ import (
 	"fmt"
 	stdhtml "html"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -229,11 +230,20 @@ func (c Client) ReadPage(ctx context.Context, pageURL string, maxChars int) (Pag
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return Page{}, fmt.Errorf("web page status %d: %s", resp.StatusCode, errorSnippet(data))
 	}
-	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
-	if contentType != "" && !strings.Contains(contentType, "text/html") && !strings.Contains(contentType, "text/plain") && !strings.Contains(contentType, "application/xhtml+xml") {
-		return Page{}, fmt.Errorf("unsupported web page content type %q", contentType)
+	contentType := resp.Header.Get("Content-Type")
+	mediaType := ""
+	if contentType != "" {
+		mediaType, _, err = mime.ParseMediaType(contentType)
+		if err != nil {
+			return Page{}, fmt.Errorf("invalid web page content type: %w", err)
+		}
 	}
-	title, text := extractReadableText(string(data), contentType)
+	switch mediaType {
+	case "", "text/html", "text/plain", "application/xhtml+xml":
+	default:
+		return Page{}, fmt.Errorf("unsupported web page content type %q", mediaType)
+	}
+	title, text := extractReadableText(string(data), mediaType)
 	if maxChars > 0 && len(text) > maxChars {
 		text = truncateTextHeadTail(text, maxChars)
 	}
@@ -528,7 +538,7 @@ func normalizePageURL(raw string) (string, error) {
 }
 
 func extractReadableText(data, contentType string) (string, string) {
-	if strings.Contains(contentType, "text/plain") {
+	if contentType == "text/plain" {
 		return "", cleanWhitespace(data)
 	}
 	document, err := xhtml.Parse(strings.NewReader(data))
