@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,41 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/providers"
 )
+
+func TestResponsesTerminalReceiptsDoNotTriggerEmptyRecovery(t *testing.T) {
+	for _, reason := range []string{"max_output_tokens", "content_filter"} {
+		t.Run(reason, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprintf(w, "data: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":%q},\"output\":[],\"usage\":{\"input_tokens\":4,\"output_tokens\":9}}}\n\n", reason)
+			}))
+			defer server.Close()
+			client, err := providers.New(providers.Config{Provider: "openai", Protocol: "responses", BaseURL: server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			catalog, _ := tool.NewCatalog()
+			runner, err := agentruntime.New(agentruntime.Config{Model: "test", MaxEmptyResponseRetries: 2}, agentruntime.Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := runner.RunTurn(t.Context(), agentruntime.TurnRequest{SessionID: "responses-" + reason, Input: model.TextMessage(model.RoleUser, "inspect")})
+			if reason == "content_filter" {
+				var typed *model.Error
+				if !errors.As(err, &typed) || typed.Kind != model.ErrorContentPolicy {
+					t.Fatalf("lost content refusal: %v", err)
+				}
+			} else if err != nil || result.Termination != agentruntime.TerminationOutputLimit {
+				t.Fatalf("lost output limit: %+v err=%v", result, err)
+			}
+			if requests != 1 || result.Usage.InputTokens != 4 || result.Usage.OutputTokens != 9 {
+				t.Fatalf("terminal request retried or usage lost: requests=%d result=%+v", requests, result)
+			}
+		})
+	}
+}
 
 type roundTripEcho struct{}
 

@@ -161,7 +161,7 @@ func TestIncompleteResponseDoesNotReplaySuppressedNativeCalls(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatal(err)
 		}
-		body := `{"status":"incomplete","output":[{"type":"reasoning","id":"reasoning","encrypted_content":"opaque"},{"type":"function_call","id":"fc","call_id":"call","name":"write","arguments":"{"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"partial answer"}]}],"usage":{"input_tokens":4,"output_tokens":9}}`
+		body := `{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"reasoning","id":"reasoning","encrypted_content":"opaque"},{"type":"function_call","id":"fc","call_id":"call","name":"write","arguments":"{"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"partial answer"}]}],"usage":{"input_tokens":4,"output_tokens":9}}`
 		if calls == 2 {
 			if strings.Contains(string(request.Input), `"function_call"`) || strings.Contains(string(request.Input), `"opaque"`) || !strings.Contains(string(request.Input), "partial answer") {
 				t.Fatalf("suppressed call leaked into next request: %s", request.Input)
