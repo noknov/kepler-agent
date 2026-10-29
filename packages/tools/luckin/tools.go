@@ -8,6 +8,7 @@ import (
 
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/mcp"
+	mcptools "github.com/noknov/kepler-agent/packages/tools/mcp"
 )
 
 const previewedOrderCacheKey = "luckin:previewed_order_fingerprint"
@@ -43,7 +44,7 @@ func (t MCPTool) Execute(ctx context.Context, call tool.Call) (tool.Result, erro
 		return tool.Result{}, fmt.Errorf("Luckin MCP is not configured: LUCKIN_MCP_TOKEN is required")
 	}
 	cache := tool.CacheFor(call.Scope)
-	if t.LocalName == "luckin-create_order" && cache != nil {
+	if t.LocalName == "luckin-create_order" {
 		fp := orderFingerprint(call.Arguments)
 		previewed, _ := cache.Get(previewedOrderCacheKey)
 		if fp == "" || previewed != fp {
@@ -61,12 +62,12 @@ func (t MCPTool) Execute(ctx context.Context, call tool.Call) (tool.Result, erro
 	if err != nil {
 		return tool.Result{}, err
 	}
-	if t.LocalName == "luckin-preview_order" && cache != nil {
+	if t.LocalName == "luckin-preview_order" && !out.IsError {
 		if fp := orderFingerprint(call.Arguments); fp != "" {
 			cache.Set(previewedOrderCacheKey, fp)
 		}
 	}
-	return tool.TextResult(out.Content), nil
+	return mcptools.Result(out), nil
 }
 
 func orderFingerprint(raw json.RawMessage) string {
@@ -81,12 +82,8 @@ func orderFingerprint(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &payload); err != nil || payload.DeptID == 0 || len(payload.ProductList) == 0 {
 		return ""
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "dept:%d", payload.DeptID)
-	for _, item := range payload.ProductList {
-		fmt.Fprintf(&b, "|%d:%s:%d", item.ProductID, strings.TrimSpace(item.SKUCode), item.Amount)
-	}
-	return b.String()
+	encoded, _ := json.Marshal(payload)
+	return string(encoded)
 }
 
 // Tools returns the Luckin MCP tool inventory for catalog registration.
