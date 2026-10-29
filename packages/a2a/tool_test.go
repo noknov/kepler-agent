@@ -16,6 +16,42 @@ import (
 	"github.com/noknov/kepler-agent/packages/config"
 )
 
+func TestRemoteMessageIdentityPreservesOpaqueTupleBoundaries(t *testing.T) {
+	var ids []string
+	messageIDs := make(chan string, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     string `json:"id"`
+			Params struct {
+				Message struct {
+					ID string `json:"messageId"`
+				} `json:"message"`
+			} `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		messageIDs <- request.Params.Message.ID
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%q,"result":{"kind":"task","id":"remote","contextId":"context","status":{"state":"working"}}}`, request.ID)
+	}))
+	defer server.Close()
+	item, err := NewTool(config.RemoteAgentConfig{Name: "peer", URL: server.URL}, transcript.NewMemoryStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, identity := range []struct{ session, turn, call string }{{"s", "a\x00b", "c"}, {"s", "a", "b\x00c"}, {"s\x00a", "b", "c"}, {"s", "a\x00b", "c"}} {
+		call := tool.Call{ID: identity.call, Scope: tool.Scope{SessionID: identity.session, TurnID: identity.turn}, Arguments: json.RawMessage(`{"operation":"send","task":{"name":"n","role":"r","task":"t","boundaries":"b","deliverable":"d","success_criteria":["v"]}}`)}
+		if _, err := item.Execute(t.Context(), call); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, <-messageIDs)
+	}
+	if len(ids) != 4 || ids[0] == ids[1] || ids[0] == ids[2] || ids[1] == ids[2] || ids[0] != ids[3] {
+		t.Fatalf("message identities collided or replay changed: %q", ids)
+	}
+}
+
 func TestRemoteTaskOwnershipAndExplicitLifecycle(t *testing.T) {
 	t.Setenv("A2A_TEST_TOKEN", "private-credential")
 	var calls atomic.Int32

@@ -209,7 +209,8 @@ func (r *Runtime) captureUnknownEffect(ctx context.Context, event transcript.Eve
 	if err != nil {
 		return err
 	}
-	fingerprint := sha256.Sum256([]byte(event.TurnID + "\x00" + event.ToolCall.ID))
+	identity, _ := json.Marshal([]string{event.TurnID, event.ToolCall.ID})
+	fingerprint := sha256.Sum256(identity)
 	id := fmt.Sprintf("effect-%x", fingerprint[:16])
 	for _, item := range state.Items {
 		if item.ID == id {

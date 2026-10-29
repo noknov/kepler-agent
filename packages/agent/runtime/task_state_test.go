@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -11,6 +12,35 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 )
+
+func TestUnknownEffectIdentityPreservesOpaqueTupleBoundaries(t *testing.T) {
+	store := transcript.NewMemoryStore()
+	catalog, _ := tool.NewCatalog()
+	runner, err := New(Config{}, Dependencies{Model: &scriptedModel{}, Tools: catalog, Transcript: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, identity := range []struct{ turn, call string }{{"a\x00b", "c"}, {"a", "b\x00c"}, {"a\x00b", "c"}} {
+		result := tool.TextResult("outcome unknown")
+		result.IsError, result.ErrorCode = true, "execution_interrupted"
+		call := tool.Call{ID: identity.call, Name: "external_write"}
+		event, err := store.Append(t.Context(), transcript.Event{ID: fmt.Sprint(index), SessionID: "session", TurnID: identity.turn, Type: transcript.ToolCallFailed, ToolCall: &call, ToolResult: &result})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := runner.captureUnknownEffect(t.Context(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err := store.Load(t.Context(), "session", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := latestTaskState(events)
+	if err != nil || len(state.Items) != 2 || state.Revision != 2 {
+		t.Fatalf("distinct uncertain effects collapsed or replay duplicated: %+v %v", state, err)
+	}
+}
 
 func TestTaskStateRequiresSourcesAndSurvivesCompaction(t *testing.T) {
 	ctx := context.Background()

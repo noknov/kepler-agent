@@ -167,8 +167,8 @@ func (t *Tool) Execute(ctx context.Context, call tool.Call) (tool.Result, error)
 		// transcript, shared context and tool catalogs remain in the local process.
 		raw, _ := json.Marshal(args.Task)
 		message := a2a.NewMessage(a2a.MessageRoleUser, a2a.TextPart{Text: string(raw)})
-		identity := sha256.Sum256([]byte(call.Scope.SessionID + "\x00" + call.Scope.TurnID + "\x00" + call.ID))
-		message.ID = fmt.Sprintf("%x", identity)
+		identity, _ := json.Marshal([]string{call.Scope.SessionID, call.Scope.TurnID, call.ID})
+		message.ID = fmt.Sprintf("%x", sha256.Sum256(identity))
 		message.TaskID = args.TaskID
 		message.ContextID = ref.ContextID
 		blocking := false
