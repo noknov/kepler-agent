@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 
@@ -80,6 +81,9 @@ func (r ModelRanker) Rank(ctx context.Context, query string, records []Record) (
 		Schema: json.RawMessage(`{"type":"object","properties":{"keys":{"type":"array","items":{"type":"string"}}},"required":["keys"],"additionalProperties":false}`),
 	}, Messages: messages, MaxOutputTokens: 512, InputTokenEstimate: estimate}, nil)
 	if err != nil {
+		if errors.Is(err, model.ErrOutputValidation) {
+			return nil, fmt.Errorf("%w: %w", ErrInvalidSelection, err)
+		}
 		return nil, err
 	}
 	if response.FinishReason != model.FinishStop {

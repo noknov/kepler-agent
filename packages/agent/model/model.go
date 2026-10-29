@@ -214,6 +214,10 @@ type OutputFormat struct {
 	Mode   OutputMode      `json:"mode,omitempty"`
 }
 
+// ErrOutputValidation identifies completed output rejected by its schema. It
+// carries no validator diagnostics, which may contain private response values.
+var ErrOutputValidation = errors.New("structured output validation failed")
+
 type Request struct {
 	OutputFormat       *OutputFormat     `json:"output_format,omitempty"`
 	Operation          string            `json:"operation,omitempty"`

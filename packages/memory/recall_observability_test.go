@@ -2,16 +2,69 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
+	"github.com/noknov/kepler-agent/packages/llm"
+	"github.com/noknov/kepler-agent/packages/providers"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
+
+type selectionWire struct {
+	text string
+	err  error
+}
+
+func (w selectionWire) Chat(context.Context, llm.Request) (llm.Response, error) {
+	return llm.Response{Message: llm.Message{Role: "assistant", Content: w.text}, FinishReason: "stop"}, w.err
+}
+
+func TestProviderRejectedRankingSelectionKeepsTypedCause(t *testing.T) {
+	for _, text := range []string{`{"keys":`, `{}`, `{"keys":[12]}`, `{"keys":[]} {}`} {
+		t.Run(text, func(t *testing.T) {
+			recorder := recordRecallSpans(t)
+			ranker := ModelRanker{Model: "ranker", Client: &providers.Client{Wire: selectionWire{text: text}}}
+			records := []Record{{Key: "known", Kind: "fact", Content: "private candidate"}}
+			_, err := ranker.Rank(t.Context(), "query", records)
+			if !errors.Is(err, ErrInvalidSelection) || !errors.Is(err, model.ErrOutputValidation) || model.ErrorKindOf(err) != model.ErrorProtocol {
+				t.Fatalf("typed cause lost: %v", err)
+			}
+			store := &queryStore{query: func(q Query) Page {
+				if q.ExcludePreferences || q.Keys != nil {
+					return Page{Records: records}
+				}
+				return Page{}
+			}}
+			page, err := Recall(t.Context(), store, Identity{TeamID: "team", UserID: "user"}, "query", RecallPolicy{}, ranker)
+			if err != nil || len(page.Records) != 1 {
+				t.Fatalf("fallback changed: %+v %v", page, err)
+			}
+			spans := recorder.Ended()
+			if len(spans) != 1 {
+				t.Fatalf("spans=%v", spans)
+			}
+			var outcome string
+			for _, attr := range spans[0].Attributes() {
+				if attr.Key == "agent.memory.rerank.outcome" {
+					outcome = attr.Value.AsString()
+				}
+			}
+			if outcome != "invalid_selection" {
+				t.Fatalf("provider rejection classified as %s", outcome)
+			}
+		})
+	}
+	ranker := ModelRanker{Model: "ranker", Client: &providers.Client{Wire: selectionWire{err: &model.Error{Kind: model.ErrorProtocol, Message: "transport protocol failure"}}}}
+	if _, err := ranker.Rank(t.Context(), "query", []Record{{Key: "known"}}); errors.Is(err, ErrInvalidSelection) {
+		t.Fatalf("unrelated protocol failure misclassified: %v", err)
+	}
+}
 
 func recordRecallSpans(t *testing.T) *tracetest.SpanRecorder {
 	t.Helper()
