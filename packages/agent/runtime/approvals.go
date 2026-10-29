@@ -46,6 +46,8 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, resolut
 		}
 		return fmt.Errorf("approval was resolved but its tool result is incomplete or differs")
 	}
+	defer r.deps.Tools.EndTurn(sessionID, resolution.TurnID)
+	defer r.clearCircuit(sessionID)
 	var item tool.Tool
 	var descriptor tool.Descriptor
 	var decision tool.Decision
@@ -83,18 +85,20 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, resolut
 	if _, err := r.record(ctx, transcript.Event{SessionID: sessionID, TurnID: resolution.TurnID, Type: transcript.ApprovalResolved, ToolCall: call, Metadata: metadata}); err != nil {
 		return err
 	}
+	prepared := preparedCall{call: *call, item: item, descriptor: descriptor}
+	request := TurnRequest{SessionID: sessionID, TurnID: resolution.TurnID, Scope: call.Scope}
 	if !resolution.Approved || decision.Type == tool.DecisionDeny {
 		message, code := "User declined this tool call.", "approval_declined"
 		if decision.Type == tool.DecisionDeny {
 			message, code = "Tool call denied by policy: "+decision.Reason, "policy_denied"
 		}
 		result := tool.Result{Content: []model.Content{{Type: model.ContentText, Text: message}}, IsError: true, ErrorCode: code}
-		_, err := r.recordToolResults(ctx, TurnRequest{SessionID: sessionID, TurnID: resolution.TurnID, Scope: call.Scope}, []preparedCall{{call: *call, item: item, descriptor: descriptor, result: &result}})
-		return err
+		prepared.result = &result
+	} else {
+		r.runPreparedTool(ctx, request, &prepared)
 	}
-	prepared := preparedCall{call: *call, item: item, descriptor: descriptor}
-	request := TurnRequest{SessionID: sessionID, TurnID: resolution.TurnID, Scope: call.Scope}
-	r.runPreparedTool(ctx, request, &prepared)
-	_, err = r.recordToolResults(ctx, request, []preparedCall{prepared})
+	cleanupCtx, cancel := r.cleanupContext(ctx)
+	defer cancel()
+	_, err = r.recordToolResults(cleanupCtx, request, []preparedCall{prepared})
 	return err
 }
