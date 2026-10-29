@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"testing"
@@ -21,6 +22,7 @@ func TestMCPToolCallsStreamableHTTP(t *testing.T) {
 				t.Fatalf("Authorization = %q", got)
 			}
 			var payload struct {
+				ID     json.RawMessage `json:"id"`
 				Method string          `json:"method"`
 				Params json.RawMessage `json:"params"`
 			}
@@ -33,7 +35,7 @@ func TestMCPToolCallsStreamableHTTP(t *testing.T) {
 				return httpResponse(http.StatusOK, map[string]string{
 					"Mcp-Session-Id": sessionID,
 					"Content-Type":   "application/json",
-				}, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`), nil
+				}, fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`, payload.ID)), nil
 			case "notifications/initialized":
 				if got := r.Header.Get("Mcp-Session-Id"); got != sessionID {
 					t.Fatalf("initialized session = %q", got)
@@ -58,7 +60,7 @@ func TestMCPToolCallsStreamableHTTP(t *testing.T) {
 					t.Fatalf("arguments = %#v", params.Arguments)
 				}
 				return httpResponse(http.StatusOK, map[string]string{"Content-Type": "text/event-stream"},
-					"event: message\n"+`data: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"ok"}]}}`+"\n\n"), nil
+					fmt.Sprintf("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}}\n\n", payload.ID)), nil
 			default:
 				t.Fatalf("unexpected method %q", payload.Method)
 			}
