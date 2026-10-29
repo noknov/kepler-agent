@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -164,7 +163,7 @@ func ProjectEvent(event transcript.Event, redactor safety.Redactor) (ClientEvent
 	case transcript.TurnFailed:
 		text := "The assistant could not complete this turn."
 		if strings.TrimSpace(event.Error) != "" {
-			text = failure.PublicMessage(errors.New(event.Error))
+			text = failure.PublicMessage(event.Err())
 		}
 		view.Kind, view.Status, view.Text = "turn", "failed", text
 	case transcript.TurnCanceled:

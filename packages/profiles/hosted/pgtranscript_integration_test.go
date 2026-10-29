@@ -3,6 +3,7 @@ package hosted
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -15,6 +16,45 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/runs"
 )
+
+func TestIntegrationTerminalErrorReplayAfterJSONBRoundTrip(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
+	pool, err := pgxpool.New(t.Context(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	for _, original := range []error{context.Canceled, context.DeadlineExceeded, &model.Error{Kind: model.ErrorContentPolicy, Message: "private refusal"}} {
+		t.Run(original.Error(), func(t *testing.T) {
+			sessionID := fmt.Sprintf("terminal-classification-%d", time.Now().UnixNano())
+			defer func() {
+				pool.Exec(context.Background(), `DELETE FROM agent_transcript_events WHERE session_id=$1`, sessionID)
+			}()
+			store := PGTranscript{Pool: pool}
+			kind, reason := transcript.TurnFailed, agentruntime.TerminationModelError
+			if errors.Is(original, context.Canceled) {
+				kind, reason = transcript.TurnCanceled, agentruntime.TerminationCanceled
+			}
+			_, err := store.Append(t.Context(), transcript.Event{ID: sessionID, SessionID: sessionID, TurnID: "turn", Type: kind, Status: string(reason), Error: original.Error(), Failure: transcript.FailureFromError(original), Timestamp: time.Now()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := &jsonbReplayModel{}
+			catalog, _ := tool.NewCatalog()
+			runner, err := agentruntime.New(agentruntime.Config{}, agentruntime.Dependencies{Model: client, Tools: catalog, Transcript: store})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, replayErr := runner.RunTurn(t.Context(), agentruntime.TurnRequest{SessionID: sessionID, TurnID: "turn"})
+			if replayErr == nil || replayErr.Error() != original.Error() || model.ErrorKindOf(replayErr) != model.ErrorKindOf(original) || errors.Is(replayErr, context.Canceled) != errors.Is(original, context.Canceled) || errors.Is(replayErr, context.DeadlineExceeded) != errors.Is(original, context.DeadlineExceeded) || result.Termination != reason || client.responded {
+				t.Fatalf("result=%+v replay=%T %v original=%T %v requested=%v", result, replayErr, replayErr, original, original, client.responded)
+			}
+		})
+	}
+}
 
 func TestIntegrationPGTranscriptAppendAndReplay(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")

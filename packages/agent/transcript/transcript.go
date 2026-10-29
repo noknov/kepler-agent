@@ -80,6 +80,7 @@ type Event struct {
 	Plan       *tool.PlanUpdate   `json:"plan,omitempty"`
 	Status     string             `json:"status,omitempty"`
 	Error      string             `json:"error,omitempty"`
+	Failure    *Failure           `json:"failure,omitempty"`
 	Metadata   json.RawMessage    `json:"metadata,omitempty"`
 	// Trace is the vendor-neutral W3C identity captured at the durable event
 	// boundary. It lets projections and trajectory readers correlate a replayed

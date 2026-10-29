@@ -387,7 +387,7 @@ func completedTurn(events []transcript.Event, turnID string) (TurnResult, error,
 		result.Termination = TerminationCompleted
 	}
 	if terminal.Type == transcript.TurnFailed || terminal.Type == transcript.TurnCanceled {
-		return result, errors.New(terminal.Error), true
+		return result, terminal.Err(), true
 	}
 	return result, nil, true
 }
@@ -665,6 +665,7 @@ func (r *Runtime) finishTurn(ctx context.Context, result TurnResult, message mod
 	event := transcript.Event{SessionID: result.SessionID, TurnID: result.TurnID, Type: eventType, Status: status, Metadata: metadata}
 	if err != nil {
 		event.Error = err.Error()
+		event.Failure = transcript.FailureFromError(err)
 	}
 	_, recordErr := r.record(cleanupCtx, event)
 	if recordErr != nil && err == nil {
