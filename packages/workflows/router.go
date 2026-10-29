@@ -132,6 +132,13 @@ Registered route labels:
 	if err != nil {
 		return RouteDecision{}, &RouteError{Kind: RouteErrorModel, Err: fmt.Errorf("classify workflow intent: %w", err)}
 	}
+	if response.FinishReason != model.FinishStop || len(response.Message.ToolCalls()) != 0 {
+		return RouteDecision{}, &RouteError{
+			Kind:        RouteErrorContract,
+			Err:         errors.New("intent model did not complete a label-only classification"),
+			Diagnostics: responseDiagnostics(response),
+		}
+	}
 	label := strings.TrimSpace(response.Message.Text())
 	if label == GeneralIntent {
 		return RouteDecision{Intent: GeneralIntent}, nil
