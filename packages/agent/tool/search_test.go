@@ -89,7 +89,7 @@ func (namedDeferredFixture) Execute(context.Context, Call) (Result, error) {
 	return TextResult("ok"), nil
 }
 
-func TestSearchToolPrioritizesExactToolNameMatches(t *testing.T) {
+func TestSearchSeparatesExactIdentityFromDocumentRelevance(t *testing.T) {
 	catalog, err := NewCatalog(
 		namedDeferredFixture{name: "generic-review", description: "Read Notion pages and YouTrack issues from links, access project documentation and tickets for review."},
 		namedDeferredFixture{name: "mcp_notion_notion-search", description: "Search connected Notion pages and databases."},
@@ -99,20 +99,21 @@ func TestSearchToolPrioritizesExactToolNameMatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	search := NewSearchTool(catalog)
-	result, err := search.Execute(context.Background(), Call{
-		Name:      "tool_search",
-		Arguments: json.RawMessage(`{"action":"search","query":"read Notion pages and YouTrack issues from links","limit":2}`),
-	})
-	if err != nil {
-		t.Fatal(err)
+	for _, test := range []struct{ query, first string }{
+		{"youtrack-get_issue", "youtrack-get_issue"},
+		{"read Notion pages and YouTrack issues from links", "generic-review"},
+	} {
+		args, _ := json.Marshal(map[string]any{"action": "search", "query": test.query, "limit": 2})
+		result, err := search.Execute(t.Context(), Call{Name: "tool_search", Arguments: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(result.Text(), "\n")
+		if len(lines) < 2 || !strings.HasPrefix(lines[1], "- "+test.first+" [") {
+			t.Fatalf("query=%q first=%q result=%s", test.query, test.first, result.Text())
+		}
 	}
-	text := result.Text()
-	if !strings.Contains(text, "mcp_notion_notion-search") || !strings.Contains(text, "youtrack-get_issue") {
-		t.Fatalf("exactly named integrations were not prioritized: %s", text)
-	}
-	if strings.Contains(text, "generic-review") {
-		t.Fatalf("generic description match outranked named integrations: %s", text)
-	}
+
 }
 
 func TestSearchToolTokenizesIdentifierSubwords(t *testing.T) {

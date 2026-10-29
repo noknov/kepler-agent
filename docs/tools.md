@@ -2,8 +2,14 @@
 
 The agent exposes tools through structured function-calling. Many heavier tool
 families are deferred by default. `tool_search` lists their stable categories
-and exact names; the model then activates only the exact tools it needs. Discovery supports category listing and lexical relevance-ranked search over
-names, descriptions, tags, and schemas. Categories filter discovery, never bulk-load schemas. Activation is atomic and
+and exact names; the model then activates only the exact tools it needs.
+`action=search` is read-only discovery: query text never activates tools.
+Activation requires `action=activate` with exact registered `tool_names`.
+Exact identifier queries use case-sensitive registry identity; capability queries
+use BM25 over indexed names, descriptions, tags, and schemas. Substrings do not
+invent term matches, and names/tags receive no ad-hoc score bonuses. Retrieval
+does not infer tool effects, authorization, or executable identity.
+Categories filter discovery, never bulk-load schemas. Activation is atomic and
 uses the runtime context projector to admit the candidate schemas and their
 acknowledgement before publishing them. Rejected loads leave active tools
 unchanged and return a recoverable tool error; discovery does not grant permission.
