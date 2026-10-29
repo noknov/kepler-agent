@@ -94,6 +94,8 @@ type TraceContext struct {
 	ParentSpanID string `json:"parent_span_id,omitempty"`
 }
 
+// Store owns append-only facts. Returned events are caller-owned snapshots;
+// mutating an appended input or a read result cannot rewrite recorded history.
 type Store interface {
 	Append(ctx context.Context, event Event) (Event, error)
 	Load(ctx context.Context, sessionID string, afterSequence uint64) ([]Event, error)
