@@ -183,7 +183,7 @@ func InvokeReadOnly(ctx context.Context, client *mcp.Client, name string, args j
 		invalidateRouterSession(client)
 		return tool.Result{}, err
 	}
-	return formatToolResult(value), nil
+	return Result(value), nil
 }
 
 // InvokeExternal validates and invokes one explicitly selected remote MCP
@@ -220,10 +220,11 @@ func InvokeExternal(ctx context.Context, client *mcp.Client, name string, args j
 		invalidateRouterSession(client)
 		return tool.Result{}, err
 	}
-	return formatToolResult(value), nil
+	return Result(value), nil
 }
 
-func formatToolResult(value mcp.ToolResult) tool.Result {
+// Result adapts a remote MCP outcome without losing its error or image content.
+func Result(value mcp.ToolResult) tool.Result {
 	content := make([]model.Content, 0, 1+len(value.Images))
 	if value.Content != "" {
 		content = append(content, model.Content{Type: model.ContentText, Text: value.Content})
@@ -349,14 +350,7 @@ func (t *remoteTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 		t.server.invalidateSession(call, client, session)
 		return tool.Result{}, err
 	}
-	content := make([]model.Content, 0, 1+len(value.Images))
-	if value.Content != "" {
-		content = append(content, model.Content{Type: model.ContentText, Text: value.Content})
-	}
-	for _, image := range value.Images {
-		content = append(content, model.Content{Type: model.ContentImage, ImageURL: image.DataURI()})
-	}
-	return tool.Result{Content: content, IsError: value.IsError, ErrorCode: mapErrorCode(value.IsError)}, nil
+	return Result(value), nil
 }
 
 func mapErrorCode(isError bool) string {
