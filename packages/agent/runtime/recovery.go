@@ -51,7 +51,7 @@ func projectTurnProgress(events []transcript.Event, turnID string, config Config
 			if err := json.Unmarshal(event.Metadata, &data); err != nil {
 				return progress, err
 			}
-			addUsage(&progress.Usage, data.Usage)
+			progress.Usage = progress.Usage.Add(data.Usage)
 			legacySpent += model.UsageTokens(data.Usage)
 			var request modelRequestState
 			if json.Unmarshal(event.Metadata, &request) == nil {
@@ -63,7 +63,7 @@ func projectTurnProgress(events []transcript.Event, turnID string, config Config
 			}
 			seenTools[event.ToolCall.ID] = true
 			if usage := toolResultUsage(*event.ToolResult); usage != nil {
-				addUsage(&progress.Usage, *usage)
+				progress.Usage = progress.Usage.Add(*usage)
 				legacySpent += model.UsageTokens(*usage)
 			}
 		case transcript.ModelUsageSettled:
@@ -72,7 +72,7 @@ func projectTurnProgress(events []transcript.Event, turnID string, config Config
 				return progress, err
 			}
 			if receipt.Operation == "embedding" {
-				addUsage(&progress.EmbeddingUsage, receipt.Usage)
+				progress.EmbeddingUsage = progress.EmbeddingUsage.Add(receipt.Usage)
 			}
 		case transcript.TokenBudgetUpdated:
 			if err := json.Unmarshal(event.Metadata, &progress.Budget); err != nil {

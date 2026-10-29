@@ -200,13 +200,7 @@ func (t ExploreTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	}
 	var totalUsage model.Usage
 	for _, audit := range audits {
-		totalUsage.Reported = totalUsage.Reported || audit.Usage.Reported
-		totalUsage.ReasoningTokens += audit.Usage.ReasoningTokens
-		totalUsage.InputTokens += audit.Usage.InputTokens
-		totalUsage.OutputTokens += audit.Usage.OutputTokens
-		totalUsage.CacheReadTokens += audit.Usage.CacheReadTokens
-		totalUsage.CacheCreatedTokens += audit.Usage.CacheCreatedTokens
-		totalUsage.CacheTokensIncludedInInput = totalUsage.CacheTokensIncludedInInput || audit.Usage.CacheTokensIncludedInInput
+		totalUsage = totalUsage.Add(audit.Usage)
 	}
 	result := tool.TextResult(reports)
 	result.Usage = &totalUsage

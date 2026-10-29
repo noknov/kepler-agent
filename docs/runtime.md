@@ -181,6 +181,10 @@ on replay. Live and recovered turn results derive generation usage from committe
 model completions and deduplicated tool results, including completed empty-response
 recovery requests. Embedding usage stays separate. Per-attempt receipts and budget
 settlement also cover failed attempts; turn-result usage is not a billing ledger.
+Aggregated turn and delegated-batch input counts include cache tokens.
+`model.Usage.Add` normalizes each receipt before addition, so mixing providers
+whose input counts include or exclude cache tokens preserves the exact total.
+Per-attempt receipts keep their provider's original accounting convention.
 Terminal events retain structured model and context error categories; replay
 restores cancellation, deadlines, and safe failure classification without
 interpreting diagnostic text. Original Go error types and arbitrary causes are
