@@ -394,14 +394,7 @@ func (c *OpenAICompatibleClient) doOnce(ctx context.Context, payload []byte, met
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, NewProviderError(c.providerName()+" chat completion", resp.StatusCode, string(data))
-	}
-	return data, nil
+	return readJSONResponse(resp, c.providerName()+" chat completion")
 }
 
 func (c *OpenAICompatibleClient) providerName() string {

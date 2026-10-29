@@ -382,14 +382,7 @@ func (c *OpenAIResponsesClient) doOnce(ctx context.Context, payload []byte, meta
 		return nil, err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, NewProviderError(c.providerName()+" responses", resp.StatusCode, string(data))
-	}
-	return data, nil
+	return readJSONResponse(resp, c.providerName()+" responses")
 }
 
 func (c *OpenAIResponsesClient) providerName() string {

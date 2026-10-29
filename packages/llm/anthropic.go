@@ -416,14 +416,7 @@ func (c *AnthropicClient) doOnce(ctx context.Context, payload []byte) ([]byte, e
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, NewProviderError("anthropic messages", resp.StatusCode, string(data))
-	}
-	return data, nil
+	return readJSONResponse(resp, "anthropic messages")
 }
 
 type anthropicRequest struct {
