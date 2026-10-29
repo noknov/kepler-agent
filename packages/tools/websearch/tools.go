@@ -101,7 +101,9 @@ func (t ReadPageTool) Execute(ctx context.Context, call tool.Call) (tool.Result,
 	if err != nil {
 		return tool.Result{}, err
 	}
-	return tool.TextResult(formatPage(page)), nil
+	result := tool.TextResult(formatPage(page))
+	result.Truncated = page.Truncated
+	return result, nil
 }
 
 func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, error) {
@@ -137,6 +139,7 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 	})
 	if err != nil {
 		res := tool.TextResult(searchFailureGuidance(query, err))
+		res.IsError = true
 		res.ErrorCode = "search_unavailable"
 		return res, nil
 	}
@@ -165,9 +168,10 @@ func errorSnippet(data []byte) string {
 }
 
 type Page struct {
-	URL   string
-	Title string
-	Text  string
+	URL       string
+	Title     string
+	Text      string
+	Truncated bool
 }
 
 func (c Client) Search(ctx context.Context, req SearchRequest) ([]ResultItem, error) {
@@ -223,12 +227,17 @@ func (c Client) ReadPage(ctx context.Context, pageURL string, maxChars int) (Pag
 		return Page{}, err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	const maxPageBytes = 2 << 20
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxPageBytes+1))
 	if err != nil {
 		return Page{}, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return Page{}, fmt.Errorf("web page status %d: %s", resp.StatusCode, errorSnippet(data))
+	}
+	truncated := len(data) > maxPageBytes
+	if truncated {
+		data = data[:maxPageBytes]
 	}
 	contentType := resp.Header.Get("Content-Type")
 	mediaType := ""
@@ -245,9 +254,10 @@ func (c Client) ReadPage(ctx context.Context, pageURL string, maxChars int) (Pag
 	}
 	title, text := extractReadableText(string(data), mediaType)
 	if maxChars > 0 && len(text) > maxChars {
+		truncated = true
 		text = truncateTextHeadTail(text, maxChars)
 	}
-	return Page{URL: pageURL, Title: title, Text: text}, nil
+	return Page{URL: pageURL, Title: title, Text: text, Truncated: truncated}, nil
 }
 
 func (c Client) searchGoogleCSE(ctx context.Context, req SearchRequest) ([]ResultItem, error) {
