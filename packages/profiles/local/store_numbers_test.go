@@ -47,3 +47,18 @@ func TestJSONLTranscriptPreservesMetadataNumbers(t *testing.T) {
 		})
 	}
 }
+
+func TestJSONLTranscriptDuplicateCannotChangeTurnOwner(t *testing.T) {
+	store, err := NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := transcript.Event{ID: "event", SessionID: "session", TurnID: "turn", Type: transcript.UserInput}
+	if _, err := store.Append(t.Context(), original); err != nil {
+		t.Fatal(err)
+	}
+	original.TurnID = "another-turn"
+	if event, err := store.Append(t.Context(), original); err == nil || event.ID != "" {
+		t.Fatalf("duplicate returned another turn's fact: event=%+v err=%v", event, err)
+	}
+}

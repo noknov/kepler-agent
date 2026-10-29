@@ -56,6 +56,12 @@ from dynamic layers (`LayerProject`, `LayerUser`, `LayerSkill`, `LayerTurn`) via
 `agent_run_steps` are query-oriented observability projections, not a second
 conversation state store.
 
+Runtime-supplied durable event keys are scoped by the exact session, turn and
+logical operation. Their encoded tuple produces an opaque stable ID, so local
+step/request/steering labels cannot collide across sessions or ambiguous string
+separators. Store-level duplicate appends return facts only in the requested
+session/turn. Event IDs are opaque; consumers use typed fields and metadata.
+
 Model providers translate their wire formats into canonical messages and typed
 stream events. Stream deltas are sent only to transient presentation sinks;
 the durable transcript stores completed model messages and lifecycle events so

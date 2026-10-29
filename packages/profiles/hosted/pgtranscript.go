@@ -52,7 +52,7 @@ func (s PGTranscript) Append(ctx context.Context, event transcript.Event) (trans
 	}
 	if tag.RowsAffected() == 0 {
 		var existingPayload []byte
-		if err := tx.QueryRow(ctx, `SELECT payload FROM agent_transcript_events WHERE event_id=$1`, event.ID).Scan(&existingPayload); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT payload FROM agent_transcript_events WHERE event_id=$1 AND session_id=$2 AND turn_id=$3`, event.ID, key, event.TurnID).Scan(&existingPayload); err != nil {
 			return transcript.Event{}, err
 		}
 		event, err = transcript.DecodeEvent(existingPayload)

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -582,6 +583,11 @@ func (r *Runtime) record(ctx context.Context, event transcript.Event) (transcrip
 	}
 	if event.ID == "" {
 		event.ID = r.deps.IDs.New("evt")
+	} else {
+		// Supplied IDs are stable logical keys within an event's owner scope.
+		// Encode field boundaries before hashing; opaque IDs can contain separators.
+		key, _ := json.Marshal([]string{event.SessionID, event.TurnID, event.ID})
+		event.ID = fmt.Sprintf("evt_%x", sha256.Sum256(key))
 	}
 	if event.Timestamp.IsZero() {
 		event.Timestamp = r.deps.Clock()
