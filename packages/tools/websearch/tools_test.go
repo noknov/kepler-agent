@@ -175,6 +175,31 @@ func TestSearchToolFailureGuidesDirectPageRead(t *testing.T) {
 	if result.ErrorCode != "search_unavailable" {
 		t.Fatalf("result.ErrorCode = %q, want search_unavailable", result.ErrorCode)
 	}
+	if !result.IsError {
+		t.Fatal("failed search was reported as successful evidence")
+	}
+}
+
+func TestPageReadReportsSourceAndTextTruncation(t *testing.T) {
+	for _, test := range []struct {
+		name, body string
+		limit      int
+		truncated  bool
+	}{
+		{"complete", "complete evidence", 100, false},
+		{"extracted text budget", strings.Repeat("x", 200), 100, true},
+		{"exact source boundary", strings.Repeat(" ", 2<<20), 100, false},
+		{"source budget despite short extraction", strings.Repeat(" ", 2<<20) + "omitted conclusion", 100, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := Client{HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) { return textResponse(test.body), nil })}}
+			raw, _ := json.Marshal(map[string]any{"url": "https://example.com/doc", "max_chars": test.limit})
+			result, err := (ReadPageTool{Client: client}).Execute(t.Context(), agenttool.Call{Arguments: raw})
+			if err != nil || result.Truncated != test.truncated {
+				t.Fatalf("truncated=%v want=%v err=%v", result.Truncated, test.truncated, err)
+			}
+		})
+	}
 }
 
 func TestMissingProviderConfigReturnsClearError(t *testing.T) {
