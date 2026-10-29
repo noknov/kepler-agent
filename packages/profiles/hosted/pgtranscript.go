@@ -2,7 +2,6 @@ package hosted
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -22,9 +21,7 @@ func (s PGTranscript) ReadEvent(ctx context.Context, sessionID string, sequence 
 	if err := s.Pool.QueryRow(ctx, `SELECT payload FROM agent_transcript_events WHERE session_id=$1 AND sequence=$2`, sessionID, sequence).Scan(&payload); err != nil {
 		return transcript.Event{}, err
 	}
-	var event transcript.Event
-	err := json.Unmarshal(payload, &event)
-	return event, err
+	return transcript.DecodeEvent(payload)
 }
 
 func (s PGTranscript) Append(ctx context.Context, event transcript.Event) (transcript.Event, error) {
@@ -58,7 +55,8 @@ func (s PGTranscript) Append(ctx context.Context, event transcript.Event) (trans
 		if err := tx.QueryRow(ctx, `SELECT payload FROM agent_transcript_events WHERE event_id=$1`, event.ID).Scan(&existingPayload); err != nil {
 			return transcript.Event{}, err
 		}
-		if err := json.Unmarshal(existingPayload, &event); err != nil {
+		event, err = transcript.DecodeEvent(existingPayload)
+		if err != nil {
 			return transcript.Event{}, err
 		}
 	}
@@ -129,8 +127,8 @@ func (s PGTranscript) Load(ctx context.Context, sessionID string, after uint64) 
 		if err := rows.Scan(&payload); err != nil {
 			return nil, err
 		}
-		var event transcript.Event
-		if err := json.Unmarshal(payload, &event); err != nil {
+		event, err := transcript.DecodeEvent(payload)
+		if err != nil {
 			return nil, err
 		}
 		events = append(events, event)

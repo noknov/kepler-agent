@@ -186,9 +186,7 @@ func readEvent(file *os.File, location eventLocation) (transcript.Event, error) 
 	if _, err := file.ReadAt(data, location.offset); err != nil {
 		return transcript.Event{}, err
 	}
-	var event transcript.Event
-	err := json.Unmarshal(data, &event)
-	return event, err
+	return transcript.DecodeEvent(data)
 }
 
 func lockSessionFile(ctx context.Context, directory string) (func(), error) {

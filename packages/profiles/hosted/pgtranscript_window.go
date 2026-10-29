@@ -2,8 +2,8 @@ package hosted
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 )
 
@@ -36,8 +36,8 @@ func (s PGTranscript) LoadTurn(ctx context.Context, sessionID, turnID string) ([
 		if err := rows.Scan(&raw); err != nil {
 			return nil, err
 		}
-		var event transcript.Event
-		if err := json.Unmarshal(raw, &event); err != nil {
+		event, err := transcript.DecodeEvent(raw)
+		if err != nil {
 			return nil, err
 		}
 		events = append(events, event)
