@@ -145,13 +145,24 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 			return false
 		case "error":
 			var apiErr struct {
-				Message string `json:"message"`
+				ResponsesStreamError
+				Error *ResponsesStreamError `json:"error"`
 			}
-			if json.Unmarshal([]byte(ev.Data), &apiErr) == nil && apiErr.Message != "" {
-				streamErr = fmt.Errorf("openai responses stream error: %s", apiErr.Message)
-			} else {
-				streamErr = fmt.Errorf("openai responses stream returned an error")
+			if json.Unmarshal([]byte(ev.Data), &apiErr) != nil {
+				streamErr = ProtocolError{Provider: c.providerName(), Detail: "invalid Responses error event"}
+				return false
 			}
+			detail := apiErr.ResponsesStreamError
+			// The top-level type names the event, not the error category.
+			detail.Type = ""
+			if apiErr.Error != nil {
+				detail = *apiErr.Error
+			}
+			detail.Provider, detail.Event = c.providerName(), "error"
+			if requestID := resp.Header.Get("X-Request-ID"); requestID != "" {
+				detail.RequestID = requestID
+			}
+			streamErr = detail
 			return false
 		}
 		return true
@@ -167,6 +178,13 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 	}
 	result, err := terminal.completion()
 	result.Streamed = true
+	if detail, ok := err.(ResponsesStreamError); ok {
+		detail.Provider = c.providerName()
+		if requestID := resp.Header.Get("X-Request-ID"); requestID != "" {
+			detail.RequestID = requestID
+		}
+		err = detail
+	}
 	if h.OnUsage != nil {
 		h.OnUsage(result.Usage)
 	}
@@ -389,10 +407,7 @@ type responsesResponse struct {
 	IncompleteDetails struct {
 		Reason string `json:"reason"`
 	} `json:"incomplete_details"`
-	Error struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	} `json:"error"`
+	Error ResponsesStreamError `json:"error"`
 }
 
 type responsesOutput struct {
@@ -462,7 +477,9 @@ func (r responsesResponse) completion() (Response, error) {
 	case "cancelled":
 		result.FinishReason = "cancelled"
 	case "failed":
-		return result, fmt.Errorf("Responses failed: %s %s", r.Error.Code, r.Error.Message)
+		detail := r.Error
+		detail.Provider, detail.Event = "responses", "response.failed"
+		return result, detail
 	default:
 		return result, ProtocolError{Provider: "responses", Detail: "response has no terminal status"}
 	}

@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -317,6 +318,67 @@ func TestChatGPTPlanAlwaysStreamsAndRequiresCompletion(t *testing.T) {
 			}
 			if tc.success && resp.Message.Content != "ok" {
 				t.Fatalf("response = %#v", resp)
+			}
+		})
+	}
+}
+
+func TestResponsesStreamErrorDetails(t *testing.T) {
+	for _, provider := range []string{"chatgpt", "openai"} {
+		for _, event := range []string{
+			`{"type":"error","code":"server_error","message":"upstream unavailable","param":"model"}`,
+			`{"type":"error","error":{"type":"server_error","code":"server_error","message":"upstream unavailable","param":"model"}}`,
+			`{"type":"response.failed","response":{"status":"failed","error":{"code":"server_error","message":"upstream unavailable","param":"model"},"usage":{"input_tokens":7,"output_tokens":2}}}`,
+		} {
+			t.Run(provider+"/"+event, func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "text/event-stream")
+					w.Header().Set("X-Request-ID", "req-synthetic")
+					fmt.Fprintf(w, "data: %s\n\n", event)
+				}))
+				defer server.Close()
+				client := NewOpenAIResponsesClient(provider, server.URL, "synthetic", time.Second)
+				resp, err := client.ChatStream(context.Background(), Request{Model: "test"}, StreamHandler{})
+				if err == nil {
+					t.Fatal("error event was accepted as successful inference")
+				}
+				for _, detail := range []string{"server_error", "upstream unavailable", "model", "req-synthetic"} {
+					if !strings.Contains(err.Error(), detail) {
+						t.Errorf("missing %q in error: %v", detail, err)
+					}
+				}
+				if strings.Contains(event, `"usage"`) && (!resp.Usage.Reported || resp.Usage.PromptTokens != 7 || resp.Usage.CompletionTokens != 2) {
+					t.Errorf("failed response lost reported usage: %+v", resp.Usage)
+				}
+			})
+		}
+	}
+}
+
+func TestResponsesStreamFailureDoesNotPublishTools(t *testing.T) {
+	for _, event := range []string{
+		`{"type":"error"}`,
+		`{"type":"error","error":{"code":"future_code","request_id":"req-event"},"unrelated":"private payload"}`,
+	} {
+		t.Run(event, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"id\":\"item\",\"call_id\":\"call\",\"name\":\"write\",\"arguments\":\"{}\"}}\n\n")
+				fmt.Fprintf(w, "data: %s\n\n", event)
+			}))
+			defer server.Close()
+			client := NewOpenAIResponsesClient("chatgpt", server.URL, "synthetic", time.Second)
+			published := false
+			resp, err := client.ChatStream(context.Background(), Request{Model: "test"}, StreamHandler{OnToolCallComplete: func(ToolCall) { published = true }})
+			var detail ResponsesStreamError
+			if !errors.As(err, &detail) || published || len(resp.Message.ToolCalls) != 0 || len(resp.Message.NativeItems) != 0 {
+				t.Fatalf("failed inference leaked tools: response=%+v published=%v error=%v", resp, published, err)
+			}
+			if strings.Contains(err.Error(), "private payload") {
+				t.Fatal("error included unrelated payload")
+			}
+			if strings.Contains(event, "req-event") && detail.RequestID != "req-event" {
+				t.Fatal("lost event request ID")
 			}
 		})
 	}

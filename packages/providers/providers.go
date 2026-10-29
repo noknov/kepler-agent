@@ -516,6 +516,30 @@ func toModelError(err error) error {
 	if errors.As(err, &protocolErr) {
 		return &model.Error{Kind: model.ErrorProtocol, Message: err.Error(), Retryable: true, Cause: err}
 	}
+	var streamErr llm.ResponsesStreamError
+	if errors.As(err, &streamErr) {
+		// Responses may fail inside an HTTP 200 stream. Only stable upstream
+		// codes define recovery; diagnostic messages never grant retries.
+		kind, retryable := model.ErrorUnknown, false
+		switch streamErr.Code {
+		case "server_error", "subscription_sharing_usage_unavailable", "subscription_sharing_user_unavailable":
+			kind, retryable = model.ErrorUnavailable, true
+		case "rate_limit_exceeded":
+			kind, retryable = model.ErrorRateLimited, true
+		case "subscription_sharing_usage_limit_exceeded", "insufficient_quota":
+			kind = model.ErrorRateLimited
+		case "subscription_sharing_invalid_user", "subscription_sharing_user_not_eligible",
+			"subscription_sharing_route_not_supported", "chatpass_v2_scope_not_authorized", "chatpass_v2_invalid_authorization_context":
+			kind = model.ErrorAuth
+		case "subscription_sharing_unsupported_capability":
+			kind = model.ErrorInvalid
+		case "context_length_exceeded", "string_above_max_length":
+			kind = model.ErrorContextLimit
+		case "content_filter", "content_policy_violation":
+			kind = model.ErrorContentPolicy
+		}
+		return &model.Error{Kind: kind, Message: err.Error(), Retryable: retryable, Cause: err}
+	}
 	var providerErr llm.ProviderError
 	if errors.As(err, &providerErr) {
 		kind := model.ErrorInvalid

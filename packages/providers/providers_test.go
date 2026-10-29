@@ -17,6 +17,78 @@ import (
 	"github.com/noknov/kepler-agent/packages/llm"
 )
 
+func TestResponsesStreamErrorClassification(t *testing.T) {
+	for _, tc := range []struct {
+		code      string
+		kind      model.ErrorKind
+		retryable bool
+	}{
+		{"server_error", model.ErrorUnavailable, true},
+		{"subscription_sharing_usage_unavailable", model.ErrorUnavailable, true},
+		{"subscription_sharing_user_unavailable", model.ErrorUnavailable, true},
+		{"rate_limit_exceeded", model.ErrorRateLimited, true},
+		{"subscription_sharing_usage_limit_exceeded", model.ErrorRateLimited, false},
+		{"insufficient_quota", model.ErrorRateLimited, false},
+		{"subscription_sharing_invalid_user", model.ErrorAuth, false},
+		{"subscription_sharing_user_not_eligible", model.ErrorAuth, false},
+		{"subscription_sharing_unsupported_capability", model.ErrorInvalid, false},
+		{"context_length_exceeded", model.ErrorContextLimit, false},
+		{"content_policy_violation", model.ErrorContentPolicy, false},
+		{"new_unknown_code", model.ErrorUnknown, false},
+		{"", model.ErrorUnknown, false},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			// Message text must not change policy, even if it names another code.
+			original := llm.ResponsesStreamError{Provider: "chatgpt", Event: "error", Code: tc.code, Message: "server_error: rate_limit_exceeded"}
+			err := toModelError(fmt.Errorf("wrapped: %w", original))
+			var typed *model.Error
+			if !errors.As(err, &typed) || typed.Kind != tc.kind || typed.Retryable != tc.retryable || typed.StatusCode != 0 {
+				t.Fatalf("error = %+v, want kind=%s retryable=%v and no invented HTTP status", typed, tc.kind, tc.retryable)
+			}
+			var cause llm.ResponsesStreamError
+			if !errors.As(err, &cause) || cause.Code != tc.code {
+				t.Fatal("lost structured upstream cause")
+			}
+		})
+	}
+}
+
+func TestResponsesStreamRecoveryUsesExistingRetryPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name, code, text string
+		calls            int
+		kind             model.ErrorKind
+	}{
+		{name: "temporary failure", code: "server_error", calls: 2},
+		{name: "quota exhausted", code: "subscription_sharing_usage_limit_exceeded", calls: 1, kind: model.ErrorRateLimited},
+		{name: "unknown error", code: "future_code", calls: 1, kind: model.ErrorUnknown},
+		{name: "committed output", code: "server_error", text: "partial answer", calls: 1, kind: model.ErrorOutputCommitted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				w.Header().Set("Content-Type", "text/event-stream")
+				if calls == 1 {
+					if tc.text != "" {
+						fmt.Fprintf(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":%q}\n\n", tc.text)
+					}
+					fmt.Fprintf(w, "data: {\"type\":\"error\",\"error\":{\"code\":%q}}\n\n", tc.code)
+					return
+				}
+				fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}}\n\n")
+			}))
+			defer server.Close()
+			wire := llm.NewOpenAIResponsesClient("chatgpt", server.URL, "synthetic", time.Second)
+			client := &model.ResilientClient{Primary: &Client{Wire: wire}, MaxAttempts: 2, RetryDelay: time.Nanosecond}
+			_, err := client.Generate(context.Background(), model.Request{Model: "test"}, func(model.StreamEvent) error { return nil })
+			if calls != tc.calls || (err == nil) != (tc.kind == "") || (err != nil && model.ErrorKindOf(err) != tc.kind) {
+				t.Fatalf("calls=%d error=%v, want calls=%d kind=%s", calls, err, tc.calls, tc.kind)
+			}
+		})
+	}
+}
+
 type recordingWire struct {
 	request  llm.Request
 	response llm.Response

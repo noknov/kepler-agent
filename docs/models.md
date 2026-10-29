@@ -14,6 +14,15 @@ compaction, and retries together.
 
 ## Streaming contracts
 
+Responses stream failures preserve the event, error code, type, parameter,
+message and upstream request ID, plus usage when reported. Both top-level
+`error` events and nested `response.failed` errors terminate inference without
+publishing pending tool calls. Retry decisions use explicit upstream codes;
+temporary service failures use the existing bounded retry policy, quota and
+permission failures stop, and unknown codes remain non-retryable. Diagnostic
+message wording does not determine recovery. See OpenAI's
+[ChatGPT errors and recovery](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery).
+
 OpenAI-compatible chat streams require an explicit provider `finish_reason`.
 EOF and `[DONE]` alone do not establish completion; EOF after an explicit finish
 reason remains supported. Tool indexes must be present and within the shared
