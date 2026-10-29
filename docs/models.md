@@ -23,6 +23,12 @@ permission failures stop, and unknown codes remain non-retryable. Diagnostic
 message wording does not determine recovery. See OpenAI's
 [ChatGPT errors and recovery](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery).
 
+The shared model retry policy doubles `LLM_RESILIENCE_RETRY_BASE` after each
+failed attempt, capped at 30 seconds, with equal jitter between half and all of
+that delay. `LLM_RESILIENCE_MAX_ATTEMPTS` includes the initial request. Each
+retry must fit the remaining turn budget; cancellation interrupts the wait,
+and committed output prevents replay.
+
 OpenAI-compatible chat streams require an explicit provider `finish_reason`.
 EOF and `[DONE]` alone do not establish completion; EOF after an explicit finish
 reason remains supported. Tool indexes must be present and within the shared

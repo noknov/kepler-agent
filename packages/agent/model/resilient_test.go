@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -54,6 +55,64 @@ func TestResilientClientRetriesTransientFailure(t *testing.T) {
 	}
 	if primary.calls != 2 {
 		t.Fatalf("calls = %d, want 2", primary.calls)
+	}
+}
+
+func TestResilientClientExponentialBackoff(t *testing.T) {
+	primary := &resilientScript{errs: []error{transient(), transient(), transient(), transient(), transient(), nil}}
+	var delays []time.Duration
+	client := &ResilientClient{
+		Primary: primary, MaxAttempts: 6, RetryDelay: 5 * time.Second,
+		Sleep: func(_ context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
+			return nil
+		},
+	}
+	if _, err := client.Generate(t.Context(), Request{Model: "test"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if primary.calls != 6 || len(delays) != 5 {
+		t.Fatalf("calls=%d delays=%v", primary.calls, delays)
+	}
+	for i, ceiling := range []time.Duration{5 * time.Second, 10 * time.Second, 20 * time.Second, 30 * time.Second, 30 * time.Second} {
+		if delays[i] < ceiling/2 || delays[i] > ceiling {
+			t.Fatalf("retry %d delay=%s outside [%s,%s]", i+1, delays[i], ceiling/2, ceiling)
+		}
+	}
+	for _, base := range []time.Duration{0, time.Nanosecond, time.Duration(1<<63 - 1)} {
+		client.RetryDelay = base
+		if delay := client.retryDelay(1 << 30); delay < 15*time.Second || delay > 30*time.Second {
+			t.Fatalf("base=%s overflowed or exceeded capped backoff: %s", base, delay)
+		}
+	}
+}
+
+func TestResilientClientBackoffRespectsBudgetAndCancellation(t *testing.T) {
+	for _, cancelDuringWait := range []bool{false, true} {
+		now := time.Now()
+		ctx, cancel := context.WithDeadline(t.Context(), now.Add(46*time.Second))
+		primary := &resilientScript{errs: []error{transient(), nil}}
+		waited := false
+		client := &ResilientClient{
+			Primary: primary, MaxAttempts: 2, RetryDelay: 4 * time.Second,
+			Now: func() time.Time { return now },
+			Sleep: func(ctx context.Context, _ time.Duration) error {
+				waited = true
+				cancel()
+				return ctx.Err()
+			},
+		}
+		if cancelDuringWait {
+			client.MinAttemptBudget = time.Second
+		}
+		_, err := client.Generate(ctx, Request{Model: "test"}, nil)
+		cancel()
+		if primary.calls != 1 || waited != cancelDuringWait {
+			t.Fatalf("calls=%d waited=%v cancellation=%v", primary.calls, waited, cancelDuringWait)
+		}
+		if cancelDuringWait && !errors.Is(err, context.Canceled) || !cancelDuringWait && ErrorKindOf(err) != ErrorBudgetExhausted {
+			t.Fatalf("wrong termination for cancellation=%v: %v", cancelDuringWait, err)
+		}
 	}
 }
 

@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"sync"
 	"time"
 )
@@ -132,7 +133,7 @@ func (c *ResilientClient) generate(ctx context.Context, client Client, provider 
 		if number == c.maxAttempts() {
 			break
 		}
-		delay := c.retryDelay()
+		delay := c.retryDelay(number)
 		if err := c.requireBudget(ctx, delay, c.minBudget()); err != nil {
 			observeAttempt(ctx, c.attempt(ctx, provider, request.Model, number, fallback, "budget_exhausted", err))
 			return Response{}, err
@@ -169,11 +170,21 @@ func (c *ResilientClient) now() time.Time {
 	}
 	return time.Now()
 }
-func (c *ResilientClient) retryDelay() time.Duration {
-	if c.RetryDelay > 0 {
-		return c.RetryDelay
+func (c *ResilientClient) retryDelay(attempt int) time.Duration {
+	const maximum = 30 * time.Second
+	delay := c.RetryDelay
+	if delay <= 0 {
+		delay = 500 * time.Millisecond
 	}
-	return 500 * time.Millisecond
+	// Saturate before doubling to avoid overflow, even for extreme settings.
+	delay = min(delay, maximum)
+	for n := 1; n < attempt && delay < maximum; n++ {
+		delay = min(delay, maximum/2) * 2
+	}
+	// Equal jitter keeps half the backoff and randomizes the rest, spreading
+	// concurrent retries without collapsing the exponential delay to zero.
+	half := (delay + 1) / 2
+	return half + time.Duration(rand.Int64N(int64(delay-half)+1))
 }
 func (c *ResilientClient) minBudget() time.Duration {
 	if c.MinAttemptBudget > 0 {
