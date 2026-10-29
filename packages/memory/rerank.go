@@ -38,14 +38,34 @@ func (r ModelRanker) Rank(ctx context.Context, query string, records []Record) (
 		Query   string          `json:"query"`
 		Records []ContextRecord `json:"records"`
 	}
-	var raw []byte
+	candidates := ForContext(records)
+	payload := input{maxResults, query, candidates}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
 	selected := records
-	for len(selected) > 0 {
-		raw, _ = json.Marshal(input{maxResults, query, ForContext(selected)})
-		if len(raw) <= limit {
-			break
+	if len(raw) > limit {
+		payload.Records = candidates[:0]
+		empty, _ := json.Marshal(payload)
+		size := len(empty)
+		selected = records[:0]
+		for index, candidate := range candidates {
+			// The complete encoding above already validated these fields. Count
+			// each record and array separator once, preserving the ranked prefix.
+			encoded, _ := json.Marshal(candidate)
+			next := size + len(encoded)
+			if index > 0 {
+				next++
+			}
+			if next > limit {
+				break
+			}
+			size = next
+			selected = records[:index+1]
 		}
-		selected = selected[:len(selected)-1]
+		payload.Records = candidates[:len(selected)]
+		raw, _ = json.Marshal(payload)
 	}
 	if len(selected) == 0 {
 		return nil, fmt.Errorf("memory rank input exceeds limit")
