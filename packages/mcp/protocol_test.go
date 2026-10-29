@@ -80,6 +80,38 @@ func TestRPCStringIdentityUsesDecodedValue(t *testing.T) {
 	}
 }
 
+func TestRPCResponseUsesParsedMediaType(t *testing.T) {
+	response := `{"jsonrpc":"2.0","id":"request","result":{"ok":true}}`
+	for _, test := range []struct {
+		contentType string
+		sse         bool
+	}{
+		{`application/json; profile="text/event-stream"`, false},
+		{"", false},
+		{"Application/JSON; charset=utf-8", false},
+		{"Text/Event-Stream; charset=utf-8", true},
+	} {
+		t.Run(test.contentType, func(t *testing.T) {
+			body := response
+			if test.sse {
+				body = "data: " + response + "\n\n"
+			}
+			result, err := readRPCResponse(strings.NewReader(body), test.contentType, "request")
+			if err != nil || string(result) != `{"ok":true}` {
+				t.Fatalf("result=%s err=%v", result, err)
+			}
+		})
+	}
+}
+
+func TestRPCResponseRejectsMalformedMediaType(t *testing.T) {
+	for _, contentType := range []string{`text/event-stream; charset="unclosed`, "application/json; charset", "not a media type"} {
+		if _, err := readRPCResponse(strings.NewReader(`{"jsonrpc":"2.0","id":"request","result":{}}`), contentType, "request"); err == nil {
+			t.Fatalf("accepted malformed Content-Type %q", contentType)
+		}
+	}
+}
+
 func TestSSECompletesWithoutWaitingForConnectionEOF(t *testing.T) {
 	closed := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -265,7 +265,10 @@ requests carry the negotiated `MCP-Protocol-Version`, including when the server
 has no session ID. This is not a claim of full protocol-feature conformance or
 support for the newer stateless `2026-07-28` specification.
 
-RPC results must identify the numeric request ID and JSON-RPC 2.0 envelope.
+RPC results must identify the opaque string request ID and JSON-RPC 2.0 envelope.
+The parsed Content-Type selects SSE only for `text/event-stream`; parameter
+values cannot change the decoder. Malformed headers fail explicitly. An absent
+header retains JSON decoding, with the same envelope and identity validation.
 SSE consumption stops at the matching result/error and closes its body, rather
 than waiting for a persistent connection to end. Notifications and responses
 for other IDs do not substitute for our result. No tool call is automatically
