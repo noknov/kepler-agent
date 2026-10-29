@@ -1,10 +1,24 @@
 package observability
 
 import (
+	"math"
 	"testing"
 
+	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/llm"
 )
+
+func TestAggregateCostMatchesMixedProviderReceipts(t *testing.T) {
+	rates := CostRates{InputPerMTok: 1, OutputPerMTok: 1, CacheReadPerMTok: 0.1, CacheCreationPerMTok: 0.2}
+	a := model.Usage{InputTokens: 1000000, OutputTokens: 100000, CacheReadTokens: 400000, CacheTokensIncludedInInput: true}
+	b := model.Usage{InputTokens: 600000, OutputTokens: 100000, CacheReadTokens: 200000, CacheCreatedTokens: 50000}
+	want := rates.EstimateUSD(UsageFromModel(a)) + rates.EstimateUSD(UsageFromModel(b))
+	for _, total := range []model.Usage{a.Add(b), b.Add(a)} {
+		if got := rates.EstimateUSD(UsageFromModel(total)); math.Abs(got-want) > 1e-12 {
+			t.Fatalf("aggregate cost=%v receipt sum=%v", got, want)
+		}
+	}
+}
 
 func TestCostRatesEstimateUSD(t *testing.T) {
 	rates := CostRates{InputPerMTok: 1, OutputPerMTok: 2}

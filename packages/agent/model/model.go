@@ -257,6 +257,29 @@ func (u Usage) Known() bool {
 	return u.Reported || u.InputTokens != 0 || u.OutputTokens != 0 || u.CacheReadTokens != 0 || u.CacheCreatedTokens != 0 || u.ReasoningTokens != 0
 }
 
+// Add combines usage in a cache-inclusive input basis. Providers disagree on
+// whether input includes cache tokens; OR-ing those flags loses billable input
+// when a turn or delegated batch uses both accounting conventions.
+// Individual provider receipts retain their original representation.
+func (u Usage) Add(other Usage) Usage {
+	input := u.InputTokens + other.InputTokens
+	if !u.CacheTokensIncludedInInput {
+		input += u.CacheReadTokens + u.CacheCreatedTokens
+	}
+	if !other.CacheTokensIncludedInInput {
+		input += other.CacheReadTokens + other.CacheCreatedTokens
+	}
+	return Usage{
+		Reported:                   u.Reported || other.Reported,
+		InputTokens:                input,
+		OutputTokens:               u.OutputTokens + other.OutputTokens,
+		CacheReadTokens:            u.CacheReadTokens + other.CacheReadTokens,
+		CacheCreatedTokens:         u.CacheCreatedTokens + other.CacheCreatedTokens,
+		CacheTokensIncludedInInput: true,
+		ReasoningTokens:            u.ReasoningTokens + other.ReasoningTokens,
+	}
+}
+
 type Response struct {
 	// OutputMode acknowledges an applied structured output contract across remote adapters.
 	OutputMode   OutputMode      `json:"output_mode,omitempty"`

@@ -23,7 +23,7 @@ func TestTurnUsageIncludesCompletedEmptyRecoveryRequests(t *testing.T) {
 	}
 	request := TurnRequest{SessionID: "usage", TurnID: "turn", Input: model.TextMessage(model.RoleUser, "inspect")}
 	result, err := runner.RunTurn(t.Context(), request)
-	want := model.Usage{Reported: true, InputTokens: 12, OutputTokens: 5}
+	want := model.Usage{Reported: true, InputTokens: 12, OutputTokens: 5, CacheTokensIncludedInInput: true}
 	if err != nil || result.Usage != want || len(client.requests) != 2 {
 		t.Fatalf("live usage=%+v requests=%d err=%v", result.Usage, len(client.requests), err)
 	}
