@@ -81,7 +81,9 @@ definition's `readOnlyHint` before execution. Both resolve credentials and
 targets using the call's authenticated user and selected instance, and reuse a
 cached MCP router session (5-minute TTL, automatically invalidated on transport
 error) to avoid repeating `initialize` and `tools/list` handshakes on every
-tool call.
+tool call. Each request uses a fresh opaque string ID independent of client
+instances, so reusing a session cannot reset its request identity. Responses
+must echo the same string value; notifications carry no request ID.
 
 For ClickHouse Cloud, each new App Home connection requires its own Service ID
 and OAuth authorization. Copy `x-service-id` from the corresponding service's

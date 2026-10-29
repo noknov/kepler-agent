@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -48,36 +47,55 @@ func TestInitializationNegotiatesBeforeNotifying(t *testing.T) {
 
 func TestRPCResponseIdentityAndError(t *testing.T) {
 	for _, body := range []string{
-		`{"jsonrpc":"2.0","id":"1","result":{}}`,
-		`{"jsonrpc":"2.0","id":2,"result":{}}`,
-		`{"id":1,"result":{}}`,
-		`{"jsonrpc":"2.0","id":1,"result":{},"error":{"code":-1,"message":"ambiguous"}}`,
-		`{"jsonrpc":"2.0","id":1}`,
+		`{"jsonrpc":"2.0","id":1,"result":{}}`,
+		`{"jsonrpc":"2.0","id":"unrelated","result":{}}`,
+		`{"id":"request","result":{}}`,
+		`{"jsonrpc":"2.0","id":"request","result":{},"error":{"code":-1,"message":"ambiguous"}}`,
+		`{"jsonrpc":"2.0","id":"request"}`,
 	} {
-		if _, err := readRPCResponse(strings.NewReader(body), "application/json", json.RawMessage(`1`)); err == nil {
+		if _, err := readRPCResponse(strings.NewReader(body), "application/json", "request"); err == nil {
 			t.Fatalf("accepted %s", body)
 		}
 	}
-	body := `data: {"jsonrpc":"2.0","method":"notifications/message"}` + "\n\n" + `data: {"jsonrpc":"2.0","id":2,"result":{}}` + "\n\n" + `data: {"jsonrpc":"2.0","id":1,"error":{"code":-32001,"message":"failed"}}` + "\n\n"
-	_, err := readRPCResponse(strings.NewReader(body), "text/event-stream", json.RawMessage(`1`))
+	body := `data: {"jsonrpc":"2.0","method":"notifications/message"}` + "\n\n" + `data: {"jsonrpc":"2.0","id":2,"result":{}}` + "\n\n" + `data: {"jsonrpc":"2.0","id":"request","error":{"code":-32001,"message":"failed"}}` + "\n\n"
+	_, err := readRPCResponse(strings.NewReader(body), "text/event-stream", "request")
 	var rpc RPCError
 	if !errors.As(err, &rpc) || rpc.Code != -32001 {
 		t.Fatalf("matched RPC error swallowed: %v", err)
 	}
 }
 
+func TestRPCStringIdentityUsesDecodedValue(t *testing.T) {
+	for _, contentType := range []string{"application/json", "text/event-stream"} {
+		body := `{"jsonrpc":"2.0","id":"req\u0075est","result":{"ok":true}}`
+		if contentType == "text/event-stream" {
+			body = "data: " + body + "\n\n"
+		}
+		if result, err := readRPCResponse(strings.NewReader(body), contentType, "request"); err != nil || string(result) != `{"ok":true}` {
+			t.Fatalf("content type=%s result=%s err=%v", contentType, result, err)
+		}
+	}
+	if _, err := readRPCResponse(strings.NewReader(`{"jsonrpc":"2.0","id":1,"result":{}}`), "application/json", "1"); err == nil {
+		t.Fatal("numeric response ID matched a string request ID")
+	}
+}
+
 func TestSSECompletesWithoutWaitingForConnectionEOF(t *testing.T) {
 	closed := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID json.RawMessage `json:"id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&request)
 		w.Header().Set("Content-Type", "text/event-stream")
-		io.WriteString(w, "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n\n")
+		fmt.Fprintf(w, "data: {\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"ok\":true}}\n\n", request.ID)
 		w.(http.Flusher).Flush()
 		<-r.Context().Done()
 		close(closed)
 	}))
 	defer server.Close()
 	client := &Client{URL: server.URL, HTTP: &http.Client{Timeout: 2 * time.Second}}
-	result, _, err := client.rpcWithID(context.Background(), Session{}, 1, "tools/list", nil)
+	result, _, err := client.rpc(context.Background(), Session{}, "tools/list", nil)
 	if err != nil || string(result) != `{"ok":true}` {
 		t.Fatalf("result=%s err=%v", result, err)
 	}
@@ -119,8 +137,8 @@ func TestDiscoveryRejectsCyclesDuplicateNamesAndPageExhaustion(t *testing.T) {
 }
 
 func TestSSEPrimingEventPrecedesMatchingResponse(t *testing.T) {
-	stream := "id: prime\ndata:\n\n" + `data: {"jsonrpc":"2.0","id":1,"result":{"ok":true}}` + "\n\n"
-	result, err := readRPCResponse(strings.NewReader(stream), "text/event-stream", json.RawMessage(`1`))
+	stream := "id: prime\ndata:\n\n" + `data: {"jsonrpc":"2.0","id":"request","result":{"ok":true}}` + "\n\n"
+	result, err := readRPCResponse(strings.NewReader(stream), "text/event-stream", "request")
 	if err != nil || string(result) != `{"ok":true}` {
 		t.Fatalf("priming event aborted response: result=%s err=%v", result, err)
 	}
@@ -128,8 +146,8 @@ func TestSSEPrimingEventPrecedesMatchingResponse(t *testing.T) {
 
 func TestMCPResultsMustBeObjects(t *testing.T) {
 	for _, result := range []string{"null", "[]", "true", "42", `"text"`} {
-		body := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"result":%s}`, result)
-		if _, err := readRPCResponse(strings.NewReader(body), "application/json", json.RawMessage(`1`)); err == nil {
+		body := fmt.Sprintf(`{"jsonrpc":"2.0","id":"request","result":%s}`, result)
+		if _, err := readRPCResponse(strings.NewReader(body), "application/json", "request"); err == nil {
 			t.Fatalf("non-object result accepted: %s", result)
 		}
 	}

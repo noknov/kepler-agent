@@ -268,7 +268,7 @@ type sessionInitialization struct {
 }
 
 // clientConfig intentionally contains only immutable transport configuration.
-// A fresh mcp.Client owns its atomic request ID and sync.Once state per call.
+// A fresh mcp.Client owns its sync.Once transport state per call.
 type clientConfig struct {
 	serviceName string
 	url         string
