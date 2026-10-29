@@ -227,6 +227,35 @@ func TestReadPageRejectsUnsupportedContentType(t *testing.T) {
 	}
 }
 
+func TestReadPageUsesParsedMediaType(t *testing.T) {
+	for _, test := range []struct {
+		name, header string
+		wantError    bool
+	}{
+		{"HTML parameter mentions plain text", `text/html; note="text/plain"`, false},
+		{"case insensitive media type", `TEXT/HTML; charset=utf-8`, false},
+		{"unsupported parameter mentions HTML", `application/json; note="text/html"`, true},
+		{"unsupported subtype", `text/html-extra`, true},
+		{"malformed parameter", `text/html; charset=`, true},
+		{"absent header", "", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := Client{HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				resp := htmlResponse(`<html><title>Parsed</title><body>Visible<script>hidden</script></body></html>`)
+				resp.Header.Set("Content-Type", test.header)
+				return resp, nil
+			})}}
+			page, err := client.ReadPage(t.Context(), "https://example.com/doc", 1000)
+			if (err != nil) != test.wantError {
+				t.Fatalf("page=%+v err=%v", page, err)
+			}
+			if !test.wantError && (page.Title != "Parsed" || page.Text != "Visible") {
+				t.Fatalf("wrong extractor selected: %+v", page)
+			}
+		})
+	}
+}
+
 func TestReadPageTruncatesHeadAndTail(t *testing.T) {
 	client := Client{HTTP: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return textResponse(strings.Repeat("A", 1000) + "\n" + strings.Repeat("Z", 1000)), nil
