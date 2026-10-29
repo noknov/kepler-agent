@@ -745,7 +745,7 @@ func setAnthropicAuthHeaders(header http.Header, token, flavor string) {
 	if hasBearerPrefix(token) {
 		header.Set("Authorization", token)
 		if flavor != "claude-code" {
-			header.Set("x-api-key", strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(token, "Bearer "), "bearer ")))
+			header.Set("x-api-key", bearerTokenValue(token))
 		}
 		return
 	}

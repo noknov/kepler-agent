@@ -405,7 +405,7 @@ func (c *OpenAICompatibleClient) providerName() string {
 }
 
 func hasBearerPrefix(token string) bool {
-	return len(token) >= 7 && (token[:7] == "Bearer " || token[:7] == "bearer ")
+	return len(token) >= 7 && strings.EqualFold(token[:7], "Bearer ")
 }
 
 func bearerTokenValue(token string) string {
