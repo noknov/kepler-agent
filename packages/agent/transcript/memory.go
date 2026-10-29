@@ -1,7 +1,6 @@
 package transcript
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -22,14 +21,6 @@ type memoryEvent struct {
 
 func NewMemoryStore() *MemoryStore { return &MemoryStore{events: make(map[string][]memoryEvent)} }
 
-func decodeMemoryEvent(data json.RawMessage) (Event, error) {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	var event Event
-	err := decoder.Decode(&event)
-	return event, err
-}
-
 func (s *MemoryStore) ReadEvent(_ context.Context, sessionID string, sequence uint64) (Event, error) {
 	s.mu.Lock()
 	events := s.events[sessionID]
@@ -39,7 +30,7 @@ func (s *MemoryStore) ReadEvent(_ context.Context, sessionID string, sequence ui
 	}
 	data := events[sequence-1].data
 	s.mu.Unlock()
-	return decodeMemoryEvent(data)
+	return DecodeEvent(data)
 }
 
 func (s *MemoryStore) Append(_ context.Context, event Event) (Event, error) {
@@ -51,7 +42,7 @@ func (s *MemoryStore) Append(_ context.Context, event Event) (Event, error) {
 	if event.ID != "" {
 		for _, existing := range s.events[event.SessionID] {
 			if existing.id == event.ID {
-				return decodeMemoryEvent(existing.data)
+				return DecodeEvent(existing.data)
 			}
 		}
 	}
@@ -60,7 +51,7 @@ func (s *MemoryStore) Append(_ context.Context, event Event) (Event, error) {
 	if err != nil {
 		return Event{}, err
 	}
-	result, err := decodeMemoryEvent(data)
+	result, err := DecodeEvent(data)
 	if err != nil {
 		return Event{}, err
 	}
@@ -91,7 +82,7 @@ func (s *MemoryStore) AppendBatch(_ context.Context, events []Event) ([]Event, e
 		if err != nil {
 			return nil, err
 		}
-		snapshot, err := decodeMemoryEvent(data)
+		snapshot, err := DecodeEvent(data)
 		if err != nil {
 			return nil, err
 		}
@@ -113,7 +104,7 @@ func (s *MemoryStore) Load(_ context.Context, sessionID string, afterSequence ui
 	s.mu.Unlock()
 	result := make([]Event, 0, len(snapshot))
 	for _, entry := range snapshot {
-		event, err := decodeMemoryEvent(entry.data)
+		event, err := DecodeEvent(entry.data)
 		if err != nil {
 			return nil, err
 		}
