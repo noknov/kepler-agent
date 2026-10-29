@@ -76,6 +76,9 @@ type Call struct {
 	Name        string          `json:"name"`
 	Arguments   json.RawMessage `json:"arguments"`
 	Scope       Scope           `json:"scope"`
+	// State is captured by the trusted tool before execution or suspension.
+	// It is not part of the model-visible arguments or accepted from controls.
+	State json.RawMessage `json:"state,omitempty"`
 }
 
 type Result struct {
@@ -125,6 +128,35 @@ func (r Result) Text() string {
 type Tool interface {
 	Descriptor() Descriptor
 	Execute(ctx context.Context, call Call) (Result, error)
+}
+
+// CallPreparer captures immutable prerequisites before a call can be approved.
+// Preparation only snapshots local server-owned evidence; it must not call
+// external services. Approval resumes the captured call rather than rebuilding
+// its evidence from transient adapter state.
+type CallPreparer interface {
+	PrepareCall(Call) (json.RawMessage, error)
+}
+
+func prepareCallState(item Tool, call Call) (json.RawMessage, error) {
+	if preparer, ok := item.(CallPreparer); ok {
+		return preparer.PrepareCall(call)
+	}
+	return nil, nil
+}
+
+// PrepareCall discards supplied state and captures the registered adapter's state.
+func PrepareCall(item Tool, call Call) (Call, error) {
+	call.State = nil
+	state, err := prepareCallState(item, call)
+	if err != nil {
+		return Call{}, err
+	}
+	if len(state) > 0 && !json.Valid(state) {
+		return Call{}, fmt.Errorf("tool preparation returned invalid JSON state")
+	}
+	call.State = append(json.RawMessage(nil), state...)
+	return call, nil
 }
 
 // CallDescriptor resolves argument-dependent effects before policy and scheduling.

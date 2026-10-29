@@ -181,13 +181,19 @@ Final Slack answers append a concise evidence section when the turn used
 
 Luckin order management uses the official MCP endpoint and requires
 `LUCKIN_MCP_TOKEN` from <https://open.lkcoffee.com/mcp>. Order creation
-(`luckin-create_order`) enforces a turn-scoped preview fingerprint check: the
+(`luckin-create_order`) enforces an exact preview prerequisite: the
 model must successfully call `luckin-preview_order` with matching store and
 item IDs/SKUs/quantities in the same turn before creating an order. SKU values
 are opaque: whitespace and separator characters are preserved in the structured
 preview binding. Remote MCP errors remain failed tool results and cannot establish
-a successful preview; image content is preserved. Order creation and cancellation
-also require explicit user confirmation.
+a successful preview; image content is preserved. A failed preview invalidates
+the prior preview in that turn. The create tool captures the successful preview
+binding before requesting confirmation and persists it with the pending call;
+confirmation can resume after turn cleanup or on another worker. The binding
+includes session, turn, actor, store/items and integration identity. Changed
+credentials or arguments require a new preview and confirmation. This confirms
+the item selection, not a price guarantee or reservation from the remote service.
+Order creation and cancellation also require explicit user confirmation.
 
 ## Local Workspace Tools
 

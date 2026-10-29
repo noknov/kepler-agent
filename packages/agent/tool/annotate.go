@@ -1,6 +1,9 @@
 package tool
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // Annotate wraps a tool and merges descriptor fields from patch into the
 // inner descriptor. Patch fields override only when explicitly set.
@@ -56,6 +59,10 @@ func mergeDescriptor(base Descriptor, patch Descriptor) Descriptor {
 
 func (t annotatedTool) Execute(ctx context.Context, call Call) (Result, error) {
 	return t.inner.Execute(ctx, call)
+}
+
+func (t annotatedTool) PrepareCall(call Call) (json.RawMessage, error) {
+	return prepareCallState(t.inner, call)
 }
 
 func (t annotatedTool) EndTurn(sessionID, turnID string) {

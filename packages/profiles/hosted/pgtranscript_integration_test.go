@@ -242,7 +242,17 @@ type jsonbApprovalTool struct{ calls *int }
 func (jsonbApprovalTool) Descriptor() tool.Descriptor {
 	return tool.Descriptor{Name: "write", Exposure: tool.ExposureDeferred, Effects: []tool.Effect{tool.EffectExternalWrite}, InputSchema: json.RawMessage(`{"type":"object","properties":{"amount":{"type":"number","minimum":1e3}},"required":["amount"]}`)}
 }
-func (t jsonbApprovalTool) Execute(context.Context, tool.Call) (tool.Result, error) {
+func (jsonbApprovalTool) PrepareCall(tool.Call) (json.RawMessage, error) {
+	return json.RawMessage(`{"proof":"captured","version":9007199254740993}`), nil
+}
+func (t jsonbApprovalTool) Execute(_ context.Context, call tool.Call) (tool.Result, error) {
+	var state struct {
+		Proof   string `json:"proof"`
+		Version int64  `json:"version"`
+	}
+	if err := json.Unmarshal(call.State, &state); err != nil || state.Proof != "captured" || state.Version != 9007199254740993 {
+		return tool.Result{}, fmt.Errorf("captured call state lost across JSONB: %s", call.State)
+	}
 	*t.calls++
 	return tool.TextResult("done"), nil
 }

@@ -56,7 +56,7 @@ func TestRunTurnBindsReplayedToolResultToCall(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
 			store := transcript.NewMemoryStore()
-			call := tool.Call{ID: "one", Name: "write", Arguments: json.RawMessage(`{"target":"original","n":9007199254740993}`), Scope: tool.Scope{SessionID: "s", TurnID: "t"}}
+			call := tool.Call{ID: "one", Name: "write", Arguments: json.RawMessage(`{"target":"original","n":9007199254740993}`), State: json.RawMessage(`{"prerequisite":"captured"}`), Scope: tool.Scope{SessionID: "s", TurnID: "t"}}
 			result := tool.TextResult("original result")
 			result.Usage = &model.Usage{InputTokens: 17, Reported: true}
 			result.Plan = &tool.PlanUpdate{Explanation: "already applied", Items: []tool.PlanItem{{Task: "original", Status: "completed"}}}
@@ -73,7 +73,11 @@ func TestRunTurnBindsReplayedToolResultToCall(t *testing.T) {
 			if test.wantError {
 				content = append([]model.Content{{Type: model.ContentToolCall, ToolCall: &newCall}}, content...)
 			}
-			client := &scriptedModel{responses: []model.Response{{Message: model.Message{Role: model.RoleAssistant, Content: content}}, {Message: model.TextMessage(model.RoleAssistant, "done")}}}
+			client := &scriptedModel{responses: []model.Response{
+				{Message: model.Message{Role: model.RoleAssistant, Content: content}},
+				{Message: model.Message{Role: model.RoleAssistant, Content: content}},
+				{Message: model.TextMessage(model.RoleAssistant, "done")},
+			}}
 			runner, _ := New(Config{Model: "test"}, Dependencies{Model: client, Tools: catalog, Policy: tool.AllowAllPolicy{}, Transcript: store})
 			turn, err := runner.RunTurn(ctx, TurnRequest{SessionID: "s", TurnID: "t", Input: model.TextMessage(model.RoleUser, "write")})
 			if test.wantError && model.ErrorKindOf(err) != model.ErrorProtocol {

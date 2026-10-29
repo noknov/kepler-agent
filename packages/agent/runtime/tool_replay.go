@@ -9,11 +9,16 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 )
 
+type completedToolReceipt struct {
+	call   tool.Call
+	result tool.Result
+}
+
 // completedToolResults validates the whole batch before it becomes executable
 // transcript history. An ID names one immutable call within a turn, not a slot
 // that a later model response can retarget. Downstream tools can additionally use
 // Call.ExecutionID where their API supports stronger idempotency guarantees.
-func (r *Runtime) completedToolResults(ctx context.Context, request TurnRequest, calls []model.ToolCall) (map[string]tool.Result, error) {
+func (r *Runtime) completedToolResults(ctx context.Context, request TurnRequest, calls []model.ToolCall) (map[string]completedToolReceipt, error) {
 	if len(calls) == 0 {
 		return nil, nil
 	}
@@ -29,7 +34,7 @@ func (r *Runtime) completedToolResults(ctx context.Context, request TurnRequest,
 	if err != nil {
 		return nil, err
 	}
-	results := make(map[string]tool.Result)
+	results := make(map[string]completedToolReceipt)
 	bindings := make(map[string]tool.Call)
 	for _, event := range events {
 		if event.TurnID != request.TurnID || event.ToolCall == nil || event.ToolResult == nil {
@@ -50,13 +55,16 @@ func (r *Runtime) completedToolResults(ctx context.Context, request TurnRequest,
 			return nil, invalid("durable tool call ID has conflicting bindings")
 		}
 		bindings[call.ID] = call
-		results[call.ID] = *event.ToolResult
+		results[call.ID] = completedToolReceipt{call: *event.ToolCall, result: *event.ToolResult}
 	}
 	for _, call := range calls {
 		previous, ok := bindings[call.ID]
 		if !ok {
 			continue
 		}
+		// Model call identity contains arguments, not the adapter's captured state.
+		// Durable receipt-to-receipt comparisons above still include that state.
+		previous.State = nil
 		current := tool.Call{ID: call.ID, Name: call.Name, Arguments: call.Arguments}
 		if !sameJSONDocument(previous, current) {
 			return nil, invalid("model reused a completed tool call ID with a different binding")

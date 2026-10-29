@@ -1,6 +1,9 @@
 package tool
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // SetPromptOverlay installs product text at composition time. Only description
 // and schema wording may change; authorization and scheduling stay authoritative.
@@ -42,6 +45,9 @@ func withPromptOverlay(item Tool, overlay func(Descriptor) Descriptor) Tool {
 func (t promptTool) Descriptor() Descriptor { return t.descriptor }
 func (t promptTool) Execute(ctx context.Context, call Call) (Result, error) {
 	return t.inner.Execute(ctx, call)
+}
+func (t promptTool) PrepareCall(call Call) (json.RawMessage, error) {
+	return prepareCallState(t.inner, call)
 }
 func (t promptTool) DescriptorForCall(call Call) (Descriptor, error) {
 	d, err := DescribeCall(t.inner, call)

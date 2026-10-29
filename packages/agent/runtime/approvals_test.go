@@ -18,6 +18,38 @@ func (approvalPolicy) Decide(context.Context, tool.PolicyRequest) (tool.Decision
 	return tool.Decision{Type: tool.DecisionRequireApproval, Rule: "user_confirmation"}, nil
 }
 
+type unpreparedWriteTool struct{ countingWriteTool }
+
+func (unpreparedWriteTool) PrepareCall(tool.Call) (json.RawMessage, error) {
+	return nil, fmt.Errorf("required preview unavailable")
+}
+
+func TestFailedPreparationCannotRequestApprovalOrExecute(t *testing.T) {
+	writes := 0
+	catalog, _ := tool.NewCatalog(unpreparedWriteTool{countingWriteTool{calls: &writes}})
+	store := transcript.NewMemoryStore()
+	client := &scriptedModel{responses: []model.Response{
+		{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "call", Name: "write", Arguments: json.RawMessage(`{}`)}}}}, FinishReason: model.FinishToolCalls},
+		{Message: model.TextMessage(model.RoleAssistant, "preview required"), FinishReason: model.FinishStop},
+	}}
+	runner, _ := New(Config{}, Dependencies{Model: client, Tools: catalog, Transcript: store, Policy: approvalPolicy{}})
+	result, err := runner.RunTurn(t.Context(), TurnRequest{SessionID: "preparation", TurnID: "turn", Input: model.TextMessage(model.RoleUser, "write")})
+	if err != nil || result.Termination != TerminationCompleted || writes != 0 {
+		t.Fatalf("failed preparation escaped: result=%+v writes=%d err=%v", result, writes, err)
+	}
+	events, _ := store.Load(t.Context(), "preparation", 0)
+	failed := false
+	for _, event := range events {
+		if event.Type == transcript.ApprovalRequested || event.Type == transcript.ToolCallStarted {
+			t.Fatalf("unprepared write admitted: %+v", event)
+		}
+		failed = failed || (event.ToolResult != nil && event.ToolResult.ErrorCode == "tool_precondition_failed")
+	}
+	if !failed {
+		t.Fatal("missing failed precondition result")
+	}
+}
+
 type blockingApprovalWriteTool struct {
 	calls   atomic.Int32
 	started chan struct{}
