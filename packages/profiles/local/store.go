@@ -73,10 +73,13 @@ func (s *JSONLStore) Append(ctx context.Context, event transcript.Event) (transc
 	defer closeSession()
 	if location, ok := index.byID[event.ID]; event.ID != "" && ok {
 		stored, err := readEvent(file, index.entries[location])
-		if err == nil {
-			err = file.Sync()
+		if err != nil {
+			return transcript.Event{}, err
 		}
-		return stored, err
+		if stored.SessionID != event.SessionID || stored.TurnID != event.TurnID {
+			return transcript.Event{}, fmt.Errorf("transcript event ID belongs to another owner")
+		}
+		return stored, file.Sync()
 	}
 	event.Sequence = index.sequence + 1
 	data, err := json.Marshal(event)

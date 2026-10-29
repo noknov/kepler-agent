@@ -96,6 +96,7 @@ type TraceContext struct {
 
 // Store owns append-only facts. Returned events are caller-owned snapshots;
 // mutating an appended input or a read result cannot rewrite recorded history.
+// An idempotent append can only return a fact in the requested session/turn.
 type Store interface {
 	Append(ctx context.Context, event Event) (Event, error)
 	Load(ctx context.Context, sessionID string, afterSequence uint64) ([]Event, error)

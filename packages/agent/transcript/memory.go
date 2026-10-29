@@ -42,7 +42,14 @@ func (s *MemoryStore) Append(_ context.Context, event Event) (Event, error) {
 	if event.ID != "" {
 		for _, existing := range s.events[event.SessionID] {
 			if existing.id == event.ID {
-				return DecodeEvent(existing.data)
+				stored, err := DecodeEvent(existing.data)
+				if err != nil {
+					return Event{}, err
+				}
+				if stored.SessionID != event.SessionID || stored.TurnID != event.TurnID {
+					return Event{}, fmt.Errorf("transcript event ID belongs to another owner")
+				}
+				return stored, nil
 			}
 		}
 	}

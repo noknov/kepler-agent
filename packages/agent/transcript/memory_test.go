@@ -51,7 +51,7 @@ func TestMemoryStoreOwnsAppendAndReadSnapshots(t *testing.T) {
 			case "append return", "batch return":
 				corruptSnapshot(returned)
 			case "duplicate return":
-				returned, err = store.Append(t.Context(), Event{ID: original.ID, SessionID: original.SessionID})
+				returned, err = store.Append(t.Context(), Event{ID: original.ID, SessionID: original.SessionID, TurnID: original.TurnID})
 				if err == nil {
 					corruptSnapshot(returned)
 				}
@@ -95,5 +95,17 @@ func TestMemoryStoreRejectsInvalidBatchAtomically(t *testing.T) {
 	events, err := store.Load(t.Context(), "session", 0)
 	if err != nil || len(events) != 0 {
 		t.Fatalf("failed batch changed history: events=%+v err=%v", events, err)
+	}
+}
+
+func TestMemoryStoreDuplicateCannotChangeTurnOwner(t *testing.T) {
+	store := NewMemoryStore()
+	original := snapshotFixture()
+	if _, err := store.Append(t.Context(), original); err != nil {
+		t.Fatal(err)
+	}
+	original.TurnID = "another-turn"
+	if event, err := store.Append(t.Context(), original); err == nil || event.ID != "" {
+		t.Fatalf("duplicate returned another turn's fact: event=%+v err=%v", event, err)
 	}
 }
