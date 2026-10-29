@@ -62,6 +62,13 @@ func (roundTripEcho) Execute(context.Context, tool.Call) (tool.Result, error) {
 }
 
 func TestResponsesFactoryCompletesCanonicalToolRoundTrip(t *testing.T) {
+	for _, sparse := range []bool{false, true} {
+		t.Run(fmt.Sprintf("sparse=%v", sparse), func(t *testing.T) { responsesToolRoundTrip(t, sparse) })
+	}
+}
+
+func responsesToolRoundTrip(t *testing.T, sparse bool) {
+	t.Helper()
 	requests := 0
 	var secondInput []any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -73,11 +80,21 @@ func TestResponsesFactoryCompletesCanonicalToolRoundTrip(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		if requests == 1 {
 			_, _ = fmt.Fprint(w, "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"fc_internal\",\"type\":\"function_call\",\"status\":\"completed\",\"name\":\"echo\",\"call_id\":\"call_public\",\"arguments\":\"{}\"}}\n\n")
-			_, _ = fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"id\":\"fc_internal\",\"type\":\"function_call\",\"name\":\"echo\",\"call_id\":\"call_public\",\"arguments\":\"{}\"}]}}\n\n")
+			output := `[{"id":"fc_internal","type":"function_call","name":"echo","call_id":"call_public","arguments":"{}"}]`
+			if sparse {
+				output = `[]`
+			}
+			_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":%s}}\n\n", output)
 			return
 		}
 		secondInput, _ = body["input"].([]any)
-		_, _ = fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}]}}\n\n")
+		item := `{"id":"answer","type":"message","phase":"final_answer","role":"assistant","content":[{"type":"output_text","text":"done"}]}`
+		fmt.Fprintf(w, "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":%s}\n\n", item)
+		output := "[" + item + "]"
+		if sparse {
+			output = `[]`
+		}
+		fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":%s}}\n\n", output)
 	}))
 	defer server.Close()
 	client, err := providers.New(providers.Config{Provider: "openai", Protocol: "responses", BaseURL: server.URL})
