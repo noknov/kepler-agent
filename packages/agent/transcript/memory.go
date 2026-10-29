@@ -1,26 +1,45 @@
 package transcript
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 )
 
 type MemoryStore struct {
 	mu     sync.Mutex
-	events map[string][]Event
+	events map[string][]memoryEvent
 }
 
-func NewMemoryStore() *MemoryStore { return &MemoryStore{events: make(map[string][]Event)} }
+// Encoded facts are owned by the store. Every read decodes a caller-owned
+// snapshot, matching the isolation of the persistent transcript adapters.
+type memoryEvent struct {
+	id   string
+	data json.RawMessage
+}
+
+func NewMemoryStore() *MemoryStore { return &MemoryStore{events: make(map[string][]memoryEvent)} }
+
+func decodeMemoryEvent(data json.RawMessage) (Event, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var event Event
+	err := decoder.Decode(&event)
+	return event, err
+}
 
 func (s *MemoryStore) ReadEvent(_ context.Context, sessionID string, sequence uint64) (Event, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	events := s.events[sessionID]
 	if sequence == 0 || sequence > uint64(len(events)) {
+		s.mu.Unlock()
 		return Event{}, fmt.Errorf("transcript event not found")
 	}
-	return events[sequence-1], nil
+	data := events[sequence-1].data
+	s.mu.Unlock()
+	return decodeMemoryEvent(data)
 }
 
 func (s *MemoryStore) Append(_ context.Context, event Event) (Event, error) {
@@ -31,14 +50,22 @@ func (s *MemoryStore) Append(_ context.Context, event Event) (Event, error) {
 	defer s.mu.Unlock()
 	if event.ID != "" {
 		for _, existing := range s.events[event.SessionID] {
-			if existing.ID == event.ID {
-				return existing, nil
+			if existing.id == event.ID {
+				return decodeMemoryEvent(existing.data)
 			}
 		}
 	}
 	event.Sequence = uint64(len(s.events[event.SessionID]) + 1)
-	s.events[event.SessionID] = append(s.events[event.SessionID], event)
-	return event, nil
+	data, err := json.Marshal(event)
+	if err != nil {
+		return Event{}, err
+	}
+	result, err := decodeMemoryEvent(data)
+	if err != nil {
+		return Event{}, err
+	}
+	s.events[event.SessionID] = append(s.events[event.SessionID], memoryEvent{id: event.ID, data: data})
+	return result, nil
 }
 
 func (s *MemoryStore) AppendBatch(_ context.Context, events []Event) ([]Event, error) {
@@ -57,26 +84,48 @@ func (s *MemoryStore) AppendBatch(_ context.Context, events []Event) ([]Event, e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	result := make([]Event, 0, len(events))
-	for _, event := range events {
-		event.Sequence = uint64(len(s.events[sessionID]) + 1)
-		s.events[sessionID] = append(s.events[sessionID], event)
-		result = append(result, event)
+	batch := make([]memoryEvent, 0, len(events))
+	for index, event := range events {
+		event.Sequence = uint64(len(s.events[sessionID]) + index + 1)
+		data, err := json.Marshal(event)
+		if err != nil {
+			return nil, err
+		}
+		snapshot, err := decodeMemoryEvent(data)
+		if err != nil {
+			return nil, err
+		}
+		batch = append(batch, memoryEvent{id: event.ID, data: data})
+		result = append(result, snapshot)
 	}
+	s.events[sessionID] = append(s.events[sessionID], batch...)
 	return result, nil
 }
 
 func (s *MemoryStore) Load(_ context.Context, sessionID string, afterSequence uint64) ([]Event, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	events := s.events[sessionID]
 	if afterSequence >= uint64(len(events)) {
+		s.mu.Unlock()
 		return nil, nil
 	}
-	return append([]Event(nil), events[afterSequence:]...), nil
+	snapshot := append([]memoryEvent(nil), events[afterSequence:]...)
+	s.mu.Unlock()
+	result := make([]Event, 0, len(snapshot))
+	for _, entry := range snapshot {
+		event, err := decodeMemoryEvent(entry.data)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, event)
+	}
+	return result, nil
 }
 
-func (s *MemoryStore) LoadTurn(_ context.Context, sessionID, turnID string) ([]Event, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return TurnWindow(s.events[sessionID], turnID), nil
+func (s *MemoryStore) LoadTurn(ctx context.Context, sessionID, turnID string) ([]Event, error) {
+	events, err := s.Load(ctx, sessionID, 0)
+	if err != nil {
+		return nil, err
+	}
+	return TurnWindow(events, turnID), nil
 }
