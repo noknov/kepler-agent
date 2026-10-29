@@ -83,9 +83,10 @@ func (e RPCError) Error() string {
 }
 
 type ToolResult struct {
-	Content string
-	Images  []Image
-	IsError bool
+	Content           string
+	StructuredContent json.RawMessage
+	Images            []Image
+	IsError           bool
 }
 
 type Image struct {
@@ -387,8 +388,7 @@ func decodeRPCResponse(body json.RawMessage, expected string) (json.RawMessage, 
 	return result, true, nil
 }
 
-// FormatToolResult parses an MCP tools/call result and returns the concatenated content.
-// Image items (type "image") are returned as data URIs so multimodal models can consume them.
+// FormatToolResult preserves structured JSON separately from text and images.
 func FormatToolResult(raw json.RawMessage) (ToolResult, error) {
 	var parsed struct {
 		Content []struct {
@@ -406,7 +406,10 @@ func FormatToolResult(raw json.RawMessage) (ToolResult, error) {
 	var parts []string
 	var images []Image
 	if len(parsed.StructuredContent) > 0 {
-		parts = append(parts, string(parsed.StructuredContent))
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(parsed.StructuredContent, &object); err != nil || object == nil {
+			return ToolResult{}, fmt.Errorf("mcp structuredContent must be a JSON object")
+		}
 	}
 	for _, item := range parsed.Content {
 		switch item.Type {
@@ -428,7 +431,7 @@ func FormatToolResult(raw json.RawMessage) (ToolResult, error) {
 			return ToolResult{}, fmt.Errorf("unsupported MCP content type %q", item.Type)
 		}
 	}
-	return ToolResult{Content: strings.Join(parts, "\n"), Images: images, IsError: parsed.IsError}, nil
+	return ToolResult{Content: strings.Join(parts, "\n"), StructuredContent: parsed.StructuredContent, Images: images, IsError: parsed.IsError}, nil
 }
 
 func firstHeader(headers http.Header, key string) string {
