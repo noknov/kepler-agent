@@ -21,6 +21,13 @@ ambiguous commits idempotent. Completed, failed, and canceled turns are terminal
 for durable queue acknowledgement. Terminal persistence runs under a bounded
 cleanup context (10 seconds by default), including after cancellation.
 
+Session routing reads the latest terminal turn and its original owner/scope.
+PostgreSQL retrieves only the terminal and start facts in one snapshot through
+`transcript.TerminalTurnLoader`; unrelated model and tool payloads are not
+loaded for this projection. Other stores retain the canonical full-read path.
+A missing start never revives an older pending turn, and a newer active turn
+does not replace the latest terminal state. Full audit and replay reads are unchanged.
+
 Local JSONL storage maintains up to 64 session indexes of IDs and byte offsets.
 Warm appends parse only external additions. File replacement or truncation
 invalidates the index; a malformed incomplete tail is truncated and a valid
