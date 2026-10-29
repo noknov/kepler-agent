@@ -12,6 +12,30 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 )
 
+func TestApprovalProjectionPreservesOpaqueCallOwner(t *testing.T) {
+	pending := tool.Call{ID: "c", Name: "write"}
+	completed := tool.Call{ID: "b\x00c", Name: "write"}
+	result := tool.TextResult("another call completed")
+	projection, err := NewBoundedProjector(ContextConfig{MaxTokens: 2000}).Project(t.Context(), ProjectRequest{Events: []transcript.Event{
+		{Sequence: 1, TurnID: "a\x00b", Type: transcript.ApprovalRequested, ToolCall: &pending},
+		{Sequence: 2, TurnID: "a", Type: transcript.ToolCallCompleted, ToolCall: &completed, ToolResult: &result},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, message := range projection.Messages {
+		for _, block := range message.Content {
+			if block.ToolResult != nil && block.ToolResult.CallID == pending.ID {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("another turn's completed call hid a pending approval")
+	}
+}
+
 func TestBoundedProjectorDropsOldMessagesAndPreservesRecentTurn(t *testing.T) {
 	events := []transcript.Event{
 		{Sequence: 1, Type: transcript.UserInput, Message: messagePtr(model.TextMessage(model.RoleUser, strings.Repeat("old ", 100)))},

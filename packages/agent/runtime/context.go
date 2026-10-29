@@ -116,17 +116,17 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 	fallbackTurn := 0
 	// An unresolved approval is a known non-execution state, not a missing
 	// tool result. Project it explicitly without settling the durable approval.
-	resolvedCalls := make(map[string]bool)
+	resolvedCalls := make(map[[2]string]bool)
 	for _, event := range events {
 		if (event.Type == transcript.ToolCallCompleted || event.Type == transcript.ToolCallFailed) && event.ToolCall != nil && event.ToolResult != nil {
-			resolvedCalls[event.TurnID+"\x00"+event.ToolCall.ID] = true
+			resolvedCalls[[2]string{event.TurnID, event.ToolCall.ID}] = true
 		}
 	}
 	for _, event := range events {
 		if event.Sequence <= baseSequence && event.Sequence != currentInput {
 			continue
 		}
-		if event.Type == transcript.ApprovalRequested && event.ToolCall != nil && resolvedCalls[event.TurnID+"\x00"+event.ToolCall.ID] {
+		if event.Type == transcript.ApprovalRequested && event.ToolCall != nil && resolvedCalls[[2]string{event.TurnID, event.ToolCall.ID}] {
 			continue
 		}
 		message, ok := eventMessage(event)
