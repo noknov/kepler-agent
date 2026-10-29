@@ -29,7 +29,7 @@ Read [architecture](architecture.md) first, then follow the area you change:
 | Prompts, rules, skills, private overlays | [Prompts](prompts.md) |
 | Cross-session user memory design and evaluation | [Long-term memory](long-term-memory.md) |
 | Memory 检索、时效与配额 | [记忆生命周期](memory-retrieval.md) |
-| Agent maintenance, design cost, and review | [Maintenance workflow](maintaining.md), [execution plans](plans/README.md), [backlog](maintenance-backlog.md) |
+| Agent maintenance, design cost, and review | [Maintenance workflow](maintaining.md), [execution records](plans/README.md), [backlog](maintenance-backlog.md) |
 | Source setup and verification | [Development](development.md) |
 | Chinese walkthrough with diagrams and source links | [Architecture site](../architecture-site/README.md) |
 | Generated app-server wire contract | [JSON Schema](app-server.schema.json) |

@@ -9,7 +9,8 @@ resolve effects before execution. Descriptor wrappers forward that contract and
 turn cleanup. Wording overlays cannot alter effects or concurrency.
 
 Use the [maintenance workflow](maintaining.md) for design, review, and cross-session
-plans. `make repo-check` is the fast credential-free repository feedback loop.
+execution records. `make repo-check` is the fast credential-free repository
+feedback loop.
 
 Start in the source repository. Packaging and environment rollout are separate
 operational concerns and are not documented here.

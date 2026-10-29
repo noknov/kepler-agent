@@ -25,8 +25,8 @@ an ownership or state-transition defect.
 ## Navigate before changing
 
 Read Git status/log, the root and applicable scoped AGENTS.md files, the owning
-guide, and any [active plan](plans/README.md). Trace one real request through the
-current implementation and tests. Treat historical audits and completed plans
+guide, and the [issue/PR execution record](plans/README.md). Trace one real
+request through the current implementation and tests. Treat historical audits and completed records
 as dated evidence, not specifications for current code. Update an owning guide
 instead of copying its facts into several new documents.
 
@@ -66,10 +66,10 @@ or owning design guide, then update the executable rule and its rejection tests.
 ## Make progress recoverable
 
 Small changes need an acceptance statement and validation in their PR. A change
-crossing architectural or persistence boundaries may need a checked-in
-[execution plan](plans/README.md) for durable design decisions, contracts,
-alternatives, rollout order, and acceptance criteria. Keep the plan concise and
-move it to completed when those criteria have evidence.
+crossing architectural or persistence boundaries needs an
+[execution record](plans/README.md) in its GitHub issue/PR for alternatives,
+rollout order, acceptance criteria, progress and handoff. Update the owning
+guide for supported contracts and durable design decisions.
 
 Keep task progress reports, retrospectives, and capability comparisons in issue
 or PR discussions. Committed guides describe current supported behavior, stable

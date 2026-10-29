@@ -84,9 +84,6 @@ def documentation_errors(root: Path, paths: list[str]) -> list[str]:
         path = root / name
         if path.suffix != ".md" or not path.exists():
             continue
-        # Historical plans are records of a past tree; live guides are checked.
-        if name.startswith("docs/plans/completed/"):
-            continue
         for destination in markdown_links(path.read_text()):
             parsed = urlsplit(destination)
             if parsed.scheme or parsed.netloc or not parsed.path:

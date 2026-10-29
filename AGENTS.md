@@ -8,14 +8,15 @@ repository so a new session can continue without private chat history.
 - Product boundaries and request flow: [architecture](docs/architecture.md).
 - Change method, simplicity, review, and completion: [maintenance](docs/maintaining.md).
 - Commands and verification scope: [development](docs/development.md).
-- Multi-session work: [plans](docs/plans/README.md); inspect active plans and Git
-  status/log before starting overlapping work.
+- Multi-session work: [execution records](docs/plans/README.md); inspect linked
+  issues/PRs and Git status/log before starting overlapping work.
 - Known gaps and their acceptance criteria: [maintenance backlog](docs/maintenance-backlog.md).
 - Find a subsystem guide through the [documentation index](docs/README.md).
 
 Start with `make doctor` and `make repo-check`. For a small change, state the
 behavior and acceptance test in the task/PR. For a cross-boundary, persistent,
-or multi-session change, maintain a versioned execution plan. Reuse the owning
+or multi-session change, maintain an execution record in its GitHub issue/PR.
+Keep stable contracts in the owning guide. Reuse the owning
 module; justify a new package, interface, dependency, or durable state first.
 
 ## Non-negotiable contracts
