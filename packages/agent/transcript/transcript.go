@@ -110,9 +110,9 @@ type Store interface {
 	Load(ctx context.Context, sessionID string, afterSequence uint64) ([]Event, error)
 }
 
-// BatchStore atomically appends a related set of canonical facts. Protocol
-// operations such as thread/fork require this contract so a failed write can
-// never expose a partially copied conversation.
+// BatchStore atomically appends a related set of canonical facts. A failed
+// write never exposes a partially committed import. SessionCreator additionally
+// enforces empty-destination ownership for operations such as thread/fork.
 type BatchStore interface {
 	Store
 	AppendBatch(ctx context.Context, events []Event) ([]Event, error)

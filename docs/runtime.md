@@ -143,6 +143,11 @@ runtime over stdio with `thread/start`, `thread/resume`, `thread/fork`,
 `turn/start`, `turn/steer`, `turn/interrupt`, and Codex-style item
 notifications including `item/agentMessage/delta`.
 
+`thread/fork` requires an empty, inactive destination. Transcript stores implement
+`transcript.SessionCreator` to check emptiness and commit the copied facts under
+one ownership boundary; an existing destination is never an append target.
+An empty source produces no facts and does not reserve a session ID.
+
 `thread/trajectory` is a read-only reconstruction API. It derives a redacted
 sequence of prompt/context, provider-attempt, tool, recovery, and termination
 facts from the canonical transcript; it never exposes message content, tool
