@@ -44,13 +44,15 @@ class DocumentationTests(unittest.TestCase):
             self.assertEqual(len(errors), 1)
             self.assertIn("escapes the repository", errors[0])
 
-    def test_historical_plans_are_not_current_architecture_claims(self):
+    def test_completed_directory_does_not_exempt_broken_links(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             path = root / "docs/plans/completed/old.md"
             path.parent.mkdir(parents=True)
             path.write_text("[old code](removed.go)")
-            self.assertEqual(repository.documentation_errors(root, [str(path.relative_to(root))]), [])
+            errors = repository.documentation_errors(root, [str(path.relative_to(root))])
+            self.assertEqual(len(errors), 1)
+            self.assertIn("removed.go", errors[0])
 
 
 class ReportTests(unittest.TestCase):

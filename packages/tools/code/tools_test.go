@@ -3,6 +3,8 @@ package code
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -321,4 +323,91 @@ func runGitOutput(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return string(out)
+}
+
+func TestReadFileFindsRequestedLineBeyondSourcePrefixLimit(t *testing.T) {
+	root, work := testGitRepo(t)
+	const start = 40001
+	content := strings.Repeat(strings.Repeat("x", 127)+"\n", start-1) + "const finalMarker = 42\n"
+	if err := os.WriteFile(filepath.Join(work, "large.go"), []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, work, "add", "large.go")
+	runGit(t, work, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "large source fixture")
+	runGit(t, work, "push", "origin", "main")
+	reader := ReadFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
+	scope := agenttool.Scope{SessionID: t.Name(), TurnID: "read"}
+	t.Cleanup(func() { agenttool.ClearTurnCache(scope.SessionID, scope.TurnID) })
+	for _, source := range []string{"origin/main", "working_tree"} {
+		raw, _ := json.Marshal(map[string]any{"path": "work/large.go", "source": source, "start_line": start, "max_lines": 1})
+		result, err := reader.Execute(t.Context(), agenttool.Call{Arguments: raw, Scope: scope})
+		if err != nil || !strings.Contains(result.Text(), "40001  const finalMarker = 42") {
+			t.Errorf("source=%s: selected line missing: %q %v", source, result.Text(), err)
+		}
+	}
+}
+
+func TestCappedBufferBoundsReaderFromCopies(t *testing.T) {
+	var output cappedBuffer
+	output.limit = 4
+	input := struct{ io.Reader }{strings.NewReader("0123456789")}
+	count, err := io.Copy(&output, input)
+	if err != nil || count != 10 || output.String() != "0123" {
+		t.Fatalf("copy bypassed byte limit: count=%d output=%q err=%v", count, output.String(), err)
+	}
+}
+
+func TestReadLineRangeHandlesLongLinesWithoutReadingOutsideWindow(t *testing.T) {
+	for _, fixture := range []struct {
+		input string
+		start int
+		want  string
+	}{
+		{"first\n" + strings.Repeat("x", 2<<20), 1, "     1  first\n"},
+		{strings.Repeat("x", 2<<20) + "\nlast\n", 2, "     2  last\n"},
+		{"first\r\nlast\r\n", 2, "     2  last\n"},
+	} {
+		got, err := readLineRange(t.Context(), strings.NewReader(fixture.input), fixture.start, 1)
+		if err != nil || got != fixture.want {
+			t.Fatalf("line window: got=%q err=%v", got, err)
+		}
+	}
+	got, err := readLineRange(t.Context(), strings.NewReader(strings.Repeat("x", 2<<20)), 1, 1)
+	if err != nil || !strings.HasSuffix(got, "...[truncated]\n") || len(got) > 200_100 {
+		t.Fatalf("long selected line: bytes=%d err=%v", len(got), err)
+	}
+}
+
+func TestSearchReportsLimitedResultsAsTruncated(t *testing.T) {
+	root, work := testGitRepo(t)
+	if err := os.WriteFile(filepath.Join(work, "matches.go"), []byte("needle\nneedle\nneedle\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, work, "add", "matches.go")
+	runGit(t, work, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "search fixture")
+	runGit(t, work, "push", "origin", "main")
+	scope := agenttool.Scope{SessionID: t.Name(), TurnID: "search"}
+	t.Cleanup(func() { agenttool.ClearTurnCache(scope.SessionID, scope.TurnID) })
+	search := SearchTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}
+	for _, source := range []string{"origin/main", "working_tree"} {
+		raw, _ := json.Marshal(map[string]any{"path": "work", "query": "needle", "source": source, "limit": 1})
+		result, err := search.Execute(t.Context(), agenttool.Call{Scope: scope, Arguments: raw})
+		if err != nil || !result.Truncated || !strings.Contains(result.Text(), "...[truncated") {
+			t.Fatalf("source=%s completeness lost: %+v %v", source, result, err)
+		}
+	}
+}
+
+func BenchmarkReadLineWindow(b *testing.B) {
+	for _, lines := range []int{100, 40000} {
+		content := strings.Repeat(strings.Repeat("x", 127)+"\n", lines)
+		b.Run(fmt.Sprint(lines), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if _, err := readLineRange(b.Context(), strings.NewReader(content), 1, 1); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }

@@ -165,8 +165,6 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		}
 	}
 
-	gitcache.SetRedis(stores.Redis)
-
 	slackClient := slack.NewClient(cfg.Slack.BotToken, cfg.Slack.BotUserID)
 	if botUserID, err := slackClient.AuthTest(context.Background()); err == nil {
 		if cfg.Slack.BotUserID == "" {

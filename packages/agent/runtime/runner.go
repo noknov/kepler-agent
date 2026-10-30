@@ -353,7 +353,7 @@ func completedTurn(events []transcript.Event, turnID string) (TurnResult, error,
 				Usage model.Usage `json:"usage"`
 			}
 			if json.Unmarshal(event.Metadata, &metadata) == nil {
-				addUsage(&result.Usage, metadata.Usage)
+				result.Usage = result.Usage.Add(metadata.Usage)
 			}
 		case transcript.AssistantMessage:
 			if event.Message != nil && len(event.Message.ToolCalls()) == 0 {
@@ -563,16 +563,6 @@ func (r *Runtime) appendSteeringCount(ctx context.Context, request TurnRequest) 
 		}
 	}
 	return len(inputs), nil
-}
-
-func addUsage(total *model.Usage, usage model.Usage) {
-	total.Reported = total.Reported || usage.Reported
-	total.ReasoningTokens += usage.ReasoningTokens
-	total.InputTokens += usage.InputTokens
-	total.OutputTokens += usage.OutputTokens
-	total.CacheReadTokens += usage.CacheReadTokens
-	total.CacheCreatedTokens += usage.CacheCreatedTokens
-	total.CacheTokensIncludedInInput = total.CacheTokensIncludedInInput || usage.CacheTokensIncludedInInput
 }
 
 func (r *Runtime) record(ctx context.Context, event transcript.Event) (transcript.Event, error) {

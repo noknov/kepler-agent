@@ -50,13 +50,13 @@ func (c *TurnCache) Update(key string, update func(any) any) {
 
 var turnCaches sync.Map
 
-func turnCacheKey(scope Scope) string {
-	return scope.SessionID + "\x00" + scope.TurnID
+type turnCacheScope struct {
+	sessionID, turnID string
 }
 
 // CacheFor returns the turn-scoped cache for a tool call.
 func CacheFor(scope Scope) *TurnCache {
-	key := turnCacheKey(scope)
+	key := turnCacheScope{scope.SessionID, scope.TurnID}
 	if existing, ok := turnCaches.Load(key); ok {
 		return existing.(*TurnCache)
 	}
@@ -67,5 +67,5 @@ func CacheFor(scope Scope) *TurnCache {
 
 // ClearTurnCache drops scratch state for a finished turn.
 func ClearTurnCache(sessionID, turnID string) {
-	turnCaches.Delete(sessionID + "\x00" + turnID)
+	turnCaches.Delete(turnCacheScope{sessionID, turnID})
 }

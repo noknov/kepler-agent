@@ -14,6 +14,23 @@ compaction, and retries together.
 
 ## Streaming contracts
 
+The shared SSE decoder accepts LF, CRLF and CR line endings and a leading UTF-8
+BOM. Field values retain significant whitespace; repeated event fields replace
+the event name and empty data lines remain part of multiline payloads. Both
+individual lines and assembled event data are bounded to 8 MiB, so completed
+native items larger than 1 MiB can reach the Responses continuation owner.
+Clean EOF can still dispatch a final buffered event; each provider's terminal
+receipt rules independently decide whether inference actually completed.
+
+Responses streams retain `response.output_item.done` receipts by `output_index`.
+Some ChatGPT streams deliver complete items there but send `output: []` in the
+terminal response. Those completed items supply text and native continuation;
+a populated terminal snapshot takes precedence. Collection is bounded to 1024
+items and 8 MiB, and sparse receipts require unique contiguous indexes. No text
+is inferred from token counts or incomplete argument deltas. Terminal status
+still controls success, truncation, refusal and failure; tool completion is
+published only after a successful response.
+
 Responses stream failures preserve the event, error code, type, parameter,
 message and upstream request ID, plus usage when reported. Both top-level
 `error` events and nested `response.failed` errors terminate inference without
