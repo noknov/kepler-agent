@@ -95,6 +95,7 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 		}
 	}
 	var terminal *responsesResponse
+	var completedOutput responsesStreamOutput
 	var streamErr error
 	err = readSSE(resp.Body, func(ev sseEvent) bool {
 		if ev.Data == "[DONE]" {
@@ -117,16 +118,24 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 			}
 		case "response.output_item.added", "response.output_item.done":
 			var output struct {
-				Item responsesOutput `json:"item"`
+				Item        json.RawMessage `json:"item"`
+				OutputIndex *int            `json:"output_index"`
 			}
 			if json.Unmarshal([]byte(ev.Data), &output) == nil {
-				if output.Item.Type == "message" {
-					messagePhases[output.Item.ID] = output.Item.Phase
+				if typ.Type == "response.output_item.done" {
+					completedOutput.add(output.OutputIndex, output.Item)
+				}
+				var item responsesOutput
+				if json.Unmarshal(output.Item, &item) != nil {
+					return true
+				}
+				if item.Type == "message" {
+					messagePhases[item.ID] = item.Phase
 					if typ.Type == "response.output_item.done" {
-						emitCommentary(output.Item)
+						emitCommentary(item)
 					}
 				}
-				if output.Item.Type == "function_call" && !toolCallsStarted {
+				if item.Type == "function_call" && !toolCallsStarted {
 					toolCallsStarted = true
 					if h.OnToolCallsStarted != nil {
 						h.OnToolCallsStarted()
@@ -176,7 +185,12 @@ func (c *OpenAIResponsesClient) ChatStream(ctx context.Context, req Request, h S
 	if terminal == nil {
 		return Response{}, ProtocolError{Provider: c.providerName(), Detail: "stream ended without a terminal response"}
 	}
+	outputErr := completedOutput.populate(terminal)
 	result, err := terminal.completion()
+	if err == nil && outputErr != nil {
+		result.Message = Message{}
+		err = outputErr
+	}
 	result.Streamed = true
 	if detail, ok := err.(ResponsesStreamError); ok {
 		detail.Provider = c.providerName()
@@ -441,8 +455,8 @@ type responsesUsage struct {
 	} `json:"output_tokens_details"`
 }
 
-// completion is the sole owner of Responses terminal semantics. Incremental
-// item events are presentation progress; the final snapshot establishes calls.
+// completion owns Responses terminal semantics. Item completion establishes
+// content; only the final response status permits publishing executable calls.
 func (r responsesResponse) completion() (Response, error) {
 	result := Response{Usage: r.Usage.toUsage()}
 	switch r.Status {
