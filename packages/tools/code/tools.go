@@ -99,7 +99,7 @@ func (t ReadFileTool) readOne(ctx context.Context, call tool.Call, rawPath, sour
 		if sourceErr != nil {
 			return "", sourceErr
 		}
-		if relPath, relErr := filepath.Rel(repoDir, path); relErr == nil && !strings.HasPrefix(relPath, "..") {
+		if relPath, relErr := filepath.Rel(repoDir, path); relErr == nil && filepath.IsLocal(relPath) {
 			content, gitErr := gitShowFile(ctx, repoDir, snapshot.commit, relPath, startLine, maxLines)
 			if gitErr == nil {
 				header := fmt.Sprintf("[source: git ref=%s commit=%s fetch_status=%s]\n", snapshot.ref, snapshot.commit, snapshot.fetchStatus)
@@ -218,7 +218,7 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 			// Compute the pathspec relative to the repo root.
 			relSearch := "."
 			if rel, relErr := filepath.Rel(repoDir, searchPath); relErr == nil &&
-				rel != "." && !strings.HasPrefix(rel, "..") {
+				rel != "." && filepath.IsLocal(rel) {
 				relSearch = rel
 			}
 			remaining := args.Limit - len(lines)
@@ -458,25 +458,39 @@ func readLineRange(ctx context.Context, input io.Reader, startLine, maxLines int
 // the raw output lines. relPath restricts the search to a sub-directory;
 // pass "." to search the whole repo. glob filters by file pattern.
 func gitGrep(ctx context.Context, repoDir, ref, query, queryMode, relPath, glob string, contextLines, limit int) ([]string, bool, error) {
+	searchDir := repoDir
+	var exactFile string
+	if relPath != "." && relPath != "" {
+		requested := filepath.Join(repoDir, relPath)
+		info, err := os.Stat(requested)
+		if err != nil {
+			return nil, false, err
+		}
+		if info.IsDir() {
+			searchDir = requested
+		} else {
+			searchDir = filepath.Dir(requested)
+			exactFile = filepath.Base(requested)
+		}
+	}
 	patternFlag := "-F"
 	if queryMode == "regex" {
 		patternFlag = "-E"
 	}
-	cmdArgs := []string{"-C", repoDir, "grep", "--line-number", patternFlag}
+	cmdArgs := []string{"-C", searchDir, "grep", "--full-name", "--line-number", patternFlag}
 	if contextLines > 0 {
 		cmdArgs = append(cmdArgs, "-C", strconv.Itoa(contextLines))
 	}
 	cmdArgs = append(cmdArgs, "-e", query, ref, "--")
-	if glob != "" {
+	if exactFile != "" {
+		cmdArgs = append(cmdArgs, ":(literal)"+exactFile)
+	} else if glob != "" {
 		// Convert rg-style glob to git pathspec magic; add **/ prefix when absent.
 		g := glob
 		if !strings.HasPrefix(g, "**/") {
 			g = "**/" + g
 		}
 		cmdArgs = append(cmdArgs, ":(glob)"+g)
-	}
-	if relPath != "." && relPath != "" {
-		cmdArgs = append(cmdArgs, relPath)
 	}
 	cmdArgs = append(cmdArgs, safety.SensitiveGitPathspecs()...)
 	cmd := exec.CommandContext(ctx, "git", cmdArgs...)

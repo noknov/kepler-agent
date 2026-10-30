@@ -42,6 +42,11 @@ Git source operations resolve their requested ref to one immutable commit before
 reading or searching. Content, source headers and search file identities use that
 same snapshot even if another fetch advances the remote-tracking ref.
 
+Search directory paths define the search root, and `glob` narrows results inside
+that root. Paths are literal filesystem locations, including names containing
+wildcard characters. An explicit file is searched directly, as in working-tree
+search. Sensitive-file exclusions remain rooted at the repository.
+
 Code-file reads stream the requested line range instead of retaining the full Git
 blob. Earlier lines are skipped with bounded memory; selected output is bounded
 to approximately 200 KB plus a truncation marker. Git and working-tree reads use
