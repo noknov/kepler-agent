@@ -384,3 +384,51 @@ func (m *jsonbReplayModel) Generate(context.Context, model.Request, model.EventS
 	m.responded = true
 	return model.Response{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &m.call}}}, FinishReason: model.FinishToolCalls}, nil
 }
+
+func TestIntegrationPGSessionCreationOwnsEmptyDestination(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
+	pool, err := pgxpool.New(t.Context(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	session := fmt.Sprintf("fork-owner-%d", time.Now().UnixNano())
+	defer pool.Exec(context.Background(), `DELETE FROM agent_transcript_events WHERE session_id=$1`, session)
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for i := range 2 {
+		go func() {
+			<-start
+			store := PGTranscript{Pool: pool}
+			message := model.TextMessage(model.RoleUser, fmt.Sprint(i))
+			_, err := store.CreateSession(t.Context(), session, []transcript.Event{{ID: fmt.Sprintf("%s-%d", session, i), SessionID: session, Type: transcript.UserInput, Timestamp: time.Now(), Message: &message}})
+			results <- err
+		}()
+	}
+	close(start)
+	successes, conflicts := 0, 0
+	for range 2 {
+		err := <-results
+		if err == nil {
+			successes++
+		} else if errors.Is(err, transcript.ErrSessionExists) {
+			conflicts++
+		} else {
+			t.Fatal(err)
+		}
+	}
+	store := PGTranscript{Pool: pool}
+	events, err := store.Load(t.Context(), session, 0)
+	if err != nil || successes != 1 || conflicts != 1 || len(events) != 1 {
+		t.Fatalf("destination facts mixed: successes=%d conflicts=%d events=%d err=%v", successes, conflicts, len(events), err)
+	}
+	if _, err := store.CreateSession(t.Context(), session, nil); !errors.Is(err, transcript.ErrSessionExists) {
+		t.Fatalf("empty create skipped owner check: %v", err)
+	}
+	if _, err := store.AppendBatch(t.Context(), []transcript.Event{{ID: session + "-append", SessionID: session, Type: transcript.SessionInitialized, Timestamp: time.Now()}}); err != nil {
+		t.Fatalf("normal batch append changed: %v", err)
+	}
+}

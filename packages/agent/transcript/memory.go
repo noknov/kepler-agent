@@ -66,14 +66,22 @@ func (s *MemoryStore) Append(_ context.Context, event Event) (Event, error) {
 	return result, nil
 }
 
-func (s *MemoryStore) AppendBatch(_ context.Context, events []Event) ([]Event, error) {
+func (s *MemoryStore) AppendBatch(ctx context.Context, events []Event) ([]Event, error) {
 	if len(events) == 0 {
 		return nil, nil
 	}
-	sessionID := events[0].SessionID
+	return s.appendBatch(ctx, events[0].SessionID, events, false)
+}
+
+func (s *MemoryStore) CreateSession(ctx context.Context, sessionID string, events []Event) ([]Event, error) {
+	return s.appendBatch(ctx, sessionID, events, true)
+}
+
+func (s *MemoryStore) appendBatch(ctx context.Context, sessionID string, events []Event, create bool) ([]Event, error) {
 	if sessionID == "" {
 		return nil, fmt.Errorf("session id is required")
 	}
+
 	for _, event := range events {
 		if event.SessionID != sessionID {
 			return nil, fmt.Errorf("batch events must share one session id")
@@ -81,6 +89,9 @@ func (s *MemoryStore) AppendBatch(_ context.Context, events []Event) ([]Event, e
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if create && len(s.events[sessionID]) != 0 {
+		return nil, ErrSessionExists
+	}
 	result := make([]Event, 0, len(events))
 	batch := make([]memoryEvent, 0, len(events))
 	for index, event := range events {

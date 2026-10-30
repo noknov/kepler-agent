@@ -109,7 +109,18 @@ func (s *JSONLStore) AppendBatch(ctx context.Context, batch []transcript.Event) 
 	if len(batch) == 0 {
 		return nil, nil
 	}
-	sessionID := batch[0].SessionID
+	return s.appendBatch(ctx, batch[0].SessionID, batch, false)
+}
+
+func (s *JSONLStore) CreateSession(ctx context.Context, sessionID string, batch []transcript.Event) ([]transcript.Event, error) {
+	return s.appendBatch(ctx, sessionID, batch, true)
+}
+
+func (s *JSONLStore) appendBatch(ctx context.Context, sessionID string, batch []transcript.Event, create bool) ([]transcript.Event, error) {
+	if sessionID == "" {
+		return nil, fmt.Errorf("session id is required")
+	}
+
 	for _, event := range batch {
 		if event.SessionID != sessionID {
 			return nil, fmt.Errorf("batch events must share one session id")
@@ -120,6 +131,13 @@ func (s *JSONLStore) AppendBatch(ctx context.Context, batch []transcript.Event) 
 		return nil, err
 	}
 	defer closeSession()
+	if create && index.sequence != 0 {
+		return nil, transcript.ErrSessionExists
+	}
+	if len(batch) == 0 {
+		return nil, nil
+	}
+
 	result := make([]transcript.Event, len(batch))
 	for i, event := range batch {
 		event.Sequence = index.sequence + uint64(i) + 1
