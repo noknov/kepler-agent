@@ -95,18 +95,17 @@ func (t ReadFileTool) readOne(ctx context.Context, call tool.Call, rawPath, sour
 		if repoDir == "" {
 			return "", fmt.Errorf("source %q requires a file inside a git repository", source)
 		}
-		ref, fetchStatus, sourceErr := sourceRef(ctx, repoDir, source, call.Scope)
+		snapshot, sourceErr := resolveSource(ctx, repoDir, source, call.Scope)
 		if sourceErr != nil {
 			return "", sourceErr
 		}
 		if relPath, relErr := filepath.Rel(repoDir, path); relErr == nil && !strings.HasPrefix(relPath, "..") {
-			content, gitErr := gitShowFile(ctx, repoDir, ref, relPath, startLine, maxLines)
+			content, gitErr := gitShowFile(ctx, repoDir, snapshot.commit, relPath, startLine, maxLines)
 			if gitErr == nil {
-				commit := gitRevParse(ctx, repoDir, ref, "--short")
-				header := fmt.Sprintf("[source: git ref=%s commit=%s fetch_status=%s]\n", ref, commit, fetchStatus)
+				header := fmt.Sprintf("[source: git ref=%s commit=%s fetch_status=%s]\n", snapshot.ref, snapshot.commit, snapshot.fetchStatus)
 				return header + content, nil
 			}
-			return "", fmt.Errorf("read %s at %s: %w", filepath.ToSlash(relPath), ref, gitErr)
+			return "", fmt.Errorf("read %s at %s: %w", filepath.ToSlash(relPath), snapshot.ref, gitErr)
 		}
 		return "", fmt.Errorf("path %q is outside repository %q", path, repoDir)
 	}
@@ -210,12 +209,12 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 		var grepErrors []string
 		var truncated bool
 		for _, repoDir := range repos {
-			ref, fetchStatus, sourceErr := sourceRef(ctx, repoDir, source, call.Scope)
+			snapshot, sourceErr := resolveSource(ctx, repoDir, source, call.Scope)
 			if sourceErr != nil {
 				grepErrors = append(grepErrors, fmt.Sprintf("%s: %v", filepath.Base(repoDir), sourceErr))
 				continue
 			}
-			headers = append(headers, fmt.Sprintf("[source: git repo=%s ref=%s commit=%s fetch_status=%s]", filepath.Base(repoDir), ref, gitRevParse(ctx, repoDir, ref, "--short"), fetchStatus))
+			headers = append(headers, fmt.Sprintf("[source: git repo=%s ref=%s commit=%s fetch_status=%s]", filepath.Base(repoDir), snapshot.ref, snapshot.commit, snapshot.fetchStatus))
 			// Compute the pathspec relative to the repo root.
 			relSearch := "."
 			if rel, relErr := filepath.Rel(repoDir, searchPath); relErr == nil &&
@@ -227,7 +226,7 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 				truncated = true
 				break
 			}
-			got, clipped, grepErr := gitGrep(ctx, repoDir, ref, args.Query, queryMode, relSearch, args.Glob, args.ContextLines, remaining)
+			got, clipped, grepErr := gitGrep(ctx, repoDir, snapshot.commit, args.Query, queryMode, relSearch, args.Glob, args.ContextLines, remaining)
 			if grepErr != nil {
 				grepErrors = append(grepErrors, fmt.Sprintf("%s: %v", filepath.Base(repoDir), grepErr))
 				continue
@@ -237,7 +236,7 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 			// Strip the "<ref>:" prefix and prepend the repo name so the format
 			// matches what rg used to emit after workspace-root stripping.
 			repoName := filepath.Base(repoDir)
-			refPrefix := ref + ":"
+			refPrefix := snapshot.commit + ":"
 			for _, l := range got {
 				l = strings.TrimPrefix(l, refPrefix)
 				lines = append(lines, repoName+"/"+l)
@@ -311,23 +310,32 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 	return result, nil
 }
 
-func sourceRef(ctx context.Context, repoDir, source string, scope tool.Scope) (string, string, error) {
+type sourceSnapshot struct {
+	ref, commit, fetchStatus string
+}
+
+func resolveSource(ctx context.Context, repoDir, source string, scope tool.Scope) (sourceSnapshot, error) {
 	source = strings.TrimSpace(source)
 	if source == "" {
 		source = "current_branch"
 	}
 	if err := refreshRepo(ctx, repoDir, scope); err != nil {
-		return "", "", err
+		return sourceSnapshot{}, err
 	}
-	fetchStatus := "origin_refs_refreshed"
 	if source == "current_branch" {
-		ref, err := currentBranchOriginRef(ctx, repoDir)
-		return ref, fetchStatus, err
+		var err error
+		source, err = currentBranchOriginRef(ctx, repoDir)
+		if err != nil {
+			return sourceSnapshot{}, err
+		}
+	} else if !safeGitRef(source) {
+		return sourceSnapshot{}, fmt.Errorf("invalid git source ref %q", source)
 	}
-	if !safeGitRef(source) {
-		return "", fetchStatus, fmt.Errorf("invalid git source ref %q", source)
+	commit := gitRevParse(ctx, repoDir, source+"^{commit}", "--verify", "--end-of-options")
+	if commit == "" {
+		return sourceSnapshot{}, fmt.Errorf("cannot resolve git source ref %q to a commit", source)
 	}
-	return source, fetchStatus, nil
+	return sourceSnapshot{ref: source, commit: commit, fetchStatus: "origin_refs_refreshed"}, nil
 }
 
 func currentBranchOriginRef(ctx context.Context, repoDir string) (string, error) {

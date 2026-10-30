@@ -38,6 +38,10 @@ snapshots, so concurrent users can inspect different refs without checkout
 conflicts. GitHub pull requests should use `github-pr_diff` and
 `github-pr_file_diff`, not a PR number or `refs/pull/...` as a branch.
 
+Git source operations resolve their requested ref to one immutable commit before
+reading or searching. Content, source headers and search file identities use that
+same snapshot even if another fetch advances the remote-tracking ref.
+
 Code-file reads stream the requested line range instead of retaining the full Git
 blob. Earlier lines are skipped with bounded memory; selected output is bounded
 to approximately 200 KB plus a truncation marker. Git and working-tree reads use
