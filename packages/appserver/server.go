@@ -226,6 +226,10 @@ func (s *Server) handle(ctx context.Context, request Request) {
 		if childID == "" {
 			childID = NewSessionID(s.IDs)
 		}
+		if s.sessionActive(childID) {
+			s.respond(request.ID, nil, &ResponseError{Code: ThreadBusyErrorCode, Message: "cannot fork into a thread with an active turn"})
+			return
+		}
 		events, err := s.Transcript.Load(ctx, params.SourceSessionID, 0)
 		if err != nil {
 			s.respond(request.ID, nil, &ResponseError{Code: -32002, Message: err.Error()})
@@ -247,12 +251,12 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			forked.Sequence = 0
 			forkedEvents = append(forkedEvents, forked)
 		}
-		batchStore, ok := s.Transcript.(transcript.BatchStore)
+		creator, ok := s.Transcript.(transcript.SessionCreator)
 		if !ok {
 			s.respond(request.ID, nil, &ResponseError{Code: -32012, Message: "transcript store does not support atomic fork"})
 			return
 		}
-		if _, err := batchStore.AppendBatch(ctx, forkedEvents); err != nil {
+		if _, err := creator.CreateSession(ctx, childID, forkedEvents); err != nil {
 			s.respond(request.ID, nil, &ResponseError{Code: -32003, Message: err.Error()})
 			return
 		}

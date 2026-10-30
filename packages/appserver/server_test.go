@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -373,5 +375,115 @@ func waitForOutput(t *testing.T, out *synchronizedBuffer, needle string) {
 			t.Fatalf("output missing %q: %s", needle, out.String())
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestThreadForkDoesNotAppendToExistingDestination(t *testing.T) {
+	for _, child := range []string{"ses_child", "ses_parent"} {
+		t.Run(child, func(t *testing.T) {
+			store := transcript.NewMemoryStore()
+			for _, session := range []string{"ses_parent", "ses_child"} {
+				_, err := store.Append(t.Context(), transcript.Event{ID: session + "-input", SessionID: session, Type: transcript.UserInput, Message: ptr(model.TextMessage(model.RoleUser, session))})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			var out synchronizedBuffer
+			server := New(nil, strings.NewReader(""), &out)
+			initializeForTest(t, server)
+			server.Transcript = store
+			server.handle(t.Context(), Request{ID: json.RawMessage(`1`), Method: "thread/fork", Params: mustJSON(map[string]any{"sourceSessionId": "ses_parent", "childSessionId": child})})
+			events, err := store.Load(t.Context(), child, 0)
+			if err != nil || len(events) != 1 {
+				t.Fatalf("fork modified existing destination: events=%d err=%v", len(events), err)
+			}
+			waitForOutput(t, &out, `"id":1`)
+			var response Response
+			decoder := json.NewDecoder(strings.NewReader(out.String()))
+			for {
+				if err := decoder.Decode(&response); err != nil {
+					t.Fatal(err)
+				}
+				if string(response.ID) == "1" {
+					break
+				}
+			}
+			if response.Error == nil {
+				t.Fatalf("fork did not reject existing destination: %s", out.String())
+			}
+		})
+	}
+}
+
+func TestForkDestinationCreationIsAtomic(t *testing.T) {
+	for _, backend := range []string{"memory", "jsonl"} {
+		t.Run(backend, func(t *testing.T) {
+			var stores [2]transcript.SessionCreator
+			if backend == "memory" {
+				store := transcript.NewMemoryStore()
+				stores = [2]transcript.SessionCreator{store, store}
+			} else {
+				root := t.TempDir()
+				for i := range stores {
+					store, err := local.NewJSONLStore(root)
+					if err != nil {
+						t.Fatal(err)
+					}
+					stores[i] = store
+				}
+			}
+			start := make(chan struct{})
+			results := make(chan error, 2)
+			for i, store := range stores {
+				go func() {
+					<-start
+					_, err := store.CreateSession(t.Context(), "child", []transcript.Event{{ID: fmt.Sprint(i), SessionID: "child", Type: transcript.UserInput, Message: ptr(model.TextMessage(model.RoleUser, fmt.Sprint(i)))}})
+					results <- err
+				}()
+			}
+			close(start)
+			successes, conflicts := 0, 0
+			for range stores {
+				err := <-results
+				if err == nil {
+					successes++
+				} else if errors.Is(err, transcript.ErrSessionExists) {
+					conflicts++
+				} else {
+					t.Fatal(err)
+				}
+			}
+			events, err := stores[0].Load(t.Context(), "child", 0)
+			if err != nil || successes != 1 || conflicts != 1 || len(events) != 1 {
+				t.Fatalf("creators mixed destination facts: success=%d conflicts=%d events=%d err=%v", successes, conflicts, len(events), err)
+			}
+			if _, err := stores[1].CreateSession(t.Context(), "child", nil); !errors.Is(err, transcript.ErrSessionExists) {
+				t.Fatalf("empty create bypassed owner check: %v", err)
+			}
+			if _, err := stores[0].(transcript.BatchStore).AppendBatch(t.Context(), []transcript.Event{{ID: "later", SessionID: "child", Type: transcript.SessionInitialized}}); err != nil {
+				t.Fatalf("ordinary batch append changed: %v", err)
+			}
+		})
+	}
+}
+
+func TestThreadForkRejectsActiveEmptyDestination(t *testing.T) {
+	store := transcript.NewMemoryStore()
+	if _, err := store.Append(t.Context(), transcript.Event{SessionID: "parent", Type: transcript.UserInput}); err != nil {
+		t.Fatal(err)
+	}
+	var output synchronizedBuffer
+	server := New(nil, strings.NewReader(""), &output)
+	initializeForTest(t, server)
+	server.Transcript = store
+	if server.register("running", &activeTurn{sessionID: "child"}) != registerOK {
+		t.Fatal("register failed")
+	}
+	defer server.unregister("running")
+	server.handle(t.Context(), Request{ID: json.RawMessage(`1`), Method: "thread/fork", Params: mustJSON(map[string]any{"sourceSessionId": "parent", "childSessionId": "child"})})
+	waitForOutput(t, &output, fmt.Sprintf(`"code":%d`, ThreadBusyErrorCode))
+	events, err := store.Load(t.Context(), "child", 0)
+	if err != nil || len(events) != 0 {
+		t.Fatalf("active destination modified: %d %v", len(events), err)
 	}
 }
