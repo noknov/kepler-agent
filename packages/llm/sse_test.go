@@ -55,6 +55,27 @@ func TestReadSSEStopsAtBareCRBoundary(t *testing.T) {
 	}
 }
 
+func TestReadSSEConsumesAllBufferedCRLFEvents(t *testing.T) {
+	for _, suffix := range []string{"", "event: final\r\ndata: third\r\n\r\n"} {
+		wire := "data: first\r\n\r\ndata: second\r\n\r\n" + suffix
+		var events []sseEvent
+		err := readSSE(strings.NewReader(wire), func(event sseEvent) bool { events = append(events, event); return true })
+		want := 2
+		if suffix != "" {
+			want++
+		}
+		if err != nil || len(events) != want || events[0].Data != "first" || events[1].Data != "second" {
+			t.Fatalf("buffered CRLF events lost: events=%q err=%v", events, err)
+		}
+	}
+	tail := &sseTailReader{}
+	calls := 0
+	err := readSSE(io.MultiReader(strings.NewReader("data: first\r\n\r\ndata: terminal\r\n\r\n"), tail), func(event sseEvent) bool { calls++; return event.Data != "terminal" })
+	if err != nil || calls != 2 || tail.reads != 0 {
+		t.Fatalf("buffered terminal waited for network read: calls=%d reads=%d err=%v", calls, tail.reads, err)
+	}
+}
+
 func TestReadSSEBoundsWholeEvent(t *testing.T) {
 	for _, extra := range []string{"", "data: x\n"} {
 		wire := "data:" + strings.Repeat("a", maxSSEEventBytes/2) + "\ndata:" + strings.Repeat("b", maxSSEEventBytes/2-1) + "\n" + extra + "\n"

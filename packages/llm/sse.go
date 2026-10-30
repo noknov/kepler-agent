@@ -79,19 +79,21 @@ func readSSE(r io.Reader, fn func(ev sseEvent) bool) error {
 func scanSSELines() bufio.SplitFunc {
 	afterCR := false
 	return func(data []byte, atEOF bool) (int, []byte, error) {
+		skipped := 0
 		if afterCR && len(data) > 0 {
 			afterCR = false
 			if data[0] == '\n' {
-				return 1, nil, nil
+				skipped = 1
+				data = data[1:]
 			}
 		}
 		if index := bytes.IndexAny(data, "\r\n"); index >= 0 {
 			afterCR = data[index] == '\r'
-			return index + 1, data[:index], nil
+			return skipped + index + 1, data[:index], nil
 		}
 		if atEOF && len(data) > 0 {
-			return len(data), data, nil
+			return skipped + len(data), data, nil
 		}
-		return 0, nil, nil
+		return skipped, nil, nil
 	}
 }
