@@ -86,29 +86,14 @@ func (t ReadFileTool) readOne(ctx context.Context, call tool.Call, rawPath, sour
 	if safety.IsSensitivePath(rawPath) {
 		return "", fmt.Errorf("refusing to read sensitive file %q", filepath.Base(rawPath))
 	}
+	if source != "working_tree" {
+		return t.readGitOne(ctx, call, rawPath, source, startLine, maxLines)
+	}
 	path, err := resolveReadableFile(t.Paths, rawPath)
 	if err != nil {
 		return "", err
 	}
 	repoDir := findRepoRoot(t.Paths.Roots, filepath.Dir(path))
-	if source != "working_tree" {
-		if repoDir == "" {
-			return "", fmt.Errorf("source %q requires a file inside a git repository", source)
-		}
-		snapshot, sourceErr := resolveSource(ctx, repoDir, source, call.Scope)
-		if sourceErr != nil {
-			return "", sourceErr
-		}
-		if relPath, relErr := filepath.Rel(repoDir, path); relErr == nil && filepath.IsLocal(relPath) {
-			content, gitErr := gitShowFile(ctx, repoDir, snapshot.commit, relPath, startLine, maxLines)
-			if gitErr == nil {
-				header := fmt.Sprintf("[source: git ref=%s commit=%s fetch_status=%s]\n", snapshot.ref, snapshot.commit, snapshot.fetchStatus)
-				return header + content, nil
-			}
-			return "", fmt.Errorf("read %s at %s: %w", filepath.ToSlash(relPath), snapshot.ref, gitErr)
-		}
-		return "", fmt.Errorf("path %q is outside repository %q", path, repoDir)
-	}
 
 	// Working-tree access is explicit, including for files outside git repos.
 	file, err := os.Open(path)
@@ -128,6 +113,72 @@ func (t ReadFileTool) readOne(ctx context.Context, call tool.Call, rawPath, sour
 	}
 	header += "]\n"
 	return header + content, nil
+}
+
+// Committed source paths belong to Git's namespace, not the checkout's files or
+// symlinks. Only the configured workspace roots and repository roots are local.
+func (t ReadFileTool) readGitOne(ctx context.Context, call tool.Call, rawPath, source string, startLine, maxLines int) (string, error) {
+	// Keep the API's configured-root and root-prefixed path forms; resolve
+	// them against committed blobs rather than guessing from checkout files.
+	names := []string{rawPath}
+	if stripped, ok := stripWorkspaceRootBase(t.Paths, rawPath); ok {
+		names = append(names, stripped)
+	}
+	var lastErr error
+	for _, name := range names {
+		for _, root := range t.Paths.Roots {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+			absoluteRoot, err := filepath.Abs(root)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			path := name
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(absoluteRoot, path)
+			}
+			relative, err := filepath.Rel(absoluteRoot, path)
+			if err != nil || !filepath.IsLocal(relative) {
+				continue
+			}
+			realRoot, err := filepath.EvalSymlinks(absoluteRoot)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			path = filepath.Join(realRoot, relative)
+			if safety.IsSensitivePath(path) {
+				lastErr = fmt.Errorf("refusing to read sensitive file %q", filepath.Base(path))
+				continue
+			}
+			repoDir := findRepoRoot([]string{realRoot}, filepath.Dir(path))
+			if repoDir == "" {
+				continue
+			}
+			relPath, err := filepath.Rel(repoDir, path)
+			if err != nil || !filepath.IsLocal(relPath) {
+				continue
+			}
+			snapshot, err := resolveSource(ctx, repoDir, source, call.Scope)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			content, err := gitReadFile(ctx, repoDir, snapshot.commit, relPath, startLine, maxLines)
+			if err != nil {
+				lastErr = fmt.Errorf("read %s at %s: %w", filepath.ToSlash(relPath), snapshot.ref, err)
+				continue
+			}
+			header := fmt.Sprintf("[source: git ref=%s commit=%s fetch_status=%s]\n", snapshot.ref, snapshot.commit, snapshot.fetchStatus)
+			return header + content, nil
+		}
+	}
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", fmt.Errorf("source %q requires a file inside an allowed git repository", source)
 }
 
 type SearchTool struct {
@@ -379,10 +430,10 @@ func safeGitRef(ref string) bool {
 		!strings.ContainsAny(ref, " \t\n\r~^:?*[\\")
 }
 
-// gitShowFile streams the requested source window without retaining the full blob.
-func gitShowFile(ctx context.Context, repoDir, ref, relPath string, startLine, maxLines int) (string, error) {
+// gitReadFile streams the requested source window without retaining the full blob.
+func gitReadFile(ctx context.Context, repoDir, ref, relPath string, startLine, maxLines int) (string, error) {
 	arg := ref + ":" + filepath.ToSlash(relPath)
-	command := exec.CommandContext(ctx, "git", "-C", repoDir, "show", arg)
+	command := exec.CommandContext(ctx, "git", "-C", repoDir, "cat-file", "blob", arg)
 	output, err := command.StdoutPipe()
 	if err != nil {
 		return "", err

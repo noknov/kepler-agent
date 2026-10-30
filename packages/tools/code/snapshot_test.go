@@ -29,7 +29,7 @@ func TestCodeEvidencePinsContentAndCommitDuringRefRefresh(t *testing.T) {
 			}
 			shim := t.TempDir()
 			script := `#!/bin/sh
-if [ "$3" = "show" ]; then
+if [ "$3" = "show" ] || [ "$3" = "cat-file" ]; then
  "$KEPLER_TEST_REAL_GIT" "$@"
  status=$?
  "$KEPLER_TEST_REAL_GIT" -C "$2" update-ref refs/remotes/origin/main "$KEPLER_TEST_NEXT_COMMIT"

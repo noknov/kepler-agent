@@ -47,6 +47,10 @@ that root. Paths are literal filesystem locations, including names containing
 wildcard characters. An explicit file is searched directly, as in working-tree
 search. Sensitive-file exclusions remain rooted at the repository.
 
+Committed-file reads resolve blobs in the selected Git snapshot. A file need not
+exist in the checkout, and checkout symlinks do not select its contents. Explicit
+working-tree reads retain filesystem symlink and workspace-boundary checks.
+
 Code-file reads stream the requested line range instead of retaining the full Git
 blob. Earlier lines are skipped with bounded memory; selected output is bounded
 to approximately 200 KB plus a truncation marker. Git and working-tree reads use
