@@ -38,6 +38,12 @@ snapshots, so concurrent users can inspect different refs without checkout
 conflicts. GitHub pull requests should use `github-pr_diff` and
 `github-pr_file_diff`, not a PR number or `refs/pull/...` as a branch.
 
+Code-file reads stream the requested line range instead of retaining the full Git
+blob. Earlier lines are skipped with bounded memory; selected output is bounded
+to approximately 200 KB plus a truncation marker. Git and working-tree reads use
+the same formatter. Search subprocess output is bounded to 4 MiB; byte or line
+limits produce an explicit truncation marker and `Result.Truncated`.
+
 Code investigation uses search followed by exact source reads. Validate behavior
 with the repository's compiler, tests, linters, or other project-native checks.
 

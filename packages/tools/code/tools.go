@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -99,11 +100,11 @@ func (t ReadFileTool) readOne(ctx context.Context, call tool.Call, rawPath, sour
 			return "", sourceErr
 		}
 		if relPath, relErr := filepath.Rel(repoDir, path); relErr == nil && !strings.HasPrefix(relPath, "..") {
-			content, gitErr := gitShowFile(ctx, repoDir, ref, relPath)
+			content, gitErr := gitShowFile(ctx, repoDir, ref, relPath, startLine, maxLines)
 			if gitErr == nil {
 				commit := gitRevParse(ctx, repoDir, ref, "--short")
 				header := fmt.Sprintf("[source: git ref=%s commit=%s fetch_status=%s]\n", ref, commit, fetchStatus)
-				return header + applyLineRange(content, startLine, maxLines), nil
+				return header + content, nil
 			}
 			return "", fmt.Errorf("read %s at %s: %w", filepath.ToSlash(relPath), ref, gitErr)
 		}
@@ -117,40 +118,17 @@ func (t ReadFileTool) readOne(ctx context.Context, call tool.Call, rawPath, sour
 	}
 	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	var b strings.Builder
-	lineNo := 0
-	emitted := 0
-	for scanner.Scan() {
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		default:
-		}
-		lineNo++
-		if lineNo < startLine {
-			continue
-		}
-		if emitted >= maxLines {
-			break
-		}
-		b.WriteString(fmt.Sprintf("%6d  %s\n", lineNo, scanner.Text()))
-		emitted++
-		if b.Len() > 200_000 {
-			b.WriteString("...[truncated]\n")
-			break
-		}
-	}
-	if err := scanner.Err(); err != nil {
+	content, err := readLineRange(ctx, file, startLine, maxLines)
+	if err != nil {
 		return "", err
 	}
+
 	header := "[source: working_tree"
 	if repoDir != "" {
 		header += " branch=" + gitRevParse(ctx, repoDir, "HEAD", "--abbrev-ref")
 	}
 	header += "]\n"
-	return header + b.String(), nil
+	return header + content, nil
 }
 
 type SearchTool struct {
@@ -230,6 +208,7 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 		var lines []string
 		var headers []string
 		var grepErrors []string
+		var truncated bool
 		for _, repoDir := range repos {
 			ref, fetchStatus, sourceErr := sourceRef(ctx, repoDir, source, call.Scope)
 			if sourceErr != nil {
@@ -245,13 +224,15 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 			}
 			remaining := args.Limit - len(lines)
 			if remaining <= 0 {
+				truncated = true
 				break
 			}
-			got, grepErr := gitGrep(ctx, repoDir, ref, args.Query, queryMode, relSearch, args.Glob, args.ContextLines, remaining)
+			got, clipped, grepErr := gitGrep(ctx, repoDir, ref, args.Query, queryMode, relSearch, args.Glob, args.ContextLines, remaining)
 			if grepErr != nil {
 				grepErrors = append(grepErrors, fmt.Sprintf("%s: %v", filepath.Base(repoDir), grepErr))
 				continue
 			}
+			truncated = truncated || clipped
 			// git grep output for tree searches: "<ref>:<path>:<linenum>:<content>"
 			// Strip the "<ref>:" prefix and prepend the repo name so the format
 			// matches what rg used to emit after workspace-root stripping.
@@ -269,13 +250,19 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 			return tool.TextResult(strings.Join(headers, "\n") + "\n\nno matches"), nil
 		}
 		if len(lines) > args.Limit {
-			lines = append(lines[:args.Limit], "...[truncated after "+strconv.Itoa(args.Limit)+" matches]")
+			lines = lines[:args.Limit]
+			truncated = true
+		}
+		if truncated {
+			lines = append(lines, "...[truncated by search output limit]")
 		}
 		content := strings.Join(headers, "\n") + "\n\nSearch hits are hints; read matching files before claiming behavior.\n" + strings.Join(lines, "\n")
 		if len(grepErrors) > 0 {
 			content += "\n\nSearch warnings:\n- " + strings.Join(grepErrors, "\n- ")
 		}
-		return tool.TextResult(content), nil
+		result := tool.TextResult(content)
+		result.Truncated = truncated
+		return result, nil
 	}
 	if source != "working_tree" {
 		return tool.Result{}, fmt.Errorf("source %q requires a search path containing a git repository", source)
@@ -311,10 +298,17 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 		output = strings.ReplaceAll(output, r+"/", "")
 	}
 	resultLines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	truncated := stdout.truncated
 	if len(resultLines) > args.Limit {
-		resultLines = append(resultLines[:args.Limit], "...[truncated after "+strconv.Itoa(args.Limit)+" matches]")
+		resultLines = resultLines[:args.Limit]
+		truncated = true
 	}
-	return tool.TextResult("[source: working_tree]\n\nSearch hits are hints; read matching files before claiming behavior.\n" + strings.Join(resultLines, "\n")), nil
+	if truncated {
+		resultLines = append(resultLines, "...[truncated by search output limit]")
+	}
+	result := tool.TextResult("[source: working_tree]\n\nSearch hits are hints; read matching files before claiming behavior.\n" + strings.Join(resultLines, "\n"))
+	result.Truncated = truncated
+	return result, nil
 }
 
 func sourceRef(ctx context.Context, repoDir, source string, scope tool.Scope) (string, string, error) {
@@ -377,18 +371,28 @@ func safeGitRef(ref string) bool {
 		!strings.ContainsAny(ref, " \t\n\r~^:?*[\\")
 }
 
-// gitShowFile returns the full text content of relPath inside repoDir at ref.
-func gitShowFile(ctx context.Context, repoDir, ref, relPath string) (string, error) {
+// gitShowFile streams the requested source window without retaining the full blob.
+func gitShowFile(ctx context.Context, repoDir, ref, relPath string, startLine, maxLines int) (string, error) {
 	arg := ref + ":" + filepath.ToSlash(relPath)
 	command := exec.CommandContext(ctx, "git", "-C", repoDir, "show", arg)
-	var out cappedBuffer
-	out.limit = 4 << 20
-	command.Stdout = &out
-	err := command.Run()
+	output, err := command.StdoutPipe()
 	if err != nil {
 		return "", err
 	}
-	return out.String(), nil
+	if err := command.Start(); err != nil {
+		return "", err
+	}
+	content, readErr := readLineRange(ctx, output, startLine, maxLines)
+	// Drain unread bytes so Git can exit normally; keep its actual exit status.
+	_, drainErr := io.Copy(io.Discard, output)
+	waitErr := command.Wait()
+	if readErr != nil {
+		return "", readErr
+	}
+	if drainErr != nil {
+		return "", drainErr
+	}
+	return content, waitErr
 }
 
 func gitRevParse(ctx context.Context, repoDir, ref string, extra ...string) string {
@@ -401,34 +405,51 @@ func gitRevParse(ctx context.Context, repoDir, ref string, extra ...string) stri
 	return strings.TrimSpace(string(out))
 }
 
-// applyLineRange formats raw file content with 1-based line numbers, applying
-// the given start/max window.
-func applyLineRange(content string, startLine, maxLines int) string {
-	var b strings.Builder
-	lineNo := 0
-	emitted := 0
-	for _, line := range strings.Split(content, "\n") {
-		lineNo++
-		if lineNo < startLine {
-			continue
+// readLineRange formats the requested 1-based source window with bounded memory.
+func readLineRange(ctx context.Context, input io.Reader, startLine, maxLines int) (string, error) {
+	reader := bufio.NewReaderSize(input, 64*1024)
+	var output strings.Builder
+	lineNo, emitted := 1, 0
+	continued := false
+	for emitted < maxLines {
+		if err := ctx.Err(); err != nil {
+			return "", err
 		}
-		if emitted >= maxLines {
+		fragment, more, err := reader.ReadLine()
+		if err == io.EOF {
 			break
 		}
-		b.WriteString(fmt.Sprintf("%6d  %s\n", lineNo, line))
-		emitted++
-		if b.Len() > 200_000 {
-			b.WriteString("...[truncated]\n")
-			break
+		if err != nil {
+			return "", err
+		}
+		if lineNo >= startLine {
+			if !continued {
+				fmt.Fprintf(&output, "%6d  ", lineNo)
+			}
+			remaining := max(0, 200_000-output.Len())
+			if len(fragment) > remaining {
+				output.Write(fragment[:remaining])
+				output.WriteString("\n...[truncated]\n")
+				return output.String(), nil
+			}
+			output.Write(fragment)
+			if !more {
+				output.WriteByte('\n')
+				emitted++
+			}
+		}
+		continued = more
+		if !more {
+			lineNo++
 		}
 	}
-	return b.String()
+	return output.String(), nil
 }
 
 // gitGrep searches repoDir at ref for query, returning
 // the raw output lines. relPath restricts the search to a sub-directory;
 // pass "." to search the whole repo. glob filters by file pattern.
-func gitGrep(ctx context.Context, repoDir, ref, query, queryMode, relPath, glob string, contextLines, limit int) ([]string, error) {
+func gitGrep(ctx context.Context, repoDir, ref, query, queryMode, relPath, glob string, contextLines, limit int) ([]string, bool, error) {
 	patternFlag := "-F"
 	if queryMode == "regex" {
 		patternFlag = "-E"
@@ -458,32 +479,37 @@ func gitGrep(ctx context.Context, repoDir, ref, query, queryMode, relPath, glob 
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
-			return nil, nil // no matches
+			return nil, false, nil // no matches
 		}
-		return nil, fmt.Errorf("git grep: %s", strings.TrimSpace(stderr.String()))
+		return nil, false, fmt.Errorf("git grep: %s", strings.TrimSpace(stderr.String()))
 	}
 	lines := strings.Split(strings.TrimRight(stdout.String(), "\n"), "\n")
+	truncated := stdout.truncated || (limit > 0 && len(lines) > limit)
 	if limit > 0 && len(lines) > limit {
 		lines = lines[:limit]
 	}
-	return lines, nil
+	return lines, truncated, nil
 }
 
 type cappedBuffer struct {
-	bytes.Buffer
-	limit int
+	buffer    bytes.Buffer
+	limit     int
+	truncated bool
 }
+
+func (b *cappedBuffer) String() string { return b.buffer.String() }
 
 func (b *cappedBuffer) Write(value []byte) (int, error) {
 	original := len(value)
-	remaining := b.limit - b.Len()
+	remaining := b.limit - b.buffer.Len()
+	b.truncated = b.truncated || original > remaining
 	if remaining <= 0 {
 		return original, nil
 	}
 	if len(value) > remaining {
 		value = value[:remaining]
 	}
-	_, err := b.Buffer.Write(value)
+	_, err := b.buffer.Write(value)
 	return original, err
 }
 
