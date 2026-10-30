@@ -14,6 +14,14 @@ compaction, and retries together.
 
 ## Streaming contracts
 
+The shared SSE decoder accepts LF, CRLF and CR line endings and a leading UTF-8
+BOM. Field values retain significant whitespace; repeated event fields replace
+the event name and empty data lines remain part of multiline payloads. Both
+individual lines and assembled event data are bounded to 8 MiB, so completed
+native items larger than 1 MiB can reach the Responses continuation owner.
+Clean EOF can still dispatch a final buffered event; each provider's terminal
+receipt rules independently decide whether inference actually completed.
+
 Responses streams retain `response.output_item.done` receipts by `output_index`.
 Some ChatGPT streams deliver complete items there but send `output: []` in the
 terminal response. Those completed items supply text and native continuation;
