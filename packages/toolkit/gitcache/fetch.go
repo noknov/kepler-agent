@@ -7,8 +7,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/noknov/kepler-agent/packages/infra/redisclient"
 )
 
 const (
@@ -26,15 +24,12 @@ type fetchEntry struct {
 var (
 	mu      sync.Mutex
 	entries = map[string]fetchEntry{}
-	rdb     *redisclient.Client
 )
-
-// SetRedis configures a shared Redis client for cross-pod fetch deduplication.
-func SetRedis(c *redisclient.Client) { rdb = c }
 
 // FetchOrigin refreshes origin refs at most once per TTL for each repo path.
 // It is process-wide so separate Slack requests do not all pay a network fetch
-// before answering a simple code question.
+// before answering a simple code question. Fetch receipts are local: another
+// worker refreshing the same path does not update this process's filesystem.
 func FetchOrigin(ctx context.Context, repoDir string, ttl time.Duration) error {
 	return fetchOrigin(ctx, repoDir, ttl, false)
 }
@@ -45,21 +40,10 @@ func FetchOriginFresh(ctx context.Context, repoDir string) error {
 	return fetchOrigin(ctx, repoDir, DefaultFetchTTL, true)
 }
 
-func redisFetchKey(repoDir string) string {
-	return "git:fetch:" + repoDir
-}
-
 func fetchOrigin(ctx context.Context, repoDir string, ttl time.Duration, force bool) error {
 	if ttl <= 0 {
 		ttl = DefaultFetchTTL
 	}
-
-	if !force && rdb != nil {
-		if _, err := rdb.Get(ctx, redisFetchKey(repoDir)); err == nil {
-			return nil
-		}
-	}
-
 	requestStarted := time.Now()
 	for {
 		now := time.Now()
@@ -93,21 +77,6 @@ func fetchOrigin(ctx context.Context, repoDir string, ttl time.Duration, force b
 			return err
 		}
 
-		lockAcquired := false
-		if !force && rdb != nil {
-			acquired, _ := rdb.SetNX(ctx, redisFetchKey(repoDir)+":lock", "1", 2*time.Minute)
-			if !acquired {
-				mu.Unlock()
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(2 * time.Second):
-					continue
-				}
-			}
-			lockAcquired = true
-		}
-
 		done := make(chan struct{})
 		entries[repoDir] = fetchEntry{lastFetch: entry.lastFetch, err: entry.err, inFlight: true, done: done}
 		mu.Unlock()
@@ -116,15 +85,6 @@ func fetchOrigin(ctx context.Context, repoDir string, ttl time.Duration, force b
 		entries[repoDir] = fetchEntry{lastFetch: time.Now(), err: err}
 		close(done)
 		mu.Unlock()
-
-		if rdb != nil {
-			if err == nil {
-				_ = rdb.Set(ctx, redisFetchKey(repoDir), "1", ttl)
-			}
-			if lockAcquired {
-				_ = rdb.Del(ctx, redisFetchKey(repoDir)+":lock")
-			}
-		}
 		return err
 	}
 }
