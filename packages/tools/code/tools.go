@@ -103,15 +103,6 @@ func (t ReadFileTool) readOne(ctx context.Context, call tool.Call, rawPath, sour
 			if gitErr == nil {
 				commit := gitRevParse(ctx, repoDir, ref, "--short")
 				header := fmt.Sprintf("[source: git ref=%s commit=%s fetch_status=%s]\n", ref, commit, fetchStatus)
-				recordReadState(call.Scope, readState{
-					Path:      filepath.ToSlash(relPath),
-					Repo:      filepath.Base(repoDir),
-					Source:    "git",
-					Ref:       ref,
-					Commit:    commit,
-					StartLine: startLine,
-					MaxLines:  maxLines,
-				})
 				return header + applyLineRange(content, startLine, maxLines), nil
 			}
 			return "", fmt.Errorf("read %s at %s: %w", filepath.ToSlash(relPath), ref, gitErr)
@@ -159,7 +150,6 @@ func (t ReadFileTool) readOne(ctx context.Context, call tool.Call, rawPath, sour
 		header += " branch=" + gitRevParse(ctx, repoDir, "HEAD", "--abbrev-ref")
 	}
 	header += "]\n"
-	recordReadState(call.Scope, readState{Path: path, Source: "working_tree", StartLine: startLine, MaxLines: maxLines})
 	return header + b.String(), nil
 }
 
@@ -495,34 +485,6 @@ func (b *cappedBuffer) Write(value []byte) (int, error) {
 	}
 	_, err := b.Buffer.Write(value)
 	return original, err
-}
-
-type readState struct {
-	Path      string
-	Repo      string
-	Source    string
-	Ref       string
-	Commit    string
-	StartLine int
-	MaxLines  int
-}
-
-func recordReadState(scope tool.Scope, state readState) {
-	if tool.CacheFor(scope) == nil {
-		return
-	}
-	const key = "code-read-state"
-	var states []readState
-	if existing, ok := tool.CacheFor(scope).Get(key); ok {
-		if typed, ok := existing.([]readState); ok {
-			states = typed
-		}
-	}
-	states = append(states, state)
-	if len(states) > 100 {
-		states = states[len(states)-100:]
-	}
-	tool.CacheFor(scope).Set(key, states)
 }
 
 // findReposUnder returns the git repos that cover dir: if dir is inside a repo,
