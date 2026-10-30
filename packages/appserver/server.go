@@ -42,6 +42,9 @@ type Server struct {
 	droppedOutbound atomic.Uint64
 	deltas          *deltaBatcher
 
+	// executions tracks runtime cleanup, independently of presentation delivery.
+	executions sync.WaitGroup
+
 	activeMu sync.Mutex
 	active   map[string]*activeTurn
 
@@ -121,7 +124,18 @@ func (s *Server) writeLoop() {
 	}
 }
 
+// Serve owns a connection lifetime. Cancellation closes a closable input to
+// interrupt a blocked read; all accepted turns inherit this connection context.
 func (s *Server) Serve(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer func() {
+		cancel()
+		s.executions.Wait()
+	}()
+	if input, ok := s.reader.(io.ReadCloser); ok {
+		stop := context.AfterFunc(ctx, func() { _ = input.Close() })
+		defer stop()
+	}
 	scanner := bufio.NewScanner(s.reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
@@ -142,6 +156,9 @@ func (s *Server) Serve(ctx context.Context) error {
 			continue
 		}
 		s.handle(ctx, request)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return scanner.Err()
 }
@@ -292,7 +309,13 @@ func (s *Server) handle(ctx context.Context, request Request) {
 			return
 		}
 		s.respond(request.ID, TurnStartResult{TurnID: params.TurnID, SessionID: params.SessionID, Status: "started"}, nil)
-		go s.execute(turnCtx, params, buffer)
+		s.executions.Add(1)
+		go func() {
+			payload := s.execute(turnCtx, params, buffer)
+			cancel()
+			s.executions.Done()
+			s.notifyRequired("turn/completed", payload)
+		}()
 	case "turn/steer":
 		var params TurnSteerParams
 		if err := json.Unmarshal(request.Params, &params); err != nil || params.TurnID == "" || params.Text == "" {
@@ -365,7 +388,7 @@ func (s *Server) initialized() bool {
 	return s.state == connectionReady
 }
 
-func (s *Server) execute(ctx context.Context, params TurnStartParams, steering *agentruntime.InputBuffer) {
+func (s *Server) execute(ctx context.Context, params TurnStartParams, steering *agentruntime.InputBuffer) TurnCompletedNotification {
 	defer s.unregister(params.TurnID)
 	if s.TurnTimeout > 0 {
 		var cancel context.CancelFunc
@@ -395,8 +418,7 @@ func (s *Server) execute(ctx context.Context, params TurnStartParams, steering *
 	// Runtime has durably finished. Do not let a stalled presentation writer
 	// occupy a local admission slot; clients recover transient notices through
 	// thread/resume and the canonical transcript.
-	s.unregister(params.TurnID)
-	s.notifyRequired("turn/completed", payload)
+	return payload
 }
 
 func (s *Server) notify(method string, params any) {

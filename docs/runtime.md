@@ -159,6 +159,15 @@ overloaded; retry later`); clients retry with exponential backoff and jitter.
 This protects the app-server process from stalled providers or tools without
 discarding an already accepted turn.
 
+The stdio connection owns its accepted turn contexts. EOF or an input error
+cancels active work; cancellation also closes a closable input so a stalled
+read cannot prevent shutdown. Reader ownership is transferred to `Serve` for
+this connection lifetime. Completed turns release their child contexts.
+`Serve` waits for accepted runtime executions to finish canonical cleanup before
+returning, so callers may then tear down workspace resources. This wait excludes
+presentation delivery, which can remain blocked after the runtime has finished.
+Canonical cancellation facts remain in the transcript.
+
 ## Delegation
 
 `agent-explore` is a read-only delegation tool, not a second product runtime. It
