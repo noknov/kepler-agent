@@ -27,68 +27,134 @@ func (m connectionProbeModel) Generate(ctx context.Context, _ model.Request, _ m
 	return model.Response{}, ctx.Err()
 }
 
-func TestServeEOFCancelsAcceptedTurn(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	store := transcript.NewMemoryStore()
-	catalog, _ := tool.NewCatalog()
-	probe := connectionProbeModel{started: make(chan struct{}), done: make(chan error, 1)}
-	runner, err := agentruntime.New(agentruntime.Config{}, agentruntime.Dependencies{Model: probe, Tools: catalog, Transcript: store})
-	if err != nil {
-		t.Fatal(err)
+type cancellationGateStore struct {
+	*transcript.MemoryStore
+	pending, release chan struct{}
+}
+
+func (s *cancellationGateStore) Append(ctx context.Context, event transcript.Event) (transcript.Event, error) {
+	if event.Type == transcript.TurnCanceled {
+		close(s.pending)
+		<-s.release
 	}
-	input, writer := io.Pipe()
-	defer writer.Close()
-	defer input.Close()
-	var output synchronizedBuffer
-	server := New(runner, input, &output)
-	server.Transcript = store
-	served := make(chan error, 1)
-	go func() { served <- server.Serve(ctx) }()
-	for _, request := range []Request{
-		{Method: "initialize", Params: mustJSON(InitializeParams{ClientName: "test"})},
-		{Method: "initialized"},
-		{Method: "turn/start", Params: mustJSON(TurnStartParams{SessionID: "session", TurnID: "turn", Input: "hello"})},
+	return s.MemoryStore.Append(ctx, event)
+}
+
+type lifecycleBlockedWriter struct{ entered, release chan struct{} }
+
+func (w lifecycleBlockedWriter) Write(data []byte) (int, error) {
+	select {
+	case w.entered <- struct{}{}:
+	default:
+	}
+	<-w.release
+	return len(data), nil
+}
+
+func TestServeConnectionEndWaitsForCanceledTurn(t *testing.T) {
+	for _, ending := range []struct {
+		name               string
+		eof, blockedWriter bool
+	}{
+		{name: "EOF", eof: true}, {name: "context cancellation"}, {name: "stalled presentation", blockedWriter: true},
 	} {
-		if _, err := fmt.Fprintln(writer, string(mustJSON(request))); err != nil {
-			t.Fatal(err)
-		}
-	}
-	select {
-	case <-probe.started:
-	case <-time.After(time.Second):
-		t.Fatal("model did not start")
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case err := <-served:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Serve did not return at EOF")
-	}
-	select {
-	case err := <-probe.done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("model ended with %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("accepted model request survived its connection")
-	}
-	waitForNoActiveTurns(t, server)
-	events, err := store.Load(t.Context(), "session", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, event := range events {
-		found = found || event.Type == transcript.TurnCanceled
-	}
-	if !found {
-		t.Fatal("connection cancellation was not committed to transcript")
+		t.Run(ending.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			store := &cancellationGateStore{MemoryStore: transcript.NewMemoryStore(), pending: make(chan struct{}), release: make(chan struct{})}
+			released := false
+			t.Cleanup(func() {
+				if !released {
+					close(store.release)
+				}
+			})
+			catalog, _ := tool.NewCatalog()
+			probe := connectionProbeModel{started: make(chan struct{}), done: make(chan error, 1)}
+			runner, err := agentruntime.New(agentruntime.Config{}, agentruntime.Dependencies{Model: probe, Tools: catalog, Transcript: store})
+			if err != nil {
+				t.Fatal(err)
+			}
+			input, writer := io.Pipe()
+			defer writer.Close()
+			defer input.Close()
+			var output io.Writer = io.Discard
+			stalled := lifecycleBlockedWriter{entered: make(chan struct{}, 1), release: make(chan struct{})}
+			if ending.blockedWriter {
+				output = stalled
+				t.Cleanup(func() { close(stalled.release) })
+			}
+			server := New(runner, input, output)
+			server.Transcript = store
+			if ending.blockedWriter {
+				server.notify("fixture", nil)
+				<-stalled.entered
+				for range cap(server.outbound) {
+					server.outbound <- struct{}{}
+				}
+			}
+			served := make(chan error, 1)
+			go func() { served <- server.Serve(ctx) }()
+			for _, request := range []Request{
+				{Method: "initialize", Params: mustJSON(InitializeParams{ClientName: "test"})},
+				{Method: "initialized"},
+				{Method: "turn/start", Params: mustJSON(TurnStartParams{SessionID: "session", TurnID: "turn", Input: "hello"})},
+			} {
+				if _, err := fmt.Fprintln(writer, string(mustJSON(request))); err != nil {
+					t.Fatal(err)
+				}
+			}
+			select {
+			case <-probe.started:
+			case <-time.After(time.Second):
+				t.Fatal("model did not start")
+			}
+			if ending.eof {
+				if err := writer.Close(); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				cancel()
+			}
+			select {
+			case err := <-probe.done:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("model error=%v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("accepted model request survived connection")
+			}
+			select {
+			case <-store.pending:
+			case <-time.After(time.Second):
+				t.Fatal("cancellation did not reach canonical commit")
+			}
+			select {
+			case err := <-served:
+				t.Fatalf("Serve returned before cancellation commit: %v", err)
+			case <-time.After(50 * time.Millisecond):
+			}
+			close(store.release)
+			released = true
+			select {
+			case err := <-served:
+				if (ending.eof && err != nil) || (!ending.eof && !errors.Is(err, context.Canceled)) {
+					t.Fatalf("Serve error=%v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("Serve waited on presentation after canonical cleanup")
+			}
+			events, err := store.Load(t.Context(), "session", 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, event := range events {
+				found = found || event.Type == transcript.TurnCanceled
+			}
+			if !found {
+				t.Fatal("Serve returned without canonical cancellation")
+			}
+		})
 	}
 }
 
