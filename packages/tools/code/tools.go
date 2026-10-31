@@ -209,6 +209,11 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 		var grepErrors []string
 		var truncated bool
 		for _, repoDir := range repos {
+			remaining := args.Limit - len(lines)
+			if remaining <= 0 {
+				truncated = true
+				break
+			}
 			snapshot, sourceErr := resolveSource(ctx, repoDir, source, call.Scope)
 			if sourceErr != nil {
 				grepErrors = append(grepErrors, fmt.Sprintf("%s: %v", filepath.Base(repoDir), sourceErr))
@@ -220,11 +225,6 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 			if rel, relErr := filepath.Rel(repoDir, searchPath); relErr == nil &&
 				rel != "." && filepath.IsLocal(rel) {
 				relSearch = rel
-			}
-			remaining := args.Limit - len(lines)
-			if remaining <= 0 {
-				truncated = true
-				break
 			}
 			got, clipped, grepErr := gitGrep(ctx, repoDir, snapshot.commit, args.Query, queryMode, relSearch, args.Glob, args.ContextLines, remaining)
 			if grepErr != nil {
