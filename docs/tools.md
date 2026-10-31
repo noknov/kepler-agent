@@ -43,8 +43,8 @@ reading or searching. Content, source headers and search file identities use tha
 same snapshot even if another fetch advances the remote-tracking ref.
 
 Search directory paths define the search root, and `glob` narrows results inside
-that root. Paths are literal filesystem locations, including names containing
-wildcard characters. An explicit file is searched directly, as in working-tree
+that root. Path type comes from the selected Git snapshot, and directory prefixes are
+literal, including names containing wildcard characters. An explicit file is searched directly, as in working-tree
 search. Sensitive-file exclusions remain rooted at the repository.
 
 Committed-file reads resolve blobs in the selected Git snapshot. A file need not

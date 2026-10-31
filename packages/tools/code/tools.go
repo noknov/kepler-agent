@@ -366,6 +366,9 @@ type sourceSnapshot struct {
 }
 
 func resolveSource(ctx context.Context, repoDir, source string, scope tool.Scope) (sourceSnapshot, error) {
+	if safety.IsSensitivePath(repoDir) {
+		return sourceSnapshot{}, fmt.Errorf("refusing to search or read sensitive repository %q", filepath.Base(repoDir))
+	}
 	source = strings.TrimSpace(source)
 	if source == "" {
 		source = "current_branch"
@@ -505,43 +508,55 @@ func readLineRange(ctx context.Context, input io.Reader, startLine, maxLines int
 	return output.String(), nil
 }
 
+// Escape only the literal directory prefix; the user-supplied glob retains
+// Git wildmatch semantics inside that directory.
+var gitGlobPathLiteral = strings.NewReplacer("\\", "\\\\", "*", "\\*", "?", "\\?", "[", "\\[", "]", "\\]")
+
+func recursiveGitGlob(pattern string) string {
+	if strings.HasPrefix(pattern, "**/") {
+		return pattern
+	}
+	return "**/" + pattern
+}
+
 // gitGrep searches repoDir at ref for query, returning
 // the raw output lines. relPath restricts the search to a sub-directory;
 // pass "." to search the whole repo. glob filters by file pattern.
 func gitGrep(ctx context.Context, repoDir, ref, query, queryMode, relPath, glob string, contextLines, limit int) ([]string, bool, error) {
-	searchDir := repoDir
-	var exactFile string
+	var pathspec string
 	if relPath != "." && relPath != "" {
-		requested := filepath.Join(repoDir, relPath)
-		info, err := os.Stat(requested)
+		relative := filepath.ToSlash(relPath)
+		output, err := exec.CommandContext(ctx, "git", "-C", repoDir, "cat-file", "-t", ref+":"+relative).Output()
 		if err != nil {
-			return nil, false, err
+			return nil, false, fmt.Errorf("inspect source path %q: %w", relative, err)
 		}
-		if info.IsDir() {
-			searchDir = requested
-		} else {
-			searchDir = filepath.Dir(requested)
-			exactFile = filepath.Base(requested)
+		switch strings.TrimSpace(string(output)) {
+		case "blob":
+			// Explicit files have priority over globs, as in working-tree searches.
+			pathspec = ":(literal)" + relative
+		case "tree":
+			if glob == "" {
+				pathspec = ":(literal)" + relative
+			} else {
+				pathspec = ":(glob)" + gitGlobPathLiteral.Replace(relative) + "/" + recursiveGitGlob(glob)
+			}
+		default:
+			return nil, false, fmt.Errorf("source path %q is not a file or directory", relative)
 		}
+	} else if glob != "" {
+		pathspec = ":(glob)" + recursiveGitGlob(glob)
 	}
 	patternFlag := "-F"
 	if queryMode == "regex" {
 		patternFlag = "-E"
 	}
-	cmdArgs := []string{"-C", searchDir, "grep", "--full-name", "--line-number", patternFlag}
+	cmdArgs := []string{"-C", repoDir, "grep", "--line-number", patternFlag}
 	if contextLines > 0 {
 		cmdArgs = append(cmdArgs, "-C", strconv.Itoa(contextLines))
 	}
 	cmdArgs = append(cmdArgs, "-e", query, ref, "--")
-	if exactFile != "" {
-		cmdArgs = append(cmdArgs, ":(literal)"+exactFile)
-	} else if glob != "" {
-		// Convert rg-style glob to git pathspec magic; add **/ prefix when absent.
-		g := glob
-		if !strings.HasPrefix(g, "**/") {
-			g = "**/" + g
-		}
-		cmdArgs = append(cmdArgs, ":(glob)"+g)
+	if pathspec != "" {
+		cmdArgs = append(cmdArgs, pathspec)
 	}
 	cmdArgs = append(cmdArgs, safety.SensitiveGitPathspecs()...)
 	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
@@ -599,7 +614,7 @@ func findReposUnder(workspaceRoots []string, dir string) []string {
 	seen := map[string]bool{}
 	var repos []string
 	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+		if !e.IsDir() {
 			continue
 		}
 		sub := filepath.Join(dir, e.Name())
