@@ -101,3 +101,16 @@ func TestGitReadRetainsFileAndWorkspaceBoundaries(t *testing.T) {
 		}
 	}
 }
+
+func TestGitReadPreservesRepositoryAliasBeforeCanonicalMetadataRoot(t *testing.T) {
+	root, work := testGitRepo(t)
+	if err := os.Symlink(work, filepath.Join(root, "linked-repo")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	scope := agenttool.Scope{SessionID: t.Name(), TurnID: "read"}
+	t.Cleanup(func() { agenttool.ClearTurnCache(scope.SessionID, scope.TurnID) })
+	result, err := (ReadFileTool{Paths: safety.WorkspacePolicy{Roots: []string{root}}}).Execute(t.Context(), agenttool.Call{Scope: scope, Arguments: json.RawMessage(`{"path":"linked-repo/app.go","source":"origin/main"}`)})
+	if err != nil || !strings.Contains(result.Text(), "package app") {
+		t.Fatalf("repository alias lost Git-relative path: %q %v", result.Text(), err)
+	}
+}

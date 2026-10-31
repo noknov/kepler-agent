@@ -93,7 +93,7 @@ func (t ReadFileTool) readOne(ctx context.Context, call tool.Call, rawPath, sour
 	if err != nil {
 		return "", err
 	}
-	repoDir := findRepoRoot(t.Paths.Roots, filepath.Dir(path))
+	repoDir := findRepository(t.Paths.Roots, filepath.Dir(path)).root
 
 	// Working-tree access is explicit, including for files outside git repos.
 	file, err := os.Open(path)
@@ -153,14 +153,13 @@ func (t ReadFileTool) readGitOne(ctx context.Context, call tool.Call, rawPath, s
 				lastErr = fmt.Errorf("refusing to read sensitive file %q", filepath.Base(path))
 				continue
 			}
-			repoDir := findRepoRoot([]string{realRoot}, filepath.Dir(path))
-			if repoDir == "" {
+			repository := findRepository([]string{realRoot}, filepath.Dir(path))
+			if repository.root == "" {
 				continue
 			}
-			relPath, err := filepath.Rel(repoDir, path)
-			if err != nil || !filepath.IsLocal(relPath) {
-				continue
-			}
+			repoDir := repository.root
+			relPath := filepath.Join(repository.relative, filepath.Base(path))
+
 			snapshot, err := resolveSource(ctx, repoDir, source, call.Scope)
 			if err != nil {
 				lastErr = err
@@ -604,7 +603,7 @@ func (b *cappedBuffer) Write(value []byte) (int, error) {
 // findReposUnder returns the git repos that cover dir: if dir is inside a repo,
 // returns that single repo; otherwise enumerates immediate sub-directories for repos.
 func findReposUnder(workspaceRoots []string, dir string) []string {
-	if repoDir := findRepoRoot(workspaceRoots, dir); repoDir != "" {
+	if repoDir := findRepository(workspaceRoots, dir).root; repoDir != "" {
 		return []string{repoDir}
 	}
 	entries, err := os.ReadDir(dir)
@@ -618,7 +617,7 @@ func findReposUnder(workspaceRoots []string, dir string) []string {
 			continue
 		}
 		sub := filepath.Join(dir, e.Name())
-		if repoDir := findRepoRoot(workspaceRoots, sub); repoDir != "" && !seen[repoDir] {
+		if repoDir := findRepository(workspaceRoots, sub).root; repoDir != "" && !seen[repoDir] {
 			seen[repoDir] = true
 			repos = append(repos, repoDir)
 		}
@@ -626,33 +625,40 @@ func findReposUnder(workspaceRoots []string, dir string) []string {
 	return repos
 }
 
-// findRepoRoot walks upward from absPath looking for a .git directory that
-// is within one of the allowed workspace roots.
-func findRepoRoot(roots []string, absPath string) string {
+type repositoryLocation struct {
+	root, relative string
+}
+
+// findRepository discovers allowed Git metadata while retaining the requested
+// path relative to the logical repository root, before canonicalizing aliases.
+func findRepository(roots []string, absPath string) repositoryLocation {
 	dir := absPath
 	for {
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			clean := filepath.Clean(dir)
-			if realClean, err := filepath.EvalSymlinks(clean); err == nil {
-				clean = realClean
-			}
-			for _, root := range roots {
-				cleanRoot := filepath.Clean(root)
-				if realRoot, err := filepath.EvalSymlinks(cleanRoot); err == nil {
-					cleanRoot = realRoot
-				}
-				if clean == cleanRoot || strings.HasPrefix(clean+"/", cleanRoot+"/") {
-					return clean
+			physicalRoot, err := filepath.EvalSymlinks(dir)
+			if err == nil {
+				for _, root := range roots {
+					allowedRoot, err := filepath.EvalSymlinks(filepath.Clean(root))
+					if err != nil {
+						continue
+					}
+					within, err := filepath.Rel(allowedRoot, physicalRoot)
+					if err != nil || !filepath.IsLocal(within) {
+						continue
+					}
+					relative, err := filepath.Rel(dir, absPath)
+					if err == nil && filepath.IsLocal(relative) {
+						return repositoryLocation{root: physicalRoot, relative: relative}
+					}
 				}
 			}
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			break
+			return repositoryLocation{}
 		}
 		dir = parent
 	}
-	return ""
 }
 
 func resolveReadableFile(paths safety.WorkspacePolicy, path string) (string, error) {
