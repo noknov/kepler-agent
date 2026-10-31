@@ -165,11 +165,12 @@ func IsSensitivePath(path string) bool {
 }
 
 // SensitiveGitPathspecs applies the same readable-path policy to committed trees.
+// Exclusions are rooted at the repository even when Git runs in a subdirectory.
 func SensitiveGitPathspecs() []string {
 	patterns := sensitivePathPatterns()
 	out := make([]string, 0, len(patterns))
 	for _, pattern := range patterns {
-		out = append(out, ":(exclude,glob,icase)**/"+pattern)
+		out = append(out, ":(top,exclude,glob,icase)**/"+pattern)
 	}
 	return out
 }

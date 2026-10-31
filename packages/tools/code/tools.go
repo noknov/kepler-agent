@@ -99,7 +99,7 @@ func (t ReadFileTool) readOne(ctx context.Context, call tool.Call, rawPath, sour
 		if sourceErr != nil {
 			return "", sourceErr
 		}
-		if relPath, relErr := filepath.Rel(repoDir, path); relErr == nil && !strings.HasPrefix(relPath, "..") {
+		if relPath, relErr := filepath.Rel(repoDir, path); relErr == nil && filepath.IsLocal(relPath) {
 			content, gitErr := gitShowFile(ctx, repoDir, snapshot.commit, relPath, startLine, maxLines)
 			if gitErr == nil {
 				header := fmt.Sprintf("[source: git ref=%s commit=%s fetch_status=%s]\n", snapshot.ref, snapshot.commit, snapshot.fetchStatus)
@@ -218,7 +218,7 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 			// Compute the pathspec relative to the repo root.
 			relSearch := "."
 			if rel, relErr := filepath.Rel(repoDir, searchPath); relErr == nil &&
-				rel != "." && !strings.HasPrefix(rel, "..") {
+				rel != "." && filepath.IsLocal(rel) {
 				relSearch = rel
 			}
 			remaining := args.Limit - len(lines)
@@ -315,6 +315,9 @@ type sourceSnapshot struct {
 }
 
 func resolveSource(ctx context.Context, repoDir, source string, scope tool.Scope) (sourceSnapshot, error) {
+	if safety.IsSensitivePath(repoDir) {
+		return sourceSnapshot{}, fmt.Errorf("refusing to search or read sensitive repository %q", filepath.Base(repoDir))
+	}
 	source = strings.TrimSpace(source)
 	if source == "" {
 		source = "current_branch"
@@ -454,10 +457,44 @@ func readLineRange(ctx context.Context, input io.Reader, startLine, maxLines int
 	return output.String(), nil
 }
 
+// Escape only the literal directory prefix; the user-supplied glob retains
+// Git wildmatch semantics inside that directory.
+var gitGlobPathLiteral = strings.NewReplacer("\\", "\\\\", "*", "\\*", "?", "\\?", "[", "\\[", "]", "\\]")
+
+func recursiveGitGlob(pattern string) string {
+	if strings.HasPrefix(pattern, "**/") {
+		return pattern
+	}
+	return "**/" + pattern
+}
+
 // gitGrep searches repoDir at ref for query, returning
 // the raw output lines. relPath restricts the search to a sub-directory;
 // pass "." to search the whole repo. glob filters by file pattern.
 func gitGrep(ctx context.Context, repoDir, ref, query, queryMode, relPath, glob string, contextLines, limit int) ([]string, bool, error) {
+	var pathspec string
+	if relPath != "." && relPath != "" {
+		relative := filepath.ToSlash(relPath)
+		output, err := exec.CommandContext(ctx, "git", "-C", repoDir, "cat-file", "-t", ref+":"+relative).Output()
+		if err != nil {
+			return nil, false, fmt.Errorf("inspect source path %q: %w", relative, err)
+		}
+		switch strings.TrimSpace(string(output)) {
+		case "blob":
+			// Explicit files have priority over globs, as in working-tree searches.
+			pathspec = ":(literal)" + relative
+		case "tree":
+			if glob == "" {
+				pathspec = ":(literal)" + relative
+			} else {
+				pathspec = ":(glob)" + gitGlobPathLiteral.Replace(relative) + "/" + recursiveGitGlob(glob)
+			}
+		default:
+			return nil, false, fmt.Errorf("source path %q is not a file or directory", relative)
+		}
+	} else if glob != "" {
+		pathspec = ":(glob)" + recursiveGitGlob(glob)
+	}
 	patternFlag := "-F"
 	if queryMode == "regex" {
 		patternFlag = "-E"
@@ -467,16 +504,8 @@ func gitGrep(ctx context.Context, repoDir, ref, query, queryMode, relPath, glob 
 		cmdArgs = append(cmdArgs, "-C", strconv.Itoa(contextLines))
 	}
 	cmdArgs = append(cmdArgs, "-e", query, ref, "--")
-	if glob != "" {
-		// Convert rg-style glob to git pathspec magic; add **/ prefix when absent.
-		g := glob
-		if !strings.HasPrefix(g, "**/") {
-			g = "**/" + g
-		}
-		cmdArgs = append(cmdArgs, ":(glob)"+g)
-	}
-	if relPath != "." && relPath != "" {
-		cmdArgs = append(cmdArgs, relPath)
+	if pathspec != "" {
+		cmdArgs = append(cmdArgs, pathspec)
 	}
 	cmdArgs = append(cmdArgs, safety.SensitiveGitPathspecs()...)
 	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
@@ -534,7 +563,7 @@ func findReposUnder(workspaceRoots []string, dir string) []string {
 	seen := map[string]bool{}
 	var repos []string
 	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+		if !e.IsDir() {
 			continue
 		}
 		sub := filepath.Join(dir, e.Name())
