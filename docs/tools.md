@@ -46,6 +46,8 @@ Search directory paths define the search root, and `glob` narrows results inside
 that root. Path type comes from the selected Git snapshot, and directory prefixes are
 literal, including names containing wildcard characters. An explicit file is searched directly, as in working-tree
 search. Sensitive-file exclusions remain rooted at the repository.
+Working-tree code searches use the same case-insensitive credential-path policy
+and ignore ambient ripgrep configuration, including settings that follow symlinks.
 
 Committed-file reads resolve blobs in the selected Git snapshot. A file need not
 exist in the checkout, and checkout symlinks do not select its contents. Explicit

@@ -318,7 +318,7 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 	}
 
 	// Working-tree search is explicit and uses rg locally.
-	cmdArgs := []string{"--line-number", "--no-heading", "--color=never"}
+	cmdArgs := []string{"--no-config", "--line-number", "--no-heading", "--color=never"}
 	if queryMode == "literal" {
 		cmdArgs = append(cmdArgs, "--fixed-strings")
 	}
@@ -327,6 +327,9 @@ func (t SearchTool) Execute(ctx context.Context, call tool.Call) (tool.Result, e
 	}
 	if args.Glob != "" {
 		cmdArgs = append(cmdArgs, "--glob", args.Glob)
+	}
+	for _, pattern := range safety.SensitiveRGGlobs() {
+		cmdArgs = append(cmdArgs, "--iglob", pattern)
 	}
 	cmdArgs = append(cmdArgs, "--", args.Query, searchPath)
 	cmd := exec.CommandContext(ctx, "rg", cmdArgs...)
