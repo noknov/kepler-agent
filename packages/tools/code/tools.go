@@ -86,29 +86,14 @@ func (t ReadFileTool) readOne(ctx context.Context, call tool.Call, rawPath, sour
 	if safety.IsSensitivePath(rawPath) {
 		return "", fmt.Errorf("refusing to read sensitive file %q", filepath.Base(rawPath))
 	}
+	if source != "working_tree" {
+		return t.readGitOne(ctx, call, rawPath, source, startLine, maxLines)
+	}
 	path, err := resolveReadableFile(t.Paths, rawPath)
 	if err != nil {
 		return "", err
 	}
-	repoDir := findRepoRoot(t.Paths.Roots, filepath.Dir(path))
-	if source != "working_tree" {
-		if repoDir == "" {
-			return "", fmt.Errorf("source %q requires a file inside a git repository", source)
-		}
-		snapshot, sourceErr := resolveSource(ctx, repoDir, source, call.Scope)
-		if sourceErr != nil {
-			return "", sourceErr
-		}
-		if relPath, relErr := filepath.Rel(repoDir, path); relErr == nil && filepath.IsLocal(relPath) {
-			content, gitErr := gitShowFile(ctx, repoDir, snapshot.commit, relPath, startLine, maxLines)
-			if gitErr == nil {
-				header := fmt.Sprintf("[source: git ref=%s commit=%s fetch_status=%s]\n", snapshot.ref, snapshot.commit, snapshot.fetchStatus)
-				return header + content, nil
-			}
-			return "", fmt.Errorf("read %s at %s: %w", filepath.ToSlash(relPath), snapshot.ref, gitErr)
-		}
-		return "", fmt.Errorf("path %q is outside repository %q", path, repoDir)
-	}
+	repoDir := findRepository(t.Paths.Roots, filepath.Dir(path)).root
 
 	// Working-tree access is explicit, including for files outside git repos.
 	file, err := os.Open(path)
@@ -128,6 +113,71 @@ func (t ReadFileTool) readOne(ctx context.Context, call tool.Call, rawPath, sour
 	}
 	header += "]\n"
 	return header + content, nil
+}
+
+// Committed source paths belong to Git's namespace, not the checkout's files or
+// symlinks. Only the configured workspace roots and repository roots are local.
+func (t ReadFileTool) readGitOne(ctx context.Context, call tool.Call, rawPath, source string, startLine, maxLines int) (string, error) {
+	// Keep the API's configured-root and root-prefixed path forms; resolve
+	// them against committed blobs rather than guessing from checkout files.
+	names := []string{rawPath}
+	if stripped, ok := stripWorkspaceRootBase(t.Paths, rawPath); ok {
+		names = append(names, stripped)
+	}
+	var lastErr error
+	for _, name := range names {
+		for _, root := range t.Paths.Roots {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+			absoluteRoot, err := filepath.Abs(root)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			path := name
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(absoluteRoot, path)
+			}
+			relative, err := filepath.Rel(absoluteRoot, path)
+			if err != nil || !filepath.IsLocal(relative) {
+				continue
+			}
+			realRoot, err := filepath.EvalSymlinks(absoluteRoot)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			path = filepath.Join(realRoot, relative)
+			if safety.IsSensitivePath(path) {
+				lastErr = fmt.Errorf("refusing to read sensitive file %q", filepath.Base(path))
+				continue
+			}
+			repository := findRepository([]string{realRoot}, filepath.Dir(path))
+			if repository.root == "" {
+				continue
+			}
+			repoDir := repository.root
+			relPath := filepath.Join(repository.relative, filepath.Base(path))
+
+			snapshot, err := resolveSource(ctx, repoDir, source, call.Scope)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			content, err := gitReadFile(ctx, repoDir, snapshot.commit, relPath, startLine, maxLines)
+			if err != nil {
+				lastErr = fmt.Errorf("read %s at %s: %w", filepath.ToSlash(relPath), snapshot.ref, err)
+				continue
+			}
+			header := fmt.Sprintf("[source: git ref=%s commit=%s fetch_status=%s]\n", snapshot.ref, snapshot.commit, snapshot.fetchStatus)
+			return header + content, nil
+		}
+	}
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", fmt.Errorf("source %q requires a file inside an allowed git repository", source)
 }
 
 type SearchTool struct {
@@ -382,10 +432,10 @@ func safeGitRef(ref string) bool {
 		!strings.ContainsAny(ref, " \t\n\r~^:?*[\\")
 }
 
-// gitShowFile streams the requested source window without retaining the full blob.
-func gitShowFile(ctx context.Context, repoDir, ref, relPath string, startLine, maxLines int) (string, error) {
+// gitReadFile streams the requested source window without retaining the full blob.
+func gitReadFile(ctx context.Context, repoDir, ref, relPath string, startLine, maxLines int) (string, error) {
 	arg := ref + ":" + filepath.ToSlash(relPath)
-	command := exec.CommandContext(ctx, "git", "-C", repoDir, "show", arg)
+	command := exec.CommandContext(ctx, "git", "-C", repoDir, "cat-file", "blob", arg)
 	output, err := command.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -553,7 +603,7 @@ func (b *cappedBuffer) Write(value []byte) (int, error) {
 // findReposUnder returns the git repos that cover dir: if dir is inside a repo,
 // returns that single repo; otherwise enumerates immediate sub-directories for repos.
 func findReposUnder(workspaceRoots []string, dir string) []string {
-	if repoDir := findRepoRoot(workspaceRoots, dir); repoDir != "" {
+	if repoDir := findRepository(workspaceRoots, dir).root; repoDir != "" {
 		return []string{repoDir}
 	}
 	entries, err := os.ReadDir(dir)
@@ -567,7 +617,7 @@ func findReposUnder(workspaceRoots []string, dir string) []string {
 			continue
 		}
 		sub := filepath.Join(dir, e.Name())
-		if repoDir := findRepoRoot(workspaceRoots, sub); repoDir != "" && !seen[repoDir] {
+		if repoDir := findRepository(workspaceRoots, sub).root; repoDir != "" && !seen[repoDir] {
 			seen[repoDir] = true
 			repos = append(repos, repoDir)
 		}
@@ -575,33 +625,40 @@ func findReposUnder(workspaceRoots []string, dir string) []string {
 	return repos
 }
 
-// findRepoRoot walks upward from absPath looking for a .git directory that
-// is within one of the allowed workspace roots.
-func findRepoRoot(roots []string, absPath string) string {
+type repositoryLocation struct {
+	root, relative string
+}
+
+// findRepository discovers allowed Git metadata while retaining the requested
+// path relative to the logical repository root, before canonicalizing aliases.
+func findRepository(roots []string, absPath string) repositoryLocation {
 	dir := absPath
 	for {
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			clean := filepath.Clean(dir)
-			if realClean, err := filepath.EvalSymlinks(clean); err == nil {
-				clean = realClean
-			}
-			for _, root := range roots {
-				cleanRoot := filepath.Clean(root)
-				if realRoot, err := filepath.EvalSymlinks(cleanRoot); err == nil {
-					cleanRoot = realRoot
-				}
-				if clean == cleanRoot || strings.HasPrefix(clean+"/", cleanRoot+"/") {
-					return clean
+			physicalRoot, err := filepath.EvalSymlinks(dir)
+			if err == nil {
+				for _, root := range roots {
+					allowedRoot, err := filepath.EvalSymlinks(filepath.Clean(root))
+					if err != nil {
+						continue
+					}
+					within, err := filepath.Rel(allowedRoot, physicalRoot)
+					if err != nil || !filepath.IsLocal(within) {
+						continue
+					}
+					relative, err := filepath.Rel(dir, absPath)
+					if err == nil && filepath.IsLocal(relative) {
+						return repositoryLocation{root: physicalRoot, relative: relative}
+					}
 				}
 			}
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			break
+			return repositoryLocation{}
 		}
 		dir = parent
 	}
-	return ""
 }
 
 func resolveReadableFile(paths safety.WorkspacePolicy, path string) (string, error) {
