@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="架构指南的阅读路径、统一术语和技术说明写作规则">
-<title>阅读方法与术语 · Kepler 架构指南</title>
+<meta name="description" content="架构指南的专题范围、统一术语和实现依据">
+<title>术语与文档范围 · Kepler 架构指南</title>
 <link rel="stylesheet" href="assets/guide.css">
 <script src="assets/search-index.js" defer></script>
 <script src="assets/architecture.js" defer></script>
@@ -15,14 +15,14 @@
 <a href="index.html">概览</a><a href="execution.html">执行</a><a href="models.html">模型</a><a href="tools.html">工具</a><a href="reliability.html">可靠性</a><a href="operations.html">观测</a><a href="production.html">生产推演</a><a href="slack.html">Slack</a><a href="delegation.html">委派</a><a href="reference.html">索引</a>
 </nav></div></header>
 <main class="doc-shell"><aside class="side" aria-label="文档目录"></aside><article class="doc" id="content" tabindex="-1">
-<header class="hero2"><p class="kicker">READING / CONCEPTS</p><h1>阅读方法与术语</h1><p class="lead2">先确认模块职责，再沿请求路径理解状态变化。遇到重试、恢复或授权问题时，核对条件、执行主体、保存的记录和预期结果。本页统一术语，并说明本指南如何组织技术说明。</p></header>
-<section class="chapter-brief" aria-label="本章要点"><p class="eyebrow">本章要点</p><h2>先统一概念，再讨论行为</h2><ul><li>同一个概念使用同一个名称；代码标识保留原文。</li><li>说明行为时，写明条件、主体、动作和结果。</li><li>说明恢复时，分别列出已知事实和未知状态。</li></ul></section>
-<section class="chapter2" id="paths"><h2>按目标选择阅读路径</h2>
-<div class="table-scroll"><table class="detail-table"><thead><tr><th>阅读目标</th><th>建议顺序</th><th>读完后应能回答</th></tr></thead><tbody>
-<tr><td>理解系统</td><td><a href="index.html#products">产品边界</a> → <a href="execution.html">执行过程</a> → <a href="reference.html">实现索引</a></td><td>谁接收请求？谁执行？记录存在哪里？</td></tr>
-<tr><td>理解模型与工具</td><td><a href="models.html">上下文与模型</a> → <a href="tools.html">工具与策略</a></td><td>模型看见什么？工具在什么条件下可以执行？</td></tr>
-<tr><td>理解并发与恢复</td><td><a href="reliability.html">状态与恢复</a> → <a href="delegation.html">委派执行</a></td><td>谁持有处理权？中断后依据什么继续？</td></tr>
-<tr><td>定位生产故障</td><td><a href="operations.html">队列与观测</a> → <a href="production.html">生产推演</a> → <a href="slack.html">Slack 接入</a></td><td>故障在哪个边界？哪些操作可重试？</td></tr>
+<header class="hero2"><p class="kicker">READING / CONCEPTS</p><h1>术语与文档范围</h1><p class="lead2">本页定义架构指南使用的术语、标识和文档范围。中文名称用于说明概念；英文名称和代码标识用于定位实现。</p></header>
+
+<section class="chapter2" id="paths"><h2>专题范围</h2>
+<div class="table-scroll"><table class="detail-table"><thead><tr><th>专题</th><th>内容</th><th>相关文档</th></tr></thead><tbody>
+<tr><td>执行模型</td><td>产品组成、模块职责、执行流程与终态。</td><td><a href="index.html#products">产品组成</a>、<a href="execution.html">执行过程</a></td></tr>
+<tr><td>模型与工具</td><td>请求构造、上下文预算、权限与工具执行。</td><td><a href="models.html">上下文与模型</a>、<a href="tools.html">工具与策略</a></td></tr>
+<tr><td>并发与恢复</td><td>会话处理权、事件记录、委派与恢复。</td><td><a href="reliability.html">状态与恢复</a>、<a href="delegation.html">委派执行</a></td></tr>
+<tr><td>生产运行</td><td>队列、超时、租约、消息投递和故障处理。</td><td><a href="operations.html">队列与观测</a>、<a href="production.html">生产推演</a>、<a href="slack.html">Slack 接入</a></td></tr>
 </tbody></table></div></section>
 <section class="chapter2" id="terms"><h2>统一术语</h2>
 <p>中文名称用于解释概念。英文名称和代码标识用于查找实现。不同层级的标识不能互相替代。</p>
@@ -41,29 +41,13 @@
 <tr><td>未知结果</td><td>unknown outcome</td><td>已有开始记录，但缺少足以确认完成或未执行的证据。</td></tr>
 </tbody></table></div>
 <p>类型、事件和数据表的完整列表见<a href="reference.html">实现索引</a>。</p></section>
-<section class="chapter2" id="method"><h2>按条件、动作和结果阅读</h2>
-<p>每个机制都应能回答四个问题：什么条件触发？哪个组件负责？组件执行什么动作？系统留下什么证据？</p>
-<div class="case"><h3>例：工具调用开始后，进程退出</h3><div class="case-row"><b>条件</b><span>会话中存在工具开始记录，但没有对应结果。</span></div><div class="case-row"><b>主体</b><span>接管该会话的执行器。</span></div><div class="case-row"><b>动作</b><span>执行器按恢复逻辑核对调用，并保留中断或未知状态。</span></div><div class="case-row"><b>边界</b><span>外部写入可能已经生效。重试前需查询下游，或使用下游支持的稳定幂等标识。</span></div></div>
-<p>继续核对<a href="reliability.html">恢复机制</a>和<a href="tools.html">工具调用边界</a>。界面显示的完成状态不能单独证明外部操作的结果。</p></section>
-<section class="chapter2" id="writing"><h2>技术说明的写作规则</h2>
-<p>本指南借鉴 ASD-STE100 的受控词汇、明确主体、短句和单一主题原则。ASD-STE100 是英文技术写作规范；这里将这些原则用于中文说明，不作标准符合性或认证声明。</p>
-<ol class="walkthrough">
-<li><b>一个概念使用一个名称。</b><span>首次出现时写出中文名称和英文标识。后文使用统一名称，避免在“执行”“请求”“轮次”之间随意替换。</span></li>
-<li><b>写明执行主体。</b><span>使用“执行器保存工具结果”，避免使用“结果会被处理”。主体应能对应到一个模块。</span></li>
-<li><b>一句话说明一个主要动作。</b><span>将顺序动作拆开。先写前置条件，再写动作和结果；复杂流程使用有序步骤。</span></li>
-<li><b>把限制写在相关动作旁边。</b><span>说明重试时，同时说明可重试条件。说明审批时，同时说明审批绑定的调用和参数。</span></li>
-<li><b>用记录说明状态。</b><span>写出用于核对的事件、标识或测试。没有证据时保留“未知”，不要把推测写成完成事实。</span></li>
-</ol>
-<div class="table-scroll"><table class="detail-table"><thead><tr><th>含糊表达</th><th>明确表达</th></tr></thead><tbody>
-<tr><td>失败后会自动处理。</td><td>投影写入失败后，投影层从会话事件重建数据。</td></tr>
-<tr><td>批准后就可以执行。</td><td>收到批准后，执行器取回原调用参数，并重新检查能力策略。</td></tr>
-<tr><td>请求已经完成。</td><td>执行器已保存终态。消息投递状态仍需单独核对。</td></tr>
-</tbody></table></div></section>
-<section class="chapter2" id="evidence"><h2>从说明追踪到实现</h2>
-<p>本网站解释架构。运行步骤、配置和排障命令由项目文档维护。核对行为时，先确认当前代码版本，再查看对应实现和测试。</p>
+
+
+<section class="chapter2" id="evidence"><h2>文档职责与实现依据</h2>
+<p>本网站说明架构。项目 Markdown 文档维护运行步骤、配置和排障命令。实现行为以对应版本的源码为准；测试结果仅证明已执行的验证范围。</p>
 <ul><li>产品边界：<a href="https://github.com/noknov/kepler-agent/blob/main/docs/architecture.md">架构指南</a>。</li><li>执行机制与失败窗口：<a href="https://github.com/noknov/kepler-agent/blob/main/docs/architecture-deep-dive.md">架构详解</a>。</li><li>验证范围：<a href="https://github.com/noknov/kepler-agent/blob/main/docs/development.md">开发与验证</a>。</li></ul>
-<p class="source-note">阅读设计参考：<a href="https://lintsinghua.github.io/">御舆 · Agent Harness 架构剖析</a>。技术写作方法参考：<a href="https://www.asd-ste100.org/">ASD-STE100 官方介绍</a>。本指南的架构契约以 Kepler 的源码和所属文档为准。</p>
+
 </section>
 </article></main>
-<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">阅读方法与术语</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
+<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">术语与文档范围</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
 </body></html>

@@ -27,14 +27,14 @@
       <p class="kicker">PRODUCTION / FAILURE WALKTHROUGH</p>
       <h1>生产运行与故障推演</h1>
       <p class="lead2">生产排障需要同时检查排队、处理权、模型调用、工具操作和消息投递。本章按故障发生的位置，说明应查的记录、可执行的恢复动作和必须保留的未知状态。</p>
-      <div class="facts"><span><b>默认语义</b> 至少一次</span><span><b>权威状态</b> Transcript</span><span><b>恢复原则</b> 不猜未知副作用</span><span><b>调度原则</b> 有界背压</span></div>
+      <div class="facts"><span><b>默认语义</b> 至少一次</span><span><b>权威状态</b> Transcript</span><span><b>恢复原则</b> 核对未知结果</span><span><b>调度原则</b> 有界背压</span></div>
     </header>
-<section class="chapter-brief" aria-label="本章要点"><p class="eyebrow">本章要点</p><h2>先确认排障顺序</h2><ul><li>先定位故障边界，再核对该边界的记录。</li><li>入口响应、任务租约和执行截止时间分别检查。</li><li>外部写入结果未知时，不直接重跑整条请求。</li></ul></section>
+<section class="chapter-brief" aria-label="关键约束"><p class="eyebrow">关键约束</p><h2>故障处理约束</h2><ul><li>先定位故障边界，再核对该边界的记录。</li><li>入口响应、任务租约和执行截止时间分别检查。</li><li>外部写入结果未知时，不直接重跑整条请求。</li></ul></section>
 
 
     <section class="chapter2" id="clocks">
-      <h2>先把一条请求拆成四个时钟</h2>
-      <p class="intro">生产事故经常来自“看起来只有一个 timeout”。实际上，HTTP 响应、入口事件租约、会话处理权和模型/工具截止时间分别由不同组件控制。任何一个时钟过短，都会让健康工作被误判为失败；任何一个过长，都会延迟接管并放大资源占用。</p>
+      <h2>超时、租约与执行期限</h2>
+      <p class="intro">HTTP 响应期限、入口事件租约、会话处理权和模型或工具的执行期限由不同组件控制。期限过短会中断仍在正常执行的工作。期限过长会延迟故障接管，并增加资源占用。</p>
       <figure class="diagram">
         <div class="flow">
           <div class="box"><b>入口响应时钟</b><small>签名验证、去重、入队<br>不等待模型完成</small></div>
@@ -61,7 +61,7 @@
     </section>
 
     <section class="chapter2" id="windows">
-      <h2>把失败窗口写成可恢复的状态</h2>
+      <h2>故障窗口与恢复状态</h2>
       <p>从“调用成功/失败”看 Agent 会过于粗糙。真正需要记录的是调用前后发生过哪些确定事实，以及下一位执行者是否有条件安全重做。下面的矩阵是设计新能力时应补齐的最小答案。</p>
       <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>失败位置</th><th>已经确认的事实</th><th>能否自动重试</th><th>恢复动作</th></tr></thead>
@@ -78,7 +78,7 @@
     </section>
 
     <section class="chapter2" id="capacity">
-      <h2>容量、背压与资源乘法</h2>
+      <h2>容量与背压</h2>
       <p class="intro">Agent 的资源消耗不是“一个请求占一个 worker”。一条用户请求可能包含多个模型步骤、每步多个工具、一个工具内部的多文件 fan-out，以及一个委派调用产生的多个子 turn。容量设计必须按峰值 fan-out 计算，并让每个入口在资源耗尽时有明确的拒绝或延迟行为。</p>
       <div class="metric-grid">
         <div class="metric"><b>入口并发</b><strong>worker 数 × 活跃任务</strong><span>决定同时运行的 Slack handler 数量；队列满时应可观察地拒绝/等待。</span></div>
@@ -100,7 +100,7 @@
     </section>
 
     <section class="chapter2" id="incidents">
-      <h2>按症状推演，而不是直接重启</h2>
+      <h2>故障诊断</h2>
       <div class="scenario-list">
         <article class="scenario">
           <h3>场景 A：Slack 显示已收到，但一直没有回复</h3>
@@ -130,7 +130,7 @@
     </section>
 
     <section class="chapter2" id="security">
-      <h2>生产安全是多道边界，不是一个批准按钮</h2>
+      <h2>生产安全边界</h2>
       <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>边界</th><th>检查什么</th><th>常见误区</th></tr></thead>
         <tbody>
@@ -146,7 +146,7 @@
     </section>
 
     <section class="chapter2" id="release">
-      <h2>发布、Schema 和配置怎样一起演进</h2>
+      <h2>发布、Schema 与配置变更</h2>
       <ol class="walkthrough">
         <li><b>先确认行为归属。</b><span>运行时不承载 DDL；共享契约在 <code>packages/agent</code>，数据库对象在 <code>schema/postgres.sql</code>，入口和 profile 只做组装。</span></li>
         <li><b>先扩展后切换。</b><span>新增字段或事件时，先让旧消费者忽略未知数据、新消费者兼容旧数据，再切换生产流量，最后清理旧路径。</span></li>
@@ -158,7 +158,7 @@
     </section>
 
     <section class="chapter2" id="verification">
-      <h2>上线前应验证哪些故障路径</h2>
+      <h2>发布验证范围</h2>
       <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>验证组</th><th>故障注入</th><th>应观察到的结果</th></tr></thead>
         <tbody>
@@ -192,6 +192,6 @@
     </section>
   </article>
 </main>
-<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">阅读方法与术语</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
+<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">术语与文档范围</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
 </body>
 </html>

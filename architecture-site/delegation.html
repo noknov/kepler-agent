@@ -16,11 +16,11 @@
 </nav></div></header>
 <main class="doc-shell"><aside class="side"></aside><article class="doc" id="content" tabindex="-1">
 <header class="hero2"><p class="kicker">CORE / DELEGATION</p><h1>委派执行</h1><p class="lead2">主任务把工作拆成有验收条件的子任务。子任务共用执行核心，各自保留上下文和会话记录。主任务接收报告、核验证据，再决定是否完成或继续执行。</p></header>
-<section class="chapter-brief" aria-label="本章要点"><p class="eyebrow">本章要点</p><h2>先确认父子任务的分工</h2><ul><li>每个子任务都要有明确输入和验收条件。</li><li>并发名额、执行时限和上下文隔离分别控制。</li><li>主任务核验证据；子任务报告本身不是完成证明。</li></ul></section>
+<section class="chapter-brief" aria-label="关键约束"><p class="eyebrow">关键约束</p><h2>委派约束</h2><ul><li>每个子任务都要有明确输入和验收条件。</li><li>并发名额、执行时限和上下文隔离分别控制。</li><li>主任务核验证据；子任务报告本身不是完成证明。</li></ul></section>
 
 
 <section class="chapter2" id="primitive">
-<h2>委派不是第二套 Agent Runtime</h2>
+<h2>委派执行模型</h2>
 <p>委派能力没有建立一套平行的模型循环。它为每个子任务创建独立请求，使用经过过滤的只读工具目录和明确的任务说明，再调用共享执行器。因此上下文投影、模型重试、工具调度、会话锁、记录和结束条件都沿用普通请求的契约。</p>
 <figure class="diagram"><div class="flow">
 <div class="box blue"><b>主任务</b><small>拆分工作<br>确定边界和验收条件</small></div><div class="arrow">→</div>
@@ -32,7 +32,7 @@
 </section>
 
 <section class="chapter2" id="contract">
-<h2>每个子任务都必须能独立验收</h2>
+<h2>子任务验收条件</h2>
 <p>任务批次只接受能够独立执行的叶子任务。只写“检查一下”会把拆分成本转移给子模型，也使失败后无法判断缺的是范围、证据还是结论。</p>
 <div class="table-scroll"><table class="detail-table"><thead><tr><th>字段</th><th>运行时要求</th><th>缺失时的风险</th></tr></thead><tbody>
 <tr><td>稳定名称</td><td>批次内唯一，用于关联结果和记录</td><td>报告覆盖错位，主任务无法可靠汇合</td></tr>
@@ -46,7 +46,7 @@
 </section>
 
 <section class="chapter2" id="scheduling">
-<h2>先等待并发名额，再开始计时</h2>
+<h2>并发等待与执行计时</h2>
 <p>委派的生产难点不只在并发数，还在“任务什么时候开始计时”。调度器对总任务数、同时运行数、主任务剩余 deadline 和单子任务 timeout 都设上限；单个子任务的运行时限从真正取得 Worker 名额后开始，而不是从排队那一刻开始。</p>
 <div class="timeline"><dt>校验</dt><dd>拒绝空目标、重复名称、越界范围和不允许的工具；不要创建无法收敛的子会话。</dd><dt>等待并发名额</dt><dd>任务尚未开始模型请求，只消耗批次队列容量；主任务取消时，排队任务也要被移除或标为取消。</dd><dt>取得名额</dt><dd>创建子会话和请求，写入父子关联，然后启动共享执行器。</dd><dt>运行期间</dt><dd>子任务只能使用过滤后的工具目录并启用独立熔断器（<code>MaxIdenticalFailedAttempts: 3</code>）；取消、父级 deadline 和会话失权都传给子执行。</dd><dt>结束</dt><dd>结果包含子会话、子请求、身份、结束原因、用量、报告和错误，并将子任务 <code>model.Usage</code> 汇总累加至父 Turn 的总用量，不把“有输出”当作“成功”。</dd><dt>汇合</dt><dd>主任务按稳定名称接收结果，决定直接使用、自己核验，或再启动有针对性的后续任务。</dd></div>
 <div class="table-scroll"><table class="detail-table"><thead><tr><th>预算</th><th>应限制什么</th><th>为什么不能只限制模型 token</th></tr></thead><tbody>
@@ -70,7 +70,7 @@
 </section>
 
 <section class="chapter2" id="records">
-<h2>关联记录必须能解释成本与失败</h2>
+<h2>父子任务关联记录</h2>
 <p>每个子任务拥有自己的事件序列，并在创建时保存父任务关系。主任务不复制子任务的全部消息，只保存任务说明、完成状态、报告、用量和子记录位置；这样既能审计分工，也不会让多个长上下文互相污染。</p>
 <div class="table-scroll"><table class="detail-table"><thead><tr><th>记录位置</th><th>保存内容</th><th>查询用途</th></tr></thead><tbody>
 <tr><td>主任务</td><td>任务批次、每项任务的身份与要求、子任务完成结果、汇合后的判断</td><td>解释总体决策和最终输出</td></tr>
@@ -82,7 +82,7 @@
 </section>
 
 <section class="chapter2" id="aggregation">
-<h2>部分成功要有明确语义</h2>
+<h2>部分成功的处理</h2>
 <div class="table-scroll"><table class="detail-table"><thead><tr><th>子任务状态</th><th>主任务应该怎么处理</th></tr></thead><tbody>
 <tr><td>completed</td><td>读取报告并检查是否满足成功条件；完成不代表结论正确。</td></tr>
 <tr><td>canceled / deadline</td><td>标记该角度未覆盖，不把空报告当成“没有问题”。</td></tr>
@@ -94,12 +94,12 @@
 </section>
 
 <section class="chapter2" id="scenarios">
-<h2>生产中最容易出现的几个问题</h2>
+<h2>委派故障处理</h2>
 <div class="scenario-list">
-<article class="scenario"><h3>一个子任务卡住，为什么不应该拖死整批？</h3><p><span class="label">现象</span> 四个任务已经返回，剩下一个工具连接一直等待。</p><p><span class="label">处理</span> 单任务 timeout、父级 deadline 和批次最大等待时间分别生效；主任务收到明确的 partial result，再决定是否在关键结果缺失时补跑。</p><p><span class="label">核对</span> 看任务是否真正取得 slot、工具是否写入 started、子会话是否仍持有锁，不要只看“创建时间”。</p></article>
-<article class="scenario"><h3>报告说“已检查”，怎样判断它是否可信？</h3><p><span class="label">现象</span> 子任务正常结束，但报告没有文件位置或只给一句结论。</p><p><span class="label">处理</span> 按交付物和成功条件判定为不完整；主任务回到证据位置或重新发一个更窄的只读任务。</p><p><span class="label">核对</span> 子任务的报告、工具调用和上下文裁剪记录是否一致，避免把摘要丢失误判为未发现。</p></article>
-<article class="scenario"><h3>并发扩大后，为什么成本和锁等待一起上升？</h3><p><span class="label">现象</span> Fanout 增大后模型调用更多，数据库连接池、投影队列和工具服务同时变慢。</p><p><span class="label">处理</span> 把 fanout、worker、模型并发和工具槽位作为一组预算调节，并限制报告进入父上下文的大小。</p><p><span class="label">核对</span> 比较每个子任务的排队时间、模型 token、工具耗时和数据库锁等待，而不是只看总 wall time。</p></article>
-<article class="scenario"><h3>父任务取消时，已经启动的子任务怎么办？</h3><p><span class="label">现象</span> 用户停止了主任务，部分子任务还在模型或工具调用中。</p><p><span class="label">处理</span> 传播取消并停止创建新子任务；对已经写入 started 的工具保留未知/中断事实，不能假设外部副作用已经撤销。</p><p><span class="label">核对</span> 父任务结束原因、子任务结束原因、工具结果和租约状态是否都已落盘。</p></article>
+<article class="scenario"><h3>子任务超时</h3><p><span class="label">现象</span> 四个任务已经返回，剩下一个工具连接一直等待。</p><p><span class="label">处理</span> 单任务 timeout、父级 deadline 和批次最大等待时间分别生效；主任务收到明确的 partial result，再决定是否在关键结果缺失时补跑。</p><p><span class="label">核对</span> 看任务是否真正取得 slot、工具是否写入 started、子会话是否仍持有锁，不要只看“创建时间”。</p></article>
+<article class="scenario"><h3>子任务报告缺少证据</h3><p><span class="label">现象</span> 子任务正常结束，但报告没有文件位置或只给一句结论。</p><p><span class="label">处理</span> 按交付物和成功条件判定为不完整；主任务回到证据位置或重新发一个更窄的只读任务。</p><p><span class="label">核对</span> 子任务的报告、工具调用和上下文裁剪记录是否一致，避免把摘要丢失误判为未发现。</p></article>
+<article class="scenario"><h3>并发增长导致资源竞争</h3><p><span class="label">现象</span> Fanout 增大后模型调用更多，数据库连接池、投影队列和工具服务同时变慢。</p><p><span class="label">处理</span> 把 fanout、worker、模型并发和工具槽位作为一组预算调节，并限制报告进入父上下文的大小。</p><p><span class="label">核对</span> 比较每个子任务的排队时间、模型 token、工具耗时和数据库锁等待，而不是只看总 wall time。</p></article>
+<article class="scenario"><h3>父任务取消后的子任务处理</h3><p><span class="label">现象</span> 用户停止了主任务，部分子任务还在模型或工具调用中。</p><p><span class="label">处理</span> 传播取消并停止创建新子任务；对已经写入 started 的工具保留未知/中断事实，不能假设外部副作用已经撤销。</p><p><span class="label">核对</span> 父任务结束原因、子任务结束原因、工具结果和租约状态是否都已落盘。</p></article>
 </div>
 </section>
 
@@ -119,6 +119,6 @@
 </tbody></table></div>
 </section>
 </article></main>
-<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">阅读方法与术语</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
+<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">术语与文档范围</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
 </body>
 </html>

@@ -4,8 +4,8 @@
   if (!article || !sections.length) return;
 
   const pages = [
-    ['index.html', '系统概览', '开始阅读'],
-    ['reading-guide.html', '阅读方法与术语', '开始阅读'],
+    ['index.html', '系统概览', '总览'],
+    ['reading-guide.html', '术语与文档范围', '总览'],
     ['execution.html', '执行过程', '核心机制'],
     ['models.html', '上下文与模型', '核心机制'],
     ['tools.html', '工具与策略', '核心机制'],
@@ -151,7 +151,7 @@
     nav.className = 'next-pages';
     nav.setAttribute('aria-label', '章节翻页');
     nav.innerHTML = [pages[currentIndex - 1], pages[currentIndex + 1]].map((page, i) => page
-      ? `<a href="${page.href}"><span>${i ? '继续阅读' : '上一章'}</span><b>${i ? '' : '← '}${page.title}${i ? ' →' : ''}</b></a>`
+      ? `<a href="${page.href}"><span>${i ? '下一章' : '上一章'}</span><b>${i ? '' : '← '}${page.title}${i ? ' →' : ''}</b></a>`
       : '<div></div>').join('');
     article.append(nav);
   }

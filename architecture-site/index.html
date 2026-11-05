@@ -15,24 +15,20 @@
 <a href="index.html" aria-current="page">概览</a><a href="execution.html">执行</a><a href="models.html">模型</a><a href="tools.html">工具</a><a href="reliability.html">可靠性</a><a href="operations.html">观测</a><a href="production.html">生产推演</a><a href="slack.html">Slack</a><a href="delegation.html">委派</a><a href="reference.html">索引</a>
 </nav></div></header>
 <main class="doc-shell"><aside class="side" aria-label="文档目录"></aside><article class="doc" id="content" tabindex="-1">
-<header class="hero2"><p class="kicker">ARCH / 00</p><h1>共享执行核心</h1><p class="lead2">Kepler 让 Slack、Web 和本地 CLI 共用一套执行核心。入口接收请求；产品配置选择工具、存储和策略；执行器调用模型与工具，并保存执行事件。阅读本指南，先追踪一条请求，再检查每个模块的职责和故障边界。</p><div class="facts"><span><b>模型循环</b> 单一实现</span><span><b>状态</b> 事件驱动</span><span><b>工具</b> 策略先行</span><span><b>恢复</b> 基于事实</span></div></header>
-<section class="chapter-brief" aria-label="本章要点"><p class="eyebrow">本章要点</p><h2>先确认三个模块的职责</h2><ul><li>入口负责身份验证和输入输出。</li><li>产品配置负责选择存储、工具和策略。</li><li>执行器负责模型与工具循环，并保存执行事件。</li></ul></section>
+<header class="hero2"><p class="kicker">ARCH / 00</p><h1>共享执行核心</h1><p class="lead2">Kepler 的 Slack、Web 和本地 CLI 共用执行核心。入口适配器负责身份验证、请求接收和结果投递。产品配置选择工具、存储和策略。执行器负责模型调用、工具调度和事件持久化。</p><div class="facts"><span><b>模型循环</b> 单一实现</span><span><b>状态</b> 事件驱动</span><span><b>工具</b> 执行前检查策略</span><span><b>恢复</b> 核对事件记录</span></div></header>
+<section class="chapter-brief" aria-label="关键约束"><p class="eyebrow">关键约束</p><h2>模块职责</h2><ul><li>入口负责身份验证和输入输出。</li><li>产品配置负责选择存储、工具和策略。</li><li>执行器负责模型与工具循环，并保存执行事件。</li></ul></section>
 
 
 
 
 <section class="chapter2" id="start">
-<h2>从一个问题开始</h2>
-<p class="intro">第一次阅读，先看产品边界，再跟随一轮请求。已有具体问题时，直接进入对应专题。</p>
-<div class="reading-paths">
-<a href="execution.html"><span class="path-number">01 / 理解流程</span><h3>一条请求怎样完成？</h3><p>沿会话、模型和工具的顺序，查看输入、事件与终态。</p><span class="path-link">阅读执行过程 →</span></a>
-<a href="tools.html"><span class="path-number">02 / 检查权限</span><h3>谁决定工具能否执行？</h3><p>从工具描述走到能力策略、实际目标和操作系统沙箱。</p><span class="path-link">阅读工具与策略 →</span></a>
-<a href="production.html"><span class="path-number">03 / 定位故障</span><h3>请求卡在哪个边界？</h3><p>按身份标识核对队列、执行记录和消息投递。</p><span class="path-link">阅读生产推演 →</span></a>
-</div>
-<p class="reading-note">先统一术语：<a href="reading-guide.html#terms">会话、执行、模型轮次与网络尝试</a>。查找实现：<a href="reference.html">源码与测试索引</a>。</p>
+<h2>文档范围</h2>
+<p>本指南说明 Kepler 的模块职责、执行流程、状态管理和故障边界。配置、部署和操作命令由项目的运行指南维护。</p>
+<ul><li><a href="execution.html">执行过程</a>：会话处理权、模型循环、工具调度和终态。</li><li><a href="tools.html">工具与策略</a>：参数校验、能力策略、执行范围和沙箱。</li><li><a href="production.html">生产推演</a>：超时、租约、容量和故障恢复。</li><li><a href="reference.html">实现索引</a>：类型、事件、配置、数据表和测试。</li></ul>
+<p>概念定义见<a href="reading-guide.html#terms">术语表</a>。</p>
 </section>
 <section class="chapter2" id="products">
-<h2>三个产品，共用一个执行核心</h2>
+<h2>产品组成与共享核心</h2>
 <p>产品配置（profile）为执行器选择依赖。托管服务和本地 CLI 使用不同的工作区、存储及授权边界。</p>
 <figure class="diagram product-map" aria-label="托管与本地产品的组装关系">
 <div class="product-inputs"><div><b>Slack / Web</b><span>服务端工作区 · PostgreSQL</span><small>托管产品配置</small></div><div><b>CLI / app-server</b><span>本地工作区 · JSONL</span><small>本地产品配置</small></div></div>
@@ -43,8 +39,8 @@
 </section>
 
 <section class="chapter2" id="boundary">
-<h2>区分控制面与执行面</h2>
-<p>生产系统里最容易混淆的是“用户已经发出请求”“系统已经接受请求”“模型已经完成判断”“外部动作已经生效”和“用户已经看到回复”。这些是不同事实，分别由入口、队列、Runtime、工具和消息投影负责。</p>
+<h2>控制面与执行面</h2>
+<p>请求提交、持久化接收、模型完成、工具生效和回复投递是独立状态。入口、队列、执行器、工具适配器和投递模块分别维护对应状态。一个状态成功，不表示后续状态成功。</p>
 <figure class="diagram" aria-label="控制面与执行面">
 <div class="flow"><div class="box"><b>控制面</b><small>认证 · 路由 · 入队<br>租约 · 投影 · 观测</small></div><div class="arrow">↕</div><div class="box blue"><b>执行面</b><small>session · turn<br>context · model · tools</small></div><div class="arrow">→</div><div class="box green"><b>外部世界</b><small>Slack · GitHub<br>文件 · 网络 · 数据库</small></div></div>
 <figcaption>控制面保证可认领、可恢复、可查询；执行面决定模型和工具如何推进；外部世界的未知副作用不能由内存状态猜回。</figcaption></figure>
@@ -74,7 +70,7 @@
 </section>
 
 <section class="chapter2" id="identities">
-<h2>一个请求至少有六种身份</h2>
+<h2>请求标识及其作用域</h2>
 <div class="table-scroll"><table class="detail-table"><thead><tr><th>身份</th><th>范围</th><th>用途</th><th>不能替代什么</th></tr></thead><tbody>
 <tr><td>event_id</td><td>入口投递</td><td>Slack inbox 去重、平台重试收敛</td><td>不能当作会话内顺序</td></tr>
 <tr><td>session_id</td><td>连续对话和执行归属</td><td>会话锁、历史、输入队列</td><td>不能表示一个 turn 的完成</td></tr>
@@ -83,11 +79,11 @@
 <tr><td>attempt_id</td><td>一次提供方尝试</td><td>重试、fallback、熔断统计</td><td>不能代表模型已经产生可见文本</td></tr>
 <tr><td>call_id / execution_id</td><td>工具请求和实际执行</td><td>调用去重、未知结果调查、外部幂等</td><td>不能证明外部系统一定完成</td></tr>
 </tbody></table></div>
-<div class="decision"><b>排障口诀：</b>先问“我手里的 ID 属于哪一层”，再决定查 inbox、session transcript、run step、model attempt 还是外部请求。用 event_id 去查工具重复，通常会把真正的问题藏起来。</div>
+<div class="decision"><b>标识使用要求</b><p>排障时，使用对应层级的标识查询记录：event_id 对应入口事件，session_id 对应会话，turn_id 对应一次执行，attempt_id 对应模型网络尝试。工具调用使用 call_id 或 execution_id 核对。</p></div>
 </section>
 
 <section class="chapter2" id="loop">
-<h2>一轮执行怎样推进</h2>
+<h2>执行流程</h2>
 <ol class="walkthrough">
 <li><b>取得会话处理权</b><span>同一 session 只允许一个有效执行者推进，避免两个分支同时消费同一份历史。</span></li>
 <li><b>恢复未完成事实</b><span>读取有序事件；工具开始但没有结果的调用标记为中断/未知，不能在恢复时假装从未发生。</span></li>
@@ -101,7 +97,7 @@
 </section>
 
 <section class="chapter2" id="invariants">
-<h2>必须保持的不变量</h2>
+<h2>架构不变量</h2>
 <div class="case"><h3>Core 不依赖入口</h3><div class="case-body"><div class="case-row"><b>允许</b><span>入口把身份、消息、附件和输出接收器转换成核心契约。</span></div><div class="case-row"><b>禁止</b><span>Runtime 内读取平台请求、调用平台 SDK 或维护界面状态。</span></div></div></div>
 <div class="case"><h3>事件只记录已确认事实</h3><div class="case-body"><div class="case-row"><b>权威</b><span>用户输入、完整模型消息、工具生命周期、批准、压缩和请求终态。</span></div><div class="case-row"><b>派生</b><span>运行摘要、步骤列表、费用、状态提示和健康汇总，可从权威记录重建。</span></div></div></div>
 <div class="case"><h3>策略高于工具描述</h3><div class="case-body"><div class="case-row"><b>描述</b><span>告诉模型工具能做什么，不构成授权。</span></div><div class="case-row"><b>执行</b><span>工具元数据、服务端允许列表、工作区边界与沙箱共同决定动作能否发生。</span></div></div></div>
@@ -110,7 +106,7 @@
 </section>
 
 <section class="chapter2" id="production-questions">
-<h2>设计落地时必须回答的问题</h2>
+<h2>故障边界索引</h2>
 <div class="table-scroll"><table class="detail-table"><thead><tr><th>问题</th><th>文档中的落点</th></tr></thead><tbody>
 <tr><td>进程崩溃后从哪里恢复？</td><td>会话事件、inbox/input 租约和可重建的运行投影；见 <a href="reliability.html">可靠性</a>。</td></tr>
 <tr><td>工具超时后能否安全重试？</td><td>看 ToolCallStarted、执行身份和外部幂等能力；见 <a href="tools.html">工具</a>。</td></tr>
@@ -139,19 +135,19 @@
 </section>
 
 <section class="chapter2" id="reading">
-<h2>阅读路径</h2>
-<div class="table-scroll"><table class="detail-table"><thead><tr><th>如果你想知道</th><th>阅读</th></tr></thead><tbody>
-<tr><td>一轮模型与工具调用怎样推进</td><td><a href="execution.html">执行过程</a></td></tr>
-<tr><td>上下文、压缩与提供方适配怎样工作</td><td><a href="models.html">上下文与模型</a></td></tr>
-<tr><td>工具如何注册、授权、并发与收敛结果</td><td><a href="tools.html">工具与策略</a></td></tr>
-<tr><td>事件、处理权和中断恢复如何配合</td><td><a href="reliability.html">状态与恢复</a></td></tr>
-<tr><td>队列、容量、关闭和生产症状如何定位</td><td><a href="operations.html">队列与观测</a>、<a href="production.html">生产推演</a></td></tr>
-<tr><td>子任务如何隔离上下文并汇合</td><td><a href="delegation.html">委派执行</a></td></tr>
-<tr><td>Slack 如何转换为 Core 请求与事件</td><td><a href="slack.html">Slack 接入</a></td></tr>
-<tr><td>内部类型、事件、表和测试在哪里</td><td><a href="reference.html">实现索引</a></td></tr>
+<h2>专题索引</h2>
+<div class="table-scroll"><table class="detail-table"><thead><tr><th>功能范围</th><th>阅读</th></tr></thead><tbody>
+<tr><td>模型与工具执行流程</td><td><a href="execution.html">执行过程</a></td></tr>
+<tr><td>上下文、压缩与提供方适配</td><td><a href="models.html">上下文与模型</a></td></tr>
+<tr><td>工具注册、授权、并发与结果处理</td><td><a href="tools.html">工具与策略</a></td></tr>
+<tr><td>事件、处理权与中断恢复</td><td><a href="reliability.html">状态与恢复</a></td></tr>
+<tr><td>队列、容量、关闭与故障诊断</td><td><a href="operations.html">队列与观测</a>、<a href="production.html">生产推演</a></td></tr>
+<tr><td>子任务上下文隔离与结果汇合</td><td><a href="delegation.html">委派执行</a></td></tr>
+<tr><td>Slack 请求与事件转换</td><td><a href="slack.html">Slack 接入</a></td></tr>
+<tr><td>类型、事件、数据表与测试位置</td><td><a href="reference.html">实现索引</a></td></tr>
 </tbody></table></div>
 </section>
 </article></main>
-<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">阅读方法与术语</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
+<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">术语与文档范围</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
 </body>
 </html>

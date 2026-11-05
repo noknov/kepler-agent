@@ -16,7 +16,7 @@
 </nav></div></header>
 <main class="doc-shell"><aside class="side"></aside><article class="doc" id="content" tabindex="-1">
 <header class="hero2"><p class="kicker">ADAPTER / SLACK</p><h1>Slack 接入</h1><p class="lead2">Slack 适配器验证请求、映射会话、整理附件，并投递回复。共享执行核心负责模型循环、工具调度和终态判断。本章沿接收与投递两条路径说明职责。</p></header>
-<section class="chapter-brief" aria-label="本章要点"><p class="eyebrow">本章要点</p><h2>先确认接收与投递的职责</h2><ul><li>签名检查使用收到的原始请求字节。</li><li>入口事件与会话执行使用不同的身份标识。</li><li>消息投递失败，不表示模型或工具没有完成。</li></ul></section>
+<section class="chapter-brief" aria-label="关键约束"><p class="eyebrow">关键约束</p><h2>适配器约束</h2><ul><li>签名检查使用收到的原始请求字节。</li><li>入口事件与会话执行使用不同的身份标识。</li><li>消息投递失败，不表示模型或工具没有完成。</li></ul></section>
 
 
 <section class="chapter2" id="contract">
@@ -33,7 +33,7 @@
 </section>
 
 <section class="chapter2" id="ingress">
-<h2>HTTP 接收：原始字节是签名边界</h2>
+<h2>HTTP 请求签名验证</h2>
 <ol class="walkthrough">
 <li><b>限制请求体。</b><span>先读取有限大小的原始请求体，防止异常 payload 让入口耗尽内存。</span></li>
 <li><b>检查时间窗口。</b><span>拒绝过旧或未来偏差过大的时间戳，避免重放旧签名请求。</span></li>
@@ -50,7 +50,7 @@
 </section>
 
 <section class="chapter2" id="routing">
-<h2>事件路由不是“所有消息都启动新请求”</h2>
+<h2>事件路由规则</h2>
 <div class="table-scroll"><table class="detail-table"><thead><tr><th>事件</th><th>路由</th><th>生产注意</th></tr></thead><tbody>
 <tr><td>频道 mention</td><td>清理 bot mention，先经 <code>Registry.HasPromptCandidate</code> 做零延迟候选预筛（无 PR 链接等工作流特征时直接跳过 LLM IntentRouter），再按频道权限创建或续接线程会话</td><td>无权限只返回拒绝提示，不把原文送入 Core</td></tr>
 <tr><td>私信</td><td>新消息创建会话；线程回复优先作为已有会话输入</td><td>bot、自身消息和非用户 subtype 要过滤</td></tr>
@@ -73,7 +73,7 @@
 </section>
 
 <section class="chapter2" id="attachments">
-<h2>附件不是一个可以直接塞进 prompt 的 URL</h2>
+<h2>附件处理</h2>
 <ol class="walkthrough">
 <li><b>确认来源和权限。</b><span>只处理当前用户可访问的文件；私有下载地址和访问令牌不得进入模型上下文。</span></li>
 <li><b>检查类型和大小。</b><span>受支持图片转为图片内容，文本/Markdown/JSON 等受控提取，其他类型形成明确的不可用信息。</span></li>
@@ -84,7 +84,7 @@
 </section>
 
 <section class="chapter2" id="interactions">
-<h2>按钮和审批必须回到具体执行事实</h2>
+<h2>交互操作与审批绑定</h2>
 <p>运行请求工具批准时，Slack 状态消息携带 turn_id 和 tool_call_id。用户点击批准或拒绝后，Handler 验证动作值，使用当前用户身份构造新的输入记录，再进入会话输入队列；它不是直接从 HTTP handler 调用工具。</p>
 <div class="table-scroll"><table class="detail-table"><thead><tr><th>步骤</th><th>为什么这样做</th></tr></thead><tbody>
 <tr><td>Core 写入 approval_requested</td><td>先记录等待的是哪一个具体工具调用</td></tr>
@@ -96,7 +96,7 @@
 </section>
 
 <section class="chapter2" id="output">
-<h2>流式回复和最终回复是两条投递路径</h2>
+<h2>流式回复与最终回复</h2>
 <div class="timeline"><dt>控制流事件</dt><dd>turn、工具、计划和审批状态更新 Slack session status；委派报告等内部事件不直接显示为用户文本。</dd><dt>首次可见文本</dt><dd>缓冲跨片段脱敏后的 assistant 文本，只有出现第一段非空可见内容时才建立 Slack 原生流。</dd><dt>节流追加</dt><dd>按时间或最小字符数合并更新，避免每个 token 都触发平台 API。</dd><dt>流式失败</dt><dd>标记投递失败但保留 Core 的完整答案；结束时回退到普通消息。</dd><dt>消息过长</dt><dd>分段发送并维护代码围栏状态，避免 Markdown 语义跨段损坏。</dd><dt>结果不确定</dt><dd>Slack API 与数据库没有共同事务；超时后先查询既有消息关联或稳定 client_msg_id，不能直接重复外部写入。</dd></div>
 <div class="table-scroll"><table class="detail-table"><thead><tr><th>状态</th><th>执行权威事实</th><th>用户看到的表现</th></tr></thead><tbody>
 <tr><td>工具阶段无文本</td><td>Runtime 仍在执行</td><td>可以只有 processing 状态，不创建空白流</td></tr>
@@ -107,7 +107,7 @@
 </section>
 
 <section class="chapter2" id="scenarios">
-<h2>入口和投递的真实故障场景</h2>
+<h2>入口与投递故障处理</h2>
 <div class="scenario-list">
 <article class="scenario"><h3>平台重试同一事件</h3><p><span class="label">现象</span> Slack 因为入口超时又发来同一个 event_id。</p><p><span class="label">正确路径</span> inbox 唯一键使第二次只得到“已接收”的结果；不要再次创建 turn 或发送第二次初始回复。</p><p><span class="label">核对</span> event_id、inbox 状态、session ID 和 turn ID 是否一一对应。</p></article>
 <article class="scenario"><h3>流启动请求超时</h3><p><span class="label">现象</span> Slack API 没有返回明确结果，但请求可能已经在服务端生效。</p><p><span class="label">正确路径</span> 将启动视为未知结果，结束时查询消息关联；只有能证明未创建时才走普通消息补偿。</p><p><span class="label">核对</span> client_msg_id、channel/thread、run 的最终消息关联和投递日志。</p></article>
@@ -129,6 +129,6 @@
 </tbody></table></div>
 </section>
 </article></main>
-<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">阅读方法与术语</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
+<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">术语与文档范围</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
 </body>
 </html>

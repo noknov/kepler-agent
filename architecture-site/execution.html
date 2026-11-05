@@ -28,12 +28,12 @@
       <p class="lead2">执行器先取得会话处理权，再读取事件并构造上下文。模型返回答复或工具调用。执行器保存工具结果，然后继续调用模型。每次执行都必须到达明确终态，或留下可供恢复核对的记录。</p>
       <div class="facts"><span><b>一个 turn</b> 多个 step</span><span><b>一个 step</b> 一次模型判断</span><span><b>工具批次</b> 先检查后执行</span><span><b>终态</b> 必须持久化</span></div>
     </header>
-<section class="chapter-brief" aria-label="本章要点"><p class="eyebrow">本章要点</p><h2>先确认执行顺序</h2><ul><li>执行器先取得会话处理权，再推进请求。</li><li>工具结果写入事件记录后，执行器才继续下一轮。</li><li>恢复时，执行器先核对未完成操作的状态。</li></ul></section>
+<section class="chapter-brief" aria-label="关键约束"><p class="eyebrow">关键约束</p><h2>执行约束</h2><ul><li>执行器先取得会话处理权，再推进请求。</li><li>工具结果写入事件记录后，执行器才继续下一轮。</li><li>恢复时，执行器先核对未完成操作的状态。</li></ul></section>
 
 
     <section class="chapter2" id="mental-model">
-      <h2>先分清五个容易混淆的对象</h2>
-      <p class="intro">很多并发和重试问题，根源是把会话、请求、网络尝试和展示片段看成同一件事。Runtime 使用不同 ID 和不同事件类型把它们拆开。</p>
+      <h2>执行对象与标识</h2>
+      <p class="intro">会话、执行、模型轮次、网络尝试和流式片段具有不同的生命周期。执行器使用对应标识和事件类型记录这些对象。</p>
       <div class="layers">
         <div class="layer"><b>Session / 会话</b><span>连续对话和串行化边界。相同 session 的两个 turn 不能同时从同一份旧历史继续。</span></div>
         <div class="layer"><b>Turn / 一次执行</b><span>从一条用户输入开始到明确终止。它可以跨多个模型 step，并可能暂停等待批准或用户补充。</span></div>
@@ -41,11 +41,11 @@
         <div class="layer"><b>Attempt / 网络尝试</b><span>一次具体 provider 网络调用。一次逻辑模型请求可能包含 retry 或 fallback，但只能产生一个可供 Runtime 消费的完成结果。</span></div>
         <div class="layer"><b>Stream delta / 片段</b><span>用于实时呈现的瞬时事件。它不是恢复单元；恢复依赖完整 assistant message、模型生命周期和工具结果。</span></div>
       </div>
-      <div class="callout"><strong>判断恢复应该看哪一层</strong>如果进程退出，先看 turn 是否已经有终态，再看当前模型请求或工具调用是否只有 started 而没有 completed/failed。不要只看“最后一段文字”或内存里的 goroutine 状态。</div>
+      <div class="callout"><strong>恢复检查顺序</strong>如果进程退出，先看 turn 是否已经有终态，再看当前模型请求或工具调用是否只有 started 而没有 completed/failed。不要只看“最后一段文字”或内存里的 goroutine 状态。</div>
     </section>
 
     <section class="chapter2" id="input">
-      <span class="number">01</span><h2>执行器开始请求前的准备</h2>
+      <span class="number">01</span><h2>执行前置条件</h2>
       <p class="intro">入口只负责把外部协议转换成 <code>TurnRequest</code>。Runtime 负责确认身份字段、补齐 session/turn ID、取得会话所有权并将当前输入写入 canonical transcript。模型调用发生在这些事实建立之后。</p>
       <figure class="diagram">
         <div class="flow">
@@ -67,7 +67,7 @@
     </section>
 
     <section class="chapter2" id="state-machine">
-      <h2>主循环实际上是一台小型状态机</h2>
+      <h2>执行状态机</h2>
       <p>每一步都有“进入前检查”和“离开时事实”。任何返回路径都必须产生明确终态，或者留下足够信息让下一个 owner 继续对账。</p>
       <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>阶段</th><th>主要事件</th><th>允许的下一步</th><th>关键失败含义</th></tr></thead>
@@ -84,7 +84,7 @@
     </section>
 
     <section class="chapter2" id="context">
-      <span class="number">02</span><h2>上下文怎样组成</h2>
+      <span class="number">02</span><h2>上下文构造</h2>
       <p class="intro">每次模型判断前，执行器都会重新从权威事件中投影上下文。这保证刚完成的工具结果、刚追加的用户消息和新生成的摘要都会被纳入，同时避免入口自己拼接出另一套历史语义。</p>
       <figure class="diagram"><div class="flow">
         <div class="box"><b>系统说明</b><small>核心行为、规则、产品补充<br>运行环境事实</small></div><div class="arrow">+</div>
@@ -105,7 +105,7 @@
     </section>
 
     <section class="chapter2" id="model">
-      <span class="number">03</span><h2>一次模型判断，底层可能包含多次网络尝试</h2>
+      <span class="number">03</span><h2>模型请求与网络尝试</h2>
       <p>Runtime 的逻辑边界是“这一轮有没有得到完整 Response”；ResilientClient 的边界是“某个 provider attempt 是否可安全重试或切换”。两者分开后，重启不会把一次网络失败误认为模型已经完成，观测也能区分逻辑请求和实际尝试。</p>
       <figure class="diagram"><div class="flow">
         <div class="box"><b>logical request</b><small>稳定 request_id<br>model_request_started</small></div><div class="arrow">→</div>
@@ -128,7 +128,7 @@
     </section>
 
     <section class="chapter2" id="tools">
-      <span class="number">04</span><h2>工具从模型请求到实际执行的完整路径</h2>
+      <span class="number">04</span><h2>工具调用与执行</h2>
       <p class="intro">工具调用是从不可信模型输出进入真实系统的唯一入口之一。Runtime 把“模型想调用什么”和“系统是否允许、是否已经调用过、结果如何进入下一轮”拆成连续检查。</p>
       <ol class="walkthrough">
         <li><b>按 CallID 查找已有结果。</b><span>恢复执行时，已有成功或失败结果直接复用，不再次派发。CallID 是 Runtime 去重边界；ExecutionID 供工具传给支持幂等的下游。</span></li>
@@ -144,7 +144,7 @@
     </section>
 
     <section class="chapter2" id="results">
-      <span class="number">05</span><h2>工具结果的两层大小限制</h2>
+      <span class="number">05</span><h2>工具结果大小限制</h2>
       <p>大结果会同时伤害模型上下文、数据库写入、日志体积和 UI 响应。Runtime 先限制单个结果，再限制同一批结果的总量；若有 ArtifactStore，则把完整内容放在受作用域保护的附件中。</p>
       <div class="plain-grid">
         <article><h3>单个结果较小</h3><p>原始 content 直接进入 tool message，模型可以完整读取。</p></article>
@@ -156,7 +156,7 @@
     </section>
 
     <section class="chapter2" id="steering">
-      <span class="number">06</span><h2>执行期间的新消息怎样加入</h2>
+      <span class="number">06</span><h2>执行期间的追加输入</h2>
       <p>用户可能在模型仍工作时继续发消息。追加输入不是直接改写当前模型请求，而是进入 InputSource，在稳定边界被 claim、写成 SteeringInput、ack 后再参与下一次投影。</p>
       <div class="timeline">
         <dt>消息到达</dt><dd>Hosted 先写入 <code>agent_session_inputs</code>；Redis 只做快速唤醒，丢通知不会丢消息。</dd>
@@ -169,7 +169,7 @@
     </section>
 
     <section class="chapter2" id="finish">
-      <span class="number">07</span><h2>一次处理怎样结束</h2>
+      <span class="number">07</span><h2>执行终态</h2>
       <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>结果</th><th>触发条件</th><th>恢复/呈现含义</th></tr></thead>
         <tbody>
@@ -188,12 +188,12 @@
     </section>
 
     <section class="chapter2" id="scenarios">
-      <h2>生产中最容易问错的几个问题</h2>
+      <h2>执行故障处理</h2>
       <div class="scenario-list">
-        <article class="scenario"><h3>“模型超时了，重试就行吗？”</h3><p><span class="label">先看</span>是否已经产生文字 delta、是否已经写入 ModelRequestStarted、剩余 deadline 以及错误的 typed kind。</p><p><span class="label">结论</span>未提交输出且属于 transient/rate-limited/unavailable/protocol 才能在预算内重试；首段文字后只能结束并保留已展示内容。</p></article>
-        <article class="scenario"><h3>“ToolCallStarted 但没有完成事件，为什么不再调用一次？”</h3><p><span class="label">风险</span>工具可能已经完成外部写入，只是进程在结果 append 前退出。再次调用会产生重复副作用。</p><p><span class="label">结论</span>先补写 execution_interrupted，让下一轮模型查询上游；能否安全重做取决于工具是否有幂等键和结果查询能力。</p></article>
-        <article class="scenario"><h3>“MaxSteps 到了，为什么不再让模型写一段总结？”</h3><p><span class="label">原因</span>总结本身也是一次模型调用，会突破既定 step、deadline 和成本边界；最后一个工具结果是否足够也未必已验证。</p><p><span class="label">结论</span>以明确的 max_steps 终态结束，让入口根据产品策略展示“达到执行上限”，或由用户发起新的 turn。</p></article>
-        <article class="scenario"><h3>“同一个 session 的两个请求为什么不能并行？”</h3><p><span class="label">原因</span>它们会从同一旧 transcript 投影出两个互不知情的上下文，工具顺序和追加输入也无法解释。</p><p><span class="label">结论</span>不同 session 可并行；同一 session 串行是会话一致性的必要条件，吞吐应靠多 session、入口队列和工具 bulkhead 调节。</p></article>
+        <article class="scenario"><h3>模型超时后的重试条件</h3><p><span class="label">先看</span>是否已经产生文字 delta、是否已经写入 ModelRequestStarted、剩余 deadline 以及错误的 typed kind。</p><p><span class="label">结论</span>未提交输出且属于 transient/rate-limited/unavailable/protocol 才能在预算内重试；首段文字后只能结束并保留已展示内容。</p></article>
+        <article class="scenario"><h3>工具开始记录缺少完成事件</h3><p><span class="label">风险</span>工具可能已经完成外部写入，只是进程在结果 append 前退出。再次调用会产生重复副作用。</p><p><span class="label">结论</span>先补写 execution_interrupted，让下一轮模型查询上游；能否安全重做取决于工具是否有幂等键和结果查询能力。</p></article>
+        <article class="scenario"><h3>模型轮次达到上限</h3><p><span class="label">原因</span>总结本身也是一次模型调用，会突破既定 step、deadline 和成本边界；最后一个工具结果是否足够也未必已验证。</p><p><span class="label">结论</span>以明确的 max_steps 终态结束，让入口根据产品策略展示“达到执行上限”，或由用户发起新的 turn。</p></article>
+        <article class="scenario"><h3>同一会话的执行串行化</h3><p><span class="label">原因</span>它们会从同一旧 transcript 投影出两个互不知情的上下文，工具顺序和追加输入也无法解释。</p><p><span class="label">结论</span>不同 session 可并行；同一 session 串行是会话一致性的必要条件，吞吐应靠多 session、入口队列和工具 bulkhead 调节。</p></article>
       </div>
     </section>
 
@@ -215,6 +215,6 @@
     </section>
   </article>
 </main>
-<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">阅读方法与术语</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
+<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">术语与文档范围</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
 </body>
 </html>

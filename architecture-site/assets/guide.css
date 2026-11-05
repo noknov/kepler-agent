@@ -1064,14 +1064,6 @@ kbd { margin-left: 16px; font: 11px var(--mono); color: var(--faint); }
 h2:hover .heading-link, .heading-link:focus-visible { opacity: 1; }
 .chapter2 > p { margin: 16px 0; }
 .chapter2 > .intro { color: var(--ink-soft); }
-.reading-paths { display: grid; gap: 12px; margin: 24px 0; }
-.reading-paths > a { display: block; border: 1px solid var(--line); padding: 20px 24px; background: var(--panel); border-radius: 6px; text-decoration: none; color: var(--ink); }
-.reading-paths > a:hover { border-color: var(--signal-border); background: var(--signal-soft); }
-.path-number { font: 600 10px var(--mono); color: var(--signal); letter-spacing: .04em; }
-.reading-paths h3 { font: 600 19px/1.5 var(--serif); margin: 9px 0; }
-.reading-paths p { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
-.path-link { font-size: 12px; color: var(--signal); }
-.reading-note { font-size: 13px; color: var(--muted); }
 .product-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .product-inputs > div { padding: 18px; border: 1px solid var(--line); background: var(--panel-subtle); border-radius: 6px; }
 .product-inputs b, .product-inputs span, .product-inputs small, .shared-core span { display: block; }
@@ -1131,7 +1123,6 @@ p code, li code, td code { overflow-wrap: anywhere; }
   .hero2 .lead2 { font-size: 15px; }
   .chapter-brief { padding: 18px; margin-bottom: 36px; }
   .chapter2 > h2 { font-size: 22px; }
-  .reading-paths > a { padding: 18px; }
   .product-inputs { grid-template-columns: 1fr; gap: 10px; }
   .diagram { padding: 16px; }
   .layer { grid-template-columns: 1fr; gap: 5px; }

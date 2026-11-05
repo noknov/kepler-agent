@@ -28,11 +28,11 @@
       <p class="lead2">恢复依赖已保存的事件和可验证的处理权。新执行者先核对记录，再决定下一步。对于已经开始但没有完成记录的外部操作，系统保留未知状态，直到获得核对证据。</p>
       <div class="facts"><span><b>Canonical</b> append-only transcript</span><span><b>所有权</b> owner + lease</span><span><b>投影</b> 可重建</span><span><b>外部副作用</b> 仍可能未知</span></div>
     </header>
-<section class="chapter-brief" aria-label="本章要点"><p class="eyebrow">本章要点</p><h2>先确认恢复依据</h2><ul><li>会话事件提供恢复依据；运行列表是派生视图。</li><li>旧执行者失去处理权后必须停止推进。</li><li>没有完成记录的外部操作仍可能已经生效。</li></ul></section>
+<section class="chapter-brief" aria-label="关键约束"><p class="eyebrow">关键约束</p><h2>恢复依据</h2><ul><li>会话事件提供恢复依据；运行列表是派生视图。</li><li>旧执行者失去处理权后必须停止推进。</li><li>没有完成记录的外部操作仍可能已经生效。</li></ul></section>
 
 
     <section class="chapter2" id="authority">
-      <h2>权威记录和派生数据必须分开</h2>
+      <h2>权威记录与派生数据</h2>
       <p class="intro">会话事件是执行恢复的 source of truth。运行列表、步骤、费用、健康汇总和界面状态都是 projection；它们可以延迟、丢失通知或重建，但不能反过来替代 transcript 判断下一步。</p>
       <figure class="diagram"><div class="flow">
         <div class="box blue"><b>Canonical transcript</b><small>用户、模型、工具<br>生命周期与终态</small></div><div class="arrow">→</div>
@@ -53,7 +53,7 @@
     </section>
 
     <section class="chapter2" id="ownership">
-      <h2>四层处理权保护四种不同对象</h2>
+      <h2>处理权的保护范围</h2>
       <p>所有权层次不能互相替代。Inbox 只能保证入口任务由一个 worker 处理；Session lease 才保证同一会话的上下文串行；工具 bulkhead 限制 fan-out；输入 claim 则保护追加消息不会被多个 worker 同时消费。</p>
       <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>保护对象</th><th>实现</th><th>没有这一层的风险</th><th>所有权丢失时</th></tr></thead>
@@ -68,7 +68,7 @@
     </section>
 
     <section class="chapter2" id="postgres">
-      <h2>Hosted 如何给事件分配严格顺序</h2>
+      <h2>托管事件顺序</h2>
       <p>PostgreSQL transcript append 在事务内按 session 获取事务级 advisory lock，读取该 session 当前最大 sequence，再插入下一个序号。不同 session 仍可并行；同一 session 的 append 顺序由数据库提交事实决定。</p>
       <ol class="walkthrough">
         <li><b>开启事务并锁定 session。</b><span>锁键由 session ID 稳定 hash 得到；使用 64-bit hash 避免高流量 session 因 32-bit 碰撞而不必要串行。</span></li>
@@ -80,7 +80,7 @@
     </section>
 
     <section class="chapter2" id="jsonl">
-      <h2>Local 如何用 JSONL 保持可恢复</h2>
+      <h2>本地 JSONL 存储与恢复</h2>
       <p>Local profile 没有 PostgreSQL，每个 session 使用目录下的 <code>events.jsonl</code>。进程内 mutex 负责同一进程，<code>.events.lock</code> 的 OS file lock 负责同一台机器上的其他进程；目录为 0700，文件为 0600。</p>
       <div class="timeline">
         <dt>单条追加</dt><dd>取得文件锁，读取并修复尾部，追加完整 JSON 行，Write 后 Sync，再释放锁。</dd>
@@ -92,7 +92,7 @@
     </section>
 
     <section class="chapter2" id="projection">
-      <h2>派生投影怎样在丢失通知后恢复</h2>
+      <h2>投影恢复</h2>
       <p>AsyncSink 只承载可重建投影，队列有界。队列满时它丢弃通知并累计 dropped，发送合并的 shed 信号；它不会为每条事件创建脱离控制的 goroutine，也不会让 canonical append 等待慢投影。</p>
       <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>投影事件</th><th>RunSink 如何使用</th><th>幂等依据</th></tr></thead>
@@ -108,7 +108,7 @@
     </section>
 
     <section class="chapter2" id="windows">
-      <h2>三个最关键的崩溃窗口</h2>
+      <h2>进程退出的故障窗口</h2>
       <div class="scenario-list">
         <article class="scenario">
           <h3>工具已经修改外部系统，进程在保存结果前退出</h3>
@@ -132,7 +132,7 @@
     </section>
 
     <section class="chapter2" id="recovery">
-      <h2>恢复流程：先对账，再继续</h2>
+      <h2>恢复对账流程</h2>
       <ol class="walkthrough">
         <li><b>确认谁拥有当前工作。</b><span>查看 session lease、inbox claim、input claim 的 owner 与 expiry；没有 owner 不等于没有副作用。</span></li>
         <li><b>读取 canonical transcript。</b><span>按 session sequence 找 turn、step、model request、tool call 和终态，不以 runs 行的 status 作为唯一依据。</span></li>
@@ -145,12 +145,12 @@
     </section>
 
     <section class="chapter2" id="scenarios">
-      <h2>状态相关的生产推演</h2>
+      <h2>状态故障处理</h2>
       <div class="scenario-list">
-        <article class="scenario"><h3>投影队列满了，能不能让模型暂停等它？</h3><p><span class="label">结论</span>不应该。投影是可重建的派生层，反压 canonical execution 会把健康请求和慢观测耦合在一起。</p><p><span class="label">要做</span>监控 dropped/shed，随后从 transcript 重建；如果重建很慢，优化 projection store 或拆分队列，而不是取消事件事实。</p></article>
+        <article class="scenario"><h3>投影队列容量耗尽</h3><p><span class="label">结论</span>不应该。投影是可重建的派生层，反压 canonical execution 会把健康请求和慢观测耦合在一起。</p><p><span class="label">要做</span>监控 dropped/shed，随后从 transcript 重建；如果重建很慢，优化 projection store 或拆分队列，而不是取消事件事实。</p></article>
         <article class="scenario"><h3>数据库里 sequence 看起来不按 wall clock 排序</h3><p><span class="label">结论</span>sequence 表示同一 session 的提交顺序，不是每个 goroutine 开始执行的时间。并行工具的 started 事件可能先后竞争，结果写回则按模型调用顺序。</p><p><span class="label">要做</span>用 event timestamp、trace span 和 tool duration 还原并发时间线，不要把 sequence 当成全局物理时钟。</p></article>
-        <article class="scenario"><h3>清理 stuck processing 行能不能快速恢复？</h3><p><span class="label">风险</span>如果健康 worker 只是慢，手动清 owner 会让两个 worker 同时处理；如果旧 worker 仍能访问外部系统，重复副作用会放大。</p><p><span class="label">要做</span>遵守 claim_until 和 owner-checking 的接管流程，先确认旧 owner 已取消或租约确实过期，再使用 recovery。</p></article>
-        <article class="scenario"><h3>为什么一个 pending_input 不能被任意线程回复？</h3><p><span class="label">原因</span>等待输入是带用户身份的会话状态。Runtime 的 WaitingForInput 会校验最新终态和原用户，防止另一个人把数据写入正在等待的工作流。</p><p><span class="label">要做</span>入口保留 session/thread/user scope；连接授权后的 continuation 也要重新建立正确作用域。</p></article>
+        <article class="scenario"><h3>处理状态卡住时的接管条件</h3><p><span class="label">风险</span>如果健康 worker 只是慢，手动清 owner 会让两个 worker 同时处理；如果旧 worker 仍能访问外部系统，重复副作用会放大。</p><p><span class="label">要做</span>遵守 claim_until 和 owner-checking 的接管流程，先确认旧 owner 已取消或租约确实过期，再使用 recovery。</p></article>
+        <article class="scenario"><h3>等待输入的身份与会话校验</h3><p><span class="label">原因</span>等待输入是带用户身份的会话状态。Runtime 的 WaitingForInput 会校验最新终态和原用户，防止另一个人把数据写入正在等待的工作流。</p><p><span class="label">要做</span>入口保留 session/thread/user scope；连接授权后的 continuation 也要重新建立正确作用域。</p></article>
       </div>
     </section>
 
@@ -173,6 +173,6 @@
     </section>
   </article>
 </main>
-<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">阅读方法与术语</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
+<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">术语与文档范围</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
 </body>
 </html>

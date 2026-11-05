@@ -28,11 +28,11 @@
       <p class="lead2">执行器把提示、用户输入、历史和工具定义组成模型请求。模型适配器负责转换提供方协议。本章说明请求如何组成、如何控制上下文大小，以及模型失败后何时可以重试。</p>
       <div class="facts"><span><b>提示</b> 分层合并</span><span><b>历史</b> 事件投影</span><span><b>容量</b> 保守估算</span><span><b>失败</b> 先看提交边界</span></div>
     </header>
-<section class="chapter-brief" aria-label="本章要点"><p class="eyebrow">本章要点</p><h2>先确认请求与重试边界</h2><ul><li>上下文预算必须包含工具定义和输出预留。</li><li>提供方协议转换由模型适配器负责。</li><li>可见文本输出后，重试不能拼接另一份答复。</li></ul></section>
+<section class="chapter-brief" aria-label="关键约束"><p class="eyebrow">关键约束</p><h2>模型请求约束</h2><ul><li>上下文预算必须包含工具定义和输出预留。</li><li>提供方协议转换由模型适配器负责。</li><li>可见文本输出后，重试不能拼接另一份答复。</li></ul></section>
 
 
     <section class="chapter2" id="request">
-      <h2>模型一次能够看到什么</h2>
+      <h2>模型请求组成</h2>
       <p class="intro">一次请求不是把数据库里所有内容原样塞给模型。执行器每轮重新生成系统说明、会话消息和当前工具定义；只有会影响下一步判断的内容进入模型请求。</p>
       <figure class="diagram"><div class="flow">
         <div class="box"><b>System</b><small>稳定行为、规则<br>产品与环境事实</small></div><div class="arrow">+</div>
@@ -53,7 +53,7 @@
     </section>
 
     <section class="chapter2" id="prompt-layers">
-      <h2>提示不是一段越来越长的字符串</h2>
+      <h2>提示分层</h2>
       <p>提示内容按稳定性和责任拆开。越靠近业务环境、变化越频繁的内容，越不应该写进核心系统说明；否则每次部署变化都会扩大上下文、破坏缓存并难以定位行为回归。</p>
       <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>层</th><th>典型内容</th><th>装载/覆盖规则</th><th>变更风险</th></tr></thead>
@@ -70,7 +70,7 @@
     </section>
 
     <section class="chapter2" id="projection">
-      <h2>会话事件怎样变成模型上下文</h2>
+      <h2>会话事件的上下文投影</h2>
       <p class="intro">Transcript 同时包含恢复所需的生命周期事实和模型真正需要的对话内容。BoundedProjector 通过事件类型、摘要覆盖点和完整交互分组把两者分开。</p>
       <ol class="walkthrough">
         <li><b>计算输入预算。</b><span>总 MaxTokens 减去 ReserveTokens；预留给模型输出、工具定义和 provider 差异。配置差值不合理时直接拒绝派发，而不是退回总上限。</span></li>
@@ -84,7 +84,7 @@
     </section>
 
     <section class="chapter2" id="compaction">
-      <h2>长对话压缩怎样避免语义断裂</h2>
+      <h2>上下文压缩</h2>
       <p>压缩不是删除旧行，也不是覆盖 transcript。它产生一条新的、带覆盖序号的摘要事件；原始历史继续存在，摘要只是以后投影的入口。摘要还会被明确标为不可信 transcript data，避免模型把历史里的命令当成系统指令。</p>
       <div class="timeline">
         <dt>发现可丢弃范围</dt><dd>投影器按完整 group 计算 Dropped 和 CoversThrough；最近一轮不作为旧历史压掉。</dd>
@@ -94,12 +94,12 @@
         <dt>提交摘要事件</dt><dd>写入 <code>compaction_created</code> 和 <code>covers_through</code>，不修改任何旧事件。</dd>
         <dt>重新投影</dt><dd>从最新摘要继续加入未覆盖事件；若 provider 仍报 context limit，则强制收紧后再请求。</dd>
       </div>
-      <h3>压缩会带来什么代价</h3>
+      <h3>压缩限制</h3>
       <p>压缩本身也是一次模型调用，增加 token、延迟和 provider 依赖。摘要错误可能让模型失去细节，因此需要保留原始 transcript、可从 coverage 定位被压缩范围，并在关键工作流中让工具结果带有稳定引用而不是只依赖摘要文字。</p>
     </section>
 
     <section class="chapter2" id="protocol">
-      <h2>模型接入层负责协议差异</h2>
+      <h2>模型协议适配</h2>
       <p>Runtime 依赖 <code>model.Client</code>，而不是某家 SDK。Provider adapter 将请求字段、消息块、tool calls、SSE 流和错误映射为统一模型契约；这样切换协议不需要重写会话、工具或恢复逻辑。</p>
       <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>Provider 差异</th><th>Canonical 表达</th><th>必须保留的诊断信息</th></tr></thead>
@@ -116,7 +116,7 @@
     </section>
 
     <section class="chapter2" id="resilience">
-      <h2>重试、备用模型和熔断只在一个边界统一处理</h2>
+      <h2>模型重试、备用路径与熔断</h2>
       <p>ResilientClient 是 provider attempt 的唯一弹性边界。不要把多个 ResilientClient 嵌套起来，否则一次请求的尝试次数和截止时间会乘法膨胀，观测也无法回答“到底请求了几次”。</p>
       <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>决策</th><th>判定依据</th><th>记录方式</th></tr></thead>
@@ -144,7 +144,7 @@
     </section>
 
     <section class="chapter2" id="scenarios">
-      <h2>模型相关的生产推演</h2>
+      <h2>模型故障处理</h2>
       <div class="scenario-list">
         <article class="scenario"><h3>提供方返回 429，但队列也在增长</h3><p><span class="label">诊断</span>把 provider attempt、429、retry delay、circuit 状态和 inbox backlog 放在同一时间线上。429 期间提高 worker 数只会制造更多受限请求。</p><p><span class="label">动作</span>先控制入口并发和 retry fan-out，确认 fallback 是否真的可用，再决定是否调整 provider 配额或路由。</p></article>
         <article class="scenario"><h3>提示更新后，同样输入的工具选择变了</h3><p><span class="label">诊断</span>比较 prompt_hash、工具目录版本、激活列表、模型名和 workflow scope；不要只比较最终自然语言。</p><p><span class="label">动作</span>保留静态 prompt 与 dynamic context 的摘要，使用代表性请求做回归。工具选择改变不代表 policy 已改变，必须分别验证。</p></article>
@@ -171,6 +171,6 @@
     </section>
   </article>
 </main>
-<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">阅读方法与术语</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
+<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">术语与文档范围</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
 </body>
 </html>

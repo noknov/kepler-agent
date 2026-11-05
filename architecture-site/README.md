@@ -37,12 +37,14 @@ stored locally when browser storage is available. Search runs entirely in the
 browser, across section titles and body text. It needs no remote service or font.
 The static chapter content remains readable without JavaScript.
 
-`reading-guide.html` owns reading paths, the shared glossary, and writing rules.
+`reading-guide.html` owns the shared glossary and documentation scope.
 The Chinese prose borrows ASD-STE100 principles: consistent terms, explicit actors,
 one main action per sentence, and conditions beside the relevant action. This is
 an adaptation of writing principles, not an STE compliance or certification claim.
 Keep code identifiers unchanged and link behavior claims to the owning source or
-guide. Keep architecture contracts distinct from review history.
+guide. Keep architecture contracts distinct from review history. Use functional headings,
+state conditions and outcomes directly, and omit rhetorical questions, slogans,
+reader coaching, and prose about the writing method from the architecture pages.
 
 After editing any HTML content, regenerate and verify the offline search index:
 

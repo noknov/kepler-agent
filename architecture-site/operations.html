@@ -16,11 +16,11 @@
 </nav></div></header>
 <main class="doc-shell"><aside class="side"></aside><article class="doc" id="content" tabindex="-1">
 <header class="hero2"><p class="kicker">运行维护</p><h1>队列、观测与关闭</h1><p class="lead2">入口将请求写入持久队列。工作进程认领请求，并把追加输入交给对应会话。本章说明队列、运行投影、健康检查和关闭流程各自负责什么。</p></header>
-<section class="chapter-brief" aria-label="本章要点"><p class="eyebrow">本章要点</p><h2>先确认接收、执行与呈现的边界</h2><ul><li>请求入队成功，只表示系统已接收请求。</li><li>追加输入通过会话顺序和认领状态控制。</li><li>运行投影和消息投递失败，应分别恢复。</li></ul></section>
+<section class="chapter-brief" aria-label="关键约束"><p class="eyebrow">关键约束</p><h2>状态边界</h2><ul><li>请求入队成功，只表示系统已接收请求。</li><li>追加输入通过会话顺序和认领状态控制。</li><li>运行投影和消息投递失败，应分别恢复。</li></ul></section>
 
 
 <section class="chapter2" id="topology">
-<h2>先分清控制面和执行面</h2>
+<h2>控制面与执行面</h2>
 <p>Gateway 的职责是尽快验证并落盘，Worker 的职责是持有会话执行权并续期，Observability 的职责是读取投影回答查询。三者可以独立扩缩容；把它们合成一个同步 HTTP 请求，会把平台回调超时、模型延迟和工具副作用绑在同一个失败窗口里。</p>
 <div class="table-scroll"><table class="detail-table"><thead><tr><th>组件</th><th>拥有的状态</th><th>不应该承担的职责</th></tr></thead><tbody>
 <tr><td>Gateway</td><td>请求认证、入口去重、收件箱写入、用户输入入队</td><td>长时间持有模型或工具执行</td></tr>
@@ -33,7 +33,7 @@
 </section>
 
 <section class="chapter2" id="inbox">
-<h2>Slack 收件箱：先接住，再交给执行者</h2>
+<h2>Slack 事件接收与认领</h2>
 <p>Slack 可能因为响应超时或网络故障重复发送同一事件。入口用平台事件编号作为稳定去重键，把原始事件写入 PostgreSQL 收件箱。只有持久化成功后才确认接收；Redis 通知丢失只会让处理变慢，不会让事件消失。</p>
 <figure class="diagram"><div class="flow">
 <div class="box"><b>等待处理</b><small>事件已持久化<br>到达可执行时间</small></div><div class="arrow">认领</div>
@@ -59,14 +59,14 @@
 </section>
 
 <section class="chapter2" id="input">
-<h2>执行中的新消息使用独立持久队列</h2>
+<h2>追加输入队列</h2>
 <p>接收后续消息的进程可能不是正在运行该会话的进程。新消息先写入会话输入队列，Redis 再尝试通知当前执行者。执行器会在稳定边界查询 PostgreSQL；所以唤醒是优化，不是正确性条件。</p>
 <div class="timeline"><dt>写入</dt><dd>为消息分配会话内顺序并保存内容、来源和路由方式。</dd><dt>认领</dt><dd>当前执行者按顺序认领取正在等待、认领已过期或仍属于自己的消息。</dd><dt>加入会话</dt><dd>执行器把消息写成普通用户输入事件，使它进入下一次上下文投影。</dd><dt>确认</dt><dd>处理完成后按消息编号和当前认领者更新状态。</dd><dt>处理权丢失</dt><dd>确认或释放没有命中记录时返回错误，调用者不能把消息当成已经处理。</dd></div>
 <p>排队到当前请求之后的消息会在本次请求结束后建立新的请求。要求立即影响当前工作的消息，只在模型判断前或最终答复确认前加入，不打断正在执行的一批工具；这让工具调用与用户 steering 之间有稳定的顺序边界。</p>
 </section>
 
 <section class="chapter2" id="projection">
-<h2>运行列表和步骤是可重建的投影</h2>
+<h2>运行投影</h2>
 <p>运行投影读取会话事件，把一次请求整理成便于查询的运行记录和步骤。运行记录保存模型、用户、入口、开始与结束、用量、费用、错误和最终消息关联；步骤分别描述模型尝试、工具、批准、压缩和其他阶段。</p>
 <figure class="diagram"><div class="flow">
 <div class="box blue"><b>会话事件</b><small>恢复执行的权威事实</small></div><div class="arrow">→</div>
@@ -79,7 +79,7 @@
 </section>
 
 <section class="chapter2" id="trajectory">
-<h2>轨迹回答“控制流走到哪里”</h2>
+<h2>执行轨迹</h2>
 <p>轨迹读取接口从会话事件重建提示和上下文生成、模型提供方尝试、工具执行、恢复动作和结束过程。默认结果经过脱敏，不返回消息正文、工具参数或任意元数据；需要业务内容时走受控的运行详情权限。</p>
 <div class="table-scroll"><table class="detail-table"><thead><tr><th>轨迹部分</th><th>能够说明的事情</th><th>不能推断的事情</th></tr></thead><tbody>
 <tr><td>上下文</td><td>一次模型判断使用了哪些事件范围、是否使用摘要以及发生了何种裁剪</td><td>被裁剪的历史仍然完整地出现在模型请求中</td></tr>
@@ -90,7 +90,7 @@
 </section>
 
 <section class="chapter2" id="capacity">
-<h2>容量不是“Worker 数量”一个数字</h2>
+<h2>容量限制</h2>
 <p>一个 Worker 同时消耗数据库连接、会话租约、模型并发、工具槽位、上下文内存和外部 API 配额。扩容前要找出最先饱和的那一层；只增加 Worker，可能把延迟从应用内转移到数据库或提供方。</p>
 <div class="metric-grid"><div class="metric"><b>入口</b><strong>请求确认延迟</strong><span>收件箱写入 p95、签名失败、入队失败</span></div><div class="metric"><b>队列</b><strong>等待时间</strong><span>ready 数量、最老事件年龄、死信增长</span></div><div class="metric"><b>执行</b><strong>占用与停留</strong><span>会话锁等待、turn 时长、最大步骤命中</span></div><div class="metric"><b>模型</b><strong>配额与耗时</strong><span>重试次数、429、熔断、流式首字节</span></div><div class="metric"><b>工具</b><strong>槽位与副作用</strong><span>并发槽位、超时、审批等待、外部错误</span></div><div class="metric"><b>数据</b><strong>连接与写入</strong><span>连接池耗尽、事件追加、投影延迟、溢出体积</span></div></div>
 <div class="table-scroll"><table class="detail-table"><thead><tr><th>背压点</th><th>必须有的动作</th></tr></thead><tbody>
@@ -103,7 +103,7 @@
 </section>
 
 <section class="chapter2" id="health">
-<h2>健康检查要回答不同问题</h2>
+<h2>健康检查类型</h2>
 <div class="table-scroll"><table class="detail-table"><thead><tr><th>检查</th><th>含义</th><th>调度系统的处理</th></tr></thead><tbody>
 <tr><td>进程存活</td><td>HTTP 进程仍能响应</td><td>失败时重启进程</td></tr>
 <tr><td>服务就绪</td><td>关键依赖可用且服务没有进入排空状态</td><td>只有就绪时发送新流量</td></tr>
@@ -114,7 +114,7 @@
 </section>
 
 <section class="chapter2" id="shutdown">
-<h2>关闭是一个可观察的状态转换</h2>
+<h2>关闭状态与流程</h2>
 <ol class="walkthrough">
 <li><b>进入排空状态。</b><span>服务就绪检查开始失败，流量调度器不再发送新请求。</span></li>
 <li><b>入口停止认领新工作。</b><span>已经持久化但尚未认领的事件留在数据库，其他健康 Worker 可以接手。</span></li>
@@ -126,7 +126,7 @@
 </section>
 
 <section class="chapter2" id="incidents">
-<h2>按症状定位，而不是只看 HTTP 状态码</h2>
+<h2>故障诊断</h2>
 <div class="table-scroll"><table class="detail-table"><thead><tr><th>症状</th><th>第一处查什么</th><th>常见根因</th><th>安全处置</th></tr></thead><tbody>
 <tr><td>Slack 已确认但没有回复</td><td>收件箱状态、处理期限、会话事件</td><td>Worker 未认领、失权取消、模型/工具等待</td><td>先看持久状态；不要重复手工触发同一事件</td></tr>
 <tr><td>队列越来越长</td><td>最老事件年龄、Worker 认领速率、模型 429</td><td>下游配额、数据库锁、单请求占满并发</td><td>限流并保护入口，逐层找饱和点</td></tr>
@@ -149,6 +149,6 @@
 </tbody></table></div>
 </section>
 </article></main>
-<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">阅读方法与术语</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
+<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">术语与文档范围</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
 </body>
 </html>
