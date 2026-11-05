@@ -63,3 +63,11 @@ The visual reading reference is [御舆](https://lintsinghua.github.io/).
 [ASD-STE100](https://www.asd-ste100.org/) is the source of the technical writing
 principles. Kepler source and owning documentation remain authoritative for the
 architecture described here.
+
+## Publish with CI
+
+The `architecture-pages` GitHub Actions workflow deploys this directory to GitHub
+Pages. Run it manually for the selected ref, or push an explicit release tag
+matching `architecture-site-*`. A release tag publishes the site from that exact
+commit, including commits on a feature branch. Ordinary branch pushes do not
+publish the site. Check the workflow result before treating a release as live.

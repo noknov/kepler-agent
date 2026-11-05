@@ -2,6 +2,9 @@ name: architecture-pages
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - 'architecture-site-*'
 
 permissions:
   contents: read
@@ -14,7 +17,7 @@ concurrency:
 
 jobs:
   deploy:
-    # Manual runs publish the selected branch, including feature branches.
+    # Manual runs publish the selected ref; release tags publish a pinned version.
     if: github.repository == 'noknov/kepler-agent'
     environment:
       name: github-pages
