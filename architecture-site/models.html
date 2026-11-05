@@ -4,13 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="提示分层、上下文投影、压缩、模型适配、重试和流式提交边界">
-  <title>上下文与模型 · Agent Core 架构</title>
+  <title>上下文与模型 · Kepler 架构指南</title>
   <link rel="stylesheet" href="assets/guide.css">
+  <script src="assets/search-index.js" defer></script>
   <script src="assets/architecture.js" defer></script>
 </head>
 <body>
+<a class="skip2" href="#content">跳到正文</a>
 <header class="topbar"><div class="topbar-inner">
-  <a class="brand2" href="index.html">AGENT CORE / ARCHITECTURE</a>
+  <a class="brand2" href="index.html">KEPLER / 架构指南</a>
   <nav class="topnav" aria-label="文档导航">
     <a href="index.html">概览</a><a href="execution.html">执行</a><a href="models.html" aria-current="page">模型</a>
     <a href="tools.html">工具</a><a href="reliability.html">可靠性</a><a href="operations.html">观测</a><a href="production.html">生产推演</a><a href="slack.html">Slack</a><a href="delegation.html">委派</a><a href="reference.html">索引</a>
@@ -19,13 +21,15 @@
 
 <main class="doc-shell">
   <aside class="side"><p>本页目录</p><a href="#request">模型看到什么</a><a href="#prompt-layers">提示分层</a><a href="#projection">事件投影</a><a href="#compaction">长对话压缩</a><a href="#protocol">协议适配</a><a href="#resilience">重试与切换</a><a href="#streaming">流式输出</a><a href="#scenarios">生产推演</a><a href="#source">实现索引</a></aside>
-  <article class="doc">
+  <article class="doc" id="content" tabindex="-1">
     <header class="hero2">
       <p class="kicker">CORE / CONTEXT &amp; MODEL</p>
       <h1>提示内容、上下文与模型</h1>
-      <p class="lead2">模型质量与生产可靠性共享同一个入口：最终发给 provider 的那份请求。它不仅包含用户原话，还包含分层提示、运行环境、摘要、工具定义和工具结果。Kepler 把这些内容先转换成 provider-neutral 的 canonical messages，再把协议差异留给适配层。</p>
+      <p class="lead2">执行器把提示、用户输入、历史和工具定义组成模型请求。模型适配器负责转换提供方协议。本章说明请求如何组成、如何控制上下文大小，以及模型失败后何时可以重试。</p>
       <div class="facts"><span><b>提示</b> 分层合并</span><span><b>历史</b> 事件投影</span><span><b>容量</b> 保守估算</span><span><b>失败</b> 先看提交边界</span></div>
     </header>
+<section class="chapter-brief" aria-label="本章要点"><p class="eyebrow">本章要点</p><h2>先确认请求与重试边界</h2><ul><li>上下文预算必须包含工具定义和输出预留。</li><li>提供方协议转换由模型适配器负责。</li><li>可见文本输出后，重试不能拼接另一份答复。</li></ul></section>
+
 
     <section class="chapter2" id="request">
       <h2>模型一次能够看到什么</h2>
@@ -36,7 +40,7 @@
         <div class="box"><b>Tools</b><small>eager + activated<br>schema 与描述</small></div><div class="arrow">→</div>
         <div class="box blue"><b>Canonical Request</b><small>model、budget、metadata<br>provider adapter</small></div>
       </div><figcaption>入口不自行拼接模型历史；同一份 transcript 在 Slack、Web 和 CLI 上都经过同一个投影器。</figcaption></figure>
-      <table class="detail-table">
+      <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>组成</th><th>会影响什么</th><th>是否进入长期 transcript</th></tr></thead>
         <tbody>
           <tr><td>系统说明</td><td>身份、证据纪律、安全边界、操作规则</td><td>由提示目录和运行配置重建，不作为会话消息追加</td></tr>
@@ -45,13 +49,13 @@
           <tr><td>工具定义</td><td>模型能否提出某个调用以及如何填写参数</td><td>目录是 profile 状态；激活状态按 turn 清理</td></tr>
           <tr><td>流式 delta</td><td>入口实时展示</td><td>否；完整 assistant message 和 lifecycle 才是恢复依据</td></tr>
         </tbody>
-      </table>
+      </table></div>
     </section>
 
     <section class="chapter2" id="prompt-layers">
       <h2>提示不是一段越来越长的字符串</h2>
       <p>提示内容按稳定性和责任拆开。越靠近业务环境、变化越频繁的内容，越不应该写进核心系统说明；否则每次部署变化都会扩大上下文、破坏缓存并难以定位行为回归。</p>
-      <table class="detail-table">
+      <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>层</th><th>典型内容</th><th>装载/覆盖规则</th><th>变更风险</th></tr></thead>
         <tbody>
           <tr><td>Core kernel</td><td>身份、保密、证据、自主执行、沟通和安全</td><td><code>packages/prompts/defaults/system.md</code>，提交到仓库</td><td>影响所有 surface；需要跨产品回归</td></tr>
@@ -61,7 +65,7 @@
           <tr><td>Private overlay</td><td>仓库别名、环境映射、私有 runbook 入口</td><td><code>PROMPT_DIR</code> 叠加在 public defaults 上</td><td>不能把凭据或大段 incident 历史放入每次 prompt</td></tr>
           <tr><td>Dynamic context</td><td>当前日期、workspace、session scope 和已选工具</td><td>每次请求生成，位于静态内容之后</td><td>应可观测其摘要，不能依赖进程启动时快照</td></tr>
         </tbody>
-      </table>
+      </table></div>
       <div class="decision"><b>提示修改的判断</b><p>如果一条文字包含某个公司的仓库、workflow、租户或私有服务，它通常属于 overlay 或 workflow，而不是系统 kernel。提示可以约束模型行为，但不能代替工具的 schema、服务端 allowlist、workspace 检查和上游权限。</p></div>
     </section>
 
@@ -97,7 +101,7 @@
     <section class="chapter2" id="protocol">
       <h2>模型接入层负责协议差异</h2>
       <p>Runtime 依赖 <code>model.Client</code>，而不是某家 SDK。Provider adapter 将请求字段、消息块、tool calls、SSE 流和错误映射为统一模型契约；这样切换协议不需要重写会话、工具或恢复逻辑。</p>
-      <table class="detail-table">
+      <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>Provider 差异</th><th>Canonical 表达</th><th>必须保留的诊断信息</th></tr></thead>
         <tbody>
           <tr><td>chat/completions、responses、Anthropic message</td><td><code>model.Request</code> 与 <code>model.Response</code></td><td>provider、model、response ID、finish reason</td></tr>
@@ -107,14 +111,14 @@
           <tr><td>HTTP 状态和错误体不同</td><td>typed <code>model.Error</code></td><td>kind、retryable、status、受控错误信息</td></tr>
           <tr><td>结构化引用</td><td>挂在具体 Content block 的 citations</td><td>URL、标题、字符范围；呈现由 surface 决定</td></tr>
         </tbody>
-      </table>
+      </table></div>
       <p>Provider adapter 可以保留 raw metadata 供诊断，但不能把完整凭据、prompt、工具参数或用户文本无条件放进 span 属性。模型返回的内容仍是模型内容，不会提升为系统策略。</p>
     </section>
 
     <section class="chapter2" id="resilience">
       <h2>重试、备用模型和熔断只在一个边界统一处理</h2>
       <p>ResilientClient 是 provider attempt 的唯一弹性边界。不要把多个 ResilientClient 嵌套起来，否则一次请求的尝试次数和截止时间会乘法膨胀，观测也无法回答“到底请求了几次”。</p>
-      <table class="detail-table">
+      <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>决策</th><th>判定依据</th><th>记录方式</th></tr></thead>
         <tbody>
           <tr><td>重试</td><td>typed transient、rate limited、unavailable 或 protocol；未取消且剩余预算足够</td><td>同一 logical request 下增加 attempt，记录等待和结果</td></tr>
@@ -123,7 +127,7 @@
           <tr><td>熔断</td><td>同一 provider/model 连续失败达到阈值，进入 cooldown</td><td>新请求快速返回 circuit_open，不占用下游资源</td></tr>
           <tr><td>空响应恢复</td><td>Response 没有 content 且没有工具调用，使用 runtime 的独立空响应预算</td><td>记录 model_failed；成功前不产生空 final</td></tr>
         </tbody>
-      </table>
+      </table></div>
       <div class="callout"><strong>逻辑请求和网络尝试不是一对一</strong>一次 step 可能先发 primary、等待退避、再发 primary retry，最后切 fallback。成本、延迟和 provider 事故分析必须同时统计 logical request 与 attempt，不能只看 turn 数。</div>
     </section>
 
@@ -151,7 +155,7 @@
 
     <section class="chapter2" id="source">
       <h2>对应实现</h2>
-      <table class="detail-table">
+      <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>内容</th><th>主要实现</th><th>验证位置</th></tr></thead>
         <tbody>
           <tr><td>提示目录与覆盖合并</td><td><code>packages/prompts</code>、<code>packages/agent/prompt</code></td><td><code>catalog_test.go</code>、<code>prompt_test.go</code></td></tr>
@@ -163,10 +167,10 @@
           <tr><td>重试、备用服务与流提交</td><td><code>agent/model/resilient.go</code>、<code>runtime/runner.go</code></td><td><code>resilient_test.go</code>、runner tests</td></tr>
           <tr><td>结构化引用与呈现</td><td><code>model.Content.Citations</code>、各 surface adapter</td><td>provider/surface integration tests</td></tr>
         </tbody>
-      </table>
+      </table></div>
     </section>
   </article>
 </main>
-<footer class="footer2">AGENT CORE / CONTEXT &amp; MODEL</footer>
+<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">阅读方法与术语</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
 </body>
 </html>

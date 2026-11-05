@@ -4,13 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="Kepler Agent 在生产环境中的超时、租约、容量、发布与故障推演">
-  <title>生产运行与故障推演 · Agent Core 架构</title>
+  <title>生产运行与故障推演 · Kepler 架构指南</title>
   <link rel="stylesheet" href="assets/guide.css">
+  <script src="assets/search-index.js" defer></script>
   <script src="assets/architecture.js" defer></script>
 </head>
 <body>
+<a class="skip2" href="#content">跳到正文</a>
 <header class="topbar"><div class="topbar-inner">
-  <a class="brand2" href="index.html">AGENT CORE / ARCHITECTURE</a>
+  <a class="brand2" href="index.html">KEPLER / 架构指南</a>
   <nav class="topnav" aria-label="文档导航">
     <a href="index.html">概览</a><a href="execution.html">执行</a><a href="models.html">模型</a>
     <a href="tools.html">工具</a><a href="reliability.html">可靠性</a><a href="operations.html">观测</a><a href="production.html" aria-current="page">生产推演</a>
@@ -20,13 +22,15 @@
 
 <main class="doc-shell">
   <aside class="side"><p>本页目录</p><a href="#clocks">四个时钟</a><a href="#windows">故障窗口</a><a href="#capacity">容量与背压</a><a href="#incidents">故障推演</a><a href="#security">安全边界</a><a href="#release">发布与演进</a><a href="#verification">验证清单</a><a href="#source">对应实现</a></aside>
-  <article class="doc">
+  <article class="doc" id="content" tabindex="-1">
     <header class="hero2">
       <p class="kicker">PRODUCTION / FAILURE WALKTHROUGH</p>
       <h1>生产运行与故障推演</h1>
-      <p class="lead2">Agent 系统最难的部分不是让模型返回一句话，而是让一条请求在排队、并发、超时、重试、外部副作用和用户呈现同时发生时仍然可解释。本页把跨模块的生产问题串起来：每个时钟由谁拥有、每次失败留下什么事实、什么可以重试、什么必须先查清楚。</p>
+      <p class="lead2">生产排障需要同时检查排队、处理权、模型调用、工具操作和消息投递。本章按故障发生的位置，说明应查的记录、可执行的恢复动作和必须保留的未知状态。</p>
       <div class="facts"><span><b>默认语义</b> 至少一次</span><span><b>权威状态</b> Transcript</span><span><b>恢复原则</b> 不猜未知副作用</span><span><b>调度原则</b> 有界背压</span></div>
     </header>
+<section class="chapter-brief" aria-label="本章要点"><p class="eyebrow">本章要点</p><h2>先确认排障顺序</h2><ul><li>先定位故障边界，再核对该边界的记录。</li><li>入口响应、任务租约和执行截止时间分别检查。</li><li>外部写入结果未知时，不直接重跑整条请求。</li></ul></section>
+
 
     <section class="chapter2" id="clocks">
       <h2>先把一条请求拆成四个时钟</h2>
@@ -43,7 +47,7 @@
         </div>
         <figcaption>四个时钟不是同一个取消信号，但最终都通过 context 影响执行。租约丢失时，旧所有者必须主动停止。</figcaption>
       </figure>
-      <table class="detail-table">
+      <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>时钟</th><th>负责组件</th><th>保护对象</th><th>过期后的正确动作</th></tr></thead>
         <tbody>
           <tr><td>入口响应</td><td>Gateway / surface handler</td><td>平台回调连接</td><td>已验证并持久化就返回；不因模型变慢而占住平台连接</td></tr>
@@ -52,14 +56,14 @@
           <tr><td>Turn deadline</td><td>surface / worker / runtime</td><td>模型、工具和子任务的资源预算</td><td>取消当前上下文，记录 canceled 或相应失败，不再开启下一次尝试</td></tr>
           <tr><td>Shutdown deadline</td><td>进程生命周期</td><td>排空期间的存活时间</td><td>停止接收新任务，未完成工作靠租约到期后的恢复继续</td></tr>
         </tbody>
-      </table>
+      </table></div>
       <div class="decision"><b>配置关系</b><p>入口事件的租约必须覆盖一次完整 handler，但不应无限大；handler 的事件超时必须小于租约，才能给续期/接管留下余量。数据库连接池还要容纳正在等待会话锁的请求、锁监视连接、事件写入和观测查询，不能只按平均 QPS 估算。</p></div>
     </section>
 
     <section class="chapter2" id="windows">
       <h2>把失败窗口写成可恢复的状态</h2>
       <p>从“调用成功/失败”看 Agent 会过于粗糙。真正需要记录的是调用前后发生过哪些确定事实，以及下一位执行者是否有条件安全重做。下面的矩阵是设计新能力时应补齐的最小答案。</p>
-      <table class="detail-table">
+      <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>失败位置</th><th>已经确认的事实</th><th>能否自动重试</th><th>恢复动作</th></tr></thead>
         <tbody>
           <tr><td>HTTP 返回前</td><td>原始 event 已按 event_id 写入 inbox</td><td>可以。入口重试只会命中同一去重键</td><td>worker 从 queued 记录重新派发；坏 payload 直接 dead-letter</td></tr>
@@ -69,7 +73,7 @@
           <tr><td>工具结果已写入、投影失败</td><td>Canonical transcript 已提交</td><td>可以重建投影，不重做工具</td><td>RunSink 从 transcript 按 event ID 幂等重放</td></tr>
           <tr><td>Slack 发消息超时</td><td>外部消息是否创建未知</td><td>不应盲目再发一条</td><td>先按稳定 client_msg_id 或已保存链接查询，再决定补偿</td></tr>
         </tbody>
-      </table>
+      </table></div>
       <div class="callout warn"><strong>“重试”不是一个全局开关</strong>模型网络重试、空响应重试、上下文超限恢复、工具失败重试和 Slack 投递补偿属于不同层。把它们叠加会乘倍放大调用次数；每一层都要声明自己的次数、预算和提交边界。</div>
     </section>
 
@@ -127,7 +131,7 @@
 
     <section class="chapter2" id="security">
       <h2>生产安全是多道边界，不是一个批准按钮</h2>
-      <table class="detail-table">
+      <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>边界</th><th>检查什么</th><th>常见误区</th></tr></thead>
         <tbody>
           <tr><td>身份</td><td>Slack/浏览器身份、用户连接、服务端凭据分别核对</td><td>把“用户已登录”当成“工具拥有上游 token”</td></tr>
@@ -137,7 +141,7 @@
           <tr><td>网络访问</td><td>scheme、目标地址、DNS 解析后的 IP、重定向和代理行为</td><td>只检查 URL 文本，忽略 DNS rebinding 或内部地址</td></tr>
           <tr><td>日志与轨迹</td><td>默认仅保留结构性摘要、hash、大小、工具名和 trace 关联</td><td>把完整 prompt、token、凭据和工具参数直接打入日志</td></tr>
         </tbody>
-      </table>
+      </table></div>
       <p>安全检查必须覆盖“读取、搜索、Git 引用、命令子进程、网络重定向和大结果”组合场景。单个 read-file 测试通过，不能证明另一个工具不会以不同路径访问同一敏感资源。</p>
     </section>
 
@@ -155,7 +159,7 @@
 
     <section class="chapter2" id="verification">
       <h2>上线前应验证哪些故障路径</h2>
-      <table class="detail-table">
+      <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>验证组</th><th>故障注入</th><th>应观察到的结果</th></tr></thead>
         <tbody>
           <tr><td>入口</td><td>重复 webhook、Redis 断连、内存队列满、坏 JSON</td><td>同一 event_id 不重复入库；Redis 丢失由轮询补偿；坏事件死信</td></tr>
@@ -166,13 +170,13 @@
           <tr><td>呈现</td><td>Slack stream 失败、普通消息超时、客户端重复提交</td><td>先查既有 delivery；不把呈现失败倒灌成执行失败</td></tr>
           <tr><td>容量</td><td>大量并行只读、子任务 fan-out、连接池耗尽、shutdown drain</td><td>有界排队/拒绝；不创建无界 goroutine；未完成任务可在租约后接管</td></tr>
         </tbody>
-      </table>
+      </table></div>
       <p>测试通过只能证明对应故障路径，不代表模型质量、上游业务正确性或所有部署拓扑都已验证。生产观测应至少能按 session、turn、event、tool call、provider attempt 和 trace 关联一次完整调查。</p>
     </section>
 
     <section class="chapter2" id="source">
       <h2>对应实现</h2>
-      <table class="detail-table">
+      <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>主题</th><th>主要实现</th><th>行为测试/运维文档</th></tr></thead>
         <tbody>
           <tr><td>会话处理权</td><td><code>packages/session/pgstore.go</code>、<code>packages/agent/runtime/types.go</code></td><td><code>runtime/runner_test.go</code>、<code>docs/operations.md</code></td></tr>
@@ -184,10 +188,10 @@
           <tr><td>安全边界</td><td><code>packages/safety</code>、<code>profiles/local</code>、hosted policy</td><td><code>docs/safety.md</code></td></tr>
           <tr><td>Schema 契约</td><td><code>schema/postgres.sql</code></td><td><code>docs/operations.md#schema-and-release-coordination</code></td></tr>
         </tbody>
-      </table>
+      </table></div>
     </section>
   </article>
 </main>
-<footer class="footer2">AGENT CORE / PRODUCTION FAILURE WALKTHROUGH</footer>
+<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">阅读方法与术语</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
 </body>
 </html>

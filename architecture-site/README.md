@@ -28,3 +28,38 @@
 ## 深入阅读
 
 - [执行架构详解](../docs/architecture-deep-dive.md)：身份与信任边界、完整 turn、失败窗口、请求预算、取证与存储生命周期。
+
+## Reading experience
+
+The guide uses a chapter sidebar, per-page contents, section permalinks, previous/next
+links, a mobile chapter menu, and a light/dark reading theme. Theme preference is
+stored locally when browser storage is available. Search runs entirely in the
+browser, across section titles and body text. It needs no remote service or font.
+The static chapter content remains readable without JavaScript.
+
+`reading-guide.html` owns reading paths, the shared glossary, and writing rules.
+The Chinese prose borrows ASD-STE100 principles: consistent terms, explicit actors,
+one main action per sentence, and conditions beside the relevant action. This is
+an adaptation of writing principles, not an STE compliance or certification claim.
+Keep code identifiers unchanged and link behavior claims to the owning source or
+guide. Keep architecture contracts distinct from review history.
+
+After editing any HTML content, regenerate and verify the offline search index:
+
+```sh
+python3 architecture-site/scripts/build-search-index.py
+python3 architecture-site/scripts/build-search-index.py --check
+```
+
+Run these commands from the source repository root. The generator uses only the
+Python standard library; no site build or package installation is required.
+For browser checks, serve `architecture-site` with a local static server. Verify
+search results across chapters, keyboard dismissal and focus return, mobile
+navigation, both themes, section anchors, and wide-table scrolling. Check that
+pages remain readable with JavaScript disabled. Run `make repo-check` for the
+repository documentation checks.
+
+The visual reading reference is [御舆](https://lintsinghua.github.io/).
+[ASD-STE100](https://www.asd-ste100.org/) is the source of the technical writing
+principles. Kepler source and owning documentation remain authoritative for the
+architecture described here.

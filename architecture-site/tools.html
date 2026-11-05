@@ -4,13 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="description" content="工具目录、effects、权限、安全边界、并发调度、结果处理与幂等">
-  <title>工具与策略 · Agent Core 架构</title>
+  <title>工具与策略 · Kepler 架构指南</title>
   <link rel="stylesheet" href="assets/guide.css">
+  <script src="assets/search-index.js" defer></script>
   <script src="assets/architecture.js" defer></script>
 </head>
 <body>
+<a class="skip2" href="#content">跳到正文</a>
 <header class="topbar"><div class="topbar-inner">
-  <a class="brand2" href="index.html">AGENT CORE / ARCHITECTURE</a>
+  <a class="brand2" href="index.html">KEPLER / 架构指南</a>
   <nav class="topnav" aria-label="文档导航">
     <a href="index.html">概览</a><a href="execution.html">执行</a><a href="models.html">模型</a>
     <a href="tools.html" aria-current="page">工具</a><a href="reliability.html">可靠性</a><a href="operations.html">观测</a><a href="production.html">生产推演</a><a href="slack.html">Slack</a><a href="delegation.html">委派</a><a href="reference.html">索引</a>
@@ -19,18 +21,20 @@
 
 <main class="doc-shell">
   <aside class="side"><p>本页目录</p><a href="#contract">工具契约</a><a href="#catalog">目录与发现</a><a href="#lifecycle">调用生命周期</a><a href="#policy">权限层</a><a href="#local">本地边界</a><a href="#concurrency">并发</a><a href="#results">结果</a><a href="#idempotency">幂等与恢复</a><a href="#adding">新增工具</a><a href="#scenarios">生产推演</a><a href="#source">实现索引</a></aside>
-  <article class="doc">
+  <article class="doc" id="content" tabindex="-1">
     <header class="hero2">
       <p class="kicker">CORE / TOOLS &amp; POLICY</p>
       <h1>工具、权限与执行</h1>
-      <p class="lead2">工具把模型的判断连接到文件、代码仓库、外部服务和本地命令。可靠的工具系统不能只回答“模型能不能看到这个函数”，还要回答“当前用户能否调用、真实目标是什么、是否可以并发、失败后能否重做，以及结果如何被限制”。</p>
+      <p class="lead2">模型提出工具调用，执行器决定是否执行。执行器先检查参数、能力策略和目标范围，再调度工具并保存结果。本章说明权限、并发、结果大小和重复调用的边界。</p>
       <div class="facts"><span><b>描述</b> 告知模型</span><span><b>Policy</b> 决定授权</span><span><b>Runtime</b> 控制调度</span><span><b>Tool</b> 负责边界与副作用</span></div>
     </header>
+<section class="chapter-brief" aria-label="本章要点"><p class="eyebrow">本章要点</p><h2>先确认工具的执行条件</h2><ul><li>工具描述说明用途，不授予执行权限。</li><li>执行器检查实际参数、目标和能力策略。</li><li>外部写入结果未知时，先核对，再决定是否重试。</li></ul></section>
+
 
     <section class="chapter2" id="contract">
       <h2>工具注册时就要说清楚影响</h2>
       <p class="intro">Descriptor 是工具进入系统的静态契约。它不等于权限，但缺少它就无法安全地进行策略判断、并发调度、目录暴露和结果治理。</p>
-      <table class="detail-table">
+      <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>字段</th><th>回答的问题</th><th>错误声明的后果</th></tr></thead>
         <tbody>
           <tr><td>Name / schema</td><td>叫什么、参数是不是 object、必填和允许值是什么</td><td>模型调用歧义；注册时直接拒绝无效 schema</td></tr>
@@ -41,7 +45,7 @@
           <tr><td>Timeout</td><td>单次执行的局部时间上限</td><td>慢下游拖住整个 session；没有 deadline 的调用难以恢复</td></tr>
           <tr><td>Dependencies / Surfaces</td><td>需要哪种连接、在哪个入口可见</td><td>把能力注册到没有依赖或不支持的 surface</td></tr>
         </tbody>
-      </table>
+      </table></div>
       <div class="callout warn"><strong>工具描述不是授权</strong>“只读”是 descriptor 对实现行为的声明，必须与实际代码一致；surface annotation、动态 MCP 工具名称和模型写在参数里的说明都不能替代 profile policy 与真实目标检查。</div>
     </section>
 
@@ -82,7 +86,7 @@
     <section class="chapter2" id="policy">
       <h2>权限层要检查实际作用域</h2>
       <p>两种 profile 共用 descriptor 和调用协议，但控制对象不同。Hosted 权限由 operator policy 负责；Local 权限则把 workspace、批准和 OS sandbox 组合起来。</p>
-      <table class="detail-table">
+      <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>方面</th><th>Hosted profile</th><th>Local profile</th></tr></thead>
         <tbody>
           <tr><td>控制对象</td><td>服务端 workspace、服务凭据、用户连接和外部资源</td><td>用户选择的本地 workspace、本机进程和本地连接</td></tr>
@@ -92,7 +96,7 @@
           <tr><td>入口标签</td><td>限制工具适用 surface，不构成授权</td><td>UI 提示只是展示；解析后的目标和批准才有效</td></tr>
           <tr><td>失败策略</td><td>拒绝是结构化工具错误或不可用能力</td><td>可等待用户批准，但批准绑定原始 call，不接受替换参数</td></tr>
         </tbody>
-      </table>
+      </table></div>
       <div class="decision"><b>批准的安全语义</b><p>批准流程保存的是已经请求的具体 ToolCall。恢复时按 TurnID + ToolCallID 找回原始参数，再重新检查当前 policy；界面不能把“批准”变成提交一组新参数的通道。</p></div>
     </section>
 
@@ -125,7 +129,7 @@
     <section class="chapter2" id="results">
       <h2>工具结果怎样进入下一次模型判断</h2>
       <p>单个结果和整批结果分别受 inline budget 约束。结果治理同时保护模型上下文、transcript 大小、观测成本和入口响应。</p>
-      <table class="detail-table">
+      <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>结果情况</th><th>模型看到的内容</th><th>完整内容在哪里</th></tr></thead>
         <tbody>
           <tr><td>小于单结果上限</td><td>完整 text/JSON/content block</td><td>tool result 的 canonical event</td></tr>
@@ -133,7 +137,7 @@
           <tr><td>超限但不能 spill</td><td>UTF-8 安全截断加明确标记</td><td>没有假装存在的完整副本</td></tr>
           <tr><td>一批合计超限</td><td>再次按 batch budget 分配每个结果额度</td><td>每个结果自己的 spill（如果可用）</td></tr>
         </tbody>
-      </table>
+      </table></div>
       <p>Artifact 引用不是无条件公开的 URL：读取时仍需按调用 scope 再次核对。Slack 展示时可以隐藏完整参数和结果，但这不改变模型看到的内容，也不替代 transcript 的审计权限。</p>
     </section>
 
@@ -174,7 +178,7 @@
 
     <section class="chapter2" id="source">
       <h2>对应实现</h2>
-      <table class="detail-table">
+      <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>内容</th><th>主要实现</th><th>验证位置</th></tr></thead>
         <tbody>
           <tr><td>工具接口、描述与 catalog</td><td><code>packages/agent/tool/tool.go</code>、<code>policy.go</code>、<code>categories.go</code></td><td><code>tool_test.go</code>、<code>schema_test.go</code></td></tr>
@@ -186,10 +190,10 @@
           <tr><td>重复调用保护</td><td><code>runtime/circuit.go</code></td><td><code>circuit_test.go</code></td></tr>
           <tr><td>工具实现族</td><td><code>packages/tools/*</code>、<code>packages/surfaces/slack/tools</code></td><td>各工具包测试</td></tr>
         </tbody>
-      </table>
+      </table></div>
     </section>
   </article>
 </main>
-<footer class="footer2">AGENT CORE / TOOLS &amp; POLICY</footer>
+<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">阅读方法与术语</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
 </body>
 </html>

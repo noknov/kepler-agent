@@ -4,27 +4,31 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="description" content="托管队列、工作进程、运行投影、健康检查、容量和关闭流程">
-<title>队列与观测 · Agent Core 架构</title>
+<title>队列与观测 · Kepler 架构指南</title>
 <link rel="stylesheet" href="assets/guide.css">
+<script src="assets/search-index.js" defer></script>
 <script src="assets/architecture.js" defer></script>
 </head>
 <body>
-<header class="topbar"><div class="topbar-inner"><a class="brand2" href="index.html">AGENT CORE / ARCHITECTURE</a><nav class="topnav">
+<a class="skip2" href="#content">跳到正文</a>
+<header class="topbar"><div class="topbar-inner"><a class="brand2" href="index.html">KEPLER / 架构指南</a><nav class="topnav">
 <a href="index.html">概览</a><a href="execution.html">执行</a><a href="models.html">模型</a><a href="tools.html">工具</a><a href="reliability.html">可靠性</a><a href="operations.html" aria-current="page">观测</a><a href="production.html">生产推演</a><a href="slack.html">Slack</a><a href="delegation.html">委派</a><a href="reference.html">索引</a>
 </nav></div></header>
-<main class="doc-shell"><aside class="side"></aside><article class="doc">
-<header class="hero2"><p class="kicker">运行维护</p><h1>队列、观测与关闭</h1><p class="lead2">托管服务把接收请求、认领工作、执行会话和查询运行状态分开。PostgreSQL 保存不能丢失的事件与队列状态，Redis 只负责快速唤醒，运行投影提供查询与指标；服务关闭时先停止接收新工作，再等待已经取得处理权的请求结束。</p></header>
+<main class="doc-shell"><aside class="side"></aside><article class="doc" id="content" tabindex="-1">
+<header class="hero2"><p class="kicker">运行维护</p><h1>队列、观测与关闭</h1><p class="lead2">入口将请求写入持久队列。工作进程认领请求，并把追加输入交给对应会话。本章说明队列、运行投影、健康检查和关闭流程各自负责什么。</p></header>
+<section class="chapter-brief" aria-label="本章要点"><p class="eyebrow">本章要点</p><h2>先确认接收、执行与呈现的边界</h2><ul><li>请求入队成功，只表示系统已接收请求。</li><li>追加输入通过会话顺序和认领状态控制。</li><li>运行投影和消息投递失败，应分别恢复。</li></ul></section>
+
 
 <section class="chapter2" id="topology">
 <h2>先分清控制面和执行面</h2>
 <p>Gateway 的职责是尽快验证并落盘，Worker 的职责是持有会话执行权并续期，Observability 的职责是读取投影回答查询。三者可以独立扩缩容；把它们合成一个同步 HTTP 请求，会把平台回调超时、模型延迟和工具副作用绑在同一个失败窗口里。</p>
-<table class="detail-table"><thead><tr><th>组件</th><th>拥有的状态</th><th>不应该承担的职责</th></tr></thead><tbody>
+<div class="table-scroll"><table class="detail-table"><thead><tr><th>组件</th><th>拥有的状态</th><th>不应该承担的职责</th></tr></thead><tbody>
 <tr><td>Gateway</td><td>请求认证、入口去重、收件箱写入、用户输入入队</td><td>长时间持有模型或工具执行</td></tr>
 <tr><td>Worker</td><td>事件处理权、会话锁、turn 生命周期、工具执行</td><td>把内存中的状态当作恢复依据</td></tr>
 <tr><td>Observability</td><td>运行/步骤查询、轨迹、费用与健康信息</td><td>修改权威会话历史来“修复”展示结果</td></tr>
 <tr><td>PostgreSQL</td><td>收件箱、输入队列、会话事件、运行投影与审计关联</td><td>替代模型或工具的实时流传输</td></tr>
 <tr><td>Redis</td><td>唤醒提示和短期调度信号</td><td>充当消息唯一副本</td></tr>
-</tbody></table>
+</tbody></table></div>
 <div class="decision"><b>判断标准：</b>任何“Redis 丢了会不会丢消息”的问题，答案都应该是否定的；任何“数据库写成功但进程崩了能否恢复”的问题，答案都应该指向事件或队列记录，而不是某个 Worker 的内存。</div>
 </section>
 
@@ -46,12 +50,12 @@
 <li><b>失败退避。</b><span>临时错误延后到下一次可执行时间；无法解析的事件和超过尝试范围的事件进入停止自动处理的状态，并保留原因。</span></li>
 <li><b>期限接管。</b><span>进程退出后，恢复任务扫描过期租约，使事件重新可认领。恢复不是重放旧进程的内存，而是从持久状态启动新的处理尝试。</span></li>
 </ol>
-<table class="detail-table"><thead><tr><th>参数</th><th>过小的表现</th><th>过大的表现</th></tr></thead><tbody>
+<div class="table-scroll"><table class="detail-table"><thead><tr><th>参数</th><th>过小的表现</th><th>过大的表现</th></tr></thead><tbody>
 <tr><td>Lease TTL</td><td>正常长调用频繁被误判为过期</td><td>故障接管变慢，重复处理窗口变长</td></tr>
 <tr><td>Renew interval</td><td>数据库写压力上升</td><td>网络抖动后更容易错过期限</td></tr>
 <tr><td>Batch size</td><td>吞吐不足、轮询开销高</td><td>单个 Worker 占满连接和模型配额</td></tr>
 <tr><td>Max attempts</td><td>瞬时故障很快死信</td><td>永久坏事件长期占据重试容量</td></tr>
-</tbody></table>
+</tbody></table></div>
 </section>
 
 <section class="chapter2" id="input">
@@ -77,35 +81,35 @@
 <section class="chapter2" id="trajectory">
 <h2>轨迹回答“控制流走到哪里”</h2>
 <p>轨迹读取接口从会话事件重建提示和上下文生成、模型提供方尝试、工具执行、恢复动作和结束过程。默认结果经过脱敏，不返回消息正文、工具参数或任意元数据；需要业务内容时走受控的运行详情权限。</p>
-<table class="detail-table"><thead><tr><th>轨迹部分</th><th>能够说明的事情</th><th>不能推断的事情</th></tr></thead><tbody>
+<div class="table-scroll"><table class="detail-table"><thead><tr><th>轨迹部分</th><th>能够说明的事情</th><th>不能推断的事情</th></tr></thead><tbody>
 <tr><td>上下文</td><td>一次模型判断使用了哪些事件范围、是否使用摘要以及发生了何种裁剪</td><td>被裁剪的历史仍然完整地出现在模型请求中</td></tr>
 <tr><td>模型尝试</td><td>同一次判断包含哪些网络尝试、使用哪个提供方以及在哪里失败</td><td>每个提供方都已经产生了可见文本</td></tr>
 <tr><td>工具</td><td>调用何时开始、是否完成、是否由恢复逻辑补成中断</td><td>未写入开始事件的调用一定从未触达外部系统</td></tr>
 <tr><td>批准</td><td>哪个具体调用等待决定以及最后采用的决定</td><td>用户看到了哪一份未持久化的临时 UI</td></tr>
-</tbody></table>
+</tbody></table></div>
 </section>
 
 <section class="chapter2" id="capacity">
 <h2>容量不是“Worker 数量”一个数字</h2>
 <p>一个 Worker 同时消耗数据库连接、会话租约、模型并发、工具槽位、上下文内存和外部 API 配额。扩容前要找出最先饱和的那一层；只增加 Worker，可能把延迟从应用内转移到数据库或提供方。</p>
 <div class="metric-grid"><div class="metric"><b>入口</b><strong>请求确认延迟</strong><span>收件箱写入 p95、签名失败、入队失败</span></div><div class="metric"><b>队列</b><strong>等待时间</strong><span>ready 数量、最老事件年龄、死信增长</span></div><div class="metric"><b>执行</b><strong>占用与停留</strong><span>会话锁等待、turn 时长、最大步骤命中</span></div><div class="metric"><b>模型</b><strong>配额与耗时</strong><span>重试次数、429、熔断、流式首字节</span></div><div class="metric"><b>工具</b><strong>槽位与副作用</strong><span>并发槽位、超时、审批等待、外部错误</span></div><div class="metric"><b>数据</b><strong>连接与写入</strong><span>连接池耗尽、事件追加、投影延迟、溢出体积</span></div></div>
-<table class="detail-table"><thead><tr><th>背压点</th><th>必须有的动作</th></tr></thead><tbody>
+<div class="table-scroll"><table class="detail-table"><thead><tr><th>背压点</th><th>必须有的动作</th></tr></thead><tbody>
 <tr><td>入口队列达到上限</td><td>拒绝或延迟确认新事件，并记录可告警的原因；不能无限把请求堆进内存。</td></tr>
 <tr><td>模型配额耗尽</td><td>降低并发、按策略退避或切换提供方；不能让每个请求各自无限重试。</td></tr>
 <tr><td>工具槽位耗尽</td><td>让调用在受控位置等待或返回明确失败，避免 goroutine、连接和子进程无界增长。</td></tr>
 <tr><td>投影落后</td><td>保留会话事件为事实，单独告警投影延迟；不要让展示层反向阻塞主执行路径。</td></tr>
 <tr><td>数据库连接紧张</td><td>限制 Worker、批量大小与续期频率，检查长事务和投影查询，不通过加连接掩盖锁争用。</td></tr>
-</tbody></table>
+</tbody></table></div>
 </section>
 
 <section class="chapter2" id="health">
 <h2>健康检查要回答不同问题</h2>
-<table class="detail-table"><thead><tr><th>检查</th><th>含义</th><th>调度系统的处理</th></tr></thead><tbody>
+<div class="table-scroll"><table class="detail-table"><thead><tr><th>检查</th><th>含义</th><th>调度系统的处理</th></tr></thead><tbody>
 <tr><td>进程存活</td><td>HTTP 进程仍能响应</td><td>失败时重启进程</td></tr>
 <tr><td>服务就绪</td><td>关键依赖可用且服务没有进入排空状态</td><td>只有就绪时发送新流量</td></tr>
 <tr><td>工具健康</td><td>工具依赖、连接和基础能力是否可用</td><td>供管理页面诊断，不替代每次调用的错误处理</td></tr>
 <tr><td>运行与费用指标</td><td>请求数量、持续时间、错误、模型用量和估算成本</td><td>用于监控、容量判断和故障定位</td></tr>
-</tbody></table>
+</tbody></table></div>
 <p>“进程活着”不等于“可以接新流量”，“模型可用”也不等于“某个连接的工具可用”。运行、指标和健康详情属于管理接口，需要管理凭据或受控的本地开发访问，不通过普通用户入口公开。</p>
 </section>
 
@@ -123,18 +127,18 @@
 
 <section class="chapter2" id="incidents">
 <h2>按症状定位，而不是只看 HTTP 状态码</h2>
-<table class="detail-table"><thead><tr><th>症状</th><th>第一处查什么</th><th>常见根因</th><th>安全处置</th></tr></thead><tbody>
+<div class="table-scroll"><table class="detail-table"><thead><tr><th>症状</th><th>第一处查什么</th><th>常见根因</th><th>安全处置</th></tr></thead><tbody>
 <tr><td>Slack 已确认但没有回复</td><td>收件箱状态、处理期限、会话事件</td><td>Worker 未认领、失权取消、模型/工具等待</td><td>先看持久状态；不要重复手工触发同一事件</td></tr>
 <tr><td>队列越来越长</td><td>最老事件年龄、Worker 认领速率、模型 429</td><td>下游配额、数据库锁、单请求占满并发</td><td>限流并保护入口，逐层找饱和点</td></tr>
 <tr><td>同一个工具动作重复</td><td>CallID、ExecutionID、ToolCallStarted、外部请求号</td><td>未知结果重试、外部 API 超时、工具非幂等</td><td>先查询外部状态，再补偿或人工确认</td></tr>
 <tr><td>运行页面落后</td><td>投影游标、事件表、投影失败计数</td><td>异步队列拥堵、投影 schema 不兼容</td><td>主执行以事件为准，修复投影后重建</td></tr>
 <tr><td>关闭后旧进程仍在输出</td><td>租约续期结果和取消信号</td><td>旧进程未响应失权、流式 sink 未停止</td><td>拒绝失权后的写入，必要时终止进程并审计</td></tr>
-</tbody></table>
+</tbody></table></div>
 </section>
 
 <section class="chapter2" id="source">
 <h2>对应实现</h2>
-<table class="detail-table"><thead><tr><th>内容</th><th>主要实现</th><th>验证位置</th></tr></thead><tbody>
+<div class="table-scroll"><table class="detail-table"><thead><tr><th>内容</th><th>主要实现</th><th>验证位置</th></tr></thead><tbody>
 <tr><td>Slack 收件箱存储</td><td><code>packages/eventinbox/pgstore.go</code></td><td><code>packages/surfaces/slack/events/worker_test.go</code></td></tr>
 <tr><td>Slack 工作进程</td><td><code>packages/surfaces/slack/events/worker.go</code></td><td><code>worker_test.go</code></td></tr>
 <tr><td>执行中输入</td><td><code>packages/sessioninput/store.go</code></td><td>会话输入认领与处理测试</td></tr>
@@ -142,9 +146,9 @@
 <tr><td>执行轨迹</td><td><code>packages/trajectory/trajectory.go</code></td><td><code>trajectory_test.go</code></td></tr>
 <tr><td>健康与排空</td><td><code>gateway</code>、<code>worker</code>、<code>observability</code></td><td>对应命令和 HTTP 处理测试</td></tr>
 <tr><td>用户连接</td><td><code>packages/connections</code></td><td>OAuth、令牌加密和续接测试</td></tr>
-</tbody></table>
+</tbody></table></div>
 </section>
 </article></main>
-<footer class="footer2">AGENT CORE / OPERATIONS</footer>
+<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">阅读方法与术语</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
 </body>
 </html>

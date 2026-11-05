@@ -4,13 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="Agent Core 的权威事件、所有权、落盘顺序和中断恢复">
-  <title>状态与恢复 · Agent Core 架构</title>
+  <title>状态与恢复 · Kepler 架构指南</title>
   <link rel="stylesheet" href="assets/guide.css">
+  <script src="assets/search-index.js" defer></script>
   <script src="assets/architecture.js" defer></script>
 </head>
 <body>
+<a class="skip2" href="#content">跳到正文</a>
 <header class="topbar"><div class="topbar-inner">
-  <a class="brand2" href="index.html">AGENT CORE / ARCHITECTURE</a>
+  <a class="brand2" href="index.html">KEPLER / 架构指南</a>
   <nav class="topnav" aria-label="文档导航">
     <a href="index.html">概览</a><a href="execution.html">执行</a><a href="models.html">模型</a>
     <a href="tools.html">工具</a><a href="reliability.html" aria-current="page">可靠性</a><a href="operations.html">观测</a><a href="production.html">生产推演</a><a href="slack.html">Slack</a><a href="delegation.html">委派</a><a href="reference.html">索引</a>
@@ -19,13 +21,15 @@
 
 <main class="doc-shell">
   <aside class="side"><p>本页目录</p><a href="#authority">权威记录</a><a href="#ownership">所有权层次</a><a href="#postgres">Hosted 落盘</a><a href="#jsonl">Local 落盘</a><a href="#projection">派生投影</a><a href="#windows">崩溃窗口</a><a href="#recovery">恢复流程</a><a href="#scenarios">生产推演</a><a href="#source">实现索引</a></aside>
-  <article class="doc">
+  <article class="doc" id="content" tabindex="-1">
     <header class="hero2">
       <p class="kicker">STATE / DURABILITY &amp; RECOVERY</p>
       <h1>记录、并发与恢复</h1>
-      <p class="lead2">Agent 的可靠性不来自一个更大的锁或一个全局 retry，而来自“事实先落盘、所有权可验证、未知状态不猜测、派生视图可重建”。本页解释 transcript、队列、session lease 和 delivery 之间的边界，以及进程在每个边界退出时下一位 worker 应该怎么判断。</p>
+      <p class="lead2">恢复依赖已保存的事件和可验证的处理权。新执行者先核对记录，再决定下一步。对于已经开始但没有完成记录的外部操作，系统保留未知状态，直到获得核对证据。</p>
       <div class="facts"><span><b>Canonical</b> append-only transcript</span><span><b>所有权</b> owner + lease</span><span><b>投影</b> 可重建</span><span><b>外部副作用</b> 仍可能未知</span></div>
     </header>
+<section class="chapter-brief" aria-label="本章要点"><p class="eyebrow">本章要点</p><h2>先确认恢复依据</h2><ul><li>会话事件提供恢复依据；运行列表是派生视图。</li><li>旧执行者失去处理权后必须停止推进。</li><li>没有完成记录的外部操作仍可能已经生效。</li></ul></section>
+
 
     <section class="chapter2" id="authority">
       <h2>权威记录和派生数据必须分开</h2>
@@ -35,7 +39,7 @@
         <div class="box"><b>Projection sinks</b><small>runs、steps、metrics<br>UI / trajectory</small></div><div class="arrow">→</div>
         <div class="box green"><b>Operator view</b><small>查询、告警、成本<br>不反向改写事实</small></div>
       </div><figcaption>Runtime 先 Append 成功，再 Publish；projection 失败要靠 replay 修复，不能为了 UI 成功而重做模型或工具。</figcaption></figure>
-      <table class="detail-table">
+      <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>数据</th><th>权威性</th><th>增长形态</th><th>故障后怎么处理</th></tr></thead>
         <tbody>
           <tr><td>agent_transcript_events / JSONL</td><td>会话事实</td><td>只追加，按 session sequence</td><td>不覆盖旧事件；从它重放上下文和终态</td></tr>
@@ -44,22 +48,22 @@
           <tr><td>stream delta / UI status</td><td>瞬时呈现</td><td>高频、可丢失</td><td>重连或最终消息补偿；不作为恢复依据</td></tr>
           <tr><td>inbox / session inputs</td><td>待处理工作状态</td><td>带 owner、lease、attempts</td><td>按到期条件接管；确认必须命中当前 owner</td></tr>
         </tbody>
-      </table>
+      </table></div>
       <div class="callout"><strong>事件不是“日志字符串”</strong>每条事件有 ID、session sequence、turn、type、timestamp 和结构化 payload。恢复依赖事件类型与相互关系；仅凭一行 error message 推断状态是不安全的。</div>
     </section>
 
     <section class="chapter2" id="ownership">
       <h2>四层处理权保护四种不同对象</h2>
       <p>所有权层次不能互相替代。Inbox 只能保证入口任务由一个 worker 处理；Session lease 才保证同一会话的上下文串行；工具 bulkhead 限制 fan-out；输入 claim 则保护追加消息不会被多个 worker 同时消费。</p>
-      <table class="detail-table">
+      <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>保护对象</th><th>实现</th><th>没有这一层的风险</th><th>所有权丢失时</th></tr></thead>
         <tbody>
           <tr><td>Slack event</td><td><code>slack_event_inbox</code> 的 event_id、status、claim_owner、claim_until</td><td>平台重投递产生多条回复</td><td>旧 handler 停止，不 Complete/Fail 覆盖新 owner</td></tr>
-          <tr><td>Session turn</td><td>本地 mutex；Hosted PostgreSQL advisory session lease</td><td>两个 turn 从同一旧历史分叉</td><td>不能再追加事实；新 owner 从 transcript 继续</td></tr>
+          <tr><td>Session turn</td><td>本地会话文件锁；托管 PostgreSQL advisory session lease</td><td>两个 turn 从同一旧历史分叉</td><td>不能再追加事实；新 owner 从 transcript 继续</td></tr>
           <tr><td>Pending input</td><td><code>agent_session_inputs</code> 的 sequence、owner、claim_until、ack</td><td>追加消息重复进入或被确认两次</td><td>Ack/Release 零行返回 claim lost，调用者不能假设成功</td></tr>
           <tr><td>Tool fan-out</td><td>MaxParallelToolCalls + 工具内部上限 + read/write lock</td><td>模型输出制造无界 goroutine 和下游请求</td><td>随 context 取消；已开始调用仍按未知副作用处理</td></tr>
         </tbody>
-      </table>
+      </table></div>
       <p>Session lease 的语义是“保护完整执行期间的会话”，不是只在写 transcript 时短暂上锁。Hosted 实现为 advisory lock 绑定到专用数据库连接；GuardedSessionLease 每两秒确认连接仍可用，失去确认就取消执行上下文。</p>
     </section>
 
@@ -90,7 +94,7 @@
     <section class="chapter2" id="projection">
       <h2>派生投影怎样在丢失通知后恢复</h2>
       <p>AsyncSink 只承载可重建投影，队列有界。队列满时它丢弃通知并累计 dropped，发送合并的 shed 信号；它不会为每条事件创建脱离控制的 goroutine，也不会让 canonical append 等待慢投影。</p>
-      <table class="detail-table">
+      <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>投影事件</th><th>RunSink 如何使用</th><th>幂等依据</th></tr></thead>
         <tbody>
           <tr><td>TurnStarted</td><td>创建/更新 run，保存 user、surface、model、trace</td><td>run ID = TurnID</td></tr>
@@ -99,7 +103,7 @@
           <tr><td>Turn terminal</td><td>更新 status、termination、error、duration、final hash</td><td>按事件重放并重新计算</td></tr>
           <tr><td>ModelStreamed</td><td>可用于 first token 的临时观测，不作为 durable step</td><td>丢失不影响最终消息和恢复</td></tr>
         </tbody>
-      </table>
+      </table></div>
       <p>运行主记录不能塞入不断增长的 steps 数组作为唯一存储；当前 schema 将 run 与 run_steps 分开，避免每个新步骤都重写整个 aggregate，也避免并发投影互相覆盖。</p>
     </section>
 
@@ -152,7 +156,7 @@
 
     <section class="chapter2" id="source">
       <h2>对应实现</h2>
-      <table class="detail-table">
+      <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>正文内容</th><th>主要实现</th><th>验证行为的测试</th></tr></thead>
         <tbody>
           <tr><td>事件类型与只追加接口</td><td><code>packages/agent/transcript/transcript.go</code></td><td><code>transcript/async_test.go</code></td></tr>
@@ -165,10 +169,10 @@
           <tr><td>运行投影</td><td><code>packages/profiles/hosted/runs.go</code>、<code>packages/runs</code></td><td><code>runs_test.go</code></td></tr>
           <tr><td>轨迹重建</td><td><code>packages/trajectory/trajectory.go</code></td><td><code>trajectory_test.go</code></td></tr>
         </tbody>
-      </table>
+      </table></div>
     </section>
   </article>
 </main>
-<footer class="footer2">AGENT CORE / STATE &amp; RECOVERY</footer>
+<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">阅读方法与术语</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
 </body>
 </html>
