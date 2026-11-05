@@ -23,7 +23,7 @@ class Sections(HTMLParser):
         attrs = dict(attrs)
         if tag == 'h1':
             self.in_h1 = True
-        if tag == 'section' and 'chapter2' in attrs.get('class', '').split():
+        if tag == 'section' and 'doc-section' in attrs.get('class', '').split():
             self.current = {'page': self.page, 'title': '', 'href': f'{self.filename}#{attrs["id"]}', 'parts': []}
         if tag == 'h2' and self.current is not None:
             self.in_h2 = True

@@ -1,176 +1,50 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="提示分层、上下文投影、压缩、模型适配、重试和流式提交边界">
-  <title>上下文与模型 · Kepler 架构指南</title>
-  <link rel="stylesheet" href="assets/guide.css">
-  <script src="assets/search-index.js" defer></script>
-  <script src="assets/architecture.js" defer></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="模型请求由系统提示、会话消息和工具定义组成。执行器控制上下文和执行预算；模型适配器转换提供方协议；弹性客户端管理网络尝试。">
+<meta name="color-scheme" content="light dark">
+<title>上下文与模型 · Kepler 架构文档</title>
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/guide.css">
+<script src="assets/search-index.js" defer></script>
+<script src="assets/architecture.js" defer></script>
 </head>
 <body>
-<a class="skip2" href="#content">跳到正文</a>
-<header class="topbar"><div class="topbar-inner">
-  <a class="brand2" href="index.html">KEPLER / 架构指南</a>
-  <nav class="topnav" aria-label="文档导航">
-    <a href="index.html">概览</a><a href="execution.html">执行</a><a href="models.html" aria-current="page">模型</a>
-    <a href="tools.html">工具</a><a href="reliability.html">可靠性</a><a href="operations.html">观测</a><a href="production.html">生产推演</a><a href="slack.html">Slack</a><a href="delegation.html">委派</a><a href="reference.html">索引</a>
-  </nav>
-</div></header>
-
-<main class="doc-shell">
-  <aside class="side"><p>本页目录</p><a href="#request">模型看到什么</a><a href="#prompt-layers">提示分层</a><a href="#projection">事件投影</a><a href="#compaction">长对话压缩</a><a href="#protocol">协议适配</a><a href="#resilience">重试与切换</a><a href="#streaming">流式输出</a><a href="#scenarios">生产推演</a><a href="#source">实现索引</a></aside>
-  <article class="doc" id="content" tabindex="-1">
-    <header class="hero2">
-      <p class="kicker">CORE / CONTEXT &amp; MODEL</p>
-      <h1>提示内容、上下文与模型</h1>
-      <p class="lead2">执行器把提示、用户输入、历史和工具定义组成模型请求。模型适配器负责转换提供方协议。本章说明请求如何组成、如何控制上下文大小，以及模型失败后何时可以重试。</p>
-      <div class="facts"><span><b>提示</b> 分层合并</span><span><b>历史</b> 事件投影</span><span><b>容量</b> 保守估算</span><span><b>失败</b> 输出提交边界</span></div>
-    </header>
-<section class="chapter-brief" aria-label="关键约束"><p class="eyebrow">关键约束</p><h2>模型请求约束</h2><ul><li>上下文预算必须包含工具定义和输出预留。</li><li>提供方协议转换由模型适配器负责。</li><li>可见文本输出后，重试不能拼接另一份答复。</li></ul></section>
-
-
-    <section class="chapter2" id="request">
-      <h2>模型请求组成</h2>
-      <p class="intro">执行器每轮构造模型请求。请求包含系统提示、经过投影的会话消息和当前已启用工具的定义。生命周期事件用于恢复，不全部映射为模型消息。</p>
-      <figure class="diagram"><div class="flow">
-        <div class="box"><b>System</b><small>稳定行为、规则<br>产品与环境事实</small></div><div class="arrow">+</div>
-        <div class="box"><b>Messages</b><small>用户、assistant、tool<br>摘要与 steering</small></div><div class="arrow">+</div>
-        <div class="box"><b>Tools</b><small>eager + activated<br>schema 与描述</small></div><div class="arrow">→</div>
-        <div class="box blue"><b>Canonical Request</b><small>model、budget、metadata<br>provider adapter</small></div>
-      </div><figcaption>入口不自行拼接模型历史；同一份 transcript 在 Slack、Web 和 CLI 上都经过同一个投影器。</figcaption></figure>
-      <div class="table-scroll"><table class="detail-table">
-        <thead><tr><th>组成</th><th>会影响什么</th><th>是否进入长期 transcript</th></tr></thead>
-        <tbody>
-          <tr><td>系统说明</td><td>身份、证据纪律、安全边界、操作规则</td><td>由提示目录和运行配置重建，不作为会话消息追加</td></tr>
-          <tr><td>运行环境</td><td>日期、时区、workspace roots、本次作用域</td><td>按请求生成；不依赖入口的旧环境缓存</td></tr>
-          <tr><td>会话消息</td><td>用户意图、已完成答复、工具结果</td><td>是；用户输入中的图片在持久化时替换为文本说明</td></tr>
-          <tr><td>工具定义</td><td>模型能否提出某个调用以及如何填写参数</td><td>目录是 profile 状态；激活状态按 turn 清理</td></tr>
-          <tr><td>流式 delta</td><td>入口实时展示</td><td>否；完整 assistant message 和 lifecycle 才是恢复依据</td></tr>
-        </tbody>
-      </table></div>
-    </section>
-
-    <section class="chapter2" id="prompt-layers">
-      <h2>提示分层</h2>
-      <p>提示内容按稳定性和责任拆开。越靠近业务环境、变化越频繁的内容，越不应该写进核心系统说明；否则每次部署变化都会扩大上下文、破坏缓存并难以定位行为回归。</p>
-      <div class="table-scroll"><table class="detail-table">
-        <thead><tr><th>层</th><th>典型内容</th><th>装载/覆盖规则</th><th>变更风险</th></tr></thead>
-        <tbody>
-          <tr><td>Core kernel</td><td>身份、保密、证据、自主执行、沟通和安全</td><td><code>packages/prompts/defaults/system.md</code>，提交到仓库</td><td>影响所有 surface；需要跨产品回归</td></tr>
-          <tr><td>Rules</td><td>调查方式、写操作约束、验证要求、调试纪律</td><td><code>rules/*.md</code> 按目录读取并合并</td><td>可改变工具选择和结束前行为</td></tr>
-          <tr><td>Tool guidance</td><td>用途、参数、路由提示和安全说明</td><td>随工具 descriptor 及 <code>tools.json</code> 应用</td><td>只改善选择提示，不能扩大 policy 权限</td></tr>
-          <tr><td>Skills</td><td>完整工作流、专项检查和验证步骤</td><td>基础 prompt 只放名称/说明，按需 skills-load</td><td>按来源和加载路径处理信任边界；加载技能不授予工具权限</td></tr>
-          <tr><td>Private overlay</td><td>仓库别名、环境映射、私有 runbook 入口</td><td><code>PROMPT_DIR</code> 叠加在 public defaults 上</td><td>不能把凭据或大段 incident 历史放入每次 prompt</td></tr>
-          <tr><td>Dynamic context</td><td>当前日期、workspace、session scope 和已选工具</td><td>每次请求生成，位于静态内容之后</td><td>应可观测其摘要，不能依赖进程启动时快照</td></tr>
-        </tbody>
-      </table></div>
-      <div class="decision"><b>提示修改的判断</b><p>如果一条文字包含某个公司的仓库、workflow、租户或私有服务，它通常属于 overlay 或 workflow，而不是系统 kernel。提示可以约束模型行为，但不能代替工具的 schema、服务端 allowlist、workspace 检查和上游权限。</p></div>
-    </section>
-
-    <section class="chapter2" id="projection">
-      <h2>会话事件的上下文投影</h2>
-      <p class="intro">Transcript 同时包含恢复所需的生命周期事实和模型真正需要的对话内容。BoundedProjector 通过事件类型、摘要覆盖点和完整交互分组把两者分开。</p>
-      <ol class="walkthrough">
-        <li><b>计算输入预算。</b><span>总 MaxTokens 减去 ReserveTokens；预留给模型输出、工具定义和 provider 差异。配置差值不合理时直接拒绝派发，而不是退回总上限。</span></li>
-        <li><b>选择最近有效压缩。</b><span>只接受带有向后覆盖边界的 <code>covers_through</code>。坏摘要不会悄悄遮住原始消息，避免数据损坏变成事实丢失。</span></li>
-        <li><b>筛选可投影事件并保留伴随推理。</b><span>UserInput、SteeringInput、AssistantMessage、ToolCallCompleted/Failed 形成 canonical messages；工具调用步伴随的公开说明保持为普通文本，并标记 commentary 阶段；与模型原生推理分离，跨 provider 回传时不丢失，也不污染最终回答。</span></li>
-        <li><b>压缩前执行历史工具结果遮蔽。</b><span>当历史体积超出预算时，优先对最近两个完整交互之外的历史 <code>ToolResult</code> 执行 UTF-8 安全折叠（大文本保留首尾预览，旧图片改为引用，并通过 <code>context_read</code> 按需读回原始证据），避免过早触发整轮对话裁剪或高延迟 LLM 压缩。</span></li>
-        <li><b>按 TurnID 聚成完整 group 向前加入。</b><span>一个用户请求及其 assistant tool call/result 是不可拆分单元。最新 group 必须保留；更早 group 只有在预算内才进入。</span></li>
-        <li><b>插入缓存断点并叠加动态上下文。</b><span>在静态层（<code>LayerCore / LayerProduct / LayerEnvironment</code>）与动态层（<code>LayerProject / LayerUser / LayerSkill / LayerTurn</code>）之间自动注入 <code>---DYNAMIC_CONTEXT_BELOW---</code> 缓存分界，并为最近一轮消息附加增量缓存锚点。</span></li>
-      </ol>
-      <div class="callout warn"><strong>估算不是 provider tokenizer</strong>估算器按 ASCII、中文字符、结构、图片、artifact 和 tool result 做保守近似。它只能提前发现大多数超限；provider 仍可能因自己的 tokenizer、隐藏 reasoning 或工具协议拒绝请求。</div>
-    </section>
-
-    <section class="chapter2" id="compaction">
-      <h2>上下文压缩</h2>
-      <p>压缩不是删除旧行，也不是覆盖 transcript。它产生一条新的、带覆盖序号的摘要事件；原始历史继续存在，摘要只是以后投影的入口。摘要还会被明确标为不可信 transcript data，避免模型把历史里的命令当成系统指令。</p>
-      <div class="timeline">
-        <dt>发现可丢弃范围</dt><dd>投影器按完整 group 计算 Dropped 和 CoversThrough；最近一轮不作为旧历史压掉。</dd>
-        <dt>准备安全输入</dt><dd>图片替换为说明文本；历史中的 prompt injection 不获得 system authority。</dd>
-        <dt>分块压缩</dt><dd>如果压缩输入本身过大，按用户边界分块，多轮归并；达到内部轮数上限则返回错误。</dd>
-        <dt>生成摘要</dt><dd>保留用户意图、决策、证据、路径、工具结果、约束和未解决事项；不发明事实。</dd>
-        <dt>提交摘要事件</dt><dd>写入 <code>compaction_created</code> 和 <code>covers_through</code>，不修改任何旧事件。</dd>
-        <dt>重新投影</dt><dd>从最新摘要继续加入未覆盖事件；若 provider 仍报 context limit，则强制收紧后再请求。</dd>
-      </div>
-      <h3>压缩限制</h3>
-      <p>压缩本身也是一次模型调用，增加 token、延迟和 provider 依赖。摘要错误可能让模型失去细节，因此需要保留原始 transcript、可从 coverage 定位被压缩范围，并在关键工作流中让工具结果带有稳定引用而不是只依赖摘要文字。</p>
-    </section>
-
-    <section class="chapter2" id="protocol">
-      <h2>模型协议适配</h2>
-      <p>Runtime 依赖 <code>model.Client</code>，而不是某家 SDK。Provider adapter 将请求字段、消息块、tool calls、SSE 流和错误映射为统一模型契约；这样切换协议不需要重写会话、工具或恢复逻辑。</p>
-      <div class="table-scroll"><table class="detail-table">
-        <thead><tr><th>Provider 差异</th><th>Canonical 表达</th><th>必须保留的诊断信息</th></tr></thead>
-        <tbody>
-          <tr><td>chat/completions、responses、Anthropic message</td><td><code>model.Request</code> 与 <code>model.Response</code></td><td>provider、model、response ID、finish reason</td></tr>
-          <tr><td>不同 tool/function 格式</td><td><code>model.ToolDefinition</code>、<code>ToolCall</code></td><td>稳定 CallID 和原始参数字节/大小</td></tr>
-          <tr><td>SSE delta 类型不同</td><td>started、text_delta、tool args、usage、completed</td><td>事件类型、item ID、response ID，不默认存完整内容</td></tr>
-          <tr><td>缓存 token 口径不同</td><td><code>model.Usage</code> 的 cache fields</td><td>是否已计入 input，避免成本重复计算</td></tr>
-          <tr><td>HTTP 状态和错误体不同</td><td>typed <code>model.Error</code></td><td>kind、retryable、status、受控错误信息</td></tr>
-          <tr><td>结构化引用</td><td>挂在具体 Content block 的 citations</td><td>URL、标题、字符范围；呈现由 surface 决定</td></tr>
-        </tbody>
-      </table></div>
-      <p>Provider adapter 可以保留 raw metadata 供诊断，但不能把完整凭据、prompt、工具参数或用户文本无条件放进 span 属性。模型返回的内容仍是模型内容，不会提升为系统策略。</p>
-    </section>
-
-    <section class="chapter2" id="resilience">
-      <h2>模型重试、备用路径与熔断</h2>
-      <p>ResilientClient 是 provider attempt 的唯一弹性边界。不要把多个 ResilientClient 嵌套起来，否则一次请求的尝试次数和截止时间会乘法膨胀，观测也无法回答“到底请求了几次”。</p>
-      <div class="table-scroll"><table class="detail-table">
-        <thead><tr><th>决策</th><th>判定依据</th><th>记录方式</th></tr></thead>
-        <tbody>
-          <tr><td>重试</td><td>typed transient、rate limited、unavailable 或 protocol；未取消且剩余预算足够</td><td>同一 logical request 下增加 attempt，记录等待和结果</td></tr>
-          <tr><td>不重试</td><td>invalid、authentication、context limit（交给压缩）、cancel、deadline</td><td>结束该路径并归类错误</td></tr>
-          <tr><td>fallback</td><td>主 provider 可 failover、备用已配置、尚未提交用户可见文字</td><td>保留 primary/fallback provider 与 model 关系</td></tr>
-          <tr><td>熔断</td><td>同一 provider/model 连续失败达到阈值，进入 cooldown</td><td>新请求快速返回 circuit_open，不占用下游资源</td></tr>
-          <tr><td>空响应恢复</td><td>Response 没有 content 且没有工具调用，使用 runtime 的独立空响应预算</td><td>记录 model_failed；成功前不产生空 final</td></tr>
-        </tbody>
-      </table></div>
-      <div class="callout"><strong>逻辑请求和网络尝试不是一对一</strong>一次 step 可能先发 primary、等待退避、再发 primary retry，最后切 fallback。成本、延迟和 provider 事故分析必须同时统计 logical request 与 attempt，不能只看 turn 数。</div>
-    </section>
-
-    <section class="chapter2" id="streaming">
-      <h2>流式输出的提交边界</h2>
-      <p>流式事件主要服务于展示。Runtime 会把 delta 送给 sink，但只把完整 assistant message、model lifecycle 和最终状态作为 canonical facts。这样 transcript 不会按 token 数线性膨胀，projection 也可以在事件重放后重建。</p>
-      <div class="plain-grid">
-        <article><h3>首段文字前</h3><p>模型仍处于可安全重试的阶段；provider 临时故障可以 retry/fallback。</p></article>
-        <article><h3>首段文字后</h3><p>输出可能已被 Slack/Web/CLI 展示；停止 retry/fallback，防止两份答案拼接。</p></article>
-        <article><h3>工具调用 delta</h3><p>Runtime 等待完整响应后才执行工具；工具 delta 本身不等于外部副作用。</p></article>
-        <article><h3>Sink 故障</h3><p>呈现失败与模型完成是两件事；保留完整答案，交给 surface 的 delivery fallback。</p></article>
-      </div>
-      <p>如果产品把某些中间文本交给用户，就必须明确它是否改变输出提交语义。当前共享实现以非空文本 delta 为提交点，不能在不同 surface 私自采用“收到任意 stream event 就重试”的规则。</p>
-    </section>
-
-    <section class="chapter2" id="scenarios">
-      <h2>模型故障处理</h2>
-      <div class="scenario-list">
-        <article class="scenario"><h3>提供方返回 429，但队列也在增长</h3><p><span class="label">诊断</span>把 provider attempt、429、retry delay、circuit 状态和 inbox backlog 放在同一时间线上。429 期间提高 worker 数只会制造更多受限请求。</p><p><span class="label">动作</span>先控制入口并发和 retry fan-out，确认 fallback 是否真的可用，再决定是否调整 provider 配额或路由。</p></article>
-        <article class="scenario"><h3>提示更新后，同样输入的工具选择变了</h3><p><span class="label">诊断</span>比较 prompt_hash、工具目录版本、激活列表、模型名和 workflow scope；不要只比较最终自然语言。</p><p><span class="label">动作</span>保留静态 prompt 与 dynamic context 的摘要，使用代表性请求做回归。工具选择改变不代表 policy 已改变，必须分别验证。</p></article>
-        <article class="scenario"><h3>压缩后模型“不记得”关键路径</h3><p><span class="label">诊断</span>定位 compaction_created 的 covers_through，检查被压缩的工具结果是否只有大段文本而没有 artifact 引用，检查摘要是否在未完成交互中切断。</p><p><span class="label">动作</span>调整工具结果外置和摘要字段，不直接放宽上下文上限来掩盖信息结构问题。</p></article>
-        <article class="scenario"><h3>UI 没有收到流，但运行记录显示完成</h3><p><span class="label">诊断</span>先查 canonical transcript 和 run terminal，再查 stream sink、SSE/Slack delivery。运行完成只说明 Core 终止，不说明用户看到了内容。</p><p><span class="label">动作</span>走入口的最终消息补偿或重连逻辑；不要重新执行模型和工具。</p></article>
-      </div>
-    </section>
-
-    <section class="chapter2" id="source">
-      <h2>对应实现</h2>
-      <div class="table-scroll"><table class="detail-table">
-        <thead><tr><th>内容</th><th>主要实现</th><th>验证位置</th></tr></thead>
-        <tbody>
-          <tr><td>提示目录与覆盖合并</td><td><code>packages/prompts</code>、<code>packages/agent/prompt</code></td><td><code>catalog_test.go</code>、<code>prompt_test.go</code></td></tr>
-          <tr><td>运行环境片段</td><td><code>packages/agent/environment</code>、<code>runtime/environment.go</code></td><td><code>environment_test.go</code></td></tr>
-          <tr><td>上下文投影与估算</td><td><code>packages/agent/runtime/context.go</code></td><td><code>context_test.go</code></td></tr>
-          <tr><td>压缩与超限恢复</td><td><code>runtime/compactor.go</code>、<code>context_recovery.go</code></td><td><code>compactor_test.go</code>、runner recovery tests</td></tr>
-          <tr><td>统一模型协议</td><td><code>packages/agent/model</code></td><td>model package tests</td></tr>
-          <tr><td>Provider 转换</td><td><code>packages/llm</code>、<code>packages/providers</code></td><td>各 provider adapter tests</td></tr>
-          <tr><td>重试、备用服务与流提交</td><td><code>agent/model/resilient.go</code>、<code>runtime/runner.go</code></td><td><code>resilient_test.go</code>、runner tests</td></tr>
-          <tr><td>结构化引用与呈现</td><td><code>model.Content.Citations</code>、各 surface adapter</td><td>provider/surface integration tests</td></tr>
-        </tbody>
-      </table></div>
-    </section>
-  </article>
+<a class="skip-link" href="#content">跳到正文</a>
+<header class="site-header"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">K</span><strong>Kepler</strong><span class="brand-label">架构文档</span></a><div class="header-actions"></div></header>
+<div class="doc-layout">
+<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="execution.html">执行过程</a><a href="models.html" aria-current="page">上下文与模型</a><a href="tools.html">工具与策略</a><a href="reliability.html">状态与恢复</a><a href="delegation.html">委派执行</a><a href="operations.html">队列与观测</a><a href="production.html">故障处理</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="reading-guide.html">术语</a><a href="reference.html">实现索引</a></nav>
+<main class="doc-content" id="content" tabindex="-1">
+<header class="doc-header"><p class="breadcrumb">执行机制<span aria-hidden="true"> / </span>03</p><h1>上下文与模型</h1><p class="lead">模型请求由系统提示、会话消息和工具定义组成。执行器控制上下文和执行预算；模型适配器转换提供方协议；弹性客户端管理网络尝试。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<section class="doc-section" id="request"><h2>请求组成</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="组成、来源、处理规则"><table><thead><tr><th scope="col">组成</th><th scope="col">来源</th><th scope="col">处理规则</th></tr></thead><tbody><tr><td>系统提示</td><td>核心、产品和环境配置</td><td>与动态输入分层</td></tr><tr><td>会话消息</td><td>用户输入、模型消息和工具结果</td><td>从会话事件投影</td></tr><tr><td>当前环境与图片</td><td>本次执行的临时上下文</td><td>参与请求预算</td></tr><tr><td>工具定义</td><td>默认启用和已激活目录</td><td>激活前检查上下文容量</td></tr><tr><td>输出预留</td><td>模型输出上限与安全预留</td><td>派发前计入完整请求</td></tr></tbody></table></div></section>
+<section class="doc-section" id="prompt-layers"><h2>提示分层</h2>
+<p>提示层区分核心规则、产品配置、环境、项目、用户、技能和当前执行。静态层与动态层分别处理缓存。环境专用信息由对应配置提供，不写入共享执行循环。</p>
+<p>提示说明不能替代服务端能力策略、工作区检查或上游权限。加载技能不会自动授予工具权限。</p></section>
+<section class="doc-section" id="projection"><h2>上下文预算</h2>
+<p>每次派发前，执行器检查：消息、环境、当前图片、工具定义、输出预留和安全预留的估算总量不超过上下文窗口。</p>
+<p><code>BoundedProjector</code> 根据事件类型、摘要覆盖点和完整交互分组选择历史。工具调用与结果需要保持配对。当前输入不能因历史裁剪而丢失。</p>
+<aside class="note"><strong>估算限制</strong><p>本地 token 估算不等于提供方 tokenizer。提供方仍可能因协议或实际计数拒绝请求。</p></aside></section>
+<section class="doc-section" id="compaction"><h2>历史遮蔽与压缩</h2>
+<ol class="steps"><li>读取最新有效摘要及其覆盖边界。</li><li>历史过大时，先遮蔽近期完整交互之外的大工具结果，保留预览与证据引用。</li><li>仍超预算时，按完整交互选择可压缩历史。压缩器读取原始证据。</li><li>将摘要作为新事件追加，不覆盖原始会话事件。</li><li>重新投影并检查完整请求。预算仍不满足时，明确返回错误。</li></ol>
+<p><code>context_read</code> 读取当前会话中已记录的工具证据。大结果读取还需验证 artifact 引用的会话和用户作用域。摘要属于历史数据，不能提升为系统指令。</p></section>
+<section class="doc-section" id="protocol"><h2>协议与完成判定</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="协议边界、要求"><table><thead><tr><th scope="col">协议边界</th><th scope="col">要求</th></tr></thead><tbody><tr><td>统一模型接口</td><td>请求、响应、内容块、工具调用、用量和错误使用内部类型</td></tr><tr><td>Chat Completions</td><td>需要明确的提供方结束原因；EOF 或 <code>[DONE]</code> 本身不证明完成</td></tr><tr><td>Responses</td><td>按原生完成回执和终态处理文本、工具调用及续接</td></tr><tr><td>Anthropic</td><td>按内容块索引配对开始、增量和结束事件</td></tr><tr><td>不完整参数</td><td>不能作为已完成工具调用执行</td></tr></tbody></table></div></section>
+<section class="doc-section" id="resilience"><h2>重试、备用路径与熔断</h2>
+<p>弹性客户端按错误分类、剩余预算和输出提交状态决定是否重试。尝试次数包含首次请求。重试等待采用有界退避和抖动，并响应取消。</p>
+<p>已向接收器成功提交非空文本后，客户端不透明重放整段回答。主要提供方熔断时，只有已配置且可用的备用路径才能继续。权限、配额或未知错误不能一概按临时故障重试。</p></section>
+<section class="doc-section" id="streaming"><h2>流式输出与用量</h2>
+<p>流式文本用于即时呈现；完整模型消息和生命周期事件用于恢复。投递失败与推理失败分别记录。</p>
+<p>每次网络尝试分别计入资源预留和结算。失败且用量未知时保留估算。父任务与子任务用量按结构化字段汇总；运行结果不是提供方账单。</p></section>
+<section class="doc-section" id="task-state"><h2>任务声明与证据</h2>
+<p>结构化任务状态保存带来源和 revision 的模型声明。它与压缩摘要分别保留，用于连续执行。</p>
+<p>模型声明、任务状态和内容哈希不构成实际完成证明。完成判断仍需对应工具结果、源文件或测试证据；外部副作用未知时需单独核对。</p></section>
+<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="依据、位置"><table><thead><tr><th scope="col">依据</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/model/resilient.go">packages/agent/model/resilient.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/model/resilient_test.go">packages/agent/model/resilient_test.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/context.go">packages/agent/runtime/context.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/transcript">packages/agent/transcript</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/models.md">docs/models.md</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/taskstate/state.go">packages/agent/taskstate/state.go</a></td></tr></tbody></table></div></section>
 </main>
-<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">术语与文档范围</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
+<aside class="toc" aria-label="本页目录"></aside>
+</div>
+<footer class="site-footer"><span>Kepler 架构文档</span><a href="reading-guide.html">术语</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
 </body>
 </html>

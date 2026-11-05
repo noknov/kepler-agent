@@ -1,34 +1,75 @@
 name: architecture-pages
 
 on:
+  push:
+    branches: ['**']
+    paths:
+      - 'architecture-site/**'
+      - '.github/workflows/pages.yml'
+  pull_request:
+    paths:
+      - 'architecture-site/**'
+      - '.github/workflows/pages.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: architecture-pages
-  cancel-in-progress: true
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Test documentation validator
+        run: python3 -m unittest discover -s architecture-site/scripts -p 'test_*.py'
+      - name: Validate architecture documentation
+        run: python3 architecture-site/scripts/validate-site.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install browser test runtime
+        run: |
+          npm install --prefix "$RUNNER_TEMP/architecture-browser" --no-audit --no-fund playwright@1.58.2
+          "$RUNNER_TEMP/architecture-browser/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Verify documentation in Chromium
+        env:
+          PLAYWRIGHT_MODULE: ${{ runner.temp }}/architecture-browser/node_modules/playwright
+        run: node architecture-site/scripts/browser-check.cjs
+      - name: Explain publication scope
+        if: github.ref != 'refs/heads/main'
+        run: echo 'Validation only. GitHub Pages publishes from main after merge.' >> "$GITHUB_STEP_SUMMARY"
+
   deploy:
-    # Manual runs publish the selected branch, including feature branches.
-    if: github.repository == 'noknov/kepler-agent'
+    needs: validate
+    # Keep the existing Pages environment protection. Feature refs validate only.
+    if: github.repository == 'noknov/kepler-agent' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: architecture-pages-deploy
+      cancel-in-progress: true
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Validate architecture site
-        run: test -s architecture-site/index.html
       - uses: actions/configure-pages@v5
+      - name: Prepare static site
+        run: |
+          mkdir -p "$RUNNER_TEMP/architecture-pages"
+          cp architecture-site/*.html "$RUNNER_TEMP/architecture-pages/"
+          cp -R architecture-site/assets "$RUNNER_TEMP/architecture-pages/assets"
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: architecture-site
+          path: ${{ runner.temp }}/architecture-pages
       - name: Deploy architecture guide
         id: deployment
         uses: actions/deploy-pages@v4

@@ -1,221 +1,50 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="共享执行核心的状态机、上下文、模型请求、工具调度和结束条件">
-  <title>执行过程 · Kepler 架构指南</title>
-  <link rel="stylesheet" href="assets/guide.css">
-  <script src="assets/search-index.js" defer></script>
-  <script src="assets/architecture.js" defer></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="一次执行（turn）包含输入、模型轮次、工具调用和终态。执行器先取得会话处理权，再根据已保存事件推进状态。">
+<meta name="color-scheme" content="light dark">
+<title>执行过程 · Kepler 架构文档</title>
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/guide.css">
+<script src="assets/search-index.js" defer></script>
+<script src="assets/architecture.js" defer></script>
 </head>
 <body>
-<a class="skip2" href="#content">跳到正文</a>
-<header class="topbar"><div class="topbar-inner">
-  <a class="brand2" href="index.html">KEPLER / 架构指南</a>
-  <nav class="topnav" aria-label="文档导航">
-    <a href="index.html">概览</a><a href="execution.html" aria-current="page">执行</a><a href="models.html">模型</a>
-    <a href="tools.html">工具</a><a href="reliability.html">可靠性</a><a href="operations.html">观测</a><a href="production.html">生产推演</a><a href="slack.html">Slack</a><a href="delegation.html">委派</a><a href="reference.html">索引</a>
-  </nav>
-</div></header>
-
-<main class="doc-shell">
-  <aside class="side"><p>本页目录</p><a href="#mental-model">对象层次</a><a href="#input">请求准备</a><a href="#state-machine">状态机</a><a href="#context">上下文</a><a href="#model">模型请求</a><a href="#tools">工具执行</a><a href="#results">结果大小</a><a href="#steering">追加输入</a><a href="#finish">结束条件</a><a href="#scenarios">生产推演</a><a href="#source">实现索引</a></aside>
-  <article class="doc" id="content" tabindex="-1">
-    <header class="hero2">
-      <p class="kicker">CORE / EXECUTION</p>
-      <h1>请求执行</h1>
-      <p class="lead2">执行器先取得会话处理权，再读取事件并构造上下文。模型返回答复或工具调用。执行器保存工具结果，然后继续调用模型。每次执行都必须到达明确终态，或留下可供恢复核对的记录。</p>
-      <div class="facts"><span><b>一个 turn</b> 多个 step</span><span><b>一个 step</b> 一次模型判断</span><span><b>工具批次</b> 先检查后执行</span><span><b>终态</b> 必须持久化</span></div>
-    </header>
-<section class="chapter-brief" aria-label="关键约束"><p class="eyebrow">关键约束</p><h2>执行约束</h2><ul><li>执行器先取得会话处理权，再推进请求。</li><li>工具结果写入事件记录后，执行器才继续下一轮。</li><li>恢复时，执行器先核对未完成操作的状态。</li></ul></section>
-
-
-    <section class="chapter2" id="mental-model">
-      <h2>执行对象与标识</h2>
-      <p class="intro">会话、执行、模型轮次、网络尝试和流式片段具有不同的生命周期。执行器使用对应标识和事件类型记录这些对象。</p>
-      <div class="layers">
-        <div class="layer"><b>Session / 会话</b><span>连续对话和串行化边界。相同 session 的两个 turn 不能同时从同一份旧历史继续。</span></div>
-        <div class="layer"><b>Turn / 一次执行</b><span>从一条用户输入开始到明确终止。它可以跨多个模型 step，并可能暂停等待批准或用户补充。</span></div>
-        <div class="layer"><b>Step / 模型轮次</b><span>构造一次上下文并请求一次模型；若模型产生工具调用，则完成该批工具后进入下一轮。</span></div>
-        <div class="layer"><b>Attempt / 网络尝试</b><span>一次具体 provider 网络调用。一次逻辑模型请求可能包含 retry 或 fallback，但只能产生一个可供 Runtime 消费的完成结果。</span></div>
-        <div class="layer"><b>Stream delta / 片段</b><span>用于实时呈现的瞬时事件。它不是恢复单元；恢复依赖完整 assistant message、模型生命周期和工具结果。</span></div>
-      </div>
-      <div class="callout"><strong>恢复检查顺序</strong>如果进程退出，先看 turn 是否已经有终态，再看当前模型请求或工具调用是否只有 started 而没有 completed/failed。不要只看“最后一段文字”或内存里的 goroutine 状态。</div>
-    </section>
-
-    <section class="chapter2" id="input">
-      <span class="number">01</span><h2>执行前置条件</h2>
-      <p class="intro">入口只负责把外部协议转换成 <code>TurnRequest</code>。Runtime 负责确认身份字段、补齐 session/turn ID、取得会话所有权并将当前输入写入 canonical transcript。模型调用发生在这些事实建立之后。</p>
-      <figure class="diagram">
-        <div class="flow">
-          <div class="box"><b>Surface request</b><small>用户、线程、附件<br>入口作用域</small></div><div class="arrow">→</div>
-          <div class="box"><b>TurnRequest</b><small>session · turn<br>input · scope</small></div><div class="arrow">→</div>
-          <div class="box blue"><b>Session ownership</b><small>本地会话文件锁<br>托管会话租约</small></div><div class="arrow">→</div>
-          <div class="box green"><b>Canonical input</b><small>turn_started<br>user_input</small></div>
-        </div>
-        <figcaption>写入用户输入不是“模型即将看到的临时参数”，而是本次请求能够被恢复和审计的起点。</figcaption>
-      </figure>
-      <ol class="walkthrough">
-        <li><b>确定请求属于哪段对话。</b><span>入口提供稳定的 SessionID；没有时由执行器生成。TurnID 也可以由入口提供，用于重复提交返回已有结果。</span></li>
-        <li><b>确认当前内容是用户输入。</b><span>没有角色时默认为 user；其他角色不会被接受为新 turn 的输入。历史导入只在 canonical session 为空时发生，并按普通不可信消息保存。</span></li>
-        <li><b>取得整段会话的处理权。</b><span>本地运行使用覆盖整个 turn 的会话文件锁；托管产品配置使用 PostgreSQL advisory lock 实现跨进程串行化。锁覆盖完整 turn，而不是只保护一次 append。</span></li>
-        <li><b>读取已有事实并做恢复对账。</b><span>已经存在该 TurnID 的终态时直接重放结果；ToolCallStarted 没有结果时写入 execution_interrupted；ModelRequestStarted 没有收敛事件时写入 model request unknown。</span></li>
-        <li><b>建立 turn 边界。</b><span>追加 <code>turn_started</code> 和 <code>user_input</code>。后续步骤、工具、追加输入和终态都关联同一 TurnID。</span></li>
-      </ol>
-      <div class="callout warn"><strong>会话锁不是幂等键</strong>锁只能防止两个活跃执行者同时工作；它不能阻止用户重复发送一个新的 TurnID，也不能把外部 API 调用和 transcript append 变成一个事务。重复提交和外部副作用要分别处理。</div>
-    </section>
-
-    <section class="chapter2" id="state-machine">
-      <h2>执行状态机</h2>
-      <p>每一步都有“进入前检查”和“离开时事实”。任何返回路径都必须产生明确终态，或者留下足够信息让下一个 owner 继续对账。</p>
-      <div class="table-scroll"><table class="detail-table">
-        <thead><tr><th>阶段</th><th>主要事件</th><th>允许的下一步</th><th>关键失败含义</th></tr></thead>
-        <tbody>
-          <tr><td>Admitted</td><td><code>turn_started</code>、<code>user_input</code></td><td>投影上下文</td><td>写入失败时不能发模型请求，因为输入没有进入权威历史</td></tr>
-          <tr><td>Step started</td><td><code>step_started</code></td><td>追加 steering、投影、请求模型</td><td>取消在模型请求前发生，终止为 canceled</td></tr>
-          <tr><td>Model in flight</td><td><code>model_request_started</code>、attempt events</td><td>得到完整响应或失败</td><td>只有可重试错误才可换 attempt；重启后未收敛请求是 unknown</td></tr>
-          <tr><td>Tool batch</td><td><code>assistant_message</code>、<code>tool_call_started</code></td><td>完成/失败所有调用，按原顺序写结果</td><td>单个调用可能已产生副作用；没有结果不能自动重做</td></tr>
-          <tr><td>Candidate final</td><td>无工具调用的 assistant message</td><td>两次检查追加输入</td><td>收到新消息就继续下一 step，不把旧答复当作最终答案</td></tr>
-          <tr><td>Terminal</td><td><code>turn_completed</code> / failed / canceled</td><td>释放锁、结束 turn-scoped catalog</td><td>投影失败不应篡改 canonical terminal fact</td></tr>
-        </tbody>
-      </table></div>
-      <p>“写事件”与“分发事件”是两个动作：Runtime 先调用 transcript store，成功后才向 projection sink 发布。sink 崩溃或变慢不能回滚已经提交的事实；投影应通过重放修复。</p>
-    </section>
-
-    <section class="chapter2" id="context">
-      <span class="number">02</span><h2>上下文构造</h2>
-      <p class="intro">每次模型判断前，执行器都会重新从权威事件中投影上下文。这保证刚完成的工具结果、刚追加的用户消息和新生成的摘要都会被纳入，同时避免入口自己拼接出另一套历史语义。</p>
-      <figure class="diagram"><div class="flow">
-        <div class="box"><b>系统说明</b><small>核心行为、规则、产品补充<br>运行环境事实</small></div><div class="arrow">+</div>
-        <div class="box"><b>会话事件</b><small>用户、assistant、tool<br>摘要与追加输入</small></div><div class="arrow">+</div>
-        <div class="box"><b>当前工具</b><small>eager 或已激活<br>名称与 schema</small></div><div class="arrow">→</div>
-        <div class="box blue"><b>Model Request</b><small>预算内 canonical messages<br>再由 provider 转换</small></div>
-      </div></figure>
-      <h3>投影的取舍顺序</h3>
-      <ol class="walkthrough">
-        <li><b>先为输出和工具定义留空间。</b><span>可用输入预算是 MaxTokens 减 ReserveTokens；差值不合理时退回总上限，避免负预算导致不可解释的请求。</span></li>
-        <li><b>从最近有效摘要之后继续。</b><span>CompactionCreated 带有 <code>covers_through</code>。边界缺失、为零或越过摘要事件自身时，投影器不会让它隐藏原始历史。</span></li>
-        <li><b>只映射会影响下一次判断的事件。</b><span>UserInput、SteeringInput、AssistantMessage 和 ToolCallCompleted/Failed 进入；锁、步骤开始、运行投影和纯遥测事件不进入。</span></li>
-        <li><b>保持完整交互分组。</b><span>用户输入、模型工具请求和工具结果构成不可拆分的 group。裁剪不会留下 tool call 却删掉 tool result。</span></li>
-        <li><b>从最新 group 向前保留。</b><span>最新一组不能被丢弃；更早 group 在预算内加入。被移出的消息交给 compactor，并把最后事件序号记录成覆盖点。</span></li>
-      </ol>
-      <h3>当前输入和持久化输入的差异</h3>
-      <p>当前执行可以使用用户输入中的图片。执行器通过 <code>durableUserInput</code> 保存用户输入时，将图片替换为文本说明。因此，恢复后的用户消息不包含这些原始图片。工具结果中的图片使用独立处理规则，不能据此推断所有图片都不持久化。</p>
-      <p class="source-note">用户输入持久化：<a href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/runtime/runner.go">runner.go 中的 durableUserInput</a>。执行恢复行为见<a href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/runtime/recovery_regression_test.go">恢复回归测试</a>。</p>
-    </section>
-
-    <section class="chapter2" id="model">
-      <span class="number">03</span><h2>模型请求与网络尝试</h2>
-      <p>Runtime 的逻辑边界是“这一轮有没有得到完整 Response”；ResilientClient 的边界是“某个 provider attempt 是否可安全重试或切换”。两者分开后，重启不会把一次网络失败误认为模型已经完成，观测也能区分逻辑请求和实际尝试。</p>
-      <figure class="diagram"><div class="flow">
-        <div class="box"><b>logical request</b><small>稳定 request_id<br>model_request_started</small></div><div class="arrow">→</div>
-        <div class="box"><b>primary attempt</b><small>typed transient / 429 / 5xx<br>有限 retry</small></div><div class="arrow">→</div>
-        <div class="box"><b>fallback attempt</b><small>仅在未提交输出时<br>换 provider/model</small></div><div class="arrow">→</div>
-        <div class="box green"><b>complete / fail</b><small>完整消息、usage<br>finish reason</small></div>
-      </div></figure>
-      <div class="table-scroll"><table class="detail-table">
-        <thead><tr><th>错误类别</th><th>默认处理思路</th><th>不能做什么</th></tr></thead>
-        <tbody>
-          <tr><td>transient / unavailable</td><td>在 MaxAttempts 和 deadline 内重试；连续失败计入 provider/model breaker</td><td>不能超过剩余预算继续发送</td></tr>
-          <tr><td>rate limited</td><td>按延迟策略等待，必要时 fallback；尝试数和 token 成本仍要记录</td><td>不能把 429 当作免费或无限容量</td></tr>
-          <tr><td>context limit</td><td>通过 compactor 缩短 durable history，重新投影后再发一次</td><td>不能只把当前请求字符串截断到半个工具交互</td></tr>
-          <tr><td>invalid / auth</td><td>快速失败，修配置或凭据</td><td>不能用重试掩盖错误配置</td></tr>
-          <tr><td>protocol / empty</td><td>协议错误可在安全边界内重试；空内容按 MaxEmptyResponseRetries 处理</td><td>不能把空响应当成 completed final answer</td></tr>
-          <tr><td>output committed</td><td>停止 retry/fallback，保留已展示片段，终止为可诊断失败</td><td>不能把两次模型回答拼在同一条消息中</td></tr>
-        </tbody>
-      </table></div>
-      <p>首个非空文字 delta 是“输出已提交”边界。工具调用、usage 和 transport lifecycle 不会单独触发该边界，因为 Runtime 会等完整响应后才执行工具，入口也不会把这些事件当作 assistant 文本展示。</p>
-    </section>
-
-    <section class="chapter2" id="tools">
-      <span class="number">04</span><h2>工具调用与执行</h2>
-      <p class="intro">工具调用是从不可信模型输出进入真实系统的唯一入口之一。Runtime 把“模型想调用什么”和“系统是否允许、是否已经调用过、结果如何进入下一轮”拆成连续检查。</p>
-      <ol class="walkthrough">
-        <li><b>按 CallID 查找已有结果。</b><span>恢复执行时，已有成功或失败结果直接复用，不再次派发。CallID 是 Runtime 去重边界；ExecutionID 供工具传给支持幂等的下游。</span></li>
-        <li><b>确认工具处于 active catalog。</b><span>工具必须已注册，且是 eager 或已在该 session 激活。tool_search 负责发现和激活，不负责授权。</span></li>
-        <li><b>校验参数结构。</b><span>注册时要求 object schema；执行前仍要由具体工具解析和检查参数。无效参数不应进入文件、网络或外部连接代码。</span></li>
-        <li><b>检查 exclusive 批次。</b><span>需要用户输入等独占工具必须单独出现。混入其他调用时整批返回结构化错误，防止模型一边暂停一边先执行写操作。</span></li>
-        <li><b>作出权限决定。</b><span>Policy 根据 descriptor effects、call scope、用户、workspace 和实际目标返回 allow、deny 或 require approval。描述和 surface 标签不构成授权。</span></li>
-        <li><b>取得并发名额，再启动执行。</b><span>parallel 只允许明确安全的读取；MaxParallelToolCalls 在创建 goroutine 前作为 bulkhead。其他调用通过写锁串行化。</span></li>
-        <li><b>先记开始，再调用实现。</b><span>ToolCallStarted 写入成功后才执行外部动作。工具有独立 timeout，panic、普通错误和空结果都会转成可解释的 ToolResult。</span></li>
-        <li><b>限制结果并按模型原顺序写回。</b><span>并行调用可以先后完成，但结果写入和下一次上下文按照模型请求的顺序。单结果和整批都有大小预算。</span></li>
-      </ol>
-      <div class="callout warn"><strong>ToolCallStarted 是有意留下的“危险边界”</strong>它证明执行器已经决定要调用，而不证明外部系统成功或失败。进程在这之后退出，恢复逻辑会写一个 execution_interrupted 的工具失败结果，让模型先调查，而不是假设“没看到结果所以没发生”。</div>
-    </section>
-
-    <section class="chapter2" id="results">
-      <span class="number">05</span><h2>工具结果大小限制</h2>
-      <p>大结果会同时伤害模型上下文、数据库写入、日志体积和 UI 响应。Runtime 先限制单个结果，再限制同一批结果的总量；若有 ArtifactStore，则把完整内容放在受作用域保护的附件中。</p>
-      <div class="plain-grid">
-        <article><h3>单个结果较小</h3><p>原始 content 直接进入 tool message，模型可以完整读取。</p></article>
-        <article><h3>单个结果超限且可 spill</h3><p>完整 JSON 写入 artifact，模型收到有限说明、引用和大小信息。</p></article>
-        <article><h3>没有附件存储</h3><p>按 UTF-8 边界截断，追加明确的 truncated 标记，不伪装为完整结果。</p></article>
-        <article><h3>多个结果合计超限</h3><p>再次按 batch budget 分配，避免多个“各自合法”的结果一起淹没上下文。</p></article>
-      </div>
-      <p>结果被截断不会改变 canonical tool call 的身份和错误状态；它改变的是下一轮模型可见的 content。入口层的 Slack 长消息分段属于另一个展示问题，不能拿它解决模型上下文过大。</p>
-    </section>
-
-    <section class="chapter2" id="steering">
-      <span class="number">06</span><h2>执行期间的追加输入</h2>
-      <p>用户可能在模型仍工作时继续发消息。追加输入不是直接改写当前模型请求，而是进入 InputSource，在稳定边界被 claim、写成 SteeringInput、ack 后再参与下一次投影。</p>
-      <div class="timeline">
-        <dt>消息到达</dt><dd>Hosted 先写入 <code>agent_session_inputs</code>；Redis 只做快速唤醒，丢通知不会丢消息。</dd>
-        <dt>工作进程认领</dt><dd>按 session、kind 和 sequence 认领，带 owner/lease/attempts；处理权过期后可以被接管。</dd>
-        <dt>模型判断前</dt><dd>Runtime 原子取出待处理消息，写成 SteeringInput，再 ack。下一次上下文会看到它。</dd>
-        <dt>最终文字产生后</dt><dd>Runtime 在结束前检查两次；关闭输入源后再次检查，避免恰好到达的消息被漏掉。</dd>
-        <dt>工具执行期间</dt><dd>不插入当前工具批次。当前批次完成后再吸收消息，保持同一批工具基于同一意图执行。</dd>
-      </div>
-      <div class="callout"><strong>为什么不实时打断每个工具</strong>打断会让同一批工具看到不同用户意图，还会产生“部分工具按旧意图、部分工具按新意图”的权限审计问题。稳定边界的代价是几十毫秒到一个工具超时的等待，换来可重放顺序。</div>
-    </section>
-
-    <section class="chapter2" id="finish">
-      <span class="number">07</span><h2>执行终态</h2>
-      <div class="table-scroll"><table class="detail-table">
-        <thead><tr><th>结果</th><th>触发条件</th><th>恢复/呈现含义</th></tr></thead>
-        <tbody>
-          <tr><td>completed</td><td>模型返回无工具的最终消息，结束前没有新 steering</td><td>可正常展示；若投影失败可从 transcript 重建</td></tr>
-          <tr><td>canceled</td><td>用户中断、上层 deadline、session lease 丢失或服务关闭</td><td>停止当前模型/工具；未完成外部调用仍按未知边界处理</td></tr>
-          <tr><td>pending_approval</td><td>Policy 要求批准且当前没有同步 Approver</td><td>保存具体 Call，UI 决定；批准时只执行已保存调用，不接受替换参数</td></tr>
-          <tr><td>pending_input</td><td>工具明确要求用户补充信息</td><td>只有被允许的用户回复才恢复该 session 的工作流</td></tr>
-          <tr><td>max_steps</td><td>达到 MaxSteps，且最后一步已经完成</td><td>停止，不额外发一轮“合成回答”请求，避免预算和状态不可预期</td></tr>
-          <tr><td>output_limit</td><td>模型以 length 结束且没有工具调用</td><td>保留已有消息并标记输出受限，不自动拼接第二次回答</td></tr>
-          <tr><td>empty_response</td><td>空消息经过配置的空响应重试仍无内容</td><td>作为可诊断失败结束，不把空内容当作用户答复</td></tr>
-          <tr><td>budget_exhausted</td><td>剩余 deadline 不足以进行下一次有意义的尝试</td><td>停止 retry/fallback，避免关闭期限内继续堆积工作</td></tr>
-          <tr><td>provider_circuit_open / fallback_exhausted</td><td>提供方连续失败或主备路径均耗尽</td><td>与普通 model_error 区分，便于容量和 provider 事故定位</td></tr>
-        </tbody>
-      </table></div>
-      <p>终态事件使用 <code>context.WithoutCancel</code> 尝试写入，避免上层取消使恢复失去边界。若终态本身写入失败，调用者必须把它视为持久化故障，而不是报告“已完成”。</p>
-    </section>
-
-    <section class="chapter2" id="scenarios">
-      <h2>执行故障处理</h2>
-      <div class="scenario-list">
-        <article class="scenario"><h3>模型超时后的重试条件</h3><p><span class="label">先看</span>是否已经产生文字 delta、是否已经写入 ModelRequestStarted、剩余 deadline 以及错误的 typed kind。</p><p><span class="label">结论</span>未提交输出且属于 transient/rate-limited/unavailable/protocol 才能在预算内重试；首段文字后只能结束并保留已展示内容。</p></article>
-        <article class="scenario"><h3>工具开始记录缺少完成事件</h3><p><span class="label">风险</span>工具可能已经完成外部写入，只是进程在结果 append 前退出。再次调用会产生重复副作用。</p><p><span class="label">结论</span>先补写 execution_interrupted，让下一轮模型查询上游；能否安全重做取决于工具是否有幂等键和结果查询能力。</p></article>
-        <article class="scenario"><h3>模型轮次达到上限</h3><p><span class="label">原因</span>总结本身也是一次模型调用，会突破既定 step、deadline 和成本边界；最后一个工具结果是否足够也未必已验证。</p><p><span class="label">结论</span>以明确的 max_steps 终态结束，让入口根据产品策略展示“达到执行上限”，或由用户发起新的 turn。</p></article>
-        <article class="scenario"><h3>同一会话的执行串行化</h3><p><span class="label">原因</span>它们会从同一旧 transcript 投影出两个互不知情的上下文，工具顺序和追加输入也无法解释。</p><p><span class="label">结论</span>不同 session 可并行；同一 session 串行是会话一致性的必要条件，吞吐应靠多 session、入口队列和工具 bulkhead 调节。</p></article>
-      </div>
-    </section>
-
-    <section class="chapter2" id="source">
-      <h2>对应实现</h2>
-      <div class="table-scroll"><table class="detail-table">
-        <thead><tr><th>正文内容</th><th>主要实现</th><th>验证行为的测试</th></tr></thead>
-        <tbody>
-          <tr><td>请求主循环与结束条件</td><td><code>packages/agent/runtime/runner.go</code>、<code>state.go</code></td><td><code>runner_test.go</code>、<code>state_test.go</code></td></tr>
-          <tr><td>会话锁与处理权</td><td><code>runtime/types.go</code>、<code>packages/session/pgstore.go</code></td><td>lease 获取、取消和恢复测试</td></tr>
-          <tr><td>上下文选择与恢复</td><td><code>context.go</code>、<code>context_recovery.go</code></td><td><code>context_test.go</code>、恢复测试</td></tr>
-          <tr><td>模型请求与 attempt 记录</td><td><code>runtime/runner.go</code>、<code>agent/model/resilient.go</code></td><td><code>resilient_test.go</code>、telemetry tests</td></tr>
-          <tr><td>工具检查、调度与批准</td><td><code>runtime/tools.go</code>、<code>approvals.go</code>、<code>packages/agent/tool</code></td><td><code>approvals_test.go</code>、<code>tool/concurrent_test.go</code></td></tr>
-          <tr><td>结果限制与附件转存</td><td><code>runtime/tool_results.go</code></td><td><code>tool_results_test.go</code></td></tr>
-          <tr><td>执行中的追加输入</td><td><code>runtime/continuation.go</code>、<code>packages/sessioninput/store.go</code></td><td><code>runner_test.go</code>、session input tests</td></tr>
-          <tr><td>生产故障窗口</td><td><a href="reliability.html">状态与恢复</a>、<a href="production.html">生产推演</a></td><td><a href="reference.html">源码索引</a></td></tr>
-        </tbody>
-      </table></div>
-    </section>
-  </article>
+<a class="skip-link" href="#content">跳到正文</a>
+<header class="site-header"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">K</span><strong>Kepler</strong><span class="brand-label">架构文档</span></a><div class="header-actions"></div></header>
+<div class="doc-layout">
+<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="execution.html" aria-current="page">执行过程</a><a href="models.html">上下文与模型</a><a href="tools.html">工具与策略</a><a href="reliability.html">状态与恢复</a><a href="delegation.html">委派执行</a><a href="operations.html">队列与观测</a><a href="production.html">故障处理</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="reading-guide.html">术语</a><a href="reference.html">实现索引</a></nav>
+<main class="doc-content" id="content" tabindex="-1">
+<header class="doc-header"><p class="breadcrumb">执行机制<span aria-hidden="true"> / </span>02</p><h1>执行过程</h1><p class="lead">一次执行（turn）包含输入、模型轮次、工具调用和终态。执行器先取得会话处理权，再根据已保存事件推进状态。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<section class="doc-section" id="mental-model"><h2>执行对象</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="对象、作用域、用途"><table><thead><tr><th scope="col">对象</th><th scope="col">作用域</th><th scope="col">用途</th></tr></thead><tbody><tr><td>会话 / session</td><td>连续对话</td><td>历史、锁与输入路由</td></tr><tr><td>执行 / turn</td><td>一次执行生命周期</td><td>审批、模型轮次、预算与终态</td></tr><tr><td>模型轮次 / model step</td><td>一次逻辑模型请求</td><td>构造上下文并取得响应</td></tr><tr><td>网络尝试 / attempt</td><td>一次提供方调用</td><td>重试与备用模型记录</td></tr><tr><td>工具调用 / call</td><td>一组工具名称与参数</td><td>结果配对与操作核对</td></tr><tr><td>流式片段 / delta</td><td>实时呈现</td><td>不作为持久恢复单元</td></tr></tbody></table></div></section>
+<section class="doc-section" id="input"><h2>执行前置条件</h2>
+<ol class="steps"><li>入口确认用户、工作区和会话归属。会话标识本身不是认证凭据。</li><li>执行器取得会话处理权，并检查相同 TurnID 是否已有终态。</li><li>已有终态时，执行器恢复对应结果，不重新执行工具。</li><li>缺少终态时，执行器核对未完成模型请求和工具调用，并确保用户输入已保存。</li></ol>
+<p><code>TurnStarted</code> 与 <code>UserInput</code> 是不同事件。只有开始标记而没有用户输入时，恢复仍需补齐输入。</p></section>
+<section class="doc-section" id="state-machine"><h2>执行状态</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="阶段、主要记录、后续动作"><table><thead><tr><th scope="col">阶段</th><th scope="col">主要记录</th><th scope="col">后续动作</th></tr></thead><tbody><tr><td>输入建立</td><td><code>turn_started</code>、<code>user_input</code></td><td>构造上下文</td></tr><tr><td>模型请求</td><td><code>model_request_started</code> 与完成或失败事件</td><td>保存完整模型消息</td></tr><tr><td>工具执行</td><td><code>tool_call_started</code> 与结果事件</td><td>保存结果并继续或结束</td></tr><tr><td>等待</td><td>待输入或待批准终态</td><td>按原调用和身份恢复</td></tr><tr><td>终止</td><td>完成、失败或取消终态</td><td>清理执行范围内状态并返回结果</td></tr></tbody></table></div></section>
+<section class="doc-section" id="context"><h2>上下文构造</h2>
+<p>每轮请求从会话事件生成模型消息。执行器纳入环境、当前输入、有效摘要、历史消息和工具定义，并在派发前检查完整请求预算。</p>
+<p>用户输入中的图片可用于当前执行。<code>durableUserInput</code> 在持久化用户消息时将图片替换为文本说明。工具结果图片另有处理规则，不能推断所有图片都不持久化。</p>
+<p>上下文选择和压缩见<a href="models.html">上下文与模型</a>。</p></section>
+<section class="doc-section" id="model"><h2>模型请求</h2>
+<p>执行器依赖统一的 <code>model.Client</code>。产品配置提供的弹性客户端负责提供方重试、备用路径和熔断。一次逻辑请求可以包含多次网络尝试。</p>
+<p>完整模型响应与流式片段分别处理。只有完整工具调用才能进入工具执行；参数片段不触发外部操作。</p></section>
+<section class="doc-section" id="tools"><h2>工具执行</h2>
+<ol class="steps"><li>解析工具身份和调用参数，检查已有结果。</li><li>检查能力策略、实际作用域和审批状态。具体工具验证业务参数。</li><li>取得并发名额和对应读写锁。</li><li>保存工具开始事件，再调用执行器。</li><li>保存结果或分类错误，按模型可见预算处理内容。</li></ol>
+<aside class="note"><strong>参数校验范围</strong><p>当前执行器不提供覆盖全部工具的完整 JSON Schema 校验层。工具实现仍需检查边界值和业务前置条件。</p></aside></section>
+<section class="doc-section" id="steering"><h2>追加输入与取消</h2>
+<p>追加输入在模型或工具轮次之间写入会话事件。排队输入用于后续执行；取消用于停止当前执行。三者具有不同状态，不能合并为一个“最后消息”字段。</p>
+<p>等待会话处理权时的取消应及时返回。已经开始的执行在取消后仍需完成有界的终态写入与清理。</p></section>
+<section class="doc-section" id="finish"><h2>执行终态</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="类别、触发条件、处理要求"><table><thead><tr><th scope="col">类别</th><th scope="col">触发条件</th><th scope="col">处理要求</th></tr></thead><tbody><tr><td>完成</td><td>模型返回最终答复且没有需要继续处理的输入</td><td>保存答复、用量与终态</td></tr><tr><td>等待输入或批准</td><td>当前执行需要外部输入</td><td>保留请求身份与原始调用</td></tr><tr><td>取消或超时</td><td>取消信号或执行期限触发</td><td>停止继续派发并执行有界清理</td></tr><tr><td>上限或预算耗尽</td><td>轮次、上下文或执行预算不足</td><td>明确结束，不追加一次未计入预算的总结请求</td></tr><tr><td>错误</td><td>模型、工具或存储出现无法继续的错误</td><td>保留分类及可核对的事件</td></tr></tbody></table></div>
+<p>终态写入使用独立的有界清理上下文。终态保存失败属于持久化故障，调用方不能报告持久完成。</p></section>
+<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="依据、位置"><table><thead><tr><th scope="col">依据</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/runner.go">packages/agent/runtime/runner.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/tools.go">packages/agent/runtime/tools.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/recovery_regression_test.go">packages/agent/runtime/recovery_regression_test.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/runtime.md">docs/runtime.md</a></td></tr></tbody></table></div></section>
 </main>
-<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">术语与文档范围</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
+<aside class="toc" aria-label="本页目录"></aside>
+</div>
+<footer class="site-footer"><span>Kepler 架构文档</span><a href="reading-guide.html">术语</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
 </body>
 </html>

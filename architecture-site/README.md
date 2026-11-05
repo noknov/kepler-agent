@@ -1,74 +1,93 @@
-# Agent Core 架构站点
+# Kepler architecture documentation
 
-这里是当前主分支共享执行核心的中文架构说明。站点不依赖构建工具，直接打开 index.html 即可阅读。
+This static Chinese site describes the shared execution core and the product
+boundaries of Slack, Web, and the local CLI. Open `index.html` directly or serve
+this directory with a static HTTP server. The site has no runtime package,
+external font, remote renderer, or build-service dependency.
 
-项目文档总入口见 [docs/README.md](../docs/README.md)。本网站负责解释架构；
-使用步骤、配置和排障分别由对应 Markdown 指南维护。
+## Content ownership
 
-## 页面
+- `index.html`: system responsibilities, product boundaries, and request flow.
+- `execution.html`, `models.html`, `tools.html`: shared execution mechanisms.
+- `reliability.html`, `delegation.html`: state, ownership, recovery, and child tasks.
+- `operations.html`, `production.html`: durable queues, observation, diagnosis,
+  shutdown, and release boundaries.
+- `slack.html`, `web.html`, `local.html`: product-specific ingress, authentication,
+  execution, delivery, and lifecycle contracts.
+- `reading-guide.html`, `reference.html`: terminology, identifiers, source, and tests.
 
-- index.html：系统组成、完整请求路径、贯穿实现的规则和阅读入口。
-- execution.html：一条请求从取得会话处理权到明确结束的控制流。
-- models.html：提示内容、上下文投影、压缩、模型适配、重试和流式事件。
-- tools.html：工具目录、参数、权限、安全边界、并发和结果处理。
-- reliability.html：事件存储、并发所有权和中断恢复。
-- delegation.html：子任务协议、批次调度、父子记录和汇合边界。
-- slack.html：Slack 请求接收、会话映射、附件与结果呈现。
-- operations.html：入口队列、追加输入、运行投影、健康检查和关闭。
-- production.html：把超时、租约、容量、发布和故障排查放在同一条生产链路上推演。
-- reference.html：内部类型、事件、配置归属、数据库表、源码与测试索引。
+The Markdown guides under `docs/` own setup, configuration and operating commands.
+The site explains architecture rather than maintaining a second deployment runbook.
 
-## 维护
+Source citations pin application revision
+`35995459c70ec3059e15fbbb7e68119f360af74d`. Later commits in the documentation branch
+change the site rather than the application behavior described. When revising a
+behavior claim, verify the owning source and tests, then update the affected
+citations and this baseline. A current path existing is not proof that every
+statement at that path is correct; the validator checks references, not semantics.
 
-- assets/guide.css 保存文档布局、图表和响应式样式。
-- assets/architecture.js 生成文档导航、本页目录和当前章节高亮。
-- 概览建立全局结构，专题页沿真实执行路径解释行为，源码参考集中列出内部名称。
-- 阅读生产专题时，先看可靠性中的权威事件，再看运维中的队列和投影；生产页只做跨模块的故障推演，不重新定义各模块的契约。
+## Technical writing
 
-## 深入阅读
+Apply the useful principles of ASD-STE100 to Chinese technical prose: consistent
+terms, explicit actors, short sentences, one subject per paragraph, and conditions
+beside the affected action. This is an adaptation of writing principles, not a
+claim of English STE conformity or certification.
 
-- [执行架构详解](../docs/architecture-deep-dive.md)：身份与信任边界、完整 turn、失败窗口、请求预算、取证与存储生命周期。
+Use functional headings and concrete descriptions. Exclude slogans, rhetorical
+questions, reader coaching, review history, and prose about the writing process
+from the architecture pages. Preserve code identifiers. Distinguish implemented
+behavior, design requirements, verified outcomes, and unresolved limits.
 
-## Reading experience
+The reading-layout reference is [御舆](https://lintsinghua.github.io/). Its public
+source was inspected for chapter grouping and long-form navigation. The architecture
+content is based on Kepler, not copied from that site's product implementation.
+Writing principles refer to [ASD-STE100](https://www.asd-ste100.org/).
 
-The guide uses a chapter sidebar, per-page contents, section permalinks, previous/next
-links, a mobile chapter menu, and a light/dark reading theme. Theme preference is
-stored locally when browser storage is available. Search runs entirely in the
-browser, across section titles and body text. It needs no remote service or font.
-The static chapter content remains readable without JavaScript.
+## Site maintenance
 
-`reading-guide.html` owns the shared glossary and documentation scope.
-The Chinese prose borrows ASD-STE100 principles: consistent terms, explicit actors,
-one main action per sentence, and conditions beside the relevant action. This is
-an adaptation of writing principles, not an STE compliance or certification claim.
-Keep code identifiers unchanged and link behavior claims to the owning source or
-guide. Keep architecture contracts distinct from review history. Use functional headings,
-state conditions and outcomes directly, and omit rhetorical questions, slogans,
-reader coaching, and prose about the writing method from the architecture pages.
+`assets/guide.css` owns layout and both themes. `assets/architecture.js` owns
+navigation, section anchors, the page contents, search, dialogs and theme choice.
+Static HTML includes chapter links and all content so navigation and reading work
+without JavaScript. Search uses a generated section index; it does not fetch pages
+or call an external search service.
 
-After editing any HTML content, regenerate and verify the offline search index:
+After changing HTML, run from the repository root:
 
 ```sh
 python3 architecture-site/scripts/build-search-index.py
-python3 architecture-site/scripts/build-search-index.py --check
+python3 architecture-site/scripts/validate-site.py
+python3 -m unittest discover -s architecture-site/scripts -p 'test_*.py'
 ```
 
-Run these commands from the source repository root. The generator uses only the
-Python standard library; no site build or package installation is required.
-For browser checks, serve `architecture-site` with a local static server. Verify
-search results across chapters, keyboard dismissal and focus return, mobile
-navigation, both themes, section anchors, and wide-table scrolling. Check that
-pages remain readable with JavaScript disabled. Run `make repo-check` for the
-repository documentation checks.
+The Python tools use only the standard library. Validation checks document
+structure, assets, cross-page anchors, pinned source paths and index freshness.
+Regression tests ensure broken links, duplicate anchors, missing assets and
+unpinned source citations fail the checker.
 
-The visual reading reference is [御舆](https://lintsinghua.github.io/).
-[ASD-STE100](https://www.asd-ste100.org/) is the source of the technical writing
-principles. Kepler source and owning documentation remain authoritative for the
-architecture described here.
+Optional browser regression checks use an externally installed Playwright module
+and Chromium. Neither is a site runtime dependency:
 
-## Publish with CI
+```sh
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright-core \
+CHROMIUM_PATH=/absolute/path/to/chromium \
+node architecture-site/scripts/browser-check.cjs
+```
 
-Run the existing `architecture-pages` workflow manually for the intended ref.
-The selected ref must satisfy the repository's `github-pages` environment
-protection rules. Release tags are not currently permitted by that environment.
-A pushed branch or tag is not evidence of deployment; check the workflow result.
+The checker starts and stops its own loopback server. It covers every page at
+five widths, both themes, search and focus, mobile navigation, storage failure,
+JavaScript-disabled reading and print layout. `SITE_SCREENSHOTS=/existing/path`
+optionally saves screenshots. `CHROMIUM_NO_SANDBOX=1` is only for test containers
+whose Chromium requires it; do not assume it is needed on a developer machine.
+
+## CI and publication
+
+`architecture-pages` validates site changes on branch pushes and pull requests.
+Feature branches validate only. The deployment job runs on `main`, after the
+validation job succeeds, and retains the existing `github-pages` environment
+protection. Pushing a feature branch or tag does not publish it.
+
+After review and merge to `main`, relevant changes trigger validation and Pages
+publication. Manual runs on `main` are also supported. If the environment rejects
+`main`, an administrator must review the Pages environment rules; do not change
+refs or permissions to bypass them. A successful validation is distinct from a
+successful deployment. Check the deployment job before claiming the site is live.

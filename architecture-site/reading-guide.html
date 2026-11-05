@@ -2,52 +2,33 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="架构指南的专题范围、统一术语和实现依据">
-<title>术语与文档范围 · Kepler 架构指南</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="本页统一架构说明中的概念与标识。中文名称用于解释职责；英文类型与字段名用于核对实现。">
+<meta name="color-scheme" content="light dark">
+<title>术语 · Kepler 架构文档</title>
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="assets/guide.css">
 <script src="assets/search-index.js" defer></script>
 <script src="assets/architecture.js" defer></script>
 </head>
 <body>
-<a class="skip2" href="#content">跳到正文</a>
-<header class="topbar"><div class="topbar-inner"><a class="brand2" href="index.html">KEPLER / 架构指南</a><nav class="topnav" aria-label="文档导航">
-<a href="index.html">概览</a><a href="execution.html">执行</a><a href="models.html">模型</a><a href="tools.html">工具</a><a href="reliability.html">可靠性</a><a href="operations.html">观测</a><a href="production.html">生产推演</a><a href="slack.html">Slack</a><a href="delegation.html">委派</a><a href="reference.html">索引</a>
-</nav></div></header>
-<main class="doc-shell"><aside class="side" aria-label="文档目录"></aside><article class="doc" id="content" tabindex="-1">
-<header class="hero2"><p class="kicker">READING / CONCEPTS</p><h1>术语与文档范围</h1><p class="lead2">本页定义架构指南使用的术语、标识和文档范围。中文名称用于说明概念；英文名称和代码标识用于定位实现。</p></header>
-
-<section class="chapter2" id="paths"><h2>专题范围</h2>
-<div class="table-scroll"><table class="detail-table"><thead><tr><th>专题</th><th>内容</th><th>相关文档</th></tr></thead><tbody>
-<tr><td>执行模型</td><td>产品组成、模块职责、执行流程与终态。</td><td><a href="index.html#products">产品组成</a>、<a href="execution.html">执行过程</a></td></tr>
-<tr><td>模型与工具</td><td>请求构造、上下文预算、权限与工具执行。</td><td><a href="models.html">上下文与模型</a>、<a href="tools.html">工具与策略</a></td></tr>
-<tr><td>并发与恢复</td><td>会话处理权、事件记录、委派与恢复。</td><td><a href="reliability.html">状态与恢复</a>、<a href="delegation.html">委派执行</a></td></tr>
-<tr><td>生产运行</td><td>队列、超时、租约、消息投递和故障处理。</td><td><a href="operations.html">队列与观测</a>、<a href="production.html">生产推演</a>、<a href="slack.html">Slack 接入</a></td></tr>
-</tbody></table></div></section>
-<section class="chapter2" id="terms"><h2>统一术语</h2>
-<p>中文名称用于解释概念。英文名称和代码标识用于查找实现。不同层级的标识不能互相替代。</p>
-<div class="table-scroll"><table class="detail-table"><thead><tr><th>统一名称</th><th>英文或标识</th><th>本指南中的含义</th></tr></thead><tbody>
-<tr><td>入口适配器</td><td>surface</td><td>验证身份、接收输入并呈现输出的产品适配层。</td></tr>
-<tr><td>产品配置</td><td>profile</td><td>选择存储、模型、工具、凭据和策略的组装层。</td></tr>
-<tr><td>执行器</td><td>runtime</td><td>构造上下文、请求模型、调度工具并保存执行事件的共享核心。</td></tr>
-<tr><td>会话</td><td>session / session_id</td><td>连续对话的归属，也是历史加载和执行串行化的边界。</td></tr>
-<tr><td>一次执行</td><td>turn / turn_id</td><td>一次请求的执行生命周期，可以包含多个模型轮次和工具调用。</td></tr>
-<tr><td>模型轮次</td><td>model step</td><td>构造上下文并进行一次逻辑模型请求。运行投影中的 step 也可表示工具步骤，需结合事件类型判断。</td></tr>
-<tr><td>网络尝试</td><td>attempt / attempt_id</td><td>一次实际的提供方请求。重试或切换备用模型会产生新的网络尝试。</td></tr>
-<tr><td>会话事件记录</td><td>canonical transcript</td><td>只追加的执行记录。用于重建上下文、核对执行状态和恢复。</td></tr>
-<tr><td>运行投影</td><td>run / step projection</td><td>从执行事件派生的查询数据，用于运行列表和详情。</td></tr>
-<tr><td>处理权</td><td>ownership / lease</td><td>执行者推进工作的权利。需要区分队列认领和会话执行锁。</td></tr>
-<tr><td>外部副作用</td><td>side effect</td><td>对文件、外部服务或数据库产生的实际修改。内部超时不能证明修改未生效。</td></tr>
-<tr><td>未知结果</td><td>unknown outcome</td><td>已有开始记录，但缺少足以确认完成或未执行的证据。</td></tr>
-</tbody></table></div>
-<p>类型、事件和数据表的完整列表见<a href="reference.html">实现索引</a>。</p></section>
-
-
-<section class="chapter2" id="evidence"><h2>文档职责与实现依据</h2>
-<p>本网站说明架构。项目 Markdown 文档维护运行步骤、配置和排障命令。实现行为以对应版本的源码为准；测试结果仅证明已执行的验证范围。</p>
-<ul><li>产品边界：<a href="https://github.com/noknov/kepler-agent/blob/main/docs/architecture.md">架构指南</a>。</li><li>执行机制与失败窗口：<a href="https://github.com/noknov/kepler-agent/blob/main/docs/architecture-deep-dive.md">架构详解</a>。</li><li>验证范围：<a href="https://github.com/noknov/kepler-agent/blob/main/docs/development.md">开发与验证</a>。</li></ul>
-
-</section>
-</article></main>
-<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">术语与文档范围</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
-</body></html>
+<a class="skip-link" href="#content">跳到正文</a>
+<header class="site-header"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">K</span><strong>Kepler</strong><span class="brand-label">架构文档</span></a><div class="header-actions"></div></header>
+<div class="doc-layout">
+<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="execution.html">执行过程</a><a href="models.html">上下文与模型</a><a href="tools.html">工具与策略</a><a href="reliability.html">状态与恢复</a><a href="delegation.html">委派执行</a><a href="operations.html">队列与观测</a><a href="production.html">故障处理</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="reading-guide.html" aria-current="page">术语</a><a href="reference.html">实现索引</a></nav>
+<main class="doc-content" id="content" tabindex="-1">
+<header class="doc-header"><p class="breadcrumb">实现参考<span aria-hidden="true"> / </span>12</p><h1>术语</h1><p class="lead">本页统一架构说明中的概念与标识。中文名称用于解释职责；英文类型与字段名用于核对实现。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<section class="doc-section" id="terms"><h2>核心术语</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="名称、英文、定义"><table><thead><tr><th scope="col">名称</th><th scope="col">英文</th><th scope="col">定义</th></tr></thead><tbody><tr><td>入口适配器</td><td>surface</td><td>验证输入身份，接收请求并呈现结果。</td></tr><tr><td>产品配置</td><td>profile</td><td>选择执行依赖、存储、凭据、工具和策略。</td></tr><tr><td>执行器</td><td>runtime</td><td>推进模型与工具循环，维护执行事件与终态。</td></tr><tr><td>会话</td><td>session</td><td>连续对话及历史、锁和输入路由的归属。</td></tr><tr><td>一次执行</td><td>turn</td><td>从输入建立到终态的一次执行生命周期。</td></tr><tr><td>模型轮次</td><td>model step</td><td>构造上下文并取得一次逻辑模型响应。</td></tr><tr><td>网络尝试</td><td>attempt</td><td>一次实际提供方请求，包含重试和备用路径中的尝试。</td></tr><tr><td>会话事件记录</td><td>transcript</td><td>用于历史投影和恢复的只追加执行记录。</td></tr><tr><td>运行投影</td><td>run / step projection</td><td>从执行事件生成的查询状态。</td></tr><tr><td>处理权</td><td>ownership / lease</td><td>在指定范围内认领并推进工作的权利。</td></tr><tr><td>未知结果</td><td>unknown outcome</td><td>无法确认操作完成或未发生的状态。</td></tr></tbody></table></div></section>
+<section class="doc-section" id="identifiers"><h2>标识作用域</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="标识、对应对象、不能替代"><table><thead><tr><th scope="col">标识</th><th scope="col">对应对象</th><th scope="col">不能替代</th></tr></thead><tbody><tr><td><code>event_id</code></td><td>一次入口或执行事件，按所属存储解释</td><td>会话内顺序</td></tr><tr><td><code>session_id</code></td><td>会话</td><td>用户授权凭证</td></tr><tr><td><code>turn_id</code></td><td>一次执行</td><td>每次模型网络尝试</td></tr><tr><td><code>attempt_id</code></td><td>提供方网络尝试</td><td>工具副作用确认</td></tr><tr><td><code>call_id</code> / <code>execution_id</code></td><td>工具调用与实际执行身份</td><td>下游完成证明</td></tr></tbody></table></div></section>
+<section class="doc-section" id="scope"><h2>说明范围</h2>
+<p>网站解释共享机制及各产品边界。配置、安装、迁移和部署命令由所属 Markdown 指南维护。产品源码是当前行为依据，测试仅证明执行过的验证范围。</p>
+<p>运行投影中的 step 也可能表示工具步骤，不能在所有上下文中都理解为模型轮次。</p></section>
+<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="依据、位置"><table><thead><tr><th scope="col">依据</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/architecture.md">docs/architecture.md</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/architecture-deep-dive.md">docs/architecture-deep-dive.md</a></td></tr></tbody></table></div></section>
+</main>
+<aside class="toc" aria-label="本页目录"></aside>
+</div>
+<footer class="site-footer"><span>Kepler 架构文档</span><a href="reading-guide.html">术语</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
+</body>
+</html>

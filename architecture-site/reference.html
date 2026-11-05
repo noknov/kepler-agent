@@ -1,96 +1,43 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="核心类型、事件、配置、数据库表和测试索引"><title>实现索引 · Kepler 架构指南</title><link rel="stylesheet" href="assets/guide.css"><script src="assets/search-index.js" defer></script>
-<script src="assets/architecture.js" defer></script></head><body>
-<a class="skip2" href="#content">跳到正文</a>
-<header class="topbar"><div class="topbar-inner"><a class="brand2" href="index.html">KEPLER / 架构指南</a><nav class="topnav"><a href="index.html">概览</a><a href="execution.html">执行</a><a href="models.html">模型</a><a href="tools.html">工具</a><a href="reliability.html">可靠性</a><a href="operations.html">观测</a><a href="production.html">生产推演</a><a href="slack.html">Slack</a><a href="delegation.html">委派</a><a href="reference.html" aria-current="page">索引</a></nav></div></header>
-<main class="doc-shell"><aside class="side"><p>本页目录</p><a href="#objects">核心类型</a><a href="#events">事件记录</a><a href="#endings">结束原因</a><a href="#defaults">配置归属</a><a href="#tables">数据库表</a><a href="#packages">功能与实现位置</a><a href="#tests">行为与测试</a></aside><article class="doc" id="content" tabindex="-1">
-<header class="hero2"><p class="kicker">实现</p><h1>源码参考</h1><p class="lead2">按概念查找类型、事件、配置、数据表和测试。术语定义见术语表，实现位置见本页索引。运行投影用于查询；恢复执行时应核对会话事件。</p></header>
-<section class="chapter-brief" aria-label="关键约束"><p class="eyebrow">关键约束</p><h2>索引说明</h2><ul><li>会话、执行、模型尝试和工具调用使用不同标识。</li><li>会话事件与运行投影具有不同权威性。</li><li>源码说明机制；测试说明已验证的行为范围。</li></ul></section>
-
-
-<section class="chapter2" id="objects"><span class="number">01</span><h2>核心类型</h2>
-<div class="term">
-<div class="cn">连续会话</div><div class="meaning">一段有顺序的长期对话，是事件记录、会话锁、工具激活和追加输入的共同索引。</div><div class="src">SessionID string</div>
-<div class="cn">一次执行</div><div class="meaning">从请求开始到明确结束；内部可以多次请求模型和执行工具。</div><div class="src">TurnRequest / TurnResult / TurnID</div>
-<div class="cn">模型轮次</div><div class="meaning">构造一次上下文、请求一次模型；模型要求工具时，执行完工具后进入下一轮。</div><div class="src">step int / StepStarted / StepCompleted</div>
-<div class="cn">会话事件记录</div><div class="meaning">只追加的权威历史，保存恢复和审计所需的完整事实。</div><div class="src">transcript.Event / Store</div>
-<div class="cn">产品配置</div><div class="meaning">把模型、工具、权限、存储、环境和提示内容组合成可运行产品。</div><div class="src">profiles/hosted / profiles/local</div>
-<div class="cn">入口适配</div><div class="meaning">接收外部协议，生成内部请求，并把内部事件转换成用户输出。</div><div class="src">surfaces/slack / surfaces/web / appserver</div>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="按职责定位实现与测试。以下引用固定到本次核对的应用版本，避免主分支更新后引用含义改变。">
+<meta name="color-scheme" content="light dark">
+<title>实现索引 · Kepler 架构文档</title>
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/guide.css">
+<script src="assets/search-index.js" defer></script>
+<script src="assets/architecture.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#content">跳到正文</a>
+<header class="site-header"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">K</span><strong>Kepler</strong><span class="brand-label">架构文档</span></a><div class="header-actions"></div></header>
+<div class="doc-layout">
+<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="execution.html">执行过程</a><a href="models.html">上下文与模型</a><a href="tools.html">工具与策略</a><a href="reliability.html">状态与恢复</a><a href="delegation.html">委派执行</a><a href="operations.html">队列与观测</a><a href="production.html">故障处理</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="reading-guide.html">术语</a><a href="reference.html" aria-current="page">实现索引</a></nav>
+<main class="doc-content" id="content" tabindex="-1">
+<header class="doc-header"><p class="breadcrumb">实现参考<span aria-hidden="true"> / </span>13</p><h1>实现索引</h1><p class="lead">按职责定位实现与测试。以下引用固定到本次核对的应用版本，避免主分支更新后引用含义改变。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<section class="doc-section" id="packages"><h2>模块与实现</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="职责、实现入口"><table><thead><tr><th scope="col">职责</th><th scope="col">实现入口</th></tr></thead><tbody><tr><td>执行循环</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/runner.go">packages/agent/runtime/runner.go</a></td></tr><tr><td>模型重试</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/model/resilient.go">packages/agent/model/resilient.go</a></td></tr><tr><td>工具调度</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/tools.go">packages/agent/runtime/tools.go</a></td></tr><tr><td>工具熔断</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/circuit.go">packages/agent/runtime/circuit.go</a></td></tr><tr><td>上下文投影</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/context.go">packages/agent/runtime/context.go</a></td></tr><tr><td>规范化事件</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/transcript/transcript.go">packages/agent/transcript/transcript.go</a></td></tr><tr><td>托管产品组装</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/profiles/hosted/profile.go">packages/profiles/hosted/profile.go</a></td></tr><tr><td>本地产品组装</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/profiles/local">packages/profiles/local</a></td></tr><tr><td>委派执行</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/delegation/explore.go">packages/agent/delegation/explore.go</a></td></tr><tr><td>Slack 入口</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/slack/agent/service.go">packages/surfaces/slack/agent/service.go</a></td></tr><tr><td>Web 会话</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/web/conversation.go">packages/surfaces/web/conversation.go</a></td></tr><tr><td>本地协议</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/appserver/server.go">packages/appserver/server.go</a></td></tr></tbody></table></div></section>
+<section class="doc-section" id="events"><h2>事件分类</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="类别、示例、用途"><table><thead><tr><th scope="col">类别</th><th scope="col">示例</th><th scope="col">用途</th></tr></thead><tbody><tr><td>会话与输入</td><td><code>TurnStarted</code>、<code>UserInput</code>、<code>SteeringInput</code></td><td>执行范围与输入事实</td></tr><tr><td>模型</td><td>请求开始、完成和失败事件</td><td>逻辑请求与尝试诊断</td></tr><tr><td>工具</td><td><code>ToolCallStarted</code>、完成和失败结果</td><td>恢复、结果配对与未知状态</td></tr><tr><td>控制</td><td>批准、压缩、等待与取消记录</td><td>按对应类型恢复状态</td></tr><tr><td>终态</td><td>完成、失败与取消</td><td>执行收敛及结果恢复</td></tr></tbody></table></div>
+<p>完整事件定义见 <a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/transcript/transcript.go">packages/agent/transcript/transcript.go</a>。</p></section>
+<section class="doc-section" id="tables"><h2>数据与存储</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="数据、存储、职责"><table><thead><tr><th scope="col">数据</th><th scope="col">存储</th><th scope="col">职责</th></tr></thead><tbody><tr><td>托管会话事件</td><td><code>agent_transcript_events</code></td><td>规范化会话记录</td></tr><tr><td>本地会话</td><td>JSONL 与事件索引</td><td>本地历史和恢复</td></tr><tr><td>运行摘要与步骤</td><td><code>agent_runs</code>、<code>agent_run_steps</code></td><td>查询投影</td></tr><tr><td>Slack 入口</td><td><code>slack_event_inbox</code></td><td>持久接收与认领</td></tr><tr><td>追加输入</td><td><code>agent_session_inputs</code></td><td>消息顺序、认领与确认</td></tr><tr><td>用户集成</td><td>连接记录与加密凭据</td><td>按用户和实例选择授权</td></tr></tbody></table></div>
+<p>完整 schema 见 <a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/schema/postgres.sql">schema/postgres.sql</a>。增量升级由部署仓库维护。</p></section>
+<section class="doc-section" id="defaults"><h2>配置归属</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="配置、所属范围"><table><thead><tr><th scope="col">配置</th><th scope="col">所属范围</th></tr></thead><tbody><tr><td>提供方、模型与弹性参数</td><td>托管环境及产品配置</td></tr><tr><td>写能力允许项</td><td>服务端能力策略</td></tr><tr><td>工作区与本地限制</td><td>本地配置和部署挂载</td></tr><tr><td>连接凭据与登录状态</td><td>对应的身份和凭据存储</td></tr><tr><td>公开地址与回调</td><td>部署配置与入口适配器</td></tr></tbody></table></div>
+<p>字段及读取范围见 <a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/config/config.go">packages/config/config.go</a> 和 <a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/configuration.md">docs/configuration.md</a>。</p></section>
+<section class="doc-section" id="tests"><h2>行为与测试</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="行为、测试入口"><table><thead><tr><th scope="col">行为</th><th scope="col">测试入口</th></tr></thead><tbody><tr><td>模型重试与输出提交</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/model/resilient_test.go">packages/agent/model/resilient_test.go</a></td></tr><tr><td>执行恢复</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/recovery_regression_test.go">packages/agent/runtime/recovery_regression_test.go</a></td></tr><tr><td>工具重复失败</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/circuit_test.go">packages/agent/runtime/circuit_test.go</a></td></tr><tr><td>本地会话与沙箱</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/profiles/local">packages/profiles/local</a></td></tr><tr><td>子任务处理权</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/delegation/lease_test.go">packages/agent/delegation/lease_test.go</a></td></tr><tr><td>Web 恢复</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/web/recovery_regression_test.go">packages/surfaces/web/recovery_regression_test.go</a></td></tr><tr><td>stdio 生命周期</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/appserver/serve_lifecycle_test.go">packages/appserver/serve_lifecycle_test.go</a></td></tr></tbody></table></div></section>
+<section class="doc-section" id="verification"><h2>验证解释</h2>
+<p>单元测试验证指定输入和状态边界。集成测试需要显式配置测试存储，跳过的测试不计为通过。真实模型、Slack 投递、浏览器登录和操作系统沙箱需分别验证。</p>
+<p>验证命令和范围见 <a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/development.md">docs/development.md</a>。</p></section>
+<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="依据、位置"><table><thead><tr><th scope="col">依据</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/development.md">docs/development.md</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/schema/postgres.sql">schema/postgres.sql</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/config/config.go">packages/config/config.go</a></td></tr></tbody></table></div></section>
+</main>
+<aside class="toc" aria-label="本页目录"></aside>
 </div>
-<h3>执行请求字段</h3><div class="table-scroll"><table class="detail-table"><thead><tr><th>字段</th><th>含义</th><th>注意点</th></tr></thead><tbody>
-<tr><td><code>SessionID</code></td><td>连续会话编号</td><td>为空时执行器生成；写入工具作用域</td></tr>
-<tr><td><code>TurnID</code></td><td>本次用户请求编号</td><td>为空时生成；稳定外部编号可用于去重</td></tr>
-<tr><td><code>Input</code></td><td>当前用户消息</td><td>角色必须是用户；持久化时会移除原始图片数据</td></tr>
-<tr><td><code>History</code></td><td>首次建立会话时导入的有界历史</td><td>仅在权威会话为空时写成普通不可信消息</td></tr>
-<tr><td><code>Prompt</code></td><td>系统说明片段</td><td>合成后计算内容摘要</td></tr>
-<tr><td><code>Scope</code></td><td>用户、工作区及入口附加值</td><td>供权限、工具与审计使用</td></tr>
-<tr><td><code>Steering</code></td><td>执行中的追加输入来源</td><td>通过认领与确认接口消费</td></tr>
-<tr><td><code>Parent</code></td><td>隔离子任务与父调用的审计关系</td><td>只进入持久元数据，不进入模型上下文</td></tr>
-</tbody></table></div><p class="source-note"><code>packages/agent/runtime/types.go</code></p></section>
-
-<section class="chapter2" id="events"><span class="number">02</span><h2>会话事件分类</h2><div class="table-scroll"><table class="detail-table"><thead><tr><th>用途</th><th>事件值</th><th>负载重点</th></tr></thead><tbody>
-<tr><td>会话与请求边界</td><td><code>session_started</code>、<code>turn_started</code>、<code>turn_completed</code>、<code>turn_failed</code>、<code>turn_canceled</code></td><td>状态、错误、模型、用户、作用域、父任务和追踪编号</td></tr>
-<tr><td>执行轮次</td><td><code>step_started</code>、<code>step_completed</code></td><td>轮次编号和完成方式</td></tr>
-<tr><td>输入</td><td><code>user_input</code>、<code>steering_input</code></td><td>规范消息；追加输入保留来源顺序</td></tr>
-<tr><td>上下文</td><td><code>context_projected</code>、<code>compaction_created</code></td><td>估算字数、消息数、提示摘要、工具数、摘要和覆盖序号</td></tr>
-<tr><td>模型逻辑请求</td><td><code>model_request_started</code>、<code>model_request_unknown</code>、<code>model_completed</code>、<code>model_failed</code></td><td>稳定请求编号、完整结果、用量和失败</td></tr>
-<tr><td>模型服务尝试</td><td><code>model_attempted</code></td><td>提供方、模型、尝试序号、重试或切换结果</td></tr>
-<tr><td>模型消息与流</td><td><code>assistant_message</code>、<code>model_streamed</code></td><td>完整消息持久化；文字片段仅分发</td></tr>
-<tr><td>工具</td><td><code>tool_call_started</code>、<code>tool_call_completed</code>、<code>tool_call_failed</code></td><td>调用编号、稳定执行编号、参数、结果、错误码和耗时</td></tr>
-<tr><td>批准</td><td><code>approval_requested</code>、<code>approval_resolved</code></td><td>权限决定与用户答复</td></tr>
-<tr><td>计划与子任务</td><td><code>plan_updated</code>、<code>delegated_task_started</code>、<code>delegated_task_completed</code>、<code>delegated_task_failed</code></td><td>计划内容、父子关联与子任务结果</td></tr>
-</tbody></table></div><h3>每条事件的公共字段</h3><p><code>ID</code> 是事件幂等编号；<code>Sequence</code> 是会话内递增序号；<code>SessionID</code> 和可选 <code>TurnID</code> 确定归属；<code>Type</code> 决定负载含义；<code>Timestamp</code> 使用 UTC。可选负载分别承载消息、模型流事件、工具调用、工具结果、计划、状态、错误、JSON 元数据和 W3C 追踪关系。</p><p class="source-note"><code>packages/agent/transcript/transcript.go</code></p></section>
-
-<section class="chapter2" id="endings"><span class="number">03</span><h2>执行结束原因</h2><div class="table-scroll"><table class="detail-table"><thead><tr><th>中文含义</th><th>内部值</th><th>触发条件</th></tr></thead><tbody>
-<tr><td>正常完成</td><td><code>completed</code></td><td>模型返回最终消息，结束前两次检查都没有新输入</td></tr>
-<tr><td>被取消</td><td><code>canceled</code></td><td>上层取消执行上下文，例如用户中断或处理权丢失</td></tr>
-<tr><td>模型错误</td><td><code>model_error</code></td><td>无法归入更具体类别的模型调用失败</td></tr>
-<tr><td>达到执行轮数上限</td><td><code>max_steps</code></td><td>模型持续请求工具，超过允许轮数（当配置 <code>MaxSteps = -1</code> / <code>UnlimitedSteps</code> 时解除步数上限，仅受上下文窗口与 Turn 超时约束）</td></tr>
-<tr><td>模型输出达到上限</td><td><code>output_limit</code></td><td>模型回答因长度限制停止且没有工具请求</td></tr>
-<tr><td>等待用户批准</td><td><code>pending_approval</code></td><td>权限层要求批准，当前调用没有同步批准器</td></tr>
-<tr><td>等待用户补充</td><td><code>pending_input</code></td><td>工具结果明确要求用户继续提供信息</td></tr>
-<tr><td>模型返回空内容</td><td><code>empty_response</code></td><td>有限重试后仍无任何内容</td></tr>
-<tr><td>时间预算不足</td><td><code>budget_exhausted</code></td><td>剩余时间不足以开始一次有意义的模型尝试</td></tr>
-<tr><td>模型服务暂时熔断</td><td><code>provider_circuit_open</code></td><td>同一服务和模型连续失败达到阈值</td></tr>
-<tr><td>主要与备用模型都失败</td><td><code>fallback_exhausted</code></td><td>可用的模型路径均已尝试</td></tr>
-</tbody></table></div></section>
-
-<section class="chapter2" id="defaults"><span class="number">04</span><h2>配置归属</h2><div class="table-scroll"><table class="detail-table"><thead><tr><th>配置范围</th><th>负责内容</th><th>源码位置</th></tr></thead><tbody><tr><td>共享执行器</td><td>执行轮数、工具并发、上下文预算、工具结果大小和重复调用保护</td><td><code>packages/agent/runtime/types.go</code></td></tr><tr><td>托管产品</td><td>模型服务、会话容量、Slack 事件处理、数据库、缓存和工具开放范围</td><td><code>packages/config/config.go</code></td></tr><tr><td>接入适配器</td><td>请求体、用户输入、缓冲和协议并发等限制</td><td><code>packages/surfaces</code></td></tr></tbody></table></div><p>运行时取值属于环境配置，不在架构说明中重复。这里保留配置归属，便于判断某项行为应该在哪一层修改。</p></section>
-
-<section class="chapter2" id="tables"><span class="number">05</span><h2>数据表职责</h2><div class="table-scroll"><table class="detail-table"><thead><tr><th>职责</th><th>表</th><th>主要内容</th></tr></thead><tbody>
-<tr><td>权威执行历史</td><td><code>agent_transcript_events</code></td><td>会话序号、事件类型、完整 JSON 负载</td></tr>
-<tr><td>查询与成本</td><td><code>agent_runs</code>、<code>agent_run_steps</code>、<code>agent_run_feedback</code></td><td>运行摘要、每轮用量和费用、用户反馈</td></tr>
-<tr><td>大结果</td><td><code>agent_tool_spills</code></td><td>超过内联上限的工具完整结果与引用</td></tr>
-<tr><td>执行中输入</td><td><code>agent_session_inputs</code></td><td>消息种类、序号、认领者、到期时间、确认时间和尝试次数</td></tr>
-<tr><td>Slack 可靠接收</td><td><code>slack_event_inbox</code></td><td>原始事件、状态、可执行时间、处理权、重试和错误</td></tr>
-<tr><td>外部连接</td><td><code>user_connections</code>、<code>oauth_states</code></td><td>加密凭据、提供方状态与 OAuth 事务</td></tr>
-<tr><td>用户配置</td><td><code>user_settings</code>、<code>user_prompt_assets</code></td><td>用户级设置与提示资源</td></tr>
-</tbody></table></div><p class="source-note">完整字段、约束与索引：<code>schema/postgres.sql</code>。</p></section>
-
-<section class="chapter2" id="packages"><span class="number">06</span><h2>功能与实现位置</h2><div class="table-scroll"><table class="detail-table"><thead><tr><th>功能</th><th>主要实现</th><th>相关实现</th></tr></thead><tbody>
-<tr><td>执行流程与终态</td><td><code>packages/agent/runtime/runner.go</code></td><td><code>types.go</code>、<code>state.go</code>、<code>empty_response.go</code></td></tr>
-<tr><td>上下文选择与压缩</td><td><code>runtime/context.go</code></td><td><code>compactor.go</code>、<code>context_recovery.go</code></td></tr>
-<tr><td>模型重试与备用路径</td><td><code>agent/model/resilient.go</code></td><td><code>packages/llm</code>、<code>packages/providers</code></td></tr>
-<tr><td>工具授权与并发</td><td><code>runtime/tools.go</code></td><td><code>agent/tool/tool.go</code>、<code>policy.go</code></td></tr>
-<tr><td>工具结果外置</td><td><code>runtime/tool_results.go</code></td><td><code>profiles/hosted/artifacts.go</code>、<code>local/artifacts.go</code></td></tr>
-<tr><td>事件定义与分发</td><td><code>agent/transcript/transcript.go</code></td><td><code>memory.go</code>、<code>profiles/hosted/pgtranscript.go</code></td></tr>
-<tr><td>Slack 接收与回复</td><td><code>surfaces/slack/events</code></td><td><code>surfaces/slack/agent/service.go</code>、<code>streaming.go</code></td></tr>
-<tr><td>本地文件与命令限制</td><td><code>profiles/local/policy.go</code></td><td><code>workspace.go</code>、<code>sandbox.go</code>、<code>tools/local/bootstrap.go</code>、<code>packages/safety</code></td></tr>
-<tr><td>托管服务依赖组装</td><td><code>profiles/hosted/profile.go</code></td><td><code>hosted.go</code>、<code>platform/stores.go</code></td></tr>
-<tr><td>提示装载与覆盖</td><td><code>packages/prompts</code></td><td><code>packages/prompts/defaults</code>、<code>packages/agent/prompt</code></td></tr>
-<tr><td>子任务创建与汇合</td><td><code>packages/agent/delegation</code></td><td><code>runtime/types.go</code> 中的父任务关系</td></tr>
-<tr><td>代码审查选择与恢复</td><td><code>packages/workflows</code></td><td><code>packages/workflows/codereview</code></td></tr>
-<tr><td>执行轨迹重建与脱敏</td><td><code>packages/trajectory/trajectory.go</code></td><td><code>trajectory_test.go</code></td></tr>
-<tr><td>外部连接保存与续接</td><td><code>packages/connections</code></td><td>各提供方 OAuth、令牌和续接测试</td></tr>
-</tbody></table></div></section>
-
-<section class="chapter2" id="tests"><span class="number">07</span><h2>行为与测试位置</h2><div class="table-scroll"><table class="detail-table"><thead><tr><th>行为</th><th>测试文件</th></tr></thead><tbody>
-<tr><td>恢复已有终态、中断工具、空响应、最大轮数、并行上限</td><td><code>packages/agent/runtime/runner_test.go</code></td></tr>
-<tr><td>中文字符、图片、完整请求分组与压缩覆盖点</td><td><code>runtime/context_test.go</code>、<code>compactor_test.go</code></td></tr>
-<tr><td>工具单结果和批次限制、附件外置</td><td><code>runtime/tool_results_test.go</code></td></tr>
-<tr><td>模型重试、备用模型、暂停与输出提交边界</td><td><code>agent/model/resilient_test.go</code></td></tr>
-<tr><td>每一种文字分片位置的脱敏一致性</td><td><code>safety/stream_redactor_test.go</code></td></tr>
-<tr><td>本地文件半行修复、坏行报错、批量分叉</td><td><code>profiles/local/store_test.go</code></td></tr>
-<tr><td>Slack 处理权续期、重试与重复回复</td><td><code>surfaces/slack/events/worker_test.go</code>、<code>slack/agent/streaming_test.go</code></td></tr>
-</tbody></table></div><div class="callout"><strong>代码阅读建议</strong>先从某一行为测试进入，再回到实现；测试通常同时给出输入事件、期望顺序和故障边界，比只沿包目录向下读更快。</div></section>
-</article></main><footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">术语与文档范围</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer></body></html>
+<footer class="site-footer"><span>Kepler 架构文档</span><a href="reading-guide.html">术语</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
+</body>
+</html>

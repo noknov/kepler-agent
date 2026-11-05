@@ -1,200 +1,51 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="工具目录、effects、权限、安全边界、并发调度、结果处理与幂等">
-  <title>工具与策略 · Kepler 架构指南</title>
-  <link rel="stylesheet" href="assets/guide.css">
-  <script src="assets/search-index.js" defer></script>
-  <script src="assets/architecture.js" defer></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="模型提出工具调用。执行器检查调用身份、能力策略和实际作用域后，调度工具并保存结果。工具可见性、用户确认和执行权限是独立条件。">
+<meta name="color-scheme" content="light dark">
+<title>工具与策略 · Kepler 架构文档</title>
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/guide.css">
+<script src="assets/search-index.js" defer></script>
+<script src="assets/architecture.js" defer></script>
 </head>
 <body>
-<a class="skip2" href="#content">跳到正文</a>
-<header class="topbar"><div class="topbar-inner">
-  <a class="brand2" href="index.html">KEPLER / 架构指南</a>
-  <nav class="topnav" aria-label="文档导航">
-    <a href="index.html">概览</a><a href="execution.html">执行</a><a href="models.html">模型</a>
-    <a href="tools.html" aria-current="page">工具</a><a href="reliability.html">可靠性</a><a href="operations.html">观测</a><a href="production.html">生产推演</a><a href="slack.html">Slack</a><a href="delegation.html">委派</a><a href="reference.html">索引</a>
-  </nav>
-</div></header>
-
-<main class="doc-shell">
-  <aside class="side"><p>本页目录</p><a href="#contract">工具契约</a><a href="#catalog">目录与发现</a><a href="#lifecycle">调用生命周期</a><a href="#policy">权限层</a><a href="#local">本地边界</a><a href="#concurrency">并发</a><a href="#results">结果</a><a href="#idempotency">幂等与恢复</a><a href="#adding">新增工具</a><a href="#scenarios">生产推演</a><a href="#source">实现索引</a></aside>
-  <article class="doc" id="content" tabindex="-1">
-    <header class="hero2">
-      <p class="kicker">CORE / TOOLS &amp; POLICY</p>
-      <h1>工具、权限与执行</h1>
-      <p class="lead2">模型提出工具调用，执行器决定是否执行。执行器先检查参数、能力策略和目标范围，再调度工具并保存结果。本章说明权限、并发、结果大小和重复调用的边界。</p>
-      <div class="facts"><span><b>描述</b> 告知模型</span><span><b>Policy</b> 决定授权</span><span><b>Runtime</b> 控制调度</span><span><b>Tool</b> 负责边界与副作用</span></div>
-    </header>
-<section class="chapter-brief" aria-label="关键约束"><p class="eyebrow">关键约束</p><h2>工具执行条件</h2><ul><li>工具描述说明用途，不授予执行权限。</li><li>执行器检查实际参数、目标和能力策略。</li><li>外部写入结果未知时，先核对，再决定是否重试。</li></ul></section>
-
-
-    <section class="chapter2" id="contract">
-      <h2>工具效果声明</h2>
-      <p class="intro">Descriptor 是工具进入系统的静态契约。它不等于权限，但缺少它就无法安全地进行策略判断、并发调度、目录暴露和结果治理。</p>
-      <div class="table-scroll"><table class="detail-table">
-        <thead><tr><th>字段</th><th>回答的问题</th><th>错误声明的后果</th></tr></thead>
-        <tbody>
-          <tr><td>Name / schema</td><td>叫什么、参数是不是 object、必填和允许值是什么</td><td>模型调用歧义；注册时直接拒绝无效 schema</td></tr>
-          <tr><td>Effects</td><td>只读、改 workspace、改外部系统、网络或 privileged</td><td>安全边界失真；ReadOnlyPolicy 可能错误放行或拒绝</td></tr>
-          <tr><td>Exposure</td><td>eager、deferred、disabled，是否默认进入模型上下文</td><td>上下文膨胀或能力意外不可用；不会因此获得授权</td></tr>
-          <tr><td>Parallel</td><td>能否和其他明确安全调用同时执行</td><td>mutating/privileged 工具在注册时不允许标为并行</td></tr>
-          <tr><td>Exclusive</td><td>是否必须成为一批调用中的唯一工具</td><td>需要暂停/用户输入时，可能先执行同批写操作</td></tr>
-          <tr><td>Timeout</td><td>单次执行的局部时间上限</td><td>慢下游拖住整个 session；没有 deadline 的调用难以恢复</td></tr>
-          <tr><td>Dependencies / Surfaces</td><td>需要哪种连接、在哪个入口可见</td><td>把能力注册到没有依赖或不支持的 surface</td></tr>
-        </tbody>
-      </table></div>
-      <div class="callout warn"><strong>工具描述不是授权</strong>“只读”是 descriptor 对实现行为的声明，必须与实际代码一致；surface annotation、动态 MCP 工具名称和模型写在参数里的说明都不能替代 profile policy 与真实目标检查。</div>
-    </section>
-
-    <section class="chapter2" id="catalog">
-      <h2>工具发现与上下文装载</h2>
-      <p>产品启动时组装 Catalog。轻量常用工具可以 eager；较重、依赖连接或只在专项任务使用的工具以 deferred 形式保留。模型先通过 <code>tool_search</code>（基于带字段权重的 BM25 评分与标识符子词分词）检索候选，再用准确名称激活。</p>
-      <figure class="diagram"><div class="flow">
-        <div class="box"><b>Tool implementation</b><small>descriptor<br>Execute / result</small></div><div class="arrow">→</div>
-        <div class="box"><b>Catalog</b><small>register-time validation<br>surface/dependency filter</small></div><div class="arrow">→</div>
-        <div class="box blue"><b>Discovery</b><small>list / search / activate<br>exact names or tags</small></div><div class="arrow">→</div>
-        <div class="box green"><b>Active definitions</b><small>本轮模型可见<br>仍需 Policy</small></div>
-      </div><figcaption>Deferred 只解决“上下文里放多少”，不解决“是否允许执行”。EndTurn 会清理 turn-scoped activation。</figcaption></figure>
-      <ol class="walkthrough">
-        <li><b>注册时校验 descriptor。</b><span>名称、effects、schema 和 parallel/exclusive 组合不符合契约时启动失败，而不是等模型调用时才暴露隐患。</span></li>
-        <li><b>按 surface 和依赖过滤。</b><span>没有当前连接或不适合当前入口的工具不进入 catalog；这是可见性和组装问题，不是 operator authorization。</span></li>
-        <li><b>稳定地做发现。</b><span>搜索返回稳定名称、分类和精确描述；排序改变不应让一次搜索随机暴露不同能力。</span></li>
-        <li><b>按 session 激活。</b><span>激活使用准确名称或分类，后续模型 step 才看到 definitions；请求结束时释放。</span></li>
-        <li><b>执行时再次查找。</b><span>即使模型看过 definition，调用时仍要 GetActive、参数解析、策略判断和目标边界检查。</span></li>
-      </ol>
-    </section>
-
-    <section class="chapter2" id="lifecycle">
-      <h2>工具调用流程</h2>
-      <p class="intro">模型产出的 tool call 是不可信输入。Runtime 在真正调用 <code>Execute</code> 前完成所有无副作用检查，并把开始、结果和错误分开持久化。</p>
-      <ol class="walkthrough">
-        <li><b>按 CallID 查找已有结果。</b><span>同一 turn 中有成功或失败结果的调用直接复用，不重新访问外部系统。它是恢复级幂等，不是全局分布式事务。</span></li>
-        <li><b>确认工具仍 active。</b><span>工具存在、未 disabled，并且是 eager 或已被当前 session 激活；未知工具形成结构化错误返回模型。</span></li>
-        <li><b>校验参数和目标。</b><span>schema 负责形状；具体实现负责路径、资源 ID、网络目标、scope 和业务约束，不能把 JSON 解析成功当成安全。</span></li>
-        <li><b>检查 exclusive。</b><span>独占工具与其他调用混合时整批不执行，返回 mixed_exclusive_tool_batch，避免“等待用户”的调用和写操作交错。</span></li>
-        <li><b>请求 Policy 决策。</b><span>allow 继续；deny 写入 policy_denied；require approval 写入 ApprovalRequested，并由明确的批准流程继续。</span></li>
-        <li><b>安排并发和锁。</b><span>parallel 调用取得总并发名额并共享读锁；其他调用取得写锁。并发名额在启动 goroutine 之前取得。</span></li>
-        <li><b>先记录 ToolCallStarted。</b><span>这是外部动作前的 durable marker。写入失败时不应继续执行，因为恢复无法判断边界。</span></li>
-        <li><b>执行、规范化和限时。</b><span>每个工具可以有 timeout；panic、空结果和普通错误转换为结构化失败，保留 error code、duration 和 trace 关系。</span></li>
-        <li><b>按请求顺序记录结果。</b><span>并发完成顺序不改变模型上下文顺序。ToolCallCompleted/Failed 写入后，下一 step 才会重新投影。</span></li>
-      </ol>
-    </section>
-
-    <section class="chapter2" id="policy">
-      <h2>作用域校验</h2>
-      <p>两种 profile 共用 descriptor 和调用协议，但控制对象不同。Hosted 权限由 operator policy 负责；Local 权限则把 workspace、批准和 OS sandbox 组合起来。</p>
-      <div class="table-scroll"><table class="detail-table">
-        <thead><tr><th>方面</th><th>Hosted profile</th><th>Local profile</th></tr></thead>
-        <tbody>
-          <tr><td>控制对象</td><td>服务端 workspace、服务凭据、用户连接和外部资源</td><td>用户选择的本地 workspace、本机进程和本地连接</td></tr>
-          <tr><td>写权限</td><td>精确工具名 operator allowlist；终端用户批准不能扩大主机权限</td><td>workspace policy、scoped approval 和 sandbox</td></tr>
-          <tr><td>身份</td><td>用户/租户作用域与 operator credential 分开</td><td>本地用户和当前项目作用域</td></tr>
-          <tr><td>连接</td><td>user_connections 中的每用户 OAuth token 再次核对 provider scope</td><td>本地配置/连接不能绕过工具自身检查</td></tr>
-          <tr><td>入口标签</td><td>限制工具适用 surface，不构成授权</td><td>UI 提示只是展示；解析后的目标和批准才有效</td></tr>
-          <tr><td>失败策略</td><td>拒绝是结构化工具错误或不可用能力</td><td>可等待用户批准，但批准绑定原始 call，不接受替换参数</td></tr>
-        </tbody>
-      </table></div>
-      <div class="decision"><b>批准的安全语义</b><p>批准流程保存的是已经请求的具体 ToolCall。恢复时按 TurnID + ToolCallID 找回原始参数，再重新检查当前 policy；界面不能把“批准”变成提交一组新参数的通道。</p></div>
-    </section>
-
-    <section class="chapter2" id="local">
-      <h2>本地执行边界</h2>
-      <div class="plain-grid">
-        <article><h3>路径解析</h3><p>输入路径先清理并转绝对路径，再检查是否在 workspace roots 内。已有目标解析 symlink；新目标检查最近存在的父目录，避免父级 symlink 把写入导出到根目录外。</p></article>
-        <article><h3>敏感文件</h3><p>路径边界之后仍检查凭据、密钥和其他敏感位置。通过 workspace read 测试不代表 Git、诊断或命令工具也能安全访问同一文件。</p></article>
-        <article><h3>argv 执行</h3><p>命令以参数数组启动，不把模型字符串交给 shell。命令风险匹配只提供保守信号，不是 shell parser，也不能单独承担隔离。</p></article>
-        <article><h3>OS sandbox</h3><p>macOS Seatbelt、Linux bubblewrap 按调用需要开放读写和网络。沙箱不可用时正常策略拒绝；绕过是显式开发 escape hatch。</p></article>
-        <article><h3>网络目标</h3><p>检查 scheme、hostname 和地址；DNS 解析后再次拒绝 private/loopback/link-local 等目标，重定向也重新验证，且不静默使用 proxy 环境变量。</p></article>
-        <article><h3>进程后代</h3><p>命令的子进程继承可见环境和 sandbox 边界。不要把本地登录令牌自动放入子进程，也要测试子进程是否能绕开父命令的限制。</p></article>
-      </div>
-    </section>
-
-    <section class="chapter2" id="concurrency">
-      <h2>工具并发调度</h2>
-      <p class="intro">“模型一次返回多个调用”不等于“它们互不影响”。并发属性由 descriptor 声明，并由 Runtime 用读写锁和 bulkhead 落实。</p>
-      <figure class="diagram"><div class="flow">
-        <div class="box"><b>Model tool batch</b><small>原始顺序<br>不可信数量</small></div><div class="arrow">→</div>
-        <div class="box blue"><b>Preflight</b><small>active · schema<br>exclusive · policy</small></div><div class="arrow">→</div>
-        <div class="box"><b>Parallel reads</b><small>MaxParallelToolCalls<br>shared RLock</small></div><div class="arrow">+</div>
-        <div class="box"><b>Writes / normal</b><small>write lock<br>等待并排他</small></div><div class="arrow">→</div>
-        <div class="box green"><b>Ordered results</b><small>按模型顺序<br>写入 transcript</small></div>
-      </div><figcaption>读并发提高吞吐，不能用“工具名看起来像 read”推断安全；修改工具在注册时不得标记为 parallel。</figcaption></figure>
-      <p>Runtime 在创建执行 goroutine 前占用并发名额，所以一次异常大的调用批次不会瞬间耗尽 worker。工具内部如果要对路径数组或远程资源 fan-out，还要使用自己的上限；内部并发数量由对应工具的配置和实现限制。</p>
-      <div class="callout warn"><strong>并发声明的限制</strong>执行器按工具声明选择读写锁。修改共享资源的工具若错误声明为 parallel，可能发生数据竞争。新增 parallel 工具应验证并发访问、取消和下游限流。</div>
-    </section>
-
-    <section class="chapter2" id="results">
-      <h2>工具结果处理</h2>
-      <p>单个结果和整批结果分别受 inline budget 约束。结果治理同时保护模型上下文、transcript 大小、观测成本和入口响应。</p>
-      <div class="table-scroll"><table class="detail-table">
-        <thead><tr><th>结果情况</th><th>模型看到的内容</th><th>完整内容在哪里</th></tr></thead>
-        <tbody>
-          <tr><td>小于单结果上限</td><td>完整 text/JSON/content block</td><td>tool result 的 canonical event</td></tr>
-          <tr><td>超限且有 ArtifactStore</td><td>说明、有限预览、artifact 引用和大小</td><td>按用户/session scope 保存的 artifact</td></tr>
-          <tr><td>超限但不能 spill</td><td>UTF-8 安全截断加明确标记</td><td>没有假装存在的完整副本</td></tr>
-          <tr><td>一批合计超限</td><td>再次按 batch budget 分配每个结果额度</td><td>每个结果自己的 spill（如果可用）</td></tr>
-        </tbody>
-      </table></div>
-      <p>Artifact 引用不是无条件公开的 URL：读取时仍需按调用 scope 再次核对。Slack 展示时可以隐藏完整参数和结果，但这不改变模型看到的内容，也不替代 transcript 的审计权限。</p>
-    </section>
-
-    <section class="chapter2" id="idempotency">
-      <h2>重复调用与幂等性</h2>
-      <p>系统提供三层不同强度的保护，不能把它们混称为“Exactly once”。</p>
-      <div class="layers">
-        <div class="layer"><b>调用级复用</b><span>同一 turn 里已有 ToolCallCompleted/Failed 时，Runtime 不再次派发相同 CallID。它依赖 transcript 已经保存结果。</span></div>
-        <div class="layer"><b>执行编号</b><span>Call.ExecutionID 由 turn 和 call 组成。工具可以把它传给下游的 idempotency key，前提是下游真正支持该语义。</span></div>
-        <div class="layer"><b>恢复中的 unknown</b><span>只有 ToolCallStarted 没有结果时，恢复写入 execution_interrupted，不自动重做；下一轮可以先查询上游。</span></div>
-        <div class="layer"><b>重复失败熔断</b><span>同一次执行中，执行器按工具名和规范化参数累计失败次数。达到阈值后，执行器阻止相同调用。成功调用清除该调用的失败计数；执行结束时清理熔断状态。阈值前的预警由 <code>CircuitWarning</code> 生成。</span></div><div class="layer"><b>MCP 会话缓存</b><span>MCP 路由器缓存已完成握手的会话和工具定义。缓存具有有效期，并在传输错误后失效。缓存不替代每次调用的权限检查。</span></div>
-      </div>
-      <p class="source-note">熔断实现：<a href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/runtime/circuit.go">circuit.go</a>；执行结束清理：<a href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/runtime/runner.go">runner.go</a>；计数行为测试：<a href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/runtime/circuit_test.go">circuit_test.go</a>。</p>
-      <div class="callout"><strong>没有跨系统事务</strong>外部 API 成功和 transcript append 不能放进同一个 PostgreSQL 事务。要实现更强的业务语义，工具需要幂等写入、结果查询、outbox/inbox 或人工补偿中的至少一种。</div>
-    </section>
-
-    <section class="chapter2" id="adding">
-      <h2>工具接入要求</h2>
-      <ol class="walkthrough">
-        <li><b>定义真实效果。</b><span>把读取、workspace write、external write、network 和 privileged 全部写进 Effects；不要因为“通常只读”而隐藏偶发写入。</span></li>
-        <li><b>定义严格 schema。</b><span>参数结构、枚举、大小和必填项要能在 Execute 前验证；工具仍要做业务级目标校验。</span></li>
-        <li><b>决定 exposure 和 surface。</b><span>重工具默认 deferred；依赖未连接时不注册；Surface 只决定产品可见性，不当作授权。</span></li>
-        <li><b>证明并发属性。</b><span>只有真实独立、可安全重叠的读操作才标 parallel；包含用户暂停或必须单独执行的调用标 exclusive。</span></li>
-        <li><b>定义超时和结果上限。</b><span>给下游调用设置 timeout，限制日志/文件大小，必要时接入 ArtifactStore，并返回稳定 ErrorCode。</span></li>
-        <li><b>处理未知副作用。</b><span>在实际动作前允许 Runtime 写 ToolCallStarted；传 ExecutionID 到支持幂等的下游，准备查询接口或补偿流程。</span></li>
-        <li><b>覆盖组合测试。</b><span>至少测试 policy deny/approval、取消、panic、空结果、超大结果、重复恢复、路径/网络边界和并发重叠。</span></li>
-      </ol>
-    </section>
-
-    <section class="chapter2" id="scenarios">
-      <h2>工具故障处理</h2>
-      <div class="scenario-list">
-        <article class="scenario"><h3>一个只读工具把数据库连接池打满</h3><p><span class="label">原因</span>parallel 只限制 Runtime 的调用数，工具内部或下游 client 可能再次 fan-out；共享读锁不代表下游没有连接上限。</p><p><span class="label">动作</span>同时观察 MaxParallelToolCalls、工具内部 worker、pool wait、调用 p95 和 provider API rate limit，按最窄的资源调节。</p></article>
-        <article class="scenario"><h3>模型不断重复同一个失败调用</h3><p><span class="label">先查</span>工具返回的 ErrorCode、参数规范化是否稳定、是否真的有结果事件，以及 circuit breaker 是否只在当前 turn 生效。</p><p><span class="label">动作</span>修复可操作的结构化错误；保留重复失败保护，但不要把它当成权限拒绝或业务成功。</p></article>
-        <article class="scenario"><h3>“批准”后执行了不同于用户看到的参数</h3><p><span class="label">风险</span>如果 UI 允许后续模型重新生成参数，用户批准的动作和实际动作已经不是同一件事。</p><p><span class="label">动作</span>按原始 TurnID + ToolCallID 取回参数并重新做 policy 检查；批准记录与结果必须关联同一个 call。</p></article>
-        <article class="scenario"><h3>工具结果变小后模型反而做出错误结论</h3><p><span class="label">先查</span>Truncated、Spill、artifact 可读性、批次总预算和模型是否看到了完整错误码。</p><p><span class="label">动作</span>让工具返回摘要、关键字段和稳定引用，不要只盲目提高 inline budget；大结果应能被按权限重新读取。</p></article>
-      </div>
-    </section>
-
-    <section class="chapter2" id="source">
-      <h2>对应实现</h2>
-      <div class="table-scroll"><table class="detail-table">
-        <thead><tr><th>内容</th><th>主要实现</th><th>验证位置</th></tr></thead>
-        <tbody>
-          <tr><td>工具接口、描述与 catalog</td><td><code>packages/agent/tool/tool.go</code>、<code>policy.go</code>、<code>categories.go</code></td><td><code>tool_test.go</code>、<code>schema_test.go</code></td></tr>
-          <tr><td>搜索与激活</td><td><code>packages/agent/tool/search.go</code></td><td><code>search_test.go</code></td></tr>
-          <tr><td>Runtime 检查和调度</td><td><code>packages/agent/runtime/tools.go</code></td><td><code>runner_test.go</code>、<code>tool/concurrent_test.go</code></td></tr>
-          <tr><td>批准与精确 call 恢复</td><td><code>runtime/approvals.go</code>、<code>profiles/local/approvals.go</code></td><td><code>approvals_test.go</code></td></tr>
-          <tr><td>路径、命令和沙箱</td><td><code>profiles/local/workspace.go</code>、<code>sandbox.go</code>、<code>packages/safety</code></td><td><code>workspace_test.go</code>、<code>sandbox_test.go</code></td></tr>
-          <tr><td>结果限制与附件</td><td><code>runtime/tool_results.go</code>、<code>profiles/hosted/artifacts.go</code></td><td><code>tool_results_test.go</code></td></tr>
-          <tr><td>重复调用保护</td><td><code>runtime/circuit.go</code></td><td><code>circuit_test.go</code></td></tr>
-          <tr><td>工具实现族</td><td><code>packages/tools/*</code>、<code>packages/surfaces/slack/tools</code></td><td>各工具包测试</td></tr>
-        </tbody>
-      </table></div>
-    </section>
-  </article>
+<a class="skip-link" href="#content">跳到正文</a>
+<header class="site-header"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">K</span><strong>Kepler</strong><span class="brand-label">架构文档</span></a><div class="header-actions"></div></header>
+<div class="doc-layout">
+<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="execution.html">执行过程</a><a href="models.html">上下文与模型</a><a href="tools.html" aria-current="page">工具与策略</a><a href="reliability.html">状态与恢复</a><a href="delegation.html">委派执行</a><a href="operations.html">队列与观测</a><a href="production.html">故障处理</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="reading-guide.html">术语</a><a href="reference.html">实现索引</a></nav>
+<main class="doc-content" id="content" tabindex="-1">
+<header class="doc-header"><p class="breadcrumb">执行机制<span aria-hidden="true"> / </span>04</p><h1>工具与策略</h1><p class="lead">模型提出工具调用。执行器检查调用身份、能力策略和实际作用域后，调度工具并保存结果。工具可见性、用户确认和执行权限是独立条件。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<section class="doc-section" id="descriptors"><h2>工具声明</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="声明、含义、限制"><table><thead><tr><th scope="col">声明</th><th scope="col">含义</th><th scope="col">限制</th></tr></thead><tbody><tr><td>名称与参数</td><td>稳定调用身份及输入结构</td><td>模型生成的参数仍需验证</td></tr><tr><td>效果 / effects</td><td>读、写、网络或特权影响</td><td>用于策略决策，不能从检索结果猜测</td></tr><tr><td>可见性 / exposure</td><td>默认启用、延迟发现或关闭</td><td>只控制目录可见性</td></tr><tr><td>并发属性</td><td>是否允许安全并行</td><td>修改共享资源的工具不能错误声明为只读并行</td></tr><tr><td>作用域 / scope</td><td>服务端提供的会话、用户和工作区身份</td><td>不能由模型参数替换</td></tr></tbody></table></div></section>
+<section class="doc-section" id="discovery"><h2>发现与激活</h2>
+<p><code>tool_search</code> 的搜索操作只返回目录信息。激活操作使用确切注册名称，并将候选工具定义与确认结果一并纳入上下文容量检查。激活失败时保留原有目录。</p>
+<p>工具发现采用词法检索。检索命中、名称匹配和激活成功均不代表本次调用获准执行。</p></section>
+<section class="doc-section" id="pipeline"><h2>调用流程</h2>
+<ol class="steps"><li>按调用标识检查已有结果，避免恢复时重复执行已记录调用。</li><li>解析调用并验证参数、业务前置条件和实际目标。</li><li>按能力策略决定允许、拒绝或等待批准。</li><li>取得并发名额与锁，保存开始事件。</li><li>执行工具并保存结构化结果、错误和证据引用。</li></ol></section>
+<section class="doc-section" id="policy"><h2>授权与审批</h2>
+<p>托管能力策略由服务端配置决定。用户确认不能新增宿主机权限。写工具需要对应效果声明及确切的操作员允许项。</p>
+<p>本地审批绑定原工具调用、参数、用户和会话。恢复时重新检查策略；模型重新生成的另一组参数不能继承原批准。</p></section>
+<section class="doc-section" id="sandbox"><h2>文件、命令与网络边界</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="边界、执行要求"><table><thead><tr><th scope="col">边界</th><th scope="col">执行要求</th></tr></thead><tbody><tr><td>路径</td><td>解析实际路径和符号链接，检查工作区与敏感文件策略</td></tr><tr><td>命令</td><td>按 argv 执行；命令风险匹配不能替代操作系统隔离</td></tr><tr><td>沙箱</td><td>本地使用 macOS Seatbelt 或 Linux bubblewrap；可用性需实际验证</td></tr><tr><td>网络</td><td>对应网络工具检查协议、主机、解析地址和重定向目标</td></tr><tr><td>凭据</td><td>按集成作用域使用，不能自动传入任意命令子进程</td></tr></tbody></table></div></section>
+<section class="doc-section" id="concurrency"><h2>并发与资源限制</h2>
+<p>执行器在创建执行 goroutine 前取得并发名额。允许并行的调用共享读锁，其他调用使用写锁。工具内部的并发和下游连接池仍需单独限制。</p>
+<p>执行器按工具声明选择锁。错误的并发声明可能导致数据竞争，锁本身不能修正声明。</p></section>
+<section class="doc-section" id="results"><h2>结果与证据</h2>
+<p>模型可见结果受单项及批次总预算限制。截断通过 <code>Truncated</code> 等结构化状态告知模型。外置结果使用受作用域限制的引用读取，不能把任意宿主机路径当作证据入口。</p>
+<p>历史结果遮蔽与新结果截断是不同阶段。前者调整后续上下文，后者限制当前工具输出。原始证据是否保留取决于对应存储机制。</p></section>
+<section class="doc-section" id="repetition"><h2>恢复与重复失败</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="状态、处理"><table><thead><tr><th scope="col">状态</th><th scope="col">处理</th></tr></thead><tbody><tr><td>调用已有结果</td><td>复用已保存结果</td></tr><tr><td>已生成但未记录开始</td><td>恢复写入 <code>execution_not_started</code></td></tr><tr><td>已有开始但没有结果</td><td>保留 <code>execution_interrupted</code>，不自动重发</td></tr><tr><td>相同调用重复失败</td><td>当前执行内累计失败，达到阈值后熔断；成功清除该调用计数</td></tr><tr><td>执行结束</td><td>清理该执行的熔断状态</td></tr></tbody></table></div>
+<p>外部写入与会话事件提交不是跨系统事务。安全重试取决于下游幂等约束或结果查询能力。</p></section>
+<section class="doc-section" id="mcp"><h2>MCP 连接与信任边界</h2>
+<p>MCP 路由器使用配置、凭据指纹和调用作用域选择会话。凭据变化、租户变化或缓存到期后，需要重新握手。缓存不能替代调用授权。</p>
+<p>远端 readOnlyHint 是工具声明，不是已验证的实际行为。未知工具写入失败不能因连接重建而透明重发。执行隔离、出站网络策略和凭据范围需要分别成立。</p></section>
+<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="依据、位置"><table><thead><tr><th scope="col">依据</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/tool">packages/agent/tool</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/tools.go">packages/agent/runtime/tools.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/circuit.go">packages/agent/runtime/circuit.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/circuit_test.go">packages/agent/runtime/circuit_test.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/tools.md">docs/tools.md</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/safety.md">docs/safety.md</a></td></tr></tbody></table></div></section>
 </main>
-<footer class="footer2"><span>Kepler · 架构指南</span><a href="reading-guide.html">术语与文档范围</a><a href="https://github.com/noknov/kepler-agent">项目源码 ↗</a></footer>
+<aside class="toc" aria-label="本页目录"></aside>
+</div>
+<footer class="site-footer"><span>Kepler 架构文档</span><a href="reading-guide.html">术语</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
 </body>
 </html>
