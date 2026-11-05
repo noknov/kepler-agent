@@ -101,7 +101,8 @@
         <li><b>从最新 group 向前保留。</b><span>最新一组不能被丢弃；更早 group 在预算内加入。被移出的消息交给 compactor，并把最后事件序号记录成覆盖点。</span></li>
       </ol>
       <h3>当前输入和持久化输入的差异</h3>
-      <p>模型请求可以暂时看到当前 message 中的图片，但 canonical transcript 不保留原始图片二进制；持久化时替换为说明文本。这样恢复不会依赖大段 base64，也不把敏感附件意外写入长期会话。若 provider 不支持某类图片，适配器在 dispatch 前去除并保留可解释的文字提示。</p>
+      <p>当前执行可以使用用户输入中的图片。执行器通过 <code>durableUserInput</code> 保存用户输入时，将图片替换为文本说明。因此，恢复后的用户消息不包含这些原始图片。工具结果中的图片使用独立处理规则，不能据此推断所有图片都不持久化。</p>
+      <p class="source-note">用户输入持久化：<a href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/runtime/runner.go">runner.go 中的 durableUserInput</a>。执行恢复行为见<a href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/runtime/recovery_regression_test.go">恢复回归测试</a>。</p>
     </section>
 
     <section class="chapter2" id="model">

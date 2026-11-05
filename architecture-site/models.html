@@ -26,14 +26,14 @@
       <p class="kicker">CORE / CONTEXT &amp; MODEL</p>
       <h1>提示内容、上下文与模型</h1>
       <p class="lead2">执行器把提示、用户输入、历史和工具定义组成模型请求。模型适配器负责转换提供方协议。本章说明请求如何组成、如何控制上下文大小，以及模型失败后何时可以重试。</p>
-      <div class="facts"><span><b>提示</b> 分层合并</span><span><b>历史</b> 事件投影</span><span><b>容量</b> 保守估算</span><span><b>失败</b> 先看提交边界</span></div>
+      <div class="facts"><span><b>提示</b> 分层合并</span><span><b>历史</b> 事件投影</span><span><b>容量</b> 保守估算</span><span><b>失败</b> 输出提交边界</span></div>
     </header>
 <section class="chapter-brief" aria-label="关键约束"><p class="eyebrow">关键约束</p><h2>模型请求约束</h2><ul><li>上下文预算必须包含工具定义和输出预留。</li><li>提供方协议转换由模型适配器负责。</li><li>可见文本输出后，重试不能拼接另一份答复。</li></ul></section>
 
 
     <section class="chapter2" id="request">
       <h2>模型请求组成</h2>
-      <p class="intro">一次请求不是把数据库里所有内容原样塞给模型。执行器每轮重新生成系统说明、会话消息和当前工具定义；只有会影响下一步判断的内容进入模型请求。</p>
+      <p class="intro">执行器每轮构造模型请求。请求包含系统提示、经过投影的会话消息和当前已启用工具的定义。生命周期事件用于恢复，不全部映射为模型消息。</p>
       <figure class="diagram"><div class="flow">
         <div class="box"><b>System</b><small>稳定行为、规则<br>产品与环境事实</small></div><div class="arrow">+</div>
         <div class="box"><b>Messages</b><small>用户、assistant、tool<br>摘要与 steering</small></div><div class="arrow">+</div>
@@ -45,7 +45,7 @@
         <tbody>
           <tr><td>系统说明</td><td>身份、证据纪律、安全边界、操作规则</td><td>由提示目录和运行配置重建，不作为会话消息追加</td></tr>
           <tr><td>运行环境</td><td>日期、时区、workspace roots、本次作用域</td><td>按请求生成；不依赖入口的旧环境缓存</td></tr>
-          <tr><td>会话消息</td><td>用户意图、已完成答复、工具结果</td><td>是；图片二进制会被替换为可解释的文本说明</td></tr>
+          <tr><td>会话消息</td><td>用户意图、已完成答复、工具结果</td><td>是；用户输入中的图片在持久化时替换为文本说明</td></tr>
           <tr><td>工具定义</td><td>模型能否提出某个调用以及如何填写参数</td><td>目录是 profile 状态；激活状态按 turn 清理</td></tr>
           <tr><td>流式 delta</td><td>入口实时展示</td><td>否；完整 assistant message 和 lifecycle 才是恢复依据</td></tr>
         </tbody>
@@ -61,7 +61,7 @@
           <tr><td>Core kernel</td><td>身份、保密、证据、自主执行、沟通和安全</td><td><code>packages/prompts/defaults/system.md</code>，提交到仓库</td><td>影响所有 surface；需要跨产品回归</td></tr>
           <tr><td>Rules</td><td>调查方式、写操作约束、验证要求、调试纪律</td><td><code>rules/*.md</code> 按目录读取并合并</td><td>可改变工具选择和结束前行为</td></tr>
           <tr><td>Tool guidance</td><td>用途、参数、路由提示和安全说明</td><td>随工具 descriptor 及 <code>tools.json</code> 应用</td><td>只改善选择提示，不能扩大 policy 权限</td></tr>
-          <tr><td>Skills</td><td>完整工作流、专项检查和验证步骤</td><td>基础 prompt 只放名称/说明，按需 skills-load</td><td>按需加载仍要视为不可信历史/外部输入边界</td></tr>
+          <tr><td>Skills</td><td>完整工作流、专项检查和验证步骤</td><td>基础 prompt 只放名称/说明，按需 skills-load</td><td>按来源和加载路径处理信任边界；加载技能不授予工具权限</td></tr>
           <tr><td>Private overlay</td><td>仓库别名、环境映射、私有 runbook 入口</td><td><code>PROMPT_DIR</code> 叠加在 public defaults 上</td><td>不能把凭据或大段 incident 历史放入每次 prompt</td></tr>
           <tr><td>Dynamic context</td><td>当前日期、workspace、session scope 和已选工具</td><td>每次请求生成，位于静态内容之后</td><td>应可观测其摘要，不能依赖进程启动时快照</td></tr>
         </tbody>
@@ -76,7 +76,7 @@
         <li><b>计算输入预算。</b><span>总 MaxTokens 减去 ReserveTokens；预留给模型输出、工具定义和 provider 差异。配置差值不合理时直接拒绝派发，而不是退回总上限。</span></li>
         <li><b>选择最近有效压缩。</b><span>只接受带有向后覆盖边界的 <code>covers_through</code>。坏摘要不会悄悄遮住原始消息，避免数据损坏变成事实丢失。</span></li>
         <li><b>筛选可投影事件并保留伴随推理。</b><span>UserInput、SteeringInput、AssistantMessage、ToolCallCompleted/Failed 形成 canonical messages；工具调用步伴随的公开说明保持为普通文本，并标记 commentary 阶段；与模型原生推理分离，跨 provider 回传时不丢失，也不污染最终回答。</span></li>
-        <li><b>两阶段瘦身：先做 Observation Masking。</b><span>当历史体积超出预算时，优先对最近两个完整交互之外的历史 <code>ToolResult</code> 执行 UTF-8 安全折叠（大文本保留首尾预览，旧图片改为引用，并通过 <code>context_read</code> 按需读回原始证据），避免过早触发整轮对话裁剪或高延迟 LLM 压缩。</span></li>
+        <li><b>压缩前执行历史工具结果遮蔽。</b><span>当历史体积超出预算时，优先对最近两个完整交互之外的历史 <code>ToolResult</code> 执行 UTF-8 安全折叠（大文本保留首尾预览，旧图片改为引用，并通过 <code>context_read</code> 按需读回原始证据），避免过早触发整轮对话裁剪或高延迟 LLM 压缩。</span></li>
         <li><b>按 TurnID 聚成完整 group 向前加入。</b><span>一个用户请求及其 assistant tool call/result 是不可拆分单元。最新 group 必须保留；更早 group 只有在预算内才进入。</span></li>
         <li><b>插入缓存断点并叠加动态上下文。</b><span>在静态层（<code>LayerCore / LayerProduct / LayerEnvironment</code>）与动态层（<code>LayerProject / LayerUser / LayerSkill / LayerTurn</code>）之间自动注入 <code>---DYNAMIC_CONTEXT_BELOW---</code> 缓存分界，并为最近一轮消息附加增量缓存锚点。</span></li>
       </ol>

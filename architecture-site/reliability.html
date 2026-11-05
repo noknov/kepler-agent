@@ -33,7 +33,7 @@
 
     <section class="chapter2" id="authority">
       <h2>权威记录与派生数据</h2>
-      <p class="intro">会话事件是执行恢复的 source of truth。运行列表、步骤、费用、健康汇总和界面状态都是 projection；它们可以延迟、丢失通知或重建，但不能反过来替代 transcript 判断下一步。</p>
+      <p class="intro">会话事件记录是执行恢复的权威依据。运行列表、步骤、费用、健康汇总和界面状态是派生投影。投影可能延迟或丢失通知。恢复执行时，执行器核对会话事件，不以投影状态替代执行记录。</p>
       <figure class="diagram"><div class="flow">
         <div class="box blue"><b>Canonical transcript</b><small>用户、模型、工具<br>生命周期与终态</small></div><div class="arrow">→</div>
         <div class="box"><b>Projection sinks</b><small>runs、steps、metrics<br>UI / trajectory</small></div><div class="arrow">→</div>
@@ -54,7 +54,7 @@
 
     <section class="chapter2" id="ownership">
       <h2>处理权的保护范围</h2>
-      <p>所有权层次不能互相替代。Inbox 只能保证入口任务由一个 worker 处理；Session lease 才保证同一会话的上下文串行；工具 bulkhead 限制 fan-out；输入 claim 则保护追加消息不会被多个 worker 同时消费。</p>
+      <p>入口任务认领、会话处理权、工具并发限制和追加输入认领保护不同对象。入口认领控制当前处理者。会话锁控制同一会话的执行顺序。工具并发限制控制调用数量。追加输入认领控制消息消费与确认。租约过期后的旧执行者仍须停止操作。</p>
       <div class="table-scroll"><table class="detail-table">
         <thead><tr><th>保护对象</th><th>实现</th><th>没有这一层的风险</th><th>所有权丢失时</th></tr></thead>
         <tbody>

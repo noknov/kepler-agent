@@ -68,8 +68,7 @@ architecture described here.
 
 ## Publish with CI
 
-The `architecture-pages` GitHub Actions workflow deploys this directory to GitHub
-Pages. Run it manually for the selected ref, or push an explicit release tag
-matching `architecture-site-*`. A release tag publishes the site from that exact
-commit, including commits on a feature branch. Ordinary branch pushes do not
-publish the site. Check the workflow result before treating a release as live.
+Run the existing `architecture-pages` workflow manually for the intended ref.
+The selected ref must satisfy the repository's `github-pages` environment
+protection rules. Release tags are not currently permitted by that environment.
+A pushed branch or tag is not evidence of deployment; check the workflow result.

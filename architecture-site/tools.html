@@ -122,8 +122,8 @@
         <div class="box"><b>Writes / normal</b><small>write lock<br>等待并排他</small></div><div class="arrow">→</div>
         <div class="box green"><b>Ordered results</b><small>按模型顺序<br>写入 transcript</small></div>
       </div><figcaption>读并发提高吞吐，不能用“工具名看起来像 read”推断安全；修改工具在注册时不得标记为 parallel。</figcaption></figure>
-      <p>Runtime 在创建执行 goroutine 前占用并发名额，所以一次异常大的调用批次不会瞬间耗尽 worker。工具内部如果要对路径数组或远程资源 fan-out，还要使用自己的上限；当前 MapOrdered 将内部 worker 限制为固定小值。</p>
-      <div class="callout warn"><strong>并发声明是正确性契约</strong>如果一个工具实际上会修改共享资源，却声明为 parallel，锁只能忠实执行错误声明，无法挽救数据竞争。新增 parallel 工具必须测试真实重叠行为、取消和下游限流，而不是只测 descriptor 字段。</div>
+      <p>Runtime 在创建执行 goroutine 前占用并发名额，所以一次异常大的调用批次不会瞬间耗尽 worker。工具内部如果要对路径数组或远程资源 fan-out，还要使用自己的上限；内部并发数量由对应工具的配置和实现限制。</p>
+      <div class="callout warn"><strong>并发声明的限制</strong>执行器按工具声明选择读写锁。修改共享资源的工具若错误声明为 parallel，可能发生数据竞争。新增 parallel 工具应验证并发访问、取消和下游限流。</div>
     </section>
 
     <section class="chapter2" id="results">
@@ -148,8 +148,9 @@
         <div class="layer"><b>调用级复用</b><span>同一 turn 里已有 ToolCallCompleted/Failed 时，Runtime 不再次派发相同 CallID。它依赖 transcript 已经保存结果。</span></div>
         <div class="layer"><b>执行编号</b><span>Call.ExecutionID 由 turn 和 call 组成。工具可以把它传给下游的 idempotency key，前提是下游真正支持该语义。</span></div>
         <div class="layer"><b>恢复中的 unknown</b><span>只有 ToolCallStarted 没有结果时，恢复写入 execution_interrupted，不自动重做；下一轮可以先查询上游。</span></div>
-        <div class="layer"><b>重复失败熔断与纠偏预警</b><span>同一 session 内相同工具和规范化参数连续失败时，先在倒数第二步追加 <code>CircuitWarning</code> 自纠偏提示，达到阈值后触发熔断阻止无效循环；MCP 路由器缓存已握手的会话与工具定义（5 分钟 TTL，异常自动失效）。</span></div>
+        <div class="layer"><b>重复失败熔断</b><span>同一次执行中，执行器按工具名和规范化参数累计失败次数。达到阈值后，执行器阻止相同调用。成功调用清除该调用的失败计数；执行结束时清理熔断状态。阈值前的预警由 <code>CircuitWarning</code> 生成。</span></div><div class="layer"><b>MCP 会话缓存</b><span>MCP 路由器缓存已完成握手的会话和工具定义。缓存具有有效期，并在传输错误后失效。缓存不替代每次调用的权限检查。</span></div>
       </div>
+      <p class="source-note">熔断实现：<a href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/runtime/circuit.go">circuit.go</a>；执行结束清理：<a href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/runtime/runner.go">runner.go</a>；计数行为测试：<a href="https://github.com/noknov/kepler-agent/blob/main/packages/agent/runtime/circuit_test.go">circuit_test.go</a>。</p>
       <div class="callout"><strong>没有跨系统事务</strong>外部 API 成功和 transcript append 不能放进同一个 PostgreSQL 事务。要实现更强的业务语义，工具需要幂等写入、结果查询、outbox/inbox 或人工补偿中的至少一种。</div>
     </section>
 
