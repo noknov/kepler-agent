@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Slack 适配器验证平台请求，将线程和消息映射为托管会话，并投递执行结果。模型循环和工具策略由共享核心与托管产品配置负责。">
+<meta name="description" content="Slack 负责把平台消息转换为托管任务，并把执行结果投递回对话。它需要处理验签、重复事件、线程身份、附件和流式消息。共享执行器负责分析与工具调度，但不会替入口完成这些平台工作。">
 <meta name="color-scheme" content="light dark">
 <title>Slack 接入 · 架构文档</title>
 <link rel="stylesheet" href="assets/guide.css">
@@ -16,26 +16,42 @@
 <div class="doc-layout">
 <nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html" aria-current="page">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
 <main class="doc-content" id="content" tabindex="-1">
-<header class="doc-header"><p class="breadcrumb">产品边界<span aria-hidden="true"> / </span>11</p><h1>Slack 接入</h1><p class="lead">Slack 适配器验证平台请求，将线程和消息映射为托管会话，并投递执行结果。模型循环和工具策略由共享核心与托管产品配置负责。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<header class="doc-header"><p class="breadcrumb">产品边界<span aria-hidden="true"> / </span>11</p><h1>Slack 接入</h1><p class="lead">Slack 负责把平台消息转换为托管任务，并把执行结果投递回对话。它需要处理验签、重复事件、线程身份、附件和流式消息。共享执行器负责分析与工具调度，但不会替入口完成这些平台工作。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
 <section class="doc-section" id="contract"><h2>输入与输出</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="输入、适配器处理、输出"><table><thead><tr><th scope="col">输入</th><th scope="col">适配器处理</th><th scope="col">输出</th></tr></thead><tbody><tr><td>签名请求</td><td>按原始请求字节验证签名与访问范围</td><td>可信平台身份和事件</td></tr><tr><td>消息与线程</td><td>映射用户、频道、线程和会话</td><td>规范化执行输入</td></tr><tr><td>执行事件</td><td>合并流式更新并管理最终消息</td><td>Slack 回复与关联记录</td></tr></tbody></table></div></section>
+<p>一条 Slack 消息同时包含内容和平台上下文：谁发送、在哪个工作区和频道、是否属于已有线程，以及是什么事件。入口先验证这些信息，再决定怎样映射为内部会话和执行输入。</p>
+<p>例如，用户在线程里要求继续调查登录问题，适配器需要找到原会话；用户另发一条根消息，则可能建立另一段对话。只把文字交给模型而丢掉线程与身份，会让后续权限和回复位置失去依据。</p>
+<p>输出也需要适配。执行器产生的是模型文字、工具生命周期和终态，Slack 适配器将其转换为状态更新、流式文本和最终回复。界面控件不直接拥有执行权限。</p>
+</section>
 <section class="doc-section" id="http"><h2>请求验证与持久接收</h2>
-<p>网关验证 Slack 请求签名和配置的访问范围。事件在进入工作进程前写入持久收件箱。平台事件去重与会话执行锁分别处理重复投递和并发执行。</p>
-<p>会话用户、工作区和线程身份由入口传入。知道 session ID 不能替代 Slack 身份验证。</p></section>
+<p>网关使用收到的原始请求字节验证签名，再检查配置的用户和频道访问范围。不能先重新编码请求体，再用变化后的字节验签。</p>
+<p>通过验证的事件进入持久收件箱，工作进程随后认领。这样入口可以尽快确认接收，而不必等模型调查完成。平台因超时重新发送同一事件时，事件身份用于去重。</p>
+<p>这只能解决入口重复投递。用户重新发出另一条相似消息，或者同一任务内部重复执行工具，属于不同问题，需要对应的会话与调用规则。</p>
+</section>
 <section class="doc-section" id="routing"><h2>消息路由</h2>
-<p>入口按事件类型、提及和线程状态决定新建对话、继续会话或处理控制动作。当前 Slack 产品还可安装代码审查路由。Web 和本地 CLI 不因此具有相同路由。</p>
-<p>支持的私信和频道行为受当前访问策略及具体工具约束。不能把事件订阅存在视为任何用户都能使用对应能力。</p></section>
+<p>事件类型、提及方式、线程状态和当前产品策略共同决定处理路径。新任务、线程续接、补充输入、停止和按钮动作不能都视为“创建新执行”。</p>
+<p>当前 Slack 产品还可以安装代码审查等工作流路由。例如，一条明确的 PR 审查请求可能进入特定的调查组织流程。这个路由属于 Slack 产品配置，不是所有入口共用的默认行为。</p>
+<p>平台订阅了某类事件，也不代表任何用户都有对应能力。频道成员关系、入口允许范围和工具权限都要分别成立。</p>
+</section>
 <section class="doc-section" id="attachments"><h2>附件处理</h2>
-<p>附件需要补齐消息和线程上下文，再通过授权路径读取。文件事件缺少映射信息时，入口不能猜测会话。私有文件 URL 和凭据不应作为公开日志输出。</p>
-<p>附件在原执行中的可见性与其是否长期保存分别判断。恢复后的记录不能声称重新读取了未保留的原始图片。</p></section>
+<p>附件通常需要额外的读取步骤。入口要先知道文件属于哪条消息和哪个线程，再通过授权路径获得内容。一个文件事件先到达时，可能还没有足够信息确定会话；这时不能随意猜一个 session。</p>
+<p>附件的私有 URL 不是公开证据链接，也不应直接输出到日志。图片可以在当前执行里提供给模型，但用户图片是否长期保留，还要看持久化规则。恢复时只有“曾经有图片”的说明，不能当作原图仍然可用。</p>
+</section>
 <section class="doc-section" id="controls"><h2>审批与控制动作</h2>
-<p>按钮、停止和补充输入必须匹配请求身份、会话、执行及具体等待点。旧控件不能作为当前工具的通用批准。</p>
-<p>GitHub PR 审批工具具有独立的允许项与原始请求范围。共享频道确认不授予合并、评论或其他未启用操作。</p></section>
+<p>批准按钮必须绑定某个具体等待点，包括用户、会话、执行和工具调用。用户点击旧消息上的按钮时，当前执行可能已经取消，或正在等待另一项操作。入口需要重新核对这些关系。</p>
+<p>停止动作也必须对应目标会话和执行，不能让一条无关线程控制另一段工作。用户确认表达的是对具体操作的选择，不会扩大服务端工具允许列表。</p>
+<p>GitHub PR 审批工具还有自己的原始 PR 范围与头部版本检查。一次确认不能被解释为允许合并、评论或处理另一个 PR。</p>
+</section>
 <section class="doc-section" id="delivery"><h2>流式与最终投递</h2>
-<p>适配器使用 Slack 的 start、append 和 stop stream 接口合并文本更新。最终答复可能需要替换流式消息或修复已知消息。</p>
-<p>启动请求结果未知且没有消息标识时，不能直接再发一条来假设原请求失败。投递确认与执行结果分开保存。</p></section>
+<p>模型会陆续输出文字，Slack 则通过开始、追加和停止流式消息等 API 展示。适配器需要合并更新，避免每一个小片段都变成一个并发请求，也不能让慢投递直接阻塞模型回调。</p>
+<p>最终答复不一定只是流式文字的继续。如果最终内容修订了前面的文字，适配器需要修复已有消息。已知消息 ID 时，可以针对该消息补偿，而不是再发一份可能重复的答案。</p>
+<aside class="worked-example"><p class="example-label">说明示例</p><h3>消息创建结果未知</h3><p>假设创建流式消息的请求已经到达 Slack，但响应丢失，应用没拿到消息 ID。此时无法仅凭超时确定消息没创建。</p>
+<p>立即再发普通消息可能产生两份回复。系统应保留未知投递状态，并按消息关联或可核对证据处理。示例说明失败窗口，不代表一次实际 Slack 请求。</p></aside>
+<p>执行事件和投递记录分开保存。模型答复已经完整保存后，修复的是消息投递，而不是重新请求模型生成另一份结论。</p>
+</section>
 <section class="doc-section" id="scenarios"><h2>重复事件与未知投递</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="情况、处理边界"><table><thead><tr><th scope="col">情况</th><th scope="col">处理边界</th></tr></thead><tbody><tr><td>平台重发同一事件</td><td>按入口事件身份去重</td></tr><tr><td>旧审批按钮</td><td>按原调用和当前状态重新校验</td></tr><tr><td>投递请求超时</td><td>区分明确拒绝与结果未知</td></tr><tr><td>执行完成但回复失败</td><td>修复投递，不重跑模型与工具</td></tr></tbody></table></div></section>
+<p>重复事件按入口事件身份处理；旧控件按原调用与当前等待状态处理；未知投递按平台结果处理。这三类问题看起来都可能表现为“用户没看到正确回复”，但恢复动作不同。</p>
+<p>排障时需要同时记录入口 event ID、会话与执行标识、线程位置和投递关联。入口确认接收只证明任务被接住，不能作为最终消息已发送的证据。</p>
+</section>
 <section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="归属、位置"><table><thead><tr><th scope="col">归属</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/slack/events">packages/surfaces/slack/events</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/slack/agent/service.go">packages/surfaces/slack/agent/service.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/eventinbox">packages/eventinbox</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/slack.md">docs/slack.md</a></td></tr></tbody></table></div></section>
 </main><aside class="toc" aria-label="本页目录"></aside></div>
 <footer class="site-footer"><a href="reading-guide.html">概念与标识</a><a href="reference.html">实现索引</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="托管入口先持久接收工作，再由处理者认领执行。队列认领、会话锁和执行准入保护不同对象。关闭流程必须覆盖执行结束后的持久确认。">
+<meta name="description" content="队列把“已经接收请求”和“现在能够执行”分开。工作进程按规则认领任务，再取得会话处理权。服务关闭时，还要等到结果确认或认领释放完成，不能只看模型是否已经返回。">
 <meta name="color-scheme" content="light dark">
 <title>队列与生命周期 · 架构文档</title>
 <link rel="stylesheet" href="assets/guide.css">
@@ -16,24 +16,38 @@
 <div class="doc-layout">
 <nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html" aria-current="page">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
 <main class="doc-content" id="content" tabindex="-1">
-<header class="doc-header"><p class="breadcrumb">调度与协作<span aria-hidden="true"> / </span>10</p><h1>队列与生命周期</h1><p class="lead">托管入口先持久接收工作，再由处理者认领执行。队列认领、会话锁和执行准入保护不同对象。关闭流程必须覆盖执行结束后的持久确认。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<header class="doc-header"><p class="breadcrumb">调度与协作<span aria-hidden="true"> / </span>10</p><h1>队列与生命周期</h1><p class="lead">队列把“已经接收请求”和“现在能够执行”分开。工作进程按规则认领任务，再取得会话处理权。服务关闭时，还要等到结果确认或认领释放完成，不能只看模型是否已经返回。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
 <section class="doc-section" id="inbox"><h2>入口队列</h2>
-<p>Slack 入口先把已验证事件写入 PostgreSQL 收件箱。工作进程按认领所有者和到期时间处理事件，并执行续租、失败重试和死信处理。</p>
-<p>完成或失败确认必须匹配当前所有者。旧执行者不能覆盖新所有者的状态。Web 队列具有独立的会话准入与确认逻辑。</p></section>
+<p>平台请求通常要求尽快确认接收，而模型任务可能持续较长时间。如果网关一直等到模型完成才响应，平台可能超时并重新投递。因此，Slack 入口先把已验证事件写入 PostgreSQL 收件箱，再由工作进程处理。</p>
+<p>写入收件箱后，系统取得了一份可恢复的待处理记录。某个工作进程退出，其他工作进程可以按认领和租约规则接手。入口事件身份用于识别平台重投递，不是工具调用的幂等键。</p>
+<p>Redis 可以通知工作进程有新任务，但通知本身不是持久接收。丢一条唤醒通知可能增加等待，不应等同于丢失已经写入数据库的用户要求。</p>
+</section>
 <section class="doc-section" id="inputs"><h2>追加输入</h2>
-<p>追加消息写入持久会话输入队列。顺序、认领、确认和释放由存储维护。Redis 通知用于减少等待时间，不是输入已经保存的证明。</p>
-<p>暂时性存储错误不能按“会话不存在”确认并丢弃消息。已经终止的执行应按对应终态确认，不重复运行。</p></section>
+<p>执行期间到达的新消息，需要保留顺序和用途。追加输入、后续排队输入与取消控制不同，不能把它们覆盖成一个字段。持久会话输入队列记录这些消息，并维护认领、确认和释放。</p>
+<p>例如，调查过程中用户补充“先不要修改文件”。这条要求必须按对应输入路径进入会话，不能仅存于某个接收线程的内存。进程重启后还需要知道它是否被消费。</p>
+<p>处理输入时的数据库暂时错误，也不能按“会话不存在”直接确认丢弃。只有权威状态明确说明任务已经终止或应拒绝时，才按规则结束确认。</p>
+</section>
 <section class="doc-section" id="admission"><h2>准入与认领</h2>
-<p>准入上限限制本进程正在承担的工作。工作进程已满时，不提前认领等待中的 Web 会话并消耗其重试次数。</p>
-<p>暂时性查询或审批错误释放认领。只有明确的持久终态或终止拒绝，才能按规则确认任务。已终止的执行不能因重复投递再次运行。</p></section>
+<p>准入上限控制一个进程已经承担多少工作。它不同于工具并发，也不同于模型请求并发。一个任务可能暂时没有请求模型，却仍占用会话、存储确认和生命周期资源。</p>
+<p>Web 队列在工作进程已满时，不应提前认领大量等待会话并消耗它们的重试次数。已经接收的工作，在持久确认或释放完成之前，仍属于准入管理范围。</p>
+<p>如果只在模型返回时释放容量，服务可能把“执行已结束但确认尚未完成”的任务漏掉，关闭时也可能误判为空闲。</p>
+</section>
 <section class="doc-section" id="capacity"><h2>容量限制</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="资源、检查对象"><table><thead><tr><th scope="col">资源</th><th scope="col">检查对象</th></tr></thead><tbody><tr><td>执行准入</td><td>活跃会话与已接收工作</td></tr><tr><td>模型</td><td>进程级请求并发、尝试次数和退避</td></tr><tr><td>工具</td><td>调用并发、内部并发和下游配额</td></tr><tr><td>数据库</td><td>连接池占用、会话锁和查询等待</td></tr><tr><td>投影与投递</td><td>待处理数量、丢弃通知与补偿进度</td></tr></tbody></table></div>
-<p>调高工作进程数量可能同时增加模型请求和数据库连接。容量调整需以实际受限资源为依据。</p></section>
+<p>积压可能出现在入口、会话锁、模型、工具、数据库或投递层。它们都有自己的容量限制。只有找到实际等待的位置，才能知道应该调哪个参数。</p>
+<p>例如，模型提供方正在限流时，增加工作进程可能制造更多请求和退避，而不是更快完成。数据库连接已被会话占用时，增加子任务也可能使等待更长。</p>
+<p>容量调整应同时观察当前执行数、连接池等待、模型限流、工具并发和队列年龄。某个局部上限变大，不表示系统整体更能承受负载。</p>
+</section>
 <section class="doc-section" id="shutdown"><h2>关闭流程</h2>
-<p>进入 drain 后，服务停止新的准入并使 readiness 失败。系统在关闭期限内等待已接收工作及持久确认。期限到达后取消服务工作，再执行有界清理。</p>
-<p>容器停止期限需要覆盖应用宽限期和清理时间。readiness 失败不表示所有执行已结束。Slack、Web 和本地 stdio 的关闭语义需分别验证。</p></section>
+<p>关闭流程先阻止新的准入，再等待已承担工作在期限内结束。这一阶段称为 drain。readiness 会失败，用于告诉流量入口不要再把新工作交给此实例；它不表示所有任务已经完成。</p>
+<p>等待范围还包括持久队列确认或释放。模型循环结束后，若数据库确认仍在进行，服务不能立即关闭底层连接并假装已经清空工作。</p>
+<p>宽限期到达后，系统取消服务工作，再进行有时间上限的清理。容器停止期限要覆盖这些阶段，否则应用还在保存终态时就可能被强制结束。Slack、Web 和本地 stdio 的具体关闭路径不同，需要分别验证。</p>
+</section>
 <section class="doc-section" id="handoff"><h2>接管与确认</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="状态、要求"><table><thead><tr><th scope="col">状态</th><th scope="col">要求</th></tr></thead><tbody><tr><td>当前处理者正常</td><td>续租和确认匹配当前 owner</td></tr><tr><td>租约到期</td><td>按存储条件接管，并停止旧处理者推进</td></tr><tr><td>执行已终止</td><td>完成持久确认，不重复模型和工具</td></tr><tr><td>确认或释放尚未完成</td><td>仍计入对应的准入生命周期</td></tr><tr><td>服务进入 drain</td><td>阻止新准入后，再等待已承担工作结束</td></tr></tbody></table></div></section>
+<p>认领通常带有所有者和截止时间。正常处理者续租并按自己的身份确认；接管者在到期条件成立后取得新的所有权。旧处理者的迟到确认必须失败，而不能覆盖新状态。</p>
+<p>这里有两个独立判断：一个队列任务是否由当前处理者持有，同一会话是否允许当前执行推进。拿到入口任务，不等于可以绕过会话锁；拿到会话锁，也不等于可以确认别人认领的输入。</p>
+<aside class="worked-example"><p class="example-label">说明示例</p><h3>接管前后的恢复</h3><p>假设处理者 A 在执行后、确认队列前退出。B 接管后读取到该 TurnID 的持久终态，应完成对应确认，而不是重新运行一次模型。</p>
+<p>如果没有终态，B 继续按会话事件对账。租约只允许接管工作，不会替 B 判断外部工具是否已经成功。</p></aside>
+</section>
 <section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="归属、位置"><table><thead><tr><th scope="col">归属</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/eventinbox">packages/eventinbox</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/sessioninput/store.go">packages/sessioninput/store.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/web/conversation.go">packages/surfaces/web/conversation.go</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/operations.md">docs/operations.md</a></td></tr></tbody></table></div></section>
 </main><aside class="toc" aria-label="本页目录"></aside></div>
 <footer class="site-footer"><a href="reading-guide.html">概念与标识</a><a href="reference.html">实现索引</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>

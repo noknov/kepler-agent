@@ -53,6 +53,15 @@ Use a neutral site title. Do not add a product name, logo, monogram, branded
 favicon or decorative identity mark to the published pages. Keep actual source
 URLs and technical identifiers accurate.
 
+Clarity does not mean short chapters. A mechanism needs its motivation, plain
+term definitions, input, normal sequence, reason for the design, failure path,
+and implementation evidence. Use complete hypothetical examples to connect
+steps. Define technical vocabulary before relying on it. Distinguish illustrative
+numbers and invented scenarios from defaults, real traces, and actual test results.
+Tables summarize relationships; they must not replace the explanation needed to
+understand them. Do not impose a word-count target or remove necessary reasoning
+just to keep individual sections brief.
+
 Use functional headings and concrete descriptions. Exclude slogans, rhetorical
 questions, reader coaching, review history, and prose about the writing process
 from the architecture pages. Preserve code identifiers. Distinguish implemented

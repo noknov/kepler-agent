@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="一次执行（turn）包含输入、模型轮次、工具调用和终态。执行器先取得会话处理权，再根据已保存事件推进状态。">
+<meta name="description" content="执行器将一条用户要求推进为若干模型与工具步骤。要解释一次执行，必须同时看输入是否保存、谁持有会话处理权、工具是否实际开始，以及终态是否成功写入。">
 <meta name="color-scheme" content="light dark">
 <title>执行过程 · 架构文档</title>
 <link rel="stylesheet" href="assets/guide.css">
@@ -16,27 +16,53 @@
 <div class="doc-layout">
 <nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html" aria-current="page">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
 <main class="doc-content" id="content" tabindex="-1">
-<header class="doc-header"><p class="breadcrumb">执行机制<span aria-hidden="true"> / </span>03</p><h1>执行过程</h1><p class="lead">一次执行（turn）包含输入、模型轮次、工具调用和终态。执行器先取得会话处理权，再根据已保存事件推进状态。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
-<section class="doc-section" id="mental-model"><h2>执行范围</h2><p>一次执行由输入建立开始，到完成、等待、取消或失败终态结束。它可以包含多个模型轮次、网络尝试和工具调用。各标识的含义由<a href="reading-guide.html#terms">概念与标识</a>定义。</p></section>
+<header class="doc-header"><p class="breadcrumb">执行机制<span aria-hidden="true"> / </span>03</p><h1>执行过程</h1><p class="lead">执行器将一条用户要求推进为若干模型与工具步骤。要解释一次执行，必须同时看输入是否保存、谁持有会话处理权、工具是否实际开始，以及终态是否成功写入。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<section class="doc-section" id="mental-model"><h2>执行范围</h2>
+<p>一次执行称为 turn。它从某条输入开始，到完成、失败、取消或等待输入等明确结果结束。一次执行内部可以请求模型多次，每次模型请求又可能包含网络重试。</p>
+<p>会话（session）保存连续对话。用户先要求调查登录失败，随后要求补充说明，这些可以属于同一个会话，但通常是不同执行。会话标识用于加载历史和串行化执行，不是登录凭证。</p>
+<aside class="worked-example"><p class="example-label">说明示例</p><h3>一条用户消息并不等于一次模型调用</h3><p>假设第一次模型响应要求读取代码，第二次要求运行测试，第三次才给出解释。这仍然是同一次用户任务中的多个模型轮次。</p>
+<p>某个模型轮次遇到临时网络故障，弹性客户端重试一次，则该轮次有两次网络尝试。重试不应被当成一条新的用户任务。</p></aside>
+</section>
 <section class="doc-section" id="input"><h2>执行前置条件</h2>
-<ol class="steps"><li>入口确认用户、工作区和会话归属。会话标识本身不是认证凭据。</li><li>执行器取得会话处理权，并检查相同 TurnID 是否已有终态。</li><li>已有终态时，执行器恢复对应结果，不重新执行工具。</li><li>缺少终态时，执行器核对未完成模型请求和工具调用，并确保用户输入已保存。</li></ol>
-<p><code>TurnStarted</code> 与 <code>UserInput</code> 是不同事件。只有开始标记而没有用户输入时，恢复仍需补齐输入。</p></section>
+<p>执行开始前，入口已经需要确定用户和会话归属。执行器接着取得会话处理权。这样两条发往同一会话的消息就不会同时加载同一旧历史，然后各自执行冲突的下一步。等待处理权也需要响应取消，不能让已取消的请求一直排队。</p>
+<p>取得处理权后，执行器读取已有记录。如果相同 TurnID 已经有终态，就恢复原结果，而不是重新运行工具。如果记录不完整，则先对账，再建立后续步骤。</p>
+<h3>开始标记与用户输入分别保存</h3>
+<p><code>TurnStarted</code> 说明执行边界已经建立，<code>UserInput</code> 才保存本次用户要求。两条事件不是同一件事。如果进程在两次写入之间退出，重试时必须补齐输入；不能因为“开始事件存在”，就让模型在缺少原始要求的情况下继续。</p>
+<p>这些写入使用稳定身份避免重复追加。稳定事件身份解决重复提交，同一会话锁解决并发推进；二者不能互相替代。</p>
+</section>
 <section class="doc-section" id="state-machine"><h2>执行状态</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="阶段、主要记录、后续动作"><table><thead><tr><th scope="col">阶段</th><th scope="col">主要记录</th><th scope="col">后续动作</th></tr></thead><tbody><tr><td>输入建立</td><td><code>turn_started</code>、<code>user_input</code></td><td>构造上下文</td></tr><tr><td>模型请求</td><td><code>model_request_started</code> 与完成或失败事件</td><td>保存完整模型消息</td></tr><tr><td>工具执行</td><td><code>tool_call_started</code> 与结果事件</td><td>保存结果并继续或结束</td></tr><tr><td>等待</td><td>待输入或待批准终态</td><td>按原调用和身份恢复</td></tr><tr><td>终止</td><td>完成、失败或取消终态</td><td>清理执行范围内状态并返回结果</td></tr></tbody></table></div></section>
+<p>执行器按阶段推进。每个阶段要说明进入前需要什么，离开时留下什么记录。所谓状态机，就是下一步由这些明确状态决定，而不是只依赖某个进程内变量。</p>
+<ol class="steps"><li>建立输入：保存执行开始和用户输入，恢复必要的预算与作用域。</li><li>准备请求：从历史构造上下文，检查容量和剩余执行预算。</li><li>请求模型：记录模型请求生命周期，接收完整响应。</li><li>处理响应：最终答复进入结束判断；工具调用进入策略与执行流程。</li><li>处理工具：保存开始与结果，将结果用于下一轮模型判断。</li><li>记录结果：保存完成、等待、取消、上限或错误等终态，再返回调用方。</li></ol>
+<p>记录“模型请求开始”不能证明模型已返回；记录“工具开始”也不能证明外部修改成功。每个阶段的完成条件必须单独满足。</p>
+</section>
 <section class="doc-section" id="context"><h2>上下文构造</h2>
-<p>每轮请求从会话事件生成模型消息。执行器纳入环境、当前输入、有效摘要、历史消息和工具定义，并在派发前检查完整请求预算。</p><p>用户输入中的图片可用于当前执行。持久化用户输入时，执行器将这些图片替换为文本说明。工具结果图片另有处理规则。</p><p>完整选择、预算、压缩和读取规则见<a href="context.html">上下文与证据</a>。</p></section>
+<p>模型下一轮需要同时知道原任务和调查的新结果。执行器从记录中组装这些内容，不让入口自己维护另一份可随意变化的模型历史。否则，同一事件在恢复后可能生成不同上下文。</p>
+<p>例如，文件读取刚完成，下一轮应看到该工具调用及其结果。测试只返回了一部分日志时，下一轮还需要知道结果不完整，而不能把缺失部分理解为“没有报错”。</p>
+<p>上下文窗口、历史压缩和原文补读在 <a href="context.html">上下文与证据</a> 中完整说明。</p>
+</section>
 <section class="doc-section" id="model"><h2>模型请求</h2>
-<p>执行器依赖统一的 <code>model.Client</code>。产品配置提供的弹性客户端负责提供方重试、备用路径和熔断。一次逻辑请求可以包含多次网络尝试。</p>
-<p>完整模型响应与流式片段分别处理。只有完整工具调用才能进入工具执行；参数片段不触发外部操作。</p></section>
+<p>执行器提出一次逻辑模型请求，产品配置提供的弹性客户端负责实际网络尝试。这样，文件与工具调度不需要了解每家模型服务的退避规则。</p>
+<p>模型可能返回答复，也可能返回“调用某个工具，并使用这些参数”。后者只是执行意图。执行器必须等到完整响应可被接受，再进入工具检查。流式参数片段本身不触发工具。</p>
+<p>如果提供方在用户已经看到一部分文字后断流，简单重试可能把两份答案拼到一起。因此，网络重试还要检查输出是否已经提交。具体完成判定和重试条件由模型章节定义。</p>
+</section>
 <section class="doc-section" id="tools"><h2>工具执行</h2>
-<ol class="steps"><li>解析工具身份和调用参数，检查已有结果。</li><li>检查能力策略、实际作用域和审批状态。具体工具验证业务参数。</li><li>取得并发名额和对应读写锁。</li><li>保存工具开始事件，再调用执行器。</li><li>保存结果或分类错误，按模型可见预算处理内容。</li></ol>
-<aside class="note"><strong>参数校验范围</strong><p>当前执行器不提供覆盖全部工具的完整 JSON Schema 校验层。工具实现仍需检查边界值和业务前置条件。</p></aside></section>
+<p>一次响应可能包含多个工具调用。执行器先解析调用、查找已有结果并评估策略，再安排执行。工具自己还需要检查业务参数，不能只相信模型符合参数格式。</p>
+<p>例如，读取登录文件需要验证实际路径属于允许的工作区；运行测试需要验证命令与沙箱配置。模型提供一个看起来合理的路径，不能跳过这些检查。</p>
+<ol class="steps"><li>已有对应调用结果时，使用已保存结果。</li><li>没有结果时，检查工具身份、参数、实际目标和能力策略；需要批准则保留原调用等待。</li><li>取得并发名额与对应锁，记录工具开始。</li><li>调用工具，收集结果或分类错误，再记录结果。</li><li>处理模型可见的大小限制，准备下一轮上下文。</li></ol>
+<p>已开始的工具在取消时仍可能产生外部效果。执行器需要等待并记录这些已启动工作，再形成终态；不遵守取消的工具实现仍可能拖延结束。</p>
+</section>
 <section class="doc-section" id="steering"><h2>追加输入与取消</h2>
-<p>追加输入在模型或工具轮次之间写入会话事件。排队输入用于后续执行；取消用于停止当前执行。三者具有不同状态，不能合并为一个“最后消息”字段。</p>
-<p>等待会话处理权时的取消应及时返回。已经开始的执行在取消后仍需完成有界的终态写入与清理。</p></section>
+<p>任务运行中到达的新消息需要确定用途。追加输入（steer）用于影响当前执行的后续轮次；排队输入用于后续执行；停止操作用于取消。这三种意图不能合并成一个不断覆盖的“最新消息”。</p>
+<p>例如，调查登录问题时用户补充“只看服务端，不查浏览器”，这条要求应在安全的模型或工具轮次边界进入后续上下文。它不能让已经发出的外部操作自动撤销。</p>
+<p>取消也是如此：停止信号要求执行停止继续派发，并进行必要清理。它不保证提供方撤销了已经接受的请求，更不保证外部写入已经回滚。</p>
+</section>
 <section class="doc-section" id="finish"><h2>执行终态</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="类别、触发条件、处理要求"><table><thead><tr><th scope="col">类别</th><th scope="col">触发条件</th><th scope="col">处理要求</th></tr></thead><tbody><tr><td>完成</td><td>模型返回最终答复且没有需要继续处理的输入</td><td>保存答复、用量与终态</td></tr><tr><td>等待输入或批准</td><td>当前执行需要外部输入</td><td>保留请求身份与原始调用</td></tr><tr><td>取消或超时</td><td>取消信号或执行期限触发</td><td>停止继续派发并执行有界清理</td></tr><tr><td>上限或预算耗尽</td><td>轮次、上下文或执行预算不足</td><td>明确结束，不追加一次未计入预算的总结请求</td></tr><tr><td>错误</td><td>模型、工具或存储出现无法继续的错误</td><td>保留分类及可核对的事件</td></tr></tbody></table></div>
-<p>终态写入使用独立的有界清理上下文。终态保存失败属于持久化故障，调用方不能报告持久完成。</p></section>
+<p>终态说明本次执行以什么方式结束。完成是其中一种，等待输入、等待批准、取消、达到轮次上限和出错也是需要明确保存的结果。入口据此决定如何回复和确认队列任务。</p>
+<p>例如，达到模型轮次上限后，再要求模型“最后总结一下”仍是一轮新的模型调用。这样会突破已经用尽的预算，因此执行器按明确的上限原因结束，而不是额外发起一次未计入限制的请求。</p>
+<p>终态还必须持久保存。用户取消后，原执行上下文可能已不可用，执行器会使用独立但有时间上限的清理上下文尝试写入。如果终态写入失败，调用方得到的是持久化故障，不能宣称结果已经可靠保存。</p>
+<aside class="worked-example"><p class="example-label">说明示例</p><h3>执行成功与投递成功</h3><p>假设分析答复和终态已经保存，但 Slack 发消息失败。此时执行已经结束，需要修复的是投递。重新运行测试或模型，可能重复成本，甚至重复外部修改。</p>
+<p>相反，如果只看到界面上的一段流式文字，却没有完整消息或终态记录，就不能仅凭界面宣布执行已完成。</p></aside>
+</section>
 <section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="归属、位置"><table><thead><tr><th scope="col">归属</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/runner.go">packages/agent/runtime/runner.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/tools.go">packages/agent/runtime/tools.go</a></td></tr><tr><td>验证用例</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/recovery_regression_test.go">packages/agent/runtime/recovery_regression_test.go</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/runtime.md">docs/runtime.md</a></td></tr></tbody></table></div></section>
 </main><aside class="toc" aria-label="本页目录"></aside></div>
 <footer class="site-footer"><a href="reading-guide.html">概念与标识</a><a href="reference.html">实现索引</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>

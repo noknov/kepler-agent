@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="会话事件提供执行恢复依据。任务认领、会话处理权、模型状态和外部操作结果分别维护。恢复必须核对已知记录，并保留无法确认的结果。">
+<meta name="description" content="进程可能在任意一步退出。恢复需要根据已经保存的记录，决定哪些结果可以复用、哪些工作尚未开始、哪些外部操作仍然未知。锁、事件和队列各自只解决其中一部分问题。">
 <meta name="color-scheme" content="light dark">
 <title>持久化与恢复 · 架构文档</title>
 <link rel="stylesheet" href="assets/guide.css">
@@ -16,26 +16,47 @@
 <div class="doc-layout">
 <nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html" aria-current="page">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
 <main class="doc-content" id="content" tabindex="-1">
-<header class="doc-header"><p class="breadcrumb">状态与数据<span aria-hidden="true"> / </span>07</p><h1>持久化与恢复</h1><p class="lead">会话事件提供执行恢复依据。任务认领、会话处理权、模型状态和外部操作结果分别维护。恢复必须核对已知记录，并保留无法确认的结果。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<header class="doc-header"><p class="breadcrumb">状态与数据<span aria-hidden="true"> / </span>07</p><h1>持久化与恢复</h1><p class="lead">进程可能在任意一步退出。恢复需要根据已经保存的记录，决定哪些结果可以复用、哪些工作尚未开始、哪些外部操作仍然未知。锁、事件和队列各自只解决其中一部分问题。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
 <section class="doc-section" id="authority"><h2>权威记录与派生状态</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="状态、权威来源、恢复方式"><table><thead><tr><th scope="col">状态</th><th scope="col">权威来源</th><th scope="col">恢复方式</th></tr></thead><tbody><tr><td>对话与执行</td><td>只追加的会话事件</td><td>加载消息、调用与终态</td></tr><tr><td>待处理工作</td><td>持久入口和追加输入队列</td><td>按认领、租约和确认状态接管</td></tr><tr><td>当前上下文</td><td>投影器与有效摘要</td><td>从事件和临时输入重建</td></tr><tr><td>运行列表与步骤</td><td>执行事件的查询投影</td><td>从事件重建，不反向决定执行事实</td></tr><tr><td>实时界面</td><td>流式片段与呈现状态</td><td>重连或最终投递，不重跑已完成操作</td></tr></tbody></table></div></section>
+<p>恢复最先需要的是可信的执行记录。会话事件保存用户输入、模型消息、工具开始和结果、等待状态及终态。运行列表、步骤和指标是从这些事件生成的查询视图，称为投影。</p>
+<p>把两者分开，是为了避免界面写入失败改变实际执行状态。例如，工具结果已经提交，但运行详情页没有更新，不能据此再执行一次工具。应从事件恢复查询视图。</p>
+<p>当前模型上下文也不是完整历史。它是为一次模型调用选择的消息，可能包含摘要或预览；原始事件仍负责说明当时实际保存了什么。</p>
+</section>
 <section class="doc-section" id="ownership"><h2>处理权</h2>
-<p>入口任务认领限制当前处理者，会话锁限制同一历史的执行顺序。追加输入认领保护消息消费与确认。它们不能互相替代。</p>
-<p>托管会话通过专用 PostgreSQL 连接持有 advisory lock。连接健康检查失败后，执行上下文被取消。本地会话使用覆盖完整执行的文件锁。失去处理权的旧执行者必须停止推进。</p></section>
+<p>两个工作进程都能读取同一会话，但不能同时根据同一旧历史推进任务。会话处理权用于限制当前能够推进的人。它和入口任务认领不是同一把锁：入口认领保护待处理工作，会话锁保护连续历史。</p>
+<p>托管实现使用专用 PostgreSQL 连接持有会话 advisory lock，并检查该连接是否仍可用。失去确认时取消执行。本地实现使用覆盖整个 turn 的文件锁，多个本机进程也要遵守同一边界。</p>
+<aside class="worked-example"><p class="example-label">说明示例</p><h3>租约到期后的旧处理者</h3><p>假设工作进程 A 认领了入口事件，但与数据库失联。租约到期后，B 可以按规则接管。A 如果恢复连接，不能不加检查地把任务标成完成，否则可能覆盖 B 的处理状态。</p>
+<p>因此，认领续租、完成和释放都需要匹配当前所有者；旧执行者还要停止继续推进。单纯等一个超时时间不构成完整的互斥保证。</p></aside>
+</section>
 <section class="doc-section" id="postgres"><h2>托管事件存储</h2>
-<p>PostgreSQL 事件追加在事务中分配会话序号。事件标识用于幂等追加，会话序号用于排序。批次提交需要保持对应存储契约。</p>
-<p>执行器在追加成功后发布事件。投影接收失败不撤销已经提交的执行事件。</p></section>
+<p>数据库事件需要确定顺序。相同会话的追加在事务中协调，分配递增的会话序号，再提交事件。事件标识用于判断重复追加，序号用于决定历史先后；它们承担不同职责。</p>
+<p>如果一次提交的结果对调用方不明确，稳定事件标识可以避免重试写成两条相同事实。但它只能约束事件存储。外部 API 调用不在这个数据库事务中，不能因为事件去重存在，就认为外部操作也只执行一次。</p>
+<p>执行器在事件追加成功后才通知投影接收器。这样投影失败可以重建，不会把“界面收到更新”当成权威事件提交的前提。</p>
+</section>
 <section class="doc-section" id="jsonl"><h2>本地事件存储</h2>
-<p>本地 JSONL 存储使用独立的执行锁和事件锁。执行锁覆盖完整 turn；事件锁保护短暂读写。不同会话不共用一把全局 I/O 锁。</p>
-<p>文件索引缓存保存事件标识和字节位置。文件替换、截断或外部追加需要更新索引。恢复处理不完整尾部不能替代工具副作用核对。</p></section>
+<p>本地 JSONL 按行保存事件。多个进程共用同一会话文件时，单纯调用 append 不够：两个执行者可能都读到旧历史，然后分别运行工具。</p>
+<p>因此，本地存储区分执行锁和事件锁。执行锁覆盖完整 turn，事件锁只保护一次短暂读写。如果把两种锁混成一把，执行者可能在持有执行锁时，无法再取得写入自己结果所需的锁。</p>
+<p>文件索引用事件标识和字节位置加速读取。文件被替换、截断或外部追加后，索引需要更新。修复不完整文件尾部只解决记录格式，不会确认一个中断的外部操作到底有没有完成。</p>
+</section>
 <section class="doc-section" id="windows"><h2>故障窗口</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="中断位置、已有证据、恢复动作"><table><thead><tr><th scope="col">中断位置</th><th scope="col">已有证据</th><th scope="col">恢复动作</th></tr></thead><tbody><tr><td>输入入队后、执行前</td><td>持久输入记录</td><td>新执行者按规则认领</td></tr><tr><td>执行开始后、用户输入保存前</td><td>只有开始标记</td><td>补齐稳定标识对应的用户输入</td></tr><tr><td>生成工具调用后、开始前</td><td>模型调用意图</td><td>记录未执行结果</td></tr><tr><td>工具开始后、结果前</td><td>外部操作可能已发生</td><td>记录中断或未知，不自动重复写入</td></tr><tr><td>结果提交后、投递前</td><td>完整结果事件</td><td>恢复投影或投递</td></tr><tr><td>终态写入失败</td><td>缺少持久终态</td><td>报告存储故障，不宣称持久完成</td></tr></tbody></table></div></section>
+<p>恢复动作取决于退出发生在哪个边界。最重要的区别，是操作意图、执行开始和执行结果不能互相替代。</p>
+<h3>模型已提出调用，但工具未开始</h3>
+<p>模型消息中可能已经有工具调用，但还没有工具开始事件。恢复将其记为未开始执行，而不是猜测它已完成。系统需要为这个调用形成明确结果，使后续模型能理解发生了什么。</p>
+<h3>工具已开始，但没有结果</h3>
+<p>这时外部操作可能已经成功，只是进程来不及保存结果。例如，下游已经接收了一次写入，响应却在网络中丢失。恢复保留中断或未知状态，不能自动发送同一写入。</p>
+<h3>结果已保存，但用户没看到</h3>
+<p>这时应恢复投影或消息投递。重跑模型和工具会把展示故障变成重复执行问题。</p>
+<p>同样，“执行开始存在但用户输入缺失”需要补齐输入，“终态已保存”需要恢复已有结果。恢复不是简单地从最后一行代码重新运行。</p>
+</section>
 <section class="doc-section" id="projection"><h2>投影恢复</h2>
-<p>运行摘要、步骤和指标用于查询。消费者应按事件身份避免重复写入，并允许从权威事件恢复。流式片段不作为完整消息重放。</p>
-<p>投影失败的处理范围是投影。不能为修复运行列表而重新执行模型或外部写操作。</p></section>
+<p>运行查询需要易于展示的数据结构，例如一行运行摘要和若干步骤。它们可以从事件生成，但生成过程也可能失败或重复收到通知。消费者应利用事件身份保持幂等，并允许从记录重建。</p>
+<p>实时文本片段不适合承担同样职责。一个片段只是回答的一部分，可能被界面收到，也可能未收到。持久重放依赖完整消息与生命周期事件，而不是再次发送所有 token 片段。</p>
+</section>
 <section class="doc-section" id="recovery"><h2>恢复对账</h2>
-<ol class="steps"><li>取得当前会话处理权。</li><li>加载当前执行的事件、终态和累计预算。</li><li>复用已经保存的结果。</li><li>区分未开始的工具调用和结果未知的已开始调用。</li><li>恢复输入、作用域和允许继续的状态。</li><li>按剩余预算继续执行，或保存明确终态。</li></ol>
-<aside class="note"><strong>保证范围</strong><p>会话锁和事件去重不提供跨系统 exactly-once。只有下游实际支持并执行幂等约束时，稳定执行标识才能减少重复副作用。</p></aside></section>
+<p>接管者首先取得会话处理权，然后加载当前执行的记录和累计预算。已经保存的结果可以复用；未完成模型请求与工具调用则按它们留下的证据处理。只有把这些情况区分开，才能决定是否继续。</p>
+<ol class="steps"><li>确认当前用户、工作区和会话作用域。</li><li>检查是否已有终态；有终态就恢复结果。</li><li>确保原始输入存在，并恢复执行限制与已用预算。</li><li>区分工具尚未开始、结果已保存和结果未知。</li><li>按当前允许的状态继续模型与工具循环，或记录明确结束原因。</li></ol>
+<p>即使所有步骤正确，系统仍不具有通用的跨系统 exactly-once 保证。稳定 execution ID 只有被下游实际作为幂等键接受时，才能约束重复写入。不支持查询或幂等的下游，需要保留未知并采用明确的补偿或人工核对。</p>
+</section>
 <section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="归属、位置"><table><thead><tr><th scope="col">归属</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/session/pgstore.go">packages/session/pgstore.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/profiles/hosted/pgtranscript.go">packages/profiles/hosted/pgtranscript.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/profiles/local">packages/profiles/local</a></td></tr><tr><td>验证用例</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/recovery_regression_test.go">packages/agent/runtime/recovery_regression_test.go</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/architecture-deep-dive.md">docs/architecture-deep-dive.md</a></td></tr></tbody></table></div></section>
 </main><aside class="toc" aria-label="本页目录"></aside></div>
 <footer class="site-footer"><a href="reading-guide.html">概念与标识</a><a href="reference.html">实现索引</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>

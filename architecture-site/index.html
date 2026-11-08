@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Slack、Web 和本地 CLI 共用执行核心。入口适配器处理身份和输入输出；产品配置选择依赖；执行器调度模型与工具，并保存执行事件。">
+<meta name="description" content="这套系统接收用户任务，调用模型决定下一步，执行经过检查的工具，再把结果返回用户。Slack、Web 和本地 CLI 共用执行核心，但使用不同的身份、存储、工作区和投递方式。">
 <meta name="color-scheme" content="light dark">
 <title>系统架构 · 架构文档</title>
 <link rel="stylesheet" href="assets/guide.css">
@@ -16,18 +16,49 @@
 <div class="doc-layout">
 <nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html" aria-current="page">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
 <main class="doc-content" id="content" tabindex="-1">
-<header class="doc-header"><p class="breadcrumb">系统基础<span aria-hidden="true"> / </span>01</p><h1>系统架构</h1><p class="lead">Slack、Web 和本地 CLI 共用执行核心。入口适配器处理身份和输入输出；产品配置选择依赖；执行器调度模型与工具，并保存执行事件。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<header class="doc-header"><p class="breadcrumb">系统基础<span aria-hidden="true"> / </span>01</p><h1>系统架构</h1><p class="lead">这套系统接收用户任务，调用模型决定下一步，执行经过检查的工具，再把结果返回用户。Slack、Web 和本地 CLI 共用执行核心，但使用不同的身份、存储、工作区和投递方式。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
 <section class="doc-section" id="boundary"><h2>模块职责</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="模块、职责、不承担的职责"><table><thead><tr><th scope="col">模块</th><th scope="col">职责</th><th scope="col">不承担的职责</th></tr></thead><tbody><tr><td>入口适配器 / Surface</td><td>身份验证、请求接收、结果投递</td><td>不复制模型与工具循环</td></tr><tr><td>产品配置 / Profile</td><td>组装存储、凭据、策略、工具和模型客户端</td><td>不根据界面状态授予权限</td></tr><tr><td>执行器 / Runtime</td><td>构造上下文、调用模型、调度工具、记录终态</td><td>不依赖 Slack 或提供方协议</td></tr><tr><td>适配层</td><td>转换模型协议，执行工具操作</td><td>不从模型参数取得认证身份</td></tr><tr><td>会话事件记录 / Transcript</td><td>保存消息与执行生命周期，支持恢复</td><td>不承担入口调度或实时界面状态</td></tr></tbody></table></div></section>
+<p>模型负责生成答复或提出工具调用；真正读取文件、运行命令和访问外部服务的，是应用中的工具。应用还必须决定谁可以执行、到哪里执行、如何保存结果，以及进程退出后如何继续。这些职责不能由一段提示文字代替。</p>
+<p>系统将这些职责分成入口适配器、产品配置、执行器、模型与工具适配层，以及会话事件存储。下面的划分描述责任归属，不表示每一层都对应独立部署的服务。</p>
+<h3>入口适配器与产品配置</h3>
+<p>入口适配器处理来自具体产品的请求。Slack 需要验签和线程映射；Web 需要浏览器登录与会话归属；本地 CLI 需要工作区和终端输入。它们将输入整理成核心可以处理的请求。</p>
+<p>产品配置（profile）负责选择执行依赖。例如，托管产品使用 PostgreSQL 和服务端工具策略，本地产品使用 JSONL 与本机沙箱。同一个执行器可以通过不同依赖运行，不需要为每种入口复制一套模型循环。</p>
+<h3>执行器与适配层</h3>
+<p>执行器负责推进任务：加载记录、构造上下文、请求模型、检查工具调用、保存结果并判断是否结束。它依赖内部约定的请求和结果，不直接处理 Slack 签名或某家模型的网络格式。</p>
+<p>模型适配器把内部请求转换为提供方协议。工具实现把检查后的调用转换为文件、命令或外部 API 操作。会话事件存储则保存输入、模型消息、工具生命周期和终态，供后续恢复与查询。</p>
+</section>
 <section class="doc-section" id="products"><h2>产品边界</h2>
-<figure class="system-map"><div class="map-inputs"><div><strong>Slack · Web</strong><span>托管入口与产品配置</span></div><div><strong>CLI · app-server</strong><span>本地入口与产品配置</span></div></div><div class="map-join" aria-hidden="true">↓</div><div class="map-core"><strong>共享执行器</strong><span>上下文 → 模型 → 策略检查 → 工具 → 事件</span></div><figcaption>产品共用执行机制，工作区、存储和授权边界分别配置。</figcaption></figure>
-<div class="table-wrap" role="region" tabindex="0" aria-label="产品、工具执行位置、会话存储、说明"><table><thead><tr><th scope="col">产品</th><th scope="col">工具执行位置</th><th scope="col">会话存储</th><th scope="col">说明</th></tr></thead><tbody><tr><td>Slack</td><td>服务端工作区</td><td>PostgreSQL</td><td><a href="slack.html">Slack 接入</a></td></tr><tr><td>Web</td><td>服务端工作区</td><td>PostgreSQL</td><td><a href="web.html">Web 接入</a></td></tr><tr><td>本地 CLI</td><td>用户选择的本地工作区</td><td>JSONL</td><td><a href="local.html">本地 CLI 与 app-server</a></td></tr></tbody></table></div></section>
+<p>“共用执行核心”指产品使用相同的执行机制，不表示工具在同一个地方运行，也不表示它们共享全部登录和会话规则。这个区别直接影响权限、数据位置和故障恢复。</p>
+<h3>托管 Slack 与 Web</h3>
+<p>工具在操作员管理的服务端工作区运行。用户发来一个仓库路径，不会自动使该路径成为可访问的服务器目录。服务端配置和用户集成授权共同决定可以访问的资源。会话、入口任务和追加输入由对应的托管存储维护。</p>
+<h3>本地 CLI 与 app-server</h3>
+<p>工具在用户选择的本地工作区运行，会话写入本机 JSONL。交互终端通过 stdio app-server 使用本地执行能力。本地工具的文件边界和审批规则不同于托管服务。</p>
+<aside class="worked-example"><p class="example-label">说明示例</p><h3>同一项代码调查，不同执行位置</h3><p>在 Slack 中要求检查登录代码时，执行者读取的是服务端已配置的仓库。使用本地 CLI 时，读取的是当前选择的本机工作区。</p>
+<p>两次调查都可以使用相同的模型与工具循环，但一个产品成功访问文件，不证明另一个产品也有同样的目录和凭据。</p></aside>
+<p>具体入口行为分别见 <a href="slack.html">Slack</a>、<a href="web.html">Web</a> 和 <a href="local.html">本地 CLI</a>。</p>
+</section>
 <section class="doc-section" id="flow"><h2>系统调用关系</h2>
-<p>入口适配器将已认证输入交给产品配置。产品配置组装执行器所需依赖。执行器调用模型与工具，向会话事件存储追加结果。投影与投递读取这些结果。</p>
-<p>托管产品在执行前维护持久入口队列。本地 stdio 使用连接生命周期管理已接收工作，二者不具有相同的持久接收保证。</p>
-<p>执行状态和前置条件由<a href="execution.html">执行过程</a>定义；组件关系不构成跨系统原子提交。</p></section>
+<p>以“检查登录失败原因，运行相关测试，并解释结果”为例，用户的一条要求通常需要多次模型判断。模型先决定读取什么，应用执行读取；模型看到代码后再决定运行哪个测试，应用执行命令；模型最后依据实际结果作答。</p>
+<pre class="example-code"><code>用户输入 → 入口验证与路由 → 产品配置
+                           ↓
+                    共享执行器
+            构造上下文 → 请求模型
+                         ↓
+                  答复 或 工具调用
+                         ↓
+              策略检查 → 工具执行 → 保存结果
+                         ↓
+                 继续请求模型 或 记录终态
+                         ↓
+                   入口投递与查询投影</code></pre>
+<p>托管入口的持久队列解决“请求已收到，工作进程尚未处理”的交接。会话锁解决“同一历史只能由谁继续推进”。执行事件解决“已经发生了什么”。结果投递解决“用户是否看到了回复”。它们保护的是不同边界。</p>
+<p>因此，请求被接受不等于模型已完成；模型已完成也不等于工具修改已被确认；执行完成更不等于消息投递成功。排障时必须分别核对这些事实。</p>
+</section>
 <section class="doc-section" id="invariants"><h2>状态与权限约束</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="约束、含义"><table><thead><tr><th scope="col">约束</th><th scope="col">含义</th></tr></thead><tbody><tr><td>执行与投递分离</td><td>模型或工具完成，不表示用户已收到回复。</td></tr><tr><td>事件与投影分离</td><td>恢复依据会话事件；运行列表用于查询。</td></tr><tr><td>发现与授权分离</td><td>模型能看到工具，不表示当前调用被允许。</td></tr><tr><td>未知结果保留</td><td>工具开始后缺少结果时，外部操作可能已生效。</td></tr><tr><td>会话执行串行</td><td>相同会话的执行不能从同一旧历史并行推进。</td></tr></tbody></table></div></section>
+<p>这些边界是实际设计约束，不是理想效果的概括。它们决定了系统在正常执行和异常退出时如何处理。</p>
+<ul><li>权限由实际执行策略决定。模型看到工具、用户点击确认，都不能增加服务端未授予的宿主机能力。</li><li>同一会话的执行需要串行推进，避免两个任务根据同一旧历史作出互不知情的操作。不同会话之间的业务冲突仍要由下游解决。</li><li>恢复先看会话事件。运行列表和界面状态用于展示，不能覆盖工具已经保存的结果。</li><li>外部操作结果未知时，先查询下游。内部超时不能证明外部操作没有生效。</li><li>投递失败只修复投递，不为了补发消息重跑已经完成的模型和工具。</li></ul>
+<p>例如，工具请求已经发出，进程却在保存结果前退出。新的执行者不能根据“数据库没有结果”推断工具没运行。它需要保留未知状态，结合外部记录判断。完整恢复过程在持久化章节说明。</p>
+</section>
 <section class="doc-section" id="ownership"><h2>文档主题归属</h2>
 <div class="table-wrap" role="region" tabindex="0" aria-label="主题、所属章节、边界"><table><thead><tr><th scope="col">主题</th><th scope="col">所属章节</th><th scope="col">边界</th></tr></thead><tbody><tr><td><a href="context.html">上下文与证据</a></td><td>请求投影、压缩和证据引用</td><td>不定义提供方协议</td></tr><tr><td><a href="models.html">模型协议与重试</a></td><td>协议完成条件与网络尝试</td><td>不授予工具权限</td></tr><tr><td><a href="reliability.html">持久化与恢复</a></td><td>事件、锁和执行对账</td><td>不等于记忆删除</td></tr><tr><td><a href="memory.html">记忆生命周期</a></td><td>记忆归属、检索和重置</td><td>不替代会话恢复</td></tr><tr><td><a href="operations.html">队列与生命周期</a></td><td>认领、准入和关闭</td><td>不以界面状态决定执行事实</td></tr><tr><td><a href="observability.html">运行观测</a></td><td>指标、投影和追踪</td><td>不提供外部操作完成证明</td></tr></tbody></table></div></section>
 <section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="归属、位置"><table><thead><tr><th scope="col">归属</th><th scope="col">位置</th></tr></thead><tbody><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/architecture.md">docs/architecture.md</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/architecture-deep-dive.md">docs/architecture-deep-dive.md</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/runner.go">packages/agent/runtime/runner.go</a></td></tr></tbody></table></div></section>

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="主任务通过受限任务契约启动子任务。子任务使用共享执行器和独立事件记录。主任务负责验收结果，子任务报告不直接构成最终结论。">
+<meta name="description" content="主任务可以把相互独立的调查分给受限子任务。委派的价值是隔离调查范围并并行收集证据；主任务仍负责理解报告、处理冲突和决定最终结论。">
 <meta name="color-scheme" content="light dark">
 <title>任务委派 · 架构文档</title>
 <link rel="stylesheet" href="assets/guide.css">
@@ -16,26 +16,42 @@
 <div class="doc-layout">
 <nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html" aria-current="page">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
 <main class="doc-content" id="content" tabindex="-1">
-<header class="doc-header"><p class="breadcrumb">调度与协作<span aria-hidden="true"> / </span>09</p><h1>任务委派</h1><p class="lead">主任务通过受限任务契约启动子任务。子任务使用共享执行器和独立事件记录。主任务负责验收结果，子任务报告不直接构成最终结论。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<header class="doc-header"><p class="breadcrumb">调度与协作<span aria-hidden="true"> / </span>09</p><h1>任务委派</h1><p class="lead">主任务可以把相互独立的调查分给受限子任务。委派的价值是隔离调查范围并并行收集证据；主任务仍负责理解报告、处理冲突和决定最终结论。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
 <section class="doc-section" id="runtime"><h2>执行模型</h2>
-<p><code>agent-explore</code> 用于只读探索。代码审查等产品流程通过任务契约启动受限子任务，不复制另一套模型循环。子任务继承父级取消，并保留父子关系。</p>
-<p>新建的只读叶子任务使用私有会话，不重复占用父任务已经持有的分布式会话锁连接。</p></section>
+<p>子任务不是另一个独立产品循环。当前只读探索与代码审查复用共享执行器，使用筛选后的工具目录，并保存自己的会话事件。父任务保存与子记录的关联。</p>
+<p>例如，调查登录问题时，可以分别检查身份验证流程和对应测试。两个任务都获得明确范围，最后由主任务把它们的证据合在一起判断，而不是让两个结果各自直接成为最终答复。</p>
+<p>这些叶子任务使用新建私有会话，并继承父取消上下文。它们不重复占用父任务已经持有的分布式会话锁连接，避免父任务等待子任务时耗尽全部锁连接。</p>
+</section>
 <section class="doc-section" id="contract"><h2>任务契约</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="字段、用途"><table><thead><tr><th scope="col">字段</th><th scope="col">用途</th></tr></thead><tbody><tr><td>稳定名称与角色</td><td>识别子任务及其职责</td></tr><tr><td>目标与范围</td><td>限定调查对象和禁止扩展的边界</td></tr><tr><td>输入</td><td>提供任务所需的上下文与证据位置</td></tr><tr><td>交付物</td><td>明确报告、文件位置和结果格式</td></tr><tr><td>成功条件</td><td>定义可核对的验收要求</td></tr></tbody></table></div></section>
+<p>可独立验收的子任务必须写明目标、范围、输入、交付物和成功条件。仅写“帮我看一下”无法判断子任务到底应该查什么，也无法判断一份简短报告是否完成任务。</p>
+<aside class="worked-example"><p class="example-label">说明示例</p><h3>两项有边界的调查</h3><p>任务 A：检查登录请求到会话校验的调用链，给出相关文件与函数，不修改代码。任务 B：检查相关测试覆盖和失败条件，给出测试位置，不把没有运行的测试写成通过。</p>
+<p>主任务再核对：报告是否覆盖分配范围，证据是否来自当前代码版本，两个任务的结论是否一致。示例说明任务划分，不代表实际运行结果。</p></aside>
+<p>稳定名称用于把结果对应回任务。角色说明分工，不能赋予工具权限。约束和验收条件需要随任务传入，而不能依赖子任务猜出主任务的全部聊天背景。</p>
+</section>
 <section class="doc-section" id="scheduling"><h2>调度与预算</h2>
-<p>子任务数量、并发名额、执行时限和报告大小分别限制。调度应区分等待名额的时间与实际执行时间。父级取消或期限到达后，不继续创建新任务。</p>
-<p>父任务、子任务和压缩请求共享进程内的模型资源控制。该控制不等于集群级租户配额，也不等于提供方账单。</p></section>
+<p>任务数量、同时执行数量、单任务期限和报告大小要分别限制。任务已经创建，不表示它已经取得并发名额。等待名额的时间与真正执行的时间需要区分，否则排队可能消耗掉全部执行期限。</p>
+<p>父任务取消后，调度器不再继续启动新子任务，已经运行的任务接收取消。等待和模型请求也要响应取消，不能只在某个最终检查点才处理。</p>
+<p>子任务还与父任务及压缩请求共享模型资源。把调查拆成更多份可能加快独立读取，也可能增加数据库、提供方和报告处理压力。增加任务数不是无条件提高吞吐的方法。</p>
+</section>
 <section class="doc-section" id="context"><h2>上下文与工具隔离</h2>
-<p>子任务接收明确任务输入，使用筛选后的工具目录，并写入独立会话。主任务接收报告与记录标识，不合并子任务的全部历史。</p>
-<p>只读边界由工具目录与策略落实。任务提示中的“只读”不能单独阻止写操作。子任务报告中引用的历史或外部文本仍按其来源处理信任边界。</p></section>
+<p>每个子任务接收任务需要的上下文，而不是主会话的无差别复制。它将工具调用和结果写入独立记录，主任务接收报告和引用。这样可以减少相互干扰，也能追踪某个结论从哪里来。</p>
+<p>只读要求要由目录和策略落实，不能仅在提示中写一句“不要修改”。外部工具的只读声明仍需要结合实际信任边界判断。</p>
+<p>报告中引用的网页、代码注释和历史文本还是调查材料，不会因为由另一个模型总结过，就变成可信指令。</p>
+</section>
 <section class="doc-section" id="records"><h2>父子记录与用量</h2>
-<p>子任务结果包含身份、会话、执行标识、结束原因、报告、用量和错误。主任务保存这些关联，用于定位失败和核对成本。</p>
-<p>子任务用量通过结构化字段汇总。模型声明的“已检查”不替代工具结果和对应证据。</p></section>
+<p>结果需要包含子会话与执行身份、结束原因、报告、用量和错误。主任务据此区分“没有启动”“调查失败”“已结束但证据不足”和“满足验收条件”。</p>
+<p>子任务用量通过结构化字段汇总，不能在主任务再把同一结果重复计费。记录关系还能用于排障：耗时来自排队、模型、工具，还是报告汇合，需要沿子记录检查。</p>
+<p>一份报告写着“已检查”只是一项声明。主任务仍要核对相关文件、工具结果或测试证据，尤其在报告缺少位置或存在冲突时。</p>
+</section>
 <section class="doc-section" id="partial"><h2>部分成功与取消</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="情况、主任务处理"><table><thead><tr><th scope="col">情况</th><th scope="col">主任务处理</th></tr></thead><tbody><tr><td>全部任务结束</td><td>仍需按验收条件核对结果</td></tr><tr><td>关键任务失败</td><td>明确缺失范围，决定针对性重试或停止</td></tr><tr><td>报告缺少证据</td><td>查询原始记录，不直接采纳结论</td></tr><tr><td>父任务取消</td><td>取消子任务，核对已开始工具的未知结果</td></tr><tr><td>结果互相冲突</td><td>定位原始证据，不以完成顺序决定结论</td></tr></tbody></table></div></section>
+<p>所有任务都结束、关键任务成功、结果相互一致，是三个不同条件。某个任务失败后，主任务需要判断缺失部分是否影响当前结论，而不是把批次完成直接标成成功。</p>
+<p>如果身份验证调用链已经查清，但测试范围的报告缺少证据，主任务可以补查缺少的测试位置。若缺失部分正是判断故障原因的关键，则必须说明不能得出结论，或进行针对性验证。</p>
+<p>父任务取消时，已经开始的工具仍可能有未知结果。父子任务都需要保留对应记录。取消子任务不会自动回滚它已经接触的外部系统。</p>
+</section>
 <section class="doc-section" id="limits"><h2>使用边界</h2>
-<p>当前探索与审查任务面向受限只读工作。不能据此推断任意任务都已具备隔离文件系统、独立远程沙箱或写入授权。</p>
-<p>验收应覆盖任务范围、证据位置和实际验证结果。完成状态只说明子执行已结束。</p></section>
+<p>当前委派结构适合有明确边界的只读调查。它并不自动提供任意任务的独立文件系统、远程沙箱、写入授权或集群公平调度。</p>
+<p>主任务是验收者。它需要比较任务目标、报告内容和实际证据，再给出完整答复。委派减少了每个任务需要处理的范围，不减少最终结论所需的核对责任。</p>
+</section>
 <section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="归属、位置"><table><thead><tr><th scope="col">归属</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/delegation/explore.go">packages/agent/delegation/explore.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/delegation/evidence.go">packages/agent/delegation/evidence.go</a></td></tr><tr><td>验证用例</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/delegation/lease_test.go">packages/agent/delegation/lease_test.go</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/runtime.md">docs/runtime.md</a></td></tr></tbody></table></div></section>
 </main><aside class="toc" aria-label="本页目录"></aside></div>
 <footer class="site-footer"><a href="reading-guide.html">概念与标识</a><a href="reference.html">实现索引</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>

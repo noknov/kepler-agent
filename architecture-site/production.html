@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="诊断先核对失败位置和持久记录，再选择恢复动作。已完成的执行、结果未知的外部操作和投递失败需要不同处理。">
+<meta name="description" content="故障诊断要把现象还原为明确状态：请求是否保存、是否有人处理、模型是否返回、工具是否生效、结果是否提交，以及用户是否收到。定位边界之后，再选择恢复动作。">
 <meta name="color-scheme" content="light dark">
 <title>故障诊断 · 架构文档</title>
 <link rel="stylesheet" href="assets/guide.css">
@@ -16,21 +16,38 @@
 <div class="doc-layout">
 <nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html" aria-current="page">故障诊断</a><a href="reference.html">实现索引</a></nav>
 <main class="doc-content" id="content" tabindex="-1">
-<header class="doc-header"><p class="breadcrumb">观测与诊断<span aria-hidden="true"> / </span>15</p><h1>故障诊断</h1><p class="lead">诊断先核对失败位置和持久记录，再选择恢复动作。已完成的执行、结果未知的外部操作和投递失败需要不同处理。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<header class="doc-header"><p class="breadcrumb">观测与诊断<span aria-hidden="true"> / </span>15</p><h1>故障诊断</h1><p class="lead">故障诊断要把现象还原为明确状态：请求是否保存、是否有人处理、模型是否返回、工具是否生效、结果是否提交，以及用户是否收到。定位边界之后，再选择恢复动作。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
 <section class="doc-section" id="windows"><h2>执行与投递的故障边界</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="现象、核对记录、处理"><table><thead><tr><th scope="col">现象</th><th scope="col">核对记录</th><th scope="col">处理</th></tr></thead><tbody><tr><td>入口已确认但无答复</td><td>收件箱认领、会话事件、终态、投递记录</td><td>区分尚未执行与已执行但投递失败</td></tr><tr><td>模型输出后断流</td><td>网络尝试、输出提交和完整消息</td><td>不从头透明重放另一份答案</td></tr><tr><td>工具超时且无结果</td><td>工具开始、执行标识与下游状态</td><td>保留未知，查询实际结果后决定重试</td></tr><tr><td>运行列表缺少步骤</td><td>权威事件与投影状态</td><td>恢复投影，不重跑工具</td></tr></tbody></table></div></section>
+<p>同一个“没有回复”现象，可能对应完全不同的失败。盲目重启或重新提交任务，会改变现场，甚至重复已经成功的外部操作。调查应先沿请求路径取得证据。</p>
+<ol class="steps"><li>接收：入口事件或会话输入是否已经持久保存？没有保存时，后续查询为空是预期结果。</li><li>调度：是否已被认领，当前所有者和期限是什么，是否受准入限制？</li><li>执行：对应 TurnID 有无模型请求、工具开始、工具结果和终态？</li><li>外部效果：开始后没有结果的工具，能否从下游查询实际完成情况？</li><li>呈现：完整结果已保存时，是否只剩流式、最终消息或重连失败？</li></ol>
+<aside class="worked-example"><p class="example-label">说明示例</p><h3>测试结束但用户没有答案</h3><p>假设工具结果里已经保存测试输出，模型最终答复与终态也存在，而消息投递报错。应调查投递记录和关联消息，不能为了“再试一次”重跑测试和模型。</p>
+<p>如果只有工具开始而没有输出，才需要调查命令进程和恢复状态。两种情形都可能表现为用户没收到结果，但处理动作不同。</p></aside>
+</section>
 <section class="doc-section" id="clocks"><h2>期限与处理权</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="期限或锁、保护对象、到期或失效后的处理"><table><thead><tr><th scope="col">期限或锁</th><th scope="col">保护对象</th><th scope="col">到期或失效后的处理</th></tr></thead><tbody><tr><td>入口响应期限</td><td>平台请求接收</td><td>避免等待完整模型执行后才响应</td></tr><tr><td>任务认领租约</td><td>当前队列处理者</td><td>按所有者和到期条件接管</td></tr><tr><td>会话执行锁</td><td>同一历史的执行顺序</td><td>取消旧执行者并重新对账</td></tr><tr><td>执行 deadline</td><td>模型、工具和子任务</td><td>停止继续派发并清理</td></tr><tr><td>关闭宽限期</td><td>已经接收的工作</td><td>到期后取消并进行有界收尾</td></tr></tbody></table></div></section>
+<p>系统没有一个统一超时能代表所有阶段。入口响应期限用于及时确认平台请求；任务租约用于认领接管；会话锁用于串行推进；执行期限限制模型、工具和子任务；关闭宽限期用于收尾。</p>
+<p>这些值需要协调，但不能互相替代。例如，入口已经超时不表示模型应立即重跑；租约过期允许新处理者接管，也不证明旧工具没有产生副作用。</p>
+<p>期限过短会打断仍在正常推进的工作，过长会延迟接管并增加占用。调整前要看实际任务耗时和清理行为，而不是把所有超时一起放大。</p>
+</section>
 <section class="doc-section" id="resources"><h2>积压与资源等待</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="现象、检查对象、处理依据"><table><thead><tr><th scope="col">现象</th><th scope="col">检查对象</th><th scope="col">处理依据</th></tr></thead><tbody><tr><td>任务长期未被执行</td><td>持久接收、认领、准入和可用工作进程</td><td>定位工作是否已被接受及谁在处理</td></tr><tr><td>模型持续限流</td><td>错误分类、实际尝试数和退避</td><td>按提供方限制降低实际请求压力</td></tr><tr><td>工具等待增长</td><td>工具并发、连接池和下游配额</td><td>调整实际受限资源，而不是同时放大所有上限</td></tr><tr><td>界面无更新</td><td>权威终态、事件流与最终投递</td><td>分离执行恢复与呈现恢复</td></tr></tbody></table></div></section>
+<p>积压说明进入速度超过某个处理阶段的完成速度，但不自动指出瓶颈在哪里。先比较队列年龄、活跃执行、会话锁等待、数据库连接池、模型限流和工具耗时的同一时间窗口。</p>
+<p>如果大量请求都在提供方限流退避，增加工作进程可能只制造更多重试。如果会话锁等待很长，要检查是否集中在同一会话；不能只增加同一历史的并行执行。</p>
+<p>如果模型已经完成而界面迟迟无变化，要分离投影和投递积压。应用仍可能正常保存执行事件，只是呈现消费者变慢。恢复范围应落在实际变慢的阶段。</p>
+</section>
 <section class="doc-section" id="incidents"><h2>诊断依据</h2>
-<ul><li>记录会话、执行、网络尝试和工具调用标识，避免混用不同层级的 ID。</li><li>记录应用与配置版本、时间、错误分类和相关脱敏日志。</li><li>先验证依赖与状态，再执行恢复。不要把重启作为所有故障的默认处理。</li><li>同一次未知外部写入需要下游证据，模型报告或哈希本身不能证明完成。</li></ul></section>
+<p>调查需要能够关联同一次工作的记录。入口 event ID、session ID、TurnID、模型 attempt 和工具 execution ID 属于不同层级。使用错误层级查询，会把有关事件漏掉，也可能把不相关的尝试混在一起。</p>
+<p>还需要记录应用版本、配置版本、时间、错误分类和相关脱敏日志。只有“昨天有个请求失败”很难判断是否已经升级、是否配置改变，以及是否同一个外部目标。</p>
+<p>每个判断都应区分事实和推断。例如，“保存了 ToolCallStarted”是事实；“外部写入失败了”不是这个事件能够支持的结论。模型报告、摘要和哈希都不能填补缺失的外部完成回执。</p>
+</section>
 <section class="doc-section" id="release"><h2>Schema 与发布</h2>
-<ol class="steps"><li>记录应用和配置版本，核对增量迁移兼容性。</li><li>验证备份可恢复，再应用所需迁移。</li><li>启动匹配的应用版本，检查服务依赖和真实请求。</li><li>故障回退时，分别评估代码、数据库与已产生的新数据。</li></ol>
-<p>应用运行时不执行 DDL。新装 schema 与增量迁移不是同一种升级方式。具体部署命令由 部署仓库 维护。</p></section>
+<p>发布前要核对代码依赖哪个存储契约。新装 schema 用于创建完整结构，增量迁移用于升级已有部署。不能把新装 SQL 当作没有说明的升级步骤；应用运行时也不负责执行 DDL。</p>
+<p>迁移需要先有可恢复备份，再按对应版本顺序应用，随后启动匹配代码并验证实际请求。恢复备份和恢复旧镜像是不同操作。</p>
+<p>新实例已经接收写入后，旧实例的数据就可能过期。此时简单切回旧机器，可能丢失新写入或重复未知操作。回退需要分别评估数据库、工作区和外部效果，而不能只看哪个镜像曾经启动成功。</p>
+</section>
 <section class="doc-section" id="verification"><h2>验证范围</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="验证、覆盖范围"><table><thead><tr><th scope="col">验证</th><th scope="col">覆盖范围</th></tr></thead><tbody><tr><td>单元与契约测试</td><td>对应输入、状态转换和边界</td></tr><tr><td>数据库与 Redis 集成测试</td><td>显式测试存储上的持久行为</td></tr><tr><td>沙箱测试</td><td>当前操作系统上的访问限制</td></tr><tr><td>真实模型与产品请求</td><td>实际凭据、路由、模型和投递</td></tr><tr><td>备份恢复演练</td><td>指定备份在隔离目标中的数据恢复</td></tr></tbody></table></div>
-<p>构建成功不等于真实请求成功。健康检查不等于完整业务验证。不同产品的验证结果不能直接互相替代。</p></section>
+<p>验证结论必须与实际执行的检查一致。编译证明程序能构建；单元测试证明对应输入和断言成立；集成测试证明配置的测试存储上通过了指定流程。它们不能直接替代真实用户路径。</p>
+<p>完整产品验证通常还包含身份认证、一次实际模型响应、必要的工具或集成，以及最终投递。备份能生成文件也不等于可恢复，需要在隔离目标上读取并核对数据。</p>
+<p>测试被跳过、没有运行、预期失败和真正通过都应分别记录。失败时先确定是环境配置、应用缺陷还是外部授权问题，再修正对应原因。不要为取得通过状态删掉边界检查。</p>
+</section>
 <section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="归属、位置"><table><thead><tr><th scope="col">归属</th><th scope="col">位置</th></tr></thead><tbody><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/operations.md">docs/operations.md</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/safety.md">docs/safety.md</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/development.md">docs/development.md</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/architecture-deep-dive.md">docs/architecture-deep-dive.md</a></td></tr></tbody></table></div></section>
 </main><aside class="toc" aria-label="本页目录"></aside></div>
 <footer class="site-footer"><a href="reading-guide.html">概念与标识</a><a href="reference.html">实现索引</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>

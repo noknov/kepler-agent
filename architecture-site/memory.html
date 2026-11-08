@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="显式记忆保存跨会话的数据。它与会话事件、压缩摘要和用户规则分别管理。写入、检索、版本检查和重置使用同一身份边界。">
+<meta name="description" content="记忆用于在后续会话中继续使用明确保存的用户或项目信息。它有自己的归属、版本、检索与删除规则。一次对话的历史、压缩摘要和用户维护的规则，都不能直接等同于这种记忆。">
 <meta name="color-scheme" content="light dark">
 <title>记忆生命周期 · 架构文档</title>
 <link rel="stylesheet" href="assets/guide.css">
@@ -16,24 +16,40 @@
 <div class="doc-layout">
 <nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html" aria-current="page">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
 <main class="doc-content" id="content" tabindex="-1">
-<header class="doc-header"><p class="breadcrumb">状态与数据<span aria-hidden="true"> / </span>08</p><h1>记忆生命周期</h1><p class="lead">显式记忆保存跨会话的数据。它与会话事件、压缩摘要和用户规则分别管理。写入、检索、版本检查和重置使用同一身份边界。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<header class="doc-header"><p class="breadcrumb">状态与数据<span aria-hidden="true"> / </span>08</p><h1>记忆生命周期</h1><p class="lead">记忆用于在后续会话中继续使用明确保存的用户或项目信息。它有自己的归属、版本、检索与删除规则。一次对话的历史、压缩摘要和用户维护的规则，都不能直接等同于这种记忆。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
 <section class="doc-section" id="stores"><h2>状态类型与用途</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="数据、用途、生命周期"><table><thead><tr><th scope="col">数据</th><th scope="col">用途</th><th scope="col">生命周期</th></tr></thead><tbody><tr><td>会话事件</td><td>执行历史与恢复</td><td>会话记录</td></tr><tr><td>上下文摘要</td><td>在有限窗口内继续执行</td><td>覆盖指定历史的投影</td></tr><tr><td>任务状态</td><td>带来源与版本的模型声明</td><td>当前任务的连续执行</td></tr><tr><td>显式记忆</td><td>跨会话保留的用户或项目事实</td><td>独立查询、更新、过期与删除</td></tr><tr><td>用户规则与技能</td><td>用户维护的行为要求和流程</td><td>独立配置，不由生成记忆自动提升</td></tr></tbody></table></div></section>
+<p>同一句话可能出现在不同数据里，但这些数据的用途不同。用户说“本项目只使用某个运行版本”，它首先是会话输入；模型可能在任务摘要里提到它；若需要跨会话长期使用，还需要按记忆机制保存。</p>
+<p>会话事件负责记录执行经过。摘要帮助在有限上下文里继续当前工作。结构化任务状态保留当前任务的约束和待办。显式记忆服务于跨会话查询。用户规则和技能则是独立维护的行为要求。</p>
+<p>这些机制分开，才能解释“忘记一条记忆”到底删除什么。如果把所有内容混成一个长期提示，既无法可靠删除，也难以判断一条生成结论为何持续影响后续任务。</p>
+</section>
 <section class="doc-section" id="identity"><h2>归属与授权</h2>
-<p>托管记忆使用认证的工作区和用户身份。本地项目记忆使用规范化工作区命名空间，跨项目偏好需要明确的用户命名空间。模型参数不能选择另一用户。</p>
-<p>读取与修改声明不同效果。托管记忆修改需要对应的服务端允许项和写操作策略。已签名的用户重置控件不授予任意工具写权限。</p></section>
+<p>托管记忆的归属由认证工作区和用户共同确定。相同用户在不同工作区中的信息，不应仅凭显示名称相同就混用。模型工具参数不能任意选择其他用户作为所有者。</p>
+<p>本地项目记忆按规范化工作区命名空间区分；跨项目偏好需要明确的用户命名空间。路径别名如何归一化会影响是否被视为同一项目，因此不能简单用一个临时目录名代替项目身份。</p>
+<p>读取和修改使用不同效果声明。托管写入需要对应服务端允许项与既有写策略。本地保存到工作区外状态目录时，也要遵守对应本地批准规则。</p>
+</section>
 <section class="doc-section" id="write"><h2>版本、过期与并发写入</h2>
-<p>存储记录维护版本和 generation，用于拒绝过期执行或过期版本的写入。过期时间和命名空间容量由记忆存储处理。</p>
-<p>本地文件修改在文件锁内完成，并通过文件替换提交。托管存储使用数据库事务维护相应条件。</p></section>
+<p>记忆有版本，用来避免旧内容覆盖新内容。一个执行读取某条记录后，另一个执行可能已经修改了它。前者更新时需要按版本条件提交，而不是无条件覆盖。</p>
+<p>generation 是整个记忆归属范围的重置代号。它解决的不是单条记录并发，而是“清理全部记忆后，先前开始的执行又写回来”的问题。执行要继续使用它开始时对应的重置代号，不能在恢复批准时自动换成新代号。</p>
+<aside class="worked-example"><p class="example-label">说明示例</p><h3>删除之后的迟到写入</h3><p>假设某次任务已经准备保存一条记忆，但正在等待批准。用户随后清理了记忆。旧任务的批准迟到时，原 generation 已经过期，存储应拒绝把旧内容重新写回。</p>
+<p>否则用户看见清理成功，过一会儿相同内容又出现，会破坏删除语义。这里的先后顺序是说明示例。</p></aside>
+<p>本地文件更新用文件锁保护完整的读、修改、写入过程，并通过同步后的替换提交。托管存储使用数据库事务维护对应版本和重置条件。</p>
+</section>
 <section class="doc-section" id="recall"><h2>检索与注入</h2>
-<p>存储查询与模型上下文注入分别限量。检索得到的记录仍属于数据，不获得系统指令权限。</p>
-<p>普通查询与可选语义检索使用不同配置。语义检索需要明确的模型空间、维度和存储支持；不能因存在向量缓存代码就宣称部署已启用。</p>
-<p>模型上下文只接收必要的记忆字段。源会话和执行标识保留在认证的存储或审计接口，不作为排序模型的必需输入。</p></section>
+<p>存储中有记忆，不表示每次请求都要把所有记忆加入上下文。检索先在允许归属内选择相关记录，注入阶段再限制数量与大小。存储分页范围和本轮注入上限是不同限制。</p>
+<p>普通查询、混合检索和可选语义检索使用不同路径。语义检索需要配置模型、向量维度、模型空间和存储支持。换一个向量模型后，旧向量不能直接当作同一空间继续比较。</p>
+<p>用于排序和注入的内容只应包含必要字段。源会话和执行身份保留在认证的存储或审计接口，不因为做相关性判断就全部发送给模型。</p>
+<p>召回的记忆依然是数据。它可能过期、不准确或与当前要求冲突，不能自动升级为系统规则。当前用户要求和执行策略仍要在各自边界检查。</p>
+</section>
 <section class="doc-section" id="reset"><h2>重置与删除边界</h2>
-<p>重置推进 generation，以阻止旧执行重新写入已清理的记忆。重置不删除会话历史、用户规则、集成凭据或外部追踪。</p>
-<p>已经发送给模型或仍在执行中的请求，不会因删除存储记录而自动撤回。自动提取和后台整理应以当前启用的实现与配置为准。</p></section>
+<p>重置清理的是显式记忆并推进 generation，不会连带删除会话历史、项目规则、技能、用户集成或外部追踪。如果同一事实仍在聊天记录里，模型后续仍可能从那段历史看到它。</p>
+<p>已经发给提供方的请求，也不会因为本地删除一条记录而自动撤回。删除需要分别考虑数据库、上下文、备份和外部系统的数据生命周期。</p>
+<p>因此，用户清理后的反馈应该准确说明被清理的范围。不能把一项记忆删除描述为整个系统已经不再持有相关内容。</p>
+</section>
 <section class="doc-section" id="failures"><h2>失效处理</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="情况、处理范围"><table><thead><tr><th scope="col">情况</th><th scope="col">处理范围</th></tr></thead><tbody><tr><td>身份缺失</td><td>拒绝跨用户访问</td></tr><tr><td>记录版本或 generation 已变化</td><td>拒绝旧状态写回</td></tr><tr><td>语义模型空间不同</td><td>按配置与重建规则处理，不能直接混用向量</td></tr><tr><td>检索失败</td><td>记录降级情况，不虚构已召回内容</td></tr></tbody></table></div></section>
+<p>身份缺失时拒绝访问；记录版本或 generation 已变化时拒绝旧写入。检索失败需要记录降级，模型不能假装成功召回了某条记忆。</p>
+<p>可选语义路径失败时，还要区分正常退回其他查询与整次调用因取消而结束。存在一段回退代码，不表示任意错误都能忽略。</p>
+<p>自动提取和后台整理也要按实际启用的实现判断。设计文档里计划未来自动整理，不等于当前部署已经在后台总结所有会话。</p>
+</section>
 <section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="归属、位置"><table><thead><tr><th scope="col">归属</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/memory/store.go">packages/memory/store.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/memory/context.go">packages/memory/context.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/memory/semantic.go">packages/memory/semantic.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/memory/recall.go">packages/memory/recall.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/tools/local/memory.go">packages/tools/local/memory.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/tools/memory/tools.go">packages/tools/memory/tools.go</a></td></tr></tbody></table></div></section>
 </main><aside class="toc" aria-label="本页目录"></aside></div>
 <footer class="site-footer"><a href="reading-guide.html">概念与标识</a><a href="reference.html">实现索引</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>

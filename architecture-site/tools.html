@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="模型提出工具调用。执行器检查调用身份、能力策略和实际作用域后，调度工具并保存结果。工具可见性、用户确认和执行权限是独立条件。">
+<meta name="description" content="工具是应用真正接触文件、命令和外部服务的位置。模型提出调用意图，执行器决定这次调用是否允许、何时启动、如何记录结果。可见性、权限和实际效果需要分别检查。">
 <meta name="color-scheme" content="light dark">
 <title>工具与策略 · 架构文档</title>
 <link rel="stylesheet" href="assets/guide.css">
@@ -16,31 +16,57 @@
 <div class="doc-layout">
 <nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html" aria-current="page">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
 <main class="doc-content" id="content" tabindex="-1">
-<header class="doc-header"><p class="breadcrumb">执行机制<span aria-hidden="true"> / </span>06</p><h1>工具与策略</h1><p class="lead">模型提出工具调用。执行器检查调用身份、能力策略和实际作用域后，调度工具并保存结果。工具可见性、用户确认和执行权限是独立条件。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<header class="doc-header"><p class="breadcrumb">执行机制<span aria-hidden="true"> / </span>06</p><h1>工具与策略</h1><p class="lead">工具是应用真正接触文件、命令和外部服务的位置。模型提出调用意图，执行器决定这次调用是否允许、何时启动、如何记录结果。可见性、权限和实际效果需要分别检查。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
 <section class="doc-section" id="descriptors"><h2>工具声明</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="声明、含义、限制"><table><thead><tr><th scope="col">声明</th><th scope="col">含义</th><th scope="col">限制</th></tr></thead><tbody><tr><td>名称与参数</td><td>稳定调用身份及输入结构</td><td>模型生成的参数仍需验证</td></tr><tr><td>效果 / effects</td><td>读、写、网络或特权影响</td><td>用于策略决策，不能从检索结果猜测</td></tr><tr><td>可见性 / exposure</td><td>默认启用、延迟发现或关闭</td><td>只控制目录可见性</td></tr><tr><td>并发属性</td><td>是否允许安全并行</td><td>修改共享资源的工具不能错误声明为只读并行</td></tr><tr><td>作用域 / scope</td><td>服务端提供的会话、用户和工作区身份</td><td>不能由模型参数替换</td></tr></tbody></table></div></section>
+<p>工具声明向系统描述一种能力。名称和参数让模型知道怎样提出调用，效果声明让策略知道它可能读取、修改或访问哪些资源，并发属性说明能否与其他调用安全重叠。它们不是同一项设置。</p>
+<p>例如，一个工具名为“检查配置”，实际实现却会修改文件，就不能只因名称听起来只读而按只读处理。执行策略需要依据效果和真实目标，工具实现还要履行自己声明的行为。</p>
+<p>作用域（scope）则来自服务端可信的调用身份，包含用户、会话和工作区。模型可以选择业务参数，但不能通过填写另一个 user ID 获得那个人的凭据。</p>
+</section>
 <section class="doc-section" id="discovery"><h2>发现与激活</h2>
-<p><code>tool_search</code> 的搜索操作只返回目录信息。激活操作使用确切注册名称，并将候选工具定义与确认结果一并纳入上下文容量检查。激活失败时保留原有目录。</p>
-<p>工具发现采用词法检索。检索命中、名称匹配和激活成功均不代表本次调用获准执行。</p></section>
+<p>把所有工具定义一次性发送给模型，会占用大量上下文，也会增加选择难度。因此部分工具默认延迟提供。模型先搜索目录，取得名称和说明，再申请激活确切工具。</p>
+<p>搜索只查目录，不执行工具，也不会因检索结果匹配就授予权限。激活只是把定义加入本次执行可见目录。执行器还要检查新增定义和确认结果能否纳入上下文；容量不足时保留原目录。</p>
+<aside class="worked-example"><p class="example-label">说明示例</p><h3>找到工具与允许调用</h3><p>模型可能找到一个读取代码的工具，也找到一个写入外部系统的工具。两者都出现在搜索结果，不表示两者都能执行。</p>
+<p>真实调用时仍需检查当前用户、目标资源、效果和策略。目录告诉模型有哪些能力，策略决定这个请求能否使用它们。</p></aside>
+</section>
 <section class="doc-section" id="pipeline"><h2>调用流程</h2>
-<ol class="steps"><li>按调用标识检查已有结果，避免恢复时重复执行已记录调用。</li><li>解析调用并验证参数、业务前置条件和实际目标。</li><li>按能力策略决定允许、拒绝或等待批准。</li><li>取得并发名额与锁，保存开始事件。</li><li>执行工具并保存结构化结果、错误和证据引用。</li></ol></section>
+<p>模型返回完整工具请求后，执行器先查找该调用的已保存结果。恢复时如果结果已经存在，就不重新访问外部服务。没有结果时，才进入后续检查。</p>
+<ol class="steps"><li>识别工具和调用，解析参数；工具实现验证边界值与业务前置条件。</li><li>结合服务端作用域解析真实目标，检查能力策略。</li><li>需要批准时，保存原调用和等待状态；拒绝时记录明确结果。</li><li>允许执行时，取得并发名额与对应锁，保存开始事件。</li><li>执行工具，保存结构化结果或分类错误，并处理结果大小。</li></ol>
+<p>当前系统没有覆盖全部工具的完整 JSON Schema 校验层。因此“参数符合模型看到的 schema”不能替代执行器或工具的实际验证。验证成功、执行开始和执行结果是三个边界。</p>
+</section>
 <section class="doc-section" id="policy"><h2>授权与审批</h2>
-<p>托管能力策略由服务端配置决定。用户确认不能新增宿主机权限。写工具需要对应效果声明及确切的操作员允许项。</p>
-<p>本地审批绑定原工具调用、参数、用户和会话。恢复时重新检查策略；模型重新生成的另一组参数不能继承原批准。</p></section>
+<p>托管产品的写能力由操作员允许列表和效果策略决定。用户确认是在已经允许的能力范围内批准具体操作，不会新增服务器权限。</p>
+<p>本地产品还需要考虑工作区、敏感路径、操作系统沙箱，以及针对具体调用的批准。允许某一次操作不等于允许模型以后任意生成新参数。</p>
+<aside class="worked-example"><p class="example-label">说明示例</p><h3>批准绑定的对象</h3><p>假设用户看到并批准的是“对文件 A 执行某次修改”。等待期间，模型又提出对文件 B 的修改。B 不能继承 A 的批准。</p>
+<p>恢复批准时要取回原始调用、参数和作用域，并重新检查当前策略。工具消失、目标改变或权限收紧后，旧批准也不能无条件继续执行。</p></aside>
+</section>
 <section class="doc-section" id="sandbox"><h2>文件、命令与网络边界</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="边界、执行要求"><table><thead><tr><th scope="col">边界</th><th scope="col">执行要求</th></tr></thead><tbody><tr><td>路径</td><td>解析实际路径和符号链接，检查工作区与敏感文件策略</td></tr><tr><td>命令</td><td>按 argv 执行；命令风险匹配不能替代操作系统隔离</td></tr><tr><td>沙箱</td><td>本地使用 macOS Seatbelt 或 Linux bubblewrap；可用性需实际验证</td></tr><tr><td>网络</td><td>对应网络工具检查协议、主机、解析地址和重定向目标</td></tr><tr><td>凭据</td><td>按集成作用域使用，不能自动传入任意命令子进程</td></tr></tbody></table></div></section>
+<p>文件路径需要检查实际落点。<code>workspace/allowed/file</code> 看起来位于工作区，但父目录可能是符号链接，指向工作区外。已有目标需要解析实际路径，新目标需要检查已有父目录；之后还要检查敏感位置策略。</p>
+<p>命令使用参数数组（argv）启动。这样不会把模型输出整体当成一段 shell 程序。但命令本身仍可能读写大量资源，或启动子进程，所以 argv 不是沙箱的替代品。</p>
+<p>本地沙箱由 macOS Seatbelt 或 Linux bubblewrap 等操作系统机制实施。它限制进程可见的文件和网络。沙箱可用性需要在实际系统上验证，不能只检查程序名是否存在。</p>
+<p>网络工具还需要检查协议、目标主机、解析地址和重定向。最初 URL 合规，不表示重定向后的目标也合规。凭据按授权目的使用，不能顺便放进任意命令的子进程环境。</p>
+</section>
 <section class="doc-section" id="concurrency"><h2>并发与资源限制</h2>
-<p>执行器在创建执行 goroutine 前取得并发名额。允许并行的调用共享读锁，其他调用使用写锁。工具内部的并发和下游连接池仍需单独限制。</p>
-<p>执行器按工具声明选择锁。错误的并发声明可能导致数据竞争，锁本身不能修正声明。</p></section>
+<p>多个读取操作通常可以并行，但涉及修改共享资源的操作需要更谨慎。执行器按声明选择读写锁：允许并行的工具共享读锁，其他调用使用写锁。同时还限制并发名额，并在创建执行 goroutine 之前取得名额。</p>
+<p>提前取得名额，是为了防止模型一次提出大量调用时，先创建同样多的等待工作。否则即使下游实际并发有限，本机也可能被等待任务和内存占用拖垮。</p>
+<p>工具内部仍可能再次并发。例如，一个“读取多文件”的工具内部可能同时请求很多路径；数据库连接池也有自己的上限。执行器的总名额不能自动约束所有下游资源。</p>
+<p>锁只会执行声明。如果修改工具错误地声明为可安全并行，锁不能识别真实副作用。新增并行工具应验证实际重叠、取消和下游限流。</p>
+</section>
 <section class="doc-section" id="results"><h2>结果与证据</h2>
-<p>模型可见结果受单项及批次总预算限制。截断通过 <code>Truncated</code> 等结构化状态告知模型。外置结果使用受作用域限制的引用读取，不能把任意宿主机路径当作证据入口。</p>
-<p>历史结果遮蔽与新结果截断是不同阶段。前者调整后续上下文，后者限制当前工具输出。原始证据是否保留取决于对应存储机制。</p></section>
+<p>工具结果既是模型后续判断的输入，也是恢复时的证据。大结果需要控制大小，但控制大小时不能隐藏“不完整”这个事实。否则模型可能把没看到的部分理解为不存在。</p>
+<p>当前结果受单项和批次总预算限制。截断通过结构化字段和模型可见说明表达；需要保留的大内容可以外置为受作用域限制的 artifact。后续再用引用补读，而不是把整份内容每轮重复发送。</p>
+<p>例如，一份长测试输出可能包含大量通过项和最后的失败断言。仅保留前部并声称“测试通过”，就是错误使用截断结果。工具应保留明确的完成与错误信息，模型需要按引用读取相关原文。</p>
+<p>当前工具输出截断和较早历史的上下文遮蔽发生在不同阶段。两者都需要说明内容范围，但不能假设任何缩短后的文本都能恢复成原文；是否保留取决于对应存储。</p>
+</section>
 <section class="doc-section" id="repetition"><h2>恢复与重复失败</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="状态、处理"><table><thead><tr><th scope="col">状态</th><th scope="col">处理</th></tr></thead><tbody><tr><td>调用已有结果</td><td>复用已保存结果</td></tr><tr><td>已生成但未记录开始</td><td>恢复写入 <code>execution_not_started</code></td></tr><tr><td>已有开始但没有结果</td><td>保留 <code>execution_interrupted</code>，不自动重发</td></tr><tr><td>相同调用重复失败</td><td>当前执行内累计失败，达到阈值后熔断；成功清除该调用计数</td></tr><tr><td>执行结束</td><td>清理该执行的熔断状态</td></tr></tbody></table></div>
-<p>外部写入与会话事件提交不是跨系统事务。安全重试取决于下游幂等约束或结果查询能力。</p></section>
+<p>工具已保存结果时，恢复可以复用结果。只有开始记录而没有结果时，系统保留中断或未知；它不会把同一外部写入自动发送一次来“试试看”。已经生成但未开始的调用则形成未执行结果。</p>
+<p>另一类问题是模型反复发起同样失败的调用。执行器在当前执行中按工具名称和规范化参数累计失败。达到阈值后阻止相同调用继续消耗；成功会清除该调用计数，执行结束后清理状态。</p>
+<p>这个熔断保护的是继续执行能力和成本。它不证明工具安全，也不说明任务已经完成。被拒绝的调用不能被转换成业务成功。</p>
+</section>
 <section class="doc-section" id="mcp"><h2>MCP 连接与信任边界</h2>
-<p>MCP 路由器使用配置、凭据指纹和调用作用域选择会话。凭据变化、租户变化或缓存到期后，需要重新握手。缓存不能替代调用授权。</p>
-<p>远端 readOnlyHint 是工具声明，不是已验证的实际行为。未知工具写入失败不能因连接重建而透明重发。执行隔离、出站网络策略和凭据范围需要分别成立。</p></section>
+<p>MCP（Model Context Protocol）把工具放在外部服务中。路由器需要先建立会话、读取工具定义，再按调用身份发送请求。复用握手可以减少重复连接，但缓存必须与配置、凭据和作用域绑定。</p>
+<p>例如，用户更新了集成令牌，后续调用不能只因为 user ID 相同，就继续使用旧凭据建立的会话。凭据变化、租户变化、有效期到达或传输错误，需要按规则重建或失效。</p>
+<p>外部服务声明某工具只读，只是一项集成声明，应用并未因此证明它没有副作用。凭据范围、出站网络和执行隔离仍需要独立成立。连接重建也不构成重试未知写入的理由。</p>
+</section>
 <section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="归属、位置"><table><thead><tr><th scope="col">归属</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/tool">packages/agent/tool</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/tools.go">packages/agent/runtime/tools.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/circuit.go">packages/agent/runtime/circuit.go</a></td></tr><tr><td>验证用例</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/circuit_test.go">packages/agent/runtime/circuit_test.go</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/tools.md">docs/tools.md</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/safety.md">docs/safety.md</a></td></tr></tbody></table></div></section>
 </main><aside class="toc" aria-label="本页目录"></aside></div>
 <footer class="site-footer"><a href="reading-guide.html">概念与标识</a><a href="reference.html">实现索引</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>

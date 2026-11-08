@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Web 提供经认证的会话界面。托管工作进程执行模型与工具，浏览器接收事件并呈现结果。Web 使用自己的会话归属、队列准入和恢复规则。">
+<meta name="description" content="Web 将浏览器交互与服务端执行分开。浏览器提交用户输入并显示事件；服务端负责认证、会话归属、持久输入、执行准入和恢复。页面连接中断，不等于后台任务已经停止。">
 <meta name="color-scheme" content="light dark">
 <title>Web 接入 · 架构文档</title>
 <link rel="stylesheet" href="assets/guide.css">
@@ -16,24 +16,36 @@
 <div class="doc-layout">
 <nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="web.html" aria-current="page">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
 <main class="doc-content" id="content" tabindex="-1">
-<header class="doc-header"><p class="breadcrumb">产品边界<span aria-hidden="true"> / </span>12</p><h1>Web 接入</h1><p class="lead">Web 提供经认证的会话界面。托管工作进程执行模型与工具，浏览器接收事件并呈现结果。Web 使用自己的会话归属、队列准入和恢复规则。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<header class="doc-header"><p class="breadcrumb">产品边界<span aria-hidden="true"> / </span>12</p><h1>Web 接入</h1><p class="lead">Web 将浏览器交互与服务端执行分开。浏览器提交用户输入并显示事件；服务端负责认证、会话归属、持久输入、执行准入和恢复。页面连接中断，不等于后台任务已经停止。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
 <section class="doc-section" id="boundary"><h2>服务职责</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="组件、职责"><table><thead><tr><th scope="col">组件</th><th scope="col">职责</th></tr></thead><tbody><tr><td>网关</td><td>公开入口与请求转发</td></tr><tr><td>Web 认证</td><td>Slack OIDC 回调、浏览器会话及用户身份</td></tr><tr><td>会话服务</td><td>会话归属、输入保存、准入与恢复</td></tr><tr><td>共享执行器</td><td>上下文、模型、工具与终态</td></tr><tr><td>浏览器</td><td>请求提交、事件接收和界面状态</td></tr></tbody></table></div></section>
+<p>浏览器界面不是执行器本身。用户点击提交后，请求经公开入口到达 Web 会话服务；服务端验证身份和 conversation 归属，保存输入，再按准入与队列规则推进。实际模型和工具运行在托管工作进程。</p>
+<p>因此，浏览器负责维护草稿、连接与展示状态，服务端负责可靠的会话与执行事实。把“按钮恢复可点击”当成执行结束，或把页面还开着当成任务仍活跃，都会混淆这两层。</p>
+</section>
 <section class="doc-section" id="identity"><h2>认证与会话归属</h2>
-<p>浏览器登录、Slack 线程身份和用户的外部集成连接是不同对象。会话服务先确认用户对 conversation 的访问权，再处理执行请求。</p>
-<p>外部凭据由对应用户连接和作用域选择。客户端传入的会话或用户字段不能单独构成授权。</p></section>
+<p>浏览器通过登录建立自己的会话身份。这个身份与 Slack 某条线程的身份不是同一个对象，也不同于用户授权 GitHub、GCP 等外部集成的连接。</p>
+<p>用户请求某个 conversation 时，服务端先检查它是否属于当前用户允许的范围。知道 conversation ID 不能当作访问凭证。工具需要外部授权时，还要从正确的用户连接与实例选择凭据。</p>
+<p>这种区分使“可以登录网站”和“可以读取某个外部资源”成为两项明确检查。前者成功不能证明后者已经授权。</p>
+</section>
 <section class="doc-section" id="queue"><h2>准入与持久输入</h2>
-<p>Web 会话队列区分存储错误、租约错误与权威的会话不存在。临时错误应释放认领，不直接确认丢弃。已经持久保存的终态用于结束确认。</p>
-<p>工作进程已满时，不应通过提前认领等待任务消耗其重试次数。准入范围包含持久确认或释放之前的生命周期。</p></section>
+<p>服务端保存输入后，需要在可执行时认领它。工作进程已满时，不提前占住大量等待会话并消耗它们的重试次数。已经接收的任务则需要在执行结束后完成持久确认或释放。</p>
+<p>查询会话时，数据库暂时不可用和数据库明确返回会话不存在，含义不同。前者应释放认领等待恢复；不能假装它是无效会话并确认丢弃。</p>
+<p>同样，已有持久终态的执行可以按终态确认，不再重复执行审批、模型和工具。队列恢复依赖服务端记录，而不是浏览器是否还连接。</p>
+</section>
 <section class="doc-section" id="events"><h2>事件与重连</h2>
-<p>浏览器通过事件流更新运行状态与消息。连接中断不证明执行已取消；界面需要按服务端会话和运行状态恢复。</p>
-<p>模型与工具记录属于执行事实。输入草稿、连接状态和实时片段属于呈现状态，不能反向替代终态判断。</p></section>
+<p>事件流让浏览器逐步看到文字和运行状态，但网络可能随时断开。断开后，界面需要从服务端恢复会话与运行状态，而不能假定“没再收到文字”就表示执行失败。</p>
+<aside class="worked-example"><p class="example-label">说明示例</p><h3>刷新页面后的任务</h3><p>假设用户提交了登录故障调查，随后刷新浏览器。后台可能仍在等待测试工具返回，也可能已经保存最终答复，只是页面尚未显示。</p>
+<p>重新打开后，应根据会话和运行记录恢复展示。盲目再次提交相同任务，可能创建新执行并重复调查。</p></aside>
+<p>输入草稿、流式片段和连接指示属于界面状态。完整模型消息、工具结果和终态属于执行记录。两者可以短暂不一致，需要由重连与结果加载收敛。</p>
+</section>
 <section class="doc-section" id="drain"><h2>关闭与恢复</h2>
-<p>drain 在生命周期锁下阻止新的准入。服务等待已接收工作及持久确认，再按共享关闭期限取消并清理。</p>
-<p>运行结束、队列确认和浏览器收到结果是不同时间点。关闭验证需要覆盖这些边界。</p></section>
+<p>服务准备关闭时，先在生命周期锁下阻止新准入，再等待已接收工作及其持久确认。只等模型请求结束不够，因为执行结果还可能需要写入、队列还可能需要确认。</p>
+<p>到达共享关闭期限后，服务取消工作，再做有界清理。浏览器可能在这个过程中断开，但断开只是呈现变化。恢复时仍需读取服务端记录，判断执行已完成、已取消还是结果未知。</p>
+</section>
 <section class="doc-section" id="verification"><h2>验证范围</h2>
-<p>现有测试覆盖认证、会话控制、终态失败、恢复和浏览器交互。界面可打开不代表模型、用户集成或流式链路可用。</p>
-<p>实际验证需要包含登录、会话提交、消息重连和一次真实模型响应。</p></section>
+<p>Web 验证需要覆盖登录、会话访问、输入提交、事件重连、执行终态和用户集成。静态页面能够加载，只证明前端文件可访问。</p>
+<p>例如，浏览器能显示对话列表，但工作进程无法连接模型提供方，新的任务仍不能完成。反过来，模型已经完成但事件流断开，则需要检查呈现与重连，不应先重跑模型。</p>
+<p>现有认证、会话与恢复测试验证对应的边界；真实登录和一次实际模型响应仍需在选定部署上验证。</p>
+</section>
 <section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="归属、位置"><table><thead><tr><th scope="col">归属</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/web/auth.go">packages/surfaces/web/auth.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/web/conversation.go">packages/surfaces/web/conversation.go</a></td></tr><tr><td>验证用例</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/web/recovery_regression_test.go">packages/surfaces/web/recovery_regression_test.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/web/tests/conversation.test.mjs">packages/surfaces/web/tests/conversation.test.mjs</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/operations.md">docs/operations.md</a></td></tr></tbody></table></div></section>
 </main><aside class="toc" aria-label="本页目录"></aside></div>
 <footer class="site-footer"><a href="reading-guide.html">概念与标识</a><a href="reference.html">实现索引</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>

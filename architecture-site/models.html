@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="模型适配器将统一请求转换为提供方协议。弹性客户端处理网络尝试、重试和备用路径；输出提交状态决定是否允许重放。">
+<meta name="description" content="一次模型请求可能经历连接、流式接收、协议完成判定、退避和再次尝试。应用需要判断哪些内容已经可靠取得、哪些可以重试，以及何时必须停止，不能只看 HTTP 是否返回。">
 <meta name="color-scheme" content="light dark">
 <title>模型协议与重试 · 架构文档</title>
 <link rel="stylesheet" href="assets/guide.css">
@@ -16,23 +16,43 @@
 <div class="doc-layout">
 <nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html" aria-current="page">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
 <main class="doc-content" id="content" tabindex="-1">
-<header class="doc-header"><p class="breadcrumb">执行机制<span aria-hidden="true"> / </span>05</p><h1>模型协议与重试</h1><p class="lead">模型适配器将统一请求转换为提供方协议。弹性客户端处理网络尝试、重试和备用路径；输出提交状态决定是否允许重放。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<header class="doc-header"><p class="breadcrumb">执行机制<span aria-hidden="true"> / </span>05</p><h1>模型协议与重试</h1><p class="lead">一次模型请求可能经历连接、流式接收、协议完成判定、退避和再次尝试。应用需要判断哪些内容已经可靠取得、哪些可以重试，以及何时必须停止，不能只看 HTTP 是否返回。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
 <section class="doc-section" id="boundary"><h2>请求与适配边界</h2>
-<p>执行器接收一次逻辑模型请求的完整响应。适配器负责协议字段、内容块、工具身份、用量与分类错误。上下文选择由<a href="context.html">上下文投影机制</a>负责。</p>
-<div class="table-wrap" role="region" tabindex="0" aria-label="对象、责任"><table><thead><tr><th scope="col">对象</th><th scope="col">责任</th></tr></thead><tbody><tr><td><code>model.Request</code></td><td>模型、消息、工具定义和请求预算</td></tr><tr><td>提供方适配器</td><td>协议编码、流式解码和完成回执</td></tr><tr><td>弹性客户端</td><td>尝试预算、退避、备用路径和熔断</td></tr><tr><td>执行器</td><td>保存完整消息，并决定工具或终态</td></tr></tbody></table></div></section>
+<p>执行器关心的是：给定一份上下文，能否取得一份完整模型结果。不同提供方却使用不同的请求字段、流式事件和工具格式。模型适配器将这些网络差异转换为内部的请求、响应、内容块、工具调用、用量和错误类型。</p>
+<p>弹性客户端位于这条边界上，负责一次逻辑请求中的实际网络尝试。例如，请求第一次遇到暂时性故障，第二次成功，执行器仍应得到一份完整结果，而不是把两次尝试当成两条用户输入。</p>
+<p>上下文是否选对、工具是否有权限，是其他模块的职责。把这些工作与协议解码分开，才能更换提供方而不重写会话恢复和工具策略。</p>
+</section>
 <section class="doc-section" id="protocol"><h2>协议与完成判定</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="协议边界、要求"><table><thead><tr><th scope="col">协议边界</th><th scope="col">要求</th></tr></thead><tbody><tr><td>统一模型接口</td><td>请求、响应、内容块、工具调用、用量和错误使用内部类型</td></tr><tr><td>Chat Completions</td><td>需要明确的提供方结束原因；EOF 或 <code>[DONE]</code> 本身不证明完成</td></tr><tr><td>Responses</td><td>按原生完成回执和终态处理文本、工具调用及续接</td></tr><tr><td>Anthropic</td><td>按内容块索引配对开始、增量和结束事件</td></tr><tr><td>不完整参数</td><td>不能作为已完成工具调用执行</td></tr></tbody></table></div></section>
+<p>网络连接结束只表示没有更多字节到达，不一定表示模型已经完成。连接可能正常结束，也可能在回答中途断开。适配器因此检查提供方协议中的结束回执，而不是把 EOF 一律当成成功。</p>
+<h3>文本与工具分别收敛</h3>
+<p>Chat Completions 需要明确的结束原因，单独的 <code>[DONE]</code> 或 EOF 不够。Responses 按原生项目回执和最终状态处理结果。Anthropic 按内容块索引连接开始、增量和结束事件。</p>
+<p>工具参数尤其需要完整性。例如，一个 JSON 参数只接收了前半段，应用不能自己补完后执行。工具身份在流式索引中发生冲突，或者参数无法形成可接受的完整对象时，应返回协议错误。</p>
+<aside class="worked-example"><p class="example-label">说明示例</p><h3>响应未完整接收</h3><p>假设模型正在生成读取文件的参数，连接在文件路径中间断开。此时应用只有一段不完整字符串，没有一个可执行的工具请求。</p>
+<p>正确处理是保留协议失败，按重试条件决定是否重新请求模型；不能猜一个路径，也不能因为已经看见工具名称就启动工具。</p></aside>
+</section>
 <section class="doc-section" id="resilience"><h2>重试、备用路径与熔断</h2>
-<p>弹性客户端按错误分类、剩余预算和输出提交状态决定是否重试。尝试次数包含首次请求。重试等待采用有界退避和抖动，并响应取消。</p>
-<p>已向接收器成功提交非空文本后，客户端不透明重放整段回答。主要提供方熔断时，只有已配置且可用的备用路径才能继续。权限、配额或未知错误不能一概按临时故障重试。</p></section>
+<p>重试用于处理可能短暂恢复的失败，例如明确的临时服务故障或限流。它会再发一次网络请求，所以必须同时受尝试次数和剩余执行时间限制。尝试次数包括第一次调用。</p>
+<p>重试之间采用有上限的退避和抖动。退避让受压服务有恢复时间，抖动避免多个执行者同时重发。用户取消时，等待也需要结束，不能等完固定延迟后继续请求。</p>
+<p>备用路径是切换到已配置的其他模型或提供方。它不是所有错误的通用修复：权限不足、配额用尽和未知错误要按明确分类处理。主要提供方的熔断也只是暂时停止继续尝试该路径，不证明备用路径一定健康。</p>
+</section>
 <section class="doc-section" id="commit"><h2>输出提交与工具执行</h2>
-<p>向接收器成功提交非空文本后，弹性客户端不再从头透明重放回答。只收到工具参数增量，不等于工具已执行。</p>
-<p>执行器等待完整响应，再检查和调度工具。响应中途失败时，不能把未完成参数提升为完整调用。</p></section>
+<p>重试还受输出提交限制。应用向接收器成功提交非空文本后，用户可能已经看到这段内容。此时从头再请求一次，可能生成另一份措辞和结论，最终在界面上拼成两份回答。</p>
+<p>因此，弹性客户端把已提交可见文本作为停止透明重放的边界。这里说的是向呈现接收器提交，不等于消息已经最终投递到用户，也不等于完整模型答复已经保存。</p>
+<aside class="worked-example"><p class="example-label">说明示例</p><h3>已输出文字后断流</h3><p>假设界面已经显示“登录失败与会话校验有关”，随后连接中断。重新请求可能得到“数据库连接失败”的另一份回答。直接拼接会让用户无法判断哪份结论可靠。</p>
+<p>系统应保留已提交状态和分类失败，由对应入口处理错误与呈现恢复。若没有完整结果，就不能把片段当成已验证结论。</p></aside>
+<p>工具参数增量和用量事件不等于可见答复，也不等于工具已经运行。执行器等待完整模型响应后，才进入工具检查与执行。</p>
+</section>
 <section class="doc-section" id="resources"><h2>网络尝试与资源预算</h2>
-<p>模型准入控制实际网络尝试的并发。退避等待不持续占用模型名额。父任务、子任务与压缩请求共享进程内资源控制。</p>
-<p>每次尝试分别预留和结算用量。缺少提供方回执的失败请求保留估算。缓存 token 口径、已知用量和预算扣减是不同数据，不能重复相加。</p></section>
+<p>父任务、子任务和压缩器都可能请求模型。如果每个调用方只限制自己的一小部分，进程合起来仍可能超过提供方或本机承受能力。因此，实际网络尝试共享进程内的准入控制。</p>
+<p>一次尝试取得名额后才访问提供方。进入退避时释放名额，避免失败请求一边等待，一边占满其他工作的通道。这个限制保护单个进程，不自动形成多副本共享的租户配额。</p>
+<p>token 预算与并发名额也不同。并发限制同时有多少请求，预算限制可以消耗多少估算用量。每次尝试先预留，收到提供方用量后结算；没有用量回执的失败需要保留估算，不能直接算作零。</p>
+<p>最终运行用量、逐尝试预算扣减和提供方账单有不同口径。缓存 token 与子任务用量要按结构化记录归并，不能把逻辑请求总量再与每次尝试重复相加。</p>
+</section>
 <section class="doc-section" id="errors"><h2>错误分类与恢复条件</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="错误或状态、恢复条件"><table><thead><tr><th scope="col">错误或状态</th><th scope="col">恢复条件</th></tr></thead><tbody><tr><td>临时故障或明确限流</td><td>剩余期限、尝试次数和输出提交状态均允许时重试</td></tr><tr><td>权限或配额错误</td><td>按明确分类停止，不把所有错误都视为临时故障</td></tr><tr><td>协议不完整</td><td>保留分类错误，不执行未完成工具调用</td></tr><tr><td>首段文本后失败</td><td>停止透明重放，区分执行失败和投递补偿</td></tr><tr><td>主要提供方熔断</td><td>仅使用已配置且可用的备用路径</td></tr></tbody></table></div></section>
+<p>错误分类决定恢复动作。HTTP 状态、提供方明确错误码和协议状态都可能参与判断。诊断消息的措辞可以帮助人工调查，但不能仅凭字符串里出现“稍后再试”，就把任意错误变成可重试。</p>
+<ol class="steps"><li>临时故障或明确限流：检查是否尚未提交文本，以及次数和期限是否允许，再退避重试。</li><li>认证、权限或配额问题：停止不适用的重试，核对对应配置或账号能力。</li><li>协议不完整：不发布未完成工具调用，保留分类错误。</li><li>文本已经提交：停止从头透明重放，保留执行与呈现状态。</li><li>所有允许路径都不可用：以明确原因结束，不把空结果标为成功。</li></ol>
+<p>实际行为由 <a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/model/resilient.go">packages/agent/model/resilient.go</a> 与对应回归测试定义。提供方适配器还负责各自的完成回执规则。</p>
+</section>
 <section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="归属、位置"><table><thead><tr><th scope="col">归属</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/model/model.go">packages/agent/model/model.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/model/resilient.go">packages/agent/model/resilient.go</a></td></tr><tr><td>验证用例</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/model/resilient_test.go">packages/agent/model/resilient_test.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/model/governor.go">packages/agent/model/governor.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/model/attempt_usage.go">packages/agent/model/attempt_usage.go</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/models.md">docs/models.md</a></td></tr></tbody></table></div></section>
 </main><aside class="toc" aria-label="本页目录"></aside></div>
 <footer class="site-footer"><a href="reading-guide.html">概念与标识</a><a href="reference.html">实现索引</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>

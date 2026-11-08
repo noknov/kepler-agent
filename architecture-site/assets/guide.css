@@ -73,6 +73,7 @@ h2 { font-size: 22px; font-weight: 600; line-height: 1.6; letter-spacing: -.025e
 h3 { font-size: 16px; line-height: 1.65; margin: 25px 0 12px; }
 p { margin: 14px 0; }
 .doc-section > p, li { color: var(--secondary); }
+.doc-section p a { overflow-wrap: anywhere; }
 ul, ol { padding-left: 23px; margin: 18px 0; }
 li { padding-left: 3px; margin: 9px 0; }
 li::marker { color: var(--muted); }
@@ -178,3 +179,13 @@ dialog::backdrop { background: rgb(16 24 40 / 35%); }
   .table-wrap { overflow: visible; }
   .table-wrap table { min-width: 0; }
 }
+
+/* Worked examples explain mechanisms; they are not recorded product results. */
+.worked-example { margin: 24px 0; padding: 18px 22px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 0 5px 5px 0; background: var(--sidebar); }
+.worked-example .example-label { margin: 0 0 7px; color: var(--muted); font-size: 11px; }
+.worked-example h3 { margin: 0 0 12px; font-size: 15px; }
+.worked-example p { margin: 10px 0; color: var(--secondary); font-size: 14px; }
+.example-code { max-width: 100%; margin: 22px 0; padding: 18px; overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); font: 12px/1.85 var(--mono); tab-size: 2; }
+.example-code code { padding: 0; background: none; font: inherit; overflow-wrap: normal; }
+@media (max-width: 480px) { .worked-example { padding: 16px; } .example-code { padding: 14px; } }
+@media print { .worked-example { break-inside: auto; } .example-code { white-space: pre-wrap; } }
