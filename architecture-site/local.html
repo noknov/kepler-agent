@@ -5,21 +5,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="本地产品在用户选定的工作区执行工具，使用 JSONL 保存会话。交互式 CLI 与 stdio app-server 使用同一本地产品配置和共享执行器。">
 <meta name="color-scheme" content="light dark">
-<title>本地 CLI 与 app-server · Kepler 架构文档</title>
-<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<title>本地 CLI 与 app-server · 架构文档</title>
 <link rel="stylesheet" href="assets/guide.css">
 <script src="assets/search-index.js" defer></script>
 <script src="assets/architecture.js" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#content">跳到正文</a>
-<header class="site-header"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">K</span><strong>Kepler</strong><span class="brand-label">架构文档</span></a><div class="header-actions"></div></header>
+<header class="site-header"><a class="site-title" href="index.html">架构文档</a><div class="header-actions"></div></header>
 <div class="doc-layout">
-<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="execution.html">执行过程</a><a href="models.html">上下文与模型</a><a href="tools.html">工具与策略</a><a href="reliability.html">状态与恢复</a><a href="delegation.html">委派执行</a><a href="operations.html">队列与观测</a><a href="production.html">故障处理</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html" aria-current="page">本地 CLI 与 app-server</a><a href="reading-guide.html">术语</a><a href="reference.html">实现索引</a></nav>
+<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html" aria-current="page">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
 <main class="doc-content" id="content" tabindex="-1">
-<header class="doc-header"><p class="breadcrumb">产品接入<span aria-hidden="true"> / </span>11</p><h1>本地 CLI 与 app-server</h1><p class="lead">本地产品在用户选定的工作区执行工具，使用 JSONL 保存会话。交互式 CLI 与 stdio app-server 使用同一本地产品配置和共享执行器。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<header class="doc-header"><p class="breadcrumb">产品边界<span aria-hidden="true"> / </span>13</p><h1>本地 CLI 与 app-server</h1><p class="lead">本地产品在用户选定的工作区执行工具，使用 JSONL 保存会话。交互式 CLI 与 stdio app-server 使用同一本地产品配置和共享执行器。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
 <section class="doc-section" id="components"><h2>运行组件</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="组件、职责"><table><thead><tr><th scope="col">组件</th><th scope="col">职责</th></tr></thead><tbody><tr><td>Go CLI 启动器</td><td>参数、登录状态及交互或无界面模式选择</td></tr><tr><td>终端界面</td><td>输入、事件呈现与交互状态</td></tr><tr><td>stdio app-server</td><td>JSON-RPC 会话和执行协议</td></tr><tr><td>本地产品配置</td><td>工具、沙箱、审批及 JSONL 存储</td></tr><tr><td>Kepler 网关</td><td>经认证的模型配置与调用路径</td></tr></tbody></table></div></section>
+<div class="table-wrap" role="region" tabindex="0" aria-label="组件、职责"><table><thead><tr><th scope="col">组件</th><th scope="col">职责</th></tr></thead><tbody><tr><td>Go CLI 启动器</td><td>参数、登录状态及交互或无界面模式选择</td></tr><tr><td>终端界面</td><td>输入、事件呈现与交互状态</td></tr><tr><td>stdio app-server</td><td>JSON-RPC 会话和执行协议</td></tr><tr><td>本地产品配置</td><td>工具、沙箱、审批及 JSONL 存储</td></tr><tr><td>服务端网关</td><td>经认证的模型配置与调用路径</td></tr></tbody></table></div></section>
 <section class="doc-section" id="workspace"><h2>工作区与权限</h2>
 <p><code>--cwd</code> 选择本地工具工作区。读写根、敏感路径、审批与操作系统沙箱共同约束工具访问。</p>
 <p>本地审批绑定具体调用及其参数，不等于允许任意后续命令。本地会话锁跨进程保护整个执行，事件文件锁只保护短暂读写。</p></section>
@@ -35,10 +34,7 @@
 <section class="doc-section" id="packaging"><h2>打包与验证</h2>
 <p>交互式包包含启动器、app-server 和终端前端，需保持相对目录结构。部署仓库负责打包。普通交互包依赖 Node，便携包另行携带运行时。</p>
 <p>验证需区分 Go 构建、前端类型范围、交互测试与真实沙箱行为。无界面结果不能单独证明终端交互可用。</p></section>
-<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="依据、位置"><table><thead><tr><th scope="col">依据</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/local-cli.md">docs/local-cli.md</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/appserver/server.go">packages/appserver/server.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/appserver/serve_lifecycle_test.go">packages/appserver/serve_lifecycle_test.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/tools/local/bootstrap.go">packages/tools/local/bootstrap.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/profiles/local">packages/profiles/local</a></td></tr></tbody></table></div></section>
-</main>
-<aside class="toc" aria-label="本页目录"></aside>
-</div>
-<footer class="site-footer"><span>Kepler 架构文档</span><a href="reading-guide.html">术语</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
-</body>
-</html>
+<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="归属、位置"><table><thead><tr><th scope="col">归属</th><th scope="col">位置</th></tr></thead><tbody><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/local-cli.md">docs/local-cli.md</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/appserver/server.go">packages/appserver/server.go</a></td></tr><tr><td>验证用例</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/appserver/serve_lifecycle_test.go">packages/appserver/serve_lifecycle_test.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/tools/local/bootstrap.go">packages/tools/local/bootstrap.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/profiles/local">packages/profiles/local</a></td></tr></tbody></table></div></section>
+</main><aside class="toc" aria-label="本页目录"></aside></div>
+<footer class="site-footer"><a href="reading-guide.html">概念与标识</a><a href="reference.html">实现索引</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
+</body></html>

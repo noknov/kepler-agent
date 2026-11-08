@@ -5,19 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="主任务通过受限任务契约启动子任务。子任务使用共享执行器和独立事件记录。主任务负责验收结果，子任务报告不直接构成最终结论。">
 <meta name="color-scheme" content="light dark">
-<title>委派执行 · Kepler 架构文档</title>
-<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<title>任务委派 · 架构文档</title>
 <link rel="stylesheet" href="assets/guide.css">
 <script src="assets/search-index.js" defer></script>
 <script src="assets/architecture.js" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#content">跳到正文</a>
-<header class="site-header"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">K</span><strong>Kepler</strong><span class="brand-label">架构文档</span></a><div class="header-actions"></div></header>
+<header class="site-header"><a class="site-title" href="index.html">架构文档</a><div class="header-actions"></div></header>
 <div class="doc-layout">
-<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="execution.html">执行过程</a><a href="models.html">上下文与模型</a><a href="tools.html">工具与策略</a><a href="reliability.html">状态与恢复</a><a href="delegation.html" aria-current="page">委派执行</a><a href="operations.html">队列与观测</a><a href="production.html">故障处理</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="reading-guide.html">术语</a><a href="reference.html">实现索引</a></nav>
+<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html" aria-current="page">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
 <main class="doc-content" id="content" tabindex="-1">
-<header class="doc-header"><p class="breadcrumb">状态与协作<span aria-hidden="true"> / </span>06</p><h1>委派执行</h1><p class="lead">主任务通过受限任务契约启动子任务。子任务使用共享执行器和独立事件记录。主任务负责验收结果，子任务报告不直接构成最终结论。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<header class="doc-header"><p class="breadcrumb">调度与协作<span aria-hidden="true"> / </span>09</p><h1>任务委派</h1><p class="lead">主任务通过受限任务契约启动子任务。子任务使用共享执行器和独立事件记录。主任务负责验收结果，子任务报告不直接构成最终结论。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
 <section class="doc-section" id="runtime"><h2>执行模型</h2>
 <p><code>agent-explore</code> 用于只读探索。代码审查等产品流程通过任务契约启动受限子任务，不复制另一套模型循环。子任务继承父级取消，并保留父子关系。</p>
 <p>新建的只读叶子任务使用私有会话，不重复占用父任务已经持有的分布式会话锁连接。</p></section>
@@ -37,10 +36,7 @@
 <section class="doc-section" id="limits"><h2>使用边界</h2>
 <p>当前探索与审查任务面向受限只读工作。不能据此推断任意任务都已具备隔离文件系统、独立远程沙箱或写入授权。</p>
 <p>验收应覆盖任务范围、证据位置和实际验证结果。完成状态只说明子执行已结束。</p></section>
-<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="依据、位置"><table><thead><tr><th scope="col">依据</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/delegation/explore.go">packages/agent/delegation/explore.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/delegation/evidence.go">packages/agent/delegation/evidence.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/delegation/lease_test.go">packages/agent/delegation/lease_test.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/runtime.md">docs/runtime.md</a></td></tr></tbody></table></div></section>
-</main>
-<aside class="toc" aria-label="本页目录"></aside>
-</div>
-<footer class="site-footer"><span>Kepler 架构文档</span><a href="reading-guide.html">术语</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
-</body>
-</html>
+<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="归属、位置"><table><thead><tr><th scope="col">归属</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/delegation/explore.go">packages/agent/delegation/explore.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/delegation/evidence.go">packages/agent/delegation/evidence.go</a></td></tr><tr><td>验证用例</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/delegation/lease_test.go">packages/agent/delegation/lease_test.go</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/runtime.md">docs/runtime.md</a></td></tr></tbody></table></div></section>
+</main><aside class="toc" aria-label="本页目录"></aside></div>
+<footer class="site-footer"><a href="reading-guide.html">概念与标识</a><a href="reference.html">实现索引</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
+</body></html>

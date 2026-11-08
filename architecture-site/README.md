@@ -1,4 +1,4 @@
-# Kepler architecture documentation
+# Architecture documentation
 
 This static Chinese site describes the shared execution core and the product
 boundaries of Slack, Web, and the local CLI. Open `index.html` directly or serve
@@ -7,14 +7,30 @@ external font, remote renderer, or build-service dependency.
 
 ## Content ownership
 
-- `index.html`: system responsibilities, product boundaries, and request flow.
-- `execution.html`, `models.html`, `tools.html`: shared execution mechanisms.
-- `reliability.html`, `delegation.html`: state, ownership, recovery, and child tasks.
-- `operations.html`, `production.html`: durable queues, observation, diagnosis,
-  shutdown, and release boundaries.
-- `slack.html`, `web.html`, `local.html`: product-specific ingress, authentication,
-  execution, delivery, and lifecycle contracts.
-- `reading-guide.html`, `reference.html`: terminology, identifiers, source, and tests.
+The chapter order follows system boundaries rather than review history:
+
+| Group | Page | Owns |
+| --- | --- | --- |
+| Foundations | `index.html` | Component responsibilities and product boundaries |
+| Foundations | `reading-guide.html` | Concept definitions and identifier scope |
+| Execution | `execution.html` | Admission, execution phases and termination |
+| Execution | `context.html` | Prompt layers, projection, budgets, compaction and evidence |
+| Execution | `models.html` | Provider protocols, network attempts and retry conditions |
+| Execution | `tools.html` | Discovery, effects, authorization, scheduling and results |
+| State | `reliability.html` | Canonical storage, ownership and recovery windows |
+| State | `memory.html` | Explicit memory identity, versions, retrieval and deletion |
+| Coordination | `delegation.html` | Child-task contracts, isolation and acceptance |
+| Coordination | `operations.html` | Durable queue claims, admission and shutdown |
+| Products | `slack.html`, `web.html`, `local.html` | Product-specific boundaries |
+| Diagnostics | `observability.html` | Projection, health, metrics, traces and their limits |
+| Diagnostics | `production.html` | Symptom-to-evidence diagnosis and recovery decisions |
+| Reference | `reference.html` | Implementation and validation pointers |
+
+The overview maps components; it does not redefine each chapter's workflow.
+Context and memory have separate owners: history projection does not replace
+cross-session memory, and memory deletion does not delete a transcript. Queue
+claims and canonical event recovery also have separate ownership. Observation
+reports state; diagnosis uses it without granting authority to derived views.
 
 The Markdown guides under `docs/` own setup, configuration and operating commands.
 The site explains architecture rather than maintaining a second deployment runbook.
@@ -33,6 +49,10 @@ terms, explicit actors, short sentences, one subject per paragraph, and conditio
 beside the affected action. This is an adaptation of writing principles, not a
 claim of English STE conformity or certification.
 
+Use a neutral site title. Do not add a product name, logo, monogram, branded
+favicon or decorative identity mark to the published pages. Keep actual source
+URLs and technical identifiers accurate.
+
 Use functional headings and concrete descriptions. Exclude slogans, rhetorical
 questions, reader coaching, review history, and prose about the writing process
 from the architecture pages. Preserve code identifiers. Distinguish implemented
@@ -40,7 +60,7 @@ behavior, design requirements, verified outcomes, and unresolved limits.
 
 The reading-layout reference is [御舆](https://lintsinghua.github.io/). Its public
 source was inspected for chapter grouping and long-form navigation. The architecture
-content is based on Kepler, not copied from that site's product implementation.
+content is based on the repository, not copied from that site's product implementation.
 Writing principles refer to [ASD-STE100](https://www.asd-ste100.org/).
 
 ## Site maintenance

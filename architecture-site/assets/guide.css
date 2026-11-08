@@ -40,11 +40,8 @@ code { font: .86em/1.65 var(--mono); overflow-wrap: anywhere; background: var(--
 .skip-link { position: fixed; top: -100px; left: 20px; z-index: 100; background: var(--bg); padding: 8px 16px; border: 1px solid var(--accent); }
 .skip-link:focus { top: 12px; }
 .site-header { position: sticky; top: 0; z-index: 20; height: var(--header-height); background: var(--bg); border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 32px; }
-.brand { display: inline-flex; gap: 11px; align-items: center; color: var(--text); text-decoration: none; white-space: nowrap; }
-.brand:hover { text-decoration: none; }
-.brand-mark { display: grid; place-items: center; width: 26px; height: 26px; color: var(--bg); background: var(--text); border-radius: 6px; font: 600 15px/1 var(--font); }
-.brand strong { font-size: 16px; font-weight: 650; letter-spacing: -.4px; }
-.brand-label { font-size: 12px; color: var(--muted); border-left: 1px solid var(--line); padding-left: 13px; margin-left: 3px; }
+.site-title { color: var(--text); font-size: 14px; font-weight: 600; text-decoration: none; letter-spacing: 0; }
+.site-title:hover { text-decoration: none; }
 .header-actions { display: flex; gap: 8px; align-items: center; }
 .control { border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--secondary); padding: 6px 11px; font-size: 12px; line-height: 1.6; }
 .control:hover { color: var(--text); background: var(--surface); }
@@ -152,8 +149,6 @@ dialog::backdrop { background: rgb(16 24 40 / 35%); }
 }
 @media (max-width: 480px) {
   .site-header { padding: 0 15px; gap: 8px; }
-  .brand-label { display: none; }
-  .brand { gap: 8px; }
   .header-actions { gap: 5px; }
   .control { padding: 6px 9px; font-size: 11px; }
   .search-trigger kbd { display: none; }

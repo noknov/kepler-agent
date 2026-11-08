@@ -5,30 +5,26 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="一次执行（turn）包含输入、模型轮次、工具调用和终态。执行器先取得会话处理权，再根据已保存事件推进状态。">
 <meta name="color-scheme" content="light dark">
-<title>执行过程 · Kepler 架构文档</title>
-<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<title>执行过程 · 架构文档</title>
 <link rel="stylesheet" href="assets/guide.css">
 <script src="assets/search-index.js" defer></script>
 <script src="assets/architecture.js" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#content">跳到正文</a>
-<header class="site-header"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">K</span><strong>Kepler</strong><span class="brand-label">架构文档</span></a><div class="header-actions"></div></header>
+<header class="site-header"><a class="site-title" href="index.html">架构文档</a><div class="header-actions"></div></header>
 <div class="doc-layout">
-<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="execution.html" aria-current="page">执行过程</a><a href="models.html">上下文与模型</a><a href="tools.html">工具与策略</a><a href="reliability.html">状态与恢复</a><a href="delegation.html">委派执行</a><a href="operations.html">队列与观测</a><a href="production.html">故障处理</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="reading-guide.html">术语</a><a href="reference.html">实现索引</a></nav>
+<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html" aria-current="page">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
 <main class="doc-content" id="content" tabindex="-1">
-<header class="doc-header"><p class="breadcrumb">执行机制<span aria-hidden="true"> / </span>02</p><h1>执行过程</h1><p class="lead">一次执行（turn）包含输入、模型轮次、工具调用和终态。执行器先取得会话处理权，再根据已保存事件推进状态。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
-<section class="doc-section" id="mental-model"><h2>执行对象</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="对象、作用域、用途"><table><thead><tr><th scope="col">对象</th><th scope="col">作用域</th><th scope="col">用途</th></tr></thead><tbody><tr><td>会话 / session</td><td>连续对话</td><td>历史、锁与输入路由</td></tr><tr><td>执行 / turn</td><td>一次执行生命周期</td><td>审批、模型轮次、预算与终态</td></tr><tr><td>模型轮次 / model step</td><td>一次逻辑模型请求</td><td>构造上下文并取得响应</td></tr><tr><td>网络尝试 / attempt</td><td>一次提供方调用</td><td>重试与备用模型记录</td></tr><tr><td>工具调用 / call</td><td>一组工具名称与参数</td><td>结果配对与操作核对</td></tr><tr><td>流式片段 / delta</td><td>实时呈现</td><td>不作为持久恢复单元</td></tr></tbody></table></div></section>
+<header class="doc-header"><p class="breadcrumb">执行机制<span aria-hidden="true"> / </span>03</p><h1>执行过程</h1><p class="lead">一次执行（turn）包含输入、模型轮次、工具调用和终态。执行器先取得会话处理权，再根据已保存事件推进状态。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<section class="doc-section" id="mental-model"><h2>执行范围</h2><p>一次执行由输入建立开始，到完成、等待、取消或失败终态结束。它可以包含多个模型轮次、网络尝试和工具调用。各标识的含义由<a href="reading-guide.html#terms">概念与标识</a>定义。</p></section>
 <section class="doc-section" id="input"><h2>执行前置条件</h2>
 <ol class="steps"><li>入口确认用户、工作区和会话归属。会话标识本身不是认证凭据。</li><li>执行器取得会话处理权，并检查相同 TurnID 是否已有终态。</li><li>已有终态时，执行器恢复对应结果，不重新执行工具。</li><li>缺少终态时，执行器核对未完成模型请求和工具调用，并确保用户输入已保存。</li></ol>
 <p><code>TurnStarted</code> 与 <code>UserInput</code> 是不同事件。只有开始标记而没有用户输入时，恢复仍需补齐输入。</p></section>
 <section class="doc-section" id="state-machine"><h2>执行状态</h2>
 <div class="table-wrap" role="region" tabindex="0" aria-label="阶段、主要记录、后续动作"><table><thead><tr><th scope="col">阶段</th><th scope="col">主要记录</th><th scope="col">后续动作</th></tr></thead><tbody><tr><td>输入建立</td><td><code>turn_started</code>、<code>user_input</code></td><td>构造上下文</td></tr><tr><td>模型请求</td><td><code>model_request_started</code> 与完成或失败事件</td><td>保存完整模型消息</td></tr><tr><td>工具执行</td><td><code>tool_call_started</code> 与结果事件</td><td>保存结果并继续或结束</td></tr><tr><td>等待</td><td>待输入或待批准终态</td><td>按原调用和身份恢复</td></tr><tr><td>终止</td><td>完成、失败或取消终态</td><td>清理执行范围内状态并返回结果</td></tr></tbody></table></div></section>
 <section class="doc-section" id="context"><h2>上下文构造</h2>
-<p>每轮请求从会话事件生成模型消息。执行器纳入环境、当前输入、有效摘要、历史消息和工具定义，并在派发前检查完整请求预算。</p>
-<p>用户输入中的图片可用于当前执行。<code>durableUserInput</code> 在持久化用户消息时将图片替换为文本说明。工具结果图片另有处理规则，不能推断所有图片都不持久化。</p>
-<p>上下文选择和压缩见<a href="models.html">上下文与模型</a>。</p></section>
+<p>每轮请求从会话事件生成模型消息。执行器纳入环境、当前输入、有效摘要、历史消息和工具定义，并在派发前检查完整请求预算。</p><p>用户输入中的图片可用于当前执行。持久化用户输入时，执行器将这些图片替换为文本说明。工具结果图片另有处理规则。</p><p>完整选择、预算、压缩和读取规则见<a href="context.html">上下文与证据</a>。</p></section>
 <section class="doc-section" id="model"><h2>模型请求</h2>
 <p>执行器依赖统一的 <code>model.Client</code>。产品配置提供的弹性客户端负责提供方重试、备用路径和熔断。一次逻辑请求可以包含多次网络尝试。</p>
 <p>完整模型响应与流式片段分别处理。只有完整工具调用才能进入工具执行；参数片段不触发外部操作。</p></section>
@@ -41,10 +37,7 @@
 <section class="doc-section" id="finish"><h2>执行终态</h2>
 <div class="table-wrap" role="region" tabindex="0" aria-label="类别、触发条件、处理要求"><table><thead><tr><th scope="col">类别</th><th scope="col">触发条件</th><th scope="col">处理要求</th></tr></thead><tbody><tr><td>完成</td><td>模型返回最终答复且没有需要继续处理的输入</td><td>保存答复、用量与终态</td></tr><tr><td>等待输入或批准</td><td>当前执行需要外部输入</td><td>保留请求身份与原始调用</td></tr><tr><td>取消或超时</td><td>取消信号或执行期限触发</td><td>停止继续派发并执行有界清理</td></tr><tr><td>上限或预算耗尽</td><td>轮次、上下文或执行预算不足</td><td>明确结束，不追加一次未计入预算的总结请求</td></tr><tr><td>错误</td><td>模型、工具或存储出现无法继续的错误</td><td>保留分类及可核对的事件</td></tr></tbody></table></div>
 <p>终态写入使用独立的有界清理上下文。终态保存失败属于持久化故障，调用方不能报告持久完成。</p></section>
-<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="依据、位置"><table><thead><tr><th scope="col">依据</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/runner.go">packages/agent/runtime/runner.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/tools.go">packages/agent/runtime/tools.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/recovery_regression_test.go">packages/agent/runtime/recovery_regression_test.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/runtime.md">docs/runtime.md</a></td></tr></tbody></table></div></section>
-</main>
-<aside class="toc" aria-label="本页目录"></aside>
-</div>
-<footer class="site-footer"><span>Kepler 架构文档</span><a href="reading-guide.html">术语</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
-</body>
-</html>
+<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="归属、位置"><table><thead><tr><th scope="col">归属</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/runner.go">packages/agent/runtime/runner.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/tools.go">packages/agent/runtime/tools.go</a></td></tr><tr><td>验证用例</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/recovery_regression_test.go">packages/agent/runtime/recovery_regression_test.go</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/runtime.md">docs/runtime.md</a></td></tr></tbody></table></div></section>
+</main><aside class="toc" aria-label="本页目录"></aside></div>
+<footer class="site-footer"><a href="reading-guide.html">概念与标识</a><a href="reference.html">实现索引</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
+</body></html>

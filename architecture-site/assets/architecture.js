@@ -2,20 +2,87 @@
   const article = document.querySelector('.doc-content');
   if (!article) return;
   const pages = [
-    ['index.html', '系统架构', '系统概述'],
-    ['execution.html', '执行过程', '执行机制'],
-    ['models.html', '上下文与模型', '执行机制'],
-    ['tools.html', '工具与策略', '执行机制'],
-    ['reliability.html', '状态与恢复', '状态与协作'],
-    ['delegation.html', '委派执行', '状态与协作'],
-    ['operations.html', '队列与观测', '运行与恢复'],
-    ['production.html', '故障处理', '运行与恢复'],
-    ['slack.html', 'Slack 接入', '产品接入'],
-    ['web.html', 'Web 接入', '产品接入'],
-    ['local.html', '本地 CLI 与 app-server', '产品接入'],
-    ['reading-guide.html', '术语', '实现参考'],
-    ['reference.html', '实现索引', '实现参考'],
-  ].map(([href, title, group]) => ({ href, title, group }));
+    [
+        "index.html",
+        "系统架构",
+        "系统基础"
+    ],
+    [
+        "reading-guide.html",
+        "概念与标识",
+        "系统基础"
+    ],
+    [
+        "execution.html",
+        "执行过程",
+        "执行机制"
+    ],
+    [
+        "context.html",
+        "上下文与证据",
+        "执行机制"
+    ],
+    [
+        "models.html",
+        "模型协议与重试",
+        "执行机制"
+    ],
+    [
+        "tools.html",
+        "工具与策略",
+        "执行机制"
+    ],
+    [
+        "reliability.html",
+        "持久化与恢复",
+        "状态与数据"
+    ],
+    [
+        "memory.html",
+        "记忆生命周期",
+        "状态与数据"
+    ],
+    [
+        "delegation.html",
+        "任务委派",
+        "调度与协作"
+    ],
+    [
+        "operations.html",
+        "队列与生命周期",
+        "调度与协作"
+    ],
+    [
+        "slack.html",
+        "Slack 接入",
+        "产品边界"
+    ],
+    [
+        "web.html",
+        "Web 接入",
+        "产品边界"
+    ],
+    [
+        "local.html",
+        "本地 CLI 与 app-server",
+        "产品边界"
+    ],
+    [
+        "observability.html",
+        "运行观测",
+        "观测与诊断"
+    ],
+    [
+        "production.html",
+        "故障诊断",
+        "观测与诊断"
+    ],
+    [
+        "reference.html",
+        "实现索引",
+        "实现参考"
+    ]
+].map(([href, title, group]) => ({ href, title, group }));
   const file = location.pathname.split('/').pop() || 'index.html';
   const chapterNav = document.querySelector('.chapter-nav');
   chapterNav.replaceChildren();

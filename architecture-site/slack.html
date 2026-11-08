@@ -5,19 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="Slack 适配器验证平台请求，将线程和消息映射为托管会话，并投递执行结果。模型循环和工具策略由共享核心与托管产品配置负责。">
 <meta name="color-scheme" content="light dark">
-<title>Slack 接入 · Kepler 架构文档</title>
-<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<title>Slack 接入 · 架构文档</title>
 <link rel="stylesheet" href="assets/guide.css">
 <script src="assets/search-index.js" defer></script>
 <script src="assets/architecture.js" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#content">跳到正文</a>
-<header class="site-header"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">K</span><strong>Kepler</strong><span class="brand-label">架构文档</span></a><div class="header-actions"></div></header>
+<header class="site-header"><a class="site-title" href="index.html">架构文档</a><div class="header-actions"></div></header>
 <div class="doc-layout">
-<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="execution.html">执行过程</a><a href="models.html">上下文与模型</a><a href="tools.html">工具与策略</a><a href="reliability.html">状态与恢复</a><a href="delegation.html">委派执行</a><a href="operations.html">队列与观测</a><a href="production.html">故障处理</a><a href="slack.html" aria-current="page">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="reading-guide.html">术语</a><a href="reference.html">实现索引</a></nav>
+<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html" aria-current="page">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
 <main class="doc-content" id="content" tabindex="-1">
-<header class="doc-header"><p class="breadcrumb">产品接入<span aria-hidden="true"> / </span>09</p><h1>Slack 接入</h1><p class="lead">Slack 适配器验证平台请求，将线程和消息映射为托管会话，并投递执行结果。模型循环和工具策略由共享核心与托管产品配置负责。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<header class="doc-header"><p class="breadcrumb">产品边界<span aria-hidden="true"> / </span>11</p><h1>Slack 接入</h1><p class="lead">Slack 适配器验证平台请求，将线程和消息映射为托管会话，并投递执行结果。模型循环和工具策略由共享核心与托管产品配置负责。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
 <section class="doc-section" id="contract"><h2>输入与输出</h2>
 <div class="table-wrap" role="region" tabindex="0" aria-label="输入、适配器处理、输出"><table><thead><tr><th scope="col">输入</th><th scope="col">适配器处理</th><th scope="col">输出</th></tr></thead><tbody><tr><td>签名请求</td><td>按原始请求字节验证签名与访问范围</td><td>可信平台身份和事件</td></tr><tr><td>消息与线程</td><td>映射用户、频道、线程和会话</td><td>规范化执行输入</td></tr><tr><td>执行事件</td><td>合并流式更新并管理最终消息</td><td>Slack 回复与关联记录</td></tr></tbody></table></div></section>
 <section class="doc-section" id="http"><h2>请求验证与持久接收</h2>
@@ -37,10 +36,7 @@
 <p>启动请求结果未知且没有消息标识时，不能直接再发一条来假设原请求失败。投递确认与执行结果分开保存。</p></section>
 <section class="doc-section" id="scenarios"><h2>重复事件与未知投递</h2>
 <div class="table-wrap" role="region" tabindex="0" aria-label="情况、处理边界"><table><thead><tr><th scope="col">情况</th><th scope="col">处理边界</th></tr></thead><tbody><tr><td>平台重发同一事件</td><td>按入口事件身份去重</td></tr><tr><td>旧审批按钮</td><td>按原调用和当前状态重新校验</td></tr><tr><td>投递请求超时</td><td>区分明确拒绝与结果未知</td></tr><tr><td>执行完成但回复失败</td><td>修复投递，不重跑模型与工具</td></tr></tbody></table></div></section>
-<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="依据、位置"><table><thead><tr><th scope="col">依据</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/slack/events">packages/surfaces/slack/events</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/slack/agent/service.go">packages/surfaces/slack/agent/service.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/eventinbox">packages/eventinbox</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/slack.md">docs/slack.md</a></td></tr></tbody></table></div></section>
-</main>
-<aside class="toc" aria-label="本页目录"></aside>
-</div>
-<footer class="site-footer"><span>Kepler 架构文档</span><a href="reading-guide.html">术语</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
-</body>
-</html>
+<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="归属、位置"><table><thead><tr><th scope="col">归属</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/slack/events">packages/surfaces/slack/events</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/slack/agent/service.go">packages/surfaces/slack/agent/service.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/eventinbox">packages/eventinbox</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/slack.md">docs/slack.md</a></td></tr></tbody></table></div></section>
+</main><aside class="toc" aria-label="本页目录"></aside></div>
+<footer class="site-footer"><a href="reading-guide.html">概念与标识</a><a href="reference.html">实现索引</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
+</body></html>

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="上下文是会话事件的有限投影。投影器选择历史、保留完整交互，并将环境、当前图片和工具定义纳入预算。压缩和任务声明不能替代原始证据。">
+<meta name="color-scheme" content="light dark">
+<title>上下文与证据 · 架构文档</title>
+<link rel="stylesheet" href="assets/guide.css">
+<script src="assets/search-index.js" defer></script>
+<script src="assets/architecture.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#content">跳到正文</a>
+<header class="site-header"><a class="site-title" href="index.html">架构文档</a><div class="header-actions"></div></header>
+<div class="doc-layout">
+<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html" aria-current="page">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
+<main class="doc-content" id="content" tabindex="-1">
+<header class="doc-header"><p class="breadcrumb">执行机制<span aria-hidden="true"> / </span>04</p><h1>上下文与证据</h1><p class="lead">上下文是会话事件的有限投影。投影器选择历史、保留完整交互，并将环境、当前图片和工具定义纳入预算。压缩和任务声明不能替代原始证据。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<section class="doc-section" id="request"><h2>请求组成</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="组成、来源、处理规则"><table><thead><tr><th scope="col">组成</th><th scope="col">来源</th><th scope="col">处理规则</th></tr></thead><tbody><tr><td>系统提示</td><td>核心、产品和环境配置</td><td>与动态输入分层</td></tr><tr><td>会话消息</td><td>用户输入、模型消息和工具结果</td><td>从会话事件投影</td></tr><tr><td>当前环境与图片</td><td>本次执行的临时上下文</td><td>参与请求预算</td></tr><tr><td>工具定义</td><td>默认启用和已激活目录</td><td>激活前检查上下文容量</td></tr><tr><td>输出预留</td><td>模型输出上限与安全预留</td><td>派发前计入完整请求</td></tr></tbody></table></div></section>
+<section class="doc-section" id="prompt-layers"><h2>提示分层</h2>
+<p>提示层区分核心规则、产品配置、环境、项目、用户、技能和当前执行。静态层与动态层分别处理缓存。环境专用信息由对应配置提供，不写入共享执行循环。</p>
+<p>提示说明不能替代服务端能力策略、工作区检查或上游权限。加载技能不会自动授予工具权限。</p></section>
+<section class="doc-section" id="projection"><h2>上下文预算</h2>
+<p>每次派发前，执行器检查：消息、环境、当前图片、工具定义、输出预留和安全预留的估算总量不超过上下文窗口。</p>
+<p><code>BoundedProjector</code> 根据事件类型、摘要覆盖点和完整交互分组选择历史。工具调用与结果需要保持配对。当前输入不能因历史裁剪而丢失。</p>
+<aside class="note"><strong>估算限制</strong><p>本地 token 估算不等于提供方 tokenizer。提供方仍可能因协议或实际计数拒绝请求。</p></aside></section>
+<section class="doc-section" id="compaction"><h2>历史遮蔽与压缩</h2>
+<ol class="steps"><li>读取最新有效摘要及其覆盖边界。</li><li>历史过大时，先遮蔽近期完整交互之外的大工具结果，保留预览与证据引用。</li><li>仍超预算时，按完整交互选择可压缩历史。压缩器读取原始证据。</li><li>将摘要作为新事件追加，不覆盖原始会话事件。</li><li>重新投影并检查完整请求。预算仍不满足时，明确返回错误。</li></ol>
+<p><code>context_read</code> 读取当前会话中已记录的工具证据。大结果读取还需验证 artifact 引用的会话和用户作用域。摘要属于历史数据，不能提升为系统指令。</p></section>
+<section class="doc-section" id="evidence"><h2>证据读取与作用域</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="机制、读取对象、作用域"><table><thead><tr><th scope="col">机制</th><th scope="col">读取对象</th><th scope="col">作用域</th></tr></thead><tbody><tr><td><code>context_read</code></td><td>已记录的历史工具内容块</td><td>当前调用的会话</td></tr><tr><td>托管 artifact</td><td>外置的大结果</td><td>会话与用户</td></tr><tr><td>本地 artifact</td><td>会话目录中的受限证据引用</td><td>当前会话及受限文件根</td></tr></tbody></table></div>
+<p>引用不是任意磁盘路径。读取器检查引用、调用作用域和偏移。内容是否可恢复，取决于原始记录或外置存储是否实际保留。</p>
+<p>用户输入图片在原执行中的可见性，不表示恢复时仍有原图。相关持久化规则见<a href="execution.html#context">执行过程</a>。</p></section>
+<section class="doc-section" id="task-state"><h2>任务声明与证据</h2>
+<p>结构化任务状态保存带来源和 revision 的模型声明。它与压缩摘要分别保留，用于连续执行。</p>
+<p>模型声明、任务状态和内容哈希不构成实际完成证明。完成判断仍需对应工具结果、源文件或测试证据；外部副作用未知时需单独核对。</p></section>
+<section class="doc-section" id="limits"><h2>失效与容量边界</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="情况、处理"><table><thead><tr><th scope="col">情况</th><th scope="col">处理</th></tr></thead><tbody><tr><td>摘要覆盖边界无效</td><td>不让摘要隐藏原始历史</td></tr><tr><td>单个当前输入已超预算</td><td>派发前失败，不退回整个上下文窗口</td></tr><tr><td>压缩失败</td><td>只有完整历史仍满足硬预算时才允许继续</td></tr><tr><td>证据引用失效</td><td>明确缺少原始内容，不把预览当作全文</td></tr><tr><td>提供方实际计数不同</td><td>记录请求错误，不能宣称本地估算与提供方完全一致</td></tr></tbody></table></div></section>
+<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="归属、位置"><table><thead><tr><th scope="col">归属</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/context.go">packages/agent/runtime/context.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/transcript">packages/agent/transcript</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/taskstate/state.go">packages/agent/taskstate/state.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/profiles/local/artifacts.go">packages/profiles/local/artifacts.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/profiles/hosted/artifacts.go">packages/profiles/hosted/artifacts.go</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/architecture-deep-dive.md">docs/architecture-deep-dive.md</a></td></tr></tbody></table></div></section>
+</main><aside class="toc" aria-label="本页目录"></aside></div>
+<footer class="site-footer"><a href="reading-guide.html">概念与标识</a><a href="reference.html">实现索引</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
+</body></html>

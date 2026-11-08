@@ -5,19 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="会话事件提供执行恢复依据。任务认领、会话处理权、模型状态和外部操作结果分别维护。恢复必须核对已知记录，并保留无法确认的结果。">
 <meta name="color-scheme" content="light dark">
-<title>状态与恢复 · Kepler 架构文档</title>
-<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<title>持久化与恢复 · 架构文档</title>
 <link rel="stylesheet" href="assets/guide.css">
 <script src="assets/search-index.js" defer></script>
 <script src="assets/architecture.js" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#content">跳到正文</a>
-<header class="site-header"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">K</span><strong>Kepler</strong><span class="brand-label">架构文档</span></a><div class="header-actions"></div></header>
+<header class="site-header"><a class="site-title" href="index.html">架构文档</a><div class="header-actions"></div></header>
 <div class="doc-layout">
-<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="execution.html">执行过程</a><a href="models.html">上下文与模型</a><a href="tools.html">工具与策略</a><a href="reliability.html" aria-current="page">状态与恢复</a><a href="delegation.html">委派执行</a><a href="operations.html">队列与观测</a><a href="production.html">故障处理</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="reading-guide.html">术语</a><a href="reference.html">实现索引</a></nav>
+<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html" aria-current="page">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
 <main class="doc-content" id="content" tabindex="-1">
-<header class="doc-header"><p class="breadcrumb">状态与协作<span aria-hidden="true"> / </span>05</p><h1>状态与恢复</h1><p class="lead">会话事件提供执行恢复依据。任务认领、会话处理权、模型状态和外部操作结果分别维护。恢复必须核对已知记录，并保留无法确认的结果。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<header class="doc-header"><p class="breadcrumb">状态与数据<span aria-hidden="true"> / </span>07</p><h1>持久化与恢复</h1><p class="lead">会话事件提供执行恢复依据。任务认领、会话处理权、模型状态和外部操作结果分别维护。恢复必须核对已知记录，并保留无法确认的结果。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
 <section class="doc-section" id="authority"><h2>权威记录与派生状态</h2>
 <div class="table-wrap" role="region" tabindex="0" aria-label="状态、权威来源、恢复方式"><table><thead><tr><th scope="col">状态</th><th scope="col">权威来源</th><th scope="col">恢复方式</th></tr></thead><tbody><tr><td>对话与执行</td><td>只追加的会话事件</td><td>加载消息、调用与终态</td></tr><tr><td>待处理工作</td><td>持久入口和追加输入队列</td><td>按认领、租约和确认状态接管</td></tr><tr><td>当前上下文</td><td>投影器与有效摘要</td><td>从事件和临时输入重建</td></tr><tr><td>运行列表与步骤</td><td>执行事件的查询投影</td><td>从事件重建，不反向决定执行事实</td></tr><tr><td>实时界面</td><td>流式片段与呈现状态</td><td>重连或最终投递，不重跑已完成操作</td></tr></tbody></table></div></section>
 <section class="doc-section" id="ownership"><h2>处理权</h2>
@@ -37,14 +36,7 @@
 <section class="doc-section" id="recovery"><h2>恢复对账</h2>
 <ol class="steps"><li>取得当前会话处理权。</li><li>加载当前执行的事件、终态和累计预算。</li><li>复用已经保存的结果。</li><li>区分未开始的工具调用和结果未知的已开始调用。</li><li>恢复输入、作用域和允许继续的状态。</li><li>按剩余预算继续执行，或保存明确终态。</li></ol>
 <aside class="note"><strong>保证范围</strong><p>会话锁和事件去重不提供跨系统 exactly-once。只有下游实际支持并执行幂等约束时，稳定执行标识才能减少重复副作用。</p></aside></section>
-<section class="doc-section" id="memory"><h2>显式记忆与数据生命周期</h2>
-<p>托管显式记忆按认证的工作区和用户划分。本地项目记忆按规范化工作区划分。模型参数不能选择其他用户的记忆归属。</p>
-<p>重置记忆会推进 generation，阻止旧执行把已经清理的内容写回。删除记忆不删除会话历史、规则、连接凭据或外部追踪。</p>
-<p>记忆检索、过期和版本检查由记忆模块维护。自动记忆提取与后台整理不能仅凭设计文档中的计划描述为已启用行为。</p></section>
-<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="依据、位置"><table><thead><tr><th scope="col">依据</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/session/pgstore.go">packages/session/pgstore.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/profiles/hosted/pgtranscript.go">packages/profiles/hosted/pgtranscript.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/profiles/local">packages/profiles/local</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/recovery_regression_test.go">packages/agent/runtime/recovery_regression_test.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/architecture-deep-dive.md">docs/architecture-deep-dive.md</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/memory/store.go">packages/memory/store.go</a></td></tr></tbody></table></div></section>
-</main>
-<aside class="toc" aria-label="本页目录"></aside>
-</div>
-<footer class="site-footer"><span>Kepler 架构文档</span><a href="reading-guide.html">术语</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
-</body>
-</html>
+<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="归属、位置"><table><thead><tr><th scope="col">归属</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/session/pgstore.go">packages/session/pgstore.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/profiles/hosted/pgtranscript.go">packages/profiles/hosted/pgtranscript.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/profiles/local">packages/profiles/local</a></td></tr><tr><td>验证用例</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/recovery_regression_test.go">packages/agent/runtime/recovery_regression_test.go</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/architecture-deep-dive.md">docs/architecture-deep-dive.md</a></td></tr></tbody></table></div></section>
+</main><aside class="toc" aria-label="本页目录"></aside></div>
+<footer class="site-footer"><a href="reading-guide.html">概念与标识</a><a href="reference.html">实现索引</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
+</body></html>

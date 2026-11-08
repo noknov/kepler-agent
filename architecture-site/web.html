@@ -5,19 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="Web 提供经认证的会话界面。托管工作进程执行模型与工具，浏览器接收事件并呈现结果。Web 使用自己的会话归属、队列准入和恢复规则。">
 <meta name="color-scheme" content="light dark">
-<title>Web 接入 · Kepler 架构文档</title>
-<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<title>Web 接入 · 架构文档</title>
 <link rel="stylesheet" href="assets/guide.css">
 <script src="assets/search-index.js" defer></script>
 <script src="assets/architecture.js" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#content">跳到正文</a>
-<header class="site-header"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">K</span><strong>Kepler</strong><span class="brand-label">架构文档</span></a><div class="header-actions"></div></header>
+<header class="site-header"><a class="site-title" href="index.html">架构文档</a><div class="header-actions"></div></header>
 <div class="doc-layout">
-<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="execution.html">执行过程</a><a href="models.html">上下文与模型</a><a href="tools.html">工具与策略</a><a href="reliability.html">状态与恢复</a><a href="delegation.html">委派执行</a><a href="operations.html">队列与观测</a><a href="production.html">故障处理</a><a href="slack.html">Slack 接入</a><a href="web.html" aria-current="page">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="reading-guide.html">术语</a><a href="reference.html">实现索引</a></nav>
+<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="web.html" aria-current="page">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
 <main class="doc-content" id="content" tabindex="-1">
-<header class="doc-header"><p class="breadcrumb">产品接入<span aria-hidden="true"> / </span>10</p><h1>Web 接入</h1><p class="lead">Web 提供经认证的会话界面。托管工作进程执行模型与工具，浏览器接收事件并呈现结果。Web 使用自己的会话归属、队列准入和恢复规则。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<header class="doc-header"><p class="breadcrumb">产品边界<span aria-hidden="true"> / </span>12</p><h1>Web 接入</h1><p class="lead">Web 提供经认证的会话界面。托管工作进程执行模型与工具，浏览器接收事件并呈现结果。Web 使用自己的会话归属、队列准入和恢复规则。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
 <section class="doc-section" id="boundary"><h2>服务职责</h2>
 <div class="table-wrap" role="region" tabindex="0" aria-label="组件、职责"><table><thead><tr><th scope="col">组件</th><th scope="col">职责</th></tr></thead><tbody><tr><td>网关</td><td>公开入口与请求转发</td></tr><tr><td>Web 认证</td><td>Slack OIDC 回调、浏览器会话及用户身份</td></tr><tr><td>会话服务</td><td>会话归属、输入保存、准入与恢复</td></tr><tr><td>共享执行器</td><td>上下文、模型、工具与终态</td></tr><tr><td>浏览器</td><td>请求提交、事件接收和界面状态</td></tr></tbody></table></div></section>
 <section class="doc-section" id="identity"><h2>认证与会话归属</h2>
@@ -35,10 +34,7 @@
 <section class="doc-section" id="verification"><h2>验证范围</h2>
 <p>现有测试覆盖认证、会话控制、终态失败、恢复和浏览器交互。界面可打开不代表模型、用户集成或流式链路可用。</p>
 <p>实际验证需要包含登录、会话提交、消息重连和一次真实模型响应。</p></section>
-<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="依据、位置"><table><thead><tr><th scope="col">依据</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/web/auth.go">packages/surfaces/web/auth.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/web/conversation.go">packages/surfaces/web/conversation.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/web/recovery_regression_test.go">packages/surfaces/web/recovery_regression_test.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/web/tests/conversation.test.mjs">packages/surfaces/web/tests/conversation.test.mjs</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/operations.md">docs/operations.md</a></td></tr></tbody></table></div></section>
-</main>
-<aside class="toc" aria-label="本页目录"></aside>
-</div>
-<footer class="site-footer"><span>Kepler 架构文档</span><a href="reading-guide.html">术语</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
-</body>
-</html>
+<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="归属、位置"><table><thead><tr><th scope="col">归属</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/web/auth.go">packages/surfaces/web/auth.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/web/conversation.go">packages/surfaces/web/conversation.go</a></td></tr><tr><td>验证用例</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/web/recovery_regression_test.go">packages/surfaces/web/recovery_regression_test.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/surfaces/web/tests/conversation.test.mjs">packages/surfaces/web/tests/conversation.test.mjs</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/operations.md">docs/operations.md</a></td></tr></tbody></table></div></section>
+</main><aside class="toc" aria-label="本页目录"></aside></div>
+<footer class="site-footer"><a href="reading-guide.html">概念与标识</a><a href="reference.html">实现索引</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
+</body></html>

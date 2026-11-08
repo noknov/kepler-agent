@@ -33,6 +33,9 @@ const server = http.createServer((req,res) => {
       for (const file of files) {
         await page.goto(`${origin}/${file}`);
         assert.equal(await page.locator('h1').count(),1,file);
+        assert.equal(await page.locator('.site-header img, .site-header svg, .brand, .brand-mark').count(),0,file);
+        assert.doesNotMatch(await page.locator('body').innerText(), /\bKepler\b/i, file);
+        assert.doesNotMatch(await page.title(), /\bKepler\b/i, file);
         assert.equal(await page.locator('.chapter-nav [aria-current="page"]').count(),1,file);
         assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`${file}: overflow at ${width}`);
         const missing=await page.evaluate(()=>[...document.querySelectorAll('a[href^="#"]')].filter(a=>!document.getElementById(a.hash.slice(1))).map(a=>a.href));
@@ -42,7 +45,7 @@ const server = http.createServer((req,res) => {
     }
     await page.setViewportSize({width:1440,height:1000});
     await page.goto(`${origin}/index.html`);
-    if (process.env.SITE_SCREENSHOTS) await page.screenshot({path:path.join(process.env.SITE_SCREENSHOTS,'kepler-docs-light.png')});
+    if (process.env.SITE_SCREENSHOTS) await page.screenshot({path:path.join(process.env.SITE_SCREENSHOTS,'architecture-light.png')});
     await page.locator('.search-trigger').click();
     await page.locator('.search-input').fill('工具 权限');
     assert.ok(await page.locator('.search-results a').count()>0);
@@ -50,6 +53,8 @@ const server = http.createServer((req,res) => {
     assert.equal(await page.locator('.search-dialog').evaluate(d=>d.open),false);
     assert.equal(await page.locator('.search-trigger').evaluate(e=>e===document.activeElement),true);
     await page.keyboard.press('/');
+    await page.locator('.search-input').fill('记忆生命周期');
+    assert.match(await page.locator('.search-results a').first().getAttribute('href'), /^memory\.html#/);
     await page.locator('.search-input').fill('JSONL');
     assert.ok(await page.locator('.search-results a').count()>0);
     const href=await page.locator('.search-results a').first().getAttribute('href');
@@ -62,7 +67,7 @@ const server = http.createServer((req,res) => {
     await page.locator('.theme-toggle').click(); assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');
     for (const file of files) { await page.goto(`${origin}/${file}`); assert.equal(await page.locator('html').getAttribute('data-theme'),'dark'); }
     await page.goto(`${origin}/index.html`);
-    if (process.env.SITE_SCREENSHOTS) await page.screenshot({path:path.join(process.env.SITE_SCREENSHOTS,'kepler-docs-dark.png')});
+    if (process.env.SITE_SCREENSHOTS) await page.screenshot({path:path.join(process.env.SITE_SCREENSHOTS,'architecture-dark.png')});
     await page.locator('.toc a[href="#products"]').click();
     await page.waitForFunction(()=>document.querySelector('.toc [aria-current="location"]')?.getAttribute('href') === '#products');
     assert.equal(await page.locator('.toc [aria-current="location"]').getAttribute('href'),'#products');
@@ -70,7 +75,7 @@ const server = http.createServer((req,res) => {
     await page.waitForFunction(()=>document.querySelector('.toc [aria-current="location"]')?.getAttribute('href') === '#source');
     assert.equal(await page.locator('.toc [aria-current="location"]').getAttribute('href'),'#source');
     await page.setViewportSize({width:390,height:844}); await page.goto(`${origin}/index.html`); await page.locator('.theme-toggle').click();
-    if (process.env.SITE_SCREENSHOTS) await page.screenshot({path:path.join(process.env.SITE_SCREENSHOTS,'kepler-docs-mobile.png')});
+    if (process.env.SITE_SCREENSHOTS) await page.screenshot({path:path.join(process.env.SITE_SCREENSHOTS,'architecture-mobile.png')});
     await page.locator('.menu-trigger').click(); assert.equal(await page.locator('.mobile-dialog').evaluate(d=>d.open),true);
     await page.keyboard.press('Escape'); assert.equal(await page.locator('.menu-trigger').evaluate(e=>e===document.activeElement),true);
     await page.locator('.menu-trigger').click(); await page.locator('.mobile-chapters a[href="web.html"]').click(); await page.waitForURL('**/web.html');

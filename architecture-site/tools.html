@@ -5,19 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="模型提出工具调用。执行器检查调用身份、能力策略和实际作用域后，调度工具并保存结果。工具可见性、用户确认和执行权限是独立条件。">
 <meta name="color-scheme" content="light dark">
-<title>工具与策略 · Kepler 架构文档</title>
-<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<title>工具与策略 · 架构文档</title>
 <link rel="stylesheet" href="assets/guide.css">
 <script src="assets/search-index.js" defer></script>
 <script src="assets/architecture.js" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#content">跳到正文</a>
-<header class="site-header"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">K</span><strong>Kepler</strong><span class="brand-label">架构文档</span></a><div class="header-actions"></div></header>
+<header class="site-header"><a class="site-title" href="index.html">架构文档</a><div class="header-actions"></div></header>
 <div class="doc-layout">
-<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="execution.html">执行过程</a><a href="models.html">上下文与模型</a><a href="tools.html" aria-current="page">工具与策略</a><a href="reliability.html">状态与恢复</a><a href="delegation.html">委派执行</a><a href="operations.html">队列与观测</a><a href="production.html">故障处理</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="reading-guide.html">术语</a><a href="reference.html">实现索引</a></nav>
+<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html" aria-current="page">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
 <main class="doc-content" id="content" tabindex="-1">
-<header class="doc-header"><p class="breadcrumb">执行机制<span aria-hidden="true"> / </span>04</p><h1>工具与策略</h1><p class="lead">模型提出工具调用。执行器检查调用身份、能力策略和实际作用域后，调度工具并保存结果。工具可见性、用户确认和执行权限是独立条件。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<header class="doc-header"><p class="breadcrumb">执行机制<span aria-hidden="true"> / </span>06</p><h1>工具与策略</h1><p class="lead">模型提出工具调用。执行器检查调用身份、能力策略和实际作用域后，调度工具并保存结果。工具可见性、用户确认和执行权限是独立条件。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
 <section class="doc-section" id="descriptors"><h2>工具声明</h2>
 <div class="table-wrap" role="region" tabindex="0" aria-label="声明、含义、限制"><table><thead><tr><th scope="col">声明</th><th scope="col">含义</th><th scope="col">限制</th></tr></thead><tbody><tr><td>名称与参数</td><td>稳定调用身份及输入结构</td><td>模型生成的参数仍需验证</td></tr><tr><td>效果 / effects</td><td>读、写、网络或特权影响</td><td>用于策略决策，不能从检索结果猜测</td></tr><tr><td>可见性 / exposure</td><td>默认启用、延迟发现或关闭</td><td>只控制目录可见性</td></tr><tr><td>并发属性</td><td>是否允许安全并行</td><td>修改共享资源的工具不能错误声明为只读并行</td></tr><tr><td>作用域 / scope</td><td>服务端提供的会话、用户和工作区身份</td><td>不能由模型参数替换</td></tr></tbody></table></div></section>
 <section class="doc-section" id="discovery"><h2>发现与激活</h2>
@@ -42,10 +41,7 @@
 <section class="doc-section" id="mcp"><h2>MCP 连接与信任边界</h2>
 <p>MCP 路由器使用配置、凭据指纹和调用作用域选择会话。凭据变化、租户变化或缓存到期后，需要重新握手。缓存不能替代调用授权。</p>
 <p>远端 readOnlyHint 是工具声明，不是已验证的实际行为。未知工具写入失败不能因连接重建而透明重发。执行隔离、出站网络策略和凭据范围需要分别成立。</p></section>
-<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="依据、位置"><table><thead><tr><th scope="col">依据</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/tool">packages/agent/tool</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/tools.go">packages/agent/runtime/tools.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/circuit.go">packages/agent/runtime/circuit.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/circuit_test.go">packages/agent/runtime/circuit_test.go</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/tools.md">docs/tools.md</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/safety.md">docs/safety.md</a></td></tr></tbody></table></div></section>
-</main>
-<aside class="toc" aria-label="本页目录"></aside>
-</div>
-<footer class="site-footer"><span>Kepler 架构文档</span><a href="reading-guide.html">术语</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
-</body>
-</html>
+<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="归属、位置"><table><thead><tr><th scope="col">归属</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/tool">packages/agent/tool</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/tools.go">packages/agent/runtime/tools.go</a></td></tr><tr><td>实现</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/circuit.go">packages/agent/runtime/circuit.go</a></td></tr><tr><td>验证用例</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/packages/agent/runtime/circuit_test.go">packages/agent/runtime/circuit_test.go</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/tools.md">docs/tools.md</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/safety.md">docs/safety.md</a></td></tr></tbody></table></div></section>
+</main><aside class="toc" aria-label="本页目录"></aside></div>
+<footer class="site-footer"><a href="reading-guide.html">概念与标识</a><a href="reference.html">实现索引</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
+</body></html>

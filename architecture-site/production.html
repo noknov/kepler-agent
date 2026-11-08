@@ -3,43 +3,35 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="故障处理以持久记录和实际依赖状态为依据。先定位接收、执行、外部操作或投递中的失败位置，再选择对应恢复动作。">
+<meta name="description" content="诊断先核对失败位置和持久记录，再选择恢复动作。已完成的执行、结果未知的外部操作和投递失败需要不同处理。">
 <meta name="color-scheme" content="light dark">
-<title>故障处理 · Kepler 架构文档</title>
-<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<title>故障诊断 · 架构文档</title>
 <link rel="stylesheet" href="assets/guide.css">
 <script src="assets/search-index.js" defer></script>
 <script src="assets/architecture.js" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#content">跳到正文</a>
-<header class="site-header"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">K</span><strong>Kepler</strong><span class="brand-label">架构文档</span></a><div class="header-actions"></div></header>
+<header class="site-header"><a class="site-title" href="index.html">架构文档</a><div class="header-actions"></div></header>
 <div class="doc-layout">
-<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="execution.html">执行过程</a><a href="models.html">上下文与模型</a><a href="tools.html">工具与策略</a><a href="reliability.html">状态与恢复</a><a href="delegation.html">委派执行</a><a href="operations.html">队列与观测</a><a href="production.html" aria-current="page">故障处理</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="reading-guide.html">术语</a><a href="reference.html">实现索引</a></nav>
+<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html" aria-current="page">故障诊断</a><a href="reference.html">实现索引</a></nav>
 <main class="doc-content" id="content" tabindex="-1">
-<header class="doc-header"><p class="breadcrumb">运行与恢复<span aria-hidden="true"> / </span>08</p><h1>故障处理</h1><p class="lead">故障处理以持久记录和实际依赖状态为依据。先定位接收、执行、外部操作或投递中的失败位置，再选择对应恢复动作。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
-<section class="doc-section" id="clocks"><h2>期限与处理权</h2>
-<div class="table-wrap" role="region" tabindex="0" aria-label="期限或锁、保护对象、到期或失效后的处理"><table><thead><tr><th scope="col">期限或锁</th><th scope="col">保护对象</th><th scope="col">到期或失效后的处理</th></tr></thead><tbody><tr><td>入口响应期限</td><td>平台请求接收</td><td>避免等待完整模型执行后才响应</td></tr><tr><td>任务认领租约</td><td>当前队列处理者</td><td>按所有者和到期条件接管</td></tr><tr><td>会话执行锁</td><td>同一历史的执行顺序</td><td>取消旧执行者并重新对账</td></tr><tr><td>执行 deadline</td><td>模型、工具和子任务</td><td>停止继续派发并清理</td></tr><tr><td>关闭宽限期</td><td>已经接收的工作</td><td>到期后取消并进行有界收尾</td></tr></tbody></table></div></section>
+<header class="doc-header"><p class="breadcrumb">观测与诊断<span aria-hidden="true"> / </span>15</p><h1>故障诊断</h1><p class="lead">诊断先核对失败位置和持久记录，再选择恢复动作。已完成的执行、结果未知的外部操作和投递失败需要不同处理。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
 <section class="doc-section" id="windows"><h2>执行与投递的故障边界</h2>
 <div class="table-wrap" role="region" tabindex="0" aria-label="现象、核对记录、处理"><table><thead><tr><th scope="col">现象</th><th scope="col">核对记录</th><th scope="col">处理</th></tr></thead><tbody><tr><td>入口已确认但无答复</td><td>收件箱认领、会话事件、终态、投递记录</td><td>区分尚未执行与已执行但投递失败</td></tr><tr><td>模型输出后断流</td><td>网络尝试、输出提交和完整消息</td><td>不从头透明重放另一份答案</td></tr><tr><td>工具超时且无结果</td><td>工具开始、执行标识与下游状态</td><td>保留未知，查询实际结果后决定重试</td></tr><tr><td>运行列表缺少步骤</td><td>权威事件与投影状态</td><td>恢复投影，不重跑工具</td></tr></tbody></table></div></section>
-<section class="doc-section" id="capacity"><h2>资源与背压</h2>
-<p>检查入口积压、活跃执行、数据库等待、模型限流和投递积压的同一时间窗口。单独增加工作进程可能放大下游压力。</p>
-<p>重试必须受剩余期限和尝试预算限制。临时限流与永久权限或配额错误需要不同处理。</p></section>
+<section class="doc-section" id="clocks"><h2>期限与处理权</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="期限或锁、保护对象、到期或失效后的处理"><table><thead><tr><th scope="col">期限或锁</th><th scope="col">保护对象</th><th scope="col">到期或失效后的处理</th></tr></thead><tbody><tr><td>入口响应期限</td><td>平台请求接收</td><td>避免等待完整模型执行后才响应</td></tr><tr><td>任务认领租约</td><td>当前队列处理者</td><td>按所有者和到期条件接管</td></tr><tr><td>会话执行锁</td><td>同一历史的执行顺序</td><td>取消旧执行者并重新对账</td></tr><tr><td>执行 deadline</td><td>模型、工具和子任务</td><td>停止继续派发并清理</td></tr><tr><td>关闭宽限期</td><td>已经接收的工作</td><td>到期后取消并进行有界收尾</td></tr></tbody></table></div></section>
+<section class="doc-section" id="resources"><h2>积压与资源等待</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="现象、检查对象、处理依据"><table><thead><tr><th scope="col">现象</th><th scope="col">检查对象</th><th scope="col">处理依据</th></tr></thead><tbody><tr><td>任务长期未被执行</td><td>持久接收、认领、准入和可用工作进程</td><td>定位工作是否已被接受及谁在处理</td></tr><tr><td>模型持续限流</td><td>错误分类、实际尝试数和退避</td><td>按提供方限制降低实际请求压力</td></tr><tr><td>工具等待增长</td><td>工具并发、连接池和下游配额</td><td>调整实际受限资源，而不是同时放大所有上限</td></tr><tr><td>界面无更新</td><td>权威终态、事件流与最终投递</td><td>分离执行恢复与呈现恢复</td></tr></tbody></table></div></section>
 <section class="doc-section" id="incidents"><h2>诊断依据</h2>
 <ul><li>记录会话、执行、网络尝试和工具调用标识，避免混用不同层级的 ID。</li><li>记录应用与配置版本、时间、错误分类和相关脱敏日志。</li><li>先验证依赖与状态，再执行恢复。不要把重启作为所有故障的默认处理。</li><li>同一次未知外部写入需要下游证据，模型报告或哈希本身不能证明完成。</li></ul></section>
-<section class="doc-section" id="security"><h2>权限与数据边界</h2>
-<p>托管写能力由操作员配置。用户批准不能扩大服务端允许范围。模型输入、摘要、子任务报告和外部内容不能修改身份或权限。</p>
-<p>凭据、历史、显式记忆、工作区文件和外部追踪分别管理。清理其中一项，不表示其他数据也已删除。</p></section>
 <section class="doc-section" id="release"><h2>Schema 与发布</h2>
 <ol class="steps"><li>记录应用和配置版本，核对增量迁移兼容性。</li><li>验证备份可恢复，再应用所需迁移。</li><li>启动匹配的应用版本，检查服务依赖和真实请求。</li><li>故障回退时，分别评估代码、数据库与已产生的新数据。</li></ol>
-<p>应用运行时不执行 DDL。新装 schema 与增量迁移不是同一种升级方式。具体部署命令由 <code>kepler-agent-deploy</code> 维护。</p></section>
+<p>应用运行时不执行 DDL。新装 schema 与增量迁移不是同一种升级方式。具体部署命令由 部署仓库 维护。</p></section>
 <section class="doc-section" id="verification"><h2>验证范围</h2>
 <div class="table-wrap" role="region" tabindex="0" aria-label="验证、覆盖范围"><table><thead><tr><th scope="col">验证</th><th scope="col">覆盖范围</th></tr></thead><tbody><tr><td>单元与契约测试</td><td>对应输入、状态转换和边界</td></tr><tr><td>数据库与 Redis 集成测试</td><td>显式测试存储上的持久行为</td></tr><tr><td>沙箱测试</td><td>当前操作系统上的访问限制</td></tr><tr><td>真实模型与产品请求</td><td>实际凭据、路由、模型和投递</td></tr><tr><td>备份恢复演练</td><td>指定备份在隔离目标中的数据恢复</td></tr></tbody></table></div>
 <p>构建成功不等于真实请求成功。健康检查不等于完整业务验证。不同产品的验证结果不能直接互相替代。</p></section>
-<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="依据、位置"><table><thead><tr><th scope="col">依据</th><th scope="col">位置</th></tr></thead><tbody><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/operations.md">docs/operations.md</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/safety.md">docs/safety.md</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/development.md">docs/development.md</a></td></tr><tr><td>实现与所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/architecture-deep-dive.md">docs/architecture-deep-dive.md</a></td></tr></tbody></table></div></section>
-</main>
-<aside class="toc" aria-label="本页目录"></aside>
-</div>
-<footer class="site-footer"><span>Kepler 架构文档</span><a href="reading-guide.html">术语</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
-</body>
-</html>
+<section class="doc-section sources" id="source"><h2>实现依据</h2><div class="table-wrap" role="region" tabindex="0" aria-label="归属、位置"><table><thead><tr><th scope="col">归属</th><th scope="col">位置</th></tr></thead><tbody><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/operations.md">docs/operations.md</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/safety.md">docs/safety.md</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/development.md">docs/development.md</a></td></tr><tr><td>所属说明</td><td><a href="https://github.com/noknov/kepler-agent/blob/35995459c70ec3059e15fbbb7e68119f360af74d/docs/architecture-deep-dive.md">docs/architecture-deep-dive.md</a></td></tr></tbody></table></div></section>
+</main><aside class="toc" aria-label="本页目录"></aside></div>
+<footer class="site-footer"><a href="reading-guide.html">概念与标识</a><a href="reference.html">实现索引</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
+</body></html>
