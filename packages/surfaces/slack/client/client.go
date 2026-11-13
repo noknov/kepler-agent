@@ -414,8 +414,10 @@ func (c *Client) UpdateView(ctx context.Context, viewID string, view map[string]
 
 func (c *Client) StartStream(ctx context.Context, request slackconversation.StreamStart) (string, error) {
 	payload := map[string]any{
-		"channel":   request.Channel,
-		"thread_ts": request.ThreadTS,
+		"channel": request.Channel,
+	}
+	if request.ThreadTS != "" {
+		payload["thread_ts"] = request.ThreadTS
 	}
 	if request.TaskDisplayMode != "" {
 		payload["task_display_mode"] = request.TaskDisplayMode
@@ -493,13 +495,15 @@ func (c *Client) StopStream(ctx context.Context, channel, messageTS string) erro
 	return nil
 }
 
-// SetAgentSessionStatus updates the lifecycle state for a thread-based Slack
+// SetAgentSessionStatus updates the lifecycle state for a thread or code-channel Slack
 // agent session. initiatorUserID is used only when Slack creates the session.
 func (c *Client) SetAgentSessionStatus(ctx context.Context, channel, threadTS, initiatorUserID, status string) error {
 	payload := map[string]any{
 		"channel_id": channel,
-		"thread_ts":  threadTS,
 		"status":     status,
+	}
+	if threadTS != "" {
+		payload["thread_ts"] = threadTS
 	}
 	if initiatorUserID != "" {
 		payload["initiator_user_id"] = initiatorUserID

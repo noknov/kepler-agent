@@ -22,6 +22,17 @@ import (
 )
 
 func TestIntegrationCrossWorkerSteerAndQueue(t *testing.T) {
+	for _, kind := range []slackconversation.SessionKind{slackconversation.ThreadSession, slackconversation.CodeChannelSession} {
+		name := "thread"
+		if kind == slackconversation.CodeChannelSession {
+			name = "code_channel"
+		}
+		t.Run(name, func(t *testing.T) { integrationCrossWorkerSteerAndQueue(t, kind) })
+	}
+}
+
+func integrationCrossWorkerSteerAndQueue(t *testing.T, kind slackconversation.SessionKind) {
+	t.Helper()
 	url := os.Getenv("REDIS_TEST_URL")
 	if url == "" {
 		t.Skip("REDIS_TEST_URL is not set")
@@ -41,7 +52,12 @@ func TestIntegrationCrossWorkerSteerAndQueue(t *testing.T) {
 	}
 	defer pool.Close()
 	inputs := sessioninput.NewPGStore(pool)
-	sessionID := "integration-control-" + time.Now().UTC().Format("20060102150405.000000000")
+	channel := "Cintegration-control-" + time.Now().UTC().Format("20060102150405.000000000")
+	thread := "T"
+	if kind == slackconversation.CodeChannelSession {
+		thread = ""
+	}
+	sessionID := (slackconversation.Target{Kind: kind, Channel: channel, ThreadTS: thread}).SessionID()
 	defer func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM agent_session_inputs WHERE session_id=$1`, sessionID)
 	}()
@@ -58,7 +74,7 @@ func TestIntegrationCrossWorkerSteerAndQueue(t *testing.T) {
 	peer := New(hosted.Agent{}, &fakeMessenger{}, safety.PromptPolicy{}, safety.Redactor{}, nil)
 	peer.Redis, peer.PodID, peer.Inputs = client, "peer", inputs
 
-	steer := slackconversation.Request{EventID: "steer", UserID: "U1", ThreadTS: "T", Text: "look at redis"}
+	steer := slackconversation.Request{EventID: "steer", UserID: "U1", SessionKind: kind, Channel: channel, ThreadTS: thread, Text: "look at redis"}
 	eventuallyControl(t, func() bool {
 		ok, err := peer.controlActive(context.Background(), sessionID, steer)
 		return err == nil && ok
@@ -68,7 +84,7 @@ func TestIntegrationCrossWorkerSteerAndQueue(t *testing.T) {
 	if err := active.steering.Ack(ctx, "steer"); err != nil {
 		t.Fatal(err)
 	}
-	other := slackconversation.Request{EventID: sessionID + "-other", UserID: "U2", ThreadTS: "T", Text: "use my account"}
+	other := slackconversation.Request{EventID: sessionID + "-other", UserID: "U2", SessionKind: kind, Channel: channel, ThreadTS: thread, Text: "use my account"}
 	if ok, err := peer.controlActive(context.Background(), sessionID, other); err != nil || !ok {
 		t.Fatalf("other actor accepted=%v err=%v", ok, err)
 	}
@@ -84,7 +100,7 @@ func TestIntegrationCrossWorkerSteerAndQueue(t *testing.T) {
 	}
 
 	peer.ModeForUser = func(string) ConversationMode { return ModeQueue }
-	queued := slackconversation.Request{EventID: "queue", UserID: "U1", ThreadTS: "T", Text: "then inspect postgres"}
+	queued := slackconversation.Request{EventID: "queue", UserID: "U1", SessionKind: kind, Channel: channel, ThreadTS: thread, Text: "then inspect postgres"}
 	if ok, err := peer.controlActive(context.Background(), sessionID, queued); err != nil || !ok {
 		t.Fatal("cross-worker queue was not accepted")
 	}

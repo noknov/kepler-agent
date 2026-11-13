@@ -11,7 +11,6 @@ import (
 
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/connections"
-	"github.com/noknov/kepler-agent/packages/session"
 	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
 
@@ -174,7 +173,7 @@ func (s *slackStream) requestApproval(event transcript.Event) {
 		return
 	}
 	call := event.ToolCall
-	value, err := json.Marshal(map[string]string{"session_id": session.ID(s.req.Channel, s.req.ThreadTS), "turn_id": event.TurnID, "tool_call_id": call.ID})
+	value, err := json.Marshal(map[string]string{"session_id": s.req.Target().SessionID(), "turn_id": event.TurnID, "tool_call_id": call.ID})
 	if err != nil {
 		return
 	}

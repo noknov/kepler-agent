@@ -317,14 +317,14 @@ func TestQueuedInputSurvivesServiceReplacement(t *testing.T) {
 	inputs := &memoryInputs{}
 	first := New(hosted.Agent{}, &fakeMessenger{}, safety.PromptPolicy{}, safety.Redactor{}, nil)
 	first.Inputs = inputs
-	request := slackconversation.Request{EventID: "event-queued", UserID: "U1", Text: "follow up"}
-	if err := first.persistInput(context.Background(), "session", sessioninput.KindQueue, request); err != nil {
+	request := slackconversation.Request{EventID: "event-queued", UserID: "U1", Channel: "C", ThreadTS: "T", Text: "follow up"}
+	if err := first.persistInput(context.Background(), request.Target().SessionID(), sessioninput.KindQueue, request); err != nil {
 		t.Fatal(err)
 	}
 
 	second := New(hosted.Agent{}, &fakeMessenger{}, safety.PromptPolicy{}, safety.Redactor{}, nil)
 	second.Inputs = inputs
-	queued, err := second.claimNextQueue(context.Background(), "session")
+	queued, err := second.claimNextQueue(context.Background(), request.Target().SessionID())
 	if err != nil || queued == nil || queued.EventID != request.EventID {
 		t.Fatalf("queued=%+v err=%v", queued, err)
 	}
@@ -401,7 +401,7 @@ func TestQueuedApprovalUsesTheDequeuedActorAndDecision(t *testing.T) {
 	ctx := context.Background()
 	store := transcript.NewMemoryStore()
 	call := tool.Call{ID: "pending", Name: "write", Scope: tool.Scope{UserID: "U1"}, Arguments: json.RawMessage(`{}`)}
-	_, err := store.Append(ctx, transcript.Event{SessionID: "s", TurnID: "original", Type: transcript.ApprovalRequested, ToolCall: &call})
+	_, err := store.Append(ctx, transcript.Event{SessionID: session.ID("C1", "T1"), TurnID: "original", Type: transcript.ApprovalRequested, ToolCall: &call})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -414,14 +414,14 @@ func TestQueuedApprovalUsesTheDequeuedActorAndDecision(t *testing.T) {
 	service := New(hosted.Agent{Runtime: runner}, &fakeMessenger{}, safety.PromptPolicy{}, safety.Redactor{}, nil)
 	service.Inputs = &memoryInputs{}
 	queued := slackconversation.Request{EventID: "decision", UserID: "U2", Channel: "C1", ThreadTS: "T1", Approval: &slackconversation.ApprovalRequest{TurnID: "original", ToolCallID: "pending", Approved: false}}
-	if err := service.persistInput(ctx, "s", sessioninput.KindQueue, queued); err != nil {
+	if err := service.persistInput(ctx, session.ID("C1", "T1"), sessioninput.KindQueue, queued); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := service.claimNextQueue(ctx, "s")
+	claimed, err := service.claimNextQueue(ctx, session.ID("C1", "T1"))
 	if err != nil || claimed == nil {
 		t.Fatalf("claim queued approval: %v", err)
 	}
-	err = service.run(ctx, "s", *claimed)
+	err = service.run(ctx, session.ID("C1", "T1"), *claimed)
 	if err == nil || !strings.Contains(err.Error(), "only the requesting user") {
 		t.Fatalf("queued approval was lost: %v", err)
 	}

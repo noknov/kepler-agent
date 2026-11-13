@@ -58,6 +58,7 @@ type Service struct {
 	Inputs               sessioninput.Store
 	Deliveries           DeliveryStore
 	BeforeRun            func(context.Context, string) error
+	AuthorizeInput       func(context.Context, slackconversation.Request) (bool, error)
 	RunTimeout           time.Duration
 	MaxConcurrentRuns    int
 	Tools                *tool.Catalog

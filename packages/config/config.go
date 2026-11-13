@@ -64,12 +64,13 @@ type HTTPConfig struct {
 }
 
 type SlackConfig struct {
-	BotToken        string
-	SigningSecret   string
-	BotUserID       string
-	DefaultLocale   string
-	AttributionName string
-	ReplyFooter     string
+	CodeChannelsEnabled bool
+	BotToken            string
+	SigningSecret       string
+	BotUserID           string
+	DefaultLocale       string
+	AttributionName     string
+	ReplyFooter         string
 }
 
 type LLMConfig struct {
@@ -338,12 +339,13 @@ func loadRaw(profile RuntimeProfile) (Config, error) {
 			WorkerUpstreamURL:   trimRightSlash(firstEnv("WORKER_UPSTREAM_URL", "WEB_UPSTREAM_URL")),
 		},
 		Slack: SlackConfig{
-			BotToken:        os.Getenv("SLACK_BOT_TOKEN"),
-			SigningSecret:   os.Getenv("SLACK_SIGNING_SECRET"),
-			BotUserID:       os.Getenv("SLACK_BOT_USER_ID"),
-			DefaultLocale:   env("SLACK_DEFAULT_LOCALE", "en-US"),
-			AttributionName: env("SLACK_ATTRIBUTION_NAME", env("ATTRIBUTION_NAME", "斗包")),
-			ReplyFooter:     firstEnv("SLACK_REPLY_FOOTER", "REPLY_FOOTER"),
+			BotToken:            os.Getenv("SLACK_BOT_TOKEN"),
+			CodeChannelsEnabled: envBool("SLACK_CODE_CHANNELS_ENABLED", false),
+			SigningSecret:       os.Getenv("SLACK_SIGNING_SECRET"),
+			BotUserID:           os.Getenv("SLACK_BOT_USER_ID"),
+			DefaultLocale:       env("SLACK_DEFAULT_LOCALE", "en-US"),
+			AttributionName:     env("SLACK_ATTRIBUTION_NAME", env("ATTRIBUTION_NAME", "斗包")),
+			ReplyFooter:         firstEnv("SLACK_REPLY_FOOTER", "REPLY_FOOTER"),
 		},
 		LLM: LLMConfig{
 			ChatGPTCredentialsFile: strings.TrimSpace(os.Getenv("CHATGPT_CREDENTIALS_FILE")),

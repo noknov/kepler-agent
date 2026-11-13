@@ -140,17 +140,17 @@ func TestExecutionConflictReleasesOnlyTheClaimedInput(t *testing.T) {
 	s := New(hosted.Agent{}, &fakeMessenger{}, safety.PromptPolicy{}, safety.Redactor{}, nil)
 	inputs := &memoryInputs{}
 	s.Inputs = inputs
-	active := &activeRun{userID: "U", turnID: "running", steering: &steeringInput{store: inputs, sessionID: "session", owner: s.owner(), userID: "U"}}
-	s.active["session"] = active
+	active := &activeRun{userID: "U", turnID: "running", steering: &steeringInput{store: inputs, sessionID: conversation.Target{Channel: "C", ThreadTS: "T"}.SessionID(), owner: s.owner(), userID: "U"}}
+	s.active[conversation.Target{Channel: "C", ThreadTS: "T"}.SessionID()] = active
 	request := conversation.Request{EventID: "queued", UserID: "U", Channel: "C", ThreadTS: "T"}
-	if err := s.persistInput(t.Context(), "session", sessioninput.KindQueue, request); err != nil {
+	if err := s.persistInput(t.Context(), conversation.Target{Channel: "C", ThreadTS: "T"}.SessionID(), sessioninput.KindQueue, request); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := s.claimNextQueue(t.Context(), "session")
+	claimed, err := s.claimNextQueue(t.Context(), conversation.Target{Channel: "C", ThreadTS: "T"}.SessionID())
 	if err != nil || claimed == nil {
 		t.Fatalf("claim: %v", err)
 	}
-	if err := s.run(t.Context(), "session", *claimed); err != nil {
+	if err := s.run(t.Context(), conversation.Target{Channel: "C", ThreadTS: "T"}.SessionID(), *claimed); err != nil {
 		t.Fatal(err)
 	}
 	inputs.mu.Lock()
@@ -158,7 +158,7 @@ func TestExecutionConflictReleasesOnlyTheClaimedInput(t *testing.T) {
 	if inputs.claimed[request.EventID] != "" || inputs.acked[request.EventID] || len(inputs.items) != 1 || inputs.items[0].Kind != sessioninput.KindQueue {
 		t.Fatal("conflicting execution consumed or re-admitted the queued input")
 	}
-	if s.active["session"] != active {
+	if s.active[conversation.Target{Channel: "C", ThreadTS: "T"}.SessionID()] != active {
 		t.Fatal("conflicting execution displaced the session owner")
 	}
 }

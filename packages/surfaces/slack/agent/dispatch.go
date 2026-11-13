@@ -5,10 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
-	"github.com/noknov/kepler-agent/packages/session"
 	"github.com/noknov/kepler-agent/packages/sessioninput"
 	conversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
@@ -24,7 +22,10 @@ func (s *Service) HandleMention(ctx context.Context, req conversation.Request) (
 	if s.Messenger == nil || s.Agent.Runtime == nil {
 		return false, nil
 	}
-	id := session.ID(req.Channel, req.ThreadTS)
+	if err := req.Target().Validate(); err != nil {
+		return false, err
+	}
+	id := req.Target().SessionID()
 	if controlled, err := s.controlActive(ctx, id, req); controlled || err != nil {
 		return controlled, err
 	}
@@ -175,7 +176,7 @@ func (s *Service) controlActive(ctx context.Context, sessionID string, req conve
 		}
 		return true, nil
 	}
-	if s.Redis == nil || strings.TrimSpace(req.ThreadTS) == "" {
+	if s.Redis == nil {
 		return false, nil
 	}
 	owner, err := s.Redis.Get(ctx, "agent:active:"+sessionID)

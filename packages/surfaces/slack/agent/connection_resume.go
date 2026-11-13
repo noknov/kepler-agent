@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/connections"
-	"github.com/noknov/kepler-agent/packages/session"
+
 	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
 
@@ -52,8 +52,9 @@ func (s *Service) resumeAfterConnection(parentCtx context.Context, continuation 
 		s.releaseContinuation(ctx, continuation)
 		return
 	}
-	sessionID := session.ID(continuation.Channel, continuation.ThreadTS)
-	if continuation.Channel == "" || continuation.UserID == "" || continuation.SessionID != sessionID || continuation.TurnID == "" || continuation.TeamID == "" {
+	target := slackconversation.Target{Kind: continuation.SessionKind, Channel: continuation.Channel, ThreadTS: continuation.ThreadTS}
+	sessionID := target.SessionID()
+	if target.Validate() != nil || continuation.UserID == "" || continuation.SessionID != sessionID || continuation.TurnID == "" || continuation.TeamID == "" {
 		if s.Continuations != nil {
 			_ = s.Continuations.Clear(ctx, continuation)
 		}
@@ -65,6 +66,7 @@ func (s *Service) resumeAfterConnection(parentCtx context.Context, continuation 
 	id := fmt.Sprintf("connection-continue-%x", sha256.Sum256(identity))
 	req := slackconversation.Request{
 		TeamID:           continuation.TeamID,
+		SessionKind:      continuation.SessionKind,
 		ConversationType: continuation.ConversationType,
 		EventID:          id,
 		MessageID:        id,

@@ -26,6 +26,7 @@ func (v ViewingContext) ValidFor(team string) bool {
 }
 
 type Request struct {
+	SessionKind      SessionKind     `json:"session_kind,omitempty"`
 	ViewingContext   *ViewingContext `json:"viewing_context,omitempty"`
 	TeamID           string
 	EventID          string
@@ -66,6 +67,7 @@ type SessionStopper interface {
 }
 
 type StopRequest struct {
+	SessionKind                                 SessionKind
 	EventID, UserID, Channel, ThreadTS, EventTS string
 }
 
