@@ -108,3 +108,34 @@ func TestReplyCreationRequiresPersistedIntent(t *testing.T) {
 		t.Fatal("network create ran without durable intent")
 	}
 }
+
+// Expose native streaming but deliberately omit message-update capability.
+type nativeMessengerWithoutUpdate struct {
+	conversation.Messenger
+	conversation.NativeStreamMessenger
+}
+
+func TestKnownReplyIsNotRepostedWhenUpdatesAreUnsupported(t *testing.T) {
+	for _, finish := range []string{"complete", "fail"} {
+		t.Run(finish, func(t *testing.T) {
+			messenger := &nativeStreamingMessenger{}
+			stream := newSlackStream(t.Context(), nativeMessengerWithoutUpdate{messenger, messenger}, conversation.Request{Channel: "C", ThreadTS: "T"})
+			stream.nativeStream = true
+			stream.messageTS = "known.123"
+			stream.streamDeliveryFailed = true
+			var ts string
+			var err error
+			if finish == "complete" {
+				ts, err = stream.Complete("final answer")
+			} else {
+				ts, err = stream.Fail("execution failed", false)
+			}
+			if err == nil || ts != "known.123" {
+				t.Fatalf("lost known reply or unsupported update error: ts=%q err=%v", ts, err)
+			}
+			if len(messenger.posts) != 0 {
+				t.Fatalf("created another reply: %v", messenger.posts)
+			}
+		})
+	}
+}

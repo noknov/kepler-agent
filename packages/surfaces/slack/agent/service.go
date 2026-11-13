@@ -188,7 +188,7 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	if err != nil {
 		return err
 	}
-	if delivery != nil && delivery.receipt.Phase == "delivered" {
+	if delivery != nil && delivery.receipt.Phase == replyDelivered {
 		return s.ackClaim(runCtx, req.ClaimID)
 	}
 	stream := newSlackStream(runCtx, s.Messenger, req)
@@ -205,7 +205,7 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 			stream.nativeStream = true
 			stream.streamDeliveryFailed = true
 		}
-		if receipt.Phase == "uncertain" {
+		if receipt.Phase == replyUncertain {
 			stream.streamStartUncertain = true
 			stream.streamDeliveryFailed = true
 		}
@@ -292,8 +292,8 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 		}
 		log.Printf("slack agent run failed session=%s turn=%s: %v", sessionID, turnID, err)
 		messageTS, deliveryErr := stream.Fail(failure.PublicMessage(err), errors.Is(err, context.Canceled))
-		if deliveryErr == nil && messageTS != "" && delivery != nil && delivery.receipt.Phase == "streaming" {
-			deliveryErr = delivery.advance(finalizeCtx, "delivered", messageTS)
+		if deliveryErr == nil && messageTS != "" && delivery != nil && delivery.receipt.Phase == replyStreaming {
+			deliveryErr = delivery.advance(finalizeCtx, replyDelivered, messageTS)
 		}
 		deliveryErr = errors.Join(deliveryErr, delivery.persistenceError())
 		stream.recordFinalDelivery(messageTS, deliveryErr)
@@ -319,8 +319,8 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 		}
 	}
 	messageTS, err := stream.Complete(final)
-	if err == nil && messageTS != "" && delivery != nil && delivery.receipt.Phase == "streaming" {
-		err = delivery.advance(finalizeCtx, "delivered", messageTS)
+	if err == nil && messageTS != "" && delivery != nil && delivery.receipt.Phase == replyStreaming {
+		err = delivery.advance(finalizeCtx, replyDelivered, messageTS)
 	}
 	err = errors.Join(err, delivery.persistenceError())
 	stream.recordFinalDelivery(messageTS, err)

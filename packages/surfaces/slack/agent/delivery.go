@@ -19,19 +19,23 @@ type replyDelivery struct {
 	err     error
 }
 
-func (s *Service) beginDelivery(ctx context.Context, id string, req conversation.Request) (*replyDelivery, error) {
+func (s *Service) beginDelivery(ctx context.Context, sessionID string, req conversation.Request) (*replyDelivery, error) {
 	if s.Deliveries == nil {
 		return nil, nil
 	}
-	receipt, err := s.Deliveries.Begin(ctx, ReplyReceipt{TurnID: req.EventID, SessionID: id, InputID: req.ClaimID, Owner: s.owner(), Attempt: req.ClaimAttempt, Channel: req.Channel, ThreadTS: req.ThreadTS, UserID: req.UserID})
+	receipt, err := s.Deliveries.Begin(ctx, ReplyReceipt{
+		TurnID: req.EventID, SessionID: sessionID, InputID: req.ClaimID,
+		Owner: s.owner(), Attempt: req.ClaimAttempt,
+		Channel: req.Channel, ThreadTS: req.ThreadTS, UserID: req.UserID,
+	})
 	if err != nil {
 		return nil, err
 	}
 	d := &replyDelivery{store: s.Deliveries, receipt: receipt}
 	// A previous process left intent without a receipt. Its request may have
 	// succeeded. Never create another message based on the absence of a local ID.
-	if receipt.Phase == "starting" || receipt.Phase == "posting" {
-		if err := d.advance(ctx, "uncertain", receipt.MessageTS); err != nil {
+	if receipt.Phase == replyStarting || receipt.Phase == replyPosting {
+		if err := d.advance(ctx, replyUncertain, receipt.MessageTS); err != nil {
 			return nil, err
 		}
 	}
@@ -56,21 +60,21 @@ func (d *replyDelivery) post(ctx context.Context, send func() (string, error)) (
 	if d == nil {
 		return send()
 	}
-	if err := d.advance(ctx, "posting", ""); err != nil {
+	if err := d.advance(ctx, replyPosting, ""); err != nil {
 		return "", err
 	}
 	ts, err := send()
 	if err != nil {
-		phase := "prepared"
+		phase := replyPrepared
 		if isDeliveryUncertain(err) {
-			phase = "uncertain"
+			phase = replyUncertain
 		}
 		return ts, errors.Join(err, d.advance(ctx, phase, ts))
 	}
 	if ts == "" {
 		return "", fmt.Errorf("Slack returned no delivery receipt")
 	}
-	return ts, d.advance(ctx, "delivered", ts)
+	return ts, d.advance(ctx, replyDelivered, ts)
 }
 
 func (s *Service) reconcileReplies(ctx context.Context) {

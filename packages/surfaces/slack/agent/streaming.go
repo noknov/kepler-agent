@@ -80,7 +80,7 @@ func (s *slackStream) ensureNativeStream(chunks []map[string]any) (bool, error) 
 	if len(chunks) > 0 {
 		start.TaskDisplayMode = "plan"
 	}
-	if err := s.delivery.advance(ctx, "starting", ""); err != nil {
+	if err := s.delivery.advance(ctx, replyStarting, ""); err != nil {
 		s.mu.Lock()
 		s.streamDeliveryFailed = true
 		s.streamStartUncertain = true
@@ -92,9 +92,9 @@ func (s *slackStream) ensureNativeStream(chunks []map[string]any) (bool, error) 
 		log.Printf("slack native stream start failed channel=%s thread=%s user=%s: %v",
 			s.req.Channel, s.req.ThreadTS, s.req.UserID, err)
 		if s.delivery != nil {
-			phase := "prepared"
+			phase := replyPrepared
 			if isDeliveryUncertain(err) {
-				phase = "uncertain"
+				phase = replyUncertain
 			}
 			err = errors.Join(err, s.delivery.advance(ctx, phase, ""))
 		}
@@ -104,7 +104,7 @@ func (s *slackStream) ensureNativeStream(chunks []map[string]any) (bool, error) 
 		s.mu.Unlock()
 		return false, err
 	}
-	if err := s.delivery.advance(ctx, "streaming", ts); err != nil {
+	if err := s.delivery.advance(ctx, replyStreaming, ts); err != nil {
 		s.mu.Lock()
 		s.messageTS = ts
 		s.nativeStream = true

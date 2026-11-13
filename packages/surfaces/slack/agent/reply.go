@@ -2,6 +2,7 @@ package slackagent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -107,18 +108,7 @@ func (s *slackStream) Complete(final string) (string, error) {
 		}
 		s.stopNativeStream(ctx)
 		if deliveryFailed {
-			if updater, ok := s.messenger.(slackconversation.MarkdownMessageUpdater); ok {
-				if err := updater.UpdateMarkdownMessage(ctx, s.req.Channel, messageTS, final); err != nil {
-					return messageTS, err
-				}
-				s.mu.Lock()
-				s.streamStopError = nil
-				s.mu.Unlock()
-				return messageTS, nil
-			}
-			// A third-party Messenger without update support cannot safely amend
-			// a partial native stream. Posting is its only available fallback.
-			return s.postFinalMarkdown(ctx, final)
+			return messageTS, s.updateKnownReply(ctx, messageTS, final)
 		}
 		return messageTS, nil
 	}
@@ -167,14 +157,25 @@ func (s *slackStream) Fail(message string, canceled bool) (string, error) {
 	defer cancel()
 	if nativeStream && messageTS != "" {
 		s.stopNativeStream(ctx)
-		if updater, ok := s.messenger.(slackconversation.MarkdownMessageUpdater); ok {
-			if err := updater.UpdateMarkdownMessage(ctx, s.req.Channel, messageTS, message); err != nil {
-				return messageTS, err
-			}
-			return messageTS, nil
-		}
+		return messageTS, s.updateKnownReply(ctx, messageTS, message)
 	}
 	return s.postFinalMarkdown(ctx, message)
+}
+
+// A known reply can be repaired only in place. Creating another message would
+// hide an unsupported update and duplicate the original answer.
+func (s *slackStream) updateKnownReply(ctx context.Context, messageTS, text string) error {
+	updater, ok := s.messenger.(slackconversation.MarkdownMessageUpdater)
+	if !ok {
+		return fmt.Errorf("Slack messenger cannot update existing reply %s", messageTS)
+	}
+	if err := updater.UpdateMarkdownMessage(ctx, s.req.Channel, messageTS, text); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.streamStopError = nil
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *slackStream) postFinalMarkdown(ctx context.Context, final string) (string, error) {

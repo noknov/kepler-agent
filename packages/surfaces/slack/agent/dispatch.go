@@ -94,7 +94,12 @@ func (s *Service) recoverInputs(ctx context.Context) {
 	}
 }
 
-const inputClaimLease = time.Minute
+const (
+	inputClaimLease       = time.Minute
+	inputRetryBaseDelay   = time.Second
+	inputRetryMaxDelay    = time.Minute
+	inputRetryMaxAttempts = 5
+)
 
 func (s *Service) failInput(ctx context.Context, id string, req conversation.Request, cause error) {
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -103,11 +108,11 @@ func (s *Service) failInput(ctx context.Context, id string, req conversation.Req
 		_ = s.releaseClaim(cleanup, req.ClaimID)
 		return
 	}
-	delay := time.Second
-	for attempt := 1; attempt < req.ClaimAttempt && delay < time.Minute; attempt++ {
-		delay = min(time.Minute, delay*2)
+	delay := inputRetryBaseDelay
+	for attempt := 1; attempt < req.ClaimAttempt && delay < inputRetryMaxDelay; attempt++ {
+		delay = min(inputRetryMaxDelay, delay*2)
 	}
-	dead, err := s.Inputs.Fail(cleanup, req.ClaimID, s.owner(), cause, delay, 5)
+	dead, err := s.Inputs.Fail(cleanup, req.ClaimID, s.owner(), cause, delay, inputRetryMaxAttempts)
 	if err != nil {
 		log.Printf("slack failed input receipt error session=%s: %v", id, err)
 		return
@@ -122,7 +127,12 @@ func (s *Service) failInput(ctx context.Context, id string, req conversation.Req
 	}
 }
 
-func (s *Service) Quiesce() { s.mu.Lock(); s.draining = true; s.mu.Unlock() }
+func (s *Service) Quiesce() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.draining = true
+}
+
 func (s *Service) WaitIdle(ctx context.Context) bool {
 	s.mu.Lock()
 	if s.running == 0 {

@@ -8,14 +8,31 @@ import (
 	"github.com/noknov/kepler-agent/packages/sessioninput"
 )
 
+// These phases describe network delivery, independently of runtime termination.
+const (
+	replyPrepared  = "prepared"
+	replyStarting  = "starting"
+	replyPosting   = "posting"
+	replyStreaming = "streaming"
+	replyDelivered = "delivered"
+	replyUncertain = "uncertain"
+)
+
 // ReplyReceipt stores network intent and known Slack identity. It contains no
 // answer text: the canonical transcript remains the source of the final answer.
 type ReplyReceipt struct {
-	TurnID, SessionID, InputID, Owner string
-	Attempt                           int
-	Channel, ThreadTS, UserID         string
-	Phase, MessageTS, DesiredStatus   string
-	StatusApplied                     bool
+	TurnID        string
+	SessionID     string
+	InputID       string
+	Owner         string
+	Attempt       int
+	Channel       string
+	ThreadTS      string
+	UserID        string
+	Phase         string
+	MessageTS     string
+	DesiredStatus string
+	StatusApplied bool
 }
 
 type DeliveryStore interface {
@@ -53,20 +70,20 @@ func (s PGDeliveryStore) Begin(ctx context.Context, r ReplyReceipt) (ReplyReceip
 
 func validReplyTransition(from, to string) bool {
 	switch from {
-	case "prepared":
-		return to == "starting" || to == "posting"
-	case "starting":
-		return to == "streaming" || to == "prepared" || to == "uncertain"
-	case "posting":
-		return to == "delivered" || to == "prepared" || to == "uncertain"
-	case "streaming":
-		return to == "delivered"
+	case replyPrepared:
+		return to == replyStarting || to == replyPosting
+	case replyStarting:
+		return to == replyStreaming || to == replyPrepared || to == replyUncertain
+	case replyPosting:
+		return to == replyDelivered || to == replyPrepared || to == replyUncertain
+	case replyStreaming:
+		return to == replyDelivered
 	}
 	return false
 }
 
 func (s PGDeliveryStore) Advance(ctx context.Context, r ReplyReceipt, phase, messageTS string) error {
-	if ((phase == "streaming" || phase == "delivered") && messageTS == "") || !validReplyTransition(r.Phase, phase) {
+	if ((phase == replyStreaming || phase == replyDelivered) && messageTS == "") || !validReplyTransition(r.Phase, phase) {
 		return fmt.Errorf("invalid Slack delivery transition %s to %s", r.Phase, phase)
 	}
 	tag, err := s.Pool.Exec(ctx, `UPDATE slack_reply_receipts r SET phase=$6,message_ts=$7,updated_at=NOW()
