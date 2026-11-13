@@ -172,3 +172,41 @@ func BenchmarkInputContextEstimate(b *testing.B) {
 		})
 	}
 }
+
+func TestUsageAnchorDoesNotNormalizeJSONRenderedAsText(t *testing.T) {
+	for _, content := range []struct {
+		name  string
+		block func(json.RawMessage) model.Content
+	}{
+		{"JSON", func(raw json.RawMessage) model.Content { return model.Content{Type: model.ContentJSON, JSON: raw} }},
+		{"tool arguments", func(raw json.RawMessage) model.Content {
+			return model.Content{Type: model.ContentToolCall, ToolCall: &model.ToolCall{ID: "call", Name: "tool", Arguments: raw}}
+		}},
+		{"nested result", func(raw json.RawMessage) model.Content {
+			return model.Content{Type: model.ContentToolResult, ToolResult: &model.ToolResult{CallID: "call", Content: []model.Content{{Type: model.ContentJSON, JSON: raw}}}}
+		}},
+	} {
+		t.Run(content.name, func(t *testing.T) {
+			catalog, _ := tool.NewCatalog()
+			client := &measuredContextClient{route: "route", scriptedModel: &scriptedModel{}}
+			runner, err := New(Config{Model: "m"}, Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			turn := TurnRequest{SessionID: "s", TurnID: "t"}
+			messages := []model.Message{{Role: model.RoleUser, Content: []model.Content{content.block(json.RawMessage(`{"v":1}`))}}}
+			runner.setEventCache(turn.SessionID, nil)
+			defer runner.clearEventCache(turn.SessionID)
+			anchor := runner.observeContext(runner.modelRequest(turn, messages, nil), model.Response{InputContextKey: "route", FinishReason: model.FinishStop, Usage: model.Usage{InputTokens: 500}})
+			runner.eventCache[turn.SessionID].contextUsage = anchor
+			if got := runner.inputEstimate(t.Context(), turn, messages, nil); got != 500 {
+				t.Fatalf("unchanged prefix: %d", got)
+			}
+			messages[0].Content[0] = content.block(json.RawMessage(`{ "v" : 1 }`))
+			want := runner.config.Context.counter().Messages(messages)
+			if got := runner.inputEstimate(t.Context(), turn, messages, nil); got != want {
+				t.Fatalf("changed wire bytes reused usage: got %d want %d", got, want)
+			}
+		})
+	}
+}

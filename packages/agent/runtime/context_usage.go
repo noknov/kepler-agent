@@ -3,8 +3,10 @@ package runtime
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"hash"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
 )
@@ -24,18 +26,65 @@ func contextRequestKey(route string, request model.Request) string {
 	request.Messages = nil
 	request.Metadata = nil
 	request.InputTokenEstimate = 0
-	return contextDigest(struct {
+	digest := contextHash(struct {
 		Route   string
 		Request model.Request
 	}{route, request})
-}
-
-func contextDigest(value any) string {
-	hash := sha256.New()
-	if err := json.NewEncoder(hash).Encode(value); err != nil {
+	if digest == nil {
 		return ""
 	}
-	return hex.EncodeToString(hash.Sum(nil))
+	if request.OutputFormat != nil {
+		hashContextRaw(digest, request.OutputFormat.Schema)
+	}
+	for _, definition := range request.Tools {
+		hashContextRaw(digest, definition.InputSchema)
+	}
+	return hex.EncodeToString(digest.Sum(nil))
+}
+
+// Structural JSON binds field positions. Raw payloads are additionally framed
+// byte-for-byte: encoding/json normalizes RawMessage whitespace, but providers
+// can render those payloads as text with a different token count.
+func contextHash(value any) hash.Hash {
+	digest := sha256.New()
+	_, _ = digest.Write([]byte("kepler-input-context-v2\x00"))
+	if err := json.NewEncoder(digest).Encode(value); err != nil {
+		return nil
+	}
+	return digest
+}
+
+func hashContextRaw(digest hash.Hash, raw json.RawMessage) {
+	var size [8]byte
+	binary.BigEndian.PutUint64(size[:], uint64(len(raw)))
+	_, _ = digest.Write(size[:])
+	_, _ = digest.Write(raw)
+}
+
+func contextMessagesKey(messages []model.Message) string {
+	digest := contextHash(messages)
+	if digest == nil {
+		return ""
+	}
+	for _, message := range messages {
+		hashContextContent(digest, message.Content)
+	}
+	return hex.EncodeToString(digest.Sum(nil))
+}
+
+func hashContextContent(digest hash.Hash, content []model.Content) {
+	for _, block := range content {
+		hashContextRaw(digest, block.JSON)
+		if block.ToolCall != nil {
+			hashContextRaw(digest, block.ToolCall.Arguments)
+		}
+		if block.Continuation != nil {
+			hashContextRaw(digest, block.Continuation.Items)
+		}
+		if block.ToolResult != nil {
+			hashContextContent(digest, block.ToolResult.Content)
+		}
+	}
 }
 
 func (r *Runtime) observeContext(request model.Request, response model.Response) *contextUsageAnchor {
@@ -47,7 +96,7 @@ func (r *Runtime) observeContext(request model.Request, response model.Response)
 		return nil
 	}
 	requestKey := contextRequestKey(response.InputContextKey, request)
-	prefixKey := contextDigest(request.Messages)
+	prefixKey := contextMessagesKey(request.Messages)
 	if requestKey == "" || prefixKey == "" {
 		return nil
 	}
@@ -74,7 +123,7 @@ func (r *Runtime) inputEstimate(ctx context.Context, turn TurnRequest, messages 
 	if err != nil || routeKey == "" || routeKey != anchor.RouteKey {
 		return fallback()
 	}
-	if anchor.RequestKey != contextRequestKey(routeKey, request) || anchor.PrefixKey != contextDigest(messages[:anchor.MessageCount]) {
+	if anchor.RequestKey != contextRequestKey(routeKey, request) || anchor.PrefixKey != contextMessagesKey(messages[:anchor.MessageCount]) {
 		return fallback()
 	}
 	// Counter output is an int throughout projection. Reject a corrupt restored
