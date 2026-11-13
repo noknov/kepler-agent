@@ -53,11 +53,32 @@ continuation checkpoint covering task constraints, decisions, verified work,
 failures, next actions and evidence references. With a compactor configured, the
 runtime first targets 85% of the available input budget. A proactive summary
 failure falls back to the hard budget only when no history must be discarded.
-Incomplete model responses cannot become portable compaction checkpoints.
+Incomplete model responses cannot become portable compaction checkpoints. Projection and final admission use one input-budget calculation for history,
+tool schemas, output and safety reserve. On a provider context-limit rejection,
+the same projector selects removable exchanges while retaining the current input
+and complete latest tool batch; recovery does not guess a smaller model window.
+All current-turn user and steering messages after the last matched successful
+inference remain raw, in order, outside checkpoint coverage. Admission, failures
+and compactor output never advance this input-consumption boundary. Legacy
+completions must match their own turn/request admission receipt.
+
+Both paths commit through one checkpoint owner. Empty or oversized checkpoints
+are rejected before durable append. Checkpoint metadata records retained/summary
+tokens, the output allowance, elapsed time, coverage and recovery reason.
+
 Static prompt layers
 (`LayerCore`, `LayerProduct`, `LayerEnvironment`) are automatically separated
 from dynamic layers (`LayerProject`, `LayerUser`, `LayerSkill`, `LayerTurn`) via
 `---DYNAMIC_CONTEXT_BELOW---`, enabling prefix and incremental prompt caching.
+
+Reported input usage is reusable only for the unchanged request prefix, tool
+schemas, requested model and provider-owned input route identity. The route key
+binds credentials/account and protocol routing without exposing secrets. The
+runtime estimates only the appended suffix, and invalidates observations after
+edits, compaction, missing usage or route changes. Rebuildable measurements and
+input-consumption boundaries are restored from lifecycle receipts. Unknown
+adapters, including a remote gateway without a planned provider identity, keep
+using the explicit estimator; the runtime never guesses the remote route.
 
 `agent_runs` and
 `agent_run_steps` are query-oriented observability projections, not a second

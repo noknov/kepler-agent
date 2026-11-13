@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, system model.Message) (Projection, error) {
@@ -29,7 +33,10 @@ func (r *Runtime) projectContextOnce(ctx context.Context, request TurnRequest, s
 	}
 	projectRequest := r.projectionRequest(events, request, system, r.deps.Tools.ActiveDefinitions(request.SessionID))
 	if r.deps.Compactor != nil {
-		available := r.config.Context.MaxTokens - r.config.Context.ReserveTokens - r.config.Context.OutputTokens - r.config.Context.counter().Tools(projectRequest.Tools)
+		available, err := r.config.Context.inputBudget(projectRequest.Tools)
+		if err != nil {
+			return Projection{}, err
+		}
 		projectRequest.TargetTokens = available * r.config.Context.Policy.WithDefaults().SoftLimitPercent / 100
 	}
 	projection, err := r.deps.Projector.Project(ctx, projectRequest)
@@ -39,6 +46,26 @@ func (r *Runtime) projectContextOnce(ctx context.Context, request TurnRequest, s
 	}
 	if err != nil {
 		return Projection{}, err
+	}
+	if len(projection.Dropped) == 0 && !projection.MaskedEvidence {
+		input := r.inputEstimate(ctx, request, projection.Messages, projectRequest.Tools)
+		threshold, budgetErr := r.config.Context.inputBudget(projectRequest.Tools)
+		if budgetErr != nil {
+			return Projection{}, budgetErr
+		}
+		if projectRequest.TargetTokens > 0 {
+			threshold = projectRequest.TargetTokens
+		}
+		projection.EstimatedTokens = max(0, input-r.config.Context.counter().Tools(projectRequest.Tools))
+		if projection.EstimatedTokens > threshold {
+			// The provider measured the unchanged prefix above the local estimate.
+			// Select structural history reduction through the existing planner.
+			projectRequest.CompactHistory = true
+			projection, err = r.deps.Projector.Project(ctx, projectRequest)
+			if err != nil {
+				return Projection{}, err
+			}
+		}
 	}
 	needsReader := projection.MaskedEvidence
 	for _, message := range projection.Dropped {
@@ -62,18 +89,9 @@ func (r *Runtime) projectContextOnce(ctx context.Context, request TurnRequest, s
 	if len(projection.Dropped) == 0 || r.deps.Compactor == nil {
 		return projection, nil
 	}
-	targetTokens := 4_096
-	if smallContextTarget := r.config.Context.MaxTokens / 8; smallContextTarget > 0 && smallContextTarget < targetTokens {
-		targetTokens = smallContextTarget
-	}
-	if targetTokens < 512 {
-		targetTokens = 512
-	}
-	evidence := compactionEvidence(projection)
-	summary, err := r.deps.Compactor.Compact(ctx, evidence, targetTokens)
-	if err != nil {
-		// A proactive compaction outage must not terminate work that still fits
-		// safely in the hard input budget. Never silently discard history here.
+	if err := r.compactContext(ctx, request, projection, false); err != nil {
+		// A proactive outage may use the hard budget only when no source history
+		// is discarded. It never silently turns a failed summary into truncation.
 		if ctx.Err() == nil {
 			hard, projectErr := r.deps.Projector.Project(ctx, r.projectionRequest(events, request, system, r.deps.Tools.ActiveDefinitions(request.SessionID)))
 			if projectErr == nil && len(hard.Dropped) == 0 {
@@ -82,13 +100,7 @@ func (r *Runtime) projectContextOnce(ctx context.Context, request TurnRequest, s
 		}
 		return Projection{}, err
 	}
-	metadata, _ := json.Marshal(map[string]any{"covers_through": projection.CoversThrough, "context_policy": r.config.Context.Policy.WithDefaults(), "native_continuation": hasNativeContinuation(summary)})
-	if _, err = r.record(ctx, transcript.Event{
-		SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.CompactionCreated,
-		Message: &summary, Metadata: metadata,
-	}); err != nil {
-		return Projection{}, err
-	}
+
 	events, err = r.contextEvents(ctx, request.SessionID)
 	if err != nil {
 		return Projection{}, err
@@ -98,6 +110,63 @@ func (r *Runtime) projectContextOnce(ctx context.Context, request TurnRequest, s
 		return Projection{}, err
 	}
 	return projection, err
+}
+
+// compactContext is the sole checkpoint commit path for proactive and rejected
+// requests. Its output ceiling comes from the actual remaining input capacity.
+func (r *Runtime) compactContext(ctx context.Context, request TurnRequest, projection Projection, forced bool) (err error) {
+	ctx, span := runtimeTracer.Start(ctx, "context.compact", trace.WithAttributes(
+		attribute.Bool("agent.context.forced", forced),
+		attribute.Int("agent.context.retained_tokens", projection.EstimatedTokens),
+		attribute.Int("agent.context.compacted_messages", len(projection.Dropped)),
+	))
+	defer func() {
+		if err != nil {
+			span.SetAttributes(attribute.String("error.type", string(model.ErrorKindOf(err))))
+			span.SetStatus(codes.Error, "checkpoint failed")
+		}
+		span.End()
+	}()
+	available, err := r.config.Context.inputBudget(r.deps.Tools.ActiveDefinitions(request.SessionID))
+	if err != nil {
+		return err
+	}
+	counter := r.config.Context.counter()
+	envelope := model.TextMessage(model.RoleUser, "<untrusted_transcript_summary>\n\n</untrusted_transcript_summary>")
+	overhead := counter.Messages([]model.Message{envelope, untrustedTranscriptSummaryBoundary})
+	target := min(defaultCompactionOutputTokens, available-projection.EstimatedTokens-overhead)
+	if target <= 0 {
+		return &model.Error{Kind: model.ErrorBudgetExhausted, Message: "no input capacity remains for a continuation checkpoint"}
+	}
+	started := time.Now()
+	summary, err := r.deps.Compactor.Compact(ctx, compactionEvidence(projection), target)
+	if err != nil {
+		return err
+	}
+	summary, err = continuationCheckpoint(summary)
+	if err != nil {
+		return err
+	}
+	summaryTokens := counter.Messages([]model.Message{summary})
+	span.SetAttributes(attribute.Int("agent.context.summary_tokens", summaryTokens), attribute.Int("agent.context.summary_budget", target))
+	if len(summary.Content) == 0 || summaryTokens+projection.EstimatedTokens+counter.Messages([]model.Message{untrustedTranscriptSummaryBoundary}) > available {
+		return &model.Error{Kind: model.ErrorBudgetExhausted, Message: "compactor returned an empty or oversized continuation checkpoint"}
+	}
+	metadata, err := json.Marshal(map[string]any{
+		"covers_through": projection.CoversThrough, "forced": forced,
+		"context_policy":      r.config.Context.Policy.WithDefaults(),
+		"native_continuation": hasNativeContinuation(summary),
+		"retained_tokens":     projection.EstimatedTokens, "summary_tokens": summaryTokens,
+		"summary_budget": target, "duration_ms": time.Since(started).Milliseconds(),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = r.record(ctx, transcript.Event{
+		SessionID: request.SessionID, TurnID: request.TurnID,
+		Type: transcript.CompactionCreated, Message: &summary, Metadata: metadata,
+	})
+	return err
 }
 
 func compactionEvidence(projection Projection) []model.Message {
@@ -119,4 +188,29 @@ func compactionEvidence(projection Projection) []model.Message {
 		messages[i] = message
 	}
 	return messages
+}
+
+// All compactors produce data, including profile-supplied implementations. Only
+// this owner wraps portable text and assigns its non-system role before commit.
+func continuationCheckpoint(summary model.Message) (model.Message, error) {
+	checkpoint := model.Message{Role: model.RoleUser}
+	if text := summary.Text(); text != "" {
+		checkpoint = model.TextMessage(model.RoleUser, "<untrusted_transcript_summary>\n"+text+"\n</untrusted_transcript_summary>")
+	}
+	for _, block := range summary.Content {
+		switch block.Type {
+		case model.ContentText:
+		case model.ContentContinuation:
+			if block.Continuation == nil {
+				return model.Message{}, fmt.Errorf("compactor returned a missing native continuation")
+			}
+			checkpoint.Content = append(checkpoint.Content, block)
+		default:
+			return model.Message{}, fmt.Errorf("compactor returned unsupported checkpoint content %q", block.Type)
+		}
+	}
+	if len(checkpoint.Content) == 0 {
+		return model.Message{}, fmt.Errorf("compactor returned an empty continuation checkpoint")
+	}
+	return checkpoint, nil
 }

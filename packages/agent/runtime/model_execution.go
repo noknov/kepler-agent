@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
+	"time"
+
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
-	"sync/atomic"
-	"time"
 )
 
 func (r *Runtime) generate(ctx context.Context, turn TurnRequest, messages []model.Message) (model.Response, error) {
@@ -19,27 +20,25 @@ func (r *Runtime) generate(ctx context.Context, turn TurnRequest, messages []mod
 }
 
 func (r *Runtime) generateWithTools(ctx context.Context, turn TurnRequest, messages []model.Message, definitions []model.ToolDefinition) (model.Response, error) {
-	modelName := turn.Model
-	if modelName == "" {
-		modelName = r.config.Model
-	}
 	// Final admission also protects custom projectors and tool-less recovery
 	// requests. Nothing may be appended after this complete request check.
-	inputTokens := r.config.Context.counter().Messages(messages) + r.config.Context.counter().Tools(definitions)
-	if inputTokens+r.config.Context.ReserveTokens+r.config.Context.OutputTokens > r.config.Context.MaxTokens {
+	inputBudget, err := r.config.Context.inputBudget(definitions)
+	if err != nil {
+		return model.Response{}, err
+	}
+	inputTokens := r.inputEstimate(ctx, turn, messages, definitions)
+	if inputTokens > inputBudget+r.config.Context.counter().Tools(definitions) {
 		return model.Response{}, &model.Error{Kind: model.ErrorBudgetExhausted, Message: "assembled model request exceeds the context budget"}
 	}
 	requestID, err := r.nextModelRequestID(ctx, turn)
 	if err != nil {
 		return model.Response{}, err
 	}
-	request := model.Request{
-		InputTokenEstimate: inputTokens,
-		Model:              modelName, Messages: messages, Tools: definitions,
-		ReasoningEffort: r.config.ReasoningEffort, Temperature: r.config.Temperature, MaxOutputTokens: r.config.MaxOutputTokens,
-		Metadata: map[string]string{"session_id": turn.SessionID, "turn_id": turn.TurnID, "request_id": requestID},
-	}
+	request := r.modelRequest(turn, messages, definitions)
+	request.InputTokenEstimate = inputTokens
+	request.Metadata = map[string]string{"session_id": turn.SessionID, "turn_id": turn.TurnID, "request_id": requestID}
 
+	inputThrough := r.inputBoundary(turn.SessionID)
 	var lastErr error
 	for attempt := 0; attempt <= r.config.MaxModelRetries; attempt++ {
 		metadata, _ := json.Marshal(map[string]any{"request_id": requestID, "attempt": attempt + 1, "model": request.Model})
@@ -48,7 +47,7 @@ func (r *Runtime) generateWithTools(ctx context.Context, turn TurnRequest, messa
 		}
 		response, err := r.generateAttempt(ctx, turn, request, attempt+1)
 		if err == nil {
-			completed, _ := json.Marshal(map[string]any{"request_id": requestID, "attempt": attempt + 1, "model": request.Model, "finish_reason": response.FinishReason, "usage": response.Usage})
+			completed, _ := json.Marshal(map[string]any{"request_id": requestID, "attempt": attempt + 1, "model": request.Model, "finish_reason": response.FinishReason, "usage": response.Usage, "context_usage": r.observeContext(request, response), "input_through": inputThrough})
 			if _, recordErr := r.record(ctx, transcript.Event{SessionID: turn.SessionID, TurnID: turn.TurnID, Type: transcript.ModelCompleted, Metadata: completed, Trace: responseTrace(response)}); recordErr != nil {
 				return model.Response{}, recordErr
 			}
@@ -73,10 +72,24 @@ func (r *Runtime) generateWithTools(ctx context.Context, turn TurnRequest, messa
 	return model.Response{}, lastErr
 }
 
+// Construct generation parameters once so admission fingerprints and the
+// dispatched request cannot drift when model settings change.
+func (r *Runtime) modelRequest(turn TurnRequest, messages []model.Message, definitions []model.ToolDefinition) model.Request {
+	name := turn.Model
+	if name == "" {
+		name = r.config.Model
+	}
+	return model.Request{
+		Model: name, Messages: messages, Tools: definitions,
+		ReasoningEffort: r.config.ReasoningEffort, Temperature: r.config.Temperature,
+		MaxOutputTokens: r.config.MaxOutputTokens,
+	}
+}
+
 func (r *Runtime) nextModelRequestID(ctx context.Context, turn TurnRequest) (string, error) {
 	r.eventMu.RLock()
 	if cached := r.eventCache[turn.SessionID]; cached != nil {
-		next := len(cached.requests[turn.TurnID]) + 1
+		next := len(cached.requestBoundaries[turn.TurnID]) + 1
 		r.eventMu.RUnlock()
 		return fmt.Sprintf("%s:model:%d", turn.TurnID, next), nil
 	}
@@ -107,6 +120,7 @@ func (r *Runtime) generateAttempt(ctx context.Context, turn TurnRequest, request
 	modelAttributes = append(modelAttributes,
 		attribute.String("gen_ai.request.model", request.Model),
 		attribute.Int("gen_ai.request.max_tokens", request.MaxOutputTokens),
+		attribute.Int("agent.model.estimated_input_tokens", request.InputTokenEstimate),
 		attribute.String("agent.model.request_id", request.Metadata["request_id"]),
 		attribute.Int("agent.model.attempt", attempt),
 	)
@@ -158,6 +172,9 @@ func (r *Runtime) generateAttempt(ctx context.Context, turn TurnRequest, request
 			attempts = 1
 		} // Clients without a resilience observer make one call.
 		recordUsage(span, response.Usage)
+		if actualInput := response.Usage.Add(model.Usage{}).InputTokens; actualInput > 0 {
+			span.SetAttributes(attribute.Int64("agent.model.input_estimate_error_tokens", int64(request.InputTokenEstimate)-actualInput))
+		}
 		span.SetAttributes(attribute.String("langfuse.observation.model.name", actualModel),
 			attribute.String("langfuse.observation.metadata.requested_model", request.Model),
 			attribute.String("langfuse.observation.metadata.actual_provider", actualProvider),

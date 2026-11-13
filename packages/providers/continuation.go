@@ -67,7 +67,7 @@ func (c *Client) compact(ctx context.Context, request model.Request) (model.Resp
 	if state == nil {
 		return model.Response{}, fmt.Errorf("native compaction did not return a continuation")
 	}
-	return model.Response{Message: model.Message{Role: model.RoleUser, Content: []model.Content{{Type: model.ContentContinuation, Continuation: state}}}, FinishReason: model.FinishStop, Usage: toUsage(response.Usage)}, nil
+	return model.Response{InputContextKey: c.inputContextKey(request.Model), Message: model.Message{Role: model.RoleUser, Content: []model.Content{{Type: model.ContentContinuation, Continuation: state}}}, FinishReason: model.FinishStop, Usage: toUsage(response.Usage)}, nil
 }
 
 // A credential path is a storage location, not an account identity. Bind a

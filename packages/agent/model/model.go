@@ -281,6 +281,9 @@ func (u Usage) Add(other Usage) Usage {
 }
 
 type Response struct {
+	// InputContextKey binds reported input usage to the provider's rendering
+	// route. It is opaque and must not contain credentials or account details.
+	InputContextKey string `json:"input_context_key,omitempty"`
 	// OutputMode acknowledges an applied structured output contract across remote adapters.
 	OutputMode   OutputMode      `json:"output_mode,omitempty"`
 	ID           string          `json:"id,omitempty"`

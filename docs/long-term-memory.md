@@ -5,7 +5,7 @@
 Kepler has explicit cross-session memories in addition to durable transcripts,
 compaction summaries, and user-authored rules/skills. Hosted memory uses
 `user_memory_generations`, `user_memories` and reset idempotency receipts, keyed by the authenticated Slack
-workspace **and** user. Slack and Web propagate that identity into the hosted
+workspace **and** user. Slack propagates that identity into the hosted
 profile; model arguments cannot select another owner. Missing identity fails
 closed. No automatic extraction or background consolidation is enabled.
 
@@ -40,8 +40,7 @@ projects. Legacy records without a namespace remain available in the user
 namespace. Writes require the local policy's approval for state outside the
 workspace. The file is atomically replaced after syncing.
 
-**Operator rollout:** apply `schema/postgres.sql` before starting the updated
-hosted services, including the `pg_trgm` extension and memory search index.
+**Operator rollout:** use the deploy repository's incremental migrations before starting updated hosted services, including the `pg_trgm` extension and memory search index. The source `schema/postgres.sql` is the fresh-install contract.
 Reset request hashes are retained as idempotency receipts (no memory content)
 so a delayed Slack retry cannot erase newly saved facts. The new tables are additive and existing transcripts/assets
 are unchanged. Add `memory` to the write allowlist if agent-authored memory
