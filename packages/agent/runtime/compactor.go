@@ -8,6 +8,8 @@ import (
 	"github.com/noknov/kepler-agent/packages/agent/model"
 )
 
+const defaultCompactionOutputTokens = 4096
+
 type ModelCompactor struct {
 	NativeClient    model.Client
 	NativeModel     string
@@ -27,7 +29,7 @@ func (c ModelCompactor) Compact(ctx context.Context, messages []model.Message, t
 	}
 	maxTokens := c.MaxOutputTokens
 	if maxTokens <= 0 {
-		maxTokens = 4_096
+		maxTokens = defaultCompactionOutputTokens
 	}
 	if targetTokens > 0 && targetTokens < maxTokens {
 		maxTokens = targetTokens

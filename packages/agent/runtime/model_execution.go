@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
+	"time"
+
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
-	"sync/atomic"
-	"time"
 )
 
 func (r *Runtime) generate(ctx context.Context, turn TurnRequest, messages []model.Message) (model.Response, error) {
@@ -25,8 +26,13 @@ func (r *Runtime) generateWithTools(ctx context.Context, turn TurnRequest, messa
 	}
 	// Final admission also protects custom projectors and tool-less recovery
 	// requests. Nothing may be appended after this complete request check.
-	inputTokens := r.config.Context.counter().Messages(messages) + r.config.Context.counter().Tools(definitions)
-	if inputTokens+r.config.Context.ReserveTokens+r.config.Context.OutputTokens > r.config.Context.MaxTokens {
+	inputBudget, err := r.config.Context.inputBudget(definitions)
+	if err != nil {
+		return model.Response{}, err
+	}
+	messageTokens := r.config.Context.counter().Messages(messages)
+	inputTokens := messageTokens + r.config.Context.counter().Tools(definitions)
+	if messageTokens > inputBudget {
 		return model.Response{}, &model.Error{Kind: model.ErrorBudgetExhausted, Message: "assembled model request exceeds the context budget"}
 	}
 	requestID, err := r.nextModelRequestID(ctx, turn)

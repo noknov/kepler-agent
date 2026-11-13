@@ -23,7 +23,7 @@ in source does not mean every surface reads it.
 | --- | --- | --- |
 | Hosted environment | Environment configuration and secret manager | Gateway, worker, observability |
 | Source debugging | Service `.env` or `KEPLER_AGENT_ENV_FILE` | Directly launched Go service |
-| Local benchmark adapter | TOML created by `kepler-agent config init` | Local limits, routing, sandbox, MCP, prompts |
+| Local benchmark adapter | Optional TOML loaded by `kepler-bench --config` | Local limits, routing, sandbox, MCP, prompts |
 | Provider credentials/model selection | Hosted environment configuration | Worker and local-client bootstrap |
 | Private prompt context | `PROMPT_DIR` overlay | Profile-specific prompt composition |
 
@@ -50,7 +50,6 @@ is supplied by the target environment.
 
 - [Models](models.md): provider namespaces, protocols, primary/secondary settings.
 - [Observability](observability.md): OTLP, Langfuse, cost rates.
-- [benchmark](benchmark.md): browser origin, cookies, OIDC, and static assets.
 - [Tools](tools.md): integration credentials and search providers.
 - [Prompts](prompts.md): public defaults and private overlays.
 - [Local benchmark adapter](benchmark.md): local TOML and supported flags.
@@ -103,7 +102,7 @@ SLACK_EVENT_WORKERS=8
 SLACK_EVENT_QUEUE_SIZE=512
 SLACK_EVENT_ENQUEUE_TIMEOUT=2s
 SLACK_EVENT_TIMEOUT=15m
-SLACK_EVENT_INBOX_LEASE=16m
+SLACK_EVENT_INBOX_LEASE=1m
 SLACK_EVENT_MAX_ATTEMPTS=5
 SLACK_EVENT_RETRY_BASE=1s
 SLACK_EVENT_RETRY_MAX=1m
@@ -111,8 +110,7 @@ SLACK_EVENT_RETRY_MAX=1m
 
 Workers renew the inbox lease while an event is running. Failed events use
 bounded exponential backoff and move to `dead_letter` after the configured
-attempt limit; malformed payloads are dead-lettered immediately. The inbox
-lease must be greater than the event timeout.
+attempt limit; malformed payloads are dead-lettered immediately. The short renewable inbox lease is independent of the event timeout.
 
 `SLACK_EVENT_WORKERS` is the worker-level execution concurrency limit. Inputs
 that arrive while a session is active are written to

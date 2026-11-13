@@ -33,6 +33,9 @@ type ProjectRequest struct {
 	CurrentInput model.Message
 	// TargetTokens is an optional soft input ceiling for proactive compaction.
 	TargetTokens int
+	// CompactHistory selects all removable history after a provider context-limit
+	// rejection. The latest exchange and current input remain indivisible.
+	CompactHistory bool
 }
 
 type Projection struct {
@@ -81,9 +84,9 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 	counter := p.config.counter()
 	events := request.Events
 	system := request.System
-	limit := p.config.MaxTokens - p.config.ReserveTokens - p.config.OutputTokens - counter.Tools(request.Tools)
-	if limit <= 0 {
-		return Projection{}, &model.Error{Kind: model.ErrorBudgetExhausted, Message: "context budget exhausted by reserved, output, and tool tokens"}
+	limit, err := p.config.inputBudget(request.Tools)
+	if err != nil {
+		return Projection{}, err
 	}
 	if request.TargetTokens > 0 && request.TargetTokens < limit {
 		limit = request.TargetTokens
@@ -166,10 +169,9 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 			}
 		}
 	}
-	originals := make(map[uint64]model.Message, len(entries))
-	for _, entry := range entries {
-		originals[entry.sequence] = entry.message
-	}
+	// Masking preserves entry order and only replaces message values. Retain the
+	// original slice for summarization without duplicating every entry in a map.
+	originalEntries := entries
 	stateMessage, err := taskStateMessage(events)
 	if err != nil {
 		return Projection{}, err
@@ -197,20 +199,10 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 	}
 	messages := buildMessages(entries)
 	tokens := counter.Messages(messages)
-	groups := groupProjectedMessages(entries)
-	// Long autonomous runs contain many completed model/tool exchanges within
-	// one user turn. They can be summarized at exchange boundaries, while the
-	// original current input and unfinished tool batches remain intact.
-	if len(groups) > 0 {
-		last := groups[len(groups)-1]
-		var lastMessages []model.Message
-		for _, entry := range last.entries {
-			lastMessages = append(lastMessages, entry.message)
-		}
-		if counter.Messages(lastMessages)+prefixTokens > limit {
-			groups = append(groups[:len(groups)-1], exchangeGroups(last.entries)...)
-		}
+	if tokens <= limit && !request.CompactHistory {
+		return Projection{Messages: messages, EstimatedTokens: tokens}, nil
 	}
+	groups := projectionGroups(entries, prefixTokens, limit, counter)
 	// Stage 1: Observation Masking. Before dropping entire conversation turns
 	// and invoking an LLM compaction call, fold oversized historical tool
 	// outputs outside the most recent exchanges into compact previews.
@@ -221,25 +213,21 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 		if changed {
 			maskedEvidence = true
 			entries = maskedEntries
-			groups = groupProjectedMessages(entries)
-			if len(groups) > 0 {
-				last := groups[len(groups)-1]
-				var lastMessages []model.Message
-				for _, entry := range last.entries {
-					lastMessages = append(lastMessages, entry.message)
-				}
-				if counter.Messages(lastMessages)+prefixTokens > limit {
-					groups = append(groups[:len(groups)-1], exchangeGroups(last.entries)...)
-				}
-			}
+			groups = projectionGroups(entries, prefixTokens, limit, counter)
 			messages = buildMessages(entries)
 			tokens = counter.Messages(messages)
 		}
 	}
-	if tokens <= limit {
+	if tokens <= limit && !request.CompactHistory {
 		return Projection{Messages: messages, EstimatedTokens: tokens, MaskedEvidence: maskedEvidence}, nil
 	}
+	if request.CompactHistory {
+		groups = exchangeGroups(entries)
+	}
 	if len(groups) <= 1 {
+		if tokens <= limit {
+			return Projection{Messages: messages, EstimatedTokens: tokens, MaskedEvidence: maskedEvidence}, nil
+		}
 		return Projection{}, fmt.Errorf("context exceeds token budget and the latest turn cannot be dropped")
 	}
 	keepGroup := 0
@@ -264,6 +252,9 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 		}
 		keptTokens += groupTokens
 	}
+	if request.CompactHistory {
+		keepGroup = len(groups) - 1
+	}
 	if keepGroup == 0 {
 		return Projection{}, fmt.Errorf("context exceeds token budget and no complete older turn can be dropped")
 	}
@@ -278,9 +269,10 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 		entry := entries[index]
 		if entry.sequence == currentInput {
 			protected = &entries[index]
+			continue
 		}
 		// Summaries must see original evidence, never the lossy display preview.
-		dropped = append(dropped, originals[entry.sequence])
+		dropped = append(dropped, originalEntries[index].message)
 		droppedSequences = append(droppedSequences, entry.sequence)
 	}
 	kept := append(make([]model.Message, 0, len(entries)-keepFrom+len(prefix)+1), prefix...)
@@ -298,6 +290,24 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 		return Projection{}, fmt.Errorf("latest turn exceeds token budget")
 	}
 	return projection, nil
+}
+
+// A long autonomous turn may contain many complete exchanges. Split its last
+// group only when necessary; unfinished tool batches remain atomic.
+func projectionGroups(entries []projectedMessage, prefixTokens, limit int, counter TokenCounter) []projectedGroup {
+	groups := groupProjectedMessages(entries)
+	if len(groups) == 0 {
+		return groups
+	}
+	last := groups[len(groups)-1]
+	messages := make([]model.Message, len(last.entries))
+	for i, entry := range last.entries {
+		messages[i] = entry.message
+	}
+	if counter.Messages(messages)+prefixTokens > limit {
+		groups = append(groups[:len(groups)-1], exchangeGroups(last.entries)...)
+	}
+	return groups
 }
 
 // exchangeGroups never separates an assistant tool batch from any of its

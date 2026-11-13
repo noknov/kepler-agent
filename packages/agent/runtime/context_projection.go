@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func (r *Runtime) projectContext(ctx context.Context, request TurnRequest, system model.Message) (Projection, error) {
@@ -29,7 +33,10 @@ func (r *Runtime) projectContextOnce(ctx context.Context, request TurnRequest, s
 	}
 	projectRequest := r.projectionRequest(events, request, system, r.deps.Tools.ActiveDefinitions(request.SessionID))
 	if r.deps.Compactor != nil {
-		available := r.config.Context.MaxTokens - r.config.Context.ReserveTokens - r.config.Context.OutputTokens - r.config.Context.counter().Tools(projectRequest.Tools)
+		available, err := r.config.Context.inputBudget(projectRequest.Tools)
+		if err != nil {
+			return Projection{}, err
+		}
 		projectRequest.TargetTokens = available * r.config.Context.Policy.WithDefaults().SoftLimitPercent / 100
 	}
 	projection, err := r.deps.Projector.Project(ctx, projectRequest)
@@ -62,18 +69,9 @@ func (r *Runtime) projectContextOnce(ctx context.Context, request TurnRequest, s
 	if len(projection.Dropped) == 0 || r.deps.Compactor == nil {
 		return projection, nil
 	}
-	targetTokens := 4_096
-	if smallContextTarget := r.config.Context.MaxTokens / 8; smallContextTarget > 0 && smallContextTarget < targetTokens {
-		targetTokens = smallContextTarget
-	}
-	if targetTokens < 512 {
-		targetTokens = 512
-	}
-	evidence := compactionEvidence(projection)
-	summary, err := r.deps.Compactor.Compact(ctx, evidence, targetTokens)
-	if err != nil {
-		// A proactive compaction outage must not terminate work that still fits
-		// safely in the hard input budget. Never silently discard history here.
+	if err := r.compactContext(ctx, request, projection, false); err != nil {
+		// A proactive outage may use the hard budget only when no source history
+		// is discarded. It never silently turns a failed summary into truncation.
 		if ctx.Err() == nil {
 			hard, projectErr := r.deps.Projector.Project(ctx, r.projectionRequest(events, request, system, r.deps.Tools.ActiveDefinitions(request.SessionID)))
 			if projectErr == nil && len(hard.Dropped) == 0 {
@@ -82,13 +80,7 @@ func (r *Runtime) projectContextOnce(ctx context.Context, request TurnRequest, s
 		}
 		return Projection{}, err
 	}
-	metadata, _ := json.Marshal(map[string]any{"covers_through": projection.CoversThrough, "context_policy": r.config.Context.Policy.WithDefaults(), "native_continuation": hasNativeContinuation(summary)})
-	if _, err = r.record(ctx, transcript.Event{
-		SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.CompactionCreated,
-		Message: &summary, Metadata: metadata,
-	}); err != nil {
-		return Projection{}, err
-	}
+
 	events, err = r.contextEvents(ctx, request.SessionID)
 	if err != nil {
 		return Projection{}, err
@@ -98,6 +90,59 @@ func (r *Runtime) projectContextOnce(ctx context.Context, request TurnRequest, s
 		return Projection{}, err
 	}
 	return projection, err
+}
+
+// compactContext is the sole checkpoint commit path for proactive and rejected
+// requests. Its output ceiling comes from the actual remaining input capacity.
+func (r *Runtime) compactContext(ctx context.Context, request TurnRequest, projection Projection, forced bool) (err error) {
+	ctx, span := runtimeTracer.Start(ctx, "context.compact", trace.WithAttributes(
+		attribute.Bool("agent.context.forced", forced),
+		attribute.Int("agent.context.retained_tokens", projection.EstimatedTokens),
+		attribute.Int("agent.context.compacted_messages", len(projection.Dropped)),
+	))
+	defer func() {
+		if err != nil {
+			span.SetAttributes(attribute.String("error.type", string(model.ErrorKindOf(err))))
+			span.SetStatus(codes.Error, "checkpoint failed")
+		}
+		span.End()
+	}()
+	available, err := r.config.Context.inputBudget(r.deps.Tools.ActiveDefinitions(request.SessionID))
+	if err != nil {
+		return err
+	}
+	counter := r.config.Context.counter()
+	envelope := model.TextMessage(model.RoleUser, "<untrusted_transcript_summary>\n\n</untrusted_transcript_summary>")
+	overhead := counter.Messages([]model.Message{envelope, untrustedTranscriptSummaryBoundary})
+	target := min(defaultCompactionOutputTokens, available-projection.EstimatedTokens-overhead)
+	if target <= 0 {
+		return &model.Error{Kind: model.ErrorBudgetExhausted, Message: "no input capacity remains for a continuation checkpoint"}
+	}
+	started := time.Now()
+	summary, err := r.deps.Compactor.Compact(ctx, compactionEvidence(projection), target)
+	if err != nil {
+		return err
+	}
+	summaryTokens := counter.Messages([]model.Message{summary})
+	span.SetAttributes(attribute.Int("agent.context.summary_tokens", summaryTokens), attribute.Int("agent.context.summary_budget", target))
+	if len(summary.Content) == 0 || summaryTokens+projection.EstimatedTokens+counter.Messages([]model.Message{untrustedTranscriptSummaryBoundary}) > available {
+		return &model.Error{Kind: model.ErrorBudgetExhausted, Message: "compactor returned an empty or oversized continuation checkpoint"}
+	}
+	metadata, err := json.Marshal(map[string]any{
+		"covers_through": projection.CoversThrough, "forced": forced,
+		"context_policy":      r.config.Context.Policy.WithDefaults(),
+		"native_continuation": hasNativeContinuation(summary),
+		"retained_tokens":     projection.EstimatedTokens, "summary_tokens": summaryTokens,
+		"summary_budget": target, "duration_ms": time.Since(started).Milliseconds(),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = r.record(ctx, transcript.Event{
+		SessionID: request.SessionID, TurnID: request.TurnID,
+		Type: transcript.CompactionCreated, Message: &summary, Metadata: metadata,
+	})
+	return err
 }
 
 func compactionEvidence(projection Projection) []model.Message {

@@ -53,7 +53,14 @@ continuation checkpoint covering task constraints, decisions, verified work,
 failures, next actions and evidence references. With a compactor configured, the
 runtime first targets 85% of the available input budget. A proactive summary
 failure falls back to the hard budget only when no history must be discarded.
-Incomplete model responses cannot become portable compaction checkpoints.
+Incomplete model responses cannot become portable compaction checkpoints. Projection and final admission use one input-budget calculation for history,
+tool schemas, output and safety reserve. On a provider context-limit rejection,
+the same projector selects removable exchanges while retaining the current input
+and complete latest tool batch; recovery does not guess a smaller model window.
+Both paths commit through one checkpoint owner. Empty or oversized checkpoints
+are rejected before durable append. Checkpoint metadata records retained/summary
+tokens, the output allowance, elapsed time, coverage and recovery reason.
+
 Static prompt layers
 (`LayerCore`, `LayerProduct`, `LayerEnvironment`) are automatically separated
 from dynamic layers (`LayerProject`, `LayerUser`, `LayerSkill`, `LayerTurn`) via

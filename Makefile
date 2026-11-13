@@ -85,6 +85,11 @@ eval-harbor:
 bench:
 	GOCACHE=$(GOCACHE) go test ./packages/profiles/local ./packages/agent/tool ./packages/tools/websearch -run '^$$' -bench 'Benchmark(JSONLAppend|DeferredSearch|CleanWhitespace)$$' -benchmem -benchtime=20x -count=3
 
+# Isolated harness overhead; no network calls or model-specific prompt grading.
+.PHONY: bench-context
+bench-context:
+	GOCACHE=$(GOCACHE) go test ./packages/agent/runtime -run '^$$' -bench 'Benchmark(LongSessionProjection|ContextEventsWithLongAuditTrail|OversizedUnicodeCompactionChunks)$$' -benchmem -count=5
+
 .PHONY: eval-harbor-oracle
 eval-harbor-oracle:
 	$(PYTHON) evals/run_harbor.py --benchmark "$(EVAL_HARBOR_BENCHMARK)" --candidate oracle --jobs-dir "$(EVAL_HARBOR_JOBS_DIR)" --output "$(EVAL_HARBOR_OUTPUT)-oracle" $(EVAL_HARBOR_ARGS)

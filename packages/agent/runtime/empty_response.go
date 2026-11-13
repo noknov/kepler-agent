@@ -32,7 +32,7 @@ func (r *Runtime) recoverGenerateAfterContextLimit(ctx context.Context, request 
 		return model.Response{}, err
 	}
 	if compactErr := r.forceCompactAfterContextLimit(ctx, request, system); compactErr != nil {
-		return model.Response{}, err
+		return model.Response{}, errors.Join(err, compactErr)
 	}
 	projection, projErr := r.projectContext(ctx, request, system)
 	if projErr != nil {

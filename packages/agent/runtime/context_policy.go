@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+
 	"github.com/noknov/kepler-agent/packages/agent/model"
 )
 
