@@ -25,9 +25,13 @@ type ContextConfig struct {
 // sent alongside the projection; their schemas consume the same window even
 // though they are not transcript messages.
 type ProjectRequest struct {
-	Events []transcript.Event
-	System model.Message
-	Tools  []model.ToolDefinition
+	// Only successful inference proves delivery. Keep unsampled current-turn
+	// inputs as raw data, including every message in a steering batch.
+	TurnID         string
+	SampledThrough uint64
+	Events         []transcript.Event
+	System         model.Message
+	Tools          []model.ToolDefinition
 	// Ephemeral request data must participate in the same budget as history.
 	Environment  model.Message
 	CurrentInput model.Message
@@ -106,9 +110,13 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 		}
 	}
 	var currentInput uint64
+	unsampledInputs := make(map[uint64]bool)
 	for _, event := range events {
 		if event.Type == transcript.UserInput || event.Type == transcript.SteeringInput {
 			currentInput = event.Sequence
+			if request.TurnID != "" && event.TurnID == request.TurnID && event.Sequence > request.SampledThrough {
+				unsampledInputs[event.Sequence] = true
+			}
 		}
 	}
 	entries := make([]projectedMessage, 0, len(events)+1)
@@ -126,7 +134,7 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 		}
 	}
 	for _, event := range events {
-		if event.Sequence <= baseSequence && event.Sequence != currentInput {
+		if event.Sequence <= baseSequence && event.Sequence != currentInput && !unsampledInputs[event.Sequence] {
 			continue
 		}
 		if event.Type == transcript.ApprovalRequested && event.ToolCall != nil && resolvedCalls[[2]string{event.TurnID, event.ToolCall.ID}] {
@@ -255,6 +263,15 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 	if request.CompactHistory {
 		keepGroup = len(groups) - 1
 	}
+	// Retain the complete suffix from the first unseen input, aligned to an
+	// exchange boundary. Coverage can never hide a pending input on restart.
+	for index, group := range groups {
+		for _, entry := range group.entries {
+			if unsampledInputs[entry.sequence] {
+				keepGroup = min(keepGroup, index)
+			}
+		}
+	}
 	if keepGroup == 0 {
 		return Projection{}, fmt.Errorf("context exceeds token budget and no complete older turn can be dropped")
 	}
@@ -269,7 +286,6 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 		entry := entries[index]
 		if entry.sequence == currentInput {
 			protected = &entries[index]
-			continue
 		}
 		// Summaries must see original evidence, never the lossy display preview.
 		dropped = append(dropped, originalEntries[index].message)
@@ -282,9 +298,16 @@ func (p BoundedProjector) Project(_ context.Context, request ProjectRequest) (Pr
 	for _, entry := range entries[keepFrom:] {
 		kept = append(kept, entry.message)
 	}
+	coverage := entries[keepFrom-1].sequence
+	for sequence := range unsampledInputs {
+		coverage = min(coverage, sequence-1)
+	}
+	if coverage == 0 {
+		return Projection{}, fmt.Errorf("no delivered history is available for compaction")
+	}
 	projection := Projection{
 		Messages: kept, EstimatedTokens: counter.Messages(kept), Dropped: dropped, DroppedSequences: droppedSequences,
-		CoversThrough: entries[keepFrom-1].sequence, MaskedEvidence: maskedEvidence,
+		CoversThrough: coverage, MaskedEvidence: maskedEvidence,
 	}
 	if projection.EstimatedTokens > limit {
 		return Projection{}, fmt.Errorf("latest turn exceeds token budget")

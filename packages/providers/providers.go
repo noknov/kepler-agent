@@ -254,7 +254,7 @@ func (c *Client) generate(ctx context.Context, request model.Request, sink model
 		publish(model.StreamEvent{Type: model.StreamToolCallDone, ToolCall: &call})
 	}
 
-	canonical := model.Response{Message: message, FinishReason: reason, Usage: toUsage(response.Usage), RawMetadata: response.Raw}
+	canonical := model.Response{InputContextKey: c.inputContextKey(request.Model), Message: message, FinishReason: reason, Usage: toUsage(response.Usage), RawMetadata: response.Raw}
 	if !presentedCommentary && len(message.ToolCalls()) > 0 && response.Message.Content != "" {
 		publish(model.StreamEvent{Type: model.StreamCommentary, Text: response.Message.Content, Phase: "commentary"})
 	}
@@ -568,7 +568,7 @@ var _ model.Client = (*Client)(nil)
 
 func bindClient(wire llm.Client, config Config) *Client {
 	// The endpoint and credential identity are part of the continuation contract.
-	identity, _ := json.Marshal([]string{config.Provider, config.Protocol, config.BaseURL, config.APIKey, config.ChatGPTCredentialsFile})
+	identity, _ := json.Marshal([]string{config.Provider, config.Protocol, config.BaseURL, config.APIKey, config.ChatGPTCredentialsFile, config.AnthropicFlavor})
 	fingerprint := sha256.Sum256(identity)
 	client := &Client{Wire: wire, provider: config.Provider, route: fmt.Sprintf("%x", fingerprint)}
 	if config.Provider == "chatgpt" {

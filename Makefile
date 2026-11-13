@@ -88,7 +88,7 @@ bench:
 # Isolated harness overhead; no network calls or model-specific prompt grading.
 .PHONY: bench-context
 bench-context:
-	GOCACHE=$(GOCACHE) go test ./packages/agent/runtime -run '^$$' -bench 'Benchmark(LongSessionProjection|ContextEventsWithLongAuditTrail|OversizedUnicodeCompactionChunks)$$' -benchmem -count=5
+	GOCACHE=$(GOCACHE) go test ./packages/agent/runtime -run '^$$' -bench 'Benchmark(LongSessionProjection|InputContextEstimate|ContextEventsWithLongAuditTrail|OversizedUnicodeCompactionChunks)$$' -benchmem -count=5
 
 .PHONY: eval-harbor-oracle
 eval-harbor-oracle:

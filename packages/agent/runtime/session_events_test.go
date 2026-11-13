@@ -3,10 +3,11 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"testing"
+
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
-	"testing"
 )
 
 func BenchmarkContextEventsWithLongAuditTrail(b *testing.B) {
@@ -30,12 +31,12 @@ func BenchmarkContextEventsWithLongAuditTrail(b *testing.B) {
 }
 
 func TestSessionEventViewsAreAppendSafeAndRequestIDsIncremental(t *testing.T) {
-	state := &sessionEvents{requests: make(map[string]map[string]bool)}
+	state := &sessionEvents{requestBoundaries: make(map[string]map[string]uint64)}
 	for i, attempt := range []int{1, 2} {
 		raw, _ := json.Marshal(modelRequestState{RequestID: "request", Attempt: attempt})
 		state.append(transcript.Event{ID: "event", Sequence: uint64(i + 1), TurnID: "t", Type: transcript.ModelRequestStarted, Metadata: raw})
 	}
-	if len(state.requests["t"]) != 1 {
+	if len(state.requestBoundaries["t"]) != 1 {
 		t.Fatal("retry consumed another logical request ID")
 	}
 	catalog, _ := tool.NewCatalog()
@@ -56,7 +57,7 @@ func TestSessionEventViewsAreAppendSafeAndRequestIDsIncremental(t *testing.T) {
 }
 
 func TestSessionEventsRetainOutOfOrderDurableAppends(t *testing.T) {
-	state := &sessionEvents{requests: make(map[string]map[string]bool)}
+	state := &sessionEvents{requestBoundaries: make(map[string]map[string]uint64)}
 	input := model.TextMessage(model.RoleUser, "task")
 	state.append(transcript.Event{Sequence: 1, Type: transcript.UserInput, Message: &input})
 	summary := model.TextMessage(model.RoleUser, "checkpoint")
@@ -70,8 +71,8 @@ func TestSessionEventsRetainOutOfOrderDurableAppends(t *testing.T) {
 	answer := model.TextMessage(model.RoleAssistant, "after covered history")
 	state.append(transcript.Event{Sequence: 4, Type: transcript.AssistantMessage, Message: &answer})
 	state.append(request) // Store idempotency must still avoid duplicate accounting.
-	if len(state.events) != 5 || len(state.requests["t"]) != 1 {
-		t.Fatalf("lost/duplicated durable facts: events=%+v requests=%v", state.events, state.requests)
+	if len(state.events) != 5 || len(state.requestBoundaries["t"]) != 1 {
+		t.Fatalf("lost/duplicated durable facts: events=%+v requests=%v", state.events, state.requestBoundaries)
 	}
 	for i, event := range state.events {
 		if event.Sequence != uint64(i+1) {

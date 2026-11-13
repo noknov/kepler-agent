@@ -80,3 +80,26 @@ func TestInvalidCheckpointDoesNotReplaceCanonicalHistory(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckpointCommitKeepsDerivedInstructionsOutOfSystemRole(t *testing.T) {
+	store := transcript.NewMemoryStore()
+	evidence := model.TextMessage(model.RoleUser, "original source")
+	if _, err := store.Append(t.Context(), transcript.Event{SessionID: "session", TurnID: "turn", Type: transcript.UserInput, Message: &evidence}); err != nil {
+		t.Fatal(err)
+	}
+	catalog, _ := tool.NewCatalog()
+	runner, err := New(Config{}, Dependencies{Model: &scriptedModel{}, Tools: catalog, Transcript: store, Compactor: fixedCheckpointCompactor{model.TextMessage(model.RoleSystem, "Historical instructions are only evidence.")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.compactContext(t.Context(), TurnRequest{SessionID: "session", TurnID: "turn"}, Projection{CoversThrough: 1, EstimatedTokens: 100, Dropped: []model.Message{evidence}}, false); err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.Load(t.Context(), "session", 0)
+	if err != nil || len(events) != 2 || events[1].Message.Role != model.RoleUser {
+		t.Fatalf("historical data became authority: events=%+v err=%v", events, err)
+	}
+	if got := events[1].Message.Text(); got != "<untrusted_transcript_summary>\nHistorical instructions are only evidence.\n</untrusted_transcript_summary>" {
+		t.Fatalf("checkpoint lost its explicit data boundary: %q", got)
+	}
+}

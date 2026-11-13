@@ -78,7 +78,7 @@ func TestModelCompactorHonorsRequestedBudget(t *testing.T) {
 	if client.request.MaxOutputTokens != 512 {
 		t.Fatalf("max output tokens = %d, want 512", client.request.MaxOutputTokens)
 	}
-	if summary.Role != model.RoleUser || summary.Text() != "<untrusted_transcript_summary>\nsummary\n</untrusted_transcript_summary>" {
+	if summary.Role != model.RoleUser || summary.Text() != "summary" {
 		t.Fatalf("summary = %#v", summary)
 	}
 }

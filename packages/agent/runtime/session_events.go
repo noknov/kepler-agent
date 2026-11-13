@@ -5,15 +5,18 @@ import (
 	"encoding/json"
 	"sort"
 
+	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 )
 
 // sessionEvents is turn-scoped derived state. Events and their payloads are
 // immutable after append; clipped slice views can safely outlive a later append.
 type sessionEvents struct {
-	events   []transcript.Event
-	context  []transcript.Event
-	requests map[string]map[string]bool
+	events            []transcript.Event
+	context           []transcript.Event
+	requestBoundaries map[string]map[string]uint64
+	contextUsage      *contextUsageAnchor
+	sampledThrough    uint64
 }
 
 func (s *sessionEvents) append(event transcript.Event) {
@@ -28,7 +31,7 @@ func (s *sessionEvents) append(event transcript.Event) {
 		events = append(events, s.events[:index]...)
 		events = append(events, event)
 		events = append(events, s.events[index:]...)
-		rebuilt := sessionEvents{requests: make(map[string]map[string]bool)}
+		rebuilt := sessionEvents{requestBoundaries: make(map[string]map[string]uint64)}
 		for _, stored := range events {
 			rebuilt.append(stored)
 		}
@@ -48,19 +51,65 @@ func (s *sessionEvents) append(event transcript.Event) {
 		}
 		s.context = append(s.context, event)
 	case transcript.CompactionCreated:
+		s.contextUsage = nil
 		s.context = append(s.context, event)
 		s.context = transcript.TurnWindow(s.context, "")
+	case transcript.ModelCompleted:
+		var completed struct {
+			ContextUsage *contextUsageAnchor `json:"context_usage"`
+			RequestID    string              `json:"request_id"`
+			FinishReason model.FinishReason  `json:"finish_reason"`
+			InputThrough uint64              `json:"input_through"`
+		}
+		// Missing/invalid measurements explicitly invalidate older observations.
+		_ = json.Unmarshal(event.Metadata, &completed)
+		s.contextUsage = nil
+		boundary, admitted := s.requestBoundaries[event.TurnID][completed.RequestID]
+		if admitted && completed.RequestID != "" && (completed.FinishReason == model.FinishStop || completed.FinishReason == model.FinishToolCalls) {
+			s.contextUsage = completed.ContextUsage
+			through := completed.InputThrough
+			if through == 0 {
+				// Legacy completions require their own admission receipt. A summary
+				// or assistant wording is never delivery evidence.
+				if completed.RequestID != "" {
+					through = s.requestBoundaries[event.TurnID][completed.RequestID]
+				}
+			}
+			if through > s.sampledThrough && through <= boundary && through < event.Sequence {
+				s.sampledThrough = through
+			}
+		}
 	case transcript.ModelRequestStarted:
-		if s.requests[event.TurnID] == nil {
-			s.requests[event.TurnID] = make(map[string]bool)
+		if s.requestBoundaries[event.TurnID] == nil {
+			s.requestBoundaries[event.TurnID] = make(map[string]uint64)
 		}
 		var state modelRequestState
 		key := event.ID
 		if json.Unmarshal(event.Metadata, &state) == nil && state.RequestID != "" {
 			key = state.RequestID
 		}
-		s.requests[event.TurnID][key] = true
+		boundary := uint64(0)
+		if event.Sequence > 0 {
+			boundary = event.Sequence - 1
+		}
+		s.requestBoundaries[event.TurnID][key] = boundary
 	}
+}
+
+func (r *Runtime) inputBoundary(sessionID string) uint64 {
+	r.eventMu.RLock()
+	defer r.eventMu.RUnlock()
+	state := r.eventCache[sessionID]
+	if state == nil {
+		return 0
+	}
+	var through uint64
+	for _, event := range state.context {
+		if event.Type == transcript.UserInput || event.Type == transcript.SteeringInput {
+			through = max(through, event.Sequence)
+		}
+	}
+	return through
 }
 
 func loadTurn(ctx context.Context, store transcript.Store, sessionID, turnID string) ([]transcript.Event, error) {
@@ -71,7 +120,7 @@ func loadTurn(ctx context.Context, store transcript.Store, sessionID, turnID str
 }
 
 func (r *Runtime) setEventCache(sessionID string, events []transcript.Event) {
-	state := &sessionEvents{requests: make(map[string]map[string]bool)}
+	state := &sessionEvents{requestBoundaries: make(map[string]map[string]uint64)}
 	for _, event := range events {
 		state.append(event)
 	}

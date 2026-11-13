@@ -65,10 +65,9 @@ func (c ModelCompactor) Compact(ctx context.Context, messages []model.Message, t
 	if err != nil {
 		return model.Message{}, err
 	}
-	// A summary is derived from prior user and tool content, so it must not be
-	// promoted to system authority. The projector adds a fixed system boundary
-	// before this data on every future request.
-	checkpoint := model.TextMessage(model.RoleUser, "<untrusted_transcript_summary>\n"+response.Text()+"\n</untrusted_transcript_summary>")
+	// Return derived content. The checkpoint owner assigns its trust boundary
+	// when committing, including for custom Compactor implementations.
+	checkpoint := model.TextMessage(model.RoleUser, response.Text())
 	if c.NativeClient != nil {
 		name := c.NativeModel
 		if name == "" {

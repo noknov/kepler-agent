@@ -232,6 +232,10 @@ type observedModel struct {
 	Metrics *observability.Recorder
 }
 
+func (c observedModel) InputContextKey(ctx context.Context, name string) (string, error) {
+	return model.InputContextKey(ctx, c.Client, name)
+}
+
 func (c observedModel) Generate(ctx context.Context, request model.Request, sink model.EventSink) (model.Response, error) {
 	started := time.Now()
 	response, err := c.Client.Generate(ctx, request, sink)

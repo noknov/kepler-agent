@@ -47,6 +47,26 @@ func (r *Runtime) projectContextOnce(ctx context.Context, request TurnRequest, s
 	if err != nil {
 		return Projection{}, err
 	}
+	if len(projection.Dropped) == 0 && !projection.MaskedEvidence {
+		input := r.inputEstimate(ctx, request, projection.Messages, projectRequest.Tools)
+		threshold, budgetErr := r.config.Context.inputBudget(projectRequest.Tools)
+		if budgetErr != nil {
+			return Projection{}, budgetErr
+		}
+		if projectRequest.TargetTokens > 0 {
+			threshold = projectRequest.TargetTokens
+		}
+		projection.EstimatedTokens = max(0, input-r.config.Context.counter().Tools(projectRequest.Tools))
+		if projection.EstimatedTokens > threshold {
+			// The provider measured the unchanged prefix above the local estimate.
+			// Select structural history reduction through the existing planner.
+			projectRequest.CompactHistory = true
+			projection, err = r.deps.Projector.Project(ctx, projectRequest)
+			if err != nil {
+				return Projection{}, err
+			}
+		}
+	}
 	needsReader := projection.MaskedEvidence
 	for _, message := range projection.Dropped {
 		for _, block := range message.Content {
@@ -123,6 +143,10 @@ func (r *Runtime) compactContext(ctx context.Context, request TurnRequest, proje
 	if err != nil {
 		return err
 	}
+	summary, err = continuationCheckpoint(summary)
+	if err != nil {
+		return err
+	}
 	summaryTokens := counter.Messages([]model.Message{summary})
 	span.SetAttributes(attribute.Int("agent.context.summary_tokens", summaryTokens), attribute.Int("agent.context.summary_budget", target))
 	if len(summary.Content) == 0 || summaryTokens+projection.EstimatedTokens+counter.Messages([]model.Message{untrustedTranscriptSummaryBoundary}) > available {
@@ -164,4 +188,29 @@ func compactionEvidence(projection Projection) []model.Message {
 		messages[i] = message
 	}
 	return messages
+}
+
+// All compactors produce data, including profile-supplied implementations. Only
+// this owner wraps portable text and assigns its non-system role before commit.
+func continuationCheckpoint(summary model.Message) (model.Message, error) {
+	checkpoint := model.Message{Role: model.RoleUser}
+	if text := summary.Text(); text != "" {
+		checkpoint = model.TextMessage(model.RoleUser, "<untrusted_transcript_summary>\n"+text+"\n</untrusted_transcript_summary>")
+	}
+	for _, block := range summary.Content {
+		switch block.Type {
+		case model.ContentText:
+		case model.ContentContinuation:
+			if block.Continuation == nil {
+				return model.Message{}, fmt.Errorf("compactor returned a missing native continuation")
+			}
+			checkpoint.Content = append(checkpoint.Content, block)
+		default:
+			return model.Message{}, fmt.Errorf("compactor returned unsupported checkpoint content %q", block.Type)
+		}
+	}
+	if len(checkpoint.Content) == 0 {
+		return model.Message{}, fmt.Errorf("compactor returned an empty continuation checkpoint")
+	}
+	return checkpoint, nil
 }
