@@ -3,11 +3,12 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"strings"
+	"testing"
+
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
-	"strings"
-	"testing"
 )
 
 func TestPendingApprovalProjectsOneNonExecutionResult(t *testing.T) {
@@ -38,7 +39,7 @@ func TestPendingApprovalProjectsOneNonExecutionResult(t *testing.T) {
 					if !block.ToolResult.IsError {
 						t.Fatal("approval was represented as a successful execution")
 					}
-					if resolved && block.ToolResult.Content[0].Text != "declined" {
+					if resolved && block.ToolResult.Content[len(block.ToolResult.Content)-1].Text != "declined" {
 						t.Fatal("pending placeholder hid the recorded resolution")
 					}
 				}

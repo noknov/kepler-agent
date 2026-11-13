@@ -146,7 +146,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	surface := hostedTools.SurfaceOptions{Name: "slack", AvailableDeps: map[string]bool{
 		"slack": slackClient != nil,
 	}, Connections: &connService}
-	bundle, err := hostedTools.NewCatalog(cfg, workspacePolicy, safety.NewCommandPolicy(), stores.UserPrefs, surface)
+	bundle, err := hostedTools.NewCatalog(cfg, workspacePolicy, stores.UserPrefs, surface)
 	if err != nil {
 		return nil, fmt.Errorf("build hosted tool catalog: %w", err)
 	}

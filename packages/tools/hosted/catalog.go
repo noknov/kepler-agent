@@ -38,7 +38,7 @@ type CatalogBundle struct {
 	Notion     *notionTools.Registrar
 }
 
-func NewCatalog(cfg config.Config, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy, userPrefs userprefs.Store, surface SurfaceOptions) (CatalogBundle, error) {
+func NewCatalog(cfg config.Config, workspacePolicy safety.WorkspacePolicy, userPrefs userprefs.Store, surface SurfaceOptions) (CatalogBundle, error) {
 	policy := policyForSurface(cfg, surface)
 	catalog, err := tool.NewCatalog()
 	if err != nil {
@@ -49,8 +49,8 @@ func NewCatalog(cfg config.Config, workspacePolicy safety.WorkspacePolicy, comma
 	}
 	registration := tool.NewRegistration(catalog, policy)
 	registerWorkspaceTools(registration, workspacePolicy)
-	registerCodeTools(registration, cfg, workspacePolicy, commandPolicy)
-	registerIntegrationTools(registration, cfg, commandPolicy, surface.Connections)
+	registerCodeTools(registration, cfg, workspacePolicy)
+	registerIntegrationTools(registration, cfg, surface.Connections)
 	clickstackReg := clickstackTools.NewRegistrar(cfg.Integrations.ClickStack, surface.Connections)
 	notionReg := notionTools.NewRegistrar(cfg.Integrations.Notion, surface.Connections)
 	registerKnowledgeTools(registration, cfg)
@@ -108,11 +108,11 @@ func registerWorkspaceTools(registration *tool.Registration, workspacePolicy saf
 	registration.Deferred(tool.CategoryWorkspace, workspaceTools.ListReposTool{Roots: workspacePolicy.Roots})
 }
 
-func registerCodeTools(registration *tool.Registration, cfg config.Config, workspacePolicy safety.WorkspacePolicy, commandPolicy safety.CommandPolicy) {
+func registerCodeTools(registration *tool.Registration, cfg config.Config, workspacePolicy safety.WorkspacePolicy) {
 	registration.Visible(codeTools.SearchTool{Paths: workspacePolicy})
 	registration.Visible(codeTools.ReadFileTool{Paths: workspacePolicy})
 
-	gitBase := gitTools.Base{Paths: workspacePolicy, Guard: commandPolicy, Timeout: cfg.Tools.CommandTimeout}
+	gitBase := gitTools.Base{Paths: workspacePolicy, Timeout: cfg.Tools.CommandTimeout}
 	registration.Visible(gitTools.RepoSearchTool{Base: gitBase})
 	registration.Visible(gitTools.RepoReadFileTool{Base: gitBase})
 	registration.Visible(gitTools.FetchRefTool{Base: gitBase})
@@ -123,7 +123,7 @@ func registerCodeTools(registration *tool.Registration, cfg config.Config, works
 	registration.Visible(gitTools.ShowTool{Base: gitBase})
 }
 
-func registerIntegrationTools(registration *tool.Registration, cfg config.Config, commandPolicy safety.CommandPolicy, conn *connections.Service) {
+func registerIntegrationTools(registration *tool.Registration, cfg config.Config, conn *connections.Service) {
 	integrations := cfg.Integrations
 	k8sDefaults := k8sTools.Defaults{
 		Project:   integrations.GCP.DefaultProject,

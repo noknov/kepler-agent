@@ -11,6 +11,13 @@ a model-visible notice. This applies to source-limited results and runtime
 omission/spill alike; referenced artifacts remain accessible. The derived notice
 is included in context budgeting and does not modify stored source evidence.
 
+Failed tool results project their typed status/error code as model-visible data,
+including for wire protocols without a native tool-error flag. This derived
+status is counted in context budgets and does not replace or mutate source output.
+Command timeouts retain partial stdout/stderr; failures before execution do not
+invent a successful exit code. Git search treats only a completed grep exit 1 as
+no matches; invalid queries, failed commands and cancellation remain errors.
+
 The canonical transcript is append-only. Hosted sessions persist events in
 `agent_transcript_events`; local sessions persist the same event model as
 JSONL. Context projection, compaction, steering, retries, tool execution, and
@@ -156,19 +163,19 @@ The `evals` package treats the benchmark adapter as a black-box process.
 Because it runs the same harness, its context, tool, retry, and termination
 results exercise the shared runtime used by Slack.
 
-Hosted and local profiles enable the optional circuit breaker by default. It blocks
-identical repeated failed tool calls at the configured failure threshold and
-appends a pre-trip self-correction warning (`CircuitWarning`) to repeated tool
-error results on the penultimate failure. This is a liveness/cost guard, not
-authorization. The implementation and reset semantics live in
-[circuit.go](../packages/agent/runtime/circuit.go).
+Tool failures remain task evidence. Identical arguments do not imply that the
+world, workspace or expected outcome stayed unchanged: tests, builds and searches
+may fail repeatedly before a repair succeeds. The runtime does not block these
+calls or insert self-correction warnings. Steps, tokens, deadlines and explicit
+capability policy bound execution. Provider health circuits remain in the shared
+model resilience policy and use typed transport/provider failures.
 
 
 ## Delegation
 
 `agent-explore` is a read-only delegation tool, not a second product runtime. It
-creates isolated child turns from a filtered catalog with its own circuit breaker
-(`MaxIdenticalFailedAttempts: 3`), records a parent link and its own transcript,
+creates isolated child turns from a filtered catalog with explicit step/token
+budgets, records a parent link and its own transcript,
 and returns a factual report to the parent. Child `model.Usage` across single or
 batch subtasks is rolled up into the tool result metadata and added to the
 parent turn's `TurnResult.Usage`. Each fresh child

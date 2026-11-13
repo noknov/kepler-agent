@@ -1,9 +1,10 @@
 package hostedtools
 
 import (
+	"testing"
+
 	"github.com/noknov/kepler-agent/packages/config"
 	"github.com/noknov/kepler-agent/packages/safety"
-	"testing"
 )
 
 func TestApprovalToolExposureRequiresConfiguredSlackOperator(t *testing.T) {
@@ -14,7 +15,7 @@ func TestApprovalToolExposureRequiresConfiguredSlackOperator(t *testing.T) {
 			if configured {
 				cfg.Integrations.GitHub.ApprovalNotifyUserID = "owner"
 			}
-			bundle, err := NewCatalog(cfg, safety.WorkspacePolicy{}, safety.CommandPolicy{}, nil, SurfaceOptions{Name: surface})
+			bundle, err := NewCatalog(cfg, safety.WorkspacePolicy{}, nil, SurfaceOptions{Name: surface})
 			if err != nil {
 				t.Fatal(err)
 			}

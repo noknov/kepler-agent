@@ -36,7 +36,7 @@ func TestSafeEnvironmentRejectsDangerousOverrides(t *testing.T) {
 
 func TestDarwinSandboxProfileAllowsDevNullWrites(t *testing.T) {
 	workspace := Workspace{Root: "/workspace", Temp: "/workspace/.kepler-tmp"}
-	profile := darwinSandboxProfile(workspace, nil, nil, false)
+	profile := darwinSandboxProfile(workspace, nil, nil, nil, false)
 	if !strings.Contains(profile, `(allow file-write* (literal "/dev/null"))`) {
 		t.Fatalf("/dev/null write access is required for standard command redirection: %s", profile)
 	}
@@ -51,7 +51,7 @@ func TestDarwinSandboxProfileDeniesSensitiveDirectoryDescendants(t *testing.T) {
 	if err := os.Mkdir(sensitive, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	profile := darwinSandboxProfile(Workspace{Root: root, Temp: filepath.Join(root, ".tmp")}, nil, []string{sensitive}, false)
+	profile := darwinSandboxProfile(Workspace{Root: root, Temp: filepath.Join(root, ".tmp")}, nil, []string{sensitive}, nil, false)
 	if !strings.Contains(profile, `(subpath "`+sensitive+`")`) {
 		t.Fatalf("missing sensitive subpath denial: %s", profile)
 	}
@@ -95,7 +95,7 @@ func TestSanitizedGitEnvironmentPersistsIndex(t *testing.T) {
 }
 
 func TestCanonicalReadRootsRejectsBroadAndResolvesSymlink(t *testing.T) {
-	if _, err := canonicalReadRoots([]string{"/"}); err == nil {
+	if _, err := canonicalReadRoots([]string{"/"}, nil); err == nil {
 		t.Fatal("root read grant was accepted")
 	}
 	dir := t.TempDir()
@@ -104,7 +104,7 @@ func TestCanonicalReadRootsRejectsBroadAndResolvesSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.Remove(link)
-	roots, err := canonicalReadRoots([]string{link, dir})
+	roots, err := canonicalReadRoots([]string{link, dir}, nil)
 	real, _ := filepath.EvalSymlinks(dir)
 	if err != nil || len(roots) != 1 || roots[0] != real {
 		t.Fatalf("roots=%#v err=%v", roots, err)
@@ -222,5 +222,61 @@ func TestDarwinSandboxCanReadAndWriteItsScratchDirectory(t *testing.T) {
 	result, err := sandbox.Run(context.Background(), CommandRequest{Argv: []string{"/bin/sh", "-c", `mkdir -p "$HOME/cache" && printf scratch > "$TMPDIR/file" && cat "$TMPDIR/file"`}})
 	if err != nil || result.ExitCode != 0 || result.Output != "scratch" {
 		t.Fatalf("result=%+v error=%v", result, err)
+	}
+}
+
+func TestIntegrationSandboxProtectsOutsideFilesWithoutCommandClassification(t *testing.T) {
+	if os.Getenv("SANDBOX_INTEGRATION") != "1" {
+		t.Skip("SANDBOX_INTEGRATION is not enabled")
+	}
+	workspace, err := NewWorkspace(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workspace.Close()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sandbox := Sandbox{Workspace: workspace}
+	for _, argv := range [][]string{
+		{"/bin/sh", "-c", "printf changed > \"$1\"", "script", outside},
+		{"/bin/rm", "-rf", "--", outside},
+	} {
+		_, err := sandbox.Run(t.Context(), CommandRequest{Argv: argv})
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, readErr := os.ReadFile(outside)
+		if readErr != nil || string(data) != "original" {
+			t.Fatalf("outside file was mutated by %q: data=%q error=%v", argv[0], data, readErr)
+		}
+	}
+}
+
+func TestIntegrationSandboxCannotReadAnotherScratchDirectory(t *testing.T) {
+	if os.Getenv("SANDBOX_INTEGRATION") != "1" {
+		t.Skip("SANDBOX_INTEGRATION is not enabled")
+	}
+	workspace, err := NewWorkspace(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workspace.Close()
+	outside := filepath.Join(t.TempDir(), "other-application.txt")
+	if err := os.WriteFile(outside, []byte("other-scratch-private-content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := (Sandbox{Workspace: workspace}).Run(t.Context(), CommandRequest{Argv: []string{"/bin/cat", outside}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ExitCode == 0 || strings.Contains(result.Output, "other-scratch-private-content") {
+		t.Fatalf("another scratch directory was readable: %+v", result)
+	}
+	sandbox := Sandbox{Workspace: workspace, AdditionalReadRoots: []string{filepath.Dir(outside)}}
+	allowed, err := sandbox.Run(t.Context(), CommandRequest{Argv: []string{"/bin/cat", outside}})
+	if err != nil || allowed.ExitCode != 0 || strings.TrimSpace(allowed.Output) != "other-scratch-private-content" {
+		t.Fatalf("explicit read root was not honored: %+v %v", allowed, err)
 	}
 }

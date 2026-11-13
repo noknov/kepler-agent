@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -20,7 +21,6 @@ import (
 
 type Base struct {
 	Paths   safety.WorkspacePolicy
-	Guard   safety.CommandPolicy
 	Timeout time.Duration
 }
 
@@ -152,7 +152,7 @@ func (t SearchRefTool) Execute(ctx context.Context, call tool.Call) (tool.Result
 	cmdArgs = append(cmdArgs, safety.SensitiveGitPathspecs()...)
 	out, err := t.run(ctx, repo, cmdArgs...)
 	if err != nil {
-		if strings.TrimSpace(out) == "" {
+		if noGitGrepMatches(err) {
 			return tool.TextResult("no matches"), nil
 		}
 		return tool.Result{}, err
@@ -226,7 +226,7 @@ func (t RepoSearchTool) Execute(ctx context.Context, call tool.Call) (tool.Resul
 	cmdArgs = append(cmdArgs, safety.SensitiveGitPathspecs()...)
 	out, err := t.run(ctx, repo, cmdArgs...)
 	if err != nil {
-		if strings.TrimSpace(out) == "" {
+		if noGitGrepMatches(err) {
 			return tool.TextResult(snap.header() + "\n\nno matches"), nil
 		}
 		return tool.Result{}, err
@@ -720,9 +720,7 @@ func repoLabel(repo string) string {
 }
 
 func (b Base) run(ctx context.Context, repo string, args ...string) (string, error) {
-	if err := b.Guard.CheckArgv(append([]string{"git", "-C", repo}, args...)); err != nil {
-		return "", err
-	}
+
 	timeout := b.Timeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second
@@ -734,13 +732,21 @@ func (b Base) run(ctx context.Context, repo string, args ...string) (string, err
 	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
 	var stdout limitedGitBuffer
 	stdout.limit = 8 << 20
-	var stderr bytes.Buffer
+	var stderr limitedGitBuffer
+	stderr.limit = 64 << 10
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return stdout.String(), fmt.Errorf("git failed: %s", strings.TrimSpace(stderr.String()))
+		return stdout.String(), fmt.Errorf("git failed: %w: %s", errors.Join(err, ctx.Err()), strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), nil
+}
+
+// Git grep's exit 1 means a completed search with no matches. Invalid queries,
+// failed execution and cancellation must remain errors, even with empty stdout.
+func noGitGrepMatches(err error) bool {
+	var exit *exec.ExitError
+	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && errors.As(err, &exit) && exit.ExitCode() == 1
 }
 
 type limitedGitBuffer struct {

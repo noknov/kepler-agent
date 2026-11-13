@@ -57,7 +57,6 @@ type Config struct {
 	RetryBaseDelay          time.Duration
 	Context                 ContextConfig
 	ToolResults             ToolResultConfig
-	CircuitBreaker          CircuitBreakerConfig
 }
 
 func (c Config) withDefaults() Config {
@@ -140,8 +139,6 @@ type Runtime struct {
 	locks      map[string]*sessionMutex
 	eventMu    sync.RWMutex
 	eventCache map[string]*sessionEvents
-	circuitMu  sync.Mutex
-	circuits   map[string]*circuitState
 }
 
 type sessionMutex struct {
@@ -200,7 +197,6 @@ func New(config Config, deps Dependencies) (*Runtime, error) {
 		deps:       deps,
 		locks:      make(map[string]*sessionMutex),
 		eventCache: make(map[string]*sessionEvents),
-		circuits:   make(map[string]*circuitState),
 	}, nil
 }
 

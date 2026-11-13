@@ -20,8 +20,14 @@ substitute for checking the upstream resource permissions intended for users.
 
 The local profile combines workspace path checks, sensitive-path restrictions,
 scoped approvals, and macOS Seatbelt or Linux bubblewrap. Commands use argv.
-Pattern matching supplies risk signals; it is not a shell parser or isolation
-boundary. Disabling the sandbox is an explicit development escape hatch and
+The exec adapter resolves argument-dependent effects before policy: network
+access requires approval only when requested, and workspace confinement is
+provided by the OS sandbox. Workspace writes have the same permission contract
+as file-write tools; command spelling does not add or remove authority. Invalid
+argv/timeout values fail before execution. Both sandboxes protect the OS account
+home independently of the caller-controlled HOME value. macOS denies other application scratch
+while allowing traversal metadata for the owned workspace, scratch and explicit
+read roots. Disabling the sandbox is an explicit development escape hatch and
 changes the execution boundary.
 
 Validate reads, search, Git revision access, symlinks, command descendants,

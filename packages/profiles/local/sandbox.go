@@ -52,7 +52,11 @@ func (s Sandbox) Run(ctx context.Context, request CommandRequest) (CommandResult
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("scan sensitive workspace paths: %w", err)
 	}
-	readRoots, err := canonicalReadRoots(s.AdditionalReadRoots)
+	homes, privateRoots, err := sandboxPrivateRoots()
+	if err != nil {
+		return CommandResult{}, err
+	}
+	readRoots, err := canonicalReadRoots(s.AdditionalReadRoots, homes)
 	if err != nil {
 		return CommandResult{}, err
 	}
@@ -62,7 +66,7 @@ func (s Sandbox) Run(ctx context.Context, request CommandRequest) (CommandResult
 		if _, statErr := os.Stat(path); statErr != nil {
 			return s.unsandboxed(ctx, request, workdir, statErr)
 		}
-		profile := darwinSandboxProfile(s.Workspace, readRoots, sensitive, request.Network)
+		profile := darwinSandboxProfile(s.Workspace, readRoots, sensitive, privateRoots, request.Network)
 		internalEnvironment, cleanupInternalEnvironment, err = sanitizedGitEnvironment(s.Workspace)
 		if err != nil {
 			return CommandResult{}, err
@@ -75,11 +79,15 @@ func (s Sandbox) Run(ctx context.Context, request CommandRequest) (CommandResult
 			return s.unsandboxed(ctx, request, workdir, lookupErr)
 		}
 		args := []string{"--die-with-parent", "--new-session", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try", "--cap-drop", "ALL", "--ro-bind", "/", "/"}
-		if home, homeErr := os.UserHomeDir(); homeErr == nil && home != "/" {
-			args = append(args, "--tmpfs", home)
-			args = append(args, bindParentArgs(home, s.Workspace.Root)...)
+		for _, root := range privateRoots {
+			args = append(args, "--tmpfs", root)
 		}
-		args = append(args, "--tmpfs", "/tmp", "--bind", s.Workspace.Root, s.Workspace.Root, "--bind", s.Workspace.Temp, s.Workspace.Temp)
+		for _, target := range append([]string{s.Workspace.Root, s.Workspace.Temp}, readRoots...) {
+			for _, root := range privateRoots {
+				args = append(args, bindParentArgs(root, target)...)
+			}
+		}
+		args = append(args, "--bind", s.Workspace.Root, s.Workspace.Root, "--bind", s.Workspace.Temp, s.Workspace.Temp)
 		for _, hidden := range sensitive {
 			info, statErr := os.Stat(hidden)
 			if statErr != nil {
@@ -226,16 +234,27 @@ func sanitizedGitEnvironmentValues(isolationDir, workspaceRoot string) []string 
 	}
 }
 
-func darwinSandboxProfile(workspace Workspace, readRoots, sensitive []string, network bool) string {
+func darwinSandboxProfile(workspace Workspace, readRoots, sensitive, privateRoots []string, network bool) string {
 	profile := "(version 1)\n(allow default)\n(deny file-write*)\n"
 	profile += "(allow file-write* (literal \"/dev/null\"))\n"
 	profile += "(allow file-write* (subpath " + strconv.Quote(workspace.Root) + ") (subpath " + strconv.Quote(workspace.Temp) + "))\n"
-	if home, err := os.UserHomeDir(); err == nil {
-		profile += "(deny file-read* (subpath " + strconv.Quote(home) + "))\n"
+	for _, root := range privateRoots {
+		profile += "(deny file-read* (subpath " + strconv.Quote(root) + "))\n"
 	}
 	profile += "(allow file-read* (subpath " + strconv.Quote(workspace.Root) + ") (subpath " + strconv.Quote(workspace.Temp) + "))\n"
 	for _, root := range readRoots {
 		profile += "(allow file-read* (subpath " + strconv.Quote(root) + "))\n"
+	}
+	// Traversing an allowed directory needs metadata on its ancestors, but not
+	// directory listings or file contents from neighboring application scratch.
+	ancestors := make(map[string]bool)
+	for _, root := range append([]string{workspace.Root, workspace.Temp}, readRoots...) {
+		for parent := filepath.Dir(root); parent != filepath.Dir(parent); parent = filepath.Dir(parent) {
+			if !ancestors[parent] {
+				profile += "(allow file-read-metadata (literal " + strconv.Quote(parent) + "))\n"
+				ancestors[parent] = true
+			}
+		}
 	}
 	for _, path := range sensitive {
 		profile += "(deny file-read* file-write* (literal " + strconv.Quote(path) + ")"
@@ -324,8 +343,7 @@ func safeEnvironment(isolatedHome string, extra []string) []string {
 	return values
 }
 
-func canonicalReadRoots(values []string) ([]string, error) {
-	home, _ := os.UserHomeDir()
+func canonicalReadRoots(values, protectedHomes []string) ([]string, error) {
 	seen := make(map[string]bool, len(values))
 	out := make([]string, 0, len(values))
 	for _, value := range values {
@@ -344,7 +362,11 @@ func canonicalReadRoots(values []string) ([]string, error) {
 		if err != nil || !info.IsDir() {
 			return nil, fmt.Errorf("additional read root %q must be an existing directory", value)
 		}
-		if real == string(filepath.Separator) || (home != "" && real == home) {
+		tooBroad := real == string(filepath.Separator)
+		for _, home := range protectedHomes {
+			tooBroad = tooBroad || within(home, real)
+		}
+		if tooBroad {
 			return nil, fmt.Errorf("additional read root %q is too broad", value)
 		}
 		if !seen[real] {

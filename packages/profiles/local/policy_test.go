@@ -2,31 +2,28 @@ package local
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 )
 
-func TestWorkspacePolicyUsesStructuredExecNetworkFlag(t *testing.T) {
-	descriptor := tool.Descriptor{Name: "exec", Effects: []tool.Effect{tool.EffectWorkspaceWrite, tool.EffectNetwork}}
+func TestWorkspacePolicyUsesTrustedEffectsWithoutCommandTextInference(t *testing.T) {
 	for _, test := range []struct {
-		name string
-		args string
-		want tool.DecisionType
+		name    string
+		effects []tool.Effect
+		want    tool.DecisionType
 	}{
-		{name: "network denied by sandbox", args: `{"argv":["rg","needle"],"network":false}`, want: tool.DecisionAllow},
-		{name: "network requested", args: `{"argv":["curl","example.com"],"network":true}`, want: tool.DecisionRequireApproval},
-		{name: "heuristic destructive risk requires approval", args: `{"argv":["rm","-rf","build"],"network":false}`, want: tool.DecisionRequireApproval},
-		{name: "invalid arguments fail closed", args: `{`, want: tool.DecisionDeny},
+		{"workspace write", []tool.Effect{tool.EffectWorkspaceWrite}, tool.DecisionAllow},
+		{"network", []tool.Effect{tool.EffectWorkspaceWrite, tool.EffectNetwork}, tool.DecisionRequireApproval},
+		{"external write", []tool.Effect{tool.EffectExternalWrite}, tool.DecisionRequireApproval},
+		{"privileged", []tool.Effect{tool.EffectPrivileged}, tool.DecisionRequireApproval},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			decision, err := NewWorkspacePolicy().Decide(context.Background(), tool.PolicyRequest{
-				Descriptor: descriptor,
-				Call:       tool.Call{Name: "exec", Arguments: json.RawMessage(test.args)},
-			})
-			if err != nil || decision.Type != test.want {
-				t.Fatalf("decision=%+v err=%v, want %s", decision, err, test.want)
+			for _, name := range []string{"exec", "another-adapter"} {
+				decision, err := (WorkspacePolicy{}).Decide(context.Background(), tool.PolicyRequest{Descriptor: tool.Descriptor{Name: name, Effects: test.effects}, Call: tool.Call{Name: name, Arguments: []byte(`{"argv":["rm","-rf","build"]}`)}})
+				if err != nil || decision.Type != test.want {
+					t.Fatalf("tool=%s decision=%+v err=%v", name, decision, err)
+				}
 			}
 		})
 	}

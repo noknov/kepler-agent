@@ -89,11 +89,8 @@ func TestApprovalResolutionFinalizesToolResourcesAndReceipts(t *testing.T) {
 				t.Fatalf("tool receipt was lost: %v", err)
 			}
 			_, scratch := tool.CacheFor(tool.Scope{SessionID: sessionID, TurnID: "turn"}).Get("private-scratch")
-			runner.circuitMu.Lock()
-			_, circuit := runner.circuits[sessionID]
-			runner.circuitMu.Unlock()
-			if item.open || item.closed != 1 || scratch || circuit {
-				t.Fatalf("approval resources survived: open=%v closed=%d scratch=%v circuit=%v", item.open, item.closed, scratch, circuit)
+			if item.open || item.closed != 1 || scratch {
+				t.Fatalf("approval resources survived: open=%v closed=%d scratch=%v", item.open, item.closed, scratch)
 			}
 			duplicateErr := runner.ResolveApproval(t.Context(), sessionID, resolution)
 			if (duplicateErr != nil) != (mode == "blocked receipt") || item.calls != 1 {

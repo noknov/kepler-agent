@@ -241,11 +241,3 @@ func TestDeferredApprovalRecordsAlreadyRejectedSiblings(t *testing.T) {
 		t.Fatal("already rejected sibling was left without a durable result")
 	}
 }
-
-func TestCircuitFingerprintPreservesLargeIntegerArguments(t *testing.T) {
-	a := fingerprint(tool.Call{Name: "read", Arguments: json.RawMessage(`{"id":9007199254740992}`)})
-	b := fingerprint(tool.Call{Name: "read", Arguments: json.RawMessage(`{"id":9007199254740993}`)})
-	if a == b {
-		t.Fatal("distinct integer identifiers share a circuit key")
-	}
-}

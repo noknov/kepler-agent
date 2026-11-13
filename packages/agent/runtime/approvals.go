@@ -47,7 +47,6 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, resolut
 		return fmt.Errorf("approval was resolved but its tool result is incomplete or differs")
 	}
 	defer r.deps.Tools.EndTurn(sessionID, resolution.TurnID)
-	defer r.clearCircuit(sessionID)
 	var item tool.Tool
 	var descriptor tool.Descriptor
 	var decision tool.Decision

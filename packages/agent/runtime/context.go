@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -383,6 +384,15 @@ func eventMessage(event transcript.Event) (model.Message, bool) {
 			result := model.ToolResult{
 				CallID: event.ToolCall.ID, Name: event.ToolCall.Name,
 				Content: event.ToolResult.Content, IsError: event.ToolResult.IsError,
+			}
+			if result.IsError {
+				// Text-only function-result protocols have no native error flag.
+				// Project the canonical status without replacing partial evidence.
+				status, _ := json.Marshal(struct {
+					Status string `json:"tool_status"`
+					Code   string `json:"error_code,omitempty"`
+				}{Status: "error", Code: event.ToolResult.ErrorCode})
+				result.Content = append([]model.Content{{Type: model.ContentJSON, JSON: append(status, '\n')}}, result.Content...)
 			}
 			if event.ToolResult.Truncated {
 				// Completeness is runtime evidence, not a wording convention that
