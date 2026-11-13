@@ -2,6 +2,7 @@ package slack
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"unicode/utf8"
@@ -171,4 +172,75 @@ func (c *Client) codeChannelWrite(ctx context.Context, method string, payload an
 		return slackAPIError{Method: method, Code: out.Error}
 	}
 	return nil
+}
+
+// CodeViewInfo is Slack's small, complete channel view index. View content is
+// fetched separately so rediscovery after a restart does not reload every file.
+type CodeViewInfo struct {
+	ID             string `json:"view_id"`
+	Key            string `json:"view_key,omitempty"`
+	FileID         string `json:"file_id"`
+	Label          string `json:"label"`
+	ContentVersion int64  `json:"content_version"`
+}
+
+func (c *Client) ListCodeViews(ctx context.Context, channel string) ([]CodeViewInfo, error) {
+	if channel == "" {
+		return nil, fmt.Errorf("code views require a channel")
+	}
+	var out struct {
+		OK    bool           `json:"ok"`
+		Error string         `json:"error"`
+		Views []CodeViewInfo `json:"views"`
+	}
+	if err := c.postJSON(ctx, "agents.conversations.listViews", map[string]string{"channel_id": channel}, &out); err != nil {
+		return nil, err
+	}
+	if !out.OK {
+		return nil, slackAPIError{Method: "agents.conversations.listViews", Code: out.Error}
+	}
+	return out.Views, nil
+}
+
+// CodeCanvas keeps native quoted comment/reply data intact. Slack bounds the
+// response and reports truncation; never imply every historical comment was read.
+type CodeCanvas struct {
+	ID              string          `json:"canvas_id"`
+	Title           string          `json:"title"`
+	Content         string          `json:"content"`
+	Comments        json.RawMessage `json:"comments"`
+	HasMoreComments bool            `json:"has_more_comments"`
+}
+
+func (c *Client) GetCodeCanvas(ctx context.Context, channel, canvas string, includeResolved bool) (CodeCanvas, error) {
+	if channel == "" || canvas == "" {
+		return CodeCanvas{}, fmt.Errorf("canvas read requires a channel and canvas ID")
+	}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+		CodeCanvas
+	}
+	if err := c.postJSON(ctx, "agents.conversations.getCanvas", map[string]any{"channel": channel, "canvas_id": canvas, "include_resolved": includeResolved, "content_format": "markdown"}, &out); err != nil {
+		return CodeCanvas{}, err
+	}
+	if !out.OK {
+		return CodeCanvas{}, slackAPIError{Method: "agents.conversations.getCanvas", Code: out.Error}
+	}
+	if out.ID != canvas {
+		return CodeCanvas{}, fmt.Errorf("Slack canvas response identity mismatch")
+	}
+	return out.CodeCanvas, nil
+}
+func (c *Client) SetCodeCanvasContent(ctx context.Context, channel, canvas, content string) error {
+	if channel == "" || canvas == "" || content == "" || len(content) > 1_000_000 {
+		return fmt.Errorf("canvas update requires channel, canvas ID and nonempty content within one million bytes")
+	}
+	return c.codeChannelWrite(ctx, "agents.conversations.setCanvasContent", map[string]string{"channel": channel, "canvas_id": canvas, "content": content})
+}
+func (c *Client) RemoveCodeView(ctx context.Context, channel, viewID string) error {
+	if channel == "" || viewID == "" {
+		return fmt.Errorf("view removal requires a channel and view ID")
+	}
+	return c.codeChannelWrite(ctx, "agents.conversations.removeView", map[string]string{"channel_id": channel, "view_id": viewID})
 }

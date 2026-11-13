@@ -77,3 +77,61 @@ func TestCodeViewsKeepStableIdentityAndRestrictedCanvasAccess(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeViewLifecycleWireContracts(t *testing.T) {
+	client := NewTestClient(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		response := `{"ok":true}`
+		switch req.URL.Path {
+		case "/api/agents.conversations.listViews":
+			if payload["channel_id"] != "CSPACE" {
+				t.Fatalf("list payload: %+v", payload)
+			}
+			response = `{"ok":true,"views":[{"view_id":"V1","view_key":"plan","file_id":"F1","label":"Plan","content_version":3}]}`
+		case "/api/agents.conversations.getCanvas":
+			if payload["channel"] != "CSPACE" || payload["canvas_id"] != "F1" || payload["include_resolved"] != true || payload["content_format"] != "markdown" {
+				t.Fatalf("canvas payload: %+v", payload)
+			}
+			response = `{"ok":true,"canvas_id":"F1","title":"Plan","content":"# Plan","comments":[{"quoted_text":"Plan","has_more_replies":true,"replies":[{"text":"Review this"}]}],"has_more_comments":true}`
+		case "/api/agents.conversations.setCanvasContent":
+			if payload["channel"] != "CSPACE" || payload["canvas_id"] != "F1" || payload["content"] != "# Revised" {
+				t.Fatalf("update payload: %+v", payload)
+			}
+		case "/api/agents.conversations.removeView":
+			if payload["channel_id"] != "CSPACE" || payload["view_id"] != "V1" {
+				t.Fatalf("remove payload: %+v", payload)
+			}
+		default:
+			t.Fatalf("unexpected API: %s", req.URL.Path)
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(response)), Request: req}, nil
+	}))
+	views, err := client.ListCodeViews(t.Context(), "CSPACE")
+	if err != nil || len(views) != 1 || views[0].ContentVersion != 3 || views[0].FileID != "F1" {
+		t.Fatalf("views=%+v err=%v", views, err)
+	}
+	canvas, err := client.GetCodeCanvas(t.Context(), "CSPACE", "F1", true)
+	if err != nil || !canvas.HasMoreComments || !strings.Contains(string(canvas.Comments), `"has_more_replies":true`) {
+		t.Fatalf("canvas=%+v err=%v", canvas, err)
+	}
+	if err := client.SetCodeCanvasContent(t.Context(), "CSPACE", "F1", "# Revised"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.RemoveCodeView(t.Context(), "CSPACE", "V1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNativeCanvasRejectsCrossDocumentResponsesAndSlackFailures(t *testing.T) {
+	for _, body := range []string{`{"ok":true,"canvas_id":"OTHER","content":"private"}`, `{"ok":false,"error":"canvas_not_found"}`} {
+		client := NewTestClient(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+		}))
+		if _, err := client.GetCodeCanvas(t.Context(), "CSPACE", "F1", false); err == nil {
+			t.Fatal("invalid canvas result accepted")
+		}
+	}
+}

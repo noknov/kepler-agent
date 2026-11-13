@@ -84,6 +84,20 @@ record type and assigned agent, not names or empty timestamps. Existing native
 channels without a Kepler grant require operator channel authorization. Channels
 still require explicit mentions; DMs retain their existing direct-input policy.
 
+The deferred `slack-list_task_views` tool lists Slack's view IDs, stable keys,
+file IDs and versions without fetching every document. `slack-read_task_canvas`
+reads an attached canvas and its anchored comments/replies; Slack's truncation
+flags remain visible. Reads are scoped to the currently authorized native
+channel, not a model-supplied destination.
+
+Allowlist `slack-update_task_canvas` and `slack-remove_task_view` separately to
+permit those writes. Canvas updates use Slack's section-aware Markdown API so
+unchanged sections retain their comment anchors. It is not a conditional-write
+API: neither a prior read nor user confirmation promises isolation from edits
+made concurrently in Slack. Removing an HTML, diff or Block Kit view also
+deletes its backing content file; removing a Canvas view detaches that view.
+Both operations retain the existing requester confirmation policy.
+
 Context bars replace up to five informational items. Views use stable keys;
 diffs are channel singletons. HTML does not receive model-controlled CSP
 extensions. Canvas attachments grant comment access. These are presentation
