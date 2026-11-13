@@ -49,7 +49,7 @@ func stateRuntime(t testing.TB, store transcript.Store) *agentruntime.Runtime {
 	return runner
 }
 
-func TestIntegrationLatestTerminalStateMatchesFullHistory(t *testing.T) {
+func TestIntegrationCurrentTurnStateMatchesFullHistory(t *testing.T) {
 	store, session := stateFixture(t)
 	indexed, full := stateRuntime(t, store), stateRuntime(t, fullStateStore{store})
 	for _, kind := range []transcript.EventType{transcript.TurnCompleted, transcript.TurnFailed, transcript.TurnCanceled} {
@@ -64,14 +64,10 @@ func TestIntegrationLatestTerminalStateMatchesFullHistory(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		a, okA, errA := indexed.LatestSessionState(t.Context(), session)
-		b, okB, errB := full.LatestSessionState(t.Context(), session)
-		if errA != nil || errB != nil || !okA || okA != okB || !reflect.DeepEqual(a, b) || a.TurnID != turn {
-			t.Fatalf("indexed=%+v/%v/%v full=%+v/%v/%v", a, okA, errA, b, okB, errB)
-		}
-		facts, err := store.LoadLatestTerminalTurn(t.Context(), session)
-		if err != nil || len(facts) != 2 {
-			t.Fatalf("state read not bounded: %d %v", len(facts), err)
+		a, errA := indexed.LatestTurnEvents(t.Context(), session)
+		b, errB := full.LatestTurnEvents(t.Context(), session)
+		if errA != nil || errB != nil || !reflect.DeepEqual(a, b) || len(a) != 1 || a[0].TurnID != turn+"-active" {
+			t.Fatalf("indexed=%+v/%v full=%+v/%v", a, errA, b, errB)
 		}
 	}
 	for _, event := range []transcript.Event{
@@ -83,15 +79,16 @@ func TestIntegrationLatestTerminalStateMatchesFullHistory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, ok, err := indexed.LatestSessionState(t.Context(), session); err != nil || ok {
-		t.Fatalf("missing start selected another turn: %v %v", ok, err)
+	events, err := indexed.LatestTurnEvents(t.Context(), session)
+	if err != nil || len(events) != 1 || events[0].TurnID != "turn_canceled-active" {
+		t.Fatalf("orphan terminal displaced the current owner: %+v %v", events, err)
 	}
-	if events, err := store.LoadLatestTerminalTurn(t.Context(), session+"-absent"); err != nil || len(events) != 0 {
+	if events, err := indexed.LatestTurnEvents(t.Context(), session+"-absent"); err != nil || len(events) != 0 {
 		t.Fatalf("absent session: %+v %v", events, err)
 	}
 }
 
-func BenchmarkLatestSessionState(b *testing.B) {
+func BenchmarkLatestTurnControl(b *testing.B) {
 	store, session := stateFixture(b)
 	events := []transcript.Event{{Type: transcript.TurnStarted, Metadata: json.RawMessage(`{"user_id":"owner"}`)}}
 	message := model.TextMessage(model.RoleTool, strings.Repeat("evidence ", 4096))
@@ -114,8 +111,8 @@ func BenchmarkLatestSessionState(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				if _, ok, err := runner.LatestSessionState(context.Background(), session); err != nil || !ok {
-					b.Fatalf("ok=%v err=%v", ok, err)
+				if events, err := runner.LatestTurnEvents(context.Background(), session); err != nil || len(events) != 2 {
+					b.Fatalf("events=%+v err=%v", events, err)
 				}
 			}
 		})

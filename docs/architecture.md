@@ -30,6 +30,8 @@ flowchart TD
 | Runtime | Context, model/tool execution, approvals, accounting and terminal facts | [runtime](../packages/agent/runtime) |
 | Profiles | Compose storage, policy, models and tool catalogs | [profiles](../packages/profiles) |
 | Providers | Translate wire requests and typed events | [providers](../packages/providers) |
+| Connection change notification | Publish credential-change facts without owning conversation state | [connections](../packages/connections/oauth_completed.go) |
+| Slack OAuth continuation | Persist waiting-thread identity, claim it and admit a conditional input | [connection recovery](../packages/surfaces/slack/agent/connection_resume.go) |
 | Delivery | Network intent, known Slack identity and status recovery | [delivery](../packages/surfaces/slack/agent/delivery.go) |
 | Benchmark | Single-shot input and canonical JSONL output | [benchmark](../benchmark) |
 | Delegation | Bounded read-only leaf turns with evidence links | [delegation](../packages/agent/delegation) |
@@ -46,6 +48,11 @@ transcript commit and user delivery are separate facts. PostgreSQL stores hosted
 transcripts, event/input queues, connection records and Slack reply receipts.
 Redis supplies notifications, not durable acceptance. Run records and Langfuse
 traces are observations and cannot authorize a write or prove Slack delivery.
+
+Input admission never claims or executes a turn. The dispatcher claims one input
+and hands it to the executor as a private `claimedInput`; execution cannot replace
+that request with another queued actor. Decode failures retain their claim receipt
+and enter the same bounded retry/dead-letter path as execution failures.
 
 Each execution holds session ownership. Input claims are short and renewed while
 work remains owned. Losing a claim cancels the old executor. Failed inputs have

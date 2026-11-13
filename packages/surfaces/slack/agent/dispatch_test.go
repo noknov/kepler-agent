@@ -112,3 +112,64 @@ func TestAdmissionDoesNotAcknowledgeAnUnpersistedInput(t *testing.T) {
 		t.Fatalf("accepted=%v error=%v queued=%d", accepted, err, len(s.dispatch))
 	}
 }
+
+type failedInputReceipts struct {
+	memoryInputs
+	failures int
+}
+
+func (s *failedInputReceipts) Fail(ctx context.Context, id, owner string, cause error, delay time.Duration, attempts int) (bool, error) {
+	s.failures++
+	return s.memoryInputs.Fail(ctx, id, owner, cause, delay, attempts)
+}
+
+func TestMalformedQueuedInputUsesBoundedFailureReceipt(t *testing.T) {
+	s := New(hosted.Agent{}, &fakeMessenger{}, safety.PromptPolicy{}, safety.Redactor{}, nil)
+	inputs := &failedInputReceipts{}
+	s.Inputs = inputs
+	if err := inputs.Enqueue(t.Context(), sessioninput.Item{ID: "broken", SessionID: "session", Kind: sessioninput.KindQueue, Payload: []byte(`{"UserID":13}`)}); err != nil {
+		t.Fatal(err)
+	}
+	s.startPending(t.Context(), "session")
+	if inputs.failures != 1 {
+		t.Fatalf("malformed input bypassed retry/dead-letter policy: %d failure receipts", inputs.failures)
+	}
+}
+
+func TestExecutionConflictReleasesOnlyTheClaimedInput(t *testing.T) {
+	s := New(hosted.Agent{}, &fakeMessenger{}, safety.PromptPolicy{}, safety.Redactor{}, nil)
+	inputs := &memoryInputs{}
+	s.Inputs = inputs
+	active := &activeRun{userID: "U", turnID: "running", steering: &steeringInput{store: inputs, sessionID: "session", owner: s.owner(), userID: "U"}}
+	s.active["session"] = active
+	request := conversation.Request{EventID: "queued", UserID: "U", Channel: "C", ThreadTS: "T"}
+	if err := s.persistInput(t.Context(), "session", sessioninput.KindQueue, request); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := s.claimNextQueue(t.Context(), "session")
+	if err != nil || claimed == nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if err := s.run(t.Context(), "session", *claimed); err != nil {
+		t.Fatal(err)
+	}
+	inputs.mu.Lock()
+	defer inputs.mu.Unlock()
+	if inputs.claimed[request.EventID] != "" || inputs.acked[request.EventID] || len(inputs.items) != 1 || inputs.items[0].Kind != sessioninput.KindQueue {
+		t.Fatal("conflicting execution consumed or re-admitted the queued input")
+	}
+	if s.active["session"] != active {
+		t.Fatal("conflicting execution displaced the session owner")
+	}
+}
+
+func TestAutomaticResumeNeverSteersAnotherActiveTurn(t *testing.T) {
+	s, continuation := waitingConnectionService(t)
+	id := continuation.SessionID
+	s.active[id] = &activeRun{userID: "requester", turnID: "new-active", steering: &steeringInput{store: s.Inputs, sessionID: id, owner: s.owner(), userID: "requester"}}
+	s.resumeAfterConnection(t.Context(), continuation)
+	inputs := s.Inputs.(*memoryInputs)
+	if len(inputs.items) != 1 || inputs.items[0].Kind != sessioninput.KindQueue {
+		t.Fatalf("resume was injected into another active turn: %+v", inputs.items)
+	}
+}

@@ -13,6 +13,12 @@ type Client struct {
 	rdb *redis.Client
 }
 
+// Eval executes an atomic storage operation owned by the calling adapter.
+// Keep domain scripts with their store instead of duplicating transactions here.
+func (c *Client) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
+	return c.rdb.Eval(ctx, script, keys, args...).Result()
+}
+
 func New(redisURL string) (*Client, error) {
 	if redisURL == "" {
 		return nil, fmt.Errorf("redis URL is required")

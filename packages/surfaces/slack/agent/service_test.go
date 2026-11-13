@@ -417,7 +417,11 @@ func TestQueuedApprovalUsesTheDequeuedActorAndDecision(t *testing.T) {
 	if err := service.persistInput(ctx, "s", sessioninput.KindQueue, queued); err != nil {
 		t.Fatal(err)
 	}
-	err = service.run(ctx, "s", slackconversation.Request{EventID: "incoming", UserID: "U1", Channel: "C1", ThreadTS: "T1", Text: "continue"})
+	claimed, err := service.claimNextQueue(ctx, "s")
+	if err != nil || claimed == nil {
+		t.Fatalf("claim queued approval: %v", err)
+	}
+	err = service.run(ctx, "s", *claimed)
 	if err == nil || !strings.Contains(err.Error(), "only the requesting user") {
 		t.Fatalf("queued approval was lost: %v", err)
 	}
@@ -468,5 +472,5 @@ func (s *Service) handle(ctx context.Context, req slackconversation.Request) (bo
 	if controlled {
 		return true, nil
 	}
-	return true, s.run(ctx, sessionID, req)
+	return true, s.run(ctx, sessionID, claimedInput{Request: req})
 }

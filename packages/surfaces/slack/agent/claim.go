@@ -2,8 +2,13 @@ package slackagent
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
 	"time"
+
+	"github.com/noknov/kepler-agent/packages/sessioninput"
+	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
 
 // A short renewable input claim bounds restart recovery independently of the
@@ -47,4 +52,44 @@ func (s *Service) owner() string {
 		return s.PodID
 	}
 	return "local-slack-service"
+}
+
+type claimedInput struct {
+	slackconversation.Request
+}
+
+func (s *Service) claimNextQueue(ctx context.Context, sessionID string) (*claimedInput, error) {
+	if s.Inputs == nil {
+		return nil, nil
+	}
+	items, err := s.Inputs.Claim(ctx, sessionID, sessioninput.KindQueue, s.owner(), inputClaimLease, 1)
+	if err != nil || len(items) == 0 {
+		return nil, err
+	}
+	var request slackconversation.Request
+	decodeErr := json.Unmarshal(items[0].Payload, &request)
+	request.ClaimID = items[0].ID
+	request.ClaimAttempt = items[0].Attempts
+	claimed := &claimedInput{Request: request}
+	if decodeErr != nil {
+		return claimed, fmt.Errorf("decode queued input: %w", decodeErr)
+	}
+	if request.EventID != items[0].ID || request.UserID == "" {
+		return claimed, fmt.Errorf("queued input identity does not match its receipt")
+	}
+	return claimed, nil
+}
+
+func (s *Service) ackClaim(ctx context.Context, id string) error {
+	if id == "" || s.Inputs == nil {
+		return nil
+	}
+	return s.Inputs.Ack(ctx, id, s.owner())
+}
+
+func (s *Service) releaseClaim(ctx context.Context, id string) error {
+	if id == "" || s.Inputs == nil {
+		return nil
+	}
+	return s.Inputs.Release(ctx, id, s.owner())
 }

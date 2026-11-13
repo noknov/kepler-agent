@@ -21,12 +21,20 @@ ambiguous commits idempotent. Completed, failed, and canceled turns are terminal
 for durable queue acknowledgement. Terminal persistence runs under a bounded
 cleanup context (10 seconds by default), including after cancellation.
 
-Session routing reads the latest terminal turn and its original owner/scope.
-PostgreSQL retrieves only the terminal and start facts in one snapshot through
-`transcript.TerminalTurnLoader`; unrelated model and tool payloads are not
-loaded for this projection. Other stores retain the canonical full-read path.
-A missing start never revives an older pending turn, and a newer active turn
-does not replace the latest terminal state. Full audit and replay reads are unchanged.
+Session control and conditional resumption use the latest started turn and its
+matching terminal fact. PostgreSQL reads at most those two control facts through
+`transcript.LatestTurnLoader`; other stores project the same facts from history.
+A previous terminal turn cannot authorize resumption of a newer active turn.
+`ResumeFromTurnID` is checked under the session lease before a new turn starts,
+including the original actor, workspace and `pending_input` outcome. Completed
+replays retain their existing durable result. A stale conditional input cannot
+call the model or tools and does not create another turn.
+
+Connection handoffs carry the authenticated tool scope and waiting turn identity;
+the runtime contains no Slack channel/thread interpretation. Handoff storage
+failures are returned after the complete tool-result batch is recorded, preserving
+call/result pairing. Reused results can retry that handoff without executing the
+tool again.
 
 Local JSONL storage maintains up to 64 session indexes of IDs and byte offsets.
 Warm appends parse only external additions. File replacement or truncation

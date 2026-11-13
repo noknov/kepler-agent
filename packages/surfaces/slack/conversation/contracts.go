@@ -38,6 +38,7 @@ type Request struct {
 	Locale           string
 	Content          []model.Content
 	MessageID        string           `json:"message_id,omitempty"`
+	ResumeFromTurnID string           `json:"resume_from_turn_id,omitempty"`
 	ClaimID          string           `json:"-"`
 	ClaimAttempt     int              `json:"-"`
 	Approval         *ApprovalRequest `json:"approval,omitempty"`

@@ -2,6 +2,7 @@ package connections
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -34,62 +35,31 @@ func TestOAuthCompletionNotifiesSurfaceRefresh(t *testing.T) {
 	}
 }
 
-func TestRedisContinuationStoreRoundTrip(t *testing.T) {
-	client, err := redisclient.New("redis://127.0.0.1:6379/15")
+func continuationRedis(t *testing.T) *redisclient.Client {
+	t.Helper()
+	address := os.Getenv("REDIS_TEST_URL")
+	if address == "" {
+		t.Skip("REDIS_TEST_URL must point to an isolated Redis fixture")
+	}
+	client, err := redisclient.New(address)
 	if err != nil {
-		t.Skipf("redis unavailable: %v", err)
+		t.Fatal(err)
 	}
-	defer client.Close()
-
-	store := NewRedisContinuationStore(client)
-	ctx := context.Background()
-	cont := Continuation{
-		UserID:     "U-test",
-		Provider:   ProviderNotion,
-		InstanceID: "i-prod",
-		SessionID:  "C1:T1",
-		Channel:    "C1",
-		ThreadTS:   "T1",
-	}
-	if err := store.Save(ctx, cont); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-	loaded, err := store.Claim(ctx, cont.UserID, cont.Provider, cont.InstanceID)
-	if err != nil || len(loaded) != 1 {
-		t.Fatalf("Claim() = (%+v, %v)", loaded, err)
-	}
-	if loaded[0].Channel != cont.Channel || loaded[0].ThreadTS != cont.ThreadTS {
-		t.Fatalf("Claim() = %+v, want %+v", loaded[0], cont)
-	}
-	if err := store.Release(ctx, cont); err != nil {
-		t.Fatalf("Release() error = %v", err)
-	}
-	loaded, err = store.Claim(ctx, cont.UserID, cont.Provider, cont.InstanceID)
-	if err != nil || len(loaded) != 1 {
-		t.Fatalf("Claim() after release = (%+v, %v)", loaded, err)
-	}
-	if err := store.Clear(ctx, cont); err != nil {
-		t.Fatalf("Clear() error = %v", err)
-	}
-	loaded, err = store.Claim(ctx, cont.UserID, cont.Provider, cont.InstanceID)
-	if err != nil || len(loaded) != 0 {
-		t.Fatalf("Claim() after clear = (%+v, %v)", loaded, err)
-	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client
 }
 
 func TestRedisContinuationStorePublishCompleted(t *testing.T) {
-	client, err := redisclient.New("redis://127.0.0.1:6379/15")
-	if err != nil {
-		t.Skipf("redis unavailable: %v", err)
-	}
-	defer client.Close()
+	client := continuationRedis(t)
 
-	store := NewRedisContinuationStore(client)
+	store := RedisOAuthCompletionNotifier{Redis: client}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	sub := client.Subscribe(ctx, OAuthCompletedChannel)
 	defer func() { _ = sub.Close() }()
-	time.Sleep(100 * time.Millisecond)
+	if _, err := sub.Receive(ctx); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := store.PublishCompleted(ctx, "U1", ProviderSlack, "i-prod"); err != nil {
 		t.Fatalf("PublishCompleted() error = %v", err)
