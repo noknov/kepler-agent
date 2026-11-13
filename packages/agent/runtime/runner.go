@@ -77,9 +77,6 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 		return result, err
 	}
 	defer unlock()
-	// Circuit state is scoped to one live turn. Do not retain it for abandoned
-	// sessions if an adapter panics or returns before terminal bookkeeping.
-	defer r.clearCircuit(request.SessionID)
 	defer closeInputSource(request.Steering)
 	defer r.deps.Tools.EndTurn(request.SessionID, request.TurnID)
 
@@ -667,7 +664,6 @@ func (r *Runtime) finishTurn(ctx context.Context, result TurnResult, message mod
 	if recordErr != nil && err == nil {
 		err = recordErr
 	}
-	r.clearCircuit(result.SessionID)
 	return result, err
 }
 

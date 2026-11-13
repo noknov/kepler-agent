@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,7 +22,6 @@ func TestFetchRefReturnsImmutableCommitRef(t *testing.T) {
 
 	tool := FetchRefTool{Base: Base{
 		Paths:   safety.WorkspacePolicy{Roots: []string{root}},
-		Guard:   safety.NewCommandPolicy(),
 		Timeout: 10 * time.Second,
 	}}
 	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main"}`), Scope: agenttool.Scope{}})
@@ -58,7 +58,6 @@ func TestFetchRefUsesExplicitBranch(t *testing.T) {
 
 	tool := FetchRefTool{Base: Base{
 		Paths:   safety.WorkspacePolicy{Roots: []string{root}},
-		Guard:   safety.NewCommandPolicy(),
 		Timeout: 10 * time.Second,
 	}}
 	result, err := tool.Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"mt-main"}`), Scope: agenttool.Scope{}})
@@ -110,7 +109,6 @@ func TestFetchRefFailsWhenOriginBecomesUnavailable(t *testing.T) {
 	root, work := testRepo(t)
 	base := Base{
 		Paths:   safety.WorkspacePolicy{Roots: []string{root}},
-		Guard:   safety.NewCommandPolicy(),
 		Timeout: 10 * time.Second,
 	}
 	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
@@ -137,7 +135,6 @@ func TestGitLogRefreshesExplicitBranchWithinFetchTTL(t *testing.T) {
 	root, work := testRepo(t)
 	base := Base{
 		Paths:   safety.WorkspacePolicy{Roots: []string{root}},
-		Guard:   safety.NewCommandPolicy(),
 		Timeout: 10 * time.Second,
 	}
 	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
@@ -176,7 +173,6 @@ func TestRefToolsRequireExplicitRepo(t *testing.T) {
 	root, work := testRepo(t)
 	base := Base{
 		Paths:   safety.WorkspacePolicy{Roots: []string{root}},
-		Guard:   safety.NewCommandPolicy(),
 		Timeout: 10 * time.Second,
 	}
 	fetchResult, err := (FetchRefTool{Base: base}).Execute(context.Background(), agenttool.Call{Arguments: json.RawMessage(`{"repo":"` + work + `","branch":"main"}`), Scope: agenttool.Scope{}})
@@ -202,7 +198,6 @@ func TestRepoToolsReadFetchedSnapshotNotWorkingTree(t *testing.T) {
 	}
 	base := Base{
 		Paths:   safety.WorkspacePolicy{Roots: []string{root}},
-		Guard:   safety.NewCommandPolicy(),
 		Timeout: 10 * time.Second,
 	}
 	searchTool := RepoSearchTool{Base: base}
@@ -235,7 +230,6 @@ func TestRepoToolsDoNotUseStaleRefsWhenOriginIsUnavailable(t *testing.T) {
 	root, work := testRepo(t)
 	base := Base{
 		Paths:   safety.WorkspacePolicy{Roots: []string{root}},
-		Guard:   safety.NewCommandPolicy(),
 		Timeout: 10 * time.Second,
 	}
 	scope := agenttool.Scope{SessionID: "test", TurnID: "turn"}
@@ -297,4 +291,30 @@ func runGitOutput(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return string(out)
+}
+
+func TestGitSearchDistinguishesNoMatchesFromFailedSearch(t *testing.T) {
+	root, work := testRepo(t)
+	base := Base{Paths: safety.WorkspacePolicy{Roots: []string{root}}, Timeout: 10 * time.Second}
+	for _, item := range []agenttool.Tool{SearchRefTool{Base: base}, RepoSearchTool{Base: base}} {
+		for _, query := range []string{"absent-project-symbol", "["} {
+			mode := "literal"
+			if query == "[" {
+				mode = "regex"
+			}
+			args, _ := json.Marshal(map[string]any{"repo": work, "ref": "main", "branch": "main", "query": query, "query_mode": mode})
+			result, err := item.Execute(t.Context(), agenttool.Call{Arguments: args})
+			if mode == "regex" {
+				if err == nil {
+					t.Fatalf("%s disguised an invalid regex as no matches: %s", item.Descriptor().Name, result.Text())
+				}
+				var exit *exec.ExitError
+				if !errors.As(err, &exit) || exit.ExitCode() == 1 {
+					t.Fatalf("%s lost the command failure identity: %v", item.Descriptor().Name, err)
+				}
+			} else if err != nil || !strings.Contains(result.Text(), "no matches") {
+				t.Fatalf("%s rejected a valid empty search: %v %s", item.Descriptor().Name, err, result.Text())
+			}
+		}
+	}
 }

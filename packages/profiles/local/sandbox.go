@@ -233,9 +233,28 @@ func darwinSandboxProfile(workspace Workspace, readRoots, sensitive []string, ne
 	if home, err := os.UserHomeDir(); err == nil {
 		profile += "(deny file-read* (subpath " + strconv.Quote(home) + "))\n"
 	}
+	// User/application scratch can contain credentials outside HOME. Only the
+	// owned scratch directory, workspace and explicit read roots are readable.
+	for _, root := range []string{os.TempDir(), "/tmp", "/var/tmp"} {
+		if canonical, err := filepath.EvalSymlinks(root); err == nil {
+			root = canonical
+		}
+		profile += "(deny file-read* (subpath " + strconv.Quote(filepath.Clean(root)) + "))\n"
+	}
 	profile += "(allow file-read* (subpath " + strconv.Quote(workspace.Root) + ") (subpath " + strconv.Quote(workspace.Temp) + "))\n"
 	for _, root := range readRoots {
 		profile += "(allow file-read* (subpath " + strconv.Quote(root) + "))\n"
+	}
+	// Traversing an allowed directory needs metadata on its ancestors, but not
+	// directory listings or file contents from neighboring application scratch.
+	ancestors := make(map[string]bool)
+	for _, root := range append([]string{workspace.Root, workspace.Temp}, readRoots...) {
+		for parent := filepath.Dir(root); parent != filepath.Dir(parent); parent = filepath.Dir(parent) {
+			if !ancestors[parent] {
+				profile += "(allow file-read-metadata (literal " + strconv.Quote(parent) + "))\n"
+				ancestors[parent] = true
+			}
+		}
 	}
 	for _, path := range sensitive {
 		profile += "(deny file-read* file-write* (literal " + strconv.Quote(path) + ")"

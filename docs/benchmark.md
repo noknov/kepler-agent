@@ -34,3 +34,9 @@ not permission to access the operator's host or an upstream resource.
 Production packaging is `scripts/build-benchmark.sh` in the deploy repository.
 Harbor and AppWorld adapters invoke this process directly and retain its events,
 source identity and budgets. They do not substitute another agent loop.
+
+Command execution uses structured argv and call-specific effect declarations.
+The OS sandbox confines workspace writes and user-private scratch access;
+network grants remain explicit. Timeouts preserve collected output for diagnosis.
+The harness does not block repeated identical test/build calls after negative
+results: use the configured step/token/deadline budgets to bound a run.

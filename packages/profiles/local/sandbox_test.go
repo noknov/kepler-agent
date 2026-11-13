@@ -224,3 +224,59 @@ func TestDarwinSandboxCanReadAndWriteItsScratchDirectory(t *testing.T) {
 		t.Fatalf("result=%+v error=%v", result, err)
 	}
 }
+
+func TestIntegrationSandboxProtectsOutsideFilesWithoutCommandClassification(t *testing.T) {
+	if os.Getenv("SANDBOX_INTEGRATION") != "1" {
+		t.Skip("SANDBOX_INTEGRATION is not enabled")
+	}
+	workspace, err := NewWorkspace(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workspace.Close()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sandbox := Sandbox{Workspace: workspace}
+	for _, argv := range [][]string{
+		{"/bin/sh", "-c", "printf changed > \"$1\"", "script", outside},
+		{"/bin/rm", "-rf", "--", outside},
+	} {
+		_, err := sandbox.Run(t.Context(), CommandRequest{Argv: argv})
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, readErr := os.ReadFile(outside)
+		if readErr != nil || string(data) != "original" {
+			t.Fatalf("outside file was mutated by %q: data=%q error=%v", argv[0], data, readErr)
+		}
+	}
+}
+
+func TestIntegrationSandboxCannotReadAnotherScratchDirectory(t *testing.T) {
+	if os.Getenv("SANDBOX_INTEGRATION") != "1" {
+		t.Skip("SANDBOX_INTEGRATION is not enabled")
+	}
+	workspace, err := NewWorkspace(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workspace.Close()
+	outside := filepath.Join(t.TempDir(), "other-application.txt")
+	if err := os.WriteFile(outside, []byte("other-scratch-private-content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := (Sandbox{Workspace: workspace}).Run(t.Context(), CommandRequest{Argv: []string{"/bin/cat", outside}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ExitCode == 0 || strings.Contains(result.Output, "other-scratch-private-content") {
+		t.Fatalf("another scratch directory was readable: %+v", result)
+	}
+	sandbox := Sandbox{Workspace: workspace, AdditionalReadRoots: []string{filepath.Dir(outside)}}
+	allowed, err := sandbox.Run(t.Context(), CommandRequest{Argv: []string{"/bin/cat", outside}})
+	if err != nil || allowed.ExitCode != 0 || strings.TrimSpace(allowed.Output) != "other-scratch-private-content" {
+		t.Fatalf("explicit read root was not honored: %+v %v", allowed, err)
+	}
+}

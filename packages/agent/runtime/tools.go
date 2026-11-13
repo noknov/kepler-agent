@@ -299,10 +299,6 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 		}
 	}()
 	call := entry.call
-	if err := r.checkCircuit(ctx, call); err != nil {
-		entry.result = &tool.Result{Content: []model.Content{{Type: model.ContentText, Text: err.Error()}}, IsError: true, ErrorCode: "circuit_breaker"}
-		return
-	}
 	if _, err := r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.ToolCallStarted, ToolCall: &call}); err != nil {
 		entry.result = &tool.Result{Content: []model.Content{{Type: model.ContentText, Text: err.Error()}}, IsError: true, ErrorCode: "transcript_error"}
 		return
@@ -385,11 +381,6 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 		r.traceContent(span, "output", map[string]any{"content": traceMessages([]model.Message{{Role: model.RoleTool, Content: result.Content}}), "is_error": result.IsError, "error_code": result.ErrorCode})
 	}
 	span.SetAttributes(attribute.String("langfuse.observation.metadata.tool_name", call.Name), attribute.String("langfuse.observation.metadata.error_code", result.ErrorCode))
-	failed := result.IsError || err != nil
-	r.recordCircuit(call, failed)
-	if warning := r.CircuitWarning(call, failed); warning != "" {
-		result.Content = append(result.Content, model.Content{Type: model.ContentText, Text: "\n\n" + warning})
-	}
 	entry.result = &result
 }
 

@@ -534,10 +534,6 @@ func (r Runner) exploreConfig() agentruntime.Config {
 	} else {
 		config.MaxSteps = defaultExploreMaxSteps
 	}
-	config.CircuitBreaker.Enabled = true
-	if config.CircuitBreaker.MaxIdenticalFailedAttempts <= 0 {
-		config.CircuitBreaker.MaxIdenticalFailedAttempts = 3
-	}
 	return config
 }
 
