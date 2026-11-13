@@ -2,7 +2,7 @@
 
 Use this directory for evaluator code, adapters, and wiring checks (`make eval-check`).
 This source repository provides only application and evaluator source code;
-concrete benchmark execution, CLI/service packaging, deployment, and result
+concrete benchmark execution, benchmark/service packaging, deployment, and result
 records belong in the sibling `kepler-agent-deploy` repository. It does not
 currently provide a verified end-to-end release gate.
 
@@ -17,12 +17,12 @@ currently provide a verified end-to-end release gate.
 
 ## AppWorld evaluation
 
-AppWorld uses the actual Kepler CLI loop and its existing MCP discovery, gateway
+AppWorld uses the actual Kepler benchmark adapter loop and its existing MCP discovery, gateway
 authentication, policy and context management. It does not substitute AppWorld's
 reference agent. Prepare an isolated AppWorld SDK environment with official MCP
 support and downloaded task data, independently from Kepler's runtime dependencies.
 The environment must provide `appworld`, its MCP dependencies, and the official
-grader. Then supply its interpreter, data root and a built Kepler CLI explicitly:
+grader. Then supply its interpreter, data root and a built Kepler benchmark adapter explicitly:
 
 ```sh
 /path/to/appworld-venv/bin/python evals/run_appworld.py \
@@ -78,8 +78,8 @@ do not inspect test-set task details or tune against test-set failures.
 ## Authentication and preflight
 
 Kepler uses gateway login/bootstrap rather than direct-provider CLI flags.
-Run `bin/kepler-agent login --api-url <your-public-gateway>` once. The runner
-reads that existing private login, validates `/cli/bootstrap`, and selects its
+Run `bin/kepler-bench login --api-url <your-public-gateway>` once. The runner
+reads that existing private login, validates `/benchmark/bootstrap`, and selects its
 actual model automatically. An explicit `--model` must match bootstrap. Expired
 login and model mismatches fail before cases start. Tokens stay in child process
 environments and are never included in result manifests.
@@ -118,7 +118,7 @@ coverage requirement unless a reviewed profile requires otherwise.
 ## What is implemented
 
 - A local task runner with separate workspace copies, wall-clock limits, command/test grading, JSONL case records, and an aggregate JSON report.
-- Command adapters for the local `kepler-agent` CLI, Codex CLI, Claude Code, Pi, and OpenCode. Commands are data, so version-specific flags can be changed without changing the evaluator.
+- Command adapters for the local `kepler-bench` process, Codex CLI, Claude Code, Pi, and OpenCode. Commands are data, so version-specific flags can be changed without changing the evaluator.
 - Optional candidate version probes, recorded once per run and copied into every case record.
 - Capability-aware eligibility: tasks declare the minimum capabilities they exercise; a candidate that does not declare a requirement is recorded as `skipped`, never as a failed run.
 - Per-candidate, category, and tag coverage with weighted pass rate, median latency, p95 latency, and failure-class breakdowns in JSON and the static report.
@@ -147,7 +147,7 @@ make eval EVAL_OUTPUT=evals/results/my-run
 Use `make bench` separately for Go storage/tool microbenchmarks; it makes no
 model calls.
 
-This builds the current CLI, runs the candidates, restores protected tests in a
+This builds the current benchmark adapter, runs the candidates, restores protected tests in a
 separate grader workspace, and generates `report.html`. Case scores describe
 these small synthetic tasks, not an external benchmark ranking.
 
@@ -213,7 +213,7 @@ make eval-harbor-oracle
 make eval-harbor
 ```
 
-The target builds a Linux CLI and uploads it, avoiding an unpublished-source
+The target builds a Linux benchmark binary and uploads it, avoiding an unpublished-source
 clone or task-by-task Go installation. The invocation records the source commit
 and binary SHA256. `EVAL_GOARCH=amd64` selects another Docker architecture.
 The binary adapter uses the host's trusted CA bundle when available and installs
@@ -317,7 +317,7 @@ hash and does not require pushing the commit.
 For Kepler, provider credentials remain on the gateway/worker (including SOPS
 managed Qoder credentials). The task container receives a CLI session token,
 not the operator PAT. Retired `provider`, `protocol`, `api_key_env`, and
-`base_url_env` adapter kwargs are rejected because the current CLI has no such
+`base_url_env` adapter kwargs are rejected because the current benchmark adapter has no such
 flags.
 
 ## Suite schema

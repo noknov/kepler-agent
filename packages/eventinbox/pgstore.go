@@ -31,6 +31,7 @@ type Store interface {
 	DeadLetter(context.Context, string, error) error
 	RecoverExpired(context.Context, int) error
 	Pending(context.Context, int) ([]Record, error)
+	NextAvailable(context.Context) (time.Time, error)
 }
 type PGStore struct {
 	pool  *pgxpool.Pool
@@ -193,4 +194,15 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return v
+}
+
+// NextAvailable schedules future retries. Already due records are handled by
+// Pending; including them here would spin while a local worker owns its slot.
+func (s *PGStore) NextAvailable(ctx context.Context) (time.Time, error) {
+	var due *time.Time
+	err := s.pool.QueryRow(ctx, `SELECT MIN(available_at) FROM slack_event_inbox WHERE status='queued' AND available_at>NOW()`).Scan(&due)
+	if err != nil || due == nil {
+		return time.Time{}, err
+	}
+	return *due, nil
 }

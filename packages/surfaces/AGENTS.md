@@ -1,7 +1,7 @@
 # Product adapters
 
 Follow [architecture](../../docs/architecture.md), then the owning
-[Slack](../../docs/slack.md) or [Web](../../docs/web.md) guide.
+[Slack](../../docs/slack.md) or [benchmark](../../docs/benchmark.md) guide.
 
 - Surfaces authenticate/admit input and project canonical events. Do not infer
   authorization, completion, or plans from free-form model text.
@@ -13,5 +13,4 @@ Follow [architecture](../../docs/architecture.md), then the owning
 - Keep ambiguous writes uncertain. Retry only when rejection or downstream
   idempotency makes replay safe. Redis wakeups are hints, not durable acceptance.
 - Extend the existing deterministic service/control tests; run `make eval-slack`
-  with isolated PostgreSQL/Redis for Slack durable control changes. Verify Web
-  interactions with their existing Node test suite and the actual UI when changed.
+  with isolated PostgreSQL/Redis for Slack durable control changes. Verify benchmark process output and cancellation when its adapter changes.

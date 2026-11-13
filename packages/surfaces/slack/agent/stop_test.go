@@ -94,7 +94,7 @@ func TestNativeStopCancelsModelAndToolThroughRuntime(t *testing.T) {
 			defer cancel()
 			done := make(chan error, 1)
 			go func() {
-				_, err := s.HandleMention(ctx, conversation.Request{EventID: "run", UserID: "U", Channel: "C", ThreadTS: "T", Text: "wait", Locale: "zh-CN"})
+				_, err := s.handle(ctx, conversation.Request{EventID: "run", UserID: "U", Channel: "C", ThreadTS: "T", Text: "wait", Locale: "zh-CN"})
 				done <- err
 			}()
 			select {

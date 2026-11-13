@@ -323,3 +323,25 @@ ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS embedding_version BIGINT NOT 
 ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS embedding_vector vector;
 ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS embedding_claim_owner TEXT NOT NULL DEFAULT '';
 ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS embedding_claim_until TIMESTAMPTZ;
+-- Delivery receipts are surface-owned state, separate from model execution and
+-- rebuildable run projections. A claimed input fences each network attempt.
+CREATE TABLE IF NOT EXISTS slack_reply_receipts (
+ turn_id TEXT PRIMARY KEY,
+ session_id TEXT NOT NULL,
+ input_id TEXT NOT NULL,
+ owner TEXT NOT NULL,
+ attempt BIGINT NOT NULL,
+ channel TEXT NOT NULL,
+ thread_ts TEXT NOT NULL,
+ user_id TEXT NOT NULL,
+ phase TEXT NOT NULL DEFAULT 'prepared' CHECK (phase IN ('prepared','starting','streaming','posting','delivered','uncertain')),
+ message_ts TEXT NOT NULL DEFAULT '',
+ desired_status TEXT NOT NULL DEFAULT 'processing' CHECK (desired_status IN ('processing','active','suspended')),
+ status_applied BOOLEAN NOT NULL DEFAULT FALSE,
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS slack_reply_unsettled_idx ON slack_reply_receipts(updated_at) WHERE NOT status_applied;
+ALTER TABLE agent_session_inputs ADD COLUMN IF NOT EXISTS available_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE agent_session_inputs ADD COLUMN IF NOT EXISTS last_error TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_session_inputs ADD COLUMN IF NOT EXISTS dead_lettered_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS agent_input_retry_idx ON agent_session_inputs(available_at,sequence) WHERE acknowledged_at IS NULL AND dead_lettered_at IS NULL;

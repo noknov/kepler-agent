@@ -111,8 +111,7 @@ type Store interface {
 }
 
 // BatchStore atomically appends a related set of canonical facts. A failed
-// write never exposes a partially committed import. SessionCreator additionally
-// enforces empty-destination ownership for operations such as thread/fork.
+// write never exposes a partially committed import.
 type BatchStore interface {
 	Store
 	AppendBatch(ctx context.Context, events []Event) ([]Event, error)
@@ -227,4 +226,10 @@ func (s *AsyncSink) Shed() <-chan struct{} {
 		return nil
 	}
 	return s.shed
+}
+
+// LatestTurnLoader provides the latest started turn and its terminal receipt,
+// if any. Control paths must not load model/tool evidence to identify a turn.
+type LatestTurnLoader interface {
+	LoadLatestTurn(context.Context, string) ([]Event, error)
 }

@@ -218,7 +218,7 @@ Order creation and cancellation also require explicit user confirmation.
 
 ## Local Workspace Tools
 
-The local CLI and stdio `app-server` share one catalog (`packages/tools/local`):
+The benchmark adapter uses one local catalog (`packages/tools/local`):
 
 | Tool | Description |
 |---|---|

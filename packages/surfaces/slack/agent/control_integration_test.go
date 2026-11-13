@@ -18,7 +18,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/safety"
 	"github.com/noknov/kepler-agent/packages/session"
 	"github.com/noknov/kepler-agent/packages/sessioninput"
-	"github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
+	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
 
 func TestIntegrationCrossWorkerSteerAndQueue(t *testing.T) {
@@ -59,14 +59,17 @@ func TestIntegrationCrossWorkerSteerAndQueue(t *testing.T) {
 	peer.Redis, peer.PodID, peer.Inputs = client, "peer", inputs
 
 	steer := slackconversation.Request{EventID: "steer", UserID: "U1", ThreadTS: "T", Text: "look at redis"}
-	eventuallyControl(t, func() bool { ok, err := peer.controlActive(sessionID, steer); return err == nil && ok })
+	eventuallyControl(t, func() bool {
+		ok, err := peer.controlActive(context.Background(), sessionID, steer)
+		return err == nil && ok
+	})
 	eventually(t, func() bool { inputs, _ := active.steering.Claim(context.Background(), 10); return len(inputs) == 1 })
 
 	if err := active.steering.Ack(ctx, "steer"); err != nil {
 		t.Fatal(err)
 	}
 	other := slackconversation.Request{EventID: sessionID + "-other", UserID: "U2", ThreadTS: "T", Text: "use my account"}
-	if ok, err := peer.controlActive(sessionID, other); err != nil || !ok {
+	if ok, err := peer.controlActive(context.Background(), sessionID, other); err != nil || !ok {
 		t.Fatalf("other actor accepted=%v err=%v", ok, err)
 	}
 	if got, err := active.steering.Claim(ctx, 10); err != nil || len(got) != 0 {
@@ -82,7 +85,7 @@ func TestIntegrationCrossWorkerSteerAndQueue(t *testing.T) {
 
 	peer.ModeForUser = func(string) ConversationMode { return ModeQueue }
 	queued := slackconversation.Request{EventID: "queue", UserID: "U1", ThreadTS: "T", Text: "then inspect postgres"}
-	if ok, err := peer.controlActive(sessionID, queued); err != nil || !ok {
+	if ok, err := peer.controlActive(context.Background(), sessionID, queued); err != nil || !ok {
 		t.Fatal("cross-worker queue was not accepted")
 	}
 	items, err := inputs.Claim(context.Background(), sessionID, sessioninput.KindQueue, "owner", time.Minute, 1)

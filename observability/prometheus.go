@@ -45,8 +45,8 @@ func (s *Service) handlePrometheus(w http.ResponseWriter, r *http.Request) {
 	age := prometheus.NewGauge(prometheus.GaugeOpts{Name: "kepler_agent_durable_inbox_oldest_queued_seconds", Help: "Age of the oldest currently queued durable inbox event."})
 	age.Set(snapshot.Inbox.OldestQueuedMS / 1000)
 	inputs := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "kepler_agent_durable_pending_inputs", Help: "Unacknowledged session inputs by kind and claim state."}, []string{"queue"})
-	for _, kind := range []sessioninput.Kind{sessioninput.KindSteering, sessioninput.KindQueue, sessioninput.KindStop, sessioninput.KindWeb} {
-		for _, state := range []string{"queued", "claimed", "expired"} {
+	for _, kind := range []sessioninput.Kind{sessioninput.KindSteering, sessioninput.KindQueue, sessioninput.KindStop} {
+		for _, state := range []string{"queued", "claimed", "expired", "retry_wait", "dead_letter"} {
 			key := string(kind) + ":" + state
 			inputs.WithLabelValues(key).Set(float64(snapshot.Inputs[key]))
 		}
@@ -54,6 +54,10 @@ func (s *Service) handlePrometheus(w http.ResponseWriter, r *http.Request) {
 	for queue, count := range snapshot.Inputs {
 		inputs.WithLabelValues(queue).Set(float64(count))
 	}
-	registry.MustRegister(inbox, expired, age, inputs)
+	uncertain := prometheus.NewGauge(prometheus.GaugeOpts{Name: "kepler_agent_uncertain_replies", Help: "Slack reply creations with uncertain delivery; not automatically repeated."})
+	uncertain.Set(float64(snapshot.Replies.Uncertain))
+	unsettled := prometheus.NewGauge(prometheus.GaugeOpts{Name: "kepler_agent_unsettled_session_status", Help: "Reply status projections not yet acknowledged by Slack; includes active work."})
+	unsettled.Set(float64(snapshot.Replies.UnsettledStatus))
+	registry.MustRegister(inbox, expired, age, inputs, uncertain, unsettled)
 	promhttp.HandlerFor(registry, promhttp.HandlerOpts{EnableOpenMetrics: true}).ServeHTTP(w, r)
 }

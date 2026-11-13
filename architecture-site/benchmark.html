@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="非交互式 benchmark 接入复用共享 runtime、沙箱和 JSONL 事件，不维护终端 UI 或另一套执行协议。">
+<meta name="color-scheme" content="light dark">
+<title>Benchmark 接入 · 架构文档</title>
+<link rel="stylesheet" href="assets/guide.css">
+<script src="assets/search-index.js" defer></script>
+<script src="assets/architecture.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#content">跳到正文</a>
+<header class="site-header"><a class="site-title" href="index.html">架构文档</a><div class="header-actions"></div></header>
+<div class="doc-layout">
+<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="benchmark.html#contract" aria-current="page">Benchmark 接入</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
+<main class="doc-content" id="content" tabindex="-1">
+<h1>Benchmark 接入</h1>
+<section class="doc-section" id="contract"><h2>单次执行边界</h2><p>评测进程接收一次输入，输出规范化 JSONL 事件并退出。它复用同一 runtime、本地工具与操作系统沙箱，不启动终端界面、浏览器聊天或 app-server。</p><p>Slack 是唯一维护的会话产品；评测进程只负责进程输入、输出、退出码和取消。</p></section>
+<section class="doc-section" id="authentication"><h2>认证与配置</h2><p>评测使用网关的 /benchmark/bootstrap 和经过认证的模型生成接口。可以传入专用环境变量，或由操作者完成 benchmark login。集成授权的 /oauth/ 回调与评测登录分开。</p></section>
+<section class="doc-section" id="lifecycle"><h2>取消与验证</h2><p>SIGINT/SIGTERM 取消 turn，并等待有界的规范事件落盘和命令后代清理。标准输出只包含 JSONL；诊断写入标准错误。文本模式只输出最终答案。</p><p>Harbor 和 AppWorld 保留实际二进制哈希、源码、模型与预算；成功的适配器检查不能代替真实模型评测。</p></section>
+<section class="doc-section sources" id="source"><h2>实现位置</h2><p><code>benchmark/cmd</code>、<code>benchmark/process_test.go</code>、<code>packages/profiles/local</code>。构建与部署脚本归部署仓库所有。</p></section>
+</main><aside class="toc" aria-label="本页目录"></aside></div>
+<footer class="site-footer"><a href="reading-guide.html">概念与标识</a><a href="reference.html">实现索引</a><a href="https://github.com/noknov/kepler-agent">源码 ↗</a></footer>
+</body></html>

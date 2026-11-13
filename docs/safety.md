@@ -45,8 +45,8 @@ not make an external API call and a database append atomic. A crash after a
 side effect and before its result is recorded can leave an uncertain outcome.
 Do not automatically repeat such actions without checking their result.
 
-Likewise, browser acceptance, Slack inbox persistence, local app-server
-admission, and UI streaming are distinct boundaries. Test each surface under
+Likewise, Slack inbox persistence, session input acceptance, benchmark process
+admission, and Slack streaming are distinct boundaries. Test each surface under
 restart and disconnection; do not transfer one surface's recovery guarantee
 to another merely because both use the shared runtime.
 

@@ -17,17 +17,17 @@ def prepare(expected_model: str | None = None) -> dict:
     api_url = (os.environ.get("EVAL_KEPLER_API_URL") or credentials.get("api_url", "")).rstrip("/")
     token = os.environ.get("KEPLER_TOKEN") or credentials.get("token", "")
     if not api_url or not token:
-        raise ValueError("Kepler login required: run bin/kepler-agent login, or set EVAL_KEPLER_API_URL and KEPLER_TOKEN")
+        raise ValueError("Kepler login required: run bin/kepler-bench login, or set EVAL_KEPLER_API_URL and KEPLER_TOKEN")
     parsed = urlsplit(api_url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError("EVAL_KEPLER_API_URL must be a gateway origin without credentials or query parameters")
-    request = Request(api_url + "/cli/bootstrap", headers={"Authorization": "Bearer " + token, "ngrok-skip-browser-warning": "true"})
+    request = Request(api_url + "/benchmark/bootstrap", headers={"Authorization": "Bearer " + token, "ngrok-skip-browser-warning": "true"})
     try:
         with urlopen(request, timeout=30) as response:
             bootstrap = json.load(response)
     except HTTPError as error:
         if error.code in {401, 403}:
-            raise ValueError(f"Kepler gateway HTTP {error.code}: run bin/kepler-agent login --api-url {api_url} again") from None
+            raise ValueError(f"Kepler gateway HTTP {error.code}: run bin/kepler-bench login --api-url {api_url} again") from None
         raise ValueError(f"Kepler gateway bootstrap HTTP {error.code}") from None
     except URLError as error:
         raise ValueError(f"Kepler gateway unreachable ({type(error.reason).__name__}); check EVAL_KEPLER_API_URL") from None

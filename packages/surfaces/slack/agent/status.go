@@ -24,6 +24,10 @@ const (
 // Lifecycle projects canonical turn completion into Slack's agent-session
 // lifecycle. It does not infer progress from tools or issue model requests.
 func (s *slackStream) Lifecycle(event transcript.Event) {
+	if event.Type == transcript.TurnStarted {
+		s.Start()
+		return
+	}
 	if event.Type == transcript.PlanUpdated {
 		s.UpdatePlan(event.Plan)
 		return
@@ -303,9 +307,30 @@ func (s *slackStream) setSessionStatus(status string) {
 	}
 	ctx, cancel := s.deliveryContext()
 	defer cancel()
-	if err := s.session.SetAgentSessionStatus(ctx, s.req.Channel, s.req.ThreadTS, s.req.UserID, status); err != nil {
+	if s.delivery != nil {
+		if err := s.delivery.store.Status(ctx, s.delivery.receipt, status, false); err != nil {
+			log.Printf("slack desired status persistence failed: %v", err)
+			return
+		}
+	}
+	send := func(ctx context.Context) error {
+		return s.session.SetAgentSessionStatus(ctx, s.req.Channel, s.req.ThreadTS, s.req.UserID, status)
+	}
+	var statusErr error
+	if status != sessionProcessing && s.reconcileStatus != nil {
+		statusErr = s.reconcileStatus(ctx, send)
+	} else {
+		statusErr = send(ctx)
+	}
+	if err := statusErr; err != nil {
 		log.Printf("slack agent session status unavailable turn=%s status=%s error_code=%s error_type=%T", s.req.EventID, status, safeSlackErrorCode(err), err)
 		return
+	}
+	if s.delivery != nil && status != sessionProcessing {
+		if err := s.delivery.store.Status(ctx, s.delivery.receipt, status, true); err != nil {
+			log.Printf("slack status receipt persistence failed: %v", err)
+			return
+		}
 	}
 	s.sessionStatus = status
 }

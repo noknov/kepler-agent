@@ -2,10 +2,11 @@ package slackagent
 
 import (
 	"context"
-	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 	"strings"
 	"testing"
 	"time"
+
+	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
 
 type blockedStreamMessenger struct {

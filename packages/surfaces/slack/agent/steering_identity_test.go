@@ -3,12 +3,13 @@ package slackagent
 import (
 	"context"
 	"encoding/json"
+	"testing"
+	"time"
+
 	"github.com/noknov/kepler-agent/packages/profiles/hosted"
 	"github.com/noknov/kepler-agent/packages/safety"
 	"github.com/noknov/kepler-agent/packages/sessioninput"
 	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
-	"testing"
-	"time"
 )
 
 func TestSteeringConsumerSeparatesActors(t *testing.T) {
@@ -16,7 +17,7 @@ func TestSteeringConsumerSeparatesActors(t *testing.T) {
 	store := &memoryInputs{}
 	input := &steeringInput{store: store, sessionID: "session", owner: "worker-A", userID: "A"}
 	for _, req := range []slackconversation.Request{{EventID: "B", UserID: "B", Text: "other actor"}, {EventID: "A", UserID: "A", Text: "same actor"}} {
-		if err := input.Push(req); err != nil {
+		if err := input.Push(context.Background(), req); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -42,7 +43,7 @@ func TestLocalSteeringQueuesOtherActor(t *testing.T) {
 	service := New(hosted.Agent{}, nil, safety.PromptPolicy{}, safety.Redactor{}, nil)
 	service.Inputs = store
 	service.active["session"] = &activeRun{userID: "A"}
-	ok, err := service.controlActive("session", slackconversation.Request{EventID: "B", UserID: "B", Text: "follow up"})
+	ok, err := service.controlActive(context.Background(), "session", slackconversation.Request{EventID: "B", UserID: "B", Text: "follow up"})
 	if err != nil || !ok {
 		t.Fatalf("accepted=%v err=%v", ok, err)
 	}
@@ -56,7 +57,7 @@ func TestSteeringRetainsItsOwnViewingSnapshot(t *testing.T) {
 	store := &memoryInputs{}
 	input := &steeringInput{store: store, sessionID: "session", owner: "worker", userID: "U1"}
 	req := slackconversation.Request{TeamID: "T1", EventID: "context-update", UserID: "U1", Channel: "D1", Text: "use this channel instead", ViewingContext: &slackconversation.ViewingContext{TeamID: "T1", ChannelID: "C456"}}
-	if err := input.Push(req); err != nil {
+	if err := input.Push(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}
 	items, err := input.Claim(context.Background(), 1)

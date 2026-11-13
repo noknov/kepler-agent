@@ -2,9 +2,10 @@ package transcript
 
 import (
 	"encoding/json"
-	"github.com/noknov/kepler-agent/packages/agent/model"
 	"reflect"
 	"testing"
+
+	"github.com/noknov/kepler-agent/packages/agent/model"
 )
 
 func TestTurnWindowPreservesReplayAccountingAndOriginalInput(t *testing.T) {

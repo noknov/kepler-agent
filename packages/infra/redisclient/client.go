@@ -137,3 +137,8 @@ func (c *Client) SRem(ctx context.Context, key string, members ...string) (int64
 	}
 	return c.rdb.SRem(ctx, key, values...).Result()
 }
+
+// DeleteIfValue releases a routing hint only while its owner still matches.
+func (c *Client) DeleteIfValue(ctx context.Context, key, owner string) error {
+	return c.rdb.Eval(ctx, `if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) end return 0`, []string{key}, owner).Err()
+}

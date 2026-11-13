@@ -1,7 +1,7 @@
 # Architecture documentation
 
 This static Chinese site describes the shared execution core and the product
-boundaries of Slack, Web, and the local CLI. Open `index.html` directly or serve
+boundaries of Slack and the noninteractive benchmark adapter. Open `index.html` directly or serve
 this directory with a static HTTP server. The site has no runtime package,
 external font, remote renderer, or build-service dependency.
 
@@ -21,7 +21,7 @@ The chapter order follows system boundaries rather than review history:
 | State | `memory.html` | Explicit memory identity, versions, retrieval and deletion |
 | Coordination | `delegation.html` | Child-task contracts, isolation and acceptance |
 | Coordination | `operations.html` | Durable queue claims, admission and shutdown |
-| Products | `slack.html`, `web.html`, `local.html` | Product-specific boundaries |
+| Products | `slack.html`, `benchmark.html` | Product-specific boundaries |
 | Diagnostics | `observability.html` | Projection, health, metrics, traces and their limits |
 | Diagnostics | `production.html` | Symptom-to-evidence diagnosis and recovery decisions |
 | Reference | `reference.html` | Implementation and validation pointers |

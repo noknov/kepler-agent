@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,7 +20,6 @@ import (
 	"github.com/noknov/kepler-agent/packages/health"
 	"github.com/noknov/kepler-agent/packages/infra/httpguard"
 	sharedlogging "github.com/noknov/kepler-agent/packages/infra/logging"
-	"github.com/noknov/kepler-agent/packages/infra/redisclient"
 	"github.com/noknov/kepler-agent/packages/infra/telemetry"
 	"github.com/noknov/kepler-agent/packages/memory"
 	"github.com/noknov/kepler-agent/packages/observability"
@@ -30,37 +28,29 @@ import (
 	"github.com/noknov/kepler-agent/packages/prompts"
 	"github.com/noknov/kepler-agent/packages/providers"
 	"github.com/noknov/kepler-agent/packages/safety"
-	"github.com/noknov/kepler-agent/packages/surfaces/slack/agent"
-	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
-	"github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
-	"github.com/noknov/kepler-agent/packages/surfaces/slack/events"
-	"github.com/noknov/kepler-agent/packages/surfaces/slack/handler"
-	"github.com/noknov/kepler-agent/packages/surfaces/slack/home"
+	slackagent "github.com/noknov/kepler-agent/packages/surfaces/slack/agent"
+	slack "github.com/noknov/kepler-agent/packages/surfaces/slack/client"
+	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
+	slackevents "github.com/noknov/kepler-agent/packages/surfaces/slack/events"
+	slackhandler "github.com/noknov/kepler-agent/packages/surfaces/slack/handler"
+	slackhome "github.com/noknov/kepler-agent/packages/surfaces/slack/home"
 	slackmessaging "github.com/noknov/kepler-agent/packages/surfaces/slack/messaging"
 	slackTools "github.com/noknov/kepler-agent/packages/surfaces/slack/tools"
-	websurface "github.com/noknov/kepler-agent/packages/surfaces/web"
 	"github.com/noknov/kepler-agent/packages/toolkit/gitcache"
-	clickstackTools "github.com/noknov/kepler-agent/packages/tools/clickstack"
 	hostedTools "github.com/noknov/kepler-agent/packages/tools/hosted"
-	notionTools "github.com/noknov/kepler-agent/packages/tools/notion"
-	"github.com/noknov/kepler-agent/packages/workflows"
-	"github.com/noknov/kepler-agent/packages/workflows/codereview"
 )
 
 type Service struct {
-	cfg              config.Config
-	stores           *platform.Stores
-	slack            *slack.Client
-	metrics          *observability.Recorder
-	health           *health.Service
-	conv             slackconversation.ControlledConversation
-	handler          *slackhandler.Handler
-	slackWorker      *slackevents.Worker
-	web              http.Handler
-	webTools         *webToolRefresh
-	webConversations *websurface.ConversationService
-	runSink          *hosted.RunSink
-	runEvents        *transcript.AsyncSink
+	cfg         config.Config
+	stores      *platform.Stores
+	slack       *slack.Client
+	metrics     *observability.Recorder
+	health      *health.Service
+	conv        slackconversation.ControlledConversation
+	handler     *slackhandler.Handler
+	slackWorker *slackevents.Worker
+	runSink     *hosted.RunSink
+	runEvents   *transcript.AsyncSink
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -71,47 +61,6 @@ type Service struct {
 	activeEvents int
 	draining     atomic.Bool
 	serveErr     chan error
-}
-
-type webToolRefresh struct {
-	Redis      *redisclient.Client
-	ClickStack *clickstackTools.Registrar
-	Notion     *notionTools.Registrar
-}
-
-func (c *webToolRefresh) Start(ctx context.Context) {
-	if c == nil || c.Redis == nil {
-		return
-	}
-	sub := c.Redis.Subscribe(ctx, connections.OAuthCompletedChannel)
-	defer sub.Close()
-	ch := sub.Channel()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case msg, ok := <-ch:
-			if !ok {
-				return
-			}
-			userID, provider, _, parsed := connections.ParseOAuthCompletedPayload(msg.Payload)
-			if !parsed {
-				continue
-			}
-			switch provider {
-			case connections.ProviderClickStack:
-				if c.ClickStack != nil {
-					c.ClickStack.Invalidate()
-					log.Printf("web tools: invalidated clickstack registrar after oauth user=%s", userID)
-				}
-			case connections.ProviderNotion:
-				if c.Notion != nil {
-					c.Notion.Invalidate()
-					log.Printf("web tools: invalidated notion registrar after oauth user=%s", userID)
-				}
-			}
-		}
-	}
 }
 
 func Run(ctx context.Context) error {
@@ -213,83 +162,11 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	if profileErr != nil {
 		return nil, fmt.Errorf("build hosted profile: %w", profileErr)
 	}
-	var webHandler http.Handler
-	var webToolCoordinator *webToolRefresh
-	var webConversations *websurface.ConversationService
-	if cfg.Web.Enabled {
-		if err := platform.RequireWebSchema(ctx, stores.PGPool); err != nil {
-			return nil, fmt.Errorf("verify web schema: %w", err)
-		}
-		webSurface := hostedTools.SurfaceOptions{Name: "web", Connections: &connService}
-		webCatalogBundle, err := hostedTools.NewCatalog(cfg, workspacePolicy, safety.NewCommandPolicy(), nil, webSurface)
-		if err != nil {
-			return nil, fmt.Errorf("build web tool catalog: %w", err)
-		}
-		webProfile, err := hosted.NewProfile(cfg, hosted.ProfileDependencies{
-			ModelGovernor: modelGovernor,
-			Tools:         webCatalogBundle.Catalog, Postgres: stores.PGPool, Redis: stores.Redis, ToolSpills: stores.Runs,
-			Events: events, Metrics: recorder, Lease: stores.Sessions,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("build web hosted profile: %w", err)
-		}
-		webStore := websurface.PGStore{Pool: stores.PGPool}
-		webHub := websurface.NewEventHub(webProfile.Redactor)
-		events.Add(webHub)
-		webConversations = websurface.NewConversationService(webProfile.Agent, webStore, hosted.PGTranscript{Pool: stores.PGPool}, webHub)
-		webConversations.Prompt = webProfile.Prompt
-		webConversations.Redactor = webProfile.Redactor
-		webConversations.Model = cfg.LLM.Model
-		webConversations.Lifecycle = serviceCtx
-		webConversations.Inputs = stores.Inputs
-		webConversations.QueueOwner = podID + ":web"
-		webPolicy := hostedTools.PolicyForSurface(cfg, webSurface)
-		if webCatalogBundle.ClickStack != nil || webCatalogBundle.Notion != nil {
-			webConversations.BeforeRun = func(ctx context.Context, userID string) error {
-				if webCatalogBundle.ClickStack != nil {
-					if err := webCatalogBundle.ClickStack.Ensure(ctx, webCatalogBundle.Catalog, webPolicy, userID); err != nil {
-						return err
-					}
-				}
-				if webCatalogBundle.Notion != nil {
-					if err := webCatalogBundle.Notion.Ensure(ctx, webCatalogBundle.Catalog, webPolicy, userID); err != nil {
-						return err
-					}
-				}
-				return nil
-			}
-		}
-		if len(cfg.Security.WorkspaceRoots) > 0 {
-			webConversations.Workspace = cfg.Security.WorkspaceRoots[0]
-		}
-		redirectURL := strings.TrimRight(cfg.Web.PublicBaseURL, "/") + "/auth/slack/callback"
-		slackIdentity := websurface.NewSlackOIDC(cfg.Connections.SlackClientID, cfg.Connections.SlackClientSecret, redirectURL)
-		webAuth, err := websurface.NewAuthService(webStore, cfg.Web.PublicBaseURL, cfg.Web.SessionSecret, cfg.Web.SessionTTL, cfg.Security.AllowedUsers, slackIdentity)
-		if err != nil {
-			return nil, fmt.Errorf("configure web authentication: %w", err)
-		}
-		configuredHandler, err := websurface.NewHandler(webAuth, webConversations, webStore, cfg.Web.StaticDir)
-		if err != nil {
-			return nil, fmt.Errorf("build web handler: %w", err)
-		}
-		configuredHandler.Brand = websurface.Brand{Name: cfg.Web.SiteName}
-		webHandler = configuredHandler
-		webToolCoordinator = &webToolRefresh{
-			Redis:      stores.Redis,
-			ClickStack: webCatalogBundle.ClickStack,
-			Notion:     webCatalogBundle.Notion,
-		}
-	}
 	healthService := health.NewService(profile.Tools, cfg.Security.WorkspaceRoots)
 	healthService.Redis = stores.Redis
 	conversation := slackagent.New(profile.Agent, slackClient, profile.Prompt, profile.Redactor, stores.UserPrefs)
 	conversation.ApprovalNotifyUserID = cfg.Integrations.GitHub.ApprovalNotifyUserID
 	conversation.ThreadLoader = slackmessaging.ThreadLoader{Bot: slackClient}
-	conversation.Workflows = workflows.NewRegistry(codereview.Definition{})
-	conversation.IntentRouter = workflows.ModelRouter{
-		Client: profile.SecondaryModel, Model: profile.SecondaryModelName,
-		Options: codereview.RouteOptions(),
-	}
 	policy := hostedTools.PolicyForSurface(cfg, surface)
 	var beforeRuns []func(context.Context, string) error
 	if bundle.ClickStack != nil {
@@ -314,10 +191,11 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 			return nil
 		}
 	}
+	conversation.Deliveries = slackagent.PGDeliveryStore{Pool: stores.PGPool}
 	conversation.OnDelivered = runSink.LinkSlackMessage
-	conversation.AlreadyDelivered = runSink.SlackMessageDelivered
 	conversation.Redis, conversation.PodID, conversation.Lifecycle = stores.Redis, podID, serviceCtx
 	conversation.RunTimeout = cfg.Tools.AgentTurnTimeout
+	conversation.MaxConcurrentRuns = cfg.HTTP.EventWorkers
 	conversation.Tools = profile.Tools
 	conversation.Continuations = continuations
 	conversation.Connections = &connService
@@ -365,26 +243,21 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 
 	s := &Service{
-		cfg:              cfg,
-		stores:           stores,
-		slack:            slackClient,
-		metrics:          recorder,
-		health:           healthService,
-		conv:             conv,
-		handler:          handler,
-		ctx:              serviceCtx,
-		cancel:           serviceCancel,
-		serveErr:         make(chan error, 1),
-		web:              webHandler,
-		webTools:         webToolCoordinator,
-		webConversations: webConversations,
-		runSink:          runSink,
-		runEvents:        runEvents,
+		cfg:       cfg,
+		stores:    stores,
+		slack:     slackClient,
+		metrics:   recorder,
+		health:    healthService,
+		conv:      conv,
+		handler:   handler,
+		ctx:       serviceCtx,
+		cancel:    serviceCancel,
+		serveErr:  make(chan error, 1),
+		runSink:   runSink,
+		runEvents: runEvents,
 	}
 	s.eventCond = sync.NewCond(&s.eventMu)
-	if webConversations != nil {
-		webConversations.IsDraining = func() bool { return s.draining.Load() }
-	}
+
 	s.slackWorker = &slackevents.Worker{
 		Inbox:          stores.Events,
 		Redis:          stores.Redis,
@@ -434,12 +307,6 @@ func (s *Service) StartBackground() {
 			s.handler.Home.StartRefreshSubscriber(ctx)
 		})
 	}
-	if s.webTools != nil {
-		s.Go(s.webTools.Start)
-	}
-	if s.webConversations != nil {
-		s.Go(s.webConversations.StartRecovery)
-	}
 	if s.slackWorker != nil {
 		s.slackWorker.Start(s.ctx)
 	}
@@ -463,8 +330,6 @@ func (s *Service) pruneEphemeralData(ctx context.Context) {
 			`DELETE FROM slack_event_inbox WHERE status='completed' AND completed_at < NOW()-INTERVAL '30 days'`,
 			`DELETE FROM slack_event_inbox WHERE status='dead_letter' AND dead_lettered_at < NOW()-INTERVAL '90 days'`,
 			`DELETE FROM agent_session_inputs WHERE acknowledged_at < NOW()-INTERVAL '7 days'`,
-			`DELETE FROM web_auth_states WHERE expires_at < NOW()-INTERVAL '1 day'`,
-			`DELETE FROM web_auth_sessions WHERE expires_at < NOW()-INTERVAL '7 days'`,
 			`DELETE FROM oauth_states WHERE expires_at < NOW()-INTERVAL '1 day'`,
 		}
 		for _, statement := range statements {
@@ -537,9 +402,6 @@ func (s *Service) RunUntilDone(ctx context.Context) error {
 	case runErr = <-s.serveErr:
 	}
 	s.draining.Store(true)
-	if s.webConversations != nil {
-		s.webConversations.Drain()
-	}
 	// All ingress surfaces share one grace deadline. Exhaustion cancels service
 	// work; queue owners retain their existing bounded terminal/claim cleanup.
 	drainCtx, drainCancel := context.WithTimeout(context.Background(), s.cfg.HTTP.ShutdownTimeout)
@@ -547,8 +409,11 @@ func (s *Service) RunUntilDone(ctx context.Context) error {
 	if !s.waitEvents(drainCtx) {
 		log.Printf("shutdown: timed out waiting for in-flight Slack events")
 	}
-	if s.webConversations != nil && !s.webConversations.WaitContext(drainCtx) {
-		log.Printf("shutdown: timed out waiting for in-flight Web turns")
+	if s.conv != nil {
+		s.conv.Quiesce()
+		if !s.conv.WaitIdle(drainCtx) {
+			log.Printf("shutdown: timed out waiting for Slack execution")
+		}
 	}
 	if s.cancel != nil {
 		s.cancel()
@@ -570,9 +435,6 @@ func (s *Service) serveHealth(ctx context.Context) {
 		default:
 		}
 		return
-	}
-	if s.web != nil {
-		mux.Handle("/", s.web)
 	}
 	server := &http.Server{
 		Addr:              s.cfg.HTTP.Addr,
@@ -631,8 +493,8 @@ func (s *Service) handleDrain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.draining.Store(true)
-	if s.webConversations != nil {
-		s.webConversations.Drain()
+	if s.conv != nil {
+		s.conv.Quiesce()
 	}
 	_, _ = w.Write([]byte("draining"))
 }
@@ -644,13 +506,8 @@ func (s *Service) Close() {
 	if s.cancel != nil {
 		s.cancel()
 	}
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
-	// Web owns a separate execution/finalization lifetime from service goroutines.
-	// Keep its stores alive during the same bounded post-cancellation cleanup.
-	if s.webConversations != nil {
-		s.webConversations.WaitContext(cleanupCtx)
-	}
 	s.waitContext(cleanupCtx)
 	if s.stores != nil {
 		s.stores.Close()

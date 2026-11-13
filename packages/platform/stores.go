@@ -147,28 +147,19 @@ var allTables = []string{
 	"agent_runs", "agent_tool_spills", "agent_run_steps",
 	"agent_run_feedback", "agent_transcript_events",
 	"slack_event_inbox", "user_settings", "user_prompt_assets", "user_memories", "user_memory_generations", "user_memory_reset_requests",
-	"agent_session_inputs", "user_connections", "oauth_states",
+	"agent_session_inputs", "user_connections", "oauth_states", "slack_reply_receipts",
 }
 
 var ingressTables = []string{"slack_event_inbox", "agent_session_inputs", "user_settings", "user_prompt_assets", "user_memories", "user_memory_generations", "user_memory_reset_requests", "user_connections", "oauth_states"}
 
-var webTables = []string{"web_auth_states", "web_auth_sessions", "web_conversations"}
-
 var allColumns = map[string][]string{
 	"slack_event_inbox":    {"claim_owner", "claim_until"},
-	"agent_session_inputs": {"claim_owner", "claim_until"},
+	"agent_session_inputs": {"claim_owner", "claim_until", "available_at", "last_error", "dead_lettered_at"},
 	// Connection-instance migrations are applied by the deploy repository.
 	// Check them before constructing stores so an old schema fails at startup
 	// with an actionable migration error instead of during an OAuth request.
 	"user_connections": {"instance_id", "label", "metadata"},
 	"oauth_states":     {"instance_id", "label", "metadata", "origin", "return_context", "code_verifier"},
-}
-
-// RequireWebSchema checks the optional browser-surface contract only when an
-// operator enables that surface. This preserves the existing Slack-only
-// deployment upgrade order.
-func RequireWebSchema(ctx context.Context, pool *pgxpool.Pool) error {
-	return requireSchema(ctx, pool, webTables)
 }
 
 // requireSchema performs a read-only startup check. Application processes do

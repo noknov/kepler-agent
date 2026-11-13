@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -118,5 +119,38 @@ func BenchmarkLatestSessionState(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+func TestIntegrationLatestTurnControlProjectionExcludesEvidence(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
+	pool, err := pgxpool.New(t.Context(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	id := fmt.Sprintf("control-window-%d", time.Now().UnixNano())
+	defer pool.Exec(context.Background(), `DELETE FROM agent_transcript_events WHERE session_id=$1`, id)
+	store := PGTranscript{Pool: pool}
+	for index, event := range []transcript.Event{{TurnID: "old", Type: transcript.TurnStarted}, {TurnID: "old", Type: transcript.TurnCompleted}, {TurnID: "new", Type: transcript.TurnStarted}, {TurnID: "new", Type: transcript.AssistantMessage}, {TurnID: "old", Type: transcript.TurnCompleted}} {
+		event.SessionID = id
+		event.ID = fmt.Sprintf("%s-%d", id, index)
+		if _, err := store.Append(t.Context(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err := store.LoadLatestTurn(t.Context(), id)
+	if err != nil || len(events) != 1 || events[0].TurnID != "new" {
+		t.Fatalf("old terminal displaced active owner: %+v %v", events, err)
+	}
+	if _, err := store.Append(t.Context(), transcript.Event{ID: id + "-canceled", SessionID: id, TurnID: "new", Type: transcript.TurnCanceled}); err != nil {
+		t.Fatal(err)
+	}
+	events, err = store.LoadLatestTurn(t.Context(), id)
+	if err != nil || len(events) != 2 || events[1].Type != transcript.TurnCanceled {
+		t.Fatalf("control receipts=%+v error=%v", events, err)
 	}
 }

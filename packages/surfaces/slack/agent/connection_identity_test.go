@@ -33,7 +33,9 @@ func TestOAuthResumeRetainsAuthenticatedWorkspaceAndConversationType(t *testing.
 				t.Fatal(err)
 			}
 			service := New(hosted.Agent{Runtime: runner}, &fakeMessenger{}, safety.PromptPolicy{}, safety.Redactor{}, nil)
+			service.Inputs = &memoryInputs{}
 			service.resumeAfterConnection(t.Context(), connections.Continuation{UserID: "requester", Provider: "github", SessionID: sessionID, Channel: "C1", ThreadTS: "thread"})
+			service.startPending(t.Context(), sessionID)
 			state, ok, err := runner.LatestSessionState(t.Context(), sessionID)
 			if err != nil || !ok || state.TurnID == "original" || state.UserID != "requester" || state.Scope["team_id"] != "T-origin" || state.Scope["conversation_type"] != kind {
 				t.Fatalf("OAuth resume lost origin: %+v ok=%v err=%v", state, ok, err)

@@ -45,7 +45,7 @@ def doctor(root: Path, ui: bool, integration: bool) -> int:
             failures.append("use the Go toolchain declared by go.mod (GOTOOLCHAIN=auto can select it)")
         else:
             print(result.stdout.strip())
-    for command, minimum in (("node", 20), ("pnpm", 10)):
+    for command, minimum in (("node", 20),):
         path = shutil.which(command)
         version = "unavailable"
         if path:
@@ -53,8 +53,8 @@ def doctor(root: Path, ui: bool, integration: bool) -> int:
             version = result.stdout.strip() if result.returncode == 0 else "unavailable"
         print(f"{command}: {version} ({'required' if ui else 'optional for core checks'})")
         match = re.match(r"v?(\d+)", version)
-        if ui and (not match or (int(match.group(1)) != 10 if command == "pnpm" else int(match.group(1)) < minimum)):
-            failures.append(f"UI checks require {command} " + ("10, matching CI" if command == "pnpm" else f"{minimum}+"))
+        if ui and (not match or int(match.group(1)) < minimum):
+            failures.append(f"UI checks require {command} " + f"{minimum}+")
     for variable in ("POSTGRES_TEST_DSN", "REDIS_TEST_URL"):
         configured = bool(os.environ.get(variable))
         print(f"{variable}: {'configured' if configured else 'not configured; dependent tests can skip'}")
@@ -116,8 +116,6 @@ def docs(root: Path) -> int:
 
 
 def category(path: str) -> str:
-    if path.startswith("apps/cli/src/generated/") or path == "docs/app-server.schema.json":
-        return "generated"
     if path.endswith("_test.go") or "/tests/" in path or Path(path).name.startswith("test_"):
         return "tests"
     if path.startswith("docs/") or path.endswith(".md"):

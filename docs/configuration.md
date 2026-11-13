@@ -23,7 +23,7 @@ in source does not mean every surface reads it.
 | --- | --- | --- |
 | Hosted environment | Environment configuration and secret manager | Gateway, worker, observability |
 | Source debugging | Service `.env` or `KEPLER_AGENT_ENV_FILE` | Directly launched Go service |
-| Local CLI | TOML created by `kepler-agent config init` | Local limits, routing, sandbox, MCP, prompts |
+| Local benchmark adapter | TOML created by `kepler-agent config init` | Local limits, routing, sandbox, MCP, prompts |
 | Provider credentials/model selection | Hosted environment configuration | Worker and local-client bootstrap |
 | Private prompt context | `PROMPT_DIR` overlay | Profile-specific prompt composition |
 
@@ -34,10 +34,10 @@ outside the source tree and inject them at runtime.
 
 | Service | Main configuration |
 | --- | --- |
-| Gateway | Slack signing secret, PostgreSQL, Redis; OAuth/public origin/allowlist and worker upstream for CLI/Web |
+| Gateway | Slack signing secret, PostgreSQL, Redis; OAuth/public origin/allowlist and worker upstream for benchmark transport |
 | Worker | Slack bot/signing credentials, allowlist, PostgreSQL, Redis, active provider credentials |
 | Observability | PostgreSQL, Redis, admin token for protected HTTP access |
-| Local CLI | Gateway URL and Slack login; optional local TOML |
+| Local benchmark adapter | Gateway URL and Slack login; optional local TOML |
 
 The source loader is [packages/config/config.go](../packages/config/config.go).
 It validates requirements by service. For direct source debugging, its default
@@ -50,10 +50,10 @@ is supplied by the target environment.
 
 - [Models](models.md): provider namespaces, protocols, primary/secondary settings.
 - [Observability](observability.md): OTLP, Langfuse, cost rates.
-- [Web](web.md): browser origin, cookies, OIDC, and static assets.
+- [benchmark](benchmark.md): browser origin, cookies, OIDC, and static assets.
 - [Tools](tools.md): integration credentials and search providers.
 - [Prompts](prompts.md): public defaults and private overlays.
-- [Local CLI](local-cli.md): local TOML and supported flags.
+- [Local benchmark adapter](benchmark.md): local TOML and supported flags.
 
 `SLACK_DEFAULT_LOCALE` selects deterministic status/attachment localization:
 `zh` and `zh-*` use Chinese; other values use English. It does not infer locale

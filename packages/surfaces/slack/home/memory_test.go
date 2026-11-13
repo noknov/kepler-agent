@@ -3,9 +3,10 @@ package slackhome
 import (
 	"context"
 	"encoding/json"
-	"github.com/noknov/kepler-agent/packages/memory"
 	"strings"
 	"testing"
+
+	"github.com/noknov/kepler-agent/packages/memory"
 )
 
 type resetMemoryStub struct{}

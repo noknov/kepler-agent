@@ -40,7 +40,7 @@ func (s *Service) StopSession(ctx context.Context, req conversation.StopRequest)
 	s.mu.Unlock()
 	var events []transcript.Event
 	if s.Agent.Runtime != nil {
-		events, err = s.Agent.Runtime.SessionEvents(ctx, sessionID)
+		events, err = s.Agent.Runtime.LatestTurnEvents(ctx, sessionID)
 		if err != nil {
 			return err
 		}
@@ -186,7 +186,7 @@ func (s *Service) consumeStops(ctx context.Context, sessionID string) error {
 	active := s.active[sessionID]
 	s.mu.Unlock()
 	if s.Agent.Runtime != nil {
-		events, err := s.Agent.Runtime.SessionEvents(ctx, sessionID)
+		events, err := s.Agent.Runtime.LatestTurnEvents(ctx, sessionID)
 		if err != nil {
 			return err
 		}
@@ -228,7 +228,7 @@ func (s *Service) consumeStops(ctx context.Context, sessionID string) error {
 			// the PG session lock. It must not consume the actual owner's stop.
 			finished := false
 			if s.Agent.Runtime != nil {
-				events, err := s.Agent.Runtime.SessionEvents(ctx, sessionID)
+				events, err := s.Agent.Runtime.LatestTurnEvents(ctx, sessionID)
 				if err != nil {
 					_ = s.Inputs.Release(ctx, item.ID, owner)
 					return err

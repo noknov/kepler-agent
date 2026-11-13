@@ -6,7 +6,7 @@ canonical runtime or turn every local reviewer into a network service.
 
 ## Configured peers
 
-CLI and app-server read operator-selected peers from local config:
+benchmark adapter read operator-selected peers from local config:
 
 ```toml
 [[remote_agents]]
@@ -58,7 +58,7 @@ task, use `send` with its task ID and a new explicit assignment. There is no
 background polling loop or hidden task scheduler.
 
 Get/cancel/continuation require a reference already recorded by this configured
-tool in the canonical transcript of the same session and actor. Local CLI/app-server sessions may have an empty end-user ID: they retain the
+tool in the canonical transcript of the same session and actor. Local benchmark adapter sessions may have an empty end-user ID: they retain the
 exact actor recorded by the owning session instead of inventing a hosted user.
 The reference survives process restart; a caller-supplied foreign task ID is not authorization.
 Returned task/context IDs must retain their binding. Reports and file references

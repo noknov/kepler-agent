@@ -20,9 +20,10 @@ import (
 type taskStateTool struct{ store transcript.Store }
 
 func (taskStateTool) Descriptor() tool.Descriptor {
-	d := tool.FunctionDescriptor("task_state", "Read or update persistent task goals, user constraints, work and evidence for multi-step tasks. Read with {}. Updates use expected_revision and upsert; omitted entries are retained. Reference transcript sequence numbers. User goals/constraints require a verbatim source quote. Verified is an agent claim backed by successful tool evidence, not independent certification. Use plan for presentation; use this ledger for continuity.",
+	d := tool.FunctionDescriptor("task_state", "Read or update persistent task goals, user constraints, work and evidence for multi-step tasks. Read with {}. Updates use expected_revision and upsert; omitted entries are retained. Use archive to remove explicitly completed or superseded IDs from the active projection; historical evidence stays in the transcript. Reference transcript sequence numbers. User goals/constraints require a verbatim source quote. Verified is an agent claim backed by successful tool evidence, not independent certification. Use plan for presentation; use this ledger for continuity.",
 		tool.ObjectSchema(nil, map[string]any{
 			"expected_revision": map[string]any{"type": "integer", "minimum": 0},
+			"archive":           map[string]any{"type": "array", "maxItems": taskstate.MaxItems, "items": map[string]any{"type": "string"}},
 			"upsert": map[string]any{"type": "array", "maxItems": taskstate.MaxItems, "items": tool.ObjectSchema([]string{"id", "kind", "text", "status", "sources"}, map[string]any{
 				"id": map[string]any{"type": "string"}, "kind": map[string]any{"type": "string", "enum": []string{"goal", "constraint", "work", "question", "artifact", "effect"}}, "text": map[string]any{"type": "string", "maxLength": 2000}, "status": map[string]any{"type": "string", "enum": []string{"active", "blocked", "done", "verified", "superseded", "unknown", "reconciled"}},
 				"sources": referenceSchema(), "evidence": referenceSchema(), "verification": map[string]any{"type": "string"}, "workspace_revision": map[string]any{"type": "string"},
@@ -53,6 +54,7 @@ func (t taskStateTool) Execute(ctx context.Context, call tool.Call) (tool.Result
 	var args struct {
 		ExpectedRevision *uint64          `json:"expected_revision"`
 		Upsert           []taskstate.Item `json:"upsert"`
+		Archive          []string         `json:"archive"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(call.Arguments))
 	decoder.DisallowUnknownFields()
@@ -77,11 +79,11 @@ func (t taskStateTool) Execute(ctx context.Context, call tool.Call) (tool.Result
 		return tool.Result{}, err
 	}
 	next := current
-	if args.Upsert != nil {
+	if args.Upsert != nil || args.Archive != nil {
 		if args.ExpectedRevision == nil {
 			return tool.Result{}, fmt.Errorf("expected_revision is required for updates")
 		}
-		next, err = taskstate.Apply(current, taskstate.Patch{ExpectedRevision: *args.ExpectedRevision, Upsert: args.Upsert})
+		next, err = taskstate.Apply(current, taskstate.Patch{ExpectedRevision: *args.ExpectedRevision, Upsert: args.Upsert, Archive: args.Archive})
 		if err != nil {
 			return tool.Result{}, err
 		}
@@ -116,7 +118,7 @@ func (t taskStateTool) Execute(ctx context.Context, call tool.Call) (tool.Result
 		Recent []source        `json:"recent_sources"`
 	}{next, recent})
 	result := tool.TextResult(string(payload))
-	if args.Upsert != nil {
+	if args.Upsert != nil || args.Archive != nil {
 		result.TaskState = &next
 	}
 	return result, nil

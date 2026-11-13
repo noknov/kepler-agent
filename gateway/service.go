@@ -3,12 +3,8 @@ package gateway
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -23,11 +19,11 @@ import (
 	"github.com/noknov/kepler-agent/packages/platform"
 	"github.com/noknov/kepler-agent/packages/profiles/hosted"
 	"github.com/noknov/kepler-agent/packages/safety"
-	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
-	"github.com/noknov/kepler-agent/packages/surfaces/slack/events"
-	"github.com/noknov/kepler-agent/packages/surfaces/slack/gateway"
-	"github.com/noknov/kepler-agent/packages/surfaces/slack/handler"
-	"github.com/noknov/kepler-agent/packages/surfaces/slack/home"
+	slack "github.com/noknov/kepler-agent/packages/surfaces/slack/client"
+	slackevents "github.com/noknov/kepler-agent/packages/surfaces/slack/events"
+	slackgateway "github.com/noknov/kepler-agent/packages/surfaces/slack/gateway"
+	slackhandler "github.com/noknov/kepler-agent/packages/surfaces/slack/handler"
+	slackhome "github.com/noknov/kepler-agent/packages/surfaces/slack/home"
 )
 
 type Service struct {
@@ -36,11 +32,7 @@ type Service struct {
 	gateway     slackgateway.Gateway
 	home        slackhome.Controller
 	connections connections.Service
-	webProxy    http.Handler
 	draining    atomic.Bool
-	webMu       sync.Mutex
-	webCancels  map[uint64]context.CancelFunc
-	webSequence atomic.Uint64
 }
 
 func Run(ctx context.Context) error {
@@ -71,7 +63,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Service{cfg: cfg, stores: stores, webCancels: make(map[uint64]context.CancelFunc)}
+	s := &Service{cfg: cfg, stores: stores}
 	var slackClient *slack.Client
 	if cfg.Slack.BotToken != "" {
 		slackClient = slack.NewClient(cfg.Slack.BotToken, cfg.Slack.BotUserID)
@@ -93,17 +85,6 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		return s.home.RequestRefresh(ctx, userID)
 	}
 	s.connections = connService
-	if cfg.Web.Enabled {
-		upstream, err := url.Parse(cfg.Web.UpstreamURL)
-		if err != nil || upstream.Scheme == "" || upstream.Host == "" {
-			return nil, fmt.Errorf("invalid WEB_UPSTREAM_URL %q", cfg.Web.UpstreamURL)
-		}
-		proxy := httputil.NewSingleHostReverseProxy(upstream)
-		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-			s.writeHTTPError(w, r, http.StatusBadGateway, "web service unavailable", err)
-		}
-		s.webProxy = proxy
-	}
 	handler := &slackhandler.Handler{
 		Approvals: agentruntime.ApprovalAuthority{Transcript: hosted.PGTranscript{Pool: stores.PGPool}},
 		Access:    safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
@@ -136,28 +117,14 @@ func (s *Service) Close() {
 }
 
 func (s *Service) ListenAndServe(ctx context.Context) error {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/livez", ok("ok"))
-	mux.HandleFunc("/healthz", ok("ok"))
-	mux.HandleFunc("/readyz", s.handleReady)
-	mux.HandleFunc("/drain", s.handleDrain)
-	mux.HandleFunc("/slack/events", s.gateway.HandleEvents)
-	mux.HandleFunc("/slack/interactions", s.gateway.HandleInteractions)
-	if s.connections.Config.OAuthEnabled() && s.connections.Config.PublicBaseURL != "" {
-		mux.Handle("/oauth/", connections.NewHTTPHandler(s.connections))
-	}
-	if cli, err := cloud.NewGateway(s.cfg, s.stores.Redis); err != nil {
+	handler, err := s.routes()
+	if err != nil {
 		return err
-	} else {
-		cli.Register(mux)
-	}
-	if s.webProxy != nil {
-		mux.HandleFunc("/", s.serveWeb)
 	}
 
 	server := &http.Server{
 		Addr:              s.cfg.HTTP.Addr,
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       10 * time.Minute,
 		IdleTimeout:       120 * time.Second,
@@ -167,10 +134,6 @@ func (s *Service) ListenAndServe(ctx context.Context) error {
 		defer close(shutdownDone)
 		<-ctx.Done()
 		s.draining.Store(true)
-		// Browser event streams are intentionally long-lived. Disconnect only
-		// these proxied requests so a rollout cannot wait for an SSE client;
-		// Slack ingress requests retain the configured graceful shutdown budget.
-		s.cancelWebRequests()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.HTTP.ShutdownTimeout)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
@@ -183,43 +146,6 @@ func (s *Service) ListenAndServe(ctx context.Context) error {
 		<-shutdownDone
 	}
 	return nil
-}
-
-func (s *Service) serveWeb(w http.ResponseWriter, r *http.Request) {
-	// Process diagnostics are read directly by local monitoring, never through
-	// the public Web proxy. The snapshot may contain recent upstream errors.
-	if r.URL.Path == "/metrics" {
-		http.NotFound(w, r)
-		return
-	}
-	if s.webProxy == nil {
-		http.NotFound(w, r)
-		return
-	}
-	ctx, cancel := context.WithCancel(r.Context())
-	id := s.webSequence.Add(1)
-	s.webMu.Lock()
-	s.webCancels[id] = cancel
-	s.webMu.Unlock()
-	defer func() {
-		s.webMu.Lock()
-		delete(s.webCancels, id)
-		s.webMu.Unlock()
-		cancel()
-	}()
-	s.webProxy.ServeHTTP(w, r.WithContext(ctx))
-}
-
-func (s *Service) cancelWebRequests() {
-	s.webMu.Lock()
-	cancels := make([]context.CancelFunc, 0, len(s.webCancels))
-	for _, cancel := range s.webCancels {
-		cancels = append(cancels, cancel)
-	}
-	s.webMu.Unlock()
-	for _, cancel := range cancels {
-		cancel()
-	}
 }
 
 func (s *Service) handleReady(w http.ResponseWriter, r *http.Request) {
@@ -273,4 +199,24 @@ func ok(body string) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(body))
 	}
+}
+
+func (s *Service) routes() (http.Handler, error) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/livez", ok("ok"))
+	mux.HandleFunc("/healthz", ok("ok"))
+	mux.HandleFunc("/readyz", s.handleReady)
+	mux.HandleFunc("/drain", s.handleDrain)
+	mux.HandleFunc("/slack/events", s.gateway.HandleEvents)
+	mux.HandleFunc("/slack/interactions", s.gateway.HandleInteractions)
+	if s.connections.Config.OAuthEnabled() && s.connections.Config.PublicBaseURL != "" {
+		mux.Handle("/oauth/", connections.NewHTTPHandler(s.connections))
+	}
+	if benchmark, err := cloud.NewGateway(s.cfg, s.stores.Redis); err != nil {
+		return nil, err
+	} else {
+		benchmark.Register(mux)
+	}
+
+	return mux, nil
 }

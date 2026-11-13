@@ -27,6 +27,7 @@ type Overview struct {
 	Running      []runs.Run       `json:"running"`
 	Inbox        QueueStats       `json:"inbox"`
 	Inputs       map[string]int64 `json:"inputs"`
+	Replies      ReplyStats       `json:"replies"`
 	DeadLetters  []InboxIssue     `json:"dead_letters"`
 }
 
@@ -95,7 +96,7 @@ func queryOverview(ctx context.Context, tx pgx.Tx, start, end time.Time) (Overvi
 	if err != nil {
 		return result, err
 	}
-	result.Inbox, result.Inputs = queues.Inbox, queues.Inputs
+	result.Inbox, result.Inputs, result.Replies = queues.Inbox, queues.Inputs, queues.Replies
 	rows, err := tx.Query(ctx, `SELECT event_id,COALESCE(dead_lettered_at,received_at),attempt_count,left(last_error,500)
  FROM slack_event_inbox WHERE status='dead_letter' ORDER BY COALESCE(dead_lettered_at,received_at) DESC LIMIT 10`)
 	if err != nil {
@@ -155,8 +156,9 @@ func readRunMetadata(ctx context.Context, tx pgx.Tx, query string, args ...any) 
 // QueueSnapshot contains only current durable queue gauges, independent of any
 // run cohort or in-process worker queue. It contains no payload/error/actor IDs.
 type QueueSnapshot struct {
-	Inbox  QueueStats
-	Inputs map[string]int64
+	Inbox   QueueStats
+	Inputs  map[string]int64
+	Replies ReplyStats
 }
 
 func readQueues(ctx context.Context, pool *pgxpool.Pool, now time.Time) (QueueSnapshot, error) {
@@ -183,9 +185,17 @@ func queryQueues(ctx context.Context, tx pgx.Tx, end time.Time) (QueueSnapshot, 
  FROM slack_event_inbox`, end).Scan(&result.Inbox.ExpiredClaims, &result.Inbox.OldestQueuedMS); err != nil {
 		return result, err
 	}
-	if err = readCounts(ctx, tx, `SELECT kind||':'||CASE WHEN claim_until IS NULL THEN 'queued' WHEN claim_until <= $1 THEN 'expired' ELSE 'claimed' END,count(*)
+	if err = readCounts(ctx, tx, `SELECT kind||':'||CASE WHEN dead_lettered_at IS NOT NULL THEN 'dead_letter' WHEN available_at>$1 THEN 'retry_wait' WHEN claim_until IS NULL THEN 'queued' WHEN claim_until <= $1 THEN 'expired' ELSE 'claimed' END,count(*)
  FROM agent_session_inputs WHERE acknowledged_at IS NULL GROUP BY 1`, result.Inputs, end); err != nil {
 		return result, err
 	}
+	if err = tx.QueryRow(ctx, `SELECT count(*) FILTER(WHERE phase='uncertain'),count(*) FILTER(WHERE NOT status_applied) FROM slack_reply_receipts`).Scan(&result.Replies.Uncertain, &result.Replies.UnsettledStatus); err != nil {
+		return result, err
+	}
 	return result, nil
+}
+
+type ReplyStats struct {
+	Uncertain       int64 `json:"uncertain"`
+	UnsettledStatus int64 `json:"unsettled_status"`
 }

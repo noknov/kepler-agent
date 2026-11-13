@@ -25,7 +25,7 @@ func TestDependencyDirections(t *testing.T) {
 		{"packages/agent/runtime/a.go", "go.opentelemetry.io/otelx", true},
 		{"packages/providers/a.go", module + "packages/llm/chatgpt", false},
 		{"packages/providers/a.go", module + "packages/llmx", true},
-		{"packages/profiles/local/a.go", module + "packages/surfaces/web", true},
+		{"packages/profiles/local/a.go", module + "packages/surfaces/slack/agent", true},
 		{"packages/profiles/local/a.go", module + "packages/providers", false},
 		{"packages/tools/foo/a.go", module + "packages/surfaces/slack/client", true},
 		{"packages/connections/a.go", module + "worker", true},

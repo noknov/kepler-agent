@@ -57,37 +57,6 @@ func TestLoadRejectsMalformedProviderTypedEnvironment(t *testing.T) {
 	}
 }
 
-func TestLoadWebDefaultsToConnectionsOriginAndKeplerBrand(t *testing.T) {
-	resetConfigEnv(t)
-	t.Setenv("WEB_ENABLED", "true")
-	t.Setenv("CONNECTIONS_PUBLIC_BASE_URL", "https://agent.example/")
-
-	cfg, err := LoadFor(ProfileCLI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Web.PublicBaseURL != "https://agent.example" {
-		t.Fatalf("Web.PublicBaseURL = %q", cfg.Web.PublicBaseURL)
-	}
-	if cfg.Web.SiteName != "Kepler" {
-		t.Fatalf("unexpected default brand: %#v", cfg.Web)
-	}
-}
-
-func TestValidateWebRequiresStrongSessionConfiguration(t *testing.T) {
-	base := Config{
-		Web:         WebConfig{Enabled: true, PublicBaseURL: "https://agent.example", SessionSecret: strings.Repeat("s", 32), SessionTTL: 7 * 24 * time.Hour},
-		Connections: ConnectionsConfig{SlackClientID: "client", SlackClientSecret: "secret"},
-	}
-	if err := validateWeb(base); err != nil {
-		t.Fatalf("valid Web configuration: %v", err)
-	}
-	base.Web.SessionSecret = "short"
-	if err := validateWeb(base); err == nil || !strings.Contains(err.Error(), "32") {
-		t.Fatalf("expected session secret error, got %v", err)
-	}
-}
-
 func TestValidToolName(t *testing.T) {
 	for _, name := range []string{"canvas-create", "slack_create", "Tool123"} {
 		if !validToolName(name) {
@@ -896,13 +865,6 @@ func resetConfigEnv(t *testing.T) {
 		"WEB_SEARCH_SEARXNG_URL",
 		"WEB_SEARCH_BRAVE_API_KEY",
 		"WEB_SEARCH_BRAVE_BASE_URL",
-		"WEB_ENABLED",
-		"WEB_PUBLIC_BASE_URL",
-		"WEB_UPSTREAM_URL",
-		"WEB_SESSION_SECRET",
-		"WEB_SESSION_TTL",
-		"WEB_SITE_NAME",
-		"WEB_STATIC_DIR",
 		"OBSERVABILITY_TOKEN",
 		"OBSERVABILITY_ALLOW_UNAUTHENTICATED",
 	}
@@ -958,14 +920,14 @@ func TestQoderUsesPATAndNativeProtocol(t *testing.T) {
 func TestEmbeddingConfigurationIsExplicit(t *testing.T) {
 	resetConfigEnv(t)
 	t.Setenv("MEMORY_EMBEDDING_ENABLED", "true")
-	if _, err := LoadFor(ProfileCLI); err == nil {
+	if _, err := LoadFor(ProfileBenchmark); err == nil {
 		t.Fatal("accepted enabled embedding without configuration")
 	}
 	t.Setenv("MEMORY_EMBEDDING_BASE_URL", "https://embedding.example/v1")
 	t.Setenv("MEMORY_EMBEDDING_MODEL", "explicit-model")
 	t.Setenv("MEMORY_EMBEDDING_REVISION", "2026-10")
 	t.Setenv("MEMORY_EMBEDDING_DIMENSIONS", "1536")
-	cfg, err := LoadFor(ProfileCLI)
+	cfg, err := LoadFor(ProfileBenchmark)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -973,7 +935,7 @@ func TestEmbeddingConfigurationIsExplicit(t *testing.T) {
 		t.Fatal("implicit credentials or invalid defaults")
 	}
 	t.Setenv("MEMORY_EMBEDDING_TIMEOUT", "1h")
-	if _, err = LoadFor(ProfileCLI); err == nil {
+	if _, err = LoadFor(ProfileBenchmark); err == nil {
 		t.Fatal("accepted timeout exceeding recall budget")
 	}
 }
@@ -983,7 +945,7 @@ func TestRejectMalformedMemoryEnvironment(t *testing.T) {
 		t.Run(key, func(t *testing.T) {
 			resetConfigEnv(t)
 			t.Setenv(key, "invalid")
-			if _, err := LoadFor(ProfileCLI); err == nil || !strings.Contains(err.Error(), key) {
+			if _, err := LoadFor(ProfileBenchmark); err == nil || !strings.Contains(err.Error(), key) {
 				t.Fatalf("%s silently fell back: %v", key, err)
 			}
 		})

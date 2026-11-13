@@ -109,14 +109,7 @@ func (s *JSONLStore) AppendBatch(ctx context.Context, batch []transcript.Event) 
 	if len(batch) == 0 {
 		return nil, nil
 	}
-	return s.appendBatch(ctx, batch[0].SessionID, batch, false)
-}
-
-func (s *JSONLStore) CreateSession(ctx context.Context, sessionID string, batch []transcript.Event) ([]transcript.Event, error) {
-	return s.appendBatch(ctx, sessionID, batch, true)
-}
-
-func (s *JSONLStore) appendBatch(ctx context.Context, sessionID string, batch []transcript.Event, create bool) ([]transcript.Event, error) {
+	sessionID := batch[0].SessionID
 	if sessionID == "" {
 		return nil, fmt.Errorf("session id is required")
 	}
@@ -131,9 +124,6 @@ func (s *JSONLStore) appendBatch(ctx context.Context, sessionID string, batch []
 		return nil, err
 	}
 	defer closeSession()
-	if create && index.sequence != 0 {
-		return nil, transcript.ErrSessionExists
-	}
 	if len(batch) == 0 {
 		return nil, nil
 	}
@@ -143,7 +133,7 @@ func (s *JSONLStore) appendBatch(ctx context.Context, sessionID string, batch []
 		event.Sequence = index.sequence + uint64(i) + 1
 		result[i] = event
 	}
-	// Fork/initialization batches remain atomic. Copy the validated bytes;
+	// Initialization batches remain atomic. Copy the validated bytes;
 	// decoding and re-encoding all prior messages only amplifies the write.
 	directory := filepath.Dir(file.Name())
 	temporary, err := os.CreateTemp(directory, ".events-*.jsonl")

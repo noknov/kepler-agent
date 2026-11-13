@@ -107,7 +107,8 @@ func TestOverviewSQLWindowQueuesAndMetadata(t *testing.T) {
  CREATE TEMP TABLE agent_run_steps(run_id text,payload jsonb);
  CREATE TEMP TABLE agent_transcript_events(type text,at timestamptz,payload jsonb);
  CREATE TEMP TABLE slack_event_inbox(event_id text,status text,received_at timestamptz,claim_until timestamptz,dead_lettered_at timestamptz,attempt_count int,last_error text);
- CREATE TEMP TABLE agent_session_inputs(kind text,claim_until timestamptz,acknowledged_at timestamptz);`)
+ CREATE TEMP TABLE agent_session_inputs(kind text,claim_until timestamptz,acknowledged_at timestamptz,available_at timestamptz DEFAULT NOW(),dead_lettered_at timestamptz);
+ CREATE TEMP TABLE slack_reply_receipts(phase text,status_applied boolean);`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +126,7 @@ func TestOverviewSQLWindowQueuesAndMetadata(t *testing.T) {
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO agent_run_steps VALUES ('bad','{"type":"model","name":"test-model","error":"failed","duration_ms":150,"metadata":{"first_token_ms":25}}'),('boundary','{"type":"model","name":"excluded","duration_ms":999}');
  INSERT INTO slack_event_inbox VALUES('dead','dead_letter',$1,NULL,$1,3,'failure'),('expired','processing',$1,$1,NULL,1,''),('queued','queued',$1,NULL,NULL,0,'');
- INSERT INTO agent_session_inputs VALUES('web',$1,NULL),('queue',NULL,NULL),('web',$1,$1);
+ INSERT INTO agent_session_inputs(kind,claim_until,acknowledged_at,available_at) VALUES('steering',$1,NULL,$1),('queue',NULL,NULL,$1),('steering',$1,$1,$1);
  INSERT INTO agent_transcript_events VALUES('model_attempted',$1,'{"metadata":{"outcome":"retry"}}');`, pgx.QueryExecModeSimpleProtocol, start)
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +141,7 @@ func TestOverviewSQLWindowQueuesAndMetadata(t *testing.T) {
 	if len(result.Running) != 1 || result.Running[0].ID != "old" || len(result.RecentIssues) != 1 || result.RecentIssues[0].ID != "bad" {
 		t.Fatal("incorrect window or running cohort")
 	}
-	if result.Inbox.ExpiredClaims != 1 || result.Inbox.OldestQueuedMS != 3600000 || result.Inputs["web:expired"] != 1 || result.Inputs["queue:queued"] != 1 || len(result.DeadLetters) != 1 {
+	if result.Inbox.ExpiredClaims != 1 || result.Inbox.OldestQueuedMS != 3600000 || result.Inputs["steering:expired"] != 1 || result.Inputs["queue:queued"] != 1 || len(result.DeadLetters) != 1 {
 		t.Fatalf("queue/attempt totals=%+v", result)
 	}
 	encoded, _ := json.Marshal(result)

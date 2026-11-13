@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate the real Kepler CLI against AppWorld's official MCP and grader.
+"""Evaluate the real Kepler benchmark adapter against AppWorld's official MCP and grader.
 
 Run with the isolated AppWorld Python environment. Data and grading stay outside
 the agent workspace; the adapter neither generates model calls nor executes tools.
@@ -121,7 +121,7 @@ def parse_step_limit(value: str) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True, help="Prepared AppWorld data root outside agent workspaces")
-    parser.add_argument("--binary-path", type=Path, required=True, help="Native Kepler CLI, built in deploy repository")
+    parser.add_argument("--binary-path", type=Path, required=True, help="Native Kepler benchmark adapter, built in deploy repository")
     parser.add_argument("--output", type=Path, required=True, help="New invocation directory; never overwrite a run")
     parser.add_argument("--split", choices=["train", "dev", "test_normal", "test_challenge"], default="dev")
     selection = parser.add_mutually_exclusive_group()
@@ -137,7 +137,7 @@ def main() -> int:
         parser.error("tasks and timeout-seconds must be positive")
     args.root, args.binary_path, args.output = (p.resolve() for p in (args.root, args.binary_path, args.output))
     if not args.binary_path.is_file() or not os.access(args.binary_path, os.X_OK):
-        parser.error("binary-path must be an executable native CLI")
+        parser.error("binary-path must be an executable native benchmark adapter")
     if not (args.root / "data/datasets" / (args.split + ".txt")).is_file():
         parser.error("AppWorld data missing: run appworld install, then appworld download data --root ROOT")
     if args.output.exists():
