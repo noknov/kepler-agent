@@ -47,6 +47,8 @@ type Agent struct {
 	MemoryTimeout time.Duration
 }
 type Request struct {
+	Limits                               agentruntime.TurnLimits
+	WorkClass                            model.WorkClass
 	SessionID, TurnID, UserID, Workspace string
 	ResumeFromTurnID                     string
 	Input                                model.Message
@@ -99,6 +101,7 @@ func (a Agent) Run(ctx context.Context, request Request) (agentruntime.TurnResul
 	}
 
 	return a.Runtime.RunTurn(ctx, agentruntime.TurnRequest{
+		Limits: request.Limits, WorkClass: request.WorkClass,
 		SessionID:        request.SessionID,
 		TurnID:           request.TurnID,
 		ResumeFromTurnID: request.ResumeFromTurnID,

@@ -52,6 +52,15 @@ type Budget struct {
 	record func(context.Context, BudgetState) error
 }
 
+// TokenBudgetLimit exposes the inherited immutable ceiling, never a new ledger.
+// Zero means no shared token budget is installed in this context.
+func TokenBudgetLimit(ctx context.Context) int64 {
+	if budget, ok := ctx.Value(budgetKey{}).(*Budget); ok && budget != nil {
+		return budget.limit
+	}
+	return 0
+}
+
 func WithBudget(ctx context.Context, limit int64) context.Context {
 	return WithBudgetState(ctx, limit, BudgetState{}, nil)
 }

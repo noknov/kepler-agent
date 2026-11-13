@@ -15,7 +15,7 @@ func TestRuntimePersistsEachActualAttemptUsage(t *testing.T) {
 	catalog, _ := tool.NewCatalog()
 	raw := &scriptedModel{responses: []model.Response{{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop, Usage: model.Usage{Reported: true, InputTokens: 3}}}}
 	resilient := &model.ResilientClient{Primary: raw, PrimaryProvider: "test", MaxAttempts: 1}
-	runner, err := New(Config{MaxTotalTokens: 10000}, Dependencies{Model: resilient, Tools: catalog, Transcript: store})
+	runner, err := New(Config{MaxTotalTokens: 10000, MaxOutputTokens: 100}, Dependencies{Model: resilient, Tools: catalog, Transcript: store})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestEmbeddingUsageIsSeparateAndSurvivesReplay(t *testing.T) {
 	store := transcript.NewMemoryStore()
 	catalog, _ := tool.NewCatalog()
 	raw := &scriptedModel{responses: []model.Response{{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop, Usage: model.Usage{Reported: true, InputTokens: 3}}}}
-	runner, err := New(Config{MaxTotalTokens: 10000}, Dependencies{Model: raw, Tools: catalog, Transcript: store})
+	runner, err := New(Config{MaxTotalTokens: 10000, MaxOutputTokens: 100}, Dependencies{Model: raw, Tools: catalog, Transcript: store})
 	if err != nil {
 		t.Fatal(err)
 	}

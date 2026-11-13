@@ -118,6 +118,22 @@ separate progress-model configuration.
 Status is presentation-only: it is never written to the transcript, returned to
 the runtime, or placed in model context.
 
+### Durable execution ceilings
+
+`TurnRequest.Limits` can tighten the operator's step and total-token ceilings;
+zero inherits and negative values are invalid. The effective ceilings and
+interactive/background workload class are captured with the original actor and
+scope in `TurnStarted`. Recovery can tighten those ceilings but cannot enlarge
+them or promote captured background work. Legacy starts without a captured
+budget use the current operator configuration.
+
+A finite total-token ceiling requires a positive model output limit: reserving
+only estimated input cannot bound an otherwise unlimited provider output.
+Nested work retains its existing shared token ledger. A conflicting smaller
+child ceiling is rejected rather than silently ignored or used to reset parent
+consumption. The task's invoking context owns its deadline; a step limit does
+not replace cancellation or a wall-clock limit.
+
 ## Execution and termination
 
 The current loop has no model-output repair layer. unsupported image parts are removed before provider dispatch; and parallel tool

@@ -147,6 +147,9 @@ type sessionMutex struct {
 }
 
 func New(config Config, deps Dependencies) (*Runtime, error) {
+	if config.MaxTotalTokens > 0 && config.MaxOutputTokens <= 0 {
+		return nil, errors.New("finite token budget requires a positive model output limit")
+	}
 	if config.MaxTotalTokens < 0 {
 		return nil, errors.New("max total tokens cannot be negative")
 	}
@@ -265,6 +268,10 @@ func (b *InputBuffer) Close() {
 }
 
 type TurnRequest struct {
+	Limits TurnLimits
+	// WorkClass selects interactive/background scheduling without fabricating a
+	// delegation parent. Parent-linked work always remains background work.
+	WorkClass      model.WorkClass
 	PrepareContext func(context.Context, tool.Scope) (PreparedContext, error) `json:"-"`
 	SessionID      string
 	TurnID         string

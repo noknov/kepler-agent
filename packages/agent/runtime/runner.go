@@ -29,15 +29,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 	}
 	request.Scope.SessionID = request.SessionID
 	request.Scope.TurnID = request.TurnID
-	class := model.WorkInteractive
-	if request.Parent != nil {
-		class = model.WorkBackground
-	}
-	owner := request.Scope.Values["team_id"] + "/" + request.Scope.UserID
-	if request.Scope.UserID == "" {
-		owner = "session:" + request.SessionID
-	}
-	ctx = model.WithWorkload(ctx, model.Workload{Owner: owner, Class: class})
+
 	turnAttributes := langfuseObservationAttributes(request.Scope, "agent")
 	turnAttributes = append(turnAttributes,
 		attribute.String("agent.session.id", request.SessionID),
@@ -95,17 +87,24 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 			return result, err
 		}
 	}
+	request, budget, err := r.restoreTurnContract(ctx, request, events)
+	if err != nil {
+		return result, err
+	}
+	effectiveConfig := r.config
+	effectiveConfig.MaxSteps = budget.MaxSteps
+	effectiveConfig.MaxTotalTokens = budget.MaxTotalTokens
 	for _, event := range events {
 		if err := r.captureUnknownEffect(ctx, event); err != nil {
 			return TurnResult{SessionID: request.SessionID, TurnID: request.TurnID}, err
 		}
 	}
-	progress, err := projectTurnProgress(events, request.TurnID, r.config)
+	progress, err := projectTurnProgress(events, request.TurnID, effectiveConfig)
 	if err != nil {
 		return result, err
 	}
 	result.Steps, result.Usage, result.EmbeddingUsage = progress.Steps, progress.Usage, progress.EmbeddingUsage
-	ctx = model.WithBudgetState(ctx, r.config.MaxTotalTokens, progress.Budget, func(recordCtx context.Context, state model.BudgetState) error {
+	ctx = model.WithBudgetState(ctx, budget.MaxTotalTokens, progress.Budget, func(recordCtx context.Context, state model.BudgetState) error {
 		cleanupCtx, cancel := r.cleanupContext(recordCtx)
 		defer cancel()
 		metadata, err := json.Marshal(state)
@@ -125,37 +124,12 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 		_, err = r.record(cleanup, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.ModelUsageSettled, Metadata: metadata})
 		return err
 	})
-	// A replay retains its original authorization and reset-generation scope;
-	// refreshing transient profile state must not authorize an old pending write.
-	for _, event := range events {
-		if event.TurnID != request.TurnID || event.Type != transcript.TurnStarted {
-			continue
-		}
-		if len(event.Metadata) == 0 {
-			continue
-		} // Legacy start events had no scope.
-		var original struct {
-			UserID    string            `json:"user_id"`
-			Workspace string            `json:"workspace"`
-			Scope     map[string]string `json:"scope"`
-		}
-		if err := json.Unmarshal(event.Metadata, &original); err != nil {
-			return result, err
-		}
-		if original.UserID != "" && request.Scope.UserID != "" && original.UserID != request.Scope.UserID {
-			return result, fmt.Errorf("turn belongs to a different user")
-		}
-		if original.Scope != nil {
-			request.Scope.Values = original.Scope
-		}
-		if original.UserID != "" {
-			request.Scope.UserID = original.UserID
-		}
-		if original.Workspace != "" {
-			request.Scope.Workspace = original.Workspace
-		}
-		break
+
+	owner := request.Scope.Values["team_id"] + "/" + request.Scope.UserID
+	if request.Scope.UserID == "" {
+		owner = "session:" + request.SessionID
 	}
+	ctx = model.WithWorkload(ctx, model.Workload{Owner: owner, Class: budget.Class})
 	if err := r.reconcileInterruptedToolCalls(ctx, request, events); err != nil {
 		return r.failTurn(ctx, result, err)
 	}
@@ -171,7 +145,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 		if modelName == "" {
 			modelName = r.config.Model
 		}
-		turnMetadata := map[string]any{"user_id": request.Scope.UserID, "workspace": request.Scope.Workspace, "scope": request.Scope.Values, "model": modelName}
+		turnMetadata := map[string]any{"user_id": request.Scope.UserID, "workspace": request.Scope.Workspace, "scope": request.Scope.Values, "model": modelName, "execution_budget": budget}
 		if request.ResumeFromTurnID != "" {
 			turnMetadata["resume_from_turn_id"] = request.ResumeFromTurnID
 		}
@@ -244,7 +218,7 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 		_, err = r.deps.Projector.Project(admissionCtx, r.projectionRequest(candidate, request, system, proposed.Definitions))
 		return err
 	})
-	for step := result.Steps + 1; r.config.MaxSteps == UnlimitedSteps || step <= r.config.MaxSteps; step++ {
+	for step := result.Steps + 1; budget.MaxSteps == UnlimitedSteps || step <= budget.MaxSteps; step++ {
 		result.Steps = step
 		if err := r.recordStepStarted(ctx, request, step); err != nil {
 			return r.failTurn(ctx, result, err)
