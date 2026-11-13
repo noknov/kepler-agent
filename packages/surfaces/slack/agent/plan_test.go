@@ -4,14 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"testing"
+	"testing/synctest"
+	"time"
+
 	"github.com/noknov/kepler-agent/packages/agent/model"
 	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
 	"github.com/noknov/kepler-agent/packages/profiles/hosted"
 	"github.com/noknov/kepler-agent/packages/safety"
-	"testing"
-	"testing/synctest"
-	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"

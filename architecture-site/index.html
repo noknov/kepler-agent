@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="这套系统接收用户任务，调用模型决定下一步，执行经过检查的工具，再把结果返回用户。Slack、Web 和本地 CLI 共用执行核心，但使用不同的身份、存储、工作区和投递方式。">
+<meta name="description" content="这套系统接收用户任务，调用模型决定下一步，执行经过检查的工具，再把结果返回用户。Slack、Web 和benchmark adapter 共用执行核心，但使用不同的身份、存储、工作区和投递方式。">
 <meta name="color-scheme" content="light dark">
 <title>系统架构 · 架构文档</title>
 <link rel="stylesheet" href="assets/guide.css">
@@ -14,14 +14,14 @@
 <a class="skip-link" href="#content">跳到正文</a>
 <header class="site-header"><a class="site-title" href="index.html">架构文档</a><div class="header-actions"></div></header>
 <div class="doc-layout">
-<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html" aria-current="page">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="web.html">Web 接入</a><a href="local.html">本地 CLI 与 app-server</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
+<nav class="chapter-nav" id="chapter-navigation" aria-label="章节目录"><p class="nav-label">文档</p><a href="index.html" aria-current="page">系统架构</a><a href="reading-guide.html">概念与标识</a><a href="execution.html">执行过程</a><a href="context.html">上下文与证据</a><a href="models.html">模型协议与重试</a><a href="tools.html">工具与策略</a><a href="reliability.html">持久化与恢复</a><a href="memory.html">记忆生命周期</a><a href="delegation.html">任务委派</a><a href="operations.html">队列与生命周期</a><a href="slack.html">Slack 接入</a><a href="benchmark.html#contract">Benchmark 接入</a><a href="observability.html">运行观测</a><a href="production.html">故障诊断</a><a href="reference.html">实现索引</a></nav>
 <main class="doc-content" id="content" tabindex="-1">
-<header class="doc-header"><p class="breadcrumb">系统基础<span aria-hidden="true"> / </span>01</p><h1>系统架构</h1><p class="lead">这套系统接收用户任务，调用模型决定下一步，执行经过检查的工具，再把结果返回用户。Slack、Web 和本地 CLI 共用执行核心，但使用不同的身份、存储、工作区和投递方式。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
+<header class="doc-header"><p class="breadcrumb">系统基础<span aria-hidden="true"> / </span>01</p><h1>系统架构</h1><p class="lead">这套系统接收用户任务，调用模型决定下一步，执行经过检查的工具，再把结果返回用户。Slack、Web 和benchmark adapter 共用执行核心，但使用不同的身份、存储、工作区和投递方式。</p><a class="source-version" href="https://github.com/noknov/kepler-agent/tree/35995459c70ec3059e15fbbb7e68119f360af74d">实现基线 <code>3599545</code><span aria-hidden="true"> ↗</span></a></header>
 <section class="doc-section" id="boundary"><h2>模块职责</h2>
 <p>模型负责生成答复或提出工具调用；真正读取文件、运行命令和访问外部服务的，是应用中的工具。应用还必须决定谁可以执行、到哪里执行、如何保存结果，以及进程退出后如何继续。这些职责不能由一段提示文字代替。</p>
 <p>系统将这些职责分成入口适配器、产品配置、执行器、模型与工具适配层，以及会话事件存储。下面的划分描述责任归属，不表示每一层都对应独立部署的服务。</p>
 <h3>入口适配器与产品配置</h3>
-<p>入口适配器处理来自具体产品的请求。Slack 需要验签和线程映射；Web 需要浏览器登录与会话归属；本地 CLI 需要工作区和终端输入。它们将输入整理成核心可以处理的请求。</p>
+<p>入口适配器处理来自具体产品的请求。Slack 需要验签和线程映射；Web 需要浏览器登录与会话归属；benchmark adapter 需要工作区和终端输入。它们将输入整理成核心可以处理的请求。</p>
 <p>产品配置（profile）负责选择执行依赖。例如，托管产品使用 PostgreSQL 和服务端工具策略，本地产品使用 JSONL 与本机沙箱。同一个执行器可以通过不同依赖运行，不需要为每种入口复制一套模型循环。</p>
 <h3>执行器与适配层</h3>
 <p>执行器负责推进任务：加载记录、构造上下文、请求模型、检查工具调用、保存结果并判断是否结束。它依赖内部约定的请求和结果，不直接处理 Slack 签名或某家模型的网络格式。</p>
@@ -31,11 +31,11 @@
 <p>“共用执行核心”指产品使用相同的执行机制，不表示工具在同一个地方运行，也不表示它们共享全部登录和会话规则。这个区别直接影响权限、数据位置和故障恢复。</p>
 <h3>托管 Slack 与 Web</h3>
 <p>工具在操作员管理的服务端工作区运行。用户发来一个仓库路径，不会自动使该路径成为可访问的服务器目录。服务端配置和用户集成授权共同决定可以访问的资源。会话、入口任务和追加输入由对应的托管存储维护。</p>
-<h3>本地 CLI 与 app-server</h3>
-<p>工具在用户选择的本地工作区运行，会话写入本机 JSONL。交互终端通过 stdio app-server 使用本地执行能力。本地工具的文件边界和审批规则不同于托管服务。</p>
-<aside class="worked-example"><p class="example-label">说明示例</p><h3>同一项代码调查，不同执行位置</h3><p>在 Slack 中要求检查登录代码时，执行者读取的是服务端已配置的仓库。使用本地 CLI 时，读取的是当前选择的本机工作区。</p>
+<h3>Benchmark 接入</h3>
+<p>工具在用户选择的本地工作区运行，会话写入本机 JSONL。评测进程接收一次输入并输出 JSONL，不维护交互界面。本地工具的文件边界和审批规则不同于托管服务。</p>
+<aside class="worked-example"><p class="example-label">说明示例</p><h3>同一项代码调查，不同执行位置</h3><p>在 Slack 中要求检查登录代码时，执行者读取的是服务端已配置的仓库。使用benchmark adapter 时，读取的是当前选择的本机工作区。</p>
 <p>两次调查都可以使用相同的模型与工具循环，但一个产品成功访问文件，不证明另一个产品也有同样的目录和凭据。</p></aside>
-<p>具体入口行为分别见 <a href="slack.html">Slack</a>、<a href="web.html">Web</a> 和 <a href="local.html">本地 CLI</a>。</p>
+<p>具体入口行为分别见 <a href="slack.html">Slack</a> 和 <a href="benchmark.html#contract">benchmark adapter</a>。</p>
 </section>
 <section class="doc-section" id="flow"><h2>系统调用关系</h2>
 <p>以“检查登录失败原因，运行相关测试，并解释结果”为例，用户的一条要求通常需要多次模型判断。模型先决定读取什么，应用执行读取；模型看到代码后再决定运行哪个测试，应用执行命令；模型最后依据实际结果作答。</p>

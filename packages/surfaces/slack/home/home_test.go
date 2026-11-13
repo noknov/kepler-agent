@@ -71,18 +71,14 @@ func TestViewShowsRawModelIDAndHidesSecondary(t *testing.T) {
 	if strings.Contains(body, "mimo-v2.5") || strings.Contains(body, "MiMo V2.5") || strings.Contains(body, "Explorer Model") {
 		t.Fatalf("expected secondary model hidden from view, got %s", body)
 	}
-	if !strings.Contains(body, "Capabilities") || !strings.Contains(body, "Code Review") || !strings.Contains(body, "Review GitHub pull requests with a multi-agent workflow.") {
-		t.Fatalf("expected conversational code review capability, got %s", body)
-	}
-	if strings.Contains(body, "secondary model") || strings.Contains(body, "ordinary questions remain") {
-		t.Fatalf("expected concise code review capability, got %s", body)
+	if strings.Contains(body, "multi-agent workflow") || strings.Contains(body, "Code Review") || strings.Contains(body, "Capabilities") {
+		t.Fatalf("retired workflow is still advertised: %s", body)
 	}
 	webSearchIndex := strings.Index(body, "toggle_web_search")
 	rulesIndex := strings.Index(body, "manage_rules")
 	skillsIndex := strings.Index(body, "manage_skills")
-	capabilitiesIndex := strings.LastIndex(body, "Capabilities")
-	if webSearchIndex < 0 || rulesIndex < 0 || skillsIndex < 0 || capabilitiesIndex < 0 || !(webSearchIndex < rulesIndex && rulesIndex < skillsIndex && skillsIndex < capabilitiesIndex) {
-		t.Fatalf("expected Web Search before managers and Capabilities last, got %s", body)
+	if webSearchIndex < 0 || rulesIndex < 0 || skillsIndex < 0 || !(webSearchIndex < rulesIndex && rulesIndex < skillsIndex) {
+		t.Fatalf("expected Web Search before rule and skill managers, got %s", body)
 	}
 	if strings.Contains(body, "Active-turn") || strings.Contains(body, "Image Model") || strings.Contains(body, "toggle_conversation_mode") {
 		t.Fatalf("expected no active-turn or image model fields, got %s", body)

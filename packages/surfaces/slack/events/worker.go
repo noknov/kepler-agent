@@ -11,7 +11,7 @@ import (
 
 	"github.com/noknov/kepler-agent/packages/eventinbox"
 	"github.com/noknov/kepler-agent/packages/infra/redisclient"
-	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
+	slack "github.com/noknov/kepler-agent/packages/surfaces/slack/client"
 )
 
 const (
@@ -45,6 +45,7 @@ type Worker struct {
 
 	queue    chan job
 	controls chan job
+	wake     chan struct{}
 }
 
 type job struct {
@@ -69,6 +70,9 @@ func (w *Worker) Start(ctx context.Context) {
 	}
 	if err := w.Inbox.RecoverExpired(ctx, w.maxAttempts()); err != nil {
 		log.Printf("recover expired Slack inbox events: %v", err)
+	}
+	if w.wake == nil {
+		w.wake = make(chan struct{}, 1)
 	}
 	w.replay(ctx)
 	workers := w.Workers
@@ -99,24 +103,8 @@ func (w *Worker) Start(ctx context.Context) {
 		}
 	})
 	w.goRun(ctx, w.subscribeRedisEvents)
-	w.goRun(ctx, func(ctx context.Context) {
-		ticker := time.NewTicker(FallbackPollPeriod)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if w.draining() {
-					return
-				}
-				if err := w.Inbox.RecoverExpired(ctx, w.maxAttempts()); err != nil {
-					log.Printf("recover expired Slack inbox events: %v", err)
-				}
-				w.replay(ctx)
-			}
-		}
-	})
+	w.goRun(ctx, w.pollDue)
+
 }
 
 func (w *Worker) Notify(ctx context.Context, eventID string, event slack.Event, timeout time.Duration) bool {
@@ -248,6 +236,7 @@ func (w *Worker) handle(ctx context.Context, job job) {
 			log.Printf("dead-lettered Slack inbox event %s after %d attempts", job.eventID, w.maxAttempts())
 			w.observeJob("dead_letter")
 		}
+		w.signalPoll()
 		w.observeJob("handler_error")
 		return
 	}

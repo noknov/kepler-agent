@@ -5,7 +5,7 @@
 These are configuration examples for adapters present in this source tree, not
 a live catalog of model availability, pricing, or provider guarantees. Confirm
 the endpoint, credentials, model ID, reasoning support, and output limits with
-your deployed provider. Keep credentials in deploy secrets. The local CLI
+your deployed provider. Keep credentials in deploy secrets. The local benchmark adapter
 receives its model configuration from the gateway.
 
 `LLM_MAX_OUTPUT_TOKENS` sets the requested output cap when positive; zero or
@@ -156,8 +156,8 @@ Account eligibility, plan usage limits, and permission to serve other users are
 controlled by OpenAI; local deployment alone does not establish that permission.
 
 ```bash
-go run ./cli/cmd/kepler-agent chatgpt login --credentials-file /private/operator-chatgpt/session.json
-go run ./cli/cmd/kepler-agent chatgpt models --credentials-file /private/operator-chatgpt/session.json
+go run ./benchmark/cmd/kepler-bench chatgpt login --credentials-file /private/operator-chatgpt/session.json
+go run ./benchmark/cmd/kepler-bench chatgpt models --credentials-file /private/operator-chatgpt/session.json
 ```
 
 Open the printed URL in your browser and approve ChatGPT plan usage. Choose an
@@ -228,7 +228,7 @@ the vendor CLI protocol and the MIT-licensed
 [Pi Qoder provider](https://github.com/simonsmh/pi-provider-qoder). This is an
 account-tested protocol adapter, **not a documented standalone model API
 guarantee**. Qoder protocol changes may require an adapter update. The official
-[Agent SDK](https://docs.qoder.com/cli/sdk/how-it-works) owns its own agent loop
+[Agent SDK](https://docs.qoder.com/benchmark/sdk/how-it-works) owns its own agent loop
 and is therefore not embedded in the Kepler model provider.
 
 Text and structured tool-call round trips were verified using the `efficient`
@@ -306,7 +306,7 @@ OPENAI_MODEL=gpt-4o-mini
 
 Set `LLM_PROTOCOL=responses` for an OpenAI Responses endpoint. `openai`,
 `responses`, and `anthropic` all adapt into the same canonical model contract;
-the local CLI exposes the same choice as `--protocol`.
+the local benchmark adapter exposes the same choice as `--protocol`.
 
 ### OpenCode
 

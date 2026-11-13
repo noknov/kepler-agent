@@ -37,8 +37,9 @@ type State struct {
 }
 
 type Patch struct {
-	ExpectedRevision uint64 `json:"expected_revision"`
-	Upsert           []Item `json:"upsert"`
+	ExpectedRevision uint64   `json:"expected_revision"`
+	Upsert           []Item   `json:"upsert"`
+	Archive          []string `json:"archive"`
 }
 
 // Apply is a CAS update. Entries are retained until explicitly superseded;
@@ -47,10 +48,39 @@ func Apply(current State, patch Patch) (State, error) {
 	if current.Revision != patch.ExpectedRevision {
 		return State{}, fmt.Errorf("task state revision conflict: read revision %d before updating", current.Revision)
 	}
-	if len(patch.Upsert) == 0 || len(patch.Upsert) > MaxItems {
+	if len(patch.Upsert)+len(patch.Archive) == 0 || len(patch.Upsert) > MaxItems || len(patch.Archive) > MaxItems {
 		return State{}, fmt.Errorf("task update requires 1..%d items", MaxItems)
 	}
 	out := State{SchemaVersion: SchemaVersion, Revision: current.Revision + 1, Items: append([]Item(nil), current.Items...)}
+	// Archival removes only explicitly selected inactive entries from the current
+	// projection. Earlier transcript snapshots retain their evidence and identity.
+	archived := make(map[string]bool, len(patch.Archive))
+	for _, id := range patch.Archive {
+		if archived[id] {
+			return State{}, fmt.Errorf("duplicate archive ID %q", id)
+		}
+		archived[id] = true
+	}
+	var retained []Item
+	for _, item := range out.Items {
+		if !archived[item.ID] {
+			retained = append(retained, item)
+			continue
+		}
+		switch item.Status {
+		case "done", "verified", "superseded", "reconciled":
+		default:
+			return State{}, fmt.Errorf("cannot archive active or unresolved item %q", item.ID)
+		}
+		if item.Kind == "constraint" && item.Status != "superseded" {
+			return State{}, fmt.Errorf("constraints must be explicitly superseded before archival")
+		}
+		delete(archived, item.ID)
+	}
+	if len(archived) != 0 {
+		return State{}, fmt.Errorf("archive contains unknown task IDs")
+	}
+	out.Items = retained
 	positions := make(map[string]int, len(out.Items))
 	for i, item := range out.Items {
 		positions[item.ID] = i
@@ -132,7 +162,7 @@ func Apply(current State, patch Patch) (State, error) {
 		}
 	}
 	if len(out.Items) > MaxItems {
-		return State{}, fmt.Errorf("task state exceeds %d items; start a new session for an unrelated task", MaxItems)
+		return State{}, fmt.Errorf("task state exceeds %d items; archive completed or superseded items before adding work", MaxItems)
 	}
 	return out, nil
 }

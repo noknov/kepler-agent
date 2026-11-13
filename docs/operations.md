@@ -35,7 +35,6 @@ are authorized or every tool can complete.
 | Service never becomes ready | Startup error, PostgreSQL/Redis reachability, schema version, required configuration | Correct configuration or migration before restart |
 | Slack accepted an event but no answer | Inbox claim/retry/dead-letter state, run termination, delivery error | Determine whether execution or delivery failed before replay |
 | Turns wait without progress | Active sessions, connection-pool occupancy, locks, provider timeouts, child-agent fan-out | Resolve the constrained resource; do not blindly raise every concurrency limit |
-| Web page works but a turn stalls | Worker logs, conversation/run state, SSE connection, user integration state | Distinguish lost presentation from incomplete execution |
 | Model calls fail | Provider/protocol/model selection and typed error | Verify credentials and request compatibility; inspect bounded retries |
 | Cost appears zero | Configured rates and recorded usage | Compare provider billing; zero configured rates mean zero estimate |
 | Old code appears in a read | Requested snapshot/ref versus explicit working-tree view | Check [workspace snapshot rules](configuration.md#workspace-snapshots) |
@@ -56,36 +55,31 @@ Do not clear owner/lease fields or delete inbox rows as routine recovery.
 Investigate malformed and exhausted events rather than replaying them forever.
 See [safety and limitations](safety.md).
 
-Web queue recovery distinguishes an authoritative missing conversation from a
-storage/lease failure. Temporary lookup or approval errors release the claim;
-only a persisted terminal rejection permits acknowledgement. Retry exhaustion
-and malformed payloads also require a canonical terminal before acknowledgement.
-An already terminal turn is acknowledged without repeating approval/execution.
-A full worker does not claim waiting conversations and consume their retry
-attempts. Web admission counts the existing in-flight lifetime through durable
-acknowledgement/release, rather than only entries still executing model work.
-The completed owner releases capacity before attempting its next queued turn;
-this avoids an extra recovery-poll delay at concurrency1. Waiting observes the
-currently admitted work; Drain must fence admission before treating idle as
-shutdown quiescence. Final admission rechecks drain/cancellation before starting work.
+Slack intake acknowledges durable admission rather than waiting for a model run.
+A bounded executor claims inputs only when capacity is available. Its one-minute
+claim is renewed independently of the model deadline; Redis active-session hints
+use the same short lifetime. Orphan steering is promoted only after its parent
+claim expires. Event retries wake at their persisted deadline; periodic scans
+recover lost wakeups. Exhausted session inputs remain dead-lettered and visible.
 
+Slack reply receipts record create intent before sending and preserve known
+message IDs across restarts. An ambiguous create is marked uncertain instead of
+posting another answer. Terminal session status is reconciled while holding
+canonical session ownership, so an old turn cannot clear its successor's status.
+`kepler_agent_uncertain_replies` indicates ambiguous message creation.
+`kepler_agent_unsettled_session_status` also includes active work; inspect the
+canonical turn before treating it as an error.
 
 ## Shutdown
 
-A drain makes readiness fail; it does not mean all turns have already completed.
-Slack event drain and Web drain share one `HTTP_SHUTDOWN_TIMEOUT` grace deadline.
-Web admission is fenced under its lifecycle lock, and its idle signal includes
-durable queue acknowledgement/release after model execution ends. Waiting is
-notification-driven. When grace expires, the worker cancels service work and
-returns instead of entering an unbounded Web wait. `Service.Close` then gives
-Web finalization and background services the existing shared five-second cleanup
-budget before closing stores. Runtime/claim/HTTP and telemetry cleanup also have
-their own bounds; container stop timeout
-must allow that cleanup as well as the grace period. The grace deadline is not
-a promise that an arbitrary adapter or PostgreSQL pool close can be forcibly
-interrupted in process. Long turns may outlive those deadlines. Verify the affected
-surface's behavior instead of assuming Slack, Web, and local clients drain in
-exactly the same way.
+A drain makes readiness fail and fences new conversation execution. Ingress and
+running turns share the `HTTP_SHUTDOWN_TIMEOUT` grace deadline. Waiting observes
+execution through durable acknowledgement or release. When grace expires, the
+worker cancels service work. `Service.Close` gives background work and bounded
+Slack finalization a shared 40-second join budget before closing stores.
+Container stop settings must allow cleanup in addition to the grace period.
+An arbitrary adapter or PostgreSQL pool close cannot be forcibly interrupted in
+process; long turns can still be interrupted by container termination.
 
 The local deployment replaces containers by stopping the old instance before
 starting the new one. Expect an interruption window. It does not provide

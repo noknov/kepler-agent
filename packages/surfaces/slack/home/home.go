@@ -178,11 +178,6 @@ func (c Controller) View(userID string) map[string]any {
 		actionsBlock(controls...),
 	}
 	blocks = append(blocks, c.connectionBlocks(userID)...)
-	blocks = append(blocks,
-		dividerBlock(),
-		headerBlock(":sparkles: Capabilities"),
-		sectionBlock("*Code Review*\nReview GitHub pull requests with a multi-agent workflow."),
-	)
 
 	return map[string]any{
 		"type":   "home",

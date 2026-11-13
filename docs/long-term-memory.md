@@ -33,7 +33,7 @@ increment rejects writes from turns that began before the reset; replay keeps
 the turn's original generation. Reset does not erase facts already present in a
 chat transcript or a model request already in flight.
 
-Local CLI memory uses a JSON file with an OS file lock around the complete
+Local benchmark adapter memory uses a JSON file with an OS file lock around the complete
 read/modify/write transaction. Project memories are namespaced by the canonical
 workspace root; `namespace=user` explicitly selects preferences shared across
 projects. Legacy records without a namespace remain available in the user

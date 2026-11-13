@@ -5,14 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
-	"github.com/noknov/kepler-agent/packages/agent/tool"
-	"github.com/noknov/kepler-agent/packages/session"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
+	"github.com/noknov/kepler-agent/packages/agent/tool"
+	"github.com/noknov/kepler-agent/packages/session"
 
 	"github.com/noknov/kepler-agent/packages/connections"
 	"github.com/noknov/kepler-agent/packages/sessioninput"
@@ -374,3 +375,9 @@ func TestConnectionDetailsSubmissionRejectsInvalidName(t *testing.T) {
 }
 
 func (*dedupeInputStore) Requeue(context.Context, string, string) error { return nil }
+
+func (*dedupeInputStore) Renew(context.Context, string, string, time.Duration) error { return nil }
+
+func (*dedupeInputStore) Fail(context.Context, string, string, error, time.Duration, int) (bool, error) {
+	return false, nil
+}

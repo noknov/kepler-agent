@@ -83,7 +83,7 @@ request time. Repository inventories are no longer embedded in the system
 prompt; use the deferred `workspace-list_repos` tool when the model needs a
 repository catalog.
 
-Assistant replies use standard Markdown across Slack, Web, and CLI. Bold is
+Assistant replies use standard Markdown across Slack and benchmark output. Bold is
 `**text**`, and links are `[label](url)`. Slack's native `markdown` blocks and
 `markdown_text` stream chunks consume this same format. Legacy Slack `mrkdwn`
 (`*text*` for bold and `<url|label>` links) is reserved for adapter-owned UI blocks;
@@ -147,7 +147,7 @@ Private files are merged on top of public defaults at startup. See
 
 ## Change and verify
 
-Check which profile loads a prompt layer before editing it; Web and Slack do
+Check which profile loads a prompt layer before editing it; the benchmark and Slack profiles do
 not necessarily load identical rules/skills. Validate representative user
 requests, tool selection, and failure behavior. Prompt text cannot grant a
 capability that policy denies. See [development](development.md).

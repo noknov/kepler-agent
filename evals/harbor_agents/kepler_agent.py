@@ -16,7 +16,7 @@ from harbor.models.agent.context import AgentContext
 
 
 class KeplerAgent(BaseAgent):
-    """Run the local kepler-agent CLI inside Harbor's task environment.
+    """Run the local kepler-bench adapter inside Harbor's task environment.
 
     The adapter deliberately builds from an immutable Git commit in each task
     environment.  This makes a benchmark result attributable to a product
@@ -25,7 +25,7 @@ class KeplerAgent(BaseAgent):
 
     _COMMIT = re.compile(r"^[0-9a-f]{40}$")
     _DEFAULT_SOURCE_REPO = "https://github.com/noknov/kepler-agent.git"
-    _BINARY = "/usr/local/bin/kepler-agent"
+    _BINARY = "/usr/local/bin/kepler-bench"
     _LOG = "/logs/agent/kepler-agent.txt"
 
     def __init__(
@@ -46,7 +46,7 @@ class KeplerAgent(BaseAgent):
             raise ValueError("source_repo must use an https URL")
         retired = {"provider", "protocol", "api_key_env", "base_url_env"}.intersection(kwargs)
         if retired:
-            raise ValueError("Current Kepler CLI uses gateway login; remove direct-provider kwargs: " + ", ".join(sorted(retired)))
+            raise ValueError("Current Kepler benchmark adapter uses gateway login; remove direct-provider kwargs: " + ", ".join(sorted(retired)))
 
         self._source_ref = source_ref
         if ubuntu_mirror and not re.fullmatch(r"https://[A-Za-z0-9.-]+(?::[0-9]+)?/[A-Za-z0-9/_-]+", ubuntu_mirror):
@@ -144,7 +144,7 @@ class KeplerAgent(BaseAgent):
                 f'test "$(git -C {source} rev-parse HEAD)" = {quoted_ref}; '
                 f"cd {source}; "
                 "GOCACHE=/tmp/kepler-agent-go-build "
-                f"go build -trimpath -o {self._BINARY} ./cli/cmd/kepler-agent; "
+                f"go build -trimpath -o {self._BINARY} ./benchmark/cmd/kepler-bench; "
                 f"mkdir -p {Path(self._LOG).parent}"
             ),
             user="root",
@@ -175,7 +175,7 @@ class KeplerAgent(BaseAgent):
             [
                 shlex.quote(self._BINARY),
                 # Harbor preserves each task image's declared WORKDIR when cwd
-                # is omitted. Passing that runtime directory keeps the CLI
+                # is omitted. Passing that runtime directory keeps the benchmark adapter
                 # workspace aligned with task images that use /app, /root, etc.
                 '--cwd "$PWD"',
                 "--approval project",

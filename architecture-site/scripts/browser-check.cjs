@@ -78,7 +78,7 @@ const server = http.createServer((req,res) => {
     if (process.env.SITE_SCREENSHOTS) await page.screenshot({path:path.join(process.env.SITE_SCREENSHOTS,'architecture-mobile.png')});
     await page.locator('.menu-trigger').click(); assert.equal(await page.locator('.mobile-dialog').evaluate(d=>d.open),true);
     await page.keyboard.press('Escape'); assert.equal(await page.locator('.menu-trigger').evaluate(e=>e===document.activeElement),true);
-    await page.locator('.menu-trigger').click(); await page.locator('.mobile-chapters a[href="web.html"]').click(); await page.waitForURL('**/web.html');
+    await page.locator('.menu-trigger').click(); await page.locator('.mobile-chapters a[href="benchmark.html"]').click(); await page.waitForURL('**/benchmark.html');
     assert.equal(await page.locator('.mobile-dialog').evaluate(d=>d.open),false);
     const blockedStorage=await browser.newContext({colorScheme:'dark'});
     await blockedStorage.addInitScript(()=>Object.defineProperty(window,'localStorage',{get(){throw new Error('Storage unavailable')}}));

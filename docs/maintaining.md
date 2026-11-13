@@ -10,7 +10,7 @@ provided by this document.
 
 ## Choose the right change
 
-Kepler shares a canonical loop across hosted Slack/Web and local CLI. Preserve
+Kepler shares a canonical loop across hosted Slack and the benchmark adapter. Preserve
 correct identity, explicit authorization, durable recovery, bounded resource
 use, and usable product feedback before adding orchestration features. Product
 boundaries are owned by [architecture](architecture.md); detailed mechanisms

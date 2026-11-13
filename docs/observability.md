@@ -66,7 +66,7 @@ model/agent trace analysis; it does not replace queue and service diagnostics.
 
 ## OpenTelemetry
 
-The gateway, worker, observability service, and local CLI support standard
+The gateway, worker, observability service, and local benchmark adapter support standard
 OTLP/HTTP trace export through the OpenTelemetry environment contract:
 
 ```bash
@@ -85,7 +85,7 @@ Langfuse is an optional OTLP backend for all Kepler surfaces, not a Slack-only
 integration. When a standard `OTEL_EXPORTER_OTLP_ENDPOINT` is present it takes
 precedence, so an OpenTelemetry Collector can fan traces out to Langfuse and
 other backends. For direct Langfuse export, configure the same variables for
-each process that should report traces (normally the worker, local CLI, and
+each process that should report traces (normally the worker, local benchmark adapter, and
 interactive app server):
 
 ```bash
@@ -96,7 +96,7 @@ LANGFUSE_SECRET_KEY=sk-lf-...
 
 The runtime labels the root turn as a Langfuse `agent`, model calls as
 `generation`, and tools as `tool`. Every span receives the session ID, user ID
-when known, and the ingress surface (`slack`, `web`, `cli`, or `appserver`) so
+when known, and the ingress surface (`slack` or `benchmark`) so
 Langfuse can filter and aggregate child observations. Content capture is opt-in through a profile-injected recorder; it never changes
 prompts or canonical transcript data.
 
@@ -229,3 +229,8 @@ end-user-delivery SLOs. Real Slack latency and delivery outcomes still come from
 `slack.reply` traces; benchmark pass rates still require their native graders.
 References: [histograms](https://prometheus.io/docs/practices/histograms/),
 [official Go client](https://github.com/prometheus/client_golang).
+
+Slack reply creation uncertainty is exported as `kepler_agent_uncertain_replies`.
+`kepler_agent_unsettled_session_status` includes active work and is not itself a
+failure count. Durable pending-input gauges distinguish retry_wait and dead_letter;
+exhausted execution is not reported as an acknowledged/completed input.

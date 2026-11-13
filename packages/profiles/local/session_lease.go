@@ -9,7 +9,7 @@ import (
 	"sync"
 )
 
-// Lock serializes an entire turn across independent CLI/app-server processes.
+// Lock serializes an entire turn across independent benchmark processes.
 // This lock is separate from short transcript append locks: holding the turn
 // lease must not deadlock its own durable writes. Kernel locks release on exit.
 func (s *JSONLStore) Lock(ctx context.Context, key string) (func(), error) {

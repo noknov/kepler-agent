@@ -25,11 +25,9 @@ import (
 	"github.com/noknov/kepler-agent/packages/safety"
 	"github.com/noknov/kepler-agent/packages/session"
 	"github.com/noknov/kepler-agent/packages/sessioninput"
-	"github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
+	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 	"github.com/noknov/kepler-agent/packages/userprefs"
-	"github.com/noknov/kepler-agent/packages/workflows"
 	"github.com/redis/go-redis/v9"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -69,15 +67,20 @@ type Service struct {
 	WebSearchEnabled     func(string) bool
 	ApprovalNotifyUserID string
 	Inputs               sessioninput.Store
+	Deliveries           DeliveryStore
 	BeforeRun            func(context.Context, string) error
 	RunTimeout           time.Duration
+	MaxConcurrentRuns    int
 	Tools                *tool.Catalog
-	Workflows            workflows.Registry
-	IntentRouter         workflows.Router
 
-	mu     sync.Mutex
-	active map[string]*activeRun
-	router *eventRouter
+	mu        sync.Mutex
+	active    map[string]*activeRun
+	dispatch  chan string
+	scheduled map[string]bool
+	draining  bool
+	running   int
+	idle      chan struct{}
+	router    *eventRouter
 }
 
 type activeRun struct {
@@ -88,122 +91,15 @@ type activeRun struct {
 	steering  *steeringInput
 }
 
-type steeringInput struct {
-	userID    string
-	store     sessioninput.Store
-	sessionID string
-	owner     string
-}
-
-func (s *steeringInput) Push(request slackconversation.Request) error {
-	if s.store == nil {
-		return fmt.Errorf("durable session input store is unavailable")
-	}
-	payload, err := json.Marshal(request)
-	if err != nil {
-		return err
-	}
-	return s.store.Enqueue(context.Background(), sessioninput.Item{ID: request.EventID, SessionID: s.sessionID, Kind: sessioninput.KindSteering, Payload: payload})
-}
-
-func (s *steeringInput) Claim(ctx context.Context, limit int) ([]agentruntime.PendingInput, error) {
-	if s.store == nil {
-		return nil, nil
-	}
-	items, err := s.store.Claim(ctx, s.sessionID, sessioninput.KindSteering, s.owner, 35*time.Minute, limit)
-	if err != nil {
-		return nil, err
-	}
-	inputs := make([]agentruntime.PendingInput, 0, len(items))
-	for _, item := range items {
-		var request slackconversation.Request
-		if err := json.Unmarshal(item.Payload, &request); err != nil {
-			return nil, err
-		}
-		if s.userID == "" || request.UserID != s.userID {
-			if err := s.store.Requeue(ctx, item.ID, s.owner); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		inputs = append(inputs, agentruntime.PendingInput{ID: item.ID, Message: request.Message()})
-	}
-	return inputs, nil
-}
-
-func (s *steeringInput) Ack(ctx context.Context, id string) error {
-	if s.store == nil {
-		return fmt.Errorf("durable session input store is unavailable")
-	}
-	return s.store.Ack(ctx, id, s.owner)
-}
-
-type eventRouter struct {
-	mu      sync.RWMutex
-	streams map[string]*slackStream
-}
-
 func New(agent hosted.Agent, messenger slackconversation.Messenger, policy safety.PromptPolicy, redactor safety.Redactor, prefs userprefs.Store) *Service {
 	router := &eventRouter{streams: make(map[string]*slackStream)}
 	return &Service{
 		Agent: agent, Messenger: messenger, Prompt: policy, Redactor: redactor, UserPrefs: prefs, traceContent: telemetry.ContentRecorder(),
-		Workflows: workflows.NewRegistry(), active: make(map[string]*activeRun), router: router,
+		active: make(map[string]*activeRun), dispatch: make(chan string, 512), scheduled: make(map[string]bool), router: router,
 	}
 }
 
 func (s *Service) EventSink() transcript.Sink { return s.router }
-
-func (r *eventRouter) Publish(_ context.Context, event transcript.Event) {
-	r.mu.RLock()
-	stream := r.streams[event.TurnID]
-	r.mu.RUnlock()
-	if stream == nil {
-		return
-	}
-	if event.Type == transcript.ContextProjected && stream.telemetry != nil {
-		var projection struct {
-			PromptHash string `json:"prompt_hash"`
-		}
-		if json.Unmarshal(event.Metadata, &projection) == nil && projection.PromptHash != "" {
-			stream.telemetry.span.SetAttributes(attribute.String("langfuse.version", projection.PromptHash), attribute.String("langfuse.observation.metadata.prompt_hash", projection.PromptHash))
-		}
-	}
-	stream.Lifecycle(event)
-	if event.Type == transcript.ModelStreamed && event.Model != nil {
-		switch event.Model.Type {
-		case model.StreamTextDelta:
-			stream.AppendDelta(event.Model.Text)
-		}
-	}
-}
-
-func (r *eventRouter) set(turnID string, stream *slackStream) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if stream == nil {
-		delete(r.streams, turnID)
-	} else {
-		r.streams[turnID] = stream
-	}
-}
-
-func (s *Service) HandleMention(ctx context.Context, req slackconversation.Request) (bool, error) {
-	return s.handle(ctx, req)
-}
-func (s *Service) handle(ctx context.Context, req slackconversation.Request) (bool, error) {
-	if s.Messenger == nil || s.Agent.Runtime == nil {
-		return false, nil
-	}
-	sessionID := session.ID(req.Channel, req.ThreadTS)
-	controlled, controlErr := s.controlActive(sessionID, req)
-	if controlErr != nil {
-		return false, controlErr
-	}
-	if controlled {
-		return true, nil
-	}
-	return true, s.run(ctx, sessionID, req)
-}
 
 func (s *Service) run(eventCtx context.Context, sessionID string, req slackconversation.Request) (runErr error) {
 	base := eventCtx
@@ -254,7 +150,7 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 				return err
 			}
 		} else {
-			if err := existing.steering.Push(req); err != nil {
+			if err := existing.steering.Push(runCtx, req); err != nil {
 				return err
 			}
 		}
@@ -271,18 +167,12 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 				runErr = promoteErr
 			}
 		}
-		if runErr != nil && req.ClaimID != "" {
-			_ = s.releaseClaim(context.Background(), req.ClaimID)
-		}
 		if runErr == nil {
-			followCtx := s.Lifecycle
-			if followCtx == nil {
-				followCtx = context.Background()
-			}
-			go s.startPending(followCtx, sessionID)
+			s.wakeExecution(sessionID)
 		}
 	}()
 
+	defer s.keepInputClaim(runCtx, sessionID, req.ClaimID, cancel)()
 	if s.BeforeRun != nil {
 		if err := s.BeforeRun(runCtx, req.UserID); err != nil {
 			cancel()
@@ -294,14 +184,39 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	turnID := req.EventID
 	runCtx, reply := beginReplyTrace(runCtx, sessionID, req, s.traceContent)
 	defer func() { reply.end(runErr) }()
+	delivery, err := s.beginDelivery(runCtx, sessionID, req)
+	if err != nil {
+		return err
+	}
+	if delivery != nil && delivery.receipt.Phase == "delivered" {
+		return s.ackClaim(runCtx, req.ClaimID)
+	}
 	stream := newSlackStream(runCtx, s.Messenger, req)
+	stream.reconcileStatus = func(ctx context.Context, send func(context.Context) error) error {
+		_, err := s.Agent.Runtime.ReconcileTurn(ctx, sessionID, req.EventID, func(ctx context.Context, _ agentruntime.TerminationReason) error { return send(ctx) })
+		return err
+	}
+	defer stream.closeDeliveryContext()
+	stream.delivery = delivery
+	if delivery != nil {
+		receipt := delivery.receipt
+		if receipt.MessageTS != "" {
+			stream.messageTS = receipt.MessageTS
+			stream.nativeStream = true
+			stream.streamDeliveryFailed = true
+		}
+		if receipt.Phase == "uncertain" {
+			stream.streamStartUncertain = true
+			stream.streamDeliveryFailed = true
+		}
+	}
+
 	stream.approvalNotifyUserID = s.ApprovalNotifyUserID
 	stream.telemetry = reply
 	stream.connections = s.Connections
 	stream.redactor = safety.NewStreamRedactor(s.Redactor)
 	s.router.set(turnID, stream)
 	defer s.router.set(turnID, nil)
-	stream.Start()
 	finalSessionStatus := sessionActive
 	defer func() {
 		// Complete/Fail normally synchronize status after message delivery.
@@ -328,14 +243,6 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 		{ID: "slack-output-format", Version: "3", Layer: prompt.LayerProduct, Content: slackOutputFormatPrompt},
 		{ID: "user-rules", Layer: prompt.LayerUser, Content: userprefs.RulesPrompt(runCtx, s.UserPrefs, req.UserID)},
 		{ID: "user-skills", Layer: prompt.LayerSkill, Content: userprefs.SkillsMetadataPrompt(runCtx, s.UserPrefs, req.UserID)},
-	}
-	activation, workflowMode, workflowErr := s.resolveWorkflow(runCtx, sessionID, turnID, req)
-	if workflowErr != nil {
-		return workflowErr
-	}
-	if workflowMode {
-		fragments = append(fragments, activation.Prompt)
-		stream.SetOutputPolicy(activation.OutputPolicy)
 	}
 	// Slack thread history is a first-turn bootstrap only: the runtime lazily
 	// loads it when the canonical session is empty and otherwise relies on the
@@ -368,21 +275,6 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	}
 	scopeValues := map[string]string{"surface": "slack", "team_id": req.TeamID, "channel": req.Channel, "thread_ts": req.ThreadTS, "message_ts": req.MessageTS, "web_search": webSearch}
 	scopeValues["conversation_type"] = req.ConversationType
-	if workflowMode {
-		for key, value := range activation.Scope {
-			scopeValues[key] = value
-		}
-	}
-	if workflowMode {
-		if err := s.activateWorkflowTools(sessionID, activation.RequiredTools); err != nil {
-			return err
-		}
-		if s.Tools != nil {
-			// Runtime.EndTurn normally performs this cleanup. Keep the surface-level
-			// guard for failures before the runtime acquires the session lease.
-			defer s.Tools.Deactivate(sessionID)
-		}
-	}
 	result, err := s.Agent.Run(runCtx, hosted.Request{SessionID: sessionID, TurnID: turnID, UserID: req.UserID, Workspace: s.Workspace, Input: input, HistoryLoader: historyLoader, Model: modelName, Steering: active.steering, Prompt: fragments, ScopeValues: scopeValues})
 	finalizeCtx, finalizeCancel := context.WithTimeout(context.WithoutCancel(runCtx), 20*time.Second)
 	defer finalizeCancel()
@@ -400,6 +292,10 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 		}
 		log.Printf("slack agent run failed session=%s turn=%s: %v", sessionID, turnID, err)
 		messageTS, deliveryErr := stream.Fail(failure.PublicMessage(err), errors.Is(err, context.Canceled))
+		if deliveryErr == nil && messageTS != "" && delivery != nil && delivery.receipt.Phase == "streaming" {
+			deliveryErr = delivery.advance(finalizeCtx, "delivered", messageTS)
+		}
+		deliveryErr = errors.Join(deliveryErr, delivery.persistenceError())
 		stream.recordFinalDelivery(messageTS, deliveryErr)
 		if deliveryErr != nil {
 			return deliveryErr
@@ -408,6 +304,9 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 	}
 	final := s.Redactor.Sanitize(renderAnswer(result.Message))
 	finalSessionStatus = sessionStatusForTermination(string(result.Termination))
+	stream.sessionMu.Lock()
+	stream.terminalSessionStatus = finalSessionStatus
+	stream.sessionMu.Unlock()
 	if s.AlreadyDelivered != nil {
 		delivered, deliveryStateErr := s.AlreadyDelivered(finalizeCtx, turnID)
 		if deliveryStateErr != nil {
@@ -420,6 +319,10 @@ func (s *Service) run(eventCtx context.Context, sessionID string, req slackconve
 		}
 	}
 	messageTS, err := stream.Complete(final)
+	if err == nil && messageTS != "" && delivery != nil && delivery.receipt.Phase == "streaming" {
+		err = delivery.advance(finalizeCtx, "delivered", messageTS)
+	}
+	err = errors.Join(err, delivery.persistenceError())
 	stream.recordFinalDelivery(messageTS, err)
 	if err != nil {
 		return err
@@ -438,47 +341,6 @@ func (s *Service) persistDelivery(ctx context.Context, turnID string, req slackc
 		}
 	}
 	return s.ackClaim(ctx, req.ClaimID)
-}
-
-func (s *Service) activateWorkflowTools(sessionID string, names []string) error {
-	if s.Tools == nil || len(names) == 0 {
-		return nil
-	}
-	if err := s.Tools.Activate(sessionID, names...); err != nil {
-		return fmt.Errorf("activate workflow tools: %w", err)
-	}
-	return nil
-}
-
-func (s *Service) resolveWorkflow(ctx context.Context, sessionID, turnID string, req slackconversation.Request) (workflows.Activation, bool, error) {
-	state, ok, err := s.Agent.Runtime.LatestSessionState(ctx, sessionID)
-	if err != nil {
-		return workflows.Activation{}, false, err
-	}
-	if ok && state.UserID == req.UserID {
-		if activation, resumed := s.Workflows.Resume(state.Scope); resumed {
-			return activation, true, nil
-		}
-	}
-	if s.IntentRouter == nil || !s.Workflows.HasPromptCandidate(req.Text) {
-		return workflows.Activation{}, false, nil
-	}
-	decision, err := s.IntentRouter.Route(ctx, workflows.RouteRequest{Text: req.Text, SessionID: sessionID})
-	if err != nil {
-		diagnostics := workflows.ErrorDiagnostics(err)
-		log.Printf("workflow intent classification unavailable turn=%s error_kind=%s finish_reason=%s final_text_bytes=%d reasoning_bytes=%d", turnID, workflows.ErrorKind(err), diagnostics.FinishReason, diagnostics.FinalTextBytes, diagnostics.ReasoningBytes)
-		return workflows.Activation{}, false, nil
-	}
-	if decision.Intent == "" || decision.Intent == workflows.GeneralIntent {
-		return workflows.Activation{}, false, nil
-	}
-	activation, err := s.Workflows.StartPrompt(decision.Intent, req.Text, decision.Inputs)
-	if err != nil {
-		log.Printf("workflow intent activation rejected turn=%s workflow=%s error_type=%T", turnID, decision.Intent, err)
-		return workflows.Activation{}, false, nil
-	}
-	log.Printf("workflow intent activated turn=%s workflow=%s", turnID, decision.Intent)
-	return activation, true, nil
 }
 
 func (s *Service) runTimeout() time.Duration {
@@ -541,21 +403,21 @@ func (s *Service) mode(userID string) ConversationMode {
 	return ModeSteer
 }
 
-func (s *Service) controlActive(sessionID string, req slackconversation.Request) (bool, error) {
+func (s *Service) controlActive(ctx context.Context, sessionID string, req slackconversation.Request) (bool, error) {
 	s.mu.Lock()
 	active := s.active[sessionID]
 	s.mu.Unlock()
 	if active != nil && active.userID != req.UserID {
-		err := s.persistInput(context.Background(), sessionID, sessioninput.KindQueue, req)
+		err := s.persistInput(ctx, sessionID, sessioninput.KindQueue, req)
 		return err == nil, err
 	}
 	if active != nil {
 		if s.mode(req.UserID) == ModeQueue || req.Approval != nil {
-			if err := s.persistInput(context.Background(), sessionID, sessioninput.KindQueue, req); err != nil {
+			if err := s.persistInput(ctx, sessionID, sessioninput.KindQueue, req); err != nil {
 				return false, err
 			}
 		} else {
-			if err := active.steering.Push(req); err != nil {
+			if err := active.steering.Push(ctx, req); err != nil {
 				return false, err
 			}
 		}
@@ -564,7 +426,7 @@ func (s *Service) controlActive(sessionID string, req slackconversation.Request)
 	if s.Redis == nil || strings.TrimSpace(req.ThreadTS) == "" {
 		return false, nil
 	}
-	owner, err := s.Redis.Get(context.Background(), "agent:active:"+sessionID)
+	owner, err := s.Redis.Get(ctx, "agent:active:"+sessionID)
 	if err != nil || owner == "" || owner == s.PodID {
 		// Redis is only a routing hint. If it is unavailable or the hint has
 		// expired, the durable inbox and PG session lock still serialize this
@@ -575,12 +437,12 @@ func (s *Service) controlActive(sessionID string, req slackconversation.Request)
 	if s.mode(req.UserID) == ModeQueue || req.Approval != nil {
 		kind = sessioninput.KindQueue
 	}
-	if err := s.persistInput(context.Background(), sessionID, kind, req); err != nil {
+	if err := s.persistInput(ctx, sessionID, kind, req); err != nil {
 		return false, err
 	}
 	// Pub/Sub is only a latency hint. The request is accepted because it was
 	// durably enqueued, never because a subscriber happened to be present.
-	_, _ = s.Redis.PublishCount(context.Background(), "agent:control:"+owner, sessionID)
+	_, _ = s.Redis.PublishCount(ctx, "agent:control:"+owner, sessionID)
 	return true, nil
 }
 
@@ -603,7 +465,7 @@ func (s *Service) claimNextQueue(ctx context.Context, sessionID string) (*slackc
 	if owner == "" {
 		owner = "local-slack-service"
 	}
-	items, err := s.Inputs.Claim(ctx, sessionID, sessioninput.KindQueue, owner, 35*time.Minute, 1)
+	items, err := s.Inputs.Claim(ctx, sessionID, sessioninput.KindQueue, owner, inputClaimLease, 1)
 	if err != nil || len(items) == 0 {
 		return nil, err
 	}
@@ -613,6 +475,7 @@ func (s *Service) claimNextQueue(ctx context.Context, sessionID string) (*slackc
 		return nil, err
 	}
 	request.ClaimID = items[0].ID
+	request.ClaimAttempt = items[0].Attempts
 	return &request, nil
 }
 
@@ -653,30 +516,38 @@ func (s *Service) startPending(ctx context.Context, sessionID string) {
 	if err != nil || request == nil {
 		return
 	}
-	_ = s.run(ctx, sessionID, *request)
+	if err := s.run(ctx, sessionID, *request); err != nil {
+		s.failInput(ctx, sessionID, *request, err)
+	}
 }
 
 func (s *Service) register(sessionID string, run *activeRun) *activeRun {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if existing := s.active[sessionID]; existing != nil {
+		s.mu.Unlock()
 		return existing
 	}
 	s.active[sessionID] = run
+	s.mu.Unlock()
 	if s.Redis != nil {
-		_ = s.Redis.Set(context.Background(), "agent:active:"+sessionID, s.PodID, 35*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = s.Redis.Set(ctx, "agent:active:"+sessionID, s.PodID, inputClaimLease)
 	}
 	return nil
 }
 
 func (s *Service) unregister(sessionID string, run *activeRun) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.active[sessionID] == run {
+	owned := s.active[sessionID] == run
+	if owned {
 		delete(s.active, sessionID)
 	}
-	if s.Redis != nil {
-		_ = s.Redis.Del(context.Background(), "agent:active:"+sessionID)
+	s.mu.Unlock()
+	if owned && s.Redis != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = s.Redis.DeleteIfValue(ctx, "agent:active:"+sessionID, s.PodID)
 	}
 }
 
@@ -753,7 +624,7 @@ func (s *Service) resumeAfterConnection(parentCtx context.Context, continuation 
 			log.Printf("connection continuation status post failed session=%s: %v", sessionID, err)
 		}
 	}
-	accepted, err := s.handle(ctx, req)
+	accepted, err := s.HandleMention(ctx, req)
 	if err != nil {
 		log.Printf("connection continuation resume failed session=%s: %v", sessionID, err)
 		s.releaseContinuation(ctx, continuation)
@@ -776,6 +647,21 @@ func (s *Service) releaseContinuation(ctx context.Context, continuation connecti
 }
 
 func (s *Service) StartControlSubscriber(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	var executions sync.WaitGroup
+	workers := s.MaxConcurrentRuns
+	if workers <= 0 {
+		workers = 8
+	}
+	for range workers {
+		executions.Add(1)
+		go func() { defer executions.Done(); s.executePending(ctx) }()
+	}
+	defer func() { cancel(); executions.Wait() }()
+	executions.Add(1)
+	go func() { defer executions.Done(); s.reconcileReplyLoop(ctx) }()
+	s.recoverInputs(ctx)
+
 	if (s.Redis == nil || s.PodID == "") && s.Inputs == nil {
 		return
 	}
@@ -795,7 +681,7 @@ func (s *Service) StartControlSubscriber(ctx context.Context) {
 		closeApproval = func() { _ = sub.Close() }
 		defer closeApproval()
 	}
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
@@ -809,210 +695,27 @@ func (s *Service) StartControlSubscriber(ctx context.Context) {
 			if message.Channel == sessionStopChannel {
 				go s.handleStopSignal(ctx, message.Payload)
 			} else {
-				go s.startPending(ctx, message.Payload)
+				s.wakeExecution(message.Payload)
 			}
 		case message, ok := <-approvalMessages:
 			if !ok {
 				approvalMessages = nil
 				continue
 			}
-			go s.startPending(ctx, message.Payload)
+			s.wakeExecution(message.Payload)
 		case <-ticker.C:
 			if s.Inputs == nil {
 				continue
 			}
 			s.pollSessionStops(ctx)
-			_, _ = s.Inputs.PromoteExpiredSteering(ctx, 36*time.Minute)
+			_, _ = s.Inputs.PromoteExpiredSteering(ctx, 2*inputClaimLease)
 			sessions, err := s.Inputs.PendingSessions(ctx, sessioninput.KindQueue, 100)
 			if err != nil {
 				continue
 			}
 			for _, sessionID := range sessions {
-				go s.startPending(ctx, sessionID)
+				s.wakeExecution(sessionID)
 			}
 		}
 	}
-}
-
-type slackStream struct {
-	approvalNotifyUserID  string
-	telemetry             *replyTrace
-	streamStopError       error
-	ctx                   context.Context
-	messenger             slackconversation.Messenger
-	req                   slackconversation.Request
-	mu                    sync.Mutex
-	deliveryMu            sync.Mutex
-	sessionMu             sync.Mutex
-	session               slackconversation.AgentSessionMessenger
-	sessionStatus         string
-	terminalSessionStatus string
-	redactor              *safety.StreamRedactor
-	outputPolicy          workflows.OutputPolicy
-	answer                strings.Builder
-	messageTS             string
-	nativeStream          bool
-	streamDeliveryFailed  bool
-	streamStartUncertain  bool
-	streamClosed          bool
-	streamClosing         bool
-	lastStreamText        string
-	lastStreamUpdate      time.Time
-	streamTimer           *time.Timer
-	planDeliveryMu        sync.Mutex
-	planClosing           bool
-	planPostUncertain     bool
-	pendingPlan           *tool.PlanUpdate
-	planMessageTS         string
-	planRevision          int
-	planLastUpdate        time.Time
-	planTimer             *time.Timer
-	connectionActions     map[string]bool
-	connections           *connections.Service
-}
-
-func newSlackStream(ctx context.Context, messenger slackconversation.Messenger, req slackconversation.Request) *slackStream {
-	return &slackStream{ctx: ctx, messenger: messenger, req: req}
-}
-func (s *slackStream) SetOutputPolicy(policy workflows.OutputPolicy) {
-	s.mu.Lock()
-	s.outputPolicy = policy
-	s.mu.Unlock()
-}
-func (s *slackStream) Start() {
-	if session, ok := s.messenger.(slackconversation.AgentSessionMessenger); ok {
-		s.session = session
-		s.setSessionStatus(sessionProcessing)
-	}
-}
-func (s *slackStream) Complete(final string) (string, error) {
-	defer s.finishSession()
-	s.telemetry.output(final)
-	s.stopStreamTimer()
-	s.finishPlan()
-	if s.redactor != nil {
-		s.appendSanitizedDelta(s.redactor.Flush())
-	}
-	s.flushDeferredStream()
-	s.mu.Lock()
-	s.streamClosed = true
-	messageTS := s.messageTS
-	nativeStream := s.nativeStream
-	deliveryFailed := s.streamDeliveryFailed
-	startUncertain := s.streamStartUncertain
-	streamed := strings.TrimSpace(s.answer.String())
-	s.mu.Unlock()
-	ctx, cancel := s.deliveryContext()
-	defer cancel()
-	if final == "" {
-		if nativeStream && messageTS != "" {
-			s.stopNativeStream(ctx)
-		}
-		return messageTS, nil
-	}
-	if startUncertain && messageTS == "" {
-		// The initial non-idempotent write may already exist in Slack. Posting a
-		// fallback here would reintroduce the exact duplicate-message window.
-		return "", nil
-	}
-	if nativeStream && messageTS != "" {
-		trimmedFinal := strings.TrimSpace(final)
-		if !strings.HasPrefix(trimmedFinal, streamed) {
-			// The durable final answer supersedes intermediate commentary or
-			// a revised response. Appending it would duplicate that content.
-			deliveryFailed = true
-		} else if suffix := streamSuffix(streamed, trimmedFinal); suffix != "" && trimmedFinal != s.streamedText() {
-			if err := s.appendNativeChunks(suffix); err != nil {
-				deliveryFailed = true
-			}
-		}
-		s.stopNativeStream(ctx)
-		if deliveryFailed {
-			if updater, ok := s.messenger.(slackconversation.MarkdownMessageUpdater); ok {
-				if err := updater.UpdateMarkdownMessage(ctx, s.req.Channel, messageTS, final); err != nil {
-					return messageTS, err
-				}
-				s.mu.Lock()
-				s.streamStopError = nil
-				s.mu.Unlock()
-				return messageTS, nil
-			}
-			// A third-party Messenger without update support cannot safely amend
-			// a partial native stream. Posting is its only available fallback.
-			return s.postFinalMarkdown(ctx, final)
-		}
-		return messageTS, nil
-	}
-	return s.postFinalMarkdown(ctx, final)
-}
-
-func (s *slackStream) appendSanitizedDelta(delta string) {
-	if delta == "" {
-		return
-	}
-	s.mu.Lock()
-	s.answer.WriteString(delta)
-	s.mu.Unlock()
-}
-func (s *slackStream) Fail(message string, canceled bool) (string, error) {
-	defer s.setSessionStatus(sessionActive)
-	s.stopStreamTimer()
-	s.finishPlan()
-	s.flushDeferredStream()
-	s.mu.Lock()
-	s.streamClosed = true
-	messageTS := s.messageTS
-	nativeStream := s.nativeStream
-	startUncertain := s.streamStartUncertain
-	s.mu.Unlock()
-	if canceled {
-		message = "Cancelled this request."
-		if slackconversation.IsChineseLocale(s.req.Locale) {
-			message = "已中止本次请求。"
-		}
-	}
-	s.telemetry.output(message)
-	if message == "" {
-		ctx, cancel := s.deliveryContext()
-		defer cancel()
-		if nativeStream && messageTS != "" {
-			s.stopNativeStream(ctx)
-		}
-		return messageTS, nil
-	}
-	if startUncertain && messageTS == "" {
-		return "", nil
-	}
-	ctx, cancel := s.deliveryContext()
-	defer cancel()
-	if nativeStream && messageTS != "" {
-		s.stopNativeStream(ctx)
-		if updater, ok := s.messenger.(slackconversation.MarkdownMessageUpdater); ok {
-			if err := updater.UpdateMarkdownMessage(ctx, s.req.Channel, messageTS, message); err != nil {
-				return messageTS, err
-			}
-			return messageTS, nil
-		}
-	}
-	if messenger, ok := s.messenger.(slackconversation.IdempotentMarkdownMessenger); ok {
-		return messenger.PostMarkdownMessageWithID(ctx, s.req.Channel, s.req.ThreadTS, message, s.req.EventID)
-	}
-	return s.messenger.PostMessage(ctx, s.req.Channel, s.req.ThreadTS, message)
-}
-
-func (s *slackStream) postFinalMarkdown(ctx context.Context, final string) (string, error) {
-	if messenger, ok := s.messenger.(slackconversation.IdempotentMarkdownMessenger); ok {
-		return messenger.PostMarkdownMessageWithID(ctx, s.req.Channel, s.req.ThreadTS, final, s.req.EventID)
-	}
-	return s.messenger.PostMarkdownMessage(ctx, s.req.Channel, s.req.ThreadTS, final)
-}
-
-func (s *slackStream) deliveryContext() (context.Context, context.CancelFunc) {
-	base := s.ctx
-	if base == nil {
-		base = context.Background()
-	}
-	// Delivery must remain possible after a canceled or timed-out model run,
-	// while still having a strict network deadline.
-	return context.WithTimeout(context.WithoutCancel(base), 20*time.Second)
 }

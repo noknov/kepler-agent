@@ -60,22 +60,12 @@ not access granted in the provider's own account settings. Entries marked
 `server credentials` are deployment configuration and have no personal Remove
 action.
 
-## Review pull requests
+## Pull-request investigation
 
-Ask for a review and include one or more GitHub pull request links. No slash
-command is required. A secondary-model router classifies new conversations;
-the code review workflow validates URLs from the original message. Routing
-failures fall back to general conversation.
-
-The workflow instructs the lead to inspect an immutable PR head, assign bounded
-read-only reviewer tasks by risk, verify candidate findings, and return a
-consolidated answer. Workers have separate transcripts; their output is
-internal to the lead. These are workflow instructions and execution structure,
-not a guarantee that every model finding is correct.
-
-Explicitly @mention the bot in the same thread to follow up on the original PR scope. A new root
-message starts another conversation. CLI and Web do not install this Slack
-router. See [runtime and delegation](runtime.md) for scope propagation.
+Ask the agent to inspect a PR with ordinary tools. There is no intent classifier,
+workflow activation, mandatory reviewer team or sticky PR scope. Generic read-only
+delegation is available when independent investigation helps. Each new request
+provides its scope; previous review metadata does not select another execution path.
 
 ### Approve a pull request
 
@@ -110,7 +100,7 @@ For readiness, dead letters, shutdown, and run inspection, use
 [configuration](configuration.md).
 
 DMs start or update an agent task directly, without an @mention. In channels and
-channel threads, explicitly @mention the bot, including workflow follow-ups,
+channel threads, explicitly @mention the bot, including follow-ups,
 pending-input answers and messages arriving while a task is running. Unmentioned
 channel messages and standalone file-sharing notifications do not trigger
 execution. Files can accompany a DM or an explicit channel mention.

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
-	"github.com/noknov/kepler-agent/packages/workflows"
 )
 
 // Slack recommends designing for one request per second rather than relying
@@ -20,7 +19,7 @@ const streamAppendInterval = time.Second
 // AppendDelta buffers streamed assistant text and periodically delivers it to Slack.
 func (s *slackStream) AppendDelta(delta string) {
 	s.mu.Lock()
-	finalOnly := s.outputPolicy == workflows.OutputFinalOnly || s.streamClosing || s.streamClosed
+	finalOnly := s.streamClosing || s.streamClosed
 	s.mu.Unlock()
 	if finalOnly {
 		return
@@ -81,13 +80,35 @@ func (s *slackStream) ensureNativeStream(chunks []map[string]any) (bool, error) 
 	if len(chunks) > 0 {
 		start.TaskDisplayMode = "plan"
 	}
+	if err := s.delivery.advance(ctx, "starting", ""); err != nil {
+		s.mu.Lock()
+		s.streamDeliveryFailed = true
+		s.streamStartUncertain = true
+		s.mu.Unlock()
+		return false, err
+	}
 	ts, err := native.StartStream(ctx, start)
 	if err != nil {
 		log.Printf("slack native stream start failed channel=%s thread=%s user=%s: %v",
 			s.req.Channel, s.req.ThreadTS, s.req.UserID, err)
+		if s.delivery != nil {
+			phase := "prepared"
+			if isDeliveryUncertain(err) {
+				phase = "uncertain"
+			}
+			err = errors.Join(err, s.delivery.advance(ctx, phase, ""))
+		}
 		s.mu.Lock()
 		s.streamDeliveryFailed = true
 		s.streamStartUncertain = isDeliveryUncertain(err)
+		s.mu.Unlock()
+		return false, err
+	}
+	if err := s.delivery.advance(ctx, "streaming", ts); err != nil {
+		s.mu.Lock()
+		s.messageTS = ts
+		s.nativeStream = true
+		s.streamDeliveryFailed = true
 		s.mu.Unlock()
 		return false, err
 	}

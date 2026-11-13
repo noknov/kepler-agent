@@ -39,6 +39,7 @@ type Request struct {
 	Content          []model.Content
 	MessageID        string           `json:"message_id,omitempty"`
 	ClaimID          string           `json:"-"`
+	ClaimAttempt     int              `json:"-"`
 	Approval         *ApprovalRequest `json:"approval,omitempty"`
 }
 
@@ -71,6 +72,8 @@ type ControlledConversation interface {
 	Conversation
 	StartControlSubscriber(context.Context)
 	StartConnectionCompletedSubscriber(context.Context)
+	Quiesce()
+	WaitIdle(context.Context) bool
 }
 
 type Messenger interface {

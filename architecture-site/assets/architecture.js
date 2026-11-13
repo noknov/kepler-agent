@@ -58,13 +58,8 @@
         "产品边界"
     ],
     [
-        "web.html",
-        "Web 接入",
-        "产品边界"
-    ],
-    [
-        "local.html",
-        "本地 CLI 与 app-server",
+        "benchmark.html",
+        "Benchmark 接入",
         "产品边界"
     ],
     [

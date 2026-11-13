@@ -70,14 +70,7 @@ func (s PGTranscript) AppendBatch(ctx context.Context, events []transcript.Event
 	if len(events) == 0 {
 		return nil, nil
 	}
-	return s.appendBatch(ctx, events[0].SessionID, events, false)
-}
-
-func (s PGTranscript) CreateSession(ctx context.Context, sessionID string, events []transcript.Event) ([]transcript.Event, error) {
-	return s.appendBatch(ctx, sessionID, events, true)
-}
-
-func (s PGTranscript) appendBatch(ctx context.Context, sessionID string, events []transcript.Event, create bool) ([]transcript.Event, error) {
+	sessionID := events[0].SessionID
 	if sessionID == "" {
 		return nil, fmt.Errorf("session id is required")
 	}
@@ -102,9 +95,6 @@ func (s PGTranscript) appendBatch(ctx context.Context, sessionID string, events 
 	var next uint64
 	if err = tx.QueryRow(ctx, `SELECT COALESCE(MAX(sequence), 0) + 1 FROM agent_transcript_events WHERE session_id=$1`, sessionID).Scan(&next); err != nil {
 		return nil, err
-	}
-	if create && next != 1 {
-		return nil, transcript.ErrSessionExists
 	}
 	result := make([]transcript.Event, len(events))
 	for index, event := range events {

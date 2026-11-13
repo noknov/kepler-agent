@@ -1,8 +1,0 @@
-{
-  "extends": "./tsconfig.json",
-  "include": [
-    "src/client/**/*.ts",
-    "src/generated/**/*.ts",
-    "src/lib/**/*.ts"
-  ]
-}

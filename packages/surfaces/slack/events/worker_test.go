@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/eventinbox"
-	"github.com/noknov/kepler-agent/packages/surfaces/slack/client"
+	slack "github.com/noknov/kepler-agent/packages/surfaces/slack/client"
 )
 
 type fakeInbox struct {
@@ -200,5 +200,58 @@ func TestReplayDeadLettersMalformedPayload(t *testing.T) {
 	w.replay(context.Background())
 	if inbox.deadLetters != 1 {
 		t.Fatalf("deadLetters=%d, want 1", inbox.deadLetters)
+	}
+}
+
+func (f *fakeInbox) NextAvailable(context.Context) (time.Time, error) { return time.Time{}, nil }
+
+type retryDueInbox struct {
+	fakeInbox
+	due             time.Time
+	completedSignal chan struct{}
+}
+
+func (f *retryDueInbox) Fail(_ context.Context, id string, _ error, delay time.Duration, _ int) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.due = time.Now().Add(delay)
+	f.pending = []eventinbox.Record{{ID: id, Payload: []byte(`{"type":"message"}`), Attempts: 1}}
+	return false, nil
+}
+func (f *retryDueInbox) NextAvailable(context.Context) (time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.due, nil
+}
+func (f *retryDueInbox) Pending(context.Context, int) ([]eventinbox.Record, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.due.IsZero() || time.Now().Before(f.due) {
+		return nil, nil
+	}
+	result := f.pending
+	f.pending = nil
+	f.due = time.Time{}
+	return result, nil
+}
+func (f *retryDueInbox) Complete(context.Context, string) error { close(f.completedSignal); return nil }
+func TestRetryWakesAtItsPersistedDueTimeWithoutAnotherEvent(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	inbox := &retryDueInbox{completedSignal: make(chan struct{})}
+	calls := 0
+	w := &Worker{Inbox: inbox, Workers: 1, InboxLease: time.Minute, EventTimeout: time.Second, RetryBase: 10 * time.Millisecond, Handler: func(context.Context, string, slack.Event) error {
+		calls++
+		if calls == 1 {
+			return errors.New("fixture retryable failure")
+		}
+		return nil
+	}}
+	w.Start(ctx)
+	w.Notify(ctx, "retry", slack.Event{Type: "message"}, 0)
+	select {
+	case <-inbox.completedSignal:
+	case <-time.After(time.Second):
+		t.Fatal("retry waited for fallback polling or an unrelated event")
 	}
 }

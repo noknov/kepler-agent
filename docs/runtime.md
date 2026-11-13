@@ -1,6 +1,6 @@
 # Shared Agent Runtime
 
-The hosted Slack agent and local CLI use `packages/agent/runtime` as their
+The hosted Slack agent and local benchmark adapter use `packages/agent/runtime` as their
 only model/tool loop. Product profiles inject storage, policy, tools, model
 providers, and presentation; they do not implement another loop.
 
@@ -34,7 +34,7 @@ invalidates the index; a malformed incomplete tail is truncated and a valid
 unterminated JSON line gains a newline. Different sessions do not share an I/O
 mutex. Per-session file locks coordinate writers across processes and honor
 cancellation while waiting; appends retain file sync and atomic batch replacement.
-Local CLI and app-server also hold a separate OS turn lease for the complete
+Local benchmark adapter also hold a separate OS turn lease for the complete
 session execution, so multiple processes cannot concurrently resume the same
 session. Runtime admission waiting honors cancellation.
 
@@ -72,7 +72,7 @@ session/turn. Event IDs are opaque; consumers use typed fields and metadata.
 Model providers translate their wire formats into canonical messages and typed
 stream events. Stream deltas are sent only to transient presentation sinks;
 the durable transcript stores completed model messages and lifecycle events so
-replay does not duplicate token fragments. Web citations remain structured provenance on content blocks.
+replay does not duplicate token fragments. Provider web-search citations remain structured provenance on content blocks.
 Prompts decide when and how to cite; presentation adapters decide how to render
 the provider-supplied citation records. Dynamic status remains a projection of
 canonical runtime events rather than a second execution-state model. Slack sets
@@ -84,9 +84,7 @@ the runtime, or placed in model context.
 
 ## Execution and termination
 
-The current loop has no model-output repair layer. Only the owner of a
-`pending_input` turn can continue it with an unmentioned thread reply;
-unsupported image parts are removed before provider dispatch; and parallel tool
+The current loop has no model-output repair layer. unsupported image parts are removed before provider dispatch; and parallel tool
 results share an aggregate inline budget. A model step admits parallel-safe
 tools through a shared read lock and mutating tools through an exclusive write
 lock, so independent reads overlap instead of waiting on list order. The tool-step limit stops without an extra synthesis request. Empty model
@@ -125,8 +123,8 @@ visibility metadata such as `Surfaces` and integration dependencies at
 registration time. Local tools use the workspace sandbox and scoped approvals. TTS is
 an optional external-write tool and is never automatic orchestration.
 
-The `evals` package treats the CLI and other products as black-box processes.
-Because the CLI runs the same harness, its context, tool, retry, and termination
+The `evals` package treats the benchmark adapter as a black-box process.
+Because it runs the same harness, its context, tool, retry, and termination
 results exercise the shared runtime used by Slack.
 
 Hosted and local profiles enable the optional circuit breaker by default. It blocks
@@ -136,37 +134,6 @@ error results on the penultimate failure. This is a liveness/cost guard, not
 authorization. The implementation and reset semantics live in
 [circuit.go](../packages/agent/runtime/circuit.go).
 
-## Local app-server
-
-The JSON-RPC app server (`appserver/cmd/app-server`) exposes the same local
-runtime over stdio with `thread/start`, `thread/resume`, `thread/fork`,
-`turn/start`, `turn/steer`, `turn/interrupt`, and Codex-style item
-notifications including `item/agentMessage/delta`.
-
-`thread/fork` requires an empty, inactive destination. Transcript stores implement
-`transcript.SessionCreator` to check emptiness and commit the copied facts under
-one ownership boundary; an existing destination is never an append target.
-An empty source produces no facts and does not reserve a session ID.
-
-`thread/trajectory` is a read-only reconstruction API. It derives a redacted
-sequence of prompt/context, provider-attempt, tool, recovery, and termination
-facts from the canonical transcript; it never exposes message content, tool
-arguments, or arbitrary metadata by default.
-
-The server admits at most eight active turns by default. When its local
-bulkhead is full, `turn/start` returns JSON-RPC error `-32001` (`server
-overloaded; retry later`); clients retry with exponential backoff and jitter.
-This protects the app-server process from stalled providers or tools without
-discarding an already accepted turn.
-
-The stdio connection owns its accepted turn contexts. EOF or an input error
-cancels active work; cancellation also closes a closable input so a stalled
-read cannot prevent shutdown. Reader ownership is transferred to `Serve` for
-this connection lifetime. Completed turns release their child contexts.
-`Serve` waits for accepted runtime executions to finish canonical cleanup before
-returning, so callers may then tear down workspace resources. This wait excludes
-presentation delivery, which can remain blocked after the runtime has finished.
-Canonical cancellation facts remain in the transcript.
 
 ## Delegation
 
@@ -229,46 +196,9 @@ optional batch and worker deadlines when it needs tighter isolation. A
 configured worker deadline begins only after that worker acquires a concurrency
 slot, so queueing cannot consume its model retry budget before it starts.
 
-## Slack workflow activation
-
-Slack uses the configured secondary model as a small semantic router for new
-conversations when `workflows.Registry.HasPromptCandidate(text)` detects a
-plausible workflow trigger (for example, a GitHub pull request URL). Ordinary
-messages without workflow candidates bypass the router LLM call with zero
-latency overhead. The router returns a validated `general|code_review` decision;
-it has no tools and never uses keyword or regular-expression intent matching.
-Code Review then extracts and validates GitHub PR URLs from the original
-message. The coordinator uses a bounded multi-agent workflow and keeps every
-listed PR in the review scope; there is no user-facing review-depth selector.
-Routing failures fall back to general conversation. CLI, app-server, and other surfaces
-do not install this Slack product router and remain generic.
-Only a normally completed, label-only model response can select a workflow;
-truncated, refused, canceled, or tool-requesting responses are routing failures.
-The ordinary hosted agent becomes the coordinator and uses the same runtime to
-triage an immutable GitHub PR head, launch a bounded risk-based reviewer batch,
-verify candidate findings itself or with targeted follow-up workers, and
-synthesize one report. Slack renders coordinator-authored plan tasks as the
-team view and defers model text until the final response. Worker streams and
-reports remain internal, while their completion, usage, result, and parent link
-remain durable delegation events. The lead alone receives those reports,
-verifies candidate evidence, and publishes the normal Slack response after
-fan-in.
-
-Workflow selection produces a transport-neutral activation containing its
-prompt, durable scope, required tools, and thread-ownership policy. Code Review
-stores the normalized PR URLs and mode in turn scope. A later reply from the
-same user in the same Slack thread restores that activation without reparsing
-the follow-up as a new review command; a new root message remains a new session.
-The activation also places the validated PR set in delegation shared context,
-which the execution layer injects into every worker independently of the
-lead-authored task description. Worker targets therefore cannot disappear
-during dynamic decomposition. GitHub PR manifests are indexed independently by
-repository and pull-request number inside each worker turn; file reads must
-select a PR URL when more than one manifest is active, so concurrent multi-PR
-inspection cannot overwrite or ambiguously reuse another PR's head context.
 
 Local spilled tool evidence uses opaque `artifact://` references and an eager,
-session-scoped `artifact_read` tool in both the CLI and app-server (including
+session-scoped `artifact_read` tool in both the benchmark adapter (including
 read-only exploration workers). Its bounded UTF-8 pages do not require extending
 workspace read permissions. Artifact IDs bind turn and payload to prevent reused
 call IDs from overwriting earlier evidence. Legacy bare-path artifacts are not
@@ -328,3 +258,21 @@ missing canonical finish reasons and malformed tool-call completions do not ente
 recovery path. An empty refused/filtered response uses the existing non-retryable
 content-policy error; a canceled provider receipt uses the existing canceled
 turn state. Reported usage is retained for these terminal attempts.
+
+## Slack admission, delivery and control
+
+Slack inbox handlers persist authenticated input and return without waiting for
+model execution. Bounded execution slots consume the session queue. Stop and
+same-user steering remain intake operations while every execution slot is busy.
+Input claims renew independently of turn timeouts. Execution failures use durable
+retry deadlines and dead letters; uncertain delivery is not a retryable create.
+
+`slack_reply_receipts` records creation intent, known message identity and native
+session status. Recovery reuses the known message instead of creating another.
+An interrupted intent without a receipt becomes uncertain. Terminal status is
+reconciled under runtime session ownership so it cannot overwrite a successor.
+These are surface facts, not model claims or run-projection completion flags.
+
+Task-state updates can explicitly archive completed/superseded IDs under the
+same revision check. Active constraints and unresolved effects cannot be archived.
+Previous snapshots and evidence remain in the append-only transcript.

@@ -24,7 +24,7 @@ func TestDurablePrometheusAuthorizationAndFailureSemantics(t *testing.T) {
 		if fail {
 			return QueueSnapshot{}, errors.New("PRIVATE_DATABASE_ERROR")
 		}
-		return QueueSnapshot{Inbox: QueueStats{Statuses: map[string]int64{"queued": 7}, ExpiredClaims: 2, OldestQueuedMS: 3500}, Inputs: map[string]int64{"web:expired": 4}}, nil
+		return QueueSnapshot{Inbox: QueueStats{Statuses: map[string]int64{"queued": 7}, ExpiredClaims: 2, OldestQueuedMS: 3500}, Inputs: map[string]int64{"queue:expired": 4}}, nil
 	}}
 	unauthorized := httptest.NewRecorder()
 	service.handlePrometheus(unauthorized, httptest.NewRequest("GET", "/metrics/prometheus", nil))
@@ -43,7 +43,7 @@ func TestDurablePrometheusAuthorizationAndFailureSemantics(t *testing.T) {
 	if families["kepler_agent_durable_inbox_oldest_queued_seconds"].Metric[0].GetGauge().GetValue() != 3.5 {
 		t.Fatal("queue age unit conversion failed")
 	}
-	if len(families["kepler_agent_durable_pending_inputs"].Metric) != 12 {
+	if len(families["kepler_agent_durable_pending_inputs"].Metric) != 15 {
 		t.Fatal("missing zero-valued queue states")
 	}
 	fail = true

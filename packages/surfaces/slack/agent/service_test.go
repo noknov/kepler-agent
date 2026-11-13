@@ -17,39 +17,10 @@ import (
 	"github.com/noknov/kepler-agent/packages/safety"
 	"github.com/noknov/kepler-agent/packages/session"
 	"github.com/noknov/kepler-agent/packages/sessioninput"
-	"github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
-	"github.com/noknov/kepler-agent/packages/workflows"
-	"github.com/noknov/kepler-agent/packages/workflows/codereview"
+	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
 
 type replyModel struct{ request *model.Request }
-
-type fixedIntentRouter struct {
-	decision workflows.RouteDecision
-	request  workflows.RouteRequest
-}
-
-func (r *fixedIntentRouter) Route(_ context.Context, request workflows.RouteRequest) (workflows.RouteDecision, error) {
-	r.request = request
-	return r.decision, nil
-}
-
-type deferredReviewTool struct{ name string }
-
-func codeReviewWorkflows() workflows.Registry {
-	return workflows.NewRegistry(codereview.Definition{})
-}
-
-func (t deferredReviewTool) Descriptor() tool.Descriptor {
-	return tool.Descriptor{
-		Name: t.name, InputSchema: json.RawMessage(`{"type":"object"}`),
-		Effects: []tool.Effect{tool.EffectRead}, Exposure: tool.ExposureDeferred,
-	}
-}
-
-func (deferredReviewTool) Execute(context.Context, tool.Call) (tool.Result, error) {
-	return tool.TextResult("ok"), nil
-}
 
 func (m *replyModel) Generate(_ context.Context, request model.Request, sink model.EventSink) (model.Response, error) {
 	m.request = &request
@@ -173,7 +144,7 @@ func TestServiceRunsHostedHarnessAndPostsFormattedAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	service.Agent.Runtime = runner
-	accepted, handleErr := service.HandleMention(context.Background(), slackconversation.Request{EventID: "event-1", UserID: "U1", Channel: "C1", ThreadTS: "T1", Text: "question"})
+	accepted, handleErr := service.handle(context.Background(), slackconversation.Request{EventID: "event-1", UserID: "U1", Channel: "C1", ThreadTS: "T1", Text: "question"})
 	if handleErr != nil || !accepted {
 		t.Fatal("request was not handled")
 	}
@@ -190,151 +161,6 @@ func TestServiceRunsHostedHarnessAndPostsFormattedAnswer(t *testing.T) {
 	}
 }
 
-func TestServiceRoutesCodeReviewIntentToDedicatedWorkflow(t *testing.T) {
-	catalog, err := tool.NewCatalog()
-	if err != nil {
-		t.Fatal(err)
-	}
-	messenger := &fakeMessenger{}
-	service := New(hosted.Agent{}, messenger, safety.PromptPolicy{}, safety.Redactor{}, nil)
-	service.Workflows = codeReviewWorkflows()
-	service.IntentRouter = &fixedIntentRouter{decision: workflows.RouteDecision{Intent: codereview.WorkflowName}}
-	client := &replyModel{}
-	runner, err := agentruntime.New(agentruntime.Config{Model: "test"}, agentruntime.Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore(), Events: service.EventSink()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	service.Agent.Runtime = runner
-	_, err = service.HandleMention(context.Background(), slackconversation.Request{
-		EventID: "review-1", UserID: "U1", Channel: "C1", ThreadTS: "T1",
-		Text: "Review https://github.com/acme/widgets/pull/42",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if client.request == nil || len(client.request.Messages) == 0 {
-		t.Fatal("model did not receive request")
-	}
-	system := client.request.Messages[0].Text()
-	for _, want := range []string{"dedicated multi-agent pull-request review workflow", "targeted verification", "Parsed PR URLs:"} {
-		if !strings.Contains(system, want) {
-			t.Fatalf("review system prompt missing %q", want)
-		}
-	}
-}
-
-func TestSlackIntentRouterActivatesCodeReviewFromUserMessage(t *testing.T) {
-	catalog, err := tool.NewCatalog(
-		deferredReviewTool{name: "github-pr_diff"},
-		deferredReviewTool{name: "github-pr_file_diff"},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	messenger := &fakeMessenger{}
-	service := New(hosted.Agent{}, messenger, safety.PromptPolicy{}, safety.Redactor{}, nil)
-	service.Workflows = codeReviewWorkflows()
-	router := &fixedIntentRouter{decision: workflows.RouteDecision{Intent: codereview.WorkflowName}}
-	service.IntentRouter = router
-	client := &replyModel{}
-	runner, err := agentruntime.New(agentruntime.Config{Model: "primary"}, agentruntime.Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore(), Events: service.EventSink()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	service.Agent.Runtime = runner
-
-	accepted, err := service.HandleMention(context.Background(), slackconversation.Request{
-		EventID: "review-routed", UserID: "U1", Channel: "C1", ThreadTS: "T1",
-		Text: "请 review https://github.com/acme/widgets/pull/42",
-	})
-	if err != nil || !accepted {
-		t.Fatalf("accepted=%v err=%v", accepted, err)
-	}
-	if client.request == nil || !strings.Contains(client.request.Messages[0].Text(), "Parsed PR URLs:") {
-		t.Fatalf("request=%+v", client.request)
-	}
-	if router.request.SessionID == "" {
-		t.Fatal("intent router did not receive the stable Slack session ID")
-	}
-}
-
-func TestSlackIntentRouterSkipsOrdinaryMessagesWithoutCandidateTokens(t *testing.T) {
-	catalog, err := tool.NewCatalog()
-	if err != nil {
-		t.Fatal(err)
-	}
-	messenger := &fakeMessenger{}
-	service := New(hosted.Agent{}, messenger, safety.PromptPolicy{}, safety.Redactor{}, nil)
-	service.Workflows = codeReviewWorkflows()
-	router := &fixedIntentRouter{decision: workflows.RouteDecision{Intent: codereview.WorkflowName}}
-	service.IntentRouter = router
-	client := &replyModel{}
-	runner, err := agentruntime.New(agentruntime.Config{Model: "primary"}, agentruntime.Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore(), Events: service.EventSink()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	service.Agent.Runtime = runner
-
-	accepted, err := service.HandleMention(context.Background(), slackconversation.Request{
-		EventID: "ordinary-chat", UserID: "U1", Channel: "C1", ThreadTS: "T1",
-		Text: "帮我查一下最近线上网关的错误率",
-	})
-	if err != nil || !accepted {
-		t.Fatalf("accepted=%v err=%v", accepted, err)
-	}
-	if router.request.SessionID != "" || router.request.Text != "" {
-		t.Fatalf("intent router should be bypassed when no workflow candidate matches, got %+v", router.request)
-	}
-}
-
-func TestCodeReviewThreadReplyContinuesDurableWorkflowWithoutMention(t *testing.T) {
-	catalog, _ := tool.NewCatalog()
-	messenger := &fakeMessenger{}
-	service := New(hosted.Agent{}, messenger, safety.PromptPolicy{}, safety.Redactor{}, nil)
-	service.Workflows = codeReviewWorkflows()
-	service.IntentRouter = &fixedIntentRouter{decision: workflows.RouteDecision{Intent: codereview.WorkflowName}}
-	client := &replyModel{}
-	runner, _ := agentruntime.New(agentruntime.Config{Model: "test"}, agentruntime.Dependencies{Model: client, Tools: catalog, Transcript: transcript.NewMemoryStore(), Events: service.EventSink()})
-	service.Agent.Runtime = runner
-
-	request := slackconversation.Request{
-		EventID: "review", UserID: "U1", Channel: "C1", ThreadTS: "T1", Text: "Review https://github.com/acme/widgets/pull/42",
-	}
-	if accepted, err := service.HandleMention(context.Background(), request); err != nil || !accepted {
-		t.Fatalf("initial accepted=%v err=%v", accepted, err)
-	}
-	request.EventID = "follow-up"
-	request.Text = "第二个候选问题为什么被确认？"
-	if accepted, err := service.HandleMention(context.Background(), request); err != nil || !accepted {
-		t.Fatalf("follow-up accepted=%v err=%v", accepted, err)
-	}
-	if client.request == nil || !strings.Contains(client.request.Messages[0].Text(), "continuing an existing pull-request review") {
-		t.Fatalf("follow-up did not retain workflow: %+v", client.request)
-	}
-	if !strings.Contains(client.request.Messages[0].Text(), "https://github.com/acme/widgets/pull/42") {
-		t.Fatalf("follow-up lost PR identity: %q", client.request.Messages[0].Text())
-	}
-}
-
-func TestServiceActivatesKnownCodeReviewToolsWithoutToolSearch(t *testing.T) {
-	catalog, err := tool.NewCatalog(
-		deferredReviewTool{name: "github-pr_diff"},
-		deferredReviewTool{name: "github-pr_file_diff"},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	service := Service{Tools: catalog}
-	if err := service.activateWorkflowTools("review-session", []string{"github-pr_diff", "github-pr_file_diff"}); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"github-pr_diff", "github-pr_file_diff"} {
-		if _, ok := catalog.GetActive("review-session", name); !ok {
-			t.Fatalf("%s was not activated", name)
-		}
-	}
-}
-
 func TestExplicitMentionResumesPendingInput(t *testing.T) {
 	catalog, _ := tool.NewCatalog()
 	store := transcript.NewMemoryStore()
@@ -347,7 +173,7 @@ func TestExplicitMentionResumesPendingInput(t *testing.T) {
 	metadata := json.RawMessage(`{"user_id":"U1"}`)
 	_, _ = store.Append(context.Background(), transcript.Event{ID: "start", SessionID: sessionID, TurnID: "first", Type: transcript.TurnStarted, Metadata: metadata})
 	_, _ = store.Append(context.Background(), transcript.Event{ID: "done", SessionID: sessionID, TurnID: "first", Type: transcript.TurnCompleted, Status: string(agentruntime.TerminationPendingInput)})
-	accepted, err := service.HandleMention(context.Background(), slackconversation.Request{EventID: "explicit", UserID: "U1", Channel: "C", ThreadTS: "T", Text: "production"})
+	accepted, err := service.handle(context.Background(), slackconversation.Request{EventID: "explicit", UserID: "U1", Channel: "C", ThreadTS: "T", Text: "production"})
 	if err != nil || !accepted {
 		t.Fatal("explicit mention did not resume pending input")
 	}
@@ -547,7 +373,7 @@ func TestImageCapabilityControlsSlackInputWithoutDroppingOnLookupFailure(t *test
 			}
 			service.Agent.Runtime = runner
 			service.Multimodal = func(context.Context, string) (bool, error) { return test.supported, test.lookupErr }
-			_, err = service.HandleMention(context.Background(), slackconversation.Request{EventID: "image", UserID: "U", Channel: "D", ThreadTS: "1", Text: "what is this?", Content: []model.Content{{Type: model.ContentImage, ImageURL: "data:image/png;base64,AAAA"}}})
+			_, err = service.handle(context.Background(), slackconversation.Request{EventID: "image", UserID: "U", Channel: "D", ThreadTS: "1", Text: "what is this?", Content: []model.Content{{Type: model.ContentImage, ImageURL: "data:image/png;base64,AAAA"}}})
 			if test.lookupErr != nil {
 				if err == nil || client.request != nil {
 					t.Fatalf("catalog failure reached inference: %v", err)
@@ -614,4 +440,33 @@ func (s *memoryInputs) Requeue(_ context.Context, id, owner string) error {
 		}
 	}
 	return sessioninput.ErrClaimLost
+}
+
+func (s *memoryInputs) Renew(_ context.Context, id, owner string, _ time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.claimed[id] != owner || s.acked[id] {
+		return sessioninput.ErrClaimLost
+	}
+	return nil
+}
+
+func (s *memoryInputs) Fail(ctx context.Context, id, owner string, _ error, _ time.Duration, _ int) (bool, error) {
+	return false, s.Release(ctx, id, owner)
+}
+
+// handle drives execution synchronously in runtime/presentation unit fixtures.
+func (s *Service) handle(ctx context.Context, req slackconversation.Request) (bool, error) {
+	if s.Messenger == nil || s.Agent.Runtime == nil {
+		return false, nil
+	}
+	sessionID := session.ID(req.Channel, req.ThreadTS)
+	controlled, controlErr := s.controlActive(ctx, sessionID, req)
+	if controlErr != nil {
+		return false, controlErr
+	}
+	if controlled {
+		return true, nil
+	}
+	return true, s.run(ctx, sessionID, req)
 }

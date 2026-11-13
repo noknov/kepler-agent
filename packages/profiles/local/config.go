@@ -18,7 +18,6 @@ type Config struct {
 	RemoteAgents         []appconfig.RemoteAgentConfig `toml:"remote_agents"`
 	NativeCompaction     bool                          `toml:"native_compaction"`
 	MaxTotalTokens       int64                         `toml:"max_total_tokens"`
-	InputRouting         string                        `toml:"input_routing"`
 	Output               string                        `toml:"output"`
 	MaxSteps             int                           `toml:"max_steps"`
 	MaxParallelToolCalls int                           `toml:"max_parallel_tool_calls"`
@@ -50,7 +49,7 @@ type MCPServerConfig struct {
 const configDirectory = "kepler-agent"
 
 func DefaultConfig() Config {
-	return Config{InputRouting: "steer", Output: "text", MaxSteps: 256, MaxParallelToolCalls: 8, MaxOutputTokens: 16384, MaxContextTokens: 96_000, AutocompactBuffer: 8_000, Timeout: 30 * time.Minute}
+	return Config{Output: "jsonl", MaxSteps: 256, MaxParallelToolCalls: 8, MaxOutputTokens: 16384, MaxContextTokens: 96_000, AutocompactBuffer: 8_000, Timeout: 30 * time.Minute}
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -93,9 +92,6 @@ func (config Config) Validate() error {
 	}
 	if config.MaxSteps < agentruntime.UnlimitedSteps {
 		return fmt.Errorf("max_steps must be positive, zero for default, or -1 for unlimited")
-	}
-	if config.InputRouting != "steer" && config.InputRouting != "queue" {
-		return fmt.Errorf("input_routing must be steer or queue")
 	}
 	if config.Output != "text" && config.Output != "jsonl" {
 		return fmt.Errorf("output must be text or jsonl")

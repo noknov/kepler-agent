@@ -1,79 +1,48 @@
 # Kepler Agent
 
-Kepler is an agent harness shared by hosted team assistants and a local coding
-CLI. Tools run where the selected product runs; the clients do not all execute
-on the same remote workspace.
+Kepler is a Slack assistant with one shared model/tool runtime. It investigates
+code and operational evidence, uses connected tools, and requests confirmation
+for operator-enabled writes. Shared-channel requests require an explicit mention;
+direct messages do not.
 
-| Product | Tools and workspace | Entry point |
-| --- | --- | --- |
-| Hosted Slack | Operator-managed server workspace | Slack mentions and conversations |
-| Hosted Web | Operator-managed server workspace | Browser, authenticated through Slack OIDC |
-| Local CLI | User-selected local workspace | Interactive terminal or headless command |
+Slack is the only maintained conversational product. The noninteractive
+`kepler-bench` executable exists for evaluation and automation of benchmark tasks;
+there is no browser chat, terminal UI, app-server, or automatic review workflow.
+Generic read-only delegation remains available when the agent needs independent
+investigations. A PR URL does not select a separate loop or orchestration policy.
 
-Profiles compose a shared model/tool loop with product-specific policy,
-storage, credentials, and presentation. Hosted transcripts use PostgreSQL;
-local transcripts use JSONL. The local app-server exposes the local profile
-over stdio JSON-RPC for clients.
+## Architecture
 
-## Start here
+Authenticated Slack events enter a durable inbox. Admission persists session
+input before acknowledging an event. A bounded dispatcher runs turns separately
+from intake, so follow-ups and Stop remain serviceable during long work. The
+runtime owns context, tools, approvals, budgets, cancellation and transcript
+facts. PostgreSQL owns durable work; Redis wake-ups reduce latency.
 
-- **Connect Slack:** follow the [Slack integration guide](docs/slack.md).
-- **Understand or change the code:** start with [architecture](docs/architecture.md)
-  and [development](docs/development.md).
-- **Evaluate behavior:** read the [evaluation guide](evals/README.md).
-- **Browse all documentation:** use the [documentation index](docs/README.md).
+Slack delivery receipts record intent and known message identity separately from
+model completion and query-oriented run projections. Recovery repairs a known
+message and does not repeat an uncertain message creation. Native session status
+is reconciled under the same session ownership as execution.
 
-## Agent maintenance
+- [Architecture](docs/architecture.md)
+- [Development and checks](docs/development.md)
+- [Slack behavior](docs/slack.md)
+- [Models](docs/models.md), [tools](docs/tools.md), [memory](docs/long-term-memory.md)
+- [Benchmark adapter](docs/benchmark.md) and [evaluators](evals/README.md)
+- [Safety boundaries](docs/safety.md)
 
-Start with [AGENTS.md](AGENTS.md), then the [maintenance workflow](docs/maintaining.md).
-Run `make doctor` to inspect prerequisites and `make repo-check` for repository
-contracts. Codex and Claude share the same guidance; complex changes keep a
-versioned execution plan and CI publishes structural change evidence.
+Deployment, images, private configuration, SOPS secrets, incremental migrations
+and benchmark execution records belong to
+[kepler-agent-deploy](https://github.com/noknov/kepler-agent-deploy).
 
-## Develop
-
-Use the Go version declared in [go.mod](go.mod). The CLI frontend uses the
-Node/pnpm versions in [CI](.github/workflows/check.yml).
+## Verification
 
 ```sh
+make doctor repo-check
 make check
+make test-race
 ```
 
-This checks formatting, package boundaries, generated protocol artifacts,
-Go vet/tests/builds, and evaluator wiring. It does not run a real model
-benchmark or the full frontend checks. See [verification scope](docs/development.md#verification)
-for frontend, race, and integration checks.
-
-Build and package the interactive CLI through the sibling deployment repository:
-
-```sh
-cd ../kepler-agent-deploy
-SOURCE_DIR=../kepler-agent scripts/build-cli.sh
-bin/kepler-agent
-```
-
-That script builds the launcher, app-server and frontend together and writes the
-CLI bundle under `kepler-agent-deploy/bin`. This application repository owns
-source code, protocol contracts, and tests; concrete evaluation execution,
-packaging, deployment, and result records live in `kepler-agent-deploy`.
-`make eval-build` only builds a temporary headless CLI for local evaluations.
-
-## Repository boundaries
-
-| Path | Owns |
-| --- | --- |
-| `packages/agent/` | Model/tool contracts, transcript, context, runtime, delegation |
-| `packages/profiles/` | Hosted and local composition and policy |
-| `packages/surfaces/` | Slack/Web ingress and presentation |
-| `packages/providers/`, `packages/tools/` | Provider adapters and tool implementations |
-| `packages/connections/` | User integration credentials and OAuth lifecycle |
-| `packages/appserver/`, `appserver/` | Local JSON-RPC protocol and executable |
-| `cli/`, `apps/cli/` | Go launcher and Ink terminal frontend |
-| `gateway/`, `worker/`, `observability/` | Hosted service entry points |
-| `schema/`, `evals/`, `architecture-site/` | Schema contract, evaluation, Chinese architecture guide |
-
-Hosted write authorization belongs to the operator; user approval cannot grant
-access to the host. Local execution uses workspace policy, scoped approvals,
-and an OS sandbox. These are design boundaries, not a claim of complete
-isolation or exactly-once external effects. See [safety and limitations](docs/safety.md)
-and [private vulnerability reporting](SECURITY.md).
+`make integration-check` additionally requires isolated PostgreSQL and Redis.
+Tests do not send Slack messages or establish live model quality. Use explicit
+benchmark runs with pinned source, model and budgets for model-driven evidence.

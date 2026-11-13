@@ -48,14 +48,11 @@ func NewGateway(cfg config.Config, redis *redisclient.Client) (*Gateway, error) 
 }
 
 func (g *Gateway) Register(mux *http.ServeMux) {
-	mux.HandleFunc("/cli/device", g.handleDevice)
-	mux.HandleFunc("/cli/login", g.handleLogin)
-	mux.HandleFunc("/cli/oauth/callback", g.handleCallback)
-	mux.HandleFunc("/cli/bootstrap", g.withSession(g.proxyWorker))
+	mux.HandleFunc("/benchmark/device", g.handleDevice)
+	mux.HandleFunc("/benchmark/login", g.handleLogin)
+	mux.HandleFunc("/benchmark/oauth/callback", g.handleCallback)
+	mux.HandleFunc("/benchmark/bootstrap", g.withSession(g.proxyWorker))
 	mux.Handle("POST "+providers.KeplerGeneratePath, g.withSession(g.proxyWorker))
-	mux.Handle("POST /v1/responses", g.withSession(g.proxyWorker))
-	mux.Handle("POST /v1/chat/completions", g.withSession(g.proxyWorker))
-	mux.Handle("POST /v1/messages", g.withSession(g.proxyWorker))
 }
 
 type deviceStart struct {
@@ -90,7 +87,7 @@ func (g *Gateway) startDevice(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not start login", http.StatusInternalServerError)
 		return
 	}
-	login, err := url.Parse(g.PublicBaseURL + "/cli/login")
+	login, err := url.Parse(g.PublicBaseURL + "/benchmark/login")
 	if err != nil {
 		http.Error(w, "invalid public base URL", http.StatusInternalServerError)
 		return
@@ -149,7 +146,7 @@ func (g *Gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 	values := url.Values{
 		"client_id":    {g.SlackClientID},
 		"user_scope":   {"identity.basic"},
-		"redirect_uri": {g.PublicBaseURL + "/cli/oauth/callback"},
+		"redirect_uri": {g.PublicBaseURL + "/benchmark/oauth/callback"},
 		"state":        {record.State},
 	}
 	http.Redirect(w, r, "https://slack.com/oauth/v2/authorize?"+values.Encode(), http.StatusFound)
@@ -179,7 +176,7 @@ func (g *Gateway) handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	userID, err := exchangeSlackIdentity(r.Context(), g.SlackClientID, g.SlackSecret, code, g.PublicBaseURL+"/cli/oauth/callback")
+	userID, err := exchangeSlackIdentity(r.Context(), g.SlackClientID, g.SlackSecret, code, g.PublicBaseURL+"/benchmark/oauth/callback")
 	if err != nil {
 		_ = g.Store.FailDevice(r.Context(), pending.DeviceCode, err.Error())
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -241,7 +238,7 @@ type Bootstrap struct {
 }
 
 func RegisterWorker(mux *http.ServeMux, cfg config.Config) error {
-	mux.HandleFunc("/cli/bootstrap", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/benchmark/bootstrap", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -274,14 +271,6 @@ func RegisterWorker(mux *http.ServeMux, cfg config.Config) error {
 	mux.Handle("POST "+providers.KeplerGeneratePath, limitConcurrency(HandleHostedGenerate(hosted, HostedGeneratePolicy{AllowNativeCompaction: cfg.LLM.NativeCompaction,
 		Model: cfg.LLM.Model, MaxOutputTokens: cfg.LLM.MaxOutputTokens, Temperature: cfg.LLM.Temperature,
 	}), limit))
-	proxy, err := NewLLMUpstreamProxy(cfg.LLM)
-	if err != nil {
-		return err
-	}
-	restricted := limitConcurrency(RestrictLLMProxy(proxy, cfg.LLM), limit)
-	mux.Handle("POST /v1/responses", restricted)
-	mux.Handle("POST /v1/chat/completions", restricted)
-	mux.Handle("POST /v1/messages", restricted)
 	return nil
 }
 

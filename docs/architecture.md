@@ -1,102 +1,73 @@
 # Architecture
 
-Kepler shares one agent loop across products. A **surface** receives input and
-renders output; a **profile** selects storage, tools, credentials, and policy;
-the **runtime** executes turns using canonical model and transcript contracts.
+Kepler has one conversational surface, Slack, and one noninteractive benchmark
+adapter. Both compose the same transport-neutral runtime. Profiles select tools,
+policy, credentials, persistence and providers; they do not implement another loop.
 
 ```mermaid
 flowchart TD
-    H["Slack / Web ingress"] --> Q["Durable inbox / input"]
-    Q --> P["Hosted profile"]
-    L["CLI / stdio app-server"] --> LP["Local profile"]
-    P --> R["Shared runtime"]
-    LP --> R
-    R --> E["Providers / tools"]
-    R --> T["Canonical transcript"]
+ S[Slack events and interactions] --> I[Durable event inbox]
+ I --> A[Authenticated input admission]
+ A --> Q[Durable session inputs]
+ Q --> D[Bounded execution dispatcher]
+ D --> P[Hosted profile]
+ B[Noninteractive benchmark process] --> L[Local sandbox profile]
+ P --> R[Canonical runtime]
+ L --> R
+ R --> T[Append-only transcript]
+ R --> E[Model and tool adapters]
+ T --> V[Run and telemetry projections]
+ D --> F[Slack delivery receipts]
+ F --> S
 ```
-
-Sharing the runtime does not make the surfaces feature-equivalent. Web has its
-own conversations and catalog; Slack installs product routing and delivery;
-local execution has a different filesystem and approval boundary. The most
-important production distinction is that ingress acceptance, session ownership,
-model completion, tool side effects, transcript commit, projection, and user
-delivery are separate boundaries. A successful step at one boundary is not
-evidence that the next boundary succeeded.
 
 ## Ownership
 
-| Layer | Responsibility | Source entry |
+| Owner | Responsibility | Entry |
 | --- | --- | --- |
-| Runtime | Context projection, model/tool scheduling, termination, canonical events | [runtime](../packages/agent/runtime) |
-| Model adapters | Translate provider requests and events | [providers](../packages/providers) |
-| Profiles | Compose policy, storage, catalogs, resilient clients | [profiles](../packages/profiles) |
-| Surfaces | Authentication, ingress, user-visible state and delivery | [surfaces](../packages/surfaces) |
-| App-server | Local client protocol and admission | [appserver](../packages/appserver) |
-| Delegation | Bounded child tasks with separate transcripts and parent links | [delegation](../packages/agent/delegation) |
+| Slack ingress | Signatures, access and durable event acceptance | [gateway](../gateway/service.go) |
+| Slack admission and dispatch | Persist input, route controls, bound execution and drain | [dispatch](../packages/surfaces/slack/agent/dispatch.go) |
+| Runtime | Context, model/tool execution, approvals, accounting and terminal facts | [runtime](../packages/agent/runtime) |
+| Profiles | Compose storage, policy, models and tool catalogs | [profiles](../packages/profiles) |
+| Providers | Translate wire requests and typed events | [providers](../packages/providers) |
+| Delivery | Network intent, known Slack identity and status recovery | [delivery](../packages/surfaces/slack/agent/delivery.go) |
+| Benchmark | Single-shot input and canonical JSONL output | [benchmark](../benchmark) |
+| Delegation | Bounded read-only leaf turns with evidence links | [delegation](../packages/agent/delegation) |
 
-Do not import Slack or provider wire assumptions into `packages/agent`.
-[AGENTS.md](../AGENTS.md) records the repository's implementation constraints.
+There is no workflow router, automatic PR-review activation, second agent loop,
+or persistent autonomous task scheduler. The model chooses tools from the active
+catalog. Generic delegation is scoped to the parent turn and is not independent
+background work that can outlive or resume after that parent.
+
+## Durable boundaries
+
+Ingress acceptance, session ownership, model completion, external effects,
+transcript commit and user delivery are separate facts. PostgreSQL stores hosted
+transcripts, event/input queues, connection records and Slack reply receipts.
+Redis supplies notifications, not durable acceptance. Run records and Langfuse
+traces are observations and cannot authorize a write or prove Slack delivery.
+
+Each execution holds session ownership. Input claims are short and renewed while
+work remains owned. Losing a claim cancels the old executor. Failed inputs have
+persisted retry deadlines and a bounded attempt budget; exhausted work remains
+dead-lettered instead of being acknowledged as success. Shutdown stops admission
+of new executions, waits for current ones, then preserves bounded cleanup.
+
+Reply creation records intent before the network call. A known message ID is
+retained for repair after restart. An intent without a receipt is uncertain and
+must not create another message automatically. Terminal status recovery takes
+session ownership and ignores older turns before changing Slack's state.
+These mechanisms do not make PostgreSQL and an external API one transaction or
+promise exactly-once external effects.
 
 ## State and identity
 
-| Term | Meaning |
-| --- | --- |
-| Session/thread | Conversation identity used to load history and route input |
-| Turn | One execution lifecycle, including model and tool steps |
-| Transcript | Append-only canonical completed messages and lifecycle events |
-| Run/step | Query-oriented observability projection, not a second conversation store |
-| Stream delta | Transient presentation update; not the durable replay unit |
-| Connection | A user's integration credential, distinct from a browser or CLI login |
+A session identifies a conversation. A turn identifies one execution. A tool
+execution ID identifies one attempted effect. The transcript contains completed
+messages and execution facts; transient token deltas are presentation only.
+Connection identity scopes upstream credentials independently from the user's
+Slack identity. Neither a known session ID nor user confirmation grants host
+access. Tools use authenticated server scope, not model-supplied actor IDs.
 
-Hosted transcripts, inboxes, session inputs, runs, and connections use
-PostgreSQL. Redis supplies wakeups and coordination. Local transcripts use
-JSONL. Browser identity, Slack thread identity, and local workspace identity
-must not be treated as interchangeable.
-
-A persisted transcript does not by itself prove durable acceptance or
-exactly-once tool effects. Ingress, ownership, external side effects, and
-presentation have separate failure windows. Recovery records an interrupted
-model request or tool call as unknown instead of silently replaying it. A tool
-can narrow that window only when it passes a stable execution ID to an
-idempotent downstream API. See [safety and limitations](safety.md) and the
-[production failure walkthrough](../architecture-site/production.html).
-
-## Questions the architecture must answer
-
-When changing the system, be able to answer these before implementation:
-
-1. Which event is the source of truth if the process exits at this line?
-2. Which owner or lease prevents another worker from taking the same work, and
-   what does the old owner do after losing it?
-3. If the downstream call succeeded but the result append failed, how is the
-   next attempt prevented from duplicating the side effect?
-4. Does the retry happen before or after user-visible output, and where is the
-   retry budget counted?
-5. What is the backpressure behavior when the provider, database, projection,
-   or external API is slower than the incoming request rate?
-6. Which metric and durable identifier let an operator distinguish execution
-   failure from delivery failure?
-
-The Chinese site expands these questions into state transitions, failure
-windows, and source references rather than treating the top-level boxes as a
-complete design.
-
-## Read a request through the code
-
-1. Start at [gateway/service.go](../gateway/service.go),
-   [worker/service.go](../worker/service.go), or [CLI](../cli).
-2. Find the selected [profile](../packages/profiles) and its catalog/policy.
-3. Follow [runtime](../packages/agent/runtime) for projection, model calls,
-   tool execution, and termination.
-4. Follow the adapter in [providers](../packages/providers) or
-   [tools](../packages/tools) for the external operation.
-5. Return to the surface for delivery and to [runs](../packages/runs) for
-   observability projection.
-
-For execution contracts, failure windows, identity, context accounting, privacy,
-and capacity boundaries, read the [detailed architecture walkthrough](architecture-deep-dive.md)
-(中文).
-
-For details, read [runtime](runtime.md), [tools](tools.md), and
-[the Chinese architecture walkthrough](../architecture-site/README.md).
-For tracked maintenance work, read the [maintenance backlog](maintenance-backlog.md).
+See [runtime](runtime.md), [safety](safety.md), [Slack](slack.md),
+[benchmark](benchmark.md), and the [architecture walkthrough](architecture-deep-dive.md).

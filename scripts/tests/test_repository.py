@@ -62,8 +62,7 @@ class ReportTests(unittest.TestCase):
         self.assertIsNone(records[1]["added"])
         self.assertEqual(records[1]["path"], "file\nname.png")
 
-    def test_generated_and_tests_have_separate_accounting(self):
-        self.assertEqual(repository.category("docs/app-server.schema.json"), "generated")
+    def test_tests_have_separate_accounting(self):
         self.assertEqual(repository.category("scripts/tests/test_repository.py"), "tests")
         self.assertEqual(repository.category("packages/example/a_test.go"), "tests")
 

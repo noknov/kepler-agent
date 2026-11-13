@@ -1,7 +1,7 @@
 # Product adapters
 
 Follow [architecture](../../docs/architecture.md), then the owning
-[Slack](../../docs/slack.md) or [Web](../../docs/web.md) guide.
+[Slack](../../docs/slack.md) or [benchmark](../../docs/benchmark.md) guide.
 
 - Surfaces authenticate/admit input and project canonical events. Do not infer
   authorization, completion, or plans from free-form model text.
