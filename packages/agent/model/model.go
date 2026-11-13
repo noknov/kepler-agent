@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 )
 
 type Role string
@@ -87,13 +88,20 @@ func TextMessage(role Role, value string) Message {
 }
 
 func (m Message) Text() string {
-	var value string
+	if len(m.Content) == 1 {
+		block := m.Content[0]
+		if block.Type == ContentText && block.Phase != "commentary" {
+			return block.Text
+		}
+		return ""
+	}
+	var value strings.Builder
 	for _, block := range m.Content {
 		if block.Type == ContentText && block.Phase != "commentary" {
-			value += block.Text
+			value.WriteString(block.Text)
 		}
 	}
-	return value
+	return value.String()
 }
 
 func (m Message) Citations() []Citation {
