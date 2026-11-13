@@ -36,3 +36,29 @@ func TestClearProviderDeletesConnection(t *testing.T) {
 		t.Fatal("expected connection changed notification")
 	}
 }
+
+type completionCounter struct{ calls int }
+
+func (c *completionCounter) PublishCompleted(context.Context, string, string, string) error {
+	c.calls++
+	return nil
+}
+
+func TestCredentialInvalidationDoesNotAnnounceOAuthCompletion(t *testing.T) {
+	store, err := NewFileStore(t.TempDir()+"/connections.json", "test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	notifier := &completionCounter{}
+	service := Service{Store: store, OAuthCompleted: notifier}
+	if err := service.ClearProviderInstance(t.Context(), "U1", ProviderClickStack, "i-eu"); err != nil {
+		t.Fatal(err)
+	}
+	if notifier.calls != 0 {
+		t.Fatal("credential invalidation announced successful authorization")
+	}
+	service.notifyOAuthCompleted(t.Context(), "U1", ProviderClickStack, "i-eu")
+	if notifier.calls != 1 {
+		t.Fatal("successful OAuth completion was not announced")
+	}
+}

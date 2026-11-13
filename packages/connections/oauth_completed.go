@@ -39,19 +39,16 @@ func ParseOAuthCompletedPayload(payload string) (userID, provider, instanceID st
 	return parts[0], parts[1], instanceID, true
 }
 
-func (s Service) notifyOAuthCompleted(ctx context.Context, userID, provider string, instanceID ...string) {
-	s.notifyConnectionChanged(ctx, userID, provider, instanceID...)
+func (s Service) notifyOAuthCompleted(ctx context.Context, userID, provider, instanceID string) {
+	s.notifyConnectionChanged(ctx, userID, provider)
+	if s.OAuthCompleted != nil {
+		_ = s.OAuthCompleted.PublishCompleted(ctx, userID, provider, instanceID)
+	}
 }
 
-func (s Service) notifyConnectionChanged(ctx context.Context, userID, provider string, instanceID ...string) {
+// Connection invalidation refreshes presentation, never resumes a waiting turn.
+func (s Service) notifyConnectionChanged(ctx context.Context, userID, provider string) {
 	if s.OnConnectionChanged != nil {
 		_ = s.OnConnectionChanged(ctx, userID, provider)
-	}
-	if s.OAuthCompleted != nil {
-		selected := ""
-		if len(instanceID) > 0 {
-			selected = instanceID[0]
-		}
-		_ = s.OAuthCompleted.PublishCompleted(ctx, userID, provider, selected)
 	}
 }
