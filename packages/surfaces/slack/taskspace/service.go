@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/safety"
 	slack "github.com/noknov/kepler-agent/packages/surfaces/slack/client"
@@ -27,6 +28,32 @@ type Service struct {
 	Slack     Client
 	Access    safety.AccessPolicy
 	BotUserID string
+}
+
+// NewService verifies the shared installation prerequisite for both message
+// execution and interaction admission. Bot identity must never be inferred from
+// the app's mutable display name.
+func NewService(ctx context.Context, pool *pgxpool.Pool, client *slack.Client, access safety.AccessPolicy) (*Service, error) {
+	if client == nil {
+		return nil, fmt.Errorf("native Slack task spaces require a bot client")
+	}
+	store := PGStore{Pool: pool}
+	if err := store.CheckSchema(ctx); err != nil {
+		return nil, err
+	}
+	bot := client.BotUserID()
+	if bot == "" {
+		var err error
+		bot, err = client.AuthTest(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("resolve native Slack bot identity: %w", err)
+		}
+		if bot == "" {
+			return nil, fmt.Errorf("Slack omitted native bot identity")
+		}
+		client.SetBotUserID(bot)
+	}
+	return &Service{Store: store, Slack: client, Access: access, BotUserID: bot}, nil
 }
 
 func (s Service) allowedOrigin(user, channel string) bool {

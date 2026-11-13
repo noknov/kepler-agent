@@ -40,7 +40,7 @@ func TestIntegrationGatewayAdmitsOnlyRequesterApprovalInOriginalThread(t *testin
 	store := hosted.PGTranscript{Pool: service.stores.PGPool}
 	for _, actor := range []string{"requester", "revoked"} {
 		call := tool.Call{ID: actor, Name: "github-approve_pr", Scope: tool.Scope{UserID: actor, SessionID: sessionID, TurnID: "turn", Values: map[string]string{"conversation_type": "channel", "team_id": "team", "channel": "C-shared", "thread_ts": thread}}}
-		if _, err := store.Append(ctx, transcript.Event{SessionID: sessionID, TurnID: "turn", Type: transcript.ApprovalRequested, ToolCall: &call}); err != nil {
+		if _, err := store.Append(ctx, transcript.Event{ID: thread + "-" + actor, SessionID: sessionID, TurnID: "turn", Type: transcript.ApprovalRequested, ToolCall: &call}); err != nil {
 			t.Fatal(err)
 		}
 	}

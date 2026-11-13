@@ -155,11 +155,10 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	access := safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels)
 	var spaces *taskspace.Service
 	if cfg.Slack.CodeChannelsEnabled {
-		spaceStore := taskspace.PGStore{Pool: stores.PGPool}
-		if err := spaceStore.CheckSchema(ctx); err != nil {
+		spaces, err = taskspace.NewService(ctx, stores.PGPool, slackClient, access)
+		if err != nil {
 			return nil, err
 		}
-		spaces = &taskspace.Service{Store: spaceStore, Slack: slackClient, Access: access, BotUserID: cfg.Slack.BotUserID}
 		if err := slackTools.AddTaskSpaceTools(catalog, hostedTools.PolicyForSurface(cfg, surface), spaces); err != nil {
 			return nil, err
 		}
