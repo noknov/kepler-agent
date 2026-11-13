@@ -20,7 +20,7 @@ const (
 	defaultExploreMaxSteps   = 64
 	defaultExploreMaxWorkers = 5
 	defaultExploreMaxJobs    = 8
-	// ScopeSharedContext carries workflow-owned, immutable context into every
+	// ScopeSharedContext carries caller-owned, immutable context into every
 	// delegated worker. It is supplied by orchestration rather than repeated in
 	// model-authored task arguments, so a worker cannot lose its target when the
 	// lead omits details while decomposing work.
@@ -53,7 +53,7 @@ type ExecutionBudget struct {
 
 // TaskSpec is the transport-neutral contract for one isolated agent worker.
 // It deliberately describes the work instead of a named model or surface so
-// workflows can reuse the same delegation infrastructure.
+// product adapters can reuse the same delegation infrastructure.
 type TaskSpec struct {
 	Name            string   `json:"name,omitempty"`
 	Role            string   `json:"role,omitempty"`
@@ -63,7 +63,7 @@ type TaskSpec struct {
 	SuccessCriteria []string `json:"success_criteria,omitempty"`
 }
 
-// TaskRequest executes a worker outside the tool adapter. Product workflows
+// TaskRequest executes a worker outside the tool adapter. Product adapters
 // can therefore compose the same child-agent primitive without depending on
 // model-authored tool-call JSON.
 type TaskRequest struct {
@@ -189,20 +189,24 @@ func (t ExploreTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 			// operators can inspect the durable transcript that caused the error.
 			result.IsError = true
 			result.ErrorCode = "explore_failed"
-			result.Content = []model.Content{{Type: model.ContentText, Text: "Exploration failed: " + err.Error()}}
+			result.Content = tool.TextResult(childOutcome(out.Text, err)).Content
 			return result, nil
 		}
 		return result, nil
 	}
-	reports, audits, err := t.Runner.runMany(ctx, call, jobs)
-	if err != nil {
-		return tool.Result{}, err
-	}
+	reports, audits, failures := t.Runner.runMany(ctx, call, jobs)
 	var totalUsage model.Usage
 	for _, audit := range audits {
 		totalUsage = totalUsage.Add(audit.Usage)
 	}
 	result := tool.TextResult(reports)
+	if failures > 0 {
+		result.IsError = true
+		result.ErrorCode = "explore_partial_failure"
+		if failures == len(jobs) {
+			result.ErrorCode = "explore_failed"
+		}
+	}
 	result.Usage = &totalUsage
 	result.Metadata = map[string]any{"child_runs": audits, "usage": totalUsage}
 	return result, nil
@@ -255,7 +259,7 @@ func validateLeafTasks(jobs []TaskSpec) error {
 	return nil
 }
 
-func (r Runner) runMany(ctx context.Context, parentCall tool.Call, jobs []TaskSpec) (string, []ChildRun, error) {
+func (r Runner) runMany(ctx context.Context, parentCall tool.Call, jobs []TaskSpec) (string, []ChildRun, int) {
 	workers := r.maxWorkers()
 	sem := make(chan struct{}, workers)
 	reports := make([]childReport, len(jobs))
@@ -282,16 +286,28 @@ func (r Runner) runMany(ctx context.Context, parentCall tool.Call, jobs []TaskSp
 	wg.Wait()
 	var parts []string
 	audits := make([]ChildRun, 0, len(jobs))
+	failures := 0
 	for index, job := range jobs {
 		if errs[index] != nil {
-			parts = append(parts, fmt.Sprintf("## %s\n%s\n\nError: %v", taskLabel(index, job), job.Task, errs[index]))
-			audits = append(audits, reports[index].Audit)
-			continue
+			failures++
 		}
-		parts = append(parts, fmt.Sprintf("## %s\n%s\n\n%s", taskLabel(index, job), job.Task, reports[index].Text))
+		parts = append(parts, fmt.Sprintf("## %s\n%s\n\n%s", taskLabel(index, job), job.Task, childOutcome(reports[index].Text, errs[index])))
 		audits = append(audits, reports[index].Audit)
 	}
-	return strings.Join(parts, "\n\n"), audits, nil
+	return strings.Join(parts, "\n\n"), audits, failures
+}
+
+// childOutcome preserves useful partial findings while making failure explicit.
+// Report text never determines whether the child completed.
+func childOutcome(text string, err error) string {
+	if err == nil {
+		return text
+	}
+	failure := "Exploration incomplete: " + err.Error()
+	if text == "" {
+		return failure
+	}
+	return failure + "\n\nPartial findings (not a completed report):\n" + text
 }
 
 func taskLabel(index int, job TaskSpec) string {
@@ -319,6 +335,9 @@ func (r Runner) runJob(ctx context.Context, parentCall tool.Call, job TaskSpec) 
 			Kind:       "agent_explore",
 		},
 	})
+	if err != nil && result.Audit.Error == "" {
+		result.Audit.Error = err.Error()
+	}
 	return childReport{Text: strings.TrimSpace(result.Message.Text()), Audit: result.Audit}, err
 }
 
@@ -409,7 +428,7 @@ func (r Runner) RunTask(ctx context.Context, request TaskRequest) (TaskResult, e
 	if err != nil {
 		audit.Error = err.Error()
 		_, publishErr := r.publishTaskEvent(auditCtx, parentEvents, request, transcript.DelegatedTaskFailed, audit, nil)
-		return TaskResult{Audit: audit}, errors.Join(err, publishErr)
+		return TaskResult{Message: result.Message, Audit: audit}, errors.Join(err, publishErr)
 	}
 	text := strings.TrimSpace(result.Message.Text())
 	if text == "" {
