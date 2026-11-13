@@ -84,6 +84,13 @@ record type and assigned agent, not names or empty timestamps. Existing native
 channels without a Kepler grant require operator channel authorization. Channels
 still require explicit mentions; DMs retain their existing direct-input policy.
 
+App Home lists the current user's recent task spaces for the authenticated bot
+installation. The list reads existing immutable grants and rechecks the current
+user/origin policy; it contains links, not conversation content or execution
+authority. Archived spaces may remain visible because their history is retained.
+Opening a link does not start a task. No per-channel metadata polling, new task
+database or autonomous scheduler is involved.
+
 Context bars replace up to five informational items. Views use stable keys;
 diffs are channel singletons. HTML does not receive model-controlled CSP
 extensions. Canvas attachments grant comment access. These are presentation

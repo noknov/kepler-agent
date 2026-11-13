@@ -239,6 +239,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		Runs:      stores.Runs,
 		UserPrefs: stores.UserPrefs,
 		Home: slackhome.Controller{
+			Spaces: spaces, TeamID: slackClient.TeamID(),
 			Memory:      memory.PGStore{Pool: stores.PGPool},
 			Cfg:         cfg,
 			Access:      access,
