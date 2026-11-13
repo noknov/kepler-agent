@@ -36,7 +36,7 @@ func TestSafeEnvironmentRejectsDangerousOverrides(t *testing.T) {
 
 func TestDarwinSandboxProfileAllowsDevNullWrites(t *testing.T) {
 	workspace := Workspace{Root: "/workspace", Temp: "/workspace/.kepler-tmp"}
-	profile := darwinSandboxProfile(workspace, nil, nil, false)
+	profile := darwinSandboxProfile(workspace, nil, nil, nil, false)
 	if !strings.Contains(profile, `(allow file-write* (literal "/dev/null"))`) {
 		t.Fatalf("/dev/null write access is required for standard command redirection: %s", profile)
 	}
@@ -51,7 +51,7 @@ func TestDarwinSandboxProfileDeniesSensitiveDirectoryDescendants(t *testing.T) {
 	if err := os.Mkdir(sensitive, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	profile := darwinSandboxProfile(Workspace{Root: root, Temp: filepath.Join(root, ".tmp")}, nil, []string{sensitive}, false)
+	profile := darwinSandboxProfile(Workspace{Root: root, Temp: filepath.Join(root, ".tmp")}, nil, []string{sensitive}, nil, false)
 	if !strings.Contains(profile, `(subpath "`+sensitive+`")`) {
 		t.Fatalf("missing sensitive subpath denial: %s", profile)
 	}
@@ -95,7 +95,7 @@ func TestSanitizedGitEnvironmentPersistsIndex(t *testing.T) {
 }
 
 func TestCanonicalReadRootsRejectsBroadAndResolvesSymlink(t *testing.T) {
-	if _, err := canonicalReadRoots([]string{"/"}); err == nil {
+	if _, err := canonicalReadRoots([]string{"/"}, nil); err == nil {
 		t.Fatal("root read grant was accepted")
 	}
 	dir := t.TempDir()
@@ -104,7 +104,7 @@ func TestCanonicalReadRootsRejectsBroadAndResolvesSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.Remove(link)
-	roots, err := canonicalReadRoots([]string{link, dir})
+	roots, err := canonicalReadRoots([]string{link, dir}, nil)
 	real, _ := filepath.EvalSymlinks(dir)
 	if err != nil || len(roots) != 1 || roots[0] != real {
 		t.Fatalf("roots=%#v err=%v", roots, err)
