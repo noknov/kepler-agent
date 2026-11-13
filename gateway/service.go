@@ -24,6 +24,7 @@ import (
 	slackgateway "github.com/noknov/kepler-agent/packages/surfaces/slack/gateway"
 	slackhandler "github.com/noknov/kepler-agent/packages/surfaces/slack/handler"
 	slackhome "github.com/noknov/kepler-agent/packages/surfaces/slack/home"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/taskspace"
 )
 
 type Service struct {
@@ -63,18 +64,37 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Service{cfg: cfg, stores: stores}
 	var slackClient *slack.Client
 	if cfg.Slack.BotToken != "" {
 		slackClient = slack.NewClient(cfg.Slack.BotToken, cfg.Slack.BotUserID)
 	}
+	service, err := newWithStores(ctx, cfg, stores, slackClient)
+	if err != nil {
+		stores.Close()
+	}
+	return service, err
+}
+
+// newWithStores composes the same ingress for production and isolated tests;
+// only I/O clients are substituted, never approval or input-admission policy.
+func newWithStores(ctx context.Context, cfg config.Config, stores *platform.EventIngressStores, slackClient *slack.Client) (*Service, error) {
+	s := &Service{cfg: cfg, stores: stores}
 	connStore := connections.PGStore{Pool: stores.PGPool, SecretKey: cfg.Connections.EncryptionKey}
 	connService := connections.NewServiceFromConfig(connStore, cfg)
 	connService.OAuthCompleted = connections.RedisOAuthCompletionNotifier{Redis: stores.Redis}
+	access := safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels)
+	var spaces *taskspace.Service
+	if cfg.Slack.CodeChannelsEnabled {
+		var err error
+		spaces, err = taskspace.NewService(ctx, stores.PGPool, slackClient, access)
+		if err != nil {
+			return nil, err
+		}
+	}
 	s.home = slackhome.Controller{
 		Memory:      memory.PGStore{Pool: stores.PGPool},
 		Cfg:         cfg,
-		Access:      safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
+		Access:      access,
 		Slack:       slackClient,
 		Store:       stores.UserPrefs,
 		Redis:       stores.Redis,
@@ -85,8 +105,9 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 	s.connections = connService
 	handler := &slackhandler.Handler{
+		Spaces:    spaces,
 		Approvals: agentruntime.ApprovalAuthority{Transcript: hosted.PGTranscript{Pool: stores.PGPool}},
-		Access:    safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels),
+		Access:    access,
 		Cfg:       cfg,
 		Slack:     slackClient,
 		Home:      s.home,
