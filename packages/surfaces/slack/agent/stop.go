@@ -108,7 +108,16 @@ func (s *Service) handleStopSignal(ctx context.Context, sessionID string) {
 	}
 }
 
-func (s *Service) pollSessionStops(ctx context.Context) {
+// Stop notifications are hints backed by durable commands. Saturation may drop
+// a hint, never the command; the next active-session poll retries the wake-up.
+func wakeStop(hints chan<- string, sessionID string) {
+	select {
+	case hints <- sessionID:
+	default:
+	}
+}
+
+func (s *Service) pollSessionStops(hints chan<- string) {
 	s.mu.Lock()
 	sessions := make([]string, 0, len(s.active))
 	for sessionID := range s.active {
@@ -116,7 +125,7 @@ func (s *Service) pollSessionStops(ctx context.Context) {
 	}
 	s.mu.Unlock()
 	for _, sessionID := range sessions {
-		go s.handleStopSignal(ctx, sessionID)
+		wakeStop(hints, sessionID)
 	}
 }
 

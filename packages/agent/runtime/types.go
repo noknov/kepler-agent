@@ -272,7 +272,10 @@ type TurnRequest struct {
 	PrepareContext func(context.Context, tool.Scope) (PreparedContext, error) `json:"-"`
 	SessionID      string
 	TurnID         string
-	Input          model.Message
+	// ResumeFromTurnID admits a new turn only while that exact previous turn
+	// remains pending input for this actor. The check runs under session ownership.
+	ResumeFromTurnID string
+	Input            model.Message
 	// History is an optional, bounded transport import used only when the
 	// canonical session has no prior events. It is recorded as ordinary
 	// untrusted conversation messages before the current turn.

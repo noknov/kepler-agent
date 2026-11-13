@@ -7,7 +7,6 @@ import (
 	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
 	"github.com/noknov/kepler-agent/packages/agent/tool"
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
-	"github.com/noknov/kepler-agent/packages/connections"
 	"github.com/noknov/kepler-agent/packages/profiles/hosted"
 	"github.com/noknov/kepler-agent/packages/safety"
 	"github.com/noknov/kepler-agent/packages/session"
@@ -34,11 +33,21 @@ func TestOAuthResumeRetainsAuthenticatedWorkspaceAndConversationType(t *testing.
 			}
 			service := New(hosted.Agent{Runtime: runner}, &fakeMessenger{}, safety.PromptPolicy{}, safety.Redactor{}, nil)
 			service.Inputs = &memoryInputs{}
-			service.resumeAfterConnection(t.Context(), connections.Continuation{UserID: "requester", Provider: "github", SessionID: sessionID, Channel: "C1", ThreadTS: "thread"})
+			service.resumeAfterConnection(t.Context(), ConnectionContinuation{UserID: "requester", Provider: "github", SessionID: sessionID, TurnID: "original", TeamID: "T-origin", ConversationType: kind, Channel: "C1", ThreadTS: "thread"})
 			service.startPending(t.Context(), sessionID)
-			state, ok, err := runner.LatestSessionState(t.Context(), sessionID)
-			if err != nil || !ok || state.TurnID == "original" || state.UserID != "requester" || state.Scope["team_id"] != "T-origin" || state.Scope["conversation_type"] != kind {
-				t.Fatalf("OAuth resume lost origin: %+v ok=%v err=%v", state, ok, err)
+			events, err := runner.LatestTurnEvents(t.Context(), sessionID)
+			if err != nil || len(events) < 2 || events[0].TurnID == "original" {
+				t.Fatalf("OAuth did not execute a new turn: %+v %v", events, err)
+			}
+			var started struct {
+				UserID string            `json:"user_id"`
+				Scope  map[string]string `json:"scope"`
+			}
+			if err := json.Unmarshal(events[0].Metadata, &started); err != nil {
+				t.Fatal(err)
+			}
+			if started.UserID != "requester" || started.Scope["team_id"] != "T-origin" || started.Scope["conversation_type"] != kind {
+				t.Fatalf("OAuth resume lost origin: %+v", started)
 			}
 		})
 	}

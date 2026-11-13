@@ -2,7 +2,10 @@ package slackagent
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/session"
@@ -15,6 +18,9 @@ import (
 // dispatcher and recovery poll consume the same durable input, including after
 // a process exits between acceptance and its local wake-up.
 func (s *Service) HandleMention(ctx context.Context, req conversation.Request) (bool, error) {
+	if req.EventID == "" || req.UserID == "" || req.Channel == "" {
+		return false, fmt.Errorf("input requires an event, authenticated user and channel")
+	}
 	if s.Messenger == nil || s.Agent.Runtime == nil {
 		return false, nil
 	}
@@ -146,5 +152,86 @@ func (s *Service) WaitIdle(ctx context.Context) bool {
 		return true
 	case <-ctx.Done():
 		return false
+	}
+}
+
+func (s *Service) controlActive(ctx context.Context, sessionID string, req conversation.Request) (bool, error) {
+	s.mu.Lock()
+	active := s.active[sessionID]
+	s.mu.Unlock()
+	if active != nil && active.userID != req.UserID {
+		err := s.persistInput(ctx, sessionID, sessioninput.KindQueue, req)
+		return err == nil, err
+	}
+	if active != nil {
+		if s.mode(req.UserID) == ModeQueue || req.Approval != nil || req.ResumeFromTurnID != "" {
+			if err := s.persistInput(ctx, sessionID, sessioninput.KindQueue, req); err != nil {
+				return false, err
+			}
+		} else {
+			if err := active.steering.Push(ctx, req); err != nil {
+				return false, err
+			}
+		}
+		return true, nil
+	}
+	if s.Redis == nil || strings.TrimSpace(req.ThreadTS) == "" {
+		return false, nil
+	}
+	owner, err := s.Redis.Get(ctx, "agent:active:"+sessionID)
+	if err != nil || owner == "" || owner == s.PodID {
+		// Redis is only a routing hint. If it is unavailable or the hint has
+		// expired, the durable inbox and PG session lock still serialize this
+		// request as a later turn.
+		return false, nil
+	}
+	kind := sessioninput.KindSteering
+	if s.mode(req.UserID) == ModeQueue || req.Approval != nil || req.ResumeFromTurnID != "" {
+		kind = sessioninput.KindQueue
+	}
+	if err := s.persistInput(ctx, sessionID, kind, req); err != nil {
+		return false, err
+	}
+	// Pub/Sub is only a latency hint. The request is accepted because it was
+	// durably enqueued, never because a subscriber happened to be present.
+	_, _ = s.Redis.PublishCount(ctx, "agent:control:"+owner, sessionID)
+	return true, nil
+}
+
+func (s *Service) persistInput(ctx context.Context, sessionID string, kind sessioninput.Kind, request conversation.Request) error {
+	if s.Inputs == nil {
+		return fmt.Errorf("durable session input store is unavailable")
+	}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return err
+	}
+	return s.Inputs.Enqueue(ctx, sessioninput.Item{ID: request.EventID, SessionID: sessionID, Kind: kind, Payload: payload})
+}
+
+func (s *Service) startPending(ctx context.Context, sessionID string) {
+	if err := s.consumeStops(ctx, sessionID); err != nil {
+		log.Printf("slack stop command failed session=%s: %v", sessionID, err)
+		return
+	}
+	s.mu.Lock()
+	active := s.active[sessionID]
+	s.mu.Unlock()
+	if active != nil {
+		return
+	}
+	request, err := s.claimNextQueue(ctx, sessionID)
+	if request == nil {
+		if err != nil {
+			log.Printf("slack input claim failed session=%s: %v", sessionID, err)
+		}
+		return
+	}
+	if err != nil {
+		s.failInput(ctx, sessionID, request.Request, err)
+		return
+	}
+	if err := s.run(ctx, sessionID, *request); err != nil {
+		s.failInput(ctx, sessionID, request.Request, err)
 	}
 }

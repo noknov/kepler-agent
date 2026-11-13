@@ -1,16 +1,18 @@
 package runtime
 
-import "context"
+import (
+	"context"
+
+	"github.com/noknov/kepler-agent/packages/agent/tool"
+)
 
 // ConnectionContinuation is a transport-neutral request to resume a session
 // after an external credential has been granted.
 type ConnectionContinuation struct {
-	UserID     string
 	Provider   string
 	InstanceID string
-	SessionID  string
-	Channel    string
-	ThreadTS   string
+	TurnID     string
+	Scope      tool.Scope
 }
 
 // ConnectionContinuationStore is implemented by product adapters. The shared

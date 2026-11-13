@@ -85,7 +85,7 @@ type ConnectionChangedHandler func(ctx context.Context, userID, provider string)
 type Service struct {
 	Store               Store
 	Config              Config
-	Continuations       ContinuationStore
+	OAuthCompleted      OAuthCompletionNotifier
 	OnConnectionChanged ConnectionChangedHandler
 	state               *serviceState
 }

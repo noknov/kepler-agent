@@ -228,6 +228,7 @@ func (r *Runtime) executeTools(ctx context.Context, request TurnRequest, calls [
 
 func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, prepared []preparedCall) (*model.Message, error) {
 	var pending *model.Message
+	var continuationErr error
 	for index := range prepared {
 		entry := &prepared[index]
 		if entry.result == nil {
@@ -263,20 +264,21 @@ func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, pr
 		}); err != nil {
 			return nil, err
 		}
-		if entry.result.ErrorCode == "connection_required" && r.deps.ConnectionContinuations != nil && !entry.reused {
+		if entry.result.ErrorCode == "connection_required" && r.deps.ConnectionContinuations != nil {
 			provider, _ := entry.result.Metadata["provider"].(string)
 			instanceID, _ := entry.result.Metadata["instance_id"].(string)
-			channel := entry.call.Scope.Values["channel"]
-			threadTS := entry.call.Scope.Values["thread_ts"]
-			if provider != "" && entry.call.Scope.UserID != "" && channel != "" {
-				_ = r.deps.ConnectionContinuations.Save(ctx, ConnectionContinuation{
-					UserID:     entry.call.Scope.UserID,
+			if provider != "" && entry.call.Scope.UserID != "" {
+				err := r.deps.ConnectionContinuations.Save(ctx, ConnectionContinuation{
 					Provider:   provider,
 					InstanceID: instanceID,
-					SessionID:  entry.call.Scope.SessionID,
-					Channel:    channel,
-					ThreadTS:   threadTS,
+					TurnID:     request.TurnID,
+					Scope:      entry.call.Scope,
 				})
+				if err != nil {
+					// Complete the tool batch before reporting the failed handoff;
+					// recovery must never see orphaned sibling function calls.
+					continuationErr = errors.Join(continuationErr, fmt.Errorf("save connection continuation: %w", err))
+				}
 			}
 		}
 		if pending == nil && entry.result.NeedsUserInput && len(entry.result.Content) > 0 {
@@ -284,7 +286,7 @@ func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, pr
 			pending = &message
 		}
 	}
-	return pending, nil
+	return pending, continuationErr
 }
 
 func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entry *preparedCall) {

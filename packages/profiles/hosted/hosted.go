@@ -48,6 +48,7 @@ type Agent struct {
 }
 type Request struct {
 	SessionID, TurnID, UserID, Workspace string
+	ResumeFromTurnID                     string
 	Input                                model.Message
 	History                              []model.Message
 	HistoryLoader                        func(context.Context) ([]model.Message, error)
@@ -97,5 +98,20 @@ func (a Agent) Run(ctx context.Context, request Request) (agentruntime.TurnResul
 		}
 	}
 
-	return a.Runtime.RunTurn(ctx, agentruntime.TurnRequest{PrepareContext: prepare, SessionID: request.SessionID, TurnID: request.TurnID, Input: request.Input, History: request.History, HistoryLoader: request.HistoryLoader, Prompt: fragments, Scope: tool.Scope{SessionID: request.SessionID, TurnID: request.TurnID, UserID: request.UserID, Workspace: request.Workspace, Values: request.ScopeValues}, Steering: request.Steering, Model: request.Model})
+	return a.Runtime.RunTurn(ctx, agentruntime.TurnRequest{
+		SessionID:        request.SessionID,
+		TurnID:           request.TurnID,
+		ResumeFromTurnID: request.ResumeFromTurnID,
+		Input:            request.Input,
+		History:          request.History,
+		HistoryLoader:    request.HistoryLoader,
+		PrepareContext:   prepare,
+		Prompt:           fragments,
+		Scope: tool.Scope{
+			SessionID: request.SessionID, TurnID: request.TurnID,
+			UserID: request.UserID, Workspace: request.Workspace, Values: request.ScopeValues,
+		},
+		Steering: request.Steering,
+		Model:    request.Model,
+	})
 }

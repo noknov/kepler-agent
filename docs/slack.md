@@ -226,3 +226,30 @@ evidence rather than continuously crawling the workspace.
 
 References: [RTS usage and eligibility](https://docs.slack.dev/apis/web-api/real-time-search-api/),
 [API contract and limits](https://docs.slack.dev/reference/methods/assistant.search.context/).
+
+## Credential completion and resumption
+
+Provider connections publish credential changes without storing Slack waiting
+threads. The Slack adapter owns waiting continuations, including the authenticated
+workspace, conversation type, actor, exact waiting turn and integration instance.
+Redis claim tokens and payload snapshots fence cleanup: an old worker cannot
+release a newer claim or clear a replacement continuation.
+
+A completion notification admits a durable conditional input through the same
+admission and dispatcher as a user request. Its deterministic event ID deduplicates
+notifications. It never becomes steering for another active turn. OAuth may finish
+before the original turn ends: the conditional input waits for session ownership,
+then the runtime checks the waiting outcome. A superseded input is acknowledged
+without a model call or a failure reply. Notifications and Stop processing use
+bounded workers whose lifetime follows the service context.
+
+Continuations saved before this contract have no exact waiting-turn/workspace
+identity and are not automatically resumed. Credentials remain valid; an explicit
+mention (or a DM message) continues the conversation. No SQL migration is needed;
+the temporary Redis payload gains identity fields and retains its existing TTL.
+
+For this input-protocol upgrade, quiesce and drain all old workers before
+starting new workers. An old binary does not enforce `resume_from_turn_id` or
+claim-scoped continuation cleanup. Drain conditional inputs before rollback;
+do not mix old and new consumers against the same input queue. Gateways may
+continue accepting signed Slack events while worker execution is drained.

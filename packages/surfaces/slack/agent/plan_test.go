@@ -182,7 +182,7 @@ func TestPlanDrainPreservesDeliveryPersistenceBudget(t *testing.T) {
 					return nil
 				}
 				req := slackconversation.Request{EventID: "turn", UserID: "U", Channel: "C", ThreadTS: "T", Text: "question", ClaimID: "input"}
-				if err := service.run(context.Background(), "session", req); err != nil {
+				if err := service.run(context.Background(), "session", claimedInput{Request: req}); err != nil {
 					t.Fatal(err)
 				}
 				if !linked || !inputs.acknowledged {

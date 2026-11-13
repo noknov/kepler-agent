@@ -93,6 +93,11 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 	if replayed, replayErr, ok := completedTurn(events, request.TurnID); ok {
 		return replayed, replayErr
 	}
+	if request.ResumeFromTurnID != "" && !hasTurnEvent(events, request.TurnID, transcript.TurnStarted) {
+		if err := r.checkResumePrecondition(ctx, request); err != nil {
+			return result, err
+		}
+	}
 	for _, event := range events {
 		if err := r.captureUnknownEffect(ctx, event); err != nil {
 			return TurnResult{SessionID: request.SessionID, TurnID: request.TurnID}, err
@@ -170,6 +175,9 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 			modelName = r.config.Model
 		}
 		turnMetadata := map[string]any{"user_id": request.Scope.UserID, "workspace": request.Scope.Workspace, "scope": request.Scope.Values, "model": modelName}
+		if request.ResumeFromTurnID != "" {
+			turnMetadata["resume_from_turn_id"] = request.ResumeFromTurnID
+		}
 		// Persist the W3C trace identity with the durable turn boundary. Event
 		// projections can then link a recovered run back to the distributed trace
 		// without depending on an in-memory span or a particular telemetry vendor.

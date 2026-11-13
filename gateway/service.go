@@ -69,9 +69,8 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		slackClient = slack.NewClient(cfg.Slack.BotToken, cfg.Slack.BotUserID)
 	}
 	connStore := connections.PGStore{Pool: stores.PGPool, SecretKey: cfg.Connections.EncryptionKey}
-	continuations := connections.NewRedisContinuationStore(stores.Redis)
 	connService := connections.NewServiceFromConfig(connStore, cfg)
-	connService.Continuations = continuations
+	connService.OAuthCompleted = connections.RedisOAuthCompletionNotifier{Redis: stores.Redis}
 	s.home = slackhome.Controller{
 		Memory:      memory.PGStore{Pool: stores.PGPool},
 		Cfg:         cfg,

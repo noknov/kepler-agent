@@ -10,6 +10,7 @@ import (
 
 	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
 	conversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
+	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
 
 type replyDelivery struct {
@@ -137,4 +138,15 @@ func (d *replyDelivery) persistenceError() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.err
+}
+
+func (s *Service) persistDelivery(ctx context.Context, turnID string, req slackconversation.Request, messageTS string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+	defer cancel()
+	if s.OnDelivered != nil && messageTS != "" {
+		if err := s.OnDelivered(ctx, turnID, req.Channel, messageTS); err != nil {
+			return err
+		}
+	}
+	return s.ackClaim(ctx, req.ClaimID)
 }

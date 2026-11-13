@@ -140,9 +140,9 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	events := transcript.NewFanout(runEvents)
 	workspacePolicy := safety.WorkspacePolicy{Roots: cfg.Security.WorkspaceRoots}
 	connStore := connections.PGStore{Pool: stores.PGPool, SecretKey: cfg.Connections.EncryptionKey}
-	continuations := connections.NewRedisContinuationStore(stores.Redis)
 	connService := connections.NewServiceFromConfig(connStore, cfg)
-	connService.Continuations = continuations
+	connService.OAuthCompleted = connections.RedisOAuthCompletionNotifier{Redis: stores.Redis}
+	continuations := slackagent.NewRedisContinuationStore(stores.Redis)
 	surface := hostedTools.SurfaceOptions{Name: "slack", AvailableDeps: map[string]bool{
 		"slack": slackClient != nil,
 	}, Connections: &connService}
@@ -157,7 +157,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	profile, profileErr := hosted.NewProfile(cfg, hosted.ProfileDependencies{
 		ModelGovernor: modelGovernor,
 		Tools:         catalog, Postgres: stores.PGPool, Redis: stores.Redis, ToolSpills: stores.Runs, Events: events, Metrics: recorder, Lease: stores.Sessions,
-		ConnectionContinuations: connections.RuntimeContinuationStore{Store: continuations},
+		ConnectionContinuations: slackagent.RuntimeConnectionContinuationStore{Store: continuations},
 	})
 	if profileErr != nil {
 		return nil, fmt.Errorf("build hosted profile: %w", profileErr)
@@ -193,7 +193,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 	conversation.Deliveries = slackagent.PGDeliveryStore{Pool: stores.PGPool}
 	conversation.OnDelivered = runSink.LinkSlackMessage
-	conversation.Redis, conversation.PodID, conversation.Lifecycle = stores.Redis, podID, serviceCtx
+	conversation.Redis, conversation.PodID = stores.Redis, podID
 	conversation.RunTimeout = cfg.Tools.AgentTurnTimeout
 	conversation.MaxConcurrentRuns = cfg.HTTP.EventWorkers
 	conversation.Tools = profile.Tools
