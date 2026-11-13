@@ -87,6 +87,11 @@ func (s Sandbox) Run(ctx context.Context, request CommandRequest) (CommandResult
 				args = append(args, bindParentArgs(root, target)...)
 			}
 		}
+		// Broad read grants must precede owned writable mounts. Credential
+		// masks come last so no later ancestor bind can expose them again.
+		for _, root := range readRoots {
+			args = append(args, "--ro-bind", root, root)
+		}
 		args = append(args, "--bind", s.Workspace.Root, s.Workspace.Root, "--bind", s.Workspace.Temp, s.Workspace.Temp)
 		for _, hidden := range sensitive {
 			info, statErr := os.Stat(hidden)
@@ -98,9 +103,6 @@ func (s Sandbox) Run(ctx context.Context, request CommandRequest) (CommandResult
 			} else {
 				args = append(args, "--ro-bind", "/dev/null", hidden)
 			}
-		}
-		for _, root := range readRoots {
-			args = append(args, "--ro-bind", root, root)
 		}
 		args = append(args, "--chdir", workdir, "--proc", "/proc", "--dev", "/dev")
 		if !request.Network {
