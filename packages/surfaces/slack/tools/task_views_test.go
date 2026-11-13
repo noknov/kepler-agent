@@ -85,3 +85,7 @@ func TestTaskViewToolsUseAuthenticatedNativeTargetAndRetainEffects(t *testing.T)
 		})
 	}
 }
+
+func (taskViewGrant) List(context.Context, string, string, int) ([]taskspace.Space, error) {
+	return nil, nil
+}
