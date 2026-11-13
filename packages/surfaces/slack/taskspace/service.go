@@ -116,3 +116,22 @@ func (s Service) Current(ctx context.Context, scope tool.Scope) (string, error) 
 	}
 	return target.Channel, nil
 }
+
+// ListOwned is a navigation projection, not authorization to execute a task.
+// Retained grants cannot expose another user's spaces or revoked origins.
+func (s Service) ListOwned(ctx context.Context, team, user string) ([]Space, error) {
+	if team == "" || user == "" || !s.Access.AllowsUser(user) || s.Store == nil {
+		return nil, nil
+	}
+	spaces, err := s.Store.List(ctx, team, user, 20)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]Space, 0, len(spaces))
+	for _, space := range spaces {
+		if space.TeamID == team && space.OwnerID == user && s.allowedOrigin(user, space.OriginChannel) {
+			result = append(result, space)
+		}
+	}
+	return result, nil
+}

@@ -60,6 +60,15 @@ not access granted in the provider's own account settings. Entries marked
 `server credentials` are deployment configuration and have no personal Remove
 action.
 
+## Personal task-space navigation
+
+App Home lists the current user's recent task spaces for the authenticated bot
+installation. The list reads existing immutable grants and rechecks the current
+user/origin policy; it contains links, not conversation content or execution
+authority. Archived spaces may remain visible because their history is retained.
+Opening a link does not start a task. No per-channel metadata polling, new task
+database or autonomous scheduler is involved.
+
 ## Native task channels
 
 Native Slack Code Channels are optional. Apply deployment migration 021 before

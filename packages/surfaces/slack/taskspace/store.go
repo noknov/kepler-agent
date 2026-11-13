@@ -24,6 +24,7 @@ type Space struct {
 type Store interface {
 	Get(context.Context, string, string) (Space, error)
 	Save(context.Context, Space) error
+	List(context.Context, string, string, int) ([]Space, error)
 }
 
 type PGStore struct{ Pool *pgxpool.Pool }
@@ -62,4 +63,26 @@ func (s PGStore) CheckSchema(ctx context.Context) error {
 		return fmt.Errorf("native Slack task spaces require deployment migration 021: %w", err)
 	}
 	return nil
+}
+
+// List returns a bounded owner/workspace index, without conversation content.
+// The existing unique origin index starts with (team_id, owner_id).
+func (s PGStore) List(ctx context.Context, team, user string, limit int) ([]Space, error) {
+	if team == "" || user == "" || limit < 1 || limit > 20 {
+		return nil, fmt.Errorf("task-space listing requires workspace, owner and a limit of one to twenty")
+	}
+	rows, err := s.Pool.Query(ctx, `SELECT team_id,channel_id,owner_id,origin_channel_id,origin_message_ts FROM slack_task_spaces WHERE team_id=$1 AND owner_id=$2 ORDER BY created_at DESC,channel_id LIMIT $3`, team, user, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var spaces []Space
+	for rows.Next() {
+		var space Space
+		if err := rows.Scan(&space.TeamID, &space.Channel, &space.OwnerID, &space.OriginChannel, &space.OriginMessageTS); err != nil {
+			return nil, err
+		}
+		spaces = append(spaces, space)
+	}
+	return spaces, rows.Err()
 }
