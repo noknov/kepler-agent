@@ -15,6 +15,10 @@ import (
 )
 
 type Client interface {
+	ListCodeViews(context.Context, string) ([]slack.CodeViewInfo, error)
+	GetCodeCanvas(context.Context, string, string, bool) (slack.CodeCanvas, error)
+	SetCodeCanvasContent(context.Context, string, string, string) error
+	RemoveCodeView(context.Context, string, string) error
 	CodeChannelInfo(context.Context, string) (slack.CodeChannelInfo, error)
 	CreateCodeChannel(context.Context, slack.CodeChannelCreate) (string, error)
 	SetCodeContext(context.Context, string, []slack.CodeContextItem) error
