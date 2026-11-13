@@ -12,6 +12,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
@@ -505,7 +506,8 @@ func toModelError(err error) error {
 	if errors.As(err, &typed) {
 		return err
 	}
-	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE) {
 		return &model.Error{Kind: model.ErrorTransient, Message: err.Error(), Retryable: true, Cause: err}
 	}
 	var emptyErr llm.EmptyResponseError
