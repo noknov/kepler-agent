@@ -21,10 +21,12 @@ import (
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/gateway"
 	"github.com/noknov/kepler-agent/packages/surfaces/slack/home"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/taskspace"
 	"github.com/noknov/kepler-agent/packages/userprefs"
 )
 
 type Handler struct {
+	Spaces         *taskspace.Service
 	Approvals      ApprovalAuthority
 	Cfg            config.Config
 	Slack          *slack.Client
@@ -55,18 +57,18 @@ func (h *Handler) Handle(ctx context.Context, eventID string, ev slack.Event) (e
 	case "app_mention", "message":
 		return h.handlePrompt(ctx, eventID, ev)
 	case "agent_session_stopped":
-		allowed := h.Access.IsAllowed(ev.User, ev.Channel)
-		if IsAppDM(ev) {
-			allowed = h.Access.AllowsUser(ev.User)
+		target, allowed, err := h.eventTarget(ctx, ev)
+		if err != nil {
+			return err
 		}
-		if ev.User == "" || ev.Channel == "" || ev.ThreadTS == "" || !allowed {
+		if !allowed {
 			return nil
 		}
 		stopper, ok := h.Conv.(slackconversation.SessionStopper)
 		if !ok {
 			return fmt.Errorf("conversation does not support stopping sessions")
 		}
-		return stopper.StopSession(ctx, slackconversation.StopRequest{EventID: eventID, UserID: ev.User, Channel: ev.Channel, ThreadTS: ev.ThreadTS, EventTS: ev.EventTS})
+		return stopper.StopSession(ctx, slackconversation.StopRequest{EventID: eventID, UserID: ev.User, Channel: target.Channel, ThreadTS: target.ThreadTS, SessionKind: target.Kind, EventTS: ev.EventTS})
 	case "reaction_added":
 		if ev.Item.Type == "message" {
 			if h.Metrics != nil {
@@ -527,9 +529,9 @@ func (h *Handler) handlePrompt(ctx context.Context, eventID string, ev slack.Eve
 	if (ev.Type == "message" && !isDM) || (ev.Type == "app_mention" && isDM) {
 		return nil
 	}
-	allowed := h.Access.IsAllowed(ev.User, ev.Channel)
-	if isDM {
-		allowed = h.Access.AllowsUser(ev.User)
+	target, allowed, err := h.eventTarget(ctx, ev)
+	if err != nil {
+		return err
 	}
 	if !allowed {
 		if h.Metrics != nil {
@@ -558,7 +560,8 @@ func (h *Handler) handlePrompt(ctx context.Context, eventID string, ev slack.Eve
 		EventID:          eventID,
 		UserID:           ev.User,
 		Channel:          ev.Channel,
-		ThreadTS:         ev.ConversationThreadTS(),
+		ThreadTS:         target.ThreadTS,
+		SessionKind:      target.Kind,
 		MessageTS:        ev.TS,
 		Text:             text,
 		Locale:           h.Cfg.Slack.DefaultLocale,

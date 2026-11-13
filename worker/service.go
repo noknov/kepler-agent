@@ -35,6 +35,7 @@ import (
 	slackhandler "github.com/noknov/kepler-agent/packages/surfaces/slack/handler"
 	slackhome "github.com/noknov/kepler-agent/packages/surfaces/slack/home"
 	slackmessaging "github.com/noknov/kepler-agent/packages/surfaces/slack/messaging"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/taskspace"
 	slackTools "github.com/noknov/kepler-agent/packages/surfaces/slack/tools"
 	"github.com/noknov/kepler-agent/packages/toolkit/gitcache"
 	hostedTools "github.com/noknov/kepler-agent/packages/tools/hosted"
@@ -151,6 +152,19 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 		return nil, fmt.Errorf("build hosted tool catalog: %w", err)
 	}
 	catalog := bundle.Catalog
+	access := safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels)
+	var spaces *taskspace.Service
+	if cfg.Slack.CodeChannelsEnabled {
+		spaceStore := taskspace.PGStore{Pool: stores.PGPool}
+		if err := spaceStore.CheckSchema(ctx); err != nil {
+			return nil, err
+		}
+		spaces = &taskspace.Service{Store: spaceStore, Slack: slackClient, Access: access, BotUserID: cfg.Slack.BotUserID}
+		if err := slackTools.AddTaskSpaceTools(catalog, hostedTools.PolicyForSurface(cfg, surface), spaces); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := slackTools.AddToCatalog(catalog, hostedTools.PolicyForSurface(cfg, surface), cfg, slackClient, &connService); err != nil {
 		return nil, fmt.Errorf("register Slack tools: %w", err)
 	}
@@ -213,8 +227,8 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	conv := slackconversation.ControlledConversation(conversation)
 	log.Printf("worker agent runtime: shared")
 
-	access := safety.NewAccessPolicy(cfg.Security.AllowedUsers, cfg.Security.AllowedChannels)
 	handler := &slackhandler.Handler{
+		Spaces:    spaces,
 		Approvals: agentruntime.ApprovalAuthority{Transcript: hosted.PGTranscript{Pool: stores.PGPool}},
 		Cfg:       cfg,
 		Slack:     slackClient,
@@ -234,6 +248,7 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 			Connections: connService,
 		},
 	}
+	conversation.AuthorizeInput = handler.AuthorizeInput
 	conversation.WebSearchEnabled = handler.WebSearchPreference
 	conversation.ModeForUser = func(userID string) slackagent.ConversationMode {
 		return slackagent.ConversationMode(handler.Home.ConversationMode(userID))

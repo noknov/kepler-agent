@@ -12,6 +12,7 @@ import (
 	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
 	"github.com/noknov/kepler-agent/packages/connections"
 	"github.com/noknov/kepler-agent/packages/infra/redisclient"
+	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -22,15 +23,16 @@ const (
 
 // ConnectionContinuation captures a Slack thread that paused for OAuth.
 type ConnectionContinuation struct {
-	UserID           string `json:"user_id"`
-	Provider         string `json:"provider"`
-	InstanceID       string `json:"instance_id,omitempty"`
-	SessionID        string `json:"session_id"`
-	TurnID           string `json:"turn_id,omitempty"`
-	TeamID           string `json:"team_id,omitempty"`
-	ConversationType string `json:"conversation_type,omitempty"`
-	Channel          string `json:"channel"`
-	ThreadTS         string `json:"thread_ts"`
+	SessionKind      slackconversation.SessionKind `json:"session_kind,omitempty"`
+	UserID           string                        `json:"user_id"`
+	Provider         string                        `json:"provider"`
+	InstanceID       string                        `json:"instance_id,omitempty"`
+	SessionID        string                        `json:"session_id"`
+	TurnID           string                        `json:"turn_id,omitempty"`
+	TeamID           string                        `json:"team_id,omitempty"`
+	ConversationType string                        `json:"conversation_type,omitempty"`
+	Channel          string                        `json:"channel"`
+	ThreadTS         string                        `json:"thread_ts"`
 
 	claimOwner string
 	snapshot   string
@@ -58,7 +60,7 @@ func (s RuntimeConnectionContinuationStore) Save(ctx context.Context, continuati
 	}
 	return s.Store.Save(ctx, ConnectionContinuation{
 		UserID: continuation.Scope.UserID, Provider: continuation.Provider, InstanceID: continuation.InstanceID, SessionID: continuation.Scope.SessionID,
-		TurnID: continuation.TurnID,
+		TurnID: continuation.TurnID, SessionKind: slackconversation.SessionKind(continuation.Scope.Values["session_kind"]),
 		TeamID: continuation.Scope.Values["team_id"], ConversationType: continuation.Scope.Values["conversation_type"],
 		Channel: continuation.Scope.Values["channel"], ThreadTS: continuation.Scope.Values["thread_ts"],
 	})

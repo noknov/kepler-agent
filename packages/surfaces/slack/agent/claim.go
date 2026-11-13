@@ -74,7 +74,7 @@ func (s *Service) claimNextQueue(ctx context.Context, sessionID string) (*claime
 	if decodeErr != nil {
 		return claimed, fmt.Errorf("decode queued input: %w", decodeErr)
 	}
-	if request.EventID != items[0].ID || request.UserID == "" {
+	if request.EventID != items[0].ID || request.UserID == "" || request.Target().Validate() != nil || request.Target().SessionID() != sessionID {
 		return claimed, fmt.Errorf("queued input identity does not match its receipt")
 	}
 	return claimed, nil

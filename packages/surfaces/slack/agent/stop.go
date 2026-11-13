@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/agent/transcript"
-	"github.com/noknov/kepler-agent/packages/session"
 	"github.com/noknov/kepler-agent/packages/sessioninput"
 	conversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 	"github.com/redis/go-redis/v9"
@@ -27,14 +26,14 @@ type stopCommand struct {
 const sessionStopChannel = "agent:stop"
 
 func (s *Service) StopSession(ctx context.Context, req conversation.StopRequest) error {
-	if req.EventID == "" || req.Channel == "" || req.ThreadTS == "" || s.Inputs == nil {
-		return fmt.Errorf("stop requires an event, thread and durable input store")
+	if req.EventID == "" || req.Target().Validate() != nil || s.Inputs == nil {
+		return fmt.Errorf("stop requires an event, valid session and durable input store")
 	}
 	clickedAt, err := parseSlackEventTime(req.EventTS)
 	if err != nil {
 		return fmt.Errorf("stop requires a valid Slack event timestamp")
 	}
-	sessionID := session.ID(req.Channel, req.ThreadTS)
+	sessionID := req.Target().SessionID()
 	s.mu.Lock()
 	active := s.active[sessionID]
 	s.mu.Unlock()

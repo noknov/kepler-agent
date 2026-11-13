@@ -49,6 +49,17 @@ func (s *Service) run(eventCtx context.Context, sessionID string, claimed claime
 	}()
 
 	defer s.keepInputClaim(runCtx, sessionID, req.ClaimID, cancel)()
+	if s.AuthorizeInput != nil {
+		allowed, err := s.AuthorizeInput(runCtx, req)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(runCtx), 5*time.Second)
+			defer cancel()
+			return s.ackClaim(cleanup, req.ClaimID)
+		}
+	}
 	if s.BeforeRun != nil {
 		if err := s.BeforeRun(runCtx, req.UserID); err != nil {
 			cancel()
@@ -151,6 +162,7 @@ func (s *Service) run(eventCtx context.Context, sessionID string, claimed claime
 	}
 	scopeValues := map[string]string{"surface": "slack", "team_id": req.TeamID, "channel": req.Channel, "thread_ts": req.ThreadTS, "message_ts": req.MessageTS, "web_search": webSearch}
 	scopeValues["conversation_type"] = req.ConversationType
+	scopeValues["session_kind"] = string(req.SessionKind)
 	result, err := s.Agent.Run(runCtx, hosted.Request{
 		SessionID: sessionID, TurnID: turnID, ResumeFromTurnID: req.ResumeFromTurnID,
 		UserID: req.UserID, Workspace: s.Workspace,

@@ -345,3 +345,15 @@ ALTER TABLE agent_session_inputs ADD COLUMN IF NOT EXISTS available_at TIMESTAMP
 ALTER TABLE agent_session_inputs ADD COLUMN IF NOT EXISTS last_error TEXT NOT NULL DEFAULT '';
 ALTER TABLE agent_session_inputs ADD COLUMN IF NOT EXISTS dead_lettered_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS agent_input_retry_idx ON agent_session_inputs(available_at,sequence) WHERE acknowledged_at IS NULL AND dead_lettered_at IS NULL;
+
+-- Native Slack channel grants are owner/origin-bound and contain no transcript.
+CREATE TABLE IF NOT EXISTS slack_task_spaces (
+ team_id TEXT NOT NULL,
+ channel_id TEXT NOT NULL,
+ owner_id TEXT NOT NULL,
+ origin_channel_id TEXT NOT NULL,
+ origin_message_ts TEXT NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ PRIMARY KEY(team_id, channel_id),
+ UNIQUE(team_id, owner_id, origin_channel_id, origin_message_ts)
+);

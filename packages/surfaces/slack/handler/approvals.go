@@ -8,7 +8,6 @@ import (
 
 	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
 	"github.com/noknov/kepler-agent/packages/agent/tool"
-	"github.com/noknov/kepler-agent/packages/session"
 	"github.com/noknov/kepler-agent/packages/sessioninput"
 	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 	slackgateway "github.com/noknov/kepler-agent/packages/surfaces/slack/gateway"
@@ -49,14 +48,24 @@ func (h *Handler) resolveApproval(ctx context.Context, interaction slackgateway.
 		return
 	}
 	channel, thread := scope.Values["channel"], scope.Values["thread_ts"]
-	if channel == "" || thread == "" || session.ID(channel, thread) != sessionID || (!IsDMChannel(channel) && !h.Access.AllowsChannel(channel)) {
+	target := slackconversation.Target{Kind: slackconversation.SessionKind(scope.Values["session_kind"]), Channel: channel, ThreadTS: thread}
+	if target.Validate() != nil || target.SessionID() != sessionID || interaction.Channel != channel {
 		return
 	}
-	if interaction.Channel != channel || interaction.ThreadTS != thread {
+	if target.Kind == slackconversation.CodeChannelSession {
+		if h.Spaces == nil {
+			return
+		}
+		_, allowed, err := h.Spaces.Resolve(ctx, interaction.TeamID, interaction.UserID, channel)
+		if err != nil || !allowed {
+			return
+		}
+	} else if interaction.ThreadTS != thread || (!IsDMChannel(channel) && !h.Access.AllowsChannel(channel)) {
 		return
 	}
 	request := slackconversation.Request{
 		TeamID:           interaction.TeamID,
+		SessionKind:      target.Kind,
 		ConversationType: scope.Values["conversation_type"],
 		EventID:          "approval-" + token.TurnID + "-" + token.ToolCallID + "-" + verb,
 		MessageID:        "approval-continuation:" + token.TurnID + ":" + token.ToolCallID,

@@ -60,6 +60,37 @@ not access granted in the provider's own account settings. Entries marked
 `server credentials` are deployment configuration and have no personal Remove
 action.
 
+## Native task channels
+
+Native Slack Code Channels are optional. Apply deployment migration 021 before
+setting `SLACK_CODE_CHANNELS_ENABLED=true`. The app installation needs
+`code_channels:manage`, conversation metadata read scopes, and the manifest's
+`features.code_channels.enabled`. Availability also depends on Slack enabling
+the feature for the app and initiating user. A successful local API contract
+test does not establish workspace availability.
+
+Explicitly allowlist `slack-create_task_space`, `slack-set_task_context`, and
+`slack-set_task_view` in `AGENT_ALLOWED_WRITE_TOOLS` to permit these external
+writes. Creation derives workspace, user and origin from the authenticated turn,
+inherits origin privacy, and uses a stable Slack session key. It posts a concise
+task brief. The active origin turn completes in place; the next explicit mention
+in the new channel starts its separate canonical session. Original thread
+history is not automatically copied. New channel grants remain bound to their
+creator and authorized origin, even when another allowed user joins the channel.
+
+A code channel is one session: replies, Stop, approvals, delivery recovery and
+OAuth resumption omit thread timestamps. Classification uses Slack's native
+record type and assigned agent, not names or empty timestamps. Existing native
+channels without a Kepler grant require operator channel authorization. Channels
+still require explicit mentions; DMs retain their existing direct-input policy.
+
+Context bars replace up to five informational items. Views use stable keys;
+diffs are channel singletons. HTML does not receive model-controlled CSP
+extensions. Canvas attachments grant comment access. These are presentation
+projections, not another task database or agent loop. Users can archive a task
+channel through Slack's native UI; the agent does not archive its channel while
+its final answer is still being delivered.
+
 ## Pull-request investigation
 
 Ask the agent to inspect a PR with ordinary tools. There is no intent classifier,
