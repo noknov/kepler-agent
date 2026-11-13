@@ -24,7 +24,7 @@ func TestContextPreparationSharesAdmittedTurnBudget(t *testing.T) {
 	catalog, _ := tool.NewCatalog()
 	client := &scriptedModel{}
 	store := transcript.NewMemoryStore()
-	runner, err := New(Config{MaxTotalTokens: 10}, Dependencies{Model: client, Tools: catalog, Transcript: store})
+	runner, err := New(Config{MaxTotalTokens: 10, MaxOutputTokens: 1}, Dependencies{Model: client, Tools: catalog, Transcript: store})
 	if err != nil {
 		t.Fatal(err)
 	}
