@@ -357,3 +357,31 @@ CREATE TABLE IF NOT EXISTS slack_task_spaces (
  PRIMARY KEY(team_id, channel_id),
  UNIQUE(team_id, owner_id, origin_channel_id, origin_message_ts)
 );
+-- Authorization identity changes only when credentials are installed, not refreshed.
+CREATE TABLE IF NOT EXISTS connection_authorizations (
+    user_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    instance_id TEXT NOT NULL,
+    revision TEXT NOT NULL,
+    PRIMARY KEY(user_id,provider,instance_id)
+);
+
+CREATE TABLE IF NOT EXISTS slack_connection_continuations (
+    user_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    instance_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    turn_id TEXT NOT NULL,
+    after_revision TEXT NOT NULL,
+    payload JSONB NOT NULL,
+    generation TEXT NOT NULL DEFAULT gen_random_uuid()::text,
+    claim_owner TEXT,
+    claim_until TIMESTAMPTZ,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    available_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY(user_id,provider,instance_id,session_id)
+);
+CREATE INDEX IF NOT EXISTS slack_connection_continuations_due
+    ON slack_connection_continuations(available_at,created_at);

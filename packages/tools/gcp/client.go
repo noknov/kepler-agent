@@ -67,7 +67,7 @@ func (s ConnectedSource) Resolve(ctx context.Context, call tool.Call) (Client, e
 	token, err := s.Service.GCPAccessTokenInstance(ctx, call.Scope.UserID, instanceID)
 	if err != nil {
 		if errors.Is(err, connections.ErrNotConnected) {
-			return Client{}, s.Service.RequiredInstance(call.Scope.UserID, connections.ProviderGCP, instanceID)
+			return Client{}, s.Service.RequiredInstance(ctx, call.Scope.UserID, connections.ProviderGCP, instanceID)
 		}
 		return Client{}, err
 	}

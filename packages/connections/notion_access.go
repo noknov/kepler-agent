@@ -110,7 +110,7 @@ func (s *Service) ensureFreshNotionBundleInstance(ctx context.Context, userID st
 	}
 
 	if strings.TrimSpace(bundle.Refresh) == "" {
-		return notionTokenBundle{}, s.RequiredInstance(userID, ProviderNotion, conn.InstanceID)
+		return notionTokenBundle{}, s.ReauthorizeInstance(ctx, userID, ProviderNotion, conn.InstanceID)
 	}
 	if !s.Config.NotionEnabled() {
 		return notionTokenBundle{}, fmt.Errorf("notion oauth is not configured")

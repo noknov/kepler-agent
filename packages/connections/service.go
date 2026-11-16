@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -461,27 +462,35 @@ func (s Service) githubLogin(ctx context.Context, token string) (string, error) 
 	return payload.Login, nil
 }
 
-func (s Service) Required(userID, provider string) error {
-	return s.RequiredInstance(userID, provider, DefaultInstanceID)
+func (s Service) Required(ctx context.Context, userID, provider string) error {
+	return s.RequiredInstance(ctx, userID, provider, DefaultInstanceID)
 }
-
-// RequiredInstance is the shared connection gate used by tools. It keeps the
-// selected instance in the error contract so chat surfaces can offer the
-// exact connection action that was requested.
-func (s Service) RequiredInstance(userID, provider, instanceID string) error {
-	if _, err := s.tokenForInstance(context.Background(), userID, provider, instanceID); err == nil {
-		return nil
+func (s Service) RequiredInstance(ctx context.Context, userID, provider, instanceID string) error {
+	return s.connectionRequired(ctx, userID, provider, instanceID, false)
+}
+func (s Service) connectionRequired(ctx context.Context, userID, provider, instanceID string, reauthorize bool) error {
+	var revision string
+	if store, ok := s.Store.(AuthorizationStore); ok {
+		var err error
+		revision, err = store.AuthorizationRevision(ctx, userID, provider, instanceID)
+		if err != nil {
+			return err
+		}
 	}
-	label, metadata := s.connectionActionDetails(context.Background(), userID, provider, instanceID)
-	authURL, err := s.ConnectURLForInstance(userID, provider, instanceID, label, metadata)
+	if !reauthorize {
+		if token, err := s.tokenForInstance(ctx, userID, provider, instanceID); err == nil && token != "" {
+			return nil
+		} else if err != nil && !errors.Is(err, ErrNotConnected) {
+			return err
+		}
+	}
+	label, metadata := s.connectionActionDetails(ctx, userID, provider, instanceID)
+	authURL, _ := s.ConnectURLForInstance(userID, provider, instanceID, label, metadata)
 	title := pluginTitle(provider)
 	if strings.TrimSpace(label) != "" {
 		title += " · " + strings.TrimSpace(label)
 	}
-	if err != nil {
-		return &RequiredError{Provider: provider, InstanceID: connectionInstanceID(instanceID), Title: title, Metadata: metadata}
-	}
-	return &RequiredError{Provider: provider, InstanceID: connectionInstanceID(instanceID), Title: title, AuthURL: authURL, Metadata: metadata}
+	return &RequiredError{Provider: provider, InstanceID: connectionInstanceID(instanceID), Title: title, AuthURL: authURL, Metadata: metadata, Reauthorize: reauthorize, AuthorizationRevision: revision}
 }
 
 func (s Service) connectionActionDetails(ctx context.Context, userID, provider, instanceID string) (string, map[string]string) {
@@ -494,6 +503,9 @@ func (s Service) connectionActionDetails(ctx context.Context, userID, provider, 
 
 func (s Service) tokenForInstance(ctx context.Context, userID, provider, instanceID string) (string, error) {
 	instanceID = connectionInstanceID(instanceID)
+	if s.Store == nil {
+		return "", ErrNotConnected
+	}
 	if store, ok := instanceStore(s.Store); ok {
 		return store.TokenInstance(ctx, userID, provider, instanceID)
 	}
@@ -505,21 +517,11 @@ func (s Service) tokenForInstance(ctx context.Context, userID, provider, instanc
 
 // Reauthorize returns a connection-required error with a fresh OAuth URL even when
 // a token already exists.
-func (s Service) Reauthorize(userID, provider string) error {
-	return s.ReauthorizeInstance(userID, provider, DefaultInstanceID)
+func (s Service) Reauthorize(ctx context.Context, userID, provider string) error {
+	return s.ReauthorizeInstance(ctx, userID, provider, DefaultInstanceID)
 }
-
-func (s Service) ReauthorizeInstance(userID, provider, instanceID string) error {
-	label, metadata := s.connectionActionDetails(context.Background(), userID, provider, instanceID)
-	authURL, err := s.ConnectURLForInstance(userID, provider, instanceID, label, metadata)
-	title := pluginTitle(provider)
-	if strings.TrimSpace(label) != "" {
-		title += " · " + strings.TrimSpace(label)
-	}
-	if err != nil {
-		return &RequiredError{Provider: provider, InstanceID: connectionInstanceID(instanceID), Title: title, Reauthorize: true, Metadata: metadata}
-	}
-	return &RequiredError{Provider: provider, InstanceID: connectionInstanceID(instanceID), Title: title, AuthURL: authURL, Reauthorize: true, Metadata: metadata}
+func (s Service) ReauthorizeInstance(ctx context.Context, userID, provider, instanceID string) error {
+	return s.connectionRequired(ctx, userID, provider, instanceID, true)
 }
 
 func ToolResult(err error) (tool.Result, error) {
@@ -538,7 +540,8 @@ func ToolResult(err error) (tool.Result, error) {
 		NeedsUserInput: true,
 		Metadata: map[string]any{
 			"provider": required.Provider, "instance_id": required.InstanceID,
-			"auth_url": required.AuthURL, "reauthorize": required.Reauthorize,
+			"authorization_revision": required.AuthorizationRevision,
+			"auth_url":               required.AuthURL, "reauthorize": required.Reauthorize,
 			"connection_action": ConnectionActionFor(required),
 		},
 	}, nil

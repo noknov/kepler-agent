@@ -64,3 +64,9 @@ type CredentialStore interface {
 	LoadCredential(context.Context, string, string, string) (Connection, string, error)
 	UpdateCredential(context.Context, Connection, string) error
 }
+
+// AuthorizationStore reads the last credential authorization, independently of
+// token refresh revisions. Hosted continuation admission uses this durable fact.
+type AuthorizationStore interface {
+	AuthorizationRevision(context.Context, string, string, string) (string, error)
+}

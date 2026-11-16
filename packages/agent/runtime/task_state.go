@@ -200,7 +200,7 @@ func taskStateMessage(events []transcript.Event) (model.Message, error) {
 // Unknown effects survive prose compaction as runtime-owned ledger entries.
 // Model updates may reconcile them only with later successful tool evidence.
 func (r *Runtime) captureUnknownEffect(ctx context.Context, event transcript.Event) error {
-	if event.Type != transcript.ToolCallFailed || event.ToolCall == nil || event.ToolResult == nil || event.ToolResult.ErrorCode != "execution_interrupted" {
+	if event.Type != transcript.ToolCallFailed || event.ToolCall == nil || event.ToolResult == nil || (!event.ToolResult.OutcomeUnknown && event.ToolResult.ErrorCode != "execution_interrupted") {
 		return nil
 	}
 	events, err := r.turnEvents(ctx, event.SessionID)
@@ -210,6 +210,9 @@ func (r *Runtime) captureUnknownEffect(ctx context.Context, event transcript.Eve
 	state, err := latestTaskState(events)
 	if err != nil {
 		return err
+	}
+	if event.Sequence <= state.EffectsThrough {
+		return nil
 	}
 	identity, _ := json.Marshal([]string{event.TurnID, event.ToolCall.ID})
 	fingerprint := sha256.Sum256(identity)
@@ -223,6 +226,7 @@ func (r *Runtime) captureUnknownEffect(ctx context.Context, event transcript.Eve
 		return fmt.Errorf("task state is full; uncertain effect remains in transcript at sequence %d", event.Sequence)
 	}
 	state.Revision++
+	state.EffectsThrough = event.Sequence
 	state.SchemaVersion = taskstate.SchemaVersion
 	state.Items = append(state.Items, taskstate.Item{ID: id, Kind: "effect", Text: fmt.Sprintf("Outcome unknown for tool %s, call %s; reconcile before repeating", event.ToolCall.Name, event.ToolCall.ID), Status: "unknown", Sources: []taskstate.Reference{{Sequence: event.Sequence}}})
 	raw, err := json.Marshal(state)

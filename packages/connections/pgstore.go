@@ -92,7 +92,7 @@ func (s PGStore) UpsertTokenInstance(ctx context.Context, userID, provider, inst
 		metadata = map[string]string{}
 	}
 	_, err = s.Pool.Exec(ctx, `
-		INSERT INTO user_connections (user_id, provider, instance_id, label, status, token_ciphertext, scopes, account, metadata, updated_at)
+		WITH saved AS (INSERT INTO user_connections (user_id, provider, instance_id, label, status, token_ciphertext, scopes, account, metadata, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
 		ON CONFLICT (user_id, provider, instance_id) DO UPDATE SET
 			label = EXCLUDED.label,
@@ -102,7 +102,11 @@ func (s PGStore) UpsertTokenInstance(ctx context.Context, userID, provider, inst
 			account = EXCLUDED.account,
 			metadata = EXCLUDED.metadata,
 			revision = gen_random_uuid()::text,
-			updated_at = NOW()`,
+			updated_at = NOW()
+ RETURNING user_id,provider,instance_id,revision)
+ INSERT INTO connection_authorizations(user_id,provider,instance_id,revision)
+ SELECT user_id,provider,instance_id,revision FROM saved
+ ON CONFLICT(user_id,provider,instance_id) DO UPDATE SET revision=EXCLUDED.revision`,
 		userID, provider, instanceID, label, StatusConnected, encrypted, scopes, account, metadata)
 	return err
 }
@@ -303,4 +307,13 @@ func (s PGStore) UpdateCredential(ctx context.Context, conn Connection, token st
 		return ErrConnectionChanged
 	}
 	return nil
+}
+
+func (s PGStore) AuthorizationRevision(ctx context.Context, user, provider, instance string) (string, error) {
+	var revision string
+	err := s.Pool.QueryRow(ctx, `SELECT revision FROM connection_authorizations WHERE user_id=$1 AND provider=$2 AND instance_id=$3`, user, provider, connectionInstanceID(instance)).Scan(&revision)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return revision, err
 }

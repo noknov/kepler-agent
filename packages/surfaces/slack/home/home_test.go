@@ -124,7 +124,7 @@ func TestConnectionBlocksShowsLocalGCPAsConnectedWithoutButton(t *testing.T) {
 			},
 		},
 	}
-	blocks := controller.connectionBlocks("U123")
+	blocks := controller.connectionBlocks(t.Context(), "U123")
 	if len(blocks) == 0 {
 		t.Fatal("expected connection blocks for local GCP credentials")
 	}
@@ -160,7 +160,7 @@ func TestConnectionBlocksShowsGitHubServerCredentials(t *testing.T) {
 		},
 		Connections: connections.Service{Store: store},
 	}
-	blocks := controller.connectionBlocks("U123")
+	blocks := controller.connectionBlocks(t.Context(), "U123")
 	raw, err := json.Marshal(blocks)
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
@@ -194,7 +194,7 @@ func TestConnectionBlocksShowsInvalidNotionLegacyToken(t *testing.T) {
 			},
 		},
 	}
-	blocks := controller.connectionBlocks("U123")
+	blocks := controller.connectionBlocks(t.Context(), "U123")
 	raw, err := json.Marshal(blocks)
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
@@ -231,7 +231,7 @@ func TestConnectionBlocksShowsInvalidClickStackLegacyOAuthToken(t *testing.T) {
 			},
 		},
 	}
-	blocks := controller.connectionBlocks("U123")
+	blocks := controller.connectionBlocks(t.Context(), "U123")
 	raw, err := json.Marshal(blocks)
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
@@ -261,7 +261,7 @@ func TestConnectionBlocksShowsYouTrackServerCredentials(t *testing.T) {
 		},
 		Connections: connections.Service{Store: store},
 	}
-	blocks := controller.connectionBlocks("U123")
+	blocks := controller.connectionBlocks(t.Context(), "U123")
 	raw, err := json.Marshal(blocks)
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
@@ -292,7 +292,7 @@ func TestConnectionBlocksAddIntegrationCarriesExplicitOrigin(t *testing.T) {
 		},
 	}
 
-	blocks := controller.connectionBlocks("U123")
+	blocks := controller.connectionBlocks(t.Context(), "U123")
 	for _, block := range blocks {
 		if block["type"] != "actions" {
 			continue

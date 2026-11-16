@@ -81,7 +81,15 @@ type Call struct {
 	State json.RawMessage `json:"state,omitempty"`
 }
 
+// UncertainEffect marks a dispatched operation whose external outcome is unknown.
+// Adapters implement this contract; the runtime never classifies error text.
+type UncertainEffect interface {
+	error
+	EffectUncertain() bool
+}
+
 type Result struct {
+	OutcomeUnknown bool             `json:"outcome_unknown,omitempty"`
 	TaskState      *taskstate.State `json:"task_state,omitempty"`
 	Usage          *model.Usage     `json:"usage,omitempty"`
 	Content        []model.Content  `json:"content,omitempty"`

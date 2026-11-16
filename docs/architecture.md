@@ -30,7 +30,7 @@ flowchart TD
 | Runtime | Context, model/tool execution, approvals, accounting and terminal facts | [runtime](../packages/agent/runtime) |
 | Profiles | Compose storage, policy, models and tool catalogs | [profiles](../packages/profiles) |
 | Providers | Translate wire requests and typed events | [providers](../packages/providers) |
-| Connection change notification | Publish credential-change facts without owning conversation state | [connections](../packages/connections/oauth_completed.go) |
+| Connection change notification | Publish credential-change hints without owning conversation state | [connections](../packages/connections/oauth_completed.go) |
 | Slack OAuth continuation | Persist waiting-thread identity, claim it and admit a conditional input | [connection recovery](../packages/surfaces/slack/agent/connection_resume.go) |
 | Delivery | Network intent, known Slack identity and status recovery | [delivery](../packages/surfaces/slack/agent/delivery.go) |
 | Benchmark | Single-shot input and canonical JSONL output | [benchmark](../benchmark) |
@@ -46,6 +46,8 @@ background work that can outlive or resume after that parent.
 Ingress acceptance, session ownership, model completion, external effects,
 transcript commit and user delivery are separate facts. PostgreSQL stores hosted
 transcripts, event/input queues, connection records and Slack reply receipts.
+Credential authorization identities and Slack pending continuations also live in
+PostgreSQL; credentials and their authorization identity commit atomically.
 Redis supplies notifications, not durable acceptance. Run records and Langfuse
 traces are observations and cannot authorize a write or prove Slack delivery.
 

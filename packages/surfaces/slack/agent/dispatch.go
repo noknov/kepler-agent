@@ -165,7 +165,7 @@ func (s *Service) controlActive(ctx context.Context, sessionID string, req conve
 		return err == nil, err
 	}
 	if active != nil {
-		if s.mode(req.UserID) == ModeQueue || req.Approval != nil || req.ResumeFromTurnID != "" {
+		if s.mode(ctx, req.UserID) == ModeQueue || req.Approval != nil || req.ResumeFromTurnID != "" {
 			if err := s.persistInput(ctx, sessionID, sessioninput.KindQueue, req); err != nil {
 				return false, err
 			}
@@ -187,7 +187,7 @@ func (s *Service) controlActive(ctx context.Context, sessionID string, req conve
 		return false, nil
 	}
 	kind := sessioninput.KindSteering
-	if s.mode(req.UserID) == ModeQueue || req.Approval != nil || req.ResumeFromTurnID != "" {
+	if s.mode(ctx, req.UserID) == ModeQueue || req.Approval != nil || req.ResumeFromTurnID != "" {
 		kind = sessioninput.KindQueue
 	}
 	if err := s.persistInput(ctx, sessionID, kind, req); err != nil {

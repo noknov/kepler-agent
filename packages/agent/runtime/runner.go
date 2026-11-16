@@ -79,6 +79,15 @@ func (r *Runtime) RunTurn(ctx context.Context, request TurnRequest) (turnResult 
 	}
 	r.setEventCache(request.SessionID, events)
 	defer r.clearEventCache(request.SessionID)
+	// Repair a receipt/ledger interruption before any terminal replay or generation.
+	for _, event := range events {
+		if event.ToolResult == nil || !event.ToolResult.OutcomeUnknown {
+			continue
+		}
+		if err := r.captureUnknownEffect(ctx, event); err != nil {
+			return result, err
+		}
+	}
 	if replayed, replayErr, ok := completedTurn(events, request.TurnID); ok {
 		return replayed, replayErr
 	}
@@ -420,12 +429,7 @@ func (r *Runtime) reconcileInterruptedToolCalls(ctx context.Context, request Tur
 		}
 	}
 	for _, call := range started {
-		result := tool.Result{
-			Content:   []model.Content{{Type: model.ContentText, Text: fmt.Sprintf("Tool %q was interrupted before its result was recorded and was not retried because it may have already completed.", call.Name)}},
-			IsError:   true,
-			ErrorCode: "execution_interrupted",
-			Metadata:  map[string]any{"recovered": true},
-		}
+		result := interruptedToolResult(call)
 		stored, err := r.record(ctx, transcript.Event{SessionID: request.SessionID, TurnID: request.TurnID, Type: transcript.ToolCallFailed, ToolCall: &call, ToolResult: &result})
 		if err != nil {
 			return err
@@ -675,4 +679,9 @@ func (r *Runtime) failTurn(ctx context.Context, result TurnResult, err error) (T
 func (r *Runtime) cancelTurn(ctx context.Context, result TurnResult, err error) (TurnResult, error) {
 	result.Termination = TerminationCanceled
 	return r.finishTurn(ctx, result, result.Message, result.Termination, err)
+}
+
+// A start fact precedes dispatch. Without a result, the effect cannot be inferred.
+func interruptedToolResult(call tool.Call) tool.Result {
+	return tool.Result{Content: []model.Content{{Type: model.ContentText, Text: fmt.Sprintf("Tool %q was interrupted after dispatch began. Its outcome is unknown; reconcile before repeating the action.", call.Name)}}, IsError: true, OutcomeUnknown: true, ErrorCode: "execution_interrupted", Metadata: map[string]any{"recovered": true}}
 }

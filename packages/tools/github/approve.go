@@ -109,7 +109,7 @@ func (t ApprovePRTool) Execute(ctx context.Context, call tool.Call) (tool.Result
 
 func unknownApprovalResult() tool.Result {
 	result := tool.TextResult("GitHub may have accepted this approval, but its receipt could not be verified. Do not repeat the write automatically; inspect the PR's reviews before requesting another approval.")
-	result.IsError, result.ErrorCode = true, "external_outcome_unknown"
+	result.IsError, result.ErrorCode, result.OutcomeUnknown = true, "external_outcome_unknown", true
 	return result
 }
 

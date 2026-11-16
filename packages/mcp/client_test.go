@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -228,5 +229,60 @@ func TestCallToolPreservesJSONNumbers(t *testing.T) {
 		if _, err := client.CallTool(context.Background(), Session{}, "lookup", json.RawMessage(invalid)); err == nil || called {
 			t.Fatalf("invalid arguments sent: %s", invalid)
 		}
+	}
+}
+
+func TestCallToolDistinguishesUnknownOutcomeFromRejection(t *testing.T) {
+	for _, scenario := range []string{"transport", "server", "timeout", "broken_json", "internal_rpc", "invalid_params", "forbidden", "rate_limit", "redirect", "bad_arguments"} {
+		t.Run(scenario, func(t *testing.T) {
+			calls := 0
+			client := &Client{URL: "https://mcp.example/rpc", HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				calls++
+				if scenario == "transport" {
+					return nil, io.ErrUnexpectedEOF
+				}
+				var request struct {
+					ID string `json:"id"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				status, body := 200, `{"jsonrpc":"2.0","id":"`+request.ID+`","result":{"content":[]}}`
+				switch scenario {
+				case "server":
+					status = 503
+				case "timeout":
+					status = 408
+				case "forbidden":
+					status = 403
+				case "rate_limit":
+					status = 429
+				case "redirect":
+					status = 307
+				case "broken_json":
+					body = `{"result":`
+				case "internal_rpc":
+					body = `{"jsonrpc":"2.0","id":"` + request.ID + `","error":{"code":-32603,"message":"internal failure"}}`
+				case "invalid_params":
+					body = `{"jsonrpc":"2.0","id":"` + request.ID + `","error":{"code":-32602,"message":"invalid params"}}`
+				}
+				return httpResp(status, map[string]string{"Content-Type": "application/json", "Location": "https://other.example/rpc"}, body), nil
+			})}}
+			args := json.RawMessage(`{}`)
+			if scenario == "bad_arguments" {
+				args = json.RawMessage(`[]`)
+			}
+			_, err := client.CallTool(t.Context(), Session{}, "write", args)
+			var uncertain UncertainResponseError
+			unknown := errors.As(err, &uncertain)
+			want := scenario != "invalid_params" && scenario != "forbidden" && scenario != "rate_limit" && scenario != "bad_arguments"
+			expectedCalls := 1
+			if scenario == "bad_arguments" {
+				expectedCalls = 0
+			}
+			if err == nil || unknown != want || calls != expectedCalls {
+				t.Fatalf("calls=%d unknown=%t err=%v", calls, unknown, err)
+			}
+		})
 	}
 }

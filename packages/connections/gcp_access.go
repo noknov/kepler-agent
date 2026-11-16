@@ -77,7 +77,7 @@ func (s *Service) ensureFreshGCPBundleInstance(ctx context.Context, userID strin
 	}
 
 	if strings.TrimSpace(bundle.Refresh) == "" {
-		return clickStackTokenBundle{}, s.RequiredInstance(userID, ProviderGCP, conn.InstanceID)
+		return clickStackTokenBundle{}, s.ReauthorizeInstance(ctx, userID, ProviderGCP, conn.InstanceID)
 	}
 	if !s.Config.GCP.Enabled() {
 		return clickStackTokenBundle{}, fmt.Errorf("gcp oauth is not configured")

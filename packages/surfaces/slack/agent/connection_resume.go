@@ -9,39 +9,51 @@ import (
 	"time"
 
 	"github.com/noknov/kepler-agent/packages/connections"
+	"github.com/redis/go-redis/v9"
 
 	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
 
-func (s *Service) StartConnectionCompletedSubscriber(ctx context.Context) {
-	if s.Redis == nil || s.Continuations == nil || s.Agent.Runtime == nil {
+// RecoverConnections derives readiness from durable authorization facts. Pub/Sub
+// reduces latency; startup and periodic recovery do not depend on a notification.
+func (s *Service) RecoverConnections(ctx context.Context) {
+	if s.Continuations == nil || s.Agent.Runtime == nil {
 		return
 	}
-	sub := s.Redis.Subscribe(ctx, connections.OAuthCompletedChannel)
-	defer func() { _ = sub.Close() }()
+	var wake <-chan *redis.Message
+	if s.Redis != nil {
+		sub := s.Redis.Subscribe(ctx, connections.OAuthCompletedChannel)
+		defer sub.Close()
+		wake = sub.Channel()
+	}
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 	for {
+		s.recoverConnections(ctx)
 		select {
 		case <-ctx.Done():
 			return
-		case message, ok := <-sub.Channel():
+		case <-ticker.C:
+		case _, ok := <-wake:
 			if !ok {
-				return
-			}
-			userID, provider, instanceID, parsed := connections.ParseOAuthCompletedPayload(message.Payload)
-			if !parsed {
-				continue
-			}
-			continuations, err := s.Continuations.Claim(ctx, userID, provider, instanceID)
-			if err != nil {
-				log.Printf("connection continuation claim failed user=%s provider=%s: %v", userID, provider, err)
-				continue
-			}
-			for _, continuation := range continuations {
-				// Resumption only admits durable input; model work stays in the
-				// bounded dispatcher. Do not detach a worker per saved thread.
-				s.resumeAfterConnection(ctx, continuation)
+				wake = nil
 			}
 		}
+	}
+}
+func (s *Service) recoverConnections(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+	claimCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	pending, err := s.Continuations.ClaimReady(claimCtx, continuationBatchSize)
+	cancel()
+	if err != nil {
+		log.Printf("connection continuation recovery failed: %v", err)
+		return
+	}
+	for _, c := range pending {
+		s.resumeAfterConnection(ctx, c)
 	}
 }
 
@@ -56,7 +68,10 @@ func (s *Service) resumeAfterConnection(parentCtx context.Context, continuation 
 	sessionID := target.SessionID()
 	if target.Validate() != nil || continuation.UserID == "" || continuation.SessionID != sessionID || continuation.TurnID == "" || continuation.TeamID == "" {
 		if s.Continuations != nil {
-			_ = s.Continuations.Clear(ctx, continuation)
+			if err := s.Continuations.Clear(ctx, continuation); err != nil {
+				log.Printf("connection continuation cleanup failed session=%s: %v", sessionID, err)
+				s.releaseContinuation(ctx, continuation)
+			}
 		}
 		return
 	}
@@ -88,7 +103,10 @@ func (s *Service) resumeAfterConnection(parentCtx context.Context, continuation 
 		return
 	}
 	if s.Continuations != nil {
-		_ = s.Continuations.Clear(ctx, continuation)
+		if err := s.Continuations.Clear(ctx, continuation); err != nil {
+			log.Printf("connection continuation cleanup failed session=%s: %v", sessionID, err)
+			s.releaseContinuation(ctx, continuation)
+		}
 	}
 }
 

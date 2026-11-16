@@ -1,5 +1,6 @@
 // Package taskstate defines a versioned, evidence-linked task projection.
-// It records agent claims, never authorization or a substitute for verification.
+// It records agent claims and runtime-owned effect observations, never authorization
+// or a substitute for verification.
 package taskstate
 
 import (
@@ -31,9 +32,11 @@ type Item struct {
 }
 
 type State struct {
-	SchemaVersion int    `json:"schema_version"`
-	Revision      uint64 `json:"revision"`
-	Items         []Item `json:"items"`
+	// EffectsThrough is owned by the runtime, never by a model-authored patch.
+	EffectsThrough uint64 `json:"effects_through,omitempty"`
+	SchemaVersion  int    `json:"schema_version"`
+	Revision       uint64 `json:"revision"`
+	Items          []Item `json:"items"`
 }
 
 type Patch struct {
@@ -51,7 +54,7 @@ func Apply(current State, patch Patch) (State, error) {
 	if len(patch.Upsert)+len(patch.Archive) == 0 || len(patch.Upsert) > MaxItems || len(patch.Archive) > MaxItems {
 		return State{}, fmt.Errorf("task update requires 1..%d items", MaxItems)
 	}
-	out := State{SchemaVersion: SchemaVersion, Revision: current.Revision + 1, Items: append([]Item(nil), current.Items...)}
+	out := State{SchemaVersion: SchemaVersion, Revision: current.Revision + 1, EffectsThrough: current.EffectsThrough, Items: append([]Item(nil), current.Items...)}
 	// Archival removes only explicitly selected inactive entries from the current
 	// projection. Earlier transcript snapshots retain their evidence and identity.
 	archived := make(map[string]bool, len(patch.Archive))

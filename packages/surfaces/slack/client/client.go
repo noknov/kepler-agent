@@ -271,6 +271,7 @@ type uncertainDeliveryError struct{ err error }
 func (e uncertainDeliveryError) Error() string           { return e.err.Error() }
 func (e uncertainDeliveryError) Unwrap() error           { return e.err }
 func (e uncertainDeliveryError) DeliveryUncertain() bool { return true }
+func (e uncertainDeliveryError) EffectUncertain() bool   { return true }
 
 // Permanent reports errors that cannot succeed by retrying an unchanged API
 // request. This includes Slack's message and block size validation failures.

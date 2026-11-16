@@ -50,6 +50,9 @@ func (t MCPTool) Execute(ctx context.Context, call tool.Call) (tool.Result, erro
 		return tool.Result{}, err
 	}
 	out, err := t.Client.MCP.CallTool(ctx, session, t.RemoteName, call.Arguments)
+	if t.SideEffect {
+		return mcptools.ExternalResult(out, err)
+	}
 	if err != nil {
 		return tool.Result{}, err
 	}

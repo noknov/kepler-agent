@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -218,7 +219,7 @@ func InvokeExternal(ctx context.Context, client *mcp.Client, name string, args j
 	value, err := client.CallTool(ctx, session, name, args)
 	if err != nil {
 		invalidateRouterSession(client)
-		return tool.Result{}, err
+		return ExternalResult(value, err)
 	}
 	return Result(value), nil
 }
@@ -351,6 +352,9 @@ func (t *remoteTool) Execute(ctx context.Context, call tool.Call) (tool.Result, 
 	value, err := client.CallTool(ctx, session, t.remote.Name, call.Arguments)
 	if err != nil {
 		t.server.invalidateSession(call, client, session)
+		if !explicitlyReadOnly(t.remote) {
+			return ExternalResult(value, err)
+		}
 		return tool.Result{}, err
 	}
 	return Result(value), nil
@@ -449,4 +453,19 @@ func cloneHeaders(headers map[string]string) map[string]string {
 		copy[key] = value
 	}
 	return copy
+}
+
+// ExternalResult preserves request uncertainty as a canonical tool effect outcome.
+// Read-only adapters keep ordinary error semantics; no tool-name inference occurs.
+func ExternalResult(value mcp.ToolResult, err error) (tool.Result, error) {
+	if err == nil {
+		return Result(value), nil
+	}
+	var uncertain mcp.UncertainResponseError
+	if !errors.As(err, &uncertain) {
+		return tool.Result{}, err
+	}
+	result := remoteToolError("external_outcome_unknown", "The external operation may have completed, but no trustworthy receipt arrived. Read its state before repeating it. "+err.Error())
+	result.OutcomeUnknown = true
+	return result, nil
 }

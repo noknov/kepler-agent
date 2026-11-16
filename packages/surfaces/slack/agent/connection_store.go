@@ -4,191 +4,132 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	agentruntime "github.com/noknov/kepler-agent/packages/agent/runtime"
 	"github.com/noknov/kepler-agent/packages/connections"
-	"github.com/noknov/kepler-agent/packages/infra/redisclient"
-	slackconversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
-	"github.com/redis/go-redis/v9"
+	conversation "github.com/noknov/kepler-agent/packages/surfaces/slack/conversation"
 )
 
 const (
-	continuationTTL      = 24 * time.Hour
-	continuationClaimTTL = 5 * time.Minute
+	continuationTTL       = 24 * time.Hour
+	continuationClaimTTL  = 5 * time.Minute
+	continuationBatchSize = 16 // Each admission has a 10-second budget, within the claim lease.
 )
 
-// ConnectionContinuation captures a Slack thread that paused for OAuth.
+// ConnectionContinuation binds one authorization dependency to its waiting turn.
 type ConnectionContinuation struct {
-	SessionKind      slackconversation.SessionKind `json:"session_kind,omitempty"`
-	UserID           string                        `json:"user_id"`
-	Provider         string                        `json:"provider"`
-	InstanceID       string                        `json:"instance_id,omitempty"`
-	SessionID        string                        `json:"session_id"`
-	TurnID           string                        `json:"turn_id,omitempty"`
-	TeamID           string                        `json:"team_id,omitempty"`
-	ConversationType string                        `json:"conversation_type,omitempty"`
-	Channel          string                        `json:"channel"`
-	ThreadTS         string                        `json:"thread_ts"`
-
-	claimOwner string
-	snapshot   string
+	AuthorizationRevision string                   `json:"authorization_revision,omitempty"`
+	SessionKind           conversation.SessionKind `json:"session_kind,omitempty"`
+	UserID                string                   `json:"user_id"`
+	Provider              string                   `json:"provider"`
+	InstanceID            string                   `json:"instance_id"`
+	SessionID             string                   `json:"session_id"`
+	TurnID                string                   `json:"turn_id"`
+	TeamID                string                   `json:"team_id"`
+	ConversationType      string                   `json:"conversation_type,omitempty"`
+	Channel               string                   `json:"channel"`
+	ThreadTS              string                   `json:"thread_ts"`
+	claimOwner            string
+	generation            string
 }
-
-// ConnectionContinuationStore owns pending Slack threads and their claim-scoped cleanup.
 type ConnectionContinuationStore interface {
-	Save(ctx context.Context, continuation ConnectionContinuation) error
-	Claim(ctx context.Context, userID, provider, instanceID string) ([]ConnectionContinuation, error)
-	Release(ctx context.Context, continuation ConnectionContinuation) error
-	Clear(ctx context.Context, continuation ConnectionContinuation) error
+	Save(context.Context, ConnectionContinuation) error
+	ClaimReady(context.Context, int) ([]ConnectionContinuation, error)
+	Release(context.Context, ConnectionContinuation) error
+	Clear(context.Context, ConnectionContinuation) error
 }
-
-type RedisContinuationStore struct {
-	Redis *redisclient.Client
-}
-
-// RuntimeConnectionContinuationStore adapts the shared runtime contract to Slack's
-// OAuth continuation implementation.
 type RuntimeConnectionContinuationStore struct{ Store ConnectionContinuationStore }
 
-func (s RuntimeConnectionContinuationStore) Save(ctx context.Context, continuation agentruntime.ConnectionContinuation) error {
+func (s RuntimeConnectionContinuationStore) Save(ctx context.Context, c agentruntime.ConnectionContinuation) error {
 	if s.Store == nil {
-		return nil
+		return fmt.Errorf("connection continuation store unavailable")
 	}
-	return s.Store.Save(ctx, ConnectionContinuation{
-		UserID: continuation.Scope.UserID, Provider: continuation.Provider, InstanceID: continuation.InstanceID, SessionID: continuation.Scope.SessionID,
-		TurnID: continuation.TurnID, SessionKind: slackconversation.SessionKind(continuation.Scope.Values["session_kind"]),
-		TeamID: continuation.Scope.Values["team_id"], ConversationType: continuation.Scope.Values["conversation_type"],
-		Channel: continuation.Scope.Values["channel"], ThreadTS: continuation.Scope.Values["thread_ts"],
-	})
+	return s.Store.Save(ctx, ConnectionContinuation{AuthorizationRevision: c.AuthorizationRevision, UserID: c.Scope.UserID, Provider: c.Provider, InstanceID: c.InstanceID, SessionID: c.Scope.SessionID, TurnID: c.TurnID, SessionKind: conversation.SessionKind(c.Scope.Values["session_kind"]), TeamID: c.Scope.Values["team_id"], ConversationType: c.Scope.Values["conversation_type"], Channel: c.Scope.Values["channel"], ThreadTS: c.Scope.Values["thread_ts"]})
 }
 
-func NewRedisContinuationStore(rdb *redisclient.Client) *RedisContinuationStore {
-	if rdb == nil {
-		return nil
+type PGContinuationStore struct{ Pool *pgxpool.Pool }
+
+func NewPGContinuationStore(ctx context.Context, pool *pgxpool.Pool) (*PGContinuationStore, error) {
+	// Check both sides of the durable handoff before accepting any new waiting turns.
+	rows, err := pool.Query(ctx, `SELECT p.generation,a.revision FROM slack_connection_continuations p CROSS JOIN connection_authorizations a LIMIT 0`)
+	if err != nil {
+		return nil, fmt.Errorf("connection continuation schema: %w", err)
 	}
-	return &RedisContinuationStore{Redis: rdb}
+	rows.Close()
+	return &PGContinuationStore{Pool: pool}, nil
 }
-
-func continuationIndexKey(userID, provider, instanceID string) string {
-	return "connection:pending:" + userID + ":" + provider + ":" + continuationInstanceID(instanceID)
-}
-
-func continuationKey(continuation ConnectionContinuation) string {
-	return continuationIndexKey(continuation.UserID, continuation.Provider, continuation.InstanceID) + ":" + continuation.SessionID
-}
-
-func continuationClaimKey(continuation ConnectionContinuation) string {
-	return continuationKey(continuation) + ":claim"
-}
-
-func (s *RedisContinuationStore) Save(ctx context.Context, continuation ConnectionContinuation) error {
-	if s == nil || s.Redis == nil {
-		return nil
+func (s PGContinuationStore) Save(ctx context.Context, c ConnectionContinuation) error {
+	target := conversation.Target{Kind: c.SessionKind, Channel: c.Channel, ThreadTS: c.ThreadTS}
+	if c.UserID == "" || c.Provider == "" || c.TeamID == "" || c.TurnID == "" || target.Validate() != nil || c.SessionID != target.SessionID() {
+		return fmt.Errorf("continuation requires authenticated actor/team, provider, target and waiting turn")
 	}
-	if continuation.UserID == "" || continuation.Provider == "" || continuation.Channel == "" || continuation.SessionID == "" || continuation.TurnID == "" {
-		return fmt.Errorf("continuation requires an actor, provider, channel, session and waiting turn")
+	c.InstanceID = connections.NormalizeInstanceID(c.InstanceID)
+	if c.InstanceID == "" {
+		c.InstanceID = connections.DefaultInstanceID
 	}
-	continuation.InstanceID = continuationInstanceID(continuation.InstanceID)
-	payload, err := json.Marshal(continuation)
+	payload, err := json.Marshal(c)
 	if err != nil {
 		return err
 	}
-	_, err = s.Redis.Eval(ctx, `
-redis.call('SET',KEYS[1],ARGV[1],'EX',ARGV[3])
-redis.call('SADD',KEYS[2],ARGV[2])
-redis.call('EXPIRE',KEYS[2],ARGV[3])
-redis.call('DEL',KEYS[3])
-return 1`, []string{continuationKey(continuation), continuationIndexKey(continuation.UserID, continuation.Provider, continuation.InstanceID), continuationClaimKey(continuation)}, string(payload), continuation.SessionID, int64(continuationTTL/time.Second))
+	_, err = s.Pool.Exec(ctx, `INSERT INTO slack_connection_continuations(user_id,provider,instance_id,session_id,turn_id,after_revision,payload,expires_at)
+ VALUES($1,$2,$3,$4,$5,$6,$7,NOW()+make_interval(secs=>$8))
+ ON CONFLICT(user_id,provider,instance_id,session_id) DO UPDATE SET
+ turn_id=EXCLUDED.turn_id,after_revision=EXCLUDED.after_revision,payload=EXCLUDED.payload,
+ generation=gen_random_uuid()::text,claim_owner=NULL,claim_until=NULL,attempts=0,
+ created_at=NOW(),available_at=NOW(),expires_at=EXCLUDED.expires_at
+ WHERE slack_connection_continuations.turn_id<>EXCLUDED.turn_id`, c.UserID, c.Provider, c.InstanceID, c.SessionID, c.TurnID, c.AuthorizationRevision, payload, int64(continuationTTL/time.Second))
 	return err
 }
-
-func (s *RedisContinuationStore) Claim(ctx context.Context, userID, provider, instanceID string) ([]ConnectionContinuation, error) {
-	if s == nil || s.Redis == nil || userID == "" || provider == "" {
-		return nil, nil
+func (s PGContinuationStore) ClaimReady(ctx context.Context, limit int) ([]ConnectionContinuation, error) {
+	if limit <= 0 || limit > continuationBatchSize {
+		limit = continuationBatchSize
 	}
-	sessions, err := s.Redis.SMembers(ctx, continuationIndexKey(userID, provider, instanceID))
+	owner := rand.Text()
+	rows, err := s.Pool.Query(ctx, `WITH picked AS (
+ SELECT p.user_id,p.provider,p.instance_id,p.session_id FROM slack_connection_continuations p
+ JOIN connection_authorizations a USING(user_id,provider,instance_id)
+ JOIN user_connections c USING(user_id,provider,instance_id)
+ WHERE a.revision<>p.after_revision AND c.status='connected' AND p.expires_at>NOW()
+ AND p.available_at<=NOW() AND (p.claim_until IS NULL OR p.claim_until<=NOW())
+ ORDER BY p.created_at FOR UPDATE OF p SKIP LOCKED LIMIT $1
+ ) UPDATE slack_connection_continuations p SET claim_owner=$2,claim_until=NOW()+make_interval(secs=>$3),attempts=attempts+1
+ FROM picked x WHERE p.user_id=x.user_id AND p.provider=x.provider AND p.instance_id=x.instance_id AND p.session_id=x.session_id
+ RETURNING p.payload,p.generation`, limit, owner, int64(continuationClaimTTL/time.Second))
 	if err != nil {
 		return nil, err
 	}
-	continuations := make([]ConnectionContinuation, 0, len(sessions))
-	complete := false
-	defer func() {
-		if complete {
-			return
-		}
-		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		for _, claimed := range continuations {
-			_ = s.Release(cleanup, claimed)
-		}
-	}()
-	for _, sessionID := range sessions {
-		candidate := ConnectionContinuation{UserID: userID, Provider: provider, InstanceID: instanceID, SessionID: sessionID}
-		owner := rand.Text()
-		value, err := s.Redis.Eval(ctx, `
-local value=redis.call('GET',KEYS[1])
-if not value then redis.call('SREM',KEYS[2],ARGV[2]); return nil end
-if redis.call('SET',KEYS[3],ARGV[1],'NX','EX',ARGV[3]) then return value end
-return nil`, []string{continuationKey(candidate), continuationIndexKey(userID, provider, instanceID), continuationClaimKey(candidate)}, owner, sessionID, int64(continuationClaimTTL/time.Second))
-		if errors.Is(err, redis.Nil) {
-			continue
-		}
-		if err != nil {
+	defer rows.Close()
+	var out []ConnectionContinuation
+	for rows.Next() {
+		var raw []byte
+		var c ConnectionContinuation
+		if err := rows.Scan(&raw, &c.generation); err != nil {
 			return nil, err
 		}
-		raw, ok := value.(string)
-		if !ok {
-			_ = s.Redis.DeleteIfValue(ctx, continuationClaimKey(candidate), owner)
-			return nil, fmt.Errorf("invalid continuation storage response")
-		}
-		var continuation ConnectionContinuation
-		if err := json.Unmarshal([]byte(raw), &continuation); err != nil {
-			_ = s.Redis.DeleteIfValue(ctx, continuationClaimKey(candidate), owner)
+		if err := json.Unmarshal(raw, &c); err != nil {
 			return nil, err
 		}
-		continuation.claimOwner, continuation.snapshot = owner, raw
-		continuations = append(continuations, continuation)
+		c.claimOwner = owner
+		out = append(out, c)
 	}
-	complete = true
-	return continuations, nil
+	return out, rows.Err()
 }
-
-func (s *RedisContinuationStore) Clear(ctx context.Context, continuation ConnectionContinuation) error {
-	if s == nil || s.Redis == nil || continuation.UserID == "" || continuation.Provider == "" || continuation.SessionID == "" {
-		return nil
+func (s PGContinuationStore) Clear(ctx context.Context, c ConnectionContinuation) error {
+	if c.claimOwner == "" || c.generation == "" {
+		return fmt.Errorf("continuation cleanup requires its claim")
 	}
-	if continuation.claimOwner == "" || continuation.snapshot == "" {
-		return fmt.Errorf("clearing a continuation requires its claim")
-	}
-	_, err := s.Redis.Eval(ctx, `
-if redis.call('GET',KEYS[3])~=ARGV[1] then return 0 end
-if redis.call('GET',KEYS[1])==ARGV[2] then
-  redis.call('DEL',KEYS[1]); redis.call('SREM',KEYS[2],ARGV[3])
-end
-redis.call('DEL',KEYS[3])
-return 1`, []string{continuationKey(continuation), continuationIndexKey(continuation.UserID, continuation.Provider, continuation.InstanceID), continuationClaimKey(continuation)}, continuation.claimOwner, continuation.snapshot, continuation.SessionID)
+	_, err := s.Pool.Exec(ctx, `DELETE FROM slack_connection_continuations WHERE user_id=$1 AND provider=$2 AND instance_id=$3 AND session_id=$4 AND generation=$5 AND claim_owner=$6 AND claim_until>NOW()`, c.UserID, c.Provider, c.InstanceID, c.SessionID, c.generation, c.claimOwner)
 	return err
 }
-
-// Release makes a claimed continuation available for another delivery attempt.
-// It intentionally preserves both the payload and index membership.
-func (s *RedisContinuationStore) Release(ctx context.Context, continuation ConnectionContinuation) error {
-	if s == nil || s.Redis == nil || continuation.UserID == "" || continuation.Provider == "" || continuation.SessionID == "" {
-		return nil
+func (s PGContinuationStore) Release(ctx context.Context, c ConnectionContinuation) error {
+	if c.claimOwner == "" || c.generation == "" {
+		return fmt.Errorf("continuation release requires its claim")
 	}
-	if continuation.claimOwner == "" {
-		return fmt.Errorf("releasing a continuation requires its claim")
-	}
-	return s.Redis.DeleteIfValue(ctx, continuationClaimKey(continuation), continuation.claimOwner)
-}
-
-func continuationInstanceID(instanceID string) string {
-	if value := strings.TrimSpace(instanceID); value != "" {
-		return value
-	}
-	return connections.DefaultInstanceID
+	_, err := s.Pool.Exec(ctx, `UPDATE slack_connection_continuations SET claim_owner=NULL,claim_until=NULL,
+ available_at=NOW()+make_interval(secs=>LEAST(60,POWER(2,LEAST(attempts,6)))::int)
+ WHERE user_id=$1 AND provider=$2 AND instance_id=$3 AND session_id=$4 AND generation=$5 AND claim_owner=$6 AND claim_until>NOW()`, c.UserID, c.Provider, c.InstanceID, c.SessionID, c.generation, c.claimOwner)
+	return err
 }

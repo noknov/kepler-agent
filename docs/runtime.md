@@ -17,6 +17,23 @@ status is counted in context budgets and does not replace or mutate source outpu
 Structured error results use the same inline, artifact-spill and fallback limits
 as successful results, preserving partial evidence. Only raw exception strings
 that supply an otherwise empty result have a separate diagnostic text cap.
+External-effect uncertainty is a typed adapter contract (`tool.UncertainEffect`)
+and a canonical result field (`OutcomeUnknown`). It is neither a retryable
+failure nor proof that the action did not happen. Slack, GitHub approval and
+mutating MCP adapters preserve it; MCP request failures do not make read-only
+tools mutating. Known transport/protocol rejections remain ordinary failures.
+Unknown results project explicit status to the model and populate the existing
+runtime-owned effect ledger. An observation cursor survives model task-state
+patches, so repairing an interrupted ledger commit cannot resurrect an archived,
+reconciled effect. The ledger is retained independently of prose checkpoints.
+
+Approval recovery reads the original requester, exact descriptor/arguments,
+recorded decision, dispatch start and result under the session lease. A matching
+completed resolution is idempotent. A recorded decision without a dispatch start
+can continue only after revalidating the tool contract and current operator
+policy. A start without a result is settled as an unknown effect without another
+external request; its read-after-write reconciliation remains explicit.
+
 Command timeouts retain partial stdout/stderr; failures before execution do not
 invent a successful exit code. Git search treats only a completed grep exit 1 as
 no matches; invalid queries, failed commands and cancellation remain errors.

@@ -80,12 +80,8 @@ func (h *Handler) Handle(ctx context.Context, eventID string, ev slack.Event) (e
 	return nil
 }
 
-func (h *Handler) WebSearchPreference(userID string) bool {
-	return h.Home.WebSearchEnabled(userID)
-}
-
-func (h *Handler) ToggleWebSearch(userID string) {
-	go h.Home.ToggleWebSearch(context.Background(), userID)
+func (h *Handler) WebSearchPreference(ctx context.Context, userID string) bool {
+	return h.Home.WebSearchEnabled(ctx, userID)
 }
 
 func (h *Handler) HandleInteraction(ctx context.Context, interaction slackgateway.Interaction) *slackgateway.InteractionResponse {
