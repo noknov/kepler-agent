@@ -369,7 +369,6 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 	if result.IsError {
 		span.SetStatus(codes.Error, "tool returned an error result")
 		span.SetAttributes(attribute.String("agent.tool.error_code", result.ErrorCode))
-		result.Content = boundToolErrorContent(result.Content)
 	}
 	if result.IsError {
 		if stats, ok := ctx.Value(turnTraceKey{}).(*turnTrace); ok {
@@ -390,15 +389,6 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 // result. A failed fetch can return a full HTML error page; storing it would
 // waste transcript tokens and re-send it on every later turn.
 const maxToolErrorTextBytes = 2000
-
-func boundToolErrorContent(content []model.Content) []model.Content {
-	for index := range content {
-		if content[index].Type == model.ContentText {
-			content[index].Text = boundToolErrorText(content[index].Text)
-		}
-	}
-	return content
-}
 
 func boundToolErrorText(text string) string {
 	text = strings.TrimSpace(text)

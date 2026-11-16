@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/noknov/kepler-agent/packages/agent/model"
@@ -61,5 +62,66 @@ func TestToolFailureIsModelVisibleWithoutReplacingPartialEvidence(t *testing.T) 
 		if event.Type == transcript.ToolCallFailed && !reflect.DeepEqual(event.ToolResult.Content, original) {
 			t.Fatal("derived status mutated canonical evidence")
 		}
+	}
+}
+
+func TestStructuredToolFailureUsesNormalResultBudget(t *testing.T) {
+	for _, mode := range []string{"inline", "spill", "truncate"} {
+		t.Run(mode, func(t *testing.T) {
+			text := strings.Repeat("diagnostic evidence\n", 180) + "successful sibling findings at the end"
+			result := tool.TextResult(text)
+			result.IsError, result.ErrorCode = true, "partial_failure"
+			catalog, _ := tool.NewCatalog(auditTool{name: "inspect", execute: func(context.Context) (tool.Result, error) { return result, nil }})
+			call := model.ToolCall{ID: "call", Name: "inspect", Arguments: json.RawMessage(`{}`)}
+			client := &scriptedModel{responses: []model.Response{
+				{Message: model.Message{Role: model.RoleAssistant, Content: []model.Content{{Type: model.ContentToolCall, ToolCall: &call}}}, FinishReason: model.FinishToolCalls},
+				{Message: model.TextMessage(model.RoleAssistant, "done"), FinishReason: model.FinishStop},
+			}}
+			config := Config{ToolResults: ToolResultConfig{MaxInlineBytes: 8000}}
+			store := transcript.NewMemoryStore()
+			deps := Dependencies{Model: client, Tools: catalog, Transcript: store}
+			artifacts := &artifactMemory{}
+			if mode != "inline" {
+				config.ToolResults.MaxInlineBytes = 2500
+			}
+			if mode == "spill" {
+				deps.Artifacts = artifacts
+			}
+			runner, err := New(config, deps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := runner.RunTurn(t.Context(), TurnRequest{SessionID: "s", TurnID: "t", Input: model.TextMessage(model.RoleUser, "inspect")}); err != nil {
+				t.Fatal(err)
+			}
+			events, err := store.Load(t.Context(), "s", 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got *tool.Result
+			for _, event := range events {
+				if event.Type == transcript.ToolCallFailed {
+					got = event.ToolResult
+				}
+			}
+			if got == nil || !got.IsError || got.ErrorCode != "partial_failure" {
+				t.Fatalf("lost failure status: %+v", got)
+			}
+			switch mode {
+			case "inline":
+				if got.Truncated || got.Content[0].Text != text {
+					t.Fatal("structured error evidence was silently shortened")
+				}
+			case "spill":
+				var content []model.Content
+				if !got.Truncated || got.Spill == nil || json.Unmarshal(artifacts.content, &content) != nil || len(content) != 1 || content[0].Text != text {
+					t.Fatal("full structured error evidence was not preserved in the artifact")
+				}
+			case "truncate":
+				if !got.Truncated || got.Spill != nil || got.Content[0].Text != text[:2500] {
+					t.Fatal("structured error bypassed the configured fallback budget")
+				}
+			}
+		})
 	}
 }

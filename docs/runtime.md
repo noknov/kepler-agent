@@ -14,6 +14,9 @@ is included in context budgeting and does not modify stored source evidence.
 Failed tool results project their typed status/error code as model-visible data,
 including for wire protocols without a native tool-error flag. This derived
 status is counted in context budgets and does not replace or mutate source output.
+Structured error results use the same inline, artifact-spill and fallback limits
+as successful results, preserving partial evidence. Only raw exception strings
+that supply an otherwise empty result have a separate diagnostic text cap.
 Command timeouts retain partial stdout/stderr; failures before execution do not
 invent a successful exit code. Git search treats only a completed grep exit 1 as
 no matches; invalid queries, failed commands and cancellation remain errors.
