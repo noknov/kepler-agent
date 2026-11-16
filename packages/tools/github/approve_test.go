@@ -69,7 +69,7 @@ func TestApprovePRPinsHeadAndSubmitsOnlyApproval(t *testing.T) {
 					t.Fatalf("result=%+v err=%v posts=%d", result, err, posts)
 				}
 			case "uncertain", "bad-receipt", "bad-json":
-				if err != nil || result.ErrorCode != "external_outcome_unknown" || posts != 1 {
+				if err != nil || result.ErrorCode != "external_outcome_unknown" || !result.OutcomeUnknown || posts != 1 {
 					t.Fatalf("result=%+v err=%v posts=%d", result, err, posts)
 				}
 			case "forbidden":

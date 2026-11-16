@@ -123,12 +123,13 @@ func ConnectionActionFor(required *RequiredError) ConnectionAction {
 
 // RequiredError is returned when a tool needs a user connection.
 type RequiredError struct {
-	Provider    string
-	InstanceID  string
-	Title       string
-	AuthURL     string
-	Reauthorize bool
-	Metadata    map[string]string
+	AuthorizationRevision string
+	Provider              string
+	InstanceID            string
+	Title                 string
+	AuthURL               string
+	Reauthorize           bool
+	Metadata              map[string]string
 }
 
 func (e *RequiredError) Error() string {

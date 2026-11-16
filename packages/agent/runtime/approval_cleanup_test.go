@@ -93,8 +93,20 @@ func TestApprovalResolutionFinalizesToolResourcesAndReceipts(t *testing.T) {
 				t.Fatalf("approval resources survived: open=%v closed=%d scratch=%v", item.open, item.closed, scratch)
 			}
 			duplicateErr := runner.ResolveApproval(t.Context(), sessionID, resolution)
-			if (duplicateErr != nil) != (mode == "blocked receipt") || item.calls != 1 {
+			if duplicateErr != nil || item.calls != 1 {
 				t.Fatalf("duplicate resolution=%v calls=%d", duplicateErr, item.calls)
+			}
+			if mode == "blocked receipt" {
+				events, _ := memory.Load(t.Context(), sessionID, 0)
+				found := false
+				for _, event := range events {
+					if event.Type == transcript.ToolCallFailed && event.ToolResult.OutcomeUnknown {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatal("interrupted approval did not record its unknown outcome")
+				}
 			}
 		})
 	}

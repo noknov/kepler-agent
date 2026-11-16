@@ -43,6 +43,9 @@ func TestConnectionHandoffFailurePreservesCompleteToolBatchAndCanRetry(t *testin
 	if err != nil || len(events) != 2 || events[0].ToolCall.ID != "connect" || events[1].ToolCall.ID != "read" {
 		t.Fatalf("handoff failure orphaned a sibling: %+v %v", events, err)
 	}
+	if events[0].ToolResult.NeedsUserInput || events[0].ToolResult.ErrorCode != "connection_handoff_failed" {
+		t.Fatal("failed dependency was published as a resumable wait")
+	}
 	if len(receipt.saved) != 1 || receipt.saved[0].Scope.UserID != "owner" || receipt.saved[0].TurnID != "turn" || receipt.saved[0].Scope.Values["surface"] != "benchmark" {
 		t.Fatalf("handoff was not scoped without Slack fields: %+v", receipt.saved)
 	}

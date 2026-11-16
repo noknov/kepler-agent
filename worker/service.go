@@ -143,7 +143,10 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	connStore := connections.PGStore{Pool: stores.PGPool, SecretKey: cfg.Connections.EncryptionKey}
 	connService := connections.NewServiceFromConfig(connStore, cfg)
 	connService.OAuthCompleted = connections.RedisOAuthCompletionNotifier{Redis: stores.Redis}
-	continuations := slackagent.NewRedisContinuationStore(stores.Redis)
+	continuations, err := slackagent.NewPGContinuationStore(ctx, stores.PGPool)
+	if err != nil {
+		return nil, err
+	}
 	surface := hostedTools.SurfaceOptions{Name: "slack", AvailableDeps: map[string]bool{
 		"slack": slackClient != nil,
 	}, Connections: &connService}
@@ -250,8 +253,8 @@ func New(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 	conversation.AuthorizeInput = handler.AuthorizeInput
 	conversation.WebSearchEnabled = handler.WebSearchPreference
-	conversation.ModeForUser = func(userID string) slackagent.ConversationMode {
-		return slackagent.ConversationMode(handler.Home.ConversationMode(userID))
+	conversation.ModeForUser = func(ctx context.Context, userID string) slackagent.ConversationMode {
+		return slackagent.ConversationMode(handler.Home.ConversationMode(ctx, userID))
 	}
 	connService.OnConnectionChanged = func(ctx context.Context, userID, provider string) error {
 		return handler.Home.RequestRefresh(ctx, userID)
@@ -315,7 +318,7 @@ func (s *Service) StartBackground() {
 		s.conv.StartControlSubscriber(ctx)
 	})
 	s.Go(func(ctx context.Context) {
-		s.conv.StartConnectionCompletedSubscriber(ctx)
+		s.conv.RecoverConnections(ctx)
 	})
 	if s.handler != nil {
 		s.Go(func(ctx context.Context) {
@@ -346,6 +349,8 @@ func (s *Service) pruneEphemeralData(ctx context.Context) {
 			`DELETE FROM slack_event_inbox WHERE status='dead_letter' AND dead_lettered_at < NOW()-INTERVAL '90 days'`,
 			`DELETE FROM agent_session_inputs WHERE acknowledged_at < NOW()-INTERVAL '7 days'`,
 			`DELETE FROM oauth_states WHERE expires_at < NOW()-INTERVAL '1 day'`,
+			`DELETE FROM slack_connection_continuations WHERE expires_at < NOW() AND (claim_until IS NULL OR claim_until<NOW())`,
+			`DELETE FROM connection_authorizations a WHERE NOT EXISTS(SELECT 1 FROM user_connections c WHERE c.user_id=a.user_id AND c.provider=a.provider AND c.instance_id=a.instance_id) AND NOT EXISTS(SELECT 1 FROM slack_connection_continuations p WHERE p.user_id=a.user_id AND p.provider=a.provider AND p.instance_id=a.instance_id)`,
 		}
 		for _, statement := range statements {
 			if _, err := s.stores.PGPool.Exec(pruneCtx, statement); err != nil {

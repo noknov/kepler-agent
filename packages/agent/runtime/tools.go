@@ -258,31 +258,23 @@ func (r *Runtime) recordToolResults(ctx context.Context, request TurnRequest, pr
 				return nil, err
 			}
 		}
-		if _, err := r.record(ctx, transcript.Event{
+		// Preserve the whole batch even if one durable handoff fails.
+		storedResult, handoffErr := r.prepareContinuation(ctx, request, entry.call, entry.result)
+		continuationErr = errors.Join(continuationErr, handoffErr)
+
+		stored, err := r.record(ctx, transcript.Event{
 			SessionID: request.SessionID, TurnID: request.TurnID, Type: eventType,
-			ToolCall: &entry.call, ToolResult: entry.result,
-		}); err != nil {
+			ToolCall: &entry.call, ToolResult: storedResult,
+		})
+		if err != nil {
 			return nil, err
 		}
-		if entry.result.ErrorCode == "connection_required" && r.deps.ConnectionContinuations != nil {
-			provider, _ := entry.result.Metadata["provider"].(string)
-			instanceID, _ := entry.result.Metadata["instance_id"].(string)
-			if provider != "" && entry.call.Scope.UserID != "" {
-				err := r.deps.ConnectionContinuations.Save(ctx, ConnectionContinuation{
-					Provider:   provider,
-					InstanceID: instanceID,
-					TurnID:     request.TurnID,
-					Scope:      entry.call.Scope,
-				})
-				if err != nil {
-					// Complete the tool batch before reporting the failed handoff;
-					// recovery must never see orphaned sibling function calls.
-					continuationErr = errors.Join(continuationErr, fmt.Errorf("save connection continuation: %w", err))
-				}
-			}
+		if err := r.captureUnknownEffect(ctx, stored); err != nil {
+			return nil, err
 		}
-		if pending == nil && entry.result.NeedsUserInput && len(entry.result.Content) > 0 {
-			message := model.Message{Role: model.RoleAssistant, Content: append([]model.Content(nil), entry.result.Content...)}
+
+		if pending == nil && storedResult.NeedsUserInput && len(storedResult.Content) > 0 {
+			message := model.Message{Role: model.RoleAssistant, Content: append([]model.Content(nil), storedResult.Content...)}
 			pending = &message
 		}
 	}
@@ -345,9 +337,17 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 		if result.ErrorCode == "" {
 			result.ErrorCode = "tool_error"
 		}
+		var uncertain tool.UncertainEffect
+		if errors.As(err, &uncertain) && uncertain.EffectUncertain() {
+			result.OutcomeUnknown, result.Retryable = true, false
+			result.ErrorCode = "effect_outcome_unknown"
+		}
 		if len(result.Content) == 0 {
 			result.Content = []model.Content{{Type: model.ContentText, Text: boundToolErrorText(err.Error())}}
 		}
+	}
+	if result.OutcomeUnknown {
+		result.IsError, result.Retryable = true, false
 	}
 	if !hasWireVisibleToolContent(result.Content) {
 		// Empty successful output is valid (for example an empty directory).
@@ -365,7 +365,7 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 		}
 	}
 	result.Metadata["duration_ms"] = time.Since(started).Milliseconds()
-	span.SetAttributes(attribute.Int64("agent.tool.duration_ms", time.Since(started).Milliseconds()), attribute.Bool("agent.tool.error", result.IsError))
+	span.SetAttributes(attribute.Int64("agent.tool.duration_ms", time.Since(started).Milliseconds()), attribute.Bool("agent.tool.error", result.IsError), attribute.Bool("agent.tool.outcome_unknown", result.OutcomeUnknown))
 	if result.IsError {
 		span.SetStatus(codes.Error, "tool returned an error result")
 		span.SetAttributes(attribute.String("agent.tool.error_code", result.ErrorCode))
@@ -379,7 +379,7 @@ func (r *Runtime) runPreparedTool(ctx context.Context, request TurnRequest, entr
 	}
 	result = limitToolResult(ctx, result, call, r.config.ToolResults, r.deps.Artifacts)
 	if r.deps.TraceContent != nil && span.IsRecording() {
-		r.traceContent(span, "output", map[string]any{"content": traceMessages([]model.Message{{Role: model.RoleTool, Content: result.Content}}), "is_error": result.IsError, "error_code": result.ErrorCode})
+		r.traceContent(span, "output", map[string]any{"content": traceMessages([]model.Message{{Role: model.RoleTool, Content: result.Content}}), "is_error": result.IsError, "error_code": result.ErrorCode, "outcome_unknown": result.OutcomeUnknown})
 	}
 	span.SetAttributes(attribute.String("langfuse.observation.metadata.tool_name", call.Name), attribute.String("langfuse.observation.metadata.error_code", result.ErrorCode))
 	entry.result = &result

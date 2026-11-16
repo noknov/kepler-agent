@@ -74,7 +74,7 @@ type StopRequest struct {
 type ControlledConversation interface {
 	Conversation
 	StartControlSubscriber(context.Context)
-	StartConnectionCompletedSubscriber(context.Context)
+	RecoverConnections(context.Context)
 	Quiesce()
 	WaitIdle(context.Context) bool
 }

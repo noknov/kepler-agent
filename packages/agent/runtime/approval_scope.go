@@ -14,6 +14,8 @@ type approvalState struct {
 	call                                  *tool.Call
 	requested                             approvalRequestMetadata
 	resolved, completed, resolvedApproved bool
+	started                               bool
+	resultEvent                           *transcript.Event
 }
 
 // ApprovalAuthority validates durable approval ownership without a model runtime.
@@ -65,8 +67,12 @@ func (a ApprovalAuthority) loadApprovalState(ctx context.Context, sessionID stri
 				return state, err
 			}
 			state.resolved, state.resolvedApproved = true, metadata.Approved
+		case transcript.ToolCallStarted:
+			state.started = true
 		case transcript.ToolCallCompleted, transcript.ToolCallFailed:
 			state.completed = true
+			copy := event
+			state.resultEvent = &copy
 		}
 	}
 	if state.call == nil {

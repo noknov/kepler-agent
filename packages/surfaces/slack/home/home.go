@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/noknov/kepler-agent/packages/config"
 	"github.com/noknov/kepler-agent/packages/connections"
@@ -48,7 +49,14 @@ func (c Controller) Publish(ctx context.Context, userID string) error {
 	if c.Slack == nil || userID == "" {
 		return nil
 	}
-	return c.Slack.PublishHome(ctx, userID, c.View(ctx, userID))
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	view := c.View(ctx, userID)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return c.Slack.PublishHome(ctx, userID, view)
 }
 
 func (c Controller) RequestRefresh(ctx context.Context, userID string) error {
@@ -81,7 +89,10 @@ func (c Controller) StartRefreshSubscriber(ctx context.Context) {
 			if userID == "" {
 				continue
 			}
-			if err := c.Publish(context.Background(), userID); err != nil {
+			refreshCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			err := c.Publish(refreshCtx, userID)
+			cancel()
+			if err != nil {
 				log.Printf("publish home from refresh request failed user=%s: %v", userID, err)
 			}
 		}
@@ -92,28 +103,31 @@ func (c Controller) ToggleWebSearch(ctx context.Context, userID string) {
 	if c.Store == nil || userID == "" {
 		return
 	}
-	_ = c.Store.SetWebSearchEnabled(ctx, userID, !c.WebSearchEnabled(userID))
-	if err := c.RequestRefresh(context.Background(), userID); err != nil {
+	if err := c.Store.SetWebSearchEnabled(ctx, userID, !c.WebSearchEnabled(ctx, userID)); err != nil {
+		log.Printf("save web search preference failed: %v", err)
+		return
+	}
+	if err := c.RequestRefresh(ctx, userID); err != nil {
 		log.Printf("refresh home after web search toggle failed: %v", err)
 	}
 }
 
-func (c Controller) WebSearchEnabled(userID string) bool {
+func (c Controller) WebSearchEnabled(ctx context.Context, userID string) bool {
 	if c.Store == nil {
 		return true
 	}
-	settings, err := c.Store.GetSettings(context.Background(), userID)
+	settings, err := c.Store.GetSettings(ctx, userID)
 	if err != nil {
 		return true
 	}
 	return settings.WebSearchEnabled
 }
 
-func (c Controller) ConversationMode(userID string) string {
+func (c Controller) ConversationMode(ctx context.Context, userID string) string {
 	if c.Redis == nil || strings.TrimSpace(userID) == "" {
 		return "steer"
 	}
-	mode, err := c.Redis.Get(context.Background(), conversationModePrefix+userID)
+	mode, err := c.Redis.Get(ctx, conversationModePrefix+userID)
 	if err != nil || mode != "queue" {
 		return "steer"
 	}
@@ -125,14 +139,14 @@ func (c Controller) ToggleConversationMode(ctx context.Context, userID string) {
 		return
 	}
 	mode := "queue"
-	if c.ConversationMode(userID) == "queue" {
+	if c.ConversationMode(ctx, userID) == "queue" {
 		mode = "steer"
 	}
 	if err := c.Redis.Set(ctx, conversationModePrefix+userID, mode, 0); err != nil {
 		log.Printf("save conversation mode failed: %v", err)
 		return
 	}
-	if err := c.RequestRefresh(context.Background(), userID); err != nil {
+	if err := c.RequestRefresh(ctx, userID); err != nil {
 		log.Printf("refresh home after conversation mode toggle failed: %v", err)
 	}
 }
@@ -144,15 +158,15 @@ func (c Controller) View(ctx context.Context, userID string) map[string]any {
 		accessStatus = "Not allowlisted"
 	}
 
-	webSearchOn := c.WebSearchEnabled(userID)
+	webSearchOn := c.WebSearchEnabled(ctx, userID)
 	webSearchStatus := "On"
 	webSearchBtnStyle := "primary"
 	if !webSearchOn {
 		webSearchStatus = "Off"
 		webSearchBtnStyle = ""
 	}
-	ruleCount := userprefs.CountByKind(context.Background(), c.Store, userID, userprefs.KindRule)
-	skillCount := userprefs.CountByKind(context.Background(), c.Store, userID, userprefs.KindSkill)
+	ruleCount := userprefs.CountByKind(ctx, c.Store, userID, userprefs.KindRule)
+	skillCount := userprefs.CountByKind(ctx, c.Store, userID, userprefs.KindSkill)
 	statusFields := []map[string]any{
 		mrkdwnField("*Access*\n" + accessStatus),
 		mrkdwnField("*Web Search*\n" + webSearchStatus),
@@ -181,7 +195,7 @@ func (c Controller) View(ctx context.Context, userID string) map[string]any {
 		actionsBlock(controls...),
 	}
 	blocks = append(blocks, c.taskSpaceBlocks(ctx, userID)...)
-	blocks = append(blocks, c.connectionBlocks(userID)...)
+	blocks = append(blocks, c.connectionBlocks(ctx, userID)...)
 
 	return map[string]any{
 		"type":   "home",
@@ -189,11 +203,11 @@ func (c Controller) View(ctx context.Context, userID string) map[string]any {
 	}
 }
 
-func (c Controller) connectionBlocks(userID string) []map[string]any {
+func (c Controller) connectionBlocks(ctx context.Context, userID string) []map[string]any {
 	if c.Connections.Store == nil {
 		return nil
 	}
-	listed, _ := c.Connections.ListConnections(context.Background(), userID)
+	listed, _ := c.Connections.ListConnections(ctx, userID)
 	serverCreds := c.serverCredentialConnections()
 	if len(listed) == 0 && !c.connectionsSectionEnabled() {
 		return nil
@@ -215,14 +229,14 @@ func (c Controller) connectionBlocks(userID string) []map[string]any {
 		if item.Status == connections.StatusConnected {
 			switch item.Provider {
 			case connections.ProviderNotion:
-				if !c.Connections.NotionMCPConnectedInstance(context.Background(), userID, item.InstanceID) {
+				if !c.Connections.NotionMCPConnectedInstance(ctx, userID, item.InstanceID) {
 					status = "Invalid"
 				} else {
 					status = "Connected"
 					account = item.Account
 				}
 			case connections.ProviderClickStack:
-				if !c.Connections.ClickStackConnectedInstance(context.Background(), userID, item.InstanceID) {
+				if !c.Connections.ClickStackConnectedInstance(ctx, userID, item.InstanceID) {
 					status = "Invalid"
 				} else {
 					status = "Connected"

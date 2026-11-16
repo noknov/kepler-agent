@@ -40,7 +40,7 @@ func (s ConnectedSource) Resolve(ctx context.Context, call tool.Call) (Client, e
 	token, err := s.Service.Store.Token(ctx, call.Scope.UserID, connections.ProviderGitHub)
 	if err != nil {
 		if errors.Is(err, connections.ErrNotConnected) {
-			return Client{}, s.Service.Required(call.Scope.UserID, connections.ProviderGitHub)
+			return Client{}, s.Service.Required(ctx, call.Scope.UserID, connections.ProviderGitHub)
 		}
 		return Client{}, err
 	}

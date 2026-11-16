@@ -26,7 +26,7 @@ func connectedSlackClient(ctx context.Context, service connections.Service, user
 	token, err := service.Store.Token(ctx, userID, connections.ProviderSlack)
 	if err != nil {
 		if errors.Is(err, connections.ErrNotConnected) {
-			return nil, service.Required(userID, connections.ProviderSlack)
+			return nil, service.Required(ctx, userID, connections.ProviderSlack)
 		}
 		return nil, err
 	}

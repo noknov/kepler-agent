@@ -72,7 +72,7 @@ func (t connectionListTool) Execute(ctx context.Context, call tool.Call) (tool.R
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].InstanceID < result[j].InstanceID })
 	if len(result) == 0 {
-		requiredErr := t.conn.Required(call.Scope.UserID, connections.ProviderClickStack)
+		requiredErr := t.conn.Required(ctx, call.Scope.UserID, connections.ProviderClickStack)
 		if requiredErr == nil {
 			return tool.TextResult("No ClickStack connections are available."), nil
 		}

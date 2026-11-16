@@ -91,7 +91,7 @@ func (r *Registrar) tokenResolverForInstance(instanceID string) mcptools.TokenRe
 		token, err := r.conn.ClickStackAccessTokenInstance(ctx, call.Scope.UserID, instanceID)
 		if err != nil {
 			if errors.Is(err, connections.ErrNotConnected) {
-				return "", r.conn.RequiredInstance(call.Scope.UserID, connections.ProviderClickStack, instanceID)
+				return "", r.conn.RequiredInstance(ctx, call.Scope.UserID, connections.ProviderClickStack, instanceID)
 			}
 			return "", err
 		}
@@ -151,7 +151,7 @@ func (t connectionCallTool) clientForInstance(ctx context.Context, call tool.Cal
 	}
 	connection, err := t.conn.GetConnection(ctx, call.Scope.UserID, connections.ProviderClickStack, instanceID)
 	if errors.Is(err, connections.ErrNotConnected) {
-		result := t.requiredResult(call.Scope.UserID, instanceID)
+		result := t.requiredResult(ctx, call.Scope.UserID, instanceID)
 		return nil, &result, nil
 	}
 	if err != nil {
@@ -160,7 +160,7 @@ func (t connectionCallTool) clientForInstance(ctx context.Context, call tool.Cal
 	token, err := t.conn.ClickStackAccessTokenInstance(ctx, call.Scope.UserID, connection.InstanceID)
 	var required *connections.RequiredError
 	if errors.Is(err, connections.ErrNotConnected) || connections.AsRequired(err, &required) {
-		result := t.requiredResult(call.Scope.UserID, instanceID)
+		result := t.requiredResult(ctx, call.Scope.UserID, instanceID)
 		return nil, &result, nil
 	}
 	if err != nil {
@@ -173,10 +173,10 @@ func (t connectionCallTool) clientForInstance(ctx context.Context, call tool.Cal
 	return client, nil, nil
 }
 
-func (t connectionCallTool) requiredResult(userID, instanceID string) tool.Result {
-	result, err := connections.ToolResult(t.conn.RequiredInstance(userID, connections.ProviderClickStack, instanceID))
+func (t connectionCallTool) requiredResult(ctx context.Context, userID, instanceID string) tool.Result {
+	result, err := connections.ToolResult(t.conn.RequiredInstance(ctx, userID, connections.ProviderClickStack, instanceID))
 	if err != nil {
-		return tool.TextResult(err.Error())
+		return tool.Result{IsError: true, ErrorCode: "connection_lookup_failed", Content: tool.TextResult(err.Error()).Content}
 	}
 	return result
 }

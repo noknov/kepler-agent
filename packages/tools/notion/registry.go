@@ -88,7 +88,7 @@ func (r *Registrar) tokenResolverForInstance(instanceID string) mcptools.TokenRe
 		token, err := r.conn.NotionAccessTokenInstance(ctx, call.Scope.UserID, instanceID)
 		if err != nil {
 			if errors.Is(err, connections.ErrNotConnected) {
-				return "", r.conn.RequiredInstance(call.Scope.UserID, connections.ProviderNotion, instanceID)
+				return "", r.conn.RequiredInstance(ctx, call.Scope.UserID, connections.ProviderNotion, instanceID)
 			}
 			return "", err
 		}
@@ -153,7 +153,7 @@ func (t connectionListTool) Execute(ctx context.Context, call tool.Call) (tool.R
 		result = append(result, entry)
 	}
 	if len(result) == 0 {
-		requiredErr := t.conn.Required(call.Scope.UserID, connections.ProviderNotion)
+		requiredErr := t.conn.Required(ctx, call.Scope.UserID, connections.ProviderNotion)
 		if requiredErr == nil {
 			return tool.TextResult("No Notion connections are available."), nil
 		}
@@ -216,11 +216,11 @@ func (t connectionCallTool) Execute(ctx context.Context, call tool.Call) (tool.R
 	}
 	connection, err := t.conn.GetConnection(ctx, call.Scope.UserID, connections.ProviderNotion, args.InstanceID)
 	if err != nil {
-		return t.requiredResult(call.Scope.UserID, args.InstanceID), nil
+		return t.requiredResult(ctx, call.Scope.UserID, args.InstanceID), nil
 	}
 	token, err := t.conn.NotionAccessTokenInstance(ctx, call.Scope.UserID, connection.InstanceID)
 	if err != nil {
-		return t.requiredResult(call.Scope.UserID, connection.InstanceID), nil
+		return t.requiredResult(ctx, call.Scope.UserID, connection.InstanceID), nil
 	}
 	if len(args.Arguments) == 0 {
 		args.Arguments = json.RawMessage(`{}`)
@@ -232,10 +232,10 @@ func (t connectionCallTool) Execute(ctx context.Context, call tool.Call) (tool.R
 	return mcptools.InvokeReadOnly(ctx, client, args.ToolName, args.Arguments)
 }
 
-func (t connectionCallTool) requiredResult(userID, instanceID string) tool.Result {
-	result, err := connections.ToolResult(t.conn.RequiredInstance(userID, connections.ProviderNotion, instanceID))
+func (t connectionCallTool) requiredResult(ctx context.Context, userID, instanceID string) tool.Result {
+	result, err := connections.ToolResult(t.conn.RequiredInstance(ctx, userID, connections.ProviderNotion, instanceID))
 	if err != nil {
-		return tool.TextResult(err.Error())
+		return tool.Result{IsError: true, ErrorCode: "connection_lookup_failed", Content: tool.TextResult(err.Error()).Content}
 	}
 	return result
 }
@@ -290,11 +290,11 @@ func (t connectionWriteTool) Execute(ctx context.Context, call tool.Call) (tool.
 	}
 	connection, err := t.conn.GetConnection(ctx, call.Scope.UserID, connections.ProviderNotion, args.InstanceID)
 	if err != nil {
-		return t.requiredResult(call.Scope.UserID, args.InstanceID), nil
+		return t.requiredResult(ctx, call.Scope.UserID, args.InstanceID), nil
 	}
 	token, err := t.conn.NotionAccessTokenInstance(ctx, call.Scope.UserID, connection.InstanceID)
 	if err != nil {
-		return t.requiredResult(call.Scope.UserID, connection.InstanceID), nil
+		return t.requiredResult(ctx, call.Scope.UserID, connection.InstanceID), nil
 	}
 	if len(args.Arguments) == 0 {
 		args.Arguments = json.RawMessage(`{}`)
@@ -306,10 +306,10 @@ func (t connectionWriteTool) Execute(ctx context.Context, call tool.Call) (tool.
 	return mcptools.InvokeExternal(ctx, client, args.ToolName, args.Arguments)
 }
 
-func (t connectionWriteTool) requiredResult(userID, instanceID string) tool.Result {
-	result, err := connections.ToolResult(t.conn.RequiredInstance(userID, connections.ProviderNotion, instanceID))
+func (t connectionWriteTool) requiredResult(ctx context.Context, userID, instanceID string) tool.Result {
+	result, err := connections.ToolResult(t.conn.RequiredInstance(ctx, userID, connections.ProviderNotion, instanceID))
 	if err != nil {
-		return tool.TextResult(err.Error())
+		return tool.Result{IsError: true, ErrorCode: "connection_lookup_failed", Content: tool.TextResult(err.Error()).Content}
 	}
 	return result
 }

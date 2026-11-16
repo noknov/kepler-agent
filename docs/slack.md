@@ -285,27 +285,32 @@ References: [RTS usage and eligibility](https://docs.slack.dev/apis/web-api/real
 
 ## Credential completion and resumption
 
-Provider connections publish credential changes without storing Slack waiting
-threads. The Slack adapter owns waiting continuations, including the authenticated
-workspace, conversation type, actor, exact waiting turn and integration instance.
-Redis claim tokens and payload snapshots fence cleanup: an old worker cannot
-release a newer claim or clear a replacement continuation.
+Credential installation atomically updates the connection and its authorization
+revision in PostgreSQL. Token refresh and metadata CAS updates do not advance
+that authorization identity. The Slack adapter stores a pending continuation
+with the revision observed before requesting authorization, authenticated team,
+actor, target, exact waiting turn and integration instance. This dependency is
+saved before the runtime publishes a waiting tool receipt. A failed dependency
+write records an explicit handoff failure instead of an unbacked wait, while
+preserving all sibling tool results.
 
-A completion notification admits a durable conditional input through the same
-admission and dispatcher as a user request. Its deterministic event ID deduplicates
-notifications. It never becomes steering for another active turn. OAuth may finish
-before the original turn ends: the conditional input waits for session ownership,
-then the runtime checks the waiting outcome. A superseded input is acknowledged
-without a model call or a failure reply. Notifications and Stop processing use
-bounded workers whose lifetime follows the service context.
+Startup and periodic recovery claim continuations whose exact instance has a
+new authorization and remains connected. PostgreSQL row generations and claim
+owners fence replacement/cleanup; admission failures retain a persisted bounded
+backoff. Redis Pub/Sub is only a latency hint. No completion event or in-memory
+subscriber is required for recovery. Waiting records expire after 24 hours;
+active claims have a five-minute lease and admission batches fit within it.
 
-Continuations saved before this contract have no exact waiting-turn/workspace
-identity and are not automatically resumed. Credentials remain valid; an explicit
-mention (or a DM message) continues the conversation. No SQL migration is needed;
-the temporary Redis payload gains identity fields and retains its existing TTL.
+Recovery admits durable conditional input through normal admission/dispatch.
+Its deterministic event ID deduplicates repeated recovery. It never becomes
+steering for another active turn. OAuth can finish before the original turn ends:
+the input waits for session ownership, then the runtime validates the waiting
+outcome, original actor and workspace. Superseded input is acknowledged without
+calling the model or posting a failure reply.
 
-For this input-protocol upgrade, quiesce and drain all old workers before
-starting new workers. An old binary does not enforce `resume_from_turn_id` or
-claim-scoped continuation cleanup. Drain conditional inputs before rollback;
-do not mix old and new consumers against the same input queue. Gateways may
-continue accepting signed Slack events while worker execution is drained.
+Apply deployment migration 022 before this code. Drain old workers and update
+the gateway/worker together so credential installs always write the authorization
+fact. Legacy Redis pending records contain no authorization baseline and cannot
+be safely inferred from current credentials; check for them before rollout and
+let those users explicitly continue or reconnect. Retain their private backup;
+do not guess that a currently stored token completed an old request.

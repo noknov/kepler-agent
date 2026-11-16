@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -68,6 +69,13 @@ type HTTPError struct {
 func (e HTTPError) Error() string {
 	return fmt.Sprintf("mcp %s: status %d: %s", e.Service, e.StatusCode, e.Body)
 }
+
+// UncertainResponseError means dispatch began but no trustworthy outcome arrived.
+// Tool adapters decide whether that request could have an external effect.
+type UncertainResponseError struct{ Err error }
+
+func (e UncertainResponseError) Error() string { return e.Err.Error() }
+func (e UncertainResponseError) Unwrap() error { return e.Err }
 
 type RPCError struct {
 	Code    int
@@ -233,7 +241,11 @@ func (c *Client) CallTool(ctx context.Context, s Session, name string, args json
 	if err != nil {
 		return ToolResult{}, err
 	}
-	return FormatToolResult(result)
+	formatted, err := FormatToolResult(result)
+	if err != nil {
+		return ToolResult{}, UncertainResponseError{Err: err}
+	}
+	return formatted, nil
 }
 
 func (c *Client) rpc(ctx context.Context, session Session, method string, params any) (json.RawMessage, http.Header, error) {
@@ -277,22 +289,38 @@ func (c *Client) rpcWithID(ctx context.Context, session Session, id *string, met
 	if session.ProtocolVersion != "" {
 		req.Header.Set("MCP-Protocol-Version", session.ProtocolVersion)
 	}
-	resp, err := c.httpClient().Do(req)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, nil, err
+	}
+	client := *c.httpClient()
+	if method == "tools/call" {
+		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, nil, UncertainResponseError{Err: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		if readErr != nil {
-			return nil, resp.Header, readErr
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		err := error(HTTPError{Service: c.ServiceName, StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(body))})
+		if resp.StatusCode >= 500 || resp.StatusCode == 408 || (resp.StatusCode >= 300 && resp.StatusCode < 400) {
+			err = UncertainResponseError{Err: err}
 		}
-		return nil, resp.Header, HTTPError{Service: c.ServiceName, StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(body))}
+		return nil, resp.Header, err
 	}
+
 	if id == nil {
 		return nil, resp.Header, nil
 	}
 	result, err := readRPCResponse(resp.Body, resp.Header.Get("Content-Type"), *id)
+	if err != nil {
+		var rpc RPCError
+		knownRejection := errors.As(err, &rpc) && (rpc.Code == -32700 || rpc.Code == -32600 || rpc.Code == -32601 || rpc.Code == -32602)
+		if !knownRejection {
+			err = UncertainResponseError{Err: err}
+		}
+	}
 	return result, resp.Header, err
 }
 

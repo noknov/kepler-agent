@@ -389,9 +389,10 @@ func eventMessage(event transcript.Event) (model.Message, bool) {
 				// Text-only function-result protocols have no native error flag.
 				// Project the canonical status without replacing partial evidence.
 				status, _ := json.Marshal(struct {
-					Status string `json:"tool_status"`
-					Code   string `json:"error_code,omitempty"`
-				}{Status: "error", Code: event.ToolResult.ErrorCode})
+					Status  string `json:"tool_status"`
+					Code    string `json:"error_code,omitempty"`
+					Unknown bool   `json:"outcome_unknown,omitempty"`
+				}{Status: "error", Code: event.ToolResult.ErrorCode, Unknown: event.ToolResult.OutcomeUnknown})
 				result.Content = append([]model.Content{{Type: model.ContentJSON, JSON: append(status, '\n')}}, result.Content...)
 			}
 			if event.ToolResult.Truncated {

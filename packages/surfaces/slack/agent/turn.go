@@ -157,7 +157,7 @@ func (s *Service) run(eventCtx context.Context, sessionID string, claimed claime
 		}
 	}
 	webSearch := "enabled"
-	if s.WebSearchEnabled != nil && !s.WebSearchEnabled(req.UserID) {
+	if s.WebSearchEnabled != nil && !s.WebSearchEnabled(runCtx, req.UserID) {
 		webSearch = "disabled"
 	}
 	scopeValues := map[string]string{"surface": "slack", "team_id": req.TeamID, "channel": req.Channel, "thread_ts": req.ThreadTS, "message_ts": req.MessageTS, "web_search": webSearch}

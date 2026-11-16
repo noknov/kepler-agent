@@ -99,7 +99,7 @@ func integrationCrossWorkerSteerAndQueue(t *testing.T, kind slackconversation.Se
 		t.Fatal(err)
 	}
 
-	peer.ModeForUser = func(string) ConversationMode { return ModeQueue }
+	peer.ModeForUser = func(context.Context, string) ConversationMode { return ModeQueue }
 	queued := slackconversation.Request{EventID: "queue", UserID: "U1", SessionKind: kind, Channel: channel, ThreadTS: thread, Text: "then inspect postgres"}
 	if ok, err := peer.controlActive(context.Background(), sessionID, queued); err != nil || !ok {
 		t.Fatal("cross-worker queue was not accepted")

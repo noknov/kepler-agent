@@ -74,7 +74,7 @@ func TestServiceRequiredIncludesAuthURL(t *testing.T) {
 			},
 		},
 	}
-	err = service.Required(LocalUserID, ProviderSlack)
+	err = service.Required(context.Background(), LocalUserID, ProviderSlack)
 	var required *RequiredError
 	if !errors.As(err, &required) || required.AuthURL == "" {
 		t.Fatalf("Required() = %v, want RequiredError with auth url", err)

@@ -48,12 +48,12 @@ type Service struct {
 	Continuations        ConnectionContinuationStore
 	Connections          *connections.Service
 	PodID                string
-	ModeForUser          func(string) ConversationMode
+	ModeForUser          func(context.Context, string) ConversationMode
 	OnDelivered          func(context.Context, string, string, string) error
 	AlreadyDelivered     func(context.Context, string) (bool, error)
 	Multimodal           func(context.Context, string) (bool, error)
 	ThreadLoader         ThreadLoader
-	WebSearchEnabled     func(string) bool
+	WebSearchEnabled     func(context.Context, string) bool
 	ApprovalNotifyUserID string
 	Inputs               sessioninput.Store
 	Deliveries           DeliveryStore
@@ -91,9 +91,9 @@ func New(agent hosted.Agent, messenger slackconversation.Messenger, policy safet
 
 func (s *Service) EventSink() transcript.Sink { return s.router }
 
-func (s *Service) mode(userID string) ConversationMode {
+func (s *Service) mode(ctx context.Context, userID string) ConversationMode {
 	if s.ModeForUser != nil {
-		if mode := s.ModeForUser(userID); mode == ModeQueue {
+		if mode := s.ModeForUser(ctx, userID); mode == ModeQueue {
 			return mode
 		}
 	}

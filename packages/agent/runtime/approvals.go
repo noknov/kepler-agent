@@ -41,11 +41,23 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, resolut
 	}
 	call, requested := state.call, state.requested
 	if state.resolved {
-		if state.completed && state.resolvedApproved == resolution.Approved {
-			return nil
+		if state.resolvedApproved != resolution.Approved {
+			return fmt.Errorf("approval decision differs from the recorded decision")
 		}
-		return fmt.Errorf("approval was resolved but its tool result is incomplete or differs")
+		if state.completed {
+			return r.captureUnknownEffect(ctx, *state.resultEvent)
+		}
+		if state.started {
+			// Never dispatch an approved write again after a durable start intent.
+			result := interruptedToolResult(*call)
+			cleanup, cancel := r.cleanupContext(ctx)
+			defer cancel()
+			_, err := r.recordToolResults(cleanup, TurnRequest{SessionID: sessionID, TurnID: resolution.TurnID, Scope: call.Scope}, []preparedCall{{call: *call, result: &result}})
+			return err
+		}
+		// No start intent means no dispatch. Revalidate the exact contract/policy below.
 	}
+
 	defer r.deps.Tools.EndTurn(sessionID, resolution.TurnID)
 	var item tool.Tool
 	var descriptor tool.Descriptor
@@ -81,8 +93,10 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, resolut
 		}
 	}
 	metadata, _ := json.Marshal(map[string]any{"approved": resolution.Approved, "resolved_by": resolution.UserID})
-	if _, err := r.record(ctx, transcript.Event{SessionID: sessionID, TurnID: resolution.TurnID, Type: transcript.ApprovalResolved, ToolCall: call, Metadata: metadata}); err != nil {
-		return err
+	if !state.resolved {
+		if _, err := r.record(ctx, transcript.Event{SessionID: sessionID, TurnID: resolution.TurnID, Type: transcript.ApprovalResolved, ToolCall: call, Metadata: metadata}); err != nil {
+			return err
+		}
 	}
 	prepared := preparedCall{call: *call, item: item, descriptor: descriptor}
 	request := TurnRequest{SessionID: sessionID, TurnID: resolution.TurnID, Scope: call.Scope}

@@ -112,7 +112,7 @@ func (s *Service) ensureFreshClickStackBundleInstance(ctx context.Context, userI
 	}
 
 	if strings.TrimSpace(bundle.Refresh) == "" {
-		return clickStackTokenBundle{}, s.RequiredInstance(userID, ProviderClickStack, conn.InstanceID)
+		return clickStackTokenBundle{}, s.ReauthorizeInstance(ctx, userID, ProviderClickStack, conn.InstanceID)
 	}
 	if !s.Config.ClickStackEnabled() && strings.TrimSpace(conn.Metadata["mcp_url"]) == "" {
 		return clickStackTokenBundle{}, fmt.Errorf("clickstack oauth is not configured")
