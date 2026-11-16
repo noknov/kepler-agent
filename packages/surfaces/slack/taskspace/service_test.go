@@ -130,3 +130,12 @@ func TestClassificationRequiresNativeRecordAndAssignedAgent(t *testing.T) {
 		t.Fatal("foreign native session could fall through to a thread")
 	}
 }
+
+func (*fakeClient) ListCodeViews(context.Context, string) ([]slack.CodeViewInfo, error) {
+	return nil, nil
+}
+func (*fakeClient) GetCodeCanvas(context.Context, string, string, bool) (slack.CodeCanvas, error) {
+	return slack.CodeCanvas{}, nil
+}
+func (*fakeClient) SetCodeCanvasContent(context.Context, string, string, string) error { return nil }
+func (*fakeClient) RemoveCodeView(context.Context, string, string) error               { return nil }

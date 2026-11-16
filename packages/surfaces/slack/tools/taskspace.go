@@ -17,6 +17,10 @@ func AddTaskSpaceTools(catalog *tool.Catalog, policy tool.SurfacePolicy, spaces 
 	}
 	registration := tool.NewRegistration(catalog, policy)
 	registration.Visible(CreateTaskSpaceTool{Spaces: spaces})
+	registration.Deferred(tool.CategoryIntegration, ListTaskViewsTool{Spaces: spaces})
+	registration.Deferred(tool.CategoryIntegration, ReadTaskCanvasTool{Spaces: spaces})
+	registration.Deferred(tool.CategoryIntegration, UpdateTaskCanvasTool{Spaces: spaces})
+	registration.Deferred(tool.CategoryIntegration, RemoveTaskViewTool{Spaces: spaces})
 	registration.Deferred(tool.CategoryIntegration, SetTaskContextTool{Spaces: spaces})
 	registration.Deferred(tool.CategoryIntegration, SetTaskViewTool{Spaces: spaces})
 	return registration.Err()
