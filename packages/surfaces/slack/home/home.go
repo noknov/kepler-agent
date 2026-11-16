@@ -12,6 +12,7 @@ import (
 	"github.com/noknov/kepler-agent/packages/infra/redisclient"
 	"github.com/noknov/kepler-agent/packages/memory"
 	"github.com/noknov/kepler-agent/packages/safety"
+	"github.com/noknov/kepler-agent/packages/surfaces/slack/taskspace"
 	"github.com/noknov/kepler-agent/packages/userprefs"
 )
 
@@ -30,6 +31,8 @@ type ConnectionReference struct {
 }
 
 type Controller struct {
+	Spaces *taskspace.Service
+	TeamID string
 	Memory interface {
 		Reset(context.Context, memory.Identity) error
 	}
@@ -45,7 +48,7 @@ func (c Controller) Publish(ctx context.Context, userID string) error {
 	if c.Slack == nil || userID == "" {
 		return nil
 	}
-	return c.Slack.PublishHome(ctx, userID, c.View(userID))
+	return c.Slack.PublishHome(ctx, userID, c.View(ctx, userID))
 }
 
 func (c Controller) RequestRefresh(ctx context.Context, userID string) error {
@@ -134,7 +137,7 @@ func (c Controller) ToggleConversationMode(ctx context.Context, userID string) {
 	}
 }
 
-func (c Controller) View(userID string) map[string]any {
+func (c Controller) View(ctx context.Context, userID string) map[string]any {
 	allowed := c.Access.AllowsUser(userID)
 	accessStatus := "Allowed"
 	if !allowed {
@@ -177,6 +180,7 @@ func (c Controller) View(userID string) map[string]any {
 		headerBlock(":control_knobs: Controls"),
 		actionsBlock(controls...),
 	}
+	blocks = append(blocks, c.taskSpaceBlocks(ctx, userID)...)
 	blocks = append(blocks, c.connectionBlocks(userID)...)
 
 	return map[string]any{

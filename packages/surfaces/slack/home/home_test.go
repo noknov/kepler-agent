@@ -52,7 +52,7 @@ func TestViewShowsRawModelIDAndHidesSecondary(t *testing.T) {
 		},
 		Access: safety.AccessPolicy{},
 	}
-	view := controller.View("U123")
+	view := controller.View(t.Context(), "U123")
 	blocks, ok := view["blocks"].([]map[string]any)
 	if !ok {
 		t.Fatal("expected blocks in view")

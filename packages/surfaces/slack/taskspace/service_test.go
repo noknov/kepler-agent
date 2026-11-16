@@ -30,6 +30,13 @@ func (m *memoryStore) Save(_ context.Context, s Space) error {
 	return nil
 }
 
+func (m *memoryStore) List(_ context.Context, team, user string, _ int) ([]Space, error) {
+	if m.space.TeamID == team && m.space.OwnerID == user {
+		return []Space{m.space}, nil
+	}
+	return nil, nil
+}
+
 type fakeClient struct {
 	info      slack.CodeChannelInfo
 	requests  []slack.CodeChannelCreate

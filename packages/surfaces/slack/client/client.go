@@ -55,6 +55,9 @@ func NewTestClient(transport http.RoundTripper) *Client {
 	return &Client{httpClient: &http.Client{Transport: transport}}
 }
 
+// TeamID is resolved by auth.test during installation startup, not by app names.
+func (c *Client) TeamID() string { return c.teamID }
+
 func (c *Client) BotUserID() string {
 	return c.botUserID
 }

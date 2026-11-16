@@ -13,7 +13,7 @@ type resetMemoryStub struct{}
 
 func (resetMemoryStub) Reset(context.Context, memory.Identity) error { return nil }
 func TestHomeMemoryResetIsConfirmedAndHasNoOwnerPayload(t *testing.T) {
-	view := Controller{Memory: resetMemoryStub{}}.View("U1")
+	view := Controller{Memory: resetMemoryStub{}}.View(t.Context(), "U1")
 	data, _ := json.Marshal(view)
 	body := string(data)
 	if !strings.Contains(body, "reset_user_memory") || !strings.Contains(body, "Clear Memories") || !strings.Contains(body, "Clear Memories?") || strings.Contains(body, `"value":"U1"`) {

@@ -3,6 +3,7 @@ package taskspace
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"os"
 	"testing"
@@ -41,5 +42,45 @@ func TestPGSpaceGrantsAreImmutableAndWorkspaceBound(t *testing.T) {
 	}
 	if _, err := store.Get(t.Context(), "other-team", space.Channel); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-workspace read: %v", err)
+	}
+}
+
+func TestPGSpaceListIsBoundedByWorkspaceAndOwner(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_TEST_DSN must name an isolated fixture")
+	}
+	pool, err := pgxpool.New(t.Context(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	team := fmt.Sprintf("home-spaces-%d", time.Now().UnixNano())
+	defer pool.Exec(context.Background(), `DELETE FROM slack_task_spaces WHERE team_id=$1 OR team_id=$2`, team, team+"-foreign")
+	store := PGStore{Pool: pool}
+	for _, space := range []Space{
+		{TeamID: team, OwnerID: "U1", Channel: "C1", OriginChannel: "C0", OriginMessageTS: "1"},
+		{TeamID: team, OwnerID: "U1", Channel: "C2", OriginChannel: "C0", OriginMessageTS: "2"},
+		{TeamID: team, OwnerID: "U2", Channel: "C3", OriginChannel: "C0", OriginMessageTS: "3"},
+		{TeamID: team + "-foreign", OwnerID: "U1", Channel: "C4", OriginChannel: "C0", OriginMessageTS: "4"},
+	} {
+		if err := store.Save(t.Context(), space); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spaces, err := store.List(t.Context(), team, "U1", 20)
+	if err != nil || len(spaces) != 2 {
+		t.Fatalf("spaces=%+v err=%v", spaces, err)
+	}
+	for _, space := range spaces {
+		if space.TeamID != team || space.OwnerID != "U1" {
+			t.Fatal("task index crossed identity")
+		}
+	}
+	if limited, err := store.List(t.Context(), team, "U1", 1); err != nil || len(limited) != 1 {
+		t.Fatalf("limit ignored: %+v %v", limited, err)
+	}
+	if _, err := store.List(t.Context(), team, "", 20); err == nil {
+		t.Fatal("unscoped list accepted")
 	}
 }

@@ -108,3 +108,7 @@ func TestNativeApprovalRetainsRequesterAndWholeChannelScope(t *testing.T) {
 		t.Fatal("other participant could approve")
 	}
 }
+
+func (nativeGrant) List(context.Context, string, string, int) ([]taskspace.Space, error) {
+	return nil, nil
+}
