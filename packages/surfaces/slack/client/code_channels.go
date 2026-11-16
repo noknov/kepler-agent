@@ -165,11 +165,13 @@ func (c *Client) codeChannelWrite(ctx context.Context, method string, payload an
 		OK    bool   `json:"ok"`
 		Error string `json:"error"`
 	}
-	if err := c.postJSON(ctx, method, payload, &out); err != nil {
+	// These APIs have neither an idempotency key nor a revision precondition.
+	// Replaying an old update can overwrite newer state after a lost response.
+	if err := c.postJSONNonIdempotent(ctx, method, payload, &out); err != nil {
 		return err
 	}
 	if !out.OK {
-		return slackAPIError{Method: method, Code: out.Error}
+		return slackWriteError(method, out.Error)
 	}
 	return nil
 }

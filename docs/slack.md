@@ -96,7 +96,9 @@ unchanged sections retain their comment anchors. It is not a conditional-write
 API: neither a prior read nor user confirmation promises isolation from edits
 made concurrently in Slack. Removing an HTML, diff or Block Kit view also
 deletes its backing content file; removing a Canvas view detaches that view.
-Both operations retain the existing requester confirmation policy.
+Both operations retain the existing requester confirmation policy. Native
+context/view/Canvas writes are not replayed after ambiguous responses; explicit
+429 rejections may retry after Retry-After. Reads remain retryable.
 
 Context bars replace up to five informational items. Views use stable keys;
 diffs are channel singletons. HTML does not receive model-controlled CSP
